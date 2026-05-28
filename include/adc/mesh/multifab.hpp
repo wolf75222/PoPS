@@ -1,0 +1,85 @@
+#pragma once
+
+#include <adc/core/types.hpp>
+#include <adc/mesh/box2d.hpp>
+#include <adc/mesh/box_array.hpp>
+#include <adc/mesh/distribution_mapping.hpp>
+#include <adc/mesh/fab2d.hpp>
+#include <adc/parallel/comm.hpp>
+
+#include <utility>
+#include <vector>
+
+// MultiFab : champ distribue, l'equivalent maison du MultiFab d'AMReX. Porte le
+// decoupage (BoxArray), la repartition (DistributionMapping), le nombre de
+// composantes et de ghosts, et n'alloue que les Fab2D possedes par ce rang.
+//
+// C'est ici que vit le parallelisme de donnees ; la couche physique ne le voit
+// jamais. L'iteration se fait sur les fabs locaux :
+//   for (int li = 0; li < mf.local_size(); ++li) {
+//     auto a = mf.fab(li).array();
+//     for_each_cell(mf.box(li), [=](int i, int j) { ... });
+//   }
+
+namespace adc {
+
+class MultiFab {
+ public:
+  MultiFab() = default;
+
+  MultiFab(BoxArray ba, DistributionMapping dm, int ncomp, int ngrow)
+      : ba_(std::move(ba)),
+        dm_(std::move(dm)),
+        ncomp_(ncomp),
+        ngrow_(ngrow),
+        local_index_(ba_.size(), -1) {
+    const int me = my_rank();
+    for (int i = 0; i < ba_.size(); ++i) {
+      if (dm_[i] == me) {
+        local_index_[i] = static_cast<int>(fabs_.size());
+        global_of_local_.push_back(i);
+        fabs_.emplace_back(ba_[i], ncomp_, ngrow_);
+      }
+    }
+  }
+
+  const BoxArray& box_array() const { return ba_; }
+  const DistributionMapping& dmap() const { return dm_; }
+  int ncomp() const { return ncomp_; }
+  int n_grow() const { return ngrow_; }
+
+  int local_size() const { return static_cast<int>(fabs_.size()); }
+  Fab2D& fab(int li) { return fabs_[li]; }
+  const Fab2D& fab(int li) const { return fabs_[li]; }
+  const Box2D& box(int li) const { return fabs_[li].box(); }
+  int global_index(int li) const { return global_of_local_[li]; }
+  // Indice local d'une box globale, ou -1 si elle n'est pas sur ce rang.
+  int local_index_of(int global) const { return local_index_[global]; }
+
+  void set_val(Real v) {
+    for (auto& f : fabs_) f.set_val(v);
+  }
+
+ private:
+  BoxArray ba_{};
+  DistributionMapping dm_{};
+  int ncomp_{1};
+  int ngrow_{0};
+  std::vector<Fab2D> fabs_{};       // fabs possedes localement
+  std::vector<int> local_index_{};  // box globale -> indice local (-1 sinon)
+  std::vector<int> global_of_local_{};  // indice local -> box globale
+};
+
+// Somme des cellules valides de la composante comp. all-reduce MPI plus tard.
+inline Real sum(const MultiFab& mf, int comp = 0) {
+  Real s = 0;
+  for (int li = 0; li < mf.local_size(); ++li) {
+    const Fab2D& f = mf.fab(li);
+    const Box2D b = f.box();
+    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+      for (int i = b.lo[0]; i <= b.hi[0]; ++i) s += f(i, j, comp);
+  }
+  return s;
+}
+
+}  // namespace adc

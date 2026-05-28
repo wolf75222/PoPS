@@ -105,9 +105,9 @@ coefficients durs.
 
 1. index space : `Box2D` (fait)
 2. donnees mono-grille : `Fab2D` + `Array4` + `for_each_cell` (fait)
-3. decomposition : `BoxArray` + `DistributionMapping` (rang unique, interface MPI)
-4. conteneur multi-grille : `MultiFab` (collection de `Fab2D` + ghosts)
-5. echange de halos : `fill_boundary` (intra-niveau, MPI ensuite)
+3. decomposition : `BoxArray` + `DistributionMapping` + seam `comm` (fait)
+4. conteneur multi-grille : `MultiFab` (collection de `Fab2D` + ghosts) (fait)
+5. echange de halos : `fill_boundary` (intra-niveau, periodique, MPI ensuite) (fait)
 6. CL physiques : periodique / Dirichlet / Neumann au bord du domaine
 7. hierarchie AMR : niveaux, regrid (tagging, Berger-Rigoutsos, proper nesting),
    prolongation / restriction
@@ -124,6 +124,9 @@ premier modele conforme (`Diocotron`).
 Couche donnees/maillage : index space `Box2D`, donnees mono-grille `Fab2D`
 (layout composante-lente, ghosts) avec handle `Array4` capturable par valeur, et
 dispatch `for_each_cell` (backend OpenMP, miroir de Kokkos `parallel_for`).
+Decomposition `BoxArray` + `DistributionMapping` sur le seam `comm` (rang
+unique, interface MPI-ready), champ distribue `MultiFab`, et echange de halos
+`fill_boundary` (intra-niveau, wrapping periodique).
 
 ## Build
 
