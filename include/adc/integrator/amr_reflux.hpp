@@ -28,12 +28,14 @@ inline Box2D yface_box(const Box2D& v) {
   return Box2D{{v.lo[0], v.lo[1]}, {v.hi[0], v.hi[1] + 1}};
 }
 
-// flux de Rusanov premier ordre, 1 composante, aux uniforme, sur un Fab2D.
+// flux de Rusanov premier ordre, 1 composante, aux variable en espace (Fab2D a
+// 3 composantes [phi, gx, gy], ghosts remplis), sur un Fab2D.
 // fx(i,j) = flux a la face gauche de la cellule i ; fy(i,j) = face basse de j.
 template <class Model>
-void compute_fluxes_1c(const Model& m, const Fab2D& U, const Aux& a, Fab2D& fx,
-                       Fab2D& fy) {
+void compute_fluxes_1c(const Model& m, const Fab2D& U, const Fab2D& aux,
+                       Fab2D& fx, Fab2D& fy) {
   const ConstArray4 u = U.const_array();
+  const ConstArray4 ax = aux.const_array();
   {
     Array4 F = fx.array();
     const Box2D b = fx.box();
@@ -42,7 +44,8 @@ void compute_fluxes_1c(const Model& m, const Fab2D& U, const Aux& a, Fab2D& fx,
         typename Model::State UL{}, UR{};
         UL[0] = u(i - 1, j);
         UR[0] = u(i, j);
-        F(i, j) = rusanov_flux(m, UL, a, UR, a, 0)[0];
+        F(i, j) = rusanov_flux(m, UL, load_aux(ax, i - 1, j), UR,
+                               load_aux(ax, i, j), 0)[0];
       }
   }
   {
@@ -53,16 +56,17 @@ void compute_fluxes_1c(const Model& m, const Fab2D& U, const Aux& a, Fab2D& fx,
         typename Model::State UL{}, UR{};
         UL[0] = u(i, j - 1);
         UR[0] = u(i, j);
-        F(i, j) = rusanov_flux(m, UL, a, UR, a, 1)[0];
+        F(i, j) = rusanov_flux(m, UL, load_aux(ax, i, j - 1), UR,
+                               load_aux(ax, i, j), 1)[0];
       }
   }
 }
 
 // Euler explicite : U -= dt div(F). Les ghosts de U doivent etre remplis.
 template <class Model>
-void advance_fab_1c(const Model& m, Fab2D& U, const Aux& a, double dx, double dy,
-                    double dt, Fab2D& fx, Fab2D& fy) {
-  compute_fluxes_1c(m, U, a, fx, fy);
+void advance_fab_1c(const Model& m, Fab2D& U, const Fab2D& aux, double dx,
+                    double dy, double dt, Fab2D& fx, Fab2D& fy) {
+  compute_fluxes_1c(m, U, aux, fx, fy);
   Array4 uu = U.array();
   const ConstArray4 FX = fx.const_array();
   const ConstArray4 FY = fy.const_array();
@@ -131,7 +135,7 @@ inline void average_down_fab(const Fab2D& Uf, Fab2D& Uc, int CI0, int CI1,
 template <class Model>
 void amr_step_2level(const Model& m, Fab2D& Uc, const Box2D& dom, double dxc,
                      double dyc, Fab2D& Uf, int CI0, int CI1, int CJ0, int CJ1,
-                     const Aux& a, double dt) {
+                     const Fab2D& auxc, const Fab2D& auxf, double dt) {
   const int r = 2;
   const double dxf = dxc / 2, dyf = dyc / 2, dtf = dt / r;
   const int nJ = CJ1 - CJ0 + 1, nI = CI1 - CI0 + 1;
@@ -141,7 +145,7 @@ void amr_step_2level(const Model& m, Fab2D& Uc, const Box2D& dom, double dxc,
   // --- flux grossiers (avant mise a jour) aux 4 faces de la region fine ---
   fill_periodic_fab(Uc, dom);
   Fab2D fxc(xface_box(Uc.box()), 1, 0), fyc(yface_box(Uc.box()), 1, 0);
-  compute_fluxes_1c(m, Uc, a, fxc, fyc);
+  compute_fluxes_1c(m, Uc, auxc, fxc, fyc);
   const ConstArray4 FXc = fxc.const_array();
   const ConstArray4 FYc = fyc.const_array();
   std::vector<double> cL(nJ), cR(nJ), cB(nI), cT(nI);
@@ -154,14 +158,14 @@ void amr_step_2level(const Model& m, Fab2D& Uc, const Box2D& dom, double dxc,
     cT[I - CI0] = FYc(I, CJ1 + 1);
   }
 
-  advance_fab_1c(m, Uc, a, dxc, dyc, dt, fxc, fyc);  // Uc devient l'etat "t+dt"
+  advance_fab_1c(m, Uc, auxc, dxc, dyc, dt, fxc, fyc);  // Uc devient l'etat "t+dt"
 
   // --- sous-cyclage fin : r sous-pas, accumulation des flux fins (x dtf) ---
   std::vector<double> fL(nJ, 0), fR(nJ, 0), fB(nI, 0), fT(nI, 0);
   Fab2D fxf(xface_box(Uf.box()), 1, 0), fyf(yface_box(Uf.box()), 1, 0);
   for (int s = 0; s < r; ++s) {
     fill_fine_ghosts_t(Uf, Uc_old, Uc, double(s) / r);  // BC interpolee en temps
-    compute_fluxes_1c(m, Uf, a, fxf, fyf);
+    compute_fluxes_1c(m, Uf, auxf, fxf, fyf);
     const ConstArray4 FXf = fxf.const_array();
     const ConstArray4 FYf = fyf.const_array();
     for (int J = CJ0; J <= CJ1; ++J) {
@@ -174,7 +178,7 @@ void amr_step_2level(const Model& m, Fab2D& Uc, const Box2D& dom, double dxc,
       fT[I - CI0] +=
           0.5 * (FYf(2 * I, 2 * CJ1 + 2) + FYf(2 * I + 1, 2 * CJ1 + 2)) * dtf;
     }
-    advance_fab_1c(m, Uf, a, dxf, dyf, dtf, fxf, fyf);
+    advance_fab_1c(m, Uf, auxf, dxf, dyf, dtf, fxf, fyf);
   }
 
   average_down_fab(Uf, Uc, CI0, CI1, CJ0, CJ1);  // sync des cellules couvertes

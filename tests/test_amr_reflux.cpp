@@ -32,11 +32,23 @@ int main() {
 
   Diocotron m;
   m.B0 = 1.0;
-  Aux a{};
-  a.grad_x = 0.5;   // vy = grad_x/B0 = 0.5
-  a.grad_y = -1.0;  // vx = -grad_y/B0 = 1.0
+  // champ de vitesse E x B variable en espace et divergence-libre :
+  // vx = -gy/B0 = 1, vy = gx/B0 = 0.2 sin(2 pi x). aux = (phi, gx, gy).
+  constexpr double kPi = 3.14159265358979323846;
+  auto fill_aux = [&](Fab2D& aux, double dx, double dy) {
+    const Box2D g = aux.grown_box();
+    for (int j = g.lo[1]; j <= g.hi[1]; ++j)
+      for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
+        aux(i, j, 0) = 0.0;                                  // phi (inutilise)
+        aux(i, j, 1) = 0.2 * std::sin(2 * kPi * (i + 0.5) * dx);  // gx
+        aux(i, j, 2) = -1.0;                                 // gy
+      }
+  };
 
   Fab2D Uc(dom, 1, 1), Uf(fbox, 1, 1);
+  Fab2D auxc(dom, 3, 1), auxf(fbox, 3, 1);
+  fill_aux(auxc, dxc, dyc);
+  fill_aux(auxf, dxc / 2, dyc / 2);
   auto blob = [](double x, double y) {
     const double r2 = (x - 0.5) * (x - 0.5) + (y - 0.5) * (y - 0.5);
     return 1.0 + 0.5 * std::exp(-r2 / 0.02);
@@ -60,7 +72,7 @@ int main() {
 
   const double dt = 0.4 * dxc;  // CFL grossier ; CFL fin = 0.4 (sous-cycle)
   for (int s = 0; s < 60; ++s)
-    amr_step_2level(m, Uc, dom, dxc, dyc, Uf, CI0, CI1, CJ0, CJ1, a, dt);
+    amr_step_2level(m, Uc, dom, dxc, dyc, Uf, CI0, CI1, CJ0, CJ1, auxc, auxf, dt);
 
   const double M1 = mass();
   std::printf("masse : M0=%.10f M1=%.10f  drift=%.3e\n", M0, M1,
