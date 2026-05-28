@@ -263,7 +263,7 @@ coefficients durs.
 2. donnees mono-grille : `Fab2D` + `Array4` + `for_each_cell` (fait)
 3. decomposition : `BoxArray` + `DistributionMapping` + seam `comm` (fait)
 4. conteneur multi-grille : `MultiFab` (collection de `Fab2D` + ghosts) (fait)
-5. echange de halos : `fill_boundary` (intra-niveau, periodique, MPI ensuite) (fait)
+5. echange de halos : `fill_boundary` (intra-niveau, periodique, cross-rang MPI) (fait)
 6. CL physiques : Foextrap / Dirichlet au bord du domaine (fait)
 7a. hierarchie AMR + transfert : `AmrHierarchy`, `average_down`, `interpolate`,
     `parallel_copy` (fait)
@@ -297,8 +297,15 @@ passe par `MPI_Comm_rank/size` + collectives (`all_reduce_sum/max`, `barrier`).
 Sans le flag, ou si MPI n'est pas initialise, tout reste serie (rang unique).
 Le `MultiFab` etant deja distribue par `DistributionMapping`, `sum(mf)` agrege
 via all-reduce et donne le meme resultat quel que soit le nombre de rangs.
-Verifie par `test_mpi_smoke` (lance `mpirun -np 4` : distribution SFC d'un
-`BoxArray`, somme globale invariante au nombre de rangs).
+
+L'**echange de halos est distribue** : `fill_boundary` fait les copies locales
+puis, pour les paires coupant un bord de rang, agrege un message par voisin
+(`MPI_Isend/Irecv`). Les metadonnees etant repliquees, les deux rangs d'une paire
+enumerent la meme liste de jobs dans le meme ordre, donc la disposition des
+tampons coincide sans negocier les tailles. Verifie par `test_mpi_smoke`
+(somme globale invariante au nombre de rangs) et `test_mpi_fillboundary` (ghosts
+remplis depuis des fabs distants, egaux a la valeur periodique attendue, coins
+compris), lances via `mpirun -np 4`.
 
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`

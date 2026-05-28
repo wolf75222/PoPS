@@ -4,6 +4,7 @@
 #include <adc/mesh/fab2d.hpp>
 #include <adc/mesh/for_each.hpp>
 #include <adc/mesh/multifab.hpp>
+#include <adc/parallel/comm.hpp>
 
 #include <utility>
 #include <vector>
@@ -12,9 +13,15 @@
 // Fab depuis les regions valides des boxes voisines de la meme MultiFab, avec
 // wrapping periodique optionnel.
 //
-// Structure prete pour MPI : le seul point a changer plus tard est l'acces a la
-// box source (memoire locale aujourd'hui, send/recv MPI ensuite). La logique
-// (boucle sur les voisins, intersection, copie decalee) reste identique.
+// Mono-rang : copies memoire directes (paires dst-locale / src-locale).
+//
+// Multi-rang (ADC_HAS_MPI + n_ranks()>1) : les metadonnees etant repliquees
+// (chaque rang connait tout le BoxArray + DistributionMapping), chaque rang
+// enumere DETERMINISTIQUEMENT la meme liste de jobs (src, dst, shift, region),
+// classe chacun par appartenance, et agrege un message par rang voisin
+// (MPI_Isend/Irecv, tag 0). Comme les deux rangs d'une paire enumerent dans le
+// meme ordre, la disposition du tampon coincide sans negocier les tailles. Le
+// pack lit la cellule source decalee S(i-sx, j-sy) ; l'unpack ecrit D(i, j).
 //
 // Les ghosts qui tombent hors du domaine sans wrapping periodique ne sont pas
 // touches ici : ce sont les conditions aux limites physiques (etape suivante).
@@ -63,6 +70,7 @@ inline void fill_boundary(MultiFab& mf, const Box2D& domain,
   for (int sx : sxv)
     for (int sy : syv) shifts.push_back({sx, sy});
 
+  // --- copies locales (dst locale ET src locale) ---
   for (int li = 0; li < mf.local_size(); ++li) {
     Fab2D& F = mf.fab(li);
     const int gF = mf.global_index(li);
@@ -70,7 +78,7 @@ inline void fill_boundary(MultiFab& mf, const Box2D& domain,
 
     for (int gB = 0; gB < ba.size(); ++gB) {
       const int srcLocal = mf.local_index_of(gB);
-      if (srcLocal < 0) continue;  // box non locale (MPI plus tard)
+      if (srcLocal < 0) continue;  // src non locale -> traitee par MPI ci-dessous
       const Fab2D& S = mf.fab(srcLocal);
       const Box2D vB = ba[gB];
 
@@ -83,6 +91,84 @@ inline void fill_boundary(MultiFab& mf, const Box2D& domain,
       }
     }
   }
+
+#ifdef ADC_HAS_MPI
+  if (n_ranks() <= 1) return;
+  const int me = my_rank(), np = n_ranks();
+  const DistributionMapping& dm = mf.dmap();
+
+  struct Job {
+    int src, dst, sx, sy;
+    Box2D region;
+  };
+  std::vector<std::vector<Job>> send(np), recv(np);  // par rang voisin
+
+  // enumeration globale deterministe : (dst gF) x (src gB) x shifts.
+  for (int gF = 0; gF < ba.size(); ++gF) {
+    const int od = dm[gF];
+    const Box2D gbox = ba[gF].grow(ng);
+    for (int gB = 0; gB < ba.size(); ++gB) {
+      const int os = dm[gB];
+      if (od != me && os != me) continue;  // ne nous concerne pas
+      if (od == me && os == me) continue;  // deja traite en local
+      const Box2D vB = ba[gB];
+      for (auto [sx, sy] : shifts) {
+        if (gB == gF && sx == 0 && sy == 0) continue;
+        const Box2D region = gbox.intersect(vB.shift(0, sx).shift(1, sy));
+        if (region.empty()) continue;
+        if (os == me)
+          send[od].push_back({gB, gF, sx, sy, region});  // je possede la src
+        else
+          recv[os].push_back({gB, gF, sx, sy, region});  // je possede la dst
+      }
+    }
+  }
+
+  auto buf_size = [&](const std::vector<Job>& js) {
+    long n = 0;
+    for (const auto& j : js) n += j.region.num_cells() * nc;
+    return n;
+  };
+
+  std::vector<std::vector<Real>> sbuf(np), rbuf(np);
+  std::vector<MPI_Request> reqs;
+  for (int r = 0; r < np; ++r) {
+    if (!send[r].empty()) {
+      sbuf[r].resize(buf_size(send[r]));
+      long k = 0;
+      for (const auto& j : send[r]) {
+        const ConstArray4 s = mf.fab(mf.local_index_of(j.src)).const_array();
+        for (int c = 0; c < nc; ++c)
+          for (int jj = j.region.lo[1]; jj <= j.region.hi[1]; ++jj)
+            for (int ii = j.region.lo[0]; ii <= j.region.hi[0]; ++ii)
+              sbuf[r][k++] = s(ii - j.sx, jj - j.sy, c);
+      }
+      reqs.emplace_back();
+      MPI_Isend(sbuf[r].data(), static_cast<int>(sbuf[r].size()), MPI_DOUBLE, r,
+                0, MPI_COMM_WORLD, &reqs.back());
+    }
+    if (!recv[r].empty()) {
+      rbuf[r].resize(buf_size(recv[r]));
+      reqs.emplace_back();
+      MPI_Irecv(rbuf[r].data(), static_cast<int>(rbuf[r].size()), MPI_DOUBLE, r,
+                0, MPI_COMM_WORLD, &reqs.back());
+    }
+  }
+  if (!reqs.empty())
+    MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(),
+                MPI_STATUSES_IGNORE);
+
+  for (int r = 0; r < np; ++r) {
+    long k = 0;
+    for (const auto& j : recv[r]) {
+      Array4 d = mf.fab(mf.local_index_of(j.dst)).array();
+      for (int c = 0; c < nc; ++c)
+        for (int jj = j.region.lo[1]; jj <= j.region.hi[1]; ++jj)
+          for (int ii = j.region.lo[0]; ii <= j.region.hi[0]; ++ii)
+            d(ii, jj, c) = rbuf[r][k++];
+    }
+  }
+#endif
 }
 
 }  // namespace adc

@@ -39,10 +39,14 @@ adc_add_test(test_load_balance)
 # Test MPI : seulement si le backend MPI est active. Lance via mpirun -np 4 ;
 # le seam (rang/size, all-reduce) doit donner le meme resultat quel que soit N.
 if(ADC_HAS_MPI)
-  add_executable(test_mpi_smoke test_mpi_smoke.cpp)
-  target_link_libraries(test_mpi_smoke PRIVATE adc::adc)
-  add_test(NAME test_mpi_smoke
-           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
-                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_smoke>
-                   ${MPIEXEC_POSTFLAGS})
+  function(adc_add_mpi_test name nproc)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name} PRIVATE adc::adc)
+    add_test(NAME ${name}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${nproc}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}>
+                     ${MPIEXEC_POSTFLAGS})
+  endfunction()
+  adc_add_mpi_test(test_mpi_smoke 4)
+  adc_add_mpi_test(test_mpi_fillboundary 4)
 endif()
