@@ -320,6 +320,13 @@ Valide hors-Mac sur **ROMEO 2025** (partition CPU `x64cpu`, gcc 14 + Open MPI
 toujours bit a bit (maxdiff = 0) et la somme globale invariante de np=1 a 16. Le
 workflow build + run est fige dans `scripts/romeo_mpi.sbatch`.
 
+Poisson distribue **spectral** (`elliptic/poisson_fft.hpp`) : pour le domaine
+periodique, le solveur propre est la FFT, qui resout EXACTEMENT le Laplacien
+5-points (valeur propre discrete, mode nul a zero). Distribue par bandes : FFT-x
+locale, transpose parallele (`MPI_Alltoall`), FFT-y locale, division spectrale,
+inverse. `test_mpi_poisson` verifie le residu `lap_h(phi) - rho` a 2e-14
+(arrondi) et l'invariance au nombre de rangs (np=1 a 8). FFT 1D radix-2 maison.
+
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`
 (injection grossier->fin) sur la brique `parallel_copy`, clustering
