@@ -107,6 +107,33 @@ cmake --build build --target diocotron_theory
 python scripts/plot_diocotron_theory.py /tmp/theory.csv docs/fig_diocotron_theory.png
 ```
 
+## AMR dans le temps : diocotron raffine
+
+Le transport est integre sur une hierarchie 2 niveaux avec **sous-cyclage
+Berger-Oliger** (le niveau fin fait r=2 sous-pas de dt/2) et **reflux**
+(`FluxRegister` : le flux grossier a l'interface est remplace par la somme des
+flux fins). Resultat : conservation de masse a l'arrondi (1e-15) ET stabilite.
+
+Le couplage est **decouple** : phi etant lisse, Poisson est resolu sur la grille
+grossiere uniforme (la multigrille maison), et aux = grad phi est injecte vers le
+niveau fin. Pas de Poisson composite : l'AMR ne porte que le transport.
+
+![Diocotron AMR](docs/anim_diocotron_amr.gif)
+
+La couche de cisaillement (mode m=2) s'enroule en deux tourbillons, resolus dans
+la zone raffinee (cadre cyan), avec une fraction des degres de liberte d'une
+grille uniforme equivalente. Reproduire :
+
+```bash
+cmake --build build --target diocotron_amr
+./build/bin/diocotron_amr /tmp/dio_amr 128 500
+```
+
+Limite actuelle : la box fine est statique (placee a la main autour de la couche).
+Le regrid dynamique (tagging des tourbillons + Berger-Rigoutsos a chaque pas) est
+deja disponible cote maillage ; le brancher dans la boucle temporelle est la
+derniere etape.
+
 ## Niveau d'abstraction
 
 Trois axes orthogonaux qui ne se melangent jamais :
