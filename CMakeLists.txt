@@ -19,6 +19,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 option(ADC_BUILD_TESTS    "Build tests"    ON)
 option(ADC_BUILD_EXAMPLES "Build examples" ON)
 option(ADC_USE_OPENMP     "Enable the OpenMP dispatch backend" OFF)
+option(ADC_USE_MPI        "Enable the MPI backend (distributed comm seam)" OFF)
 option(ADC_USE_EIGEN      "Build host-side Eigen analysis tools (diocotron theory)" ON)
 
 # Eigen : cote host uniquement (analyse, hors hot path). Header-only : on
@@ -70,6 +71,19 @@ if(ADC_USE_OPENMP)
   endif()
   find_package(OpenMP REQUIRED)
   target_link_libraries(adc INTERFACE OpenMP::OpenMP_CXX)
+endif()
+
+# MPI : backend distribue, confine au seam comm (parallel/comm.hpp). Optionnel :
+# par defaut OFF, le build et les tests restent serie (comm.hpp = rang unique).
+# Quand ON, comm.hpp passe par MPI_Comm_rank/size + collectives, et le test
+# test_mpi_smoke tourne via mpirun. ADC_HAS_MPI est propage a tout ce qui lie adc.
+set(ADC_HAS_MPI OFF)
+if(ADC_USE_MPI)
+  find_package(MPI REQUIRED)
+  target_link_libraries(adc INTERFACE MPI::MPI_CXX)
+  target_compile_definitions(adc INTERFACE ADC_HAS_MPI)
+  set(ADC_HAS_MPI ON)
+  message(STATUS "MPI found (${MPIEXEC_EXECUTABLE}) : enabling distributed comm seam")
 endif()
 
 if(ADC_BUILD_TESTS)

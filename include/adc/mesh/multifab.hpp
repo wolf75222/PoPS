@@ -70,7 +70,9 @@ class MultiFab {
   std::vector<int> global_of_local_{};  // indice local -> box globale
 };
 
-// Somme des cellules valides de la composante comp. all-reduce MPI plus tard.
+// Somme des cellules valides de la composante comp, reduite sur tous les rangs
+// (all-reduce). Chaque rang somme ses fabs locaux, puis MPI_Allreduce agrege ;
+// en serie all_reduce_sum est l'identite.
 inline Real sum(const MultiFab& mf, int comp = 0) {
   Real s = 0;
   for (int li = 0; li < mf.local_size(); ++li) {
@@ -79,7 +81,7 @@ inline Real sum(const MultiFab& mf, int comp = 0) {
     for (int j = b.lo[1]; j <= b.hi[1]; ++j)
       for (int i = b.lo[0]; i <= b.hi[0]; ++i) s += f(i, j, comp);
   }
-  return s;
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
 }
 
 }  // namespace adc

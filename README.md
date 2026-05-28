@@ -284,14 +284,21 @@ premier modele conforme (`Diocotron`).
 Couche donnees/maillage : index space `Box2D`, donnees mono-grille `Fab2D`
 (layout composante-lente, ghosts) avec handle `Array4` capturable par valeur, et
 dispatch `for_each_cell` (backend OpenMP, miroir de Kokkos `parallel_for`).
-Decomposition `BoxArray` + `DistributionMapping` sur le seam `comm` (rang
-unique, interface MPI-ready), champ distribue `MultiFab`, echange de halos
+Decomposition `BoxArray` + `DistributionMapping` sur le seam `comm`, champ
+distribue `MultiFab` (n'alloue que les fabs de `my_rank()`), echange de halos
 `fill_boundary` (intra-niveau, wrapping periodique) et CL physiques
 (`fill_physical_bc` : Foextrap, Dirichlet). Equilibrage de charge
 (`parallel/load_balance.hpp`) : distribution **Z-order** (segments contigus le
 long de la courbe de Morton, localite) et **knapsack** (LPT, desequilibre max
-minimal), avec metrique de desequilibre. Algos purs, testes en serie, prets a
-alimenter le seam `comm` des qu'un backend MPI sera branche.
+minimal), avec metrique de desequilibre.
+
+**Backend MPI** (`-DADC_USE_MPI=ON`, optionnel, OFF par defaut) : le seam `comm`
+passe par `MPI_Comm_rank/size` + collectives (`all_reduce_sum/max`, `barrier`).
+Sans le flag, ou si MPI n'est pas initialise, tout reste serie (rang unique).
+Le `MultiFab` etant deja distribue par `DistributionMapping`, `sum(mf)` agrege
+via all-reduce et donne le meme resultat quel que soit le nombre de rangs.
+Verifie par `test_mpi_smoke` (lance `mpirun -np 4` : distribution SFC d'un
+`BoxArray`, somme globale invariante au nombre de rangs).
 
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`

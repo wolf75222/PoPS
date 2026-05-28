@@ -35,3 +35,14 @@ adc_add_test(test_muscl_convergence)
 adc_add_test(test_amr_reflux)
 adc_add_test(test_amr_multilevel)
 adc_add_test(test_load_balance)
+
+# Test MPI : seulement si le backend MPI est active. Lance via mpirun -np 4 ;
+# le seam (rang/size, all-reduce) doit donner le meme resultat quel que soit N.
+if(ADC_HAS_MPI)
+  add_executable(test_mpi_smoke test_mpi_smoke.cpp)
+  target_link_libraries(test_mpi_smoke PRIVATE adc::adc)
+  add_test(NAME test_mpi_smoke
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_smoke>
+                   ${MPIEXEC_POSTFLAGS})
+endif()
