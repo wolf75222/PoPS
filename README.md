@@ -74,11 +74,38 @@ python scripts/plot_diocotron_modes.py docs/fig_diocotron_modes.png /tmp/col3 /t
 python scripts/make_diocotron_gif.py /tmp/col3 docs/anim_diocotron_column.gif
 ```
 
-Pas encore fait pour une comparaison quantitative du taux de croissance au
-modele lineaire de Davidson-Felice (leur fig. 5.4) : il faut une paroi
-conductrice circulaire (ici on approxime par le bord carre Dirichlet) et la
-normalisation par la frequence diocotron. C'est la prochaine etape de
-validation.
+### Taux de croissance : validation contre la theorie lineaire (fig 5.4)
+
+Un eigensolver radial (host Eigen) resout le probleme aux valeurs propres
+diocotron de Petri (arXiv:astro-ph/0611936, eq. 20-21), equivalent a
+Davidson-Felice : `ω L_m φ = mΩ L_m φ + q_m φ`, discretise en differences finies
+et resolu par `M = L⁻¹A` avec `Eigen::EigenSolver`. C'est le seul usage d'Eigen,
+cote host, conformement a la decision d'architecture.
+
+![Taux de croissance diocotron](docs/fig_diocotron_theory.png)
+
+Pour la geometrie du papier (a=6, b=8, R=16), il reproduit les taux theoriques
+publies a mieux que 0.5 % :
+
+| ℓ | eigensolver | Hoffart et al. (fig 5.4) |
+|---|---|---|
+| 3 | 0.772 | 0.772 |
+| 4 | 0.912 | 0.911 |
+| 5 | 0.686 | 0.683 |
+
+Le spectre culmine a ℓ=4 et se coupe a ℓ≥6 (cutoff haute frequence), comme dans
+le papier. C'est la fig 5.4 du papier reproduite cote theorie. La simulation non
+lineaire reproduit la phenomenologie (les ℓ tourbillons) et la tendance du
+spectre ; son taux absolu est attenue par la diffusion numerique du schema, donc
+la comparaison theorie/simulation reste qualitative a cette resolution.
+
+Reproduire :
+
+```bash
+cmake --build build --target diocotron_theory
+./build/bin/diocotron_theory 6 8 16 /tmp/theory.csv
+python scripts/plot_diocotron_theory.py /tmp/theory.csv docs/fig_diocotron_theory.png
+```
 
 ## Niveau d'abstraction
 

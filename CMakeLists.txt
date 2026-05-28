@@ -19,6 +19,28 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 option(ADC_BUILD_TESTS    "Build tests"    ON)
 option(ADC_BUILD_EXAMPLES "Build examples" ON)
 option(ADC_USE_OPENMP     "Enable the OpenMP dispatch backend" OFF)
+option(ADC_USE_EIGEN      "Build host-side Eigen analysis tools (diocotron theory)" ON)
+
+# Eigen : cote host uniquement (analyse, hors hot path). Header-only : on
+# localise juste le dossier d'include et on l'expose via une cible d'interface
+# adc_eigen. Si introuvable, les cibles d'analyse sont sautees.
+set(ADC_HAS_EIGEN OFF)
+if(ADC_USE_EIGEN)
+  execute_process(COMMAND brew --prefix eigen
+                  OUTPUT_VARIABLE EIGEN_PREFIX
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  find_path(EIGEN_INCLUDE_DIR Eigen/Dense
+    HINTS "${EIGEN_PREFIX}/include/eigen3" /opt/homebrew/include/eigen3
+          /usr/local/include/eigen3 /usr/include/eigen3)
+  if(EIGEN_INCLUDE_DIR)
+    set(ADC_HAS_EIGEN ON)
+    add_library(adc_eigen INTERFACE)
+    target_include_directories(adc_eigen INTERFACE ${EIGEN_INCLUDE_DIR})
+    message(STATUS "Eigen found at ${EIGEN_INCLUDE_DIR} : building host analysis tools")
+  else()
+    message(STATUS "Eigen not found : skipping host analysis tools")
+  endif()
+endif()
 
 # Couche physique + maillage : bibliotheque d'interface (header-only) pour
 # l'instant. L'operateur spatial, l'elliptique et l'integrateur viendront en

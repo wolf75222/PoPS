@@ -3,3 +3,8 @@ target_link_libraries(diocotron PRIVATE adc::adc)
 
 add_executable(diocotron_column diocotron_column.cpp)
 target_link_libraries(diocotron_column PRIVATE adc::adc)
+
+if(ADC_HAS_EIGEN)
+  add_executable(diocotron_theory diocotron_theory.cpp)
+  target_link_libraries(diocotron_theory PRIVATE adc::adc adc_eigen)
+endif()
