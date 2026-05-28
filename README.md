@@ -147,6 +147,13 @@ borne de la solution sur 3 niveaux.
 
 ![Diocotron AMR 3 niveaux](docs/anim_diocotron_amr3.gif)
 
+Le pas couple AMR (sync + Poisson grossier + aux = grad phi injecte +
+sous-cyclage/reflux multi-niveaux) est un **composant reutilisable**
+`AmrExBStepper<Model>` (`coupling/amr_coupler.hpp`, pendant AMR du
+`SpectralExBStepper`) : `diocotron_amr3` ne reimplemente plus la boucle, il ne
+garde que ce qui lui est propre (le critere de regrid) et appelle `sim.step(dt)`.
+L'aux est resynchronise automatiquement quand un regrid change une box.
+
 Le demo `diocotron_amr3` met cette pile en oeuvre : niveau 0 grossier (Poisson +
 transport), niveau 1 (cadre cyan, ratio 2) qui suit la bande de charge, niveau 2
 (cadre lime, ratio 4) qui suit l'interface de cisaillement et les filaments. Le
