@@ -377,10 +377,17 @@ E x B (flux de Rusanov) dans un kernel CUDA en reutilisant TELLE QUELLE la vue
 `Array4` (meme layout SoA, meme indexation), et valide le resultat contre le CPU.
 Verifie sur ROMEO partition `armgpu` (Nvidia **GH200 120GB**, CUDA 12.6, gcc 11) :
 `maxdiff(GPU vs CPU) = 0`. Build + run : `scripts/romeo_gpu.sbatch` (l'aarch64 +
-CUDA ne se compile que sur un noeud `armgpu`, pas sur le login). C'est la preuve
-que la conception (vues legeres capturees par valeur, kernels sans etat) porte
-sur GPU ; le backend complet (`for_each_cell` device, Arenas memoire) est la
-suite.
+CUDA ne se compile que sur un noeud `armgpu`, pas sur le login).
+
+Le meme pas tourne aussi via **Kokkos** (`examples/gpu/advect_kokkos.cpp`,
+`Kokkos::parallel_for` en `MDRangePolicy` 2D, espace d'execution **Cuda**) en
+reutilisant la meme vue `Array4` DANS le kernel device : `maxdiff(Kokkos vs CPU)
+= 2e-16`. Kokkos 4.4 est compile maison (CUDA + `Kokkos_ARCH_HOPPER90`) dans le
+scratch ; le demo se construit via `examples/gpu/CMakeLists.txt`
+(`find_package(Kokkos)` + `nvcc_wrapper`). C'est la preuve que la conception
+(vues legeres capturees par valeur, kernels sans etat) porte sur GPU, en CUDA
+brut comme via Kokkos ; le backend complet (`for_each_cell` device, Arenas
+memoire) est la suite.
 
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`
