@@ -59,9 +59,9 @@ int main(int argc, char** argv) {
   const double dxc = geom.dx(), dyc = geom.dy();
   BoxArray ba(std::vector<Box2D>{dom});  // une box grossiere
 
-  // box fine interieure (raffine la zone du cisaillement), ratio 2
-  const int CI0 = nc / 8, CI1 = 7 * nc / 8 - 1;
-  const int CJ0 = 3 * nc / 8, CJ1 = 5 * nc / 8 - 1;
+  // box fine (recalculee dynamiquement par tagging), ratio 2
+  int CI0 = nc / 8, CI1 = 7 * nc / 8 - 1;
+  int CJ0 = 7 * nc / 16, CJ1 = 9 * nc / 16 - 1;
   Box2D fbox{{2 * CI0, 2 * CJ0}, {2 * CI1 + 1, 2 * CJ1 + 1}};
 
   Diocotron model;
@@ -130,12 +130,16 @@ int main(int argc, char** argv) {
         v = std::max(v, std::hypot(auxc(i, j, 1), auxc(i, j, 2)) / model.B0);
     return std::max(v, 1e-12);
   };
+  std::ofstream boxes(out + "/boxes.csv");
+  boxes << "frame,CI0,CI1,CJ0,CJ1,nc\n";
   auto dump = [&](int frame) {
     char name[64];
     std::snprintf(name, sizeof(name), "/dens_%04d.txt", frame);
     std::ofstream f(out + name);
     for (int j = 0; j < nc; ++j)
       for (int i = 0; i < nc; ++i) f << Uc(i, j) << (i + 1 < nc ? ' ' : '\n');
+    boxes << frame << ',' << CI0 << ',' << CI1 << ',' << CJ0 << ',' << CJ1 << ','
+          << nc << '\n';
   };
   auto mass = [&]() {
     double M = 0;
@@ -144,21 +148,59 @@ int main(int argc, char** argv) {
     return M;
   };
 
+  // regrid dynamique : la box fine est recalculee comme le bounding box des
+  // cellules taguees (densite au-dessus du fond), elargi d'un buffer et clippe a
+  // l'interieur. L'etat fin est transfere (ancien fin la ou il existe, sinon
+  // injection depuis le grossier synchronise).
+  auto regrid = [&]() {
+    int i0 = nc, i1 = -1, j0 = nc, j1 = -1;
+    for (int j = 0; j < nc; ++j)
+      for (int i = 0; i < nc; ++i)
+        if (Uc(i, j) > model.n_i0 + 0.12) {
+          i0 = std::min(i0, i);
+          i1 = std::max(i1, i);
+          j0 = std::min(j0, j);
+          j1 = std::max(j1, j);
+        }
+    if (i1 < i0) return;
+    const int buf = 4;
+    const int nCI0 = std::max(2, i0 - buf), nCI1 = std::min(nc - 3, i1 + buf);
+    const int nCJ0 = std::max(2, j0 - buf), nCJ1 = std::min(nc - 3, j1 + buf);
+    if (nCI0 == CI0 && nCI1 == CI1 && nCJ0 == CJ0 && nCJ1 == CJ1) return;
+    Box2D nf{{2 * nCI0, 2 * nCJ0}, {2 * nCI1 + 1, 2 * nCJ1 + 1}};
+    Fab2D Ufn(nf, 1, 1), auxfn(nf, 3, 1);
+    const ConstArray4 c = Uc.const_array();
+    const ConstArray4 ofo = Uf.const_array();
+    const Box2D oldfb = Uf.box();
+    Array4 a = Ufn.array();
+    auto crsn = [](int x) { return x >= 0 ? x / 2 : -((-x + 1) / 2); };
+    for (int j = nf.lo[1]; j <= nf.hi[1]; ++j)
+      for (int i = nf.lo[0]; i <= nf.hi[0]; ++i)
+        a(i, j) = oldfb.contains(i, j) ? ofo(i, j) : c(crsn(i), crsn(j));
+    Uf = std::move(Ufn);
+    auxf = std::move(auxfn);
+    CI0 = nCI0;
+    CI1 = nCI1;
+    CJ0 = nCJ0;
+    CJ1 = nCJ1;
+  };
+
   compute_aux();
   const double M0 = mass();
   double dt = 0.4 * dxc / vmax();
   const int snap = std::max(1, nsteps / 30);
-  std::printf("diocotron AMR nc=%d fine=[%d..%d]x[%d..%d] dt=%.2e\n", nc, CI0,
-              CI1, CJ0, CJ1, dt);
+  std::printf("diocotron AMR (regrid dynamique) nc=%d dt=%.2e\n", nc, dt);
 
   int frame = 0;
   for (int s = 0; s <= nsteps; ++s) {
     if (s % snap == 0) {
       dump(frame++);
-      std::printf("  s=%4d  drift=%.2e\n", s, std::fabs(mass() - M0));
+      std::printf("  s=%4d  fine=[%d..%d]x[%d..%d]  drift=%.2e\n", s, CI0, CI1,
+                  CJ0, CJ1, std::fabs(mass() - M0));
     }
     if (s == nsteps) break;
-    average_down_fab(Uf, Uc, CI0, CI1, CJ0, CJ1);
+    average_down_fab(Uf, Uc, CI0, CI1, CJ0, CJ1);  // sync grossier
+    if (s > 0 && s % 20 == 0) regrid();            // remaillage dynamique
     compute_aux();
     amr_step_2level(model, Uc, dom, dxc, dyc, Uf, CI0, CI1, CJ0, CJ1, auxc,
                     auxf, dt);

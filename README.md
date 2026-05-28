@@ -129,10 +129,13 @@ cmake --build build --target diocotron_amr
 ./build/bin/diocotron_amr /tmp/dio_amr 128 500
 ```
 
-Limite actuelle : la box fine est statique (placee a la main autour de la couche).
-Le regrid dynamique (tagging des tourbillons + Berger-Rigoutsos a chaque pas) est
-deja disponible cote maillage ; le brancher dans la boucle temporelle est la
-derniere etape.
+Le **regrid est dynamique** : toutes les 20 iterations, les cellules dont la
+densite depasse le fond sont taguees, on en prend le bounding box, on l'elargit
+d'un buffer et on le clippe a l'interieur ; la nouvelle box fine est reallouee et
+l'etat transfere (ancien fin la ou il existe, sinon injection depuis le grossier
+synchronise). Le cadre cyan de l'animation suit ainsi les structures (extents lus
+dans `boxes.csv`), et la masse reste conservee a l'arrondi a travers chaque
+remaillage (drift ~1e-15).
 
 ## Niveau d'abstraction
 
