@@ -108,9 +108,10 @@ coefficients durs.
 3. decomposition : `BoxArray` + `DistributionMapping` + seam `comm` (fait)
 4. conteneur multi-grille : `MultiFab` (collection de `Fab2D` + ghosts) (fait)
 5. echange de halos : `fill_boundary` (intra-niveau, periodique, MPI ensuite) (fait)
-6. CL physiques : periodique / Dirichlet / Neumann au bord du domaine
-7. hierarchie AMR : niveaux, regrid (tagging, Berger-Rigoutsos, proper nesting),
-   prolongation / restriction
+6. CL physiques : Foextrap / Dirichlet au bord du domaine (fait)
+7a. hierarchie AMR + transfert : `AmrHierarchy`, `average_down`, `interpolate`,
+    `parallel_copy` (fait)
+7b. regrid dynamique : tagging, Berger-Rigoutsos, proper nesting
 8. reflux : `FluxRegister` coarse-fine
 9. operateur spatial : reconstruction + Riemann + divergence
 10. integrateur temporel : SSPRK2/3, sous-cyclage
@@ -125,8 +126,13 @@ Couche donnees/maillage : index space `Box2D`, donnees mono-grille `Fab2D`
 (layout composante-lente, ghosts) avec handle `Array4` capturable par valeur, et
 dispatch `for_each_cell` (backend OpenMP, miroir de Kokkos `parallel_for`).
 Decomposition `BoxArray` + `DistributionMapping` sur le seam `comm` (rang
-unique, interface MPI-ready), champ distribue `MultiFab`, et echange de halos
-`fill_boundary` (intra-niveau, wrapping periodique).
+unique, interface MPI-ready), champ distribue `MultiFab`, echange de halos
+`fill_boundary` (intra-niveau, wrapping periodique) et CL physiques
+(`fill_physical_bc` : Foextrap, Dirichlet).
+
+Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
+transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`
+(injection grossier->fin), sur la brique `parallel_copy`.
 
 ## Build
 
