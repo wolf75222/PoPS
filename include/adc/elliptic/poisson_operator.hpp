@@ -33,7 +33,7 @@ inline void apply_laplacian(const MultiFab& phi, const Geometry& geom,
     const ConstArray4 p = phi.fab(li).const_array();
     Array4 L = lap.fab(li).array();
     const Box2D v = lap.box(li);
-    for_each_cell(v, [=](int i, int j) {
+    for_each_cell(v, [=] ADC_HD(int i, int j) {
       L(i, j) = (p(i + 1, j) - 2 * p(i, j) + p(i - 1, j)) * idx2 +
                 (p(i, j + 1) - 2 * p(i, j) + p(i, j - 1)) * idy2;
     });
@@ -44,6 +44,8 @@ inline void apply_laplacian(const MultiFab& phi, const Geometry& geom,
 inline void poisson_residual(MultiFab& phi, const MultiFab& f,
                              const Geometry& geom, const BCRec& bc,
                              MultiFab& res, const MultiFab* mask = nullptr) {
+  device_fence();  // GPU : phi a pu etre ecrit par un kernel (lisseur) ; on
+                   // attend avant la lecture hote de fill_ghosts.
   fill_ghosts(phi, geom.domain, bc);
   const Real idx2 = Real(1) / (geom.dx() * geom.dx());
   const Real idy2 = Real(1) / (geom.dy() * geom.dy());
@@ -54,7 +56,7 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
     const Box2D v = res.box(li);
     const bool hm = mask != nullptr;
     const ConstArray4 mk = hm ? mask->fab(li).const_array() : ConstArray4{};
-    for_each_cell(v, [=](int i, int j) {
+    for_each_cell(v, [=] ADC_HD(int i, int j) {
       if (hm && mk(i, j) == Real(0)) {
         r(i, j) = 0;
         return;
@@ -78,7 +80,7 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
     const Box2D v = phi.box(li);
     const bool hm = mask != nullptr;
     const ConstArray4 mk = hm ? mask->fab(li).const_array() : ConstArray4{};
-    for_each_cell(v, [=](int i, int j) {
+    for_each_cell(v, [=] ADC_HD(int i, int j) {
       if (((i + j) & 1) != color) return;
       if (hm && mk(i, j) == Real(0)) return;  // conducteur : fige
       const Real off = (p(i + 1, j) + p(i - 1, j)) * idx2 +
@@ -91,8 +93,10 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
 
 inline void gs_rb_sweep(MultiFab& phi, const MultiFab& f, const Geometry& geom,
                         const BCRec& bc, const MultiFab* mask = nullptr) {
+  device_fence();  // attend le kernel precedent avant la lecture hote des halos
   fill_ghosts(phi, geom.domain, bc);
-  detail::gs_color(phi, f, geom, 0, mask);  // rouge
+  detail::gs_color(phi, f, geom, 0, mask);  // rouge (kernel GPU)
+  device_fence();  // le balayage noir lit les valeurs rouges via fill_ghosts hote
   fill_ghosts(phi, geom.domain, bc);
   detail::gs_color(phi, f, geom, 1, mask);  // noir
 }
@@ -109,7 +113,7 @@ inline void zero_conductor(MultiFab& phi, const MultiFab& mask) {
     Array4 p = phi.fab(li).array();
     const ConstArray4 mk = mask.fab(li).const_array();
     const Box2D v = phi.box(li);
-    for_each_cell(v, [=](int i, int j) {
+    for_each_cell(v, [=] ADC_HD(int i, int j) {
       if (mk(i, j) == Real(0)) p(i, j) = 0;
     });
   }

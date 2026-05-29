@@ -40,3 +40,10 @@ target_include_directories(rhs_kokkos
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_definitions(rhs_kokkos PRIVATE ADC_HAS_KOKKOS)
 target_link_libraries(rhs_kokkos PRIVATE Kokkos::kokkos)
+
+# etape B (solveur complet) : briques multigrille (residu + lisseur GS rb) sur GPU
+add_executable(poisson_kokkos poisson_kokkos.cpp)
+target_include_directories(poisson_kokkos
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_definitions(poisson_kokkos PRIVATE ADC_HAS_KOKKOS)
+target_link_libraries(poisson_kokkos PRIVATE Kokkos::kokkos)

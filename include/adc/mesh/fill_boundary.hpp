@@ -42,8 +42,9 @@ inline void copy_shifted(Fab2D& dst, const Fab2D& src, const Box2D& region,
   Array4 d = dst.array();
   ConstArray4 s = src.const_array();
   for (int c = 0; c < ncomp; ++c)
-    for_each_cell(region,
-                  [=](int i, int j) { d(i, j, c) = s(i - sx, j - sy, c); });
+    for_each_cell(region, [=] ADC_HD(int i, int j) {
+      d(i, j, c) = s(i - sx, j - sy, c);
+    });
 }
 
 }  // namespace detail

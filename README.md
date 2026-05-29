@@ -432,9 +432,23 @@ les limiteurs (avec `min`/`abs` manuels, device-safe). `examples/gpu/rhs_kokkos.
 le valide sur GH200 (`maxdiff = 3e-14` vs reference serie utilisant les memes
 fonctions). Donc transport 1er ordre ET MUSCL ordre 2 tournent sur GPU.
 
-Reste pour un pas couple entier GPU : la multigrille geometrique (lisseur GS
-red-black, residu, restriction, prolongation) par `for_each_cell`, et un pool
-memoire (Arena) pour eviter un `cudaMallocManaged` par petit Fab temporaire.
+Les briques de la multigrille geometrique suivent : l'operateur de Poisson 5
+points (`apply_laplacian`, `poisson_residual`) et le lisseur Gauss-Seidel
+red-black (`gs_color`) utilisaient deja `for_each_cell` ; on annote `ADC_HD` leurs
+lambdas et celui de `copy_shifted` (remplissage de halos), si bien que residu,
+lisseur ET remplissage de ghosts tournent sur le GPU. Subtilite : `gs_rb_sweep`
+et `poisson_residual` alternent kernels device et remplissages de bord faits cote
+hote sur la memoire unifiee ; un `device_fence()` (= `Kokkos::fence`, no-op hors
+Kokkos) avant chaque lecture hote evite de lire un `phi` encore en cours
+d'ecriture par un kernel. `examples/gpu/poisson_kokkos.cpp` valide sur GH200 :
+`poisson_residual` bit a bit identique a la reference serie (`maxdiff = 0`), et
+`gs_smooth` fait chuter le residu (lisseur + barrieres OK de bout en bout).
+Hyperbolique (transport, MUSCL) et elliptique (residu, lisseur) tournent donc
+tous sur GPU.
+
+Reste pour un pas couple entier GPU : router de meme les operateurs de transfert
+AMR (`average_down` / `interpolate`, restriction et prolongation du V-cycle) et un
+pool memoire (Arena) pour eviter un `cudaMallocManaged` par petit Fab temporaire.
 
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`

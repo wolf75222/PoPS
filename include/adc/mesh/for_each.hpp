@@ -24,6 +24,16 @@
 
 namespace adc {
 
+// Barriere device : attend la fin des kernels en vol avant qu'un acces HOTE a la
+// memoire (unifiee) ne lise des donnees encore en cours d'ecriture par un kernel.
+// No-op hors Kokkos. A appeler avant toute lecture/ecriture hote (fill_ghosts,
+// transferts, normes) suivant un for_each_cell sur GPU.
+inline void device_fence() {
+#if defined(ADC_HAS_KOKKOS)
+  Kokkos::fence();
+#endif
+}
+
 template <class F>
 void for_each_cell(const Box2D& b, F f) {
 #if defined(ADC_HAS_KOKKOS)
