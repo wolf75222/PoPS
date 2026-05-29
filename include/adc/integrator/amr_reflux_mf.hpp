@@ -416,4 +416,220 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   }
 }
 
+// --- MULTI-PATCH N-NIVEAUX (multi-box a CHAQUE niveau) ---
+// Generalise subcycle_level_mf : chaque niveau est un MultiFab multi-box. Le reflux
+// (registre FluxRegister) est coverage-aware ET route la correction vers la box PARENTE
+// contenant la cellule grossiere adjacente. Se reduit BIT A BIT au chemin mono-box quand
+// chaque niveau n'a qu'une box (garde de validation).
+
+// box LOCALE (valide) contenant la cellule (I,J), ou -1.
+inline int mf_find_box(const MultiFab& mf, int I, int J) {
+  for (int li = 0; li < mf.local_size(); ++li)
+    if (mf.box(li).contains(I, J)) return li;
+  return -1;
+}
+
+// ghosts fins multi-box depuis un parent MULTI-BOX (interp espace constant + temps lin).
+inline void mf_fill_fine_ghosts_mb(MultiFab& Uf, const MultiFab& Po, const MultiFab& Pn,
+                                   Real frac) {
+  device_fence();
+  const int nc = Uf.ncomp();
+  for (int li = 0; li < Uf.local_size(); ++li) {
+    Array4 f = Uf.fab(li).array();
+    const Box2D v = Uf.box(li), g = Uf.fab(li).grown_box();
+    for (int j = g.lo[1]; j <= g.hi[1]; ++j)
+      for (int i = g.lo[0]; i <= g.hi[0]; ++i)
+        if (!v.contains(i, j)) {
+          const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
+          const int pb = mf_find_box(Po, ci, cj);
+          if (pb < 0) continue;  // hors couverture parente -> laisse au fill_boundary
+          const ConstArray4 po = Po.fab(pb).const_array(), pn = Pn.fab(pb).const_array();
+          for (int k = 0; k < nc; ++k)
+            f(i, j, k) = (1 - frac) * po(ci, cj, k) + frac * pn(ci, cj, k);
+        }
+  }
+}
+
+// moyenne fin multi-box -> parent multi-box (chaque cellule routee vers sa box parente).
+inline void mf_average_down_mb(const MultiFab& Uf, MultiFab& Uc) {
+  device_fence();
+  const int nc = Uc.ncomp();
+  for (int lf = 0; lf < Uf.local_size(); ++lf) {
+    const ConstArray4 f = Uf.fab(lf).const_array();
+    const Box2D fb = Uf.box(lf);
+    const int I0 = fb.lo[0] / 2, I1 = (fb.hi[0] - 1) / 2;
+    const int J0 = fb.lo[1] / 2, J1 = (fb.hi[1] - 1) / 2;
+    for (int J = J0; J <= J1; ++J)
+      for (int I = I0; I <= I1; ++I) {
+        const int pb = mf_find_box(Uc, I, J);
+        if (pb < 0) continue;
+        Array4 c = Uc.fab(pb).array();
+        for (int k = 0; k < nc; ++k)
+          c(I, J, k) = Real(0.25) * (f(2 * I, 2 * J, k) + f(2 * I + 1, 2 * J, k) +
+                                     f(2 * I, 2 * J + 1, k) + f(2 * I + 1, 2 * J + 1, k));
+      }
+  }
+}
+
+// un niveau de la hierarchie multi-patch (U + aux multi-box, meme BoxArray).
+struct AmrLevelMP {
+  MultiFab U;
+  const MultiFab* aux;
+  Real dx, dy;
+};
+
+// registre par patch enfant (coords PARENTES I0..J1). c* = flux grossier (sans dt) ;
+// f* = flux fin time-integre accumule par l'enfant durant le sous-cyclage.
+struct RegMP {
+  int I0, I1, J0, J1;
+  std::vector<Real> cL, cR, cB, cT, fL, fR, fB, fT;
+};
+
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real dt,
+                       const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
+                       const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs) {
+  const int r = 2, nc = L[lev].U.ncomp();
+  AmrLevelMP& lv = L[lev];
+  const int np = lv.U.local_size();
+
+  if (lev == 0) {
+    fill_boundary(lv.U, base_dom, base_per);
+  } else {
+    mf_fill_fine_ghosts_mb(lv.U, *pOld, *pNew, frac);
+    const Box2D fdom = Box2D::from_extents(base_dom.nx() << lev, base_dom.ny() << lev);
+    fill_boundary(lv.U, fdom, Periodicity{false, false});  // halos fin-fin
+  }
+
+  std::vector<Box2D> fxb, fyb;
+  for (int li = 0; li < np; ++li) {
+    fxb.push_back(xface_box(lv.U.box(li)));
+    fyb.push_back(yface_box(lv.U.box(li)));
+  }
+  MultiFab fx(BoxArray(std::move(fxb)), lv.U.dmap(), nc, 0);
+  MultiFab fy(BoxArray(std::move(fyb)), lv.U.dmap(), nc, 0);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, fx, fy);
+  device_fence();
+
+  if (parentRegs) {  // role FIN : flux fins de CE niveau dans le registre du parent
+    for (int li = 0; li < np; ++li) {
+      RegMP& g = (*parentRegs)[li];
+      const ConstArray4 FX = fx.fab(li).const_array(), FY = fy.fab(li).const_array();
+      for (int J = g.J0; J <= g.J1; ++J)
+        for (int k = 0; k < nc; ++k) {
+          g.fL[(J - g.J0) * nc + k] +=
+              Real(0.5) * (FX(2 * g.I0, 2 * J, k) + FX(2 * g.I0, 2 * J + 1, k)) * dt;
+          g.fR[(J - g.J0) * nc + k] += Real(0.5) *
+              (FX(2 * g.I1 + 2, 2 * J, k) + FX(2 * g.I1 + 2, 2 * J + 1, k)) * dt;
+        }
+      for (int I = g.I0; I <= g.I1; ++I)
+        for (int k = 0; k < nc; ++k) {
+          g.fB[(I - g.I0) * nc + k] +=
+              Real(0.5) * (FY(2 * I, 2 * g.J0, k) + FY(2 * I + 1, 2 * g.J0, k)) * dt;
+          g.fT[(I - g.I0) * nc + k] += Real(0.5) *
+              (FY(2 * I, 2 * g.J1 + 2, k) + FY(2 * I + 1, 2 * g.J1 + 2, k)) * dt;
+        }
+    }
+  }
+
+  if (lev + 1 >= static_cast<int>(L.size())) {  // feuille
+    mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
+    return;
+  }
+
+  // role GROSSIER pour lev+1 : couverture + registres + flux grossier sauve.
+  const int NX = base_dom.nx() << lev, NY = base_dom.ny() << lev;
+  std::vector<char> cov(static_cast<std::size_t>(NX) * NY, 0);
+  for (int lc = 0; lc < L[lev + 1].U.local_size(); ++lc) {
+    const Box2D cb = L[lev + 1].U.box(lc);
+    for (int J = cb.lo[1] / 2; J <= (cb.hi[1] - 1) / 2; ++J)
+      for (int I = cb.lo[0] / 2; I <= (cb.hi[0] - 1) / 2; ++I)
+        cov[static_cast<std::size_t>(J) * NX + I] = 1;
+  }
+  auto covered = [&](int I, int J) {
+    return (I >= 0 && I < NX && J >= 0 && J < NY) ? cov[static_cast<std::size_t>(J) * NX + I]
+                                                  : char(0);
+  };
+
+  std::vector<RegMP> regs(L[lev + 1].U.local_size());
+  for (int lc = 0; lc < L[lev + 1].U.local_size(); ++lc) {
+    const Box2D cb = L[lev + 1].U.box(lc);
+    RegMP& g = regs[lc];
+    g.I0 = cb.lo[0] / 2; g.I1 = (cb.hi[0] - 1) / 2;
+    g.J0 = cb.lo[1] / 2; g.J1 = (cb.hi[1] - 1) / 2;
+    const int nJ = g.J1 - g.J0 + 1, nI = g.I1 - g.I0 + 1;
+    g.cL.assign(nJ * nc, 0); g.cR.assign(nJ * nc, 0);
+    g.cB.assign(nI * nc, 0); g.cT.assign(nI * nc, 0);
+    g.fL.assign(nJ * nc, 0); g.fR.assign(nJ * nc, 0);
+    g.fB.assign(nI * nc, 0); g.fT.assign(nI * nc, 0);
+    for (int J = g.J0; J <= g.J1; ++J) {
+      const int pbL = mf_find_box(lv.U, g.I0, J), pbR = mf_find_box(lv.U, g.I1, J);
+      const ConstArray4 FXL = fx.fab(pbL).const_array(), FXR = fx.fab(pbR).const_array();
+      for (int k = 0; k < nc; ++k) {
+        g.cL[(J - g.J0) * nc + k] = FXL(g.I0, J, k);
+        g.cR[(J - g.J0) * nc + k] = FXR(g.I1 + 1, J, k);
+      }
+    }
+    for (int I = g.I0; I <= g.I1; ++I) {
+      const int pbB = mf_find_box(lv.U, I, g.J0), pbT = mf_find_box(lv.U, I, g.J1);
+      const ConstArray4 FYB = fy.fab(pbB).const_array(), FYT = fy.fab(pbT).const_array();
+      for (int k = 0; k < nc; ++k) {
+        g.cB[(I - g.I0) * nc + k] = FYB(I, g.J0, k);
+        g.cT[(I - g.I0) * nc + k] = FYT(I, g.J1 + 1, k);
+      }
+    }
+  }
+
+  MultiFab U_old = lv.U;  // etat t (interp temporelle pour les enfants)
+  mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
+  for (int s = 0; s < r; ++s)
+    subcycle_level_mp<Limiter, NumericalFlux>(m, L, lev + 1, dt / r, base_dom, base_per,
+                                              &U_old, &lv.U, Real(s) / r, &regs);
+  mf_average_down_mb(L[lev + 1].U, lv.U);
+
+  device_fence();  // reflux coverage-aware route vers la box parente.
+  for (int lc = 0; lc < static_cast<int>(regs.size()); ++lc) {
+    RegMP& g = regs[lc];
+    for (int J = g.J0; J <= g.J1; ++J)
+      for (int k = 0; k < nc; ++k) {
+        if (!covered(g.I0 - 1, J)) {
+          const int pb = mf_find_box(lv.U, g.I0 - 1, J);
+          if (pb >= 0)
+            lv.U.fab(pb).array()(g.I0 - 1, J, k) -=
+                (g.fL[(J - g.J0) * nc + k] - g.cL[(J - g.J0) * nc + k] * dt) / lv.dx;
+        }
+        if (!covered(g.I1 + 1, J)) {
+          const int pb = mf_find_box(lv.U, g.I1 + 1, J);
+          if (pb >= 0)
+            lv.U.fab(pb).array()(g.I1 + 1, J, k) +=
+                (g.fR[(J - g.J0) * nc + k] - g.cR[(J - g.J0) * nc + k] * dt) / lv.dx;
+        }
+      }
+    for (int I = g.I0; I <= g.I1; ++I)
+      for (int k = 0; k < nc; ++k) {
+        if (!covered(I, g.J0 - 1)) {
+          const int pb = mf_find_box(lv.U, I, g.J0 - 1);
+          if (pb >= 0)
+            lv.U.fab(pb).array()(I, g.J0 - 1, k) -=
+                (g.fB[(I - g.I0) * nc + k] - g.cB[(I - g.I0) * nc + k] * dt) / lv.dy;
+        }
+        if (!covered(I, g.J1 + 1)) {
+          const int pb = mf_find_box(lv.U, I, g.J1 + 1);
+          if (pb >= 0)
+            lv.U.fab(pb).array()(I, g.J1 + 1, k) +=
+                (g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k] * dt) / lv.dy;
+        }
+      }
+  }
+}
+
+// Driver : un pas dt de la hierarchie multi-patch N-niveaux (niveau 0 = grossier).
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L,
+                                    const Box2D& dom, Real dt,
+                                    Periodicity per = Periodicity{true, true}) {
+  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr,
+                                            Real(0), nullptr);
+}
+
 }  // namespace adc

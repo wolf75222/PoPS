@@ -106,42 +106,54 @@ discret 5 points (memes valeurs propres) :
 
 `Coupler<Model, Elliptic = GeometricMG>` est generique sur le backend.
 
-## 7. AMR : etat (unification MultiFab faite, multi-patch a venir)
+## 7. AMR : etat (unification MultiFab + multi-patch N-niveaux faits)
 
-**L'integrateur AMR de production tourne desormais sur la pile MultiFab + seam.**
-Le chemin (`AmrCoupler` + `diocotron_amr`/`amr3`) utilise :
-- `integrator/amr_reflux_mf.hpp` : `amr_step_2level_mf` / `amr_step_multilevel_mf`
-  (sous-cyclage Berger-Oliger recursif + reflux), generique
-  `<Limiter, NumericalFlux, N-comp>`, bulk via `for_each_cell` (GPU-ready), bati sur
-  `operator/spatial_operator.hpp::compute_face_fluxes` (les flux de FACE que le reflux
-  exige) ;
+**L'integrateur AMR tourne sur la pile MultiFab + seam, du mono-box au multi-patch
+N-niveaux.** `integrator/amr_reflux_mf.hpp` fournit, generique
+`<Limiter, NumericalFlux, N-comp>`, bulk `for_each_cell` (GPU-ready), bati sur
+`operator/spatial_operator.hpp::compute_face_fluxes` :
+- mono-box par niveau : `amr_step_2level_mf` / `amr_step_multilevel_mf` (sous-cyclage
+  Berger-Oliger recursif + reflux) ;
+- multi-patch (plusieurs boxes par niveau) : `amr_step_2level_multipatch` (2 niveaux) et
+  `amr_step_multilevel_multipatch` (N niveaux, recursion `subcycle_level_mp`). Le reflux
+  est **coverage-aware** (reflux seulement aux interfaces fin-grossier reelles, pas aux
+  joints fin-fin geres par `fill_boundary`) et **route la correction vers la box parente**
+  contenant la cellule grossiere adjacente (`mf_find_box`) ; ghosts inter-patch et
+  moyenne descendante depuis un parent multi-box (`mf_fill_fine_ghosts_mb`,
+  `mf_average_down_mb`).
 - `coupling/amr_coupler.hpp::AmrCoupler<Model, Elliptic=GeometricMG>` : hierarchie
   `std::vector<AmrLevelMF>`, Poisson via le concept `EllipticSolver`, `sync_down` /
   `inject_aux` / aux sur MultiFab.
 
-Chaque brique est prouvee **bit-identique** a la pile Fab2D de reference
-(`integrator/amr_reflux.hpp` / `amr_multilevel.hpp`), qui ne sert plus que de
-reference testee (`test_amr_reflux`, `test_amr_multilevel`). Tests d'equivalence :
-`test_face_fluxes`, `test_amr_reflux_mf`, `test_amr_multilevel_mf` ; conservation
-production : `test_amr_coupler` (`5.55e-16`).
+Chaque brique est prouvee **bit-identique** a sa reference. Le mono-box l'est vs la pile
+Fab2D (`amr_reflux.hpp` / `amr_multilevel.hpp`, reference testee). Le multipatch N-niveaux
+l'est sur DEUX axes (`test_amr_multilevel_multipatch`) : 3 niveaux mono-box -> identique
+a `amr_step_multilevel_mf` (`0`), 2 niveaux fin multi-box -> identique a
+`amr_step_2level_multipatch` (`0`), et 3 niveaux avec niveau intermediaire multi-box ->
+masse conservee (`0`). Autres tests : `test_face_fluxes`, `test_amr_reflux_mf`,
+`test_amr_multilevel_mf`, `test_amr_multipatch`, `test_amr_cluster_step`,
+`test_amr_coupler` (`5.55e-16`). Le demo couple `diocotron_multipatch` re-cluster ses
+patchs par Berger-Rigoutsos a la volee (masse `~2e-15`).
 
-Acquis : l'AMR peut utiliser MUSCL / HLL / HLLC / N-composantes et est GPU-ready, la
-ou la pile Fab2D etait figee Rusanov 1er ordre scalaire hote-only.
+Acquis : l'AMR peut utiliser MUSCL / HLL / HLLC / N-composantes, du mono-box au
+multi-patch N-niveaux, et est GPU-ready, la ou la pile Fab2D etait figee Rusanov 1er
+ordre scalaire hote-only.
 
-**Reste (le dernier morceau) : le multi-patch.** Chaque niveau est encore une **box
-unique** (`AmrLevelMF` = 1 MultiFab a 1 box). Le vrai multi-patch demande : niveaux a
-plusieurs boxes, FluxRegister coverage-aware (reflux uniquement aux interfaces fin-
-grossier, pas fin-fin), FillPatch inter-patch, regrid **Berger-Rigoutsos** (la Pile A
-`amr/cluster`+`regrid`, deja testee mais pas branchee) + `load_balance` SFC sur le
-multi-box. Effort distinct et conservation-critique.
+**Reste : le distribue.** Le multipatch tourne mono-rang (le reflux ecrit la box grossiere
+localement, la couverture est batie sur les patchs locaux). Le rendre MPI demande un
+all-gather des empreintes pour la couverture globale + un gather des registres vers le
+rang du grossier. Plus : regrid dynamique Berger-Rigoutsos branche DANS `AmrCoupler`
+(et non plus seulement dans le demo) + `load_balance` SFC sur le multi-box. Effort
+distinct et conservation-critique.
 
 ## 8. Comparaison AMReX
 
 Correspondances : `MultiFab`, `BoxArray`/`DistributionMapping`, `Geometry`,
 `AmrLevel`, FillBoundary, Arena, reflux, MLMG ~ `GeometricMG`. Divergences assumees :
 pas de `MFIter` (on itere `for_each_cell` + fab local, GPU-ready) ; `EllipticSolver`
-joue `LinOp` mais Laplacien a coefficient constant (EB en escalier) ; AMR a box unique
-par niveau (le multi-patch facon AMReX FluxRegister/FillPatch est le morceau restant).
+joue `LinOp` mais Laplacien a coefficient constant (EB en escalier) ; le FluxRegister /
+FillPatch multi-patch N-niveaux existe (`amr_step_multilevel_multipatch`) mais reste
+mono-rang (le distribue MPI du reflux multi-patch est le morceau restant).
 
 ## 9. Validation
 
