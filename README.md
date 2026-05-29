@@ -574,6 +574,15 @@ Termes raides et sortie distribuee (briques inspirees de MUFFIN) :
   (`max|a| = 1.0`) la ou l'explicite explose (`1e200`) ; ordre 1 en non raide. C'est
   le terme raide du futur deux-fluides isotherme magnetique, valide avant le
   couplage spatial complet.
+- `model/two_fluid_isothermal.hpp` : `TwoFluidLinear`, generalisation aux DEUX
+  especes mobiles (electrons + ions isothermes). Les amplitudes de mode obeissent a
+  `Ä = K A` (couplage 2x2), dont les frequences propres sont les DEUX branches du
+  plasma : Langmuir (haute freq) ET ion-acoustique (basse freq, absente quand les
+  ions sont figes). IMEX : plasma (`omega_pe, omega_pi`) implicite (solve 2x2
+  A-stable), acoustique explicite. `test_two_fluid` : dispersion conforme (relations
+  de Vieta exactes, limites k->0), AP (a `omega_pe = 1e3`, IMEX borne vs explicite a
+  `1e200`), et le schema reproduit la branche de Langmuir a 0.1%. Premier increment
+  vers le deux-fluides spatial.
 - `analysis/hdf5_writer.hpp` (option `ADC_USE_HDF5`) : DataWriter HDF5 parallele.
   Chaque rang ecrit ses boites par hyperslab dans un dataset global, sans gather
   (MPI-IO independant). Aller-retour `maxdiff = 0` en serie ; ecriture sur 4 rangs
