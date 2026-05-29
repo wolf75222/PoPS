@@ -16,4 +16,6 @@ find_package(Kokkos REQUIRED)
 add_executable(advect_kokkos advect_kokkos.cpp)
 target_include_directories(advect_kokkos
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+# active le backend Kokkos du seam for_each_cell pour cette unite de traduction
+target_compile_definitions(advect_kokkos PRIVATE ADC_HAS_KOKKOS)
 target_link_libraries(advect_kokkos PRIVATE Kokkos::kokkos)

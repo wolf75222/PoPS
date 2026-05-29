@@ -392,15 +392,21 @@ Verifie sur ROMEO partition `armgpu` (Nvidia **GH200 120GB**, CUDA 12.6, gcc 11)
 `maxdiff(GPU vs CPU) = 0`. Build + run : `scripts/romeo_gpu.sbatch` (l'aarch64 +
 CUDA ne se compile que sur un noeud `armgpu`, pas sur le login).
 
-Le meme pas tourne aussi via **Kokkos** (`examples/gpu/advect_kokkos.cpp`,
-`Kokkos::parallel_for` en `MDRangePolicy` 2D, espace d'execution **Cuda**) en
-reutilisant la meme vue `Array4` DANS le kernel device : `maxdiff(Kokkos vs CPU)
-= 2e-16`. Kokkos 4.4 est compile maison (CUDA + `Kokkos_ARCH_HOPPER90`) dans le
-scratch ; le demo se construit via `examples/gpu/CMakeLists.txt`
-(`find_package(Kokkos)` + `nvcc_wrapper`). C'est la preuve que la conception
-(vues legeres capturees par valeur, kernels sans etat) porte sur GPU, en CUDA
-brut comme via Kokkos ; le backend complet (`for_each_cell` device, Arenas
-memoire) est la suite.
+Surtout, le **seam `for_each_cell` lui-meme** a un backend Kokkos
+(`#ifdef ADC_HAS_KOKKOS` -> `Kokkos::parallel_for(MDRangePolicy<Rank<2>>)`, a cote
+des backends serie et OpenMP). Le demo `examples/gpu/advect_kokkos.cpp` appelle
+le **MEME** `for_each_cell(box, kernel)` que le code CPU ; sous `ADC_HAS_KOKKOS`
+il lance un kernel sur l'espace **Cuda** du GH200, le fonctor (lambda `ADC_HD`)
+operant sur une vue `Array4` device-residente : `maxdiff(Kokkos vs CPU) = 2e-16`.
+Le passage CPU -> GPU ne touche donc PAS les sites d'appel, seulement le backend.
+Kokkos 4.4 est compile maison (CUDA + `Kokkos_ARCH_HOPPER90`) dans le scratch ; le
+demo se construit via `examples/gpu/CMakeLists.txt` (`find_package(Kokkos)` +
+`nvcc_wrapper`).
+
+Etape suivante vers un solveur entierement GPU : rendre la donnee device-residente
+(`Fab2D` sur `Kokkos::View` / memoire unifiee coherente du GH200), pour que les
+operateurs (assemble_rhs, coupleurs) tournent sur device via ce meme seam, sans
+reecriture.
 
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`

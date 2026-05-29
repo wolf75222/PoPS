@@ -11,6 +11,7 @@
 #include <adc/core/types.hpp>
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/fab2d.hpp>
+#include <adc/mesh/for_each.hpp>  // le seam : backend Kokkos sous ADC_HAS_KOKKOS
 
 #include <Kokkos_Core.hpp>
 
@@ -69,16 +70,16 @@ int main(int argc, char** argv) {
     ConstArray4 u_dev{d_u.data(), hv.nx_tot, hv.comp_stride, hv.ig0, hv.jg0};
     Array4 un_dev{d_un.data(), hv.nx_tot, hv.comp_stride, hv.ig0, hv.jg0};
 
-    using MD = Kokkos::MDRangePolicy<Kokkos::Rank<2>>;
-    Kokkos::parallel_for(
-        "advect", MD({0, 0}, {N, N}), KOKKOS_LAMBDA(int i, int j) {
-          const double fxL = rus(u_dev(i - 1, j), u_dev(i, j), vx);
-          const double fxR = rus(u_dev(i, j), u_dev(i + 1, j), vx);
-          const double fyB = rus(u_dev(i, j - 1), u_dev(i, j), vy);
-          const double fyT = rus(u_dev(i, j), u_dev(i, j + 1), vy);
-          un_dev(i, j) =
-              u_dev(i, j) - dt * ((fxR - fxL) / dx + (fyT - fyB) / dy);
-        });
+    // Le MEME for_each_cell que le code CPU. Sous ADC_HAS_KOKKOS il dispatche
+    // vers Kokkos::parallel_for (espace Cuda) ; le fonctor est device-callable
+    // (ADC_HD) et opere sur la donnee device-residente (vues sur d_u / d_un).
+    for_each_cell(Box2D{{0, 0}, {N - 1, N - 1}}, [=] ADC_HD(int i, int j) {
+      const double fxL = rus(u_dev(i - 1, j), u_dev(i, j), vx);
+      const double fxR = rus(u_dev(i, j), u_dev(i + 1, j), vx);
+      const double fyB = rus(u_dev(i, j - 1), u_dev(i, j), vy);
+      const double fyT = rus(u_dev(i, j), u_dev(i, j + 1), vy);
+      un_dev(i, j) = u_dev(i, j) - dt * ((fxR - fxL) / dx + (fyT - fyB) / dy);
+    });
     Kokkos::fence();
 
     auto h_un = Kokkos::create_mirror_view(d_un);

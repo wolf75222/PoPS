@@ -2,26 +2,44 @@
 
 #include <adc/mesh/box2d.hpp>
 
-// for_each_cell : le dispatch maison sur les cellules d'une Box2D. C'est le
-// seam de parallelisme, calque sur Kokkos::parallel_for(MDRangePolicy<Rank<2>>).
-//
-// Le fonctor est pris par valeur et recoit (i, j). Il capture par valeur des
+#ifdef ADC_HAS_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
+
+// for_each_cell : le seam de parallelisme sur les cellules d'une Box2D. Le
+// fonctor est pris par valeur et recoit (i, j) ; il capture par valeur des
 // handles Array4 (POD), jamais le Fab ni rien de virtuel : exactement la
-// contrainte d'un kernel device. Basculer sur Kokkos plus tard revient a
-// remplacer le corps de cette fonction, sans toucher aux appelants.
+// contrainte d'un kernel device.
 //
-// Backend actuel : OpenMP (collapse 2D, ordonnancement statique). Sans -fopenmp
-// la pragma est ignoree et l'execution est sequentielle.
+// Backend selectionnable a la compilation (par unite de traduction) :
+//   - Kokkos (ADC_HAS_KOKKOS) : Kokkos::parallel_for(MDRangePolicy<Rank<2>>),
+//     s'execute sur l'espace par defaut (p.ex. Cuda sur GH200). Le fonctor doit
+//     alors etre device-callable (lambda annotee ADC_HD) et operer sur une
+//     donnee device-residente. C'est le MEME appel for_each_cell que le CPU.
+//   - OpenMP (_OPENMP) : collapse(2), ordonnancement statique.
+//   - sinon : sequentiel.
+//
+// Le passage CPU -> GPU ne change donc PAS les sites d'appel : on remplace le
+// backend ici, les operateurs (assemble_rhs, coupleurs, demos) restent inchanges.
 
 namespace adc {
 
 template <class F>
 void for_each_cell(const Box2D& b, F f) {
-#ifdef _OPENMP
+#if defined(ADC_HAS_KOKKOS)
+  Kokkos::parallel_for(
+      "adc_for_each_cell",
+      Kokkos::MDRangePolicy<Kokkos::Rank<2>>({b.lo[0], b.lo[1]},
+                                             {b.hi[0] + 1, b.hi[1] + 1}),
+      f);
+#elif defined(_OPENMP)
 #pragma omp parallel for collapse(2) schedule(static)
-#endif
   for (int j = b.lo[1]; j <= b.hi[1]; ++j)
     for (int i = b.lo[0]; i <= b.hi[0]; ++i) f(i, j);
+#else
+  for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+    for (int i = b.lo[0]; i <= b.hi[0]; ++i) f(i, j);
+#endif
 }
 
 }  // namespace adc
