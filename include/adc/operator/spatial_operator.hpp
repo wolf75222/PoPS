@@ -29,26 +29,28 @@
 namespace adc {
 
 template <class Model>
-inline typename Model::State load_state(const ConstArray4& a, int i, int j) {
+ADC_HD inline typename Model::State load_state(const ConstArray4& a, int i,
+                                              int j) {
   typename Model::State u;
   for (int c = 0; c < Model::n_vars; ++c) u[c] = a(i, j, c);
   return u;
 }
 
-inline Aux load_aux(const ConstArray4& a, int i, int j) {
+ADC_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
   return Aux{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
 }
 
 template <class Model>
-inline typename Model::State rusanov_flux(const Model& m,
+ADC_HD inline typename Model::State rusanov_flux(const Model& m,
                                           const typename Model::State& UL,
                                           const Aux& AL,
                                           const typename Model::State& UR,
                                           const Aux& AR, int dir) {
   const auto FL = m.flux(UL, AL, dir);
   const auto FR = m.flux(UR, AR, dir);
-  const Real alpha = std::max(m.max_wave_speed(UL, AL, dir),
-                              m.max_wave_speed(UR, AR, dir));
+  const Real sL = m.max_wave_speed(UL, AL, dir);
+  const Real sR = m.max_wave_speed(UR, AR, dir);
+  const Real alpha = sL > sR ? sL : sR;  // max device-safe (pas de std::max)
   typename Model::State F;
   for (int c = 0; c < Model::n_vars; ++c)
     F[c] = Real(0.5) * (FL[c] + FR[c]) - Real(0.5) * alpha * (UR[c] - UL[c]);

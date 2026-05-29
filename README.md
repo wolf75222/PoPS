@@ -414,10 +414,20 @@ CPU est byte-identique (l'alias se reduit a `std::allocator`). Le demo
 `Array4`, **sans aucun buffer device manuel ni deep_copy** : `maxdiff = 2e-16`. La
 structure de donnees de la lib tourne donc sur GPU.
 
-Reste, pour un solveur entierement GPU : faire passer tous les operateurs
-(`assemble_rhs`, coupleurs, reflux) par `for_each_cell` (au lieu de boucles
-brutes), et un pool memoire (Arenas) pour eviter un `cudaMallocManaged` par petit
-Fab temporaire.
+**Etape 3 (faite) : un vrai operateur sur GPU.** Le pas de transport
+`advance_fab_1c` (flux de Rusanov via le modele `Diocotron`, Euler explicite)
+tourne ENTIEREMENT sur GPU sans une ligne de code GPU dans l'operateur : ses
+boucles passent par `for_each_cell` (backend Kokkos), la chaine flux (`StateVec`,
+`load_aux`, `rusanov_flux`, methodes du modele) est annotee `ADC_HD`, et le
+`Fab2D` est en memoire unifiee. `StateVec` utilise un tableau C (pas `std::array`)
+et le flux evite `std::max`/`std::fabs` -> noyau device-trivial, sans dependance
+a `--expt-relaxed-constexpr`. Le demo `examples/gpu/advance_fab_kokkos.cpp` valide
+`maxdiff = 2e-16` sur GH200. Seuls le backend (`for_each_cell`) et l'allocateur
+(`Fab2D`) ont change ; l'operateur, lui, est le meme qu'en CPU.
+
+Reste pour un solveur complet GPU : router de meme les autres operateurs
+(`assemble_rhs` SSPRK, multigrille) par `for_each_cell`, et un pool memoire
+(Arenas) pour eviter un `cudaMallocManaged` par petit Fab temporaire.
 
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`

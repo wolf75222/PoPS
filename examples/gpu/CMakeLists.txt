@@ -26,3 +26,10 @@ target_include_directories(advect_fab_kokkos
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_definitions(advect_fab_kokkos PRIVATE ADC_HAS_KOKKOS)
 target_link_libraries(advect_fab_kokkos PRIVATE Kokkos::kokkos)
+
+# etape 3 : le VRAI operateur advance_fab_1c (modele + Rusanov) sur GPU
+add_executable(advance_fab_kokkos advance_fab_kokkos.cpp)
+target_include_directories(advance_fab_kokkos
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_definitions(advance_fab_kokkos PRIVATE ADC_HAS_KOKKOS)
+target_link_libraries(advance_fab_kokkos PRIVATE Kokkos::kokkos)

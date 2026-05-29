@@ -31,23 +31,24 @@ struct Diocotron {
   Real alpha = 1.0;  // constante de couplage Poisson
 
   // Composante de la vitesse de derive E x B dans la direction dir.
-  Real drift_velocity(const Aux& a, int dir) const {
+  ADC_HD Real drift_velocity(const Aux& a, int dir) const {
     return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
   }
 
-  State flux(const State& u, const Aux& a, int dir) const {
+  ADC_HD State flux(const State& u, const Aux& a, int dir) const {
     State f{};
     f[0] = u[0] * drift_velocity(a, dir);
     return f;
   }
 
-  Real max_wave_speed(const State&, const Aux& a, int dir) const {
-    return std::fabs(drift_velocity(a, dir));
+  ADC_HD Real max_wave_speed(const State&, const Aux& a, int dir) const {
+    const Real d = drift_velocity(a, dir);
+    return d < 0 ? -d : d;  // |.| device-safe (pas de std::fabs)
   }
 
-  State source(const State&, const Aux&) const { return State{}; }
+  ADC_HD State source(const State&, const Aux&) const { return State{}; }
 
-  Real elliptic_rhs(const State& u) const { return alpha * (u[0] - n_i0); }
+  ADC_HD Real elliptic_rhs(const State& u) const { return alpha * (u[0] - n_i0); }
 };
 
 }  // namespace adc

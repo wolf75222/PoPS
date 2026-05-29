@@ -4,6 +4,7 @@
 #include <adc/core/types.hpp>
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/fab2d.hpp>
+#include <adc/mesh/for_each.hpp>
 #include <adc/operator/spatial_operator.hpp>
 
 #include <vector>
@@ -38,27 +39,23 @@ void compute_fluxes_1c(const Model& m, const Fab2D& U, const Fab2D& aux,
   const ConstArray4 ax = aux.const_array();
   {
     Array4 F = fx.array();
-    const Box2D b = fx.box();
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-        typename Model::State UL{}, UR{};
-        UL[0] = u(i - 1, j);
-        UR[0] = u(i, j);
-        F(i, j) = rusanov_flux(m, UL, load_aux(ax, i - 1, j), UR,
-                               load_aux(ax, i, j), 0)[0];
-      }
+    for_each_cell(fx.box(), [=] ADC_HD(int i, int j) {
+      typename Model::State UL{}, UR{};
+      UL[0] = u(i - 1, j);
+      UR[0] = u(i, j);
+      F(i, j) = rusanov_flux(m, UL, load_aux(ax, i - 1, j), UR,
+                             load_aux(ax, i, j), 0)[0];
+    });
   }
   {
     Array4 F = fy.array();
-    const Box2D b = fy.box();
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
-        typename Model::State UL{}, UR{};
-        UL[0] = u(i, j - 1);
-        UR[0] = u(i, j);
-        F(i, j) = rusanov_flux(m, UL, load_aux(ax, i, j - 1), UR,
-                               load_aux(ax, i, j), 1)[0];
-      }
+    for_each_cell(fy.box(), [=] ADC_HD(int i, int j) {
+      typename Model::State UL{}, UR{};
+      UL[0] = u(i, j - 1);
+      UR[0] = u(i, j);
+      F(i, j) = rusanov_flux(m, UL, load_aux(ax, i, j - 1), UR,
+                             load_aux(ax, i, j), 1)[0];
+    });
   }
 }
 
@@ -70,11 +67,10 @@ void advance_fab_1c(const Model& m, Fab2D& U, const Fab2D& aux, double dx,
   Array4 uu = U.array();
   const ConstArray4 FX = fx.const_array();
   const ConstArray4 FY = fy.const_array();
-  const Box2D v = U.box();
-  for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-    for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-      uu(i, j) -= dt * ((FX(i + 1, j) - FX(i, j)) / dx +
-                        (FY(i, j + 1) - FY(i, j)) / dy);
+  for_each_cell(U.box(), [=] ADC_HD(int i, int j) {
+    uu(i, j) -= dt * ((FX(i + 1, j) - FX(i, j)) / dx +
+                      (FY(i, j + 1) - FY(i, j)) / dy);
+  });
 }
 
 // ghosts periodiques pour un Fab2D unique couvrant le domaine.

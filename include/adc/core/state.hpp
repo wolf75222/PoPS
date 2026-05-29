@@ -2,8 +2,6 @@
 
 #include <adc/core/types.hpp>
 
-#include <array>
-
 // State et Aux : les deux types ponctuels manipules par la couche physique.
 //
 // Regle d'architecture : ce sont des agregats trivialement copiables (POD).
@@ -19,28 +17,28 @@ namespace adc {
 // Pour Euler 2D : StateVec<4>. La taille pilote n_vars du modele.
 template <int N>
 struct StateVec {
-  std::array<Real, N> v{};
+  Real v[N]{};  // tableau C : trivialement utilisable sur device (pas std::array)
 
-  Real& operator[](int i) { return v[i]; }
-  Real operator[](int i) const { return v[i]; }
+  ADC_HD Real& operator[](int i) { return v[i]; }
+  ADC_HD Real operator[](int i) const { return v[i]; }
 
-  static constexpr int size() { return N; }
+  ADC_HD static constexpr int size() { return N; }
 };
 
 template <int N>
-StateVec<N> operator+(StateVec<N> a, const StateVec<N>& b) {
+ADC_HD StateVec<N> operator+(StateVec<N> a, const StateVec<N>& b) {
   for (int i = 0; i < N; ++i) a[i] += b[i];
   return a;
 }
 
 template <int N>
-StateVec<N> operator-(StateVec<N> a, const StateVec<N>& b) {
+ADC_HD StateVec<N> operator-(StateVec<N> a, const StateVec<N>& b) {
   for (int i = 0; i < N; ++i) a[i] -= b[i];
   return a;
 }
 
 template <int N>
-StateVec<N> operator*(Real s, StateVec<N> a) {
+ADC_HD StateVec<N> operator*(Real s, StateVec<N> a) {
   for (int i = 0; i < N; ++i) a[i] *= s;
   return a;
 }
