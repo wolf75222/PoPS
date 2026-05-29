@@ -121,9 +121,13 @@ N-niveaux.** `integrator/amr_reflux_mf.hpp` fournit, generique
   contenant la cellule grossiere adjacente (`mf_find_box`) ; ghosts inter-patch et
   moyenne descendante depuis un parent multi-box (`mf_fill_fine_ghosts_mb`,
   `mf_average_down_mb`).
-- `coupling/amr_coupler.hpp::AmrCoupler<Model, Elliptic=GeometricMG>` : hierarchie
-  `std::vector<AmrLevelMF>`, Poisson via le concept `EllipticSolver`, `sync_down` /
-  `inject_aux` / aux sur MultiFab.
+- `coupling/amr_coupler.hpp::AmrCoupler<Model, Elliptic=GeometricMG>` : coupleur mono-box,
+  hierarchie `std::vector<AmrLevelMF>`, Poisson via le concept `EllipticSolver`,
+  `sync_down` / `inject_aux` / aux sur MultiFab.
+- `coupling/amr_coupler_mp.hpp::AmrCouplerMP<Model, Elliptic>` : coupleur MULTI-PATCH,
+  hierarchie `std::vector<AmrLevelMP>`, pas via `amr_step_multilevel_multipatch`, et
+  `regrid()` reconstruit le niveau fin a la volee par Berger-Rigoutsos (le regrid
+  dynamique est donc dans le coupleur reutilisable, plus seulement dans le demo).
 
 Chaque brique est prouvee **bit-identique** a sa reference. Le mono-box l'est vs la pile
 Fab2D (`amr_reflux.hpp` / `amr_multilevel.hpp`, reference testee). Le multipatch N-niveaux
@@ -132,7 +136,9 @@ a `amr_step_multilevel_mf` (`0`), 2 niveaux fin multi-box -> identique a
 `amr_step_2level_multipatch` (`0`), et 3 niveaux avec niveau intermediaire multi-box ->
 masse conservee (`0`). Autres tests : `test_face_fluxes`, `test_amr_reflux_mf`,
 `test_amr_multilevel_mf`, `test_amr_multipatch`, `test_amr_cluster_step`,
-`test_amr_coupler` (`5.55e-16`). Le demo couple `diocotron_multipatch` re-cluster ses
+`test_amr_coupler` (`5.55e-16`). `AmrCouplerMP` est prouve **bit-identique** (`0`) a
+`AmrCoupler` sur hierarchie mono-box et conservatif (`1.3e-15`) sous regrid BR dynamique
+a 3 patchs (`test_amr_coupler_mp`). Le demo couple `diocotron_multipatch` re-cluster ses
 patchs par Berger-Rigoutsos a la volee (masse `~2e-15`).
 
 Acquis : l'AMR peut utiliser MUSCL / HLL / HLLC / N-composantes, du mono-box au
@@ -142,9 +148,9 @@ ordre scalaire hote-only.
 **Reste : le distribue.** Le multipatch tourne mono-rang (le reflux ecrit la box grossiere
 localement, la couverture est batie sur les patchs locaux). Le rendre MPI demande un
 all-gather des empreintes pour la couverture globale + un gather des registres vers le
-rang du grossier. Plus : regrid dynamique Berger-Rigoutsos branche DANS `AmrCoupler`
-(et non plus seulement dans le demo) + `load_balance` SFC sur le multi-box. Effort
-distinct et conservation-critique.
+rang du grossier, plus `load_balance` SFC sur le multi-box. Effort distinct et
+conservation-critique. Le regrid dynamique BR dans le coupleur reutilisable est fait
+(`AmrCouplerMP::regrid`).
 
 ## 8. Comparaison AMReX
 
