@@ -90,6 +90,12 @@ class GeometricMG {
     return max_cycles;
   }
 
+  // Interface du concept EllipticSolver : solve() sans argument (tolerance par
+  // defaut) et residual() (alias de current_residual). Permet aux coupleurs de
+  // dependre du concept, pas de GeometricMG en dur.
+  void solve() { solve(Real(1e-8), 50); }
+  Real residual() { return current_residual(); }
+
   // Residu courant (norme infinie) au niveau le plus fin.
   Real current_residual() {
     poisson_residual(lev_[0].phi, lev_[0].rhs, lev_[0].geom, bc_, lev_[0].res,

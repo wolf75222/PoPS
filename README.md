@@ -508,6 +508,20 @@ Couplage : `Coupler` ferme la boucle hyperbolique-elliptique stade par stade
 centrees -> assemble_rhs -> SSPRK2). Diocotron : equilibre neutre stationnaire,
 masse conservee et positivite preservee sous dynamique couplee non triviale.
 
+Interfaces generiques (avant d'ajouter Euler-Poisson) : trois points de variation
+sont extraits en politiques/concepts, sans toucher mesh/amr/parallel.
+- `operator/numerical_flux.hpp` : le flux numerique est une POLITIQUE template, au
+  meme titre que le limiteur. `assemble_rhs<Limiter, NumericalFlux>` (defaut
+  `RusanovFlux`) ; HLL/HLLC suivront avec Euler (ils exigent les vitesses d'onde
+  signees, donc une extension du concept). `RusanovFlux` est `ADC_HD` (GPU-safe).
+- `elliptic/elliptic_solver.hpp` : concept `EllipticSolver` (rhs/phi/solve/
+  residual/geom). `GeometricMG` le modele (static_assert dans le coupleur) ; le
+  coupleur depend du contrat, pas du backend, pour preparer FFT/PETSc.
+- `coupling/coupling_policy.hpp` : `Coupler::advance<Limiter, Policy>` avec
+  `PerStageCoupling` (phi a chaque etage, defaut) ou `OncePerStepCoupling` (un
+  solve elliptique par pas). `test_interfaces` valide : flux defaut == explicite
+  bit a bit, OncePerStep conserve la masse.
+
 Termes raides et sortie distribuee (briques inspirees de MUFFIN) :
 - `integrator/splitting.hpp` : splitting d'operateur `lie_step` (1er ordre) et
   `strang_step` (2e ordre), generiques sur des sous-pas (transport / source raide),

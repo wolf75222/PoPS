@@ -1,6 +1,8 @@
 #pragma once
 
 #include <adc/core/types.hpp>
+#include <adc/coupling/coupling_policy.hpp>
+#include <adc/elliptic/elliptic_solver.hpp>
 #include <adc/elliptic/geometric_mg.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
@@ -15,6 +17,7 @@
 #include <adc/parallel/comm.hpp>
 
 #include <functional>
+#include <type_traits>
 #include <utility>
 
 // Coupleur hyperbolique-elliptique : ferme la boucle Poisson -> aux -> advance.
@@ -84,10 +87,15 @@ class Coupler {
         mg_(geom, ba, bcPhi, std::move(active)),
         aux_(ba, dm_, 3, 1) {}
 
-  // SSPRK2 couple (phi recalcule a chaque etage). Le limiteur (reconstruction)
-  // est un parametre de template ; U doit avoir au moins Limiter::n_ghost ghosts.
-  template <class Limiter = NoSlope>
+  // SSPRK2 couple. Limiteur (reconstruction) et politique de couplage temporel
+  // sont des parametres de template ; U doit avoir au moins Limiter::n_ghost
+  // ghosts. Policy = PerStageCoupling (defaut) recalcule phi a chaque etage ;
+  // OncePerStepCoupling le resout une fois par pas (aux gele).
+  template <class Limiter = NoSlope, class Policy = PerStageCoupling>
   void advance(MultiFab& U, Real dt, Real mg_tol = 1e-8, int mg_maxc = 30) {
+    static_assert(std::is_same_v<Policy, PerStageCoupling> ||
+                      std::is_same_v<Policy, OncePerStepCoupling>,
+                  "Policy doit etre PerStageCoupling ou OncePerStepCoupling");
     MultiFab R(ba_, dm_, Model::n_vars, 0);
 
     update_aux(U, mg_tol, mg_maxc);
@@ -96,7 +104,10 @@ class Coupler {
     MultiFab U1 = U;
     saxpy(U1, dt, R);
 
-    update_aux(U1, mg_tol, mg_maxc);
+    // PerStage : phi recalcule pour l'etat intermediaire U1 (plus precis).
+    // OncePerStep : on reutilise le aux du debut de pas (un seul solve elliptique).
+    if constexpr (std::is_same_v<Policy, PerStageCoupling>)
+      update_aux(U1, mg_tol, mg_maxc);
     fill_ghosts(U1, geom_.domain, bcU_);
     assemble_rhs<Limiter>(model_, U1, aux_, geom_, R);
     saxpy(U1, dt, R);
@@ -147,5 +158,11 @@ class Coupler {
   GeometricMG mg_;
   MultiFab aux_;
 };
+
+// Le backend elliptique du coupleur respecte le contrat commun : echanger
+// GeometricMG contre un autre solveur conforme (FFT enveloppe, PETSc) ne demandera
+// que de changer le type du membre, pas la logique de couplage.
+static_assert(EllipticSolver<GeometricMG>,
+              "GeometricMG doit modeler le concept EllipticSolver");
 
 }  // namespace adc

@@ -6,6 +6,7 @@
 #include <adc/mesh/for_each.hpp>
 #include <adc/mesh/geometry.hpp>
 #include <adc/mesh/multifab.hpp>
+#include <adc/operator/numerical_flux.hpp>
 #include <adc/operator/reconstruction.hpp>
 
 #include <algorithm>
@@ -40,21 +41,16 @@ ADC_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
   return Aux{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
 }
 
+// Compat : flux de Rusanov en fonction libre, delegue a la politique RusanovFlux
+// (operator/numerical_flux.hpp). Conserve pour les references serie (demos GPU,
+// tests) qui appellent rusanov_flux directement.
 template <class Model>
 ADC_HD inline typename Model::State rusanov_flux(const Model& m,
                                           const typename Model::State& UL,
                                           const Aux& AL,
                                           const typename Model::State& UR,
                                           const Aux& AR, int dir) {
-  const auto FL = m.flux(UL, AL, dir);
-  const auto FR = m.flux(UR, AR, dir);
-  const Real sL = m.max_wave_speed(UL, AL, dir);
-  const Real sR = m.max_wave_speed(UR, AR, dir);
-  const Real alpha = sL > sR ? sL : sR;  // max device-safe (pas de std::max)
-  typename Model::State F;
-  for (int c = 0; c < Model::n_vars; ++c)
-    F[c] = Real(0.5) * (FL[c] + FR[c]) - Real(0.5) * alpha * (UR[c] - UL[c]);
-  return F;
+  return RusanovFlux{}(m, UL, AL, UR, AR, dir);
 }
 
 // Valeur de cellule (i,j) extrapolee vers sa face +dir (sgn=+1) ou -dir (sgn=-1).
@@ -76,11 +72,15 @@ ADC_HD inline typename Model::State reconstruct(const ConstArray4& u, int i,
   return s;
 }
 
-template <class Limiter = NoSlope, class Model>
+// assemble_rhs<Limiter, NumericalFlux> : R = -div Fhat + S. Le limiteur (pente de
+// reconstruction) ET le flux numerique sont des parametres de template, par defaut
+// MUSCL au choix de l'appelant + Rusanov. Tous deux device-callable (ADC_HD).
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux,
                   const Geometry& geom, MultiFab& R) {
   const Real dx = geom.dx(), dy = geom.dy();
   const Limiter lim{};
+  const NumericalFlux nflux{};
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
@@ -98,16 +98,16 @@ void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux,
       const auto Rxm = reconstruct<Model>(u, i, j, 0, -1, lim);
       const auto Lxp = reconstruct<Model>(u, i, j, 0, +1, lim);
       const auto Rxp = reconstruct<Model>(u, i + 1, j, 0, -1, lim);
-      const auto Fxm = rusanov_flux(model, Lxm, Axm, Rxm, Ac, 0);
-      const auto Fxp = rusanov_flux(model, Lxp, Ac, Rxp, Axp, 0);
+      const auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
+      const auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
 
       // faces y
       const auto Lym = reconstruct<Model>(u, i, j - 1, 1, +1, lim);
       const auto Rym = reconstruct<Model>(u, i, j, 1, -1, lim);
       const auto Lyp = reconstruct<Model>(u, i, j, 1, +1, lim);
       const auto Ryp = reconstruct<Model>(u, i, j + 1, 1, -1, lim);
-      const auto Fym = rusanov_flux(model, Lym, Aym, Rym, Ac, 1);
-      const auto Fyp = rusanov_flux(model, Lyp, Ac, Ryp, Ayp, 1);
+      const auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
+      const auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
 
       const auto S = model.source(load_state<Model>(u, i, j), Ac);
       for (int c = 0; c < Model::n_vars; ++c)

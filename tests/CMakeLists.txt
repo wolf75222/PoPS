@@ -37,6 +37,7 @@ adc_add_test(test_amr_multilevel)
 adc_add_test(test_load_balance)
 adc_add_test(test_splitting)
 adc_add_test(test_imex_ap)
+adc_add_test(test_interfaces)
 
 if(ADC_HAS_HDF5)
   adc_add_test(test_hdf5_io)
