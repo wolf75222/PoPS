@@ -38,6 +38,10 @@ adc_add_test(test_load_balance)
 adc_add_test(test_splitting)
 adc_add_test(test_imex_ap)
 
+if(ADC_HAS_HDF5)
+  adc_add_test(test_hdf5_io)
+endif()
+
 # Test MPI : seulement si le backend MPI est active. Lance via mpirun -np 4 ;
 # le seam (rang/size, all-reduce) doit donner le meme resultat quel que soit N.
 if(ADC_HAS_MPI)

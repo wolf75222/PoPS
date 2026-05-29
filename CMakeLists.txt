@@ -20,6 +20,7 @@ option(ADC_BUILD_TESTS    "Build tests"    ON)
 option(ADC_BUILD_EXAMPLES "Build examples" ON)
 option(ADC_USE_OPENMP     "Enable the OpenMP dispatch backend" OFF)
 option(ADC_USE_MPI        "Enable the MPI backend (distributed comm seam)" OFF)
+option(ADC_USE_HDF5       "Enable the HDF5 DataWriter (parallel output)" OFF)
 option(ADC_USE_EIGEN      "Build host-side Eigen analysis tools (diocotron theory)" ON)
 
 # Eigen : cote host uniquement (analyse, hors hot path). Header-only : on
@@ -84,6 +85,18 @@ if(ADC_USE_MPI)
   target_compile_definitions(adc INTERFACE ADC_HAS_MPI)
   set(ADC_HAS_MPI ON)
   message(STATUS "MPI found (${MPIEXEC_EXECUTABLE}) : enabling distributed comm seam")
+endif()
+
+# Sortie HDF5 (DataWriter parallele). En serie : ecriture directe. En parallele
+# (HDF5 MPI-IO) : chaque rang ecrit ses boites par hyperslab, sans gather.
+set(ADC_HAS_HDF5 OFF)
+if(ADC_USE_HDF5)
+  find_package(HDF5 REQUIRED COMPONENTS C)
+  target_link_libraries(adc INTERFACE ${HDF5_C_LIBRARIES})
+  target_include_directories(adc INTERFACE ${HDF5_C_INCLUDE_DIRS})
+  target_compile_definitions(adc INTERFACE ADC_HAS_HDF5)
+  set(ADC_HAS_HDF5 ON)
+  message(STATUS "HDF5 found (${HDF5_VERSION}, parallel=${HDF5_IS_PARALLEL}) : enabling DataWriter")
 endif()
 
 if(ADC_BUILD_TESTS)
