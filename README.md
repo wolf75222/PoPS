@@ -526,7 +526,12 @@ source" du concept, et il se branche TEL QUEL sur `Coupler<EulerPoisson>`. Valid
 `omega = sqrt(c_s^2 k^2 - 4 pi G rho0)`, mesure **a 0.1%** de la theorie ; quantite de
 mouvement totale conservee a `1e-16` (gravite interne) et masse conservee. Le meme
 `Coupler` porte donc diocotron (aux dans le flux) ET Euler-Poisson (aux dans la
-source) sans changement.
+source) sans changement. Et il tourne SUR GPU sans modification :
+`examples/gpu/euler_poisson_kokkos.cpp` (meme source CPU et GPU) execute le pas
+couple a 4 variables sur GH200, **bit a bit identique au CPU** (`sum(U^2) =
+5.3248058096e+04`, quantite de mouvement conservee a `1e-18`). L'infrastructure
+generique (`Coupler`, `for_each_cell`, multigrille, Arena) porte donc le modele
+auto-gravitant a 4 variables sans aucun changement de code GPU.
 
 Interfaces generiques (avant d'ajouter Euler-Poisson) : trois points de variation
 sont extraits en politiques/concepts, sans toucher mesh/amr/parallel.

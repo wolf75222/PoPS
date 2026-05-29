@@ -68,3 +68,10 @@ target_include_directories(arena_kokkos
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_definitions(arena_kokkos PRIVATE ADC_HAS_KOKKOS)
 target_link_libraries(arena_kokkos PRIVATE Kokkos::kokkos)
+
+# Euler-Poisson (4 variables) : pas couple entier sur GPU, bit-identique au CPU
+add_executable(euler_poisson_kokkos euler_poisson_kokkos.cpp)
+target_include_directories(euler_poisson_kokkos
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_definitions(euler_poisson_kokkos PRIVATE ADC_HAS_KOKKOS)
+target_link_libraries(euler_poisson_kokkos PRIVATE Kokkos::kokkos)
