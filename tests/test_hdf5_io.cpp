@@ -8,6 +8,7 @@
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/multifab.hpp>
+#include <adc/parallel/comm.hpp>
 
 #include <hdf5.h>
 
@@ -19,7 +20,8 @@ using namespace adc;
 
 static double fval(int i, int j) { return i + 100.0 * j; }  // valeur globale deterministe
 
-int main() {
+int main(int argc, char** argv) {
+  comm_init(&argc, &argv);
   const int N = 16, bs = 8;  // 2x2 boites de 8x8
   Box2D dom = Box2D::from_extents(N, N);
   BoxArray ba = BoxArray::from_domain(dom, bs);
@@ -35,6 +37,7 @@ int main() {
 
   const std::string fn = "/tmp/adc_test_hdf5.h5";
   write_hdf5(mf, N, N, fn, "field", 0);
+  barrier();  // tous les rangs ont ecrit avant que le rang 0 ne relise
 
   // relecture (rang 0) et comparaison au domaine global complet
   int fails = 0;
@@ -61,5 +64,6 @@ int main() {
   }
 
   if (fails == 0 && my_rank() == 0) std::printf("OK test_hdf5_io\n");
+  comm_finalize();
   return fails == 0 ? 0 : 1;
 }
