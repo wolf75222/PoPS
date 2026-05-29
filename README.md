@@ -508,6 +508,15 @@ Couplage : `Coupler` ferme la boucle hyperbolique-elliptique stade par stade
 centrees -> assemble_rhs -> SSPRK2). Diocotron : equilibre neutre stationnaire,
 masse conservee et positivite preservee sous dynamique couplee non triviale.
 
+Modele Euler compressible 2D (`model/euler.hpp`) : gaz parfait, U = (rho, rho u,
+rho v, E), flux directionnel et `max_wave_speed = |v_dir| + c`, instance du concept
+`PhysicalModel` (donc directement utilisable par `assemble_rhs<Limiter,
+NumericalFlux>` + `advance_ssprk2`, et device-callable `ADC_HD`). `source = 0`
+(Euler pur), `elliptic_rhs = rho` (prepare Euler-Poisson auto-gravitant). Valide
+par `test_euler` : preservation d'un etat uniforme (`max|R| = 0`) et tourbillon
+isentropique advecte, ordre de convergence **1.86 (VanLeer)** vers l'ordre 2
+attendu (Minmod 1.50, ecretage des extrema lisses), positivite preservee.
+
 Interfaces generiques (avant d'ajouter Euler-Poisson) : trois points de variation
 sont extraits en politiques/concepts, sans toucher mesh/amr/parallel.
 - `operator/numerical_flux.hpp` : le flux numerique est une POLITIQUE template, au
