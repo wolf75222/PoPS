@@ -508,6 +508,21 @@ Couplage : `Coupler` ferme la boucle hyperbolique-elliptique stade par stade
 centrees -> assemble_rhs -> SSPRK2). Diocotron : equilibre neutre stationnaire,
 masse conservee et positivite preservee sous dynamique couplee non triviale.
 
+Termes raides et sortie distribuee (briques inspirees de MUFFIN) :
+- `integrator/splitting.hpp` : splitting d'operateur `lie_step` (1er ordre) et
+  `strang_step` (2e ordre), generiques sur des sous-pas (transport / source raide),
+  prerequis aux sources chimiques/collisionnelles. Mesure : Strang ordre 2.00,
+  Lie 1.00 sur un systeme non commutant a flot exact.
+- `integrator/imex.hpp` : IMEX d'Euler (forward-backward) asymptotic-preserving,
+  explicite sur le transport, implicite sur la source raide. Pont vers le vrai
+  Euler-Poisson magnetique (Debye -> 0, Lorentz, quasi-neutralite du regime
+  Hoffart). Sur une relaxation raide : stable et vers l'equilibre a dt >> eps la
+  ou l'explicite explose ; ordre 1 en regime non raide.
+- `analysis/hdf5_writer.hpp` (option `ADC_USE_HDF5`) : DataWriter HDF5 parallele.
+  Chaque rang ecrit ses boites par hyperslab dans un dataset global, sans gather
+  (MPI-IO independant). Aller-retour `maxdiff = 0` en serie ; ecriture sur 4 rangs
+  MPI validee sur ROMEO (GPFS).
+
 ## Build
 
 ```bash
