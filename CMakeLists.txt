@@ -91,7 +91,9 @@ endif()
 # (HDF5 MPI-IO) : chaque rang ecrit ses boites par hyperslab, sans gather.
 set(ADC_HAS_HDF5 OFF)
 if(ADC_USE_HDF5)
-  find_package(HDF5 REQUIRED COMPONENTS C)
+  # MODULE (wrappers h5cc/h5pcc + variables) plutot que CONFIG : le hdf5-config.cmake
+  # de spack exige une cible importee MPI::MPI_C que ce projet CXX-only ne cree pas.
+  find_package(HDF5 MODULE REQUIRED COMPONENTS C)
   target_link_libraries(adc INTERFACE ${HDF5_C_LIBRARIES})
   target_include_directories(adc INTERFACE ${HDF5_C_INCLUDE_DIRS})
   target_compile_definitions(adc INTERFACE ADC_HAS_HDF5)
