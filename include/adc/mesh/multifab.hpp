@@ -5,6 +5,7 @@
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fab2d.hpp>
+#include <adc/mesh/for_each.hpp>  // device_fence
 #include <adc/parallel/comm.hpp>
 
 #include <utility>
@@ -57,6 +58,8 @@ class MultiFab {
   int local_index_of(int global) const { return local_index_[global]; }
 
   void set_val(Real v) {
+    device_fence();  // GPU : un kernel a pu ecrire ces fabs ; barriere avant le
+                     // remplissage hote (sinon course ecriture hote/kernel).
     for (auto& f : fabs_) f.set_val(v);
   }
 

@@ -443,12 +443,23 @@ Kokkos) avant chaque lecture hote evite de lire un `phi` encore en cours
 d'ecriture par un kernel. `examples/gpu/poisson_kokkos.cpp` valide sur GH200 :
 `poisson_residual` bit a bit identique a la reference serie (`maxdiff = 0`), et
 `gs_smooth` fait chuter le residu (lisseur + barrieres OK de bout en bout).
-Hyperbolique (transport, MUSCL) et elliptique (residu, lisseur) tournent donc
-tous sur GPU.
 
-Reste pour un pas couple entier GPU : router de meme les operateurs de transfert
-AMR (`average_down` / `interpolate`, restriction et prolongation du V-cycle) et un
-pool memoire (Arena) pour eviter un `cudaMallocManaged` par petit Fab temporaire.
+Le **V-cycle entier** suit : on route aussi les operateurs de transfert AMR
+(`average_down` / `interpolate` via `for_each_cell` + `ADC_HD`, `coarsen_index`
+annote `ADC_HD`) et l'arithmetique de `MultiFab` (`saxpy` / `lincomb` sur
+`for_each_cell`). Les seuls points hote restants portent un `device_fence()` :
+remplissage de bord (dans `gs`/`residu`), reduction `norm_inf` et `set_val`. Le
+V-cycle devient une chaine de kernels device, ordonnancee sur le stream par
+defaut. `examples/gpu/mg_kokkos.cpp` valide `GeometricMG::solve` sur GH200, probleme
+manufacture Dirichlet : hierarchie 7 niveaux (128 -> 2), **9 V-cycles** pour un
+residu relatif de `8e-11`, solution exacte a `err = 5e-5` = O(dx^2). Tout le
+solveur elliptique tourne donc sur GPU.
+
+Bilan : hyperbolique (transport, MUSCL `assemble_rhs`), elliptique (multigrille
+complete) ET l'arithmetique des etages d'integration tournent sur GPU. Les briques
+d'un pas couple Euler-Poisson sont donc toutes portees. Reste surtout un pool
+memoire (Arena) pour eviter un `cudaMallocManaged` par petit Fab temporaire dans
+les etages d'integration et les niveaux de la multigrille.
 
 Couche AMR : `AmrHierarchy` (niveaux, ratio de raffinement), operateurs de
 transfert `average_down` (moyenne conservative fin->grossier) et `interpolate`

@@ -25,7 +25,7 @@
 
 namespace adc {
 
-inline int coarsen_index(int a, int r) {
+ADC_HD inline int coarsen_index(int a, int r) {
   int q = a / r, rem = a % r;
   return (rem != 0 && ((rem < 0) != (r < 0))) ? q - 1 : q;
 }
@@ -142,17 +142,16 @@ inline void average_down(const MultiFab& fine, MultiFab& coarse, int r) {
   MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);
   const Real inv = Real(1) / (r * r);
   for (int li = 0; li < fine.local_size(); ++li) {
-    const Fab2D& F = fine.fab(li);
-    Fab2D& C = cfine.fab(li);
-    const Box2D cb = C.box();
+    const ConstArray4 F = fine.fab(li).const_array();
+    Array4 C = cfine.fab(li).array();
+    const Box2D cb = cfine.fab(li).box();
     for (int c = 0; c < nc; ++c)
-      for (int J = cb.lo[1]; J <= cb.hi[1]; ++J)
-        for (int I = cb.lo[0]; I <= cb.hi[0]; ++I) {
-          Real s = 0;
-          for (int b = 0; b < r; ++b)
-            for (int a = 0; a < r; ++a) s += F(r * I + a, r * J + b, c);
-          C(I, J, c) = s * inv;
-        }
+      for_each_cell(cb, [=] ADC_HD(int I, int J) {
+        Real s = 0;
+        for (int b = 0; b < r; ++b)
+          for (int a = 0; a < r; ++a) s += F(r * I + a, r * J + b, c);
+        C(I, J, c) = s * inv;
+      });
   }
   parallel_copy(coarse, cfine);
 }
@@ -162,13 +161,13 @@ inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r) {
   MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);
   parallel_copy(cfine, coarse);  // amene les valeurs grossieres sur la grille fine-coarsen
   for (int li = 0; li < fine.local_size(); ++li) {
-    Fab2D& F = fine.fab(li);
-    const Fab2D& C = cfine.fab(li);
-    const Box2D fb = F.box();
+    Array4 F = fine.fab(li).array();
+    const ConstArray4 C = cfine.fab(li).const_array();
+    const Box2D fb = fine.fab(li).box();
     for (int c = 0; c < nc; ++c)
-      for (int j = fb.lo[1]; j <= fb.hi[1]; ++j)
-        for (int i = fb.lo[0]; i <= fb.hi[0]; ++i)
-          F(i, j, c) = C(coarsen_index(i, r), coarsen_index(j, r), c);
+      for_each_cell(fb, [=] ADC_HD(int i, int j) {
+        F(i, j, c) = C(coarsen_index(i, r), coarsen_index(j, r), c);
+      });
   }
 }
 

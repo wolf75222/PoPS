@@ -60,9 +60,12 @@ class GeometricMG {
         for (int li = 0; li < L.mask.local_size(); ++li) {
           Array4 m = L.mask.fab(li).array();
           const Geometry& g = L.geom;
-          for_each_cell(L.mask.box(li), [=, this](int i, int j) {
-            m(i, j) = active_(g.x_cell(i), g.y_cell(j)) ? Real(1) : Real(0);
-          });
+          const Box2D b = L.mask.box(li);
+          // initialisation hote (predicat std::function non device-callable) ;
+          // ecrit la memoire unifiee avant tout kernel.
+          for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+            for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+              m(i, j) = active_(g.x_cell(i), g.y_cell(j)) ? Real(1) : Real(0);
         }
       }
     }

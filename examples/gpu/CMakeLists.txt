@@ -47,3 +47,10 @@ target_include_directories(poisson_kokkos
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 target_compile_definitions(poisson_kokkos PRIVATE ADC_HAS_KOKKOS)
 target_link_libraries(poisson_kokkos PRIVATE Kokkos::kokkos)
+
+# etape B (suite) : V-cycle multigrille ENTIER (transferts + arith) sur GPU
+add_executable(mg_kokkos mg_kokkos.cpp)
+target_include_directories(mg_kokkos
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_compile_definitions(mg_kokkos PRIVATE ADC_HAS_KOKKOS)
+target_link_libraries(mg_kokkos PRIVATE Kokkos::kokkos)
