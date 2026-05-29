@@ -79,6 +79,7 @@ if(ADC_HAS_MPI)
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}>
                      ${MPIEXEC_POSTFLAGS})
   endfunction()
+  adc_add_mpi_test(test_mpi_array_reduce 4)
   adc_add_mpi_test(test_mpi_smoke 4)
   adc_add_mpi_test(test_mpi_fillboundary 4)
   adc_add_mpi_test(test_mpi_advect 4)

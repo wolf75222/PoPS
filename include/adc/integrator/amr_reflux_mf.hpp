@@ -308,10 +308,11 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   const Real dxf = dxc / 2, dyf = dyc / 2, dtf = dt / r;
   const int NX = dom.nx(), NY = dom.ny();
 
-  // masque de couverture : cellules grossieres couvertes par une box fine.
+  // masque de couverture : cellules grossieres couvertes par une box fine. Bati sur le
+  // BoxArray GLOBAL (toutes les boxes, connues de tous les rangs) -> correct sous MPI.
   std::vector<char> cov(static_cast<std::size_t>(NX) * NY, 0);
-  for (int li = 0; li < Uf.local_size(); ++li) {
-    const Box2D fb = Uf.box(li);
+  for (int g = 0; g < Uf.box_array().size(); ++g) {
+    const Box2D fb = Uf.box_array()[g];
     for (int J = fb.lo[1] / 2; J <= (fb.hi[1] - 1) / 2; ++J)
       for (int I = fb.lo[0] / 2; I <= (fb.hi[0] - 1) / 2; ++I)
         cov[static_cast<std::size_t>(J) * NX + I] = 1;
@@ -539,9 +540,9 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   // role GROSSIER pour lev+1 : couverture + registres + flux grossier sauve.
   const int NX = base_dom.nx() << lev, NY = base_dom.ny() << lev;
-  std::vector<char> cov(static_cast<std::size_t>(NX) * NY, 0);
-  for (int lc = 0; lc < L[lev + 1].U.local_size(); ++lc) {
-    const Box2D cb = L[lev + 1].U.box(lc);
+  std::vector<char> cov(static_cast<std::size_t>(NX) * NY, 0);  // couverture GLOBALE (MPI-safe)
+  for (int g = 0; g < L[lev + 1].U.box_array().size(); ++g) {
+    const Box2D cb = L[lev + 1].U.box_array()[g];
     for (int J = cb.lo[1] / 2; J <= (cb.hi[1] - 1) / 2; ++J)
       for (int I = cb.lo[0] / 2; I <= (cb.hi[0] - 1) / 2; ++I)
         cov[static_cast<std::size_t>(J) * NX + I] = 1;

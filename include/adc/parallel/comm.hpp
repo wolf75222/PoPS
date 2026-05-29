@@ -67,6 +67,14 @@ inline double all_reduce_max(double x) {
   return r;
 }
 
+// Somme element par element d'un tableau, en place, sur tous les rangs. Brique de
+// base du reflux AMR multi-patch distribue : chaque rang remplit les contributions de
+// ses patchs locaux (0 ailleurs), all-reduce -> chaque rang a le registre complet.
+inline void all_reduce_sum_inplace(double* buf, int n) {
+  if (!comm_active() || n <= 0) return;
+  MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+}
+
 inline long all_reduce_sum(long x) {
   if (!comm_active()) return x;
   long r = x;
@@ -85,6 +93,7 @@ inline void barrier() {}
 inline double all_reduce_sum(double x) { return x; }
 inline double all_reduce_max(double x) { return x; }
 inline long all_reduce_sum(long x) { return x; }
+inline void all_reduce_sum_inplace(double*, int) {}  // serie : identite
 
 #endif
 
