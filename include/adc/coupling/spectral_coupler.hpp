@@ -32,9 +32,9 @@
 namespace adc {
 
 template <class Model>
-class SpectralExBStepper {
+class SpectralCoupler {
  public:
-  SpectralExBStepper(const Model& model, int Nx, int Ny, double Lx, double Ly)
+  SpectralCoupler(const Model& model, int Nx, int Ny, double Lx, double Ly)
       : model_(model),
         Nx_(Nx),
         Ny_(Ny),

@@ -1,6 +1,6 @@
 // Diocotron sur AMR a 2 niveaux (couplage decouple). Le pas couple (sync +
 // Poisson grossier + aux = grad phi injecte + sous-cyclage/reflux) est porte par
-// le composant reutilisable AmrExBStepper (coupling/amr_coupler.hpp), ici avec 2
+// le composant reutilisable AmrCoupler (coupling/amr_coupler.hpp), ici avec 2
 // niveaux. Cet exemple ne garde que ce qui lui est propre : le regrid dynamique
 // (bounding box des cellules au-dessus du fond) et l'I/O. Plus aucune boucle
 // couplee reecrite a la main.
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
   L0.push_back({std::move(Uf), nullptr, dxf, dyf, 0, 0, 0, 0, false});
 
   BCRec bc;  // periodique
-  AmrExBStepper<Diocotron> sim(model, geom, ba, bc, std::move(L0));
+  AmrCoupler<Diocotron> sim(model, geom, ba, bc, std::move(L0));
   std::vector<AmrLevel>& L = sim.levels();
 
   // --- PROPRE A CET EXEMPLE : regrid dynamique (densite au-dessus du fond) ---
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
   const double M0 = sim.mass();
   double dt = 0.4 * dxc / sim.max_drift_speed();
   const int snap = std::max(1, nsteps / 30);
-  std::printf("diocotron AMR 2 niveaux (AmrExBStepper) nc=%d dt=%.2e\n", nc, dt);
+  std::printf("diocotron AMR 2 niveaux (AmrCoupler) nc=%d dt=%.2e\n", nc, dt);
 
   int frame = 0;
   for (int s = 0; s <= nsteps; ++s) {

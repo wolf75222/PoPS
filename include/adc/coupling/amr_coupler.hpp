@@ -27,14 +27,14 @@
 // pour reconstruire les box fines, le stepper resynchronise aux tout seul.
 //
 // Generique sur le modele (Diocotron ; tout modele a alpha, n_i0, B0, flux E x B).
-// Pendant AMR du SpectralExBStepper distribue.
+// Pendant AMR du SpectralCoupler distribue.
 
 namespace adc {
 
 template <class Model>
-class AmrExBStepper {
+class AmrCoupler {
  public:
-  AmrExBStepper(const Model& model, const Geometry& geom,
+  AmrCoupler(const Model& model, const Geometry& geom,
                 const BoxArray& ba_coarse, const BCRec& bc,
                 std::vector<AmrLevel> levels, Real mg_tol = 1e-8,
                 int mg_maxc = 30)

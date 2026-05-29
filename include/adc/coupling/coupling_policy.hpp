@@ -13,7 +13,7 @@
 //                         couplage. Utile quand l'elliptique domine le cout.
 //
 // (AMR sous-cyclage et redistribution tuiles<->bandes FFT sont des politiques de
-// la meme famille, portees par AmrExBStepper / SpectralExBStepper.)
+// la meme famille, portees par AmrCoupler / SpectralCoupler.)
 
 namespace adc {
 

@@ -25,7 +25,7 @@
 //
 // Portee : mono-rang, boite unique couvrant le domaine (le cas par defaut du Coupler
 // et des facades). Le periodique distribue tuiles <-> bandes FFT est porte par
-// SpectralExBStepper (qui gere la redistribution).
+// SpectralCoupler (qui gere la redistribution).
 
 namespace adc {
 
@@ -41,7 +41,7 @@ class PoissonFFTSolver {
         fft_(geom.domain.nx(), geom.domain.ny(), geom.xhi - geom.xlo,
              geom.yhi - geom.ylo) {
     assert(n_ranks() == 1 && ba.size() == 1 &&
-           "PoissonFFTSolver : mono-rang / boite unique (sinon SpectralExBStepper)");
+           "PoissonFFTSolver : mono-rang / boite unique (sinon SpectralCoupler)");
   }
 
   MultiFab& rhs() { return rhs_; }

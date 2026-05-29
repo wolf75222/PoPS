@@ -1,5 +1,5 @@
 // Diocotron distribue MPI, version demo. Le pas couple (transport E x B + Poisson
-// spectral distribue) est porte par le composant reutilisable SpectralExBStepper
+// spectral distribue) est porte par le composant reutilisable SpectralCoupler
 // (coupling/spectral_coupler.hpp) : cet exemple ne fait que CONFIGURER (condition
 // initiale, n_i0) et TOURNER (boucle step + dump). Plus aucune boucle couplee
 // reecrite a la main.
@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
   model.n_i0 = mean / (double(nc) * nc);
 
   // --- composant pret a l'emploi ---
-  SpectralExBStepper<Diocotron> sim(model, nc, nc, Lx, Ly);
+  SpectralCoupler<Diocotron> sim(model, nc, nc, Lx, Ly);
   const int nyl = sim.ny_local(), y0 = sim.y_begin();
   {
     Fab2D& F = sim.local();

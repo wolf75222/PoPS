@@ -128,10 +128,10 @@ int main(int argc, char** argv) {
     }
   }
 
-  // ===== distribue : via le composant reutilisable SpectralExBStepper =====
+  // ===== distribue : via le composant reutilisable SpectralCoupler =====
   // (l'interet du test : valider que le composant de la lib egale la reference
   //  serie bit a bit, pas reimplementer la boucle ici).
-  SpectralExBStepper<Diocotron> sim(model, Nx, Ny, Lx, Ly);
+  SpectralCoupler<Diocotron> sim(model, Nx, Ny, Lx, Ly);
   const int nyl = sim.ny_local(), y0 = sim.y_begin();
   {
     Fab2D& F = sim.local();
