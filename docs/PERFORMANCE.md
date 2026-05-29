@@ -1,7 +1,8 @@
 # Performance (run-time)
 
 Methodologie CS:APP : mesurer d'abord, identifier le goulot, transformer, re-mesurer.
-Banc : pas couple Euler-Poisson, N=256, Apple M2, AppleClang -O3 -DNDEBUG.
+Banc : pas couple Euler-Poisson, N=256, Apple M1 Pro (6 coeurs perf + 2 efficiency),
+AppleClang -O3 -DNDEBUG.
 
 ## Profil d'un pas couple (ou part le temps)
 
@@ -54,7 +55,7 @@ est un solveur DIRECT (une transformee), enveloppant `PoissonFFT` au niveau Mult
 et modelisant le concept `EllipticSolver`. Le `Coupler` est devenu generique sur le
 backend : `Coupler<Model, PoissonFFTSolver>` au lieu de `Coupler<Model>` (= MG).
 
-Pas couple Euler-Poisson, N=256 (M2, -O3, PerStage) :
+Pas couple Euler-Poisson, N=256 (M1 Pro, -O3, PerStage) :
 
 | backend elliptique | ms/pas |
 | --- | --- |
@@ -69,7 +70,7 @@ distribue tuiles<->bandes est `SpectralExBStepper`). Cumulable avec OncePerStep.
 
 ## Banc `bench_amr` : deux-fluides AP + coupleur AMR multi-patch
 
-`examples/bench_amr.cpp`, chronometre sans I/O (M2 8 coeurs = 4 perf + 4 efficiency,
+`examples/bench_amr.cpp`, chronometre sans I/O (M1 Pro, 8 coeurs = 6 perf + 2 efficiency,
 Release -O3 -DNDEBUG, backend OpenMP). Run : `OMP_NUM_THREADS=k ./build-omp/bin/bench_amr n nsteps`.
 
 **Deux-fluides AP mono-grille** (2 especes Rusanov + continuite + Poisson multigrille).
@@ -87,10 +88,13 @@ Balayage propre (`scripts/plot_bench_scaling.py`, figure `docs/fig_openmp_scalin
 A TRES petite grille (n=384, hors figure) on est overhead-bound : trop de petits noyaux
 (`tfap_mstar`, 2x `div_update`, `efield`, 2x `lorentz`) + niveaux grossiers du multigrille,
 le fork/join par `for_each_cell` coute plus que le travail -> OpenMP perd. Des n>=512 le
-grain par noyau amortit l'overhead : **~x2.4-2.5 sur les 4 coeurs performants** du M2 (un
-run isole a meme donne x3.6 ; variabilite thermique/ordonnancement), puis **plateau net a 8
-threads** car les 4 coeurs efficiency n'ajoutent rien. Masse conservee a `~3e-7` (CFL
-`dt = 0.4 dx`).
+grain par noyau amortit l'overhead : **~x2.4-2.5 a partir de 4 threads** (un run isole a
+meme donne x3.6 ; variabilite thermique/ordonnancement), puis **plateau net** au-dela (et
+legere baisse a 8). Ce plateau n'est PAS un plafond de coeurs : le M1 Pro a **6 coeurs
+performants**. C'est la **saturation de la bande passante memoire** : le stencil + le
+multigrille sont a faible intensite arithmetique (bandwidth-bound), ~4 threads suffisent a
+saturer le bus memoire, et ajouter des coeurs (perf ou efficiency) n'apporte plus rien.
+Masse conservee a `~3e-7` (CFL `dt = 0.4 dx`).
 
 **Elliptique FFT vs multigrille pour le deux-fluides AP : MG GAGNE (contre-intuitif).**
 n=512, 60 pas, OMP=4 : MG **9.66 ms/pas**, FFT **23.1 ms/pas** (FFT x0.42, soit 2.4x plus

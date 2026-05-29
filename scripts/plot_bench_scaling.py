@@ -3,7 +3,7 @@
 Lit le CSV produit par le balayage (n, threads, M mailles-MAJ/s) et trace le debit en
 fonction du nombre de threads, une courbe par taille de grille, avec la droite de scaling
 ideal (lineaire depuis 1 thread) en pointilles. Montre que le scaling depend de la taille
-et plafonne aux 4 coeurs performants du M2.
+et plafonne par la bande passante memoire (M1 Pro, stencil + multigrille bandwidth-bound).
 
 Usage :
   bash scripts/bench_scaling.sh > /tmp/scaling.csv   # ou le one-liner du bench
@@ -49,10 +49,11 @@ def main() -> int:
         ax.plot(th, ideal, "--", color=c, lw=0.9, alpha=0.5)
 
     ax.axvline(4, color="gray", ls=":", lw=0.9)
-    ax.text(4.05, ax.get_ylim()[1] * 0.05, "4 coeurs perf (M2)", color="gray", fontsize=8)
+    ax.text(4.05, ax.get_ylim()[1] * 0.05, "saturation bande passante (~4 threads)",
+            color="gray", fontsize=8)
     ax.set_xlabel("threads OpenMP")
     ax.set_ylabel("debit (M mailles-MAJ / s)")
-    ax.set_title("Scaling OpenMP : deux-fluides AP mono-grille (M2)")
+    ax.set_title("Scaling OpenMP : deux-fluides AP mono-grille (M1 Pro)")
     ax.set_xticks([1, 2, 4, 8])
     ax.legend(title="grille", frameon=False)
     ax.grid(True, alpha=0.25)
