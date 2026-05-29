@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tutorials/**'
+      - '.gitignore'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tutorials/**'
+      - '.gitignore'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ubuntu-latest / Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        # Cap les jobs paralleles : les instanciations de templates AMR + Eigen
+        # dans les TU les plus lourdes (test_amr_*) peuvent prendre ~1-2 GB RAM ;
+        # avec -j illimite le runner github (~7 GB) se fait tuer (exit 143).
+        run: cmake --build build --config Release -j 2
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C Release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build + test bindings Python
+        run: |
+          pip install --upgrade pip numpy
+          cmake -B build-py -DCMAKE_BUILD_TYPE=Release -DADC_BUILD_PYTHON=ON -DADC_USE_EIGEN=OFF
+          cmake --build build-py --target adc_py -j 2
+          PYTHONPATH=$PWD/build-py/python python3 python/test_bindings.py
+
+  mpi:
+    name: ubuntu-latest / MPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev libopenmpi-dev openmpi-bin
+
+      - name: Configure + build (MPI)
+        run: |
+          cmake -B build-mpi -DCMAKE_BUILD_TYPE=Release -DADC_USE_MPI=ON
+          cmake --build build-mpi --config Release -j 2
+
+      - name: Test (bit-identique np=1/2/4)
+        run: ctest --test-dir build-mpi --output-on-failure -C Release

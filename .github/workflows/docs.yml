@@ -1,0 +1,86 @@
+name: Docs
+
+# Publie la doc (Sphinx + Doxygen) sur GitHub Pages. Opt-in seulement :
+#   - le message de commit contient "[docs]"
+#   - ou declenchement manuel (workflow_dispatch)
+# Le job installe Sphinx + Doxygen et compile le module Python (~quelques min) ;
+# la plupart des commits ne touchent pas la doc, d'ou le marqueur opt-in.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[docs]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev doxygen graphviz
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Compile le module `adc` pour qu'autodoc (api.md) ait des signatures.
+      # best-effort : si ca echoue, la doc se publie quand meme (autodoc degrade).
+      - name: Build module Python adc
+        continue-on-error: true
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DADC_BUILD_PYTHON=ON -DADC_USE_EIGEN=OFF
+          cmake --build build --target adc_py -j 2
+
+      - name: Install Sphinx
+        run: |
+          pip install --upgrade pip
+          pip install -r docs/sphinx/requirements.txt
+
+      # Sphinx d'abord : cree docs/_build, ce dont Doxygen a besoin (OUTPUT_DIRECTORY).
+      - name: Build Sphinx
+        run: PYTHONPATH=$PWD/build/python sphinx-build -b html --keep-going docs/sphinx docs/_build/sphinx
+
+      - name: Build Doxygen
+        run: |
+          mkdir -p docs/_build
+          doxygen docs/Doxyfile
+          # Doxygen ecrit <img src="docs/..."> dans le README rendu mais ne copie
+          # pas les images ; on les place sous la sortie HTML pour que les chemins
+          # relatifs resolvent.
+          mkdir -p docs/_build/doxygen/html/docs
+          cp docs/*.png docs/*.gif docs/_build/doxygen/html/docs/ 2>/dev/null || true
+
+      - name: Combine sites (Doxygen sous /cpp/)
+        run: |
+          mkdir -p docs/_site
+          cp -r docs/_build/sphinx/. docs/_site/
+          mkdir -p docs/_site/cpp
+          cp -r docs/_build/doxygen/html/. docs/_site/cpp/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
