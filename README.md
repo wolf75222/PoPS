@@ -600,6 +600,22 @@ coeur template : ce qui PEUT etre concret (les solveurs "prets a l'emploi") vit 
 `src/` et se compile dans `libadc` ; ce qui DOIT rester template (les operateurs
 generiques, le seam GPU) reste dans `include/`.
 
+`python/` : bindings pybind11 de la facade (option `ADC_BUILD_PYTHON`). On expose les
+solveurs CONCRETS (`DiocotronSolver`, `EulerPoissonSolver`), jamais les templates :
+c'est tout l'interet du `src/`. Cote Python :
+
+```python
+import adc, numpy as np
+cfg = adc.EulerPoissonConfig(); cfg.n = 128; cfg.use_fft = True
+s = adc.EulerPoissonSolver(cfg)
+for _ in range(100): s.step(2e-3)
+rho = s.density()        # tableau numpy (n, n)
+print(s.mass(), s.total_momentum(0))
+```
+
+Build : `cmake -B build -DADC_BUILD_PYTHON=ON` (pybind11 via find_package ou
+FetchContent), `cmake --build build --target adc_py` -> `build/python/adc*.so`.
+
 ## Build
 
 ```bash

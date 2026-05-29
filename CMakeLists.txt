@@ -22,6 +22,7 @@ option(ADC_BUILD_EXAMPLES "Build examples" ON)
 option(ADC_USE_OPENMP     "Enable the OpenMP dispatch backend" OFF)
 option(ADC_USE_MPI        "Enable the MPI backend (distributed comm seam)" OFF)
 option(ADC_USE_HDF5       "Enable the HDF5 DataWriter (parallel output)" OFF)
+option(ADC_BUILD_PYTHON   "Build the pybind11 Python bindings (libadc facade)" OFF)
 option(ADC_USE_EIGEN      "Build host-side Eigen analysis tools (diocotron theory)" ON)
 
 # Eigen : cote host uniquement (analyse, hors hot path). Header-only : on
@@ -110,7 +111,24 @@ add_library(adc_solver STATIC
   src/diocotron_solver.cpp
   src/euler_poisson_solver.cpp)
 target_link_libraries(adc_solver PUBLIC adc)
+# PIC : la lib statique sera liee dans le module partage pybind11.
+set_target_properties(adc_solver PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(adc::solver ALIAS adc_solver)
+
+# Bindings Python (pybind11) de la facade compilee. find_package, sinon FetchContent.
+if(ADC_BUILD_PYTHON)
+  find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+  find_package(pybind11 2.11 CONFIG QUIET)
+  if(NOT pybind11_FOUND)
+    message(STATUS "pybind11 introuvable ; recuperation via FetchContent")
+    include(FetchContent)
+    FetchContent_Declare(pybind11
+      GIT_REPOSITORY https://github.com/pybind/pybind11.git
+      GIT_TAG        v2.13.6)
+    FetchContent_MakeAvailable(pybind11)
+  endif()
+  add_subdirectory(python)
+endif()
 
 if(ADC_BUILD_TESTS)
   enable_testing()
