@@ -22,6 +22,8 @@ struct TwoFluidAPConfig {
   double omega_pi = 1.0;         // ion
   bool stabilize = true;         // schema AP (Poisson reformule) ; false = non stabilise
   double eps = 1e-3;             // amplitude de la perturbation cosinus initiale
+  bool upwind_continuity = false;  // flux de masse Rusanov (anti-Gibbs sur fronts raides)
+                                   // au lieu de la continuite centree par defaut
 };
 
 class TwoFluidAPSolver {

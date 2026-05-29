@@ -75,6 +75,43 @@ inline void tfap_div_update(const MultiFab& nsrc, const MultiFab& m, MultiFab& n
   });
 }
 
+// Variante UPWIND de la continuite : flux de masse Rusanov COHERENT avec le flux de
+// quantite de mouvement de tfap_mstar (meme vitesse d'onde a = |u|+cs). Le schema
+// centre tfap_div_update est un flux central pur (dissipation nulle) -> dispersif sur
+// les fronts raides (oscillations de Gibbs). Ici F_n = 0.5(m_i+m_{i+1}) - 0.5 a (n_{i+1}-n_i)
+// complete le flux Rusanov sur la composante densite : monotone, supprime l'overshoot.
+// PAS in-place (lit n aux voisins) : nout doit etre distinct de nsrc. 1 ghost suffit.
+inline void tfap_div_update_up(const MultiFab& nsrc, const MultiFab& m, MultiFab& nout,
+                               Real c2, Real dt, const Box2D& dom, Real dx, Real dy) {
+  ConstArray4 s = nsrc.fab(0).const_array(), mm = m.fab(0).const_array();
+  Array4 o = nout.fab(0).array();
+  const Real cs = std::sqrt(c2);
+  for_each_cell(dom, [=] ADC_HD(int i, int j) {
+    using tfap::ab;
+    using tfap::mx2;
+    const Real n0 = s(i, j, 0), nE = s(i + 1, j, 0), nW = s(i - 1, j, 0);
+    const Real nN = s(i, j + 1, 0), nS = s(i, j - 1, 0);
+    const Real x0 = mm(i, j, 0), xE = mm(i + 1, j, 0), xW = mm(i - 1, j, 0);
+    const Real y0 = mm(i, j, 1), yN = mm(i, j + 1, 1), yS = mm(i, j - 1, 1);
+    const Real aR = mx2(ab(x0 / n0) + cs, ab(xE / nE) + cs);
+    const Real aL = mx2(ab(xW / nW) + cs, ab(x0 / n0) + cs);
+    const Real bU = mx2(ab(y0 / n0) + cs, ab(yN / nN) + cs);
+    const Real bD = mx2(ab(yS / nS) + cs, ab(y0 / n0) + cs);
+    const Real FxR = Real(0.5) * (x0 + xE) - Real(0.5) * aR * (nE - n0);
+    const Real FxL = Real(0.5) * (xW + x0) - Real(0.5) * aL * (n0 - nW);
+    const Real FyU = Real(0.5) * (y0 + yN) - Real(0.5) * bU * (nN - n0);
+    const Real FyD = Real(0.5) * (yS + y0) - Real(0.5) * bD * (n0 - nS);
+    o(i, j, 0) = n0 - dt * ((FxR - FxL) / dx + (FyU - FyD) / dy);
+  });
+}
+
+// recopie la composante densite (comp 0) de src vers sp (interface vers l'etat).
+inline void tfap_copy_n(MultiFab& sp, const MultiFab& src, const Box2D& dom) {
+  Array4 d = sp.fab(0).array();
+  ConstArray4 s = src.fab(0).const_array();
+  for_each_cell(dom, [=] ADC_HD(int i, int j) { d(i, j, 0) = s(i, j, 0); });
+}
+
 // E = -grad phi (centre, phi avec 1 ghost) ; Ex en comp 0, Ey en comp 1.
 inline void tfap_efield(const MultiFab& phi, MultiFab& E, const Box2D& dom, Real dx,
                         Real dy) {
@@ -111,6 +148,8 @@ struct TwoFluidAP2D {
   MultiFab e, ion, mse, msi, nte, nti, Ef, mne, mni;
   Elliptic ell;
   Periodicity per{true, true};
+  bool upwind_continuity = false;  // false = continuite centree (defaut valide) ;
+                                   // true = flux de masse Rusanov (anti-Gibbs).
 
   TwoFluidAP2D(int n_, Real L_, Real cse2_, Real csi2_, Real wpe, Real wpi)
       : n(n_), L(L_), dx(L_ / n_), dy(L_ / n_), cse2(cse2_), csi2(csi2_),
@@ -144,8 +183,13 @@ struct TwoFluidAP2D {
     tfap_mstar(ion, msi, csi2, dt, dom, dx, dy);
     fill_boundary(mse, dom, per);
     fill_boundary(msi, dom, per);
-    tfap_div_update(e, mse, nte, dt, dom, dx, dy);
-    tfap_div_update(ion, msi, nti, dt, dom, dx, dy);
+    if (upwind_continuity) {
+      tfap_div_update_up(e, mse, nte, cse2, dt, dom, dx, dy);
+      tfap_div_update_up(ion, msi, nti, csi2, dt, dom, dx, dy);
+    } else {
+      tfap_div_update(e, mse, nte, dt, dom, dx, dy);
+      tfap_div_update(ion, msi, nti, dt, dom, dx, dy);
+    }
     const Real beta0 = stabilize ? dt * dt * (ce + ci) : Real(0);  // n0 = 1
     {  // RHS du Poisson reformule : lap(phi) = (ne* - ni*)/(1+beta0)
       ConstArray4 ne = nte.fab(0).const_array(), ni = nti.fab(0).const_array();
@@ -162,8 +206,15 @@ struct TwoFluidAP2D {
     tfap_lorentz(msi, Ef, mni, Real(+1), ci, dt, dom);  // ion
     fill_boundary(mne, dom, per);
     fill_boundary(mni, dom, per);
-    tfap_div_update(e, mne, e, dt, dom, dx, dy);   // n_e^{n+1} (n source = n_e^n)
-    tfap_div_update(ion, mni, ion, dt, dom, dx, dy);
+    if (upwind_continuity) {  // pas in-place : scratch nte/nti puis recopie de n
+      tfap_div_update_up(e, mne, nte, cse2, dt, dom, dx, dy);
+      tfap_div_update_up(ion, mni, nti, csi2, dt, dom, dx, dy);
+      tfap_copy_n(e, nte, dom);
+      tfap_copy_n(ion, nti, dom);
+    } else {
+      tfap_div_update(e, mne, e, dt, dom, dx, dy);   // n_e^{n+1} (n source = n_e^n)
+      tfap_div_update(ion, mni, ion, dt, dom, dx, dy);
+    }
     copy_mom(e, mne);  // recopie mx, my finaux dans l'etat
     copy_mom(ion, mni);
   }

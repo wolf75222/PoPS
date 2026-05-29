@@ -84,12 +84,12 @@ int main() {
 
   // --- scenario 2 : front raide en transport (couplage faible ~= Euler isotherme) ---
   // Une bosse gaussienne ETROITE quasi-neutre (e == ion -> E ~= 0) lance des ondes
-  // acoustiques a fronts raides. La continuite CENTREE est dispersive : on mesure le
-  // sous-depassement (min(n_e) sous le fond) revelateur d'oscillations de Gibbs. C'est
-  // ce regime, pas la perturbation lisse ci-dessus, qui motiverait une reconstruction
-  // MUSCL/limitee. Le schema reste conservatif et borne ; seul l'overshoot est en jeu.
-  {
+  // acoustiques a fronts raides. La continuite CENTREE est dispersive (sous-depassement
+  // = oscillations de Gibbs) ; la continuite UPWIND (flux de masse Rusanov) est monotone.
+  // On joue le MEME scenario dans les deux modes et on mesure la reduction de l'overshoot.
+  auto run_bump = [&](bool upwind, double& minover, double& dm, bool& fin) {
     Driver d(96, 2 * kPi, 1.0, 1.0, 2.0, 0.4);  // couplage faible
+    d.upwind_continuity = upwind;
     d.e.set_val(0); d.ion.set_val(0);
     Array4 ae = d.e.fab(0).array(), ai = d.ion.fab(0).array();
     const double xc = kPi, yc = kPi, w = 6.0 * (2 * kPi / 96);  // demi-largeur ~6 mailles
@@ -102,19 +102,29 @@ int main() {
       }
     const double m0 = sum(d.e, 0);
     const double dt = 0.3 * (2 * kPi / 96) / std::sqrt(1.0);  // CFL acoustique
-    double minover = 1e300;
+    minover = 1e300;
     for (int t = 0; t < 200; ++t) {
       d.step(dt, true);
       minover = std::fmin(minover, mindens(d));
     }
-    const double dm = std::fabs(sum(d.e, 0) - m0);
-    const bool fin = allfinite(d);
-    std::printf("front raide (bosse etroite, couplage faible) : min(n_e) sur le run=%.4f "
-                "(fond=1.0, sous-depassement=%.2e) d masse=%.2e %s\n",
-                minover, std::fabs(1.0 - minover) > 0 ? (1.0 - minover) : 0.0, dm,
-                fin ? "fini" : "NON-FINI");
-    chk(fin, "front_raide_fini");
-    chk(dm < 1e-7, "front_raide_masse_conservee");
+    dm = std::fabs(sum(d.e, 0) - m0);
+    fin = allfinite(d);
+  };
+  {
+    double minC, dmC, minU, dmU; bool finC, finU;
+    run_bump(false, minC, dmC, finC);
+    run_bump(true, minU, dmU, finU);
+    const double underC = 1.0 - minC, underU = 1.0 - minU;
+    std::printf("front raide (bosse etroite, couplage faible) :\n");
+    std::printf("   continuite CENTREE : min(n_e)=%.4f sous-depassement=%.1f%% d masse=%.2e %s\n",
+                minC, 100 * underC, dmC, finC ? "fini" : "NON-FINI");
+    std::printf("   continuite UPWIND  : min(n_e)=%.4f sous-depassement=%.1f%% d masse=%.2e %s\n",
+                minU, 100 * underU, dmU, finU ? "fini" : "NON-FINI");
+    std::printf("   reduction de l'overshoot par l'upwind : %.0f%%\n",
+                underC > 0 ? 100 * (1 - underU / underC) : 0.0);
+    chk(finC && finU, "front_raide_fini");
+    chk(dmC < 1e-7 && dmU < 1e-7, "front_raide_masse_conservee");
+    chk(underU < underC, "upwind_reduit_overshoot");  // monotone -> moins de Gibbs
   }
 
   if (fails == 0) std::printf("OK test_two_fluid_ap_amplitude\n");

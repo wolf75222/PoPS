@@ -17,6 +17,7 @@ struct TwoFluidAPSolver::Impl {
 
   explicit Impl(const TwoFluidAPConfig& c)
       : d(c.n, c.L, c.cse2, c.csi2, c.omega_pe, c.omega_pi), stabilize(c.stabilize) {
+    d.upwind_continuity = c.upwind_continuity;
     d.init(c.eps);
   }
 

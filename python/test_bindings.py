@@ -73,6 +73,19 @@ chk(ts.max_dev() < 0.1, "tfap_AP_borne")
 chk(ts.max_charge() < 0.1, "tfap_quasi_neutre")
 chk(abs(ts.mass_e() - tm0) < 1e-7, "tfap_masse_conservee")
 
+# --- TwoFluidAPSolver, continuite upwind (flux de masse Rusanov anti-Gibbs) ---
+uc = adc.TwoFluidAPConfig()
+uc.n = 64
+uc.omega_pe = 1e3
+uc.omega_pi = 20.0
+uc.upwind_continuity = True
+us = adc.TwoFluidAPSolver(uc)
+um0 = us.mass_e()
+us.advance(5.0 / 1e3, 200)
+print(f"TwoFluidAPSolver(upwind) : max|dne|={us.max_dev():.3e} dmasse_e={abs(us.mass_e() - um0):.2e}")
+chk(us.max_dev() < 0.1, "tfap_upwind_borne")
+chk(abs(us.mass_e() - um0) < 1e-7, "tfap_upwind_masse_conservee")
+
 if fails == 0:
     print("OK test_bindings")
 sys.exit(0 if fails == 0 else 1)

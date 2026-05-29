@@ -105,7 +105,8 @@ PYBIND11_MODULE(adc, m) {
       .def_readwrite("omega_pe", &TwoFluidAPConfig::omega_pe)
       .def_readwrite("omega_pi", &TwoFluidAPConfig::omega_pi)
       .def_readwrite("stabilize", &TwoFluidAPConfig::stabilize)
-      .def_readwrite("eps", &TwoFluidAPConfig::eps);
+      .def_readwrite("eps", &TwoFluidAPConfig::eps)
+      .def_readwrite("upwind_continuity", &TwoFluidAPConfig::upwind_continuity);
 
   py::class_<TwoFluidAPSolver>(m, "TwoFluidAPSolver")
       .def(py::init<const TwoFluidAPConfig&>())
