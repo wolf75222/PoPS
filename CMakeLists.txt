@@ -3,7 +3,8 @@ cmake_minimum_required(VERSION 3.20)
 project(adc_cpp
   VERSION 0.0.1
   DESCRIPTION "Solveur advection-diffusion-couplage hyperbolique-elliptique sur AMR, cible cluster"
-  LANGUAGES CXX
+  LANGUAGES CXX C  # C : pour que find_package(MPI) cree MPI::MPI_C (exige par le
+                   # hdf5-config parallele de spack)
 )
 
 set(CMAKE_CXX_STANDARD 23)
