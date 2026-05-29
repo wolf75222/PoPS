@@ -403,6 +403,27 @@ Kokkos 4.4 est compile maison (CUDA + `Kokkos_ARCH_HOPPER90`) dans le scratch ; 
 demo se construit via `examples/gpu/CMakeLists.txt` (`find_package(Kokkos)` +
 `nvcc_wrapper`).
 
+**Backend = propriete de la bibliotheque, pas un drapeau par cible.** OpenMP, MPI,
+HDF5 et Kokkos sont attaches a la cible d'interface `adc` (`target_compile_definitions`
+/ `target_link_libraries(adc INTERFACE ...)`), donc **TOUT ce qui lie `adc` herite du
+backend** : la facade compilee `src/` (`libadc`), les tests, les exemples. On configure
+**une seule fois** :
+
+```
+cmake -S . -B build -DADC_USE_OPENMP=ON                       # CPU multi-thread
+cmake -S . -B build -DADC_USE_MPI=ON                          # distribue
+cmake -S . -B build -DADC_USE_KOKKOS=ON \                     # GPU (ou CPU portable)
+  -DCMAKE_CXX_COMPILER=$K/bin/nvcc_wrapper -DKokkos_ROOT=$K
+```
+
+Aucun `target_compile_definitions(... ADC_HAS_KOKKOS)` rebadge par cible : les demos
+`examples/gpu/` lient juste `adc` et heritent du backend. Sous `-DADC_USE_KOKKOS=ON`,
+la norme retombe a C++20 (nvcc CUDA 12.x) et **`libadc` elle-meme se compile pour le
+GPU** : les trois facades `src/` (`diocotron_solver`, `euler_poisson_solver`,
+`two_fluid_ap_solver`) passent sous `nvcc_wrapper` et l'exemple integre tourne sur
+GH200 bit-identique au CPU (`scripts/romeo_libadc_gpu.sbatch`). Le backend n'est donc
+PAS un ajout au solveur : il est inclus dans la lib des la configuration.
+
 **Etape 2 (faite) : donnee device-residente.** Le stockage de `Fab2D` passe par
 un allocateur selectionnable (`core/allocator.hpp`) : sous CUDA c'est la memoire
 UNIFIEE (`cudaMallocManaged`), accessible de facon coherente hote ET device sur le

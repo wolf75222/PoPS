@@ -5,6 +5,7 @@
 
 #include <adc/solver/diocotron_solver.hpp>
 #include <adc/solver/euler_poisson_solver.hpp>
+#include <adc/solver/two_fluid_ap_solver.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -59,6 +60,24 @@ int main() {
                 s.total_momentum(0), s.total_momentum(1));
     chk(std::fabs(s.mass() - m0) < 1e-9, "ep_fft_masse_conservee");
     chk(std::fabs(s.total_momentum(0)) < 1e-9, "ep_fft_qte_mouvement_nulle");
+  }
+
+  // --- TwoFluidAPSolver (facade compilee, GPU-portable) : AP raide ---
+  {
+    TwoFluidAPConfig cfg;
+    cfg.n = 64;
+    cfg.omega_pe = 1e3;  // raide
+    cfg.omega_pi = 20.0;
+    TwoFluidAPSolver s(cfg);
+    const double m0e = s.mass_e(), m0i = s.mass_i();
+    s.advance(5.0 / 1e3, 200);  // dt*omega_pe = 5 : explicite exploserait
+    std::printf("TwoFluidAPSolver : n=%d max|dne|=%.3e max|charge|=%.3e dmasse_e=%.2e\n",
+                s.nx(), s.max_dev(), s.max_charge(), std::fabs(s.mass_e() - m0e));
+    chk(static_cast<int>(s.density_e().size()) == 64 * 64, "tfap_density_size");
+    chk(s.max_dev() < 0.1, "tfap_AP_borne");
+    chk(s.max_charge() < 0.1, "tfap_quasi_neutre");
+    chk(std::fabs(s.mass_e() - m0e) < 1e-7 && std::fabs(s.mass_i() - m0i) < 1e-7,
+        "tfap_masse_conservee");
   }
 
   if (fails == 0) std::printf("OK test_solver\n");

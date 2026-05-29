@@ -7,7 +7,23 @@ project(adc_cpp
                    # hdf5-config parallele de spack)
 )
 
-set(CMAKE_CXX_STANDARD 23)
+option(ADC_BUILD_TESTS    "Build tests"    ON)
+option(ADC_BUILD_EXAMPLES "Build examples" ON)
+option(ADC_USE_OPENMP     "Enable the OpenMP dispatch backend" OFF)
+option(ADC_USE_KOKKOS     "Enable the Kokkos dispatch backend (CPU/GPU portable)" OFF)
+option(ADC_USE_MPI        "Enable the MPI backend (distributed comm seam)" OFF)
+option(ADC_USE_HDF5       "Enable the HDF5 DataWriter (parallel output)" OFF)
+option(ADC_BUILD_PYTHON   "Build the pybind11 Python bindings (libadc facade)" OFF)
+option(ADC_USE_EIGEN      "Build host-side Eigen analysis tools (diocotron theory)" ON)
+
+# Norme C++ : 23 par defaut. Sous Kokkos+nvcc on retombe a 20 (CUDA 12.x ne propose
+# pas -std=c++23) ; tout le coeur compile en C++20 (le seul usage >20 est cote hote).
+if(ADC_USE_KOKKOS)
+  set(ADC_CXX_STD 20)
+else()
+  set(ADC_CXX_STD 23)
+endif()
+set(CMAKE_CXX_STANDARD ${ADC_CXX_STD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -16,14 +32,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-
-option(ADC_BUILD_TESTS    "Build tests"    ON)
-option(ADC_BUILD_EXAMPLES "Build examples" ON)
-option(ADC_USE_OPENMP     "Enable the OpenMP dispatch backend" OFF)
-option(ADC_USE_MPI        "Enable the MPI backend (distributed comm seam)" OFF)
-option(ADC_USE_HDF5       "Enable the HDF5 DataWriter (parallel output)" OFF)
-option(ADC_BUILD_PYTHON   "Build the pybind11 Python bindings (libadc facade)" OFF)
-option(ADC_USE_EIGEN      "Build host-side Eigen analysis tools (diocotron theory)" ON)
 
 # Eigen : cote host uniquement (analyse, hors hot path). Header-only : on
 # localise juste le dossier d'include et on l'expose via une cible d'interface
@@ -55,7 +63,7 @@ add_library(adc::adc ALIAS adc)
 target_include_directories(adc INTERFACE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
-target_compile_features(adc INTERFACE cxx_std_23)
+target_compile_features(adc INTERFACE cxx_std_${ADC_CXX_STD})
 
 if(ADC_USE_OPENMP)
   # AppleClang / Homebrew clang ne trouvent pas libomp tout seuls : on injecte
@@ -72,8 +80,30 @@ if(ADC_USE_OPENMP)
           CACHE FILEPATH "" FORCE)
     endif()
   endif()
-  find_package(OpenMP REQUIRED)
+  # COMPONENTS CXX : le projet active aussi le langage C (pour MPI::MPI_C), mais on
+  # n'utilise OpenMP que cote C++. Sans cette restriction, find_package exigerait
+  # OpenMP_C (que les hints Homebrew ne configurent pas) et echouerait sur macOS.
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
   target_link_libraries(adc INTERFACE OpenMP::OpenMP_CXX)
+endif()
+
+# Kokkos : backend de dispatch PORTABLE (CPU multi-thread / GPU). Comme MPI, c'est
+# une propriete de la BIBLIOTHEQUE, pas un drapeau qu'on rebadge par cible : on
+# l'attache a l'interface `adc`, donc TOUT ce qui lie adc (la facade compilee src/,
+# les tests, les exemples) herite de ADC_HAS_KOKKOS + Kokkos::kokkos et bascule le
+# seam for_each_cell sur l'espace d'execution par defaut (p.ex. Cuda sur GH200).
+# La facade libadc se compile alors DIRECTEMENT pour le GPU. Configurer ainsi :
+#   cmake -DADC_USE_KOKKOS=ON -DCMAKE_CXX_COMPILER=$K/bin/nvcc_wrapper -DKokkos_ROOT=$K
+set(ADC_HAS_KOKKOS OFF)
+if(ADC_USE_KOKKOS)
+  find_package(Kokkos REQUIRED)
+  target_link_libraries(adc INTERFACE Kokkos::kokkos)
+  target_compile_definitions(adc INTERFACE ADC_HAS_KOKKOS)
+  set(ADC_HAS_KOKKOS ON)
+  message(STATUS "Kokkos found : for_each_cell dispatch backend = Kokkos (${Kokkos_DEVICES})")
+  if(ADC_USE_OPENMP)
+    message(STATUS "  note: OpenMP aussi actif ; le seam for_each_cell donne la priorite a Kokkos")
+  endif()
 endif()
 
 # MPI : backend distribue, confine au seam comm (parallel/comm.hpp). Optionnel :
@@ -109,7 +139,8 @@ endif()
 # dans include/ (les templates doivent etre visibles a l'instanciation).
 add_library(adc_solver STATIC
   src/diocotron_solver.cpp
-  src/euler_poisson_solver.cpp)
+  src/euler_poisson_solver.cpp
+  src/two_fluid_ap_solver.cpp)
 target_link_libraries(adc_solver PUBLIC adc)
 # PIC : la lib statique sera liee dans le module partage pybind11.
 set_target_properties(adc_solver PROPERTIES POSITION_INDEPENDENT_CODE ON)

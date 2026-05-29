@@ -17,3 +17,10 @@ if(ADC_HAS_EIGEN)
   add_executable(diocotron_theory diocotron_theory.cpp)
   target_link_libraries(diocotron_theory PRIVATE adc::adc adc_eigen)
 endif()
+
+# Demos GPU (Kokkos) : integres au build principal quand le backend Kokkos est
+# configure (-DADC_USE_KOKKOS=ON). Ils lient `adc` et heritent du backend ; aucun
+# drapeau rajoute. Hors Kokkos, on les ignore (ils n'ont de sens que sur GPU).
+if(ADC_USE_KOKKOS)
+  add_subdirectory(gpu)
+endif()
