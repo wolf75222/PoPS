@@ -72,6 +72,52 @@ ADC_HD inline typename Model::State reconstruct(const ConstArray4& u, int i,
   return s;
 }
 
+// Boites de FACE associees a une boite de cellules (faces normales a x : nx+1 x ny ;
+// normales a y : nx x ny+1). Sert a dimensionner les MultiFab de flux de face.
+inline Box2D xface_box(const Box2D& v) {
+  return Box2D{{v.lo[0], v.lo[1]}, {v.hi[0] + 1, v.hi[1]}};
+}
+inline Box2D yface_box(const Box2D& v) {
+  return Box2D{{v.lo[0], v.lo[1]}, {v.hi[0], v.hi[1] + 1}};
+}
+
+// compute_face_fluxes : ecrit les flux numeriques aux FACES (Fx aux faces normales
+// a x, Fy a y), AVANT divergence. C'est la brique dont le reflux AMR a besoin (il
+// accumule les flux fins et soustrait le flux grossier aux interfaces coarse-fine ;
+// assemble_rhs, lui, calcule directement -div F et jette les flux de face).
+//
+// Conventions : Fx(i,j) = flux a la face entre les cellules (i-1,j) et (i,j), i dans
+// [lo..hi+1]. Fy(i,j) = flux entre (i,j-1) et (i,j), j dans [lo..hi+1]. Memes
+// reconstruction (Limiter) et flux numerique (NumericalFlux) qu'assemble_rhs, donc
+//   r(i,j) = S - (Fx(i+1,j)-Fx(i,j))/dx - (Fy(i,j+1)-Fy(i,j))/dy
+// redonne EXACTEMENT le residu d'assemble_rhs. Fx, Fy dimensionnes par l'appelant
+// (boites xface_box/yface_box, ncomp = Model::n_vars, 0 ghost). Device-callable.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& aux,
+                         const Geometry&, MultiFab& Fx, MultiFab& Fy) {
+  const Limiter lim{};
+  const NumericalFlux nflux{};
+  for (int li = 0; li < U.local_size(); ++li) {
+    const ConstArray4 u = U.fab(li).const_array();
+    const ConstArray4 ax = aux.fab(li).const_array();
+    Array4 fx = Fx.fab(li).array();
+    Array4 fy = Fy.fab(li).array();
+    const Box2D v = U.box(li);
+    for_each_cell(xface_box(v), [=] ADC_HD(int i, int j) {
+      const auto L = reconstruct<Model>(u, i - 1, j, 0, +1, lim);
+      const auto Rr = reconstruct<Model>(u, i, j, 0, -1, lim);
+      const auto F = nflux(model, L, load_aux(ax, i - 1, j), Rr, load_aux(ax, i, j), 0);
+      for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = F[c];
+    });
+    for_each_cell(yface_box(v), [=] ADC_HD(int i, int j) {
+      const auto L = reconstruct<Model>(u, i, j - 1, 1, +1, lim);
+      const auto Rr = reconstruct<Model>(u, i, j, 1, -1, lim);
+      const auto F = nflux(model, L, load_aux(ax, i, j - 1), Rr, load_aux(ax, i, j), 1);
+      for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = F[c];
+    });
+  }
+}
+
 // assemble_rhs<Limiter, NumericalFlux> : R = -div Fhat + S. Le limiteur (pente de
 // reconstruction) ET le flux numerique sont des parametres de template, par defaut
 // MUSCL au choix de l'appelant + Rusanov. Tous deux device-callable (ADC_HD).
