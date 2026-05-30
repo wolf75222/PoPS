@@ -487,19 +487,26 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
 // contenant la cellule grossiere adjacente. Se reduit BIT A BIT au chemin mono-box quand
 // chaque niveau n'a qu'une box (garde de validation).
 //
-// Etat distribue (MPI) : MONO-RANG pour l'instant (contrairement au 2-niveaux
-// amr_step_2level_multipatch, distribue + teste). Le grossier etant MULTI-BOX reparti, on
-// ne peut pas le repliquer a bon marche ; il faut un FillPatch facon AMReX, via le
-// parallel_copy deja present (mesh/refinement.hpp). Cinq points supposent le parent LOCAL
-// (via mf_find_box qui rend un indice LOCAL ou -1) et sont a rendre distribues :
-//   1. mf_fill_fine_ghosts_mb : recuperer les regions parentes couvrant chaque patch
-//      enfant par parallel_copy (parent -> fine-coarsen), puis interpoler ;
-//   2. echantillonnage du registre grossier (cL/cR depuis fx.fab(pb)) : meme fetch ;
-//   3. mf_average_down_mb : router la moyenne vers la box parente proprietaire (gather) ;
-//   4. reflux : router la correction vers la box parente proprietaire (gather) ;
+// Etat distribue (MPI) : DISTRIBUE et teste bit a bit identique np=1/2/4
+// (test_mpi_amr_multipatch3, 3 niveaux avec un niveau intermediaire multi-box reparti dont le
+// PARENT d'un patch fin tombe sur un autre rang). Le niveau 0 (grossier) est REPLIQUE comme au
+// 2-niveaux ; les niveaux >0 sont repartis et jouent simultanement le role d'enfant et de
+// parent. Les cinq points supposant le parent local (via mf_find_box) sont resolus :
+//   1. mf_fill_fine_ghosts_mb : parent REPLIQUE (lev==1) lu localement ; parent REPARTI
+//      (lev>=2) amene par parallel_copy (parent -> fine-coarsen) puis interpole ;
+//   2. echantillonnage du registre grossier : parent REPLIQUE lu localement, parent REPARTI
+//      amene par parallel_copy vers une grille FACE enfant-coarsen ;
+//   3. mf_average_down_mb : moyenne versee dans un buffer grossier indexe GLOBAL +
+//      all_reduce_sum, appliquee aux boxes parentes locales (replique : tous ; reparti : le
+//      proprietaire) ;
+//   4. reflux : meme buffer global + all_reduce, application gardee par appartenance locale
+//      de la box parente (pas de double comptage car le parent reparti a un seul proprietaire);
 //   5. couverture : deja batie sur le box_array() global (MPI-safe).
-// Effort distinct et conservation-critique (ROADMAP). Tant qu'il n'est pas la, n'utiliser
-// amr_step_multilevel_multipatch / AmrCouplerMP qu'en mono-rang.
+// En serie all_reduce est l'identite et parallel_copy se reduit a des copies memoire : le
+// chemin distribue execute les memes operations flottantes que le mono-rang -> bit-identique.
+// Note : AmrCouplerMP reste limite au mono-rang au-dela de 2 niveaux distribues, car son
+// injection d'aux parent->enfant (inject_aux_mb) suppose encore le parent local via
+// mf_find_box ; l'integrateur amr_step_multilevel_multipatch, lui, est distribue.
 
 // box LOCALE (valide) contenant la cellule (I,J), ou -1.
 inline int mf_find_box(const MultiFab& mf, int I, int J) {
@@ -508,45 +515,122 @@ inline int mf_find_box(const MultiFab& mf, int I, int J) {
   return -1;
 }
 
-// ghosts fins multi-box depuis un parent MULTI-BOX (interp espace constant + temps lin).
+// BoxArray des boites enfant GROSSIES de ngrow puis coarsenees (ratio 2). Chaque box
+// couvre toutes les cellules grossieres dont l'enfant a besoin, ghosts compris : c'est la
+// grille fine-coarsen du FillPatch (cf. refinement.hpp::interpolate).
+inline BoxArray coarsen_grown(const BoxArray& ba, int ngrow, int r) {
+  std::vector<Box2D> b;
+  b.reserve(ba.size());
+  for (int i = 0; i < ba.size(); ++i) b.push_back(ba[i].grow(ngrow).coarsen(r));
+  return BoxArray{std::move(b)};
+}
+
+// ghosts fins multi-box depuis un parent MULTI-BOX (interp espace constant + temps lin),
+// DISTRIBUE. Deux cas de parent :
+//  - REPLIQUE (niveau 0, replicated_parent=true) : le parent est entierement local sur chaque
+//    rang, on lit directement via mf_find_box (toujours trouve) ; aucune collective. C'est le
+//    chemin du grossier replique, comme le 2-niveaux (parallel_copy violerait l'hypothese de
+//    metadonnees repliquees du parent, dmap par-rang).
+//  - REPARTI (intermediaire) : le parent peut etre sur un autre rang ; on amene ses regions
+//    valides sur une grille enfant-coarsen LOCALE par parallel_copy (routage MPI gere la), puis
+//    on interpole. Plus aucun echec silencieux remote.
+// En serie les deux chemins sont identiques (parent local partout, parallel_copy = copie memoire).
 inline void mf_fill_fine_ghosts_mb(MultiFab& Uf, const MultiFab& Po, const MultiFab& Pn,
-                                   Real frac) {
+                                   Real frac, bool replicated_parent = true) {
+  const int nc = Uf.ncomp(), ng = Uf.n_grow();
+  if (replicated_parent) {
+    device_fence();
+    for (int li = 0; li < Uf.local_size(); ++li) {
+      Array4 f = Uf.fab(li).array();
+      const Box2D v = Uf.box(li), g = Uf.fab(li).grown_box();
+      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
+        for (int i = g.lo[0]; i <= g.hi[0]; ++i)
+          if (!v.contains(i, j)) {
+            const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
+            const int pb = mf_find_box(Po, ci, cj);
+            if (pb < 0) continue;  // hors couverture parente -> laisse au fill_boundary
+            const ConstArray4 po = Po.fab(pb).const_array(), pn = Pn.fab(pb).const_array();
+            for (int k = 0; k < nc; ++k)
+              f(i, j, k) = (1 - frac) * po(ci, cj, k) + frac * pn(ci, cj, k);
+          }
+    }
+    return;
+  }
+  const BoxArray pcoarse_ba = coarsen_grown(Uf.box_array(), ng, 2);
+  MultiFab Pco(pcoarse_ba, Uf.dmap(), nc, 0), Pcn(pcoarse_ba, Uf.dmap(), nc, 0);
+  parallel_copy(Pco, Po);  // regions parentes (depuis n'importe quel rang) -> grille locale
+  parallel_copy(Pcn, Pn);
   device_fence();
-  const int nc = Uf.ncomp();
   for (int li = 0; li < Uf.local_size(); ++li) {
     Array4 f = Uf.fab(li).array();
+    const ConstArray4 po = Pco.fab(li).const_array(), pn = Pcn.fab(li).const_array();
     const Box2D v = Uf.box(li), g = Uf.fab(li).grown_box();
     for (int j = g.lo[1]; j <= g.hi[1]; ++j)
       for (int i = g.lo[0]; i <= g.hi[0]; ++i)
         if (!v.contains(i, j)) {
           const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
-          const int pb = mf_find_box(Po, ci, cj);
-          if (pb < 0) continue;  // hors couverture parente -> laisse au fill_boundary
-          const ConstArray4 po = Po.fab(pb).const_array(), pn = Pn.fab(pb).const_array();
           for (int k = 0; k < nc; ++k)
             f(i, j, k) = (1 - frac) * po(ci, cj, k) + frac * pn(ci, cj, k);
         }
   }
 }
 
-// moyenne fin multi-box -> parent multi-box (chaque cellule routee vers sa box parente).
+// moyenne fin multi-box -> parent multi-box (chaque cellule routee vers sa box parente),
+// DISTRIBUE. La box parente d'une cellule grossiere peut etre sur un autre rang, et le parent
+// peut etre soit REPLIQUE (niveau 0, chaque rang en a une copie), soit REPARTI (intermediaire,
+// un seul proprietaire). Les deux sont couverts par un buffer grossier indexe GLOBAL :
+// chaque rang verse la moyenne 2x2 de SES patchs fins locaux (0 ailleurs ; patchs disjoints
+// donc une seule contribution par cellule couverte), all_reduce_sum -> chaque rang a le total,
+// puis applique a SES boxes parentes locales (ecrasement). Replique : tous appliquent la meme
+// valeur a leur copie. Reparti : seul le proprietaire applique. En serie all_reduce est
+// l'identite (0 + moyenne = moyenne) -> bit a bit identique au routage direct.
 inline void mf_average_down_mb(const MultiFab& Uf, MultiFab& Uc) {
+  const int nc = std::min(Uf.ncomp(), Uc.ncomp());
+  // boite englobante grossiere (indices GLOBAUX) couvrant toutes les empreintes enfant.
+  const BoxArray cba = coarsen(Uf.box_array(), 2);
+  Box2D bb{{0, 0}, {-1, -1}};
+  for (int g = 0; g < cba.size(); ++g)
+    bb = (g == 0) ? cba[g] : Box2D{{std::min(bb.lo[0], cba[g].lo[0]), std::min(bb.lo[1], cba[g].lo[1])},
+                                   {std::max(bb.hi[0], cba[g].hi[0]), std::max(bb.hi[1], cba[g].hi[1])}};
+  if (bb.empty()) { all_reduce_sum_inplace(nullptr, 0); return; }  // collective appariee a vide
+  const int BX = bb.nx(), BY = bb.ny();
+  auto idx = [&](int I, int J, int k) {
+    return ((static_cast<std::size_t>(J - bb.lo[1]) * BX) + (I - bb.lo[0])) * nc + k;
+  };
+  const std::size_t N = static_cast<std::size_t>(BX) * BY * nc;
+  std::vector<Real> avg(N, Real(0));
+  // couverture GLOBALE (toutes les empreintes enfant) : seules ces cellules sont ecrasees ;
+  // la boite englobante peut contenir des trous entre patchs disjoints qu'il ne faut PAS ecraser.
+  std::vector<char> cov(static_cast<std::size_t>(BX) * BY, 0);
+  for (int g = 0; g < cba.size(); ++g) {
+    const Box2D cb = cba[g];
+    for (int J = cb.lo[1]; J <= cb.hi[1]; ++J)
+      for (int I = cb.lo[0]; I <= cb.hi[0]; ++I)
+        cov[(static_cast<std::size_t>(J - bb.lo[1]) * BX) + (I - bb.lo[0])] = 1;
+  }
+  auto covered = [&](int I, int J) {
+    return cov[(static_cast<std::size_t>(J - bb.lo[1]) * BX) + (I - bb.lo[0])];
+  };
   device_fence();
-  const int nc = Uc.ncomp();
   for (int lf = 0; lf < Uf.local_size(); ++lf) {
     const ConstArray4 f = Uf.fab(lf).const_array();
     const Box2D fb = Uf.box(lf);
     const int I0 = fb.lo[0] / 2, I1 = (fb.hi[0] - 1) / 2;
     const int J0 = fb.lo[1] / 2, J1 = (fb.hi[1] - 1) / 2;
     for (int J = J0; J <= J1; ++J)
-      for (int I = I0; I <= I1; ++I) {
-        const int pb = mf_find_box(Uc, I, J);
-        if (pb < 0) continue;
-        Array4 c = Uc.fab(pb).array();
+      for (int I = I0; I <= I1; ++I)
         for (int k = 0; k < nc; ++k)
-          c(I, J, k) = Real(0.25) * (f(2 * I, 2 * J, k) + f(2 * I + 1, 2 * J, k) +
-                                     f(2 * I, 2 * J + 1, k) + f(2 * I + 1, 2 * J + 1, k));
-      }
+          avg[idx(I, J, k)] = Real(0.25) * (f(2 * I, 2 * J, k) + f(2 * I + 1, 2 * J, k) +
+                                            f(2 * I, 2 * J + 1, k) + f(2 * I + 1, 2 * J + 1, k));
+  }
+  all_reduce_sum_inplace(avg.data(), static_cast<int>(N));
+  for (int pb = 0; pb < Uc.local_size(); ++pb) {
+    Array4 c = Uc.fab(pb).array();
+    const Box2D inter = Uc.box(pb).intersect(bb);
+    for (int J = inter.lo[1]; J <= inter.hi[1]; ++J)
+      for (int I = inter.lo[0]; I <= inter.hi[0]; ++I)
+        if (covered(I, J))
+          for (int k = 0; k < nc; ++k) c(I, J, k) = avg[idx(I, J, k)];
   }
 }
 
@@ -575,7 +659,9 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   if (lev == 0) {
     fill_boundary(lv.U, base_dom, base_per);
   } else {
-    mf_fill_fine_ghosts_mb(lv.U, *pOld, *pNew, frac);
+    // parent (niveau lev-1) REPLIQUE seulement s'il s'agit du niveau 0 (lev == 1) ; sinon
+    // reparti -> FillPatch par parallel_copy.
+    mf_fill_fine_ghosts_mb(lv.U, *pOld, *pNew, frac, /*replicated_parent=*/lev == 1);
     const Box2D fdom = Box2D::from_extents(base_dom.nx() << lev, base_dom.ny() << lev);
     fill_boundary(lv.U, fdom, Periodicity{false, false});  // halos fin-fin
   }
@@ -633,6 +719,29 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
                                                   : char(0);
   };
 
+  // Point 2 distribue : le flux grossier fx/fy vit sur la dmap du PARENT (lv.U), donc fx.fab
+  // est sur le rang proprietaire de la box parente, pas forcement celui de l'enfant. Deux cas :
+  //  - parent REPLIQUE (lev == 0) : fx/fy entierement locaux, on echantillonne directement via
+  //    mf_find_box (toujours trouve) ; aucune collective (parallel_copy violerait la
+  //    replication du parent) ;
+  //  - parent REPARTI (lev >= 1) : on amene les flux grossiers necessaires sur une grille FACE
+  //    enfant-coarsen (dmap de l'enfant) par parallel_copy, chaque enfant lit alors localement.
+  const bool replicated_parent = (lev == 0);
+  const BoxArray cba = coarsen(L[lev + 1].U.box_array(), 2);  // empreinte grossiere par enfant
+  MultiFab cfx, cfy;
+  if (!replicated_parent) {
+    std::vector<Box2D> cfxb, cfyb;
+    for (int g = 0; g < cba.size(); ++g) {
+      cfxb.push_back(xface_box(cba[g]));
+      cfyb.push_back(yface_box(cba[g]));
+    }
+    cfx = MultiFab(BoxArray(std::move(cfxb)), L[lev + 1].U.dmap(), nc, 0);
+    cfy = MultiFab(BoxArray(std::move(cfyb)), L[lev + 1].U.dmap(), nc, 0);
+    parallel_copy(cfx, fx);  // flux grossier aux faces -> grille enfant-coarsen locale
+    parallel_copy(cfy, fy);
+  }
+  device_fence();
+
   std::vector<RegMP> regs(L[lev + 1].U.local_size());
   for (int lc = 0; lc < L[lev + 1].U.local_size(); ++lc) {
     const Box2D cb = L[lev + 1].U.box(lc);
@@ -644,21 +753,35 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     g.cB.assign(nI * nc, 0); g.cT.assign(nI * nc, 0);
     g.fL.assign(nJ * nc, 0); g.fR.assign(nJ * nc, 0);
     g.fB.assign(nI * nc, 0); g.fT.assign(nI * nc, 0);
-    for (int J = g.J0; J <= g.J1; ++J) {
-      const int pbL = mf_find_box(lv.U, g.I0, J), pbR = mf_find_box(lv.U, g.I1, J);
-      const ConstArray4 FXL = fx.fab(pbL).const_array(), FXR = fx.fab(pbR).const_array();
-      for (int k = 0; k < nc; ++k) {
-        g.cL[(J - g.J0) * nc + k] = FXL(g.I0, J, k);
-        g.cR[(J - g.J0) * nc + k] = FXR(g.I1 + 1, J, k);
+    if (replicated_parent) {
+      for (int J = g.J0; J <= g.J1; ++J) {
+        const int bL = mf_find_box(lv.U, g.I0, J), bR = mf_find_box(lv.U, g.I1, J);
+        const ConstArray4 FXL = fx.fab(bL).const_array(), FXR = fx.fab(bR).const_array();
+        for (int k = 0; k < nc; ++k) {
+          g.cL[(J - g.J0) * nc + k] = FXL(g.I0, J, k);
+          g.cR[(J - g.J0) * nc + k] = FXR(g.I1 + 1, J, k);
+        }
       }
-    }
-    for (int I = g.I0; I <= g.I1; ++I) {
-      const int pbB = mf_find_box(lv.U, I, g.J0), pbT = mf_find_box(lv.U, I, g.J1);
-      const ConstArray4 FYB = fy.fab(pbB).const_array(), FYT = fy.fab(pbT).const_array();
-      for (int k = 0; k < nc; ++k) {
-        g.cB[(I - g.I0) * nc + k] = FYB(I, g.J0, k);
-        g.cT[(I - g.I0) * nc + k] = FYT(I, g.J1 + 1, k);
+      for (int I = g.I0; I <= g.I1; ++I) {
+        const int bB = mf_find_box(lv.U, I, g.J0), bT = mf_find_box(lv.U, I, g.J1);
+        const ConstArray4 FYB = fy.fab(bB).const_array(), FYT = fy.fab(bT).const_array();
+        for (int k = 0; k < nc; ++k) {
+          g.cB[(I - g.I0) * nc + k] = FYB(I, g.J0, k);
+          g.cT[(I - g.I0) * nc + k] = FYT(I, g.J1 + 1, k);
+        }
       }
+    } else {
+      const ConstArray4 FX = cfx.fab(lc).const_array(), FY = cfy.fab(lc).const_array();
+      for (int J = g.J0; J <= g.J1; ++J)
+        for (int k = 0; k < nc; ++k) {
+          g.cL[(J - g.J0) * nc + k] = FX(g.I0, J, k);
+          g.cR[(J - g.J0) * nc + k] = FX(g.I1 + 1, J, k);
+        }
+      for (int I = g.I0; I <= g.I1; ++I)
+        for (int k = 0; k < nc; ++k) {
+          g.cB[(I - g.I0) * nc + k] = FY(I, g.J0, k);
+          g.cT[(I - g.I0) * nc + k] = FY(I, g.J1 + 1, k);
+        }
     }
   }
 
@@ -667,41 +790,45 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   for (int s = 0; s < r; ++s)
     subcycle_level_mp<Limiter, NumericalFlux>(m, L, lev + 1, dt / r, base_dom, base_per,
                                               &U_old, &lv.U, Real(s) / r, &regs);
-  mf_average_down_mb(L[lev + 1].U, lv.U);
+  mf_average_down_mb(L[lev + 1].U, lv.U);  // point 3 distribue (parallel_copy)
 
-  device_fence();  // reflux coverage-aware route vers la box parente.
+  // Point 4 distribue : reflux coverage-aware. La cellule grossiere bordante peut appartenir
+  // a une box parente REMOTE. On verse, pour chaque enfant LOCAL, la correction (cL/fL deja
+  // locaux apres parallel_copy) dans un buffer grossier indexe GLOBAL, all_reduce -> chaque
+  // rang a le registre complet, puis chaque rang applique a SES boxes parentes locales (le
+  // parent etant reparti, chaque cellule n'a qu'un proprietaire : pas de double comptage).
+  // En serie all_reduce est l'identite et l'application directe -> bit a bit identique.
+  device_fence();
+  const std::size_t Nref = static_cast<std::size_t>(NX) * NY * nc;
+  std::vector<Real> ref(Nref, Real(0));
+  auto idx = [&](int I, int J, int k) { return (static_cast<std::size_t>(J) * NX + I) * nc + k; };
+  auto radd = [&](int I, int J, int k, Real v) {
+    if (I >= 0 && I < NX && J >= 0 && J < NY) ref[idx(I, J, k)] += v;
+  };
   for (int lc = 0; lc < static_cast<int>(regs.size()); ++lc) {
     RegMP& g = regs[lc];
     for (int J = g.J0; J <= g.J1; ++J)
       for (int k = 0; k < nc; ++k) {
-        if (!covered(g.I0 - 1, J)) {
-          const int pb = mf_find_box(lv.U, g.I0 - 1, J);
-          if (pb >= 0)
-            lv.U.fab(pb).array()(g.I0 - 1, J, k) -=
-                (g.fL[(J - g.J0) * nc + k] - g.cL[(J - g.J0) * nc + k] * dt) / lv.dx;
-        }
-        if (!covered(g.I1 + 1, J)) {
-          const int pb = mf_find_box(lv.U, g.I1 + 1, J);
-          if (pb >= 0)
-            lv.U.fab(pb).array()(g.I1 + 1, J, k) +=
-                (g.fR[(J - g.J0) * nc + k] - g.cR[(J - g.J0) * nc + k] * dt) / lv.dx;
-        }
+        if (!covered(g.I0 - 1, J))
+          radd(g.I0 - 1, J, k, -(g.fL[(J - g.J0) * nc + k] - g.cL[(J - g.J0) * nc + k] * dt) / lv.dx);
+        if (!covered(g.I1 + 1, J))
+          radd(g.I1 + 1, J, k, +(g.fR[(J - g.J0) * nc + k] - g.cR[(J - g.J0) * nc + k] * dt) / lv.dx);
       }
     for (int I = g.I0; I <= g.I1; ++I)
       for (int k = 0; k < nc; ++k) {
-        if (!covered(I, g.J0 - 1)) {
-          const int pb = mf_find_box(lv.U, I, g.J0 - 1);
-          if (pb >= 0)
-            lv.U.fab(pb).array()(I, g.J0 - 1, k) -=
-                (g.fB[(I - g.I0) * nc + k] - g.cB[(I - g.I0) * nc + k] * dt) / lv.dy;
-        }
-        if (!covered(I, g.J1 + 1)) {
-          const int pb = mf_find_box(lv.U, I, g.J1 + 1);
-          if (pb >= 0)
-            lv.U.fab(pb).array()(I, g.J1 + 1, k) +=
-                (g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k] * dt) / lv.dy;
-        }
+        if (!covered(I, g.J0 - 1))
+          radd(I, g.J0 - 1, k, -(g.fB[(I - g.I0) * nc + k] - g.cB[(I - g.I0) * nc + k] * dt) / lv.dy);
+        if (!covered(I, g.J1 + 1))
+          radd(I, g.J1 + 1, k, +(g.fT[(I - g.I0) * nc + k] - g.cT[(I - g.I0) * nc + k] * dt) / lv.dy);
       }
+  }
+  all_reduce_sum_inplace(ref.data(), static_cast<int>(Nref));
+  for (int pb = 0; pb < lv.U.local_size(); ++pb) {  // application aux boxes parentes locales
+    Array4 c = lv.U.fab(pb).array();
+    const Box2D pbx = lv.U.box(pb);
+    for (int J = pbx.lo[1]; J <= pbx.hi[1]; ++J)
+      for (int I = pbx.lo[0]; I <= pbx.hi[0]; ++I)
+        for (int k = 0; k < nc; ++k) c(I, J, k) += ref[idx(I, J, k)];
   }
 }
 

@@ -32,6 +32,12 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
   vers la box parente, validé sur deux axes à `0` exact.
 - Reflux 2-niveaux multi-patch DISTRIBUÉ MPI (`test_mpi_amr_multipatch`, np=1/2/4 bit-identique,
   grossier répliqué + gather `average_down`/reflux).
+- Reflux N-niveaux multi-patch DISTRIBUÉ MPI (`amr_step_multilevel_multipatch` /
+  `subcycle_level_mp`, `test_mpi_amr_multipatch3`, 3 niveaux avec niveau intermédiaire
+  multi-box réparti dont le parent d'un patch fin tombe sur un autre rang ; np=1/2/4
+  bit-identique). Niveau 0 répliqué, niveaux >0 répartis ; ghost-fill et échantillonnage du
+  flux grossier par `parallel_copy` quand le parent est réparti, `average_down` et reflux par
+  buffer grossier global + `all_reduce_sum`.
 - Clustering Berger-Rigoutsos + regrid dynamique ; coupleurs `AmrCoupler` (mono-box) et
   `AmrCouplerMP` (multi-patch + regrid), conservatifs.
 
@@ -62,14 +68,18 @@ exécution, et un AMR multi-patch pas encore pensé distribué. Voir
    (écrasement couvert) et reflux (addition bordante) remontent par deux buffers grossiers +
    `all_reduce_sum_inplace`. Au passage, un bug mono-rang corrigé : les face-box des flux fins
    se bâtissaient sur les boxes **locales** avec le dmap **global** (tailles incohérentes sous
-   MPI). Le même bug latent corrigé dans `subcycle_level_mp`. Reste : rendre distribué le
-   chemin N-niveaux récursif (`subcycle_level_mp`, grossier MULTI-box réparti, qu'on ne peut
-   répliquer à bon marché). Cinq points supposent le parent local (via `mf_find_box`) et
-   demandent un FillPatch façon AMReX via le `parallel_copy` déjà présent : (1) ghost-fill
-   parent->enfant, (2) échantillonnage du registre grossier, (3) `average_down` routé vers
-   le propriétaire de la box parente, (4) reflux routé de même, (5) couverture (déjà
-   globale). Puis, cible finale, chaque patch portant `owner_rank`, `global_box_id`,
-   interfaces coarse-fine globales, registre distribué, `load_balance` SFC.
+   MPI). Le même bug latent corrigé dans `subcycle_level_mp`. **Fait aussi pour le N-niveaux :**
+   `subcycle_level_mp` / `amr_step_multilevel_multipatch` tourne **réellement distribué**
+   (`test_mpi_amr_multipatch3`, 3 niveaux, niveau intermédiaire multi-box réparti dont le parent
+   d'un patch fin tombe sur un autre rang ; np=1/2/4 **bit à bit identiques**, masse conservée).
+   Niveau 0 répliqué, niveaux >0 répartis. Les cinq points sont résolus : (1) ghost-fill
+   parent->enfant et (2) échantillonnage du registre grossier par `parallel_copy` quand le
+   parent est réparti (lecture locale quand il est répliqué) ; (3) `average_down` et (4) reflux
+   par buffer grossier global + `all_reduce_sum_inplace`, appliqué aux boxes parentes locales ;
+   (5) couverture déjà globale. Reste : le coupleur `AmrCouplerMP` au-delà de 2 niveaux
+   distribués (son injection d'aux `inject_aux_mb` suppose encore le parent local) ; puis, cible
+   finale, chaque patch portant `owner_rank`, `global_box_id`, interfaces coarse-fine globales,
+   registre distribué, `load_balance` SFC.
 2. **Moteur AMR unifié.** Premier pas fait : l'entrée unifiée `advance_amr(m, LevelHierarchy&,
    dt)` + le type `LevelHierarchy` (vérifié façade-fidèle et conservatif, `test_advance_amr`).
    Reste : nommer les autres objets (`PatchRange`, `CoarseFineInterface`, `FluxRegister`,
