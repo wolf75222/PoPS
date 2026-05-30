@@ -39,11 +39,17 @@ class GeometricMG {
  public:
   // active(x, y) : predicat optionnel "cellule active" (interieur du conducteur).
   // Vide => tout actif (pas de paroi embedded).
+  // replicated : si true, chaque niveau (mono-box couvrant le domaine) est REPLIQUE sur
+  // tous les rangs (dmap = my_rank() partout) au lieu du round-robin par defaut. Chaque rang
+  // resout alors le MEME Poisson grossier redondamment, SANS communication (V-cycle par-fab,
+  // fill_boundary sur une box couvrant le domaine est local, et current_residual reduit par
+  // norm_inf = all_reduce_MAX, idempotent sous replication). C'est ce qu'attend le coupleur
+  // AMR (niveau 0 replique). En serie my_rank()=0 -> identique au round-robin, bit a bit.
   GeometricMG(const Geometry& geom, const BoxArray& ba, const BCRec& bc,
-              std::function<bool(Real, Real)> active = {}, int min_coarse = 2,
-              int nu1 = 2, int nu2 = 2, int nbottom = 50)
+              std::function<bool(Real, Real)> active = {}, bool replicated = false,
+              int min_coarse = 2, int nu1 = 2, int nu2 = 2, int nbottom = 50)
       : bc_(bc), active_(std::move(active)), nu1_(nu1), nu2_(nu2),
-        nbottom_(nbottom) {
+        nbottom_(nbottom), replicated_(replicated) {
     add_level(geom, ba);
     while (true) {
       const Geometry g = lev_.back().geom;
@@ -114,7 +120,9 @@ class GeometricMG {
   const MultiFab* mask_ptr(int l) { return active_ ? &lev_[l].mask : nullptr; }
 
   void add_level(const Geometry& g, const BoxArray& ba) {
-    DistributionMapping dm(ba.size(), n_ranks());
+    DistributionMapping dm = replicated_
+        ? DistributionMapping(std::vector<int>(ba.size(), my_rank()))
+        : DistributionMapping(ba.size(), n_ranks());
     lev_.push_back(MGLevel{g, ba, dm, MultiFab(ba, dm, 1, 1),
                            MultiFab(ba, dm, 1, 0), MultiFab(ba, dm, 1, 0),
                            MultiFab{}});
@@ -147,6 +155,7 @@ class GeometricMG {
   BCRec bc_;
   std::function<bool(Real, Real)> active_;
   int nu1_, nu2_, nbottom_;
+  bool replicated_ = false;
   std::vector<MGLevel> lev_;
 };
 

@@ -99,10 +99,17 @@ class AmrCouplerMP {
   // conductrice circulaire de l'instabilite colonne (passe tel quel au multigrille). Vide
   // par defaut -> pas de paroi (comportement historique inchange). Seul le grossier porte la
   // paroi : les patchs fins raffinent le bord d'anneau, strictement a l'interieur du mur.
+  // replicated_coarse : le niveau 0 (grossier mono-box) est REPLIQUE sur tous les rangs ;
+  // le multigrille de Poisson doit l'etre aussi (sinon, sous MPI, le grossier tombe sur le
+  // seul rang 0 et compute_aux lit un phi absent ailleurs). On le passe donc au mg_. En serie
+  // (my_rank()=0) c'est bit-identique au round-robin. Mettre false seulement quand le grossier
+  // devient multi-box reparti (de-replication, objectif B a l'echelle hero).
   AmrCouplerMP(const Model& model, const Geometry& geom, const BoxArray& ba_coarse,
                const BCRec& bc, std::vector<AmrLevelMP> levels,
-               std::function<bool(Real, Real)> active = {})
-      : model_(model), geom_(geom), mg_(geom, ba_coarse, bc, std::move(active)),
+               std::function<bool(Real, Real)> active = {},
+               bool replicated_coarse = true)
+      : model_(model), geom_(geom),
+        mg_(geom, ba_coarse, bc, std::move(active), replicated_coarse),
         stack_(geom.domain, std::move(levels)) {}
 
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }

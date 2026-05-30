@@ -63,19 +63,29 @@ Le risque est repoussé en fin de plan, quand il devient nécessaire.
 
 ## Plan étagé
 
-### Étape 0 : pilote diocotron AMR distribué (CPU), grossier répliqué
+### Étape 0 : diocotron AMR distribué de bout en bout (CPU), grossier répliqué (FAIT)
 
-Écrire `examples/diocotron_amr_mpi.cpp` : la colonne diocotron sur `AmrCouplerMP`
-(grossier répliqué + 1 niveau fin réparti, tag couronne, regrid Berger-Rigoutsos,
-paroi conductrice dans le MG), pilotée en MPI. Décomposition : patchs fins répartis
-par `make_sfc_distribution`. Diagnostic : amplitude du mode `l`, masse, nombre de
-patchs par rang.
+`test_mpi_diocotron_amr` : le diocotron 2 niveaux sur `AmrCouplerMP` (Poisson
+grossier + injection d'aux + pas multi-patch + regrid Berger-Rigoutsos) tourne
+distribué, `np=1/2/4` BIT À BIT identique (`max|Uc_dist - Uc_ref| = 0`) et masse
+conservée à l'arrondi (`2e-15`) sous regrid dynamique réparti.
 
-- **Livrable** : un binaire MPI qui fait le diocotron AMR dynamique réparti.
-- **Gate de validation** : `test_mpi_diocotron_amr` (nouveau), `np=1/2/4`
-  bit-identique au rang 0, masse conservée. Réutilise tout le reflux distribué
-  existant ; pas de nouvelle primitive de comm.
-- **Risque** : FAIBLE (assemblage de briques validées).
+GAP TROUVÉ ET CORRIGÉ au passage : le multigrille de Poisson du coupleur n'était
+PAS répliqué sous MPI. `GeometricMG` distribuait son grossier mono-box en
+round-robin (`DistributionMapping(1, n_ranks())` -> box 0 sur le seul rang 0),
+alors que `compute_aux` lit `mg_.phi().fab(0)` et injecte avec
+`replicated_parent=true` sur CHAQUE rang : sous MPI, les rangs > 0 n'avaient pas
+de grossier à lire. Aucun test MPI n'exerçait le `AmrCouplerMP.step()` complet (ils
+testaient le reflux nu et la primitive d'injection seuls), d'où le trou. Correctif :
+option `replicated` sur `GeometricMG` (chaque rang détient + résout le même Poisson
+grossier, sans communication : V-cycle par-fab, `fill_boundary` local sur une box
+couvrant le domaine, résidu par `norm_inf` = `all_reduce_MAX` idempotent) ; option
+`replicated_coarse=true` sur `AmrCouplerMP` qui la lui passe. En série c'est
+bit-identique au round-robin (60/60 inchangés).
+
+- **Livrable** : `AmrCouplerMP` réellement MPI-correct de bout en bout (gate ci-dessus).
+- **Risque réel** : ce n'était PAS du pur assemblage : un vrai trou de réplication
+  du Poisson a été révélé et corrigé. D'où l'intérêt de la vérification.
 
 ### Étape 1 : porter l'étape 0 sur GPU (Kokkos), grossier répliqué
 
