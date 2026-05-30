@@ -17,6 +17,7 @@
 #include <adc/mesh/physical_bc.hpp>
 #include <adc/mesh/refinement.hpp>  // coarsen_index
 
+#include <functional>  // std::function (predicat de paroi conductrice passe au MG)
 #include <utility>
 #include <vector>
 
@@ -94,9 +95,14 @@ class AmrCouplerMP {
   static_assert(EllipticSolver<Elliptic>, "Elliptic doit modeler EllipticSolver");
 
  public:
+  // active : predicat optionnel "cellule active" (interieur du conducteur), pour la paroi
+  // conductrice circulaire de l'instabilite colonne (passe tel quel au multigrille). Vide
+  // par defaut -> pas de paroi (comportement historique inchange). Seul le grossier porte la
+  // paroi : les patchs fins raffinent le bord d'anneau, strictement a l'interieur du mur.
   AmrCouplerMP(const Model& model, const Geometry& geom, const BoxArray& ba_coarse,
-               const BCRec& bc, std::vector<AmrLevelMP> levels)
-      : model_(model), geom_(geom), mg_(geom, ba_coarse, bc),
+               const BCRec& bc, std::vector<AmrLevelMP> levels,
+               std::function<bool(Real, Real)> active = {})
+      : model_(model), geom_(geom), mg_(geom, ba_coarse, bc, std::move(active)),
         stack_(geom.domain, std::move(levels)) {}
 
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }
