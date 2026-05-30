@@ -82,12 +82,12 @@ exécution, et un AMR multi-patch pas encore pensé distribué. Voir
 6. **CouplingPolicy mince.** Sortir la hiérarchie, le regrid et les diagnostics des coupleurs
    pour que la policy ne fasse plus qu'ordonner les opérations.
 7. **Suite de validation numérique** (le bit-identique ne prouve pas la justesse). Posé :
-   ordre de convergence du Laplacien 5 points (`test_poisson_convergence`, L2 et Linf à
-   l'ordre 2.00, Dirichlet et périodique + nullspace périodique) ; ordre MUSCL ~2 / Rusanov
-   ~1 (`test_muscl_convergence`) ; conservation sous regrid (`test_amr_coupler_mp`). Reste :
-   solutions manufacturées Euler / Euler-Poisson + ordre L1/L2/Linf, ordre de la conservation
-   du flux coarse-fine, Gauss discret div(E) = rho, limite AP quantifiée, invariants diocotron
-   (énergie, moment, enstrophie).
+   ordre du Laplacien 5 points (`test_poisson_convergence`, L2/Linf = 2.00, Dirichlet +
+   périodique + nullspace) ; tourbillon isentropique d'Euler (L1 ~2, `test_euler`) ; ordre
+   MUSCL ~2 / Rusanov ~1 (`test_muscl_convergence`) ; loi de Gauss discrète du couplage
+   `div(grad phi) = source` à l'ordre 2.00 (`test_gauss_law`) ; conservation sous regrid
+   (`test_amr_coupler_mp`). Reste : ordre de la conservation du flux coarse-fine sous AMR,
+   limite AP quantifiée, invariants diocotron (énergie, moment, enstrophie).
 
 ### Physique magnétisée (cible Hoffart)
 
