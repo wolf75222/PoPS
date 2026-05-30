@@ -30,19 +30,30 @@ physique). Le hero run vise `armgpu`.
 
 ## Build hybride (aarch64 : OBLIGATOIREMENT dans un job armgpu)
 
-Le login est x86_64 : on ne peut pas compiler de l'ARM dessus. Soit on laisse le `.sbatch`
-compiler (il le fait), soit on prépare en interactif :
+Le login est x86_64 : on ne peut pas compiler de l'ARM dessus. ATTENTION : **Kokkos n'est PAS
+fourni par spack ni par les modules** sur ROMEO (seuls `cuda/12.6`, `openmpi/aarch64/4.1.7-cuda`,
+`nvhpc` existent). Il faut donc le COMPILER depuis les sources (Serial + CUDA, Hopper sm_90,
+nvcc_wrapper), une fois, en cache sur `/scratch_p`. Les noeuds de calcul n'ayant pas internet,
+cloner Kokkos sur le LOGIN d'abord. `romeo/diocotron_amr_gpu.sbatch` fait tout cela
+automatiquement (validé sur GH200, exec=Cuda, AMR bit-identique CPU). Recette manuelle :
 
 ```bash
-salloc -t 1:00:00 --account=R00000 --constraint=armgpu --gpus-per-node=1 --mem=32G
-romeo_load_armgpu_env
-spack load cmake cuda openmpi+cuda
-spack load kokkos +cuda +wrapper cuda_arch=90          # Hopper = sm_90
-K=$(spack location -i kokkos)
-cmake -S . -B build-gh200 -DCMAKE_BUILD_TYPE=Release \
-  -DADC_USE_MPI=ON -DADC_USE_KOKKOS=ON \
-  -DCMAKE_CXX_COMPILER=$K/bin/nvcc_wrapper -DKokkos_ROOT=$K
-cmake --build build-gh200 -j --target diocotron_mpi
+# sur le login (internet) : cloner Kokkos une fois
+git clone --depth 1 -b 4.4.01 https://github.com/kokkos/kokkos.git /scratch_p/$USER/kokkos-src
+
+# dans un job armgpu (compte reel r250127) :
+salloc -t 1:00:00 --account=r250127 --constraint=armgpu --gpus-per-node=1 --mem=64G
+module load cuda/12.6
+K=/scratch_p/$USER/kokkos-install
+cmake -S /scratch_p/$USER/kokkos-src -B /scratch_p/$USER/kokkos-build -DCMAKE_INSTALL_PREFIX=$K \
+  -DCMAKE_BUILD_TYPE=Release -DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_CUDA=ON \
+  -DKokkos_ARCH_HOPPER90=ON -DKokkos_ENABLE_CUDA_LAMBDA=ON \
+  -DCMAKE_CXX_COMPILER=/scratch_p/$USER/kokkos-src/bin/nvcc_wrapper -DCMAKE_CXX_STANDARD=17
+cmake --build /scratch_p/$USER/kokkos-build -j 24 --target install
+# puis le projet
+cmake -S . -B build-gh200 -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON \
+  -DCMAKE_CXX_COMPILER=$K/bin/nvcc_wrapper -DKokkos_ROOT=$K   # +-DADC_USE_MPI=ON pour le multi-GPU
+cmake --build build-gh200 -j 10 --target diocotron_amr_kokkos
 ```
 
 ## Lancer
@@ -55,7 +66,8 @@ squeue --me                               # suivre
 ```
 
 Avant de soumettre, éditer dans les `.sbatch` :
-- `--account` : le vrai code projet (demander à Romain ; placeholder `R00000`).
+- `--account` : `r250127` (le code projet réel ; les `.sbatch` historiques portent encore le
+  placeholder `R00000`, à remplacer).
 - `--nodes` / `RES` / `STEPS` : ambition vs temps de file. `RES=8192` (67 M cellules) est un
   bon point de départ « ça calcule un certain temps » ; monter à 16384 pour saturer plus.
 - `--time`, `--mem` (par SERVEUR) : voir la doc ROMEO.

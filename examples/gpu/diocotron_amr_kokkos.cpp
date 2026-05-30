@@ -24,7 +24,6 @@
 #endif
 
 using namespace adc;
-static constexpr double kPi = 3.14159265358979323846;
 
 int main(int argc, char** argv) {
 #ifdef ADC_HAS_KOKKOS
