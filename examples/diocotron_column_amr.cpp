@@ -45,6 +45,9 @@ int main(int argc, char** argv) {
   const int nsteps = (argc > 3) ? std::atoi(argv[3]) : 1200;
   const bool refine = (argc > 4) ? (std::atoi(argv[4]) != 0) : true;
   const int l = (argc > 5) ? std::atoi(argv[5]) : 4;
+  // ml=1 : Poisson MULTI-NIVEAU (densite composite sur la grille fine -> potentiel fin au bord
+  // d'anneau), au lieu du Poisson grossier + injection d'aux. Teste si le grossier bride le taux.
+  const bool ml = (argc > 6) ? (std::atoi(argv[6]) != 0) : false;
   std::filesystem::create_directories(out);
 
   const double L = 1.0, cx = 0.5 * L, cy = 0.5 * L;
@@ -80,8 +83,19 @@ int main(int argc, char** argv) {
       for (int i = g.lo[0]; i <= g.hi[0]; ++i) u(i, j, 0) = ne0((i + 0.5) * dxc, (j + 0.5) * dyc);
   }
 
-  GeometricMG mg(geom, ba, bc, active);  // multigrille avec paroi embedded
+  GeometricMG mg(geom, ba, bc, active);  // multigrille grossier avec paroi embedded
   MultiFab Uf, auxf;                     // niveau fin multi-box (vide si refine=0)
+
+  // Poisson MULTI-NIVEAU (mode ml) : grille fine uniforme 2nc, densite COMPOSITE (grossier
+  // prolonge + fin ecrase la ou raffine) -> potentiel fin au bord d'anneau. phic = restriction
+  // du potentiel fin sur le grossier (pour l'aux grossier du transport).
+  const int nf = 2 * nc;
+  const double dxf = dxc / 2, dyf = dyc / 2;
+  Box2D fdom = Box2D::from_extents(nf, nf);
+  Geometry fgeom{fdom, 0.0, L, 0.0, L};
+  BoxArray fba(std::vector<Box2D>{fdom});
+  GeometricMG fmg(fgeom, fba, bc, active);
+  MultiFab phic(ba, dm, 1, 1);
 
   auto compute_coarse_aux = [&]() {
     fill_boundary(Uc, dom, Periodicity{false, false});
@@ -109,6 +123,51 @@ int main(int argc, char** argv) {
       for (int j = g.lo[1]; j <= g.hi[1]; ++j)
         for (int i = g.lo[0]; i <= g.hi[0]; ++i)
           for (int k = 0; k < 3; ++k) af(i, j, k) = ac(coarsen_index(i, 2), coarsen_index(j, 2), k);
+    }
+  };
+
+  // MULTI-NIVEAU : Poisson sur la grille fine, densite composite (grossier prolonge + fin
+  // ecrase la ou raffine) -> potentiel FIN au bord d'anneau. Remplit auxc (restriction) ET
+  // auxf (gradient fin direct). Remplace compute_coarse_aux + inject_aux.
+  auto compute_aux_ml = [&]() {
+    fill_boundary(Uc, dom, Periodicity{false, false});
+    Array4 rf = fmg.rhs().fab(0).array();
+    const ConstArray4 uc = Uc.fab(0).const_array();
+    for (int J = 0; J < nf; ++J)
+      for (int I = 0; I < nf; ++I) rf(I, J) = model.alpha * (uc(I / 2, J / 2, 0) - model.n_i0);
+    for (int li = 0; li < Uf.local_size(); ++li) {
+      const ConstArray4 uf = Uf.fab(li).const_array();
+      const Box2D nb = Uf.box(li);
+      for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)
+        for (int i = nb.lo[0]; i <= nb.hi[0]; ++i) rf(i, j) = model.alpha * (uf(i, j, 0) - model.n_i0);
+    }
+    fmg.solve();
+    const ConstArray4 pf = fmg.phi().fab(0).const_array();
+    Array4 pq = phic.fab(0).array();  // restriction du potentiel fin sur le grossier
+    for (int J = 0; J < nc; ++J)
+      for (int I = 0; I < nc; ++I)
+        pq(I, J, 0) = 0.25 * (pf(2 * I, 2 * J) + pf(2 * I + 1, 2 * J) + pf(2 * I, 2 * J + 1) +
+                              pf(2 * I + 1, 2 * J + 1));
+    fill_boundary(phic, dom, Periodicity{false, false});
+    const ConstArray4 pc = phic.fab(0).const_array();
+    Array4 ac = auxc.fab(0).array();
+    for (int J = 0; J < nc; ++J)
+      for (int I = 0; I < nc; ++I) {
+        ac(I, J, 0) = pc(I, J, 0);
+        ac(I, J, 1) = (pc(I + 1, J, 0) - pc(I - 1, J, 0)) / (2 * dxc);
+        ac(I, J, 2) = (pc(I, J + 1, 0) - pc(I, J - 1, 0)) / (2 * dyc);
+      }
+    fill_boundary(auxc, dom, Periodicity{false, false});
+    for (int li = 0; li < Uf.local_size(); ++li) {  // aux fin = gradient du potentiel fin
+      Array4 af = auxf.fab(li).array();
+      const Box2D g = auxf.fab(li).grown_box();
+      for (int j = g.lo[1]; j <= g.hi[1]; ++j)
+        for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
+          const int ii = std::clamp(i, 1, nf - 2), jj = std::clamp(j, 1, nf - 2);
+          af(i, j, 0) = pf(ii, jj);
+          af(i, j, 1) = (pf(ii + 1, jj) - pf(ii - 1, jj)) / (2 * dxf);
+          af(i, j, 2) = (pf(ii, jj + 1) - pf(ii, jj - 1)) / (2 * dyf);
+        }
     }
   };
 
@@ -148,19 +207,21 @@ int main(int argc, char** argv) {
     auxf = MultiFab(Uf.box_array(), Uf.dmap(), 3, 1);
   };
 
-  // amplitude du mode l de phi echantillonne sur le cercle r=r0 (acces direct mg.phi()).
+  // amplitude du mode l de phi sur le cercle r=r0 (potentiel grossier mg, ou fin fmg si ml).
   auto mode_amplitude = [&]() {
-    const ConstArray4 p = mg.phi().fab(0).const_array();
+    const ConstArray4 p = (ml ? fmg.phi() : mg.phi()).fab(0).const_array();
+    const int n = ml ? nf : nc;
+    const double dx = ml ? dxf : dxc;
     const int K = 256;
     double sr = 0, si = 0;
     for (int k = 0; k < K; ++k) {
       const double th = 2 * kPi * k / K;
       const double x = cx + r0 * std::cos(th), y = cy + r0 * std::sin(th);
-      const double fx = x / dxc - 0.5, fy = y / dyc - 0.5;
+      const double fx = x / dx - 0.5, fy = y / dx - 0.5;
       const int i0 = (int)std::floor(fx), j0 = (int)std::floor(fy);
       const double tx = fx - i0, ty = fy - j0;
       auto P = [&](int ii, int jj) {
-        ii = std::clamp(ii, 0, nc - 1); jj = std::clamp(jj, 0, nc - 1); return p(ii, jj);
+        ii = std::clamp(ii, 0, n - 1); jj = std::clamp(jj, 0, n - 1); return p(ii, jj);
       };
       const double v = (1 - tx) * (1 - ty) * P(i0, j0) + tx * (1 - ty) * P(i0 + 1, j0) +
                        (1 - tx) * ty * P(i0, j0 + 1) + tx * ty * P(i0 + 1, j0 + 1);
@@ -189,8 +250,8 @@ int main(int argc, char** argv) {
     return c;
   };
 
-  compute_coarse_aux();
   if (refine) regrid();
+  if (ml) compute_aux_ml(); else compute_coarse_aux();
   if (refine) mf_average_down_multi(Uf, Uc);
   const double M0 = mass();
   double dt = 0.4 * dxc / vmax(), t = 0;
@@ -212,9 +273,8 @@ int main(int argc, char** argv) {
       std::printf("  s=%5d t=%7.3f a=%.4e npatch=%d cells=%ld drift=%.2e\n", s, t,
                   mode_amplitude(), Uf.local_size(), cells, std::fabs(mass() - M0));
     if (s == nsteps) break;
-    if (refine && s > 0 && s % 30 == 0) { compute_coarse_aux(); regrid(); }
-    compute_coarse_aux();
-    if (refine) inject_aux();
+    if (refine && s > 0 && s % 30 == 0) regrid();  // tag geometrique (Uc seul)
+    if (ml) compute_aux_ml(); else { compute_coarse_aux(); if (refine) inject_aux(); }
     amr_step_2level_multipatch<NoSlope, RusanovFlux>(model, Uc, dom, dxc, dyc, Uf, auxc, auxf, dt);
     t += dt;
     if (s % 20 == 0) dt = 0.4 * dxc / vmax();

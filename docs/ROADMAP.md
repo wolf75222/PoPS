@@ -210,11 +210,18 @@ puis d'y ajouter notre AMR, puis SAMRAI.
   Résultat (mode 4, `docs/fig_diocotron_amr_vs_uniforme.png`) : à BASE GROSSIÈRE ÉGALE (96), l'AMR
   **triple le taux** (`γ_norm = 0.38` vs uniforme `0.12`) en raffinant le transport au bord, pour
   1.8x les cellules ; il est sur une MEILLEURE courbe taux/cellule que l'uniforme (0.38 à 16k
-  cellules vs ~0.22 par interpolation uniforme). Constat HONNÊTE : il n'atteint pas encore l'uniforme
-  fin (`0.50` à 192) ni `0.911`, parce que le **Poisson reste résolu sur le grossier** (le coupleur
-  injecte l'aux grossier aux patchs ; le potentiel est donc bridé par la résolution grossière). Le
-  pas suivant vers `0.911` : un Poisson MULTI-NIVEAU (les patchs fins contribuant au potentiel), pas
-  seulement un transport raffiné.
+  cellules vs ~0.22 par interpolation uniforme).
+- **M2b : Poisson MULTI-NIVEAU (FAIT, mode `ml=1`).** L'étape M2 bridait le taux parce que le
+  **Poisson restait résolu sur le grossier** (le coupleur injecte l'aux grossier aux patchs). Le mode
+  `ml` (`diocotron_column_amr <out> <nc> <nsteps> <refine> <l> <ml>`) assemble une densité composite
+  sur la grille fine (grossier prolongé + patchs fins écrasés), résout un `GeometricMG` fin dessus,
+  puis restreint le potentiel vers le grossier (gradient pour `auxc`) et garde le gradient fin direct
+  (`auxf`). Résultat (mode 4, mêmes 16 392 cellules) : le taux remonte de `γ_norm = 0.38` à `0.42`,
+  vers l'uniforme fin (`0.50` à 192 = 36 864 cellules). HYPOTHÈSE CONFIRMÉE : le Poisson grossier
+  bridait bien le taux. L'AMR multi-niveau atteint donc 85 % du taux de l'uniforme-192 pour 44 % des
+  cellules. Le reste de l'écart à `0.50` puis à `0.911` est le **transport grossier hors patchs** plus
+  la résolution effective finie (limite de diffusion de M1) : il se referme en montant la base (la
+  cible du hero-run).
 - **M3 : système magnétique complet (eq 2.4).** Au-delà de la limite de dérive : Euler+énergie +
   Poisson + Lorentz `m×Ω` (push de Boris déjà en place) + splitting d'opérateurs, pour reproduire la
   *méthode* du papier à travers les 12 ordres de grandeur d'échelles de temps.
