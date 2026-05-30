@@ -21,8 +21,9 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
   asymptotic-preserving, tous via `aux = grad phi`.
 - Schéma AP deux-fluides (Lorentz implicite, Poisson reformulé `beta0`), dispersion isotrope
   validée (3.1%), borne AP à `omega_pe = 1e3`.
-- Continuité upwind MUSCL (anti-Gibbs) en option ; champ magnétique : rotation cyclotron
-  (fréquence exacte à 0.00%).
+- Continuité upwind MUSCL (anti-Gibbs) en option ; champ magnétique : push de Boris E+B
+  combiné (`tfap_boris`, fréquence cyclotron exacte à 0.00%, dérive E x B préservée sans
+  croissance séculaire), à la place du splitting de Strang externe.
 
 ### AMR
 
@@ -170,8 +171,19 @@ exécution, et un AMR multi-patch pas encore pensé distribué. Voir
 
 ### Physique magnétisée (cible Hoffart)
 
-- Push de Boris E+B combiné (au lieu du splitting de Strang externe), reformulation AP
-  tensorielle sous champ fort, reproduction d'un benchmark Hoffart précis.
+- **Push de Boris E+B combiné : FAIT.** `tfap_boris` avance la quantité de mouvement sous E
+  ET B en un pas symétrique (demi-impulsion électrique, rotation magnétique complète,
+  demi-impulsion), au lieu du splitting de Strang externe (rotation autour de tout le pas
+  électrostatique). Câblé dans `TwoFluidAP2D::step` (seul le cas magnétisé change ; à `wc = 0`
+  le push se réduit exactement à `tfap_lorentz`, donc tous les tests `B = 0` restent
+  bit-identiques ; à `E = 0` c'est la rotation pure, donc le cyclotron reste exact à 0.00 %).
+  `test_two_fluid_boris` fige les trois propriétés : rotation conservant `|m|` sous B seul,
+  réduction à l'impulsion électrique sans B, et surtout le point fixe `E x B` discret
+  `m* = h cot(theta/2) (Ey, -Ex)` préservé avec rayon de giration constant (pas de croissance
+  séculaire de l'énergie). `test_two_fluid_ap_amplitude` (B activé) valide le push dans la pile
+  AP self-consistante.
+- Reste : reformulation AP tensorielle sous champ fort, reproduction d'un benchmark Hoffart
+  précis.
 
 ### Performance
 

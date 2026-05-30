@@ -162,6 +162,29 @@ inline void tfap_lorentz(const MultiFab& ms, const MultiFab& E, MultiFab& mn, Re
   });
 }
 
+// Push de Boris : avance la quantite de mouvement sous E ET B en UN pas symetrique
+//   demi-impulsion electrique -> rotation magnetique complete theta -> demi-impulsion,
+// au lieu du splitting de Strang externe (rotation autour de tout le pas ES). Reproduit
+// EXACTEMENT la derive E x B (point fixe de la carte) et conserve |m| sous B seul, sans
+// croissance seculaire. Cas limites : theta = 0 (pas de B) -> identique a tfap_lorentz ;
+// E = 0 -> rotation pure R(theta), meme convention que tfap_rotate_mom ([[c,s],[-s,c]] sur
+// (mx,my)). cos/sin en hote (champ uniforme). Comp 0 = mx, comp 1 = my.
+inline void tfap_boris(const MultiFab& ms, const MultiFab& E, MultiFab& mn, Real z, Real coup,
+                       Real theta, Real dt, const Box2D& dom) {
+  const Real c = std::cos(theta), s = std::sin(theta);
+  const Real h = Real(0.5) * dt * z * coup;  // coefficient de demi-impulsion electrique
+  ConstArray4 m = ms.fab(0).const_array(), ef = E.fab(0).const_array();
+  Array4 o = mn.fab(0).array();
+  for_each_cell(dom, [=] ADC_HD(int i, int j) {
+    const Real mxm = m(i, j, 0) + h * ef(i, j, 0);   // demi-impulsion E
+    const Real mym = m(i, j, 1) + h * ef(i, j, 1);
+    const Real mxr = c * mxm + s * mym;               // rotation B complete
+    const Real myr = -s * mxm + c * mym;
+    o(i, j, 0) = mxr + h * ef(i, j, 0);               // seconde demi-impulsion E
+    o(i, j, 1) = myr + h * ef(i, j, 1);
+  });
+}
+
 // Solveur AP 2D deux-fluides porte MultiFab, template sur l'EllipticSolver.
 template <class Elliptic>
 struct TwoFluidAP2D {
@@ -207,14 +230,11 @@ struct TwoFluidAP2D {
   }
 
   void step(Real dt, bool stabilize) {
-    // demi-rotation cyclotron (Strang) : R(theta/2) o pas-electrostatique o R(theta/2).
-    // signe = z_s (electron z=-1, ion z=+1). theta = z wc dt.
+    // push de Boris : la force magnetique est combinee a l'impulsion electrique DANS la mise
+    // a jour de la vitesse (plus de splitting de Strang externe autour du pas ES). theta = z
+    // wc dt par espece (electron z=-1, ion z=+1) ; quand wc=0 le push se reduit a tfap_lorentz.
     const Real the = Real(-1) * wce * dt, thi = Real(+1) * wci * dt;
     const bool mag = (wce != Real(0) || wci != Real(0));
-    if (mag) {
-      tfap_rotate_mom(e, Real(0.5) * the, dom);
-      tfap_rotate_mom(ion, Real(0.5) * thi, dom);
-    }
     fill_boundary(e, dom, per);
     fill_boundary(ion, dom, per);
     tfap_mstar(e, mse, cse2, dt, dom, dx, dy);
@@ -240,8 +260,13 @@ struct TwoFluidAP2D {
     ell.solve();
     fill_boundary(ell.phi(), dom, per);
     tfap_efield(ell.phi(), Ef, dom, dx, dy);
-    tfap_lorentz(mse, Ef, mne, Real(-1), ce, dt, dom);  // electron
-    tfap_lorentz(msi, Ef, mni, Real(+1), ci, dt, dom);  // ion
+    if (mag) {  // E et B combines (Boris) ; se reduit a tfap_lorentz quand wc = 0
+      tfap_boris(mse, Ef, mne, Real(-1), ce, the, dt, dom);  // electron
+      tfap_boris(msi, Ef, mni, Real(+1), ci, thi, dt, dom);  // ion
+    } else {
+      tfap_lorentz(mse, Ef, mne, Real(-1), ce, dt, dom);  // electron
+      tfap_lorentz(msi, Ef, mni, Real(+1), ci, dt, dom);  // ion
+    }
     fill_boundary(mne, dom, per);
     fill_boundary(mni, dom, per);
     if (upwind_continuity) {  // pas in-place : scratch nte/nti puis recopie de n
@@ -255,10 +280,6 @@ struct TwoFluidAP2D {
     }
     copy_mom(e, mne);  // recopie mx, my finaux dans l'etat
     copy_mom(ion, mni);
-    if (mag) {  // seconde demi-rotation cyclotron (Strang)
-      tfap_rotate_mom(e, Real(0.5) * the, dom);
-      tfap_rotate_mom(ion, Real(0.5) * thi, dom);
-    }
   }
 
   static void copy_mom(MultiFab& sp, const MultiFab& mn) {
