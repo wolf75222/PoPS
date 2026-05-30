@@ -46,7 +46,7 @@ Les cinq couches, par contenu :
 | Couche | Quoi | Ne connait pas |
 |---|---|---|
 | **Physique** | `PhysicalModel`, equation d'etat, termes sources, lois de fermeture | MPI, AMR, MultiFab, Kokkos, halos |
-| **Numerique** | reconstruction, flux numerique, operateur spatial, operateur elliptique, CL | le layout memoire, la strategie AMR |
+| **Numerique** | reconstruction, flux numerique, operateur spatial, operateur elliptique, CL | la decomposition en boxes/rangs (`BoxArray`, `DistributionMapping`), le backend d'execution, la strategie AMR |
 | **Maillage / donnees** | Box, BoxArray, DistributionMapping, MultiFab, Geometry, hierarchie AMR | comment on boucle / communique (le backend) |
 | **Execution** | `for_each_cell`, `comm`, GhostExchange, reductions, allocateur, BackendPolicy | les formules physiques, les conteneurs concrets |
 | **Temps / couplage** | SSPRK, IMEX, splitting, `CouplingPolicy`, reflux / average-down / subcyclage | l'implementation des operateurs qu'il compose |
@@ -94,14 +94,28 @@ au `for_each_cell` du backend. Le mauvais design serait
 `numerical_flux.compute_all_cells(U, F, grid, mpi)` ; le bon est un `assemble_rhs` qui
 compose `(modele, flux, reconstruction, CL)` puis laisse l'execution boucler.
 
+Deux granularites a distinguer dans cette couche :
+
+- **Politiques point-wise** (`numerical_flux`, `reconstruction`, le stencil elliptique) :
+  prennent des etats / des indices, rendent un flux ou une valeur. Elles ne voient ni
+  `Array4`, ni `Box`, ni le moindre conteneur ; entierement reutilisables.
+- **Operateurs de grille** (`assemble_rhs`, `compute_face_fluxes`, `apply_laplacian`, le
+  lisseur) : ils bouclent sur une `Box` et lisent/ecrivent une vue locale `Array4`. Ils
+  dependent donc du *layout local d'un patch* (l'API `Array4` + bornes de `Box`), mais **pas**
+  de la decomposition en boxes/rangs (`BoxArray` / `DistributionMapping`), **pas** du backend
+  (cache derriere `for_each_cell`), **pas** de la strategie AMR. La boucle sur les fabs et la
+  distribution restent au-dessus, dans la couche maillage/donnees.
+
 ## 4. Couches 3-4 : maillage/donnees ET execution (distinctes)
 
 Deux concerns separes, volontairement. **Maillage / donnees** = ce qui STOCKE :
 `mesh/box2d`, `box_array`, `distribution_mapping`, `multifab`, `geometry`, la hierarchie AMR.
 Ces conteneurs ne savent pas comment on boucle ni on communique. **Execution** = la politique
 (table ci-dessous) : `for_each_cell` (serie/OpenMP/Kokkos), `comm`, l'echange de halos, les
-reductions, l'allocateur. Les confondre laisserait un operateur numerique dependre du layout
-memoire ou de la strategie AMR ; les separer est le point structurel de la revue.
+reductions, l'allocateur. Les confondre laisserait un operateur numerique dependre de la
+decomposition en boxes/rangs ou du backend d'execution ; un operateur de grille voit une vue
+locale `Array4` + `Box`, mais ni la `DistributionMapping` ni la politique de boucle. Cette
+separation est le point structurel de la revue.
 
 | Seam | Fichier | Role | Backends |
 |---|---|---|---|
@@ -200,9 +214,10 @@ Etat reel : la decomposition est plus avancee que ne le suggerait ce document.
   l'`OperatorSpec` partage : `poisson_residual` EST la definition du Laplacien 5 points.
 - **LinearSolver FAIT** : le concept `EllipticSolver` (`rhs`/`phi`/`solve`/`residual`/`geom`)
   est l'interface ; `GeometricMG` (V-cycle GS rb, seul compatible AMR et tout `n`, on-device)
-  et `PoissonFFTSolver` (direct, mono-niveau periodique `n` puissance de 2, ~5x, distribue par
-  bandes `MPI_Alltoall`) en sont deux implementations. `Coupler<Model, Elliptic = GeometricMG>`
-  depend du concept, pas d'un backend.
+  et `PoissonFFTSolver` (direct, mono-niveau periodique `n` puissance de 2, ~5x, **mono-rang /
+  boite unique** : il assert `n_ranks()==1 && ba.size()==1`) en sont deux implementations. La
+  variante distribuee par bandes (`MPI_Alltoall`) vit dans `SpectralCoupler`, pas ici.
+  `Coupler<Model, Elliptic = GeometricMG>` depend du concept, pas d'un backend.
 - **Identite MG = FFT rendue STRUCTURELLE** : `test_elliptic_operator` applique le MEME
   operateur canonique `poisson_residual` aux deux solutions -> residus `3.4e-14` (MG) et
   `7.2e-14` (FFT), solutions identiques a `1.3e-16`. Les deux inversent prouvablement le meme

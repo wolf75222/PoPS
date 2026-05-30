@@ -47,9 +47,16 @@ static double vortex(double x, double y, double cx, double cy, int comp,
   return E;
 }
 
+// diagnostics optionnels remontes par run_vortex : positivite + derive des
+// invariants conserves (domaine periodique + schema conservatif -> arrondi machine).
+struct VortexDiag {
+  double rho_min, p_min;
+  double mass_drift, momx_drift, momy_drift, energy_drift;  // |final - initial| relatif
+};
+
 // erreur L1 sur rho apres advection du tourbillon jusqu'a T sur une grille N x N.
 template <class Limiter>
-static double run_vortex(int N) {
+static double run_vortex(int N, VortexDiag* diag = nullptr) {
   const double L = 10.0, beta = 5.0, uinf = 1.0, vinf = 1.0, T = 1.0, cfl = 0.4;
   Box2D dom = Box2D::from_extents(N, N);
   Geometry geom{dom, 0.0, L, 0.0, L};
@@ -70,6 +77,19 @@ static double run_vortex(int N) {
                               beta, uinf, vinf, L);
   }
   BCRec bc;  // periodique
+
+  // somme des invariants conserves (memes bornes/ordre de boucle initial et final).
+  auto totals = [&](double& m, double& px, double& py, double& e) {
+    m = px = py = e = 0;
+    const ConstArray4 u = U.fab(0).const_array();
+    const Box2D v = U.box(0);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+        m += u(i, j, 0); px += u(i, j, 1); py += u(i, j, 2); e += u(i, j, 3);
+      }
+  };
+  double m0 = 0, px0 = 0, py0 = 0, e0 = 0;
+  if (diag) totals(m0, px0, py0, e0);
 
   double t = 0;
   while (t < T - 1e-12) {
@@ -100,6 +120,26 @@ static double run_vortex(int N) {
           vortex(geom.x_cell(i), geom.y_cell(j), cx, cy, 0, g, beta, uinf, vinf, L);
       err += std::fabs(u(i, j, 0) - re);
     }
+
+  if (diag) {
+    double m1, px1, py1, e1;
+    totals(m1, px1, py1, e1);
+    double rmin = 1e300, pmin = 1e300;
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+        const double rho = u(i, j, 0), mx = u(i, j, 1), my = u(i, j, 2),
+                     E = u(i, j, 3);
+        const double pr = (g - 1) * (E - 0.5 * (mx * mx + my * my) / rho);
+        rmin = std::fmin(rmin, rho);
+        pmin = std::fmin(pmin, pr);
+      }
+    diag->rho_min = rmin;
+    diag->p_min = pmin;
+    diag->mass_drift = std::fabs(m1 - m0) / std::fabs(m0);
+    diag->momx_drift = std::fabs(px1 - px0) / std::fabs(px0);
+    diag->momy_drift = std::fabs(py1 - py0) / std::fabs(py0);
+    diag->energy_drift = std::fabs(e1 - e0) / std::fabs(e0);
+  }
   return err / (static_cast<double>(N) * N);
 }
 
@@ -147,8 +187,9 @@ int main() {
   // reduit. VanLeer (limiteur lisse) preserve mieux le 2e ordre : on mesure l'ordre
   // sur VanLeer, et on imprime Minmod pour comparaison.
   {
+    VortexDiag d;
     const double m64 = run_vortex<Minmod>(64), m128 = run_vortex<Minmod>(128);
-    const double v64 = run_vortex<VanLeer>(64), v128 = run_vortex<VanLeer>(128);
+    const double v64 = run_vortex<VanLeer>(64), v128 = run_vortex<VanLeer>(128, &d);
     const double om = std::log2(m64 / m128), ov = std::log2(v64 / v128);
     std::printf("vortex Minmod  : L1 N=64 %.3e | N=128 %.3e | ordre=%.2f\n", m64,
                 m128, om);
@@ -156,6 +197,14 @@ int main() {
                 v128, ov);
     chk(std::isfinite(v128) && v128 < v64, "vortex_converge");
     chk(ov > 1.7, "vortex_VanLeer_ordre_~2");
+    // positivite + invariants conserves (domaine periodique, schema conservatif)
+    std::printf(
+        "vortex VanLeer : rho_min=%.3e p_min=%.3e | derive masse=%.2e qdm=%.2e E=%.2e\n",
+        d.rho_min, d.p_min, d.mass_drift, std::fmax(d.momx_drift, d.momy_drift),
+        d.energy_drift);
+    chk(d.rho_min > 0.0 && d.p_min > 0.0, "vortex_positivity");
+    chk(d.mass_drift < 1e-10 && d.energy_drift < 1e-10, "vortex_conservation_mass_energy");
+    chk(d.momx_drift < 1e-10 && d.momy_drift < 1e-10, "vortex_conservation_momentum");
   }
 
   if (fails == 0) std::printf("OK test_euler\n");

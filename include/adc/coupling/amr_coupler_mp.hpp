@@ -4,6 +4,7 @@
 #include <adc/amr/regrid.hpp>     // tag_cells, grow_tags
 #include <adc/amr/tag_box.hpp>    // TagBox
 #include <adc/core/types.hpp>
+#include <adc/coupling/coupler.hpp>  // detail::coupler_eval_rhs (f = model.elliptic_rhs(U))
 #include <adc/elliptic/elliptic_solver.hpp>
 #include <adc/elliptic/geometric_mg.hpp>
 #include <adc/integrator/amr_reflux_mf.hpp>  // AmrLevelMP, amr_step_multilevel_multipatch, mf_*_mb
@@ -61,13 +62,8 @@ class AmrCouplerMP {
   void compute_aux() {  // Poisson grossier + grad phi + injection vers les fins
     const int nx = dom_.nx(), ny = dom_.ny();
     const Real dx = geom_.dx(), dy = geom_.dy();
-    {
-      Array4 f = mg_.rhs().fab(0).array();
-      const ConstArray4 u0 = L_[0].U.fab(0).const_array();
-      device_fence();
-      for (int j = 0; j < ny; ++j)
-        for (int i = 0; i < nx; ++i) f(i, j) = model_.alpha * (u0(i, j, 0) - model_.n_i0);
-    }
+    // second membre via le modele (pas de formule recopiee) : f = elliptic_rhs(U)
+    detail::coupler_eval_rhs(L_[0].U, mg_.rhs(), model_);
     mg_.solve();
     const ConstArray4 p = mg_.phi().fab(0).const_array();
     Array4 a0 = aux_[0].fab(0).array();

@@ -40,8 +40,8 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
 - OpenMP (déterministe vs série), MPI (bit-identique np=1/2/4, 9 tests `mpirun`), portage GPU
   GH200 (Kokkos, bit-identique CPU).
 - Validation numérique (au-delà du bit-identique) : ordre du Laplacien 5 points (L2/Linf=2.00),
-  tourbillon isentropique Euler (L1~2), MUSCL ~2 / Rusanov ~1, loi de Gauss du couplage
-  (`div(grad phi)=source`, ordre 2.00), conservation sous regrid.
+  tourbillon isentropique Euler (VanLeer L1 mesuré 1.86), MUSCL mesuré 1.86 / Rusanov mesuré 0.89,
+  loi de Gauss du couplage (`div(grad phi)=source`, ordre 2.00), conservation sous regrid.
 - Bindings Python (3 solveurs, 1:1 avec les façades), 10 scripts exécutables (GIF/plots), banc
   `bench_amr`, figures de scaling.
 - Docs : README, ALGORITHMS, ARCHITECTURE (5 couches), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
@@ -95,12 +95,13 @@ exécution, et un AMR multi-patch pas encore pensé distribué. Voir
 7. **Suite de validation numérique (FAIT).** Le bit-identique ne prouve pas la justesse ;
    la suite couvre désormais : ordre du Laplacien 5 points (`test_poisson_convergence`,
    L2/Linf = 2.00, Dirichlet + périodique + nullspace) ; tourbillon isentropique d'Euler
-   (L1 ~2, `test_euler`) ; ordre MUSCL ~2 / Rusanov ~1 (`test_muscl_convergence`) ; loi de
-   Gauss discrète du couplage `div(grad phi) = source` à 2.00 (`test_gauss_law`) ; limite AP
-   quantifiée, uniforme sur 8 décades de raideur (`test_ap_limit`) ; invariants diocotron
-   (masse, principe du maximum, enstrophie non croissante, `test_diocotron_stability`) ;
-   conservation flux coarse-fine exacte par reflux + conservation sous regrid
-   (`test_amr_coupler_mp`).
+   (VanLeer L1 mesuré 1.86, asserti > 1.7, `test_euler`) ; ordre MUSCL mesuré 1.86 (asserti
+   > 1.7) / Rusanov mesuré 0.89 (`test_muscl_convergence`) ; loi de Gauss discrète du couplage
+   `div(grad phi) = source` à 2.00 (`test_gauss_law`) ; limite AP quantifiée, uniforme sur 8
+   décades de raideur (`test_ap_limit`) ; invariants diocotron (masse, principe du maximum,
+   enstrophie non croissante, `test_diocotron_stability`) ; conservation flux coarse-fine
+   exacte par reflux (`test_amr_reflux`, masse à 1e-12) + conservation sous regrid
+   (`test_amr_coupler_mp`, dérive à 1e-9).
 
 ### Physique magnétisée (cible Hoffart)
 
