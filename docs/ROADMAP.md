@@ -44,7 +44,7 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
   (`div(grad phi)=source`, ordre 2.00), conservation sous regrid.
 - Bindings Python (3 solveurs, 1:1 avec les façades), 10 scripts exécutables (GIF/plots), banc
   `bench_amr`, figures de scaling.
-- Docs : README, ALGORITHMS, ARCHITECTURE (4 couches), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
+- Docs : README, ALGORITHMS, ARCHITECTURE (5 couches), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
   two_fluid_ap, tutoriels 00 à 09, Doxygen + Sphinx.
 
 ## En file
@@ -53,7 +53,7 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
 
 Issu d'une revue : la faiblesse structurelle est le mélange discrétisation / stockage /
 exécution, et un AMR multi-patch pas encore pensé distribué. Voir
-[ARCHITECTURE.md](ARCHITECTURE.md) (modèle en quatre couches, sections marquées « cible »).
+[ARCHITECTURE.md](ARCHITECTURE.md) (modèle en cinq couches, sections marquées « cible »).
 
 1. **AMR multi-patch nativement distribué (priorité absolue).** Fait pour le 2-niveaux :
    `amr_step_2level_multipatch` tourne **réellement distribué** (`test_mpi_amr_multipatch`,
