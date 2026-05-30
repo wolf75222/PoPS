@@ -227,6 +227,20 @@ cf. M2) ; le run uniforme sert de reference chiffree pour mesurer le gain de l'A
 `diocotron_hero.sbatch` (run) + `diocotron_scaling.sbatch` (scaling fort/faible) +
 `romeo/README.md` (build + soumission).
 
+Hero run AMR DYNAMIQUE (le vrai but de comparaison uniforme vs AMR sur ROMEO) : c'est la
+convergence de plusieurs briques et le plus gros morceau restant. A l'echelle hero, le grossier
+8192^2 NE PEUT PAS etre replique sur chaque rang -> il faut un **grossier decompose** (multi-box
+distribue) + **Poisson MG distribue** dessus (`GeometricMG` distribue deja un grossier multi-box
+via `DistributionMapping(ba.size(), n_ranks())`, mais le diocotron a un grossier MONO-box -> a
+decomposer) + **reflux sans replication** (notre reflux distribue suppose le niveau 0 replique ;
+les niveaux >0 sont deja distribues via `parallel_copy` + gather, a etendre au niveau 0) +
+**regrid distribue** (clustering BR + redistribution des patchs) + le tout en **Kokkos/CUDA**.
+Autrement dit, la **de-replication du grossier (objectif B)**, declaree NO-GO pour un PETIT
+grossier, redevient REQUISE a l'echelle hero. Chemin propre : M2 d'abord (AMR sur la colonne,
+mono-rang, science) pour chiffrer le gain cellules, puis assembler le driver distribue (B +
+MG/regrid distribues + GPU), puis comparer les deux hero runs. Conception-d'abord recommandee
+(gate conservation `maxdiff=0` np=1/2/4 a chaque etape).
+
 ### Performance
 
 - Région OpenMP consolidée au-dessus de la boucle de niveaux du multigrille (le seul levier
