@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdlib>
+#include <cstdio>
 
 #include <adc/core/types.hpp>
 #include <adc/mesh/box_array.hpp>
