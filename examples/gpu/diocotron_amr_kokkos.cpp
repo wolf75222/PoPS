@@ -15,8 +15,10 @@
 #include <adc/mesh/geometry.hpp>
 #include <adc/model/diocotron.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #ifdef ADC_HAS_KOKKOS
@@ -29,13 +31,16 @@ int main(int argc, char** argv) {
 #ifdef ADC_HAS_KOKKOS
   Kokkos::initialize(argc, argv);
   const char* exec = Kokkos::DefaultExecutionSpace::name();
+  const long conc = Kokkos::DefaultExecutionSpace().concurrency();  // threads materiels reels
 #else
-  (void)argc; (void)argv;
   const char* exec = "serie-cpu";
+  const long conc = 1;
 #endif
   int rc = 0;
   {
-    const int nc = 64;
+    // nc en argument (le Kokkos a deja retire ses --kokkos-* de argv) : grand nc -> le
+    // chrono montre une vraie acceleration parallele. Defaut 64 pour garder le checksum connu.
+    const int nc = (argc > 1) ? std::atoi(argv[1]) : 64;
     Box2D dom = Box2D::from_extents(nc, nc);
     Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
     const double dxc = geom.dx(), dyc = geom.dy(), dxf = dxc / 2, dyf = dyc / 2;
@@ -74,19 +79,27 @@ int main(int argc, char** argv) {
     const double dt = 0.4 * dxc / sim.max_drift_speed();
     bool finite = true;
     int npatch = 0;
+    device_fence();
+    const auto t0 = std::chrono::steady_clock::now();
     for (int s = 0; s < 80; ++s) {
       if (s % 10 == 0) sim.regrid(crit);
       sim.step(dt);
       if (!std::isfinite(sim.mass())) finite = false;
       npatch = sim.levels()[1].U.local_size();
     }
+    device_fence();  // attendre la fin des kernels GPU avant de chronometrer
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     const double drift = std::fabs(sim.mass() - m0);
-    device_fence();
     double checksum = 0;  // somme de controle du grossier (acces hote apres fence)
     const ConstArray4 c = sim.coarse().fab(0).const_array();
     for (int j = 0; j < nc; ++j)
       for (int i = 0; i < nc; ++i) checksum += c(i, j, 0) * (i + 1) * (j + 1);
 
+    // PREUVE DE PARALLELISME : concurrency = nombre de threads materiels reellement utilises
+    // (milliers sur GPU Cuda, = nb threads OpenMP sur CPU, 1 si vraiment monothread). wall = temps
+    // des 80 pas (a comparer entre 1 et N threads / CPU vs GPU pour voir l'acceleration).
+    std::printf("PARALLELISME : exec=%s concurrency=%ld threads, nc=%d, 80 pas en %.3f s\n",
+                exec, conc, nc, wall);
     std::printf("diocotron AMR sous le seam (%s) : npatch=%d derive_masse=%.3e checksum=%.6f %s\n",
                 exec, npatch, drift, checksum, finite ? "fini" : "NON-FINI");
     if (!finite || drift > 1e-9) {

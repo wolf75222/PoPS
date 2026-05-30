@@ -126,6 +126,20 @@ répartition des patchs.
 - **Reste (perf, pas correction)** : binding GPU optimal, multi-nœud (Infiniband),
   et l'échelle. La CORRECTION multi-GPU est acquise.
 
+PERFORMANCE (constat HONNETE, mesuré). `concurrency()` confirme le parallélisme RÉEL :
+`270336` threads sur le GH200 (espace Cuda), `1`/`8` sur CPU OpenMP selon
+`OMP_NUM_THREADS` (donc PAS du monothread déguisé). MAIS parallèle != rapide ici : le
+pas AMR (80 pas) prend `29 s` à nc=64 et `174 s` à nc=1024 sur GPU, contre `1.85 s`
+(nc=64) sur UN thread CPU. Le GPU est donc plus lent que 1 cœur CPU à ces tailles, et
+le CPU OpenMP est lui-même plus lent à 8 threads qu'à 1 (`210 s` vs `1.85 s` à nc=64).
+Cause : le pas AMR lance une myriade de PETITS kernels (chaque V-cycle = dizaines de
+`gs_rb_sweep` x `fill_ghosts` x `device_fence`) et le regrid Berger-Rigoutsos est
+CÔTÉ HÔTE (série) ; à ces tailles la latence de lancement + les syncs device<->hôte
+dominent le calcul. Le code est donc CORRECT en parallèle (bit-identique, 270k threads)
+mais PAS optimisé. L'accélération demanderait fusion de kernels, regrid résident GPU,
+moins de fences : un chantier de PERF distinct de la correction, hors périmètre du
+hero-run AMR (qui vise d'abord la correction distribuée et l'échelle mémoire).
+
 ### Étape 2 : dé-réplication du grossier (objectif B proprement dit)
 
 Requise seulement quand le grossier doit croître au-delà de ce que la réplication
