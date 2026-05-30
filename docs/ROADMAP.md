@@ -253,7 +253,6 @@ puis d'y ajouter notre AMR, puis SAMRAI.
   (`docs/anim_magnetic_diocotron.gif`). La reproduction quantitative du taux à `0.911` dans le système
   complet est limitée par la diffusion (même constat que M1) et vise le hero-run.
 - **M4 : SAMRAI.** Porter le diocotron sur l'AMR de SAMRAI (FetchContent + adaptateur).
-- **M4 : SAMRAI.** Porter le diocotron sur l'AMR de SAMRAI (FetchContent + adaptateur).
 
 Hero run ROMEO (`romeo/`) : scripts SLURM prets pour le diocotron a grande echelle sur GH200,
 hybride **MPI + Kokkos/CUDA** (1 rang MPI par H100, les noyaux `for_each_cell` sur GPU ; les
@@ -279,6 +278,14 @@ grossier, redevient REQUISE a l'echelle hero. Chemin propre : M2 d'abord (AMR su
 mono-rang, science) pour chiffrer le gain cellules, puis assembler le driver distribue (B +
 MG/regrid distribues + GPU), puis comparer les deux hero runs. Conception-d'abord recommandee
 (gate conservation `maxdiff=0` np=1/2/4 a chaque etape).
+
+Le PLAN etage de ce hero-run AMR distribue est ecrit dans
+[HERO_RUN_AMR.md](HERO_RUN_AMR.md) : l'insight clef est qu'un diocotron a 2 NIVEAUX
+(grossier replique + 1 niveau fin reparti) ne touche AUCUN des deux verrous durs (le regrid
+tague le niveau 0 REPLIQUE, donc pas de gather-tags ; pas de de-replication tant que le grossier
+reste modere), ce qui permet de livrer les etapes 0 (driver CPU) et 1 (portage GPU) en
+s'appuyant sur le reflux distribue deja prouve, et de repousser le risque dur (solveur de fond
+reparti + gather-tags, etape 2) jusqu'a ce qu'il devienne necessaire.
 
 ### Performance
 
