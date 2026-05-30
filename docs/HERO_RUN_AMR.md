@@ -111,10 +111,20 @@ Note ROMEO : Kokkos n'est PAS fourni par spack/module (la recette `spack load
 kokkos` était erronée) ; le `.sbatch` le compile depuis les sources (Serial + CUDA,
 Hopper sm_90, nvcc_wrapper), une fois, en cache sur `/scratch_p`. Compte : `r250127`.
 
-- **Livrable** : pas AMR complet prouvé bit-identique CPU sur GH200 réel (mono-GPU).
-- **Reste pour le hero-run** : le MULTI-GPU (MPI CUDA-aware : `parallel_copy` entre
-  fabs device de rangs différents), à valider sur 4 GH200 d'un nœud puis multi-nœud.
-- **Risque** : FAIBLE sur le mono-GPU (fait) ; MOYEN sur le MPI CUDA-aware multi-GPU.
+MULTI-GPU VALIDÉ (FAIT). `examples/gpu/diocotron_amr_mpi_kokkos.cpp` lance le diocotron
+AMR distribué sur 4 GH200 d'un nœud `armgpu` (1 rang MPI par GPU), via
+`romeo/diocotron_amr_mpi_gpu.sbatch` (build MPI + Kokkos/CUDA, module
+`openmpi/aarch64/4.1.7-cuda`). Le `parallel_copy` et les `all_reduce` du reflux
+déplacent les données entre fabs DEVICE de rangs différents (MPI CUDA-aware). Gate
+d'invariance à la distribution : `exec=Cuda, np=4, max|Uc_dist - Uc_ref| = 0.000e+00`,
+BIT À BIT identique entre patchs round-robin (DIST) et tous-sur-rang-0 (REF). Le pas
+AMR distribué tourne donc réellement multi-GPU et le résultat ne dépend pas de la
+répartition des patchs.
+
+- **Livrable** : pas AMR distribué validé bit-identique sur 1 ET 4 GH200 réels. Le
+  verrou « GPU + AMR jamais combinés » est entièrement levé (mono ET multi-GPU).
+- **Reste (perf, pas correction)** : binding GPU optimal, multi-nœud (Infiniband),
+  et l'échelle. La CORRECTION multi-GPU est acquise.
 
 ### Étape 2 : dé-réplication du grossier (objectif B proprement dit)
 

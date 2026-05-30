@@ -39,3 +39,4 @@ adc_gpu_example(arena_kokkos)         # pool memoire unifiee
 adc_gpu_example(euler_poisson_kokkos) # Euler-Poisson 4 variables
 adc_gpu_example(two_fluid_ap_kokkos)  # deux-fluides 2D AP entier
 adc_gpu_example(diocotron_amr_kokkos) # AMR (coupleur + reflux + regrid) sous le seam
+adc_gpu_example(diocotron_amr_mpi_kokkos) # AMR distribue multi-GPU (MPI + Kokkos/CUDA)
