@@ -71,9 +71,14 @@ PYBIND11_MODULE(adc, m) {
       .def("potential",
            [](const DiocotronSolver& s) { return to_2d(s.potential(), s.nx()); });
 
-  // --- Euler-Poisson auto-gravitant ---
+  // --- Euler-Poisson : auto-gravite OU plasma electrostatique ---
+  py::enum_<InteractionKind>(m, "InteractionKind", "Signe du couplage Euler-Poisson")
+      .value("Gravity", InteractionKind::Gravity)   // attractif : effondrement de Jeans
+      .value("Plasma", InteractionKind::Plasma);    // repulsif : Langmuir + Coulomb
+
   py::class_<EulerPoissonConfig>(m, "EulerPoissonConfig")
       .def(py::init<>())
+      .def_readwrite("interaction", &EulerPoissonConfig::interaction)
       .def_readwrite("n", &EulerPoissonConfig::n)
       .def_readwrite("L", &EulerPoissonConfig::L)
       .def_readwrite("gamma", &EulerPoissonConfig::gamma)

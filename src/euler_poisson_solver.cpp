@@ -22,6 +22,7 @@ static EulerPoisson make_model(const EulerPoissonConfig& c) {
   m.hydro.gamma = c.gamma;
   m.four_pi_G = c.four_pi_G;
   m.rho0 = c.rho0;
+  m.coupling_sign = (c.interaction == InteractionKind::Plasma) ? Real(-1) : Real(1);
   return m;
 }
 

@@ -164,7 +164,51 @@ Laplacien 5 points). **Pièges.** Le FFT n'est PAS toujours plus rapide : il l'e
 couplé Euler-Poisson Poisson-dominé (~4.8x), mais la multigrille warm-startée gagne sur le
 deux-fluides transport-dominé (voir PERFORMANCE.md).
 
-## 8. AMR : sous-cyclage Berger-Oliger + reflux
+## 8. Euler-Poisson : couplage hyperbolique-elliptique (gravité OU plasma)
+
+**Intuition.** Un gaz compressible (Euler) dont chaque maille crée un potentiel `phi` via
+Poisson, et subit en retour la force `g = -grad phi`. Selon le SIGNE de la source
+elliptique, le même code fait deux physiques opposées : auto-gravité attractive
+(astrophysique, effondrement de Jeans) ou électrostatique répulsive mono-espèce (plasma :
+oscillation de Langmuir + explosion de Coulomb).
+
+**Équations.**
+
+$$\partial_t U + \nabla\!\cdot F(U) = S(U,\nabla\phi),\qquad \nabla^2\phi = s\,4\pi G\,(\rho-\rho_0),\qquad s=\pm 1$$
+
+avec `g = -grad phi` et `S = (0, rho g_x, rho g_y, rho u . g)`. `rho0` est le fond
+neutralisant (la moyenne de `rho`) : en périodique, Poisson exige un second membre à
+moyenne nulle pour être soluble.
+
+**La dualité en une ligne.** `s = +1` (attractif) : là où `rho > rho0`, `phi` creuse un
+puits, `g` pointe vers la sur-densité, elle s'accentue (instabilité de Jeans). `s = -1`
+(répulsif) : `phi` fait une bosse, `g` pointe vers l'extérieur, la sur-densité se disperse
+(Coulomb). Retourner `coupling_sign` retourne `phi`, donc `g` : une seule ligne sépare
+gravité et plasma (`model/euler_poisson.hpp::elliptic_rhs`, exposée par `InteractionKind`).
+
+**Dispersion (validation quantitative).** Une perturbation acoustique au repos
+`delta_rho = eps rho0 cos(kx)` obéit à
+
+$$\omega^2 = c_s^2 k^2 \;\mp\; \omega_p^2,\qquad \omega_p^2 = 4\pi G\,\rho_0$$
+
+signe `-` en gravité (critère de Jeans : `omega^2 < 0` dès que `omega_p > c_s k`, donc
+effondrement), signe `+` en plasma (Bohm-Gross : `omega^2 > 0` toujours, donc
+inconditionnellement stable).
+
+**Pseudocode.** Le modèle `EulerPoisson` délègue toute l'hydrodynamique à `Euler` (flux,
+vitesses d'onde) et n'ajoute que `source` (la force, via `aux = grad phi`) et `elliptic_rhs`
+(le second membre signé). C'est le chemin « aux entre par la SOURCE » du concept
+`PhysicalModel` (contraste avec le diocotron, « aux entre par le FLUX »). Branché tel quel
+sur `Coupler<EulerPoisson>` : `elliptic_rhs -> multigrille/FFT -> aux=grad phi -> assemble_rhs`.
+
+**Validation.** `test_euler_poisson` (Jeans stable : `omega` mesuré à 0.1% de la théorie,
+masse et qté de mouvement conservées) ; `test_euler_poisson_plasma` (Bohm-Gross à 0.1%, et
+un même grumeau gaussien dont le pic CROÎT en gravité et DÉCROÎT en plasma : signes
+opposés). Démo Python : `tutorials/run/plasma.py`. **Pièges.** Le FFT direct exige `N`
+puissance de 2 (sinon UB) ; `rho0` doit valoir `<rho>` exactement, sinon le second membre
+périodique n'est pas à moyenne nulle et `phi` dérive.
+
+## 9. AMR : sous-cyclage Berger-Oliger + reflux
 
 **Intuition.** Raffiner seulement là où il le faut. Un niveau fin (pas d'espace `dx/2`)
 recouvre une sous-région ; pour respecter sa propre CFL il fait `r=2` sous-pas de `dt/2`
@@ -188,7 +232,7 @@ pile Fab2D de référence (`amr_multilevel.hpp`) ; conservation à `~1e-12`. **P
 flux grossier doit être échantillonné AVANT d'avancer le grossier (sinon mauvais
 centrage temporel) ; la moyenne descendante doit précéder la mesure de masse initiale.
 
-## 9. AMR multi-patch : reflux coverage-aware
+## 10. AMR multi-patch : reflux coverage-aware
 
 **Intuition.** Un niveau fin n'est pas une seule boîte mais un **ensemble de patchs**
 (plusieurs zones raffinées). Deux subtilités : (a) au joint entre deux patchs voisins
@@ -213,7 +257,7 @@ conservatif), les trois à `0`. **Pièges.** Sans le masque de couverture, le jo
 serait reflué deux fois -> non-conservation ; le grossier doit être disponible (mono-rang
 pour l'instant, le distribué demande une copie inter-niveaux).
 
-## 10. Clustering Berger-Rigoutsos
+## 11. Clustering Berger-Rigoutsos
 
 **Intuition.** Étant donné les cellules marquées (fort gradient), trouver un petit nombre
 de boîtes rectangulaires qui les couvrent sans trop de gaspillage. L'algorithme coupe
@@ -230,7 +274,7 @@ conservatif, masse `6.4e-12`) ; le démo `diocotron_multipatch` re-clusterise à
 **Pièges.** Le nesting propre (chaque patch fin strictement intérieur à la couverture
 parente) doit être imposé après le clustering, sinon le ghost-fill inter-niveaux échoue.
 
-## 11. Deux-fluides isotherme asymptotic-preserving
+## 12. Deux-fluides isotherme asymptotic-preserving
 
 Résumé ; détail complet dans [two_fluid_ap.md](two_fluid_ap.md).
 
@@ -249,7 +293,7 @@ espèce. **Pièges.** La continuité centrée est dispersive sur les fronts raid
 upwind MUSCL `upwind_continuity`) ; le sous-dépassement mesuré est surtout physique
 (raréfaction acoustique), pas du Gibbs.
 
-## 12. Champ magnétique : rotation cyclotron
+## 13. Champ magnétique : rotation cyclotron
 
 **Intuition.** Un champ `B_z` hors-plan ajoute la force de Lorentz magnétique `z (m x B)`
 qui ne fait que **faire tourner** `(m_x, m_y)` à la fréquence cyclotron `w_c`, sans changer
@@ -271,7 +315,7 @@ transport inerte) -> rotation pure à `w_c` mesurée à **0.00%** d'écart, `|m|
 de E et B perd en précision face à un push de Boris combiné (E+B au même centrage temporel)
 -- piste d'amélioration, pas encore implémentée.
 
-## 13. Le seam de dispatch (série / OpenMP / Kokkos / MPI)
+## 14. Le seam de dispatch (série / OpenMP / Kokkos / MPI)
 
 Pas un algorithme numérique mais le point de bascule qui les rend tous portables. Détail
 dans [ARCHITECTURE.md](ARCHITECTURE.md) section 2-4. En bref : `for_each_cell(box, lambda)`

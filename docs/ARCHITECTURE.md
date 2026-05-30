@@ -163,7 +163,7 @@ mono-rang (le distribue MPI du reflux multi-patch est le morceau restant).
 
 ## 9. Validation
 
-- Tests : 47/47 CPU serie (Eigen inclus) ; 47/47 OpenMP ; +8 MPI (`mpirun -np 4`) ; +1 HDF5.
+- Tests : 48/48 CPU serie (Eigen inclus) ; 48/48 OpenMP ; +8 MPI (`mpirun -np 4`) ; +1 HDF5.
 - GPU : GH200 (CUDA 12.6), advection / MG / pas couple Euler-Poisson / deux-fluides AP
   + `libadc` compilee GPU, tous **bit-identiques au CPU**.
 - MPI : advection bit-identique a np=1/2/4/7, halos + FFT distribues.

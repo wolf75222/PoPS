@@ -4,11 +4,13 @@
 #include <adc/core/types.hpp>
 #include <adc/model/euler.hpp>
 
-// Euler-Poisson auto-gravitant 2D : Euler compressible couple a la gravite via
-// Poisson.
+// Euler-Poisson 2D : Euler compressible couple a un champ de potentiel via Poisson.
+// Selon le signe du couplage, c'est de l'AUTO-GRAVITE (attractif, astrophysique) ou de
+// l'ELECTROSTATIQUE mono-espece (repulsif, plasma : oscillation de Langmuir + explosion
+// de Coulomb). Memes equations, signe de la source elliptique opposee.
 //
-//   d_t U + div F(U) = S(U, grad phi),   lap phi = 4 pi G (rho - rho0)
-//   g = -grad phi,   S = (0, rho g_x, rho g_y, rho u . g)
+//   d_t U + div F(U) = S(U, grad phi),   lap phi = s * 4 pi G (rho - rho0)
+//   g = -grad phi,   S = (0, rho g_x, rho g_y, rho u . g),   s = +-1
 //
 // La partie hydrodynamique (flux, vitesses d'onde) est DELEGUEE a Euler : seuls la
 // SOURCE (force gravitationnelle, via aux = grad phi) et le second membre elliptique
@@ -28,8 +30,13 @@ struct EulerPoisson {
   static constexpr int n_vars = 4;
 
   Euler hydro{};         // partie hydrodynamique (gamma, flux, max_wave_speed)
-  Real four_pi_G = 1.0;  // lap phi = four_pi_G (rho - rho0)
+  Real four_pi_G = 1.0;  // intensite du couplage (4 pi G gravite, 4 pi k_e plasma)
   Real rho0 = 1.0;       // fond neutralisant (solvabilite periodique)
+  // signe du couplage : +1 = ATTRACTIF (auto-gravite -> effondrement de Jeans),
+  // -1 = REPULSIF (electrostatique mono-espece -> oscillation de Langmuir + explosion
+  // de Coulomb). Retourner le signe de la source elliptique retourne phi, donc la force
+  // g = -grad phi : une seule ligne separe gravite et plasma.
+  Real coupling_sign = 1;
 
   ADC_HD State flux(const State& u, const Aux& a, int dir) const {
     return hydro.flux(u, a, dir);
@@ -55,7 +62,7 @@ struct EulerPoisson {
   }
 
   ADC_HD Real elliptic_rhs(const State& u) const {
-    return four_pi_G * (u[0] - rho0);
+    return coupling_sign * four_pi_G * (u[0] - rho0);
   }
 };
 

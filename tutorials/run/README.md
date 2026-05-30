@@ -21,11 +21,13 @@ pip install numpy matplotlib
 | [`diocotron_growth.py`](diocotron_growth.py) | taux de croissance de l'instabilité (phase linéaire) | `docs/tut_diocotron_growth.png` | gamma > 0 ajusté |
 | [`two_fluid_ap.py`](two_fluid_ap.py) | schéma AP : stabilisé borné vs non-stabilisé qui explose | `docs/tut_tfap_ap.png` | AP borné, l'autre explose |
 | [`euler_poisson.py`](euler_poisson.py) | Euler auto-gravitant, conservation | `docs/tut_euler_poisson.png` | masse + qté de mvt à l'arrondi |
+| [`plasma.py`](plasma.py) | Euler pour les plasmas : gravité vs électrostatique (Jeans vs Bohm-Gross, effondrement vs stabilité) | `docs/tut_plasma.png` | fréquences à 0.1%, gravité instable / plasma borné |
 
 ```bash
 PYTHONPATH=build-py/python python3 tutorials/run/diocotron.py 128 400
 PYTHONPATH=build-py/python python3 tutorials/run/two_fluid_ap.py
 PYTHONPATH=build-py/python python3 tutorials/run/euler_poisson.py
+PYTHONPATH=build-py/python python3 tutorials/run/plasma.py
 PYTHONPATH=build-py/python python3 tutorials/run/diocotron_growth.py
 ```
 

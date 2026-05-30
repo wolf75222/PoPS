@@ -2,7 +2,7 @@
 
 # ADC CPP
 
-**Solveur C++23 maison (mini-AMReX ecrit from scratch) pour les systemes hyperbolique-elliptique couples sur AMR : seam de dispatch unique serie / OpenMP / Kokkos (GPU GH200), MPI distribue, MultiFab + BoxArray + Geometry, AMR block-structured multi-niveaux + multi-patch (Berger-Rigoutsos, reflux coverage-aware), flux Rusanov / HLL / HLLC, reconstruction MUSCL, SSPRK2/3 + IMEX asymptotic-preserving + Strang, Poisson multigrille ET FFT spectrale, couplage diocotron (derive E x B) + Euler-Poisson auto-gravitant + deux-fluides isotherme AP.**
+**Solveur C++23 maison (mini-AMReX ecrit from scratch) pour les systemes hyperbolique-elliptique couples sur AMR : seam de dispatch unique serie / OpenMP / Kokkos (GPU GH200), MPI distribue, MultiFab + BoxArray + Geometry, AMR block-structured multi-niveaux + multi-patch (Berger-Rigoutsos, reflux coverage-aware), flux Rusanov / HLL / HLLC, reconstruction MUSCL, SSPRK2/3 + IMEX asymptotic-preserving + Strang, Poisson multigrille ET FFT spectrale, couplage diocotron (derive E x B) + Euler-Poisson (auto-gravite OU plasma electrostatique) + deux-fluides isotherme AP.**
 
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue?logo=cplusplus)
 ![Tests](https://img.shields.io/badge/tests-47%2F47%20C%2B%2B%20%2B%208%20MPI%20%2B%20python-brightgreen)
@@ -50,7 +50,7 @@ arXiv:2510.11808), puis le **deux-fluides isotherme** plasma.
 |---|---|---|
 | [`model::Diocotron`](include/adc/model/diocotron.hpp) | derive E x B (vorticite reduite, scalaire) | flux advectif, `elliptic_rhs = alpha (n_e - n_i0)` |
 | [`model::Euler`](include/adc/model/euler.hpp) | Euler compressible (γ = 1.4, 4 var) | validé free-stream + tourbillon isentropique (ordre 1.86) |
-| [`model::EulerPoisson`](include/adc/model/euler_poisson.hpp) | Euler auto-gravitant | source gravite g = -grad phi, validé instabilite de Jeans (0.1%) |
+| [`model::EulerPoisson`](include/adc/model/euler_poisson.hpp) | Euler couple Poisson : gravite OU plasma (`InteractionKind`) | source g = -grad phi, un seul signe ; Jeans (0.1%) et Bohm-Gross + Coulomb (0.1%) valides |
 | [`model::LangmuirMode`, `TwoFluidLinear`](include/adc/model/two_fluid_isothermal.hpp) | noyaux 0D AP (Ä = K A) | 2 branches plasma (Langmuir + ion-acoustique), Vieta exact |
 | [`operator::{RusanovFlux,HLLFlux,HLLCFlux}`](include/adc/operator/numerical_flux.hpp) | flux numeriques (politiques `ADC_HD`) | validé Sod vs Riemann exact |
 | [`operator::reconstruction`](include/adc/operator/reconstruction.hpp) | MUSCL ordre 2 (NoSlope / Minmod / VanLeer) | limiteur en parametre de template |
@@ -178,8 +178,10 @@ ts = adc.TwoFluidAPSolver(tc)
 ts.advance(5e-3, 200)    # dt*omega_pe = 5 : stable, quasi-neutre
 print(ts.max_dev(), ts.max_charge())
 
-# Euler-Poisson auto-gravitant (backend FFT)
+# Euler-Poisson : meme code, deux physiques (le signe du couplage)
 ec = adc.EulerPoissonConfig(); ec.n = 128; ec.use_fft = True
+ec.interaction = adc.InteractionKind.Gravity   # attractif : effondrement de Jeans
+# ec.interaction = adc.InteractionKind.Plasma  # repulsif : Langmuir + Coulomb
 es = adc.EulerPoissonSolver(ec)
 for _ in range(100): es.step(2e-3)
 print(es.mass(), es.total_momentum(0))
@@ -202,7 +204,7 @@ docs/          ARCHITECTURE.md, PERFORMANCE.md, animations.
 
 ## Validation
 
-- **47/47** tests C++ (serie), idem OpenMP ; **+8** MPI (`mpirun -np 4`, bit-identique a np=1/2/4) ; **+1** HDF5 ; bindings Python verts.
+- **48/48** tests C++ (serie), idem OpenMP ; **+8** MPI (`mpirun -np 4`, bit-identique a np=1/2/4) ; **+1** HDF5 ; bindings Python verts.
 - **GPU GH200** (CUDA 12.6) : advection, multigrille, pas couple Euler-Poisson, deux-fluides AP + `libadc` compilee GPU, tous **bit-identiques au CPU**.
 - **AMR** : reflux 2-niveaux / N-niveaux / multi-patch coverage-aware, tous prouves **bit-identiques** a la reference, conservation a l'arrondi (5.55e-16) ; clustering Berger-Rigoutsos branche. Le demo couple `diocotron_multipatch` (Poisson grossier + reflux multi-patch) re-cluster ses patchs a la volee (`docs/anim_diocotron_multipatch.gif`) en conservant la masse a `~2e-15` sur tout le run.
 - **Deux-fluides AP** : dispersion isotrope (3.1%), borne + quasi-neutre a `omega_pe = 1e3` (`dt*omega_pe = 5`) la ou l'explicite explose.

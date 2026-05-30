@@ -9,14 +9,20 @@
 
 namespace adc {
 
+// Signe du couplage Euler-Poisson. Gravity = attractif (effondrement de Jeans,
+// astrophysique) ; Plasma = repulsif (electrostatique mono-espece : oscillation de
+// Langmuir + explosion de Coulomb). Memes equations, source elliptique de signe opposee.
+enum class InteractionKind { Gravity, Plasma };
+
 struct EulerPoissonConfig {
   int n = 128;
   double L = 1.0;
   double gamma = 5.0 / 3.0;
-  double four_pi_G = 20.0;  // lap phi = four_pi_G (rho - rho0)
+  double four_pi_G = 20.0;  // intensite : lap phi = +-four_pi_G (rho - rho0)
   double rho0 = 1.0;        // fond neutralisant
   double p0 = 1.0;
-  double eps = 1e-3;        // amplitude de la perturbation de Jeans
+  InteractionKind interaction = InteractionKind::Gravity;  // Gravity | Plasma
+  double eps = 1e-3;        // amplitude de la perturbation initiale
   bool poisson_per_stage = true;  // false -> OncePerStep, ~2.6x plus rapide
   // true -> backend Poisson FFT direct (~5x), exige n puissance de 2 ; false ->
   // multigrille (tout n). Resultats identiques (meme Laplacien discret).

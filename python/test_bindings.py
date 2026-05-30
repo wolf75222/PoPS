@@ -45,6 +45,20 @@ chk(abs(es.mass() - em0) < 1e-9, "ep_masse_conservee")
 chk(abs(es.total_momentum(0)) < 1e-9, "ep_qte_mouvement_nulle")
 chk(es.density().shape == (64, 64), "ep_density_numpy")
 
+# --- EulerPoissonSolver, couplage plasma repulsif (InteractionKind) ---
+chk(hasattr(adc, "InteractionKind"), "interaction_kind_expose")
+pc = adc.EulerPoissonConfig()
+pc.n = 64
+pc.interaction = adc.InteractionKind.Plasma  # repulsif : Langmuir + Coulomb
+ps = adc.EulerPoissonSolver(pc)
+pm0 = ps.mass()
+for _ in range(20):
+    ps.step(0.004)
+print(f"EulerPoissonSolver(Plasma) : masse={ps.mass():.6e} "
+      f"p=({ps.total_momentum(0):.2e}, {ps.total_momentum(1):.2e})")
+chk(abs(ps.mass() - pm0) < 1e-9, "ep_plasma_masse_conservee")
+chk(abs(ps.total_momentum(0)) < 1e-9, "ep_plasma_qte_mouvement_nulle")
+
 # --- DiocotronSolver, CI bande + pas auto CFL ---
 bc = adc.DiocotronConfig()
 bc.n = 48

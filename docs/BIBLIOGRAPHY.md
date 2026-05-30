@@ -35,6 +35,12 @@ reconstruction x Riemann x intégrateur) a inspiré le découpage concept-templ�
 
 - **Birdsall & Langdon**, *Plasma Physics via Computer Simulation*, 1985. Dérive E x B,
   fréquences plasma et cyclotron, instabilité diocotron.
+- **Chen**, *Introduction to Plasma Physics and Controlled Fusion*, 3e éd., 2016. Oscillation
+  de Langmuir, dispersion de Bohm-Gross `omega^2 = omega_p^2 + 3 k^2 v_th^2`, longueur de
+  Debye : côté répulsif d'Euler-Poisson (`InteractionKind::Plasma`).
+- **Binney & Tremaine**, *Galactic Dynamics*, 2e éd., 2008. Instabilité de Jeans, dispersion
+  gravitationnelle `omega^2 = c_s^2 k^2 - 4 pi G rho0` : côté attractif d'Euler-Poisson
+  (`InteractionKind::Gravity`).
 - **Toro**, *Riemann Solvers and Numerical Methods for Fluid Dynamics*, 3e éd., 2009.
   Solveurs de Riemann (Rusanov, HLL, HLLC), reconstruction MUSCL, forme conservative.
 - **Trottenberg, Oosterlee & Schüller**, *Multigrid*, 2001. V-cycle, lisseur Gauss-Seidel

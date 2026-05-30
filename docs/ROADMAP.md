@@ -15,7 +15,9 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
 
 ### Couplage
 
-- Diocotron (dérive E x B), Euler-Poisson auto-gravitant, deux-fluides isotherme
+- Diocotron (dérive E x B), Euler-Poisson (auto-gravité attractive OU plasma
+  électrostatique répulsif, via `InteractionKind` : un seul signe sépare l'effondrement de
+  Jeans de l'oscillation de Langmuir + explosion de Coulomb), deux-fluides isotherme
   asymptotic-preserving, tous via `aux = grad phi`.
 - Schéma AP deux-fluides (Lorentz implicite, Poisson reformulé `beta0`), dispersion isotrope
   validée (3.1%), borne AP à `omega_pe = 1e3`.
