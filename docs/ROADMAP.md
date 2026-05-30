@@ -234,9 +234,25 @@ puis d'y ajouter notre AMR, puis SAMRAI.
   courbes montent vers `0.911` (0.50 -> 0.53 -> 0.56) sans l'atteindre : la limite de diffusion de M1
   demande une base bien plus haute, ce qui est exactement la cible du hero-run ROMEO (et l'AMR y
   arrivera pour ~43 % des cellules de l'uniforme équivalent).
-- **M3 : système magnétique complet (eq 2.4).** Au-delà de la limite de dérive : Euler+énergie +
-  Poisson + Lorentz `m×Ω` (push de Boris déjà en place) + splitting d'opérateurs, pour reproduire la
-  *méthode* du papier à travers les 12 ordres de grandeur d'échelles de temps.
+- **M3 : système magnétique complet (eq 2.4, FAIT).** Au-delà de la limite de dérive : Euler
+  compressible + énergie + Poisson + force de Lorentz `m × Ω`. L'architecture était déjà prête : le
+  modèle `EulerPoisson` porte l'hydro, la source `-ρ∇φ`, le travail `-m·∇φ` et le second membre
+  `α(ρ-ρ0)` ; il ne manquait que la rotation cyclotron `m × Ω`.
+  `integrator/magnetic_euler_poisson.hpp` : `magnetic_rotate` (rotation EXACTE de la quantité de
+  mouvement, `ρ` et `E` inchangés, conserve `|m|`) + `MagneticEulerPoissonCoupler`, splitting de
+  Strang autour de `Coupler<EulerPoisson>` (½ rotation, transport+électrostatique SSPRK2 avec Poisson
+  par étage, ½ rotation). La rotation exacte est inconditionnellement stable : schéma
+  ASYMPTOTIC-PRESERVING, le pas de temps reste gouverné par la CFL hydro et NON par la fréquence
+  cyclotron `ω_c = |Ω|`. `test_magnetic_euler_poisson` (60/60) prouve : rotation `ρ`/`E` bit à bit
+  conservés et `|m|` préservé ; à `Ω=0` le pas est BIT À BIT le `Coupler` nu (tout le chemin
+  Euler-Poisson testé est préservé) ; le point fixe de la carte de Strang converge à l'ORDRE 2
+  (ratio `4.00`) vers la dérive E×B `v = (-∂_yφ, ∂_xφ)/Ω`, donc le système complet se RÉDUIT à la
+  limite de dérive (M1/M2) quand `Ω` grandit. Démo `examples/magnetic_diocotron.cpp` : bande de charge
+  sous le système complet, initialisée sur la variété de dérive ; tourne stablement à grand `Ω`
+  (CFL hydro), masse conservée à l'arrondi (`~4e-11`), énergie du gaz quasi conservée sur la dérive
+  (`docs/anim_magnetic_diocotron.gif`). La reproduction quantitative du taux à `0.911` dans le système
+  complet est limitée par la diffusion (même constat que M1) et vise le hero-run.
+- **M4 : SAMRAI.** Porter le diocotron sur l'AMR de SAMRAI (FetchContent + adaptateur).
 - **M4 : SAMRAI.** Porter le diocotron sur l'AMR de SAMRAI (FetchContent + adaptateur).
 
 Hero run ROMEO (`romeo/`) : scripts SLURM prets pour le diocotron a grande echelle sur GH200,

@@ -112,14 +112,27 @@ Le pilote écrit `ring_amp.csv` (amplitude du mode `l` de φ sur le cercle `r=r0
 reporte le nombre de patchs et la dérive de masse (conservée à `~1e-14` sur tout
 le run). Comparer deux branches : même binaire, on bascule `refine` et `ml`.
 
+## M3, le système magnétique complet (fait)
+
+Tout ce qui précède vit dans la limite de dérive `v = -∇φ × Ω/|Ω|²`. Le papier
+résout le système COMPLET (eq 2.4) : Euler compressible + énergie + Poisson +
+force de Lorentz `m × Ω`, où la dynamique cyclotron est résolue et non supposée
+instantanée. `integrator/magnetic_euler_poisson.hpp` l'ajoute par un splitting de
+Strang autour du `Coupler<EulerPoisson>` déjà validé : demi rotation cyclotron
+exacte, un pas transport + électrostatique, demi rotation. La rotation exacte est
+inconditionnellement stable, donc le pas de temps suit la CFL hydro et pas la
+fréquence cyclotron `ω_c = |Ω|` : le schéma est asymptotic-preserving. Le test
+`test_magnetic_euler_poisson` prouve qu'à `Ω = 0` le pas est bit à bit le coupleur
+nu, et que le point fixe de la carte de Strang converge à l'ordre 2 vers la dérive
+E×B `v = (-∂_yφ, ∂_xφ)/Ω` : le système complet se réduit à la limite de dérive
+ci-dessus quand `Ω` grandit. Démo `examples/magnetic_diocotron.cpp`, animation
+`docs/anim_magnetic_diocotron.gif`.
+
 ## Où va la suite
 
-- **M3 : système magnétique complet** (eq 2.4 du papier). Au-delà de la limite
-  de dérive : Euler + énergie + Poisson + force de Lorentz (push de Boris déjà en
-  place), pour reproduire la *méthode* multi-échelles du papier, pas seulement sa
-  limite asymptotique. Voir [07_magnetic.md](07_magnetic.md).
 - **Hero-run ROMEO** : pousser la base sur GH200 (MPI + Kokkos/CUDA) pour viser
-  `0.911` à pleine résolution. Voir `romeo/README.md`.
+  `0.911` à pleine résolution, en limite de dérive comme en système complet (les
+  deux y sont limités par la diffusion à basse résolution). Voir `romeo/README.md`.
 - **M4 : SAMRAI**. Porter la colonne sur l'AMR de SAMRAI et comparer.
 
 Détail des opérateurs : [ALGORITHMS.md](../docs/ALGORITHMS.md). Hiérarchie AMR :
