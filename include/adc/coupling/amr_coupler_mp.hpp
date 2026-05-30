@@ -16,7 +16,10 @@
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
 #include <adc/mesh/refinement.hpp>  // coarsen_index
+#include <adc/parallel/comm.hpp>    // all_reduce_sum / all_reduce_max (masse/derive distribuees)
 
+#include <algorithm>   // std::max
+#include <cmath>       // std::hypot
 #include <functional>  // std::function (predicat de paroi conductrice passe au MG)
 #include <utility>
 #include <vector>
@@ -110,7 +113,7 @@ class AmrCouplerMP {
                bool replicated_coarse = true)
       : model_(model), geom_(geom),
         mg_(geom, ba_coarse, bc, std::move(active), replicated_coarse),
-        stack_(geom.domain, std::move(levels)) {}
+        stack_(geom.domain, std::move(levels)), replicated_coarse_(replicated_coarse) {}
 
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }
   MultiFab& coarse() { return stack_.coarse(); }
@@ -126,24 +129,32 @@ class AmrCouplerMP {
   void compute_aux() {  // Poisson grossier + grad phi + injection vers les fins
     auto& L = stack_.L();
     const Box2D& dom = stack_.domain();
-    const int nx = dom.nx(), ny = dom.ny();
     const Real dx = geom_.dx(), dy = geom_.dy();
     // second membre via le modele (pas de formule recopiee) : f = elliptic_rhs(U)
     detail::coupler_eval_rhs(L[0].U, mg_.rhs(), model_);
-    mg_.solve();
-    const ConstArray4 p = mg_.phi().fab(0).const_array();
-    Array4 a0 = stack_.aux(0).fab(0).array();
+    mg_.solve();  // laisse phi avec ses ghosts remplis (dernier gs_rb_sweep -> fill_ghosts)
     device_fence();
-    for (int j = 0; j < ny; ++j)
-      for (int i = 0; i < nx; ++i) {
-        a0(i, j, 0) = p(i, j);
-        a0(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-        a0(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
-      }
+    // aux = (phi, grad phi) par fab grossier LOCAL : couvre le mono-box replique (1 fab) comme
+    // le multi-box reparti (de-replication). Les derivees au bord de box lisent les ghosts de
+    // phi remplis par le solve (echange inter-box distribue via fill_boundary). mg_.phi() et
+    // aux(0) partagent le meme layout (meme BoxArray + DistributionMapping) -> fab(li) <-> box(li).
+    for (int li = 0; li < mg_.phi().local_size(); ++li) {
+      const ConstArray4 p = mg_.phi().fab(li).const_array();
+      Array4 a = stack_.aux(0).fab(li).array();
+      const Box2D b = stack_.aux(0).box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
+          a(i, j, 0) = p(i, j);
+          a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
+          a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
+        }
+    }
     fill_boundary(stack_.aux(0), dom, Periodicity{true, true});
-    // parent aux(k-1) replique seulement au niveau 0 (grossier mono-box) ; au-dela, reparti.
+    // parent aux(k-1) replique seulement si le niveau 0 l'est : sinon il est REPARTI (multi-box)
+    // et l'injection passe par parallel_copy. Au-dela du niveau 1, le parent est toujours reparti.
     for (int k = 1; k < stack_.nlev(); ++k)
-      detail::coupler_inject_aux_mb(stack_.aux(k - 1), stack_.aux(k), /*replicated_parent=*/k == 1);
+      detail::coupler_inject_aux_mb(stack_.aux(k - 1), stack_.aux(k),
+                                    /*replicated_parent=*/(k == 1) && replicated_coarse_);
   }
 
   void update() { sync_down(); compute_aux(); }
@@ -161,12 +172,38 @@ class AmrCouplerMP {
     amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin);
   }
 
+  // masse grossiere, sur fabs LOCAUX (mono-box replique comme multi-box reparti). Grossier
+  // replique : la somme locale EST deja la masse totale (chaque rang detient tout) -> pas
+  // d'all_reduce. Reparti : chaque rang n'a qu'une part -> all_reduce_sum.
   Real mass() const {
-    return amr_mass(stack_.coarse(), stack_.domain(), geom_.dx(), geom_.dy());
+    device_fence();
+    const MultiFab& U = stack_.coarse();
+    const Real dV = geom_.dx() * geom_.dy();
+    Real M = 0;
+    for (int li = 0; li < U.local_size(); ++li) {
+      const ConstArray4 u = U.fab(li).const_array();
+      const Box2D b = U.box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i) M += u(i, j, 0) * dV;
+    }
+    return replicated_coarse_ ? M : all_reduce_sum(M);
   }
 
+  // vitesse de derive max sur le grossier. all_reduce_max correct dans les DEUX cas : sous
+  // replication le max local est deja global (idempotent) ; reparti, on prend le max des parts.
   Real max_drift_speed() const {
-    return amr_max_drift_speed(stack_.aux(0), stack_.domain(), model_.B0);
+    device_fence();
+    const MultiFab& aux0 = stack_.aux(0);
+    const Real B0 = model_.B0;
+    Real v = 0;
+    for (int li = 0; li < aux0.local_size(); ++li) {
+      const ConstArray4 a = aux0.fab(li).const_array();
+      const Box2D b = aux0.box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+          v = std::max(v, std::hypot(a(i, j, 1), a(i, j, 2)) / B0);
+    }
+    return all_reduce_max(std::max(v, Real(1e-12)));
   }
 
  private:
@@ -174,6 +211,7 @@ class AmrCouplerMP {
   Geometry geom_;
   Elliptic mg_;
   AmrLevelStack<AmrLevelMP> stack_;
+  bool replicated_coarse_;  // niveau 0 replique (true) ou multi-box reparti (false, de-replication)
 };
 
 }  // namespace adc

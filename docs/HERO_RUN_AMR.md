@@ -143,26 +143,36 @@ hero-run AMR (qui vise d'abord la correction distribuée et l'échelle mémoire)
 ### Étape 2 : dé-réplication du grossier (objectif B proprement dit)
 
 Requise seulement quand le grossier doit croître au-delà de ce que la réplication
-permet. Trois sous-chantiers, chacun avec son gate bit-identique :
+permet. État : le coeur 2a/2b FONCTIONNE et est prouvé bit-identique à np<=2 ; reste
+un bug `parallel_copy` à np=4 et le gather-tags 2c.
 
-- **2a. Grossier multi-box réparti** : remplacer le niveau 0 mono-box répliqué par
-  une `BoxArray` multi-box + `DistributionMapping(ba.size(), n_ranks())`. Adapter
-  `AmrCouplerMP` (l'injection d'aux a déjà le chemin `replicated_parent=false` par
-  `parallel_copy`) et la mesure de masse (réduction globale au lieu de locale).
-- **2b. MG de Poisson sur grossier réparti** : `GeometricMG` applique déjà des
-  stencils par fab ; ajouter (i) l'échange de halos inter-box à chaque niveau du
-  V-cycle (déjà via `fill_boundary` réparti), (ii) un SOLVEUR DE FOND réparti
-  (rassembler le niveau le plus grossier sur un rang, résoudre, rediffuser ; OU
-  continuer le coarsening jusqu'à une box mono-rang). Gate : `div(grad phi)=source`
-  ordre 2 + bit-identique `np=1/2/4` sur un grossier multi-box.
-- **2c. Gather-tags pour le regrid d'un niveau réparti** : ajouter à `comm.hpp` un
-  `gather` (ou un `all_reduce` du `TagBox` indexé global, même schéma que le
-  registre de flux), rassembler les tags répartis sur la grille de tag avant le
-  clustering Berger-Rigoutsos (cf. `tag_box.hpp:11`). Gate : regrid d'un niveau
-  intermédiaire réparti bit-identique `np=1/2/4` (étendre `test_mpi_amr_multipatch3`).
+- **2a. Grossier multi-box réparti (FAIT, np<=2).** `AmrCouplerMP` accepte un grossier
+  multi-box réparti (`replicated_coarse=false`) : `compute_aux` boucle sur les fabs
+  grossiers LOCAUX (au lieu de `fab(0)`), `mass()` fait un `all_reduce` quand le grossier
+  est réparti (somme locale sinon), `max_drift_speed()` un `all_reduce_max`, et
+  l'injection d'aux passe par `parallel_copy` (chemin `replicated_parent=false`). Tout
+  reste BIT À BIT identique au chemin répliqué (série 60/60, AMR répliqué np=1/2/4
+  `maxdiff=0`). `test_mpi_decoarse` prouve qu'un grossier multi-box 2x2 réparti donne le
+  MÊME grossier que le mono-box répliqué, bit à bit, à np=1 et np=2.
+- **2b. MG de Poisson sur grossier réparti (DEJA LA).** `GeometricMG` solveur multi-box
+  réparti marche tel quel : `gs_rb_sweep` appelle `fill_ghosts` -> `fill_boundary`
+  (échange de halos inter-box DISTRIBUÉ) entre balayages rouge/noir, et le GS red-black
+  est indépendant de la décomposition -> `phi` bit-identique au mono-box. Pas de solveur
+  de fond séparé nécessaire ici (le bottom smoother fait aussi `fill_ghosts`).
+- **BUG OUVERT (np=4).** À np=4 exactement (1 box grossière par rang), un `parallel_copy`
+  lève `MPI_ERR_TRUNCATE` (taille de message incohérente) PENDANT le pas, avant tout
+  gather de comparaison. C'est un bug de la primitive `parallel_copy` partagée sur ce
+  motif de boîtes (un overlap par paire de rangs), pas de la logique de de-réplication
+  (correcte à np<=2). À CORRIGER (audit de l'appariement Isend/Irecv/Waitall de
+  `parallel_copy`) avant de monter en rangs.
+- **2c. Gather-tags pour le regrid d'un niveau réparti (RESTE).** Ajouter à `comm.hpp` un
+  `gather` (ou un `all_reduce` du `TagBox` indexé global), rassembler les tags répartis
+  avant le clustering Berger-Rigoutsos (cf. `tag_box.hpp:11`). Non nécessaire à 2 niveaux
+  (le niveau 0, même réparti, est tagué globalement via une réduction) mais requis pour
+  raffiner un niveau intermédiaire réparti.
 
-- **Risque** : ÉLEVÉ (2b le solveur de fond réparti surtout). C'est le coeur de
-  l'objectif B, déclaré NO-GO pour un PETIT grossier mais REQUIS ici.
+- **Risque** : le bug `parallel_copy` np=4 est le blocage immédiat ; 2c suit. Le coeur
+  (grossier multi-box + MG réparti) est acquis bit-identique à np<=2.
 
 ### Étape 3 : run de production + science
 
