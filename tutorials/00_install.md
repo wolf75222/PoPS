@@ -18,7 +18,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-**53/53** tests doivent passer (transport, flux de face, Riemann, Poisson, AMR reflux
+**54/54** tests doivent passer (transport, flux de face, Riemann, Poisson, AMR reflux
 2-niveaux / N-niveaux / multi-patch, deux-fluides AP, cyclotron, coupleurs).
 
 ## Options CMake

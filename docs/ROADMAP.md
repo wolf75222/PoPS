@@ -70,11 +70,11 @@ exécution, et un AMR multi-patch pas encore pensé distribué. Voir
    le propriétaire de la box parente, (4) reflux routé de même, (5) couverture (déjà
    globale). Puis, cible finale, chaque patch portant `owner_rank`, `global_box_id`,
    interfaces coarse-fine globales, registre distribué, `load_balance` SFC.
-2. **Moteur AMR unifié.** Replier la famille `amr_step_2level_mf` / `_multilevel_mf` /
-   `_2level_multipatch` / `_multilevel_multipatch` (duplication par cas particulier) sur un
-   seul `advance_amr(hierarchy, dt, operators, schedule, execution)`, au-dessus d'objets
-   nommés : `LevelHierarchy`, `PatchRange`, `CoarseFineInterface`, `FluxRegister`,
-   `SubcyclingSchedule`, `RegridPolicy`, `OwnershipPolicy`.
+2. **Moteur AMR unifié.** Premier pas fait : l'entrée unifiée `advance_amr(m, LevelHierarchy&,
+   dt)` + le type `LevelHierarchy` (vérifié façade-fidèle et conservatif, `test_advance_amr`).
+   Reste : nommer les autres objets (`PatchRange`, `CoarseFineInterface`, `FluxRegister`,
+   `SubcyclingSchedule`, `RegridPolicy` ; `OwnershipPolicy` ~ `DistributionMapping`) et y
+   replier la famille `amr_step_*` (qui encode le cas dans le nom).
 3. **Découper l'elliptique.** Avancé : l'`EllipticOperator` existe déjà séparé
    (`poisson_operator.hpp` : `apply_laplacian`, `poisson_residual`, lisseur) ; le
    `LinearSolver` est le concept `EllipticSolver` (MG, FFT) ; l'identité MG = FFT est rendue

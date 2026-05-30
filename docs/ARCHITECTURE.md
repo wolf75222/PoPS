@@ -11,7 +11,7 @@ resultats. Ici on decrit les couches, les seams, les decisions, et on distingue
 explicitement ce qui est **fait** de ce qui est **cible** (refactor planifie, voir
 [ROADMAP.md](ROADMAP.md)).
 
-## 1. Principe : quatre couches orthogonales
+## 1. Principe : cinq couches orthogonales
 
 Le modele physique ne depend JAMAIS du backend parallele. Il n'expose que des lois
 **locales**, pures ou quasi pures, appelables dans un kernel (`ADC_HD`, device-callable).
@@ -226,14 +226,17 @@ conservatifs.
 
 **Faiblesse 1 : la duplication par cas particulier.** Les noms
 `amr_step_2level_mf` / `_multilevel_mf` / `_2level_multipatch` / `_multilevel_multipatch` /
-`subcycle_level_mp` signalent des cas codes avant l'abstraction finale. Cible : un seul
-moteur sur des objets nommes.
+`subcycle_level_mp` encodent le cas dans le NOM. Premier pas FAIT : l'entree unifiee
+`advance_amr(m, LevelHierarchy&, dt)` + le type nomme `LevelHierarchy` (niveaux + base_dom +
+periodicite ; l'`OwnershipPolicy` est portee par le `DistributionMapping` de chaque
+MultiFab). Verifie facade-fidele (`test_advance_amr`, `maxdiff = 0` vs l'appel direct) et
+conservatif. Reste : nommer les autres objets et y replier la famille de pas.
 
 ```
-LevelHierarchy   PatchRange   CoarseFineInterface   FluxRegister
-SubcyclingSchedule   RegridPolicy   OwnershipPolicy
+LevelHierarchy [fait]   PatchRange   CoarseFineInterface   FluxRegister
+SubcyclingSchedule   RegridPolicy   OwnershipPolicy [via DistributionMapping]
 
-advance_amr(hierarchy, dt, operators, schedule, execution);   // un seul point d'entree
+advance_amr(m, hierarchy, dt);   // entree unifiee posee ; reste a absorber la famille amr_step_*
 ```
 
 **Faiblesse 2 : le multi-patch distribue (priorite n.1).** Fait pour le 2-niveaux :
@@ -301,7 +304,7 @@ bit-identique a la reference prouve que la refactorisation n'a rien casse. Ca ne
 que le comportement est numeriquement correct. Les deux sont necessaires.
 
 Fait aujourd'hui :
-- Tests : 53/53 CPU serie (Eigen inclus) ; 53/53 OpenMP ; +9 MPI (`mpirun -np 4`) ; +1 HDF5.
+- Tests : 54/54 CPU serie (Eigen inclus) ; 54/54 OpenMP ; +9 MPI (`mpirun -np 4`) ; +1 HDF5.
 - Bit-identique : mono-box vs pile Fab2D ; multipatch N-niveaux sur deux axes
   (`test_amr_multilevel_multipatch`, `0`) ; `AmrCouplerMP` vs `AmrCoupler` (`0`) et
   conservatif sous regrid BR (`1.3e-15`, `test_amr_coupler_mp`) ; reflux multipatch 2-niveaux

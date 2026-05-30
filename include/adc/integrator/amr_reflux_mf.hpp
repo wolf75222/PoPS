@@ -714,4 +714,24 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L,
                                             Real(0), nullptr);
 }
 
+// --- Moteur AMR unifie (revue, point 5) ---
+// La hierarchie AMR comme OBJET nomme que le moteur fait avancer, plutot qu'une famille de
+// fonctions amr_step_* dont le cas (2/N niveaux, mono/multi-box) est encode dans le NOM.
+// Premier pas : l'entree unifiee advance_amr(hierarchy, dt) + le type LevelHierarchy. Le
+// DistributionMapping de chaque MultiFab porte la repartition (OwnershipPolicy implicite).
+// Generalisation a venir (ROADMAP) : PatchRange / CoarseFineInterface / FluxRegister /
+// SubcyclingSchedule / RegridPolicy en objets de premier plan, puis repli complet de la
+// famille de pas dans ce seul moteur.
+struct LevelHierarchy {
+  std::vector<AmrLevelMP> levels;    // niveau 0 = grossier, niveaux >0 = patchs fins
+  Box2D base_dom;                    // empreinte du niveau de base
+  Periodicity base_per{true, true};  // CL du domaine de base
+};
+
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void advance_amr(const Model& m, LevelHierarchy& h, Real dt) {
+  amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt,
+                                                         h.base_per);
+}
+
 }  // namespace adc
