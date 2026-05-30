@@ -30,16 +30,22 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
   Fab2D de référence.
 - Multi-patch N-niveaux (`amr_step_multilevel_multipatch`) : reflux coverage-aware, routage
   vers la box parente, validé sur deux axes à `0` exact.
+- Reflux 2-niveaux multi-patch DISTRIBUÉ MPI (`test_mpi_amr_multipatch`, np=1/2/4 bit-identique,
+  grossier répliqué + gather `average_down`/reflux).
 - Clustering Berger-Rigoutsos + regrid dynamique ; coupleurs `AmrCoupler` (mono-box) et
   `AmrCouplerMP` (multi-patch + regrid), conservatifs.
 
 ### Parallélisme et outils
 
-- OpenMP (déterministe vs série), MPI (bit-identique np=1/2/4, 8 tests `mpirun`), portage GPU
+- OpenMP (déterministe vs série), MPI (bit-identique np=1/2/4, 9 tests `mpirun`), portage GPU
   GH200 (Kokkos, bit-identique CPU).
-- Bindings Python (3 solveurs, 1:1 avec les façades), banc `bench_amr`, figures de scaling.
-- Docs : README, ALGORITHMS, ARCHITECTURE, CHOICES, BIBLIOGRAPHY, PERFORMANCE, two_fluid_ap,
-  tutoriels 00 à 08, Doxygen + Sphinx.
+- Validation numérique (au-delà du bit-identique) : ordre du Laplacien 5 points (L2/Linf=2.00),
+  tourbillon isentropique Euler (L1~2), MUSCL ~2 / Rusanov ~1, loi de Gauss du couplage
+  (`div(grad phi)=source`, ordre 2.00), conservation sous regrid.
+- Bindings Python (3 solveurs, 1:1 avec les façades), 10 scripts exécutables (GIF/plots), banc
+  `bench_amr`, figures de scaling.
+- Docs : README, ALGORITHMS, ARCHITECTURE (4 couches), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
+  two_fluid_ap, tutoriels 00 à 09, Doxygen + Sphinx.
 
 ## En file
 
