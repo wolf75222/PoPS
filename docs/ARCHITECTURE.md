@@ -19,8 +19,10 @@ Il ne voit ni MPI, ni AMR, ni MultiFab, ni halos. En revanche il est ecrit pour 
 compatible avec l'execution choisie : pas d'allocation dans les boucles chaudes, pas de
 `std::function`, pas de polymorphisme dynamique, donnees accessibles sur GPU.
 
-Le code s'organise en quatre couches. Une couche haute exprime le probleme, une couche
-basse l'execute ; une couche haute ne depend jamais d'un detail d'execution.
+Le code s'organise en cinq couches. **Donnees et execution sont distinctes** : les
+conteneurs (ce qui STOCKE) ne sont pas la politique d'execution (comment on BOUCLE et on
+COMMUNIQUE). Une couche haute exprime le probleme, une couche basse l'execute ; une couche
+haute ne depend jamais d'un detail d'execution.
 
 ```
   PhysicalModel          lois locales : flux, sources, fermetures (device-callable)
@@ -29,23 +31,24 @@ basse l'execute ; une couche haute ne depend jamais d'un detail d'execution.
   NumericalMethod        reconstruction, flux numerique, operateur elliptique, CL logiques
         |
         v
-  DiscreteOperator       applique la discretisation sur une grille (stencils, ghosts)
+  DataLayout             conteneurs : Box, BoxArray, MultiFab, Geometry, hierarchie AMR
         |
         v
-  ExecutionBackend       comment boucler : for_each_cell serie / OpenMP / Kokkos ; comm,
-                         halos, reductions, allocateur, MPI ; conteneurs MultiFab/BoxArray
+  ExecutionBackend       politique : for_each_cell (serie/OpenMP/Kokkos), comm, GhostExchange,
+                         reductions, allocateur, BackendPolicy
         |
   TimeIntegrator         compose les operateurs (RK, IMEX, splitting, AP) sans connaitre
                          leur implementation interne
 ```
 
-Les quatre couches, par contenu :
+Les cinq couches, par contenu :
 
 | Couche | Quoi | Ne connait pas |
 |---|---|---|
 | **Physique** | `PhysicalModel`, equation d'etat, termes sources, lois de fermeture | MPI, AMR, MultiFab, Kokkos, halos |
 | **Numerique** | reconstruction, flux numerique, operateur spatial, operateur elliptique, CL | le layout memoire, la strategie AMR |
-| **Maillage / donnees / execution** | Box, BoxArray, DistributionMapping, MultiFab, Geometry, hierarchie AMR, `for_each_cell`, `comm`, echange de halos, reductions, allocateur | les formules physiques |
+| **Maillage / donnees** | Box, BoxArray, DistributionMapping, MultiFab, Geometry, hierarchie AMR | comment on boucle / communique (le backend) |
+| **Execution** | `for_each_cell`, `comm`, GhostExchange, reductions, allocateur, BackendPolicy | les formules physiques, les conteneurs concrets |
 | **Temps / couplage** | SSPRK, IMEX, splitting, `CouplingPolicy`, reflux / average-down / subcyclage | l'implementation des operateurs qu'il compose |
 
 **Point delicat : le modele point-wise ne suffit pas pour les modeles couples.** Certains
@@ -91,7 +94,14 @@ au `for_each_cell` du backend. Le mauvais design serait
 `numerical_flux.compute_all_cells(U, F, grid, mpi)` ; le bon est un `assemble_rhs` qui
 compose `(modele, flux, reconstruction, CL)` puis laisse l'execution boucler.
 
-## 4. Couche 3 : maillage, donnees, execution
+## 4. Couches 3-4 : maillage/donnees ET execution (distinctes)
+
+Deux concerns separes, volontairement. **Maillage / donnees** = ce qui STOCKE :
+`mesh/box2d`, `box_array`, `distribution_mapping`, `multifab`, `geometry`, la hierarchie AMR.
+Ces conteneurs ne savent pas comment on boucle ni on communique. **Execution** = la politique
+(table ci-dessous) : `for_each_cell` (serie/OpenMP/Kokkos), `comm`, l'echange de halos, les
+reductions, l'allocateur. Les confondre laisserait un operateur numerique dependre du layout
+memoire ou de la strategie AMR ; les separer est le point structurel de la revue.
 
 | Seam | Fichier | Role | Backends |
 |---|---|---|---|
@@ -134,7 +144,7 @@ fence, pas des reductions device. **Cible** : une API memoire explicite
 visible dans le type ou le nom, et des reductions device (pas des boucles hote protegees),
 pour ne pas accumuler de synchronisations globales sur GH200.
 
-## 5. Couche 4 : temps et couplage
+## 5. Couche 5 : temps et couplage
 
 `integrator/ssprk.hpp`, `imex.hpp` (AP), `splitting.hpp`, `two_fluid_ap.hpp`. Un
 `TimeIntegrator` pilote explicitement les etapes (remplissage des ghosts entre stages,
