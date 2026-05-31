@@ -32,8 +32,9 @@ haute ne depend jamais d'un detail d'execution.
   DataLayout             conteneurs : Box, BoxArray, MultiFab, Geometry, hierarchie AMR
         |
         v
-  ExecutionBackend       politique : for_each_cell (serie/OpenMP/Kokkos), comm, GhostExchange,
-                         reductions, allocateur, BackendPolicy
+  ExecutionBackend       seams : for_each_cell (serie/OpenMP/Kokkos), comm, allocateur,
+                         BackendPolicy. Ne voient que des vues minimales (Box2D, Array4,
+                         scalaire, rang), jamais BoxArray/DistributionMapping
         |
   TimeIntegrator         compose les operateurs (RK, IMEX, splitting, AP) sans connaitre
                          leur implementation interne
@@ -46,8 +47,13 @@ Les cinq couches, par contenu :
 | **Physique** | `PhysicalModel`, equation d'etat, termes sources, lois de fermeture | MPI, AMR, MultiFab, Kokkos, halos |
 | **Numerique** | reconstruction, flux numerique, operateur spatial, operateur elliptique, CL | la decomposition en boxes/rangs (`BoxArray`, `DistributionMapping`), le backend d'execution, la strategie AMR |
 | **Maillage / donnees** | Box, BoxArray, DistributionMapping, MultiFab, Geometry, hierarchie AMR | comment on boucle / communique (le backend) |
-| **Execution** | `for_each_cell`, `comm`, GhostExchange, reductions, allocateur, BackendPolicy | les formules physiques, les conteneurs concrets |
+| **Execution** | seams : `for_each_cell`, `comm`, allocateur, `BackendPolicy` (vues minimales : Box2D, Array4, scalaire, rang) | les formules physiques, les methodes numeriques, `BoxArray`/`DistributionMapping` |
 | **Temps / couplage** | SSPRK, IMEX, splitting, `CouplingPolicy`, reflux / average-down / subcyclage | l'implementation des operateurs qu'il compose |
+
+`GhostExchange` (`fill_boundary`) et les reductions / `saxpy` (`mf_arith`) ne sont PAS la
+politique Execution : ce sont des operateurs de grille qui ORCHESTRENT les seams (ils bouclent
+`for_each_cell` sur chaque fab local et appellent `comm` / `all_reduce`), au meme titre
+qu'`assemble_rhs`. La couche Execution se limite aux seams qui ne voient que des vues minimales.
 
 **Point delicat : le modele point-wise ne suffit pas pour les modeles couples.** Certains
 termes ne sont pas purement locaux : potentiel, champ electrique, nullspace de Poisson
@@ -191,9 +197,10 @@ l'arrondi inchangees).
 | `model/` | physique | `diocotron`, `euler`, `euler_poisson` (gravite OU plasma via `coupling_sign`) ; `langmuir`, `two_fluid_isothermal` (noyaux 0D AP) |
 | `operator/` | numerique | `numerical_flux` (Rusanov/HLL/HLLC), `reconstruction` (MUSCL), `spatial_operator` (`assemble_rhs`) |
 | `elliptic/` | numerique + temps | concept `EllipticSolver` ; `geometric_mg` (V-cycle) ; `poisson_fft`(+`_solver`) ; `poisson_operator` |
-| `mesh/` | execution | `box2d`, `box_array`, `fab2d`/`multifab`, `for_each`, `fill_boundary`, `physical_bc`, `geometry`, `mf_arith`, `refinement`, `box_hash` |
+| `mesh/` (donnees) | maillage / donnees | `box2d`, `box_array`, `distribution_mapping`, `fab2d`/`multifab`, `geometry`, `refinement`, `box_hash` |
+| `mesh/` (execution) | execution | `for_each` (seam `for_each_cell`), `fill_boundary` (GhostExchange), `physical_bc`, `mf_arith` (operateurs de grille qui bouclent le seam) |
 | `parallel/` | execution | `comm` (seam MPI), `load_balance` (Z-order + knapsack) |
-| `amr/` | execution | `amr_hierarchy`, `cluster` (Berger-Rigoutsos), `regrid`, `tag_box` |
+| `amr/` | maillage adaptatif | `amr_hierarchy` (conteneur de niveaux), `cluster` (Berger-Rigoutsos, arithmetique entiere), `regrid` (politique de remaillage), `tag_box` (grille de marqueurs) |
 | `integrator/` | temps | `ssprk`, `imex` (AP), `splitting`, `two_fluid_ap`, `magnetic_euler_poisson` (rotation cyclotron `m x Omega` en Strang autour du couplage Euler-Poisson), `amr_reflux`/`amr_multilevel` (pile Fab2D de reference), `amr_reflux_mf` (pile MultiFab, mono-box -> multi-patch N-niveaux, GPU-ready) |
 | `coupling/` | temps | `coupler`, `coupling_policy`, `amr_coupler` (mono-box), `amr_coupler_mp` (multi-patch + regrid BR), `amr_level_storage` (hierarchie `AmrLevelStack`), `amr_regrid_coupler` (`amr_regrid_finest`), `amr_diagnostics` (masse, derive), `spectral_coupler` |
 | `analysis/` | hors chemin chaud | `diocotron_growth` (Eigen, `#ifdef ADC_HAS_EIGEN`), `hdf5_writer` (`#ifdef ADC_HAS_HDF5`) |

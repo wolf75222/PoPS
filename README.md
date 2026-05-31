@@ -127,7 +127,7 @@ python3 -m sphinx -b html docs/sphinx docs/_build/sphinx # site Python + tutorie
 
 ### Prerequis
 
-- C++23 (AppleClang 16+, GCC 13+, Clang 17+)
+- C++23 (AppleClang 16+, GCC 13+, Clang 17+) ; coeur compatible C++20, la norme retombe a C++20 sous Kokkos/nvcc (build GPU)
 - CMake >= 3.20
 - Eigen >= 3.4 *(cote host uniquement, analyse diocotron ; optionnel `-DADC_USE_EIGEN`)*
 - MPI *(optionnel `-DADC_USE_MPI=ON`)*, Kokkos *(optionnel `-DADC_USE_KOKKOS=ON`, GPU)*, HDF5 *(optionnel `-DADC_USE_HDF5=ON`)*
