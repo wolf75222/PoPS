@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# Porte de CORRECTION GPU sur UN GH200 d'armgpu : passe les binaires Kokkos/CUDA sous
-# compute-sanitizer (NVIDIA, successeur de cuda-memcheck) + rejoue la validation
-# bit-identique CPU vs GPU. But : attraper la classe de bugs la plus subtile du code
-# (cf. docs/CHOICES.md : un device_fence() oublie = lecture hote de memoire unifiee
-# encore en cours d'ecriture par un kernel, bug GPU SILENCIEUX invisible en CI CPU).
+# Porte de CORRECTION GPU sur UN GH200 d'armgpu : passe les EXEMPLES Kokkos/CUDA sous
+# compute-sanitizer (NVIDIA) + rejoue la validation bit-identique CPU vs GPU. But :
+# attraper la classe de bug la plus subtile (cf. docs/CHOICES.md : un device_fence()
+# oublie = lecture hote de memoire unifiee encore ecrite par un kernel, silencieux en
+# CI CPU).
 #
 # Deux filets COMPLEMENTAIRES :
-#   1. compute-sanitizer : erreurs memoire GPU larges (acces hors borne / mal alignes,
-#      lectures non initialisees via initcheck, mauvais usage des primitives de synchro
-#      via synccheck). Ne detecte PAS directement une course hote/device sur memoire
-#      managee, mais couvre tout le reste de l'hygiene GPU.
-#   2. checksum CPU vs GPU (coupled_kokkos) : c'est LUI qui attrape un fence manquant.
-#      Un fence oublie fait DIVERGER le resultat GPU du resultat CPU connu
-#      (4394594.404318) -> le checksum casse. C'est le detecteur reel des fences.
+#   1. compute-sanitizer (memcheck/initcheck/synccheck) : erreurs memoire GPU (acces
+#      hors borne / mal alignes, lectures non initialisees, synchro). On l'applique aux
+#      EXEMPLES coupled_kokkos / diocotron_amr_kokkos, qui appellent Kokkos::initialize
+#      via un ScopeGuard. PAS aux tests unitaires : ecrits pour le seam CPU, ils n'ont
+#      pas de ScopeGuard et echouent "device not initialized" sous backend Cuda (rien a
+#      verifier). Pas de --leak-check : cudaMallocManaged signale des fuites benignes en
+#      sortie (memoire unifiee liberee a la fin du process), ce n'est pas le sujet.
+#   2. checksum CPU vs GPU : c'est LUI qui attrape un fence manquant. diocotron_amr_kokkos
+#      imprime un checksum compare a la valeur CPU connue 4394594.404318 ; un fence oublie
+#      ferait diverger ce nombre. C'est le detecteur reel des fences (compute-sanitizer ne
+#      voit pas la course hote/device sur memoire managee).
 #
 # Pre-requis : kokkos-src clone sous /scratch_p/$USER (les noeuds n'ont pas internet),
 # cf. romeo/README.md. Soumettre depuis la racine du depot sur ROMEO :
 #   sbatch romeo/sanitizer.sbatch
-#
-# NOTE : ce script n'a PAS pu etre execute hors ROMEO (pas de GPU) ; il reprend a
-# l'identique la section build validee de diocotron_amr_gpu.sbatch. Verifier la
-# premiere execution.
 
 #SBATCH --account=r250127
 #SBATCH --job-name=adc_sanitizer
@@ -57,54 +57,43 @@ if [ ! -f "$KINST/lib64/cmake/Kokkos/KokkosConfig.cmake" ] && [ ! -f "$KINST/lib
 fi
 echo "== Kokkos installe: $KINST =="
 
-# 2. le projet, backend Kokkos/CUDA. On construit les binaires qui EXERCENT la
-#    frontiere hote/device : la reference auto-validee (coupled_kokkos), le pas AMR
-#    complet, le test du reducteur (sommes/normes par le seam, cf. commit recent) et
-#    les coupleurs (dont mass() route maintenant par for_each_cell_reduce_sum).
+# 2. le projet, backend Kokkos/CUDA. Seuls les 2 exemples GPU (ScopeGuard Kokkos) sont
+#    sanitizes ; ils exercent le pas couple complet + l'AMR multi-patch, dont mass()
+#    route maintenant par for_each_cell_reduce_sum.
 SRC=$SLURM_SUBMIT_DIR
 BUILD=$SRC/build-gh200
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON \
   -DCMAKE_CXX_COMPILER="$KINST/bin/nvcc_wrapper" -DKokkos_ROOT="$KINST" \
   || { echo "ADC_CFG_KO"; exit 1; }
 cmake --build "$BUILD" -j 10 --target coupled_kokkos diocotron_amr_kokkos \
-  test_reduce test_amr_coupler_mp test_fft_coupler \
   || { echo "ADC_BUILD_KO"; exit 1; }
 
-# --- helper : un binaire sous un outil compute-sanitizer, verdict par ERROR SUMMARY ---
-# On NE met PAS --error-exitcode : Kokkos peut declencher des avertissements initcheck
-# benins sur ses buffers internes ; on lit "ERROR SUMMARY: N errors" et on rapporte.
+# --- helper : un binaire sous un outil compute-sanitizer, verdict honnete ---
 run_san () {  # $1=tool  $2=binaire  $3...=args
   local tool="$1"; shift
   local bin="$1"; shift
-  local leak=""              # --leak-check est specifique a memcheck ; invalide ailleurs
-  [ "$tool" = "memcheck" ] && leak="--leak-check full"
   echo "----- compute-sanitizer --tool $tool  $(basename "$bin") -----"
-  local log; log=$(compute-sanitizer --tool "$tool" $leak "$bin" "$@" 2>&1)
-  echo "$log" | tail -25
-  if echo "$log" | grep -q "ERROR SUMMARY: 0 errors"; then
+  local log; log=$(compute-sanitizer --tool "$tool" "$bin" "$@" 2>&1)
+  echo "$log" | tail -20
+  if echo "$log" | grep -qE "not initialized|didn't terminate successfully|returned an error"; then
+    echo "  >>> $tool $(basename "$bin") : ECHEC (l'appli a plante avant le check)"
+  elif echo "$log" | grep -q "ERROR SUMMARY: 0 errors"; then
     echo "  >>> $tool $(basename "$bin") : OK"
   else
-    echo "  >>> $tool $(basename "$bin") : ERREURS (voir ci-dessus)"
+    echo "  >>> $tool $(basename "$bin") : ERREURS MEMOIRE (voir ci-dessus)"
   fi
 }
 
 echo "===== compute-sanitizer (memcheck / initcheck / synccheck) ====="
-# memcheck (defaut) : acces hors borne / mal alignes / fuites. Sur les petits tests
-# (nc=32) le ralentissement sanitizer est negligeable.
+# coupled_kokkos est petit (N=128, 20 pas) : les 3 outils passent vite. diocotron_amr_kokkos
+# est plus lourd (AMR, ~18 s nominal -> minutes sous sanitizer) : memcheck seul.
 for t in memcheck initcheck synccheck; do
-  run_san "$t" "$BUILD/bin/test_reduce"
-  run_san "$t" "$BUILD/bin/test_amr_coupler_mp"
-  run_san "$t" "$BUILD/bin/test_fft_coupler"
+  run_san "$t" "$BUILD/bin/coupled_kokkos"
 done
-# coupled_kokkos sous memcheck (reference GPU compacte, exerce le pas couple complet).
-run_san memcheck "$BUILD/bin/coupled_kokkos"
+run_san memcheck "$BUILD/bin/diocotron_amr_kokkos"
 
 echo "===== detecteur reel des fences manquants : checksum bit-identique CPU vs GPU ====="
-# Un device_fence() oublie fait diverger ce checksum du CPU connu. C'est le filet qui
-# attrape la classe de bug visee (compute-sanitizer ne voit pas la course hote/device
-# sur memoire managee). coupled_kokkos s'auto-valide CPU vs GPU en interne.
 "$BUILD/bin/coupled_kokkos"
-echo "== checksum CPU attendu (serie + Kokkos-OpenMP local) = 4394594.404318 =="
-echo "== diocotron_amr_kokkos (pas AMR complet, doit rester bit-identique au CPU) =="
+echo "== diocotron_amr_kokkos : checksum doit valoir EXACTEMENT 4394594.404318 (= CPU) =="
 "$BUILD/bin/diocotron_amr_kokkos"
 echo "== FIN sanitizer =="

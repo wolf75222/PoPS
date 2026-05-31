@@ -177,15 +177,21 @@ Etat : les trois sont deja des briques SEPAREES et testees isolement.
 (`fill_boundary` ; `fill_physical_bc`). **Reste (cible)** : remonter (3), qui vit dans le pas
 AMR, en helper nomme de premier niveau (et le rendre distribue, cf. section 8).
 
-**Modele memoire : remplacer la discipline manuelle par une API explicite.** Aujourd'hui,
-toute fonction qui fait un kernel device puis une boucle HOTE sur la meme memoire doit
-appeler `device_fence()` entre les deux (sinon course memoire unifiee sur GPU, invisible en
-CI CPU). C'est correct mais c'est une discipline **manuelle** : un oubli est un bug
-silencieux GPU. `sum` / `norm_inf` sont aujourd'hui des boucles hote derriere un fence, pas
-des reductions device. **Cible** : une API memoire explicite
-(`device_reduce`, `device_norm_inf`, `sync_host`, `sync_device`) qui rend la transition
-visible dans le type ou le nom, et des reductions device (pas des boucles hote protegees),
-pour ne pas accumuler de synchronisations globales sur GH200.
+**Modele memoire : reductions device + detection des oublis de fence.** Toute fonction qui
+fait un kernel device puis une boucle HOTE sur la meme memoire unifiee doit appeler
+`device_fence()` entre les deux (sinon course hote/device sur GPU, invisible en CI CPU ; cf.
+CHOICES.md, le bug le plus subtil). Deux reponses, et PAS une API a la MFEM (`Memory<T>` +
+flags host/device) : inutile ici, la memoire est UNIFIEE (GH200, un seul buffer, rien a
+desambiguiser).
+- Reductions DEVICE faites : `for_each_cell_reduce_sum` / `_max` (`mesh/for_each.hpp`),
+  reducteurs `Kokkos::Sum` / `Max` deterministes (bit-identique en serie/OpenMP ; sous Kokkos
+  le sum reassocie le dernier bit, le max reste exact). `sum`, `norm_inf` et les diagnostics
+  AMR (`amr_mass`, coupleurs `mass`) y passent ; plus de boucle hote derriere un fence. Restent
+  les `max_drift_speed` (noyau `std::hypot`, a confirmer device sur ROMEO avant conversion).
+- Detection des oublis de fence : `romeo/sanitizer.sbatch` (compute-sanitizer sur les exemples
+  GPU) + le checksum bit-identique CPU vs GPU de `diocotron_amr_kokkos`, qui DIVERGE si un fence
+  manque. Un filet de CI, plutot qu'un type qui cache la barriere dans l'accesseur (a
+  contre-courant de l'idiome Kokkos/AMReX : fence explicite, separe de l'acces).
 
 ## 5. Couche 5 : temps et couplage
 
