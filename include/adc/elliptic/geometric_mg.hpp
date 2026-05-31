@@ -45,11 +45,22 @@ class GeometricMG {
   // fill_boundary sur une box couvrant le domaine est local, et current_residual reduit par
   // norm_inf = all_reduce_MAX, idempotent sous replication). C'est ce qu'attend le coupleur
   // AMR (niveau 0 replique). En serie my_rank()=0 -> identique au round-robin, bit a bit.
+  //
+  // cut_cell + levelset : bord embedded d'ORDRE 2 (Shortley-Weller) au lieu de
+  // l'escalier. levelset(x, y) est une fonction de niveau (< 0 a l'interieur, signe
+  // du bord) ; pour le cercle conducteur, levelset = hypot(x - cx, y - cy) - Rwall.
+  // Chaque cellule active recoit 5 coefficients calcules a partir des distances au
+  // bord (fraction de coupe theta par direction). active est alors deduit du signe de
+  // levelset s'il n'est pas fourni. cut_cell=false => stencil escalier historique (bit-identique).
   GeometricMG(const Geometry& geom, const BoxArray& ba, const BCRec& bc,
               std::function<bool(Real, Real)> active = {}, bool replicated = false,
-              int min_coarse = 2, int nu1 = 2, int nu2 = 2, int nbottom = 50)
+              int min_coarse = 2, int nu1 = 2, int nu2 = 2, int nbottom = 50,
+              bool cut_cell = false, std::function<Real(Real, Real)> levelset = {})
       : bc_(bc), active_(std::move(active)), nu1_(nu1), nu2_(nu2),
-        nbottom_(nbottom), replicated_(replicated) {
+        nbottom_(nbottom), replicated_(replicated), cut_cell_(cut_cell),
+        levelset_(std::move(levelset)) {
+    if (cut_cell_ && levelset_ && !active_)
+      active_ = [ls = levelset_](Real x, Real y) { return ls(x, y) < Real(0); };
     add_level(geom, ba);
     while (true) {
       const Geometry g = lev_.back().geom;
@@ -72,6 +83,47 @@ class GeometricMG {
           for (int j = b.lo[1]; j <= b.hi[1]; ++j)
             for (int i = b.lo[0]; i <= b.hi[0]; ++i)
               m(i, j) = active_(g.x_cell(i), g.y_cell(j)) ? Real(1) : Real(0);
+        }
+      }
+    }
+    if (cut_cell_ && levelset_) {
+      // coefficients Shortley-Weller par cellule active, calcules par niveau a partir
+      // des fractions de coupe du level-set (crossing lineaire). w_diag grossit pres du
+      // bord (cellule coupee) mais le systeme RESTE diagonalement dominant (le GS converge) :
+      // on ne clampe theta qu'a 1e-3 pour eviter la division par 0, sans degrader l'ordre 2
+      // (un clamp plus large, ex. 0.05, deplace les pires cellules coupees et casse l'ordre).
+      for (auto& L : lev_) {
+        L.coef = MultiFab(L.ba, L.dm, 5, 0);
+        const Geometry& g = L.geom;
+        const Real dx = g.dx(), dy = g.dy();
+        for (int li = 0; li < L.coef.local_size(); ++li) {
+          Array4 c = L.coef.fab(li).array();
+          const ConstArray4 m = L.mask.fab(li).const_array();
+          const Box2D b = L.coef.box(li);
+          auto cut = [](Real lc, Real ln, Real h) -> Real {
+            if (ln < Real(0)) return h;              // voisin interieur : pas de coupe
+            Real th = lc / (lc - ln);                // ls change de signe : fraction de coupe
+            if (th < Real(1e-3)) th = Real(1e-3);    // garde-fou anti division par 0 (theta->0)
+            if (th > Real(1)) th = Real(1);
+            return th * h;
+          };
+          for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+            for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
+              if (m(i, j) == Real(0)) {  // conducteur : coef inutilise (cellule sautee)
+                for (int k = 0; k < 5; ++k) c(i, j, k) = 0;
+                continue;
+              }
+              const Real xc = g.x_cell(i), yc = g.y_cell(j), lc = levelset_(xc, yc);
+              const Real axm = cut(lc, levelset_(xc - dx, yc), dx);
+              const Real axp = cut(lc, levelset_(xc + dx, yc), dx);
+              const Real aym = cut(lc, levelset_(xc, yc - dy), dy);
+              const Real ayp = cut(lc, levelset_(xc, yc + dy), dy);
+              c(i, j, 0) = Real(2) / (axm * (axm + axp));  // w_xm sur p(i-1)
+              c(i, j, 1) = Real(2) / (axp * (axm + axp));  // w_xp sur p(i+1)
+              c(i, j, 2) = Real(2) / (aym * (aym + ayp));  // w_ym sur p(i,j-1)
+              c(i, j, 3) = Real(2) / (ayp * (aym + ayp));  // w_yp sur p(i,j+1)
+              c(i, j, 4) = Real(2) / (axm * axp) + Real(2) / (aym * ayp);  // w_diag
+            }
         }
       }
     }
@@ -161,7 +213,7 @@ class GeometricMG {
   // identite en serie -> bit-identique au comportement historique.
   Real current_residual() {
     poisson_residual(lev_[0].phi, lev_[0].rhs, lev_[0].geom, bc_, lev_[0].res,
-                     mask_ptr(0));
+                     mask_ptr(0), coef_ptr(0));
     return all_reduce_max(norm_inf(lev_[0].res));
   }
 
@@ -170,10 +222,11 @@ class GeometricMG {
     Geometry geom;
     BoxArray ba;
     DistributionMapping dm;
-    MultiFab phi, rhs, res, mask;
+    MultiFab phi, rhs, res, mask, coef;
   };
 
   const MultiFab* mask_ptr(int l) { return active_ ? &lev_[l].mask : nullptr; }
+  const MultiFab* coef_ptr(int l) { return cut_cell_ ? &lev_[l].coef : nullptr; }
 
   void add_level(const Geometry& g, const BoxArray& ba) {
     DistributionMapping dm = replicated_
@@ -181,21 +234,22 @@ class GeometricMG {
         : DistributionMapping(ba.size(), n_ranks());
     lev_.push_back(MGLevel{g, ba, dm, MultiFab(ba, dm, 1, 1),
                            MultiFab(ba, dm, 1, 0), MultiFab(ba, dm, 1, 0),
-                           MultiFab{}});
+                           MultiFab{}, MultiFab{}});
   }
 
   void vcycle_rec(int l, const BCRec& bc) {
     MGLevel& L = lev_[l];
     const MultiFab* mk = mask_ptr(l);
-    gs_smooth(L.phi, L.rhs, L.geom, bc, nu1_, mk);
+    const MultiFab* ck = coef_ptr(l);
+    gs_smooth(L.phi, L.rhs, L.geom, bc, nu1_, mk, ck);
 
     if (l + 1 == static_cast<int>(lev_.size())) {
-      gs_smooth(L.phi, L.rhs, L.geom, bc, nbottom_, mk);  // bottom solve
+      gs_smooth(L.phi, L.rhs, L.geom, bc, nbottom_, mk, ck);  // bottom solve
       if (mk) zero_conductor(L.phi, L.mask);
       return;
     }
 
-    poisson_residual(L.phi, L.rhs, L.geom, bc, L.res, mk);
+    poisson_residual(L.phi, L.rhs, L.geom, bc, L.res, mk, ck);
     MGLevel& C = lev_[l + 1];
     average_down(L.res, C.rhs, 2);  // restriction du residu
     C.phi.set_val(0.0);
@@ -205,13 +259,15 @@ class GeometricMG {
     interpolate(C.phi, corr, 2);  // prolongation de la correction
     saxpy(L.phi, Real(1), corr);
     if (mk) zero_conductor(L.phi, L.mask);  // refige le conducteur
-    gs_smooth(L.phi, L.rhs, L.geom, bc, nu2_, mk);
+    gs_smooth(L.phi, L.rhs, L.geom, bc, nu2_, mk, ck);
   }
 
   BCRec bc_;
   std::function<bool(Real, Real)> active_;
   int nu1_, nu2_, nbottom_;
   bool replicated_ = false;
+  bool cut_cell_ = false;
+  std::function<Real(Real, Real)> levelset_;
   std::vector<MGLevel> lev_;
 };
 

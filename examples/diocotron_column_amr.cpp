@@ -68,6 +68,11 @@ int main(int argc, char** argv) {
   // taux monte nettement (eff 256 : gamma_norm 0.56 -> 0.76 en VanLeer). MUSCL lit 2 ghosts.
   const int recon = (argc > 7) ? std::atoi(argv[7]) : 0;
   const int ng = (recon != 0) ? 2 : 1;  // 1 ghost (NoSlope) ou 2 (MUSCL) ; recon=0 bit-identique
+  // cut : bord embedded cut-cell (Shortley-Weller, ordre 2 sur le cercle) au lieu de l'escalier.
+  // 0 = escalier historique (bit-identique). 1 = cut-cell. L'escalier place la paroi phi=0 sur les
+  // centres de cellules (erreur O(dx) au bord, taux gamma surestime de ~8% car geometrique) ; le
+  // cut-cell la place sur le vrai cercle. Verrou science #1 du rapprochement vers gamma_norm=0.911.
+  const int cut = (argc > 8) ? std::atoi(argv[8]) : 0;
   std::filesystem::create_directories(out);
 
   const double L = 1.0, cx = 0.5 * L, cy = 0.5 * L;
@@ -92,6 +97,11 @@ int main(int argc, char** argv) {
   std::function<bool(Real, Real)> active = [cx, cy, Rwall](Real x, Real y) {
     return std::hypot(x - cx, y - cy) < Rwall;
   };
+  // level-set du cercle (< 0 a l'interieur) pour le cut-cell ; vide si escalier.
+  std::function<Real(Real, Real)> levelset = [cx, cy, Rwall](Real x, Real y) {
+    return std::hypot(x - cx, y - cy) - Rwall;
+  };
+  std::function<Real(Real, Real)> ls_arg = cut ? levelset : std::function<Real(Real, Real)>{};
   BCRec bc;
   bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;  // paroi conductrice phi=0
 
@@ -103,7 +113,8 @@ int main(int argc, char** argv) {
       for (int i = g.lo[0]; i <= g.hi[0]; ++i) u(i, j, 0) = ne0((i + 0.5) * dxc, (j + 0.5) * dyc);
   }
 
-  GeometricMG mg(geom, ba, bc, active);  // multigrille grossier avec paroi embedded
+  // (geom, ba, bc, active, replicated, min_coarse, nu1, nu2, nbottom, cut_cell, levelset)
+  GeometricMG mg(geom, ba, bc, active, false, 2, 2, 2, 50, cut != 0, ls_arg);  // paroi embedded
   MultiFab Uf, auxf;                     // niveau fin multi-box (vide si refine=0)
 
   // Poisson MULTI-NIVEAU (mode ml) : grille fine uniforme 2nc, densite COMPOSITE (grossier
@@ -114,7 +125,7 @@ int main(int argc, char** argv) {
   Box2D fdom = Box2D::from_extents(nf, nf);
   Geometry fgeom{fdom, 0.0, L, 0.0, L};
   BoxArray fba(std::vector<Box2D>{fdom});
-  GeometricMG fmg(fgeom, fba, bc, active);
+  GeometricMG fmg(fgeom, fba, bc, active, false, 2, 2, 2, 50, cut != 0, ls_arg);
   MultiFab phic(ba, dm, 1, 1);
 
   auto compute_coarse_aux = [&]() {
