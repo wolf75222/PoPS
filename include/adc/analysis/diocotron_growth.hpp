@@ -8,6 +8,7 @@
 #include <Eigen/Eigenvalues>
 
 #include <cmath>
+#include <complex>
 #include <vector>
 
 // Taux de croissance lineaire de l'instabilite diocotron pour une colonne creuse
@@ -35,6 +36,49 @@ inline double diocotron_density(double r, double a, double b, double rhobar,
                                 double w) {
   if (w <= 0) return (r > a && r < b) ? rhobar : 0.0;
   return 0.5 * rhobar * (std::tanh((r - a) / w) - std::tanh((r - b) / w));
+}
+
+// Valeur propre complexe DOMINANTE (max Im) normalisee a la convention du papier
+// (omega_norm = 2 pi omega / rho_bar). Im = taux de croissance gamma ; Re = frequence de
+// ROTATION azimutale du mode (vitesse de phase). Permet de valider les DEUX parties de la
+// relation de dispersion contre la simu (qui mesure |c_l| -> gamma ET arg(c_l) -> -Re).
+inline std::complex<double> diocotron_eigenvalue(int m, double a, double b, double Rw,
+                                                 double rhobar = 1.0, double w = 0.05,
+                                                 int N = 1200) {
+  const double h = Rw / N;
+  std::vector<double> r(N + 1), rho(N + 1), C(N + 1), Om(N + 1);
+  for (int i = 0; i <= N; ++i) {
+    r[i] = i * h;
+    rho[i] = diocotron_density(r[i], a, b, rhobar, w);
+  }
+  C[0] = 0;
+  for (int i = 1; i <= N; ++i)
+    C[i] = C[i - 1] + 0.5 * (rho[i] * r[i] + rho[i - 1] * r[i - 1]) * h;
+  for (int i = 0; i <= N; ++i) Om[i] = (i == 0) ? 0.0 : -C[i] / (r[i] * r[i]);
+
+  const int n = N - 1;
+  Eigen::MatrixXd L = Eigen::MatrixXd::Zero(n, n);
+  Eigen::VectorXd Q(n), Omv(n);
+  for (int k = 0; k < n; ++k) {
+    const int i = k + 1;
+    const double ri = r[i];
+    if (k > 0) L(k, k - 1) = 1.0 / (h * h) - 1.0 / (2 * h * ri);
+    L(k, k) = -2.0 / (h * h) - double(m * m) / (ri * ri);
+    if (k < n - 1) L(k, k + 1) = 1.0 / (h * h) + 1.0 / (2 * h * ri);
+    Q(k) = (double(m) / ri) * ((rho[i + 1] - rho[i - 1]) / (2 * h));
+    Omv(k) = Om[i];
+  }
+  Eigen::MatrixXd A = (double(m) * Omv).asDiagonal() * L;
+  for (int k = 0; k < n; ++k) A(k, k) += Q(k);
+  const Eigen::MatrixXd M = L.partialPivLu().solve(A);
+  Eigen::EigenSolver<Eigen::MatrixXd> es(M, /*computeEigenvectors=*/false);
+  std::complex<double> dom(0, 0);
+  double gmax = -1e300;
+  for (int k = 0; k < n; ++k) {
+    const auto ev = es.eigenvalues()(k);
+    if (ev.imag() > gmax) { gmax = ev.imag(); dom = ev; }
+  }
+  return (2.0 * M_PI / rhobar) * dom;  // normalisation papier
 }
 
 inline double diocotron_growth_rate(int m, double a, double b, double Rw,

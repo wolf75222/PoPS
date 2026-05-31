@@ -11,6 +11,7 @@
 // Sortie : <out>/ring_amp.csv (t, amplitude du mode l de phi sur le cercle r0). Extraire gamma :
 //   python3 scripts/validate_diocotron_growth.py <out>/ring_amp.csv --rhobar 0.9 --target <g_l> --window t0,t1
 
+#include <adc/analysis/diocotron_invariants.hpp>
 #include <adc/elliptic/geometric_mg.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
@@ -89,6 +90,7 @@ static void run(const std::string& out, int nc, int nsteps, int l, double cfl, d
     fill_ghosts(state, dom, bcU);
     assemble_rhs<Limiter, RusanovFlux>(model, state, aux, geom, R);
   };
+  double last_phase = 0;  // mis a jour par mode_amplitude (phase du mode -> Re(omega))
   auto mode_amplitude = [&]() {
     const ConstArray4 p = mg.phi().fab(0).const_array();
     const int K = 512; double sr = 0, si = 0;
@@ -103,6 +105,7 @@ static void run(const std::string& out, int nc, int nsteps, int l, double cfl, d
                        (1 - tx) * ty * P(i0, j0 + 1) + tx * ty * P(i0 + 1, j0 + 1);
       sr += v * std::cos(l * th); si += v * std::sin(l * th);
     }
+    last_phase = std::atan2(si, sr);  // phase du coefficient -> rotation du mode -> Re(omega)
     return 2.0 * std::hypot(sr, si) / K;
   };
   auto vmax = [&]() {
@@ -119,12 +122,25 @@ static void run(const std::string& out, int nc, int nsteps, int l, double cfl, d
   std::ofstream amp(out + "/ring_amp.csv");
   amp << "# diocotron highorder nc=" << nc << " l=" << l << " ng=" << ng << " cfl=" << cfl << "\n";
   amp << "t,amplitude\n";
+  // invariants physiques (verification de fidelite) : masse exacte, enstrophie non croissante
+  // (mesure la diffusion), energie et moment angulaire ~conserves, principe du maximum ; et la
+  // PHASE du mode (-> frequence de rotation Re(omega), 2e moitie de la relation de dispersion).
+  std::ofstream inv(out + "/invariants.csv");
+  inv << "# invariants diocotron nc=" << nc << " l=" << l << "\n";
+  inv << "t,mass,energy,enstrophy,angmom,rho_min,rho_max,mode_phase\n";
+  const DiocotronInvariants q0 = diocotron_invariants(U, mg.phi(), geom, cx, cy);
   const int snap = std::max(1, nsteps / 30);
-  std::printf("highorder nc=%d l=%d ng=%d dt0=%.3e\n", nc, l, ng, dt0);
+  std::printf("highorder nc=%d l=%d ng=%d dt0=%.3e | M0=%.4e Z0=%.4e P0=%.4e W0=%.4e\n",
+              nc, l, ng, dt0, q0.mass, q0.enstrophy, q0.angmom, q0.energy);
   for (int s = 0; s <= nsteps; ++s) {
     solve_aux(U);  // phi pour l'etat courant : diagnostic ET aux de l'etage 1
     amp << t << ',' << mode_amplitude() << '\n';
-    if (s % snap == 0) std::printf("  s=%5d t=%7.3f a=%.4e\n", s, t, mode_amplitude());
+    const DiocotronInvariants q = diocotron_invariants(U, mg.phi(), geom, cx, cy);
+    inv << t << ',' << q.mass << ',' << q.energy << ',' << q.enstrophy << ',' << q.angmom
+        << ',' << q.rho_min << ',' << q.rho_max << ',' << last_phase << '\n';
+    if (s % snap == 0) std::printf("  s=%5d t=%7.3f a=%.4e | dZ/Z0=%+.2e dP/P0=%+.2e rho[%.3f,%.3f]\n",
+                                   s, t, mode_amplitude(), (q.enstrophy - q0.enstrophy) / q0.enstrophy,
+                                   (q.angmom - q0.angmom) / q0.angmom, q.rho_min, q.rho_max);
     if (s == nsteps) break;
     // SSPRK3 (Shu-Osher), Poisson RE-RESOLU a chaque etage (couplage stade par stade).
     eval_L(U, R);                          // R = L(U)   (aux de solve_aux(U))
@@ -139,7 +155,8 @@ static void run(const std::string& out, int nc, int nsteps, int l, double cfl, d
     if (s % 20 == 0) dt = std::min(dt0, cfl * dxc / vmax());
   }
   amp.close();
-  std::printf("ecrit %s/ring_amp.csv\n", out.c_str());
+  inv.close();
+  std::printf("ecrit %s/ring_amp.csv + invariants.csv\n", out.c_str());
 }
 
 int main(int argc, char** argv) {
