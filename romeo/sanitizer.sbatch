@@ -76,8 +76,10 @@ cmake --build "$BUILD" -j 10 --target coupled_kokkos diocotron_amr_kokkos \
 run_san () {  # $1=tool  $2=binaire  $3...=args
   local tool="$1"; shift
   local bin="$1"; shift
+  local leak=""              # --leak-check est specifique a memcheck ; invalide ailleurs
+  [ "$tool" = "memcheck" ] && leak="--leak-check full"
   echo "----- compute-sanitizer --tool $tool  $(basename "$bin") -----"
-  local log; log=$(compute-sanitizer --tool "$tool" --leak-check full "$bin" "$@" 2>&1)
+  local log; log=$(compute-sanitizer --tool "$tool" $leak "$bin" "$@" 2>&1)
   echo "$log" | tail -25
   if echo "$log" | grep -q "ERROR SUMMARY: 0 errors"; then
     echo "  >>> $tool $(basename "$bin") : OK"
