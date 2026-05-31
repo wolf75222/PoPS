@@ -424,3 +424,91 @@ FillBoundary, Arena, reflux, MLMG ~ `GeometricMG`. Divergences assumees : pas de
 mais Laplacien a coefficient constant (EB en escalier) ; le FluxRegister / FillPatch
 multi-patch 2-niveaux est distribue (bit-identique np=1/2/4), grossier replique ou de-replique
 (multi-box reparti) ; reste le regrid d'un niveau intermediaire reparti pour 3+ niveaux (section 8).
+
+## 13. Arborescence detaillee (fichier par fichier)
+
+Coeur header-only sous `include/adc/`, range par couche. Une ligne par fichier : ce que
+c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-tete.
+
+### `core/` : types et contrat
+- `types.hpp` : scalaires de base (`Real`) + macro `ADC_HD` (host/device). Minimal, inclus partout.
+- `state.hpp` : `State` / `Aux`, les deux types ponctuels de la couche physique (POD device-callable).
+- `physical_model.hpp` : le concept `PhysicalModel` (contrat flux / source / max_wave_speed / elliptic_rhs).
+- `allocator.hpp` : allocateur du `Fab2D`, std (host) ou `cudaMallocManaged` (memoire unifiee GH200).
+
+### `mesh/` : donnees + seams (couche 3)
+- `box2d.hpp` : `Box2D`, espace d'indices d'une grille cartesienne 2D.
+- `box_array.hpp` : `BoxArray`, les boxes qui pavent un niveau (disjointes, couvrantes).
+- `box_hash.hpp` : hash spatial (bins uniformes) pour retrouver les boxes voisines.
+- `distribution_mapping.hpp` : `DistributionMapping`, box -> rang MPI.
+- `fab2d.hpp` : `Fab2D`, donnees mono-grille sur une Box2D + ghosts (equivalent du FArrayBox).
+- `multifab.hpp` : `MultiFab`, champ distribue (collection de Fab2D) (equivalent du MultiFab AMReX).
+- `geometry.hpp` : `Geometry`, correspondance indices <-> coordonnees physiques.
+- `for_each.hpp` : **seam d'execution** `for_each_cell` + `for_each_cell_reduce_*` (serie/OpenMP/Kokkos) + `device_fence`.
+- `fill_boundary.hpp` : echange de halos intra-niveau (begin/end non-bloquant).
+- `physical_bc.hpp` : CL physiques du domaine + `fill_ghosts`.
+- `refinement.hpp` : transfert AMR ratio r : prolongation (interp) + restriction (average_down).
+- `mf_arith.hpp` : combinaisons lineaires de MultiFab (saxpy, norm_inf, sum) pour les etages RK.
+
+### `model/` : physique locale (couche 1)
+- `diocotron.hpp` : transport derive E x B d'une densite n_e (cas fil rouge).
+- `euler.hpp` : Euler compressible 2D (gaz parfait).
+- `euler_poisson.hpp` : Euler couple Poisson (gravite OU plasma).
+- `two_fluid_isothermal.hpp` : deux-fluides isotherme, mode lineaire 1-Fourier.
+- `langmuir.hpp` : mode de Langmuir 0D, noyau du schema AP deux-fluides.
+
+### `operator/` : numerique local (couche 2)
+- `numerical_flux.hpp` : flux de Riemann en politique (template) : Rusanov / HLL / HLLC.
+- `reconstruction.hpp` : reconstruction d'interface : NoSlope / MUSCL (Minmod, VanLeer, MC) / WENO5-Z.
+- `spatial_operator.hpp` : `assemble_rhs` (R = -div F + S) + `compute_face_fluxes` (flux de face pour le reflux).
+
+### `elliptic/` : Poisson
+- `elliptic_solver.hpp` : concept `EllipticSolver` (contrat resoudre D phi = f).
+- `elliptic_problem.hpp` : types descriptifs de l'etage elliptique.
+- `poisson_operator.hpp` : Laplacien 5 points + lisseur Gauss-Seidel red-black.
+- `geometric_mg.hpp` : multigrille geometrique (V-cycle), `solve_robust` anti-divergence.
+- `poisson_fft.hpp` : Poisson spectral direct (FFT), distribue par bandes (MPI_Alltoall).
+- `poisson_fft_solver.hpp` : backend `EllipticSolver` FFT : `PoissonFFTSolver` (mono-rang) + `DistributedFFTSolver` (bandes MPI).
+
+### `integrator/` : temps + AMR (couche 5)
+- `ssprk.hpp` : SSPRK2 / SSPRK3 (Shu-Osher, TVD).
+- `imex.hpp` : IMEX asymptotic-preserving (raide implicite + non-raide explicite).
+- `splitting.hpp` : splitting d'operateur Lie (ordre 1) / Strang (ordre 2).
+- `two_fluid_ap.hpp` : pas deux-fluides 2D AP, portable GPU.
+- `magnetic_euler_poisson.hpp` : systeme magnetique complet (Hoffart eq 2.4), Strang cyclotron exact.
+- `amr_reflux_mf.hpp` : **moteur AMR de production** `advance_amr` (multi-patch N-niveaux distribue) + types `FluxRegister` / `CoverageMask` ; la pile mono-box `amr_*_mf` y vit en `detail::` (oracle de validation).
+- `amr_reflux.hpp` / `amr_multilevel.hpp` : reference Fab2D mono-box (2-niveaux / N-niveaux), verite-terrain du moteur ci-dessus.
+
+### `coupling/` : couplage hyperbolique-elliptique (couche 5)
+- `coupler.hpp` : coupleur generique (ferme Poisson -> aux -> advance), par etage.
+- `coupling_policy.hpp` : frequence du solve elliptique (PerStage / OncePerStep).
+- `amr_coupler.hpp` : coupleur AMR E x B mono-box (route par `advance_amr`).
+- `amr_coupler_mp.hpp` : coupleur AMR E x B multi-patch + regrid BR, parametre `replicated_coarse`.
+- `amr_regrid_coupler.hpp` : le regrid Berger-Rigoutsos extrait du coupleur multi-patch.
+- `amr_level_storage.hpp` : stockage de la hierarchie (niveaux + aux) extrait des coupleurs.
+- `amr_diagnostics.hpp` : masse / vitesse de derive via le seam reducteur.
+- `spectral_coupler.hpp` : coupleur E x B periodique distribue (FFT par bandes).
+
+### `amr/` : maillage adaptatif
+- `amr_hierarchy.hpp` : `AmrHierarchy`, la pile de niveaux raffines (niveau 0 = grossier).
+- `tag_box.hpp` : grille dense de marqueurs 0/1, entree du clustering.
+- `cluster.hpp` : clustering Berger-Rigoutsos (tags -> peu de boxes).
+- `regrid.hpp` : regrid dynamique (tague, regroupe, proper nesting).
+
+### `analysis/` : diagnostics hors hot-path
+- `diocotron_growth.hpp` : mesure du taux de croissance (host-only, Eigen).
+- `diocotron_invariants.hpp` : invariants (masse, energie, enstrophie, moment angulaire).
+- `hdf5_writer.hpp` : sortie HDF5 distribuee a l'echelle, sans gather (hyperslab MPI-IO).
+
+### `parallel/` : seam HPC
+- `comm.hpp` : seam MPI (rang / taille / all-reduce / send-recv), degenere en serie.
+- `load_balance.hpp` : equilibrage des boxes sur les rangs (round-robin / SFC).
+
+### `solver/` + `src/` : facades compilees
+- `solver/{diocotron,euler_poisson,two_fluid_ap}_solver.hpp` + `src/*.cpp` : facades PIMPL `libadc`, API stable sans template (apps + bindings Python).
+
+### Hors `include/`
+- `examples/` (23 pilotes, dont `examples/gpu/`) : un `main` chacun, demos CPU / MPI / GPU + generation de GIF.
+- `tests/` (81, dont `test_mpi_*`) : suite CTest, serie + MPI np=4 bit-identique.
+- `romeo/` : jobs SLURM ROMEO (hero-runs, sanitizer GPU) + journal `HERO_RESULTS.md`.
+- `scripts/` : generation des figures / GIF + extraction du taux de croissance + jobs.
