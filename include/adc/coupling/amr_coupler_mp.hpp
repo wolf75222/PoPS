@@ -161,7 +161,7 @@ class AmrCouplerMP {
 
   void step(Real dt) {
     update();
-    amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(
+    advance_amr<NoSlope, RusanovFlux>(
         model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_);
   }
 

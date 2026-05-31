@@ -904,12 +904,24 @@ struct LevelHierarchy {
   std::vector<AmrLevelMP> levels;    // niveau 0 = grossier, niveaux >0 = patchs fins
   Box2D base_dom;                    // empreinte du niveau de base
   Periodicity base_per{true, true};  // CL du domaine de base
+  bool coarse_replicated = true;     // niveau 0 replique (true) ou multi-box reparti (false)
 };
+
+// Entree unifiee de production : avance la hierarchie d'un pas dt. Forme "pieces" (le coupleur
+// possede son propre stack et passe les vecteurs directement) et forme LevelHierarchy. La porte
+// TRANSMET coarse_replicated au moteur ; sans cela un grossier de-replique repasserait en
+// replique (mf_find_box au lieu de parallel_copy). coarse_replicated=true (defaut) -> identique
+// au comportement historique.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
+                 Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true) {
+  amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, levels, base_dom, dt, base_per,
+                                                         coarse_replicated);
+}
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, LevelHierarchy& h, Real dt) {
-  amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt,
-                                                         h.base_per);
+  advance_amr<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt, h.base_per, h.coarse_replicated);
 }
 
 }  // namespace adc
