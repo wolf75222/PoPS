@@ -26,6 +26,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 using namespace adc;
@@ -50,6 +51,21 @@ int main() {
 
   // (C) garde-fou eps : etat implicite actuel du stencil.
   chk(EllipticProblem{}.eps == Real(1), "eps_implicite_vaut_1");
+
+  // (C bis) eps != 1 n'est pas supporte (stencil a coefficient constant) :
+  // make_elliptic_solver doit LANCER plutot que de l'ignorer en silence.
+  {
+    EllipticProblem prob_eps2{Real(2), bc, false};
+    bool a_lance = false;
+    try {
+      GeometricMG bad =
+          make_elliptic_solver<GeometricMG>(geom, ba, prob_eps2);
+      (void)bad;
+    } catch (const std::invalid_argument&) {
+      a_lance = true;
+    }
+    chk(a_lance, "eps_different_de_1_lance");
+  }
 
   // homogeneous_bc(probleme) == homogeneous(probleme.bc), champ par champ.
   {

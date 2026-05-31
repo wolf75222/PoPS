@@ -7,6 +7,7 @@
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
 
+#include <stdexcept>
 #include <utility>
 
 // Types DESCRIPTIFS de l'etage elliptique. Ils NOMMENT des valeurs et des
@@ -65,6 +66,15 @@ template <class Solver, class... Args>
 inline Solver make_elliptic_solver(const Geometry& geom, const BoxArray& ba,
                                    const EllipticProblem& problem,
                                    Args&&... args) {
+  // Garde scientifique : eps n'est PAS lu par le stencil 5 points
+  // (apply_laplacian / poisson_residual / gs_color ecrivent lap sans facteur,
+  // soit eps = 1). Poser eps != 1 croirait resoudre un Laplacien a coefficient
+  // variable sans aucun effet sur les valeurs : on interdit ce piege au lieu de
+  // l'ignorer silencieusement.
+  if (problem.eps != Real(1))
+    throw std::invalid_argument(
+        "EllipticProblem::eps != 1 non supporte (operateur Laplacien a "
+        "coefficient constant)");
   return Solver(geom, ba, problem.bc, std::forward<Args>(args)...);
 }
 
