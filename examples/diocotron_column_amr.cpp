@@ -265,7 +265,12 @@ int main(int argc, char** argv) {
   if (ml) compute_aux_ml(); else compute_coarse_aux();
   if (refine) mf_average_down_multi(Uf, Uc);
   const double M0 = mass();
-  double dt = 0.4 * dxc / vmax(), t = 0;
+  // CFL initial. La derive E x B de l'anneau est ~constante en phase lineaire, donc dt ne doit
+  // JAMAIS croitre au-dela de dt0 : a haute resolution un solve Poisson qui converge mal peut
+  // rendre vmax ~ 0, et dt = 0.4 dx / vmax exploserait (t -> 1e12, nan, simulation perdue). On
+  // plafonne dt a dt0 (no-op pour les runs stables ou vmax >= vmax0 ; garde-fou sinon).
+  const double dt0 = 0.4 * dxc / vmax();
+  double dt = dt0, t = 0;
 
   std::ofstream amp(out + "/ring_amp.csv");
   amp << "# diocotron colonne AMR nc=" << nc << " refine=" << refine << " l=" << l
@@ -288,7 +293,7 @@ int main(int argc, char** argv) {
     if (ml) compute_aux_ml(); else { compute_coarse_aux(); if (refine) inject_aux(); }
     amr_step_2level_multipatch<NoSlope, RusanovFlux>(model, Uc, dom, dxc, dyc, Uf, auxc, auxf, dt);
     t += dt;
-    if (s % 20 == 0) dt = 0.4 * dxc / vmax();
+    if (s % 20 == 0) dt = std::min(dt0, 0.4 * dxc / vmax());
   }
   amp.close();
   std::ofstream(out + "/cells.txt") << "max_cells " << maxcells << "\n"

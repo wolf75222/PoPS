@@ -211,6 +211,29 @@ l'uniforme équivalent (la promesse de M2b, à l'échelle).
 - **Gate** : taux convergé vers `0.911`, masse conservée sur tout le run, scaling
   fort et faible tracés.
 
+- **Résultats réels (GH200, ROMEO `armgpu`).** Le pipeline tourne bout en bout sur H100 :
+  `diocotron_column_amr` (rendu Kokkos-compatible, init `Kokkos::ScopeGuard`) se construit sous
+  Kokkos/CUDA (`nvcc_wrapper`, sm_90) et s'exécute sur le GPU. Reproduction EXACTE de la table
+  M2b-conv sur matériel réel, taux extrait par `validate_diocotron_growth.py` (rhobar=0.9,
+  omega_D=0.143) :
+
+  | cas (1 GPU GH200 H100) | cellules | gamma_norm | table M2b |
+  |---|---|---|---|
+  | uniforme eff 448 (nc=448) | 200 704 | 0.577 | 0.577 |
+  | AMR `ml` eff 448 (nc=224) | 82 808  | 0.592 | 0.592 |
+
+- **Barrière identifiée vers `0.911` : instabilité haute résolution.** Monter plus haut fait
+  diverger la simulation : densité/vitesse partent en `nan` dès les premiers pas, AUX DEUX schémas
+  (uniforme nc>=512, et AMR `ml` nc>=320 à ~66 patchs). Diagnostic : ce n'est PAS le pas de temps.
+  Le symptôme premier était une explosion d'horloge (`dt = 0.4 dx / vmax` avec `vmax ~ 0` quand le
+  Poisson converge mal -> `dt` énorme -> `t -> 2.3e12`) ; on plafonne `dt` à sa valeur initiale
+  `dt0` (la dérive E x B de l'anneau est ~constante, `dt` ne doit jamais croître), ce qui supprime
+  l'explosion mais le `nan` du CHAMP persiste avec `dt` borné. La cause est donc en amont, dans le
+  couplage Poisson/densité à haute résolution (multigrille géométrique qui converge mal au bord
+  embedded sur grille fine, et/ou plancher de densité `1e-3` franchi). C'est exactement pourquoi la
+  table s'arrête à eff 448. Lever ce verrou (durcir `GeometricMG` au bord embedded haute résolution,
+  garde de plancher de densité dans le pas) est le prochain chantier scientifique pour viser `0.911`.
+
 ## Décisions ouvertes (à trancher avant de coder)
 
 1. **Jusqu'où va-t-on ?** Étapes 0-1 (AMR distribué GPU à grossier répliqué)
