@@ -36,10 +36,21 @@
 #include <string>
 #include <vector>
 
+#ifdef ADC_HAS_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
+
 using namespace adc;
 static constexpr double kPi = 3.14159265358979323846;
 
 int main(int argc, char** argv) {
+#ifdef ADC_HAS_KOKKOS
+  // Initialise Kokkos AVANT toute allocation de fab / kernel du seam (sinon l'espace Cuda n'est
+  // pas initialise -> abort "device not initialized"). ScopeGuard declare en PREMIER => detruit
+  // en DERNIER, donc finalize APRES la destruction de tous les MultiFab locaux (RAII correct,
+  // GPU comme CPU). Sans Kokkos (build serie/OpenMP) la garde disparait, comportement inchange.
+  Kokkos::ScopeGuard ksg(argc, argv);
+#endif
   const std::string out = (argc > 1) ? argv[1] : "dio_col_amr";
   const int nc = (argc > 2) ? std::atoi(argv[2]) : 96;
   const int nsteps = (argc > 3) ? std::atoi(argv[3]) : 1200;
