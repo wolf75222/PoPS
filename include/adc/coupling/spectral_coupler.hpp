@@ -1,6 +1,6 @@
 #pragma once
 
-#include <adc/elliptic/poisson_fft.hpp>
+#include <adc/elliptic/poisson_fft_solver.hpp>  // DistributedFFTSolver (enveloppe PoissonFFT)
 #include <adc/integrator/amr_reflux.hpp>  // advance_fab_1c, xface_box, yface_box
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
@@ -45,15 +45,13 @@ class SpectralCoupler {
         me_(my_rank()),
         nyl_(Ny / np_),
         y0_(me_ * nyl_),
-        solver_(Nx, Ny, Lx, Ly),
-        rho_(static_cast<std::size_t>(nyl_) * Nx) {
+        fft_(Geometry{Box2D::from_extents(Nx, Ny), 0.0, Lx, 0.0, Ly}) {
     std::vector<Box2D> slabs;
     for (int r = 0; r < np_; ++r)
       slabs.push_back(Box2D{{0, r * nyl_}, {Nx - 1, (r + 1) * nyl_ - 1}});
     ba_ = BoxArray(std::move(slabs));
     dm_ = DistributionMapping(np_, np_);  // box r -> rang r
     U_ = MultiFab(ba_, dm_, 1, 1);
-    Uphi_ = MultiFab(ba_, dm_, 1, 1);
     Uaux_ = MultiFab(ba_, dm_, 3, 1);
   }
 
@@ -70,16 +68,15 @@ class SpectralCoupler {
 
   // Poisson + aux + halos sans avancer (pour fixer dt / diagnostiquer).
   void solve_aux() {
+    // rho dans le rhs du solveur FFT distribue (meme decoupage en bandes que U_, donc
+    // bit-identique a l'ancien chemin inline qui appelait PoissonFFT directement).
     const ConstArray4 u = U_.fab(0).const_array();
-    for (int jl = 0; jl < nyl_; ++jl)
-      for (int i = 0; i < Nx_; ++i)
-        rho_[jl * Nx_ + i] = model_.alpha * (u(i, y0_ + jl) - model_.n_i0);
-    solver_.solve(rho_, phi_);
-    Array4 p = Uphi_.fab(0).array();
-    for (int jl = 0; jl < nyl_; ++jl)
-      for (int i = 0; i < Nx_; ++i) p(i, y0_ + jl) = phi_[jl * Nx_ + i];
-    fill_boundary(Uphi_, dom_, Periodicity{true, true});
-    const ConstArray4 pc = Uphi_.fab(0).const_array();
+    Array4 r = fft_.rhs().fab(0).array();
+    for (int j = y0_; j < y0_ + nyl_; ++j)
+      for (int i = 0; i < Nx_; ++i) r(i, j) = model_.alpha * (u(i, j) - model_.n_i0);
+    fft_.solve();
+    fill_boundary(fft_.phi(), dom_, Periodicity{true, true});
+    const ConstArray4 pc = fft_.phi().fab(0).const_array();
     Array4 a = Uaux_.fab(0).array();
     for (int j = y0_; j < y0_ + nyl_; ++j)
       for (int i = 0; i < Nx_; ++i) {
@@ -127,9 +124,8 @@ class SpectralCoupler {
   int np_, me_, nyl_, y0_;
   BoxArray ba_;
   DistributionMapping dm_;
-  MultiFab U_, Uphi_, Uaux_;
-  PoissonFFT solver_;
-  std::vector<double> rho_, phi_;
+  MultiFab U_, Uaux_;
+  DistributedFFTSolver fft_;
 };
 
 }  // namespace adc
