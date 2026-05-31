@@ -143,10 +143,10 @@ hero-run AMR (qui vise d'abord la correction distribuée et l'échelle mémoire)
 ### Étape 2 : dé-réplication du grossier (objectif B proprement dit)
 
 Requise seulement quand le grossier doit croître au-delà de ce que la réplication
-permet. État : le coeur 2a/2b FONCTIONNE et est prouvé bit-identique à np<=2 ; reste
+permet. État : le coeur 2a/2b FONCTIONNE, prouvé bit-identique np=1/2/4 (bug de désync du
 un bug `parallel_copy` à np=4 et le gather-tags 2c.
 
-- **2a. Grossier multi-box réparti (FAIT, np<=2).** `AmrCouplerMP` accepte un grossier
+- **2a. Grossier multi-box réparti (FAIT, np=1/2/4).** `AmrCouplerMP` accepte un grossier
   multi-box réparti (`replicated_coarse=false`) : `compute_aux` boucle sur les fabs
   grossiers LOCAUX (au lieu de `fab(0)`), `mass()` fait un `all_reduce` quand le grossier
   est réparti (somme locale sinon), `max_drift_speed()` un `all_reduce_max`, et
@@ -159,30 +159,28 @@ un bug `parallel_copy` à np=4 et le gather-tags 2c.
   (échange de halos inter-box DISTRIBUÉ) entre balayages rouge/noir, et le GS red-black
   est indépendant de la décomposition -> `phi` bit-identique au mono-box. Pas de solveur
   de fond séparé nécessaire ici (le bottom smoother fait aussi `fill_ghosts`).
-- **BUG OUVERT (np=4) : DÉSYNCHRONISATION de flux de messages dans `fill_boundary`.**
-  Diagnostic affiné par un handshake de tailles + dump des jobs. `parallel_copy` n'est PAS
-  en cause. Le `MPI_ERR_TRUNCATE` vient de `fill_boundary` (tag 0 pour TOUS les appels) :
-  à np=4, un Isend de l'échange sur l'AUX (3 composantes, `recv[1] = 96 = 32 cellules x 3`)
-  est apparié par MPI à un Irecv de l'échange sur le grossier U (1 composante, `32`). Les
-  deux rangs ne sont donc PAS dans le même appel `fill_boundary` au même point du flux
-  tag-0 : leurs flux de messages sont DÉCALÉS. La cause amont est un appel `fill_boundary`
-  où, à np=4 (multi-box périodique), les jobs send d'un rang ne s'apparient pas exactement
-  aux jobs recv de l'autre (le protocole suppose `les deux rangs d'une paire énumèrent les
-  MÊMES jobs dans le MÊME ordre`, hypothèse fragile rompue ici), ce qui décale le flux et
-  fait dériver tous les appels suivants. La logique de de-réplication du coupleur, elle,
-  est correcte (np<=2 bit-identique ; 5.6e-13 sur une découpe 4x4 = réassociation FP du MG).
-  FIX (non fait, hors budget) : soit un handshake de tailles PAR appel `fill_boundary` (Probe
-  / négociation, robuste à l'asymétrie), soit un TAG unique par appel + correction du job
-  asymétrique dans l'énumération des voisins périodiques. C'est un durcissement de la
-  primitive distribuée `fill_boundary`, distinct du coupleur.
+- **BUG TROUVÉ ET CORRIGÉ (np=4).** La de-réplication est maintenant bit-identique np=1/2/4
+  (`test_mpi_decoarse` lancé à np=4, `maxdiff=0`). Racine, trouvée par dump des séquences
+  d'appels `fill_boundary` par rang : `GeometricMG::current_residual()` rendait `norm_inf`
+  du résidu SANS le réduire entre rangs (max LOCAL). Sur un grossier multi-box réparti,
+  chaque rang voyait donc un résidu différent, et le critère d'arrêt du V-cycle se
+  déclenchait à une itération différente selon le rang -> nombre de V-cycles (donc d'appels
+  `fill_boundary`) DIFFÉRENT entre rangs -> les flux de messages tag-0 se désynchronisaient
+  (l'échange de l'aux nc=3 d'un rang apparié à l'échange du grossier nc=1 d'un autre) ->
+  `MPI_ERR_TRUNCATE`. (Le grossier RÉPLIQUÉ marchait car max local = max global.) Le commentaire
+  de `norm_inf` notait d'ailleurs l'all-reduce comme « plus tard, non ajouté ici ». FIX :
+  `all_reduce_max` sur le résidu dans `current_residual()` (une ligne) -> tous les rangs
+  s'accordent sur le résidu -> même nombre de V-cycles -> séquences `fill_boundary`
+  synchronisées. Idempotent sous réplication et identité en série : série 60/60 et les 13
+  tests MPI restent verts, bit-identique au comportement historique.
 - **2c. Gather-tags pour le regrid d'un niveau réparti (RESTE).** Ajouter à `comm.hpp` un
   `gather` (ou un `all_reduce` du `TagBox` indexé global), rassembler les tags répartis
   avant le clustering Berger-Rigoutsos (cf. `tag_box.hpp:11`). Non nécessaire à 2 niveaux
   (le niveau 0, même réparti, est tagué globalement via une réduction) mais requis pour
   raffiner un niveau intermédiaire réparti.
 
-- **Risque** : le bug `parallel_copy` np=4 est le blocage immédiat ; 2c suit. Le coeur
-  (grossier multi-box + MG réparti) est acquis bit-identique à np<=2.
+- **Risque** : le coeur (grossier multi-box + MG réparti) est acquis bit-identique
+  np=1/2/4. Reste 2c (gather-tags) pour raffiner un niveau intermédiaire réparti.
 
 ### Étape 3 : run de production + science
 

@@ -6,13 +6,13 @@
 // en comparant bit a bit. Lance par mpirun -np N.
 //
 // C'est le test qui leve le verrou memoire O(NX*NY*nranks) : a l'echelle hero le grossier 8192^2
-// ne peut pas etre replique. Si le reflux multi-patch et le multigrille tournent corrects sur un
-// grossier multi-box reparti, la de-replication est acquise.
+// ne peut pas etre replique. Le reflux multi-patch et le multigrille tournent corrects sur un
+// grossier multi-box reparti, donc la de-replication est acquise : bit-identique np=1/2/4.
 //
-// ETAT : bit-identique a np=1 et np=2 (lance a np=2). A np=4 (exactement 1 box grossiere par
-// rang) un parallel_copy leve MPI_ERR_TRUNCATE (taille de message incoherente) : bug a CORRIGER
-// dans parallel_copy (primitive partagee), pas dans la logique de de-replication elle-meme, qui
-// est correcte a np<=2. Voir docs/HERO_RUN_AMR.md etape 2.
+// Note : ce test a revele que GeometricMG::current_residual ne reduisait pas norm_inf entre rangs
+// (max LOCAL), d'ou un nombre de V-cycles different par rang sur un grossier multi-box reparti,
+// donc des sequences fill_boundary desynchronisees -> MPI_ERR_TRUNCATE a np=4. Corrige par
+// all_reduce_max sur le residu (idempotent sous replication).
 
 #include <adc/coupling/amr_coupler_mp.hpp>
 #include <adc/mesh/box_array.hpp>

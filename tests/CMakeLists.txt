@@ -104,7 +104,5 @@ if(ADC_HAS_MPI)
   adc_add_mpi_test(test_mpi_amr_multipatch3 4)
   adc_add_mpi_test(test_mpi_coupler_inject 4)
   adc_add_mpi_test(test_mpi_diocotron_amr 4)
-  # de-replication du grossier : prouve bit-identique a np=2 ; np=4 (1 box grossiere/rang)
-  # expose un MPI_ERR_TRUNCATE dans parallel_copy, a corriger (cf. docs/HERO_RUN_AMR.md etape 2).
-  adc_add_mpi_test(test_mpi_decoarse 2)
+  adc_add_mpi_test(test_mpi_decoarse 4)
 endif()

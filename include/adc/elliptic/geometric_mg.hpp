@@ -102,11 +102,16 @@ class GeometricMG {
   void solve() { solve(Real(1e-8), 50); }
   Real residual() { return current_residual(); }
 
-  // Residu courant (norme infinie) au niveau le plus fin.
+  // Residu courant (norme infinie) au niveau le plus fin. all_reduce_max OBLIGATOIRE pour
+  // un grossier MULTI-BOX REPARTI : sans lui, norm_inf rend le max LOCAL (different par rang),
+  // donc le critere d'arret du V-cycle se declenche a des iterations differentes selon le rang
+  // -> nombre de V-cycles (et d'appels fill_boundary) different -> desynchronisation des flux
+  // MPI (MPI_ERR_TRUNCATE). Idempotent sous replication (max local = global sur chaque rang) et
+  // identite en serie -> bit-identique au comportement historique.
   Real current_residual() {
     poisson_residual(lev_[0].phi, lev_[0].rhs, lev_[0].geom, bc_, lev_[0].res,
                      mask_ptr(0));
-    return norm_inf(lev_[0].res);
+    return all_reduce_max(norm_inf(lev_[0].res));
   }
 
  private:
