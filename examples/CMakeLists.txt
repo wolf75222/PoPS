@@ -26,6 +26,15 @@ target_link_libraries(magnetic_diocotron PRIVATE adc::adc)
 add_executable(bench_amr bench_amr.cpp)
 target_link_libraries(bench_amr PRIVATE adc::adc)
 
+# Garde de NON-REGRESSION (perf/ressources) cablee sur le bench existant, en mode
+# "smoke" : petite taille, GARDE DURE deterministe (derive de masse < 1e-6, sinon
+# rc!=0). Le DEBIT reste informatif (jamais asserte) => non flaky. L'executable de
+# bench reste SEPARE des TU de test : le bit-identique des tests serie/MPI est
+# preserve par construction (aucun test existant ni .hpp du coeur touche).
+if(ADC_BUILD_TESTS)
+  add_test(NAME bench_amr_smoke COMMAND bench_amr 64 20 smoke)
+endif()
+
 add_executable(diocotron_mpi diocotron_mpi.cpp)
 target_link_libraries(diocotron_mpi PRIVATE adc::adc)
 

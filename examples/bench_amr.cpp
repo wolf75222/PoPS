@@ -7,7 +7,13 @@
 //   2. coupleur AMR multi-patch (AmrCouplerMP) + regrid Berger-Rigoutsos : verifie que
 //      l'AMR couple tourne et CONSERVE, et son debit.
 //
-// Run : OMP_NUM_THREADS=k ./build-omp/bin/bench_amr [n] [nsteps]
+// Run : OMP_NUM_THREADS=k ./build-omp/bin/bench_amr [n] [nsteps] [mode]
+//   mode = "tf" | "amr" | "both" (defaut) | "smoke"
+//
+// Mode "smoke" (garde de non-regression CTest) : meme physique, petite taille, et
+// renvoie rc!=0 si une GARDE DURE est violee (derive de masse au-dela d'un seuil
+// large). Le DEBIT reste informatif (jamais asserte). Cf. examples/CMakeLists.txt
+// (add_test bench_amr_smoke). En "smoke", [n] et [nsteps] gardent un defaut reduit.
 
 #include <adc/coupling/amr_coupler_mp.hpp>
 #include <adc/elliptic/geometric_mg.hpp>
@@ -53,10 +59,18 @@ static double bench_tfap(int n, int nsteps, double& drift, double& dev) {
 }
 
 int main(int argc, char** argv) {
-  const int n = (argc > 1) ? std::atoi(argv[1]) : 256;
-  const int nsteps = (argc > 2) ? std::atoi(argv[2]) : 100;
-  const std::string mode = (argc > 3) ? argv[3] : "both";  // "tf" | "amr" | "both"
+  const std::string mode = (argc > 3) ? argv[3] : "both";  // "tf" | "amr" | "both" | "smoke"
+  const bool smoke = (mode == "smoke");
+  // En smoke : petite grille / peu de pas par defaut (garde rapide, deterministe).
+  const int n = (argc > 1) ? std::atoi(argv[1]) : (smoke ? 64 : 256);
+  const int nsteps = (argc > 2) ? std::atoi(argv[2]) : (smoke ? 20 : 100);
   const double cells = double(n) * n * nsteps;
+
+  // Garde DURE (smoke) : seuil LARGE de derive de masse. Le schema conserve la masse
+  // a la precision machine (~1e-12) ; on tolere tres large pour ne JAMAIS etre flaky,
+  // tout en attrapant une vraie regression (fuite/desequilibre du reflux AMR).
+  const double kDriftMax = 1e-6;
+  int rc = 0;
 
   // --- 1. deux-fluides AP mono-grille (scaling OpenMP, backend multigrille) ---
   if (mode != "amr") {
@@ -65,6 +79,10 @@ int main(int argc, char** argv) {
     std::printf("two-fluid AP (MG) n=%d, %d pas : %.3f s | %.1f M mailles-MAJ/s | "
                 "%.2f us/pas | drift_masse=%.2e\n",
                 n, nsteps, t, cells / t / 1e6, t / nsteps * 1e6, drift);
+    if (smoke && drift > kDriftMax) {
+      std::printf("FAIL garde masse two-fluid AP (MG) : drift=%.2e > %.2e\n", drift, kDriftMax);
+      rc = 1;
+    }
 
     // backend FFT direct (CL periodique, n puissance de 2) : meme physique, plus rapide.
     if ((n & (n - 1)) == 0) {
@@ -122,6 +140,11 @@ int main(int argc, char** argv) {
     std::printf("AMR multi-patch couple n=%d (+1 niveau fin), %d pas : %.3f s | %.2f ms/pas | "
                 "npatch=%d | drift_masse=%.2e\n",
                 n, nsteps, t, t / nsteps * 1e3, sim.levels()[1].U.local_size(), drift);
+    if (smoke && drift > kDriftMax) {
+      std::printf("FAIL garde masse AMR couple : drift=%.2e > %.2e\n", drift, kDriftMax);
+      rc = 1;
+    }
   }
-  return 0;
+  if (smoke && rc == 0) std::printf("OK bench_amr smoke (masse conservee sous %.0e)\n", kDriftMax);
+  return rc;
 }

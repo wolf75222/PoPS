@@ -40,3 +40,12 @@ adc_gpu_example(euler_poisson_kokkos) # Euler-Poisson 4 variables
 adc_gpu_example(two_fluid_ap_kokkos)  # deux-fluides 2D AP entier
 adc_gpu_example(diocotron_amr_kokkos) # AMR (coupleur + reflux + regrid) sous le seam
 adc_gpu_example(diocotron_amr_mpi_kokkos) # AMR distribue multi-GPU (MPI + Kokkos/CUDA)
+
+# Garde de NON-REGRESSION ressources : arena_kokkos renvoie deja rc!=0 si le pool
+# memoire unifiee declenche un nouveau cudaMallocManaged apres rodage (new_mallocs!=0).
+# On le PROMEUT en CTest. Conditionnel a ADC_USE_KOKKOS (ce fichier n'est inclus que
+# dans ce cas) ET a ADC_BUILD_TESTS (enable_testing() n'est actif que la). Garde DURE
+# deterministe : 0 allocation attendue par pas apres rodage.
+if(ADC_BUILD_TESTS)
+  add_test(NAME arena_kokkos_no_malloc COMMAND arena_kokkos)
+endif()
