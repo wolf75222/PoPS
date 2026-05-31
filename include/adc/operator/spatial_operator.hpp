@@ -60,13 +60,27 @@ ADC_HD inline typename Model::State reconstruct(const ConstArray4& u, int i,
                                                 int j, int dir, Real sgn,
                                                 const Limiter& lim) {
   typename Model::State s = load_state<Model>(u, i, j);
-  if constexpr (Limiter::n_ghost > 1) {
+  if constexpr (Limiter::n_ghost == 2) {
+    // MUSCL : pente limitee par composante (ordre 2).
     for (int c = 0; c < Model::n_vars; ++c) {
       const Real am = (dir == 0) ? u(i, j, c) - u(i - 1, j, c)
                                  : u(i, j, c) - u(i, j - 1, c);
       const Real ap = (dir == 0) ? u(i + 1, j, c) - u(i, j, c)
                                  : u(i, j + 1, c) - u(i, j, c);
       s[c] += sgn * Real(0.5) * lim(am, ap);
+    }
+  } else if constexpr (Limiter::n_ghost >= 3) {
+    // WENO5 (ordre 5) : valeur de face depuis un stencil 5 points oriente par sgn
+    // (sgn>0 -> face +dir ; sgn<0 -> face -dir, stencil renverse). lim inutilise.
+    (void)lim;
+    const int d = (sgn > Real(0)) ? 1 : -1;
+    for (int c = 0; c < Model::n_vars; ++c) {
+      if (dir == 0)
+        s[c] = weno5z(u(i - 2 * d, j, c), u(i - d, j, c), u(i, j, c),
+                      u(i + d, j, c), u(i + 2 * d, j, c));
+      else
+        s[c] = weno5z(u(i, j - 2 * d, c), u(i, j - d, c), u(i, j, c),
+                      u(i, j + d, c), u(i, j + 2 * d, c));
     }
   }
   return s;

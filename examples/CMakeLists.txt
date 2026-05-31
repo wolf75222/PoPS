@@ -20,6 +20,9 @@ target_link_libraries(diocotron_multipatch PRIVATE adc::adc)
 add_executable(diocotron_column_amr diocotron_column_amr.cpp)
 target_link_libraries(diocotron_column_amr PRIVATE adc::adc)
 
+add_executable(diocotron_highorder diocotron_highorder.cpp)
+target_link_libraries(diocotron_highorder PRIVATE adc::adc)
+
 add_executable(magnetic_diocotron magnetic_diocotron.cpp)
 target_link_libraries(magnetic_diocotron PRIVATE adc::adc)
 
