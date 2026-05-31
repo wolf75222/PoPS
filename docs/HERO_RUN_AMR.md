@@ -168,7 +168,7 @@ un bug `parallel_copy` à np=4 et le gather-tags 2c.
   tag-0 : leurs flux de messages sont DÉCALÉS. La cause amont est un appel `fill_boundary`
   où, à np=4 (multi-box périodique), les jobs send d'un rang ne s'apparient pas exactement
   aux jobs recv de l'autre (le protocole suppose `les deux rangs d'une paire énumèrent les
-  MÊMES jobs dans le MÊME ordre` -- hypothèse fragile rompue ici), ce qui décale le flux et
+  MÊMES jobs dans le MÊME ordre`, hypothèse fragile rompue ici), ce qui décale le flux et
   fait dériver tous les appels suivants. La logique de de-réplication du coupleur, elle,
   est correcte (np<=2 bit-identique ; 5.6e-13 sur une découpe 4x4 = réassociation FP du MG).
   FIX (non fait, hors budget) : soit un handshake de tailles PAR appel `fill_boundary` (Probe
