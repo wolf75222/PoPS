@@ -287,6 +287,27 @@ puis d'y ajouter notre AMR, puis SAMRAI.
   patchs incluse). Le défaut `recon=0` (`NoSlope`) reste BIT À BIT identique aux runs enregistrés. Les
   ~5 % restants vers `0.911` (transitoire initial, intégration en temps Euler explicite d'ordre 1,
   représentation embedded du bord) sont la cible fine ; le gros du gain est acquis à coût modeste.
+- **M2b-HO : voie haute precision WENO5-Z + SSPRK3 (ordre eleve espace ET temps), erreur vs analytique.**
+  La recherche (papier Hoffart, methodes classiques : Jiang-Shu, Borges WENO-Z, Gottlieb-Shu-Tadmor)
+  confirme les deux leviers : reconstruction ordre 5 ET temps ordre 3 (forward Euler biaise un mode en
+  croissance exponentielle, instable sur l'axe imaginaire). `examples/diocotron_highorder.cpp` :
+  diocotron uniforme WENO5-Z + SSPRK3, Poisson RE-RESOLU a chaque etage RK (`solve_robust`). On compare
+  au papier (modes 3/4/5 vs analytique 0.772 / 0.911 / 0.683, erreur relative). L'analytique du depot
+  (`diocotron_growth.hpp`, Petri/Davidson-Felice) est INSENSIBLE au lissage du profil (mode 4 = 0.9118
+  au profil net), donc 0.911 est bien la cible du pas net qu'on simule, et la normalisation
+  (`omega_D = rho_bar/2pi`) est coherente analytique/simu.
+  Resultat (fenetre du papier, eff 256, WENO5+SSPRK3) : `gamma_norm` mode 3 = 0.838 (+8.5 %), mode 4 =
+  0.985 (+8.1 %), mode 5 = 0.730 (+6.9 %). Donc l'ordre eleve fait passer le mode 4 de 0.56 (sous-evalue,
+  `NoSlope`+Euler, trop diffusif) a ~0.98 (SUR-evalue), du BON cote (comme le maillage grossier du papier,
+  0.935), mais PAS encore < 1 %. Le sur-tir est UNIFORME (~7-8.5 %) sur les trois modes, PLAT en resolution
+  (eff 256 ~ eff 512 ~ eff 1024) et PLAT en ordre de reconstruction (WENO5 ~ VanLeer) : ce n'est donc NI
+  le schema NI la resolution, mais l'absence de PLATEAU exponentiel propre (le transitoire initial decline
+  directement vers la saturation, sans phase lineaire nette ou lire le mode propre), liee a la geometrie
+  CARTESIENNE en escalier (paroi conductrice + bords d'anneau non alignes) la ou le papier emploie une
+  geometrie EPOUSANT le bord (FEM structure-preserving, disque courbe exact). Atteindre < 0.5 % comme le
+  papier demande donc un bord conducteur EPOUSANT (cellules coupees / grille polaire), prochain chantier ;
+  la reconstruction et l'integration d'ordre eleve, elles, sont en place et verifiees
+  (`test_weno_convergence` : ordre 5.00).
 - **M3 : système magnétique complet (eq 2.4, FAIT).** Au-delà de la limite de dérive : Euler
   compressible + énergie + Poisson + force de Lorentz `m × Ω`. L'architecture était déjà prête : le
   modèle `EulerPoisson` porte l'hydro, la source `-ρ∇φ`, le travail `-m·∇φ` et le second membre
