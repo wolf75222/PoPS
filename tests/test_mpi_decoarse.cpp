@@ -63,17 +63,10 @@ int main(int argc, char** argv) {
     }
   };
 
-  // patchs fins : region [8..23]^2 (coarse) en 2x2 quadrants -> 4 patchs repartis.
-  const int I0 = 8, I1 = 23, J0 = 8, J1 = 23, MI = 15, MJ = 15;
-  std::vector<Box2D> faces = {
-      {{2 * I0, 2 * J0}, {2 * MI + 1, 2 * MJ + 1}},
-      {{2 * (MI + 1), 2 * J0}, {2 * I1 + 1, 2 * MJ + 1}},
-      {{2 * I0, 2 * (MJ + 1)}, {2 * MI + 1, 2 * J1 + 1}},
-      {{2 * (MI + 1), 2 * (MJ + 1)}, {2 * I1 + 1, 2 * J1 + 1}}};
-  BoxArray baf(faces);
-  DistributionMapping dmf(static_cast<int>(faces.size()), n_ranks());
-
-  auto run = [&](const BoxArray& bac, const DistributionMapping& dmc, bool replicated) {
+  // un run AMR diocotron complet (20 pas) sur un grossier donne, renvoie le grossier final. Les
+  // patchs fins (baf/dmf) sont parametres pour pouvoir exercer differents motifs de couverture.
+  auto run = [&](const BoxArray& bac, const DistributionMapping& dmc, bool replicated,
+                 const BoxArray& baf, const DistributionMapping& dmf) {
     MultiFab Uc(bac, dmc, 1, 1), Uf(baf, dmf, 1, 1);
     fillc(Uc); fillf(Uf); mf_average_down_mb(Uf, Uc);
     std::vector<AmrLevelMP> LP;
@@ -86,37 +79,60 @@ int main(int argc, char** argv) {
     return MultiFab(sim.coarse());
   };
 
-  // REF : grossier mono-box REPLIQUE (box 0 sur chaque rang).
+  // grossier mono-box REPLIQUE (box 0 sur chaque rang) : la reference.
   BoxArray ba_repl(std::vector<Box2D>{dom});
-  MultiFab UcRef = run(ba_repl, DistributionMapping(std::vector<int>(1, me)), /*replicated=*/true);
+  // grossier 2x2 (4 boxes 16x16) REPARTI round-robin -> de-replique. La hierarchie multigrille
+  // coarsen 16->8->4->2->1 : 4 boxes 1x1 pavent EXACTEMENT le fond MG 2x2, donc le MG multi-box
+  // est bit-identique au mono-box. (Un decoupage plus fin, p.ex. 4x4, ne pave PAS le fond 2x2 :
+  // la hierarchie MG degenere et converge a un point distinct a la tolerance pres, non
+  // bit-identique et non deterministe -> inutilisable comme oracle. On garde donc 2x2.)
+  BoxArray ba_dist(std::vector<Box2D>{
+      {{0, 0}, {15, 15}}, {{16, 0}, {31, 15}}, {{0, 16}, {15, 31}}, {{16, 16}, {31, 31}}});
 
-  // DIST : grossier MULTI-BOX (2x2 quadrants 16x16) REPARTI round-robin -> de-replique.
-  std::vector<Box2D> cboxes = {
-      {{0, 0}, {15, 15}}, {{16, 0}, {31, 15}}, {{0, 16}, {15, 31}}, {{16, 16}, {31, 31}}};
-  BoxArray ba_multi(cboxes);
-  MultiFab UcDist = run(ba_multi, DistributionMapping(static_cast<int>(cboxes.size()), n_ranks()),
-                        /*replicated=*/false);
+  // Compare le grossier de-replique (4-box) au grossier mono-box replique, pour un motif de
+  // patchs fins donne. Rassemble le reparti sur une box unique posee sur le RANG 0 (dmap coherent
+  // {0} sur tous les rangs : parallel_copy gather ; un dmap "replique" {me} serait INCOHERENT
+  // entre rangs -> deadlock collectif), compare bit a bit sur le rang 0. Doit etre BIT IDENTIQUE.
+  auto check = [&](const BoxArray& baf, const DistributionMapping& dmf, const char* label) {
+    MultiFab UcRef = run(ba_repl, DistributionMapping(std::vector<int>(1, me)), true, baf, dmf);
+    MultiFab UcDist = run(ba_dist, DistributionMapping(4, n_ranks()), false, baf, dmf);
+    MultiFab gathered(ba_repl, DistributionMapping(std::vector<int>(1, 0)), 1, 0);
+    gathered.set_val(0.0);
+    parallel_copy(gathered, UcDist);  // multi-box reparti -> box unique sur le rang 0
+    device_fence();
+    double maxdiff = 0;
+    if (me == 0) {  // seul le rang 0 detient la box rassemblee ; UcRef replique (valide partout)
+      const ConstArray4 ug = gathered.fab(0).const_array(), ur = UcRef.fab(0).const_array();
+      for (int j = 0; j < nc; ++j)
+        for (int i = 0; i < nc; ++i)
+          maxdiff = std::fmax(maxdiff, std::fabs(ug(i, j, 0) - ur(i, j, 0)));
+    }
+    maxdiff = all_reduce_max(maxdiff);
+    if (me == 0)
+      std::printf("de-replication grossier (np=%d) : %s, max|d| = %.3e\n", n_ranks(), label,
+                  maxdiff);
+    if (maxdiff > 1e-12) { if (me == 0) std::printf("FAIL %s\n", label); ++fails; }
+  };
 
-  // rassemble le grossier reparti sur une box unique posee sur le RANG 0 (dmap coherent
-  // {0} sur tous les rangs : parallel_copy gather). NB : un dmap "replique" {me} serait
-  // INCOHERENT entre rangs (chaque rang croirait posseder la box 0) -> deadlock collectif.
-  MultiFab gathered(ba_repl, DistributionMapping(std::vector<int>(1, 0)), 1, 0);
-  gathered.set_val(0.0);
-  parallel_copy(gathered, UcDist);  // multi-box reparti -> box unique sur le rang 0
-  device_fence();
-  double maxdiff = 0;
-  if (me == 0) {  // seul le rang 0 detient la box rassemblee ; UcRef est replique (valide partout)
-    const ConstArray4 ug = gathered.fab(0).const_array(), ur = UcRef.fab(0).const_array();
-    for (int j = 0; j < nc; ++j)
-      for (int i = 0; i < nc; ++i)
-        maxdiff = std::fmax(maxdiff, std::fabs(ug(i, j, 0) - ur(i, j, 0)));
-  }
-  maxdiff = all_reduce_max(maxdiff);
+  // motif A : 4 patchs fins en 2x2 quadrants sur [8..23]^2 (coarse). A np=4 chaque empreinte
+  // grossiere fine tombe dans la box grossiere du MEME rang (alignement round-robin) : ce motif
+  // n'exerce PAS le chemin "box parente distante".
+  const int I0 = 8, I1 = 23, J0 = 8, J1 = 23, MI = 15, MJ = 15;
+  std::vector<Box2D> quad = {
+      {{2 * I0, 2 * J0}, {2 * MI + 1, 2 * MJ + 1}},
+      {{2 * (MI + 1), 2 * J0}, {2 * I1 + 1, 2 * MJ + 1}},
+      {{2 * I0, 2 * (MJ + 1)}, {2 * MI + 1, 2 * J1 + 1}},
+      {{2 * (MI + 1), 2 * (MJ + 1)}, {2 * I1 + 1, 2 * J1 + 1}}};
+  check(BoxArray(quad), DistributionMapping(4, n_ranks()), "4 patchs quadrants (aligne)");
 
-  if (me == 0)
-    std::printf("de-replication grossier (np=%d) : grossier multi-box reparti vs mono-box "
-                "replique, max|d| = %.3e\n", n_ranks(), maxdiff);
-  if (maxdiff > 1e-12) { if (me == 0) std::printf("FAIL derepli_bit_identique\n"); ++fails; }
+  // motif B : UN seul patch fin CENTRE sur la jonction des 4 boxes grossieres. Fine [24..39]^2 ->
+  // empreinte grossiere [12..19]^2 qui CHEVAUCHE la frontiere coarse 16 en x ET y, donc touche les
+  // 4 boxes grossieres. Le patch unique vit sur le rang 0 (dmf {0}), mais a np=4 il lit le flux
+  // grossier des boxes 1,2,3 possedees par des rangs DISTANTS : c'est exactement le chemin ou
+  // mf_find_box renvoyait -1 -> fx.fab(-1) -> segfault (corrige : route par parallel_copy). MG
+  // 4-box propre -> BIT IDENTIQUE et deterministe.
+  std::vector<Box2D> center = {{{24, 24}, {39, 39}}};
+  check(BoxArray(center), DistributionMapping(1, n_ranks()), "1 patch centre (box parente distante)");
 
   fails = all_reduce_sum(fails);
   if (fails == 0 && me == 0) std::printf("OK test_mpi_decoarse\n");

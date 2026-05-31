@@ -690,7 +690,8 @@ struct RegMP {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real dt,
                        const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
-                       const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs) {
+                       const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs,
+                       bool coarse_replicated = true) {
   const int r = 2, nc = L[lev].U.ncomp();
   AmrLevelMP& lv = L[lev];
   const int np = lv.U.local_size();
@@ -700,7 +701,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   } else {
     // parent (niveau lev-1) REPLIQUE seulement s'il s'agit du niveau 0 (lev == 1) ; sinon
     // reparti -> FillPatch par parallel_copy.
-    mf_fill_fine_ghosts_mb(lv.U, *pOld, *pNew, frac, /*replicated_parent=*/lev == 1);
+    mf_fill_fine_ghosts_mb(lv.U, *pOld, *pNew, frac,
+                           /*replicated_parent=*/(lev == 1) && coarse_replicated);
     const Box2D fdom = Box2D::from_extents(base_dom.nx() << lev, base_dom.ny() << lev);
     fill_boundary(lv.U, fdom, Periodicity{false, false});  // halos fin-fin
   }
@@ -760,7 +762,11 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   //    replication du parent) ;
   //  - parent REPARTI (lev >= 1) : on amene les flux grossiers necessaires sur une grille FACE
   //    enfant-coarsen (dmap de l'enfant) par parallel_copy, chaque enfant lit alors localement.
-  const bool replicated_parent = (lev == 0);
+  // Le niveau 0 n'est REPLIQUE que si coarse_replicated : a la de-replication (grossier multi-box
+  // reparti), il devient REPARTI comme les niveaux fins, et mf_find_box(lv.U, I, J) renverrait -1
+  // pour une cellule grossiere bordante possedee par un rang DISTANT (-> fab(-1), segfault). On
+  // route alors vers le chemin parallel_copy (empreinte grossiere par enfant), MPI-correct.
+  const bool replicated_parent = (lev == 0) && coarse_replicated;
   const BoxArray cba = coarsen(L[lev + 1].U.box_array(), 2);  // empreinte grossiere par enfant
   MultiFab cfx, cfy;
   if (!replicated_parent) {
@@ -823,7 +829,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
   for (int s = 0; s < r; ++s)
     subcycle_level_mp<Limiter, NumericalFlux>(m, L, lev + 1, dt / r, base_dom, base_per,
-                                              &U_old, &lv.U, Real(s) / r, &regs);
+                                              &U_old, &lv.U, Real(s) / r, &regs,
+                                              coarse_replicated);
   mf_average_down_mb(L[lev + 1].U, lv.U);  // point 3 distribue (parallel_copy)
 
   // Point 4 distribue : reflux coverage-aware. La cellule grossiere bordante peut appartenir
@@ -872,9 +879,10 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L,
                                     const Box2D& dom, Real dt,
-                                    Periodicity per = Periodicity{true, true}) {
+                                    Periodicity per = Periodicity{true, true},
+                                    bool coarse_replicated = true) {
   subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr,
-                                            Real(0), nullptr);
+                                            Real(0), nullptr, coarse_replicated);
 }
 
 // --- Moteur AMR unifie (revue, point 5) ---

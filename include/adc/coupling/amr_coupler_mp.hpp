@@ -161,7 +161,8 @@ class AmrCouplerMP {
 
   void step(Real dt) {
     update();
-    amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(model_, stack_.L(), stack_.domain(), dt);
+    amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(
+        model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_);
   }
 
   // Regrid du niveau FIN par Berger-Rigoutsos (delegue a amr_regrid_finest) :

@@ -173,11 +173,24 @@ un bug `parallel_copy` à np=4 et le gather-tags 2c.
   s'accordent sur le résidu -> même nombre de V-cycles -> séquences `fill_boundary`
   synchronisées. Idempotent sous réplication et identité en série : série 60/60 et les 13
   tests MPI restent verts, bit-identique au comportement historique.
-  RESTE (séparé) : une découpe grossière plus fine (16 boxes = plusieurs boxes par rang)
-  expose un SECOND bug à np=4 (segfault, pas un TRUNCATE), distinct de la désync du résidu.
-  Le cas testé (4 boxes, 1 par rang à np=4) est donc bit-identique np=1/2/4 ; généraliser à
-  un grossier multi-box plus fin (nécessaire à l'échelle hero) demande de traquer ce segfault
-  (accès hors-bornes probable dans un chemin multi-box-par-rang). Non corrigé ici.
+- **SECOND BUG TROUVÉ ET CORRIGÉ (np=4).** Distinct de la désync du résidu : un segfault
+  dès qu'un rang détient PLUSIEURS boxes grossières, ou qu'une empreinte fine borde une box
+  grossière DISTANTE. Racine : le reflux multi-patch `subcycle_level_mp` codait en dur
+  `replicated_parent = (lev == 0)`, donc au niveau 0 il échantillonnait le flux grossier
+  bordant par `mf_find_box`. À la de-réplication le niveau 0 est RÉPARTI : une cellule
+  grossière bordante peut appartenir à un rang DISTANT, `mf_find_box` rendait alors -1 puis
+  `fx.fab(-1)` -> segfault (adresse fautive 0x40/0x80, null+offset). Le cas 4 boxes (1 par
+  rang à np=4) survivait par alignement round-robin fortuit (chaque empreinte fine tombait
+  dans la box grossière du même rang). FIX : on propage `replicated_coarse` du coupleur
+  jusqu'à `subcycle_level_mp`, `replicated_parent = (lev == 0) && coarse_replicated`. Le
+  niveau 0 de-répliqué emprunte alors le chemin `parallel_copy` (empreinte grossière par
+  enfant) déjà utilisé pour les niveaux fins, MPI-correct. Régression `test_mpi_decoarse` :
+  un patch fin CENTRÉ chevauchant les 4 boxes grossières (3 distantes à np=4) reproduit
+  exactement l'ancien segfault et passe désormais bit-identique (`maxdiff=0`, np=1/2/4).
+  Idempotent sous réplication : série 60/60 et MPI 73/73 restent verts. NB : une découpe 4x4
+  (16 boxes) dégénère le fond du multigrille géométrique (16 boxes ne pavent pas la grille la
+  plus grossière 2x2) et converge à un point distinct à la tolérance près, non déterministe ;
+  la box distante se teste donc par le patch centré sur un grossier 2x2 propre, pas par 16 boxes.
 - **2c. Gather-tags pour le regrid d'un niveau réparti (RESTE).** Ajouter à `comm.hpp` un
   `gather` (ou un `all_reduce` du `TagBox` indexé global), rassembler les tags répartis
   avant le clustering Berger-Rigoutsos (cf. `tag_box.hpp:11`). Non nécessaire à 2 niveaux
