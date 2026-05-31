@@ -687,6 +687,8 @@ struct RegMP {
   std::vector<Real> cL, cR, cB, cT, fL, fR, fB, fT;
 };
 
+namespace detail {  // moteur N-niveaux multi-patch INTERNE ; la facade publique est advance_amr
+
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real dt,
                        const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
@@ -885,6 +887,8 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L,
                                             Real(0), nullptr, coarse_replicated);
 }
 
+}  // namespace detail (moteur N-niveaux multi-patch)
+
 // --- Moteur AMR unifie (revue, point 5) ---
 // La hierarchie AMR comme OBJET nomme que le moteur fait avancer, plutot qu'une famille de
 // fonctions amr_step_* dont le cas (2/N niveaux, mono/multi-box) est encode dans le NOM.
@@ -915,8 +919,8 @@ struct LevelHierarchy {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
                  Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true) {
-  amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, levels, base_dom, dt, base_per,
-                                                         coarse_replicated);
+  detail::amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, levels, base_dom, dt, base_per,
+                                                                 coarse_replicated);
 }
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>

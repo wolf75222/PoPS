@@ -98,7 +98,7 @@ int main() {
     const double dt = 0.4 * dxc;
     for (int s = 0; s < 40; ++s) {
       amr_step_multilevel_mf<NoSlope, RusanovFlux>(m, LR, dom, dt);
-      amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(m, LP, dom, dt);
+      detail::amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(m, LP, dom, dt);
     }
     double maxdiff = 0;
     const ConstArray4 ur = LR[0].U.fab(0).const_array(), up = LP[0].U.fab(0).const_array();
@@ -131,7 +131,7 @@ int main() {
     LP[0] = {std::move(Pc), &axc, dxc, dyc};
     LP[1] = {std::move(Pf), &axf, dxc / 2, dyc / 2};
     for (int s = 0; s < 20; ++s)
-      amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(m, LP, dom, dt);
+      detail::amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(m, LP, dom, dt);
 
     double maxdiff = 0;
     const ConstArray4 ur = Rc.fab(0).const_array(), up = LP[0].U.fab(0).const_array();
@@ -163,7 +163,7 @@ int main() {
     const double M0 = coarse_mass(LP[0].U);
     const double dt = 0.4 * dxc;
     for (int s = 0; s < 30; ++s)
-      amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(m, LP, dom, dt);
+      detail::amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(m, LP, dom, dt);
     const double drift = std::fabs(coarse_mass(LP[0].U) - M0);
     std::printf("garde 3 (3 niv, niv 1 multi-box) : drift_masse = %.3e\n", drift);
     chk(drift < 1e-12, "mp_3level_multibox_conservation");

@@ -72,7 +72,7 @@ int main() {
     Ld[0] = {std::move(Uc), &axc, dxc, dyc};
     Ld[1] = {std::move(Uf), &axf, dxc / 2, dyc / 2}; }
   for (int s = 0; s < 15; ++s)
-    amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(model, Ld, dom, dt);
+    detail::amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(model, Ld, dom, dt);
 
   // --- voie NOMMEE : advance_amr(m, LevelHierarchy, dt) ---
   LevelHierarchy h;
@@ -117,7 +117,7 @@ int main() {
     std::vector<AmrLevelMP> Ld3;
     build(Ld3);
     for (int s = 0; s < 12; ++s)
-      amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(model, Ld3, dom, dt);
+      detail::amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(model, Ld3, dom, dt);
 
     LevelHierarchy h3;
     h3.base_dom = dom;

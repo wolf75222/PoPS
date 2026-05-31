@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
     const double M0 = local_mass(LP[0].U);
     const double dt = 0.4 * dxc;
     for (int s = 0; s < 30; ++s)
-      amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(model, LP, dom, dt);
+      detail::amr_step_multilevel_multipatch<NoSlope, RusanovFlux>(model, LP, dom, dt);
     return std::make_pair(std::move(LP[0].U), std::fabs(local_mass(LP[0].U) - M0));
   };
 
