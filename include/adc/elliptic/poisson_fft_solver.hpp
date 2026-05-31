@@ -5,6 +5,7 @@
 #include <adc/elliptic/poisson_operator.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
+#include <adc/mesh/fill_boundary.hpp>
 #include <adc/mesh/geometry.hpp>
 #include <adc/mesh/mf_arith.hpp>
 #include <adc/mesh/multifab.hpp>
@@ -24,8 +25,8 @@
 // comme parametre Elliptic du Coupler : Coupler<Model, PoissonFFTSolver>.
 //
 // Portee : mono-rang, boite unique couvrant le domaine (le cas par defaut du Coupler
-// et des facades). Le periodique distribue tuiles <-> bandes FFT est porte par
-// SpectralCoupler (qui gere la redistribution).
+// et des facades). Pour le periodique DISTRIBUE, voir DistributedFFTSolver ci-dessous (bandes,
+// EllipticSolver autonome) ; SpectralCoupler l'enveloppe avec le transport E x B.
 
 namespace adc {
 
@@ -80,5 +81,72 @@ class PoissonFFTSolver {
 
 static_assert(EllipticSolver<PoissonFFTSolver>,
               "PoissonFFTSolver doit modeler EllipticSolver");
+
+// Variante DISTRIBUEE du meme backend FFT. Le domaine periodique est decoupe en BANDES (slabs,
+// 1 box par rang, le layout natif du solveur FFT) ; PoissonFFT fait la transposee parallele
+// (MPI_Alltoall) en interne. C'est un EllipticSolver AUTONOME : utilisable comme
+// Coupler<Model, DistributedFFTSolver>, au lieu d'enfermer la FFT distribuee dans SpectralCoupler.
+// Contrainte : Ny divisible par n_ranks(), Nx/Ny puissances de 2. En serie (n_ranks()==1) une
+// seule bande couvre le domaine, identique a PoissonFFTSolver.
+class DistributedFFTSolver {
+ public:
+  DistributedFFTSolver(const Geometry& geom, const BCRec& = BCRec{},
+                       std::function<bool(Real, Real)> = {})
+      : geom_(geom),
+        Nx_(geom.domain.nx()),
+        nyl_(geom.domain.ny() / n_ranks()),
+        fft_(geom.domain.nx(), geom.domain.ny(), geom.xhi - geom.xlo,
+             geom.yhi - geom.ylo) {
+    const int np = n_ranks();
+    assert(geom.domain.ny() % np == 0 &&
+           "DistributedFFTSolver : Ny doit etre divisible par n_ranks()");
+    std::vector<Box2D> slabs;
+    for (int r = 0; r < np; ++r)
+      slabs.push_back(Box2D{{0, r * nyl_}, {Nx_ - 1, (r + 1) * nyl_ - 1}});
+    BoxArray ba(std::move(slabs));
+    dm_ = DistributionMapping(np, np);  // bande r -> rang r
+    phi_ = MultiFab(ba, dm_, 1, 1);
+    rhs_ = MultiFab(ba, dm_, 1, 0);
+    res_ = MultiFab(ba, dm_, 1, 0);
+  }
+
+  MultiFab& rhs() { return rhs_; }
+  MultiFab& phi() { return phi_; }
+  const Geometry& geom() const { return geom_; }
+
+  // Resout lap(phi) = rhs en place : bande locale -> tableau plat -> PoissonFFT (transposee MPI
+  // interne) -> reecrit la bande locale. Mode k=0 mis a zero (phi de moyenne nulle).
+  void solve() {
+    const ConstArray4 f = rhs_.fab(0).const_array();
+    const Box2D v = rhs_.box(0);  // bande locale [0..Nx-1] x [y0..y0+nyl-1]
+    std::vector<double> rho(static_cast<std::size_t>(nyl_) * Nx_), phil;
+    for (int jl = 0; jl < nyl_; ++jl)
+      for (int i = 0; i < Nx_; ++i)
+        rho[static_cast<std::size_t>(jl) * Nx_ + i] = f(v.lo[0] + i, v.lo[1] + jl);
+    fft_.solve(rho, phil);
+    Array4 p = phi_.fab(0).array();
+    for (int jl = 0; jl < nyl_; ++jl)
+      for (int i = 0; i < Nx_; ++i)
+        p(v.lo[0] + i, v.lo[1] + jl) = phil[static_cast<std::size_t>(jl) * Nx_ + i];
+  }
+
+  // Residu discret ||lap(phi) - rhs|| reduit sur tous les rangs (~arrondi : solve direct exact).
+  Real residual() {
+    BCRec bc;  // periodique
+    fill_boundary(phi_, geom_.domain, Periodicity{true, true});  // halos inter-bandes (MPI)
+    poisson_residual(phi_, rhs_, geom_, bc, res_);
+    return all_reduce_max(norm_inf(res_));
+  }
+
+ private:
+  Geometry geom_;
+  int Nx_, nyl_;
+  DistributionMapping dm_;
+  MultiFab phi_, rhs_, res_;
+  PoissonFFT fft_;
+};
+
+static_assert(EllipticSolver<DistributedFFTSolver>,
+              "DistributedFFTSolver doit modeler EllipticSolver");
 
 }  // namespace adc
