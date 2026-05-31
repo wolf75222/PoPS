@@ -10,15 +10,20 @@ Le coeur du depot est solide et honnetement documente : separation en cinq couch
 
 Tri par severite (high d'abord) puis effort (S avant L). Les doublons inter-dimensions ont ete fusionnes (voir notes).
 
+**Avancement (mai 2026)** : quatre chantiers high sont FAITS et marques `[FAIT]` ci-dessous : le bord
+cut-cell Shortley-Weller (avec un resultat negatif important, cf. ce qu'il debloque), le test de
+`solve_robust` phase-2, la couverture WENO5 dans le flux 2D reel, et le durcissement `nu` local.
+Tout le tableau de tests passe (67/67 ctest, build complet 78 cibles).
+
 | Chantier | Categorie | Severite | Effort | Fichiers cles | Ce que ca debloque |
 |---|---|---|---|---|---|
-| Bord conducteur cut-cell / Shortley-Weller (verrou science n.1) | Numerique | high | L | `elliptic/poisson_operator.hpp:16-91`, `elliptic/geometric_mg.hpp:62-77,169` | Ordre 2 au bord, convergence du taux diocotron vers moins de 1 pour cent (sort du plafond +8 pour cent) |
-| Tester `solve_robust` phase-2 (escalade + recuperation) | Test | high | M | `elliptic/geometric_mg.hpp:126-147`, `tests/test_geometric_mg.cpp` | Garde le correctif nan-au-bord ; verifie recuperation, escalade, bit-identique si convergent |
-| Couvrir WENO5 dans le flux 2D reel (`assemble_rhs`) | Test | high | M | `operator/spatial_operator.hpp:72-82`, `tests/test_weno_convergence.cpp` | Valide l'ordre 5 du schema complet, pas juste du noyau scalaire 1D |
+| `[FAIT]` Bord conducteur cut-cell / Shortley-Weller | Numerique | high | L | `elliptic/poisson_operator.hpp`, `elliptic/geometric_mg.hpp`, `tests/test_cut_cell.cpp` | Ordre 2 au bord (valide : L2 1.93, erreur Poisson 3459x plus faible). RESULTAT NEGATIF : le taux diocotron est INCHANGE (mode loin de la paroi, effet d'image 1e-3) ; la paroi n'etait PAS le verrou du +8 % (cf. `DIOCOTRON_GROWTH_RATE.md` section 4 mesure 5) |
+| `[FAIT]` Tester `solve_robust` phase-2 (escalade + recuperation) | Test | high | M | `tests/test_solve_robust.cpp` | Garde le correctif nan-au-bord ; verifie recuperation (eff 640), escalade, locality, bit-identique si convergent |
+| `[FAIT]` Couvrir WENO5 dans le flux 2D reel (`assemble_rhs`) | Test | high | M | `tests/test_weno2d.cpp` | Ordre 5.00 du schema complet (vs VanLeer 1.95, NoSlope 1.00) + etat constant exact |
 | Valider les invariants en geometrie embedded + masque dans le calcul | Test | high | M | `analysis/diocotron_invariants.hpp:35-55`, `tests/test_diocotron_invariants.cpp` | Aligne la doc (invariants verts embedded) sur la capacite reellement testee |
 | Couvrir les chemins recon=1/2 (VanLeer/Minmod, 2 ghosts) en AMR multipatch | Test | high | M | `tests/test_amr_multipatch.cpp:80`, `examples/diocotron_column_amr.cpp:306-311` | Non-regression sur le chemin AMR+MUSCL de production (gestion ghosts 2 couches) |
 | Combiner ordre eleve et AMR (exposer Limiter/Flux, puis SSPRK3 par niveau) | Numerique | high | M | `coupling/amr_coupler_mp.hpp:172`, `integrator/amr_reflux_mf.hpp:27-39` | Run AMR haute precision (aujourd'hui plafonne en ordre 1 temps, ordre 1 espace) |
-| `solve_robust` : rendre le durcissement `nu` local au solve (non sticky) | Bug | high | M | `elliptic/geometric_mg.hpp:126-147,206` | Supprime le ratchet de lissage permanent sur le hot path ; restaure la reproductibilite |
+| `[FAIT]` `solve_robust` : durcissement `nu` local au solve (non sticky) | Bug | high | M | `elliptic/geometric_mg.hpp:126-154`, `tests/test_solve_robust.cpp` | Supprime le ratchet de lissage permanent sur le hot path ; reproductibilite restauree (nu sauve/restaure, teste) |
 | Planchers de densite/pression dans Euler + gardes HLLC | Numerique | high | M | `model/euler.hpp:34-51`, `operator/numerical_flux.hpp:95-127` | Evite sqrt(p moins) vers NaN sur Euler-Poisson/magnetique (basse densite, Coulomb) |
 | Cache du BoxHash de `fill_boundary` (maillage statique) | Performance | high | M | `mesh/fill_boundary.hpp:98`, `mesh/box_hash.hpp:14-15` | Supprime des milliers de constructions d'unordered_map par pas sur le chemin MG |
 | Fusion GS red-black plus reduction des fences GPU dans le MG | Performance | high | L | `elliptic/poisson_operator.hpp:94-102`, `elliptic/geometric_mg.hpp:180-202` | Cause-racine du GPU plus lent que 1 coeur CPU ; debloque le GPU sur les 86 pour cent elliptiques |
@@ -38,7 +43,7 @@ Tri par severite (high d'abord) puis effort (S avant L). Les doublons inter-dime
 | Variante AMR multi-patch du systeme magnetique M3 | Feature | medium | L | `integrator/magnetic_euler_poisson.hpp:68-94` | Hero-run sur le systeme complet (aujourd'hui M3 est mono-niveau) |
 | Jobs CI OpenMP et HDF5 (backends non gardes) | Test | medium | M | `.github/workflows/ci.yml`, `CMakeLists.txt:11-18` | Detecte les regressions du seam multi-thread et de `test_hdf5_io` |
 | Triple redondance du recit solve_robust / +8 pour cent (3 docs) | Doc | medium | M | `docs/ROADMAP.md:244-329`, `docs/HERO_RUN_AMR.md:225-268`, `docs/DIOCOTRON_GROWTH_RATE.md` | Source unique ; evite la derive de chiffres future |
-| Bug doc : recon=3 (WENO5) annonce pour column_amr alors qu'il n'existe pas | Doc | medium | S | `docs/DIOCOTRON_GROWTH_RATE.md:137`, `examples/diocotron_column_amr.cpp:14,306-311` | Le protocole de repro ne lance plus silencieusement NoSlope au lieu de WENO5 |
+| `[FAIT]` Bug doc : recon=3 (WENO5) annonce pour column_amr alors qu'il n'existe pas | Doc | medium | S | `docs/DIOCOTRON_GROWTH_RATE.md` section 8 | Corrige : recon documente 0/1/2 ; nouvel arg `cut` (0/1) documente avec |
 | Predicat de paroi en `std::function` jusque dans GeometricMG | Architecture | low | M | `elliptic/geometric_mg.hpp:49,205` | Aligne sur la regle couche-basse (pas de std::function) ; sort la geometrie de l'elliptique |
 | Formule grad-phi re-inlinee en 4-5 endroits | Refactor | low | M | `coupling/amr_coupler.hpp:102-103`, `analysis/diocotron_invariants.hpp:53-54` | Une convention physique centrale a un seul endroit (au moins les sites hors bit-identique) |
 | HLL/HLLC inutilisables pour diocotron (wave_speeds absent) | Numerique | low | S | `operator/numerical_flux.hpp:46-57`, `model/diocotron.hpp:24-52` | Clarifie l'API (Rusanov seul flux du diocotron) ou ajoute un wave_speeds trivial |

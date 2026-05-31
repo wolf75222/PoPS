@@ -64,7 +64,7 @@ sous-evalue, trop diffusif) a ~0.99, du BON cote de 0.911 :
 
 ## 4. Diagnostic : un sur-tir ~+8 % UNIFORME et PLAT en resolution
 
-Quatre mesures independantes ecartent toutes les causes "faciles" et pointent la GEOMETRIE :
+Cinq mesures independantes ecartent les causes "faciles" ET le bord conducteur :
 
 1. **Plat en resolution** : eff 256 ~ 512 ~ 1024 (meme +8 %). Plus de cellules ne referme PAS l'ecart.
 2. **Plat en ordre de reconstruction** : `WENO5 ~ VanLeer`. Ce n'est pas l'ordre spatial.
@@ -75,10 +75,18 @@ Quatre mesures independantes ecartent toutes les causes "faciles" et pointent la
    propre COMPLEXE `diocotron_eigenvalue` : analytique Re_norm = -2.08 / -2.75 / -3.44 pour l=3/4/5) :
    mesure 0.31 vs analytique 0.331 -> ~5 % de DISTORSION STRUCTURELLE de la valeur propre + ~3 % de
    decalage de normalisation `omega_D`.
+5. **Plat en traitement du bord (cut-cell vs escalier)** : le bord embedded Shortley-Weller d'ordre 2
+   a ete implemente (`GeometricMG`, option `cut_cell`, validation `test_cut_cell` : ordre L2 1.93,
+   erreur de Poisson 3459x plus faible qu'en escalier a nc=512). Sur le diocotron (nc=256, VanLeer,
+   `cut=1` vs `cut=0`), le taux est **IDENTIQUE a 3 chiffres** (gamma_norm 0.945, 0.838, 0.738 ... aux
+   memes fenetres). Le bord conducteur n'est donc PAS la cause du +8 %.
 
-Cause : la **geometrie cartesienne** (paroi conductrice en escalier + symetrie 4 du carre brisant
-l'invariance de rotation du probleme circulaire), un biais O(1) qui ne converge PAS sur grille
-cartesienne. Le transport lui-meme est fidele (invariants verts, section 6).
+Cause : ce n'est PAS le traitement de la paroi. Le mode-l instable vit sur l'**anneau** (r ~ 0.175),
+loin de la paroi (r = 0.40) : l'effet d'image de la paroi sur le mode l au rayon de l'anneau decroit
+en `(r_anneau/Rwall)^(2l)` = `(0.44)^8 ~ 1e-3` pour l=4, electrostatiquement negligeable. Le sur-tir
+est **structurel** : distorsion ~5 % de la valeur propre sur la dynamique E x B cartesienne (la
+symetrie 4 de la grille carree resonne avec le mode 4) plus ~3 % de normalisation `omega_D` (mesure 4),
+et non un biais O(1) de bord. Le transport lui-meme est fidele (invariants verts, section 6).
 
 ## 5. Comparaison directe au papier (lecture de l'arXiv)
 
@@ -98,11 +106,13 @@ La DIFFERENCE decisive est la GEOMETRIE, prouvee par la table de convergence du 
 | | 786 432 | 0.919 | +0.9 % | | 512 | 0.988 (+8 %) |
 | | 3 145 728 | **0.913** | **+0.2 %** | | 1024 | 0.987 (+8 %) |
 
-Le papier **CONVERGE** (0.935 -> 0.919 -> 0.913) parce que son domaine est un **DISQUE** dont la
-paroi conductrice EST le bord du maillage (epousant, erreur O(h^2) qui s'annule au raffinement).
-Notre domaine est une **boite carree avec un cercle conducteur embedded en escalier** : erreur O(1)
-qui NE converge PAS (exactement nos donnees plates a +8 %). Meme a leur maillage le plus GROSSIER
-(~eff 222) le papier est a +2.6 %, deja meilleur que nos +8 %, et il raffine jusqu'a +0.2 %.
+Le papier **CONVERGE** (0.935 -> 0.919 -> 0.913) sur un maillage de **DISQUE** epousant ; nous sommes
+**PLATS** a +8 % sur une boite carree. L'ecart est reel, mais l'experience cut-cell (section 4,
+mesure 5) montre qu'il ne vient PAS du *stencil* de paroi : poser Dirichlet sur le vrai cercle (ordre
+2) au lieu de l'escalier ne change pas le taux. La difference tient a la representation cartesienne de
+la **dynamique de l'anneau** elle-meme (advection E x B sur grille carree, dont la symetrie 4 resonne
+avec le mode 4), pas au bord conducteur lointain. Reste a confirmer la cause structurelle exacte
+(symetrie de grille vs methode de mesure DFT-phi vs normalisation), cf. section 7.
 
 ## 6. Indicateurs physiques verifies (fidelite du transport)
 
@@ -123,20 +133,33 @@ Figures : `docs/fig_diocotron_highorder.png` (taux vs ordre), `docs/fig_diocotro
 ## 7. Conclusion et prochaine etape
 
 Les leviers de RECONSTRUCTION et d'INTEGRATION d'ordre eleve sont en place et verifies ; ils amenent
-le taux mode 4 a ~+8 % de l'analytique (depuis -39 % en ordre 1). Le verrou restant vers < 1 % (et
-< 0.5 % comme le papier) est **purement geometrique** : il faut un bord conducteur EPOUSANT, pas plus
-de resolution. Deux voies classiques :
-- **grille polaire / disque** (comme les methodes semi-Lagrangiennes diocotron, Madaule, Mehrenberger)
-  ou la paroi est une surface de coordonnees ;
-- **cellules coupees (cut-cell) Shortley-Weller** : Dirichlet `phi=0` impose au vrai cercle dans les
-  cellules du bord, au lieu de l'escalier (ordre 2 au bord embedded dans `GeometricMG`).
+le taux mode 4 a ~+8 % de l'analytique (depuis -39 % en ordre 1).
+
+Le bord embedded **cut-cell Shortley-Weller** (`GeometricMG`, option `cut_cell`) a ete implemente et
+valide (`test_cut_cell` : ordre L2 1.93 au bord, erreur de Poisson 3459x plus faible qu'en escalier).
+**Resultat negatif important** : il ne bouge PAS le taux diocotron (section 4, mesure 5). Le bord
+conducteur n'etait donc pas le verrou suppose ; le mode instable est trop loin de la paroi pour la
+"voir" (effet d'image `(0.44)^8 ~ 1e-3`). Le cut-cell reste un gain de precision propre du solveur de
+Poisson, utile pour des configurations ou la charge approche la paroi.
+
+Le verrou restant vers < 1 % est donc **structurel, pas un bord** : il faut isoler laquelle des trois
+pistes domine, par des experiences ciblees :
+- **symetrie de grille** : la dynamique E x B sur grille CARTESIENNE a une symetrie 4 qui resonne avec
+  le mode 4. Test : reprendre le mode 3 ou 5 (sur-tir +7/+8 % aussi) sur grille tournee de 45 deg, ou
+  comparer a une **grille polaire / disque** (semi-Lagrangien diocotron, Madaule, Mehrenberger) ;
+- **methode de mesure** : adopter exactement la DFT-de-phi-a-r0 du papier plutot que `mode_amplitude`,
+  et le fit sur la fenetre etroite du papier, pour eliminer un biais de fenetre/observable ;
+- **normalisation** `omega_D` : le rapport sans dimension `gamma/|Re(omega)|` (mesure 4) isole ~3 % de
+  decalage de normalisation des ~5 % de distorsion de valeur propre.
 
 ## 8. Reproduction
 
 ```
-# stabilite + AMR (recon : 0 NoSlope, 1 VanLeer, 3 WENO5)
+# stabilite + AMR ; args : out nc nsteps refine l ml recon cut
+#   recon : 0 NoSlope, 1 VanLeer, 2 Minmod   |   cut : 0 escalier, 1 cut-cell Shortley-Weller
 g++ -std=c++23 -O2 -I include examples/diocotron_column_amr.cpp -o dca
-./dca out 640 3000 0 4 0 1        # uniforme VanLeer eff 640 (stable)
+./dca out 640 3000 0 4 0 1 0      # uniforme VanLeer eff 640, escalier (stable)
+./dca out 256 900  0 4 0 1 1      # cut-cell : taux INCHANGE (cf section 4, mesure 5)
 
 # haute precision WENO5 + SSPRK3, mode l, comparaison analytique
 g++ -std=c++23 -O3 -fopenmp -I include examples/diocotron_highorder.cpp -o dho

@@ -327,6 +327,11 @@ puis d'y ajouter notre AMR, puis SAMRAI.
   EPOUSANT (cut-cell Shortley-Weller, ou grille polaire comme les methodes semi-Lagrangiennes diocotron),
   pas plus de resolution. Invariants physiques verts sur tout le run (masse exacte, enstrophie = mesure
   de diffusion, energie/moment ~conserves, principe du maximum) : le transport lui-meme est fidele.
+  MISE A JOUR (mai 2026) : le bord cut-cell Shortley-Weller a ete IMPLEMENTE et valide (`test_cut_cell` :
+  ordre 2, erreur Poisson 3459x plus faible) et il ne change PAS le taux (gamma identique a 3 chiffres,
+  cut vs escalier). La paroi en escalier n'etait donc PAS le verrou : le mode est trop loin de la paroi
+  (effet d'image `(0.44)^8 ~ 1e-3`). Reste la distorsion STRUCTURELLE (b) de la valeur propre cartesienne
+  (symetrie 4 grille/mode) plus la normalisation. Recit complet et unique : `docs/DIOCOTRON_GROWTH_RATE.md`.
 - **M3 : système magnétique complet (eq 2.4, FAIT).** Au-delà de la limite de dérive : Euler
   compressible + énergie + Poisson + force de Lorentz `m × Ω`. L'architecture était déjà prête : le
   modèle `EulerPoisson` porte l'hydro, la source `-ρ∇φ`, le travail `-m·∇φ` et le second membre
