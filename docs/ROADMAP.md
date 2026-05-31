@@ -313,6 +313,20 @@ puis d'y ajouter notre AMR, puis SAMRAI.
   papier demande donc un bord conducteur EPOUSANT (cellules coupees / grille polaire), prochain chantier ;
   la reconstruction et l'integration d'ordre eleve, elles, sont en place et verifiees
   (`test_weno_convergence` : ordre 5.00).
+  CONFIRMATION multi-mesures (balayage ROMEO `diocotron_highorder_hero`, modes 3/4/5 x eff 256/512/1024,
+  fenetres du papier, R2 = 1.00) : sur-tir `gamma_norm` UNIFORME et PLAT EN RESOLUTION, mode 4 =
+  0.985 / 0.988 / 0.987, mode 3 = 0.838 / 0.850 / 0.853, mode 5 = 0.730 / 0.731 / 0.729 (la resolution
+  ne referme PAS l'ecart). Trois diagnostics ecartent les causes simples : (a) balayage en delta : la
+  LIMITE LINEAIRE (delta -> 0) monte a ~+27 % au lieu de baisser -> pas une contamination nonlineaire,
+  et l'accord apparent a delta=0.1 etait une compensation par la saturation ; (b) rapport SANS DIMENSION
+  `gamma / |Re(omega)|` (normalisation-independant, via la valeur propre complexe `diocotron_eigenvalue`)
+  = 0.31 mesure vs 0.331 analytique -> ~5 % est une distorsion STRUCTURELLE de la valeur propre, ~3 % un
+  decalage de normalisation `omega_D` ; (c) WENO5 ~ VanLeer -> pas l'ordre. Verdict ROBUSTE : la cause est
+  la GEOMETRIE cartesienne (paroi en escalier + symetrie 4 du carre brisant l'invariance de rotation du
+  probleme circulaire), INDEPENDANTE de la resolution et du schema. La voie < 1 % est donc un bord
+  EPOUSANT (cut-cell Shortley-Weller, ou grille polaire comme les methodes semi-Lagrangiennes diocotron),
+  pas plus de resolution. Invariants physiques verts sur tout le run (masse exacte, enstrophie = mesure
+  de diffusion, energie/moment ~conserves, principe du maximum) : le transport lui-meme est fidele.
 - **M3 : système magnétique complet (eq 2.4, FAIT).** Au-delà de la limite de dérive : Euler
   compressible + énergie + Poisson + force de Lorentz `m × Ω`. L'architecture était déjà prête : le
   modèle `EulerPoisson` porte l'hydro, la source `-ρ∇φ`, le travail `-m·∇φ` et le second membre
