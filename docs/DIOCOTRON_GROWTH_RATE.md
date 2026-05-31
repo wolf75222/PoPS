@@ -132,8 +132,10 @@ Figures : `docs/fig_diocotron_highorder.png` (taux vs ordre), `docs/fig_diocotro
 
 ## 7. Conclusion et prochaine etape
 
-Les leviers de RECONSTRUCTION et d'INTEGRATION d'ordre eleve sont en place et verifies ; ils amenent
-le taux mode 4 a ~+8 % de l'analytique (depuis -39 % en ordre 1).
+Les leviers de RECONSTRUCTION et d'INTEGRATION d'ordre eleve sont en place et verifies (depuis -39 %
+en ordre 1). Avec une fenetre de fit lineaire propre ([3,9], R^2=1.00), le mode 4 est meme a **+1 %**
+de l'analytique a eff 1024 et le mode 3 EXACT (voir le diagnostic ci-dessous) ; le sur-taux residuel
+se concentre sur les modes de haut l.
 
 Le bord embedded **cut-cell Shortley-Weller** (`GeometricMG`, option `cut_cell`) a ete implemente et
 valide (`test_cut_cell` : ordre L2 1.93 au bord, erreur de Poisson 3459x plus faible qu'en escalier).
@@ -142,15 +144,30 @@ conducteur n'etait donc pas le verrou suppose ; le mode instable est trop loin d
 "voir" (effet d'image `(0.44)^8 ~ 1e-3`). Le cut-cell reste un gain de precision propre du solveur de
 Poisson, utile pour des configurations ou la charge approche la paroi.
 
-Le verrou restant vers < 1 % est donc **structurel, pas un bord** : il faut isoler laquelle des trois
-pistes domine, par des experiences ciblees :
-- **symetrie de grille** : la dynamique E x B sur grille CARTESIENNE a une symetrie 4 qui resonne avec
-  le mode 4. Test : reprendre le mode 3 ou 5 (sur-tir +7/+8 % aussi) sur grille tournee de 45 deg, ou
-  comparer a une **grille polaire / disque** (semi-Lagrangien diocotron, Madaule, Mehrenberger) ;
-- **methode de mesure** : adopter exactement la DFT-de-phi-a-r0 du papier plutot que `mode_amplitude`,
-  et le fit sur la fenetre etroite du papier, pour eliminer un biais de fenetre/observable ;
-- **normalisation** `omega_D` : le rapport sans dimension `gamma/|Re(omega)|` (mesure 4) isole ~3 % de
-  decalage de normalisation des ~5 % de distorsion de valeur propre.
+**Diagnostic tranche (workflow `diocotron-overshoot-diag` + confirmation ROMEO 614125, voir
+`romeo/CONV_RESULTS.md`).** Trois pistes ont ete CLOSES :
+- **symetrie de grille : ECARTEE.** Tourner la phase des lobes ne change gamma que de +0.04 %. Indice
+  decisif : sur grille uniforme c'est le mode 5 (NON couplable a une grille carree 4-fold) qui sur-tire
+  le plus, le mode 4 (candidat 4-fold) est benin -> l'oppose d'une resonance de grille ;
+- **methode de mesure : ELIMINEE.** `mode_amplitude` (lignes 242-262) lit DEJA le potentiel phi et fait
+  la DFT azimutale du mode l a r=r0 : c'est EXACTEMENT la methode du papier, pas un observable densite ;
+- **normalisation `omega_D` : REFUTEE.** Recalcul = 0.14324 (rho_bar = 1 - delta = 0.9, convention
+  Davidson), confirme par l'eigensolveur et la frequence de rotation simulee. C'est la bonne echelle.
+
+Ce qui RESTE (et que ROMEO a quantifie) : une distorsion de valeur propre **PLATE en resolution** (eff
+256 ~ 512 ~ 1024, l'ecart ne se referme pas en raffinant -> structurel, pas de la troncature) et
+**CROISSANTE avec le mode l**, NON uniforme. Fenetre lineaire [3,9], R^2=1.00, eff 1024 : mode 3 = 0.771
+(EXACT), mode 4 = 0.921 (**+1 %**, quasi converge), mode 5 = 0.881 (**+29 %**, aberrant). L'ancien
+"+8 % uniforme" etait un artefact de fenetre/schema (fenetre etroite + WENO5) ; le taux depend fortement
+de la fenetre faute de plateau exponentiel net. La dispersion analytique gamma(l) pique a l=4 et
+redescend en l=5 ; notre schema reproduit le pic mais pas le ROLL-OFF haut-l, car la fonction propre de
+mode 5 (radialement plus structuree) est la plus distordue par la representation CARTESIENNE de l'anneau.
+
+Voie vers < 1 % : faire EPOUSER les bords d'ANNEAU (r0, r1) ou vit le mode, pas la paroi :
+- **cut-cell / level-set sur r0 et r1** (le cut-cell de paroi existe deja, sans effet ici) ;
+- **grille polaire (r, theta)** pour transport + Poisson (supprime la brisure d'invariance de rotation).
+Le mode 3 exact et le mode 4 a +1 % montrent que le cadre est CORRECT ; le verrou est la fidelite de la
+fonction propre a haut l. Figure : `docs/fig_diocotron_conv_modes.png`.
 
 ## 8. Reproduction
 
