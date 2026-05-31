@@ -127,22 +127,29 @@ class GeometricMG {
     const Real r0 = current_residual();
     if (r0 <= Real(0)) return 0;
     int total = 0;
-    for (int c = 1; c <= max_cycles; ++c) {  // phase 1 : identique a solve()
+    for (int c = 1; c <= max_cycles; ++c) {  // phase 1 : EXACTEMENT le corps de solve()
       vcycle();
       ++total;
-      if (current_residual() <= rel_tol * r0) return total;
+      if (current_residual() <= rel_tol * r0) return total;  // -> bit-identique aux runs enregistres
     }
     if (current_residual() <= r0) return total;  // stagnation (pas divergence) : on garde tel quel
-    while (nu1_ < 64 || nu2_ < 64) {             // phase 2 : durcissement sticky + restart a froid
+    // phase 2 : divergence du V-cycle au bord embedded. Durcissement du lissage LOCAL au solve
+    // (nu1_/nu2_ sauves puis RESTAURES avant chaque retour) : pas de ratchet permanent sur le hot
+    // path, le surcout n'est paye QUE par le solve qui diverge ; les solves suivants repartent au
+    // lissage nominal (reproductibilite preservee, cout independant de l'historique). Restart a
+    // froid (phi=0, le warm start portait l'etat diverge). Plus de lissage rend le cycle contractant.
+    const int nu1_save = nu1_, nu2_save = nu2_;
+    while (nu1_ < 64 || nu2_ < 64) {
       if (nu1_ < 64) nu1_ *= 2;
       if (nu2_ < 64) nu2_ *= 2;
       lev_[0].phi.set_val(Real(0));
       for (int c = 1; c <= max_cycles; ++c) {
         vcycle();
         ++total;
-        if (current_residual() <= rel_tol * r0) return total;
+        if (current_residual() <= rel_tol * r0) { nu1_ = nu1_save; nu2_ = nu2_save; return total; }
       }
     }
+    nu1_ = nu1_save; nu2_ = nu2_save;
     return total;  // meilleur effort au lissage maximal (residu deja sous r0 : pas de divergence)
   }
 
