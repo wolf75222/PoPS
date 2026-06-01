@@ -277,10 +277,11 @@ le `TimeIntegrator` étant un objet du cœur (ou fourni par l'utilisateur).
   un tag du cœur (`SSPRK2`/`SSPRK3`) **ou un type `TimeStepper` écrit par l'utilisateur** —
   le coupleur l'instancie et appelle son `take_step` (`test_user_time_integrator`). Depuis
   Python : sélection par tag (pas de callback hot path). *[BYO-stepper Python = futur]*
-- [x] **A4. Délégation** : `SystemCoupler::advance_explicit_block` appelle l'objet stepper
-  (plus de SSPRK inline) ; `ssprk.hpp` aussi. `rhs_eval` du coupleur encapsule `fill_ghosts`
-  + (re)solve elliptique par étage + `assemble_rhs<Spatial>`. *[`Coupler` legacy mono-modèle
-  non migré — diocotron validé, à faire à comportement identique plus tard.]*
+- [x] **A4. Délégation** : `SystemCoupler::advance_explicit_block`, `ssprk.hpp`, **ET le
+  `Coupler` legacy mono-modèle** (`advance`/`advance_ssprk3`) délèguent désormais aux objets
+  `SSPRK2Step`/`SSPRK3Step` — plus aucune copie SSPRK inline. Le legacy gardait un
+  `recompute_aux` par étage (`true` à l'étage 0, `per` ensuite) : reproduit par un `rhs_eval`
+  qui compte les étages. **Bit-identique** (diocotron : adc_cases 48/48).
 - [x] **A5. Exemple** : `test_user_time_integrator` (intégrateur utilisateur) + tout le reste
   tout-cœur. 
 - [x] Garde : **bit-identique** aux SSPRK actuels (adc_cpp 41/41, adc_cases 48/48).

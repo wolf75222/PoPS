@@ -7,6 +7,7 @@
 #include <adc/elliptic/elliptic_solver.hpp>
 #include <adc/elliptic/geometric_mg.hpp>
 #include <adc/integrator/time_integrator.hpp>
+#include <adc/integrator/time_steppers.hpp>  // SSPRK2Step / SSPRK3Step (schema partage)
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fab2d.hpp>
@@ -98,16 +99,15 @@ class Coupler {
                       std::is_same_v<Policy, OncePerStepCoupling>,
                   "Policy doit etre PerStageCoupling ou OncePerStepCoupling");
     constexpr bool per = std::is_same_v<Policy, PerStageCoupling>;
-    MultiFab R(ba_, dm_, Model::n_vars, 0);
-
-    stage_rhs<Limiter, NumericalFlux>(U, R, /*recompute_aux=*/true);
-    MultiFab U1 = U;
-    saxpy(U1, dt, R);
-    // PerStage : phi recalcule pour l'etat intermediaire (plus precis).
-    // OncePerStep : on reutilise le aux du debut de pas.
-    stage_rhs<Limiter, NumericalFlux>(U1, R, /*recompute_aux=*/per);
-    saxpy(U1, dt, R);
-    lincomb(U, Real(0.5), U, Real(0.5), U1);
+    // DELEGUE le schema a l'objet SSPRK2Step du coeur (dedup, §8.2 A4). L'evaluateur de
+    // residu compte les etages : recompute_aux=true a l'etage 0, =per ensuite (PerStage :
+    // phi recalcule pour l'etat intermediaire ; OncePerStep : aux gele). Bit-identique.
+    int stage = 0;
+    SSPRK2Step{}.take_step(
+        [&](MultiFab& s, MultiFab& R) {
+          stage_rhs<Limiter, NumericalFlux>(s, R, (stage++ == 0) ? true : per);
+        },
+        U, dt);
   }
 
   // SSPRK3 couple (Shu-Osher, 3 etages). Memes axes que advance.
@@ -118,19 +118,13 @@ class Coupler {
                       std::is_same_v<Policy, OncePerStepCoupling>,
                   "Policy doit etre PerStageCoupling ou OncePerStepCoupling");
     constexpr bool per = std::is_same_v<Policy, PerStageCoupling>;
-    MultiFab R(ba_, dm_, Model::n_vars, 0);
-
-    stage_rhs<Limiter, NumericalFlux>(U, R, /*recompute_aux=*/true);
-    MultiFab U1 = U;
-    saxpy(U1, dt, R);                            // u1 = u + dt L(u)
-    stage_rhs<Limiter, NumericalFlux>(U1, R, per);
-    MultiFab U2 = U1;
-    saxpy(U2, dt, R);                            // tmp = u1 + dt L(u1)
-    lincomb(U2, Real(3) / 4, U, Real(1) / 4, U2);  // u2 = 3/4 u + 1/4 tmp
-    stage_rhs<Limiter, NumericalFlux>(U2, R, per);
-    MultiFab U3 = U2;
-    saxpy(U3, dt, R);                            // tmp = u2 + dt L(u2)
-    lincomb(U, Real(1) / 3, U, Real(2) / 3, U3);   // u^{n+1} = 1/3 u + 2/3 tmp
+    // Idem advance : delegue a SSPRK3Step, recompute_aux=true a l'etage 0, =per ensuite.
+    int stage = 0;
+    SSPRK3Step{}.take_step(
+        [&](MultiFab& s, MultiFab& R) {
+          stage_rhs<Limiter, NumericalFlux>(s, R, (stage++ == 0) ? true : per);
+        },
+        U, dt);
   }
 
   // Point d'entree unifie : on donne au coupleur une DISCRETISATION SPATIALE
