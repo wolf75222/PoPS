@@ -8,12 +8,12 @@ project(adc_cpp
 )
 
 option(ADC_BUILD_TESTS    "Build tests"    ON)
-option(ADC_BUILD_EXAMPLES "Build examples" ON)
+# Exemples, bindings Python et facades libadc vivent dans le depot adc_cases (qui
+# consomme adc::adc). Le coeur ne fournit que la lib d'interface + ses tests.
 option(ADC_USE_OPENMP     "Enable the OpenMP dispatch backend" OFF)
 option(ADC_USE_KOKKOS     "Enable the Kokkos dispatch backend (CPU/GPU portable)" OFF)
 option(ADC_USE_MPI        "Enable the MPI backend (distributed comm seam)" OFF)
 option(ADC_USE_HDF5       "Enable the HDF5 DataWriter (parallel output)" OFF)
-option(ADC_BUILD_PYTHON   "Build the pybind11 Python bindings (libadc facade)" OFF)
 option(ADC_USE_EIGEN      "Build host-side Eigen analysis tools (diocotron theory)" ON)
 
 # Norme C++ : 23 par defaut. Sous Kokkos+nvcc on retombe a 20 (CUDA 12.x ne propose

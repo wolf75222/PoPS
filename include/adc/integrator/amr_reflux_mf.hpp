@@ -38,6 +38,25 @@ inline void mf_advance_faces(MultiFab& U, const MultiFab& Fx, const MultiFab& Fy
   }
 }
 
+// U <- U + dt S(U, aux) sur les cellules valides : terme source applique en Euler
+// avant a chaque sous-pas AMR (cellule-local, pas de reflux). Sans cela le chemin AMR
+// (compute_face_fluxes -> divergence) ignorerait model.source. Pour un modele a source
+// nulle (diocotron) ceci ajoute dt*0 : bit-identique. NB : la DIFFUSION (terme non
+// local, +nu Lap U) n'est PAS encore portee ici (il faudrait un flux de face diffusif
+// pour rester conservatif au reflux) -> diffusion sur AMR = follow-up.
+template <class Model>
+inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Real dt) {
+  for (int li = 0; li < U.local_size(); ++li) {
+    Array4 u = U.fab(li).array();
+    const ConstArray4 uc = U.fab(li).const_array();
+    const ConstArray4 ax = aux.fab(li).const_array();
+    for_each_cell(U.box(li), [=] ADC_HD(int i, int j) {
+      const auto S = m.source(load_state<Model>(uc, i, j), load_aux(ax, i, j));
+      for (int c = 0; c < Model::n_vars; ++c) u(i, j, c) += dt * S[c];
+    });
+  }
+}
+
 // moyenne fin -> grossier (ratio 2) sur la region couverte (coords grossieres).
 inline void mf_average_down(const MultiFab& Uf, MultiFab& Uc, int CI0, int CI1,
                             int CJ0, int CJ1) {
@@ -115,6 +134,7 @@ void amr_step_2level_mf(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc
       }
   }
   mf_advance_faces(Uc, fxc, fyc, dxc, dyc, dt);  // Uc -> etat t+dt
+  mf_apply_source(m, Uc, auxc, dt);  // source S(U,aux) au sous-pas
 
   // --- sous-cyclage fin : r sous-pas, accumulation des flux fins (x dtf) ---
   std::vector<Real> fL(nJ * nc, 0), fR(nJ * nc, 0), fB(nI * nc, 0), fT(nI * nc, 0);
@@ -140,6 +160,7 @@ void amr_step_2level_mf(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc
             (FY(2 * I, 2 * CJ1 + 2, k) + FY(2 * I + 1, 2 * CJ1 + 2, k)) * dtf;
       }
     mf_advance_faces(Uf, fxf, fyf, dxf, dyf, dtf);
+    mf_apply_source(m, Uf, auxf, dtf);  // source S(U,aux) au sous-pas
   }
 
   mf_average_down(Uf, Uc, CI0, CI1, CJ0, CJ1);  // sync des cellules couvertes
@@ -215,6 +236,7 @@ void subcycle_level_mf(const Model& m, std::vector<AmrLevelMF>& L, int lev, Real
 
   if (!lv.has_fine) {
     mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);  // feuille
+    mf_apply_source(m, lv.U, *lv.aux, dt);  // source S(U,aux) au sous-pas
     return;
   }
 
@@ -240,6 +262,7 @@ void subcycle_level_mf(const Model& m, std::vector<AmrLevelMF>& L, int lev, Real
 
   MultiFab U_old = lv.U;  // etat t (interp temporelle de l'enfant)
   mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);  // lv.U -> t+dt
+  mf_apply_source(m, lv.U, *lv.aux, dt);  // source S(U,aux) au sous-pas
 
   for (int s = 0; s < r; ++s)
     subcycle_level_mf<Limiter, NumericalFlux>(m, L, lev + 1, dt / r, dom, &U_old,
@@ -449,6 +472,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
     }
   }
   mf_advance_faces(Uc, fxc, fyc, dxc, dyc, dt);
+  mf_apply_source(m, Uc, auxc, dt);  // source S(U,aux) au sous-pas
 
   // flux fins multi-box : une face-box par box fine GLOBALE, meme dmap que Uf. Bati sur le
   // box_array() global (et non les boxes locales) pour que BoxArray et DistributionMapping
@@ -487,6 +511,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
         }
     }
     mf_advance_faces(Uf, fxf, fyf, dxf, dyf, dtf);
+    mf_apply_source(m, Uf, auxf, dtf);  // source S(U,aux) au sous-pas
   }
 
   // average_down + reflux DISTRIBUES, le grossier etant REPLIQUE (chaque rang detient une
@@ -761,6 +786,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   if (lev + 1 >= static_cast<int>(L.size())) {  // feuille
     mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
+    mf_apply_source(m, lv.U, *lv.aux, dt);  // source S(U,aux) au sous-pas
     return;
   }
 
@@ -845,6 +871,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   MultiFab U_old = lv.U;  // etat t (interp temporelle pour les enfants)
   mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
+  mf_apply_source(m, lv.U, *lv.aux, dt);  // source S(U,aux) au sous-pas
   for (int s = 0; s < r; ++s)
     subcycle_level_mp<Limiter, NumericalFlux>(m, L, lev + 1, dt / r, base_dom, base_per,
                                               &U_old, &lv.U, Real(s) / r, &regs,
