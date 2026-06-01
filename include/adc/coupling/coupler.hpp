@@ -5,6 +5,7 @@
 #include <adc/elliptic/elliptic_problem.hpp>
 #include <adc/elliptic/elliptic_solver.hpp>
 #include <adc/elliptic/geometric_mg.hpp>
+#include <adc/integrator/time_integrator.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fab2d.hpp>
@@ -14,6 +15,7 @@
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
 #include <adc/operator/reconstruction.hpp>
+#include <adc/operator/spatial_discretisation.hpp>
 #include <adc/operator/spatial_operator.hpp>
 #include <adc/parallel/comm.hpp>
 
@@ -87,30 +89,68 @@ class Coupler {
         mg_(geom, ba, bcPhi, std::move(active)),
         aux_(ba, dm_, 3, 1) {}
 
-  // SSPRK2 couple. Limiteur (reconstruction) et politique de couplage temporel
-  // sont des parametres de template ; U doit avoir au moins Limiter::n_ghost
-  // ghosts. Policy = PerStageCoupling (defaut) recalcule phi a chaque etage ;
-  // OncePerStepCoupling le resout une fois par pas (aux gele).
-  template <class Limiter = NoSlope, class Policy = PerStageCoupling>
+  // SSPRK2 couple. Trois axes orthogonaux, tous parametres de template :
+  //   - Limiter      : reconstruction (NoSlope / Minmod / VanLeer ...)
+  //   - Policy       : couplage temporel (PerStage = phi a chaque etage ; OncePerStep
+  //                    = un seul solve par pas, aux gele)
+  //   - NumericalFlux : flux de Riemann (Rusanov par defaut, HLL, HLLC ...)
+  // U doit avoir au moins Limiter::n_ghost ghosts. La signature historique
+  // advance<Limiter, Policy> reste valide (NumericalFlux defaut = Rusanov).
+  template <class Limiter = NoSlope, class Policy = PerStageCoupling,
+            class NumericalFlux = RusanovFlux>
   void advance(MultiFab& U, Real dt) {
     static_assert(std::is_same_v<Policy, PerStageCoupling> ||
                       std::is_same_v<Policy, OncePerStepCoupling>,
                   "Policy doit etre PerStageCoupling ou OncePerStepCoupling");
+    constexpr bool per = std::is_same_v<Policy, PerStageCoupling>;
     MultiFab R(ba_, dm_, Model::n_vars, 0);
 
-    update_aux(U);
-    fill_ghosts(U, geom_.domain, bcU_);
-    assemble_rhs<Limiter>(model_, U, aux_, geom_, R);
+    stage_rhs<Limiter, NumericalFlux>(U, R, /*recompute_aux=*/true);
     MultiFab U1 = U;
     saxpy(U1, dt, R);
-
-    // PerStage : phi recalcule pour l'etat intermediaire U1 (plus precis).
-    // OncePerStep : on reutilise le aux du debut de pas (un seul solve elliptique).
-    if constexpr (std::is_same_v<Policy, PerStageCoupling>) update_aux(U1);
-    fill_ghosts(U1, geom_.domain, bcU_);
-    assemble_rhs<Limiter>(model_, U1, aux_, geom_, R);
+    // PerStage : phi recalcule pour l'etat intermediaire (plus precis).
+    // OncePerStep : on reutilise le aux du debut de pas.
+    stage_rhs<Limiter, NumericalFlux>(U1, R, /*recompute_aux=*/per);
     saxpy(U1, dt, R);
     lincomb(U, Real(0.5), U, Real(0.5), U1);
+  }
+
+  // SSPRK3 couple (Shu-Osher, 3 etages). Memes axes que advance.
+  template <class Limiter = NoSlope, class Policy = PerStageCoupling,
+            class NumericalFlux = RusanovFlux>
+  void advance_ssprk3(MultiFab& U, Real dt) {
+    static_assert(std::is_same_v<Policy, PerStageCoupling> ||
+                      std::is_same_v<Policy, OncePerStepCoupling>,
+                  "Policy doit etre PerStageCoupling ou OncePerStepCoupling");
+    constexpr bool per = std::is_same_v<Policy, PerStageCoupling>;
+    MultiFab R(ba_, dm_, Model::n_vars, 0);
+
+    stage_rhs<Limiter, NumericalFlux>(U, R, /*recompute_aux=*/true);
+    MultiFab U1 = U;
+    saxpy(U1, dt, R);                            // u1 = u + dt L(u)
+    stage_rhs<Limiter, NumericalFlux>(U1, R, per);
+    MultiFab U2 = U1;
+    saxpy(U2, dt, R);                            // tmp = u1 + dt L(u1)
+    lincomb(U2, Real(3) / 4, U, Real(1) / 4, U2);  // u2 = 3/4 u + 1/4 tmp
+    stage_rhs<Limiter, NumericalFlux>(U2, R, per);
+    MultiFab U3 = U2;
+    saxpy(U3, dt, R);                            // tmp = u2 + dt L(u2)
+    lincomb(U, Real(1) / 3, U, Real(2) / 3, U3);   // u^{n+1} = 1/3 u + 2/3 tmp
+  }
+
+  // Point d'entree unifie : on donne au coupleur une DISCRETISATION SPATIALE
+  // (limiteur + flux) et un INTEGRATEUR EN TEMPS (tag), plus la politique de
+  // couplage. Le coupleur assemble ; le cas ne choisit que les politiques.
+  //   sim.step<MusclVanLeerHLLC, SSPRK3>(U, dt);
+  template <class Disc = FirstOrder, class TimeInteg = SSPRK2,
+            class Policy = PerStageCoupling>
+  void step(MultiFab& U, Real dt) {
+    using L = typename Disc::Limiter;
+    using F = typename Disc::NumericalFlux;
+    if constexpr (std::is_same_v<TimeInteg, SSPRK3>)
+      advance_ssprk3<L, Policy, F>(U, dt);
+    else
+      advance<L, Policy, F>(U, dt);
   }
 
   // Resout phi et derive aux pour un etat donne, sans avancer en temps
@@ -137,6 +177,16 @@ class Coupler {
     detail::coupler_eval_rhs(state, mg_.rhs(), model_);
     mg_.solve();  // interface du concept EllipticSolver (backend-agnostique)
     derive_aux();
+  }
+
+  // Un etage : (option) resolution elliptique, halos, residu hyperbolique dans R.
+  // Mutualise par advance (SSPRK2) et advance_ssprk3 ; ordre des operations conserve
+  // pour rester bit-identique a l'ancien advance.
+  template <class Limiter, class NumericalFlux>
+  void stage_rhs(MultiFab& s, MultiFab& R, bool recompute_aux) {
+    if (recompute_aux) update_aux(s);
+    fill_ghosts(s, geom_.domain, bcU_);
+    assemble_rhs<Limiter, NumericalFlux>(model_, s, aux_, geom_, R);
   }
 
   void derive_aux() {

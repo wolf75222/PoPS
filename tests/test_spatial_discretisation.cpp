@@ -1,0 +1,34 @@
+// La discretisation spatiale (limiteur + flux) et les tags d'integration en temps
+// sont des types nommes du coeur. Verification statique des bundles et des aliases :
+// aucun modele requis (le coeur ne connait aucune physique).
+
+#include <adc/integrator/time_integrator.hpp>
+#include <adc/operator/numerical_flux.hpp>
+#include <adc/operator/reconstruction.hpp>
+#include <adc/operator/spatial_discretisation.hpp>
+
+#include <cstdio>
+#include <type_traits>
+
+using namespace adc;
+
+// Un bundle expose Limiter et NumericalFlux.
+static_assert(std::is_same_v<FirstOrder::Limiter, NoSlope>);
+static_assert(std::is_same_v<FirstOrder::NumericalFlux, RusanovFlux>);
+static_assert(std::is_same_v<MusclVanLeer::Limiter, VanLeer>);
+static_assert(std::is_same_v<MusclVanLeer::NumericalFlux, RusanovFlux>);
+static_assert(std::is_same_v<MusclVanLeerHLLC::Limiter, VanLeer>);
+static_assert(std::is_same_v<MusclVanLeerHLLC::NumericalFlux, HLLCFlux>);
+
+// On peut composer librement reconstruction x flux.
+using MinmodHLL = SpatialDiscretisation<Minmod, HLLFlux>;
+static_assert(std::is_same_v<MinmodHLL::Limiter, Minmod>);
+static_assert(std::is_same_v<MinmodHLL::NumericalFlux, HLLFlux>);
+
+// Les tags d'integration en temps sont distincts.
+static_assert(!std::is_same_v<SSPRK2, SSPRK3>);
+
+int main() {
+  std::printf("OK test_spatial_discretisation\n");
+  return 0;
+}
