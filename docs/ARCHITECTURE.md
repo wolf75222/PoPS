@@ -1,9 +1,9 @@
 # Architecture de adc_cpp
 
-Solveur C++23 pour les systemes hyperbolique-elliptique couples sur AMR (pile mesh maison),
-ecrit pour OpenMP + MPI + Kokkos, cible cluster ROMEO (GH200). Cas de validation fil rouge :
-l'instabilite diocotron (derive E x B), l'Euler-Poisson (gravite ou plasma) et le
-deux-fluides isotherme (type Hoffart, arXiv:2510.11808).
+Solveur C++23 pour les systemes hyperbolique-elliptique couples sur AMR, ecrit pour
+OpenMP + MPI + Kokkos. Cas de validation : l'instabilite diocotron (derive E x B),
+l'Euler-Poisson (gravite ou plasma) et le deux-fluides isotherme (type Hoffart,
+arXiv:2510.11808).
 
 Ce document fige l'architecture cible et son etat. Le README porte la narration et les
 resultats. Ici on decrit les couches, les seams, les decisions, et on distingue ce qui est
@@ -55,7 +55,7 @@ politique Execution : ce sont des operateurs de grille qui ORCHESTRENT les seams
 `for_each_cell` sur chaque fab local et appellent `comm` / `all_reduce`), au meme titre
 qu'`assemble_rhs`. La couche Execution se limite aux seams qui ne voient que des vues minimales.
 
-**Point delicat : le modele point-wise ne suffit pas pour les modeles couples.** Certains
+**Les modeles couples ont des termes non locaux.** Certains
 termes ne sont pas purement locaux : potentiel, champ electrique, nullspace de Poisson
 periodique, moyenne de charge, sources implicites. La regle :
 
@@ -287,7 +287,7 @@ car la division peut differer au dernier bit de la forme multiplicative `*cx` du
 (IEEE754 : `a/b` et `a*(1/b)` ne coincident pas toujours). Ils instancient la meme convention
 nommee, documentee, mais ne sont pas touches a cette etape.
 
-## 8. AMR : vers un objet nativement distribue (priorite)
+## 8. AMR distribue
 
 **Etat.** L'integrateur AMR tourne sur la pile MultiFab + seam (`integrator/amr_reflux_mf.hpp`,
 generique `<Limiter, NumericalFlux, N-comp>`, bulk `for_each_cell` GPU-ready). UN SEUL moteur de
@@ -451,7 +451,7 @@ c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-te
 - `mf_arith.hpp` : combinaisons lineaires de MultiFab (saxpy, norm_inf, sum) pour les etages RK.
 
 ### `model/` : physique locale (couche 1)
-- `diocotron.hpp` : transport derive E x B d'une densite n_e (cas fil rouge).
+- `diocotron.hpp` : transport derive E x B d'une densite n_e (cas de validation principal).
 - `euler.hpp` : Euler compressible 2D (gaz parfait).
 - `euler_poisson.hpp` : Euler couple Poisson (gravite OU plasma).
 - `two_fluid_isothermal.hpp` : deux-fluides isotherme, mode lineaire 1-Fourier.

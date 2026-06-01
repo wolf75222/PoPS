@@ -66,7 +66,7 @@ Soit **~4.8x** sur le pas couple, a physique **bit-identique** : les deux invers
 le MEME Laplacien discret 5 points (`test_fft_coupler` : MG vs FFT `maxdiff = 1.6e-14`
 apres 5 pas ; residu FFT seul `7e-14`). C'est l'optimisation run-time a fort impact
 sur les 86% elliptiques. Limite : FFT periodique, N puissance de 2, mono-rang (le
-distribue tuiles<->bandes est `SpectralExBStepper`). Cumulable avec OncePerStep.
+distribue par bandes MPI est `SpectralCoupler`). Cumulable avec OncePerStep.
 
 ## Banc `bench_amr` : deux-fluides AP + coupleur AMR multi-patch
 

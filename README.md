@@ -2,14 +2,9 @@
 
 # ADC CPP
 
-**Solveur C++23 pour systemes hyperbolique-elliptique couples sur AMR block-structured (multi-niveaux + multi-patch), dispatch unique serie / OpenMP / Kokkos (GPU) et MPI distribue. Cas fil rouge : l'instabilite diocotron (derive E x B) du papier Hoffart (arXiv:2510.11808).**
+**Solveur C++23 pour systemes hyperbolique-elliptique couples, avec AMR, MPI et GPU.**
 
-![C++23](https://img.shields.io/badge/C%2B%2B-23-blue?logo=cplusplus)
-![Tests](https://img.shields.io/badge/tests-66%20C%2B%2B%20%2B%2015%20MPI%20%2B%20python-brightgreen)
-![Build](https://img.shields.io/badge/build-CMake%203.20%2B-064F8C?logo=cmake)
-![GPU](https://img.shields.io/badge/GPU-Nvidia%20GH200%20(Kokkos%2FCUDA)-76B900?logo=nvidia)
-![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20ROMEO-lightgrey)
+![Tests](https://img.shields.io/badge/tests-66%20%2B%2015%20MPI-brightgreen)
 
 </div>
 
@@ -51,8 +46,8 @@ d U / d t  +  div F(U, phi)  =  div H(U, grad U)  +  S(U, phi)
 D phi = f(U)
 ```
 
-Cas de validation fil rouge : l'instabilite **diocotron** (Hoffart et al.,
-arXiv:2510.11808), puis le **deux-fluides isotherme** plasma.
+Cas de validation : l'instabilite **diocotron** (Hoffart et al., arXiv:2510.11808)
+et le **deux-fluides isotherme** plasma.
 
 ## Solveurs
 
@@ -220,20 +215,8 @@ docs/          ARCHITECTURE.md, PERFORMANCE.md, animations.
 
 ## Validation
 
-- **66/66** tests C++ (serie), idem OpenMP ; **15** tests MPI (`mpirun -np 4`, **bit-identique np=1/2/4**) ; HDF5 ; bindings Python verts.
-- **GPU GH200** (CUDA 12.6, ROMEO) : advection, multigrille, pas couple Euler-Poisson, deux-fluides AP, AMR multi-patch (`diocotron_amr_kokkos`, checksum `4394594.404318`) + `libadc` compilee GPU, tous **bit-identiques au CPU**. Garde-fou `romeo/sanitizer.sbatch` (compute-sanitizer + checksum CPU vs GPU).
-- **AMR** : un seul moteur de production (`advance_amr`, multi-patch N-niveaux distribue), dont le mono-box est le cas degenere (`maxdiff=0`) ; reflux 2-niveaux / N-niveaux / multi-patch coverage-aware **bit-identiques** a la reference, conservation a l'arrondi (5.55e-16) ; clustering Berger-Rigoutsos branche. Le demo couple `diocotron_multipatch` (Poisson grossier + reflux multi-patch) re-cluster ses patchs a la volee (`docs/anim_diocotron_multipatch.gif`) en conservant la masse a `~2e-15` sur tout le run.
-- **Reproduction papier diocotron** (arXiv:2510.11808, objectif de stage) : la colonne sur AMR avec Poisson multi-niveau egale l'uniforme a resolution effective egale pour ~41-44 % des cellules (taux mode 4 normalise `0.42`/`0.526`/`0.563`/`0.592` aux eff 192/256/320/448). La cible analytique `0.911` n'est pas atteinte : la montee est monotone mais lente, et une instabilite numerique au-dela de eff 448 (champ en `nan`) bloque la resolution. Pipeline valide sur 1 GPU GH200 (ROMEO), qui reproduit eff-448 (uniforme `0.577`, AMR `0.592`). Detail : [tutorials/10_diocotron_reproduction.md](tutorials/10_diocotron_reproduction.md).
-- **Deux-fluides AP** : dispersion isotrope (3.1%), borne + quasi-neutre a `omega_pe = 1e3` (`dt*omega_pe = 5`) la ou l'explicite explose.
+- **66** tests C++ (serie = OpenMP) + **15** tests MPI bit-identiques np=1/2/4 ; bindings Python verts.
+- AMR conservatif : reflux multi-patch a l'arrondi machine (`~1e-15`).
+- GPU GH200 : pas couple + AMR bit-identiques au CPU (checksum exact).
 
-## Resultats ROMEO (GH200 + EPYC)
-
-Runs de reproduction du taux diocotron (arXiv:2510.11808, mode 4, cible 0.911).
-
-| Figure | Source | Conclusion |
-|---|---|---|
-| ![convergence WENO5](docs/romeo_highorder_convergence.png) | job 613961, WENO5-Z + SSPRK3, modes 3/4/5 x eff 256/512/1024 | sur-tir ~+8 % **plat en resolution** : limite geometrique (bord cartesien), pas numerique |
-| ![croissance mode 4](docs/romeo_growth_mode4.png) | `ring_amp.csv` reels, mode 4 | eff 512 et 1024 **confondues** : taux converge en resolution effective |
-| ![efficacite AMR](docs/romeo_amr_efficiency.png) | job 613945, colonne AMR vs uniforme | meme taux pour **~40 % des cellules** (AMR multi-niveau VanLeer) |
-
-Voir `romeo/HERO_RESULTS.md` + `tutorials/10_diocotron_reproduction.md` pour le detail.
+Runs sur ROMEO (reproduction du taux diocotron, GPU) : [docs/ROMEO.md](docs/ROMEO.md).
