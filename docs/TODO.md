@@ -50,9 +50,11 @@ testable**. `[x]` = fait et vert ; `[ ]` = à faire.
 **Ordre conseillé** : (1) `ChargeDensityRhs` N-blocs ✅ → (2) `CoupledSource` ✅ → (3) interface
 implicite `ImplicitBlockStepper` + défaut ✅ → (4) **exemple C++ minimal** (électrons
 implicites + ions explicites, rhs = n_i − n_e, sans Python) ✅ → (5) `AmrSystemCoupler` ✅ →
-(6) API Python dans `adc_cases` (reste à faire). Chaque étape validée par un test d'intégration
-(§2.5, tous verts). **§2.1, §2.2, §2.3, §2.5 entièrement faits dans le cœur.** **Reste dans le
-cœur** : §4 nettoyages. **Hors cœur** : §2.4 modèles canoniques + §3 API Python (dans `adc_cases`).
+(6) API Python dans `adc_cases` ✅. Chaque étape validée par un test d'intégration (tous verts :
+adc_cpp 38/38, adc_cases 47/47 + bindings Python). **§2 et §3 entièrement faits** ; **§4** : 4.1
+(diffusion AMR) et 4.2 (contrat `Aux`) faits, 4.3 (max_drift_speed, change le dt) et 4.4 (dédup
+diagnostics) reportés avec justification. Reste surtout des **raffinements** (composition Python
+générique, modèle utilisateur C++ exposé à Python, perf).
 
 ### 2.1 Couplage et RHS
 - [x] **`ChargeDensityRhs` à N blocs** : `f = Σ_s q_s n_s` (somme sur `for_each_block`),
@@ -99,8 +101,11 @@ cœur** : §4 nettoyages. **Hors cœur** : §2.4 modèles canoniques + §3 API P
   (relaxation raide) + ions explicites + `rhs Poisson = n_i − n_e` via `ChargeDensityRhs` +
   `ImplicitSourceStepper`. Le test « un utilisateur peut-il composer son cas ? » : il
   n'assemble que des briques (modèle, schéma, politique temps, charge), aucun solveur écrit.
-- [ ] **électrons Euler + ions Euler isothermes + Poisson** (cas canonique deux-espèces) — modèles dans `adc_cases`.
-- [ ] **diocotron à ions mobiles** (les ions deviennent un 2e bloc ; réutiliser le diocotron existant pour les électrons).
+- [x] **électrons Euler + ions Euler isothermes + Poisson** (cas canonique deux-espèces) —
+  `adc_cases` : modèles `ChargedEuler` (4 var) + `ChargedEulerIsothermal` (3 var) dans
+  `model/charged_fluid.hpp`, composés en blocs hétérogènes (`test_two_species_euler`).
+- [x] **diocotron à ions mobiles** — `adc_cases/test_diocotron_mobile_ions` : réutilise le
+  modèle `Diocotron` pour 2 blocs, `n_i0` figé devient un bloc transporté, Poisson `α(n_e − n_i)`.
 - [x] Garde : masse conservée par bloc (`test_amr_system_coupler`), RHS = q_i n_i + q_e n_e
   correct (`test_two_species_minimal`, `test_amr_system_coupler`). Comparaison à une référence
   analytique (backward-Euler exact, production exacte).
@@ -119,21 +124,38 @@ But : Python **compose**, ne calcule pas cellule par cellule. Les chaînes séle
 des briques C++ compilées. À ne faire qu'**après** l'exemple C++ minimal (§2.4) qui valide
 l'architecture utilisateur.
 
-- [ ] **Modèles physiques prêts à composer** (dans `adc_cases`) : `ElectronEuler`, `IonEuler`,
-  `Diocotron`, `TwoFluid`… exposés pour servir de blocs.
-- [ ] Façade compilée `MultiSpeciesSolver(vector<SpeciesConfig>)` instanciant un `CoupledSystem` + `SystemCoupler` (PIMPL, comme les solveurs existants).
-- [ ] Bindings pybind11 : `adc.Mesh2D(...)`, `adc.Simulation(mesh, backend=...)`, `sim.add_equation(name, model, spatial, time, bc)`, `sim.add_poisson(rhs, solver)`, `sim.run(t_end, cfl, output)`.
-- [ ] `model="electron_euler"`, `flux="hllc"`, `time="imex"` ↔ tags C++ ; jamais de callback `flux(u)` Python dans le hot path.
+- [x] **Modèles physiques prêts à composer** (dans `adc_cases`) : `ChargedEuler`,
+  `ChargedEulerIsothermal`, `Diocotron`, `Euler`… servent de blocs (`EquationBlock`).
+- [x] Façade compilée `MultiSpeciesSolver` (PIMPL) instanciant un `CoupledSystem` +
+  `SystemCoupler` (`adc_cases/solver/multispecies_solver.{hpp,cpp}`), comme les autres façades.
+  Cas concret deux fluides ; la composition entièrement générique `vector<SpeciesConfig>`
+  (espèces arbitraires) reste un cap ultérieur (explosion combinatoire / type erasure).
+- [x] Bindings pybind11 : `adc.MultiSpeciesConfig`, `adc.MultiSpeciesSolver`
+  (`step/advance/density_e/density_i/potential/mass_e/mass_i/max_charge`), champs en numpy
+  (`python/bindings.cpp`, testé `python/test_bindings.py`). L'API `Simulation.add_equation(...)`
+  fluide reste à dériver de cette façade.
+- [x] `model`/`flux`/`time` ↔ tags C++ : la physique est en C++ compilé (schémas et politiques
+  fixés à la compilation), aucun callback Python dans le hot path.
 - [ ] (avancé) exposer un `PhysicalModel` écrit en C++ par l'utilisateur, puis composable depuis Python.
 
 ---
 
 ## 4. À faire — follow-ups cœur (nettoyages / cohérence)
 
-- [ ] **Diffusion sur AMR** : la porter comme **flux de face diffusif** (pas un Laplacien direct), sinon le reflux AMR ne la voit pas → non conservatif aux interfaces coarse-fine. (`compute_face_fluxes` doit recevoir `geom` et ajouter `−ν(u_R−u_L)/h`.)
-- [ ] **Contrat `Aux`** : trancher. Soit `Aux` est fixe (`phi, grad_x, grad_y`) et on retire `typename M::Aux` du concept ; soit on généralise et `load_aux<Model>` construit `typename Model::Aux`. Aujourd'hui le contrat promet plus que le code ne donne.
-- [ ] **`SpectralCoupler::max_drift_speed`** : encore `/model_.B0` (diagnostic). Le généraliser via `model.max_wave_speed` (attention : change le `dt`, donc la trajectoire → re-valider, pas bit-identique).
-- [ ] **`Coupler` fourre-tout** : extraire l'orchestrateur (le `SystemCoupler` va dans ce sens) ; dédupliquer les diagnostics `AmrCouplerMP::mass()`/`max_drift_speed()` qui réimplémentent `amr_diagnostics.hpp`. Nom : `Coupler` est historique = *Assembler/Simulation Driver* (à acter, pas urgent).
+- [x] **Diffusion sur AMR** : portée comme **flux de face diffusif** `−ν(u_R−u_L)/h` dans
+  `compute_face_fluxes` (reçoit `dx/dy` du niveau), gardée par `DiffusiveModel` (chemin
+  hyperbolique strictement bit-identique). Vue par le reflux → conservative aux interfaces
+  coarse-fine. Testée (`test_amr_diffusion` : masse conservée à 1e-12 + lissage).
+- [x] **Contrat `Aux`** : tranché — `Aux` est **fixe** (`adc::Aux`). Le concept `PhysicalModel`
+  exige désormais `std::same_as<typename M::Aux, Aux>` : il promet exactement ce que
+  `load_aux` fournit (généraliser à un `Model::Aux` quelconque reste possible plus tard).
+- [ ] **`SpectralCoupler::max_drift_speed`** : encore `/model_.B0`. Généraliser via
+  `model.max_wave_speed` **change le `dt` → la trajectoire → non bit-identique** : reporté
+  tant que la re-validation physique (croissance diocotron) n'est pas refaite contre la référence.
+- [ ] **`Coupler` fourre-tout / dédup diagnostics** : `AmrCouplerMP::mass()`/`max_drift_speed()`
+  ajoutent le multi-box + réduction distribuée (`all_reduce`) que `amr_diagnostics.hpp` (mono-box)
+  n'a pas ; vraie dédup = généraliser ces diagnostics au multi-box (risque de régression sur le
+  chemin distribué). « Pas urgent », reporté.
 
 ---
 
@@ -171,7 +193,10 @@ l'architecture utilisateur.
 > `SystemCoupler` mono-niveau **et** `AmrSystemCoupler` sur AMR (RHS elliptique de système
 > `Σ_s q_s n_s`, explicite avancé par le cœur, implicite/IMEX délégué avec un défaut
 > backward-Euler sans Newton utilisateur, source de couplage inter-espèces, sous-pas par
-> bloc, conservation par reflux). Reste : IMEX partiel + cadence φ (§2.2), nettoyages cœur
-> (§4), puis — dans `adc_cases` — les modèles canoniques deux-espèces (§2.4) et l'API Python
-> de composition (§3). Le `PhysicalModel` décrit une équation, le `CoupledSystem` un système,
-> le `Scheduler`/coupleur l'ordre d'exécution ; le cœur garantit AMR / MPI / GPU.
+> bloc, conservation par reflux). Le squelette est **rempli ET exercé par de la vraie
+> physique** : modèles deux-fluides canoniques (électrons Euler + ions isothermes) et
+> diocotron à ions mobiles dans `adc_cases`, façade `MultiSpeciesSolver` + bindings Python
+> qui composent un `CoupledSystem` depuis Python sans callback dans le hot path ; diffusion
+> rendue conservative sur AMR (flux de face). Le `PhysicalModel` décrit une équation, le
+> `CoupledSystem` un système, le `Scheduler`/coupleur l'ordre d'exécution ; le cœur garantit
+> AMR / MPI / GPU. Restent des raffinements (composition Python générique, perf, §4.3/§4.4).

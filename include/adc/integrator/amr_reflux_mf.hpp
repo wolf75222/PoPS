@@ -41,9 +41,9 @@ inline void mf_advance_faces(MultiFab& U, const MultiFab& Fx, const MultiFab& Fy
 // U <- U + dt S(U, aux) sur les cellules valides : terme source applique en Euler
 // avant a chaque sous-pas AMR (cellule-local, pas de reflux). Sans cela le chemin AMR
 // (compute_face_fluxes -> divergence) ignorerait model.source. Pour un modele a source
-// nulle (diocotron) ceci ajoute dt*0 : bit-identique. NB : la DIFFUSION (terme non
-// local, +nu Lap U) n'est PAS encore portee ici (il faudrait un flux de face diffusif
-// pour rester conservatif au reflux) -> diffusion sur AMR = follow-up.
+// nulle (diocotron) ceci ajoute dt*0 : bit-identique. La DIFFUSION, elle, est portee
+// par compute_face_fluxes comme FLUX de face Fickien (-nu grad u), donc vue par le
+// reflux et conservative aux interfaces coarse-fine : ce n'est PAS une source locale.
 template <class Model>
 inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Real dt) {
   for (int li = 0; li < U.local_size(); ++li) {
@@ -117,7 +117,7 @@ void amr_step_2level_mf(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc
   fill_boundary(Uc, dom, Periodicity{true, true});
   MultiFab fxc(BoxArray(std::vector<Box2D>{xface_box(Uc.box(0))}), Uc.dmap(), nc, 0);
   MultiFab fyc(BoxArray(std::vector<Box2D>{yface_box(Uc.box(0))}), Uc.dmap(), nc, 0);
-  compute_face_fluxes<Limiter, NumericalFlux>(m, Uc, auxc, fxc, fyc);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, Uc, auxc, fxc, fyc, dxc, dyc);
   std::vector<Real> cL(nJ * nc), cR(nJ * nc), cB(nI * nc), cT(nI * nc);
   {
     device_fence();
@@ -142,7 +142,7 @@ void amr_step_2level_mf(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc
   MultiFab fyf(BoxArray(std::vector<Box2D>{yface_box(Uf.box(0))}), Uf.dmap(), nc, 0);
   for (int s = 0; s < r; ++s) {
     mf_fill_fine_ghosts_t(Uf, Uc_old, Uc, Real(s) / r);
-    compute_face_fluxes<Limiter, NumericalFlux>(m, Uf, auxf, fxf, fyf);
+    compute_face_fluxes<Limiter, NumericalFlux>(m, Uf, auxf, fxf, fyf, dxf, dyf);
     device_fence();
     const ConstArray4 FX = fxf.fab(0).const_array(), FY = fyf.fab(0).const_array();
     for (int J = CJ0; J <= CJ1; ++J)
@@ -211,7 +211,7 @@ void subcycle_level_mf(const Model& m, std::vector<AmrLevelMF>& L, int lev, Real
 
   MultiFab fx(BoxArray(std::vector<Box2D>{xface_box(lv.U.box(0))}), lv.U.dmap(), nc, 0);
   MultiFab fy(BoxArray(std::vector<Box2D>{yface_box(lv.U.box(0))}), lv.U.dmap(), nc, 0);
-  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, fx, fy);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy);
 
   if (lev > 0) {  // contribution au registre du parent (flux fins x dt)
     device_fence();
@@ -441,7 +441,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   fill_periodic_local(Uc, dom);  // grossier replique -> fill periodique local (pas de plan MPI)
   MultiFab fxc(BoxArray(std::vector<Box2D>{xface_box(Uc.box(0))}), Uc.dmap(), nc, 0);
   MultiFab fyc(BoxArray(std::vector<Box2D>{yface_box(Uc.box(0))}), Uc.dmap(), nc, 0);
-  compute_face_fluxes<Limiter, NumericalFlux>(m, Uc, auxc, fxc, fyc);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, Uc, auxc, fxc, fyc, dxc, dyc);
 
   // registre par box fine : flux grossier (sans dt) sauve aux 4 faces.
   struct Reg { int I0, I1, J0, J1; std::vector<Real> cL, cR, cB, cT, fL, fR, fB, fT; };
@@ -490,7 +490,7 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
   for (int s = 0; s < r; ++s) {
     mf_fill_fine_ghosts_multi(Uf, Uc_old, Uc, Real(s) / r);
     fill_boundary(Uf, fdom, Periodicity{false, false});  // halos fin-fin
-    compute_face_fluxes<Limiter, NumericalFlux>(m, Uf, auxf, fxf, fyf);
+    compute_face_fluxes<Limiter, NumericalFlux>(m, Uf, auxf, fxf, fyf, dxf, dyf);
     device_fence();
     for (int li = 0; li < Uf.local_size(); ++li) {
       Reg& g = regs[li];
@@ -760,7 +760,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   }
   MultiFab fx(BoxArray(std::move(fxb)), lv.U.dmap(), nc, 0);
   MultiFab fy(BoxArray(std::move(fyb)), lv.U.dmap(), nc, 0);
-  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, fx, fy);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy);
   device_fence();
 
   if (parentRegs) {  // role FIN : flux fins de CE niveau dans le registre du parent

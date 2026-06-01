@@ -117,9 +117,17 @@ inline Box2D yface_box(const Box2D& v) {
 //   r(i,j) = S - (Fx(i+1,j)-Fx(i,j))/dx - (Fy(i,j+1)-Fy(i,j))/dy
 // redonne EXACTEMENT le residu d'assemble_rhs. Fx, Fy dimensionnes par l'appelant
 // (boites xface_box/yface_box, ncomp = Model::n_vars, 0 ghost). Device-callable.
+//
+// DIFFUSION sur AMR (TODO 4) : pour un DiffusiveModel, on ajoute le flux de FACE
+// Fickien F_diff = -nu (u_R - u_L)/h (gradient centre au face, valeurs de cellule).
+// Sa divergence -(Fx(i+1)-Fx(i))/dx redonne EXACTEMENT +nu Lap(u) d'assemble_rhs,
+// mais traite en FLUX : le reflux AMR le voit donc, et la diffusion reste
+// conservative aux interfaces coarse-fine (sinon un Laplacien direct serait ignore
+// par le reflux). dx/dy = pas du NIVEAU (passes par l'appelant ; 0 par defaut, non
+// lus pour un modele non diffusif -> chemin hyperbolique strictement bit-identique).
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& aux,
-                         MultiFab& Fx, MultiFab& Fy) {
+                         MultiFab& Fx, MultiFab& Fy, Real dx = 0, Real dy = 0) {
   const Limiter lim{};
   const NumericalFlux nflux{};
   for (int li = 0; li < U.local_size(); ++li) {
@@ -133,12 +141,22 @@ void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& 
       const auto Rr = reconstruct<Model>(u, i, j, 0, -1, lim);
       const auto F = nflux(model, L, load_aux(ax, i - 1, j), Rr, load_aux(ax, i, j), 0);
       for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = F[c];
+      if constexpr (DiffusiveModel<Model>) {
+        const Real nu = model.diffusivity();
+        for (int c = 0; c < Model::n_vars; ++c)
+          fx(i, j, c) += -nu * (u(i, j, c) - u(i - 1, j, c)) / dx;
+      }
     });
     for_each_cell(yface_box(v), [=] ADC_HD(int i, int j) {
       const auto L = reconstruct<Model>(u, i, j - 1, 1, +1, lim);
       const auto Rr = reconstruct<Model>(u, i, j, 1, -1, lim);
       const auto F = nflux(model, L, load_aux(ax, i, j - 1), Rr, load_aux(ax, i, j), 1);
       for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = F[c];
+      if constexpr (DiffusiveModel<Model>) {
+        const Real nu = model.diffusivity();
+        for (int c = 0; c < Model::n_vars; ++c)
+          fy(i, j, c) += -nu * (u(i, j, c) - u(i, j - 1, c)) / dy;
+      }
     });
   }
 }
