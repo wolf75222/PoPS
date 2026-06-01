@@ -204,6 +204,32 @@ int main() {
         "amr_ion_coarse_produced");
   }
 
+  // --- Partie C : cadence Poisson (TODO 2.2.3) ---
+  // Un bloc explicite a 4 sous-pas. OncePerStep -> phi resolu 1 fois par macro-pas ;
+  // PerSubstep -> re-resolu avant chaque sous-pas suivant (1 + 3 = 4 resolutions).
+  {
+    using Blk4 = EquationBlock<AdvectX, FirstOrder, ExplicitTime<SSPRK2, 4>>;
+    static_assert(Blk4::Time::substeps == 4);
+    auto build = [&](PoissonCadence cadence) {
+      MultiFab Uc(ba_coarse, dm, 1, 2);
+      Uc.set_val(Real(1));
+      Blk4 blk{"adv", AdvectX{Real(1)}, Uc, BCRec{}};
+      CoupledSystem system{blk};
+      std::vector<std::vector<AmrLevelMP>> bl;
+      bl.emplace_back();
+      bl.back().push_back(make_level(std::move(Uc), dxc, dyc));  // 1 niveau (grossier seul)
+      return AmrSystemCoupler(system, geom, ba_coarse, BCRec{}, ZeroSystemRhs{},
+                              std::move(bl), Periodicity{true, true}, true, cadence);
+    };
+    auto once = build(PoissonCadence::OncePerStep);
+    once.step(Real(0.01));
+    chk(once.solve_count() == 1, "cadence_once_per_step");
+
+    auto each = build(PoissonCadence::PerSubstep);
+    each.step(Real(0.01));
+    chk(each.solve_count() == 4, "cadence_per_substep");
+  }
+
   if (fails == 0) std::printf("OK test_amr_system_coupler\n");
   return fails == 0 ? 0 : 1;
 }

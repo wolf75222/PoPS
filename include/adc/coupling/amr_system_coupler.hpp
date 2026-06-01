@@ -42,10 +42,21 @@
 // Hypothese du squelette : tous les blocs partagent le BoxArray par niveau (grille AMR
 // commune a toutes les especes) -> un seul aux, un seul Poisson. Mono-rang / mono-box
 // par niveau valide (comme AmrCoupler) ; le multi-box reutilise les primitives _mb.
-// Le re-solve de phi entre sous-pas d'espece (cadence) reste un raffinement (TODO 2.2.3) :
-// ici phi est resolu une fois par pas et gele pendant l'avance des blocs.
+//
+// CADENCE POISSON (TODO 2.2.3) : quand une espece fait plus de sous-pas qu'une autre, a
+// quelle frequence re-resoudre phi ? Le choix est explicite (PoissonCadence) plutot que
+// cable en dur :
+//   OncePerStep (defaut) : phi resolu une fois par macro-pas, GELE pendant l'avance des
+//     blocs. Le moins cher ; coherent quand le pas macro est petit devant l'echelle de phi.
+//   PerSubstep : phi re-resolu avant chaque sous-pas d'espece (la charge a bouge). Plus
+//     fidele pour un transport pilote par le champ (derive E x B), plus cher. Approximation
+//     dans tous les cas (les blocs avancent l'un apres l'autre, pas en lock-step multirate
+//     vrai ; ca, c'est un scheduler a part). Le SystemCoupler mono-niveau, lui, re-resout
+//     deja phi a CHAQUE etage RK (recompute_aux=true) : cadence maximale par construction.
 
 namespace adc {
+
+enum class PoissonCadence { OncePerStep, PerSubstep };
 
 namespace detail {
 template <class>
@@ -69,6 +80,7 @@ class AmrSystemCoupler {
                    std::vector<std::vector<AmrLevelMP>> block_levels,
                    Periodicity base_per = Periodicity{true, true},
                    bool replicated_coarse = true,
+                   PoissonCadence cadence = PoissonCadence::OncePerStep,
                    std::function<bool(Real, Real)> active = {})
       : system_(std::move(system)),
         rhs_assembler_(std::move(rhs_assembler)),
@@ -76,6 +88,7 @@ class AmrSystemCoupler {
         dom_(geom.domain),
         base_per_(base_per),
         replicated_coarse_(replicated_coarse),
+        cadence_(cadence),
         mg_(geom, ba_coarse, bcPhi, std::move(active), replicated_coarse),
         block_levels_(std::move(block_levels)) {
     nlev_ = block_levels_.empty() ? 0
@@ -105,9 +118,12 @@ class AmrSystemCoupler {
   std::vector<AmrLevelMP>& levels(std::size_t b) { return block_levels_[b]; }
   MultiFab& coarse(std::size_t b) { return block_levels_[b][0].U; }
   const MultiFab& coarse(std::size_t b) const { return block_levels_[b][0].U; }
+  // nombre de resolutions Poisson du dernier step() : diagnostic de la cadence.
+  int solve_count() const { return solve_count_; }
 
   // sync_down (par bloc) + Poisson grossier de systeme + aux grossier + injection fine.
   void solve_fields() {
+    ++solve_count_;
     for (auto& levels : block_levels_)
       for (int k = nlev_ - 1; k >= 1; --k)
         mf_average_down_mb(levels[k].U, levels[k - 1].U);
@@ -139,6 +155,7 @@ class AmrSystemCoupler {
   // levels, dt), point de branchement Newton / IMEX (defaut AmrImplicitSourceStepper).
   template <class ImplicitAdvance>
   void step(Real dt, ImplicitAdvance&& implicit_advance) {
+    solve_count_ = 0;
     solve_fields();
     std::size_t b = 0;
     system_.for_each_block([&](auto& block) {
@@ -149,9 +166,13 @@ class AmrSystemCoupler {
       auto& levels = block_levels_[b];
       if constexpr (treatment == TimeTreatment::Explicit) {
         const Real h = dt / static_cast<Real>(n);
-        for (int s = 0; s < n; ++s)
+        for (int s = 0; s < n; ++s) {
+          // PerSubstep : re-resout phi avant chaque sous-pas suivant (la charge a
+          // bouge) ; le premier reutilise le solve de tete. OncePerStep : phi gele.
+          if (cadence_ == PoissonCadence::PerSubstep && s > 0) solve_fields();
           advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
               block.model, levels, dom_, h, base_per_, replicated_coarse_);
+        }
       } else if constexpr (treatment == TimeTreatment::Implicit ||
                            treatment == TimeTreatment::IMEX) {
         implicit_advance(*this, block, levels, dt);
@@ -191,6 +212,8 @@ class AmrSystemCoupler {
   Box2D dom_;
   Periodicity base_per_;
   bool replicated_coarse_;
+  PoissonCadence cadence_;
+  mutable int solve_count_ = 0;
   Elliptic mg_;
   std::vector<std::vector<AmrLevelMP>> block_levels_;  // [bloc][niveau]
   std::vector<MultiFab> aux_;                          // [niveau], partage

@@ -51,8 +51,8 @@ testable**. `[x]` = fait et vert ; `[ ]` = à faire.
 implicite `ImplicitBlockStepper` + défaut ✅ → (4) **exemple C++ minimal** (électrons
 implicites + ions explicites, rhs = n_i − n_e, sans Python) ✅ → (5) `AmrSystemCoupler` ✅ →
 (6) API Python dans `adc_cases` (reste à faire). Chaque étape validée par un test d'intégration
-(§2.5, tous verts). **Reste dans le cœur** : §2.2 IMEX partiel + cadence φ ; §4 nettoyages.
-**Hors cœur** : §2.4 modèles canoniques + §3 API Python (dans `adc_cases`).
+(§2.5, tous verts). **§2.1, §2.2, §2.3, §2.5 entièrement faits dans le cœur.** **Reste dans le
+cœur** : §4 nettoyages. **Hors cœur** : §2.4 modèles canoniques + §3 API Python (dans `adc_cases`).
 
 ### 2.1 Couplage et RHS
 - [x] **`ChargeDensityRhs` à N blocs** : `f = Σ_s q_s n_s` (somme sur `for_each_block`),
@@ -73,8 +73,15 @@ implicites + ions explicites, rhs = n_i − n_e, sans Python) ✅ → (5) `AmrSy
   finies : **inconditionnellement stable**, exact en 1 itération pour une relaxation linéaire,
   là où Picard divergerait dès `dt·raideur > 1`), et `ImplicitSourceStepper` (défaut prêt à
   l'emploi, **aucun Newton côté utilisateur**). Testé (`test_two_species_minimal` : `dt·k=100`).
-- [ ] **IMEX partiel** : traiter implicitement un **sous-ensemble** des variables d'un bloc (trait `which_implicit()` sur le modèle), pas tout le bloc. (Le défaut actuel traite toute la source en implicite.)
-- [ ] **Sous-cyclage temporel par espèce** : `substeps` exécuté (mono-niveau **et** AMR). Reste à trancher la **cadence de re-résolution de φ** entre sous-pas d'espèce (aujourd'hui φ figé sur le pas dans `AmrSystemCoupler`, re-solve par étage RK en mono-niveau).
+- [x] **IMEX partiel** : trait `Model::is_implicit(c)` (concept `PartiallyImplicitModel`).
+  `backward_euler_source` fait du forward-backward Euler : variables explicites en Euler avant,
+  variables implicites par Newton sur le **sous-système réduit** (`solve_dense` de taille
+  `m_impl ≤ n_vars`). Sans le trait → tout implicite (compat). Testé (`test_imex_partial` :
+  var raide implicite bornée, var douce explicite, le masque change bien le traitement).
+- [x] **Sous-cyclage temporel par espèce + cadence φ** : `substeps` exécuté (mono-niveau **et**
+  AMR). La cadence de re-résolution de φ est désormais **explicite** : `PoissonCadence`
+  (`OncePerStep` défaut / `PerSubstep`) dans `AmrSystemCoupler` ; le `SystemCoupler` mono-niveau
+  re-résout déjà φ à chaque étage RK. Testé (`test_amr_system_coupler` part C : 1 vs 4 solves).
 
 ### 2.3 AMR pour le système : `AmrSystemCoupler`
 - [x] `coupling/amr_system_coupler.hpp` : porte `CoupledSystem` sur AMR. Chaque bloc a **sa**
