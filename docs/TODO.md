@@ -305,40 +305,39 @@ trop. « Avancer un coupleur » est bancal — un coupleur *assemble*, un *drive
 
 ---
 
-## 9. Durcissement — revue Codex (2026-06-01)
+## 9. Durcissement — revue Codex (2026-06-01) — TRAITÉ (2026-06-02)
 
-Revue indépendante de `multispecies-fill` (build OK, `ctest` 38/38). Verdict : vrai squelette
-multi-blocs **fonctionnel + testé**, mais points à durcir avant de le présenter comme
-architecture propre. Chaque point ci-dessous **vérifié dans le code**.
+Revue indépendante de `multispecies-fill`. Verdict initial : squelette **fonctionnel + testé**
+mais points à durcir. **Les 6 points ont été traités** (adc_cpp 41/41, adc_cases 48/48, refactors
+bit-identiques sur l'existant). État final ci-dessous.
 
 - [x] **9.1 Vrai IMEX** *(recoupe §8.2 A)*. `SystemCoupler::step` ET `AmrSystemCoupler::step`
-  font maintenant, pour un bloc `IMEX` : **transport explicite par le cœur** (−div F via
-  `SourceFreeModel` + Euler avant / `advance_amr` source-free), **puis** source implicite par
-  le callback. Implicite pur : pas de transport. Un bloc IMEX à flux non nul est donc bien
-  transporté (`test_imex_transport` ; avant : champ figé). Limite connue : un bloc IMEX
-  **diffusif** perd le flux Fickien au demi-pas explicite (`SourceFreeModel` n'expose pas
-  `diffusivity()`) — raffinement à part.
-- [ ] **9.2 `ChargeDensityRhs` : défaut de charge dangereux** *(sév. correctness — **fix
-  rapide**)*. `SpeciesCharge{}` vaut `q = +1` ; un bloc **sans entrée** dans `species`
-  (p.ex. un **neutre** oublié) contribue à tort à Poisson. → défaut **`q = 0`** ET assert
-  `species.size() == System::n_blocks` (exiger une charge par bloc). *[ne casse aucun test :
-  les cas existants listent toutes les espèces.]*
-- [ ] **9.3 `AmrSystemCoupler` suppose sans vérifier** *(sév. robustesse — **fix rapide**)*.
-  Le ctor suppose `block_levels.size() == n_blocks`, même `nlev` par bloc, mêmes grilles par
-  niveau, layout `aux` == layout bloc — sans contrôle → out-of-bounds silencieux possible.
-  → asserts explicites : `n_blocks` (compile-time), tailles + `box_array()` par niveau
-  (runtime).
-- [ ] **9.4 BC `phi`/`aux` AMR simplifiées** *(sév. moyenne)*. `AmrSystemCoupler::solve_fields`
-  dérive `aux` à la main + `fill_boundary` (OK périodique) ; moins propre que le `Coupler`
-  mono-niveau (`fill_ghosts` + `FieldPostProcess`, `aux_bc` dérivé de `bcPhi`). → router par
-  le même chemin pour le **non-périodique / cut-cell**.
-- [ ] **9.5 `CoupledSource` pas intégré sur AMR** *(sév. moyenne ; recoupe §2.1.2)*. Mono-
-  niveau a `SystemCoupler::coupled_source_step` ; `AmrSystemCoupler` n'a **pas** d'équivalent.
-  → ajouter `AmrSystemCoupler::coupled_source_step` (splitting par niveau, après `solve_fields`).
-- [ ] **9.6 Nom `Coupler`** *(sév. cosmétique)* → déjà §8.2 B3 : `SystemCoupler`/`AmrSystemCoupler`
-  sont plutôt des `SimulationDriver` / `SystemStepper` / `CoupledSolver`. Pas urgent.
+  font, pour un bloc `IMEX` : **transport explicite par le cœur** (−div F via `SourceFreeModel`
+  + Euler avant / `advance_amr` source-free), **puis** source implicite par le callback.
+  Implicite pur : pas de transport. (`test_imex_transport` ; avant : champ figé.) Limite connue :
+  un bloc IMEX **diffusif** perd le flux Fickien au demi-pas explicite (`SourceFreeModel`
+  n'expose pas `diffusivity()`) — raffinement à part.
+- [x] **9.2 `ChargeDensityRhs` : défaut de charge** → `SpeciesCharge{}` vaut **`q = 0`** (un
+  neutre / un bloc oublié ne pollue plus Poisson) ET `operator()` exige `species.size() ==
+  System::n_blocks` (throw sinon : une charge par bloc, neutre déclaré explicitement `q=0`).
+  (`test_system_hardening`.)
+- [x] **9.3 `AmrSystemCoupler` garde-fous de construction** → le ctor **throw** si
+  `block_levels.size() != n_blocks`, si un bloc n'a pas le bon `nlev`, ou si les grilles par
+  niveau diffèrent (nombre de boîtes ≠ bloc 0). Plus d'out-of-bounds silencieux.
+  (`test_system_hardening`.)
+- [x] **9.4 BC `phi`/`aux` AMR** → `AmrSystemCoupler::solve_fields` dérive aux par le **même
+  chemin** que le mono-niveau : `fill_ghosts(phi, bcPhi)` → `field_postprocess` →
+  `fill_ghosts(aux, aux_bc)`, `aux_bc` dérivé de `bcPhi` (Periodic→Periodic, sinon Foextrap).
+  Gère le non-périodique au lieu d'un `fill_boundary` périodique en dur.
+- [x] **9.5 `CoupledSource` sur AMR** → `AmrSystemCoupler::coupled_source_step` (splitting
+  **par niveau** : repointe chaque bloc vers son niveau k, lit tous les blocs + aux[k]).
+  (`test_amr_system_coupler` Partie D : échange conservatif.)
+- [x] **9.6 Nom `Coupler`** *(cosmétique)* → alias `SystemDriver` / `AmrSystemDriver` (le nom
+  « qui avance ») + doc des deux rôles (assembleur = `solve_fields` ; driver = `step`). La
+  scission en deux classes reste reportée (§8.2 B1/B2 : cosmétique sur code validé).
 
-**Ordre de durcissement conseillé** : 9.2 + 9.3 (fixes rapides, correctness/robustesse) →
-9.5 (parité AMR de la source de couplage) → 9.4 (BC propres) → 9.1 (vrai IMEX, avec §8.2 A) →
-9.6 (renommage, avec §8.2 B). Tout est à **comportement identique** sur les tests existants
-sauf 9.1 (qui ajoute le transport explicite des blocs IMEX — nouveau comportement à tester).
+**Nuance (point TimeIntegrator)** : `ssprk.hpp` ne portait qu'`advance_ssprk2` générique ;
+SSPRK3 était recodé dans les coupleurs (duplication réelle). C'est résolu (§8.2 A) :
+`SystemCoupler` **délègue** SSPRK2/3 aux objets `SSPRK2Step`/`SSPRK3Step` du cœur,
+`ssprk.hpp` délègue aussi. Reste le `Coupler` legacy mono-modèle (non migré, diocotron validé,
+§8.2 A4).
