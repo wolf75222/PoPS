@@ -57,6 +57,20 @@ struct SourceFreeModel {
   }
   ADC_HD State source(const State&, const Aux&) const { return State{}; }
   ADC_HD Real elliptic_rhs(const State& u) const { return m.elliptic_rhs(u); }
+  // Transparent au contrat HLL/HLLC : ne forwarde pression et vitesses signees QUE si M
+  // les expose (clause requires), pour qu'un demi-pas IMEX puisse rester en flux HLLC.
+  ADC_HD Real pressure(const State& u) const
+    requires requires(const M& mm, const State& s) { mm.pressure(s); }
+  {
+    return m.pressure(u);
+  }
+  ADC_HD void wave_speeds(const State& u, const Aux& a, int dir, Real& smin, Real& smax) const
+    requires requires(const M& mm, const State& s, const Aux& aa, int d, Real& lo, Real& hi) {
+      mm.wave_speeds(s, aa, d, lo, hi);
+    }
+  {
+    m.wave_speeds(u, a, dir, smin, smax);
+  }
 };
 
 template <class Model>
