@@ -134,40 +134,12 @@ if(ADC_USE_HDF5)
   message(STATUS "HDF5 found (${HDF5_VERSION}, parallel=${HDF5_IS_PARALLEL}) : enabling DataWriter")
 endif()
 
-# Facade COMPILEE : solveurs concrets (PIMPL) instanciant la pile template
-# header-only une seule fois -> une vraie librairie libadc, API stable sans
-# template (ideale pour pybind11 et les applications). Le coeur generique reste
-# dans include/ (les templates doivent etre visibles a l'instanciation).
-add_library(adc_solver STATIC
-  src/diocotron_solver.cpp
-  src/diocotron_amr_solver.cpp
-  src/euler_poisson_solver.cpp
-  src/two_fluid_ap_solver.cpp)
-target_link_libraries(adc_solver PUBLIC adc)
-# PIC : la lib statique sera liee dans le module partage pybind11.
-set_target_properties(adc_solver PROPERTIES POSITION_INDEPENDENT_CODE ON)
-add_library(adc::solver ALIAS adc_solver)
-
-# Bindings Python (pybind11) de la facade compilee. find_package, sinon FetchContent.
-if(ADC_BUILD_PYTHON)
-  find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
-  find_package(pybind11 2.11 CONFIG QUIET)
-  if(NOT pybind11_FOUND)
-    message(STATUS "pybind11 introuvable ; recuperation via FetchContent")
-    include(FetchContent)
-    FetchContent_Declare(pybind11
-      GIT_REPOSITORY https://github.com/pybind/pybind11.git
-      GIT_TAG        v2.13.6)
-    FetchContent_MakeAvailable(pybind11)
-  endif()
-  add_subdirectory(python)
-endif()
+# adc_cpp = COEUR de la bibliotheque (generique, header-only). Les modeles
+# physiques, les facades compilees (libadc), les bindings Python et les exemples
+# vivent dans le depot applicatif separe adc_cases, qui consomme adc::adc via
+# FetchContent. Le coeur ne connait aucun modele : aucune dependance coeur->cas.
 
 if(ADC_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
-endif()
-
-if(ADC_BUILD_EXAMPLES)
-  add_subdirectory(examples)
 endif()
