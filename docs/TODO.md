@@ -288,15 +288,16 @@ le `TimeIntegrator` étant un objet du cœur (ou fourni par l'utilisateur).
 **B. Scinder le coupleur — Assembleur vs Driver (priorité 2 ; §9.6).** Un coupleur assemble
 l'elliptique + résout Poisson + dérive aux + calcule le RHS spatial + intègre + sous-cycle :
 trop. « Avancer un coupleur » est bancal — un coupleur *assemble*, un *driver* *avance*.
-- [x] **B3. Nom « qui avance »** : alias `SystemDriver` / `AmrSystemDriver` (= les coupleurs)
-  + doc des deux rôles (solve_fields = assembleur ; step = driver) dans les en-têtes. Le nom
-  correct existe et est utilisable, sans toucher aux classes validées.
-- [ ] **B1/B2. Extraction en DEUX classes** (`SystemAssembler` : `solve_fields` + `rhs_eval` ;
-  `SystemDriver` : schedule + `take_step`) — **reportée** : refactor purement cosmétique d'un
-  code validé bit-identique ; à faire en changement dédié pour ne pas régresser. `stage_rhs`
-  re-résout φ par étage, donc le driver appellera l'assembleur (séparation par composition).
-- [ ] **B4.** `Simulation` (`adc_cases`) reposera sur `{Assembler, Driver, TimeIntegrator}`
-  une fois B1/B2 faits.
+- [x] **B1/B2. Extraction en DEUX classes** (`system_coupler.hpp`) : `SystemAssembler`
+  (`solve_fields` + `block_residual` = l'évaluateur de résidu ; phi/aux/geom/ba/dm ; AUCUN
+  pas) et `SystemDriver` (schedule, `advance_explicit_block` via `take_step`, IMEX,
+  `coupled_source_step`) qui **possède** un `SystemAssembler` (composition). Bit-identique
+  (adc_cpp 42/42, adc_cases 48/48). Testé `test_assembler_driver` (assembleur seul + driver).
+- [x] **B3. Nom « qui avance »** : `SystemCoupler` est désormais l'**alias** de `SystemDriver`
+  (le nom « qui avance ») ; `AmrSystemDriver` alias pour l'AMR. Compat préservée (tests, façades).
+- [x] **B4.** La façade compilée `MultiSpeciesSolver` (`adc_cases`) repose déjà sur
+  `SystemDriver` (via l'alias `SystemCoupler`). La `Simulation` runtime garde sa propre
+  orchestration (type-erased) par conception (espèces composées à l'exécution).
 
 **C. Multirate — `dt` propre par modèle (priorité 3).** `substeps` couvre 10:1 en lock-step.
 - [ ] `dt` par espèce piloté CFL (et la cadence φ associée), au-delà du sous-cyclage entier.

@@ -23,20 +23,19 @@
 #include <type_traits>
 #include <utility>
 
-// Coupleur de systeme mono-niveau.
+// Systeme couple mono-niveau : DEUX responsabilites, DEUX classes (retour tuteur §8.2 B).
 //
-// Le Coupler historique avance un seul PhysicalModel. SystemCoupler est la couche
-// au-dessus : un CoupledSystem contient plusieurs EquationBlock, le RHS elliptique
-// peut lire tous les blocs, et chaque bloc porte sa discretisation spatiale et sa
-// politique de temps.
+//   SystemAssembler : ASSEMBLE. Couple l'hyperbolique et l'elliptique : RHS de systeme
+//     (f = Sum_s q_s n_s), Poisson, aux = (phi, grad phi), et l'evaluateur de residu d'un
+//     bloc R = −div F + S. Il ne fait AUCUN pas de temps.
+//   SystemDriver    : AVANCE. Porte le schedule (sous-cyclage par espece, implicite/IMEX
+//     delegue) et appelle un TimeStepper (take_step). « Avancer un coupleur » etait bancal :
+//     ici un Assembleur assemble, un Driver avance. Le Driver POSSEDE un Assembleur.
 //
-// C'est volontairement un orchestrateur : il ne remplace ni PhysicalModel
-// (formules locales), ni assemble_rhs (operateur spatial), ni GeometricMG
-// (elliptique). Il connecte ces briques pour rendre explicite le niveau
-// d'abstraction voulu par la discussion tuteur :
-//   electrons : modele + schema + implicite + sous-pas
-//   ions      : modele + schema + explicite
-//   Poisson   : assembleur global f(U_e, U_i, ...)
+// SystemCoupler reste comme ALIAS de SystemDriver (compat : tests, facades adc_cases).
+//
+// Aucune des deux ne remplace PhysicalModel (formules locales), assemble_rhs (operateur
+// spatial), ni GeometricMG (elliptique) : elles les connectent.
 
 namespace adc {
 
@@ -58,16 +57,17 @@ struct ScopedBlockState {
 };
 }  // namespace detail
 
+// === ASSEMBLEUR : champs (Poisson de systeme + aux) + residu de bloc. Aucun pas. ======
 template <CoupledSystemLike System, class RhsAssembler,
           class Elliptic = GeometricMG>
-class SystemCoupler {
+class SystemAssembler {
   static_assert(EllipticSolver<Elliptic>,
                 "le backend elliptique doit modeler EllipticSolver");
 
  public:
-  SystemCoupler(System system, const Geometry& geom, const BoxArray& ba,
-                const BCRec& bcPhi, RhsAssembler rhs_assembler,
-                std::function<bool(Real, Real)> active = {})
+  SystemAssembler(System system, const Geometry& geom, const BoxArray& ba,
+                  const BCRec& bcPhi, RhsAssembler rhs_assembler,
+                  std::function<bool(Real, Real)> active = {})
       : system_(std::move(system)),
         rhs_assembler_(std::move(rhs_assembler)),
         geom_(geom),
@@ -80,63 +80,31 @@ class SystemCoupler {
 
   System& system() { return system_; }
   const System& system() const { return system_; }
-
   MultiFab& phi() { return mg_.phi(); }
+  MultiFab& aux() { return aux_; }
   const MultiFab& aux() const { return aux_; }
+  const Geometry& geom() const { return geom_; }
+  const BoxArray& ba() const { return ba_; }
+  const DistributionMapping& dm() const { return dm_; }
 
+  // Resout le RHS de systeme (Sum_s q_s n_s), Poisson, puis aux = (phi, grad phi).
   void solve_fields() {
     rhs_assembler_(system_, mg_.rhs());
     mg_.solve();
     derive_aux();
   }
 
-  // Avance les blocs selon leur TimePolicy.
-  //
-  // Les blocs explicites SSPRK2/SSPRK3 sont executes ici. Les blocs implicites
-  // ou IMEX sont delegues au callback : c'est l'endroit ou brancher Newton,
-  // solveur lineaire, solveur collisionnel, etc., sans imposer une API prematuree
-  // au coeur.
-  template <class ImplicitAdvance>
-  void step(Real dt, ImplicitAdvance&& implicit_advance) {
-    ImplicitAdvance& advance_implicit = implicit_advance;
-    advance_subcycled(system_, dt, [&](auto& block, Real h, int s, int n) {
-      using Block = std::decay_t<decltype(block)>;
-      constexpr TimeTreatment treatment = block_time_treatment_v<Block>;
-      if constexpr (treatment == TimeTreatment::Explicit) {
-        advance_explicit_block(block, h);
-      } else if constexpr (treatment == TimeTreatment::Implicit ||
-                           treatment == TimeTreatment::IMEX) {
-        solve_fields();
-        // IMEX = vrai forward-backward (revue Codex 9.1) : le coeur avance le TRANSPORT
-        // explicite (−div F, source-free), puis le callback traite la SOURCE en implicite.
-        // Implicite pur : pas de transport, tout au callback.
-        if constexpr (treatment == TimeTreatment::IMEX) explicit_transport(block, h);
-        advance_implicit(*this, block, h, s, n);
-      }
-    });
-  }
-
-  // Surcharge pratique pour un systeme entierement explicite.
-  void step(Real dt) {
-    step(dt, [](auto&, auto& block, Real, int, int) {
-      using Block = std::decay_t<decltype(block)>;
-      static_assert(detail::always_false_v<Block>,
-                    "SystemCoupler::step(dt) ne peut pas avancer un bloc "
-                    "implicite/IMEX sans callback");
-    });
-  }
-
-  // Pas de SOURCE DE COUPLAGE inter-especes (splitting forward-Euler) : on
-  // rafraichit phi (aux) puis on laisse la source lire tous les blocs et les
-  // mettre a jour. C'est l'endroit distinct de model.source (locale au bloc) :
-  // ici S_e peut dependre de U_i et de phi. NoCoupledSource => no-op.
-  template <class CoupledSource>
-  void coupled_source_step(CoupledSource&& src, Real dt) {
-    static_assert(CoupledSourceFor<std::decay_t<CoupledSource>, System>,
-                  "coupled_source_step attend une CoupledSource : "
-                  "apply(system, aux, dt)");
-    solve_fields();
-    src.apply(system_, aux_, dt);
+  // Residu d'un bloc a un etage : R = −div F + S (+ aux re-resolu si recompute_aux). C'est
+  // l'evaluateur (la fleche methode-des-lignes) que le Driver passe au TimeStepper.
+  template <class Limiter, class NumericalFlux, class Block>
+  void block_residual(Block& block, MultiFab& state, MultiFab& R,
+                      bool recompute_aux) {
+    if (recompute_aux) {
+      detail::ScopedBlockState<Block> swap(block, state);
+      solve_fields();
+    }
+    fill_ghosts(state, geom_.domain, block.bc);
+    assemble_rhs<Limiter, NumericalFlux>(block.model, state, aux_, geom_, R);
   }
 
  private:
@@ -161,20 +129,79 @@ class SystemCoupler {
     fill_ghosts(aux_, geom_.domain, aux_bc_);
   }
 
-  template <class Limiter, class NumericalFlux, class Block>
-  void stage_rhs(Block& block, MultiFab& state, MultiFab& R,
-                 bool recompute_aux) {
-    if (recompute_aux) {
-      detail::ScopedBlockState<Block> swap(block, state);
-      solve_fields();
-    }
-    fill_ghosts(state, geom_.domain, block.bc);
-    assemble_rhs<Limiter, NumericalFlux>(block.model, state, aux_, geom_, R);
+  System system_;
+  RhsAssembler rhs_assembler_;
+  Geometry geom_;
+  BoxArray ba_;
+  DistributionMapping dm_;
+  BCRec bcPhi_, aux_bc_;
+  Elliptic mg_;
+  MultiFab aux_;
+};
+
+// === DRIVER : avance le systeme. Possede un Assembleur, lui delegue les champs. =========
+template <CoupledSystemLike System, class RhsAssembler,
+          class Elliptic = GeometricMG>
+class SystemDriver {
+ public:
+  SystemDriver(System system, const Geometry& geom, const BoxArray& ba,
+               const BCRec& bcPhi, RhsAssembler rhs_assembler,
+               std::function<bool(Real, Real)> active = {})
+      : asm_(std::move(system), geom, ba, bcPhi, std::move(rhs_assembler),
+             std::move(active)) {}
+
+  // Acces delegues a l'assembleur (compat avec l'ancienne API SystemCoupler).
+  System& system() { return asm_.system(); }
+  const System& system() const { return asm_.system(); }
+  MultiFab& phi() { return asm_.phi(); }
+  const MultiFab& aux() const { return asm_.aux(); }
+  void solve_fields() { asm_.solve_fields(); }
+  SystemAssembler<System, RhsAssembler, Elliptic>& assembler() { return asm_; }
+
+  // Avance les blocs selon leur TimePolicy. Explicites SSPRK2/3 (ou TimeStepper utilisateur)
+  // executes via take_step ; implicites/IMEX delegues au callback (Newton, collisions, ...).
+  // IMEX = vrai forward-backward : transport explicite par le coeur, source au callback.
+  template <class ImplicitAdvance>
+  void step(Real dt, ImplicitAdvance&& implicit_advance) {
+    ImplicitAdvance& advance_implicit = implicit_advance;
+    advance_subcycled(asm_.system(), dt, [&](auto& block, Real h, int s, int n) {
+      using Block = std::decay_t<decltype(block)>;
+      constexpr TimeTreatment treatment = block_time_treatment_v<Block>;
+      if constexpr (treatment == TimeTreatment::Explicit) {
+        advance_explicit_block(block, h);
+      } else if constexpr (treatment == TimeTreatment::Implicit ||
+                           treatment == TimeTreatment::IMEX) {
+        asm_.solve_fields();
+        if constexpr (treatment == TimeTreatment::IMEX) explicit_transport(block, h);
+        advance_implicit(*this, block, h, s, n);
+      }
+    });
   }
 
-  // Avance explicite d'un bloc : on DELEGUE le schema a un objet TimeStepper du coeur
-  // (SSPRK2Step / SSPRK3Step) en lui passant l'evaluateur de residu du bloc (fill_ghosts +
-  // re-solve aux par etage + assemble_rhs<Spatial>). Bit-identique a l'ancien SSPRK inline.
+  // Surcharge pratique pour un systeme entierement explicite.
+  void step(Real dt) {
+    step(dt, [](auto&, auto& block, Real, int, int) {
+      using Block = std::decay_t<decltype(block)>;
+      static_assert(detail::always_false_v<Block>,
+                    "SystemDriver::step(dt) ne peut pas avancer un bloc "
+                    "implicite/IMEX sans callback");
+    });
+  }
+
+  // Source de couplage inter-especes (splitting forward-Euler) : rafraichit phi (aux) puis
+  // laisse la source lire tous les blocs + aux. Distinct de model.source (local au bloc).
+  template <class CoupledSource>
+  void coupled_source_step(CoupledSource&& src, Real dt) {
+    static_assert(CoupledSourceFor<std::decay_t<CoupledSource>, System>,
+                  "coupled_source_step attend une CoupledSource : "
+                  "apply(system, aux, dt)");
+    asm_.solve_fields();
+    src.apply(asm_.system(), asm_.aux(), dt);
+  }
+
+ private:
+  // Avance explicite d'un bloc : DELEGUE le schema a un objet TimeStepper (SSPRK2/3 du coeur
+  // ou integrateur utilisateur), en lui passant l'evaluateur de residu de l'assembleur.
   template <class Block>
   void advance_explicit_block(Block& block, Real dt) {
     using Time = TimePolicyTraits<typename Block::Time>;
@@ -185,10 +212,9 @@ class SystemCoupler {
                   "advance_explicit_block attend un bloc explicite");
 
     auto rhs_eval = [&](MultiFab& stage, MultiFab& R) {
-      stage_rhs<Limiter, NumericalFlux>(block, stage, R, /*recompute_aux=*/true);
+      asm_.template block_residual<Limiter, NumericalFlux>(block, stage, R,
+                                                           /*recompute_aux=*/true);
     };
-    // Method = tag du coeur (SSPRK2/SSPRK3) -> objet stepper correspondant ; OU un
-    // TimeStepper fourni par l'utilisateur (son propre take_step), instancie ici.
     if constexpr (std::is_same_v<Method, SSPRK3>)
       SSPRK3Step{}.take_step(rhs_eval, block.U(), dt);
     else if constexpr (std::is_same_v<Method, SSPRK2>)
@@ -202,38 +228,25 @@ class SystemCoupler {
   }
 
   // Demi-pas EXPLICITE d'un bloc IMEX : transport seul (−div F, source-free), Euler avant.
-  // La source (raide) est traitee separement en implicite par le callback. aux suppose a
-  // jour (solve_fields appele juste avant dans step).
+  // La source raide est traitee separement en implicite par le callback. aux suppose a jour.
   template <class Block>
   void explicit_transport(Block& block, Real dt) {
     using Model = typename Block::Model;
     using Limiter = typename Block::Spatial::Limiter;
     using NumericalFlux = typename Block::Spatial::NumericalFlux;
     const SourceFreeModel<Model> sf{block.model};
-    MultiFab R(ba_, dm_, Model::n_vars, 0);
-    fill_ghosts(block.U(), geom_.domain, block.bc);
-    assemble_rhs<Limiter, NumericalFlux>(sf, block.U(), aux_, geom_, R);
+    MultiFab R(asm_.ba(), asm_.dm(), Model::n_vars, 0);
+    fill_ghosts(block.U(), asm_.geom().domain, block.bc);
+    assemble_rhs<Limiter, NumericalFlux>(sf, block.U(), asm_.aux(), asm_.geom(), R);
     saxpy(block.U(), dt, R);
   }
 
-  System system_;
-  RhsAssembler rhs_assembler_;
-  Geometry geom_;
-  BoxArray ba_;
-  DistributionMapping dm_;
-  BCRec bcPhi_, aux_bc_;
-  Elliptic mg_;
-  MultiFab aux_;
+  SystemAssembler<System, RhsAssembler, Elliptic> asm_;
 };
 
-// Nommage / responsabilites (retour tuteur §8.2 B, §9.6). Deux roles coexistent ici :
-//   - ASSEMBLEUR : couple hyperbolique + elliptique (RHS de systeme Sum_s q_s n_s, Poisson,
-//     aux) -> solve_fields() ;
-//   - DRIVER : AVANCE la simulation (step(), sous-cyclage, take_step de l'integrateur).
-// « Avancer un coupleur » etant bancal, l'alias SystemDriver donne le nom « qui avance ».
-// La scission en DEUX classes (SystemAssembler + SystemDriver) est cosmetique et reportee :
-// la classe unifiee est validee (bit-identique), on evite d'y toucher sans necessite.
+// Compat / nommage historique : SystemCoupler == le Driver (qui avance). On garde l'alias
+// SystemCoupler (tests, facade MultiSpeciesSolver) ET SystemDriver (le nom « qui avance »).
 template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>
-using SystemDriver = SystemCoupler<System, RhsAssembler, Elliptic>;
+using SystemCoupler = SystemDriver<System, RhsAssembler, Elliptic>;
 
 }  // namespace adc
