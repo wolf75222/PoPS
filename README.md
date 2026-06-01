@@ -4,7 +4,9 @@
 
 **Solveur C++23 pour systemes hyperbolique-elliptique couples, avec AMR, MPI et GPU.**
 
-![Tests](https://img.shields.io/badge/tests-66%20%2B%2015%20MPI-brightgreen)
+![C++23](https://img.shields.io/badge/C%2B%2B-23-blue)
+![CMake](https://img.shields.io/badge/build-CMake-064F8C)
+![Tests](https://img.shields.io/badge/tests-82-brightgreen)
 
 </div>
 
@@ -215,7 +217,7 @@ docs/          ARCHITECTURE.md, PERFORMANCE.md, animations.
 
 ## Validation
 
-- **66** tests C++ (serie = OpenMP) + **15** tests MPI bit-identiques np=1/2/4 ; bindings Python verts.
+- **82** tests (serie, OpenMP, MPI bit-identique np=1/2/4) ; bindings Python verts.
 - AMR conservatif : reflux multi-patch a l'arrondi machine (`~1e-15`).
 - GPU GH200 : pas couple + AMR bit-identiques au CPU (checksum exact).
 
