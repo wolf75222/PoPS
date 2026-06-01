@@ -1,0 +1,103 @@
+@startuml 02_classes
+' Diagramme de classes : abstractions reelles et leurs relations.
+' Montre le niveau d'abstraction (concepts C++20 = interfaces statiques,
+' composition par template, zero heritage virtuel).
+
+title adc_cpp -- diagramme de classes (abstractions cle)
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam classBackgroundColor #F4F6F8
+skinparam classBorderColor #08519C
+skinparam ArrowColor #444444
+hide empty members
+
+' ----- concepts (interfaces statiques, verifiees a la compilation) -----
+interface "PhysicalModel\n<<concept>>" as PM {
+  +State, Aux, n_vars
+  +flux(U, aux, dir) : State
+  +max_wave_speed(U, aux, dir) : Real
+  +source(U, aux) : State
+  +elliptic_rhs(U) : Real
+}
+
+interface "EllipticSolver\n<<concept>>" as ES {
+  +rhs() : MultiFab&
+  +phi() : MultiFab&
+  +solve()
+  +residual() : Real
+  +geom() : Geometry&
+}
+
+' ----- modeles physiques (modelisent PhysicalModel) -----
+class Diocotron
+class Euler
+class EulerPoisson
+Diocotron ..|> PM
+Euler ..|> PM
+EulerPoisson ..|> PM
+EulerPoisson *-- Euler : delegue hydro
+
+' ----- backends elliptiques (modelisent EllipticSolver) -----
+class GeometricMG
+class PoissonFFTSolver
+class DistributedFFTSolver
+GeometricMG ..|> ES
+PoissonFFTSolver ..|> ES
+DistributedFFTSolver ..|> ES
+
+' ----- coupleurs (parametres par les deux concepts) -----
+class "Coupler<Model, Elliptic>" as Coupler {
+  +advance<Limiter, Policy>(U, dt)
+  -update_aux(U)
+}
+class "AmrCouplerMP<Model, Elliptic>" as AmrCoupler {
+  +step(dt)
+  +regrid(crit)
+  +mass() : Real
+}
+
+Coupler ..> PM : <<Model>>\nrequiert
+Coupler o-- ES : <<Elliptic>>\nmembre mg_
+Coupler *-- MultiFab : aux_
+
+AmrCoupler ..> PM : <<Model>>\nrequiert
+AmrCoupler o-- ES : <<Elliptic>>\nmembre mg_
+AmrCoupler *-- "AmrLevelStack" : stack_
+
+' ----- donnees -----
+class MultiFab {
+  +fab(li) : Fab2D&
+  +box_array() : BoxArray
+}
+class Fab2D
+class BoxArray
+class DistributionMapping
+MultiFab o-- BoxArray
+MultiFab o-- DistributionMapping
+MultiFab *-- "*" Fab2D
+
+class "AmrLevelStack<AmrLevelMP>" as AmrLevelStack
+class AmrLevelMP {
+  +U : MultiFab
+  +aux : MultiFab*
+  +dx, dy
+}
+AmrLevelStack *-- "*" AmrLevelMP
+AmrLevelMP *-- MultiFab : U
+
+note top of PM
+  Concept C++20 = contrat verifie
+  a la compilation. Pas d'heritage
+  virtuel, pas de vtable.
+end note
+
+note bottom of Coupler
+  Les deux axes (modele physique,
+  backend elliptique) sont des
+  parametres de template independants.
+  Coupler<Diocotron, GeometricMG>,
+  Coupler<Euler, PoissonFFTSolver>...
+end note
+
+@enduml

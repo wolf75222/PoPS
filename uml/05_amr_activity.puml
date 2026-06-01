@@ -1,0 +1,45 @@
+@startuml 05_amr_activity
+' Diagramme d'activite : un pas AMR (advance_amr / subcycle_level_mp).
+' Montre la methode -- sous-cyclage Berger-Oliger r=2 + reflux conservatif.
+
+title adc_cpp -- pas AMR (sous-cyclage Berger-Oliger + reflux)
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam activity {
+  BackgroundColor #F4F6F8
+  BorderColor #08519C
+  DiamondBackgroundColor #FDE9E9
+}
+
+start
+:subcycle_level(niveau L, dt);
+
+if (niveau le plus fin ?) then (oui)
+  :remplir ghosts\n(BC + halo MPI);
+  :assemble_rhs + avancer\nU(L) de dt;
+  stop
+else (non)
+  :sauver le flux grossier\naux faces de l'interface;
+  :avancer U(L) de dt;
+  partition "sous-cyclage r=2" {
+    repeat
+      :remplir ghosts fins\n(interp espace + temps\ndepuis le parent);
+      :subcycle_level(L+1, dt/2);
+      note right
+        recursion :
+        chaque niveau fin fait
+        2 sous-pas de dt/2
+      end note
+    repeat while (2 sous-pas faits ?) is (non) not (oui)
+  }
+  :average_down\n(fin -> grossier sur\nles cellules couvertes);
+  :REFLUX coverage-aware\nU(L) corrige par\n(somme flux fins - flux grossier);
+  note right
+    rend la masse conservee
+    a l'arrondi machine (~1e-15)
+  end note
+  stop
+endif
+
+@enduml

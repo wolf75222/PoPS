@@ -1,0 +1,57 @@
+@startuml 04_execution_seam
+' Vue composant : le seam d'execution, point d'abstraction du parallelisme.
+' Un seul point d'appel (for_each_cell) -> trois backends choisis a la compilation.
+
+title adc_cpp -- le seam d'execution (un appel, trois backends)
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam componentStyle rectangle
+skinparam component {
+  BackgroundColor #F4F6F8
+  BorderColor #08519C
+}
+skinparam ArrowColor #444444
+
+[operateurs\n(assemble_rhs, reflux, reductions)] as OP
+
+interface "for_each_cell(box, f)" as IF
+
+OP --> IF : appelle (code unique)
+
+package "selection a la COMPILATION (#ifdef)" #FDE9E9 {
+  [serie\nboucle i,j] as SER
+  [OpenMP\n#pragma omp parallel for\ncollapse(2)] as OMP
+  [Kokkos\nparallel_for MDRange\n(espace Cuda sur GH200)] as KOK
+}
+
+IF ..> SER : ADC_HAS_KOKKOS absent\net _OPENMP absent
+IF ..> OMP : _OPENMP defini
+IF ..> KOK : ADC_HAS_KOKKOS defini
+
+package "distribution (orthogonale)" #E3EEF8 {
+  interface "comm : my_rank / n_ranks / all_reduce" as COMM
+  [MPI] as MPI
+  [serie (degenere : 1 rang)] as SOLO
+}
+OP --> COMM
+COMM ..> MPI : ADC_HAS_MPI
+COMM ..> SOLO : sinon
+
+note bottom of KOK
+  Le fonctor f est annote ADC_HD
+  (host + device) et ne capture
+  que des handles POD (Array4) :
+  le MEME lambda compile pour CPU
+  et GPU.
+end note
+
+note right of COMM
+  MPI est un axe SEPARE du backend
+  intra-noeud : on combine
+  MPI + Kokkos (multi-GPU),
+  MPI + OpenMP (CPU pur), etc.
+  Contrat : bit-identique np=1/2/4.
+end note
+
+@enduml

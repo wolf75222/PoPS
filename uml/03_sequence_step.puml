@@ -1,0 +1,62 @@
+@startuml 03_sequence_step
+' Diagramme de sequence : un pas couple hyperbolique-elliptique.
+' Montre l'INTERACTION entre les couches (qui appelle qui) sur un pas SSP-RK2.
+
+title adc_cpp -- sequence d'un pas couple (Coupler::advance, SSP-RK2)
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam sequenceArrowColor #444444
+skinparam participantBackgroundColor #F4F6F8
+skinparam participantBorderColor #08519C
+
+actor "boucle de temps" as Loop
+participant "Coupler" as C
+participant "Elliptic\n(GeometricMG)" as MG
+participant "assemble_rhs" as RHS
+participant "Model\n(Diocotron)" as M
+participant "for_each_cell\n<<seam>>" as SEAM
+
+Loop -> C : advance(U, dt)
+activate C
+
+== 1. resolution elliptique ==
+C -> MG : rhs() <- model.elliptic_rhs(U)
+C -> MG : solve()
+activate MG
+MG --> C : phi (warm-start)
+deactivate MG
+C -> C : aux = (phi, grad phi)
+
+== 2. etage RK : R = -div F + S ==
+C -> RHS : assemble_rhs(model, U, aux, R)
+activate RHS
+RHS -> SEAM : for_each_cell(box, lambda)
+activate SEAM
+SEAM -> M : flux(U, aux, dir)
+SEAM -> M : max_wave_speed(U, aux, dir)
+SEAM -> M : source(U, aux)
+M --> SEAM : valeurs ponctuelles
+SEAM --> RHS : R rempli
+deactivate SEAM
+RHS --> C : R
+deactivate RHS
+C -> C : U1 = U + dt * R
+
+== 3. second etage (re-solve phi pour U1) ==
+C -> MG : solve()  (PerStage)
+C -> RHS : assemble_rhs(model, U1, aux, R)
+C -> C : U = 1/2 (U + U1 + dt R)
+
+C --> Loop : U avance
+deactivate C
+
+note over SEAM, M
+  La physique (Model) est appelee
+  point par point dans le seam.
+  Le seam choisit serie / OpenMP /
+  Kokkos a la compilation -- le Model
+  ne le sait pas.
+end note
+
+@enduml

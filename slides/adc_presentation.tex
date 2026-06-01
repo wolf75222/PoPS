@@ -1,0 +1,309 @@
+\documentclass[11pt,aspectratio=169]{beamer}
+
+\usetheme{metropolis}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usepackage{listings}
+\usetikzlibrary{positioning,arrows.meta}
+
+% Palette LPP (Laboratoire de Physique des Plasmas)
+\definecolor{adcblue}{HTML}{0F52AC}   % bleu de marque LPP
+\definecolor{adcteal}{HTML}{00CC99}   % accent teal LPP
+\definecolor{adcdeep}{HTML}{2D2DB9}   % indigo LPP
+\definecolor{adclight}{HTML}{D9E6F5}
+\definecolor{adcred}{HTML}{D62728}
+\definecolor{codebg}{HTML}{F4F6F8}
+\definecolor{kw}{HTML}{0F52AC}
+\definecolor{cmt}{HTML}{6A8759}
+
+\graphicspath{{logos/}}
+
+\setbeamercolor{frametitle}{bg=adcblue, fg=white}
+\setbeamercolor{title}{fg=adcblue}
+\setbeamercolor{subtitle}{fg=black}
+\setbeamercolor{progress bar}{fg=adcteal}
+\setbeamercolor{alerted text}{fg=adcteal}
+\setbeamercolor{standout}{bg=adcblue, fg=white}
+\setbeamertemplate{frame footer}{\textbf{LPP} \textbar\ Laboratoire de Physique des Plasmas \textbar\ adc\_cpp}
+
+\lstset{
+  language=C++,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{kw}\bfseries,
+  commentstyle=\color{cmt}\itshape,
+  backgroundcolor=\color{codebg},
+  showstringspaces=false,
+  breaklines=true,
+  columns=fullflexible,
+  morekeywords={concept,requires,constexpr,ADC\_HD,Real,struct,using,template,
+    typename,auto,nullptr}
+}
+
+\title{\textbf{adc\_cpp} : architecture d'un solveur AMR / MPI / GPU}
+\subtitle{Conception template-first pour systèmes hyperbolique-elliptique}
+\author{Romain Despoullains}
+\institute{Master CHPS -- URCA}
+\date{\today}
+
+\begin{document}
+
+% --- Page de titre habillee LPP ---
+{\setbeamertemplate{frame footer}{}
+\begin{frame}[plain]
+\centering
+\vspace{0.1cm}
+\includegraphics[height=2.0cm]{logos/lpp.png}
+
+\vspace{0.55cm}
+{\usebeamercolor[fg]{title}\usebeamerfont{title}\inserttitle\par}
+\vspace{0.12cm}
+{\color{adcteal}\rule{0.55\textwidth}{1.2pt}}\par
+\vspace{0.18cm}
+{\usebeamerfont{subtitle}\insertsubtitle\par}
+\vspace{0.5cm}
+{\insertauthor\ \ \textbar\ \ \insertinstitute\par}
+\vspace{0.1cm}
+{\small\insertdate\par}
+\vfill
+\includegraphics[height=0.8cm]{logos/obspsl.png}\hfill
+\includegraphics[height=0.85cm]{logos/cnrs.png}\hfill
+\includegraphics[height=0.8cm]{logos/polytechnique.png}
+\vspace{0.2cm}
+\end{frame}}
+
+% ---------------------------------------------------------------
+\begin{frame}{Le problème}
+\[
+  \frac{\partial U}{\partial t} + \nabla\!\cdot F(U,\mathrm{aux}) = S(U,\mathrm{aux})
+  \qquad
+  \Delta\phi = f(U)
+\]
+\vspace{1.5em}
+
+Une partie \textbf{hyperbolique} ($U$) et une partie \textbf{elliptique} ($\phi$),
+couplées à chaque pas par $\mathrm{aux} = (\phi, \nabla\phi)$.
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}{Architecture en couches}
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  box/.style={rectangle, rounded corners=2pt, draw=adcblue, fill=adclight,
+    text width=10.4cm, inner sep=4pt, align=center},
+  node distance=0.30cm,
+  arr/.style={-{Latex[length=2.2mm]}, adcteal, line width=1.4pt}
+]
+\node[box] (l1) {\textbf{PhysicalModel}\\[1pt] lois locales : flux, sources, fermetures (device-callable)};
+\node[box, below=of l1] (l2) {\textbf{NumericalMethod}\\[1pt] reconstruction, flux numérique, opérateur elliptique, CL logiques};
+\node[box, below=of l2] (l3) {\textbf{DataLayout}\\[1pt] conteneurs : Box, BoxArray, MultiFab, Geometry, hiérarchie AMR};
+\node[box, below=of l3] (l4) {\textbf{ExecutionBackend}\\[1pt] seams : \texttt{for\_each\_cell} (série/OpenMP/Kokkos), comm, allocateur\\
+  \texttt{BackendPolicy} ne voit que des vues minimales (Box, Array4, scalaire, rang),
+  jamais BoxArray/DistributionMapping};
+\node[box, below=of l4] (l5) {\textbf{TimeIntegrator}\\[1pt] compose les opérateurs (RK, IMEX, splitting, AP) sans connaître leur implémentation};
+
+\draw[arr] (l1) -- (l2);
+\draw[arr] (l2) -- (l3);
+\draw[arr] (l3) -- (l4);
+\draw[arr] (l4) -- (l5);
+\end{tikzpicture}
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{La physique : un concept}
+Un modèle est un type qui fournit quatre fonctions \textbf{locales} :
+
+\begin{lstlisting}
+template <class M>
+concept PhysicalModel = requires(M m, M::State u, M::Aux a, int dir) {
+  { m.flux(u, a, dir) }         -> std::same_as<typename M::State>;
+  { m.max_wave_speed(u, a, dir)}-> std::convertible_to<Real>;
+  { m.source(u, a) }            -> std::same_as<typename M::State>;
+  { m.elliptic_rhs(u) }         -> std::convertible_to<Real>;
+};
+\end{lstlisting}
+
+\vspace{0.2em}
+\small
+\texttt{flux}, \texttt{source} : les termes de l'équation \;|\;
+\texttt{max\_wave\_speed} : le pas stable (CFL) \;|\;
+\texttt{elliptic\_rhs} : le couplage Poisson. \\
+Le compilateur vérifie le contrat ; tout type le remplissant est un modèle valide.
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{Un modèle : le diocotron}
+\begin{lstlisting}
+struct Diocotron {
+  using State = StateVec<1>;  using Aux = adc::Aux;   // 1 scalaire : n_e
+  static constexpr int n_vars = 1;
+  Real B0 = 1.0, n_i0 = 1.0, alpha = 1.0;
+
+  ADC_HD State flux(const State& u, const Aux& a, int dir) const {
+    Real v = (dir == 0) ? -a.grad_y/B0 : a.grad_x/B0;  // v = (E x B)/|B|^2
+    return State{ u[0] * v };                          // F = n_e * v
+  }
+  ADC_HD State source(const State&, const Aux&) const { return State{}; }
+  ADC_HD Real  elliptic_rhs(const State& u) const { return alpha*(u[0]-n_i0); }
+};
+\end{lstlisting}
+
+\vspace{0.3em}
+\small \texttt{ADC\_HD} = host + device : le même code compile pour CPU et GPU.
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{L'elliptique : un concept}
+Même principe pour le solveur de Poisson : un contrat, plusieurs backends.
+
+\begin{lstlisting}
+template <class S>
+concept EllipticSolver = requires(S s) {
+  { s.rhs() } -> std::same_as<MultiFab&>;   // on ecrit f
+  { s.phi() } -> std::same_as<MultiFab&>;   // on lit phi
+  s.solve();                                // resout Delta phi = f
+};
+\end{lstlisting}
+
+\vspace{0.5em}
+Trois implémentations interchangeables :
+\begin{itemize}\setlength\itemsep{0.15em}
+  \item \texttt{GeometricMG} (multigrille, général)
+  \item \texttt{PoissonFFTSolver} (spectral direct, périodique)
+  \item \texttt{DistributedFFTSolver} (FFT distribuée, MPI)
+\end{itemize}
+\end{frame}
+
+% ===============================================================
+\begin{frame}[standout]
+  Construire son solveur avec adc
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{Étape 1 : définir son modèle}
+Un type qui satisfait \texttt{PhysicalModel} (advection scalaire, vitesse $(a,b)$) :
+
+\vspace{-0.4em}
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize]
+struct Advection {
+  using State = adc::StateVec<1>;   using Aux = adc::Aux;
+  static constexpr int n_vars = 1;
+  double a = 1.0, b = 0.5;          // vitesse d'advection
+  ADC_HD State flux(const State& u, const Aux&, int dir) const {
+    double v = (dir == 0) ? a : b;
+    return State{ v * u[0] };        // F = v u
+  }
+  ADC_HD double max_wave_speed(const State&, const Aux&, int d) const {
+    return (d == 0) ? std::fabs(a) : std::fabs(b); }
+  ADC_HD State  source(const State&, const Aux&) const { return State{0.0}; }
+  ADC_HD double elliptic_rhs(const State& u) const { return u[0]; }
+};
+static_assert(adc::PhysicalModel<Advection>);  // le compilateur valide le contrat
+\end{lstlisting}
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{Étape 2 : le faire tourner sur grille uniforme}
+Le couplage Poisson + transport est encapsulé par \texttt{Coupler<Model, Elliptic>} :
+
+\begin{lstlisting}
+#include <adc/coupling/coupler.hpp>
+#include <adc/elliptic/geometric_mg.hpp>
+
+adc::Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+adc::Coupler<Diocotron, adc::GeometricMG> sim(model, geom, ba, bc);
+
+// remplir sim.state() (densite initiale), puis :
+for (int s = 0; s < nsteps; ++s)
+    sim.advance<adc::VanLeer>(dt);   // Poisson -> aux -> transport
+\end{lstlisting}
+
+\vspace{0.3em}
+\small Le coupleur ferme la boucle $\phi \to \mathrm{aux} \to$ avance. Pour un modèle
+pur hyperbolique, on appelle directement \texttt{advance\_ssprk2}.
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{Étape 3 : choisir le schéma}
+Flux et reconstruction sont des \textbf{policies} template, pas des branches :
+
+\begin{lstlisting}
+sim.advance<adc::VanLeer>(dt);                          // MUSCL VanLeer
+sim.advance<adc::NoSlope, adc::OncePerStepCoupling>(dt);// ordre 1, Poisson 1x/pas
+\end{lstlisting}
+
+\vspace{0.5em}
+\small
+Flux : \texttt{RusanovFlux}, \texttt{HLLFlux}, \texttt{HLLCFlux}. \\
+Reconstruction : \texttt{NoSlope} (ordre 1), \texttt{Minmod} / \texttt{VanLeer} / \texttt{MC}, \texttt{WENO5Z} (ordre 5). \\[0.3em]
+Pour fixer aussi le flux : \texttt{compute\_face\_fluxes<Limiter, NumericalFlux>}.
+Changer de schéma ne touche jamais le modèle.
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{Étape 4 : passer en AMR}
+Même interface, un coupleur de plus : \texttt{AmrCouplerMP} :
+
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize]
+std::vector<adc::AmrLevelMP> levels(2);
+levels[0] = {std::move(Uc), nullptr, dxc, dyc};      // niveau grossier
+levels[1] = {std::move(Uf), nullptr, dxc/2, dyc/2};  // un patch fin
+adc::AmrCouplerMP<Diocotron> sim(model, geom, ba_coarse, bc, std::move(levels));
+auto crit = [&](const adc::ConstArray4& a, int i, int j) {  // raffinement
+  return a(i, j, 0) > seuil;
+};
+for (int s = 0; s < nsteps; ++s) {
+  if (s % 20 == 0) sim.regrid(crit);   // clustering Berger-Rigoutsos
+  sim.step(dt);                        // sous-cyclage + reflux conservatif
+}
+\end{lstlisting}
+
+\vspace{0.2em}
+\small Le critère est à l'utilisateur ; le moteur gère hiérarchie, regrid, reflux.
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{Étape 5 : choisir le backend (compilation)}
+\textbf{Le code source ne change pas.} On choisit le backend une fois, à \texttt{cmake} :
+
+\begin{lstlisting}[language=bash, basicstyle=\ttfamily\small,
+  keywordstyle=\color{kw}, morekeywords={cmake}]
+cmake -B build                       # serie
+cmake -B build -DADC_USE_OPENMP=ON   # CPU multi-thread
+cmake -B build -DADC_USE_MPI=ON      # distribue
+cmake -B build -DADC_USE_KOKKOS=ON   # GPU (CUDA) ou CPU portable
+\end{lstlisting}
+
+\vspace{0.5em}
+Le seam \texttt{for\_each\_cell} se compile en boucle série, \texttt{\#pragma omp},
+ou \texttt{Kokkos::parallel\_for}. \textbf{Passer en MPI ou GPU = un drapeau, pas du
+code} : les opérateurs (modèle, flux, coupleur) sont inchangés. OpenMP est garanti
+bit-identique à la série.
+\end{frame}
+
+% ---------------------------------------------------------------
+\begin{frame}[fragile]{Depuis Python}
+Le solveur compilé est piloté depuis Python (pybind11), sans recompiler :
+
+\begin{lstlisting}[language=Python, basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{kw}\bfseries, morekeywords={import,for,in,def,return}]
+import adc
+
+def run(n, B0):                      # parametres -> resultat
+    cfg = adc.DiocotronConfig()
+    cfg.n, cfg.B0 = n, B0
+    cfg.ic = adc.DiocotronIC.Band
+    sim = adc.DiocotronSolver(cfg)
+    for _ in range(500):
+        sim.step_cfl(0.4)
+    return sim.density()             # numpy (n, n)
+
+for n in [128, 256, 512]:            # balayage en resolution
+    rho = run(n, B0=1.0)
+\end{lstlisting}
+\end{frame}
+
+\end{document}

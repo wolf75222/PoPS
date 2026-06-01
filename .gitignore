@@ -9,6 +9,15 @@ cmake-build-*/
 .cache/
 compile_commands.json
 
+# sorties temporaires LaTeX
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.vrb
+
 # documentation generee (Doxygen + Sphinx)
 docs/_build/
 docs/sphinx/_generated/
