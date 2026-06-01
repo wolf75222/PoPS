@@ -157,10 +157,13 @@ l'architecture utilisateur.
 - [ ] **`SpectralCoupler::max_drift_speed`** : encore `/model_.B0`. Généraliser via
   `model.max_wave_speed` **change le `dt` → la trajectoire → non bit-identique** : reporté
   tant que la re-validation physique (croissance diocotron) n'est pas refaite contre la référence.
-- [ ] **`Coupler` fourre-tout / dédup diagnostics** : `AmrCouplerMP::mass()`/`max_drift_speed()`
-  ajoutent le multi-box + réduction distribuée (`all_reduce`) que `amr_diagnostics.hpp` (mono-box)
-  n'a pas ; vraie dédup = généraliser ces diagnostics au multi-box (risque de régression sur le
-  chemin distribué). « Pas urgent », reporté.
+- [x] **Dédup diagnostics** : `amr_diagnostics.hpp` porte désormais l'implémentation **unique**
+  multi-box (`amr_mass_mb`, `amr_max_drift_speed_mb`) ; les variantes mono-box s'y ramènent
+  (cas dégénéré 1 fab, bit-identique) et `AmrCouplerMP::mass()`/`max_drift_speed()` les
+  appellent (+ `all_reduce` selon l'ownership) au lieu de réimplémenter les boucles. Vérifié
+  bit-identique (adc_cpp 38/38, adc_cases 48/48 dont diocotron AMR).
+- [ ] **`Coupler` fourre-tout** : extraire l'orchestrateur — `SystemCoupler`/`AmrSystemCoupler`
+  vont dans ce sens ; renommer `Coupler` (historique) = *Assembler/Simulation Driver*, pas urgent.
 
 ---
 

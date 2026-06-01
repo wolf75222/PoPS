@@ -22,29 +22,50 @@
 
 namespace adc {
 
-// masse de la composante 0 sur le niveau grossier (box unique). dV = dx * dy passes
-// tels que geom_.dx() / geom_.dy(). dV multiplie DANS le noyau (somme de u*dV), pas en
-// facteur de la somme : somme(u)*dV differerait au dernier bit de somme(u*dV).
-inline Real amr_mass(const MultiFab& coarse, const Box2D& dom, Real dx, Real dy) {
-  const ConstArray4 u = coarse.fab(0).const_array();
-  const int nx = dom.nx(), ny = dom.ny();
+// --- forme MULTI-BOX (canonique) : somme/max sur les cellules valides de TOUS les fabs
+// locaux, SANS reduction MPI (le coupleur decide d'all_reduce ou non selon sa politique
+// d'ownership). C'est l'implementation unique ; les variantes mono-box ci-dessous s'y
+// ramenent (un seul fab dont la box vaut le domaine -> bit a bit identique). Cela retire
+// la duplication entre AmrCoupler (mono-box) et AmrCouplerMP (multi-box / distribue).
+
+// somme locale de u(.,.,0) * dV sur les cellules valides. dV multiplie DANS le noyau.
+inline Real amr_mass_mb(const MultiFab& coarse, Real dx, Real dy) {
   const Real dV = dx * dy;
-  return for_each_cell_reduce_sum(Box2D{{0, 0}, {nx - 1, ny - 1}},
-                                  [u, dV] ADC_HD(int i, int j) { return u(i, j, 0) * dV; });
+  Real M = 0;
+  for (int li = 0; li < coarse.local_size(); ++li) {
+    const ConstArray4 u = coarse.fab(li).const_array();
+    M += for_each_cell_reduce_sum(
+        coarse.box(li), [u, dV] ADC_HD(int i, int j) { return u(i, j, 0) * dV; });
+  }
+  return M;
 }
 
-// vitesse de derive max |grad phi| / B0 sur le niveau grossier (box unique). aux0 =
-// aux_[0], composantes 1 et 2 = (d phi/dx, d phi/dy). Boucle hote (std::hypot non
-// confirme device : voir l'en-tete).
-inline Real amr_max_drift_speed(const MultiFab& aux0, const Box2D& dom, Real B0) {
+// max local de |grad phi| / B0 (aux comp 1,2 = grad phi). Boucle hote (std::hypot non
+// confirme device : voir l'en-tete). SANS plancher (applique par l'appelant).
+inline Real amr_max_drift_speed_mb(const MultiFab& aux0, Real B0) {
   device_fence();
-  const ConstArray4 a = aux0.fab(0).const_array();
-  const int nx = dom.nx(), ny = dom.ny();
   Real v = 0;
-  for (int j = 0; j < ny; ++j)
-    for (int i = 0; i < nx; ++i)
-      v = std::max(v, std::hypot(a(i, j, 1), a(i, j, 2)) / B0);
-  return std::max(v, Real(1e-12));
+  for (int li = 0; li < aux0.local_size(); ++li) {
+    const ConstArray4 a = aux0.fab(li).const_array();
+    const Box2D b = aux0.box(li);
+    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+        v = std::max(v, std::hypot(a(i, j, 1), a(i, j, 2)) / B0);
+  }
+  return v;
+}
+
+// masse de la composante 0 sur le niveau grossier (box unique) : cas degenere de
+// amr_mass_mb (un fab couvrant le domaine), bit a bit identique. dom conserve pour l'API.
+inline Real amr_mass(const MultiFab& coarse, const Box2D& dom, Real dx, Real dy) {
+  (void)dom;
+  return amr_mass_mb(coarse, dx, dy);
+}
+
+// vitesse de derive max sur le grossier (box unique) + plancher 1e-12 (garde-fou CFL).
+inline Real amr_max_drift_speed(const MultiFab& aux0, const Box2D& dom, Real B0) {
+  (void)dom;
+  return std::max(amr_max_drift_speed_mb(aux0, B0), Real(1e-12));
 }
 
 }  // namespace adc
