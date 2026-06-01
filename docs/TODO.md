@@ -315,10 +315,12 @@ trop. « Avancer un coupleur » est bancal — un coupleur *assemble*, un *drive
   la plus rapide contraint le pas. Combiné au `Stride` d'une espèce lente, cela donne le
   **multirate pratique** (pas macro fixé par les rapides, lente avancée 1 fois sur stride).
   Testé `test_cfl_dt`.
-- [ ] **Multirate pleinement adaptatif** (raffinement) : dériver le `Stride` de chaque espèce
-  au RUNTIME du ratio `dt_s / dt_macro` (au lieu d'un stride fixé à la compilation), + cadence
-  φ associée. La brique (`step_cfl`, `max_wave_speed_mf`, `Stride` runtime dans le scheduler)
-  est là ; reste à boucler la sélection automatique du stride par espèce.
+- [x] **Multirate pleinement adaptatif** : `SystemDriver::step_adaptive(cfl)` — pas macro
+  fixé par l'espèce la plus rapide (CFL), et `stride` de CHAQUE espèce dérivé **au runtime**
+  du ratio `w_max / w_s` (`stride_s = max(1, ⌊w_max/w_s⌋)`). Une espèce N× plus lente avance
+  automatiquement 1 fois sur N, par un pas N× plus grand (= son dt stable). Le dispatch par
+  bloc est factorisé (`advance_block_dispatch`) et partagé avec `step` (pas de duplication).
+  Testé `test_adaptive_multirate` (rapide a=4 → stride 1 ; lent a=1 → stride 4, dérivés seuls).
 
 ---
 

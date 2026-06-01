@@ -168,18 +168,48 @@ class SystemDriver {
     // macro_step_ : un bloc de cadence `stride` n'avance qu'1 macro-pas sur stride
     // (alors d'un pas effectif stride*dt). stride=1 -> chaque pas (historique).
     advance_subcycled(asm_.system(), dt, macro_step_, [&](auto& block, Real h, int s, int n) {
+      advance_block_dispatch(block, h, s, n, advance_implicit);
+    });
+    ++macro_step_;
+  }
+
+  // Multirate PLEINEMENT ADAPTATIF (§8.2 C) : le pas macro est fixe par l'espece la plus
+  // rapide (CFL), et le `stride` de CHAQUE espece est derive AU RUNTIME du ratio des
+  // vitesses d'onde, stride_s = max(1, floor(w_max / w_s)). Une espece lente (gaz) avance
+  // donc automatiquement moins souvent, par un pas plus grand (stride_s * macro_dt ~ son dt
+  // stable). Retourne le pas macro. (vs `Stride` fixe a la compilation + `step_cfl`.)
+  template <class ImplicitAdvance>
+  Real step_adaptive(Real cfl, ImplicitAdvance&& implicit_advance) {
+    ImplicitAdvance& advance_implicit = implicit_advance;
+    asm_.solve_fields();  // aux a jour pour les vitesses d'onde
+    const Real h = std::min(asm_.geom().dx(), asm_.geom().dy());
+    const Real wmax = system_max_wave_speed();
+    const Real macro_dt = cfl * h / std::max(wmax, Real(1e-30));
+    asm_.system().for_each_block([&](auto& block) {
       using Block = std::decay_t<decltype(block)>;
-      constexpr TimeTreatment treatment = block_time_treatment_v<Block>;
-      if constexpr (treatment == TimeTreatment::Explicit) {
-        advance_explicit_block(block, h);
-      } else if constexpr (treatment == TimeTreatment::Implicit ||
-                           treatment == TimeTreatment::IMEX) {
-        asm_.solve_fields();
-        if constexpr (treatment == TimeTreatment::IMEX) explicit_transport(block, h);
-        advance_implicit(*this, block, h, s, n);
+      if constexpr (block_time_treatment_v<Block> != TimeTreatment::Prescribed) {
+        const Real w_s = max_wave_speed_mf(block.model, block.U(), asm_.aux());
+        const int stride = (w_s <= Real(0))
+                               ? 1
+                               : std::max(1, static_cast<int>(wmax / w_s));
+        if (macro_step_ % stride == 0) {
+          constexpr int n = block_substeps_v<Block>;
+          const Real hh = (macro_dt * static_cast<Real>(stride)) / static_cast<Real>(n);
+          for (int s = 0; s < n; ++s)
+            advance_block_dispatch(block, hh, s, n, advance_implicit);
+        }
       }
     });
     ++macro_step_;
+    return macro_dt;
+  }
+  Real step_adaptive(Real cfl) {
+    return step_adaptive(cfl, [](auto&, auto& block, Real, int, int) {
+      using Block = std::decay_t<decltype(block)>;
+      static_assert(detail::always_false_v<Block>,
+                    "SystemDriver::step_adaptive(cfl) ne peut pas avancer un bloc "
+                    "implicite/IMEX sans callback");
+    });
   }
 
   // Surcharge pratique pour un systeme entierement explicite.
@@ -200,11 +230,7 @@ class SystemDriver {
   Real cfl_dt(Real cfl) {
     asm_.solve_fields();
     const Real h = std::min(asm_.geom().dx(), asm_.geom().dy());
-    Real wmax = 0;
-    asm_.system().for_each_block([&](auto& block) {
-      wmax = std::max(wmax, max_wave_speed_mf(block.model, block.U(), asm_.aux()));
-    });
-    return cfl * h / std::max(wmax, Real(1e-30));
+    return cfl * h / std::max(system_max_wave_speed(), Real(1e-30));
   }
   template <class ImplicitAdvance>
   Real step_cfl(Real cfl, ImplicitAdvance&& implicit_advance) {
@@ -230,6 +256,33 @@ class SystemDriver {
   }
 
  private:
+  // Plus grande vitesse d'onde sur TOUTES les especes (aux suppose a jour). Fixe le pas CFL.
+  Real system_max_wave_speed() {
+    Real wmax = 0;
+    asm_.system().for_each_block([&](auto& block) {
+      wmax = std::max(wmax, max_wave_speed_mf(block.model, block.U(), asm_.aux()));
+    });
+    return wmax;
+  }
+
+  // Dispatch d'un (sous-)pas pour UN bloc, selon son traitement. Partage par step (cadence
+  // compile-time) et step_adaptive (cadence CFL runtime) : pas de duplication.
+  //   Explicite : avance via TimeStepper. Implicite/IMEX : re-resout les champs, (IMEX)
+  //   transport explicite, puis source implicite par le callback.
+  template <class Block, class ImplicitAdvance>
+  void advance_block_dispatch(Block& block, Real h, int s, int n,
+                              ImplicitAdvance& advance_implicit) {
+    constexpr TimeTreatment treatment = block_time_treatment_v<Block>;
+    if constexpr (treatment == TimeTreatment::Explicit) {
+      advance_explicit_block(block, h);
+    } else if constexpr (treatment == TimeTreatment::Implicit ||
+                         treatment == TimeTreatment::IMEX) {
+      asm_.solve_fields();
+      if constexpr (treatment == TimeTreatment::IMEX) explicit_transport(block, h);
+      advance_implicit(*this, block, h, s, n);
+    }
+  }
+
   // Avance explicite d'un bloc : DELEGUE le schema a un objet TimeStepper (SSPRK2/3 du coeur
   // ou integrateur utilisateur), en lui passant l'evaluateur de residu de l'assembleur.
   template <class Block>
