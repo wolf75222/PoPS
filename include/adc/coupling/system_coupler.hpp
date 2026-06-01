@@ -226,4 +226,14 @@ class SystemCoupler {
   MultiFab aux_;
 };
 
+// Nommage / responsabilites (retour tuteur §8.2 B, §9.6). Deux roles coexistent ici :
+//   - ASSEMBLEUR : couple hyperbolique + elliptique (RHS de systeme Sum_s q_s n_s, Poisson,
+//     aux) -> solve_fields() ;
+//   - DRIVER : AVANCE la simulation (step(), sous-cyclage, take_step de l'integrateur).
+// « Avancer un coupleur » etant bancal, l'alias SystemDriver donne le nom « qui avance ».
+// La scission en DEUX classes (SystemAssembler + SystemDriver) est cosmetique et reportee :
+// la classe unifiee est validee (bit-identique), on evite d'y toucher sans necessite.
+template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>
+using SystemDriver = SystemCoupler<System, RhsAssembler, Elliptic>;
+
 }  // namespace adc

@@ -285,17 +285,18 @@ le `TimeIntegrator` étant un objet du cœur (ou fourni par l'utilisateur).
   tout-cœur. 
 - [x] Garde : **bit-identique** aux SSPRK actuels (adc_cpp 41/41, adc_cases 48/48).
 
-**B. Scinder le coupleur — Assembleur vs Driver (priorité 2).** Un coupleur assemble
+**B. Scinder le coupleur — Assembleur vs Driver (priorité 2 ; §9.6).** Un coupleur assemble
 l'elliptique + résout Poisson + dérive aux + calcule le RHS spatial + intègre + sous-cycle :
 trop. « Avancer un coupleur » est bancal — un coupleur *assemble*, un *driver* *avance*.
-- [ ] **B1. `SystemAssembler`** : couple hyperbolique + elliptique → expose `solve_fields()`
-  (Poisson de système `f = Σ_s q_s n_s` + aux) et le `rhs_eval` par bloc. NE fait PAS de pas.
-- [ ] **B2. `SystemDriver`** : porte le schedule (sous-cyclage par espèce, cadence φ,
-  implicite/IMEX délégué) et appelle `TimeIntegrator::take_step` via le `rhs_eval` de
-  l'assembleur. C'est lui qui « avance ».
-- [ ] **B3. Renommage** : acter `Coupler` = *Assembler/Simulation Driver* (avec Sacha).
-- [ ] **B4.** `Simulation` (`adc_cases`) repose sur `{Assembler, Driver, TimeIntegrator}`
-  au lieu de tout faire elle-même.
+- [x] **B3. Nom « qui avance »** : alias `SystemDriver` / `AmrSystemDriver` (= les coupleurs)
+  + doc des deux rôles (solve_fields = assembleur ; step = driver) dans les en-têtes. Le nom
+  correct existe et est utilisable, sans toucher aux classes validées.
+- [ ] **B1/B2. Extraction en DEUX classes** (`SystemAssembler` : `solve_fields` + `rhs_eval` ;
+  `SystemDriver` : schedule + `take_step`) — **reportée** : refactor purement cosmétique d'un
+  code validé bit-identique ; à faire en changement dédié pour ne pas régresser. `stage_rhs`
+  re-résout φ par étage, donc le driver appellera l'assembleur (séparation par composition).
+- [ ] **B4.** `Simulation` (`adc_cases`) reposera sur `{Assembler, Driver, TimeIntegrator}`
+  une fois B1/B2 faits.
 
 **C. Multirate — `dt` propre par modèle (priorité 3).** `substeps` couvre 10:1 en lock-step.
 - [ ] `dt` par espèce piloté CFL (et la cadence φ associée), au-delà du sous-cyclage entier.

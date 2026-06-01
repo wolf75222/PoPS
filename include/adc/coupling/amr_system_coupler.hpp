@@ -294,4 +294,10 @@ struct AmrImplicitSourceStepper {
   }
 };
 
+// Alias « qui avance » (retour tuteur §8.2 B, §9.6) : AmrSystemCoupler assemble (Poisson de
+// systeme + aux par niveau) ET avance (step, reflux, sous-cyclage). Scission en deux classes
+// cosmetique et reportee (classe unifiee validee bit-identique).
+template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>
+using AmrSystemDriver = AmrSystemCoupler<System, RhsAssembler, Elliptic>;
+
 }  // namespace adc
