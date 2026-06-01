@@ -73,8 +73,12 @@ class SpectralCoupler {
     // bit-identique a l'ancien chemin inline qui appelait PoissonFFT directement).
     const ConstArray4 u = U_.fab(0).const_array();
     Array4 r = fft_.rhs().fab(0).array();
+    // f = model.elliptic_rhs(U) : on appelle le PhysicalModel (comme le Coupler normal)
+    // au lieu de coder la formule diocotron alpha*(u - n_i0) en dur dans le coeur.
+    // Pour le diocotron c'est exactement la meme expression -> bit-identique.
     for (int j = y0_; j < y0_ + nyl_; ++j)
-      for (int i = 0; i < Nx_; ++i) r(i, j) = model_.alpha * (u(i, j) - model_.n_i0);
+      for (int i = 0; i < Nx_; ++i)
+        r(i, j) = model_.elliptic_rhs(typename Model::State{u(i, j)});
     fft_.solve();
     fill_boundary(fft_.phi(), dom_, Periodicity{true, true});
     const ConstArray4 pc = fft_.phi().fab(0).const_array();
