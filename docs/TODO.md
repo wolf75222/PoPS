@@ -47,31 +47,61 @@ testable**. `[x]` = fait et vert ; `[ ]` = à faire.
 
 ## 2. À faire — compléter le squelette multi-espèces
 
+**Ordre conseillé** : (1) `PoissonRhsAssembler` N-blocs → (2) `CoupledSource` → (3) vraie
+interface implicite `ImplicitSolver`/`IMEXStepper` → (4) **exemple C++ minimal** (électrons
+implicites + ions explicites, rhs = n_i − n_e, sans Python) → (5) `AmrSystemCoupler` →
+(6) API Python dans `adc_cases`. On valide à chaque étape par un test d'intégration (§2.5).
+
 ### 2.1 Couplage et RHS
-- [ ] **RHS de charge à N blocs** : généraliser `TwoBlockChargeDensityRhs` (q0·n0+q1·n1) à N espèces `f = Σ_s q_s n_s` (somme sur `for_each_block`).
-- [ ] **Source de couplage inter-espèces** : distinguer `source` locale du modèle et un terme de **couplage** (collisions, échange q/m) qui voit les autres blocs. Aujourd'hui `source(u,aux)` ne voit que le bloc local.
+- [ ] **`PoissonRhsAssembler` / `ChargeDensityRhs<Blocks...>` à N blocs** : généraliser
+  `TwoBlockChargeDensityRhs` (q0·n0+q1·n1) à N espèces `f = Σ_s q_s n_s` (somme sur
+  `for_each_block`), avec **charges, composantes densité et signes configurables** par bloc.
+- [ ] **`CoupledSource` (sources inter-espèces)** : distinguer `source` locale du modèle et
+  une couche de **couplage** qui lit plusieurs blocs : `S_e(U_e, U_i, phi)`,
+  `S_i(U_i, U_e, phi)` (collisions, échange q/m). Aujourd'hui `source(u,aux)` ne voit que le
+  bloc local.
 - [ ] **BC par bloc réellement appliquées** : `EquationBlock::bc` existe ; vérifier/forcer son usage dans `SystemCoupler` (remplissage des halos par bloc), pas une BC globale unique.
 
 ### 2.2 Temps : implicite / IMEX réellement exécutés
-- [ ] Aujourd'hui `SystemCoupler::step` exécute l'**explicite** (SSPRK2/3) et **délègue** l'implicite/IMEX à un callback. Fournir au moins **un intégrateur IMEX par défaut** (réutiliser `integrator/imex.hpp` / `two_fluid_ap`) branché sur le callback, pour un cas plasma raide sans que l'utilisateur écrive Newton.
+- [ ] **Vraie interface implicite** : aujourd'hui `SystemCoupler::step` exécute l'**explicite**
+  (SSPRK2/3) et **délègue** l'implicite/IMEX à un simple callback. Définir un **contrat clair**
+  `ImplicitSolver<Block>` / `IMEXStepper<Block>` (au lieu du callback nu), et fournir **un
+  IMEX par défaut** (réutiliser `integrator/imex.hpp` / `two_fluid_ap`) pour un cas plasma
+  raide sans que l'utilisateur écrive Newton.
 - [ ] **IMEX partiel** : traiter implicitement un **sous-ensemble** des variables d'un bloc (trait `which_implicit()` sur le modèle), pas tout le bloc.
 - [ ] **Sous-cyclage temporel par espèce** : déjà exprimé par `substeps` ; vérifier la cohérence du couplage Poisson quand les blocs ont des `dt` différents (re-résoudre φ à quelle cadence ?).
 
-### 2.3 AMR pour le système
-- [ ] `SystemCoupler` est **mono-niveau**. Porter l'exécution multi-blocs sur AMR : chaque bloc avancé par `advance_amr<Disc_bloc>` avec son schéma, RHS elliptique global ré-assemblé par niveau. (L'AMR est déjà un orchestrateur : `fill_ghosts → subcycle → average_down → reflux → regrid`.)
+### 2.3 AMR pour le système : `AmrSystemCoupler`
+- [ ] `SystemCoupler` est **mono-niveau**. Créer `AmrSystemCoupler` qui porte
+  `EquationBlock / CoupledSystem` sur AMR : niveaux 0/1/2, **sous-cyclage AMR**, **reflux**,
+  **average_down**, **Poisson par niveau**, chaque bloc avancé par `advance_amr<Disc_bloc>`
+  avec son schéma. (L'AMR est déjà un orchestrateur : `fill_ghosts → subcycle → average_down
+  → reflux → regrid`.) Note : `AmrCoupler`/`AmrCouplerMP` restent mono-modèle aujourd'hui.
 
 ### 2.4 Cas de validation (squelette testable)
-- [ ] **électrons Euler + ions Euler isothermes + Poisson** (cas canonique deux-espèces) via `CoupledSystem` + `SystemCoupler` (modèles dans `adc_cases`).
+- [ ] **Exemple C++ minimal SANS Python** (pour valider l'archi utilisateur) : électrons
+  implicites + ions explicites + `rhs Poisson = n_i − n_e`, via `CoupledSystem` +
+  `SystemCoupler`. C'est le test « est-ce qu'un utilisateur peut construire son cas ? ».
+- [ ] **électrons Euler + ions Euler isothermes + Poisson** (cas canonique deux-espèces) — modèles dans `adc_cases`.
 - [ ] **diocotron à ions mobiles** (les ions deviennent un 2e bloc ; réutiliser le diocotron existant pour les électrons).
 - [ ] Garde : masse conservée par bloc, RHS = q_i n_i − q_e n_e correct, comparaison à une référence simple.
 
+### 2.5 Tests d'intégration à ajouter
+- [ ] `CoupledSystem` + **Poisson RHS non nul** (au-delà du `ZeroSystemRhs` actuel).
+- [ ] `SystemCoupler` avec **deux blocs explicites différents** (schémas/sous-pas distincts).
+- [ ] `SystemCoupler` avec **bloc implicite** branché sur le callback (déjà amorcé par `test_system_coupler`, à durcir).
+- [ ] `AmrSystemCoupler` quand il existera (conservation par niveau, reflux).
+
 ---
 
-## 3. À faire — API Python de composition (dans `adc_cases`)
+## 3. À faire — API Python de composition (dans `adc_cases`, APRÈS l'exemple C++)
 
 But : Python **compose**, ne calcule pas cellule par cellule. Les chaînes sélectionnent
-des briques C++ compilées.
+des briques C++ compilées. À ne faire qu'**après** l'exemple C++ minimal (§2.4) qui valide
+l'architecture utilisateur.
 
+- [ ] **Modèles physiques prêts à composer** (dans `adc_cases`) : `ElectronEuler`, `IonEuler`,
+  `Diocotron`, `TwoFluid`… exposés pour servir de blocs.
 - [ ] Façade compilée `MultiSpeciesSolver(vector<SpeciesConfig>)` instanciant un `CoupledSystem` + `SystemCoupler` (PIMPL, comme les solveurs existants).
 - [ ] Bindings pybind11 : `adc.Mesh2D(...)`, `adc.Simulation(mesh, backend=...)`, `sim.add_equation(name, model, spatial, time, bc)`, `sim.add_poisson(rhs, solver)`, `sim.run(t_end, cfl, output)`.
 - [ ] `model="electron_euler"`, `flux="hllc"`, `time="imex"` ↔ tags C++ ; jamais de callback `flux(u)` Python dans le hot path.
