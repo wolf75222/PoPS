@@ -83,6 +83,11 @@ class System {
   /// Avance d'un pas a dt = cfl * h / vitesse d'onde max du systeme. @return le dt utilise.
   double step_cfl(double cfl);
 
+  /// Avance d'un macro-pas MULTIRATE : le bloc le plus lent fixe le macro-pas, chaque bloc
+  /// plus rapide est sous-cycle n = ceil(w_bloc / w_min) fois (sa contrainte CFL). @return
+  /// le macro-pas. @note aux est fige sur le macro-pas (couplage once-per-step).
+  double step_adaptive(double cfl);
+
   /// @name Primitives pour un integrateur temporel ecrit en Python
   /// Pilotage depuis Python (par pas), residu et Poisson restant en C++ (par cellule) :
   /// solve_fields(); R = eval_rhs(name); U = get_state(name); ...; set_state(name, U).

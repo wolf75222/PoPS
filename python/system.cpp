@@ -37,7 +37,8 @@ struct System::Impl {
     double charge;
     Kind kind;
     int ncomp;
-    std::function<void(MultiFab&, Real)> advance;             // un macro-pas (sous-pas inclus)
+    int substeps;                                             // sous-pas statiques (add_block)
+    std::function<void(MultiFab&, Real, int)> advance;        // (U, dt, n) : n sous-pas de dt/n
     std::function<void(MultiFab&, MultiFab&)> rhs_into;        // R <- -div F + S (Poisson fige)
     std::function<Real(const MultiFab&)> max_speed;           // max |vitesse d'onde| du bloc
     std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;  // += elliptic_rhs(U)
@@ -173,23 +174,25 @@ struct System::Impl {
   }
 
   struct BlockClosures {
-    std::function<void(MultiFab&, Real)> advance;
+    std::function<void(MultiFab&, Real, int)> advance;  // (U, dt, n_substeps)
     std::function<void(MultiFab&, MultiFab&)> rhs_into;
   };
 
+  // Le nombre de sous-pas n est un PARAMETRE d'execution (pas fige dans la fermeture) :
+  // step utilise les sous-pas statiques du bloc, step_adaptive un n derive du CFL.
   template <class Limiter, class Flux, class Model>
-  BlockClosures build(const Model& m, bool imex, int substeps) {
+  BlockClosures build(const Model& m, bool imex) {
     Impl* P = this;
     BlockClosures bc;
     if (imex)
-      bc.advance = [P, m, substeps](MultiFab& U, Real dt) {
-        const Real h = dt / static_cast<Real>(substeps);
-        for (int s = 0; s < substeps; ++s) P->imex_step<Limiter, Flux>(m, U, h);
+      bc.advance = [P, m](MultiFab& U, Real dt, int n) {
+        const Real h = dt / static_cast<Real>(n);
+        for (int s = 0; s < n; ++s) P->imex_step<Limiter, Flux>(m, U, h);
       };
     else
-      bc.advance = [P, m, substeps](MultiFab& U, Real dt) {
-        const Real h = dt / static_cast<Real>(substeps);
-        for (int s = 0; s < substeps; ++s) P->ssprk2<Limiter, Flux>(m, U, h);
+      bc.advance = [P, m](MultiFab& U, Real dt, int n) {
+        const Real h = dt / static_cast<Real>(n);
+        for (int s = 0; s < n; ++s) P->ssprk2<Limiter, Flux>(m, U, h);
       };
     // residu nu (Poisson/aux fige par l'appelant) : pour un integrateur custom Python.
     bc.rhs_into = [P, m](MultiFab& U, MultiFab& R) {
@@ -201,19 +204,19 @@ struct System::Impl {
 
   template <class Model>
   BlockClosures make_block(const Model& m, const std::string& lim, const std::string& flx,
-                           bool imex, int substeps) {
+                           bool imex) {
     if (flx == "rusanov") {
-      if (lim == "none") return build<NoSlope, RusanovFlux>(m, imex, substeps);
-      if (lim == "minmod") return build<Minmod, RusanovFlux>(m, imex, substeps);
-      if (lim == "vanleer") return build<VanLeer, RusanovFlux>(m, imex, substeps);
+      if (lim == "none") return build<NoSlope, RusanovFlux>(m, imex);
+      if (lim == "minmod") return build<Minmod, RusanovFlux>(m, imex);
+      if (lim == "vanleer") return build<VanLeer, RusanovFlux>(m, imex);
       throw std::runtime_error("System : limiter inconnu '" + lim + "'");
     }
     if (flx == "hllc") {
       if constexpr (Model::n_vars == 4 &&
                     requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-        if (lim == "none") return build<NoSlope, HLLCFlux>(m, imex, substeps);
-        if (lim == "minmod") return build<Minmod, HLLCFlux>(m, imex, substeps);
-        if (lim == "vanleer") return build<VanLeer, HLLCFlux>(m, imex, substeps);
+        if (lim == "none") return build<NoSlope, HLLCFlux>(m, imex);
+        if (lim == "minmod") return build<Minmod, HLLCFlux>(m, imex);
+        if (lim == "vanleer") return build<VanLeer, HLLCFlux>(m, imex);
         throw std::runtime_error("System : limiter inconnu '" + lim + "'");
       } else {
         throw std::runtime_error("System : flux 'hllc' exige un modele Euler complet "
@@ -327,19 +330,19 @@ void System::add_block(const std::string& name, const std::string& model, double
   if (model == "diocotron") {
     ncomp = 1; kind = Kind::Diocotron;
     const Diocotron m{Real(P->cfg.B0), Real(P->cfg.n_i0), Real(P->cfg.alpha)};
-    clo = P->make_block(m, limiter, flux, imex, substeps);
+    clo = P->make_block(m, limiter, flux, imex);
     max_speed = P->make_max_speed(m);
     add_poisson_rhs = P->make_poisson_rhs(m);
   } else if (model == "electron_euler") {
     ncomp = 4; kind = Kind::Euler;
     const ChargedEuler m{Euler{Real(P->cfg.gamma)}, Real(charge), Real(charge)};
-    clo = P->make_block(m, limiter, flux, imex, substeps);
+    clo = P->make_block(m, limiter, flux, imex);
     max_speed = P->make_max_speed(m);
     add_poisson_rhs = P->make_poisson_rhs(m);
   } else if (model == "ion_isothermal") {
     ncomp = 3; kind = Kind::Isothermal;
     const ChargedEulerIsothermal m{Real(P->cfg.cs2), Real(charge), Real(charge)};
-    clo = P->make_block(m, limiter, flux, imex, substeps);
+    clo = P->make_block(m, limiter, flux, imex);
     max_speed = P->make_max_speed(m);
     add_poisson_rhs = P->make_poisson_rhs(m);
   } else if (model == "euler_poisson") {
@@ -349,7 +352,7 @@ void System::add_block(const std::string& name, const std::string& model, double
     m.four_pi_G = Real(P->cfg.four_pi_G);
     m.rho0 = Real(P->cfg.rho0);
     m.coupling_sign = Real(charge);  // +1 auto-gravite, -1 electrostatique (Langmuir)
-    clo = P->make_block(m, limiter, flux, imex, substeps);
+    clo = P->make_block(m, limiter, flux, imex);
     max_speed = P->make_max_speed(m);
     add_poisson_rhs = P->make_poisson_rhs(m);
   } else {
@@ -358,7 +361,7 @@ void System::add_block(const std::string& name, const std::string& model, double
   }
 
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), charge, kind, ncomp,
-                                std::move(clo.advance), std::move(clo.rhs_into),
+                                substeps, std::move(clo.advance), std::move(clo.rhs_into),
                                 std::move(max_speed), std::move(add_poisson_rhs)});
   P->sp.back().U.set_val(Real(0));
 }
@@ -403,7 +406,7 @@ void System::solve_fields() { p_->solve_fields(); }
 
 void System::step(double dt) {
   p_->solve_fields();
-  for (auto& s : p_->sp) s.advance(s.U, Real(dt));
+  for (auto& s : p_->sp) s.advance(s.U, Real(dt), s.substeps);  // sous-pas statiques du bloc
   p_->t += dt;
 }
 void System::advance(double dt, int nsteps) {
@@ -418,9 +421,33 @@ double System::step_cfl(double cfl) {
   }
   const Real h = std::min(p_->geom.dx(), p_->geom.dy());
   const double dt = cfl * static_cast<double>(h) / static_cast<double>(wmax);
-  for (auto& s : p_->sp) s.advance(s.U, Real(dt));  // aux deja resolu ci-dessus
+  for (auto& s : p_->sp) s.advance(s.U, Real(dt), s.substeps);  // aux deja resolu ci-dessus
   p_->t += dt;
   return dt;
+}
+double System::step_adaptive(double cfl) {
+  p_->solve_fields();
+  // Multirate par sous-cyclage : le macro-pas est le pas stable du bloc le PLUS LENT ;
+  // chaque bloc plus rapide est sous-cycle n_b = ceil(w_b / w_min) fois (sa contrainte CFL).
+  // aux est fige sur le macro-pas (couplage once-per-step), comme step().
+  Real wmin = Real(1e30), wmax = Real(1e-30);
+  std::vector<Real> wb;
+  wb.reserve(p_->sp.size());
+  for (auto& s : p_->sp) {
+    const Real w = s.max_speed(s.U);
+    wb.push_back(w);
+    wmin = std::min(wmin, w);
+    wmax = std::max(wmax, w);
+  }
+  const Real h = std::min(p_->geom.dx(), p_->geom.dy());
+  const double macro_dt = cfl * static_cast<double>(h) / static_cast<double>(wmin);
+  for (std::size_t b = 0; b < p_->sp.size(); ++b) {
+    int n = static_cast<int>(std::ceil(static_cast<double>(wb[b] / wmin)));
+    if (n < 1) n = 1;
+    p_->sp[b].advance(p_->sp[b].U, Real(macro_dt), n);
+  }
+  p_->t += macro_dt;
+  return macro_dt;
 }
 
 std::vector<double> System::eval_rhs(const std::string& name) {

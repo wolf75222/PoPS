@@ -47,6 +47,11 @@ me0, mi0 = sim.mass("electrons"), sim.mass("ions")
 sim.advance(0.001, 6)
 chk(abs(sim.mass("electrons") - me0) < 1e-10, "masse electrons conservee (Euler/HLLC/IMEX)")
 chk(abs(sim.mass("ions") - mi0) < 1e-10, "masse ions conservee (isotherme/Rusanov)")
+# multirate : chaque bloc sous-cycle selon sa contrainte CFL, masse conservee par bloc
+mea, mia = sim.mass("electrons"), sim.mass("ions")
+sim.step_adaptive(0.4)
+chk(abs(sim.mass("electrons") - mea) < 1e-9 and abs(sim.mass("ions") - mia) < 1e-9,
+    "step_adaptive (multirate) : masses conservees par bloc")
 
 # --- 2. implicite/explicite par bloc, REVERSIBLE (pas hardcode) ------------------
 print("== implicite/explicite par bloc, reversible ==")

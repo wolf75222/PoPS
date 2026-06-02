@@ -77,6 +77,7 @@ PYBIND11_MODULE(_adc, m) {
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &System::step_cfl, py::arg("cfl"))
+      .def("step_adaptive", &System::step_adaptive, py::arg("cfl"))
       // Primitives pour un integrateur temporel CUSTOM en Python (take_step) :
       .def("eval_rhs",
            [](System& s, const std::string& name) {
