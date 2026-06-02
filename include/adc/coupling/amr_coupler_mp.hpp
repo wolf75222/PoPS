@@ -200,6 +200,32 @@ class AmrCouplerMP {
     return all_reduce_max(std::max(v, Real(1e-12)));
   }
 
+  /// @brief Max wave speed over the coarse level via `model.max_wave_speed`.
+  ///
+  /// Model-generic CFL speed (any `PhysicalModel`), unlike `max_drift_speed` which is
+  /// specific to the E x B drift (`model.B0`). For the diocotron it equals the drift speed.
+  ///
+  /// @returns the max over coarse cells and both directions, reduced across ranks.
+  /// @note `update()` must have run so that `aux(0)` holds the current `grad phi`.
+  Real max_wave_speed() {
+    Real w = Real(1e-12);
+    MultiFab& U = stack_.coarse();
+    MultiFab& A = stack_.aux(0);
+    for (int li = 0; li < U.local_size(); ++li) {
+      const ConstArray4 u = U.fab(li).const_array();
+      const ConstArray4 a = A.fab(li).const_array();
+      const Box2D b = U.box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
+          const auto us = load_state<Model>(u, i, j);
+          const Aux ax = load_aux(a, i, j);
+          w = std::max(w, std::max(model_.max_wave_speed(us, ax, 0),
+                                   model_.max_wave_speed(us, ax, 1)));
+        }
+    }
+    return all_reduce_max(w);
+  }
+
  private:
   Model model_;
   Geometry geom_;

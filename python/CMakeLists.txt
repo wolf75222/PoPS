@@ -6,8 +6,7 @@
 #   cmake -B build-py -DADC_BUILD_PYTHON=ON && cmake --build build-py --target _adc
 #   PYTHONPATH=build-py/python python3 -c "import adc; print(adc.System)"
 
-pybind11_add_module(_adc bindings.cpp system.cpp
-                    two_fluid_ap_solver.cpp diocotron_amr_solver.cpp)
+pybind11_add_module(_adc bindings.cpp system.cpp amr_system.cpp two_fluid_ap_solver.cpp)
 target_link_libraries(_adc PRIVATE adc::adc)
 target_compile_features(_adc PRIVATE cxx_std_${ADC_CXX_STD})
 

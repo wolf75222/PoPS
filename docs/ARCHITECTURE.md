@@ -341,7 +341,7 @@ une lib publique : on ne peut pas avoir une cible CPU et une cible GPU dans le m
 | `tests/` | CTest du coeur (+ MPI via `mpirun` quand active). | lie `adc::adc` |
 | `docs/` | architecture, algorithmes, notes de validation/performance. | documentation |
 | `include/adc/model/` | bibliotheque de modeles physiques (diocotron, Euler, Euler-Poisson, fluides charges, isotherme). | header-only `adc::adc` |
-| `python/` | module Python `adc` (pybind11) : facade runtime `System` + solveurs `TwoFluidAP`/`DiocotronAmr` + `adc.integrate`. | `-DADC_BUILD_PYTHON=ON` |
+| `python/` | module Python `adc` (pybind11) : facades runtime `System` / `AmrSystem` + solveur `TwoFluidAP` + `adc.integrate`. | `-DADC_BUILD_PYTHON=ON` |
 | `adc_cases` | cas d'utilisation 100 % Python (un dossier par cas), importent le module `adc`. | aucun C++ |
 
 Regle actuelle : `adc_cpp` est la bibliotheque (coeur + modeles + bindings). Le coeur

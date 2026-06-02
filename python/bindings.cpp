@@ -10,8 +10,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <adc/runtime/amr_system.hpp>
 #include <adc/runtime/system.hpp>
-#include <adc/solver/diocotron_amr_solver.hpp>
 #include <adc/solver/two_fluid_ap_solver.hpp>
 
 #include <cstring>
@@ -139,29 +139,42 @@ PYBIND11_MODULE(_adc, m) {
       .def("density_i",
            [](const TwoFluidAPSolver& s) { return to_2d(s.density_i(), s.nx()); });
 
-  py::class_<DiocotronAmrConfig>(m, "DiocotronAmrConfig")
+  // AmrSystem : composition mono-espece generique sur AMR (remplace DiocotronAmrSolver).
+  py::class_<AmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
-      .def_readwrite("n", &DiocotronAmrConfig::n)
-      .def_readwrite("L", &DiocotronAmrConfig::L)
-      .def_readwrite("B0", &DiocotronAmrConfig::B0)
-      .def_readwrite("alpha", &DiocotronAmrConfig::alpha)
-      .def_readwrite("band_amp", &DiocotronAmrConfig::band_amp)
-      .def_readwrite("band_width", &DiocotronAmrConfig::band_width)
-      .def_readwrite("band_mode", &DiocotronAmrConfig::band_mode)
-      .def_readwrite("band_disp", &DiocotronAmrConfig::band_disp)
-      .def_readwrite("refine_frac", &DiocotronAmrConfig::refine_frac)
-      .def_readwrite("regrid_every", &DiocotronAmrConfig::regrid_every);
+      .def_readwrite("n", &AmrSystemConfig::n)
+      .def_readwrite("L", &AmrSystemConfig::L)
+      .def_readwrite("B0", &AmrSystemConfig::B0)
+      .def_readwrite("n_i0", &AmrSystemConfig::n_i0)
+      .def_readwrite("alpha", &AmrSystemConfig::alpha)
+      .def_readwrite("gamma", &AmrSystemConfig::gamma)
+      .def_readwrite("cs2", &AmrSystemConfig::cs2)
+      .def_readwrite("four_pi_G", &AmrSystemConfig::four_pi_G)
+      .def_readwrite("rho0", &AmrSystemConfig::rho0)
+      .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
+      .def_readwrite("periodic", &AmrSystemConfig::periodic);
 
-  py::class_<DiocotronAmrSolver>(m, "DiocotronAmr")
-      .def(py::init<const DiocotronAmrConfig&>())
-      .def("step", &DiocotronAmrSolver::step, py::arg("dt"))
-      .def("step_cfl", &DiocotronAmrSolver::step_cfl, py::arg("cfl"))
-      .def("max_drift_speed", &DiocotronAmrSolver::max_drift_speed)
-      .def("dx", &DiocotronAmrSolver::dx)
-      .def("mass", &DiocotronAmrSolver::mass)
-      .def("time", &DiocotronAmrSolver::time)
-      .def("nx", &DiocotronAmrSolver::nx)
-      .def("n_patches", &DiocotronAmrSolver::n_patches)
-      .def("density",
-           [](const DiocotronAmrSolver& s) { return to_2d(s.density(), s.nx()); });
+  py::class_<AmrSystem>(m, "AmrSystem")
+      .def(py::init<const AmrSystemConfig&>())
+      .def("add_block", &AmrSystem::add_block, py::arg("name"), py::arg("model"),
+           py::arg("charge"), py::arg("limiter") = "minmod", py::arg("flux") = "rusanov",
+           py::arg("time") = "explicit", py::arg("substeps") = 1)
+      .def("set_refinement", &AmrSystem::set_refinement, py::arg("threshold"))
+      .def("set_poisson", &AmrSystem::set_poisson, py::arg("rhs") = "charge_density",
+           py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
+           py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
+      .def("set_density",
+           [](AmrSystem& s, const std::string& name,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             s.set_density(name, flat(arr));
+           },
+           py::arg("name"), py::arg("rho"))
+      .def("step", &AmrSystem::step, py::arg("dt"))
+      .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
+      .def("step_cfl", &AmrSystem::step_cfl, py::arg("cfl"))
+      .def("nx", &AmrSystem::nx)
+      .def("time", &AmrSystem::time)
+      .def("n_patches", &AmrSystem::n_patches)
+      .def("mass", &AmrSystem::mass)
+      .def("density", [](AmrSystem& s) { return to_2d(s.density(), s.nx()); });
 }

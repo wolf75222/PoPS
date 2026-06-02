@@ -24,7 +24,7 @@ regrid Berger-Rigoutsos, sous-cyclage Berger-Oliger + reflux conservatif (derive
 
 `adc_cpp` est la **bibliotheque** : le moteur generique (coeur sans modele) **plus** la
 bibliotheque de modeles physiques (`include/adc/model/`) et **les bindings Python de la lib**,
-le module `adc` (composition `System` + solveurs specialises `TwoFluidAP`, `DiocotronAmr`).
+le module `adc` (composition `System` / `AmrSystem` + solveur specialise `TwoFluidAP`).
 Le depot separe **[`adc_cases`](https://github.com/wolf75222/adc_cases)** ne contient QUE des
 **cas d'utilisation en Python** (un dossier par cas) qui importent ce module ; il n'a plus de C++.
 
@@ -167,7 +167,8 @@ sim.step_cfl(0.4)
 - **Integrateur temporel ecrit en Python** : primitives `solve_fields()`, `eval_rhs(name)`,
   `get_state`/`set_state` : on ecrit son propre `take_step` cote Python (par PAS), le residu
   et Poisson restant calcules en C++ (par CELLULE). Cf. `adc.integrate.ssprk2_step`.
-- **Solveurs specialises** : `adc.TwoFluidAP` (asymptotic-preserving), `adc.DiocotronAmr` (AMR),
+- **AMR** : `adc.AmrSystem` compose un bloc sur une hierarchie raffinee (meme API que System
+  plus `set_refinement`). **Specialise** : `adc.TwoFluidAP` (asymptotic-preserving),
   integrateurs sur mesure exposes comme facades.
 
 Le test `python/tests/test_bindings.py` exerce ces chemins. Exemples complets : depot

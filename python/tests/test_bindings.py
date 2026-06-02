@@ -102,6 +102,26 @@ for _ in range(10):
 chk(abs(pdio.mass("ne") - m0) < 1e-9, "integrateur Python : masse conservee")
 chk(np.isfinite(pdio.density("ne")).all(), "integrateur Python : etat fini (stable)")
 
+# --- 4b. AmrSystem : diocotron generique sur AMR (remplace DiocotronAmrSolver) ------
+print("== AmrSystem (diocotron sur AMR, composition generique) ==")
+nb = 64
+xs = (np.arange(nb) + 0.5) / nb
+xx, yy = np.meshgrid(xs, xs, indexing="xy")
+y0 = 0.5 + 0.02 * np.cos(2 * np.pi * 4 * xx)
+band = 1.0 + np.exp(-((yy - y0) ** 2) / 0.05 ** 2)
+nbar = float(band.mean())
+amr = adc.AmrSystem(n=nb, B0=1.0, alpha=1.0, n_i0=nbar, regrid_every=10, periodic=True)
+amr.add_block("ne", model="diocotron", charge=1.0, spatial=adc.Spatial(none=True))
+amr.set_refinement(threshold=nbar + 0.15)
+amr.set_poisson()
+amr.set_density("ne", band)
+am0 = amr.mass()
+for _ in range(20):
+    amr.step_cfl(0.4)
+chk(amr.n_patches() >= 1, "AmrSystem : raffinement actif (n_patches >= 1)")
+chk(abs(amr.mass() - am0) / abs(am0) < 1e-9, "AmrSystem : masse conservee (reflux)")
+chk(np.isfinite(amr.density()).all(), "AmrSystem : densite finie")
+
 # --- 5. garde-fous -----------------------------------------------------------------
 print("== garde-fous ==")
 

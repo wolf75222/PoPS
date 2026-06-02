@@ -28,10 +28,12 @@ par cellule). Voir adc.integrate.ssprk2_step.
 """
 
 from ._adc import (SystemConfig, System as _System,
-                   TwoFluidAP, TwoFluidAPConfig, DiocotronAmr, DiocotronAmrConfig)
+                   AmrSystemConfig, AmrSystem as _AmrSystem,
+                   TwoFluidAP, TwoFluidAPConfig)
 
-__all__ = ["System", "SystemConfig", "Spatial", "Explicit", "IMEX", "Implicit", "integrate",
-           "TwoFluidAP", "TwoFluidAPConfig", "DiocotronAmr", "DiocotronAmrConfig"]
+__all__ = ["System", "SystemConfig", "AmrSystem", "AmrSystemConfig",
+           "Spatial", "Explicit", "IMEX", "Implicit", "integrate",
+           "TwoFluidAP", "TwoFluidAPConfig"]
 
 
 class Spatial:
@@ -118,6 +120,38 @@ class System:
 
     # Tout le reste de l'API (set_poisson, set_density, solve_fields, step, step_cfl,
     # eval_rhs/get_state/set_state, diagnostics) est transmis a la facade compilee.
+    def __getattr__(self, attr):
+        return getattr(self._s, attr)
+
+
+class AmrSystem:
+    """Le pendant raffine de System : un bloc porte sur une hierarchie AMR.
+
+    Memes objets de composition (Spatial / Explicit), plus set_refinement(threshold) et
+    une config AMR (niveaux suivis par regrid, ratio 2, cadence regrid_every). Un seul bloc,
+    traitement explicite. Remplace l'ancien solveur dedie au diocotron sur AMR.
+
+        sim = adc.AmrSystem(n=128, regrid_every=10, periodic=True)
+        sim.add_block("ne", model="diocotron", spatial=adc.Spatial(minmod=True))
+        sim.set_refinement(threshold=1.15)
+        sim.set_poisson(rhs="charge_density")
+        sim.set_density("ne", ne_numpy)
+        sim.step_cfl(0.4)
+    """
+
+    def __init__(self, config=None, **cfg_kw):
+        if config is None:
+            config = AmrSystemConfig()
+            for k, v in cfg_kw.items():
+                setattr(config, k, v)
+        self._s = _AmrSystem(config)
+
+    def add_block(self, name, model, charge=0.0, spatial=None, time=None):
+        spatial = spatial if spatial is not None else Spatial()
+        time = time if time is not None else Explicit()
+        self._s.add_block(name, model, float(charge), spatial.limiter, spatial.flux,
+                          time.kind, getattr(time, "substeps", 1))
+
     def __getattr__(self, attr):
         return getattr(self._s, attr)
 

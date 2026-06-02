@@ -51,8 +51,8 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
   loi de Gauss du couplage (`div(grad phi)=source`, ordre 2.00), conservation sous regrid.
 - Bindings Python de la lib (`python/`, module `adc`, `-DADC_BUILD_PYTHON=ON`) : `adc.System`
   (composition bloc par bloc via `add_block`, `set_poisson`, `set_density`, `step`/`advance`/`step_cfl`,
-  primitives `eval_rhs`/`get_state`/`set_state` + `adc.integrate.ssprk2_step`) et les façades
-  spécialisées `adc.TwoFluidAP`, `adc.DiocotronAmr`. Banc `bench_amr`, figures de scaling.
+  primitives `eval_rhs`/`get_state`/`set_state` + `adc.integrate.ssprk2_step`), la composition
+  AMR `adc.AmrSystem` et la façade spécialisée `adc.TwoFluidAP`. Banc `bench_amr`, figures de scaling.
 - Docs : README, ALGORITHMS, ARCHITECTURE (5 couches), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
   two_fluid_ap, tutoriels 00 à 09, Doxygen + Sphinx.
 

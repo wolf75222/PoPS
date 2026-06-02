@@ -66,12 +66,12 @@ Intégrateurs sur mesure exposés comme façades, non composables bloc à bloc.
    :members:
 ```
 
-### Diocotron sur AMR multi-patch
+### Composition sur AMR multi-patch
 
 ```{eval-rst}
-.. autoclass:: adc.DiocotronAmr
+.. autoclass:: adc.AmrSystem
    :members:
 
-.. autoclass:: adc.DiocotronAmrConfig
+.. autoclass:: adc.AmrSystemConfig
    :members:
 ```
