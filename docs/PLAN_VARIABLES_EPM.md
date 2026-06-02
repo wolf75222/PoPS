@@ -46,6 +46,9 @@ seconde correction est de **ne pas hard-coder Poisson** mais d'en faire une inst
 - #55/#56/#59 : recettes systeme models.two_fluid / models.plasma ; objets de couplage
   (adc.Ionization / Collision / ThermalExchange) + sim.add_coupling ; descripteur de variables
   (sim.variable_names cons/prim par bloc, introspection).
+- Raffinements (faits) : descripteur `Variables` porte par la brique (core/variables.hpp ;
+  conservative_vars/primitive_vars, "Vars" au meme niveau que Flux/Source) ; adc.PythonFlux
+  (backend de prototypage hote, residu Rusanov numpy, hors Kokkos/GPU).
 - Verifie : test_bindings (briques + frozen + 3 couplages + EPM + introspection + garde-fous),
   cas two_euler et plasma, ctest coeur 46/46 inchange.
 
@@ -145,12 +148,11 @@ if (recon == Conservative) reconstruct(model.conservative_vars, U);
 if (recon == Primitive)  { P = model.to_primitive(U); reconstruct(model.primitive_vars, P);
                            U = model.to_conservative(P); }
 ```
-Etat : la Phase 1 fournit le coeur FONCTIONNEL (Prim + to_primitive/to_conservative ; la
-reconstruction limite composante par composante, deja aveugle au sens des composantes). Les NOMS
-des variables (cons/prim par bloc) sont exposes pour l'introspection via `sim.variable_names`
-(#59, FAIT, metadonnee hote). Un objet descripteur `Variables` (kind + names + size) porte
-directement par la brique (vraie "Vars" au meme niveau que Flux/Source) resterait une forme plus
-poussee, non necessaire au calcul.
+Etat (#59, FAIT) : un objet descripteur `Variables` (kind + names + size) est porte DIRECTEMENT par
+chaque modele (`core/variables.hpp` ; `conservative_vars()` / `primitive_vars()` sur les briques de
+transport, forwarde par `CompositeModel`) : "Vars" est donc une brique de premiere classe, au meme
+niveau que Flux/Source. Le runtime y puise les noms exposes par `sim.variable_names` (source unique
+de verite). Metadonnee hote, ne sert pas au calcul (le coeur travaille par composante).
 
 ---
 
@@ -343,6 +345,7 @@ Frontiere adc_cpp / adc_cases :
 - adc_cases : SCENARIOS = compositions Python (diocotron, two-fluid, plasma...) + eventuels PythonFlux
   de prototypage. Les NOMS de scenarios vivent ici.
 
-Le pattern `custom_scheme` (tache #40, deja faite) est l'ancetre du PythonFlux ; reste a le faire
-entrer proprement DERRIERE l'interface Vars+Flux+Source, avec le garde-fou Kokkos/GPU (tache #62).
-Les flux nommes (Euler/isotherme/ExB) NE sont PAS deplaces hors de adc_cpp : ils sont le CompiledFlux.
+Le pattern `custom_scheme` (tache #40) est l'ancetre du PythonFlux ; FAIT (#62) : `adc.PythonFlux`
+(flux + max_wave_speed en numpy, residu Rusanov volumes finis cote HOTE) formalise ce backend de
+prototypage, HORS Kokkos/GPU (chemin hote pur, jamais dans un kernel). Les flux nommes
+(Euler/isotherme/ExB) NE sont PAS deplaces hors de adc_cpp : ils sont le CompiledFlux (production).

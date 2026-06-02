@@ -2,6 +2,7 @@
 
 #include <adc/core/state.hpp>
 #include <adc/core/types.hpp>
+#include <adc/core/variables.hpp>
 
 #include <cmath>
 
@@ -109,6 +110,14 @@ struct Euler {
 
   /// Second membre de Poisson : densite de masse rho (auto-gravite du fluide compressible).
   ADC_HD Real elliptic_rhs(const State& u) const { return u[0]; }
+
+  /// Descripteur des variables (metadonnee hote : introspection / diagnostics).
+  static Variables conservative_vars() {
+    return {VariableKind::Conservative, {"rho", "rho_u", "rho_v", "E"}, 4};
+  }
+  static Variables primitive_vars() {
+    return {VariableKind::Primitive, {"rho", "u", "v", "p"}, 4};
+  }
 };
 
 }  // namespace adc

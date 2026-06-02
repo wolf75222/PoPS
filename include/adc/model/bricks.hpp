@@ -2,6 +2,7 @@
 
 #include <adc/core/state.hpp>
 #include <adc/core/types.hpp>
+#include <adc/core/variables.hpp>
 #include <adc/model/euler.hpp>  // Euler : reutilise comme brique de transport CompressibleFlux
 
 #include <cmath>
@@ -46,6 +47,8 @@ struct ExBVelocity {
   using Prim = StateVec<1>;
   ADC_HD Prim to_primitive(const StateVec<1>& u) const { return u; }
   ADC_HD StateVec<1> to_conservative(const Prim& p) const { return p; }
+  static Variables conservative_vars() { return {VariableKind::Conservative, {"n"}, 1}; }
+  static Variables primitive_vars() { return {VariableKind::Primitive, {"n"}, 1}; }
 };
 
 /// Flux d'Euler compressible 2D (reutilise Euler : gamma, pression, vitesses d'onde signees).
@@ -97,6 +100,10 @@ struct IsothermalFlux {
     smin = vn - c;
     smax = vn + c;
   }
+  static Variables conservative_vars() {
+    return {VariableKind::Conservative, {"rho", "rho_u", "rho_v"}, 3};
+  }
+  static Variables primitive_vars() { return {VariableKind::Primitive, {"rho", "u", "v"}, 3}; }
 };
 
 // ---------------------------------------------------------------------------
@@ -195,6 +202,8 @@ struct CompositeModel {
   ADC_HD Real elliptic_rhs(const State& u) const { return ell.rhs(u); }
   ADC_HD Prim to_primitive(const State& u) const { return tr.to_primitive(u); }
   ADC_HD State to_conservative(const Prim& p) const { return tr.to_conservative(p); }
+  static Variables conservative_vars() { return Transport::conservative_vars(); }
+  static Variables primitive_vars() { return Transport::primitive_vars(); }
 
   ADC_HD Real pressure(const State& u) const
     requires requires(const Transport t, const State s) { t.pressure(s); }

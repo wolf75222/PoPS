@@ -95,19 +95,6 @@ struct System::Impl {
     throw std::runtime_error("System : bloc inconnu '" + name + "'");
   }
 
-  // Noms des variables (conservatives ou primitives) selon le transport. Metadonnee HOTE pour
-  // l'introspection / les diagnostics ; ne sert pas au calcul (le coeur travaille par composante).
-  static std::vector<std::string> var_names(const std::string& transport, bool prim) {
-    if (transport == "exb") return {"n"};
-    if (transport == "compressible")
-      return prim ? std::vector<std::string>{"rho", "u", "v", "p"}
-                  : std::vector<std::string>{"rho", "rho_u", "rho_v", "E"};
-    if (transport == "isothermal")
-      return prim ? std::vector<std::string>{"rho", "u", "v"}
-                  : std::vector<std::string>{"rho", "rho_u", "rho_v"};
-    return {};
-  }
-
   // Sources de COUPLAGE inter-especes : appliquees par SPLITTING (un pas additif explicite de
   // dt) APRES le transport de chaque bloc. Passe HOTE (comme set_density) : a revisiter pour
   // Kokkos/GPU. Chaque couplage lit/met a jour l'etat de PLUSIEURS blocs au meme point.
@@ -344,22 +331,26 @@ void System::add_block(const std::string& name, const ModelSpec& model,
   Impl::BlockClosures clo;
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
-  // Le modele est compose a partir des briques designees par la spec ; le visiteur cable
-  // les fermetures. ncomp = n_vars du modele compose ; set_density s'y adapte.
+  std::vector<std::string> cons_nm, prim_nm;
+  // Le modele est compose a partir des briques designees par la spec ; le visiteur cable les
+  // fermetures. ncomp = n_vars du modele compose ; set_density s'y adapte. Les noms de variables
+  // viennent du descripteur Variables porte par le modele (brique Vars), source unique de verite.
   detail::dispatch_model(model, [&](auto m) {
     using M = decltype(m);
     ncomp = M::n_vars;
     clo = P->make_block(m, limiter, riemann, imex, recon_prim);
     max_speed = P->make_max_speed(m);
     add_poisson_rhs = P->make_poisson_rhs(m);
+    cons_nm = M::conservative_vars().names;
+    prim_nm = M::primitive_vars().names;
   });
 
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps,
                                 evolve, model.gamma, std::move(clo.advance), std::move(clo.rhs_into),
                                 std::move(max_speed), std::move(add_poisson_rhs)});
   P->sp.back().U.set_val(Real(0));
-  P->sp.back().cons_names = Impl::var_names(model.transport, false);
-  P->sp.back().prim_names = Impl::var_names(model.transport, true);
+  P->sp.back().cons_names = std::move(cons_nm);
+  P->sp.back().prim_names = std::move(prim_nm);
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver,

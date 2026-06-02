@@ -34,6 +34,7 @@ __all__ = [
     "elliptic", "div_eps_grad", "charge_density", "electric_field_from_potential",
     "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
+    "PythonFlux",
 ]
 
 
@@ -391,6 +392,43 @@ class AmrSystem:
 
     def __getattr__(self, attr):
         return getattr(self._s, attr)
+
+
+class PythonFlux:
+    """Backend de PROTOTYPAGE (hote, numpy) pour l'interface Flux : l'utilisateur fournit le flux
+    physique et la vitesse d'onde en Python, et PythonFlux assemble le residu -div(F*) par volumes
+    finis (Rusanov, ordre 1, domaine periodique) sur tout le tableau d'un coup.
+
+    HORS hot path GPU/MPI : c'est un chemin HOTE pur (numpy), il ne passe JAMAIS par un kernel
+    Kokkos. Pour la production (GPU/MPI), composer un flux COMPILE (brique adc.CompressibleFlux,
+    adc.ExB...). PythonFlux formalise le pattern du cas custom_scheme : iterer vite sur un flux
+    inedit sans recompiler (adc.System servant d'oracle de Poisson si besoin).
+
+    flux(U, dir) -> F : U et F sont des numpy (ncomp, n, n) ; dir = 0 (x) ou 1 (y).
+    max_wave_speed(U) -> float : borne pour le flux de Rusanov et le CFL.
+    """
+
+    def __init__(self, flux, max_wave_speed):
+        self.flux = flux
+        self.max_wave_speed = max_wave_speed
+
+    def residual(self, U, dx, dy=None):
+        """-div(F*) par flux de Rusanov (ordre 1, periodique). U numpy (ncomp, n, n) ; rend dU/dt."""
+        import numpy as np
+        dy = dx if dy is None else dy
+        a = float(self.max_wave_speed(U))
+        res = np.zeros_like(U)
+        for axis, h, d in ((2, dx, 0), (1, dy, 1)):  # x = axe 2, y = axe 1
+            F = self.flux(U, d)
+            UR = np.roll(U, -1, axis=axis)
+            FR = np.roll(F, -1, axis=axis)
+            face = 0.5 * (F + FR) - 0.5 * a * (UR - U)       # flux a la face +d de chaque cellule
+            res -= (face - np.roll(face, 1, axis=axis)) / h  # -div : (F_{i+1/2} - F_{i-1/2}) / h
+        return res
+
+    def cfl_dt(self, U, h, cfl=0.4):
+        """Pas de temps stable : dt = cfl * h / max_wave_speed(U)."""
+        return cfl * h / max(float(self.max_wave_speed(U)), 1e-30)
 
 
 from . import integrate  # noqa: E402  (apres la definition de System)

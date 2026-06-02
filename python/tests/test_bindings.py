@@ -265,6 +265,30 @@ chk(list(vn.variable_names("e", "conservative")) == ["rho", "rho_u", "rho_v", "E
 chk(list(vn.variable_names("e", "primitive")) == ["rho", "u", "v", "p"], "noms primitifs (Euler)")
 chk(list(vn.variable_names("d")) == ["n"], "noms scalaire (diocotron)")
 
+# --- 4i. PythonFlux : backend de prototypage (hote, numpy) ----------------------
+print("== PythonFlux : flux defini en Python (prototypage hote, hors Kokkos) ==")
+vx, vy = 0.7, -0.3
+
+
+def adv_flux(U, d):
+    return (vx if d == 0 else vy) * U  # advection scalaire F = v U
+
+
+def adv_speed(U):
+    return abs(vx) + abs(vy)
+
+
+pf = adc.PythonFlux(adv_flux, adv_speed)
+nn = 32
+Upf = np.zeros((1, nn, nn))
+Upf[0] = 1.0 + 0.2 * np.sin(2 * np.pi * meshx(nn))[None, :] * np.ones((nn, nn))
+hh = 1.0 / nn
+m0pf = float(Upf.sum())
+for _ in range(50):
+    Upf = Upf + pf.cfl_dt(Upf, hh, 0.4) * pf.residual(Upf, hh)  # Euler avant
+chk(abs(float(Upf.sum()) - m0pf) < 1e-9, "PythonFlux : masse conservee (Rusanov conservatif)")
+chk(np.isfinite(Upf).all() and float(np.abs(Upf - 1.0).max()) > 1e-3, "PythonFlux : transport actif, fini")
+
 # --- 5. garde-fous --------------------------------------------------------------
 print("== garde-fous ==")
 
