@@ -238,7 +238,7 @@ struct System::Impl {
         const Box2D b = rhs.box(li);
         for (int j = b.lo[1]; j <= b.hi[1]; ++j)
           for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            r(i, j) += m.elliptic_rhs(load_state<Model>(u, i, j));
+            r(i, j) += m.elliptic_rhs(adc::load_state<Model>(u, i, j));
       }
     };
   }
@@ -288,7 +288,7 @@ struct System::Impl {
         for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, c));
     return out;
   }
-  void load_state(MultiFab& mf, int ncomp, const std::vector<double>& in) {
+  void write_state(MultiFab& mf, int ncomp, const std::vector<double>& in) {
     const Box2D v = mf.box(0);
     const std::size_t need = static_cast<std::size_t>(ncomp) * v.nx() * v.ny();
     if (in.size() != need)
@@ -433,7 +433,7 @@ std::vector<double> System::get_state(const std::string& name) {
 }
 void System::set_state(const std::string& name, const std::vector<double>& u) {
   Impl::Species& s = p_->find(name);
-  p_->load_state(s.U, s.ncomp, u);
+  p_->write_state(s.U, s.ncomp, u);
 }
 int System::n_vars(const std::string& name) const { return p_->find(name).ncomp; }
 
