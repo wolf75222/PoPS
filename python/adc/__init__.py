@@ -33,6 +33,7 @@ __all__ = [
     "TwoFluidAP", "TwoFluidAPConfig",
     "elliptic", "div_eps_grad", "charge_density", "electric_field_from_potential",
     "EllipticSolver", "EllipticModel",
+    "Ionization", "Collision", "ThermalExchange",
 ]
 
 
@@ -219,6 +220,35 @@ class EllipticSolver:
         self.kind = kind
 
 
+# --- Couplages inter-especes (operator-split) : objets passes a sim.add_coupling ---
+class Ionization:
+    """Ionisation n_g -> n_i + n_e (taux k n_e n_g). Masse transferee du neutre vers l'ion."""
+
+    def __init__(self, electron, ion, neutral, rate):
+        self.electron = electron
+        self.ion = ion
+        self.neutral = neutral
+        self.rate = rate
+
+
+class Collision:
+    """Friction inter-especes : force k (u_a - u_b), qte de mvt conservee. Blocs fluides (>= 3 var)."""
+
+    def __init__(self, a, b, rate):
+        self.a = a
+        self.b = b
+        self.rate = rate
+
+
+class ThermalExchange:
+    """Echange thermique k (T_a - T_b), energie conservee. Blocs Euler (4 var)."""
+
+    def __init__(self, a, b, rate):
+        self.a = a
+        self.b = b
+        self.rate = rate
+
+
 # --- Schema spatial + traitement temporel (par bloc) ------------------------
 class Spatial:
     """Discretisation spatiale : reconstruction (limiteur) + flux numerique de Riemann.
@@ -318,6 +348,19 @@ class System:
             raise NotImplementedError("add_elliptic_model : seul rhs=charge_density est supporte")
         kind = solver.kind if solver is not None else "geometric_mg"
         self.set_poisson(rhs="charge_density", solver=kind, bc=bc, wall=wall, wall_radius=wall_radius)
+
+    def add_coupling(self, coupling):
+        """Ajoute un couplage inter-especes : objet adc.Ionization / Collision / ThermalExchange.
+        Equivaut a add_ionization / add_collision / add_thermal_exchange."""
+        if isinstance(coupling, Ionization):
+            self.add_ionization(electron=coupling.electron, ion=coupling.ion,
+                                neutral=coupling.neutral, rate=coupling.rate)
+        elif isinstance(coupling, Collision):
+            self.add_collision(coupling.a, coupling.b, coupling.rate)
+        elif isinstance(coupling, ThermalExchange):
+            self.add_thermal_exchange(coupling.a, coupling.b, coupling.rate)
+        else:
+            raise TypeError("add_coupling attend adc.Ionization / Collision / ThermalExchange")
 
     def block_names(self):
         """Noms des blocs ajoutes, dans l'ordre (utile a un integrateur Python)."""

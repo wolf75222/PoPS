@@ -194,7 +194,7 @@ Ua = np.zeros((3, 24, 24)); Ua[0] = 1.0; Ua[1] = 0.3   # a : rho=1, u_x=0.3
 Ub = np.zeros((3, 24, 24)); Ub[0] = 1.0; Ub[1] = 0.0   # b : rho=1, au repos
 co.set_state("a", Ua.reshape(-1).tolist())
 co.set_state("b", Ub.reshape(-1).tolist())
-co.add_collision("a", "b", rate=1.0)
+co.add_coupling(adc.Collision("a", "b", rate=1.0))  # forme OBJET (= add_collision)
 pa0 = float(np.array(co.get_state("a")).reshape(3, 24, 24)[1].sum())
 pb0 = float(np.array(co.get_state("b")).reshape(3, 24, 24)[1].sum())
 co.advance(0.01, 20)  # etat uniforme -> transport nul : on teste la friction seule
