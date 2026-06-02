@@ -122,6 +122,82 @@ def sqrt(x):
     return Sqrt(_wrap(x))
 
 
+# --- Elimination des sous-expressions communes (CSE) -------------------------
+# Le codegen inline chaque sous-expression a chaque apparition (H, c... recalcules). La CSE detecte
+# les sous-expressions COMPOUND (non feuilles) apparaissant plusieurs fois et les sort en variables
+# locales 'cseK_', en ordre de dependance (les plus petites d'abord). Repose sur une cle STRUCTURELLE
+# par noeud : deux sous-arbres identiques ont la meme cle, donc la meme locale.
+def _children(e):
+    if isinstance(e, _Bin):
+        return (e.a, e.b)
+    if isinstance(e, (Neg, Sqrt)):
+        return (e.a,)
+    return ()
+
+
+def _key(e):
+    if isinstance(e, Const):
+        return ("const", e.value)
+    if isinstance(e, Var):
+        return ("var", e.name)
+    if isinstance(e, Neg):
+        return ("neg", _key(e.a))
+    if isinstance(e, Sqrt):
+        return ("sqrt", _key(e.a))
+    return (e.op, tuple(_key(c) for c in _children(e)))  # _Bin (Add/Sub/Mul/Div/Pow)
+
+
+def _cpp_expand(e, cse_map):
+    """C++ du noeud e en developpant SON niveau ; les enfants passent par _cpp_cse (-> locales CSE)."""
+    if isinstance(e, Const):
+        return repr(e.value)
+    if isinstance(e, Var):
+        return e.name
+    if isinstance(e, Neg):
+        return "(-%s)" % _cpp_cse(e.a, cse_map)
+    if isinstance(e, Sqrt):
+        return "std::sqrt(%s)" % _cpp_cse(e.a, cse_map)
+    if isinstance(e, Pow):
+        return "std::pow(%s, %s)" % (_cpp_cse(e.a, cse_map), _cpp_cse(e.b, cse_map))
+    if isinstance(e, _Bin):
+        return "(%s %s %s)" % (_cpp_cse(e.a, cse_map), e.op, _cpp_cse(e.b, cse_map))
+    raise TypeError("expression non geree par le codegen : %r" % (e,))
+
+
+def _cpp_cse(e, cse_map):
+    """C++ de e ; si e correspond a une locale CSE deja definie, renvoie son nom."""
+    k = _key(e)
+    if k in cse_map:
+        return cse_map[k]
+    return _cpp_expand(e, cse_map)
+
+
+def _cse_emit(roots, real, indent):
+    """Retourne (lignes_de_locales, [C++ par racine]). Les sous-expressions compound vues >= 2 fois
+    deviennent des locales 'cseK_'. roots : liste d'Expr."""
+    counts, rep, size = {}, {}, {}
+
+    def visit(e):
+        if isinstance(e, (Const, Var)):
+            return 1
+        k = _key(e)
+        s = 1 + sum(visit(c) for c in _children(e))
+        counts[k] = counts.get(k, 0) + 1
+        rep.setdefault(k, e)
+        size[k] = s
+        return s
+
+    for r in roots:
+        visit(r)
+    cand = sorted((k for k, c in counts.items() if c >= 2), key=lambda k: size[k])
+    cse_map, lines = {}, []
+    for i, k in enumerate(cand):
+        name = "cse%d_" % i
+        lines.append("%sconst %s %s = %s;" % (indent, real, name, _cpp_expand(rep[k], cse_map)))
+        cse_map[k] = name
+    return lines, [_cpp_cse(r, cse_map) for r in roots]
+
+
 # --- Modele hyperbolique declaratif -----------------------------------------
 class HyperbolicModel:
     """Modele hyperbolique ecrit en FORMULES : variables conservatives, primitives (definies par
@@ -235,52 +311,56 @@ class HyperbolicModel:
         return True
 
     # --- codegen (etape 2 : arbre symbolique -> C++ compilable) ---
-    def emit_cpp(self, func=None):
+    def _codegen_exprs(self, exprs, cse, real="adc::Real", indent="    "):
+        """(lignes de locales CSE, [C++ par expr]). Si cse, factorise les sous-expressions communes
+        (H, c...) en locales 'cseK_' ; sinon inline chaque expression via to_cpp."""
+        if cse:
+            return _cse_emit(list(exprs), real, indent)
+        return [], [e.to_cpp() for e in exprs]
+
+    def emit_cpp(self, func=None, cse=True):
         """Genere une fonction C++ compilable calculant le flux physique a partir de l'arbre
         symbolique (chaque noeud Expr sait s'ecrire en C++ via to_cpp).
 
         Signature produite : template <class Real> void <func>_flux(const Real* U, Real* F, int dir).
-        Les constantes sont inlinees ; chaque primitive devient une variable locale (les
-        sous-expressions H, c... sont inlinees a chaque apparition, pas de CSE pour l'instant).
+        Constantes inlinees ; chaque primitive devient une variable locale. cse=True (defaut) factorise
+        les sous-expressions communes (H, c...) en locales 'cseK_' ; cse=False les recalcule inline.
 
-        C'est l'etape (2) du DSL (cf. docs/ARCHITECTURE_CIBLE.md sect. 3) : on genere du C++ HOTE
-        (templatable sur Real). Le codegen Kokkos/CUDA (3) et le JIT (4) restent a faire ; ce code
-        ne passe pas encore par l'interface de brique compilee adc (StateVec/Aux/ADC_HD)."""
+        Etape (2) du DSL (cf. docs/ARCHITECTURE_CIBLE.md sect. 3) : C++ HOTE (templatable sur Real)."""
         name = func or self.name
         if not self._flux:
             raise ValueError("emit_cpp : appeler set_flux(...) d'abord")
         if len(self._flux.get("x", [])) != self.n_vars or len(self._flux.get("y", [])) != self.n_vars:
             raise ValueError("emit_cpp : flux attendu avec %d composantes par direction" % self.n_vars)
+        nc = self.n_vars
         out = [
             "// genere depuis le modele symbolique '%s' (adc.dsl.emit_cpp)" % self.name,
-            "// flux physique F = flux(U, dir) ; dir 0=x, 1=y ; U et F de taille %d." % self.n_vars,
+            "// flux physique F = flux(U, dir) ; dir 0=x, 1=y ; U et F de taille %d." % nc,
             "#include <cmath>",
             "template <class Real>",
             "inline void %s_flux(const Real* U, Real* F, int dir) {" % name,
         ]
-        for i, c in enumerate(self.cons_names):
-            out.append("  const Real %s = U[%d];" % (c, i))
-        for pname, pexpr in self.prim_defs.items():
-            out.append("  const Real %s = %s;" % (pname, pexpr.to_cpp()))
+        out += ["  const Real %s = U[%d];" % (c, i) for i, c in enumerate(self.cons_names)]
+        out += ["  const Real %s = %s;" % (p, e.to_cpp()) for p, e in self.prim_defs.items()]
+        tl, cpps = self._codegen_exprs(self._flux["x"] + self._flux["y"], cse, real="Real", indent="  ")
+        out += tl
         out.append("  if (dir == 0) {")
-        for i, comp in enumerate(self._flux["x"]):
-            out.append("    F[%d] = %s;" % (i, comp.to_cpp()))
+        out += ["    F[%d] = %s;" % (i, cpps[i]) for i in range(nc)]
         out.append("  } else {")
-        for i, comp in enumerate(self._flux["y"]):
-            out.append("    F[%d] = %s;" % (i, comp.to_cpp()))
-        out.append("  }")
-        out.append("}")
+        out += ["    F[%d] = %s;" % (i, cpps[nc + i]) for i in range(nc)]
+        out += ["  }", "}"]
         return "\n".join(out) + "\n"
 
-    def emit_cpp_brick(self, name=None, namespace="adc_generated"):
+    def emit_cpp_brick(self, name=None, namespace="adc_generated", cse=True):
         """Genere une BRIQUE C++ satisfaisant le concept adc::HyperbolicModel (emballage : etape
         2bis). Le struct produit utilise StateVec / Aux / ADC_HD / Variables et expose flux,
         max_wave_speed, to_primitive, to_conservative, conservative_vars, primitive_vars : il peut
         donc entrer dans un CompositeModel et tourner dans le solveur compile.
 
         Exige set_primitive_state(...) (layout de Prim) et set_conservative_from([...]) (to_conservative,
-        que le DSL ne sait pas inverser tout seul). Constantes inlinees, primitives -> locals, pas de
-        CSE. Reste a faire (cf. ARCHITECTURE_CIBLE.md sect. 3) : CSE, codegen Kokkos/CUDA, JIT."""
+        que le DSL ne sait pas inverser tout seul). cse=True (defaut) factorise les sous-expressions
+        communes (H, c...) en locales 'cseK_'. Reste a faire (cf. ARCHITECTURE_CIBLE.md sect. 3) :
+        codegen Kokkos/CUDA, JIT."""
         if not self.prim_state:
             raise ValueError("emit_cpp_brick : appeler set_primitive_state(...) d'abord")
         if self.cons_from is None or len(self.cons_from) != self.n_vars:
@@ -309,12 +389,12 @@ class HyperbolicModel:
         # pour ne pas declencher d'avertissement de parametre inutilise).
         aux_param = "const Aux& a" if self.aux_names else "const Aux&"
 
-        def eig_block(eigs, ind):
-            # noms internes a suffixe '_' : ne masquent ni une variable de l'utilisateur ni le
-            # parametre Aux 'a' (cf. revue adverse : collision possible avec une primitive l0/m/a).
-            lines = ["%sconst adc::Real lam%d_ = %s;" % (ind, k, e.to_cpp()) for k, e in enumerate(eigs)]
+        def eig_reduce(cpps, ind):
+            # cpps : C++ deja genere (eventuellement CSE) des valeurs propres. Noms internes a suffixe
+            # '_' : ne masquent ni une variable utilisateur ni le parametre Aux 'a' (cf. revue adverse).
+            lines = ["%sconst adc::Real lam%d_ = %s;" % (ind, k, c) for k, c in enumerate(cpps)]
             lines.append("%sadc::Real mws_ = lam0_ < 0 ? -lam0_ : lam0_;" % ind)
-            for k in range(1, len(eigs)):
+            for k in range(1, len(cpps)):
                 lines.append("%s{ const adc::Real cand_ = lam%d_ < 0 ? -lam%d_ : lam%d_;"
                              " if (cand_ > mws_) mws_ = cand_; }" % (ind, k, k, k))
             lines.append("%sreturn mws_;" % ind)
@@ -336,19 +416,24 @@ class HyperbolicModel:
             "  ADC_HD State flux(const State& U, %s, int dir) const {" % aux_param,
         ]
         S += cons_locals() + prim_locals() + aux_locals()
+        ftl, fcpps = self._codegen_exprs(self._flux["x"] + self._flux["y"], cse)
+        S += ftl
         S.append("    State F{};")
         S.append("    if (dir == 0) {")
-        S += ["      F[%d] = %s;" % (i, c.to_cpp()) for i, c in enumerate(self._flux["x"])]
+        S += ["      F[%d] = %s;" % (i, fcpps[i]) for i in range(nc)]
         S.append("    } else {")
-        S += ["      F[%d] = %s;" % (i, c.to_cpp()) for i, c in enumerate(self._flux["y"])]
+        S += ["      F[%d] = %s;" % (i, fcpps[nc + i]) for i in range(nc)]
         S += ["    }", "    return F;", "  }", ""]
 
         S.append("  ADC_HD adc::Real max_wave_speed(const State& U, %s, int dir) const {" % aux_param)
         S += cons_locals() + prim_locals() + aux_locals()
+        nx = len(self._eig["x"])
+        etl, ecpps = self._codegen_exprs(self._eig["x"] + self._eig["y"], cse)
+        S += etl
         S.append("    if (dir == 0) {")
-        S += eig_block(self._eig["x"], "      ")
+        S += eig_reduce(ecpps[:nx], "      ")
         S.append("    } else {")
-        S += eig_block(self._eig["y"], "      ")
+        S += eig_reduce(ecpps[nx:], "      ")
         S += ["    }", "  }", ""]
 
         S.append("  ADC_HD Prim to_primitive(const State& U) const {")
@@ -359,8 +444,10 @@ class HyperbolicModel:
 
         S.append("  ADC_HD State to_conservative(const Prim& P) const {")
         S += ["    const adc::Real %s = P[%d];" % (p, i) for i, p in enumerate(self.prim_state)]
+        ctl, ccpps = self._codegen_exprs(self.cons_from, cse)
+        S += ctl
         S.append("    State U{};")
-        S += ["    U[%d] = %s;" % (i, e.to_cpp()) for i, e in enumerate(self.cons_from)]
+        S += ["    U[%d] = %s;" % (i, c) for i, c in enumerate(ccpps)]
         S += ["    return U;", "  }", ""]
 
         S.append('  static adc::Variables conservative_vars() { return {adc::VariableKind::Conservative, {%s}, %d}; }'
@@ -370,7 +457,7 @@ class HyperbolicModel:
         S += ["};", "}  // namespace %s" % namespace]
         return "\n".join(S) + "\n"
 
-    def emit_cpp_source(self, name=None, namespace="adc_generated"):
+    def emit_cpp_source(self, name=None, namespace="adc_generated", cse=True):
         """Genere une BRIQUE de SOURCE C++ composable (au sens adc) depuis self._source.
 
         Le struct produit expose apply(U, a) renvoyant le terme source S(U, aux), avec une ligne par
@@ -384,7 +471,8 @@ class HyperbolicModel:
         l'etat exterieur que par le canal adc::Aux (potentiel et son gradient).
 
         Style identique a emit_cpp_brick (constantes inlinees, cons -> locals, primitives -> locals ;
-        en plus, aux -> locals) ; pas de CSE. Leve ValueError si set_source(...) n'a pas ete appele."""
+        en plus, aux -> locals) ; cse=True factorise les sous-expressions communes. Leve ValueError si
+        set_source(...) n'a pas ete appele."""
         if self._source is None:
             raise ValueError("emit_cpp_source : appeler set_source([...]) d'abord")
         nm = name or (self.name.capitalize() + "Source")
@@ -409,8 +497,36 @@ class HyperbolicModel:
             % (nc, nc),
         ]
         S += cons_locals() + prim_locals() + aux_locals()
-        S.append("    adc::StateVec<%d> S{};" % nc)
         # _wrap : une composante peut etre un litteral Python (p.ex. 0.0), promu en Const.
-        S += ["    S[%d] = %s;" % (i, _wrap(e).to_cpp()) for i, e in enumerate(self._source)]
+        stl, scpps = self._codegen_exprs([_wrap(e) for e in self._source], cse)
+        S += stl
+        S.append("    adc::StateVec<%d> S{};" % nc)
+        S += ["    S[%d] = %s;" % (i, c) for i, c in enumerate(scpps)]
         S += ["    return S;", "  }", "};", "}  // namespace %s" % namespace]
         return "\n".join(S) + "\n"
+
+    def emit_cpp_elliptic(self, name=None, namespace="adc_generated", cse=True):
+        """Genere une BRIQUE de SECOND MEMBRE elliptique composable depuis self._elliptic.
+
+        Le struct produit expose rhs(U) -> Real (densite de charge, fond, gravite...), meme forme que
+        les briques manuelles (ChargeDensity, BackgroundDensity dans adc/model/bricks.hpp) : il entre
+        comme parametre Elliptic d'un CompositeModel. Constantes inlinees, cons/primitives -> locals,
+        cse=True factorise les sous-expressions communes. ValueError si set_elliptic_rhs(...) absent."""
+        if self._elliptic is None:
+            raise ValueError("emit_cpp_elliptic : appeler set_elliptic_rhs(...) d'abord")
+        nm = name or (self.name.capitalize() + "Elliptic")
+        out = [
+            "// brique de SECOND MEMBRE elliptique generee depuis '%s' (adc.dsl.emit_cpp_elliptic)."
+            % self.name,
+            "// rhs(U) -> Real : second membre f(U) de l'operateur elliptique (p.ex. densite de charge).",
+            "namespace %s {" % namespace,
+            "struct %s {" % nm,
+            "  template <class State>",
+            "  ADC_HD adc::Real rhs(const State& U) const {",
+        ]
+        out += ["    const adc::Real %s = U[%d];" % (c, i) for i, c in enumerate(self.cons_names)]
+        out += ["    const adc::Real %s = %s;" % (p, e.to_cpp()) for p, e in self.prim_defs.items()]
+        tl, cpps = self._codegen_exprs([self._elliptic], cse)
+        out += tl
+        out += ["    return %s;" % cpps[0], "  }", "};", "}  // namespace %s" % namespace]
+        return "\n".join(out) + "\n"

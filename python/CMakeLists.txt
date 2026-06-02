@@ -67,3 +67,21 @@ add_test(NAME test_dsl_jit
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_jit.py)
 set_tests_properties(test_dsl_jit PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# Codegen elliptique : la brique de second membre generee == adc::ChargeDensity.
+add_test(NAME test_dsl_elliptic
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_elliptic.py)
+set_tests_properties(test_dsl_elliptic PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# CSE : cse=True et cse=False donnent le meme resultat ; la version CSE factorise (moins de sqrt).
+add_test(NAME test_dsl_cse
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_cse.py)
+set_tests_properties(test_dsl_cse PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# JIT reel : flux genere compile en .so, charge dans le process (ctypes), == interprete numpy.
+add_test(NAME test_dsl_jitlib
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_jitlib.py)
+set_tests_properties(test_dsl_jitlib PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")

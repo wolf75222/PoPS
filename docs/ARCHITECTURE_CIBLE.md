@@ -3,8 +3,9 @@
 Doc de VISION (pas l'etat actuel), issu de la description du tuteur. A relire avant la seance
 tableau. Deux niveaux :
 - **(A)** l'architecture OO en couches (modeles composables) : DEJA largement realisee dans adc_cpp ;
-- **(B)** le DSL symbolique ou Python ECRIT les formules : interprete CPU + codegen C++ du flux faits
-  (`adc.dsl`) ; codegen Kokkos/CUDA + JIT restent le gros chantier (compilateur).
+- **(B)** le DSL symbolique ou Python ECRIT les formules : interprete CPU + codegen C++
+  (flux / brique / source / elliptique) + CSE + JIT dlopen du noyau faits (`adc.dsl`) ; restent le
+  dispatch dans le solveur template (type-erased) et Kokkos/CUDA + run GPU.
 
 ---
 
@@ -153,12 +154,16 @@ Verifie (tous en CI) :
   volumes-finis -> residu Rusanov identique a `adc::Euler`).
 Verifie aussi sur ROMEO (g++ 11, C++20) : compilation et egalite au bit pres.
 
-RESTE (le compilateur) : codegen des contributions elliptiques ; CSE (H et c sont inlines a chaque
-apparition) ; branchement de la brique generee dans la factory runtime (dispatch / `ModelSpec`, ce qui
-suppose un JIT/compilation a la volee puisque le solveur compile travaille sur des types connus a la
-compilation) ; puis (3) Kokkos/CUDA et (4) JIT complet. La brique generee est deja device-ready
-(`ADC_HD`, ops device-safe, `std::sqrt` comme `adc::Euler`). Le prototype et ce codegen hote NE
-remplacent PAS les briques compilees de production.
+FAIT depuis : codegen elliptique (`emit_cpp_elliptic`, == `adc::ChargeDensity`) ; CSE (`cse=True` par
+defaut : H / c factorises en locales `cseK_`, verifie identique a la version sans CSE et a `adc::Euler`) ;
+JIT REEL du noyau (`test_dsl_jitlib` : flux genere -> `.so` compile a la volee -> charge dans le process
+Python via ctypes -> == interprete numpy).
+
+RESTE : (a) brancher la brique generee dans le solveur TEMPLATE compile (dispatch / `ModelSpec`) : cela
+suppose une interface de modele TYPE-ERASED, car le solveur connait ses types a la compilation alors que
+le `.so` JIT n'expose qu'un noyau, pas un type C++ instanciable dans les templates ; (b) (3) Kokkos/CUDA
+et le RUN GPU. La brique generee est deja device-ready (`ADC_HD`, ops device-safe, `std::sqrt` comme
+`adc::Euler`). Le prototype et ce codegen hote NE remplacent PAS les briques compilees de production.
 
 ---
 
