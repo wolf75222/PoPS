@@ -1,5 +1,6 @@
 #include <adc/runtime/system.hpp>
 
+#include <adc/runtime/model_factory.hpp>  // detail::dispatch_model (liste des modeles)
 #include <adc/elliptic/geometric_mg.hpp>
 #include <adc/elliptic/poisson_fft_solver.hpp>
 #include <adc/integrator/implicit_stepper.hpp>   // backward_euler_source
@@ -327,38 +328,20 @@ void System::add_block(const std::string& name, const std::string& model, double
   Impl::BlockClosures clo;
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
-  if (model == "diocotron") {
-    ncomp = 1; kind = Kind::Diocotron;
-    const Diocotron m{Real(P->cfg.B0), Real(P->cfg.n_i0), Real(P->cfg.alpha)};
+  // Modele construit par la fabrique partagee ; le visiteur cable les fermetures du bloc.
+  // kind (pour set_density : Euler pose l'energie, isotherme la qte de mvt) vient de n_vars.
+  const detail::ModelParams mp{P->cfg.B0, P->cfg.n_i0, P->cfg.alpha, P->cfg.gamma,
+                               P->cfg.cs2, P->cfg.four_pi_G, P->cfg.rho0, charge};
+  detail::dispatch_model(model, mp, [&](auto m) {
+    using M = decltype(m);
+    ncomp = M::n_vars;
+    kind = (M::n_vars == 1) ? Kind::Diocotron
+           : (M::n_vars == 3) ? Kind::Isothermal
+                              : Kind::Euler;
     clo = P->make_block(m, limiter, flux, imex);
     max_speed = P->make_max_speed(m);
     add_poisson_rhs = P->make_poisson_rhs(m);
-  } else if (model == "electron_euler") {
-    ncomp = 4; kind = Kind::Euler;
-    const ChargedEuler m{Euler{Real(P->cfg.gamma)}, Real(charge), Real(charge)};
-    clo = P->make_block(m, limiter, flux, imex);
-    max_speed = P->make_max_speed(m);
-    add_poisson_rhs = P->make_poisson_rhs(m);
-  } else if (model == "ion_isothermal") {
-    ncomp = 3; kind = Kind::Isothermal;
-    const ChargedEulerIsothermal m{Real(P->cfg.cs2), Real(charge), Real(charge)};
-    clo = P->make_block(m, limiter, flux, imex);
-    max_speed = P->make_max_speed(m);
-    add_poisson_rhs = P->make_poisson_rhs(m);
-  } else if (model == "euler_poisson") {
-    ncomp = 4; kind = Kind::Euler;  // 4 var, set_density comme Euler ; charge = signe couplage
-    EulerPoisson m;
-    m.hydro.gamma = Real(P->cfg.gamma);
-    m.four_pi_G = Real(P->cfg.four_pi_G);
-    m.rho0 = Real(P->cfg.rho0);
-    m.coupling_sign = Real(charge);  // +1 auto-gravite, -1 electrostatique (Langmuir)
-    clo = P->make_block(m, limiter, flux, imex);
-    max_speed = P->make_max_speed(m);
-    add_poisson_rhs = P->make_poisson_rhs(m);
-  } else {
-    throw std::runtime_error("System::add_block : modele inconnu '" + model +
-                             "' (diocotron|electron_euler|ion_isothermal|euler_poisson)");
-  }
+  });
 
   P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), charge, kind, ncomp,
                                 substeps, std::move(clo.advance), std::move(clo.rhs_into),

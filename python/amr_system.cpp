@@ -1,5 +1,6 @@
 #include <adc/runtime/amr_system.hpp>
 
+#include <adc/runtime/model_factory.hpp>     // detail::dispatch_model (liste des modeles)
 #include <adc/coupling/amr_coupler_mp.hpp>   // AmrCouplerMP, AmrLevelMP
 #include <adc/model/charged_fluid.hpp>        // ChargedEuler, ChargedEulerIsothermal (+ Euler)
 #include <adc/model/diocotron.hpp>
@@ -203,26 +204,16 @@ struct AmrSystem::Impl {
   void ensure_built() {
     if (built) return;
     if (!has_block) throw std::runtime_error("AmrSystem : appeler add_block d'abord");
-    if (b_model == "diocotron") {
-      kind = Kind::Diocotron;
-      dispatch_spatial(Diocotron{Real(cfg.B0), Real(cfg.n_i0), Real(cfg.alpha)});
-    } else if (b_model == "electron_euler") {
-      kind = Kind::Euler;
-      dispatch_spatial(ChargedEuler{Euler{Real(cfg.gamma)}, Real(b_charge), Real(b_charge)});
-    } else if (b_model == "ion_isothermal") {
-      kind = Kind::Isothermal;
-      dispatch_spatial(ChargedEulerIsothermal{Real(cfg.cs2), Real(b_charge), Real(b_charge)});
-    } else if (b_model == "euler_poisson") {
-      kind = Kind::Euler;
-      EulerPoisson m;
-      m.hydro.gamma = Real(cfg.gamma);
-      m.four_pi_G = Real(cfg.four_pi_G);
-      m.rho0 = Real(cfg.rho0);
-      m.coupling_sign = Real(b_charge);
+    // Meme fabrique partagee que System ; kind (set_density) vient de n_vars.
+    const detail::ModelParams mp{cfg.B0, cfg.n_i0, cfg.alpha, cfg.gamma, cfg.cs2,
+                                 cfg.four_pi_G, cfg.rho0, b_charge};
+    detail::dispatch_model(b_model, mp, [&](auto m) {
+      using M = decltype(m);
+      kind = (M::n_vars == 1) ? Kind::Diocotron
+             : (M::n_vars == 3) ? Kind::Isothermal
+                                : Kind::Euler;
       dispatch_spatial(m);
-    } else {
-      throw std::runtime_error("AmrSystem : modele inconnu '" + b_model + "'");
-    }
+    });
   }
 };
 
