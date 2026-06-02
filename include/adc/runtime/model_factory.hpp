@@ -11,7 +11,7 @@
 ///
 /// Le coeur ne connait que des BRIQUES generiques ; un scenario est une composition,
 /// nommee cote application (adc_cases). dispatch_model(spec, visitor) construit le
-/// CompositeModel<Transport, Source, Elliptic> designe par la spec et appelle visitor(model).
+/// CompositeModel<Hyperbolic, Source, Elliptic> designe par la spec et appelle visitor(model).
 /// Les combinaisons invalides (source fluide sur un transport scalaire) sont rejetees.
 
 namespace adc::detail {

@@ -2,6 +2,7 @@
 
 #include <adc/core/state.hpp>  // Aux : le contrat fixe l'auxiliaire a adc::Aux
 #include <adc/core/types.hpp>
+#include <adc/core/variables.hpp>  // Variables : contrat obligatoire du modele hyperbolique
 
 #include <concepts>
 
@@ -59,6 +60,26 @@ concept HasPrimitiveVars =
       typename M::Prim;
       { m.to_primitive(u) } -> std::same_as<typename M::Prim>;
       { m.to_conservative(p) } -> std::same_as<typename M::State>;
+    };
+
+// Contrat de la brique HYPERBOLIQUE (la "partie hyperbolique" d'un modele) : elle porte les
+// VARIABLES (conservatives U, primitives P + conversions + descripteur Variables), le FLUX et la
+// vitesse d'onde. Vars, conversions et flux sont physiquement LIES (un flux est ecrit pour une
+// disposition de variables donnee) : on les regroupe dans une seule brique, distincte de la source
+// et de l'elliptique. PAS de source ni de second membre elliptique ici (ce sont d'autres briques de
+// CompositeModel). conservative_vars() / primitive_vars() sont OBLIGATOIRES (contrat, pas un extra).
+template <class M>
+concept HyperbolicModel =
+    requires(const M m, const typename M::State u, const typename M::Prim p, const Aux a, int dir) {
+      typename M::State;
+      typename M::Prim;
+      { M::n_vars } -> std::convertible_to<int>;
+      { m.flux(u, a, dir) } -> std::same_as<typename M::State>;
+      { m.max_wave_speed(u, a, dir) } -> std::convertible_to<Real>;
+      { m.to_primitive(u) } -> std::same_as<typename M::Prim>;
+      { m.to_conservative(p) } -> std::same_as<typename M::State>;
+      { M::conservative_vars() } -> std::same_as<Variables>;
+      { M::primitive_vars() } -> std::same_as<Variables>;
     };
 
 }  // namespace adc

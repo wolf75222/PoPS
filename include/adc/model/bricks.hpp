@@ -1,9 +1,10 @@
 #pragma once
 
+#include <adc/core/physical_model.hpp>  // HyperbolicModel : contrat de la brique hyperbolique
 #include <adc/core/state.hpp>
 #include <adc/core/types.hpp>
 #include <adc/core/variables.hpp>
-#include <adc/model/euler.hpp>  // Euler : reutilise comme brique de transport CompressibleFlux
+#include <adc/model/euler.hpp>  // Euler : reutilise comme brique hyperbolique CompressibleFlux
 
 #include <cmath>
 
@@ -11,11 +12,12 @@
 /// @brief Briques physiques GENERIQUES composables, et le CompositeModel qui les assemble.
 ///
 /// Le coeur ne connait AUCUN scenario nomme. Il fournit des
-/// briques mathematiques reutilisables (transport, source, second membre elliptique), et un
-/// `CompositeModel<Transport, Source, Elliptic>` qui les combine en un PhysicalModel compile.
+/// briques mathematiques reutilisables (hyperbolique, source, second membre elliptique), et un
+/// `CompositeModel<Hyperbolic, Source, Elliptic>` qui les combine en un PhysicalModel compile.
 /// Un scenario nomme est une COMPOSITION de briques, choisie depuis l'application (adc_cases).
 ///
-/// Transport (hyperbolique) : ExBVelocity (1 var), CompressibleFlux (4 var, = Euler),
+/// Hyperbolique (Vars + flux + vitesses d'onde + conversions) : ExBVelocity (1 var),
+/// CompressibleFlux (4 var, = Euler),
 /// IsothermalFlux (3 var). Source : NoSource, PotentialForce ((q/m) rho E), GravityForce
 /// (rho g). Elliptique : ChargeDensity (q n), BackgroundDensity (alpha (n - n0)),
 /// GravityCoupling (s 4piG (rho - rho0)).
@@ -23,13 +25,15 @@
 namespace adc {
 
 // ---------------------------------------------------------------------------
-// Briques de TRANSPORT (flux hyperbolique). Chacune : n_vars, flux, max_wave_speed
-// (+ pressure / wave_speeds quand le flux HLLC s'applique).
+// Briques HYPERBOLIQUES (Vars + flux + vitesses d'onde + conversions cons<->prim). Chacune :
+// State, Prim, n_vars, flux, max_wave_speed, to_primitive/to_conservative, conservative_vars/
+// primitive_vars (+ pressure/wave_speeds si flux HLLC). Cf. le concept HyperbolicModel.
 // ---------------------------------------------------------------------------
 
 /// Advection scalaire par la derive E x B : v = (-d_y phi, d_x phi)/B0 (a divergence nulle).
 struct ExBVelocity {
   static constexpr int n_vars = 1;
+  using State = StateVec<1>;
   Real B0 = 1;
   ADC_HD Real velocity(const Aux& a, int dir) const {
     return (dir == 0) ? (-a.grad_y / B0) : (a.grad_x / B0);
@@ -43,7 +47,7 @@ struct ExBVelocity {
     const Real d = velocity(a, dir);
     return d < 0 ? -d : d;
   }
-  // Transport scalaire : variables primitives = conservatives (densite transportee).
+  // Scalaire : variables primitives = conservatives (densite transportee).
   using Prim = StateVec<1>;
   ADC_HD Prim to_primitive(const StateVec<1>& u) const { return u; }
   ADC_HD StateVec<1> to_conservative(const Prim& p) const { return p; }
@@ -57,7 +61,8 @@ using CompressibleFlux = Euler;
 /// Flux d'Euler ISOTHERME (p = cs^2 rho), 3 variables (rho, rho u, rho v).
 struct IsothermalFlux {
   static constexpr int n_vars = 3;
-  using Prim = StateVec<3>;  ///< variables primitives (rho, u, v)
+  using State = StateVec<3>;  ///< variables conservatives (rho, rho u, rho v)
+  using Prim = StateVec<3>;   ///< variables primitives (rho, u, v)
   Real cs2 = 1;
   ADC_HD StateVec<3> flux(const StateVec<3>& u, const Aux&, int dir) const {
     const Real rho = u[0];
@@ -178,43 +183,50 @@ struct GravityCoupling {
 };
 
 // ---------------------------------------------------------------------------
-// Composition : assemble (transport, source, elliptic) en un PhysicalModel compile.
+// Composition : assemble (hyperbolique, source, elliptic) en un PhysicalModel compile. La brique
+// HYPERBOLIQUE porte Vars + flux + vitesses d'onde + conversions (indissociables) ; source et
+// elliptique sont des briques separees, librement composables.
 // ---------------------------------------------------------------------------
 
-/// Modele physique compose de trois briques. Satisfait le concept PhysicalModel ; expose
-/// pressure / wave_speeds quand la brique de transport les fournit (necessaire au flux HLLC).
-template <class Transport, class Source, class Elliptic>
+/// Modele physique compose : une brique HYPERBOLIQUE + une source + un second membre elliptique.
+/// Satisfait le concept PhysicalModel ; les Vars (conversions + descripteur), le flux et les
+/// vitesses d'onde viennent de l'hyperbolique ; pressure / wave_speeds sont exposes quand
+/// l'hyperbolique les fournit (necessaire au flux HLLC).
+template <class Hyperbolic, class Source, class Elliptic>
 struct CompositeModel {
-  using State = StateVec<Transport::n_vars>;
-  using Prim = typename Transport::Prim;
+  static_assert(HyperbolicModel<Hyperbolic>,
+                "CompositeModel : la 1ere brique doit etre un modele HYPERBOLIQUE (Vars + "
+                "conversions cons<->prim + flux + max_wave_speed), cf. concept HyperbolicModel");
+  using State = StateVec<Hyperbolic::n_vars>;
+  using Prim = typename Hyperbolic::Prim;
   using Aux = adc::Aux;
-  static constexpr int n_vars = Transport::n_vars;
+  static constexpr int n_vars = Hyperbolic::n_vars;
 
-  Transport tr{};
+  Hyperbolic hyp{};
   Source src{};
   Elliptic ell{};
 
-  ADC_HD State flux(const State& u, const Aux& a, int dir) const { return tr.flux(u, a, dir); }
+  ADC_HD State flux(const State& u, const Aux& a, int dir) const { return hyp.flux(u, a, dir); }
   ADC_HD Real max_wave_speed(const State& u, const Aux& a, int dir) const {
-    return tr.max_wave_speed(u, a, dir);
+    return hyp.max_wave_speed(u, a, dir);
   }
   ADC_HD State source(const State& u, const Aux& a) const { return src.apply(u, a); }
   ADC_HD Real elliptic_rhs(const State& u) const { return ell.rhs(u); }
-  ADC_HD Prim to_primitive(const State& u) const { return tr.to_primitive(u); }
-  ADC_HD State to_conservative(const Prim& p) const { return tr.to_conservative(p); }
-  static Variables conservative_vars() { return Transport::conservative_vars(); }
-  static Variables primitive_vars() { return Transport::primitive_vars(); }
+  ADC_HD Prim to_primitive(const State& u) const { return hyp.to_primitive(u); }
+  ADC_HD State to_conservative(const Prim& p) const { return hyp.to_conservative(p); }
+  static Variables conservative_vars() { return Hyperbolic::conservative_vars(); }
+  static Variables primitive_vars() { return Hyperbolic::primitive_vars(); }
 
   ADC_HD Real pressure(const State& u) const
-    requires requires(const Transport t, const State s) { t.pressure(s); }
+    requires requires(const Hyperbolic h, const State s) { h.pressure(s); }
   {
-    return tr.pressure(u);
+    return hyp.pressure(u);
   }
   ADC_HD void wave_speeds(const State& u, const Aux& a, int dir, Real& smin, Real& smax) const
-    requires requires(const Transport t, const State s, const Aux aa, int d, Real& lo,
-                      Real& hi) { t.wave_speeds(s, aa, d, lo, hi); }
+    requires requires(const Hyperbolic h, const State s, const Aux aa, int d, Real& lo,
+                      Real& hi) { h.wave_speeds(s, aa, d, lo, hi); }
   {
-    tr.wave_speeds(u, a, dir, smin, smax);
+    hyp.wave_speeds(u, a, dir, smin, smax);
   }
 };
 

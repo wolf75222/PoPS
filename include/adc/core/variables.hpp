@@ -4,13 +4,15 @@
 #include <vector>
 
 /// @file
-/// @brief Descripteur des variables d'un modele : Vars, brique de premiere classe au meme niveau
-///        que Flux et Source.
+/// @brief Descripteur des variables d'un modele (Vars). Porte par la brique HYPERBOLIQUE (avec le
+///        flux et les conversions), car variables et flux sont physiquement lies ; ce n'est PAS une
+///        brique independante combinable librement.
 ///
-/// `Variables` DECRIT les variables d'un modele (conservatives ou primitives) : leur nature, leurs
-/// noms, leur taille. C'est une METADONNEE HOTE : elle ne sert pas au calcul (le coeur travaille par
-/// composante, aveugle au sens des composantes), mais a l'introspection, aux diagnostics nommes et a
-/// la sortie labellisee. Un modele expose conservative_vars() et primitive_vars().
+/// `Variables` DECRIT les variables (conservatives ou primitives) : nature, noms, taille. C'est une
+/// metadonnee HOTE (elle ne pilote pas le calcul, qui travaille par composante via les conversions
+/// cons<->prim), mais c'est un CONTRAT OBLIGATOIRE du modele hyperbolique (concept HyperbolicModel) :
+/// conservative_vars() et primitive_vars(). Sert a l'introspection, aux diagnostics nommes, a la
+/// sortie labellisee.
 
 namespace adc {
 

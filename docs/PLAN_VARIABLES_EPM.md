@@ -46,9 +46,11 @@ seconde correction est de **ne pas hard-coder Poisson** mais d'en faire une inst
 - #55/#56/#59 : recettes systeme models.two_fluid / models.plasma ; objets de couplage
   (adc.Ionization / Collision / ThermalExchange) + sim.add_coupling ; descripteur de variables
   (sim.variable_names cons/prim par bloc, introspection).
-- Raffinements (faits) : descripteur `Variables` porte par la brique (core/variables.hpp ;
-  conservative_vars/primitive_vars, "Vars" au meme niveau que Flux/Source) ; adc.PythonFlux
-  (backend de prototypage hote, residu Rusanov numpy, hors Kokkos/GPU).
+- Raffinements (faits) : concept `HyperbolicModel` (Vars + conversions + flux + vitesses d'onde,
+  Variables OBLIGATOIRE) ; `Euler` scinde en brique hyperbolique PURE (sans source ni elliptic_rhs) ;
+  `CompositeModel<Hyperbolic, Source, Elliptic>` (ex-Transport) avec static_assert(HyperbolicModel) ;
+  descripteur `Variables` (core/variables.hpp) porte par l'hyperbolique ; adc.PythonFlux (backend de
+  prototypage hote, residu Rusanov numpy, hors Kokkos/GPU).
 - Verifie : test_bindings (briques + frozen + 3 couplages + EPM + introspection + garde-fous),
   cas two_euler et plasma, ctest coeur 46/46 inchange.
 
@@ -108,18 +110,21 @@ Primitif    :  U_i  -> P_i = cons_to_prim(U_i) -> limiteur sur P -> P_L, P_R
 ```
 Pour Euler le primitif est plus robuste (positivite de rho et p).
 
-### Vars comme BRIQUE de premiere classe (precision du tuteur)
+### Vars : portee par la brique HYPERBOLIQUE (choix de design)
 
-Au tableau, `Vars` est une brique du PhysicalModel, AU MEME NIVEAU que `Flux` et `Source` :
+Au tableau le prof dessine `PhysicalModel = Vars + Flux + Source` (trois enfants). DECISION
+d'implementation : `Vars` n'est PAS une brique independante combinable librement (on ne peut pas
+appairer les variables d'Euler avec le flux isotherme). `Vars`, les conversions cons<->prim et les
+vitesses d'onde sont PORTEES par la brique HYPERBOLIQUE (concept `HyperbolicModel`), parce qu'elles
+sont physiquement liees au flux. La composition se fait sur (hyperbolique, source, elliptique) :
 ```
-PhysicalModel
-   |-- Vars     (description des variables)
-   |-- Flux     (operateur de transport)
-   |-- Source   (couplage / reactions / forces)
+PhysicalModel = CompositeModel<Hyperbolic, Source, Elliptic>
+   Hyperbolic --> Vars (cons U / prim P + conversions + descripteur Variables) + Flux + |lambda|max
+   Source     --> S(U, aux)            (composable independamment)
+   Elliptic   --> elliptic_rhs / EPM   (composable independamment)
 ```
-`Vars` n'est donc PAS seulement `using State` / `using Prim` + conversions (ce que la Phase 1
-a fait, et qui est le sous-ensemble FONCTIONNEL qui marche). Conceptuellement c'est un objet qui
-DECRIT les variables :
+La brique hyperbolique (Euler, IsothermalFlux, ExBVelocity) expose donc un objet DESCRIPTEUR
+`Variables`, contrat OBLIGATOIRE (`conservative_vars()` / `primitive_vars()`) :
 ```cpp
 enum class VariableKind { Conservative, Primitive };
 struct Variables {
@@ -148,11 +153,12 @@ if (recon == Conservative) reconstruct(model.conservative_vars, U);
 if (recon == Primitive)  { P = model.to_primitive(U); reconstruct(model.primitive_vars, P);
                            U = model.to_conservative(P); }
 ```
-Etat (#59, FAIT) : un objet descripteur `Variables` (kind + names + size) est porte DIRECTEMENT par
-chaque modele (`core/variables.hpp` ; `conservative_vars()` / `primitive_vars()` sur les briques de
-transport, forwarde par `CompositeModel`) : "Vars" est donc une brique de premiere classe, au meme
-niveau que Flux/Source. Le runtime y puise les noms exposes par `sim.variable_names` (source unique
-de verite). Metadonnee hote, ne sert pas au calcul (le coeur travaille par composante).
+Etat (#59, FAIT) : un objet descripteur `Variables` (kind + names + size) est porte par la brique
+HYPERBOLIQUE (`core/variables.hpp` ; `conservative_vars()` / `primitive_vars()` sur Euler / isotherme /
+ExB, forwarde par `CompositeModel`), et c'est un CONTRAT OBLIGATOIRE du concept `HyperbolicModel` (pas
+une brique separee : Vars est physiquement liee au flux). Le runtime y puise les noms exposes par
+`sim.variable_names` (source unique de verite). Metadonnee hote, ne pilote pas le calcul (le coeur
+travaille par composante via les conversions cons<->prim).
 
 ---
 

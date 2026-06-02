@@ -9,17 +9,17 @@
 namespace adc {
 
 /**
- * Euler compressible 2D pour un gaz parfait, instance du concept PhysicalModel.
+ * Euler compressible 2D pour un gaz parfait : brique HYPERBOLIQUE (concept HyperbolicModel).
  *
  * Variables conservatives U = (rho, rho u, rho v, E), avec
  * E = p/(gamma-1) + 1/2 rho (u^2 + v^2) et p = (gamma-1)(E - 1/2 rho |v|^2). Le flux
  * directionnel est F_x = (rho u, rho u^2 + p, rho u v, (E+p) u) et symetriquement en y ;
  * la vitesse d'onde maximale vaut |v_dir| + c avec c = sqrt(gamma p/rho).
  *
- * Le terme source est nul (Euler pur) et elliptic_rhs renvoie la densite de masse rho,
- * second membre de Poisson pour un futur Euler compressible auto-gravitant (inutilise en
- * Euler pur). L'argument aux est present pour le concept et recevra grad phi via la
- * source dans ce couplage auto-gravitant, mais n'entre pas dans le flux d'Euler pur.
+ * Brique HYPERBOLIQUE pure : variables (cons U, prim P) + conversions + flux + vitesses d'onde.
+ * AUCUNE source ni second membre elliptique ici : ce sont des briques SEPAREES, assemblees par
+ * CompositeModel. L'argument aux est present pour le contrat (un transport a derive y lit grad
+ * phi) mais n'entre pas dans le flux d'Euler.
  *
  * @note Tout est device-callable (ADC_HD) : StateVec sur tableau C, std::sqrt
  *       (intrinseque device sous nvcc), abs manuel. Compatible kernel GPU comme le
@@ -105,13 +105,7 @@ struct Euler {
     return a + std::sqrt(gamma * p[3] / p[0]);
   }
 
-  /// Terme source nul : Euler pur.
-  ADC_HD State source(const State&, const Aux&) const { return State{}; }
-
-  /// Second membre de Poisson : densite de masse rho (auto-gravite du fluide compressible).
-  ADC_HD Real elliptic_rhs(const State& u) const { return u[0]; }
-
-  /// Descripteur des variables (metadonnee hote : introspection / diagnostics).
+  /// Descripteur des variables (contrat du modele hyperbolique ; metadonnee hote d'introspection).
   static Variables conservative_vars() {
     return {VariableKind::Conservative, {"rho", "rho_u", "rho_v", "E"}, 4};
   }
