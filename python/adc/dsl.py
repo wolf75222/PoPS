@@ -507,6 +507,37 @@ class HyperbolicModel:
         S += ["    return S;", "  }", "};", "}  // namespace %s" % namespace]
         return "\n".join(S) + "\n"
 
+    def compile_so(self, so_path, include, name=None, cxx=None, std="c++20"):
+        """JIT : genere la brique, l'emballe dans une fabrique extern "C" (adc_model_nvars /
+        adc_make_model / adc_destroy_model via adc::ModelAdapter) et compile une bibliotheque
+        partagee chargeable par System.add_dynamic_block (dlopen). include = dossier des en-tetes adc ;
+        cxx = compilateur (defaut c++/g++/clang++). Renvoie so_path. Exige set_primitive_state(...) et
+        set_conservative_from([...]) (comme emit_cpp_brick)."""
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        nm = name or (self.name.capitalize() + "Gen")
+        nv = self.n_vars
+        brick = self.emit_cpp_brick(name=nm)
+        src = ('#include <adc/runtime/dynamic_model.hpp>\n'
+               '#include <adc/core/variables.hpp>\n'
+               + brick
+               + '\nextern "C" int adc_model_nvars() { return %d; }\n' % nv
+               + 'extern "C" void* adc_make_model() { return new adc::ModelAdapter<adc_generated::%s>(); }\n' % nm
+               + 'extern "C" void adc_destroy_model(void* p) { delete static_cast<adc::IModel<%d>*>(p); }\n' % nv)
+        cc = cxx or shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+        if not cc:
+            raise RuntimeError("compile_so : aucun compilateur C++ trouve")
+        with tempfile.TemporaryDirectory() as tmp:
+            cpp = os.path.join(tmp, "model.cpp")
+            with open(cpp, "w") as f:
+                f.write(src)
+            subprocess.run([cc, "-shared", "-fPIC", "-std=" + std, "-O2", "-I", include, cpp,
+                            "-o", so_path], check=True)
+        return so_path
+
     def emit_cpp_elliptic(self, name=None, namespace="adc_generated", cse=True):
         """Genere une BRIQUE de SECOND MEMBRE elliptique composable depuis self._elliptic.
 

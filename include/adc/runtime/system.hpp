@@ -56,6 +56,15 @@ class System {
                  const std::string& time = "explicit", int substeps = 1,
                  bool evolve = true);
 
+  /// Ajoute un bloc dont le modele est CHARGE A L'EXECUTION depuis une bibliotheque partagee (.so)
+  /// generee par le DSL (emit_cpp_brick -> ModelAdapter -> fabrique extern "C"). Le .so doit exposer
+  /// adc_model_nvars(), adc_make_model() (renvoie un IModel<NV>*) et adc_destroy_model(void*).
+  /// CHEMIN HOTE (dispatch virtuel, Rusanov ordre 1 periodique, Euler explicite) : pour prototyper
+  /// un modele inedit, ecrit en formules cote Python, sans recompiler le coeur. cf. dynamic_model.hpp.
+  /// @param names noms des variables (introspection) ; defaut u0..u{NV-1}.
+  void add_dynamic_block(const std::string& name, const std::string& so_path, int substeps = 1,
+                         const std::vector<std::string>& names = {});
+
   /// Configure le Poisson partage.
   /// @param rhs    seul mode : "charge_density", f = somme_s elliptic_rhs_s(u_s)
   /// @param solver "geometric_mg" (tout cas, paroi comprise) | "fft" (periodique, n = 2^k)

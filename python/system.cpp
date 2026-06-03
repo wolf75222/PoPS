@@ -14,15 +14,61 @@
 #include <adc/mesh/mf_arith.hpp>  // sum
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>  // fill_ghosts, fill_boundary
+#include <adc/runtime/dynamic_model.hpp>  // IModel : modele charge a l'execution (bloc dynamique)
 
 #include <algorithm>
 #include <cmath>
+#include <dlfcn.h>  // dlopen/dlsym : chargement d'une brique generee (.so)
 #include <functional>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <variant>
 
 namespace adc {
+
+// Residu hote -div F* (Rusanov ordre 1, periodique, a_max GLOBAL comme adc.PythonFlux) calcule via un
+// IModel : sert au bloc DYNAMIQUE (modele charge a l'execution, dispatch virtuel, hors GPU). U et le
+// retour en disposition composante-majeur (c*n*n + j*n + i), comme copy_state / write_state.
+namespace {
+template <int NV>
+std::vector<double> host_rusanov(const IModel<NV>& m, const std::vector<double>& U, int n, double dx) {
+  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  auto at = [&](int c, int i, int j) {
+    return U[static_cast<std::size_t>(c) * nn + static_cast<std::size_t>((j + n) % n) * n +
+             ((i + n) % n)];
+  };
+  auto cell = [&](int i, int j) {
+    StateVec<NV> u;
+    for (int c = 0; c < NV; ++c) u[c] = at(c, i, j);
+    return u;
+  };
+  Aux a{};
+  double amax = 0;
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      StateVec<NV> u = cell(i, j);
+      double s = std::max(m.max_wave_speed(u, a, 0), m.max_wave_speed(u, a, 1));
+      if (s > amax) amax = s;
+    }
+  auto rus = [&](const StateVec<NV>& L, const StateVec<NV>& Rr, int dir) {
+    StateVec<NV> FL = m.flux(L, a, dir), FR = m.flux(Rr, a, dir), f;
+    for (int c = 0; c < NV; ++c) f[c] = 0.5 * (FL[c] + FR[c]) - 0.5 * amax * (Rr[c] - L[c]);
+    return f;
+  };
+  std::vector<double> Rout(static_cast<std::size_t>(NV) * nn, 0.0);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      StateVec<NV> Uc = cell(i, j);
+      StateVec<NV> Fxr = rus(Uc, cell(i + 1, j), 0), Fxl = rus(cell(i - 1, j), Uc, 0);
+      StateVec<NV> Fyr = rus(Uc, cell(i, j + 1), 1), Fyl = rus(cell(i, j - 1), Uc, 1);
+      for (int c = 0; c < NV; ++c)
+        Rout[static_cast<std::size_t>(c) * nn + static_cast<std::size_t>(j) * n + i] =
+            -((Fxr[c] - Fxl[c]) + (Fyr[c] - Fyl[c])) / dx;
+    }
+  return Rout;
+}
+}  // namespace
 
 struct System::Impl {
   // Fermetures compilees figees a l'ajout du bloc (modele compose + schema spatial + temps).
@@ -305,6 +351,59 @@ struct System::Impl {
       for (int j = v.lo[1]; j <= v.hi[1]; ++j)
         for (int i = v.lo[0]; i <= v.hi[0]; ++i) u(i, j, c) = in[k++];
   }
+
+  // Construit un bloc DYNAMIQUE (modele IModel<NV> charge depuis le .so @p h) et l'ajoute. Le
+  // shared_ptr possede le modele : il appelle adc_destroy_model puis ferme le .so a la destruction.
+  template <int NV>
+  static void push_dynamic(Impl* P, const std::string& name, void* h, int substeps,
+                           std::vector<std::string> names) {
+    auto mk = reinterpret_cast<void* (*)()>(dlsym(h, "adc_make_model"));
+    auto del = reinterpret_cast<void (*)(void*)>(dlsym(h, "adc_destroy_model"));
+    if (!mk || !del) {
+      dlclose(h);
+      throw std::runtime_error("add_dynamic_block : adc_make_model / adc_destroy_model absents du .so");
+    }
+    std::shared_ptr<IModel<NV>> im(static_cast<IModel<NV>*>(mk()),
+                                   [del, h](IModel<NV>* p) { del(p); dlclose(h); });
+    const int n = P->cfg.n;
+    const double dx = P->cfg.L / P->cfg.n;
+
+    std::function<void(MultiFab&, MultiFab&)> rhs_into = [P, im, n, dx](MultiFab& U, MultiFab& R) {
+      P->write_state(R, NV, host_rusanov<NV>(*im, P->copy_state(U, NV), n, dx));
+    };
+    std::function<Real(const MultiFab&)> max_speed = [P, im, n](const MultiFab& U) -> Real {
+      std::vector<double> u = P->copy_state(U, NV);
+      const std::size_t nn = static_cast<std::size_t>(n) * n;
+      Aux a{};
+      Real mx = 0;
+      for (std::size_t c0 = 0; c0 < nn; ++c0) {
+        StateVec<NV> s;
+        for (int c = 0; c < NV; ++c) s[c] = u[static_cast<std::size_t>(c) * nn + c0];
+        Real v = std::max(im->max_wave_speed(s, a, 0), im->max_wave_speed(s, a, 1));
+        if (v > mx) mx = v;
+      }
+      return mx;
+    };
+    std::function<void(MultiFab&, Real, int)> advance = [P, im, n, dx](MultiFab& U, Real dt, int nsub) {
+      const Real hh = dt / nsub;
+      for (int s = 0; s < nsub; ++s) {  // Euler explicite par sous-pas (chemin hote, prototype)
+        std::vector<double> u = P->copy_state(U, NV);
+        std::vector<double> res = host_rusanov<NV>(*im, u, n, dx);
+        for (std::size_t k = 0; k < u.size(); ++k) u[k] += hh * res[k];
+        P->write_state(U, NV, u);
+      }
+    };
+    std::function<void(const MultiFab&, MultiFab&)> no_poisson = [](const MultiFab&, MultiFab&) {};
+    if (names.empty())
+      for (int c = 0; c < NV; ++c) names.push_back("u" + std::to_string(c));
+
+    Species block{name, MultiFab(P->ba, P->dm, NV, 2), NV, substeps, true, 1.4,
+                  std::move(advance), std::move(rhs_into), std::move(max_speed), std::move(no_poisson)};
+    block.cons_names = names;
+    block.prim_names = names;
+    P->sp.push_back(std::move(block));
+    P->sp.back().U.set_val(Real(0));
+  }
 };
 
 System::System(const SystemConfig& c) : p_(std::make_unique<Impl>(c)) {}
@@ -351,6 +450,32 @@ void System::add_block(const std::string& name, const ModelSpec& model,
   P->sp.back().U.set_val(Real(0));
   P->sp.back().cons_names = std::move(cons_nm);
   P->sp.back().prim_names = std::move(prim_nm);
+}
+
+void System::add_dynamic_block(const std::string& name, const std::string& so_path, int substeps,
+                               const std::vector<std::string>& names) {
+  if (substeps < 1) throw std::runtime_error("System::add_dynamic_block : substeps >= 1");
+  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!h) {
+    const char* e = dlerror();
+    throw std::runtime_error("add_dynamic_block : dlopen('" + so_path + "') : " +
+                             std::string(e ? e : "?"));
+  }
+  auto nv_fn = reinterpret_cast<int (*)()>(dlsym(h, "adc_model_nvars"));
+  if (!nv_fn) {
+    dlclose(h);
+    throw std::runtime_error("add_dynamic_block : adc_model_nvars absent du .so");
+  }
+  const int nv = nv_fn();
+  switch (nv) {
+    case 1: Impl::push_dynamic<1>(p_.get(), name, h, substeps, names); break;
+    case 3: Impl::push_dynamic<3>(p_.get(), name, h, substeps, names); break;
+    case 4: Impl::push_dynamic<4>(p_.get(), name, h, substeps, names); break;
+    default:
+      dlclose(h);
+      throw std::runtime_error("add_dynamic_block : n_vars=" + std::to_string(nv) +
+                               " non supporte (1, 3, 4)");
+  }
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver,

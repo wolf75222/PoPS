@@ -168,11 +168,14 @@ l'espace d'execution `Cuda` (GH200 ; Kokkos 4.4 + CUDA 12.6, `HOPPER90`), == `ad
 (5.6e-17, contraction FMA), cf. docs/GPU_ROMEO.md. C'est le meme primitif de dispatch que
 `adc/mesh/for_each.hpp`.
 
-(a) FAIT (mecanisme type-erased) : `adc::IModel<NV>` + `ModelAdapter` (include/adc/runtime/dynamic_model.hpp).
-Une brique generee, compilee en `.so`, est CHARGEE a l'execution (dlopen) et dispatchee par l'interface
-virtuelle, == `adc::Euler` (`test_dynamic_model` C++ ; `test_dsl_dynamic` Python). Chemin HOTE (vtable,
-hors GPU ; pendant COMPILE de PythonFlux). Reste pour (a) : cabler `IModel` dans le runtime `System`
-(`sim.add_dynamic_block`) pour piloter depuis Python un modele charge a l'execution.
+(a) FAIT : interface TYPE-ERASED `adc::IModel<NV>` + `ModelAdapter` (include/adc/runtime/dynamic_model.hpp)
+ET cablage dans le runtime. `System::add_dynamic_block(name, so)` charge a l'execution (dlopen) une brique
+generee compilee en `.so` et cree un bloc pilote par l'IModel (host Rusanov ordre 1), avance par
+eval_rhs / step / step_cfl comme n'importe quel bloc ; `dsl.HyperbolicModel.compile_so` fait le JIT.
+Bout-en-bout verifie : `test_dsl_block` (DSL -> .so -> add_dynamic_block ; eval_rhs == adc.PythonFlux a
+9e-16 ; 25 pas dans le System, masse conservee) ; `test_dynamic_model` (C++) et `test_dsl_dynamic`
+(dlopen depuis un main ignorant le type) verrouillent le mecanisme. Chemin HOTE (vtable, hors GPU ;
+pendant COMPILE de PythonFlux). Le hot path GPU reste le chemin TEMPLATE.
 
 (b) FAIT : un CAS Euler 2D COMPLET (80 pas, CFL, Rusanov, periodique) avance sur GH200 a travers le
 seam Kokkos d'adc (`for_each_cell` / `for_each_cell_reduce_*`), masse exactement conservee, brique

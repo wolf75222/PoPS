@@ -7,7 +7,7 @@
 #   PYTHONPATH=build-py/python python3 -c "import adc; print(adc.System)"
 
 pybind11_add_module(_adc bindings.cpp system.cpp amr_system.cpp two_fluid_ap_solver.cpp)
-target_link_libraries(_adc PRIVATE adc::adc)
+target_link_libraries(_adc PRIVATE adc::adc ${CMAKE_DL_LIBS})  # dl : add_dynamic_block (dlopen)
 target_compile_features(_adc PRIVATE cxx_std_${ADC_CXX_STD})
 
 # L'extension va dans le paquet adc/ ; on y copie aussi les sources Python du paquet.
@@ -90,4 +90,10 @@ set_tests_properties(test_dsl_jitlib PROPERTIES
 add_test(NAME test_dsl_dynamic
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_dynamic.py)
 set_tests_properties(test_dsl_dynamic PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# Bloc dynamique de bout en bout : DSL -> compile_so -> System.add_dynamic_block -> eval_rhs/step.
+add_test(NAME test_dsl_block
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_block.py)
+set_tests_properties(test_dsl_block PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
