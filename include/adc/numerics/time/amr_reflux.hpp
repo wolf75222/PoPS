@@ -5,7 +5,7 @@
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/fab2d.hpp>
 #include <adc/mesh/for_each.hpp>
-#include <adc/operator/spatial_operator.hpp>
+#include <adc/numerics/spatial_operator.hpp>
 
 #include <vector>
 

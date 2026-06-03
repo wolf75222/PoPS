@@ -4,7 +4,7 @@
 #include <adc/core/state.hpp>
 #include <adc/core/types.hpp>
 #include <adc/core/variables.hpp>
-#include <adc/model/euler.hpp>  // Euler : reutilise comme brique hyperbolique CompressibleFlux
+#include <adc/physics/euler.hpp>  // Euler : reutilise comme brique hyperbolique CompressibleFlux
 
 #include <cmath>
 

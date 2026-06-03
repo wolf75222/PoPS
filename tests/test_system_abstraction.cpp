@@ -4,7 +4,7 @@
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/state.hpp>
 #include <adc/coupling/elliptic_rhs.hpp>
-#include <adc/integrator/scheduler.hpp>
+#include <adc/numerics/time/scheduler.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/geometry.hpp>

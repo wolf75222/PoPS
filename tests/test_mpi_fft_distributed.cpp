@@ -6,7 +6,7 @@
 // Prouve que la FFT distribuee est un EllipticSolver reutilisable, pas un rouage enferme dans
 // SpectralCoupler.
 
-#include <adc/elliptic/poisson_fft_solver.hpp>
+#include <adc/numerics/elliptic/poisson_fft_solver.hpp>
 #include <adc/mesh/geometry.hpp>
 #include <adc/parallel/comm.hpp>
 

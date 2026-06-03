@@ -49,8 +49,8 @@ def build_euler_brick():
 # E = p/(gamma-1) (vitesse nulle, pas de terme cinetique). Une passe de residu Rusanov pour Gen et
 # Ref ; on compare le residu cellule par cellule, composante par composante.
 DRIVER = r"""
-#include <adc/model/euler.hpp>
-#include <adc/model/bricks.hpp>
+#include <adc/physics/euler.hpp>
+#include <adc/physics/bricks.hpp>
 #include <adc/core/physical_model.hpp>
 %s
 #include <vector>

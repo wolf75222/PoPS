@@ -1,6 +1,6 @@
 #pragma once
 
-#include <adc/elliptic/elliptic_solver.hpp>
+#include <adc/numerics/elliptic/elliptic_solver.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fab2d.hpp>

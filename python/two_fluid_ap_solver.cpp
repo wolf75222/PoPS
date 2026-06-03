@@ -1,7 +1,7 @@
 #include <adc/solver/two_fluid_ap_solver.hpp>
 
-#include <adc/elliptic/geometric_mg.hpp>
-#include <adc/integrator/two_fluid_ap.hpp>
+#include <adc/numerics/elliptic/geometric_mg.hpp>
+#include <adc/numerics/time/two_fluid_ap.hpp>
 #include <adc/mesh/for_each.hpp>  // device_fence
 
 #include <cmath>

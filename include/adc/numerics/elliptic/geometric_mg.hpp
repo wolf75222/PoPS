@@ -1,7 +1,7 @@
 #pragma once
 
 #include <adc/core/types.hpp>
-#include <adc/elliptic/poisson_operator.hpp>
+#include <adc/numerics/elliptic/poisson_operator.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/geometry.hpp>

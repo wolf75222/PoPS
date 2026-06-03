@@ -2,10 +2,10 @@
 // sont des types nommes du coeur. Verification statique des bundles et des aliases :
 // aucun modele requis (le coeur ne connait aucune physique).
 
-#include <adc/integrator/time_integrator.hpp>
-#include <adc/operator/numerical_flux.hpp>
-#include <adc/operator/reconstruction.hpp>
-#include <adc/operator/spatial_discretisation.hpp>
+#include <adc/numerics/time/time_integrator.hpp>
+#include <adc/numerics/numerical_flux.hpp>
+#include <adc/numerics/reconstruction.hpp>
+#include <adc/numerics/spatial_discretisation.hpp>
 
 #include <cstdio>
 #include <type_traits>

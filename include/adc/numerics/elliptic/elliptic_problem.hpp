@@ -1,7 +1,7 @@
 #pragma once
 
 #include <adc/core/types.hpp>
-#include <adc/elliptic/geometric_mg.hpp>  // homogeneous(const BCRec&)
+#include <adc/numerics/elliptic/geometric_mg.hpp>  // homogeneous(const BCRec&)
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/geometry.hpp>
 #include <adc/mesh/multifab.hpp>

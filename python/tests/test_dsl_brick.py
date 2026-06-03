@@ -37,7 +37,7 @@ def build_euler_brick():
 
 
 HARNESS = r"""
-#include <adc/model/euler.hpp>
+#include <adc/physics/euler.hpp>
 #include <adc/core/physical_model.hpp>
 %s
 #include <cstdio>
@@ -88,7 +88,7 @@ def build_exb_brick():
 
 
 EXB_HARNESS = r"""
-#include <adc/model/bricks.hpp>
+#include <adc/physics/bricks.hpp>
 #include <adc/core/physical_model.hpp>
 %s
 #include <cstdio>

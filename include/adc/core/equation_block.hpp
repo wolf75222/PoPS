@@ -1,10 +1,10 @@
 #pragma once
 
 #include <adc/core/physical_model.hpp>
-#include <adc/integrator/time_integrator.hpp>
+#include <adc/numerics/time/time_integrator.hpp>
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
-#include <adc/operator/spatial_discretisation.hpp>
+#include <adc/numerics/spatial_discretisation.hpp>
 
 #include <concepts>
 #include <string_view>

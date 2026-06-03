@@ -1,6 +1,6 @@
 #pragma once
 
-#include <adc/integrator/amr_reflux.hpp>
+#include <adc/numerics/time/amr_reflux.hpp>
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/fab2d.hpp>
 

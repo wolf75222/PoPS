@@ -2,8 +2,8 @@
 
 #include <adc/runtime/model_factory.hpp>     // detail::dispatch_model + briques compilees
 #include <adc/coupling/amr_coupler_mp.hpp>   // AmrCouplerMP, AmrLevelMP
-#include <adc/operator/numerical_flux.hpp>    // RusanovFlux, HLLCFlux
-#include <adc/operator/reconstruction.hpp>    // NoSlope, Minmod, VanLeer
+#include <adc/numerics/numerical_flux.hpp>    // RusanovFlux, HLLCFlux
+#include <adc/numerics/reconstruction.hpp>    // NoSlope, Minmod, VanLeer
 
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>

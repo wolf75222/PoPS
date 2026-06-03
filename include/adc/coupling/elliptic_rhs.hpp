@@ -4,7 +4,7 @@
 #include <adc/core/types.hpp>
 #include <adc/mesh/for_each.hpp>
 #include <adc/mesh/multifab.hpp>
-#include <adc/operator/spatial_operator.hpp>  // load_state
+#include <adc/numerics/spatial_operator.hpp>  // load_state
 
 #include <cstddef>
 #include <stdexcept>

@@ -1,11 +1,11 @@
 #include <adc/runtime/system.hpp>
 
 #include <adc/runtime/model_factory.hpp>  // detail::dispatch_model + briques compilees
-#include <adc/elliptic/geometric_mg.hpp>
-#include <adc/elliptic/poisson_fft_solver.hpp>
-#include <adc/integrator/implicit_stepper.hpp>   // backward_euler_source
-#include <adc/integrator/time_steppers.hpp>      // ForwardEuler, SSPRK2Step (math RK du coeur)
-#include <adc/operator/spatial_operator.hpp>     // assemble_rhs, SourceFreeModel, max_wave_speed_mf, load_state
+#include <adc/numerics/elliptic/geometric_mg.hpp>
+#include <adc/numerics/elliptic/poisson_fft_solver.hpp>
+#include <adc/numerics/time/implicit_stepper.hpp>   // backward_euler_source
+#include <adc/numerics/time/time_steppers.hpp>      // ForwardEuler, SSPRK2Step (math RK du coeur)
+#include <adc/numerics/spatial_operator.hpp>     // assemble_rhs, SourceFreeModel, max_wave_speed_mf, load_state
 
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>

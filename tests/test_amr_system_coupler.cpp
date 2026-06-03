@@ -12,7 +12,7 @@
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/state.hpp>
 #include <adc/coupling/amr_system_coupler.hpp>
-#include <adc/integrator/amr_reflux_mf.hpp>  // AmrLevelMP
+#include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>

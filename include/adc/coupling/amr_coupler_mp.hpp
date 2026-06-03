@@ -5,9 +5,9 @@
 #include <adc/coupling/amr_level_storage.hpp>    // AmrLevelStack
 #include <adc/coupling/amr_regrid_coupler.hpp>   // amr_regrid_finest (Berger-Rigoutsos)
 #include <adc/coupling/coupler.hpp>  // detail::coupler_eval_rhs (f = model.elliptic_rhs(U))
-#include <adc/elliptic/elliptic_solver.hpp>
-#include <adc/elliptic/geometric_mg.hpp>
-#include <adc/integrator/amr_reflux_mf.hpp>  // AmrLevelMP, amr_step_multilevel_multipatch, mf_*_mb
+#include <adc/numerics/elliptic/elliptic_solver.hpp>
+#include <adc/numerics/elliptic/geometric_mg.hpp>
+#include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP, amr_step_multilevel_multipatch, mf_*_mb
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/fill_boundary.hpp>

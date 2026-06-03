@@ -6,7 +6,7 @@
 #include <adc/core/physical_model.hpp>
 #include <adc/core/state.hpp>
 #include <adc/core/types.hpp>
-#include <adc/integrator/ssprk.hpp>
+#include <adc/numerics/time/ssprk.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fab2d.hpp>
@@ -15,7 +15,7 @@
 #include <adc/mesh/mf_arith.hpp>
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
-#include <adc/operator/spatial_operator.hpp>
+#include <adc/numerics/spatial_operator.hpp>
 
 #include <cmath>
 #include <cstdio>

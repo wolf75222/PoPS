@@ -4,7 +4,7 @@
 // le double-reflux d'un joint fin-fin ; son integration AMR est couverte par les tests de
 // reflux (np=1/2/4 bit-identiques), ici on fige les mecaniques locales.
 
-#include <adc/integrator/amr_reflux_mf.hpp>  // adc::CoverageMask
+#include <adc/numerics/time/amr_reflux_mf.hpp>  // adc::CoverageMask
 #include <adc/mesh/box2d.hpp>
 
 #include <cstdio>

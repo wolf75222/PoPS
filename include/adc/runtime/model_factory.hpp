@@ -1,6 +1,6 @@
 #pragma once
 
-#include <adc/model/bricks.hpp>
+#include <adc/physics/bricks.hpp>
 #include <adc/runtime/model_spec.hpp>
 
 #include <stdexcept>

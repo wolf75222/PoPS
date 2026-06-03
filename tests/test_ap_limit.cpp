@@ -7,7 +7,7 @@
 // Erreur apres n pas : |u_n - u_eq| = |u0 - u_eq| / (1 + dt/eps)^n  -> 0 quand eps -> 0.
 // L'explicite, lui, a un facteur |1 - dt/eps| >> 1 des que dt >> eps : il explose.
 
-#include <adc/integrator/imex.hpp>
+#include <adc/numerics/time/imex.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/multifab.hpp>

@@ -25,7 +25,7 @@ extern "C" void adc_destroy_model(adc::IModel<4>* p) { delete p; }
 """
 
 MAIN = r"""
-#include <adc/model/euler.hpp>
+#include <adc/physics/euler.hpp>
 #include <adc/runtime/dynamic_model.hpp>
 #include <dlfcn.h>
 #include <cstdio>

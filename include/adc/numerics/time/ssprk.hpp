@@ -5,9 +5,9 @@
 #include <adc/mesh/mf_arith.hpp>
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
-#include <adc/operator/reconstruction.hpp>
-#include <adc/operator/spatial_operator.hpp>
-#include <adc/integrator/time_steppers.hpp>  // SSPRK2Step (schema partage)
+#include <adc/numerics/reconstruction.hpp>
+#include <adc/numerics/spatial_operator.hpp>
+#include <adc/numerics/time/time_steppers.hpp>  // SSPRK2Step (schema partage)
 
 // Integrateur SSP-RK2 mono-niveau, fonction libre de commodite. Le SCHEMA vit
 // desormais dans integrator/time_steppers.hpp (objet SSPRK2Step) ; ici on ne fait

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <adc/operator/numerical_flux.hpp>
-#include <adc/operator/reconstruction.hpp>
+#include <adc/numerics/numerical_flux.hpp>
+#include <adc/numerics/reconstruction.hpp>
 
 #include <concepts>
 

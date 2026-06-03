@@ -10,7 +10,7 @@
 //
 // Attendu : Strang 2e ordre (erreur /4 quand dt /2), Lie 1er ordre (/2).
 
-#include <adc/integrator/splitting.hpp>
+#include <adc/numerics/time/splitting.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/multifab.hpp>

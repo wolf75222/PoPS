@@ -4,7 +4,7 @@
 #include <adc/amr/regrid.hpp>   // tag_cells, grow_tags
 #include <adc/amr/tag_box.hpp>  // TagBox
 #include <adc/core/types.hpp>
-#include <adc/integrator/amr_reflux_mf.hpp>  // AmrLevelMP, mf_find_box
+#include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP, mf_find_box
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>

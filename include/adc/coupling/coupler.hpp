@@ -3,11 +3,11 @@
 #include <adc/core/types.hpp>
 #include <adc/coupling/coupling_policy.hpp>
 #include <adc/coupling/elliptic_rhs.hpp>
-#include <adc/elliptic/elliptic_problem.hpp>
-#include <adc/elliptic/elliptic_solver.hpp>
-#include <adc/elliptic/geometric_mg.hpp>
-#include <adc/integrator/time_integrator.hpp>
-#include <adc/integrator/time_steppers.hpp>  // SSPRK2Step / SSPRK3Step (schema partage)
+#include <adc/numerics/elliptic/elliptic_problem.hpp>
+#include <adc/numerics/elliptic/elliptic_solver.hpp>
+#include <adc/numerics/elliptic/geometric_mg.hpp>
+#include <adc/numerics/time/time_integrator.hpp>
+#include <adc/numerics/time/time_steppers.hpp>  // SSPRK2Step / SSPRK3Step (schema partage)
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fab2d.hpp>
@@ -16,9 +16,9 @@
 #include <adc/mesh/mf_arith.hpp>
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
-#include <adc/operator/reconstruction.hpp>
-#include <adc/operator/spatial_discretisation.hpp>
-#include <adc/operator/spatial_operator.hpp>
+#include <adc/numerics/reconstruction.hpp>
+#include <adc/numerics/spatial_discretisation.hpp>
+#include <adc/numerics/spatial_operator.hpp>
 #include <adc/parallel/comm.hpp>
 
 #include <functional>

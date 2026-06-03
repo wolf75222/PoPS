@@ -5,8 +5,8 @@
 // des variables primitives. Imprime "OK test_primitive_recon" en cas de succes.
 
 #include <adc/core/physical_model.hpp>
-#include <adc/model/bricks.hpp>
-#include <adc/model/euler.hpp>
+#include <adc/physics/bricks.hpp>
+#include <adc/physics/euler.hpp>
 
 #include <cmath>
 #include <cstdio>

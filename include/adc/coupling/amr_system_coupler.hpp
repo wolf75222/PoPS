@@ -5,12 +5,12 @@
 #include <adc/coupling/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb
 #include <adc/coupling/coupled_source.hpp>  // CoupledSourceFor
 #include <adc/coupling/elliptic_rhs.hpp>
-#include <adc/elliptic/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
-#include <adc/elliptic/elliptic_solver.hpp>
-#include <adc/elliptic/geometric_mg.hpp>
-#include <adc/integrator/amr_reflux_mf.hpp>  // AmrLevelMP, advance_amr, mf_average_down_mb
-#include <adc/integrator/implicit_stepper.hpp>  // backward_euler_source
-#include <adc/integrator/scheduler.hpp>  // block_substeps_v, block_time_treatment_v
+#include <adc/numerics/elliptic/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
+#include <adc/numerics/elliptic/elliptic_solver.hpp>
+#include <adc/numerics/elliptic/geometric_mg.hpp>
+#include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP, advance_amr, mf_average_down_mb
+#include <adc/numerics/time/implicit_stepper.hpp>  // backward_euler_source
+#include <adc/numerics/time/scheduler.hpp>  // block_substeps_v, block_time_treatment_v
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>

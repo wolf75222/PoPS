@@ -6,7 +6,7 @@
 #include <adc/mesh/for_each.hpp>
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/refinement.hpp>  // coarsen_index
-#include <adc/operator/spatial_operator.hpp>  // compute_face_fluxes, xface_box, yface_box
+#include <adc/numerics/spatial_operator.hpp>  // compute_face_fluxes, xface_box, yface_box
 #include <adc/parallel/comm.hpp>  // all_reduce_sum_inplace (reflux multi-patch distribue)
 
 #include <vector>
