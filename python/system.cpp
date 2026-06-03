@@ -155,6 +155,8 @@ struct System::Impl {
   Periodicity per_;
   bool periodic_;
   MultiFab aux;
+  int aux_ncomp_ = kAuxBaseComps;     // largeur du canal aux PARTAGE (max des blocs ; >= 3)
+  std::vector<Real> bz_field_;        // champ B_z(x) n*n row-major (vide si non fourni)
   std::vector<Species> sp;
   double t = 0;
   std::vector<std::function<void(Real)>> couplings;  // sources couplees inter-especes (splitting)
@@ -179,7 +181,29 @@ struct System::Impl {
         dom(Box2D::from_extents(c.n, c.n)),
         per_{c.periodic, c.periodic},
         periodic_(c.periodic),
-        aux(ba, dm, 3, 1) {}
+        aux(ba, dm, kAuxBaseComps, 1) {}
+
+  // Garantit une largeur aux >= ncomp (canal PARTAGE). Reallouer l'aux GARDE son adresse (membre :
+  // les fermetures de bloc capturent &aux via grid_ctx) et re-applique B_z. No-op si deja assez large.
+  void ensure_aux_width(int ncomp) {
+    if (ncomp <= aux_ncomp_) return;
+    aux_ncomp_ = ncomp;
+    aux = MultiFab(ba, dm, aux_ncomp_, 1);
+    apply_bz();
+  }
+
+  // Peuple la composante B_z (indice kAuxBaseComps) du canal partage depuis bz_field_, sur les
+  // cellules valides. No-op si B_z non fourni ou si aucun bloc ne le lit (largeur de base). Les
+  // halos de B_z sont remplis par solve_fields (comme grad) ; field_postprocess n'ecrit que comp 0..2.
+  void apply_bz() {
+    if (bz_field_.empty() || aux_ncomp_ <= kAuxBaseComps) return;
+    const int n = cfg.n;
+    Array4 a = aux.fab(0).array();
+    const Box2D v = aux.box(0);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        a(i, j, kAuxBaseComps) = bz_field_[static_cast<std::size_t>(j) * n + i];
+  }
 
   static BCRec make_bc(const SystemConfig& c) {
     BCRec b;  // periodique par defaut
@@ -650,6 +674,16 @@ void System::set_epsilon_field(const std::vector<double>& eps) {
   p_->p_eps_field_ = eps;
   p_->has_eps_field_ = true;
   p_->ell_.reset();  // l'operateur sera reconstruit avec le champ eps au prochain solve_fields
+}
+
+void System::ensure_aux_width(int ncomp) { p_->ensure_aux_width(ncomp); }
+
+void System::set_magnetic_field(const std::vector<double>& bz) {
+  const int n = p_->cfg.n;
+  if (static_cast<int>(bz.size()) != n * n)
+    throw std::runtime_error("System::set_magnetic_field : taille != n*n");
+  p_->bz_field_.assign(bz.begin(), bz.end());
+  p_->apply_bz();  // applique tout de suite si un bloc lit deja B_z ; sinon conserve pour ensure_aux_width
 }
 
 void System::add_ionization(const std::string& electron, const std::string& ion,

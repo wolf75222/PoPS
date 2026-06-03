@@ -85,6 +85,12 @@ add_executable(test_compiled_model_parity test_compiled_model_parity.cpp
 target_link_libraries(test_compiled_model_parity PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_compiled_model_parity COMMAND test_compiled_model_parity)
 
+# --- runtime System : B_z partage cable de bout en bout (ensure_aux_width + set_magnetic_field) ---
+add_executable(test_aux_runtime_bz test_aux_runtime_bz.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
+target_link_libraries(test_aux_runtime_bz PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_aux_runtime_bz COMMAND test_aux_runtime_bz)
+
 # --- descripteur de variables : roles physiques (index_of(role)) ---
 adc_add_test(test_variable_role)
 

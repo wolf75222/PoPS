@@ -125,6 +125,19 @@ class System {
   /// erreur. Prevaut sur la permittivite constante de set_poisson. A appeler avant solve_fields.
   void set_epsilon_field(const std::vector<double>& eps);
 
+  /// Fixe un champ magnetique hors-plan B_z(x, y) PARTAGE par les blocs, n*n row-major. Peuple la
+  /// composante aux supplementaire (canal B_z) lue par les modeles qui la declarent (n_aux > 3) ;
+  /// inerte si aucun bloc ne lit B_z (canal aux reste a la largeur de base). B_z est statique
+  /// (externe a l'elliptique) : derive_aux ne le touche pas. A appeler apres avoir ajoute le bloc
+  /// (ou avant : la valeur est conservee et appliquee quand le canal aux s'elargit).
+  void set_magnetic_field(const std::vector<double>& bz);
+
+  /// Garantit que le canal aux PARTAGE a au moins @p ncomp composantes. Appele par
+  /// add_compiled_model (cf. dsl_block.hpp) avec aux_comps<Model> a l'ajout d'un bloc qui lit des
+  /// champs auxiliaires supplementaires. Reallouer preserve l'ADRESSE de l'aux du System (les
+  /// fermetures de bloc deja installees pointent &aux), et re-applique B_z s'il a ete fourni.
+  void ensure_aux_width(int ncomp);
+
   /// Fixe la densite d'une espece (composante 0), tableau n*n row-major. Les autres
   /// composantes (qte de mouvement, energie) sont posees a l'equilibre au repos.
   void set_density(const std::string& name, const std::vector<double>& rho);

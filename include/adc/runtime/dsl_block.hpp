@@ -1,5 +1,6 @@
 #pragma once
 
+#include <adc/core/physical_model.hpp>  // aux_comps<Model> : largeur aux demandee par le modele
 #include <adc/runtime/block_builder.hpp>
 #include <adc/runtime/system.hpp>
 
@@ -38,6 +39,10 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
                         int substeps = 1, bool evolve = true) {
   const bool imex = (time == "imex");
   const bool recon_prim = (recon == "primitive");
+  // Le bloc peut lire des champs auxiliaires supplementaires (aux_comps<Model> > 3, p.ex. B_z d'une
+  // source magnetisee) : on elargit le canal aux PARTAGE du System AVANT de capturer son adresse,
+  // pour que la fermeture lise un aux assez large. Modele de base (3) -> no-op, inchange.
+  sys.ensure_aux_width(aux_comps<Model>());
   const GridContext ctx = sys.grid_context();
   BlockClosures clo = make_block(model, limiter, riemann, ctx, imex, recon_prim);
   std::function<Real(const MultiFab&)> ms = make_max_speed(model, ctx);
