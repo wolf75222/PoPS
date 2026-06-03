@@ -3,6 +3,8 @@
 #include <adc/core/state.hpp>
 #include <adc/core/types.hpp>
 
+#include <cmath>  // std::sqrt (RoeFlux : moyenne de Roe) ; libstdc++ ne le tire pas transitivement
+
 // Flux numerique a une interface, exprime en POLITIQUE (template), au meme titre
 // que le limiteur de reconstruction. assemble_rhs<Limiter, NumericalFlux> choisit
 // les deux independamment, au lieu d'appeler en dur rusanov_flux.
