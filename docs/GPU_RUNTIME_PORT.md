@@ -4,8 +4,22 @@ Le DSL et le coeur de calcul sont verifies jusqu'au GPU GH200 (flux, brique gene
 via le seam Kokkos `for_each_cell` ; cf. docs/GPU_ROMEO.md). Ce qui reste pour une PRODUCTION GPU de
 bout en bout, c'est porter la PILE RUNTIME entiere (System / MultiFab / Poisson / AMR / MPI) sur device.
 ETAT (juin 2026) : le solveur MONO-GRILLE complet (transport + BCs + couplages + Poisson + pas
-de temps, orchestre par le System) tourne sur GH200, verifie == CPU (phases 1-5 et 7). Reste la phase 6
-(MPI CUDA-aware, multi-GPU) et des optimisations perf. Ce document decoupe le chantier en phases.
+de temps, orchestre par le System) tourne sur GH200, verifie == CPU (phases 1-5, 7) ; le backend AOT
+d'un modele genere par le DSL tourne sur device (phase 8) ; et l'echange de halos MULTI-GPU est valide
+(phase 6, np=1/2/4 bit-identiques). Reste surtout des optimisations perf. Ce document decoupe en phases.
+
+## Modele d'execution : MPI + Kokkos (PAS de CUDA ecrit a la main)
+
+L'architecture est **MPI + Kokkos**, pas "trois couches Kokkos+CUDA+MPI". MPI distribue les
+sous-domaines entre rangs (un GPU par rang) ; Kokkos parallelise le calcul LOCAL et abstrait le
+materiel via son ExecutionSpace : backend **Cuda** pour GPU NVIDIA, **Serial/OpenMP** pour CPU. Le MEME
+code source (`for_each_cell`, `assemble_rhs`, les briques) cible donc CPU et GPU selon le backend choisi
+A LA COMPILATION ; on n'ecrit AUCUN kernel CUDA a la main. Dans les sorties ci-dessous, `exec=Cuda` est
+simplement le backend Kokkos actif ; les memes .cpp passent en `exec=Serial`/`OpenMP` sur CPU (c'est ce
+que verifie la CI MPI cote hote). `nvcc_wrapper` n'est que le compilateur exige par le backend Cuda de
+Kokkos. SEULE dependance CUDA brute restante : l'allocateur unifie (`cudaMallocManaged` dans
+`core/allocator.hpp`, sous `__CUDACC__`) et la macro `ADC_HD` (= `__host__ __device__`) ; tous deux
+remplacables par du Kokkos pur (`Kokkos::SharedSpace`, `KOKKOS_FUNCTION`) si l'on veut zero CUDA.
 
 ## Atout de conception : le seam ne change pas les sites d'appel
 
@@ -62,8 +76,13 @@ pas une reecriture des noyaux de calcul.
    hote (correct, infrequent ; nvcc ne la compile pas, ce qui est normal -- ce n'est pas un kernel).
    Les registres de flux gardent des boucles hote (corrects via memoire unifiee ; full-device reflux =
    perf follow-up). python/tests/gpu/{amr_CMakeLists.txt, romeo_amr_build.sh}.
-6. **MPI CUDA-aware.** Echange de halos device-to-device (GPUDirect), `fill_boundary` distribue sans
-   detour par l'hote ; FFT distribuee device. Effort : eleve.
+6. **MPI multi-GPU (backend Kokkos Cuda + OpenMPI CUDA-aware).** ✅ FAIT (verifie GH200). `fill_boundary`
+   distribue (echange de halos cross-rang) tourne sur 1/2/4 GH200, un GPU par rang, avec OpenMPI
+   `+cuda` (UCX). Le MEME `mpi6_fillboundary.cpp` (= `tests/test_mpi_fillboundary.cpp` + init Kokkos +
+   `device_fence` avant lecture hote) donne `gfails=0` en np=1/2/4 (`exec=Cuda`) : ghosts distants
+   bit-identiques a la valeur periodique attendue, donc transfert device-to-device correct. La memoire
+   unifiee + le `device_fence` suffisent ; aucune modif de `fill_boundary`. `python/tests/gpu/mpi6_fillboundary.cpp`.
+   RESTE (perf) : halos device sans rebond hote (GPUDirect direct), FFT distribuee device.
 7. **Validation bout-en-bout via le System.** ✅ FAIT (verifie GH200) -- sans modif de code.
    `system.cpp` ENTIER (dispatch des modeles, transport HLLC, source de gravite, solve Poisson a CHAQUE
    pas, pas de temps CFL) compile sous nvcc, et le cas `euler_poisson` complet tourne sur GH200 : `max|phi|`
