@@ -14,9 +14,21 @@
 #include <cstdio>
 #include <vector>
 
+#if defined(ADC_HAS_KOKKOS)
+#include <Kokkos_Core.hpp>
+#endif
+
 using namespace adc;
 
-int main() {
+int main(int argc, char** argv) {
+#if defined(ADC_HAS_KOKKOS)
+  // Sous Kokkos, l'allocateur unifie (kokkos_malloc<SharedSpace>) exige Kokkos initialise AVANT la
+  // 1ere allocation (le ctor de System alloue l'aux) : ScopeGuard (RAII) avant toute construction.
+  Kokkos::ScopeGuard guard(argc, argv);
+#else
+  (void)argc;
+  (void)argv;
+#endif
   const int n = 48;
   const double L = 1.0;
   std::vector<double> rho(static_cast<std::size_t>(n) * n);
