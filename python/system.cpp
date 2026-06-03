@@ -158,6 +158,7 @@ struct System::Impl {
   MultiFab aux;
   int aux_ncomp_ = kAuxBaseComps;     // largeur du canal aux PARTAGE (max des blocs ; >= 3)
   std::vector<Real> bz_field_;        // champ B_z(x) n*n row-major (vide si non fourni)
+  int te_src_ = -1;                   // indice du bloc fluide source de T_e (-1 = aucune)
   std::vector<Species> sp;
   double t = 0;
   std::vector<std::function<void(Real)>> couplings;  // sources couplees inter-especes (splitting)
@@ -191,6 +192,7 @@ struct System::Impl {
     aux_ncomp_ = ncomp;
     aux = MultiFab(ba, dm, aux_ncomp_, 1);
     apply_bz();
+    apply_te();
   }
 
   // Peuple la composante B_z (indice kAuxBaseComps) du canal partage depuis bz_field_, sur les
@@ -204,6 +206,28 @@ struct System::Impl {
     for (int j = v.lo[1]; j <= v.hi[1]; ++j)
       for (int i = v.lo[0]; i <= v.hi[0]; ++i)
         a(i, j, kAuxBaseComps) = bz_field_[static_cast<std::size_t>(j) * n + i];
+  }
+
+  // Composante canonique de T_e (apres phi/grad/B_z) ; cf. adc::Aux et AUX_CANONICAL cote DSL.
+  static constexpr int kTeComp = kAuxBaseComps + 1;  // = 4
+
+  // Peuple la composante T_e (temperature electronique) = p/rho du bloc fluide source te_src_.
+  // RECALCULEE a chaque solve_fields (T_e varie avec le fluide, contrairement a B_z statique).
+  // No-op si aucune source ou si aucun bloc ne lit T_e (largeur insuffisante). Le bloc source est
+  // compressible (4 var) ; p = (gamma-1)(E - 0.5 rho|v|^2), T = p/rho.
+  void apply_te() {
+    if (te_src_ < 0 || aux_ncomp_ <= kTeComp) return;
+    const Species& s = sp[static_cast<std::size_t>(te_src_)];
+    const Real gm1 = Real(s.gamma) - Real(1);
+    const ConstArray4 us = s.U.fab(0).const_array();
+    Array4 a = aux.fab(0).array();
+    const Box2D v = aux.box(0);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+        const Real rho = us(i, j, 0), mx = us(i, j, 1), my = us(i, j, 2), E = us(i, j, 3);
+        const Real p = gm1 * (E - Real(0.5) * (mx * mx + my * my) / rho);
+        a(i, j, kTeComp) = p / rho;  // T = p / rho
+      }
   }
 
   static BCRec make_bc(const SystemConfig& c) {
@@ -344,6 +368,7 @@ struct System::Impl {
         a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
         a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
       }
+    apply_te();  // T_e = p/rho du bloc fluide source, recalculee a chaque solve (B_z, comp 3, preservee)
     if (periodic_)
       fill_boundary(aux, dom, per_);
     else
@@ -690,6 +715,17 @@ void System::set_magnetic_field(const std::vector<double>& bz) {
     throw std::runtime_error("System::set_magnetic_field : taille != n*n");
   p_->bz_field_.assign(bz.begin(), bz.end());
   p_->apply_bz();  // applique tout de suite si un bloc lit deja B_z ; sinon conserve pour ensure_aux_width
+}
+
+void System::set_electron_temperature_from(const std::string& name) {
+  const int idx = p_->index(name);  // leve si bloc inconnu
+  if (p_->sp[static_cast<std::size_t>(idx)].ncomp != 4)
+    throw std::runtime_error("System::set_electron_temperature_from : le bloc '" + name +
+                             "' doit etre compressible (4 var : rho, rho u, rho v, E) pour T = p/rho");
+  p_->te_src_ = idx;
+  // T_e (comp canonique 4) DERIVE : recalcule a chaque solve_fields. Inerte tant qu'aucun bloc ne
+  // lit T_e (n_aux=5 -> ensure_aux_width(5)), comme set_magnetic_field pour B_z.
+  p_->apply_te();
 }
 
 void System::add_ionization(const std::string& electron, const std::string& ion,

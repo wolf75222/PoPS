@@ -46,7 +46,7 @@ def main():
 
     # (4) validation : un nom aux inconnu est rejete (doit etre une composante de adc::Aux).
     try:
-        dsl.aux_n_aux(["T_e"])  # pas encore dans la disposition canonique
+        dsl.aux_n_aux(["n_e"])  # nom absent de la disposition canonique
         raise AssertionError("aux_n_aux aurait du lever ValueError sur un nom inconnu")
     except ValueError:
         pass

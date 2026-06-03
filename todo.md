@@ -24,9 +24,9 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
 - [ ] **Inc. 8 — chemin AOT compile** `add_compiled_block` : l'ABI `compiled_block_abi.hpp`
       (`adc_compiled_*`) marshale encore 3 composantes en dur -> B_z absent par ce chemin.
       Symetrique de l'inc. 7 cote ABI `extern "C"`.
-- [ ] **T_e — 2e champ extra DERIVE** : T = p/rho calculee par le `System` depuis un bloc fluide
-      designe a chaque solve (comp 4, populate cote System, pas user-fourni comme B_z). Valide la
-      generalisation a 2 champs aux.
+- [x] **T_e — 2e champ extra DERIVE** : T = p/rho calculee par le `System` depuis un bloc fluide
+      designe a chaque solve (comp 4, `set_electron_temperature_from`, recalcule dans `solve_fields`,
+      pas user-fourni comme B_z). Valide la generalisation a 2 champs aux. (#35)
 - [ ] **AMR / implicite** : `advance_amr` et le stepper implicite gardent `load_aux` defaut (3) ;
       etendre a la largeur du modele pour un B_z sur AMR (bit-identique aujourd'hui).
 

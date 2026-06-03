@@ -106,6 +106,8 @@ PYBIND11_MODULE(_adc, m) {
              s.set_magnetic_field(flat(arr));
            },
            py::arg("bz"))
+      .def("set_electron_temperature_from", &System::set_electron_temperature_from,
+           py::arg("name"))
       .def("set_density",
            [](System& s, const std::string& name,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {

@@ -132,6 +132,13 @@ class System {
   /// (ou avant : la valeur est conservee et appliquee quand le canal aux s'elargit).
   void set_magnetic_field(const std::vector<double>& bz);
 
+  /// Designe un bloc fluide COMPRESSIBLE (4 var) comme source de la temperature electronique T_e :
+  /// le canal aux T_e (composante canonique suivante) est rempli a T = p/rho de ce bloc, RECALCULE
+  /// a chaque solve_fields. N'a d'effet que si un bloc declare lire T_e (n_aux > 4) ; sinon stocke
+  /// et inerte. C'est le second champ aux SUPPLEMENTAIRE (apres B_z), peuple par DERIVATION d'un
+  /// bloc (et non fourni par l'utilisateur comme B_z).
+  void set_electron_temperature_from(const std::string& name);
+
   /// Garantit que le canal aux PARTAGE a au moins @p ncomp composantes. Appele par
   /// add_compiled_model (cf. dsl_block.hpp) avec aux_comps<Model> a l'ajout d'un bloc qui lit des
   /// champs auxiliaires supplementaires. Reallouer preserve l'ADRESSE de l'aux du System (les

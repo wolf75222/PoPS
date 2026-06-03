@@ -54,15 +54,16 @@ ADC_HD StateVec<N> operator*(Real s, StateVec<N> a) {
 // premieres composantes sont le contrat de BASE, identique a l'historique :
 //   [0] = phi, [1] = grad_x, [2] = grad_y.
 // Les suivantes sont des champs auxiliaires SUPPLEMENTAIRES, optionnels, dans un ordre
-// canonique fixe ([3] = B_z, ...). Un modele declare combien de composantes il lit via
-// un membre statique n_aux (defaut kAuxBaseComps = 3) ; un modele sans n_aux ne lit
-// jamais les champs extra et reste strictement bit-identique. Les champs extra valent 0
-// par defaut : load_aux ne les ecrase que si le modele les demande.
+// canonique fixe ([3] = B_z, [4] = T_e, ...). Un modele declare combien de composantes il lit
+// via un membre statique n_aux (defaut kAuxBaseComps = 3) ; un modele sans n_aux ne lit jamais
+// les champs extra et reste strictement bit-identique. Les champs extra valent 0 par defaut :
+// load_aux ne les ecrase que si le modele les demande.
 struct Aux {
   Real phi{};     // potentiel       (composante aux 0)
   Real grad_x{};  // d phi / d x     (composante aux 1)
   Real grad_y{};  // d phi / d y     (composante aux 2)
   Real B_z{};     // champ B hors-plan, fourni par le systeme (composante aux 3, optionnel)
+  Real T_e{};     // temperature electronique, derivee p/rho d'un bloc fluide (composante aux 4)
 };
 
 // Largeur du canal aux du contrat de base (phi, grad phi). Un modele lisant des champs

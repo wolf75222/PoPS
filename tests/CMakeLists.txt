@@ -91,6 +91,12 @@ add_executable(test_aux_runtime_bz test_aux_runtime_bz.cpp
 target_link_libraries(test_aux_runtime_bz PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_aux_runtime_bz COMMAND test_aux_runtime_bz)
 
+# --- runtime System : T_e DERIVE d'un bloc fluide (set_electron_temperature_from, 2e champ aux) ---
+add_executable(test_aux_te test_aux_te.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
+target_link_libraries(test_aux_te PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_aux_te COMMAND test_aux_te)
+
 # --- descripteur de variables : roles physiques (index_of(role)) ---
 adc_add_test(test_variable_role)
 

@@ -26,7 +26,7 @@ import numpy as np
 # (cf. adc::Aux / kAuxBaseComps cote C++). phi/grad_x/grad_y = contrat de BASE (3 composantes) ;
 # les suivants (B_z, ...) ELARGISSENT le canal -> la brique generee declare alors n_aux pour que
 # le systeme dimensionne et peuple le canal partage (cf. CompositeModel::n_aux, ensure_aux_width).
-AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3}
+AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4}
 AUX_BASE_COMPS = 3
 
 

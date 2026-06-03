@@ -98,6 +98,7 @@ template <int NComp = kAuxBaseComps>
 ADC_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
   Aux x{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
   if constexpr (NComp > 3) x.B_z = a(i, j, 3);
+  if constexpr (NComp > 4) x.T_e = a(i, j, 4);  // champ extra suivant (composante canonique 4)
   return x;
 }
 
