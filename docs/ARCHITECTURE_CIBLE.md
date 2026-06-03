@@ -51,6 +51,18 @@ solver/
   python/  bindings.cpp
 ```
 
+### Etat de l'arborescence REELLE (juin 2026)
+
+L'arbre `include/adc/` a ete reorganise vers cette cible (prefixe `<adc/...>` conserve) :
+`core/`, `physics/` (euler + hyperbolic / source / elliptic / composite, cf. scission de `bricks.hpp`),
+`numerics/` (flux + spatial_operator + `time/` + `elliptic/`), `mesh/`, `amr/`, `runtime/`,
+`coupling/`, `parallel/`. Les categories de briques sont desormais des fichiers separes
+(`physics/{hyperbolic,source,elliptic,composite}.hpp`), `physics/bricks.hpp` restant un umbrella de
+compat. Restent flat (pas de sous-dossiers fins `numerics/{flux,space,reconstruction}`) faute de
+correspondance 1:1 fichier<->concept ; `physical_model.hpp` (concepts) et `variables.hpp` restent dans
+`core/` (contrats fondamentaux). Renommages : `Variables`->`VariableSet`, `HyperbolicModel`->
+`HyperbolicPhysicalModel` (alias de compat conserves).
+
 ---
 
 ## 2. Couches OO (et etat actuel)
