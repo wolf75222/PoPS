@@ -158,7 +158,7 @@ struct BackwardEulerSourceKernel {
   int it;
   ADC_HD void operator()(int i, int j) const {
     const typename Model::State Un = load_state<Model>(uc, i, j);
-    const Aux a = load_aux(ax, i, j);
+    const Aux a = load_aux<aux_comps<Model>()>(ax, i, j);
     const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, it);
     for (int c = 0; c < Model::n_vars; ++c) u(i, j, c) = W[c];
   }

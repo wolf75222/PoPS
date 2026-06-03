@@ -121,7 +121,8 @@ class AmrCouplerMP {
                bool replicated_coarse = true)
       : model_(model), geom_(geom),
         mg_(geom, ba_coarse, bc, std::move(active), replicated_coarse),
-        stack_(geom.domain, std::move(levels)), replicated_coarse_(replicated_coarse) {}
+        stack_(geom.domain, std::move(levels), aux_comps<Model>()),
+        replicated_coarse_(replicated_coarse) {}
 
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }
   MultiFab& coarse() { return stack_.coarse(); }
@@ -183,7 +184,8 @@ class AmrCouplerMP {
   // margin = nesting. Le coupleur ne fait qu'ordonner l'appel.
   template <class Crit>
   void regrid(Crit crit, int grow = 2, int margin = 2) {
-    amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin);
+    amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin,
+                      aux_comps<Model>());
   }
 
   // masse grossiere via le diagnostic partage amr_mass_mb (mono-box replique comme
@@ -220,7 +222,7 @@ class AmrCouplerMP {
       for (int j = b.lo[1]; j <= b.hi[1]; ++j)
         for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
           const auto us = load_state<Model>(u, i, j);
-          const Aux ax = load_aux(a, i, j);
+          const Aux ax = load_aux<aux_comps<Model>()>(a, i, j);
           w = std::max(w, std::max(model_.max_wave_speed(us, ax, 0),
                                    model_.max_wave_speed(us, ax, 1)));
         }

@@ -39,8 +39,8 @@ void compute_fluxes_1c(const Model& m, const Fab2D& U, const Fab2D& aux,
       typename Model::State UL{}, UR{};
       UL[0] = u(i - 1, j);
       UR[0] = u(i, j);
-      F(i, j) = rusanov_flux(m, UL, load_aux(ax, i - 1, j), UR,
-                             load_aux(ax, i, j), 0)[0];
+      F(i, j) = rusanov_flux(m, UL, load_aux<aux_comps<Model>()>(ax, i - 1, j), UR,
+                             load_aux<aux_comps<Model>()>(ax, i, j), 0)[0];
     });
   }
   {
@@ -49,8 +49,8 @@ void compute_fluxes_1c(const Model& m, const Fab2D& U, const Fab2D& aux,
       typename Model::State UL{}, UR{};
       UL[0] = u(i, j - 1);
       UR[0] = u(i, j);
-      F(i, j) = rusanov_flux(m, UL, load_aux(ax, i, j - 1), UR,
-                             load_aux(ax, i, j), 1)[0];
+      F(i, j) = rusanov_flux(m, UL, load_aux<aux_comps<Model>()>(ax, i, j - 1), UR,
+                             load_aux<aux_comps<Model>()>(ax, i, j), 1)[0];
     });
   }
 }

@@ -51,7 +51,8 @@ inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Re
     const ConstArray4 uc = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
     for_each_cell(U.box(li), [=] ADC_HD(int i, int j) {
-      const auto S = m.source(load_state<Model>(uc, i, j), load_aux(ax, i, j));
+      const auto S = m.source(load_state<Model>(uc, i, j),
+                              load_aux<aux_comps<Model>()>(ax, i, j));
       for (int c = 0; c < Model::n_vars; ++c) u(i, j, c) += dt * S[c];
     });
   }

@@ -118,12 +118,16 @@ class AmrSystemCoupler {
               "AmrSystemCoupler : grilles par niveau incoherentes entre blocs "
               "(aux partage exige la meme BoxArray par niveau)");
     }
-    // aux PARTAGE : un MultiFab (phi, grad phi) par niveau, sur la grille commune.
-    // Dimensionne une seule fois -> adresses stables pour les pointeurs aux des blocs.
+    // aux PARTAGE : un MultiFab (phi, grad phi [, B_z, ...]) par niveau, sur la grille commune.
+    // Dimensionne une seule fois -> adresses stables pour les pointeurs aux des blocs. Largeur =
+    // max des aux_comps<Model> sur les blocs (au moins 3) : un bloc lisant B_z (n_aux > 3) dispose
+    // de la place a CHAQUE niveau, un bloc de base ignore les composantes extra. Sans bloc a champ
+    // extra -> largeur 3 -> allocation strictement bit-identique a l'historique.
+    aux_ncomp_ = system_aux_comps(system_);
     aux_.resize(nlev_);
     for (int k = 0; k < nlev_; ++k)
       aux_[k] = MultiFab(block_levels_[0][k].U.box_array(),
-                         block_levels_[0][k].U.dmap(), 3, 1);
+                         block_levels_[0][k].U.dmap(), aux_ncomp_, 1);
     for (auto& levels : block_levels_)
       for (int k = 0; k < nlev_; ++k) levels[k].aux = &aux_[k];
 
@@ -140,6 +144,11 @@ class AmrSystemCoupler {
   MultiFab& phi() { return mg_.phi(); }
   int nlev() const { return nlev_; }
   const MultiFab& aux(int k) const { return aux_[k]; }
+  // Acces ECRITURE au canal aux partage du niveau k (parite avec SystemAssembler::aux()) :
+  // permet de peupler une composante extra (B_z, ...) que field_postprocess ne touche pas
+  // (il n'ecrit que phi/grad, comp 0..2). La largeur est aux_ncomp_ (max aux_comps des blocs).
+  MultiFab& aux(int k) { return aux_[k]; }
+  int aux_ncomp() const { return aux_ncomp_; }
   std::vector<AmrLevelMP>& levels(std::size_t b) { return block_levels_[b]; }
   MultiFab& coarse(std::size_t b) { return block_levels_[b][0].U; }
   const MultiFab& coarse(std::size_t b) const { return block_levels_[b][0].U; }
@@ -264,6 +273,21 @@ class AmrSystemCoupler {
  private:
   System system_;
   RhsAssembler rhs_assembler_;
+  // Largeur du canal aux PARTAGE : maximum des aux_comps<Model> sur tous les blocs (au moins
+  // kAuxBaseComps). Le canal partage par niveau doit etre au moins aussi large que le bloc le
+  // plus exigeant pour que load_aux<aux_comps<Model>> n'y lise jamais hors borne dans les chemins
+  // AMR (compute_face_fluxes, mf_apply_source, ...) ; un bloc moins exigeant ignore simplement les
+  // composantes extra. Calque exact de SystemAssembler::system_aux_comps (chemin non-AMR). Sans
+  // bloc a champ extra, la largeur reste 3 -> allocation strictement bit-identique a l'historique.
+  static int system_aux_comps(const System& sys) {
+    int w = kAuxBaseComps;
+    sys.for_each_block([&](const auto& b) {
+      using Model = std::decay_t<decltype(b.model)>;
+      const int c = aux_comps<Model>();
+      if (c > w) w = c;
+    });
+    return w;
+  }
   static BCRec derive_aux_bc(const BCRec& b) {
     auto t = [](BCType x) {
       return x == BCType::Periodic ? BCType::Periodic : BCType::Foextrap;
@@ -285,6 +309,7 @@ class AmrSystemCoupler {
   Elliptic mg_;
   std::vector<std::vector<AmrLevelMP>> block_levels_;  // [bloc][niveau]
   std::vector<MultiFab> aux_;                          // [niveau], partage
+  int aux_ncomp_ = kAuxBaseComps;  // largeur du canal aux partage (max aux_comps sur les blocs)
   int nlev_ = 0;
 };
 

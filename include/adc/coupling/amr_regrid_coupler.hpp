@@ -33,9 +33,16 @@ namespace adc {
 // applique au parent. Reconstruit les patchs (report des donnees fines la ou
 // possible, sinon interpolation depuis le parent) + l'aux associe. margin =
 // nesting. No-op si moins de 2 niveaux ou si aucun patch ne sort du clustering.
+//
+// aux_ncomp : largeur du canal aux reconstruit (defaut kAuxBaseComps = 3). Le coupleur,
+// qui connait le Model, propage aux_comps<Model>() pour qu'un modele lisant des champs
+// extra (B_z, ...) garde la place apres regrid. Le Model n'etant pas a portee ici (free
+// function sur le seul critere), la largeur est PROPAGEE en parametre ; defaut 3 ->
+// allocation MultiFab(..., 3, 1) strictement bit-identique a l'historique.
 template <class Crit>
 void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux,
-                       const Box2D& dom, Crit crit, int grow, int margin) {
+                       const Box2D& dom, Crit crit, int grow, int margin,
+                       int aux_ncomp = kAuxBaseComps) {
   const int nlev = static_cast<int>(L.size());
   if (nlev < 2) return;
   const int fk = nlev - 1, pk = fk - 1;  // fin et son parent
@@ -80,7 +87,7 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux,
     }
   }
   L[fk].U = std::move(nU);
-  aux[fk] = MultiFab(L[fk].U.box_array(), L[fk].U.dmap(), 3, 1);  // adresse stable
+  aux[fk] = MultiFab(L[fk].U.box_array(), L[fk].U.dmap(), aux_ncomp, 1);  // adresse stable
   L[fk].aux = &aux[fk];
 }
 

@@ -66,7 +66,7 @@ class AmrCoupler {
       : model_(model),
         geom_(geom),
         mg_(geom, ba_coarse, bc),
-        stack_(geom.domain, std::move(levels)) {}
+        stack_(geom.domain, std::move(levels), aux_comps<Model>()) {}
 
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }
   const std::vector<AmrLevelMP>& levels() const { return stack_.levels(); }

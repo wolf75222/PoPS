@@ -1,5 +1,6 @@
 #pragma once
 
+#include <adc/core/state.hpp>  // kAuxBaseComps : largeur aux par defaut (canal de base phi/grad)
 #include <adc/core/types.hpp>
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/multifab.hpp>
@@ -20,18 +21,25 @@
 // Invariant d'adresses : aux_ est dimensionne UNE seule fois au ctor puis jamais
 // redimensionne (les pointeurs L_[k].aux pointent dans aux_). reattach_aux(k)
 // remplace l'element aux_[k] en place (pas de resize) et recable L_[k].aux.
+//
+// Largeur du canal aux : aux_ncomp (defaut kAuxBaseComps = 3, le contrat de base phi/grad).
+// Le coupleur, qui connait le Model, passe aux_comps<Model>() pour qu'un modele lisant des
+// champs extra (B_z, ... ; n_aux > 3) dispose de la place. Le Model n'etant pas a portee ici
+// (le stack est generique sur Level), la largeur est PROPAGEE en parametre. Defaut 3 ->
+// allocation MultiFab(..., 3, 1) strictement bit-identique a l'historique.
 
 namespace adc {
 
 template <class Level>
 class AmrLevelStack {
  public:
-  AmrLevelStack(const Box2D& dom, std::vector<Level> levels)
-      : dom_(dom), L_(std::move(levels)) {
+  AmrLevelStack(const Box2D& dom, std::vector<Level> levels,
+                int aux_ncomp = kAuxBaseComps)
+      : dom_(dom), L_(std::move(levels)), aux_ncomp_(aux_ncomp) {
     nlev_ = static_cast<int>(L_.size());
     aux_.resize(nlev_);  // addresses stables : aux_ n'est plus redimensionne
     for (int k = 0; k < nlev_; ++k) {
-      aux_[k] = MultiFab(L_[k].U.box_array(), L_[k].U.dmap(), 3, 1);
+      aux_[k] = MultiFab(L_[k].U.box_array(), L_[k].U.dmap(), aux_ncomp_, 1);
       L_[k].aux = &aux_[k];
     }
   }
@@ -48,10 +56,14 @@ class AmrLevelStack {
   MultiFab& aux(int k) { return aux_[k]; }
   const MultiFab& aux(int k) const { return aux_[k]; }
 
+  // Largeur du canal aux (composantes), telle que dimensionnee au ctor.
+  int aux_ncomp() const { return aux_ncomp_; }
+
   // realloc en place de aux_[k] sur la box courante de L_[k].U + recablage du
-  // pointeur. Bit-identique au bloc inline d'origine (meme MultiFab(...,3,1)).
+  // pointeur. Conserve la largeur du canal aux (aux_ncomp_) ; defaut 3 -> bit-identique
+  // au bloc inline d'origine (meme MultiFab(..., 3, 1)).
   void reattach_aux(int k) {
-    aux_[k] = MultiFab(L_[k].U.box_array(), L_[k].U.dmap(), 3, 1);
+    aux_[k] = MultiFab(L_[k].U.box_array(), L_[k].U.dmap(), aux_ncomp_, 1);
     L_[k].aux = &aux_[k];
   }
 
@@ -60,6 +72,7 @@ class AmrLevelStack {
   std::vector<Level> L_;
   std::vector<MultiFab> aux_;
   int nlev_ = 0;
+  int aux_ncomp_ = kAuxBaseComps;  // largeur du canal aux (defaut : contrat de base)
 };
 
 }  // namespace adc
