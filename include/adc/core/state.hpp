@@ -49,10 +49,24 @@ ADC_HD StateVec<N> operator*(Real s, StateVec<N> a) {
 // vitesse E x B vient de grad phi) et la source (fluide compressible
 // auto-gravitant : S = -rho grad phi). Cette dualite est ce qui permet a un seul
 // operateur spatial de servir les deux problemes cibles.
+//
+// Canal aux EXTENSIBLE (cf. aux_comps()/load_aux dans spatial_operator.hpp). Les trois
+// premieres composantes sont le contrat de BASE, identique a l'historique :
+//   [0] = phi, [1] = grad_x, [2] = grad_y.
+// Les suivantes sont des champs auxiliaires SUPPLEMENTAIRES, optionnels, dans un ordre
+// canonique fixe ([3] = B_z, ...). Un modele declare combien de composantes il lit via
+// un membre statique n_aux (defaut kAuxBaseComps = 3) ; un modele sans n_aux ne lit
+// jamais les champs extra et reste strictement bit-identique. Les champs extra valent 0
+// par defaut : load_aux ne les ecrase que si le modele les demande.
 struct Aux {
-  Real phi{};     // potentiel
-  Real grad_x{};  // d phi / d x
-  Real grad_y{};  // d phi / d y
+  Real phi{};     // potentiel       (composante aux 0)
+  Real grad_x{};  // d phi / d x     (composante aux 1)
+  Real grad_y{};  // d phi / d y     (composante aux 2)
+  Real B_z{};     // champ B hors-plan, fourni par le systeme (composante aux 3, optionnel)
 };
+
+// Largeur du canal aux du contrat de base (phi, grad phi). Un modele lisant des champs
+// supplementaires declare un n_aux plus grand ; cf. aux_comps()/load_aux().
+inline constexpr int kAuxBaseComps = 3;
 
 }  // namespace adc

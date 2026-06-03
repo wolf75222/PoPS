@@ -72,9 +72,15 @@ class Coupler {
  public:
   // active : predicat optionnel "interieur du conducteur" (paroi embedded pour
   // le solveur de Poisson). Vide => pas de paroi interne.
+  // bz : champ magnetique hors-plan B_z(x, y) FOURNI par l'utilisateur (constante ou
+  // champ). N'a d'effet que si le modele declare la composante aux B_z (aux_comps>3) ;
+  // peuple alors la composante aux 3 une fois pour toutes (B_z statique, externe a
+  // l'elliptique : derive_aux ne la touche pas). Vide => pas de B_z. Le canal aux est
+  // alloue a la largeur DU MODELE : un modele de base (3) reste bit-identique.
   Coupler(const Model& model, const Geometry& geom, const BoxArray& ba,
           const BCRec& bcU, const BCRec& bcPhi,
-          std::function<bool(Real, Real)> active = {})
+          std::function<bool(Real, Real)> active = {},
+          std::function<Real(Real, Real)> bz = {})
       : model_(model),
         geom_(geom),
         ba_(ba),
@@ -83,7 +89,10 @@ class Coupler {
         bcPhi_(bcPhi),
         aux_bc_(derive_aux_bc(bcPhi)),
         mg_(geom, ba, bcPhi, std::move(active)),
-        aux_(ba, dm_, 3, 1) {}
+        aux_(ba, dm_, aux_comps<Model>(), 1),
+        bz_(std::move(bz)) {
+    fill_bz();  // peuple la composante B_z (no-op si modele de base ou bz vide)
+  }
 
   // SSPRK2 couple. Trois axes orthogonaux, tous parametres de template :
   //   - Limiter      : reconstruction (NoSlope / Minmod / VanLeer ...)
@@ -196,6 +205,25 @@ class Coupler {
     fill_ghosts(aux_, geom_.domain, aux_bc_);
   }
 
+  // Peuple la composante aux B_z (indice kAuxBaseComps) sur les cellules valides depuis
+  // bz_(x, y), une seule fois (B_z statique). Garde compile-time : sans champ B_z dans le
+  // modele (aux_comps == 3) la composante n'existe pas -> aucun code, aucun acces hors borne.
+  // Les halos de B_z sont ensuite maintenus par derive_aux (Foextrap/periodique d'aux_bc_,
+  // cf. grad) ; field_postprocess n'ecrit que phi/grad (composantes 0..2), B_z est preserve.
+  void fill_bz() {
+    if constexpr (aux_comps<Model>() > kAuxBaseComps) {
+      if (!bz_) return;
+      for (int li = 0; li < aux_.local_size(); ++li) {
+        Fab2D& f = aux_.fab(li);
+        const Box2D v = aux_.box(li);
+        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+            f(i, j, kAuxBaseComps) = bz_(geom_.x_cell(i), geom_.y_cell(j));
+      }
+      fill_ghosts(aux_, geom_.domain, aux_bc_);  // halos de B_z avant le 1er solve
+    }
+  }
+
   Model model_;
   Geometry geom_;
   BoxArray ba_;
@@ -203,6 +231,7 @@ class Coupler {
   BCRec bcU_, bcPhi_, aux_bc_;
   Elliptic mg_;
   MultiFab aux_;
+  std::function<Real(Real, Real)> bz_;  // B_z(x, y) externe (vide si non fourni)
 };
 
 // Le backend elliptique du coupleur respecte le contrat commun : echanger

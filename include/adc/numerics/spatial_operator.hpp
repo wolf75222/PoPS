@@ -31,6 +31,19 @@
 
 namespace adc {
 
+// Largeur du canal aux qu'un modele CONSOMME : Model::n_aux s'il le declare (champs
+// auxiliaires supplementaires au-dela de phi/grad : B_z, ...), sinon kAuxBaseComps (= 3,
+// le contrat de base phi/grad_x/grad_y). Pilote le nombre de composantes que load_aux lit
+// et que le systeme doit allouer/peupler. Un modele sans n_aux -> 3 -> strictement
+// identique a l'historique (les champs extra de Aux restent a 0, jamais lus).
+template <class M>
+constexpr int aux_comps() {
+  if constexpr (requires { M::n_aux; })
+    return M::n_aux;
+  else
+    return kAuxBaseComps;
+}
+
 // Modele DIFFUSIF (optionnel) : fournit une diffusivite scalaire isotrope nu. Le
 // tuteur : "la diffusion, c'est comme un flux de plus". Le flux Fickien F = -nu grad U
 // ajoute au flux hyperbolique donne, apres divergence (-div F), exactement +nu Lap(U).
@@ -51,6 +64,7 @@ struct SourceFreeModel {
   using State = typename M::State;
   using Aux = typename M::Aux;
   static constexpr int n_vars = M::n_vars;
+  static constexpr int n_aux = aux_comps<M>();  // transparent a la largeur aux du modele enveloppe
   M m;
   ADC_HD State flux(const State& u, const Aux& a, int dir) const { return m.flux(u, a, dir); }
   ADC_HD Real max_wave_speed(const State& u, const Aux& a, int dir) const {
@@ -85,8 +99,16 @@ ADC_HD inline typename Model::State load_state(const ConstArray4& a, int i,
   return u;
 }
 
+// Charge l'auxiliaire de cellule depuis le canal aux. NComp = nombre de composantes lues
+// (cf. aux_comps<Model>()). Les trois premieres sont toujours phi/grad_x/grad_y ; les
+// suivantes, optionnelles, alimentent les champs extra de Aux dans l'ordre canonique.
+// NComp = kAuxBaseComps (defaut) reproduit a l'identique l'ancien comportement : les
+// champs extra restent a 0 et aucune composante au-dela de 2 n'est touchee.
+template <int NComp = kAuxBaseComps>
 ADC_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
-  return Aux{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
+  Aux x{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
+  if constexpr (NComp > 3) x.B_z = a(i, j, 3);
+  return x;
 }
 
 namespace detail {
@@ -101,7 +123,7 @@ struct MaxWaveSpeedKernel {
   ConstArray4 u, a;
   ADC_HD void operator()(int i, int j, Real& acc) const {
     const auto s = load_state<Model>(u, i, j);
-    const Aux ax = load_aux(a, i, j);
+    const Aux ax = load_aux<aux_comps<Model>()>(a, i, j);
     const Real wx = model.max_wave_speed(s, ax, 0);
     const Real wy = model.max_wave_speed(s, ax, 1);
     const Real w = wx > wy ? wx : wy;
@@ -251,7 +273,8 @@ struct FaceFluxXKernel {
   ADC_HD void operator()(int i, int j) const {
     const auto L = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
     const auto Rr = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
-    const auto F = nflux(model, L, load_aux(ax, i - 1, j), Rr, load_aux(ax, i, j), 0);
+    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
+                         load_aux<aux_comps<Model>()>(ax, i, j), 0);
     for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = F[c];
     if constexpr (DiffusiveModel<Model>) {
       const Real nu = model.diffusivity();
@@ -272,7 +295,8 @@ struct FaceFluxYKernel {
   ADC_HD void operator()(int i, int j) const {
     const auto L = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
     const auto Rr = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
-    const auto F = nflux(model, L, load_aux(ax, i, j - 1), Rr, load_aux(ax, i, j), 1);
+    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
+                         load_aux<aux_comps<Model>()>(ax, i, j), 1);
     for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = F[c];
     if constexpr (DiffusiveModel<Model>) {
       const Real nu = model.diffusivity();
@@ -320,11 +344,11 @@ struct AssembleRhsKernel {
   NumericalFlux nflux;
   bool recon_prim;
   ADC_HD void operator()(int i, int j) const {
-    const Aux Ac = load_aux(ax, i, j);
-    const Aux Axm = load_aux(ax, i - 1, j);
-    const Aux Axp = load_aux(ax, i + 1, j);
-    const Aux Aym = load_aux(ax, i, j - 1);
-    const Aux Ayp = load_aux(ax, i, j + 1);
+    const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
+    const Aux Axm = load_aux<aux_comps<Model>()>(ax, i - 1, j);
+    const Aux Axp = load_aux<aux_comps<Model>()>(ax, i + 1, j);
+    const Aux Aym = load_aux<aux_comps<Model>()>(ax, i, j - 1);
+    const Aux Ayp = load_aux<aux_comps<Model>()>(ax, i, j + 1);
 
     // faces x : reconstruction des etats de part et d'autre de chaque face
     const auto Lxm = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
