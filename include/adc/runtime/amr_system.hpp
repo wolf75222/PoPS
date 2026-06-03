@@ -1,7 +1,9 @@
 #pragma once
 
+#include <adc/mesh/physical_bc.hpp>  // BCRec
 #include <adc/runtime/model_spec.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,6 +28,34 @@ struct AmrSystemConfig {
   bool periodic = true;   ///< domaine periodique
 };
 
+/// Parametres figes passes au build differe du chemin compile (add_compiled_model). Materialises
+/// par AmrSystem au moment de ensure_built : la geometrie + les choix refine/poisson/density connus
+/// a ce moment-la. Le header amr_dsl_block les consomme pour instancier AmrCouplerMP<Model>.
+struct AmrBuildParams {
+  int n = 128;
+  double L = 1.0;
+  int regrid_every = 20;
+  double gamma = 1.4;
+  int substeps = 1;
+  bool recon_prim = false;            ///< recon == "primitive" (fige par add_compiled_model)
+  double refine_threshold = 1e30;     ///< 1e30 => aucun raffinement
+  BCRec poisson_bc;                   ///< CL Poisson grossier (resolue par set_poisson)
+  std::function<bool(Real, Real)> wall;  ///< predicat paroi conductrice (vide = aucune)
+  bool has_density = false;
+  std::vector<double> density;        ///< densite initiale grossiere (composante 0), n*n
+};
+
+/// Fermetures type-erased d'un bloc AMR compile, produites par amr_dsl_block::build_amr_compiled et
+/// installees par AmrSystem::install_compiled. Symetrique des hooks std::function de AmrSystem::Impl.
+struct AmrCompiledHooks {
+  std::shared_ptr<void> coupler_holder;   ///< maintient en vie le AmrCouplerMP<Model>
+  std::function<void(double)> step;       ///< un macro-pas (regrid periodique inclus)
+  std::function<double()> max_speed;      ///< vitesse d'onde max (pas CFL)
+  std::function<double()> mass;           ///< masse grossiere
+  std::function<int()> n_patches;         ///< nombre de patchs fins
+  std::function<std::vector<double>()> density;  ///< densite grossiere, n*n row-major
+};
+
 /// Bloc unique porte sur une hierarchie AMR, compose a l'execution.
 class AmrSystem {
  public:
@@ -48,6 +78,13 @@ class AmrSystem {
                  const std::string& riemann = "rusanov",
                  const std::string& recon = "conservative",
                  const std::string& time = "explicit", int substeps = 1);
+
+  /// Enregistre un bloc COMPILE (chemin add_compiled_model, header amr_dsl_block.hpp) : @p builder
+  /// est une fermeture type-erased qui, recevant les AmrBuildParams figes au build paresseux, rend
+  /// les AmrCompiledHooks d'un AmrCouplerMP<Model> concret. NE PAS appeler directement : passer par
+  /// la fonction libre add_compiled_model(AmrSystem&, ...). @throws si un bloc est deja defini.
+  void set_compiled_block(int ncomp, double gamma, int substeps,
+                          std::function<AmrCompiledHooks(const AmrBuildParams&)> builder);
 
   /// Raffine les cellules ou la densite (composante 0) depasse @p threshold.
   void set_refinement(double threshold);

@@ -88,6 +88,15 @@ add_executable(test_compiled_model_parity test_compiled_model_parity.cpp
 target_link_libraries(test_compiled_model_parity PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_compiled_model_parity COMMAND test_compiled_model_parity)
 
+# --- parite bloc compile AOT (add_compiled_model) == bloc natif (add_block) COTE AMR ---
+# Compile le runtime AmrSystem (python/amr_system.cpp) avec le test : add_compiled_model branche un
+# CompositeModel connu a la compilation sur la hierarchie AMR reelle (AmrCouplerMP + reflux + regrid),
+# comme add_block (sans dispatch ModelSpec). Densite grossiere et masse bit-identiques apres N pas.
+add_executable(test_amr_compiled_model test_amr_compiled_model.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_compiled_model PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_amr_compiled_model COMMAND test_amr_compiled_model)
+
 # --- runtime System : B_z partage cable de bout en bout (ensure_aux_width + set_magnetic_field) ---
 add_executable(test_aux_runtime_bz test_aux_runtime_bz.cpp
                ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)

@@ -50,6 +50,13 @@ struct AmrSystem::Impl {
   std::vector<double> pending_density;
   bool has_density = false;
 
+  // Chemin compile (add_compiled_model, header amr_dsl_block.hpp) : builder type-erase d'un
+  // AmrCouplerMP<Model> concret, invoque au build paresseux avec les AmrBuildParams figes. Exclusif
+  // de has_block (un seul bloc, comme le chemin ModelSpec).
+  bool has_compiled = false;
+  std::function<AmrCompiledHooks(const AmrBuildParams&)> compiled_builder;
+  std::shared_ptr<void> compiled_holder;  // maintient en vie le coupleur des hooks installes
+
   bool built = false;
   std::shared_ptr<void> coupler_holder;
   std::function<void(double)> step_fn;
@@ -232,6 +239,28 @@ struct AmrSystem::Impl {
 
   void ensure_built() {
     if (built) return;
+    if (has_compiled) {  // chemin compile : le builder fige les types (Model, Limiter, Flux)
+      AmrBuildParams bp;
+      bp.n = cfg.n;
+      bp.L = cfg.L;
+      bp.regrid_every = cfg.regrid_every;
+      bp.gamma = gamma;
+      bp.substeps = b_substeps;
+      bp.refine_threshold = refine_threshold;
+      bp.poisson_bc = poisson_bc();
+      bp.wall = wall_active();
+      bp.has_density = has_density;
+      bp.density = pending_density;
+      AmrCompiledHooks h = compiled_builder(bp);
+      compiled_holder = std::move(h.coupler_holder);
+      step_fn = std::move(h.step);
+      max_speed_fn = std::move(h.max_speed);
+      mass_fn = std::move(h.mass);
+      n_patches_fn = std::move(h.n_patches);
+      density_fn = std::move(h.density);
+      built = true;
+      return;
+    }
     if (!has_block) throw std::runtime_error("AmrSystem : appeler add_block d'abord");
     detail::dispatch_model(b_spec, [&](auto m) {
       using M = decltype(m);
@@ -251,7 +280,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           const std::string& limiter, const std::string& riemann,
                           const std::string& recon, const std::string& time, int substeps) {
   (void)name;
-  if (p_->has_block) throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
+  if (p_->has_block || p_->has_compiled)
+    throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
   if (time != "explicit")
     throw std::runtime_error("AmrSystem : seul time='explicit' est supporte sur AMR");
@@ -265,6 +295,17 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   p_->b_recon_prim = (recon == "primitive");
   p_->b_substeps = substeps;
   p_->has_block = true;
+}
+
+void AmrSystem::set_compiled_block(int ncomp, double gamma, int substeps,
+                                   std::function<AmrCompiledHooks(const AmrBuildParams&)> builder) {
+  if (p_->has_block || p_->has_compiled)
+    throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
+  p_->ncomp = ncomp;
+  p_->gamma = gamma;
+  p_->b_substeps = substeps;
+  p_->compiled_builder = std::move(builder);
+  p_->has_compiled = true;
 }
 
 void AmrSystem::set_refinement(double threshold) { p_->refine_threshold = threshold; }
