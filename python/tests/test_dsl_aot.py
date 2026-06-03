@@ -37,43 +37,51 @@ def main():
         U[3] = 1.0 / (GAMMA - 1.0)
         Uflat = U.reshape(-1).tolist()
 
-        # bloc AOT : chemin de production (minmod + rusanov + conservatif + SSPRK2)
-        aot = adc.System(n=n, L=L, periodic=True)
-        aot.add_compiled_block("gas", so, limiter="minmod", riemann="rusanov",
-                               recon="conservative", time="explicit",
-                               names=["rho", "rho_u", "rho_v", "E"])
-        aot.set_poisson(rhs="charge_density", solver="geometric_mg")
-        aot.set_state("gas", Uflat)
-        aot.solve_fields()
-        R_aot = np.array(aot.eval_rhs("gas")).reshape(4, n, n)
-        phi_aot = np.array(aot.potential()).reshape(n, n)
-
-        # bloc NATIF de reference : MEMES briques (euler_poisson) et MEME schema
         spec = adc.Model(state=adc.FluidState("compressible", gamma=GAMMA),
                          transport=adc.CompressibleFlux(),
                          source=adc.GravityForce(),
                          elliptic=adc.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
-        nat = adc.System(n=n, L=L, periodic=True)
-        nat.add_block("gas", spec, spatial=adc.Spatial(minmod=True, flux="rusanov",
-                                                       recon="conservative"), time=adc.Explicit())
-        nat.set_poisson(rhs="charge_density", solver="geometric_mg")
-        nat.set_state("gas", Uflat)
-        nat.solve_fields()
-        R_nat = np.array(nat.eval_rhs("gas")).reshape(4, n, n)
-        phi_nat = np.array(nat.potential()).reshape(n, n)
 
-        # (A) couplage elliptique identique (le second membre genere == GravityCoupling natif)
-        dphi = float(np.max(np.abs(phi_aot - phi_nat)))
-        assert dphi < 1e-9, "potentiel AOT != natif (ecart %.2e)" % dphi
-        print("OK  bloc AOT : Poisson identique au natif (ecart phi %.1e)" % dphi)
+        # Pour chaque schema (rusanov, puis HLLC qui exige pressure() + wave_speeds() generes), le
+        # bloc AOT doit etre IDENTIQUE au bloc NATIF add_block (memes briques, meme assemble_rhs).
+        def compare(limiter, riemann, recon):
+            aot = adc.System(n=n, L=L, periodic=True)
+            aot.add_compiled_block("gas", so, limiter=limiter, riemann=riemann, recon=recon,
+                                   time="explicit", names=["rho", "rho_u", "rho_v", "E"])
+            aot.set_poisson(rhs="charge_density", solver="geometric_mg")
+            aot.set_state("gas", Uflat)
+            aot.solve_fields()
+            R_aot = np.array(aot.eval_rhs("gas")).reshape(4, n, n)
+            phi_aot = np.array(aot.potential()).reshape(n, n)
 
-        # (B) residu de production IDENTIQUE au natif (memes formules, meme assemble_rhs)
-        assert float(np.max(np.abs(R_aot))) > 1e-3, "residu AOT trivial"
-        dres = float(np.max(np.abs(R_aot - R_nat)))
-        assert dres < 1e-9, "eval_rhs AOT != natif (ecart %.2e) -> numerique non identique" % dres
-        print("OK  bloc AOT : eval_rhs == bloc natif (chemin de production, ecart %.1e)" % dres)
+            nat = adc.System(n=n, L=L, periodic=True)
+            lim = {"none": dict(none=True), "minmod": dict(minmod=True),
+                   "vanleer": dict(vanleer=True)}[limiter]
+            nat.add_block("gas", spec, spatial=adc.Spatial(flux=riemann, recon=recon, **lim),
+                          time=adc.Explicit())
+            nat.set_poisson(rhs="charge_density", solver="geometric_mg")
+            nat.set_state("gas", Uflat)
+            nat.solve_fields()
+            R_nat = np.array(nat.eval_rhs("gas")).reshape(4, n, n)
+            phi_nat = np.array(nat.potential()).reshape(n, n)
 
-        # (C) avance de production (SSPRK2) : tourne, masse conservee, dynamique non triviale
+            dphi = float(np.max(np.abs(phi_aot - phi_nat)))
+            assert dphi < 1e-9, "%s : potentiel AOT != natif (%.2e)" % (riemann, dphi)
+            assert float(np.max(np.abs(R_aot))) > 1e-3, "%s : residu AOT trivial" % riemann
+            dres = float(np.max(np.abs(R_aot - R_nat)))
+            assert dres < 1e-9, "%s : eval_rhs AOT != natif (%.2e)" % (riemann, dres)
+            print("OK  bloc AOT %s+%s : eval_rhs ET potentiel == bloc natif (ecart %.1e)"
+                  % (limiter, riemann, max(dphi, dres)))
+
+        compare("minmod", "rusanov", "conservative")
+        compare("minmod", "hllc", "primitive")  # flux de production : pressure()/wave_speeds() generes
+
+        # (C) avance de production (SSPRK2 + HLLC) : tourne, masse conservee, dynamique non triviale
+        aot = adc.System(n=n, L=L, periodic=True)
+        aot.add_compiled_block("gas", so, limiter="minmod", riemann="hllc", recon="primitive",
+                               names=["rho", "rho_u", "rho_v", "E"])
+        aot.set_poisson(rhs="charge_density", solver="geometric_mg")
+        aot.set_state("gas", Uflat)
         mass0 = float(np.array(aot.get_state("gas")).reshape(4, n, n)[0].sum())
         for _ in range(15):
             aot.step_cfl(0.4)

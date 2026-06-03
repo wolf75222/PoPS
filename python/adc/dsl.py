@@ -400,6 +400,16 @@ class HyperbolicModel:
             lines.append("%sreturn mws_;" % ind)
             return lines
 
+        def eig_minmax(cpps, ind):
+            # vitesses d'onde signees : smin = plus petite, smax = plus grande valeur propre (pour
+            # HLLC / Roe). Memes noms internes a suffixe '_' que eig_reduce.
+            lines = ["%sconst adc::Real lam%d_ = %s;" % (ind, k, c) for k, c in enumerate(cpps)]
+            lines.append("%ssmin = lam0_; smax = lam0_;" % ind)
+            for k in range(1, len(cpps)):
+                lines.append("%sif (lam%d_ < smin) smin = lam%d_;" % (ind, k, k))
+                lines.append("%sif (lam%d_ > smax) smax = lam%d_;" % (ind, k, k))
+            return lines
+
         cnames = ", ".join('"%s"' % c for c in self.cons_names)
         pnames = ", ".join('"%s"' % p for p in self.prim_state)
         S = [
@@ -436,6 +446,25 @@ class HyperbolicModel:
         S.append("    } else {")
         S += eig_reduce(ecpps[nx:], "      ")
         S += ["    }", "  }", ""]
+
+        # pression + vitesses d'onde signees : emises SI une primitive 'p' (pression) est declaree
+        # (convention compressible). Elles rendent la brique generee compatible avec les flux HLLC /
+        # Roe (make_block les exige via requires { m.pressure(s); } + m.wave_speeds). Sans 'p' (p.ex.
+        # transport scalaire ExB) elles ne sont pas emises : le modele reste limite a Rusanov, inchange.
+        if "p" in self.prim_defs:
+            S.append("  ADC_HD adc::Real pressure(const State& U) const {")
+            S += cons_locals() + prim_locals()
+            S += ["    return p;", "  }", ""]
+            S.append("  ADC_HD void wave_speeds(const State& U, %s, int dir, adc::Real& smin, "
+                     "adc::Real& smax) const {" % aux_param)
+            S += cons_locals() + prim_locals() + aux_locals()
+            wtl, wcpps = self._codegen_exprs(self._eig["x"] + self._eig["y"], cse)
+            S += wtl
+            S.append("    if (dir == 0) {")
+            S += eig_minmax(wcpps[:nx], "      ")
+            S.append("    } else {")
+            S += eig_minmax(wcpps[nx:], "      ")
+            S += ["    }", "  }", ""]
 
         S.append("  ADC_HD Prim to_primitive(const State& U) const {")
         S += cons_locals() + prim_locals()
