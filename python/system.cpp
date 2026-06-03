@@ -1,5 +1,6 @@
 #include <adc/runtime/system.hpp>
 
+#include <adc/runtime/block_builder.hpp>  // GridContext + make_block/make_max_speed (fermetures compilees)
 #include <adc/runtime/model_factory.hpp>  // detail::dispatch_model + briques compilees
 #include <adc/numerics/elliptic/geometric_mg.hpp>
 #include <adc/numerics/elliptic/poisson_fft_solver.hpp>
@@ -251,109 +252,11 @@ struct System::Impl {
 
   // --- schemas spatiaux compiles -------------------------------------------
   // Evaluateur methode-des-lignes d'un bloc (L/F/Model figes) : ghosts puis R = -div F + S.
-  // La math RK est portee par les TimeStepper du coeur, pas reimplementee.
-  template <class Limiter, class Flux, class Model>
-  auto rhs_eval(const Model& model, bool recon_prim) {
-    return [this, &model, recon_prim](MultiFab& U, MultiFab& R) {
-      fill_ghosts(U, dom, bc_);
-      assemble_rhs<Limiter, Flux>(model, U, aux, geom, R, recon_prim);
-    };
-  }
-  template <class Limiter, class Flux, class Model>
-  void ssprk2(const Model& model, MultiFab& U, Real dt, bool recon_prim) {
-    SSPRK2Step{}.take_step(rhs_eval<Limiter, Flux>(model, recon_prim), U, dt);
-  }
-  template <class Limiter, class Flux, class Model>
-  void imex_step(const Model& model, MultiFab& U, Real dt, bool recon_prim) {
-    const SourceFreeModel<Model> sf{model};  // demi-pas explicite : SourceFreeModel sans Prim
-    ForwardEuler{}.take_step(rhs_eval<Limiter, Flux>(sf, recon_prim), U, dt);  // -> conservatif
-    backward_euler_source(model, aux, U, dt);
-  }
-
-  struct BlockClosures {
-    std::function<void(MultiFab&, Real, int)> advance;
-    std::function<void(MultiFab&, MultiFab&)> rhs_into;
-  };
-
-  template <class Limiter, class Flux, class Model>
-  BlockClosures build(const Model& m, bool imex, bool recon_prim) {
-    Impl* P = this;
-    BlockClosures bc;
-    if (imex)
-      bc.advance = [P, m, recon_prim](MultiFab& U, Real dt, int n) {
-        const Real h = dt / static_cast<Real>(n);
-        for (int s = 0; s < n; ++s) P->imex_step<Limiter, Flux>(m, U, h, recon_prim);
-      };
-    else
-      bc.advance = [P, m, recon_prim](MultiFab& U, Real dt, int n) {
-        const Real h = dt / static_cast<Real>(n);
-        for (int s = 0; s < n; ++s) P->ssprk2<Limiter, Flux>(m, U, h, recon_prim);
-      };
-    bc.rhs_into = [P, m, recon_prim](MultiFab& U, MultiFab& R) {
-      fill_ghosts(U, P->dom, P->bc_);
-      assemble_rhs<Limiter, Flux>(m, U, P->aux, P->geom, R, recon_prim);
-    };
-    return bc;
-  }
-
-  // Dispatch du schema spatial (limiteur x flux Riemann) -> fermetures compilees. HLLC garde
-  // par requires : exige un transport a 4 variables exposant pressure (sinon -> rusanov).
-  template <class Model>
-  BlockClosures make_block(const Model& m, const std::string& lim, const std::string& riem,
-                           bool imex, bool recon_prim) {
-    if (riem == "rusanov") {
-      if (lim == "none") return build<NoSlope, RusanovFlux>(m, imex, recon_prim);
-      if (lim == "minmod") return build<Minmod, RusanovFlux>(m, imex, recon_prim);
-      if (lim == "vanleer") return build<VanLeer, RusanovFlux>(m, imex, recon_prim);
-      throw std::runtime_error("System : limiter inconnu '" + lim + "'");
-    }
-    if (riem == "hllc") {
-      if constexpr (Model::n_vars == 4 &&
-                    requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-        if (lim == "none") return build<NoSlope, HLLCFlux>(m, imex, recon_prim);
-        if (lim == "minmod") return build<Minmod, HLLCFlux>(m, imex, recon_prim);
-        if (lim == "vanleer") return build<VanLeer, HLLCFlux>(m, imex, recon_prim);
-        throw std::runtime_error("System : limiter inconnu '" + lim + "'");
-      } else {
-        throw std::runtime_error("System : flux 'hllc' exige un transport compressible "
-                                 "(4 variables + pression) ; ce transport -> 'rusanov'");
-      }
-    }
-    if (riem == "roe") {
-      if constexpr (Model::n_vars == 4 &&
-                    requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-        if (lim == "none") return build<NoSlope, RoeFlux>(m, imex, recon_prim);
-        if (lim == "minmod") return build<Minmod, RoeFlux>(m, imex, recon_prim);
-        if (lim == "vanleer") return build<VanLeer, RoeFlux>(m, imex, recon_prim);
-        throw std::runtime_error("System : limiter inconnu '" + lim + "'");
-      } else {
-        throw std::runtime_error("System : flux 'roe' exige un transport compressible "
-                                 "(4 variables + pression) ; ce transport -> 'rusanov'");
-      }
-    }
-    throw std::runtime_error("System : flux Riemann inconnu '" + riem + "' (rusanov|hllc|roe)");
-  }
-
-  template <class Model>
-  std::function<Real(const MultiFab&)> make_max_speed(const Model& m) {
-    Impl* P = this;
-    return [P, m](const MultiFab& U) { return max_wave_speed_mf(m, U, P->aux); };
-  }
-
-  // Contribution du bloc au second membre de Poisson : rhs += elliptic_rhs(U) (boucle hote).
-  template <class Model>
-  std::function<void(const MultiFab&, MultiFab&)> make_poisson_rhs(const Model& m) {
-    return [m](const MultiFab& U, MultiFab& rhs) {
-      for (int li = 0; li < rhs.local_size(); ++li) {
-        Array4 r = rhs.fab(li).array();
-        const ConstArray4 u = U.fab(li).const_array();
-        const Box2D b = rhs.box(li);
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            r(i, j) += m.elliptic_rhs(adc::load_state<Model>(u, i, j));
-      }
-    };
-  }
+  // Construction des fermetures de bloc (avance + residu + Poisson) deplacee en en-tete
+  // (adc/runtime/block_builder.hpp : make_block / make_max_speed / make_poisson_rhs) afin que le
+  // chemin template de production soit instanciable hors de cette unite (compilation AOT d'un
+  // modele genere). Ici on ne fournit que le contexte de grille a leur passer.
+  GridContext grid_ctx() { return GridContext{dom, bc_, geom, &aux}; }
 
   void solve_fields() {
     ensure_elliptic();
@@ -527,19 +430,21 @@ void System::add_block(const std::string& name, const ModelSpec& model,
   const bool recon_prim = (recon == "primitive");
 
   int ncomp = 1;
-  Impl::BlockClosures clo;
+  BlockClosures clo;
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
   std::vector<std::string> cons_nm, prim_nm;
+  const GridContext ctx = P->grid_ctx();
   // Le modele est compose a partir des briques designees par la spec ; le visiteur cable les
-  // fermetures. ncomp = n_vars du modele compose ; set_density s'y adapte. Les noms de variables
-  // viennent du descripteur Variables porte par le modele (brique Vars), source unique de verite.
+  // fermetures (constructeurs en en-tete, instanciables AOT). ncomp = n_vars du modele compose ;
+  // set_density s'y adapte. Les noms de variables viennent du descripteur Variables porte par le
+  // modele (brique Vars), source unique de verite.
   detail::dispatch_model(model, [&](auto m) {
     using M = decltype(m);
     ncomp = M::n_vars;
-    clo = P->make_block(m, limiter, riemann, imex, recon_prim);
-    max_speed = P->make_max_speed(m);
-    add_poisson_rhs = P->make_poisson_rhs(m);
+    clo = make_block(m, limiter, riemann, ctx, imex, recon_prim);
+    max_speed = make_max_speed(m, ctx);
+    add_poisson_rhs = make_poisson_rhs(m);
     cons_nm = M::conservative_vars().names;
     prim_nm = M::primitive_vars().names;
   });

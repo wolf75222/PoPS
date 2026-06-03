@@ -66,6 +66,9 @@ adc_add_test(test_ap_limit)
 # --- dispatch a l'execution (modele type-erased pour brique generee / JIT) ---
 adc_add_test(test_dynamic_model)
 
+# --- constructeur de fermetures de bloc instanciable hors System (fondation backend AOT) ---
+adc_add_test(test_block_builder)
+
 # --- descripteur de variables : roles physiques (index_of(role)) ---
 adc_add_test(test_variable_role)
 
