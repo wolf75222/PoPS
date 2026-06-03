@@ -41,10 +41,49 @@ La brique GENEREE depuis des formules Python compile avec nvcc et s'execute sur 
 resultat BIT-IDENTIQUE a la brique ecrite a la main. Le codegen est donc correct jusqu'au GPU de
 production.
 
+## Kokkos (dispatch parallel_for, backend CUDA)
+
+Au-dela du CUDA brut, on verifie la brique generee a travers le VRAI dispatch parallele que le solveur
+utilise (`adc/mesh/for_each.hpp` -> `Kokkos::parallel_for`). On construit Kokkos depuis les sources
+(pas de module sur ROMEO) puis un harnais `Kokkos::parallel_for(KOKKOS_LAMBDA ...)` qui calcule le flux
+de `EulerGen` sur le device et le compare a `adc::Euler` sur l'hote.
+
+```bash
+# 1. generer le harnais Kokkos (depuis la racine, paquet adc construit dans build-py)
+PYTHONPATH=$PWD/build-py/python python3 python/tests/gpu/gen_kokkos_harness.py   # -> /tmp/kokkos_euler.cpp
+
+# 2. envoyer en-tetes + harnais (+ CMakeLists) + script, cloner Kokkos
+rsync -az include /tmp/kokkos_euler.cpp python/tests/gpu/kokkos_CMakeLists.txt \
+      python/tests/gpu/romeo_kokkos_build.sh romeo:adc_dsl_kk/
+ssh romeo 'cd ~/adc_dsl_kk && mkdir -p harness && mv kokkos_euler.cpp harness/ \
+           && mv kokkos_CMakeLists.txt harness/CMakeLists.txt && mv romeo_kokkos_build.sh kk_build.sh \
+           && git clone --depth 1 -b 4.4.01 https://github.com/kokkos/kokkos.git'
+
+# 3. build Kokkos (CUDA + Serial, HOPPER90) + harnais + run, sur un noeud GPU
+ssh romeo 'cd ~/adc_dsl_kk && srun --account=<compte> -p instant --constraint=armgpu \
+           --gres=gpu:1 --mem=16G -c 16 -t 25 bash kk_build.sh'
+```
+
+`kk_build.sh` configure Kokkos avec `-DKokkos_ENABLE_CUDA=ON -DKokkos_ARCH_HOPPER90=ON
+-DKokkos_ENABLE_SERIAL=ON` et `nvcc_wrapper` comme compilateur, installe, puis compile le harnais
+(`find_package(Kokkos)` + `Kokkos::kokkos`).
+
+Resultat (obtenu) :
+```
+KOKKOS_OK
+HARNESS_OK
+exec_space=Cuda  maxdiff(Kokkos EulerGen vs hote adc::Euler)=5.551e-17
+```
+
+L'espace d'execution par defaut est `Cuda` (le kernel tourne bien sur le GPU). L'ecart est d'un ULP
+(5.55e-17), du a la contraction FMA de nvcc_wrapper differente de l'hote, pas a un bug : la brique
+generee est correcte a travers le dispatch Kokkos sur GH200.
+
 ## Limites / suite
 
-- Test CUDA brut (nvcc), pas un build Kokkos complet : `ADC_HD` couvre les deux (Kokkos mappe sur
-  `KOKKOS_INLINE_FUNCTION`), mais le solveur Kokkos complet n'est pas reconstruit ici.
-- Toujours pas le dispatch de la brique generee DANS le solveur template (cf. ARCHITECTURE_CIBLE.md
-  sect. 3 : exige une interface de modele type-erased). Ici la brique est compilee statiquement dans
-  un harnais, ce qui suffit a valider le codegen device.
+- Le solveur adc COMPLET n'est pas rebati ici avec Kokkos : on valide la brique generee a travers le
+  meme primitif de dispatch (`Kokkos::parallel_for` / `KOKKOS_LAMBDA`) que `adc/mesh/for_each.hpp`,
+  ce qui prouve sa compatibilite Kokkos device.
+- Toujours pas le dispatch de la brique generee DANS le solveur template a l'execution (cf.
+  ARCHITECTURE_CIBLE.md sect. 3 : exige une interface de modele type-erased). Ici la brique est
+  compilee statiquement dans le harnais, ce qui suffit a valider le codegen device + Kokkos.

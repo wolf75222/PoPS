@@ -163,12 +163,16 @@ RUN GPU FAIT : la brique generee compile avec nvcc (`-arch=sm_90`) et s'execute 
 (ROMEO, noeud aarch64), resultat BIT-IDENTIQUE a `adc::Euler` (cf. docs/GPU_ROMEO.md). Elle est
 device-ready par construction (`ADC_HD` -> `__host__ __device__`, ops device-safe, `std::sqrt`).
 
-RESTE : (a) brancher la brique generee dans le solveur TEMPLATE compile (dispatch / `ModelSpec`) : cela
-suppose une interface de modele TYPE-ERASED (le solveur connait ses types a la compilation ; le `.so`
-JIT n'expose qu'un noyau, pas un type C++ instanciable dans les templates) ; (b) un build KOKKOS
-COMPLET du solveur avec la brique generee (le run ci-dessus est du CUDA brut ; `ADC_HD` couvre Kokkos
-via `KOKKOS_INLINE_FUNCTION`, mais le solveur Kokkos n'est pas reconstruit ici). Le codegen hote NE
-remplace PAS les briques compilees de production.
+KOKKOS FAIT (verification de la brique) : la brique generee tourne via `Kokkos::parallel_for` sur
+l'espace d'execution `Cuda` (GH200 ; Kokkos 4.4 + CUDA 12.6, `HOPPER90`), == `adc::Euler` a un ULP
+(5.6e-17, contraction FMA), cf. docs/GPU_ROMEO.md. C'est le meme primitif de dispatch que
+`adc/mesh/for_each.hpp`.
+
+RESTE : (a) brancher la brique generee dans le solveur TEMPLATE compile a L'EXECUTION (dispatch /
+`ModelSpec`) : suppose une interface de modele TYPE-ERASED (le solveur connait ses types a la
+compilation ; le `.so` JIT et le harnais Kokkos compilent la brique STATIQUEMENT) ; (b) rebatir le
+solveur adc COMPLET avec `-DADC_USE_KOKKOS=ON` et faire tourner un CAS entier (pas seulement le flux)
+sur GPU. Le codegen hote NE remplace PAS les briques compilees de production.
 
 ---
 
