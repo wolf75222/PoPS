@@ -10,6 +10,7 @@
 #include <adc/numerics/spatial_operator.hpp>
 #include <adc/numerics/time/implicit_stepper.hpp>
 #include <adc/numerics/time/time_steppers.hpp>
+#include <adc/runtime/grid_context.hpp>  // GridContext + BlockClosures (en-tete leger partage)
 
 #include <functional>
 #include <stdexcept>
@@ -31,19 +32,8 @@
 
 namespace adc {
 
-/// Maillage + CL transport + aux partages par les fermetures d'un bloc.
-struct GridContext {
-  Box2D dom;            ///< domaine (sans ghost)
-  BCRec bc;             ///< CL de transport
-  Geometry geom;        ///< geometrie (dx, dy, bornes)
-  MultiFab* aux = nullptr;  ///< aux du System (phi, grad phi) ; NON possede
-};
-
-/// Fermetures compilees d'un bloc, figees a l'ajout.
-struct BlockClosures {
-  std::function<void(MultiFab&, Real, int)> advance;  ///< (U, dt, n) : n sous-pas de dt/n
-  std::function<void(MultiFab&, MultiFab&)> rhs_into;  ///< R <- -div F + S (Poisson fige)
-};
+// GridContext et BlockClosures : definis dans adc/runtime/grid_context.hpp (en-tete leger, inclus
+// aussi par system.hpp pour exposer grid_context() / install_block() sans tirer la numerique).
 
 namespace detail {
 /// Foncteur residu -div F + S (fill_ghosts puis assemble_rhs) capture par les TimeStepper.

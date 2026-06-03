@@ -1,7 +1,9 @@
 #pragma once
 
+#include <adc/runtime/grid_context.hpp>  // GridContext + BlockClosures (seam bloc compile AOT)
 #include <adc/runtime/model_spec.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -82,6 +84,24 @@ class System {
                           const std::string& recon = "conservative",
                           const std::string& time = "explicit", int substeps = 1,
                           const std::vector<std::string>& names = {});
+
+  /// @name Seam de bloc COMPILE AOT (parite native, sans marshaling)
+  /// Pour brancher un modele genere par le DSL en COMPOSANT au moment de la COMPILATION (binaire de
+  /// production Kokkos + MPI + AMR), via le gabarit libre adc::add_compiled_model<Model> de
+  /// adc/runtime/dsl_block.hpp : il fabrique les fermetures avec block_builder.hpp sur le CONTEXTE
+  /// REEL du System (grid_context) -- donc le bloc tourne le meme chemin que add_block (fill_boundary
+  /// = halos MPI, assemble_rhs device), sans recopier les tableaux. C'est la difference avec
+  /// add_compiled_block (.so + marshaling hote, prototypage runtime CPU).
+  /// @{
+  GridContext grid_context();  ///< maillage + CL + aux REELS du System (aux non possede)
+  /// Installe un bloc a partir de fermetures deja fabriquees (cf. add_compiled_model).
+  void install_block(const std::string& name, int ncomp,
+                     const std::vector<std::string>& cons_names,
+                     const std::vector<std::string>& prim_names, double gamma,
+                     BlockClosures closures, std::function<Real(const MultiFab&)> max_speed,
+                     std::function<void(const MultiFab&, MultiFab&)> poisson_rhs, int substeps,
+                     bool evolve);
+  /// @}
 
   /// Configure le Poisson partage.
   /// @param rhs    seul mode : "charge_density", f = somme_s elliptic_rhs_s(u_s)

@@ -69,6 +69,14 @@ adc_add_test(test_dynamic_model)
 # --- constructeur de fermetures de bloc instanciable hors System (fondation backend AOT) ---
 adc_add_test(test_block_builder)
 
+# --- parite bloc compile AOT (add_compiled_model) == bloc natif (add_block) ---
+# Compile le runtime System (python/system.cpp) avec le test : add_compiled_model branche un
+# CompositeModel connu a la compilation sur la grille reelle, comme un bloc natif (sans marshaling).
+add_executable(test_compiled_model_parity test_compiled_model_parity.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
+target_link_libraries(test_compiled_model_parity PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_compiled_model_parity COMMAND test_compiled_model_parity)
+
 # --- descripteur de variables : roles physiques (index_of(role)) ---
 adc_add_test(test_variable_role)
 

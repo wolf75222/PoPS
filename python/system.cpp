@@ -448,13 +448,32 @@ void System::add_block(const std::string& name, const ModelSpec& model,
     cons_nm = M::conservative_vars().names;
     prim_nm = M::primitive_vars().names;
   });
+  // Installation commune (meme chemin que add_compiled_model pour un modele genere par le DSL) :
+  // les fermetures tournent sur les MultiFab REELS du System (halos MPI via fill_boundary, device
+  // via Kokkos), sans recopie.
+  install_block(name, ncomp, cons_nm, prim_nm, model.gamma, std::move(clo), std::move(max_speed),
+                std::move(add_poisson_rhs), substeps, evolve);
+}
 
-  P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps,
-                                evolve, model.gamma, std::move(clo.advance), std::move(clo.rhs_into),
-                                std::move(max_speed), std::move(add_poisson_rhs)});
+// Contexte de grille reel (maillage + CL + aux) : sert au gabarit add_compiled_model pour fabriquer
+// les fermetures d'un modele compile AOT sur les vrais champs du System (parite native, sans marshaling).
+GridContext System::grid_context() { return p_->grid_ctx(); }
+
+// Installe un bloc a partir de fermetures deja fabriquees (par dispatch_model cote add_block, ou par
+// block_builder cote add_compiled_model). Centralise la creation de l'espece (U, noms, schema).
+void System::install_block(const std::string& name, int ncomp,
+                           const std::vector<std::string>& cons_names,
+                           const std::vector<std::string>& prim_names, double gamma,
+                           BlockClosures closures, std::function<Real(const MultiFab&)> max_speed,
+                           std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
+                           int substeps, bool evolve) {
+  Impl* P = p_.get();
+  P->sp.push_back(Impl::Species{name, MultiFab(P->ba, P->dm, ncomp, 2), ncomp, substeps, evolve,
+                                gamma, std::move(closures.advance), std::move(closures.rhs_into),
+                                std::move(max_speed), std::move(poisson_rhs)});
   P->sp.back().U.set_val(Real(0));
-  P->sp.back().cons_names = std::move(cons_nm);
-  P->sp.back().prim_names = std::move(prim_nm);
+  P->sp.back().cons_names = cons_names;
+  P->sp.back().prim_names = prim_names;
 }
 
 void System::add_dynamic_block(const std::string& name, const std::string& so_path, int substeps,
