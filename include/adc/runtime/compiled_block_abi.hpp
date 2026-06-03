@@ -5,6 +5,7 @@
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fill_boundary.hpp>
+#include <adc/mesh/for_each.hpp>  // device_fence : barriere avant lecture hote (memoire unifiee)
 #include <adc/mesh/geometry.hpp>
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
@@ -74,6 +75,8 @@ inline void fill_interior(MultiFab& mf, const double* in, int n, int nv) {
 }
 
 inline void extract(const MultiFab& mf, double* out, int n, int nv) {
+  device_fence();  // assemble_rhs / l'avance ont lance des kernels ASYNC ; attendre avant la
+                   // lecture hote de la memoire unifiee (sinon course -> resultat partiel sur GPU).
   const ConstArray4 a = mf.fab(0).const_array();
   const std::size_t nn = static_cast<std::size_t>(n) * n;
   for (int c = 0; c < nv; ++c)

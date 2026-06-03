@@ -71,6 +71,15 @@ pas une reecriture des noyaux de calcul.
    correctifs nvcc des phases 1/2 + le design for_each suffisent. `python/tests/gpu/phase7_system.cpp`.
    RESTE pour la prod multi-GPU : phase 6 (MPI CUDA-aware) + perf (full-device reflux, eviter les
    sync hote des reductions par pas).
+8. **Backend AOT sur device (modele genere par le DSL).** ✅ FAIT (verifie GH200). Un modele
+   `euler_poisson` ECRIT EN FORMULES, compile AOT (`compile_or_jit(mode="compile")`) en .so via
+   `compiled_block_abi.hpp`, execute le chemin de production (`assemble_rhs<Minmod, HLLCFlux>` recon
+   primitif + SSPRK2) sur le GH200 : residu, masse, quantite de mouvement et energie BIT-IDENTIQUES au
+   build serie hote (`sim_aot/`). A leve + corrige un vrai bug : `extract()` lisait la memoire unifiee
+   AVANT la fin du kernel async (`assemble_rhs`/avance) ; ajout d'un `device_fence()` (le seam System
+   fencait deja via `copy_state`). Le marshaling de tableaux plats traverse le dlopen sans partage
+   d'objet C++ (ABI propre). RESTE : variante zero-copie (modele compile dans le meme binaire que le
+   System device, sans marshaling) pour la perf.
 
 ## Strategie suggeree
 
