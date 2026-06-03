@@ -37,6 +37,7 @@ struct ArenaStats {
 }  // namespace adc
 
 #if defined(ADC_HAS_KOKKOS)
+#include <adc/core/kokkos_env.hpp>  // detail::ensure_kokkos_initialized : Kokkos init AVANT kokkos_malloc
 #include <Kokkos_Core.hpp>
 
 #include <mutex>
@@ -67,6 +68,10 @@ class ManagedArena {
 
   void* allocate(std::size_t bytes) {
     if (bytes == 0) return nullptr;
+    // CRUCIAL : un Fab peut etre construit AVANT tout for_each (donc avant l'init paresseuse cote
+    // kernel). kokkos_malloc exige Kokkos initialise -> on garantit l'init ICI aussi. Sans cela, le
+    // build Kokkos plante des la 1ere allocation (regression identifiee sur build-kokkos). Hors lock.
+    detail::ensure_kokkos_initialized();
     std::lock_guard<std::mutex> lk(m_);
     std::call_once(hook_once_, [] {  // rendre les blocs a Kokkos::finalize (sinon allocation "fuitee")
       Kokkos::push_finalize_hook([] { ManagedArena::instance().release_all(); });

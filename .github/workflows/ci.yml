@@ -101,3 +101,32 @@ jobs:
           OMPI_MCA_rmaps_base_oversubscribe: "true"
           PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
         run: ctest --test-dir build-mpi --output-on-failure -C Release
+
+  kokkos:
+    name: ubuntu-latest / Kokkos (Serial)
+    runs-on: ubuntu-latest
+    # Teste le backend KOKKOS sur CPU (Serial). Indispensable : le build SANS Kokkos (job Release)
+    # ne couvre PAS le chemin kokkos_malloc / for_each Kokkos. C'est ce trou qui avait laisse passer
+    # la regression d'init (allocation d'un Fab avant l'init paresseuse de Kokkos).
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Build + install Kokkos (Serial)
+        run: |
+          git clone --depth 1 -b 4.4.01 https://github.com/kokkos/kokkos.git /tmp/kokkos
+          cmake -S /tmp/kokkos -B /tmp/kbuild -DKokkos_ENABLE_SERIAL=ON \
+            -DCMAKE_INSTALL_PREFIX=/tmp/kinstall -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20
+          cmake --build /tmp/kbuild -j 2 --target install
+
+      - name: Configure + build (backend Kokkos)
+        run: |
+          cmake -B build-kokkos -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON -DKokkos_ROOT=/tmp/kinstall
+          cmake --build build-kokkos --config Release -j 2
+
+      - name: Test (ctest, backend Kokkos Serial)
+        run: ctest --test-dir build-kokkos --output-on-failure -C Release
