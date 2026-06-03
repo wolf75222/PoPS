@@ -2,6 +2,16 @@
 
 Liste vivante de ce qui est fait et de ce qui reste, par intention.
 
+> Note de perimetre. Ce depot (`adc_cpp`) est la BIBLIOTHEQUE : coeur + briques physiques +
+> bindings Python. Les EXEMPLES C++ (`examples/`), les SCRIPTS de figures (`scripts/`), les
+> TUTORIELS et les tests de validation APPLICATIFS (taux diocotron, runs ROMEO, invariants
+> physiques, ordre de convergence des modeles) vivent desormais dans `adc_cases`. Plusieurs
+> entrees ci-dessous citent des fichiers (`examples/...`, `test_euler`, `test_diocotron_*`,
+> `magnetic_euler_poisson.hpp`, etc.) qui ne sont PAS dans ce depot : ce sont des resultats
+> obtenus / a obtenir cote `adc_cases`, conserves ici comme memoire de projet. Les tests
+> presents dans CE depot sont les ~53 ctests coeur + ~16 tests Python (cf. `tests/` et
+> `python/tests/`).
+
 ## Fait
 
 ### Cœur numérique
@@ -13,12 +23,24 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
 - Pile mesh maison : `MultiFab` / `BoxArray` / `DistributionMapping` / `Geometry`,
   `fill_boundary`, CL physiques, seam `for_each_cell` série / OpenMP / Kokkos.
 
-### Couplage
+### Modèle et couplage
 
-- Diocotron (dérive E x B), Euler-Poisson (auto-gravité attractive OU plasma
-  électrostatique répulsif, via `InteractionKind` : un seul signe sépare l'effondrement de
-  Jeans de l'oscillation de Langmuir + explosion de Coulomb), deux-fluides isotherme
-  asymptotic-preserving, tous via `aux = grad phi`.
+- Cœur AGNOSTIQUE au modèle : aucun scénario nommé dans le cœur, seulement des briques
+  génériques (état, transport, source, second membre elliptique) composées en `CompositeModel`
+  par le `model_factory`. Les compositions nommées (diocotron, Euler-Poisson, deux-fluides...)
+  vivent côté application (`adc_cases`). Couplage par `aux = (phi, grad phi)`, `aux` FIGÉ
+  (non extensible pour l'instant).
+- DSL symbolique au niveau PROTOTYPE, complet et testé : formules -> brique C++ (`emit_cpp_brick`)
+  + source + second membre elliptique + CSE ; chemin JIT (`.so`, `IModel` virtuel,
+  `System.add_dynamic_block`) ; chemin AOT (`compile_or_jit(mode="compile")`,
+  `System.add_compiled_block` via `compiled_block_abi.hpp`) ; bloc compilé NATIF à parité avec
+  `add_block` (`add_compiled_model` / `dsl_block.hpp`, validé bit-identique sur CPU/Serial par
+  `test_compiled_model_parity`). Reconstruction MUSCL au choix (`none`/`minmod`/`vanleer`) pour
+  le bloc dynamique.
+- Flux de Roe dans le cœur (`RusanovFlux` / `HLLFlux` / `HLLCFlux` / `RoeFlux`) ; opérateur
+  elliptique à permittivité VARIABLE `eps(x)` côté cœur (`GeometricMG::set_epsilon`, câblage
+  System/Python NON fait) ; `VariableSet` / `VariableRole` (présents mais PAS encore utilisés
+  dans les couplages / le runtime / Python / le DSL) ; réorganisation `physics/` + `numerics/`.
 - Schéma AP deux-fluides (Lorentz implicite, Poisson reformulé `beta0`), dispersion isotrope
   validée (3.1%), borne AP à `omega_pe = 1e3`.
 - Continuité upwind MUSCL (anti-Gibbs) en option ; champ magnétique : push de Boris E+B
@@ -44,18 +66,25 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
 
 ### Parallélisme et outils
 
-- OpenMP (déterministe vs série), MPI (bit-identique np=1/2/4, 9 tests `mpirun`), portage GPU
-  GH200 (Kokkos, bit-identique CPU).
-- Validation numérique (au-delà du bit-identique) : ordre du Laplacien 5 points (L2/Linf=2.00),
-  tourbillon isentropique Euler (VanLeer L1 mesuré 1.86), MUSCL mesuré 1.86 / Rusanov mesuré 0.89,
-  loi de Gauss du couplage (`div(grad phi)=source`, ordre 2.00), conservation sous regrid.
+- OpenMP autonome (déterministe vs série, mais **déprécié** au profit de Kokkos), MPI
+  (bit-identique np=1/2/4, 7 tests `mpirun` dans ce dépôt), backend Kokkos (CPU Serial/OpenMP
+  ET GPU Cuda, sans CUDA écrit à la main). La CI joue 3 jobs : Release, MPI, Kokkos (Serial).
+- GPU GH200 : composants validés SÉPARÉMENT et bit-identiques au CPU (System mono-grille,
+  ops de champ AMR, halos MPI multi-GPU, backend AOT d'un modèle DSL). Validation INTÉGRÉE
+  AmrSystem + MPI + GPU NON faite ; perf full-device à travailler. Cf. `docs/GPU_RUNTIME_PORT.md`.
+- Validation numérique (au-delà du bit-identique) : ordre du Laplacien 5 points, ordre WENO5-Z
+  (`test_weno_convergence`), discrétisations, IMEX/AP. Les ordres de convergence APPLICATIFS
+  (tourbillon isentropique Euler, MUSCL/Rusanov, loi de Gauss du couplage, invariants diocotron)
+  sont mesurés côté `adc_cases`.
 - Bindings Python de la lib (`python/`, module `adc`, `-DADC_BUILD_PYTHON=ON`) : `adc.System`
   (composition bloc par bloc via `add_block`, `set_poisson`, `set_density`, `step`/`advance`/`step_cfl`,
   primitives `eval_rhs`/`get_state`/`set_state` + `adc.integrate.ssprk2_step`), la composition
-  AMR `adc.AmrSystem` (l'intégrateur AP deux-fluides sur mesure n'est pas exposé dans l'API publique :
-  méthode compilée dans le module privé `_adc._TwoFluidAP`). Banc `bench_amr`, figures de scaling.
+  AMR `adc.AmrSystem` (mono-bloc, explicite, PAS à parité avec `System` ; l'intégrateur AP
+  deux-fluides sur mesure n'est pas exposé dans l'API publique : méthode compilée dans le module
+  privé `_adc._TwoFluidAP`, en cours de sortie du cœur vers `adc_cases`), plus le mini-DSL
+  symbolique (suite `test_dsl_*`).
 - Docs : README, ALGORITHMS, ARCHITECTURE (5 couches), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
-  two_fluid_ap, tutoriels 00 à 09, Doxygen + Sphinx.
+  two_fluid_ap, Doxygen + Sphinx (les tutoriels et figures vivent dans `adc_cases`).
 
 ## En file
 
@@ -161,21 +190,17 @@ exécution, et un AMR multi-patch pas encore pensé distribué. Voir
    restent des helpers `detail::`. Extraction structurelle bit-identique : équivalence
    `max|dUc| = 0` et conservation de masse à l'arrondi inchangées
    (`test_amr_coupler`, `test_amr_coupler_mp`).
-7. **Suite de validation numérique (FAIT).** Le bit-identique ne prouve pas la justesse ;
-   la suite couvre désormais : ordre du Laplacien 5 points (`test_poisson_convergence`,
-   L2/Linf = 2.00, Dirichlet + périodique + nullspace) ; tourbillon isentropique d'Euler
-   (VanLeer L1 mesuré 1.86, asserti > 1.7, `test_euler`) ; ordre MUSCL mesuré 1.86 (asserti
-   > 1.7) / Rusanov mesuré 0.89 (`test_muscl_convergence`) ; loi de Gauss discrète du couplage
-   `div(grad phi) = source` à 2.00 (`test_gauss_law`) ; limite AP quantifiée, uniforme sur 8
-   décades de raideur (`test_ap_limit`) ; invariants diocotron (masse, principe du maximum,
-   enstrophie non croissante, `test_diocotron_stability`) ; conservation flux coarse-fine
-   exacte par reflux (`test_amr_reflux`, masse à 1e-12) + conservation sous regrid
-   (`test_amr_coupler_mp`, dérive à 1e-9) ; ordre 5 de la reconstruction WENO5-Z mesure 5.00
-   (`test_weno_convergence`) ; INVARIANTS PHYSIQUES diocotron etendus (energie de champ et moment
-   angulaire ~conserves, enstrophie = mesure de diffusion, principe du maximum, `test_diocotron_invariants`
-   + module `analysis/diocotron_invariants.hpp`). Indicateurs de fidelite au-dela du taux : la simu
-   reproduit la VALEUR PROPRE COMPLEXE (rotation Re ET croissance Im, `diocotron_eigenvalue`), pas
-   seulement gamma. Toute la suite serie passe (63/63).
+7. **Suite de validation numérique (FAIT).** Le bit-identique ne prouve pas la justesse.
+   DANS CE DÉPÔT (cœur) : ordre du Laplacien 5 points (`test_poisson_convergence`, Dirichlet +
+   périodique + nullspace) ; limite AP quantifiée sur plusieurs décades de raideur
+   (`test_ap_limit`) ; ordre 5 de la reconstruction WENO5-Z (`test_weno_convergence`, mesuré
+   5.00) ; diffusion AMR conservative (`test_amr_diffusion`) ; reflux exact (`test_flux_register`,
+   `test_coverage_mask`). CÔTÉ `adc_cases` (modèle physique requis) : tourbillon isentropique
+   d'Euler (ordre VanLeer), ordres MUSCL / Rusanov, loi de Gauss discrète du couplage, invariants
+   diocotron (masse, principe du maximum, enstrophie, énergie de champ, moment angulaire) et la
+   valeur propre complexe (rotation Re + croissance Im). Les tests `test_euler`,
+   `test_muscl_convergence`, `test_gauss_law`, `test_diocotron_*`, `test_amr_reflux`,
+   `test_amr_coupler*` cités historiquement ici vivent désormais dans `adc_cases`.
 
 ### Physique magnétisée (cible Hoffart)
 
@@ -194,11 +219,18 @@ exécution, et un AMR multi-patch pas encore pensé distribué. Voir
 
 ### Reproduction Hoffart (arXiv:2510.11808) : objectif du stage
 
+> Travail APPLICATIF : les milestones M1 à M4 ci-dessous sont réalisés CÔTÉ `adc_cases`
+> (binaires `examples/`, scripts de figures, tests applicatifs, runs ROMEO). Les fichiers et
+> tests cités (`diocotron_column_amr.cpp`, `diocotron_highorder.cpp`,
+> `integrator/magnetic_euler_poisson.hpp`, `test_magnetic_euler_poisson`, etc.) ne sont PAS dans
+> ce dépôt. Conservés ici comme mémoire de projet ; le cœur (`adc_cpp`) ne fournit que les briques.
+
 Le papier (Euler-Poisson magnétique, structure-preserving FEM) valide en Section 5 l'instabilité
 **diocotron** par ses taux de croissance, dans la **limite de dérive magnétique** (eq 2.7 :
-`v_dr = -∇φ×Ω/|Ω|²`, `∂tρ + ∇·(ρ v_dr) = 0`, `ωd = ρα/|Ω| = ωp²/ωc`). Cette limite EST le modèle
-`Diocotron` de adc_cpp. Aucune AMR dans le papier : l'objectif est de reproduire avec NOTRE solveur
-puis d'y ajouter notre AMR, puis SAMRAI.
+`v_dr = -∇φ×Ω/|Ω|²`, `∂tρ + ∇·(ρ v_dr) = 0`, `ωd = ρα/|Ω| = ωp²/ωc`). Cette limite est la
+composition de briques `ExB` + `BackgroundDensity` (scénario "diocotron" côté `adc_cases`).
+Aucune AMR dans le papier : l'objectif est de reproduire avec NOTRE solveur puis d'y ajouter
+notre AMR, puis SAMRAI.
 
 - **M1 (en cours) : taux de croissance numérique vs analytique.** Pipeline construit et validé.
   L'analytique (`diocotron_growth.hpp`, valeurs propres de Petri/Davidson-Felice) redonne déjà les
@@ -335,11 +367,12 @@ puis d'y ajouter notre AMR, puis SAMRAI.
   cut vs escalier). La paroi en escalier n'etait donc PAS le verrou : le mode est trop loin de la paroi
   (effet d'image `(0.44)^8 ~ 1e-3`). Reste la distorsion STRUCTURELLE (b) de la valeur propre cartesienne
   (symetrie 4 grille/mode) plus la normalisation. Recit complet et unique : `docs/DIOCOTRON_GROWTH_RATE.md`.
-- **M3 : système magnétique complet (eq 2.4, FAIT).** Au-delà de la limite de dérive : Euler
-  compressible + énergie + Poisson + force de Lorentz `m × Ω`. L'architecture était déjà prête : le
-  modèle `EulerPoisson` porte l'hydro, la source `-ρ∇φ`, le travail `-m·∇φ` et le second membre
-  `α(ρ-ρ0)` ; il ne manquait que la rotation cyclotron `m × Ω`.
-  `integrator/magnetic_euler_poisson.hpp` : `magnetic_rotate` (rotation EXACTE de la quantité de
+- **M3 : système magnétique complet (eq 2.4, FAIT côté `adc_cases`).** Au-delà de la limite de
+  dérive : Euler compressible + énergie + Poisson + force de Lorentz `m × Ω`. L'architecture du
+  cœur était déjà prête (briques `CompressibleFlux` + `PotentialForce`/`GravityForce` +
+  `GravityCoupling`) ; il ne manquait que la rotation cyclotron `m × Ω`, ajoutée APPLICATIVEMENT
+  (le fichier `magnetic_euler_poisson.hpp` cité ici vit dans `adc_cases`, pas dans ce dépôt).
+  `magnetic_rotate` (rotation EXACTE de la quantité de
   mouvement, `ρ` et `E` inchangés, conserve `|m|`) + `MagneticEulerPoissonCoupler`, splitting de
   Strang autour de `Coupler<EulerPoisson>` (½ rotation, transport+électrostatique SSPRK2 avec Poisson
   par étage, ½ rotation). La rotation exacte est inconditionnellement stable : schéma

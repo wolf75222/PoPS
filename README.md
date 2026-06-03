@@ -4,7 +4,7 @@
 
 **Coeur C++23 d'un solveur AMR / MPI / GPU pour systemes hyperbolique-elliptique couples.**
 
-![Tests](https://img.shields.io/badge/tests-45%20%28serie%2FASan%2FKokkos%29%20%7C%2052%20MPI-brightgreen)
+![Tests](https://img.shields.io/badge/tests-~53%20ctests%20C%2B%2B%20%28serie%20%2B%20Kokkos%20Serial%29%20%7C%20%2B7%20MPI%20%7C%20~16%20Python-brightgreen)
 
 </div>
 
@@ -22,11 +22,15 @@ regrid Berger-Rigoutsos, sous-cyclage Berger-Oliger + reflux conservatif (derive
 
 ---
 
-`adc_cpp` est la **bibliotheque** : le moteur generique (coeur sans modele) **plus** la
-bibliotheque de modeles physiques (`include/adc/model/`) et **les bindings Python de la lib**,
-le module `adc` (composition `System` / `AmrSystem` + solveur specialise `TwoFluidAP`).
-Le depot separe **[`adc_cases`](https://github.com/wolf75222/adc_cases)** ne contient QUE des
-**cas d'utilisation en Python** (un dossier par cas) qui importent ce module ; il n'a plus de C++.
+`adc_cpp` est la **bibliotheque** : le moteur generique (coeur sans modele) **plus** une
+bibliotheque de briques physiques (`include/adc/physics/`) et **les bindings Python de la lib**,
+le module `adc` (composition `System` / `AmrSystem` + solveur specialise `TwoFluidAP`, ce
+dernier en cours de sortie du coeur vers `adc_cases`). Le coeur est **agnostique au modele** :
+il ne nomme aucun scenario, il ne fournit que des briques generiques (etat, transport, source,
+second membre elliptique) composees en `CompositeModel` ; les scenarios nommes (diocotron,
+Euler-Poisson, deux-fluides...) vivent cote application. Le depot separe
+**[`adc_cases`](https://github.com/wolf75222/adc_cases)** ne contient QUE des **cas
+d'utilisation en Python** (un dossier par cas) qui importent ce module ; il n'a plus de C++.
 
 Le coeur resout, sur maillage cartesien adaptatif, la partie generique :
 
@@ -36,10 +40,12 @@ D phi = f(U)
 ```
 
 ou la partie hyperbolique (U) et la partie elliptique (phi) sont couplees a chaque pas
-via `aux = (phi, grad phi)`. Le coeur ne connait aucun modele : il fournit les contrats
+via `aux = (phi, grad phi)`. `aux` reste FIGE pour l'instant (`phi`, `grad_x`, `grad_y`),
+non extensible. Le coeur ne connait aucun modele : il fournit les contrats
 (`PhysicalModel`, `EllipticSolver`), les operateurs, l'elliptique, les integrateurs, l'AMR
-et les seams de parallelisme. Les modeles concrets (diocotron, Euler, Euler-Poisson, fluides
-charges, isotherme) vivent dans `include/adc/model/` ; le module Python les compose.
+et les seams de parallelisme. Les briques physiques (etat compressible/isotherme, flux d'Euler,
+flux Roe, source de potentiel/gravite, second membre de charge) vivent dans
+`include/adc/physics/` ; le module Python les compose en `CompositeModel`.
 
 ## Ce que fournit le coeur
 
@@ -47,18 +53,19 @@ charges, isotherme) vivent dans `include/adc/model/` ; le module Python les comp
 |---|---|
 | [`core/physical_model.hpp`](include/adc/core/physical_model.hpp) | concept `PhysicalModel` (flux, max_wave_speed, source, elliptic_rhs) |
 | [`core::{EquationBlock,CoupledSystem}`](include/adc/core/equation_block.hpp) | bundle par espece (modele + schema spatial + politique temps + BC) et systeme de N especes |
-| [`operator::{RusanovFlux,HLLFlux,HLLCFlux}`](include/adc/operator/numerical_flux.hpp) | flux numeriques (politiques `ADC_HD`) |
-| [`operator::reconstruction`](include/adc/operator/reconstruction.hpp) | MUSCL ordre 2 (NoSlope / Minmod / VanLeer) + WENO5Z |
-| [`operator::assemble_rhs` / `compute_face_fluxes`](include/adc/operator/spatial_operator.hpp) | `R = -div F + S`, flux de face pour le reflux (diffusion incluse) ; GPU via `for_each_cell` |
-| [`integrator::{TimePolicy,SSPRK2,SSPRK3}`](include/adc/integrator/time_integrator.hpp) | par bloc : explicite / implicite / IMEX, sous-pas (`substeps`) ET cadence (`stride`) |
-| [`integrator::{ForwardEuler,SSPRK2Step,SSPRK3Step}`](include/adc/integrator/time_steppers.hpp) | integrateurs en temps OBJETS (`take_step(rhs, U, dt)`) ; l'utilisateur peut fournir le sien |
-| [`integrator::{ImplicitSourceStepper,backward_euler_source}`](include/adc/integrator/implicit_stepper.hpp) | defaut implicite (Newton local) ; IMEX partiel via `Model::is_implicit(c)` |
-| [`integrator::advance_subcycled`](include/adc/integrator/scheduler.hpp) | scheduler : sous-pas + cadence (macro-pas) par `EquationBlock` |
-| [`integrator::imex_euler_step`](include/adc/integrator/imex.hpp) | IMEX asymptotic-preserving |
-| [`integrator::{lie_step,strang_step}`](include/adc/integrator/splitting.hpp) | splitting d'operateurs |
-| [`integrator::advance_amr`](include/adc/integrator/amr_reflux_mf.hpp) | moteur AMR unifie : multi-patch N-niveaux, reflux coverage-aware, distribue MPI |
-| [`elliptic::GeometricMG`](include/adc/elliptic/geometric_mg.hpp) | multigrille geometrique (V-cycle GS rb), AMR-compatible, on-device |
-| [`elliptic::PoissonFFTSolver` / `DistributedFFTSolver`](include/adc/elliptic) | Poisson FFT spectral (mono-rang) et distribue (MPI) |
+| [`physics::bricks` / `composite`](include/adc/physics/bricks.hpp) | briques generiques (etat, transport, source, elliptique) composees en `CompositeModel` |
+| [`numerics::{RusanovFlux,HLLFlux,HLLCFlux,RoeFlux}`](include/adc/numerics/numerical_flux.hpp) | flux numeriques (politiques `ADC_HD`) |
+| [`numerics::reconstruction`](include/adc/numerics/reconstruction.hpp) | MUSCL ordre 2 (NoSlope / Minmod / VanLeer) + WENO5Z |
+| [`numerics::assemble_rhs` / `compute_face_fluxes`](include/adc/numerics/spatial_operator.hpp) | `R = -div F + S`, flux de face pour le reflux (diffusion incluse) ; GPU via `for_each_cell` |
+| [`numerics::time::{TimePolicy,SSPRK2,SSPRK3}`](include/adc/numerics/time/time_integrator.hpp) | par bloc : explicite / implicite / IMEX, sous-pas (`substeps`) ET cadence (`stride`) |
+| [`numerics::time::{ForwardEuler,SSPRK2Step,SSPRK3Step}`](include/adc/numerics/time/time_steppers.hpp) | integrateurs en temps OBJETS (`take_step(rhs, U, dt)`) ; l'utilisateur peut fournir le sien |
+| [`numerics::time::{ImplicitSourceStepper,backward_euler_source}`](include/adc/numerics/time/implicit_stepper.hpp) | defaut implicite (Newton local) ; IMEX partiel via `Model::is_implicit(c)` |
+| [`numerics::time::advance_subcycled`](include/adc/numerics/time/scheduler.hpp) | scheduler : sous-pas + cadence (macro-pas) par `EquationBlock` |
+| [`numerics::time::imex_euler_step`](include/adc/numerics/time/imex.hpp) | IMEX asymptotic-preserving |
+| [`numerics::time::{lie_step,strang_step}`](include/adc/numerics/time/splitting.hpp) | splitting d'operateurs |
+| [`numerics::time::advance_amr`](include/adc/numerics/time/amr_reflux_mf.hpp) | moteur AMR unifie : multi-patch N-niveaux, reflux coverage-aware, distribue MPI |
+| [`numerics::elliptic::GeometricMG`](include/adc/numerics/elliptic/geometric_mg.hpp) | multigrille geometrique (V-cycle GS rb), AMR-compatible, on-device ; eps(x) variable cote coeur (`set_epsilon`) |
+| [`numerics::elliptic::PoissonFFTSolver` / `DistributedFFTSolver`](include/adc/numerics/elliptic) | Poisson FFT spectral (mono-rang) et distribue (MPI), correctif `n` non puissance de 2 |
 | [`coupling::{ChargeDensityRhs,CoupledSource}`](include/adc/coupling/elliptic_rhs.hpp) | RHS de systeme `f = Σ_s q_s n_s` (N especes) ; source inter-especes `S(U_e,U_i,φ)` |
 | [`coupling::Coupler`](include/adc/coupling/coupler.hpp) | couplage hyperbolique-elliptique mono-modele : `Coupler<Model, Elliptic>` |
 | [`coupling::{SystemAssembler,SystemDriver}`](include/adc/coupling/system_coupler.hpp) | multi-especes mono-niveau : l'**assembleur** assemble (Poisson de systeme + aux), le **driver** avance (`step`, `step_cfl`, `step_adaptive`) ; `SystemCoupler` = alias du driver |
@@ -66,10 +73,29 @@ charges, isotherme) vivent dans `include/adc/model/` ; le module Python les comp
 | [`coupling::AmrCouplerMP`](include/adc/coupling) | couplage AMR multi-patch mono-modele (route par `advance_amr`) |
 | [`amr::{cluster,regrid,tag_box}`](include/adc/amr) | tagging + clustering Berger-Rigoutsos + regrid |
 | [`mesh::{MultiFab,BoxArray,Geometry}`](include/adc/mesh) | conteneurs distribues, halos, geometrie |
+| [`runtime::{System,AmrSystem}`](include/adc/runtime/system.hpp) | facades runtime de composition (assise des bindings Python) |
+| [`runtime::{model_factory,model_spec}`](include/adc/runtime/model_factory.hpp) | assemblage d'un `CompositeModel` a partir d'une spec de briques |
+| [`runtime::{dynamic_model,compiled_block_abi,dsl_block}`](include/adc/runtime/dsl_block.hpp) | dispatch JIT (`.so`, `IModel` virtuel) et AOT (bloc compile) d'un modele genere par le DSL |
 | seams [`for_each_cell`](include/adc/mesh/for_each.hpp), [`comm`](include/adc/parallel/comm.hpp) | dispatch serie/OpenMP/Kokkos, comm MPI |
 
 Concepts et seams : [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md). Algorithmes :
 [docs/ALGORITHMS.md](docs/ALGORITHMS.md). Profil : [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+## DSL symbolique (prototype)
+
+Un mini-DSL symbolique cote Python decrit un modele en FORMULES et le transforme en brique C++ :
+emission de la fonction de flux (`emit_cpp_brick`), de la source et du second membre elliptique,
+elimination de sous-expressions communes (CSE). Deux chemins de mise en oeuvre :
+
+- **JIT** (`.so` + `IModel` virtuel) : `System.add_dynamic_block` charge un modele a dispatch
+  virtuel, pour le prototypage hote ;
+- **AOT** : `compile_or_jit(mode="compile")` produit un bloc compile via `compiled_block_abi.hpp`,
+  branche par `System.add_compiled_block` (`.so`, marshaling de tableaux plats cote hote, sans
+  AMR ni MPI) ; et `System.add_compiled_model` (`dsl_block.hpp`) branche un `CompositeModel`
+  connu a la compilation comme un bloc NATIF, **valide bit-identique a `add_block` sur CPU/Serial**
+  (`test_compiled_model_parity`). Sur GPU (backend Cuda), ce chemin AOT natif bute encore sur une
+  limite nvcc (lambdas etendues instanciees dans une TU externe) : la parite zero-copie sur device
+  n'est pas encore acquise. Voir [docs/GPU_RUNTIME_PORT.md](docs/GPU_RUNTIME_PORT.md).
 
 ## Systemes multi-especes
 
@@ -179,11 +205,12 @@ sim.step_cfl(0.4)
 - **Integrateur temporel ecrit en Python** : primitives `solve_fields()`, `eval_rhs(name)`,
   `get_state`/`set_state` : on ecrit son propre `take_step` cote Python (par PAS), le residu
   et Poisson restant calcules en C++ (par CELLULE). Cf. `adc.integrate.ssprk2_step`.
-- **AMR** : `adc.AmrSystem` compose un bloc sur une hierarchie raffinee (meme API que System
-  plus `set_refinement`). L'integrateur AP deux-fluides (asymptotic-preserving) est un
-  integrateur **sur mesure**, non composable bloc a bloc : il n'est PAS expose dans l'API
+- **AMR** : `adc.AmrSystem` compose un bloc sur une hierarchie raffinee (API proche de System
+  plus `set_refinement`). Il n'est PAS a parite avec `System` : MONO-bloc, explicite, sans
+  reconstruction primitive ni flux de Roe. L'integrateur AP deux-fluides (asymptotic-preserving)
+  est un integrateur **sur mesure**, non composable bloc a bloc : il n'est PAS expose dans l'API
   publique ; sa methode reste compilee dans le module prive (`_adc._TwoFluidAP`, echappatoire
-  interne).
+  interne), en cours de sortie du coeur vers `adc_cases`.
 
 Le test `python/tests/test_bindings.py` exerce ces chemins. Exemples complets : depot
 [`adc_cases`](https://github.com/wolf75222/adc_cases) (un dossier Python par cas).
@@ -207,8 +234,11 @@ git clone https://github.com/wolf75222/adc_cpp.git
 cd adc_cpp
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build                 # 45 tests coeur (maillage, AMR, elliptique, integrateurs)
+ctest --test-dir build                 # ~53 tests coeur (maillage, AMR, elliptique, integrateurs)
 ```
+
+La CI a trois jobs : Release (serie), MPI (`+7` tests `mpirun`, bit-identiques np=1/2/4) et
+Kokkos (backend Serial). Le module Python ajoute une suite (`~16` tests : bindings + DSL).
 
 | Option | Defaut | Role |
 |---|---|---|
@@ -223,23 +253,30 @@ ctest --test-dir build                 # 45 tests coeur (maillage, AMR, elliptiq
 
 ```
 include/adc/
-  core/        types, etat, PhysicalModel, EquationBlock, CoupledSystem
-  mesh/        MultiFab, BoxArray, Geometry, for_each_cell, CL physiques
-  parallel/    seam comm (MPI)
-  operator/    reconstruction, flux numeriques, operateur spatial
-  elliptic/    concept EllipticSolver, multigrille, FFT (mono / distribue)
-  coupling/    Coupler, SystemCoupler, AmrCouplerMP, diagnostics
-  integrator/  SSP-RK, TimePolicy, scheduler, IMEX, splitting, moteur AMR
-  amr/         clustering Berger-Rigoutsos, regrid, hierarchie
-tests/         45 tests coeur (+ tests MPI via mpirun)
-docs/          ARCHITECTURE.md, ALGORITHMS.md, PERFORMANCE.md, validation diocotron
+  core/         types, etat, PhysicalModel, EquationBlock, CoupledSystem, variables
+  mesh/         MultiFab, BoxArray, Geometry, for_each_cell, CL physiques
+  parallel/     seam comm (MPI), load balance
+  physics/      briques generiques (etat, transport, source, elliptique) -> CompositeModel
+  numerics/     reconstruction, flux numeriques (Rusanov/HLL/HLLC/Roe), operateur spatial
+  numerics/elliptic/  concept EllipticSolver, multigrille, FFT (mono / distribue)
+  numerics/time/      SSP-RK, TimePolicy, scheduler, IMEX, splitting, moteur AMR
+  coupling/     Coupler, SystemCoupler, AmrSystemCoupler, AmrCouplerMP, diagnostics
+  amr/          clustering Berger-Rigoutsos, regrid, hierarchie
+  runtime/      facades System / AmrSystem, model_factory, JIT/AOT du DSL
+  solver/       integrateur specialise TwoFluidAP (en cours de sortie vers adc_cases)
+tests/          ~53 tests coeur (+ 7 tests MPI via mpirun)
+docs/           ARCHITECTURE.md, ALGORITHMS.md, PERFORMANCE.md, validation diocotron
 ```
 
 ## Validation (coeur)
 
-- **45** tests coeur (serie, ASan/UBSan, Kokkos device OpenMP ; MPI 52 bit-identiques np=1/2/4).
+- **~53** ctests coeur, joues sur deux builds en CI : Release (serie) et Kokkos (backend Serial) ;
+  **+7** tests MPI bit-identiques np=1/2/4. Le module Python ajoute **~16** tests (bindings + DSL).
 - AMR conservatif : reflux multi-patch a l'arrondi machine (`~1e-15`).
-- GPU GH200 : pas couple + AMR bit-identiques au CPU (checksum exact).
+- GPU GH200 : composants valides SEPAREMENT et bit-identiques au CPU (System mono-grille, ops de
+  champ AMR, halos MPI multi-GPU, backend AOT d'un modele DSL). La validation INTEGREE
+  AmrSystem + MPI + GPU n'est PAS faite ; la perf full-device reste a travailler. Voir
+  [docs/GPU_RUNTIME_PORT.md](docs/GPU_RUNTIME_PORT.md).
 
 Validation bout-en-bout (modeles, taux diocotron, runs ROMEO) : depot
 [`adc_cases`](https://github.com/wolf75222/adc_cases). Reference ROMEO : [docs/ROMEO.md](docs/ROMEO.md).

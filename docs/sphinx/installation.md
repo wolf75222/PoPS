@@ -14,7 +14,7 @@ git clone https://github.com/wolf75222/adc_cpp.git
 cd adc_cpp
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build          # 47/47
+ctest --test-dir build          # ~53 ctests coeur
 ```
 
 ## Module Python
@@ -32,14 +32,15 @@ python3 -c "import adc; print(adc.__doc__)"
 ## Backends optionnels
 
 ```bash
-cmake -S . -B build-omp -DADC_USE_OPENMP=ON    # OpenMP
-cmake -S . -B build-mpi -DADC_USE_MPI=ON       # MPI (+8 tests via mpirun -np 4)
-cmake -S . -B build-gpu -DADC_USE_KOKKOS=ON    # Kokkos (CPU/GPU GH200)
+cmake -S . -B build-omp -DADC_USE_OPENMP=ON    # OpenMP autonome (déprécié -> Kokkos)
+cmake -S . -B build-mpi -DADC_USE_MPI=ON       # MPI (+7 tests via mpirun -np 4)
+cmake -S . -B build-gpu -DADC_USE_KOKKOS=ON    # Kokkos (CPU Serial/OpenMP, GPU Cuda)
 ```
 
-Le backend est une propriété de la cible `adc` (héritée par tout ce qui la lie) ; aucun
-drapeau à rajouter dans le code. Voir le tutoriel
-[08, Backends](https://github.com/wolf75222/adc_cpp/blob/master/tutorials/08_backends.md).
+Le backend Kokkos est recommandé (CPU multi-thread ET GPU avec un seul code) ; le backend
+OpenMP autonome est déprécié. Le backend est une propriété de la cible `adc` (héritée par tout
+ce qui la lie) ; aucun drapeau à rajouter dans le code. La CI joue trois jobs : Release, MPI et
+Kokkos (Serial). Tutoriels et exemples vivent dans le dépôt applicatif `adc_cases`.
 
 ## Vérification
 

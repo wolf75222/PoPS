@@ -1,9 +1,11 @@
 # Architecture de adc_cpp
 
 Coeur C++23 pour les systemes hyperbolique-elliptique couples sur AMR, ecrit pour
-OpenMP + MPI + Kokkos. Les modeles physiques (`include/adc/model/`) et **les bindings
-Python de la lib** (module `adc` : composition `System` + solveurs specialises) vivent ICI ;
-`adc_cases` ne contient que des **cas d'utilisation en Python** qui importent ce module.
+MPI + Kokkos (le backend OpenMP autonome est deprecie). Les briques physiques
+(`include/adc/physics/`) et **les bindings Python de la lib** (module `adc` : composition
+`System` + solveur specialise `TwoFluidAP`) vivent ICI ; `adc_cases` ne contient que des
+**cas d'utilisation en Python** qui importent ce module. Le coeur est AGNOSTIQUE au modele :
+il ne nomme aucun scenario, il fournit des briques generiques composees en `CompositeModel`.
 
 Ce document fige l'architecture cible et son etat. Le README porte la narration et les
 resultats. Ici on decrit les couches, les seams, les decisions, et on distingue ce qui est
@@ -84,17 +86,20 @@ struct EulerPoisson {                       // bon : local, device-callable
 };
 ```
 
-**Les modeles, axe par axe** (verifie contre le code) :
+**Les briques, axe par axe** (verifie contre le code, `physics/`). Le coeur ne nomme aucun
+scenario : un modele est une COMPOSITION (`CompositeModel<Transport, Source, Elliptic>`) de
+briques generiques, les noms de scenario (diocotron, Euler-Poisson...) vivant cote application.
 
-| Modele | U (`State`) | `aux` | `flux` | `source` | `elliptic_rhs` |
-|---|---|---|---|---|---|
-| `Diocotron` | `n_e` (1 var) | `(phi, dphi/dx, dphi/dy)` | advection par derive E x B : `n_e v_E`, `v_E = (-dphi/dy, dphi/dx)/B0` | 0 | `alpha (n_e - n_i0)` |
-| `Euler` | `(rho, rho u, rho v, E)` | inutilise (present pour le concept) | flux d'Euler compressible | 0 | `rho` (densite de masse, inutilisee en Euler pur) |
-| `EulerPoisson` | `(rho, rho u, rho v, E)` | `grad phi` | DELEGUE a `Euler` | force `g = -grad phi` : `(0, rho g_x, rho g_y, rho u . g)` | `s * 4 pi G (rho - rho0)`, `s = +-1` |
+| Axe | Briques (exemples) | Role |
+|---|---|---|
+| etat / transport | `ExB` (1 var), `Euler` / `CompressibleFlux` (4 var), `IsothermalFlux` (3 var) | `flux(U, aux, dir)` + `max_wave_speed` |
+| source | `NoSource`, `PotentialForce(charge)`, `GravityForce` | `source(U, aux)` (force du champ) |
+| elliptique | `ChargeDensity`, `BackgroundDensity`, `GravityCoupling(sign)` | `elliptic_rhs(U)` (second membre de Poisson) |
 
-Diocotron exerce le chemin **aux vers flux** (le potentiel entre par le flux) ; Euler-Poisson le
-chemin **aux vers source** (le potentiel entre par la source, le flux reste celui d'Euler). C'est
-ce qui unifie les deux sous le MEME operateur spatial, sans specialisation.
+Deux chemins de couplage coexistent sous le MEME operateur spatial, sans specialisation : la
+derive E x B exerce le chemin **aux vers flux** (le potentiel entre par le flux `ExB`) ;
+Euler-Poisson le chemin **aux vers source** (le potentiel entre par `PotentialForce`/`GravityForce`,
+le flux reste celui d'Euler). `aux` reste FIGE (`phi`, `grad_x`, `grad_y`), non extensible.
 
 **Etendre : hypotheses et limite.** Ajouter un modele est simple S'IL rentre dans la famille
 hyperbolique-elliptique LOCALE prevue. La promesse implicite (un nouveau modele marche partout)
@@ -114,10 +119,10 @@ melange physique, parallelisme et organisation memoire.
 
 ## 3. Couche 2 : numerique / discretisation
 
-`operator/numerical_flux.hpp` (Rusanov / HLL / HLLC, politiques `ADC_HD`),
-`operator/reconstruction.hpp` (MUSCL), `operator/spatial_operator.hpp`
-(`compute_face_fluxes`, `assemble_rhs`), l'operateur elliptique (`elliptic/`), les CL
-logiques (`mesh/physical_bc.hpp`).
+`numerics/numerical_flux.hpp` (Rusanov / HLL / HLLC / Roe, politiques `ADC_HD`),
+`numerics/reconstruction.hpp` (MUSCL + WENO5-Z), `numerics/spatial_operator.hpp`
+(`compute_face_fluxes`, `assemble_rhs`), l'operateur elliptique (`numerics/elliptic/`),
+les CL logiques (`mesh/physical_bc.hpp`).
 
 C'est de la logique numerique **locale**, pas un conteneur. **Le flux numerique ne
 parcourt pas les cellules lui-meme** : il est appele par l'operateur discret, qui le passe
@@ -197,7 +202,7 @@ desambiguiser).
 
 ## 5. Couche 5 : temps et couplage
 
-`integrator/time_integrator.hpp`, `scheduler.hpp`, `ssprk.hpp`, `imex.hpp` (AP) et
+`numerics/time/time_integrator.hpp`, `scheduler.hpp`, `ssprk.hpp`, `imex.hpp` (AP) et
 `splitting.hpp`. Une `TimePolicy` nomme, par bloc, le traitement temporel
 (explicite, implicite, IMEX, prescrit) et le nombre de sous-pas. Le scheduler lit cette
 politique et appelle l'operateur adapte ; il ne connait pas la formule du flux. Le temps
@@ -232,15 +237,18 @@ l'arrondi inchangees).
 
 | Module | Couche | Role |
 |---|---|---|
-| `core/` | physique / systeme | `types` (`ADC_HD`, `Real`), `state` (`StateVec<N>`), `physical_model` (concept), `EquationBlock`, `CoupledSystem`, `allocator` (Arena) |
-| `operator/` | numerique | `numerical_flux` (Rusanov/HLL/HLLC), `reconstruction` (MUSCL), `spatial_operator` (`assemble_rhs`) |
-| `elliptic/` | numerique + temps | concept `EllipticSolver` ; `geometric_mg` (V-cycle) ; `poisson_fft`(+`_solver`) ; `poisson_operator` |
+| `core/` | physique / systeme | `types` (`ADC_HD`, `Real`), `state` (`StateVec<N>`), `physical_model` (concept), `EquationBlock`, `CoupledSystem`, `variables` (`VariableRole`), `allocator` (Arena) |
+| `physics/` | physique | briques generiques (`bricks`, `composite`), `euler`, `hyperbolic` (iso), `source`, `elliptic`, `langmuir`, `advection_diffusion` |
+| `numerics/` | numerique | `numerical_flux` (Rusanov/HLL/HLLC/Roe), `reconstruction` (MUSCL + WENO5-Z), `spatial_operator` (`assemble_rhs`), `spatial_discretisation` |
+| `numerics/elliptic/` | numerique + temps | concept `EllipticSolver` ; `geometric_mg` (V-cycle, eps(x)) ; `poisson_fft`(+`_solver`) ; `poisson_operator` ; `elliptic_problem` |
+| `numerics/time/` | temps | `TimePolicy`, scheduler par sous-pas, SSPRK, `time_steppers`, `implicit_stepper`, IMEX, splitting, moteur AMR `advance_amr`, `two_fluid_ap` |
 | `mesh/` (donnees) | maillage / donnees | `box2d`, `box_array`, `distribution_mapping`, `fab2d`/`multifab`, `geometry`, `refinement`, `box_hash` |
 | `mesh/` (execution) | execution | `for_each` (seam `for_each_cell`), `fill_boundary` (GhostExchange), `physical_bc`, `mf_arith` (operateurs de grille qui bouclent le seam) |
 | `parallel/` | execution | `comm` (seam MPI), `load_balance` (Z-order + knapsack) |
 | `amr/` | maillage adaptatif | `amr_hierarchy` (conteneur de niveaux), `cluster` (Berger-Rigoutsos, arithmetique entiere), `regrid` (politique de remaillage), `tag_box` (grille de marqueurs) |
-| `integrator/` | temps | `TimePolicy`, scheduler par sous-pas, SSPRK, IMEX, splitting, moteur AMR `advance_amr` |
-| `coupling/` | temps / couplage | `elliptic_rhs`, `Coupler`, `SystemCoupler`, `coupling_policy`, `amr_coupler`, `amr_coupler_mp`, `spectral_coupler`, diagnostics AMR |
+| `coupling/` | temps / couplage | `elliptic_rhs`, `Coupler`, `SystemCoupler`, `coupling_policy`, `amr_coupler`, `amr_coupler_mp`, `amr_system_coupler`, `spectral_coupler`, diagnostics AMR |
+| `runtime/` | runtime / bindings | facades `System` / `AmrSystem`, `model_factory` / `model_spec`, `block_builder`, JIT/AOT du DSL (`dynamic_model`, `compiled_block_abi`, `dsl_block`) |
+| `solver/` | solveur specialise | `two_fluid_ap_solver` (integrateur AP sur mesure, en cours de sortie vers adc_cases) |
 
 ## 7. Solveur elliptique : probleme / operateur / solveur / post-traitement
 
@@ -256,15 +264,16 @@ FieldPostProcess       E = -grad phi, energie, diagnostics.
 ```
 
 Etat :
-- **EllipticOperator FAIT** : `elliptic/poisson_operator.hpp` est l'operateur canonique,
+- **EllipticOperator FAIT** : `numerics/elliptic/poisson_operator.hpp` est l'operateur canonique,
   separe des solveurs (`apply_laplacian`, `poisson_residual`, lisseur GS rouge-noir). C'est
   l'`OperatorSpec` partage : `poisson_residual` EST la definition du Laplacien 5 points.
 - **LinearSolver FAIT** : le concept `EllipticSolver` (`rhs`/`phi`/`solve`/`residual`/`geom`)
   est l'interface ; `GeometricMG` (V-cycle GS rb, seul compatible AMR et tout `n`, on-device)
-  et `PoissonFFTSolver` (direct, mono-niveau periodique `n` puissance de 2, ~5x, **mono-rang /
-  boite unique** : il assert `n_ranks()==1 && ba.size()==1`) et `DistributedFFTSolver` (FFT
-  distribuee par BANDES, `MPI_Alltoall`, enveloppant le composant autonome `PoissonFFT` de
-  `elliptic/poisson_fft.hpp`) en sont TROIS implementations. `SpectralCoupler` DELEGUE desormais a
+  et `PoissonFFTSolver` (direct, mono-niveau periodique, ~5x, **mono-rang / boite unique** : il
+  assert `n_ranks()==1 && ba.size()==1`, avec correctif `n` non puissance de 2) et
+  `DistributedFFTSolver` (FFT distribuee par BANDES, `MPI_Alltoall`, enveloppant le composant
+  autonome `PoissonFFT` de `numerics/elliptic/poisson_fft.hpp`) en sont TROIS implementations.
+  `SpectralCoupler` DELEGUE desormais a
   `DistributedFFTSolver` (il ne re-implemente plus la FFT) : il ORCHESTRE un `EllipticSolver`, il
   n'en contient pas. `Coupler<Model, Elliptic = GeometricMG>` depend du concept, pas d'un backend.
 - **Identite MG = FFT rendue STRUCTURELLE** : `test_elliptic_operator` applique le MEME
@@ -272,11 +281,17 @@ Etat :
   `7.2e-14` (FFT), solutions identiques a `1.3e-16`. Les deux inversent prouvablement le meme
   operateur.
 
-- **EllipticProblem et FieldPostProcess FAITS** : `elliptic/elliptic_problem.hpp` nomme les
-  deux. `EllipticProblem` rassemble le coeff `eps`, les CL `BCRec` et le drapeau
-  `nullspace_const` (jusqu'ici implicites : Laplacien a coefficient constant `eps = 1`, CL via
-  `BCRec`, nullspace ad hoc en periodique). `eps` reste DESCRIPTIF (le stencil ne le lit pas
-  encore ; le brancher changerait les valeurs des que `eps != 1`). La fabrique
+- **eps(x) variable cote coeur FAIT** : `GeometricMG` resout reellement `div(eps grad phi)=f`,
+  `eps` etant un champ au centre des cellules fourni par `set_epsilon(eps_fn)` (formule
+  analytique evaluee niveau par niveau, ordre 2 preserve) ou `set_epsilon(eps_fine)` (champ
+  discretise restreint par `average_down`). NON appele => `eps` uniforme (chemin historique).
+  RESTE (TODO) : le cablage `System` / Python n'est PAS fait ; aucune facade runtime ne passe
+  encore un `eps` non uniforme au solveur.
+- **EllipticProblem et FieldPostProcess FAITS** : `numerics/elliptic/elliptic_problem.hpp` nomme
+  les deux. `EllipticProblem` rassemble le coeff `eps`, les CL `BCRec` et le drapeau
+  `nullspace_const`. Au niveau de CETTE fabrique additive, `eps` du `EllipticProblem` reste
+  DESCRIPTIF (le brancher au stencil via cette voie reste a faire ; la voie directe
+  `set_epsilon` ci-dessus, elle, est cablee dans `GeometricMG`). La fabrique
   `make_elliptic_solver<Solver>(geom, ba, EllipticProblem)` est additive et delegue a la
   `BCRec` existante : aucun appelant casse, le concept `EllipticSolver` reste modele.
   `FieldPostProcess` nomme la convention de derivation `E = -grad phi` via un signe explicite
@@ -295,15 +310,17 @@ nommee, documentee, mais ne sont pas touches a cette etape.
 ## 8. AMR distribue
 
 **Etat.** Le coeur fournit les briques AMR dans `amr/` et le moteur MultiFab dans
-`integrator/amr_reflux_mf.hpp`. Le schema reste le meme : tagging, clustering
+`numerics/time/amr_reflux_mf.hpp`. Le schema reste le meme : tagging, clustering
 Berger-Rigoutsos, regrid, sous-cyclage, average-down et reflux conservatif. Les roles
 importants sont explicites : `FluxRegister` accumule les flux de face, `CoverageMask`
 evite les doubles corrections, `DistributionMapping` porte l'ownership des boxes.
 
-**Couplage.** `AmrCoupler` et `AmrCouplerMP` restent les drivers AMR mono-modele. Le nouveau
-`SystemCoupler` couvre pour l'instant le mono-niveau multi-blocs ; l'etape suivante est de
-faire porter la meme notion d'`EquationBlock` par le moteur AMR, au lieu de dupliquer la
-logique par cas physique.
+**Couplage.** `AmrCoupler` et `AmrCouplerMP` restent les drivers AMR mono-modele. Le
+`SystemCoupler` couvre le mono-niveau multi-blocs ; `AmrSystemCoupler` porte le systeme
+multi-especes sur AMR (Poisson grossier + reflux par bloc). La facade `AmrSystem` n'est PAS a
+parite avec `System` : MONO-bloc, explicite, sans reconstruction primitive ni flux de Roe.
+L'etape suivante est de faire porter pleinement la meme notion d'`EquationBlock` par le moteur
+AMR, au lieu de dupliquer la logique par cas physique.
 
 **Tests coeur.** Les invariants AMR actuellement couverts dans ce depot sont le raffinement,
 la hierarchie, le clustering, le regrid, le reflux, le masque de couverture, les diagnostics
@@ -318,11 +335,15 @@ une seule fois :
 
 ```
 cmake -B build                       # serie
-cmake -B build -DADC_USE_OPENMP=ON   # CPU multi-thread (_OPENMP)
+cmake -B build -DADC_USE_OPENMP=ON   # CPU multi-thread (_OPENMP), deprecie -> Kokkos
 cmake -B build -DADC_USE_MPI=ON      # distribue (ADC_HAS_MPI + MPI::MPI_CXX)
-cmake -B build -DADC_USE_KOKKOS=ON \ # GPU / CPU portable (ADC_HAS_KOKKOS)
+cmake -B build -DADC_USE_KOKKOS=ON \ # GPU / CPU portable (ADC_HAS_KOKKOS), recommande
    -DCMAKE_CXX_COMPILER=$K/bin/nvcc_wrapper -DKokkos_ROOT=$K
 ```
+
+Le backend Kokkos est recommande : il couvre le CPU multi-thread (Serial / OpenMP) ET le GPU
+(Cuda) avec un seul code, sans aucun kernel CUDA ecrit a la main. La CI joue le backend Kokkos
+en Serial.
 
 Sous Kokkos, la norme retombe a C++20 (nvcc CUDA 12.x). Les kernels `ADC_HD` et le seam
 `for_each_cell` sont alors compiles pour le backend choisi.
@@ -340,13 +361,14 @@ une lib publique : on ne peut pas avoir une cible CPU et une cible GPU dans le m
 | `include/` | coeur generique (concepts, templates, seam GPU). Visible a l'instanciation. | header-only `adc::adc` |
 | `tests/` | CTest du coeur (+ MPI via `mpirun` quand active). | lie `adc::adc` |
 | `docs/` | architecture, algorithmes, notes de validation/performance. | documentation |
-| `include/adc/model/` | bibliotheque de modeles physiques (diocotron, Euler, Euler-Poisson, fluides charges, isotherme). | header-only `adc::adc` |
-| `python/` | module Python `adc` (pybind11) : facades runtime `System` / `AmrSystem` + `adc.integrate` (l'integrateur AP deux-fluides reste compile dans le module prive `_adc._TwoFluidAP`, hors API publique). | `-DADC_BUILD_PYTHON=ON` |
+| `include/adc/physics/` | briques physiques generiques (etat, transport, source, elliptique) composees en `CompositeModel`. | header-only `adc::adc` |
+| `python/` | module Python `adc` (pybind11) : facades runtime `System` / `AmrSystem` + `adc.integrate` + DSL (l'integrateur AP deux-fluides reste compile dans le module prive `_adc._TwoFluidAP`, hors API publique). | `-DADC_BUILD_PYTHON=ON` |
 | `adc_cases` | cas d'utilisation 100 % Python (un dossier par cas), importent le module `adc`. | aucun C++ |
 
-Regle actuelle : `adc_cpp` est la bibliotheque (coeur + modeles + bindings). Le coeur
-generique (`include/`, hors `model/`) ne depend d'aucun modele ; les modeles et la facade
-runtime se posent au-dessus. `adc_cases` ne fait que **consommer** le module Python.
+Regle actuelle : `adc_cpp` est la bibliotheque (coeur + briques physiques + bindings). Le coeur
+est AGNOSTIQUE au modele : aucun scenario n'est nomme dans `include/`, seules des briques
+generiques composees par le `model_factory` ; les compositions nommees vivent dans `adc_cases`,
+qui ne fait que **consommer** le module Python.
 
 ## 11. Validation : logicielle ET numerique
 
@@ -355,11 +377,15 @@ bit-identique a la reference prouve que la refactorisation n'a rien casse. Ca ne
 que le comportement est numeriquement correct. Les deux sont necessaires.
 
 Fait aujourd'hui dans `adc_cpp` :
-- Tests : 32 tests CPU serie par defaut (`ctest --test-dir build`).
-- Numerique coeur : maillage, halos, AMR, reflux, multigrille, Poisson, discretisations,
-  IMEX/AP, splitting, `EquationBlock`, `CoupledSystem`, `SystemCoupler`.
-- MPI : tests dedies actives quand `-DADC_USE_MPI=ON`.
-- Les validations applicatives (diocotron, runs ROMEO, Python) vivent dans `adc_cases`.
+- Tests : ~53 ctests coeur par defaut (`ctest --test-dir build`), joues en CI sur deux builds
+  (Release serie ET Kokkos backend Serial) ; +7 tests MPI quand `-DADC_USE_MPI=ON`. Le module
+  Python ajoute ~16 tests (bindings + DSL).
+- Numerique coeur : maillage, halos, AMR, reflux, multigrille, Poisson (dont eps(x) variable),
+  discretisations, flux de Roe, IMEX/AP, splitting, `EquationBlock`, `CoupledSystem`,
+  `SystemCoupler`, parite du bloc compile AOT (CPU/Serial).
+- Les validations applicatives (diocotron, runs ROMEO, taux de croissance) vivent dans `adc_cases`.
+- GPU GH200 : composants valides SEPAREMENT (System mono-grille, ops de champ AMR, halos MPI
+  multi-GPU, backend AOT d'un modele DSL) ; pas de validation INTEGREE AmrSystem + MPI + GPU.
 
 ## 12. Comparaison AMReX
 
@@ -376,12 +402,14 @@ Coeur header-only sous `include/adc/`, range par couche. Une ligne par fichier :
 c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-tete.
 
 ### `core/` : types et contrat
-- `types.hpp` : scalaires de base (`Real`) + macro `ADC_HD` (host/device). Minimal, inclus partout.
+- `types.hpp` : scalaires de base (`Real`) + macro `ADC_HD` (delegue a `KOKKOS_FUNCTION` sous Kokkos).
 - `state.hpp` : `State` / `Aux`, les deux types ponctuels de la couche physique (POD device-callable).
 - `physical_model.hpp` : le concept `PhysicalModel` (contrat flux / source / max_wave_speed / elliptic_rhs).
+- `variables.hpp` : `VariableRole` + `VariableSet` (`index_of(role)`). EXISTE mais PAS encore utilise dans les couplages / le runtime / Python / le DSL (ceux-ci adressent encore `u[0..3]`).
 - `equation_block.hpp` : un bloc d'equation = nom, `MultiFab`, modele, discretisation spatiale, politique temps.
 - `coupled_system.hpp` : tuple type de plusieurs `EquationBlock`, iteration generique par bloc.
-- `allocator.hpp` : allocateur du `Fab2D`, std (host) ou `cudaMallocManaged` (memoire unifiee GH200).
+- `kokkos_env.hpp` : initialisation paresseuse de Kokkos (avant toute allocation `SharedSpace`).
+- `allocator.hpp` : allocateur du `Fab2D`, std (host) ou `Kokkos::kokkos_malloc<SharedSpace>` (memoire unifiee).
 
 ### `mesh/` : donnees + seams (couche 3)
 - `box2d.hpp` : `Box2D`, espace d'indices d'une grille cartesienne 2D.
@@ -397,25 +425,37 @@ c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-te
 - `refinement.hpp` : transfert AMR ratio r : prolongation (interp) + restriction (average_down).
 - `mf_arith.hpp` : combinaisons lineaires de MultiFab (saxpy, norm_inf, sum) pour les etages RK.
 
-### `operator/` : numerique local (couche 2)
-- `numerical_flux.hpp` : flux de Riemann en politique (template) : Rusanov / HLL / HLLC.
+### `physics/` : briques physiques generiques (couche 1)
+- `bricks.hpp` / `composite.hpp` : briques generiques (etat, transport, source, elliptique) et leur composition en `CompositeModel<Hyperbolic, Source, Elliptic>`.
+- `hyperbolic.hpp` : flux hyperboliques generiques (dont `IsothermalFlux`).
+- `euler.hpp` : flux d'Euler compressible 4 var (+ `eigenvalues`, roles de variables).
+- `source.hpp` : termes sources de potentiel / gravite.
+- `elliptic.hpp` : seconds membres elliptiques (charge, fond, gravite).
+- `langmuir.hpp` : briques Langmuir (oscillation electrostatique). `advection_diffusion.hpp` / `two_fluid_isothermal.hpp` : briques associees.
+
+### `numerics/` : numerique local (couche 2)
+- `numerical_flux.hpp` : flux de Riemann en politique (template) : Rusanov / HLL / HLLC / Roe.
 - `reconstruction.hpp` : reconstruction d'interface : NoSlope / MUSCL (Minmod, VanLeer, MC) / WENO5-Z.
 - `spatial_operator.hpp` : `assemble_rhs` (R = -div F + S) + `compute_face_fluxes` (flux de face pour le reflux).
+- `spatial_discretisation.hpp` : assemblage du couple (reconstruction x flux) par bloc.
 
-### `elliptic/` : Poisson
+### `numerics/elliptic/` : Poisson
 - `elliptic_solver.hpp` : concept `EllipticSolver` (contrat resoudre D phi = f).
 - `elliptic_problem.hpp` : types descriptifs de l'etage elliptique.
 - `poisson_operator.hpp` : Laplacien 5 points + lisseur Gauss-Seidel red-black.
-- `geometric_mg.hpp` : multigrille geometrique (V-cycle), `solve_robust` anti-divergence.
-- `poisson_fft.hpp` : Poisson spectral direct (FFT), distribue par bandes (MPI_Alltoall).
+- `geometric_mg.hpp` : multigrille geometrique (V-cycle), `solve_robust` anti-divergence, `set_epsilon` (eps(x) variable).
+- `poisson_fft.hpp` : Poisson spectral direct (FFT), distribue par bandes (MPI_Alltoall), correctif `n` non puissance de 2.
 - `poisson_fft_solver.hpp` : backend `EllipticSolver` FFT : `PoissonFFTSolver` (mono-rang) + `DistributedFFTSolver` (bandes MPI).
 
-### `integrator/` : temps + AMR (couche 5)
+### `numerics/time/` : temps + AMR (couche 5)
 - `time_integrator.hpp` : tags SSPRK + `TimePolicy` explicite / implicite / IMEX / prescrit.
+- `time_steppers.hpp` : integrateurs OBJETS (`ForwardEuler`, `SSPRK2Step`, `SSPRK3Step`, `take_step`).
+- `implicit_stepper.hpp` : defaut implicite (Newton local), IMEX partiel via `is_implicit(c)`.
 - `scheduler.hpp` : sous-cyclage generique d'un `CoupledSystem` selon les policies de blocs.
 - `ssprk.hpp` : SSPRK2 / SSPRK3 (Shu-Osher, TVD).
 - `imex.hpp` : IMEX asymptotic-preserving (raide implicite + non-raide explicite).
 - `splitting.hpp` : splitting d'operateur Lie (ordre 1) / Strang (ordre 2).
+- `two_fluid_ap.hpp` : primitives du schema AP deux-fluides (en cours de sortie vers adc_cases).
 - `amr_reflux_mf.hpp` : **moteur AMR de production** `advance_amr` (multi-patch N-niveaux distribue) + types `FluxRegister` / `CoverageMask` ; la pile mono-box `amr_*_mf` y vit en `detail::` (oracle de validation).
 - `amr_reflux.hpp` / `amr_multilevel.hpp` : reference Fab2D mono-box (2-niveaux / N-niveaux), verite-terrain du moteur ci-dessus.
 
@@ -426,10 +466,24 @@ c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-te
 - `coupling_policy.hpp` : frequence du solve elliptique (PerStage / OncePerStep).
 - `amr_coupler.hpp` : coupleur AMR E x B mono-box (route par `advance_amr`).
 - `amr_coupler_mp.hpp` : coupleur AMR E x B multi-patch + regrid BR, parametre `replicated_coarse`.
+- `amr_system_coupler.hpp` : systeme multi-especes porte sur AMR (Poisson grossier + reflux par bloc).
 - `amr_regrid_coupler.hpp` : le regrid Berger-Rigoutsos extrait du coupleur multi-patch.
 - `amr_level_storage.hpp` : stockage de la hierarchie (niveaux + aux) extrait des coupleurs.
 - `amr_diagnostics.hpp` : masse / vitesse de derive via le seam reducteur.
 - `spectral_coupler.hpp` : coupleur periodique distribue (FFT par bandes).
+
+### `runtime/` : facades runtime + DSL (assise des bindings)
+- `system.hpp` : facade `System` (composition multi-blocs mono-niveau, Poisson partage).
+- `amr_system.hpp` : facade `AmrSystem` (un bloc sur hierarchie raffinee ; mono-bloc, explicite, PAS a parite avec `System`).
+- `model_spec.hpp` / `model_factory.hpp` : spec de briques -> `CompositeModel` (le coeur ne nomme aucun scenario).
+- `block_builder.hpp` : fermetures de bloc instanciables hors `System` (fondation backend AOT).
+- `grid_context.hpp` : contexte de grille reel (maillage + CL + aux) partage par les chemins de bloc.
+- `dynamic_model.hpp` : modele type-erased a dispatch virtuel (`IModel`), charge en JIT via `.so`.
+- `compiled_block_abi.hpp` : ABI `extern "C"` du bloc compile (`add_compiled_block`, marshaling hote, sans AMR/MPI).
+- `dsl_block.hpp` : `add_compiled_model` (bloc compile NATIF connu a la compilation ; parite `add_block` validee CPU/Serial, limite nvcc sur GPU).
+
+### `solver/` : solveur specialise
+- `two_fluid_ap_solver.hpp` : integrateur AP deux-fluides sur mesure (hors API publique, en cours de sortie vers adc_cases).
 
 ### `amr/` : maillage adaptatif
 - `amr_hierarchy.hpp` : `AmrHierarchy`, la pile de niveaux raffines (niveau 0 = grossier).

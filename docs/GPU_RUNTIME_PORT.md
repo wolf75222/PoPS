@@ -3,10 +3,14 @@
 Le DSL et le coeur de calcul sont verifies jusqu'au GPU GH200 (flux, brique generee, CAS Euler complet
 via le seam Kokkos `for_each_cell` ; cf. docs/GPU_ROMEO.md). Ce qui reste pour une PRODUCTION GPU de
 bout en bout, c'est porter la PILE RUNTIME entiere (System / MultiFab / Poisson / AMR / MPI) sur device.
-ETAT (juin 2026) : le solveur MONO-GRILLE complet (transport + BCs + couplages + Poisson + pas
-de temps, orchestre par le System) tourne sur GH200, verifie == CPU (phases 1-5, 7) ; le backend AOT
-d'un modele genere par le DSL tourne sur device (phase 8) ; et l'echange de halos MULTI-GPU est valide
-(phase 6, np=1/2/4 bit-identiques). Reste surtout des optimisations perf. Ce document decoupe en phases.
+ETAT (juin 2026) : les composants sont valides SEPAREMENT sur GH200, pas en pile integree. Le
+solveur MONO-GRILLE complet (transport + BCs + couplages + Poisson + pas de temps, orchestre par
+le System) tourne sur GH200, verifie == CPU (phases 1-5, 7) ; les ops de champ AMR (reflux,
+transferts) tournent sur device (phase 5) ; l'echange de halos MULTI-GPU est valide (phase 6,
+np=1/2/4 bit-identiques) ; le backend AOT .so d'un modele genere par le DSL tourne sur device
+(phase 8, avec marshaling hote). Ce qui RESTE : la VALIDATION INTEGREE AmrSystem + MPI + GPU
+(jamais executee ensemble), la perf full-device, et la parite AOT zero-copie sur device. Ce
+document decoupe en phases.
 
 ## Modele d'execution : MPI + Kokkos (PAS de CUDA ecrit a la main)
 
@@ -55,7 +59,7 @@ pas une reecriture des noyaux de calcul.
    `device_fence` interne supprime (les kernels BC s'ordonnent apres `copy_shifted`, et les faces y
    apres les faces x, sur le meme flux). Un transport NON-periodique (sortie Foextrap) sur GH200 donne
    un resultat BIT-IDENTIQUE au CPU (`python/tests/gpu/phase2_transport.cpp` ; la masse decroit comme
-   il se doit, sortie libre). 49 ctests (dont test_physical_bc, poisson_disc, cut_cell) verts.
+   il se doit, sortie libre). ~53 ctests (dont test_physical_bc, poisson_disc, cut_cell) verts.
 3. **Poisson sur device.** ✅ FAIT (verifie GH200) -- et SANS modification de code. Toute la boucle
    V-cycle de `GeometricMG` etait DEJA en `for_each` -> device : smoother red-black GS, residu, Laplacien
    (`poisson_operator.hpp`), restriction `average_down` + prolongation `interpolate` (`mesh/refinement.hpp`),
@@ -93,15 +97,19 @@ pas une reecriture des noyaux de calcul.
    correctifs nvcc des phases 1/2 + le design for_each suffisent. `python/tests/gpu/phase7_system.cpp`.
    RESTE pour la prod multi-GPU : phase 6 (MPI CUDA-aware) + perf (full-device reflux, eviter les
    sync hote des reductions par pas).
-8. **Backend AOT sur device (modele genere par le DSL).** ✅ FAIT (verifie GH200). Un modele
-   `euler_poisson` ECRIT EN FORMULES, compile AOT (`compile_or_jit(mode="compile")`) en .so via
-   `compiled_block_abi.hpp`, execute le chemin de production (`assemble_rhs<Minmod, HLLCFlux>` recon
-   primitif + SSPRK2) sur le GH200 : residu, masse, quantite de mouvement et energie BIT-IDENTIQUES au
-   build serie hote (`sim_aot/`). A leve + corrige un vrai bug : `extract()` lisait la memoire unifiee
-   AVANT la fin du kernel async (`assemble_rhs`/avance) ; ajout d'un `device_fence()` (le seam System
-   fencait deja via `copy_state`). Le marshaling de tableaux plats traverse le dlopen sans partage
-   d'objet C++ (ABI propre). RESTE : variante zero-copie (modele compile dans le meme binaire que le
-   System device, sans marshaling) pour la perf.
+8. **Backend AOT sur device (modele genere par le DSL).** ✅ FAIT pour le chemin .so avec
+   MARSHALING HOTE (verifie GH200). Un modele `euler_poisson` ECRIT EN FORMULES, compile AOT
+   (`compile_or_jit(mode="compile")`) en .so via `compiled_block_abi.hpp` (`add_compiled_block`),
+   execute le chemin de production (`assemble_rhs<Minmod, HLLCFlux>` recon primitif + SSPRK2) sur
+   le GH200 : residu, masse, quantite de mouvement et energie BIT-IDENTIQUES au build serie hote
+   (`sim_aot/`). A leve + corrige un vrai bug : `extract()` lisait la memoire unifiee AVANT la fin
+   du kernel async ; ajout d'un `device_fence()`. Le marshaling de tableaux plats traverse le
+   dlopen sans partage d'objet C++ (ABI propre) ; ce chemin .so ne porte ni AMR ni MPI.
+   RESTE (non fait) : la variante ZERO-COPIE NATIVE (`add_compiled_model` / `dsl_block.hpp`, modele
+   compile dans le meme binaire que le System, sans marshaling) est validee BIT-IDENTIQUE a
+   `add_block` sur CPU/Serial (`test_compiled_model_parity`), mais sur GPU (backend Cuda) elle BUTE
+   sur une limite nvcc : une lambda etendue `__host__ __device__` instanciee dans une TU EXTERNE
+   (le .so genere) n'est pas acceptee. La parite zero-copie sur device n'est donc PAS encore acquise.
 
 ## Strategie suggeree
 
@@ -117,6 +125,10 @@ pas une reecriture des noyaux de calcul.
 ## Etat
 
 Le reste de la vision (DSL symbolique : interprete, codegen flux/brique/source/elliptique, CSE, JIT
-.so, dispatch type-erased dans le System ; flux Roe ; VariableRole ; eps constant ; reorg physics/
-numerics) est COMPLET au niveau prototype, teste (49 ctests C++ + 13 tests Python) et verifie jusqu'au
-GH200. Ce portage runtime est le seul gros morceau ouvert.
+.so, dispatch type-erased dans le System, AOT bloc compile a parite native sur CPU/Serial ; flux Roe ;
+VariableRole present mais pas encore cable ; eps(x) variable cote coeur, cablage System/Python a faire ;
+reorg physics/ numerics/) est COMPLET au niveau PROTOTYPE, teste (~53 ctests C++ + ~16 tests Python) et
+verifie jusqu'au GH200 PAR COMPOSANTS SEPARES. Restent : la VALIDATION INTEGREE AmrSystem + MPI + GPU
+(seuls des composants separes ont ete valides), la perf full-device (reflux sans rebond hote, halos
+GPUDirect device-direct, FFT distribuee device) et la parite AOT zero-copie sur device (limite nvcc,
+phase 8). Ce portage runtime reste le gros morceau ouvert.

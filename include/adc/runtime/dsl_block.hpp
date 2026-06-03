@@ -15,9 +15,15 @@
 /// pour le prototypage RUNTIME cote Python) : ici le modele est connu a la compilation, donc
 /// block_builder fabrique les fermetures sur le CONTEXTE DE GRILLE REEL du System (grid_context) et le
 /// bloc tourne EXACTEMENT le chemin de production -- le residu fait fill_boundary (halos MPI) +
-/// assemble_rhs (device Kokkos) sur les vrais MultiFab du System, SANS recopie. Parite complete
-/// Kokkos + MPI avec un bloc add_block (le meme make_block est utilise). C'est le backend "compile"
-/// de l'ideal m.compile_or_jit() pour un binaire de production.
+/// assemble_rhs (Kokkos) sur les vrais MultiFab du System, SANS recopie : le MEME make_block que
+/// add_block. Parite validee sur CPU (build/ ET backend Kokkos Serial) : eval_rhs bit-identique a
+/// add_block (cf. tests/test_compiled_model_parity.cpp).
+///
+/// LIMITE CONNUE (backend Kokkos Cuda) : make_block instancie des LAMBDAS ETENDUES (__host__
+/// __device__) ; instanciees ICI dans la TU appelante (et non dans system.cpp), elles butent sur une
+/// limite nvcc des lambdas etendues en template cross-TU -> crash device a l'execution. La parite GPU
+/// demande de remplacer ces lambdas par des FONCTEURS NOMMES dans block_builder.hpp (suivi dedie).
+/// C'est le backend "compile" de l'ideal m.compile_or_jit() pour un binaire de production.
 
 namespace adc {
 
