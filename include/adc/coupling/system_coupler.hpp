@@ -66,9 +66,15 @@ class SystemAssembler {
                 "le backend elliptique doit modeler EllipticSolver");
 
  public:
+  // bz : champ magnetique hors-plan B_z(x, y) fourni par l'utilisateur (constante ou champ),
+  // partage par TOUS les blocs. Le canal aux PARTAGE est alloue a la largeur MAXIMALE demandee
+  // par les blocs (aux_comps) : un bloc qui lit B_z (n_aux=4) le voit, un bloc de base (3)
+  // ignore la composante. Sans bloc a champ extra, la largeur reste 3 -> allocation et numerique
+  // strictement bit-identiques a l'historique.
   SystemAssembler(System system, const Geometry& geom, const BoxArray& ba,
                   const BCRec& bcPhi, RhsAssembler rhs_assembler,
-                  std::function<bool(Real, Real)> active = {})
+                  std::function<bool(Real, Real)> active = {},
+                  std::function<Real(Real, Real)> bz = {})
       : system_(std::move(system)),
         rhs_assembler_(std::move(rhs_assembler)),
         geom_(geom),
@@ -77,7 +83,11 @@ class SystemAssembler {
         bcPhi_(bcPhi),
         aux_bc_(derive_aux_bc(bcPhi)),
         mg_(geom, ba, bcPhi, std::move(active)),
-        aux_(ba, dm_, 3, 1) {}
+        aux_ncomp_(system_aux_comps(system_)),
+        aux_(ba, dm_, aux_ncomp_, 1),
+        bz_(std::move(bz)) {
+    fill_bz();  // peuple B_z (no-op si aucun bloc ne le demande ou si bz vide)
+  }
 
   System& system() { return system_; }
   const System& system() const { return system_; }
@@ -130,6 +140,36 @@ class SystemAssembler {
     fill_ghosts(aux_, geom_.domain, aux_bc_);
   }
 
+  // Largeur du canal aux PARTAGE : maximum des aux_comps<Model> sur tous les blocs (au moins
+  // kAuxBaseComps). Le canal partage doit etre au moins aussi large que le bloc le plus exigeant
+  // pour que load_aux<aux_comps<Model>> n'y lise jamais hors borne ; un bloc moins exigeant
+  // ignore simplement les composantes extra.
+  static int system_aux_comps(const System& sys) {
+    int w = kAuxBaseComps;
+    sys.for_each_block([&](const auto& b) {
+      using Model = std::decay_t<decltype(b.model)>;
+      const int c = aux_comps<Model>();
+      if (c > w) w = c;
+    });
+    return w;
+  }
+
+  // Peuple la composante aux B_z (indice kAuxBaseComps) du canal partage depuis bz_(x, y), une
+  // seule fois (B_z statique). No-op si aucun bloc ne declare B_z (largeur 3) ou si bz_ vide :
+  // garde RUNTIME sur aux_ncomp_ (la largeur n'est connue qu'a la construction). Halos ensuite
+  // maintenus par derive_aux (aux_bc_) ; field_postprocess n'ecrit que phi/grad (comp 0..2).
+  void fill_bz() {
+    if (!bz_ || aux_ncomp_ <= kAuxBaseComps) return;
+    for (int li = 0; li < aux_.local_size(); ++li) {
+      Fab2D& f = aux_.fab(li);
+      const Box2D v = aux_.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          f(i, j, kAuxBaseComps) = bz_(geom_.x_cell(i), geom_.y_cell(j));
+    }
+    fill_ghosts(aux_, geom_.domain, aux_bc_);  // halos de B_z avant le 1er solve
+  }
+
   System system_;
   RhsAssembler rhs_assembler_;
   Geometry geom_;
@@ -137,7 +177,9 @@ class SystemAssembler {
   DistributionMapping dm_;
   BCRec bcPhi_, aux_bc_;
   Elliptic mg_;
+  int aux_ncomp_;  // largeur du canal aux partage (max des blocs) ; init avant aux_
   MultiFab aux_;
+  std::function<Real(Real, Real)> bz_;  // B_z(x, y) externe (vide si non fourni)
 };
 
 // === DRIVER : avance le systeme. Possede un Assembleur, lui delegue les champs. =========
@@ -147,9 +189,10 @@ class SystemDriver {
  public:
   SystemDriver(System system, const Geometry& geom, const BoxArray& ba,
                const BCRec& bcPhi, RhsAssembler rhs_assembler,
-               std::function<bool(Real, Real)> active = {})
+               std::function<bool(Real, Real)> active = {},
+               std::function<Real(Real, Real)> bz = {})
       : asm_(std::move(system), geom, ba, bcPhi, std::move(rhs_assembler),
-             std::move(active)) {}
+             std::move(active), std::move(bz)) {}
 
   // Acces delegues a l'assembleur (compat avec l'ancienne API SystemCoupler).
   System& system() { return asm_.system(); }

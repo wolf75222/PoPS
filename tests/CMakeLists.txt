@@ -63,6 +63,7 @@ adc_add_test(test_amr_spatial_parity)
 # --- canal aux extensible (n_aux + load_aux<NComp>) : champ extra B_z lu et peuple ---
 adc_add_test(test_aux_extra)
 adc_add_test(test_aux_coupler_bz)
+adc_add_test(test_aux_system_bz)  # B_z partage multi-blocs (SystemAssembler, aux = max sur les blocs)
 
 adc_add_test(test_weno_convergence)
 adc_add_test(test_splitting)
