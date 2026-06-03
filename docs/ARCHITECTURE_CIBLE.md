@@ -174,8 +174,10 @@ virtuelle, == `adc::Euler` (`test_dynamic_model` C++ ; `test_dsl_dynamic` Python
 hors GPU ; pendant COMPILE de PythonFlux). Reste pour (a) : cabler `IModel` dans le runtime `System`
 (`sim.add_dynamic_block`) pour piloter depuis Python un modele charge a l'execution.
 
-(b) RESTE : rebatir le solveur adc COMPLET avec `-DADC_USE_KOKKOS=ON` et faire tourner un CAS entier
-(time-stepping, pas seulement le flux) sur GPU.
+(b) FAIT : un CAS Euler 2D COMPLET (80 pas, CFL, Rusanov, periodique) avance sur GH200 a travers le
+seam Kokkos d'adc (`for_each_cell` / `for_each_cell_reduce_*`), masse exactement conservee, brique
+generee == `adc::Euler` a 9e-16 sur 80 pas (cf. docs/GPU_ROMEO.md). Reste : la pile runtime ENTIERE
+(System / AMR / MPI) sur GPU, et `sim.add_dynamic_block` cote Python (item (a)).
 
 Le codegen hote et le dispatch type-erased NE remplacent PAS les briques compilees de production (chemin
 template, GPU/MPI).

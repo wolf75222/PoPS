@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(kksim CXX)
+find_package(Kokkos REQUIRED)
+add_executable(kksim kokkos_euler_sim.cpp)
+target_include_directories(kksim PRIVATE ${ADC_INCLUDE})
+target_compile_definitions(kksim PRIVATE ADC_HAS_KOKKOS)
+target_link_libraries(kksim PRIVATE Kokkos::kokkos)

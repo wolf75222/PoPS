@@ -79,11 +79,38 @@ L'espace d'execution par defaut est `Cuda` (le kernel tourne bien sur le GPU). L
 (5.55e-17), du a la contraction FMA de nvcc_wrapper differente de l'hote, pas a un bug : la brique
 generee est correcte a travers le dispatch Kokkos sur GH200.
 
+## Cas COMPLET (time-stepping) sur GPU via le seam Kokkos d'adc
+
+On va au-dela d'un flux isole : un cas Euler 2D complet (80 pas, CFL, Rusanov ordre 1, periodique)
+avance ENTIEREMENT sur GPU a travers `adc::for_each_cell` / `for_each_cell_reduce_max|sum`
+(`adc/mesh/for_each.hpp` -> `Kokkos::parallel_for` / `parallel_reduce`). On simule la MEME chose avec
+la brique generee `EulerGen` et avec `adc::Euler`, et on compare les champs finaux + la masse.
+
+```bash
+PYTHONPATH=$PWD/build-py/python python3 python/tests/gpu/gen_kokkos_sim.py   # -> /tmp/kokkos_euler_sim.cpp
+rsync -az include /tmp/kokkos_euler_sim.cpp romeo:adc_dsl_kk/sim/   # + kokkos_sim_CMakeLists.txt -> sim/CMakeLists.txt
+rsync -az python/tests/gpu/romeo_kokkos_sim_build.sh romeo:adc_dsl_kk/kk_sim_build.sh
+ssh romeo 'cd ~/adc_dsl_kk && srun --account=<compte> -p instant --constraint=armgpu \
+           --gres=gpu:1 --mem=16G -c 16 -t 25 bash kk_sim_build.sh'
+```
+
+Le harnais definit `#define ADC_HAS_KOKKOS` puis inclut `adc/mesh/for_each.hpp` : les boucles de
+cellules passent donc par le VRAI dispatch Kokkos du solveur (le meme site d'appel que sur CPU).
+
+Resultat (obtenu) :
+```
+exec=Cuda  n=64 steps=80  mass_drel=0.000e+00  rho[min,max]=[0.8912,1.0464]  maxdiff(EulerGen vs adc::Euler, GPU)=8.882e-16
+```
+
+80 pas de temps sur GH200 : masse EXACTEMENT conservee, dynamique non triviale (la bulle de pression
+fait varier la densite), et la brique generee == `adc::Euler` a la precision machine (8.9e-16 cumule
+sur 80 pas). Le cas complet tourne donc sur GPU a travers la machinerie Kokkos d'adc.
+
 ## Limites / suite
 
-- Le solveur adc COMPLET n'est pas rebati ici avec Kokkos : on valide la brique generee a travers le
-  meme primitif de dispatch (`Kokkos::parallel_for` / `KOKKOS_LAMBDA`) que `adc/mesh/for_each.hpp`,
-  ce qui prouve sa compatibilite Kokkos device.
-- Toujours pas le dispatch de la brique generee DANS le solveur template a l'execution (cf.
-  ARCHITECTURE_CIBLE.md sect. 3 : exige une interface de modele type-erased). Ici la brique est
-  compilee statiquement dans le harnais, ce qui suffit a valider le codegen device + Kokkos.
+- Le cas complet passe par `adc/mesh/for_each.hpp` (le seam Kokkos REEL du solveur), mais on ne
+  rebatit pas ici toute la pile runtime (System / AMR / MPI) sur GPU : les boucles de cellules
+  empruntent le meme dispatch que la production, ce qui suffit a valider le device.
+- Dispatch type-erased a l'execution : FAIT par ailleurs (adc::IModel, cf. python/tests/test_dsl_dynamic.py).
+  Les harnais GPU ci-dessus compilent en revanche la brique STATIQUEMENT (perf) ; le chemin type-erased
+  (vtable) est un complement HOTE, pas pour la boucle chaude GPU.

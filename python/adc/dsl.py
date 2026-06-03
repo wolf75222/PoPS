@@ -403,6 +403,7 @@ class HyperbolicModel:
         cnames = ", ".join('"%s"' % c for c in self.cons_names)
         pnames = ", ".join('"%s"' % p for p in self.prim_state)
         S = [
+            "#include <cmath>",  # std::sqrt / std::pow : brique autosuffisante (g++ ne tire pas cmath)
             "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (adc.dsl.emit_cpp_brick)."
             % self.name,
             "// Satisfait adc::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
@@ -488,6 +489,7 @@ class HyperbolicModel:
             return ["    const adc::Real %s = a.%s;" % (nm_, nm_) for nm_ in self.aux_names]
 
         S = [
+            "#include <cmath>",  # autosuffisant pour std::sqrt / std::pow
             "// brique de SOURCE generee depuis le modele symbolique '%s' (adc.dsl.emit_cpp_source)."
             % self.name,
             "// apply(U, a) -> terme source S(U, aux) ; noms aux = champs de adc::Aux (grad_x, grad_y).",
@@ -516,6 +518,7 @@ class HyperbolicModel:
             raise ValueError("emit_cpp_elliptic : appeler set_elliptic_rhs(...) d'abord")
         nm = name or (self.name.capitalize() + "Elliptic")
         out = [
+            "#include <cmath>",  # autosuffisant pour std::sqrt / std::pow
             "// brique de SECOND MEMBRE elliptique generee depuis '%s' (adc.dsl.emit_cpp_elliptic)."
             % self.name,
             "// rhs(U) -> Real : second membre f(U) de l'operateur elliptique (p.ex. densite de charge).",
