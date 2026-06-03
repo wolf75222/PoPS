@@ -19,8 +19,10 @@
 //
 // Decomposition : chaque rang possede Ny/np lignes (x complet). La 2D FFT se
 // fait en FFT-x locale -> transpose parallele (MPI_Alltoall) -> FFT-y locale ->
-// division par la valeur propre discrete du Laplacien -> inverse. Nx et Ny
-// doivent etre des puissances de 2 divisibles par np.
+// division par la valeur propre discrete du Laplacien -> inverse. La transposee
+// par bandes impose Nx et Ny divisibles par np. Les puissances de 2 empruntent la
+// FFT radix-2 rapide ; toute autre taille (ex. 48) retombe sur une DFT directe
+// correcte mais quadratique (cf. dft1d_direct), donc mono-rang accepte tout n.
 //
 // Valeur propre du stencil 5-points sous la DFT :
 //   lambda(kx,ky) = (2cos(2*pi*kx/Nx) - 2)/dx^2 + (2cos(2*pi*ky/Ny) - 2)/dy^2
@@ -32,9 +34,37 @@ namespace adc {
 
 using cplx = std::complex<double>;
 
+inline bool is_pow2(int n) { return n > 0 && (n & (n - 1)) == 0; }
+
+// DFT directe O(n^2), repli de CORRECTION pour les longueurs qui ne sont PAS
+// puissance de 2 (le radix-2 ci-dessous suppose n = 2^k : sur n quelconque sa
+// butterfly deborde le buffer, d'ou un resultat corrompu et non deterministe).
+// Memes conventions que fft1d (inv=false : exp(-i...), inv=true : exp(+i...) avec
+// 1/n), donc le solveur spectral reste correct pour un Nx ou Ny arbitraire, au
+// prix d'un cout quadratique. Sur grille puissance de 2 (le cas vise) on garde la
+// FFT rapide.
+inline void dft1d_direct(cplx* a, int n, bool inv) {
+  std::vector<cplx> out(static_cast<std::size_t>(n));
+  const double s = inv ? 1.0 : -1.0;
+  for (int k = 0; k < n; ++k) {
+    cplx acc(0.0, 0.0);
+    for (int j = 0; j < n; ++j) {
+      const double ang = s * 2.0 * M_PI * (static_cast<double>(k) * j / n);
+      acc += a[j] * cplx(std::cos(ang), std::sin(ang));
+    }
+    out[static_cast<std::size_t>(k)] = inv ? acc / static_cast<double>(n) : acc;
+  }
+  for (int i = 0; i < n; ++i) a[i] = out[static_cast<std::size_t>(i)];
+}
+
 // FFT 1D radix-2 en place (longueur puissance de 2). inv=false : exp(-i...),
-// inv=true : exp(+i...) avec normalisation 1/n.
+// inv=true : exp(+i...) avec normalisation 1/n. Repli sur la DFT directe quand n
+// n'est pas une puissance de 2 (sinon la butterfly radix-2 deborde le buffer).
 inline void fft1d(cplx* a, int n, bool inv) {
+  if (!is_pow2(n)) {
+    dft1d_direct(a, n, inv);
+    return;
+  }
   for (int i = 1, j = 0; i < n; ++i) {
     int bit = n >> 1;
     for (; j & bit; bit >>= 1) j ^= bit;
