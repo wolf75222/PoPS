@@ -172,6 +172,8 @@ struct System::Impl {
   Real p_eps_ = 1;  // permittivite CONSTANTE : div(eps grad phi) = f <=> lap phi = f/eps
   bool has_eps_field_ = false;          // permittivite VARIABLE eps(x) fournie (porte par l'operateur)
   std::vector<double> p_eps_field_;     // champ eps(x), n*n row-major (si has_eps_field_)
+  bool has_kappa_field_ = false;        // terme de REACTION kappa(x) fourni : div(eps grad phi) - kappa phi
+  std::vector<double> p_kappa_field_;   // champ kappa(x), n*n row-major (si has_kappa_field_)
   std::optional<std::variant<GeometricMG, PoissonFFTSolver>> ell_;
 
   explicit Impl(const SystemConfig& c)
@@ -304,10 +306,20 @@ struct System::Impl {
       if (has_eps_field_)
         throw std::runtime_error("System : solver 'fft' a coefficient CONSTANT, incompatible avec un "
                                  "champ eps(x) variable -> utiliser solver='geometric_mg'");
+      if (has_kappa_field_)
+        throw std::runtime_error("System : solver 'fft' (Poisson pur) incompatible avec un terme de "
+                                 "reaction kappa(x) -> utiliser solver='geometric_mg'");
       ell_.emplace(std::in_place_type<PoissonFFTSolver>, geom, ba, pbc, active);
     } else if (p_solver == "geometric_mg") {
       ell_.emplace(std::in_place_type<GeometricMG>, geom, ba, pbc, std::move(active));
-      if (has_eps_field_) apply_epsilon_field();  // operateur div(eps grad phi) a eps(x) variable
+      if (has_eps_field_) apply_epsilon_field();    // operateur div(eps grad phi) a eps(x) variable
+      if (has_kappa_field_) apply_reaction_field();  // terme - kappa phi (Poisson ecrante / Helmholtz)
+      // Garde-fou : avec kappa et une permittivite CONSTANTE eps != 1 (sans champ eps(x)), le rhs
+      // serait mis a l'echelle 1/eps (raccourci lap phi = f/eps) -- incoherent avec le terme -kappa phi.
+      // On exige alors eps = 1 ou un champ eps(x) (porte par l'operateur, sans mise a l'echelle).
+      if (has_kappa_field_ && !has_eps_field_ && p_eps_ != Real(1))
+        throw std::runtime_error("System : terme de reaction kappa(x) + permittivite CONSTANTE eps != 1 "
+                                 "non supporte ; utiliser eps = 1 ou un champ eps(x) (set_epsilon_field)");
     } else {
       throw std::runtime_error("System::set_poisson : solver '" + p_solver +
                                "' inconnu (geometric_mg|fft)");
@@ -326,6 +338,20 @@ struct System::Impl {
       for (int i = v.lo[0]; i <= v.hi[0]; ++i)
         e(i, j, 0) = static_cast<Real>(p_eps_field_[static_cast<std::size_t>(j) * n + i]);
     mg.set_epsilon(eps_fine);  // copie sur le niveau fin + restriction (average_down) aux grossiers
+  }
+  // Installe le terme de reaction kappa(x) (n*n row-major) sur le GeometricMG : l'operateur passe a
+  // div(eps grad phi) - kappa phi = f (Poisson ecrante / Helmholtz ; kappa = 1/lambda_D^2 pour Debye).
+  // kappa est DIAGONAL (lu en cellule), restreint par moyenne aux niveaux grossiers. GeometricMG seul.
+  void apply_reaction_field() {
+    GeometricMG& mg = std::get<GeometricMG>(*ell_);
+    MultiFab kappa_fine(ba, dm, 1, 0);
+    Array4 k = kappa_fine.fab(0).array();
+    const Box2D v = kappa_fine.box(0);
+    const int n = cfg.n;
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        k(i, j, 0) = static_cast<Real>(p_kappa_field_[static_cast<std::size_t>(j) * n + i]);
+    mg.set_reaction(kappa_fine);
   }
   MultiFab& ell_rhs() {
     return std::visit([](auto& e) -> MultiFab& { return e.rhs(); }, *ell_);
@@ -711,6 +737,19 @@ void System::set_epsilon_field(const std::vector<double>& eps) {
   p_->p_eps_field_ = eps;
   p_->has_eps_field_ = true;
   p_->ell_.reset();  // l'operateur sera reconstruit avec le champ eps au prochain solve_fields
+}
+
+void System::set_reaction_field(const std::vector<double>& kappa) {
+  const int n = p_->cfg.n;
+  if (static_cast<int>(kappa.size()) != n * n)
+    throw std::runtime_error("System::set_reaction_field : taille != n*n");
+  for (double k : kappa)
+    if (!(k >= 0.0))
+      throw std::runtime_error("System::set_reaction_field : terme de reaction kappa(x) >= 0 requis "
+                               "(operateur elliptique bien pose et multigrille convergente)");
+  p_->p_kappa_field_ = kappa;
+  p_->has_kappa_field_ = true;
+  p_->ell_.reset();  // operateur reconstruit avec - kappa phi au prochain solve_fields
 }
 
 void System::ensure_aux_width(int ncomp) { p_->ensure_aux_width(ncomp); }

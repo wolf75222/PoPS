@@ -63,7 +63,8 @@ ADC_HD inline Real eps_harmonic(Real ec, Real ev) {
 
 inline void apply_laplacian(const MultiFab& phi, const Geometry& geom,
                             MultiFab& lap, const MultiFab* coef = nullptr,
-                            const MultiFab* eps = nullptr) {
+                            const MultiFab* eps = nullptr,
+                            const MultiFab* kappa = nullptr) {
   const Real idx2 = Real(1) / (geom.dx() * geom.dx());
   const Real idy2 = Real(1) / (geom.dy() * geom.dy());
   for (int li = 0; li < phi.local_size(); ++li) {
@@ -74,6 +75,8 @@ inline void apply_laplacian(const MultiFab& phi, const Geometry& geom,
     const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
     const bool he = eps != nullptr;
     const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
+    const bool hk = kappa != nullptr;  // terme de reaction -kappa phi
+    const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
     for_each_cell(v, [=] ADC_HD(int i, int j) {
       if (he) {  // permittivite de face (harmonique), avec ou sans cut-cell
         const Real ec = ep(i, j);
@@ -98,6 +101,8 @@ inline void apply_laplacian(const MultiFab& phi, const Geometry& geom,
       else
         L(i, j) = (p(i + 1, j) - 2 * p(i, j) + p(i - 1, j)) * idx2 +
                   (p(i, j + 1) - 2 * p(i, j) + p(i, j - 1)) * idy2;
+      // operateur Helmholtz / ecrante : L phi = div(eps grad phi) - kappa phi.
+      if (hk) L(i, j) -= ka(i, j) * p(i, j);
     });
   }
 }
@@ -107,7 +112,8 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
                              const Geometry& geom, const BCRec& bc,
                              MultiFab& res, const MultiFab* mask = nullptr,
                              const MultiFab* coef = nullptr,
-                             const MultiFab* eps = nullptr) {
+                             const MultiFab* eps = nullptr,
+                             const MultiFab* kappa = nullptr) {
   device_fence();  // GPU : phi a pu etre ecrit par un kernel (lisseur) ; on
                    // attend avant la lecture hote de fill_ghosts.
   fill_ghosts(phi, geom.domain, bc);
@@ -124,6 +130,8 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
     const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
     const bool he = eps != nullptr;
     const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
+    const bool hk = kappa != nullptr;  // terme de reaction -kappa phi
+    const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
     for_each_cell(v, [=] ADC_HD(int i, int j) {
       if (hm && mk(i, j) == Real(0)) {
         r(i, j) = 0;
@@ -153,7 +161,8 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
       else
         lap = (p(i + 1, j) - 2 * p(i, j) + p(i - 1, j)) * idx2 +
               (p(i, j + 1) - 2 * p(i, j) + p(i, j - 1)) * idy2;
-      r(i, j) = ff(i, j) - lap;
+      // res = f - L phi, L phi = div(eps grad phi) - kappa phi = lap - kappa phi.
+      r(i, j) = ff(i, j) - lap + (hk ? ka(i, j) * p(i, j) : Real(0));
     });
   }
 }
@@ -161,7 +170,7 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
 namespace detail {
 inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
                      int color, const MultiFab* mask, const MultiFab* coef,
-                     const MultiFab* eps) {
+                     const MultiFab* eps, const MultiFab* kappa = nullptr) {
   const Real idx2 = Real(1) / (geom.dx() * geom.dx());
   const Real idy2 = Real(1) / (geom.dy() * geom.dy());
   const Real diag0 = 2 * idx2 + 2 * idy2;
@@ -175,6 +184,8 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
     const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
     const bool he = eps != nullptr;
     const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
+    const bool hk = kappa != nullptr;  // terme de reaction -kappa phi (Helmholtz / ecrante)
+    const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
     for_each_cell(v, [=] ADC_HD(int i, int j) {
       if (((i + j) & 1) != color) return;
       if (hm && mk(i, j) == Real(0)) return;  // conducteur : fige phi=0
@@ -205,7 +216,9 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
               (p(i, j + 1) + p(i, j - 1)) * idy2;
         diag = diag0;
       }
-      p(i, j) = (off - ff(i, j)) / diag;
+      // Terme de reaction : l'operateur devient div(eps grad phi) - kappa phi, donc la
+      // diagonale gagne +kappa (kappa >= 0 => plus diagonalement dominant, MG converge mieux).
+      p(i, j) = (off - ff(i, j)) / (diag + (hk ? ka(i, j) : Real(0)));
     });
   }
 }
@@ -214,19 +227,21 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
 inline void gs_rb_sweep(MultiFab& phi, const MultiFab& f, const Geometry& geom,
                         const BCRec& bc, const MultiFab* mask = nullptr,
                         const MultiFab* coef = nullptr,
-                        const MultiFab* eps = nullptr) {
+                        const MultiFab* eps = nullptr,
+                        const MultiFab* kappa = nullptr) {
   device_fence();  // attend le kernel precedent avant la lecture hote des halos
   fill_ghosts(phi, geom.domain, bc);
-  detail::gs_color(phi, f, geom, 0, mask, coef, eps);  // rouge (kernel GPU)
+  detail::gs_color(phi, f, geom, 0, mask, coef, eps, kappa);  // rouge (kernel GPU)
   device_fence();  // le balayage noir lit les valeurs rouges via fill_ghosts hote
   fill_ghosts(phi, geom.domain, bc);
-  detail::gs_color(phi, f, geom, 1, mask, coef, eps);  // noir
+  detail::gs_color(phi, f, geom, 1, mask, coef, eps, kappa);  // noir
 }
 
 inline void gs_smooth(MultiFab& phi, const MultiFab& f, const Geometry& geom,
                       const BCRec& bc, int nsweeps, const MultiFab* mask = nullptr,
-                      const MultiFab* coef = nullptr, const MultiFab* eps = nullptr) {
-  for (int s = 0; s < nsweeps; ++s) gs_rb_sweep(phi, f, geom, bc, mask, coef, eps);
+                      const MultiFab* coef = nullptr, const MultiFab* eps = nullptr,
+                      const MultiFab* kappa = nullptr) {
+  for (int s = 0; s < nsweeps; ++s) gs_rb_sweep(phi, f, geom, bc, mask, coef, eps, kappa);
 }
 
 // Force phi=0 dans les cellules conductrices (mask==0).

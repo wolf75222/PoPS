@@ -183,6 +183,43 @@ class GeometricMG {
     has_eps_ = true;
   }
 
+  // Active le terme de REACTION kappa(x) : l'operateur passe de div(eps grad phi) = f a
+  // div(eps grad phi) - kappa phi = f (Poisson ECRANTE / Helmholtz ; kappa = 1/lambda_D^2 pour
+  // l'ecrantage de Debye). kappa >= 0 rend l'operateur plus diagonalement dominant (la multigrille
+  // converge au moins aussi bien). C'est un coefficient PHYSIQUE (unite 1/longueur^2), DIAGONAL :
+  // lu en (i,j) seulement (aucun voisin), donc 0 ghost ; restreint par moyenne sur les niveaux
+  // grossiers (meme valeur physique echantillonnee). NE PAS appeler => kappa = 0 (Poisson, chemin
+  // historique strictement inchange). Composable avec set_epsilon (eps(x) et kappa(x) ensemble).
+  void set_reaction(std::function<Real(Real, Real)> kappa_fn) {
+    for (auto& L : lev_) {
+      L.kappa = MultiFab(L.ba, L.dm, 1, 0);
+      const Geometry& g = L.geom;
+      for (int li = 0; li < L.kappa.local_size(); ++li) {
+        Array4 k = L.kappa.fab(li).array();
+        const Box2D b = L.kappa.box(li);
+        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+            k(i, j) = kappa_fn(g.x_cell(i), g.y_cell(j));
+      }
+    }
+    has_kappa_ = true;
+  }
+
+  // Surcharge : champ kappa DEJA discretise (MultiFab 1 composante, grille fine), copie sur le
+  // niveau fin puis RESTREINT (average_down) vers les grossiers. Point d'entree pour le cablage
+  // System (un champ kappa par cellule).
+  void set_reaction(const MultiFab& kappa_fine) {
+    for (auto& L : lev_) L.kappa = MultiFab(L.ba, L.dm, 1, 0);
+    for (int li = 0; li < lev_[0].kappa.local_size(); ++li) {
+      Array4 k = lev_[0].kappa.fab(li).array();
+      const ConstArray4 s = kappa_fine.fab(li).const_array();
+      const Box2D b = lev_[0].kappa.box(li);
+      for_each_cell(b, [=] ADC_HD(int i, int j) { k(i, j) = s(i, j, 0); });
+    }
+    for (int l = 1; l < num_levels(); ++l) average_down(lev_[l - 1].kappa, lev_[l].kappa, 2);
+    has_kappa_ = true;
+  }
+
   void vcycle() { vcycle_rec(0, bc_); }
 
   // V-cycles jusqu'a residu relatif < rel_tol (ou max_cycles). Renvoie le
@@ -262,7 +299,7 @@ class GeometricMG {
   // identite en serie -> bit-identique au comportement historique.
   Real current_residual() {
     poisson_residual(lev_[0].phi, lev_[0].rhs, lev_[0].geom, bc_, lev_[0].res,
-                     mask_ptr(0), coef_ptr(0), eps_ptr(0));
+                     mask_ptr(0), coef_ptr(0), eps_ptr(0), kappa_ptr(0));
     return all_reduce_max(norm_inf(lev_[0].res));
   }
 
@@ -271,12 +308,13 @@ class GeometricMG {
     Geometry geom;
     BoxArray ba;
     DistributionMapping dm;
-    MultiFab phi, rhs, res, mask, coef, eps;
+    MultiFab phi, rhs, res, mask, coef, eps, kappa;
   };
 
   const MultiFab* mask_ptr(int l) { return active_ ? &lev_[l].mask : nullptr; }
   const MultiFab* coef_ptr(int l) { return cut_cell_ ? &lev_[l].coef : nullptr; }
   const MultiFab* eps_ptr(int l) { return has_eps_ ? &lev_[l].eps : nullptr; }
+  const MultiFab* kappa_ptr(int l) { return has_kappa_ ? &lev_[l].kappa : nullptr; }
 
   // CL utilisee pour remplir les ghosts du champ eps : on garde le periodique mais
   // on remplace tout bord physique (Dirichlet ou outflow de phi) par une
@@ -296,7 +334,7 @@ class GeometricMG {
         : DistributionMapping(ba.size(), n_ranks());
     lev_.push_back(MGLevel{g, ba, dm, MultiFab(ba, dm, 1, 1),
                            MultiFab(ba, dm, 1, 0), MultiFab(ba, dm, 1, 0),
-                           MultiFab{}, MultiFab{}, MultiFab{}});
+                           MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}});
   }
 
   void vcycle_rec(int l, const BCRec& bc) {
@@ -304,15 +342,16 @@ class GeometricMG {
     const MultiFab* mk = mask_ptr(l);
     const MultiFab* ck = coef_ptr(l);
     const MultiFab* ep = eps_ptr(l);
-    gs_smooth(L.phi, L.rhs, L.geom, bc, nu1_, mk, ck, ep);
+    const MultiFab* kp = kappa_ptr(l);
+    gs_smooth(L.phi, L.rhs, L.geom, bc, nu1_, mk, ck, ep, kp);
 
     if (l + 1 == static_cast<int>(lev_.size())) {
-      gs_smooth(L.phi, L.rhs, L.geom, bc, nbottom_, mk, ck, ep);  // bottom solve
+      gs_smooth(L.phi, L.rhs, L.geom, bc, nbottom_, mk, ck, ep, kp);  // bottom solve
       if (mk) zero_conductor(L.phi, L.mask);
       return;
     }
 
-    poisson_residual(L.phi, L.rhs, L.geom, bc, L.res, mk, ck, ep);
+    poisson_residual(L.phi, L.rhs, L.geom, bc, L.res, mk, ck, ep, kp);
     MGLevel& C = lev_[l + 1];
     average_down(L.res, C.rhs, 2);  // restriction du residu
     C.phi.set_val(0.0);
@@ -322,7 +361,7 @@ class GeometricMG {
     interpolate(C.phi, corr, 2);  // prolongation de la correction
     saxpy(L.phi, Real(1), corr);
     if (mk) zero_conductor(L.phi, L.mask);  // refige le conducteur
-    gs_smooth(L.phi, L.rhs, L.geom, bc, nu2_, mk, ck, ep);
+    gs_smooth(L.phi, L.rhs, L.geom, bc, nu2_, mk, ck, ep, kp);
   }
 
   BCRec bc_;
@@ -331,6 +370,7 @@ class GeometricMG {
   bool replicated_ = false;
   bool cut_cell_ = false;
   bool has_eps_ = false;
+  bool has_kappa_ = false;
   std::function<Real(Real, Real)> levelset_;
   std::vector<MGLevel> lev_;
 };

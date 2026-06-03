@@ -125,6 +125,13 @@ class System {
   /// erreur. Prevaut sur la permittivite constante de set_poisson. A appeler avant solve_fields.
   void set_epsilon_field(const std::vector<double>& eps);
 
+  /// Active un terme de REACTION kappa(x) >= 0 : l'operateur du Poisson de systeme passe de
+  /// div(eps grad phi) = f a div(eps grad phi) - kappa phi = f (Poisson ECRANTE / Helmholtz ;
+  /// kappa = 1/lambda_D^2 pour l'ecrantage de Debye). Champ n*n row-major, porte par l'operateur
+  /// GeometricMG (kappa diagonal, restreint aux niveaux grossiers). Seul 'geometric_mg' le supporte
+  /// (erreur avec 'fft'). Composable avec set_epsilon_field. kappa = 0 partout => Poisson inchange.
+  void set_reaction_field(const std::vector<double>& kappa);
+
   /// Fixe un champ magnetique hors-plan B_z(x, y) PARTAGE par les blocs, n*n row-major. Peuple la
   /// composante aux supplementaire (canal B_z) lue par les modeles qui la declarent (n_aux > 3) ;
   /// inerte si aucun bloc ne lit B_z (canal aux reste a la largeur de base). B_z est statique

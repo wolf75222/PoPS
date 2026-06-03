@@ -100,6 +100,12 @@ PYBIND11_MODULE(_adc, m) {
              s.set_epsilon_field(flat(arr));
            },
            py::arg("eps"))
+      .def("set_reaction_field",
+           [](System& s,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             s.set_reaction_field(flat(arr));
+           },
+           py::arg("kappa"))
       .def("set_magnetic_field",
            [](System& s,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
