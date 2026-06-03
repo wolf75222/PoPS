@@ -1,0 +1,60 @@
+# Portage de la pile runtime sur GPU (feuille de route)
+
+Le DSL et le coeur de calcul sont verifies jusqu'au GPU GH200 (flux, brique generee, CAS Euler complet
+via le seam Kokkos `for_each_cell` ; cf. docs/GPU_ROMEO.md). Ce qui reste pour une PRODUCTION GPU de
+bout en bout, c'est porter la PILE RUNTIME entiere (System / MultiFab / Poisson / AMR / MPI) sur device.
+C'est un chantier d'integration MAJEUR (semaines), pas un tour. Ce document le decoupe en phases, avec
+ce qui est deja acquis et ce que chaque phase exige.
+
+## Atout de conception : le seam ne change pas les sites d'appel
+
+`adc/mesh/for_each.hpp` (`for_each_cell`, `for_each_cell_reduce_*`) bascule CPU <-> GPU a la
+COMPILATION sans toucher les operateurs. `ADC_HD` rend tout le coeur device-callable. Donc le portage
+GPU est surtout un travail de RESIDENCE des donnees sur device + de portage des etapes encore hote,
+pas une reecriture des noyaux de calcul.
+
+## Deja device-ready (verifie sur GH200)
+
+- `for_each_cell` / reductions -> `Kokkos::parallel_for` / `parallel_reduce` (espace `Cuda`).
+- `ADC_HD`, `StateVec`, `Aux` : device-callable ; flux + `eigenvalues` + briques (Euler/iso/ExB).
+- Brique generee par le DSL : compile nvcc `sm_90`, == `adc::Euler` au bit (CUDA) / a 1 ULP (Kokkos).
+- Cas Euler 2D complet (80 pas, CFL, Rusanov, periodique) sur GH200 : masse conservee, == CPU.
+
+## Phases du portage runtime (par dependance croissante)
+
+1. **MultiFab device-resident.** Garder l'etat U dans des Views DEVICE entre les pas ; reserver les
+   copies hote (`copy_state`/`write_state`) aux seules I/O (set_density, get_state, diagnostics). Le
+   hot loop (assemble_rhs, advance) ne doit jamais rapatrier U sur l'hote. Effort : moyen.
+2. **Conditions aux limites sur device.** `fill_ghosts` / `fill_boundary` (`mesh/physical_bc.hpp`)
+   en kernels (ou via `for_each` sur les boites de ghosts). Periodicite + parois. Effort : moyen.
+3. **Poisson sur device (le plus gros).** GeometricMG : smoother (Jacobi/GS), restriction,
+   prolongation, residu en kernels device ; ou PoissonFFTSolver via cuFFT. C'est le coeur de
+   l'effort, et c'est aussi la ou se brancherait le solveur a COEFFICIENTS VARIABLES (eps(x)) encore
+   manquant. Effort : eleve.
+4. **Couplages inter-especes sur device.** `apply_couplings` (ionisation/collision/echange,
+   operator-split) est aujourd'hui une passe HOTE ; la porter en kernels lisant plusieurs blocs.
+   Effort : moyen.
+5. **AMR sur device.** regrid, prolongation/restriction de niveau, reflux : kernels device + gestion
+   de la hierarchie cote hote (orchestration) avec donnees device. Effort : eleve.
+6. **MPI CUDA-aware.** Echange de halos device-to-device (GPUDirect), `fill_boundary` distribue sans
+   detour par l'hote ; FFT distribuee device. Effort : eleve.
+7. **Validation bout-en-bout.** Un cas plasma multi-especes complet (transport + Poisson + couplages
+   [+ AMR]) sur GH200, compare bit-a-bit (ou a tolerance FP documentee) au meme cas CPU/serie.
+
+## Strategie suggeree
+
+- Avancer phase par phase, chacune validee CPU == GPU (le seam autorise a basculer une etape a la
+  fois). Demarrer par 1 -> 2 -> 4 (transport pur multi-blocs sur GPU, sans Poisson) : deja un jalon
+  utile et testable. Poisson device (3) ensuite, puis AMR (5) et MPI (6).
+- Outillage ROMEO : `module load cuda/12.6`, build Kokkos+CUDA (`Kokkos_ARCH_HOPPER90`), `srun
+  --account=<compte> -p instant --constraint=armgpu --gres=gpu:1` (cf. docs/GPU_ROMEO.md). nvcc ne
+  s'execute QUE sur le noeud GPU (aarch64), pas sur le login (x86).
+- Orchestration : un workflow multi-agent par backend (Kokkos-Serial / OpenMP / CUDA) + verificateurs
+  adverses comparant a l'oracle CPU est le bon outil pour la phase de validation (cf. sessions DSL).
+
+## Etat
+
+Le reste de la vision (DSL symbolique : interprete, codegen flux/brique/source/elliptique, CSE, JIT
+.so, dispatch type-erased dans le System ; flux Roe ; VariableRole ; eps constant ; reorg physics/
+numerics) est COMPLET au niveau prototype, teste (49 ctests C++ + 13 tests Python) et verifie jusqu'au
+GH200. Ce portage runtime est le seul gros morceau ouvert.
