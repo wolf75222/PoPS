@@ -180,8 +180,10 @@ sim.step_cfl(0.4)
   `get_state`/`set_state` : on ecrit son propre `take_step` cote Python (par PAS), le residu
   et Poisson restant calcules en C++ (par CELLULE). Cf. `adc.integrate.ssprk2_step`.
 - **AMR** : `adc.AmrSystem` compose un bloc sur une hierarchie raffinee (meme API que System
-  plus `set_refinement`). **Specialise** : `adc.TwoFluidAP` (asymptotic-preserving),
-  integrateurs sur mesure exposes comme facades.
+  plus `set_refinement`). L'integrateur AP deux-fluides (asymptotic-preserving) est un
+  integrateur **sur mesure**, non composable bloc a bloc : il n'est PAS expose dans l'API
+  publique ; sa methode reste compilee dans le module prive (`_adc._TwoFluidAP`, echappatoire
+  interne).
 
 Le test `python/tests/test_bindings.py` exerce ces chemins. Exemples complets : depot
 [`adc_cases`](https://github.com/wolf75222/adc_cases) (un dossier Python par cas).

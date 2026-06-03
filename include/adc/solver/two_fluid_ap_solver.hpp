@@ -12,8 +12,11 @@
 /// la ou un schema explicite exploserait. L'elliptique etant on-device, la facade se compile
 /// telle quelle pour le GPU sous -DADC_USE_KOKKOS=ON (backend herite de la cible `adc`).
 ///
-/// @note Solveur SPECIALISE (integrateur sur mesure), expose a Python comme `adc.TwoFluidAP` ;
-///       non composable bloc a bloc comme `System`.
+/// @note Integrateur SUR MESURE, non composable bloc a bloc comme `System` (la stabilisation AP
+///       couple la raideur au pas de temps DANS l'elliptique). Ce n'est donc PAS un scenario de
+///       l'API Python publique : il n'est pas reexporte par le paquet `adc`. Sa methode reste
+///       compilee dans le module prive `_adc` sous le nom `_adc._TwoFluidAP` (echappatoire interne,
+///       hors contrat d'API stable).
 
 namespace adc {
 

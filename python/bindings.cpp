@@ -128,12 +128,19 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("name"))
       .def("potential", [](System& s) { return to_2d(s.potential(), s.nx()); });
 
-  // --- Solveurs SPECIALISES (integrateurs sur mesure non composables bloc-a-bloc) ---
-  // Exposes comme facades de la lib : un schema asymptotic-preserving deux-fluides, et
-  // une composition mono-espece sur AMR multi-patch. adc_cases les PILOTE depuis Python (pas de C++ cote
-  // cases) au meme titre que System.
+  // --- AMR : composition mono-espece sur AMR multi-patch (brique generique composable) ---
+  // adc_cases la PILOTE depuis Python (pas de C++ cote cases) au meme titre que System.
 
-  py::class_<TwoFluidAPConfig>(m, "TwoFluidAPConfig")
+  // --- ECHAPPATOIRE INTERNE (hors API publique) : integrateur AP deux-fluides --------------
+  // La methode AP-IMEX (terme raide de frequence plasma integre implicitement via un Poisson
+  // REFORMULE lap(phi) = (ne* - ni*)/(1 + dt^2 (wpe^2 + wpi^2))) est une methode numerique
+  // legitime du coeur, mais c'est un integrateur SUR MESURE : non composable bloc a bloc comme
+  // System (la stabilisation AP couple la raideur au pas de temps DANS l'elliptique, ce que la
+  // composition System ne sait pas reproduire). On ne l'expose donc PAS comme scenario nomme de
+  // l'API : les classes sont publiees sous des noms PREFIXES `_` (convention "prive") dans le
+  // module prive `_adc`, comme echappatoire pour piloter la methode depuis une application sans
+  // recompiler le coeur. Le paquet adc/__init__.py ne les reexporte pas (cf. son __all__).
+  py::class_<TwoFluidAPConfig>(m, "_TwoFluidAPConfig")
       .def(py::init<>())
       .def_readwrite("n", &TwoFluidAPConfig::n)
       .def_readwrite("L", &TwoFluidAPConfig::L)
@@ -147,7 +154,7 @@ PYBIND11_MODULE(_adc, m) {
       .def_readwrite("omega_ce", &TwoFluidAPConfig::omega_ce)
       .def_readwrite("omega_ci", &TwoFluidAPConfig::omega_ci);
 
-  py::class_<TwoFluidAPSolver>(m, "TwoFluidAP")
+  py::class_<TwoFluidAPSolver>(m, "_TwoFluidAP")
       .def(py::init<const TwoFluidAPConfig&>(), py::arg("cfg") = TwoFluidAPConfig{})
       .def("step", &TwoFluidAPSolver::step, py::arg("dt"))
       .def("advance", &TwoFluidAPSolver::advance, py::arg("dt"), py::arg("nsteps"))

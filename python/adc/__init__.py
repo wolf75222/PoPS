@@ -21,16 +21,19 @@ application (cf. adc_cases). Aucun nom de scenario ici.
 """
 
 from ._adc import (SystemConfig, ModelSpec, System as _System,
-                   AmrSystemConfig, AmrSystem as _AmrSystem,
-                   TwoFluidAP, TwoFluidAPConfig)
+                   AmrSystemConfig, AmrSystem as _AmrSystem)
 
+# L'API PUBLIQUE n'expose QUE des briques composables (System, AmrSystem, Model...) : aucun
+# scenario physique nomme. L'integrateur AP deux-fluides (schema asymptotic-preserving, non
+# composable bloc a bloc) n'est volontairement PAS reexporte ici ; sa methode reste compilee
+# dans le module prive _adc (cf. _adc._TwoFluidAP) comme echappatoire interne, pilotable depuis
+# une application sans recompiler le coeur, mais hors du contrat d'API stable.
 __all__ = [
     "System", "SystemConfig", "AmrSystem", "AmrSystemConfig", "Model",
     "Scalar", "FluidState", "ExB", "CompressibleFlux", "IsothermalFlux",
     "NoSource", "PotentialForce", "GravityForce",
     "ChargeDensity", "BackgroundDensity", "GravityCoupling",
     "Spatial", "Explicit", "IMEX", "Implicit", "integrate",
-    "TwoFluidAP", "TwoFluidAPConfig",
     "elliptic", "div_eps_grad", "charge_density", "electric_field_from_potential",
     "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
