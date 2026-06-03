@@ -276,6 +276,12 @@ chk(list(vn.variable_names("e", "conservative")) == ["rho", "rho_u", "rho_v", "E
     "noms conservatifs (Euler)")
 chk(list(vn.variable_names("e", "primitive")) == ["rho", "u", "v", "p"], "noms primitifs (Euler)")
 chk(list(vn.variable_names("d")) == ["n"], "noms scalaire (diocotron)")
+# Roles PHYSIQUES (ce que resolvent les couplages : index_of(role) au lieu d'un indice litteral).
+chk(list(vn.variable_roles("e", "conservative")) == ["density", "momentum_x", "momentum_y", "energy"],
+    "roles conservatifs (Euler)")
+chk(list(vn.variable_roles("e", "primitive")) == ["density", "velocity_x", "velocity_y", "pressure"],
+    "roles primitifs (Euler)")
+chk(list(vn.variable_roles("d")) == ["density"], "role scalaire (diocotron)")
 
 # --- 4i. PythonFlux : backend de prototypage (hote, numpy) ----------------------
 print("== PythonFlux : flux defini en Python (prototypage hote, hors Kokkos) ==")

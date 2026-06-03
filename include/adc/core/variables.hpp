@@ -54,6 +54,25 @@ struct VariableSet {
   }
 };
 
+/// Nom lisible d'un role (introspection, binding Python). Stable : sert de cle cote application.
+inline const char* role_name(VariableRole r) {
+  switch (r) {
+    case VariableRole::Density:     return "density";
+    case VariableRole::MomentumX:   return "momentum_x";
+    case VariableRole::MomentumY:   return "momentum_y";
+    case VariableRole::MomentumZ:   return "momentum_z";
+    case VariableRole::Energy:      return "energy";
+    case VariableRole::VelocityX:   return "velocity_x";
+    case VariableRole::VelocityY:   return "velocity_y";
+    case VariableRole::VelocityZ:   return "velocity_z";
+    case VariableRole::Pressure:    return "pressure";
+    case VariableRole::Temperature: return "temperature";
+    case VariableRole::Scalar:      return "scalar";
+    case VariableRole::Custom:      return "custom";
+  }
+  return "custom";
+}
+
 /// Ancien nom (compat) : VariableSet etait `Variables`. Conserve pour le code existant et genere.
 using Variables = VariableSet;
 

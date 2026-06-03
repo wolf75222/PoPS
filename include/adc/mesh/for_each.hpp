@@ -129,4 +129,30 @@ Real for_each_cell_reduce_max(const Box2D& b, F f) {
 #endif
 }
 
+// Variante MAX a FONCTEUR REDUCTEUR : @p f est passe DIRECTEMENT a Kokkos::parallel_reduce et
+// recoit (i, j, Real& acc) pour mettre acc a jour (acc = max(acc, valeur)). A la difference de
+// for_each_cell_reduce_max, AUCUNE lambda etendue n'enveloppe @p f : c'est le chemin device-clean
+// pour un noyau Model-template instancie depuis une UNITE DE TRADUCTION EXTERNE (add_compiled_model),
+// ou nvcc n'emet pas fiablement une lambda etendue (cf. les foncteurs nommes de spatial_operator.hpp).
+// Determinisme et bit-exactitude IDENTIQUES a for_each_cell_reduce_max (meme Kokkos::Max, meme boucle
+// hote sequentielle) : seul le porteur du calcul change (foncteur nomme au lieu d'un wrapper lambda).
+template <class F>
+Real reduce_max_cell(const Box2D& b, F f) {
+#if defined(ADC_HAS_KOKKOS)
+  detail::ensure_kokkos_initialized();
+  Real result = 0;
+  Kokkos::parallel_reduce(
+      "adc_reduce_max_cell",
+      Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+          {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
+      f, Kokkos::Max<Real>{result});
+  return result;
+#else
+  Real acc = 0;
+  for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+    for (int i = b.lo[0]; i <= b.hi[0]; ++i) f(i, j, acc);
+  return acc;
+#endif
+}
+
 }  // namespace adc

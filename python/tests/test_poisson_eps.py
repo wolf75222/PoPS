@@ -1,17 +1,30 @@
-"""Operateur elliptique a permittivite CONSTANTE : div(eps grad phi) = f <=> lap phi = f/eps.
-Verifie la linearite en 1/eps (phi(eps=2) == phi(eps=1)/2) via set_poisson(epsilon=...) ET via l'EPM
-add_elliptic_model(div_eps_grad(eps)). eps(x) variable / diffusion / projection restent un raffinement
-(solveur a coefficients variables, non disponible) signale par NotImplementedError.
+"""Operateur elliptique de Poisson de systeme, permittivite CONSTANTE et VARIABLE.
+
+1. eps CONSTANT : div(eps grad phi) = f <=> lap phi = f/eps. Linearite en 1/eps
+   (phi(eps=2) == phi(eps=1)/2) via set_poisson(epsilon=...) ET via l'EPM div_eps_grad(eps).
+2. eps(x) VARIABLE : set_epsilon_field(champ n*n) cable GeometricMG::set_epsilon (operateur
+   div(eps grad phi) a coefficient de face harmonique, sans mise a l'echelle 1/eps du rhs). On
+   verifie une solution manufacturee LISSE (Dirichlet), la coherence (eps(x) modifie bien phi), la
+   non-regression (champ uniforme=1 == operateur sans eps) et le refus avec le solveur 'fft'.
 """
 import numpy as np
 
 import adc
+
+PI = np.pi
 
 
 def _charge_model():
     return adc.Model(state=adc.FluidState(kind="compressible", gamma=1.4),
                      transport=adc.CompressibleFlux(), source=adc.NoSource(),
                      elliptic=adc.ChargeDensity(charge=1.0))
+
+
+def _charge_scalar():
+    """Bloc scalaire (1 var) de densite de charge unite : f = q n = n. set_density n'ecrit que la
+    densite (comp 0), ce qui isole le second membre du Poisson pour une solution manufacturee."""
+    return adc.Model(state=adc.Scalar(), transport=adc.ExB(B0=1.0),
+                     source=adc.NoSource(), elliptic=adc.ChargeDensity(charge=1.0))
 
 
 def _density(n):
@@ -54,7 +67,63 @@ def main():
     err2 = float(np.max(np.abs(phi_epm - phi2))) / scale
     assert err2 < 1e-12, "EPM div_eps_grad(2) != set_poisson(epsilon=2) (err %.2e)" % err2
     print("OK  add_elliptic_model(div_eps_grad(2)) == set_poisson(epsilon=2) (err %.1e)" % err2)
+
+    variable_epsilon_tests()
     print("test_poisson_eps : tout est vert")
+
+
+def variable_epsilon_tests():
+    """eps(x) VARIABLE via set_epsilon_field : MMS, coherence, non-regression, refus 'fft'."""
+    # MMS Dirichlet : phi = sin(pi x) sin(pi y) (nul au bord), eps = 1 + 0.5 x (lisse), et
+    #   f = div(eps grad phi) = -(1 + 0.5 x) 2 pi^2 sin(pi x) sin(pi y) + 0.5 pi cos(pi x) sin(pi y).
+    # Le bloc de charge (charge 1) pose f comme densite -> rhs du Poisson = f.
+    n = 96
+    xs = (np.arange(n) + 0.5) / n
+    X, Y = np.meshgrid(xs, xs, indexing="xy")               # X[j,i]=x_i, Y[j,i]=y_j
+    s_xy = np.sin(PI * X) * np.sin(PI * Y)
+    phi_ex = s_xy
+    eps = 1.0 + 0.5 * X
+    f = -(1.0 + 0.5 * X) * 2.0 * PI ** 2 * s_xy + 0.5 * PI * np.cos(PI * X) * np.sin(PI * Y)
+
+    def solve(eps_field, solver="geometric_mg"):
+        s = adc.System(n=n, L=1.0, periodic=False)
+        s.add_block("q", model=_charge_scalar(), spatial=adc.Spatial(none=True))
+        s.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
+        s.set_density("q", f)
+        if eps_field is not None:
+            s.set_epsilon_field(eps_field)
+        s.solve_fields()
+        return np.array(s.potential()).reshape(n, n)
+
+    amp = float(np.max(np.abs(phi_ex)))
+    phi_var = solve(eps)
+    err = float(np.max(np.abs(phi_var - phi_ex))) / amp
+    assert err < 5e-3, "eps(x) MMS : phi != solution manufacturee (err rel %.2e)" % err
+    print("OK  eps(x) variable (MMS Dirichlet) : phi == sin(pi x)sin(pi y) (err rel %.1e)" % err)
+
+    # Coherence : eps(x) modifie REELLEMENT l'operateur (phi differe de la solution a eps=1).
+    phi_const = solve(None)
+    diff = float(np.max(np.abs(phi_var - phi_const))) / amp
+    assert diff > 1e-2, "eps(x) sans effet (phi identique a eps=1 ?)"
+    print("OK  eps(x) modifie l'operateur : ecart a eps=1 = %.1e" % diff)
+
+    # Non-regression : un champ eps UNIFORME=1 redonne EXACTEMENT l'operateur sans eps.
+    phi_unit = solve(np.ones((n, n)))
+    gap = float(np.max(np.abs(phi_unit - phi_const))) / amp
+    assert gap < 1e-9, "champ eps uniforme=1 != operateur sans eps (gap %.2e)" % gap
+    print("OK  non-regression : champ eps uniforme=1 == operateur sans eps (gap %.1e)" % gap)
+
+    # eps(x) variable + solveur 'fft' (coefficient constant) : refus explicite au solve.
+    sp = adc.System(n=n, L=1.0, periodic=True)
+    sp.add_block("q", model=_charge_scalar(), spatial=adc.Spatial(none=True))
+    sp.set_poisson(rhs="charge_density", solver="fft")
+    sp.set_density("q", f)
+    sp.set_epsilon_field(eps)
+    try:
+        sp.solve_fields()
+        raise AssertionError("fft + eps(x) variable aurait du lever une erreur")
+    except RuntimeError:
+        print("OK  eps(x) variable refuse avec solver='fft' (coefficient constant)")
 
 
 if __name__ == "__main__":

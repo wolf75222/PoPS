@@ -1,5 +1,6 @@
 #include <adc/runtime/system.hpp>
 
+#include <adc/core/variables.hpp>  // VariableSet + VariableRole : descripteur a roles porte par chaque bloc
 #include <adc/runtime/block_builder.hpp>  // GridContext + make_block/make_max_speed (fermetures compilees)
 #include <adc/runtime/model_factory.hpp>  // detail::dispatch_model + briques compilees
 #include <adc/numerics/elliptic/geometric_mg.hpp>
@@ -115,6 +116,14 @@ std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>
     }
   return Rout;
 }
+
+// Indice de la composante portant @p role dans @p vs, ou @p fallback si le bloc ne renseigne
+// pas ce role (bloc dynamique / compile : descripteur sans roles). Permet aux couplages de viser
+// une composante par son SENS sans coder l'indice en dur, tout en restant retro-compatible.
+int role_index(const VariableSet& vs, VariableRole role, int fallback) {
+  const int c = vs.index_of(role);
+  return c >= 0 ? c : fallback;
+}
 }  // namespace
 
 struct System::Impl {
@@ -131,7 +140,10 @@ struct System::Impl {
     std::function<void(MultiFab&, MultiFab&)> rhs_into;        // R <- -div F + S (Poisson fige)
     std::function<Real(const MultiFab&)> max_speed;           // max |vitesse d'onde| du bloc
     std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;  // += elliptic_rhs(U)
-    std::vector<std::string> cons_names, prim_names;  // noms des variables (introspection)
+    // Descripteur des variables conservatives / primitives (noms + ROLES physiques) du bloc.
+    // Les roles (fournis par M::conservative_vars()) permettent aux couplages inter-especes de
+    // viser une composante par son SENS (qte de mvt, energie) au lieu d'un indice u[1]/u[3] en dur.
+    VariableSet cons_vars, prim_vars;
   };
 
   SystemConfig cfg;
@@ -154,6 +166,8 @@ struct System::Impl {
   std::string p_wall = "none";
   double p_wall_radius = 0.0;
   Real p_eps_ = 1;  // permittivite CONSTANTE : div(eps grad phi) = f <=> lap phi = f/eps
+  bool has_eps_field_ = false;          // permittivite VARIABLE eps(x) fournie (porte par l'operateur)
+  std::vector<double> p_eps_field_;     // champ eps(x), n*n row-major (si has_eps_field_)
   std::optional<std::variant<GeometricMG, PoissonFFTSolver>> ell_;
 
   explicit Impl(const SystemConfig& c)
@@ -232,13 +246,31 @@ struct System::Impl {
     if (p_solver == "fft") {
       if (active)
         throw std::runtime_error("System : solver 'fft' incompatible avec une paroi -> 'geometric_mg'");
+      if (has_eps_field_)
+        throw std::runtime_error("System : solver 'fft' a coefficient CONSTANT, incompatible avec un "
+                                 "champ eps(x) variable -> utiliser solver='geometric_mg'");
       ell_.emplace(std::in_place_type<PoissonFFTSolver>, geom, ba, pbc, active);
     } else if (p_solver == "geometric_mg") {
       ell_.emplace(std::in_place_type<GeometricMG>, geom, ba, pbc, std::move(active));
+      if (has_eps_field_) apply_epsilon_field();  // operateur div(eps grad phi) a eps(x) variable
     } else {
       throw std::runtime_error("System::set_poisson : solver '" + p_solver +
                                "' inconnu (geometric_mg|fft)");
     }
+  }
+  // Installe le champ eps(x) (n*n row-major) sur le GeometricMG : l'operateur passe a
+  // div(eps grad phi) = f, eps PORTE PAR L'OPERATEUR (coefficient de face harmonique, ordre 2),
+  // sans mise a l'echelle 1/eps du second membre. Seul GeometricMG supporte ce coefficient variable.
+  void apply_epsilon_field() {
+    GeometricMG& mg = std::get<GeometricMG>(*ell_);
+    MultiFab eps_fine(ba, dm, 1, 0);
+    Array4 e = eps_fine.fab(0).array();
+    const Box2D v = eps_fine.box(0);
+    const int n = cfg.n;
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        e(i, j, 0) = static_cast<Real>(p_eps_field_[static_cast<std::size_t>(j) * n + i]);
+    mg.set_epsilon(eps_fine);  // copie sur le niveau fin + restriction (average_down) aux grossiers
   }
   MultiFab& ell_rhs() {
     return std::visit([](auto& e) -> MultiFab& { return e.rhs(); }, *ell_);
@@ -263,7 +295,10 @@ struct System::Impl {
     MultiFab& rhs = ell_rhs();
     rhs.set_val(Real(0));
     for (auto& s : sp) s.add_poisson_rhs(s.U, rhs);  // f = Sum_s elliptic_rhs_s(u_s)
-    if (p_eps_ != Real(1)) {  // permittivite constante : div(eps grad phi) = f <=> lap phi = f/eps
+    // Permittivite CONSTANTE : div(eps grad phi) = f <=> lap phi = f/eps, donc on met le rhs a
+    // l'echelle 1/eps. Avec un champ eps(x) VARIABLE on NE le fait PAS : l'operateur GeometricMG
+    // porte eps directement (cf. apply_epsilon_field), le rhs reste f tel quel.
+    if (!has_eps_field_ && p_eps_ != Real(1)) {
       const Real inv = Real(1) / p_eps_;
       for (int li = 0; li < rhs.local_size(); ++li) {
         Array4 r = rhs.fab(li).array();
@@ -272,14 +307,6 @@ struct System::Impl {
           for (int i = v.lo[0]; i <= v.hi[0]; ++i) r(i, j, 0) *= inv;
       }
     }
-    // TODO permittivite VARIABLE eps(x) : le coeur GeometricMG la supporte deja via
-    // set_epsilon (champ par cellule ou fonction analytique, operateur div(eps grad phi)
-    // a coefficient de face harmonique, valide a l'ordre 2 par test_variable_epsilon). Le
-    // cablage System reste a faire : exposer cote Python un moyen de fournir eps (numpy a 1
-    // composante ou callable), appeler set_epsilon UNIQUEMENT sur la branche GeometricMG du
-    // variant ell_ (le solveur 'fft' est a coefficient constant par construction -> erreur
-    // explicite si eps variable demande avec 'fft'), et NE PLUS mettre le rhs a l'echelle
-    // 1/eps dans ce cas (l'operateur porte alors eps directement).
     ell_solve();
     device_fence();
     const Real dx = geom.dx(), dy = geom.dy();
@@ -402,8 +429,10 @@ struct System::Impl {
 
     Species block{name, MultiFab(P->ba, P->dm, NV, 2), NV, substeps, true, 1.4,
                   std::move(advance), std::move(rhs_into), std::move(max_speed), std::move(add_poisson)};
-    block.cons_names = names;
-    block.prim_names = names;
+    // Bloc dynamique : descripteur a noms seuls (pas de roles ; les couplages retombent alors
+    // sur les indices historiques via role_index).
+    block.cons_vars = {VariableKind::Conservative, names, NV, {}};
+    block.prim_vars = {VariableKind::Primitive, names, NV, {}};
     P->sp.push_back(std::move(block));
     P->sp.back().U.set_val(Real(0));
   }
@@ -433,7 +462,7 @@ void System::add_block(const std::string& name, const ModelSpec& model,
   BlockClosures clo;
   std::function<Real(const MultiFab&)> max_speed;
   std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;
-  std::vector<std::string> cons_nm, prim_nm;
+  VariableSet cons_vs, prim_vs;
   const GridContext ctx = P->grid_ctx();
   // Le modele est compose a partir des briques designees par la spec ; le visiteur cable les
   // fermetures (constructeurs en en-tete, instanciables AOT). ncomp = n_vars du modele compose ;
@@ -445,13 +474,13 @@ void System::add_block(const std::string& name, const ModelSpec& model,
     clo = make_block(m, limiter, riemann, ctx, imex, recon_prim);
     max_speed = make_max_speed(m, ctx);
     add_poisson_rhs = make_poisson_rhs(m);
-    cons_nm = M::conservative_vars().names;
-    prim_nm = M::primitive_vars().names;
+    cons_vs = M::conservative_vars();  // noms + ROLES physiques (source unique de verite)
+    prim_vs = M::primitive_vars();
   });
   // Installation commune (meme chemin que add_compiled_model pour un modele genere par le DSL) :
   // les fermetures tournent sur les MultiFab REELS du System (halos MPI via fill_boundary, device
   // via Kokkos), sans recopie.
-  install_block(name, ncomp, cons_nm, prim_nm, model.gamma, std::move(clo), std::move(max_speed),
+  install_block(name, ncomp, cons_vs, prim_vs, model.gamma, std::move(clo), std::move(max_speed),
                 std::move(add_poisson_rhs), substeps, evolve);
 }
 
@@ -462,8 +491,7 @@ GridContext System::grid_context() { return p_->grid_ctx(); }
 // Installe un bloc a partir de fermetures deja fabriquees (par dispatch_model cote add_block, ou par
 // block_builder cote add_compiled_model). Centralise la creation de l'espece (U, noms, schema).
 void System::install_block(const std::string& name, int ncomp,
-                           const std::vector<std::string>& cons_names,
-                           const std::vector<std::string>& prim_names, double gamma,
+                           const VariableSet& cons_vars, const VariableSet& prim_vars, double gamma,
                            BlockClosures closures, std::function<Real(const MultiFab&)> max_speed,
                            std::function<void(const MultiFab&, MultiFab&)> poisson_rhs,
                            int substeps, bool evolve) {
@@ -472,8 +500,8 @@ void System::install_block(const std::string& name, int ncomp,
                                 gamma, std::move(closures.advance), std::move(closures.rhs_into),
                                 std::move(max_speed), std::move(poisson_rhs)});
   P->sp.back().U.set_val(Real(0));
-  P->sp.back().cons_names = cons_names;
-  P->sp.back().prim_names = prim_names;
+  P->sp.back().cons_vars = cons_vars;
+  P->sp.back().prim_vars = prim_vars;
 }
 
 void System::add_dynamic_block(const std::string& name, const std::string& so_path, int substeps,
@@ -592,8 +620,9 @@ void System::add_compiled_block(const std::string& name, const std::string& so_p
   Impl::Species block{name, MultiFab(P->ba, P->dm, nv, 2), nv, substeps, true, 1.4,
                       std::move(advance), std::move(rhs_into), std::move(max_speed),
                       std::move(add_poisson)};
-  block.cons_names = nm;
-  block.prim_names = nm;
+  // Bloc compile AOT : descripteur a noms seuls (roles non transmis par l'ABI extern "C").
+  block.cons_vars = {VariableKind::Conservative, nm, nv, {}};
+  block.prim_vars = {VariableKind::Primitive, nm, nv, {}};
   P->sp.push_back(std::move(block));
   P->sp.back().U.set_val(Real(0));
 }
@@ -609,6 +638,18 @@ void System::set_poisson(const std::string& rhs, const std::string& solver,
   p_->p_wall_radius = wall_radius;
   p_->p_eps_ = static_cast<Real>(epsilon);
   p_->ell_.reset();
+}
+
+void System::set_epsilon_field(const std::vector<double>& eps) {
+  const int n = p_->cfg.n;
+  if (static_cast<int>(eps.size()) != n * n)
+    throw std::runtime_error("System::set_epsilon_field : taille != n*n");
+  for (double e : eps)
+    if (!(e > 0.0))
+      throw std::runtime_error("System::set_epsilon_field : permittivite eps(x) > 0 requise");
+  p_->p_eps_field_ = eps;
+  p_->has_eps_field_ = true;
+  p_->ell_.reset();  // l'operateur sera reconstruit avec le champ eps au prochain solve_fields
 }
 
 void System::add_ionization(const std::string& electron, const std::string& ion,
@@ -640,21 +681,29 @@ void System::add_collision(const std::string& a, const std::string& b, double ra
     throw std::runtime_error("System::add_collision : les deux blocs doivent porter une quantite "
                              "de mouvement (transport fluide >= 3 variables)");
   const Real k = static_cast<Real>(rate);
+  // Composantes resolues par ROLE (qte de mvt x/y, densite) plutot que par indice litteral : un
+  // bloc qui range ses variables autrement reste correctement couple. Fallback aux indices
+  // historiques (1, 2, 0) si le bloc ne renseigne pas ses roles (bloc dynamique / compile).
+  const VariableSet& va_set = P->sp[ia].cons_vars;
+  const VariableSet& vb_set = P->sp[ib].cons_vars;
+  const int mxa = role_index(va_set, VariableRole::MomentumX, 1);
+  const int mya = role_index(va_set, VariableRole::MomentumY, 2);
+  const int da = role_index(va_set, VariableRole::Density, 0);
+  const int mxb = role_index(vb_set, VariableRole::MomentumX, 1);
+  const int myb = role_index(vb_set, VariableRole::MomentumY, 2);
+  const int db = role_index(vb_set, VariableRole::Density, 0);
   // Friction inter-especes (operator-split) : force F = k (u_a - u_b) sur la quantite de
   // mouvement, opposee sur chaque espece (qte de mvt totale conservee) ; les vitesses relaxent
-  // l'une vers l'autre. Sur comp 1 et 2 (qte de mvt). L'echauffement par friction (energie) est
-  // un raffinement ulterieur (neglige : convient aux especes isothermes, sans eq. d'energie).
-  P->couplings.push_back([P, ia, ib, k](Real dt) {
+  // l'une vers l'autre. L'echauffement par friction (energie) est un raffinement ulterieur
+  // (neglige : convient aux especes isothermes, sans eq. d'energie).
+  P->couplings.push_back([P, ia, ib, k, mxa, mya, da, mxb, myb, db](Real dt) {
     Array4 ua = P->sp[ia].U.fab(0).array();
     Array4 ub = P->sp[ib].U.fab(0).array();
     for_each_cell(P->sp[ia].U.box(0), [=] ADC_HD(int i, int j) {  // sur device
-      for (int c = 1; c <= 2; ++c) {  // composantes de quantite de mouvement (x, y)
-        const Real va = ua(i, j, c) / ua(i, j, 0);
-        const Real vb = ub(i, j, c) / ub(i, j, 0);
-        const Real f = dt * k * (va - vb);
-        ua(i, j, c) -= f;
-        ub(i, j, c) += f;
-      }
+      const Real fx = dt * k * (ua(i, j, mxa) / ua(i, j, da) - ub(i, j, mxb) / ub(i, j, db));
+      ua(i, j, mxa) -= fx; ub(i, j, mxb) += fx;
+      const Real fy = dt * k * (ua(i, j, mya) / ua(i, j, da) - ub(i, j, myb) / ub(i, j, db));
+      ua(i, j, mya) -= fy; ub(i, j, myb) += fy;
     });
   });
 }
@@ -667,21 +716,33 @@ void System::add_thermal_exchange(const std::string& a, const std::string& b, do
                              "energie (Euler compressible, 4 variables)");
   const Real k = static_cast<Real>(rate);
   const Real ga = static_cast<Real>(P->sp[ia].gamma), gb = static_cast<Real>(P->sp[ib].gamma);
+  // Composantes resolues par ROLE (energie, qte de mvt x/y, densite) plutot que par indice litteral.
+  // Fallback aux indices historiques (3, 1, 2, 0) si le bloc ne renseigne pas ses roles.
+  const VariableSet& va_set = P->sp[ia].cons_vars;
+  const VariableSet& vb_set = P->sp[ib].cons_vars;
+  const int ea = role_index(va_set, VariableRole::Energy, 3);
+  const int mxa = role_index(va_set, VariableRole::MomentumX, 1);
+  const int mya = role_index(va_set, VariableRole::MomentumY, 2);
+  const int da = role_index(va_set, VariableRole::Density, 0);
+  const int eb = role_index(vb_set, VariableRole::Energy, 3);
+  const int mxb = role_index(vb_set, VariableRole::MomentumX, 1);
+  const int myb = role_index(vb_set, VariableRole::MomentumY, 2);
+  const int db = role_index(vb_set, VariableRole::Density, 0);
   // Echange thermique (operator-split) : flux de chaleur q = k (T_a - T_b) sur l'energie, oppose
   // sur chaque espece (energie totale conservee) ; les temperatures relaxent. T = p/rho (a une
   // constante pres), p = (gamma-1)(E - 1/2 rho |u|^2). Transfere l'energie INTERNE (u inchange).
-  P->couplings.push_back([P, ia, ib, k, ga, gb](Real dt) {
+  P->couplings.push_back([P, ia, ib, k, ga, gb, ea, mxa, mya, da, eb, mxb, myb, db](Real dt) {
     Array4 ua = P->sp[ia].U.fab(0).array();
     Array4 ub = P->sp[ib].U.fab(0).array();
     for_each_cell(P->sp[ia].U.box(0), [=] ADC_HD(int i, int j) {  // sur device
-      const Real ra = ua(i, j, 0), rb = ub(i, j, 0);
-      const Real pa = (ga - Real(1)) * (ua(i, j, 3) -
-          Real(0.5) * (ua(i, j, 1) * ua(i, j, 1) + ua(i, j, 2) * ua(i, j, 2)) / ra);
-      const Real pb = (gb - Real(1)) * (ub(i, j, 3) -
-          Real(0.5) * (ub(i, j, 1) * ub(i, j, 1) + ub(i, j, 2) * ub(i, j, 2)) / rb);
+      const Real ra = ua(i, j, da), rb = ub(i, j, db);
+      const Real pa = (ga - Real(1)) * (ua(i, j, ea) -
+          Real(0.5) * (ua(i, j, mxa) * ua(i, j, mxa) + ua(i, j, mya) * ua(i, j, mya)) / ra);
+      const Real pb = (gb - Real(1)) * (ub(i, j, eb) -
+          Real(0.5) * (ub(i, j, mxb) * ub(i, j, mxb) + ub(i, j, myb) * ub(i, j, myb)) / rb);
       const Real q = dt * k * (pa / ra - pb / rb);  // k (T_a - T_b), T = p/rho
-      ua(i, j, 3) -= q;
-      ub(i, j, 3) += q;
+      ua(i, j, ea) -= q;
+      ub(i, j, eb) += q;
     });
   });
 }
@@ -772,10 +833,23 @@ int System::n_vars(const std::string& name) const { return p_->find(name).ncomp;
 std::vector<std::string> System::variable_names(const std::string& name,
                                                const std::string& kind) const {
   const Impl::Species& s = p_->find(name);
-  if (kind == "conservative") return s.cons_names;
-  if (kind == "primitive") return s.prim_names;
+  if (kind == "conservative") return s.cons_vars.names;
+  if (kind == "primitive") return s.prim_vars.names;
   throw std::runtime_error("System::variable_names : kind 'conservative' | 'primitive' (recu '" +
                            kind + "')");
+}
+std::vector<std::string> System::variable_roles(const std::string& name,
+                                               const std::string& kind) const {
+  const Impl::Species& s = p_->find(name);
+  const VariableSet* vs = nullptr;
+  if (kind == "conservative") vs = &s.cons_vars;
+  else if (kind == "primitive") vs = &s.prim_vars;
+  else throw std::runtime_error("System::variable_roles : kind 'conservative' | 'primitive' (recu '" +
+                                kind + "')");
+  std::vector<std::string> out;
+  out.reserve(static_cast<std::size_t>(vs->size));
+  for (int i = 0; i < vs->size; ++i) out.push_back(role_name(vs->at(i).role));  // 'custom' si absent
+  return out;
 }
 
 int System::nx() const { return p_->cfg.n; }

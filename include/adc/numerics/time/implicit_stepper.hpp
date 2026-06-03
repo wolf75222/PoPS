@@ -144,6 +144,27 @@ ADC_HD inline typename Model::State newton_source_solve(
 }
 }  // namespace detail
 
+namespace detail {
+// Noyau device du pas implicite sur la source (Newton local en place). FONCTEUR NOMME (et non lambda
+// etendue) : emission device ROBUSTE quand le noyau Model-template est instancie depuis une TU EXTERNE
+// (chemin IMEX d'un bloc add_compiled_model, via la std::function d'avance de block_builder). Corps
+// identique a l'ancienne lambda -> resultat bit-identique sur CPU.
+template <class Model>
+struct BackwardEulerSourceKernel {
+  Model m;
+  ConstArray4 uc, ax;
+  Array4 u;
+  Real dt;
+  int it;
+  ADC_HD void operator()(int i, int j) const {
+    const typename Model::State Un = load_state<Model>(uc, i, j);
+    const Aux a = load_aux(ax, i, j);
+    const typename Model::State W = newton_source_solve<Model>(m, Un, a, dt, it);
+    for (int c = 0; c < Model::n_vars; ++c) u(i, j, c) = W[c];
+  }
+};
+}  // namespace detail
+
 // W = U + dt * model.source(W, aux), resolu EN PLACE par Newton local (jacobienne
 // par differences finies). Voir l'en-tete du fichier pour la stabilite.
 template <class Model>
@@ -154,15 +175,7 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
     const ConstArray4 uc = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
     const Box2D b = U.box(li);
-    const Model m = model;
-    const int it = iters;
-    for_each_cell(b, [=] ADC_HD(int i, int j) {
-      const typename Model::State Un = load_state<Model>(uc, i, j);
-      const Aux a = load_aux(ax, i, j);
-      const typename Model::State W =
-          detail::newton_source_solve<Model>(m, Un, a, dt, it);
-      for (int c = 0; c < Model::n_vars; ++c) u(i, j, c) = W[c];
-    });
+    for_each_cell(b, detail::BackwardEulerSourceKernel<Model>{model, uc, ax, u, dt, iters});
   }
 }
 

@@ -89,6 +89,27 @@ ADC_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
   return Aux{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
 }
 
+namespace detail {
+// Noyau reducteur de la vitesse d'onde max d'une cellule (max sur les deux directions). FONCTEUR
+// NOMME (et non lambda etendue) : emission device ROBUSTE quand le noyau Model-template est
+// instancie depuis une TU EXTERNE (add_compiled_model, via la std::function de make_max_speed).
+// Passe directement a reduce_max_cell -> aucune lambda etendue. Corps identique a l'ancienne
+// lambda -> resultat bit-identique (meme Kokkos::Max, meme boucle hote).
+template <class Model>
+struct MaxWaveSpeedKernel {
+  Model model;
+  ConstArray4 u, a;
+  ADC_HD void operator()(int i, int j, Real& acc) const {
+    const auto s = load_state<Model>(u, i, j);
+    const Aux ax = load_aux(a, i, j);
+    const Real wx = model.max_wave_speed(s, ax, 0);
+    const Real wy = model.max_wave_speed(s, ax, 1);
+    const Real w = wx > wy ? wx : wy;
+    if (w > acc) acc = w;
+  }
+};
+}  // namespace detail
+
 // Vitesse d'onde maximale d'un champ : max sur les cellules valides et les deux directions
 // de model.max_wave_speed(U, aux, dir). Sert au choix CFL du pas (dt = cfl*h/w_max). Pour un
 // modele sans transport (flux nul, w=0) -> 0, donc ne contraint pas le pas. Reduction par le
@@ -100,14 +121,7 @@ inline Real max_wave_speed_mf(const Model& model, const MultiFab& U,
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 a = aux.fab(li).const_array();
-    const Model mm = model;
-    m = std::max(m, for_each_cell_reduce_max(U.box(li), [u, a, mm] ADC_HD(int i, int j) {
-                      const auto s = load_state<Model>(u, i, j);
-                      const Aux ax = load_aux(a, i, j);
-                      const Real wx = mm.max_wave_speed(s, ax, 0);
-                      const Real wy = mm.max_wave_speed(s, ax, 1);
-                      return wx > wy ? wx : wy;
-                    }));
+    m = std::max(m, reduce_max_cell(U.box(li), detail::MaxWaveSpeedKernel<Model>{model, u, a}));
   }
   return m;
 }
@@ -218,6 +232,57 @@ inline Box2D yface_box(const Box2D& v) {
 // conservative aux interfaces coarse-fine (sinon un Laplacien direct serait ignore
 // par le reflux). dx/dy = pas du NIVEAU (passes par l'appelant ; 0 par defaut, non
 // lus pour un modele non diffusif -> chemin hyperbolique strictement bit-identique).
+namespace detail {
+// Noyaux de FLUX DE FACE (x puis y). FONCTEURS NOMMES (et non lambdas etendues) : emission device
+// ROBUSTE quand le noyau Model-template est instancie depuis une TU EXTERNE (chemin reflux AMR d'un
+// bloc add_compiled_model). Corps identique aux anciennes lambdas (le terme Fickien reste garde par
+// DiffusiveModel) -> flux de face bit-identique. dx/dy ne sont lus que par la branche diffusive
+// (membre inutilise, sans codegen, pour un modele non diffusif) : plus besoin du (void)dx hors
+// if-constexpr qu'imposait la capture d'une lambda.
+template <class Limiter, class NumericalFlux, class Model>
+struct FaceFluxXKernel {
+  Model model;
+  ConstArray4 u, ax;
+  Array4 fx;
+  Real dx;
+  Limiter lim;
+  NumericalFlux nflux;
+  bool recon_prim;
+  ADC_HD void operator()(int i, int j) const {
+    const auto L = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
+    const auto Rr = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
+    const auto F = nflux(model, L, load_aux(ax, i - 1, j), Rr, load_aux(ax, i, j), 0);
+    for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = F[c];
+    if constexpr (DiffusiveModel<Model>) {
+      const Real nu = model.diffusivity();
+      for (int c = 0; c < Model::n_vars; ++c)
+        fx(i, j, c) += -nu * (u(i, j, c) - u(i - 1, j, c)) / dx;
+    }
+  }
+};
+template <class Limiter, class NumericalFlux, class Model>
+struct FaceFluxYKernel {
+  Model model;
+  ConstArray4 u, ax;
+  Array4 fy;
+  Real dy;
+  Limiter lim;
+  NumericalFlux nflux;
+  bool recon_prim;
+  ADC_HD void operator()(int i, int j) const {
+    const auto L = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
+    const auto Rr = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
+    const auto F = nflux(model, L, load_aux(ax, i, j - 1), Rr, load_aux(ax, i, j), 1);
+    for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = F[c];
+    if constexpr (DiffusiveModel<Model>) {
+      const Real nu = model.diffusivity();
+      for (int c = 0; c < Model::n_vars; ++c)
+        fy(i, j, c) += -nu * (u(i, j, c) - u(i, j - 1, c)) / dy;
+    }
+  }
+};
+}  // namespace detail
+
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& aux,
                          MultiFab& Fx, MultiFab& Fy, Real dx = 0, Real dy = 0,
@@ -230,32 +295,69 @@ void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& 
     Array4 fx = Fx.fab(li).array();
     Array4 fy = Fy.fab(li).array();
     const Box2D v = U.box(li);
-    for_each_cell(xface_box(v), [=] ADC_HD(int i, int j) {
-      (void)dx;  // capture HORS du if constexpr : nvcc interdit la 1ere capture en contexte constexpr-if
-      const auto L = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
-      const auto Rr = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
-      const auto F = nflux(model, L, load_aux(ax, i - 1, j), Rr, load_aux(ax, i, j), 0);
-      for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = F[c];
-      if constexpr (DiffusiveModel<Model>) {
-        const Real nu = model.diffusivity();
-        for (int c = 0; c < Model::n_vars; ++c)
-          fx(i, j, c) += -nu * (u(i, j, c) - u(i - 1, j, c)) / dx;
-      }
-    });
-    for_each_cell(yface_box(v), [=] ADC_HD(int i, int j) {
-      (void)dy;  // capture HORS du if constexpr : nvcc interdit la 1ere capture en contexte constexpr-if
-      const auto L = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
-      const auto Rr = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
-      const auto F = nflux(model, L, load_aux(ax, i, j - 1), Rr, load_aux(ax, i, j), 1);
-      for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = F[c];
-      if constexpr (DiffusiveModel<Model>) {
-        const Real nu = model.diffusivity();
-        for (int c = 0; c < Model::n_vars; ++c)
-          fy(i, j, c) += -nu * (u(i, j, c) - u(i, j - 1, c)) / dy;
-      }
-    });
+    for_each_cell(xface_box(v), detail::FaceFluxXKernel<Limiter, NumericalFlux, Model>{
+                                    model, u, ax, fx, dx, lim, nflux, recon_prim});
+    for_each_cell(yface_box(v), detail::FaceFluxYKernel<Limiter, NumericalFlux, Model>{
+                                    model, u, ax, fy, dy, lim, nflux, recon_prim});
   }
 }
+
+namespace detail {
+// Noyau device d'assemble_rhs : R = -div Fhat + S (+ Fickien si diffusif) en (i, j). FONCTEUR NOMME
+// (et non lambda etendue) : c'est le point CLE du chemin AOT "parite native" (add_compiled_model).
+// nvcc n'emet pas fiablement le kernel device d'une lambda etendue Model-template premiere-instanciee
+// depuis une TU EXTERNE a travers le nesting std::function / lambda-hote de block_builder : le test
+// passe sur Serial et sous compute-sanitizer mais segfaute a l'execution sur Cuda (Heisenbug). Une
+// classe device-callable n'a pas ces restrictions de contexte d'instanciation. Corps IDENTIQUE a
+// l'ancienne lambda -> residu BIT-IDENTIQUE a add_block sur CPU (et, vise, sur device).
+template <class Limiter, class NumericalFlux, class Model>
+struct AssembleRhsKernel {
+  Model model;
+  ConstArray4 u, ax;
+  Array4 r;
+  Real dx, dy;
+  Limiter lim;
+  NumericalFlux nflux;
+  bool recon_prim;
+  ADC_HD void operator()(int i, int j) const {
+    const Aux Ac = load_aux(ax, i, j);
+    const Aux Axm = load_aux(ax, i - 1, j);
+    const Aux Axp = load_aux(ax, i + 1, j);
+    const Aux Aym = load_aux(ax, i, j - 1);
+    const Aux Ayp = load_aux(ax, i, j + 1);
+
+    // faces x : reconstruction des etats de part et d'autre de chaque face
+    const auto Lxm = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
+    const auto Rxm = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
+    const auto Lxp = reconstruct<Model>(model, u, i, j, 0, +1, lim, recon_prim);
+    const auto Rxp = reconstruct<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim);
+    const auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
+    const auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
+
+    // faces y
+    const auto Lym = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
+    const auto Rym = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
+    const auto Lyp = reconstruct<Model>(model, u, i, j, 1, +1, lim, recon_prim);
+    const auto Ryp = reconstruct<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim);
+    const auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
+    const auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
+
+    const auto S = model.source(load_state<Model>(u, i, j), Ac);
+    for (int c = 0; c < Model::n_vars; ++c)
+      r(i, j, c) = S[c] - (Fxp[c] - Fxm[c]) / dx - (Fyp[c] - Fym[c]) / dy;
+
+    // Terme parabolique (Fickien) : +nu Lap(U), differences centrees a 5 points.
+    // Garde par DiffusiveModel : aucun effet (ni codegen) pour un modele non diffusif.
+    if constexpr (DiffusiveModel<Model>) {
+      const Real nu = model.diffusivity();
+      const Real idx2 = Real(1) / (dx * dx), idy2 = Real(1) / (dy * dy);
+      for (int c = 0; c < Model::n_vars; ++c)
+        r(i, j, c) += nu * ((u(i + 1, j, c) - 2 * u(i, j, c) + u(i - 1, j, c)) * idx2 +
+                            (u(i, j + 1, c) - 2 * u(i, j, c) + u(i, j - 1, c)) * idy2);
+    }
+  }
+};
+}  // namespace detail
 
 // assemble_rhs<Limiter, NumericalFlux> : R = -div Fhat + S. Le limiteur (pente de
 // reconstruction) ET le flux numerique sont des parametres de template, par defaut
@@ -271,43 +373,8 @@ void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux,
     const ConstArray4 ax = aux.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
-    for_each_cell(v, [=] ADC_HD(int i, int j) {
-      const Aux Ac = load_aux(ax, i, j);
-      const Aux Axm = load_aux(ax, i - 1, j);
-      const Aux Axp = load_aux(ax, i + 1, j);
-      const Aux Aym = load_aux(ax, i, j - 1);
-      const Aux Ayp = load_aux(ax, i, j + 1);
-
-      // faces x : reconstruction des etats de part et d'autre de chaque face
-      const auto Lxm = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
-      const auto Rxm = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
-      const auto Lxp = reconstruct<Model>(model, u, i, j, 0, +1, lim, recon_prim);
-      const auto Rxp = reconstruct<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim);
-      const auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
-      const auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
-
-      // faces y
-      const auto Lym = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
-      const auto Rym = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
-      const auto Lyp = reconstruct<Model>(model, u, i, j, 1, +1, lim, recon_prim);
-      const auto Ryp = reconstruct<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim);
-      const auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
-      const auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
-
-      const auto S = model.source(load_state<Model>(u, i, j), Ac);
-      for (int c = 0; c < Model::n_vars; ++c)
-        r(i, j, c) = S[c] - (Fxp[c] - Fxm[c]) / dx - (Fyp[c] - Fym[c]) / dy;
-
-      // Terme parabolique (Fickien) : +nu Lap(U), differences centrees a 5 points.
-      // Garde par DiffusiveModel : aucun effet (ni codegen) pour un modele non diffusif.
-      if constexpr (DiffusiveModel<Model>) {
-        const Real nu = model.diffusivity();
-        const Real idx2 = Real(1) / (dx * dx), idy2 = Real(1) / (dy * dy);
-        for (int c = 0; c < Model::n_vars; ++c)
-          r(i, j, c) += nu * ((u(i + 1, j, c) - 2 * u(i, j, c) + u(i - 1, j, c)) * idx2 +
-                              (u(i, j + 1, c) - 2 * u(i, j, c) + u(i, j - 1, c)) * idy2);
-      }
-    });
+    for_each_cell(v, detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>{
+                         model, u, ax, r, dx, dy, lim, nflux, recon_prim});
   }
 }
 

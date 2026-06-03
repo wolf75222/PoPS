@@ -1,5 +1,6 @@
 #pragma once
 
+#include <adc/core/variables.hpp>  // VariableSet (descripteur a roles porte par chaque bloc)
 #include <adc/runtime/grid_context.hpp>  // GridContext + BlockClosures (seam bloc compile AOT)
 #include <adc/runtime/model_spec.hpp>
 
@@ -94,11 +95,12 @@ class System {
   /// add_compiled_block (.so + marshaling hote, prototypage runtime CPU).
   /// @{
   GridContext grid_context();  ///< maillage + CL + aux REELS du System (aux non possede)
-  /// Installe un bloc a partir de fermetures deja fabriquees (cf. add_compiled_model).
-  void install_block(const std::string& name, int ncomp,
-                     const std::vector<std::string>& cons_names,
-                     const std::vector<std::string>& prim_names, double gamma,
-                     BlockClosures closures, std::function<Real(const MultiFab&)> max_speed,
+  /// Installe un bloc a partir de fermetures deja fabriquees (cf. add_compiled_model). Les
+  /// descripteurs cons/prim portent les noms ET les roles (M::conservative_vars()), exploites
+  /// par les couplages inter-especes.
+  void install_block(const std::string& name, int ncomp, const VariableSet& cons_vars,
+                     const VariableSet& prim_vars, double gamma, BlockClosures closures,
+                     std::function<Real(const MultiFab&)> max_speed,
                      std::function<void(const MultiFab&, MultiFab&)> poisson_rhs, int substeps,
                      bool evolve);
   /// @}
@@ -109,12 +111,19 @@ class System {
   /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
   /// @param wall   "none" | "circle" : paroi conductrice en (L/2, L/2), rayon wall_radius
   /// @param epsilon permittivite CONSTANTE de l'operateur div(eps grad phi) = f. eps != 1 resout
-  ///                eps lap phi = f (i.e. lap phi = f/eps). eps(x) variable demanderait un solveur
-  ///                a coefficients variables (non encore disponible).
+  ///                eps lap phi = f (i.e. lap phi = f/eps). Pour une permittivite eps(x) VARIABLE,
+  ///                cf. set_epsilon_field (operateur a coefficients variables, GeometricMG).
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg",
                    const std::string& bc = "auto", const std::string& wall = "none",
                    double wall_radius = 0.0, double epsilon = 1.0);
+
+  /// Fixe une permittivite VARIABLE eps(x), champ n*n row-major (> 0), au CENTRE des cellules.
+  /// L'operateur du Poisson de systeme passe a div(eps grad phi) = f, eps PORTE PAR L'OPERATEUR
+  /// (coefficient de face harmonique, ordre 2) sans mise a l'echelle 1/eps du second membre. Seul
+  /// le solveur 'geometric_mg' le supporte ; le demander avec 'fft' (coefficient constant) leve une
+  /// erreur. Prevaut sur la permittivite constante de set_poisson. A appeler avant solve_fields.
+  void set_epsilon_field(const std::vector<double>& eps);
 
   /// Fixe la densite d'une espece (composante 0), tableau n*n row-major. Les autres
   /// composantes (qte de mouvement, energie) sont posees a l'equilibre au repos.
@@ -156,6 +165,11 @@ class System {
   int n_vars(const std::string& name) const;
   /// Noms des variables d'un bloc (introspection) : kind = "conservative" | "primitive".
   std::vector<std::string> variable_names(const std::string& name,
+                                          const std::string& kind = "conservative") const;
+  /// Roles PHYSIQUES des variables d'un bloc (parallele a variable_names) : "density",
+  /// "momentum_x", "energy", ... ou "custom" si le bloc ne renseigne pas ses roles. C'est ce que
+  /// resolvent les couplages inter-especes (index_of(role)) au lieu d'un indice litteral.
+  std::vector<std::string> variable_roles(const std::string& name,
                                           const std::string& kind = "conservative") const;
   /// @}
 

@@ -258,7 +258,7 @@ class Spatial:
     """Discretisation spatiale : reconstruction (limiteur) + flux numerique de Riemann.
 
     limiter : "none" | "minmod" | "vanleer"  (raccourcis none=/minmod=/vanleer=)
-    flux    : "rusanov" | "hllc"  (hllc exige un transport compressible)
+    flux    : "rusanov" | "hllc" | "roe"  (hllc/roe exigent un transport compressible)
     recon   : "conservative" | "primitive"  (variables reconstruites ; primitif plus robuste
               pour Euler : positivite de rho et p ; raccourci primitive=)
     """
@@ -385,11 +385,8 @@ class AmrSystem:
 
     def add_block(self, name, model, spatial=None, time=None):
         spatial = spatial if spatial is not None else Spatial()
-        if spatial.recon == "primitive":
-            raise NotImplementedError(
-                "reconstruction primitive non supportee sur AMR (utiliser recon conservative)")
         time = time if time is not None else Explicit()
-        self._s.add_block(name, model, spatial.limiter, spatial.flux, time.kind,
+        self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1))
 
     def __getattr__(self, attr):

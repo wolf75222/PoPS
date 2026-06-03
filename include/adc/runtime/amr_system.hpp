@@ -34,15 +34,19 @@ class AmrSystem {
   AmrSystem(AmrSystem&&) noexcept;
   AmrSystem& operator=(AmrSystem&&) noexcept;
 
-  /// Definit l'unique bloc porte sur l'AMR.
+  /// Definit l'unique bloc porte sur l'AMR. Memes parametres de schema spatial que System
+  /// (limiter x riemann x recon), appliques a chaque niveau/patch de la hierarchie.
   /// @param model   composition de briques (transport/source/elliptic + parametres)
   /// @param limiter "none" | "minmod" | "vanleer"
-  /// @param riemann "rusanov" | "hllc"
+  /// @param riemann "rusanov" | "hllc" | "roe" (hllc/roe exigent un transport compressible)
+  /// @param recon   "conservative" | "primitive" (variables reconstruites ; primitif plus
+  ///                robuste pour Euler : positivite de rho et p)
   /// @param time    "explicit" uniquement (l'IMEX sur AMR n'est pas cable ici)
   /// @throws std::runtime_error si un bloc est deja defini ou si time != "explicit".
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod",
                  const std::string& riemann = "rusanov",
+                 const std::string& recon = "conservative",
                  const std::string& time = "explicit", int substeps = 1);
 
   /// Raffine les cellules ou la densite (composante 0) depasse @p threshold.

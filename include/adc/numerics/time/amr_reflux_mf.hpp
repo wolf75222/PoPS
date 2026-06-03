@@ -734,7 +734,7 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real dt,
                        const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
                        const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs,
-                       bool coarse_replicated = true) {
+                       bool coarse_replicated = true, bool recon_prim = false) {
   const int r = 2, nc = L[lev].U.ncomp();
   AmrLevelMP& lv = L[lev];
   const int np = lv.U.local_size();
@@ -760,7 +760,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   }
   MultiFab fx(BoxArray(std::move(fxb)), lv.U.dmap(), nc, 0);
   MultiFab fy(BoxArray(std::move(fyb)), lv.U.dmap(), nc, 0);
-  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy, recon_prim);
   device_fence();
 
   if (parentRegs) {  // role FIN : flux fins de CE niveau dans le registre du parent
@@ -875,7 +875,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
   for (int s = 0; s < r; ++s)
     subcycle_level_mp<Limiter, NumericalFlux>(m, L, lev + 1, dt / r, base_dom, base_per,
                                               &U_old, &lv.U, Real(s) / r, &regs,
-                                              coarse_replicated);
+                                              coarse_replicated, recon_prim);
   mf_average_down_mb(L[lev + 1].U, lv.U);  // point 3 distribue (parallel_copy)
 
   // Point 4 distribue : reflux coverage-aware. La cellule grossiere bordante peut appartenir
@@ -925,9 +925,9 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L,
                                     const Box2D& dom, Real dt,
                                     Periodicity per = Periodicity{true, true},
-                                    bool coarse_replicated = true) {
+                                    bool coarse_replicated = true, bool recon_prim = false) {
   subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr,
-                                            Real(0), nullptr, coarse_replicated);
+                                            Real(0), nullptr, coarse_replicated, recon_prim);
 }
 
 }  // namespace detail (moteur N-niveaux multi-patch)
@@ -952,23 +952,28 @@ struct LevelHierarchy {
   Box2D base_dom;                    // empreinte du niveau de base
   Periodicity base_per{true, true};  // CL du domaine de base
   bool coarse_replicated = true;     // niveau 0 replique (true) ou multi-box reparti (false)
+  bool recon_prim = false;           // reconstruction primitive (cf. compute_face_fluxes)
 };
 
 // Entree unifiee de production : avance la hierarchie d'un pas dt. Forme "pieces" (le coupleur
 // possede son propre stack et passe les vecteurs directement) et forme LevelHierarchy. La porte
 // TRANSMET coarse_replicated au moteur ; sans cela un grossier de-replique repasserait en
 // replique (mf_find_box au lieu de parallel_copy). coarse_replicated=true (defaut) -> identique
-// au comportement historique.
+// au comportement historique. recon_prim selectionne la reconstruction primitive (variables
+// (rho, u, p)) au lieu de conservative : meme parametre qu'assemble_rhs, fige a l'ajout du bloc ;
+// false (defaut) -> conservative, strictement bit-identique a l'historique.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
-                 Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true) {
+                 Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true,
+                 bool recon_prim = false) {
   detail::amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, levels, base_dom, dt, base_per,
-                                                                 coarse_replicated);
+                                                                 coarse_replicated, recon_prim);
 }
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, LevelHierarchy& h, Real dt) {
-  advance_amr<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt, h.base_per, h.coarse_replicated);
+  advance_amr<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt, h.base_per, h.coarse_replicated,
+                                      h.recon_prim);
 }
 
 }  // namespace adc

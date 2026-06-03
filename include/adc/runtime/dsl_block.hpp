@@ -42,9 +42,8 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   BlockClosures clo = make_block(model, limiter, riemann, ctx, imex, recon_prim);
   std::function<Real(const MultiFab&)> ms = make_max_speed(model, ctx);
   std::function<void(const MultiFab&, MultiFab&)> pr = make_poisson_rhs(model);
-  sys.install_block(name, Model::n_vars, Model::conservative_vars().names,
-                    Model::primitive_vars().names, gamma, std::move(clo), std::move(ms),
-                    std::move(pr), substeps, evolve);
+  sys.install_block(name, Model::n_vars, Model::conservative_vars(), Model::primitive_vars(),
+                    gamma, std::move(clo), std::move(ms), std::move(pr), substeps, evolve);
 }
 
 }  // namespace adc

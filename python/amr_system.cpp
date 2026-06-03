@@ -2,7 +2,7 @@
 
 #include <adc/runtime/model_factory.hpp>     // detail::dispatch_model + briques compilees
 #include <adc/coupling/amr_coupler_mp.hpp>   // AmrCouplerMP, AmrLevelMP
-#include <adc/numerics/numerical_flux.hpp>    // RusanovFlux, HLLCFlux
+#include <adc/numerics/numerical_flux.hpp>    // RusanovFlux, HLLCFlux, RoeFlux
 #include <adc/numerics/reconstruction.hpp>    // NoSlope, Minmod, VanLeer
 
 #include <adc/mesh/box2d.hpp>
@@ -11,6 +11,7 @@
 #include <adc/mesh/for_each.hpp>  // device_fence
 #include <adc/mesh/geometry.hpp>
 #include <adc/mesh/multifab.hpp>
+#include <adc/mesh/refinement.hpp>  // coarsen_index (injection grossier -> fin)
 #include <adc/parallel/comm.hpp>  // n_ranks
 
 #include <cmath>
@@ -34,7 +35,8 @@ struct AmrSystem::Impl {
   // Specification du bloc (figee a add_block, materialisee au build paresseux).
   bool has_block = false;
   ModelSpec b_spec;
-  std::string b_limiter = "minmod", b_riemann = "rusanov";
+  std::string b_limiter = "minmod", b_riemann = "rusanov", b_recon = "conservative";
+  bool b_recon_prim = false;  // recon == "primitive" (fige a add_block)
   int b_substeps = 1;
   int ncomp = 1;
   double gamma = 1.4;
@@ -108,6 +110,28 @@ struct AmrSystem::Impl {
     return out;
   }
 
+  // Injecte le grossier (mono-box) dans les cellules valides d'un patch fin (constant par
+  // morceaux, ratio 2). Rend la hierarchie COHERENTE avant le premier sync_down : le patch
+  // seed est cree a 0 ; sans cette injection, update()->sync_down() moyennerait ces zeros
+  // sur le grossier et y creuserait un trou (densite nulle -> pression/celerite NaN pour un
+  // transport Euler ; pour un scalaire le trou passe inapercu mais fausse le grossier).
+  // Idempotent vis-a-vis du reflux : la moyenne fin->grossier de 4 cellules egales redonne
+  // exactement la valeur grossiere.
+  static void inject_coarse_to_fine(const MultiFab& Uc, MultiFab& Uf) {
+    device_fence();
+    const int nc = Uf.ncomp();
+    const ConstArray4 c = Uc.fab(0).const_array();
+    for (int li = 0; li < Uf.local_size(); ++li) {
+      Array4 f = Uf.fab(li).array();
+      const Box2D v = Uf.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+          const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
+          for (int k = 0; k < nc; ++k) f(i, j, k) = c(ci, cj, k);
+        }
+    }
+  }
+
   // Construit le coupleur AMR pour un Model compose + (Limiter, Flux) concrets et cable les
   // fermetures. Deux niveaux : grossier + un patch fin seed central, remodele par le regrid.
   template <class Model, class L, class F>
@@ -133,6 +157,10 @@ struct AmrSystem::Impl {
                                          wall_active());
     coupler_holder = cpl;
     if (has_density) write_coarse(cpl->coarse(), pending_density);
+    // Coherence de la hierarchie AVANT regrid/sync : remplir les patchs fins depuis le
+    // grossier (le seed est a 0, sinon sync_down creuserait le grossier -> NaN Euler).
+    auto& Lv = cpl->levels();
+    for (std::size_t k = 1; k < Lv.size(); ++k) inject_coarse_to_fine(cpl->coarse(), Lv[k].U);
 
     const double thr = refine_threshold;
     auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
@@ -141,12 +169,13 @@ struct AmrSystem::Impl {
 
     Impl* P = this;
     const int sub = b_substeps;
-    step_fn = [P, cpl, crit, sub](double dt) {
+    const bool rprim = b_recon_prim;
+    step_fn = [P, cpl, crit, sub, rprim](double dt) {
       if (P->cfg.regrid_every > 0 && P->step_count > 0 &&
           P->step_count % P->cfg.regrid_every == 0)
         cpl->regrid(crit);
       const double h = dt / sub;
-      for (int s = 0; s < sub; ++s) cpl->template step<DiscLF<L, F>>(h);
+      for (int s = 0; s < sub; ++s) cpl->template step<DiscLF<L, F>>(h, rprim);
       ++P->step_count;
     };
     max_speed_fn = [cpl] { return static_cast<double>(cpl->max_wave_speed()); };
@@ -180,7 +209,19 @@ struct AmrSystem::Impl {
                                  "(4 variables + pression) ; ce transport -> 'rusanov'");
       }
     }
-    throw std::runtime_error("AmrSystem : flux Riemann inconnu '" + b_riemann + "'");
+    if (b_riemann == "roe") {
+      if constexpr (Model::n_vars == 4 &&
+                    requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
+        if (b_limiter == "none") return build<Model, NoSlope, RoeFlux>(m);
+        if (b_limiter == "minmod") return build<Model, Minmod, RoeFlux>(m);
+        if (b_limiter == "vanleer") return build<Model, VanLeer, RoeFlux>(m);
+        throw std::runtime_error("AmrSystem : limiter inconnu '" + b_limiter + "'");
+      } else {
+        throw std::runtime_error("AmrSystem : flux 'roe' exige un transport compressible "
+                                 "(4 variables + pression) ; ce transport -> 'rusanov'");
+      }
+    }
+    throw std::runtime_error("AmrSystem : flux Riemann inconnu '" + b_riemann + "' (rusanov|hllc|roe)");
   }
 
   void ensure_built() {
@@ -202,15 +243,20 @@ AmrSystem& AmrSystem::operator=(AmrSystem&&) noexcept = default;
 
 void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           const std::string& limiter, const std::string& riemann,
-                          const std::string& time, int substeps) {
+                          const std::string& recon, const std::string& time, int substeps) {
   (void)name;
   if (p_->has_block) throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
   if (time != "explicit")
     throw std::runtime_error("AmrSystem : seul time='explicit' est supporte sur AMR");
+  if (recon != "conservative" && recon != "primitive")
+    throw std::runtime_error("AmrSystem : recon inconnu '" + recon +
+                             "' (conservative|primitive)");
   p_->b_spec = model;
   p_->b_limiter = limiter;
   p_->b_riemann = riemann;
+  p_->b_recon = recon;
+  p_->b_recon_prim = (recon == "primitive");
   p_->b_substeps = substeps;
   p_->has_block = true;
 }

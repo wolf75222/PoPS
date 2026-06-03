@@ -168,12 +168,14 @@ class AmrCouplerMP {
   void update() { sync_down(); compute_aux(); }
 
   // Discretisation spatiale selectionnable (defaut FirstOrder = NoSlope + Rusanov,
-  // strictement identique a l'ancien step()).
+  // strictement identique a l'ancien step()). recon_prim selectionne la reconstruction
+  // primitive (meme parametre qu'assemble_rhs / System) ; false (defaut) -> conservative.
   template <class Disc = FirstOrder>
-  void step(Real dt) {
+  void step(Real dt, bool recon_prim = false) {
     update();
     advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
-        model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_);
+        model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_,
+        recon_prim);
   }
 
   // Regrid du niveau FIN par Berger-Rigoutsos (delegue a amr_regrid_finest) :

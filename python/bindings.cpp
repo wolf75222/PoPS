@@ -90,9 +90,17 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("rate"))
       .def("variable_names", &System::variable_names, py::arg("name"),
            py::arg("kind") = "conservative")
+      .def("variable_roles", &System::variable_roles, py::arg("name"),
+           py::arg("kind") = "conservative")
       .def("set_poisson", &System::set_poisson, py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
            py::arg("wall") = "none", py::arg("wall_radius") = 0.0, py::arg("epsilon") = 1.0)
+      .def("set_epsilon_field",
+           [](System& s,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             s.set_epsilon_field(flat(arr));
+           },
+           py::arg("eps"))
       .def("set_density",
            [](System& s, const std::string& name,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
@@ -185,7 +193,8 @@ PYBIND11_MODULE(_adc, m) {
       .def(py::init<const AmrSystemConfig&>())
       .def("add_block", &AmrSystem::add_block, py::arg("name"), py::arg("model"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
-           py::arg("time") = "explicit", py::arg("substeps") = 1)
+           py::arg("recon") = "conservative", py::arg("time") = "explicit",
+           py::arg("substeps") = 1)
       .def("set_refinement", &AmrSystem::set_refinement, py::arg("threshold"))
       .def("set_poisson", &AmrSystem::set_poisson, py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
