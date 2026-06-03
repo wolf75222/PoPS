@@ -69,6 +69,20 @@ class System {
                          const std::vector<std::string>& names = {},
                          const std::string& recon = "none");
 
+  /// Ajoute un bloc dont le modele est COMPILE AOT depuis une .so generee par le DSL
+  /// (dsl.compile_aot / compile_or_jit(mode="compile")). A la difference du bloc dynamique (chemin
+  /// hote, dispatch virtuel IModel, Rusanov ordre 1), ce bloc tourne le chemin de PRODUCTION : la .so
+  /// execute assemble_rhs<Limiter, Flux> (HLLC/Roe au choix, ordre 2) et SSPRK2/IMEX du coeur sur le
+  /// modele genere ; seuls des tableaux plats transitent (ABI extern "C", cf. compiled_block_abi.hpp).
+  /// @param limiter "none" | "minmod" | "vanleer"   @param riemann "rusanov" | "hllc" | "roe"
+  /// @param recon   "conservative" | "primitive"    @param time "explicit" | "imex"
+  void add_compiled_block(const std::string& name, const std::string& so_path,
+                          const std::string& limiter = "minmod",
+                          const std::string& riemann = "rusanov",
+                          const std::string& recon = "conservative",
+                          const std::string& time = "explicit", int substeps = 1,
+                          const std::vector<std::string>& names = {});
+
   /// Configure le Poisson partage.
   /// @param rhs    seul mode : "charge_density", f = somme_s elliptic_rhs_s(u_s)
   /// @param solver "geometric_mg" (tout cas, paroi comprise) | "fft" (periodique, n = 2^k)

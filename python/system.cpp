@@ -489,6 +489,96 @@ void System::add_dynamic_block(const std::string& name, const std::string& so_pa
   }
 }
 
+void System::add_compiled_block(const std::string& name, const std::string& so_path,
+                                const std::string& limiter, const std::string& riemann,
+                                const std::string& recon, const std::string& time, int substeps,
+                                const std::vector<std::string>& names) {
+  Impl* P = p_.get();
+  if (substeps < 1) throw std::runtime_error("System::add_compiled_block : substeps >= 1");
+  if (recon != "conservative" && recon != "primitive")
+    throw std::runtime_error("System::add_compiled_block : recon 'conservative' | 'primitive'");
+  if (time != "explicit" && time != "imex")
+    throw std::runtime_error("System::add_compiled_block : time 'explicit' | 'imex'");
+  const int recon_prim = (recon == "primitive") ? 1 : 0;
+  const int imex = (time == "imex") ? 1 : 0;
+
+  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!h) {
+    const char* e = dlerror();
+    throw std::runtime_error("add_compiled_block : dlopen('" + so_path + "') : " +
+                             std::string(e ? e : "?"));
+  }
+  // ABI extern "C" du bloc compile (compiled_block_abi.hpp). Le .so tourne le chemin de production
+  // (assemble_rhs<Limiter, Flux>, SSPRK2/IMEX) sur le modele genere ; seuls des tableaux plats
+  // transitent (aucun objet C++ partage a travers le dlopen, donc RTLD_LOCAL sans risque d'ABI).
+  using nv_fn_t = int (*)();
+  using res_fn_t = void (*)(const double*, double*, const double*, int, double, double, int,
+                            const char*, const char*, int);
+  using adv_fn_t = void (*)(double*, const double*, int, double, double, int, const char*,
+                            const char*, int, int, double, int);
+  using max_fn_t = double (*)(const double*, const double*, int, double, double, int);
+  using poi_fn_t = void (*)(const double*, double*, int);
+  auto nv_fn = reinterpret_cast<nv_fn_t>(dlsym(h, "adc_model_nvars"));
+  auto res_fn = reinterpret_cast<res_fn_t>(dlsym(h, "adc_compiled_residual"));
+  auto adv_fn = reinterpret_cast<adv_fn_t>(dlsym(h, "adc_compiled_advance"));
+  auto max_fn = reinterpret_cast<max_fn_t>(dlsym(h, "adc_compiled_max_speed"));
+  auto poi_fn = reinterpret_cast<poi_fn_t>(dlsym(h, "adc_compiled_poisson_rhs"));
+  if (!nv_fn || !res_fn || !adv_fn || !max_fn || !poi_fn) {
+    dlclose(h);
+    throw std::runtime_error("add_compiled_block : ABI bloc compile absente du .so (regenerer via "
+                             "dsl.compile_aot / compile_or_jit(mode='compile'))");
+  }
+  const int nv = nv_fn();
+  std::shared_ptr<void> lib(h, [](void* p) { dlclose(p); });  // ferme le .so a la mort des fermetures
+  const int n = P->cfg.n;
+  const double dx = P->geom.dx(), dy = P->geom.dy();
+  const int per = P->periodic_ ? 1 : 0;
+  const std::string lim = limiter, riem = riemann;
+
+  std::function<void(MultiFab&, MultiFab&)> rhs_into =
+      [P, lib, res_fn, nv, n, dx, dy, per, lim, riem, recon_prim](MultiFab& U, MultiFab& R) {
+        std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, 3);
+        std::vector<double> r(static_cast<std::size_t>(nv) * n * n, 0.0);
+        res_fn(u.data(), r.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(), recon_prim);
+        P->write_state(R, nv, r);
+      };
+  std::function<void(MultiFab&, Real, int)> advance =
+      [P, lib, adv_fn, nv, n, dx, dy, per, lim, riem, recon_prim, imex](MultiFab& U, Real dt,
+                                                                        int nsub) {
+        std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, 3);
+        adv_fn(u.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(), recon_prim, imex,
+               static_cast<double>(dt), nsub);
+        P->write_state(U, nv, u);
+      };
+  std::function<Real(const MultiFab&)> max_speed =
+      [P, lib, max_fn, nv, n, dx, dy, per](const MultiFab& U) -> Real {
+        std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, 3);
+        return max_fn(u.data(), a.data(), n, dx, dy, per);
+      };
+  std::function<void(const MultiFab&, MultiFab&)> add_poisson =
+      [P, lib, poi_fn, nv, n](const MultiFab& U, MultiFab& rhs) {
+        std::vector<double> u = P->copy_state(U, nv);
+        std::vector<double> pr(static_cast<std::size_t>(n) * n, 0.0);
+        poi_fn(u.data(), pr.data(), n);
+        Array4 r = rhs.fab(0).array();
+        const Box2D v = rhs.box(0);
+        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+            r(i, j, 0) += pr[static_cast<std::size_t>(j - v.lo[1]) * n + (i - v.lo[0])];
+      };
+
+  std::vector<std::string> nm = names;
+  if (nm.empty())
+    for (int c = 0; c < nv; ++c) nm.push_back("u" + std::to_string(c));
+  Impl::Species block{name, MultiFab(P->ba, P->dm, nv, 2), nv, substeps, true, 1.4,
+                      std::move(advance), std::move(rhs_into), std::move(max_speed),
+                      std::move(add_poisson)};
+  block.cons_names = nm;
+  block.prim_names = nm;
+  P->sp.push_back(std::move(block));
+  P->sp.back().U.set_val(Real(0));
+}
+
 void System::set_poisson(const std::string& rhs, const std::string& solver,
                          const std::string& bc, const std::string& wall, double wall_radius,
                          double epsilon) {

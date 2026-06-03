@@ -105,6 +105,12 @@ add_test(NAME test_dsl_coupled
 set_tests_properties(test_dsl_coupled PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# Backend AOT : euler_poisson compile_or_jit(mode="compile") -> add_compiled_block == bloc natif.
+add_test(NAME test_dsl_aot
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_aot.py)
+set_tests_properties(test_dsl_aot PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # Choix de reconstruction (ordre) du bloc dynamique : recon none/minmod/vanleer == reference MUSCL numpy.
 add_test(NAME test_dsl_recon
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_recon.py)

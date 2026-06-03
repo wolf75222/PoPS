@@ -507,13 +507,11 @@ class HyperbolicModel:
         S += ["    return S;", "  }", "};", "}  // namespace %s" % namespace]
         return "\n".join(S) + "\n"
 
-    def emit_cpp_so_source(self, name=None):
-        """Assemble le code source de la bibliotheque JIT : le MODELE COMPLET (brique hyperbolique +
-        source + second membre elliptique) en adc::CompositeModel<GenHyp, GenSrc, GenEll>, derriere une
-        fabrique extern "C" (adc_model_nvars / adc_make_model / adc_destroy_model via adc::ModelAdapter).
-        Source et elliptique sont OPTIONNELS : sans set_source -> adc::NoSource ; sans set_elliptic_rhs
-        -> rhs nul (le bloc ne contribue pas au Poisson). C'est ce que compile_so compile en .so et que
-        System.add_dynamic_block charge comme un vrai bloc COUPLE (flux + source + Poisson)."""
+    def _emit_bricks(self, name=None):
+        """Genere les briques (hyperbolique + source + elliptique) et le type CompositeModel<...>
+        partages par les DEUX backends (JIT IModel et AOT). Source / elliptique OPTIONNELS : sans
+        set_source -> adc::NoSource ; sans set_elliptic_rhs -> rhs nul (pas de couplage Poisson).
+        Renvoie (nv, code_des_briques, type_composite)."""
         nm = name or (self.name.capitalize() + "Gen")
         nv = self.n_vars
         parts = [self.emit_cpp_brick(name=nm + "Hyp")]
@@ -529,12 +527,20 @@ class HyperbolicModel:
                 "namespace adc_generated { struct %sEll {\n"
                 "  template <class State> ADC_HD adc::Real rhs(const State&) const { return adc::Real(0); }\n"
                 "}; }\n" % nm)
-        ell_type = "adc_generated::%sEll" % nm
-        composite = ("adc::CompositeModel<adc_generated::%sHyp, %s, %s>" % (nm, src_type, ell_type))
+        composite = ("adc::CompositeModel<adc_generated::%sHyp, %s, adc_generated::%sEll>"
+                     % (nm, src_type, nm))
+        return nv, "".join(parts), composite
+
+    def emit_cpp_so_source(self, name=None):
+        """Source de la bibliotheque JIT (backend "jit") : le MODELE COMPLET en CompositeModel<GenHyp,
+        GenSrc, GenEll> derriere une fabrique extern "C" (adc_model_nvars / adc_make_model /
+        adc_destroy_model via adc::ModelAdapter). C'est ce que compile_so compile et que
+        System.add_dynamic_block charge comme bloc couple a DISPATCH VIRTUEL (prototypage hote)."""
+        nv, bricks, composite = self._emit_bricks(name)
         return ('#include <adc/runtime/dynamic_model.hpp>\n'
                 '#include <adc/physics/bricks.hpp>\n'  # CompositeModel + NoSource + briques
                 '#include <adc/core/variables.hpp>\n'
-                + "".join(parts)
+                + bricks
                 + '\nextern "C" int adc_model_nvars() { return %d; }\n' % nv
                 + 'extern "C" void* adc_make_model() { return new adc::ModelAdapter<%s>(); }\n' % composite
                 + 'extern "C" void adc_destroy_model(void* p) { delete static_cast<adc::IModel<%d>*>(p); }\n' % nv)
@@ -562,6 +568,54 @@ class HyperbolicModel:
             subprocess.run([cc, "-shared", "-fPIC", "-std=" + std, "-O2", "-I", include, cpp,
                             "-o", so_path], check=True)
         return so_path
+
+    def emit_cpp_aot_source(self, name=None):
+        """Source de la bibliotheque AOT (backend "compile") : le MODELE COMPLET en CompositeModel<...>
+        derriere l'ABI extern "C" de compiled_block_abi.hpp. Le .so EXECUTE le chemin de PRODUCTION
+        (assemble_rhs<Limiter, Flux>, SSPRK2/IMEX du coeur) sur le modele genere : numerique inlinee,
+        identique a un bloc natif add_block. Oppose au backend "jit" (IModel, dispatch virtuel)."""
+        nv, bricks, composite = self._emit_bricks(name)
+        return ('#include <adc/runtime/compiled_block_abi.hpp>\n'
+                '#include <adc/physics/bricks.hpp>\n'  # CompositeModel + NoSource + briques
+                '#include <adc/core/variables.hpp>\n'
+                + bricks
+                + '\nnamespace adc_generated { using AotModel = %s; }\n' % composite
+                + 'ADC_DEFINE_COMPILED_BLOCK(adc_generated::AotModel)\n')
+
+    def compile_aot(self, so_path, include, name=None, cxx=None, std="c++20"):
+        """Backend "compile" (AOT) : genere le MODELE COMPLET (emit_cpp_aot_source) et compile une .so
+        chargeable par System.add_compiled_block. Contrairement au backend "jit" (compile_so : IModel,
+        dispatch virtuel, Rusanov hote), le bloc tourne ici le chemin de PRODUCTION (flux HLLC/Roe au
+        choix, ordre 2, SSPRK2/IMEX) sur le modele genere -- numerique identique a un bloc natif.
+        include = dossier des en-tetes adc ; cxx = compilateur. Renvoie so_path."""
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+
+        src = self.emit_cpp_aot_source(name=name)
+        cc = cxx or shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+        if not cc:
+            raise RuntimeError("compile_aot : aucun compilateur C++ trouve")
+        with tempfile.TemporaryDirectory() as tmp:
+            cpp = os.path.join(tmp, "model_aot.cpp")
+            with open(cpp, "w") as f:
+                f.write(src)
+            subprocess.run([cc, "-shared", "-fPIC", "-std=" + std, "-O2", "-I", include, cpp,
+                            "-o", so_path], check=True)
+        return so_path
+
+    def compile_or_jit(self, so_path, include, mode="jit", name=None, cxx=None, std="c++20"):
+        """API unifiee (facade de l'ideal m.compile_or_jit()) choisissant le backend :
+        mode="jit"     -> compile_so  (IModel, dispatch virtuel : prototypage hote, a brancher via
+                          System.add_dynamic_block) ;
+        mode="compile" -> compile_aot (chemin de production AOT, numerique identique au natif : a
+                          brancher via System.add_compiled_block)."""
+        if mode == "jit":
+            return self.compile_so(so_path, include, name=name, cxx=cxx, std=std)
+        if mode == "compile":
+            return self.compile_aot(so_path, include, name=name, cxx=cxx, std=std)
+        raise ValueError("compile_or_jit : mode 'jit' | 'compile' (recu %r)" % mode)
 
     def emit_cpp_elliptic(self, name=None, namespace="adc_generated", cse=True):
         """Genere une BRIQUE de SECOND MEMBRE elliptique composable depuis self._elliptic.
