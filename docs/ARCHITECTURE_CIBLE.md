@@ -159,11 +159,16 @@ defaut : H / c factorises en locales `cseK_`, verifie identique a la version san
 JIT REEL du noyau (`test_dsl_jitlib` : flux genere -> `.so` compile a la volee -> charge dans le process
 Python via ctypes -> == interprete numpy).
 
+RUN GPU FAIT : la brique generee compile avec nvcc (`-arch=sm_90`) et s'execute sur NVIDIA GH200
+(ROMEO, noeud aarch64), resultat BIT-IDENTIQUE a `adc::Euler` (cf. docs/GPU_ROMEO.md). Elle est
+device-ready par construction (`ADC_HD` -> `__host__ __device__`, ops device-safe, `std::sqrt`).
+
 RESTE : (a) brancher la brique generee dans le solveur TEMPLATE compile (dispatch / `ModelSpec`) : cela
-suppose une interface de modele TYPE-ERASED, car le solveur connait ses types a la compilation alors que
-le `.so` JIT n'expose qu'un noyau, pas un type C++ instanciable dans les templates ; (b) (3) Kokkos/CUDA
-et le RUN GPU. La brique generee est deja device-ready (`ADC_HD`, ops device-safe, `std::sqrt` comme
-`adc::Euler`). Le prototype et ce codegen hote NE remplacent PAS les briques compilees de production.
+suppose une interface de modele TYPE-ERASED (le solveur connait ses types a la compilation ; le `.so`
+JIT n'expose qu'un noyau, pas un type C++ instanciable dans les templates) ; (b) un build KOKKOS
+COMPLET du solveur avec la brique generee (le run ci-dessus est du CUDA brut ; `ADC_HD` couvre Kokkos
+via `KOKKOS_INLINE_FUNCTION`, mais le solveur Kokkos n'est pas reconstruit ici). Le codegen hote NE
+remplace PAS les briques compilees de production.
 
 ---
 
