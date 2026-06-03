@@ -51,8 +51,12 @@ struct ExBVelocity {
   using Prim = StateVec<1>;
   ADC_HD Prim to_primitive(const StateVec<1>& u) const { return u; }
   ADC_HD StateVec<1> to_conservative(const Prim& p) const { return p; }
-  static Variables conservative_vars() { return {VariableKind::Conservative, {"n"}, 1}; }
-  static Variables primitive_vars() { return {VariableKind::Primitive, {"n"}, 1}; }
+  static Variables conservative_vars() {
+    return {VariableKind::Conservative, {"n"}, 1, {VariableRole::Density}};
+  }
+  static Variables primitive_vars() {
+    return {VariableKind::Primitive, {"n"}, 1, {VariableRole::Density}};
+  }
 };
 
 /// Flux d'Euler compressible 2D (reutilise Euler : gamma, pression, vitesses d'onde signees).
@@ -106,9 +110,13 @@ struct IsothermalFlux {
     smax = vn + c;
   }
   static Variables conservative_vars() {
-    return {VariableKind::Conservative, {"rho", "rho_u", "rho_v"}, 3};
+    return {VariableKind::Conservative, {"rho", "rho_u", "rho_v"}, 3,
+            {VariableRole::Density, VariableRole::MomentumX, VariableRole::MomentumY}};
   }
-  static Variables primitive_vars() { return {VariableKind::Primitive, {"rho", "u", "v"}, 3}; }
+  static Variables primitive_vars() {
+    return {VariableKind::Primitive, {"rho", "u", "v"}, 3,
+            {VariableRole::Density, VariableRole::VelocityX, VariableRole::VelocityY}};
+  }
 };
 
 // ---------------------------------------------------------------------------

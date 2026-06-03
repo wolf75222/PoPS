@@ -64,6 +64,9 @@ adc_add_test(test_ap_limit)
 # --- dispatch a l'execution (modele type-erased pour brique generee / JIT) ---
 adc_add_test(test_dynamic_model)
 
+# --- descripteur de variables : roles physiques (index_of(role)) ---
+adc_add_test(test_variable_role)
+
 # --- MPI (coeur) : seam comm, reductions, Poisson distribue ---
 if(ADC_HAS_MPI)
   function(adc_add_mpi_test name nproc)
