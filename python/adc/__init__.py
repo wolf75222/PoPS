@@ -376,7 +376,8 @@ class System:
 
         - un ModelSpec (adc.Model(...)) -> add_block (briques natives composees) ;
         - un CompiledModel (m.compile(...)) -> l'adder du backend (add_dynamic_block pour prototype,
-          add_compiled_block pour aot/production), avec les noms/roles/gamma transportes par le .so.
+          add_compiled_block pour aot, add_native_block pour production), avec les noms/roles/gamma
+          transportes par le .so.
 
         Centralise le couplage backend <-> adder (un .so AOT ne doit pas etre branche sur
         add_dynamic_block, et inversement). cf. docs/DSL_MODEL_DESIGN.md section 3.
@@ -392,8 +393,11 @@ class System:
         nsub = substeps if substeps is not None else getattr(time, "substeps", 1)
 
         # --- ModelSpec : briques natives composees -> add_block (chemin existant) ---
+        # NB : on appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block, dont la signature
+        # n'a pas de substeps -> elle utiliserait time.substeps et IGNORERAIT l'override substeps=).
         if isinstance(model, ModelSpec):
-            self.add_block(name, model, spatial=spatial, time=time, evolve=evolve)
+            self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
+                              nsub, evolve)
             return
 
         if not isinstance(model, dsl.CompiledModel):

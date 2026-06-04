@@ -1044,9 +1044,10 @@ class Param:
     Mode (b), parametre runtime (modifiable sans recompiler) : `kind="runtime"` -> NotImplementedError
     (changement d'ABI + codegen requis, phase ulterieure ; cf. DSL_MODEL_DESIGN.md section 2b).
 
-    Comme Param se comporte comme un noeud d'arbre (il herite d'Expr), `g * (E - ...)` construit
-    directement l'arbre attendu : `eval`/`to_cpp`/`deps` delegues a un Const interne (la valeur est
-    une constante, pas une variable d'environnement -> pas de dependance a verifier dans check())."""
+    Param N'HERITE PAS d'Expr (voir NB ci-dessous) : il EXPOSE les memes hooks d'arbre
+    (`eval`/`to_cpp`/`deps`) et les operateurs en DELEGANT a un Const interne, donc `g * (E - ...)`
+    construit directement l'arbre attendu. La valeur est une constante (pas une variable
+    d'environnement) -> aucune dependance a verifier dans check()."""
 
     # NB : Param N'HERITE PAS d'Expr pour eviter d'embarquer son etat (name/kind) dans la cle
     # structurelle de CSE ; il EXPOSE plutot les hooks d'arbre en deleguant a un Const interne.

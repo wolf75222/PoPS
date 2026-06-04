@@ -163,8 +163,33 @@ def end_to_end_checks(cxx):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def modelspec_substeps_check():
+    """substeps= doit etre forwarde pour un ModelSpec (pas seulement pour un CompiledModel) : la
+    branche ModelSpec d'add_equation appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block,
+    qui retomberait sur time.substeps et IGNORERAIT l'override). Verifie via un espion sur _s.add_block."""
+    s = adc.System(n=16, periodic=True)
+    spec = adc.Model(state=adc.FluidState("isothermal", cs2=1.0), transport=adc.IsothermalFlux(),
+                     source=adc.NoSource(), elliptic=adc.ChargeDensity(charge=-1.0))
+    calls = []
+
+    class _Spy:
+        def add_block(self, *a):
+            calls.append(a)
+
+    s._s = _Spy()
+    # _s.add_block positional : (name, model, limiter, flux, recon, time_kind, substeps, evolve)
+    s.add_equation("ions", spec, time=adc.Explicit(), substeps=10)
+    assert calls, "add_equation(ModelSpec) doit appeler _s.add_block"
+    assert calls[0][6] == 10, "substeps= ignore pour ModelSpec : recu %r" % (calls[0][6],)
+    calls.clear()
+    s.add_equation("ions2", spec, time=adc.Explicit(substeps=3))   # defaut = time.substeps
+    assert calls[0][6] == 3, "defaut substeps != time.substeps : recu %r" % (calls[0][6],)
+    print("OK  substeps= override forwarde pour ModelSpec (10) ; defaut = time.substeps (3)")
+
+
 def main():
     pure_python_checks()
+    modelspec_substeps_check()
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
         print("skip  bout-en-bout (compilateur ou en-tetes adc absents)")
