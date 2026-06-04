@@ -83,17 +83,77 @@ flux Roe, source de potentiel/gravite, second membre de charge) vivent dans
 Concepts et seams : [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md). Algorithmes :
 [docs/ALGORITHMS.md](docs/ALGORITHMS.md). Profil : [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
-## DSL symbolique (prototype)
+## DSL symbolique : ecrire un modele en formules Python
 
-Un mini-DSL symbolique cote Python decrit un modele en FORMULES et le transforme en brique C++ :
-emission de la fonction de flux (`emit_cpp_brick`), de la source et du second membre elliptique,
-elimination de sous-expressions communes (CSE). Deux chemins de mise en oeuvre :
+Outre la composition de briques (ci-dessus), on peut ECRIRE un modele en FORMULES cote Python avec
+`adc.dsl.Model` : on declare les variables conservatives, les primitives (par expressions), le flux
+PHYSIQUE, les valeurs propres, la source et la contribution elliptique. Le DSL emet du C++
+(brique de flux, source, second membre elliptique ; elimination de sous-expressions communes), le
+compile en `.so`, puis renvoie un `CompiledModel` que l'on branche sur le systeme.
 
-- **JIT** (`.so` + `IModel` virtuel) : `System.add_dynamic_block`, prototypage hote ;
-- **AOT** : `System.add_compiled_block` (bloc compile via `compiled_block_abi.hpp`, marshaling hote,
-  sans AMR ni MPI) ; `System.add_compiled_model` (`dsl_block.hpp`) branche un `CompositeModel` connu
-  a la compilation comme bloc NATIF, bit-identique a `add_block` et device-clean sur GH200 (foncteurs
-  nommes de `block_builder.hpp`, multi-box + MPI). Detail : [docs/GPU_RUNTIME_PORT.md](docs/GPU_RUNTIME_PORT.md).
+```python
+import adc
+
+m = adc.dsl.Model("euler")
+rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
+g = m.param("gamma", 1.4)                          # constante NOMMEE, inlinee au codegen
+u = m.primitive("u", rhou / rho)
+v = m.primitive("v", rhov / rho)
+p = m.primitive("p", (g - 1.0) * (E - 0.5 * rho * (u*u + v*v)))
+c = m.primitive("c", adc.dsl.sqrt(g * p / rho))
+m.flux(x=[rhou, rhou*u + p, rhou*v, (E + p)*u],    # m.flux = DECLARATEUR symbolique du flux PHYSIQUE
+       y=[rhov, rhov*u, rhov*v + p, (E + p)*v])
+m.eigenvalues(x=[u - c, u, u, u + c], y=[v - c, v, v, v + c])
+m.primitive_vars(rho=rho, u=u, v=v, p=p)           # layout Prim ordonne (ordre des kwargs)
+m.conservative_from([rho, rho*u, rho*v, p/(g - 1.0) + 0.5*rho*(u*u + v*v)])
+
+compiled = m.compile(so_path="euler.so", include="include", backend="aot")  # -> CompiledModel
+sim = adc.System(n=192, periodic=True)
+sim.add_equation("gas", model=compiled,
+                 spatial=adc.FiniteVolume(limiter="minmod", riemann="hllc", variables="primitive"),
+                 time=adc.Explicit())
+sim.run(t_end=0.2, cfl=0.4)
+```
+
+`m.flux(x=, y=)` est le DECLARATEUR symbolique du flux PHYSIQUE ; l'evaluateur numpy de debug est
+nomme distinctement `m.eval_flux(U, aux, dir)`. Le flux NUMERIQUE de Riemann s'appelle `riemann=`
+dans `adc.FiniteVolume(limiter=, riemann=, variables=)`, PAS `flux=`, pour ne pas collisionner avec
+le flux physique du modele (`limiter` = reconstruction MUSCL/WENO5, `riemann` = `rusanov`/`hllc`/`roe`,
+`variables` = reconstruction conservative/primitive). `m.param(name, value)` est une constante NOMMEE
+inlinee au codegen ; `m.compile(...)` renvoie un `CompiledModel` qui porte `so_path`, le backend, son
+adder, les noms/roles/gamma/n_aux, la cle d'ABI et le hash du modele. (#89/#90)
+
+### Les QUATRE chemins de modele
+
+| chemin | comment l'ecrire | adder System | execution |
+|---|---|---|---|
+| **(a) natif compose de briques** | `adc.Model(state, transport, source, elliptic)` (briques d'`include/adc/physics/`) | `add_block` | bloc NATIF du coeur (chemin de production : GPU/MPI/AMR, WENO5/SSPRK3) |
+| **(b) DSL Python, backend `prototype`** | `m.compile(backend="prototype")` (JIT) | `add_dynamic_block` | `.so` -> `IModel` a DISPATCH VIRTUEL, residu HOTE Rusanov ordre 1 (iteration rapide, hors hot path GPU/MPI) |
+| **(c) DSL Python, backend `aot`** | `m.compile(backend="aot")` | `add_compiled_block` | `.so` a ABI plate, chemin de production (HLLC/Roe, ordre 2, SSPRK2/IMEX) mais sur grille LOCALE host-marshalee, mono-rang (sans MPI/AMR) |
+| **(d) DSL Python, backend `production`** | `m.compile(backend="production")` (NATIF, #85) | `add_native_block` | loader `.so` qui inline `add_compiled_model<ProdModel>` sur le CONTEXTE REEL du `System` : bloc natif ZERO-COPIE, parite stricte avec `add_block` (cle d'ABI verifiee). Objectif MPI/GPU/AMR |
+
+Les chemins (b)/(c)/(d) sont aiguilles automatiquement par `System.add_equation` selon
+`compiled.backend` (un `.so` AOT ne peut pas se brancher sur `add_dynamic_block`, et inversement).
+Detail natif : [docs/GPU_RUNTIME_PORT.md](docs/GPU_RUNTIME_PORT.md) ; conception et statut :
+[docs/DSL_MODEL_DESIGN.md](docs/DSL_MODEL_DESIGN.md).
+
+### Limites actuelles (honnetes)
+
+- **WENO5 hors des chemins `.so`** : `weno5` (WENO5-Z, stencil 5 points, 3 ghosts) n'est cable que
+  par le chemin natif `add_block` (a). Les chemins compiles (`aot`/`production`) allouent 2 ghosts et
+  REJETTENT `weno5` explicitement (`system.cpp:793` pour AOT, `system.cpp:921` pour le natif loader) ;
+  `add_equation` le rejette aussi cote Python avant la frontiere C++. SSPRK3 est, lui, accessible
+  depuis Python (`adc.Explicit(ssprk3=True)`, #88).
+- **Ergonomie de `compile()`** : `m.compile(so_path=, include=, backend=)` exige encore le chemin de
+  sortie `.so` et le dossier d'en-tetes ; un cache automatique (cle = `model_hash`) reste a faire.
+- **`AmrSystem` en production** : `m.compile(target="amr_system")` leve `NotImplementedError` (le
+  pendant natif `add_compiled_model(AmrSystem&)` n'a pas de binding Python ; Phase D).
+- **Validation Python device/MPI** : le chemin natif (d) est device-clean et valide bit-identique en
+  C++ sur GH200 pour l'`eval_rhs`/`advance` (foncteurs nommes, parite A==B). La validation end-to-end
+  sur GPU n'est PAS encore acquise : un crash device a ete identifie sur GH200 dans `solve_fields()`
+  par le chemin `add_compiled_model` (cote hote, hors kernel ; le chemin natif `add_block` y tourne
+  pourtant proprement), diagnostic en cours via un harness dedie. Tant que ce point n'est pas leve,
+  on ne peut pas affirmer que la production DSL tourne sur GPU de bout en bout.
 
 ## Systemes multi-especes
 
@@ -200,6 +260,9 @@ sim.step_cfl(0.4)
   second membre elliptique (`ChargeDensity`/`BackgroundDensity`/`GravityCoupling`). Le coeur ne
   nomme aucun scenario ; les compositions nommees vivent cote application (`adc_cases/models.py`).
   Le choix implicite/explicite est **par bloc et reversible** ; aucun callback Python dans le hot path.
+  Pour un modele ECRIT EN FORMULES (DSL), `add_equation(name, model=compiled, ...)` prend un
+  `CompiledModel` (`adc.dsl.Model(...).compile(...)`) et aiguille sur l'adder du backend ; cf. la
+  section DSL ci-dessus et [docs/DSL_MODEL_DESIGN.md](docs/DSL_MODEL_DESIGN.md).
 - **Integrateur temporel ecrit en Python** : primitives `solve_fields()`, `eval_rhs(name)`,
   `get_state`/`set_state` : on ecrit son propre `take_step` cote Python (par PAS), le residu
   et Poisson restant calcules en C++ (par CELLULE). Cf. `adc.integrate.ssprk2_step`.

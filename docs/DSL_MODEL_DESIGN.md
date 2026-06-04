@@ -1,9 +1,48 @@
 # Conception de l'API modele DSL Python (`dsl.Model`)
 
-SPEC documentaire. AUCUNE implementation : ce document decrit l'API cible et la
-mappe ligne a ligne sur le code EXISTANT (sur `origin/master`, ref 950d5b2). Chaque
-affirmation est ancree dans un fichier lu (cite `chemin:symbole`). L'implementation
-est differee (d'autres agents editent les memes fichiers Python).
+Conception + STATUT. Ce document a ete ecrit comme une SPEC cible (API decrite et mappee
+ligne a ligne sur le code existant). La Phase A et le backend natif `production` ont
+depuis ete livres : les sections ci-dessous gardent le raisonnement de conception, et la
+section 0bis (`Statut d'implementation`) marque ce qui est SHIPPE et ce qui reste un GAP.
+Chaque affirmation est ancree dans un fichier lu (cite `chemin:symbole`). Les references de
+ligne sont indicatives (elles datent de la redaction ; le code a depuis bouge).
+
+## 0bis. Statut d'implementation (a jour `origin/master`)
+
+Recapitulatif rapide ; le detail par section suit (les balises SHIPPE/GAP y sont reprises).
+
+SHIPPE (ne plus lire comme "cible") :
+- **Phase A** (#89/#90) : `dsl.Model` facade (`dsl.py:Model`), `Param` nomme (`dsl.py:Param`,
+  mode `const` ; `runtime` leve `NotImplementedError`), `CompiledModel` (`dsl.py:CompiledModel`,
+  porte `abi_key`/`model_hash`/`cxx`/`std`), `System.add_equation` (`__init__.py:add_equation`,
+  dispatch `ModelSpec`->`add_block` vs `CompiledModel`->adder du backend), `adc.FiniteVolume(limiter=,
+  riemann=, variables=)` (`__init__.py:FiniteVolume`), `System.run(t_end, cfl)` (`__init__.py:run`).
+  `m.flux`/`m.eval_flux` (declarateur vs evaluateur, noms distincts), `m.primitive_vars(**kwargs)`.
+- **Backend `production` natif** (#85) : `production` n'est PLUS un alias d'`aot`. `_BACKENDS`
+  (`dsl.py`) mappe `production -> ("native", "add_native_block")` ; `compile_native` emet un LOADER
+  natif (`emit_cpp_native_loader`) qui inline `add_compiled_model<ProdModel>` sur le `grid_context()`
+  REEL du `System` (zero-copie, parite `add_block`), avec garde-fou de cle d'ABI
+  (`add_native_block`, `system.cpp:902`).
+- **WENO5-Z + SSPRK3 accessibles depuis Python** (#88) : `adc.Spatial/FiniteVolume(limiter="weno5")`
+  et `adc.Explicit(ssprk3=True)` (`__init__.py:Spatial`/`Explicit`). MAIS uniquement via le chemin
+  natif `add_block` (modele compose `adc.Model`) ; PAS via les chemins `.so`/`CompiledModel` (voir GAP).
+
+GAP (encore cible / differe) :
+- **WENO5 sur `CompiledModel`** : les `.so` (`aot`/`production`) allouent 2 ghosts ; WENO5 en exige 3.
+  Rejet explicite cote C++ (`system.cpp:793` AOT, `system.cpp:921` natif loader) ET cote Python
+  (`add_equation`). Unification des ghosts (le `.so` alloue selon le limiteur) = Phase A residuelle.
+- **Ergonomie `compile()`/cache** : `m.compile(so_path=, include=, ...)` exige encore le chemin de
+  sortie et le dossier d'en-tetes ; cache automatique (cle = `model_hash`) a faire.
+- **`AmrSystem` en production** : `m.compile(target="amr_system")` leve `NotImplementedError`
+  (`dsl.py:Model.compile`) ; pendant natif `add_compiled_model(AmrSystem&)` sans binding Python (Phase D).
+- **Params runtime** : `m.param(kind="runtime")` leve `NotImplementedError` (changement d'ABI/codegen ;
+  section 2b, Phase E).
+- **Validation Python device/MPI** du chemin `production` natif : valide bit-identique en C++ sur
+  GH200, mais la validation end-to-end DEPUIS Python (`add_native_block` GPU / multi-rang) est en cours.
+
+NOTE HISTORIQUE. Le texte ci-dessous emploie encore le futur ("CIBLE", "a ajouter") la ou la
+chose est desormais livree ; se fier a 0bis et aux balises SHIPPE/GAP. Le contenu de conception
+est conserve volontairement (justifications, ancres, taxonomie d'erreurs).
 
 Sources lues pour cette conception :
 - `python/adc/dsl.py` : `HyperbolicModel` (toutes les methodes), le codegen
@@ -50,9 +89,14 @@ Points d'API fixes apres revue, pour eviter l'ambiguite a l'implementation :
 (arbre `Expr`), trois groupes de generateurs (`emit_cpp_brick`, `emit_cpp_source`,
 `emit_cpp_elliptic`), trois enrobages (`emit_cpp_so_source` JIT, `emit_cpp_aot_source`
 AOT, et la fabrique `_emit_bricks`/`_emit_metadata` partagee), et la facade
-`compile(backend=)`. Trois backends sont declares (`dsl.py:792 _BACKENDS`) :
+`compile(backend=)`. Trois backends sont declares (`dsl.py:_BACKENDS`) :
 `prototype` -> (`jit`, `add_dynamic_block`), `aot` -> (`compile`, `add_compiled_block`),
-`production` -> ALIAS de `aot` (`dsl.py:794`, meme couple `compile`/`add_compiled_block`).
+`production` -> (`native`, `add_native_block`).
+
+> SHIPPE (#85). Au moment de la redaction, `production` etait un ALIAS d'`aot`. Ce n'est PLUS le
+> cas : `_BACKENDS["production"] = ("native", "add_native_block")`, et `compile_native`
+> (`emit_cpp_native_loader`) emet le LOADER natif zero-copie decrit au point 3 ci-dessous. La suite
+> de cette section 0 conserve l'analyse des 3 chemins C++, toujours exacte.
 
 Trois chemins d'execution existent cote C++ :
 1. JIT : `.so` expose `adc_make_model`/`adc_model_nvars`/`adc_destroy_model`
@@ -69,18 +113,29 @@ Trois chemins d'execution existent cote C++ :
    qui fabrique les fermetures sur le `grid_context()` REEL du `System` via
    `make_block` (parite bit-identique a `add_block`, validee CPU et GH200,
    `dsl_block.hpp:18-29`). Pendant AMR : `add_compiled_model(AmrSystem&, ...)`
-   (`amr_dsl_block.hpp`). CE chemin n'a AUCUN binding Python : c'est un template,
-   il exige `Model` connu a la compilation ; il n'est instancie que depuis une TU C++
-   (p.ex. `python/tests/gpu/amrmpi_integrated.cpp:69`). C'est la cible du vrai backend
-   `production`.
+   (`amr_dsl_block.hpp`). C'est la cible du backend `production`, desormais ATTEINTE pour
+   `System` (voir SHIPPE ci-dessous).
 
-`dsl.Model` n'existe PAS aujourd'hui. Le nom `Model` (`__init__.py:115`) est une
-fonction qui compose un `ModelSpec` de briques NATIVES (`adc.ExB`, `adc.CompressibleFlux`...),
-chemin distinct du DSL symbolique. La spec ci-dessous reserve `dsl.Model` (dans le
-module `adc.dsl`, pas `adc`) a la facade modele symbolique.
+> SHIPPE (#85), pour `System`. Le template `add_compiled_model(System&, ...)` a desormais un
+> chemin Python : `compile_native` (`dsl.py:emit_cpp_native_loader`) emet un LOADER `.so` (deux
+> symboles `extern "C"` : `adc_native_abi_key` + `adc_install_native`) qui inline
+> `add_compiled_model<ProdModel>` sur le `grid_context()` REEL du `System`. `System.add_native_block`
+> (`system.cpp:902`) le `dlopen`, compare la cle d'ABI (rejet explicite si en-tetes/compilateur/std
+> divergent) puis appelle l'installateur : bloc natif zero-copie, parite `add_block`. GAP : le pendant
+> `add_compiled_model(AmrSystem&)` (`amr_dsl_block.hpp`) n'a PAS de binding Python (`target="amr_system"`
+> leve `NotImplementedError` ; Phase D).
+
+> SHIPPE (#89). `dsl.Model` EXISTE maintenant (`dsl.py:Model`, module `adc.dsl`). C'est la facade
+> qui COMPOSE un `HyperbolicModel` prive (`_m`) et delegue chaque appel. Le nom `adc.Model`
+> (`__init__.py:Model`) reste la fonction distincte qui compose un `ModelSpec` de briques NATIVES
+> (chemin (a)) ; les deux coexistent comme prevu (l'un dans `adc.dsl`, l'autre dans `adc`).
 
 
 ## 1. Facade stable `dsl.Model`
+
+> SHIPPE (#89). Cette section est LIVREE : `dsl.Model`, `m.flux`/`m.eval_flux`,
+> `m.primitive_vars(**kwargs)`, `m.param`, `m.compile(backend, target)` existent
+> (`dsl.py:Model`). Le tableau de mapping ci-dessous decrit l'implementation effective.
 
 CIBLE : `dsl.Model` est la SURFACE stable ; `HyperbolicModel` reste le BACKEND
 interne inchange. `dsl.Model` delegue chaque appel a une methode existante de
@@ -104,9 +159,9 @@ Mapping methode cible -> backing `HyperbolicModel` :
 | `m.eigenvalues(x=, y=)` | `set_eigenvalues(x, y)` `:312` | |
 | `m.elliptic_rhs(e)` | `set_elliptic_rhs(e)` `:314` | optionnel (couplage Poisson) |
 | `m.gamma(value)` ou `m.set_gamma(value)` | `set_gamma(gamma)` `:316` | EOS, porte par `ADC_EXPORT_BLOCK_GAMMA` |
-| `m.param(name, value)` | (aucun backing) | GAP, voir section 2 |
+| `m.param(name, value)` | `Param` + `Model.param` (#89) | SHIPPE en mode `const` (constante NOMMEE inlinee au codegen, stockee dans `m.params`) ; `kind="runtime"` leve `NotImplementedError` (section 2b, GAP). Cas `name=="gamma"` appelle aussi `set_gamma` |
 | `m.check()` | `check()` `:382` | verifie dependances |
-| `m.compile(backend, target)` | `compile(...)` `:798` (+ section 3) | renvoie un `CompiledModel`. PAS d'argument `device` : les capacites (GPU/MPI/AMR) sont verifiees AU BRANCHEMENT/EXECUTION (`add_equation`/`run`), pas figees comme un drapeau de compilation (eviterait une fausse garantie si le module n'est pas bati avec Kokkos/CUDA). Voir sections 5 et 7 |
+| `m.compile(backend, target)` | `Model.compile(...)` (#89, delegue a `HyperbolicModel.compile`) | SHIPPE : renvoie un `CompiledModel` (section 3). `target="system"` cable ; `target="amr_system"` leve `NotImplementedError` (GAP, Phase D). PAS d'argument `device` : les capacites (GPU/MPI/AMR) sont verifiees AU BRANCHEMENT/EXECUTION (`add_equation`/`run`), pas figees comme un drapeau de compilation (eviterait une fausse garantie si le module n'est pas bati avec Kokkos/CUDA). Voir sections 5 et 7 |
 
 COLLISION DE NOMS : TRANCHEE. Dans `HyperbolicModel`, `flux(U, aux, dir)` `:354` est
 l'EVALUATEUR numpy (interprete CPU) et `set_flux` `:311` est le DECLARATEUR. Le plan
@@ -116,20 +171,23 @@ nom DISTINCT `m.eval_flux(U, aux, dir)` (delegue a `_m.flux`). La surface declar
 prime ; aucun nom ne porte les deux sens. (Pas d'alias `m.set_flux` sur la facade : un
 seul nom par intention.)
 
-Methodes cible SANS backing actuel (GAP LIST consolidee section 7) :
-- `m.param(name, value)` : aucun mecanisme de parametre nomme dans `dsl.py` (voir 2).
-- `m.compile(target=)` : `compile()` `:798` n'a PAS d'argument `target` ; il a `backend`,
-  `name`, `cxx`, `std`, `require_metadata`. `target` (`"system"`/`"amr_system"`) est a
-  ajouter (section 3). PAS de `device=` : decision (point 7) de ne PAS porter la capacite
-  device comme un argument de `compile` -> les capacites sont verifiees au branchement
-  (`add_equation`) et a l'execution (`run`), ou l'on sait si le module est bati Kokkos/CUDA
-  et le contexte MPI/AMR reel (section 5). Un `device=True` a la compilation donnerait une
-  fausse garantie (un `.so` peut compiler sans que le module hote soit device-capable).
-- `m.compile()` ne renvoie PAS un objet `CompiledModel` aujourd'hui : il renvoie
-  `so_path` (un `str`). Le `CompiledModel` (section 3) est nouveau.
+Etat de ces points cible (initialement des GAP ; voir 0bis) :
+- `m.param(name, value)` : SHIPPE en mode `const` (#89, classe `Param` + `Model.param`,
+  `dsl.py`). Mode `runtime` reste GAP (section 2b, `NotImplementedError`).
+- `m.compile(target=)` : SHIPPE (#89). `Model.compile` prend `backend`, `target`, `name`, `cxx`,
+  `std`, `require_metadata`. `target="system"` cable ; `target="amr_system"` leve
+  `NotImplementedError` (GAP, Phase D). PAS de `device=` (point 7) : capacites verifiees au
+  branchement (`add_equation`) / a l'execution (`run`), pas figees comme drapeau de compilation
+  (un `device=True` a la compilation donnerait une fausse garantie : un `.so` peut compiler sans
+  que le module hote soit device-capable).
+- `m.compile()` renvoie desormais un `CompiledModel` (#89, section 3), pas un `str so_path`.
 
 
 ## 2. `m.param(name, value)` : deux modes
+
+> STATUT. Mode (a) SHIPPE (#89, classe `Param`, `dsl.py`). Mode (b) GAP (leve
+> `NotImplementedError` ; changement d'ABI/codegen, Phase E). Le raisonnement ci-dessous
+> documente pourquoi (b) n'est pas livrable sans changement de moteur.
 
 ### Mode (a) : constante figee a la compilation (FAISABLE aujourd'hui)
 
@@ -191,10 +249,16 @@ explicitement `NotImplementedError` (voir taxonomie section 4).
 
 ## 3. Objet Python `CompiledModel`
 
-Aujourd'hui `compile()` `:798` renvoie un `str` (`so_path`) et expose separement
-`adder_for(backend)` `:851` pour savoir quel adder `System` employer. La cible
-remplace ce couple `(str, classmethod)` par un objet `CompiledModel` qui PORTE le
-chemin et tout ce qu'il faut pour le brancher correctement.
+> SHIPPE (#89). `CompiledModel` existe (`dsl.py:CompiledModel`) et est produit par
+> `Model.compile`. Il porte tous les champs ci-dessous (`abi_key`, `model_hash`, `cxx`,
+> `std`, `caps`, `params`...). `System.add_equation` (#89/#90) le consomme et aiguille
+> sur l'adder du backend. Le tableau et la sous-section consommation decrivent l'implementation
+> effective ; voir les notes en ligne pour le cas `production` (desormais natif, plus un alias d'`aot`).
+
+A la redaction, `compile()` renvoyait un `str` (`so_path`) et exposait separement
+`adder_for(backend)` pour savoir quel adder `System` employer. Le `CompiledModel` remplace
+ce couple `(str, classmethod)` par un objet qui PORTE le chemin et tout ce qu'il faut pour
+le brancher correctement.
 
 ### Champs
 
@@ -242,23 +306,23 @@ dispatche sur le bon adder selon `compiled.backend`/`compiled.adder` :
   (`none`/`minmod`/`vanleer`) et `substeps`. La facade doit donc IGNORER (ou refuser,
   section 4) un `spatial.riemann != "rusanov"` pour ce backend (`riemann` = flux
   NUMERIQUE de `FiniteVolume`, cf. section 6 ; `flux` reste le flux PHYSIQUE du modele).
-- `backend in {"aot","production"}` aujourd'hui (`adder="add_compiled_block"`) ->
+- `backend="aot"` (`adder="add_compiled_block"`) ->
   `self._s.add_compiled_block(name, compiled.so_path, spatial.limiter, spatial.riemann,
-  spatial.variables, time.kind, substeps, names)` (`bindings.cpp:81`, `system.cpp:738` ;
-  l'arg C++ du flux numerique s'appelle deja `riemann`, `variables` mappe `recon`).
-- `backend="production"` CIBLE (apres le travail du frere) -> adder natif zero-copie
-  (le pendant Python de `add_compiled_model`, `dsl_block.hpp:36`). Cet adder n'existe
-  PAS encore cote binding (`add_compiled_model` est un template C++ non bindable tel
-  quel : voir section 0). Le `CompiledModel.adder` doit alors pointer sur ce futur
-  binding ; jusque-la `production` reste l'alias d'`aot` (`dsl.py:794`,`:810`).
+  spatial.variables, time.kind, substeps, names)` (`system.cpp:776` ; l'arg C++ du flux
+  numerique s'appelle deja `riemann`, `variables` mappe `recon`).
+- `backend="production"` (`adder="add_native_block"`) SHIPPE (#85) -> `self._s.add_native_block(name,
+  compiled.so_path, spatial.limiter, spatial.riemann, spatial.variables, time.kind, gamma, substeps,
+  evolve)` (`system.cpp:902`). Ce n'est PLUS l'alias d'`aot` : l'adder natif zero-copie EXISTE
+  (loader `.so` -> `add_compiled_model<ProdModel>` sur le contexte reel ; cle d'ABI verifiee).
+  NB : ce chemin ne prend PAS `names=` (les noms/roles viennent des metadonnees du `.so`) ; `add_equation`
+  leve si `names=` est fourni (`__init__.py:add_equation`).
 
-`add_equation` est un NOM CIBLE. Aujourd'hui `System.add_block` (`__init__.py:337`)
-prend un `ModelSpec` de briques natives, PAS un `.so`. `add_equation` est une nouvelle
-methode de la facade Python `System` (`__init__.py:322`) qui aiguille selon le type
-de `model` : un `ModelSpec` -> `add_block` ; un `CompiledModel` -> l'adder de bloc
-compile/dynamique. Cela centralise le couplage backend<->adder que `dsl.py` documente
-deja comme une regle de surete (`dsl.py:778-796` : "ne pas brancher un `.so` AOT sur
-`add_dynamic_block`").
+`add_equation` est SHIPPE (#89/#90, `__init__.py:add_equation`) : c'est la methode de la facade
+Python `System` qui aiguille selon le type de `model` : un `ModelSpec` (`adc.Model(...)`) ->
+`add_block` ; un `CompiledModel` -> l'adder de bloc compile/dynamique/natif fixe par le backend.
+`System.add_block` (`__init__.py:add_block`) prend un `ModelSpec` de briques natives, PAS un `.so`.
+`add_equation` centralise le couplage backend<->adder que `dsl.py` documente comme une regle de
+surete ("ne pas brancher un `.so` AOT sur `add_dynamic_block`").
 
 
 ## 4. Taxonomie d'erreurs
@@ -289,14 +353,20 @@ de l'ABI (l'API `names=` ne les fournit pas, `system.cpp:828`).
 
 ## 5. Matrice de capacites des backends
 
-Etat HONNETE (aujourd'hui) vs cible. Lignes = backend `compile()`, colonnes = capacite.
+Etat HONNETE. Lignes = backend `compile()`, colonnes = capacite. La matrice est aussi
+materialisee cote code dans `_BACKEND_CAPS` (`dsl.py`), lu par `CompiledModel.caps`.
 
 | backend | CPU serie | MPI | AMR | GPU/Kokkos | zero-copie device | callbacks Python en hot path |
 |---|---|---|---|---|---|---|
 | `prototype` (JIT, `add_dynamic_block`) | oui (residu hote Rusanov o1) | non | non | non | non | non (C++ dispatch virtuel, sans GIL) |
 | `aot` (`add_compiled_block`) | oui (production o2, HLLC/Roe) | non | non | non | non | non |
-| `production` AUJOURD'HUI (= alias `aot`) | oui | non | non | non | non | non |
-| `production` CIBLE (natif `add_compiled_model`) | oui | oui | oui | oui | oui | non |
+| `production` (natif `add_native_block`, #85) | oui | oui | non (System mono-niveau) | en cours (validation Python) | oui | non |
+
+> SHIPPE (#85). `production` n'est PLUS l'alias d'`aot`. `_BACKEND_CAPS["production"]` (`dsl.py`)
+> declare `{cpu, mpi}=True`, `amr=False` (System mono-niveau ; AMR = Phase D), `gpu=False` par
+> PRUDENCE (le chemin natif est device-clean en C++/GH200, mais la validation end-to-end DEPUIS
+> Python n'est pas encore faite). Ces capacites sont des drapeaux de diagnostic verifies au
+> branchement/execution, pas figes a la compilation (point 7).
 
 Ancres :
 - `prototype`/JIT : `dynamic_model.hpp:18-21` ("CHEMIN HOTE / PROTOTYPAGE uniquement ;
@@ -309,21 +379,20 @@ Ancres :
   `DistributionMapping dm(ba.size(), 1)`) avec marshaling `copy_state`/`write_state`
   (`system.cpp:794-824`) : pas zero-copie, pas de halos MPI, pas d'AMR
   (`ARCHITECTURE.md:499` "sans AMR/MPI").
-- `production` CIBLE : `add_compiled_model` (`dsl_block.hpp:18-29`) fabrique les
-  fermetures sur le `grid_context()` REEL (`system.cpp:688`), residu via `make_block`
-  avec `fill_boundary` (halos MPI) + `assemble_rhs` Kokkos sur les vrais `MultiFab`,
-  SANS recopie ; parite bit-identique `add_block` validee CPU/Serial ET GH200
-  (foncteurs nommes, `dsl_block.hpp:22-29`). AMR : `add_compiled_model(AmrSystem&)`
-  (`amr_dsl_block.hpp`). STATUT GPU (a ne PAS lire comme "production GPU casse") :
-  l'ANCIEN chemin a LAMBDAS ETENDUES `__host__ __device__` segfautait sur Cuda (limite
-  nvcc) ; il a ete remplace par les FONCTEURS NOMMES device-clean de `block_builder.hpp`,
-  et c'est CE chemin (le seul que `add_compiled_model` emprunte aujourd'hui) qui est
-  VALIDE bit-identique sur GH200 (parite A==B `dres=0`, multi-box + MPI ; #64/#48,
-  `dsl_block.hpp:22-29`). La SEULE limite restante est cote PYTHON : `add_compiled_model`
-  est un template C++ sans binding, donc le backend `production` n'est pas encore
-  re-route dessus depuis Python (c'est le travail du frere ; cf. section 0 et 7). Autrement
-  dit : le chemin natif device-clean EXISTE et est valide en C++ ; il manque juste son
-  exposition Python.
+- `production` SHIPPE (#85) : `add_compiled_model` (`dsl_block.hpp`) fabrique les
+  fermetures sur le `grid_context()` REEL, residu via `make_block` avec `fill_boundary`
+  (halos MPI) + `assemble_rhs` Kokkos sur les vrais `MultiFab`, SANS recopie ; parite
+  bit-identique `add_block` validee CPU/Serial ET GH200 (foncteurs nommes). Le backend
+  `production` Y EST DESORMAIS RE-ROUTE depuis Python : `compile_native` emet un loader
+  `.so`, `System.add_native_block` (`system.cpp:902`) le `dlopen`, verifie la cle d'ABI,
+  puis appelle `add_compiled_model<ProdModel>`. AMR : `add_compiled_model(AmrSystem&)`
+  (`amr_dsl_block.hpp`) reste SANS binding Python (GAP, Phase D). STATUT GPU (a ne PAS
+  lire comme "production GPU casse") : l'ANCIEN chemin a LAMBDAS ETENDUES `__host__
+  __device__` segfautait sur Cuda (limite nvcc) ; il a ete remplace par les FONCTEURS
+  NOMMES device-clean de `block_builder.hpp`, et c'est CE chemin que `add_compiled_model`
+  emprunte, VALIDE bit-identique sur GH200 (parite A==B `dres=0`, multi-box + MPI ;
+  #64/#48). GAP restant : la validation device/MPI end-to-end DEPUIS Python
+  (`add_native_block` sur GPU / multi-rang) est en cours (cf. section 7 Phase C).
 - Aucun backend n'execute de callback Python par cellule : meme `prototype` est un
   modele C++ (issu du codegen), pas un `adc.PythonFlux`. `adc.PythonFlux`
   (`__init__.py:420`) est un chemin numpy hote SEPARE, hors DSL compile.
@@ -336,28 +405,32 @@ Mapping des objets/methodes runtime cibles du plan sur ce qui EXISTE
 
 | cible (plan) | existant | statut |
 |---|---|---|
-| `adc.FiniteVolume(limiter=, riemann=, variables=)` | `adc.Spatial(limiter=, flux=, recon=)` (`__init__.py:271`) | RENOMMAGE + REMAP des args. DECISION (point 3) : le flux NUMERIQUE (Rusanov/HLL/HLLC/Roe) s'appelle `riemann=`, PAS `flux=`, pour ne pas collisionner avec le flux PHYSIQUE `m.flux` du modele. `limiter=` -> `Spatial.limiter` (none/minmod/vanleer, et a terme weno5), `riemann=` -> `Spatial.flux`, `variables=` (`"conservative"`/`"primitive"`) -> `Spatial.recon`. GAP de nommage, pas de moteur. |
-| `adc.IMEX(substeps=)` | `adc.IMEX(substeps=)` (`__init__.py:304`) | EXISTE a l'identique. `Explicit(substeps=)` `:295` et `Implicit(dt_ratio=, substeps=)` `:313` (alias d'IMEX) aussi. |
-| `adc.DivEpsGrad` | `adc.DivEpsGrad(epsilon=)` (`__init__.py:174`) | EXISTE. Operateur elliptique `div(eps grad)`. eps(x) variable via `set_epsilon_field` (`system.cpp:867`). |
-| `adc.DirichletWall.circle(radius=)` | `set_poisson(wall="circle", wall_radius=)` (`bindings.cpp:95`, `system.cpp:854`) | GAP de sucre : pas d'objet `DirichletWall` ; aujourd'hui c'est un argument chaine de `set_poisson`/`add_elliptic_model` (`__init__.py:350`). `DirichletWall.circle(r)` serait un constructeur retournant `(wall="circle", wall_radius=r)`. |
-| `sim.add_equation(model=, ...)` | `System.add_block(model=ModelSpec, ...)` (`__init__.py:337`) ; pour un `.so` : `add_dynamic_block`/`add_compiled_block` (`bindings.cpp:78`/`:81`) | GAP : `add_equation` n'existe pas. C'est le dispatcheur de la section 3 (aiguille `ModelSpec` vs `CompiledModel`). |
-| `sim.run(...)` | `step(dt)` / `advance(dt, nsteps)` / `step_cfl(cfl)` / `step_adaptive(cfl)` (`bindings.cpp:132-135`, `system.cpp:1050-1097`) | GAP de sucre : pas de `run` ; aujourd'hui boucle Python explicite sur `step_cfl` (cf. `__init__.py:17` docstring, `dsl_euler/run.py`). `run(t_end=, cfl=)` serait une boucle `while time()<t_end: step_cfl(cfl)`. |
-| `adc.System(n=, periodic=)` | EXISTE (`__init__.py:330`) | identique. |
+| `adc.FiniteVolume(limiter=, riemann=, variables=)` | `FiniteVolume` (`__init__.py:FiniteVolume`), remappe sur `adc.Spatial(limiter=, flux=, recon=)` | SHIPPE (#89). DECISION (point 3) : le flux NUMERIQUE (Rusanov/HLL/HLLC/Roe) s'appelle `riemann=`, PAS `flux=`, pour ne pas collisionner avec le flux PHYSIQUE `m.flux` du modele. `limiter=` -> `Spatial.limiter` (none/minmod/vanleer/weno5), `riemann=` -> `Spatial.flux`, `variables=` (`"conservative"`/`"primitive"`) -> `Spatial.recon`. |
+| `adc.IMEX(substeps=)` | `adc.IMEX(substeps=)` (`__init__.py:IMEX`) | EXISTE a l'identique. `Explicit(substeps=, method=)` (`ssprk2`/`ssprk3`, #88) et `Implicit(dt_ratio=, substeps=)` (alias d'IMEX) aussi. |
+| `adc.DivEpsGrad` | `adc.DivEpsGrad(epsilon=)` (`__init__.py:DivEpsGrad`) | EXISTE. Operateur elliptique `div(eps grad)`. eps(x) variable via `set_epsilon_field`. |
+| `adc.DirichletWall.circle(radius=)` | `set_poisson(wall="circle", wall_radius=)` (`system.cpp`) | GAP de sucre : pas d'objet `DirichletWall` ; aujourd'hui c'est un argument chaine de `set_poisson`/`add_elliptic_model`. `DirichletWall.circle(r)` serait un constructeur retournant `(wall="circle", wall_radius=r)`. |
+| `sim.add_equation(model=, ...)` | `System.add_equation` (`__init__.py:add_equation`, #89/#90) | SHIPPE : dispatcheur de la section 3 (aiguille `ModelSpec` -> `add_block` vs `CompiledModel` -> adder du backend). |
+| `sim.run(...)` | `System.run(t_end, cfl, max_steps)` (`__init__.py:run`, #89) | SHIPPE : boucle `while time()<t_end: step_cfl(cfl)`. `step`/`advance`/`step_cfl`/`step_adaptive` restent exposes. |
+| `adc.System(n=, periodic=)` | EXISTE (`__init__.py:System`) | identique. |
 
 Tous ces items sont du SUCRE Python pur-facade : aucun ne touche la numerique C++.
 `add_equation` et `run` sont les seuls a porter une vraie logique (dispatch + boucle),
-le reste est renommage/remap d'arguments.
+le reste est renommage/remap d'arguments. GAP de sucre restant : `adc.DirichletWall`.
 
 
 ## 7. Sequencement d'implementation
 
-Regroupe par dependance. Ecrit pour paralleliser : chaque etape note son WRITE-SET de
-fichiers (pour eviter les conflits avec les agents editant deja `python/**`).
+> STATUT global. Phase A SHIPPE (#89/#90). Phase B SHIPPE (#85, pour `System`). Phases C
+> (validation Python device/MPI), D (`AmrSystem` en production) et E (params runtime) restent
+> des GAP. Le sequencement ci-dessous est conserve pour la tracabilite ; les balises par phase
+> indiquent l'etat reel.
 
-### Phase A : facade pure-Python, AUCUN changement de moteur
+Regroupe par dependance. Chaque etape note son WRITE-SET de fichiers.
 
-Livrable des que les fichiers Python sont libres. N'edite que du Python ; ne touche ni
-`include/**` ni `python/system.cpp`/`bindings.cpp`.
+### Phase A : facade pure-Python, AUCUN changement de moteur -- SHIPPE (#89/#90)
+
+Livree. N'edite que du Python ; ne touche ni `include/**` ni `python/system.cpp`/`bindings.cpp`.
+Items 1-6 ci-dessous : tous SHIPPES.
 
 1. `dsl.Model` (section 1) : delegation vers `HyperbolicModel`. WRITE-SET :
    `python/adc/dsl.py` (ajout d'une classe ; ne pas modifier `HyperbolicModel`).
@@ -375,41 +448,36 @@ Livrable des que les fichiers Python sont libres. N'edite que du Python ; ne tou
    non poses, garde-fou flux/`p`, garde-fou backend/device. WRITE-SET : `python/adc/dsl.py`
    (+ messages dans `add_equation`, `__init__.py`).
 
-Toute la phase A est testable contre les backends `prototype` et `aot` ACTUELS (CPU
-serie), sans GPU/MPI.
+La phase A est testable contre les backends `prototype` et `aot` (CPU serie), sans GPU/MPI.
 
-### Phase B : depend du backend natif `production` (travail du frere)
+### Phase B : backend natif `production` -- SHIPPE (#85, pour `System`)
 
-A activer une fois le loader natif + son binding `System` disponibles (ne pas presumer
-les noms). Ne touche pas la numerique ; c'est du cablage de dispatch.
+Livree pour `System`. C'est du cablage de dispatch (pas de numerique nouvelle).
 
-7. `CompiledModel.adder` pour `production` pointe sur le NOUVEAU binding natif (au lieu
-   d'`add_compiled_block`). `dsl.py:_BACKENDS["production"]` (`:794`) passe de
-   `("compile","add_compiled_block")` a `("native","<binding natif>")` ; `compile`
-   route alors sur le generateur natif (le frere ajoute un `emit_cpp_native_loader`
-   equivalent ; la spec ne fixe pas le nom). WRITE-SET : `python/adc/dsl.py`,
-   `python/adc/__init__.py` (branche `production` d'`add_equation`).
-8. Rendre EXPLICITE l'ecart `production`->`aot` tant que (7) n'est pas en place :
-   warning ou erreur si `device="gpu"`/MPI demande (section 4). WRITE-SET :
-   `python/adc/dsl.py`.
+7. SHIPPE. `_BACKENDS["production"]` (`dsl.py`) vaut `("native", "add_native_block")` ; `compile`
+   route sur `compile_native` (`emit_cpp_native_loader`) ; `add_equation` branche sur
+   `System.add_native_block`. Le pendant `AmrSystem` reste un GAP (Phase D).
+8. SHIPPE (caduc). `production` n'etant plus l'alias d'`aot`, l'ecart a rendre explicite a disparu.
+   Reste : `compile(backend="prototype", require_metadata=True)` leve (`dsl.py:Model.compile`), et
+   `add_equation` rejette `weno5` / HLLC-Roe-sans-`p` / `names=` sur le chemin natif (section 4).
 
-### Phase C : MPI / GPU (validation, pas API)
+### Phase C : validation Python device/MPI -- GAP
 
-9. Validation device/MPI du chemin `production` natif : parite A==B (`dres=0`) sur
-   device, bit-identite multi-rang. Deja faite pour `add_compiled_model` C++
-   (`dsl_block.hpp:22-29`, `PAPER_ROADMAP.md:91-92`) ; reste a valider de bout en bout
-   via le binding Python de la phase B. AUCUN write-set Python nouveau (tests).
+9. Validation device/MPI du chemin `production` natif DEPUIS Python : parite A==B (`dres=0`) sur
+   device, bit-identite multi-rang via `add_native_block`. Deja faite pour `add_compiled_model`
+   en C++ (`dsl_block.hpp`) sur GH200 ; reste a valider de bout en bout depuis Python. AUCUN
+   write-set Python nouveau (tests).
 
-### Phase D : `AmrSystem` (phase 2)
+### Phase D : `AmrSystem` en production -- GAP (phase 2)
 
-10. `add_equation` cote `adc.AmrSystem` (`__init__.py:400`) router vers le pendant AMR
-    natif `add_compiled_model(AmrSystem&)` (`amr_dsl_block.hpp`). LIMITE : `AmrSystem`
-    n'est PAS a parite avec `System` (mono-bloc, explicite, sans recon primitive ni
-    Roe ; `ARCHITECTURE.md:494`, `PAPER_ROADMAP.md:118-121`) : la facade doit refuser
-    (section 4) un `spatial.riemann="roe"`/`variables="primitive"` sur AMR. WRITE-SET :
+10. GAP. `add_equation` cote `adc.AmrSystem` (`__init__.py:AmrSystem`) router vers le pendant
+    AMR natif `add_compiled_model(AmrSystem&)` (`amr_dsl_block.hpp`). Aujourd'hui
+    `m.compile(target="amr_system")` leve `NotImplementedError` (`dsl.py:Model.compile`).
+    LIMITE : `AmrSystem` n'est PAS a parite avec `System` (mono-bloc, explicite) : la facade
+    devra refuser un `spatial.riemann="roe"`/`variables="primitive"` sur AMR. WRITE-SET :
     `python/adc/__init__.py` (facade `AmrSystem`).
 
-### Phase E : `m.param` runtime (phase 2, changement de moteur)
+### Phase E : `m.param` runtime -- GAP (phase 2, changement de moteur)
 
 11. Mode (b) (section 2b) : ABI a parametres + codegen a membres, OU canal aux dedie.
     WRITE-SET LOURD : `include/adc/runtime/compiled_block_abi.hpp`,
@@ -419,8 +487,9 @@ les noms). Ne touche pas la numerique ; c'est du cablage de dispatch.
 
 ### Resume de dependance
 
-- A (1-6) : independant, pur Python, livrable immediatement. Le gros de la valeur
-  (`dsl.Model` stable, `CompiledModel`, `add_equation`, sucre runtime, erreurs).
-- B (7-8), C (9) : gates sur le binding natif `production` du frere.
-- D (10) : phase 2 AMR (et bornee par la non-parite `AmrSystem`).
-- E (11) : phase 2, seul item exigeant un changement d'ABI/codegen (param runtime).
+- A (1-6) : SHIPPE (#89/#90). Le gros de la valeur (`dsl.Model` stable, `CompiledModel`,
+  `add_equation`, sucre runtime, erreurs).
+- B (7-8) : SHIPPE (#85) pour `System` (backend natif `production` -> `add_native_block`).
+- C (9) : GAP, validation device/MPI DEPUIS Python (deja valide en C++ sur GH200).
+- D (10) : GAP, phase 2 AMR (bornee par la non-parite `AmrSystem` ; `target="amr_system"` leve).
+- E (11) : GAP, phase 2, seul item exigeant un changement d'ABI/codegen (param runtime).
