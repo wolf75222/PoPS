@@ -1,6 +1,7 @@
 #pragma once
 
 #include <adc/core/types.hpp>
+#include <adc/coupling/aux_fill.hpp>  // detail::derive_aux_bc + detail::fill_bz_box (partages)
 #include <adc/coupling/coupling_policy.hpp>
 #include <adc/coupling/elliptic_rhs.hpp>
 #include <adc/numerics/elliptic/elliptic_problem.hpp>
@@ -87,7 +88,7 @@ class Coupler {
         dm_(ba.size(), n_ranks()),
         bcU_(bcU),
         bcPhi_(bcPhi),
-        aux_bc_(derive_aux_bc(bcPhi)),
+        aux_bc_(detail::derive_aux_bc(bcPhi)),
         mg_(geom, ba, bcPhi, std::move(active)),
         aux_(ba, dm_, aux_comps<Model>(), 1),
         bz_(std::move(bz)) {
@@ -169,18 +170,6 @@ class Coupler {
   const MultiFab& aux() const { return aux_; }
 
  private:
-  static BCRec derive_aux_bc(const BCRec& b) {
-    auto t = [](BCType x) {
-      return x == BCType::Periodic ? BCType::Periodic : BCType::Foextrap;
-    };
-    BCRec a;
-    a.xlo = t(b.xlo);
-    a.xhi = t(b.xhi);
-    a.ylo = t(b.ylo);
-    a.yhi = t(b.yhi);
-    return a;
-  }
-
   void update_aux(const MultiFab& state) {
     detail::coupler_eval_rhs(state, mg_.rhs(), model_);
     mg_.solve();  // interface du concept EllipticSolver (backend-agnostique)
@@ -213,13 +202,8 @@ class Coupler {
   void fill_bz() {
     if constexpr (aux_comps<Model>() > kAuxBaseComps) {
       if (!bz_) return;
-      for (int li = 0; li < aux_.local_size(); ++li) {
-        Fab2D& f = aux_.fab(li);
-        const Box2D v = aux_.box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            f(i, j, kAuxBaseComps) = bz_(geom_.x_cell(i), geom_.y_cell(j));
-      }
+      for (int li = 0; li < aux_.local_size(); ++li)
+        detail::fill_bz_box(aux_.fab(li), aux_.box(li), geom_, bz_);  // boite valide
       fill_ghosts(aux_, geom_.domain, aux_bc_);  // halos de B_z avant le 1er solve
     }
   }

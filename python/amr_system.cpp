@@ -2,6 +2,7 @@
 
 #include <adc/runtime/amr_dsl_block.hpp>   // detail::dispatch_amr_compiled + build_amr_compiled (chemin partage)
 #include <adc/runtime/model_factory.hpp>   // detail::dispatch_model + briques compilees
+#include <adc/runtime/wall_predicate.hpp>  // detail::wall_predicate (paroi partagee System/AmrSystem)
 
 #include <cmath>
 #include <functional>
@@ -58,12 +59,7 @@ struct AmrSystem::Impl {
     throw std::runtime_error("AmrSystem::set_poisson : bc inconnu '" + mode + "'");
   }
   std::function<bool(Real, Real)> wall_active() {
-    if (p_wall == "none") return {};
-    if (p_wall == "circle") {
-      const double cx = 0.5 * cfg.L, cy = 0.5 * cfg.L, R = p_wall_radius;
-      return [cx, cy, R](Real x, Real y) { return std::hypot(x - cx, y - cy) < R; };
-    }
-    throw std::runtime_error("AmrSystem::set_poisson : wall inconnu '" + p_wall + "'");
+    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "AmrSystem::set_poisson");
   }
 
   // Materialise les parametres figes du build paresseux a partir de la config + des choix

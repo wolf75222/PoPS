@@ -17,6 +17,7 @@
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>  // fill_ghosts, fill_boundary
 #include <adc/runtime/dynamic_model.hpp>  // IModel : modele charge a l'execution (bloc dynamique)
+#include <adc/runtime/wall_predicate.hpp>  // detail::wall_predicate (paroi partagee System/AmrSystem)
 
 #include <algorithm>
 #include <cmath>
@@ -290,12 +291,7 @@ struct System::Impl {
     throw std::runtime_error("System::set_poisson : bc inconnu '" + mode + "'");
   }
   std::function<bool(Real, Real)> wall_active() {
-    if (p_wall == "none") return {};
-    if (p_wall == "circle") {
-      const double cx = 0.5 * cfg.L, cy = 0.5 * cfg.L, R = p_wall_radius;
-      return [cx, cy, R](Real x, Real y) { return std::hypot(x - cx, y - cy) < R; };
-    }
-    throw std::runtime_error("System::set_poisson : wall inconnu '" + p_wall + "'");
+    return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "System::set_poisson");
   }
   void ensure_elliptic() {
     if (ell_) return;

@@ -3,6 +3,7 @@
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/types.hpp>
 #include <adc/coupling/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb
+#include <adc/coupling/aux_fill.hpp>        // detail::derive_aux_bc + detail::fill_bz_box (partages)
 #include <adc/coupling/coupled_source.hpp>  // CoupledSourceFor
 #include <adc/coupling/elliptic_rhs.hpp>
 #include <adc/numerics/elliptic/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
@@ -98,7 +99,7 @@ class AmrSystemCoupler {
         dom_(geom.domain),
         base_per_(base_per),
         bcPhi_(bcPhi),
-        aux_bc_(derive_aux_bc(bcPhi)),
+        aux_bc_(detail::derive_aux_bc(bcPhi)),
         replicated_coarse_(replicated_coarse),
         cadence_(cadence),
         mg_(geom, ba_coarse, bcPhi, std::move(active), replicated_coarse),
@@ -313,16 +314,6 @@ class AmrSystemCoupler {
     });
     return w;
   }
-  static BCRec derive_aux_bc(const BCRec& b) {
-    auto t = [](BCType x) {
-      return x == BCType::Periodic ? BCType::Periodic : BCType::Foextrap;
-    };
-    BCRec a;
-    a.xlo = t(b.xlo); a.xhi = t(b.xhi);
-    a.ylo = t(b.ylo); a.yhi = t(b.yhi);
-    return a;
-  }
-
   // Peuple la composante aux B_z (indice kAuxBaseComps) du canal partage de CHAQUE niveau depuis
   // bz_(x, y). B_z est statique (externe a l'elliptique) : pose une fois (au ctor / set_bz),
   // preserve par solve_fields (field_postprocess n'ecrit que phi/grad, comp 0..2 ; on re-pose
@@ -342,10 +333,8 @@ class AmrSystemCoupler {
       MultiFab& A = aux_[k];
       for (int li = 0; li < A.local_size(); ++li) {
         Fab2D& f = A.fab(li);
-        const Box2D g = f.grown_box();  // valides + halos : B_z(x,y) correct partout
-        for (int j = g.lo[1]; j <= g.hi[1]; ++j)
-          for (int i = g.lo[0]; i <= g.hi[0]; ++i)
-            f(i, j, kAuxBaseComps) = bz_(gk.x_cell(i), gk.y_cell(j));
+        // grown box (valides + halos) : B_z(x,y) correct partout, geometrie du niveau k.
+        detail::fill_bz_box(f, f.grown_box(), gk, bz_);
       }
     }
   }

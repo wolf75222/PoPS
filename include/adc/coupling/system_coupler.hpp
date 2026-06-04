@@ -2,6 +2,7 @@
 
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/types.hpp>
+#include <adc/coupling/aux_fill.hpp>  // detail::derive_aux_bc + detail::fill_bz_box (partages)
 #include <adc/coupling/coupled_source.hpp>
 #include <adc/coupling/elliptic_rhs.hpp>
 #include <adc/numerics/elliptic/elliptic_problem.hpp>
@@ -81,7 +82,7 @@ class SystemAssembler {
         ba_(ba),
         dm_(ba.size(), n_ranks()),
         bcPhi_(bcPhi),
-        aux_bc_(derive_aux_bc(bcPhi)),
+        aux_bc_(detail::derive_aux_bc(bcPhi)),
         mg_(geom, ba, bcPhi, std::move(active)),
         aux_ncomp_(system_aux_comps(system_)),
         aux_(ba, dm_, aux_ncomp_, 1),
@@ -119,18 +120,6 @@ class SystemAssembler {
   }
 
  private:
-  static BCRec derive_aux_bc(const BCRec& b) {
-    auto t = [](BCType x) {
-      return x == BCType::Periodic ? BCType::Periodic : BCType::Foextrap;
-    };
-    BCRec a;
-    a.xlo = t(b.xlo);
-    a.xhi = t(b.xhi);
-    a.ylo = t(b.ylo);
-    a.yhi = t(b.yhi);
-    return a;
-  }
-
   void derive_aux() {
     fill_ghosts(mg_.phi(), geom_.domain, bcPhi_);
     const Real cx = Real(1) / (2 * geom_.dx());
@@ -160,13 +149,8 @@ class SystemAssembler {
   // maintenus par derive_aux (aux_bc_) ; field_postprocess n'ecrit que phi/grad (comp 0..2).
   void fill_bz() {
     if (!bz_ || aux_ncomp_ <= kAuxBaseComps) return;
-    for (int li = 0; li < aux_.local_size(); ++li) {
-      Fab2D& f = aux_.fab(li);
-      const Box2D v = aux_.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          f(i, j, kAuxBaseComps) = bz_(geom_.x_cell(i), geom_.y_cell(j));
-    }
+    for (int li = 0; li < aux_.local_size(); ++li)
+      detail::fill_bz_box(aux_.fab(li), aux_.box(li), geom_, bz_);  // boite valide
     fill_ghosts(aux_, geom_.domain, aux_bc_);  // halos de B_z avant le 1er solve
   }
 
