@@ -1,6 +1,7 @@
 #pragma once
 
 #include <adc/core/variables.hpp>  // VariableSet (descripteur a roles porte par chaque bloc)
+#include <adc/runtime/export.hpp>  // ADC_EXPORT (methodes resolues par le loader natif a travers le dlopen)
 #include <adc/runtime/grid_context.hpp>  // GridContext + BlockClosures (seam bloc compile AOT)
 #include <adc/runtime/model_spec.hpp>
 
@@ -86,6 +87,31 @@ class System {
                           const std::string& time = "explicit", int substeps = 1,
                           const std::vector<std::string>& names = {});
 
+  /// Ajoute un bloc dont le modele est compile dans un LOADER NATIF .so genere par le DSL
+  /// (dsl.compile_native / compile(backend="production")). C'est le chemin de PRODUCTION : le loader
+  /// inline le gabarit en-tete adc::add_compiled_model<ProdModel>, qui fabrique les fermetures sur le
+  /// CONTEXTE REEL du System (grid_context) et installe le bloc via install_block. Le bloc tourne
+  /// alors EXACTEMENT le chemin natif d'add_block (fill_boundary = halos MPI, assemble_rhs device),
+  /// ZERO-COPIE -- a la difference d'add_compiled_block (.so + marshaling de tableaux plats, ABI
+  /// extern "C" host). Le loader inline appelant des methodes hors-ligne de ce module (install_block
+  /// /grid_context/ensure_aux_width, exportees ADC_EXPORT), la frontiere n'est PAS une ABI plate :
+  /// loader et module DOIVENT partager la meme ABI C++. add_native_block lit la cle d'ABI du loader
+  /// (adc_native_abi_key) et la COMPARE a abi_key() ; un ecart leve une erreur EXPLICITE (pas d'UB).
+  /// @param limiter "none" | "minmod" | "vanleer"   @param riemann "rusanov" | "hllc" | "roe"
+  /// @param recon   "conservative" | "primitive"    @param time "explicit" | "imex"
+  /// @param gamma   indice adiabatique du bloc (set_density / couplages inter-especes)
+  void add_native_block(const std::string& name, const std::string& so_path,
+                        const std::string& limiter = "minmod",
+                        const std::string& riemann = "rusanov",
+                        const std::string& recon = "conservative",
+                        const std::string& time = "explicit", double gamma = 1.4,
+                        int substeps = 1, bool evolve = true);
+
+  /// Cle d'ABI du module (compilateur + standard C++ + signature des en-tetes adc, figee a la
+  /// compilation). Comparee a la cle baked dans un loader natif .so par add_native_block ; exposee
+  /// aussi cote Python pour que emit_cpp_native_loader (ou un diagnostic) puisse la consulter.
+  static std::string abi_key();
+
   /// @name Seam de bloc COMPILE AOT (parite native, sans marshaling)
   /// Pour brancher un modele genere par le DSL en COMPOSANT au moment de la COMPILATION (binaire de
   /// production Kokkos + MPI + AMR), via le gabarit libre adc::add_compiled_model<Model> de
@@ -94,11 +120,16 @@ class System {
   /// = halos MPI, assemble_rhs device), sans recopier les tableaux. C'est la difference avec
   /// add_compiled_block (.so + marshaling hote, prototypage runtime CPU).
   /// @{
-  GridContext grid_context();  ///< maillage + CL + aux REELS du System (aux non possede)
+  /// VISIBILITE DEFAUT (ADC_EXPORT) : grid_context / install_block / ensure_aux_width sont les
+  /// seules methodes appelees par le gabarit en-tete add_compiled_model. Un loader .so genere (chemin
+  /// DSL "production", cf. emit_cpp_native_loader / add_native_block) inline ce gabarit et doit
+  /// resoudre ces symboles depuis le module _adc deja charge. Compile en -fvisibility=hidden (pybind11),
+  /// le module ne les exporterait pas sans cette annotation et le dlopen du loader echouerait.
+  ADC_EXPORT GridContext grid_context();  ///< maillage + CL + aux REELS du System (aux non possede)
   /// Installe un bloc a partir de fermetures deja fabriquees (cf. add_compiled_model). Les
   /// descripteurs cons/prim portent les noms ET les roles (M::conservative_vars()), exploites
   /// par les couplages inter-especes.
-  void install_block(const std::string& name, int ncomp, const VariableSet& cons_vars,
+  ADC_EXPORT void install_block(const std::string& name, int ncomp, const VariableSet& cons_vars,
                      const VariableSet& prim_vars, double gamma, BlockClosures closures,
                      std::function<Real(const MultiFab&)> max_speed,
                      std::function<void(const MultiFab&, MultiFab&)> poisson_rhs, int substeps,
@@ -159,7 +190,8 @@ class System {
   /// add_compiled_model (cf. dsl_block.hpp) avec aux_comps<Model> a l'ajout d'un bloc qui lit des
   /// champs auxiliaires supplementaires. Reallouer preserve l'ADRESSE de l'aux du System (les
   /// fermetures de bloc deja installees pointent &aux), et re-applique B_z s'il a ete fourni.
-  void ensure_aux_width(int ncomp);
+  /// ADC_EXPORT : appelee par add_compiled_model (en-tete) -> doit etre exportee pour le loader .so.
+  ADC_EXPORT void ensure_aux_width(int ncomp);
 
   /// Fixe la densite d'une espece (composante 0), tableau n*n row-major. Les autres
   /// composantes (qte de mouvement, energie) sont posees a l'equilibre au repos.

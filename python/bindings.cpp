@@ -10,6 +10,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <adc/runtime/abi_key.hpp>  // adc::abi_key : cle d'ABI exposee au DSL (chemin "production")
 #include <adc/runtime/amr_system.hpp>
 #include <adc/runtime/system.hpp>
 
@@ -40,6 +41,11 @@ PYBIND11_MODULE(_adc, m) {
   m.doc() =
       "adc_cpp (lib) : composition multi-especes a l'execution. System compose un "
       "systeme bloc par bloc ; le calcul reste C++ compile.";
+
+  // Cle d'ABI du module (compilateur + standard C++ + signature des en-tetes adc). Le DSL la
+  // consulte (diagnostic) ; add_native_block la compare a la cle baked dans un loader natif.
+  m.def("abi_key", &adc::abi_key,
+        "Cle d'ABI du module (compilateur, standard C++, signature des en-tetes adc).");
 
   py::class_<SystemConfig>(m, "SystemConfig")
       .def(py::init<>())
@@ -82,6 +88,13 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("substeps") = 1,
            py::arg("names") = std::vector<std::string>{})
+      // Bloc NATIF charge depuis un loader .so genere par le DSL (backend "production",
+      // dsl.compile_native) : le .so inline add_compiled_model<ProdModel> -> bloc zero-copie sur le
+      // contexte reel du System, cle d'ABI verifiee. cf. System::add_native_block.
+      .def("add_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
+           py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
+           py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
+           py::arg("substeps") = 1, py::arg("evolve") = true)
       .def("add_ionization", &System::add_ionization, py::arg("electron"), py::arg("ion"),
            py::arg("neutral"), py::arg("rate"))
       .def("add_collision", &System::add_collision, py::arg("a"), py::arg("b"), py::arg("rate"))
@@ -161,7 +174,9 @@ PYBIND11_MODULE(_adc, m) {
              return to_2d(s.density(name), s.nx());
            },
            py::arg("name"))
-      .def("potential", [](System& s) { return to_2d(s.potential(), s.nx()); });
+      .def("potential", [](System& s) { return to_2d(s.potential(), s.nx()); })
+      .def_static("abi_key", &System::abi_key,
+                  "Cle d'ABI du module (cf. adc.abi_key) ; comparee a celle d'un loader natif.");
 
   // --- AMR : composition mono-espece sur AMR multi-patch (brique generique composable) ---
   // adc_cases la PILOTE depuis Python (pas de C++ cote cases) au meme titre que System.

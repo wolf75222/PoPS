@@ -1,6 +1,7 @@
 #include <adc/runtime/system.hpp>
 
 #include <adc/core/variables.hpp>  // VariableSet + VariableRole : descripteur a roles porte par chaque bloc
+#include <adc/runtime/abi_key.hpp>  // adc::abi_key + detail::abi_key_string (frontiere ABI du loader natif)
 #include <adc/runtime/block_builder.hpp>  // GridContext + make_block/make_max_speed (fermetures compilees)
 #include <adc/runtime/model_factory.hpp>  // detail::dispatch_model + briques compilees
 #include <adc/numerics/elliptic/geometric_mg.hpp>
@@ -29,6 +30,13 @@
 #include <variant>
 
 namespace adc {
+
+// Cle d'ABI du MODULE (figee a la compilation de cette TU). Definie ici pour que le module _adc
+// l'exporte (ADC_EXPORT) : add_native_block la compare a la cle baked dans le loader .so.
+std::string abi_key() { return detail::abi_key_string(); }
+
+// Methode statique pratique (binding Python + add_native_block) : delegue a la cle libre du module.
+std::string System::abi_key() { return adc::abi_key(); }
 
 // Residu hote R = -div F* + S(U, aux) (Rusanov, a_max GLOBAL comme adc.PythonFlux, periodique)
 // calcule via un IModel : sert au bloc DYNAMIQUE (modele charge a l'execution, dispatch virtuel,
@@ -849,6 +857,89 @@ void System::add_compiled_block(const std::string& name, const std::string& so_p
   block.prim_vars = std::move(prim_vs);
   P->sp.push_back(std::move(block));
   P->sp.back().U.set_val(Real(0));
+}
+
+void System::add_native_block(const std::string& name, const std::string& so_path,
+                              const std::string& limiter, const std::string& riemann,
+                              const std::string& recon, const std::string& time, double gamma,
+                              int substeps, bool evolve) {
+  if (substeps < 1) throw std::runtime_error("System::add_native_block : substeps >= 1");
+  // Validation AMONT du schema (comme add_block / add_compiled_block) : add_compiled_model retombe
+  // SILENCIEUSEMENT sur explicit/conservatif pour une chaine inconnue (imex = (time=="imex"),
+  // recon_prim = (recon=="primitive")) ; on rejette donc une faute de frappe ICI plutot que de
+  // tourner un schema different de celui demande. limiter/riemann, eux, sont valides par make_block
+  // dans le loader (exception claire, ABI partagee verifiee plus bas).
+  if (recon != "conservative" && recon != "primitive")
+    throw std::runtime_error("System::add_native_block : recon 'conservative' | 'primitive' (recu '" +
+                             recon + "')");
+  if (time != "explicit" && time != "imex")
+    throw std::runtime_error("System::add_native_block : time 'explicit' | 'imex' (recu '" + time +
+                             "')");
+  // Chemin "production" du DSL : le loader .so genere (emit_cpp_native_loader) inline le gabarit
+  // en-tete add_compiled_model<ProdModel>, qui fabrique les fermetures sur le CONTEXTE REEL du
+  // System (grid_context) et installe le bloc via install_block -- chemin NATIF, zero-copie, MEMES
+  // MultiFab que add_block (pas de marshaling de tableaux plats comme add_compiled_block). Le loader
+  // appelle donc des methodes hors-ligne de adc::System DEFINIES dans CE module ; il faut les
+  // resoudre a travers le dlopen contre le module _adc deja charge.
+  // PORTABILITE ELF (Linux) : CPython charge _adc en RTLD_LOCAL, donc ses symboles ne sont PAS dans
+  // la portee globale et le loader ne pourrait pas les resoudre. On PROMEUT donc le module courant en
+  // portee globale (RTLD_NOLOAD = sans le recharger, juste promouvoir ; RTLD_GLOBAL OR'e dans les
+  // flags de l'objet deja charge). Le chemin du module est trouve par dladdr sur un symbole exporte
+  // (adc::abi_key). Sur macOS c'est inoffensif (le loader resout deja par dynamic_lookup).
+  {
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void*>(&adc::abi_key), &info) && info.dli_fname)
+      dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
+  }
+  // RTLD_GLOBAL : place les symboles du loader dans la portee globale ET autorise le loader a resoudre
+  // ses indefinis (les methodes System exportees ADC_EXPORT) contre les images deja chargees. RTLD_NOW :
+  // resolution immediate -> un symbole System manquant (module sans ADC_EXPORT) echoue ICI, pas en vol.
+  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+  if (!h) {
+    const char* e = dlerror();
+    throw std::runtime_error("add_native_block : dlopen('" + so_path + "') : " +
+                             std::string(e ? e : "?") +
+                             " (les symboles adc::System (install_block/grid_context/"
+                             "ensure_aux_width) doivent etre exportes ET le module _adc charge "
+                             "globalement ; cf. ADC_EXPORT)");
+  }
+  // GARDE-FOU ABI EXPLICITE : la cle baked dans le loader (a SA compilation) doit egaler la cle du
+  // module (a SA compilation). Un ecart = en-tetes / compilateur / standard divergents -> agencement
+  // memoire de System/GridContext/BlockClosures potentiellement different a travers la frontiere ->
+  // UB. On leve une erreur CLAIRE plutot que de laisser passer un loader incompatible.
+  auto key_fn = reinterpret_cast<const char* (*)()>(dlsym(h, "adc_native_abi_key"));
+  if (!key_fn) {
+    dlclose(h);
+    throw std::runtime_error("add_native_block : adc_native_abi_key absent du .so (regenerer via "
+                             "dsl.compile_native / compile(backend='production'))");
+  }
+  const std::string loader_key = key_fn();
+  const std::string module_key = abi_key();
+  if (loader_key != module_key) {
+    dlclose(h);
+    throw std::runtime_error("add_native_block : ABI incompatible -- cle du loader '" + loader_key +
+                             "' != cle du module '" + module_key +
+                             "'. Recompiler le loader avec le MEME compilateur, standard C++ et "
+                             "en-tetes adc que le module _adc.");
+  }
+  // Installateur natif du loader : reinterpret_cast<System*>(this) puis add_compiled_model<ProdModel>.
+  // Schema (limiter/riemann/recon/time/gamma/substeps) marshale en arguments plats extern "C" : le
+  // loader reconstruit imex/recon_prim et appelle le gabarit. evolve est passe pour qu'un bloc fond
+  // fixe (non avance) soit possible comme via add_block.
+  using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
+                                const char*, double, int, int);
+  auto install = reinterpret_cast<install_fn_t>(dlsym(h, "adc_install_native"));
+  if (!install) {
+    dlclose(h);
+    throw std::runtime_error("add_native_block : adc_install_native absent du .so (regenerer via "
+                             "dsl.compile_native / compile(backend='production'))");
+  }
+  install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
+          time.c_str(), gamma, substeps, evolve ? 1 : 0);
+  // Le .so reste charge (RTLD_GLOBAL) pour la duree du process : le bloc installe pointe du code
+  // (fermetures de block_builder, foncteurs nommes) qui y vit. On NE le ferme PAS (pas de propriete
+  // partagee a accrocher : les fermetures sont copiees dans le registre du System mais leur CODE est
+  // dans le .so). Cohrent avec un binaire de production ou le modele est lie a vie.
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver,

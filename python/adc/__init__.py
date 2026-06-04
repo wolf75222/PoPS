@@ -21,7 +21,8 @@ application (cf. adc_cases). Aucun nom de scenario ici.
 """
 
 from ._adc import (SystemConfig, ModelSpec, System as _System,
-                   AmrSystemConfig, AmrSystem as _AmrSystem)
+                   AmrSystemConfig, AmrSystem as _AmrSystem,
+                   abi_key)  # cle d'ABI du module (chemin DSL "production" / diagnostic)
 
 # L'API PUBLIQUE n'expose QUE des briques composables (System, AmrSystem, Model...) : aucun
 # scenario physique nomme. L'integrateur AP deux-fluides (schema asymptotic-preserving, non
@@ -37,7 +38,7 @@ __all__ = [
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
-    "PythonFlux", "dsl",
+    "PythonFlux", "dsl", "abi_key",
 ]
 
 
@@ -392,6 +393,13 @@ class System:
         add_dynamic_block (.so JIT) et add_compiled_block (.so AOT), pas seulement add_block.
         """
         return list(self._s.block_names())
+
+    @staticmethod
+    def abi_key():
+        """Cle d'ABI du module (compilateur, standard C++, signature des en-tetes adc). Comparee a
+        celle d'un loader natif par add_native_block. Exposee aussi en tant qu'attribut de classe (le
+        delegue __getattr__ ne couvre que les instances), donc adc.System.abi_key() fonctionne."""
+        return _System.abi_key()
 
     def __getattr__(self, attr):
         return getattr(self._s, attr)

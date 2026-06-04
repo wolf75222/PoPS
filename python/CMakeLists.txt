@@ -10,6 +10,30 @@ pybind11_add_module(_adc bindings.cpp system.cpp amr_system.cpp)
 target_link_libraries(_adc PRIVATE adc::adc ${CMAKE_DL_LIBS})  # dl : add_dynamic_block (dlopen)
 target_compile_features(_adc PRIVATE cxx_std_${ADC_CXX_STD})
 
+# Signature de l'arbre d'en-tetes du coeur, BAKED dans la cle d'ABI du module (adc/runtime/abi_key.hpp
+# via -DADC_HEADER_SIG). Le backend DSL "production" (dsl.compile_native) recalcule la MEME signature
+# (adc.dsl.adc_header_signature) et la bake dans le loader .so : les cles concordent quand les en-tetes
+# concordent, divergent sinon -> add_native_block leve une erreur explicite (pas d'UB silencieux).
+# CALCUL (miroir bit-pour-bit de adc_header_signature) : sha256 du concatene TRIE, pour chaque .hpp/.h
+# sous include/, de "<chemin relatif>\n<sha256 du contenu>\n".
+# CONFIGURE_DEPENDS : CMake re-genere (donc recalcule la signature) si un en-tete est AJOUTE/SUPPRIME.
+# Une EDITION de contenu d'en-tete n'invalide pas le glob ; un simple `cmake --build` peut alors garder
+# une signature perimee -> compile_native rejetterait les loaders (erreur EXPLICITE, jamais d'UB). Le
+# flux standard `cmake -S . -B build-py ... && cmake --build` reconfigure et recalcule : c'est le mode
+# nominal. Apres une edition d'en-tete sans reconfigure, relancer la configuration (re-`cmake -S`).
+set(_adc_include "${CMAKE_CURRENT_SOURCE_DIR}/../include")
+file(GLOB_RECURSE _adc_headers CONFIGURE_DEPENDS RELATIVE "${_adc_include}"
+     "${_adc_include}/*.hpp" "${_adc_include}/*.h")
+list(SORT _adc_headers)
+set(_adc_hdr_blob "")
+foreach(_h ${_adc_headers})
+  file(SHA256 "${_adc_include}/${_h}" _h_digest)
+  string(APPEND _adc_hdr_blob "${_h}\n${_h_digest}\n")
+endforeach()
+string(SHA256 _adc_header_sig "${_adc_hdr_blob}")
+target_compile_definitions(_adc PRIVATE ADC_HEADER_SIG="${_adc_header_sig}")
+message(STATUS "adc Python module: signature en-tetes ADC_HEADER_SIG=${_adc_header_sig}")
+
 # L'extension va dans le paquet adc/ ; on y copie aussi les sources Python du paquet.
 set(ADC_PY_PKG ${CMAKE_CURRENT_BINARY_DIR}/adc)
 set_target_properties(_adc PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${ADC_PY_PKG})
@@ -109,6 +133,14 @@ set_tests_properties(test_dsl_coupled PROPERTIES
 add_test(NAME test_dsl_aot
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_aot.py)
 set_tests_properties(test_dsl_aot PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# Backend NATIF "production" : euler_poisson compile(backend="production") -> loader .so qui inline
+# add_compiled_model<ProdModel> -> add_native_block. Parite BIT-IDENTIQUE au bloc natif add_block
+# (eval_rhs + avance SSPRK2) + rejet explicite d'une cle d'ABI falsifiee. S'auto-saute sans compilateur.
+add_test(NAME test_dsl_production
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_production.py)
+set_tests_properties(test_dsl_production PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
 # Choix de reconstruction (ordre) du bloc dynamique : recon none/minmod/vanleer == reference MUSCL numpy.

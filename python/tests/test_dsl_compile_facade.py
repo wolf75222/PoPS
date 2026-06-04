@@ -1,6 +1,8 @@
 """Facade de compilation par INTENTION : HyperbolicModel.compile(backend=...) aiguille vers les
-moteurs existants (compile_so JIT / compile_aot AOT) SANS changer la numerique, et preserve de bout
-en bout noms, VariableRole, gamma, n_aux et B_z (les metadonnees ABI #75).
+moteurs (compile_so JIT / compile_aot AOT / compile_native NATIF) SANS changer la numerique, et
+preserve de bout en bout noms, VariableRole, gamma, n_aux et B_z (les metadonnees ABI #75). Le
+backend "production" est desormais le chemin NATIF (loader .so -> add_native_block), distinct de l'AOT
+host-marshale ; la parite numerique stricte est couverte par test_dsl_production.
 
 Deux niveaux :
 (1) GARDE-FOUS pur-Python (aucun compilateur requis) : backend inconnu, mapping backend -> adder,
@@ -96,8 +98,9 @@ def test_guardrails():
     # mapping backend -> adder System (couplage compilation/execution)
     assert dsl.HyperbolicModel.adder_for("prototype") == "add_dynamic_block"
     assert dsl.HyperbolicModel.adder_for("aot") == "add_compiled_block"
-    assert dsl.HyperbolicModel.adder_for("production") == "add_compiled_block"
-    print("OK  adder_for : prototype->add_dynamic_block, aot/production->add_compiled_block")
+    assert dsl.HyperbolicModel.adder_for("production") == "add_native_block"
+    print("OK  adder_for : prototype->add_dynamic_block, aot->add_compiled_block, "
+          "production->add_native_block")
 
     # require_metadata sur prototype (JIT, dispatch virtuel hote) : incoherent -> erreur claire
     try:
@@ -138,13 +141,18 @@ def test_end_to_end():
     n, L = 16, 1.0
     tmp = tempfile.mkdtemp()
     try:
-        # --- aot / production : meme moteur (compile_aot) ; require_metadata=True passe (roles+gamma) ---
+        # --- aot (compile_aot, add_compiled_block) ET production (compile_native, add_native_block) :
+        # require_metadata=True passe (roles+gamma). Les noms/roles propagent dans les deux cas (AOT :
+        # lus de l'ABI du .so ; natif : portes par ProdModel::conservative_vars()). Le GAMMA differe de
+        # SOURCE : l'AOT le lit du symbole adc_compiled_gamma du .so ; le natif le recoit en ARGUMENT
+        # d'add_native_block (comme add_block / add_compiled_model). On le passe donc pour le natif. ---
         for backend in ("aot", "production"):
             so = e.compile(os.path.join(tmp, "facade_%s.so" % backend), INCLUDE,
                            backend=backend, require_metadata=True)
             s = adc.System(n=n, L=L, periodic=True)
             adder = getattr(s, dsl.HyperbolicModel.adder_for(backend))
-            adder("gas", so, limiter="minmod", riemann="hllc", recon="primitive")
+            kw = dict(gamma=GAMMA) if backend == "production" else {}
+            adder("gas", so, limiter="minmod", riemann="hllc", recon="primitive", **kw)
             # noms/roles DU MODELE (pas le fallback u0.. / custom)
             assert s.variable_names("gas") == ["rho", "rho_u", "rho_v", "E"], \
                 "%s : noms != metadonnees : %r" % (backend, s.variable_names("gas"))

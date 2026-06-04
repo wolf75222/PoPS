@@ -21,6 +21,34 @@ chemin de production (qui reste les briques C++ compilees, GPU/MPI).
 import numpy as np
 
 
+# --- Signature de l'arbre d'en-tetes du coeur (cle d'ABI du chemin "production") -------------
+# Le backend "production" (compile_native) emet un loader .so qui inline le gabarit en-tete
+# adc::add_compiled_model et appelle des methodes hors-ligne du module _adc deja charge. Loader et
+# module DOIVENT partager la meme ABI C++ (memes en-tetes, compilateur, standard). On materialise la
+# "signature des en-tetes" dans la cle d'ABI (adc/runtime/abi_key.hpp, jeton ADC_HEADER_SIG) ; le
+# build du module la bake (CMake) et compile_native la rebake (flag -D) en la calculant a l'IDENTIQUE.
+# Le calcul DOIT etre bit-pour-bit identique cote CMake (python/CMakeLists.txt) et ici : sha256 du
+# concatene trie "<relpath>\n<sha256(contenu)>\n" de chaque .hpp/.h sous include/. cf. abi_key.hpp.
+def adc_header_signature(include):
+    """Signature stable de l'arbre d'en-tetes adc sous @p include : sha256 du concatene trie
+    "<chemin relatif>\\n<sha256 du contenu>\\n" de chaque .hpp/.h. MIROIR EXACT du calcul CMake
+    (python/CMakeLists.txt) : si un en-tete change, la signature change des deux cotes, donc la cle
+    d'ABI diverge et add_native_block leve une erreur explicite (jamais d'UB silencieux)."""
+    import hashlib
+    import os
+    entries = []
+    for root, _dirs, files in os.walk(include):
+        for fn in files:
+            if fn.endswith((".hpp", ".h")):
+                p = os.path.join(root, fn)
+                rel = os.path.relpath(p, include)
+                with open(p, "rb") as f:
+                    digest = hashlib.sha256(f.read()).hexdigest()
+                entries.append("%s\n%s\n" % (rel, digest))
+    blob = "".join(sorted(entries)).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
 # --- Canal aux : disposition canonique --------------------------------------
 # Les champs auxiliaires nommes (aux('...')) sont des COMPOSANTES a indice FIXE du canal aux
 # (cf. adc::Aux / kAuxBaseComps cote C++). phi/grad_x/grad_y = contrat de BASE (3 composantes) ;
@@ -763,17 +791,104 @@ class HyperbolicModel:
                             "-o", so_path], check=True)
         return so_path
 
+    def emit_cpp_native_loader(self, name=None):
+        """Source du LOADER NATIF (backend "production") : le MODELE COMPLET en CompositeModel<...>
+        derriere une ABI extern "C" MINCE de DEUX symboles.
+
+        A la difference du backend "aot" (emit_cpp_aot_source : ABI plate de tableaux, le .so
+        recalcule tout sur une grille locale et marshale les tableaux), le loader natif NE porte PAS
+        la numerique : il se contente d'INSTALLER le modele genere comme bloc NATIF du System deja
+        construit, via le gabarit en-tete adc::add_compiled_model<ProdModel>. Ce gabarit fabrique les
+        fermetures sur le CONTEXTE REEL du System (grid_context) -> le bloc tourne ensuite le MEME
+        chemin que add_block (assemble_rhs, fill_boundary), ZERO-COPIE, device-clean (foncteurs nommes).
+
+        Deux symboles extern "C" :
+          - adc_native_abi_key() : cle d'ABI figee a la compilation DU LOADER (adc::detail::
+            abi_key_string()). add_native_block la compare a abi_key() du module -> erreur explicite
+            si en-tetes / compilateur / standard divergent (pas d'UB silencieux a la frontiere C++).
+          - adc_install_native(sys, name, limiter, riemann, recon, time, gamma, substeps, evolve) :
+            reinterpret_cast<adc::System*>(sys) puis add_compiled_model<ProdModel>(*s, name, ...).
+            Le schema transite en arguments plats (chaines + double + int) ; aucun objet C++ ne
+            traverse l'ABI dans CE sens (seul le System* est repris par reference cote loader, d'ou
+            l'exigence d'ABI identique verifiee par la cle)."""
+        nv, bricks, composite = self._emit_bricks(name)
+        return ('#include <adc/runtime/dsl_block.hpp>\n'      # add_compiled_model<Model> (gabarit natif)
+                '#include <adc/runtime/abi_key.hpp>\n'         # detail::abi_key_string (cle figee a la compil)
+                '#include <adc/physics/bricks.hpp>\n'          # CompositeModel + NoSource + briques
+                '#include <adc/core/variables.hpp>\n'
+                '#include <string>\n'
+                + bricks
+                + '\nnamespace adc_generated { using ProdModel = %s; }\n' % composite  # alias sans virgule
+                + 'extern "C" const char* adc_native_abi_key() {\n'
+                + '  static const std::string k = adc::detail::abi_key_string();\n'
+                + '  return k.c_str();\n'
+                + '}\n'
+                + 'extern "C" void adc_install_native(void* sys, const char* name, const char* limiter,\n'
+                + '                                    const char* riemann, const char* recon,\n'
+                + '                                    const char* time, double gamma, int substeps,\n'
+                + '                                    int evolve) {\n'
+                + '  adc::System* s = reinterpret_cast<adc::System*>(sys);\n'
+                + '  adc::add_compiled_model<adc_generated::ProdModel>(*s, name, adc_generated::ProdModel{},\n'
+                + '                                                    limiter, riemann, recon, time, gamma,\n'
+                + '                                                    substeps, evolve != 0);\n'
+                + '}\n'
+                + self._emit_metadata("adc_generated::ProdModel"))  # noms/roles/gamma (diagnostic, comme AOT/JIT)
+
+    def compile_native(self, so_path, include, name=None, cxx=None, std="c++23"):
+        """Backend "production" : genere le LOADER NATIF (emit_cpp_native_loader) et le compile en une
+        .so chargeable par System.add_native_block. Le .so inline add_compiled_model<ProdModel> : le
+        bloc tourne le chemin NATIF zero-copie (parite stricte avec add_block / add_compiled_model<>).
+
+        Le loader appelle des methodes hors-ligne du module _adc (install_block / grid_context /
+        ensure_aux_width) DEFINIES ailleurs : on compile donc avec '-undefined dynamic_lookup' (macOS)
+        pour autoriser ces indefinis (resolus a l'execution contre le module deja charge ; cf.
+        add_native_block). On bake aussi -DADC_HEADER_SIG=<signature> a l'IDENTIQUE du module pour que
+        les cles d'ABI concordent quand les en-tetes concordent. std defaut c++23 (le module se compile
+        en C++23 hors Kokkos) : un std different changerait __cplusplus donc la cle -> rejet explicite.
+        include = dossier des en-tetes adc ; cxx = compilateur. Renvoie so_path."""
+        import os
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+
+        src = self.emit_cpp_native_loader(name=name)
+        cc = cxx or shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+        if not cc:
+            raise RuntimeError("compile_native : aucun compilateur C++ trouve")
+        sig = adc_header_signature(include)
+        # Les symboles System hors-ligne (install_block/grid_context/ensure_aux_width) sont resolus au
+        # CHARGEMENT contre le module _adc deja charge (add_native_block le promeut en portee globale).
+        # -DADC_HEADER_SIG : MEME signature que le build du module (concordance des cles d'ABI).
+        flags = ["-shared", "-fPIC", "-std=" + std, "-O2",
+                 "-DADC_HEADER_SIG=\"%s\"" % sig]
+        # macOS/Apple-ld : il FAUT autoriser explicitement les indefinis (resolus a l'execution). Sur
+        # ELF/Linux, -shared autorise deja les indefinis ; '-undefined dynamic_lookup' n'est PAS une
+        # option ld GNU (elle creerait un symbole indefini parasite 'dynamic_lookup'), donc darwin SEUL.
+        if sys.platform == "darwin":
+            flags += ["-undefined", "dynamic_lookup"]
+        with tempfile.TemporaryDirectory() as tmp:
+            cpp = os.path.join(tmp, "model_native.cpp")
+            with open(cpp, "w") as f:
+                f.write(src)
+            subprocess.run([cc, *flags, "-I", include, cpp, "-o", so_path], check=True)
+        return so_path
+
     def compile_or_jit(self, so_path, include, mode="jit", name=None, cxx=None, std="c++20"):
         """API unifiee (facade de l'ideal m.compile_or_jit()) choisissant le backend :
         mode="jit"     -> compile_so  (IModel, dispatch virtuel : prototypage hote, a brancher via
                           System.add_dynamic_block) ;
         mode="compile" -> compile_aot (chemin de production AOT, numerique identique au natif : a
-                          brancher via System.add_compiled_block)."""
+                          brancher via System.add_compiled_block) ;
+        mode="native"  -> compile_native (loader natif zero-copie : add_compiled_model<> via
+                          System.add_native_block ; chemin "production")."""
         if mode == "jit":
             return self.compile_so(so_path, include, name=name, cxx=cxx, std=std)
         if mode == "compile":
             return self.compile_aot(so_path, include, name=name, cxx=cxx, std=std)
-        raise ValueError("compile_or_jit : mode 'jit' | 'compile' (recu %r)" % mode)
+        if mode == "native":
+            return self.compile_native(so_path, include, name=name, cxx=cxx, std=std)
+        raise ValueError("compile_or_jit : mode 'jit' | 'compile' | 'native' (recu %r)" % mode)
 
     # --- facade de production : un point d'entree unique par INTENTION (backend) -----------------
     # Aiguillage du backend de compilation par INTENTION plutot que par detail d'implementation. Chaque
@@ -782,32 +897,40 @@ class HyperbolicModel:
     # l'inverse), ce qui chargerait mais avec une ABI/numerique incoherente.
     #   "prototype"  -> compile_so  (JIT, IModel, dispatch virtuel, Rusanov hote ordre 1 ; iteration
     #                   rapide, a brancher via System.add_dynamic_block) ;
-    #   "aot"        -> compile_aot (AOT, chemin de PRODUCTION : assemble_rhs<Limiter, Flux>, HLLC/Roe,
-    #                   ordre 2, SSPRK2/IMEX ; numerique identique au natif, via add_compiled_block) ;
-    #   "production" -> ALIAS du meilleur chemin device-clean disponible AUJOURD'HUI = "aot". La
-    #                   numerique AOT est inlinee (pas de dispatch virtuel) donc tournable GPU/MPI quand
-    #                   le .so est compile avec la bonne toolchain. (cf. note de suivi : un vrai backend
-    #                   "production" dedie -- TU C++ native add_compiled_model, codegen Kokkos/CUDA --
-    #                   reste a faire ; ce n'est PAS un moteur distinct ici.)
+    #   "aot"        -> compile_aot (AOT, chemin de PRODUCTION host-marshale : assemble_rhs<Limiter,
+    #                   Flux>, HLLC/Roe, ordre 2, SSPRK2/IMEX sur une grille LOCALE du .so ; numerique
+    #                   identique au natif mais tableaux marshales, via add_compiled_block) ;
+    #   "production" -> compile_native (LOADER NATIF) : le .so inline add_compiled_model<ProdModel>, qui
+    #                   installe le modele genere comme bloc NATIF du System (fermetures sur le contexte
+    #                   REEL grid_context). Le bloc tourne ZERO-COPIE le MEME chemin qu'add_block (pas de
+    #                   marshaling) ; device-clean par construction (foncteurs nommes de block_builder).
+    #                   A brancher via System.add_native_block (cle d'ABI verifiee). C'est le chemin
+    #                   prepare pour un vrai backend de production (codegen Kokkos/CUDA = PR ulterieure).
     _BACKENDS = {
         "prototype": ("jit", "add_dynamic_block"),
         "aot": ("compile", "add_compiled_block"),
-        "production": ("compile", "add_compiled_block"),
+        "production": ("native", "add_native_block"),
     }
 
-    def compile(self, so_path, include, backend="aot", name=None, cxx=None, std="c++20",
+    def compile(self, so_path, include, backend="aot", name=None, cxx=None, std=None,
                 require_metadata=False):
         """Facade de compilation par INTENTION : compile le modele en une .so via le moteur designe
-        par @p backend et renvoie son chemin. Wrappe les moteurs existants (compile_so / compile_aot)
-        SANS changer la numerique ; preserve de bout en bout noms, VariableRole, gamma, n_aux, B_z et
-        T_e (les memes briques + metadonnees ABI que compile_or_jit).
+        par @p backend et renvoie son chemin. Wrappe les moteurs existants (compile_so / compile_aot /
+        compile_native) SANS changer la numerique ; preserve de bout en bout noms, VariableRole, gamma,
+        n_aux, B_z et T_e (les memes briques + metadonnees ABI que compile_or_jit).
 
         @p backend :
           "prototype"  -> JIT (compile_so) : iteration rapide, dispatch virtuel hote (Rusanov ordre 1),
                           a brancher cote System via add_dynamic_block ;
-          "aot"        -> AOT (compile_aot) : chemin de production, numerique identique au bloc natif,
-                          a brancher via add_compiled_block ;
-          "production" -> alias du meilleur chemin device-clean disponible (aujourd'hui "aot").
+          "aot"        -> AOT (compile_aot) : chemin de production host-marshale, numerique identique au
+                          bloc natif, a brancher via add_compiled_block ;
+          "production" -> NATIF (compile_native) : loader .so inline add_compiled_model<ProdModel>, bloc
+                          natif zero-copie (parite stricte add_block / add_compiled_model<>), a brancher
+                          via add_native_block (cle d'ABI verifiee). Chemin device-clean prepare.
+
+        @p std : standard C++. Defaut None -> "c++23" pour "production" (le loader natif partage l'ABI
+        du module, compile en C++23 hors Kokkos : un std different changerait __cplusplus donc la cle
+        d'ABI -> rejet explicite par add_native_block), "c++20" pour les autres (inchange).
 
         @p require_metadata (defaut False) : si True, exige que le .so transporte des roles physiques
         utiles ET un gamma explicite (set_gamma), faute de quoi le System retomberait sur le fallback
@@ -822,6 +945,8 @@ class HyperbolicModel:
             raise ValueError("compile : backend %r inconnu (attendus %s)"
                              % (backend, sorted(self._BACKENDS)))
         mode, adder = self._BACKENDS[backend]
+        if std is None:  # defaut par backend : le natif partage l'ABI C++23 du module, les autres c++20
+            std = "c++23" if mode == "native" else "c++20"
 
         # Garde-fou device/production : le backend "prototype" passe par add_dynamic_block (IModel,
         # dispatch VIRTUEL, Rusanov hote ordre 1). Ce n'est PAS un chemin de production device-clean :
@@ -851,8 +976,9 @@ class HyperbolicModel:
     @classmethod
     def adder_for(cls, backend):
         """Nom de la methode System a employer pour brancher la .so produite par compile(backend=...) :
-        'add_dynamic_block' (prototype/JIT) ou 'add_compiled_block' (aot/production). Couple le backend
-        de compilation a son adder pour eviter une frontiere ABI incoherente. ValueError si inconnu."""
+        'add_dynamic_block' (prototype/JIT), 'add_compiled_block' (aot) ou 'add_native_block'
+        (production/natif). Couple le backend de compilation a son adder pour eviter une frontiere
+        ABI incoherente. ValueError si inconnu."""
         if backend not in cls._BACKENDS:
             raise ValueError("adder_for : backend %r inconnu (attendus %s)"
                              % (backend, sorted(cls._BACKENDS)))
