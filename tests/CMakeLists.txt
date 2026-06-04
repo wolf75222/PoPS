@@ -71,6 +71,7 @@ adc_add_test(test_aux_system_bz)  # B_z partage multi-blocs (SystemAssembler, au
 adc_add_test(test_aux_composite)  # CompositeModel propage n_aux depuis ses briques (B_z)
 adc_add_test(test_amr_aux_bz)     # lecture + allocation aux width-aware sur les chemins AMR (B_z lu)
 adc_add_test(test_amr_system_bz_pop)  # B_z peuple PAR NIVEAU dans AmrSystemCoupler (echantillonne au niveau)
+adc_add_test(test_amr_system_bz_multibox)  # B_z PAR NIVEAU multi-box (grossier 2x2, fin multi-patch) mono-rang
 
 adc_add_test(test_weno_convergence)
 adc_add_test(test_splitting)
@@ -154,6 +155,20 @@ if(ADC_HAS_MPI)
   # script ROMEO (python/tests/gpu/amrmpi_romeo_build.sh) diff les sorties np=1/2/4 (np=1 = oracle
   # mono-GPU). Compile le runtime AmrSystem comme test_amr_compiled_model. Independant du backend :
   # vert sous Kokkos Serial (CI, CPU) et Kokkos Cuda (GH200). Un binaire, trois entrees ctest.
+  # --- B_z AMR PAR NIVEAU multi-box DISTRIBUE : le meme binaire que le test serie ci-dessus
+  # (test_amr_system_bz_multibox, deja construit par adc_add_test) est rejoue sous MPI a np=2/4. Le
+  # grossier multi-box (2x2) et le niveau fin multi-patch sont REPARTIS sur les rangs ; B_z etant une
+  # fonction PURE de la position, sa valeur par boite est invariante au nombre de rangs. Chaque rang
+  # verifie ses boites locales (valides + ghosts) contre l'analytique et all_reduce_sum les echecs :
+  # np=2/4 valident le chemin multi-box CROSS-RANG (fill_boundary distant, grossier de-replique). np=1
+  # est deja couvert par l'entree serie. Aucun nouveau binaire (reutilise la cible existante).
+  foreach(np 2 4)
+    add_test(NAME test_amr_system_bz_multibox_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_amr_system_bz_multibox>
+                     ${MPIEXEC_POSTFLAGS})
+  endforeach()
+
   add_executable(test_mpi_amr_compiled_parity test_mpi_amr_compiled_parity.cpp
                  ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
   target_link_libraries(test_mpi_amr_compiled_parity PRIVATE adc::adc ${CMAKE_DL_LIBS})
