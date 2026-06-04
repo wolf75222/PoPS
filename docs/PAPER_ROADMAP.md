@@ -51,8 +51,16 @@ pleine. Le predicat de paroi (`runtime/wall_predicate.hpp`, `python/system.cpp::
 n'alimente que l'operateur elliptique, jamais le flux. Le gradient radial net de l'anneau est
 donc diffuse par le schema FV cartesien, ce qui amortit le taux de croissance de facon
 l-dependante (les modes a plus courte longueur d'onde, l=4, paient le plus). Monter en
-resolution ou en ordre (WENO5-Z + SSPRK3) referme partiellement l'ecart mais ne change pas la
-nature du verrou.
+resolution referme partiellement l'ecart mais ne change pas la nature du verrou.
+
+MESURE (PR-0, `diocotron/SWEEP_RESULTS.md` cote adc_cases). Le balayage ordre x resolution
+chiffre la part diffusion vs structurel par mode : **l=3 est diffusion-limite** (l'ecart se
+referme de facon monotone, -34% a -12% de n=128 a 384, pas de plancher), **l=4 PLAFONNE ~12%
+au-dela de n=256** (minmod -12.1% -> -12.5%) -- ce residu PLAT en resolution est la signature
+chiffree du verrou cartesien (transport-wall), et l'argument quantitatif pour la PR-A. l=5 est
+deja proche de la cible. ATTENTION : le balayage ne couvre que l'ordre <= 2 (voir Panier 1) :
+WENO5-Z / SSPRK3 ne sont PAS encore accessibles depuis Python (le cablage `make_block` plafonne a
+l'ordre 2). L'axe ordre reel est {O1, O2-minmod, O2-vanleer}.
 
 ## Classification des manques (4 paniers)
 
@@ -60,10 +68,14 @@ nature du verrou.
 
 Capacites cablees et exposees, suffisantes pour pousser plus loin sans nouveau code.
 
-- **Montee en ORDRE du transport** : `adc.Spatial` expose deja WENO5-Z (`Weno5`) et SSPRK3
-  (`docs/ALGORITHMS.md` sections 3-4) ; le cas diocotron actuel tourne en Minmod/SSPRK2. Lancer
-  le balayage ordre + resolution est un reglage, pas un developpement. C'est la voie M3 ouverte
-  de `todo.md` section 6 ("montee en resolution / convergence vers le taux analytique").
+- **Montee en RESOLUTION** : reglage pur (le cas diocotron tourne deja a n variable). C'est la voie
+  M3 de `todo.md` section 6, et le balayage de resolution est fait (PR-0). PRECISION (corrige une
+  affirmation anterieure) : la montee en ORDRE WENO5-Z / SSPRK3 N'EST PAS "deja possible" depuis
+  Python. `Weno5` et SSPRK3 existent dans le coeur (`reconstruction.hpp`, `time_steppers.hpp`) mais
+  `make_block` (`block_builder.hpp:122-143`) n'instancie que `Minmod`/`VanLeer` (ordre <= 2), et
+  `adc.Spatial(limiter="weno5")` leve "limiter inconnu" ; `adc.Explicit` = SSPRK2. Le balayage PR-0
+  est donc {O1, O2}. Cabler WENO5-Z/SSPRK3 dans `make_block` (chemin accessible depuis Python) est
+  du CODE COEUR, pas un reglage : c'est une PR core dediee, prerequis a un sweep haut-ordre.
 - **Paroi conductrice circulaire sur Poisson** : `wall="circle"` + `wall_radius` est cable sur
   `System` (`python/bindings.cpp:97`) ET sur `AmrSystem` (`python/bindings.cpp:193`,
   `python/amr_system.cpp:78`). Le cut-cell elliptique est valide (MMS ordre 2, multi-box, MPI ;
@@ -135,10 +147,12 @@ Capacites partiellement presentes mais incompletes pour un usage Hoffart pousse.
 
 ## Plan ordonne
 
-1. **Panier 1 d'abord** : balayage ordre (WENO5-Z + SSPRK3) x resolution sur le cas diocotron
-   existant, et AMR plus agressif sur le bord d'anneau. Chiffre la part de l'ecart imputable a
-   la diffusion (resolution/ordre) vs au verrou structurel (bord cartesien). Aucun code coeur.
-2. **Panier 3 ensuite** : c'est la seule voie qui leve le verrou. Porter un bord embedded /
+0. **Balayage resolution (FAIT, PR-0)** : ordre <= 2 x resolution sur le cas diocotron existant.
+   Conclusion : l=3 diffusion-limite, l=4 plateau structurel ~12%, l=5 a la cible (cf. plus haut).
+1. **Cabler WENO5-Z / SSPRK3 dans `make_block`** (PR core, prerequis au sweep haut-ordre) : sans
+   changer le comportement par defaut, exposer le choix depuis l'API Python + tests de dispatch.
+   Permet ENSUITE un balayage ordre O5 pour separer plus nettement diffusion et structurel a haut l.
+2. **Panier 3 (le verrou)** : c'est la seule voie qui leve le verrou. Porter un bord embedded /
    paroi cote transport (ou un domaine disque) pour que l'anneau ne soit plus diffuse par la
    grille cartesienne. C'est le chantier le plus lourd et le plus payant pour le taux numerique.
 3. **Panier 4 selon l'ambition** : parite `AmrSystem` <-> `System` (recon primitive + Roe +
@@ -154,4 +168,5 @@ Capacites partiellement presentes mais incompletes pour un usage Hoffart pousse.
 Reproduire la CIBLE analytique de Hoffart est fait (numpy, 3 chiffres). Reproduire le taux
 NUMERIQUE a parite demande de lever le bord d'anneau cartesien (panier 3) : aujourd'hui le
 cut-cell ne sert que Poisson, le transport reste cartesien, d'ou un sous-taux l-dependant
-structurel que la resolution et l'ordre (panier 1) attenuent sans supprimer.
+structurel que la resolution attenue sans supprimer (PR-0 : plateau ~12% du mode l=4 au-dela de
+n=256). La montee en ordre WENO5-Z/SSPRK3 exige d'abord un cablage `make_block` (PR core dediee).
