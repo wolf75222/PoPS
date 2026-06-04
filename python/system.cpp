@@ -70,6 +70,7 @@ std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>
       a.grad_x = AUX[nn + k];
       a.grad_y = AUX[2 * nn + k];
       if (AUX.size() >= 4 * nn) a.B_z = AUX[3 * nn + k];  // champ extra B_z si marshale (n_aux > 3)
+      if (AUX.size() >= 5 * nn) a.T_e = AUX[4 * nn + k];  // champ extra T_e si marshale (n_aux > 4)
     }
     return a;
   };
@@ -478,6 +479,7 @@ struct System::Impl {
           a.grad_x = aux[nn + c0];
           a.grad_y = aux[2 * nn + c0];
           if (aux.size() >= 4 * nn) a.B_z = aux[3 * nn + c0];
+          if (aux.size() >= 5 * nn) a.T_e = aux[4 * nn + c0];
         }
         Real v = std::max(im->max_wave_speed(s, a, 0), im->max_wave_speed(s, a, 1));
         if (v > mx) mx = v;
