@@ -194,4 +194,18 @@ if(ADC_HAS_MPI)
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_amr_compiled_parity>
                      ${MPIEXEC_POSTFLAGS})
   endforeach()
+
+  # --- STRONG-SCALING AMR : grossier REPARTI (distribute_coarse=true) cable dans AmrSystem. Compare
+  # le grossier multi-box reparti a l'oracle replique (meme binaire) : meme physique a l'arrondi,
+  # cmax bit-identique cross-rang, masse conservee, MG convergent. Compile le runtime AmrSystem comme
+  # test_mpi_amr_compiled_parity. Le script ROMEO diff cmax entre np=1/2/4 (bit-identique attendu).
+  add_executable(test_mpi_amr_distributed_coarse test_mpi_amr_distributed_coarse.cpp
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+  target_link_libraries(test_mpi_amr_distributed_coarse PRIVATE adc::adc ${CMAKE_DL_LIBS})
+  foreach(np 1 2 4)
+    add_test(NAME test_mpi_amr_distributed_coarse_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_amr_distributed_coarse>
+                     ${MPIEXEC_POSTFLAGS})
+  endforeach()
 endif()

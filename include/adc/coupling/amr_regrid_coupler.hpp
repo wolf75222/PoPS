@@ -8,6 +8,7 @@
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>
+#include <adc/mesh/for_each.hpp>  // device_fence (barriere apres parallel_copy async sous Cuda)
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/refinement.hpp>  // coarsen_index
 #include <adc/parallel/comm.hpp>    // n_ranks (include explicite, plus de chemin indirect)
@@ -42,7 +43,7 @@ namespace adc {
 template <class Crit>
 void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux,
                        const Box2D& dom, Crit crit, int grow, int margin,
-                       int aux_ncomp = kAuxBaseComps) {
+                       int aux_ncomp = kAuxBaseComps, bool coarse_replicated = true) {
   const int nlev = static_cast<int>(L.size());
   if (nlev < 2) return;
   const int fk = nlev - 1, pk = fk - 1;  // fin et son parent
@@ -50,6 +51,13 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux,
   const Box2D pdom = Box2D::from_extents(PNX, PNY);
   TagBox tags = tag_cells(L[pk].U, pdom, crit);
   TagBox grown = grow_tags(tags, grow, pdom);
+  // GROSSIER REPARTI (pk == 0 && !coarse_replicated) : tag_cells n'a vu que les boites LOCALES, donc
+  // chaque rang n'a tague qu'une partie du domaine. OU global avant le clustering -> tous les rangs
+  // partent de la MEME grille de tags et Berger-Rigoutsos produit des patchs fins IDENTIQUES (sinon
+  // la BoxArray fine differerait par rang -> dmaps incompatibles, MPI desynchronise). Replique : la
+  // grille de tags est deja complete sur chaque rang (no-op, all_reduce_or serait l'identite).
+  if (pk == 0 && !coarse_replicated)
+    all_reduce_or_inplace(grown.t.data(), static_cast<int>(grown.t.size()));
   std::vector<Box2D> cl = berger_rigoutsos(grown, ClusterParams{});
   std::vector<Box2D> fb;  // patchs fins (coords niveau fk = parent x2)
   for (Box2D b : cl) {
@@ -67,16 +75,41 @@ void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux,
   const MultiFab& par = L[pk].U;
   const MultiFab& old = L[fk].U;
   const int ncf = nU.ncomp();
+  // Parent REPARTI (grossier de-replique) : par.fab ne contient que les boites LOCALES, donc
+  // mf_find_box renverrait -1 pour une cellule grossiere possedee par un rang DISTANT et le patch
+  // resterait non initialise la. On amene les regions parentes necessaires sur une grille
+  // enfant-coarsen LOCALE (coarsen du BoxArray fin) par parallel_copy, puis on interpole depuis
+  // elle. Parent replique : par est entierement local, lecture directe via mf_find_box (no-op,
+  // bit-identique a l'historique mono-box/replique).
+  const bool par_replicated = (pk != 0) || coarse_replicated;
+  MultiFab parloc;
+  if (!par_replicated) {
+    parloc = MultiFab(coarsen(nU.box_array(), 2), nU.dmap(), par.ncomp(), 0);
+    parallel_copy(parloc, par);
+    // parallel_copy lance des kernels de copie ASYNC sous Cuda et, a np=1, retourne SANS fence
+    // (la barriere interne n'est sur le chemin que pour np>1). Sans ce fence, la lecture de parloc
+    // ci-dessous lirait de la memoire device non encore ecrite -> NaN (vu sur GH200 np=1 reparti).
+    device_fence();
+  }
   for (int li = 0; li < nU.local_size(); ++li) {
     Array4 a = nU.fab(li).array();
     const Box2D nb = nU.box(li);
-    for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)  // 1) interp depuis le parent
-      for (int i = nb.lo[0]; i <= nb.hi[0]; ++i) {
-        const int pb = mf_find_box(par, coarsen_index(i, 2), coarsen_index(j, 2));
-        if (pb < 0) continue;
-        const ConstArray4 pp = par.fab(pb).const_array();
-        for (int k = 0; k < ncf; ++k) a(i, j, k) = pp(coarsen_index(i, 2), coarsen_index(j, 2), k);
-      }
+    if (par_replicated) {
+      for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)  // 1) interp depuis le parent (local)
+        for (int i = nb.lo[0]; i <= nb.hi[0]; ++i) {
+          const int pb = mf_find_box(par, coarsen_index(i, 2), coarsen_index(j, 2));
+          if (pb < 0) continue;
+          const ConstArray4 pp = par.fab(pb).const_array();
+          for (int k = 0; k < ncf; ++k)
+            a(i, j, k) = pp(coarsen_index(i, 2), coarsen_index(j, 2), k);
+        }
+    } else {
+      const ConstArray4 pp = parloc.fab(li).const_array();  // grille enfant-coarsen locale
+      for (int j = nb.lo[1]; j <= nb.hi[1]; ++j)
+        for (int i = nb.lo[0]; i <= nb.hi[0]; ++i)
+          for (int k = 0; k < ncf; ++k)
+            a(i, j, k) = pp(coarsen_index(i, 2), coarsen_index(j, 2), k);
+    }
     for (int ol = 0; ol < old.local_size(); ++ol) {  // 2) report des donnees fines
       const ConstArray4 o = old.fab(ol).const_array();
       const Box2D inter = nb.intersect(old.box(ol));

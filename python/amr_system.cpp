@@ -91,52 +91,7 @@ struct AmrSystem::Impl {
   }
 
   void write_coarse(MultiFab& U, const std::vector<double>& rho) {
-    const int n = cfg.n;
-    if (static_cast<int>(rho.size()) != n * n)
-      throw std::runtime_error("AmrSystem::set_density : taille != n*n");
-    const Real gm1 = Real(gamma) - Real(1);
-    Array4 u = U.fab(0).array();
-    const Box2D v = U.box(0);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        const Real r = rho[static_cast<std::size_t>(j) * n + i];
-        u(i, j, 0) = r;
-        if (ncomp >= 3) { u(i, j, 1) = 0; u(i, j, 2) = 0; }
-        if (ncomp == 4) u(i, j, 3) = r / gm1;
-      }
-  }
-
-  static std::vector<double> read_coarse(const MultiFab& U) {
-    device_fence();
-    const ConstArray4 u = U.fab(0).const_array();
-    const Box2D v = U.box(0);
-    std::vector<double> out;
-    out.reserve(static_cast<std::size_t>(v.nx()) * v.ny());
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, 0));
-    return out;
-  }
-
-  // Injecte le grossier (mono-box) dans les cellules valides d'un patch fin (constant par
-  // morceaux, ratio 2). Rend la hierarchie COHERENTE avant le premier sync_down : le patch
-  // seed est cree a 0 ; sans cette injection, update()->sync_down() moyennerait ces zeros
-  // sur le grossier et y creuserait un trou (densite nulle -> pression/celerite NaN pour un
-  // transport Euler ; pour un scalaire le trou passe inapercu mais fausse le grossier).
-  // Idempotent vis-a-vis du reflux : la moyenne fin->grossier de 4 cellules egales redonne
-  // exactement la valeur grossiere.
-  static void inject_coarse_to_fine(const MultiFab& Uc, MultiFab& Uf) {
-    device_fence();
-    const int nc = Uf.ncomp();
-    const ConstArray4 c = Uc.fab(0).const_array();
-    for (int li = 0; li < Uf.local_size(); ++li) {
-      Array4 f = Uf.fab(li).array();
-      const Box2D v = Uf.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
-          for (int k = 0; k < nc; ++k) f(i, j, k) = c(ci, cj, k);
-        }
-    }
+    detail::coupler_write_coarse(U, rho, cfg.n, ncomp, gamma);
   }
 
   // Construit le coupleur AMR pour un Model compose + (Limiter, Flux) concrets et cable les
@@ -147,19 +102,19 @@ struct AmrSystem::Impl {
     const int nc = Model::n_vars;
     const Geometry g = geom();
     const double dxc = cfg.L / cfg.n, dxf = dxc / 2;
-    // Niveau 0 (grossier mono-box) REPLIQUE sur tous les rangs : defaut de AmrCouplerMP
-    // (replicated_coarse=true) et layout interne de GeometricMG (dmap = my_rank() partout). En
-    // round-robin DistributionMapping(1, n_ranks()) la box ne vivrait que sur le rang 0 -> fab(0)
-    // hors bornes ailleurs (segfault sous np>1). Serie my_rank()=0 : identique, bit a bit. Le seed
-    // fin part replique ; le regrid initial le repartit (round-robin) sur les rangs -> AMR distribue.
-    const DistributionMapping dm(std::vector<int>{my_rank()});
+    // Niveau 0 (grossier) : layout decide par la politique d'ownership (replique mono-box par
+    // defaut, multi-box reparti si distribute_coarse). En replique, dmap = my_rank() partout
+    // (la box vit sur chaque rang) ; un round-robin DistributionMapping(1, n_ranks()) la poserait
+    // sur le seul rang 0 -> fab hors bornes ailleurs (segfault sous np>1). Le seed fin part sur
+    // la MEME dmap que le grossier ; le regrid initial le RECONSTRUIT et le repartit round-robin.
+    const auto [bac, dm] = detail::coupler_make_coarse_layout(cfg.n, cfg.distribute_coarse,
+                                                              cfg.coarse_max_grid);
     // Largeur de ghost = stencil de reconstruction du limiteur : 1 (NoSlope) ou 2 (Minmod /
     // VanLeer, MUSCL ordre 2). Figer 1 (l'historique, ne testant que le scalaire diocotron en
     // NoSlope) lisait HORS BORNES le 2e ghost en minmod/vanleer : tolere en conservatif (octets
     // adjacents finis), mais NaN en primitif (to_primitive divise par un rho parasite). C'est la
     // largeur que System alloue ; indispensable a la PARITE du schema reconstruit, pas un confort.
     const int ng = L::n_ghost;
-    BoxArray bac(std::vector<Box2D>{Box2D::from_extents(cfg.n, cfg.n)});
     MultiFab Uc(bac, dm, nc, ng);
     Uc.set_val(Real(0));
     const int I0 = cfg.n / 4, I1 = 3 * cfg.n / 4 - 1, J0 = cfg.n / 4, J1 = 3 * cfg.n / 4 - 1;
@@ -172,13 +127,14 @@ struct AmrSystem::Impl {
     levels.push_back({std::move(Uf), nullptr, dxf, dxf});
 
     auto cpl = std::make_shared<Coupler>(model, g, bac, poisson_bc(), std::move(levels),
-                                         wall_active());
+                                         wall_active(), !cfg.distribute_coarse);
     coupler_holder = cpl;
     if (has_density) write_coarse(cpl->coarse(), pending_density);
     // Coherence de la hierarchie AVANT regrid/sync : remplir les patchs fins depuis le
     // grossier (le seed est a 0, sinon sync_down creuserait le grossier -> NaN Euler).
     auto& Lv = cpl->levels();
-    for (std::size_t k = 1; k < Lv.size(); ++k) inject_coarse_to_fine(cpl->coarse(), Lv[k].U);
+    for (std::size_t k = 1; k < Lv.size(); ++k)
+      detail::coupler_inject_coarse_to_fine_mb(cpl->coarse(), Lv[k].U, !cfg.distribute_coarse);
 
     const double thr = refine_threshold;
     auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
@@ -202,7 +158,11 @@ struct AmrSystem::Impl {
       auto& Lv = cpl->levels();
       return Lv.size() >= 2 ? static_cast<int>(Lv[1].U.box_array().size()) : 0;
     };
-    density_fn = [cpl] { return read_coarse(cpl->coarse()); };
+    const int nn = cfg.n;
+    const bool repl = !cfg.distribute_coarse;
+    density_fn = [cpl, nn, repl] {
+      return detail::coupler_read_coarse(cpl->coarse(), nn, repl);
+    };
     built = true;
   }
 
@@ -256,6 +216,8 @@ struct AmrSystem::Impl {
       bp.wall = wall_active();
       bp.has_density = has_density;
       bp.density = pending_density;
+      bp.distribute_coarse = cfg.distribute_coarse;
+      bp.coarse_max_grid = cfg.coarse_max_grid;
       AmrCompiledHooks h = compiled_builder(bp);
       compiled_holder = std::move(h.coupler_holder);
       step_fn = std::move(h.step);

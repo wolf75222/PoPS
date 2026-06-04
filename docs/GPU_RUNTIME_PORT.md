@@ -160,6 +160,69 @@ pas une reecriture des noyaux de calcul.
    les memes invariants : `crossrank_spread=0`, conservation, parite au nb de rangs) ; harness GPU
    `python/tests/gpu/{amrmpi_integrated.cpp, amrmpi_CMakeLists.txt, amrmpi_romeo_build.sh}`.
 
+11. **Strong-scaling AMR : grossier REPARTI cable dans AmrSystem.** ⚠️ FAIT (cable + correct sur
+    GH200) mais NE SCALE PAS (resultat NEGATIF, chiffre, honnete). Le verrou perf de la phase 10
+    etait que le grossier REPLIQUE rend le Poisson + le transport grossiers redondants sur chaque
+    GPU. Le mode SCALABLE (`replicated_coarse=false`, grossier multi-box reparti) existait dans
+    `AmrCouplerMP` mais n'etait pas CABLE dans `AmrSystem`. Cable ici : `AmrSystemConfig::distribute_coarse`
+    (+ `coarse_max_grid`) -> les deux chemins de build (natif `AmrSystem::Impl::build` et compile
+    `amr_dsl_block::build_amr_compiled`) construisent le niveau 0 en `BoxArray::from_domain(dom, n/2)`
+    (2x2) REPARTI round-robin et passent `replicated_coarse=false` au coupleur, au `GeometricMG` et a
+    `advance_amr`. Helpers de grossier centralises (`detail::coupler_{make_coarse_layout,write_coarse,
+    read_coarse,inject_coarse_to_fine_mb}`, amr_coupler_mp.hpp) multi-box + distribution-aware
+    (lecture/ecriture par boites GLOBALES, reconstruction `density()` n*n par `all_reduce_sum_inplace`
+    sur les boites disjointes). Le regrid Berger-Rigoutsos a ete rendu MPI-correct pour un grossier
+    reparti : `tag_cells` ne voit que les boites locales -> OU global des tags (`all_reduce_or_inplace`,
+    nouveau collectif) avant le clustering, sinon la BoxArray fine differerait par rang ; et le
+    remplissage des nouveaux patchs depuis le parent passe par `parallel_copy` quand le parent est
+    reparti (au lieu de `mf_find_box`, qui ne voit pas les boites distantes).
+    - **CORRECTION (host CI, Kokkos Serial) : grossier reparti == replique BIT A BIT.** Test de
+      regression `tests/test_mpi_amr_distributed_coarse.cpp` (np=1/2/4) : meme cas 4 bulles
+      euler_poisson, le reparti compare a l'oracle replique dans le MEME binaire ->
+      `dist_vs_repl_dmax = 0.00e+00`, `cmax_crossrank_spread = 0`, masse conservee a ~1e-15. Le MG
+      CONVERGE sur le grossier 2x2 (champ fini, non trivial, identique au mono-box).
+    - **CONVERGENCE MG mesuree (mono-box vs multi-box, MMS).** Diagnostic local (Dirichlet + pic
+      gaussien decentre, critere 1e-9) : 2x2 converge en AUTANT de cycles que le mono-box (7-8 a
+      n=64/128/256, residus identiques), 4x4 +0/+1 cycle, 8x8 degrade nettement (~13-14 cycles,
+      ~1.75x). DONC le 2x2 (defaut, et le seul decoupage utile jusqu'a 4 rangs) NE degrade PAS le
+      multigrille ; la degenerescence annoncee n'apparait qu'a decoupage agressif (>=8x8). C'est
+      pourquoi `coarse_max_grid` defaut = n/2.
+    - **CORRECTION (GH200, Kokkos Cuda, srun -n 1/2/4 --gpus-per-task=1).** np=2 et np=4 reparti :
+      `csum`/`csumsq`/`cmax` BIT-IDENTIQUES au replique, masse conservee a 2.2e-16, `cmax` bit-identique
+      cross-rang. Un BUG DEVICE a ete trouve+corrige au passage : `parallel_copy` lance des kernels de
+      copie ASYNC sous Cuda et, a np=1, RETOURNE SANS fence (la barriere interne n'est que sur le
+      chemin np>1) ; le remplissage parent du regrid lisait alors `parloc` (memoire device fraiche)
+      avant la fin de la copie -> NaN a np=1 reparti UNIQUEMENT sur Cuda (host Serial: `dmax=0`).
+      Corrige par un `device_fence()` apres ce `parallel_copy` (amr_regrid_coupler.hpp).
+    - **SCALING (per_step_ms, max sur les rangs, n=128, 40 pas mesures, 1 noeud GH200) -- NEGATIF :**
+
+      | np | REPLIQUE (defaut) | REPARTI (2x2) |
+      |----|-------------------|---------------|
+      | 1  | 222 ms            | 705 ms        |
+      | 2  | 269 ms            | 999 ms        |
+      | 4  | 278 ms            | 1403 ms       |
+
+      Run complet refait apres le fix device-fence (np=1 reparti mesure : pas de NaN, dm=2.2e-16,
+      cmax bit-identique cross-rang aux 6 points). Le grossier reparti est ~3.7x (np=2) a ~5.0x
+      (np=4) PLUS LENT que le replique, et EMPIRE avec le nombre de rangs (705 -> 999 -> 1403 ms).
+      Le strong-scaling N'EST PAS atteint. RAISON, honnete : a
+      cette taille (grossier 128^2) le compute grossier est trivial, mais le `GeometricMG` multi-box
+      echange des halos `fill_boundary` entre boites grossieres a CHAQUE niveau de chaque V-cycle (~7
+      niveaux), CROSS-RANG sous MPI, et le pas AMR ajoute `parallel_copy` (inject aux, reflux, regrid)
+      device-to-device via UCX. Ce trafic de LATENCE domine largement le compute economise. Distribuer
+      un grossier deja petit ECHANGE du compute redondant bon marche contre de la communication chere.
+    - **RECO (honnete).** Le cablage est PROPRE, correct et bit-identique au replique (mergeable comme
+      OPTION, defaut inchange), mais le strong-scaling AMR par grossier reparti n'est PAS rentable a
+      cette echelle. Chemins realistes pour un vrai scaling, non faits ici : (a) grossier reparti
+      seulement quand sa MEMOIRE est le verrou (tres grand NX*NY), pas son temps ; (b) MG HYBRIDE :
+      multigrille distribue sur les niveaux fins du grossier mais bottom-solve sur un grossier
+      RASSEMBLE (gather sur 1 rang) au lieu d'un GS multi-box cross-rang par niveau ; (c) reduire le
+      trafic (halos GPUDirect, agglomeration des `parallel_copy`). En l'etat, GARDER le replique par
+      defaut (rapide, bit-identique, valide phase 10) et n'activer `distribute_coarse` que comme
+      echappatoire memoire. Cable + test de regression CI (`test_mpi_amr_distributed_coarse`, np=1/2/4
+      Serial) + harness GH200 (`amrmpi_integrated` mesure replique ET reparti) ; resultat de perf
+      documente ici comme NEGATIF chiffre.
+
 ## Validation device des features post-#48 (round 2)
 
 La CI ne joue que Release / Python / MPI / Kokkos SERIAL (CPU). Plusieurs briques fusionnees sur

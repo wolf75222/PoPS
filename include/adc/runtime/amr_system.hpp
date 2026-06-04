@@ -26,6 +26,19 @@ struct AmrSystemConfig {
   double L = 1.0;         ///< taille du domaine carre [0,L]^2
   int regrid_every = 20;  ///< re-raffinement tous les N pas (0 = jamais apres l'init)
   bool periodic = true;   ///< domaine periodique
+  /// POLITIQUE D'OWNERSHIP du niveau grossier (cf. AmrCouplerMP::replicated_coarse).
+  /// false (DEFAUT, historique) : grossier mono-box REPLIQUE sur tous les rangs. Le Poisson
+  ///   grossier et le transport grossier sont REDONDANTS sur chaque GPU (zero communication,
+  ///   meilleur MG geometrique) mais NE SCALENT PAS : seuls les patchs fins se repartissent.
+  /// true (mode strong-scaling) : grossier MULTI-BOX (BoxArray::from_domain, taille de tuile
+  ///   coarse_max_grid) REPARTI round-robin sur les rangs. Le Poisson grossier et le transport
+  ///   grossier se distribuent (chaque rang ne porte que ses tuiles), ce qui leve la redondance
+  ///   et permet le strong-scaling AMR. Le MG geometrique opere alors sur un grossier multi-box
+  ///   (cf. geometric_mg.hpp) : convergence a mesurer (peut demander plus de cycles).
+  bool distribute_coarse = false;
+  /// Taille de tuile du grossier quand distribute_coarse=true (BoxArray::from_domain). 0 => n/2
+  /// (decoupage minimal 2x2, le moins agressif pour le MG). Ignore si distribute_coarse=false.
+  int coarse_max_grid = 0;
 };
 
 /// Parametres figes passes au build differe du chemin compile (add_compiled_model). Materialises
@@ -43,6 +56,8 @@ struct AmrBuildParams {
   std::function<bool(Real, Real)> wall;  ///< predicat paroi conductrice (vide = aucune)
   bool has_density = false;
   std::vector<double> density;        ///< densite initiale grossiere (composante 0), n*n
+  bool distribute_coarse = false;     ///< grossier multi-box reparti (strong-scaling AMR)
+  int coarse_max_grid = 0;            ///< taille de tuile du grossier reparti (0 => n/2)
 };
 
 /// Fermetures type-erased d'un bloc AMR compile, produites par amr_dsl_block::build_amr_compiled et

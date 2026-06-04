@@ -82,6 +82,17 @@ inline long all_reduce_sum(long x) {
   return r;
 }
 
+// OU logique element par element d'un tableau de marqueurs (0/1), en place, sur tous les rangs.
+// Brique du regrid AMR a GROSSIER REPARTI : chaque rang ne tague QUE ses boites grossieres
+// locales (tag_cells iterant sur local_size()), donc personne ne voit la grille de tags complete ;
+// l'OU global rassemble les tags sur chaque rang avant le clustering Berger-Rigoutsos, qui produit
+// alors des patchs fins IDENTIQUES partout (sinon la BoxArray fine differerait par rang -> MPI
+// desynchronise). Cf. la note de tag_box.hpp ("les tags repartis seront rassembles avant clustering").
+inline void all_reduce_or_inplace(char* buf, int n) {
+  if (!comm_active() || n <= 0) return;
+  MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_CHAR, MPI_BOR, MPI_COMM_WORLD);
+}
+
 #else  // ----- serie -----
 
 inline bool comm_active() { return false; }
@@ -94,6 +105,7 @@ inline double all_reduce_sum(double x) { return x; }
 inline double all_reduce_max(double x) { return x; }
 inline long all_reduce_sum(long x) { return x; }
 inline void all_reduce_sum_inplace(double*, int) {}  // serie : identite
+inline void all_reduce_or_inplace(char*, int) {}     // serie : identite
 
 #endif
 

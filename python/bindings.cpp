@@ -175,7 +175,9 @@ PYBIND11_MODULE(_adc, m) {
       .def_readwrite("n", &AmrSystemConfig::n)
       .def_readwrite("L", &AmrSystemConfig::L)
       .def_readwrite("regrid_every", &AmrSystemConfig::regrid_every)
-      .def_readwrite("periodic", &AmrSystemConfig::periodic);
+      .def_readwrite("periodic", &AmrSystemConfig::periodic)
+      .def_readwrite("distribute_coarse", &AmrSystemConfig::distribute_coarse)
+      .def_readwrite("coarse_max_grid", &AmrSystemConfig::coarse_max_grid);
 
   py::class_<AmrSystem>(m, "AmrSystem")
       .def(py::init<const AmrSystemConfig&>())

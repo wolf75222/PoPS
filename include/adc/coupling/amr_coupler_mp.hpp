@@ -10,6 +10,7 @@
 #include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP, amr_step_multilevel_multipatch, mf_*_mb
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
+#include <adc/mesh/distribution_mapping.hpp>
 #include <adc/mesh/fill_boundary.hpp>
 #include <adc/mesh/for_each.hpp>
 #include <adc/mesh/geometry.hpp>
@@ -20,8 +21,10 @@
 
 #include <algorithm>   // std::max
 #include <cmath>       // std::hypot
+#include <cstddef>     // std::size_t
 #include <functional>  // std::function (predicat de paroi conductrice passe au MG)
-#include <utility>
+#include <stdexcept>   // std::runtime_error (garde de taille densite)
+#include <utility>     // std::pair, std::move
 #include <vector>
 
 // Coupleur AMR E x B MULTI-PATCH : meme role qu'AmrCoupler (Poisson grossier -> aux =
@@ -91,6 +94,111 @@ inline void coupler_inject_aux_mb(const MultiFab& parent, MultiFab& child,
       }
   }
 }
+// Ecrit une densite initiale (composante 0, n*n row-major en indices GLOBAUX) sur le niveau
+// grossier, MULTI-BOX et DISTRIBUTION-AWARE : chaque rang ne touche que ses fabs LOCAUX et lit
+// rho a l'indice GLOBAL (i,j) de la cellule. Pour Euler (ncomp 4) pose aussi qty de mouvement
+// nulle + energie thermique r/(gamma-1) ; ncomp 1 ne touche que la densite. Mono-box replique :
+// un seul fab couvrant le domaine, indices globaux == locaux -> bit-identique a l'ecriture directe
+// historique. Multi-box reparti : chaque box locale lit sa fenetre de rho.
+inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, int n, int ncomp,
+                                 double gamma) {
+  if (static_cast<int>(rho.size()) != n * n)
+    throw std::runtime_error("AMR coupler : densite initiale de taille != n*n");
+  const Real gm1 = Real(gamma) - Real(1);
+  device_fence();
+  for (int li = 0; li < U.local_size(); ++li) {
+    Array4 u = U.fab(li).array();
+    const Box2D v = U.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+        const Real r = rho[static_cast<std::size_t>(j) * n + i];
+        u(i, j, 0) = r;
+        if (ncomp >= 3) { u(i, j, 1) = 0; u(i, j, 2) = 0; }
+        if (ncomp == 4) u(i, j, 3) = r / gm1;
+      }
+  }
+}
+
+// Lit la densite grossiere (composante 0) en un champ n*n row-major GLOBAL, MULTI-BOX et
+// DISTRIBUTION-AWARE. Chaque rang ecrit ses cellules locales dans un buffer n*n initialise a 0
+// puis, si reparti, all_reduce_sum_inplace recompose le champ complet sur TOUS les rangs (les
+// boites sont disjointes -> la somme cross-rang reconstruit exactement le champ). Mono-box
+// replique : un seul fab couvre tout, le buffer est deja complet, all_reduce serait l'identite
+// -> on l'evite (bit-identique a la lecture directe historique fab(0)).
+inline std::vector<double> coupler_read_coarse(const MultiFab& U, int n, bool replicated) {
+  device_fence();
+  std::vector<double> out(static_cast<std::size_t>(n) * n, 0.0);
+  for (int li = 0; li < U.local_size(); ++li) {
+    const ConstArray4 u = U.fab(li).const_array();
+    const Box2D v = U.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        out[static_cast<std::size_t>(j) * n + i] = u(i, j, 0);
+  }
+  if (!replicated) all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+  return out;
+}
+
+// Injecte le grossier dans les cellules valides d'un patch fin (constant par morceaux, ratio 2),
+// MULTI-BOX et DISTRIBUTION-AWARE. Rend la hierarchie coherente avant le premier sync_down (le
+// patch seed est a 0). Mono-box replique : grossier entierement local, lecture directe via
+// mf_find_box (toujours trouve) ; aucune collective -> bit-identique a l'historique fab(0).
+// Multi-box reparti : on amene les regions grossieres necessaires sur une grille enfant-coarsen
+// LOCALE par parallel_copy (meme schema que coupler_inject_aux_mb), puis on injecte.
+inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf, bool replicated) {
+  const int nc = Uf.ncomp();
+  if (replicated) {
+    device_fence();
+    for (int li = 0; li < Uf.local_size(); ++li) {
+      Array4 f = Uf.fab(li).array();
+      const Box2D v = Uf.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+          const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
+          const int pb = mf_find_box(Uc, ci, cj);
+          if (pb < 0) continue;
+          const ConstArray4 c = Uc.fab(pb).const_array();
+          for (int k = 0; k < nc; ++k) f(i, j, k) = c(ci, cj, k);
+        }
+    }
+    return;
+  }
+  const BoxArray ccoarse = coarsen(Uf.box_array(), 2);  // empreinte grossiere (cellules valides)
+  MultiFab Pc(ccoarse, Uf.dmap(), Uc.ncomp(), 0);
+  parallel_copy(Pc, Uc);  // regions grossieres (depuis n'importe quel rang) -> grille locale
+  device_fence();
+  for (int li = 0; li < Uf.local_size(); ++li) {
+    Array4 f = Uf.fab(li).array();
+    const ConstArray4 c = Pc.fab(li).const_array();
+    const Box2D v = Uf.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+        const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
+        for (int k = 0; k < nc; ++k) f(i, j, k) = c(ci, cj, k);
+      }
+  }
+}
+
+// Construit le niveau grossier (BoxArray + DistributionMapping) du chemin AmrSystem selon la
+// politique d'ownership, en un SEUL point pour les deux chemins de build (natif + compile) :
+//  - replique (distribute=false, DEFAUT) : mono-box couvrant le domaine, dmap = my_rank() partout
+//    (la box vit sur chaque rang). En serie my_rank()=0 -> identique au round-robin, bit a bit.
+//    C'est le layout qu'attend GeometricMG(replicated=true) et l'historique.
+//  - reparti (distribute=true) : multi-box BoxArray::from_domain(dom, max_grid) reparti round-robin
+//    DistributionMapping(ba.size(), n_ranks()). Chaque rang ne porte que ses tuiles -> le Poisson
+//    grossier et le transport grossier se distribuent (strong-scaling). max_grid<=0 => n/2 (2x2).
+inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(int n, bool distribute,
+                                                                           int max_grid) {
+  const Box2D dom = Box2D::from_extents(n, n);
+  if (!distribute) {
+    BoxArray ba(std::vector<Box2D>{dom});
+    return {ba, DistributionMapping(std::vector<int>{my_rank()})};
+  }
+  const int mg = (max_grid > 0) ? max_grid : (n / 2 > 0 ? n / 2 : n);
+  BoxArray ba = BoxArray::from_domain(dom, mg);
+  return {ba, DistributionMapping(ba.size(), n_ranks())};
+}
+
 }  // namespace detail
 
 template <class Model, class Elliptic = GeometricMG>
@@ -185,7 +293,7 @@ class AmrCouplerMP {
   template <class Crit>
   void regrid(Crit crit, int grow = 2, int margin = 2) {
     amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin,
-                      aux_comps<Model>());
+                      aux_comps<Model>(), replicated_coarse_);
   }
 
   // masse grossiere via le diagnostic partage amr_mass_mb (mono-box replique comme
