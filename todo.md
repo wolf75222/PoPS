@@ -81,11 +81,14 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
 - [~] **B_z multi-box distribue multi-GPU (#59)** : FONCTIONNEL sur device (B_z par boite/niveau lu,
       `bz_bad=0`, `cmax` bit-identique `dcmax=0`) mais PAS bit-identique sur les sommes globales
       (`dmass~1e-15`, `dcsum~3e-13`) -- effet d'ORDRE DE REDUCTION FMA (grossier reparti). Pas un bug.
-- [ ] **Limites device connues** (a lever) : (a) `System::add_compiled_model` SEGFAUTE sur Cuda
-      (les KERNELS make_block sont device-clean, mais leur enveloppe std::function/lambda etendue dans
-      `dsl_block.hpp` ne l'est pas) -> facade compile = CPU/Serial seul ; (b) la facade
-      `AmrSystemCoupler` ne s'instancie pas sous nvcc (concept `requires for_each_block`) -> chemin
-      device de B_z-AMR valide via `advance_amr`, facade en CI Serial.
+- [x] **Limite device (a) LEVEE** : `System::add_compiled_model` est device-clean sur Cuda. Les
+      fermetures d'enveloppe de `block_builder.hpp` (`BlockRhsEval`, `Advance*`, `RhsInto`, `MaxSpeed`,
+      `PoissonRhs`) sont passees de lambdas etendues a des FONCTEURS NOMMES (meme recette que les
+      kernels) -> plus de segfault Cuda, parite A==B bit-identique sur GH200 (`dres=0`, exit 0 ;
+      avant : SIGSEGV exit 139). Modeles DSL compiles utilisables sur GPU via la facade `System`. (#64)
+- [ ] **Limite device (b)** : la facade `AmrSystemCoupler` ne s'instancie pas sous nvcc (concept
+      `requires for_each_block`) -> chemin device de B_z-AMR valide via `advance_amr`, facade en CI
+      Serial. (memes foncteurs nommes a appliquer a la facade, comme (a))
 - [ ] **Perf full-device** : le run integre NE SCALE PAS (grossier REPLIQUE -> Poisson/transport
       grossier redondants par GPU ; seuls les patchs fins se repartissent). Mode `replicated_coarse=false`
       (grossier reparti) existe dans `AmrCouplerMP` mais degrade le MG et n'est pas cable dans `AmrSystem` :
