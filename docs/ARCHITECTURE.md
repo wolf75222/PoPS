@@ -99,7 +99,10 @@ briques generiques, les noms de scenario (diocotron, Euler-Poisson...) vivant co
 Deux chemins de couplage coexistent sous le MEME operateur spatial, sans specialisation : la
 derive E x B exerce le chemin **aux vers flux** (le potentiel entre par le flux `ExB`) ;
 Euler-Poisson le chemin **aux vers source** (le potentiel entre par `PotentialForce`/`GravityForce`,
-le flux reste celui d'Euler). `aux` reste FIGE (`phi`, `grad_x`, `grad_y`), non extensible.
+le flux reste celui d'Euler). Le canal `aux` a un contrat de BASE `(phi, grad_x, grad_y)` mais est
+desormais EXTENSIBLE : `load_aux<NComp>` / `aux_comps<Model>()` lisent des composantes supplementaires
+si le modele declare `n_aux` (`B_z` comp 3 fourni, `T_e` comp 4 derive p/rho) ; `n_aux=3` (defaut)
+reste strictement bit-identique a l'historique.
 
 **Etendre : hypotheses et limite.** Ajouter un modele est simple S'IL rentre dans la famille
 hyperbolique-elliptique LOCALE prevue. La promesse implicite (un nouveau modele marche partout)
@@ -241,14 +244,13 @@ l'arrondi inchangees).
 | `physics/` | physique | briques generiques (`bricks`, `composite`), `euler`, `hyperbolic` (iso), `source`, `elliptic`, `langmuir`, `advection_diffusion` |
 | `numerics/` | numerique | `numerical_flux` (Rusanov/HLL/HLLC/Roe), `reconstruction` (MUSCL + WENO5-Z), `spatial_operator` (`assemble_rhs`), `spatial_discretisation` |
 | `numerics/elliptic/` | numerique + temps | concept `EllipticSolver` ; `geometric_mg` (V-cycle, eps(x)) ; `poisson_fft`(+`_solver`) ; `poisson_operator` ; `elliptic_problem` |
-| `numerics/time/` | temps | `TimePolicy`, scheduler par sous-pas, SSPRK, `time_steppers`, `implicit_stepper`, IMEX, splitting, moteur AMR `advance_amr`, `two_fluid_ap` |
+| `numerics/time/` | temps | `TimePolicy`, scheduler par sous-pas, SSPRK, `time_steppers`, `implicit_stepper`, IMEX, splitting, moteur AMR `advance_amr` |
 | `mesh/` (donnees) | maillage / donnees | `box2d`, `box_array`, `distribution_mapping`, `fab2d`/`multifab`, `geometry`, `refinement`, `box_hash` |
 | `mesh/` (execution) | execution | `for_each` (seam `for_each_cell`), `fill_boundary` (GhostExchange), `physical_bc`, `mf_arith` (operateurs de grille qui bouclent le seam) |
 | `parallel/` | execution | `comm` (seam MPI), `load_balance` (Z-order + knapsack) |
 | `amr/` | maillage adaptatif | `amr_hierarchy` (conteneur de niveaux), `cluster` (Berger-Rigoutsos, arithmetique entiere), `regrid` (politique de remaillage), `tag_box` (grille de marqueurs) |
 | `coupling/` | temps / couplage | `elliptic_rhs`, `Coupler`, `SystemCoupler`, `coupling_policy`, `amr_coupler`, `amr_coupler_mp`, `amr_system_coupler`, `spectral_coupler`, diagnostics AMR |
-| `runtime/` | runtime / bindings | facades `System` / `AmrSystem`, `model_factory` / `model_spec`, `block_builder`, JIT/AOT du DSL (`dynamic_model`, `compiled_block_abi`, `dsl_block`) |
-| `solver/` | solveur specialise | `two_fluid_ap_solver` (integrateur AP sur mesure, en cours de sortie vers adc_cases) |
+| `runtime/` | runtime / bindings | facades `System` / `AmrSystem`, `model_factory` / `model_spec`, `block_builder`, JIT/AOT du DSL (`dynamic_model`, `compiled_block_abi`, `dsl_block`), `add_compiled_model` cote AmrSystem (`amr_dsl_block`) ; canal aux extensible (`ensure_aux_width`, `set_magnetic_field`, `set_electron_temperature_from`) |
 
 ## 7. Solveur elliptique : probleme / operateur / solveur / post-traitement
 
@@ -405,7 +407,7 @@ c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-te
 - `types.hpp` : scalaires de base (`Real`) + macro `ADC_HD` (delegue a `KOKKOS_FUNCTION` sous Kokkos).
 - `state.hpp` : `State` / `Aux`, les deux types ponctuels de la couche physique (POD device-callable).
 - `physical_model.hpp` : le concept `PhysicalModel` (contrat flux / source / max_wave_speed / elliptic_rhs).
-- `variables.hpp` : `VariableRole` + `VariableSet` (`index_of(role)`). EXISTE mais PAS encore utilise dans les couplages / le runtime / Python / le DSL (ceux-ci adressent encore `u[0..3]`).
+- `variables.hpp` : `VariableRole` + `VariableSet` (`index_of(role)`, `role_name`). UTILISE : les couplages inter-especes resolvent qte de mvt / densite par ROLE (fallback indices historiques), et le DSL emet les roles sur les briques generees ; chaque bloc porte son `VariableSet` (cons/prim).
 - `equation_block.hpp` : un bloc d'equation = nom, `MultiFab`, modele, discretisation spatiale, politique temps.
 - `coupled_system.hpp` : tuple type de plusieurs `EquationBlock`, iteration generique par bloc.
 - `kokkos_env.hpp` : initialisation paresseuse de Kokkos (avant toute allocation `SharedSpace`).
@@ -455,7 +457,7 @@ c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-te
 - `ssprk.hpp` : SSPRK2 / SSPRK3 (Shu-Osher, TVD).
 - `imex.hpp` : IMEX asymptotic-preserving (raide implicite + non-raide explicite).
 - `splitting.hpp` : splitting d'operateur Lie (ordre 1) / Strang (ordre 2).
-- `two_fluid_ap.hpp` : primitives du schema AP deux-fluides (en cours de sortie vers adc_cases).
+- (l'integrateur AP deux-fluides a quitte le coeur : il vit dans `adc_cases/two_fluid_ap/`, compile a la volee contre les en-tetes generiques.)
 - `amr_reflux_mf.hpp` : **moteur AMR de production** `advance_amr` (multi-patch N-niveaux distribue) + types `FluxRegister` / `CoverageMask` ; la pile mono-box `amr_*_mf` y vit en `detail::` (oracle de validation).
 - `amr_reflux.hpp` / `amr_multilevel.hpp` : reference Fab2D mono-box (2-niveaux / N-niveaux), verite-terrain du moteur ci-dessus.
 
@@ -480,10 +482,8 @@ c'est, et pourquoi il est la. Descriptions tirees du doc-comment de chaque en-te
 - `grid_context.hpp` : contexte de grille reel (maillage + CL + aux) partage par les chemins de bloc.
 - `dynamic_model.hpp` : modele type-erased a dispatch virtuel (`IModel`), charge en JIT via `.so`.
 - `compiled_block_abi.hpp` : ABI `extern "C"` du bloc compile (`add_compiled_block`, marshaling hote, sans AMR/MPI).
-- `dsl_block.hpp` : `add_compiled_model` (bloc compile NATIF connu a la compilation ; parite `add_block` validee CPU/Serial, limite nvcc sur GPU).
-
-### `solver/` : solveur specialise
-- `two_fluid_ap_solver.hpp` : integrateur AP deux-fluides sur mesure (hors API publique, en cours de sortie vers adc_cases).
+- `dsl_block.hpp` : `add_compiled_model` (bloc compile NATIF connu a la compilation ; parite `add_block` bit-identique, validee CPU/Serial ET sur device GH200 via foncteurs nommes A==B `dres=0`).
+- `amr_dsl_block.hpp` : `add_compiled_model` cote `AmrSystem` (pendant multi-niveau du chemin compile).
 
 ### `amr/` : maillage adaptatif
 - `amr_hierarchy.hpp` : `AmrHierarchy`, la pile de niveaux raffines (niveau 0 = grossier).

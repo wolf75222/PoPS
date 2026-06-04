@@ -28,8 +28,10 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
 - Cœur AGNOSTIQUE au modèle : aucun scénario nommé dans le cœur, seulement des briques
   génériques (état, transport, source, second membre elliptique) composées en `CompositeModel`
   par le `model_factory`. Les compositions nommées (diocotron, Euler-Poisson, deux-fluides...)
-  vivent côté application (`adc_cases`). Couplage par `aux = (phi, grad phi)`, `aux` FIGÉ
-  (non extensible pour l'instant).
+  vivent côté application (`adc_cases`). Couplage par le canal `aux` : contrat de base
+  `(phi, grad_x, grad_y)` (3 composantes), désormais EXTENSIBLE (`load_aux<NComp>`, `aux_comps<Model>()`)
+  pour des champs supplémentaires que le modèle déclare via `n_aux` : `B_z` (comp 3, fourni par
+  l'utilisateur) et `T_e` (comp 4, dérivé `p/rho` d'un bloc fluide). Rétro-compat bit-exacte si `n_aux=3`.
 - DSL symbolique au niveau PROTOTYPE, complet et testé : formules -> brique C++ (`emit_cpp_brick`)
   + source + second membre elliptique + CSE ; chemin JIT (`.so`, `IModel` virtuel,
   `System.add_dynamic_block`) ; chemin AOT (`compile_or_jit(mode="compile")`,
@@ -38,9 +40,10 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
   `test_compiled_model_parity`). Reconstruction MUSCL au choix (`none`/`minmod`/`vanleer`) pour
   le bloc dynamique.
 - Flux de Roe dans le cœur (`RusanovFlux` / `HLLFlux` / `HLLCFlux` / `RoeFlux`) ; opérateur
-  elliptique à permittivité VARIABLE `eps(x)` côté cœur (`GeometricMG::set_epsilon`, câblage
-  System/Python NON fait) ; `VariableSet` / `VariableRole` (présents mais PAS encore utilisés
-  dans les couplages / le runtime / Python / le DSL) ; réorganisation `physics/` + `numerics/`.
+  elliptique à permittivité VARIABLE `eps(x)` côté cœur (`GeometricMG::set_epsilon`) ET câblé
+  System/Python (`set_epsilon_field`), plus opérateur écranté/Helmholtz et anisotrope ; `VariableSet` /
+  `VariableRole` désormais UTILISÉS dans les couplages inter-espèces (`index_of(role)`) et émis par
+  le DSL sur les briques générées ; réorganisation `physics/` + `numerics/`.
 - Schéma AP deux-fluides (Lorentz implicite, Poisson reformulé `beta0`), dispersion isotrope
   validée (3.1%), borne AP à `omega_pe = 1e3`.
 - Continuité upwind MUSCL (anti-Gibbs) en option ; champ magnétique : push de Boris E+B
@@ -71,7 +74,9 @@ Liste vivante de ce qui est fait et de ce qui reste, par intention.
   ET GPU Cuda, sans CUDA écrit à la main). La CI joue 3 jobs : Release, MPI, Kokkos (Serial).
 - GPU GH200 : composants validés SÉPARÉMENT et bit-identiques au CPU (System mono-grille,
   ops de champ AMR, halos MPI multi-GPU, backend AOT d'un modèle DSL). Validation INTÉGRÉE
-  AmrSystem + MPI + GPU NON faite ; perf full-device à travailler. Cf. `docs/GPU_RUNTIME_PORT.md`.
+  AmrSystem + MPI + GPU désormais FAITE (un seul run, euler_poisson compilé sur AMR multi-patch
+  distribué, `exec=Cuda`, np=1/2/4 bit-identiques `dmax=0`, masse conservée). RESTE : la perf
+  full-device (le run intégré ne scale pas, grossier répliqué). Cf. `docs/GPU_RUNTIME_PORT.md`.
 - Validation numérique (au-delà du bit-identique) : ordre du Laplacien 5 points, ordre WENO5-Z
   (`test_weno_convergence`), discrétisations, IMEX/AP. Les ordres de convergence APPLICATIFS
   (tourbillon isentropique Euler, MUSCL/Rusanov, loi de Gauss du couplage, invariants diocotron)

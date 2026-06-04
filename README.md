@@ -41,8 +41,9 @@ D phi = f(U)
 ```
 
 ou la partie hyperbolique (U) et la partie elliptique (phi) sont couplees a chaque pas
-via `aux = (phi, grad phi)`. `aux` reste FIGE pour l'instant (`phi`, `grad_x`, `grad_y`),
-non extensible. Le coeur ne connait aucun modele : il fournit les contrats
+via le canal `aux`. Contrat de base `(phi, grad_x, grad_y)`, desormais EXTENSIBLE : un modele
+declare `n_aux` pour lire des champs supplementaires (`B_z` fourni, `T_e` derive p/rho d'un bloc
+fluide), avec retro-compat bit-exacte si `n_aux=3`. Le coeur ne connait aucun modele : il fournit les contrats
 (`PhysicalModel`, `EllipticSolver`), les operateurs, l'elliptique, les integrateurs, l'AMR
 et les seams de parallelisme. Les briques physiques (etat compressible/isotherme, flux d'Euler,
 flux Roe, source de potentiel/gravite, second membre de charge) vivent dans
@@ -264,9 +265,8 @@ include/adc/
   numerics/time/      SSP-RK, TimePolicy, scheduler, IMEX, splitting, moteur AMR
   coupling/     Coupler, SystemCoupler, AmrSystemCoupler, AmrCouplerMP, diagnostics
   amr/          clustering Berger-Rigoutsos, regrid, hierarchie
-  runtime/      facades System / AmrSystem, model_factory, JIT/AOT du DSL
-  solver/       integrateur specialise TwoFluidAP (en cours de sortie vers adc_cases)
-tests/          ~53 tests coeur (+ 7 tests MPI via mpirun)
+  runtime/      facades System / AmrSystem, model_factory, JIT/AOT du DSL, canal aux extensible
+tests/          ~66 tests coeur (+ 9 tests MPI via mpirun)
 docs/           ARCHITECTURE.md, ALGORITHMS.md, PERFORMANCE.md, validation diocotron
 ```
 
