@@ -72,6 +72,17 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       BIT-IDENTIQUES (csum identique a 17 chiffres, dmax=0), `crossrank_spread=0`, masse conservee
       (dm=0). Test de regression CPU/MPI `test_mpi_amr_compiled_parity` (CI) + harness GPU
       `python/tests/gpu/amrmpi_integrated.cpp`. Doc `docs/GPU_RUNTIME_PORT.md` (phase 10). (#48)
+- [x] **Validation device round 2** des features post-#48 (GH200, `exec=Cuda` vs oracle Serial,
+      `dmax` bit-a-bit) : T_e `load_aux<5>`, EPM Helmholtz, EPM anisotrope, B_z par niveau AMR ->
+      tous **`dmax=0`** ; harness `python/tests/gpu/gpu_{aux,epm,amr_bz}_validate.cpp`. (#61)
+- [~] **B_z multi-box distribue multi-GPU (#59)** : FONCTIONNEL sur device (B_z par boite/niveau lu,
+      `bz_bad=0`, `cmax` bit-identique `dcmax=0`) mais PAS bit-identique sur les sommes globales
+      (`dmass~1e-15`, `dcsum~3e-13`) -- effet d'ORDRE DE REDUCTION FMA (grossier reparti). Pas un bug.
+- [ ] **Limites device connues** (a lever) : (a) `System::add_compiled_model` SEGFAUTE sur Cuda
+      (les KERNELS make_block sont device-clean, mais leur enveloppe std::function/lambda etendue dans
+      `dsl_block.hpp` ne l'est pas) -> facade compile = CPU/Serial seul ; (b) la facade
+      `AmrSystemCoupler` ne s'instancie pas sous nvcc (concept `requires for_each_block`) -> chemin
+      device de B_z-AMR valide via `advance_amr`, facade en CI Serial.
 - [ ] **Perf full-device** : le run integre NE SCALE PAS (grossier REPLIQUE -> Poisson/transport
       grossier redondants par GPU ; seuls les patchs fins se repartissent). Mode `replicated_coarse=false`
       (grossier reparti) existe dans `AmrCouplerMP` mais degrade le MG et n'est pas cable dans `AmrSystem` :
