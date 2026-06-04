@@ -1,5 +1,11 @@
 #pragma once
 
+// DEPRECATED : AMR N-niveaux de reference sur Fab2D mono-box (struct AmrLevel,
+// recursion Berger-Oliger). Aucun #include dans le coeur, les tests ou les bindings
+// Python ; le moteur de production est amr_reflux_mf.hpp (pile MultiFab multi-patch),
+// dont le mono-box est le cas degenere. Conserve comme verite-terrain documentee
+// (docs/ARCHITECTURE.md). A retirer apres migration des references vers amr_reflux_mf.hpp.
+
 #include <adc/numerics/time/amr_reflux.hpp>
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/fab2d.hpp>

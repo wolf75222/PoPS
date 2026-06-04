@@ -1,5 +1,10 @@
 #pragma once
 
+// DEPRECATED : brique modele advection-diffusion scalaire (AdvectionDiffusion). Aucun
+// #include dans le coeur, les tests ou les bindings Python ; non instanciee. Conservee
+// car documentee comme brique de physique d'exemple (docs/ARCHITECTURE.md). A retirer
+// si aucun scenario (adc_cases) ne l'adopte.
+
 #include <adc/core/state.hpp>
 #include <adc/core/types.hpp>
 

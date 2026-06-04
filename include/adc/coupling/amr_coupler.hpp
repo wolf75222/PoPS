@@ -1,5 +1,11 @@
 #pragma once
 
+// DEPRECATED : coupleur AMR E x B mono-box (AmrCoupler). Aucun #include dans le coeur,
+// les tests ou les bindings Python ; remplace en production par AmrCouplerMP
+// (amr_coupler_mp.hpp), dont le mono-box est le cas degenere bit-identique. Conserve
+// car documente comme API publique (docs/ARCHITECTURE.md). A retirer apres migration
+// complete vers amr_coupler_mp.hpp.
+
 #include <adc/core/types.hpp>
 #include <adc/coupling/amr_diagnostics.hpp>  // amr_mass, amr_max_drift_speed
 #include <adc/coupling/amr_level_storage.hpp>  // AmrLevelStack

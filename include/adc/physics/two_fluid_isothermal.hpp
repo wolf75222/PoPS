@@ -1,5 +1,12 @@
 #pragma once
 
+// DEPRECATED : noyau lineaire deux-fluides isotherme (TwoFluidLinear), brique du schema
+// AP deux-fluides. Aucun #include dans le coeur, les tests ou les bindings Python.
+// L'integrateur AP deux-fluides a quitte le coeur et vit dans adc_cases/two_fluid_ap/
+// (compile a la volee contre les en-tetes generiques). Conservee car documentee comme
+// brique (docs/ARCHITECTURE.md). A retirer apres confirmation que two_fluid_ap n'en
+// depend plus.
+
 #include <adc/core/types.hpp>
 
 #include <cmath>

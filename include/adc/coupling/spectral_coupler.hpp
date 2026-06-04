@@ -1,5 +1,12 @@
 #pragma once
 
+// DEPRECATED : coupleur periodique distribue (FFT par bandes, SpectralCoupler). Aucun
+// #include dans le coeur, les tests ou les bindings Python. Le role est repris par
+// Coupler<Model, DistributedFFTSolver> (le solveur FFT distribue est devenu un
+// EllipticSolver autonome, cf. poisson_fft_solver.hpp). Conserve car documente comme
+// API publique (docs/ARCHITECTURE.md). A retirer apres migration vers
+// Coupler<Model, DistributedFFTSolver>.
+
 #include <adc/numerics/elliptic/poisson_fft_solver.hpp>  // DistributedFFTSolver (enveloppe PoissonFFT)
 #include <adc/numerics/time/amr_reflux.hpp>  // advance_fab_1c, xface_box, yface_box
 #include <adc/mesh/box2d.hpp>
