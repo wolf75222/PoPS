@@ -45,6 +45,16 @@
 // l'on retombe sur le Laplacien constant (a l'echelle eps pres). eps==nullptr
 // redonne EXACTEMENT le chemin historique (bit-identique).
 //
+// PERMITTIVITE ANISOTROPE optionnelle (eps_y) : second champ AU CENTRE des cellules
+// (memes conventions que eps : 1 composante, ghosts remplis). L'operateur passe de
+// div(eps grad phi) (eps scalaire) a div(diag(eps_x, eps_y) grad phi) : le coefficient
+// scalaire eps devient alors eps_x et porte UNIQUEMENT les faces NORMALES A X (exm, exp),
+// tandis que eps_y porte les faces NORMALES A Y (eym, eyp). Chaque face reste la moyenne
+// HARMONIQUE des deux centres adjacents de SON champ (eps_x pour x, eps_y pour y).
+// Cas d'usage : milieu/maillage anisotrope (permittivite tensorielle diagonale).
+// eps_y==nullptr => ISOTROPE : eps_y = eps (eps_x), donc faces x et y partagent le meme
+// champ, comportement actuel STRICTEMENT bit-identique. Le terme kappa est inchange.
+//
 // Combinaison cut-cell + eps : chaque poids de face Shortley-Weller est multiplie
 // par sa permittivite de face, et la diagonale est la somme des poids de face (eps
 // inclus). Avec eps uniforme=1 on retrouve les poids de face cut-cell d'origine.
@@ -64,7 +74,8 @@ ADC_HD inline Real eps_harmonic(Real ec, Real ev) {
 inline void apply_laplacian(const MultiFab& phi, const Geometry& geom,
                             MultiFab& lap, const MultiFab* coef = nullptr,
                             const MultiFab* eps = nullptr,
-                            const MultiFab* kappa = nullptr) {
+                            const MultiFab* kappa = nullptr,
+                            const MultiFab* eps_y = nullptr) {
   const Real idx2 = Real(1) / (geom.dx() * geom.dx());
   const Real idy2 = Real(1) / (geom.dy() * geom.dy());
   for (int li = 0; li < phi.local_size(); ++li) {
@@ -75,15 +86,18 @@ inline void apply_laplacian(const MultiFab& phi, const Geometry& geom,
     const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
     const bool he = eps != nullptr;
     const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
+    // eps_y==nullptr => isotrope : faces y lisent le meme champ que les faces x (eps_x).
+    const ConstArray4 ey = (he && eps_y) ? eps_y->fab(li).const_array() : ep;
     const bool hk = kappa != nullptr;  // terme de reaction -kappa phi
     const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
     for_each_cell(v, [=] ADC_HD(int i, int j) {
       if (he) {  // permittivite de face (harmonique), avec ou sans cut-cell
-        const Real ec = ep(i, j);
+        const Real ec = ep(i, j);    // eps_x au centre (faces x)
+        const Real ecy = ey(i, j);   // eps_y au centre (faces y) ; == ec en isotrope
         const Real exm = eps_harmonic(ec, ep(i - 1, j));
         const Real exp = eps_harmonic(ec, ep(i + 1, j));
-        const Real eym = eps_harmonic(ec, ep(i, j - 1));
-        const Real eyp = eps_harmonic(ec, ep(i, j + 1));
+        const Real eym = eps_harmonic(ecy, ey(i, j - 1));
+        const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
         Real wxm, wxp, wym, wyp;
         if (hc) {  // cut-cell : eps_face multiplie chaque poids Shortley-Weller
           wxm = cf(i, j, 0) * exm; wxp = cf(i, j, 1) * exp;
@@ -113,7 +127,8 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
                              MultiFab& res, const MultiFab* mask = nullptr,
                              const MultiFab* coef = nullptr,
                              const MultiFab* eps = nullptr,
-                             const MultiFab* kappa = nullptr) {
+                             const MultiFab* kappa = nullptr,
+                             const MultiFab* eps_y = nullptr) {
   device_fence();  // GPU : phi a pu etre ecrit par un kernel (lisseur) ; on
                    // attend avant la lecture hote de fill_ghosts.
   fill_ghosts(phi, geom.domain, bc);
@@ -130,6 +145,8 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
     const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
     const bool he = eps != nullptr;
     const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
+    // eps_y==nullptr => isotrope : faces y lisent le meme champ que les faces x (eps_x).
+    const ConstArray4 ey = (he && eps_y) ? eps_y->fab(li).const_array() : ep;
     const bool hk = kappa != nullptr;  // terme de reaction -kappa phi
     const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
     for_each_cell(v, [=] ADC_HD(int i, int j) {
@@ -139,11 +156,12 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
       }
       Real lap;
       if (he) {  // permittivite de face (harmonique), avec ou sans cut-cell
-        const Real ec = ep(i, j);
+        const Real ec = ep(i, j);    // eps_x au centre (faces x)
+        const Real ecy = ey(i, j);   // eps_y au centre (faces y) ; == ec en isotrope
         const Real exm = eps_harmonic(ec, ep(i - 1, j));
         const Real exp = eps_harmonic(ec, ep(i + 1, j));
-        const Real eym = eps_harmonic(ec, ep(i, j - 1));
-        const Real eyp = eps_harmonic(ec, ep(i, j + 1));
+        const Real eym = eps_harmonic(ecy, ey(i, j - 1));
+        const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
         Real wxm, wxp, wym, wyp;
         if (hc) {
           wxm = cf(i, j, 0) * exm; wxp = cf(i, j, 1) * exp;
@@ -170,7 +188,8 @@ inline void poisson_residual(MultiFab& phi, const MultiFab& f,
 namespace detail {
 inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
                      int color, const MultiFab* mask, const MultiFab* coef,
-                     const MultiFab* eps, const MultiFab* kappa = nullptr) {
+                     const MultiFab* eps, const MultiFab* kappa = nullptr,
+                     const MultiFab* eps_y = nullptr) {
   const Real idx2 = Real(1) / (geom.dx() * geom.dx());
   const Real idy2 = Real(1) / (geom.dy() * geom.dy());
   const Real diag0 = 2 * idx2 + 2 * idy2;
@@ -184,6 +203,8 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
     const ConstArray4 cf = hc ? coef->fab(li).const_array() : ConstArray4{};
     const bool he = eps != nullptr;
     const ConstArray4 ep = he ? eps->fab(li).const_array() : ConstArray4{};
+    // eps_y==nullptr => isotrope : faces y lisent le meme champ que les faces x (eps_x).
+    const ConstArray4 ey = (he && eps_y) ? eps_y->fab(li).const_array() : ep;
     const bool hk = kappa != nullptr;  // terme de reaction -kappa phi (Helmholtz / ecrante)
     const ConstArray4 ka = hk ? kappa->fab(li).const_array() : ConstArray4{};
     for_each_cell(v, [=] ADC_HD(int i, int j) {
@@ -191,11 +212,12 @@ inline void gs_color(MultiFab& phi, const MultiFab& f, const Geometry& geom,
       if (hm && mk(i, j) == Real(0)) return;  // conducteur : fige phi=0
       Real off, diag;
       if (he) {  // permittivite de face (harmonique), avec ou sans cut-cell
-        const Real ec = ep(i, j);
+        const Real ec = ep(i, j);    // eps_x au centre (faces x)
+        const Real ecy = ey(i, j);   // eps_y au centre (faces y) ; == ec en isotrope
         const Real exm = eps_harmonic(ec, ep(i - 1, j));
         const Real exp = eps_harmonic(ec, ep(i + 1, j));
-        const Real eym = eps_harmonic(ec, ep(i, j - 1));
-        const Real eyp = eps_harmonic(ec, ep(i, j + 1));
+        const Real eym = eps_harmonic(ecy, ey(i, j - 1));
+        const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
         Real wxm, wxp, wym, wyp;
         if (hc) {
           wxm = cf(i, j, 0) * exm; wxp = cf(i, j, 1) * exp;
@@ -228,20 +250,21 @@ inline void gs_rb_sweep(MultiFab& phi, const MultiFab& f, const Geometry& geom,
                         const BCRec& bc, const MultiFab* mask = nullptr,
                         const MultiFab* coef = nullptr,
                         const MultiFab* eps = nullptr,
-                        const MultiFab* kappa = nullptr) {
+                        const MultiFab* kappa = nullptr,
+                        const MultiFab* eps_y = nullptr) {
   device_fence();  // attend le kernel precedent avant la lecture hote des halos
   fill_ghosts(phi, geom.domain, bc);
-  detail::gs_color(phi, f, geom, 0, mask, coef, eps, kappa);  // rouge (kernel GPU)
+  detail::gs_color(phi, f, geom, 0, mask, coef, eps, kappa, eps_y);  // rouge (kernel GPU)
   device_fence();  // le balayage noir lit les valeurs rouges via fill_ghosts hote
   fill_ghosts(phi, geom.domain, bc);
-  detail::gs_color(phi, f, geom, 1, mask, coef, eps, kappa);  // noir
+  detail::gs_color(phi, f, geom, 1, mask, coef, eps, kappa, eps_y);  // noir
 }
 
 inline void gs_smooth(MultiFab& phi, const MultiFab& f, const Geometry& geom,
                       const BCRec& bc, int nsweeps, const MultiFab* mask = nullptr,
                       const MultiFab* coef = nullptr, const MultiFab* eps = nullptr,
-                      const MultiFab* kappa = nullptr) {
-  for (int s = 0; s < nsweeps; ++s) gs_rb_sweep(phi, f, geom, bc, mask, coef, eps, kappa);
+                      const MultiFab* kappa = nullptr, const MultiFab* eps_y = nullptr) {
+  for (int s = 0; s < nsweeps; ++s) gs_rb_sweep(phi, f, geom, bc, mask, coef, eps, kappa, eps_y);
 }
 
 // Force phi=0 dans les cellules conductrices (mask==0).

@@ -40,6 +40,7 @@ adc_add_test(test_solve_robust)
 adc_add_test(test_cut_cell)
 adc_add_test(test_variable_epsilon)
 adc_add_test(test_screened_poisson)  # operateur Helmholtz/ecrante : div(eps grad phi) - kappa phi
+adc_add_test(test_anisotropic_epsilon)  # operateur anisotrope : div(diag(eps_x, eps_y) grad phi)
 
 # --- reconstruction / discretisation / integrateurs generiques ---
 adc_add_test(test_spatial_discretisation)
