@@ -104,6 +104,15 @@ add_executable(test_amr_compiled_model test_amr_compiled_model.cpp
 target_link_libraries(test_amr_compiled_model PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_amr_compiled_model COMMAND test_amr_compiled_model)
 
+# --- contrat mono-bloc/explicite de la facade AmrSystem : refus explicite des params non cables ---
+# Compile le runtime AmrSystem (python/amr_system.cpp) avec le test : verrouille que set_poisson
+# refuse solver/rhs hors du domaine cable (GeometricMG + somme des briques elliptiques) et qu'add_block
+# refuse time != explicit / recon hors domaine / substeps < 1, au lieu de les ignorer en silence.
+add_executable(test_amr_system_contract test_amr_system_contract.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_system_contract PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_amr_system_contract COMMAND test_amr_system_contract)
+
 # --- runtime System : B_z partage cable de bout en bout (ensure_aux_width + set_magnetic_field) ---
 add_executable(test_aux_runtime_bz test_aux_runtime_bz.cpp
                ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)

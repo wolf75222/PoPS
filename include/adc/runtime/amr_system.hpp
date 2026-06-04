@@ -61,7 +61,7 @@ struct AmrBuildParams {
 };
 
 /// Fermetures type-erased d'un bloc AMR compile, produites par amr_dsl_block::build_amr_compiled et
-/// installees par AmrSystem::install_compiled. Symetrique des hooks std::function de AmrSystem::Impl.
+/// installees via AmrSystem::set_compiled_block. Symetrique des hooks std::function de AmrSystem::Impl.
 struct AmrCompiledHooks {
   std::shared_ptr<void> coupler_holder;   ///< maintient en vie le AmrCouplerMP<Model>
   std::function<void(double)> step;       ///< un macro-pas (regrid periodique inclus)
@@ -81,13 +81,16 @@ class AmrSystem {
 
   /// Definit l'unique bloc porte sur l'AMR. Memes parametres de schema spatial que System
   /// (limiter x riemann x recon), appliques a chaque niveau/patch de la hierarchie.
+  /// @param name    etiquette cosmetique du bloc (l'AMR est MONO-BLOC : ce nom n'indexe rien,
+  ///                contrairement a System ; conserve pour la symetrie d'API).
   /// @param model   composition de briques (transport/source/elliptic + parametres)
   /// @param limiter "none" | "minmod" | "vanleer"
   /// @param riemann "rusanov" | "hllc" | "roe" (hllc/roe exigent un transport compressible)
   /// @param recon   "conservative" | "primitive" (variables reconstruites ; primitif plus
   ///                robuste pour Euler : positivite de rho et p)
   /// @param time    "explicit" uniquement (l'IMEX sur AMR n'est pas cable ici)
-  /// @throws std::runtime_error si un bloc est deja defini ou si time != "explicit".
+  /// @throws std::runtime_error si un bloc est deja defini, si substeps < 1, si time != "explicit",
+  ///         ou si recon n'est pas dans {conservative, primitive}.
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod",
                  const std::string& riemann = "rusanov",
@@ -104,13 +107,20 @@ class AmrSystem {
   /// Raffine les cellules ou la densite (composante 0) depasse @p threshold.
   void set_refinement(double threshold);
 
-  /// Configure le Poisson grossier (cf. System::set_poisson).
+  /// Configure le Poisson grossier (cf. System::set_poisson). Sur AMR le solveur elliptique est
+  /// TOUJOURS GeometricMG et le second membre TOUJOURS f = somme des briques elliptiques du bloc.
+  /// @param rhs    "charge_density" | "composite" (meme second membre compose que System)
+  /// @param solver "geometric_mg" uniquement (le seul cable sur la hierarchie ; pas de FFT)
+  /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
+  /// @param wall   "none" | "circle" (paroi conductrice circulaire, exige wall_radius > 0)
+  /// @throws std::runtime_error si rhs, solver, bc ou wall est hors du domaine supporte.
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg",
                    const std::string& bc = "auto", const std::string& wall = "none",
                    double wall_radius = 0.0);
 
   /// Fixe la densite initiale sur le niveau grossier (composante 0), n*n row-major.
+  /// @param name etiquette cosmetique (AMR mono-bloc : la densite vise l'unique bloc).
   void set_density(const std::string& name, const std::vector<double>& rho);
 
   void step(double dt);  ///< un macro-pas AMR (regrid periodique inclus)

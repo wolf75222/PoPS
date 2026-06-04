@@ -1,18 +1,7 @@
 #include <adc/runtime/amr_system.hpp>
 
-#include <adc/runtime/model_factory.hpp>     // detail::dispatch_model + briques compilees
-#include <adc/coupling/amr_coupler_mp.hpp>   // AmrCouplerMP, AmrLevelMP
-#include <adc/numerics/numerical_flux.hpp>    // RusanovFlux, HLLCFlux, RoeFlux
-#include <adc/numerics/reconstruction.hpp>    // NoSlope, Minmod, VanLeer
-
-#include <adc/mesh/box2d.hpp>
-#include <adc/mesh/box_array.hpp>
-#include <adc/mesh/distribution_mapping.hpp>
-#include <adc/mesh/for_each.hpp>  // device_fence
-#include <adc/mesh/geometry.hpp>
-#include <adc/mesh/multifab.hpp>
-#include <adc/mesh/refinement.hpp>  // coarsen_index (injection grossier -> fin)
-#include <adc/parallel/comm.hpp>  // n_ranks
+#include <adc/runtime/amr_dsl_block.hpp>   // detail::dispatch_amr_compiled + build_amr_compiled (chemin partage)
+#include <adc/runtime/model_factory.hpp>   // detail::dispatch_model + briques compilees
 
 #include <cmath>
 #include <functional>
@@ -22,23 +11,15 @@
 
 namespace adc {
 
-/// Paquet (limiteur, flux Riemann) attendu par AmrCouplerMP::step<Disc>.
-template <class L, class F>
-struct DiscLF {
-  using Limiter = L;
-  using NumericalFlux = F;
-};
-
 struct AmrSystem::Impl {
   AmrSystemConfig cfg;
 
   // Specification du bloc (figee a add_block, materialisee au build paresseux).
   bool has_block = false;
   ModelSpec b_spec;
-  std::string b_limiter = "minmod", b_riemann = "rusanov", b_recon = "conservative";
+  std::string b_limiter = "minmod", b_riemann = "rusanov";
   bool b_recon_prim = false;  // recon == "primitive" (fige a add_block)
   int b_substeps = 1;
-  int ncomp = 1;
   double gamma = 1.4;
 
   double refine_threshold = 1e30;  // 1e30 => aucun raffinement par defaut
@@ -55,23 +36,18 @@ struct AmrSystem::Impl {
   // de has_block (un seul bloc, comme le chemin ModelSpec).
   bool has_compiled = false;
   std::function<AmrCompiledHooks(const AmrBuildParams&)> compiled_builder;
-  std::shared_ptr<void> compiled_holder;  // maintient en vie le coupleur des hooks installes
 
   bool built = false;
-  std::shared_ptr<void> coupler_holder;
+  std::shared_ptr<void> coupler_holder;  // maintient en vie l'AmrCouplerMP<Model> des hooks
   std::function<void(double)> step_fn;
   std::function<double()> max_speed_fn;
   std::function<double()> mass_fn;
   std::function<int()> n_patches_fn;
   std::function<std::vector<double>()> density_fn;
   double t = 0;
-  int step_count = 0;
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
 
-  Geometry geom() const {
-    return Geometry{Box2D::from_extents(cfg.n, cfg.n), 0.0, cfg.L, 0.0, cfg.L};
-  }
   BCRec poisson_bc() {
     std::string mode = p_bc;
     if (mode == "auto") mode = (p_wall == "circle" || !cfg.periodic) ? "dirichlet" : "periodic";
@@ -90,150 +66,51 @@ struct AmrSystem::Impl {
     throw std::runtime_error("AmrSystem::set_poisson : wall inconnu '" + p_wall + "'");
   }
 
-  void write_coarse(MultiFab& U, const std::vector<double>& rho) {
-    detail::coupler_write_coarse(U, rho, cfg.n, ncomp, gamma);
+  // Materialise les parametres figes du build paresseux a partir de la config + des choix
+  // refine/poisson/density. Communs aux deux chemins (ModelSpec natif et add_compiled_model) :
+  // les deux instancient le MEME builder partage (detail::build_amr_compiled, amr_dsl_block.hpp).
+  AmrBuildParams make_build_params() {
+    AmrBuildParams bp;
+    bp.n = cfg.n;
+    bp.L = cfg.L;
+    bp.regrid_every = cfg.regrid_every;
+    bp.gamma = gamma;
+    bp.substeps = b_substeps;
+    bp.recon_prim = b_recon_prim;
+    bp.refine_threshold = refine_threshold;
+    bp.poisson_bc = poisson_bc();
+    bp.wall = wall_active();
+    bp.has_density = has_density;
+    bp.density = pending_density;
+    bp.distribute_coarse = cfg.distribute_coarse;
+    bp.coarse_max_grid = cfg.coarse_max_grid;
+    return bp;
   }
 
-  // Construit le coupleur AMR pour un Model compose + (Limiter, Flux) concrets et cable les
-  // fermetures. Deux niveaux : grossier + un patch fin seed central, remodele par le regrid.
-  template <class Model, class L, class F>
-  void build(const Model& model) {
-    using Coupler = AmrCouplerMP<Model>;
-    const int nc = Model::n_vars;
-    const Geometry g = geom();
-    const double dxc = cfg.L / cfg.n, dxf = dxc / 2;
-    // Niveau 0 (grossier) : layout decide par la politique d'ownership (replique mono-box par
-    // defaut, multi-box reparti si distribute_coarse). En replique, dmap = my_rank() partout
-    // (la box vit sur chaque rang) ; un round-robin DistributionMapping(1, n_ranks()) la poserait
-    // sur le seul rang 0 -> fab hors bornes ailleurs (segfault sous np>1). Le seed fin part sur
-    // la MEME dmap que le grossier ; le regrid initial le RECONSTRUIT et le repartit round-robin.
-    const auto [bac, dm] = detail::coupler_make_coarse_layout(cfg.n, cfg.distribute_coarse,
-                                                              cfg.coarse_max_grid);
-    // Largeur de ghost = stencil de reconstruction du limiteur : 1 (NoSlope) ou 2 (Minmod /
-    // VanLeer, MUSCL ordre 2). Figer 1 (l'historique, ne testant que le scalaire diocotron en
-    // NoSlope) lisait HORS BORNES le 2e ghost en minmod/vanleer : tolere en conservatif (octets
-    // adjacents finis), mais NaN en primitif (to_primitive divise par un rho parasite). C'est la
-    // largeur que System alloue ; indispensable a la PARITE du schema reconstruit, pas un confort.
-    const int ng = L::n_ghost;
-    MultiFab Uc(bac, dm, nc, ng);
-    Uc.set_val(Real(0));
-    const int I0 = cfg.n / 4, I1 = 3 * cfg.n / 4 - 1, J0 = cfg.n / 4, J1 = 3 * cfg.n / 4 - 1;
-    Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
-    BoxArray baf(std::vector<Box2D>{fb});
-    MultiFab Uf(baf, dm, nc, ng);
-    Uf.set_val(Real(0));
-    std::vector<AmrLevelMP> levels;
-    levels.push_back({std::move(Uc), nullptr, dxc, dxc});
-    levels.push_back({std::move(Uf), nullptr, dxf, dxf});
-
-    auto cpl = std::make_shared<Coupler>(model, g, bac, poisson_bc(), std::move(levels),
-                                         wall_active(), !cfg.distribute_coarse);
-    coupler_holder = cpl;
-    if (has_density) write_coarse(cpl->coarse(), pending_density);
-    // Coherence de la hierarchie AVANT regrid/sync : remplir les patchs fins depuis le
-    // grossier (le seed est a 0, sinon sync_down creuserait le grossier -> NaN Euler).
-    auto& Lv = cpl->levels();
-    for (std::size_t k = 1; k < Lv.size(); ++k)
-      detail::coupler_inject_coarse_to_fine_mb(cpl->coarse(), Lv[k].U, !cfg.distribute_coarse);
-
-    const double thr = refine_threshold;
-    auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
-    cpl->regrid(crit);
-    cpl->update();
-
-    Impl* P = this;
-    const int sub = b_substeps;
-    const bool rprim = b_recon_prim;
-    step_fn = [P, cpl, crit, sub, rprim](double dt) {
-      if (P->cfg.regrid_every > 0 && P->step_count > 0 &&
-          P->step_count % P->cfg.regrid_every == 0)
-        cpl->regrid(crit);
-      const double h = dt / sub;
-      for (int s = 0; s < sub; ++s) cpl->template step<DiscLF<L, F>>(h, rprim);
-      ++P->step_count;
-    };
-    max_speed_fn = [cpl] { return static_cast<double>(cpl->max_wave_speed()); };
-    mass_fn = [cpl] { return static_cast<double>(cpl->mass()); };
-    n_patches_fn = [cpl] {
-      auto& Lv = cpl->levels();
-      return Lv.size() >= 2 ? static_cast<int>(Lv[1].U.box_array().size()) : 0;
-    };
-    const int nn = cfg.n;
-    const bool repl = !cfg.distribute_coarse;
-    density_fn = [cpl, nn, repl] {
-      return detail::coupler_read_coarse(cpl->coarse(), nn, repl);
-    };
+  // Installe les fermetures type-erased produites par le builder partage.
+  void install(AmrCompiledHooks&& h) {
+    coupler_holder = std::move(h.coupler_holder);
+    step_fn = std::move(h.step);
+    max_speed_fn = std::move(h.max_speed);
+    mass_fn = std::move(h.mass);
+    n_patches_fn = std::move(h.n_patches);
+    density_fn = std::move(h.density);
     built = true;
-  }
-
-  // Dispatch du schema spatial (limiteur x flux Riemann) pour un Model compose.
-  template <class Model>
-  void dispatch_spatial(const Model& m) {
-    if (b_riemann == "rusanov") {
-      if (b_limiter == "none") return build<Model, NoSlope, RusanovFlux>(m);
-      if (b_limiter == "minmod") return build<Model, Minmod, RusanovFlux>(m);
-      if (b_limiter == "vanleer") return build<Model, VanLeer, RusanovFlux>(m);
-      throw std::runtime_error("AmrSystem : limiter inconnu '" + b_limiter + "'");
-    }
-    if (b_riemann == "hllc") {
-      if constexpr (Model::n_vars == 4 &&
-                    requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-        if (b_limiter == "none") return build<Model, NoSlope, HLLCFlux>(m);
-        if (b_limiter == "minmod") return build<Model, Minmod, HLLCFlux>(m);
-        if (b_limiter == "vanleer") return build<Model, VanLeer, HLLCFlux>(m);
-        throw std::runtime_error("AmrSystem : limiter inconnu '" + b_limiter + "'");
-      } else {
-        throw std::runtime_error("AmrSystem : flux 'hllc' exige un transport compressible "
-                                 "(4 variables + pression) ; ce transport -> 'rusanov'");
-      }
-    }
-    if (b_riemann == "roe") {
-      if constexpr (Model::n_vars == 4 &&
-                    requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
-        if (b_limiter == "none") return build<Model, NoSlope, RoeFlux>(m);
-        if (b_limiter == "minmod") return build<Model, Minmod, RoeFlux>(m);
-        if (b_limiter == "vanleer") return build<Model, VanLeer, RoeFlux>(m);
-        throw std::runtime_error("AmrSystem : limiter inconnu '" + b_limiter + "'");
-      } else {
-        throw std::runtime_error("AmrSystem : flux 'roe' exige un transport compressible "
-                                 "(4 variables + pression) ; ce transport -> 'rusanov'");
-      }
-    }
-    throw std::runtime_error("AmrSystem : flux Riemann inconnu '" + b_riemann + "' (rusanov|hllc|roe)");
   }
 
   void ensure_built() {
     if (built) return;
+    if (!has_block && !has_compiled)
+      throw std::runtime_error("AmrSystem : appeler add_block d'abord");
+    const AmrBuildParams bp = make_build_params();
     if (has_compiled) {  // chemin compile : le builder fige les types (Model, Limiter, Flux)
-      AmrBuildParams bp;
-      bp.n = cfg.n;
-      bp.L = cfg.L;
-      bp.regrid_every = cfg.regrid_every;
-      bp.gamma = gamma;
-      bp.substeps = b_substeps;
-      bp.refine_threshold = refine_threshold;
-      bp.poisson_bc = poisson_bc();
-      bp.wall = wall_active();
-      bp.has_density = has_density;
-      bp.density = pending_density;
-      bp.distribute_coarse = cfg.distribute_coarse;
-      bp.coarse_max_grid = cfg.coarse_max_grid;
-      AmrCompiledHooks h = compiled_builder(bp);
-      compiled_holder = std::move(h.coupler_holder);
-      step_fn = std::move(h.step);
-      max_speed_fn = std::move(h.max_speed);
-      mass_fn = std::move(h.mass);
-      n_patches_fn = std::move(h.n_patches);
-      density_fn = std::move(h.density);
-      built = true;
+      install(compiled_builder(bp));
       return;
     }
-    if (!has_block) throw std::runtime_error("AmrSystem : appeler add_block d'abord");
+    // Chemin ModelSpec natif : la dispatch de modele resout le type concret, puis le MEME
+    // dispatch schema spatial + build du coupleur que add_compiled_model (detail, partage).
     detail::dispatch_model(b_spec, [&](auto m) {
-      using M = decltype(m);
-      ncomp = M::n_vars;
-      gamma = b_spec.gamma;
-      dispatch_spatial(m);
+      install(detail::dispatch_amr_compiled(m, b_limiter, b_riemann, bp));
     });
   }
 };
@@ -246,7 +123,7 @@ AmrSystem& AmrSystem::operator=(AmrSystem&&) noexcept = default;
 void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           const std::string& limiter, const std::string& riemann,
                           const std::string& recon, const std::string& time, int substeps) {
-  (void)name;
+  (void)name;  // AMR mono-bloc : le nom est cosmetique, il n'indexe rien (cf. header).
   if (p_->has_block || p_->has_compiled)
     throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
@@ -258,17 +135,18 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   p_->b_spec = model;
   p_->b_limiter = limiter;
   p_->b_riemann = riemann;
-  p_->b_recon = recon;
   p_->b_recon_prim = (recon == "primitive");
   p_->b_substeps = substeps;
+  p_->gamma = model.gamma;  // indice adiabatique du bloc (Euler), lu par coupler_write_coarse
   p_->has_block = true;
 }
 
 void AmrSystem::set_compiled_block(int ncomp, double gamma, int substeps,
                                    std::function<AmrCompiledHooks(const AmrBuildParams&)> builder) {
+  (void)ncomp;  // le nombre de variables est porte par le Model concret (Model::n_vars) dans le
+                // builder type-erase ; le parametre reste pour la symetrie d'API avec System.
   if (p_->has_block || p_->has_compiled)
     throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
-  p_->ncomp = ncomp;
   p_->gamma = gamma;
   p_->b_substeps = substeps;
   p_->compiled_builder = std::move(builder);
@@ -280,6 +158,20 @@ void AmrSystem::set_refinement(double threshold) { p_->refine_threshold = thresh
 void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
                             const std::string& bc, const std::string& wall,
                             double wall_radius) {
+  // CONTRAT mono-bloc/explicite (cf. set_compiled_block) : l'AMR cable un SEUL solveur
+  // elliptique (GeometricMG, le defaut template d'AmrCouplerMP) et un SEUL second membre
+  // (f = model.elliptic_rhs(U), assemble par coupler_eval_rhs). On REFUSE donc explicitement
+  // toute valeur de rhs/solver hors du domaine reellement cable, au lieu de la stocker en
+  // silence (le no-op historique laissait croire que solver='fft' marchait sur la hierarchie).
+  // bc/wall sont reellement consommes par poisson_bc()/wall_active() : valides la-bas.
+  if (rhs != "charge_density" && rhs != "composite")
+    throw std::runtime_error("AmrSystem::set_poisson : rhs '" + rhs +
+                             "' inconnu (charge_density|composite ; le second membre = somme des "
+                             "briques elliptiques du bloc)");
+  if (solver != "geometric_mg")
+    throw std::runtime_error("AmrSystem::set_poisson : solver '" + solver +
+                             "' non supporte sur AMR (seul 'geometric_mg' est cable sur la "
+                             "hierarchie ; 'fft' n'existe que sur grille mono-niveau, cf. System)");
   p_->p_rhs = rhs;
   p_->p_solver = solver;
   p_->p_bc = bc;
@@ -288,7 +180,7 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
 }
 
 void AmrSystem::set_density(const std::string& name, const std::vector<double>& rho) {
-  (void)name;
+  (void)name;  // AMR mono-bloc : la densite vise l'unique bloc, le nom est cosmetique.
   p_->pending_density = rho;
   p_->has_density = true;
 }

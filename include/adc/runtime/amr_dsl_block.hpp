@@ -30,11 +30,14 @@
 /// coupleur AMR (AmrCouplerMP<Model> + reflux conservatif + regrid) est instanciee ICI, depuis l'unite
 /// de traduction APPELANTE, sur le type Model concret -- comme block_builder.hpp pour le System plat.
 /// Le coupleur, type-erased en std::function (step / mass / max_speed / n_patches / density), entre
-/// dans AmrSystem par AmrSystem::install_compiled (methode non-template, symetrique d'install_block).
+/// dans AmrSystem par AmrSystem::set_compiled_block (methode non-template). Le MEME builder partage
+/// (detail::build_amr_compiled / dispatch_amr_compiled) sert AUSSI le chemin ModelSpec natif d'add_block
+/// (amr_system.cpp), une fois le type Model concret resolu par detail::dispatch_model : un seul build.
 
 namespace adc {
 
-/// Paquet (limiteur, flux Riemann) attendu par AmrCouplerMP::step<Disc> (identique a amr_system.cpp).
+/// Paquet (limiteur, flux Riemann) attendu par AmrCouplerMP::step<Disc>. Unique definition : le
+/// chemin natif d'amr_system.cpp passe par ce meme header (plus de DiscLF duplique cote .cpp).
 template <class L, class F>
 struct AmrDiscLF {
   using Limiter = L;
