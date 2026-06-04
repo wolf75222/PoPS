@@ -154,9 +154,47 @@ disque, Schur EPM, AMR multi-bloc, repro Hoffart) -- toutes DIFFEREES. Une PR pa
       production / domaine disque FV / AMR multi-bloc + EPM avance). Verrou = bord d'anneau cartesien
       (cut-cell ne sert que Poisson, pas le transport). Aucune implementation. (#78)
 
-### Suite identifiee (non commencee, hors feature papier)
+### Suite identifiee (faite)
 
-- [ ] **Routage `CoarseFineInterface` + `SubcyclingSchedule`** encore inlines dans `subcycle_level_mp`
-      (extraction touche la recursion coeur, differee pour garder un diff sur et bit-identique).
-- [ ] **Backend DSL `production` distinct** (TU C++ native `add_compiled_model` ou codegen Kokkos/CUDA
-      avec garde-fous GPU/MPI/AMR cote moteur) : aujourd'hui alias de `aot`.
+- [x] **Routage `CoarseFineInterface` + `SubcyclingSchedule`** extraits de `subcycle_level_mp` en types
+      nommes, bit-identique (Serial 74/74, MPI 95/95 np=1/2/4). (#82)
+- [x] **Backend DSL `production` distinct** : loader natif zero-copie `add_native_block` (inline
+      `add_compiled_model<ProdModel>`, ABI-key gate, symboles `ADC_EXPORT`), `production` ne pointe plus
+      sur `aot`. Portabilite ELF (promotion `_adc` en portee globale). Parite CPU bit-identique a
+      `add_block`. (#85)
+
+## 8. Plan Ideal ADC : ecrire le modele en Python, executer en C++ natif
+
+Objectif : l'utilisateur ecrit les equations en Python (DSL symbolique), ADC genere/compile une brique
+C++ NATIVE branchee dans `adc_cpp` comme un modele ecrit a la main ; aucune boucle cellule par cellule
+en Python sur le chemin performant. Trois backends : `prototype` (NumPy/hote), `aot` (.so ABI plate),
+`production` (natif zero-copie, objectif MPI/GPU/AMR).
+
+- [x] **Etape 1 - API `dsl.Model` stable** au-dessus de `HyperbolicModel` (facade ; `m.flux` declarateur
+      / `m.eval_flux` evaluateur ; `m.primitive_vars(**kwargs)`). (#89)
+- [x] **Etape 2 - `param` + `CompiledModel` + erreurs propres** : `Param` nomme compile-time (runtime =
+      phase E) ; `CompiledModel` (backend/adder/so_path/noms/roles/gamma/n_aux/params/cle ABI) ;
+      `add_equation` (dispatch `ModelSpec` vs `CompiledModel`), `FiniteVolume(riemann=)`, `run`. Erreurs
+      explicites (role/param/backend/flux). (#89, #90 fix substeps ModelSpec)
+- [x] **Etape 3 - `production` reel pour `System`** : loader natif zero-copie. (#85)
+- [ ] **Etape 4 - cas demonstrateurs `adc_cases`** : `diocotron_dsl` (ExB en formules, == `models.diocotron`,
+      validation CI legere), puis `magnetic_isothermal_dsl` (isotherme magnetise, B_z/phi/grad), puis
+      `two_species_dsl` (electrons+ions, temps par bloc, Poisson `sum q_s n_s`). EN COURS (adc_cases).
+- [ ] **Etape 5 - `production` -> `AmrSystem`** (Phase D) : binding Python du natif AMR
+      `add_compiled_model(AmrSystem&)` (`amr_dsl_block.hpp`). Borne par la non-parite `AmrSystem`. TOUCHE
+      `adc_cpp/python` -> a lancer sur accord.
+- [~] **Etape 6 - validation MPI/GPU du chemin `production`** : `add_compiled_model` C++ valide GH200
+      (bit-identique, multi-box + MPI). RESTE : valider le chemin Python `add_native_block` de bout en
+      bout (device GH200 + MPI np=1/2/4) ; tests `adc_cpp/python` -> a lancer sur accord.
+- [ ] **Etape 7 - DIFFERE** : domaine disque FV / paroi transport + reproduction papier quantitative
+      (cf. section 6 ; subordonne a la confirmation haute resolution du plateau l=4).
+
+## 9. Mesure diocotron haut ordre (PR-0 + O5, cote `adc_cases`)
+
+- [x] Balayage ordre x resolution O1/O2 (PR-0) puis O5 = WENO5-Z + SSPRK3 (atteignable depuis Python
+      via #88) : `diocotron/SWEEP_RESULTS.md`. l=3 part majoritairement diffuse ; l=4 passe de ~-12% (O2)
+      a ~-4% sur deux points propres (n=128/256) a O5 (n=192 = artefact de fenetre de fit, trace) ; l=5
+      a la cible. Conclusion PRUDENTE : l'hypothese PR-0 d'un plateau structurel ~12% est AFFAIBLIE (sans
+      etre refutee). (#5, #6)
+- [ ] **Confirmation haute resolution n=384 / n=512 (incl. O5) sur ROMEO/GH200** AVANT toute reecriture
+      de la roadmap papier (`PAPER_ROADMAP.md`). Sur accord.
