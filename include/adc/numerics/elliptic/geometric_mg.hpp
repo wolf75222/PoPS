@@ -341,6 +341,41 @@ class GeometricMG {
     has_cross_ = true;
   }
 
+  // Surcharge prenant deux champs DEJA discretises (grille du niveau le plus fin), copies sur le
+  // niveau fin puis RESTREINTS (average_down) vers les grossiers et ghosts remplis, exactement comme
+  // set_epsilon_anisotropic(const MultiFab&, const MultiFab&). Point d'entree pour des termes croises
+  // PAR CELLULE (ex. A = I + c rho B^{-1} de la condensation de Schur, ou rho varie en espace, donc
+  // a_xy/a_yx ne sont pas des formules analytiques mais des champs). Les coefficients croises ne
+  // servent QUE le residu / la matvec PLEINE (le lisseur GS reste 5 points, bloc diagonal) ; leur
+  // restriction au grossier ne sert donc qu'a un eventuel residu MG sur l'operateur plein (le
+  // preconditionneur Krylov, lui, est cable SANS termes croises -> partie symetrique). NE PAS appeler
+  // => bloc DIAGONAL (chemin actuel bit-identique).
+  void set_cross_terms(const MultiFab& a_xy_fine, const MultiFab& a_yx_fine) {
+    const BCRec ebc = eps_bc();
+    for (auto& L : lev_) {
+      L.a_xy = MultiFab(L.ba, L.dm, 1, 1);
+      L.a_yx = MultiFab(L.ba, L.dm, 1, 1);
+    }
+    for (int li = 0; li < lev_[0].a_xy.local_size(); ++li) {
+      Array4 fxy = lev_[0].a_xy.fab(li).array();
+      Array4 fyx = lev_[0].a_yx.fab(li).array();
+      const ConstArray4 sxy = a_xy_fine.fab(li).const_array();
+      const ConstArray4 syx = a_yx_fine.fab(li).const_array();
+      const Box2D b = lev_[0].a_xy.box(li);
+      for_each_cell(b, detail::CopyComp0Kernel{fxy, sxy});
+      for_each_cell(b, detail::CopyComp0Kernel{fyx, syx});
+    }
+    fill_ghosts(lev_[0].a_xy, lev_[0].geom.domain, ebc);
+    fill_ghosts(lev_[0].a_yx, lev_[0].geom.domain, ebc);
+    for (int l = 1; l < num_levels(); ++l) {
+      average_down(lev_[l - 1].a_xy, lev_[l].a_xy, 2);
+      average_down(lev_[l - 1].a_yx, lev_[l].a_yx, 2);
+      fill_ghosts(lev_[l].a_xy, lev_[l].geom.domain, ebc);
+      fill_ghosts(lev_[l].a_yx, lev_[l].geom.domain, ebc);
+    }
+    has_cross_ = true;
+  }
+
   void vcycle() { vcycle_rec(0, bc_); }
 
   // V-cycles jusqu'a residu relatif < rel_tol (ou max_cycles). Renvoie le

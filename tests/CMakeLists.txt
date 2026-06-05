@@ -59,6 +59,15 @@ adc_add_test(test_krylov_solver)
 # (entree serie ; entrees MPI np=1/2/4 ajoutees dans le bloc ADC_HAS_MPI plus bas)
 adc_add_test(test_schur_condensation)
 
+# Schur PR4 (etage source) : CondensedSchurSourceStepper COMPOSE le batisseur #124 + le solveur de
+# Krylov BiCGStab (#122, preconditionne MG sur la partie symetrique) + LorentzEliminator (#118) pour
+# JOUER l'etage source condense (assemble A_op + RHS, resout L_schur(phi)=rhs, reconstruit
+# v=B^{-1}(v^n - theta dt grad phi), extrapole, energie, ghosts). Test SOURCE-ONLY : un fluide
+# magnetise sous la source implicite, a GRAND dt ou l'Euler explicite explose. Verifie (A) la relation
+# implicite reconstruite, (B) la stabilite Schur vs explosion explicite, (C) l'accord avec une
+# reference RK4 fine-dt (ordre 1). (entree serie ; entrees MPI np=1/2/4 dans le bloc ADC_HAS_MPI plus bas)
+adc_add_test(test_condensed_schur_source_stepper)
+
 # --- reconstruction / discretisation / integrateurs generiques ---
 adc_add_test(test_spatial_discretisation)
 adc_add_test(test_primitive_recon)
@@ -284,6 +293,17 @@ if(ADC_HAS_MPI)
     add_test(NAME test_schur_condensation_np${np}
              COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_schur_condensation> ${MPIEXEC_POSTFLAGS})
+  endforeach()
+
+  # Schur PR4 (etage source) sous MPI np=1/2/4 : l'etage source condense doit etre INVARIANT au nombre
+  # de rangs. Le solve de Krylov est COLLECTIF (dot/all_reduce sur tous les rangs, y compris vides) :
+  # iterations et resultat invariants ; les verifs (ecarts MAX, normes) sont all_reduce_max/sum. np=1
+  # = chemin mono-rang (== serie) ; np=2/4 = chemin distribue (rangs local_size()==0 sur le mono-box).
+  foreach(np 1 2 4)
+    add_test(NAME test_condensed_schur_source_stepper_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_condensed_schur_source_stepper>
+                     ${MPIEXEC_POSTFLAGS})
   endforeach()
 
   adc_add_mpi_test(test_mpi_smoke 4)
