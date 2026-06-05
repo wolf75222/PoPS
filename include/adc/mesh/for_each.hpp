@@ -205,4 +205,31 @@ Real reduce_max_cell(const Box2D& b, F f) {
 #endif
 }
 
+// Variante SOMME a FONCTEUR REDUCTEUR : pendant exact de reduce_max_cell pour Kokkos::Sum. @p f
+// recoit (i, j, Real& acc) et accumule (acc += valeur), passe DIRECTEMENT a parallel_reduce SANS
+// lambda etendue d'enveloppe (a la difference de for_each_cell_reduce_sum, qui en pose une). C'est
+// le chemin device-clean exige par un noyau instancie depuis une UNITE DE TRADUCTION EXTERNE (le
+// solveur de Krylov tire du harness/loader natif) : nvcc n'emet pas fiablement une lambda etendue
+// premiere-instanciee cross-TU (cf. les foncteurs nommes de mf_arith.hpp / spatial_operator.hpp).
+// Determinisme et FP IDENTIQUES a for_each_cell_reduce_sum : meme Kokkos::Sum deterministe par tuile
+// sous Kokkos, meme boucle hote sequentielle en serie/OpenMP (pas de reduction(+:) qui reordonnerait).
+template <class F>
+Real reduce_sum_cell(const Box2D& b, F f) {
+#if defined(ADC_HAS_KOKKOS)
+  detail::ensure_kokkos_initialized();
+  Real result = 0;
+  Kokkos::parallel_reduce(
+      "adc_reduce_sum_cell",
+      Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
+          {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
+      f, Kokkos::Sum<Real>{result});
+  return result;
+#else
+  Real acc = 0;
+  for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+    for (int i = b.lo[0]; i <= b.hi[0]; ++i) f(i, j, acc);
+  return acc;
+#endif
+}
+
 }  // namespace adc

@@ -433,6 +433,23 @@ class GeometricMG {
     return r;
   }
 
+  // ACCES aux pointeurs de coefficient de l'operateur du NIVEAU FIN (level 0) et a la CL. Exposent
+  // EXACTEMENT ce que current_residual() passe a poisson_residual : un appelant externe (le solveur
+  // de Krylov, qui utilise apply_laplacian comme matvec et a besoin d'une matvec COHERENTE avec le
+  // residu MG) reutilise ainsi le meme operateur, sans dupliquer le cablage des champs eps/kappa/Axy.
+  // nullptr quand le terme correspondant est inactif (cf. les *_ptr internes). Additif : aucun chemin
+  // existant ne les appelle, le comportement par defaut est inchange.
+  const MultiFab* op_mask() { return mask_ptr(0); }
+  const MultiFab* op_coef() { return coef_ptr(0); }
+  const MultiFab* op_eps() { return eps_ptr(0); }
+  const MultiFab* op_kappa() { return kappa_ptr(0); }
+  const MultiFab* op_eps_y() { return eps_y_ptr(0); }
+  const MultiFab* op_a_xy() { return a_xy_ptr(0); }
+  const MultiFab* op_a_yx() { return a_yx_ptr(0); }
+  const BCRec& bc() const { return bc_; }
+  const BoxArray& box_array() const { return lev_[0].ba; }
+  const DistributionMapping& dmap() const { return lev_[0].dm; }
+
  private:
   struct MGLevel {
     Geometry geom;

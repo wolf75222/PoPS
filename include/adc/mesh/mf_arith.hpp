@@ -5,6 +5,7 @@
 #include <adc/mesh/fab2d.hpp>
 #include <adc/mesh/for_each.hpp>
 #include <adc/mesh/multifab.hpp>
+#include <adc/parallel/comm.hpp>  // all_reduce_sum : produit scalaire COLLECTIF (Krylov sous MPI)
 
 #include <algorithm>
 
@@ -52,6 +53,17 @@ struct NormInfKernel {
     if (av > acc) acc = av;
   }
 };
+
+// Reducteur x(i,j,comp) * y(i,j,comp) -> somme, passe DIRECTEMENT a reduce_sum_cell (aucune lambda
+// etendue d'enveloppe). Foncteur NOMME device-clean (meme recette que NormInfKernel) pour le produit
+// scalaire du solveur de Krylov, tire d'une TU externe. Signature reducteur (i, j, Real& acc).
+struct DotKernel {
+  ConstArray4 x, y;
+  int comp;
+  ADC_HD void operator()(int i, int j, Real& acc) const {
+    acc += x(i, j, comp) * y(i, j, comp);
+  }
+};
 }  // namespace detail
 
 // y <- y + a x
@@ -95,6 +107,30 @@ inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b,
     for (int c = 0; c < nc; ++c)
       for_each_cell(bb, detail::LincombKernel{Z, X, Y, a, b, c});
   }
+}
+
+// Produit scalaire sum_cells x . y sur les cellules VALIDES de la composante comp, reduit sur tous
+// les rangs (all-reduce). Brique des solveurs de Krylov (BiCGStab : rho, alpha, omega, betas). Chaque
+// fab local est reduit par reduce_sum_cell (vraie reduction device sous Kokkos, boucle hote en
+// serie/OpenMP), les fabs locaux agreges par somme hote, puis all_reduce_sum agrege les rangs.
+//
+// COLLECTIF, OBLIGATOIRE SOUS MPI : all_reduce_sum est appele sur CHAQUE rang, y compris un rang
+// SANS box (local_size()==0, qui contribue alors 0 a la somme locale). Sans cet appel sur tous les
+// rangs, MPI_Allreduce interbloque (collective desynchronisee) ; le solveur de Krylov ne doit donc
+// JAMAIS court-circuiter dot() sur un rang vide. En serie all_reduce_sum est l'identite.
+//
+// NOTE FP (comme sum()) : sous Kokkos l'ordre de sommation par tuile differe de la boucle hote, donc
+// dot n'est pas bit-identique entre backends ; serie et OpenMP restent exacts. Sous MPI, l'all-reduce
+// rend la MEME valeur a tous les rangs (MPI_SUM sur un meme jeu de contributions locales), donc le
+// critere d'arret du Krylov se declenche a la MEME iteration partout (pas de desynchronisation).
+inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
+  Real s = 0;
+  for (int li = 0; li < x.local_size(); ++li) {
+    const ConstArray4 X = x.fab(li).const_array();
+    const ConstArray4 Y = y.fab(li).const_array();
+    s += reduce_sum_cell(x.box(li), detail::DotKernel{X, Y, comp});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
 }
 
 }  // namespace adc

@@ -47,6 +47,11 @@ adc_add_test(test_screened_poisson)  # operateur Helmholtz/ecrante : div(eps gra
 adc_add_test(test_anisotropic_epsilon)  # operateur anisotrope : div(diag(eps_x, eps_y) grad phi)
 adc_add_test(test_cut_cell_anisotropic_multibox)  # cut-cell + aniso sur domaine MULTI-BOX (mono-rang)
 adc_add_test(test_full_tensor_operator)  # operateur tenseur PLEIN : -div(A grad phi)+kappa phi, A=[[Axx,Axy],[Ayx,Ayy]] (termes croises)
+# Schur PR3 : solveur de Krylov MATRICE-LIBRE (BiCGStab) preconditionne par le V-cycle MG sur la
+# partie SYMETRIQUE, pour l'operateur a tenseur PLEIN non symetrique. Resout les cas MMS ou le MG
+# SEUL echoue (#120 : stagnation c=0.1-0.4, divergence c=0.7), + consistance A=I vs GeometricMG.
+# (entree serie ; les entrees MPI np=1/2/4 sont ajoutees dans le bloc ADC_HAS_MPI plus bas)
+adc_add_test(test_krylov_solver)
 
 # --- reconstruction / discretisation / integrateurs generiques ---
 adc_add_test(test_spatial_discretisation)
@@ -252,6 +257,18 @@ if(ADC_HAS_MPI)
              COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${nproc}
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}> ${MPIEXEC_POSTFLAGS})
   endfunction()
+  # Schur PR3 : le solveur de Krylov (BiCGStab) rejoue sous MPI np=1/2/4. Les produits scalaires
+  # (dot) sont COLLECTIFS (all_reduce_sum), donc le critere d'arret se declenche a la MEME iteration
+  # sur tous les rangs : iterations + convergence INVARIANTES au nombre de rangs (le test all_reduce
+  # le nombre d'iters et exige spread nul). np=1 couvre le chemin mono-rang (== serie) ; np=2/4 le
+  # chemin distribue (rangs avec local_size()==0 sur ce decoupage mono-box, dot appele partout).
+  # Reutilise la cible serie test_krylov_solver (deja construite par adc_add_test, pas de doublon).
+  foreach(np 1 2 4)
+    add_test(NAME test_krylov_solver_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_krylov_solver> ${MPIEXEC_POSTFLAGS})
+  endforeach()
+
   adc_add_mpi_test(test_mpi_smoke 4)
   adc_add_mpi_test(test_mpi_array_reduce 4)
   adc_add_mpi_test(test_mpi_fillboundary 4)
