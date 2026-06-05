@@ -275,4 +275,21 @@ if(ADC_HAS_MPI)
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_system_solve_fields>
                      ${MPIEXEC_POSTFLAGS})
   endforeach()
+
+  # --- solveur Poisson FFT sous MPI : verrou de non-regression du SIGSEGV "fft + n_ranks>1" (#93).
+  # System repartit UNE box en round-robin, donc a np>1 des rangs ont local_size()==0 ;
+  # PoissonFFTSolver::solve() y dereferencait fab(0) inexistant (l'assert mono-rang disparaissait en
+  # Release). Le fix REFUSE "fft" sous MPI avec une erreur claire levee sur TOUS les rangs (collectif,
+  # pas d'interblocage). np=1 : "fft" marche et colle a geometric_mg (FP). np=2/4 : solve_fields() leve
+  # sur chaque rang, capture, all_reduce(threw)==np. Compile le runtime System comme
+  # test_mpi_system_solve_fields. Un binaire, trois entrees ctest.
+  add_executable(test_mpi_system_fft test_mpi_system_fft.cpp
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
+  target_link_libraries(test_mpi_system_fft PRIVATE adc::adc ${CMAKE_DL_LIBS})
+  foreach(np 1 2 4)
+    add_test(NAME test_mpi_system_fft_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_system_fft>
+                     ${MPIEXEC_POSTFLAGS})
+  endforeach()
 endif()

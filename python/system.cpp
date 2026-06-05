@@ -424,6 +424,17 @@ struct System::Impl {
     const BCRec pbc = poisson_bc();
     std::function<bool(Real, Real)> active = wall_active();
     if (p_solver == "fft") {
+      // FFT directe mono-rang : sous MPI (n_ranks>1) System repartit UNE box en round-robin, donc
+      // des rangs ont local_size()==0 et PoissonFFTSolver::solve() dereferencerait fab(0) inexistant
+      // (SIGSEGV, l'ancien assert disparaissait en Release). On REFUSE explicitement ici, sur TOUS
+      // les rangs (ensure_elliptic est appele collectivement par solve_fields) -> pas d'interblocage.
+      // Le periodique distribue passe par DistributedFFTSolver (bandes), non cable dans System (sa
+      // decomposition par bandes est incompatible avec la box unique de System -> assemblage du rhs /
+      // relecture de phi). PoissonFFTSolver garde aussi un garde-fou dur dans son constructeur.
+      if (n_ranks() > 1)
+        throw std::runtime_error(
+            "solveur fft non supporte en MPI (n_ranks>1) : utiliser geometric_mg ou le solveur fft "
+            "distribue");
       if (active)
         throw std::runtime_error("System : solver 'fft' incompatible avec une paroi -> 'geometric_mg'");
       if (has_eps_field_)

@@ -14,6 +14,7 @@
 
 #include <cassert>
 #include <functional>
+#include <stdexcept>
 #include <vector>
 
 // Backend EllipticSolver DIRECT par FFT spectrale (CL periodiques). Resout le MEME
@@ -41,8 +42,20 @@ class PoissonFFTSolver {
         res_(ba, dm_, 1, 0),
         fft_(geom.domain.nx(), geom.domain.ny(), geom.xhi - geom.xlo,
              geom.yhi - geom.ylo) {
-    assert(n_ranks() == 1 && ba.size() == 1 &&
-           "PoissonFFTSolver : mono-rang / boite unique (sinon SpectralCoupler)");
+    // Garde-fou DUR (actif en Release, NDEBUG ne le retire PAS) : ce solveur direct est mono-rang /
+    // boite unique. Sous DistributionMapping de systeme a n_ranks()>1, certains rangs n'ont aucune
+    // box locale (local_size()==0) et solve() dereferencerait fab(0) inexistant -> SIGSEGV. L'ancien
+    // assert disparaissait en Release et la protection s'evanouissait en silence. On leve sur TOUS les
+    // rangs (chacun construit l'objet), donc pas d'interblocage. Pour le periodique distribue :
+    // DistributedFFTSolver (bandes, MPI_Alltoall).
+    if (n_ranks() != 1)
+      throw std::runtime_error(
+          "solveur fft non supporte en MPI (n_ranks>1) : utiliser geometric_mg ou le solveur fft "
+          "distribue (DistributedFFTSolver)");
+    if (ba.size() != 1)
+      throw std::runtime_error(
+          "PoissonFFTSolver : boite unique requise (ba.size()==1) ; pour un domaine multi-box "
+          "distribue, utiliser DistributedFFTSolver ou geometric_mg");
   }
 
   MultiFab& rhs() { return rhs_; }
