@@ -60,6 +60,38 @@ static double phi_exact(double x, double y) {
 static double eps_x_field(double x, double /*y*/) { return 1.0 + 0.5 * x; }
 static double eps_y_field(double /*x*/, double y) { return 1.0 + 0.3 * y; }
 
+// Foncteur de remplissage MMS (C) : pose phi = phi_exact (sin(pi x) sin(pi y)) et f = div(A grad phi)
+// analytique pour A constant non diagonal. Top-level / device-clean (recette #64/#97/#133 : struct a
+// portee namespace tenant Array4 + Geometry + scalaires en membres, operator()(i, j) ADC_HD avec le
+// corps verbatim). phi_exact (fonction hote static) est INLINE ici en s = sin(pi x) sin(pi y) : math
+// strictement identique (phi_exact(x, y) == s), corps device-callable sans appeler une fonction hote.
+struct OperatorMmsFillKernel {
+  Array4 ap, af;
+  Geometry geom;
+  double axx, ayy, csum;
+  ADC_HD void operator()(int i, int j) const {
+    const double x = geom.x_cell(i), y = geom.y_cell(j);
+    const double s = std::sin(kPi * x) * std::sin(kPi * y);
+    const double cc = std::cos(kPi * x) * std::cos(kPi * y);
+    ap(i, j) = s;                                                     // phi_exact(x, y)
+    af(i, j) = -kPi * kPi * (axx + ayy) * s + csum * kPi * kPi * cc;  // div(A grad phi)
+  }
+};
+
+// Foncteur de remplissage du RHS de l'OBSERVATION MG (non gating) : f = div(A grad phi) pour A SDP non
+// diagonale (Axy=Ayx=c, csum=2c, bloc diagonal = I). Top-level / device-clean, meme recette.
+struct ObserveMgRhsKernel {
+  Array4 af;
+  Geometry geom;
+  double csum;
+  ADC_HD void operator()(int i, int j) const {
+    const double x = geom.x_cell(i), y = geom.y_cell(j);
+    const double s = std::sin(kPi * x) * std::sin(kPi * y);
+    const double cc = std::cos(kPi * x) * std::cos(kPi * y);
+    af(i, j) = -kPi * kPi * 2.0 * s + csum * kPi * kPi * cc;
+  }
+};
+
 // Ecart MAX (norme inf) entre deux residus discrets sur le meme phi : dmax pour le gating bit.
 static double residual_gap(MultiFab& ra, MultiFab& rb, const Box2D& dom) {
   const ConstArray4 a = ra.fab(0).const_array(), b = rb.fab(0).const_array();
@@ -144,13 +176,7 @@ static double operator_mms_resid(int n, double axx, double ayy, double cxy, doub
   // phi = phi_exact (donnee EXACTE au centre des cellules) ; f = div(A grad phi) analytique.
   const double csum = cxy + cyx;
   Array4 ap = mg.phi().fab(0).array(), af = mg.rhs().fab(0).array();
-  for_each_cell(dom, [ap, af, geom, axx, ayy, csum](int i, int j) {
-    const double x = geom.x_cell(i), y = geom.y_cell(j);
-    ap(i, j) = phi_exact(x, y);
-    const double s = std::sin(kPi * x) * std::sin(kPi * y);
-    const double cc = std::cos(kPi * x) * std::cos(kPi * y);
-    af(i, j) = -kPi * kPi * (axx + ayy) * s + csum * kPi * kPi * cc;  // div(A grad phi)
-  });
+  for_each_cell(dom, OperatorMmsFillKernel{ap, af, geom, axx, ayy, csum});
 
   // residu de l'OPERATEUR = f - L_discret(phi_exact) (norme inf). current_residual applique
   // exactement l'operateur plein cable ci-dessus.
@@ -172,12 +198,7 @@ static void observe_mg_solve(int n, double c, double& r0_out, double& rN_out, in
 
   const double csum = 2 * c;
   Array4 af = mg.rhs().fab(0).array();
-  for_each_cell(dom, [af, geom, csum](int i, int j) {
-    const double x = geom.x_cell(i), y = geom.y_cell(j);
-    const double s = std::sin(kPi * x) * std::sin(kPi * y);
-    const double cc = std::cos(kPi * x) * std::cos(kPi * y);
-    af(i, j) = -kPi * kPi * 2.0 * s + csum * kPi * kPi * cc;
-  });
+  for_each_cell(dom, ObserveMgRhsKernel{af, geom, csum});
   mg.phi().set_val(0.0);
 
   r0_out = static_cast<double>(mg.current_residual());

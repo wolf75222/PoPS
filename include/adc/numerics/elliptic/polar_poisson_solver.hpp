@@ -124,6 +124,14 @@ class PolarPoissonSolver {
   /// tridiagonale (Thomas) par mode azimutal. phi() contient la solution apres l'appel.
   void solve() {
     if (phi_.local_size() == 0) return;  // rang sans box locale (MPI) : rien a faire (cf. garde-fou)
+    // COHERENCE HOTE/DEVICE : solve() est un algorithme HOTE (std::vector / std::complex / fft1d /
+    // Thomas) qui lit le RHS via des pointeurs hote (f = rhs_.fab(0).const_array() ci-dessous). Le RHS
+    // a pu etre rempli par un kernel device (for_each_cell) reste eventuellement en vol. On rend la
+    // residence hote du RHS valide AVANT toute lecture hote, exactement comme les autres lecteurs
+    // hote du repo (cf. le seam sync_host()/device_fence() de for_each.hpp / MultiFab). Sous Kokkos
+    // Cuda = un device_fence() cible (sans quoi : donnee perimee -> cudaErrorIllegalInstruction). Sous
+    // Serie/OpenMP (memoire non Kokkos) = no-op : comportement BIT-IDENTIQUE a l'ancien.
+    rhs_.sync_host();
     const int nr = geom_.domain.nx();
     const int nth = geom_.domain.ny();
     const Real dr = geom_.dr();  // theta est SPECTRAL (valeur propre -k^2) : dtheta n'intervient pas
@@ -230,6 +238,12 @@ class PolarPoissonSolver {
   /// double-Neumann est EXCLU (sa ligne 0 est epinglee = jauge : equation identite triviale).
   Real residual() {
     if (phi_.local_size() == 0) return static_cast<Real>(all_reduce_max(0.0));
+    // Comme solve() : evaluation HOTE (FFT + stencil sur des pointeurs hote). On rend la residence hote
+    // du RHS valide avant lecture (kernel device eventuellement en vol). phi_ est ecrit cote hote par
+    // solve(), mais on fence aussi par symetrie/robustesse si residual() est appele independamment. Sous
+    // Serie/OpenMP = no-op (bit-identique) ; sous Kokkos Cuda = device_fence() cible.
+    rhs_.sync_host();
+    phi_.sync_host();
     const int nr = geom_.domain.nx();
     const int nth = geom_.domain.ny();
     const Real dr = geom_.dr();

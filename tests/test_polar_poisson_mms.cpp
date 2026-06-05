@@ -139,21 +139,18 @@ static ErrL2 err_vs_exact(const MultiFab& phi, const PolarGeometry& g, const Box
   return {std::sqrt(l2 / vol2), linf};
 }
 
-// Foncteur de remplissage du RHS polaire : device-clean (pas de lambda dans un template).
-// Chaque instance porte les handles Array4 et scalaires captures par valeur ; l'appel
-// to f_exact (un pointeur de fonction) est valide sur host et device.
-template <class FExact>
-struct FillRhsPolarKernel {
-  Array4 rhs;
-  PolarGeometry g;
-  FExact f_exact;
-  int m;
-  ADC_HD void operator()(int i, int j) const {
-    rhs(i, j, 0) = f_exact(g.r_cell(i), g.theta_cell(j), m);
-  }
-};
-
 // Resout un cas (Dirichlet OU Neumann) sur (nr x nth) et rend (erreur vs exact, residu discret).
+//
+// REMPLISSAGE DU RHS = BOUCLE HOTE (pas for_each_cell). La donnee manufacturee f_exact est une
+// FONCTION HOTE (f_dir / f_neu, static dans cette TU) passee par pointeur de fonction. Un pointeur de
+// fonction HOTE n'est PAS appelable depuis un kernel device (Kokkos::Cuda) : l'appel dans la
+// MDRangePolicy est une instruction illegale (cudaErrorIllegalInstruction au prochain
+// cudaDeviceSynchronize). On remplit donc le RHS cote HOTE, comme le sibling device-propre
+// test_polar_transport_mms (fill_exact = boucle hote, jamais for_each_cell pour des MMS a fonctions
+// hote). Le stockage Fab est en memoire UNIFIEE : la donnee ecrite cote hote est lue par solve()
+// (algorithme hote) sans copie. PolarPoissonSolver::solve()/residual() font un sync_host() en entree
+// (cf. polar_poisson_solver.hpp) : coherence garantie quel que soit le producteur du RHS. Sous
+// Serie/OpenMP rien ne change ; sous Kokkos Cuda on evite l'appel device invalide.
 template <class PhiExact, class FExact>
 static void solve_case(int nr, int nth, int m, const BCRec& bc, PhiExact phi_exact, FExact f_exact,
                        bool subtract_mean, ErrL2& err, double& res) {
@@ -163,7 +160,9 @@ static void solve_case(int nr, int nth, int m, const BCRec& bc, PhiExact phi_exa
 
   PolarPoissonSolver solver(g, ba, bc);
   Array4 rhs = solver.rhs().fab(0).array();
-  for_each_cell(dom, FillRhsPolarKernel<FExact>{rhs, g, f_exact, m});
+  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
+    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
+      rhs(i, j, 0) = f_exact(g.r_cell(i), g.theta_cell(j), m);
   solver.solve();
   err = err_vs_exact(solver.phi(), g, dom, [phi_exact, m](double r, double th) {
     return phi_exact(r, th, m);
