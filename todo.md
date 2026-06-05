@@ -5,6 +5,46 @@
 > (3) ce que les agents ont explicitement note comme "reste a faire".
 > Convention : `[x]` fait et sur `master`, `[~]` partiel, `[ ]` a faire.
 
+## ETAT COURANT (session juin 2026, master = #139)
+
+Synthese a date apres la pile Schur + pipeline System + polaire + revue adversariale. Detail dans
+les sections 10 a 15 (nouvelles).
+
+**Merge cette session :** #130 Poisson polaire (Phase 2a) ; #131 source couplee DSL (P5) ; #132 IMEX
+sur AMR (Gap 2) ; #133 foncteurs nommes nvcc (tests device) ; #134 krylov precond/matvec CL homogenes
+(findings revue 1+2) ; #139 doc archi AMR multi-blocs ; #137 honnetete API (findings 4/5/6) ;
+#138 step_cfl substeps-aware (finding 3 ; commentaires+docs+tests, formule INCHANGEE) ; #136
+acceleration CI (split fast/full + cache Kokkos/ccache, ~25 min -> ~5 min a chaud, tous les tests gardes).
+
+Findings de revue : **1-6 sur master** ; 7 dans #135 (en vol) ; 8 differe au portage MPI.
+
+CI (depuis #136) : PR de routine = ci-fast (Release + Python). MPI + Kokkos via push master / nightly /
+`workflow_dispatch` / label `ci-full`. REGLE : poser le label `ci-full` sur toute PR risquee (MPI /
+Kokkos / device / Schur / AMR) AVANT merge pour la validation complete.
+
+**En vol :**
+- [ ] **#135 fix device GPU** : accesseurs `Geometry`/`Box2D` `ADC_HD` + `all_reduce_max` CFL (finding 7).
+      Cause racine du "Schur/polaire FAUX EN SILENCE sur Cuda". Host-CI VERT ; attend validation device
+      GH200 avant merge (le host ne teste pas le device).
+- [ ] **PR stride (agent)** : fix cadence hold-then-catch-up `(macro+1)%stride==0` (bug latent du
+      couplage strided dans `AmrSystemCoupler`). Cf. section 15.
+- [ ] **PR layout-guard (agent)** : `same_layout_or_throw` exact (boxes+ordre, dmap, dx/dy, niveaux) +
+      `AmrHierarchyLayout` minimal + correction doc #139 + test bit-identique. Step-1 du capstone (section 15).
+
+**Prochaines etapes (sequencees) :**
+1. Merger #135 (sur vert device ROMEO) ; puis les 2 PR AMR-prep (stride + layout-guard, merge-tree
+   verifie entre elles, label `ci-full`).
+2. AMR multi-blocs capstone (Gap 4, section 15) : doc #139 faite ; le MOTEUR EXISTE DEJA
+   (`AmrSystemCoupler`), donc COMPLETION pas creation. step-1 (extraire AmrBlock/layout, bit-identique)
+   EN ATTENTE DE GO ; les etapes facade attendent que #137 libere `__init__.py`.
+3. Polaire Phase 2b (section 12) : cabler transport+Poisson polaire dans `System.step` + couplage
+   cartesien<->polaire + RUN diocotron annulaire. LE livrable scientifique (geometrie = le verrou du
+   taux de croissance ; affine/remplace le verrou "paroi-transport" de la section 8). Apres #138.
+4. Schur PR6 (mesure diocotron-Schur) : differe jusqu'a la geometrie polaire (le Schur stabilise le
+   TEMPS, il n'adresse PAS le gap de taux de croissance, qui est GEOMETRIQUE).
+5. Finding revue 8 (`fab(0)` sans garde) : DIFFERE au portage MPI (un demi-fix ferait un faux-silencieux
+   au lieu d'un crash franc).
+
 ## 0. API publique RECOMMANDEE (point d'entree utilisateur)
 
 Deux facons d'ecrire un modele, toutes deux executees en C++ natif (zero boucle cellule par cellule
@@ -92,14 +132,15 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       numerique coeur, decoupage elliptique (operateur / solveur / probleme).
 
 **Ordre de parite `AmrSystem` -> `System`** (combler les ecarts du chemin AMR dans cet ordre) :
-- **Gap 1 - flip facade** : lever le rejet FACADE Python de HLLC/Roe + reconstruction primitive sur
-  `AmrSystem.add_equation` (le moteur C++ `add_compiled_model(AmrSystem&)` les supporte deja ; rejet
-  PUREMENT facade, cf. section 8 Etape 5). Le moins couteux : un flip de garde-fou.
-- **Gap 2 - IMEX** : steppers implicites/IMEX sur AMR (aujourd'hui AMR EXPLICITE uniquement).
-- **Gap 3 - multi-box natif** : cabler le chemin natif multi-box cote facade (le moteur existe ;
-  non expose).
-- **Gap 4 - multi-espece (capstone)** : `AmrSystem` mono-bloc -> plusieurs blocs/especes sur la
-  hierarchie (couronnement de la parite avec `System`).
+- [x] **Gap 1 - flip facade** : rejet FACADE Python de HLLC/Roe + reconstruction primitive leve sur
+  `AmrSystem.add_equation` (le moteur C++ `add_compiled_model(AmrSystem&)` les supportait deja ; rejet
+  PUREMENT facade). FAIT.
+- [x] **Gap 2 - IMEX sur AMR** : `mf_apply_source_treatment` selectionne forward-Euler vs
+  `backward_euler_source` (foncteur nomme `BackwardEulerSourceKernel`) via un bool runtime ; parite
+  dmax=0, conservation 1e-15, defaut explicite bit-identique, tests stiff. (#132)
+- [~] **Gap 3 - multi-box natif** + **Gap 4 - multi-espece (capstone)** : FUSIONNES dans le capstone AMR
+  multi-blocs (section 15, doc #139). Constat : le moteur multi-blocs EXISTE DEJA (`AmrSystemCoupler`) ;
+  reste a exposer N blocs via la facade runtime + ajouter `regrid` au coupleur. EN ATTENTE DE GO.
 
 ## 4. GPU (GH200) - integration
 
@@ -265,3 +306,120 @@ sur le BORD D'ANNEAU (Phase 1 par masque fermee sans merge, #109, car elle masqu
       etre refutee). (#5, #6)
 - [ ] **Confirmation haute resolution n=384 / n=512 (incl. O5) sur ROMEO/GH200** AVANT toute reecriture
       de la roadmap papier (`PAPER_ROADMAP.md`). Sur accord.
+
+## 10. Condensation de Schur (EPM implicite condense, theta-schema)
+
+Algorithme NUMERIQUE (pas une physique) : eliminer la vitesse pour condenser sur le potentiel ->
+pas implicite stable a grand dt. Modele = physique ; SchurCondensation = algo. Operateur condense
+`-Lap phi - theta^2 dt^2 alpha div(rho B^-1 grad phi)` (NON symetrique) -> Krylov.
+
+- [x] **PR0 - doc** `docs/SCHUR_CONDENSATION_DESIGN.md` : convention de signe verrouillee
+      `A_op = I + theta^2 dt^2 alpha rho B^-1`, A non symetrique -> Krylov necessaire. (#119)
+- [x] **PR2 - LorentzEliminator** : `B`, `B^-1` analytique (`apply_Binv`, `binv_ij`), POD/`ADC_HD`. (#118)
+- [x] **PR1 - TensorEllipticOperator** : `-div(A grad phi) + kappa phi`, termes croises (stencil 9 points,
+      foncteur nomme `cross_div`), `set_cross_terms`. A=I/diag bit-identique. (#120)
+- [x] **PR3 - Krylov BiCGStab matrice-libre** non symetrique, preconditionne par MG sur la partie
+      symetrique (MG seul stagne/diverge), dots collectifs MPI-safe. (#122)
+- [x] **PR3 - batisseur** `schur_condensation.hpp` : coefficients de `A_op` + RHS condense, generique
+      sur les roles. (#124)
+- [x] **PR4 - etage source** `CondensedSchurSourceStepper` : build -> Krylov -> reconstruit v ->
+      energie -> extrapole U^{n+1} -> ghosts. Relation implicite 1e-15, stable a 8x le dt explicite. (#126)
+- [x] **PR5 - binding Python** : `adc.Split(hyperbolic, source=adc.CondensedSchur(...))` + `adc.Role` +
+      routage `set_source_stage` (no-op si nullptr, apres transport). (#128)
+- [x] **Fix revue (findings 1+2)** : precond ET matvec a CL HOMOGENES sous Dirichlet non nul (la matvec
+      de r0 garde l'affine ; matvec en boucle + precond linearises en retranchant leur offset) ;
+      `op_`!=`precond_` impose. Bit-identique a Dirichlet nul. (#134)
+- [~] **Device-clean GPU** : le stack Schur etait FAUX EN SILENCE sur Cuda (accesseurs Geometry/Box2D
+      non `ADC_HD` -> RHS/reductions faux, BiCGStab "0 iters rel=0 puis NaN"). Fix dans #135 (en vol,
+      attend validation GH200). Host = correct, CI verte.
+- [ ] **PR6 - mesure diocotron-Schur** : DIFFERE jusqu'a la geometrie polaire (le Schur stabilise le
+      TEMPS ; il n'adresse PAS le gap de taux de croissance, qui est GEOMETRIQUE).
+- [ ] **PR7/PR8 - portage GPU/MPI + AMR** : apres #135 ; bit-invariance au nombre de rangs.
+
+## 11. Pipeline ergonomique System (P1-P7)
+
+- [x] **P1 - stride par bloc** : `Explicit/IMEX(stride=M)` (hold-then-catch-up), CFL
+      `dt=cfl*h*substeps/(stride*w)`. (#121) Honnetete du wording -> finding revue 3 (#138).
+- [x] **P2 - clarifier Implicit/IMEX** : renommage `SourceImplicit`, deprecation de `Implicit`. (#123)
+- [x] **P3 - masque `implicit_vars`** sur la politique temporelle / le bloc (PAS sur le modele). (#125)
+- [x] **P4 - `set/get_primitive_state`** (init/diagnostic en variables primitives). (#127)
+- [x] **P5 - CoupledSource DSL** : `adc.dsl.CoupledSource` -> bytecode postfixe interprete par un
+      foncteur device nomme dans `apply_couplings` ; generique inter-especes ; 3 especes + conservation,
+      MPI np=1/2/4 bit-identique. (#131)
+- [ ] **P6 - AMR multi-blocs** = capstone Gap 4, voir section 15.
+- [ ] **P7 - implicit-total + params runtime DSL** : DIFFERE.
+
+## 12. Geometrie polaire / annulaire (le vrai verrou du taux de croissance diocotron)
+
+Conclusion scientifique : le verrou du taux de croissance est l'advection CARTESIENNE du gradient
+radial de l'anneau ; la geometrie POLAIRE le preserve (proto : ratio 73 vs 1.0 cartesien). Le Schur
+n'adresse PAS ce gap (il stabilise le temps). Donc le levier = mettre la geometrie polaire.
+
+- [x] **Abstraction Mesh** : `adc.PolarMesh` / `adc.CartesianMesh` -> `System(mesh=)` (PAS
+      `FiniteVolume(geometry=)`). `PolarGeometry`, divergence polaire `(1/r)d_r(r F_r)+(1/r)d_th F_th`,
+      `ExBVelocityPolar` `v_r=-(1/(Br))d_th phi`, `v_th=(1/B)d_r phi`. (#116)
+- [x] **Phase 2a - Poisson polaire direct** sur anneau : FFT-en-theta + tridiagonal-en-r (robuste,
+      evite le MG-en-polaire qui stagne). (#130)
+- [~] **Device** : flux/metrique polaire FAUX en silence sur Cuda (meme cause #135 : `r_cell`/`theta_cell`
+      non `ADC_HD`). Fix #135 (en vol).
+- [ ] **Phase 2b** : cabler transport+Poisson polaire dans `System.step` + couplage cartesien<->polaire
+      + RUN diocotron annulaire (la mesure). Apres #138 (libere `system.cpp`). LE livrable scientifique.
+
+## 13. Revue adversariale + durcissement (findings)
+
+Revue adversariale exhaustive du travail merge (Schur + pipeline System + polaire) : 8 findings
+confirmes reels sur 12. Disposition :
+
+- [x] **F1 - precond CL non homogenes** (krylov) : operateur affine -> BiCGStab faux pour Dirichlet
+      non nul. Corrige #134.
+- [x] **F2 - aliasing `op_`==`precond_`** : commentaire "toujours valable" faux. Corrige #134.
+- [ ] **F3 - step_cfl substeps>1 non bit-identique** : DECISION = garder la CFL substeps-aware
+      (correcte), corriger le wording + tests. En vol #138.
+- [ ] **F4 - `evolve=False` ignore en silence sur prototype/aot** : rejet explicite. En vol #137.
+- [ ] **F5 - `adc.Split` perdu en silence sur AmrSystem** : rejet explicite. En vol #137.
+- [ ] **F6 - descripteurs `CondensedSchur` jamais transmis** (code mort API) : rejet non-defaut. En vol #137.
+- [ ] **F7 - `max_wave_speed_mf` non collectif** (dt divergent par rang MPI) : `all_reduce_max`. Dans #135.
+- [ ] **F8 - `fab(0)` sans garde `local_size()`** dans le marshaling : DIFFERE au portage MPI (un demi-fix
+      ferait un faux-silencieux au lieu d'un crash franc ; a faire avec gather/scatter).
+
+## 14. Acceleration CI (garder tous les tests, aller plus vite)
+
+- [ ] **#136** (en vol) : cache du Kokkos INSTALLE (gros gain : plus de rebuild a chaque run) + ccache
+      (`CMAKE_CXX_COMPILER_LAUNCHER`) + Ninja + `ctest --parallel 2` (PAS plus : TU AMR/Eigen 1-2 Go) +
+      `setup-python@v6` + auto-decouverte `python/tests/test_*.py` + `concurrency: cancel-in-progress`
+      + split **ci-fast** (PR) / **ci-full** (push master + nightly + `workflow_dispatch` + label
+      `ci-full`). Aucun test supprime ; label `ci-full` pour exiger MPI/Kokkos sur une PR risquee.
+
+## 15. AMR multi-blocs sur hierarchie partagee (capstone Gap 4 / P6)
+
+Reference : `docs/AMR_MULTIBLOCK_DESIGN.md` (#139). Modele AMReX/FLASH/SAMRAI : UNE hierarchie AMR
+commune portant N blocs co-localises ; regrid pilote par l'UNION des criteres.
+
+Cadrage STRICT (verrouille) : meme hierarchie, memes cellules, champs co-localises ; TOUS les blocs
+evolues sur TOUS les patchs (jamais d'absence spatiale d'une espece) ; souplesse uniquement par-bloc
+(modele/spatial/time/substeps/stride/evolve) ; Poisson `rhs[level]=somme des elliptic_rhs` co-localises ;
+sources couplees meme-cellule a contributions EXACTEMENT opposees ; reflux par bloc ; tags = e OR i OR n
+OR phi OR user ; optimisations futures TEMPORELLES seulement (stride / evolve global au bloc), JAMAIS
+spatiales locales. PAS de hierarchie par espece en v1 (Phase 3 seulement si besoin scientifique reel).
+
+CONSTAT CLE : le moteur multi-blocs EXISTE DEJA = `AmrSystemCoupler` (compile-time : hierarchie
+partagee, Poisson somme, scheme/substeps/stride par bloc, IMEX-callback, sources niveau-par-niveau,
+B_z partage). Donc COMPLETION, pas creation. Deux manques reels : (1) la facade runtime `AmrSystem`
+refuse un 2e bloc (`python/amr_system.cpp:129-130, 152-153`) ; (2) `AmrSystemCoupler` n'a PAS de
+`regrid` (hierarchie figee) contrairement a `AmrCouplerMP::regrid`. Bug latent : cadence sur
+`macro_step_ % stride` au lieu de `stride_due` (couplage faux pour blocs strided).
+
+Decoupe PR (Phase 1, write-sets) - EN ATTENTE DE GO :
+- [ ] **(i)** extraire `AmrBlock` / `AmrHierarchyLayout`, sans changer la physique (bit-identique mono-bloc).
+- [ ] **(ii)** 2 blocs explicites, schemas differents.
+- [ ] **(iii)** Poisson somme co-localise.
+- [ ] **(iv)** substeps/stride/evolve + step_cfl substeps-aware (+ fix `stride_due`).
+- [ ] **(v)** DSL production multi-bloc (bloc NOMME) -- attend #137 (libere `__init__.py`).
+- [ ] **(vi)** sources couplees AMR meme-cellule / opposees.
+- [ ] **(vii)** IMEX local AMR.
+- [ ] **(viii)** ensuite seulement : Schur / implicite global / repro papier.
+
+Tests d'acceptation : 2 blocs explicites schemas differents ; e- IMEX(substeps=10) + ions
+Explicit(substeps=1) ET l'inverse ; neutres stride=20 nourrissant sources/Poisson ; evolve=False fond
+fixe dans le RHS elliptique ; regrid conserve la masse par bloc ; DSL production 2 blocs ; MPI np=1/2/4 ;
+Kokkos Serial ; 1 cas multi-bloc production sur GH200.
