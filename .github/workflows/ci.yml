@@ -1,5 +1,11 @@
 name: CI
 
+# Strategie fast/full :
+#  - ci-fast (sur pull_request) : Release + son ctest + module Python + tests Python.
+#    C'est le gate OBLIGATOIRE des PR, rapide grace aux caches (ccache + pip).
+#  - ci-full (push master, nightly cron, workflow_dispatch, ou PR portant le label
+#    `ci-full`) : Release + MPI + Kokkos-Serial + Python, la suite COMPLETE.
+# Aucun test n'est supprime : seuls les declencheurs et le cache changent.
 on:
   push:
     branches: [master]
@@ -9,115 +15,188 @@ on:
       - 'tutorials/**'
       - '.gitignore'
   pull_request:
+    # Types par defaut (opened, synchronize, reopened) PLUS labeled : poser le label
+    # `ci-full` sur une PR re-declenche le workflow, et set-mode bascule alors en plein
+    # (MPI + Kokkos). Sans `labeled`, ajouter un label ne relance aucun run.
+    types: [opened, synchronize, reopened, labeled]
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - 'tutorials/**'
       - '.gitignore'
+  schedule:
+    # Suite complete chaque nuit (03:17 UTC) meme sans push, pour attraper toute
+    # derive d'environnement (image runner, deps apt) hors du chemin critique des PR.
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Un nouveau push sur une meme branche/PR annule le run precedent encore en vol :
+  # on n'immobilise pas les runners lents sur une revision deja perimee.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Calcule si la suite COMPLETE (MPI + Kokkos) doit tourner. Plein si :
+  #  - push sur master, OU
+  #  - run nocturne (schedule), OU
+  #  - declenchement manuel (workflow_dispatch), OU
+  #  - PR portant le label `ci-full` (l'integrateur exige la validation MPI/Kokkos
+  #    sur une PR a risque avant merge).
+  # Sinon (PR ordinaire) : gate rapide seul (Release + Python).
+  set-mode:
+    name: mode (fast/full)
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.decide.outputs.full }}
+    steps:
+      - id: decide
+        run: |
+          full=false
+          if [ "${{ github.event_name }}" = "push" ] \
+             || [ "${{ github.event_name }}" = "schedule" ] \
+             || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            full=true
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}" = "true" ]; then
+            full=true
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "Mode plein (MPI + Kokkos) : $full (event=${{ github.event_name }})"
+
   build-and-test:
     name: ubuntu-latest / Release
     runs-on: ubuntu-latest
+    # Pas de `needs: set-mode` : Release + Python tournent dans TOUS les modes (fast comme
+    # full), donc ce job demarre tout de suite, en parallele du calcul de mode. Seuls mpi
+    # et kokkos dependent de set-mode (ils ne tournent qu'en plein).
+
+    env:
+      # ccache borne : evite que le cache enfle sans fin entre les runs.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
 
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev
+          sudo apt-get install -y libeigen3-dev ninja-build ccache
+
+      # ccache : cle la plus specifique (os+job+ref+sha) en ecriture, restore-keys
+      # du plus precis au plus large (meme job sur la branche -> sur master -> n'importe).
+      - name: Cache ccache (Release)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-release-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-release-${{ github.ref }}-
+            ccache-${{ runner.os }}-release-refs/heads/master-
+            ccache-${{ runner.os }}-release-
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         # Cap les jobs paralleles : les instanciations de templates AMR + Eigen
         # dans les TU les plus lourdes (test_amr_*) peuvent prendre ~1-2 GB RAM ;
         # avec -j illimite le runner github (~7 GB) se fait tuer (exit 143).
-        run: cmake --build build --config Release -j 2
+        run: cmake --build build --config Release --parallel 2
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -C Release
+        # --parallel 2 seulement : meme contrainte memoire que le build (TU lourdes
+        # 1-2 GB) ; un -j illimite tue le runner.
+        run: ctest --test-dir build --output-on-failure -C Release --parallel 2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          cache: pip
+
+      - name: Cache ccache (Python module)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache-py
+          key: ccache-${{ runner.os }}-python-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-python-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-refs/heads/master-
+            ccache-${{ runner.os }}-python-
 
       - name: Build + test Python module `adc`
         # Les bindings de la lib (module `adc` : System + facades) vivent ICI. On construit
-        # l'extension _adc et on exerce test_bindings.py (composition, Poisson, integrateur Python)
-        # et la suite du mini-DSL symbolique : test_dsl (interprete CPU), test_dsl_codegen (codegen
-        # fonction flux), test_dsl_brick (brique satisfaisant HyperbolicModel == Euler/ExB),
-        # test_dsl_source (source == PotentialForce), test_dsl_compose (CompositeModel genere ==
-        # ecrit main), test_dsl_jit (formules -> .hpp -> g++ -> residu Rusanov identique a Euler),
-        # test_dsl_coupled (euler_poisson JIT = bloc COUPLE : elliptic_rhs cable au Poisson + source),
-        # test_dsl_roles (la brique generee declare ses VariableRole ; index_of(role) resout par sens).
+        # l'extension _adc puis on exerce TOUTE la suite python/tests/test_*.py par
+        # AUTO-DECOUVERTE (find ... | xargs -P 2) : la liste ne peut plus se perimer et un
+        # nouveau test livre par une PR soeur est pris automatiquement. L'ensemble decouvert
+        # est un SUR-ENSEMBLE de l'ancienne liste manuelle (verifie : tous les anciens
+        # test_*.py sont matches, plus quelques tests deja presents jamais cables a la main).
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache-py
+          CCACHE_MAXSIZE: 500M
         run: |
           pip install --upgrade pip numpy
-          cmake -B build-py -DCMAKE_BUILD_TYPE=Release -DADC_BUILD_PYTHON=ON -DADC_USE_EIGEN=OFF
-          cmake --build build-py --target _adc -j 2
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_bindings.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_codegen.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_brick.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_source.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_compose.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_jit.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_elliptic.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_cse.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_jitlib.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_dynamic.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_block.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_coupled.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_coupled_source.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_aot.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_hybrid.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_hybrid_bz.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_hybrid_amr.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_hybrid_coupling.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_recon.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_poisson_eps.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_poisson_eps_aniso.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_poisson_screened.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_poisson_composite.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_magnetic_field.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_aux_naux.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_jit_bz.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_jit_te.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_roles.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_aot_bz.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_aot_te.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_block_names_dynamic.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_abi_metadata.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_weno5_compiledmodel.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_production_amr.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_stride.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_time_policy.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_implicit_vars.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_primitive_state.py
-          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_schur_split.py
+          cmake -B build-py -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DADC_BUILD_PYTHON=ON -DADC_USE_EIGEN=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-py --target _adc --parallel 2
+          export PYTHONPATH="$PWD/build-py/python"
+          find python/tests -maxdepth 1 -name 'test_*.py' -print0 | sort -z \
+            | xargs -0 -P 2 -I {} bash -c 'echo "::group::{}"; python3 "{}"; echo "::endgroup::"'
+
+      - name: ccache stats (Release)
+        if: always()
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: ccache -s
+
+      - name: ccache stats (Python module)
+        if: always()
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache-py
+        run: ccache -s
 
   mpi:
     name: ubuntu-latest / MPI
     runs-on: ubuntu-latest
+    needs: set-mode
+    # Suite complete uniquement (push master / nightly / dispatch / PR label `ci-full`).
+    if: needs.set-mode.outputs.full == 'true'
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
 
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev libopenmpi-dev openmpi-bin
+          sudo apt-get install -y libeigen3-dev libopenmpi-dev openmpi-bin ninja-build ccache
+
+      - name: Cache ccache (MPI)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-mpi-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-mpi-${{ github.ref }}-
+            ccache-${{ runner.os }}-mpi-refs/heads/master-
+            ccache-${{ runner.os }}-mpi-
 
       - name: Configure + build (MPI)
         run: |
-          cmake -B build-mpi -DCMAKE_BUILD_TYPE=Release -DADC_USE_MPI=ON
-          cmake --build build-mpi --config Release -j 2
+          cmake -B build-mpi -G Ninja -DCMAKE_BUILD_TYPE=Release -DADC_USE_MPI=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-mpi --config Release --parallel 2
 
       - name: Test (bit-identique np=1/2/4)
         # Les runners n'ont que 2-4 slots ; mpirun -np 4 a besoin d'oversubscribe.
@@ -125,33 +204,78 @@ jobs:
         env:
           OMPI_MCA_rmaps_base_oversubscribe: "true"
           PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
-        run: ctest --test-dir build-mpi --output-on-failure -C Release
+        run: ctest --test-dir build-mpi --output-on-failure -C Release --parallel 2
+
+      - name: ccache stats (MPI)
+        if: always()
+        run: ccache -s
 
   kokkos:
     name: ubuntu-latest / Kokkos (Serial)
     runs-on: ubuntu-latest
+    needs: set-mode
     # Teste le backend KOKKOS sur CPU (Serial). Indispensable : le build SANS Kokkos (job Release)
     # ne couvre PAS le chemin kokkos_malloc / for_each Kokkos. C'est ce trou qui avait laisse passer
     # la regression d'init (allocation d'un Fab avant l'init paresseuse de Kokkos).
+    # Suite complete uniquement (push master / nightly / dispatch / PR label `ci-full`).
+    if: needs.set-mode.outputs.full == 'true'
+
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Prefixe FIXE ou Kokkos est installe ; mis en cache (le gros gain : pas de
+      # reconstruction de Kokkos a chaque run). Version EXACTE : 4.4.01, Serial.
+      KOKKOS_VERSION: 4.4.01
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
 
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev
+          sudo apt-get install -y libeigen3-dev ninja-build ccache
+
+      # Cache du Kokkos DEJA INSTALLE, cle sur la version exacte + serial + compilateur.
+      # Sur hit, on saute entierement la reconstruction de Kokkos (le gros poste de temps).
+      - name: Cache Kokkos install (Serial ${{ env.KOKKOS_VERSION }})
+        id: kokkos-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.KOKKOS_PREFIX }}
+          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-serial-cxx20-gcc
+
+      - name: Cache ccache (Kokkos)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-kokkos-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-kokkos-${{ github.ref }}-
+            ccache-${{ runner.os }}-kokkos-refs/heads/master-
+            ccache-${{ runner.os }}-kokkos-
 
       - name: Build + install Kokkos (Serial)
+        # Reconstruit Kokkos UNIQUEMENT sur cache miss ; sinon on reutilise le prefixe en cache.
+        if: steps.kokkos-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 -b 4.4.01 https://github.com/kokkos/kokkos.git /tmp/kokkos
-          cmake -S /tmp/kokkos -B /tmp/kbuild -DKokkos_ENABLE_SERIAL=ON \
-            -DCMAKE_INSTALL_PREFIX=/tmp/kinstall -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20
-          cmake --build /tmp/kbuild -j 2 --target install
+          git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos
+          cmake -S /tmp/kokkos -B /tmp/kbuild -G Ninja -DKokkos_ENABLE_SERIAL=ON \
+            -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build /tmp/kbuild --parallel 2 --target install
 
       - name: Configure + build (backend Kokkos)
         run: |
-          cmake -B build-kokkos -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON -DKokkos_ROOT=/tmp/kinstall
-          cmake --build build-kokkos --config Release -j 2
+          cmake -B build-kokkos -G Ninja -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON \
+            -DKokkos_ROOT="${KOKKOS_PREFIX}" -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-kokkos --config Release --parallel 2
 
       - name: Test (ctest, backend Kokkos Serial)
-        run: ctest --test-dir build-kokkos --output-on-failure -C Release
+        run: ctest --test-dir build-kokkos --output-on-failure -C Release --parallel 2
+
+      - name: ccache stats (Kokkos)
+        if: always()
+        run: ccache -s
