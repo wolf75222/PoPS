@@ -34,11 +34,12 @@ Deux niveaux dans Hoffart (Section 5.3) :
    exponentielle, classement des modes correct, `l=4` dominant), mais SOUS-ESTIME le taux :
    `l=3 -22 %`, `l=4 -27 %`, `l=5 -5 %` (n=192, Minmod ordre 2). `todo.md` section 6 : M1
    "limite par la diffusion numerique du bord d'anneau", M2/M2b "AMR sur le bord d'anneau triple
-   le taux a base egale".
+   le taux a base egale". Le balayage ordre x resolution etend desormais cet axe jusqu'a O5
+   (WENO5-Z + SSPRK3) et jusqu'a n=512 ; voir la lecture par mode dans la section "verrou" ci-dessous.
 
-L'ecart restant N'EST PAS un bug : c'est l'ecart attendu d'un schema FV d'ordre modere sur le
-bord d'anneau, l-dependant et structurel. Le verrou identifie est le **bord d'anneau
-cartesien**.
+A ce stade, l'ecart ressemble davantage a une limite numerique/structurelle du schema FV
+cartesien qu'a un bug isole, mais le niveau exact du plancher reste a confirmer. Le candidat
+identifie est le **bord d'anneau cartesien**.
 
 ## Le verrou structurel : bord d'anneau cartesien
 
@@ -53,14 +54,40 @@ donc diffuse par le schema FV cartesien, ce qui amortit le taux de croissance de
 l-dependante (les modes a plus courte longueur d'onde, l=4, paient le plus). Monter en
 resolution referme partiellement l'ecart mais ne change pas la nature du verrou.
 
-MESURE (PR-0, `diocotron/SWEEP_RESULTS.md` cote adc_cases). Le balayage ordre x resolution
-chiffre la part diffusion vs structurel par mode : **l=3 est diffusion-limite** (l'ecart se
-referme de facon monotone, -34% a -12% de n=128 a 384, pas de plancher), **l=4 PLAFONNE ~12%
-au-dela de n=256** (minmod -12.1% -> -12.5%) -- ce residu PLAT en resolution est la signature
-chiffree du verrou cartesien (transport-wall), et l'argument quantitatif pour la PR-A. l=5 est
-deja proche de la cible. ATTENTION : le balayage ne couvre que l'ordre <= 2 (voir Panier 1) :
-WENO5-Z / SSPRK3 ne sont PAS encore accessibles depuis Python (le cablage `make_block` plafonne a
-l'ordre 2). L'axe ordre reel est {O1, O2-minmod, O2-vanleer}.
+MESURE (`diocotron/SWEEP_RESULTS.md` cote adc_cases). Le balayage ordre x resolution chiffre la
+part diffusion vs structurel par mode. Il couvre maintenant l'axe haut ordre O5 = WENO5-Z + SSPRK3
+(atteignable depuis Python depuis adc_cpp #88, cf. Panier 1) et la haute resolution n=384/512 (job
+ROMEO x64cpu). L'axe ordre reel est donc `{O1 none, O2 minmod, O2 vanleer, O5 weno5}`. But de l'axe
+O5 : eclairer la question laissee ouverte a O2 - le residu l-dependant est-il de la diffusion
+(refermable par l'ordre) ou un plancher structurel du bord d'anneau cartesien ? Lecture par mode
+(les %err detailles, les fenetres de fit et les reserves sont dans `SWEEP_RESULTS.md`, source de
+verite) :
+
+- **l = 3 (le signal le plus PROPRE, fenetre de fit homogene a tout n)** : l'`|%err|` se referme
+  d'abord nettement avec l'ordre et la resolution, puis a O5 il APLATIT autour de -9 % a haute
+  resolution (-10.3 % a n=256, -8.6 % a n=384, -8.8 % a n=512 : un cran plat dans le bruit de
+  mesure). Ce n'est pas le comportement d'une diffusion qui s'epuise, c'est le candidat le plus
+  CREDIBLE a un residu structurel.
+- **l = 4 (le mode-cle)** : a basse resolution O5 tombe a ~ -4 % (n=128, n=256), ce que la lecture
+  O2 prenait pour "diffusion presque epuisee" ; mais a n=384/512 il REMONTE vers ~ -9/-10 %. Reserve
+  majeure : ces deux points haute resolution ont une fenetre de fit qui s'ouvre tot (t0 = 6.3 et
+  5.4, comme le point n=192 deja ecarte), donc ils sous-lisent probablement la pente. On NE peut
+  donc PAS conclure fortement sur l=4 : on peut seulement dire que le -4 % ne se reproduit a aucune
+  des deux resolutions superieures.
+- **l = 5** : deja proche de la cible des O2 a n=192 ; petit residu de signe variable (quelques %),
+  ni l'ordre ni la haute resolution n'y font apparaitre de plancher.
+
+CONCLUSION PRUDENTE (a confirmer, ne constitue PAS une preuve definitive). L'axe O5 + haute
+resolution AFFAIBLIT l'hypothese "tout l'ecart etait de la diffusion d'ordre 2" : a l'ordre 5, sur
+le mode le mieux mesure (l=3), le residu ne continue pas de se refermer mais semble plafonner. Les
+DONNEES SUGGERENT un plancher residuel l-dependant de l'ordre de ~9-10 % a l'ordre 5 (contre ~12 %
+vus a O2), probablement lie au bord d'anneau cartesien / paroi de transport, RESTE A CONFIRMER. Deux
+limites empechent d'en faire un chiffre ferme : (1) le plateau l=3 ne tient pour l'instant que sur
+un seul cran plat n=384 -> n=512 (un n=768/1024 ou deux horizons `t_end` excluraient une convergence
+tres lente) ; (2) les points l=4 haute resolution sont biaises par leur fenetre de fit precoce
+(diagnostic de fenetre robuste a prevoir avant de chiffrer un plancher l=4). Ce candidat structurel
+reste l'argument quantitatif pour la PR-A "transport-wall", desormais avec une taille plausible
+revisee a ~9-10 % a l'ordre 5.
 
 ## Classification des manques (4 paniers)
 
@@ -68,14 +95,16 @@ l'ordre 2). L'axe ordre reel est {O1, O2-minmod, O2-vanleer}.
 
 Capacites cablees et exposees, suffisantes pour pousser plus loin sans nouveau code.
 
-- **Montee en RESOLUTION** : reglage pur (le cas diocotron tourne deja a n variable). C'est la voie
-  M3 de `todo.md` section 6, et le balayage de resolution est fait (PR-0). PRECISION (corrige une
-  affirmation anterieure) : la montee en ORDRE WENO5-Z / SSPRK3 N'EST PAS "deja possible" depuis
-  Python. `Weno5` et SSPRK3 existent dans le coeur (`reconstruction.hpp`, `time_steppers.hpp`) mais
-  `make_block` (`block_builder.hpp:122-143`) n'instancie que `Minmod`/`VanLeer` (ordre <= 2), et
-  `adc.Spatial(limiter="weno5")` leve "limiter inconnu" ; `adc.Explicit` = SSPRK2. Le balayage PR-0
-  est donc {O1, O2}. Cabler WENO5-Z/SSPRK3 dans `make_block` (chemin accessible depuis Python) est
-  du CODE COEUR, pas un reglage : c'est une PR core dediee, prerequis a un sweep haut-ordre.
+- **Montee en RESOLUTION et en ORDRE** : reglage pur (le cas diocotron tourne deja a n variable).
+  C'est la voie M3 de `todo.md` section 6, et le balayage resolution x ordre est fait (cf.
+  `SWEEP_RESULTS.md`). La montee en ORDRE WENO5-Z + SSPRK3 est desormais atteignable depuis Python
+  (adc_cpp #88) : `adc.Spatial(limiter="weno5")` (raccourci `weno5=True`) selectionne la
+  reconstruction WENO5-Z dans `make_block`, et `adc.Explicit(method="ssprk3")` (raccourci
+  `ssprk3=True`) l'integrateur SSPRK3, par le chemin natif `add_block`. Le defaut reste inchange
+  (Minmod / SSPRK2, bit-identique au pre-#88). Seule limite : le chemin natif `add_block` expose
+  WENO5 ; les chemins `.so` AOT/JIT (`add_compiled_block`) allouent 2 ghosts et rejettent `"weno5"`
+  (cf. Panier 2 / locks infra). Le balayage couvre donc `{O1, O2-minmod, O2-vanleer, O5 weno5}`,
+  jusqu'a n=512.
 - **Paroi conductrice circulaire sur Poisson** : `wall="circle"` + `wall_radius` est cable sur
   `System` (`python/bindings.cpp:97`) ET sur `AmrSystem` (`python/bindings.cpp:193`,
   `python/amr_system.cpp:78`). Le cut-cell elliptique est valide (MMS ordre 2, multi-box, MPI ;
@@ -86,6 +115,24 @@ Capacites cablees et exposees, suffisantes pour pousser plus loin sans nouveau c
   reglage de config.
 - **Diagnostic de taux** : la chaine mesure (FFT azimutale du mode `l` de `phi`, ajustement de
   la phase lineaire) est entierement en place cote `adc_cases`.
+
+### Etat des chemins d'execution GPU / MPI (production)
+
+Statut factuel des chemins production (briques natives, pas DSL), independant de la PR-A :
+
+- **`System` production CPU** : valide (ctest serie ; pipeline diocotron tourne).
+- **`AmrSystem` production CPU** : valide.
+- **`System` GPU production np=1** : valide sur GH200 (adc_cpp #97). #97 corrige le segfault device
+  des kernels elliptique/maillage (lambdas etendues premiere-instanciees depuis une TU externe ->
+  foncteurs nommes, codegen device robuste sous nvcc) ; parite Cuda vs Serial `dmax_abs` ~ 1e-13
+  sur `solve_fields`, `compute-sanitizer` propre.
+- **`System::solve_fields` MPI CPU np=1/2/4** : valide (adc_cpp #99). #99 corrige le segfault hote
+  du post-traitement par cellule (`fab(0)` sans garde `local_size()` sur les rangs sans box) ;
+  resultat bit-invariant au nombre de rangs (`test_mpi_system_solve_fields_np{1,2,4}`, joue en CI MPI).
+- **device-MPI production (GPU multi-rang)** : RESTE A VALIDER separement (adc_cpp #100, suivi).
+
+Ces chemins ne sont PAS sur le chemin critique de la cible analytique ni du sweep diocotron (CPU),
+mais ils conditionnent la montee en resolution multi-GPU evoquee au Panier 4.
 
 ### Panier 2 : facade DSL de production `m.compile(backend=...)`
 
@@ -98,13 +145,14 @@ consolidation en facade de production, pas la machinerie.
   marque `category = "experimental", ci = false` dans `cases_manifest.toml`. Aucun cas diocotron
   ne passe par le DSL aujourd'hui (les compositions vont par `models.diocotron(...)`, briques
   natives).
-- **Limite device connue** : `System::add_compiled_model` a LAMBDAS ETENDUES segfaute sur Cuda
-  (`docs/GPU_RUNTIME_PORT.md` phase 8 et round 2). Le contournement device-clean (foncteurs
-  nommes `block_builder.hpp`) est valide sur GH200 (phase 9, limites device (a) et (b) levees,
-  `todo.md` section 4), mais le chemin `add_compiled_model` Python n'est PAS encore re-route
-  dessus de bout en bout. Reproduire Hoffart NE depend pas du DSL (les briques natives
-  suffisent) ; ce panier n'est requis que si l'on veut piloter le modele magnetise complet en
-  formules depuis Python plutot qu'en composant des briques.
+- **Limite device connue** : la recette device-clean (lambda etendue -> foncteur nomme, codegen
+  device robuste sous nvcc) couvre maintenant le transport (`block_builder.hpp`, adc_cpp #64) ET
+  les kernels elliptique/maillage de `solve_fields` (#97), d'ou la validation GPU np=1 ci-dessus.
+  Le chemin `add_compiled_model` / WENO5 sur `.so` reste a part : `add_compiled_block` alloue 2
+  ghosts (rejette `"weno5"`) et le pilotage device de bout en bout du modele compile n'est pas
+  consolide. Reproduire Hoffart NE depend pas du DSL (les briques natives suffisent) ; ce panier
+  n'est requis que si l'on veut piloter le modele magnetise complet en formules depuis Python
+  plutot qu'en composant des briques.
 
 ### Panier 3 : domaine-disque FV / capacite de paroi (vrai domaine circulaire, pas bord cartesien)
 
@@ -147,26 +195,50 @@ Capacites partiellement presentes mais incompletes pour un usage Hoffart pousse.
 
 ## Plan ordonne
 
-0. **Balayage resolution (FAIT, PR-0)** : ordre <= 2 x resolution sur le cas diocotron existant.
-   Conclusion : l=3 diffusion-limite, l=4 plateau structurel ~12%, l=5 a la cible (cf. plus haut).
-1. **Cabler WENO5-Z / SSPRK3 dans `make_block`** (PR core, prerequis au sweep haut-ordre) : sans
-   changer le comportement par defaut, exposer le choix depuis l'API Python + tests de dispatch.
-   Permet ENSUITE un balayage ordre O5 pour separer plus nettement diffusion et structurel a haut l.
-2. **Panier 3 (le verrou)** : c'est la seule voie qui leve le verrou. Porter un bord embedded /
-   paroi cote transport (ou un domaine disque) pour que l'anneau ne soit plus diffuse par la
-   grille cartesienne. C'est le chantier le plus lourd et le plus payant pour le taux numerique.
-3. **Panier 4 selon l'ambition** : parite `AmrSystem` <-> `System` (recon primitive + Roe +
-   multi-bloc) pour pousser l'AMR a haute resolution ; puis modele magnetise complet
-   (`two_fluid_ap` couple au transport) si l'on sort de la limite de derive.
-4. **Panier 2 transverse, optionnel** : consolider `m.compile(backend=...)` + re-router
-   `add_compiled_model` sur les foncteurs nommes device-clean. N'est PAS sur le chemin critique
-   de la reproduction (les briques natives suffisent), mais utile pour piloter le modele
-   magnetise en formules.
+### FAIT (a date)
+
+- **WENO5-Z / SSPRK3 atteignables depuis Python** (adc_cpp #88) : `adc.Spatial(limiter="weno5")` +
+  `adc.Explicit(method="ssprk3")` via le chemin natif `add_block`, defaut inchange.
+- **Balayage ordre x resolution etendu a O5 et a n=384/512** (cf. `SWEEP_RESULTS.md`) : ordre
+  `{O1, O2 minmod, O2 vanleer, O5 weno5}`, jusqu'a n=512 (haute resolution sur ROMEO x64cpu).
+  Lecture : l=3 plafonne ~ -9 % a O5 haute resolution (candidat structurel le plus propre) ; l=4 ne
+  reproduit pas son -4 % basse resolution mais ses points haute resolution sont biaises par leur
+  fenetre de fit ; l=5 deja a la cible (cf. conclusion prudente section verrou).
+- **GPU `System` production np=1** valide sur GH200 (adc_cpp #97).
+- **`solve_fields` MPI CPU np=1/2/4** valide (adc_cpp #99).
+
+### Prochain VERROU scientifique (le seul qui leve le sous-taux structurel)
+
+- **Panier 3 - bord de transport / domaine-disque / bord embedded** : porter un bord embedded /
+  paroi cote transport (ou un domaine reellement disque) pour que l'anneau de charge ne soit plus
+  advecte sur une grille cartesienne pleine. C'est la seule voie qui adresse le candidat plancher
+  structurel ~9-10 % mis en evidence par le sweep O5. Chantier le plus lourd et le plus payant pour
+  le taux numerique. Le sweep n'en est PAS une preuve : il SUGGERE le candidat et reste a confirmer
+  (n=768/1024 ou deux horizons `t_end` pour l=3 ; diagnostic de fenetre robuste pour l=4).
+
+### Prochains verrous d'infrastructure (peuvent atterrir en parallele)
+
+- **Validation device-MPI production** (GPU multi-rang) : adc_cpp #100 (suivi). Prerequis a une
+  montee en resolution multi-GPU.
+- **WENO5 sur `CompiledModel` / `.so`** : les chemins AOT/JIT allouent 2 ghosts et rejettent
+  `"weno5"` ; etendre le stencil 5 points au chemin compile pour aligner DSL et `add_block`.
+- **Ergonomie `compile()` / cache** : consolider `m.compile(backend=...)` (Panier 2) + re-router
+  `add_compiled_model` sur les foncteurs nommes device-clean. PAS sur le chemin critique de la
+  reproduction (briques natives suffisent), mais utile pour piloter le modele magnetise en formules.
+- **Panier 4 selon l'ambition** : parite `AmrSystem` <-> `System` (recon primitive + Roe +
+  multi-bloc) pour pousser l'AMR a haute resolution ; puis modele magnetise complet
+  (`two_fluid_ap` couple au transport) si l'on sort de la limite de derive.
 
 ## Resume du verrou
 
 Reproduire la CIBLE analytique de Hoffart est fait (numpy, 3 chiffres). Reproduire le taux
 NUMERIQUE a parite demande de lever le bord d'anneau cartesien (panier 3) : aujourd'hui le
-cut-cell ne sert que Poisson, le transport reste cartesien, d'ou un sous-taux l-dependant
-structurel que la resolution attenue sans supprimer (PR-0 : plateau ~12% du mode l=4 au-dela de
-n=256). La montee en ordre WENO5-Z/SSPRK3 exige d'abord un cablage `make_block` (PR core dediee).
+cut-cell ne sert que Poisson, le transport reste cartesien, d'ou un sous-taux l-dependant que la
+resolution attenue sans supprimer. Le balayage etendu a O5 (WENO5-Z + SSPRK3, atteignable depuis
+Python depuis adc_cpp #88) et a la haute resolution n=384/512 AFFAIBLIT l'hypothese "tout l'ecart
+etait de la diffusion d'ordre 2" : sur le mode le mieux mesure (l=3), le residu O5 ne se referme
+plus mais plafonne autour de -9 %. Les donnees SUGGERENT donc un plancher structurel candidat de
+l'ordre de ~9-10 % a l'ordre 5, RESTE A CONFIRMER (un seul cran plat sur l=3 ; fenetre de fit
+precoce biaisant l=4) - PAS une preuve definitive, mais l'argument quantitatif pour la PR-A
+"transport-wall". Le pilotage WENO5-Z/SSPRK3 depuis Python n'est donc plus un verrou (fait, #88) ;
+le verrou restant est bien le bord de transport (panier 3).
