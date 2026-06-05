@@ -82,11 +82,11 @@ Colonnes :
 | test_screened_poisson | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
 | test_anisotropic_epsilon | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
 | test_cut_cell_anisotropic_multibox | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_full_tensor_operator | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_polar_poisson_mms | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_krylov_solver (serie) | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_full_tensor_operator | ci-fast | self-skip | ci-full | ? | ROMEO FAIL (nvcc) | ? |
+| test_polar_poisson_mms | ci-fast | self-skip | ci-full | ? | ROMEO FAIL (crash) | ? |
+| test_krylov_solver (serie) | ci-fast | self-skip | ci-full | ? | ROMEO FAIL (Dirichlet) | ? |
 | test_schur_condensation (serie) | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_condensed_schur_source_stepper (serie) | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_condensed_schur_source_stepper (serie) | ci-fast | self-skip | ci-full | ? | ROMEO pass | ? |
 
 ### 1d. Groupe reconstruction / integrations generiques
 
@@ -135,9 +135,9 @@ Colonnes :
 | test_splitting | ci-fast | self-skip | ci-full | ? | ? | ? |
 | test_imex_ap | ci-fast | self-skip | ci-full | ? | ? | ? |
 | test_ap_limit | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_lorentz_eliminator | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_lorentz_eliminator | ci-fast | self-skip | ci-full | ? | ROMEO pass | ? |
 | test_polar_ring_advection | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_polar_transport_mms | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_polar_transport_mms | ci-fast | self-skip | ci-full | ? | ROMEO pass | ? |
 | test_dynamic_model | ci-fast | self-skip | ci-full | ? | ? | ? |
 | test_block_builder | ci-fast | self-skip | ci-full | ? | ? | ? |
 | test_weno5_ssprk3 | ci-fast | self-skip | ci-full | ? | ? | ? |

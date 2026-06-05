@@ -15,10 +15,18 @@ sur AMR (Gap 2) ; #133 foncteurs nommes nvcc (tests device) ; #134 krylov precon
 (findings revue 1+2) ; #139 doc archi AMR multi-blocs ; #137 honnetete API (findings 4/5/6) ;
 #138 step_cfl substeps-aware (finding 3 ; commentaires+docs+tests, formule INCHANGEE) ; #136
 acceleration CI (split fast/full + cache Kokkos/ccache, ~25 min -> ~5 min a chaud, tous les tests gardes) ;
-#135 fix device GPU (Schur+polaire DEVICE-CLEAN valide GH200, finding 7) ; #141 garde-fou layout AMR
+#135 fix device GPU (finding 7 : Geometry/Box2D ADC_HD + all_reduce_max CFL ; NB ne rend PAS tout le
+stack Schur/polaire device-clean -- voir verdict GH200 ci-dessous) ; #141 garde-fou layout AMR
 + AmrHierarchyLayout (step-1 du capstone multi-blocs).
 
 Findings de revue : **1-7 sur master** ; 8 differe au portage MPI.
+
+**VERDICT device GH200 (validation post-#135 sur master, NE PAS dire "tout device-clean") : 3/6 device-clean,
+3 EN ECHEC sur Kokkos Cuda (corrections en cours, PRs nuit).** Device-clean (valides GH200, sanitizer 0 err) :
+`condensed_schur` (dmax 2.78e-16), `polar_transport` (ordre 2.00, masse 9.3e-15), `lorentz` (bit-identique).
+ECHEC sur Cuda : `krylov_solver` (Dirichlet non nul faux sur device : 0.999 vs 2e-4 hote), `full_tensor_operator`
+(ne compile pas sous nvcc), `polar_poisson_mms` (RHS rempli sur device puis lu par le solveur HOTE sans fence
+-> crash). #135 corrige bien le bug CFL/Geometry (finding 7) mais ces 3 chemins restent a corriger device.
 
 CI (depuis #136) : PR de routine = ci-fast (Release + Python). MPI + Kokkos via push master / nightly /
 `workflow_dispatch` / label `ci-full`. REGLE : poser le label `ci-full` sur toute PR risquee (MPI /
@@ -30,7 +38,7 @@ Kokkos / device / Schur / AMR) AVANT merge pour la validation complete.
       Rebasee sur #141, `ci-full` en cours (validation MPI+Kokkos). Cf. section 15 etape (iv).
 
 **Prochaines etapes (sequencees) :**
-1. Merger #140 (sur ci-full vert MPI+Kokkos) -> AMR-prep alors TERMINEE (#135 device-clean, #141
+1. #140 (ci-full MPI+Kokkos vert) MERGE -> AMR-prep TERMINEE (#135 fix finding 7, #141
    layout-guard, #140 cadence). Ensuite : **registre runtime multi-blocs** (type-erased par nom +
    closures advance/rhs/source/max_speed/mass/density ; refus `regrid_every>0` tant que regrid-union
    absent ; conservation composite leaf-only/average_down).
@@ -291,10 +299,9 @@ two_species_dsl, magnetic_isothermal_dsl, tous en CI) ; **production GPU np=1 = 
 (GH200, #93, np=1/2/4)** ; **`fft` np>1 sous System = refuse proprement (#106), plus de segfault** (DistributedFFTSolver non route, layout) ; `set_density`/`get_state` multi-rang
 = hors scope ; WENO5 sur `CompiledModel` (.so AOT ET production) = SUPPORTE (3 ghosts via `set_block_ghosts`, #102),
 WENO5 cable aussi sur le chemin natif AMR (#105) ; `m.compile()` ergonomique (auto-detect include + cache `so_path`, #103) ;
-`AmrSystem.potential()` = binding EXISTE et expose (`python/bindings.cpp:272`) ; **Schur/polaire device** :
-#135 (`Geometry`/`Box2D` `ADC_HD` + `all_reduce_max` CFL) corrige le "faux en silence" sur Kokkos Cuda,
-valide GH200 (reductions bit-exact, condensed_schur BiCGStab converge, polaire ordre 2) ; re-validation
-sur master en cours (front de nuit) ;
+`AmrSystem.potential()` = binding EXISTE et expose (`python/bindings.cpp:272`) ; **Schur/polaire device** : #135 corrige le bug CFL/Geometry (finding 7) MAIS la validation GH200
+post-#135 montre **3/6 seulement device-clean** (cf. VERDICT device GH200 en tete) ; `krylov` (Dirichlet),
+`full_tensor` (nvcc), `polar_poisson_mms` (cohérence host-solveur) restent en ECHEC sur Cuda (fix en cours) ;
 `PAPER_ROADMAP.md` = a NE PAS reecrire automatiquement
 (attend la validation humaine du sweep O5) ; **prochain verrou scientifique = paroi-transport CORRECTEMENT BORDEE
 sur le BORD D'ANNEAU (Phase 1 par masque fermee sans merge, #109, car elle masquait le conducteur externe)**.
