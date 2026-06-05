@@ -42,6 +42,18 @@
 using namespace adc;
 static constexpr double kPi = 3.14159265358979323846;
 
+// Foncteur de remplissage commun aux tests (A) et (B) : pose phi = sin(pi x) sin(2 pi y) et
+// f = cos(pi x) sin(pi y) sur la grille. Top-level (device-clean) : pas de lambda dans lambda.
+struct FillPhiRhsKernel {
+  Array4 ap, af;
+  Geometry geom;
+  ADC_HD void operator()(int i, int j) const {
+    const double x = geom.x_cell(i), y = geom.y_cell(j);
+    ap(i, j) = std::sin(kPi * x) * std::sin(2 * kPi * y);
+    af(i, j) = std::cos(kPi * x) * std::sin(kPi * y);
+  }
+};
+
 static double phi_exact(double x, double y) {
   return std::sin(kPi * x) * std::sin(kPi * y);
 }
@@ -68,11 +80,7 @@ static double gap_identity(int n) {
   // phi non trivial commun aux deux operateurs.
   auto fill = [&](GeometricMG& mg) {
     Array4 ap = mg.phi().fab(0).array(), af = mg.rhs().fab(0).array();
-    for_each_cell(dom, [ap, af, geom](int i, int j) {
-      const double x = geom.x_cell(i), y = geom.y_cell(j);
-      ap(i, j) = std::sin(kPi * x) * std::sin(2 * kPi * y);
-      af(i, j) = std::cos(kPi * x) * std::sin(kPi * y);
-    });
+    for_each_cell(dom, FillPhiRhsKernel{ap, af, geom});
   };
 
   // operateur PLEIN avec Axy = Ayx = 0 (donc A = I).
@@ -98,11 +106,7 @@ static double gap_diagonal(int n) {
 
   auto fill = [&](GeometricMG& mg) {
     Array4 ap = mg.phi().fab(0).array(), af = mg.rhs().fab(0).array();
-    for_each_cell(dom, [ap, af, geom](int i, int j) {
-      const double x = geom.x_cell(i), y = geom.y_cell(j);
-      ap(i, j) = std::sin(kPi * x) * std::sin(2 * kPi * y);
-      af(i, j) = std::cos(kPi * x) * std::sin(kPi * y);
-    });
+    for_each_cell(dom, FillPhiRhsKernel{ap, af, geom});
   };
 
   // anisotrope SEUL (reference) : div(diag(eps_x, eps_y) grad phi).

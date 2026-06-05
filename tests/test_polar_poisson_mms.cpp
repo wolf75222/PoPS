@@ -139,6 +139,20 @@ static ErrL2 err_vs_exact(const MultiFab& phi, const PolarGeometry& g, const Box
   return {std::sqrt(l2 / vol2), linf};
 }
 
+// Foncteur de remplissage du RHS polaire : device-clean (pas de lambda dans un template).
+// Chaque instance porte les handles Array4 et scalaires captures par valeur ; l'appel
+// to f_exact (un pointeur de fonction) est valide sur host et device.
+template <class FExact>
+struct FillRhsPolarKernel {
+  Array4 rhs;
+  PolarGeometry g;
+  FExact f_exact;
+  int m;
+  ADC_HD void operator()(int i, int j) const {
+    rhs(i, j, 0) = f_exact(g.r_cell(i), g.theta_cell(j), m);
+  }
+};
+
 // Resout un cas (Dirichlet OU Neumann) sur (nr x nth) et rend (erreur vs exact, residu discret).
 template <class PhiExact, class FExact>
 static void solve_case(int nr, int nth, int m, const BCRec& bc, PhiExact phi_exact, FExact f_exact,
@@ -149,9 +163,7 @@ static void solve_case(int nr, int nth, int m, const BCRec& bc, PhiExact phi_exa
 
   PolarPoissonSolver solver(g, ba, bc);
   Array4 rhs = solver.rhs().fab(0).array();
-  for_each_cell(dom, [rhs, g, f_exact, m](int i, int j) {
-    rhs(i, j, 0) = f_exact(g.r_cell(i), g.theta_cell(j), m);
-  });
+  for_each_cell(dom, FillRhsPolarKernel<FExact>{rhs, g, f_exact, m});
   solver.solve();
   err = err_vs_exact(solver.phi(), g, dom, [phi_exact, m](double r, double th) {
     return phi_exact(r, th, m);
