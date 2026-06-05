@@ -36,7 +36,15 @@
 using namespace adc;
 static constexpr double kPi = 3.14159265358979323846;
 
-static double phi_exact(double x, double y) {
+// ADC_HD : phi_exact est appelee depuis PoissonRhsKernel::operator() (ADC_HD), donc DEPUIS UN KERNEL
+// DEVICE. Sans ADC_HD c'est un __host__ appele depuis un __host__ __device__ : sous Kokkos Cuda, nvcc
+// emet le kernel SANS cet appel (warning #20011-D "calling a __host__ function ... is not allowed") et
+// le rhs reste a 0 sur device. Le MG resout alors Lap(phi)=0 a Dirichlet V => phi=V plat, d'ou le cas
+// (C) DIRICHLET err vs exact ~= max(sin sin) ~= 0.999 sur GH200 (mais 2e-4 sur l'oracle Serial, ou
+// l'appel hote est licite). MmsRhsKernel (cas B) inline deja sin/cos SANS passer par phi_exact, d'ou
+// son succes device. ADC_HD rend phi_exact device-callable ; corps inchange (sin sin) -> hote
+// bit-identique, device desormais correct (rhs rempli, MG -> V + sin sin).
+ADC_HD static double phi_exact(double x, double y) {
   return std::sin(kPi * x) * std::sin(kPi * y);
 }
 
