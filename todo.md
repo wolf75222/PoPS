@@ -21,12 +21,13 @@ stack Schur/polaire device-clean -- voir verdict GH200 ci-dessous) ; #141 garde-
 
 Findings de revue : **1-7 sur master** ; 8 differe au portage MPI.
 
-**VERDICT device GH200 (validation post-#135 sur master, NE PAS dire "tout device-clean") : 3/6 device-clean,
-3 EN ECHEC sur Kokkos Cuda (corrections en cours, PRs nuit).** Device-clean (valides GH200, sanitizer 0 err) :
-`condensed_schur` (dmax 2.78e-16), `polar_transport` (ordre 2.00, masse 9.3e-15), `lorentz` (bit-identique).
-ECHEC sur Cuda : `krylov_solver` (Dirichlet non nul faux sur device : 0.999 vs 2e-4 hote), `full_tensor_operator`
-(ne compile pas sous nvcc), `polar_poisson_mms` (RHS rempli sur device puis lu par le solveur HOTE sans fence
--> crash). #135 corrige bien le bug CFL/Geometry (finding 7) mais ces 3 chemins restent a corriger device.
+**VERDICT device GH200 (validation post-#135, puis fixes #150+#152) : 6/6 device-clean sur Kokkos Cuda
+(single-GPU).** Les 3 echecs initiaux etaient TEST-SIDE (foncteurs/pointeurs HOTE appeles dans des kernels
+device), PAS des bugs LIBRARY -- prouve par 3 probes GH200 que l'elliptique/Schur/polaire est device-correct.
+Device-clean (valides GH200, sanitizer 0 err) : `condensed_schur` (dmax 1.2e-15), `polar_transport` (ordre 2,
+masse 9.3e-15), `lorentz`, `full_tensor` (== Serial), `polar_poisson` (ordre 2), `krylov` (Dirichlet 2e-4 ==
+oracle). Fixes : #150 (full_tensor foncteurs nommes + polar_poisson remplissage hote + fence solveur), #152
+(phi_exact `ADC_HD`). NB : MPI + Kokkos Cuda multi-GPU PAS encore exerce (cf. BACKEND_COVERAGE, colonne ?).
 
 CI (depuis #136) : PR de routine = ci-fast (Release + Python). MPI + Kokkos via push master / nightly /
 `workflow_dispatch` / label `ci-full`. REGLE : poser le label `ci-full` sur toute PR risquee (MPI /
@@ -299,9 +300,9 @@ two_species_dsl, magnetic_isothermal_dsl, tous en CI) ; **production GPU np=1 = 
 (GH200, #93, np=1/2/4)** ; **`fft` np>1 sous System = refuse proprement (#106), plus de segfault** (DistributedFFTSolver non route, layout) ; `set_density`/`get_state` multi-rang
 = hors scope ; WENO5 sur `CompiledModel` (.so AOT ET production) = SUPPORTE (3 ghosts via `set_block_ghosts`, #102),
 WENO5 cable aussi sur le chemin natif AMR (#105) ; `m.compile()` ergonomique (auto-detect include + cache `so_path`, #103) ;
-`AmrSystem.potential()` = binding EXISTE et expose (`python/bindings.cpp:272`) ; **Schur/polaire device** : #135 corrige le bug CFL/Geometry (finding 7) MAIS la validation GH200
-post-#135 montre **3/6 seulement device-clean** (cf. VERDICT device GH200 en tete) ; `krylov` (Dirichlet),
-`full_tensor` (nvcc), `polar_poisson_mms` (cohérence host-solveur) restent en ECHEC sur Cuda (fix en cours) ;
+`AmrSystem.potential()` = binding EXISTE et expose (`python/bindings.cpp:272`) ; **Schur/polaire device** :
+6/6 device-clean sur Kokkos Cuda single-GPU (cf. VERDICT en tete) ; les 3 echecs initiaux de la validation
+GH200 etaient TEST-SIDE (foncteurs hote dans des kernels device), fixes #150+#152, library device-correct ;
 `PAPER_ROADMAP.md` = a NE PAS reecrire automatiquement
 (attend la validation humaine du sweep O5) ; **prochain verrou scientifique = paroi-transport CORRECTEMENT BORDEE
 sur le BORD D'ANNEAU (Phase 1 par masque fermee sans merge, #109, car elle masquait le conducteur externe)**.

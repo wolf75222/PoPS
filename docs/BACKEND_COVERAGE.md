@@ -82,9 +82,9 @@ Colonnes :
 | test_screened_poisson | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
 | test_anisotropic_epsilon | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
 | test_cut_cell_anisotropic_multibox | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_full_tensor_operator | ci-fast | self-skip | ci-full | ? | ROMEO FAIL (nvcc) | ? |
-| test_polar_poisson_mms | ci-fast | self-skip | ci-full | ? | ROMEO FAIL (crash) | ? |
-| test_krylov_solver (serie) | ci-fast | self-skip | ci-full | ? | ROMEO FAIL (Dirichlet) | ? |
+| test_full_tensor_operator | ci-fast | self-skip | ci-full | ? | ROMEO pass (#150) | ? |
+| test_polar_poisson_mms | ci-fast | self-skip | ci-full | ? | ROMEO pass (#150) | ? |
+| test_krylov_solver (serie) | ci-fast | self-skip | ci-full | ? | ROMEO pass (#152) | ? |
 | test_schur_condensation (serie) | ci-fast | self-skip | ci-full | ? | ? | ? |
 | test_condensed_schur_source_stepper (serie) | ci-fast | self-skip | ci-full | ? | ROMEO pass | ? |
 
