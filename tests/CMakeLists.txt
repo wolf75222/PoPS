@@ -249,4 +249,21 @@ if(ADC_HAS_MPI)
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_amr_distributed_coarse>
                      ${MPIEXEC_POSTFLAGS})
   endforeach()
+
+  # --- runtime System + Poisson + solve_fields() DISTRIBUE : verrou de non-regression du bug HOTE
+  # fab(0) (#98). System repartit UNE box en round-robin, donc a np>1 un seul rang la possede ; les
+  # autres ont local_size()==0. Avant le fix, le post-traitement par cellule de solve_fields()
+  # (derivation phi/grad, apply_te, apply_epsilon*, apply_reaction) appelait fab(0) sans garde et
+  # crashait cote hote sur les rangs sans box locale. Le solve elliptique reste COLLECTIF (tous les
+  # rangs). np=1 couvre le chemin proprietaire (bit-identique au serie) ; np=2/4 le chemin distribue
+  # ou des rangs sont vides. Compile le runtime System comme test_aux_te.
+  add_executable(test_mpi_system_solve_fields test_mpi_system_solve_fields.cpp
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
+  target_link_libraries(test_mpi_system_solve_fields PRIVATE adc::adc ${CMAKE_DL_LIBS})
+  foreach(np 1 2 4)
+    add_test(NAME test_mpi_system_solve_fields_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_system_solve_fields>
+                     ${MPIEXEC_POSTFLAGS})
+  endforeach()
 endif()

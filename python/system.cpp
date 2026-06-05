@@ -300,11 +300,16 @@ struct System::Impl {
   void apply_bz() {
     if (bz_field_.empty() || aux_ncomp_ <= kAuxBaseComps) return;
     const int n = cfg.n;
-    Array4 a = aux.fab(0).array();
-    const Box2D v = aux.box(0);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        a(i, j, kAuxBaseComps) = bz_field_[static_cast<std::size_t>(j) * n + i];
+    // Peuplement LOCAL au rang proprietaire (cf. solve_fields) : iteration sur les fabs locaux du
+    // canal aux au lieu de fab(0) en dur (no-op sur un rang sans box locale a np>1, bit-identique au
+    // proprietaire).
+    for (int li = 0; li < aux.local_size(); ++li) {
+      Array4 a = aux.fab(li).array();
+      const Box2D v = aux.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          a(i, j, kAuxBaseComps) = bz_field_[static_cast<std::size_t>(j) * n + i];
+    }
   }
 
   // Garantit que l'etat U du bloc @p name porte au moins @p ng ghosts (stencil du schema spatial).
@@ -339,15 +344,20 @@ struct System::Impl {
     if (te_src_ < 0 || aux_ncomp_ <= kTeComp) return;
     const Species& s = sp[static_cast<std::size_t>(te_src_)];
     const Real gm1 = Real(s.gamma) - Real(1);
-    const ConstArray4 us = s.U.fab(0).const_array();
-    Array4 a = aux.fab(0).array();
-    const Box2D v = aux.box(0);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        const Real rho = us(i, j, 0), mx = us(i, j, 1), my = us(i, j, 2), E = us(i, j, 3);
-        const Real p = gm1 * (E - Real(0.5) * (mx * mx + my * my) / rho);
-        a(i, j, kTeComp) = p / rho;  // T = p / rho
-      }
+    // Peuplement LOCAL au rang proprietaire (cf. solve_fields) : on itere sur les fabs locaux du
+    // canal aux au lieu de fab(0) en dur (no-op sur un rang sans box locale a np>1, bit-identique au
+    // proprietaire). s.U et aux partagent la meme DistributionMapping -> meme indexation locale.
+    for (int li = 0; li < aux.local_size(); ++li) {
+      const ConstArray4 us = s.U.fab(li).const_array();
+      Array4 a = aux.fab(li).array();
+      const Box2D v = aux.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+          const Real rho = us(i, j, 0), mx = us(i, j, 1), my = us(i, j, 2), E = us(i, j, 3);
+          const Real p = gm1 * (E - Real(0.5) * (mx * mx + my * my) / rho);
+          a(i, j, kTeComp) = p / rho;  // T = p / rho
+        }
+    }
   }
 
   static BCRec make_bc(const SystemConfig& c) {
@@ -448,12 +458,17 @@ struct System::Impl {
   void apply_epsilon_field() {
     GeometricMG& mg = std::get<GeometricMG>(*ell_);
     MultiFab eps_fine(ba, dm, 1, 0);
-    Array4 e = eps_fine.fab(0).array();
-    const Box2D v = eps_fine.box(0);
     const int n = cfg.n;
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        e(i, j, 0) = static_cast<Real>(p_eps_field_[static_cast<std::size_t>(j) * n + i]);
+    // Remplissage du champ source LOCAL au rang proprietaire (iteration sur les fabs locaux, jamais
+    // fab(0) en dur) : no-op sur un rang sans box locale a np>1, identique a avant sur le
+    // proprietaire. mg.set_epsilon est ensuite COLLECTIF (copie locale + restriction MPI-safe).
+    for (int li = 0; li < eps_fine.local_size(); ++li) {
+      Array4 e = eps_fine.fab(li).array();
+      const Box2D v = eps_fine.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          e(i, j, 0) = static_cast<Real>(p_eps_field_[static_cast<std::size_t>(j) * n + i]);
+    }
     mg.set_epsilon(eps_fine);  // copie sur le niveau fin + restriction (average_down) aux grossiers
   }
   // Installe les champs eps_x(x), eps_y(x) (n*n row-major chacun) sur le GeometricMG : l'operateur
@@ -463,16 +478,21 @@ struct System::Impl {
   void apply_epsilon_anisotropic_field() {
     GeometricMG& mg = std::get<GeometricMG>(*ell_);
     MultiFab eps_x_fine(ba, dm, 1, 0), eps_y_fine(ba, dm, 1, 0);
-    Array4 ex = eps_x_fine.fab(0).array();
-    Array4 ey = eps_y_fine.fab(0).array();
-    const Box2D v = eps_x_fine.box(0);
     const int n = cfg.n;
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        const std::size_t k = static_cast<std::size_t>(j) * n + i;
-        ex(i, j, 0) = static_cast<Real>(p_eps_x_field_[k]);
-        ey(i, j, 0) = static_cast<Real>(p_eps_y_field_[k]);
-      }
+    // Remplissage LOCAL au rang proprietaire (cf. apply_epsilon_field) : iteration sur les fabs
+    // locaux (no-op sur un rang vide a np>1). eps_x_fine et eps_y_fine partagent ba/dm -> meme
+    // indexation locale. mg.set_epsilon_anisotropic est ensuite COLLECTIF (copie + restriction).
+    for (int li = 0; li < eps_x_fine.local_size(); ++li) {
+      Array4 ex = eps_x_fine.fab(li).array();
+      Array4 ey = eps_y_fine.fab(li).array();
+      const Box2D v = eps_x_fine.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+          const std::size_t k = static_cast<std::size_t>(j) * n + i;
+          ex(i, j, 0) = static_cast<Real>(p_eps_x_field_[k]);
+          ey(i, j, 0) = static_cast<Real>(p_eps_y_field_[k]);
+        }
+    }
     mg.set_epsilon_anisotropic(eps_x_fine, eps_y_fine);  // faces x <- eps_x, faces y <- eps_y (+ restriction)
   }
   // Installe le terme de reaction kappa(x) (n*n row-major) sur le GeometricMG : l'operateur passe a
@@ -481,12 +501,16 @@ struct System::Impl {
   void apply_reaction_field() {
     GeometricMG& mg = std::get<GeometricMG>(*ell_);
     MultiFab kappa_fine(ba, dm, 1, 0);
-    Array4 k = kappa_fine.fab(0).array();
-    const Box2D v = kappa_fine.box(0);
     const int n = cfg.n;
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-        k(i, j, 0) = static_cast<Real>(p_kappa_field_[static_cast<std::size_t>(j) * n + i]);
+    // Remplissage LOCAL au rang proprietaire (cf. apply_epsilon_field) : iteration sur les fabs
+    // locaux (no-op sur un rang vide a np>1). mg.set_reaction est ensuite COLLECTIF.
+    for (int li = 0; li < kappa_fine.local_size(); ++li) {
+      Array4 k = kappa_fine.fab(li).array();
+      const Box2D v = kappa_fine.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          k(i, j, 0) = static_cast<Real>(p_kappa_field_[static_cast<std::size_t>(j) * n + i]);
+    }
     mg.set_reaction(kappa_fine);
   }
   MultiFab& ell_rhs() {
@@ -546,15 +570,24 @@ struct System::Impl {
     device_fence();
     adc_sf_mark("solve_fields: apres device_fence (derivation aux)");
     const Real dx = geom.dx(), dy = geom.dy();
-    const ConstArray4 p = ell_phi().fab(0).const_array();
-    Array4 a = aux.fab(0).array();
-    const Box2D v = aux.box(0);
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-        a(i, j, 0) = p(i, j);
-        a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-        a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
-      }
+    // Derivation par cellule (phi, grad phi) -> canal aux : LOCALE au rang proprietaire. System
+    // repartit UNE box (round-robin DistributionMapping(1, n_ranks())), donc a np>1 un seul rang la
+    // possede ; les autres ont local_size()==0 et N'ONT PAS de fab a deriver. On itere sur les fabs
+    // LOCAUX (jamais fab(0) en dur) : no-op sur un rang vide, identique a avant sur le proprietaire
+    // (boucle executee une fois, bit-identique a np=1). ell_phi() et aux partagent la meme
+    // DistributionMapping -> meme indexation locale.
+    MultiFab& phi_mf = ell_phi();
+    for (int li = 0; li < aux.local_size(); ++li) {
+      const ConstArray4 p = phi_mf.fab(li).const_array();
+      Array4 a = aux.fab(li).array();
+      const Box2D v = aux.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+          a(i, j, 0) = p(i, j);
+          a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
+          a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
+        }
+    }
     adc_sf_mark("solve_fields: apres derivation aux (phi, grad phi)");
     apply_te();  // T_e = p/rho du bloc fluide source, recalculee a chaque solve (B_z, comp 3, preservee)
     adc_sf_mark("solve_fields: apres apply_te");
@@ -662,6 +695,12 @@ struct System::Impl {
     // Modele sans elliptique => elliptic_rhs vaut 0 (aucun effet), donc retro-compatible.
     std::function<void(const MultiFab&, MultiFab&)> add_poisson =
         [P, im, n](const MultiFab& U, MultiFab& rhs) {
+          // Chemin HOTE (bloc dynamique .so prototype) : il marshale la box vers un tableau plein
+          // n*n et la traite comme repliquee. Sur un rang sans box locale (System repartit UNE box,
+          // donc local_size()==0 a np>1 sur les rangs non proprietaires) il n'y a rien a marshaler :
+          // on saute, le rang proprietaire porte la contribution complete au second membre. Sans
+          // cette garde, copy_state(U) / rhs.fab(0) dereferenceraient un fab inexistant (crash hote).
+          if (rhs.local_size() == 0) return;
           std::vector<double> u = P->copy_state(U, NV);
           const std::size_t nn = static_cast<std::size_t>(n) * n;
           Array4 r = rhs.fab(0).array();
@@ -899,6 +938,11 @@ void System::add_compiled_block(const std::string& name, const std::string& so_p
       };
   std::function<void(const MultiFab&, MultiFab&)> add_poisson =
       [P, lib, poi_fn, nv, n](const MultiFab& U, MultiFab& rhs) {
+        // Chemin HOTE (bloc compile .so prototype) : meme garde MPI que le bloc dynamique. Sur un
+        // rang sans box locale (local_size()==0 a np>1) il n'y a rien a marshaler -> on saute, le
+        // rang proprietaire porte la contribution complete. Sans cela copy_state(U) / rhs.fab(0)
+        // dereferenceraient un fab inexistant (crash hote).
+        if (rhs.local_size() == 0) return;
         std::vector<double> u = P->copy_state(U, nv);
         std::vector<double> pr(static_cast<std::size_t>(n) * n, 0.0);
         poi_fn(u.data(), pr.data(), n);
