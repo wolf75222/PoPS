@@ -18,7 +18,9 @@ add_compiled_model). On verifie :
      FP d'ordre 1e-16, donc < 1e-12 et non == 0 quand le couplage est actif).
   3) LIMITES AMR enforcees (AmrSystem n'est PAS a parite avec System : mono-bloc, explicite, sans
      recon primitive ni flux de Riemann complet) : la facade AmrSystem.add_equation REJETTE clairement
-     variables="primitive", riemann="roe"/"hllc" et limiter="weno5" sur un CompiledModel, AVANT le C++.
+     variables="primitive" et riemann="roe"/"hllc" sur un CompiledModel, AVANT le C++. limiter="weno5"
+     (WENO5-Z, 3 ghosts) est en revanche CABLE sur AMR (rusanov) : on prouve sa PARITE STRICTE
+     (densite production == add_block, dmax == 0) et qu'il DIFFERE de minmod (reconstruction active).
   4) GARDE-FOUS de compilation : compile(target="amr_system") exige backend="production" ; un
      CompiledModel target="system" est refuse par AmrSystem.add_equation (loader sans adc_install_native_amr).
   5) GARDE-FOU ABI : un loader AMR a cle adc_native_abi_key falsifiee est rejete par add_native_block.
@@ -172,7 +174,7 @@ def main():
         assert C.n_patches() == D.n_patches(), "n_patches final != add_block (regrid different)"
         print("OK  (2) euler_poisson AMR couple : masse/densite/patchs == add_block (dmax=%.1e)" % dmaxp)
 
-        # --- (3) LIMITES AMR : la facade add_equation rejette primitive / roe / hllc / weno5 ---
+        # --- (3) LIMITES AMR : la facade add_equation rejette primitive / roe / hllc ---
         amr_cm = ep.compile(os.path.join(tmp, "ep_amr_cm.so"), INCLUDE,
                             backend="production", target="amr_system")
 
@@ -188,8 +190,41 @@ def main():
         expect(adc.Spatial(minmod=True, flux="rusanov", recon="primitive"), "primitive")
         expect(adc.Spatial(minmod=True, flux="roe", recon="conservative"), "roe")
         expect(adc.Spatial(minmod=True, flux="hllc", recon="conservative"), "hllc")
-        expect(adc.Spatial(weno5=True, flux="rusanov", recon="conservative"), "weno5")
-        print("OK  (3) AMR : variables='primitive' / riemann='roe'/'hllc' / 'weno5' REJETES clairement")
+        print("OK  (3) AMR : variables='primitive' / riemann='roe'/'hllc' REJETES clairement")
+
+        # --- (3w) WENO5 (3 ghosts) CABLE sur AMR : parite stricte production == add_block + != minmod.
+        # Le coupleur alloue ses niveaux a Limiter::n_ghost (3) et le regrid herite n_grow() : le
+        # stencil 5 points ne lit pas hors bornes (MEME mecanisme ghost que System, pas de duplication).
+        Aw = _amr(n, L, lambda s: s._s.add_native_block(
+            "gas", so_t, limiter="weno5", riemann="rusanov", recon="conservative",
+            time="explicit", gamma=GAMMA, substeps=1))
+        Bw = _amr(n, L, lambda s: s.add_block(
+            "gas", spec_t, spatial=adc.Spatial(weno5=True, flux="rusanov", recon="conservative"),
+            time=adc.Explicit()))
+        assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches initial production != add_block"
+        for _ in range(12):
+            Aw.step(dt)
+            Bw.step(dt)
+        daw, dbw = np.array(Aw.density()), np.array(Bw.density())
+        assert float(np.max(np.abs(dbw))) > 1e-6, "weno5 : densite natif triviale"
+        dmaxw = float(np.max(np.abs(daw - dbw)))
+        assert dmaxw == 0.0, ("weno5 AMR : densite production != add_block (dmax %.2e, attendu 0)"
+                              % dmaxw)
+        assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches final production != add_block"
+        # WENO5 (ordre 5) doit differer de minmod (ordre 2) sur le meme transport lisse : la
+        # reconstruction WENO5 est bien active (sinon le branchement weno5 retomberait sur minmod).
+        assert float(np.max(np.abs(daw - da))) > 1e-9, "weno5 == minmod (reconstruction inactive)"
+        # WENO5 via la facade add_equation (pas seulement le binding bas niveau) : meme chemin nominal.
+        Gw = adc.AmrSystem(n=n, L=L, periodic=True)
+        Gw.add_equation("gas", amr_cm,
+                        spatial=adc.Spatial(weno5=True, flux="rusanov", recon="conservative"))
+        Gw.set_refinement(1.2)
+        Gw.set_density("gas", _bubble(n))
+        for _ in range(4):
+            Gw.step(dt)
+        assert np.isfinite(np.array(Gw.density())).all() and Gw.mass() > 1e-6
+        print("OK  (3w) WENO5 AMR : production BIT-IDENTIQUE a add_block (dmax=%.1e), != minmod, "
+              "add_equation(weno5) tourne" % dmaxw)
 
         # add_equation chemin nominal (rusanov + conservatif) accepte et tourne :
         E = adc.AmrSystem(n=n, L=L, periodic=True)

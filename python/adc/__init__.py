@@ -564,8 +564,10 @@ class AmrSystem:
         reconstruction primitive ni flux de Riemann complet). La facade REJETTE clairement, AVANT la
         frontiere C++, les chemins non cables sur AMR pour un CompiledModel :
           - variables="primitive" (spatial.recon) : le chemin .so AMR reste conservatif ;
-          - riemann="roe"/"hllc" (spatial.flux) : seul Rusanov est cable sur AMR via le .so ;
-          - limiter="weno5" : le .so alloue 2 ghosts, WENO5 en exige 3.
+          - riemann="roe"/"hllc" (spatial.flux) : seul Rusanov est cable sur AMR via le .so.
+        limiter="weno5" EST cable sur AMR (WENO5-Z, 3 ghosts) : le coupleur alloue ses niveaux a
+        Limiter::n_ghost et le regrid herite n_grow(), donc le stencil 5 points ne lit pas hors bornes
+        (parite stricte avec add_block ; cf. dispatch_amr_compiled).
         Ces limites valent pour le chemin COMPILE (.so) ; un modele natif (adc.Model -> add_block)
         garde l'API add_block existante (recon primitive accepte cote C++). cf. DSL_MODEL_DESIGN.md
         Phase D (point 10).
@@ -615,10 +617,9 @@ class AmrSystem:
                 "AmrSystem.add_equation : riemann='%s' non supporte sur le chemin compile AMR ; seul "
                 "riemann='rusanov' est cable sur la hierarchie via le .so (AmrSystem n'est pas a "
                 "parite avec System : pas de flux de Riemann complet sur le .so AMR)" % spatial.flux)
-        if spatial.limiter == "weno5":
-            raise ValueError(
-                "AmrSystem.add_equation : limiter 'weno5' non supporte sur un CompiledModel (.so a 2 "
-                "ghosts ; WENO5 en exige 3) ; utiliser none/minmod/vanleer")
+        # limiter weno5 (3 ghosts) : CABLE sur AMR via dispatch_amr_compiled (rusanov). Le coupleur
+        # alloue ses niveaux a Limiter::n_ghost et le regrid herite n_grow() -> pas hors bornes. Plus
+        # de rejet ici (parite stricte avec add_block, cf. test_amr_weno5_native).
 
         gamma = compiled.gamma if compiled.gamma is not None else 1.4
         self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,

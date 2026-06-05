@@ -85,7 +85,7 @@ class AmrSystem {
   /// @param name    etiquette cosmetique du bloc (l'AMR est MONO-BLOC : ce nom n'indexe rien,
   ///                contrairement a System ; conserve pour la symetrie d'API).
   /// @param model   composition de briques (transport/source/elliptic + parametres)
-  /// @param limiter "none" | "minmod" | "vanleer"
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts ; rusanov)
   /// @param riemann "rusanov" | "hllc" | "roe" (hllc/roe exigent un transport compressible)
   /// @param recon   "conservative" | "primitive" (variables reconstruites ; primitif plus
   ///                robuste pour Euler : positivite de rho et p)
@@ -124,9 +124,11 @@ class AmrSystem {
   /// d'UB silencieux a la frontiere C++). Memes garde-fous de schema que System (validation amont).
   ///
   /// LIMITES (AmrSystem n'est PAS a parite avec System) : mono-bloc, EXPLICITE uniquement (time !=
-  /// "explicit" rejete par add_compiled_model). recon "primitive" et flux "roe"/"hllc" + weno5 sont
-  /// rejetes par la facade Python (AmrSystem.add_equation) AVANT d'arriver ici (chemin .so a contrat
-  /// restreint). @throws std::runtime_error si l'ABI diverge, si un symbole manque, ou substeps < 1.
+  /// "explicit" rejete par add_compiled_model). recon "primitive" et flux "roe"/"hllc" sont rejetes
+  /// par la facade Python (AmrSystem.add_equation) AVANT d'arriver ici (chemin .so a contrat
+  /// restreint). limiter "weno5" (WENO5-Z, 3 ghosts) est CABLE sur rusanov (les niveaux du coupleur
+  /// sont alloues a Limiter::n_ghost et le regrid herite n_grow() : pas de lecture hors bornes).
+  /// @throws std::runtime_error si l'ABI diverge, si un symbole manque, ou substeps < 1.
   /// @param name etiquette cosmetique (AMR mono-bloc : ne sert pas d'index).
   void add_native_block(const std::string& name, const std::string& so_path,
                         const std::string& limiter = "minmod",

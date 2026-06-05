@@ -122,6 +122,11 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
     if (lim == "none") return build_amr_compiled<Model, NoSlope, RusanovFlux>(m, bp);
     if (lim == "minmod") return build_amr_compiled<Model, Minmod, RusanovFlux>(m, bp);
     if (lim == "vanleer") return build_amr_compiled<Model, VanLeer, RusanovFlux>(m, bp);
+    // WENO5-Z (3 ghosts) : meme mecanisme que System (block_n_ghost(limiter)). Ici les niveaux du
+    // coupleur sont alloues a Limiter::n_ghost (build_amr_compiled : ng = Weno5::n_ghost = 3) et le
+    // regrid HERITE n_grow() (amr_regrid_finest : ngf = L[fk].U.n_grow()), donc le stencil 5 points
+    // ne lit pas hors bornes. Cable sur AMR au MEME titre que none/minmod (rusanov uniquement).
+    if (lim == "weno5") return build_amr_compiled<Model, Weno5, RusanovFlux>(m, bp);
     throw std::runtime_error("add_compiled_model(AmrSystem) : limiter inconnu '" + lim + "'");
   }
   if (riem == "hllc") {

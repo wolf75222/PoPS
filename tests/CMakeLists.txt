@@ -145,6 +145,26 @@ target_compile_definitions(test_amr_native_loader PRIVATE
   ADC_TEST_TMPDIR="${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME test_amr_native_loader COMMAND test_amr_native_loader)
 
+# --- WENO5 sur le chemin "production" NATIF cote AMR (Plan Ideal etape 5 / DSL Phase D) ---
+# Pendant raffine de test_weno5_compiled_model.cpp : prouve que WENO5-Z (3 ghosts) tourne la MEME
+# hierarchie AMR, BIT-IDENTIQUE, sur add_compiled_model == add_block (direct, tous backends) ET
+# add_native_block(loader .so) == add_compiled_model (chemin .so, auto-saute sous Kokkos). Verrou
+# ghost : les niveaux du coupleur sont alloues a Limiter::n_ghost (3 pour weno5) et le regrid herite
+# n_grow() -- MEME mecanisme que System (PR #22/#88), pas de logique dupliquee. + no-default-change
+# none/minmod. Compile amr_system.cpp (add_native_block) avec le test ; memes injections que le loader.
+add_executable(test_amr_weno5_native test_amr_weno5_native.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_weno5_native PRIVATE adc::adc ${CMAKE_DL_LIBS})
+# ENABLE_EXPORTS (-rdynamic) : le loader .so resout set_compiled_block (ADC_EXPORT) contre l'exe de
+# test auto-promu RTLD_GLOBAL (cf. test_amr_native_loader). Inoffensif sur macOS.
+set_target_properties(test_amr_weno5_native PROPERTIES ENABLE_EXPORTS ON)
+target_compile_definitions(test_amr_weno5_native PRIVATE
+  ADC_TEST_CXX="${CMAKE_CXX_COMPILER}"
+  ADC_TEST_INCLUDE="${CMAKE_CURRENT_SOURCE_DIR}/../include"
+  ADC_TEST_CXX_STD="c++${CMAKE_CXX_STANDARD}"
+  ADC_TEST_TMPDIR="${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME test_amr_weno5_native COMMAND test_amr_weno5_native)
+
 # --- contrat mono-bloc/explicite de la facade AmrSystem : refus explicite des params non cables ---
 # Compile le runtime AmrSystem (python/amr_system.cpp) avec le test : verrouille que set_poisson
 # refuse solver/rhs hors du domaine cable (GeometricMG + somme des briques elliptiques) et qu'add_block
