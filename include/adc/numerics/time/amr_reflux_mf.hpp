@@ -7,6 +7,7 @@
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/refinement.hpp>  // coarsen_index
 #include <adc/numerics/spatial_operator.hpp>  // compute_face_fluxes, xface_box, yface_box
+#include <adc/numerics/time/implicit_stepper.hpp>  // backward_euler_source (pas implicite IMEX)
 #include <adc/parallel/comm.hpp>  // all_reduce_sum_inplace (reflux multi-patch distribue)
 
 #include <vector>
@@ -56,6 +57,28 @@ inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Re
       for (int c = 0; c < Model::n_vars; ++c) u(i, j, c) += dt * S[c];
     });
   }
+}
+
+// Traitement temporel de la SOURCE a un sous-pas AMR, apres l'avance de transport
+// (mf_advance_faces, deja sans source car compute_face_fluxes ne porte que model.flux) :
+//   - EXPLICITE (imex == false, DEFAUT) : Euler avant, U += dt S(U, aux) -- l'appel
+//     historique mf_apply_source, donc bit-identique au chemin existant.
+//   - IMEX (imex == true) : source IMPLICITE raide, W = U + dt S(W, aux) resolu EN PLACE par
+//     backward_euler_source (Newton local, jacobienne par differences finies, foncteur device
+//     NOMME BackwardEulerSourceKernel). C'est le pendant AMR de l'avance IMEX du System
+//     (block_builder.hpp::AdvanceImex) : meme demi-pas explicite (le transport est porte par le
+//     reflux conservatif) + meme pas implicite sur la source. La source restant CELLULE-LOCALE
+//     (aucun flux de face), elle n'entre PAS dans les registres de reflux : le split implicite ne
+//     touche donc pas la conservation aux interfaces grossier-fin. Le CHOIX est un drapeau runtime
+//     (pas de lambda injectee dans le chemin device) : il selectionne deux fonctions HOTE, chacune
+//     lancant son propre kernel a foncteur nomme.
+template <class Model>
+inline void mf_apply_source_treatment(const Model& m, MultiFab& U, const MultiFab& aux, Real dt,
+                                      bool imex) {
+  if (imex)
+    backward_euler_source(m, aux, U, dt);  // source implicite raide (Newton, foncteur device nomme)
+  else
+    mf_apply_source(m, U, aux, dt);        // Euler avant historique (bit-identique)
 }
 
 // moyenne fin -> grossier (ratio 2) sur la region couverte (coords grossieres).
@@ -784,7 +807,8 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real dt,
                        const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
                        const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs,
-                       bool coarse_replicated = true, bool recon_prim = false) {
+                       bool coarse_replicated = true, bool recon_prim = false,
+                       bool imex = false) {
   const SubcyclingSchedule sched(2);
   const int nc = L[lev].U.ncomp();
   AmrLevelMP& lv = L[lev];
@@ -837,7 +861,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   if (lev + 1 >= static_cast<int>(L.size())) {  // feuille
     mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
-    mf_apply_source(m, lv.U, *lv.aux, dt);  // source S(U,aux) au sous-pas
+    mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex);  // source S(U,aux) explicite ou IMEX
     return;
   }
 
@@ -919,11 +943,11 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   MultiFab U_old = lv.U;  // etat t (interp temporelle pour les enfants)
   mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
-  mf_apply_source(m, lv.U, *lv.aux, dt);  // source S(U,aux) au sous-pas
+  mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex);  // source S(U,aux) explicite ou IMEX
   for (int s = 0; s < sched.count(); ++s)
     subcycle_level_mp<Limiter, NumericalFlux>(m, L, lev + 1, sched.dt_sub(dt), base_dom, base_per,
                                               &U_old, &lv.U, sched.frac(s), &regs,
-                                              coarse_replicated, recon_prim);
+                                              coarse_replicated, recon_prim, imex);
   mf_average_down_mb(L[lev + 1].U, lv.U);  // point 3 distribue (parallel_copy)
 
   // Point 4 distribue : reflux coverage-aware. La cellule grossiere bordante peut appartenir
@@ -958,9 +982,10 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L,
                                     const Box2D& dom, Real dt,
                                     Periodicity per = Periodicity{true, true},
-                                    bool coarse_replicated = true, bool recon_prim = false) {
+                                    bool coarse_replicated = true, bool recon_prim = false,
+                                    bool imex = false) {
   subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr,
-                                            Real(0), nullptr, coarse_replicated, recon_prim);
+                                            Real(0), nullptr, coarse_replicated, recon_prim, imex);
 }
 
 }  // namespace detail (moteur N-niveaux multi-patch)
@@ -990,6 +1015,7 @@ struct LevelHierarchy {
   Periodicity base_per{true, true};  // CL du domaine de base
   bool coarse_replicated = true;     // niveau 0 replique (true) ou multi-box reparti (false)
   bool recon_prim = false;           // reconstruction primitive (cf. compute_face_fluxes)
+  bool imex = false;                 // source raide implicite (backward_euler) au lieu d'Euler avant
 };
 
 // Entree unifiee de production : avance la hierarchie d'un pas dt. Forme "pieces" (le coupleur
@@ -1002,15 +1028,15 @@ struct LevelHierarchy {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
                  Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true,
-                 bool recon_prim = false) {
+                 bool recon_prim = false, bool imex = false) {
   detail::amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, levels, base_dom, dt, base_per,
-                                                                 coarse_replicated, recon_prim);
+                                                                 coarse_replicated, recon_prim, imex);
 }
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, LevelHierarchy& h, Real dt) {
   advance_amr<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt, h.base_per, h.coarse_replicated,
-                                      h.recon_prim);
+                                      h.recon_prim, h.imex);
 }
 
 }  // namespace adc

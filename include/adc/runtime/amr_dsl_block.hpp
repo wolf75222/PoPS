@@ -93,12 +93,13 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   h.coupler_holder = cpl;  // duree de vie : les fermetures capturent cpl (shared_ptr)
   const int sub = bp.substeps;
   const bool rprim = bp.recon_prim;
+  const bool imex = bp.imex;  // source raide implicite (backward_euler) plutot qu'Euler avant
   const int regrid_every = bp.regrid_every;
   auto step_state = std::make_shared<int>(0);  // compteur de pas partage par la fermeture
-  h.step = [cpl, crit, sub, rprim, regrid_every, step_state](double dt) {
+  h.step = [cpl, crit, sub, rprim, imex, regrid_every, step_state](double dt) {
     if (regrid_every > 0 && *step_state > 0 && *step_state % regrid_every == 0) cpl->regrid(crit);
     const double h2 = dt / sub;
-    for (int s = 0; s < sub; ++s) cpl->template step<AmrDiscLF<Limiter, Flux>>(h2, rprim);
+    for (int s = 0; s < sub; ++s) cpl->template step<AmrDiscLF<Limiter, Flux>>(h2, rprim, imex);
     ++*step_state;
   };
   h.max_speed = [cpl] { return static_cast<double>(cpl->max_wave_speed()); };
@@ -170,7 +171,9 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
 /// Branche @p model (CompositeModel concret) comme l'unique bloc AMR de @p sys, avec le schema demande.
 /// Le build du coupleur est DIFFERE (comme add_block) : la fermeture capturee est invoquee au premier
 /// step/mass/density via ensure_built(), apres set_refinement / set_poisson / set_density.
-/// @throws std::runtime_error si un bloc est deja defini ou si time != "explicit".
+/// @p time : "explicit" (source en Euler avant) ou "imex" (source raide implicite via
+/// backward_euler_source, transport explicite porte par le reflux). Tout autre traitement est refuse.
+/// @throws std::runtime_error si un bloc est deja defini ou si time n'est pas dans {explicit, imex}.
 template <class Model>
 void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
                         const std::string& limiter = "minmod",
@@ -179,17 +182,20 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
                         const std::string& time = "explicit", double gamma = 1.4, int substeps = 1) {
   (void)name;
   if (substeps < 1) throw std::runtime_error("add_compiled_model(AmrSystem) : substeps >= 1");
-  if (time != "explicit")
-    throw std::runtime_error("add_compiled_model(AmrSystem) : seul time='explicit' sur AMR");
+  if (time != "explicit" && time != "imex")
+    throw std::runtime_error("add_compiled_model(AmrSystem) : time '" + time +
+                             "' inconnu (explicit|imex)");
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("add_compiled_model(AmrSystem) : recon inconnu '" + recon +
                              "' (conservative|primitive)");
   const bool recon_prim = (recon == "primitive");
+  const bool imex = (time == "imex");
   // Builder type-erase : capture le Model concret + le schema, materialise le coupleur au build
   // paresseux (avec les parametres refine/poisson/density figes a ce moment-la).
-  auto builder = [model, limiter, riemann, recon_prim](const AmrBuildParams& bp) {
+  auto builder = [model, limiter, riemann, recon_prim, imex](const AmrBuildParams& bp) {
     AmrBuildParams p = bp;
     p.recon_prim = recon_prim;
+    p.imex = imex;
     return detail::dispatch_amr_compiled(model, limiter, riemann, p);
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(builder));

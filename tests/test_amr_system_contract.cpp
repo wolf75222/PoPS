@@ -1,9 +1,10 @@
-// Contrat mono-bloc/explicite de la facade AmrSystem : les parametres NON cables doivent etre
-// REFUSES explicitement (std::runtime_error), plus de no-op silencieux. Avant ce nettoyage,
-// set_poisson stockait rhs/solver sans jamais les valider (on pouvait croire que solver='fft'
-// tournait sur la hierarchie alors qu'AmrCouplerMP cable toujours GeometricMG), et add_block
-// acceptait n'importe quel time. Ce test verrouille les refus. Il compile python/amr_system.cpp
-// avec le test (comme test_amr_compiled_model), la classe AmrSystem etant la facade des bindings.
+// Contrat mono-bloc de la facade AmrSystem : les parametres NON cables doivent etre REFUSES
+// explicitement (std::runtime_error), plus de no-op silencieux. Avant ce nettoyage, set_poisson
+// stockait rhs/solver sans jamais les valider (on pouvait croire que solver='fft' tournait sur la
+// hierarchie alors qu'AmrCouplerMP cable toujours GeometricMG), et add_block acceptait n'importe
+// quel time. Ce test verrouille les refus -- et, depuis le cablage IMEX (source raide implicite),
+// l'ACCEPTATION de time='imex' (seul un time hors {explicit, imex} est refuse). Il compile
+// python/amr_system.cpp avec le test, la classe AmrSystem etant la facade des bindings.
 
 #include <adc/runtime/amr_system.hpp>
 #include <adc/runtime/model_spec.hpp>
@@ -89,12 +90,20 @@ int main(int argc, char** argv) {
       }),
       "wall inconnu refuse au build");
 
-  // --- add_block : refus de time != explicit et recon hors domaine, plus tot ----------------
-  chk(raises([&] {
+  // --- add_block : time={explicit, imex} ACCEPTE, tout autre traitement REFUSE -----------------
+  // time='imex' est desormais cable sur AMR (source raide implicite via backward_euler_source ;
+  // transport explicite porte par le reflux). On verrouille donc qu'il est ACCEPTE, et qu'un
+  // traitement GENUINEMENT inconnu reste refuse tot.
+  chk(!raises([&] {
         AmrSystem s(cfg);
         s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "imex", 1);
       }),
-      "add_block refuse time='imex' (AMR explicite uniquement)");
+      "add_block accepte time='imex' (IMEX cable sur AMR)");
+  chk(raises([&] {
+        AmrSystem s(cfg);
+        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "time_bidon", 1);
+      }),
+      "add_block refuse un time hors {explicit, imex}");
   chk(raises([&] {
         AmrSystem s(cfg);
         s.add_block("ne", exb_spec(), "none", "rusanov", "recon_bidon", "explicit", 1);

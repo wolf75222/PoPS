@@ -1070,20 +1070,18 @@ class AmrSystem:
           add_native_block : le loader .so inline add_compiled_model(AmrSystem&), donc le bloc tourne
           la MEME hierarchie AMR que add_block (reflux conservatif, regrid), ZERO-COPIE.
 
-        LIMITES AMR (AmrSystem n'est PAS a parite avec System : mono-bloc, EXPLICITE, sans
-        reconstruction primitive ni flux de Riemann complet). La facade REJETTE clairement, AVANT la
-        frontiere C++, les chemins non cables sur AMR pour un CompiledModel :
-          - variables="primitive" (spatial.recon) : le chemin .so AMR reste conservatif ;
-          - riemann="roe"/"hllc" (spatial.flux) : seul Rusanov est cable sur AMR via le .so.
-        limiter="weno5" EST cable sur AMR (WENO5-Z, 3 ghosts) : le coupleur alloue ses niveaux a
-        Limiter::n_ghost et le regrid herite n_grow(), donc le stencil 5 points ne lit pas hors bornes
-        (parite stricte avec add_block ; cf. dispatch_amr_compiled).
-        Ces limites valent pour le chemin COMPILE (.so) ; un modele natif (adc.Model -> add_block)
-        garde l'API add_block existante (recon primitive accepte cote C++). cf. DSL_MODEL_DESIGN.md
-        Phase D (point 10).
+        LIMITES AMR (AmrSystem est mono-bloc). Le traitement temporel est cable a {explicit, imex} :
+        imex traite la source raide en IMPLICITE (backward_euler_source), le transport restant
+        explicite et porte par le reflux conservatif (parite avec l'IMEX du System ; la source etant
+        cellule-locale, le split implicite ne touche pas la conservation aux interfaces grossier-fin).
+        recon "primitive" et flux "roe"/"hllc"/weno5 sont CABLES sur AMR (parite avec add_block ;
+        cf. dispatch_amr_compiled). limiter="weno5" (WENO5-Z, 3 ghosts) : le coupleur alloue ses
+        niveaux a Limiter::n_ghost et le regrid herite n_grow(), donc le stencil 5 points ne lit pas
+        hors bornes. cf. DSL_MODEL_DESIGN.md Phase D (point 10).
 
         @p spatial : adc.FiniteVolume(...) / adc.Spatial(...) (defaut minmod+rusanov+conservatif).
-        @p time : adc.Explicit (defaut ; AMR EXPLICITE uniquement). @p substeps : surcharge time.substeps.
+        @p time : adc.Explicit (defaut) ou adc.IMEX (source raide implicite). @p substeps : surcharge
+        time.substeps.
         """
         from . import dsl  # import tardif (dsl importe ce module : eviter le cycle a l'import)
 

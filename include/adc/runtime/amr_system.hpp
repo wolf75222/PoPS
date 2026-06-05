@@ -52,6 +52,7 @@ struct AmrBuildParams {
   double gamma = 1.4;
   int substeps = 1;
   bool recon_prim = false;            ///< recon == "primitive" (fige par add_compiled_model)
+  bool imex = false;                  ///< time == "imex" : source raide implicite (backward_euler)
   double refine_threshold = 1e30;     ///< 1e30 => aucun raffinement
   BCRec poisson_bc;                   ///< CL Poisson grossier (resolue par set_poisson)
   std::function<bool(Real, Real)> wall;  ///< predicat paroi conductrice (vide = aucune)
@@ -90,9 +91,11 @@ class AmrSystem {
   /// @param riemann "rusanov" | "hllc" | "roe" (hllc/roe exigent un transport compressible)
   /// @param recon   "conservative" | "primitive" (variables reconstruites ; primitif plus
   ///                robuste pour Euler : positivite de rho et p)
-  /// @param time    "explicit" uniquement (l'IMEX sur AMR n'est pas cable ici)
-  /// @throws std::runtime_error si un bloc est deja defini, si substeps < 1, si time != "explicit",
-  ///         ou si recon n'est pas dans {conservative, primitive}.
+  /// @param time    "explicit" (source en Euler avant, portee par le pas AMR) ou "imex" (source
+  ///                raide traitee en IMPLICITE par backward_euler_source ; le transport reste
+  ///                explicite, porte par le reflux conservatif). Tout autre traitement est refuse.
+  /// @throws std::runtime_error si un bloc est deja defini, si substeps < 1, si time n'est pas dans
+  ///         {explicit, imex}, ou si recon n'est pas dans {conservative, primitive}.
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod",
                  const std::string& riemann = "rusanov",
@@ -124,9 +127,10 @@ class AmrSystem {
   /// (adc_native_abi_key) est comparee a celle du module (abi_key()) -- ecart => erreur claire (pas
   /// d'UB silencieux a la frontiere C++). Memes garde-fous de schema que System (validation amont).
   ///
-  /// LIMITES RESTANTES (AmrSystem mono-bloc, EXPLICITE uniquement) : time != "explicit" est rejete
-  /// par add_compiled_model (pas d'IMEX sur AMR). Multi-box natif (grille multi-bloc) n'est pas
-  /// cable dans la facade. recon "primitive" et flux "roe"/"hllc" sont CABLES a parite (#113 :
+  /// LIMITES RESTANTES (AmrSystem mono-bloc) : time est cable a {explicit, imex} (imex = source
+  /// raide implicite via backward_euler_source ; tout autre traitement est rejete par
+  /// add_compiled_model). Multi-box natif (grille multi-bloc) n'est pas cable dans la facade. recon
+  /// "primitive" et flux "roe"/"hllc" sont CABLES a parite (#113 :
   /// dispatch_amr_compiled les accepte ; la facade Python applique un garde pression pour hllc/roe).
   /// limiter "weno5" (WENO5-Z, 3 ghosts) est CABLE sur rusanov (#105 : les niveaux du coupleur sont
   /// alloues a Limiter::n_ghost et le regrid herite n_grow() : pas de lecture hors bornes).

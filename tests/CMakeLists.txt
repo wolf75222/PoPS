@@ -244,6 +244,24 @@ target_compile_definitions(test_amr_riemann_native PRIVATE
   ADC_TEST_TMPDIR="${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME test_amr_riemann_native COMMAND test_amr_riemann_native)
 
+# --- IMEX (source raide implicite) sur le chemin "production" NATIF cote AMR (Gap 2 parite) ---
+# Pendant de test_amr_riemann_native : prouve que time="imex" tourne la MEME hierarchie AMR
+# (AmrCouplerMP + reflux + regrid), add_compiled_model == add_block == add_native_block BIT-IDENTIQUE
+# (dmax==0), que l'IMEX est ACTIF (!= explicite) et STABLE la ou l'explicite EXPLOSE sur une source
+# raide (backward_euler_source cellule-local), et que la masse grossiere reste conservee a ~machine
+# (la source hors registres de reflux). Compile amr_system.cpp comme test_amr_riemann_native ; memes
+# injections compilateur / include / norme / tmpdir.
+add_executable(test_amr_imex_native test_amr_imex_native.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_imex_native PRIVATE adc::adc ${CMAKE_DL_LIBS})
+set_target_properties(test_amr_imex_native PROPERTIES ENABLE_EXPORTS ON)
+target_compile_definitions(test_amr_imex_native PRIVATE
+  ADC_TEST_CXX="${CMAKE_CXX_COMPILER}"
+  ADC_TEST_INCLUDE="${CMAKE_CURRENT_SOURCE_DIR}/../include"
+  ADC_TEST_CXX_STD="c++${CMAKE_CXX_STANDARD}"
+  ADC_TEST_TMPDIR="${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME test_amr_imex_native COMMAND test_amr_imex_native)
+
 # --- contrat mono-bloc/explicite de la facade AmrSystem : refus explicite des params non cables ---
 # Compile le runtime AmrSystem (python/amr_system.cpp) avec le test : verrouille que set_poisson
 # refuse solver/rhs hors du domaine cable (GeometricMG + somme des briques elliptiques) et qu'add_block

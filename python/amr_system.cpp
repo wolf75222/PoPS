@@ -22,6 +22,7 @@ struct AmrSystem::Impl {
   ModelSpec b_spec;
   std::string b_limiter = "minmod", b_riemann = "rusanov";
   bool b_recon_prim = false;  // recon == "primitive" (fige a add_block)
+  bool b_imex = false;        // time == "imex" : source raide implicite (fige a add_block)
   int b_substeps = 1;
   double gamma = 1.4;
 
@@ -76,6 +77,7 @@ struct AmrSystem::Impl {
     bp.gamma = gamma;
     bp.substeps = b_substeps;
     bp.recon_prim = b_recon_prim;
+    bp.imex = b_imex;
     bp.refine_threshold = refine_threshold;
     bp.poisson_bc = poisson_bc();
     bp.wall = wall_active();
@@ -127,8 +129,9 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   if (p_->has_block || p_->has_compiled)
     throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
-  if (time != "explicit")
-    throw std::runtime_error("AmrSystem : seul time='explicit' est supporte sur AMR");
+  if (time != "explicit" && time != "imex")
+    throw std::runtime_error("AmrSystem : time '" + time +
+                             "' inconnu sur AMR (explicit|imex)");
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("AmrSystem : recon inconnu '" + recon +
                              "' (conservative|primitive)");
@@ -136,6 +139,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   p_->b_limiter = limiter;
   p_->b_riemann = riemann;
   p_->b_recon_prim = (recon == "primitive");
+  p_->b_imex = (time == "imex");
   p_->b_substeps = substeps;
   p_->gamma = model.gamma;  // indice adiabatique du bloc (Euler), lu par coupler_write_coarse
   p_->has_block = true;
@@ -167,15 +171,16 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                                  int substeps) {
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_native_block : substeps >= 1");
   // Validation AMONT du schema (comme add_block) : add_compiled_model(AmrSystem&) rejette deja
-  // time != "explicit" et recon hors {conservative, primitive}, mais on diagnostique ICI une faute
-  // de frappe avant la frontiere C++. LIMITE RESTANTE : seul time == "explicit" est cable sur la
-  // hierarchie (pas d'IMEX sur AMR). limiter (dont weno5, cable #105) et riemann (dont hllc/roe,
-  // cables a parite #113) sont valides par dispatch_amr_compiled dans le loader (exception claire).
+  // time hors {explicit, imex} et recon hors {conservative, primitive}, mais on diagnostique ICI une
+  // faute de frappe avant la frontiere C++. time == "imex" => source raide traitee en IMPLICITE
+  // (backward_euler_source), transport explicite porte par le reflux. limiter (dont weno5, cable #105)
+  // et riemann (dont hllc/roe, cables a parite #113) sont valides par dispatch_amr_compiled dans le
+  // loader (exception claire).
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("AmrSystem::add_native_block : recon 'conservative' | 'primitive' "
                              "(recu '" + recon + "')");
-  if (time != "explicit")
-    throw std::runtime_error("AmrSystem::add_native_block : seul time='explicit' sur AMR (recu '" +
+  if (time != "explicit" && time != "imex")
+    throw std::runtime_error("AmrSystem::add_native_block : time 'explicit' | 'imex' sur AMR (recu '" +
                              time + "')");
   // Chemin "production" du DSL cote AMR : le loader .so genere (emit_cpp_native_loader avec
   // target="amr_system") inline le gabarit en-tete add_compiled_model(AmrSystem&, ...), qui

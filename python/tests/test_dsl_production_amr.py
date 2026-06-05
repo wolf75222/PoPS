@@ -16,9 +16,9 @@ add_compiled_model). On verifie :
   2) PARITE FORTE (euler_poisson couple) : memes masse / n_patches / densite a la precision machine
      (< 1e-12), comme le test C++ test_amr_compiled_model.cpp (le solve elliptique MG accumule un bruit
      FP d'ordre 1e-16, donc < 1e-12 et non == 0 quand le couplage est actif).
-  3) LIMITES AMR enforcees (AmrSystem n'est PAS a parite avec System : mono-bloc, explicite, sans
-     recon primitive ni flux de Riemann complet) : la facade AmrSystem.add_equation REJETTE clairement
-     variables="primitive" et riemann="roe"/"hllc" sur un CompiledModel, AVANT le C++. limiter="weno5"
+  3) LIMITES AMR enforcees (AmrSystem est mono-bloc ; time cable a {explicit, imex}, imex = source
+     raide implicite) : la facade AmrSystem.add_equation applique son garde-fou pression (hllc/roe sans
+     primitive 'p' rejete), AVANT le C++. limiter="weno5"
      (WENO5-Z, 3 ghosts) est en revanche CABLE sur AMR (rusanov) : on prouve sa PARITE STRICTE
      (densite production == add_block, dmax == 0) et qu'il DIFFERE de minmod (reconstruction active).
   4) GARDE-FOUS de compilation : compile(target="amr_system") exige backend="production" ; un
