@@ -134,6 +134,13 @@ class System {
                      std::function<Real(const MultiFab&)> max_speed,
                      std::function<void(const MultiFab&, MultiFab&)> poisson_rhs, int substeps,
                      bool evolve);
+  /// Garantit que l'etat U du bloc @p name porte au moins @p n_ghost ghosts (largeur du stencil
+  /// spatial). WENO5 lit 3 ghosts, > les 2 alloues par install_block ; appelee par add_compiled_model
+  /// (en-tete) avec block_n_ghost(limiter) APRES install_block, pour que le chemin compile natif
+  /// (loader .so) accepte weno5 -- MEME mecanisme que add_block. No-op si U a deja assez de ghosts
+  /// (none/minmod/vanleer, <= 2) : allocation et donnees bit-identiques a l'historique. ADC_EXPORT :
+  /// appelee par le gabarit en-tete add_compiled_model -> doit etre exportee pour le loader .so.
+  ADC_EXPORT void set_block_ghosts(const std::string& name, int n_ghost);
   /// @}
 
   /// Configure le Poisson partage.

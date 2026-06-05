@@ -90,6 +90,7 @@ jobs:
           PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_aot_te.py
           PYTHONPATH=$PWD/build-py/python python3 python/tests/test_block_names_dynamic.py
           PYTHONPATH=$PWD/build-py/python python3 python/tests/test_dsl_abi_metadata.py
+          PYTHONPATH=$PWD/build-py/python python3 python/tests/test_weno5_compiledmodel.py
 
   mpi:
     name: ubuntu-latest / MPI

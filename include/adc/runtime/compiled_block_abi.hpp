@@ -93,11 +93,15 @@ inline void extract(const MultiFab& mf, double* out, int n, int nv) {
 }
 
 /// Residu -div F + S du chemin de production (assemble_rhs<Limiter, Flux>) sur le modele genere.
+/// GHOSTS : on alloue l'etat local avec block_n_ghost(lim) (3 pour weno5, son stencil 5 points,
+/// sinon 2 MUSCL) -- MEME mecanisme que System::add_block (set_block_ghosts, PR #88). Sans cette
+/// largeur, assemble_rhs lirait hors bornes de la grille locale du .so. none/minmod/vanleer (<=2
+/// ghosts) : allocation et resultat bit-identiques a l'historique (le surplus ghost est un no-op).
 template <class Model>
 void residual(const double* U, double* R, const double* aux_in, int n, double dx, double dy,
               bool periodic, const std::string& lim, const std::string& riem, bool recon_prim) {
   LocalGrid lg = make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
-  MultiFab Umf(lg.ba, lg.dm, Model::n_vars, 2), Rmf(lg.ba, lg.dm, Model::n_vars, 0);
+  MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim)), Rmf(lg.ba, lg.dm, Model::n_vars, 0);
   fill_interior(Umf, U, n, Model::n_vars);
   const GridContext ctx{lg.dom, lg.bc, lg.geom, &lg.aux};
   Model model{};
@@ -112,7 +116,8 @@ void advance(double* U, const double* aux_in, int n, double dx, double dy, bool 
              const std::string& lim, const std::string& riem, bool recon_prim, bool imex,
              double dt, int nsub) {
   LocalGrid lg = make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
-  MultiFab Umf(lg.ba, lg.dm, Model::n_vars, 2);
+  // block_n_ghost(lim) : 3 pour weno5 (stencil 5 points), 2 MUSCL sinon. cf. residual ci-dessus.
+  MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim));
   fill_interior(Umf, U, n, Model::n_vars);
   const GridContext ctx{lg.dom, lg.bc, lg.geom, &lg.aux};
   Model model{};

@@ -172,6 +172,15 @@ add_test(NAME test_weno5_ssprk3
 set_tests_properties(test_weno5_ssprk3 PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# WENO5 sur les chemins .so / CompiledModel : add_compiled_block (AOT) ET add_native_block (production)
+# allouent block_n_ghost(limiter)=3 ghosts -> weno5 accepte ; parite eval_rhs/potentiel au bloc natif
+# add_block weno5 (AOT < 1e-9 marshale, production bit-identique) + no-default-change none/minmod.
+# S'auto-saute sans compilateur.
+add_test(NAME test_weno5_compiledmodel
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_weno5_compiledmodel.py)
+set_tests_properties(test_weno5_compiledmodel PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # DSL Phase A : API utilisateur stable (dsl.Model + Param + CompiledModel + add_equation +
 # FiniteVolume + run). Erreurs explicites + aot/production end-to-end (production -> add_native_block).
 add_test(NAME test_dsl_phase_a

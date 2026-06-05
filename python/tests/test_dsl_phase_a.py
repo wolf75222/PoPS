@@ -136,8 +136,21 @@ def pure_python_checks():
                              prim_names=["rho", "u", "v"],  # PAS de 'p' -> hllc/roe doit lever
                              n_vars=4, gamma=GAMMA, n_aux=3, params={}, caps={},
                              abi_key="k", model_hash="h", cxx="c++", std="c++20")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake,
-                  spatial=adc.FiniteVolume(limiter="weno5")), "weno5 sur .so")
+    # WENO5 est desormais ACCEPTE sur aot/production (la grille .so / le bloc natif allouent
+    # block_n_ghost(limiter) = 3 ghosts) : un fake aot+weno5 passe le garde Python et echoue plus loin
+    # au dlopen (.so inexistant) -> RuntimeError, PAS ValueError (la garde weno5-aot n'existe plus).
+    expect_raises(RuntimeError, lambda: sys.add_equation("g", fake,
+                  spatial=adc.FiniteVolume(limiter="weno5")), "weno5 aot : accepte (echec au dlopen)")
+    # WENO5 reste rejete (ValueError) sur le backend 'prototype' (JIT, residu hote Rusanov ordre 1,
+    # sans assemble_rhs) : ce chemin n'a pas de stencil large a alimenter.
+    fake_proto = dsl.CompiledModel(so_path="/inexistant.so", backend="prototype",
+                                   adder="add_dynamic_block", cons_names=["rho", "rho_u", "rho_v", "E"],
+                                   cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
+                                   prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=GAMMA, n_aux=3,
+                                   params={}, caps={}, abi_key="k", model_hash="h", cxx="c++",
+                                   std="c++20")
+    expect_raises(ValueError, lambda: sys.add_equation("g", fake_proto,
+                  spatial=adc.FiniteVolume(limiter="weno5")), "weno5 sur prototype (JIT)")
     expect_raises(ValueError, lambda: sys.add_equation("g", fake,
                   spatial=adc.FiniteVolume(riemann="hllc")), "hllc sans pression")
     expect_raises(ValueError, lambda: sys.add_equation("g", fake, names=["a", "b"]),
@@ -148,7 +161,7 @@ def pure_python_checks():
                                   caps={}, abi_key="k", model_hash="h", cxx="c++", std="c++20")
     expect_raises(ValueError, lambda: sys.add_equation("g", fake_prod, names=["x"]),
                   "names= sur production natif")
-    print("OK  add_equation : erreurs explicites (weno5/.so, hllc sans p, names=, names= natif)")
+    print("OK  add_equation : erreurs explicites (weno5/prototype, hllc sans p, names=, names= natif)")
 
 
 def end_to_end_checks(cxx):

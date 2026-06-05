@@ -11,7 +11,9 @@ Verifie :
      limiter="minmod"/method="ssprk2". Le chemin par defaut n'a pas bouge.
  (4) PRECISION : sur un transport lisse (Euler, bulle de densite douce), WENO5+SSPRK3 reste fini et
      conserve la masse ; combine a minmod/rusanov (defaut) il tourne aussi -> les schemas coexistent.
- (5) Garde-fous : weno5 rejete sur les chemins compiles (.so) ; une methode temporelle invalide leve.
+ (5) weno5 ACCEPTE sur les chemins compiles (.so) : add_compiled_block / add_native_block n'opposent
+     plus de rejet de limiteur (grille .so / bloc natif a block_n_ghost = 3 ghosts) ; sur un .so
+     inexistant l'erreur est un echec de dlopen, pas un rejet weno5.
 """
 import sys
 
@@ -129,14 +131,31 @@ for _ in range(6):
 chk(np.isfinite(np.array(mix.density("hi"))).all() and np.isfinite(np.array(mix.density("lo"))).all(),
     "bloc weno5/ssprk3 et bloc minmod/ssprk2 coexistent dans un meme System")
 
-# --- 5. garde-fous : weno5 sur les chemins compiles (.so) -> rejet --------------
-print("== garde-fous : weno5 sur chemins compiles rejete ==")
-# add_compiled_block / add_native_block n'exposent pas weno5 (grille locale .so a 2 ghosts).
+# --- 5. weno5 ACCEPTE par les chemins compiles (.so) : plus de rejet "limiteur" -------
+# add_compiled_block (AOT) et add_native_block (production) acceptent desormais weno5 : la grille
+# locale du .so / le bloc natif allouent block_n_ghost(limiter) = 3 ghosts. Le rejet "weno5 non
+# expose / 2 ghosts" a ete supprime. On le PROUVE en visant un .so INEXISTANT : l'erreur doit etre
+# un echec de dlopen (chemin introuvable), PAS un rejet du limiteur -> weno5 a passe la garde schema.
+print("== weno5 accepte par les chemins compiles (rejet limiteur supprime) ==")
 ss = adc.System(n=16)._s  # facade compilee brute (pour viser les methodes .so directement)
-chk(raises(lambda: ss.add_compiled_block("x", "/inexistant.so", "weno5")),
-    "add_compiled_block(weno5) leve (rejet avant dlopen ou limiteur)")
-chk(raises(lambda: ss.add_native_block("x", "/inexistant.so", "weno5")),
-    "add_native_block(weno5) leve")
+
+
+def err_msg(fn):
+    try:
+        fn()
+        return ""
+    except Exception as ex:  # noqa: BLE001
+        return str(ex)
+
+
+msg_aot = err_msg(lambda: ss.add_compiled_block("x", "/inexistant.so", "weno5"))
+chk(msg_aot != "" and "non expose" not in msg_aot and "2 ghosts" not in msg_aot
+    and "dlopen" in msg_aot,
+    "add_compiled_block(weno5) : weno5 accepte, echec au dlopen (pas un rejet limiteur)")
+msg_nat = err_msg(lambda: ss.add_native_block("x", "/inexistant.so", "weno5"))
+chk(msg_nat != "" and "non expose" not in msg_nat and "2 ghosts" not in msg_nat
+    and "dlopen" in msg_nat,
+    "add_native_block(weno5) : weno5 accepte, echec au dlopen (pas un rejet limiteur)")
 
 print("OK test_weno5_ssprk3" if fails == 0 else f"{fails} ECHEC(S)")
 sys.exit(0 if fails == 0 else 1)

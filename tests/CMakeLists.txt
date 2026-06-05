@@ -101,6 +101,15 @@ add_executable(test_compiled_model_parity test_compiled_model_parity.cpp
 target_link_libraries(test_compiled_model_parity PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_compiled_model_parity COMMAND test_compiled_model_parity)
 
+# --- WENO5 sur le chemin compile natif (add_compiled_model) == bloc natif (add_block) ---
+# Verrou de l'unification ghost : add_compiled_model alloue le bloc a block_n_ghost(limiter) (3 pour
+# weno5) APRES install_block, comme add_block. Parite STRICTE weno5 + no-default-change none/minmod
+# (allocation <= 2 ghosts inchangee). Compile le runtime System comme test_compiled_model_parity.
+add_executable(test_weno5_compiled_model test_weno5_compiled_model.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
+target_link_libraries(test_weno5_compiled_model PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_weno5_compiled_model COMMAND test_weno5_compiled_model)
+
 # --- parite bloc compile AOT (add_compiled_model) == bloc natif (add_block) COTE AMR ---
 # Compile le runtime AmrSystem (python/amr_system.cpp) avec le test : add_compiled_model branche un
 # CompositeModel connu a la compilation sur la hierarchie AMR reelle (AmrCouplerMP + reflux + regrid),

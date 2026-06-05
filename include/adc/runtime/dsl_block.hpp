@@ -58,6 +58,11 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   std::function<void(const MultiFab&, MultiFab&)> pr = make_poisson_rhs(model);
   sys.install_block(name, Model::n_vars, Model::conservative_vars(), Model::primitive_vars(),
                     gamma, std::move(clo), std::move(ms), std::move(pr), substeps, evolve);
+  // GHOSTS du schema : WENO5 lit un stencil 5 points (3 ghosts) > les 2 alloues par install_block.
+  // On reallue l'etat du bloc avec block_n_ghost(limiter) -- MEME mecanisme qu'add_block (PR #88) --
+  // pour que fill_boundary + assemble_rhs ne lisent pas hors bornes sur les vrais MultiFab du System.
+  // none/minmod/vanleer (<= 2 ghosts) : no-op, allocation et resultat bit-identiques a avant.
+  sys.set_block_ghosts(name, block_n_ghost(limiter));
 }
 
 }  // namespace adc

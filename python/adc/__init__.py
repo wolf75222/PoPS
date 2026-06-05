@@ -412,16 +412,6 @@ class System:
         names_arg = list(names) if names is not None else []
 
         backend = compiled.backend
-        # Garde-fou WENO5 : tout CompiledModel passe par un .so qui alloue 2 ghosts ; WENO5 en exige 3
-        # (rejete cote C++, system.cpp pour aot/production). On le rejette ICI, AVANT le C++, sur TOUS
-        # les chemins .so : WENO5 n'est valide que via le chemin natif add_block (adc.Model ->
-        # ModelSpec). Differe pour les .so (Phase A : les 3 ghosts ne sont pas regles).
-        if spatial.limiter == "weno5":
-            raise ValueError(
-                "add_equation : limiter 'weno5' non supporte sur un CompiledModel (.so a 2 ghosts ; "
-                "WENO5 en exige 3) ; WENO5 n'est valide que via add_block (modele compose "
-                "adc.Model(...)). Differe pour les .so (Phase A).")
-
         # Garde-fou flux numerique : HLLC/Roe exigent une pression -> la brique generee n'emet
         # pressure()/wave_speeds() que si une primitive 'p' est declaree. Sans 'p', make_block ne
         # compile pas le flux : on le diagnostique ici avant la frontiere C++.
@@ -436,7 +426,15 @@ class System:
         adder = compiled.adder
         if adder == "add_dynamic_block":
             # JIT, residu HOTE Rusanov ordre 1 : ne prend que le LIMITER MUSCL (none/minmod/vanleer)
-            # + substeps ; pas de flux HLLC/Roe, pas de recon primitif.
+            # + substeps ; pas de flux HLLC/Roe, pas de recon primitif. WENO5 (stencil 5 points) n'est
+            # PAS un limiteur MUSCL et ce chemin n'execute pas assemble_rhs : on le rejette ICI (les
+            # chemins aot/production, eux, acceptent weno5 -- la grille .so / le bloc natif allouent
+            # block_n_ghost(limiter) = 3 ghosts).
+            if spatial.limiter == "weno5":
+                raise ValueError(
+                    "add_equation : limiter 'weno5' non supporte sur backend 'prototype' (JIT, residu "
+                    "hote Rusanov ordre 1, sans assemble_rhs) ; utiliser backend='aot'/'production' "
+                    "(WENO5 cable de bout en bout) ou add_block (modele compose adc.Model(...)).")
             if spatial.flux != "rusanov":
                 raise ValueError(
                     "add_equation : backend 'prototype' (JIT, residu hote Rusanov ordre 1) n'expose "

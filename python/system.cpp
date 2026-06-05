@@ -818,6 +818,13 @@ void System::install_block(const std::string& name, int ncomp,
   P->sp.back().prim_vars = prim_vars;
 }
 
+// Reallocation width-aware de l'etat d'un bloc (delegue a Impl::set_block_ghosts). Exposee
+// (ADC_EXPORT) pour que le gabarit en-tete add_compiled_model (chemin natif, loader .so) puisse
+// elargir le bloc compile a block_n_ghost(limiter) -- 3 pour weno5 -- comme le fait add_block.
+void System::set_block_ghosts(const std::string& name, int n_ghost) {
+  p_->set_block_ghosts(name, n_ghost);
+}
+
 void System::add_dynamic_block(const std::string& name, const std::string& so_path, int substeps,
                                const std::vector<std::string>& names, const std::string& recon) {
   if (substeps < 1) throw std::runtime_error("System::add_dynamic_block : substeps >= 1");
@@ -864,12 +871,9 @@ void System::add_compiled_block(const std::string& name, const std::string& so_p
   if (time != "explicit" && time != "imex")
     throw std::runtime_error("System::add_compiled_block : time 'explicit' | 'imex' (ssprk3 -> "
                              "add_block ; le chemin AOT n'expose que SSPRK2)");
-  // WENO5 (3 ghosts) lirait hors bornes dans la grille locale du .so (alloue 2 ghosts dans
-  // compiled_block_abi.hpp, chantier DSL Phase-A) : on le rejette ICI plutot que de produire
-  // silencieusement un resultat faux. WENO5 est cable de bout en bout par le chemin natif add_block.
-  if (limiter == "weno5")
-    throw std::runtime_error("System::add_compiled_block : limiter 'weno5' non expose par le chemin "
-                             "AOT (.so a 2 ghosts) ; utiliser add_block (chemin natif).");
+  // WENO5 (stencil 5 points, 3 ghosts) est desormais EXPOSE par le chemin AOT : la grille locale du
+  // .so alloue block_n_ghost(limiter) (compiled_block_abi.hpp), 3 pour weno5, donc assemble_rhs ne lit
+  // pas hors bornes. limiter est valide par make_block dans le .so (none|minmod|vanleer|weno5).
   const int recon_prim = (recon == "primitive") ? 1 : 0;
   const int imex = (time == "imex") ? 1 : 0;
 
@@ -997,12 +1001,10 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
   if (time != "explicit" && time != "imex")
     throw std::runtime_error("System::add_native_block : time 'explicit' | 'imex' (recu '" + time +
                              "')");
-  // WENO5 (3 ghosts) : le loader natif inline add_compiled_model qui installe via install_block
-  // (allocation a 2 ghosts ; chantier DSL Phase-A, hors de ce write-set). Rejete ICI pour ne pas
-  // lire hors bornes. WENO5 est cable de bout en bout par le chemin natif add_block.
-  if (limiter == "weno5")
-    throw std::runtime_error("System::add_native_block : limiter 'weno5' non expose par le chemin "
-                             "natif loader (install_block a 2 ghosts) ; utiliser add_block.");
+  // WENO5 (stencil 5 points, 3 ghosts) est desormais EXPOSE par le chemin natif : le loader inline
+  // add_compiled_model qui, apres install_block, reallue l'etat du bloc a block_n_ghost(limiter) (3
+  // pour weno5) -- MEME mecanisme qu'add_block. assemble_rhs ne lit donc pas hors bornes. limiter est
+  // valide par make_block dans le loader (none|minmod|vanleer|weno5).
   // Chemin "production" du DSL : le loader .so genere (emit_cpp_native_loader) inline le gabarit
   // en-tete add_compiled_model<ProdModel>, qui fabrique les fermetures sur le CONTEXTE REEL du
   // System (grid_context) et installe le bloc via install_block -- chemin NATIF, zero-copie, MEMES
