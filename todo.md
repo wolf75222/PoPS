@@ -184,18 +184,23 @@ en Python sur le chemin performant. Trois backends : `prototype` (NumPy/hote), `
       `target="amr_system"` ; parite bit-identique a `add_compiled_model(AmrSystem&)`. VALIDE CPU/CI
       (test_amr_native_loader dlopen, Release+MPI+Kokkos verts). (#92) Limites AMR (mono-bloc, explicite,
       pas de recon primitive/Roe/weno5) rejetees explicitement.
-- [~] **Etape 6 - validation MPI/GPU du chemin `production`** : `add_compiled_model` valide GH200 pour
-      `eval_rhs`/`advance` (foncteurs nommes). **BLOQUE** : le chemin production CRASHE sur GH200 dans
-      `solve_fields()` (segfault HOTE, hors kernel ; `add_block` y tourne propre). Root-cause en cours
-      (#93, harness diagnostic, NON mergeable comme validation). La production sur GPU de bout en bout
-      n'est donc PAS encore demontree.
+- [~] **Etape 6 - validation MPI/GPU du chemin `production`** : **np=1 GPU VALIDE sur GH200.** Le crash
+      device dans `solve_fields()` etait du a des lambdas `ADC_HD` etendues inline (noyaux elliptiques/mesh
+      `copy_shifted`/`fill_boundary`/MG, premiere instanciation cross-TU -> stub kernel nvcc nul en
+      Release sans `-g`) ; converties en FONCTEURS NOMMES (#97, meme recette que #64). Preuve GH200 (job
+      ROMEO 640236, Release sans `-g`) : `geometric_mg` ET `fft` Cuda np=1 exit 0 (etaient 139),
+      compute-sanitizer 0 erreur, `dmax_abs` Cuda-vs-Serial = 5.0e-13 (MG) / 1.3e-15 (FFT) -- DANS LA
+      TOLERANCE (reassociation FMA des reductions Kokkos), CPU bit-identique. RESTE BLOQUE : **MPI np=2/4**
+      par le bug System mono-box / `fab(0)` appele sans test `local_size()` dans `solve_fields` (rang sans
+      box locale -> segfault hote) ; chantier SEPARE, pas dans #97.
 - [ ] **Etape 7 - DIFFERE** : domaine disque FV / paroi transport + reproduction papier quantitative
       (cf. section 6 ; subordonne a la confirmation haute resolution du plateau l=4).
 
 **STATUT HONNETE (ne PAS presenter "Plan Ideal termine")** : System production CPU = OK ; AmrSystem
-production CPU = OK ; demonstrateurs DSL Python = OK ; production GPU de bout en bout = NON (bloquee par
-le crash `solve_fields` GH200, #93) ; WENO5 sur `CompiledModel` = encore limite (2 ghosts) ;
-`PAPER_ROADMAP.md` = a NE PAS reecrire automatiquement (attend la validation humaine du sweep O5).
+production CPU = OK ; demonstrateurs DSL Python = OK ; **production GPU np=1 = OK (GH200, #97)** ;
+production GPU MPI np=2/4 = NON, bloquee par le bug System mono-box / `fab(0)` (chantier separe a venir,
+sur accord) ; WENO5 sur `CompiledModel` = encore limite (2 ghosts) ; `PAPER_ROADMAP.md` = a NE PAS
+reecrire automatiquement (attend la validation humaine du sweep O5).
 
 ## 9. Mesure diocotron haut ordre (PR-0 + O5, cote `adc_cases`)
 
