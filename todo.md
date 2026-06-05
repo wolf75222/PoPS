@@ -179,11 +179,14 @@ en Python sur le chemin performant. Trois backends : `prototype` (NumPy/hote), `
 - [x] **Etape 3 - `production` reel pour `System`** : loader natif zero-copie. (#85)
 - [x] **Etape 4 - cas demonstrateurs `adc_cases`** : `diocotron_dsl` (ExB en formules, == `models.diocotron`
       BIT-IDENTIQUE) + `two_species_dsl` (electrons+ions, temps par bloc, Poisson `sum q_s n_s`), backend
-      `production`, validation CI legere. (adc_cases #7) `magnetic_isothermal_dsl` saute (pas d'oracle natif).
+      `production`, validation CI legere (adc_cases #7) + `magnetic_isothermal_dsl` (isotherme magnetise,
+      B_z pilote depuis Python via `set_magnetic_field`, oracle Lorentz, `aot`==`production` bit-identique en
+      CI Linux, adc_cases #9). Les 3 demonstrateurs DSL tournent en CI.
 - [x] **Etape 5 - `production` -> `AmrSystem`** (Phase D) : `AmrSystem::add_native_block` +
       `target="amr_system"` ; parite bit-identique a `add_compiled_model(AmrSystem&)`. VALIDE CPU/CI
-      (test_amr_native_loader dlopen, Release+MPI+Kokkos verts). (#92) Limites AMR (mono-bloc, explicite,
-      pas de recon primitive/Roe/weno5) rejetees explicitement.
+      (test_amr_native_loader dlopen, Release+MPI+Kokkos verts). (#92) **WENO5/Rusanov/conservatif** cable
+      sur le chemin natif AMR (parite `add_native_block`==`add_compiled_model`==`add_block`, dmax=0, #105).
+      Limites restantes : AMR mono-bloc, explicite, pas de reconstruction primitive ni HLLC/Roe via le `.so` AMR.
 - [~] **Etape 6 - validation MPI/GPU du chemin `production`** : **np=1 GPU VALIDE sur GH200.** Le crash
       device dans `solve_fields()` etait du a des lambdas `ADC_HD` etendues inline (noyaux elliptiques/mesh
       `copy_shifted`/`fill_boundary`/MG, premiere instanciation cross-TU -> stub kernel nvcc nul en
@@ -200,16 +203,20 @@ en Python sur le chemin performant. Trois backends : `prototype` (NumPy/hote), `
       leve si n_ranks()>1, et l'`assert(n_ranks()==1)` compile-out devient un garde-fou DUR (throw actif en
       Release) dans `PoissonFFTSolver`. fft direct = np=1 seulement ; `DistributedFFTSolver` existe (teste a
       part, `test_mpi_fft_distributed`) mais non route dans System (layout bandes vs box unique).
-- [ ] **Etape 7 - DIFFERE** : domaine disque FV / paroi transport + reproduction papier quantitative
-      (cf. section 6 ; subordonne a la confirmation haute resolution du plateau l=4).
+- [~] **Etape 7 - paroi transport / domaine disque FV** (prochain vrai verrou scientifique) : le cut-cell
+      ne nourrit que le Poisson, pas le flux hyperbolique -> bord d'anneau diffuse sur la grille cartesienne.
+      **Phase 1 EN COURS** : paroi-transport opt-in par masque (experimental, defaut inchange) pour tester
+      l'hypothese du plancher structurel sur l=3. Phase 2 si concluant : fractions cut-cell FV. Reproduction
+      papier quantitative subordonnee (cf. section 6, confirmation haute resolution du plateau l=4).
 
 **STATUT HONNETE (ne PAS presenter "Plan Ideal termine")** : System production CPU = OK ; AmrSystem
-production CPU = OK ; demonstrateurs DSL Python = OK ; **production GPU np=1 = OK (GH200, #97)** ;
+production CPU = OK (WENO5/Rusanov/conservatif, #105) ; demonstrateurs DSL = OK (diocotron_dsl,
+two_species_dsl, magnetic_isothermal_dsl, tous en CI) ; **production GPU np=1 = OK (GH200, #97)** ;
 **`solve_fields` MPI np=1/2/4 = OK cote CPU/CI (#99)** ; **device-MPI production `geometric_mg` = VALIDE
 (GH200, #93, np=1/2/4)** ; **`fft` np>1 sous System = refuse proprement (#106), plus de segfault** (DistributedFFTSolver non route, layout) ; `set_density`/`get_state` multi-rang
 = hors scope ; WENO5 sur `CompiledModel` = SUPPORTE (3 ghosts via `set_block_ghosts`, #102) ;
 `PAPER_ROADMAP.md` = a NE PAS reecrire automatiquement
-(attend la validation humaine du sweep O5).
+(attend la validation humaine du sweep O5) ; **prochain verrou scientifique = Phase 1 paroi-transport (experimental, en cours)**.
 
 ## 9. Mesure diocotron haut ordre (PR-0 + O5, cote `adc_cases`)
 
