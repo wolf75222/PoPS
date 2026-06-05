@@ -84,6 +84,11 @@ adc_add_test(test_splitting)
 adc_add_test(test_imex_ap)
 adc_add_test(test_ap_limit)
 
+# --- Schur PR2 : brique Lorentz-elimination (operateur B et son inverse analytique) ---
+# Teste les proprietes analytiques de LorentzEliminator : round-trip Binv(B(v))==v,
+# coherence des entrees de B^{-1}, relation norme, et cas degenere B_z=0.
+adc_add_test(test_lorentz_eliminator)
+
 # --- Proto Phase-0 : mesure decisive pour le chantier "grille polaire diocotron" ---
 # Quantifie la diffusion du gradient radial d'un anneau en rotation azimutale :
 #   bras 1 (Cartesien) = WENO5+Rusanov+SSPRK3 sur grille (x,y) reguliere,
