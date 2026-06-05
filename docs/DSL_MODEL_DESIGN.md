@@ -534,6 +534,41 @@ Livree. C'est du cablage de dispatch (pas de numerique nouvelle).
     chemin critique de reproduction Hoffart (`PAPER_ROADMAP.md:147-150`, panier 2
     transverse, optionnel).
 
+### Phase F : composition HYBRIDE native + DSL dans UN modele -- prototype
+
+12. `adc.Model(...)` compose des briques 100% NATIVES (ModelSpec, tags C++) ; `dsl.Model(...)` genere
+    un modele 100% DSL. La phase F comble l'entre-deux : MELANGER, dans UN SEUL modele, des briques
+    NATIVES et des briques DSL PARTIELLES.
+
+    **API** : `dsl.HyperbolicBrick` / `dsl.SourceBrick` / `dsl.EllipticBrick` -> `.compile()` ->
+    `CompiledHyperbolicBrick` / `...Source...` / `...Elliptic...` (le C++ d'UNE brique + metadonnees,
+    pas de .so par brique). Puis `adc.CompositeModel(transport=, source=, elliptic=)` accepte, par slot,
+    SOIT une brique native (`adc.ExB`/`PotentialForce`/`ChargeDensity`...), SOIT une brique DSL compilee
+    (>= 1 slot DSL exige ; sinon `adc.Model`). `.compile(backend=, target=)` -> `CompiledModel` branchable
+    via `add_equation`.
+
+    **Design (option B)** : le melange est genere a la compilation du `adc::CompositeModel<H,S,E>` FINAL
+    = UN seul .so, sur le chemin de PRODUCTION (pas de .so par brique ni d'ABI virtuelle partielle =
+    option A, ecartee : dispatch virtuel hote, sans inline GPU). Le coeur C++ compose deja des types de
+    slots heterogenes ; `physics/bricks.hpp` est inclus par tous les backends. Les PARAMETRES d'une brique
+    native sont cuits dans le TYPE via un struct derive genere
+    (`struct NatSrc : adc::PotentialForce { NatSrc(){ qom = adc::Real(-1.0); } };`) : numerique native
+    reutilisee a l'identique, zero re-derivation.
+
+    **Couvert (prototype)** : backends `aot` (add_compiled_block), `production` (add_native_block,
+    zero-copie, MPI par construction) ET `prototype` (JIT virtuel) ; cible `system` ET `amr_system`
+    (production seulement, loader `adc_install_native_amr`) ; aux extensible (B_z `n_aux=4`, T_e `n_aux=5`)
+    propage a travers le composite ; couplages inter-especes PAR ROLE (collision `index_of(MomentumX/Y)`)
+    sur un bloc hybride. Tests : `test_dsl_hybrid` (2 sens x aot/production/jit bit-identiques a l'oracle
+    natif), `test_dsl_hybrid_bz` (B_z e2e + T_e), `test_dsl_hybrid_amr` (parite AMR), `test_dsl_hybrid_coupling`
+    (collision par role hybride == natif), `test_mpi_hybrid_mbox_parity` (residu bit-identique np=1/2/4,
+    job MPI). WRITE-SET : `python/adc/dsl.py` (briques partielles +
+    `HybridModel`), `python/adc/__init__.py` (`adc.CompositeModel`). AUCUN changement C++ (le
+    `CompositeModel` compose deja le melange ; les roles viennent de `ADC_EXPORT_BLOCK_METADATA`).
+
+    **Reste** : T_e bout-en-bout cote Python (le marshaling est partage avec B_z, deja prouve) ;
+    validation GPU depuis Python (PR ROMEO, comme le natif).
+
 ### Resume de dependance
 
 - A (1-6) : SHIPPE (#89/#90). Le gros de la valeur (`dsl.Model` stable, `CompiledModel`,
@@ -545,3 +580,6 @@ Livree. C'est du cablage de dispatch (pas de numerique nouvelle).
 - D (10) : SHIPPE (#92/#105) mais BORNE : AMR mono-bloc/explicite, multi-box natif non cable facade,
   HLLC/Roe/primitive rejetes cote facade (moteur C++ OK). `AmrSystem.potential()` PR non mergee.
 - E (11) : GAP, phase 2, seul item exigeant un changement d'ABI/codegen (param runtime).
+- F (12) : PROTOTYPE (branche, non mergee). Composition HYBRIDE native + DSL dans un modele
+  (`adc.CompositeModel`) ; backends aot/production/jit, cible system/amr_system, aux B_z/T_e, couplage
+  inter-especes par role, parite MPI np=1/2/4. Reste : validation GPU. AUCUN changement C++ (option B).

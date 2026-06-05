@@ -1537,3 +1537,450 @@ class Model:
             params=self.params, caps=_BACKEND_CAPS[backend],
             abi_key=abi_key, model_hash=model_hash,
             cxx=eff_cxx, std=eff_std)
+
+
+# === Phase B (prototype) : composition HYBRIDE brique native + brique DSL dans UN modele ========
+# Jusqu'ici, melanger natif et DSL se faisait au niveau du SYSTEME (un bloc natif add_block + un bloc
+# DSL add_equation). On ne pouvait pas melanger une brique native et une brique DSL DANS UN SEUL
+# modele. Ce prototype l'autorise, dans les DEUX sens (transport DSL + source/elliptic natifs, ET
+# transport natif + source/elliptic DSL).
+#
+# ARCHITECTURE (option B) : le coeur C++ COMPOSE deja sans effort des types de briques heterogenes --
+# adc::CompositeModel<Hyperbolic, Source, Elliptic> accepte n'importe quel type conforme a son slot,
+# natif (include/adc/physics/) ou genere par le DSL, et physics/bricks.hpp est deja inclus par tous
+# les backends. Le melange est donc genere a la compilation du COMPOSITE final : un seul .so, sur le
+# MEME chemin que les modeles DSL complets (numerique inlinee, identique a un bloc natif). Pas de .so
+# par brique ni d'ABI virtuelle partielle (ce serait l'option A : dispatch virtuel hote, sans inline
+# GPU -- ecartee).
+#
+# La seule subtilite : les backends ne transportent que le TYPE de modele (default-construit), donc
+# les PARAMETRES d'une brique native (qom, q, cs2...) doivent etre CUITS dans le type. On emet pour
+# cela un petit struct derive qui fixe les champs publics dans son constructeur (hote) :
+#   namespace adc_generated { struct NatSrc : adc::PotentialForce { NatSrc() { qom = adc::Real(-1.0); } }; }
+# Il herite EXACTEMENT la numerique native (vrai chemin natif, zero re-derivation) et satisfait le
+# contrat du slot. Sans parametre -> simple alias `using`.
+#
+# Etat PROTOTYPE : backend "aot" (add_compiled_block, .so autosuffisant, chemin de production
+# host-marshale). Les backends "production" (natif zero-copie) et "prototype" (JIT) hybrides, la
+# propagation fine des roles/gamma/n_aux et la cible amr_system arrivent dans les PRs suivantes.
+
+
+class NativeBrick:
+    """Descripteur d'une brique NATIVE (include/adc/physics/) pour la composition hybride.
+
+    Porte le type C++ de la brique, les PARAMETRES a cuire dans le type (champ public -> valeur) et,
+    pour une brique hyperbolique, le layout de variables (noms conservatifs, n_vars, primitives,
+    gamma). emit(struct_name) rend le texte C++ a coudre dans le .so composite : un struct derive qui
+    fixe les parametres (ou un simple alias `using` si la brique n'a aucun parametre).
+
+    @p kind : 'hyperbolic' | 'source' | 'elliptic' (slot vise).
+    @p fields : dict {nom de champ C++ public -> valeur} ; ORDRE preserve (insertion).
+    @p var_names / n_vars / prim_names / gamma : metadonnees du layout (slot hyperbolique seulement).
+    @p min_vars : nombre minimal de variables qu'exige une brique TEMPLATEE (source/elliptic) ; p.ex.
+        PotentialForce indexe s[1]/s[2] donc exige >= 3 variables. Verifie par HybridModel.
+    @p n_aux : largeur du canal aux que la brique LIT (>= 3 si elle lit B_z/T_e)."""
+
+    def __init__(self, cpp_type, kind, fields=None, var_names=None, n_vars=None, prim_names=None,
+                 gamma=None, min_vars=1, n_aux=AUX_BASE_COMPS):
+        if kind not in ("hyperbolic", "source", "elliptic"):
+            raise ValueError("NativeBrick : kind 'hyperbolic' | 'source' | 'elliptic' (recu %r)" % (kind,))
+        self.cpp_type = cpp_type
+        self.kind = kind
+        self.fields = dict(fields or {})
+        self.var_names = list(var_names) if var_names else None
+        self.n_vars = n_vars
+        self.prim_names = list(prim_names) if prim_names else (list(var_names) if var_names else None)
+        self.gamma = gamma
+        self.min_vars = min_vars
+        self.n_aux = n_aux
+
+    def emit(self, struct_name, namespace="adc_generated"):
+        """Texte C++ de la brique cousue dans le .so composite. Sans parametre -> alias `using`
+        (zero cout) ; avec parametres -> struct derive qui les fixe dans son constructeur hote
+        (les valeurs sont ECRITES EN DUR, comme une constante DSL inlinee)."""
+        if not self.fields:
+            return "namespace %s { using %s = %s; }\n" % (namespace, struct_name, self.cpp_type)
+        sets = " ".join("%s = adc::Real(%s);" % (k, repr(float(v))) for k, v in self.fields.items())
+        return ("namespace %s { struct %s : %s { %s() { %s } }; }\n"
+                % (namespace, struct_name, self.cpp_type, struct_name, sets))
+
+
+class CompiledBrick:
+    """Resultat de <brique DSL partielle>.compile() : le C++ d'UNE brique (le struct genere) + ses
+    metadonnees, pret a etre cousu dans un CompositeModel hybride. La compilation MACHINE se fait au
+    niveau du composite (un seul .so) ; cet objet porte la brique deja GENEREE et figee."""
+
+    def __init__(self, kind, struct_src, type_name, n_vars=None, n_aux=AUX_BASE_COMPS,
+                 cons_names=None, cons_roles=None, prim_names=None, gamma=None, hash_part=""):
+        self.kind = kind                 # 'hyperbolic' | 'source' | 'elliptic'
+        self.struct_src = struct_src     # texte C++ du struct (namespace adc_generated { struct ... })
+        self.type_name = type_name       # type qualifie a placer dans CompositeModel<...>
+        self.n_vars = n_vars             # layout (hyperbolique) ou nombre de variables declare (src/ell)
+        self.n_aux = n_aux
+        self.cons_names = list(cons_names) if cons_names else []
+        self.cons_roles = list(cons_roles) if cons_roles else []
+        self.prim_names = list(prim_names) if prim_names else []
+        self.gamma = gamma
+        self.hash_part = hash_part       # tranche de hash stable (formules) pour la cle de cache composite
+
+    def __repr__(self):
+        return "CompiledBrick(kind=%r, type=%r, n_vars=%r)" % (self.kind, self.type_name, self.n_vars)
+
+
+class CompiledHyperbolicBrick(CompiledBrick):
+    """Brique hyperbolique DSL compilee (vars/flux/eigenvalues/conversions)."""
+    def __init__(self, **kw): super().__init__("hyperbolic", **kw)
+
+
+class CompiledSourceBrick(CompiledBrick):
+    """Brique de source DSL compilee (apply(U, aux))."""
+    def __init__(self, **kw): super().__init__("source", **kw)
+
+
+class CompiledEllipticBrick(CompiledBrick):
+    """Brique de second membre elliptique DSL compilee (rhs(U))."""
+    def __init__(self, **kw): super().__init__("elliptic", **kw)
+
+
+class HyperbolicBrick:
+    """Brique DSL PARTIELLE hyperbolique (variables/flux/valeurs propres/conversions), composable avec
+    des briques natives ou DSL pour la source et l'elliptique. Meme surface que dsl.Model mais limitee
+    au slot hyperbolique. compile() -> CompiledHyperbolicBrick."""
+
+    def __init__(self, name):
+        self._m = HyperbolicModel(name)
+
+    @property
+    def name(self): return self._m.name
+
+    def conservative_vars(self, *names, roles=None):
+        return self._m.conservative_vars(*names, roles=roles)
+
+    def primitive(self, name, expr):
+        return self._m.primitive(name, expr)
+
+    def primitive_vars(self, *vars, roles=None):
+        """Layout ORDONNE de Prim (forme positionnelle, noms/Var deja definis)."""
+        self._m.set_primitive_state(*vars, roles=roles)
+
+    def aux(self, name): return self._m.aux(name)
+    def flux(self, x, y): self._m.set_flux(x, y)
+    def eigenvalues(self, x, y): self._m.set_eigenvalues(x, y)
+    def conservative_from(self, exprs): self._m.set_conservative_from(exprs)
+    def gamma(self, value): self._m.set_gamma(value)
+    def check(self): return self._m.check()
+
+    def compile(self):
+        """Valide + emet le struct C++ hyperbolique (emit_cpp_brick) -> CompiledHyperbolicBrick."""
+        self._m.check()
+        struct_name = "Hyp" + self._m.name.capitalize()
+        struct_src = self._m.emit_cpp_brick(name=struct_name)
+        return CompiledHyperbolicBrick(
+            struct_src=struct_src, type_name="adc_generated::" + struct_name,
+            n_vars=self._m.n_vars, cons_names=list(self._m.cons_names),
+            cons_roles=roles_for(self._m.cons_names, self._m.cons_roles),
+            prim_names=list(self._m.prim_state), gamma=self._m.gamma,
+            n_aux=aux_n_aux(self._m.aux_names), hash_part=self._m._model_hash())
+
+
+class SourceBrick:
+    """Brique DSL PARTIELLE de source S(U, aux), composable avec un transport et une elliptique
+    natifs ou DSL. Declare ses conservatives (le layout doit coincider avec le transport) + ses champs
+    aux + la formule de source. compile() -> CompiledSourceBrick."""
+
+    def __init__(self, name):
+        self._m = HyperbolicModel(name)
+
+    def conservative_vars(self, *names, roles=None):
+        return self._m.conservative_vars(*names, roles=roles)
+
+    def primitive(self, name, expr): return self._m.primitive(name, expr)
+    def aux(self, name): return self._m.aux(name)
+    def source(self, s): self._m.set_source(s)
+
+    def compile(self):
+        """Valide + emet le struct C++ de source (emit_cpp_source) -> CompiledSourceBrick."""
+        if self._m._source is None:
+            raise ValueError("SourceBrick.compile : appeler source([...]) d'abord")
+        struct_name = "Src" + self._m.name.capitalize()
+        struct_src = self._m.emit_cpp_source(name=struct_name)
+        return CompiledSourceBrick(
+            struct_src=struct_src, type_name="adc_generated::" + struct_name,
+            n_vars=self._m.n_vars, n_aux=aux_n_aux(self._m.aux_names),
+            hash_part=self._m._model_hash())
+
+
+class EllipticBrick:
+    """Brique DSL PARTIELLE de second membre elliptique rhs(U), composable avec un transport et une
+    source natifs ou DSL. Declare ses conservatives (layout) + la formule du second membre.
+    compile() -> CompiledEllipticBrick."""
+
+    def __init__(self, name):
+        self._m = HyperbolicModel(name)
+
+    def conservative_vars(self, *names, roles=None):
+        return self._m.conservative_vars(*names, roles=roles)
+
+    def primitive(self, name, expr): return self._m.primitive(name, expr)
+    def elliptic_rhs(self, e): self._m.set_elliptic_rhs(e)
+
+    def compile(self):
+        """Valide + emet le struct C++ elliptique (emit_cpp_elliptic) -> CompiledEllipticBrick."""
+        if self._m._elliptic is None:
+            raise ValueError("EllipticBrick.compile : appeler elliptic_rhs(...) d'abord")
+        struct_name = "Ell" + self._m.name.capitalize()
+        struct_src = self._m.emit_cpp_elliptic(name=struct_name)
+        return CompiledEllipticBrick(
+            struct_src=struct_src, type_name="adc_generated::" + struct_name,
+            n_vars=self._m.n_vars, n_aux=AUX_BASE_COMPS, hash_part=self._m._model_hash())
+
+
+class HybridModel:
+    """Composeur d'un modele HYBRIDE : trois slots (transport, source, elliptic), chacun fourni par une
+    brique NATIVE (NativeBrick) ou DSL (CompiledBrick). Assemble un adc::CompositeModel<...> melange et
+    le compile en UN .so (prototype : backend 'aot'). Renvoie un CompiledModel branchable via
+    System.add_equation (adder add_compiled_block).
+
+    Le slot transport (hyperbolique) FIXE le layout : n_vars, noms conservatifs, primitives, gamma. Une
+    brique DSL de source/elliptic doit declarer le MEME n_vars ; une brique native templatee (source/
+    elliptic) doit seulement satisfaire son min_vars (p.ex. PotentialForce exige >= 3 variables)."""
+
+    def __init__(self, transport, source, elliptic, name="hybrid"):
+        self.name = name
+        hyp = self._norm(transport, "hyperbolic", "NatHyp")
+        src = self._norm(source, "source", "NatSrc")
+        ell = self._norm(elliptic, "elliptic", "NatEll")
+
+        nv = hyp["n_vars"]
+        if nv is None:
+            raise ValueError("HybridModel : le slot transport doit fixer n_vars (brique hyperbolique)")
+        for role, slot in (("source", src), ("elliptic", ell)):
+            if slot["provider"] == "dsl":
+                if slot["n_vars"] != nv:
+                    raise ValueError(
+                        "HybridModel : la brique DSL %s declare %d variables mais le transport en a %d ; "
+                        "aligner conservative_vars(...)" % (role, slot["n_vars"], nv))
+            elif slot["min_vars"] > nv:
+                raise ValueError(
+                    "HybridModel : la brique native %s exige >= %d variables (transport=%d) ; p.ex. une "
+                    "force fluide n'a pas de sens sur un transport scalaire"
+                    % (role, slot["min_vars"], nv))
+
+        self.n_vars = nv
+        self.cons_names = list(hyp["cons_names"])
+        self.cons_roles = list(hyp["cons_roles"])
+        self.prim_names = list(hyp["prim_names"])
+        self.gamma = hyp["gamma"]
+        self.n_aux = max(hyp["n_aux"], src["n_aux"], ell["n_aux"])
+        self._slots = (hyp, src, ell)
+
+    @staticmethod
+    def _norm(prov, role, native_struct_name):
+        """Normalise un slot (CompiledBrick DSL ou NativeBrick) en dict commun."""
+        if isinstance(prov, CompiledBrick):
+            if prov.kind != role:
+                raise ValueError("HybridModel : brique DSL de type %r placee dans le slot %r"
+                                 % (prov.kind, role))
+            d = dict(provider="dsl", struct_text=prov.struct_src, type_name=prov.type_name,
+                     n_vars=prov.n_vars, min_vars=prov.n_vars, n_aux=prov.n_aux)
+            if role == "hyperbolic":
+                d.update(cons_names=prov.cons_names, cons_roles=prov.cons_roles,
+                         prim_names=prov.prim_names, gamma=prov.gamma)
+            return d
+        if isinstance(prov, NativeBrick):
+            if prov.kind != role:
+                raise ValueError("HybridModel : brique native de type %r placee dans le slot %r"
+                                 % (prov.kind, role))
+            d = dict(provider="native", struct_text=prov.emit(native_struct_name),
+                     type_name="adc_generated::" + native_struct_name,
+                     n_vars=prov.n_vars, min_vars=prov.min_vars, n_aux=prov.n_aux)
+            if role == "hyperbolic":
+                names = prov.var_names or []
+                d.update(cons_names=list(names), cons_roles=roles_for(names),
+                         prim_names=list(prov.prim_names or names), gamma=prov.gamma)
+            return d
+        raise TypeError("HybridModel : slot %r doit etre une brique native (adc.* / NativeBrick) ou une "
+                        "brique DSL compilee (CompiledBrick) ; recu %r" % (role, type(prov).__name__))
+
+    def _emit_aot_source(self):
+        """Source C++ du .so composite hybride, derriere l'ABI extern \"C\" de compiled_block_abi.hpp
+        (backend aot : meme ABI plate que emit_cpp_aot_source). Les briques (DSL generees ou structs de
+        liaison natifs) sont cousues, puis assemblees en adc::CompositeModel<...>."""
+        hyp, src, ell = self._slots
+        parts = ['#include <adc/runtime/compiled_block_abi.hpp>\n',
+                 '#include <adc/physics/bricks.hpp>\n',   # CompositeModel + briques natives
+                 '#include <adc/core/variables.hpp>\n']   # ADC_EXPORT_BLOCK_METADATA / _GAMMA
+        for slot in self._slots:
+            if slot["struct_text"]:
+                parts.append(slot["struct_text"])
+        parts.append('\nnamespace adc_generated { using AotModel = adc::CompositeModel<%s, %s, %s>; }\n'
+                     % (hyp["type_name"], src["type_name"], ell["type_name"]))
+        parts.append('ADC_DEFINE_COMPILED_BLOCK(adc_generated::AotModel)\n')
+        parts.append('ADC_EXPORT_BLOCK_METADATA(adc_generated::AotModel)\n')
+        if self.gamma is not None:
+            parts.append('ADC_EXPORT_BLOCK_GAMMA(%r)\n' % self.gamma)
+        return "".join(parts)
+
+    def _model_hash(self):
+        """Hash stable du composite : provider + type + texte genere de chaque slot (le texte encode
+        les formules DSL et les parametres natifs cuits). Sert de cle de cache."""
+        import hashlib
+        parts = ["hybrid", self.name]
+        for slot in self._slots:
+            parts.append("%s|%s|%s" % (slot["provider"], slot["type_name"], slot.get("struct_text", "")))
+        return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+    def _bricks_and_composite(self):
+        """Texte C++ des briques cousues (DSL generees + structs de liaison natifs) + type composite."""
+        hyp, src, ell = self._slots
+        bricks = "".join(s["struct_text"] for s in self._slots if s["struct_text"])
+        composite = ("adc::CompositeModel<%s, %s, %s>"
+                     % (hyp["type_name"], src["type_name"], ell["type_name"]))
+        return bricks, composite
+
+    def _emit_metadata(self, alias):
+        """Symboles de metadonnees ABI (noms/roles depuis conservative_vars, gamma optionnel), PARTAGES
+        par les backends. @p alias : un alias SANS virgule de niveau superieur (le preprocesseur decoupe
+        les arguments de macro sur les virgules)."""
+        out = '\nADC_EXPORT_BLOCK_METADATA(%s)\n' % alias
+        if self.gamma is not None:
+            out += 'ADC_EXPORT_BLOCK_GAMMA(%r)\n' % self.gamma
+        return out
+
+    def _emit_jit_source(self):
+        """Source de la bibliotheque JIT (backend 'prototype') : le composite hybride derriere une
+        fabrique extern \"C\" (adc_make_model via adc::ModelAdapter). Dispatch VIRTUEL hote (residu
+        Rusanov ordre 1) : iteration rapide, a brancher via System.add_dynamic_block. Pendant hybride
+        d'emit_cpp_so_source."""
+        bricks, composite = self._bricks_and_composite()
+        return ('#include <adc/runtime/dynamic_model.hpp>\n'
+                '#include <adc/physics/bricks.hpp>\n'
+                '#include <adc/core/variables.hpp>\n'
+                + bricks
+                + '\nnamespace adc_generated { using JitModel = %s; }\n' % composite
+                + 'extern "C" int adc_model_nvars() { return %d; }\n' % self.n_vars
+                + 'extern "C" void* adc_make_model() { return new adc::ModelAdapter<adc_generated::JitModel>(); }\n'
+                + 'extern "C" void adc_destroy_model(void* p) { delete static_cast<adc::IModel<%d>*>(p); }\n'
+                % self.n_vars
+                + self._emit_metadata("adc_generated::JitModel"))
+
+    def _emit_native_source(self, target="system"):
+        """Source C++ du LOADER NATIF (backend 'production') : le composite hybride en CompositeModel<...>
+        derriere une ABI extern \"C\" MINCE. Comme emit_cpp_native_loader, le .so ne porte PAS la
+        numerique : il INSTALLE le modele genere comme bloc natif de la facade via add_compiled_model<>,
+        qui fabrique les fermetures sur le CONTEXTE REEL de la facade -> meme chemin que add_block,
+        ZERO-COPIE (MPI par construction, device-clean). adc_native_abi_key() fige la cle d'ABI a la
+        compilation, comparee a abi_key() du module par add_native_block (rejet explicite si
+        en-tetes/compilateur/std divergent).
+
+        @p target : 'system' -> adc_install_native (System&, evolve) ; 'amr_system' ->
+        adc_install_native_amr (AmrSystem&, sans evolve) inline add_compiled_model(AmrSystem&) : le bloc
+        tourne la MEME hierarchie AMR que AmrSystem.add_block (reflux, regrid). Symboles DISTINCTS par
+        cible (un loader System n'est pas branchable sur AmrSystem.add_native_block, et inversement)."""
+        if target not in ("system", "amr_system"):
+            raise ValueError("_emit_native_source : target 'system' | 'amr_system' (recu %r)" % (target,))
+        bricks, composite = self._bricks_and_composite()
+        head = ('#include <adc/runtime/abi_key.hpp>\n'        # detail::abi_key_string (cle figee a la compil)
+                '#include <adc/physics/bricks.hpp>\n'         # CompositeModel + briques natives
+                '#include <adc/core/variables.hpp>\n'
+                '#include <string>\n')
+        # Gabarit en-tete de la cible (selectif : ne pas tirer la machinerie AMR dans un loader System).
+        head += ('#include <adc/runtime/dsl_block.hpp>\n' if target == "system"
+                 else '#include <adc/runtime/amr_dsl_block.hpp>\n')
+        key = ('extern "C" const char* adc_native_abi_key() {\n'
+               '  static const std::string k = adc::detail::abi_key_string();\n'
+               '  return k.c_str();\n'
+               '}\n')
+        if target == "system":
+            install = ('extern "C" void adc_install_native(void* sys, const char* name, const char* limiter,\n'
+                       '                                    const char* riemann, const char* recon,\n'
+                       '                                    const char* time, double gamma, int substeps,\n'
+                       '                                    int evolve) {\n'
+                       '  adc::System* s = reinterpret_cast<adc::System*>(sys);\n'
+                       '  adc::add_compiled_model<adc_generated::ProdModel>(*s, name, adc_generated::ProdModel{},\n'
+                       '                                                    limiter, riemann, recon, time, gamma,\n'
+                       '                                                    substeps, evolve != 0);\n'
+                       '}\n')
+        else:  # amr_system : surcharge AmrSystem (pas de parametre evolve, AMR mono-bloc)
+            install = ('extern "C" void adc_install_native_amr(void* sys, const char* name,\n'
+                       '                                        const char* limiter, const char* riemann,\n'
+                       '                                        const char* recon, const char* time,\n'
+                       '                                        double gamma, int substeps) {\n'
+                       '  adc::AmrSystem* s = reinterpret_cast<adc::AmrSystem*>(sys);\n'
+                       '  adc::add_compiled_model<adc_generated::ProdModel>(*s, name, adc_generated::ProdModel{},\n'
+                       '                                                    limiter, riemann, recon, time, gamma,\n'
+                       '                                                    substeps);\n'
+                       '}\n')
+        return (head + bricks
+                + '\nnamespace adc_generated { using ProdModel = %s; }\n' % composite
+                + key + install + self._emit_metadata("adc_generated::ProdModel"))
+
+    def compile(self, backend="aot", so_path=None, include=None, name=None, cxx=None, std=None,
+                target="system"):
+        """Compile le composite hybride en un CompiledModel.
+
+        @p backend :
+          'prototype'  -> add_dynamic_block : JIT, dispatch VIRTUEL hote (Rusanov ordre 1), iteration
+                          rapide ; pas de MPI/AMR, pas de flux HLLC/Roe ni recon primitif ;
+          'aot'        -> add_compiled_block : .so autosuffisant (ABI plate, host-marshale), chemin de
+                          production mono-rang ; sans MPI/AMR ;
+          'production' -> add_native_block : loader natif zero-copie qui inline add_compiled_model<>, MEME
+                          chemin qu'add_block (fermetures sur le contexte reel de la facade), MPI par
+                          construction. Les noms/roles/gamma viennent des metadonnees du .so (pas de names=).
+        @p target : 'system' (defaut) | 'amr_system'. 'amr_system' EXIGE backend='production' : le loader
+        inline add_compiled_model(AmrSystem&) (symbole adc_install_native_amr), seul chemin .so AMR ; a
+        brancher via AmrSystem.add_equation. Les autres backends n'ont pas de pendant AMR.
+
+        so_path None -> cache hors source (cle = model_hash + abi_key + backend + target)."""
+        import os
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+        if backend not in ("prototype", "aot", "production"):
+            raise ValueError("HybridModel.compile : backend 'prototype' | 'aot' | 'production' (recu %r)"
+                             % (backend,))
+        if target not in ("system", "amr_system"):
+            raise ValueError("HybridModel.compile : target 'system' | 'amr_system' (recu %r)" % (target,))
+        if target == "amr_system" and backend != "production":
+            raise ValueError("HybridModel.compile : target='amr_system' n'existe que pour "
+                             "backend='production' (chemin natif AMR) ; recu backend=%r" % (backend,))
+        mode = {"prototype": "jit", "aot": "aot", "production": "native"}[backend]
+        if include is None:
+            include = adc_include()
+        if std is None:  # le loader natif partage l'ABI C++23 du module (cf. compile_native) ; jit/aot c++20
+            std = "c++23" if mode == "native" else "c++20"
+        eff_cxx = cxx or shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+        if not eff_cxx:
+            raise RuntimeError("HybridModel.compile : aucun compilateur C++ trouve")
+        model_hash = self._model_hash()
+        abi_key = _abi_key_python(include, eff_cxx, std)
+        if so_path is None:
+            so_path = _cache_so_path(model_hash, abi_key, "hybrid-" + backend, target, name)
+            if os.path.exists(so_path):
+                return self._compiled_model(so_path, backend, target, abi_key, model_hash, eff_cxx, std)
+
+        flags = ["-shared", "-fPIC", "-std=" + std, "-O2"]
+        if mode == "jit":
+            source = self._emit_jit_source()
+        elif mode == "aot":
+            source = self._emit_aot_source()
+        else:  # native : bake la signature des en-tetes (concordance des cles d'ABI) ; indefinis resolus
+            source = self._emit_native_source(target=target)  # au chargement contre le module _adc deja charge.
+            flags.append('-DADC_HEADER_SIG="%s"' % adc_header_signature(include))
+            if sys.platform == "darwin":  # Apple-ld : autoriser explicitement les indefinis (cf. compile_native)
+                flags += ["-undefined", "dynamic_lookup"]
+        with tempfile.TemporaryDirectory() as tmp:
+            cpp = os.path.join(tmp, "model_hybrid.cpp")
+            with open(cpp, "w") as f:
+                f.write(source)
+            subprocess.run([eff_cxx, *flags, "-I", include, cpp, "-o", so_path], check=True)
+        return self._compiled_model(so_path, backend, target, abi_key, model_hash, eff_cxx, std)
+
+    def _compiled_model(self, so_path, backend, target, abi_key, model_hash, cxx, std):
+        return CompiledModel(
+            so_path=so_path, backend=backend, adder=HyperbolicModel.adder_for(backend),
+            target=target, cons_names=self.cons_names, cons_roles=self.cons_roles,
+            prim_names=self.prim_names, n_vars=self.n_vars, gamma=self.gamma, n_aux=self.n_aux,
+            params={}, caps=_BACKEND_CAPS[backend], abi_key=abi_key, model_hash=model_hash,
+            cxx=cxx, std=std)

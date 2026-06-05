@@ -267,6 +267,18 @@ if(ADC_HAS_MPI)
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_mbox_parity> ${MPIEXEC_POSTFLAGS})
   endforeach()
 
+  # --- parite multi-box / MPI d'un composite HYBRIDE (brique source style DSL + transport/elliptique
+  # natifs) sur le chemin add_compiled_model (make_block). Pendant C++/MPI de test_dsl_hybrid_amr/_coupling :
+  # seul le TYPE de brique change vs test_mpi_mbox_parity. aux periodique analytique -> la source hybride
+  # contribue au residu ET reste decomposition-invariante. np=1 multi-box mono-rang, np=2/4 cross-rang MPI.
+  add_executable(test_mpi_hybrid_mbox_parity test_mpi_hybrid_mbox_parity.cpp)
+  target_link_libraries(test_mpi_hybrid_mbox_parity PRIVATE adc::adc)
+  foreach(np 1 2 4)
+    add_test(NAME test_mpi_hybrid_mbox_parity_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_hybrid_mbox_parity> ${MPIEXEC_POSTFLAGS})
+  endforeach()
+
   # --- cut-cell multi-box DISTRIBUE : verrou de non-regression du bug "cut-cell multi-box MPI" ---
   # Enchaine des solves cut-cell sur un domaine multi-box (16 boites) dont la hierarchie degenerait
   # au plus grossier (average_down lisait hors bornes d'un fab fin 1x1 -> divergence intermittente

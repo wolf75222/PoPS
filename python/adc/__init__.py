@@ -30,7 +30,7 @@ from ._adc import (SystemConfig, ModelSpec, System as _System,
 # qui vit desormais dans adc_cases (cf. adc_cases/two_fluid_ap/), compile a la volee contre les
 # en-tetes generiques d'adc_cpp. Il n'est donc ni reexporte ici ni present dans le module _adc.
 __all__ = [
-    "System", "SystemConfig", "AmrSystem", "AmrSystemConfig", "Model",
+    "System", "SystemConfig", "AmrSystem", "AmrSystemConfig", "Model", "CompositeModel",
     "CartesianMesh", "PolarMesh",
     "Scalar", "FluidState", "ExB", "CompressibleFlux", "IsothermalFlux",
     "NoSource", "PotentialForce", "GravityForce",
@@ -227,6 +227,92 @@ def Model(state, transport, source, elliptic):
         raise ValueError("elliptic : ChargeDensity | BackgroundDensity | GravityCoupling")
 
     return spec
+
+
+# --- Composition HYBRIDE : brique native + brique DSL DANS UN modele --------
+# adc.Model(...) compose des briques 100% natives en une ModelSpec (tags C++) ; adc.dsl.Model(...)
+# genere un modele 100% DSL. adc.CompositeModel(...) comble l'entre-deux : MELANGER, dans UN SEUL
+# modele, des briques NATIVES (adc.ExB / PotentialForce / ChargeDensity ...) et des briques DSL
+# PARTIELLES compilees (adc.dsl.HyperbolicBrick(...).compile() / SourceBrick / EllipticBrick). Le
+# melange est compile en UN .so composite (prototype : backend 'aot'). cf. adc/dsl.py (Phase B).
+def _native_to_brick(obj, role):
+    """Traduit une brique NATIVE (objet adc.*) en descripteur dsl.NativeBrick pour le slot @p role.
+    Une brique DSL deja compilee (dsl.CompiledBrick) passe telle quelle (apres verification du slot)."""
+    from . import dsl
+    if isinstance(obj, dsl.CompiledBrick):
+        if obj.kind != role:
+            raise ValueError("adc.CompositeModel : brique DSL de type %r placee dans le slot %r"
+                             % (obj.kind, role))
+        return obj
+    if role == "hyperbolic":
+        if isinstance(obj, ExB):
+            return dsl.NativeBrick("adc::ExBVelocity", "hyperbolic", fields={"B0": obj.B0},
+                                   var_names=["n"], n_vars=1, prim_names=["n"])
+        if isinstance(obj, CompressibleFlux):
+            g = float(getattr(obj, "gamma", 1.4))
+            return dsl.NativeBrick("adc::CompressibleFlux", "hyperbolic", fields={"gamma": g},
+                                   var_names=["rho", "rho_u", "rho_v", "E"], n_vars=4,
+                                   prim_names=["rho", "u", "v", "p"], gamma=g)
+        if isinstance(obj, IsothermalFlux):
+            cs2 = float(getattr(obj, "cs2", 1.0))
+            return dsl.NativeBrick("adc::IsothermalFlux", "hyperbolic", fields={"cs2": cs2},
+                                   var_names=["rho", "rho_u", "rho_v"], n_vars=3,
+                                   prim_names=["rho", "u", "v"])
+        raise ValueError("adc.CompositeModel transport : ExB | CompressibleFlux | IsothermalFlux "
+                         "(natif) ou dsl.HyperbolicBrick(...).compile()")
+    if role == "source":
+        if isinstance(obj, NoSource):
+            return dsl.NativeBrick("adc::NoSource", "source", min_vars=1)
+        if isinstance(obj, PotentialForce):
+            return dsl.NativeBrick("adc::PotentialForce", "source", fields={"qom": obj.charge},
+                                   min_vars=3)
+        if isinstance(obj, GravityForce):
+            return dsl.NativeBrick("adc::GravityForce", "source", min_vars=3)
+        raise ValueError("adc.CompositeModel source : NoSource | PotentialForce | GravityForce "
+                         "(natif) ou dsl.SourceBrick(...).compile()")
+    if role == "elliptic":
+        if isinstance(obj, ChargeDensity):
+            return dsl.NativeBrick("adc::ChargeDensity", "elliptic", fields={"q": obj.charge},
+                                   min_vars=1)
+        if isinstance(obj, BackgroundDensity):
+            return dsl.NativeBrick("adc::BackgroundDensity", "elliptic",
+                                   fields={"alpha": obj.alpha, "n0": obj.n0}, min_vars=1)
+        if isinstance(obj, GravityCoupling):
+            return dsl.NativeBrick("adc::GravityCoupling", "elliptic",
+                                   fields={"sign": obj.sign, "four_pi_G": obj.four_pi_G,
+                                           "rho0": obj.rho0}, min_vars=1)
+        raise ValueError("adc.CompositeModel elliptic : ChargeDensity | BackgroundDensity | "
+                         "GravityCoupling (natif) ou dsl.EllipticBrick(...).compile()")
+    raise ValueError("adc.CompositeModel : slot %r inconnu" % (role,))
+
+
+def CompositeModel(transport, source, elliptic, name="hybrid"):
+    """Compose un modele HYBRIDE melant briques NATIVES et briques DSL PARTIELLES dans UN modele.
+
+    Chaque slot (transport / source / elliptic) est SOIT une brique native (adc.ExB(...),
+    adc.PotentialForce(...), adc.ChargeDensity(...) ...), SOIT une brique DSL partielle compilee
+    (adc.dsl.HyperbolicBrick(...).compile(), adc.dsl.SourceBrick(...).compile(),
+    adc.dsl.EllipticBrick(...).compile()). AU MOINS un slot doit etre une brique DSL : une composition
+    100% native s'ecrit avec adc.Model(...) (ModelSpec).
+
+        tr = adc.dsl.HyperbolicBrick("iso") ...        # transport DSL
+        m  = adc.CompositeModel(transport=tr.compile(),
+                                source=adc.PotentialForce(charge=-1.0),   # source native
+                                elliptic=adc.ChargeDensity(charge=-1.0))  # elliptique native
+        co = m.compile(backend="aot")                  # -> CompiledModel
+        sim.add_equation("ions", co, spatial=adc.FiniteVolume(), names=[...])
+
+    Renvoie un adc.dsl.HybridModel ; appeler .compile(backend="aot") pour un CompiledModel branchable
+    via System.add_equation. (Prototype : seul le backend 'aot' est cable.)"""
+    from . import dsl
+    tr = _native_to_brick(transport, "hyperbolic")
+    sr = _native_to_brick(source, "source")
+    el = _native_to_brick(elliptic, "elliptic")
+    if not any(isinstance(b, dsl.CompiledBrick) for b in (tr, sr, el)):
+        raise ValueError(
+            "adc.CompositeModel : composition tout-native ; utiliser adc.Model(...) (ModelSpec) pour "
+            "un modele 100% natif. CompositeModel sert au MELANGE natif + DSL dans un seul modele.")
+    return dsl.HybridModel(tr, sr, el, name=name)
 
 
 # --- Modele elliptique (EPM) : Poisson = une instance composable ------------
