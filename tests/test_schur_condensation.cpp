@@ -68,6 +68,13 @@ struct Setup {
 // (cellules interieures seulement, pour le RHS dont le bord depend de la CL des ghosts).
 template <class F>
 static double max_gap(const MultiFab& mf, const Box2D& dom, F f, int skip = 0) {
+  // mf a ete ecrit par les kernels device du batisseur (assemble_operator / assemble_rhs, qui finissent
+  // par fill_ghosts -> kernels for_each_cell). Sous Kokkos::Cuda ces kernels sont ASYNCHRONES : sans
+  // rendre la residence hote valide AVANT la lecture directe ci-dessous, on lit la memoire unifiee
+  // pendant que le kernel est en vol -> valeurs partielles/indefinies (eps qui derive, RHS faux, les
+  // checks bit-identiques C1/C2 cassent). sync_host() = device_fence() cible sous Kokkos, no-op en
+  // serie/OpenMP -> comportement hote BIT-IDENTIQUE. Meme idiome que test_condensed_schur_source_stepper.
+  sync_host();
   double d = 0;
   for (int li = 0; li < mf.local_size(); ++li) {
     const ConstArray4 a = mf.fab(li).const_array();
@@ -262,6 +269,8 @@ int main() {
       // comparaison directe rhs vs -lap_ref, cellule a cellule (bit-identique attendu).
       MultiFab lap_ref(S.ba, S.dm, 1, 0);
       apply_laplacian(phi, S.geom, lap_ref);
+      sync_host();  // rhs (assemble_rhs) et lap_ref (apply_laplacian) ecrits par kernels device :
+                    // residence hote valide avant la lecture directe (no-op serie/OpenMP, fence Cuda).
       double dmax = 0;
       for (int li = 0; li < rhs.local_size(); ++li) {
         const ConstArray4 r = rhs.fab(li).const_array();
