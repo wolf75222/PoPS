@@ -144,7 +144,9 @@ RESTE (scientifique / hors audit) :
   profil avant/apres. (hot-path, delicat)
 
 DETTE / DIFFERES (ne pas oublier) :
-- [ ] segfault de teardown sur profils polaires INSTABLES (PRE-EXISTANT, hors #176) -> a tracer/corriger.
+- [x] segfault de teardown sur profils polaires INSTABLES (PRE-EXISTANT, hors #176) -> CORRIGE #192 :
+  bug get/set_primitive_state + accesseurs (to_2d/to_3d) supposaient un domaine CARRE (n*n) ; passes a
+  (ny,nx) -> polaire nr!=ntheta correct, cartesien bit-identique (ny==nx==n), AMR garde carre. CI full verte.
 - [ ] A4 : cas MMS polaire dedie avec v_r != 0 (couvert en pratique par #168/#174 ; optionnel).
 - [ ] finding 8 (`fab(0)` sans garde local_size) au portage MPI ; `/(2*dx)->*cx` au dernier bit ; P7
   (implicit-total + params runtime DSL).
@@ -302,8 +304,17 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
 
 ## 6. Reproduction Hoffart (arXiv:2510.11808) - APPLICATIF, cote `adc_cases`
 
-- [~] **M1** : taux de croissance numerique vs analytique (diocotron). Pipeline valide ; `gamma_norm`
-      croit vers 0.911 mais limite par la diffusion numerique du bord d'anneau (-> motive l'AMR).
+- [x] **M1 -- NORMALISATION TROUVEE (juin 2026)** : `gamma_norm = gamma_raw * 2pi/rhobar` (facteur du
+      projet). Verifie sur le chemin POLAIRE ExB (echelle papier 6:8:16, top-hat, WENO5/SSPRK3, n=128) :
+      l=4 EXACT (0.913 vs 0.911), l=3 +26% (0.97), l=5 -29% (0.48). Le scatter +-29% est la sensibilite a
+      la fenetre de fit (intrinseque a une mesure numerique de taux diocotron, cf. sweep cartesien projet).
+      DIAGNOSTIC CLEF : `gamma_raw(sim) ~ Im(omega)_eigenmode` directement (0.155 vs 0.123) -> le sim
+      polaire tourne en unites de temps ExB-naturelles, AUCUN re-scaling beta necessaire. La rotation au
+      bord interne r0 est ~0 (pas de charge enfermee dans r<r0) -> une normalisation "par rotation locale"
+      ne marche PAS ; c'est bien le facteur GLOBAL 2pi/rhobar. POURQUOI Codex (cartesien-Schur) donne 0.035
+      et pas 0.77 : (a) son runner OMET le facteur 2pi/rhobar (x2pi -> 0.22) ET (b) sa grille CARTESIENNE
+      diffuse le bord d'anneau (gamma_raw polaire 0.155 ~ 4.4x son 0.035 a resolution comparable). Polaire
+      + 2pi/rhobar reproduit le papier ; pas un bug de physique. Diag reproductible : `/tmp/diag_polar_omega.py`.
 - [x] **M2 / M2b** : AMR sur le bord d'anneau (triple le taux a base egale) + Poisson multi-niveau.
 - [ ] Montee en resolution / convergence vers le taux analytique ; integration SAMRAI ulterieure.
 
