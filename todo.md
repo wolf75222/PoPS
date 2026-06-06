@@ -124,8 +124,14 @@ RESTE (audit) :
 - [ ] **Lot C.6 / AMR (viii) regrid union-tags** : LE finale du capstone AMR (Phase 2) ; regrid pilote par
   l'UNION des tags (e OR i OR n OR phi OR user), prolong/restrict + reflux bloc-par-bloc, deverrouille
   multi-bloc + regrid_every>0. CHANTIER (gros) + decision de cadrage.
-- [ ] **AMR (v) DSL production multi-bloc** : `add_native_block`/`add_compiled_model(AmrSystem&)` ne plus
-  lever sur le 2e bloc (file + build a ensure_built). (medium)
+- [x] **AMR (v) DSL production multi-bloc -- FAIT #195** : `add_compiled_model(AmrSystem&)`/`set_compiled_block`
+  ne levent plus au 2e bloc compile ; file de specs + build paresseux a `ensure_built` (miroir du chemin
+  natif). 1 bloc route TOUJOURS par AmrCouplerMP (mono-bloc bit-identique, dmax==0) ; N blocs via AmrRuntime.
+  Footgun corrige (revue adversariale BLOCKER) : `AmrSystem.add_equation` REJETTE stride>1 / masque IMEX sur
+  le chemin compile .so (ABI plate ne les transporte pas) et les FORWARDE sur le chemin ModelSpec natif.
+  Tests : test_amr_multiblock_compiled (cas F = IMEX stride=2 + masque par composante), test_amr_production_
+  stride_reject.py. ctest 140/140. => PHASE 1 MULTI-BLOC A HIERARCHIE FIGEE COMPLETE (substeps/stride #175,
+  sources couplees #179/#191, IMEX #184/#185, multi-bloc DSL/compile #195). Reste Phase 2 = regrid (C.6).
 - [ ] **Lot A.5 autres dossiers** : convention de commentaires sur physics/numerics/mesh/coupling/runtime/amr
   (core/ fait #173) ; dossier par dossier, sans churn. (basse priorite)
 - [ ] **Lot A.3** : note SourceImplicit (local) vs CondensedSchur (global) dans les exemples. (mineur doc)
