@@ -43,24 +43,26 @@
 
 namespace adc {
 
-// Forward-declaration : BlockState porte un shared_ptr<CondensedSchurSourceStepper> (etage source
-// condense OPT-IN). Le pointeur seul suffit ici ; la definition vit dans le header de couplage, inclus
-// la ou l'etage est reellement construit (python/system.cpp::set_source_stage).
+/// Forward-declaration : BlockState porte un shared_ptr<CondensedSchurSourceStepper> (etage source
+/// condense OPT-IN). Le pointeur seul suffit ici ; la definition vit dans le header de couplage, inclus
+/// la ou l'etage est reellement construit (python/system.cpp::set_source_stage).
 class CondensedSchurSourceStepper;
 
+/// Registre ORDONNE des blocs du System + helpers de marshaling d'etat. Voir contrat ci-dessus (POSSEDE
+/// BlockState + le vector ; EXPOSE index/find + copy/write_state ; NE POSSEDE PAS le domaine/aux/Poisson).
 class SystemBlockStore {
  public:
-  // Type-erase de la conversion PONCTUELLE (une cellule) cons <-> prim d'un bloc : in/out sont des
-  // tableaux de ncomp doubles. MEME type que System::CellConvert (std::function identique) : l'assignation
-  // depuis set_block_conversion / native_loader reste un move trivial.
+  /// Type-erase de la conversion PONCTUELLE (une cellule) cons <-> prim d'un bloc : in/out sont des
+  /// tableaux de ncomp doubles. MEME type que System::CellConvert (std::function identique) : l'assignation
+  /// depuis set_block_conversion / native_loader reste un move trivial.
   using CellConvert = std::function<void(const double* in, double* out)>;
 
-  // Fermetures compilees figees a l'ajout du bloc (modele compose + schema spatial + temps).
-  // Type-erased SEULEMENT au niveau de la liste de blocs ; le noyau reste compile.
-  // ORDRE DES MEMBRES FIGE : install_block (python/system.cpp) et native_loader (push_dynamic /
-  // add_compiled_model) initialisent ce struct par AGREGAT positionnel
-  // {name, U, ncomp, substeps, evolve, stride, gamma, advance, rhs_into, max_speed, add_poisson_rhs} ;
-  // ne pas reordonner ces membres ni en inserer avant add_poisson_rhs.
+  /// Fermetures compilees figees a l'ajout du bloc (modele compose + schema spatial + temps).
+  /// Type-erased SEULEMENT au niveau de la liste de blocs ; le noyau reste compile.
+  /// ORDRE DES MEMBRES FIGE : install_block (python/system.cpp) et native_loader (push_dynamic /
+  /// add_compiled_model) initialisent ce struct par AGREGAT positionnel
+  /// {name, U, ncomp, substeps, evolve, stride, gamma, advance, rhs_into, max_speed, add_poisson_rhs} ;
+  /// ne pas reordonner ces membres ni en inserer avant add_poisson_rhs.
   struct BlockState {
     std::string name;
     MultiFab U;
@@ -91,28 +93,33 @@ class SystemBlockStore {
     double schur_theta = 0.5;  // theta-schema de l'etage source (0.5 = Crank-Nicolson)
   };
 
-  // Registre ORDONNE des blocs (UNIQUE source de verite). PUBLIC : Impl l'aliase en `sp` pour les
-  // gabarits deja extraits (SystemFieldSolver / SystemStepper / native_loader) qui iterent owner_->sp.
+  /// Registre ORDONNE des blocs (UNIQUE source de verite). PUBLIC : Impl l'aliase en `sp` pour les
+  /// gabarits deja extraits (SystemFieldSolver / SystemStepper / native_loader) qui iterent owner_->sp.
   std::vector<BlockState> blocks;
 
   // --- acces par NOM (indexation 0-base, ordre d'insertion) ------------------------------------------
+  /// Reference au bloc @p name (en ecriture). @throws std::runtime_error "System : bloc inconnu '...'".
   BlockState& find(const std::string& name) {
     for (auto& s : blocks)
       if (s.name == name) return s;
     throw std::runtime_error("System : bloc inconnu '" + name + "'");
   }
+  /// Reference au bloc @p name (en lecture). @throws std::runtime_error "System : bloc inconnu '...'".
   const BlockState& find(const std::string& name) const {
     for (auto& s : blocks)
       if (s.name == name) return s;
     throw std::runtime_error("System : bloc inconnu '" + name + "'");
   }
+  /// Indice 0-base du bloc @p name (ordre d'insertion). @throws std::runtime_error si inconnu.
   int index(const std::string& name) const {
     for (std::size_t k = 0; k < blocks.size(); ++k)
       if (blocks[k].name == name) return static_cast<int>(k);
     throw std::runtime_error("System : bloc inconnu '" + name + "'");
   }
 
+  /// Nombre de blocs enregistres.
   int size() const { return static_cast<int>(blocks.size()); }
+  /// Noms des blocs, dans l'ordre d'insertion (UNIQUE source : tous les chemins d'ajout y figurent).
   std::vector<std::string> names() const {
     // Lit le registre de blocs UNIQUE, peuple par tous les chemins d'ajout : un bloc charge via
     // add_dynamic_block / add_compiled_block (.so) y figure au meme titre qu'un add_block.
@@ -123,8 +130,8 @@ class SystemBlockStore {
   }
 
   // --- marshaling d'etat (recopie hote <-> MultiFab ; device_fence inclus) ---------------------------
-  // Recopie la composante 0 du fab(0) (densite) en row-major (j lent, i rapide). device_fence prealable :
-  // le marshaling lit l'hote, il faut que le device ait fini d'ecrire U.
+  /// Recopie la composante 0 du fab(0) (densite) en row-major (j lent, i rapide). device_fence prealable :
+  /// le marshaling lit l'hote, il faut que le device ait fini d'ecrire U.
   std::vector<double> copy_comp0(const MultiFab& mf) const {
     device_fence();
     const ConstArray4 u = mf.fab(0).const_array();
@@ -135,7 +142,7 @@ class SystemBlockStore {
       for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, 0));
     return out;
   }
-  // Recopie les ncomp composantes du fab(0) en layout composante-majeur (c lent, puis j, puis i).
+  /// Recopie les ncomp composantes du fab(0) en layout composante-majeur (c lent, puis j, puis i).
   std::vector<double> copy_state(const MultiFab& mf, int ncomp) const {
     device_fence();
     const ConstArray4 u = mf.fab(0).const_array();
@@ -147,8 +154,9 @@ class SystemBlockStore {
         for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, c));
     return out;
   }
-  // Ecrit les ncomp composantes dans le fab(0) depuis un tampon composante-majeur (meme layout que
-  // copy_state). Erreur EXPLICITE (message inchange) si la taille ne correspond pas a ncomp*nx*ny.
+  /// Ecrit les ncomp composantes dans le fab(0) depuis un tampon composante-majeur (meme layout que
+  /// copy_state). @throws std::runtime_error "System::set_state : taille != ncomp*n*n" si la taille
+  /// ne correspond pas a ncomp*nx*ny (message inchange).
   void write_state(MultiFab& mf, int ncomp, const std::vector<double>& in) {
     const Box2D v = mf.box(0);
     const std::size_t need = static_cast<std::size_t>(ncomp) * v.nx() * v.ny();

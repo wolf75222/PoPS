@@ -45,48 +45,52 @@
 namespace adc {
 namespace stepper {
 
-// SystemStepper<Impl> : voir contrat ci-dessus. Toutes les methodes sont des MEMBRES car elles
-// partagent l'orchestration de pas ; les acces a l'etat PARTAGE de Impl passent par owner_-> verbatim.
-// Template sur Impl pour rester sans dependance sur la definition (privee) de System::Impl.
+/// SystemStepper<Impl> : voir contrat ci-dessus. Toutes les methodes sont des MEMBRES car elles
+/// partagent l'orchestration de pas ; les acces a l'etat PARTAGE de Impl passent par owner_-> verbatim.
+/// Template sur Impl pour rester sans dependance sur la definition (privee) de System::Impl.
 template <class Impl>
 class SystemStepper {
  public:
+  /// @param owner back-pointer vers System::Impl (duree de vie sous-jacente a celle de Impl).
   explicit SystemStepper(Impl* owner) : owner_(owner) {}
 
-  // SEMANTIQUE STRIDE = HOLD-THEN-CATCH-UP (rattrapage en FIN de fenetre). Un bloc de cadence M est
-  // TENU (non avance) sur les macro-pas ou (macro_step + 1) % M != 0, puis avance d'un pas effectif
-  // M*dt au macro-pas ou (macro_step + 1) % M == 0, i.e. a la FIN de sa fenetre de M macro-pas. Au
-  // macro-pas k, le temps du systeme est (k+1)*dt et le bloc qui RATTRAPE a alors avance du meme
-  // (k+1)*dt cumule : il est temporellement COHERENT avec les blocs rapides, jamais "dans le futur".
-  // (L'ancienne semantique avancait au DEBUT de fenetre, macro_step % M == 0 : a k=0 le bloc avancait
-  // deja M*dt alors que le systeme n'avancait que dt -> bloc anticipe, couplage Poisson/source faux.)
+  /// Vrai si un bloc de cadence @p stride RATTRAPE a ce macro-pas (FIN de fenetre).
+  /// SEMANTIQUE STRIDE = HOLD-THEN-CATCH-UP (rattrapage en FIN de fenetre). Un bloc de cadence M est
+  /// TENU (non avance) sur les macro-pas ou (macro_step + 1) % M != 0, puis avance d'un pas effectif
+  /// M*dt au macro-pas ou (macro_step + 1) % M == 0, i.e. a la FIN de sa fenetre de M macro-pas. Au
+  /// macro-pas k, le temps du systeme est (k+1)*dt et le bloc qui RATTRAPE a alors avance du meme
+  /// (k+1)*dt cumule : il est temporellement COHERENT avec les blocs rapides, jamais "dans le futur".
+  /// (L'ancienne semantique avancait au DEBUT de fenetre, macro_step % M == 0 : a k=0 le bloc avancait
+  /// deja M*dt alors que le systeme n'avancait que dt -> bloc anticipe, couplage Poisson/source faux.)
   static bool stride_due(int macro_step, int stride) { return (macro_step + 1) % stride == 0; }
 
-  // Sources de COUPLAGE inter-especes : appliquees par SPLITTING (un pas additif explicite de dt)
-  // APRES le transport de chaque bloc. Chaque couplage est un for_each_cell (kernel DEVICE) lisant /
-  // mettant a jour plusieurs blocs au meme point ; ils s'ordonnent apres le transport sur le meme
-  // espace d'execution, donc plus de device_fence prealable (plus d'acces hote).
+  /// Sources de COUPLAGE inter-especes : appliquees par SPLITTING (un pas additif explicite de dt)
+  /// APRES le transport de chaque bloc. Chaque couplage est un for_each_cell (kernel DEVICE) lisant /
+  /// mettant a jour plusieurs blocs au meme point ; ils s'ordonnent apres le transport sur le meme
+  /// espace d'execution, donc plus de device_fence prealable (plus d'acces hote).
   void apply_couplings(Real dt) {
     if (owner_->couplings.empty()) return;
     for (auto& c : owner_->couplings) c(dt);
   }
 
-  // ETAGE SOURCE condense par Schur (OPT-IN, cf. set_source_stage). No-op si le bloc n'a pas d'etage
-  // source (s.schur == nullptr) : le chemin par defaut reste BIT-IDENTIQUE. Sinon, APRES le transport
-  // hyperbolique du bloc (deja joue par s.advance), on joue l'etage source AUTONOME
-  // (CondensedSchurSourceStepper, #126) sur l'etat post-transport :
-  //   - state = s.U (rho gelee dans la source, mom/E mis a jour) ;
-  //   - phi    = le potentiel du Poisson de systeme (ell_phi(), warm start phi^n issu de solve_fields
-  //              en tete de step) -- l'etage resout son PROPRE operateur condense et ECRIT phi^{n+1}
-  //              dedans, il NE rappelle PAS solve_fields (pas de duplication) ;
-  //   - B_z    = canal aux a l'indice kAuxBaseComps (peuple + ghosts remplis par solve_fields).
-  // theta/dt du theta-schema ; dt = eff_dt (facteur stride deja inclus par l'appelant, comme s.advance).
+  /// ETAGE SOURCE condense par Schur (OPT-IN, cf. set_source_stage). No-op si le bloc n'a pas d'etage
+  /// source (s.schur == nullptr) : le chemin par defaut reste BIT-IDENTIQUE. Sinon, APRES le transport
+  /// hyperbolique du bloc (deja joue par s.advance), on joue l'etage source AUTONOME
+  /// (CondensedSchurSourceStepper, #126) sur l'etat post-transport :
+  ///   - state = s.U (rho gelee dans la source, mom/E mis a jour) ;
+  ///   - phi    = le potentiel du Poisson de systeme (ell_phi(), warm start phi^n issu de solve_fields
+  ///              en tete de step) -- l'etage resout son PROPRE operateur condense et ECRIT phi^{n+1}
+  ///              dedans, il NE rappelle PAS solve_fields (pas de duplication) ;
+  ///   - B_z    = canal aux a l'indice kAuxBaseComps (peuple + ghosts remplis par solve_fields).
+  /// theta/dt du theta-schema ; dt = eff_dt (facteur stride deja inclus par l'appelant, comme s.advance).
   void run_source_stage(typename Impl::Species& s, Real eff_dt) {
     if (!s.schur) return;
     s.schur->step(s.U, owner_->fields_.ell_phi(), owner_->aux, kAuxBaseComps,
                   static_cast<Real>(s.schur_theta), eff_dt);
   }
 
+  /// Un macro-pas de longueur @p dt : solve_fields ; avance de chaque bloc DU (cadence stride honoree) ;
+  /// etage source condense ; couplages inter-especes ; t += dt ; ++macro_step. ORDRE INVARIANT.
   void step(double dt) {
     Impl* P = owner_;
     // COUPLAGE / POISSON : solve_fields assemble f = Sum_s elliptic_rhs_s(U_s) sur l'etat COURANT de
@@ -106,10 +110,14 @@ class SystemStepper {
     P->macro_step_++;
   }
 
+  /// Avance de @p nsteps macro-pas de longueur @p dt (boucle sur step).
   void advance(double dt, int nsteps) {
     for (int s = 0; s < nsteps; ++s) step(dt);
   }
 
+  /// Un macro-pas a dt CFL : dt = min sur les blocs evolutifs de cfl*h*substeps_b/(stride_b*w_b), puis
+  /// avance comme step. @return le dt utilise. SUBSTEPS-AWARE (post-#121) : bit-identique a l'ancienne
+  /// formule seulement pour substeps=1 (cf. note retro-compatibilite).
   double step_cfl(double cfl) {
     Impl* P = owner_;
     P->solve_fields();
@@ -155,6 +163,9 @@ class SystemStepper {
     return dt;
   }
 
+  /// Un macro-pas MULTIRATE : le macro-pas = pas stable du bloc le plus LENT ; chaque bloc plus rapide
+  /// est sous-cycle n_b = ceil(stride_b * w_b / w_min) fois. aux fige sur le macro-pas (couplage
+  /// once-per-step). @return le macro-pas.
   double step_adaptive(double cfl) {
     Impl* P = owner_;
     P->solve_fields();

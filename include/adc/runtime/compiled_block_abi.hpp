@@ -72,6 +72,8 @@ inline LocalGrid make_grid(int n, double dx, double dy, bool periodic, const dou
   return LocalGrid{dom, geom, ba, dm, bc, periodic, std::move(aux)};
 }
 
+/// Recopie @p nv composantes du tableau plat composante-majeur @p in vers l'INTERIEUR du fab(0) (sans
+/// toucher les ghosts). Pendant entree du marshaling : disposition c*n*n + j*n + i (cf. System::copy_state).
 inline void fill_interior(MultiFab& mf, const double* in, int n, int nv) {
   Array4 a = mf.fab(0).array();
   const std::size_t nn = static_cast<std::size_t>(n) * n;
@@ -81,6 +83,9 @@ inline void fill_interior(MultiFab& mf, const double* in, int n, int nv) {
         a(i, j, c) = in[static_cast<std::size_t>(c) * nn + static_cast<std::size_t>(j) * n + i];
 }
 
+/// Recopie l'INTERIEUR du fab(0) (@p nv composantes) vers le tableau plat composante-majeur @p out.
+/// Pendant sortie de fill_interior. device_fence() PREALABLE : les kernels d'assemble_rhs / d'avance
+/// sont ASYNC, on attend avant de lire la memoire unifiee cote hote (sinon course -> resultat partiel).
 inline void extract(const MultiFab& mf, double* out, int n, int nv) {
   device_fence();  // assemble_rhs / l'avance ont lance des kernels ASYNC ; attendre avant la
                    // lecture hote de la memoire unifiee (sinon course -> resultat partiel sur GPU).
@@ -126,6 +131,7 @@ void advance(double* U, const double* aux_in, int n, double dx, double dy, bool 
   extract(Umf, U, n, Model::n_vars);
 }
 
+/// Vitesse d'onde max du bloc (pour le pas CFL cote System) via make_max_speed sur le modele genere.
 template <class Model>
 double max_speed(const double* U, const double* aux_in, int n, double dx, double dy, bool periodic) {
   LocalGrid lg = make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());

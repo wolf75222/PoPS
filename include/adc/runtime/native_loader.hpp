@@ -38,13 +38,9 @@
 namespace adc {
 namespace native_loader {
 
-// Residu hote R = -div F* + S(U, aux) (Rusanov, a_max GLOBAL comme adc.PythonFlux, periodique)
-// calcule via un IModel : sert au bloc DYNAMIQUE (modele charge a l'execution, dispatch virtuel,
-// hors GPU). @p recon = ordre de reconstruction MUSCL des etats de face sur les variables
-// conservatives : 0 = aucune (ordre 1), 1 = minmod, 2 = van Leer (ordre 2, TVD). Le flux ET la
-// source recoivent l'aux par cellule (phi, grad phi) : un modele couple (transport ExB, force) marche,
-// pas seulement Euler. @p AUX est l'aux du systeme (3 comp phi/grad_x/grad_y, composante-majeur ; vide
-// => nul). U et le retour en disposition composante-majeur (c*n*n + j*n + i).
+/// Pente limitee MUSCL d'une cellule depuis differences arriere @p am et avant @p ap. ADC_HD
+/// (device-callable, sans std::). @p recon : 0 = ordre 1 (pente nulle), 1 = minmod (TVD), 2 = van Leer.
+/// Brique ponctuelle du residu hote host_residual ; pendant hote du limiteur compile (reconstruction.hpp).
 ADC_HD inline double limited_slope(double am, double ap, int recon) {
   if (recon == 1) {  // minmod : TVD, robuste
     if (am * ap <= 0) return 0.0;
@@ -58,6 +54,13 @@ ADC_HD inline double limited_slope(double am, double ap, int recon) {
   return 0.0;  // ordre 1 (pas de pente)
 }
 
+/// Residu hote R = -div F* + S(U, aux) (Rusanov, a_max GLOBAL comme adc.PythonFlux, periodique) calcule
+/// via un IModel : sert au bloc DYNAMIQUE (modele charge a l'execution, dispatch virtuel, hors GPU).
+/// @p recon = ordre de reconstruction MUSCL des etats de face sur les variables conservatives (cf.
+/// limited_slope). Le flux ET la source recoivent l'aux par cellule (phi, grad phi) : un modele couple
+/// (transport ExB, force) marche, pas seulement Euler. @p AUX est l'aux du systeme (>= 3 comp
+/// phi/grad_x/grad_y, composante-majeur ; vide => nul). U et le retour en disposition composante-majeur
+/// (c*n*n + j*n + i).
 template <int NV>
 std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>& U,
                                   const std::vector<double>& AUX, int n, double dx, int recon) {
@@ -133,8 +136,8 @@ std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>
   return Rout;
 }
 
-// Decoupe @p s sur @p sep (champs vides conserves). Brique de parsing des metadonnees TEXTE
-// transportees par l'ABI du .so (noms / roles en CSV).
+/// Decoupe @p s sur @p sep (champs vides conserves). Brique de parsing des metadonnees TEXTE
+/// transportees par l'ABI du .so (noms / roles en CSV).
 inline std::vector<std::string> split(const std::string& s, char sep) {
   std::vector<std::string> out;
   std::string cur;
@@ -146,10 +149,10 @@ inline std::vector<std::string> split(const std::string& s, char sep) {
   return out;
 }
 
-// Metadonnees OPTIONNELLES lues par dlsym sur un .so genere (noms / roles / gamma). Toutes optionnelles :
-// un vieux .so sans ces symboles donne meta vide -> les chemins add_compiled_block / add_dynamic_block
-// retombent sur leur fallback (noms u0.., roles vides, gamma 1.4). Aucune dependance d'objet C++ :
-// seules des chaines et un double transitent par dlsym (ABI plate, comme le reste du bloc).
+/// Metadonnees OPTIONNELLES lues par dlsym sur un .so genere (noms / roles / gamma). Toutes
+/// optionnelles : un vieux .so sans ces symboles donne meta vide -> les chemins add_compiled_block /
+/// add_dynamic_block retombent sur leur fallback (noms u0.., roles vides, gamma 1.4). Aucune dependance
+/// d'objet C++ : seules des chaines et un double transitent par dlsym (ABI plate, comme le reste du bloc).
 struct BlockMeta {
   bool has_gamma = false;
   double gamma = 1.4;
@@ -157,8 +160,8 @@ struct BlockMeta {
   VariableSet prim{VariableKind::Primitive, {}, 0, {}};
 };
 
-// Construit un VariableSet a partir des CSV noms / roles (parallele a names ; roles VIDE = non
-// renseignes -> VariableSet sans roles, fallback indices cote couplages). @p names_csv vide -> set vide.
+/// Construit un VariableSet a partir des CSV noms / roles (parallele a names ; roles VIDE = non
+/// renseignes -> VariableSet sans roles, fallback indices cote couplages). @p names_csv vide -> set vide.
 inline VariableSet parse_var_set(VariableKind kind, const std::string& names_csv,
                                  const std::string& roles_csv) {
   VariableSet vs{kind, {}, 0, {}};
@@ -172,9 +175,9 @@ inline VariableSet parse_var_set(VariableKind kind, const std::string& names_csv
   return vs;
 }
 
-// Lit (par dlsym, tous OPTIONNELS) les symboles de metadonnees d'un .so deja ouvert (@p h). Renvoie
-// noms+roles deserialises et gamma s'il est present. Les symboles absents laissent les champs vides /
-// has_gamma=false : le caller decide alors du fallback. Format des chaines : "cons_csv|prim_csv".
+/// Lit (par dlsym, tous OPTIONNELS) les symboles de metadonnees d'un .so deja ouvert (@p h). Renvoie
+/// noms+roles deserialises et gamma s'il est present. Les symboles absents laissent les champs vides /
+/// has_gamma=false : le caller decide alors du fallback. Format des chaines : "cons_csv|prim_csv".
 inline BlockMeta read_block_meta(void* h) {
   BlockMeta m;
   auto names_fn = reinterpret_cast<const char* (*)()>(dlsym(h, "adc_compiled_var_names"));
@@ -194,9 +197,9 @@ inline BlockMeta read_block_meta(void* h) {
   return m;
 }
 
-// Construit un bloc DYNAMIQUE (modele IModel<NV> charge depuis le .so @p h) et l'ajoute. Le
-// shared_ptr possede le modele : il appelle adc_destroy_model puis ferme le .so a la destruction.
-// VERBATIM de l'ancien Impl::push_dynamic ; @p ImplT est System::Impl (instancie cote system.cpp).
+/// Construit un bloc DYNAMIQUE (modele IModel<NV> charge depuis le .so @p h) et l'ajoute. Le
+/// shared_ptr possede le modele : il appelle adc_destroy_model puis ferme le .so a la destruction.
+/// VERBATIM de l'ancien Impl::push_dynamic ; @p ImplT est System::Impl (instancie cote system.cpp).
 template <typename ImplT, int NV>
 void push_dynamic(ImplT* P, const std::string& name, void* h, int substeps,
                   std::vector<std::string> names, int recon) {
@@ -322,7 +325,7 @@ void push_dynamic(ImplT* P, const std::string& name, void* h, int substeps,
   P->sp.back().U.set_val(Real(0));
 }
 
-// Corps de System::add_dynamic_block. VERBATIM ; @p self = le System appelant, @p P = self->p_.get().
+/// Corps de System::add_dynamic_block. VERBATIM ; @p self = le System appelant, @p P = self->p_.get().
 template <typename ImplT>
 void add_dynamic_block(System* self, ImplT* P, const std::string& name, const std::string& so_path,
                        int substeps, const std::vector<std::string>& names,
@@ -358,7 +361,7 @@ void add_dynamic_block(System* self, ImplT* P, const std::string& name, const st
   }
 }
 
-// Corps de System::add_compiled_block. VERBATIM ; @p self = le System appelant, @p P = self->p_.get().
+/// Corps de System::add_compiled_block. VERBATIM ; @p self = le System appelant, @p P = self->p_.get().
 template <typename ImplT>
 void add_compiled_block(System* self, ImplT* P, const std::string& name, const std::string& so_path,
                         const std::string& limiter, const std::string& riemann,
@@ -498,8 +501,8 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   P->sp.back().U.set_val(Real(0));
 }
 
-// Corps de System::add_native_block. VERBATIM ; @p self = le System appelant (et le `this` marshale
-// vers le loader natif), @p P = self->p_.get().
+/// Corps de System::add_native_block. VERBATIM ; @p self = le System appelant (et le `this` marshale
+/// vers le loader natif), @p P = self->p_.get().
 template <typename ImplT>
 void add_native_block(System* self, ImplT* P, const std::string& name, const std::string& so_path,
                       const std::string& limiter, const std::string& riemann,
