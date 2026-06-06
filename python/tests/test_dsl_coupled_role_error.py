@@ -13,13 +13,12 @@ Deux points de rejet sont confirmes (lus dans python/adc/dsl.py et python/system
       role_from_name(role) renvoie VariableRole::Custom pour tout role non reconnu, et le code
       leve explicitement.
 
-NOTE IMPORTANTE - ce qui n'est PAS un rejet :
-  Si un role syntaxiquement valide ('density', 'momentum_x', ...) est passe a un bloc qui ne
-  l'expose PAS dans ses variables conservatives, add_coupled_source ne leve PAS : il utilise le
-  fallback silencieux comp=0 (role_index avec fallback=0). Ce comportement est documente dans
-  le code (commentaire "Resout role -> composante ... fallback comp 0 si le bloc ne renseigne
-  pas le role") et ne constitue PAS un rejet honete. On ne teste donc PAS ce cas ici (gap
-  volontairement non couvert : le fallback silencieux est le contrat actuel du code).
+  (C) System.add_coupled_source() cote C++ : un role CANONIQUE valide mais NON EXPOSE par le bloc
+      cible leve desormais RuntimeError (fix du gap identifie a la revue Lot E). Avant, resolve()
+      retombait SILENCIEUSEMENT sur la composante 0 (role_index avec fallback=0) et appliquait la
+      source au mauvais champ. Le chemin DSL CoupledSource est maintenant STRICT (index_of(role) < 0
+      -> throw "le bloc '...' n'expose pas le role '...'"). Les couplages NOMMES (add_collision /
+      add_pair) conservent volontairement leur repli canonique via role_index et ne sont PAS touches.
 """
 import pytest
 
@@ -134,6 +133,38 @@ def test_add_coupled_source_rejects_unknown_role_direct():
     assert "inconnu" in msg or "bogus_canonical" in msg, "message inattendu : %r" % msg
 
 
+def test_add_coupled_source_rejects_role_not_exposed():
+    """(C) Role CANONIQUE valide mais NON EXPOSE par le bloc -> RuntimeError (fix du gap Lot E).
+
+    Le bloc scalaire 'ne' n'expose que la densite (composante 0) ; viser 'momentum_x' (role
+    canonique reconnu par role_from_name, mais absent du descripteur du scalaire) doit lever au
+    lieu de retomber silencieusement sur la composante 0.
+    """
+    sim = _make_cartesian_system()
+    _CS_PUSHREG = 0
+    raised = False
+    msg = ""
+    try:
+        sim._s.add_coupled_source(
+            in_blocks=["ne"],
+            in_roles=["density"],            # valide ET expose
+            consts=[],
+            out_blocks=["ne"],
+            out_roles=["momentum_x"],        # canonique reconnu MAIS non expose par un scalaire
+            prog_ops=[_CS_PUSHREG],
+            prog_args=[0],
+            prog_lens=[1],
+        )
+    except RuntimeError as e:
+        raised = True
+        msg = str(e)
+    assert raised, (
+        "add_coupled_source ciblant un role valide NON EXPOSE aurait du lever (gap Lot E corrige : "
+        "plus de repli silencieux sur comp=0)"
+    )
+    assert "expose" in msg or "momentum_x" in msg, "message inattendu : %r" % msg
+
+
 if __name__ == "__main__":
     test_coupled_source_rejects_unknown_role_at_field()
     print("OK A1 : role inconnu dans .block().role() rejete")
@@ -143,4 +174,6 @@ if __name__ == "__main__":
     print("OK contrepartie positive : role valide accepte")
     test_add_coupled_source_rejects_unknown_role_direct()
     print("OK B : role inconnu dans add_coupled_source C++ rejete")
+    test_add_coupled_source_rejects_role_not_exposed()
+    print("OK C : role valide non expose rejete (gap Lot E corrige)")
     print("test_dsl_coupled_role_error : OK")

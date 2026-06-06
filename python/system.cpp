@@ -744,7 +744,16 @@ void System::add_coupled_source(const std::vector<std::string>& in_blocks,
     if (r == VariableRole::Custom)
       throw std::runtime_error("System::add_coupled_source : role '" + role + "' inconnu (bloc '" +
                                block + "')");
-    const int comp = role_index(P->sp[static_cast<std::size_t>(sidx)].cons_vars, r, 0);
+    // STRICT (pas de repli silencieux) : une source couplee DSL vise un (bloc, role) EXPLICITEMENT
+    // demande par l'utilisateur. Si le bloc n'expose PAS ce role, c'est une erreur : un repli sur la
+    // composante 0 appliquerait la source au mauvais champ EN SILENCE (le faux-positif identifie a la
+    // revue). On leve. Distinct des couplages NOMMES (add_collision/add_pair) qui assument volontairement
+    // la disposition canonique via role_index(..., fallback) et restent inchanges.
+    const int comp = P->sp[static_cast<std::size_t>(sidx)].cons_vars.index_of(r);
+    if (comp < 0)
+      throw std::runtime_error("System::add_coupled_source : le bloc '" + block +
+                               "' n'expose pas le role '" + role +
+                               "' (pas de repli silencieux sur la composante 0)");
     return {sidx, comp};
   };
   // Entrees : (espece, composante) lues par cellule. Capturees par INDICE (les fabs peuvent etre
