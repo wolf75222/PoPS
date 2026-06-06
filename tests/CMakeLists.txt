@@ -474,3 +474,10 @@ if(ADC_HAS_MPI)
                      ${MPIEXEC_POSTFLAGS})
   endforeach()
 endif()
+
+# --- contrats communs de l'etage elliptique (audit D.1) : concepts EllipticOperator /
+# LinearSolver / FieldPostProcessor formalises dans elliptic_interface.hpp. Le test est
+# ESSENTIELLEMENT statique (static_assert que GeometricMG / TensorKrylovSolver / FFT /
+# polaire conforment, ou NON, a chaque concept) ; additif, aucune classe modifiee, donc
+# bit-identique. Ligne unique en fin de fichier pour eviter les conflits de fusion.
+adc_add_test(test_elliptic_interface)
