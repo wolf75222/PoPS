@@ -14,6 +14,26 @@ resultats. Ici on decrit les couches, les seams, les decisions, et on distingue 
 **fait** de ce qui reste **cible**. Les notes de planification et de vision sont archivees
 sous [`archive/`](archive/) (hors navigation).
 
+## Surface des classes : API actuelle / interne / legacy
+
+Classement des principaux types selon leur surface d'exposition. Pour le detail des
+responsabilites de chaque coupleur, voir [docs/COUPLER_HIERARCHY.md](COUPLER_HIERARCHY.md)
+et [docs/COUPLING_SURFACE.md](COUPLING_SURFACE.md) (classification complete du couplage).
+
+| Classe | Surface | Remarque |
+|---|---|---|
+| `System` (Python) | **API** | facade composition Python, point d'entree principal |
+| `AmrSystem` (Python) | **API** | facade AMR Python (mono-bloc, explicite) |
+| `adc.dsl.Model` / `adc.Model` | **API** | DSL Python + assemblage de briques natives |
+| `adc.FiniteVolume` / `adc.Explicit` / `adc.IMEX` | **API** | objets de configuration passes aux facades |
+| `Coupler<M,E>` | interne | coupleur mono-modele mono-niveau, non expose en Python |
+| `SystemCoupler` / `SystemDriver` | interne | ordonnanceur multi-especes mono-niveau |
+| `AmrCouplerMP` | interne | driver AMR mono-modele multi-box |
+| `AmrSystemCoupler` / `AmrSystemDriver` | interne | driver AMR multi-especes |
+| `amr_coupler.hpp::AmrCoupler` | **legacy** | remplace par `AmrCouplerMP` (mono-box = cas degenere) |
+| `spectral_coupler.hpp::SpectralCoupler` | **legacy** | orchestre `DistributedFFTSolver`, non route dans `System` MPI np>1 |
+| `amr_multilevel.hpp` / `amr_reflux.hpp` | **legacy** | reference Fab2D mono-box, verite-terrain de `advance_amr` |
+
 ## 1. Principe : cinq couches orthogonales
 
 Le modele physique ne depend JAMAIS du backend parallele. Il n'expose que des lois

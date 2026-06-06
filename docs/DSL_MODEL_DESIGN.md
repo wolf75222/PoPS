@@ -1,5 +1,8 @@
 # Conception de l'API modele DSL Python (`dsl.Model`)
 
+> API utilisateur courte : voir [docs/DSL_API.md](DSL_API.md) ; ce document = conception + historique.
+
+
 Conception + STATUT. Ce document a ete ecrit comme une SPEC cible (API decrite et mappee
 ligne a ligne sur le code existant). La quasi-totalite a depuis ete livree : Phase A,
 backend natif `production` (`System` ET `AmrSystem`), WENO5 sur tous les chemins, GPU/MPI
