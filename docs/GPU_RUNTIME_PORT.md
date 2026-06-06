@@ -333,3 +333,66 @@ Restent, cote PERF et non plus correction : le strong-scaling AMR full-device (g
 `replicated_coarse=false` cable dans `AmrSystem`, reflux sans rebond hote, halos GPUDirect
 device-direct, FFT distribuee device) et la parite AOT zero-copie sur device (limite nvcc, phase 8 ;
 c'est aussi pourquoi T_e a ete valide device via `assemble_rhs` et non `add_compiled_model`).
+
+## Validation MPI + Kokkos Cuda multi-GPU (2026-06-06, GH200)
+
+Cloture du trou "MPI + Kokkos Cuda multi-GPU" de la matrice `BACKEND_COVERAGE` (colonne marquee `?`).
+Le mono-GPU Kokkos Cuda etant device-clean (6/6 apres #150+#152), on exerce ici l'INVARIANCE AU NOMBRE
+DE RANGS de la pile ELLIPTIQUE / Schur / Poisson / system-solve sous MPI + Kokkos Cuda sur PLUSIEURS
+GH200 (1 GPU par rang).
+
+- Provenance : `origin/master` 2674d64 (archive, rsync frais sous `~/adc_gpu_p1/mpicuda/` sur ROMEO).
+- Noeud `romeo-a057` (`armgpu`), 4x GH200 visibles. Kokkos SERIAL+CUDA, `Kokkos_ARCH_HOPPER90`,
+  `nvcc_wrapper`. MPI = OpenMPI 4.1.7 CUDA-aware (`+cuda cuda_arch=90 fabrics=ucx schedulers=slurm`,
+  hash `nkokjyt`). Lancement `srun -n {1,2,4} --gpus-per-task=1` (1 GPU/rang). Build unique
+  `-DADC_USE_KOKKOS=ON -DADC_USE_MPI=ON`. np=1 = oracle mono-GPU Cuda.
+- Harness : script `mpicuda_run.sh` (configure unique, build des cibles MPI, run np=1/2/4, parse
+  l'invariant imprime par chaque test, calcule le dmax cross-np).
+
+Tableau par test (rc + invariance cross-np vs np=1, dmax sur les invariants imprimes) :
+
+| Test | np=1 | np=2 | np=4 | dmax np2-vs-np1 | dmax np4-vs-np1 | invariance |
+|------|------|------|------|-----------------|-----------------|------------|
+| test_krylov_solver (BiCGStab) | OK | OK | OK | 0 (iters=4) | 0 (iters=4) | BIT-IDENTIQUE |
+| test_condensed_schur_source_stepper | OK | OK | OK | 0 (all_reduce_max) | 0 | BIT-IDENTIQUE |
+| test_mpi_poisson | OK | OK | OK | 0 (res=1.832e-14) | 0 | BIT-IDENTIQUE |
+| test_mpi_system_solve_fields | OK | OK | OK | 0 (\|phi\|max=3.125e-2) | 0 | BIT-IDENTIQUE |
+| test_mpi_system_fft | OK | OK | OK | n/a (refuse fft si MPI) | n/a | comportement attendu |
+| test_mpi_amr_compiled_parity | OK | OK | OK | 0 (mass/csum/csumsq/cmax %.17e) | 0 | BIT-IDENTIQUE |
+| test_mpi_amr_distributed_coarse | OK | OK | OK | 0 (cmax=1.41585803814656397) | 0 | BIT-IDENTIQUE |
+| test_mpi_coupled_source | OK | OK | OK | 0 (n_e/n_i/n_g) | 0 | BIT-IDENTIQUE |
+| test_mpi_mbox_parity | OK | OK | OK | 0 (== mono-box) | 0 | BIT-IDENTIQUE |
+| test_mpi_cutcell_multibox | OK | OK | OK | 0 (== mono-box) | 0 | BIT-IDENTIQUE |
+| test_schur_condensation | FAIL | FAIL | FAIL | -- | -- | echec BACKEND (voir reserve) |
+
+Tous les invariants %.17e (AMR compiled parity, AMR distributed coarse) sont BIT-A-BIT identiques entre
+np=1/2/4 (dmax = 0.000e+00, pas meme un drift de reassociation FMA) ; `crossrank_spread = 0` ;
+masse conservee ; iterations de Krylov invariantes (min=max=4 a tout np). `test_mpi_system_fft` REFUSE
+`fft` sous MPI (np=2/4) avec une erreur collective, comme concu (#93), donc rien a comparer cross-np.
+Aucun interblocage, aucun rang vide non-garde.
+
+RESERVE HONNETE -- `test_schur_condensation` : echoue sur Cuda DES np=1 (eps assemblage = 1.026827
+au lieu de ~1, RHS dmax = 4.892e+01, checks `B_rhs_analytique_interieur` / `C1_eps_*_diag` /
+`C2_rhs_eq_neg_laplacien_bitident`). L'echec est IDENTIQUE a np=1/2/4 : c'est un defaut du chemin
+d'ASSEMBLAGE device (backend Cuda) du condenseur de Schur, PAS un probleme d'invariance MPI. Il passe
+sur Serial / Kokkos Serial (ci-full). Coherent avec la colonne `Kokkos Cuda` de ce test deja marquee
+`?` dans `BACKEND_COVERAGE` : non device-clean, donc sa variante MPI ne peut pas etre declaree
+multi-GPU-clean. A traiter cote assembleur device (hors perimetre de cette session MPI).
+
+compute-sanitizer (memcheck) :
+- Sur les binaires LIES MPI, compute-sanitizer est INUTILISABLE sur ce noeud : OpenMPI `mtl:ofi`
+  ne s'ouvre pas sous le wrapper sanitizer (`Target application terminated before first instrumented
+  API call`), meme a `-n 1` ; et l'OpenMPI CUDA-aware sonde chaque pointeur via `cuPointerGetAttribute`
+  (qui renvoie `INVALID_VALUE` pour un pointeur HOTE par conception), que le sanitizer compte comme
+  "erreur" (708 flags d'API sur `test_mpi_system_solve_fields`, mais `0 bytes leaked`, aucun OOB,
+  aucun read/write invalide -- bruit MPI benin, pas un defaut du code).
+- Memcheck PROPRE du chemin elliptique device (meme checkout, build Kokkos-Cuda SANS MPI) :
+  `test_krylov_solver` et `test_polar_poisson_mms` -> `ERROR SUMMARY: 0 errors`, `LEAK SUMMARY:
+  0 bytes leaked in 0 allocations`. Les noyaux device de la pile elliptique sont donc memory-clean ;
+  les "erreurs" du run MPI etaient exclusivement le sondage de pointeurs CUDA-aware d'OpenMPI.
+
+VERDICT : multi-GPU rank-invariant = OUI pour la pile elliptique / Schur(stepper) / Poisson /
+system-solve / AMR sous MPI + Kokkos Cuda (10 tests OK a np=1/2/4, dmax cross-np = 0, memcheck noyaux
+propre), avec UNE reserve : `test_schur_condensation` echoue cote backend Cuda des np=1 (defaut
+d'assemblage device, independant du nombre de rangs) et reste donc `?`/echec sur la colonne
+Kokkos Cuda et MPI+Kokkos Cuda. Aucun interblocage observe.
