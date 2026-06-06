@@ -71,7 +71,7 @@ sim.add_equation("gas", model=compiled,
 sim.run(t_end=0.2, cfl=0.4)
 ```
 
-Le backend RECOMMANDE est `backend="production"` (chemin natif zero-copie, GPU/MPI valides). Les
+Le backend RECOMMANDE est `backend="production"` (chemin natif zero-copie ; GPU np=1 GH200 #97 + MPI solve_fields np=1/2/4 #93/#99 valides ; transport production GPU+MPI multi-rang pas encore exerce -- voir Validation). Les
 quatre chemins de modele (natif compose, production, aot, prototype) et les limites honnetes :
 **[docs/DSL_MODEL_DESIGN.md](docs/DSL_MODEL_DESIGN.md)**.
 

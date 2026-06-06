@@ -440,3 +440,10 @@ Tests d'acceptation : 2 blocs explicites schemas differents ; e- IMEX(substeps=1
 Explicit(substeps=1) ET l'inverse ; neutres stride=20 nourrissant sources/Poisson ; evolve=False fond
 fixe dans le RHS elliptique ; regrid conserve la masse par bloc ; DSL production 2 blocs ; MPI np=1/2/4 ;
 Kokkos Serial ; 1 cas multi-bloc production sur GH200.
+
+## 16. Findings conservation (revue, A FAIRE)
+
+- **A3 [BUG conservation, prio]** : `AmrSystemCoupler::coupled_source_step` (include/adc/coupling/amr_system_coupler.hpp:341-352) et `AmrImplicitSourceStepper` (:436-438) appliquent la source a CHAQUE niveau, Y COMPRIS aux cellules grossieres COUVERTES, SANS average_down trailing -> les cellules grossieres couvertes portent une source redondante jusqu'au prochain solve_fields ; le diagnostic `amr_mass` (somme du seul niveau grossier) est alors incoherent pour une source non lineaire / champ non uniforme. (Le chemin transport-IMEX `advance_amr`->`subcycle_level_mp` est SAIN : `mf_apply_source_treatment` suivi de `mf_average_down_mb`.) FIX : `mf_average_down_mb` fin->grossier apres la boucle de niveaux dans ces deux methodes, OU application leaf-only. (Fichier occupe par le capstone AMR ; a faire apres.)
+- **A2 [RISK conservation]** : la CoupledSource DSL ne GARANTIT pas la conservation (`coupled_source_program.hpp:107` somme aveuglement les termes ; `dsl.py` ne verifie pas que les contributions +expr/-expr sur des (bloc,role) couples sont opposees -- contrairement aux couplages C++ nommes qui calculent UNE valeur a deux signes). FIX : helper `add_pair(src_block, dst_block, role, expr)` emettant automatiquement +expr et -expr, ou un mode de verification opt-in au compile().
+- **A4 [GAP test]** : conservation polaire correcte par construction mais `tests/test_polar_transport_mms.cpp:198` ne teste la conservation globale que pour v_r=0 (aucun flux radial). Ajouter un test de conservation avec flux radial INTERIEUR non nul.
+- Tests a ajouter : `test_dsl_coupled_source_conservation`, `test_amr_composite_source_conservation`, `test_amr_source_covered_cells`, `test_polar_conservation_radial_flux`.

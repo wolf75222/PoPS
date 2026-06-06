@@ -14,7 +14,7 @@
 | **ci-fast** | Tourne dans le job **Release** (ubuntu-latest, g++, Release, pas de Kokkos/MPI). Declenchement : tout `pull_request` ordinaire. |
 | **ci-full** | Tourne en mode plein (push `master`, nightly cron, `workflow_dispatch`, ou PR labellisee `ci-full`). Comprend les jobs **MPI** (`-DADC_USE_MPI=ON`) et **Kokkos-Serial** (`-DADC_USE_KOKKOS=ON`, Kokkos 4.4.01 Serial CPU). |
 | **ROMEO** | Valide manuellement sur GH200 (noeud `armgpu`, Kokkos 4.4.01, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware). Harness cite entre parentheses. Evidence dans `docs/GPU_ROMEO.md` et/ou `docs/GPU_RUNTIME_PORT.md`. |
-| **self-skip** | Le test detecte l'absence du backend et retourne sans erreur (exit 0). |
+| **self-skip** | Le test detecte l'absence du backend et retourne sans erreur (exit 0). Note : dans la colonne **MPI CPU**, un test non-MPI (sections 1a-1g) marque "self-skip" signifie en realite "tourne a np=1 dans le build MPI (lie MPI, mono-process)" -- il EST compile et lance dans le job `mpi`, hors du bloc `if(ADC_HAS_MPI)` du CMake. Ce n'est PAS un vrai skip : le binaire s'execute, il ignore simplement les appels MPI facultatifs. |
 | **?** | Inconnu / pas exerce -- voir section Gaps. |
 
 Colonnes :
