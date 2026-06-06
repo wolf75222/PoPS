@@ -21,13 +21,10 @@ stack Schur/polaire device-clean -- voir verdict GH200 ci-dessous) ; #141 garde-
 
 Findings de revue : **1-7 sur master** ; 8 differe au portage MPI.
 
-**VERDICT device GH200 (validation post-#135, puis fixes #150+#152) : 6/6 device-clean sur Kokkos Cuda
-(single-GPU).** Les 3 echecs initiaux etaient TEST-SIDE (foncteurs/pointeurs HOTE appeles dans des kernels
-device), PAS des bugs LIBRARY -- prouve par 3 probes GH200 que l'elliptique/Schur/polaire est device-correct.
-Device-clean (valides GH200, sanitizer 0 err) : `condensed_schur` (dmax 1.2e-15), `polar_transport` (ordre 2,
-masse 9.3e-15), `lorentz`, `full_tensor` (== Serial), `polar_poisson` (ordre 2), `krylov` (Dirichlet 2e-4 ==
-oracle). Fixes : #150 (full_tensor foncteurs nommes + polar_poisson remplissage hote + fence solveur), #152
-(phi_exact `ADC_HD`). NB : MPI + Kokkos Cuda multi-GPU PAS encore exerce (cf. BACKEND_COVERAGE, colonne ?).
+**VERDICT device GH200 : 7/7 device-clean Kokkos Cuda single-GPU + MPI+Kokkos Cuda multi-GPU
+rank-invariant (10 tests, dmax=0, #157) + Kokkos OpenMP CI 91/91 (#155) + MPI+Kokkos OpenMP rank-invariant
+(perf caveat : 3 tests lourds trop lents a np>1). Tous les echecs device initiaux etaient TEST-SIDE
+(#150/#152/#158) ; le LIBRARY elliptique/Schur/polaire est device-correct.**
 
 CI (depuis #136) : PR de routine = ci-fast (Release + Python). MPI + Kokkos via push master / nightly /
 `workflow_dispatch` / label `ci-full`. REGLE : poser le label `ci-full` sur toute PR risquee (MPI /
@@ -48,7 +45,7 @@ Kokkos / device / Schur / AMR) AVANT merge pour la validation complete.
    EN ATTENTE DE GO ; les etapes facade attendent que #137 libere `__init__.py`.
 3. Polaire Phase 2b (section 12) : cabler transport+Poisson polaire dans `System.step` + couplage
    cartesien<->polaire + RUN diocotron annulaire. LE livrable scientifique (geometrie = le verrou du
-   taux de croissance ; affine/remplace le verrou "paroi-transport" de la section 8). Apres #138.
+   taux de croissance). Apres #138.
 4. Schur PR6 (mesure diocotron-Schur) : differe jusqu'a la geometrie polaire (le Schur stabilise le
    TEMPS, il n'adresse PAS le gap de taux de croissance, qui est GEOMETRIQUE).
 5. Finding revue 8 (`fab(0)` sans garde) : DIFFERE au portage MPI (un demi-fix ferait un faux-silencieux
@@ -285,13 +282,16 @@ en Python sur le chemin performant. Trois backends : `prototype` (NumPy/hote), `
       leve si n_ranks()>1, et l'`assert(n_ranks()==1)` compile-out devient un garde-fou DUR (throw actif en
       Release) dans `PoissonFFTSolver`. fft direct = np=1 seulement ; `DistributedFFTSolver` existe (teste a
       part, `test_mpi_fft_distributed`) mais non route dans System (layout bandes vs box unique).
-- [ ] **Etape 7 - paroi transport / domaine disque FV** (prochain vrai verrou scientifique) : le cut-cell
-      ne nourrit que le Poisson, pas le flux hyperbolique -> bord d'anneau diffuse sur la grille cartesienne.
-      **Phase 1 (paroi-transport opt-in par masque, experimentale) FERMEE SANS MERGE (#109)** : la paroi
-      ainsi posee masque le CONDUCTEUR EXTERNE (mauvais bord), pas le bord d'anneau qui reste le verrou
-      scientifique reel. A reprendre : la paroi-transport doit cibler le BORD D'ANNEAU. Phase 2 (fractions
-      cut-cell FV) seulement si une Phase 1 correctement bordee est concluante. Reproduction papier
-      quantitative subordonnee (cf. section 6, confirmation haute resolution du plateau l=4).
+- [ ] **Etape 7 - domaine disque FV / Polaire Phase 2b** (prochain livrable scientifique) :
+      DECISION DU PROPRIETAIRE SCIENTIFIQUE -- le bord d'anneau du diocotron est une DISCONTINUITE DE
+      DENSITE TRANSPORTEE, PAS une paroi physique. NE PAS refaire "paroi-transport" (masque / cut-cell fixe)
+      sur le bord d'anneau : ce serait physiquement FAUX. Le cut-cell reste pertinent pour le CONDUCTEUR
+      EXTERNE uniquement, mais l'experience #109 a montre qu'il NE CORRIGE PAS le taux de croissance.
+      Pour le bord d'anneau, les seuls leviers valides sont la GEOMETRIE POLAIRE, le HAUT ORDRE (WENO5/SSPRK3),
+      et l'AMR. Le prochain livrable scientifique est le CHEMIN POLAIRE COMPLET (Polaire Phase 2b) :
+      cabler transport+Poisson polaire dans `System.step` + couplage cartesien<->polaire + RUN diocotron
+      annulaire. Reproduction papier quantitative subordonnee (cf. section 6, confirmation haute resolution
+      du plateau l=4).
 
 **STATUT HONNETE (ne PAS presenter "Plan Ideal termine")** : System production CPU = OK ; AmrSystem
 production CPU = OK (WENO5/Rusanov/conservatif, #105) ; demonstrateurs DSL = OK (diocotron_dsl,
@@ -304,8 +304,11 @@ WENO5 cable aussi sur le chemin natif AMR (#105) ; `m.compile()` ergonomique (au
 6/6 device-clean sur Kokkos Cuda single-GPU (cf. VERDICT en tete) ; les 3 echecs initiaux de la validation
 GH200 etaient TEST-SIDE (foncteurs hote dans des kernels device), fixes #150+#152, library device-correct ;
 `PAPER_ROADMAP.md` = a NE PAS reecrire automatiquement
-(attend la validation humaine du sweep O5) ; **prochain verrou scientifique = paroi-transport CORRECTEMENT BORDEE
-sur le BORD D'ANNEAU (Phase 1 par masque fermee sans merge, #109, car elle masquait le conducteur externe)**.
+(attend la validation humaine du sweep O5) ; **prochain livrable scientifique = CHEMIN POLAIRE COMPLET (Polaire
+Phase 2b). DECISION SCIENTIFIQUE : le bord d'anneau est une discontinuite de densite transportee, PAS une paroi
+physique ; NE PAS refaire paroi-transport sur ce bord (physiquement faux). Cut-cell pertinent pour le conducteur
+externe uniquement (#109 n'a pas corrige le taux). Leviers valides pour le bord d'anneau : geometrie polaire,
+haut ordre (WENO5/SSPRK3), AMR.**
 
 ## 9. Mesure diocotron haut ordre (PR-0 + O5, cote `adc_cases`)
 

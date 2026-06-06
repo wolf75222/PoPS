@@ -28,7 +28,8 @@ Colonnes :
 
 > **Note importante** : la CI ne construit JAMAIS avec `-DADC_USE_KOKKOS=ON -DKokkos_ENABLE_CUDA=ON`.
 > Toutes les cellules "Kokkos Cuda" et "MPI + Kokkos Cuda" sont donc soit ROMEO, soit "?".
-> Kokkos OpenMP n'est pas non plus active en CI (aucun job ne passe `Kokkos_ENABLE_OPENMP=ON`).
+> Kokkos OpenMP est desormais active en CI via le job **ci-full** (job ajoute #155,
+> `Kokkos_ENABLE_OPENMP=ON`, 91/91 ctest, 0 echec / 0 skipped).
 
 ---
 
@@ -38,151 +39,151 @@ Colonnes :
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_box2d | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_fab2d | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_box_array | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_multifab | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_sync_residence | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_reduce | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_fill_boundary | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_physical_bc | ci-fast | self-skip | ci-full | ? | ROMEO (phase2_transport.cpp -- indirect, via transport non-periodique) | ? |
-| test_geometry | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_box2d | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_fab2d | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_box_array | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_multifab | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_sync_residence | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_reduce | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_fill_boundary | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_physical_bc | ci-fast | self-skip | ci-full | ci-full | ROMEO (phase2_transport.cpp -- indirect, via transport non-periodique) | ? |
+| test_geometry | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 
 ### 1b. Groupe AMR primitives
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_refinement | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_hierarchy | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_cluster | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_regrid | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_flux_register | ci-fast | self-skip | ci-full | ? | ROMEO (romeo_amr_build.sh -- phase 5, ops AMR device) | ? |
-| test_coverage_mask | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_patch_range | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_cf_interface | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_diagnostics | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_load_balance | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_refinement | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_hierarchy | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_cluster | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_regrid | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_flux_register | ci-fast | self-skip | ci-full | ci-full | ROMEO (romeo_amr_build.sh -- phase 5, ops AMR device) | ? |
+| test_coverage_mask | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_patch_range | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_cf_interface | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_diagnostics | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_load_balance | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 
 ### 1c. Groupe elliptique
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_poisson_smoother | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_geometric_mg | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_poisson_convergence | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_poisson_fft | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_elliptic_operator | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_elliptic_problem | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_elliptic_composite_rhs | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_poisson_disc | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_solve_robust | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_cut_cell | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_cut_cell_anisotropic | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_variable_epsilon | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_screened_poisson | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
-| test_anisotropic_epsilon | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
-| test_cut_cell_anisotropic_multibox | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_full_tensor_operator | ci-fast | self-skip | ci-full | ? | ROMEO pass (#150) | ? |
-| test_polar_poisson_mms | ci-fast | self-skip | ci-full | ? | ROMEO pass (#150) | ? |
-| test_krylov_solver (serie) | ci-fast | self-skip | ci-full | ? | ROMEO pass (#152) | ? |
-| test_schur_condensation (serie) | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_condensed_schur_source_stepper (serie) | ci-fast | self-skip | ci-full | ? | ROMEO pass | ? |
+| test_poisson_smoother | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_geometric_mg | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_poisson_convergence | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_poisson_fft | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_elliptic_operator | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_elliptic_problem | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_elliptic_composite_rhs | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_poisson_disc | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_solve_robust | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_cut_cell | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_cut_cell_anisotropic | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_variable_epsilon | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_screened_poisson | ci-fast | self-skip | ci-full | ci-full | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
+| test_anisotropic_epsilon | ci-fast | self-skip | ci-full | ci-full | ROMEO (gpu_epm_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
+| test_cut_cell_anisotropic_multibox | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_full_tensor_operator | ci-fast | self-skip | ci-full | ci-full | ROMEO pass (#150) | ? |
+| test_polar_poisson_mms | ci-fast | self-skip | ci-full | ci-full | ROMEO pass (#150) | ? |
+| test_krylov_solver (serie) | ci-fast | self-skip | ci-full | ci-full | ROMEO pass (#152) | ? |
+| test_schur_condensation (serie) | ci-fast | self-skip | ci-full | ci-full | ROMEO pass (#158) | ? |
+| test_condensed_schur_source_stepper (serie) | ci-fast | self-skip | ci-full | ci-full | ROMEO pass | ? |
 
 ### 1d. Groupe reconstruction / integrations generiques
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_spatial_discretisation | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_primitive_recon | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_system_abstraction | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_system_coupler | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_two_species_minimal | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_coupled_source | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_system_two_explicit | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_assembler_driver | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_system_coupler | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_layout_guard | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_system_hardening | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_imex_partial | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_imex_transport | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_multirate_stride | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_cfl_dt | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_adaptive_multirate | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_user_time_integrator | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_diffusion | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_diffusion | ci-fast | self-skip | ci-full | ? | ROMEO (romeo_amr_build.sh -- phase 5, ops AMR device) | ? |
-| test_amr_spatial_parity | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_spatial_discretisation | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_primitive_recon | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_system_abstraction | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_system_coupler | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_two_species_minimal | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_coupled_source | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_system_two_explicit | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_assembler_driver | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_system_coupler | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_layout_guard | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_system_hardening | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_imex_partial | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_imex_transport | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_multirate_stride | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_cfl_dt | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_adaptive_multirate | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_user_time_integrator | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_diffusion | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_diffusion | ci-fast | self-skip | ci-full | ci-full | ROMEO (romeo_amr_build.sh -- phase 5, ops AMR device) | ? |
+| test_amr_spatial_parity | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 
 ### 1e. Groupe canal aux extensible (B_z, T_e)
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_aux_extra | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_aux_coupler_bz | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_aux_system_bz | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_aux_composite | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_aux_bz | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_amr_bz_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
-| test_amr_system_bz_pop | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_amr_bz_validate.cpp via romeo_gpuval2_build.sh -- AMR 2 niveaux device, dmax=0) | ? |
-| test_amr_system_bz_multibox (serie np=1) | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_aux_extra | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_aux_coupler_bz | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_aux_system_bz | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_aux_composite | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_aux_bz | ci-fast | self-skip | ci-full | ci-full | ROMEO (gpu_amr_bz_validate.cpp via romeo_gpuval2_build.sh, dmax=0) | ? |
+| test_amr_system_bz_pop | ci-fast | self-skip | ci-full | ci-full | ROMEO (gpu_amr_bz_validate.cpp via romeo_gpuval2_build.sh -- AMR 2 niveaux device, dmax=0) | ? |
+| test_amr_system_bz_multibox (serie np=1) | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_amr_system_bz_multibox (MPI np=2/4) | self-skip | ci-full | self-skip | ? | ? | ROMEO (gpu_amr_bz_mpi_validate.cpp via romeo_gpuval2_mpi_build.sh, bz_bad=0, dcmax=0) |
-| test_aux_single_source | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_aux_single_source | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 
 ### 1f. Groupe WENO, splitting, IMEX, Roe, polaire, DSL
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_weno_convergence | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_splitting | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_imex_ap | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_ap_limit | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_lorentz_eliminator | ci-fast | self-skip | ci-full | ? | ROMEO pass | ? |
-| test_polar_ring_advection | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_polar_transport_mms | ci-fast | self-skip | ci-full | ? | ROMEO pass | ? |
-| test_dynamic_model | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_block_builder | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_weno5_ssprk3 | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_variable_role | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_roe_flux | ci-fast | self-skip | ci-full | ? | ? | ? |
+| test_weno_convergence | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_splitting | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_imex_ap | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_ap_limit | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_lorentz_eliminator | ci-fast | self-skip | ci-full | ci-full | ROMEO pass | ? |
+| test_polar_ring_advection | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_polar_transport_mms | ci-fast | self-skip | ci-full | ci-full | ROMEO pass | ? |
+| test_dynamic_model | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_block_builder | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_weno5_ssprk3 | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_variable_role | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_roe_flux | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 
 ### 1g. Groupe runtime System / AmrSystem (add_executable, liaison system.cpp)
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_compiled_model_parity | ci-fast | self-skip | ci-full | ? | ? (limite nvcc lambdas etendues cross-TU, documente GPU_RUNTIME_PORT.md phase 8) | ? |
-| test_weno5_compiled_model | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_compiled_model | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_potential | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_native_loader | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_weno5_native | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_riemann_native | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_imex_native | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_amr_system_contract | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_aux_runtime_bz | ci-fast | self-skip | ci-full | ? | ? | ? |
-| test_aux_te | ci-fast | self-skip | ci-full | ? | ROMEO (gpu_aux_validate.cpp via romeo_gpuval2_build.sh -- chemin assemble_rhs, dmax=0 ; NOTE: le chemin add_compiled_model+T_e reste hors perimetre device, voir phase 8) | ? |
+| test_compiled_model_parity | ci-fast | self-skip | ci-full | ci-full | ? (limite nvcc lambdas etendues cross-TU, documente GPU_RUNTIME_PORT.md phase 8) | ? |
+| test_weno5_compiled_model | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_compiled_model | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_potential | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_native_loader | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_weno5_native | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_riemann_native | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_imex_native | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_system_contract | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_aux_runtime_bz | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_aux_te | ci-fast | self-skip | ci-full | ci-full | ROMEO (gpu_aux_validate.cpp via romeo_gpuval2_build.sh -- chemin assemble_rhs, dmax=0 ; NOTE: le chemin add_compiled_model+T_e reste hors perimetre device, voir phase 8) | ? |
 
 ### 1h. Groupe MPI coeur (compile seulement si ADC_HAS_MPI)
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |------|--------|---------|---------------|---------------|-------------|-----------------|
-| test_krylov_solver_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
-| test_schur_condensation_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
-| test_condensed_schur_source_stepper_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
+| test_krylov_solver_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
+| test_schur_condensation_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
+| test_condensed_schur_source_stepper_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
 | test_mpi_smoke (np=4) | self-skip | ci-full | self-skip | ? | ? | ? |
 | test_mpi_array_reduce (np=4) | self-skip | ci-full | self-skip | ? | ? | ? |
 | test_mpi_fillboundary (np=4) | self-skip | ci-full | self-skip | ? | ? | ROMEO (mpi6_fillboundary.cpp via mpi6_romeo_build.sh, gfails=0 np=1/2/4) |
-| test_mpi_poisson (np=4) | self-skip | ci-full | self-skip | ? | ? | ? |
+| test_mpi_poisson (np=4) | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
 | test_mpi_redistribute (np=4) | self-skip | ci-full | self-skip | ? | ? | ? |
 | test_mpi_coupler_inject (np=4) | self-skip | ci-full | self-skip | ? | ? | ? |
 | test_mpi_fft_distributed (np=4) | self-skip | ci-full | self-skip | ? | ? | ? |
-| test_mpi_mbox_parity_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (harness amrmpi_integrated.cpp + amrmpi_romeo_build.sh -- identique a test_mpi_mbox_parity, dmax=0 np=1/2/4) |
+| test_mpi_mbox_parity_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (harness amrmpi_integrated.cpp + amrmpi_romeo_build.sh -- identique a test_mpi_mbox_parity, dmax=0 np=1/2/4) -- ROMEO pass np2/4 (#157) |
 | test_mpi_hybrid_mbox_parity_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
-| test_mpi_cutcell_multibox_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
+| test_mpi_cutcell_multibox_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
 | test_amr_system_bz_multibox_np2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (gpu_amr_bz_mpi_validate.cpp via romeo_gpuval2_mpi_build.sh, bz_bad=0, dcmax=0) |
-| test_mpi_amr_compiled_parity_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (amrmpi_integrated.cpp via amrmpi_romeo_build.sh, dmax=0, masse=0, crossrank_spread=0) |
-| test_mpi_amr_distributed_coarse_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (amrmpi_integrated.cpp via amrmpi_romeo_build.sh -- mode reparti mesure, correct mais ne scale pas) |
-| test_mpi_system_solve_fields_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
+| test_mpi_amr_compiled_parity_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (amrmpi_integrated.cpp via amrmpi_romeo_build.sh, dmax=0, masse=0, crossrank_spread=0) -- ROMEO pass np2/4 (#157) |
+| test_mpi_amr_distributed_coarse_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (amrmpi_integrated.cpp via amrmpi_romeo_build.sh -- mode reparti mesure, correct mais ne scale pas) -- ROMEO pass np2/4 (#157) |
+| test_mpi_system_solve_fields_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
 | test_mpi_system_fft_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
-| test_mpi_coupled_source_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
+| test_mpi_coupled_source_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
 
 ---
 
@@ -270,6 +271,19 @@ ROMEO. Le tableau ci-dessous les indexe pour faciliter le croisement avec la sec
 
 ---
 
+---
+
+## 3b. MPI + Kokkos OpenMP (ROMEO x64cpu)
+
+Valide sur le noeud x64cpu de ROMEO (`Kokkos_ENABLE_OPENMP=ON`, OpenMPI, build cmake + g++).
+
+- 52/57 runs rank-invariant (bit-identiques np=1/2/4 sur les observables parity/AMR/Krylov, dmax=0).
+- 3 tests distribues-MG lourds (mpi_cutcell_multibox, mpi_amr_distributed_coarse,
+  condensed_schur_source_stepper) trop lents a np>1 (depassent 600s) -- pathologie PERFORMANCE
+  Kokkos-OpenMP sur petites tuiles + halos MPI (~5-7x ralentissement a np>1), PAS un deadlock ni
+  un bug de correction. Tous passent a np=1.
+
+
 ## 4. Bilan chiffre
 
 | Statut | Nombre de cellules (approx.) |
@@ -284,18 +298,22 @@ ROMEO. Le tableau ci-dessous les indexe pour faciliter le croisement avec la sec
 
 ## 5. Lacunes notables (gaps prioritaires)
 
-1. **Kokkos OpenMP (toutes suites)** -- aucune cellule couverte. Le backend `ADC_USE_OPENMP` est
-   deprecie au profit de `ADC_USE_KOKKOS + Kokkos_ENABLE_OPENMP`. Ni la CI ni ROMEO ne l'activent.
-   Un job CI "Kokkos-OpenMP" (meme recette que Kokkos-Serial mais `Kokkos_ENABLE_OPENMP=ON`) serait
-   le moyen le moins couteux de fermer ce blanc.
+> **Gaps fermes :**
+> - Kokkos OpenMP CI : FERME (#155, job ci-full, 91/91 ctest).
+> - MPI + Kokkos Cuda multi-GPU : FERME pour les 10 tests Krylov/Schur/MPI-noyau (#157, rank-invariant dmax=0).
+> - MPI + Kokkos OpenMP ROMEO : VALIDE (52/57 rank-invariants ; 3 tests lourds trop lents a np>1, perf, non deadlock).
 
-2. **MPI + Kokkos Cuda -- majorite des tests MPI** -- seuls `test_mpi_fillboundary`,
-   `test_mpi_mbox_parity`, `test_amr_system_bz_multibox` (np=2/4), `test_mpi_amr_compiled_parity`,
-   `test_mpi_amr_distributed_coarse` et `test_mpi_cutcell_multibox` ont une correspondance ROMEO.
-   Les tests MPI noyau (`test_mpi_smoke`, `test_mpi_poisson`, `test_mpi_redistribute`,
-   `test_mpi_coupler_inject`, `test_mpi_fft_distributed`, Krylov/Schur np=1/2/4,
-   `test_mpi_system_solve_fields`, `test_mpi_system_fft`, `test_mpi_coupled_source`,
-   `test_mpi_hybrid_mbox_parity`) ne sont exerces que sur CPU MPI (ci-full).
+1. **Kokkos OpenMP (toutes suites)** -- FERME (#155) : job ci-full `Kokkos_ENABLE_OPENMP=ON`, 91/91 ctest.
+   Colonnes renseignees `ci-full` pour tous les tests non-MPI (sections 1a-1g). Les tests MPI-only
+   (section 1h, Serial=self-skip) restent `self-skip` en Kokkos OpenMP (build MPI non joint).
+
+2. **MPI + Kokkos Cuda -- majorite des tests MPI** -- FERME pour 10 tests (#157, GH200,
+   rank-invariant np=1/2/4, dmax=0) : krylov_solver, condensed_schur_source_stepper, mpi_poisson,
+   mpi_system_solve_fields, mpi_amr_compiled_parity, mpi_amr_distributed_coarse, mpi_coupled_source,
+   mpi_mbox_parity, mpi_cutcell_multibox, test_schur_condensation. Restent "?" :
+   `test_mpi_smoke`, `test_mpi_array_reduce`, `test_mpi_redistribute`, `test_mpi_coupler_inject`,
+   `test_mpi_fft_distributed`, `test_mpi_system_fft`, `test_mpi_hybrid_mbox_parity`,
+   `test_amr_system_bz_multibox` (MPI+Cuda).
 
 3. **Tests Python sous Kokkos / MPI** -- le module `_adc` n'est construit en CI qu'en mode Serial
    (Release, pas de Kokkos ni MPI). Aucun test Python ne couvre le chemin Kokkos Serial, OpenMP, Cuda

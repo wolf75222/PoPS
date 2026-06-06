@@ -192,10 +192,12 @@ Detail par fichier : [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (section 13).
 - AMR conservatif : reflux multi-patch a l'arrondi machine (~1e-15).
 - GPU GH200 (hors CI) : System production np=1 valide (#97) ; multigrille geometrique device-MPI
   np=1/2/4 valide (#93) ; AmrSystem + MPI + GPU valides bit-identiques (phase 10, dmax=0, #105) ;
-  Schur/polaire device (Kokkos Cuda single-GPU, GH200) : **6/6 device-clean** -- condensed_schur, polar_transport,
-  lorentz, full_tensor, polar_poisson, krylov (tous == oracle Serial, sanitizer 0 err). Les 3 echecs initiaux de
-  la validation post-#135 etaient TEST-SIDE (foncteurs/pointeurs hote dans des kernels device), fixes #150 + #152 ;
-  l'elliptique/Schur/polaire LIBRARY est device-correct. MPI + Kokkos Cuda multi-GPU pas encore exerce.
+  Schur/polaire device : **7/7 device-clean Kokkos Cuda single-GPU + MPI+Kokkos Cuda multi-GPU
+  rank-invariant (10 tests, #157) + Kokkos OpenMP CI (#155)** -- condensed_schur, polar_transport,
+  lorentz, full_tensor, polar_poisson, krylov, schur_condensation (tous device-clean GH200,
+  compute-sanitizer 0 err). Les 4 echecs initiaux etaient TEST-SIDE (foncteurs hote / pointeurs hote
+  appeles dans des kernels device, ou lecture hote d'une sortie async sans fence), corriges #150/#152/#158 ;
+  le LIBRARY elliptique/Schur/polaire est device-correct.
   Detail : docs/BACKEND_COVERAGE.md.
 - FFT sous `System` MPI np>1 : REFUSEE proprement (#106, plus de segfault) ; `DistributedFFTSolver`
   existe et teste a part, mais n'est PAS route dans `System`.
