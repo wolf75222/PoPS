@@ -17,6 +17,16 @@
 #include <utility>
 #include <vector>
 
+/// @file
+/// @brief amr_regrid_finest : regrid Berger-Rigoutsos du niveau le plus fin (responsabilite b).
+///
+/// Free function template sur le critere, calquee sur le STYLE de amr/regrid.hpp (regrid_level) mais
+/// PAS fusionnee : invariants differents (coords niveau fk = parent x2, clamp de nesting margin,
+/// report de l'ancien fin). Corps deplace tel quel depuis AmrCouplerMP::regrid : meme tagging,
+/// clustering, clamp, interp parent puis report fin, swap + realloc aux. Ne suppose pas mono-rang
+/// (DistributionMapping construite avec n_ranks()). Sous grossier REPARTI, l'OU global des tags
+/// (all_reduce_or) garantit des patchs fins IDENTIQUES sur tous les rangs (sinon dmaps incompatibles).
+
 // Regrid Berger-Rigoutsos extrait du coupleur multi-patch (responsabilite b).
 // Free function template sur le critere, calquee sur le STYLE de amr/regrid.hpp
 // (regrid_level) mais PAS fusionnee : invariants differents (coords niveau fk =
@@ -40,6 +50,10 @@ namespace adc {
 // extra (B_z, ...) garde la place apres regrid. Le Model n'etant pas a portee ici (free
 // function sur le seul critere), la largeur est PROPAGEE en parametre ; defaut 3 ->
 // allocation MultiFab(..., 3, 1) strictement bit-identique a l'historique.
+/// Regrid le niveau le plus fin (L.back()) par Berger-Rigoutsos sur le critere @p crit applique au
+/// parent : reconstruit les patchs (report des donnees fines sinon interp parent) + l'aux. @p grow :
+/// dilatation des tags ; @p margin : nesting ; @p aux_ncomp : largeur aux reconstruit ;
+/// @p coarse_replicated : politique d'ownership du niveau 0. NO-OP si < 2 niveaux ou aucun patch.
 template <class Crit>
 void amr_regrid_finest(std::vector<AmrLevelMP>& L, std::vector<MultiFab>& aux,
                        const Box2D& dom, Crit crit, int grow, int margin,

@@ -1,3 +1,13 @@
+/// @file
+/// @brief Geometry : correspondance espace d'indices (Box2D) <-> espace physique cartesien ;
+///        PolarGeometry : SIBLING pour un domaine annulaire global (r, theta).
+///
+/// Domaine physique FIXE, pas de maille dx/dy decroissant avec le raffinement (refine() raffine
+/// l'espace d'indices a EXTENT physique constant). Centres de cellule (et faces, en polaire) definis
+/// pour TOUT indice, ghosts compris (indices negatifs). Les accesseurs sont ADC_HD : arithmetique
+/// pure, capturables par valeur et appelables depuis un kernel device. POD trivial : annotation
+/// gratuite, chemin hote bit-identique.
+
 #pragma once
 
 #include <adc/core/types.hpp>
@@ -10,6 +20,8 @@
 
 namespace adc {
 
+/// Geometrie cartesienne d'un niveau : domaine d'indices + bornes physiques [xlo, xhi] x [ylo, yhi].
+/// POD trivial ; accesseurs ADC_HD. Maille uniforme (dx = (xhi-xlo)/nx, idem dy).
 struct Geometry {
   Box2D domain{};
   Real xlo = 0, xhi = 1, ylo = 0, yhi = 1;
@@ -20,12 +32,17 @@ struct Geometry {
   // d'execution. Un noyau d'init qui pose x = geom.x_cell(i) voit alors x = 0 sur GPU (sin(pi*0) = 0)
   // -> champ silencieusement nul (defaut observe sur test_condensed_schur). Geometry est un POD
   // trivial : l'annotation est gratuite et laisse le chemin hote bit-identique.
+  /// Pas d'espace en x (= (xhi - xlo) / domain.nx()). ADC_HD.
   ADC_HD Real dx() const { return (xhi - xlo) / domain.nx(); }
+  /// Pas d'espace en y (= (yhi - ylo) / domain.ny()). ADC_HD.
   ADC_HD Real dy() const { return (yhi - ylo) / domain.ny(); }
+  /// Abscisse au CENTRE de la cellule d'indice i (i = 0 -> xlo + dx/2 ; defini pour i negatif). ADC_HD.
   ADC_HD Real x_cell(int i) const { return xlo + (i + Real(0.5)) * dx(); }
+  /// Ordonnee au CENTRE de la cellule d'indice j. ADC_HD.
   ADC_HD Real y_cell(int j) const { return ylo + (j + Real(0.5)) * dy(); }
 
   // Meme extent physique, domaine d'indices raffine.
+  /// Geometrie raffinee de ratio r : MEME extent physique, domaine d'indices raffine (dx -> dx/r).
   Geometry refine(int r) const { return Geometry{domain.refine(r), xlo, xhi, ylo, yhi}; }
 };
 

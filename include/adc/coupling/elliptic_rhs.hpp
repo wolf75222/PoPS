@@ -10,6 +10,16 @@
 #include <stdexcept>
 #include <vector>
 
+/// @file
+/// @brief Assembleurs du SECOND MEMBRE elliptique (Poisson) : mono-modele et a N especes.
+///
+/// model.elliptic_rhs(U) couvre le cas MONO-bloc (SingleModelEllipticRhs). Pour plusieurs especes le
+/// second membre est une quantite de SYSTEME (f = Sum_s q_s n_s) lisant plusieurs MultiFab. Ce header
+/// isole cette responsabilite du Coupler. ChargeDensityRhs (N especes) EXIGE une entree par bloc
+/// (species.size() == n_blocks) : un bloc oublie ne disparait pas silencieusement du second membre ;
+/// une espece neutre se declare explicitement avec charge = 0. add_scaled_component (rhs += q * U)
+/// est la brique d'accumulation. Les kernels supposent des layouts identiques entre U et rhs.
+
 // Assemblage du second membre elliptique.
 //
 // Le PhysicalModel historique expose model.elliptic_rhs(U) pour le cas mono-bloc.
@@ -22,10 +32,13 @@
 
 namespace adc {
 
+/// Assembleur de RHS MONO-modele : rhs(.,.,0) = model.elliptic_rhs(U) sur les cellules valides.
+/// @tparam Model : PhysicalModel exposant elliptic_rhs(State).
 template <class Model>
 struct SingleModelEllipticRhs {
   Model model;
 
+  /// rhs <- elliptic_rhs(state) cellule par cellule (layouts identiques entre state et rhs).
   void operator()(const MultiFab& state, MultiFab& rhs) const {
     for (int li = 0; li < state.local_size(); ++li) {
       const ConstArray4 s = state.fab(li).const_array();
@@ -39,12 +52,14 @@ struct SingleModelEllipticRhs {
   }
 };
 
+/// RHS deux champs : rhs = q0 * U0(.,.,comp0) + q1 * U1(.,.,comp1) (densite de charge a deux especes).
 struct TwoFieldChargeDensityRhs {
   Real q0 = Real(1);
   Real q1 = Real(-1);
   int comp0 = 0;
   int comp1 = 0;
 
+  /// rhs <- q0 U0 + q1 U1 sur les cellules valides (layouts identiques).
   void operator()(const MultiFab& U0, const MultiFab& U1, MultiFab& rhs) const {
     for (int li = 0; li < rhs.local_size(); ++li) {
       const ConstArray4 u0 = U0.fab(li).const_array();
@@ -60,12 +75,15 @@ struct TwoFieldChargeDensityRhs {
   }
 };
 
+/// RHS deux blocs : meme calcul que TwoFieldChargeDensityRhs mais lit les blocs 0 et 1 d'un
+/// CoupledSystem (q0 n0 + q1 n1).
 struct TwoBlockChargeDensityRhs {
   Real q0 = Real(1);
   Real q1 = Real(-1);
   int comp0 = 0;
   int comp1 = 0;
 
+  /// rhs <- q0 n_0 + q1 n_1 depuis les blocs 0 et 1 du systeme.
   template <CoupledSystemLike System>
   void operator()(const System& system, MultiFab& rhs) const {
     TwoFieldChargeDensityRhs two;
@@ -84,6 +102,8 @@ struct TwoBlockChargeDensityRhs {
 //
 // Defaut `charge = 0` (revue Codex) : une espece NEUTRE, ou un bloc dont l'entree
 // serait oubliee, ne contribue PAS a Poisson (au lieu d'y verser q=+1 par accident).
+/// Charge (avec signe) et composante densite d'une espece pour l'assemblage du RHS elliptique. Defaut
+/// charge = 0 : une espece neutre (ou un bloc oublie) ne contribue PAS a Poisson.
 struct SpeciesCharge {
   Real charge = Real(0);
   int comp = 0;
@@ -91,6 +111,8 @@ struct SpeciesCharge {
 
 // rhs += q * U(.,.,comp) sur les cellules valides. Brique d'accumulation du RHS
 // elliptique a N especes (suppose layouts identiques entre U et rhs).
+/// rhs(.,.,0) += q * U(.,.,comp) sur les cellules valides. Brique d'accumulation du RHS a N especes
+/// (layouts identiques entre U et rhs).
 inline void add_scaled_component(const MultiFab& U, Real q, int comp,
                                  MultiFab& rhs) {
   for (int li = 0; li < rhs.local_size(); ++li) {
@@ -114,9 +136,12 @@ inline void add_scaled_component(const MultiFab& U, Real q, int comp,
 // Exemple deux fluides "rhs = n_i - n_e" :
 //   ChargeDensityRhs{{ {.charge=-1, .comp=0},   // bloc 0 : electrons
 //                      {.charge=+1, .comp=0} }} // bloc 1 : ions
+/// RHS de Poisson a N especes : f = Sum_s q_s n_s sur TOUS les blocs du systeme. species[k] decrit
+/// le bloc k dans l'ordre de CoupledSystem ; EXIGE species.size() == n_blocks (sinon exception).
 struct ChargeDensityRhs {
   std::vector<SpeciesCharge> species;
 
+  /// rhs <- 0 puis += q_s n_s pour chaque bloc. Jette si species.size() != n_blocks.
   template <CoupledSystemLike System>
   void operator()(const System& system, MultiFab& rhs) const {
     if (species.size() != System::n_blocks)

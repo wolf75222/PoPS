@@ -1,3 +1,15 @@
+/// @file
+/// @brief fill_boundary : echange de halos INTRA-niveau (remplit les ghosts depuis les voisins).
+///
+/// Remplit les ghosts de chaque Fab depuis les regions VALIDES des boxes voisines de la meme
+/// MultiFab, avec wrapping periodique optionnel. Mono-rang : copies memoire directes. Multi-rang
+/// (ADC_HAS_MPI + n_ranks()>1) : metadonnees REPLIQUEES -> chaque rang enumere DETERMINISTIQUEMENT
+/// la meme liste de jobs, donc les tampons coincident sans negocier les tailles (MPI_Isend/Irecv,
+/// tag 0). API en deux phases (recouvrement calcul/comm, sect. 4.3) : fill_boundary_begin poste les
+/// echanges, fill_boundary_end attend et deballe ; fill_boundary enchaine les deux (bloquant). Les
+/// ghosts HORS domaine sans periodicite ne sont PAS touches ici (ce sont les CL physiques,
+/// physical_bc.hpp). Les kernels de pack/unpack sont des FONCTEURS NOMMES device-clean (limite nvcc).
+
 #pragma once
 
 #include <adc/mesh/box2d.hpp>
@@ -29,6 +41,8 @@
 
 namespace adc {
 
+/// Periodicite par direction : wrapping des halos en x et/ou y lors de l'echange (faux = bord ouvert,
+/// laisse aux CL physiques).
 struct Periodicity {
   bool x = false;
   bool y = false;
@@ -91,6 +105,9 @@ struct UnpackKernel {
 // des transferts et deballe le bord. Les tampons vivent dans le handle (les
 // Isend/Irecv les referencent jusqu'a end ; le move du handle preserve les
 // adresses des buffers heap).
+/// Etat opaque d'un echange de halos en cours, retourne par fill_boundary_begin et consomme par
+/// fill_boundary_end. POSSEDE les tampons d'envoi/reception et les MPI_Request : ils restent vivants
+/// (et a adresse stable apres move) jusqu'a l'appel de fill_boundary_end. Vide en mono-rang.
 struct HaloExchange {
 #ifdef ADC_HAS_MPI
   struct Job {
@@ -108,6 +125,9 @@ struct HaloExchange {
 };
 
 // Phase 1 : copies locales + postage des echanges distants (non-bloquant).
+/// Phase 1 (non-bloquant) : fait les copies de halos LOCALES et poste les Isend/Irecv des halos
+/// distants. Retourne le handle a passer a fill_boundary_end. Entre begin et end l'appelant peut
+/// avancer l'interieur. No-op si mf n'a pas de ghost. @p domain sert au wrapping periodique @p per.
 inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
                                         Periodicity per = {}) {
   HaloExchange h;
@@ -232,6 +252,9 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
 }
 
 // Phase 2 : attend la fin des transferts et deballe (no-op en serie).
+/// Phase 2 (bloquant) : MPI_Waitall sur les transferts postes par begin, puis deballe les tampons
+/// recus dans les ghosts. @p h DOIT venir du fill_boundary_begin correspondant sur le meme mf. No-op
+/// en serie (aucune requete).
 inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 #ifdef ADC_HAS_MPI
   if (h.reqs.empty()) return;
@@ -260,6 +283,8 @@ inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 }
 
 // Version bloquante : begin puis end (comportement historique, inchange).
+/// Echange de halos BLOQUANT : begin puis end immediatement (pas de recouvrement). Remplit les
+/// ghosts intra-niveau + periodiques de @p mf ; @p per fixe le wrapping, @p domain le repli periodique.
 inline void fill_boundary(MultiFab& mf, const Box2D& domain,
                           Periodicity per = {}) {
   HaloExchange h = fill_boundary_begin(mf, domain, per);

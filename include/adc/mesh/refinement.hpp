@@ -1,3 +1,14 @@
+/// @file
+/// @brief Operateurs de transfert entre niveaux AMR (ratio entier r) + parallel_copy.
+///
+/// average_down (fin -> grossier) : moyenne CONSERVATIVE sur les blocs r x r (une cellule grossiere
+/// = moyenne des r^2 cellules fines). interpolate (grossier -> fin) : injection CONSTANTE par
+/// morceaux (chaque cellule fine recoit la valeur de sa cellule grossiere). Les deux passent par un
+/// MultiFab temporaire "fin coarsen" partageant la DistributionMapping du fin (calcul par bloc LOCAL),
+/// suivi d'un parallel_copy vers la cible (schema d'AMReX). parallel_copy : redistribution generale
+/// entre deux MultiFab sur le MEME domaine a decompositions eventuellement differentes (le ParallelCopy
+/// d'AMReX) ; mono-rang = copies directes, multi-rang = jobs enumeres deterministiquement (tag 1).
+
 #pragma once
 #include <cstdlib>
 #include <cstdio>
@@ -27,11 +38,14 @@
 
 namespace adc {
 
+/// Indice de la cellule grossiere contenant la cellule fine a (division PLANCHER par r, gere a < 0).
+/// ADC_HD : appele dans les kernels d'interpolation / injection coarse->fine.
 ADC_HD inline int coarsen_index(int a, int r) {
   int q = a / r, rem = a % r;
   return (rem != 0 && ((rem < 0) != (r < 0))) ? q - 1 : q;
 }
 
+/// Grossit chaque box du BoxArray d'un ratio r (coarsen box a box, ordre preserve).
 inline BoxArray coarsen(const BoxArray& ba, int r) {
   std::vector<Box2D> b;
   b.reserve(ba.size());
@@ -48,6 +62,9 @@ inline BoxArray coarsen(const BoxArray& ba, int r) {
 // chaque rang enumere la meme liste de jobs (gd, gs, region) dans le meme ordre
 // (hash spatial sur la src, candidats tries), classe par appartenance, et agrege
 // un message par voisin (MPI_Isend/Irecv, tag 1). Tampons alignes sans handshake.
+/// Copie les regions valides qui SE RECOUVRENT de src vers dst (memes indices, sans decalage).
+/// Redistribution generale entre deux MultiFab sur le meme domaine a decompositions differentes.
+/// Copie min(ncomp) composantes. Une cellule de dst non couverte par src est laissee intacte.
 inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
   const int nc = std::min(dst.ncomp(), src.ncomp());
   const BoxArray& sba = src.box_array();
@@ -141,6 +158,9 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
 #endif
 }
 
+/// Moyenne CONSERVATIVE fin -> grossier (ratio r) : coarse(I, J) = moyenne des r^2 cellules fines du
+/// bloc. Ecrit les cellules de coarse couvertes par fine (via parallel_copy depuis une grille
+/// fine-coarsen locale) ; copie min(ncomp). Conserve l'integrale (somme * dV) du fin sur la zone couverte.
 inline void average_down(const MultiFab& fine, MultiFab& coarse, int r) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
   MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);
@@ -160,6 +180,9 @@ inline void average_down(const MultiFab& fine, MultiFab& coarse, int r) {
   parallel_copy(coarse, cfine);
 }
 
+/// Interpolation grossier -> fin (ratio r) par injection CONSTANTE par morceaux : chaque cellule fine
+/// (y compris ghosts de la box) recoit la valeur de sa cellule grossiere (coarsen_index). Copie
+/// min(ncomp). Amene d'abord les valeurs grossieres sur une grille fine-coarsen locale (parallel_copy).
 inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
   MultiFab cfine(coarsen(fine.box_array(), r), fine.dmap(), fine.ncomp(), 0);

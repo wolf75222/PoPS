@@ -25,6 +25,18 @@
 #include <type_traits>
 #include <utility>
 
+/// @file
+/// @brief Systeme couple multi-especes MONO-niveau : SystemAssembler (assemble) + SystemDriver (avance).
+///
+/// DEUX responsabilites, DEUX classes (retour tuteur 8.2 B). SystemAssembler ASSEMBLE : RHS de systeme
+/// (f = Sum_s q_s n_s), Poisson, aux = (phi, grad phi), et l'evaluateur de residu d'un bloc
+/// R = -div F + S ; il ne fait AUCUN pas de temps. SystemDriver AVANCE : porte le schedule
+/// (sous-cyclage par espece, multirate adaptatif, implicite/IMEX delegue), POSSEDE un Assembleur et
+/// appelle un TimeStepper. SystemCoupler reste un ALIAS de SystemDriver (compat tests / facade
+/// adc_cases). Le canal aux est PARTAGE par tous les blocs, alloue a la largeur MAXIMALE demandee
+/// (aux_comps) : un bloc lisant B_z (n_aux=4) le voit, un bloc de base (3) ignore la composante extra.
+/// Aucune des deux ne remplace PhysicalModel / assemble_rhs / GeometricMG : elles les CONNECTENT.
+
 // Systeme couple mono-niveau : DEUX responsabilites, DEUX classes (retour tuteur §8.2 B).
 //
 //   SystemAssembler : ASSEMBLE. Couple l'hyperbolique et l'elliptique : RHS de systeme
@@ -60,6 +72,9 @@ struct ScopedBlockState {
 }  // namespace detail
 
 // === ASSEMBLEUR : champs (Poisson de systeme + aux) + residu de bloc. Aucun pas. ======
+/// ASSEMBLE les champs (Poisson de systeme + aux partage) et l'evaluateur de residu d'un bloc. Aucun
+/// pas de temps. @tparam System : CoupledSystem. @tparam RhsAssembler : assembleur du RHS Poisson.
+/// @tparam Elliptic : backend elliptique (concept EllipticSolver, defaut GeometricMG).
 template <CoupledSystemLike System, class RhsAssembler,
           class Elliptic = GeometricMG>
 class SystemAssembler {
@@ -100,6 +115,8 @@ class SystemAssembler {
   const DistributionMapping& dm() const { return dm_; }
 
   // Resout le RHS de systeme (Sum_s q_s n_s), Poisson, puis aux = (phi, grad phi).
+  /// Resout le RHS de systeme (Sum_s q_s n_s), le Poisson, puis derive aux = (phi, grad phi). aux()
+  /// est a jour au retour.
   void solve_fields() {
     rhs_assembler_(system_, mg_.rhs());
     mg_.solve();
@@ -108,6 +125,9 @@ class SystemAssembler {
 
   // Residu d'un bloc a un etage : R = −div F + S (+ aux re-resolu si recompute_aux). C'est
   // l'evaluateur (la fleche methode-des-lignes) que le Driver passe au TimeStepper.
+  /// Residu R = -div F + S d'un bloc a un etage (avec re-resolution des champs si @p recompute_aux).
+  /// C'est la fleche methode-des-lignes que le Driver passe au TimeStepper. Remplit les ghosts de
+  /// @p state selon block.bc avant l'assemblage.
   template <class Limiter, class NumericalFlux, class Block>
   void block_residual(Block& block, MultiFab& state, MultiFab& R,
                       bool recompute_aux) {
@@ -167,10 +187,15 @@ class SystemAssembler {
 };
 
 // === DRIVER : avance le systeme. Possede un Assembleur, lui delegue les champs. =========
+/// AVANCE le systeme : porte le schedule (sous-cyclage par espece, multirate adaptatif,
+/// implicite/IMEX delegue) et appelle un TimeStepper. POSSEDE un SystemAssembler et lui delegue les
+/// champs. Memes parametres de template que SystemAssembler.
 template <CoupledSystemLike System, class RhsAssembler,
           class Elliptic = GeometricMG>
 class SystemDriver {
  public:
+  /// Construit le driver (qui construit l'assembleur sous-jacent). @p active : predicat de paroi
+  /// optionnel passe au MG ; @p bz : champ B_z(x, y) optionnel partage par les blocs.
   SystemDriver(System system, const Geometry& geom, const BoxArray& ba,
                const BCRec& bcPhi, RhsAssembler rhs_assembler,
                std::function<bool(Real, Real)> active = {},
@@ -189,6 +214,8 @@ class SystemDriver {
   // Avance les blocs selon leur TimePolicy. Explicites SSPRK2/3 (ou TimeStepper utilisateur)
   // executes via take_step ; implicites/IMEX delegues au callback (Newton, collisions, ...).
   // IMEX = vrai forward-backward : transport explicite par le coeur, source au callback.
+  /// Avance les blocs d'un macro-pas dt selon leur TimePolicy : explicites via TimeStepper,
+  /// implicites/IMEX delegues a @p implicit_advance (block, h, s, n). Cadence stride par bloc.
   template <class ImplicitAdvance>
   void step(Real dt, ImplicitAdvance&& implicit_advance) {
     ImplicitAdvance& advance_implicit = implicit_advance;
@@ -205,6 +232,9 @@ class SystemDriver {
   // vitesses d'onde, stride_s = max(1, floor(w_max / w_s)). Une espece lente (gaz) avance
   // donc automatiquement moins souvent, par un pas plus grand (stride_s * macro_dt ~ son dt
   // stable). Retourne le pas macro. (vs `Stride` fixe a la compilation + `step_cfl`.)
+  /// Multirate PLEINEMENT ADAPTATIF : pas macro fixe par l'espece la plus rapide (CFL @p cfl), stride
+  /// de chaque espece derive au RUNTIME du ratio des vitesses d'onde (espece lente avancee moins
+  /// souvent, pas plus grand). Retourne le pas macro. @p implicit_advance traite les blocs implicites/IMEX.
   template <class ImplicitAdvance>
   Real step_adaptive(Real cfl, ImplicitAdvance&& implicit_advance) {
     ImplicitAdvance& advance_implicit = implicit_advance;
@@ -254,6 +284,8 @@ class SystemDriver {
   // contraint le pas). Combine au `Stride` d'une espece lente (gaz), cela donne le multirate
   // pratique : pas macro fixe par les rapides, lente avancee 1 fois sur stride. Retourne le
   // dt utilise. aux est rafraichi avant la mesure (vitesses d'onde dependantes de phi).
+  /// Pas macro choisi par CFL multi-especes : dt = cfl * min(dx, dy) / w_max (w_max = plus grande
+  /// vitesse d'onde sur TOUTES les especes). Rafraichit aux avant la mesure.
   Real cfl_dt(Real cfl) {
     asm_.solve_fields();
     const Real h = std::min(asm_.geom().dx(), asm_.geom().dy());
@@ -273,6 +305,8 @@ class SystemDriver {
 
   // Source de couplage inter-especes (splitting forward-Euler) : rafraichit phi (aux) puis
   // laisse la source lire tous les blocs + aux. Distinct de model.source (local au bloc).
+  /// Applique une source de COUPLAGE inter-especes (splitting forward-Euler) : rafraichit phi (aux)
+  /// puis appelle src.apply(system, aux, dt). Distinct de model.source (local au bloc).
   template <class CoupledSource>
   void coupled_source_step(CoupledSource&& src, Real dt) {
     static_assert(CoupledSourceFor<std::decay_t<CoupledSource>, System>,

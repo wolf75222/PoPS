@@ -1,3 +1,17 @@
+/// @file
+/// @brief for_each_cell et reductions : le SEAM de parallelisme sur les cellules d'une Box2D ;
+///        sync_host / sync_device : le seam de COHERENCE de residence (pendant pour les acces hote).
+///
+/// Le fonctor est pris PAR VALEUR et recoit (i, j) ; il capture par valeur des handles Array4 (POD),
+/// jamais le Fab ni rien de virtuel : exactement la contrainte d'un kernel device. Backend choisi a
+/// la COMPILATION (par unite de traduction) : Kokkos (MDRangePolicy<Rank<2>>, p.ex. Cuda sur GH200),
+/// OpenMP (collapse(2)), ou sequentiel. Le passage CPU -> GPU ne change donc PAS les sites d'appel.
+/// CHOIX FP : la reduction SOMME sous Kokkos reassocie l'addition (Kokkos::Sum deterministe par
+/// tuile) -> sum n'est PAS bit-identique a la boucle hote sous Kokkos ; serie et OpenMP restent
+/// exacts (boucle sequentielle, pas de reduction(+:)). La reduction MAX est exacte partout (max
+/// associatif/commutatif en IEEE754). sync_host() = device_fence() cible avant un acces hote ;
+/// sync_device() = no-op sous memoire unifiee (scaffolding pour un futur chemin non unifie).
+
 #pragma once
 
 #include <adc/core/kokkos_env.hpp>  // detail::ensure_kokkos_initialized + device_fence (cycle de vie)
@@ -74,14 +88,22 @@ namespace adc {
 
 // Rend la residence HOTE valide avant un acces hote. Sous memoire unifiee : un
 // device_fence() cible (attend les kernels en vol). No-op hors Kokkos.
+/// Rend la residence HOTE valide avant un acces hote (lecture/ecriture depuis l'hote). Sous memoire
+/// unifiee = un device_fence() cible (attend les kernels en vol) ; no-op hors Kokkos.
 inline void sync_host() { device_fence(); }
 
 // Marque une residence DEVICE (kernel a venir). Sous memoire unifiee : no-op
 // (les ecritures hote sont deja visibles du device, rien a drainer). Existe pour
 // documenter l'intention au site d'appel et accueillir un futur deep_copy
 // hote->device sur un chemin non unifie.
+/// Marque une residence DEVICE (kernel a venir). Sous memoire unifiee : NO-OP (les ecritures hote
+/// sont deja visibles du device) ; existe pour documenter l'intention et accueillir un futur
+/// deep_copy hote->device sur un chemin non unifie.
 inline void sync_device() {}
 
+/// Applique @p f a CHAQUE cellule (i, j) de la box @p b (bornes incluses), parallelise selon le
+/// backend compile (Kokkos / OpenMP / serie). @p f est pris par valeur et DOIT etre device-callable
+/// sous Kokkos (annote ADC_HD, capture des POD par valeur). Aucune garantie d'ordre sous Kokkos/OpenMP.
 template <class F>
 void for_each_cell(const Box2D& b, F f) {
 #if defined(ADC_HAS_KOKKOS)
@@ -131,6 +153,9 @@ void for_each_cell(const Box2D& b, F f) {
 // serie et OpenMP restent exacts. norm_inf (un max) est exact partout (max et
 // fabs sont sans arrondi et associatifs/commutatifs en IEEE754).
 
+/// Reduction SOMME de @p f(i, j) sur la box @p b. @p f device-callable (ADC_HD) renvoyant la valeur
+/// a accumuler. ATTENTION FP : sous Kokkos l'ordre de sommation par tuile differe de la boucle hote
+/// (non bit-identique a la serie) ; serie et OpenMP restent exacts. Bloquant cote hote (valide au retour).
 template <class F>
 Real for_each_cell_reduce_sum(const Box2D& b, F f) {
 #if defined(ADC_HAS_KOKKOS)
@@ -154,6 +179,8 @@ Real for_each_cell_reduce_sum(const Box2D& b, F f) {
 #endif
 }
 
+/// Reduction MAX de @p f(i, j) sur la box @p b. @p f device-callable (ADC_HD). EXACT partout (le max
+/// est associatif/commutatif en IEEE754, sans arrondi) -> bit-identique entre backends. Bloquant cote hote.
 template <class F>
 Real for_each_cell_reduce_max(const Box2D& b, F f) {
 #if defined(ADC_HAS_KOKKOS)
@@ -186,6 +213,9 @@ Real for_each_cell_reduce_max(const Box2D& b, F f) {
 // ou nvcc n'emet pas fiablement une lambda etendue (cf. les foncteurs nommes de spatial_operator.hpp).
 // Determinisme et bit-exactitude IDENTIQUES a for_each_cell_reduce_max (meme Kokkos::Max, meme boucle
 // hote sequentielle) : seul le porteur du calcul change (foncteur nomme au lieu d'un wrapper lambda).
+/// Reduction MAX a FONCTEUR REDUCTEUR : @p f recoit (i, j, Real& acc) et met acc a jour, passe
+/// DIRECTEMENT a Kokkos::parallel_reduce sans lambda d'enveloppe (chemin device-clean pour un noyau
+/// instancie cross-TU). Bit-exactitude identique a for_each_cell_reduce_max.
 template <class F>
 Real reduce_max_cell(const Box2D& b, F f) {
 #if defined(ADC_HAS_KOKKOS)
@@ -213,6 +243,9 @@ Real reduce_max_cell(const Box2D& b, F f) {
 // premiere-instanciee cross-TU (cf. les foncteurs nommes de mf_arith.hpp / spatial_operator.hpp).
 // Determinisme et FP IDENTIQUES a for_each_cell_reduce_sum : meme Kokkos::Sum deterministe par tuile
 // sous Kokkos, meme boucle hote sequentielle en serie/OpenMP (pas de reduction(+:) qui reordonnerait).
+/// Reduction SOMME a FONCTEUR REDUCTEUR : @p f recoit (i, j, Real& acc) et accumule, passe DIRECTEMENT
+/// a Kokkos::parallel_reduce sans lambda d'enveloppe (chemin device-clean cross-TU). Memes garanties
+/// FP que for_each_cell_reduce_sum (non bit-identique a la serie sous Kokkos ; exact serie/OpenMP).
 template <class F>
 Real reduce_sum_cell(const Box2D& b, F f) {
 #if defined(ADC_HAS_KOKKOS)

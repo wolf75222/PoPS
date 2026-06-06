@@ -1,3 +1,16 @@
+/// @file
+/// @brief Interprete de SOURCE COUPLEE generique : bytecode postfixe evalue sur device (P5 phase 1).
+///
+/// Pour un couplage ARBITRAIRE decrit cote Python (adc.dsl.CoupledSource), on ne veut NI generer un
+/// .so par couplage, NI un callback Python par cellule. On transporte donc l'expression symbolique
+/// sous forme de BYTECODE postfixe (pile) a evaluer dans le MEME for_each_cell device que les
+/// couplages nommes. Le bytecode (CsProgram) est un POD a CAPACITE FIXE : capturable par valeur dans
+/// un kernel device (comme un Array4) ; l'evaluateur (CoupledSourceKernel) est un FONCTEUR NOMME
+/// (pas de lambda etendue) -> device-clean. Registres par cellule : r[0..n_in-1] = champs d'entree,
+/// r[n_in..] = constantes. Les ecritures de sortie sont ADDITIVES (forward-Euler split). Les
+/// capacites (kCsMaxReg, kCsMaxStack, kCsMaxProg, kCsMaxTerms) bornent pile/registres ; un depassement
+/// leve une erreur cote Python AVANT le device.
+
 #pragma once
 
 #include <adc/core/types.hpp>
@@ -24,6 +37,8 @@
 namespace adc {
 
 // Opcodes de la machine a pile. Valeurs stables (transportees telles quelles par l'ABI Python->C++).
+/// Opcodes de la machine a pile postfixe. Valeurs entieres STABLES (partie de l'ABI Python -> C++) :
+/// ne pas reordonner ni reattribuer.
 enum class CsOp : int {
   PushReg = 0,  // empile r[arg]  (entree ou constante)
   Add = 1,      // b = pop ; a = pop ; push a + b
@@ -44,6 +59,8 @@ inline constexpr int kCsMaxProg = 256;  // longueur d'un programme (opcodes)
 inline constexpr int kCsMaxTerms = 16;  // termes de source (un par .add)
 
 // Un programme postfixe : suite d'(opcode, argument). arg n'est lu que par PushReg (indice de registre).
+/// Programme postfixe a CAPACITE FIXE (POD device-copyable) : len opcodes, arg lu uniquement par
+/// PushReg (indice de registre). Capturable par valeur dans un kernel device.
 struct CsProgram {
   int len = 0;
   int op[kCsMaxProg] = {};
@@ -52,6 +69,9 @@ struct CsProgram {
   // Evalue le programme sur les registres @p reg (deja charges pour la cellule courante). Pile locale
   // a capacite fixe : aucun heap, device-callable. Un programme bien forme laisse exactement une valeur
   // au sommet (verifie cote Python a la construction). Pile insuffisante -> on borne (sp ne deborde pas).
+  /// Evalue le programme sur les registres @p reg (charges pour la cellule). Pile LOCALE a capacite
+  /// fixe, aucun heap -> ADC_HD device-callable. PRECONDITION : programme bien forme (verifie cote
+  /// Python) ; renvoie le sommet final, ou Real(0) si la pile est vide.
   ADC_HD Real eval(const Real* reg) const {
     Real st[kCsMaxStack];
     int sp = 0;
@@ -80,6 +100,10 @@ struct CsProgram {
 //   2. pour chaque terme t : S_t = prog[t].eval(r) ; out[t](i, j, out_comp[t]) += dt * S_t.
 // Les ecritures de sortie sont ADDITIVES (forward-Euler split) ; plusieurs termes peuvent viser le meme
 // (bloc, comp) -- les sources s'additionnent, cohérent avec une somme de termes sources.
+/// Foncteur device d'application d'UNE source couplee sur une box : capture par VALEUR des POD
+/// (Array4 d'entree/sortie, programmes, constantes) -> device-clean. operator()(i, j) charge les
+/// registres, evalue chaque terme et ECRIT de maniere ADDITIVE out[t] += dt * S_t (forward-Euler
+/// split). Tous les termes sont evalues sur l'etat AU DEBUT du pas (reg fige) avant les ecritures.
 struct CoupledSourceKernel {
   Array4 in[kCsMaxReg];   // champs d'entree (un par (bloc, role) lu) ; seuls n_in premiers sont valides
   int in_comp[kCsMaxReg];

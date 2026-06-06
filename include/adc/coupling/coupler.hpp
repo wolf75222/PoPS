@@ -26,6 +26,18 @@
 #include <type_traits>
 #include <utility>
 
+/// @file
+/// @brief Coupler : coupleur hyperbolique-elliptique MONO-bloc (boucle Poisson -> aux -> advance).
+///
+/// A chaque etage de l'integrateur (couplage stade par stade) : (1) RHS f = elliptic_rhs(model, U) ;
+/// (2) resolution lap(phi) = f par le backend elliptique (warm start) ; (3) aux = (phi, grad phi) par
+/// differences centrees ; (4) assemblage du residu hyperbolique avec cet aux. Pour un transport a
+/// derive l'aux entre par le FLUX (E x B) ; pour un fluide auto-gravitant par la SOURCE. Trois axes
+/// orthogonaux, tous parametres de template : Limiter (reconstruction), Policy (PerStage vs
+/// OncePerStep), NumericalFlux (Rusanov par defaut). Compatible MONO-modele ; le multi-especes passe
+/// par SystemCoupler. Les detail:: sont a portee de namespace (un lambda etendu ADC_HD ne peut pas
+/// vivre dans une methode privee, restriction nvcc).
+
 // Coupleur hyperbolique-elliptique mono-bloc : ferme la boucle Poisson -> aux -> advance.
 //
 // A chaque etage de l'integrateur (couplage stade par stade) :
@@ -47,6 +59,8 @@ namespace detail {
 
 // Compatibilite mono-modele : f = model.elliptic_rhs(U) sur les cellules valides,
 // deleguee a un assembleur nomme pour ne pas enfermer cette responsabilite dans Coupler.
+/// Assemble le RHS elliptique mono-modele : rhs = model.elliptic_rhs(U) sur les cellules valides
+/// (delegue a SingleModelEllipticRhs). Partage par Coupler et AmrCouplerMP.
 template <class Model>
 inline void coupler_eval_rhs(const MultiFab& state, MultiFab& rhs,
                              const Model& model) {
@@ -58,6 +72,8 @@ inline void coupler_eval_rhs(const MultiFab& state, MultiFab& rhs,
 // coupler stocke +grad phi (le signe physique E = -grad phi est porte par
 // la vitesse de derive du transport). Forme multiplicative *cx / *cy conservee a
 // l'identique -> bit-identique.
+/// Pose aux = (phi, d phi/dx, d phi/dy) par differences centrees (facteurs cx, cy = 1/(2 dx),
+/// 1/(2 dy)). Stocke +grad phi (le signe physique E = -grad phi est porte par la vitesse de derive).
 inline void coupler_grad_phi(const MultiFab& phi, MultiFab& aux, Real cx,
                              Real cy) {
   field_postprocess(phi, aux, cx, cy,
@@ -65,6 +81,10 @@ inline void coupler_grad_phi(const MultiFab& phi, MultiFab& aux, Real cx,
 }
 }  // namespace detail
 
+/// Coupleur hyperbolique-elliptique mono-bloc. @tparam Model : PhysicalModel (flux, source,
+/// elliptic_rhs, max_wave_speed, canal aux). @tparam Elliptic : backend elliptique (concept
+/// EllipticSolver, defaut GeometricMG). Possede l'aux et le solveur ; advance/step ferment la boucle
+/// Poisson -> aux -> residu a chaque pas. PRECONDITION : U porte au moins Limiter::n_ghost ghosts.
 template <class Model, class Elliptic = GeometricMG>
 class Coupler {
   static_assert(EllipticSolver<Elliptic>,
@@ -164,6 +184,8 @@ class Coupler {
 
   // Resout phi et derive aux pour un etat donne, sans avancer en temps
   // (utile pour estimer la vitesse E x B avant de fixer le pas de temps).
+  /// Resout phi et derive aux = (phi, grad phi) pour @p U SANS avancer en temps (utile pour estimer
+  /// la vitesse E x B avant de fixer dt). aux() est a jour au retour.
   void solve_fields(const MultiFab& U) { update_aux(U); }
 
   MultiFab& phi() { return mg_.phi(); }

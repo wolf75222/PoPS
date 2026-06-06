@@ -1,3 +1,13 @@
+/// @file
+/// @brief SpectralCoupler : stepper couple periodique E x B DISTRIBUE (FFT par bandes). DEPRECATED.
+///
+/// DEPRECATED : aucun #include dans le coeur, les tests ou les bindings Python. Le role est repris
+/// par Coupler<Model, DistributedFFTSolver> (le solveur FFT distribue est devenu un EllipticSolver
+/// autonome, cf. poisson_fft_solver.hpp) ; a retirer apres migration. Encapsule la boucle reecrite a
+/// la main dans chaque exemple : rho = elliptic_rhs(U) -> Poisson spectral distribue (FFT, bandes) ->
+/// aux = (phi, grad phi) avec halos -> advance (Rusanov, derive E x B). Decomposition en BANDES (1
+/// box par rang) ; Nx, Ny puissances de 2 divisibles par n_ranks(). Generique sur le modele.
+
 #pragma once
 
 // DEPRECATED : coupleur periodique distribue (FFT par bandes, SpectralCoupler). Aucun
@@ -39,9 +49,14 @@
 
 namespace adc {
 
+/// Stepper couple periodique E x B distribue en BANDES (FFT). DEPRECATED (cf. @file). @tparam Model :
+/// modele a derive E x B (alpha, n_i0, B0, flux E x B). PRECONDITION : Nx, Ny puissances de 2,
+/// divisibles par n_ranks().
 template <class Model>
 class SpectralCoupler {
  public:
+  /// Construit le coupleur sur un domaine [0, Lx] x [0, Ly] discretise Nx x Ny, decoupe en bandes
+  /// (1 box par rang). Alloue l'etat U_ (1 composante) et l'aux Uaux_ (3 composantes), 1 ghost.
   SpectralCoupler(const Model& model, int Nx, int Ny, double Lx, double Ly)
       : model_(model),
         Nx_(Nx),
@@ -75,6 +90,8 @@ class SpectralCoupler {
   double dy() const { return dy_; }
 
   // Poisson + aux + halos sans avancer (pour fixer dt / diagnostiquer).
+  /// Poisson spectral distribue + aux = (phi, grad phi) + halos, SANS avancer en temps (pour fixer dt
+  /// ou diagnostiquer). Uaux_ a jour au retour.
   void solve_aux() {
     // rho dans le rhs du solveur FFT distribue (meme decoupage en bandes que U_, donc
     // bit-identique a l'ancien chemin inline qui appelait PoissonFFT directement).
@@ -100,6 +117,7 @@ class SpectralCoupler {
   }
 
   // un pas couple complet.
+  /// Un pas couple complet : solve_aux puis advance (Rusanov, derive E x B) de la bande locale sur dt.
   void step(double dt) {
     solve_aux();
     fill_boundary(U_, dom_, Periodicity{true, true});

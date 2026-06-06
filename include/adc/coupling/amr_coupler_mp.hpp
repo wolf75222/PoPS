@@ -27,6 +27,19 @@
 #include <utility>     // std::pair, std::move
 #include <vector>
 
+/// @file
+/// @brief AmrCouplerMP : coupleur AMR E x B MULTI-PATCH (Poisson grossier -> aux = grad phi ->
+///        injection fine -> pas AMR conservatif), hierarchie multi-box par niveau.
+///
+/// Meme role qu'AmrCoupler mais chaque niveau est multi-box (std::vector<AmrLevelMP> detenu par un
+/// AmrLevelStack) et l'integration passe par amr_step_multilevel_multipatch (reflux coverage-aware).
+/// regrid() reconstruit le niveau fin a la volee par Berger-Rigoutsos. Niveau 0 = box unique pour le
+/// Poisson. La classe ne fait qu'ORDONNER les operations (hierarchie sortie dans AmrLevelStack,
+/// regrid dans amr_regrid_coupler.hpp, diagnostics dans amr_diagnostics.hpp). INVARIANT : se reduit
+/// BIT A BIT a AmrCoupler quand chaque niveau n'a qu'une box (garde de validation). Politique
+/// d'ownership du niveau 0 via replicated_coarse (replique vs reparti, equivalence prouvee bit a bit).
+/// Les detail:: sont les primitives DISTRIBUEES (injection aux, ecriture/lecture densite, layout).
+
 // Coupleur AMR E x B MULTI-PATCH : meme role qu'AmrCoupler (Poisson grossier -> aux =
 // grad phi -> injection -> pas AMR conservatif) mais la hierarchie est multi-box a chaque
 // niveau (std::vector<AmrLevelMP>, detenue par un AmrLevelStack) et l'integration passe par
@@ -222,6 +235,10 @@ inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(int n
 
 }  // namespace detail
 
+/// Coupleur AMR E x B multi-patch. @tparam Model : PhysicalModel (flux, source, elliptic_rhs,
+/// max_wave_speed). @tparam Elliptic : backend elliptique (concept EllipticSolver, defaut GeometricMG).
+/// ORCHESTRE seulement : la hierarchie vit dans un AmrLevelStack<AmrLevelMP>, le solve Poisson dans
+/// mg_, le regrid dans amr_regrid_finest. Se reduit bit a bit a AmrCoupler en mono-box par niveau.
 template <class Model, class Elliptic = GeometricMG>
 class AmrCouplerMP {
   static_assert(EllipticSolver<Elliptic>, "Elliptic doit modeler EllipticSolver");
@@ -299,6 +316,8 @@ class AmrCouplerMP {
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
   }
 
+  /// Met la hierarchie a jour avant un pas : sync_down (fin -> grossier) puis compute_aux (Poisson
+  /// grossier + grad phi + injection vers les fins).
   void update() { sync_down(); compute_aux(); }
 
   // Discretisation spatiale selectionnable (defaut FirstOrder = NoSlope + Rusanov,
@@ -307,6 +326,10 @@ class AmrCouplerMP {
   // imex : traite la source raide en IMPLICITE (backward_euler) plutot qu'en Euler avant ;
   // false (defaut) -> traitement explicite historique, bit-identique. La source restant
   // cellule-locale (hors registres de reflux), le split implicite preserve la conservation.
+  /// Avance la hierarchie d'un pas dt : update() puis advance_amr (sous-cyclage Berger-Oliger +
+  /// reflux + average_down conservatifs). @tparam Disc : discretisation spatiale (limiteur + flux,
+  /// defaut FirstOrder bit-identique a l'historique). recon_prim : reconstruction primitive ; imex :
+  /// source raide en implicite (backward_euler). Defauts (false) -> chemin explicite historique.
   template <class Disc = FirstOrder>
   void step(Real dt, bool recon_prim = false, bool imex = false) {
     update();

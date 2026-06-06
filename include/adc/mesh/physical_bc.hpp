@@ -1,3 +1,15 @@
+/// @file
+/// @brief Conditions aux limites PHYSIQUES au bord du domaine (BCType, BCRec, fill_physical_bc,
+///        fill_ghosts).
+///
+/// fill_boundary remplit deja les ghosts INTERIEURS et periodiques ; ici on remplit les ghosts qui
+/// tombent HORS du domaine sur les faces non periodiques. Foextrap : extrapolation d'ordre 0
+/// (gradient nul), ghost = cellule interne miroir (outflow / mur ordre 0). Dirichlet : valeur
+/// imposee a la FACE, ghost = 2 v - interne miroir (la moyenne ghost/interne vaut v sur la face).
+/// fill_ghosts compose les deux dans le bon ordre (interieur/periodique PUIS bord physique) et
+/// remplit les coins via faces-x puis faces-y sur l'extension complete. Les kernels de bord sont des
+/// FONCTEURS NOMMES device-clean (limite nvcc).
+
 #pragma once
 
 #include <adc/core/types.hpp>
@@ -21,8 +33,12 @@
 
 namespace adc {
 
+/// Type de condition au bord d'une face : Periodic (gere par fill_boundary), Foextrap (gradient nul,
+/// outflow/mur ordre 0), Dirichlet (valeur imposee a la face par reflexion).
 enum class BCType { Periodic, Foextrap, Dirichlet };
 
+/// Conditions aux limites des QUATRE faces du domaine (type + valeur Dirichlet associee). Defaut
+/// tout periodique (xlo_val... ignores pour les faces non Dirichlet).
 struct BCRec {
   BCType xlo = BCType::Periodic, xhi = BCType::Periodic;
   BCType ylo = BCType::Periodic, yhi = BCType::Periodic;
@@ -78,6 +94,9 @@ struct BCFaceYHiKernel {
 };
 }  // namespace detail
 
+/// Remplit les ghosts HORS domaine des faces NON periodiques de @p mf selon @p bc (Foextrap ou
+/// Dirichlet), sur toutes les composantes. No-op si pas de ghost ou tout periodique. PRECONDITION :
+/// fill_boundary a deja rempli l'interieur/periodique (les faces y lisent les ghosts x pour les coins).
 inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
                              const BCRec& bc) {
   const int ng = mf.n_grow();
@@ -134,6 +153,8 @@ inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
 }
 
 // Remplissage complet des ghosts : interieur + periodique, puis bord physique.
+/// Remplissage COMPLET des ghosts : fill_boundary (interieur + periodique, periodicite deduite de
+/// @p bc) PUIS fill_physical_bc (bords physiques). Point d'entree usuel avant un assemblage de residu.
 inline void fill_ghosts(MultiFab& mf, const Box2D& domain, const BCRec& bc) {
   Periodicity per{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
   fill_boundary(mf, domain, per);

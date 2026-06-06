@@ -1,3 +1,13 @@
+/// @file
+/// @brief BoxHash : hash spatial pour la recherche rapide des boxes intersectant une requete.
+///
+/// Une grille de bins uniforme (bibliographie sect. 3.3) associe a chaque bin la liste des boxes
+/// qui le touchent : trouver les boxes dont la region peut intersecter une box requete devient
+/// ~O(1) par requete (la recherche des paires de halos passe de O(N) a ~O(n), n << N). Construit
+/// UNE fois par maillage, reutilisable tant qu'il ne change pas. INVARIANT de non-omission : si une
+/// box intersecte la requete, elles partagent une cellule donc un bin -> query() renvoie un
+/// SUR-ENSEMBLE trie sans doublon, l'appelant teste l'intersection exacte.
+
 #pragma once
 
 #include <adc/mesh/box2d.hpp>
@@ -20,8 +30,13 @@
 
 namespace adc {
 
+/// Index spatial des boxes d'un BoxArray par grille de bins. Reference la BoxArray par INDICE
+/// (les indices retournes par query() sont des indices globaux dans la BoxArray d'origine) ;
+/// valide tant que cette BoxArray ne change pas.
 class BoxHash {
  public:
+  /// Construit l'index : bin = cote d'un bin (cellules) ; bin <= 0 force bin = 1. Chaque box est
+  /// inseree dans tous les bins qu'elle recouvre. Cout proportionnel a la surface totale en bins.
   BoxHash(const BoxArray& ba, int bin) : bin_(bin > 0 ? bin : 1) {
     for (int i = 0; i < ba.size(); ++i) {
       const Box2D& b = ba[i];
@@ -32,6 +47,8 @@ class BoxHash {
   }
 
   // indices (tries, sans doublon) des boxes susceptibles d'intersecter q.
+  /// Indices (TRIES, sans doublon) des boxes susceptibles d'intersecter q : SUR-ENSEMBLE garanti
+  /// (aucune box intersectante n'est omise). L'appelant teste l'intersection exacte. Vide si q vide.
   std::vector<int> query(const Box2D& q) const {
     std::vector<int> out;
     if (q.empty()) return out;
@@ -62,6 +79,8 @@ class BoxHash {
 
 // Taille de bin raisonnable : la plus grande extension de box du BoxArray, de
 // sorte que les boxes voisines tombent dans des bins adjacents.
+/// Taille de bin recommandee pour un BoxArray : la plus grande extension de box (au moins 1), de
+/// sorte que les boxes voisines tombent dans des bins adjacents (compromis memoire / selectivite).
 inline int suggest_bin(const BoxArray& ba) {
   int m = 1;
   for (int i = 0; i < ba.size(); ++i)

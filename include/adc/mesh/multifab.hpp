@@ -1,3 +1,14 @@
+/// @file
+/// @brief MultiFab : champ DISTRIBUE sur un niveau (equivalent du MultiFab d'AMReX).
+///
+/// Porte le decoupage (BoxArray), la repartition (DistributionMapping), le nombre de composantes et
+/// de ghosts, et n'alloue que les Fab2D POSSEDES par ce rang. C'est ici que vit le parallelisme de
+/// donnees ; la couche physique ne le voit jamais. L'iteration se fait sur les fabs LOCAUX :
+/// for (int li = 0; li < mf.local_size(); ++li) { auto a = mf.fab(li).array(); for_each_cell(...); }.
+/// sync_host()/sync_device() encodent l'intention d'acces (residence des donnees, cf. for_each.hpp) ;
+/// sous memoire unifiee sync_host = device_fence() cible, sync_device = no-op. sum() reduit sur tous
+/// les rangs (all_reduce) : non bit-identique entre backends sous Kokkos, exact en serie/OpenMP.
+
 #pragma once
 
 #include <adc/core/types.hpp>
@@ -24,10 +35,15 @@
 
 namespace adc {
 
+/// Champ distribue sur un niveau : decoupage (BoxArray) + repartition (DistributionMapping) +
+/// ncomp composantes + ngrow ghosts. N'alloue que les fabs possedes par CE rang ; l'iteration se
+/// fait sur local_size() (indices LOCAUX). global_index/local_index_of font le pont local <-> global.
 class MultiFab {
  public:
   MultiFab() = default;
 
+  /// Construit le champ : alloue un Fab2D (ncomp composantes, ngrow ghosts) pour CHAQUE box que ce
+  /// rang possede selon dm. Les boxes des autres rangs ne sont pas allouees ici.
   MultiFab(BoxArray ba, DistributionMapping dm, int ncomp, int ngrow)
       : ba_(std::move(ba)),
         dm_(std::move(dm)),
@@ -44,17 +60,27 @@ class MultiFab {
     }
   }
 
+  /// Decoupage GLOBAL du niveau (toutes les boxes, tous rangs).
   const BoxArray& box_array() const { return ba_; }
+  /// Repartition GLOBALE (rang proprietaire par box).
   const DistributionMapping& dmap() const { return dm_; }
+  /// Nombre de composantes.
   int ncomp() const { return ncomp_; }
+  /// Nombre de couches de ghosts.
   int n_grow() const { return ngrow_; }
 
+  /// Nombre de fabs POSSEDES par ce rang (borne des indices locaux).
   int local_size() const { return static_cast<int>(fabs_.size()); }
+  /// Fab local d'indice li (0 <= li < local_size()), en ecriture.
   Fab2D& fab(int li) { return fabs_[li]; }
+  /// Fab local d'indice li, en lecture.
   const Fab2D& fab(int li) const { return fabs_[li]; }
+  /// Box VALIDE du fab local li.
   const Box2D& box(int li) const { return fabs_[li].box(); }
+  /// Indice GLOBAL (dans box_array) du fab local li.
   int global_index(int li) const { return global_of_local_[li]; }
   // Indice local d'une box globale, ou -1 si elle n'est pas sur ce rang.
+  /// Indice LOCAL de la box globale @p global, ou -1 si elle n'est pas possedee par ce rang.
   int local_index_of(int global) const { return local_index_[global]; }
 
   // Residence explicite des donnees de ce MultiFab (cf. for_each.hpp). Encodent
@@ -64,9 +90,14 @@ class MultiFab {
   // sync_device() un no-op ; le comportement reste donc bit-identique a l'ancien
   // code. Sur un futur chemin non unifie (buffers separes) ces methodes
   // porteraient la migration deep_copy et le suivi de residence par fab.
+  /// Rend la residence HOTE valide (avant un acces hote : operator(), boucle, set_val). Sous memoire
+  /// unifiee = un device_fence() cible.
   void sync_host() { adc::sync_host(); }
+  /// Marque une residence DEVICE (avant un kernel). No-op sous memoire unifiee.
   void sync_device() { adc::sync_device(); }
 
+  /// Remplit toutes les cellules (valides + ghosts) de tous les fabs locaux avec v. Synchronise la
+  /// residence hote au prealable (un kernel a pu ecrire ces fabs).
   void set_val(Real v) {
     sync_host();  // un kernel a pu ecrire ces fabs ; on rend la residence hote
                   // valide avant le remplissage hote (sinon course ecriture
@@ -94,6 +125,9 @@ class MultiFab {
 // hote et absorbe la barriere. NOTE FP : sous Kokkos l'ordre de sommation par
 // tuile differe de la boucle hote ; sum n'est donc PLUS bit-identique a l'ancien
 // sum sur ce backend (ecart au dernier bit). En serie et OpenMP il reste exact.
+/// Somme des cellules VALIDES de la composante comp, reduite sur TOUS les rangs (all_reduce).
+/// COLLECTIF sous MPI. NOTE FP : non bit-identique a la boucle hote sous Kokkos (reassociation par
+/// tuile) ; exact en serie/OpenMP.
 inline Real sum(const MultiFab& mf, int comp = 0) {
   Real s = 0;
   for (int li = 0; li < mf.local_size(); ++li) {

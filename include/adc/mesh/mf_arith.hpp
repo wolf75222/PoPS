@@ -1,3 +1,14 @@
+/// @file
+/// @brief Arithmetique de MultiFab (saxpy, lincomb, norm_inf, dot) sur les cellules VALIDES.
+///
+/// Briques des etages des integrateurs et des solveurs de Krylov. Suppose des layouts IDENTIQUES
+/// (meme BoxArray, meme DistributionMapping). Operations point a point -> l'ALIASING est sans danger
+/// (x ou y == z autorise). norm_inf / dot passent par le seam reducteur (vraie reduction device sous
+/// Kokkos, boucle hote en serie/OpenMP). dot fait un all_reduce COLLECTIF : il DOIT etre appele sur
+/// CHAQUE rang (y compris un rang sans box) sous MPI, sinon interblocage. NOTE FP : dot/sum ne sont
+/// PAS bit-identiques entre backends sous Kokkos (reassociation) ; norm_inf est exact partout. Les
+/// kernels sont des FONCTEURS NOMMES device-clean (limite nvcc cross-TU).
+
 #pragma once
 
 #include <adc/core/types.hpp>
@@ -67,6 +78,7 @@ struct DotKernel {
 }  // namespace detail
 
 // y <- y + a x
+/// y <- y + a x sur TOUTES les composantes des cellules valides. Layouts identiques exiges.
 inline void saxpy(MultiFab& y, Real a, const MultiFab& x) {
   const int nc = y.ncomp();
   for (int li = 0; li < y.local_size(); ++li) {
@@ -86,6 +98,8 @@ inline void saxpy(MultiFab& y, Real a, const MultiFab& x) {
 // absorbe la barriere. EXACT partout : max et fabs sont sans arrondi et le max
 // est associatif/commutatif en IEEE754, donc bit-identique a l'ancien norm_inf
 // quel que soit le backend (l'ordre de reduction ne change aucun bit).
+/// Norme infinie max |f(.,.,comp)| sur les cellules valides (LOCALE, sans all_reduce MPI). EXACTE
+/// sur tous les backends (max sans arrondi, associatif/commutatif) -> bit-identique partout.
 inline Real norm_inf(const MultiFab& mf, int comp = 0) {
   Real m = 0;
   for (int li = 0; li < mf.local_size(); ++li) {
@@ -96,6 +110,7 @@ inline Real norm_inf(const MultiFab& mf, int comp = 0) {
 }
 
 // z <- a x + b y
+/// z <- a x + b y sur TOUTES les composantes des cellules valides. Layouts identiques ; aliasing sur.
 inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b,
                     const MultiFab& y) {
   const int nc = z.ncomp();
@@ -123,6 +138,10 @@ inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b,
 // dot n'est pas bit-identique entre backends ; serie et OpenMP restent exacts. Sous MPI, l'all-reduce
 // rend la MEME valeur a tous les rangs (MPI_SUM sur un meme jeu de contributions locales), donc le
 // critere d'arret du Krylov se declenche a la MEME iteration partout (pas de desynchronisation).
+/// Produit scalaire Sum_cells x.y sur la composante comp, reduit sur TOUS les rangs (all_reduce).
+/// COLLECTIF, OBLIGATOIRE SOUS MPI : doit etre appele sur chaque rang (y compris vide), sinon
+/// interblocage. NOTE FP : non bit-identique entre backends sous Kokkos ; l'all-reduce rend la meme
+/// valeur a tous les rangs (pas de desynchronisation du critere d'arret Krylov).
 inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
   Real s = 0;
   for (int li = 0; li < x.local_size(); ++li) {

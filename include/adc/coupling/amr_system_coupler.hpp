@@ -29,6 +29,18 @@
 #include <utility>
 #include <vector>
 
+/// @file
+/// @brief AmrSystemCoupler : coupleur de SYSTEME multi-especes sur AMR (TODO 2.3).
+///
+/// Porte un CoupledSystem sur une hierarchie AMR : chaque bloc a SA hierarchie de niveaux, toutes les
+/// especes PARTAGENT la meme grille AMR, le meme champ aux (phi, grad phi [, B_z, ...]) et le meme
+/// Poisson grossier. Orchestration : sync_down (par bloc) -> Poisson grossier f = Sum_s q_s n_s ->
+/// aux grossier + injection vers les fins -> chaque bloc avance par advance_amr<Disc_bloc> (avec son
+/// schema et ses sous-pas ; blocs implicites/IMEX delegues a un callback). INVARIANT FORT : tous les
+/// blocs vivent sur EXACTEMENT la meme grille par niveau (l'aux est partage) ; same_layout_or_throw
+/// le verifie au ctor. PoissonCadence choisit la frequence de re-solve de phi (OncePerStep gele vs
+/// PerSubstep). Mono-bloc = chemin bit-identique a l'historique (boucles sur les autres blocs vides).
+
 // Coupleur de SYSTEME sur AMR (TODO 2.3).
 //
 // SystemCoupler porte un CoupledSystem mono-niveau. AmrSystemCoupler le porte sur une
@@ -60,6 +72,9 @@
 
 namespace adc {
 
+/// Frequence de re-resolution du Poisson sur AMR : OncePerStep (phi resolu une fois par macro-pas,
+/// gele pendant l'avance ; le moins cher) ; PerSubstep (phi re-resolu avant chaque sous-pas d'espece,
+/// plus fidele pour un transport pilote par le champ, plus cher).
 enum class PoissonCadence { OncePerStep, PerSubstep };
 
 // Layout EXPLICITE d'une hierarchie AMR partagee (point 2 du capstone multi-blocs, premier pas
@@ -70,15 +85,21 @@ enum class PoissonCadence { OncePerStep, PerSubstep };
 // garde-fou same_layout_or_throw : il NE remplace PAS EquationBlock / AmrLevelMP et n'introduit
 // AUCUNE abstraction de bloc (l'AmrBlock large du design est un pas ULTERIEUR, et seulement si
 // necessaire). On lit le layout d'une pile de niveaux via from_levels.
+/// Source unique de verite sur la GRILLE partagee par tous les blocs : par niveau le BoxArray (boites
+/// ET ordre), le DistributionMapping (rang par boite) et dx/dy. EXTRAIT seulement (ne remplace ni
+/// EquationBlock ni AmrLevelMP) ; sert au garde-fou same_layout_or_throw.
 struct AmrHierarchyLayout {
   std::vector<BoxArray> ba;             // [niveau] : boites du niveau (ensemble ET ordre)
   std::vector<DistributionMapping> dm;  // [niveau], parallele a ba : rang MPI par boite
   std::vector<Real> dx, dy;             // [niveau] : pas d'espace (= dx_coarse / 2^k)
 
+  /// Nombre de niveaux (= ba.size()).
   int nlev() const { return static_cast<int>(ba.size()); }
 
   // Lit le layout porte par la pile de niveaux d'UN bloc (chaque AmrLevelMP porte
   // U.box_array() / U.dmap() / dx,dy). Aucune copie de donnees de champ : seulement la grille.
+  /// Extrait le layout (BoxArray + DistributionMapping + dx/dy par niveau) de la pile de niveaux d'UN
+  /// bloc. Aucune copie de donnees de champ, seulement la grille.
   static AmrHierarchyLayout from_levels(const std::vector<AmrLevelMP>& levels) {
     AmrHierarchyLayout L;
     const int n = static_cast<int>(levels.size());
@@ -140,6 +161,10 @@ inline void same_layout_or_throw(const std::vector<std::vector<AmrLevelMP>>& blo
 }
 }  // namespace detail
 
+/// Coupleur de systeme multi-especes sur AMR. @tparam System : CoupledSystem (blocs/especes).
+/// @tparam RhsAssembler : assembleur du RHS de Poisson (f = Sum_s q_s n_s, p.ex. ChargeDensityRhs).
+/// @tparam Elliptic : backend elliptique (concept EllipticSolver, defaut GeometricMG). PRECONDITION :
+/// tous les blocs partagent EXACTEMENT le meme layout AMR par niveau (verifie au ctor).
 template <CoupledSystemLike System, class RhsAssembler,
           class Elliptic = GeometricMG>
 class AmrSystemCoupler {
@@ -240,6 +265,9 @@ class AmrSystemCoupler {
   int solve_count() const { return solve_count_; }
 
   // sync_down (par bloc) + Poisson grossier de systeme + aux grossier + injection fine.
+  /// Resout les champs : average_down par bloc, Poisson grossier de systeme (RHS = Sum_s q_s n_s),
+  /// aux grossier (phi, grad phi) puis injection vers les fins + re-pose B_z par niveau. Incremente
+  /// solve_count().
   void solve_fields() {
     ++solve_count_;
     for (auto& levels : block_levels_)
@@ -274,6 +302,9 @@ class AmrSystemCoupler {
   // Avance le systeme d'un pas. Blocs explicites : advance_amr avec leur Disc et leurs
   // sous-pas d'espece. Blocs implicites / IMEX : delegues au callback (coupler, block,
   // levels, dt), point de branchement Newton / IMEX (defaut AmrImplicitSourceStepper).
+  /// Avance le systeme d'un macro-pas dt. Blocs explicites via advance_amr (leur Disc + sous-pas) ;
+  /// blocs implicites/IMEX delegues a @p implicit_advance (coupler, block, levels, dt). La cadence
+  /// par bloc (stride) tient un bloc lent puis le rattrape (hold-then-catch-up).
   template <class ImplicitAdvance>
   void step(Real dt, ImplicitAdvance&& implicit_advance) {
     solve_count_ = 0;
@@ -320,6 +351,7 @@ class AmrSystemCoupler {
   }
 
   // Surcharge pour un systeme entierement explicite.
+  /// Surcharge pour un systeme ENTIEREMENT explicite (static_assert si un bloc implicite/IMEX y passe).
   void step(Real dt) {
     step(dt, [](auto&, auto& block, auto&, Real) {
       using Block = std::decay_t<decltype(block)>;
@@ -441,6 +473,9 @@ class AmrSystemCoupler {
 // Defaut implicite sur AMR : backward-Euler (Newton) sur la source du modele, applique
 // a CHAQUE niveau de la hierarchie du bloc. Pendant AMR d'ImplicitSourceStepper ; meme
 // stabilite (inconditionnelle pour une relaxation lineaire). Aucun solveur cote user.
+/// Callback implicite par defaut pour AmrSystemCoupler::step : backward-Euler (Newton) sur la source
+/// du modele, applique a CHAQUE niveau de la hierarchie, suivi d'une cascade fin -> grossier
+/// (coherence de couverture, cf. coupled_source_step). @p iters : iterations de Newton par etage.
 struct AmrImplicitSourceStepper {
   int iters = 2;
 
