@@ -181,6 +181,30 @@ class AmrSystem {
   /// @param name etiquette cosmetique (AMR mono-bloc : la densite vise l'unique bloc).
   void set_density(const std::string& name, const std::vector<double>& rho);
 
+  /// Enregistre une SOURCE COUPLEE inter-especes (adc.dsl.CoupledSource compilee, ABI plate bytecode
+  /// P5), pendant raffine de System::add_coupled_source mais sur la hierarchie AMR PARTAGEE. La source
+  /// est appliquee a CHAQUE macro-pas APRES le transport, par splitting forward-Euler, niveau par
+  /// niveau, suivi d'une cascade fin -> grossier (coherence des cellules grossieres couvertes, #169).
+  /// Le couplage est cuit en machine a pile device-clean (CoupledSourceKernel) : AUCUN callback Python
+  /// par cellule dans le chemin chaud. MULTI-BLOCS uniquement (>= 2 add_block : le couplage lit/ecrit
+  /// PLUSIEURS blocs nommes). Doit etre appele AVANT le premier step (le moteur runtime est construit
+  /// au build paresseux ; la source y est injectee).
+  ///
+  /// CONSERVATION : une construction add_pair (un terme +expr sur un bloc, -expr exactement sur l'autre,
+  /// MEME cellule) rend la somme des deux blocs conservee PAR CELLULE (et globalement) a la precision
+  /// machine. Le moteur ne l'IMPOSE pas (une ionisation creant une paire e/i est licite) : c'est une
+  /// propriete du couplage construit (verify_conservation cote DSL la controle symboliquement).
+  ///
+  /// @throws std::runtime_error si appele en mono-bloc, si le systeme est deja construit, ou si la
+  ///         forme du bytecode / un role / un bloc est invalide (memes gardes que System).
+  void add_coupled_source(const std::vector<std::string>& in_blocks,
+                          const std::vector<std::string>& in_roles,
+                          const std::vector<double>& consts,
+                          const std::vector<std::string>& out_blocks,
+                          const std::vector<std::string>& out_roles,
+                          const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
+                          const std::vector<int>& prog_lens);
+
   void step(double dt);  ///< un macro-pas AMR (regrid periodique inclus)
   void advance(double dt, int nsteps);
   /// Avance a dt = cfl * dx_grossier / vitesse d'onde max. @returns le dt utilise.

@@ -259,6 +259,13 @@ PYBIND11_MODULE(_adc, m) {
              s.set_density(name, flat(arr));
            },
            py::arg("name"), py::arg("rho"))
+      // Source COUPLEE inter-especes (adc.dsl.CoupledSource compilee, P5 bytecode), MULTI-BLOCS sur la
+      // hierarchie AMR PARTAGEE : appliquee apres le transport a chaque macro-pas, par splitting
+      // explicite, niveau par niveau + cascade fin -> grossier (cellules couvertes coherentes). MEME
+      // ABI plate que System.add_coupled_source. Sans appel, inchange. cf. AmrSystem::add_coupled_source.
+      .def("add_coupled_source", &AmrSystem::add_coupled_source, py::arg("in_blocks"),
+           py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"), py::arg("out_roles"),
+           py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"))
       .def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &AmrSystem::step_cfl, py::arg("cfl"))

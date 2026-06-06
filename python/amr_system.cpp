@@ -46,6 +46,18 @@ struct AmrSystem::Impl {
   std::vector<BlockSpec> blocks;
   double gamma = 1.4;  // gamma du PREMIER bloc (compat : lu par le chemin mono-bloc)
 
+  // Sources couplees inter-especes (adc.dsl.CoupledSource compilee, ABI plate bytecode P5) FIGEES a
+  // add_coupled_source et injectees dans le moteur runtime AmrRuntime au build paresseux (build_multi).
+  // Le runtime n'existe pas encore a l'enregistrement (construit a ensure_built) : on memorise donc la
+  // spec plate ici, puis on la rejoue sur le runtime juste apres sa construction (multi-blocs seul).
+  struct CoupledSourceSpec {
+    std::vector<std::string> in_blocks, in_roles;
+    std::vector<double> consts;
+    std::vector<std::string> out_blocks, out_roles;
+    std::vector<int> prog_ops, prog_args, prog_lens;
+  };
+  std::vector<CoupledSourceSpec> coupled_sources;
+
   double refine_threshold = 1e30;  // 1e30 => aucun raffinement par defaut
 
   std::string p_rhs = "charge_density", p_solver = "geometric_mg", p_bc = "auto",
@@ -157,6 +169,13 @@ struct AmrSystem::Impl {
     runtime = std::make_shared<adc::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc,
                                                 std::move(rblocks), S.base_per, S.replicated_coarse,
                                                 S.wall);
+    // Rejoue les sources couplees figees a add_coupled_source sur le moteur runtime juste construit :
+    // chacune resout (bloc, role) -> (indice, composante) contre les cons_vars des blocs et stocke sa
+    // fermeture (appliquee apres le transport a chaque macro-pas). Aucune source -> no-op (la boucle
+    // est vide), donc multi-blocs sans couplage reste bit-identique a avant.
+    for (const auto& cs : coupled_sources)
+      runtime->add_coupled_source(cs.in_blocks, cs.in_roles, cs.consts, cs.out_blocks, cs.out_roles,
+                                  cs.prog_ops, cs.prog_args, cs.prog_lens);
     built = true;
   }
 
@@ -409,6 +428,33 @@ void AmrSystem::set_density(const std::string& name, const std::vector<double>& 
   }
   p_->blocks[idx].density = rho;
   p_->blocks[idx].has_density = true;
+}
+
+void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,
+                                   const std::vector<std::string>& in_roles,
+                                   const std::vector<double>& consts,
+                                   const std::vector<std::string>& out_blocks,
+                                   const std::vector<std::string>& out_roles,
+                                   const std::vector<int>& prog_ops,
+                                   const std::vector<int>& prog_args,
+                                   const std::vector<int>& prog_lens) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::add_coupled_source : le systeme est deja construit "
+                             "(enregistrer la source avant tout step/mass/density)");
+  // MULTI-BLOCS uniquement : une source COUPLEE lit/ecrit PLUSIEURS blocs nommes ; le chemin mono-bloc
+  // (AmrCouplerMP) n'a pas de registre de blocs et porte sa source via le modele. On refuse donc une
+  // source couplee tant qu'il y a moins de deux blocs (erreur EXPLICITE plutot qu'un no-op silencieux).
+  if (p_->blocks.size() < 2)
+    throw std::runtime_error("AmrSystem::add_coupled_source : source couplee inter-especes supportee "
+                             "uniquement en MULTI-BLOCS (>= 2 add_block) ; le mono-bloc porte sa source "
+                             "via le modele du bloc");
+  // Validation de forme MINIMALE ici (taille des listes) ; la validation FINE (roles, blocs, opcodes,
+  // registres) est faite par AmrRuntime::add_coupled_source a l'injection (build paresseux), exactement
+  // comme System delegue a CoupledSourceKernel. On stocke la spec plate telle quelle.
+  if (out_blocks.empty())
+    throw std::runtime_error("AmrSystem::add_coupled_source : aucun terme de source (out_blocks vide)");
+  p_->coupled_sources.push_back(Impl::CoupledSourceSpec{in_blocks, in_roles, consts, out_blocks,
+                                                        out_roles, prog_ops, prog_args, prog_lens});
 }
 
 void AmrSystem::step(double dt) {

@@ -301,6 +301,16 @@ add_executable(test_amr_multiblock_substeps test_amr_multiblock_substeps.cpp
 target_link_libraries(test_amr_multiblock_substeps PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_amr_multiblock_substeps COMMAND test_amr_multiblock_substeps)
 
+# --- AMR MULTI-BLOCS SOURCES COUPLEES (capstone vi) : add_coupled_source sur la facade runtime --------
+# echange conservatif PAR CELLULE (add_pair +k*ni*ng / -k*ni*ng, meme cellule), source active (l'etat
+# change), conservation GLOBALE composite sous K macro-pas, couverture #169 (grossier couvert = moyenne
+# 2x2 du fin apres la source), multirate (stride=2 reste conservatif), opt-in bit-identique. Compile
+# python/amr_system.cpp (la facade).
+add_executable(test_amr_multiblock_coupled_source test_amr_multiblock_coupled_source.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_multiblock_coupled_source PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_amr_multiblock_coupled_source COMMAND test_amr_multiblock_coupled_source)
+
 # --- runtime System : B_z partage cable de bout en bout (ensure_aux_width + set_magnetic_field) ---
 add_executable(test_aux_runtime_bz test_aux_runtime_bz.cpp
                ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)

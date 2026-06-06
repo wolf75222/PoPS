@@ -1,9 +1,11 @@
 #pragma once
 
 #include <adc/core/state.hpp>  // kAuxBaseComps
+#include <adc/core/variables.hpp>  // VariableSet, VariableRole, role_from_name (role -> composante des sources couplees)
 #include <adc/coupling/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb (injection aux coarse->fine)
 #include <adc/coupling/amr_system_coupler.hpp>  // detail::same_layout_or_throw (garde de layout partage)
 #include <adc/coupling/aux_fill.hpp>        // detail::derive_aux_bc (CL du canal aux)
+#include <adc/coupling/coupled_source_program.hpp>  // CoupledSourceKernel + CsProgram (ABI plate, bytecode P5)
 #include <adc/numerics/elliptic/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
 #include <adc/numerics/elliptic/geometric_mg.hpp>
 #include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
@@ -81,6 +83,12 @@ struct AmrRuntimeBlock {
   /// canal aux PARTAGE par niveau est dimensionne au MAX de cette largeur sur tous les blocs, pour
   /// qu'un bloc lisant un champ extra (B_z, T_e ; n_aux > 3) ne lise jamais hors borne.
   int aux_ncomp = kAuxBaseComps;
+
+  /// Descripteur des variables CONSERVATIVES du modele (noms + ROLES physiques, Model::conservative_vars()).
+  /// Source unique de verite pour resoudre un role (Density, MomentumX, ...) -> indice de composante dans
+  /// add_coupled_source, comme System::add_coupled_source lit Species::cons_vars (fallback comp 0 si le bloc
+  /// ne renseigne pas le role). Vide pour un bloc qui ne le declare pas : la source retombe sur la comp 0.
+  VariableSet cons_vars;
 
   /// Pile de niveaux du bloc (niveau 0 = grossier, > 0 = patchs fins), SUR le layout partage. Le
   /// pointeur aux de chaque AmrLevelMP est (re)cable par AmrRuntime vers l'aux PARTAGE du niveau.
@@ -182,6 +190,7 @@ class AmrRuntime {
 
   int nlev() const { return nlev_; }
   std::size_t n_blocks() const { return blocks_.size(); }
+  std::size_t n_coupled_sources() const { return coupled_sources_.size(); }
   MultiFab& phi() { return mg_.phi(); }
   // Second membre du Poisson de systeme apres le dernier solve_fields : f = Sum_b elliptic_rhs_b(U_b)
   // sur le grossier partage. Expose pour verifier la SOMME CO-LOCALISEE (test PR1) ; meme grille que
@@ -192,6 +201,160 @@ class AmrRuntime {
   Real mass(std::size_t b) const { return blocks_[b].mass(); }
   std::vector<double> density(std::size_t b) const { return blocks_[b].density(); }
   int solve_count() const { return solve_count_; }
+
+  /// Enregistre une SOURCE COUPLEE inter-especes (DSL CoupledSource, bytecode P5) sur la facade
+  /// runtime, pendant raffine de System::add_coupled_source. L'ABI est PLATE (bytecode postfixe) : on
+  /// resout chaque (bloc, role) en (indice de bloc, composante) puis on stocke une fermeture qui, a
+  /// chaque macro-pas APRES le transport, applique la source par splitting forward-Euler additif via
+  /// coupled_source_step. Le couplage est ENTIEREMENT cuit en machine a pile (foncteur device-clean
+  /// CoupledSourceKernel) : AUCUN callback Python par cellule dans le chemin chaud.
+  ///
+  /// CONSERVATION (echange conservatif) : avec une construction add_pair (un terme +expr sur un bloc,
+  /// -expr exactement sur l'autre, MEME cellule), les deux contributions par cellule sont opposees au
+  /// signe pres, donc n_a + n_b est conserve PAR CELLULE (et globalement) a la precision machine,
+  /// independamment de dt et de l'etat. Le moteur ne l'impose pas (une ionisation creant une paire est
+  /// licite) : la conservation est une propriete du couplage construit, controlee cote test.
+  ///
+  /// @param in_blocks/in_roles  champs LUS (un registre par (bloc, role)), dans l'ordre des registres.
+  /// @param consts              constantes (parametres), chargees dans les registres apres les entrees.
+  /// @param out_blocks/out_roles cible (bloc, role) de chaque terme de source.
+  /// @param prog_ops/prog_args  bytecode postfixe CONCATENE de tous les termes (decoupe par prog_lens).
+  /// @param prog_lens           longueur du programme de chaque terme (taille == out_blocks).
+  /// @throws std::runtime_error sur une forme incoherente, un role inconnu, un bloc inconnu, un opcode
+  ///         ou un registre hors bornes, ou un programme trop long (memes gardes que System).
+  void add_coupled_source(const std::vector<std::string>& in_blocks,
+                          const std::vector<std::string>& in_roles,
+                          const std::vector<double>& consts,
+                          const std::vector<std::string>& out_blocks,
+                          const std::vector<std::string>& out_roles,
+                          const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
+                          const std::vector<int>& prog_lens) {
+    const int n_in = static_cast<int>(in_blocks.size());
+    const int n_const = static_cast<int>(consts.size());
+    const int n_terms = static_cast<int>(out_blocks.size());
+    // --- validation de forme (avant tout pas, erreurs EXPLICITES) ; mirroir de System::add_coupled_source.
+    if (n_terms == 0)
+      throw std::runtime_error("AmrRuntime::add_coupled_source : aucun terme de source (out_blocks vide)");
+    if (static_cast<int>(in_roles.size()) != n_in)
+      throw std::runtime_error("AmrRuntime::add_coupled_source : in_blocks / in_roles de tailles differentes");
+    if (static_cast<int>(out_roles.size()) != n_terms || static_cast<int>(prog_lens.size()) != n_terms)
+      throw std::runtime_error("AmrRuntime::add_coupled_source : out_blocks / out_roles / prog_lens de "
+                               "tailles differentes");
+    if (prog_ops.size() != prog_args.size())
+      throw std::runtime_error("AmrRuntime::add_coupled_source : prog_ops / prog_args de tailles differentes");
+    if (n_in + n_const > kCsMaxReg)
+      throw std::runtime_error("AmrRuntime::add_coupled_source : trop de registres (entrees + constantes > " +
+                               std::to_string(kCsMaxReg) + ")");
+    if (n_terms > kCsMaxTerms)
+      throw std::runtime_error("AmrRuntime::add_coupled_source : trop de termes de source (> " +
+                               std::to_string(kCsMaxTerms) + ")");
+    // Resout (bloc, role) -> (indice de bloc, composante) par le descripteur CONSERVATIF du bloc, comme
+    // System (fallback comp 0 si le role n'est pas declare). Un bloc inconnu leve immediatement.
+    auto resolve = [&](const std::string& block, const std::string& role) -> std::pair<int, int> {
+      const int b = block_index(block);
+      if (b < 0)
+        throw std::runtime_error("AmrRuntime::add_coupled_source : aucun bloc nomme '" + block + "'");
+      const VariableRole r = role_from_name(role);
+      if (r == VariableRole::Custom)
+        throw std::runtime_error("AmrRuntime::add_coupled_source : role '" + role + "' inconnu (bloc '" +
+                                 block + "')");
+      // role -> composante par le descripteur CONSERVATIF du bloc ; fallback comp 0 si le bloc ne
+      // renseigne pas ce role (meme regle que System::role_index, qui n'est qu'un wrapper de index_of).
+      const int ix = blocks_[static_cast<std::size_t>(b)].cons_vars.index_of(r);
+      const int comp = ix >= 0 ? ix : 0;
+      return {b, comp};
+    };
+    // Entrees : (bloc, composante) lues par cellule. Capturees par INDICE -> on reconstruit les Array4 a
+    // CHAQUE application (les fabs vivent dans la pile de niveaux, repointees par niveau dans le splitting).
+    std::vector<CsRef> ins(static_cast<std::size_t>(n_in));
+    for (int c = 0; c < n_in; ++c) {
+      auto [b, comp] = resolve(in_blocks[static_cast<std::size_t>(c)], in_roles[static_cast<std::size_t>(c)]);
+      ins[static_cast<std::size_t>(c)] = {b, comp, CsProgram{}};
+    }
+    std::vector<CsRef> outs(static_cast<std::size_t>(n_terms));
+    int off = 0;
+    for (int t = 0; t < n_terms; ++t) {
+      auto [b, comp] = resolve(out_blocks[static_cast<std::size_t>(t)], out_roles[static_cast<std::size_t>(t)]);
+      const int len = prog_lens[static_cast<std::size_t>(t)];
+      if (len < 0 || len > kCsMaxProg)
+        throw std::runtime_error("AmrRuntime::add_coupled_source : programme du terme " +
+                                 std::to_string(t) + " trop long (> " + std::to_string(kCsMaxProg) + ")");
+      if (off + len > static_cast<int>(prog_ops.size()))
+        throw std::runtime_error("AmrRuntime::add_coupled_source : prog_lens incoherent avec prog_ops");
+      CsProgram pg;
+      pg.len = len;
+      for (int k = 0; k < len; ++k) {
+        const int opc = prog_ops[static_cast<std::size_t>(off + k)];
+        const int a = prog_args[static_cast<std::size_t>(off + k)];
+        if (opc < 0 || opc > static_cast<int>(CsOp::Sqrt))
+          throw std::runtime_error("AmrRuntime::add_coupled_source : opcode invalide");
+        if (opc == static_cast<int>(CsOp::PushReg) && (a < 0 || a >= n_in + n_const))
+          throw std::runtime_error("AmrRuntime::add_coupled_source : registre hors bornes dans le programme");
+        pg.op[k] = opc;
+        pg.arg[k] = a;
+      }
+      outs[static_cast<std::size_t>(t)] = {b, comp, pg};
+      off += len;
+    }
+    std::vector<Real> kconsts(consts.begin(), consts.end());
+    coupled_sources_.push_back(CoupledSourceSpec{std::move(ins), std::move(outs), std::move(kconsts),
+                                                 n_in, n_const, n_terms});
+  }
+
+  /// Applique TOUTES les sources couplees enregistrees d'un pas dt, par splitting forward-Euler.
+  /// Pendant runtime de AmrSystemCoupler::coupled_source_step : on rafraichit les champs (aux par
+  /// niveau) puis, source par source, on applique le bytecode INDEPENDAMMENT A CHAQUE NIVEAU de la
+  /// hierarchie partagee (les blocs vivent sur TOUS les niveaux), suivi d'une cascade fin -> grossier.
+  ///
+  /// INVARIANT DE COUVERTURE (#169) : la source a ete appliquee independamment sur CHAQUE niveau, donc
+  /// une cellule grossiere COUVERTE par un patch fin porterait sinon sa propre source grossiere, sans
+  /// rapport avec la source vue par ses enfants fins. Une cellule grossiere couverte DOIT etre la
+  /// moyenne 2x2 de ses enfants (elle ne represente pas de matiere a elle seule). On restaure cette
+  /// coherence par la MEME cascade fin -> grossier (mf_average_down_mb) que solve_fields et le moteur
+  /// compile-time : sans elle, le diagnostic de masse (somme du seul grossier) compterait une source
+  /// grossiere fantome sous le patch. Hierarchie mono-niveau : aucune cellule couverte, les boucles de
+  /// cascade ne s'executent pas -> bit-identique au cas sans patch.
+  ///
+  /// CONSERVATION PAR CELLULE : a un niveau donne, chaque terme ecrit out(i,j,comp) += dt * S(reg(i,j))
+  /// sur la MEME cellule (i,j) lue par les entrees ; un echange add_pair pose +S sur un bloc et -S sur
+  /// l'autre AU MEME (i,j), donc la somme des deux blocs est inchangee cellule par cellule. Sans source
+  /// enregistree (coupled_sources_ vide) : no-op total -> trajectoire bit-identique a l'historique.
+  void coupled_source_step(Real dt) {
+    if (coupled_sources_.empty()) return;  // opt-in : aucune source -> chemin bit-identique
+    solve_fields();  // aux par niveau a jour (un terme peut lire phi/grad via une entree future)
+    for (const auto& cs : coupled_sources_) {
+      // Application PAR NIVEAU : a chaque niveau k, les blocs partagent EXACTEMENT le meme layout
+      // (garde same_layout_or_throw), donc meme local_size() et meme indexation locale -> on itere en
+      // parallele sur les fabs locaux. local_size()==0 sur un rang sans boite -> boucle vide (MPI-safe).
+      for (int k = 0; k < nlev_; ++k) {
+        const int sref = cs.n_in > 0 ? cs.ins[0].block : cs.outs[0].block;
+        MultiFab& Uref = (*blocks_[static_cast<std::size_t>(sref)].levels)[k].U;
+        for (int li = 0; li < Uref.local_size(); ++li) {
+          CoupledSourceKernel kern;
+          kern.dt = dt;
+          kern.n_in = cs.n_in;
+          kern.n_const = cs.n_const;
+          kern.n_terms = cs.n_terms;
+          for (int c = 0; c < cs.n_in; ++c) {
+            kern.in[c] = (*blocks_[static_cast<std::size_t>(cs.ins[static_cast<std::size_t>(c)].block)]
+                               .levels)[k].U.fab(li).array();
+            kern.in_comp[c] = cs.ins[static_cast<std::size_t>(c)].comp;
+          }
+          for (int c = 0; c < cs.n_const; ++c) kern.consts[c] = cs.kconsts[static_cast<std::size_t>(c)];
+          for (int t = 0; t < cs.n_terms; ++t) {
+            kern.out[t] = (*blocks_[static_cast<std::size_t>(cs.outs[static_cast<std::size_t>(t)].block)]
+                                .levels)[k].U.fab(li).array();
+            kern.out_comp[t] = cs.outs[static_cast<std::size_t>(t)].comp;
+            kern.prog[t] = cs.outs[static_cast<std::size_t>(t)].prog;
+          }
+          for_each_cell(Uref.box(li), kern);  // foncteur NOMME (device-clean), additif forward-Euler
+        }
+      }
+      // Restaure la coherence des cellules grossieres couvertes (cf. INVARIANT DE COUVERTURE ci-dessus).
+      for (auto& b : blocks_)
+        for (int k = nlev_ - 1; k >= 1; --k) mf_average_down_mb((*b.levels)[k].U, (*b.levels)[k - 1].U);
+    }
+  }
 
   /// sync_down (par bloc) + Poisson grossier de systeme (RHS SOMME co-localise) + aux grossier +
   /// injection fine. Reproduit AmrSystemCoupler::solve_fields a l'identique, mais le RHS de systeme
@@ -253,6 +416,10 @@ class AmrRuntime {
       for (int s = 0; s < b.substeps; ++s)
         b.advance(*b.levels, dom_, h, base_per_, replicated_coarse_);
     }
+    // Sources couplees inter-especes APRES le transport (meme ordre que AmrSystemCoupler : transport
+    // puis coupled_source_step), par splitting forward-Euler. No-op si aucune source enregistree ->
+    // trajectoire bit-identique a l'historique (la feature est opt-in).
+    coupled_source_step(dt);
     ++macro_step_;
   }
 
@@ -302,6 +469,34 @@ class AmrRuntime {
   }
 
  private:
+  // Index du bloc nomme @p name dans le registre (-1 si absent). Pendant de AmrSystem::Impl::block_index
+  // (la facade nomme les blocs ; les sources couplees les ciblent par nom, resolu une fois a l'enregistrement).
+  int block_index(const std::string& name) const {
+    for (std::size_t i = 0; i < blocks_.size(); ++i)
+      if (blocks_[i].name == name) return static_cast<int>(i);
+    return -1;
+  }
+
+  // Reference resolue d'un champ d'une source couplee : (indice de bloc, composante) + le programme
+  // bytecode du terme (vide pour une entree). Les entrees ne portent que block/comp ; les sorties
+  // portent en plus le programme postfixe evalue par cellule. On capture l'INDICE de bloc (pas un
+  // pointeur de fab) : les Array4 sont reconstruits a chaque application, par niveau.
+  struct CsRef {
+    int block;
+    int comp;
+    CsProgram prog;  // sorties : programme du terme ; entrees : inutilise (CsProgram{})
+  };
+  // Une source couplee enregistree : ses entrees, ses termes de sortie et ses constantes, pretes a etre
+  // marshalees dans un CoupledSourceKernel par niveau / par fab a l'application.
+  struct CoupledSourceSpec {
+    std::vector<CsRef> ins;
+    std::vector<CsRef> outs;
+    std::vector<Real> kconsts;
+    int n_in = 0;
+    int n_const = 0;
+    int n_terms = 0;
+  };
+
   Geometry geom_;
   Box2D dom_;
   Periodicity base_per_;
@@ -310,6 +505,7 @@ class AmrRuntime {
   GeometricMG mg_;
   std::vector<AmrRuntimeBlock> blocks_;
   std::vector<MultiFab> aux_;  // [niveau], partage par tous les blocs
+  std::vector<CoupledSourceSpec> coupled_sources_;  // sources couplees enregistrees (appliquees apres transport)
   int aux_ncomp_ = kAuxBaseComps;
   int nlev_ = 0;
   int macro_step_ = 0;

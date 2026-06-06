@@ -220,6 +220,7 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
   b.substeps = substeps;
   b.stride = stride;
   b.aux_ncomp = aux_comps<Model>();  // largeur aux LUE par le modele (B_z/T_e -> > kAuxBaseComps)
+  b.cons_vars = Model::conservative_vars();  // noms + ROLES : resolution role -> comp des sources couplees
   b.levels = levels;
 
   const bool rprim = recon_prim;
