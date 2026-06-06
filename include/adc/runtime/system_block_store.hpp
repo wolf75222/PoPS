@@ -1,0 +1,165 @@
+#pragma once
+
+#include <adc/core/types.hpp>       // Real
+#include <adc/core/variables.hpp>   // VariableSet (descripteur a roles porte par chaque bloc)
+#include <adc/mesh/box2d.hpp>       // Box2D
+#include <adc/mesh/for_each.hpp>    // device_fence (le marshaling synchronise le device avant de lire l'hote)
+#include <adc/mesh/multifab.hpp>    // MultiFab, Array4, ConstArray4
+
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+/// @file
+/// @brief SystemBlockStore : la responsabilite GESTION DE BLOCS extraite du god-class System::Impl
+///        (audit Lot B.3, derniere extraction P0 ; suite de SystemFieldSolver #176 et SystemStepper).
+///        Extrait VERBATIM de python/system.cpp : aucune modification de numerique, de layout, d'ordre
+///        d'iteration, d'indice, ni de message d'erreur. STRICTEMENT bit-identique -- le code est
+///        deplace tel quel.
+///
+/// CONTRAT / INVARIANTS
+/// - POSSEDE : la struct BlockState (ex-Species : etat U + descripteurs + fermetures du bloc) et le
+///   registre ordonne des blocs (vector<BlockState>), UNIQUE source de verite peuplee par tous les
+///   chemins d'ajout (add_block / install_block ; add_dynamic_block / add_compiled_block / add_native_block
+///   via native_loader).
+/// - EXPOSE : index(name) (indice 0-base ou erreur), find(name) (const + non const, reference au bloc ou
+///   erreur), et les helpers de MARSHALING d'etat copy_comp0 / copy_state / write_state (recopie hote <->
+///   MultiFab, device_fence inclus). L'ORDRE d'insertion fixe l'indexation et donc l'iteration : il est
+///   PRESERVE (push_back en queue, jamais de tri ni de remaniement).
+/// - MESSAGES D'ERREUR INCHANGES : "System : bloc inconnu '...'" (index/find) et
+///   "System::set_state : taille != ncomp*n*n" (write_state) sont repris VERBATIM (la non-regression des
+///   tests de facade en depend).
+/// - NE POSSEDE PAS : le domaine (ba/dm/dom/geom/pgeom_), l'aux et sa largeur, le Poisson/elliptique, les
+///   couplages, t/macro_step_. Ces concerns restent dans System::Impl (ou dans SystemFieldSolver /
+///   SystemStepper) ; le store n'en sait rien.
+///
+/// Le registre `blocks` est PUBLIC : System::Impl l'expose tel quel via un membre reference `sp` (alias),
+/// de sorte que les gabarits en-tete deja extraits (SystemFieldSolver, SystemStepper, native_loader) qui
+/// iterent `owner_->sp` / `P->sp` et nomment `Impl::Species` restent INCHANGES et bit-identiques. La
+/// struct est nommee BlockState (sens plus clair que l'historique "Species") ; Impl en garde l'alias
+/// `using Species = SystemBlockStore::BlockState;` pour la compatibilite des gabarits.
+
+namespace adc {
+
+// Forward-declaration : BlockState porte un shared_ptr<CondensedSchurSourceStepper> (etage source
+// condense OPT-IN). Le pointeur seul suffit ici ; la definition vit dans le header de couplage, inclus
+// la ou l'etage est reellement construit (python/system.cpp::set_source_stage).
+class CondensedSchurSourceStepper;
+
+class SystemBlockStore {
+ public:
+  // Type-erase de la conversion PONCTUELLE (une cellule) cons <-> prim d'un bloc : in/out sont des
+  // tableaux de ncomp doubles. MEME type que System::CellConvert (std::function identique) : l'assignation
+  // depuis set_block_conversion / native_loader reste un move trivial.
+  using CellConvert = std::function<void(const double* in, double* out)>;
+
+  // Fermetures compilees figees a l'ajout du bloc (modele compose + schema spatial + temps).
+  // Type-erased SEULEMENT au niveau de la liste de blocs ; le noyau reste compile.
+  // ORDRE DES MEMBRES FIGE : install_block (python/system.cpp) et native_loader (push_dynamic /
+  // add_compiled_model) initialisent ce struct par AGREGAT positionnel
+  // {name, U, ncomp, substeps, evolve, stride, gamma, advance, rhs_into, max_speed, add_poisson_rhs} ;
+  // ne pas reordonner ces membres ni en inserer avant add_poisson_rhs.
+  struct BlockState {
+    std::string name;
+    MultiFab U;
+    int ncomp;
+    int substeps;                                             // sous-pas statiques (add_block)
+    bool evolve;                                              // false = espece gelee (fond fixe non avance)
+    int stride = 1;                                           // cadence : avance 1 fois tous les stride macro-pas
+    double gamma;                                             // pour l'energie au repos (4 var)
+    std::function<void(MultiFab&, Real, int)> advance;        // (U, dt, n) : n sous-pas de dt/n
+    std::function<void(MultiFab&, MultiFab&)> rhs_into;        // R <- -div F + S (Poisson fige)
+    std::function<Real(const MultiFab&)> max_speed;           // max |vitesse d'onde| du bloc
+    std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;  // += elliptic_rhs(U)
+    // Descripteur des variables conservatives / primitives (noms + ROLES physiques) du bloc.
+    // Les roles (fournis par M::conservative_vars()) permettent aux couplages inter-especes de
+    // viser une composante par son SENS (qte de mvt, energie) au lieu d'un indice u[1]/u[3] en dur.
+    VariableSet cons_vars, prim_vars;
+    // Conversions PONCTUELLES cons <-> prim DU MODELE du bloc (une cellule, ncomp doubles in/out).
+    // Posees a l'ajout (install_block / push_dynamic) depuis le modele reel ; vides -> identite (le
+    // modele n'expose pas de conversion, p.ex. scalaire pur ou .so genere avant ce chantier).
+    // Consommees par set_primitive_state / get_primitive_state (init/diagnostic en primitif).
+    CellConvert prim_to_cons, cons_to_prim;
+    // ETAGE SOURCE condense par Schur (OPT-IN, adc.Split(source=CondensedSchur), cf. set_source_stage).
+    // nullptr (defaut) = pas d'etage source condense : le bloc avance EXACTEMENT comme avant
+    // (bit-identique). Non nul = apres le transport hyperbolique, le pas joue l'etage source autonome
+    // (CondensedSchurSourceStepper, #126) en lieu et place de la source explicite / IMEX. shared_ptr :
+    // garde BlockState MOVABLE (le stepper porte un GeometricMG, ni copiable ni movable simplement).
+    std::shared_ptr<CondensedSchurSourceStepper> schur;
+    double schur_theta = 0.5;  // theta-schema de l'etage source (0.5 = Crank-Nicolson)
+  };
+
+  // Registre ORDONNE des blocs (UNIQUE source de verite). PUBLIC : Impl l'aliase en `sp` pour les
+  // gabarits deja extraits (SystemFieldSolver / SystemStepper / native_loader) qui iterent owner_->sp.
+  std::vector<BlockState> blocks;
+
+  // --- acces par NOM (indexation 0-base, ordre d'insertion) ------------------------------------------
+  BlockState& find(const std::string& name) {
+    for (auto& s : blocks)
+      if (s.name == name) return s;
+    throw std::runtime_error("System : bloc inconnu '" + name + "'");
+  }
+  const BlockState& find(const std::string& name) const {
+    for (auto& s : blocks)
+      if (s.name == name) return s;
+    throw std::runtime_error("System : bloc inconnu '" + name + "'");
+  }
+  int index(const std::string& name) const {
+    for (std::size_t k = 0; k < blocks.size(); ++k)
+      if (blocks[k].name == name) return static_cast<int>(k);
+    throw std::runtime_error("System : bloc inconnu '" + name + "'");
+  }
+
+  int size() const { return static_cast<int>(blocks.size()); }
+  std::vector<std::string> names() const {
+    // Lit le registre de blocs UNIQUE, peuple par tous les chemins d'ajout : un bloc charge via
+    // add_dynamic_block / add_compiled_block (.so) y figure au meme titre qu'un add_block.
+    std::vector<std::string> out;
+    out.reserve(blocks.size());
+    for (const auto& s : blocks) out.push_back(s.name);
+    return out;
+  }
+
+  // --- marshaling d'etat (recopie hote <-> MultiFab ; device_fence inclus) ---------------------------
+  // Recopie la composante 0 du fab(0) (densite) en row-major (j lent, i rapide). device_fence prealable :
+  // le marshaling lit l'hote, il faut que le device ait fini d'ecrire U.
+  std::vector<double> copy_comp0(const MultiFab& mf) const {
+    device_fence();
+    const ConstArray4 u = mf.fab(0).const_array();
+    const Box2D v = mf.box(0);
+    std::vector<double> out;
+    out.reserve(static_cast<std::size_t>(v.nx()) * v.ny());
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, 0));
+    return out;
+  }
+  // Recopie les ncomp composantes du fab(0) en layout composante-majeur (c lent, puis j, puis i).
+  std::vector<double> copy_state(const MultiFab& mf, int ncomp) const {
+    device_fence();
+    const ConstArray4 u = mf.fab(0).const_array();
+    const Box2D v = mf.box(0);
+    std::vector<double> out;
+    out.reserve(static_cast<std::size_t>(ncomp) * v.nx() * v.ny());
+    for (int c = 0; c < ncomp; ++c)
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, c));
+    return out;
+  }
+  // Ecrit les ncomp composantes dans le fab(0) depuis un tampon composante-majeur (meme layout que
+  // copy_state). Erreur EXPLICITE (message inchange) si la taille ne correspond pas a ncomp*nx*ny.
+  void write_state(MultiFab& mf, int ncomp, const std::vector<double>& in) {
+    const Box2D v = mf.box(0);
+    const std::size_t need = static_cast<std::size_t>(ncomp) * v.nx() * v.ny();
+    if (in.size() != need)
+      throw std::runtime_error("System::set_state : taille != ncomp*n*n");
+    Array4 u = mf.fab(0).array();
+    std::size_t k = 0;
+    for (int c = 0; c < ncomp; ++c)
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) u(i, j, c) = in[k++];
+  }
+};
+
+}  // namespace adc

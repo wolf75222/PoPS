@@ -11,6 +11,7 @@
 #include <adc/numerics/elliptic/polar_poisson_solver.hpp>  // PolarPoissonSolver (Poisson polaire direct, REUTILISE)
 #include <adc/runtime/system_field_solver.hpp>  // SystemFieldSolver : resolution elliptique + derivation de champ (Lot B)
 #include <adc/runtime/system_stepper.hpp>  // SystemStepper : avance en temps (step/advance/step_cfl/step_adaptive) (Lot B)
+#include <adc/runtime/system_block_store.hpp>  // SystemBlockStore : gestion de blocs (BlockState + registre + index/copy/write) (Lot B.3)
 #include <adc/runtime/block_builder_polar.hpp>  // fermetures de bloc POLAIRE (assemble_rhs_polar, REUTILISE)
 #include <adc/numerics/time/implicit_stepper.hpp>   // backward_euler_source
 #include <adc/numerics/time/time_steppers.hpp>      // ForwardEuler, SSPRK2Step (math RK du coeur)
@@ -107,37 +108,17 @@ int role_index(const VariableSet& vs, VariableRole role, int fallback) {
 }  // namespace
 
 struct System::Impl {
-  // Fermetures compilees figees a l'ajout du bloc (modele compose + schema spatial + temps).
-  // Type-erased SEULEMENT au niveau de la liste de blocs ; le noyau reste compile.
-  struct Species {
-    std::string name;
-    MultiFab U;
-    int ncomp;
-    int substeps;                                             // sous-pas statiques (add_block)
-    bool evolve;                                              // false = espece gelee (fond fixe non avance)
-    int stride = 1;                                           // cadence : avance 1 fois tous les stride macro-pas
-    double gamma;                                             // pour l'energie au repos (4 var)
-    std::function<void(MultiFab&, Real, int)> advance;        // (U, dt, n) : n sous-pas de dt/n
-    std::function<void(MultiFab&, MultiFab&)> rhs_into;        // R <- -div F + S (Poisson fige)
-    std::function<Real(const MultiFab&)> max_speed;           // max |vitesse d'onde| du bloc
-    std::function<void(const MultiFab&, MultiFab&)> add_poisson_rhs;  // += elliptic_rhs(U)
-    // Descripteur des variables conservatives / primitives (noms + ROLES physiques) du bloc.
-    // Les roles (fournis par M::conservative_vars()) permettent aux couplages inter-especes de
-    // viser une composante par son SENS (qte de mvt, energie) au lieu d'un indice u[1]/u[3] en dur.
-    VariableSet cons_vars, prim_vars;
-    // Conversions PONCTUELLES cons <-> prim DU MODELE du bloc (une cellule, ncomp doubles in/out).
-    // Posees a l'ajout (install_block / push_dynamic) depuis le modele reel ; vides -> identite (le
-    // modele n'expose pas de conversion, p.ex. scalaire pur ou .so genere avant ce chantier).
-    // Consommees par set_primitive_state / get_primitive_state (init/diagnostic en primitif).
-    System::CellConvert prim_to_cons, cons_to_prim;
-    // ETAGE SOURCE condense par Schur (OPT-IN, adc.Split(source=CondensedSchur), cf. set_source_stage).
-    // nullptr (defaut) = pas d'etage source condense : le bloc avance EXACTEMENT comme avant
-    // (bit-identique). Non nul = apres le transport hyperbolique, le pas joue l'etage source autonome
-    // (CondensedSchurSourceStepper, #126) en lieu et place de la source explicite / IMEX. shared_ptr :
-    // garde Species MOVABLE (le stepper porte un GeometricMG, ni copiable ni movable simplement).
-    std::shared_ptr<CondensedSchurSourceStepper> schur;
-    double schur_theta = 0.5;  // theta-schema de l'etage source (0.5 = Crank-Nicolson)
-  };
+  // GESTION DE BLOCS extraite vers SystemBlockStore (Lot B.3, derniere extraction P0 du god-class) :
+  // la struct des blocs (ex-Species, renommee BlockState), le registre ordonne (blocks_.blocks), les
+  // acces par nom (index / find) et le marshaling d'etat (copy_comp0 / copy_state / write_state) y
+  // vivent desormais. Voir include/adc/runtime/system_block_store.hpp.
+  //
+  // ALIAS DE COMPATIBILITE. Les gabarits en-tete deja extraits (SystemFieldSolver, SystemStepper,
+  // native_loader) iterent `owner_->sp` / `P->sp` et nomment `Impl::Species` ; on conserve ces deux
+  // points d'acces a l'identique (zero churn hors de ce fichier) :
+  //  - `Species` = le type des blocs porte par le store (init par agregat positionnel inchange) ;
+  //  - `sp` = une REFERENCE sur le registre du store (meme objet, meme iteration, meme indexation).
+  using Species = SystemBlockStore::BlockState;
 
   SystemConfig cfg;
   Geometry geom;
@@ -159,7 +140,10 @@ struct System::Impl {
   int aux_ncomp_ = kAuxBaseComps;     // largeur du canal aux PARTAGE (max des blocs ; >= 3)
   // Champs d'APPLICATION aux (bz_field_, te_src_) et tampons apply_bz/apply_te EXTRAITS vers
   // fields_ (SystemFieldSolver, Lot B) ; l'aux PARTAGE et sa largeur restent ici (canal commun).
-  std::vector<Species> sp;
+  // Registre de blocs POSSEDE par le store (Lot B.3). `sp` est une REFERENCE sur blocks_.blocks : meme
+  // objet (aucune copie), donc owner_->sp / P->sp dans les gabarits en-tete restent bit-identiques.
+  SystemBlockStore blocks_;
+  std::vector<Species>& sp = blocks_.blocks;
   double t = 0;
   int macro_step_ = 0;  // compteur de macro-pas (0-indexe) : sert au filtre stride par bloc
   std::vector<std::function<void(Real)>> couplings;  // sources couplees inter-especes (splitting)
@@ -263,21 +247,11 @@ struct System::Impl {
     return b;
   }
 
-  Species& find(const std::string& name) {
-    for (auto& s : sp)
-      if (s.name == name) return s;
-    throw std::runtime_error("System : bloc inconnu '" + name + "'");
-  }
-  const Species& find(const std::string& name) const {
-    for (auto& s : sp)
-      if (s.name == name) return s;
-    throw std::runtime_error("System : bloc inconnu '" + name + "'");
-  }
-  int index(const std::string& name) const {
-    for (std::size_t k = 0; k < sp.size(); ++k)
-      if (sp[k].name == name) return static_cast<int>(k);
-    throw std::runtime_error("System : bloc inconnu '" + name + "'");
-  }
+  // Acces par nom DELEGUES au store (Lot B.3) : meme recherche lineaire, meme indexation par ordre
+  // d'insertion, meme message d'erreur ("System : bloc inconnu '...'").
+  Species& find(const std::string& name) { return blocks_.find(name); }
+  const Species& find(const std::string& name) const { return blocks_.find(name); }
+  int index(const std::string& name) const { return blocks_.index(name); }
 
   // apply_couplings (sources de couplage inter-especes par splitting, APRES le transport) et
   // run_source_stage (etage source condense par Schur, OPT-IN) EXTRAITS vers stepper_ (SystemStepper,
@@ -307,37 +281,16 @@ struct System::Impl {
   // l'ordre des fill_ghosts/fill_boundary vivent maintenant dans le header (bit-identique).
   void solve_fields() { fields_.solve_fields(); }
 
-  std::vector<double> copy_comp0(const MultiFab& mf) const {
-    device_fence();
-    const ConstArray4 u = mf.fab(0).const_array();
-    const Box2D v = mf.box(0);
-    std::vector<double> out;
-    out.reserve(static_cast<std::size_t>(v.nx()) * v.ny());
-    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-      for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, 0));
-    return out;
-  }
+  // Marshaling d'etat DELEGUE au store (Lot B.3) : copy_comp0 / copy_state / write_state portent le
+  // device_fence, le layout (composante-majeur) et l'erreur de taille a l'identique. Conserves comme
+  // helpers de Impl car native_loader et les methodes de facade les appellent via P->copy_state /
+  // P->write_state / P->copy_comp0 (point d'acces inchange, zero churn hors de ce fichier).
+  std::vector<double> copy_comp0(const MultiFab& mf) const { return blocks_.copy_comp0(mf); }
   std::vector<double> copy_state(const MultiFab& mf, int ncomp) const {
-    device_fence();
-    const ConstArray4 u = mf.fab(0).const_array();
-    const Box2D v = mf.box(0);
-    std::vector<double> out;
-    out.reserve(static_cast<std::size_t>(ncomp) * v.nx() * v.ny());
-    for (int c = 0; c < ncomp; ++c)
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(u(i, j, c));
-    return out;
+    return blocks_.copy_state(mf, ncomp);
   }
   void write_state(MultiFab& mf, int ncomp, const std::vector<double>& in) {
-    const Box2D v = mf.box(0);
-    const std::size_t need = static_cast<std::size_t>(ncomp) * v.nx() * v.ny();
-    if (in.size() != need)
-      throw std::runtime_error("System::set_state : taille != ncomp*n*n");
-    Array4 u = mf.fab(0).array();
-    std::size_t k = 0;
-    for (int c = 0; c < ncomp; ++c)
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) u(i, j, c) = in[k++];
+    blocks_.write_state(mf, ncomp, in);
   }
 
   // push_dynamic<NV> (bloc DYNAMIQUE IModel<NV> charge depuis un .so) a ete EXTRAIT VERBATIM vers
@@ -1007,14 +960,11 @@ int System::nx() const { return p_->cfg.n; }
 // valeurs, et avec nr != ntheta le remodelage carre (nx, nx) deborde le tampon (bug de teardown).
 int System::ny() const { return p_->dom.ny(); }
 double System::time() const { return p_->t; }
-int System::n_species() const { return static_cast<int>(p_->sp.size()); }
+int System::n_species() const { return p_->blocks_.size(); }
 std::vector<std::string> System::block_names() const {
-  // Lit le registre de blocs UNIQUE (p_->sp), peuple par tous les chemins d'ajout : un bloc charge
-  // via add_dynamic_block / add_compiled_block (.so) y figure au meme titre qu'un add_block.
-  std::vector<std::string> out;
-  out.reserve(p_->sp.size());
-  for (const auto& s : p_->sp) out.push_back(s.name);
-  return out;
+  // Registre de blocs UNIQUE (store), peuple par tous les chemins d'ajout : un bloc charge via
+  // add_dynamic_block / add_compiled_block (.so) y figure au meme titre qu'un add_block.
+  return p_->blocks_.names();
 }
 double System::mass(const std::string& name) const {
   const Impl::Species& s = p_->find(name);
