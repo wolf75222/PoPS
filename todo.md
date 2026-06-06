@@ -139,7 +139,9 @@ RESTE (audit) :
 - [~] **Lot A.5 autres dossiers** : convention de commentaires. FAIT : core/ #173, physics/ #189, numerics/
   #193, mesh/+coupling/ #196. RESTE : runtime/ (sauf amr_*.hpp deja commentes par #185/#195) et amr/
   (primitives geometriques). (basse priorite, dossier par dossier sans churn)
-- [ ] **Lot A.3** : note SourceImplicit (local) vs CondensedSchur (global) dans les exemples. (mineur doc)
+- [x] **Lot A.3 -- FAIT #194** : note SourceImplicit (local, par cellule) vs CondensedSchur (global, Schur)
+  dans les docstrings python/adc/__init__.py + docs/SCHUR_CONDENSATION_DESIGN.md (pas de dossier examples/
+  dans adc_cpp ; les exemples runnables sont dans adc_cases). Doc-only, 28 insertions.
 - [ ] **Lot E.4** : tests backend a noms precis (partiellement couvert par BACKEND_COVERAGE + validation).
 - [x] **Fix role-fallback cote AMR -- FAIT #191** : `AmrRuntime::add_coupled_source` (include/adc/runtime/
   amr_runtime.hpp, lambda resolve) durci strict (miroir #181) : bloc inconnu/role non-canonique/role canonique
