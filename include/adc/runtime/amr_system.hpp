@@ -27,11 +27,26 @@
 /// potentiellement DIFFERENTS et a TRAITEMENT TEMPOREL par bloc (explicite ou IMEX, source raide
 /// implicite locale ; capstone vii) sur une hierarchie FIGEE (multi-blocs + regrid_every > 0 est
 /// REFUSE : le regrid d'union des tags est une PR ulterieure). Multirate (substeps/stride), sources
-/// couplees inter-especes : deja cables. DSL production multi-bloc compile et regrid d'union : PR ulterieures.
+/// couplees inter-especes : deja cables. Blocs COMPILES (add_compiled_model) multiples et MELANGE
+/// compile + natif : cables (capstone v, DSL production multi-bloc). Regrid d'union : PR ulterieure.
 ///
 /// @note Deux niveaux (ratio 2) ; traitement temporel explicite OU imex (par bloc).
 
 namespace adc {
+
+// Declarations anticipees du moteur multi-blocs runtime (definitions dans amr_runtime.hpp /
+// amr_dsl_block.hpp). set_compiled_block stocke un BUILDER DIFFERE de bloc runtime qui, recevant le
+// layout PARTAGE materialise au build paresseux, rend l'AmrRuntimeBlock type-erase du bloc compile :
+// c'est ce qui permet a PLUSIEURS blocs compiles (DSL production multi-bloc) de co-exister sur la
+// MEME hierarchie AMR, exactement comme add_block en multi-blocs natif. On forward-declare pour ne
+// PAS alourdir ce header public (lu par bindings.cpp et les loaders) avec amr_runtime.hpp : seules
+// les TU qui CONSTRUISENT/APPELLENT le builder (amr_dsl_block.hpp et python/amr_system.cpp) incluent
+// les definitions completes ; un std::function de signature a types incomplets est licite tant qu'on
+// ne l'instancie pas avec un callable concret hors de ces TU (recette PIMPL std::function).
+struct AmrRuntimeBlock;
+namespace detail {
+struct SharedAmrLayout;
+}
 
 /// Maillage et cadence AMR (parametres physiques par bloc, dans la ModelSpec).
 struct AmrSystemConfig {
@@ -86,6 +101,21 @@ struct AmrCompiledHooks {
   std::function<std::vector<double>()> potential;  ///< phi du niveau grossier, n*n row-major
 };
 
+/// Builder DIFFERE d'un bloc COMPILE sur la hierarchie multi-blocs : recoit le layout PARTAGE (cree
+/// UNE seule fois au build paresseux, commun a tous les blocs) plus les parametres du bloc figes a
+/// l'ajout (nom, densite initiale, gamma, substeps/stride, recon/imex, masque IMEX partiel resolu en
+/// indices de composantes), et rend l'AmrRuntimeBlock type-erase du bloc (capture le Model/Limiter/
+/// Flux CONCRETS via detail::dispatch_amr_block, le noyau reste COMPILE). Symetrique du chemin natif
+/// add_block : la (4e) difference est seulement que les types sont connus a l'ajout (modele compile)
+/// plutot que resolus d'une ModelSpec au build. La SIGNATURE mentionne des types FORWARD-DECLARES :
+/// elle n'est instanciee avec un callable concret que dans add_compiled_model(AmrSystem&) (en-tete
+/// amr_dsl_block.hpp) ou ces types sont complets, et invoquee que dans python/amr_system.cpp.
+using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
+    const detail::SharedAmrLayout& layout, const std::string& name,
+    const std::vector<double>& density, bool has_density, double gamma, int substeps, bool recon_prim,
+    bool imex, int stride, const std::vector<std::string>& implicit_vars,
+    const std::vector<std::string>& implicit_roles)>;
+
 /// Bloc unique porte sur une hierarchie AMR, compose a l'execution.
 class AmrSystem {
  public:
@@ -132,18 +162,32 @@ class AmrSystem {
                  const std::vector<std::string>& implicit_vars = {},
                  const std::vector<std::string>& implicit_roles = {});
 
-  /// Enregistre un bloc COMPILE (chemin add_compiled_model, header amr_dsl_block.hpp) : @p builder
-  /// est une fermeture type-erased qui, recevant les AmrBuildParams figes au build paresseux, rend
-  /// les AmrCompiledHooks d'un AmrCouplerMP<Model> concret. NE PAS appeler directement : passer par
-  /// la fonction libre add_compiled_model(AmrSystem&, ...). @throws si un bloc est deja defini.
+  /// Enregistre un bloc COMPILE (chemin add_compiled_model, header amr_dsl_block.hpp). DEUX builders
+  /// type-erases sont figes ici, pour les DEUX routages de la facade :
+  ///  - @p mono_builder : recevant les AmrBuildParams figes au build paresseux, rend les
+  ///    AmrCompiledHooks d'un AmrCouplerMP<Model> concret. Utilise EN MONO-BLOC (1 seul bloc compile)
+  ///    -> chemin AmrCouplerMP historique, INTOUCHE, bit-identique.
+  ///  - @p multi_builder : recevant le layout PARTAGE materialise au build paresseux (commun a tous
+  ///    les blocs), rend l'AmrRuntimeBlock type-erase du bloc. Utilise EN MULTI-BLOCS (>= 2 blocs,
+  ///    compiles et/ou natifs melanges) -> moteur runtime AmrRuntime, exactement comme add_block.
+  /// @p recon_prim / @p imex / @p stride / @p implicit_vars / @p implicit_roles : metadonnees du bloc
+  /// (schema temporel, multirate, masque IMEX partiel) figees a l'ajout, consommees par le routage
+  /// multi-blocs (le mono-bloc les porte deja dans les AmrBuildParams via mono_builder).
+  /// NE PAS appeler directement : passer par la fonction libre add_compiled_model(AmrSystem&, ...).
+  /// @throws std::runtime_error si le systeme est deja construit.
   /// VISIBILITE DEFAUT (ADC_EXPORT) : SEULE methode appelee par le gabarit en-tete
-  /// add_compiled_model(AmrSystem&) (cf. amr_dsl_block.hpp:182). Un loader .so genere (chemin DSL
+  /// add_compiled_model(AmrSystem&) (cf. amr_dsl_block.hpp). Un loader .so genere (chemin DSL
   /// "production" cote AMR, emit_cpp_native_loader(target="amr_system") / add_native_block) inline ce
   /// gabarit et doit resoudre ce symbole depuis le module _adc deja charge ; compile en
   /// -fvisibility=hidden (pybind11), le module ne l'exporterait pas sans cette annotation et le dlopen
   /// du loader echouerait. Symetrique des methodes ADC_EXPORT de System (grid_context/install_block).
-  ADC_EXPORT void set_compiled_block(int ncomp, double gamma, int substeps,
-                          std::function<AmrCompiledHooks(const AmrBuildParams&)> builder);
+  ADC_EXPORT void set_compiled_block(
+      int ncomp, double gamma, int substeps,
+      std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
+      AmrCompiledBlockBuilder multi_builder = {}, const std::string& name = std::string(),
+      bool recon_prim = false, bool imex = false, int stride = 1,
+      const std::vector<std::string>& implicit_vars = {},
+      const std::vector<std::string>& implicit_roles = {});
 
   /// Branche un bloc NATIF AMR depuis un loader .so genere par le DSL (backend "production", cible
   /// "amr_system" : dsl.compile_native(target="amr_system") / compile(backend="production",
@@ -157,15 +201,23 @@ class AmrSystem {
   /// (adc_native_abi_key) est comparee a celle du module (abi_key()) -- ecart => erreur claire (pas
   /// d'UB silencieux a la frontiere C++). Memes garde-fous de schema que System (validation amont).
   ///
-  /// LIMITES RESTANTES (AmrSystem mono-bloc) : time est cable a {explicit, imex} (imex = source
-  /// raide implicite via backward_euler_source ; tout autre traitement est rejete par
-  /// add_compiled_model). Multi-box natif (grille multi-bloc) n'est pas cable dans la facade. recon
-  /// "primitive" et flux "roe"/"hllc" sont CABLES a parite (#113 :
+  /// MULTI-BLOCS (capstone v) : add_native_block PEUT desormais etre appele plusieurs fois (ou melange
+  /// a add_block natif) -> les blocs compiles co-existent sur la hierarchie partagee via AmrRuntime
+  /// (le loader recompile contre cet en-tete fournit le builder runtime ; cf. set_compiled_block). Le
+  /// nom INDEXE alors le bloc (set_density/mass/density), comme add_block.
+  /// time est cable a {explicit, imex} (imex = source raide implicite via backward_euler_source ; tout
+  /// autre traitement est rejete par add_compiled_model). Le multirate (stride) et le masque IMEX
+  /// partiel ne transitent PAS par l'ABI plate du loader (ABI inchangee) : ce chemin .so les REJETTE
+  /// desormais au niveau de la facade Python (AmrSystem.add_equation leve ValueError sur stride>1 ou un
+  /// masque IMEX non vide, plutot que de les ignorer en silence). Pour ces parametres, utiliser
+  /// add_block natif (ModelSpec) ou add_compiled_model(AmrSystem&) en DIRECT (en-tete), qui exposent
+  /// stride et le masque. recon "primitive" et flux "roe"/"hllc" sont CABLES a parite (#113 :
   /// dispatch_amr_compiled les accepte ; la facade Python applique un garde pression pour hllc/roe).
   /// limiter "weno5" (WENO5-Z, 3 ghosts) est CABLE sur rusanov (#105 : les niveaux du coupleur sont
   /// alloues a Limiter::n_ghost et le regrid herite n_grow() : pas de lecture hors bornes).
   /// @throws std::runtime_error si l'ABI diverge, si un symbole manque, ou substeps < 1.
-  /// @param name etiquette cosmetique (AMR mono-bloc : ne sert pas d'index).
+  /// @param name nom du bloc : cosmetique en mono-bloc, INDEXE le bloc en multi-blocs (set_density/
+  ///             mass/density ; doit etre unique et non vide des le 2e bloc, comme add_block).
   void add_native_block(const std::string& name, const std::string& so_path,
                         const std::string& limiter = "minmod",
                         const std::string& riemann = "rusanov",

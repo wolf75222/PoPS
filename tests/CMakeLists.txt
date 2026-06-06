@@ -292,6 +292,19 @@ add_executable(test_amr_system_twoblock test_amr_system_twoblock.cpp
 target_link_libraries(test_amr_system_twoblock PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_amr_system_twoblock COMMAND test_amr_system_twoblock)
 
+# --- AMR MULTI-BLOCS COMPILES (capstone "v", DSL production multi-bloc) -----------------------------
+# PLUSIEURS blocs COMPILES (add_compiled_model, types connus a la compilation) co-localises sur UNE
+# hierarchie AMR PARTAGEE via le moteur runtime AmrRuntime (file de specs construite paresseusement a
+# ensure_built). Le 2e bloc compile NE LEVE PLUS (avant : "un seul bloc compile est supporte").
+# Verrouille : (A) deux blocs compiles a schemas differents evoluent + masse par bloc, (B) couplage
+# inter-blocs compiles conservatif, (C) melange compile + natif, (D) mono-bloc compile bit-identique
+# (route par AmrCouplerMP), (E) non-regression du refus. Types CONCRETS / foncteurs nommes (pas de
+# lambda generique) -> compilable sous nvcc. Compile python/amr_system.cpp (la facade) avec le test.
+add_executable(test_amr_multiblock_compiled test_amr_multiblock_compiled.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_multiblock_compiled PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_amr_multiblock_compiled COMMAND test_amr_multiblock_compiled)
+
 # --- AMR MULTI-BLOCS MULTIRATE (capstone iv) : substeps + stride PAR BLOC honores par AmrRuntime ---
 # substeps reellement exerces (A=4 differe de A=1, etat fini, masse conservee), stride hold-then-catch-up
 # (bloc lent tenu au mac0, rattrape au mac1, Poisson somme actif), step_cfl substeps/stride-aware

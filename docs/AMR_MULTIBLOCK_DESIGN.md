@@ -604,9 +604,19 @@ absence spatiale locale d'un bloc sur un patch.
       pas (point 4 ; throw clair, a `ensure_built` du registre runtime).
 - [ ] regrid conserve la masse de CHAQUE bloc (`mass(b)` avant == apres, par bloc). (regrid d'union
       = PR ulterieure ; le multi-blocs est FIGE pour l'instant)
-- [ ] `dsl.Model(...).compile(target="amr_system", backend="production")` pour DEUX blocs
-      (bloc NOMME installe, pas remplace), ABI key verifiee. (DSL production multi-bloc = PR ulterieure ;
-      le compile multi-bloc est explicitement rejete pour l'instant)
+- [x] DSL PRODUCTION MULTI-BLOC (capstone v, LIVRE) : add_compiled_model(AmrSystem&) installe un bloc
+      NOMME (pas un remplacement) -> PLUSIEURS blocs compiles (et MELANGE compile + natif) co-localises
+      sur la hierarchie partagee via AmrRuntime. add_compiled_model fige DEUX builders (mono AmrCouplerMP
+      + multi AmrRuntimeBlock) ; set_compiled_block EMPILE au lieu de lever ; build_multi invoque le
+      builder runtime du bloc compile sur le layout PARTAGE. Le 2e bloc compile NE LEVE PLUS.
+      Test `tests/test_amr_multiblock_compiled.cpp`. Loader .so recompile contre l'en-tete fournit le
+      builder runtime (ABI plate du loader inchangee ; un loader ANTERIEUR leve clairement a build_multi).
+      L'ABI plate du loader ne transporte NI le multirate (stride) NI le masque IMEX partiel
+      (implicit_vars / implicit_roles) : ce n'est PAS une perte acceptable en silence -> la facade
+      Python `AmrSystem.add_equation` les REJETTE explicitement (ValueError) sur le chemin production
+      (.so). Pour ces parametres : `AmrSystem.add_block` natif (ModelSpec) ou `add_compiled_model(
+      AmrSystem&)` en DIRECT (en-tete C++), qui exposent stride et le masque (le chemin DIRECT IMEX
+      multi-bloc est exerce par `tests/test_amr_multiblock_compiled.cpp`).
 - [ ] source couplee `+k n_e n_g` / `-k n_e n_g` : `n_i + n_g` constant a la precision machine,
       par niveau, sur tous les patchs. (PR ulterieure)
 - [ ] CONSERVATION COMPOSITE AMR de la source couplee (point 5) : sur une source NON nulle dont la

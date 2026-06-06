@@ -1181,14 +1181,22 @@ class AmrSystem:
           add_native_block : le loader .so inline add_compiled_model(AmrSystem&), donc le bloc tourne
           la MEME hierarchie AMR que add_block (reflux conservatif, regrid), ZERO-COPIE.
 
-        LIMITES AMR (AmrSystem est mono-bloc). Le traitement temporel est cable a {explicit, imex} :
-        imex traite la source raide en IMPLICITE (backward_euler_source), le transport restant
-        explicite et porte par le reflux conservatif (parite avec l'IMEX du System ; la source etant
-        cellule-locale, le split implicite ne touche pas la conservation aux interfaces grossier-fin).
-        recon "primitive" et flux "roe"/"hllc"/weno5 sont CABLES sur AMR (parite avec add_block ;
-        cf. dispatch_amr_compiled). limiter="weno5" (WENO5-Z, 3 ghosts) : le coupleur alloue ses
-        niveaux a Limiter::n_ghost et le regrid herite n_grow(), donc le stencil 5 points ne lit pas
-        hors bornes. cf. DSL_MODEL_DESIGN.md Phase D (point 10).
+        Le traitement temporel est cable a {explicit, imex} : imex traite la source raide en IMPLICITE
+        (backward_euler_source), le transport restant explicite et porte par le reflux conservatif
+        (parite avec l'IMEX du System ; la source etant cellule-locale, le split implicite ne touche pas
+        la conservation aux interfaces grossier-fin). recon "primitive" et flux "roe"/"hllc"/weno5 sont
+        CABLES sur AMR (parite avec add_block ; cf. dispatch_amr_compiled). limiter="weno5" (WENO5-Z,
+        3 ghosts) : le coupleur alloue ses niveaux a Limiter::n_ghost et le regrid herite n_grow(), donc
+        le stencil 5 points ne lit pas hors bornes. cf. DSL_MODEL_DESIGN.md Phase D (point 10).
+
+        CADENCE MULTIRATE (stride) et MASQUE IMEX PARTIEL (implicit_vars / implicit_roles) :
+        - chemin ModelSpec (adc.Model(...)) : FORWARDES a AmrSystem::add_block, qui les SUPPORTE et les
+          valide (parite avec le wrapper add_block) ;
+        - chemin CompiledModel production (.so) : REJETES explicitement (ValueError). L'ABI plate du
+          loader (add_native_block / adc_install_native_amr) ne les transporte pas ; ils seraient pris a
+          leurs defauts EN SILENCE (stride=1, backward-Euler plein). Pour un .so multirate ou a masque
+          IMEX partiel, utiliser AmrSystem.add_block (natif) ou add_compiled_model(AmrSystem&) en direct
+          (C++), qui exposent stride et le masque.
 
         @p spatial : adc.FiniteVolume(...) / adc.Spatial(...) (defaut minmod+rusanov+conservatif).
         @p time : adc.Explicit (defaut) ou adc.IMEX (source raide implicite). @p substeps : surcharge
@@ -1212,9 +1220,15 @@ class AmrSystem:
         nsub = substeps if substeps is not None else getattr(time, "substeps", 1)
 
         # --- ModelSpec : briques natives composees -> add_block (chemin existant) ---
+        # On FORWARDE stride (multirate, capstone iv) ET le masque IMEX partiel implicit_vars /
+        # implicit_roles (capstone vii), exactement comme le wrapper AmrSystem.add_block ci-dessus :
+        # le C++ AmrSystem::add_block les SUPPORTE et les valide (vides -> backward-Euler plein ; un
+        # masque demande en explicite ou en mono-bloc leve une erreur claire cote C++,
+        # amr_system.cpp:325-328 / :283-287). Ne PAS dupliquer ces gardes ici.
         if isinstance(model, ModelSpec):
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
-                              nsub)
+                              nsub, getattr(time, "stride", 1),
+                              getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []))
             return
 
         if not isinstance(model, dsl.CompiledModel):
@@ -1250,6 +1264,27 @@ class AmrSystem:
                 "AmrSystem.add_equation : riemann '%s' exige une pression : declarer une primitive 'p' "
                 "(m.primitive('p', ...)) dans le modele ; sinon utiliser riemann='rusanov'"
                 % spatial.flux)
+
+        # L'ABI plate du loader .so (adc_install_native_amr / add_native_block) ne transporte NI la
+        # cadence multirate (stride) NI le masque IMEX partiel (implicit_vars / implicit_roles) :
+        # add_compiled_model(AmrSystem&) les expose seulement en DIRECT (chemin C++). Passes via le
+        # loader, ils prendraient leurs defauts (stride=1, masque vide = backward-Euler plein) EN
+        # SILENCE. On les REJETTE plutot que de les ignorer (route explicite, meme esprit que le rejet
+        # du stride/masque sur les backends compiles de System.add_equation, cf. ~lignes 886-955).
+        nstride = getattr(time, "stride", 1)
+        if nstride != 1:
+            raise ValueError(
+                "AmrSystem.add_equation : stride=%d non transporte par le chemin production AMR "
+                "(loader .so, ABI plate add_native_block : le bloc tournerait a stride=1 en silence). "
+                "Utiliser AmrSystem.add_block (modele natif adc.Model(...), cadence cablee) ou "
+                "add_compiled_model(AmrSystem&) en direct (C++) qui expose stride." % nstride)
+        if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
+            raise ValueError(
+                "AmrSystem.add_equation : implicit_vars / implicit_roles (masque IMEX partiel) non "
+                "transportes par le chemin production AMR (loader .so, ABI plate add_native_block : le "
+                "masque serait vide = backward-Euler plein en silence). Utiliser AmrSystem.add_block "
+                "(modele natif adc.Model(...), masque cable) ou add_compiled_model(AmrSystem&) en "
+                "direct (C++) qui expose le masque IMEX.")
 
         gamma = compiled.gamma if compiled.gamma is not None else 1.4
         self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,

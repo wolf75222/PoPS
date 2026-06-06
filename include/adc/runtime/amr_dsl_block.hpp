@@ -17,6 +17,7 @@
 #include <adc/runtime/amr_system.hpp>
 #include <adc/runtime/block_builder.hpp>  // detail::make_poisson_rhs (rhs += elliptic_rhs(U))
 
+#include <algorithm>  // std::find, std::sort (resolution du masque IMEX partiel d'un bloc compile)
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -26,17 +27,20 @@
 
 /// @file
 /// @brief add_compiled_model cote AmrSystem : branche un modele COMPILE (un CompositeModel, genere
-///        par le DSL ou ecrit a la main, connu a la COMPILATION) comme l'unique bloc d'une hierarchie
-///        AMR, EXACTEMENT le chemin de production de AmrSystem::add_block mais SANS passer par la
-///        dispatch ModelSpec (le modele est deja un type concret).
+///        par le DSL ou ecrit a la main, connu a la COMPILATION) comme un bloc d'une hierarchie AMR,
+///        EXACTEMENT le chemin de production de AmrSystem::add_block mais SANS passer par la dispatch
+///        ModelSpec (le modele est deja un type concret). UN seul bloc compile -> chemin AmrCouplerMP
+///        mono-bloc historique (bit-identique) ; PLUSIEURS blocs compiles ou MELANGE compile + natif
+///        (capstone v, DSL production multi-bloc) -> moteur runtime AmrRuntime sur la hierarchie
+///        partagee, le bloc compile y etant materialise comme un AmrRuntimeBlock type-erase.
 ///
 /// Pendant raffine de add_compiled_model(System&, ...) (dsl_block.hpp). La machinerie de build du
 /// coupleur AMR (AmrCouplerMP<Model> + reflux conservatif + regrid) est instanciee ICI, depuis l'unite
 /// de traduction APPELANTE, sur le type Model concret -- comme block_builder.hpp pour le System plat.
-/// Le coupleur, type-erased en std::function (step / mass / max_speed / n_patches / density), entre
-/// dans AmrSystem par AmrSystem::set_compiled_block (methode non-template). Le MEME builder partage
-/// (detail::build_amr_compiled / dispatch_amr_compiled) sert AUSSI le chemin ModelSpec natif d'add_block
-/// (amr_system.cpp), une fois le type Model concret resolu par detail::dispatch_model : un seul build.
+/// Les fermetures type-erasees entrent dans AmrSystem par AmrSystem::set_compiled_block (methode
+/// non-template) qui fige DEUX builders : le mono-bloc (detail::build_amr_compiled / dispatch_amr_compiled,
+/// PARTAGE avec le chemin ModelSpec natif d'add_block une fois le type resolu par detail::dispatch_model)
+/// ET le multi-blocs (detail::dispatch_amr_block, PARTAGE lui aussi avec add_block en multi-blocs natif).
 
 namespace adc {
 
@@ -435,19 +439,60 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
 
 }  // namespace detail
 
-/// Branche @p model (CompositeModel concret) comme l'unique bloc AMR de @p sys, avec le schema demande.
-/// Le build du coupleur est DIFFERE (comme add_block) : la fermeture capturee est invoquee au premier
+/// Resout le MASQUE IMEX partiel (implicit_vars / implicit_roles) d'un bloc COMPILE en indices de
+/// composantes conservees, contre le descripteur conservatif @p cons du Model CONCRET (connu ici).
+/// MEME logique stricte que resolve_implicit_components d'amr_system.cpp (nom/role absent -> erreur ;
+/// indices uniques tries) -- repliquee ici car ce header ne depend pas du .cpp de la facade. VIDE en
+/// entree -> vide -> masque inactif (backward-Euler plein). Utilisee par le builder runtime multi-blocs.
+inline std::vector<int> resolve_implicit_components_compiled(
+    const std::string& block, const VariableSet& cons, const std::vector<std::string>& names,
+    const std::vector<std::string>& roles) {
+  std::vector<int> out;
+  auto push_unique = [&out](int c) {
+    if (std::find(out.begin(), out.end(), c) == out.end()) out.push_back(c);
+  };
+  for (const std::string& nm : names) {
+    int idx = -1;
+    for (int i = 0; i < static_cast<int>(cons.names.size()); ++i)
+      if (cons.names[i] == nm) { idx = i; break; }
+    if (idx < 0)
+      throw std::runtime_error("add_compiled_model(AmrSystem) : implicit_vars : variable '" + nm +
+                               "' absente du bloc '" + block + "'");
+    push_unique(idx);
+  }
+  for (const std::string& rn : roles) {
+    const VariableRole role = role_from_name(rn);
+    const int idx = cons.index_of(role);
+    if (role == VariableRole::Custom || idx < 0)
+      throw std::runtime_error("add_compiled_model(AmrSystem) : implicit_roles : role '" + rn +
+                               "' absent du bloc '" + block + "'");
+    push_unique(idx);
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+/// Branche @p model (CompositeModel concret) comme un bloc AMR de @p sys, avec le schema demande. Le
+/// build est DIFFERE (comme add_block) : les fermetures capturees sont invoquees au premier
 /// step/mass/density via ensure_built(), apres set_refinement / set_poisson / set_density.
+///
+/// MONO-BLOC (un seul add_compiled_model) : chemin AmrCouplerMP<Model> historique (mono_builder),
+/// bit-identique. MULTI-BLOCS (>= 2 blocs, compiles et/ou natifs melanges ; capstone v) : le bloc est
+/// materialise comme AmrRuntimeBlock type-erase sur le layout PARTAGE par le multi_builder, exactement
+/// comme add_block natif. On fige les DEUX builders ici (la facade choisit le routage a ensure_built).
 /// @p time : "explicit" (source en Euler avant) ou "imex" (source raide implicite via
 /// backward_euler_source, transport explicite porte par le reflux). Tout autre traitement est refuse.
-/// @throws std::runtime_error si un bloc est deja defini ou si time n'est pas dans {explicit, imex}.
+/// @p stride : cadence HOLD-THEN-CATCH-UP du bloc en multi-blocs (1 = chaque macro-pas).
+/// @p implicit_vars / @p implicit_roles : masque IMEX partiel du bloc (multi-blocs ; exige time=imex).
+/// @throws std::runtime_error si le systeme est deja construit ou si time/recon hors domaine.
 template <class Model>
 void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
                         const std::string& limiter = "minmod",
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
-                        const std::string& time = "explicit", double gamma = 1.4, int substeps = 1) {
-  (void)name;
+                        const std::string& time = "explicit", double gamma = 1.4, int substeps = 1,
+                        int stride = 1, const std::vector<std::string>& implicit_vars = {},
+                        const std::vector<std::string>& implicit_roles = {}) {
   if (substeps < 1) throw std::runtime_error("add_compiled_model(AmrSystem) : substeps >= 1");
   if (time != "explicit" && time != "imex")
     throw std::runtime_error("add_compiled_model(AmrSystem) : time '" + time +
@@ -457,15 +502,36 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
                              "' (conservative|primitive)");
   const bool recon_prim = (recon == "primitive");
   const bool imex = (time == "imex");
-  // Builder type-erase : capture le Model concret + le schema, materialise le coupleur au build
-  // paresseux (avec les parametres refine/poisson/density figes a ce moment-la).
-  auto builder = [model, limiter, riemann, recon_prim, imex](const AmrBuildParams& bp) {
+  // (1) Builder MONO-BLOC : capture le Model concret + le schema, materialise l'AmrCouplerMP au build
+  // paresseux (parametres refine/poisson/density figes a ce moment-la). Chemin historique, intouche.
+  auto mono_builder = [model, limiter, riemann, recon_prim, imex](const AmrBuildParams& bp) {
     AmrBuildParams p = bp;
     p.recon_prim = recon_prim;
     p.imex = imex;
     return detail::dispatch_amr_compiled(model, limiter, riemann, p);
   };
-  sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(builder));
+  // (2) Builder MULTI-BLOCS : capture le MEME Model/schema concrets, materialise l'AmrRuntimeBlock du
+  // bloc sur le layout PARTAGE (commun a tous les blocs, cree une fois a ensure_built). Resout LUI-MEME
+  // le masque IMEX partiel contre cons_vars du Model concret (connu ici), puis appelle dispatch_amr_block
+  // -- EXACTEMENT le chemin natif d'add_block, seul le point de resolution du type differe (ici a
+  // l'ajout, la-bas d'une ModelSpec au build). FONCTEUR sans lambda etendue cross-TU dans le noyau :
+  // dispatch_amr_block capture advance_amr<Limiter, Flux> (fonction template nommee), recette
+  // device-clean #64/#97 ; la lambda externe ne fait qu'orchestrer (pas de kernel device en son corps).
+  auto multi_builder = [model, limiter, riemann](
+                           const detail::SharedAmrLayout& S, const std::string& bname,
+                           const std::vector<double>& density, bool has_density, double bgamma,
+                           int bsub, bool brecon_prim, bool bimex, int bstride,
+                           const std::vector<std::string>& ivars,
+                           const std::vector<std::string>& iroles) {
+    const std::vector<int> impl_components =
+        bimex ? resolve_implicit_components_compiled(bname, Model::conservative_vars(), ivars, iroles)
+              : std::vector<int>{};
+    return detail::dispatch_amr_block(model, limiter, riemann, S, bname, density, has_density, bgamma,
+                                      bsub, brecon_prim, bimex, bstride, impl_components);
+  };
+  sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(mono_builder),
+                         std::move(multi_builder), name, recon_prim, imex, stride, implicit_vars,
+                         implicit_roles);
 }
 
 }  // namespace adc

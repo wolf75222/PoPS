@@ -85,8 +85,16 @@ struct AmrSystem::Impl {
     int stride = 1;                 // cadence hold-then-catch-up (multi-blocs ; cf. AmrRuntimeBlock)
     double gamma = 1.4;
     // Chemin compile MONO-BLOC : builder type-erase (AmrCompiledHooks d'un AmrCouplerMP concret),
-    // invoque au build paresseux. Le multi-blocs compile (DSL production) est une PR ulterieure.
+    // invoque au build paresseux quand le bloc compile est SEUL (chemin AmrCouplerMP, bit-identique).
     std::function<AmrCompiledHooks(const AmrBuildParams&)> compiled_hooks_builder;
+    // Chemin compile MULTI-BLOCS (capstone v, DSL production multi-bloc) : builder type-erase qui, sur
+    // le layout PARTAGE materialise au build paresseux (build_multi), rend l'AmrRuntimeBlock du bloc
+    // compile -- exactement comme dispatch_amr_block pour un bloc natif, mais avec le Model/Limiter/
+    // Flux CONCRETS deja capturas a l'ajout (add_compiled_model) au lieu d'une dispatch ModelSpec. Le
+    // masque IMEX partiel (implicit_vars/roles ci-dessus) est resolu en indices DANS ce builder (le
+    // type Model concret -- donc cons_vars -- y est connu), comme le chemin natif le resout dans
+    // build_multi. Vide pour un bloc natif (is_compiled == false).
+    AmrCompiledBlockBuilder compiled_block_builder;
     // Densite initiale du bloc (composante 0), n*n row-major ; ciblee par set_density(name, rho).
     bool has_density = false;
     std::vector<double> density;
@@ -200,11 +208,27 @@ struct AmrSystem::Impl {
     rblocks.reserve(blocks.size());
     for (auto& b : blocks) {
       if (b.is_compiled) {
-        // chemin compile multi-blocs : non cable dans PR1 (bloc compile = mono-bloc AmrCouplerMP).
-        throw std::runtime_error(
-            "AmrSystem : un bloc compile (.so / add_compiled_model) en MULTI-BLOCS n'est pas "
-            "cable dans cette version (PR1 : blocs natifs add_block ; DSL production multi-bloc = "
-            "PR ulterieure)");
+        // Un bloc compile sans builder runtime (multi_builder vide) ne peut PAS aller en multi-blocs :
+        // c'est le cas d'un loader .so ANCIEN (genere/compile contre un en-tete anterieur a ce
+        // capstone, qui n'appelait set_compiled_block qu'avec le mono_builder). On leve une erreur
+        // CLAIRE plutot qu'un appel d'une std::function vide (std::bad_function_call opaque) ; le
+        // remede est de regenerer le loader (dsl.compile_native(target='amr_system')).
+        if (!b.compiled_block_builder)
+          throw std::runtime_error(
+              "AmrSystem : bloc compile '" + b.name +
+              "' sans builder multi-blocs (loader .so anterieur au support DSL production multi-bloc). "
+              "Regenerer le loader via dsl.compile_native(target='amr_system') / "
+              "compile(backend='production', target='amr_system').");
+        // Chemin compile MULTI-BLOCS (capstone v) : le Model/Limiter/Flux CONCRETS sont deja captures
+        // dans le builder (add_compiled_model), on l'invoque sur le layout PARTAGE. Il alloue la pile
+        // de niveaux du bloc sur S et capture le schema, EXACTEMENT comme dispatch_amr_block pour un
+        // bloc natif (le builder L'APPELLE en interne). Il resout LUI-MEME le masque IMEX partiel en
+        // indices de composantes contre cons_vars du Model concret (les implicit_vars/roles bruts lui
+        // sont passes). Aucun throw : le 2e bloc compile (ou un melange compile + natif) est cable.
+        rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.gamma,
+                                                   b.substeps, b.recon_prim, b.imex, b.stride,
+                                                   b.implicit_vars, b.implicit_roles));
+        continue;
       }
       // Chemin ModelSpec natif : dispatch du modele -> type concret, puis dispatch schema spatial
       // -> build_amr_block (alloue la pile de niveaux du bloc sur le layout PARTAGE + fermetures).
@@ -302,15 +326,13 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
     throw std::runtime_error("AmrSystem::add_block : implicit_vars / implicit_roles exigent time='imex' "
                              "(le masque implicite ne s'applique qu'au pas de source IMEX ; recu time='" +
                              time + "')");
-  // MULTI-BLOCS PR1 : un 2e bloc (ou plus) bascule sur le moteur runtime AmrRuntime (hierarchie
-  // partagee, Poisson somme co-localise). Le mono-bloc reste sur AmrCouplerMP (bit-identique).
-  // Un bloc deja COMPILE (set_compiled_block) ne se melange pas a un bloc natif en multi-blocs
-  // dans PR1 (le DSL production multi-bloc est une PR ulterieure).
-  if (!p_->blocks.empty() && p_->blocks[0].is_compiled)
-    throw std::runtime_error(
-        "AmrSystem::add_block : melanger un bloc compile (.so / add_compiled_model) et un bloc "
-        "natif (add_block) en multi-blocs n'est pas cable (PR1). Utiliser des blocs natifs "
-        "(add_block) pour le multi-blocs.");
+  // MULTI-BLOCS (capstone v) : un 2e bloc (ou plus) bascule sur le moteur runtime AmrRuntime
+  // (hierarchie partagee, Poisson somme co-localise). Le mono-bloc reste sur AmrCouplerMP
+  // (bit-identique). Un bloc deja COMPILE (set_compiled_block / add_compiled_model) PEUT desormais se
+  // melanger a un bloc natif : son builder runtime (compiled_block_builder) materialise un
+  // AmrRuntimeBlock sur le MEME layout partage, exactement comme un bloc natif (cf. build_multi). Une
+  // seule garde dure : le bloc compile doit avoir ete enregistre AVEC un builder runtime (un loader .so
+  // recompile contre cet en-tete le fournit ; build_multi leve clairement sinon).
   // MULTI-BLOCS : le nom INDEXE le bloc (set_density/mass/density) -> il doit etre UNIQUE et non
   // vide des qu'il y a (ou qu'on cree) plus d'un bloc. Mono-bloc : le nom reste cosmetique.
   if (!p_->blocks.empty()) {
@@ -339,24 +361,47 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
 }
 
 void AmrSystem::set_compiled_block(int ncomp, double gamma, int substeps,
-                                   std::function<AmrCompiledHooks(const AmrBuildParams&)> builder) {
-  (void)ncomp;  // le nombre de variables est porte par le Model concret (Model::n_vars) dans le
-                // builder type-erase ; le parametre reste pour la symetrie d'API avec System.
+                                   std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
+                                   AmrCompiledBlockBuilder multi_builder, const std::string& name,
+                                   bool recon_prim, bool imex, int stride,
+                                   const std::vector<std::string>& implicit_vars,
+                                   const std::vector<std::string>& implicit_roles) {
+  (void)ncomp;  // le nombre de variables est porte par le Model concret (Model::n_vars) dans les
+                // builders type-erases ; le parametre reste pour la symetrie d'API avec System.
   if (p_->built)
     throw std::runtime_error("AmrSystem::set_compiled_block : le systeme est deja construit");
-  // Un bloc compile en MULTI-BLOCS n'est pas cable dans PR1 (DSL production multi-bloc = PR
-  // ulterieure). On reste donc MONO-BLOC compile (chemin AmrCouplerMP, intouche).
-  if (!p_->blocks.empty())
-    throw std::runtime_error(
-        "AmrSystem::set_compiled_block : un seul bloc compile (.so / add_compiled_model) est "
-        "supporte (le multi-blocs compile / DSL production est une PR ulterieure ; pour le "
-        "multi-blocs, utiliser des blocs natifs add_block)");
-  p_->gamma = gamma;
+  if (substeps < 1) throw std::runtime_error("AmrSystem::set_compiled_block : substeps >= 1");
+  if (stride < 1) throw std::runtime_error("AmrSystem::set_compiled_block : stride >= 1");
+  // Le MASQUE IMEX partiel ne s'applique qu'au pas de source IMEX (meme garde qu'add_block) : le
+  // demander en explicite est une ERREUR (pas d'ignore silencieux).
+  if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
+    throw std::runtime_error("AmrSystem::set_compiled_block : implicit_vars / implicit_roles exigent "
+                             "time='imex' (le masque implicite ne s'applique qu'au pas de source IMEX)");
+  // MULTI-BLOCS (capstone v) : un 2e bloc (ou plus) bascule sur AmrRuntime ; le bloc compile y est
+  // materialise par multi_builder (son AmrRuntimeBlock sur le layout partage). On EMPILE donc le bloc
+  // au lieu de lever. Comme add_block : des qu'il y a (ou qu'on cree) plus d'un bloc, le nom INDEXE le
+  // bloc -> il doit etre UNIQUE et non vide. En mono-bloc le nom reste cosmetique.
+  if (!p_->blocks.empty()) {
+    if (name.empty())
+      throw std::runtime_error("AmrSystem::set_compiled_block : en multi-blocs chaque bloc doit avoir "
+                               "un nom NON vide (le nom indexe le bloc : set_density/mass/density)");
+    if (p_->block_index(name) >= 0)
+      throw std::runtime_error("AmrSystem::set_compiled_block : nom de bloc deja utilise '" + name +
+                               "' (les noms de blocs doivent etre uniques en multi-blocs)");
+  }
+  if (p_->blocks.empty()) p_->gamma = gamma;  // compat : gamma du 1er bloc (chemin mono-bloc)
   Impl::BlockSpec b;
+  b.name = name;
   b.is_compiled = true;
   b.gamma = gamma;
   b.substeps = substeps;
-  b.compiled_hooks_builder = std::move(builder);
+  b.stride = stride;
+  b.recon_prim = recon_prim;
+  b.imex = imex;
+  b.implicit_vars = implicit_vars;   // masque IMEX partiel (resolu en indices par multi_builder au build)
+  b.implicit_roles = implicit_roles;
+  b.compiled_hooks_builder = std::move(mono_builder);   // chemin mono-bloc (AmrCouplerMP)
+  b.compiled_block_builder = std::move(multi_builder);  // chemin multi-blocs (AmrRuntime)
   p_->blocks.push_back(std::move(b));
 }
 
