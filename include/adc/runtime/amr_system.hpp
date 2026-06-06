@@ -10,14 +10,25 @@
 #include <vector>
 
 /// @file
-/// @brief Composition mono-espece sur AMR a l'execution : le pendant raffine de System.
+/// @brief Composition multi-especes sur AMR a l'execution : le pendant raffine de System.
 ///
-/// Un bloc (une espece, decrite par une ModelSpec de briques generiques) porte sur une
-/// hierarchie AMR (grossier + un niveau fin suivi par regrid, reflux conservatif). Comme
-/// System mais sur grille adaptative. Le coeur ne nomme aucun scenario.
+/// Un ou PLUSIEURS blocs (especes, decrites par des ModelSpec de briques generiques) portes sur une
+/// hierarchie AMR. Comme System mais sur grille adaptative.
 ///
-/// @note Un seul bloc (AmrCouplerMP est mono-modele) ; deux niveaux (ratio 2) ; traitement
-///       temporel explicite (la source du modele est appliquee par le pas AMR).
+/// MONO-BLOC (1 add_block) : un AmrCouplerMP<Model> mono-modele (grossier + un niveau fin suivi par
+/// regrid, reflux conservatif). Chemin historique, INTOUCHE -> bit-identique.
+///
+/// MULTI-BLOCS (>= 2 add_block, capstone, docs/AMR_MULTIBLOCK_DESIGN.md) : N blocs co-localises sur
+/// UNE hierarchie AMR PARTAGEE (meme BoxArray + DistributionMapping + dx/dy par niveau, garde
+/// same_layout_or_throw). Tous les blocs vivent sur TOUS les patchs. Un seul aux par niveau (phi,
+/// grad phi) et un seul Poisson grossier dont le second membre est la SOMME CO-LOCALISEE des briques
+/// elliptiques des blocs (f = Sum_b q_b n_b lu aux memes cellules). Conservation PAR BLOC (reflux +
+/// average_down). Moteur runtime AmrRuntime (registre type-erase par nom). PR1 : blocs EXPLICITES a
+/// schemas spatiaux potentiellement DIFFERENTS, hierarchie FIGEE (multi-blocs + regrid_every > 0 est
+/// REFUSE : le regrid d'union des tags est une PR ulterieure). Multirate (stride/evolve), sources
+/// couplees, IMEX multi-bloc et DSL production multi-bloc : PR ulterieures.
+///
+/// @note Deux niveaux (ratio 2) ; traitement temporel explicite (ou imex en mono-bloc).
 
 namespace adc {
 
@@ -82,10 +93,12 @@ class AmrSystem {
   AmrSystem(AmrSystem&&) noexcept;
   AmrSystem& operator=(AmrSystem&&) noexcept;
 
-  /// Definit l'unique bloc porte sur l'AMR. Memes parametres de schema spatial que System
-  /// (limiter x riemann x recon), appliques a chaque niveau/patch de la hierarchie.
-  /// @param name    etiquette cosmetique du bloc (l'AMR est MONO-BLOC : ce nom n'indexe rien,
-  ///                contrairement a System ; conserve pour la symetrie d'API).
+  /// Ajoute un bloc porte sur l'AMR. Memes parametres de schema spatial que System
+  /// (limiter x riemann x recon), appliques a chaque niveau/patch de la hierarchie. Le PREMIER
+  /// add_block definit le bloc ; un 2e (ou plus) bascule sur le moteur multi-blocs (hierarchie
+  /// partagee, Poisson somme co-localise). Les blocs peuvent avoir des SCHEMAS SPATIAUX DIFFERENTS.
+  /// @param name    nom du bloc : INDEXE le bloc (set_density(name), mass(name), density(name)). En
+  ///                multi-blocs le nom doit etre unique ; mono-bloc un nom vide cible le bloc unique.
   /// @param model   composition de briques (transport/source/elliptic + parametres)
   /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts ; rusanov)
   /// @param riemann "rusanov" | "hllc" | "roe" (hllc/roe exigent un transport compressible)
@@ -169,13 +182,18 @@ class AmrSystem {
 
   int nx() const;
   double time() const;
-  int n_patches();                ///< nombre de patchs fins courants
-  double mass();                  ///< masse sur le grossier (conservee au reflux)
-  std::vector<double> density();  ///< densite grossiere (composante 0), n*n row-major
+  int n_blocks() const;           ///< nombre de blocs (1 = mono-bloc AmrCouplerMP ; >= 2 = AmrRuntime)
+  int n_patches();                ///< nombre de patchs fins courants (de la hierarchie partagee)
+  double mass();                  ///< masse du 1er bloc sur le grossier (conservee au reflux)
+  double mass(const std::string& name);     ///< masse du bloc nomme sur le grossier (conservee PAR BLOC)
+  std::vector<double> density();  ///< densite grossiere du 1er bloc (composante 0), n*n row-major
+  std::vector<double> density(const std::string& name);  ///< densite grossiere du bloc nomme, n*n
   /// Potentiel electrostatique phi du NIVEAU GROSSIER (base), n*n row-major. Le niveau 0 couvre
   /// tout le domaine : suffisant pour echantillonner un cercle median (FFT azimutale), MEME
   /// observable que System::potential() sur grille mono-niveau. Resout le Poisson grossier si
   /// besoin (cf. System::potential / ensure_elliptic), donc valeur courante meme avant tout step.
+  /// MULTI-BLOCS : phi resulte du Poisson de SYSTEME (Sum_b q_b n_b co-localise) ; partage par tous
+  /// les blocs (aux unique). Le nom du bloc n'intervient donc pas.
   std::vector<double> potential();
 
  private:

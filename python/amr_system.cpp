@@ -2,14 +2,17 @@
 
 #include <adc/runtime/abi_key.hpp>         // detail::abi_key_string : cle d'ABI (header-only), comparee a celle du loader
 #include <adc/runtime/amr_dsl_block.hpp>   // detail::dispatch_amr_compiled + build_amr_compiled (chemin partage)
+#include <adc/runtime/amr_runtime.hpp>     // AmrRuntime + AmrRuntimeBlock (moteur multi-blocs runtime)
 #include <adc/runtime/model_factory.hpp>   // detail::dispatch_model + briques compilees
 #include <adc/runtime/wall_predicate.hpp>  // detail::wall_predicate (paroi partagee System/AmrSystem)
 
 #include <cmath>
+#include <cstddef>
 #include <dlfcn.h>  // dlopen/dlsym : chargement du loader natif AMR genere (.so)
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace adc {
@@ -17,14 +20,30 @@ namespace adc {
 struct AmrSystem::Impl {
   AmrSystemConfig cfg;
 
-  // Specification du bloc (figee a add_block, materialisee au build paresseux).
-  bool has_block = false;
-  ModelSpec b_spec;
-  std::string b_limiter = "minmod", b_riemann = "rusanov";
-  bool b_recon_prim = false;  // recon == "primitive" (fige a add_block)
-  bool b_imex = false;        // time == "imex" : source raide implicite (fige a add_block)
-  int b_substeps = 1;
-  double gamma = 1.4;
+  // Specification d'UN bloc (figee a add_block, materialisee au build paresseux). Le facade detient
+  // un REGISTRE PAR NOM de blocs (cf. design AMR_MULTIBLOCK_DESIGN.md section 0/3) : le chemin
+  // mono-bloc passe par AmrCouplerMP (intouche, bit-identique) ; deux blocs ou plus passent par le
+  // moteur runtime multi-blocs AmrRuntime (hierarchie partagee, Poisson somme co-localise).
+  struct BlockSpec {
+    std::string name;
+    // Chemin ModelSpec natif (briques composees) OU chemin compile (.so / add_compiled_model).
+    bool is_compiled = false;
+    ModelSpec spec;                 // chemin ModelSpec (is_compiled == false)
+    std::string limiter = "minmod", riemann = "rusanov";
+    bool recon_prim = false;        // recon == "primitive"
+    bool imex = false;              // time == "imex" : source raide implicite
+    int substeps = 1;
+    double gamma = 1.4;
+    // Chemin compile MONO-BLOC : builder type-erase (AmrCompiledHooks d'un AmrCouplerMP concret),
+    // invoque au build paresseux. Le multi-blocs compile (DSL production) est une PR ulterieure.
+    std::function<AmrCompiledHooks(const AmrBuildParams&)> compiled_hooks_builder;
+    // Densite initiale du bloc (composante 0), n*n row-major ; ciblee par set_density(name, rho).
+    bool has_density = false;
+    std::vector<double> density;
+  };
+
+  std::vector<BlockSpec> blocks;
+  double gamma = 1.4;  // gamma du PREMIER bloc (compat : lu par le chemin mono-bloc)
 
   double refine_threshold = 1e30;  // 1e30 => aucun raffinement par defaut
 
@@ -32,16 +51,8 @@ struct AmrSystem::Impl {
               p_wall = "none";
   double p_wall_radius = 0.0;
 
-  std::vector<double> pending_density;
-  bool has_density = false;
-
-  // Chemin compile (add_compiled_model, header amr_dsl_block.hpp) : builder type-erase d'un
-  // AmrCouplerMP<Model> concret, invoque au build paresseux avec les AmrBuildParams figes. Exclusif
-  // de has_block (un seul bloc, comme le chemin ModelSpec).
-  bool has_compiled = false;
-  std::function<AmrCompiledHooks(const AmrBuildParams&)> compiled_builder;
-
   bool built = false;
+  // --- chemin mono-bloc (AmrCouplerMP, intouche : bit-identique a l'historique) ---
   std::shared_ptr<void> coupler_holder;  // maintient en vie l'AmrCouplerMP<Model> des hooks
   std::function<void(double)> step_fn;
   std::function<double()> max_speed_fn;
@@ -49,9 +60,21 @@ struct AmrSystem::Impl {
   std::function<int()> n_patches_fn;
   std::function<std::vector<double>()> density_fn;
   std::function<std::vector<double>()> potential_fn;
+  // --- chemin multi-blocs (AmrRuntime, hierarchie partagee + Poisson somme) ---
+  std::shared_ptr<adc::AmrRuntime> runtime;
   double t = 0;
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
+
+  // Index du bloc nomme @p name dans le registre (-1 si absent). Nom vide -> premier bloc (compat
+  // mono-bloc : le nom etait cosmetique). Plusieurs blocs sans nom n'est pas ambigu a l'ajout (un
+  // nom vide cible toujours le bloc 0), mais set_density(name) le resout precisement.
+  int block_index(const std::string& name) const {
+    if (name.empty()) return blocks.empty() ? -1 : 0;
+    for (std::size_t i = 0; i < blocks.size(); ++i)
+      if (blocks[i].name == name) return static_cast<int>(i);
+    return -1;
+  }
 
   BCRec poisson_bc() {
     std::string mode = p_bc;
@@ -66,29 +89,31 @@ struct AmrSystem::Impl {
     return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "AmrSystem::set_poisson");
   }
 
-  // Materialise les parametres figes du build paresseux a partir de la config + des choix
-  // refine/poisson/density. Communs aux deux chemins (ModelSpec natif et add_compiled_model) :
-  // les deux instancient le MEME builder partage (detail::build_amr_compiled, amr_dsl_block.hpp).
+  // Materialise les parametres figes du build paresseux du chemin MONO-BLOC (AmrCouplerMP) a partir
+  // de la config + des choix refine/poisson/density + du SEUL bloc (blocks[0]). Communs aux deux
+  // chemins mono-bloc (ModelSpec natif et add_compiled_model) : les deux instancient le MEME builder
+  // partage (detail::build_amr_compiled). INTOUCHE par le multi-blocs -> mono-bloc bit-identique.
   AmrBuildParams make_build_params() {
+    const BlockSpec& b = blocks[0];
     AmrBuildParams bp;
     bp.n = cfg.n;
     bp.L = cfg.L;
     bp.regrid_every = cfg.regrid_every;
-    bp.gamma = gamma;
-    bp.substeps = b_substeps;
-    bp.recon_prim = b_recon_prim;
-    bp.imex = b_imex;
+    bp.gamma = b.gamma;
+    bp.substeps = b.substeps;
+    bp.recon_prim = b.recon_prim;
+    bp.imex = b.imex;
     bp.refine_threshold = refine_threshold;
     bp.poisson_bc = poisson_bc();
     bp.wall = wall_active();
-    bp.has_density = has_density;
-    bp.density = pending_density;
+    bp.has_density = b.has_density;
+    bp.density = b.density;
     bp.distribute_coarse = cfg.distribute_coarse;
     bp.coarse_max_grid = cfg.coarse_max_grid;
     return bp;
   }
 
-  // Installe les fermetures type-erased produites par le builder partage.
+  // Installe les fermetures type-erased du chemin MONO-BLOC (AmrCouplerMP).
   void install(AmrCompiledHooks&& h) {
     coupler_holder = std::move(h.coupler_holder);
     step_fn = std::move(h.step);
@@ -100,19 +125,67 @@ struct AmrSystem::Impl {
     built = true;
   }
 
+  bool multi_block() const { return blocks.size() >= 2; }
+
+  // Construit le moteur runtime MULTI-BLOCS (AmrRuntime) : un SharedAmrLayout commun (hierarchie
+  // partagee, figee), puis CHAQUE bloc materialise dessus son AmrRuntimeBlock type-erase (via son
+  // block_builder, qui capture le Model/Limiter/Flux concret). Le Poisson grossier est SOMME et
+  // CO-LOCALISE (Sum_b elliptic_rhs_b(U_b) lu aux memes cellules du grossier partage).
+  void build_multi() {
+    AmrBuildParams bp = make_build_params();  // geometrie + poisson_bc + wall + ownership communs
+    const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
+    std::vector<adc::AmrRuntimeBlock> rblocks;
+    rblocks.reserve(blocks.size());
+    for (auto& b : blocks) {
+      if (b.is_compiled) {
+        // chemin compile multi-blocs : non cable dans PR1 (bloc compile = mono-bloc AmrCouplerMP).
+        throw std::runtime_error(
+            "AmrSystem : un bloc compile (.so / add_compiled_model) en MULTI-BLOCS n'est pas "
+            "cable dans cette version (PR1 : blocs natifs add_block ; DSL production multi-bloc = "
+            "PR ulterieure)");
+      }
+      // Chemin ModelSpec natif : dispatch du modele -> type concret, puis dispatch schema spatial
+      // -> build_amr_block (alloue la pile de niveaux du bloc sur le layout PARTAGE + fermetures).
+      // La densite du bloc est portee par le BlockSpec (set_density(name) la cible).
+      detail::dispatch_model(b.spec, [&](auto m) {
+        rblocks.push_back(detail::dispatch_amr_block(m, b.limiter, b.riemann, S, b.name, b.density,
+                                                     b.has_density, b.gamma, b.substeps,
+                                                     b.recon_prim, b.imex));
+      });
+    }
+    runtime = std::make_shared<adc::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc,
+                                                std::move(rblocks), S.base_per, S.replicated_coarse,
+                                                S.wall);
+    built = true;
+  }
+
   void ensure_built() {
     if (built) return;
-    if (!has_block && !has_compiled)
+    if (blocks.empty())
       throw std::runtime_error("AmrSystem : appeler add_block d'abord");
+    // CONTRAINTE DURE PR1 (design section 0/4) : AmrSystemCoupler / AmrRuntime n'ont AUCUN regrid
+    // (hierarchie FIGEE). Autoriser regrid_every > 0 en multi-blocs ferait croire a un AMR dynamique
+    // inexistant (la grille ne bouge jamais) -> REFUS explicite. Le mono-bloc garde son regrid
+    // (chemin AmrCouplerMP intouche). Le regrid d'union des tags multi-blocs est une PR ulterieure.
+    if (multi_block() && cfg.regrid_every > 0)
+      throw std::runtime_error(
+          "AmrSystem : multi-blocs (>= 2 blocs) + regrid_every > 0 n'est pas supporte (la "
+          "hierarchie multi-blocs est FIGEE a la construction ; le regrid d'union des tags est une "
+          "etape ulterieure). Mettre regrid_every=0 pour une hierarchie multi-blocs figee, ou "
+          "utiliser un seul bloc pour l'AMR dynamique.");
+    if (multi_block()) { build_multi(); return; }
+
+    // --- chemin MONO-BLOC (AmrCouplerMP, intouche : bit-identique a l'historique) ---
+    const BlockSpec& b = blocks[0];
     const AmrBuildParams bp = make_build_params();
-    if (has_compiled) {  // chemin compile : le builder fige les types (Model, Limiter, Flux)
-      install(compiled_builder(bp));
+    if (b.is_compiled) {  // chemin compile : le builder fige les types (Model, Limiter, Flux)
+      install(b.compiled_hooks_builder(bp));
       return;
     }
     // Chemin ModelSpec natif : la dispatch de modele resout le type concret, puis le MEME
     // dispatch schema spatial + build du coupleur que add_compiled_model (detail, partage).
-    detail::dispatch_model(b_spec, [&](auto m) {
-      install(detail::dispatch_amr_compiled(m, b_limiter, b_riemann, bp));
+    detail::dispatch_model(b.spec, [&](auto m) {
+      install(detail::dispatch_amr_compiled(m, b.limiter, b.riemann, bp));
     });
   }
 };
@@ -125,9 +198,9 @@ AmrSystem& AmrSystem::operator=(AmrSystem&&) noexcept = default;
 void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           const std::string& limiter, const std::string& riemann,
                           const std::string& recon, const std::string& time, int substeps) {
-  (void)name;  // AMR mono-bloc : le nom est cosmetique, il n'indexe rien (cf. header).
-  if (p_->has_block || p_->has_compiled)
-    throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::add_block : le systeme est deja construit (appeler "
+                             "add_block avant tout step/mass/density)");
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
   if (time != "explicit" && time != "imex")
     throw std::runtime_error("AmrSystem : time '" + time +
@@ -135,26 +208,59 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("AmrSystem : recon inconnu '" + recon +
                              "' (conservative|primitive)");
-  p_->b_spec = model;
-  p_->b_limiter = limiter;
-  p_->b_riemann = riemann;
-  p_->b_recon_prim = (recon == "primitive");
-  p_->b_imex = (time == "imex");
-  p_->b_substeps = substeps;
-  p_->gamma = model.gamma;  // indice adiabatique du bloc (Euler), lu par coupler_write_coarse
-  p_->has_block = true;
+  // MULTI-BLOCS PR1 : un 2e bloc (ou plus) bascule sur le moteur runtime AmrRuntime (hierarchie
+  // partagee, Poisson somme co-localise). Le mono-bloc reste sur AmrCouplerMP (bit-identique).
+  // Un bloc deja COMPILE (set_compiled_block) ne se melange pas a un bloc natif en multi-blocs
+  // dans PR1 (le DSL production multi-bloc est une PR ulterieure).
+  if (!p_->blocks.empty() && p_->blocks[0].is_compiled)
+    throw std::runtime_error(
+        "AmrSystem::add_block : melanger un bloc compile (.so / add_compiled_model) et un bloc "
+        "natif (add_block) en multi-blocs n'est pas cable (PR1). Utiliser des blocs natifs "
+        "(add_block) pour le multi-blocs.");
+  // MULTI-BLOCS : le nom INDEXE le bloc (set_density/mass/density) -> il doit etre UNIQUE et non
+  // vide des qu'il y a (ou qu'on cree) plus d'un bloc. Mono-bloc : le nom reste cosmetique.
+  if (!p_->blocks.empty()) {
+    if (name.empty())
+      throw std::runtime_error("AmrSystem::add_block : en multi-blocs chaque bloc doit avoir un nom "
+                               "NON vide (le nom indexe le bloc : set_density/mass/density)");
+    if (p_->block_index(name) >= 0)
+      throw std::runtime_error("AmrSystem::add_block : nom de bloc deja utilise '" + name +
+                               "' (les noms de blocs doivent etre uniques en multi-blocs)");
+  }
+  Impl::BlockSpec b;
+  b.name = name;
+  b.is_compiled = false;
+  b.spec = model;
+  b.limiter = limiter;
+  b.riemann = riemann;
+  b.recon_prim = (recon == "primitive");
+  b.imex = (time == "imex");
+  b.substeps = substeps;
+  b.gamma = model.gamma;  // indice adiabatique du bloc (Euler), lu par coupler_write_coarse
+  if (p_->blocks.empty()) p_->gamma = model.gamma;  // compat : gamma du 1er bloc (chemin mono-bloc)
+  p_->blocks.push_back(std::move(b));
 }
 
 void AmrSystem::set_compiled_block(int ncomp, double gamma, int substeps,
                                    std::function<AmrCompiledHooks(const AmrBuildParams&)> builder) {
   (void)ncomp;  // le nombre de variables est porte par le Model concret (Model::n_vars) dans le
                 // builder type-erase ; le parametre reste pour la symetrie d'API avec System.
-  if (p_->has_block || p_->has_compiled)
-    throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_compiled_block : le systeme est deja construit");
+  // Un bloc compile en MULTI-BLOCS n'est pas cable dans PR1 (DSL production multi-bloc = PR
+  // ulterieure). On reste donc MONO-BLOC compile (chemin AmrCouplerMP, intouche).
+  if (!p_->blocks.empty())
+    throw std::runtime_error(
+        "AmrSystem::set_compiled_block : un seul bloc compile (.so / add_compiled_model) est "
+        "supporte (le multi-blocs compile / DSL production est une PR ulterieure ; pour le "
+        "multi-blocs, utiliser des blocs natifs add_block)");
   p_->gamma = gamma;
-  p_->b_substeps = substeps;
-  p_->compiled_builder = std::move(builder);
-  p_->has_compiled = true;
+  Impl::BlockSpec b;
+  b.is_compiled = true;
+  b.gamma = gamma;
+  b.substeps = substeps;
+  b.compiled_hooks_builder = std::move(builder);
+  p_->blocks.push_back(std::move(b));
 }
 
 namespace {
@@ -280,14 +386,31 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
 }
 
 void AmrSystem::set_density(const std::string& name, const std::vector<double>& rho) {
-  (void)name;  // AMR mono-bloc : la densite vise l'unique bloc, le nom est cosmetique.
-  p_->pending_density = rho;
-  p_->has_density = true;
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_density : le systeme est deja construit (poser la "
+                             "densite avant tout step/mass/density)");
+  if (p_->blocks.empty())
+    throw std::runtime_error("AmrSystem::set_density : appeler add_block d'abord");
+  // MONO-BLOC : le nom est COSMETIQUE (compat historique, chemins add_compiled_model /
+  // add_native_block qui ne nomment pas le BlockSpec) -> la densite vise l'unique bloc, quel que
+  // soit le nom passe. MULTI-BLOCS : le nom INDEXE le bloc (chaque bloc a SA densite initiale, pour
+  // le RHS Poisson somme Sum_b q_b n_b) ; un nom inconnu est une erreur explicite.
+  std::size_t idx = 0;
+  if (p_->blocks.size() >= 2) {
+    const int i = p_->block_index(name);
+    if (i < 0)
+      throw std::runtime_error("AmrSystem::set_density : aucun bloc nomme '" + name +
+                               "' (multi-blocs : le nom indexe le bloc)");
+    idx = static_cast<std::size_t>(i);
+  }
+  p_->blocks[idx].density = rho;
+  p_->blocks[idx].has_density = true;
 }
 
 void AmrSystem::step(double dt) {
   p_->ensure_built();
-  p_->step_fn(dt);
+  if (p_->runtime) p_->runtime->step(static_cast<Real>(dt));
+  else p_->step_fn(dt);
   p_->t += dt;
 }
 void AmrSystem::advance(double dt, int nsteps) {
@@ -295,6 +418,12 @@ void AmrSystem::advance(double dt, int nsteps) {
 }
 double AmrSystem::step_cfl(double cfl) {
   p_->ensure_built();
+  if (p_->runtime) {
+    const double h = cfl * (p_->cfg.L / p_->cfg.n) / static_cast<double>(p_->runtime->max_speed());
+    p_->runtime->step(static_cast<Real>(h));
+    p_->t += h;
+    return h;
+  }
   const double h = cfl * (p_->cfg.L / p_->cfg.n) / p_->max_speed_fn();
   p_->step_fn(h);
   p_->t += h;
@@ -303,20 +432,33 @@ double AmrSystem::step_cfl(double cfl) {
 
 int AmrSystem::nx() const { return p_->cfg.n; }
 double AmrSystem::time() const { return p_->t; }
+int AmrSystem::n_blocks() const { return static_cast<int>(p_->blocks.size()); }
 int AmrSystem::n_patches() {
   p_->ensure_built();
+  if (p_->runtime) return p_->runtime->n_patches();
   return p_->n_patches_fn();
 }
-double AmrSystem::mass() {
+double AmrSystem::mass() { return mass(std::string()); }
+double AmrSystem::mass(const std::string& name) {
   p_->ensure_built();
-  return p_->mass_fn();
+  if (!p_->runtime) return p_->mass_fn();  // MONO-BLOC : nom cosmetique -> unique bloc
+  const int idx = p_->block_index(name);   // MULTI-BLOCS : le nom indexe le bloc
+  if (idx < 0)
+    throw std::runtime_error("AmrSystem::mass : aucun bloc nomme '" + name + "'");
+  return static_cast<double>(p_->runtime->mass(static_cast<std::size_t>(idx)));
 }
-std::vector<double> AmrSystem::density() {
+std::vector<double> AmrSystem::density() { return density(std::string()); }
+std::vector<double> AmrSystem::density(const std::string& name) {
   p_->ensure_built();
-  return p_->density_fn();
+  if (!p_->runtime) return p_->density_fn();  // MONO-BLOC : nom cosmetique -> unique bloc
+  const int idx = p_->block_index(name);      // MULTI-BLOCS : le nom indexe le bloc
+  if (idx < 0)
+    throw std::runtime_error("AmrSystem::density : aucun bloc nomme '" + name + "'");
+  return p_->runtime->density(static_cast<std::size_t>(idx));
 }
 std::vector<double> AmrSystem::potential() {
   p_->ensure_built();
+  if (p_->runtime) return p_->runtime->potential();  // aux partage (commun a tous les blocs)
   return p_->potential_fn();
 }
 

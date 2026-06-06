@@ -264,10 +264,20 @@ PYBIND11_MODULE(_adc, m) {
       .def("step_cfl", &AmrSystem::step_cfl, py::arg("cfl"))
       .def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
+      .def("n_blocks", &AmrSystem::n_blocks)
       .def("n_patches", &AmrSystem::n_patches)
-      .def("mass", &AmrSystem::mass)
+      // mass / density : surcharge par NOM de bloc (multi-blocs ; nom vide -> 1er bloc, compat
+      // mono-bloc ou nom cosmetique). Le nom INDEXE le bloc en multi-blocs (chaque bloc a sa masse /
+      // densite, conservees PAR BLOC au reflux). Sans argument -> 1er bloc (retro-compat mono-bloc).
+      .def("mass", [](AmrSystem& s) { return s.mass(); })
+      .def("mass", [](AmrSystem& s, const std::string& name) { return s.mass(name); },
+           py::arg("name"))
       .def("density", [](AmrSystem& s) { return to_2d(s.density(), s.nx()); })
+      .def("density",
+           [](AmrSystem& s, const std::string& name) { return to_2d(s.density(name), s.nx()); },
+           py::arg("name"))
       // phi du niveau grossier (base), (n, n). MEME observable que System.potential() : le niveau 0
-      // couvre tout le domaine -> suffit a echantillonner un cercle median (FFT azimutale).
+      // couvre tout le domaine -> suffit a echantillonner un cercle median (FFT azimutale). En
+      // multi-blocs, phi resulte du Poisson de SYSTEME (Sum_b q_b n_b co-localise), partage par tous.
       .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.nx()); });
 }

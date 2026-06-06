@@ -1113,7 +1113,16 @@ class System:
 
 
 class AmrSystem:
-    """Pendant raffine de System : un bloc porte sur une hierarchie AMR (+ set_refinement)."""
+    """Pendant raffine de System : un ou PLUSIEURS blocs portes sur une hierarchie AMR.
+
+    MONO-BLOC (1 add_block) : chemin AmrCouplerMP historique (regrid dynamique, reflux). MULTI-BLOCS
+    (>= 2 add_block) : N blocs co-localises sur UNE hierarchie AMR PARTAGEE (moteur AmrRuntime),
+    Poisson de SYSTEME a second membre SOMME co-localise (Sum_b q_b n_b), conservation PAR BLOC. Les
+    blocs peuvent avoir des SCHEMAS SPATIAUX DIFFERENTS. PR1 du capstone : blocs EXPLICITES,
+    hierarchie FIGEE (multi-blocs + regrid_every > 0 est REFUSE ; le regrid d'union des tags, le
+    multirate stride/evolve, les sources couplees et le DSL production multi-bloc sont des PR
+    ulterieures). En multi-blocs le NOM du bloc indexe set_density(name) / mass(name) / density(name).
+    """
 
     def __init__(self, config=None, **cfg_kw):
         if config is None:

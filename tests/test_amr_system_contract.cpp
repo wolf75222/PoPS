@@ -115,13 +115,41 @@ int main(int argc, char** argv) {
       }),
       "add_block refuse substeps < 1");
 
-  // --- mono-bloc : un second bloc (natif ou compile) est refuse -----------------------------
-  chk(raises([&] {
-        AmrSystem s(cfg);
+  // --- multi-blocs (capstone PR1) : un 2e bloc natif est desormais ACCEPTE -------------------
+  // Bascule sur le moteur runtime AmrRuntime (hierarchie partagee, Poisson somme). On verifie que
+  // l'ajout passe sans lever ; la physique (evolution, masse, Poisson somme) est verrouillee par
+  // test_amr_system_twoblock.
+  chk(!raises([&] {
+        AmrSystemConfig c2 = cfg;
+        c2.regrid_every = 0;  // multi-blocs PR1 : hierarchie FIGEE
+        AmrSystem s(c2);
         s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
-        s.add_block("ne2", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+        s.add_block("ni", exb_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
       }),
-      "add_block refuse un second bloc (AMR mono-modele)");
+      "add_block accepte un second bloc (multi-blocs, hierarchie partagee)");
+
+  // --- CONTRAINTE DURE PR1 : multi-blocs + regrid_every > 0 est REFUSE au build -------------
+  // AmrRuntime n'a pas de regrid (hierarchie figee) : autoriser regrid_every > 0 en multi-blocs
+  // ferait croire a un AMR dynamique inexistant. Le refus tombe a ensure_built (1er mass()).
+  chk(raises([&] {
+        AmrSystemConfig c2 = cfg;
+        c2.regrid_every = 5;  // > 0
+        AmrSystem s(c2);
+        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+        s.add_block("ni", exb_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
+        (void)s.mass("ne");  // declenche ensure_built -> refus multi-blocs + regrid
+      }),
+      "multi-blocs + regrid_every > 0 refuse (hierarchie figee, regrid d'union = PR ulterieure)");
+
+  // --- mono-bloc + regrid_every > 0 reste AUTORISE (chemin AmrCouplerMP, regrid intact) -------
+  chk(!raises([&] {
+        AmrSystemConfig c2 = cfg;
+        c2.regrid_every = 5;
+        AmrSystem s(c2);
+        s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
+        (void)s.mass();  // ensure_built : mono-bloc avec regrid, pas de refus
+      }),
+      "mono-bloc + regrid_every > 0 reste autorise (regrid AmrCouplerMP intact)");
 
   if (fails == 0)
     std::printf("OK test_amr_system_contract (refus explicite des parametres non cables)\n");

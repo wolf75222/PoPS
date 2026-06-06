@@ -11,7 +11,9 @@
 #include <adc/numerics/numerical_flux.hpp>
 #include <adc/numerics/reconstruction.hpp>
 #include <adc/parallel/comm.hpp>  // n_ranks
+#include <adc/runtime/amr_runtime.hpp>  // AmrRuntimeBlock (registre multi-blocs type-erase)
 #include <adc/runtime/amr_system.hpp>
+#include <adc/runtime/block_builder.hpp>  // detail::make_poisson_rhs (rhs += elliptic_rhs(U))
 
 #include <functional>
 #include <memory>
@@ -120,6 +122,207 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     return coupler_read_coarse_phi(cpl->aux0(), nn, repl);
   };
   return h;
+}
+
+/// Layout PARTAGE d'une hierarchie AMR multi-blocs (PR1 capstone), fige a la construction. Tous les
+/// blocs allouent leurs niveaux sur EXACTEMENT ce layout (meme BoxArray + DistributionMapping +
+/// dx/dy par niveau) -> same_layout_or_throw passe par construction. PR1 : grossier + UN patch fin
+/// central FIXE (la placement par union des tags est une PR ulterieure). On expose les BoxArrays /
+/// dmaps / dx/dy par niveau, le grossier (Geometry + ba) pour le Poisson, et la politique
+/// d'ownership. build_amr_block alloue le bloc dessus.
+struct SharedAmrLayout {
+  Geometry geom;                       // geometrie du niveau grossier (Poisson)
+  BoxArray ba_coarse;                  // BoxArray du grossier
+  DistributionMapping dm_coarse;       // DistributionMapping du grossier
+  std::vector<BoxArray> ba;            // [niveau] BoxArray partage (grossier + fins)
+  std::vector<DistributionMapping> dm; // [niveau] DistributionMapping partage
+  std::vector<Real> dx, dy;            // [niveau] pas d'espace
+  bool replicated_coarse = true;       // ownership du niveau 0
+  BCRec poisson_bc;                    // CL du Poisson grossier
+  std::function<bool(Real, Real)> wall;// predicat paroi conductrice (vide = aucune)
+  int n = 128;                         // cellules du grossier par direction
+  Periodicity base_per{true, true};    // periodicite du domaine de base
+
+  int nlev() const { return static_cast<int>(ba.size()); }
+};
+
+/// Construit le layout PARTAGE (PR1) : grossier (selon la politique d'ownership) + UN patch fin
+/// central FIXE (le seed de build_amr_compiled, AVANT son regrid). Identique a la geometrie du
+/// chemin mono-bloc, mais SANS regrid initial (multi-blocs PR1 = hierarchie figee). Tous les blocs
+/// s'y posent ensuite via build_amr_block.
+inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp) {
+  SharedAmrLayout S;
+  S.geom = Geometry{Box2D::from_extents(bp.n, bp.n), 0.0, bp.L, 0.0, bp.L};
+  S.n = bp.n;
+  S.replicated_coarse = !bp.distribute_coarse;
+  S.poisson_bc = bp.poisson_bc;
+  S.wall = bp.wall;
+  const double dxc = bp.L / bp.n, dxf = dxc / 2;
+  const auto [bac, dmc] =
+      detail::coupler_make_coarse_layout(bp.n, bp.distribute_coarse, bp.coarse_max_grid);
+  S.ba_coarse = bac;
+  S.dm_coarse = dmc;
+  // Patch fin central FIXE : memes empreintes que build_amr_compiled (cellules grossieres
+  // [n/4 .. 3n/4-1]^2, raffinees x2). REPARTI round-robin DistributionMapping(nfine, n_ranks()),
+  // EXACTEMENT comme le regrid du chemin mono-bloc (amr_regrid_finest) : les patchs fins se
+  // distribuent sur les rangs (un par GPU). C'est INDISPENSABLE sous MPI : sur le grossier REPLIQUE,
+  // si le fin etait pose sur la meme dmap repliquee ({my_rank()}), CHAQUE rang detiendrait une copie
+  // de la box fine et le reflux (all_reduce_sum_inplace des registres de flux) sommerait la MEME
+  // contribution n_ranks() fois -> masse sur-comptee (croit avec np). En serie (np=1) la dmap
+  // round-robin pose la box sur le rang 0, identique a {my_rank()} : bit-identique.
+  const int I0 = bp.n / 4, I1 = 3 * bp.n / 4 - 1, J0 = bp.n / 4, J1 = 3 * bp.n / 4 - 1;
+  const Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
+  BoxArray baf(std::vector<Box2D>{fb});
+  DistributionMapping dmf(baf.size(), n_ranks());  // fin reparti round-robin (un patch par rang)
+  S.ba = {bac, baf};
+  S.dm = {dmc, dmf};
+  S.dx = {dxc, dxf};
+  S.dy = {dxc, dxf};
+  return S;
+}
+
+/// Construit UN bloc AMR type-erase (AmrRuntimeBlock) sur le layout PARTAGE @p S, pour un Model
+/// compose + (Limiter, Flux) concrets. Pendant multi-blocs de build_amr_compiled : alloue la pile de
+/// niveaux du bloc sur le MEME BoxArray/dmap que tous les autres (garantit same_layout_or_throw),
+/// pose la densite initiale (composante 0) + injection coarse->fine, et CAPTURE le schema concret
+/// dans les fermetures (advance via advance_amr<Limiter, Flux>, add_elliptic_rhs via PoissonRhs).
+/// Le noyau reste COMPILE ; seule la liste de blocs est type-erasee (calque AMR de make_block /
+/// PoissonRhs cote System plat). @p density (vide = grossier a zero), @p substeps sous-pas du bloc.
+template <class Model, class Limiter, class Flux>
+AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
+                                const std::string& name, const std::vector<double>& density,
+                                bool has_density, double gamma, int substeps, bool recon_prim,
+                                bool imex) {
+  const int nc = Model::n_vars;
+  const int ng = Limiter::n_ghost;  // stencil du limiteur (parite du schema, comme build_amr_compiled)
+  const int nlev = S.nlev();
+  auto levels = std::make_shared<std::vector<AmrLevelMP>>();
+  levels->reserve(nlev);
+  for (int k = 0; k < nlev; ++k) {
+    MultiFab U(S.ba[k], S.dm[k], nc, ng);
+    U.set_val(Real(0));
+    levels->push_back(AmrLevelMP{std::move(U), nullptr, S.dx[k], S.dy[k]});
+  }
+  // densite initiale (composante 0) sur le grossier + injection piecewise-constante vers les fins,
+  // exactement comme build_amr_compiled. Sans densite : grossier a zero (bloc neutre / fond).
+  if (has_density)
+    detail::coupler_write_coarse((*levels)[0].U, density, S.n, nc, gamma);
+  for (int k = 1; k < nlev; ++k)
+    detail::coupler_inject_coarse_to_fine_mb((*levels)[0].U, (*levels)[k].U, S.replicated_coarse);
+
+  AmrRuntimeBlock b;
+  b.name = name;
+  b.ncomp = nc;
+  b.gamma = gamma;
+  b.substeps = substeps;
+  b.aux_ncomp = aux_comps<Model>();  // largeur aux LUE par le modele (B_z/T_e -> > kAuxBaseComps)
+  b.levels = levels;
+
+  const int sub = substeps;
+  const bool rprim = recon_prim;
+  const bool bimex = imex;
+  // advance : transport AMR du bloc (Berger-Oliger + reflux + average_down conservatifs) avec SON
+  // schema (Limiter, Flux) sur SA pile de niveaux. sub sous-pas de dt/sub. imex => source raide
+  // implicite via le drapeau d'advance_amr (transport explicite porte par le reflux). FONCTEUR
+  // implicite : advance_amr<Limiter, Flux> est une fonction template nommee (pas de lambda etendue
+  // cross-TU) ; on la capture dans une std::function depuis CETTE TU (recette device-clean #64/#97).
+  b.advance = [model, sub, rprim, bimex](std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
+                                         Periodicity per, bool repl) {
+    const Real h = dt / static_cast<Real>(sub);
+    for (int s = 0; s < sub; ++s)
+      advance_amr<Limiter, Flux>(model, L, dom, h, per, repl, rprim, bimex);
+  };
+  // contribution du bloc au RHS de Poisson SOMME : rhs += elliptic_rhs(U) sur le grossier (boucle
+  // hote pure). MEME foncteur que System plat (make_poisson_rhs -> detail::PoissonRhs) -> chaque
+  // bloc accumule (+=) aux MEMES cellules du grossier partage (co-localisation par cellule).
+  b.add_elliptic_rhs = make_poisson_rhs(model);
+  b.max_speed = [model](const MultiFab& U, const MultiFab& aux) {
+    return max_wave_speed_mf(model, U, aux);
+  };
+  const Geometry g = S.geom;
+  const bool repl = S.replicated_coarse;
+  b.mass = [levels, g, repl] {
+    const MultiFab& U = (*levels)[0].U;
+    const Real dV = g.dx() * g.dy();
+    Real M = 0;
+    for (int li = 0; li < U.local_size(); ++li) {
+      const ConstArray4 u = U.fab(li).const_array();
+      M += for_each_cell_reduce_sum(
+          U.box(li), [u, dV] ADC_HD(int i, int j) { return u(i, j, 0) * dV; });
+    }
+    return repl ? M : all_reduce_sum(M);
+  };
+  const int nn = S.n;
+  b.density = [levels, nn, repl] {
+    return detail::coupler_read_coarse((*levels)[0].U, nn, repl);
+  };
+  b.potential = [nn, repl](const MultiFab& aux0) {
+    return detail::coupler_read_coarse_phi(aux0, nn, repl);
+  };
+  return b;
+}
+
+/// Dispatch du schema spatial (limiteur x flux Riemann) -> build_amr_block. MEMES gardes que
+/// dispatch_amr_compiled (hllc/roe exigent un transport compressible a 4 variables + pression).
+/// Pendant multi-blocs de dispatch_amr_compiled.
+template <class Model>
+AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const std::string& riem,
+                                   const SharedAmrLayout& S, const std::string& name,
+                                   const std::vector<double>& density, bool has_density,
+                                   double gamma, int substeps, bool recon_prim, bool imex) {
+  if (riem == "rusanov") {
+    if (lim == "none")
+      return build_amr_block<Model, NoSlope, RusanovFlux>(m, S, name, density, has_density, gamma,
+                                                          substeps, recon_prim, imex);
+    if (lim == "minmod")
+      return build_amr_block<Model, Minmod, RusanovFlux>(m, S, name, density, has_density, gamma,
+                                                        substeps, recon_prim, imex);
+    if (lim == "vanleer")
+      return build_amr_block<Model, VanLeer, RusanovFlux>(m, S, name, density, has_density, gamma,
+                                                         substeps, recon_prim, imex);
+    if (lim == "weno5")
+      return build_amr_block<Model, Weno5, RusanovFlux>(m, S, name, density, has_density, gamma,
+                                                       substeps, recon_prim, imex);
+    throw std::runtime_error("add_block(AmrSystem, multi-blocs) : limiter inconnu '" + lim + "'");
+  }
+  if (riem == "hllc") {
+    if constexpr (Model::n_vars == 4 &&
+                  requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
+      if (lim == "none")
+        return build_amr_block<Model, NoSlope, HLLCFlux>(m, S, name, density, has_density, gamma,
+                                                        substeps, recon_prim, imex);
+      if (lim == "minmod")
+        return build_amr_block<Model, Minmod, HLLCFlux>(m, S, name, density, has_density, gamma,
+                                                      substeps, recon_prim, imex);
+      if (lim == "vanleer")
+        return build_amr_block<Model, VanLeer, HLLCFlux>(m, S, name, density, has_density, gamma,
+                                                       substeps, recon_prim, imex);
+      throw std::runtime_error("add_block(AmrSystem, multi-blocs) : limiter inconnu '" + lim + "'");
+    } else {
+      throw std::runtime_error("add_block(AmrSystem, multi-blocs) : flux 'hllc' exige un transport "
+                               "compressible (4 variables + pression)");
+    }
+  }
+  if (riem == "roe") {
+    if constexpr (Model::n_vars == 4 &&
+                  requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
+      if (lim == "none")
+        return build_amr_block<Model, NoSlope, RoeFlux>(m, S, name, density, has_density, gamma,
+                                                       substeps, recon_prim, imex);
+      if (lim == "minmod")
+        return build_amr_block<Model, Minmod, RoeFlux>(m, S, name, density, has_density, gamma,
+                                                     substeps, recon_prim, imex);
+      if (lim == "vanleer")
+        return build_amr_block<Model, VanLeer, RoeFlux>(m, S, name, density, has_density, gamma,
+                                                      substeps, recon_prim, imex);
+      throw std::runtime_error("add_block(AmrSystem, multi-blocs) : limiter inconnu '" + lim + "'");
+    } else {
+      throw std::runtime_error("add_block(AmrSystem, multi-blocs) : flux 'roe' exige un transport "
+                               "compressible (4 variables + pression)");
+    }
+  }
+  throw std::runtime_error("add_block(AmrSystem, multi-blocs) : flux Riemann inconnu '" + riem +
+                           "' (rusanov|hllc|roe)");
 }
 
 /// Dispatch du schema spatial (limiteur x flux Riemann) -> build_amr_compiled. Memes gardes que

@@ -273,6 +273,15 @@ add_executable(test_amr_system_contract test_amr_system_contract.cpp
 target_link_libraries(test_amr_system_contract PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_amr_system_contract COMMAND test_amr_system_contract)
 
+# --- AMR MULTI-BLOCS (capstone PR1) : facade AmrSystem -> moteur runtime AmrRuntime ---------------
+# Deux blocs EXPLICITES a schemas DIFFERENTS sur UNE hierarchie AMR PARTAGEE : Poisson somme
+# co-localise (q0 n0 + q1 n1), masse conservee PAR BLOC, mono-bloc bit-identique (dmax=0), refus
+# multi-blocs + regrid. Compile python/amr_system.cpp (la facade) avec le test.
+add_executable(test_amr_system_twoblock test_amr_system_twoblock.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_system_twoblock PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_amr_system_twoblock COMMAND test_amr_system_twoblock)
+
 # --- runtime System : B_z partage cable de bout en bout (ensure_aux_width + set_magnetic_field) ---
 add_executable(test_aux_runtime_bz test_aux_runtime_bz.cpp
                ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
@@ -407,6 +416,21 @@ if(ADC_HAS_MPI)
     add_test(NAME test_mpi_amr_compiled_parity_np${np}
              COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_amr_compiled_parity>
+                     ${MPIEXEC_POSTFLAGS})
+  endforeach()
+
+  # --- PARITE MPI du capstone AMR MULTI-BLOCS (PR1) : DEUX blocs explicites a schemas DIFFERENTS sur
+  # UNE hierarchie partagee (Poisson de systeme somme q0 n0 + q1 n1 co-localise), DISTRIBUES sur
+  # n_ranks(). Grossier replique -> masse par bloc + densite + potentiel bit-identiques cross-rang
+  # (spread == 0). np=1 multi-box mono-rang, np=2/4 cross-rang MPI. Compile le runtime AmrSystem
+  # comme test_mpi_amr_compiled_parity. Un binaire, trois entrees ctest (np=1/2/4 bit-identiques).
+  add_executable(test_mpi_amr_twoblock_parity test_mpi_amr_twoblock_parity.cpp
+                 ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+  target_link_libraries(test_mpi_amr_twoblock_parity PRIVATE adc::adc ${CMAKE_DL_LIBS})
+  foreach(np 1 2 4)
+    add_test(NAME test_mpi_amr_twoblock_parity_np${np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:test_mpi_amr_twoblock_parity>
                      ${MPIEXEC_POSTFLAGS})
   endforeach()
 

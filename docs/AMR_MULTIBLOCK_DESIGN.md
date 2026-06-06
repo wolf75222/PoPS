@@ -590,25 +590,37 @@ absence spatiale locale d'un bloc sur un patch.
 - [x] LAYOUT (premier pas, LIVRE) : `same_layout_or_throw` JETTE sur tout mismatch (boites,
       ORDRE des boites, dmap, dx/dy, nombre de niveaux) et PASSE sur un layout identique ;
       mono-bloc bit-identique (`dmax == 0`). Test `tests/test_amr_layout_guard.cpp`.
-- [ ] Deux blocs AMR explicites a schemas DIFFERENTS, stables sur N pas.
-- [ ] electrons IMEX(substeps=10) + ions Explicit(substeps=1), stable ; ET l'inverse.
-- [ ] neutres stride=20 toujours lus par les sources et le Poisson entre rattrapages.
-- [ ] `evolve=False` present comme fond fixe dans le second membre elliptique.
-- [ ] MULTI-BLOCS + `regrid_every > 0` EXPLICITEMENT REFUSE tant que le regrid d'union n'existe
-      pas (point 4 ; throw clair, dans la PR du registre runtime).
-- [ ] regrid conserve la masse de CHAQUE bloc (`mass(b)` avant == apres, par bloc).
+- [x] FACADE RUNTIME multi-blocs (LIVRE, PR registre runtime) : `AmrSystem` accepte N blocs natifs
+      co-localises sur UNE hierarchie partagee via le moteur type-erase `AmrRuntime`
+      (`include/adc/runtime/amr_runtime.hpp`), registre par nom de fermetures
+      (advance / add_elliptic_rhs / max_speed / mass / density / potential). Poisson de SYSTEME a
+      second membre SOMME co-localise (Sum_b elliptic_rhs_b(U_b) = q0 n0 + q1 n1 sur le grossier
+      partage). Tests `tests/test_amr_system_twoblock.cpp`, `python/tests/test_amr_multiblock.py`.
+- [x] Deux blocs AMR explicites a schemas DIFFERENTS, stables sur N pas (masse par bloc conservee).
+- [ ] electrons IMEX(substeps=10) + ions Explicit(substeps=1), stable ; ET l'inverse. (PR ulterieure)
+- [ ] neutres stride=20 toujours lus par les sources et le Poisson entre rattrapages. (PR ulterieure)
+- [ ] `evolve=False` present comme fond fixe dans le second membre elliptique. (PR ulterieure)
+- [x] MULTI-BLOCS + `regrid_every > 0` EXPLICITEMENT REFUSE tant que le regrid d'union n'existe
+      pas (point 4 ; throw clair, a `ensure_built` du registre runtime).
+- [ ] regrid conserve la masse de CHAQUE bloc (`mass(b)` avant == apres, par bloc). (regrid d'union
+      = PR ulterieure ; le multi-blocs est FIGE pour l'instant)
 - [ ] `dsl.Model(...).compile(target="amr_system", backend="production")` pour DEUX blocs
-      (bloc NOMME installe, pas remplace), ABI key verifiee.
+      (bloc NOMME installe, pas remplace), ABI key verifiee. (DSL production multi-bloc = PR ulterieure ;
+      le compile multi-bloc est explicitement rejete pour l'instant)
 - [ ] source couplee `+k n_e n_g` / `-k n_e n_g` : `n_i + n_g` constant a la precision machine,
-      par niveau, sur tous les patchs.
+      par niveau, sur tous les patchs. (PR ulterieure)
 - [ ] CONSERVATION COMPOSITE AMR de la source couplee (point 5) : sur une source NON nulle dont la
       zone CHEVAUCHE l'interface coarse-fine, la masse TOTALE integree sur la hierarchie composite
       est conservee (leaf-only OU sync apres la source) -> ecarte le double comptage des cellules
-      couvertes. La conservation PAR CELLULE ne suffit PAS.
-- [ ] MPI np=1/2/4 bit-identiques (reflux par bloc + tags unis reduits).
-- [ ] Kokkos Serial vert.
-- [ ] un cas multi-bloc production valide sur GH200 (instanciation device complete).
-- [ ] NON-REGRESSION : un cas mono-bloc reste BIT-IDENTIQUE (maxdiff=0) a travers la facade.
+      couvertes. La conservation PAR CELLULE ne suffit PAS. (PR ulterieure)
+- [x] MPI np=1/2/4 bit-identiques (reflux par bloc ; grossier replique consistant cross-rang).
+      Test `tests/test_mpi_amr_twoblock_parity.cpp` (patch fin REPARTI round-robin -> pas de
+      sur-comptage du reflux ; np=1/2/4 bit-identiques, spread cross-rang == 0).
+- [x] Kokkos Serial / OpenMP vert (two-block + mono-bloc).
+- [ ] un cas multi-bloc production valide sur GH200 (instanciation device complete). (validation
+      device dediee a faire sur ROMEO ; le chemin est device-clean par construction, foncteurs nommes)
+- [x] NON-REGRESSION : un cas mono-bloc reste BIT-IDENTIQUE (maxdiff=0) a travers la facade
+      (le mono-bloc route TOUJOURS par AmrCouplerMP intouche ; jamais par AmrRuntime).
 
 
 ## 9. References de code (toutes verifiees a ce head)
