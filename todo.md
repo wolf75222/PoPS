@@ -49,16 +49,32 @@ sans ghost -> derive de l'aux lisait phi hors allocation -> nan masque (test pas
 faux en C++) ; fix `derive_aux_polar` (radial DECENTRE ordre 2 aux parois, theta ENROULE periodique).
 (2) revue adversariale : precondition nr>=3 non imposee -> OOB pour `PolarMesh(nr=2)` ; garde
 (check_geometry C++ + PolarMesh Python) + test de rejet. Validation : C++ conservation masse 3.4e-15 ;
-Python `System(PolarMesh)` step+step_cfl <1e-11 ; cartesien 4/4 PASS. RESTE : le RUN diocotron annulaire
-quantitatif (mesure du taux) = livrable scientifique suivant.
+Python `System(PolarMesh)` step+step_cfl <1e-11 ; cartesien 4/4 PASS.
 
-**En vol (vague parallele, agents isoles + integrateur ; chaque PR passe la revue adversariale) :**
-- [ ] **AMR capstone (iv)** : facade runtime honore substeps/stride par bloc + step_cfl substeps-aware
-  (`amr_runtime.hpp` + `amr_system.cpp` + tests ; le moteur `AmrSystemCoupler` a deja la logique a mirror).
-- [ ] **Lot B SystemFieldSolver** : extraction de `system.cpp` (elliptique + derive de champ, cartesien +
-  polaire), bit-identique, jugee par la suite System+polaire.
-- [ ] **Lot A.5 core/** : convention de commentaires sur `include/adc/core/` (commentaires seuls).
-- [ ] **Doc honnetete** : docstring DSL A.1 + classification briques physics (audit section 6).
+**MILESTONE SCIENTIFIQUE (#174) :** le chemin polaire CAPTURE l'instabilite diocotron. Sanity locale
+(anneau de charge creux, mode l=4 seme, WENO5/SSPRK3) : l'amplitude du mode CROIT proprement (x8.8 a
+96x96/600 pas, taux ajuste gamma~0.195), masse conservee a 2.2e-14, densite finie/positive. Verrouille
+en regression CI rapide (`python/tests/test_polar_diocotron.py`, 48x48, x>2). La mesure QUANTITATIVE du
+taux vs theorie (l=3/4/5, O5, n=384/512) reste le run ROMEO.
+
+**Vague parallele MERGEE (revue adversariale + ci-full) :**
+- [x] **AMR capstone (iv) #175** : facade runtime honore substeps/stride par bloc + step_cfl substeps-aware
+  (mirror de `AmrSystemCoupler::step` ; mono-bloc bit-identique via routage AmrCouplerMP ; test multirate
+  avec neutralize-and-fail). MERGE-SAFE (revue 4 lentilles, 0 blocker).
+- [x] **Lot A.5 core/ #173** : convention de commentaires sur `include/adc/core/` (commentaires seuls,
+  no-code-change verifie, ctest 96/96).
+- [x] **Doc honnetete #172** : docstring DSL (paragraphe CoupledSource/add_pair) + classification des 3
+  briques physics (AdvectionDiffusion/LangmuirMode/TwoFluidLinear = TEST/VALIDATION, non utilisees par
+  adc_cases ; correction d'un commentaire "deprecated" faux).
+- [x] **Test diocotron polaire #174** (cf. milestone ci-dessus).
+
+**En vol (vague suivante) :**
+- [~] **Lot B SystemFieldSolver (#176, EN REVUE)** : extraction de `system.cpp` (elliptique + derive de
+  champ, cartesien + polaire) vers `system_field_solver.hpp` ; 1470->1155 lignes ; bit-identite prouvee
+  par md5 de snapshots (5 chemins) ; ctest 133/133. NOTE : segfault de teardown sur profils polaires
+  INSTABLES = PRE-EXISTANT (reproduit sur master, hors #176) -> a tracer.
+- [~] **AMR capstone (vi)** : sources couplees inter-especes sur la facade runtime (ionisation/collision,
+  +k/-k meme cellule ; average_down covered cells deja #169). Agent en cours.
 
 **Prochaines etapes (sequencees, ETAT PRECIS post-scoping) :**
 1. **Schur PR6** (apres merge #168) : mesure diocotron-Schur sur le chemin polaire desormais dispo ;
@@ -472,14 +488,13 @@ Decoupe PR (Phase 1, write-sets) - ETAT PRECIS (scoping) :
 - [x] **(ii)** 2 blocs explicites, schemas differents (facade AmrRuntime + Poisson somme co-localisee +
       conservation par bloc + MPI np=1/2/4). FAIT #154. Tests test_amr_system_twoblock + mpi_twoblock_parity.
 - [ ] **(iii)** test de VALIDATION Poisson somme co-localise [trivial, validation seule ; le moteur le fait deja].
-- [ ] **(iv) IMMEDIAT** substeps/stride/evolve + step_cfl substeps-aware : `AmrRuntime::step` doit honorer
-      `substeps_`/`stride` par bloc (actuellement tous explicites a 1 sous-pas) ; `AmrSystem::step_cfl` doit
-      devenir substeps-aware (`dt=cfl*h*min(sub_b)/max(stride_b*w_b)`). Write-set : amr_runtime.hpp +
-      amr_system.cpp + 2 tests. AUCUN conflit avec system.cpp/dsl.py. stride_due deja correct (#140).
+- [x] **(iv) #175** substeps/stride par bloc + step_cfl substeps-aware : `AmrRuntime::step` honore
+      substeps/stride (hold-then-catch-up, mirror `AmrSystemCoupler::step`) ; `AmrSystem::step_cfl` =
+      `cfl*h*min_b(substeps_b/(stride_b*w_b))`. Mono-bloc bit-identique (routage AmrCouplerMP). MERGE.
 - [ ] **(v)** DSL production multi-bloc : `add_native_block`/`add_compiled_model(AmrSystem&)` ne doit plus
       lever sur le 2e bloc (file d'attente + build a `ensure_built`). Write-set amr_dsl_block.hpp + amr_system.cpp.
-- [ ] **(vi)** sources couplees AMR meme-cellule / opposees : exposer `coupled_source_step` du moteur via le
-      registre runtime ; A3 (average_down covered cells) DEJA fait (#169). Write-set amr_runtime.hpp + amr_system.cpp.
+- [~] **(vi) EN COURS** sources couplees AMR meme-cellule / opposees : exposer `coupled_source_step` du
+      moteur via le registre runtime ; A3 (average_down covered cells) DEJA fait (#169). amr_runtime.hpp + amr_system.cpp.
 - [ ] **(vii)** IMEX local AMR runtime : la facade honore `time="imex"` multi-bloc (le moteur a deja le callback).
 - [ ] **(viii)** Phase 2 : regrid union-tags (deverrouille multi-bloc + regrid_every>0) ; puis Schur / implicite
       global / repro papier.
