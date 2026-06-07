@@ -79,8 +79,8 @@ concept DiffusiveModel = requires(const M m) {
 /// est traitee implicitement par backward_euler_source. N'expose pas diffusivity() pour ne
 /// pas casser les modeles non diffusifs. Transparent au contrat HLL/HLLC : forwarde
 /// pressure et wave_speeds uniquement si M les expose (clause requires).
-// Modele « sans source » : meme flux et vitesse d'onde que M, mais source nulle. Sert au
-// demi-pas EXPLICITE d'un schema IMEX (transport seul, −div F), la source raide etant
+// Modele "sans source" : meme flux et vitesse d'onde que M, mais source nulle. Sert au
+// demi-pas EXPLICITE d'un schema IMEX (transport seul, -div F), la source raide etant
 // traitee implicitement a part (backward_euler_source). Note : n'expose pas diffusivity()
 // (le forwarder inconditionnellement casserait les modeles non diffusifs) -> un bloc IMEX
 // diffusif perdrait son flux Fickien dans le demi-pas explicite ; raffinement a part.

@@ -1,6 +1,6 @@
-// Scission Assembleur / Driver (retour tuteur §8.2 B). Un SystemAssembler ASSEMBLE les
+// Scission Assembleur / Driver (retour tuteur sec.8.2 B). Un SystemAssembler ASSEMBLE les
 // champs (Poisson de systeme + aux + residu de bloc) SANS avancer ; un SystemDriver AVANCE
-// (et possede un assembleur). « advance un coupleur » devient « advance un driver ».
+// (et possede un assembleur). "advance un coupleur" devient "advance un driver".
 
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/state.hpp>

@@ -129,7 +129,7 @@ class Coupler {
                       std::is_same_v<Policy, OncePerStepCoupling>,
                   "Policy doit etre PerStageCoupling ou OncePerStepCoupling");
     constexpr bool per = std::is_same_v<Policy, PerStageCoupling>;
-    // DELEGUE le schema a l'objet SSPRK2Step du coeur (dedup, §8.2 A4). L'evaluateur de
+    // DELEGUE le schema a l'objet SSPRK2Step du coeur (dedup, sec.8.2 A4). L'evaluateur de
     // residu compte les etages : recompute_aux=true a l'etage 0, =per ensuite (PerStage :
     // phi recalcule pour l'etat intermediaire ; OncePerStep : aux gele). Bit-identique.
     int stage = 0;

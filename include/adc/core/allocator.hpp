@@ -169,7 +169,7 @@ class ManagedArena {
   std::mutex m_;
   std::once_flag hook_once_;  // enregistrement unique du finalize hook Kokkos
   std::unordered_map<std::size_t, std::vector<void*>> ready_;    // surs, reutilisables
-  std::unordered_map<std::size_t, std::vector<void*>> pending_;  // liberes, a draîner
+  std::unordered_map<std::size_t, std::vector<void*>> pending_;  // liberes, a drainer
   long pending_count_ = 0;
   long hits_ = 0, misses_ = 0, fences_ = 0;
   std::size_t reserved_ = 0;

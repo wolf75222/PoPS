@@ -1,4 +1,4 @@
-// Multirate PLEINEMENT ADAPTATIF (§8.2 C) : SystemDriver::step_adaptive(cfl). Le pas macro
+// Multirate PLEINEMENT ADAPTATIF (sec.8.2 C) : SystemDriver::step_adaptive(cfl). Le pas macro
 // est fixe par l'espece la plus rapide (CFL) ; le `stride` de chaque espece est derive AU
 // RUNTIME du ratio w_max/w_s. Une espece 4x plus lente avance donc 1 fois sur 4, par un pas
 // 4x plus grand (= son dt stable), en une seule resolution.

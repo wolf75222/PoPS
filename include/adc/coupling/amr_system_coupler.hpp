@@ -317,7 +317,7 @@ class AmrSystemCoupler {
       constexpr int n = block_substeps_v<Block>;
       constexpr int stride = block_stride_v<Block>;
       const std::size_t bi = b++;
-      // cadence HOLD-THEN-CATCH-UP (doc add_block, §8.2 C) : le bloc est TENU aux
+      // cadence HOLD-THEN-CATCH-UP (doc add_block, sec.8.2 C) : le bloc est TENU aux
       // macro-pas 0..stride-2 et rattrape au macro-pas stride-1 (quand
       // (macro_step_+1) % stride == 0). Evite qu'un bloc lent avance en avance
       // au premier macro-pas (macro_step_=0, ancienne condition 0%stride==0 vraie),
@@ -338,7 +338,7 @@ class AmrSystemCoupler {
       } else if constexpr (treatment == TimeTreatment::Implicit ||
                            treatment == TimeTreatment::IMEX) {
         // IMEX = vrai forward-backward (revue Codex 9.1) : transport explicite par le
-        // moteur AMR sur un modele SOURCE-FREE (−div F seul), puis source implicite par
+        // moteur AMR sur un modele SOURCE-FREE (-div F seul), puis source implicite par
         // le callback. Implicite pur : tout au callback (pas de transport).
         if constexpr (treatment == TimeTreatment::IMEX)
           advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
@@ -496,7 +496,7 @@ struct AmrImplicitSourceStepper {
   }
 };
 
-// Alias « qui avance » (retour tuteur §8.2 B, §9.6) : AmrSystemCoupler assemble (Poisson de
+// Alias "qui avance" (retour tuteur sec.8.2 B, sec.9.6) : AmrSystemCoupler assemble (Poisson de
 // systeme + aux par niveau) ET avance (step, reflux, sous-cyclage). Scission en deux classes
 // cosmetique et reportee (classe unifiee validee bit-identique).
 template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>

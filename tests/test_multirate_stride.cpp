@@ -1,10 +1,10 @@
-// Multirate par CADENCE (retour tuteur §8.2 C) : une espece « lente » (un gaz) n'est pas
+// Multirate par CADENCE (retour tuteur sec.8.2 C) : une espece "lente" (un gaz) n'est pas
 // resolue a chaque pas. `stride` = elle n'avance qu'1 macro-pas sur stride, alors d'un pas
 // effectif stride*dt (elle rattrape le temps). Au total elle avance autant, mais calculee
 // stride fois moins souvent.
 //
 // Ici : bloc rapide (stride 1) + bloc lent (stride 3), production constante. Apres 1 pas le
-// lent a deja fait son pas de 3*dt (≠ rapide) ; apres 3 pas les deux sont synchronises.
+// lent a deja fait son pas de 3*dt (!= rapide) ; apres 3 pas les deux sont synchronises.
 
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/state.hpp>

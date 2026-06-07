@@ -1,4 +1,4 @@
-// Pas macro choisi par CFL multi-especes (§8.2 C) : SystemDriver::step_cfl. Le pas est
+// Pas macro choisi par CFL multi-especes (sec.8.2 C) : SystemDriver::step_cfl. Le pas est
 // dt = cfl * min(dx,dy) / w_max, ou w_max est la plus grande vitesse d'onde sur TOUTES les
 // especes -> l'espece la plus rapide contraint le pas. Combine au Stride d'une espece lente,
 // cela donne le multirate pratique.

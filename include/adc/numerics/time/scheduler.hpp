@@ -33,7 +33,7 @@ constexpr int block_stride_v =
 // Variante avec compteur de macro-pas : un bloc de cadence `stride` n'avance qu'aux
 // macro-pas multiples de stride, et alors d'un pas EFFECTIF stride*dt (il rattrape le
 // temps). Total au bout de M macro-pas = M*dt comme les autres, mais calcule M/stride
-// fois (le « gaz pas resolu tous les pas »). substeps reste orthogonal (decoupe le pas
+// fois (le "gaz pas resolu tous les pas"). substeps reste orthogonal (decoupe le pas
 // effectif). stride=1 -> chaque macro-pas, pas effectif dt : strictement l'historique.
 template <CoupledSystemLike System, class AdvanceBlock>
 void advance_subcycled(System& system, Real dt, int macro_step,

@@ -99,7 +99,7 @@ struct CsProgram {
 //   1. charge les registres : r[c] = in[c](i, j, in_comp[c]) pour les entrees, puis les constantes ;
 //   2. pour chaque terme t : S_t = prog[t].eval(r) ; out[t](i, j, out_comp[t]) += dt * S_t.
 // Les ecritures de sortie sont ADDITIVES (forward-Euler split) ; plusieurs termes peuvent viser le meme
-// (bloc, comp) -- les sources s'additionnent, cohérent avec une somme de termes sources.
+// (bloc, comp) -- les sources s'additionnent, coherent avec une somme de termes sources.
 /// Foncteur device d'application d'UNE source couplee sur une box : capture par VALEUR des POD
 /// (Array4 d'entree/sortie, programmes, constantes) -> device-clean. operator()(i, j) charge les
 /// registres, evalue chaque terme et ECRIT de maniere ADDITIVE out[t] += dt * S_t (forward-Euler

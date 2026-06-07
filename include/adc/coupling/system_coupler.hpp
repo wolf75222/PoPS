@@ -37,13 +37,13 @@
 /// (aux_comps) : un bloc lisant B_z (n_aux=4) le voit, un bloc de base (3) ignore la composante extra.
 /// Aucune des deux ne remplace PhysicalModel / assemble_rhs / GeometricMG : elles les CONNECTENT.
 
-// Systeme couple mono-niveau : DEUX responsabilites, DEUX classes (retour tuteur §8.2 B).
+// Systeme couple mono-niveau : DEUX responsabilites, DEUX classes (retour tuteur sec.8.2 B).
 //
 //   SystemAssembler : ASSEMBLE. Couple l'hyperbolique et l'elliptique : RHS de systeme
 //     (f = Sum_s q_s n_s), Poisson, aux = (phi, grad phi), et l'evaluateur de residu d'un
-//     bloc R = −div F + S. Il ne fait AUCUN pas de temps.
+//     bloc R = -div F + S. Il ne fait AUCUN pas de temps.
 //   SystemDriver    : AVANCE. Porte le schedule (sous-cyclage par espece, implicite/IMEX
-//     delegue) et appelle un TimeStepper (take_step). « Avancer un coupleur » etait bancal :
+//     delegue) et appelle un TimeStepper (take_step). "Avancer un coupleur" etait bancal :
 //     ici un Assembleur assemble, un Driver avance. Le Driver POSSEDE un Assembleur.
 //
 // SystemCoupler reste comme ALIAS de SystemDriver (compat : tests, facades adc_cases).
@@ -123,7 +123,7 @@ class SystemAssembler {
     derive_aux();
   }
 
-  // Residu d'un bloc a un etage : R = −div F + S (+ aux re-resolu si recompute_aux). C'est
+  // Residu d'un bloc a un etage : R = -div F + S (+ aux re-resolu si recompute_aux). C'est
   // l'evaluateur (la fleche methode-des-lignes) que le Driver passe au TimeStepper.
   /// Residu R = -div F + S d'un bloc a un etage (avec re-resolution des champs si @p recompute_aux).
   /// C'est la fleche methode-des-lignes que le Driver passe au TimeStepper. Remplit les ghosts de
@@ -227,7 +227,7 @@ class SystemDriver {
     ++macro_step_;
   }
 
-  // Multirate PLEINEMENT ADAPTATIF (§8.2 C) : le pas macro est fixe par l'espece la plus
+  // Multirate PLEINEMENT ADAPTATIF (sec.8.2 C) : le pas macro est fixe par l'espece la plus
   // rapide (CFL), et le `stride` de CHAQUE espece est derive AU RUNTIME du ratio des
   // vitesses d'onde, stride_s = max(1, floor(w_max / w_s)). Une espece lente (gaz) avance
   // donc automatiquement moins souvent, par un pas plus grand (stride_s * macro_dt ~ son dt
@@ -279,7 +279,7 @@ class SystemDriver {
     });
   }
 
-  // Pas macro choisi par CFL multi-especes (§8.2 C) : dt = cfl * min(dx,dy) / w_max, ou
+  // Pas macro choisi par CFL multi-especes (sec.8.2 C) : dt = cfl * min(dx,dy) / w_max, ou
   // w_max est la PLUS GRANDE vitesse d'onde sur TOUTES les especes (l'espece la plus rapide
   // contraint le pas). Combine au `Stride` d'une espece lente (gaz), cela donne le multirate
   // pratique : pas macro fixe par les rapides, lente avancee 1 fois sur stride. Retourne le
@@ -371,7 +371,7 @@ class SystemDriver {
                     "(objet a take_step(rhs_eval, U, dt)) fourni par l'utilisateur");
   }
 
-  // Demi-pas EXPLICITE d'un bloc IMEX : transport seul (−div F, source-free), Euler avant.
+  // Demi-pas EXPLICITE d'un bloc IMEX : transport seul (-div F, source-free), Euler avant.
   // La source raide est traitee separement en implicite par le callback. aux suppose a jour.
   template <class Block>
   void explicit_transport(Block& block, Real dt) {
@@ -390,7 +390,7 @@ class SystemDriver {
 };
 
 // Compat / nommage historique : SystemCoupler == le Driver (qui avance). On garde l'alias
-// SystemCoupler (tests, facade MultiSpeciesSolver) ET SystemDriver (le nom « qui avance »).
+// SystemCoupler (tests, facade MultiSpeciesSolver) ET SystemDriver (le nom "qui avance").
 template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>
 using SystemCoupler = SystemDriver<System, RhsAssembler, Elliptic>;
 

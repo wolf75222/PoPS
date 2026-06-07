@@ -1,5 +1,5 @@
 // Bindings pybind11 de la LIB adc_cpp : le module compile `_adc`. On expose la
-// facade de composition a l'execution `System` (le « coupleur / systeme » du
+// facade de composition a l'execution `System` (le "coupleur / systeme" du
 // tuteur) + sa config. Python compose QUOI assembler (modele + schema spatial +
 // traitement temporel + sous-pas par bloc, Poisson de systeme) ; tout le calcul
 // cellule par cellule reste dans la lib compilee. Le sucre lisible (Spatial,

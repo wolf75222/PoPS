@@ -25,7 +25,7 @@
 ///                     la cle change et l'incompatibilite est detectee. Absente (vieux build / build
 ///                     manuel) -> jeton litteral "unknown" : la cle reste stable et comparable, elle
 ///                     ne capture alors que compilateur + standard (degradation gracieuse, jamais UB
-///                     silencieux car les deux cotes voient le meme "unknown" s'ils sont bâtis pareil).
+///                     silencieux car les deux cotes voient le meme "unknown" s'ils sont batis pareil).
 
 #ifndef ADC_HEADER_SIG
 #define ADC_HEADER_SIG "unknown"

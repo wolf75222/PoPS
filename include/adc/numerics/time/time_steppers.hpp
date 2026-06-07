@@ -6,14 +6,14 @@
 
 #include <utility>
 
-// Integrateurs en temps comme OBJETS de premier plan (`take_step`), retour tuteur §8.2 A.
+// Integrateurs en temps comme OBJETS de premier plan (`take_step`), retour tuteur sec.8.2 A.
 //
 // Le schema mathematique (SSPRK, Euler avant, ...) vit ICI, dans le coeur, et le coupleur
 // l'APPELLE, au lieu d'inliner SSPRK dans chaque coupleur. Un integrateur est agnostique
 // du modele et de la discretisation : il ne voit QUE `rhs_eval(U_stage, R)`, la fleche
-// methode-des-lignes qui remplit le residu R = −div F + S, et les operations MultiFab
-// (saxpy/lincomb). C'est exactement le contrat « donner un TimeIntegrator au coupleur,
-// comme on donne un PhysicalModel ». L'utilisateur peut fournir le sien : meme signature
+// methode-des-lignes qui remplit le residu R = -div F + S, et les operations MultiFab
+// (saxpy/lincomb). C'est exactement le contrat "donner un TimeIntegrator au coupleur,
+// comme on donne un PhysicalModel". L'utilisateur peut fournir le sien : meme signature
 // `take_step(rhs_eval, U, dt)`.
 //
 // Le scratch (R, etages U1/U2/U3) est alloue depuis le layout de U : aucun etat porte.

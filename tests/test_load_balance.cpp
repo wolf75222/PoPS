@@ -82,7 +82,7 @@ int main() {
   chk(sfc_t == nranks - 1, "sfc_contiguous_segments");
   chk(knap_t > sfc_t, "knap_less_local_than_sfc");
 
-  // --- cas non-uniforme conçu : poids [5,4,3,2,2,2], 3 rangs, places le long
+  // --- cas non-uniforme concu : poids [5,4,3,2,2,2], 3 rangs, places le long
   // de l'axe x pour que l'ordre de Morton = l'ordre d'insertion. Le knapsack
   // (LPT) doit equilibrer strictement mieux que la coupe contigue SFC. ---
   const int w[] = {5, 4, 3, 2, 2, 2};
