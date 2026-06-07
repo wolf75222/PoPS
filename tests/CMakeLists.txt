@@ -344,6 +344,17 @@ add_executable(test_amr_multiblock_imex test_amr_multiblock_imex.cpp
 target_link_libraries(test_amr_multiblock_imex PRIVATE adc::adc ${CMAKE_DL_LIBS})
 add_test(NAME test_amr_multiblock_imex COMMAND test_amr_multiblock_imex)
 
+# --- AMR MULTI-BLOCS REGRID D'UNION DES TAGS (capstone Phase 2, C.6) -----------------------------------
+# AmrRuntime::regrid pilote par l'UNION (OU cellule a cellule) des tags de TOUS les blocs (predicat par
+# bloc, D1) + tags de phi sur |grad phi| (D4) -> un clustering Berger-Rigoutsos -> un layout fin partage
+# applique a TOUS les blocs (y compris stride-tenus, D3) + a l'aux, en maintenant same_layout_or_throw
+# (D5 : 2 niveaux). Couvre (a) hierarchie qui evolue, (b)+(c) union A OU B OU |grad phi|, (d) bloc
+# stride-tenu re-grille, (e) regrid_every==0 bit-identique. Foncteurs de tag NOMMES (nvcc-safe).
+add_executable(test_amr_multiblock_regrid_union test_amr_multiblock_regrid_union.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
+target_link_libraries(test_amr_multiblock_regrid_union PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_amr_multiblock_regrid_union COMMAND test_amr_multiblock_regrid_union)
+
 # --- runtime System : B_z partage cable de bout en bout (ensure_aux_width + set_magnetic_field) ---
 add_executable(test_aux_runtime_bz test_aux_runtime_bz.cpp
                ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)

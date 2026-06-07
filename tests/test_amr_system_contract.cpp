@@ -128,18 +128,20 @@ int main(int argc, char** argv) {
       }),
       "add_block accepte un second bloc (multi-blocs, hierarchie partagee)");
 
-  // --- CONTRAINTE DURE PR1 : multi-blocs + regrid_every > 0 est REFUSE au build -------------
-  // AmrRuntime n'a pas de regrid (hierarchie figee) : autoriser regrid_every > 0 en multi-blocs
-  // ferait croire a un AMR dynamique inexistant. Le refus tombe a ensure_built (1er mass()).
-  chk(raises([&] {
+  // --- DEVERROUILLAGE (capstone Phase 2, C.6) : multi-blocs + regrid_every > 0 est ACCEPTE ----
+  // L'ancien REFUS (la hierarchie multi-blocs etait FIGEE) est leve : AmrRuntime porte le regrid
+  // d'union des tags (set_regrid + set_block_tag_predicate cables dans build_multi). ensure_built
+  // (1er mass()) construit le moteur avec la cadence active au lieu de lever ; le regrid d'union et
+  // le mouvement effectif de la hierarchie sont verrouilles par test_amr_multiblock_regrid_union.
+  chk(!raises([&] {
         AmrSystemConfig c2 = cfg;
         c2.regrid_every = 5;  // > 0
         AmrSystem s(c2);
         s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
         s.add_block("ni", exb_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
-        (void)s.mass("ne");  // declenche ensure_built -> refus multi-blocs + regrid
+        (void)s.mass("ne");  // declenche ensure_built -> moteur multi-blocs avec regrid d'union actif
       }),
-      "multi-blocs + regrid_every > 0 refuse (hierarchie figee, regrid d'union = PR ulterieure)");
+      "multi-blocs + regrid_every > 0 ACCEPTE (regrid d'union des tags, deverrouillage Phase 2)");
 
   // --- mono-bloc + regrid_every > 0 reste AUTORISE (chemin AmrCouplerMP, regrid intact) -------
   chk(!raises([&] {

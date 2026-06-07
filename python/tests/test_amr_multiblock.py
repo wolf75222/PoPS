@@ -7,7 +7,7 @@ sur UNE hierarchie AMR PARTAGEE, avec un Poisson de SYSTEME a second membre SOMM
   (b) la MASSE de CHAQUE bloc est conservee a ~machine (reflux + average_down, PAR BLOC) ;
   (c) le potentiel de systeme est non trivial (le Poisson somme co-localise produit un phi) ;
   (d) le chemin MONO-BLOC reste deterministe / bit-identique (run x2 -> dmax == 0, chemin AmrCouplerMP) ;
-  (e) multi-blocs + regrid_every > 0 est REFUSE (hierarchie figee ; regrid d'union = PR ulterieure).
+  (e) multi-blocs + regrid_every > 0 est ACCEPTE (deverrouillage Phase 2, C.6 : regrid d'union des tags).
 
 Test PUR Python (aucune compilation .so) : ne gate sur rien, toujours execute.
 """
@@ -82,15 +82,17 @@ def main():
     assert float(np.abs(a - b).max()) == 0.0, "mono-bloc non bit-identique (dmax != 0)"
     print("OK  mono-bloc bit-identique (dmax == 0, chemin AmrCouplerMP intouche)")
 
-    # (e) multi-blocs + regrid_every > 0 REFUSE (hierarchie figee ; regrid d'union = PR ulterieure).
-    refused = False
-    try:
-        s = _build(n=n, regrid_every=10)  # regrid_every > 0 en multi-blocs
-        s.mass("ions")  # declenche le build paresseux -> refus
-    except RuntimeError:
-        refused = True
-    assert refused, "multi-blocs + regrid_every > 0 aurait du etre refuse"
-    print("OK  multi-blocs + regrid_every > 0 refuse (hierarchie figee)")
+    # (e) multi-blocs + regrid_every > 0 ACCEPTE (deverrouillage Phase 2, C.6 : regrid d'union des tags).
+    # L'ancien refus (hierarchie figee) est leve : la grille re-grille a partir de l'union des tags de
+    # tous les blocs. On verifie que le build paresseux + l'avance NE LEVENT PLUS et que la hierarchie
+    # reste valide (au moins un patch fin). Le mouvement effectif de la grille est verrouille en C++
+    # (test_amr_multiblock_regrid_union) ; ici on assure la non-regression de la facade Python.
+    s = _build(n=n, regrid_every=2)  # regrid_every > 0 en multi-blocs : DESORMAIS supporte
+    s.set_refinement(1.05)  # seuil bas -> l'union des tags des deux bumps raffine effectivement
+    s.advance(0.001, 6)     # declenche le build paresseux + plusieurs regrids
+    assert s.n_patches() >= 1, "hierarchie sans patch fin apres regrid d'union"
+    assert np.isfinite(np.asarray(s.density("ions"))).all(), "etat ions non fini apres regrid"
+    print("OK  multi-blocs + regrid_every > 0 accepte (regrid d'union des tags, deverrouillage Phase 2)")
 
     print("OK test_amr_multiblock")
 

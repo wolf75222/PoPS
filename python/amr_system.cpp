@@ -249,6 +249,19 @@ struct AmrSystem::Impl {
     runtime = std::make_shared<adc::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc,
                                                 std::move(rblocks), S.base_per, S.replicated_coarse,
                                                 S.wall);
+    // REGRID D'UNION DES TAGS (capstone Phase 2, C.6) : si regrid_every > 0, on ACTIVE la cadence du
+    // moteur et on pose le predicat de tag PAR BLOC (D1). En v1 le critere est COMMUN a tous les blocs
+    // (densite, composante 0 > refine_threshold), comme le chemin mono-bloc AmrCouplerMP (qui tague
+    // a(i,j,0) > threshold) -> l'UNION des tags des blocs raffine la ou N'IMPORTE QUEL bloc depasse le
+    // seuil. refine_threshold == 1e30 (defaut, aucun raffinement) -> aucun tag -> grille inchangee meme
+    // si regrid_every > 0 (no-op coherent, l'utilisateur n'a pas demande de raffinement). regrid_every
+    // == 0 -> set_regrid(0) -> hierarchie FIGEE, bit-identique a avant cette PR.
+    const Real thr = static_cast<Real>(refine_threshold);
+    runtime->set_regrid(cfg.regrid_every);
+    if (cfg.regrid_every > 0) {
+      const auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
+      for (std::size_t b = 0; b < blocks.size(); ++b) runtime->set_block_tag_predicate(b, crit);
+    }
     // Rejoue les sources couplees figees a add_coupled_source sur le moteur runtime juste construit :
     // chacune resout (bloc, role) -> (indice, composante) contre les cons_vars des blocs et stocke sa
     // fermeture (appliquee apres le transport a chaque macro-pas). Aucune source -> no-op (la boucle
@@ -263,16 +276,11 @@ struct AmrSystem::Impl {
     if (built) return;
     if (blocks.empty())
       throw std::runtime_error("AmrSystem : appeler add_block d'abord");
-    // CONTRAINTE DURE PR1 (design section 0/4) : AmrSystemCoupler / AmrRuntime n'ont AUCUN regrid
-    // (hierarchie FIGEE). Autoriser regrid_every > 0 en multi-blocs ferait croire a un AMR dynamique
-    // inexistant (la grille ne bouge jamais) -> REFUS explicite. Le mono-bloc garde son regrid
-    // (chemin AmrCouplerMP intouche). Le regrid d'union des tags multi-blocs est une PR ulterieure.
-    if (multi_block() && cfg.regrid_every > 0)
-      throw std::runtime_error(
-          "AmrSystem : multi-blocs (>= 2 blocs) + regrid_every > 0 n'est pas supporte (la "
-          "hierarchie multi-blocs est FIGEE a la construction ; le regrid d'union des tags est une "
-          "etape ulterieure). Mettre regrid_every=0 pour une hierarchie multi-blocs figee, ou "
-          "utiliser un seul bloc pour l'AMR dynamique.");
+    // DEVERROUILLAGE (capstone Phase 2, C.6) : multi-blocs + regrid_every > 0 EST DESORMAIS SUPPORTE
+    // (le moteur AmrRuntime porte le regrid d'union des tags, cf. build_multi -> set_regrid +
+    // set_block_tag_predicate). L'ancien REFUS (la hierarchie multi-blocs etait FIGEE) est leve : la
+    // grille re-grille effectivement a partir de l'union des tags de tous les blocs. regrid_every == 0
+    // reste une hierarchie figee (regrid jamais appele), bit-identique a la Phase 1.
     if (multi_block()) { build_multi(); return; }
 
     // --- chemin MONO-BLOC (AmrCouplerMP, intouche : bit-identique a l'historique) ---

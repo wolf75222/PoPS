@@ -1,8 +1,46 @@
 # Conception : regrid par UNION DES TAGS sur la hierarchie multi-blocs partagee (Phase 2)
 
-DESIGN-ONLY. Aucune implementation. Ce document est une SPEC raisonnee, a VALIDER PAR L'OWNER
-AVANT toute ligne de code. Il decrit l'algorithme qui rend ADAPTATIVE la hierarchie AMR
-multi-blocs aujourd'hui FIGEE, et n'introduit aucun fichier de code.
+DESIGN VALIDE + IMPLEMENTE (capstone Phase 2, C.6). Ce document a d'abord ete une SPEC raisonnee
+(DESIGN-ONLY) ; les decisions D1-D5 ont ete tranchees par l'owner et l'algorithme R0-R8 est
+desormais IMPLEMENTE dans le moteur multi-blocs runtime. Il decrit l'algorithme qui rend ADAPTATIVE
+la hierarchie AMR multi-blocs auparavant FIGEE.
+
+## ETAT D'AVANCEMENT (implementation Lot C.6)
+
+LIVRE (moteur multi-blocs runtime AmrRuntime) :
+- [x] (R3) helper `tag_union(span<TagBox>)` (OU cellule a cellule) -> `include/adc/amr/tag_box.hpp`.
+- [x] REFACTOR (section 6) : `amr_regrid_finest` scinde en `regrid_compute_fine_layout`
+      (tags -> grow -> all_reduce_or -> berger_rigoutsos -> clamp -> (fb, dmap)) + `regrid_field_on_layout`
+      (re-grille UN champ sur un layout IMPOSE) -> `include/adc/coupling/amr_regrid_coupler.hpp`.
+      `amr_regrid_finest` reste l'enchainement des deux -> chemin mono-bloc BIT-IDENTIQUE (verifie).
+- [x] (R0-R8) `AmrRuntime::regrid()` : (R0) solve_fields, (R1) tags par bloc (predicat D1), (R2) tags
+      phi sur |grad phi| (D4), (R3) union + grow, (R4) all_reduce_or si grossier reparti, (R5) un seul
+      clustering -> layout partage, (R6) prolong/restrict de TOUS les blocs (y compris stride-tenus, D3)
+      avec ghost herite par bloc, (R7) rebuild aux partage + re-cablage, (R8) re-solve (cascade
+      couverture). (V3) `same_layout_or_throw` post-regrid. -> `include/adc/runtime/amr_runtime.hpp`.
+- [x] API d'enregistrement : `set_regrid(every, grow, margin)` (D2 : regrid AVANT le step, cadence
+      macro-pas), `set_block_tag_predicate(b, crit)` (D1), `set_phi_tag_predicate(crit)` (D4).
+- [x] cadence dans `AmrRuntime::step` : regrid tous les `regrid_every` macro-pas, AVANT le step ;
+      `regrid_every == 0` -> regrid jamais appele -> BIT-IDENTIQUE a la hierarchie figee (verifie).
+- [x] DEVERROUILLAGE FACADE (T7) : `python/amr_system.cpp` ne REFUSE plus multi-blocs +
+      `regrid_every > 0`. `build_multi` cable `runtime->set_regrid(cfg.regrid_every)` et pose le predicat
+      de tag PAR BLOC (D1 : densite composante 0 > `refine_threshold`, commun a tous les blocs en v1,
+      comme le mono-bloc AmrCouplerMP). `refine_threshold == 1e30` (defaut) -> aucun tag -> grille
+      inchangee. `regrid_every == 0` -> hierarchie FIGEE, bit-identique a la Phase 1.
+- [x] tests d'acceptation (a-e + T7) : `tests/test_amr_multiblock_regrid_union.cpp` (foncteurs de tag
+      NOMMES, nvcc-safe). (a) hierarchie qui evolue, (b)+(c) union A OU B OU |grad phi|, (d) bloc
+      stride-tenu re-grille, (e) regrid_every==0 bit-identique, (V1) conservation par bloc, (T7) facade
+      AmrSystem ne leve plus + figee bit-identique. Tests de contrat mis a jour (test_amr_system_contract,
+      test_amr_system_twoblock, python/tests/test_amr_multiblock.py : l'ancien refus devient une
+      acceptation).
+- [x] non-regression : 102/102 ctest verts (dont tous les `test_amr_*` et `test_mpi_amr_*` existants).
+
+HORS SCOPE (conforme aux frontieres) :
+- > 2 niveaux (D5 : v1 a 2 niveaux), critere par espece produisant des grilles distinctes (Phase 3),
+  vrai solve elliptique composite : tous HORS scope, inchanges.
+- predicat de phi (|grad phi|, D4) et predicat utilisateur : exposes au niveau du MOTEUR AmrRuntime
+  (`set_phi_tag_predicate`) et testes la, mais NON cables par defaut depuis la facade Python (la facade
+  v1 pose le predicat de densite par bloc ; phi reste opt-in cote moteur, suivi mecanique si besoin).
 
 CADRE DU PROJET. Le runtime multi-blocs livre jusqu'ici (`AmrRuntime`,
 `include/adc/runtime/amr_runtime.hpp`, pendant runtime de `AmrSystemCoupler`,

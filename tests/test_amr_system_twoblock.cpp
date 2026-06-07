@@ -12,7 +12,7 @@
 //       non-regression est verifiee en comparant le mono-bloc a une reference recalculee a part
 //       (le binaire de reference n'etant pas disponible en CI, on verifie l'INVARIANCE de l'API
 //       mono-bloc : 1 bloc passe TOUJOURS par AmrCouplerMP, jamais par AmrRuntime) ;
-//   (e) multi-blocs + regrid_every > 0 est REFUSE.
+//   (e) multi-blocs + regrid_every > 0 est ACCEPTE (deverrouillage Phase 2, C.6 : regrid d'union).
 //
 // Le point (b) (co-localisation du Poisson somme) est verifie au niveau du MOTEUR AmrRuntime +
 // build_amr_block (les briques introduites par cette PR), ou l'on a acces au RHS du MG et aux
@@ -212,8 +212,11 @@ int main(int argc, char** argv) {
     chk(sim.n_patches() >= 1, "facade_shared_hierarchy_has_fine_patch");
   }
 
-  // (e) multi-blocs + regrid_every > 0 REFUSE au build (hierarchie figee, regrid d'union = PR future).
-  chk(raises([&] {
+  // (e) multi-blocs + regrid_every > 0 ACCEPTE au build (deverrouillage Phase 2, C.6 : regrid d'union
+  //     des tags). L'ancien refus (hierarchie figee) est leve ; ensure_built construit le moteur avec
+  //     la cadence de regrid active. Le mouvement effectif de la hierarchie est verrouille en detail
+  //     par test_amr_multiblock_regrid_union ; ici on verifie seulement que la facade NE LEVE PLUS.
+  chk(!raises([&] {
         AmrSystemConfig cfg;
         cfg.n = N;
         cfg.L = L;
@@ -224,9 +227,9 @@ int main(int argc, char** argv) {
                       "explicit", 1);
         sim.set_density("ions", rho0);
         sim.set_density("electrons", rho1);
-        (void)sim.mass("ions");  // declenche ensure_built -> refus
+        (void)sim.mass("ions");  // declenche ensure_built -> moteur multi-blocs + regrid d'union actif
       }),
-      "multiblock_regrid_refused");
+      "multiblock_regrid_now_accepted");
 
   // ============================================================================================
   // (d) MONO-BLOC BIT-IDENTIQUE : un seul bloc passe TOUJOURS par AmrCouplerMP (jamais AmrRuntime).

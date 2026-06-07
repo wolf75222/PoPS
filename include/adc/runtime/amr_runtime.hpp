@@ -1,8 +1,11 @@
 #pragma once
 
+#include <adc/amr/regrid.hpp>   // tag_cells, grow_tags (tags par bloc + phi pour le regrid d'union)
+#include <adc/amr/tag_box.hpp>  // TagBox, tag_union (OU cellule a cellule des tags de tous les blocs)
 #include <adc/core/state.hpp>  // kAuxBaseComps
 #include <adc/core/variables.hpp>  // VariableSet, VariableRole, role_from_name (role -> composante des sources couplees)
 #include <adc/coupling/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb (injection aux coarse->fine)
+#include <adc/coupling/amr_regrid_coupler.hpp>  // regrid_compute_fine_layout + regrid_field_on_layout (briques scindees)
 #include <adc/coupling/amr_system_coupler.hpp>  // detail::same_layout_or_throw (garde de layout partage)
 #include <adc/coupling/aux_fill.hpp>        // detail::derive_aux_bc (CL du canal aux)
 #include <adc/coupling/coupled_source_program.hpp>  // CoupledSourceKernel + CsProgram (ABI plate, bytecode P5)
@@ -237,6 +240,11 @@ class AmrRuntime {
       aux_[k] = MultiFab(L0[k].U.box_array(), L0[k].U.dmap(), aux_ncomp_, 1);
     for (auto& b : blocks_)
       for (int k = 0; k < nlev_; ++k) (*b.levels)[k].aux = &aux_[k];
+
+    // Predicats de tag du regrid d'union : un slot vide par bloc (set_block_tag_predicate les remplit).
+    // Vide par defaut -> aucun tag -> hierarchie figee (le regrid n'est de toute facon pas appele tant
+    // que set_regrid n'a pas active regrid_every_ > 0).
+    block_tag_.resize(blocks_.size());
   }
 
   int nlev() const { return nlev_; }
@@ -252,6 +260,43 @@ class AmrRuntime {
   Real mass(std::size_t b) const { return blocks_[b].mass(); }
   std::vector<double> density(std::size_t b) const { return blocks_[b].density(); }
   int solve_count() const { return solve_count_; }
+  int regrid_count() const { return regrid_count_; }
+
+  /// Predicat de tag du regrid d'union : (ConstArray4 du champ lu, i, j) -> doit-on raffiner ? Type
+  /// HOTE (evalue dans la boucle hote de tag_cells, jamais sur device) : une std::function capturant un
+  /// foncteur concret est licite (nvcc-safe -- le predicat n'entre pas dans un kernel). On l'utilise pour
+  /// le critere PAR BLOC (lu sur la densite/U du bloc, composante 0) et pour le critere de phi (lu sur
+  /// l'aux partage). docs/AMR_REGRID_UNION_TAGS_DESIGN.md (D1, D4).
+  using TagPredicate = std::function<bool(const ConstArray4&, int, int)>;
+
+  /// Active le REGRID D'UNION DES TAGS a la cadence @p every (en macro-pas) : tous les @p every
+  /// macro-pas, AVANT le step(dt) du macro-pas (D2, coherent avec le mono-bloc amr_dsl_block.hpp:104),
+  /// la hierarchie partagee est re-grillee a partir de l'UNION des tags de tous les blocs + phi.
+  /// @p every == 0 (DEFAUT) -> hierarchie FIGEE, regrid jamais appele -> trajectoire BIT-IDENTIQUE a
+  /// l'historique (la feature est opt-in). @p grow : dilatation des tags (nesting + anticipation) ;
+  /// @p margin : nesting (clamp des patchs aux bords). Doit etre appele AVANT le premier step.
+  void set_regrid(int every, int grow = 2, int margin = 2) {
+    if (every < 0) throw std::runtime_error("AmrRuntime::set_regrid : regrid_every >= 0");
+    regrid_every_ = every;
+    regrid_grow_ = grow;
+    regrid_margin_ = margin;
+  }
+
+  /// Enregistre le PREDICAT DE TAG du bloc @p b (D1 : critere d'union PAR BLOC). Le predicat est evalue
+  /// sur U du bloc (composante 0 = densite, ou un gradient discret a la charge de l'appelant) au niveau
+  /// PARENT pendant le regrid ; l'UNION (OU) des predicats de tous les blocs + le critere phi pilote le
+  /// clustering. Un bloc SANS predicat enregistre ne tague rien de SON cote (il reste re-grille comme
+  /// fond, present partout, par l'union des autres criteres). @throws si @p b est hors bornes.
+  void set_block_tag_predicate(std::size_t b, TagPredicate crit) {
+    if (b >= blocks_.size())
+      throw std::runtime_error("AmrRuntime::set_block_tag_predicate : indice de bloc hors bornes");
+    block_tag_[b] = std::move(crit);
+  }
+
+  /// Enregistre le PREDICAT DE TAG de PHI (D4 : critere de phi SEPARE, sur |grad phi|). Le predicat est
+  /// evalue sur l'aux partage du niveau parent (composantes 1,2 = grad phi en x,y) pendant le regrid ;
+  /// il s'ajoute a l'union des tags des blocs. Non enregistre -> phi ne contribue pas a l'union.
+  void set_phi_tag_predicate(TagPredicate crit) { phi_tag_ = std::move(crit); }
 
   /// Enregistre une SOURCE COUPLEE inter-especes (DSL CoupledSource, bytecode P5) sur la facade
   /// runtime, pendant raffine de System::add_coupled_source. L'ABI est PLATE (bytecode postfixe) : on
@@ -447,6 +492,79 @@ class AmrRuntime {
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
   }
 
+  /// REGRID D'UNION DES TAGS (capstone Phase 2, C.6 ; docs/AMR_REGRID_UNION_TAGS_DESIGN.md, etapes
+  /// R0-R8). Re-grille la hierarchie PARTAGEE a partir de l'UNION (OU cellule a cellule) des tags de
+  /// TOUS les blocs (predicat par bloc, D1) + des tags de phi (sur |grad phi|, D4), suivie d'UN SEUL
+  /// clustering Berger-Rigoutsos -> UN SEUL nouveau layout fin applique a TOUS les blocs (y compris
+  /// ceux tenus par leur stride, D3) ET a l'aux partage. Maintient la PRECONDITION de layout partage
+  /// (same_layout_or_throw) apres le regrid. v1 a 2 NIVEAUX (grossier + 1 fin, D5) : no-op si nlev < 2.
+  /// No-op (grille inchangee) si l'union des tags est vide (rien a raffiner).
+  void regrid() {
+    if (nlev_ < 2) return;  // 2 niveaux requis (D5) : rien a re-griller en mono-niveau
+    const int fk = nlev_ - 1, pk = fk - 1;  // fin + son parent (pk == 0 en v1 a 2 niveaux)
+
+    // (R0) PRECONDITION : champs a jour (aux par niveau, pour le critere |grad phi|). Le snapshot de
+    // masse par bloc n'est PAS necessaire au moteur (la conservation est verifiee cote test V1).
+    solve_fields();
+
+    // (R1)+(R2) TAGS PAR BLOC (sur U du bloc au niveau parent) + TAGS DE PHI (sur l'aux partage).
+    const int PNX = dom_.nx() << pk, PNY = dom_.ny() << pk;
+    const Box2D pdom = Box2D::from_extents(PNX, PNY);
+    std::vector<TagBox> parts;
+    parts.reserve(blocks_.size() + 1);
+    for (std::size_t b = 0; b < blocks_.size(); ++b) {
+      const TagPredicate& crit = block_tag_[b];
+      if (!crit) continue;  // bloc sans critere : ne tague rien de son cote (re-grille comme fond)
+      parts.push_back(tag_cells((*blocks_[b].levels)[pk].U, pdom, crit));
+    }
+    if (phi_tag_) parts.push_back(tag_cells(aux_[pk], pdom, phi_tag_));
+    if (parts.empty()) return;  // aucun critere actif -> aucune cellule taguee -> grille inchangee
+
+    // (R3) UNION (OU) des tags + dilatation (nesting + anticipation du deplacement des structures).
+    TagBox grown = grow_tags(tag_union(parts), regrid_grow_, pdom);
+
+    // (R4)+(R5) reduction collective cross-rang (si grossier reparti) + clustering UNIQUE -> layout fin
+    // PARTAGE. all_reduce_or_inplace est appele DANS regrid_compute_fine_layout pour pk==0 reparti :
+    // tous les rangs partent de la MEME grille de tags -> fb/dmap IDENTIQUES par rang (sinon MPI desync).
+    auto [fb, dmap] = regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_,
+                                                 replicated_coarse_);
+    if (fb.size() == 0) return;  // rien a raffiner : on garde la grille courante (no-op)
+
+    // (R6) PROLONG / RESTRICT COHERENT de TOUS les blocs sur le MEME fb/dmap (y compris les blocs tenus
+    // par leur stride : leur etat fige est present partout et contribue au Poisson, D3). La largeur de
+    // ghost est HERITEE par bloc (un bloc MUSCL ordre 2 porte 2 ghosts ; un bloc Minmod et un VanLeer
+    // peuvent differer), donc le schema ne lit pas hors bornes au pas suivant (V2 / risque X4).
+    for (auto& b : blocks_) {
+      auto& L = *b.levels;
+      const int ngf = L[fk].U.n_grow();
+      L[fk].U = regrid_field_on_layout(fb, dmap, L[pk].U, L[fk].U, pk, ngf, replicated_coarse_);
+    }
+
+    // (R7) REBUILD DE L'AUX PARTAGE (un seul, largeur aux_ncomp_) sur le nouveau layout + RE-CABLAGE
+    // du pointeur aux de CHAQUE bloc. L'adresse &aux_[fk] reste stable (reallocation en place du
+    // MultiFab dans le std::vector existant) -> les pointeurs des autres niveaux ne bougent pas.
+    aux_[fk] = MultiFab(fb, dmap, aux_ncomp_, 1);
+    for (auto& b : blocks_)
+      (*b.levels)[fk].aux = &aux_[fk];
+
+    // (V3) INVARIANT DE LAYOUT PARTAGE : tous les blocs DOIVENT vivre sur EXACTEMENT le meme fb/dmap
+    // (boites, ordre, rang par boite) apres le regrid. Garde-fou collectif (cross-bloc) ; attrape toute
+    // reconstruction incoherente avant qu'elle ne corrompe l'aux partage / le Poisson somme.
+    {
+      std::vector<std::vector<AmrLevelMP>> ref;
+      ref.reserve(blocks_.size());
+      for (const auto& b : blocks_) ref.push_back(*b.levels);
+      detail::same_layout_or_throw(ref);
+    }
+
+    // (R8) RESTAURATION DE L'INVARIANT DE COUVERTURE : re-solve pour que phi / grad phi soient
+    // coherents avec la nouvelle grille ET pour declencher la cascade fin -> grossier (mf_average_down_mb,
+    // dans solve_fields) qui restaure les cellules grossieres couvertes (sinon un diagnostic de masse,
+    // somme du seul grossier, compterait une valeur grossiere fantome sous le nouveau patch, X5).
+    solve_fields();
+    ++regrid_count_;
+  }
+
   /// Avance le systeme d'un macro-pas dt. On resout d'abord les champs (Poisson somme co-localise, UNE
   /// fois par macro-pas : cadence OncePerStep), puis chaque bloc avance sur SA pile de niveaux avec SON
   /// schema, en honorant sa cadence stride et ses substeps, et SON traitement temporel. Pendant runtime
@@ -470,6 +588,14 @@ class AmrRuntime {
   /// trajectoire bit-identique a l'historique (l'IMEX est opt-in).
   void step(Real dt) {
     solve_count_ = 0;
+    // REGRID D'UNION DES TAGS (capstone Phase 2, C.6 ; D2 : AVANT le step du macro-pas, coherent avec
+    // le mono-bloc amr_dsl_block.hpp:108). Cadence regrid_every_ en MACRO-PAS, HORS des boucles de
+    // substeps et des fenetres de stride (granularite macro-pas SEULEMENT, D3). regrid_every_ == 0 ->
+    // hierarchie FIGEE, regrid jamais appele -> trajectoire BIT-IDENTIQUE a l'historique. Le garde
+    // macro_step_ > 0 (comme le mono-bloc) evite un regrid au tout premier pas (la grille initiale est
+    // deja celle du build). Le regrid se place AVANT solve_fields ci-dessous : il fait son propre
+    // solve_fields (R0/R8), puis le solve_fields du step recalcule phi sur la grille re-grillee.
+    if (regrid_every_ > 0 && macro_step_ > 0 && macro_step_ % regrid_every_ == 0) regrid();
     // Poisson de systeme resolu UNE fois sur l'etat courant (cadence OncePerStep). Un bloc TENU
     // (stride > 1, hors fin de fenetre) y a contribue avec son etat FIGE depuis sa derniere avance :
     // couplage lache assume du multirate, exactement comme System::step / AmrSystemCoupler en
@@ -586,10 +712,20 @@ class AmrRuntime {
   std::vector<AmrRuntimeBlock> blocks_;
   std::vector<MultiFab> aux_;  // [niveau], partage par tous les blocs
   std::vector<CoupledSourceSpec> coupled_sources_;  // sources couplees enregistrees (appliquees apres transport)
+  // REGRID D'UNION DES TAGS (capstone Phase 2, C.6). regrid_every_ == 0 -> hierarchie FIGEE (defaut,
+  // bit-identique). block_tag_ : predicat de tag PAR BLOC (D1 ; meme taille que blocks_, vide = ce
+  // bloc ne tague rien de son cote). phi_tag_ : predicat de tag de phi sur |grad phi| (D4 ; vide = phi
+  // ne contribue pas a l'union).
+  std::vector<TagPredicate> block_tag_;
+  TagPredicate phi_tag_;
+  int regrid_every_ = 0;
+  int regrid_grow_ = 2;
+  int regrid_margin_ = 2;
   int aux_ncomp_ = kAuxBaseComps;
   int nlev_ = 0;
   int macro_step_ = 0;
   mutable int solve_count_ = 0;
+  int regrid_count_ = 0;
 };
 
 }  // namespace adc
