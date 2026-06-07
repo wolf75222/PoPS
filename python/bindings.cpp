@@ -136,6 +136,9 @@ PYBIND11_MODULE(_adc, m) {
       // apres le transport hyperbolique. kind='electrostatic_lorentz'. Defaut (sans appel) inchange.
       .def("set_source_stage", &System::set_source_stage, py::arg("name"), py::arg("kind"),
            py::arg("theta"), py::arg("alpha"))
+      // Politique de splitting en temps : "lie" (defaut, bit-identique) ou "strang" (H(dt/2) S(dt)
+      // H(dt/2), 2e ordre). Cf. System::set_time_scheme / SystemStepper::step_strang.
+      .def("set_time_scheme", &System::set_time_scheme, py::arg("scheme"))
       // Source COUPLEE generique (adc.dsl.CoupledSource, P5) : ABI plate (bytecode postfixe). Lit des
       // champs (bloc, role) et ecrit des termes de source compiles en machine a pile, appliques par
       // splitting explicite apres le transport (meme seam que add_ionization). Sans appel, inchange.

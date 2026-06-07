@@ -100,6 +100,13 @@ class SystemBlockStore {
     // chemin cartesien reste BIT-IDENTIQUE (schur_polar == nullptr quand le System est cartesien).
     std::shared_ptr<PolarCondensedSchurSourceStepper> schur_polar;
     double schur_theta = 0.5;  // theta-schema de l'etage source (0.5 = Crank-Nicolson)
+    // ETAGE SOURCE GENERIQUE (optionnel) : un callable (U, dt) qui avance EN PLACE l'etage source du
+    // bloc. nullptr (defaut) = aucun etage source generique (chemin BIT-IDENTIQUE). run_source_stage le
+    // joue UNIQUEMENT si aucun etage Schur condense (schur / schur_polar) n'est cable, donc il ne change
+    // RIEN au chemin Schur de production. Sert au splitting generique (adc.Strang sur un etage source
+    // arbitraire) et aux tests d'ordre temporel du stepper (operateurs jouets non commutants). Trailing
+    // + defaut nullptr : l'init par agregat positionnel des autres membres reste inchangee.
+    std::function<void(MultiFab&, Real)> source_step;
   };
 
   /// Registre ORDONNE des blocs (UNIQUE source de verite). PUBLIC : Impl l'aliase en `sp` pour les

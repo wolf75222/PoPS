@@ -132,6 +132,12 @@ adc_add_test(test_aux_single_source)  # source unique ADC_AUX_FIELDS : load_aux 
 
 adc_add_test(test_weno_convergence)
 adc_add_test(test_splitting)
+# Strang GENERIQUE orchestre par le STEPPER DE SYSTEME (SystemStepper::step_strang) : ordre TEMPOREL
+# observe ~2 (Strang) vs ~1 (Lie) sur deux operateurs jouets NON commutants, non-regression du chemin
+# Lie (bit-identique), consistance phi (3 solve_fields/macro-pas en Strang, RE-RESOLU entre les etages,
+# cf. docs/HOFFART_STEP_SEQUENCE.md), degenerescences source nulle == transport pur / transport nul ==
+# source pure. Instancie SystemStepper sur un Impl JOUET (mono-box, serie) ; aucun Schur/AMReX lourd.
+adc_add_test(test_strang_splitting)
 adc_add_test(test_imex_ap)
 adc_add_test(test_ap_limit)
 

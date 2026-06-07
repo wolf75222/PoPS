@@ -882,6 +882,21 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
   s.schur_theta = theta;
 }
 
+void System::set_time_scheme(const std::string& scheme) {
+  // Aiguille la politique de splitting du stepper de systeme (defaut Lie = bit-identique). Le schema
+  // Strang reutilise les MEMES briques (s.advance pour les demi-avances de transport, run_source_stage
+  // pour l'etage source plein) ; il RE-RESOUT solve_fields entre les etages (cf. SystemStepper::step_strang
+  // et docs/HOFFART_STEP_SEQUENCE.md). Un schema inconnu leve une erreur EXPLICITE (pas d'ignore silencieux).
+  if (scheme == "lie") {
+    p_->stepper_.set_scheme(stepper::SplitScheme::Lie);
+  } else if (scheme == "strang") {
+    p_->stepper_.set_scheme(stepper::SplitScheme::Strang);
+  } else {
+    throw std::runtime_error("System::set_time_scheme : schema '" + scheme +
+                             "' inconnu (attendu 'lie' ou 'strang')");
+  }
+}
+
 void System::set_density(const std::string& name, const std::vector<double>& rho) {
   Impl::Species& s = p_->find(name);
   // Layout row-major du tableau d'entree : (ni x nj) = extents de la box de l'etat. En cartesien

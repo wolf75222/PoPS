@@ -308,6 +308,16 @@ class System {
   void set_source_stage(const std::string& name, const std::string& kind, double theta,
                         double alpha);
 
+  /// POLITIQUE DE SPLITTING en temps du macro-pas (transport hyperbolique H + etage source S) :
+  ///  - "lie"    (defaut) : H(dt) ; S(dt) une fois (Godunov, 1er ordre). BIT-IDENTIQUE a l'historique.
+  ///  - "strang"          : H(dt/2) ; S(dt) ; H(dt/2) (symetrique, 2e ordre des que H et S le sont).
+  /// Le schema Strang RE-RESOUT solve_fields entre les etages pour que chaque demi-avance lise un phi
+  /// coherent avec la densite courante (le solve_fields UNIQUE de tete, suffisant pour Lie, ne suffit
+  /// pas a la 2nde demi-avance Strang) ; cf. docs/HOFFART_STEP_SEQUENCE.md et SystemStepper::step_strang.
+  /// Reutilise les MEMES briques (s.advance, etage source) : aucun nouveau stepper. Un schema inconnu
+  /// leve une erreur EXPLICITE. Sans appel, le chemin reste BIT-IDENTIQUE (Lie).
+  void set_time_scheme(const std::string& scheme);
+
   /// Ajoute une SOURCE COUPLEE GENERIQUE inter-especes decrite par un BYTECODE (adc.dsl.CoupledSource,
   /// P5 phase 1, splitting EXPLICITE forward-Euler apres le transport). A la difference des couplages
   /// nommes (add_ionization / add_collision / add_thermal_exchange) qui figent une formule, celle-ci lit

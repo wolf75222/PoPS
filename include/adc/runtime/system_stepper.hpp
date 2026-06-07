@@ -45,6 +45,16 @@
 namespace adc {
 namespace stepper {
 
+/// Politique de SPLITTING en temps du macro-pas (transport hyperbolique H + etage source S).
+///  - Lie     : H(dt) ; S(dt) une fois (Godunov, 1er ordre). C'EST LE DEFAUT, bit-identique a
+///              l'historique : un seul solve_fields en tete de pas, advance puis run_source_stage
+///              entrelaces dans la meme boucle de blocs (cf. step()).
+///  - Strang  : H(dt/2) ; S(dt) ; H(dt/2) (symetrique, 2e ordre des que H et S le sont). Necessite
+///              de RE-RESOUDRE solve_fields ENTRE les etages (cf. step()) : voir le commentaire de la
+///              branche Strang et docs/HOFFART_STEP_SEQUENCE.md (le solve_fields UNIQUE de tete ne
+///              suffit pas a la 2e demi-avance, qui lirait sinon un phi perime).
+enum class SplitScheme { Lie, Strang };
+
 /// SystemStepper<Impl> : voir contrat ci-dessus. Toutes les methodes sont des MEMBRES car elles
 /// partagent l'orchestration de pas ; les acces a l'etat PARTAGE de Impl passent par owner_-> verbatim.
 /// Template sur Impl pour rester sans dependance sur la definition (privee) de System::Impl.
@@ -53,6 +63,10 @@ class SystemStepper {
  public:
   /// @param owner back-pointer vers System::Impl (duree de vie sous-jacente a celle de Impl).
   explicit SystemStepper(Impl* owner) : owner_(owner) {}
+
+  /// Choisit la politique de splitting en temps (defaut Lie = bit-identique). Voir SplitScheme.
+  void set_scheme(SplitScheme scheme) { scheme_ = scheme; }
+  SplitScheme scheme() const { return scheme_; }
 
   /// Vrai si un bloc de cadence @p stride RATTRAPE a ce macro-pas (FIN de fenetre).
   /// SEMANTIQUE STRIDE = HOLD-THEN-CATCH-UP (rattrapage en FIN de fenetre). Un bloc de cadence M est
@@ -94,14 +108,24 @@ class SystemStepper {
                           static_cast<Real>(s.schur_theta), eff_dt);
       return;
     }
-    if (!s.schur) return;
-    s.schur->step(s.U, owner_->fields_.ell_phi(), owner_->aux, kAuxBaseComps,
-                  static_cast<Real>(s.schur_theta), eff_dt);
+    if (s.schur) {
+      s.schur->step(s.U, owner_->fields_.ell_phi(), owner_->aux, kAuxBaseComps,
+                    static_cast<Real>(s.schur_theta), eff_dt);
+      return;
+    }
+    // ETAGE SOURCE GENERIQUE (fallback) : joue UNIQUEMENT si AUCUN etage Schur condense (chemin de
+    // production INTOUCHE, bit-identique). Avance l'etage source du bloc EN PLACE sur eff_dt. nullptr
+    // (defaut) -> no-op, comme avant. Sert au splitting generique (adc.Strang) et aux tests d'ordre.
+    if (s.source_step) s.source_step(s.U, eff_dt);
   }
 
-  /// Un macro-pas de longueur @p dt : solve_fields ; avance de chaque bloc DU (cadence stride honoree) ;
-  /// etage source condense ; couplages inter-especes ; t += dt ; ++macro_step. ORDRE INVARIANT.
+  /// Un macro-pas de longueur @p dt. ORDRE INVARIANT par schema (cf. SplitScheme) :
+  ///  - Lie (defaut, bit-identique) : solve_fields ; pour chaque bloc DU (cadence stride honoree)
+  ///    advance(dt) puis run_source_stage(dt) entrelaces ; couplages ; t += dt ; ++macro_step.
+  ///  - Strang : H(dt/2) ; S(dt) ; H(dt/2), avec un solve_fields RE-RESOLU entre chaque etage
+  ///    (cf. step_strang() et docs/HOFFART_STEP_SEQUENCE.md).
   void step(double dt) {
+    if (scheme_ == SplitScheme::Strang) { step_strang(dt); return; }
     Impl* P = owner_;
     // COUPLAGE / POISSON : solve_fields assemble f = Sum_s elliptic_rhs_s(U_s) sur l'etat COURANT de
     // chaque bloc. Un bloc TENU (cadence M, hors fin de fenetre) y contribue avec son etat PERIME (sa
@@ -116,6 +140,64 @@ class SystemStepper {
       run_source_stage(s, eff_dt);  // OPT-IN : etage source condense par Schur (no-op sinon)
     }
     apply_couplings(Real(dt));  // sources couplees inter-especes (splitting), apres transport
+    P->t += dt;
+    P->macro_step_++;
+  }
+
+  /// Un macro-pas STRANG (symetrique, 2e ordre) : H(dt/2) ; S(dt) ; H(dt/2). Reutilise s.advance pour
+  /// les DEMI-avances de transport et run_source_stage pour l'etage source PLEIN (aucun nouveau stepper).
+  ///
+  /// CONSISTANCE phi (point critique, cf. docs/HOFFART_STEP_SEQUENCE.md) : le potentiel phi / les champs
+  /// aux (grad phi) que LIT le transport sont peuples par solve_fields a partir de la densite COURANTE.
+  /// Le solve_fields UNIQUE de tete de pas (suffisant pour le splitting de Lie, ou une seule avance de
+  /// transport suit) NE SUFFIT PAS ici : entre la 1re demi-avance et la 2nde, la densite a change (1re
+  /// demi-avance + etage source), donc la 2nde demi-avance lirait un phi PERIME. On RE-RESOUT donc
+  /// solve_fields AVANT chaque etage qui consomme phi :
+  ///   1. solve_fields()  -> phi coherent avec rho^n           (pour H(dt/2))
+  ///   2. H(dt/2)         (s.advance sur eff_dt/2)
+  ///   3. solve_fields()  -> phi coherent avec rho apres H(dt/2) (pour S(dt) : warm start / champ aux)
+  ///   4. S(dt)           (run_source_stage sur eff_dt ; l'etage Schur ECRIT phi^{n+1})
+  ///   5. solve_fields()  -> phi coherent avec rho apres S(dt)   (pour la 2nde H(dt/2))
+  ///   6. H(dt/2)         (s.advance sur eff_dt/2)
+  /// Sans l'etape 5, la 2nde demi-avance lirait soit le phi du Schur (ecrase au pas suivant de toute
+  /// facon) soit un phi de rho perime : la symetrie Strang (donc le 2e ordre) serait rompue. Les etapes
+  /// 1/3/5 sont des solve_fields SYSTEME (somme sur tous les blocs), hors boucle de blocs.
+  ///
+  /// CADENCE stride : evaluee UNE fois par macro-pas (stride_due au DEBUT), de sorte que les deux
+  /// demi-avances et l'etage source d'un meme macro-pas concernent le MEME ensemble de blocs DUS. Le
+  /// pas effectif eff_dt = dt * stride (catch-up) est identique a Lie ; seul le transport est scinde en
+  /// deux moities eff_dt/2.
+  void step_strang(double dt) {
+    Impl* P = owner_;
+    // (1) phi coherent avec rho^n, pour la 1re demi-avance de transport.
+    P->solve_fields();
+    // (2) H(dt/2) : 1re demi-avance de transport de chaque bloc DU. s.substeps sous-pas (inchange).
+    for (auto& s : P->sp) {
+      if (!s.evolve) continue;
+      if (!stride_due(P->macro_step_, s.stride)) continue;
+      const Real eff_dt = Real(dt) * Real(s.stride);
+      s.advance(s.U, Real(0.5) * eff_dt, s.substeps);
+    }
+    // (3) phi RE-RESOLU sur la densite post-H(dt/2), pour l'etage source.
+    P->solve_fields();
+    // (4) S(dt) : etage source PLEIN de chaque bloc DU (no-op si pas d'etage Schur, comme Lie).
+    for (auto& s : P->sp) {
+      if (!s.evolve) continue;
+      if (!stride_due(P->macro_step_, s.stride)) continue;
+      const Real eff_dt = Real(dt) * Real(s.stride);
+      run_source_stage(s, eff_dt);
+    }
+    // (5) phi RE-RESOLU sur la densite post-source : SANS cette resolution la 2nde demi-avance lirait un
+    //     phi perime (cf. docs/HOFFART_STEP_SEQUENCE.md, le solve_fields de tete unique est insuffisant).
+    P->solve_fields();
+    // (6) H(dt/2) : 2nde demi-avance de transport, fermant le pas symetrique Strang.
+    for (auto& s : P->sp) {
+      if (!s.evolve) continue;
+      if (!stride_due(P->macro_step_, s.stride)) continue;
+      const Real eff_dt = Real(dt) * Real(s.stride);
+      s.advance(s.U, Real(0.5) * eff_dt, s.substeps);
+    }
+    apply_couplings(Real(dt));  // sources couplees inter-especes (splitting), apres le pas symetrique
     P->t += dt;
     P->macro_step_++;
   }
@@ -218,6 +300,7 @@ class SystemStepper {
 
  private:
   Impl* owner_;
+  SplitScheme scheme_ = SplitScheme::Lie;  // defaut Lie (Godunov) : bit-identique a l'historique
 };
 
 }  // namespace stepper

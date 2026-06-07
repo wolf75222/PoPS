@@ -36,7 +36,7 @@ __all__ = [
     "NoSource", "PotentialForce", "GravityForce",
     "ChargeDensity", "BackgroundDensity", "GravityCoupling",
     "Spatial", "FiniteVolume", "Explicit", "IMEX", "SourceImplicit", "Implicit",
-    "Split", "CondensedSchur", "Role", "integrate",
+    "Split", "Strang", "CondensedSchur", "Role", "integrate",
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
@@ -810,6 +810,35 @@ class Split:
         self.method = hyperbolic.method
         self.substeps = hyperbolic.substeps
         self.stride = hyperbolic.stride
+        # Politique de splitting CABLEE au stepper de systeme (set_time_scheme). adc.Split = "lie"
+        # (Godunov, 1er ordre) : H(dt) puis S(dt) une fois par macro-pas, BIT-IDENTIQUE a l'historique.
+        # adc.Strang surcharge cet attribut a "strang" (cf. ci-dessous).
+        self.scheme = "lie"
+
+
+class Strang(Split):
+    """Politique temporelle SPLITTING DE STRANG (symetrique, 2e ordre) : un macro-pas joue
+    H(dt/2) ; S(dt) ; H(dt/2), ou H est le transport hyperbolique EXPLICITE (adc.Explicit, SSPRK)
+    et S l'etage SOURCE separe (adc.CondensedSchur). C'est l'extension 2e ordre de adc.Split (Lie /
+    Godunov, 1er ordre) : memes briques (transport SSPRK + etage source condense), seul l'ORDRE et la
+    cadence des resolutions de champ changent.
+
+        time=adc.Strang(
+            hyperbolic=adc.Explicit(ssprk3=True),
+            source=adc.CondensedSchur(theta=0.5, alpha=alpha),
+        )
+
+    Le stepper de systeme RE-RESOUT solve_fields ENTRE les etages (avant chaque demi-avance et avant
+    la source) pour que le transport lise toujours un phi coherent avec la densite courante (le
+    solve_fields UNIQUE de tete, suffisant pour Lie ou une seule avance de transport suit, ne suffit
+    pas a la 2nde demi-avance Strang). cf. docs/HOFFART_STEP_SEQUENCE.md et SystemStepper::step_strang.
+
+    hyperbolic / source : identiques a adc.Split. Cable par add_equation (qui branche l'etage source
+    ET appelle set_time_scheme('strang') sur le System)."""
+
+    def __init__(self, hyperbolic=None, source=None):
+        super().__init__(hyperbolic=hyperbolic, source=source)
+        self.scheme = "strang"
 
 
 class System:
@@ -880,15 +909,18 @@ class System:
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
 
-        # --- adc.Split (splitting EXPLICITE / IMPLICITE, OPT-IN Schur) ---------------------------
+        # --- adc.Split (Lie) / adc.Strang (2e ordre) : splitting EXPLICITE / IMPLICITE, OPT-IN Schur --
         # Le bloc est d'abord ajoute avec l'etage HYPERBOLIQUE explicite (chemin de production existant,
         # aucune duplication d'aiguillage), PUIS on branche l'etage SOURCE condense (set_source_stage,
         # C++). La source est jouee APRES le transport a chaque pas. Le defaut (sans Split) est inchange.
+        # La POLITIQUE de splitting (Lie / Strang) est CABLEE au stepper de systeme via set_time_scheme :
+        # adc.Split -> "lie" (defaut, bit-identique), adc.Strang -> "strang" (H(dt/2) S(dt) H(dt/2)).
         if isinstance(time, Split):
             self.add_equation(name, model, spatial=spatial, time=time.hyperbolic,
                               substeps=substeps, names=names, evolve=evolve, stride=stride)
             src = time.source
             self._s.set_source_stage(name, src.kind, src.theta, src.alpha)
+            self._s.set_time_scheme(time.scheme)  # "lie" (Split) ou "strang" (Strang)
             return
 
         nsub = substeps if substeps is not None else getattr(time, "substeps", 1)
