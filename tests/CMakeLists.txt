@@ -64,6 +64,16 @@ adc_add_test(test_polar_poisson_mms)
 # PAS branche dans System.step (etape 2b = SchurReconstructKernel polaire + wiring). Additif : le
 # PolarPoissonSolver scalaire direct et le Schur cartesien restent INTOUCHES.
 adc_add_test(test_polar_tensor_elliptic_mms)
+# Voie A etape 2b : ETAGE SOURCE condense par Schur en geometrie POLAIRE
+# (PolarCondensedSchurSourceStepper). Pendant POLAIRE du CondensedSchurSourceStepper cartesien (#126) :
+# assemble le tenseur condense A = I + theta^2 dt^2 alpha rho B^{-1} (re-etiquetage polaire r/theta du
+# meme B^{-1} 2x2 de Lorentz), resout L_int(phi)=div(A grad phi)=-rhs_schur via PolarTensorKrylovSolver
+# (#210), reconstruit v=B^{-1}(v^n - theta dt grad_polar phi) en metrique polaire, extrapole, energie,
+# ghosts. Test SOURCE-ONLY : fluide magnetise RAIDE (B0=100) ou l'Euler explicite explose. Verifie (A)
+# la relation implicite reconstruite, (B) la stabilite Schur vs explosion explicite, (C) l'accord avec
+# une reference RK4 fine-dt (ordre 1). Mono-rang (PolarTensorKrylovSolver/PolarPoissonSolver). Additif :
+# le Schur CARTESIEN reste BIT-IDENTIQUE (chemin separe).
+adc_add_test(test_polar_condensed_schur_source_stepper)
 # Schur PR3 : solveur de Krylov MATRICE-LIBRE (BiCGStab) preconditionne par le V-cycle MG sur la
 # partie SYMETRIQUE, pour l'operateur a tenseur PLEIN non symetrique. Resout les cas MMS ou le MG
 # SEUL echoue (#120 : stagnation c=0.1-0.4, divergence c=0.7), + consistance A=I vs GeometricMG.
