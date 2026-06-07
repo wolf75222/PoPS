@@ -398,14 +398,25 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       models.diocotron, CARTESIEN + paroi circulaire, sweep ROMEO ~/adc_gpu_hires/.../diocotron/sweep.py). Il valide
       la NORMALISATION 2pi/rhobar + la methode sur le MODELE REDUIT (benchmark Petri standard) -- PAS le systeme
       Hoffart complet. Le MODELE COMPLET (continuite + momentum + Lorentz + pression isotherme + Gauss via Schur)
-      EXISTE = adc_cases/hoffart_euler_poisson_dsl, MAIS : (a) sur la branche feat/normalization-and-schur-measurement,
-      PAS sur master ; (b) mesure seulement BASSE RES (0.027/0.035, runner Codex) ; (c) PAS valide haute-res ni avec
-      la geometrie/init EXACTE du papier. magnetic_isothermal_dsl = validation locale PERIODIQUE, pas le papier.
-      diocotron_polar_fluid = figure demo (branche feat/diocotron-polar-fluid), pas le setup quantitatif du papier.
-      => RESTE REEL pour la repro papier : assembler le MODELE COMPLET au setup papier (disque/anneau + init) a HAUTE
-      RES + matcher les taux. NON FAIT. Les CAPACITES sont la (Schur cartesien #118-128, Schur polaire #210/#212,
-      fluide polaire #209) ; reste l'ASSEMBLAGE + la run quantitative. (Erreur propagee corrigee : le workflow frontier
-      avait attribue le -0.38% du reduit au modele complet -- faux.)
+      EXISTE = adc_cases/hoffart_euler_poisson_dsl, sur la branche feat/normalization-and-schur-measurement (PAS master).
+      AUDIT CODE (workflow audit-hoffart-branch, juin 2026) : les 5 affirmations de Codex CONFIRMEES dans le code :
+        (1) SPLITTING = LIE pas Strang (system_stepper.hpp:104-121 : T(dt) puis S(dt) plein pas ; strang_step existe
+            mais code mort cote runtime ; aucune option --time-scheme). theta=0.5 = Crank-Nicolson du SOLVE source, PAS
+            un demi-pas Strang. => difference d'ORDRE de splitting (Lie O(dt) vs Strang O(dt^2)), pas juste FV-vs-FE.
+        (2) amr-imex EXPERIMENTAL : pas CondensedSchur (IMEX cell-local), momentum initial NUL (build_amr appelle
+            seulement set_density, jamais drift_velocity_from_potential), transport AMR cartesien.
+        (3) Schur POLAIRE strictement MONO-RANG : 3 gardes DUR throw si n_ranks!=1 (#215 cable la facade seulement).
+        (4) PARAMS papier TOUS conformes (allMatch) : r0=6,r1=8,R=16,rho_min=1e-6,rho_max=1,beta=1e6,alpha=1e12,
+            delta=0.1,modes 3/4/5,tf=10. Geometrie = disque emule par mur Poisson circulaire sur boite carree (coins
+            a rho_min) ; theta_T=0 (limite froide, papier ne donne pas de valeur) ; dt=1e-3 fixe (papier adaptatif).
+        (5) OVERCLAIMS docs CORRIGES (commit 29deabe sur la branche) : NORMALIZATION.md/README.md/model.py ne disent
+            plus "reproduit le papier" pour le REDUIT ; + table de validation obligatoire (PENDING pour full-Hoffart,
+            lignes reduced-ExB etiquetees). diocotron/README.md titre corrige via PR adc_cases #10 (a relire).
+      RUN QUANTITATIVE EN VOL (ROMEO ~/hoffart_full, jobs 647393 n=256 / 647394 n=384, t_end=10, run.py geometrie
+      papier) : SIZING preliminaire l=3 = -45 a -67% vs papier (LOIN, contrairement au reduit -0.38%) MAIS trop court.
+      VERDICT FERME a leur retour. NE PAS revendiquer reproduction du complet avant. Capacites la (Schur cart #118-128,
+      Schur polaire #210/#212, fluide polaire #209) ; reste l'ASSEMBLAGE valide + (si match) Strang + montee en res.
+      (Erreur propagee corrigee : le workflow frontier avait attribue le -0.38% du reduit au modele complet -- faux.)
 - [x] **Conservation discrete cartesien-fluide-Schur -- FAIT #207** : tests masse (machine, domaine ferme),
       symetrie momentum (machine), impulsion momentum (physique O(dt) convergente), E>0/p>0 (3 limiteurs).
       Note honnete FV-vs-FE. Decouverte : Dirichlet fuit la masse ~1e-2 par Foextrap (artefact CL, pas schema).
