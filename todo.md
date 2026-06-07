@@ -377,6 +377,22 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       trois modes tombent dans [0.87,0.97] (l=4 EXACT aux deux resolutions ; l=5 passe de -29% n=128 a
       +27% n=192 quand sa fenetre se resserre -> le scatter est de la SENSIBILITE A LA FENETRE de fit,
       PAS un deficit de physique). Diag reproductible : `/tmp/diag_polar_omega.py`.
+- [x] **MODELE COMPLET = DEJA OPERATIONNEL (chemin cartesien, juin 2026, investigation multi-agents)** :
+      adc_cases/hoffart_euler_poisson_dsl tourne le systeme COMPLET (continuite + momentum + Lorentz +
+      pression isotherme p=theta*rho + Gauss) via adc.Split(Explicit ssprk3, CondensedSchur) = pile Schur
+      #118-128 sur grille CARTESIENNE. l=3 = -0.38% n=512 GH200. L'observable de taux (FFT-theta de phi sur
+      un cercle) est polaire-propre MEME en cartesien (la diffusion de bord ne touche que le rendu de
+      DENSITE, pas le taux). => VOIE B (cartesien) RECOMMANDEE ; Voie A (fluide polaire + Schur polaire) =
+      RECHERCHE, optionnelle (PolarPoissonSolver direct scalaire incompatible avec le Schur tenseur croise ;
+      dispatch_transport_polar rejette le fluide). Roadmap : docs/FULL_MODEL_VALIDATION_ROADMAP.md.
+- [x] **Conservation discrete cartesien-fluide-Schur -- FAIT #207** : tests masse (machine, domaine ferme),
+      symetrie momentum (machine), impulsion momentum (physique O(dt) convergente), E>0/p>0 (3 limiteurs).
+      Note honnete FV-vs-FE. Decouverte : Dirichlet fuit la masse ~1e-2 par Foextrap (artefact CL, pas schema).
+- [ ] **RESTE Hoffart = VALIDATION (pas de capacite manquante)** : (a) re-fit fenetre precoce l=4/l=5 --
+      BLOQUEUR : seul le gamma final est sauve sur ROMEO, pas amplitude(t) -> modifier sweep.py + REJOUER
+      n=384/512 (heures GH200) ; (b) table de validation finale ; (c) optionnel Strang ordre 2. DECISIONS
+      PROPRIETAIRE ouvertes (figure 2D nette requise ? cible l=4/5 a +-2% ? structure-preservation FE
+      formelle ? Strang ?) -- detaillees dans docs/FULL_MODEL_VALIDATION_ROADMAP.md.
 - [x] **M2 / M2b** : AMR sur le bord d'anneau (triple le taux a base egale) + Poisson multi-niveau.
 - [ ] Montee en resolution / convergence vers le taux analytique ; integration SAMRAI ulterieure.
 
