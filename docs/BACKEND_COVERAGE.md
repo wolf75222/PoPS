@@ -3,7 +3,8 @@
 > **SOURCE DE VERITE UNIQUE** pour la couverture backend de la suite de tests.
 > README et Sphinx doivent POINTER ICI, pas dupliquer ce tableau.
 > Mis a jour manuellement apres chaque ajout de test ou de job CI.
-> Derniere revision : 2026-06-06.
+> Derniere revision : 2026-06-07 (Lot E.4 : resynchronisation matrice <-> disque,
+> +13 tests C++ et +10 tests Python qui manquaient au tableau).
 
 ---
 
@@ -74,6 +75,7 @@ Colonnes :
 | test_poisson_fft | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_elliptic_operator | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_elliptic_problem | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_elliptic_interface (static_assert concepts) | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_elliptic_composite_rhs | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_poisson_disc | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_solve_robust | ci-fast | self-skip | ci-full | ci-full | ? | ? |
@@ -102,6 +104,9 @@ Colonnes :
 | test_system_two_explicit | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_assembler_driver | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_amr_system_coupler | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_source_covered_cells | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_composite_source_conservation | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_stride_cadence | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_amr_layout_guard | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_system_hardening | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_imex_partial | ci-fast | self-skip | ci-full | ci-full | ? | ? |
@@ -139,6 +144,7 @@ Colonnes :
 | test_lorentz_eliminator | ci-fast | self-skip | ci-full | ci-full | ROMEO pass | ? |
 | test_polar_ring_advection | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_polar_transport_mms | ci-fast | self-skip | ci-full | ci-full | ROMEO pass | ? |
+| test_polar_system_step | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_dynamic_model | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_block_builder | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_weno5_ssprk3 | ci-fast | self-skip | ci-full | ci-full | ? | ? |
@@ -161,6 +167,22 @@ Colonnes :
 | test_aux_runtime_bz | ci-fast | self-skip | ci-full | ci-full | ? | ? |
 | test_aux_te | ci-fast | self-skip | ci-full | ci-full | ROMEO (gpu_aux_validate.cpp via romeo_gpuval2_build.sh -- chemin assemble_rhs, dmax=0 ; NOTE: le chemin add_compiled_model+T_e reste hors perimetre device, voir phase 8) | ? |
 
+### 1g-bis. Groupe AMR multi-blocs (capstone runtime, liaison amr_system.cpp)
+
+Tests `add_executable` lies au runtime `python/amr_system.cpp` (facade AmrSystem -> moteur AmrRuntime),
+foncteurs de modele / de tag NOMMES (pas de lambda generique) donc nvcc-compatibles en principe. Memes
+backends CPU que la section 1g ; non encore exerces sur device (colonnes Cuda = ?).
+
+| Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
+|------|--------|---------|---------------|---------------|-------------|-----------------|
+| test_amr_system_twoblock | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_multiblock_compiled | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_multiblock_substeps | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_multiblock_coupled_source | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_coupled_source_role_strict | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_multiblock_imex | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+| test_amr_multiblock_regrid_union | ci-fast | self-skip | ci-full | ci-full | ? | ? |
+
 ### 1h. Groupe MPI coeur (compile seulement si ADC_HAS_MPI)
 
 | Test | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
@@ -180,6 +202,7 @@ Colonnes :
 | test_mpi_cutcell_multibox_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
 | test_amr_system_bz_multibox_np2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (gpu_amr_bz_mpi_validate.cpp via romeo_gpuval2_mpi_build.sh, bz_bad=0, dcmax=0) |
 | test_mpi_amr_compiled_parity_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (amrmpi_integrated.cpp via amrmpi_romeo_build.sh, dmax=0, masse=0, crossrank_spread=0) -- ROMEO pass np2/4 (#157) |
+| test_mpi_amr_twoblock_parity_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
 | test_mpi_amr_distributed_coarse_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO (amrmpi_integrated.cpp via amrmpi_romeo_build.sh -- mode reparti mesure, correct mais ne scale pas) -- ROMEO pass np2/4 (#157) |
 | test_mpi_system_solve_fields_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ROMEO pass np2/4 (#157) |
 | test_mpi_system_fft_np1/2/4 | self-skip | ci-full | self-skip | ? | ? | ? |
@@ -196,6 +219,8 @@ Tous exercent le module `_adc` (pybind11) : le binding Python ne route que vers 
 
 | Test Python | Serial | MPI CPU | Kokkos Serial | Kokkos OpenMP | Kokkos Cuda | MPI+Kokkos Cuda |
 |-------------|--------|---------|---------------|---------------|-------------|-----------------|
+| test_amr_multiblock.py | ci-fast | ? | ? | ? | ? | ? |
+| test_amr_production_stride_reject.py | ci-fast | ? | ? | ? | ? | ? |
 | test_bindings.py | ci-fast | ? | ? | ? | ? | ? |
 | test_block_names_dynamic.py | ci-fast | ? | ? | ? | ? | ? |
 | test_dsl.py | ci-fast | ? | ? | ? | ? | ? |
@@ -211,7 +236,9 @@ Tous exercent le module `_adc` (pybind11) : le binding Python ne route que vers 
 | test_dsl_compile_facade.py | ci-fast | ? | ? | ? | ? | ? |
 | test_dsl_compose.py | ci-fast | ? | ? | ? | ? | ? |
 | test_dsl_coupled.py | ci-fast | ? | ? | ? | ? | ? |
+| test_dsl_coupled_role_error.py | ci-fast | ? | ? | ? | ? | ? |
 | test_dsl_coupled_source.py | ci-fast | ? | ? | ? | ? | ? |
+| test_dsl_coupled_source_conservation.py | ci-fast | ? | ? | ? | ? | ? |
 | test_dsl_cse.py | ci-fast | ? | ? | ? | ? | ? |
 | test_dsl_dynamic.py | ci-fast | ? | ? | ? | ? | ? |
 | test_dsl_elliptic.py | ci-fast | ? | ? | ? | ? | ? |
@@ -235,8 +262,14 @@ Tous exercent le module `_adc` (pybind11) : le binding Python ne route que vers 
 | test_poisson_eps.py | ci-fast | ? | ? | ? | ? | ? |
 | test_poisson_eps_aniso.py | ci-fast | ? | ? | ? | ? | ? |
 | test_poisson_screened.py | ci-fast | ? | ? | ? | ? | ? |
+| test_polar_conservation_radial_flux.py | ci-fast | ? | ? | ? | ? | ? |
+| test_polar_diocotron.py | ci-fast | ? | ? | ? | ? | ? |
+| test_polar_rejections.py | ci-fast | ? | ? | ? | ? | ? |
+| test_polar_system.py | ci-fast | ? | ? | ? | ? | ? |
+| test_polar_teardown_stability.py | ci-fast | ? | ? | ? | ? | ? |
 | test_primitive_state.py | ci-fast | ? | ? | ? | ? | ? |
 | test_schur_split.py | ci-fast | ? | ? | ? | ? | ? |
+| test_schur_via_system.py | ci-fast | ? | ? | ? | ? | ? |
 | test_stride.py | ci-fast | ? | ? | ? | ? | ? |
 | test_time_policy.py | ci-fast | ? | ? | ? | ? | ? |
 | test_weno5_compiledmodel.py | ci-fast | ? | ? | ? | ? | ? |
@@ -286,13 +319,17 @@ Valide sur le noeud x64cpu de ROMEO (`Kokkos_ENABLE_OPENMP=ON`, OpenMPI, build c
 
 ## 4. Bilan chiffre
 
+Base de comptage (au 2026-06-07) : 103 cibles ctest C++ hors bloc MPI (84 `adc_add_test` +
+19 `add_executable` runtime, dont les 7 capstones AMR multi-blocs de la section 1g-bis), +
+10 `add_executable` dans le bloc `ADC_HAS_MPI` (chacun rejoue np=1/2/4), + 55 tests Python.
+
 | Statut | Nombre de cellules (approx.) |
 |--------|------------------------------|
-| **ci-fast** | ~345 (79 adc_add_test + 11 serial runtime x Serial, + 45 Python x Serial) |
-| **ci-full** | ~225 (79+11 x Kokkos Serial ; ~21 entrees MPI CPU) |
+| **ci-fast** | ~158 (103 C++ hors-MPI x Serial + 55 Python x Serial) |
+| **ci-full** | ~227 (103 C++ x Kokkos Serial + 103 x Kokkos OpenMP ; ~21 entrees MPI CPU) |
 | **ROMEO** | ~55 (harnesses GPU mono et multi-GPU couvrant ~15 groupes fonctionnels) |
 | **self-skip** | ~350 (tests serial/Kokkos-Serial sur colonnes MPI, et MPI-only sur colonnes sans MPI) |
-| **?** | Majorite des cellules Kokkos OpenMP (aucun job CI, aucun harness ROMEO) + Kokkos Cuda des tests runtime non encore exerces sur device + MPI+Kokkos Cuda de la majorite des tests MPI |
+| **?** | Kokkos Cuda des tests runtime non encore exerces sur device (dont la section 1g-bis AMR multi-blocs) + MPI+Kokkos Cuda de la majorite des tests MPI + tout le bloc Python hors Serial |
 
 ---
 
@@ -302,10 +339,17 @@ Valide sur le noeud x64cpu de ROMEO (`Kokkos_ENABLE_OPENMP=ON`, OpenMPI, build c
 > - Kokkos OpenMP CI : FERME (#155, job ci-full, 91/91 ctest).
 > - MPI + Kokkos Cuda multi-GPU : FERME pour les 10 tests Krylov/Schur/MPI-noyau (#157, rank-invariant dmax=0).
 > - MPI + Kokkos OpenMP ROMEO : VALIDE (52/57 rank-invariants ; 3 tests lourds trop lents a np>1, perf, non deadlock).
+> - Synchro doc <-> disque (Lot E.4) : FERME. L'audit a confirme qu'AUCUN backend-path CPU n'etait
+>   sans test : tout test C++ hors-MPI tourne dans les 4 backends CPU (Serial, Kokkos Serial, Kokkos
+>   OpenMP, MPI np=1) et tout test MPI dans le job MPI. Le seul ecart etait DOCUMENTAIRE : 13 tests C++
+>   et 10 tests Python livres par des chantiers soeurs (AMR multi-blocs, polaire, elliptic_interface,
+>   DSL, schur_via_system) manquaient au tableau. Ils sont desormais indexes (sections 1c/1d/1f/1g-bis,
+>   1h pour le MPI, section 2). Aucun renommage : les noms etaient deja explicites sur leur backend.
 
 1. **Kokkos OpenMP (toutes suites)** -- FERME (#155) : job ci-full `Kokkos_ENABLE_OPENMP=ON`, 91/91 ctest.
-   Colonnes renseignees `ci-full` pour tous les tests non-MPI (sections 1a-1g). Les tests MPI-only
-   (section 1h, Serial=self-skip) restent `self-skip` en Kokkos OpenMP (build MPI non joint).
+   Colonnes renseignees `ci-full` pour tous les tests non-MPI (sections 1a-1g, y compris 1g-bis AMR
+   multi-blocs). Les tests MPI-only (section 1h, Serial=self-skip) restent `self-skip` en Kokkos OpenMP
+   (build MPI non joint).
 
 2. **MPI + Kokkos Cuda -- majorite des tests MPI** -- FERME pour 10 tests (#157, GH200,
    rank-invariant np=1/2/4, dmax=0) : krylov_solver, condensed_schur_source_stepper, mpi_poisson,
@@ -328,3 +372,12 @@ Valide sur le noeud x64cpu de ROMEO (`Kokkos_ENABLE_OPENMP=ON`, OpenMPI, build c
 5. **T_e via `add_compiled_model` sur Kokkos Cuda** -- seul le chemin `assemble_rhs` (fonceurs
    nommes) est valide device. Le marshaling T_e du chemin `System::add_compiled_model` +
    `apply_te` reste couvert uniquement en CI Serial.
+
+6. **Capstone AMR multi-blocs (section 1g-bis) sur Kokkos Cuda** -- les 7 tests runtime AMR
+   multi-blocs (`test_amr_system_twoblock`, `test_amr_multiblock_compiled/_substeps/_coupled_source/
+   _imex/_regrid_union`, `test_amr_coupled_source_role_strict`) sont valides sur les 4 backends CPU
+   (Serial, Kokkos Serial, Kokkos OpenMP, MPI np=1). Leurs foncteurs de modele et de tag sont NOMMES
+   (pas de lambda generique), donc en principe nvcc-compatibles, mais ils n'ont pas encore de harness
+   ROMEO dedie (colonnes Kokkos Cuda = "?"). Pendant device du capstone multi-blocs, a porter quand
+   le chemin `add_compiled_model` device (gap #4) sera ferme. La parite MPI CPU est couverte par
+   `test_mpi_amr_twoblock_parity_np1/2/4` (section 1h).
