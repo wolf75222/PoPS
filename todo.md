@@ -286,9 +286,12 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
 - [x] Operateur elliptique ECRANTE / Helmholtz `div(eps grad phi) - kappa phi = f` (GeometricMG + binding). (#44)
 - [x] Operateur elliptique ANISOTROPE `div(diag(eps_x, eps_y) grad phi)` : coeur GeometricMG (#52),
       eps_x(x)/eps_y(x) exposes au runtime System + Python (#56), test cut-cell + anisotrope MMS ordre 2 (#55).
-- [ ] Recabler les sites en forme `/(2*dx)` vers la forme multiplicative `*cx` (`amr_coupler`,
-      `amr_coupler_mp`, `spectral_coupler`) - differe au dernier bit, donc hors perimetre tant
-      qu'on veut le bit-identique.
+- [x] cx (`/(2*dx)` -> `*cx`) -- CLOS NON RENTABLE (evalue juin 2026). Les 3 sites divisifs restants
+      (amr_coupler_mp:307-308, spectral_coupler:113-114, system_field_solver:429-430) sont des boucles CPU
+      HORS HOTSPOT (1x par solve, apres le V-cycle MG qui domine 96-99% du temps #165/#206), memory-bound,
+      et la division par CONSTANTE est deja optimisable par le compilo. Casser la bit-identite IEEE-754 pour
+      un gain sub-ms NON mesurable n'est pas justifie. Les sites GPU (field_postprocess, condensed_schur,
+      schur_condensation) sont DEJA en `*cx`. Decision : laisser les 3 sites en l'etat. Pas de PR.
 
 ## 3. Durcissement de l'architecture (`docs/archive/ROADMAP.md`, ARCHIVE -- plus une doc active)
 
