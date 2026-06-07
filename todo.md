@@ -125,9 +125,17 @@ RESTE (audit) :
   blocks_.blocks` pour NE PAS churner les gabarits deja extraits (SystemFieldSolver/SystemStepper/native_loader).
   Bit-identique (helpers verbatim, ordre d'insertion preserve, ordre membres == init aggregat -- verifie par
   revue adversariale 4 lentilles : 0 finding). system.cpp 1065->1015. ctest 140/140 inchange. CI full verte.
-- [ ] **Lot C.6 / AMR (viii) regrid union-tags** : LE finale du capstone AMR (Phase 2) ; regrid pilote par
-  l'UNION des tags (e OR i OR n OR phi OR user), prolong/restrict + reflux bloc-par-bloc, deverrouille
-  multi-bloc + regrid_every>0. CHANTIER (gros) + decision de cadrage.
+- [x] **Lot C.6 / AMR (viii) regrid union-tags -- FAIT #199 (CAPSTONE AMR COMPLET)** : `AmrRuntime::regrid()`
+  pilote par l'UNION des tags (predicat par bloc D1 + |grad phi| D4) -> tag_union (OU) -> all_reduce_or (MPI) ->
+  Berger-Rigoutsos -> UN layout fin partage -> prolongation de TOUS les blocs (dont stride-tenus D3) + aux ->
+  same_layout_or_throw. regrid AVANT step (D2), 2 niveaux (D5). amr_regrid_finest refactore en briques
+  reutilisables (mono-bloc bit-identique). Facade deverrouillee (multi-bloc+regrid_every>0 ne leve plus).
+  regrid_every=0 BIT-IDENTIQUE. Test test_amr_multiblock_regrid_union (24 assertions a-e + conservation masse).
+  CI full verte (dont MPI). Revue adversariale 4 lentilles : 2 findings majeurs SOULEVES puis REFUTES (phi opt-in
+  = limite scope documentee, et le defaut densite capture deja le bord d'anneau = discontinuite de densite ;
+  chemin all_reduce exerce par le job CI MPI). => PHASE 1 + PHASE 2 = CAPSTONE AMR COMPLET.
+  SUIVI (non bloquant, basse prio) : (1) cabler le predicat phi |grad phi| depuis la facade Python (aujourd'hui
+  opt-in moteur) ; (2) test de parite MPI np=1/2/4 dedie (T4 du design).
 - [x] **AMR (v) DSL production multi-bloc -- FAIT #195** : `add_compiled_model(AmrSystem&)`/`set_compiled_block`
   ne levent plus au 2e bloc compile ; file de specs + build paresseux a `ensure_built` (miroir du chemin
   natif). 1 bloc route TOUJOURS par AmrCouplerMP (mono-bloc bit-identique, dmax==0) ; N blocs via AmrRuntime.
@@ -154,8 +162,14 @@ RESTE (scientifique / hors audit) :
 - [ ] **Run Hoffart haute resolution (ROMEO, AUTORISE)** : corriger le build -fPIC du module Python sur
   aarch64, puis smoke -> n=384 -> n=512, modes l=3/4/5, O5 WENO5+SSPRK3 ; enregistrer gamma/erreur/fenetre/
   cout/backend/commit. LE livrable scientifique quantitatif. (HPC, externe, demande GO ressources)
-- [ ] **Schur PR6** : mesure de l'effet TEMPOREL du Schur sur un fluide magnetise CARTESIEN (le chemin
-  polaire est explicite-only ; "Schur sur polaire" = feature ulterieure). DECISION de cadrage requise.
+- [x] **Schur PR6 -- MESURE (adc_cases, branche feat/normalization-and-schur-measurement)** : effet TEMPOREL
+  du Schur sur un fluide magnetise CARTESIEN raide mesure. cas schur_magnetized_cartesian/ : dt stable explicite
+  = 3.16e-4 (dt*omega_c=0.32, borne cyclotronique) vs CondensedSchur theta=0.5 = 1.78e-1 (gain 562x), theta=1.0
+  = 3.16e-1 (gain 1000x). Le Schur retire la borne dt*omega_c<O(1) ; le pas approche le pas de transport.
+  set_magnetic_field cartesien OK ; etage condense via set_source_stage (meme C++ CondensedSchurSourceStepper
+  #126). (chemin polaire reste explicite-only ; "Schur polaire" = feature ulterieure). A REVOIR par le proprietaire.
+- [x] **Normalisation diocotron CONSOLIDEE (adc_cases, meme branche)** : NORMALIZATION.md + diag/diag_polar_omega.py
+  (gamma_norm = gamma_raw*2pi/rhobar ; l=4 exact n=128/192). Cas hoffart_euler_poisson_dsl de Codex inclus.
 - [ ] **Perf : Poisson MG V-cycle small-box sous Kokkos** (#165 : domine 96-99.9%, regresse en OpenMP car
   parallel_for jusqu'aux grilles 2x2 ; le chemin serie garde n_cells>=4096, pas Kokkos). UNE optim par PR,
   profil avant/apres. (hot-path, delicat)
