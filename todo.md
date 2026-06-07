@@ -144,15 +144,18 @@ RESTE (audit) :
   Tests : test_amr_multiblock_compiled (cas F = IMEX stride=2 + masque par composante), test_amr_production_
   stride_reject.py. ctest 140/140. => PHASE 1 MULTI-BLOC A HIERARCHIE FIGEE COMPLETE (substeps/stride #175,
   sources couplees #179/#191, IMEX #184/#185, multi-bloc DSL/compile #195). Reste Phase 2 = regrid (C.6).
-- [~] **Lot A.5 autres dossiers** : convention de commentaires. FAIT : core/ #173, physics/ #189, numerics/
-  #193, mesh/+coupling/ #196, runtime/ non-amr #198. RESTE (bas) : amr/ (primitives geometriques) et les
-  runtime/amr_*.hpp (deja partiellement commentes par #185/#195/#199). (basse priorite, sans churn)
-  NOTE : 2 coquilles non-ASCII pre-existantes a corriger en passe dediee (abi_key.hpp "batis", system_field_
-  solver.hpp "ind+ependants" = em-dash casse).
+- [x] **Lot A.5 convention de commentaires -- COMPLET** : core/ #173, physics/ #189, numerics/ #193,
+  mesh/+coupling/ #196, runtime/ non-amr #198, amr/ primitives #200. (runtime/amr_*.hpp deja commentes par
+  #185/#195/#199.) NOTE residuelle : 2 coquilles non-ASCII pre-existantes (abi_key.hpp "batis", system_field_
+  solver.hpp "ind+ependants" = em-dash casse) a corriger en passe ASCII dediee.
 - [x] **Lot A.3 -- FAIT #194** : note SourceImplicit (local, par cellule) vs CondensedSchur (global, Schur)
   dans les docstrings python/adc/__init__.py + docs/SCHUR_CONDENSATION_DESIGN.md (pas de dossier examples/
   dans adc_cpp ; les exemples runnables sont dans adc_cases). Doc-only, 28 insertions.
-- [ ] **Lot E.4** : tests backend a noms precis (partiellement couvert par BACKEND_COVERAGE + validation).
+- [x] **Lot E.4 -- FAIT #201** : audit couverture par backend. VERDICT : la couverture par backend-path etait
+  DEJA complete (tout test C++ hors-bloc-MPI tourne Serial/Kokkos-Serial/Kokkos-OpenMP/MPI-np1 ; tests MPI dans
+  le job MPI ; noms deja explicites test_mpi_*/_npN). Seul trou = DOC perimee (13 C++ + 10 py manquants au
+  tableau) -> docs/BACKEND_COVERAGE.md remis a jour (section capstone AMR + bilan recalcule), 0 churn de test.
+  Nouveau gap #6 note : capstone multi-bloc valide 4 backends CPU, pas encore de harness ROMEO device.
 - [x] **Fix role-fallback cote AMR -- FAIT #191** : `AmrRuntime::add_coupled_source` (include/adc/runtime/
   amr_runtime.hpp, lambda resolve) durci strict (miroir #181) : bloc inconnu/role non-canonique/role canonique
   non expose -> throw nommant bloc+role, plus de repli silencieux comp=0. Test tests/test_amr_coupled_source_
