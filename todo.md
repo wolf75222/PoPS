@@ -415,11 +415,12 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       A LA FENETRE de fit ; l=5 DEVIATION ROBUSTE 16-18% quelle que soit la fenetre ; CAUSE PAS ENCORE
       IDENTIFIEE (non-linearite ? resolution/diffusion ? modele/geometrie/diagnostic ?). PAS de promesse +-2%
       avant resultats.
-      CAMPAGNE DISCRIMINANTE EN COURS (separer les causes, peu couteuse) : modes l=4,5 x n=256,512 x
+      CAMPAGNE DISCRIMINANTE EN COURS (job ROMEO 647366, 12 runs ; separer les causes) : modes l=4,5 x n=256,512 x
       delta=0.10/0.05/0.025, MEMES fenetres + MEME observable (aucun ajustement opportuniste). Lecture :
       erreur DIMINUE avec delta -> non-linearite ; DIMINUE avec n -> resolution/diffusion ; STABLE ->
       probleme de modele/geometrie/diagnostic. n=768 ENSUITE, seulement pour les configs qui le justifient.
-      SUITE (s'enchaine) : Voie A ETAPE 2 = Schur polaire (elliptique iteratif pour le tenseur croise +
+      SUITE (s'enchaine) : Voie A ETAPE 2a = operateur elliptique polaire TENSORIEL iteratif FAIT/EN-CI #210
+      (BiCGStab + precond RadialLine, MMS ordre 2, revue clean) ; ETAPE 2b = wiring Schur polaire (elliptique tenseur croise +
       stencils Schur polaires) ; cas demonstrateur diocotron fluide polaire (la figure 2D nette) ; table de
       validation finale ; (optionnel) Strang ordre 2. Roadmap detaillee : docs/FULL_MODEL_VALIDATION_ROADMAP.md.
       Question ouverte restante : preuve structure-preservation FE formelle requise, ou tests empiriques O(dt^2)
@@ -514,7 +515,10 @@ en Python sur le chemin performant. Trois backends : `prototype` (NumPy/hote), `
       leve si n_ranks()>1, et l'`assert(n_ranks()==1)` compile-out devient un garde-fou DUR (throw actif en
       Release) dans `PoissonFFTSolver`. fft direct = np=1 seulement ; `DistributedFFTSolver` existe (teste a
       part, `test_mpi_fft_distributed`) mais non route dans System (layout bandes vs box unique).
-- [~] **Etape 7 - domaine disque FV / Polaire Phase 2b** (EN COURS ; Voie A etape 1 = transport fluide polaire MERGE #209 ; reste etape 2 = Schur polaire + demonstrateur 2D) :
+- [~] **Etape 7 - domaine disque FV / Polaire Phase 2b** (EN COURS) : Voie A etape 1 = transport fluide
+      polaire MERGE #209 ; etape 2a = operateur elliptique polaire TENSORIEL iteratif #210 (revue adversariale
+      clean, CI en cours) ; reste etape 2b = wiring Schur polaire (SchurReconstructKernel polaire + coupleur
+      PolarTensorKrylovSolver) + demonstrateur diocotron 2D (l'explicit non-raide peut venir avant 2b) :
       DECISION DU PROPRIETAIRE SCIENTIFIQUE -- le bord d'anneau du diocotron est une DISCONTINUITE DE
       DENSITE TRANSPORTEE, PAS une paroi physique. NE PAS refaire "paroi-transport" (masque / cut-cell fixe)
       sur le bord d'anneau : ce serait physiquement FAUX. Le cut-cell reste pertinent pour le CONDUCTEUR
