@@ -19,6 +19,8 @@
 #include <adc/mesh/box2d.hpp>
 
 #include <algorithm>
+#include <cstdlib>      // getenv / strtol : seuil de bascule serie surchargeable (#165)
+#include <type_traits>  // std::is_same_v : garde compile-time backend hote vs device (#165)
 
 #ifdef ADC_HAS_KOKKOS
 #include <Kokkos_Core.hpp>
@@ -45,6 +47,43 @@ namespace adc {
 // detail::ensure_kokkos_initialized() et device_fence() : definis dans adc/core/kokkos_env.hpp
 // (cycle de vie Kokkos partage avec l'allocateur unifie, qui doit aussi initialiser Kokkos AVANT
 // son premier kokkos_malloc, sans quoi le build Kokkos plante a la construction d'un Fab).
+
+// SEUIL DE BASCULE SERIE pour for_each_cell (#165). Sous Kokkos OpenMP, lancer un
+// Kokkos::parallel_for(MDRangePolicy) sur une box minuscule paie un fork/join (et la
+// construction de la politique) qui ECRASE le calcul utile. Le V-cycle multigrille
+// descend jusqu'a des grilles ~2x2/4x4 ; sur ces niveaux le smoother GS, le residu, la
+// restriction/prolongation et les copies enchainent des dizaines de parallel_for sur
+// quelques cellules, et ce surcout de lancement DOMINE le temps de solve. En-dessous de
+// ce seuil on execute la boucle hote SEQUENTIELLE (le meme code que le backend serie),
+// au-dessus on garde Kokkos parallel_for pour les grilles fines.
+//
+// BIT-IDENTITE. for_each_cell n'a AUCUNE dependance inter-iteration : chaque f(i, j)
+// ecrit la seule cellule (i, j) de sa destination et lit des cellules QU'IL N'ECRIT PAS
+// dans le meme appel (le smoother GS est ROUGE-NOIR colore -- une couleur ne lit que
+// l'autre ; residu/restriction/prolongation/copies/saxpy ecrivent une destination
+// distincte de la source). Le resultat est donc INDEPENDANT DE L'ORDRE de parcours :
+// la boucle sequentielle rend exactement les memes bits que MDRangePolicy<Rank<2>>.
+// Le seuil ne touche QUE for_each_cell (pas les reductions for_each_cell_reduce_* :
+// la somme parallele Kokkos reassocie l'addition, donc y basculer en serie NE serait
+// PAS bit-identique -- on les laisse intactes ; le max est exact mais le smoother, lui,
+// passe bien par for_each_cell, ou se concentre le surcout des petites grilles).
+//
+// Surchargeable a l'execution par ADC_FOREACH_SERIAL_THRESHOLD (lu une fois) pour
+// rebalayer le seuil sans recompiler ; defaut 4096, ALIGNE sur la clause if() du backend
+// OpenMP pur ci-dessous (meme arbitrage fork/join vs calcul).
+namespace detail {
+inline long foreach_serial_threshold() {
+  static const long thr = [] {
+    if (const char* e = std::getenv("ADC_FOREACH_SERIAL_THRESHOLD")) {
+      char* end = nullptr;
+      const long v = std::strtol(e, &end, 10);
+      if (end != e && v >= 0) return v;
+    }
+    return 4096L;
+  }();
+  return thr;
+}
+}  // namespace detail
 
 // ---------------------------------------------------------------------------
 // Residence des donnees : sync_host() / sync_device(). Le seam de COHERENCE, le
@@ -107,6 +146,31 @@ inline void sync_device() {}
 template <class F>
 void for_each_cell(const Box2D& b, F f) {
 #if defined(ADC_HAS_KOKKOS)
+  // PETITES BOITES (#165) : sous un backend Kokkos a EXECUTION HOTE (Serial/OpenMP), le
+  // fork/join d'un parallel_for sur une grille minuscule (niveaux grossiers du V-cycle,
+  // ~2x2..32x32) ecrase le calcul. On execute alors la MEME boucle hote sequentielle que
+  // le backend serie. BIT-IDENTIQUE : aucune dependance inter-iteration (cf. note du
+  // seuil), donc l'ordre n'affecte aucun bit.
+  //
+  // GARDE DEVICE (if constexpr) : la bascule serie n'est prise QUE si l'espace d'execution
+  // par defaut de Kokkos EST l'espace hote (Serial/OpenMP). Sous un backend DEVICE (Cuda
+  // sur GH200), DefaultExecutionSpace != DefaultHostExecutionSpace : la boucle hote
+  // tournerait sur le CPU pendant que les kernels device precedents sont en vol (pas de
+  // fence pose ici) -- course de donnees. On garde donc parallel_for sur device QUELLE QUE
+  // SOIT la taille -> chemin GPU STRICTEMENT inchange (le if constexpr s'evapore a la
+  // compilation, zero surcout). Sous SharedSpace + execution hote, la boucle est sans
+  // course : les seams de coherence existants (gs_rb_sweep pose ses device_fence autour des
+  // sweeps, sync_host avant les acces hote) restent en place et inchanges.
+  if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace,
+                               Kokkos::DefaultHostExecutionSpace>) {
+    const long n_cells = static_cast<long>(b.hi[0] - b.lo[0] + 1) *
+                         (b.hi[1] - b.lo[1] + 1);
+    if (n_cells < detail::foreach_serial_threshold()) {
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i) f(i, j);
+      return;
+    }
+  }
   detail::ensure_kokkos_initialized();
   // IndexType<int> : indices SIGNES. Les boites de ghosts ont des bornes basses
   // negatives (p.ex. lo = -ng pour copy_shifted) ; sans type signe explicite,
