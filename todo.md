@@ -605,7 +605,11 @@ pas implicite stable a grand dt. Modele = physique ; SchurCondensation = algo. O
 - [~] **PR6 - mesure diocotron-Schur polaire -- DEBLOQUE, EN COURS** : la capacite Schur POLAIRE est FAITE
       (elliptique tensoriel #210 + etage source #212, gain dt 2000x) ; cablage facade etape 2c EN VOL
       (afd1c6c5) -> rend le Schur polaire utilisable depuis System/Python -> la mesure diocotron-Schur polaire
-      raide devient runnable. (Rappel : le Schur stabilise le TEMPS ; le gap de TAUX est geometrique/non-lineaire,
+      raide devient runnable.
+      RESTE CONCRET (presque rien) : (1) etape 2c = cablage facade -- EN VOL (afd1c6c5), PARTAGE avec Etape 7
+      (pas double-compte) ; (2) UNE run diocotron polaire RAIDE specifique. NB : le gain dt 2000x (stable la ou
+      l'explicite explose) est DEJA PROUVE au niveau stepper par le test de #212 ; la run diocotron n'est qu'une
+      demonstration sur le cas precis. (Rappel : le Schur stabilise le TEMPS ; le gap de TAUX est geometrique/non-lineaire,
       adresse separement par le chemin polaire + la campagne delta.)
 - [x] **PR7/PR8 - portage GPU/MPI + AMR** : apres #135 ; bit-invariance au nombre de rangs.
 
