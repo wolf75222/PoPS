@@ -205,8 +205,9 @@ DETTE / DIFFERES (ne pas oublier) :
   (ny,nx) -> polaire nr!=ntheta correct, cartesien bit-identique (ny==nx==n), AMR garde carre. CI full verte.
 - [x] A4 -- FAIT #202 : test_polar_mms_vr.cpp, MMS polaire DEDIE v_r != 0 (champ (v_r=0.35, v_theta=0.6),
   source manufacturee polaire (1/r)d_r(r rho v_r)+(1/r)d_theta(rho v_theta)), ordre de convergence 2.00 (limite
-  par la ponderation de face radiale). + #209 : MMS fluide 3-var (v_r != 0) ordre 2.00. (campagne MMS complete
-  = workflow en cours : audit rigueur + analyse de l'ordre + MMS transitoire manquant.)
+  par la ponderation de face radiale). + #209 : MMS fluide 3-var (v_r != 0) ordre 2.00. (A4 TERMINE. Un MMS polaire
+  TRANSITOIRE v_r!=0 reste un durcissement OPTIONNEL, NON prioritaire : ne doit pas retarder Schur polaire
+  ni la reproduction scientifique.)
 - [x] **finding 8 -- FAIT #204** : `fab(0)` sans garde `local_size` corrige (6 fermetures rhs_into/max_speed/
   advance dans native_loader.hpp ; garde `if (U.local_size()==0) return` ; collectifs hors fermetures -> pas
   d'interblocage) + test MPI np=1/2/4 (test_mpi_system_gather_scatter). CI job MPI verte. RESTE : `/(2*dx)->*cx`
@@ -407,6 +408,14 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
           legerement non-lineaire), PAS un artefact de mesure. CONCLUSION : la normalisation 2pi/rhobar est
           PROUVEE par l=3 (-0.38% fenetre longue) ; +-2% sur l=4/l=5 exigerait n=768/1024 (plus de GPU)
           et/ou delta plus petit (regime plus lineaire). Donnees : /scratch_p/rmdraux/early_fit_647356/.
+      ETAT HONNETE DES TAUX (a ne pas survendre) : l=3 VALIDE la normalisation (-0.38% n=512) ; l=4 SENSIBLE
+      A LA FENETRE de fit ; l=5 DEVIATION ROBUSTE 16-18% quelle que soit la fenetre ; CAUSE PAS ENCORE
+      IDENTIFIEE (non-linearite ? resolution/diffusion ? modele/geometrie/diagnostic ?). PAS de promesse +-2%
+      avant resultats.
+      CAMPAGNE DISCRIMINANTE EN COURS (separer les causes, peu couteuse) : modes l=4,5 x n=256,512 x
+      delta=0.10/0.05/0.025, MEMES fenetres + MEME observable (aucun ajustement opportuniste). Lecture :
+      erreur DIMINUE avec delta -> non-linearite ; DIMINUE avec n -> resolution/diffusion ; STABLE ->
+      probleme de modele/geometrie/diagnostic. n=768 ENSUITE, seulement pour les configs qui le justifient.
       SUITE (s'enchaine) : Voie A ETAPE 2 = Schur polaire (elliptique iteratif pour le tenseur croise +
       stencils Schur polaires) ; cas demonstrateur diocotron fluide polaire (la figure 2D nette) ; table de
       validation finale ; (optionnel) Strang ordre 2. Roadmap detaillee : docs/FULL_MODEL_VALIDATION_ROADMAP.md.
