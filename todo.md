@@ -361,7 +361,10 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       (job 637927) : `CUDA_BUILD_OK`, `exec=Cuda` OK, U(grossier+fin, 2 blocs) bit-identique au Serial
       (`dmax=0`), avant/apres confirme (sonde lambde remise -> echec nvcc). Harness perenne
       `python/tests/gpu/gpu_amrsys_facade_validate.cpp` (+ gpuval2 CMake). Hote inchange (72/72 ctest).
-- [ ] **Perf full-device** : le run integre NE SCALE PAS (grossier REPLIQUE -> Poisson/transport
+- [ ] **Perf full-device -- RECHERCHE/BESOIN-ROMEO (scope juin 2026, cf docs/RESEARCH_BACKLOG.md)** : la
+      replication grossiere est un CHOIX (le mode distribue mesure 3-5x PLUS LENT : MG halo latency-bound sur
+      petites boites). Prochain pas = profil ROMEO multi-GPU par niveau de V-cycle ; DECISION GATE : latence
+      >50% -> MG hybride ; sinon replication = bon compromis -> clore. NON auto-completable. [le run integre NE SCALE PAS (grossier REPLIQUE -> Poisson/transport
       grossier redondants par GPU ; seuls les patchs fins se repartissent). Mode `replicated_coarse=false`
       (grossier reparti) existe dans `AmrCouplerMP` mais degrade le MG et n'est pas cable dans `AmrSystem` :
       vrai chantier strong-scaling AMR. + parite AOT zero-copie sur device (sans rebond hote).
@@ -369,7 +372,10 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
 ## 5. Physique magnetisee
 
 - [x] Push de Boris E+B combine (`tfap_boris`, cyclotron exact, derive ExB sans croissance seculaire).
-- [ ] Reformulation AP tensorielle sous champ fort.
+- [ ] **Reformulation AP tensorielle sous champ fort -- RECHERCHE (scope juin 2026, cf docs/RESEARCH_BACKLOG.md)**
+      : le Schur condense gere DEJA le champ fort inconditionnellement (stable) ; l'AP serait un gain
+      d'EFFICACITE seulement. Prochain pas = etude math (expansion asymptotique + toy 1D), pas de code. NO-GO
+      si operateur non-local incompatible roles/DSL. NON auto-completable.
 
 ## 6. Reproduction Hoffart (arXiv:2510.11808) - APPLICATIF, cote `adc_cases`
 
@@ -429,7 +435,9 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       Question ouverte restante : preuve structure-preservation FE formelle requise, ou tests empiriques O(dt^2)
       suffisent (le schema est FV, momentum non exact par construction) ?
 - [x] **M2 / M2b** : AMR sur le bord d'anneau (triple le taux a base egale) + Poisson multi-niveau.
-- [~] Montee en resolution / convergence vers le taux analytique ; integration SAMRAI ulterieure.
+- [~] Montee en resolution / convergence vers le taux analytique : FAITE (n=384/512 GH200, l=3 -0.38%).
+      Integration SAMRAI = EXTERNE-GROS, DIFFEREE (l'AMR maison d'adc est capstone-complet et couvre le chemin
+      science ; cf docs/RESEARCH_BACKLOG.md pour le critere de reouverture). NON auto-completable.
 
 ## 7. Nettoyage / consolidation (vague P1/P2, juin 2026)
 
@@ -599,7 +607,9 @@ pas implicite stable a grand dt. Modele = physique ; SchurCondensation = algo. O
       foncteur device nomme dans `apply_couplings` ; generique inter-especes ; 3 especes + conservation,
       MPI np=1/2/4 bit-identique. (#131)
 - [x] **P6 - AMR multi-blocs** = capstone Gap 4, voir section 15.
-- [ ] **P7 - implicit-total + params runtime DSL** : DIFFERE.
+- [~] **P7** : P7-b params runtime DSL = DOABLE, EN VOL (agent dedie, PR a venir) ; P7-a implicit-total =
+      RECHERCHE (schema totalement implicite, gros chantier ; cf docs/RESEARCH_BACKLOG.md), differe sauf si le
+      splitting Lie ordre 1 devient limitant mesure (sinon Strang ordre 2 suffit).
 
 ## 12. Geometrie polaire / annulaire (le vrai verrou du taux de croissance diocotron)
 
