@@ -413,7 +413,7 @@ def _cpp_cse(e, cse_map):
 
 def _cse_emit(roots, real, indent):
     """Retourne (lignes_de_locales, [C++ par racine]). Les sous-expressions compound vues >= 2 fois
-    deviennent des locales 'cseK_'. roots : liste d'Expr."""
+    deviennent des locales ``cseK_``. roots : liste d'Expr."""
     counts, rep, size = {}, {}, {}
 
     def visit(e):
@@ -533,7 +533,7 @@ class HyperbolicModel:
         return np.stack([np.broadcast_to(c.eval(env), U[0].shape) for c in comps], axis=0)
 
     def max_wave_speed(self, U, aux, dir):
-        """max_k max_cellules |lambda_k| : borne de Rusanov / CFL."""
+        """max_k max_cellules ``|lambda_k|`` : borne de Rusanov / CFL."""
         env = self._env(U, aux)
         eigs = self._eig["x" if dir == 0 else "y"]
         return max(float(np.max(np.abs(np.asarray(e.eval(env))))) for e in eigs)
@@ -639,7 +639,7 @@ class HyperbolicModel:
     # --- codegen (etape 2 : arbre symbolique -> C++ compilable) ---
     def _codegen_exprs(self, exprs, cse, real="adc::Real", indent="    "):
         """(lignes de locales CSE, [C++ par expr]). Si cse, factorise les sous-expressions communes
-        (H, c...) en locales 'cseK_' ; sinon inline chaque expression via to_cpp."""
+        (H, c...) en locales ``cseK_`` ; sinon inline chaque expression via to_cpp."""
         if cse:
             return _cse_emit(list(exprs), real, indent)
         return [], [e.to_cpp() for e in exprs]
@@ -650,7 +650,7 @@ class HyperbolicModel:
 
         Signature produite : template <class Real> void <func>_flux(const Real* U, Real* F, int dir).
         Constantes inlinees ; chaque primitive devient une variable locale. cse=True (defaut) factorise
-        les sous-expressions communes (H, c...) en locales 'cseK_' ; cse=False les recalcule inline.
+        les sous-expressions communes (H, c...) en locales ``cseK_`` ; cse=False les recalcule inline.
 
         Etape (2) du DSL (cf. docs/ARCHITECTURE_CIBLE.md sect. 3) : C++ HOTE (templatable sur Real)."""
         name = func or self.name
@@ -685,7 +685,7 @@ class HyperbolicModel:
 
         Exige set_primitive_state(...) (layout de Prim) et set_conservative_from([...]) (to_conservative,
         que le DSL ne sait pas inverser tout seul). cse=True (defaut) factorise les sous-expressions
-        communes (H, c...) en locales 'cseK_'. Reste a faire (cf. ARCHITECTURE_CIBLE.md sect. 3) :
+        communes (H, c...) en locales ``cseK_``. Reste a faire (cf. ARCHITECTURE_CIBLE.md sect. 3) :
         codegen Kokkos/CUDA, JIT."""
         if not self.prim_state:
             raise ValueError("emit_cpp_brick : appeler set_primitive_state(...) d'abord")
@@ -1035,22 +1035,24 @@ class HyperbolicModel:
 
         @p target : "system" (defaut) | "amr_system". Choisit la facade visee et donc la SURCHARGE
         add_compiled_model appelee :
-          - "system"     : adc::System -> add_compiled_model(System&, ..., evolve) ; bloc plat
-            mono-niveau (fermetures sur grid_context, chemin de production de add_block).
-          - "amr_system" : adc::AmrSystem -> add_compiled_model(AmrSystem&, ...) ; bloc unique porte
-            sur la hierarchie AMR (reflux conservatif, regrid). PAS de parametre evolve (AMR mono-bloc).
+
+        - "system" : adc::System -> add_compiled_model(System&, ..., evolve) ; bloc plat
+          mono-niveau (fermetures sur grid_context, chemin de production de add_block).
+        - "amr_system" : adc::AmrSystem -> add_compiled_model(AmrSystem&, ...) ; bloc unique porte
+          sur la hierarchie AMR (reflux conservatif, regrid). PAS de parametre evolve (AMR mono-bloc).
 
         Symboles extern "C" emis :
-          - adc_native_abi_key() : cle d'ABI figee a la compilation DU LOADER (adc::detail::
-            abi_key_string()). add_native_block la compare a abi_key() du module -> erreur explicite
-            si en-tetes / compilateur / standard divergent (pas d'UB silencieux a la frontiere C++).
-            Commune aux deux cibles.
-          - adc_install_native (target="system") OU adc_install_native_amr (target="amr_system") :
-            reinterpret_cast<adc::System*|adc::AmrSystem*>(sys) puis add_compiled_model<ProdModel>(...).
-            Le schema transite en arguments plats (chaines + double + int) ; aucun objet C++ ne
-            traverse l'ABI dans CE sens (seul le facade* est repris par reference cote loader, d'ou
-            l'exigence d'ABI identique verifiee par la cle). Symbole DISTINCT par cible : un loader
-            System ne peut pas etre branche sur AmrSystem.add_native_block, et inversement."""
+
+        - adc_native_abi_key() : cle d'ABI figee a la compilation DU LOADER (adc::detail::
+          abi_key_string()). add_native_block la compare a abi_key() du module -> erreur explicite
+          si en-tetes / compilateur / standard divergent (pas d'UB silencieux a la frontiere C++).
+          Commune aux deux cibles.
+        - adc_install_native (target="system") OU adc_install_native_amr (target="amr_system") :
+          reinterpret_cast<adc::System*|adc::AmrSystem*>(sys) puis add_compiled_model<ProdModel>(...).
+          Le schema transite en arguments plats (chaines + double + int) ; aucun objet C++ ne
+          traverse l'ABI dans CE sens (seul le facade* est repris par reference cote loader, d'ou
+          l'exigence d'ABI identique verifiee par la cle). Symbole DISTINCT par cible : un loader
+          System ne peut pas etre branche sur AmrSystem.add_native_block, et inversement."""
         if target not in ("system", "amr_system"):
             raise ValueError("emit_cpp_native_loader : target 'system' | 'amr_system' (recu %r)"
                              % (target,))
@@ -1144,12 +1146,13 @@ class HyperbolicModel:
     def compile_or_jit(self, so_path, include=None, mode="jit", name=None, cxx=None, std="c++20",
                        target="system"):
         """API unifiee (facade de l'ideal m.compile_or_jit()) choisissant le backend :
-        mode="jit"     -> compile_so  (IModel, dispatch virtuel : prototypage hote, a brancher via
-                          System.add_dynamic_block) ;
-        mode="compile" -> compile_aot (chemin de production AOT, numerique identique au natif : a
-                          brancher via System.add_compiled_block) ;
-        mode="native"  -> compile_native (loader natif zero-copie : add_compiled_model<> via
-                          System.add_native_block ou AmrSystem.add_native_block ; chemin "production").
+
+        - mode="jit" -> compile_so (IModel, dispatch virtuel : prototypage hote, a brancher via
+          System.add_dynamic_block) ;
+        - mode="compile" -> compile_aot (chemin de production AOT, numerique identique au natif : a
+          brancher via System.add_compiled_block) ;
+        - mode="native" -> compile_native (loader natif zero-copie : add_compiled_model<> via
+          System.add_native_block ou AmrSystem.add_native_block ; chemin "production").
 
         @p target : "system" (defaut) | "amr_system". UNIQUEMENT consomme par mode="native" (choix de
         la facade visee, cf. compile_native). Les autres modes (jit/compile) ne ciblent que System ;
@@ -1661,20 +1664,22 @@ class Model:
         HyperbolicModel.compile (moteurs inchanges : compile_so / compile_aot / compile_native), puis
         empaquette le .so avec les metadonnees deja connues (pas de relecture du .so).
 
-        @p backend : "prototype" | "aot" | "production" (cf. HyperbolicModel.compile).
-        @p target : "system" (defaut) | "amr_system" (DSL Phase D). "amr_system" exige
-            backend="production" (le loader natif inline add_compiled_model(AmrSystem&), seul chemin
-            .so AMR ; cf. compile_or_jit) -> a brancher via AmrSystem.add_equation. Un autre backend
-            avec target="amr_system" leve ValueError (pas de chemin AMR hors natif).
-        PAS d'argument `device` : les capacites GPU/MPI/AMR sont verifiees au branchement
-            (add_equation) / a l'execution, pas figees a la compilation (DSL_MODEL_DESIGN.md point 7).
+        - ``backend`` : "prototype" | "aot" | "production" (cf. HyperbolicModel.compile).
+        - ``target`` : "system" (defaut) | "amr_system" (DSL Phase D). "amr_system" exige
+          backend="production" (le loader natif inline add_compiled_model(AmrSystem&), seul chemin
+          .so AMR ; cf. compile_or_jit) -> a brancher via AmrSystem.add_equation. Un autre backend
+          avec target="amr_system" leve ValueError (pas de chemin AMR hors natif).
+
+        PAS d'argument ``device`` : les capacites GPU/MPI/AMR sont verifiees au branchement
+        (add_equation) / a l'execution, pas figees a la compilation (DSL_MODEL_DESIGN.md point 7).
 
         ERGONOMIE (ne change pas la numerique) :
-          - @p include None -> auto-detecte (adc_include()) ; passer include= reste possible ;
-          - @p so_path None -> .so dans un cache hors source (adc_cache_dir()), nom de fichier keye sur
-            model_hash (PARAMS COMPRIS) + abi_key (+ backend/target/name). Cache HIT (.so deja presente)
-            -> reutilisation sans recompilation ; cache MISS (modele/param/toolchain change) ->
-            recompilation + stockage. Passer so_path= force ce chemin et recompile (retro-compat).
+
+        - ``include`` None -> auto-detecte (adc_include()) ; passer include= reste possible ;
+        - ``so_path`` None -> .so dans un cache hors source (adc_cache_dir()), nom de fichier keye sur
+          model_hash (PARAMS COMPRIS) + abi_key (+ backend/target/name). Cache HIT (.so deja presente)
+          -> reutilisation sans recompilation ; cache MISS (modele/param/toolchain change) ->
+          recompilation + stockage. Passer so_path= force ce chemin et recompile (retro-compat).
 
         Renvoie un CompiledModel portant so_path, backend, target, adder, noms/roles/gamma/n_aux/params,
         caps, abi_key, model_hash, cxx, std."""
@@ -1768,12 +1773,13 @@ class NativeBrick:
     gamma). emit(struct_name) rend le texte C++ a coudre dans le .so composite : un struct derive qui
     fixe les parametres (ou un simple alias `using` si la brique n'a aucun parametre).
 
-    @p kind : 'hyperbolic' | 'source' | 'elliptic' (slot vise).
-    @p fields : dict {nom de champ C++ public -> valeur} ; ORDRE preserve (insertion).
-    @p var_names / n_vars / prim_names / gamma : metadonnees du layout (slot hyperbolique seulement).
-    @p min_vars : nombre minimal de variables qu'exige une brique TEMPLATEE (source/elliptic) ; p.ex.
-        PotentialForce indexe s[1]/s[2] donc exige >= 3 variables. Verifie par HybridModel.
-    @p n_aux : largeur du canal aux que la brique LIT (>= 3 si elle lit B_z/T_e)."""
+    - ``kind`` : 'hyperbolic' | 'source' | 'elliptic' (slot vise).
+    - ``fields`` : dict {nom de champ C++ public -> valeur} ; ORDRE preserve (insertion).
+    - ``var_names`` / ``n_vars`` / ``prim_names`` / ``gamma`` : metadonnees du layout (slot
+      hyperbolique seulement).
+    - ``min_vars`` : nombre minimal de variables qu'exige une brique TEMPLATEE (source/elliptic) ;
+      p.ex. PotentialForce indexe s[1]/s[2] donc exige >= 3 variables. Verifie par HybridModel.
+    - ``n_aux`` : largeur du canal aux que la brique LIT (>= 3 si elle lit B_z/T_e)."""
 
     def __init__(self, cpp_type, kind, fields=None, var_names=None, n_vars=None, prim_names=None,
                  gamma=None, min_vars=1, n_aux=AUX_BASE_COMPS):
@@ -2114,15 +2120,17 @@ class HybridModel:
                 target="system"):
         """Compile le composite hybride en un CompiledModel.
 
-        @p backend :
-          'prototype'  -> add_dynamic_block : JIT, dispatch VIRTUEL hote (Rusanov ordre 1), iteration
-                          rapide ; pas de MPI/AMR, pas de flux HLLC/Roe ni recon primitif ;
-          'aot'        -> add_compiled_block : .so autosuffisant (ABI plate, host-marshale), chemin de
-                          production mono-rang ; sans MPI/AMR ;
-          'production' -> add_native_block : loader natif zero-copie qui inline add_compiled_model<>, MEME
-                          chemin qu'add_block (fermetures sur le contexte reel de la facade), MPI par
-                          construction. Les noms/roles/gamma viennent des metadonnees du .so (pas de names=).
-        @p target : 'system' (defaut) | 'amr_system'. 'amr_system' EXIGE backend='production' : le loader
+        ``backend`` :
+
+        - 'prototype' -> add_dynamic_block : JIT, dispatch VIRTUEL hote (Rusanov ordre 1), iteration
+          rapide ; pas de MPI/AMR, pas de flux HLLC/Roe ni recon primitif ;
+        - 'aot' -> add_compiled_block : .so autosuffisant (ABI plate, host-marshale), chemin de
+          production mono-rang ; sans MPI/AMR ;
+        - 'production' -> add_native_block : loader natif zero-copie qui inline add_compiled_model<>, MEME
+          chemin qu'add_block (fermetures sur le contexte reel de la facade), MPI par construction.
+          Les noms/roles/gamma viennent des metadonnees du .so (pas de names=).
+
+        ``target`` : 'system' (defaut) | 'amr_system'. 'amr_system' EXIGE backend='production' : le loader
         inline add_compiled_model(AmrSystem&) (symbole adc_install_native_amr), seul chemin .so AMR ; a
         brancher via AmrSystem.add_equation. Les autres backends n'ont pas de pendant AMR.
 

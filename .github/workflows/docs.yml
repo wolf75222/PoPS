@@ -37,22 +37,27 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Compile le module `adc` pour qu'autodoc (api.md) ait des signatures.
-      # best-effort : si ca echoue, la doc se publie quand meme (autodoc degrade).
+      # numpy est requis a l'import du module (dsl.py fait `import numpy`) et par
+      # autodoc ; on l'installe avant de compiler/importer adc.
+      - name: Python deps
+        run: |
+          pip install --upgrade pip
+          pip install numpy
+          pip install -r docs/sphinx/requirements.txt
+
+      # Compile le module `adc` pour qu'autodoc (api.md) resolve les signatures.
+      # Non best-effort : `sphinx-build -W` echouera sur les warnings autodoc si
+      # le module n'est pas importable, donc le build doit reussir ici.
       - name: Build module Python adc
-        continue-on-error: true
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DADC_BUILD_PYTHON=ON
           cmake --build build --target adc_py -j 2
 
-      - name: Install Sphinx
-        run: |
-          pip install --upgrade pip
-          pip install -r docs/sphinx/requirements.txt
-
       # Sphinx d'abord : cree docs/_build, ce dont Doxygen a besoin (OUTPUT_DIRECTORY).
+      # -W : transforme les warnings en erreurs (refs cassees, autodoc non resolu).
+      # --keep-going : collecte TOUS les warnings avant d'echouer (diagnostic complet).
       - name: Build Sphinx
-        run: PYTHONPATH=$PWD/build/python sphinx-build -b html --keep-going docs/sphinx docs/_build/sphinx
+        run: PYTHONPATH=$PWD/build/python python -m sphinx -W --keep-going -b html docs/sphinx docs/_build/sphinx
 
       - name: Build Doxygen
         run: |
