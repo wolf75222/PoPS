@@ -543,8 +543,10 @@ en Python sur le chemin performant. Trois backends : `prototype` (NumPy/hote), `
         - etape 2c = CABLAGE FACADE du Schur polaire (#212) dans System.step/Python -- EN VOL (afd1c6c5)
           -> debloque PR6 (mesure diocotron-Schur polaire raide). C'est le SEUL reste actif.
         - MINEUR : corriger le docstring PolarMesh ("ExB scalaire seulement", perime depuis #209).
-        - OPTIONNEL/futur : brique source Lorentz v x B_z POLAIRE native (le demonstrateur a contourne via
-          derive electrostatique + centrifuge ; cs2=0.1 instable / 0.5 relaxe).
+        - EN COURS (workflow) : brique source Lorentz v x B_z POLAIRE native (le demonstrateur a contourne via
+          derive electrostatique + centrifuge) -> rend le diocotron polaire EXPLICITE physiquement complet
+          (vraie force magnetique au lieu du contournement). Source = (0, +B_z*m_theta, -B_z*m_r) en repere
+          local polaire (rotation algebrique invariante, cf. revue #212).
       INVARIANT PROPRIETAIRE (garder) : bord d'anneau = DISCONTINUITE DE DENSITE TRANSPORTEE, PAS une paroi.
       NE PAS poser de paroi/masque/cut-cell fixe dessus (physiquement FAUX). Cut-cell pertinent SEULEMENT pour
       le conducteur EXTERNE (#109 montre qu'il NE corrige PAS le taux). Leviers du taux = polaire / haut-ordre
