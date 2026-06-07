@@ -134,8 +134,8 @@ RESTE (audit) :
   CI full verte (dont MPI). Revue adversariale 4 lentilles : 2 findings majeurs SOULEVES puis REFUTES (phi opt-in
   = limite scope documentee, et le defaut densite capture deja le bord d'anneau = discontinuite de densite ;
   chemin all_reduce exerce par le job CI MPI). => PHASE 1 + PHASE 2 = CAPSTONE AMR COMPLET.
-  SUIVI (non bloquant, basse prio) : (1) cabler le predicat phi |grad phi| depuis la facade Python (aujourd'hui
-  opt-in moteur) ; (2) test de parite MPI np=1/2/4 dedie (T4 du design).
+  SUIVI -- FAIT #205 : (1) predicat phi |grad phi| cable depuis la facade Python (AmrSystem.set_phi_refinement,
+  defaut <=0 = desactive/bit-identique) ; (2) test de parite MPI np=1/2/4 du regrid (test_amr_regrid_mpi_parity).
 - [x] **AMR (v) DSL production multi-bloc -- FAIT #195** : `add_compiled_model(AmrSystem&)`/`set_compiled_block`
   ne levent plus au 2e bloc compile ; file de specs + build paresseux a `ensure_built` (miroir du chemin
   natif). 1 bloc route TOUJOURS par AmrCouplerMP (mono-bloc bit-identique, dmax==0) ; N blocs via AmrRuntime.
@@ -189,7 +189,10 @@ DETTE / DIFFERES (ne pas oublier) :
   bug get/set_primitive_state + accesseurs (to_2d/to_3d) supposaient un domaine CARRE (n*n) ; passes a
   (ny,nx) -> polaire nr!=ntheta correct, cartesien bit-identique (ny==nx==n), AMR garde carre. CI full verte.
 - [ ] A4 : cas MMS polaire dedie avec v_r != 0 (couvert en pratique par #168/#174 ; optionnel).
-- [ ] finding 8 (`fab(0)` sans garde local_size) au portage MPI ; `/(2*dx)->*cx` au dernier bit ; P7
+- [x] **finding 8 -- FAIT #204** : `fab(0)` sans garde `local_size` corrige (6 fermetures rhs_into/max_speed/
+  advance dans native_loader.hpp ; garde `if (U.local_size()==0) return` ; collectifs hors fermetures -> pas
+  d'interblocage) + test MPI np=1/2/4 (test_mpi_system_gather_scatter). CI job MPI verte. RESTE : `/(2*dx)->*cx`
+  au dernier bit (NON bit-identique, differe) ; P7
   (implicit-total + params runtime DSL).
 
 **Prochaines etapes :** voir la section "RESTE A FAIRE" ci-dessus (source de verite unique). Invariants
