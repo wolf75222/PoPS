@@ -151,6 +151,10 @@ PYBIND11_MODULE(_adc, m) {
       // Politique de splitting en temps : "lie" (defaut, bit-identique) ou "strang" (H(dt/2) S(dt)
       // H(dt/2), 2e ordre). Cf. System::set_time_scheme / SystemStepper::step_strang.
       .def("set_time_scheme", &System::set_time_scheme, py::arg("scheme"))
+      // Politique de la loi de Gauss (R0, repro Hoffart) : "restart" (defaut, re-resout Poisson chaque
+      // pas, bit-identique) ou "evolve" (apres phi^0, plus de re-solve ; l'etage Schur fait evoluer phi
+      // sans restart, comme le papier). Cf. System::set_gauss_policy.
+      .def("set_gauss_policy", &System::set_gauss_policy, py::arg("policy"))
       // Source COUPLEE generique (adc.dsl.CoupledSource, P5) : ABI plate (bytecode postfixe). Lit des
       // champs (bloc, role) et ecrit des termes de source compiles en machine a pile, appliques par
       // splitting explicite apres le transport (meme seam que add_ionization). Sans appel, inchange.

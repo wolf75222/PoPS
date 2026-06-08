@@ -350,6 +350,13 @@ class System {
   /// leve une erreur EXPLICITE. Sans appel, le chemin reste BIT-IDENTIQUE (Lie).
   void set_time_scheme(const std::string& scheme);
 
+  /// Politique de la loi de Gauss (chantier R0, reproduction Hoffart). "restart" (defaut) : solve_fields
+  /// re-resout -Delta phi = f a chaque pas (BIT-IDENTIQUE a l'historique). "evolve" : apres le premier
+  /// solve (phi^0), solve_fields ne re-resout plus le Poisson et derive l'aux du phi COURANT que
+  /// l'etage source Schur fait evoluer in-place -> evolution -Delta phi sans restart du papier (Gauss
+  /// imposee qu'a t=0). N'a d'effet qu'avec un etage source condense. Schema inconnu -> erreur explicite.
+  void set_gauss_policy(const std::string& policy);
+
   /// Ajoute une SOURCE COUPLEE GENERIQUE inter-especes decrite par un BYTECODE (adc.dsl.CoupledSource,
   /// P5 phase 1, splitting EXPLICITE forward-Euler apres le transport). A la difference des couplages
   /// nommes (add_ionization / add_collision / add_thermal_exchange) qui figent une formule, celle-ci lit

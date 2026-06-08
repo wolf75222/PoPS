@@ -1004,6 +1004,25 @@ void System::set_time_scheme(const std::string& scheme) {
   }
 }
 
+void System::set_gauss_policy(const std::string& policy) {
+  // Politique de la loi de Gauss (chantier R0, reproduction Hoffart). "restart" (defaut) : solve_fields
+  // re-resout -Delta phi = f a chaque pas (bit-identique a l'historique). "evolve" : apres le premier
+  // solve (phi^0), solve_fields NE re-resout plus le Poisson ; il derive l'aux du phi COURANT que
+  // l'etage source Schur fait evoluer in-place dans ell_phi() -> evolution -Delta phi sans restart du
+  // papier (la contrainte de Gauss n'est imposee qu'a t=0). N'a d'effet QU'avec un etage source condense
+  // (sans lui phi resterait gele apres t=0). Le verrou gauss_solved_once_ est remis a zero ici pour
+  // qu'un changement de politique AVANT le premier solve reste coherent (le 1er solve resout toujours).
+  if (policy == "restart") {
+    p_->fields_.gauss_evolve_ = false;
+  } else if (policy == "evolve") {
+    p_->fields_.gauss_evolve_ = true;
+  } else {
+    throw std::runtime_error("System::set_gauss_policy : politique '" + policy +
+                             "' inconnue (attendu 'restart' ou 'evolve')");
+  }
+  p_->fields_.gauss_solved_once_ = false;
+}
+
 void System::set_density(const std::string& name, const std::vector<double>& rho) {
   Impl::Species& s = p_->find(name);
   // Layout row-major du tableau d'entree : (ni x nj) = extents de la box de l'etat. En cartesien

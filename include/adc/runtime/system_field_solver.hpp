@@ -99,6 +99,16 @@ class SystemFieldSolver {
   std::vector<double> p_eps_y_field_;   // champ eps_y(x), n*n row-major (faces normales a y ; si has_eps_xy_field_)
   bool has_kappa_field_ = false;        // terme de REACTION kappa(x) fourni : div(eps grad phi) - kappa phi
   std::vector<double> p_kappa_field_;   // champ kappa(x), n*n row-major (si has_kappa_field_)
+  // POLITIQUE DE GAUSS (chantier R0, reproduction Hoffart arXiv:2510.11808). Defaut "restart" :
+  // solve_fields re-resout -Delta phi = f (Gauss) a CHAQUE appel -- comportement historique,
+  // BIT-IDENTIQUE. "evolve" : apres le PREMIER solve (phi^0), solve_fields NE re-resout PLUS le
+  // Poisson ; il ne fait que DERIVER l'aux (phi, grad phi) du phi COURANT -- celui que l'etage source
+  // condense (Schur) fait evoluer IN-PLACE dans ell_phi() (cf. run_source_stage). Reproduit ainsi
+  // l'evolution restart-free de -Delta phi du papier (la contrainte de Gauss n'est imposee qu'a t=0).
+  // INERTE sans etage Schur (phi resterait gele apres t=0). Le verrou gauss_solved_once_ garantit que
+  // le premier solve (l'init de phi^0) resout toujours, quelle que soit la politique.
+  bool gauss_evolve_ = false;
+  bool gauss_solved_once_ = false;
   std::optional<std::variant<GeometricMG, PoissonFFTSolver>> ell_;
   // Solveur de Poisson POLAIRE direct (FFT-en-theta + tridiag-en-r), construit paresseusement quand
   // polar_ (cf. ensure_elliptic_polar). SEPARE de ell_ (geom() rend une PolarGeometry, pas une
@@ -412,31 +422,39 @@ class SystemFieldSolver {
     adc_sf_mark("solve_fields: debut");
     ensure_elliptic();
     adc_sf_mark("solve_fields: apres ensure_elliptic");
-    MultiFab& rhs = ell_rhs();
-    rhs.set_val(Real(0));
-    adc_sf_mark("solve_fields: apres rhs.set_val(0)");
-    // f = Sum_s elliptic_rhs_s(U_s) sur l'etat COURANT de chaque bloc. STRIDE : un bloc de cadence M
-    // est tenu (hold-then-catch-up) entre deux rattrapages, donc U_s y reste FIGE a sa derniere avance ;
-    // sa densite / charge entre dans cette somme avec un etat PERIME jusqu'a son prochain rattrapage
-    // (couplage Poisson lache du bloc lent, assume par le choix du stride).
-    for (auto& s : owner_->sp) s.add_poisson_rhs(s.U, rhs);
-    adc_sf_mark("solve_fields: apres add_poisson_rhs");
-    // Permittivite CONSTANTE : div(eps grad phi) = f <=> lap phi = f/eps, donc on met le rhs a
-    // l'echelle 1/eps. Avec un champ eps(x) VARIABLE ou ANISOTROPE on NE le fait PAS : l'operateur
-    // GeometricMG porte eps directement (apply_epsilon_field / apply_epsilon_anisotropic_field), le
-    // rhs reste f tel quel.
-    if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
-      const Real inv = Real(1) / p_eps_;
-      for (int li = 0; li < rhs.local_size(); ++li) {
-        Array4 r = rhs.fab(li).array();
-        const Box2D v = rhs.box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i) r(i, j, 0) *= inv;
+    // POLITIQUE DE GAUSS (R0) : "restart" (defaut, gauss_evolve_==false) re-resout -Delta phi = f a
+    // CHAQUE appel (bit-identique a l'historique). "evolve" : apres le PREMIER solve (phi^0), on SAUTE
+    // l'assemblage du RHS + le solve elliptique -> ell_phi() conserve le phi courant (celui que l'etage
+    // source Schur fait evoluer in-place), reproduisant l'evolution -Delta phi sans restart du papier.
+    // La derivation de l'aux (phi, grad phi) ci-dessous tourne TOUJOURS, sur le phi courant.
+    if (!(gauss_evolve_ && gauss_solved_once_)) {
+      MultiFab& rhs = ell_rhs();
+      rhs.set_val(Real(0));
+      adc_sf_mark("solve_fields: apres rhs.set_val(0)");
+      // f = Sum_s elliptic_rhs_s(U_s) sur l'etat COURANT de chaque bloc. STRIDE : un bloc de cadence M
+      // est tenu (hold-then-catch-up) entre deux rattrapages, donc U_s y reste FIGE a sa derniere avance ;
+      // sa densite / charge entre dans cette somme avec un etat PERIME jusqu'a son prochain rattrapage
+      // (couplage Poisson lache du bloc lent, assume par le choix du stride).
+      for (auto& s : owner_->sp) s.add_poisson_rhs(s.U, rhs);
+      adc_sf_mark("solve_fields: apres add_poisson_rhs");
+      // Permittivite CONSTANTE : div(eps grad phi) = f <=> lap phi = f/eps, donc on met le rhs a
+      // l'echelle 1/eps. Avec un champ eps(x) VARIABLE ou ANISOTROPE on NE le fait PAS : l'operateur
+      // GeometricMG porte eps directement (apply_epsilon_field / apply_epsilon_anisotropic_field), le
+      // rhs reste f tel quel.
+      if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
+        const Real inv = Real(1) / p_eps_;
+        for (int li = 0; li < rhs.local_size(); ++li) {
+          Array4 r = rhs.fab(li).array();
+          const Box2D v = rhs.box(li);
+          for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+            for (int i = v.lo[0]; i <= v.hi[0]; ++i) r(i, j, 0) *= inv;
+        }
       }
+      adc_sf_mark("solve_fields: avant ell_solve");
+      ell_solve();
+      gauss_solved_once_ = true;
+      adc_sf_mark("solve_fields: apres ell_solve, avant device_fence");
     }
-    adc_sf_mark("solve_fields: avant ell_solve");
-    ell_solve();
-    adc_sf_mark("solve_fields: apres ell_solve, avant device_fence");
     device_fence();
     adc_sf_mark("solve_fields: apres device_fence (derivation aux)");
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();

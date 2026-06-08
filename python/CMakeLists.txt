@@ -197,6 +197,15 @@ add_test(NAME test_ssprk3_production
 set_tests_properties(test_ssprk3_production PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# Politique de la loi de Gauss (R0, repro Hoffart) : System.set_gauss_policy "restart" (defaut,
+# re-resout Poisson chaque pas, bit-identique) vs "evolve" (apres phi^0, plus de re-solve : l'etage
+# Schur fait evoluer phi sans restart). API + NO-DEFAULT-CHANGE (defaut == restart) + evolve actif et
+# fini sur un fluide magnetise + CondensedSchur. La partie comportement s'auto-saute sans compilateur.
+add_test(NAME test_gauss_policy
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gauss_policy.py)
+set_tests_properties(test_gauss_policy PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # WENO5 sur les chemins .so / CompiledModel : add_compiled_block (AOT) ET add_native_block (production)
 # allouent block_n_ghost(limiter)=3 ghosts -> weno5 accepte ; parite eval_rhs/potentiel au bloc natif
 # add_block weno5 (AOT < 1e-9 marshale, production bit-identique) + no-default-change none/minmod.
