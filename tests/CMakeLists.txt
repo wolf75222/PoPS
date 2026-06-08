@@ -126,6 +126,14 @@ adc_add_test(test_amr_spatial_parity)
 # actives (flux normal nul aux faces active/inactive) + residu nul sur les cellules inactives.
 adc_add_test(test_disc_domain_mask)
 
+# Chantier T5-PR2 : transport FV EMBEDDED-BOUNDARY conservatif sur disque (assemble_rhs_eb). Generalise
+# le masque T2 (portes de face 0/1) a un schema CUT-CELL : ouvertures de face alpha_f in [0,1] et
+# fraction de volume kappa (detail::cut_fraction, T5-PR1), flux de paroi no-penetration, residu /kappa
+# (clampe petite cellule). (a) MMS sur disque : ordre 2 a l'interieur (rapport d'erreur ~4) ; (b)
+# conservation de masse a la machine (Sum n kappa_eff dx dy, aucun flux ne franchit le mur immerge) +
+# residu FINI (clamp small-cell, pas de NaN) ; (c) bit-identite : sans coupe, EB == operateur cartesien.
+adc_add_test(test_eb_transport)
+
 # --- canal aux extensible (n_aux + load_aux<NComp>) : champ extra B_z lu et peuple ---
 adc_add_test(test_aux_extra)
 adc_add_test(test_aux_coupler_bz)
