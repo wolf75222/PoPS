@@ -379,7 +379,29 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
 
 ## 6. Reproduction Hoffart (arXiv:2510.11808) - APPLICATIF, cote `adc_cases`
 
-- [~] **SESSION T5 + ABI + GEOMETRIE (juin 2026) -- chemin critique = GEOMETRIE, signal en cours** :
+- [x] **RESOLU T2+T3 (juin 2026) -- le "deficit -95%" etait un ARTEFACT DE METROLOGIE, pas le solveur.**
+      Le full system-schur cartesien REPRODUIT le papier une fois la mesure faite dans les bonnes unites :
+      l=3 -9.1%, l=4 -1.9%, l=5 +0.04% (n=96), et l'erreur CONVERGE vers 0 (n=256 : les 3 modes <1%).
+      CAUSE : (1) horloge -- gamma_paper = gamma_raw_sim * 2pi/rhobar (conversion cyclique->angulaire de
+      l'horloge de derive, EXACTE et mode-independante, verifiee <0.5% contre la valeur propre Petri ;
+      diag/petri_eigenvalue.py : Wd=2pi*omega_d reproduit, Wd=omega_d=1 donne cibles/6.2832). (2) fenetre --
+      les fenetres papier (temps T_d) etaient fittees sur le temps SIM brut (transitoire) ; il faut les
+      mapper t_sim=2pi/rhobar*t_paper. CLE : alpha=beta^2/rho_max et omega=beta^2 se SIMPLIFIENT
+      (alpha/omega=1) donc le full advecte le champ du reduit ExB normalise ; full==reduit a ~2% en fenetre
+      etablie. Decompo l=3 ferme : 0.0312 x 3.20(fenetre) x 6.28(2pi) x 1.23(grille) = 0.772.
+      LIVRE : adc_cases #32 (code T3 run.py/results.py : paper_to_sim_time_window + gamma_to_paper_units,
+      report gamma_raw_sim ET gamma_paper_units), #38/#39 (README = tutoriel complet install->run + figures
+      + GIF + DSL commente, model.py pedagogique, TUTORIAL fusionne) ; adc_cpp #251+#256 (HOFFART_FIDELITY
+      corrige : Strang pas Lie, 2pi s'applique au full ; premisse "no 2pi for full" RETIREE). Verifie par
+      workflow adversarial 4 lentilles (confirmed-with-caveats). CAVEATS : metrologie PARTIELLE (residu
+      ~0-9% = bord cart + resolution + roll-off fenetre) ; l=5 sensible a la fenetre (+-27-29%). Les [~]
+      ci-dessous (verdict "geometrie/structurel", "no 2pi for full", "Lie pas Strang") sont SUPERSEDES.
+      BRANCHES : #238 (playbook spatial, mien) ferme+supprime (superseded). Restent ouvertes, hors de mon
+      perimetre (WIP d'agents freres) : #253 (optflags DSL, CI en cours -> merge auto si vert), #229 (polaire
+      multibox, behind 31), #109 (transport-wall, behind 181), #232 (design AMR-Schur, draft). Les merger =
+      rebases/finitions qui appartiennent a ces chantiers, pas a la repro Hoffart.
+
+- [~] **(SUPERSEDE par RESOLU T2+T3 ci-dessus -- garde pour historique)** **SESSION T5 + ABI + GEOMETRIE (juin 2026) -- chemin critique = GEOMETRIE, signal en cours** :
       Audit Phase 0 (5 agents, docs/HOFFART_FIDELITY.md + HOFFART_STEP_SEQUENCE.md) : geometrie = suspect
       DOMINANT du deficit du modele complet (taux analytique = f(l, omega_d, r0, r1, R) seulement ; les
       suspects secondaires sont negligeables/mineurs). RESOLU : |Omega|=beta^2=1e12 correct (papier l.1082),
@@ -427,7 +449,7 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
       trois modes tombent dans [0.87,0.97] (l=4 EXACT aux deux resolutions ; l=5 passe de -29% n=128 a
       +27% n=192 quand sa fenetre se resserre -> le scatter est de la SENSIBILITE A LA FENETRE de fit,
       PAS un deficit de physique). Diag reproductible : `/tmp/diag_polar_omega.py`.
-- [~] **MODELE COMPLET Hoffart -- PAS encore valide a fidelite papier (CORRECTION d'honnetete, Codex juin 2026)** :
+- [~] **(SUPERSEDE par RESOLU T2+T3 en tete de section -- "Lie pas Strang" et "no 2pi for full" corriges ; garde pour historique)** **MODELE COMPLET Hoffart -- PAS encore valide a fidelite papier (CORRECTION d'honnetete, Codex juin 2026)** :
       ATTENTION : le "-0.38% l=3 n=512" cite plus haut est le DIOCOTRON ExB-SCALAIRE REDUIT (adc_cases/diocotron/,
       models.diocotron, CARTESIEN + paroi circulaire, sweep ROMEO ~/adc_gpu_hires/.../diocotron/sweep.py). Il valide
       la NORMALISATION 2pi/rhobar + la methode sur le MODELE REDUIT (benchmark Petri standard) -- PAS le systeme
