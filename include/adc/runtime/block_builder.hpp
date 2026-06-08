@@ -8,9 +8,11 @@
 #include <adc/numerics/numerical_flux.hpp>
 #include <adc/numerics/reconstruction.hpp>
 #include <adc/numerics/spatial_operator.hpp>
+#include <adc/numerics/spatial_operator_eb.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
 #include <adc/numerics/time/implicit_stepper.hpp>
 #include <adc/numerics/time/time_steppers.hpp>
 #include <adc/runtime/grid_context.hpp>  // GridContext + BlockClosures (en-tete leger partage)
+#include <adc/runtime/wall_predicate.hpp>  // detail::DiscDomain (level set device-callable du disque)
 
 #include <functional>
 #include <stdexcept>
@@ -104,6 +106,121 @@ struct RhsInto {
     assemble_rhs<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, recon_prim);
   }
 };
+
+// ============================================================================
+// ROUTAGE DISQUE (chantier T5-PR3) : evaluateurs de residu DISQUE + avances qui les portent.
+// ============================================================================
+// Le residu de transport d'un bloc passe par BlockRhsEval (assemble_rhs, plein cartesien). Les deux
+// evaluateurs ci-dessous SUBSTITUENT l'operateur disque a assemble_rhs, en lisant la geometrie du
+// System PAR POINTEUR (adresse stable d'un membre de Impl) au moment du pas -- l'ordre add_block /
+// set_disc_domain est donc indifferent. Foncteurs NOMMES (meme contrat device que BlockRhsEval).
+
+/// Residu de transport MASQUE (mode Staircase) : fill_ghosts puis assemble_rhs_masked sur le masque
+/// 0/1 cellule-centre du System (lu via @c mask, pointeur vers Impl::disc_mask_, adresse stable). Le
+/// masque a le MEME layout que U (memes ba/dm, 1 ghost). Cellule inactive -> residu 0 ; face vers une
+/// inactive -> flux normal nul (paroi FV). Le flux / la reconstruction sont REUTILISES verbatim.
+template <class Limiter, class Flux, class Model>
+struct BlockRhsEvalMasked {
+  Model model;
+  const GridContext* ctx;
+  const MultiFab* mask;  // Impl::disc_mask_ (NON possede ; adresse stable)
+  bool recon_prim;
+  void operator()(MultiFab& U, MultiFab& R) const {
+    fill_ghosts(U, ctx->dom, ctx->bc);
+    assemble_rhs_masked<Limiter, Flux>(model, U, *ctx->aux, *mask, ctx->geom, R, recon_prim);
+  }
+};
+
+/// Residu de transport CUT-CELL / EB (mode CutCell) : fill_ghosts puis assemble_rhs_eb sur le level
+/// set du disque du System (lu via @c disc, pointeur vers Impl::disc_, adresse stable). Le level set
+/// device-callable est construit ICI sur l'HOTE (detail::disc_level_set(*disc) -> DiscLevelSet, un
+/// FONCTEUR NOMME capturant trois doubles PAR VALEUR) et passe PAR VALEUR a assemble_rhs_eb : le noyau
+/// device ne recoit donc PAS de std::function, il reste device-clean (cf. spatial_operator_eb.hpp).
+template <class Limiter, class Flux, class Model>
+struct BlockRhsEvalEb {
+  Model model;
+  const GridContext* ctx;
+  const DiscDomain* disc;  // Impl::disc_ (NON possede ; adresse stable)
+  bool recon_prim;
+  void operator()(MultiFab& U, MultiFab& R) const {
+    fill_ghosts(U, ctx->dom, ctx->bc);
+    assemble_rhs_eb<Limiter, Flux>(model, U, *ctx->aux, disc_level_set(*disc), ctx->geom, R,
+                                   recon_prim);
+  }
+};
+
+/// Avance EXPLICITE MASQUEE : n sous-pas du stepper @c Stepper sur le residu de transport MASQUE.
+/// Mime AdvanceExplicit a l'identique (meme math RK, meme limiteur / flux) : seul le residu change.
+template <class Limiter, class Flux, class Model, class Stepper = SSPRK2Step>
+struct AdvanceExplicitMasked {
+  Model m;
+  GridContext ctx;
+  const MultiFab* mask;
+  bool recon_prim;
+  void operator()(MultiFab& U, Real dt, int n) const {
+    const Real h = dt / static_cast<Real>(n);
+    const BlockRhsEvalMasked<Limiter, Flux, Model> rhs{m, &ctx, mask, recon_prim};
+    for (int s = 0; s < n; ++s) Stepper{}.take_step(rhs, U, h);
+  }
+};
+
+/// Avance EXPLICITE CUT-CELL / EB : n sous-pas du stepper @c Stepper sur le residu de transport EB.
+/// Mime AdvanceExplicit a l'identique : seul le residu (assemble_rhs_eb) change.
+template <class Limiter, class Flux, class Model, class Stepper = SSPRK2Step>
+struct AdvanceExplicitEb {
+  Model m;
+  GridContext ctx;
+  const DiscDomain* disc;
+  bool recon_prim;
+  void operator()(MultiFab& U, Real dt, int n) const {
+    const Real h = dt / static_cast<Real>(n);
+    const BlockRhsEvalEb<Limiter, Flux, Model> rhs{m, &ctx, disc, recon_prim};
+    for (int s = 0; s < n; ++s) Stepper{}.take_step(rhs, U, h);
+  }
+};
+
+/// Avance IMEX MASQUEE : demi-pas EXPLICITE MASQUE (transport sans source) + source IMPLICITE raide.
+/// Mime AdvanceImex : le transport (forward-Euler) lit le residu MASQUE sans source ; la source
+/// implicite (backward_euler_source) est INCHANGEE (locale par cellule, hors frontiere disque). Une
+/// cellule inactive a un residu de transport nul puis subit la source locale -- comme T2 / EB, seule
+/// la FRONTIERE de transport est fermee, la source reste cellule-locale.
+template <class Limiter, class Flux, class Model>
+struct AdvanceImexMasked {
+  Model m;
+  GridContext ctx;
+  const MultiFab* mask;
+  bool recon_prim;
+  ImplicitMask<Model::n_vars> mask_impl{};
+  void operator()(MultiFab& U, Real dt, int n) const {
+    const Real h = dt / static_cast<Real>(n);
+    const BlockRhsEvalMasked<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m},
+                                                                        &ctx, mask, recon_prim};
+    for (int s = 0; s < n; ++s) {
+      ForwardEuler{}.take_step(rhs, U, h);
+      backward_euler_source(m, *ctx.aux, U, h, 2, mask_impl);
+    }
+  }
+};
+
+/// Avance IMEX CUT-CELL / EB : demi-pas EXPLICITE EB (transport sans source) + source IMPLICITE raide.
+/// Mime AdvanceImex : transport via assemble_rhs_eb, source implicite inchangee (cellule-locale).
+template <class Limiter, class Flux, class Model>
+struct AdvanceImexEb {
+  Model m;
+  GridContext ctx;
+  const DiscDomain* disc;
+  bool recon_prim;
+  ImplicitMask<Model::n_vars> mask_impl{};
+  void operator()(MultiFab& U, Real dt, int n) const {
+    const Real h = dt / static_cast<Real>(n);
+    const BlockRhsEvalEb<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m}, &ctx,
+                                                                    disc, recon_prim};
+    for (int s = 0; s < n; ++s) {
+      ForwardEuler{}.take_step(rhs, U, h);
+      backward_euler_source(m, *ctx.aux, U, h, 2, mask_impl);
+    }
+  }
+};
 }  // namespace detail
 
 /// Construit le masque implicite POD device-clean d'un modele a N variables a partir d'une liste
@@ -129,18 +246,44 @@ ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit_components) 
 /// @p implicit_components : indices des variables conservees a traiter en IMPLICITE dans la source IMEX
 /// (masque PORTE PAR LE BLOC, override du defaut modele). VIDE (defaut) -> masque inactif -> defaut
 /// modele is_implicit -> bit-identique. Sans effet hors IMEX (l'explicite n'a pas de pas implicite).
+/// Les avances de transport DISQUE optionnelles (advance_masked / advance_eb) sont fabriquees quand
+/// @p ctx porte la geometrie disque du System (ctx.disc_mask / ctx.disc, chantier T5-PR3) ; sinon elles
+/// restent vides et le stepper retombe sur advance (bit-identique). Adresses STABLES de membres de Impl,
+/// lues PAR POINTEUR au pas -> l'ordre add_block / set_disc_domain est indifferent. Les avances disque
+/// MIMENT advance (meme RK / IMEX, meme limiteur / flux) ; seul le residu de transport est aiguille
+/// (assemble_rhs_masked / _eb).
 template <class Limiter, class Flux, class Model>
 BlockClosures build_block(const Model& m, const GridContext& ctx, bool imex, bool recon_prim,
                           const std::string& method = "ssprk2",
                           const std::vector<int>& implicit_components = {}) {
+  const MultiFab* disc_mask = ctx.disc_mask;
+  const detail::DiscDomain* disc = ctx.disc;
   BlockClosures bc;
+  const ImplicitMask<Model::n_vars> impl_mask = make_implicit_mask<Model::n_vars>(implicit_components);
   if (imex) {
-    bc.advance = detail::AdvanceImex<Limiter, Flux, Model>{
-        m, ctx, recon_prim, make_implicit_mask<Model::n_vars>(implicit_components)};
+    bc.advance = detail::AdvanceImex<Limiter, Flux, Model>{m, ctx, recon_prim, impl_mask};
+    if (disc_mask)
+      bc.advance_masked =
+          detail::AdvanceImexMasked<Limiter, Flux, Model>{m, ctx, disc_mask, recon_prim, impl_mask};
+    if (disc)
+      bc.advance_eb =
+          detail::AdvanceImexEb<Limiter, Flux, Model>{m, ctx, disc, recon_prim, impl_mask};
   } else if (method == "ssprk3") {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{m, ctx, recon_prim};
+    if (disc_mask)
+      bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK3Step>{
+          m, ctx, disc_mask, recon_prim};
+    if (disc)
+      bc.advance_eb =
+          detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK3Step>{m, ctx, disc, recon_prim};
   } else if (method == "ssprk2") {
     bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{m, ctx, recon_prim};
+    if (disc_mask)
+      bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK2Step>{
+          m, ctx, disc_mask, recon_prim};
+    if (disc)
+      bc.advance_eb =
+          detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK2Step>{m, ctx, disc, recon_prim};
   } else {
     throw std::runtime_error("System : methode temporelle explicite inconnue '" + method +
                              "' (ssprk2|ssprk3)");

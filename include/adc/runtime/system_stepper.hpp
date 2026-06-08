@@ -2,6 +2,9 @@
 
 #include <adc/core/state.hpp>     // kAuxBaseComps (canal B_z lu par l'etage source condense)
 #include <adc/core/types.hpp>     // Real
+#include <adc/runtime/grid_context.hpp>  // GeometryMode (aiguillage du transport disque)
+
+#include <stdexcept>  // std::runtime_error (mode disque demande sans avance disque sur un bloc)
 
 #include <algorithm>  // std::min, std::max (CFL : pas physique min de la grille, dt min sur les blocs)
 #include <cmath>      // std::isfinite, std::ceil (step_cfl / step_adaptive)
@@ -119,6 +122,52 @@ class SystemStepper {
     if (s.source_step) s.source_step(s.U, eff_dt);
   }
 
+  /// AVANCE DE TRANSPORT du bloc @p s sur @p dt en @p n sous-pas, AIGUILLEE par le mode de geometrie du
+  /// System (chantier T5-PR3). C'est le SEUL point de cablage du disque dans le pas (les 4 pas -- step,
+  /// step_strang, step_cfl, step_adaptive -- passent par ici) :
+  ///   - None (defaut)             : s.advance (assemble_rhs, plein cartesien). BIT-IDENTIQUE.
+  ///   - Staircase, disque fixe    : s.advance_masked (assemble_rhs_masked, masque 0/1).
+  ///   - CutCell, disque fixe      : s.advance_eb (assemble_rhs_eb, cut-cell EB).
+  /// Un mode disque demande SANS disque fixe (disc_set_ == false) RETOMBE sur s.advance : le mode seul
+  /// (sans set_disc_domain) ne doit pas changer le transport. Un mode disque avec disque fixe mais sur
+  /// un bloc qui N'A PAS fabrique l'avance disque (p.ex. bloc polaire / charge depuis un .so anterieur)
+  /// leve une erreur EXPLICITE plutot que de jouer SILENCIEUSEMENT le chemin plein (le footgun T2 :
+  /// croire le disque actif alors que le transport l'ignore). Les avances disque MIMENT s.advance
+  /// (meme schema RK / IMEX, meme limiteur / flux) ; seul le residu de transport est aiguille.
+  void advance_transport_n(typename Impl::Species& s, Real dt, int n) {
+    const GeometryMode mode = owner_->geometry_mode_;
+    if (mode == GeometryMode::None || !owner_->disc_set_) {
+      s.advance(s.U, dt, n);  // chemin par defaut (ou mode disque sans disque fixe) : BIT-IDENTIQUE
+      return;
+    }
+    if (mode == GeometryMode::Staircase) {
+      if (!s.advance_masked)
+        throw std::runtime_error(
+            "SystemStepper : mode geometrie 'staircase' demande mais le bloc '" + s.name +
+            "' n'expose pas d'avance de transport masquee (transport disque non cable pour ce bloc)");
+      s.advance_masked(s.U, dt, n);
+      return;
+    }
+    // CutCell
+    if (!s.advance_eb)
+      throw std::runtime_error(
+          "SystemStepper : mode geometrie 'cutcell' demande mais le bloc '" + s.name +
+          "' n'expose pas d'avance de transport cut-cell EB (transport disque non cable pour ce bloc)");
+    s.advance_eb(s.U, dt, n);
+  }
+
+  /// AVANCE DE TRANSPORT du bloc @p s sur @p eff_dt en s.substeps sous-pas, aiguillee par le mode (cf.
+  /// advance_transport_n). Reutilise s.substeps comme l'ancien s.advance des pas step / step_cfl.
+  void advance_transport(typename Impl::Species& s, Real eff_dt) {
+    advance_transport_n(s, eff_dt, s.substeps);
+  }
+
+  /// DEMI-avance de transport (Strang) : aiguillage de advance_transport sur @p half_dt = eff_dt/2 --
+  /// le mode disque honore AUSSI le chemin Strang (H(dt/2) S(dt) H(dt/2)).
+  void advance_transport_half(typename Impl::Species& s, Real eff_dt) {
+    advance_transport_n(s, Real(0.5) * eff_dt, s.substeps);
+  }
+
   /// Un macro-pas de longueur @p dt. ORDRE INVARIANT par schema (cf. SplitScheme) :
   ///  - Lie (defaut, bit-identique) : solve_fields ; pour chaque bloc DU (cadence stride honoree)
   ///    advance(dt) puis run_source_stage(dt) entrelaces ; couplages ; t += dt ; ++macro_step.
@@ -136,7 +185,7 @@ class SystemStepper {
       if (!s.evolve) continue;  // bloc gele : non avance
       if (!stride_due(P->macro_step_, s.stride)) continue;  // hold : pas en fin de fenetre stride
       const Real eff_dt = Real(dt) * Real(s.stride);  // catch-up : pas effectif s.stride * dt
-      s.advance(s.U, eff_dt, s.substeps);
+      advance_transport(s, eff_dt);  // transport AIGUILLE par le mode geometrie (None : assemble_rhs)
       run_source_stage(s, eff_dt);  // OPT-IN : etage source condense par Schur (no-op sinon)
     }
     apply_couplings(Real(dt));  // sources couplees inter-especes (splitting), apres transport
@@ -172,11 +221,12 @@ class SystemStepper {
     // (1) phi coherent avec rho^n, pour la 1re demi-avance de transport.
     P->solve_fields();
     // (2) H(dt/2) : 1re demi-avance de transport de chaque bloc DU. s.substeps sous-pas (inchange).
+    // Aiguillee par le mode geometrie (None : assemble_rhs ; Staircase/CutCell : operateur disque).
     for (auto& s : P->sp) {
       if (!s.evolve) continue;
       if (!stride_due(P->macro_step_, s.stride)) continue;
       const Real eff_dt = Real(dt) * Real(s.stride);
-      s.advance(s.U, Real(0.5) * eff_dt, s.substeps);
+      advance_transport_half(s, eff_dt);
     }
     // (3) phi RE-RESOLU sur la densite post-H(dt/2), pour l'etage source.
     P->solve_fields();
@@ -190,12 +240,12 @@ class SystemStepper {
     // (5) phi RE-RESOLU sur la densite post-source : SANS cette resolution la 2nde demi-avance lirait un
     //     phi perime (cf. docs/HOFFART_STEP_SEQUENCE.md, le solve_fields de tete unique est insuffisant).
     P->solve_fields();
-    // (6) H(dt/2) : 2nde demi-avance de transport, fermant le pas symetrique Strang.
+    // (6) H(dt/2) : 2nde demi-avance de transport, fermant le pas symetrique Strang. MEME aiguillage.
     for (auto& s : P->sp) {
       if (!s.evolve) continue;
       if (!stride_due(P->macro_step_, s.stride)) continue;
       const Real eff_dt = Real(dt) * Real(s.stride);
-      s.advance(s.U, Real(0.5) * eff_dt, s.substeps);
+      advance_transport_half(s, eff_dt);
     }
     apply_couplings(Real(dt));  // sources couplees inter-especes (splitting), apres le pas symetrique
     P->t += dt;
@@ -246,7 +296,7 @@ class SystemStepper {
       if (!s.evolve) continue;
       if (!stride_due(P->macro_step_, s.stride)) continue;  // hold : pas en fin de fenetre stride
       const Real eff_dt = Real(dt) * Real(s.stride);  // catch-up : pas effectif s.stride * dt
-      s.advance(s.U, eff_dt, s.substeps);
+      advance_transport(s, eff_dt);  // transport AIGUILLE par le mode geometrie (None : assemble_rhs)
       run_source_stage(s, eff_dt);  // OPT-IN : etage source condense par Schur (no-op sinon)
     }
     apply_couplings(Real(dt));
@@ -289,7 +339,7 @@ class SystemStepper {
                                          static_cast<double>(wb[b] / wmin)));
       if (n < 1) n = 1;
       const Real eff_dt = Real(macro_dt) * Real(s.stride);  // catch-up : pas effectif M*macro_dt
-      s.advance(s.U, eff_dt, n);
+      advance_transport_n(s, eff_dt, n);  // transport AIGUILLE par le mode geometrie (n sous-pas adaptatifs)
       run_source_stage(s, eff_dt);  // OPT-IN : etage source condense par Schur (no-op sinon)
     }
     apply_couplings(Real(macro_dt));

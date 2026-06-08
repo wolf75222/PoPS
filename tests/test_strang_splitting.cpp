@@ -58,6 +58,11 @@ struct MockImpl {
   double t = 0.0;
   int macro_step_ = 0;
   bool polar_ = false;
+  // Geometrie de transport DISQUE (chantier T5-PR3) : le stepper lit geometry_mode_ / disc_set_ pour
+  // aiguiller l'avance de transport. None + !disc_set_ -> le toy emprunte s.advance (chemin plein),
+  // donc l'ordre temporel observe (Lie vs Strang) est INCHANGE (ce test ne fixe aucun disque).
+  GeometryMode geometry_mode_ = GeometryMode::None;
+  bool disc_set_ = false;
   Geometry geom;
   PolarGeometry pgeom_;
   Fields fields_;

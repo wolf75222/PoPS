@@ -151,6 +151,13 @@ struct System::Impl {
   detail::DiscDomain disc_;
   bool disc_set_ = false;
   MultiFab disc_mask_;  // 0/1 cellule-centre, meme layout que les blocs (ba/dm), 1 ghost ; vide tant que !disc_set_
+  // MODE DE GEOMETRIE DE TRANSPORT (chantier T5-PR3, cablage du disque dans step()). None (defaut) :
+  // transport plein cartesien (assemble_rhs) -> BIT-IDENTIQUE. Staircase : assemble_rhs_masked (masque
+  // 0/1). CutCell : assemble_rhs_eb (cut-cell EB). Le stepper lit ce mode pour AIGUILLER l'avance de
+  // transport de chaque bloc (advance vs advance_masked vs advance_eb). Pose par set_disc_domain(mode=)
+  // / set_geometry_mode ; n'a d'effet que si un disque est fixe (disc_set_) ET le bloc porte l'avance
+  // disque correspondante. None tant qu'aucun mode disque n'est demande.
+  GeometryMode geometry_mode_ = GeometryMode::None;
   // Champs d'APPLICATION aux (bz_field_, te_src_) et tampons apply_bz/apply_te EXTRAITS vers
   // fields_ (SystemFieldSolver, Lot B) ; l'aux PARTAGE et sa largeur restent ici (canal commun).
   // Registre de blocs POSSEDE par le store (Lot B.3). `sp` est une REFERENCE sur blocks_.blocks : meme
@@ -288,7 +295,11 @@ struct System::Impl {
   // (adc/runtime/block_builder.hpp : make_block / make_max_speed / make_poisson_rhs) afin que le
   // chemin template de production soit instanciable hors de cette unite (compilation AOT d'un
   // modele genere). Ici on ne fournit que le contexte de grille a leur passer.
-  GridContext grid_ctx() { return GridContext{dom, bc_, geom, &aux}; }
+  // GridContext : maillage + CL + aux + geometrie DISQUE (chantier T5-PR3). disc_mask_ / disc_ sont
+  // des MEMBRES a adresse STABLE -> les fermetures de bloc (build_block) les lisent par pointeur au
+  // pas, donc l'ordre add_block / set_disc_domain est indifferent (le masque est materialise / le
+  // rayon pose avant le 1er step ; tant que !disc_set_ le stepper ne selectionne pas l'avance disque).
+  GridContext grid_ctx() { return GridContext{dom, bc_, geom, &aux, &disc_mask_, &disc_}; }
 
   // Contexte de grille POLAIRE (anneau pgeom_ + CL r/theta + aux) pour les fermetures de bloc polaires
   // (block_builder_polar.hpp). Pendant de grid_ctx() ; jamais appele en cartesien.
@@ -427,6 +438,10 @@ void System::add_block(const std::string& name, const ModelSpec& model,
     // (bit-identique). Ne joue qu'en IMEX (garde ci-dessus pour l'explicite).
     const std::vector<int> impl_components =
         resolve_implicit_components(name, cons_vs, implicit_vars, implicit_roles);
+    // Routage disque (chantier T5-PR3) : make_block fabrique AUSSI les avances disque (advance_masked /
+    // advance_eb) car ctx (grid_ctx()) porte desormais ctx.disc_mask / ctx.disc (adresses stables des
+    // membres de Impl). Elles restent INERTES tant que le System n'est pas mis en mode Staircase /
+    // CutCell (cf. step()) : construites a l'ajout, selectionnees seulement sur opt-in.
     clo = make_block(m, limiter, riemann, ctx, imex, recon_prim, method, impl_components);
     max_speed = make_max_speed(m, ctx);
     add_poisson_rhs = make_poisson_rhs(m);
@@ -469,6 +484,10 @@ void System::install_block(const std::string& name, int ncomp,
   P->sp.back().U.set_val(Real(0));
   P->sp.back().cons_vars = cons_vars;
   P->sp.back().prim_vars = prim_vars;
+  // Avances de transport DISQUE (chantier T5-PR3) : vides sauf si build_block les a fabriquees (bloc
+  // cartesien avec disc_mask_/disc_ fournis). Vides -> le stepper retombe sur advance (bit-identique).
+  P->sp.back().advance_masked = std::move(closures.advance_masked);
+  P->sp.back().advance_eb = std::move(closures.advance_eb);
 }
 
 // Reallocation width-aware de l'etat d'un bloc (delegue a Impl::set_block_ghosts). Exposee
@@ -539,7 +558,19 @@ void System::set_poisson(const std::string& rhs, const std::string& solver,
   p_->fields_.ell_.reset();
 }
 
-void System::set_disc_domain(double cx, double cy, double R) {
+namespace {
+// Traduit le mode de transport disque Python ("none"|"staircase"|"cutcell") en GeometryMode. Erreur
+// EXPLICITE sur un mode inconnu (jamais un repli silencieux). Source unique de la table des noms.
+GeometryMode parse_geometry_mode(const std::string& mode, const char* err_context) {
+  if (mode == "none") return GeometryMode::None;
+  if (mode == "staircase") return GeometryMode::Staircase;
+  if (mode == "cutcell") return GeometryMode::CutCell;
+  throw std::runtime_error(std::string(err_context) + " : mode geometrie inconnu '" + mode +
+                           "' (none|staircase|cutcell)");
+}
+}  // namespace
+
+void System::set_disc_domain(double cx, double cy, double R, const std::string& mode) {
   Impl* P = p_.get();
   // CARTESIEN seulement : le polaire borne deja l'anneau par ses parois radiales (r_min / r_max,
   // flux radial nul) -> un masque disque cartesien n'a pas de sens sur la grille (r, theta).
@@ -549,6 +580,8 @@ void System::set_disc_domain(double cx, double cy, double R) {
         "radiales r_min/r_max ; le masque disque cartesien ne s'applique pas)");
   if (!(R > 0.0))
     throw std::runtime_error("System::set_disc_domain : rayon R > 0 requis");
+  // Valide le mode AVANT toute mutation (un mode inconnu ne doit pas laisser le disque a moitie pose).
+  const GeometryMode gmode = parse_geometry_mode(mode, "System::set_disc_domain");
   P->disc_ = detail::DiscDomain{cx, cy, R};
   P->disc_set_ = true;
   // Materialise le masque 0/1 cellule-centre (1 ghost, pour que le transport mask-aware lise les
@@ -565,6 +598,22 @@ void System::set_disc_domain(double cx, double cy, double R) {
       m(i, j, 0) = disc.cell_active(geom.x_cell(i), geom.y_cell(j)) ? Real(1) : Real(0);
     });
   }
+  // AIGUILLAGE DU TRANSPORT (chantier T5-PR3). mode == "none" : le masque est materialise (consultable
+  // via disc_mask()) mais le transport reste PLEIN cartesien -> bit-identique. mode != "none" : le
+  // stepper route l'avance vers assemble_rhs_masked (staircase) / assemble_rhs_eb (cutcell).
+  P->geometry_mode_ = gmode;
+}
+
+void System::set_geometry_mode(const std::string& mode) {
+  Impl* P = p_.get();
+  const GeometryMode gmode = parse_geometry_mode(mode, "System::set_geometry_mode");
+  // Un mode disque (staircase/cutcell) n'a de sens qu'avec un disque fixe : sinon le stepper retomberait
+  // sur le transport plein (le masque / level set n'existe pas), un footgun silencieux -> on refuse.
+  if (gmode != GeometryMode::None && !P->disc_set_)
+    throw std::runtime_error(
+        "System::set_geometry_mode : mode '" + mode +
+        "' demande sans disque fixe ; appeler set_disc_domain(cx, cy, R) d'abord");
+  P->geometry_mode_ = gmode;
 }
 
 std::vector<double> System::disc_mask() const {

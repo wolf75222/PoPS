@@ -1079,21 +1079,30 @@ class System:
         self.set_poisson(rhs=rhs_tok, solver=kind, bc=bc, wall=wall, wall_radius=wall_radius,
                          epsilon=model.operator.epsilon)
 
-    def set_disc_domain(self, cx, cy, R):
-        """Fixe le DOMAINE DE TRANSPORT comme un DISQUE de centre (cx, cy) et de rayon R (chantier T2,
-        CONTRAT inerte par defaut). Materialise un masque 0/1 cellule-centre (cellule active quand son
-        centre est dans le disque, level set hypot(x-cx, y-cy) - R < 0, MEME convention que le mur
-        conducteur du Poisson). C'est le pendant volumes-finis du mur elliptique : le papier (Hoffart
-        et al., arXiv:2510.11808) transporte sur un VRAI disque alors qu'ADC transporte sur le carre
-        cartesien plein, le cercle n'agissant que dans la paroi de Poisson (verrou des bords d'anneau
-        cartesiens, cf. docs/HOFFART_FIDELITY.md).
+    def set_disc_domain(self, cx, cy, R, mode="none"):
+        """Fixe le DOMAINE DE TRANSPORT comme un DISQUE de centre (cx, cy) et de rayon R, et CABLE le
+        transport selon mode= (chantiers T2 / T5-PR3). Materialise un masque 0/1 cellule-centre (cellule
+        active quand son centre est dans le disque, level set hypot(x-cx, y-cy) - R < 0, MEME convention
+        que le mur conducteur du Poisson). C'est le pendant volumes-finis du mur elliptique : le papier
+        (Hoffart et al., arXiv:2510.11808) transporte sur un VRAI disque alors qu'ADC transporte sur le
+        carre cartesien plein, le cercle n'agissant que dans la paroi de Poisson (verrou des bords
+        d'anneau cartesiens, cf. docs/HOFFART_FIDELITY.md).
 
-        INVARIANT (CONTRAT) : tant que set_disc_domain n'est PAS appele, le masque est tout actif et
-        le chemin de transport (cartesien / AMR / MPI) reste BIT-IDENTIQUE. Cet appel CONSTRUIT et
-        stocke le masque mais NE BRANCHE PAS encore le transport mask-aware dans step() : c'est le
-        scaffolding (le masque est consultable via disc_mask()). R > 0 ; cartesien seulement (le
+        mode :
+          - 'none' (defaut) : le masque est materialise (consultable via disc_mask()) mais le transport
+            reste PLEIN cartesien (assemble_rhs) -> step() BIT-IDENTIQUE meme avec le disque pose ;
+          - 'staircase' : transport masque conservatif (assemble_rhs_masked, porte de face 0/1) ;
+          - 'cutcell'   : transport cut-cell / embedded-boundary (assemble_rhs_eb, apertures alpha_f +
+            fraction de volume kappa, frontiere lisse, ordre 2 a l'interieur du disque).
+        Le mode est honore sous Lie ET Strang (cf. Split / Strang). R > 0 ; cartesien seulement (le
         polaire borne deja l'anneau par ses parois radiales -> erreur explicite)."""
-        self._s.set_disc_domain(cx, cy, R)
+        self._s.set_disc_domain(cx, cy, R, mode)
+
+    def set_geometry_mode(self, mode):
+        """Bascule SEULE le mode de transport disque ('none'|'staircase'|'cutcell') sans (re)definir le
+        disque. Un mode != 'none' exige un disque deja fixe (set_disc_domain) -> erreur sinon. Remettre
+        a 'none' restaure le transport plein cartesien (bit-identique)."""
+        self._s.set_geometry_mode(mode)
 
     def disc_mask(self):
         """Masque de domaine 0/1 cellule-centre, tableau (ny, nx) (diagnostic / verification du

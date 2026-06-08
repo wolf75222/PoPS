@@ -211,13 +211,23 @@ class System {
   /// cartesiens", cf. docs/HOFFART_FIDELITY.md). Le masque rend possible un transport mask-aware
   /// CONSERVATIF (flux normal nul aux faces active/inactive).
   ///
-  /// INVARIANT (CONTRAT) : tant que set_disc_domain N'EST PAS appele, le masque est "tout actif" et
-  /// le chemin FV/AMR/MPI reste BIT-IDENTIQUE a l'historique. Cet appel construit et stocke le masque
-  /// MAIS NE BRANCHE PAS encore le transport mask-aware dans step() (qui reste donc inchange) : c'est
-  /// le SCAFFOLDING. Le masque est consultable via disc_mask() ; le transport mask-aware (surcharge
-  /// assemble_rhs_masked) est exerce par les tests. R > 0 requis ; cartesien seulement (le polaire
-  /// borne deja l'anneau par ses parois radiales -> erreur explicite).
-  void set_disc_domain(double cx, double cy, double R);
+  /// MODE DE TRANSPORT DISQUE (chantier T5-PR3, @p mode) : aiguille l'avance de transport de step() vers
+  /// l'operateur disque correspondant. Defaut "none" -> chemin plein cartesien (assemble_rhs), BIT-
+  /// IDENTIQUE a l'historique meme apres set_disc_domain (le masque est materialise mais le transport
+  /// l'ignore tant que le mode est "none"). "staircase" -> transport masque conservatif (assemble_rhs_
+  /// masked, porte de face 0/1, frontiere crenelee). "cutcell" -> transport cut-cell / embedded-boundary
+  /// (assemble_rhs_eb, apertures alpha_f + fraction de volume kappa, frontiere lisse, ordre 2 interieur).
+  /// Le mode est honore sous Lie ET Strang (cf. set_time_scheme). Un mode != "none" sans bloc cartesien
+  /// transportable leve une erreur EXPLICITE au pas (jamais un transport plein silencieux). Mode inconnu
+  /// -> erreur. R > 0 requis ; cartesien seulement (le polaire borne deja l'anneau par ses parois
+  /// radiales -> erreur explicite).
+  void set_disc_domain(double cx, double cy, double R, const std::string& mode = "none");
+
+  /// Fixe SEUL le mode de transport disque (sans (re)definir le disque) : "none" | "staircase" |
+  /// "cutcell". Utile pour basculer le mode apres set_disc_domain, ou pour le remettre a "none"
+  /// (retour au chemin plein cartesien, bit-identique). Demander un mode != "none" sans disque fixe
+  /// (set_disc_domain) leve une erreur EXPLICITE (le mode seul n'a pas de geometrie a appliquer).
+  void set_geometry_mode(const std::string& mode);
 
   /// @return le masque de domaine 0/1 cellule-centre, ny*nx row-major (j lent, i rapide). Sans
   /// set_disc_domain, renvoie un masque TOUT ACTIF (que des 1.0) : le sous-domaine de transport est

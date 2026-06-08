@@ -134,6 +134,17 @@ adc_add_test(test_disc_domain_mask)
 # residu FINI (clamp small-cell, pas de NaN) ; (c) bit-identite : sans coupe, EB == operateur cartesien.
 adc_add_test(test_eb_transport)
 
+# Chantier T5-PR3 : CABLAGE du transport disque (staircase + cut-cell EB) dans System::step. Resout le
+# footgun T2 (set_disc_domain materialisait un masque que step() ignorait) : le transport est aiguille
+# vers assemble_rhs_masked (staircase) / assemble_rhs_eb (cutcell) selon un mode explicite. (a) mode none
+# byte-identique au chemin sans disque ; (b) staircase != carre + masse active conservee a la machine ;
+# (c) cutcell fini + != carre, disque englobant == carre (sans coupe) ; (d) mode honore sous Lie ET Strang.
+# Compile le runtime System (python/system.cpp) avec le test, comme test_compiled_model_parity.
+add_executable(test_facade_routing test_facade_routing.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp)
+target_link_libraries(test_facade_routing PRIVATE adc::adc ${CMAKE_DL_LIBS})
+add_test(NAME test_facade_routing COMMAND test_facade_routing)
+
 # --- canal aux extensible (n_aux + load_aux<NComp>) : champ extra B_z lu et peuple ---
 adc_add_test(test_aux_extra)
 adc_add_test(test_aux_coupler_bz)

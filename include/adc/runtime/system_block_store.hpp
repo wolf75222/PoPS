@@ -107,6 +107,16 @@ class SystemBlockStore {
     // arbitraire) et aux tests d'ordre temporel du stepper (operateurs jouets non commutants). Trailing
     // + defaut nullptr : l'init par agregat positionnel des autres membres reste inchangee.
     std::function<void(MultiFab&, Real)> source_step;
+    // AVANCES DE TRANSPORT DISQUE (chantier T5-PR3, OPT-IN). Vides (defaut) -> aucun routage disque :
+    // le stepper avance via `advance` (chemin plein cartesien, BIT-IDENTIQUE). Non vides, elles MIMENT
+    // `advance` (meme schema RK / IMEX, meme limiteur / flux) mais aiguillent le residu de transport
+    // vers l'operateur disque, et ne sont SELECTIONNEES que si le System est en mode Staircase (resp.
+    // CutCell) ET qu'un disque est fixe (set_disc_domain). Construites a l'ajout du bloc (build_block)
+    // EN MEME TEMPS que `advance`, elles lisent le masque / level set du System par pointeur au pas
+    // (adresse stable) : l'ordre add_block / set_disc_domain est indifferent. Trailing + defaut vide :
+    // l'init par agregat positionnel des autres membres reste inchangee.
+    std::function<void(MultiFab&, Real, int)> advance_masked;  // residu via assemble_rhs_masked (Staircase)
+    std::function<void(MultiFab&, Real, int)> advance_eb;      // residu via assemble_rhs_eb (CutCell)
   };
 
   /// Registre ORDONNE des blocs (UNIQUE source de verite). PUBLIC : Impl l'aliase en `sp` pour les

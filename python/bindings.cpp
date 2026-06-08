@@ -153,11 +153,16 @@ PYBIND11_MODULE(_adc, m) {
       .def("set_poisson", &System::set_poisson, py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
            py::arg("wall") = "none", py::arg("wall_radius") = 0.0, py::arg("epsilon") = 1.0)
-      // Domaine de transport DISQUE (chantier T2, CONTRAT inerte par defaut) : materialise un masque
-      // 0/1 cellule-centre (cellule active si son centre est dans hypot(x-cx, y-cy) - R < 0). Sans cet
-      // appel, le masque est tout actif et le chemin de transport reste bit-identique. cf.
-      // System::set_disc_domain.
-      .def("set_disc_domain", &System::set_disc_domain, py::arg("cx"), py::arg("cy"), py::arg("R"))
+      // Domaine de transport DISQUE (chantiers T2 / T5-PR3) : materialise un masque 0/1 cellule-centre
+      // (cellule active si son centre est dans hypot(x-cx, y-cy) - R < 0) et CABLE le transport selon
+      // mode= : 'none' (defaut, transport plein cartesien, bit-identique meme avec le disque pose),
+      // 'staircase' (assemble_rhs_masked, porte de face 0/1), 'cutcell' (assemble_rhs_eb, cut-cell EB,
+      // apertures + kappa). Honore sous Lie ET Strang (set_time_scheme). cf. System::set_disc_domain.
+      .def("set_disc_domain", &System::set_disc_domain, py::arg("cx"), py::arg("cy"), py::arg("R"),
+           py::arg("mode") = "none")
+      // Bascule SEULE du mode de transport disque ('none'|'staircase'|'cutcell') sans (re)definir le
+      // disque. Un mode != 'none' exige un disque deja fixe (set_disc_domain) -> erreur sinon.
+      .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
       // Masque de domaine 0/1 (ny, nx) row-major (diagnostic / verification du contrat). Tout 1.0 sans
       // set_disc_domain.
       .def("disc_mask", [](const System& s) { return to_2d(s.disc_mask(), s.ny(), s.nx()); })
