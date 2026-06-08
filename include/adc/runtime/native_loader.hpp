@@ -594,17 +594,20 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
   (void)P;
   if (substeps < 1) throw std::runtime_error("System::add_native_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("System::add_native_block : stride >= 1");
-  // Validation AMONT du schema (comme add_block / add_compiled_block) : add_compiled_model retombe
-  // SILENCIEUSEMENT sur explicit/conservatif pour une chaine inconnue (imex = (time=="imex"),
-  // recon_prim = (recon=="primitive")) ; on rejette donc une faute de frappe ICI plutot que de
-  // tourner un schema different de celui demande. limiter/riemann, eux, sont valides par make_block
-  // dans le loader (exception claire, ABI partagee verifiee plus bas).
+  // Validation AMONT du schema (comme add_block / add_compiled_block) : add_compiled_model interprete
+  // imex = (time=="imex"), recon_prim = (recon=="primitive") et le schema RK explicite
+  // method = (time=="ssprk3") ? ssprk3 : ssprk2 ; une chaine inconnue retomberait SILENCIEUSEMENT sur
+  // explicit/ssprk2/conservatif. On rejette donc une faute de frappe ICI plutot que de tourner un
+  // schema different de celui demande. "ssprk3" est desormais ACCEPTE (ordre 3, moins dissipatif, a
+  // apparier a weno5) : le gabarit add_compiled_model le marshale jusqu'au make_block du .so, comme le
+  // chemin natif add_block. limiter/riemann sont valides par make_block dans le loader (exception
+  // claire, ABI partagee verifiee plus bas).
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("System::add_native_block : recon 'conservative' | 'primitive' (recu '" +
                              recon + "')");
-  if (time != "explicit" && time != "imex")
-    throw std::runtime_error("System::add_native_block : time 'explicit' | 'imex' (recu '" + time +
-                             "')");
+  if (time != "explicit" && time != "ssprk3" && time != "imex")
+    throw std::runtime_error("System::add_native_block : time 'explicit' | 'ssprk3' | 'imex' (recu '" +
+                             time + "')");
   // WENO5 (stencil 5 points, 3 ghosts) est desormais EXPOSE par le chemin natif : le loader inline
   // add_compiled_model qui, apres install_block, reallue l'etat du bloc a block_n_ghost(limiter) (3
   // pour weno5) -- MEME mecanisme qu'add_block. assemble_rhs ne lit donc pas hors bornes. limiter est

@@ -179,6 +179,15 @@ add_test(NAME test_weno5_ssprk3
 set_tests_properties(test_weno5_ssprk3 PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# SSPRK3 sur le chemin de PRODUCTION (loader natif .so), pas seulement add_block : add_native_block
+# accepte time="ssprk3" et add_compiled_model threade le schema RK jusqu'au make_block du .so. Garde
+# amont (ssprk3 accepte / rk4 rejete) sans compilateur + parite BIT-IDENTIQUE production==add_block et
+# production+ssprk3 != production+ssprk2. S'auto-saute sans compilateur pour la partie parite.
+add_test(NAME test_ssprk3_production
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ssprk3_production.py)
+set_tests_properties(test_ssprk3_production PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # WENO5 sur les chemins .so / CompiledModel : add_compiled_block (AOT) ET add_native_block (production)
 # allouent block_n_ghost(limiter)=3 ghosts -> weno5 accepte ; parite eval_rhs/potentiel au bloc natif
 # add_block weno5 (AOT < 1e-9 marshale, production bit-identique) + no-default-change none/minmod.

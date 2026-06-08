@@ -48,12 +48,19 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
                         int substeps = 1, bool evolve = true, int stride = 1) {
   const bool imex = (time == "imex");
   const bool recon_prim = (recon == "primitive");
+  // Schema RK EXPLICITE marshale par le chemin de production (add_native_block -> adc_install_native
+  // -> ce gabarit) : "ssprk3" (3 etages, ordre 3, moins dissipatif, a apparier a weno5) vs "ssprk2"
+  // (defaut historique, bit-identique). N'a d'effet QUE sur l'avance explicite -- l'IMEX garde son
+  // demi-pas ForwardEuler + source implicite, donc method est ignore quand imex. On aligne ainsi le
+  // .so de production sur le chemin natif add_block (system.cpp) qui exposait deja ssprk3 ; toute
+  // autre chaine ("explicit"/inconnue) retombe sur ssprk2 (add_native_block valide la chaine amont).
+  const std::string method = (time == "ssprk3") ? "ssprk3" : "ssprk2";
   // Le bloc peut lire des champs auxiliaires supplementaires (aux_comps<Model> > 3, p.ex. B_z d'une
   // source magnetisee) : on elargit le canal aux PARTAGE du System AVANT de capturer son adresse,
   // pour que la fermeture lise un aux assez large. Modele de base (3) -> no-op, inchange.
   sys.ensure_aux_width(aux_comps<Model>());
   const GridContext ctx = sys.grid_context();
-  BlockClosures clo = make_block(model, limiter, riemann, ctx, imex, recon_prim);
+  BlockClosures clo = make_block(model, limiter, riemann, ctx, imex, recon_prim, method);
   std::function<Real(const MultiFab&)> ms = make_max_speed(model, ctx);
   std::function<void(const MultiFab&, MultiFab&)> pr = make_poisson_rhs(model);
   sys.install_block(name, Model::n_vars, Model::conservative_vars(), Model::primitive_vars(),
