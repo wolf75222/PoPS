@@ -17,3 +17,6 @@ docs/sphinx/__pycache__/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Artefacts compiles du tutoriel (les figures/provenance sont versionnees)
+docs/sphinx/tutorials/_assets/*.so

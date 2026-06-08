@@ -424,13 +424,13 @@ class ThermalExchange:
 class Spatial:
     """Discretisation spatiale : reconstruction (limiteur) + flux numerique de Riemann.
 
-    limiter : "none" | "minmod" | "vanleer" | "weno5"  (raccourcis none=/minmod=/vanleer=/weno5=)
-              weno5 = WENO5-Z, ordre 5 en zone lisse, stencil 5 points (3 ghosts) ; capture sans
-              oscillation pres d'un front. Seul le chemin natif add_block l'expose (les chemins
-              compiles .so allouent 2 ghosts -> rejet explicite).
-    flux    : "rusanov" | "hllc" | "roe"  (hllc/roe exigent un transport compressible)
-    recon   : "conservative" | "primitive"  (variables reconstruites ; primitif plus robuste
-              pour Euler : positivite de rho et p ; raccourci primitive=)
+    - ``limiter`` : "none" | "minmod" | "vanleer" | "weno5" (raccourcis none=/minmod=/vanleer=/weno5=).
+      weno5 = WENO5-Z, ordre 5 en zone lisse, stencil 5 points (3 ghosts), capture sans oscillation
+      pres d'un front ; seul le chemin natif ``add_block`` l'expose (les chemins compiles .so
+      allouent 2 ghosts -> rejet explicite).
+    - ``flux`` : "rusanov" | "hllc" | "roe" (hllc/roe exigent un transport compressible).
+    - ``recon`` : "conservative" | "primitive" (variables reconstruites ; primitif plus robuste
+      pour Euler : positivite de rho et p ; raccourci primitive=).
     """
 
     def __init__(self, limiter="minmod", flux="rusanov", recon="conservative", *, none=False,
@@ -453,11 +453,12 @@ class Spatial:
 def FiniteVolume(limiter="minmod", riemann="rusanov", variables="conservative"):
     """Schema volumes finis (surface stable Phase A) : remappe sur l'objet Spatial existant.
 
-    Le flux NUMERIQUE de Riemann s'appelle `riemann` (NON `flux`, reserve au flux PHYSIQUE du modele
+    Le flux NUMERIQUE de Riemann s'appelle ``riemann`` (NON ``flux``, reserve au flux PHYSIQUE du modele
     DSL m.flux) pour ne pas collisionner les deux sens. Mapping des arguments :
-      limiter   -> Spatial.limiter  ("none" | "minmod" | "vanleer" | "weno5")
-      riemann   -> Spatial.flux     ("rusanov" | "hllc" | "roe")
-      variables -> Spatial.recon    ("conservative" | "primitive")
+
+    - ``limiter`` -> Spatial.limiter ("none" | "minmod" | "vanleer" | "weno5")
+    - ``riemann`` -> Spatial.flux ("rusanov" | "hllc" | "roe")
+    - ``variables`` -> Spatial.recon ("conservative" | "primitive")
 
     cf. docs/DSL_MODEL_DESIGN.md section 6. Renvoie un Spatial (consomme tel quel par add_block /
     add_equation). adc.Spatial reste disponible a l'identique."""
@@ -555,20 +556,20 @@ class IMEX:
     (avance par le coeur SSPRK). Ce n'est PAS un solveur implicite global (flux + source + Poisson
     resolus implicitement / Newton-Krylov) -- ce chantier est une phase future distincte.
 
-    substeps=N : sous-pas par macro-pas (cf. Explicit). Defaut 1.
-    stride=M   : cadence du bloc, semantique hold-then-catch-up (cf. Explicit) : le bloc est tenu tant
-                 que (macro_step + 1) % M != 0, puis avance d'un pas effectif M*dt en fin de fenetre.
-                 Entre deux rattrapages, son etat PERIME contribue au Poisson de systeme. Defaut 1 =
-                 chaque macro-pas, bit-identique. Backend 'aot' : stride > 1 rejete (cf. Explicit).
-    implicit_vars  : noms des variables conservees a traiter en IMPLICITE dans le pas de source ; les
-                 autres restent explicites (Euler avant). Le masque est PORTE PAR CETTE POLITIQUE / le
-                 bloc, PAS par le modele -> le MEME modele se reutilise avec des traitements implicites
-                 differents. Defaut [] (+ implicit_roles []) = defaut du modele (Model::is_implicit, ou
-                 tout implicite a defaut), BIT-IDENTIQUE. Resolu cote C++ contre les noms du bloc (un nom
-                 absent leve une erreur). Ex. adc.IMEX(implicit_vars=["rho_u", "rho_v"]).
-    implicit_roles : meme masque mais par ROLE physique ("density", "momentum_x", "energy", ...) au lieu
-                 du nom (cf. System.variable_roles). Union avec implicit_vars. Ex.
-                 adc.IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"]).
+    - ``substeps=N`` : sous-pas par macro-pas (cf. Explicit). Defaut 1.
+    - ``stride=M`` : cadence du bloc, semantique hold-then-catch-up (cf. Explicit) : le bloc est tenu
+      tant que (macro_step + 1) % M != 0, puis avance d'un pas effectif M*dt en fin de fenetre. Entre
+      deux rattrapages, son etat PERIME contribue au Poisson de systeme. Defaut 1 = chaque macro-pas,
+      bit-identique. Backend 'aot' : stride > 1 rejete (cf. Explicit).
+    - ``implicit_vars`` : noms des variables conservees a traiter en IMPLICITE dans le pas de source ;
+      les autres restent explicites (Euler avant). Le masque est PORTE PAR CETTE POLITIQUE / le bloc,
+      PAS par le modele -> le MEME modele se reutilise avec des traitements implicites differents.
+      Defaut [] (+ implicit_roles []) = defaut du modele (Model::is_implicit, ou tout implicite a
+      defaut), BIT-IDENTIQUE. Resolu cote C++ contre les noms du bloc (un nom absent leve une erreur).
+      Ex. adc.IMEX(implicit_vars=["rho_u", "rho_v"]).
+    - ``implicit_roles`` : meme masque mais par ROLE physique ("density", "momentum_x", "energy", ...)
+      au lieu du nom (cf. System.variable_roles). Union avec implicit_vars. Ex.
+      adc.IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"]).
     """
 
     kind = "imex"
@@ -597,6 +598,7 @@ class SourceImplicit:
 
     QUAND L'UTILISER (SourceImplicit LOCAL vs adc.CondensedSchur GLOBAL) -- ces deux mecanismes
     traitent une source raide implicitement, mais a des echelles differentes :
+
     - SourceImplicit est LOCAL : l'implicite ne couple que les composantes d'UNE MEME cellule
       (backward-Euler resolu par Newton a la cellule), il n'y a AUCUN couplage spatial entre
       cellules. Adapte aux termes raides purement locaux (relaxation, reactions, friction).
@@ -605,11 +607,11 @@ class SourceImplicit:
       couplage Lorentz / electrostatique raide non local (ex. Euler-Poisson magnetise du papier
       Hoffart, arXiv:2510.11808). Une source raide locale n'a PAS besoin de Schur.
 
-    substeps=N : sous-pas par macro-pas (cf. Explicit). Defaut 1.
-    stride=M   : cadence du bloc, semantique hold-then-catch-up (cf. Explicit). Defaut 1.
-    implicit_vars / implicit_roles : masque implicite par NOM ou par ROLE physique des variables
-                 conservees a traiter en implicite dans le pas de source (cf. IMEX). Masque PORTE PAR
-                 CETTE POLITIQUE / le bloc, pas par le modele. Defauts [] = defaut modele, bit-identique.
+    - ``substeps=N`` : sous-pas par macro-pas (cf. Explicit). Defaut 1.
+    - ``stride=M`` : cadence du bloc, semantique hold-then-catch-up (cf. Explicit). Defaut 1.
+    - ``implicit_vars`` / ``implicit_roles`` : masque implicite par NOM ou par ROLE physique des
+      variables conservees a traiter en implicite dans le pas de source (cf. IMEX). Masque PORTE PAR
+      CETTE POLITIQUE / le bloc, pas par le modele. Defauts [] = defaut modele, bit-identique.
     """
 
     kind = "imex"  # meme chemin C++ que IMEX (ImplicitSourceStepper)
@@ -699,12 +701,13 @@ class CondensedSchur:
     spatial : relaxation, reactions, friction), prendre plutot adc.SourceImplicit : c'est moins cher
     et il n'y a alors AUCUN solve elliptique a faire.
 
-    theta : theta-schema dans (0, 1] (0.5 = Crank-Nicolson, 1 = Euler retrograde).
-    alpha : constante de couplage electrostatique du sous-systeme source (d_t(-Lap phi) = -alpha div(rho v)).
-    density / momentum / energy / magnetic_field / potential : descripteurs de roles / champs. Ils
-        EXPRIMENT l'intention ; la resolution role -> composante est faite cote C++ (le bloc lit ses
-        propres VariableRole). Tolerent adc.Role.* (recommande), un nom de role stable, ou un nom de
-        variable du bloc. momentum est un couple (x, y).
+    - ``theta`` : theta-schema dans (0, 1] (0.5 = Crank-Nicolson, 1 = Euler retrograde).
+    - ``alpha`` : constante de couplage electrostatique du sous-systeme source
+      (d_t(-Lap phi) = -alpha div(rho v)).
+    - ``density`` / ``momentum`` / ``energy`` / ``magnetic_field`` / ``potential`` : descripteurs de
+      roles / champs. Ils EXPRIMENT l'intention ; la resolution role -> composante est faite cote C++
+      (le bloc lit ses propres VariableRole). Tolerent adc.Role.* (recommande), un nom de role stable,
+      ou un nom de variable du bloc. momentum est un couple (x, y).
     """
 
     def __init__(self, kind="electrostatic_lorentz", theta=0.5, alpha=1.0,
@@ -775,14 +778,16 @@ class Split:
     section 6). C'est l'OPT-IN du chantier Schur : un bloc qui n'emploie PAS adc.Split garde le chemin
     par defaut (Explicit / IMEX / SourceImplicit), BIT-IDENTIQUE.
 
+    ::
+
         time=adc.Split(
             hyperbolic=adc.Explicit(ssprk3=True),
             source=adc.CondensedSchur(kind="electrostatic_lorentz", theta=0.5, ...),
         )
 
-    hyperbolic : adc.Explicit (le transport ; SSPRK2/3, substeps, stride heritent de lui).
-    source     : adc.CondensedSchur (l'etage source condense, joue APRES le transport). Seul backend
-                 source cable pour l'instant.
+    - ``hyperbolic`` : adc.Explicit (le transport ; SSPRK2/3, substeps, stride heritent de lui).
+    - ``source`` : adc.CondensedSchur (l'etage source condense, joue APRES le transport). Seul backend
+      source cable pour l'instant.
     """
 
     # kind="explicit" : le transport est joue par le chemin explicite du coeur (SSPRK), la source
@@ -823,6 +828,8 @@ class Strang(Split):
     Godunov, 1er ordre) : memes briques (transport SSPRK + etage source condense), seul l'ORDRE et la
     cadence des resolutions de champ changent.
 
+    ::
+
         time=adc.Strang(
             hyperbolic=adc.Explicit(ssprk3=True),
             source=adc.CondensedSchur(theta=0.5, alpha=alpha),
@@ -833,8 +840,8 @@ class Strang(Split):
     solve_fields UNIQUE de tete, suffisant pour Lie ou une seule avance de transport suit, ne suffit
     pas a la 2nde demi-avance Strang). cf. docs/HOFFART_STEP_SEQUENCE.md et SystemStepper::step_strang.
 
-    hyperbolic / source : identiques a adc.Split. Cable par add_equation (qui branche l'etage source
-    ET appelle set_time_scheme('strang') sur le System)."""
+    ``hyperbolic`` / ``source`` : identiques a adc.Split. Cable par add_equation (qui branche l'etage
+    source ET appelle set_time_scheme('strang') sur le System)."""
 
     def __init__(self, hyperbolic=None, source=None):
         super().__init__(hyperbolic=hyperbolic, source=source)
@@ -1215,11 +1222,13 @@ class AmrSystem:
 
     REGRID D'UNION DES TAGS (multi-blocs + regrid_every > 0) : la hierarchie partagee est re-grillee a
     partir de l'UNION des tags de tous les blocs. Deux criteres se composent (OU cellule a cellule) :
-      - DENSITE PAR BLOC (set_refinement(threshold)) : raffine la ou la densite (composante 0) d'un bloc
-        depasse threshold ;
-      - |GRAD PHI| (set_phi_refinement(grad_threshold)) : raffine la ou la norme du gradient du potentiel
-        electrostatique depasse grad_threshold (bord d'anneau du diocotron). Desactive par defaut
-        (grad_threshold <= 0). MULTI-BLOCS uniquement.
+
+    - DENSITE PAR BLOC (set_refinement(threshold)) : raffine la ou la densite (composante 0) d'un bloc
+      depasse threshold ;
+    - ``grad phi`` (set_phi_refinement(grad_threshold)) : raffine la ou la norme du gradient du potentiel
+      electrostatique depasse grad_threshold (bord d'anneau du diocotron). Desactive par defaut
+      (grad_threshold <= 0). MULTI-BLOCS uniquement.
+
     regrid_every == 0 -> hierarchie FIGEE (regrid jamais appele, bit-identique).
     """
 
@@ -1267,6 +1276,7 @@ class AmrSystem:
         le stencil 5 points ne lit pas hors bornes. cf. DSL_MODEL_DESIGN.md Phase D (point 10).
 
         CADENCE MULTIRATE (stride) et MASQUE IMEX PARTIEL (implicit_vars / implicit_roles) :
+
         - chemin ModelSpec (adc.Model(...)) : FORWARDES a AmrSystem::add_block, qui les SUPPORTE et les
           valide (parite avec le wrapper add_block) ;
         - chemin CompiledModel production (.so) : REJETES explicitement (ValueError). L'ABI plate du

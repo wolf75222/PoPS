@@ -1,0 +1,21 @@
+{
+  "script": "docs/sphinx/tutorials/diocotron_tutorial.py",
+  "command": "python diocotron_tutorial.py --n 96 --steps 60",
+  "adc_cpp_sha": "5782f7185eb2988562f72e844e798efd12cfa3d8",
+  "backend_compile": "production",
+  "backend_runtime": "serial (defaut ; cf. getting_started/backend pour Kokkos/MPI)",
+  "resolution": "96x96",
+  "steps": 60,
+  "cfl": 0.4,
+  "python": "3.12.2",
+  "adc_module": "/private/tmp/adc_cpp-sphinx-refonte/build/python/adc/__init__.py",
+  "assets": [
+    "diocotron_growth.png",
+    "diocotron_cover.png",
+    "diocotron.gif",
+    "diocotron_uniform_vs_amr.png"
+  ],
+  "growth_factor": 1.5212313128490405,
+  "mass_drift": 1.813052249481513e-16,
+  "amr_uniform_max_delta": 0.07178693343491682
+}
