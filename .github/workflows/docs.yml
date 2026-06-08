@@ -90,6 +90,9 @@ jobs:
 
   deploy:
     needs: build
+    # Ne PUBLIE que depuis master : un workflow_dispatch sur une branche construit et
+    # valide la doc (job build) SANS pousser un build non-mergé sur le site Pages live.
+    if: ${{ github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
