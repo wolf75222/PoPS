@@ -379,6 +379,33 @@ sans casser l'existant, en retro-compat bit-exacte (`n_aux` defaut = 3 -> strict
 
 ## 6. Reproduction Hoffart (arXiv:2510.11808) - APPLICATIF, cote `adc_cases`
 
+- [~] **SESSION T5 + ABI + GEOMETRIE (juin 2026) -- chemin critique = GEOMETRIE, signal en cours** :
+      Audit Phase 0 (5 agents, docs/HOFFART_FIDELITY.md + HOFFART_STEP_SEQUENCE.md) : geometrie = suspect
+      DOMINANT du deficit du modele complet (taux analytique = f(l, omega_d, r0, r1, R) seulement ; les
+      suspects secondaires sont negligeables/mineurs). RESOLU : |Omega|=beta^2=1e12 correct (papier l.1082),
+      omega_d=1, pente brute du complet DIRECTEMENT comparable a 0.772/0.911/0.683 SANS 2pi (le 2pi/rhobar
+      n'appartient qu'au chemin reduit ExB). Valeur propre Petri analytique (#12 adc_cases) confirme les
+      cibles a <0.13% en unites omega_d, sans 2pi.
+      BASELINE cartesien mesure (n=256 ET n=384, brut, fenetres papier) : l=3 -95%, l=4 -94/-93%, l=5 -82%,
+      RESOLUTION-INDEPENDANT -> structurel (geometrie), pas un manque de maille. Table de validation a jour
+      sur adc_cases/master (lignes full-system-schur cart-square remplies).
+      PILE T5 CUT-CELL MERGEE (adc_cpp master) : #218 cut_fraction partage, #222 transport EB conservatif
+      (MMS ordre ~2, masse 3e-15, clamp petite cellule), #224 cablage facade (staircase+cutcell, routing live
+      verifie, Lie+Strang). Avant : T1 #217 Strang generique, T2 #216 contrat masque, #214 Lorentz polaire,
+      #215 Schur polaire facade.
+      BUG ABI NATIF trouve + corrige (#225 adc_cpp, en CI) : compile_native figeait c++23 alors que le loader
+      _adc est c++20 sous Kokkos (CUDA 12.x sans c++23) -> add_native_block rejetait -> AUCUN run natif GH200
+      possible (CI invisible : modele compile au runtime). Fix = le modele suit loader_cxx_std() + test CI
+      add_native_block sous Kokkos (Kokkos -fPIC). Aussi corrige : ssprk3 non supporte en natif
+      (add_native_block=explicit|imex) -> cas en ssprk2 (aligne baseline) ; matplotlib rendu optionnel
+      (DISC #14 adc_cases) -> cas Hoffart EXECUTABLE en natif GH200.
+      MIGRATION : cas hoffart_euler_poisson_dsl + schur_magnetized_cartesian versionnes sur adc_cases/master
+      (#13, reproduction-candidate), plus rien sur branche side. Docs honnetes (#10 diocotron, #221/#223 doc
+      refonte ASCII-ifiees en attente apres #225).
+      SIGNAL GEOMETRIE EN COURS (ROMEO 647507, square/staircase/cutcell n=256 t_end=2) : dira si cutcell
+      remonte le taux vers les cibles. Si oui -> campagne complete n=384/512 t_end=10. AUCUNE revendication
+      de reproduction du modele complet avant ces chiffres.
+
 - [x] **M1 -- NORMALISATION TROUVEE (juin 2026)** : `gamma_norm = gamma_raw * 2pi/rhobar` (facteur du
       projet). Verifie sur le chemin POLAIRE ExB (echelle papier 6:8:16, top-hat, WENO5/SSPRK3, n=128) :
       l=4 EXACT (0.913 vs 0.911), l=3 +26% (0.97), l=5 -29% (0.48). Le scatter +-29% est la sensibilite a
