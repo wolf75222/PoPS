@@ -68,3 +68,33 @@ chemin system-schur COMPLET vs le chemin reduit ExB, pour localiser d'ou vient l
 plateau ~0.037 (normalisation 2pi/echelle de temps du complet ? force de couplage
 Schur ? vitesse de derive initiale ?). C'est une etude de normalisation/structure,
 pas une montee en resolution ni une nouvelle geometrie.
+
+## MAJ : tentative VOIE 1 (modele complet sur grille polaire) -- mur de WELL-BALANCING
+
+Le chemin polaire (anneau r0/r1 resolu par un axe de grille) a ete assemble (PR adc_cases
+#18 : fluide isotherme polaire #209 + Lorentz + Schur polaire #215 + Poisson polaire ;
+observable phi sur r=r0). Il S'ASSEMBLE et DEMARRE mais diverge avant la fenetre de fit.
+Caracterisation a 3 niveaux :
+1. NaN a t~0.02 ; dt plus petit ne fait que RETARDER (t=0.02 -> 0.101 a dt=1e-4) -> PAS le CFL.
+2. IC d'equilibre rotatif derivee (bilan radial : centrifuge rho v_theta^2/r - d_r p
+   - rho d_r phi + rho B_z v_theta = 0 ; racine ExB-continuee ; signes verifies vs le moteur,
+   PR adc_cases #20). Correcte dans le CONTINU.
+3. MAIS l'equilibre continu n'est PAS discretement stationnaire : un run delta=0 (sans
+   perturbation, nr=256) fait croitre TOUS les modes azimutaux de 0 a ~1e9 en 200 pas.
+   Les operateurs discrets (source centrifuge polar_geom_source vs divergence de flux ;
+   et/ou l'etage Schur) ne preservent pas le bilan continu.
+
+VERDICT : le fluide polaire complet aux parametres raides exige un SCHEMA WELL-BALANCED
+(qui preserve discretement l'equilibre rotatif source-equilibre) -- un vrai chantier CFD,
+pas un knob ni une IC continue. Le modele REDUIT ExB scalaire l'evite (pas d'equation de
+moment) et c'est pourquoi LUI recupere l=4 exact en polaire : la preuve que la resolution
+d'anneau est la clef existe, mais le fluide COMPLET ne tourne pas stable sans well-balancing.
+Chantier en cours : workflow polar-wellbalanced (diagnostic du residu discret + fix
+well-balanced + test de stationnarite delta=0). AUCUNE reproduction du modele complet
+revendiquee (ni cartesien -82/-95%, ni polaire bloque).
+
+## Acquis d'ingenierie de la campagne (independants du verdict scientifique)
+- Schur polaire MULTI-RANG MPI (#227 merge, plus mono-rang ; parite np=1/2/4 ~1e-13) ;
+  extension MULTI-BOX (#229, fix Kokkos en cours).
+- cut-cell EB (#218/#222/#224), Strang generique (#217), fix ABI natif GH200 (#225,
+  + test CI de non-regression), cas hoffart executable en natif (DISC #14).
