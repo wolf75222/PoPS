@@ -31,6 +31,23 @@ pas a identifier le backend de dispatch.
 Pour du parallelisme, c'est la facade C++ qu'il faut compiler avec le backend voulu, et
 y porter le calcul cote C++ (tests, executables, ou un cas `adc_cases` compile en natif).
 
+## Python pilote, le C++ compile calcule
+
+Le partage des roles ne depend pas du materiel. Python construit le `System`, deroule la boucle
+en temps et ecrit les sorties ; le travail par cellule passe par le seam `for_each_cell`, compile
+pour la cible choisie a la compilation (Serial, OpenMP, ou CUDA). Le mot "serie" decrit le module
+`_adc` tel que la CI le construit, sans `-DADC_USE_KOKKOS=ON` ; ce n'est pas une limite du Python.
+Le module lie le meme `adc::adc` que les tests (cf. `python/CMakeLists.txt`) et heriterait d'un
+backend Kokkos s'il etait construit avec.
+
+Sur GPU, et donc sur ROMEO, le calcul tourne aujourd'hui via des harnais C++ generes, pas via le
+module Python. Le flux est dans [`GPU_ROMEO.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/GPU_ROMEO.md) :
+un script hote (`python/tests/gpu/gen_kokkos_harness.py`, puis `gen_kokkos_sim.py` pour une
+simulation complete) emet un `.cpp` ou `.cu` a partir du modele ; on l'envoie sur ROMEO ; `srun` le
+compile avec `nvcc_wrapper` et l'execute sur le noeud GH200. Python reste l'auteur et
+l'orchestrateur cote hote, le binaire compile fait le calcul sur le device. Le module `_adc`
+n'est pas construit en CUDA sur les noeuds de calcul.
+
 ## Couverture des backends
 
 | Backend | Comment l'obtenir | Ou il est valide |
@@ -65,7 +82,7 @@ recette `srun` type et les preuves (`maxdiff=0` contre le CPU) sont dans
 
 ## En resume
 
-- Un script Python = backend serie, toujours.
+- Le module `_adc` tel que la CI le construit = backend serie ; Python pilote, le C++ compile calcule.
 - Pour MPI / Kokkos / GPU : recompiler la facade C++ avec le drapeau adequat.
-- Le GPU est ROMEO-manuel ; la CI est CPU uniquement.
+- Le GPU est ROMEO-manuel, via des harnais C++ generes ; la CI est CPU uniquement.
 - La source de verite du "quel test, quel backend" est [`BACKEND_COVERAGE.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/BACKEND_COVERAGE.md).

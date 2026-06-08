@@ -223,8 +223,10 @@ maximal en titre.
 
 ## Etape 16 : Kokkos OpenMP (parallelisme CPU)
 
-Le module Python tourne en serie. Pour exploiter plusieurs coeurs, c'est la facade C++ qu'on
-recompile avec le backend Kokkos (device OpenMP) ; ce n'est pas un drapeau de script :
+Le module Python distribue tourne en serie parce que la CI le construit sans Kokkos, pas parce que
+Python serait bride : `import adc` pilote, et le calcul par cellule herite du backend compile dans
+`adc` (voir [Verifier son backend](backend.md)). Pour exploiter plusieurs coeurs, c'est donc la
+facade C++ qu'on recompile avec le backend Kokkos (device OpenMP), pas un drapeau de script :
 
 ```bash
 cmake -S . -B build-kokkos -DADC_USE_KOKKOS=ON \
