@@ -206,6 +206,15 @@ add_test(NAME test_gauss_policy
 set_tests_properties(test_gauss_policy PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# Flux HLL expose pour les modeles a vitesses d'onde signees SANS exiger une pression (3-var) :
+# make_block accepte riemann="hll" des que model.wave_speeds existe (requires-gate, pas n_vars==4 ni
+# pressure). HLL natif 4-var (fini, masse conservee, != Rusanov) + accepte sur DSL 3-var isotherme
+# qui declare 'p' (wave_speeds emis) + rejete clair sans 'p'. Partie DSL s'auto-saute sans compilateur.
+add_test(NAME test_hll_isothermal
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hll_isothermal.py)
+set_tests_properties(test_hll_isothermal PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # WENO5 sur les chemins .so / CompiledModel : add_compiled_block (AOT) ET add_native_block (production)
 # allouent block_n_ghost(limiter)=3 ghosts -> weno5 accepte ; parite eval_rhs/potentiel au bloc natif
 # add_block weno5 (AOT < 1e-9 marshale, production bit-identique) + no-default-change none/minmod.

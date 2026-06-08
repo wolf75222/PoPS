@@ -311,6 +311,29 @@ BlockClosures make_block(const Model& m, const std::string& lim, const std::stri
     if (lim == "weno5") return build_block<Weno5, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components);
     throw std::runtime_error("System : limiter inconnu '" + lim + "'");
   }
+  if (riem == "hll") {
+    // HLL (Harten-Lax-van Leer, 2 ondes) : moins diffusif que Rusanov (dissipation ~ |sR-sL| signee au
+    // lieu de 2*max|v| symetrique), mais ne demande PAS de pression (contrairement a HLLC/Roe) -- seulement
+    // des vitesses d'onde SIGNEES model.wave_speeds. Disponible des qu'un modele expose ses valeurs propres
+    // signees (le DSL emet wave_speeds des qu'une primitive 'p' est declaree, meme isotherme froid p=0 ->
+    // c=0 -> HLL degenere en upwind, toujours moins diffusif que Rusanov au contact). N'EXIGE PAS n_vars==4
+    // ni une pression : utilisable par le modele isotherme 3-var (rho, m_x, m_y) du diocotron Hoffart, la
+    // ou hllc/roe sont rejetes. Gate sur la presence de wave_speeds (sinon erreur CLAIRE, pas un echec de
+    // compilation pour un modele scalaire sans onde signee, p.ex. transport ExB).
+    if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
+                    mm.wave_speeds(s, a, 0, r, r);
+                  }) {
+      if (lim == "none") return build_block<NoSlope, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components);
+      if (lim == "minmod") return build_block<Minmod, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components);
+      if (lim == "vanleer") return build_block<VanLeer, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components);
+      if (lim == "weno5") return build_block<Weno5, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components);
+      throw std::runtime_error("System : limiter inconnu '" + lim + "'");
+    } else {
+      throw std::runtime_error("System : flux 'hll' exige des vitesses d'onde signees "
+                               "(model.wave_speeds : declarer une primitive 'p' / des eigenvalues) ; "
+                               "ce transport -> 'rusanov'");
+    }
+  }
   if (riem == "hllc") {
     if constexpr (Model::n_vars == 4 &&
                   requires(const Model mm, typename Model::State s) { mm.pressure(s); }) {
@@ -337,7 +360,7 @@ BlockClosures make_block(const Model& m, const std::string& lim, const std::stri
                                "(4 variables + pression) ; ce transport -> 'rusanov'");
     }
   }
-  throw std::runtime_error("System : flux Riemann inconnu '" + riem + "' (rusanov|hllc|roe)");
+  throw std::runtime_error("System : flux Riemann inconnu '" + riem + "' (rusanov|hll|hllc|roe)");
 }
 
 /// Nombre de ghosts requis par le schema spatial @p lim (source unique : Limiter::n_ghost). Sert a
