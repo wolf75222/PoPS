@@ -10,6 +10,13 @@ pybind11_add_module(_adc bindings.cpp system.cpp amr_system.cpp)
 target_link_libraries(_adc PRIVATE adc::adc ${CMAKE_DL_LIBS})  # dl : add_dynamic_block (dlopen)
 target_compile_features(_adc PRIVATE cxx_std_${ADC_CXX_STD})
 
+# Norme C++ du LOADER baked dans le module : le DSL backend="production" doit compiler le modele
+# natif avec EXACTEMENT cette norme, sinon __cplusplus diverge -> cle d'ABI differente -> rejet par
+# add_native_block. ADC_CXX_STD vaut 20 sous Kokkos (CUDA 12.x sans -std=c++23) et 23 sinon (cf.
+# CMakeLists.txt racine). On expose la valeur (entier 20/23) au binding, qui la publie en
+# adc._adc.__cxx_std__ ; dsl.compile/compile_native en derivent le std natif au lieu de figer c++23.
+target_compile_definitions(_adc PRIVATE ADC_CXX_STD=${ADC_CXX_STD})
+
 # Signature de l'arbre d'en-tetes du coeur, BAKED dans la cle d'ABI du module (adc/runtime/abi_key.hpp
 # via -DADC_HEADER_SIG). Le backend DSL "production" (dsl.compile_native) recalcule la MEME signature
 # (adc.dsl.adc_header_signature) et la bake dans le loader .so : les cles concordent quand les en-tetes
@@ -213,7 +220,8 @@ foreach(t
     test_schur_via_system     # System -> run_source_stage -> etage Schur condense, briques natives (no AOT)
     test_polar_schur_via_system  # System POLAIRE -> run_source_stage -> etage Schur condense POLAIRE (Voie A etape 2c -> PR6), briques natives
     test_schur_conservation   # conservation discrete masse/momentum/energie + positivite du chemin cartesien-fluide-Schur (briques natives, no AOT)
-    test_disc_domain_mask)    # chantier T2 : contrat masque de domaine disque (inerte par defaut) -- disc_mask() tout-actif, inertie de step(), masque == level set, garde-fous
+    test_disc_domain_mask     # chantier T2 : contrat masque de domaine disque (inerte par defaut) -- disc_mask() tout-actif, inertie de step(), masque == level set, garde-fous
+    test_native_abi_std)      # regression ABI : le std du modele natif (backend="production") suit le loader (c++20 sous Kokkos, c++23 sinon) -> add_native_block charge sans "ABI incompatible"
   add_test(NAME ${t}
            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}.py)
   set_tests_properties(${t} PROPERTIES

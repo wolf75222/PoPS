@@ -101,6 +101,52 @@ def adc_include():
         + ", ".join(repr(c) for c in candidates))
 
 
+# --- Norme C++ du loader natif (frontiere ABI du chemin "production") ----------
+# Le backend "production" genere un loader .so qui inline add_compiled_model<> et appelle des methodes
+# hors-ligne du module _adc DEJA charge. La cle d'ABI (adc/runtime/abi_key.hpp) encode __cplusplus :
+# le loader et le module doivent donc partager la MEME norme C++, sinon add_native_block rejette
+# ("ABI incompatible"). Le module bake sa norme reelle (ADC_CXX_STD : 20 sous Kokkos car CUDA 12.x
+# n'a pas -std=c++23, 23 sinon) et l'expose en _adc.__cxx_std__. On en derive le flag -std attendu du
+# modele natif AU LIEU de figer c++23 (qui cassait le chemin natif sous Kokkos/GH200, ou le module est
+# en c++20). MIROIR direct du build, donc jamais d'ecart silencieux entre loader et modele.
+def loader_cxx_std():
+    """Flag '-std=c++NN' que le modele natif (backend="production") DOIT utiliser pour partager l'ABI
+    du module _adc charge. Source de verite : _adc.__cxx_std__ (entier 20/23 baked par le build, =
+    ADC_CXX_STD : 20 sous Kokkos, 23 sinon). Fallbacks gracieux si l'attribut manque (vieux module) :
+    on parse __cplusplus depuis _adc.abi_key() (>202002L -> c++23, sinon c++20) ; faute de tout cela,
+    on retombe sur le defaut historique c++23 (cas hote non-Kokkos, inchange)."""
+    try:
+        import _adc
+    except Exception:
+        try:
+            from . import _adc  # paquet adc : l'extension est un sous-module
+        except Exception:
+            _adc = None
+    std = _adc_cxx_std_from_module(_adc) if _adc is not None else None
+    return std or "c++23"
+
+
+def _adc_cxx_std_from_module(mod):
+    """Norme C++ du module @p mod sous forme 'c++NN', ou None si indeterminable. Priorite a l'entier
+    __cxx_std__ (baked par le build) ; sinon on extrait std=<__cplusplus> de la cle d'ABI."""
+    n = getattr(mod, "__cxx_std__", None)
+    if isinstance(n, int) and n in (20, 23):
+        return "c++%d" % n
+    # Fallback : parser "...;std=<__cplusplus>;..." de la cle d'ABI (vieux module sans __cxx_std__).
+    abi_key = getattr(mod, "abi_key", None)
+    if callable(abi_key):
+        try:
+            key = abi_key()
+        except Exception:
+            return None
+        for tok in str(key).split(";"):
+            if tok.startswith("std="):
+                val = tok[len("std="):].rstrip("Ll")
+                if val.isdigit():
+                    return "c++23" if int(val) > 202002 else "c++20"
+    return None
+
+
 # --- Cache de build hors source ----------------------------------------------
 # Quand l'appelant ne fournit pas so_path, m.compile(...) ecrit la .so dans un cache PARTAGE hors
 # source (jamais a cote du .cpp temporaire), indexe par une cle stable du modele : model_hash (formules
@@ -1108,9 +1154,11 @@ class HyperbolicModel:
         donc avec '-undefined dynamic_lookup' (macOS) pour autoriser ces indefinis (resolus a
         l'execution contre le module deja charge ; cf. add_native_block). On bake aussi
         -DADC_HEADER_SIG=<signature> a l'IDENTIQUE du module pour que les cles d'ABI concordent quand
-        les en-tetes concordent. std defaut c++23 (le module se compile en C++23 hors Kokkos) : un std
-        different changerait __cplusplus donc la cle -> rejet explicite. include = dossier des en-tetes
-        adc (None -> auto-detecte via adc_include()) ; cxx = compilateur. Renvoie so_path."""
+        les en-tetes concordent. std : un std different du module changerait __cplusplus donc la cle ->
+        rejet explicite ; les appelants (Model.compile/HybridModel.compile) defaultent donc sur la
+        norme du loader (loader_cxx_std : c++20 sous Kokkos, c++23 sinon) et non sur c++23 en dur.
+        include = dossier des en-tetes adc (None -> auto-detecte via adc_include()) ; cxx = compilateur.
+        Renvoie so_path."""
         import os
         import shutil
         import subprocess
@@ -1275,9 +1323,10 @@ class HyperbolicModel:
         (System.add_native_block vs AmrSystem.add_native_block) ; un target="amr_system" sur les autres
         backends est rejete (pas de chemin .so AMR hors natif, cf. compile_or_jit).
 
-        @p std : standard C++. Defaut None -> "c++23" pour "production" (le loader natif partage l'ABI
-        du module, compile en C++23 hors Kokkos : un std different changerait __cplusplus donc la cle
-        d'ABI -> rejet explicite par add_native_block), "c++20" pour les autres (inchange).
+        @p std : standard C++. Defaut None -> norme DU LOADER pour "production" (loader_cxx_std :
+        c++20 sous Kokkos car CUDA 12.x n'a pas -std=c++23, c++23 sinon ; le loader natif partage l'ABI
+        du module, un std different changerait __cplusplus donc la cle d'ABI -> rejet explicite par
+        add_native_block), "c++20" pour les autres (inchange).
 
         @p require_metadata (defaut False) : si True, exige que le .so transporte des roles physiques
         utiles ET un gamma explicite (set_gamma), faute de quoi le System retomberait sur le fallback
@@ -1299,8 +1348,9 @@ class HyperbolicModel:
         if target == "amr_system" and mode != "native":
             raise ValueError("compile : target='amr_system' n'existe que pour backend='production' "
                              "(chemin natif AMR) ; recu backend=%r" % (backend,))
-        if std is None:  # defaut par backend : le natif partage l'ABI C++23 du module, les autres c++20
-            std = "c++23" if mode == "native" else "c++20"
+        if std is None:  # defaut par backend : le natif partage l'ABI du module (c++20 sous Kokkos,
+            # c++23 sinon -- derive du loader, cf. loader_cxx_std), les autres restent en c++20.
+            std = loader_cxx_std() if mode == "native" else "c++20"
         if include is None:  # ergonomie : auto-detection du dossier d'en-tetes adc
             include = adc_include()
 
@@ -1687,12 +1737,13 @@ class Model:
             raise ValueError("compile : target 'system' | 'amr_system' (recu %r)" % (target,))
 
         m = self._m
-        # std effectif : meme defaut par backend que HyperbolicModel.compile (c++23 natif, c++20 sinon).
+        # std effectif : meme defaut par backend que HyperbolicModel.compile. Le natif suit la norme
+        # du loader (c++20 sous Kokkos, c++23 sinon, cf. loader_cxx_std) ; les autres restent c++20.
         mode = HyperbolicModel._BACKENDS[backend][0]
         if target == "amr_system" and mode != "native":
             raise ValueError("compile : target='amr_system' n'existe que pour backend='production' "
                              "(chemin natif AMR) ; recu backend=%r" % (backend,))
-        eff_std = std if std is not None else ("c++23" if mode == "native" else "c++20")
+        eff_std = std if std is not None else (loader_cxx_std() if mode == "native" else "c++20")
         eff_cxx = cxx or shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
         if include is None:  # ergonomie : auto-detection du dossier d'en-tetes adc
             include = adc_include()
@@ -2143,8 +2194,9 @@ class HybridModel:
         mode = {"prototype": "jit", "aot": "aot", "production": "native"}[backend]
         if include is None:
             include = adc_include()
-        if std is None:  # le loader natif partage l'ABI C++23 du module (cf. compile_native) ; jit/aot c++20
-            std = "c++23" if mode == "native" else "c++20"
+        if std is None:  # le loader natif partage l'ABI du module (norme derivee du loader : c++20 sous
+            # Kokkos, c++23 sinon, cf. loader_cxx_std/compile_native) ; jit/aot restent en c++20.
+            std = loader_cxx_std() if mode == "native" else "c++20"
         eff_cxx = cxx or shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
         if not eff_cxx:
             raise RuntimeError("HybridModel.compile : aucun compilateur C++ trouve")

@@ -63,6 +63,18 @@ PYBIND11_MODULE(_adc, m) {
   m.def("abi_key", &adc::abi_key,
         "Cle d'ABI du module (compilateur, standard C++, signature des en-tetes adc).");
 
+  // Norme C++ du LOADER (ADC_CXX_STD injecte par le build : 20 sous Kokkos, 23 sinon). Le DSL
+  // backend="production" DOIT compiler le modele natif avec cette MEME norme, sinon __cplusplus
+  // diverge -> cle d'ABI differente -> add_native_block leve "ABI incompatible". On l'expose comme
+  // entier (20/23) ; dsl.compile en derive le flag -std=c++NN au lieu de figer c++23.
+#ifdef ADC_CXX_STD
+  m.attr("__cxx_std__") = static_cast<int>(ADC_CXX_STD);
+#else
+  // Build manuel sans -DADC_CXX_STD : on retombe sur __cplusplus pour rester coherent avec la cle
+  // d'ABI (qui, elle, encode toujours __cplusplus). 202002L -> 20, au-dela -> 23.
+  m.attr("__cxx_std__") = static_cast<int>(__cplusplus > 202002L ? 23 : 20);
+#endif
+
   py::class_<SystemConfig>(m, "SystemConfig")
       .def(py::init<>())
       .def_readwrite("n", &SystemConfig::n)

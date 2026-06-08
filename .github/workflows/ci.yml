@@ -314,7 +314,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.KOKKOS_PREFIX }}
-          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-openmp-cxx20-gcc
+          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-openmp-cxx20-gcc-pic
 
       - name: Cache ccache (Kokkos OpenMP)
         uses: actions/cache@v4
@@ -334,7 +334,8 @@ jobs:
           git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos-omp
           cmake -S /tmp/kokkos-omp -B /tmp/kbuild-omp -G Ninja -DKokkos_ENABLE_OPENMP=ON \
             -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_STANDARD=20 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build /tmp/kbuild-omp --parallel 2 --target install
 
       - name: Configure + build (backend Kokkos OpenMP)
@@ -354,6 +355,43 @@ jobs:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
         run: ctest --test-dir build-kokkos-omp --output-on-failure -C Release --parallel 2
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # GARDE-FOU ABI std (regression GH200). Sous Kokkos le module _adc est compile en C++20
+      # (ADC_CXX_STD=20, CUDA 12.x sans -std=c++23) tandis que le DSL backend="production" figeait
+      # le std du modele natif a c++23 -> cles d'ABI divergentes -> add_native_block rejetait tout
+      # bloc natif. Aucun job CI ne couvrait ce chemin (le modele production est compile au RUNTIME,
+      # pas en CI). On construit donc ICI le module Python AVEC Kokkos (loader c++20) puis on exerce
+      # les tests qui compilent un modele production et appellent add_native_block : ils echoueraient
+      # avec l'ancien defaut c++23, ils passent avec le std aligne sur le loader.
+      - name: Build module Python `adc` (backend Kokkos OpenMP)
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 500M
+        run: |
+          pip install --upgrade pip numpy
+          cmake -B build-kokkos-py -G Ninja -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON \
+            -DADC_BUILD_PYTHON=ON -DADC_USE_EIGEN=OFF \
+            -DKokkos_ROOT="${KOKKOS_PREFIX}" -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-kokkos-py --target _adc --parallel 2
+
+      - name: Test ABI natif (production -> add_native_block, std aligne sur le loader c++20)
+        env:
+          OMP_NUM_THREADS: "2"
+          OMP_PROC_BIND: "false"
+        run: |
+          export PYTHONPATH="$PWD/build-kokkos-py/python"
+          # Le test cle de regression + les suites production qui compilent un modele au runtime et
+          # le branchent par add_native_block (System et AMR). Sous Kokkos, loader = c++20.
+          for t in test_native_abi_std test_dsl_production test_dsl_production_amr; do
+            echo "::group::$t"
+            python3 "python/tests/$t.py"
+            echo "::endgroup::"
+          done
 
       - name: ccache stats (Kokkos OpenMP)
         if: always()
