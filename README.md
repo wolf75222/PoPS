@@ -136,7 +136,7 @@ production, aot, prototype) et leurs limites : [docs/DSL_MODEL_DESIGN.md](docs/D
 
 ### Les deux fronts coincident
 
-Briques et formules sont deux front-ends du meme modele. Sur le diocotron, la sortie DSL est
+Briques et formules sont deux fronts d'ecriture du meme modele. Sur le diocotron, la sortie DSL est
 bit-identique a la composition de briques (cas
 [`adc_cases/diocotron_dsl`](https://github.com/wolf75222/adc_cases/tree/master/diocotron_dsl)), et le
 tutoriel parcourt les deux. Le branchement differe par l'adder : `sim.add_block(...)` prend une
@@ -148,7 +148,7 @@ l'adder natif, aot ou prototype selon son backend.
 On couple N especes (ions, electrons, neutres), chacune avec son `PhysicalModel`, son schema spatial et
 sa politique temporelle. Les interactions vivent dans le second membre elliptique (`ChargeDensityRhs`) et
 dans la source (`CoupledSource`), jamais dans le flux. Le scheduler gere sous-pas, cadence, IMEX partiel,
-pas adaptatif multirate (`step_adaptive`) et integrateur fait maison. Detail :
+pas adaptatif multirate (`step_adaptive`) et un integrateur ecrit a la main. Detail :
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (section 5).
 
 ## Backends CMake
@@ -213,7 +213,7 @@ sur AMR). Detail : [docs/DSL_MODEL_DESIGN.md](docs/DSL_MODEL_DESIGN.md).
 
 | Repo | Role | Socle maillage |
 |---|---|---|
-| `adc_cpp` (ce depot) | coeur hyperbolique-elliptique sur AMR + GPU/MPI/Kokkos | propre (from scratch) |
+| `adc_cpp` (ce depot) | coeur hyperbolique-elliptique sur AMR + GPU/MPI/Kokkos | propre |
 | [`adc_cases`](https://github.com/wolf75222/adc_cases) | applications : modeles, facades, exemples, Python | consomme `adc::adc` |
 | [`poisson_cpp`](https://github.com/wolf75222/poisson_cpp) | solveurs Poisson (Thomas, SOR, CG, DST, multigrille) | propre |
 | [`pde_core_cpp`](https://github.com/wolf75222/pde_core_cpp) | infra partagee (mesh, fields, AMR) | propre |
