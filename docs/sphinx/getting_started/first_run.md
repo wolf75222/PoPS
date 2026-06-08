@@ -1,6 +1,6 @@
 # Premier run
 
-Le plus petit programme `adc` reel : on construit un systeme periodique, on y pose UN bloc
+Le plus petit programme `adc` reel : on construit un systeme periodique, on y pose un bloc
 diocotron compose de briques natives, on branche le Poisson de systeme, on pose une condition
 initiale numpy, on avance de quelques pas et on relit la densite. Copiable tel quel (il suppose
 seulement que le module est [installe](installation.md) et importable).
@@ -49,14 +49,14 @@ print("densite  =", sim.density("ne").shape)    # (96, 96)
 Ce que font les appels cles :
 
 - `adc.System(n=, L=, periodic=)` cree le systeme/coupleur (domaine carre par defaut).
-- `adc.Model(state=, transport=, source=, elliptic=)` compose un modele a partir de **briques
-  natives**. Ici : `Scalar` + `ExB` + `NoSource` + `BackgroundDensity`. C'est exactement le
+- `adc.Model(state=, transport=, source=, elliptic=)` compose un modele a partir de briques
+  natives. Ici : `Scalar` + `ExB` + `NoSource` + `BackgroundDensity`. C'est exactement le
   modele diocotron reduit, mais le coeur ne le nomme pas.
 - `set_poisson(rhs="charge_density", solver="geometric_mg")` : `rhs` vaut `charge_density` ou
-  `composite` ; `solver` se passe par MOT-CLE (`geometric_mg` ou la FFT).
+  `composite` ; `solver` se passe par mot-cle (`geometric_mg` ou la FFT).
 - `set_density(name, arr2d)` pose un tableau `(n, n)` contigu ; `step_cfl(cfl)` avance d'un pas
   au CFL donne ; `density(name)` / `mass(name)` / `time()` lisent l'etat.
 
-Pour passer du modele compose en briques au modele **ecrit en formules** (DSL `adc.dsl.Model`),
+Pour passer du modele compose en briques au modele ecrit en formules (DSL `adc.dsl.Model`),
 au raffinement adaptatif (`adc.AmrSystem`), aux figures et au GIF, suivez le
 [tutoriel A->Z](tutorial.md).

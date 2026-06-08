@@ -1,24 +1,24 @@
 # Prise en main
 
-Cette section est le GUIDE UTILISATEUR de `adc_cpp` : elle part de zero (qu'est-ce que
+Cette section est le guide utilisateur de `adc_cpp` : elle part de zero (qu'est-ce que
 c'est, comment le construire) et conduit jusqu'a une simulation diocotron complete,
 reproductible de bout en bout. Elle ne presuppose ni connaissance du coeur C++, ni du DSL.
 
 Le parcours conseille, dans l'ordre :
 
-- **[Presentation](presentation.md)** -- ce qu'est `adc_cpp`, son perimetre honnete, ses couches.
-- **[Installation](installation.md)** -- build CMake du coeur, du module Python, et le piege de
-  l'interpreteur (le `.so` compile est lie a UNE version de Python).
-- **[Premier run](first_run.md)** -- le plus petit exemple Python reel, copiable tel quel.
-- **[Verifier son backend](backend.md)** -- savoir quel backend parallele tourne vraiment
+- [Presentation](presentation.md) : ce qu'est `adc_cpp`, son perimetre honnete, ses couches.
+- [Installation](installation.md) : build CMake du coeur, du module Python, et le piege de
+  l'interpreteur (le `.so` compile est lie a une version de Python).
+- [Premier run](first_run.md) : le plus petit exemple Python, copiable tel quel.
+- [Verifier son backend](backend.md) : savoir quel backend parallele tourne vraiment
   (serie par defaut ; Kokkos / MPI sont des configs de build ; GPU = ROMEO uniquement).
-- **[Organisation des depots](organisation.md)** -- `adc_cpp` (la lib, agnostique) vs `adc_cases`
+- [Organisation des depots](organisation.md) : `adc_cpp` (la lib, agnostique) vs `adc_cases`
   (les scenarios nommes : diocotron, euler_poisson...).
-- **[Tutoriel A->Z](tutorial.md)** -- le tutoriel canonique en 18 etapes, de `git clone` a la
+- [Tutoriel A->Z](tutorial.md) : le tutoriel canonique en 18 etapes, de `git clone` a la
   comparaison uniforme/AMR, avec figures et GIF generes.
 
 Pour la reference de conception (contributeurs), chaque page renvoie aux documents `docs/*.md`
-du depot ; cette section les RESUME pour un nouvel utilisateur sans les dupliquer.
+du depot ; cette section les resume pour un nouvel utilisateur sans les dupliquer.
 
 ```{toctree}
 :maxdepth: 1

@@ -1,10 +1,10 @@
 # API Python
 
 Reference curee du module `adc` (bindings pybind11 de `libadc` + le sucre objet du paquet
-`adc/`). Python COMPOSE un systeme bloc par bloc ; tout le calcul cellule par cellule reste
+`adc/`). Python compose un systeme bloc par bloc ; tout le calcul cellule par cellule reste
 dans la lib C++ compilee (pas de boucle numpy sur le hot path, GPU/MPI conserves).
 
-Seule la surface PUBLIQUE est documentee ici (les symboles internes ne sont pas listes). Pour
+Seule la surface publique est documentee ici (les symboles internes ne sont pas listes). Pour
 des parcours annotes, voir le [quickstart](../getting_started/first_run.md) ; les compositions nommees
 (scenarios) vivent dans le depot [`adc_cases`](https://github.com/wolf75222/adc_cases).
 
@@ -19,7 +19,7 @@ d'interpreteur (le `.so` est lie a un cpython precis), detaille dans [limitation
 
 `adc.System` est le coupleur : on ajoute des blocs (un modele par bloc), on configure un
 Poisson de systeme partage, on fixe les conditions initiales en numpy, on avance. `add_block`
-prend un modele compose `adc.Model(...)` ; `add_equation` aiguille sur le TYPE du modele
+prend un modele compose `adc.Model(...)` ; `add_equation` aiguille sur le type du modele
 (`ModelSpec` natif ou `CompiledModel` issu du DSL). `set_poisson(rhs=..., solver=..., bc=...)`
 configure l'elliptique de systeme ; `set_density` / `step_cfl` / `advance` / `run` pilotent
 l'avance ; `density` / `mass` / `time` lisent l'etat.
@@ -33,7 +33,7 @@ l'avance ; `density` / `mass` / `time` lisent l'etat.
 
 `adc.AmrSystem` est le pendant raffine de `System` : un ou plusieurs blocs portes sur une
 hierarchie AMR block-structured (regrid Berger-Rigoutsos, reflux conservatif). En multi-blocs,
-la hierarchie est re-grillee sur l'UNION des tags (densite par bloc et/ou `|grad phi|`). Memes
+la hierarchie est re-grillee sur l'union des tags (densite par bloc et/ou `|grad phi|`). Memes
 signatures `add_block` / `add_equation` que `System` ; la cadence du regrid est portee par
 `AmrSystemConfig.regrid_every`.
 
@@ -55,7 +55,7 @@ choisit via les champs `geometry`, `nr`, `ntheta`, `r_min`, `r_max` de `SystemCo
 
 ## Modeles natifs : composition de briques
 
-Un modele NATIF est assemble par `adc.Model(state, transport, source, elliptic)` a partir de
+Un modele natif est assemble par `adc.Model(state, transport, source, elliptic)` a partir de
 briques generiques. Le coeur C++ ne connait que ces briques (aucun nom de scenario). La
 fonction valide la coherence etat <-> transport (Scalar avec ExB ; FluidState compressible
 avec CompressibleFlux ; isotherme avec IsothermalFlux).
@@ -80,7 +80,7 @@ avec CompressibleFlux ; isotherme avec IsothermalFlux).
 
 Chaque bloc choisit independamment sa reconstruction (limiteur), son flux numerique de
 Riemann et les variables reconstruites. `adc.FiniteVolume(...)` est un raccourci (le flux de
-Riemann s'y appelle `riemann`, pour ne pas collisionner avec le flux PHYSIQUE `m.flux` du DSL)
+Riemann s'y appelle `riemann`, pour ne pas collisionner avec le flux physique `m.flux` du DSL)
 qui remappe sur l'objet `adc.Spatial(...)`.
 
 ```{eval-rst}
@@ -94,8 +94,8 @@ qui remappe sur l'objet `adc.Spatial(...)`.
 
 Le traitement temporel est porte par le bloc (et non le modele) : le meme modele se reutilise
 avec des politiques distinctes. `adc.Explicit` (SSPRK2/3, substeps, stride) est le defaut ;
-`adc.IMEX` / `adc.SourceImplicit` traitent la SOURCE raide en implicite (backward-Euler,
-Newton local a la cellule) tandis que le transport reste explicite -- ce n'est PAS un solveur
+`adc.IMEX` / `adc.SourceImplicit` traitent la source raide en implicite (backward-Euler,
+Newton local a la cellule) tandis que le transport reste explicite ; ce n'est pas un solveur
 implicite global. `adc.Split` / `adc.Strang` sont l'opt-in du splitting explicite/implicite et
 prennent un etage source `adc.CondensedSchur` (condensation de Schur du couplage Lorentz
 electrostatique). `adc.Role` adresse une composante par son sens physique.
@@ -124,7 +124,7 @@ electrostatique). `adc.Role` adresse une composante par son sens physique.
 ```
 
 ```{note}
-`adc.Implicit(...)` existe encore comme alias d'`adc.IMEX` mais est OBSOLETE (le nom suggere a
+`adc.Implicit(...)` existe encore comme alias d'`adc.IMEX` mais est obsolete (le nom suggere a
 tort un solveur implicite global) et emet un `DeprecationWarning` : utiliser
 `adc.SourceImplicit(...)` ou `adc.IMEX(...)`.
 ```
@@ -146,7 +146,7 @@ Le sous-module `adc.dsl` decrit un modele en formules symboliques (variables con
 auxiliaires, flux, valeurs propres, primitives, second membre elliptique), le verifie, puis le
 compile en un `.so` branchable via `System.add_equation`. `dsl.Model` est la facade ;
 `dsl.CompiledModel` est le resultat de `m.compile(...)` (il porte le `.so` et les metadonnees
-de dispatch) ; `dsl.HybridModel` melange briques natives et briques DSL partielles dans UN
+de dispatch) ; `dsl.HybridModel` melange briques natives et briques DSL partielles dans un seul
 modele (produit par `adc.CompositeModel(...)`).
 
 ```{eval-rst}

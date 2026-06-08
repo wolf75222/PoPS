@@ -6,10 +6,10 @@ pip : le module s'utilise via `PYTHONPATH`.
 
 ## Prerequis
 
-- Compilateur **C++23** (AppleClang 16+, GCC 13+, Clang 17+). Sous Kokkos/CUDA on retombe a
+- Compilateur C++23 (AppleClang 16+, GCC 13+, Clang 17+). Sous Kokkos/CUDA on retombe a
   C++20 (CUDA 12.x ne propose pas `-std=c++23` ; tout le coeur compile en C++20).
-- **CMake >= 3.20**.
-- **Python >= 3.10** pour le module (3.12 recommande, voir le piege interpreteur ci-dessous).
+- CMake >= 3.20.
+- Python >= 3.10 pour le module (3.12 recommande, voir le piege interpreteur ci-dessous).
 - Catch2 / pybind11 sont recuperes automatiquement par `FetchContent` s'ils sont absents.
 
 ## Build C++ (coeur + tests)
@@ -22,7 +22,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-C'est le build par defaut : **serie**, sans Kokkos ni MPI (`comm.hpp` = rang unique). Pour le
+C'est le build par defaut : serie, sans Kokkos ni MPI (`comm.hpp` = rang unique). Pour le
 decompte exact des tests par backend, voir la matrice de couverture
 [`BACKEND_COVERAGE.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/BACKEND_COVERAGE.md) (source de verite unique, mise a jour a la
 main) plutot qu'un nombre fige ici.
@@ -46,8 +46,8 @@ depuis le second.
 ### Le piege de l'interpreteur (a lire avant de debugger un `ImportError`)
 
 L'extension compilee porte le suffixe ABI de l'interpreteur qui l'a construite, par exemple
-`_adc.cpython-312-darwin.so`. **Elle ne s'importe QUE depuis la version de Python qui correspond
-a ce suffixe** (ici CPython 3.12), avec `numpy` installe dans ce meme interpreteur, et le
+`_adc.cpython-312-darwin.so`. Elle ne s'importe que depuis la version de Python qui correspond
+a ce suffixe (ici CPython 3.12), avec `numpy` installe dans ce meme interpreteur, et le
 repertoire `python/` sur `PYTHONPATH`. Tenter `import adc` depuis un `python3` systeme different
 echoue par :
 
@@ -60,7 +60,7 @@ incompatible). Pour eviter cela :
 
 - pinnez l'interpreteur au moment du build :
   `cmake -S . -B build-py -DADC_BUILD_PYTHON=ON -DPython_EXECUTABLE=$(which python3.12)` ;
-- importez `adc` avec **exactement** ce meme `python3.12` ;
+- importez `adc` avec exactement ce meme `python3.12` ;
 - assurez-vous que `numpy` est present dans cet interpreteur.
 
 Sur macOS, plusieurs Python coexistent souvent (framework Python.org, conda, brew) ; le
@@ -87,14 +87,14 @@ Options reelles (cf. `CMakeLists.txt`) :
 |---|---|---|
 | `ADC_BUILD_TESTS` | `ON` | construit la suite de tests (`tests/`) |
 | `ADC_BUILD_PYTHON` | `OFF` | construit le module pybind11 `adc` |
-| `ADC_USE_KOKKOS` | `OFF` | backend de dispatch Kokkos (CPU OpenMP + GPU), **recommande** |
-| `ADC_USE_OPENMP` | `OFF` | backend OpenMP autonome, **deprecie** (-> Kokkos) |
+| `ADC_USE_KOKKOS` | `OFF` | backend de dispatch Kokkos (CPU OpenMP + GPU), recommande |
+| `ADC_USE_OPENMP` | `OFF` | backend OpenMP autonome, deprecie (-> Kokkos) |
 | `ADC_USE_MPI` | `OFF` | backend MPI (seam `comm` distribue) |
 | `ADC_USE_HDF5` | `OFF` | `DataWriter` HDF5 (ecriture parallele) |
 | `ADC_BUILD_BENCH` | `OFF` | harnais de profilage (`bench/`, jamais en CI) |
 
-Choisir UN backend de dispatch : `ADC_USE_KOKKOS` OU `ADC_USE_OPENMP`, pas les deux (erreur de
-configuration sinon). Kokkos est le chemin recommande : il couvre OpenMP CPU **et** ouvre le GPU
+Choisir un backend de dispatch : `ADC_USE_KOKKOS` ou `ADC_USE_OPENMP`, pas les deux (erreur de
+configuration sinon). Kokkos est le chemin recommande : il couvre OpenMP CPU et ouvre le GPU
 CUDA/HIP avec un seul code portable. La configuration Kokkos GPU exige `nvcc_wrapper` comme
 compilateur, par exemple :
 

@@ -1,20 +1,20 @@
 # Modeles
 
-Un *modele* dans `adc` decrit **une equation** : ses formules ponctuelles (flux, source,
-vitesses d'onde, second membre elliptique). Il existe **trois facons** d'ecrire un modele, qui
-produisent toutes le MEME objet calculatoire cote coeur C++ et se branchent de la meme maniere sur
+Un *modele* dans `adc` decrit une equation : ses formules ponctuelles (flux, source,
+vitesses d'onde, second membre elliptique). Il existe trois facons d'ecrire un modele, qui
+produisent toutes le meme objet calculatoire cote coeur C++ et se branchent de la meme maniere sur
 un `adc.System` :
 
-1. **Modele avec briques (natif)** : on COMPOSE des briques generiques deja compilees
+1. **Modele avec briques (natif)** : on compose des briques generiques deja compilees
    (`adc.Model(state, transport, source, elliptic)`). C'est la voie la plus directe pour assembler
    un modele existant : aucune compilation a la volee, parite production totale (MPI/AMR/GPU).
-2. **Modele DSL** : on ECRIT le modele en FORMULES symboliques (`adc.dsl.Model`), puis on le
+2. **Modele DSL** : on ecrit le modele en formules symboliques (`adc.dsl.Model`), puis on le
    compile en un `.so`. C'est la voie quand le modele voulu n'existe pas comme brique native.
-3. **Modele hybride** : on MELANGE, dans un seul modele, des briques natives et des briques DSL
+3. **Modele hybride** : on melange, dans un seul modele, des briques natives et des briques DSL
    partielles (`adc.CompositeModel`). C'est l'entre-deux : reutiliser une brique native pour un
    slot et ecrire l'autre en formules.
 
-Ces trois objets sont des compositions de **briques generiques**. Le coeur reste agnostique au
+Ces trois objets sont des compositions de briques generiques. Le coeur reste agnostique au
 scenario : il ne nomme aucun cas physique (diocotron, Euler-Poisson, deux-fluides...) ; ce sont des
 compositions cote application. Pour le detail des methodes numeriques (reconstruction MUSCL/WENO,
 flux de Riemann, integrateurs SSPRK/IMEX, Poisson multigrille), voir
@@ -23,9 +23,9 @@ integrateur), voir [ARCHITECTURE.md](https://github.com/wolf75222/adc_cpp/blob/m
 
 ## PhysicalModel : le concept
 
-Toutes les briques satisfont le meme CONTRAT C++, le concept `adc::PhysicalModel`
+Toutes les briques satisfont le meme contrat C++, le concept `adc::PhysicalModel`
 ([include/adc/core/physical_model.hpp](https://github.com/wolf75222/adc_cpp/blob/master/include/adc/core/physical_model.hpp)). Un
-`PhysicalModel` decrit une equation comme un jeu de **fonctions pures d'etats ponctuels** -- rien de
+`PhysicalModel` decrit une equation comme un jeu de fonctions pures d'etats ponctuels, rien de
 plus. C'est le seul axe "quoi calculer" de l'architecture, separe de l'axe "ou / comment iterer"
 (maillage + dispatch) et de l'axe "dans quel ordre" (integrateur + coupleur, cf.
 [ARCHITECTURE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ARCHITECTURE.md)).
@@ -39,13 +39,13 @@ Le contrat minimal exige quatre fonctions :
 - `elliptic_rhs(U)` : le second membre de l'equation elliptique (densite de charge / de masse selon
   le modele).
 
-Point d'unification : `flux` ET `source` recoivent `aux` (le canal `adc::Aux` : potentiel `phi`,
+Point d'unification : `flux` et `source` recoivent `aux` (le canal `adc::Aux` : potentiel `phi`,
 gradient `grad_x`/`grad_y`, et champs etendus optionnels `B_z`, `T_e`). C'est ce qui place sous un
 meme operateur spatial le transport a derive (l'`aux` est lu dans le flux) et le fluide compressible
 auto-gravitant (l'`aux` est lu dans la source).
 
-Une brique **hyperbolique** complete satisfait en plus `adc::HyperbolicPhysicalModel` : elle porte
-les VARIABLES (conservatives et primitives) et les conversions `to_primitive` / `to_conservative`,
+Une brique hyperbolique complete satisfait en plus `adc::HyperbolicPhysicalModel` : elle porte
+les variables (conservatives et primitives) et les conversions `to_primitive` / `to_conservative`,
 parce que variables, conversions et flux sont physiquement lies (un flux est ecrit pour une
 disposition de variables donnee). C'est cette brique-la que l'on ecrit, native ou DSL.
 
@@ -54,7 +54,7 @@ disposition de variables donnee). C'est cette brique-la que l'on ecrit, native o
 `adc.Model(state, transport, source, elliptic)` compose un modele a partir de quatre briques
 generiques deja compilees et renvoie une `ModelSpec` (des tags lus cote C++ par la fabrique de
 modeles). Python compose les objets ; le calcul cellule par cellule reste C++ compile (pas de numpy,
-GPU/MPI conserves). Les briques reelles, telles qu'exposees par `adc.*` (et leurs structs C++ dans
+GPU/MPI conserves). Les briques disponibles, telles qu'exposees par `adc.*` (et leurs structs C++ dans
 [include/adc/physics/](https://github.com/wolf75222/adc_cpp/blob/master/include/adc/physics/)) :
 
 **Etat** (`state=`)
@@ -63,31 +63,31 @@ GPU/MPI conserves). Les briques reelles, telles qu'exposees par `adc.*` (et leur
 - `adc.FluidState(kind="isothermal", cs2=0.5)` : Euler isotherme (la vitesse du son `cs2`).
 
 **Transport** (`transport=`)
-- `adc.ExB(B0=1.0)` : advection scalaire par la derive ExB (champ magnetique `B0`) --
+- `adc.ExB(B0=1.0)` : advection scalaire par la derive ExB (champ magnetique `B0`),
   `adc::ExBVelocity` dans `physics/hyperbolic.hpp`.
-- `adc.CompressibleFlux()` : flux d'Euler compressible (`gamma` vient de l'etat) --
+- `adc.CompressibleFlux()` : flux d'Euler compressible (`gamma` vient de l'etat),
   `adc::CompressibleFlux` (alias d'`adc::Euler`).
-- `adc.IsothermalFlux()` : flux d'Euler isotherme (`cs2` vient de l'etat) -- `adc::IsothermalFlux`.
+- `adc.IsothermalFlux()` : flux d'Euler isotherme (`cs2` vient de l'etat), `adc::IsothermalFlux`.
 
 **Source** (`source=`)
-- `adc.NoSource()` : pas de source -- `adc::NoSource` dans `physics/source.hpp`.
+- `adc.NoSource()` : pas de source, `adc::NoSource` dans `physics/source.hpp`.
 - `adc.PotentialForce(charge=1.0)` : force du potentiel `(q/m) rho E` sur la quantite de mouvement
-  (plus travail si 4 variables) -- `adc::PotentialForce`.
-- `adc.GravityForce()` : force gravitationnelle `rho g` -- `adc::GravityForce`.
+  (plus travail si 4 variables), `adc::PotentialForce`.
+- `adc.GravityForce()` : force gravitationnelle `rho g`, `adc::GravityForce`.
 
 **Second membre elliptique** (`elliptic=`)
-- `adc.ChargeDensity(charge=1.0)` : densite de charge `f = q n` -- `adc::ChargeDensity` dans
+- `adc.ChargeDensity(charge=1.0)` : densite de charge `f = q n`, `adc::ChargeDensity` dans
   `physics/elliptic.hpp`.
-- `adc.BackgroundDensity(alpha=1.0, n0=0.0)` : fond neutralisant `f = alpha (n - n0)` --
+- `adc.BackgroundDensity(alpha=1.0, n0=0.0)` : fond neutralisant `f = alpha (n - n0)`,
   `adc::BackgroundDensity`.
 - `adc.GravityCoupling(sign=1.0, four_pi_G=1.0, rho0=1.0)` : couplage self-consistant
-  `f = sign * 4piG (rho - rho0)` (`sign = +1` gravite, `-1` plasma) -- `adc::GravityCoupling`.
+  `f = sign * 4piG (rho - rho0)` (`sign = +1` gravite, `-1` plasma), `adc::GravityCoupling`.
 
 `adc.Model(...)` valide la coherence etat <-> transport (Scalar avec ExB ; FluidState compressible
 avec CompressibleFlux ; isotherme avec IsothermalFlux) : un appariement incoherent leve une
 `ValueError` immediate.
 
-Exemple -- le modele diocotron reduit (densite scalaire advectee par ExB, fond neutralisant), tel
+Exemple, le modele diocotron reduit (densite scalaire advectee par ExB, fond neutralisant), tel
 qu'utilise dans le tutoriel pour la comparaison uniforme/AMR :
 
 ```python
@@ -112,7 +112,7 @@ modele : `sa.add_block("ne", model=model, ...)`.
 
 ## Modele DSL (ecrit en formules)
 
-`adc.dsl.Model` permet d'ECRIRE un modele en formules symboliques : Python compose un arbre
+`adc.dsl.Model` permet d'ecrire un modele en formules symboliques : Python compose un arbre
 d'expressions (les operateurs `+`, `-`, `*`, `/`, `**`, `adc.dsl.sqrt` construisent l'arbre, pas une
 fonction appelee par cellule), que le DSL traduit en C++ compilable. On declare les variables
 conservatives, les primitives (par des formules), le flux, les valeurs propres, la source et la
@@ -120,7 +120,7 @@ contribution elliptique, puis on compile.
 
 Voici le modele diocotron reduit du tutoriel canonique
 ([docs/sphinx/tutorials/diocotron_tutorial.py](https://github.com/wolf75222/adc_cpp/blob/master/docs/sphinx/tutorials/diocotron_tutorial.py)), ecrit en
-formules -- il reproduit exactement les briques natives `ExBVelocity` (transport) et
+formules ; il reproduit exactement les briques natives `ExBVelocity` (transport) et
 `BackgroundDensity` (elliptique) :
 
 ```python
@@ -168,20 +168,20 @@ conception [DSL_MODEL_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/maste
 ## Modele hybride (briques native + DSL dans un seul modele)
 
 `adc.Model(...)` compose des briques 100 % natives ; `adc.dsl.Model(...)` genere un modele 100 %
-DSL. `adc.CompositeModel(transport, source, elliptic)` comble l'entre-deux : MELANGER, dans UN SEUL
+DSL. `adc.CompositeModel(transport, source, elliptic)` comble l'entre-deux : melanger, dans un seul
 modele, des briques natives (`adc.ExB`, `adc.PotentialForce`, `adc.ChargeDensity`...) et des briques
-DSL PARTIELLES compilees (`adc.dsl.HyperbolicBrick`, `adc.dsl.SourceBrick`, `adc.dsl.EllipticBrick`
+DSL partielles compilees (`adc.dsl.HyperbolicBrick`, `adc.dsl.SourceBrick`, `adc.dsl.EllipticBrick`
 suivies de `.compile()`).
 
-Chaque slot accepte SOIT une brique native, SOIT une brique DSL partielle compilee. **Au moins un
-slot doit etre DSL** : une composition tout-native s'ecrit avec `adc.Model(...)`, sinon
-`CompositeModel` leve une `ValueError`. Le melange est compile en UN `.so` composite (prototype :
-backend `aot`), sur le meme chemin de production qu'un modele DSL complet -- la numerique native est
+Chaque slot accepte soit une brique native, soit une brique DSL partielle compilee. Au moins un
+slot doit etre DSL : une composition tout-native s'ecrit avec `adc.Model(...)`, sinon
+`CompositeModel` leve une `ValueError`. Le melange est compile en un `.so` composite (prototype :
+backend `aot`), sur le meme chemin de production qu'un modele DSL complet ; la numerique native est
 reutilisee a l'identique (un struct derive cuit les parametres natifs `qom`, `q`, `cs2`... dans le
 type ; aucune re-derivation). Le slot transport fixe le layout (`n_vars`, noms conservatifs,
-primitives, gamma) ; une brique DSL de source / elliptique doit declarer le MEME `n_vars`.
+primitives, gamma) ; une brique DSL de source / elliptique doit declarer le meme `n_vars`.
 
-Exemple -- transport DSL isotherme + source native + elliptique native (extrait de
+Exemple, transport DSL isotherme + source native + elliptique native (extrait de
 `python/tests/test_dsl_hybrid.py`) :
 
 ```python
@@ -218,29 +218,29 @@ sim.add_equation("gas", compiled,
 ```
 
 Le melange fonctionne dans les deux sens (transport natif + source/elliptique DSL aussi). Source :
-[DSL_MODEL_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_MODEL_DESIGN.md) section "composition HYBRIDE" et
+[DSL_MODEL_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_MODEL_DESIGN.md) section "composition hybride" et
 `python/tests/test_dsl_hybrid.py`.
 
 ## Variables conservatives / primitives
 
-Un modele DSL distingue deux jeux de variables, avec des roles PHYSIQUES qui permettent au systeme
-de retrouver une grandeur par son sens (et non par un indice litteral) -- indispensable aux couplages
+Un modele DSL distingue deux jeux de variables, avec des roles physiques qui permettent au systeme
+de retrouver une grandeur par son sens (et non par un indice litteral), indispensable aux couplages
 inter-especes.
 
 - `m.conservative_vars("rho", "mx", "my", roles=["Density", "MomentumX", "MomentumY"])` declare les
   variables conservatives (l'etat evolue `U`) et renvoie un tuple de `Var` a depacker. Le `roles=`
   est optionnel ; sans lui, un mapping canonique nom -> role s'applique (`rho`/`n` -> `Density`,
   `rho_u` -> `MomentumX`, `E` -> `Energy`...). Un nom non reconnu reste `Custom`.
-- `m.primitive(name, expr)` definit UNE primitive par sa formule (en fonction des conservatives ou
+- `m.primitive(name, expr)` definit une primitive par sa formule (en fonction des conservatives ou
   des primitives precedentes), p.ex. `u = m.primitive("u", mx / rho)`.
-- `m.primitive_vars(rho=rho, ux=mx/rho, ...)` (forme kwargs) DEFINIT chaque primitive ET fixe le
+- `m.primitive_vars(rho=rho, ux=mx/rho, ...)` (forme kwargs) definit chaque primitive et fixe le
   layout ordonne de `Prim` (l'ordre des kwargs). La forme positionnelle
   `m.primitive_vars(rho, u, v, p)` fixe juste le layout a partir de noms deja definis.
 - `m.conservative_from([rho, rho*u, rho*v])` donne l'inverse `Prim -> U` (le DSL ne sait pas inverser
   symboliquement les primitives ; on fournit l'inverse explicitement). Il genere `to_conservative`.
 
 L'operateur spatial peut alors reconstruire en variables primitives (`rho`, `u`, `p`) plutot que
-conservatives -- plus robuste pour Euler (positivite de `rho` et `p`) ; voir le choix
+conservatives, plus robuste pour Euler (positivite de `rho` et `p`) ; voir le choix
 `variables="primitive"` de `adc.FiniteVolume` et les details dans [ALGORITHMS.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ALGORITHMS.md).
 
 ## Flux, sources, valeurs propres, RHS elliptique
@@ -250,9 +250,9 @@ concept `adc::PhysicalModel` lues par le coeur.
 
 - `m.flux(x=[...], y=[...])` : le **flux physique** `F(U, aux, dir)`, une expression par composante
   conservative et par direction. L'operateur spatial l'evalue aux interfaces puis le passe au
-  solveur de Riemann (Rusanov / HLLC / Roe selon `riemann=`). NE PAS confondre avec
-  `m.eval_flux(U, aux, dir)`, qui est l'EVALUATEUR numpy (debug / proto hote), ni avec le flux
-  NUMERIQUE `riemann=` de `adc.FiniteVolume`.
+  solveur de Riemann (Rusanov / HLLC / Roe selon `riemann=`). A ne pas confondre avec
+  `m.eval_flux(U, aux, dir)`, qui est l'evaluateur numpy (debug / proto hote), ni avec le flux
+  numerique `riemann=` de `adc.FiniteVolume`.
 - `m.eigenvalues(x=[...], y=[...])` : les **valeurs propres** (vitesses caracteristiques) par
   direction. Le coeur en tire `max_wave_speed` (borne de Rusanov et pas de temps CFL) ; si une
   primitive `p` (pression) est declaree, la brique generee expose aussi `pressure` / `wave_speeds`,
@@ -274,27 +274,27 @@ propres, la source, l'elliptique) est bien declaree (conservative / primitive / 
 `m.compile(backend=..., target=...)` traduit le modele symbolique en un `.so` et renvoie un
 `CompiledModel` (qui porte `so_path`, `backend`, l'`adder` a employer, les noms/roles/gamma/n_aux,
 la `abi_key` et le `model_hash`). Le `.so` est mis en cache par `model_hash` : un modele inchange
-n'est pas recompile. Le **defaut est `backend="aot"`** -- il faut donc demander explicitement
+n'est pas recompile. Le defaut est `backend="aot"` ; il faut donc demander explicitement
 `"production"` pour le chemin natif zero-copie.
 
 Trois backends, materialises cote code dans `_BACKEND_CAPS` (`python/adc/dsl.py`) :
 
 | backend | CPU | MPI | AMR | GPU | role |
 |---|---|---|---|---|---|
-| `production` | oui | oui (np=1/2/4) | via `AmrSystem` | rapporte `False` cote Python | **recommande** en MPI/AMR ; loader natif zero-copie (`add_native_block`) |
-| `aot` | oui | non | non | non | **DEFAUT** ; `.so` a marshaling, mono-rang, debug/bench CPU. Porte les params runtime (`set_block_params`) |
+| `production` | oui | oui (np=1/2/4) | via `AmrSystem` | rapporte `False` cote Python | recommande en MPI/AMR ; loader natif zero-copie (`add_native_block`) |
+| `aot` | oui | non | non | non | defaut ; `.so` a marshaling, mono-rang, debug/bench CPU. Porte les params runtime (`set_block_params`) |
 | `prototype` | oui (Rusanov o1) | non | non | non | JIT prototype, dispatch virtuel hote ; ne pas utiliser en production |
 
 `_BACKEND_CAPS["production"]` declare `{cpu, mpi, amr} = True`. Le chemin natif `production` partage
 le moteur de `add_block` (halos `fill_boundary`, donc MPI-capable par construction) et a un pendant
 AMR (`m.compile(backend="production", target="amr_system")` -> `AmrSystem.add_native_block`). `gpu`
-est rapporte `False` PAR PRUDENCE : le chemin natif est device-clean en C++ (valide GH200), mais la
+est rapporte `False` par prudence : le chemin natif est device-clean en C++ (valide GH200), mais la
 validation end-to-end depuis Python sur un module bati Kokkos/CUDA reste une etape dediee ; le module
 hote teste en CI n'est pas bati GPU.
 
-Ces capacites sont des drapeaux de DIAGNOSTIC, verifies au branchement (`add_equation`) ou a
-l'execution -- PAS figes comme un argument `device=` de compilation (un `.so` peut compiler sans que
-le module hote soit device-capable). Les **garde-fous** levent une `ValueError` au plus tot :
+Ces capacites sont des drapeaux de diagnostic, verifies au branchement (`add_equation`) ou a
+l'execution, pas figes comme un argument `device=` de compilation (un `.so` peut compiler sans que
+le module hote soit device-capable). Les garde-fous levent une `ValueError` au plus tot :
 
 - backend inconnu (hors `prototype`/`aot`/`production`) ;
 - `target="amr_system"` avec un backend autre que `production` (pas de chemin `.so` AMR hors natif) ;

@@ -7,8 +7,7 @@ du coeur en C++, et profilage de performance.
 
 Chaque section resume l'essentiel pour un utilisateur et renvoie vers la reference
 contributeur (`docs/*.md`) pour le detail algorithmique et les preuves de validation.
-Toutes les API montrees ici sont reelles : elles sont verifiees contre le code du depot
-(bindings, tests, en-tetes).
+Les API montrees ici sont verifiees contre le code du depot (bindings, tests, en-tetes).
 
 ## Poisson : solveurs elliptiques
 
@@ -31,7 +30,7 @@ blocs). `bc=` vaut `"auto"`, `"periodic"`, `"dirichlet"`.
 ### GeometricMG (multigrille geometrique)
 
 `GeometricMG` est le solveur par defaut : un V-cycle multigrille avec lisseur
-Gauss-Seidel **rouge-noir** (le coloriage rend chaque balayage independant des donnees,
+Gauss-Seidel rouge-noir (le coloriage rend chaque balayage independant des donnees,
 donc parallelisable et device-clean). Le cycle lisse `nu1` fois, restreint le residu sur
 une grille deux fois plus grossiere (`average_down`), recurse, prolonge la correction,
 relisse `nu2` fois. Cout O(N), convergence quasi independante du maillage. Le coarsening
@@ -42,11 +41,11 @@ Le meme operateur multigrille couvre trois generalisations du Laplacien, toutes 
 et bit-identiques au chemin historique tant qu'on ne les active pas. Cote C++
 (`GeometricMG`, `numerics/elliptic/geometric_mg.hpp`) :
 
-- `set_epsilon(eps)` -- permittivite variable `div(eps(x) grad phi) = f` (moyenne
+- `set_epsilon(eps)`, permittivite variable `div(eps(x) grad phi) = f` (moyenne
   harmonique aux faces) ;
-- `set_reaction(kappa)` -- operateur ecrante / Helmholtz `div(eps grad phi) - kappa phi = f`
+- `set_reaction(kappa)`, operateur ecrante / Helmholtz `div(eps grad phi) - kappa phi = f`
   (ecrantage de Debye, `kappa = 1 / lambda_D^2`) ;
-- `set_epsilon_anisotropic(eps_x, eps_y)` -- milieu tensoriel diagonal `div(diag(eps_x, eps_y) grad phi) = f`.
+- `set_epsilon_anisotropic(eps_x, eps_y)`, milieu tensoriel diagonal `div(diag(eps_x, eps_y) grad phi) = f`.
 
 Ces trois reglages sont composables ; `eps_x == eps_y` redonne l'isotrope, ne pas appeler
 `set_reaction` redonne Poisson pur. Cote Python, ils sont exposes par champ NumPy
@@ -65,24 +64,24 @@ sim.set_epsilon_anisotropic_field(eps_x, eps_y)  # diag(eps_x, eps_y)
 
 ### Poisson spectral (FFT)
 
-Sur un domaine **periodique**, le Laplacien est diagonal en Fourier :
+Sur un domaine periodique, le Laplacien est diagonal en Fourier :
 `phi_hat(k) = -rhs_hat(k) / (k_x^2 + k_y^2)`, mode `k=0` epingle a 0 (jauge). Une FFT
-directe + division + FFT inverse resout Poisson EXACTEMENT (residu machine), sans
+directe + division + FFT inverse resout Poisson exactement (residu machine), sans
 iteration. Deux variantes existent, toutes deux modeles du concept `EllipticSolver` :
 
-- `PoissonFFTSolver` (`numerics/elliptic/poisson_fft_solver.hpp`) -- **mono-rang, boite
-  unique**. Son constructeur leve un `std::runtime_error` des que `n_ranks() != 1` ou que
-  `ba.size() != 1`. Ce garde-fou est DELIBERE et actif en Release (`NDEBUG` ne le retire
+- `PoissonFFTSolver` (`numerics/elliptic/poisson_fft_solver.hpp`), mono-rang, boite
+  unique. Son constructeur leve un `std::runtime_error` des que `n_ranks() != 1` ou que
+  `ba.size() != 1`. Ce garde-fou est delibere et actif en Release (`NDEBUG` ne le retire
   pas) : ce solveur direct dereferencerait `fab(0)` sur un rang sans box (segfault). En
   serie, c'est le solveur exact et le plus rapide pour un domaine periodique.
-- `DistributedFFTSolver` (meme en-tete) -- FFT **distribuee par BANDES** (slabs) : 1 bande
+- `DistributedFFTSolver` (meme en-tete), FFT distribuee par bandes (slabs) : 1 bande
   par rang, transposee parallele par `MPI_Alltoall`. C'est le pendant MPI du FFT direct,
   utilisable comme `Coupler<Model, DistributedFFTSolver>`. Contraintes : `Ny` divisible par
   `n_ranks()`, `Nx`/`Ny` puissances de 2 (un correctif gere `n` non puissance de 2 cote
   mono-rang). En serie (`n_ranks() == 1`) une seule bande couvre le domaine, identique a
   `PoissonFFTSolver`.
 
-MG et FFT inversent prouvablement le MEME Laplacien discret : le meme operateur canonique
+MG et FFT inversent prouvablement le meme Laplacien discret : le meme operateur canonique
 `poisson_residual` applique a leurs deux solutions donne des residus a l'arrondi
 (`~1e-14`) et des solutions identiques a `~1e-16`. Le piege du FFT : il exige le
 periodique, et le second membre doit etre a moyenne nulle (sinon `phi` derive).
@@ -94,15 +93,15 @@ periodique, et le second membre doit etre a moyenne nulle (sinon `phi` derive).
 - Les en-tetes : `include/adc/numerics/elliptic/geometric_mg.hpp`,
   `poisson_fft_solver.hpp`, `poisson_operator.hpp`.
 - Proprietes de conservation du schema couple (masse exacte FV, momentum, energie, valeurs
-  MESUREES par les tests) : [CONSERVATION_SUMMARY.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/CONSERVATION_SUMMARY.md).
+  mesurees par les tests) : [CONSERVATION_SUMMARY.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/CONSERVATION_SUMMARY.md).
 
 ## Sources couplees inter-especes
 
-Au-dela du transport et de la source LOCALE d'un bloc, on peut decrire un couplage
-**inter-especes** (ionisation, collisions, echange thermique) en FORMULES, sans ecrire de
+Au-dela du transport et de la source locale d'un bloc, on peut decrire un couplage
+inter-especes (ionisation, collisions, echange thermique) en formules, sans ecrire de
 C++ et sans callback Python par cellule. Le DSL `adc.dsl.CoupledSource` transporte la
 formule en bytecode pile-machine, interprete cote C++ dans un `for_each_cell` device
-(donc MPI-safe et GPU-clean). L'etage est applique par splitting EXPLICITE, apres le
+(donc MPI-safe et GPU-clean). L'etage est applique par splitting explicite, apres le
 transport.
 
 L'exemple canonique est une ionisation a trois especes
@@ -125,19 +124,19 @@ compiled = src.compile(backend="production")
 sim.add_coupling(compiled)   # branche l'etage sur System.add_coupled_source
 ```
 
-`sim.add_coupling(...)` accepte aussi les couplages NOMMES `adc.Ionization` /
+`sim.add_coupling(...)` accepte aussi les couplages nommes `adc.Ionization` /
 `adc.Collision` / `adc.ThermalExchange` (formule figee). Sans appel a `add_coupling`, le
 `System` reste bit-identique (l'etage est inerte par defaut).
 
 La compilation produit une ABI plate (`in_blocks`, `in_roles`, `consts`, `out_blocks`,
-`out_roles`, `prog_ops`, `prog_args`, `prog_lens`) -- du bytecode, jamais un callback
+`out_roles`, `prog_ops`, `prog_args`, `prog_lens`) : du bytecode, jamais un callback
 Python. Le test verifie que la trajectoire suit bit-pour-bit une reference NumPy
 forward-Euler de la meme ODE, et que les invariants attendus tiennent (`n_i + n_g`
 conserve, `n_e - n_i` constant : chaque ionisation cree une paire e/i).
 
 ### Pour aller plus loin
 
-- Classification PUBLIC / INTERNE / DEPRECIE des classes de couplage (dont le concept
+- Classification public / interne / deprecie des classes de couplage (dont le concept
   `CoupledSourceFor` et l'evaluateur bytecode `CoupledSourceProgram`) :
   [COUPLING_SURFACE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/COUPLING_SURFACE.md).
 - Test de reference : `python/tests/test_dsl_coupled_source.py` (et la variante de
@@ -147,8 +146,8 @@ conserve, `n_e - n_i` constant : chaque ionisation cree une paire e/i).
 
 L'integrateur `adc.CondensedSchur` reproduit le splitting d'Hoffart et al.
 (arXiv:2510.11808) pour la source raide potentiel / vitesse / force de Lorentz du systeme
-Euler-Poisson magnetise. La cle : la condensation de Schur ELIMINE algebriquement la
-vitesse du sous-systeme implicite, ce qui reduit l'etage source a UN solve elliptique
+Euler-Poisson magnetise. La cle : la condensation de Schur elimine algebriquement la
+vitesse du sous-systeme implicite, ce qui reduit l'etage source a un solve elliptique
 (operateur tensoriel `-div(A grad phi)` avec `A = rho B^{-1}`, en general non symetrique)
 suivi d'une reconstruction explicite de la vitesse.
 
@@ -179,7 +178,7 @@ natif `adc.FluidState(kind="isothermal") + adc.IsothermalFlux()` les fournit). L
 entierement C++ (`CondensedSchurSourceStepper`, expose `adc.CondensedSchur`) : aucun
 callback Python par cellule.
 
-> **Roles hardcodes cote C++.** Les descripteurs de role / champ ne sont PAS reglables
+> **Roles hardcodes cote C++.** Les descripteurs de role / champ ne sont pas reglables
 > depuis Python. `adc.CondensedSchur(...)` accepte `kind`, `theta`, `alpha`, mais passer
 > `density=`, `momentum=`, `energy=`, `magnetic_field=` ou `potential=` leve une erreur :
 > l'etage source C++ fixe ces roles en dur. C'est volontaire (le contrat de
@@ -189,23 +188,23 @@ callback Python par cellule.
 transport). Le defaut est inchange : un bloc en `adc.Explicit` pur ne voit jamais l'etage
 source condense.
 
-> **CondensedSchur (GLOBAL) vs SourceImplicit (LOCAL).** Ne pas confondre. `adc.CondensedSchur`
-> assemble et resout un operateur elliptique couplant TOUT le domaine (pour un couplage raide
-> NON local : Lorentz / electrostatique). `adc.SourceImplicit` (= IMEX source-only) est
-> LOCAL : l'implicite ne couple que les composantes d'une MEME cellule (relaxation, reactions,
-> friction), sans solve elliptique -- donc bien moins cher. Une source raide locale n'a pas
+> **CondensedSchur (global) vs SourceImplicit (local).** Ne pas confondre. `adc.CondensedSchur`
+> assemble et resout un operateur elliptique couplant tout le domaine (pour un couplage raide
+> non local : Lorentz / electrostatique). `adc.SourceImplicit` (= IMEX source-only) est
+> local : l'implicite ne couple que les composantes d'une meme cellule (relaxation, reactions,
+> friction), sans solve elliptique, donc bien moins cher. Une source raide locale n'a pas
 > besoin de Schur.
 
 ### Pour aller plus loin
 
 - Conception detaillee (les cinq niveaux, la non-symetrie de l'operateur tensoriel, la
   question du solveur Krylov) : [SCHUR_CONDENSATION_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/SCHUR_CONDENSATION_DESIGN.md)
-  (banniere : **IMPLEMENTE** ; le document est la spec d'origine, lu comme historique de
+  (banniere : `IMPLEMENTE` ; le document est la spec d'origine, lu comme historique de
   conception).
 - Proprietes de conservation du chemin Schur cartesien (valeurs mesurees) :
   [CONSERVATION_SUMMARY.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/CONSERVATION_SUMMARY.md).
 - Tests : `python/tests/test_schur_via_system.py` (chemin `System -> run_source_stage`,
-  briques NATIVES, CI-safe), `test_schur_conservation.py`.
+  briques natives, CI-safe), `test_schur_conservation.py`.
 
 ## Geometrie polaire / disque
 
@@ -214,7 +213,7 @@ geometrie non cartesienne.
 
 ### Anneau polaire global
 
-Le choix de geometrie vit dans un objet MAILLAGE passe en `mesh=` (jamais dans
+Le choix de geometrie vit dans un objet maillage passe en `mesh=` (jamais dans
 `FiniteVolume`, qui ne porte que reconstruction + flux + variables). `adc.PolarMesh`
 decrit un anneau global `r in [r_min, r_max] x theta in [0, 2pi)`, `nr x ntheta` cellules,
 theta periodique, parois physiques en `r_min` / `r_max`. La grille polaire leve le verrou
@@ -232,9 +231,9 @@ Le `SystemConfig` porte alors `geometry="polar"`, `nr`, `ntheta`, `r_min`, `r_ma
 C++, le chemin polaire est branche dans `System.step` (transport `assemble_rhs_polar` +
 Poisson `PolarPoissonSolver` + derive de l'aux en base locale `(e_r, e_theta)`).
 
-> **Portee polaire (HONNETE).** Le chemin polaire est limite : transport **ExB scalaire /
-> isotherme seulement** (les flux fluides complets ne sont pas portes), **mono-rang** (le
-> `PolarPoissonSolver` direct -- FFT-en-theta + tridiagonale-en-r par Thomas -- refuse MPI
+> **Portee polaire.** Le chemin polaire est limite : transport ExB scalaire /
+> isotherme seulement (les flux fluides complets ne sont pas portes), mono-rang (le
+> `PolarPoissonSolver` direct, FFT-en-theta + tridiagonale-en-r par Thomas, refuse MPI
 > et leve sur `n_ranks() > 1` ou `ba.size() != 1`), pas de couplage cartesien <-> polaire
 > (c'est un anneau global). `nr >= 3` (stencil radial decentre d'ordre 2 aux parois),
 > `ntheta >= 1`. `adc.CondensedSchur` est cable en polaire (le stepper condense polaire est
@@ -242,7 +241,7 @@ Poisson `PolarPoissonSolver` + derive de l'aux en base locale `(e_r, e_theta)`).
 
 ### Masque disque (transport cartesien)
 
-Sur grille **cartesienne**, on peut restreindre le transport a un disque
+Sur grille cartesienne, on peut restreindre le transport a un disque
 `hypot(x-cx, y-cy) - R < 0` :
 
 ```python
@@ -251,7 +250,7 @@ mask = sim.disc_mask()                         # masque 0/1 (ny, nx) row-major, 
 ```
 
 Sans `set_disc_domain`, le masque est tout actif et le chemin de transport reste
-bit-identique. Le masque disque est REFUSE en geometrie polaire (l'anneau est deja borne
+bit-identique. Le masque disque est refuse en geometrie polaire (l'anneau est deja borne
 par ses parois radiales `r_min` / `r_max`).
 
 ### Pour aller plus loin
@@ -262,8 +261,8 @@ par ses parois radiales `r_min` / `r_max`).
 
 ## Extension C++ : ajouter une brique native
 
-Le coeur est AGNOSTIQUE au modele : il ne nomme aucun scenario. Un modele physique est une
-COMPOSITION de briques generiques (etat, transport, source, elliptique), et le calcul
+Le coeur est agnostique au modele : il ne nomme aucun scenario. Un modele physique est une
+composition de briques generiques (etat, transport, source, elliptique), et le calcul
 cellule par cellule reste du C++ compile.
 
 Pour ecrire une nouvelle brique native, on satisfait le concept `PhysicalModel`
@@ -284,7 +283,7 @@ concept PhysicalModel =
 ```
 
 Toutes ces methodes doivent etre `ADC_HD` (host/device) si elles sont appelees dans des
-kernels. L'extension OPTIONNELLE `HasPrimitiveVars` ajoute `to_primitive` / `to_conservative`
+kernels. L'extension optionnelle `HasPrimitiveVars` ajoute `to_primitive` / `to_conservative`
 (reconstruction en variables primitives, plus robuste pour Euler : positivite de rho et p),
 et `HyperbolicPhysicalModel` ajoute le descripteur de variables (`conservative_vars()` /
 `primitive_vars()`). Une fois la brique conforme, elle se compose dans un `CompositeModel`
@@ -301,13 +300,13 @@ et s'expose au runtime comme les briques existantes.
 
 ## Performance et profiling
 
-Le depot embarque un harnais de profilage REEL : `bench/profile_step.cpp`, pilote par
+Le depot embarque un harnais de profilage : `bench/profile_step.cpp`, pilote par
 `bench/run_bench.sh`. Il reconstruit un pas de temps representatif du diocotron a partir
 des seams publics (sans toucher le hot path) et chronometre chaque phase
 (`transport`, `poisson`, `halos`, `aux_derive`, `reduction`, `fence`, `alloc_tmp`)
-encadree de `device_fence()` pour capturer l'execution device reelle sous Kokkos.
+encadree de `device_fence()` pour capturer l'execution device sous Kokkos.
 
-Le harnais est **HORS du build par defaut** (`ADC_BUILD_BENCH=OFF`) : le CI ne le
+Le harnais est hors du build par defaut (`ADC_BUILD_BENCH=OFF`) : le CI ne le
 configure ni ne le compile jamais. On l'active explicitement :
 
 ```sh
@@ -320,23 +319,23 @@ bench/run_bench.sh mpi-cuda    <Kroot> 4  # MPI + Kokkos Cuda (GH200), 4 rangs
 Il accepte `--n --steps --warmup --cfl --solver {geometric_mg|fft} --limiter
 {none|minmod|vanleer|weno5} --bc {periodic|dirichlet}`.
 
-**Constat principal du profil** : sur les six backends mesures, la phase `poisson` domine
-le pas a **96 a 99.9 %**. Le transport, les halos, les reductions et les allocations
+Constat principal du profil : sur les six backends mesures, la phase `poisson` domine
+le pas a 96 a 99.9 %. Le transport, les halos, les reductions et les allocations
 temporaires sont chacun `< 1 ms` par pas (ensemble `< 1.1 %` du pas en serie). Le verrou de
-performance est, sans ambiguite, le **solve elliptique** (`GeometricMG::solve()`, appele a
-chaque pas). Deux faits aggravants mesures : le Poisson NE PROFITE PAS du parallelisme
-on-node (il REGRESSE -- le V-cycle descend jusqu'a des grilles minuscules 2x2, 4x4, et le
-cout de lancement de chaque kernel ecrase le calcul utile), et sur GPU la LATENCE de
+performance est, sans ambiguite, le solve elliptique (`GeometricMG::solve()`, appele a
+chaque pas). Deux faits aggravants mesures : le Poisson ne profite pas du parallelisme
+on-node (il regresse, le V-cycle descend jusqu'a des grilles minuscules 2x2, 4x4, et le
+cout de lancement de chaque kernel ecrase le calcul utile), et sur GPU la latence de
 lancement domine (ni un GPU plus large ni des GPU en plus n'aident, d'autant que le layout
 `System` est mono-box).
 
 > **Regle du proprietaire.** Aucun refactor de performance sans profil montrant le goulot.
-> `PROFILE_RESULTS.md` RAPPORTE les mesures et pointe une cible (le dispatch du V-cycle sur
-> les niveaux grossiers) ; il n'applique AUCUNE optimisation.
+> `PROFILE_RESULTS.md` rapporte les mesures et pointe une cible (le dispatch du V-cycle sur
+> les niveaux grossiers) ; il n'applique aucune optimisation.
 
 ### Pour aller plus loin
 
 - Profil complet (tableau phase x backend, plateformes exactes M-series + GH200, pistes a
   investiguer) : [PROFILE_RESULTS.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/PROFILE_RESULTS.md).
-- `docs/PERFORMANCE.md` existe mais porte des MESURES HISTORIQUES (anciens pilotes
+- `docs/PERFORMANCE.md` existe mais porte des mesures historiques (anciens pilotes
   applicatifs, M1) : ne pas le lire comme la perf actuelle.

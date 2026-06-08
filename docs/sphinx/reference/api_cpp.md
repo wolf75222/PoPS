@@ -14,7 +14,7 @@ doxygen docs/Doxyfile
 ```
 
 La bibliotheque est header-only (templates et concepts C++23) : il n'y a pas d'objet `.a`/`.so`
-a lier pour le coeur, on inclut les en-tetes. Les trois axes de conception sont ORTHOGONAUX
+a lier pour le coeur, on inclut les en-tetes. Les trois axes de conception sont orthogonaux
 (modele physique x flux numerique x solveur elliptique), composes par un seam de parallelisme
 unique (`for_each_cell` : serie / OpenMP / Kokkos ; `comm.hpp` : collectives MPI). Voir
 [ARCHITECTURE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ARCHITECTURE.md) et [CHOICES.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/CHOICES.md).
