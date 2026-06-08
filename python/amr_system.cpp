@@ -98,6 +98,11 @@ struct AmrSystem::Impl {
     // Densite initiale du bloc (composante 0), n*n row-major ; ciblee par set_density(name, rho).
     bool has_density = false;
     std::vector<double> density;
+    // Etat conservatif initial COMPLET (toutes les composantes), ncomp*n*n composante-majeur ; pose
+    // par set_conservative_state(name, U). Prioritaire sur density au seed (cf. make_build_params /
+    // build_amr_compiled). MONO-BLOC uniquement (build_multi leve si has_state).
+    bool has_state = false;
+    std::vector<double> state;
   };
 
   std::vector<BlockSpec> blocks;
@@ -183,6 +188,8 @@ struct AmrSystem::Impl {
     bp.wall = wall_active();
     bp.has_density = b.has_density;
     bp.density = b.density;
+    bp.has_state = b.has_state;     // etat conservatif complet (set_conservative_state), prioritaire au seed
+    bp.state = b.state;
     bp.distribute_coarse = cfg.distribute_coarse;
     bp.coarse_max_grid = cfg.coarse_max_grid;
     return bp;
@@ -208,6 +215,16 @@ struct AmrSystem::Impl {
   // block_builder, qui capture le Model/Limiter/Flux concret). Le Poisson grossier est SOMME et
   // CO-LOCALISE (Sum_b elliptic_rhs_b(U_b) lu aux memes cellules du grossier partage).
   void build_multi() {
+    // set_conservative_state n'est cable que sur le chemin MONO-BLOC (build_amr_compiled / AmrCouplerMP) :
+    // le seed multi-blocs (compiled_block_builder / dispatch_amr_block sur le layout PARTAGE) ne
+    // transporte pas encore l'etat complet. Plutot que de retomber SILENCIEUSEMENT sur la densite
+    // (qty de mvt = 0, resultat faux), on leve une erreur CLAIRE. Threading multi-blocs = suivi distinct.
+    for (const auto& b : blocks)
+      if (b.has_state)
+        throw std::runtime_error(
+            "AmrSystem::set_conservative_state n'est supporte qu'en MONO-BLOC (1 add_block) ; "
+            "ce systeme a >= 2 blocs. Utiliser set_density par bloc, ou poser l'etat complet sur le "
+            "chemin multi-blocs (non cable). Bloc concerne : '" + b.name + "'.");
     AmrBuildParams bp = make_build_params();  // geometrie + poisson_bc + wall + ownership communs
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
     std::vector<adc::AmrRuntimeBlock> rblocks;
@@ -587,6 +604,37 @@ void AmrSystem::set_density(const std::string& name, const std::vector<double>& 
   }
   p_->blocks[idx].density = rho;
   p_->blocks[idx].has_density = true;
+}
+
+void AmrSystem::set_conservative_state(const std::string& name, const std::vector<double>& U) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_conservative_state : le systeme est deja construit "
+                             "(poser l'etat avant tout step/mass/density)");
+  if (p_->blocks.empty())
+    throw std::runtime_error("AmrSystem::set_conservative_state : appeler add_block d'abord");
+  // Garde de taille AMONT : etat NON vide et multiple de n*n. La taille exacte ncomp*n*n est verifiee
+  // au build (coupler_write_coarse_state), seul endroit ou ncomp == Model::n_vars est connu -- meme
+  // report que la garde n*n de set_density. On rejette explicitement l'etat VIDE (0 % nn == 0 sinon
+  // poserait has_state=true avec un etat vide, qui ne leverait que profond dans le 1er step).
+  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.n);
+  if (U.empty())
+    throw std::runtime_error("AmrSystem::set_conservative_state : etat vide (attendu ncomp*n*n)");
+  if (U.size() % nn != 0)
+    throw std::runtime_error("AmrSystem::set_conservative_state : taille de l'etat (" +
+                             std::to_string(U.size()) + ") non multiple de n*n (" +
+                             std::to_string(nn) + ") ; attendu ncomp*n*n composante-majeur");
+  // MONO-BLOC : nom cosmetique. MULTI-BLOCS : le nom indexe le bloc (mais build_multi levera ensuite,
+  // l'etat complet n'etant cable que sur le chemin mono-bloc).
+  std::size_t idx = 0;
+  if (p_->blocks.size() >= 2) {
+    const int i = p_->block_index(name);
+    if (i < 0)
+      throw std::runtime_error("AmrSystem::set_conservative_state : aucun bloc nomme '" + name +
+                               "' (multi-blocs : le nom indexe le bloc)");
+    idx = static_cast<std::size_t>(i);
+  }
+  p_->blocks[idx].state = U;
+  p_->blocks[idx].has_state = true;
 }
 
 void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,

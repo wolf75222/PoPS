@@ -160,6 +160,15 @@ add_test(NAME test_dsl_production_amr
 set_tests_properties(test_dsl_production_amr PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# AmrSystem::set_conservative_state (etat conservatif initial COMPLET sur AMR, mono-bloc) : demarrer
+# l'AMR depuis l'etat de derive (rho, rho*u, rho*v) au lieu de m=0. Gardes (ndim/vide/taille/multi-bloc),
+# NO-DEFAULT-CHANGE bit-identique au seed densite, conservation de masse, et la qty de mvt advecte la
+# densite. La partie parite s'auto-saute sans compilateur ; les gardes tournent toujours.
+add_test(NAME test_amr_conservative_state
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_conservative_state.py)
+set_tests_properties(test_amr_conservative_state PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # Choix de reconstruction (ordre) du bloc dynamique : recon none/minmod/vanleer == reference MUSCL numpy.
 add_test(NAME test_dsl_recon
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_recon.py)

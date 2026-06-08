@@ -88,6 +88,12 @@ struct AmrBuildParams {
   std::vector<double> density;        ///< densite initiale grossiere (composante 0), n*n
   bool distribute_coarse = false;     ///< grossier multi-box reparti (strong-scaling AMR)
   int coarse_max_grid = 0;            ///< taille de tuile du grossier reparti (0 => n/2)
+  // Etat conservatif initial COMPLET (toutes les composantes), prioritaire sur `density` quand
+  // has_state. AJOUTE EN FIN DE STRUCT : les offsets des champs precedents sont inchanges, donc un
+  // loader .so mono-bloc anterieur (qui COPIE bp dans son propre layout puis ne lit pas ces champs)
+  // retombe SILENCIEUSEMENT sur le chemin densite historique -- pas de corruption (append-only).
+  bool has_state = false;
+  std::vector<double> state;          ///< ncomp*n*n, composante-majeur c*n*n + j*n + i ; ncomp == Model::n_vars
 };
 
 /// Fermetures type-erased d'un bloc AMR compile, produites par amr_dsl_block::build_amr_compiled et
@@ -262,6 +268,18 @@ class AmrSystem {
   /// Fixe la densite initiale sur le niveau grossier (composante 0), n*n row-major.
   /// @param name etiquette cosmetique (AMR mono-bloc : la densite vise l'unique bloc).
   void set_density(const std::string& name, const std::vector<double>& rho);
+
+  /// Fixe l'ETAT CONSERVATIF INITIAL COMPLET (toutes les composantes) sur le niveau grossier, puis
+  /// le prolonge aux niveaux fins au build (injection constante, comme la densite). @p U est plat
+  /// composante-majeur (c*n*n + j*n + i) de taille ncomp*n*n ; ncomp == n_vars du modele (verifie au
+  /// build, ou seul Model::n_vars est connu). Prioritaire sur set_density : permet de demarrer l'AMR
+  /// depuis l'etat de derive du papier (rho, rho*u, rho*v) au lieu de m=0 (Probleme 2). La conversion
+  /// primitif -> conservatif (rho_u = rho*u) est faite cote Python (l'appelant fournit deja le
+  /// conservatif). MONO-BLOC uniquement : un systeme multi-blocs (>= 2 add_block) leve au build (le
+  /// threading de l'etat sur le chemin AmrRuntime multi-blocs est un suivi distinct).
+  /// @throws std::runtime_error si le systeme est deja construit, si U est vide, ou si sa taille
+  ///         n'est pas un multiple de n*n.
+  void set_conservative_state(const std::string& name, const std::vector<double>& U);
 
   /// Enregistre une SOURCE COUPLEE inter-especes (adc.dsl.CoupledSource compilee, ABI plate bytecode
   /// P5), pendant raffine de System::add_coupled_source mais sur la hierarchie AMR PARTAGEE. La source

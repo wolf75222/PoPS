@@ -132,6 +132,33 @@ inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, in
   }
 }
 
+// Ecrit l'ETAT CONSERVATIF INITIAL COMPLET (toutes les composantes) sur le niveau grossier depuis un
+// champ plat @p state composante-majeur (c*n*n + j*n + i), de taille ncomp*n*n. Pendant exact de
+// coupler_write_coarse pour le seed multi-composantes : meme parcours de boites (mono-box replique
+// ET multi-box reparti, indices GLOBAUX (i,j)), seul l'ecriture par cellule differe -- ici on copie
+// les ncomp composantes positionnellement (pas de densite/qty-mvt/energie cables ; l'appelant fournit
+// deja le conservatif, p.ex. [rho, rho*u, rho*v]). gamma omis (pas d'energie deduite). Index calcule
+// en std::size_t (pas d'overflow int a grand n, contrairement a la validation int de
+// coupler_write_coarse). Sert au seed de derive (set_conservative_state, Probleme 2 hoffart).
+inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& state, int n,
+                                       int ncomp) {
+  const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
+  if (state.size() != nn * static_cast<std::size_t>(ncomp))
+    throw std::runtime_error("AMR coupler : etat initial de taille != ncomp*n*n (etat conservatif "
+                             "complet ; ncomp == n_vars du modele)");
+  device_fence();
+  for (int li = 0; li < U.local_size(); ++li) {
+    Array4 u = U.fab(li).array();
+    const Box2D v = U.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        for (int c = 0; c < ncomp; ++c)
+          u(i, j, c) = state[static_cast<std::size_t>(c) * nn +
+                             static_cast<std::size_t>(j) * static_cast<std::size_t>(n) +
+                             static_cast<std::size_t>(i)];
+  }
+}
+
 // Lit la densite grossiere (composante 0) en un champ n*n row-major GLOBAL, MULTI-BOX et
 // DISTRIBUTION-AWARE. Chaque rang ecrit ses cellules locales dans un buffer n*n initialise a 0
 // puis, si reparti, all_reduce_sum_inplace recompose le champ complet sur TOUS les rangs (les

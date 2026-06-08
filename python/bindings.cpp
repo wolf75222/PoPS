@@ -316,6 +316,23 @@ PYBIND11_MODULE(_adc, m) {
              s.set_density(name, flat(arr));
            },
            py::arg("name"), py::arg("rho"))
+      // Etat conservatif initial COMPLET (ncomp, n, n) -> demarre l'AMR depuis l'etat de derive du
+      // papier (rho, rho*u, rho*v) au lieu de m=0. Garde ndim==3 EXPLICITE : flat() applatit
+      // n'importe quel tableau C-contigu, donc une densite 2D (n, n) passee par erreur deviendrait un
+      // etat a 1 composante (compo 0 = densite, qty de mvt laissee a 0) -- une mascarade de densite
+      // silencieuse a la mauvaise physique. On exige (ncomp, n, n). flat() applatit ensuite en
+      // composante-majeur c*n*n + j*n + i (meme convention que to_3d / set_state).
+      .def("set_conservative_state",
+           [](AmrSystem& s, const std::string& name,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             if (arr.ndim() != 3)
+               throw std::runtime_error(
+                   "AmrSystem.set_conservative_state : etat attendu de forme (ncomp, n, n) ; recu "
+                   "un tableau " + std::to_string(arr.ndim()) + "D (une densite 2D ? utiliser "
+                   "set_density)");
+             s.set_conservative_state(name, flat(arr));
+           },
+           py::arg("name"), py::arg("U"))
       // Source COUPLEE inter-especes (adc.dsl.CoupledSource compilee, P5 bytecode), MULTI-BLOCS sur la
       // hierarchie AMR PARTAGEE : appliquee apres le transport a chaque macro-pas, par splitting
       // explicite, niveau par niveau + cascade fin -> grossier (cellules couvertes coherentes). MEME

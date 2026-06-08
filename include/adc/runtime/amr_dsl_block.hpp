@@ -87,7 +87,14 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
 
   auto cpl = std::make_shared<Coupler>(model, g, bac, bp.poisson_bc, std::move(levels), bp.wall,
                                        !bp.distribute_coarse);
-  if (bp.has_density) coupler_write_coarse(cpl->coarse(), bp.density, bp.n, nc, bp.gamma);
+  // Seed du grossier : etat conservatif COMPLET (prioritaire, set_conservative_state) sinon densite
+  // seule (historique). coupler_inject_coarse_to_fine_mb prolonge TOUTES les composantes (boucle
+  // k<nc), donc la qty de mouvement du seed se propage librement aux niveaux fins -- aucun changement
+  // de prolongation. has_state==false -> chemin densite bit-identique (NO-DEFAULT-CHANGE).
+  if (bp.has_state)
+    coupler_write_coarse_state(cpl->coarse(), bp.state, bp.n, nc);
+  else if (bp.has_density)
+    coupler_write_coarse(cpl->coarse(), bp.density, bp.n, nc, bp.gamma);
   auto& Lv = cpl->levels();
   for (std::size_t k = 1; k < Lv.size(); ++k)
     coupler_inject_coarse_to_fine_mb(cpl->coarse(), Lv[k].U, !bp.distribute_coarse);
