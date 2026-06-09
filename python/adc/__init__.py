@@ -1264,15 +1264,15 @@ class AmrSystem:
     def add_block(self, name, model, spatial=None, time=None):
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        # adc.Split (etage source condense par Schur) n'a PAS de pendant AMR : set_source_stage n'est
-        # cable que sur System (pas sur AmrSystem cote bindings). Split exposant .kind/.substeps, il
-        # passerait ici comme un transport seul et la source condensee serait PERDUE en silence. On le
-        # rejette explicitement (meme garde que System.add_block).
+        # adc.Split / adc.Strang (etage source condense par Schur) n'est cable que par add_equation (qui
+        # branche set_source_stage + set_time_scheme APRES l'ajout du bloc) : on le rejette ICI plutot que
+        # de jouer le seul transport et de PERDRE la source en silence (meme garde que System.add_block).
         if isinstance(time, Split):
             raise TypeError(
-                "AmrSystem.add_block : adc.Split (etage source condense par Schur) n'est pas supporte "
-                "sur AMR (AMR n'a pas de pendant de Schur-splitting ; set_source_stage n'est cable que "
-                "sur System). Utiliser un System (non raffine) pour l'etage source condense.")
+                "AmrSystem.add_block : adc.Split / adc.Strang (etage source condense par Schur) n'est "
+                "supporte que par add_equation (qui branche l'etage source) ; utiliser "
+                "add_equation(..., time=adc.Strang(hyperbolic=adc.Explicit(...), "
+                "source=adc.CondensedSchur(...))).")
         # On thread substeps/stride (multirate, capstone iv) ET le masque IMEX partiel implicit_vars /
         # implicit_roles (capstone vii : adc.IMEX(implicit_vars=...)). Resolus / valides cote C++
         # (AmrSystem::add_block) contre les noms/roles du bloc : vides -> backward-Euler plein, et
@@ -1316,15 +1316,21 @@ class AmrSystem:
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
 
-        # adc.Split (etage source condense par Schur) n'a PAS de pendant AMR : set_source_stage n'est
-        # cable que sur System (pas sur AmrSystem cote bindings). Split exposant .kind/.substeps, il
-        # passerait ici comme un transport seul et la source condensee serait PERDUE en silence. On le
-        # rejette explicitement (meme garde que System.add_block, avant tout aiguillage).
+        # --- adc.Split (Lie) / adc.Strang (2e ordre) : CHEMIN amr-schur (etage source condense GLOBAL) --
+        # Pendant AMR de System.add_equation (cf. ~ligne 925) : on ajoute d'abord le bloc avec son seul
+        # etage HYPERBOLIQUE explicite (transport SOURCE-FREE ; le modele doit porter une brique source
+        # NoSource), PUIS on branche l'etage SOURCE condense (set_source_stage, C++) et la politique de
+        # splitting (set_time_scheme : "lie" pour Split, "strang" pour Strang). L'etage condense est
+        # GLOBAL (assemble/resout l'operateur electrostatique/Lorentz sur le grossier, en composant
+        # l'etage uniforme), par opposition a la source IMEX LOCALE cellule par cellule de time=adc.IMEX.
+        # PREREQUIS : appeler sim.set_magnetic_field(B_z) AVANT le 1er step (le terme de Lorentz lit
+        # Omega = B_z) ; sinon erreur claire au build. MONO-BLOC uniquement (set_source_stage leve sinon).
         if isinstance(time, Split):
-            raise TypeError(
-                "AmrSystem.add_equation : adc.Split (etage source condense par Schur) n'est pas "
-                "supporte sur AMR (AMR n'a pas de pendant de Schur-splitting ; set_source_stage n'est "
-                "cable que sur System). Utiliser un System (non raffine) pour l'etage source condense.")
+            self.add_equation(name, model, spatial=spatial, time=time.hyperbolic, substeps=substeps)
+            src = time.source
+            self._s.set_source_stage(name, src.kind, src.theta, src.alpha)
+            self._s.set_time_scheme(time.scheme)  # "lie" (Split) ou "strang" (Strang)
+            return
 
         nsub = substeps if substeps is not None else getattr(time, "substeps", 1)
 

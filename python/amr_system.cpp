@@ -103,6 +103,11 @@ struct AmrSystem::Impl {
     // build_amr_compiled). MONO-BLOC uniquement (build_multi leve si has_state).
     bool has_state = false;
     std::vector<double> state;
+    // ETAGE SOURCE condense par Schur (chemin amr-schur, pose par set_source_stage). schur==false ->
+    // chemin explicit/imex inchange. theta/alpha figes a l'appel. Le splitting (lie/strang) et le champ
+    // B_z sont PORTES PAR LE SYSTEME (Impl), pas le bloc : un seul etage condense en mono-bloc.
+    bool schur = false;
+    double schur_theta = 0.5, schur_alpha = 1.0;
   };
 
   std::vector<BlockSpec> blocks;
@@ -125,6 +130,12 @@ struct AmrSystem::Impl {
   // bit-identique). > 0 => en multi-blocs + regrid_every > 0, build_multi pose le predicat phi du moteur
   // (set_phi_tag_predicate) : raffine la ou |grad phi| (composantes 1,2 de l'aux partage) depasse ce seuil.
   double phi_grad_threshold = 0.0;
+
+  // ETAGE SOURCE condense par Schur (chemin amr-schur) : politique de splitting (Lie/Strang) + champ
+  // B_z, PORTES PAR LE SYSTEME (mono-bloc : un seul etage condense, B_z partage). bz_field est exige
+  // des qu'un bloc porte schur==true (verifie au build : amr_write_coarse_bz leve si taille != n*n).
+  bool schur_strang = false;       // false : Lie (H(dt) S(dt)) ; true : Strang (H(dt/2) S(dt) H(dt/2))
+  std::vector<double> bz_field;    // B_z(x,y) grossier, n*n row-major (set_magnetic_field)
 
   std::string p_rhs = "charge_density", p_solver = "geometric_mg", p_bc = "auto",
               p_wall = "none";
@@ -192,6 +203,12 @@ struct AmrSystem::Impl {
     bp.state = b.state;
     bp.distribute_coarse = cfg.distribute_coarse;
     bp.coarse_max_grid = cfg.coarse_max_grid;
+    // ETAGE SOURCE condense par Schur (amr-schur) : theta/alpha du bloc + splitting/B_z du systeme.
+    bp.schur = b.schur;
+    bp.schur_theta = b.schur_theta;
+    bp.schur_alpha = b.schur_alpha;
+    bp.schur_strang = schur_strang;
+    bp.bz_field = bz_field;
     return bp;
   }
 
@@ -635,6 +652,67 @@ void AmrSystem::set_conservative_state(const std::string& name, const std::vecto
   }
   p_->blocks[idx].state = U;
   p_->blocks[idx].has_state = true;
+}
+
+void AmrSystem::set_magnetic_field(const std::vector<double>& bz) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_magnetic_field : le systeme est deja construit "
+                             "(poser B_z avant tout step)");
+  const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.n);
+  if (bz.size() != nn)
+    throw std::runtime_error("AmrSystem::set_magnetic_field : B_z de taille " +
+                             std::to_string(bz.size()) + " (attendu n*n = " + std::to_string(nn) +
+                             ", grossier row-major)");
+  p_->bz_field = bz;
+}
+
+void AmrSystem::set_source_stage(const std::string& name, const std::string& kind, double theta,
+                                 double alpha) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_source_stage : le systeme est deja construit "
+                             "(configurer l'etage source avant tout step)");
+  // SEUL kind cable : ElectrostaticLorentzCondensation (cf. CondensedSchurSourceStepper), comme System.
+  if (kind != "electrostatic_lorentz")
+    throw std::runtime_error("AmrSystem::set_source_stage : kind '" + kind +
+                             "' inconnu (seul 'electrostatic_lorentz' est cable)");
+  if (!(theta > 0.0 && theta <= 1.0))
+    throw std::runtime_error("AmrSystem::set_source_stage : theta doit etre dans (0, 1] (recu " +
+                             std::to_string(theta) + ")");
+  // MONO-BLOC uniquement : l'etage condense AMR est cable sur le coupleur mono-bloc (AmrCouplerMP). Le
+  // chemin multi-blocs (AmrRuntime) ne le porte pas encore -> erreur claire plutot qu'un no-op silencieux.
+  if (p_->multi_block())
+    throw std::runtime_error("AmrSystem::set_source_stage : l'etage source condense par Schur n'est "
+                             "cable qu'en MONO-BLOC (1 add_block) ; ce systeme a >= 2 blocs.");
+  const int idx = p_->block_index(name);
+  if (idx < 0)
+    throw std::runtime_error("AmrSystem::set_source_stage : aucun bloc nomme '" + name + "'");
+  Impl::BlockSpec& b = p_->blocks[static_cast<std::size_t>(idx)];
+  // L'etage condense REMPLACE la source : il exige un transport SOURCE-FREE (explicite, modele NoSource),
+  // pas l'IMEX local. Le demander sur un bloc imex est une ERREUR (les deux sources se cumuleraient).
+  if (b.imex)
+    throw std::runtime_error("AmrSystem::set_source_stage : l'etage source condense exige un transport "
+                             "EXPLICITE source-free (le bloc '" + name + "' est time='imex' ; la source "
+                             "IMEX locale et l'etage condense se cumuleraient). Ajouter le bloc en "
+                             "time='explicit' (modele a brique source NoSource).");
+  // Les roles Density/MomentumX/MomentumY et la presence de B_z sont valides AU BUILD (la ou le type
+  // Model concret -- donc cons_vars -- est connu) : le ctor de AmrCondensedSchurSourceStepper leve si un
+  // role manque, amr_write_coarse_bz leve si B_z est absent. Erreurs claires, comme System.
+  b.schur = true;
+  b.schur_theta = theta;
+  b.schur_alpha = alpha;
+}
+
+void AmrSystem::set_time_scheme(const std::string& scheme) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_time_scheme : le systeme est deja construit "
+                             "(choisir le splitting avant tout step)");
+  if (scheme == "lie")
+    p_->schur_strang = false;
+  else if (scheme == "strang")
+    p_->schur_strang = true;
+  else
+    throw std::runtime_error("AmrSystem::set_time_scheme : schema '" + scheme +
+                             "' inconnu (attendu 'lie' ou 'strang')");
 }
 
 void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,

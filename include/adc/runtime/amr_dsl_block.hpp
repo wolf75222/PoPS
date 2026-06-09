@@ -1,5 +1,6 @@
 #pragma once
 
+#include <adc/coupling/amr_condensed_schur_source_stepper.hpp>  // etage source condense GLOBAL (amr-schur)
 #include <adc/coupling/amr_coupler_mp.hpp>  // AmrCouplerMP, AmrLevelMP
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
@@ -54,6 +55,39 @@ struct AmrDiscLF {
 
 namespace detail {
 
+/// Remplit le champ B_z GROSSIER (composante 0, n*n row-major en indices GLOBAUX) depuis @p field.
+/// Pendant scalaire de coupler_write_coarse (parcours de boites identique, mono-box replique ET
+/// multi-box reparti) : B_z est exige par l'etage source condense par Schur (terme de Lorentz).
+inline void amr_write_coarse_bz(MultiFab& bz, const std::vector<double>& field, int n) {
+  if (static_cast<int>(field.size()) != n * n)
+    throw std::runtime_error(
+        "AMR amr-schur : champ B_z de taille != n*n (appeler set_magnetic_field avant le 1er pas)");
+  device_fence();
+  for (int li = 0; li < bz.local_size(); ++li) {
+    Array4 b = bz.fab(li).array();
+    const Box2D v = bz.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        b(i, j, 0) = field[static_cast<std::size_t>(j) * n + i];
+  }
+}
+
+/// Un ETAGE SOURCE condense GLOBAL sur la hierarchie du coupleur mono-bloc. Seed le warm-start phi^n
+/// (= aux0 composante 0, soit le solve Poisson grossier du dernier update()), puis joue l'etage
+/// condense (AmrCondensedSchurSourceStepper) qui assemble/resout son PROPRE operateur condense sur le
+/// grossier et reconstruit la vitesse (rho gelee, mom/E mis a jour). En mono-niveau (aucun patch fin)
+/// c'est bit-pour-bit l'etage uniforme #126.
+template <class Coupler>
+void amr_schur_source(Coupler& cpl, AmrCondensedSchurSourceStepper& schur, MultiFab& bz_coarse,
+                      MultiFab& phi_coarse, double theta, double dt) {
+  device_fence();
+  for (int li = 0; li < phi_coarse.local_size(); ++li)
+    for_each_cell(phi_coarse.box(li), CopyComp0Kernel{phi_coarse.fab(li).array(),
+                                                      cpl.aux0().fab(li).const_array()});
+  schur.step(cpl.levels(), phi_coarse, bz_coarse, /*c_bz=*/0, static_cast<Real>(theta),
+             static_cast<Real>(dt));
+}
+
 /// Construit le coupleur AMR pour un Model compose + (Limiter, Flux) concrets et remplit les hooks
 /// type-erased. Deux niveaux : grossier + un patch fin seed central, remodele par le regrid. C'est le
 /// pendant header de AmrSystem::Impl::build, instancie depuis la TU appelante sur le type Model. Les
@@ -76,14 +110,21 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   const int ng = Limiter::n_ghost;  // stencil du limiteur (1 NoSlope, 2 MUSCL) : parite du schema
   MultiFab Uc(bac, dm, nc, ng);
   Uc.set_val(Real(0));
-  const int I0 = bp.n / 4, I1 = 3 * bp.n / 4 - 1, J0 = bp.n / 4, J1 = 3 * bp.n / 4 - 1;
-  Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
-  BoxArray baf(std::vector<Box2D>{fb});
-  MultiFab Uf(baf, dm, nc, ng);
-  Uf.set_val(Real(0));
   std::vector<AmrLevelMP> levels;
   levels.push_back({std::move(Uc), nullptr, dxc, dxc});
-  levels.push_back({std::move(Uf), nullptr, dxf, dxf});
+  // Niveau 1 (patch fin seed central, remodele par le regrid) : chemin explicit/imex SEULEMENT. Le
+  // chemin amr-schur (Etape 2/3) tourne MONO-NIVEAU -- l'etage source condense ne porte pas encore le
+  // multi-niveau (cf. AmrCondensedSchurSourceStepper, garde sur le nombre de patchs fins). On n'alloue
+  // donc PAS de niveau fin pour bp.schur (sinon le seed declencherait cette garde des le 1er pas). Le
+  // multi-niveau amr-schur (reconstruction fine + cascade + Schur/Poisson composite) est l'Etape 4.
+  if (!bp.schur) {
+    const int I0 = bp.n / 4, I1 = 3 * bp.n / 4 - 1, J0 = bp.n / 4, J1 = 3 * bp.n / 4 - 1;
+    Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
+    BoxArray baf(std::vector<Box2D>{fb});
+    MultiFab Uf(baf, dm, nc, ng);
+    Uf.set_val(Real(0));
+    levels.push_back({std::move(Uf), nullptr, dxf, dxf});
+  }
 
   auto cpl = std::make_shared<Coupler>(model, g, bac, bp.poisson_bc, std::move(levels), bp.wall,
                                        !bp.distribute_coarse);
@@ -101,7 +142,7 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
 
   const double thr = bp.refine_threshold;
   auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
-  cpl->regrid(crit);
+  if (cpl->levels().size() > 1) cpl->regrid(crit);  // pas de regrid sur une hierarchie mono-niveau (amr-schur)
   cpl->update();
 
   AmrCompiledHooks h;
@@ -111,12 +152,66 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   const bool imex = bp.imex;  // source raide implicite (backward_euler) plutot qu'Euler avant
   const int regrid_every = bp.regrid_every;
   auto step_state = std::make_shared<int>(0);  // compteur de pas partage par la fermeture
-  h.step = [cpl, crit, sub, rprim, imex, regrid_every, step_state](double dt) {
-    if (regrid_every > 0 && *step_state > 0 && *step_state % regrid_every == 0) cpl->regrid(crit);
-    const double h2 = dt / sub;
-    for (int s = 0; s < sub; ++s) cpl->template step<AmrDiscLF<Limiter, Flux>>(h2, rprim, imex);
-    ++*step_state;
-  };
+  if (bp.schur) {
+    // CHEMIN amr-schur : etage source condense GLOBAL (electrostatique/Lorentz) au lieu de la source
+    // explicit/imex LOCALE. L'etage est construit sur le GROSSIER en COMPOSANT l'etage uniforme #126
+    // (roles Density/MomentumX/MomentumY du Model -> erreur claire ICI si absents). B_z grossier exige
+    // (set_magnetic_field). Le modele doit etre SOURCE-FREE (brique source NoSource) : advance_transport
+    // ne joue alors AUCUNE source (la source est l'etage condense seul), miroir du chemin uniforme ou le
+    // bloc est ajoute avec son seul transport (time.hyperbolic) + l'etage source condense separe.
+    //
+    // ⚠️ OPTION A = INTERMEDIAIRE. L'etage condense resout l'elliptique sur le GROSSIER (comme le Poisson
+    // AMR compute_aux/solve_fields), puis le grad phi est injecte (constant par morceaux) aux fins : les
+    // patchs fins raffinent le TRANSPORT mais PAS le couplage elliptique. Pour une reproduction papier/AMR
+    // FIDELE il faudra un Schur/Poisson COMPOSITE multi-niveau (elliptique condense resolu a la finesse
+    // des patchs, MG composite croisant les niveaux) -- infrastructure absente aujourd'hui (GeometricMG
+    // coarsen UNE grille, != hierarchie AMR). C'est le verrou de fidelite, a faire APRES la parite mono-niveau.
+    auto schur = std::make_shared<AmrCondensedSchurSourceStepper>(
+        Model::conservative_vars(), g, bac, bp.poisson_bc, static_cast<Real>(bp.schur_alpha));
+    auto bz_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
+    amr_write_coarse_bz(*bz_coarse, bp.bz_field, bp.n);
+    auto phi_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
+    phi_coarse->set_val(Real(0));
+    const double theta = bp.schur_theta;
+    const bool strang = bp.schur_strang;
+    h.step = [cpl, crit, sub, rprim, regrid_every, step_state, schur, bz_coarse, phi_coarse, theta,
+              strang](double dt) {
+      // amr-schur Etape 2/3 : hierarchie MONO-NIVEAU (l'etage condense ne porte pas le multi-niveau).
+      // On ne regrille donc PAS (un regrid creerait un patch fin -> garde multi-niveau de l'etage). Le
+      // regrid amr-schur viendra avec le Schur/Poisson composite (Etape 4). cf. levels().size() > 1.
+      if (regrid_every > 0 && *step_state > 0 && *step_state % regrid_every == 0 &&
+          cpl->levels().size() > 1)
+        cpl->regrid(crit);
+      const double h2 = dt / sub;
+      for (int s = 0; s < sub; ++s) {
+        if (strang) {
+          // STRANG (2e ordre) : H(dt/2) ; S(dt) ; H(dt/2), avec update() (= sync_down + Poisson
+          // grossier + grad inject, le pendant AMR de solve_fields) RE-RESOLU AVANT chaque etage qui
+          // consomme phi -- exactement SystemStepper::step_strang (3 solves : tete, pre-source, post-source).
+          cpl->update();
+          cpl->template advance_transport<AmrDiscLF<Limiter, Flux>>(Real(0.5) * h2, rprim);
+          cpl->update();
+          amr_schur_source(*cpl, *schur, *bz_coarse, *phi_coarse, theta, h2);
+          cpl->update();
+          cpl->template advance_transport<AmrDiscLF<Limiter, Flux>>(Real(0.5) * h2, rprim);
+        } else {
+          // LIE (Godunov, 1er ordre) : H(dt) ; S(dt). Un seul update() en tete (l'etage source lit le
+          // phi de tete), miroir de SystemStepper::step Lie (un seul solve_fields, transport, source).
+          cpl->update();
+          cpl->template advance_transport<AmrDiscLF<Limiter, Flux>>(h2, rprim);
+          amr_schur_source(*cpl, *schur, *bz_coarse, *phi_coarse, theta, h2);
+        }
+      }
+      ++*step_state;
+    };
+  } else {
+    h.step = [cpl, crit, sub, rprim, imex, regrid_every, step_state](double dt) {
+      if (regrid_every > 0 && *step_state > 0 && *step_state % regrid_every == 0) cpl->regrid(crit);
+      const double h2 = dt / sub;
+      for (int s = 0; s < sub; ++s) cpl->template step<AmrDiscLF<Limiter, Flux>>(h2, rprim, imex);
+      ++*step_state;
+    };
+  }
   h.max_speed = [cpl] { return static_cast<double>(cpl->max_wave_speed()); };
   h.mass = [cpl] { return static_cast<double>(cpl->mass()); };
   h.n_patches = [cpl] {

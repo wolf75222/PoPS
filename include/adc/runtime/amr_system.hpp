@@ -94,6 +94,14 @@ struct AmrBuildParams {
   // retombe SILENCIEUSEMENT sur le chemin densite historique -- pas de corruption (append-only).
   bool has_state = false;
   std::vector<double> state;          ///< ncomp*n*n, composante-majeur c*n*n + j*n + i ; ncomp == Model::n_vars
+  // ETAGE SOURCE condense par Schur (chemin amr-schur, pendant de System::set_source_stage). AJOUTE EN
+  // FIN DE STRUCT (append-only, meme raison que has_state : un loader .so anterieur ne lit pas ces
+  // champs et retombe sur le chemin explicite/imex historique). schur==false -> chemin inchange.
+  bool schur = false;                 ///< true : etage source condense GLOBAL (au lieu d'explicit/imex local)
+  double schur_theta = 0.5;           ///< theta-schema de l'etage condense (0.5 = Crank-Nicolson)
+  double schur_alpha = 1.0;           ///< constante de couplage electrostatique de l'etage condense
+  bool schur_strang = false;          ///< true : splitting Strang H(dt/2) S(dt) H(dt/2) ; false : Lie H(dt) S(dt)
+  std::vector<double> bz_field;       ///< champ B_z(x,y) du grossier, n*n row-major (exige par l'etage condense)
 };
 
 /// Fermetures type-erased d'un bloc AMR compile, produites par amr_dsl_block::build_amr_compiled et
@@ -280,6 +288,31 @@ class AmrSystem {
   /// @throws std::runtime_error si le systeme est deja construit, si U est vide, ou si sa taille
   ///         n'est pas un multiple de n*n.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
+
+  /// Fixe le champ magnetique B_z(x, y) du niveau grossier (n*n row-major), requis par l'etage source
+  /// condense par Schur (terme de Lorentz Omega = B_z). Pendant AMR de System::set_magnetic_field.
+  /// MONO-BLOC uniquement (l'etage condense AMR est cable sur le coupleur mono-bloc AmrCouplerMP).
+  /// @throws std::runtime_error si le systeme est deja construit ou si bz n'est pas de taille n*n.
+  void set_magnetic_field(const std::vector<double>& bz);
+
+  /// Active l'ETAGE SOURCE condense par Schur (chemin amr-schur) sur le bloc @p name. Pendant AMR de
+  /// System::set_source_stage : assemble et resout l'operateur condense electrostatique/Lorentz GLOBAL
+  /// (sur le grossier, en composant l'etage uniforme #126), au lieu de la source IMEX LOCALE cellule
+  /// par cellule. C'est l'OPT-IN du chemin amr-schur, l'equivalent raffine du
+  /// time=Strang(Explicit(ssprk3), CondensedSchur(theta, alpha)) uniforme. Le transport du bloc doit
+  /// etre SOURCE-FREE (modele a brique source NoSource) : la source est jouee separement par l'etage.
+  /// @param kind  seul "electrostatic_lorentz" cable (cf. CondensedSchurSourceStepper).
+  /// @param theta theta-schema dans (0, 1] (0.5 = Crank-Nicolson).
+  /// @param alpha constante de couplage electrostatique.
+  /// @throws std::runtime_error si le systeme est deja construit, en MULTI-BLOCS, si kind/theta sont
+  ///         hors domaine, ou (au build) si le bloc n'expose pas Density/MomentumX/MomentumY ou si
+  ///         set_magnetic_field n'a pas ete appele.
+  void set_source_stage(const std::string& name, const std::string& kind, double theta, double alpha);
+
+  /// Choisit la politique de splitting en temps de l'etage source condense : "lie" (defaut, H(dt) S(dt))
+  /// ou "strang" (H(dt/2) S(dt) H(dt/2), 2e ordre). Pendant AMR de System::set_time_scheme. Sans etage
+  /// source condense (set_source_stage non appele), sans effet. @throws si schema inconnu / deja construit.
+  void set_time_scheme(const std::string& scheme);
 
   /// Enregistre une SOURCE COUPLEE inter-especes (adc.dsl.CoupledSource compilee, ABI plate bytecode
   /// P5), pendant raffine de System::add_coupled_source mais sur la hierarchie AMR PARTAGEE. La source

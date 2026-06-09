@@ -365,6 +365,21 @@ class AmrCouplerMP {
         recon_prim, imex);
   }
 
+  /// AVANCE DE TRANSPORT SEULE (hyperbolique), SANS update() ni source. Pendant de step() prive de
+  /// son solve de champ et avec imex==false : c'est l'avance HYPERBOLIQUE PURE (-div F) du chemin
+  /// amr-schur, ou le champ est resolu separement (update()) et la source est jouee par l'etage
+  /// condense global (AmrCondensedSchurSourceStepper), exactement comme le chemin uniforme entrelace
+  /// solve_fields / transport (s.advance) / etage source (run_source_stage). Le modele doit etre
+  /// SOURCE-FREE (brique source NoSource) pour que la source ne soit pas comptee deux fois (une fois
+  /// ici en Euler avant, une fois par l'etage Schur) : c'est le contrat du chemin amr-schur, miroir du
+  /// time=Strang(Explicit, CondensedSchur) uniforme ou le bloc est ajoute avec son seul transport.
+  template <class Disc = FirstOrder>
+  void advance_transport(Real dt, bool recon_prim = false) {
+    advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
+        model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_,
+        recon_prim, /*imex=*/false);
+  }
+
   // Regrid du niveau FIN par Berger-Rigoutsos (delegue a amr_regrid_finest) :
   // reconstruit les patchs (report des donnees fines, sinon interp parent) + l'aux.
   // margin = nesting. Le coupleur ne fait qu'ordonner l'appel.

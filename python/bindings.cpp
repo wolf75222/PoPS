@@ -314,6 +314,18 @@ PYBIND11_MODULE(_adc, m) {
       .def("set_poisson", &AmrSystem::set_poisson, py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
            py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
+      // CHEMIN amr-schur (pendant AMR de System.set_magnetic_field / set_source_stage / set_time_scheme).
+      // Etage source condense par Schur GLOBAL (electrostatique/Lorentz) sur la hierarchie mono-bloc, au
+      // lieu de la source IMEX locale. B_z (terme de Lorentz) accepte un numpy (n, n) aplati.
+      .def("set_magnetic_field",
+           [](AmrSystem& s,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             s.set_magnetic_field(flat(arr));
+           },
+           py::arg("bz"))
+      .def("set_source_stage", &AmrSystem::set_source_stage, py::arg("name"), py::arg("kind"),
+           py::arg("theta"), py::arg("alpha"))
+      .def("set_time_scheme", &AmrSystem::set_time_scheme, py::arg("scheme"))
       .def("set_density",
            [](AmrSystem& s, const std::string& name,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
