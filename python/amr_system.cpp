@@ -175,11 +175,27 @@ struct AmrSystem::Impl {
   };
   std::vector<GlobalDtBound> dt_bounds;
   std::string last_dt_reason;  // borne ACTIVE du dernier step_cfl mono-bloc (multi : via runtime)
+  // Restauration de la phase de cadence regrid du mono-bloc (IO v1, parite System::set_clock) : le
+  // builder peuple ce hook (ecrit le step_state du coupleur). VIDE tant que le bloc n'est pas installe.
+  std::function<void(int)> set_macro_step_fn;
   // --- chemin multi-blocs (AmrRuntime, hierarchie partagee + Poisson somme) ---
   std::shared_ptr<adc::AmrRuntime> runtime;
   double t = 0;
+  // Compteur de MACRO-PAS AUTORITAIRE (parite System::Impl::macro_step_) : incremente par
+  // AmrSystem::step / step_cfl, lu par macro_step(). Les moteurs (AmrRuntime ; step_state du mono-bloc)
+  // tiennent leur PROPRE compteur de cadence, synchronise depuis celui-ci au build et a set_clock.
+  int macro_step_ = 0;
+  bool clock_restore_pending_ = false;  // un set_clock attend d'etre pousse au moteur (au prochain step)
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
+
+  // Pousse macro_step_ vers le compteur de cadence du moteur (regrid/stride) : runtime multi-blocs OU
+  // step_state du coupleur mono-bloc. Appele au 1er step apres un set_clock (clock_restore_pending_).
+  // Sans restauration la cadence part de 0 (defaut, bit-identique).
+  void push_macro_step_to_engine() {
+    if (runtime) runtime->set_macro_step(macro_step_);
+    else if (set_macro_step_fn) set_macro_step_fn(macro_step_);
+  }
 
   // Index du bloc nomme @p name dans le registre (-1 si absent). Nom vide -> premier bloc (compat
   // mono-bloc : le nom etait cosmetique). Plusieurs blocs sans nom n'est pas ambigu a l'ajout (un
@@ -258,6 +274,7 @@ struct AmrSystem::Impl {
     potential_fn = std::move(h.potential);
     source_frequency_fn = std::move(h.source_frequency);  // vides sans trait (bit-identique)
     stability_dt_fn = std::move(h.stability_dt);
+    set_macro_step_fn = std::move(h.set_macro_step);  // restauration phase cadence (IO v1)
     built = true;
   }
 
@@ -877,15 +894,26 @@ void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,
 
 void AmrSystem::step(double dt) {
   p_->ensure_built();
+  // Restauration de phase de cadence en ATTENTE (set_clock avant le 1er pas) : maintenant que le
+  // moteur existe (ensure_built), on pousse macro_step_ vers son compteur regrid/stride.
+  if (p_->clock_restore_pending_) {
+    p_->push_macro_step_to_engine();
+    p_->clock_restore_pending_ = false;
+  }
   if (p_->runtime) p_->runtime->step(static_cast<Real>(dt));
   else p_->step_fn(dt);
   p_->t += dt;
+  ++p_->macro_step_;  // compteur autoritaire (parite System : un macro-pas = un increment)
 }
 void AmrSystem::advance(double dt, int nsteps) {
   for (int s = 0; s < nsteps; ++s) step(dt);
 }
 double AmrSystem::step_cfl(double cfl) {
   p_->ensure_built();
+  if (p_->clock_restore_pending_) {  // restauration de phase en attente (cf. step)
+    p_->push_macro_step_to_engine();
+    p_->clock_restore_pending_ = false;
+  }
   const double hx = p_->cfg.L / p_->cfg.n;  // pas d'espace du grossier (dx_coarse)
   if (p_->runtime) {
     // MULTI-BLOCS : pas CFL SUBSTEPS/STRIDE-AWARE, mirroir EXACT de System::step_cfl. Un bloc de
@@ -899,6 +927,7 @@ double AmrSystem::step_cfl(double cfl) {
     const double dt = static_cast<double>(
         p_->runtime->step_cfl(static_cast<Real>(cfl), static_cast<Real>(hx)));
     p_->t += dt;
+    ++p_->macro_step_;  // compteur autoritaire (parite System : un macro-pas = un increment)
     return dt;
   }
   // MONO-BLOC (AmrCouplerMP) : borne TRANSPORT historique dt = cfl*h/w_max (formule INCHANGEE,
@@ -933,6 +962,7 @@ double AmrSystem::step_cfl(double cfl) {
   }
   p_->step_fn(h);
   p_->t += h;
+  ++p_->macro_step_;  // compteur autoritaire (parite System : un macro-pas = un increment)
   return h;
 }
 
@@ -975,6 +1005,20 @@ AmrSystem::SourceNewtonReport AmrSystem::newton_report(const std::string& name) 
 
 int AmrSystem::nx() const { return p_->cfg.n; }
 double AmrSystem::time() const { return p_->t; }
+int AmrSystem::macro_step() const { return p_->macro_step_; }
+void AmrSystem::set_clock(double t, int macro_step) {
+  if (macro_step < 0)
+    throw std::runtime_error("AmrSystem::set_clock : macro_step >= 0 (restart)");
+  p_->t = t;
+  p_->macro_step_ = macro_step;
+  // Pousse la phase de cadence (regrid/stride) au moteur : tout de suite s'il est deja bati, sinon au
+  // 1er step (clock_restore_pending_). set_clock est typiquement appele AVANT le 1er pas (restart d'une
+  // composition rejouee, build paresseux), d'ou le drapeau.
+  if (p_->built)
+    p_->push_macro_step_to_engine();
+  else
+    p_->clock_restore_pending_ = true;
+}
 int AmrSystem::n_blocks() const { return static_cast<int>(p_->blocks.size()); }
 std::vector<std::string> AmrSystem::block_names() const {
   std::vector<std::string> out;

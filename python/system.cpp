@@ -1382,6 +1382,9 @@ void System::set_potential(const std::vector<double>& phi) {
   if (P->polar_) {
     P->fields_.ensure_elliptic_polar();
     MultiFab& ph = P->fields_.pell_->phi();
+    // Rang sans box (MPI mono-box) : NO-OP (le rang proprietaire restaure phi). Permet restart sur
+    // tous les rangs avec le champ GLOBAL. Mono-rang : local_size()==1, INCHANGE.
+    if (ph.local_size() == 0) return;
     const Box2D v = ph.box(0);
     if (static_cast<int>(phi.size()) != v.nx() * v.ny())
       throw std::runtime_error("System::set_potential : taille != nr*ntheta");
@@ -1393,6 +1396,7 @@ void System::set_potential(const std::vector<double>& phi) {
   }
   P->fields_.ensure_elliptic();
   MultiFab& ph = P->fields_.ell_phi();
+  if (ph.local_size() == 0) return;  // rang sans box : no-op (cf. branche polaire)
   const Box2D v = ph.box(0);
   if (static_cast<int>(phi.size()) != v.nx() * v.ny())
     throw std::runtime_error("System::set_potential : taille != n*n");
@@ -1488,6 +1492,9 @@ std::vector<double> System::potential() {
   // paresseusement si besoin (un appel avant tout step) et on lit phi() de PolarPoissonSolver.
   if (p_->polar_) {
     p_->fields_.ensure_elliptic_polar();
+    // Rang sans box (MPI mono-box) : retour VIDE (pas de fab(0)). Cf. copy_comp0 ; le champ global
+    // multi-rangs passe par System::potential_global.
+    if (p_->aux.local_size() == 0) return {};
     const ConstArray4 ph = p_->fields_.pell_->phi().fab(0).const_array();
     const Box2D v = p_->aux.box(0);
     std::vector<double> out;
@@ -1497,12 +1504,76 @@ std::vector<double> System::potential() {
     return out;
   }
   p_->fields_.ensure_elliptic();
+  if (p_->aux.local_size() == 0) return {};  // rang sans box : vide (cf. potential_global)
   const ConstArray4 ph = p_->fields_.ell_phi().fab(0).const_array();
   const Box2D v = p_->aux.box(0);
   std::vector<double> out;
   out.reserve(static_cast<std::size_t>(v.nx()) * v.ny());
   for (int j = v.lo[1]; j <= v.hi[1]; ++j)
     for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(ph(i, j));
+  return out;
+}
+
+// --- accesseurs GLOBAUX (collectifs MPI-safe), IO v1 multi-rangs --------------------------------
+// Patron commun (cf. en-tete system.hpp) : tampon GLOBAL de taille gny*gnx (ou nc*gny*gnx) initialise
+// a 0, rempli par les fabs LOCAUX en INDICES GLOBAUX (la box porte ses indices globaux ; un rang sans
+// box -> local_size()==0 -> aucune ecriture), puis all_reduce_sum_inplace : chaque cellule etant
+// possedee par EXACTEMENT un rang (boites disjointes), la somme = le champ global EXACT sur chaque
+// rang. Mono-rang : la box couvre tout le domaine et all_reduce = identite -> tableau bit-identique
+// aux accesseurs non globaux (density / get_state / potential). Layout IDENTIQUE (density : j*gnx + i ;
+// state : (c*gny + j)*gnx + i, composante-majeur ; cf. copy_comp0 / copy_state).
+std::vector<double> System::density_global(const std::string& name) const {
+  device_fence();
+  const Impl::Species& s = p_->find(name);
+  const int gnx = nx(), gny = ny();
+  std::vector<double> out(static_cast<std::size_t>(gnx) * gny, 0.0);
+  for (int li = 0; li < s.U.local_size(); ++li) {
+    const ConstArray4 u = s.U.fab(li).const_array();
+    const Box2D v = s.U.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        out[static_cast<std::size_t>(j) * gnx + i] = static_cast<double>(u(i, j, 0));
+  }
+  all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+  return out;
+}
+std::vector<double> System::state_global(const std::string& name) const {
+  device_fence();
+  const Impl::Species& s = p_->find(name);
+  const int nc = s.ncomp, gnx = nx(), gny = ny();
+  std::vector<double> out(static_cast<std::size_t>(nc) * gnx * gny, 0.0);
+  for (int li = 0; li < s.U.local_size(); ++li) {
+    const ConstArray4 u = s.U.fab(li).const_array();
+    const Box2D v = s.U.box(li);
+    for (int c = 0; c < nc; ++c)
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          out[(static_cast<std::size_t>(c) * gny + j) * gnx + i] = static_cast<double>(u(i, j, c));
+  }
+  all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+  return out;
+}
+std::vector<double> System::potential_global() {
+  device_fence();
+  const int gnx = nx(), gny = ny();
+  std::vector<double> out(static_cast<std::size_t>(gnx) * gny, 0.0);
+  // Resout le Poisson (polaire ou cartesien) si besoin : COLLECTIF, comme potential_global le tout.
+  const MultiFab* phi = nullptr;
+  if (p_->polar_) {
+    p_->fields_.ensure_elliptic_polar();
+    phi = &p_->fields_.pell_->phi();
+  } else {
+    p_->fields_.ensure_elliptic();
+    phi = &p_->fields_.ell_phi();
+  }
+  for (int li = 0; li < phi->local_size(); ++li) {
+    const ConstArray4 ph = phi->fab(li).const_array();
+    const Box2D v = phi->box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        out[static_cast<std::size_t>(j) * gnx + i] = static_cast<double>(ph(i, j));
+  }
+  all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
   return out;
 }
 

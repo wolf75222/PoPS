@@ -54,7 +54,7 @@ struct RiemannTag {
 
 /// SOURCE UNIQUE des flux de Riemann cables (ordre = message "(rusanov|hll|hllc|roe)").
 inline constexpr RiemannTag kRiemanns[] = {{"rusanov", false, false, false, true},
-                                           {"hll", true, false, false, false},
+                                           {"hll", true, false, false, true},
                                            {"hllc", false, true, false, false},
                                            {"roe", false, false, true, false}};
 
@@ -99,7 +99,7 @@ inline void validate_limiter(const std::string& lim, const char* ctx = "System")
   throw std::runtime_error(std::string(ctx) + " : limiter inconnu '" + lim + "'");
 }
 
-/// Valide un tag de FLUX de Riemann contre kRiemanns. @p polar : geometrie annulaire (seul rusanov y
+/// Valide un tag de FLUX de Riemann contre kRiemanns. @p polar : geometrie annulaire (rusanov et hll y
 /// est cable). Leve si inconnu (cartesien) ou non cable en polaire, avec les messages HISTORIQUES
 /// (des tests grepent "flux Riemann", "rusanov", "non supporte"). NE valide PAS les capabilites du
 /// modele (hll/hllc/roe sur un transport sans onde signee / sans pression) : ces gardes restent des
@@ -107,13 +107,16 @@ inline void validate_limiter(const std::string& lim, const char* ctx = "System")
 inline void validate_riemann(const std::string& riem, bool polar = false,
                              const char* ctx = "System") {
   if (polar) {
-    // Polaire : un seul flux cable (rusanov). Tout autre tag (connu mais non polaire OU inconnu) ->
-    // MEME message qu'avant (le dispatch polaire historique rejetait deja tout riem != "rusanov").
-    if (riem == "rusanov") return;
+    // Polaire : flux cables = ceux de kRiemanns avec polar_ok (rusanov + hll depuis le solde de
+    // l'audit ; hll garde sa gate de capabilite model.wave_speeds au call-site). HLLC/Roe et les
+    // tags inconnus -> message polaire unique.
+    for (const RiemannTag& t : kRiemanns)
+      if (riem == t.name && t.polar_ok) return;
     throw std::runtime_error(
         std::string(ctx) + " : flux Riemann '" + riem +
-        "' non supporte (polaire -> 'rusanov' ; HLLC/Roe supposent n_vars==4 (Euler avec energie), "
-        "sans objet pour l'ExB scalaire ou le fluide isotherme polaire)");
+        "' non supporte (polaire -> 'rusanov' | 'hll' (vitesses d'onde signees) ; HLLC/Roe "
+        "supposent n_vars==4 (Euler avec energie), sans objet pour l'ExB scalaire ou le fluide "
+        "isotherme polaire)");
   }
   for (const RiemannTag& t : kRiemanns)
     if (riem == t.name) return;

@@ -321,12 +321,17 @@ class PolarMesh:
     adc.System(mesh=adc.PolarMesh(...)) construit un anneau global et avance dessus. TROIS niveaux a
     ne pas confondre :
     - transport polaire : ExB scalaire ET fluide isotherme (IsothermalFluxPolar) ; flux Riemann
-      RUSANOV SEULEMENT (hll/hllc/roe leves cote C++) ;
+      'rusanov' (defaut, tout transport) ET 'hll' (fluide isotherme seulement -- gate model.wave_speeds,
+      identique au cartesien ; l'ExB scalaire ne fournit pas de wave_speeds -> 'hll' leve un rejet
+      clair). 'hllc'/'roe' restent leves cote C++ (Euler 4 var, sans brique polaire) ;
     - Poisson polaire DIRECT (PolarPoissonSolver) : mono-rang, une box couvrant l'anneau ;
     - etage Schur polaire TENSORIEL (PolarCondensedSchurSourceStepper, via adc.Split/CondensedSchur) :
       le solveur C++ est multi-rang/multi-box (decoupage theta), mais la FACADE construit encore une
-      box globale -> sous MPI le solve est collectif et correct sans parallelisme effectif a ce
-      niveau (decoupage theta facade = suivi dedie).
+      box globale (system.cpp Impl ctor : ba mono-box ; set_source_stage L.~1095-1103 : pas de
+      decoupage theta pilotable cote facade). DECOUPAGE THETA NON EXPOSE volontairement : le transport
+      polaire (System.step) reste lui-meme mono-box -- exposer un parametre de decoupage serait une
+      facade mensongere (le solveur Schur tensoriel sait le faire, le System non). Cf.
+      docs/GENERICITY_2026-06.md section 3.
     Pas de couplage cartesien<->polaire (anneau global). Bornes de pas optionnelles
     (stability_speed/stability_dt/source_frequency) NON cablees sur le chemin polaire (transport
     max_wave_speed seulement)."""
@@ -1712,23 +1717,35 @@ class System:
           noms/roles, phi, t, macro_step, grille.
         @p step : suffixe numerote (path_000123.vti) ; None = path brut + extension.
         @p fields : sous-ensemble de blocs a ecrire (None = tous).
-        @return le chemin ecrit."""
+        @return le chemin ecrit.
+
+        MULTI-RANGS (MPI np>1) : les champs sont rassembles via les accesseurs GLOBAUX collectifs
+        (state_global / potential_global -- chaque rang DOIT donc appeler write), puis SEUL le rang 0
+        ecrit le fichier (un fichier unique, identique au mono-rang). Le System etant mono-box (une
+        box couvrant tout le domaine, sur le rang 0), le gather est exact. Les autres rangs rendent le
+        chemin sans I/O. HDF5 PARALLELE (hyperslabs par rang) = PR-IO-3."""
         import os
         import numpy as np
+        from . import _adc
+        rank0 = (_adc.my_rank() == 0)
         blocks = [b for b in self._s.block_names() if fields is None or b in fields]
         suffix = ("_%06d" % int(step)) if step is not None else ""
         nxv, nyv = self._s.nx(), self._s.ny()
         if format == "npz":
+            # Gather COLLECTIF (tous les rangs) AVANT la garde rang-0 : state_global / potential_global
+            # font un all_reduce interne et doivent etre appeles par chaque rang.
             out = {"t": self._s.time(), "macro_step": self._s.macro_step(),
                    "nx": nxv, "ny": nyv, "blocks": np.array(blocks)}
             for b in blocks:
                 nv = self._s.n_vars(b)
-                out["state_" + b] = np.asarray(self._s.get_state(b), dtype=np.float64).reshape(
+                out["state_" + b] = np.asarray(self._s.state_global(b), dtype=np.float64).reshape(
                     nv, nyv, nxv)
                 out["names_" + b] = np.array(list(self._s.variable_names(b, "conservative")))
                 out["roles_" + b] = np.array(list(self._s.variable_roles(b, "conservative")))
-            out["phi"] = np.asarray(self._s.potential(), dtype=np.float64).reshape(nyv, nxv)
+            out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv)
             target = path + suffix + ".npz"
+            if not rank0:
+                return target  # seul le rang 0 ecrit le fichier (gather deja fait collectivement)
             tmp = target + ".tmp"
             with open(tmp, "wb") as f:
                 np.savez_compressed(f, **out)
@@ -1739,11 +1756,13 @@ class System:
             arrays, names = [], []
             for b in blocks:
                 nv = self._s.n_vars(b)
-                st = np.asarray(self._s.get_state(b), dtype=np.float64).reshape(nv, nyv, nxv)
+                st = np.asarray(self._s.state_global(b), dtype=np.float64).reshape(nv, nyv, nxv)
                 for c, nm in enumerate(self._s.variable_names(b, "conservative")):
                     arrays.append(st[c]); names.append("%s_%s" % (b, nm))
-            arrays.append(np.asarray(self._s.potential(), dtype=np.float64).reshape(nyv, nxv))
+            arrays.append(np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv))
             names.append("phi")
+            if not rank0:
+                return target  # gather collectif fait ci-dessus ; seul le rang 0 ecrit
             lines = ['<?xml version="1.0"?>',
                      '<VTKFile type="ImageData" version="0.1" byte_order="LittleEndian">',
                      '  <ImageData WholeExtent="0 %d 0 %d 0 0" Origin="0 0 0" '
@@ -1762,15 +1781,22 @@ class System:
             return target
         if format == "hdf5":
             # HDF5 AGREGE v1 (vague 3, PR-IO-2 du plan) : un fichier unique, un groupe par bloc,
-            # attributs pour l'horloge/grille. Mono-rang (la facade est mono-box) ; HDF5 PARALLELE
-            # (hyperslabs par rang) = PR-IO-3. h5py optionnel : absent -> erreur claire avec remede.
+            # attributs pour l'horloge/grille. Multi-rangs : gather collectif (state_global /
+            # potential_global) puis ecriture rang 0 (un fichier unique). HDF5 PARALLELE (hyperslabs
+            # par rang) = PR-IO-3. h5py optionnel : absent -> erreur claire avec remede.
+            # Gather COLLECTIF (tous rangs) AVANT la garde rang-0.
+            states = {b: np.asarray(self._s.state_global(b), dtype=np.float64).reshape(
+                self._s.n_vars(b), nyv, nxv) for b in blocks}
+            phi_g = np.asarray(self._s.potential_global(), dtype=np.float64).reshape(nyv, nxv)
+            target = path + suffix + ".h5"
+            if not rank0:
+                return target  # seul le rang 0 ecrit le fichier
             try:
                 import h5py
             except ImportError:
                 raise RuntimeError(
                     "write(format='hdf5') : h5py absent (pip/conda install h5py) ; "
                     "utiliser format='npz' (equivalent, sans dependance) en attendant.")
-            target = path + suffix + ".h5"
             tmp = target + ".tmp"
             with h5py.File(tmp, "w") as f:
                 f.attrs["t"] = self._s.time()
@@ -1779,17 +1805,13 @@ class System:
                 f.attrs["ny"] = nyv
                 f.attrs["abi_key"] = abi_key()
                 for b in blocks:
-                    nv = self._s.n_vars(b)
                     g = f.create_group(b)
-                    st = np.asarray(self._s.get_state(b), dtype=np.float64).reshape(nv, nyv, nxv)
-                    g.create_dataset("state", data=st, compression="gzip")
+                    g.create_dataset("state", data=states[b], compression="gzip")
                     g.attrs["names"] = [s.encode() for s in
                                         self._s.variable_names(b, "conservative")]
                     g.attrs["roles"] = [s.encode() for s in
                                         self._s.variable_roles(b, "conservative")]
-                f.create_dataset("phi", data=np.asarray(self._s.potential(),
-                                                        dtype=np.float64).reshape(nyv, nxv),
-                                 compression="gzip")
+                f.create_dataset("phi", data=phi_g, compression="gzip")
             os.replace(tmp, target)
             return target
         raise ValueError("write : format 'vtk' | 'npz' | 'hdf5' (recu %r)" % (format,))
@@ -1799,23 +1821,32 @@ class System:
         OBLIGATOIRE pour la cadence stride) + grille + provenance (abi_key). CONTRAT (cf.
         docs/IO_CHECKPOINT_PLAN.md) : restart NE reconstruit PAS la composition -- le script
         utilisateur rejoue ses add_block/set_poisson/couplages puis appelle sim.restart(path), qui
-        VERIFIE la coherence (blocs, tailles) et leve une erreur explicite sinon. @return le chemin."""
+        VERIFIE la coherence (blocs, tailles) et leve une erreur explicite sinon. @return le chemin.
+
+        MULTI-RANGS (MPI np>1) : les etats sont rassembles par les accesseurs GLOBAUX collectifs
+        (state_global / potential_global -- tous les rangs DOIVENT appeler checkpoint), puis SEUL le
+        rang 0 ecrit le fichier UNIQUE (identique au mono-rang). Le couple checkpoint/restart reste
+        bit-identique sous np>1 (System mono-box : tout l'etat vit sur le rang 0, gather exact)."""
         import os
         import numpy as np
+        from . import _adc
         blocks = list(self._s.block_names())
         out = {"adc_checkpoint_version": 1,
                "t": self._s.time(), "macro_step": self._s.macro_step(),
                "nx": self._s.nx(), "ny": self._s.ny(),
                "abi_key": abi_key(), "blocks": np.array(blocks)}
+        # Gather COLLECTIF (tous rangs) AVANT la garde rang-0.
         for b in blocks:
             nv = self._s.n_vars(b)
             out["ncomp_" + b] = nv
-            out["state_" + b] = np.asarray(self._s.get_state(b), dtype=np.float64)
+            out["state_" + b] = np.asarray(self._s.state_global(b), dtype=np.float64)
             out["names_" + b] = np.array(list(self._s.variable_names(b, "conservative")))
         # phi : warm start du multigrille (reprise BIT-IDENTIQUE) ; ETAT physique si
         # gauss_policy="evolve" (phi n'y est plus re-derive de rho).
-        out["phi"] = np.asarray(self._s.potential(), dtype=np.float64)
+        out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
         target = path if path.endswith(".npz") else path + ".npz"
+        if _adc.my_rank() != 0:
+            return target  # seul le rang 0 ecrit le checkpoint (gather deja fait)
         tmp = target + ".tmp"
         with open(tmp, "wb") as f:
             np.savez_compressed(f, **out)
@@ -1827,7 +1858,12 @@ class System:
         explicite sinon, jamais de reprise silencieusement fausse), restaure l'etat de chaque bloc
         puis l'horloge (t, macro_step : la cadence stride reprend exactement). La COMPOSITION
         (add_block / set_poisson / set_magnetic_field / couplages) doit avoir ete rejouee par le
-        script AVANT l'appel (contrat v1, cf. checkpoint)."""
+        script AVANT l'appel (contrat v1, cf. checkpoint).
+
+        MULTI-RANGS (MPI np>1) : tous les rangs lisent le fichier (systeme de fichiers partage) et
+        appellent set_state / set_potential / set_clock. set_state / set_potential sont MPI-safe (le
+        rang proprietaire -- rang 0, mono-box -- ecrit, les autres font no-op) ; set_clock pose
+        l'horloge sur chaque rang. La reprise est donc bit-identique sous np>1."""
         import numpy as np
         target = path if path.endswith(".npz") else path + ".npz"
         d = np.load(target, allow_pickle=False)
@@ -1868,11 +1904,13 @@ def capabilities():
     return {
         "riemann": {
             "system_cartesian": ["rusanov", "hll", "hllc", "roe"],
-            "system_polar": ["rusanov"],
+            "system_polar": ["rusanov", "hll"],
             "amr": ["rusanov", "hll", "hllc", "roe"],
             "notes": {
                 "rusanov": "generique minimal (max_wave_speed seul)",
-                "hll": "generique a ondes signees (model.wave_speeds ; DSL : primitive 'p')",
+                "hll": "generique a ondes signees (model.wave_speeds ; DSL : primitive 'p') ; "
+                       "polaire : eligible au fluide isotherme (IsothermalFluxPolar), pas a l'ExB "
+                       "scalaire (pas de wave_speeds) -- meme gate que le cartesien",
                 "hllc": "Euler 2D canonique (4 var + pression) OU capability modele "
                         "HasHLLCStructure -- emise par le DSL via m.enable_hllc() (roles + 'p', "
                         "y compris 3-var non Euler, scalaires passifs advectes)",
@@ -2114,17 +2152,43 @@ class AmrSystem:
         raise ValueError("AmrSystem.write : format 'npz' | 'vtk' (recu %r)" % (format,))
 
     def checkpoint(self, path):
-        """NON CABLE sur AMR (PR-IO-3 du plan, docs/IO_CHECKPOINT_PLAN.md) : un checkpoint AMR
-        exige le marshaling de TOUS les niveaux/patchs (etats fins + hierarchie + ownership), absent
-        de la facade. Erreur explicite plutot qu'un checkpoint partiel (grossier seul) silencieux."""
+        """NON CABLE sur AMR (PR-IO-3 du plan, docs/IO_CHECKPOINT_PLAN.md). Un checkpoint AMR
+        BIT-IDENTIQUE est IMPOSSIBLE avec l'ABI actuelle, et un repli "grossier seul" serait a la fois
+        LOSSY et non bit-identique -- on rejette donc explicitement plutot que d'ecrire un checkpoint
+        silencieusement faux. Ce qui MANQUE PRECISEMENT dans l'ABI (a cabler en PR-IO-3) :
+
+          1. Lecture des ETATS FINS PAR PATCH (toutes composantes, tous niveaux >= 1) : la facade
+             n'expose que density() (composante 0 du GROSSIER) et patch_boxes() (empreintes
+             index-space des patchs, PAS leurs donnees). Sans les etats fins on ne peut pas restaurer
+             la hierarchie telle quelle.
+          2. Lecture de l'ETAT CONSERVATIF COMPLET du grossier : meme au niveau 0, seul density()
+             (comp0) est lisible -- la quantite de mouvement / l'energie d'un modele multi-var (fluide
+             isotherme : rho, mom_r, mom_theta) ne sont PAS recuperables. Un repli grossier perdrait
+             donc tout sauf la densite.
+          3. Serialisation de la HIERARCHIE + OWNERSHIP (BoxArray fin par niveau, DistributionMapping)
+             pour reconstruire le MEME decoupage au restart.
+          4. ECRITURE des etats fins par patch (set_conservative_state ne fait que SEEDER le grossier
+             puis PROLONGER -- ce n'est pas une restauration bit-identique des patchs fins).
+
+        Repli : AmrSystem.write (visualisation, champs grossiers + empreintes patchs) ou un System
+        mono-niveau (System.checkpoint/restart, bit-identique y compris sous MPI)."""
         raise NotImplementedError(
-            "AmrSystem.checkpoint : non cable (PR-IO-3 : etats multi-niveaux + hierarchie + "
-            "ownership). Utiliser AmrSystem.write (visualisation) ou un System mono-niveau.")
+            "AmrSystem.checkpoint : non cable (PR-IO-3). ABI manquante pour une reprise bit-identique : "
+            "(1) lecture des etats fins par patch (tous niveaux/composantes ; la facade n'expose que "
+            "density() = comp0 du grossier + patch_boxes() = empreintes sans donnees) ; "
+            "(2) lecture de l'etat conservatif COMPLET (meme au grossier : mom/energie non lisibles) ; "
+            "(3) serialisation hierarchie + ownership ; (4) ecriture des etats fins par patch "
+            "(set_conservative_state ne fait que seeder le grossier + prolonger). Un repli grossier "
+            "seul serait LOSSY (densite seule) ET non bit-identique -> rejet. Utiliser AmrSystem.write "
+            "(visualisation) ou un System mono-niveau (checkpoint/restart bit-identique).")
 
     def restart(self, path):
-        """NON CABLE sur AMR (cf. checkpoint)."""
+        """NON CABLE sur AMR (cf. checkpoint : la lecture/ecriture des etats fins par patch et de
+        l'etat conservatif complet manque a l'ABI -> une reprise bit-identique est impossible)."""
         raise NotImplementedError(
-            "AmrSystem.restart : non cable (PR-IO-3). Utiliser un System mono-niveau.")
+            "AmrSystem.restart : non cable (PR-IO-3 ; meme manque ABI que AmrSystem.checkpoint : "
+            "etats fins par patch + etat conservatif complet illisibles/inecrivables). Utiliser un "
+            "System mono-niveau (checkpoint/restart bit-identique, y compris sous MPI).")
 
     def add_equation(self, name, model, spatial=None, time=None, substeps=None):
         """Ajoute l'UNIQUE equation/bloc AMR en aiguillant sur le TYPE de @p model (DSL Phase D) :

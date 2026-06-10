@@ -84,8 +84,8 @@ int main() {
       "riemann hllc rejete en polaire");
   chk(contains(msg, "non supporte") && contains(msg, "polaire") && contains(msg, "rusanov"),
       "message polaire : non supporte / polaire / rusanov");
-  chk(throws([] { validate_riemann("hll", /*polar=*/true, "System (polaire)"); }, msg),
-      "riemann hll rejete en polaire");
+  chk(!throws([] { validate_riemann("hll", /*polar=*/true, "System (polaire)"); }, msg),
+      "riemann hll ACCEPTE en polaire (solde audit : gate wave_speeds au call-site)");
   chk(throws([] { validate_riemann("roe", /*polar=*/true, "System (polaire)"); }, msg),
       "riemann roe rejete en polaire");
   chk(throws([] { validate_riemann("bogus", /*polar=*/true, "System (polaire)"); }, msg),
@@ -107,16 +107,16 @@ int main() {
   chk(std::string(kLimiters[0].name) == "none" && kLimiters[0].n_ghost == 1, "kLimiters[0]");
   chk(std::string(kLimiters[3].name) == "weno5" && kLimiters[3].n_ghost == 3, "kLimiters[3]");
   chk(std::string(kRiemanns[0].name) == "rusanov" && kRiemanns[0].polar_ok, "kRiemanns[0] rusanov polar_ok");
-  chk(std::string(kRiemanns[1].name) == "hll" && kRiemanns[1].needs_wave_speeds && !kRiemanns[1].polar_ok,
+  chk(std::string(kRiemanns[1].name) == "hll" && kRiemanns[1].needs_wave_speeds && kRiemanns[1].polar_ok,
       "kRiemanns[1] hll needs_wave_speeds, pas polaire");
   chk(std::string(kRiemanns[2].name) == "hllc" && kRiemanns[2].needs_hllc_struct, "kRiemanns[2] hllc");
   chk(std::string(kRiemanns[3].name) == "roe" && kRiemanns[3].needs_roe_diss, "kRiemanns[3] roe");
-  // un seul flux cable en polaire (rusanov) : verrouille polar_ok.
+  // DEUX flux cables en polaire (rusanov + hll, solde de l'audit) : verrouille polar_ok.
   {
     int n_polar = 0;
     for (const RiemannTag& t : kRiemanns)
       if (t.polar_ok) ++n_polar;
-    chk(n_polar == 1, "un seul flux polar_ok (rusanov)");
+    chk(n_polar == 2, "deux flux polar_ok (rusanov + hll)");
   }
 
   if (fails == 0) std::printf("OK test_dispatch_tags\n");

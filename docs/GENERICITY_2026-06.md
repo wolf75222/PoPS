@@ -194,6 +194,64 @@ manquait encore.
    patchs fins ; les champs multi-niveaux = PR-IO-3) ; checkpoint/restart AMR = rejet explicite
    pointant le plan (PR-IO-3).
 
+## Vague 4 (polaire HLL, IO multi-rangs, horloge AMR) -- audit 2026-06, chantiers POLAIRE + IO
+
+Solde des chantiers POLAIRE (section 3) et IO (section 10) du plan, a **perimetre honnete** (ce qui
+est cable l'est reellement ; ce qui ne l'est pas est documente avec fichier:ligne, jamais masque).
+
+1. **HLL POLAIRE cable** (`include/adc/runtime/block_builder_polar.hpp`, `make_block_polar`). Le RHS
+   polaire `assemble_rhs_polar<Limiter, NumericalFlux, Model>` portait DEJA le flux numerique en
+   PARAMETRE DE TEMPLATE (point d'injection identique au cartesien `build_block<Limiter, Flux>`) et
+   appelle `nflux(model, L, aux_L, R, aux_R, dir)` -- exactement la signature de `HLLFlux`. Brancher
+   HLL etait donc un petit cablage : `make_block_polar` route `riemann='hll'` vers
+   `build_block_polar<Limiter, HLLFlux>`, GATE sur `model.wave_speeds` (foncteur nomme, device-clean,
+   meme `requires` que `block_builder.hpp` make_block). Le fluide isotherme polaire
+   (`IsothermalFluxPolar : IsothermalFlux`) herite `wave_speeds` -> eligible ; l'ExB scalaire
+   (`ExBVelocityPolar`, pas de `wave_speeds`) -> rejet CLAIR. **Defaut `rusanov` strictement
+   bit-identique** (branche separee, intouchee). HLLC/Roe restent rejetes (Euler 4-var, pas de brique
+   flux d'energie polaire). Facade : `adc.PolarMesh` + `adc.FiniteVolume(riemann='hll')` ;
+   `adc.capabilities()['riemann']['system_polar'] = ['rusanov', 'hll']`. Test :
+   `python/tests/test_polar_hll.py` (rusanov reproductible, hll fini ET distinct de rusanov) +
+   `test_polar_rejections.test_polar_rejects_hll_on_scalar_exb`.
+
+2. **Decoupage theta polaire : NON expose** (decision honnete, cf. point 3 ci-dessous). Verifie :
+   le System polaire est mono-box ; aucune plomberie multi-box du transport. Rien expose.
+
+3. **IO System MULTI-RANGS** (`python/system.cpp` + `include/adc/runtime/system.hpp` + bindings +
+   `python/adc/__init__.py`). Constat : `copy_state` / `copy_comp0` / `potential` lisaient `fab(0)`
+   (valable sur le rang proprietaire -- mono-box, box 0 sur rang 0 -- mais HORS BORNES sur un rang
+   sans box). Ajoute : accesseurs GLOBAUX collectifs `density_global` / `state_global` /
+   `potential_global` (tampon global rempli en indices GLOBAUX depuis les fabs locaux, puis
+   `all_reduce_sum_inplace` -> chaque rang detient le champ complet ; pattern du reflux AMR). Les
+   marshalings d'ecriture/lecture (`write_state` / `set_potential` / `copy_*`) sont desormais
+   gardes contre `local_size()==0` (no-op / vide au lieu d'un UB). Facade : `sim.write` /
+   `sim.checkpoint` font le gather collectif (tous rangs) puis n'ecrivent le fichier que sur le rang 0
+   (`_adc.my_rank()`/`n_ranks()` exposes) ; `sim.restart` lit le fichier (FS partage) et appelle
+   `set_state` / `set_potential` MPI-safe (rang 0 ecrit, autres no-op) + `set_clock`. **Mono-rang
+   bit-identique** (`state_global == get_state`, all_reduce = identite, box = domaine complet) :
+   test `python/tests/test_io_multirank.py`. SEMANTIQUE GARANTIE : sous MPI np>1, `write`/`checkpoint`
+   produisent UN fichier identique au mono-rang (System mono-box), checkpoint/restart bit-identiques.
+   HDF5 PARALLELE (hyperslabs) = PR-IO-3. (Pas de harnais MPI cote pytest -> couverture np>1 a valider
+   en central ; le gather reutilise le pattern deja valide par `test_krylov_solver_np*` /
+   `test_schur_condensation_np*`.)
+
+4. **Horloge AMR : macro_step() / set_clock()** (`include/adc/runtime/amr_system.hpp` +
+   `python/amr_system.cpp` + `amr_runtime.hpp` + `amr_dsl_block.hpp` + bindings). Parite System :
+   `AmrSystem::Impl` porte un compteur de macro-pas AUTORITAIRE (incremente par step/step_cfl),
+   `macro_step()` le rend, `set_clock(t, ms)` le restaure ET le pousse au compteur de CADENCE du
+   moteur (regrid/stride) : `AmrRuntime::set_macro_step` (multi-blocs) OU hook `set_macro_step` du
+   coupleur mono-bloc (additif en queue de `AmrCompiledHooks`, abi_key auto-bumpe via ADC_HEADER_SIG).
+   Prerequis PR-IO-3, **utile seul** (cadence stride + reprise d'horloge). Test :
+   `python/tests/test_amr_clock.py`.
+
+5. **Checkpoint AMR : rejet AMELIORE** (`python/adc/__init__.py`). Un checkpoint AMR bit-identique est
+   IMPOSSIBLE avec l'ABI actuelle ; un repli "grossier seul" serait LOSSY (density() = comp0 seul, la
+   quantite de mouvement/energie multi-var non lisible) ET non bit-identique (set_conservative_state
+   seede le grossier + prolonge, ne restaure pas les patchs fins). Le rejet `NotImplementedError` est
+   conserve mais son message liste DESORMAIS PRECISEMENT les 4 manques ABI (lecture etats fins par
+   patch ; lecture etat conservatif complet ; serialisation hierarchie+ownership ; ecriture etats fins
+   par patch). Pas de coarse-restart opt-in : il ne serait pas propre (lossy + re-prolongation).
+
 ## Points encore NON generalises (explicites, mis a jour vague 3)
 
 1. **AMR** : pas de `ssprk3` ; coarse/fine suppose ratio 2 ; `set_poisson` limite a geometric_mg +
@@ -207,8 +265,18 @@ manquait encore.
 2. **AMR Schur Phase 4** : composite limite a 2 niveaux + UN patch fin mono-box + mono-rang ;
    multi-patch, > 2 niveaux, MPI, multi-blocs = Phase 4 (rejet explicite, perimetre documente
    dans l'en-tete du stepper). set_krylov AMR ne pilote que l'etage grossier.
-3. **Polaire** : flux Rusanov seulement (pas de HLL/HLLC/Roe polaire) ; Poisson direct
-   mono-rang/mono-box (Schur tensoriel = multi-box) ; decoupage theta non expose par la facade.
+3. **Polaire** : flux **Rusanov ET HLL** (HLL cable depuis la vague 4, cf. ci-dessous), mais
+   **HLLC/Roe restent NON cables** (supposent n_vars==4 Euler avec energie, sans brique flux
+   d'energie polaire -> rejet explicite, make_block_polar). Poisson direct mono-rang/mono-box (Schur
+   tensoriel = multi-box). **Decoupage theta NON expose par la facade** (decision documentee
+   ci-dessous) : le transport polaire (System.step) est lui-meme MONO-BOX
+   (`python/system.cpp` ctor Impl : `ba(std::vector<Box2D>{index_domain(c)})`, une seule box ;
+   `set_source_stage` L.~1095-1103 : la facade construit UNE box couvrant l'anneau, le decoupage
+   theta n'est pilotable qu'au niveau de l'API C++ PolarCondensedSchurSourceStepper). Exposer un
+   parametre `theta_boxes` sur `adc.PolarMesh` serait une **facade mensongere** : le solveur Schur
+   tensoriel sait decouper theta, mais le System (transport + Poisson direct) non, et il n'existe
+   AUCUNE plomberie (BoxArray decoupe + DistributionMap + halos fill_boundary du transport polaire)
+   pour le rendre multi-box. Rien n'est donc expose ; le verrou est documente, pas masque.
 4. **Aux** : toujours extensible PAR LISTE CANONIQUE (ADC_AUX_FIELDS + AUX_CANONICAL miroir
    Python), pas d'auxiliaire arbitraire par modele.
 5. **Briques natives ROLE-AWARE (fait)** : source.hpp (PotentialForce / GravityForce /
@@ -244,8 +312,12 @@ manquait encore.
    positivite par roles, round-trip des conversions) ; etat de fumee par ROLES par defaut,
    state= pour un regime precis. Reste : les FORMULES d'un .so sans son dsl.Model d'origine ne
    sont pas re-derivables (le source symbolique n'est pas embarque dans le .so — assume).
-10. **IO** : System mono-rang (npz/vtk/hdf5 via h5py) ; HDF5 agrege/PARALLELE multi-rangs,
-    checkpoint AMR et champs externes (B_z dans le checkpoint) = PR-IO-3 du plan.
+10. **IO** : System `write` / `checkpoint` / `restart` sont desormais **MULTI-RANGS** (vague 4,
+    ci-dessous) -- gather GLOBAL collectif (all_reduce_sum_inplace) + ecriture rang-0 + scatter
+    MPI-safe (System MONO-BOX : tout l'etat vit sur le rang 0, gather exact ; bit-identique au
+    mono-rang). RESTE = PR-IO-3 : **HDF5 PARALLELE** (hyperslabs par rang, vs l'actuel gather rang-0),
+    **checkpoint AMR** (rejet explicite, ABI des etats fins par patch manquante -- liste precise dans
+    le message de `AmrSystem.checkpoint`), champs externes (B_z dans le checkpoint).
 11. **Roe cote DSL** : FAIT (solde) — `m.enable_roe()` emet `roe_dissipation` depuis les ROLES :
     avec Energy = transcription exacte de l'algebre canonique Euler du coeur (parite BIT-EXACTE
     constatee sur 8 pas), sans Energy = meme decomposition avec c = sqrt(p/rho) moyenne a la Roe,

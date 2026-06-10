@@ -172,6 +172,10 @@ class SystemBlockStore {
   /// le marshaling lit l'hote, il faut que le device ait fini d'ecrire U.
   std::vector<double> copy_comp0(const MultiFab& mf) const {
     device_fence();
+    // MPI mono-box : la box vit sur le rang proprietaire (rang 0). Un rang sans box (local_size()==0)
+    // n'a PAS de fab(0) -> retour VIDE plutot qu'un acces HORS BORNES (UB). Mono-rang : local_size()
+    // vaut toujours 1, comportement INCHANGE. Pour le champ global multi-rangs : System::density_global.
+    if (mf.local_size() == 0) return {};
     const ConstArray4 u = mf.fab(0).const_array();
     const Box2D v = mf.box(0);
     std::vector<double> out;
@@ -183,6 +187,9 @@ class SystemBlockStore {
   /// Recopie les ncomp composantes du fab(0) en layout composante-majeur (c lent, puis j, puis i).
   std::vector<double> copy_state(const MultiFab& mf, int ncomp) const {
     device_fence();
+    // Rang sans box (MPI mono-box, non proprietaire) : retour VIDE (pas de fab(0)). Cf. copy_comp0 ;
+    // le champ global multi-rangs passe par System::state_global (gather collectif).
+    if (mf.local_size() == 0) return {};
     const ConstArray4 u = mf.fab(0).const_array();
     const Box2D v = mf.box(0);
     std::vector<double> out;
@@ -196,6 +203,11 @@ class SystemBlockStore {
   /// copy_state). @throws std::runtime_error "System::set_state : taille != ncomp*n*n" si la taille
   /// ne correspond pas a ncomp*nx*ny (message inchange).
   void write_state(MultiFab& mf, int ncomp, const std::vector<double>& in) {
+    // Rang sans box (MPI mono-box, non proprietaire) : NO-OP (pas de fab(0) a ecrire). Permet a
+    // sim.set_state / sim.restart d'etre appeles sur TOUS les rangs avec le champ GLOBAL : seul le
+    // rang proprietaire (rang 0, box = domaine complet) ecrit, les autres ne font rien. Mono-rang :
+    // local_size()==1, validation + ecriture INCHANGEES (bit-identique).
+    if (mf.local_size() == 0) return;
     const Box2D v = mf.box(0);
     const std::size_t need = static_cast<std::size_t>(ncomp) * v.nx() * v.ny();
     if (in.size() != need)

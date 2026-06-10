@@ -7,9 +7,12 @@ Rejets confirmes (lus dans python/system.cpp et include/adc/runtime/block_builde
   R1 - transport non-ExB (ex. compressible) sur un System polaire :
        dispatch_transport_polar leve RuntimeError :
        "transport polaire '...' non supporte (Phase 2b : seul 'exb' ...)"
-  R2 - flux Riemann autre que 'rusanov' (ex. 'hllc') sur un System polaire :
+  R2 - flux Riemann NON cable en polaire ('hllc' / 'roe') sur un System polaire :
        make_block_polar leve RuntimeError :
-       "System (polaire) : flux Riemann '...' non supporte (Phase 2b transport ExB scalaire -> 'rusanov' ...)"
+       "System (polaire) : flux Riemann '...' non supporte ... HLLC/Roe supposent n_vars==4 ..."
+       NB : 'hll' est desormais CABLE en polaire (fluide isotherme, gate model.wave_speeds) -- voir
+       test_polar_hll.py ; sur un transport ExB SCALAIRE (pas de wave_speeds) 'hll' leve aussi un
+       rejet clair (teste R2c ci-dessous).
   R3 - time=adc.IMEX() sur un System polaire :
        add_block leve RuntimeError :
        "System::add_block (polaire) : time='imex' non supporte ..."
@@ -137,6 +140,29 @@ def test_polar_rejects_roe_flux():
     except RuntimeError:
         raised = True
     assert raised, "add_block avec flux='roe' sur PolarMesh aurait du lever RuntimeError"
+
+
+def test_polar_rejects_hll_on_scalar_exb():
+    """R2c : flux='hll' sur un transport ExB SCALAIRE doit lever RuntimeError.
+
+    'hll' est cable en polaire (cf. test_polar_hll.py) mais GATE sur model.wave_speeds (ondes
+    signees), exactement comme le cartesien (block_builder.hpp make_block branche 'hll'). L'ExB
+    scalaire (ExBVelocityPolar, 1 var) ne declare PAS wave_speeds -> rejet CLAIR (pas un echec de
+    compilation pour un modele scalaire). Le fluide isotherme polaire, lui, accepte 'hll'.
+    """
+    sim = _make_polar_sim()
+    raised = False
+    msg = ""
+    try:
+        sim.add_block("ne", model=_exb_model(),
+                      spatial=adc.Spatial(flux="hll"), time=adc.Explicit())
+    except RuntimeError as e:
+        raised = True
+        msg = str(e)
+    assert raised, "add_block avec flux='hll' sur un ExB scalaire aurait du lever RuntimeError"
+    assert "wave_speeds" in msg or "ondes signees" in msg or "rusanov" in msg.lower(), (
+        "message inattendu : %r" % msg
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +293,8 @@ if __name__ == "__main__":
     print("OK R2 : flux Riemann non-rusanov (hllc) rejete")
     test_polar_rejects_roe_flux()
     print("OK R2b : flux Riemann non-rusanov (roe) rejete")
+    test_polar_rejects_hll_on_scalar_exb()
+    print("OK R2c : flux 'hll' sur ExB scalaire rejete (pas de wave_speeds)")
     test_polar_rejects_imex_time()
     print("OK R3 : IMEX sur polaire rejete")
     test_polar_rejects_variable_epsilon_on_step()

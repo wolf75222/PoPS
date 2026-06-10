@@ -544,6 +544,22 @@ class System {
   /// gauss_policy="evolve", phi EST l'etat physique et sa restauration est indispensable. Champ
   /// ny*nx row-major (meme layout que potential()).
   void set_potential(const std::vector<double>& phi);
+
+  /// @name Accesseurs GLOBAUX (collectifs MPI-safe) -- sorties / checkpoint multi-rangs (IO v1)
+  /// Le System construit UNE box couvrant tout le domaine (cf. ctor : ba mono-box, dm round-robin ->
+  /// box 0 sur le rang 0). Les accesseurs ci-dessus (density / get_state / potential) lisent fab(0) :
+  /// VALABLES sur le rang proprietaire (mono-rang OU rang 0 sous MPI), mais fab(0) est HORS BORNES sur
+  /// un rang sans box (local_size()==0). Les variantes _global remplissent un tampon GLOBAL depuis les
+  /// fabs LOCAUX (en indices GLOBAUX ; rien sur un rang vide) puis all_reduce_sum_inplace -> CHAQUE
+  /// rang detient le champ complet (pattern du reflux AMR, comm.hpp). Elles sont COLLECTIVES : tous les
+  /// rangs DOIVENT les appeler. En mono-rang elles rendent EXACTEMENT le meme tableau que les
+  /// accesseurs non-globaux (all_reduce = identite, box = domaine complet) -> sortie bit-identique.
+  /// La facade IO (sim.write / sim.checkpoint) les utilise puis n'ecrit le fichier que sur le rang 0.
+  /// @{
+  std::vector<double> density_global(const std::string& name) const;  ///< comp0, ny*nx global
+  std::vector<double> state_global(const std::string& name) const;    ///< U, ncomp*ny*nx global
+  std::vector<double> potential_global();                             ///< phi, ny*nx global
+  /// @}
   /// @}
 
  private:

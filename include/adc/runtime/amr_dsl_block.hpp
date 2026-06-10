@@ -260,6 +260,11 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
       ++*step_state;
     };
   }
+  // RESTAURATION de la PHASE DE CADENCE (IO v1, parite System::set_clock) : AmrSystem::set_clock pose
+  // le compteur de macro-pas du mono-bloc (la cadence regrid lit *step_state) au restart. Partage le
+  // MEME step_state que la fermeture step ci-dessus -> la phase regrid reprend exactement. Sans appel,
+  // *step_state reste a 0 (defaut, bit-identique).
+  h.set_macro_step = [step_state](int s) { *step_state = s; };
   // VITESSE DE CFL : lambda* (trait HasStabilitySpeed) si declare, sinon max_wave_speed du coupleur
   // (fallback historique bit-identique) -- MEME politique que System/make_max_speed, evaluee sur le
   // GROSSIER (la CFL mono-bloc AMR vit au pas grossier).

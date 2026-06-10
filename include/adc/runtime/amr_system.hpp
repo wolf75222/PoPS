@@ -138,6 +138,11 @@ struct AmrCompiledHooks {
   // garde adc_native_abi_key force la regeneration des .so anterieurs (ajout purement additif).
   std::function<double()> source_frequency;  ///< max grossier de mu [1/s] (0 = ne contraint pas)
   std::function<double()> stability_dt;      ///< min grossier du pas admissible (0 = ne contraint pas)
+  // AJOUTE EN QUEUE (IO v1, parite System::set_clock) : restauration du compteur de macro-pas du
+  // moteur MONO-BLOC (le coupleur AmrCouplerMP porte la phase de cadence regrid dans un step_state ;
+  // ce hook l'ecrit au restart). VIDE n'est jamais le cas (le builder le peuple toujours) ; le garde
+  // adc_native_abi_key force la regeneration des .so anterieurs (ajout purement additif en queue).
+  std::function<void(int)> set_macro_step;   ///< restaure la phase de cadence (regrid) du mono-bloc
 };
 
 /// Builder DIFFERE d'un bloc COMPILE sur la hierarchie multi-blocs : recoit le layout PARTAGE (cree
@@ -420,6 +425,14 @@ class AmrSystem {
 
   int nx() const;
   double time() const;
+  /// Compteur de MACRO-PAS (0-indexe ; incremente par step / advance / step_cfl), parite
+  /// System::macro_step. Necessaire au checkpoint/restart (la cadence stride / regrid depend de
+  /// macro_step % stride|regrid_every, pas seulement de t). Prerequis IO PR-IO-3 (audit 2026-06).
+  int macro_step() const;
+  /// RESTAURE l'horloge AMR (t, macro_step) -- parite System::set_clock. Pose le temps ET le compteur
+  /// de macro-pas (propage a la cadence regrid/stride du moteur, mono-bloc comme multi-blocs). Utile
+  /// seul (cadence stride + reprise d'horloge). @throws si macro_step < 0.
+  void set_clock(double t, int macro_step);
   int n_blocks() const;           ///< nombre de blocs (1 = mono-bloc AmrCouplerMP ; >= 2 = AmrRuntime)
   /// Noms des blocs dans l'ordre d'ajout (parite System::block_names) : la facade IO itere dessus
   /// pour ecrire CHAQUE bloc par son nom (un nom vide -> bloc 0, compat mono-bloc historique).

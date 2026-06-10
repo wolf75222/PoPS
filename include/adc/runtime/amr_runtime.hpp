@@ -756,6 +756,14 @@ class AmrRuntime {
     return dt;
   }
 
+  /// Compteur de MACRO-PAS du moteur (cadence regrid + stride hold-then-catch-up : regrid quand
+  /// macro_step_ % regrid_every == 0, rattrapage stride quand (macro_step_+1) % stride == 0).
+  int macro_step() const { return macro_step_; }
+  /// RESTAURE le compteur de macro-pas (IO v1, reserve au restart via AmrSystem::set_clock) : sans
+  /// lui la cadence regrid/stride repartirait de la phase 0 apres une reprise. Aucun effet sur l'etat
+  /// des niveaux ; pose seulement la phase de cadence.
+  void set_macro_step(int s) { macro_step_ = s; }
+
   /// Borne GLOBALE de pas (pendant AMR de System::add_dt_bound) : fn() evaluee une fois par
   /// step_cfl, all_reduce_min, <= 0/non finie = inerte. Pour couplage/scheduler/politiques user.
   void add_dt_bound(const std::string& label, std::function<double()> fn) {

@@ -265,26 +265,59 @@ BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, boo
   return bc;
 }
 
-/// Dispatch du schema spatial (limiteur fige, flux RusanovFlux) -> fermetures polaires compilees.
-/// Seul RusanovFlux est cable en polaire : il ne demande que max_wave_speed (donc valable pour
-/// l'ExB scalaire ET le fluide isotherme), tandis que HLLC/Roe supposent n_vars==4 (Euler avec
-/// energie), sans objet ici. "weno5" route assemble_rhs_polar sur la reconstruction WENO5-Z (3
-/// ghosts) comme le cartesien. @p wall_radial : paroi solide radiale (conservation de masse a la
-/// machine ; cf. build_block_polar).
+/// Dispatch du schema spatial (limiteur fige, flux Riemann) -> fermetures polaires compilees.
+/// Deux flux cables en polaire, MEME point d'injection template que le cartesien (build_block_polar
+/// porte le parametre Flux jusqu'a assemble_rhs_polar<Limiter, Flux>) :
+///   - "rusanov" : RusanovFlux, ne demande que max_wave_speed (valable pour l'ExB scalaire ET le
+///                 fluide isotherme) -- DEFAUT, strictement bit-identique a l'historique ;
+///   - "hll"     : HLLFlux (ondes signees), GATE identique au cartesien (make_block) sur la presence
+///                 de model.wave_speeds. Le fluide isotherme polaire (IsothermalFluxPolar : herite
+///                 IsothermalFlux::wave_speeds) y est eligible -> HLL moins diffusif que Rusanov sur
+///                 l'anneau. L'ExB scalaire (ExBVelocityPolar, pas de wave_speeds) -> rejet CLAIR.
+/// HLLC/Roe restent NON cables en polaire (supposent n_vars==4 Euler avec energie, sans brique flux
+/// d'energie polaire) -> rejet explicite. "weno5" route assemble_rhs_polar sur la reconstruction
+/// WENO5-Z (3 ghosts) comme le cartesien. @p wall_radial : paroi solide radiale (conservation de
+/// masse a la machine ; cf. build_block_polar).
 template <class Model>
 BlockClosures make_block_polar(const Model& m, const std::string& lim, const std::string& riem,
                                const PolarGridContext& ctx, bool recon_prim,
                                const std::string& method, bool wall_radial) {
-  // VALIDATION CENTRALISEE (registry dispatch_tags.hpp) AVANT le dispatch : message polaire IDENTIQUE
-  // a l'ancien throw inline (seul rusanov est cable en polaire ; HLLC/Roe supposent n_vars==4). Le
-  // dispatch des limiteurs qui suit est INCHANGE ; son throw final devient une garde d'incoherence.
+  // VALIDATION CENTRALISEE (registry dispatch_tags.hpp) AVANT le dispatch : en polaire, rusanov ET
+  // hll sont cables (hll depuis le solde de l'audit) ; HLLC/Roe et les tags inconnus levent le
+  // message polaire du registre. La GARDE DE CAPABILITE (hll exige model.wave_speeds) reste un
+  // `if constexpr` PAR MODELE ci-dessous, avec son message "exige ..." dedie.
   validate_riemann(riem, /*polar=*/true, "System (polaire)");
   validate_limiter(lim, "System (polaire)");
-  if (lim == "none") return build_block_polar<NoSlope, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
-  if (lim == "minmod") return build_block_polar<Minmod, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
-  if (lim == "vanleer") return build_block_polar<VanLeer, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
-  if (lim == "weno5") return build_block_polar<Weno5, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
-  throw_registry_dispatch_mismatch("System (polaire)", "limiteur", lim);
+  if (riem == "rusanov") {
+    if (lim == "none") return build_block_polar<NoSlope, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
+    if (lim == "minmod") return build_block_polar<Minmod, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
+    if (lim == "vanleer") return build_block_polar<VanLeer, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
+    if (lim == "weno5") return build_block_polar<Weno5, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
+    throw_registry_dispatch_mismatch("System (polaire)", "limiteur", lim);
+  }
+  if (riem == "hll") {
+    // GATE IDENTIQUE AU CARTESIEN (block_builder.hpp make_block, branche 'hll') : HLL est disponible
+    // des qu'un modele expose ses vitesses d'onde SIGNEES model.wave_speeds (le fluide isotherme
+    // polaire les herite d'IsothermalFlux). Pas de pression exigee (contrairement a HLLC/Roe). Un
+    // transport SCALAIRE sans onde signee (ExBVelocityPolar) ne satisfait PAS le requires -> erreur
+    // CLAIRE (pas un echec de compilation pour un modele scalaire). assemble_rhs_polar<Limiter, HLLFlux>
+    // est deja device-clean (foncteurs nommes, flux REUTILISE verbatim depuis le cartesien).
+    if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
+                    mm.wave_speeds(s, a, 0, r, r);
+                  }) {
+      if (lim == "none") return build_block_polar<NoSlope, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
+      if (lim == "minmod") return build_block_polar<Minmod, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
+      if (lim == "vanleer") return build_block_polar<VanLeer, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
+      if (lim == "weno5") return build_block_polar<Weno5, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
+      throw_registry_dispatch_mismatch("System (polaire)", "limiteur", lim);
+    } else {
+      throw std::runtime_error(
+          "System (polaire) : flux 'hll' exige des vitesses d'onde signees (model.wave_speeds) ; "
+          "le transport ExB scalaire ne les fournit pas -> 'rusanov'. Le fluide isotherme polaire "
+          "(transport='isothermal') les declare et accepte 'hll'.");
+    }
+  }
+  throw_registry_dispatch_mismatch("System (polaire)", "flux de Riemann", riem);
 }
 
 /// Fermeture de vitesse d'onde max du bloc POLAIRE (pour le pas CFL). @p aux pointe l'aux du System

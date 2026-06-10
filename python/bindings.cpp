@@ -12,6 +12,7 @@
 #include <pybind11/stl.h>
 
 #include <adc/core/kokkos_env.hpp>  // Kokkos_Core sous ADC_HAS_KOKKOS (kokkos_is_initialized)
+#include <adc/parallel/comm.hpp>    // adc::my_rank / n_ranks : garde rang-0 de la facade IO multi-rangs
 #include <adc/runtime/abi_key.hpp>  // adc::abi_key : cle d'ABI exposee au DSL (chemin "production")
 #include <adc/runtime/amr_system.hpp>
 #include <adc/runtime/system.hpp>
@@ -64,6 +65,12 @@ PYBIND11_MODULE(_adc, m) {
   // consulte (diagnostic) ; add_native_block la compare a la cle baked dans un loader natif.
   m.def("abi_key", &adc::abi_key,
         "Cle d'ABI du module (compilateur, standard C++, signature des en-tetes adc).");
+
+  // Rang / nombre de rangs MPI du communicateur (1 / 0 en serie ou MPI non initialise, cf.
+  // adc/parallel/comm.hpp). Exposes pour que la facade IO (sim.write / sim.checkpoint) n'ecrive le
+  // fichier que sur le rang 0 apres un gather collectif (state_global / potential_global).
+  m.def("my_rank", &adc::my_rank, "Rang MPI du processus (0 en serie).");
+  m.def("n_ranks", &adc::n_ranks, "Nombre de rangs MPI (1 en serie).");
 
   // Norme C++ du LOADER (ADC_CXX_STD injecte par le build : 20 sous Kokkos, 23 sinon). Le DSL
   // backend="production" DOIT compiler le modele natif avec cette MEME norme, sinon __cplusplus
@@ -364,6 +371,21 @@ PYBIND11_MODULE(_adc, m) {
            },
            py::arg("name"))
       .def("potential", [](System& s) { return to_2d(s.potential(), s.ny(), s.nx()); })
+      // Accesseurs GLOBAUX (collectifs MPI-safe) : sorties / checkpoint multi-rangs (IO v1). Chaque
+      // rang DOIT les appeler (all_reduce interne) ; ils rendent le champ COMPLET (gather rang-0
+      // implicite par all_reduce_sum) -- mono-rang : bit-identique a density / get_state / potential.
+      // La facade sim.write / sim.checkpoint les utilise puis n'ecrit le fichier que sur le rang 0.
+      .def("density_global",
+           [](const System& s, const std::string& name) {
+             return to_2d(s.density_global(name), s.ny(), s.nx());
+           },
+           py::arg("name"))
+      .def("state_global",
+           [](const System& s, const std::string& name) {
+             return to_3d(s.state_global(name), s.n_vars(name), s.ny(), s.nx());
+           },
+           py::arg("name"))
+      .def("potential_global", [](System& s) { return to_2d(s.potential_global(), s.ny(), s.nx()); })
       .def_static("abi_key", &System::abi_key,
                   "Cle d'ABI du module (cf. adc.abi_key) ; comparee a celle d'un loader natif.");
 
@@ -501,6 +523,10 @@ PYBIND11_MODULE(_adc, m) {
       .def("step_cfl", &AmrSystem::step_cfl, py::arg("cfl"))
       .def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
+      // Horloge AMR (IO v1, parite System) : compteur de macro-pas + restauration (t, macro_step) ->
+      // la cadence regrid/stride reprend exactement apres un set_clock. Prerequis PR-IO-3.
+      .def("macro_step", &AmrSystem::macro_step)
+      .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("n_blocks", &AmrSystem::n_blocks)
       .def("block_names", &AmrSystem::block_names)
       .def("n_patches", &AmrSystem::n_patches)
