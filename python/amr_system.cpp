@@ -128,8 +128,11 @@ struct AmrSystem::Impl {
     std::vector<double> consts;
     std::vector<std::string> out_blocks, out_roles;
     std::vector<int> prog_ops, prog_args, prog_lens;
-    double frequency = 0.0;  // mu declare (borne dt <= cfl/mu sur le macro-pas ; 0 = pas de borne)
+    double frequency = 0.0;  // mu CONSTANTE declaree (borne dt <= cfl/mu ; 0 = pas de borne)
     std::string label = "coupled_source";
+    // Frequence PAR CELLULE optionnelle mu(U) : programme bytecode (memes entrees/constantes/table de
+    // registres que la source). VIDES = frequence constante seule. Rejoue sur le runtime au build.
+    std::vector<int> freq_prog_ops, freq_prog_args;
   };
   std::vector<CoupledSourceSpec> coupled_sources;
 
@@ -328,10 +331,15 @@ struct AmrSystem::Impl {
     // (qui les agrege dans son step_cfl, all_reduce_min). Celles ajoutees APRES passent en direct.
     for (const auto& g : dt_bounds) runtime->add_dt_bound(g.label, g.fn);
     // Frequences declarees des sources couplees (CoupledSource.frequency, vague 3) : borne de pas
-    // dt <= cfl/mu sur le macro-pas du moteur runtime.
-    for (const auto& cs : coupled_sources)
+    // dt <= cfl/mu sur le macro-pas du moteur runtime. Frequence CONSTANTE puis frequence PAR CELLULE
+    // (Expr) : la seconde est evaluee sur le grossier a chaque step_cfl (add_coupled_frequency_expr
+    // resout les entrees / valide le bytecode ; programme vide -> ignore).
+    for (const auto& cs : coupled_sources) {
       if (cs.frequency > 0.0)
         runtime->add_coupled_frequency(cs.label, static_cast<Real>(cs.frequency));
+      runtime->add_coupled_frequency_expr(cs.label, cs.in_blocks, cs.in_roles, cs.consts,
+                                          cs.freq_prog_ops, cs.freq_prog_args);
+    }
     // REGRID D'UNION DES TAGS (capstone Phase 2, C.6) : si regrid_every > 0, on ACTIVE la cadence du
     // moteur et on pose le predicat de tag PAR BLOC (D1). En v1 le critere est COMMUN a tous les blocs
     // (densite, composante 0 > refine_threshold), comme le chemin mono-bloc AmrCouplerMP (qui tague
@@ -816,7 +824,9 @@ void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,
                                    const std::vector<int>& prog_ops,
                                    const std::vector<int>& prog_args,
                                    const std::vector<int>& prog_lens, double frequency,
-                                   const std::string& label) {
+                                   const std::string& label,
+                                   const std::vector<int>& freq_prog_ops,
+                                   const std::vector<int>& freq_prog_args) {
   if (p_->built)
     throw std::runtime_error("AmrSystem::add_coupled_source : le systeme est deja construit "
                              "(enregistrer la source avant tout step/mass/density)");
@@ -834,7 +844,8 @@ void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,
     throw std::runtime_error("AmrSystem::add_coupled_source : aucun terme de source (out_blocks vide)");
   p_->coupled_sources.push_back(Impl::CoupledSourceSpec{in_blocks, in_roles, consts, out_blocks,
                                                         out_roles, prog_ops, prog_args, prog_lens,
-                                                        frequency, label});
+                                                        frequency, label, freq_prog_ops,
+                                                        freq_prog_args});
 }
 
 void AmrSystem::step(double dt) {

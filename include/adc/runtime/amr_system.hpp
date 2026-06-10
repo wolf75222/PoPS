@@ -366,9 +366,14 @@ class AmrSystem {
   ///
   /// @throws std::runtime_error si appele en mono-bloc, si le systeme est deja construit, ou si la
   ///         forme du bytecode / un role / un bloc est invalide (memes gardes que System).
-  /// @param frequency frequence CONSERVATIVE declaree mu [1/s] du couplage (vague 3) : borne
+  /// @param frequency frequence CONSTANTE declaree mu [1/s] du couplage (vague 3) : borne
   ///                  dt <= cfl/mu sur le macro-pas de step_cfl ; <= 0 (defaut) = pas de borne.
   /// @param label     nom du couplage (raison "coupled_source:<label>" de last_dt_bound).
+  /// @param freq_prog_ops/freq_prog_args  programme bytecode OPTIONNEL d'une frequence PAR CELLULE
+  ///                  mu(U) (meme machine a pile / table de registres que la source). VIDES (defaut) =
+  ///                  frequence constante seule (bit-identique). Non vides : evaluee sur le NIVEAU
+  ///                  GROSSIER des blocs d'entree a chaque step_cfl (MAX + all_reduce_max, borne
+  ///                  dt <= cfl / max(mu)). La borne est donc evaluee sur le grossier (pas les patchs).
   void add_coupled_source(const std::vector<std::string>& in_blocks,
                           const std::vector<std::string>& in_roles,
                           const std::vector<double>& consts,
@@ -376,7 +381,9 @@ class AmrSystem {
                           const std::vector<std::string>& out_roles,
                           const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
                           const std::vector<int>& prog_lens, double frequency = 0.0,
-                          const std::string& label = "coupled_source");
+                          const std::string& label = "coupled_source",
+                          const std::vector<int>& freq_prog_ops = {},
+                          const std::vector<int>& freq_prog_args = {});
 
   void step(double dt);  ///< un macro-pas AMR (regrid periodique inclus)
   void advance(double dt, int nsteps);

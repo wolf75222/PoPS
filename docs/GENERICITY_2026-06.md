@@ -147,7 +147,11 @@ manquait encore.
    pas par sous-pas) ; raison "coupled_source:<label>". Plomberie System ET AmrSystem
    (add_coupled_source(frequency=, label=) -> coupled_freqs_ ; AmrRuntime::add_coupled_frequency ;
    step_cfl mono-bloc agrege aussi). DSL : `dsl.CoupledSource(...).frequency(mu)` transporte par
-   CompiledCoupledSource. Defaut sans frequency : aucun changement.
+   CompiledCoupledSource. Defaut sans frequency : aucun changement. RAFFINEMENT (sec. 7) : mu accepte
+   AUSSI une Expr (memes champs block().role() + param() que les termes) -> frequence PAR CELLULE
+   mu(U), emise en bytecode (freq_prog_ops/args) et reduite (MAX) par cellule a chaque pas
+   (CoupledFreqKernel, foncteur device-clean ; all_reduce_max global ; meme raison). AMR : evaluee sur
+   le NIVEAU GROSSIER des blocs d'entree. Constante = chemin historique, bit-identique.
 3. **DSL emet les hooks HLLC** : `m.enable_hllc()` genere contact_speed + hllc_star_state DEPUIS
    LES ROLES (Density/MomentumX/MomentumY[/Energy] requis ; les variables hors roles fluides sont
    traitees en scalaires passifs advectes a la vitesse de contact — generalisation, pas une
@@ -196,9 +200,11 @@ manquait encore.
    (documente "layout fluide canonique") ; pas de variantes role-aware.
 6. **IMEX-RK** : aucune famille ARK/IMEX-RK ; SourceImplicitBE est le seul schema implicite local
    (le Jacobien analytique vague 3 en ameliore la robustesse, pas l'ordre).
-7. **CoupledSource** : toujours explicite forward-Euler additif, capacites fixes (kCsMaxReg=32...) ;
-   frequency(mu) est une CONSTANTE declaree, pas une expression par cellule (une frequence
-   bytecode par cellule = suivi).
+7. **CoupledSource** : toujours explicite forward-Euler additif, capacites fixes (kCsMaxReg=32...).
+   frequency(mu) accepte desormais une CONSTANTE (chemin historique) OU une Expr -> frequence PAR
+   CELLULE mu(U) en bytecode, reduite (MAX) a chaque pas (cf. sec. 2 ; AMR : borne sur le grossier).
+   RESTE : la borne AMR ne voit pas une sous-estimation locale de mu sous un patch fin (evaluee sur
+   le grossier, choix assume).
 8. **Backends** : `compile(backend="aot")` reste le defaut (decision utilisateur a trancher ;
    adc.capabilities() publie la matrice) ; registry C++ des tags strings non factorisee
    (les tables make_block / dispatch_amr_* / polar restent paralleles, alignees par tests).

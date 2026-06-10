@@ -2,7 +2,9 @@
 
 #include <adc/core/state.hpp>     // kAuxBaseComps (canal B_z lu par l'etage source condense)
 #include <adc/core/types.hpp>     // Real
-#include <adc/parallel/comm.hpp>  // all_reduce_min (bornes globales : dt identique sur tous les rangs)
+#include <adc/coupling/coupled_source_program.hpp>  // CoupledFreqKernel (frequence couplee par cellule)
+#include <adc/mesh/for_each.hpp>  // reduce_max_cell (max mu sur les cellules, foncteur device-clean)
+#include <adc/parallel/comm.hpp>  // all_reduce_min/max (bornes globales : dt identique sur tous les rangs)
 #include <adc/runtime/grid_context.hpp>  // GeometryMode (aiguillage du transport disque)
 
 #include <stdexcept>  // std::runtime_error (mode disque demande sans avance disque sur un bloc)
@@ -90,6 +92,59 @@ class SystemStepper {
   void apply_couplings(Real dt) {
     if (owner_->couplings.empty()) return;
     for (auto& c : owner_->couplings) c(dt);
+  }
+
+  /// Borne de pas des FREQUENCES COUPLEES PAR CELLULE (CoupledSource.frequency avec une Expr,
+  /// raffinement de la frequence CONSTANTE). Pour chaque programme enregistre : reduit le MAX de mu(U)
+  /// sur les fabs LOCAUX du PREMIER bloc d'entree (CoupledFreqKernel, foncteur nomme device-clean ;
+  /// meme convention MPI-safe que apply_couplings), all_reduce_max GLOBAL, puis dt <= cfl / max(mu).
+  /// Met a jour @p dt (et @p reason si non nul) si la borne est plus serree. max(mu) <= 0 = pas de
+  /// borne ce pas. Raison "coupled_source:<label>" -- MEME prefixe que la frequence constante, pour un
+  /// diagnostic uniforme. Pendant PAR CELLULE de la boucle constante de step_cfl / step_adaptive ;
+  /// aucune source par cellule enregistree -> boucle vide, trajectoire bit-identique.
+  ///
+  /// MPI : all_reduce_max est appele par TOUS les rangs, le MEME nombre de fois (coupled_freq_exprs_ est
+  /// identique sur tous les rangs) -> collectif symetrique, dt identique partout (pas de deadlock). Un
+  /// rang sans box locale reduit m=0 (neutre pour MAX). ATTENTION : les Array4 sont reconstruits a
+  /// CHAQUE pas (les fabs peuvent etre realloues), comme apply_couplings.
+  void apply_coupled_freq_expr_bounds(double cfl, double& dt, std::string* reason) const {
+    Impl* P = owner_;
+    for (const auto& ce : P->coupled_freq_exprs_) {
+      Real m = 0;
+      if (ce.n_in > 0) {
+        auto& Uref = P->sp[static_cast<std::size_t>(ce.ins[0].sidx)].U;
+        for (int li = 0; li < Uref.local_size(); ++li) {
+          CoupledFreqKernel kern;
+          kern.n_in = ce.n_in;
+          kern.n_const = static_cast<int>(ce.kconsts.size());
+          for (int c = 0; c < ce.n_in; ++c) {
+            kern.in[c] = P->sp[static_cast<std::size_t>(ce.ins[static_cast<std::size_t>(c)].sidx)]
+                             .U.fab(li).array();
+            kern.in_comp[c] = ce.ins[static_cast<std::size_t>(c)].comp;
+          }
+          for (int c = 0; c < kern.n_const; ++c)
+            kern.consts[c] = ce.kconsts[static_cast<std::size_t>(c)];
+          kern.prog = ce.prog;
+          m = std::max(m, reduce_max_cell(Uref.box(li), kern));
+        }
+      } else {
+        // Programme SANS champ d'entree (frequence constante exprimee en bytecode) : evalue une fois
+        // sur les seules constantes (aucune box a parcourir) ; identique sur tous les rangs.
+        Real reg[kCsMaxReg];
+        const int nc = static_cast<int>(ce.kconsts.size());
+        for (int c = 0; c < nc; ++c) reg[c] = ce.kconsts[static_cast<std::size_t>(c)];
+        const Real mu0 = ce.prog.eval(reg);
+        if (mu0 > Real(0)) m = mu0;
+      }
+      const double mu = all_reduce_max(static_cast<double>(m));  // TOUS les rangs (symetrie collective)
+      if (mu > 0.0) {
+        const double dt_cs = cfl / mu;
+        if (dt_cs < dt) {
+          dt = dt_cs;
+          if (reason) *reason = "coupled_source:" + ce.label;
+        }
+      }
+    }
   }
 
   /// ETAGE SOURCE condense par Schur (OPT-IN, cf. set_source_stage). No-op si le bloc n'a pas d'etage
@@ -339,6 +394,10 @@ class SystemStepper {
       const double dt_cs = cfl / cs.mu;
       if (dt_cs < dt) { dt = dt_cs; reason = "coupled_source:" + cs.label; }
     }
+    // Frequences PAR CELLULE (CoupledSource.frequency avec une Expr) : mu(U) reduit (MAX) par cellule a
+    // ce pas, all_reduce_max global, dt <= cfl / max(mu). Meme raison "coupled_source:<label>" que la
+    // constante. Aucune source par cellule -> no-op (bit-identique).
+    apply_coupled_freq_expr_bounds(cfl, dt, &reason);
     // Bornes GLOBALES (System::add_dt_bound) : couplage multi-blocs, Schur/Poisson, AMR/scheduler.
     // Une evaluation HOTE par pas et par borne ; <= 0 ou non finie = ne contraint pas ce pas
     // (neutralisee en +inf AVANT le min global). ALL_REDUCE_MIN obligatoire : la callback est
@@ -426,6 +485,9 @@ class SystemStepper {
     for (const auto& cs : P->coupled_freqs_) {
       if (cs.mu > 0.0) macro_dt = std::min(macro_dt, cfl / cs.mu);
     }
+    // Frequences PAR CELLULE (Expr) : MAX de mu(U) par cellule, all_reduce_max, borne sur le macro-pas
+    // (cf. step_cfl). step_adaptive ne piste pas la raison active -> reason = nullptr.
+    apply_coupled_freq_expr_bounds(cfl, macro_dt, nullptr);
     // Bornes GLOBALES (System::add_dt_bound), comme step_cfl (meme all_reduce_min : dt identique
     // sur tous les rangs, cf. le commentaire de step_cfl).
     for (const auto& g : P->dt_bounds_) {

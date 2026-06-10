@@ -684,6 +684,41 @@ class AmrRuntime {
       const Real dt_cs = cfl / cs.mu;
       if (dt_cs < dt) { dt = dt_cs; last_dt_reason_ = "coupled_source:" + cs.label; }
     }
+    // Frequences PAR CELLULE (CoupledSource.frequency avec une Expr) : mu(U) reduit (MAX) sur le NIVEAU
+    // GROSSIER des blocs d'entree (la ou vit la CFL AMR), all_reduce_max GLOBAL (TOUS les rangs, neutre
+    // sans box locale), borne dt <= cfl / max(mu). Meme raison "coupled_source:<label>" que la
+    // constante. Aucune source par cellule -> boucle vide (bit-identique). Les Array4 sont reconstruits
+    // a CHAQUE pas (les fabs de la hierarchie sont repointes par le regrid), comme coupled_source_step.
+    for (const auto& ce : coupled_freq_exprs_) {
+      Real m = 0;
+      if (ce.n_in > 0) {
+        auto& Uref = (*blocks_[static_cast<std::size_t>(ce.ins[0].block)].levels)[0].U;  // grossier (lev 0)
+        for (int li = 0; li < Uref.local_size(); ++li) {
+          CoupledFreqKernel kern;
+          kern.n_in = ce.n_in;
+          kern.n_const = ce.n_const;
+          for (int c = 0; c < ce.n_in; ++c) {
+            kern.in[c] = (*blocks_[static_cast<std::size_t>(ce.ins[static_cast<std::size_t>(c)].block)]
+                               .levels)[0].U.fab(li).array();
+            kern.in_comp[c] = ce.ins[static_cast<std::size_t>(c)].comp;
+          }
+          for (int c = 0; c < ce.n_const; ++c) kern.consts[c] = ce.kconsts[static_cast<std::size_t>(c)];
+          kern.prog = ce.prog;
+          m = std::max(m, reduce_max_cell(Uref.box(li), kern));
+        }
+      } else {
+        // Programme SANS champ d'entree (constante en bytecode) : evalue une fois sur les constantes.
+        Real reg[kCsMaxReg];
+        for (int c = 0; c < ce.n_const; ++c) reg[c] = ce.kconsts[static_cast<std::size_t>(c)];
+        const Real mu0 = ce.prog.eval(reg);
+        if (mu0 > Real(0)) m = mu0;
+      }
+      const double mu = all_reduce_max(static_cast<double>(m));  // TOUS les rangs (symetrie collective)
+      if (mu > 0.0) {
+        const Real dt_cs = cfl / static_cast<Real>(mu);
+        if (dt_cs < dt) { dt = dt_cs; last_dt_reason_ = "coupled_source:" + ce.label; }
+      }
+    }
     // Bornes GLOBALES (AmrRuntime::add_dt_bound, parite avec System::add_dt_bound) : evaluees PAR
     // RANG puis reduites all_reduce_min (dt identique sur tous les rangs ; <= 0/non finie = inerte).
     for (const auto& g : dt_bounds_) {
@@ -712,6 +747,76 @@ class AmrRuntime {
   /// mu <= 0 = inerte (pas de borne).
   void add_coupled_frequency(const std::string& label, Real mu) {
     if (mu > Real(0)) coupled_freqs_.push_back(CoupledFreqDecl{label, mu});
+  }
+
+  /// Frequence COUPLEE PAR CELLULE (CoupledSource.frequency avec une Expr, raffinement de la frequence
+  /// CONSTANTE ci-dessus) : un programme bytecode mu(U) sur la MEME table de registres que la source
+  /// (entrees in_blocks/in_roles puis constantes consts). Evalue a chaque step_cfl sur le NIVEAU
+  /// GROSSIER des blocs d'entree (la ou vit la CFL AMR : h = dx_coarse), reduction MAX + all_reduce_max
+  /// global, borne dt <= cfl / max(mu) sur le macro-pas. La borne est donc evaluee sur le GROSSIER (pas
+  /// sur les patchs fins) : coherent avec la CFL transport AMR, mais une sous-estimation locale de mu
+  /// sous un patch fin n'est pas vue (choix assume, documente). Programme vide -> ignore (pas de borne).
+  /// Validation de forme (opcodes / registres bornes) et resolution STRICTE des roles, comme
+  /// add_coupled_source.
+  void add_coupled_frequency_expr(const std::string& label,
+                                  const std::vector<std::string>& in_blocks,
+                                  const std::vector<std::string>& in_roles,
+                                  const std::vector<double>& consts,
+                                  const std::vector<int>& freq_prog_ops,
+                                  const std::vector<int>& freq_prog_args) {
+    if (freq_prog_ops.empty() && freq_prog_args.empty()) return;  // pas de frequence par cellule
+    const int n_in = static_cast<int>(in_blocks.size());
+    const int n_const = static_cast<int>(consts.size());
+    if (static_cast<int>(in_roles.size()) != n_in)
+      throw std::runtime_error(
+          "AmrRuntime::add_coupled_frequency_expr : in_blocks / in_roles de tailles differentes");
+    if (n_in + n_const > kCsMaxReg)
+      throw std::runtime_error(
+          "AmrRuntime::add_coupled_frequency_expr : trop de registres (entrees + constantes > " +
+          std::to_string(kCsMaxReg) + ")");
+    if (freq_prog_ops.size() != freq_prog_args.size())
+      throw std::runtime_error(
+          "AmrRuntime::add_coupled_frequency_expr : freq_prog_ops / freq_prog_args de tailles differentes");
+    if (static_cast<int>(freq_prog_ops.size()) > kCsMaxProg)
+      throw std::runtime_error(
+          "AmrRuntime::add_coupled_frequency_expr : programme de frequence trop long (> " +
+          std::to_string(kCsMaxProg) + ")");
+    // Resout (bloc, role) -> (indice de bloc, composante), STRICT (mirroir de add_coupled_source).
+    std::vector<CsRef> ins(static_cast<std::size_t>(n_in));
+    for (int c = 0; c < n_in; ++c) {
+      const std::string& block = in_blocks[static_cast<std::size_t>(c)];
+      const std::string& role = in_roles[static_cast<std::size_t>(c)];
+      const int b = block_index(block);
+      if (b < 0)
+        throw std::runtime_error("AmrRuntime::add_coupled_frequency_expr : aucun bloc nomme '" + block +
+                                 "'");
+      const VariableRole r = role_from_name(role);
+      if (r == VariableRole::Custom)
+        throw std::runtime_error("AmrRuntime::add_coupled_frequency_expr : role '" + role +
+                                 "' inconnu (bloc '" + block + "')");
+      const int comp = blocks_[static_cast<std::size_t>(b)].cons_vars.index_of(r);
+      if (comp < 0)
+        throw std::runtime_error("AmrRuntime::add_coupled_frequency_expr : le bloc '" + block +
+                                 "' n'expose pas le role '" + role +
+                                 "' (pas de repli silencieux sur la composante 0)");
+      ins[static_cast<std::size_t>(c)] = {b, comp, CsProgram{}};
+    }
+    CsProgram pg;
+    pg.len = static_cast<int>(freq_prog_ops.size());
+    for (int k = 0; k < pg.len; ++k) {
+      const int opc = freq_prog_ops[static_cast<std::size_t>(k)];
+      const int a = freq_prog_args[static_cast<std::size_t>(k)];
+      if (opc < 0 || opc > static_cast<int>(CsOp::Sqrt))
+        throw std::runtime_error("AmrRuntime::add_coupled_frequency_expr : opcode invalide dans la frequence");
+      if (opc == static_cast<int>(CsOp::PushReg) && (a < 0 || a >= n_in + n_const))
+        throw std::runtime_error(
+            "AmrRuntime::add_coupled_frequency_expr : registre hors bornes dans la frequence");
+      pg.op[k] = opc;
+      pg.arg[k] = a;
+    }
+    std::vector<Real> kconsts(consts.begin(), consts.end());
+    coupled_freq_exprs_.push_back(
+        CoupledFreqExprDecl{label, std::move(ins), pg, n_in, n_const, std::move(kconsts)});
   }
 
   /// Borne ACTIVE du dernier step_cfl ("transport:<bloc>" / "source_frequency:<bloc>" /
@@ -806,6 +911,18 @@ class AmrRuntime {
     Real mu;
   };
   std::vector<CoupledFreqDecl> coupled_freqs_;
+  // Frequences PAR CELLULE des sources couplees (CoupledSource.frequency avec une Expr) : programme
+  // bytecode mu(U) evalue sur le grossier a chaque step_cfl (MAX + all_reduce_max -> dt <= cfl/max(mu)).
+  // ins = (bloc, comp) des entrees (prog inutilise) ; kconsts = constantes (memes que la source).
+  struct CoupledFreqExprDecl {
+    std::string label;
+    std::vector<CsRef> ins;
+    CsProgram prog;
+    int n_in = 0;
+    int n_const = 0;
+    std::vector<Real> kconsts;
+  };
+  std::vector<CoupledFreqExprDecl> coupled_freq_exprs_;
   std::string last_dt_reason_;
   std::vector<MultiFab> aux_;  // [niveau], partage par tous les blocs
   std::vector<CoupledSourceSpec> coupled_sources_;  // sources couplees enregistrees (appliquees apres transport)

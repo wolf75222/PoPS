@@ -3037,10 +3037,11 @@ class CompiledCoupledSource:
     integrateur Python. Aucun .so : le couplage est interprete cote C++ (machine a pile device)."""
 
     def __init__(self, name, backend, in_blocks, in_roles, consts, out_blocks, out_roles,
-                 prog_ops, prog_args, prog_lens, terms, reg_order, frequency=0.0):
+                 prog_ops, prog_args, prog_lens, terms, reg_order, frequency=0.0,
+                 freq_prog_ops=None, freq_prog_args=None, frequency_expr=None):
         self.name = name
         self.backend = backend
-        self.frequency = float(frequency)  # mu [1/s] declare (0 = pas de borne de pas)
+        self.frequency = float(frequency)  # mu [1/s] CONSTANTE declaree (0 = pas de borne constante)
         self.in_blocks = list(in_blocks)
         self.in_roles = list(in_roles)        # canoniques (lowercase, frontiere C++)
         self.consts = list(consts)
@@ -3049,6 +3050,11 @@ class CompiledCoupledSource:
         self.prog_ops = list(prog_ops)
         self.prog_args = list(prog_args)
         self.prog_lens = list(prog_lens)
+        # Frequence PAR CELLULE mu(U) : bytecode (memes entrees/constantes que la source). VIDES =
+        # frequence constante seule. Transportes a System/AmrSystem.add_coupled_source.
+        self.freq_prog_ops = list(freq_prog_ops) if freq_prog_ops else []
+        self.freq_prog_args = list(freq_prog_args) if freq_prog_args else []
+        self._frequency_expr = frequency_expr  # Expr de reference (eval numpy pour les tests) ; None si constante
         self._terms = list(terms)             # [(block, role_canonical, Expr)] : reference numpy
         self._reg_order = list(reg_order)     # noms d'env '<bloc>::<role>' dans l'ordre des registres
 
@@ -3065,6 +3071,18 @@ class CompiledCoupledSource:
         for (block, role), arr in fields.items():
             env["%s::%s" % (block, _role_canonical(role))] = arr
         return [(b, r, e.eval(env)) for (b, r, e) in self._terms]
+
+    def reference_frequency(self, fields):
+        """Evalue la frequence PAR CELLULE mu(U) sur des tableaux numpy (REFERENCE pour les tests) :
+        memes Expr / table de registres que le bytecode C++. @p fields : dict (bloc, role_canonical) ->
+        tableau ; renvoie le tableau mu (memes formules). Renvoie None si la frequence est CONSTANTE
+        (pas d'Expr) -- utiliser .frequency dans ce cas."""
+        if self._frequency_expr is None:
+            return None
+        env = {}
+        for (block, role), arr in fields.items():
+            env["%s::%s" % (block, _role_canonical(role))] = arr
+        return self._frequency_expr.eval(env)
 
 
 class CoupledSource:
@@ -3096,17 +3114,33 @@ class CoupledSource:
         # l'autre -expr (Neg) -> echange conservatif par construction. verify_conservation=True les
         # revisite a la compilation pour CONTROLER la propriete (et detecter une rupture cote add manuel).
         self._pairs = []
-        self._frequency = 0.0  # mu [1/s] declare (borne de pas du couplage ; 0 = pas de borne)
+        self._frequency = 0.0  # mu [1/s] CONSTANTE declaree (borne de pas du couplage ; 0 = pas de borne)
+        # mu(U) PAR CELLULE optionnelle : une Expr (meme vocabulaire que les termes : block().role() +
+        # param()) emise en bytecode au compile() contre la MEME table de registres. None = constante.
+        self._frequency_expr = None
 
     def frequency(self, mu):
-        """FREQUENCE CONSERVATIVE declaree mu [1/s] du couplage (audit vague 3) : borne de pas
-        dt <= cfl / mu agregee par System/AmrSystem::step_cfl (raison 'coupled_source:<nom>').
-        Les couplages sont appliques UNE fois par MACRO-pas (splitting, apply_couplings(dt)) :
-        la borne porte donc sur le macro-dt, SANS facteur substeps/stride. V1 : constante declaree
-        choisie conservative (cf. meeting : lambda*/mu 'constante ou runtime-param choisie assez
-        conservative') ; une frequence PAR CELLULE evaluee en bytecode est un raffinement ulterieur.
-        mu <= 0 = pas de borne (historique). Renvoie self (chainable)."""
-        self._frequency = float(mu)
+        """FREQUENCE declaree mu [1/s] du couplage (audit vague 3) : borne de pas dt <= cfl / mu
+        agregee par System/AmrSystem::step_cfl (raison 'coupled_source:<nom>'). Les couplages sont
+        appliques UNE fois par MACRO-pas (splitting, apply_couplings(dt)) : la borne porte sur le
+        macro-dt, SANS facteur substeps/stride. mu <= 0 = pas de borne (historique).
+
+        @p mu accepte DEUX formes :
+          - un nombre (float / int) -> frequence CONSTANTE (chemin historique, bit-identique) ;
+          - une Expr du MEME vocabulaire que les termes (champs block().role() + param()) ->
+            frequence PAR CELLULE mu(U), emise en bytecode au compile() et evaluee par cellule cote
+            C++ (MAX + all_reduce_max -> dt <= cfl / max(mu)). Les champs references DOIVENT etre
+            declares via .block(...).role(...) (comme pour les termes) ; sinon compile() leve une
+            ValueError EXPLICITE (champ utilise sans .block(...).role(...)).
+
+        Renvoie self (chainable)."""
+        # Un Expr/_CsField/Param -> frequence par cellule (bytecode) ; un scalaire -> constante.
+        if isinstance(mu, (int, float)) and not isinstance(mu, bool):
+            self._frequency = float(mu)
+            self._frequency_expr = None
+        else:
+            self._frequency_expr = _wrap(mu)  # Expr / _CsField / Param -> noeud d'arbre (cf. _wrap)
+            self._frequency = 0.0             # le bytecode porte la borne ; pas de constante en doublon
         return self
 
     # --- construction symbolique ----------------------------------------------------------------
@@ -3305,6 +3339,18 @@ class CoupledSource:
             prog_lens.append(len(ops))
             out_blocks.append(block)
             out_roles.append(role)
+        # FREQUENCE PAR CELLULE optionnelle : on emet son programme APRES les termes, contre la MEME
+        # table de registres (reg_index) et la MEME liste de constantes (self._consts) -- les champs
+        # references doivent etre declares via .block().role() (sinon _emit_program leve : champ utilise
+        # sans .block(...).role(...)). Les constantes propres a la frequence s'ajoutent apres celles des
+        # termes ; cote C++ elles occupent les memes registres r[n_in ..] (CoupledFreqKernel les charge
+        # comme la source). Frequence constante (ou aucune) -> programme vide (chemin historique).
+        freq_prog_ops, freq_prog_args = [], []
+        if self._frequency_expr is not None:
+            freq_prog_ops, freq_prog_args = self._emit_program(self._frequency_expr, reg_index)
+            if len(freq_prog_ops) > _CS_MAX_PROG:
+                raise ValueError("CoupledSource : programme de frequence trop long (%d > %d)"
+                                 % (len(freq_prog_ops), _CS_MAX_PROG))
         n_reg = len(self._reg_order) + len(self._consts)
         if n_reg > _CS_MAX_REG:
             raise ValueError("CoupledSource : trop de registres (entrees + constantes = %d > %d)"
@@ -3318,4 +3364,6 @@ class CoupledSource:
             name=self.name, backend=backend, in_blocks=in_blocks, in_roles=in_roles,
             consts=list(self._consts), out_blocks=out_blocks, out_roles=out_roles,
             prog_ops=prog_ops, prog_args=prog_args, prog_lens=prog_lens,
-            terms=self._terms, reg_order=self._reg_order, frequency=self._frequency)
+            terms=self._terms, reg_order=self._reg_order, frequency=self._frequency,
+            freq_prog_ops=freq_prog_ops, freq_prog_args=freq_prog_args,
+            frequency_expr=self._frequency_expr)

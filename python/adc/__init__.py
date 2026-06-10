@@ -1558,7 +1558,11 @@ class System:
             self._s.add_coupled_source(coupling.in_blocks, coupling.in_roles, coupling.consts,
                                        coupling.out_blocks, coupling.out_roles, coupling.prog_ops,
                                        coupling.prog_args, coupling.prog_lens,
-                                       getattr(coupling, "frequency", 0.0), coupling.name)
+                                       getattr(coupling, "frequency", 0.0), coupling.name,
+                                       # Frequence PAR CELLULE mu(U) (vides = constante seule, cf.
+                                       # CoupledSource.frequency(Expr)). Forwardes a la frontiere C++.
+                                       getattr(coupling, "freq_prog_ops", []),
+                                       getattr(coupling, "freq_prog_args", []))
         elif isinstance(coupling, Ionization):
             self.add_ionization(electron=coupling.electron, ion=coupling.ion,
                                 neutral=coupling.neutral, rate=coupling.rate)
@@ -2255,6 +2259,28 @@ class AmrSystem:
         gamma = compiled.gamma if compiled.gamma is not None else 1.4
         self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                  spatial.recon, time.kind, gamma, nsub)
+
+    def add_coupling(self, coupling):
+        """Ajoute une SOURCE COUPLEE inter-especes generique (adc.dsl.CoupledSource(...).compile(...))
+        sur la hierarchie AMR PARTAGEE (MULTI-BLOCS), pendant raffine de System.add_coupling. La source
+        est transportee en bytecode et interpretee cote C++ (AmrSystem.add_coupled_source ; aucun
+        callback Python par cellule). La frequence du couplage (CoupledSource.frequency) est honoree :
+        constante -> borne dt <= cfl/mu ; Expr -> frequence PAR CELLULE mu(U) evaluee sur le GROSSIER a
+        chaque step_cfl (les vecteurs freq_prog_* sont forwardes). Doit etre appele AVANT le premier
+        step (la source est figee puis injectee au build paresseux du moteur runtime)."""
+        from . import dsl  # import tardif (dsl importe ce module : eviter le cycle a l'import)
+
+        if isinstance(coupling, dsl.CompiledCoupledSource):
+            self._s.add_coupled_source(coupling.in_blocks, coupling.in_roles, coupling.consts,
+                                       coupling.out_blocks, coupling.out_roles, coupling.prog_ops,
+                                       coupling.prog_args, coupling.prog_lens,
+                                       getattr(coupling, "frequency", 0.0), coupling.name,
+                                       getattr(coupling, "freq_prog_ops", []),
+                                       getattr(coupling, "freq_prog_args", []))
+        else:
+            raise TypeError("AmrSystem.add_coupling attend un CompiledCoupledSource "
+                            "(adc.dsl.CoupledSource(...).compile(...)) : la source couplee AMR est "
+                            "MULTI-BLOCS et decrite en formules")
 
     def __getattr__(self, attr):
         return getattr(self._s, attr)

@@ -132,4 +132,32 @@ struct CoupledSourceKernel {
   }
 };
 
+// Foncteur de REDUCTION MAX d'une FREQUENCE COUPLEE PAR CELLULE (CoupledSource.frequency avec une Expr,
+// raffinement de la frequence CONSTANTE declaree). mu(i, j) = prog.eval(registres de la cellule) : meme
+// vocabulaire que les termes de source (champs (bloc, role) en entree + constantes .param()). Modele sur
+// CoupledSourceKernel mais en LECTURE SEULE (aucune ecriture) ; il reduit le MAX au lieu d'ecrire des
+// sorties. Capture par VALEUR des POD (Array4 d'entree, programme, constantes) -> device-clean (nvcc/
+// Kokkos) ; la signature (i, j, Real& acc) est celle attendue par reduce_max_cell. Registres charges
+// EXACTEMENT comme le noyau de source : r[0 .. n_in-1] = entrees, r[n_in ..] = constantes -> les indices
+// de registre du programme (emis cote Python contre la MEME table) sont coherents. La borne de pas qui en
+// derive est dt <= cfl / max(mu) (max global agrege par step_cfl, all_reduce_max sur tous les rangs).
+struct CoupledFreqKernel {
+  Array4 in[kCsMaxReg];   // champs d'entree (un par (bloc, role) lu) ; seuls n_in premiers sont valides
+  int in_comp[kCsMaxReg];
+  int n_in = 0;
+
+  Real consts[kCsMaxReg];  // constantes (parametres), chargees dans r[n_in ..]
+  int n_const = 0;
+
+  CsProgram prog;  // programme postfixe de la frequence (sommet final = mu de la cellule)
+
+  ADC_HD void operator()(int i, int j, Real& acc) const {
+    Real reg[kCsMaxReg];
+    for (int c = 0; c < n_in; ++c) reg[c] = in[c](i, j, in_comp[c]);
+    for (int c = 0; c < n_const; ++c) reg[n_in + c] = consts[c];
+    const Real mu = prog.eval(reg);
+    if (mu > acc) acc = mu;
+  }
+};
+
 }  // namespace adc

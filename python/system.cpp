@@ -192,6 +192,21 @@ struct System::Impl {
     double mu;
   };
   std::vector<CoupledFreq> coupled_freqs_;
+  // Frequences PAR CELLULE des sources couplees (CoupledSource.frequency avec une Expr, raffinement
+  // de la frequence CONSTANTE ci-dessus) : un programme bytecode mu(U) evalue par cellule a CHAQUE
+  // pas (reduction MAX, all_reduce_max global), borne dt <= cfl / max(mu). Les entrees REUTILISENT la
+  // resolution resolve() des registres d'entree (sidx, comp) ; les constantes sont les memes que la
+  // source. Vide (defaut) -> aucune borne par cellule (chemin historique). Stocke APRES la validation
+  // complete (meme regle anti-borne-fantome que le scalaire).
+  struct CoupledFreqExpr {
+    std::string label;
+    CsProgram prog;
+    struct In { int sidx, comp; };
+    std::vector<In> ins;  // (espece, composante) des entrees (memes que la source ; resolues une fois)
+    int n_in = 0;
+    std::vector<Real> kconsts;  // constantes chargees dans r[n_in ..] (memes que la source)
+  };
+  std::vector<CoupledFreqExpr> coupled_freq_exprs_;
 
   // stride_due (filtre de cadence hold-then-catch-up) EXTRAIT vers stepper_ (SystemStepper, Lot B) :
   // il sert exclusivement a l'avance en temps. macro_step_ (ci-dessus) reste un membre PARTAGE de Impl
@@ -953,7 +968,9 @@ void System::add_coupled_source(const std::vector<std::string>& in_blocks,
                                 const std::vector<int>& prog_ops,
                                 const std::vector<int>& prog_args,
                                 const std::vector<int>& prog_lens,
-                                double frequency, const std::string& label) {
+                                double frequency, const std::string& label,
+                                const std::vector<int>& freq_prog_ops,
+                                const std::vector<int>& freq_prog_args) {
   Impl* P = p_.get();
   const int n_in = static_cast<int>(in_blocks.size());
   const int n_const = static_cast<int>(consts.size());
@@ -1032,11 +1049,53 @@ void System::add_coupled_source(const std::vector<std::string>& in_blocks,
   // repartie en round-robin), donc meme local_size() et meme indexation locale -> on iterait en parallele
   // sur les fabs locaux. Conversion en valeurs CAPTUREES (pas de reference a 'this' du lambda C++).
   std::vector<Real> kconsts(consts.begin(), consts.end());
-  // Frequence declaree du couplage (audit vague 3) : enregistree pour la borne de pas de step_cfl /
-  // step_adaptive (dt <= cfl/mu sur le MACRO-pas). <= 0 = pas de borne (historique). Poussee APRES
-  // toute la validation (qui leve) : un couplage rejete ne doit laisser AUCUNE borne fantome --
-  // sinon un script qui try/except l'echec garderait un pas bride sans physique correspondante.
+  // Frequence PAR CELLULE optionnelle (CoupledSource.frequency avec une Expr, raffinement de la
+  // frequence CONSTANTE) : un programme bytecode mu(U) sur la MEME table de registres que les termes
+  // (entrees puis constantes). Valide ICI sa FORME (opcodes / registres bornes) AVANT tout push -- la
+  // borne ne doit etre enregistree qu'apres une validation complete (regle anti-borne-fantome). Vide
+  // (defaut) -> aucune frequence par cellule (chemin historique).
+  const bool has_freq_expr = !freq_prog_ops.empty() || !freq_prog_args.empty();
+  CsProgram freq_pg;
+  if (has_freq_expr) {
+    if (freq_prog_ops.size() != freq_prog_args.size())
+      throw std::runtime_error("System::add_coupled_source : freq_prog_ops / freq_prog_args de tailles "
+                               "differentes");
+    if (static_cast<int>(freq_prog_ops.size()) > kCsMaxProg)
+      throw std::runtime_error("System::add_coupled_source : programme de frequence trop long (> " +
+                               std::to_string(kCsMaxProg) + ")");
+    freq_pg.len = static_cast<int>(freq_prog_ops.size());
+    for (int k = 0; k < freq_pg.len; ++k) {
+      const int opc = freq_prog_ops[static_cast<std::size_t>(k)];
+      const int a = freq_prog_args[static_cast<std::size_t>(k)];
+      if (opc < 0 || opc > static_cast<int>(CsOp::Sqrt))
+        throw std::runtime_error("System::add_coupled_source : opcode invalide dans la frequence");
+      if (opc == static_cast<int>(CsOp::PushReg) && (a < 0 || a >= n_in + n_const))
+        throw std::runtime_error("System::add_coupled_source : registre hors bornes dans la frequence");
+      freq_pg.op[k] = opc;
+      freq_pg.arg[k] = a;
+    }
+  }
+  // Frequence CONSTANTE declaree du couplage (audit vague 3) : enregistree pour la borne de pas de
+  // step_cfl / step_adaptive (dt <= cfl/mu sur le MACRO-pas). <= 0 = pas de borne (historique). Poussee
+  // APRES toute la validation (source ET frequence ont leve si invalides) : un couplage rejete ne doit
+  // laisser AUCUNE borne fantome -- sinon un script qui try/except l'echec garderait un pas bride sans
+  // physique correspondante.
   if (frequency > 0.0) P->coupled_freqs_.push_back(Impl::CoupledFreq{label, frequency});
+  // Frequence PAR CELLULE : meme regle (push apres validation complete). Les entrees REUTILISENT la
+  // resolution resolve() (ins) ; les constantes sont les memes que la source (kconsts). Le programme
+  // mu(U) est reduit (MAX) a chaque pas dans step_cfl / step_adaptive.
+  if (has_freq_expr) {
+    Impl::CoupledFreqExpr ce;
+    ce.label = label;
+    ce.prog = freq_pg;
+    ce.n_in = n_in;
+    ce.ins.resize(static_cast<std::size_t>(n_in));
+    for (int c = 0; c < n_in; ++c)
+      ce.ins[static_cast<std::size_t>(c)] = {ins[static_cast<std::size_t>(c)].sidx,
+                                             ins[static_cast<std::size_t>(c)].comp};
+    ce.kconsts = kconsts;
+    P->coupled_freq_exprs_.push_back(std::move(ce));
+  }
   P->couplings.push_back(
       [P, ins, outs, kconsts, n_in, n_const, n_terms](Real dt) {
         // MPI-safe : iteration sur les fabs LOCAUX du premier bloc d'entree (ou de sortie si aucune

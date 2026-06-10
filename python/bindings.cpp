@@ -253,9 +253,13 @@ PYBIND11_MODULE(_adc, m) {
       .def("add_coupled_source", &System::add_coupled_source, py::arg("in_blocks"),
            py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"), py::arg("out_roles"),
            py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
-           // Frequence declaree mu du couplage (CoupledSource.frequency, vague 3) : borne de pas
-           // dt <= cfl/mu sur le macro-pas ; <= 0 = pas de borne (historique).
-           py::arg("frequency") = 0.0, py::arg("label") = "coupled_source")
+           // Frequence CONSTANTE declaree mu du couplage (CoupledSource.frequency, vague 3) : borne de
+           // pas dt <= cfl/mu sur le macro-pas ; <= 0 = pas de borne (historique).
+           py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
+           // Frequence PAR CELLULE optionnelle mu(U) : programme bytecode (meme machine a pile / table
+           // de registres que les termes). VIDES (defaut) = frequence constante seule, bit-identique.
+           py::arg("freq_prog_ops") = std::vector<int>{},
+           py::arg("freq_prog_args") = std::vector<int>{})
       .def("variable_names", &System::variable_names, py::arg("name"),
            py::arg("kind") = "conservative")
       .def("variable_roles", &System::variable_roles, py::arg("name"),
@@ -464,7 +468,10 @@ PYBIND11_MODULE(_adc, m) {
       .def("add_coupled_source", &AmrSystem::add_coupled_source, py::arg("in_blocks"),
            py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"), py::arg("out_roles"),
            py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
-           py::arg("frequency") = 0.0, py::arg("label") = "coupled_source")
+           py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
+           // Frequence PAR CELLULE optionnelle mu(U) : evaluee sur le grossier (cf. System).
+           py::arg("freq_prog_ops") = std::vector<int>{},
+           py::arg("freq_prog_args") = std::vector<int>{})
       .def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &AmrSystem::step_cfl, py::arg("cfl"))
