@@ -31,6 +31,9 @@ struct LevelHierarchy {
   bool coarse_replicated = true;     // niveau 0 replique (true) ou multi-box reparti (false)
   bool recon_prim = false;           // reconstruction primitive (cf. compute_face_fluxes)
   bool imex = false;                 // source raide implicite (backward_euler) au lieu d'Euler avant
+  // OPTIONS NEWTON du pas IMEX (defaut {} = constantes historiques 2 iters / 1e-7 -> bit-identique).
+  // Honorees uniquement quand imex==true ; transmises au backward_euler_source par mf_apply_source_treatment.
+  NewtonOptions newton_options{};
 };
 
 // Entree unifiee de production : avance la hierarchie d'un pas dt. Forme "pieces" (le coupleur
@@ -43,15 +46,15 @@ struct LevelHierarchy {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
                  Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true,
-                 bool recon_prim = false, bool imex = false) {
-  detail::amr_step_multilevel_multipatch<Limiter, NumericalFlux>(m, levels, base_dom, dt, base_per,
-                                                                 coarse_replicated, recon_prim, imex);
+                 bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {}) {
+  detail::amr_step_multilevel_multipatch<Limiter, NumericalFlux>(
+      m, levels, base_dom, dt, base_per, coarse_replicated, recon_prim, imex, nopts);
 }
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, LevelHierarchy& h, Real dt) {
   advance_amr<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt, h.base_per, h.coarse_replicated,
-                                      h.recon_prim, h.imex);
+                                      h.recon_prim, h.imex, h.newton_options);
 }
 
 }  // namespace adc

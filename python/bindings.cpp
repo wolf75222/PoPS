@@ -396,11 +396,35 @@ PYBIND11_MODULE(_adc, m) {
            // -> backward-Euler plein. N'ont de sens qu'en time="imex" et en MULTI-BLOCS (cf. add_block).
            py::arg("implicit_vars") = std::vector<std::string>{},
            py::arg("implicit_roles") = std::vector<std::string>{},
-           // Options Newton IMEX (vague 3, parite System) : MULTI-BLOCS seulement (mono-bloc :
-           // rejet au build, iters=2 fige cote coupleur). Pas de diagnostics sur AMR.
+           // Options Newton IMEX (vague 3, parite System) : OPTIONS cablees en MONO-BLOC (coupleur)
+           // ET MULTI-BLOCS (moteur). newton_diagnostics (rapport newton_report) : MULTI-BLOCS natif
+           // seulement (mono-bloc rejete au build ; loaders .so rejetes a la facade Python).
            py::arg("newton_max_iters") = 2, py::arg("newton_rel_tol") = 0.0,
            py::arg("newton_abs_tol") = 0.0, py::arg("newton_fd_eps") = 1e-7,
-           py::arg("newton_damping") = 1.0, py::arg("newton_fail_policy") = "none")
+           py::arg("newton_damping") = 1.0, py::arg("newton_fail_policy") = "none",
+           py::arg("newton_diagnostics") = false)
+      // Rapport Newton (diagnostics IMEX OPT-IN, MULTI-BLOCS natif) : dict {enabled, converged,
+      // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, agrege sur les
+      // niveaux/sous-pas de la DERNIERE avance du bloc. failed_cell = (i, j) ou None. Forme EXACTE du
+      // binding System.newton_report (parite, y compris failed_cell tuple/None).
+      .def("newton_report",
+           [](AmrSystem& s, const std::string& name) {
+             const AmrSystem::SourceNewtonReport r = s.newton_report(name);
+             py::dict d;
+             d["enabled"] = r.enabled;
+             d["converged"] = r.converged;
+             d["max_residual"] = r.max_residual;
+             d["max_iters_used"] = r.max_iters_used;
+             d["n_failed"] = r.n_failed;
+             if (r.failed_i >= 0)
+               d["failed_cell"] = py::make_tuple(static_cast<int>(r.failed_i),
+                                                 static_cast<int>(r.failed_j));
+             else
+               d["failed_cell"] = py::none();
+             d["failed_component"] = static_cast<int>(r.failed_comp);
+             return d;
+           },
+           py::arg("name"))
       // Bloc NATIF AMR charge depuis un loader .so genere par le DSL (backend "production",
       // target="amr_system") : le .so inline add_compiled_model(AmrSystem&) -> bloc natif sur la
       // hierarchie AMR (reflux, regrid), cle d'ABI verifiee. cf. AmrSystem::add_native_block. PAS de

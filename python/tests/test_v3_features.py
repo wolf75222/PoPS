@@ -4,8 +4,9 @@
   (A) CoupledSource.frequency : la 'CFL de couplage' declaree borne le pas
       (dt == cfl/mu, raison 'coupled_source:<nom>') -- System, sans compilateur ; et un couplage
       REJETE ne laisse AUCUNE borne fantome (frequence enregistree apres validation, revue v3) ;
-  (B) options Newton sur AMR : TRANSPORTEES en multi-blocs natif (run fini, fail_policy acceptee),
-      REJET explicite en mono-bloc (iters=2 fige cote coupleur) et pour newton_diagnostics ;
+  (B) options Newton sur AMR : OPTIONS cablees en multi-blocs natif ET en mono-bloc (run fini,
+      fail_policy acceptee) ; newton_diagnostics (rapport newton_report) cable en MULTI-BLOCS natif,
+      REJETE en mono-bloc (le coupleur n'agrege pas de rapport) ;
   (C) set_conservative_state MULTI-BLOCS : l'etat complet (avec quantite de mouvement) seede le
       grossier (la masse et la dynamique different du seed densite au repos) ; et AmrSystem.write
       npz ecrit un champ PAR bloc par NOM (pas seulement le bloc 0, revue v3) ;
@@ -83,7 +84,7 @@ chk(abs(dt2 - 0.4 / 500.0) < 1e-15 and sim.last_dt_bound() == "coupled_source:fr
     f"couplage rejete = ZERO borne fantome (dt {dt2:.3e}, borne {sim.last_dt_bound()!r})")
 
 # --- (B) options Newton sur AMR ------------------------------------------------------
-print("== (B) AMR : options Newton transportees (multi-blocs), rejets mono/diagnostics ==")
+print("== (B) AMR : options Newton cablees (mono ET multi), newton_report multi, rejet diag mono ==")
 amr = adc.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
@@ -96,24 +97,43 @@ amr.set_density("e2", gaussian(16).ravel())
 amr.step(2e-3)
 chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
     "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
+# MONO-BLOC + options Newton : DESORMAIS cable (coupleur AmrCouplerMP) -> tourne fini (plus de rejet).
 mono = adc.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 mono.set_refinement(1e30)
 mono.add_block("e", iso_model(), spatial=adc.FiniteVolume(limiter="minmod"),
-               time=adc.IMEX(newton_max_iters=4))
+               time=adc.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
 mono.set_density("e", gaussian(16).ravel())
+mono.step(2e-3)  # build paresseux mono-bloc : les options sont threadees au coupleur, ne leve plus
+chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
+    "mono-bloc : IMEX(newton_max_iters=5, rel_tol) tourne fini (options cablees, plus de rejet)")
+# newton_diagnostics en MULTI-BLOCS natif : newton_report('e1') dict coherent.
+amrd = adc.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amrd.set_refinement(1e30)
+amrd.add_block("e1", iso_model(+1.0), spatial=adc.FiniteVolume(limiter="minmod"),
+               time=adc.IMEX(newton_max_iters=4, newton_diagnostics=True))
+amrd.add_block("e2", iso_model(-1.0), spatial=adc.FiniteVolume(limiter="minmod"),
+               time=adc.Explicit())
+amrd.set_density("e1", gaussian(16).ravel())
+amrd.set_density("e2", gaussian(16).ravel())
+amrd.step(2e-3)
+rep = amrd.newton_report("e1")
+chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0,
+    f"multi-blocs : newton_report dict coherent (residu {rep['max_residual']:.2e}, "
+    f"converged {rep['converged']})")
+# newton_diagnostics en MONO-BLOC : rejet au build (le coupleur n'agrege pas de rapport).
+monod = adc.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+monod.set_refinement(1e30)
+monod.add_block("e", iso_model(), spatial=adc.FiniteVolume(limiter="minmod"),
+                time=adc.IMEX(newton_diagnostics=True))
+monod.set_density("e", gaussian(16).ravel())
 try:
-    mono.step(2e-3)  # build paresseux mono-bloc -> rejet explicite
-    chk(False, "mono-bloc + options Newton aurait du lever au build")
+    monod.step(2e-3)  # build paresseux mono-bloc -> rejet explicite de newton_diagnostics
+    chk(False, "mono-bloc + newton_diagnostics aurait du lever au build")
 except RuntimeError as e:
-    chk("MULTI-BLOCS" in str(e), f"mono-bloc rejete : {str(e)[:70]}")
-try:
-    adc.AmrSystem(n=8, periodic=True, regrid_every=0).add_block(
-        "e", iso_model(), time=adc.IMEX(newton_diagnostics=True))
-    chk(False, "newton_diagnostics sur AMR aurait du lever")
-except ValueError as e:
-    chk("newton_report" in str(e) or "diagnostics" in str(e),
-        f"diagnostics rejetes : {str(e)[:70]}")
+    chk("MULTI-BLOCS" in str(e), f"mono-bloc diagnostics rejete : {str(e)[:70]}")
 
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")

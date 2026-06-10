@@ -2,6 +2,7 @@
 
 #include <adc/mesh/patch_box.hpp>    // PatchBox : empreinte index-space d'un patch fin (patch_boxes())
 #include <adc/mesh/physical_bc.hpp>  // BCRec
+#include <adc/numerics/time/implicit_stepper.hpp>  // NewtonOptions (options du Newton de la source IMEX)
 #include <adc/runtime/export.hpp>    // ADC_EXPORT : set_compiled_block resolu par le loader natif AMR
 #include <adc/runtime/model_spec.hpp>
 
@@ -108,6 +109,12 @@ struct AmrBuildParams {
   // Descripteurs des champs de l'etage ("" = role canonique, bit-identique ; sinon nom de role
   // stable OU nom de variable du bloc, resolus au build contre Model::conservative_vars()).
   std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;
+  // OPTIONS NEWTON de la source IMEX du chemin MONO-BLOC (vague 3 : options mono-bloc AMR cablees).
+  // AJOUTE EN FIN DE STRUCT (append-only, meme raison que has_state / schur_* : un loader .so
+  // anterieur ne lit pas ce champ et retombe sur le Newton historique a 2 iters figees). DEFAUT {} =
+  // constantes historiques (2 / 0 / 0 / 1e-7 / 1.0 / none) -> backward_euler_source chemin (2a)
+  // bit-identique. Consomme par build_amr_compiled (la fermeture mono-bloc le passe a cpl->step).
+  NewtonOptions newton_options{};
 };
 
 /// Fermetures type-erased d'un bloc AMR compile, produites par amr_dsl_block::build_amr_compiled et
@@ -196,9 +203,11 @@ class AmrSystem {
   ///         n'est pas dans {explicit, imex}, si recon n'est pas dans {conservative, primitive}, ou si
   ///         un masque implicite est demande hors IMEX / avec un nom-role absent du bloc.
   /// Options Newton (vague 3, parite System::add_block) : defauts = constantes historiques,
-  /// bit-identique. SUPPORT : moteur MULTI-BLOCS seulement (le coupleur mono-bloc garde iters=2
-  /// fige ; des options non-defaut en mono-bloc sont rejetees au build). Pas de
-  /// newton_diagnostics sur AMR (rapport non expose ; fail_policy warn/throw fonctionnent).
+  /// bit-identique. SUPPORT (vague 3, solde) : les OPTIONS (newton_max_iters/rel_tol/abs_tol/fd_eps/
+  /// damping/fail_policy) sont desormais cablees EN MONO-BLOC (coupleur AmrCouplerMP) ET en MULTI-BLOCS
+  /// (moteur AmrRuntime) ; les loaders .so les rejettent (ABI plate). Le RAPPORT newton_diagnostics
+  /// (newton_report agrege) est cable en MULTI-BLOCS NATIF seulement : le mono-bloc le rejette au build,
+  /// les loaders .so a la facade ; fail_policy warn/throw fonctionne partout (detection sans rapport).
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod",
                  const std::string& riemann = "rusanov",
@@ -208,7 +217,26 @@ class AmrSystem {
                  const std::vector<std::string>& implicit_roles = {},
                  int newton_max_iters = 2, double newton_rel_tol = 0.0,
                  double newton_abs_tol = 0.0, double newton_fd_eps = 1e-7,
-                 double newton_damping = 1.0, const std::string& newton_fail_policy = "none");
+                 double newton_damping = 1.0, const std::string& newton_fail_policy = "none",
+                 bool newton_diagnostics = false);
+
+  /// Rapport du Newton de la source implicite (IMEX) d'un bloc, AGREGE sur les niveaux et sous-pas de
+  /// la DERNIERE avance du bloc. N'existe que si le bloc a ete ajoute avec newton_diagnostics=true EN
+  /// MULTI-BLOCS natif (erreur explicite sinon : mono-bloc, loader .so, ou bloc sans diagnostics).
+  /// Copie a plat (pas de dependance au header numerique cote appelant), parite System::SourceNewtonReport.
+  struct SourceNewtonReport {
+    bool enabled;          ///< un rapport a ete calcule (au moins une avance IMEX jouee)
+    bool converged;        ///< aucune cellule en echec sur la derniere avance
+    double max_residual;   ///< max cellules/niveaux/sous-pas de ||F||_inf a la sortie du Newton
+    double max_iters_used; ///< max cellules/niveaux/sous-pas des iterations consommees
+    double n_failed;       ///< nb (cellules x niveaux x sous-pas) en echec (non-fini / pivot / non-convergence)
+    double failed_i;       ///< i d'UNE cellule fautive (-1 si aucune ; index max encode)
+    double failed_j;       ///< j de la meme cellule (-1 si aucune)
+    double failed_comp;    ///< composante conservee du pire residu de cette cellule (-1 inconnu)
+  };
+  /// @throws std::runtime_error si le bloc est inconnu, en mono-bloc, sur un loader .so, ou si le bloc
+  ///         n'a pas active newton_diagnostics. Force le build paresseux (ensure_built).
+  SourceNewtonReport newton_report(const std::string& name);
 
   /// Enregistre un bloc COMPILE (chemin add_compiled_model, header amr_dsl_block.hpp). DEUX builders
   /// type-erases sont figes ici, pour les DEUX routages de la facade :

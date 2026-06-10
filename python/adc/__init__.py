@@ -1888,9 +1888,11 @@ def capabilities():
             "amr": ["explicit (ssprk2)", "imex (= SourceImplicitBE)",
                     "split lie|strang + CondensedSchur (mono-bloc, grossier)"],
             "system_polar": ["explicit (ssprk2|ssprk3)", "split + CondensedSchur polaire"],
-            "newton_options": "System + AMR multi-blocs natif (mono-bloc AMR et loaders .so : "
-                              "rejet explicite) ; jacobien analytique via m.source_jacobian ; "
-                              "newton_diagnostics/newton_report : System seulement",
+            "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
+                              "mono-bloc ET multi-blocs natif (loaders .so : rejet explicite) ; "
+                              "jacobien analytique via m.source_jacobian ; newton_diagnostics/"
+                              "newton_report : System + AMR multi-blocs natif (mono-bloc AMR et "
+                              "loaders .so : rejet explicite)",
         },
         "stability_policy": {
             "system": ["transport (max_wave_speed | stability_speed)", "source_frequency",
@@ -1948,17 +1950,28 @@ def capabilities():
     }
 
 
-def _reject_newton_diagnostics_amr(label, time):
-    """REJETTE newton_diagnostics sur les chemins AMR (vague 3) : les OPTIONS Newton (max_iters/
-    tolerances/fd_eps/damping/fail_policy) sont desormais TRANSPORTEES par AmrSystem::add_block
-    (moteur multi-blocs ; le mono-bloc les rejette au build cote C++), mais le RAPPORT
-    (newton_report) n'est pas expose par la facade AMR -- l'accepter serait un ignore silencieux.
-    fail_policy='warn'/'throw' fonctionnent sur AMR (detection interne sans rapport)."""
-    if getattr(time, "newton_diagnostics", False):
+def _reject_newton_amr_compiled(label, time):
+    """REJETTE les options/diagnostics Newton sur le chemin AMR COMPILE (.so loader, ABI plate
+    add_native_block / adc_install_native_amr) -- vague 3, solde. Cote NATIF (adc.Model(...)), les
+    OPTIONS Newton sont desormais cablees en mono-bloc (coupleur) ET multi-blocs (moteur), et le
+    RAPPORT newton_diagnostics en multi-blocs natif ; mais l'ABI plate du loader .so ne transporte NI
+    les options (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy) NI le rapport. Passees
+    via le loader, elles seraient prises a leurs defauts EN SILENCE (iters=2, pas de rapport). On les
+    REJETTE explicitement (meme esprit que le rejet stride/masque du chemin production AMR). Pour ces
+    parametres : AmrSystem.add_block (modele natif) ou add_compiled_model(AmrSystem&) en direct (C++)."""
+    if (getattr(time, "newton_max_iters", 2) != 2
+            or getattr(time, "newton_rel_tol", 0.0) != 0.0
+            or getattr(time, "newton_abs_tol", 0.0) != 0.0
+            or getattr(time, "newton_fd_eps", 1e-7) != 1e-7
+            or getattr(time, "newton_damping", 1.0) != 1.0
+            or getattr(time, "newton_fail_policy", "none") != "none"
+            or getattr(time, "newton_diagnostics", False)):
         raise ValueError(
-            "%s : newton_diagnostics n'est pas expose sur AMR (pas de newton_report cote "
-            "AmrSystem). Utiliser newton_fail_policy='warn'/'throw' (transportes), ou un System "
-            "mono-niveau pour le rapport complet." % label)
+            "%s : les options/diagnostics Newton (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
+            "fail_policy/diagnostics) ne sont pas transportes par le chemin production AMR (loader "
+            ".so, ABI plate add_native_block : ils seraient pris a leurs defauts en silence). "
+            "Utiliser AmrSystem.add_block (modele natif adc.Model(...)) ou add_compiled_model("
+            "AmrSystem&) en direct (C++)." % label)
 
 
 class AmrSystem:
@@ -2026,12 +2039,12 @@ class AmrSystem:
                 "supporte que par add_equation (qui branche l'etage source) ; utiliser "
                 "add_equation(..., time=adc.Strang(hyperbolic=adc.Explicit(...), "
                 "source=adc.CondensedSchur(...))).")
-        # newton_diagnostics non expose sur AMR (rejet) ; les autres options Newton sont TRANSPORTEES
-        # (multi-blocs ; le mono-bloc les rejette au build cote C++) depuis la vague 3.
-        _reject_newton_diagnostics_amr("AmrSystem.add_block", time)
-        # On thread substeps/stride (multirate, capstone iv), le masque IMEX partiel ET les options
-        # Newton (vague 3). Resolus / valides cote C++ (AmrSystem::add_block) contre les noms/roles
-        # du bloc : vides -> backward-Euler plein, masque/options en explicite ou mono-bloc -> erreur.
+        # On thread substeps/stride (multirate, capstone iv), le masque IMEX partiel, les OPTIONS Newton
+        # ET newton_diagnostics (vague 3, solde). Resolus / valides cote C++ (AmrSystem::add_block) contre
+        # les noms/roles du bloc : vides -> backward-Euler plein. Les options sont cablees en mono-bloc
+        # (coupleur) ET multi-blocs ; newton_diagnostics est cable en MULTI-BLOCS natif et REJETE au build
+        # C++ en mono-bloc (le coupleur n'agrege pas de rapport) -- pas de filtrage de facade ici (la
+        # facade ne connait pas encore le nombre total de blocs : la decision mono/multi est au build).
         self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1), getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
@@ -2040,7 +2053,8 @@ class AmrSystem:
                           getattr(time, "newton_abs_tol", 0.0),
                           getattr(time, "newton_fd_eps", 1e-7),
                           getattr(time, "newton_damping", 1.0),
-                          getattr(time, "newton_fail_policy", "none"))
+                          getattr(time, "newton_fail_policy", "none"),
+                          getattr(time, "newton_diagnostics", False))
 
     def write(self, path, format="npz", step=None):
         """SORTIE DE VISUALISATION AMR (vague 3) : champs GROSSIERS par bloc + phi + empreintes des
@@ -2188,7 +2202,8 @@ class AmrSystem:
         # masque demande en explicite ou en mono-bloc leve une erreur claire cote C++,
         # amr_system.cpp:325-328 / :283-287). Ne PAS dupliquer ces gardes ici.
         if isinstance(model, ModelSpec):
-            _reject_newton_diagnostics_amr("AmrSystem.add_equation", time)
+            # Modele NATIF : OPTIONS Newton cablees (mono + multi) + newton_diagnostics (multi-blocs natif,
+            # rejete au build C++ en mono-bloc). Pas de filtrage de facade : C++ AmrSystem::add_block valide.
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                               nsub, getattr(time, "stride", 1),
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
@@ -2197,7 +2212,8 @@ class AmrSystem:
                               getattr(time, "newton_abs_tol", 0.0),
                               getattr(time, "newton_fd_eps", 1e-7),
                               getattr(time, "newton_damping", 1.0),
-                              getattr(time, "newton_fail_policy", "none"))
+                              getattr(time, "newton_fail_policy", "none"),
+                              getattr(time, "newton_diagnostics", False))
             return
 
         if not isinstance(model, dsl.CompiledModel):
@@ -2257,6 +2273,10 @@ class AmrSystem:
                 "masque serait vide = backward-Euler plein en silence). Utiliser AmrSystem.add_block "
                 "(modele natif adc.Model(...), masque cable) ou add_compiled_model(AmrSystem&) en "
                 "direct (C++) qui expose le masque IMEX.")
+        # Options / diagnostics Newton : meme ABI plate -> ni les options ni le rapport ne transitent
+        # par le loader .so. Rejet explicite (sinon iters=2 / pas de rapport en silence), parite avec le
+        # rejet stride/masque ci-dessus et avec System.add_equation (backend compile).
+        _reject_newton_amr_compiled("AmrSystem.add_equation", time)
 
         # Garde PRE-DLOPEN au branchement (couvre le cache HIT, cf. System.add_equation) : module
         # _adc perime vs .so compile sur les en-tetes a jour -> erreur actionnable, pas un dlopen

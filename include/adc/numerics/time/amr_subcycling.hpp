@@ -320,7 +320,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
                        const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
                        const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs,
                        bool coarse_replicated = true, bool recon_prim = false,
-                       bool imex = false) {
+                       bool imex = false, const NewtonOptions& nopts = {}) {
   const SubcyclingSchedule sched(2);
   const int nc = L[lev].U.ncomp();
   AmrLevelMP& lv = L[lev];
@@ -373,7 +373,7 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   if (lev + 1 >= static_cast<int>(L.size())) {  // feuille
     mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
-    mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex);  // source S(U,aux) explicite ou IMEX
+    mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex, nopts);  // source explicite ou IMEX (options Newton)
     return;
   }
 
@@ -455,11 +455,11 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
 
   MultiFab U_old = lv.U;  // etat t (interp temporelle pour les enfants)
   mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
-  mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex);  // source S(U,aux) explicite ou IMEX
+  mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex, nopts);  // source explicite ou IMEX (options Newton)
   for (int s = 0; s < sched.count(); ++s)
     subcycle_level_mp<Limiter, NumericalFlux>(m, L, lev + 1, sched.dt_sub(dt), base_dom, base_per,
                                               &U_old, &lv.U, sched.frac(s), &regs,
-                                              coarse_replicated, recon_prim, imex);
+                                              coarse_replicated, recon_prim, imex, nopts);
   mf_average_down_mb(L[lev + 1].U, lv.U);  // point 3 distribue (parallel_copy)
 
   // Point 4 distribue : reflux coverage-aware. La cellule grossiere bordante peut appartenir
@@ -495,9 +495,9 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L,
                                     const Box2D& dom, Real dt,
                                     Periodicity per = Periodicity{true, true},
                                     bool coarse_replicated = true, bool recon_prim = false,
-                                    bool imex = false) {
-  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr,
-                                            Real(0), nullptr, coarse_replicated, recon_prim, imex);
+                                    bool imex = false, const NewtonOptions& nopts = {}) {
+  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0), nullptr,
+                                            coarse_replicated, recon_prim, imex, nopts);
 }
 
 }  // namespace detail (moteur N-niveaux multi-patch)

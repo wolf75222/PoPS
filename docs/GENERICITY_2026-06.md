@@ -169,6 +169,17 @@ manquait encore.
    imex_advance (l'iters=2 fige a disparu des fermetures multi-blocs). Restent REJETES
    explicitement : mono-bloc AMR (fermetures du coupleur historique), loaders .so (ABI), et
    newton_diagnostics (le rapport agrege reste System-only).
+   **SOLDE (vague 3, points NON generalises #1)** : les OPTIONS sont desormais aussi cablees en
+   MONO-BLOC (threadees sur le coupleur AmrCouplerMP : AmrBuildParams.newton_options ->
+   build_amr_compiled -> cpl->step -> advance_amr -> subcycle_level_mp -> mf_apply_source_treatment ->
+   backward_euler_source ; defaut {} bit-identique). newton_diagnostics/newton_report est cable en
+   MULTI-BLOCS natif (NewtonReport par AmrRuntimeBlock en shared_ptr, reset en tete d'avance dans
+   AmrRuntime::step, agregation max/somme + all_reduce identique a System::AdvanceImex ; binding
+   AmrSystem.newton_report(name) -> dict, forme exacte du binding System). Restent rejetes : le
+   RAPPORT en mono-bloc (rejet au build, threader le report dans le subcyclage du coupleur serait
+   invasif) et les loaders .so (options ET diagnostics : ABI plate, rejet a la facade Python).
+   Preuves : test_amr_newton_full (mono options finies, multi newton_report coherent, no-default-change
+   dmax==0, rejets .so) + test_v3_features section (B).
 6. **Schur : roles + krylov configurables sur polaire ET amr-schur** : constructeurs a composantes
    explicites (le ctor canonique DELEGUE, bit-identique) + set_krylov(tol, iters) sur
    PolarCondensedSchurSourceStepper (1e-10/600) et AmrCondensedSchurSourceStepper (grossier
@@ -186,9 +197,13 @@ manquait encore.
 ## Points encore NON generalises (explicites, mis a jour vague 3)
 
 1. **AMR** : pas de `ssprk3` ; coarse/fine suppose ratio 2 ; `set_poisson` limite a geometric_mg +
-   rhs charge_density|composite ; options Newton mono-bloc AMR et loaders .so = rejet explicite
-   (fermetures du coupleur historique / ABI) ; newton_diagnostics/newton_report = System seulement
-   (la reduction arg-max encodee n'est cablee que sur le chemin System).
+   rhs charge_density|composite. Options Newton : CABLEES en mono-bloc (threadees sur le coupleur
+   AmrCouplerMP : step -> advance_amr -> subcycle_level_mp -> mf_apply_source_treatment ->
+   backward_euler_source, defaut {} bit-identique) ET en multi-blocs ; les loaders .so les rejettent
+   encore (ABI plate). newton_diagnostics/newton_report : CABLE en MULTI-BLOCS natif (NewtonReport par
+   AmrRuntimeBlock, reset en tete d'avance dans AmrRuntime::step, agregation max/somme + all_reduce
+   identique a System) ; mono-bloc AMR et loaders .so = rejet explicite (le rapport n'est pas threade
+   dans le subcyclage du coupleur ni transporte par l'ABI).
 2. **AMR Schur Phase 4** : composite limite a 2 niveaux + UN patch fin mono-box + mono-rang ;
    multi-patch, > 2 niveaux, MPI, multi-blocs = Phase 4 (rejet explicite, perimetre documente
    dans l'en-tete du stepper). set_krylov AMR ne pilote que l'etage grossier.

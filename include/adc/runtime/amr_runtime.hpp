@@ -12,6 +12,7 @@
 #include <adc/numerics/elliptic/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
 #include <adc/numerics/elliptic/geometric_mg.hpp>
 #include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
+#include <adc/numerics/time/implicit_stepper.hpp>  // NewtonReport (diagnostics IMEX OPT-IN, agrege par bloc)
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/patch_box.hpp>  // PatchBox : empreinte index-space d'un patch fin (patch_boxes())
@@ -159,6 +160,18 @@ struct AmrRuntimeBlock {
   /// grossier, compterait une source fantome). Vide pour un bloc explicite (imex == false) : step() ne
   /// l'appelle jamais.
   std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool)> imex_advance;
+
+  /// DIAGNOSTICS NEWTON (OPT-IN, vague 3 : pendant AMR de System::newton_report). false (defaut) ->
+  /// imex_advance passe report=nullptr a backward_euler_source : chemin RAPIDE bit-identique, aucune
+  /// allocation ni reduction supplementaire. true -> imex_advance passe @c newton_report.get() (adresse
+  /// STABLE car shared_ptr) au backward_euler_source de CHAQUE niveau ; le rapport AGREGE (max residu,
+  /// max iterations, somme des cellules en echec, all_reduce MPI) sur tous les niveaux ET tous les
+  /// sous-pas d'un macro-pas. AmrRuntime::step RESET le rapport en tete d'avance du bloc (parite avec
+  /// System::AdvanceImex qui reset en tete d'operator()). MULTI-BLOCS natif seulement (le mono-bloc
+  /// coupleur et les loaders .so le rejettent au build / a la facade). Adresse STABLE (shared_ptr) :
+  /// capturee par la fermeture imex_advance ET lue par AmrRuntime::newton_report.
+  bool newton_diagnostics = false;
+  std::shared_ptr<NewtonReport> newton_report;
 
   /// Contribution du bloc au second membre de Poisson : rhs += elliptic_rhs_b(U_b) sur le grossier.
   /// CO-LOCALISE : la boucle lit U_b et ecrit rhs AUX MEMES cellules (meme BoxArray grossier
@@ -619,6 +632,13 @@ class AmrRuntime {
       // Le rattrapage en FIN de fenetre garde le bloc temporellement coherent avec les rapides au
       // point de couplage (jamais dans le futur). stride=1 : toujours vrai -> chaque pas, bit-identique.
       if ((macro_step_ + 1) % b.stride != 0) continue;
+      // DIAGNOSTICS NEWTON (OPT-IN) : RESET du rapport en TETE de l'avance du bloc (parite avec
+      // System::AdvanceImex::operator() qui reset nreport avant sa boucle de sous-pas). Le rapport
+      // AGREGE ensuite sur tous les niveaux ET sous-pas de CETTE avance (imex_advance accumule par
+      // niveau via backward_euler_source ; step() appelle imex_advance substeps fois sans re-reset).
+      // Place APRES le skip de stride : un bloc TENU garde le rapport de sa DERNIERE avance (semantique
+      // "derniere avance" de System). No-op pour un bloc sans diagnostics (newton_report nul).
+      if (b.newton_diagnostics && b.newton_report) b.newton_report->reset();
       const Real bdt = dt * static_cast<Real>(b.stride);  // catch-up : pas effectif stride*dt
       // substeps sous-pas egaux de bdt/substeps. La fermeture choisie fait UN advance par appel ;
       // substeps=1 -> un seul advance de bdt (bit-identique au cas mono-substep). SELECTION du
@@ -822,6 +842,22 @@ class AmrRuntime {
   /// Borne ACTIVE du dernier step_cfl ("transport:<bloc>" / "source_frequency:<bloc>" /
   /// "stability_dt:<bloc>" / "global:<label>" / "degenerate" / "" avant le premier pas).
   const std::string& last_dt_bound() const { return last_dt_reason_; }
+
+  /// RAPPORT NEWTON (diagnostics IMEX OPT-IN) du bloc @p name, AGREGE sur les niveaux et sous-pas de
+  /// sa DERNIERE avance (cf. AmrRuntimeBlock::newton_report). Pendant AMR de System::newton_report.
+  /// @throws std::runtime_error si le bloc est inconnu, ou s'il n'a pas ete ajoute avec
+  ///         newton_diagnostics=true (pas de rapport silencieusement vide).
+  const NewtonReport& newton_report(const std::string& name) const {
+    const int b = block_index(name);
+    if (b < 0)
+      throw std::runtime_error("AmrRuntime::newton_report : aucun bloc nomme '" + name + "'");
+    const AmrRuntimeBlock& blk = blocks_[static_cast<std::size_t>(b)];
+    if (!blk.newton_diagnostics || !blk.newton_report)
+      throw std::runtime_error(
+          "AmrRuntime::newton_report : diagnostics Newton non actives pour le bloc '" + name +
+          "' ; ajouter le bloc avec newton_diagnostics=True (adc.IMEX(newton_diagnostics=True))");
+    return *blk.newton_report;
+  }
 
   /// Potentiel grossier (composante 0 de l'aux partage) en champ n*n row-major. Resout les champs
   /// si besoin (pendant de AmrSystem::potential), puis lit aux(0). Identique pour tous les blocs.

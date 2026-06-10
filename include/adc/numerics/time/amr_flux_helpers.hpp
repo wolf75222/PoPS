@@ -62,11 +62,20 @@ inline void mf_apply_source(const Model& m, MultiFab& U, const MultiFab& aux, Re
 //     touche donc pas la conservation aux interfaces grossier-fin. Le CHOIX est un drapeau runtime
 //     (pas de lambda injectee dans le chemin device) : il selectionne deux fonctions HOTE, chacune
 //     lancant son propre kernel a foncteur nomme.
+//
+// OPTIONS NEWTON (@p nopts) : pilotent le Newton local de la source implicite (budget d'iterations,
+// tolerances, fd_eps, damping, fail_policy). DEFAUT {} = constantes historiques (2 iters, 1e-7, ...)
+// -> chemin (2a) bit-identique a l'ancien appel backward_euler_source(m, aux, U, dt). Le mono-bloc AMR
+// (AmrCouplerMP::step) les thread depuis AmrSystem (vague 3 -> options mono-bloc cablees). Le masque
+// IMEX partiel n'est PAS porte par ce chemin (mono-bloc coupleur = backward-Euler plein) : on passe
+// donc le masque par defaut (inactif). Pas de rapport diagnostics ici (report == nullptr implicite).
 template <class Model>
 inline void mf_apply_source_treatment(const Model& m, MultiFab& U, const MultiFab& aux, Real dt,
-                                      bool imex) {
+                                      bool imex, const NewtonOptions& nopts = {}) {
   if (imex)
-    backward_euler_source(m, aux, U, dt);  // source implicite raide (Newton, foncteur device nomme)
+    // Forme a OPTIONS (Newton pilote par nopts), masque inactif, sans rapport. Defaut nopts={} =>
+    // identique a la forme historique a iters figes (2), donc bit-identique tant que nopts est defaut.
+    backward_euler_source(m, aux, U, dt, nopts, ImplicitMask<Model::n_vars>{});
   else
     mf_apply_source(m, U, aux, dt);        // Euler avant historique (bit-identique)
 }

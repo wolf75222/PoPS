@@ -112,8 +112,9 @@ struct AmrSystem::Impl {
     double schur_krylov_tol = 0.0;      // <= 0 = defaut historique (1e-10)
     int schur_krylov_max_iters = 0;     // <= 0 = defaut historique (400)
     std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;  // "" = canonique
-    NewtonOptions newton{};             // options Newton IMEX (vague 3 ; multi-blocs seulement)
-    bool newton_non_default = false;    // true -> mono-bloc REJETE au build (iters=2 fige cote coupleur)
+    NewtonOptions newton{};             // options Newton IMEX (vague 3 ; mono-bloc ET multi-blocs)
+    bool newton_non_default = false;    // true -> options non-defaut (loader .so REJETE : ABI plate)
+    bool newton_diagnostics = false;    // rapport newton_report : MULTI-BLOCS natif (mono/.so REJETES)
   };
 
   std::vector<BlockSpec> blocks;
@@ -238,6 +239,10 @@ struct AmrSystem::Impl {
     bp.schur_energy = b.schur_energy;
     bp.schur_strang = schur_strang;
     bp.bz_field = bz_field;
+    // OPTIONS NEWTON de la source IMEX mono-bloc (vague 3 : desormais CABLEES sur le coupleur
+    // AmrCouplerMP). build_amr_compiled les capture depuis bp et les passe a cpl->step. Defaut
+    // (add_block sans option) = NewtonOptions{} historique -> chemin (2a) bit-identique.
+    bp.newton_options = b.newton;
     return bp;
   }
 
@@ -301,6 +306,13 @@ struct AmrSystem::Impl {
           throw std::runtime_error(
               "AmrSystem : les options Newton ne sont pas transportees par le loader .so compile "
               "(bloc '" + b.name + "') ; utiliser un bloc natif adc.Model(...) en multi-blocs.");
+        // Rapport newton_diagnostics idem : le builder du loader .so n'alloue pas de NewtonReport ni
+        // ne le thread (ABI plate). Rejet explicite (defense en profondeur ; la facade Python le filtre
+        // deja en amont) plutot qu'un rapport silencieusement vide.
+        if (b.newton_diagnostics)
+          throw std::runtime_error(
+              "AmrSystem : newton_diagnostics (rapport newton_report) n'est pas transporte par le "
+              "loader .so compile (bloc '" + b.name + "') ; utiliser un bloc natif adc.Model(...).");
         rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.gamma,
                                                    b.substeps, b.recon_prim, b.imex, b.stride,
                                                    b.implicit_vars, b.implicit_roles));
@@ -321,7 +333,8 @@ struct AmrSystem::Impl {
                                                      b.has_density, b.gamma, b.substeps,
                                                      b.recon_prim, b.imex, b.stride, impl_components,
                                                      b.newton,
-                                                     b.has_state ? &b.state : nullptr));
+                                                     b.has_state ? &b.state : nullptr,
+                                                     b.newton_diagnostics));
       });
     }
     runtime = std::make_shared<adc::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc,
@@ -396,13 +409,20 @@ struct AmrSystem::Impl {
           "AmrSystem : implicit_vars / implicit_roles (masque IMEX partiel) ne sont cables qu'en "
           "MULTI-BLOCS (>= 2 add_block, moteur runtime). En mono-bloc l'IMEX traite TOUTES les "
           "composantes en implicite (backward-Euler plein) : retirer le masque ou ajouter un 2e bloc.");
-    // Memes regles pour les options Newton (vague 3) : le coupleur mono-bloc (AmrCouplerMP) garde
-    // iters=2 fige -- des options non-defaut y seraient ignorees EN SILENCE -> rejet explicite.
-    if (b.newton_non_default)
+    // OPTIONS NEWTON mono-bloc (vague 3, solde) : DESORMAIS CABLEES sur le coupleur AmrCouplerMP
+    // (make_build_params -> bp.newton_options -> build_amr_compiled -> cpl->step -> advance_amr ->
+    // backward_euler_source). Plus de rejet de b.newton_non_default ici : un bloc unique IMEX avec
+    // newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy tourne correctement. Defaut = iters=2
+    // historique (bit-identique). Restent NON cables en mono-bloc : le RAPPORT newton_diagnostics
+    // (newton_report agrege = moteur multi-blocs seulement ; le threader dans le subcyclage du coupleur
+    // serait invasif) -> rejet EXPLICITE plutot qu'un rapport vide en silence.
+    if (b.newton_diagnostics)
       throw std::runtime_error(
-          "AmrSystem : les options Newton (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
-          "fail_policy) ne sont cablees qu'en MULTI-BLOCS (moteur runtime). Le coupleur mono-bloc "
-          "garde iters=2 fige : retirer les options, ajouter un 2e bloc, ou utiliser System.");
+          "AmrSystem : newton_diagnostics (rapport newton_report) n'est cable qu'en MULTI-BLOCS "
+          "(moteur runtime AmrRuntime). En mono-bloc les OPTIONS Newton (newton_max_iters/rel_tol/"
+          "abs_tol/fd_eps/damping/fail_policy) sont cablees, mais pas le rapport agrege : ajouter un "
+          "2e bloc pour newton_report, utiliser newton_fail_policy='warn'/'throw', ou un System "
+          "mono-niveau pour le rapport complet.");
     const AmrBuildParams bp = make_build_params();
     if (b.is_compiled) {  // chemin compile : le builder fige les types (Model, Limiter, Flux)
       install(b.compiled_hooks_builder(bp));
@@ -427,7 +447,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           int stride, const std::vector<std::string>& implicit_vars,
                           const std::vector<std::string>& implicit_roles, int newton_max_iters,
                           double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-                          double newton_damping, const std::string& newton_fail_policy) {
+                          double newton_damping, const std::string& newton_fail_policy,
+                          bool newton_diagnostics) {
   if (p_->built)
     throw std::runtime_error("AmrSystem::add_block : le systeme est deja construit (appeler "
                              "add_block avant tout step/mass/density)");
@@ -454,6 +475,11 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                                   newton_damping != 1.0 || nfail != NewtonOptions::kFailNone;
   if (time != "imex" && newton_non_default)
     throw std::runtime_error("AmrSystem::add_block : les options Newton exigent time='imex'");
+  // newton_diagnostics (rapport newton_report) exige time='imex' (le rapport vient du Newton de la
+  // source IMEX), parite avec System::add_block. SUPPORT : MULTI-BLOCS natif seulement -- le mono-bloc
+  // (coupleur) et les loaders .so le rejettent (au build / a la facade), jamais un rapport vide.
+  if (time != "imex" && newton_diagnostics)
+    throw std::runtime_error("AmrSystem::add_block : newton_diagnostics exige time='imex'");
   if (time != "explicit" && time != "imex")
     throw std::runtime_error("AmrSystem : time '" + time +
                              "' inconnu sur AMR (explicit|imex)");
@@ -501,6 +527,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.newton.damping = static_cast<Real>(newton_damping);
   b.newton.fail_policy = nfail;
   b.newton_non_default = newton_non_default;
+  b.newton_diagnostics = newton_diagnostics;  // rapport newton_report (multi-blocs natif ; mono/.so rejetes)
   b.substeps = substeps;
   b.stride = stride;
   b.gamma = model.gamma;  // indice adiabatique du bloc (Euler), lu par coupler_write_coarse
@@ -922,6 +949,28 @@ void AmrSystem::add_dt_bound(const std::string& label, std::function<double()> f
 std::string AmrSystem::last_dt_bound() const {
   if (p_->runtime) return p_->runtime->last_dt_bound();
   return p_->last_dt_reason;
+}
+
+// Rapport Newton (diagnostics IMEX OPT-IN) du bloc, AGREGE sur les niveaux/sous-pas de sa DERNIERE
+// avance (reset en tete d'avance par AmrRuntime::step). MULTI-BLOCS natif seulement : le mono-bloc
+// (coupleur AmrCouplerMP) le rejette au build (ensure_built) ; un appel ICI sans moteur runtime (donc
+// mono-bloc construit) leve une erreur claire (parite System::newton_report : jamais un rapport vide).
+AmrSystem::SourceNewtonReport AmrSystem::newton_report(const std::string& name) {
+  p_->ensure_built();  // materialise le moteur (multi-blocs) ou le coupleur (mono-bloc)
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::newton_report : diagnostics Newton non disponibles en mono-bloc (le coupleur "
+        "AmrCouplerMP rejette newton_diagnostics au build) ; ajouter un 2e bloc (moteur multi-blocs), "
+        "ou utiliser un System mono-niveau pour le rapport complet.");
+  const NewtonReport& r = p_->runtime->newton_report(name);  // leve si bloc inconnu / diagnostics off
+  return SourceNewtonReport{r.enabled,
+                            r.converged,
+                            static_cast<double>(r.max_residual),
+                            static_cast<double>(r.max_iters_used),
+                            r.n_failed,
+                            r.failed_i,
+                            r.failed_j,
+                            r.failed_comp};
 }
 
 int AmrSystem::nx() const { return p_->cfg.n; }

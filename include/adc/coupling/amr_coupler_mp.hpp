@@ -372,12 +372,18 @@ class AmrCouplerMP {
   /// reflux + average_down conservatifs). @tparam Disc : discretisation spatiale (limiteur + flux,
   /// defaut FirstOrder bit-identique a l'historique). recon_prim : reconstruction primitive ; imex :
   /// source raide en implicite (backward_euler). Defauts (false) -> chemin explicite historique.
+  /// @p nopts : OPTIONS du Newton de la source implicite IMEX (budget d'iterations, tolerances,
+  /// fd_eps, damping, fail_policy), threadees jusqu'a backward_euler_source par advance_amr ->
+  /// subcycle_level_mp -> mf_apply_source_treatment. DEFAUT {} = constantes historiques (2 iters,
+  /// 1e-7, ...) -> chemin (2a) BIT-IDENTIQUE a l'ancien appel. Sans effet si imex==false. Le masque
+  /// IMEX partiel n'est PAS porte par ce chemin mono-bloc (backward-Euler plein), seules les OPTIONS
+  /// le sont (AmrSystem mono-bloc cable les options Newton mais pas le masque ni les diagnostics).
   template <class Disc = FirstOrder>
-  void step(Real dt, bool recon_prim = false, bool imex = false) {
+  void step(Real dt, bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {}) {
     update();
     advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
         model_, stack_.L(), stack_.domain(), dt, Periodicity{true, true}, replicated_coarse_,
-        recon_prim, imex);
+        recon_prim, imex, nopts);
   }
 
   /// AVANCE DE TRANSPORT SEULE (hyperbolique), SANS update() ni source. Pendant de step() prive de
