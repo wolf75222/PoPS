@@ -238,21 +238,46 @@ maximal en titre.
 
 ## Etape 16 : Kokkos OpenMP (parallelisme CPU)
 
-Le module Python distribue tourne en serie parce que la CI le construit sans Kokkos, pas parce que
-Python serait bride : `import adc` pilote, et le calcul par cellule herite du backend compile dans
-`adc` (voir [Verifier son backend](backend.md)). Pour exploiter plusieurs coeurs, c'est donc la
-facade C++ qu'on recompile avec le backend Kokkos (device OpenMP), pas un drapeau de script :
+Il n'y a pas de parametre Python du type `threads=8`. `import adc` pilote la simulation, mais le
+calcul par cellule herite du backend avec lequel `_adc` a ete compile (voir
+[Verifier son backend](backend.md)). Le nombre de coeurs depend donc du build de `_adc` et des
+variables OpenMP au lancement, pas d'un drapeau de script ; le module distribue tourne en serie
+parce que la CI le construit sans Kokkos.
+
+Pour le multi-thread, on rebuild le module avec le backend Kokkos OpenMP, contre un Kokkos installe
+avec OpenMP (`Kokkos_ENABLE_OPENMP=ON` au build de Kokkos) et pointe par `$KOKKOS_ROOT` :
 
 ```bash
-cmake -S . -B build-kokkos -DADC_USE_KOKKOS=ON \
-      -DKokkos_ENABLE_OPENMP=ON
-cmake --build build-kokkos -j
-ctest --test-dir build-kokkos --output-on-failure
+cmake -S . -B build-py-kokkos -G Ninja \
+  -DADC_BUILD_PYTHON=ON \
+  -DADC_BUILD_TESTS=OFF \
+  -DADC_USE_KOKKOS=ON \
+  -DKokkos_ROOT="$KOKKOS_ROOT" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPython_EXECUTABLE=$(which python3.12)
+cmake --build build-py-kokkos --target _adc -j$(sysctl -n hw.logicalcpu)
 ```
 
-Le seam `for_each_cell` bascule alors sur l'espace d'execution OpenMP de Kokkos pour tout ce qui
-lie `adc`. La CI valide ce backend (job ci-full, `Kokkos_ENABLE_OPENMP=ON`). Le backend OpenMP
-autonome (`-DADC_USE_OPENMP=ON`) existe mais est deprecie au profit de Kokkos.
+Au lancement, on pointe `PYTHONPATH` sur ce build et on fixe le nombre de threads OpenMP :
+
+```bash
+export PYTHONPATH=$PWD/build-py-kokkos/python
+export ADC_INCLUDE=$PWD/include
+export ADC_CACHE_DIR=$PWD/.adc_cache_kokkos
+export ADC_KOKKOS_ROOT="$KOKKOS_ROOT"   # le .so DSL production est alors compile AVEC Kokkos
+
+OMP_NUM_THREADS=8 OMP_PROC_BIND=false python docs/sphinx/tutorials/diocotron_tutorial.py
+```
+
+`ADC_KOKKOS_ROOT` est le point cle pour le DSL `backend="production"` : sans lui, le `.so` genere
+reste zero-copie mais ses noyaux retombent sur le backend serie et ne scalent pas. Avec lui, le
+loader est compile avec le meme Kokkos que `_adc`, donc les `OMP_NUM_THREADS` coeurs servent (cf.
+[`dsl.py`](https://github.com/wolf75222/adc_cpp/blob/master/python/adc/dsl.py)).
+
+Piege courant : lancer `OMP_NUM_THREADS=8 python ...` contre un `_adc` compile en serie ne change
+quasiment rien ; il faut d'abord le build Kokkos ci-dessus. La facade C++ (hors Python) se valide
+a part avec `-DADC_USE_KOKKOS=ON -DKokkos_ENABLE_OPENMP=ON` puis `ctest` (job CI ci-full). Le
+backend OpenMP autonome (`-DADC_USE_OPENMP=ON`) existe mais est deprecie au profit de Kokkos.
 
 ## Etape 17 : MPI (parallelisme distribue)
 
