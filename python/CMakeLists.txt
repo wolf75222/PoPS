@@ -305,6 +305,7 @@ foreach(t
     test_schur_roles          # roles/champs Schur transportes dans l'ABI (vague 2) : descripteurs par nom == canonique bit-identique, rejets explicites (inconnu/polaire/amr)
     test_io_checkpoint        # IO v1 (vague 2) : checkpoint/restart bit-identique (stride=2 via macro_step), write npz/vtk, rejets composition/grille
     test_v3_features          # vague 3 : CoupledSource.frequency, options Newton AMR (multi natif / rejets mono+diagnostics), set_conservative_state multi-blocs, enable_hllc + source_jacobian DSL (auto-skip)
+    test_dsl_roe              # solde audit pt 11 : m.enable_roe() emis depuis les ROLES -- parite 4-var avec le Roe canonique, 3-var isotherme accepte (cisaillement exact), rejets explicites (auto-skip)
     test_coupled_freq_expr    # frequence PAR CELLULE des sources couplees (GENERICITY 7) : constante (regression), Expr mu(U)=k*rho (dt==cfl/(k*max rho)), suivi d'etat, rejet (bloc,role) non declare, AMR grossier
     test_native_abi_std)      # regression ABI : le std du modele natif (backend="production") suit le loader (c++20 sous Kokkos, c++23 sinon) -> add_native_block charge sans "ABI incompatible"
   add_test(NAME ${t}

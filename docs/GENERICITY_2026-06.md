@@ -224,10 +224,17 @@ manquait encore.
    sans X-macro lourde) ; la table ne porte donc que les chaines + n_ghost, pas l'aiguillage de type.
    Bug de divergence corrige au passage : les branches hllc / roe AMR ont gagne le cas weno5 (parite
    stricte avec System).
-9. **check_model sur CompiledModel** : porte sur les FORMULES (dsl.Model) et le BLOC INSTALLE
-   (System) ; un CompiledModel seul (sans son Model d'origine) n'est pas re-verifiable.
+9. **check_model sur CompiledModel** : FAIT (solde) — `CompiledModel.check_runtime(n=, state=)`
+   installe le .so dans un System EPHEMERE et delegue a System.check_model (etat/residu finis,
+   positivite par roles, round-trip des conversions) ; etat de fumee par ROLES par defaut,
+   state= pour un regime precis. Reste : les FORMULES d'un .so sans son dsl.Model d'origine ne
+   sont pas re-derivables (le source symbolique n'est pas embarque dans le .so — assume).
 10. **IO** : System mono-rang (npz/vtk/hdf5 via h5py) ; HDF5 agrege/PARALLELE multi-rangs,
     checkpoint AMR et champs externes (B_z dans le checkpoint) = PR-IO-3 du plan.
-11. **Roe cote DSL** : `m.enable_hllc()` emet les hooks HLLC ; l'equivalent Roe
-    (m.roe_dissipation(...) ou une linearisation de Roe generee depuis les flux) reste a faire —
-    le contrat C++ HasRoeDissipation est pret.
+11. **Roe cote DSL** : FAIT (solde) — `m.enable_roe()` emet `roe_dissipation` depuis les ROLES :
+    avec Energy = transcription exacte de l'algebre canonique Euler du coeur (parite BIT-EXACTE
+    constatee sur 8 pas), sans Energy = meme decomposition avec c = sqrt(p/rho) moyenne a la Roe,
+    composantes hors roles fluides = scalaires passifs sur l'onde entropique (test_dsl_roe :
+    cisaillement stationnaire preserve exactement en 3-var). Reste : une linearisation de Roe
+    SYMBOLIQUE generee depuis les flux d'un modele arbitraire (hors familles a roles fluides)
+    n'est pas tentee — hors de portee d'une emission generique honnete.

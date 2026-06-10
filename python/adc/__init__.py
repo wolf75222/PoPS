@@ -1379,14 +1379,16 @@ class System:
         # Garde-fou flux numerique : HLLC/Roe exigent une pression -> la brique generee n'emet
         # pressure()/wave_speeds() que si une primitive 'p' est declaree. Sans 'p', make_block ne
         # compile pas le flux : on le diagnostique ici avant la frontiere C++.
-        # hllc : la capability emise (m.enable_hllc -> has_hllc) OUVRE le flux meme hors Euler 4-var
-        # (la garde C++ requires l'accepte) ; sinon la voie canonique exige 'p' dans les primitives.
+        # hllc / roe : la capability emise (m.enable_hllc -> has_hllc, m.enable_roe -> has_roe)
+        # OUVRE le flux meme hors Euler 4-var (la garde C++ requires l'accepte) ; sinon la voie
+        # canonique exige 'p' dans les primitives.
         if (spatial.flux in ("hllc", "roe") and "p" not in compiled.prim_names
-                and not (spatial.flux == "hllc" and getattr(compiled, "has_hllc", False))):
+                and not (spatial.flux == "hllc" and getattr(compiled, "has_hllc", False))
+                and not (spatial.flux == "roe" and getattr(compiled, "has_roe", False))):
             raise ValueError(
                 "add_equation : riemann '%s' exige une pression : declarer une primitive 'p' "
-                "(m.primitive('p', ...)) dans le modele, ou pour hllc emettre la capability "
-                "(m.enable_hllc()) ; sinon utiliser riemann='rusanov'"
+                "(m.primitive('p', ...)) dans le modele, ou emettre la capability "
+                "(m.enable_hllc() / m.enable_roe()) ; sinon utiliser riemann='rusanov'"
                 % spatial.flux)
         # HLL : PAS de garde Python sur prim_names ici -- la brique generee emet wave_speeds des
         # qu'une primitive 'p' est DECLAREE (m.primitive('p', ...)), meme HORS layout primitive_vars
@@ -1875,7 +1877,9 @@ def capabilities():
                         "HasHLLCStructure -- emise par le DSL via m.enable_hllc() (roles + 'p', "
                         "y compris 3-var non Euler, scalaires passifs advectes)",
                 "roe": "Euler 2D gaz parfait canonique OU capability modele HasRoeDissipation "
-                       "(C++ ; emission DSL = suivi)",
+                       "-- emise par le DSL via m.enable_roe() (roles + 'p' : avec Energy = "
+                       "algebre canonique transcrite, sans Energy = c=sqrt(p/rho) moyenne Roe, "
+                       "scalaires passifs sur l'onde entropique)",
             },
         },
         "time": {
@@ -2224,10 +2228,13 @@ class AmrSystem:
         # brique generee n'emet pressure()/wave_speeds() que si une primitive 'p' est declaree. Sans
         # 'p', dispatch_amr_compiled retombe sur la branche else (requires non satisfait) et leve une
         # erreur C++ generique : on diagnostique ICI, clairement, avant la frontiere C++.
-        if spatial.flux in ("roe", "hllc") and "p" not in compiled.prim_names:
+        if (spatial.flux in ("roe", "hllc") and "p" not in compiled.prim_names
+                and not (spatial.flux == "hllc" and getattr(compiled, "has_hllc", False))
+                and not (spatial.flux == "roe" and getattr(compiled, "has_roe", False))):
             raise ValueError(
                 "AmrSystem.add_equation : riemann '%s' exige une pression : declarer une primitive 'p' "
-                "(m.primitive('p', ...)) dans le modele ; sinon utiliser riemann='rusanov'"
+                "(m.primitive('p', ...)) dans le modele, ou emettre la capability "
+                "(m.enable_hllc() / m.enable_roe()) ; sinon utiliser riemann='rusanov'"
                 % spatial.flux)
 
         # L'ABI plate du loader .so (adc_install_native_amr / add_native_block) ne transporte NI la

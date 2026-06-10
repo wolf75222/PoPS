@@ -824,6 +824,7 @@ class HyperbolicModel:
         self._src_freq = None    # Expr : frequence mu(U, aux) de la SOURCE (None = pas de borne)
         self._src_jac = None     # [[Expr]] n x n : Jacobien ANALYTIQUE dS/dU (None = diff. finies)
         self._hllc = False       # True : emettre la capability HLLC (contact_speed + star state)
+        self._roe = False        # True : emettre la capability ROE (roe_dissipation depuis les roles)
         self.prim_state = []    # noms ordonnes de l'etat primitif (layout de Prim) ; pour le codegen
         self.cons_from = None   # liste d'Expr : conservatif en fonction des primitives (to_conservative)
         self.cons_roles = None  # override explicite des roles conservatifs (sinon mapping canonique)
@@ -911,6 +912,26 @@ class HyperbolicModel:
         passivement dans l'etat etoile, Us[c] = fac*U[c]/rho). EXIGE : roles Density/MomentumX/
         MomentumY declares + primitive 'p' (erreur explicite a l'emission sinon)."""
         self._hllc = True
+        return self
+
+    def enable_roe(self):
+        """Emet la CAPABILITY ROE (solde de l'audit, GENERICITY_2026-06.md point 11) :
+        ``roe_dissipation(UL, AL, UR, AR, dir)`` = |A_roe| (UR - UL) GENEREE depuis les ROLES du
+        bloc -- le solveur Roe-like du coeur (trait C++ HasRoeDissipation, F = 1/2(FL+FR) - 1/2 d)
+        devient disponible pour CE modele, MEME hors Euler 4 variables :
+
+        - roles Density/MomentumX/MomentumY + Energy : algebre de Roe du gaz parfait, TRANSCRIPTION
+          exacte du chemin canonique C++ (moyennes ponderees sqrt(rho), gamma-1 deduit de
+          p/(E - 1/2 rho |v|^2), correction d'entropie de Harten sur les ondes acoustiques) ;
+        - roles Density/MomentumX/MomentumY SANS Energy (isotherme / pseudo-pression) : meme
+          decomposition sans la ligne d'energie, vitesse du son LOCALE c = sqrt(p/rho) moyennee
+          a la Roe (generalisation standard hors gaz parfait) ;
+        - toute composante HORS roles fluides est traitee en SCALAIRE PASSIF porte par l'onde
+          entropique (ligne identique a la quantite de mouvement tangentielle, phi = q/rho).
+
+        EXIGE : roles Density/MomentumX/MomentumY declares + primitive 'p' (erreur explicite a
+        l'emission sinon). Sans appel : rien d'emis, riemann='roe' reste Euler-4-var-only."""
+        self._roe = True
 
     def set_gamma(self, gamma):
         """Indice adiabatique du bloc (EOS compressible). Transporte par le .so genere via le symbole
@@ -1408,6 +1429,90 @@ class HyperbolicModel:
                          "(r * (s - un))));" % (iE, iE))
             S += ["    return Us;", "  }", ""]
 
+        # CAPABILITY ROE (m.enable_roe, solde de l'audit) : roe_dissipation = |A_roe| (UR - UL)
+        # GENEREE depuis les ROLES. Avec Energy : TRANSCRIPTION exacte de l'algebre canonique
+        # Euler du coeur (numerical_flux.hpp), gamma-1 deduit de p/(E - 1/2 rho |v|^2) -- parite
+        # numerique attendue avec le chemin historique. Sans Energy : meme decomposition sans la
+        # ligne E, c = sqrt(p/rho) par cote puis moyenne de Roe (generalisation standard). Les
+        # composantes HORS roles fluides sont des scalaires passifs portes par l'onde entropique
+        # (ligne tangentielle, phi = q/rho). Le coeur (HasRoeDissipation) fait F = 1/2(FL+FR) - d/2.
+        if self._roe:
+            roles_l = roles_for(self.cons_names, self.cons_roles)
+            if "p" not in self.prim_defs:
+                raise ValueError("enable_roe : la primitive 'p' (pression) doit etre declaree "
+                                 "(m.primitive('p', ...)) -- la linearisation de Roe en depend")
+            try:
+                iD = roles_l.index("Density")
+                iX = roles_l.index("MomentumX")
+                iY = roles_l.index("MomentumY")
+            except ValueError:
+                raise ValueError("enable_roe : roles Density / MomentumX / MomentumY requis "
+                                 "(declarer conservative_vars(..., roles=[...])) ; roles actuels %r"
+                                 % (roles_l,))
+            iE = roles_l.index("Energy") if "Energy" in roles_l else -1
+            passives = [c for c in range(nc) if c not in (iD, iX, iY, iE)]
+            S.append("  // CAPABILITY ROE generee depuis les ROLES (enable_roe) : dissipation")
+            S.append("  // |A_roe| dU du coeur generique (HasRoeDissipation), aucun layout fige.")
+            S.append("  ADC_HD State roe_dissipation(const State& UL, const adc::Aux&, "
+                     "const State& UR, const adc::Aux&, int dir) const {")
+            S.append("    const int in_ = dir == 0 ? %d : %d;" % (iX, iY))
+            S.append("    const int it_ = dir == 0 ? %d : %d;" % (iY, iX))
+            S.append("    const adc::Real rL = UL[%d], rR = UR[%d];" % (iD, iD))
+            S.append("    const adc::Real unL = UL[in_] / rL, unR = UR[in_] / rR;")
+            S.append("    const adc::Real utL = UL[it_] / rL, utR = UR[it_] / rR;")
+            S.append("    const adc::Real pL = pressure(UL), pR = pressure(UR);")
+            S.append("    const adc::Real sqL = std::sqrt(rL), sqR = std::sqrt(rR), "
+                     "den = sqL + sqR;")
+            S.append("    const adc::Real un = (sqL * unL + sqR * unR) / den;")
+            S.append("    const adc::Real ut = (sqL * utL + sqR * utR) / den;")
+            S.append("    const adc::Real rho = sqL * sqR;")
+            if iE >= 0:
+                S.append("    // gaz parfait : H de Roe + gamma-1 deduit (algebre canonique du coeur)")
+                S.append("    const adc::Real HL = (UL[%d] + pL) / rL, HR = (UR[%d] + pR) / rR;"
+                         % (iE, iE))
+                S.append("    const adc::Real H = (sqL * HL + sqR * HR) / den;")
+                S.append("    const adc::Real q2 = un * un + ut * ut;")
+                S.append("    const adc::Real gm1 = pL / (UL[%d] - adc::Real(0.5) * rL * "
+                         "(unL * unL + utL * utL));" % iE)
+                S.append("    const adc::Real c2 = gm1 * (H - adc::Real(0.5) * q2);")
+                S.append("    const adc::Real c = std::sqrt(c2);")
+            else:
+                S.append("    // sans Energy : c LOCAL = sqrt(p/rho) par cote, moyenne de Roe")
+                S.append("    const adc::Real c = (sqL * std::sqrt(pL / rL) + sqR * "
+                         "std::sqrt(pR / rR)) / den;")
+                S.append("    const adc::Real c2 = c * c;")
+            S.append("    const adc::Real dr = rR - rL, dp = pR - pL, dun = unR - unL, "
+                     "dut = utR - utL;")
+            S.append("    const adc::Real a1 = (dp - rho * c * dun) / (adc::Real(2) * c2);")
+            S.append("    const adc::Real a2 = dr - dp / c2;")
+            S.append("    const adc::Real a3 = rho * dut;")
+            S.append("    const adc::Real a5 = (dp + rho * c * dun) / (adc::Real(2) * c2);")
+            S.append("    // correction d'entropie de Harten, MEME politique que le chemin")
+            S.append("    // canonique : eps = adc::kRoeEntropyFixFraction * c (0.1, Euler/Roe).")
+            S.append("    const adc::Real eps = adc::Real(0.1) * c;")
+            S.append("    const adc::Real l1r = un - c, l5r = un + c;")
+            S.append("    const adc::Real al1 = (l1r < 0 ? -l1r : l1r) < eps ? "
+                     "adc::Real(0.5) * (l1r * l1r / eps + eps) : (l1r < 0 ? -l1r : l1r);")
+            S.append("    const adc::Real al2 = un < 0 ? -un : un;")
+            S.append("    const adc::Real al5 = (l5r < 0 ? -l5r : l5r) < eps ? "
+                     "adc::Real(0.5) * (l5r * l5r / eps + eps) : (l5r < 0 ? -l5r : l5r);")
+            S.append("    State d{};")
+            S.append("    d[%d] = al1 * a1 + al2 * a2 + al5 * a5;" % iD)
+            S.append("    d[in_] = al1 * a1 * (un - c) + al2 * a2 * un + al5 * a5 * (un + c);")
+            S.append("    d[it_] = al1 * a1 * ut + al2 * (a2 * ut + a3) + al5 * a5 * ut;")
+            if iE >= 0:
+                S.append("    d[%d] = al1 * a1 * (H - un * c) + al2 * (a2 * adc::Real(0.5) * q2 "
+                         "+ a3 * ut) + al5 * a5 * (H + un * c);" % iE)
+            for cpa in passives:
+                S.append("    {  // scalaire passif [%d] : porte par l'onde entropique (phi = q/rho)"
+                         % cpa)
+                S.append("      const adc::Real fL = UL[%d] / rL, fR = UR[%d] / rR;" % (cpa, cpa))
+                S.append("      const adc::Real ft = (sqL * fL + sqR * fR) / den;")
+                S.append("      d[%d] = al1 * a1 * ft + al2 * (a2 * ft + rho * (fR - fL)) "
+                         "+ al5 * a5 * ft;" % cpa)
+                S.append("    }")
+            S += ["    return d;", "  }", ""]
+
         # Bornes de pas OPTIONNELLES (m.stability_speed / m.stability_dt) : emises comme les traits
         # C++ HasStabilitySpeed / HasStabilityDt (cf. adc/core/physical_model.hpp). Une seule
         # expression (isotrope) : dir est ignore. SANS appel, rien n'est emis -> fallback strict
@@ -1901,6 +2006,7 @@ class HyperbolicModel:
         parts.append("src_jac=%s" % (";".join(repr(e) for row in m._src_jac for e in row)
                                      if m._src_jac is not None else ""))
         parts.append("hllc=%d" % (1 if m._hllc else 0))
+        parts.append("roe=%d" % (1 if getattr(m, "_roe", False) else 0))
         parts.append("n_aux=%d" % aux_n_aux(m.aux_names))
         parts.append("gamma=%r" % m.gamma)
         # Les params entrent dans le hash par (nom, valeur de DECLARATION, kind). La valeur d'un param
@@ -2168,8 +2274,9 @@ class CompiledModel:
 
     def __init__(self, so_path, backend, adder, cons_names, cons_roles, prim_names, n_vars,
                  gamma, n_aux, params, caps, abi_key, model_hash, cxx, std, target="system",
-                 hllc=False):
+                 hllc=False, roe=False):
         self.has_hllc = bool(hllc)   # capability HLLC emise (enable_hllc) : hllc dispo hors Euler 4-var
+        self.has_roe = bool(roe)     # capability ROE emise (enable_roe) : roe dispo hors Euler 4-var
         self.so_path = so_path
         self.backend = backend       # "prototype" | "aot" | "production"
         self.target = target         # "system" | "amr_system" : facade visee (loader natif AMR si amr_system)
@@ -2198,6 +2305,47 @@ class CompiledModel:
         """Valeurs de DECLARATION des params runtime, paralleles a runtime_param_names (defaut tant
         qu'aucun set_block_params n'a ete appele)."""
         return [self.params[k].value for k in self.runtime_param_names]
+
+    def check_runtime(self, n=16, state=None, raise_on_error=True, rtol=1e-8, atol=1e-10):
+        """Re-verification RUNTIME d'un CompiledModel SEUL (solde audit, GENERICITY pt 9) : sans le
+        dsl.Model d'origine, les FORMULES ne sont plus re-verifiables (check_model symbolique), mais
+        le .so, lui, l'est -- on l'installe dans un System EPHEMERE (n x n periodique, Poisson
+        neutre, minmod+rusanov) et on delegue a System.check_model (etat fini, residu -div F + S
+        fini, positivite par roles, round-trip des conversions DU MODELE).
+
+        @p state : dict {nom de variable conservative: ndarray (n, n)} pour controler l'etat teste.
+        None -> etat de FUMEE par ROLES (Density = 1 + bosse gaussienne, Momentum* = 0,
+        Energy = 2.5, autres composantes = 0.5) -- suffisant pour exercer flux/source/conversions ;
+        fournir state= pour un regime physique precis. @return le dict de System.check_model."""
+        import numpy as np
+        if getattr(self, "target", "system") != "system":
+            raise ValueError(
+                "CompiledModel.check_runtime : seul target='system' est re-verifiable dans un "
+                "System ephemere ; un loader target='amr_system' se controle installe dans son "
+                "AmrSystem (invariants des tests AMR), pas isolement.")
+        from . import System, FiniteVolume, Explicit
+        sim = System(n=int(n), L=1.0, periodic=True)
+        sim.set_poisson()
+        sim.add_equation("check", model=self,
+                         spatial=FiniteVolume(limiter="minmod", riemann="rusanov"),
+                         time=Explicit())
+        x = (np.arange(n) + 0.5) / float(n)
+        X, Y = np.meshgrid(x, x, indexing="xy")
+        bump = 1.0 + 0.3 * np.exp(-40.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
+        comps = []
+        for name, role in zip(self.cons_names, self.cons_roles):
+            if state is not None and name in state:
+                comps.append(np.asarray(state[name], dtype=float).reshape(n, n))
+            elif role == "Density":
+                comps.append(bump)
+            elif role in ("MomentumX", "MomentumY"):
+                comps.append(np.zeros((n, n)))
+            elif role == "Energy":
+                comps.append(2.5 + 0.0 * bump)
+            else:
+                comps.append(0.5 + 0.0 * bump)
+        sim._s.set_state("check", np.stack(comps).ravel())
+        return sim.check_model("check", raise_on_error=raise_on_error, rtol=rtol, atol=atol)
 
     def __repr__(self):
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
@@ -2347,6 +2495,13 @@ class Model:
         variables. Delegue a HyperbolicModel.enable_hllc."""
         self._m.enable_hllc()
 
+    def enable_roe(self):
+        """Emet la capability ROE (roe_dissipation = |A_roe| dU generee depuis les ROLES +
+        primitive 'p') : riemann='roe' devient disponible pour ce modele MEME hors Euler 4
+        variables (sans Energy : c = sqrt(p/rho) moyennee a la Roe ; composantes hors roles
+        fluides = scalaires passifs sur l'onde entropique). Delegue a HyperbolicModel.enable_roe."""
+        self._m.enable_roe()
+
     def elliptic_rhs(self, e):
         """Contribution au second membre elliptique (couplage Poisson ; delegue a set_elliptic_rhs)."""
         self._m.set_elliptic_rhs(e)
@@ -2487,7 +2642,7 @@ class Model:
             n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_n_aux(m.aux_names),
             params=self.params, caps=_BACKEND_CAPS[backend],
             abi_key=abi_key, model_hash=model_hash,
-            cxx=eff_cxx, std=eff_std, hllc=m._hllc)
+            cxx=eff_cxx, std=eff_std, hllc=m._hllc, roe=getattr(m, '_roe', False))
 
 
 # === Phase B (prototype) : composition HYBRIDE brique native + brique DSL dans UN modele ========
@@ -2954,7 +3109,8 @@ class HybridModel:
             target=target, cons_names=self.cons_names, cons_roles=self.cons_roles,
             prim_names=self.prim_names, n_vars=self.n_vars, gamma=self.gamma, n_aux=self.n_aux,
             params={}, caps=_BACKEND_CAPS[backend], abi_key=abi_key, model_hash=model_hash,
-            cxx=cxx, std=std, hllc=getattr(self, "_hllc", False))
+            cxx=cxx, std=std, hllc=getattr(self, "_hllc", False),
+            roe=getattr(self, "_roe", False))
 
 
 # --- Source COUPLEE generique inter-especes (P5 phase 1, splitting EXPLICITE) -----------------------

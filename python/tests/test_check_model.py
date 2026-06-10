@@ -11,7 +11,10 @@ Deux niveaux :
 Verifie le chemin vert ET les detections (round-trip casse, flux non fini, densite non positive).
 Invariants par assert ; imprime "OK test_check_model" en cas de succes.
 """
+import os
+import shutil
 import sys
+import tempfile
 
 import numpy as np
 
@@ -99,6 +102,39 @@ sim.set_density("ions", bad.ravel())
 rep = sim.check_model("ions", raise_on_error=False)
 chk(not rep["ok"] and any("Density" in f for f in rep["failures"]),
     f"detecte : {rep['failures'][:1]}")
+
+print("== CompiledModel.check_runtime : .so re-verifiable SEUL (solde audit pt 9) ==")
+cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
+if cxx and os.path.isdir(INCLUDE):
+    tmpd = tempfile.mkdtemp()
+    try:
+        mq = dsl.Model("ckrt")
+        rho, mx, my = mq.conservative_vars("rho", "mx", "my",
+                                           roles=["Density", "MomentumX", "MomentumY"])
+        uq = mq.primitive("u", mx / rho)
+        vq = mq.primitive("v", my / rho)
+        mq.primitive("p", 0.5 * rho)
+        cq = dsl.sqrt(0.5)
+        mq.flux(x=[mx, mx * uq + 0.5 * rho, mx * vq], y=[my, my * uq, my * vq + 0.5 * rho])
+        mq.eigenvalues(x=[uq - cq, uq, uq + cq], y=[vq - cq, vq, vq + cq])
+        mq.primitive_vars(rho, uq, vq)
+        mq.conservative_from([rho, rho * uq, rho * vq])
+        mq.elliptic_rhs(0.0 * rho)
+        cmq = mq.compile(os.path.join(tmpd, "ckrt.so"), INCLUDE, backend="production")
+        repq = cmq.check_runtime(n=16)
+        chk(repq["ok"] and not repq["failures"],
+            f"CompiledModel seul re-verifie dans un System ephemere (ok={repq['ok']})")
+        try:
+            cmq.target = "amr_system"
+            cmq.check_runtime()
+            chk(False, "check_runtime sur target amr aurait du lever")
+        except ValueError as e:
+            chk("amr_system" in str(e), f"target amr rejete : {str(e)[:60]}")
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+else:
+    print("skip  check_runtime : compilateur ou en-tetes absents")
 
 if fails:
     print(f"FAIL test_check_model : {fails} echec(s)")
