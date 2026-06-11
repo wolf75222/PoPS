@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 /// @file
@@ -42,10 +43,21 @@
 ///      5. correction grossiere : GeometricMG(Lap e_c = r_c, Dirichlet homogene) ; phi_c += e_c (non couvertes) ;
 ///   jusqu'a ||r_c|| (norme du residu composite) sous tolerance.
 ///
-/// PERIMETRE (Phase 1). Cartesien, 2 niveaux, UN patch fin mono-box strictement interieur, ratio 2,
-/// grossier MONO-BOX REPLIQUE (serie / mono-rang). Le Schur condense (operateur tenseur A=I+c rho B^-1),
-/// le multi-patch, et MPI sont des phases ulterieures. Le test MMS valide que le patch fin REDUIT
-/// l'erreur elliptique pres du patch vs coarse-only.
+/// PERIMETRE (Phase 4a, multi-patch fin). Cartesien, 2 niveaux, 1..N patchs fins disjoints strictement
+/// interieurs, alignes (lo pair / hi impair) et SEPARES d'au moins une cellule grossiere (NON adjacents),
+/// ratio 2, grossier MONO-BOX REPLIQUE (serie / mono-rang). N == 1 -> chemin mono-patch bit-identique a la
+/// Phase 1 (ctor delegue, boucles par-patch degenerees a un seul patch). Le raccord fin-fin (patchs
+/// ADJACENTS), MPI et > 2 niveaux sont la Phase 4b. Le test MMS valide que le patch fin REDUIT l'erreur
+/// elliptique pres du patch vs coarse-only.
+///
+/// MULTI-PATCH (Phase 4a). Chaque patch fin a sa propre box (BoxArray fin) ; les operations FINES (ghosts
+/// C-F bilineaires, SOR, correction de flux C-F) bouclent SUR CHAQUE patch local. La couverture grossiere
+/// (CoverageMask) est l'UNION des empreintes grossieres de tous les patchs : c'est elle qui dit quelles
+/// cellules grossieres sont ombragees (residu mis a 0, average_down) et permet de sauter une cellule
+/// bordante couverte par un AUTRE patch. La separation d'au moins une cellule grossiere (garde-fou ctor)
+/// garantit qu'aucune face fine n'est PARTAGEE entre deux patchs : chaque bord de patch est un vrai
+/// raccord grossier-fin, donc le ghost C-F bilineaire (lecture du grossier) et la correction de flux sont
+/// exacts patch par patch -- pas besoin d'echange fin-fin.
 
 namespace adc {
 
@@ -74,20 +86,29 @@ ADC_HD inline Real fac_bilerp_coarse(const ConstArray4& C, int i, int j, int r) 
 /// phi_c (grossier, couvert = average_down du fin) et phi_f (fin).
 class CompositeFacPoisson {
  public:
+  /// CTOR MONO-PATCH (Phase 1) : DELEGUE au ctor multi-patch avec un BoxArray fin a une seule box, donc
+  /// BIT-IDENTIQUE a l'ancien chemin. Conserve pour les appelants existants (AmrCouplerMP Option-A
+  /// composite, tests MMS mono-patch).
   /// @p geom_c : geometrie grossiere (domaine entier). @p ba_c : BoxArray grossier (mono-box couvrant
   ///             le domaine). @p bc : CL du domaine (Dirichlet pour ce jalon). @p fine_box : box du
   ///             patch fin (espace d'indices FIN, ratio 2, strictement interieur). @p ratio : 2.
   CompositeFacPoisson(const Geometry& geom_c, const BoxArray& ba_c, const BCRec& bc,
                       const Box2D& fine_box, int ratio = 2)
+      : CompositeFacPoisson(geom_c, ba_c, bc, BoxArray(std::vector<Box2D>{fine_box}), ratio) {}
+
+  /// CTOR MULTI-PATCH (Phase 4a). @p fine_boxes : pavage du niveau fin (1..N patchs disjoints, espace
+  /// d'indices FIN, ratio 2, strictement interieurs, alignes lo pair / hi impair, SEPARES d'au moins une
+  /// cellule grossiere). Le grossier reste mono-box replique (mono-rang). N == 1 -> chemin mono-patch.
+  CompositeFacPoisson(const Geometry& geom_c, const BoxArray& ba_c, const BCRec& bc,
+                      const BoxArray& fine_boxes, int ratio = 2)
       : geom_c_(geom_c),
         geom_f_(geom_c.refine(ratio)),
         ba_c_(ba_c),
         dm_c_(ba_c.size(), n_ranks()),
         bc_(bc),
         ratio_(ratio),
-        fine_box_(fine_box),
-        ba_f_(std::vector<Box2D>{fine_box}),
-        dm_f_(1, n_ranks()),
+        ba_f_(fine_boxes),
+        dm_f_(fine_boxes.size(), n_ranks()),
         mg_(geom_c, ba_c, bc, {}, /*replicated=*/true),
         phi_c_(ba_c, dm_c_, 1, 1),
         phi_f_(ba_f_, dm_f_, 1, 1),
@@ -100,10 +121,12 @@ class CompositeFacPoisson {
         ayx_c_(ba_c, dm_c_, 1, 1),
         axy_f_(ba_f_, dm_f_, 1, 1),
         ayx_f_(ba_f_, dm_f_, 1, 1),
-        // empreinte grossiere du patch (cellules couvertes) : PatchRange (lo/2 .. (hi-1)/2).
-        patch_coarse_(PatchRange(fine_box).box()),
         cov_(Box2D::from_extents(geom_c.domain.nx(), geom_c.domain.ny())) {
-    cov_.mark(patch_coarse_);
+    require_separated_patches(fine_boxes);  // garde-fou : patchs NON adjacents (raccord fin-fin = Phase 4b)
+    // empreintes grossieres (cellules couvertes) PAR PATCH : PatchRange (lo/2 .. (hi-1)/2). La couverture
+    // grossiere globale = UNION des empreintes (un trou eventuel entre patchs disjoints reste NON couvert).
+    for (int g = 0; g < fine_boxes.size(); ++g) patch_coarse_.push_back(PatchRange(fine_boxes[g]).box());
+    for (const Box2D& pc : patch_coarse_) cov_.mark(pc);
     phi_c_.set_val(Real(0));
     phi_f_.set_val(Real(0));
     eps_c_.set_val(Real(1));  // permittivite par defaut 1 -> operateur = Laplacien (scalaire)
@@ -134,7 +157,12 @@ class CompositeFacPoisson {
   MultiFab& a_xy_fine() { return axy_f_; }
   MultiFab& a_yx_fine() { return ayx_f_; }
   void use_cross_terms(bool v) { has_cross_ = v; }
-  const Box2D& patch_coarse() const { return patch_coarse_; }
+  /// Empreinte grossiere du PREMIER patch fin (compat mono-patch). Multi-patch : cf. patch_coarse(g).
+  const Box2D& patch_coarse() const { return patch_coarse_[0]; }
+  /// Empreinte grossiere du patch fin @p g (0 <= g < n_fine_patches()).
+  const Box2D& patch_coarse(int g) const { return patch_coarse_[g]; }
+  /// Nombre de patchs fins (taille du BoxArray fin).
+  int n_fine_patches() const { return ba_f_.size(); }
 
   void set_verbose(bool v) { verbose_ = v; }
   /// true : iterer le couplage two-way FAC (correction de flux C-F + correction grossiere). false :
@@ -144,7 +172,6 @@ class CompositeFacPoisson {
   /// Resout le systeme composite. @return le residu composite max final.
   /// @p max_iters iterations FAC (two-way) ; @p fine_sweeps balayages SOR par solve fin ; @p tol tolerance.
   Real solve(int max_iters = 30, int fine_sweeps = 400, Real tol = 1e-9) {
-    const Real omega = sor_omega();
     // COEFFICIENT VARIABLE (operateur condense Schur B_z=0) : pose eps sur le solveur grossier et
     // remplit les ghosts de eps PAR NIVEAU. eps_c ghosts = gradient-nul (coeff_bc Foextrap, comme le
     // batisseur Schur) ; eps_f ghosts C-F = bilerp de eps_c (coherence du flux de coefficient a travers
@@ -170,7 +197,7 @@ class CompositeFacPoisson {
     copy0(phi_c_, mg_.phi());
 
     // 1) ghosts C-F bilineaires + solve fin (ONE-WAY de base).
-    refresh_fine(fine_sweeps, omega);
+    refresh_fine(fine_sweeps);
 
     Real rnorm = composite_coarse_residual();
     if (verbose_ && my_rank() == 0) std::fprintf(stderr, "[FAC] init r_c=%.4e\n", rnorm);
@@ -185,7 +212,7 @@ class CompositeFacPoisson {
       mg_.solve(Real(1e-12), 100);
       add_uncovered(phi_c_, mg_.phi());
       // re-ghost + re-solve fin sur le phi_c corrige.
-      refresh_fine(fine_sweeps, omega);
+      refresh_fine(fine_sweeps);
       rnorm = composite_coarse_residual();
       if (verbose_ && my_rank() == 0) std::fprintf(stderr, "[FAC] it=%d r_c=%.4e\n", it, rnorm);
     }
@@ -221,34 +248,60 @@ class CompositeFacPoisson {
     }
   }
 
-  /// Remplit l'anneau de ghosts du patch fin par bilerp de phi_c (Dirichlet C-F cellule-centre).
+  /// Garde-fou Phase 4a : les patchs fins doivent etre disjoints ET separes d'au moins UNE cellule
+  /// grossiere (empreintes grossieres PatchRange pas meme adjacentes). Sinon une face fine serait
+  /// PARTAGEE entre deux patchs et traitee a tort comme un bord grossier-fin (ghost C-F bilineaire +
+  /// correction de flux) : le raccord fin-fin (multi-patch ADJACENT) est la Phase 4b. On teste : empreinte
+  /// grossiere du patch g DILATEE d'une cellule croise empreinte du patch h -> separation insuffisante.
+  static void require_separated_patches(const BoxArray& fine_boxes) {
+    const int N = fine_boxes.size();
+    for (int g = 0; g < N; ++g) {
+      const Box2D ag = PatchRange(fine_boxes[g]).box();
+      for (int h = g + 1; h < N; ++h) {
+        const Box2D bh = PatchRange(fine_boxes[h]).box();
+        if (!ag.grow(1).intersect(bh).empty())
+          throw std::runtime_error(
+              "CompositeFacPoisson : patchs fins adjacents ou se chevauchant (empreintes grossieres "
+              "separees de moins d'une cellule) ; le raccord fin-fin multi-patch est la Phase 4b -- "
+              "exiger des patchs disjoints separes d'au moins une cellule grossiere.");
+      }
+    }
+  }
+
+  /// Remplit l'anneau de ghosts de CHAQUE patch fin par bilerp de phi_c (Dirichlet C-F cellule-centre).
+  /// Les patchs etant separes d'au moins une cellule grossiere, l'anneau de ghosts d'un patch n'empiete
+  /// jamais sur les cellules valides d'un autre -> lecture du seul grossier (pas d'echange fin-fin).
   void fill_cf_ghosts() {
     const ConstArray4 C = phi_c_.fab(0).const_array();  // grossier mono-box replique
     const int ng = phi_f_.n_grow();
-    Array4 F = phi_f_.fab(0).array();
-    const Box2D vb = phi_f_.box(0);
-    for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
-      for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
-        const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
-        if (inside) continue;  // ghosts seulement
-        F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
-      }
+    for (int li = 0; li < phi_f_.local_size(); ++li) {
+      Array4 F = phi_f_.fab(li).array();
+      const Box2D vb = phi_f_.box(li);
+      for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
+        for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
+          const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
+          if (inside) continue;  // ghosts seulement
+          F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
+        }
+    }
   }
 
   /// Remplit les ghosts d'un champ de COEFFICIENT fin (@p fine) par bilerp du champ grossier (@p coarse) :
   /// coherence du coefficient a l'interface C-F (la face de coefficient au bord du patch melange le coeff
   /// fin interieur et le coeff grossier injecte). Generique (eps, a_xy, a_yx).
   void fill_cf_coarse_to_fine(const MultiFab& coarse, MultiFab& fine) {
-    const ConstArray4 C = coarse.fab(0).const_array();
+    const ConstArray4 C = coarse.fab(0).const_array();  // grossier mono-box replique
     const int ng = fine.n_grow();
-    Array4 F = fine.fab(0).array();
-    const Box2D vb = fine.box(0);
-    for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
-      for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
-        const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
-        if (inside) continue;
-        F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
-      }
+    for (int li = 0; li < fine.local_size(); ++li) {
+      Array4 F = fine.fab(li).array();
+      const Box2D vb = fine.box(li);
+      for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
+        for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
+          const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
+          if (inside) continue;
+          F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
+        }
+    }
   }
 
   /// CL des coefficients (eps) : periodique conserve, bord physique -> gradient-nul (Foextrap), comme
@@ -261,57 +314,62 @@ class CompositeFacPoisson {
     return c;
   }
 
-  /// Facteur de sur-relaxation SOR ~ optimal pour le patch (2/(1+sin(pi/N))) -> convergence O(N) sweeps
-  /// au lieu de O(N^2) pour GS. N = plus grand cote du patch fin.
-  Real sor_omega() const {
-    const int N = std::max(fine_box_.nx(), fine_box_.ny());
+  /// Facteur de sur-relaxation SOR ~ optimal pour un patch (2/(1+sin(pi/N))) -> convergence O(N) sweeps
+  /// au lieu de O(N^2) pour GS. N = plus grand cote de la box @p b (calcule par patch en multi-patch).
+  Real sor_omega(const Box2D& b) const {
+    const int N = std::max(b.nx(), b.ny());
     return Real(2) / (Real(1) + std::sin(Real(kPi_) / Real(N)));
   }
 
-  /// Re-remplit les ghosts C-F bilineaires depuis phi_c puis relaxe le patch fin (SOR) a ghosts GELES.
-  void refresh_fine(int sweeps, Real omega) {
+  /// Re-remplit les ghosts C-F bilineaires depuis phi_c puis relaxe CHAQUE patch fin (SOR) a ghosts GELES.
+  void refresh_fine(int sweeps) {
     device_fence();
     fill_ghosts(phi_c_, geom_c_.domain, bc_);  // phi_c ghosts physiques (le bilerp lit jusqu'au bord)
     fill_cf_ghosts();
-    fine_sor(sweeps, omega);
-    average_down(phi_f_, phi_c_, ratio_);  // coherence : couvert grossier = moyenne fine
+    fine_sor(sweeps);
+    average_down(phi_f_, phi_c_, ratio_);  // coherence : couvert grossier = moyenne fine (multi-box OK)
   }
 
-  /// SOR rouge-noir sur le patch fin : div(eps grad phi_f) = f_f (eps = harmonique de face), ghosts
+  /// SOR rouge-noir sur CHAQUE patch fin : div(eps grad phi_f) = f_f (eps = harmonique de face), ghosts
   /// GELES (pas de re-remplissage). eps == 1 partout (scalaire) -> Laplacien, bit-identique a Phase 1.
-  void fine_sor(int sweeps, Real omega) {
+  /// Le facteur de sur-relaxation est calcule PAR PATCH (taille propre). Les patchs etant separes, le
+  /// stencil 9 points d'un patch ne lit jamais les cellules valides d'un autre (ghosts geles seulement).
+  void fine_sor(int sweeps) {
     const Real idx2 = Real(1) / (geom_f_.dx() * geom_f_.dx());
     const Real idy2 = Real(1) / (geom_f_.dy() * geom_f_.dy());
-    const Box2D vb = phi_f_.box(0);
-    Array4 P = phi_f_.fab(0).array();
-    const ConstArray4 Pc = phi_f_.fab(0).const_array();  // vue const (meme memoire) pour le stencil croise
-    const ConstArray4 F = f_f_.fab(0).const_array();
-    const ConstArray4 E = eps_f_.fab(0).const_array();
-    const ConstArray4 AXY = axy_f_.fab(0).const_array();
-    const ConstArray4 AYX = ayx_f_.fab(0).const_array();
     const bool he = has_eps_;
     const bool hc = has_cross_;
     const Real idx = Real(1) / geom_f_.dx(), idy = Real(1) / geom_f_.dy();  // cross_div : 1/dx, 1/dy
-    for (int s = 0; s < sweeps; ++s)
-      for (int color = 0; color < 2; ++color)
-        for (int j = vb.lo[1]; j <= vb.hi[1]; ++j)
-          for (int i = vb.lo[0]; i <= vb.hi[0]; ++i) {
-            if (((i + j) & 1) != color) continue;
-            // permittivites de FACE (moyenne harmonique des 2 centres) ; eps==1 -> faces == 1.
-            const Real exm = he ? eps_harmonic(E(i, j, 0), E(i - 1, j, 0)) : Real(1);
-            const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
-            const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
-            const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
-            const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2;
-            const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
-                            (eym * P(i, j - 1, 0) + eyp * P(i, j + 1, 0)) * idy2;
-            // termes croises EXPLICITES (9 points, lus a partir du P courant) : div(A grad phi) =
-            // bloc_diag + cross. On resout bloc_diag(P) + cross(P) = f -> P = (nb + cross - f)/diag.
-            const Real cross =
-                hc ? detail::cross_div(Pc, true, AXY, true, AYX, i, j, idx, idy) : Real(0);
-            const Real pgs = (nb + cross - F(i, j, 0)) / diag;
-            P(i, j, 0) = (Real(1) - omega) * P(i, j, 0) + omega * pgs;  // sur-relaxation (sous-relax si fort)
-          }
+    for (int li = 0; li < phi_f_.local_size(); ++li) {
+      const Box2D vb = phi_f_.box(li);
+      const Real omega = sor_omega(vb);
+      Array4 P = phi_f_.fab(li).array();
+      const ConstArray4 Pc = phi_f_.fab(li).const_array();  // vue const (meme memoire) pour stencil croise
+      const ConstArray4 F = f_f_.fab(li).const_array();
+      const ConstArray4 E = eps_f_.fab(li).const_array();
+      const ConstArray4 AXY = axy_f_.fab(li).const_array();
+      const ConstArray4 AYX = ayx_f_.fab(li).const_array();
+      for (int s = 0; s < sweeps; ++s)
+        for (int color = 0; color < 2; ++color)
+          for (int j = vb.lo[1]; j <= vb.hi[1]; ++j)
+            for (int i = vb.lo[0]; i <= vb.hi[0]; ++i) {
+              if (((i + j) & 1) != color) continue;
+              // permittivites de FACE (moyenne harmonique des 2 centres) ; eps==1 -> faces == 1.
+              const Real exm = he ? eps_harmonic(E(i, j, 0), E(i - 1, j, 0)) : Real(1);
+              const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
+              const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
+              const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
+              const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2;
+              const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
+                              (eym * P(i, j - 1, 0) + eyp * P(i, j + 1, 0)) * idy2;
+              // termes croises EXPLICITES (9 points, lus a partir du P courant) : div(A grad phi) =
+              // bloc_diag + cross. On resout bloc_diag(P) + cross(P) = f -> P = (nb + cross - f)/diag.
+              const Real cross =
+                  hc ? detail::cross_div(Pc, true, AXY, true, AYX, i, j, idx, idy) : Real(0);
+              const Real pgs = (nb + cross - F(i, j, 0)) / diag;
+              P(i, j, 0) = (Real(1) - omega) * P(i, j, 0) + omega * pgs;  // sur-relax (sous-relax si fort)
+            }
+    }
   }
 
   /// Residu composite grossier : r_c = f_c - div(eps grad phi_c) (non couvert), 0 (couvert), + correction
@@ -336,73 +394,80 @@ class CompositeFacPoisson {
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
         R(i, j, 0) = cov_.covered(i, j) ? Real(0) : (FC(i, j, 0) - LAP(i, j, 0));
 
-    // CORRECTION DE FLUX C-F. Sur chaque cellule grossiere BORDANT le patch (non couverte, voisin
-    // couvert), on REMPLACE la contribution de la face C-F dans div(eps grad phi_c) par la contribution
-    // FINE (somme conservative des r faces fines, eps de face harmonique). r_c += (grossiere - fine).
+    // CORRECTION DE FLUX C-F, PAR PATCH FIN. Sur chaque cellule grossiere BORDANT un patch (non couverte,
+    // voisin couvert), on REMPLACE la contribution de la face C-F dans div(eps grad phi_c) par la
+    // contribution FINE (somme conservative des r faces fines, eps de face harmonique) : r_c += (grossiere
+    // - fine). Les patchs etant separes d'au moins une cellule grossiere, chaque bord est un VRAI raccord
+    // grossier-fin ; le test !cov_.covered(I, J) saute defensivement une cellule bordante qui serait
+    // couverte par un AUTRE patch (impossible sous le garde-fou, mais robuste : une cellule bordante
+    // couverte est deja un interieur d'un autre patch, son residu reste 0). Une cellule SEPARANT deux
+    // patchs (bord droit de l'un, bord gauche de l'autre) recoit DEUX corrections, une par face : correct.
     const ConstArray4 PC = phi_c_.fab(0).const_array();
-    const ConstArray4 PF = phi_f_.fab(0).const_array();
     const ConstArray4 EC = eps_c_.fab(0).const_array();
-    const ConstArray4 EF = eps_f_.fab(0).const_array();
     const bool he = has_eps_;
     const Real idx2 = Real(1) / (geom_c_.dx() * geom_c_.dx());
     const Real idy2 = Real(1) / (geom_c_.dy() * geom_c_.dy());
-    const int Ic0 = patch_coarse_.lo[0], Ic1 = patch_coarse_.hi[0];
-    const int Jc0 = patch_coarse_.lo[1], Jc1 = patch_coarse_.hi[1];
     const int r = ratio_;
-    // Faces NORMALES A X : colonnes bordantes I = Ic0-1 (face +x couverte) et I = Ic1+1 (face -x).
-    for (int J = Jc0; J <= Jc1; ++J) {
-      {  // gauche : cellule (Ic0-1, J), face grossiere entre (Ic0-1) et (Ic0) ; faces fines a i = r*Ic0.
-        const int I = Ic0 - 1;
-        const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I + 1, J, 0)) : Real(1);
-        const Real coarse_c = efc * (PC(I + 1, J, 0) - PC(I, J, 0)) * idx2;
-        Real fine_sum = Real(0);
-        for (int t = 0; t < r; ++t) {
-          const int jf = r * J + t;
-          const Real eff = he ? eps_harmonic(EF(r * Ic0 - 1, jf, 0), EF(r * Ic0, jf, 0)) : Real(1);
-          fine_sum += eff * (PF(r * Ic0, jf, 0) - PF(r * Ic0 - 1, jf, 0));  // interieur - ghost
+    for (int g = 0; g < phi_f_.local_size(); ++g) {
+      const ConstArray4 PF = phi_f_.fab(g).const_array();
+      const ConstArray4 EF = eps_f_.fab(g).const_array();
+      const int Ic0 = patch_coarse_[g].lo[0], Ic1 = patch_coarse_[g].hi[0];
+      const int Jc0 = patch_coarse_[g].lo[1], Jc1 = patch_coarse_[g].hi[1];
+      // Faces NORMALES A X : colonnes bordantes I = Ic0-1 (face +x couverte) et I = Ic1+1 (face -x).
+      for (int J = Jc0; J <= Jc1; ++J) {
+        if (!cov_.covered(Ic0 - 1, J)) {  // gauche : cellule (Ic0-1, J), face fine a i = r*Ic0.
+          const int I = Ic0 - 1;
+          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I + 1, J, 0)) : Real(1);
+          const Real coarse_c = efc * (PC(I + 1, J, 0) - PC(I, J, 0)) * idx2;
+          Real fine_sum = Real(0);
+          for (int t = 0; t < r; ++t) {
+            const int jf = r * J + t;
+            const Real eff = he ? eps_harmonic(EF(r * Ic0 - 1, jf, 0), EF(r * Ic0, jf, 0)) : Real(1);
+            fine_sum += eff * (PF(r * Ic0, jf, 0) - PF(r * Ic0 - 1, jf, 0));  // interieur - ghost
+          }
+          R(I, J, 0) += coarse_c - fine_sum * idx2;
         }
-        R(I, J, 0) += coarse_c - fine_sum * idx2;
+        if (!cov_.covered(Ic1 + 1, J)) {  // droite : cellule (Ic1+1, J), faces fines a i = r*Ic1+r.
+          const int I = Ic1 + 1;
+          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I - 1, J, 0)) : Real(1);
+          const Real coarse_c = efc * (PC(I - 1, J, 0) - PC(I, J, 0)) * idx2;
+          Real fine_sum = Real(0);
+          for (int t = 0; t < r; ++t) {
+            const int jf = r * J + t;
+            const Real eff =
+                he ? eps_harmonic(EF(r * Ic1 + r - 1, jf, 0), EF(r * Ic1 + r, jf, 0)) : Real(1);
+            fine_sum += eff * (PF(r * Ic1 + r - 1, jf, 0) - PF(r * Ic1 + r, jf, 0));
+          }
+          R(I, J, 0) += coarse_c - fine_sum * idx2;
+        }
       }
-      {  // droite : cellule (Ic1+1, J), face entre (Ic1) et (Ic1+1) ; faces fines a i = r*Ic1+r.
-        const int I = Ic1 + 1;
-        const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I - 1, J, 0)) : Real(1);
-        const Real coarse_c = efc * (PC(I - 1, J, 0) - PC(I, J, 0)) * idx2;
-        Real fine_sum = Real(0);
-        for (int t = 0; t < r; ++t) {
-          const int jf = r * J + t;
-          const Real eff =
-              he ? eps_harmonic(EF(r * Ic1 + r - 1, jf, 0), EF(r * Ic1 + r, jf, 0)) : Real(1);
-          fine_sum += eff * (PF(r * Ic1 + r - 1, jf, 0) - PF(r * Ic1 + r, jf, 0));
+      // Faces NORMALES A Y : rangees bordantes J = Jc0-1 (face +y) et J = Jc1+1 (face -y).
+      for (int I = Ic0; I <= Ic1; ++I) {
+        if (!cov_.covered(I, Jc0 - 1)) {
+          const int J = Jc0 - 1;
+          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I, J + 1, 0)) : Real(1);
+          const Real coarse_c = efc * (PC(I, J + 1, 0) - PC(I, J, 0)) * idy2;
+          Real fine_sum = Real(0);
+          for (int t = 0; t < r; ++t) {
+            const int iff = r * I + t;
+            const Real eff = he ? eps_harmonic(EF(iff, r * Jc0 - 1, 0), EF(iff, r * Jc0, 0)) : Real(1);
+            fine_sum += eff * (PF(iff, r * Jc0, 0) - PF(iff, r * Jc0 - 1, 0));
+          }
+          R(I, J, 0) += coarse_c - fine_sum * idy2;
         }
-        R(I, J, 0) += coarse_c - fine_sum * idx2;
-      }
-    }
-    // Faces NORMALES A Y : rangees bordantes J = Jc0-1 (face +y) et J = Jc1+1 (face -y).
-    for (int I = Ic0; I <= Ic1; ++I) {
-      {
-        const int J = Jc0 - 1;
-        const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I, J + 1, 0)) : Real(1);
-        const Real coarse_c = efc * (PC(I, J + 1, 0) - PC(I, J, 0)) * idy2;
-        Real fine_sum = Real(0);
-        for (int t = 0; t < r; ++t) {
-          const int iff = r * I + t;
-          const Real eff = he ? eps_harmonic(EF(iff, r * Jc0 - 1, 0), EF(iff, r * Jc0, 0)) : Real(1);
-          fine_sum += eff * (PF(iff, r * Jc0, 0) - PF(iff, r * Jc0 - 1, 0));
+        if (!cov_.covered(I, Jc1 + 1)) {
+          const int J = Jc1 + 1;
+          const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I, J - 1, 0)) : Real(1);
+          const Real coarse_c = efc * (PC(I, J - 1, 0) - PC(I, J, 0)) * idy2;
+          Real fine_sum = Real(0);
+          for (int t = 0; t < r; ++t) {
+            const int iff = r * I + t;
+            const Real eff =
+                he ? eps_harmonic(EF(iff, r * Jc1 + r - 1, 0), EF(iff, r * Jc1 + r, 0)) : Real(1);
+            fine_sum += eff * (PF(iff, r * Jc1 + r - 1, 0) - PF(iff, r * Jc1 + r, 0));
+          }
+          R(I, J, 0) += coarse_c - fine_sum * idy2;
         }
-        R(I, J, 0) += coarse_c - fine_sum * idy2;
-      }
-      {
-        const int J = Jc1 + 1;
-        const Real efc = he ? eps_harmonic(EC(I, J, 0), EC(I, J - 1, 0)) : Real(1);
-        const Real coarse_c = efc * (PC(I, J - 1, 0) - PC(I, J, 0)) * idy2;
-        Real fine_sum = Real(0);
-        for (int t = 0; t < r; ++t) {
-          const int iff = r * I + t;
-          const Real eff =
-              he ? eps_harmonic(EF(iff, r * Jc1 + r - 1, 0), EF(iff, r * Jc1 + r, 0)) : Real(1);
-          fine_sum += eff * (PF(iff, r * Jc1 + r - 1, 0) - PF(iff, r * Jc1 + r, 0));
-        }
-        R(I, J, 0) += coarse_c - fine_sum * idy2;
       }
     }
 
@@ -419,14 +484,13 @@ class CompositeFacPoisson {
   DistributionMapping dm_c_;
   BCRec bc_;
   int ratio_;
-  Box2D fine_box_;
   BoxArray ba_f_;
   DistributionMapping dm_f_;
   GeometricMG mg_;  ///< solveur grossier (initial + corrections), Dirichlet homogene
   MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_;
   MultiFab eps_c_, eps_f_;  ///< permittivite variable par niveau (operateur condense Schur B_z=0)
   MultiFab axy_c_, ayx_c_, axy_f_, ayx_f_;  ///< termes croises par niveau (tenseur plein, Schur B_z!=0)
-  Box2D patch_coarse_;
+  std::vector<Box2D> patch_coarse_;  ///< empreinte grossiere couverte PAR PATCH fin (multi-patch)
   CoverageMask cov_;
   Real last_residual_ = 0;
   bool has_eps_ = false;   ///< true : operateur div(eps grad phi) ; false : Laplacien scalaire (Phase 1)

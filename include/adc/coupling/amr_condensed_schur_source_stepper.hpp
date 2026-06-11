@@ -31,13 +31,14 @@
 /// couvertes (invariant #169). Un etat constant en espace (mono-niveau) degenere EXACTEMENT en l'etage
 /// uniforme : c'est le critere de parite (Etape 2).
 ///
-/// PERIMETRE (mis a jour audit 2026-06, apres #266 / Phase 3c). Le chemin MONO-NIVEAU est complet
-/// et bit-identique a l'etage uniforme #126. Le chemin MULTI-NIVEAU est IMPLEMENTE en Phase 3c
-/// (etage source condense COMPOSITE : l'elliptique tensoriel Schur est resolu par FAC sur
-/// grossier + fin, reconstruction des vitesses PAR NIVEAU puis cascade average_down -- cf.
-/// step_multilevel), dans le CADRE 2 niveaux + UN patch fin mono-box + grossier replique
-/// (mono-rang). Au-dela (multi-patch, > 2 niveaux, MPI, multi-blocs), step() REFUSE explicitement
-/// (erreur claire) plutot que d'appliquer une source partielle en silence : c'est la Phase 4.
+/// PERIMETRE (mis a jour Phase 4a, multi-patch fin). Le chemin MONO-NIVEAU est complet et bit-identique
+/// a l'etage uniforme #126. Le chemin MULTI-NIVEAU est IMPLEMENTE (etage source condense COMPOSITE :
+/// l'elliptique tensoriel Schur est resolu par FAC sur grossier + fin, reconstruction des vitesses
+/// PAR NIVEAU puis cascade average_down -- cf. step_multilevel), dans le CADRE 2 niveaux + 1..N patchs
+/// fins disjoints NON ADJACENTS (separes d'au moins une cellule grossiere) + grossier replique mono-bloc
+/// (mono-rang). UN patch (N == 1) degenere EXACTEMENT en la Phase 3c (bit-identique). Au-dela (patchs
+/// ADJACENTS / raccord fin-fin, > 2 niveaux, MPI, multi-blocs), step() REFUSE explicitement (erreur
+/// claire) plutot que d'appliquer une source partielle en silence : c'est la Phase 4b.
 ///
 /// CYCLE DE VIE / DEVICE / MPI. Construit UNE fois sur le layout GROSSIER (BoxArray + Geometry + CL
 /// Poisson) ; tous les tampons de l'etage uniforme grossier sont alloues a la construction et reutilises
@@ -117,14 +118,16 @@ class AmrCondensedSchurSourceStepper {
       coarse_.step(levels[0].U, coarse_phi, coarse_bz, c_bz, theta, dt);
       return;
     }
-    // MULTI-NIVEAU (Phase 3c) : etage source condense COMPOSITE -- le patch fin raffine VRAIMENT
+    // MULTI-NIVEAU (Phase 4a) : etage source condense COMPOSITE -- les patchs fins raffinent VRAIMENT
     // l'elliptique (operateur tensoriel Schur resolu par FAC sur grossier + fin), puis reconstruction
-    // des vitesses PAR NIVEAU et cascade average_down. Cadre : 2 niveaux, UN patch fin mono-box,
-    // grossier replique (mono-rang). Au-dela -> erreur claire (multi-patch / MPI = Phase 4).
-    if (levels.size() != 2 || levels[1].U.box_array().size() != 1)
+    // des vitesses PAR NIVEAU et cascade average_down. Cadre Phase 4a : 2 niveaux, 1..N patchs fins
+    // disjoints NON ADJACENTS (separes d'au moins une cellule grossiere -- garde-fou impose par le FAC),
+    // grossier replique mono-bloc, MONO-RANG. Au-dela -> erreur claire (> 2 niveaux / MPI / multi-blocs
+    // = Phase 4b). Le raccord fin-fin entre patchs adjacents est rejete au ctor du FAC (Phase 4b).
+    if (levels.size() != 2 || n_ranks() != 1)
       throw std::runtime_error(
-          "AmrCondensedSchurSourceStepper : etage source condense COMPOSITE cable pour 2 niveaux + UN "
-          "patch fin mono-box (mono-rang) ; multi-patch / >2 niveaux / MPI = Phase 4.");
+          "AmrCondensedSchurSourceStepper : etage source condense COMPOSITE cable pour 2 niveaux + "
+          "patchs fins multi-box NON ADJACENTS, mono-rang ; > 2 niveaux / MPI / multi-blocs = Phase 4b.");
     step_multilevel(levels, coarse_phi, coarse_bz, c_bz, theta, dt);
   }
 
@@ -144,8 +147,10 @@ class AmrCondensedSchurSourceStepper {
   /// pas plein, met a jour l'energie, puis cascade fin -> grossier (average_down, cellules couvertes).
   void step_multilevel(std::vector<AmrLevelMP>& levels, MultiFab& coarse_phi,
                        const MultiFab& coarse_bz, int c_bz, Real theta, Real dt) {
-    const Box2D fine_box = levels[1].U.box_array()[0];
-    ensure_fac(fine_box);
+    // BoxArray fin COMPLET (1..N patchs) : le FAC est construit sur ce pavage ; les patchs etant separes
+    // d'au moins une cellule grossiere (garde-fou du ctor FAC), chaque bord est un vrai raccord C-F.
+    const BoxArray& fine_ba = levels[1].U.box_array();
+    ensure_fac(fine_ba);
     const Geometry geom_c = coarse_geom_;
     const Geometry geom_f = coarse_geom_.refine(2);
     ElectrostaticLorentzCondensation builder(vars_, alpha_, theta, dt);
@@ -251,14 +256,13 @@ class AmrCondensedSchurSourceStepper {
     fill_ghosts(state, geom.domain, coeff_bc(bcPhi_));
   }
 
-  /// Construit (ou reconstruit si le patch change) le solveur elliptique composite sur le patch fin.
-  void ensure_fac(const Box2D& fine_box) {
-    if (fac_ && fac_fine_box_lo0_ == fine_box.lo[0] && fac_fine_box_lo1_ == fine_box.lo[1] &&
-        fac_fine_box_hi0_ == fine_box.hi[0] && fac_fine_box_hi1_ == fine_box.hi[1])
-      return;
-    fac_ = std::make_unique<CompositeFacPoisson>(coarse_geom_, coarse_ba_, bcPhi_, fine_box, 2);
-    fac_fine_box_lo0_ = fine_box.lo[0]; fac_fine_box_lo1_ = fine_box.lo[1];
-    fac_fine_box_hi0_ = fine_box.hi[0]; fac_fine_box_hi1_ = fine_box.hi[1];
+  /// Construit (ou reconstruit si le pavage fin change) le solveur elliptique composite sur les patchs
+  /// fins. On compare le BoxArray fin courant au precedent (memes boites ET meme ordre) pour eviter une
+  /// reconstruction inutile (le FAC est reutilise tant que la hierarchie ne change pas).
+  void ensure_fac(const BoxArray& fine_ba) {
+    if (fac_ && fac_fine_boxes_ == fine_ba.boxes()) return;
+    fac_ = std::make_unique<CompositeFacPoisson>(coarse_geom_, coarse_ba_, bcPhi_, fine_ba, 2);
+    fac_fine_boxes_ = fine_ba.boxes();
   }
 
   /// CL des coefficients (eps/B_z) et de l'etat publie : periodique conserve, bord physique gradient-nul.
@@ -293,16 +297,19 @@ class AmrCondensedSchurSourceStepper {
                     detail::ExtractVelocityKernel{state.fab(li).const_array(), vx.fab(li).array(),
                                                   vy.fab(li).array(), c_rho_, c_mx_, c_my_});
   }
-  /// Remplit valides + ghosts du champ fin @p fine par bilerp du champ grossier @p coarse (B_z, etc.).
+  /// Remplit valides + ghosts de CHAQUE patch fin @p fine par bilerp du champ grossier @p coarse (B_z,
+  /// etc.). Grossier mono-box replique ; on boucle sur les patchs fins locaux (multi-patch).
   void bilerp_coarse_to_fine(MultiFab& fine, const MultiFab& coarse) {
     device_fence();
     const ConstArray4 C = coarse.fab(0).const_array();
     const int ng = fine.n_grow();
-    Array4 F = fine.fab(0).array();
-    const Box2D vb = fine.box(0);
-    for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
-      for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i)
-        F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, 2);
+    for (int li = 0; li < fine.local_size(); ++li) {
+      Array4 F = fine.fab(li).array();
+      const Box2D vb = fine.box(li);
+      for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
+        for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i)
+          F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, 2);
+    }
   }
 
   VariableSet vars_;
@@ -313,9 +320,10 @@ class AmrCondensedSchurSourceStepper {
   int c_rho_, c_mx_, c_my_, c_E_;
   /// Etage source condense uniforme porte sur le NIVEAU GROSSIER (chemin MONO-NIVEAU, parite #126).
   CondensedSchurSourceStepper coarse_;
-  /// Solveur elliptique composite (chemin MULTI-NIVEAU), construit paresseusement sur le patch fin.
+  /// Solveur elliptique composite (chemin MULTI-NIVEAU), construit paresseusement sur les patchs fins.
   std::unique_ptr<CompositeFacPoisson> fac_;
-  int fac_fine_box_lo0_ = 0, fac_fine_box_lo1_ = 0, fac_fine_box_hi0_ = -1, fac_fine_box_hi1_ = -1;
+  /// Pavage fin (boites + ordre) du dernier FAC construit : sert a detecter un changement de hierarchie.
+  std::vector<Box2D> fac_fine_boxes_;
 };
 
 }  // namespace adc
