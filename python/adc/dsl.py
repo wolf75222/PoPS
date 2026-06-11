@@ -618,6 +618,7 @@ class Expr:
     def __rtruediv__(self, o): return Div(_wrap(o), self)
     def __neg__(self): return Neg(self)
     def __pos__(self): return self  # +expr = identite (l'API CoupledSource ecrit +k*ne*ng)
+    def __abs__(self): return Abs(self)  # abs(expr) -> |expr| (valeur absolue, p.ex. |lambda| de Roe)
     def __pow__(self, o): return Pow(self, _wrap(o))
 
     def eval(self, env): raise NotImplementedError
@@ -713,6 +714,58 @@ def sqrt(x):
     return Sqrt(_wrap(x))
 
 
+class Abs(Expr):
+    """Valeur absolue |a| (p.ex. |lambda_k| d'une dissipation de Roe). Emise std::fabs au codegen
+    (egale au ternaire a<0?-a:a hors -0.0). Non derivable par dsl.diff (pas de noeud signe)."""
+    def __init__(self, a): self.a = a
+    def eval(self, env): return np.abs(self.a.eval(env))
+    def deps(self): return self.a.deps()
+    def to_cpp(self): return "std::fabs(%s)" % self.a.to_cpp()
+    def _str(self): return "abs(%s)" % self.a
+
+
+def abs_(x):
+    """Valeur absolue symbolique (equivalent de abs(expr) ; nom suffixe pour ne pas masquer abs)."""
+    return Abs(_wrap(x))
+
+
+class StateRef(Expr):
+    """Marqueur d'ETAT pour la dissipation de Roe a DEUX etats (m.roe_dissipation) : la
+    sous-expression encadree s'evalue sur l'etat GAUCHE UL (side='L', dsl.left) ou DROIT UR
+    (side='R', dsl.right). A la codegen du hook roe_dissipation(UL, AL, UR, AR, dir), left(e) emet e
+    avec les locales calculees depuis UL, right(e) depuis UR. N'a de sens QUE dans les lignes
+    fournies a m.roe_dissipation : l'interprete numpy ne le traite pas (la dissipation deux etats est
+    compilee en C++, pas evaluee a l'hote). deps() = deps de la sous-expression (controle des
+    dependances)."""
+
+    def __init__(self, side, expr):
+        if side not in ("L", "R"):
+            raise ValueError("StateRef : side doit etre 'L' (UL) ou 'R' (UR), recu %r" % (side,))
+        self.side = side
+        self.expr = _wrap(expr)
+
+    def deps(self):
+        return self.expr.deps()
+
+    def eval(self, env):
+        raise NotImplementedError(
+            "StateRef (dsl.left / dsl.right) ne s'evalue pas par l'interprete numpy : la dissipation "
+            "de Roe a deux etats est EMISE en C++ (m.roe_dissipation), pas interpretee a l'hote.")
+
+    def _str(self):
+        return "%s(%s)" % ("left" if self.side == "L" else "right", self.expr)
+
+
+def left(expr):
+    """Marque @p expr comme evaluee sur l'etat GAUCHE UL (dissipation de Roe, m.roe_dissipation)."""
+    return StateRef("L", expr)
+
+
+def right(expr):
+    """Marque @p expr comme evaluee sur l'etat DROIT UR (dissipation de Roe, m.roe_dissipation)."""
+    return StateRef("R", expr)
+
+
 class RuntimeParamRef(Expr):
     """Reference a un parametre RUNTIME (P7-b) dans l'arbre d'expressions. A la difference d'un Const
     (param const inline EN DUR), ce noeud emet `params.get(<indice>)` au codegen : la brique generee
@@ -761,8 +814,10 @@ class RuntimeParamRef(Expr):
 def _children(e):
     if isinstance(e, _Bin):
         return (e.a, e.b)
-    if isinstance(e, (Neg, Sqrt)):
+    if isinstance(e, (Neg, Sqrt, Abs)):
         return (e.a,)
+    if isinstance(e, StateRef):
+        return (e.expr,)  # marqueur left/right : un seul enfant (decouverte de params runtime, etc.)
     return ()
 
 
@@ -777,6 +832,10 @@ def _key(e):
         return ("neg", _key(e.a))
     if isinstance(e, Sqrt):
         return ("sqrt", _key(e.a))
+    if isinstance(e, Abs):
+        return ("abs", _key(e.a))
+    if isinstance(e, StateRef):
+        return ("state", e.side, _key(e.expr))  # defensif : les lignes Roe ne passent pas par la CSE
     return (e.op, tuple(_key(c) for c in _children(e)))  # _Bin (Add/Sub/Mul/Div/Pow)
 
 
@@ -792,6 +851,8 @@ def _cpp_expand(e, cse_map):
         return "(-%s)" % _cpp_cse(e.a, cse_map)
     if isinstance(e, Sqrt):
         return "std::sqrt(%s)" % _cpp_cse(e.a, cse_map)
+    if isinstance(e, Abs):
+        return "std::fabs(%s)" % _cpp_cse(e.a, cse_map)
     if isinstance(e, Pow):
         return "std::pow(%s, %s)" % (_cpp_cse(e.a, cse_map), _cpp_cse(e.b, cse_map))
     if isinstance(e, _Bin):
@@ -833,6 +894,197 @@ def _cse_emit(roots, real, indent):
     return lines, [_cpp_cse(r, cse_map) for r in roots]
 
 
+# --- Differentiation symbolique (autodiff de l'arbre Expr) -------------------
+# dsl.diff(expr, var) derive l'arbre noeud par noeud : linearite (+, -), produit (a*b)' = a'b + ab',
+# quotient (a/b)' = (a'b - ab')/b^2, puissance (a^n)' = n a^(n-1) a' (exposant constant), racine
+# sqrt(a)' = a'/(2 sqrt(a)), oppose. Sert a construire le Jacobien de flux A = dF/dU (flux_jacobian)
+# que l'utilisateur emploie pour ecrire sa dissipation de Roe (m.roe_dissipation). Une primitive
+# DEFINIE est derivee PAR SA DEFINITION (regle de chaine) ; une occurrence NON derivee reste un
+# symbole (emission lisible), seule la DERIVEE descend jusqu'aux conservatives. Noeud inconnu ->
+# NotImplementedError (jamais de zero silencieux). Simplifications minimales (0*x, 1*x, x+0).
+def _is_const(e, val=None):
+    """Vrai si e est une constante numerique (Const) ; si @p val est donne, egale a val."""
+    return isinstance(e, Const) and (val is None or e.value == val)
+
+
+def _s_add(a, b):
+    if _is_const(a, 0.0):
+        return b
+    if _is_const(b, 0.0):
+        return a
+    if isinstance(a, Const) and isinstance(b, Const):
+        return Const(a.value + b.value)
+    return Add(a, b)
+
+
+def _s_neg(a):
+    if _is_const(a, 0.0):
+        return Const(0.0)
+    if isinstance(a, Const):
+        return Const(-a.value)
+    if isinstance(a, Neg):
+        return a.a
+    return Neg(a)
+
+
+def _s_sub(a, b):
+    if _is_const(b, 0.0):
+        return a
+    if _is_const(a, 0.0):
+        return _s_neg(b)
+    if isinstance(a, Const) and isinstance(b, Const):
+        return Const(a.value - b.value)
+    return Sub(a, b)
+
+
+def _s_mul(a, b):
+    if _is_const(a, 0.0) or _is_const(b, 0.0):
+        return Const(0.0)
+    if _is_const(a, 1.0):
+        return b
+    if _is_const(b, 1.0):
+        return a
+    if isinstance(a, Const) and isinstance(b, Const):
+        return Const(a.value * b.value)
+    return Mul(a, b)
+
+
+def _s_div(a, b):
+    if _is_const(a, 0.0):
+        return Const(0.0)
+    if _is_const(b, 1.0):
+        return a
+    return Div(a, b)
+
+
+def _s_pow(a, b):
+    # b : exposant (Expr), ici suppose INDEPENDANT de la variable de derivation.
+    if _is_const(b, 0.0):
+        return Const(1.0)
+    if _is_const(b, 1.0):
+        return a
+    return Pow(a, b)
+
+
+def diff(expr, var, defs=None):
+    """Derivee symbolique de @p expr par rapport a @p var (nom de variable ou Var).
+
+    @p defs (optionnel) : dictionnaire {nom de primitive: Expr de definition}. Quand la derivation
+    rencontre une primitive DEFINIE, elle derive sa DEFINITION (regle de chaine) -- les primitives
+    sont developpees jusqu'aux conservatives sans substitution manuelle. Une primitive de meme nom
+    que @p var est traitee comme la variable independante (derivee 1). Sans defs, toute variable
+    autre que @p var est independante (derivee 0).
+
+    @return un Expr simplifie minimalement (0*x, 1*x, x+0, ... elimines pour une emission lisible).
+    Leve NotImplementedError sur un noeud non derivable (en nommant son type) ou une puissance dont
+    l'exposant depend de @p var (necessiterait un logarithme, noeud absent du DSL)."""
+    target = var.name if isinstance(var, Var) else str(var)
+    d = defs or {}
+
+    def go(e):
+        if isinstance(e, Const):
+            return Const(0.0)
+        if isinstance(e, RuntimeParamRef):
+            return Const(0.0)  # parametre runtime : constant vis-a-vis de l'etat conservatif
+        if isinstance(e, Var):
+            if e.name == target:
+                return Const(1.0)
+            if e.name in d:
+                return go(d[e.name])  # primitive definie -> derivee de sa definition (chaine)
+            return Const(0.0)         # autre variable, independante de var
+        if isinstance(e, Add):
+            return _s_add(go(e.a), go(e.b))
+        if isinstance(e, Sub):
+            return _s_sub(go(e.a), go(e.b))
+        if isinstance(e, Mul):
+            return _s_add(_s_mul(go(e.a), e.b), _s_mul(e.a, go(e.b)))
+        if isinstance(e, Div):
+            num = _s_sub(_s_mul(go(e.a), e.b), _s_mul(e.a, go(e.b)))
+            return _s_div(num, _s_mul(e.b, e.b))
+        if isinstance(e, Neg):
+            return _s_neg(go(e.a))
+        if isinstance(e, Sqrt):
+            return _s_div(go(e.a), _s_mul(Const(2.0), Sqrt(e.a)))
+        if isinstance(e, Pow):
+            if not _is_const(go(e.b), 0.0):
+                raise NotImplementedError(
+                    "dsl.diff : derivee de a**b avec exposant dependant de '%s' (necessite un "
+                    "logarithme, noeud absent du DSL)" % target)
+            # exposant constant vis-a-vis de var : (a^b)' = b a^(b-1) a'
+            return _s_mul(_s_mul(e.b, _s_pow(e.a, _s_sub(e.b, Const(1.0)))), go(e.a))
+        raise NotImplementedError("dsl.diff : noeud non derivable %s (%r)" % (type(e).__name__, e))
+
+    return go(_wrap(expr))
+
+
+def _dir_key(direction):
+    """Normalise une direction en 'x' / 'y' (accepte 0/'x'/'X' et 1/'y'/'Y'). Leve sinon."""
+    if direction in (0, "x", "X"):
+        return "x"
+    if direction in (1, "y", "Y"):
+        return "y"
+    raise ValueError("direction invalide %r (attendu 0/'x' ou 1/'y')" % (direction,))
+
+
+# --- Dissipation de Roe FOURNIE par l'utilisateur (m.roe_dissipation) ---------
+# Les lignes d_i sont ecrites en termes de left(...)/right(...) de variables/primitives + constantes.
+# _roe_validate controle qu'aucune variable n'apparait HORS marqueur (etat indetermine) et qu'aucun
+# marqueur n'est imbrique ; _cpp_roe rend le C++ en resolvant left/right par un prefixe de locale
+# (L_ pour UL, R_ pour UR).
+def _roe_validate(e, in_marker):
+    """Controle structurel d'une ligne de roe_dissipation. Leve ValueError si une variable est hors
+    marqueur left()/right() (etat indetermine) ou si un marqueur est imbrique. Const / parametre
+    runtime : autorises partout (sans etat). N'evalue rien (utilisable avant l'attribution des
+    indices runtime)."""
+    if isinstance(e, StateRef):
+        if in_marker:
+            raise ValueError("m.roe_dissipation : marqueur left()/right() imbrique interdit "
+                             "(une sous-expression appartient a un seul etat)")
+        _roe_validate(e.expr, True)
+        return
+    if isinstance(e, Var):
+        if not in_marker:
+            raise ValueError(
+                "m.roe_dissipation : variable '%s' hors marqueur ; encadrer chaque variable ou "
+                "primitive par dsl.left(...) (etat UL) ou dsl.right(...) (etat UR)" % e.name)
+        return
+    if isinstance(e, (Const, RuntimeParamRef)):
+        return
+    for c in _children(e):
+        _roe_validate(c, in_marker)
+
+
+def _cpp_roe(e, prefix):
+    """C++ d'une expression de ligne roe_dissipation. @p prefix : None au niveau racine (aucun etat
+    actif -> une variable nue est une erreur), 'L_' / 'R_' dans un marqueur (les variables prennent
+    ce prefixe de locale). Sert AUSSI a rendre une definition de primitive avec un prefixe d'etat
+    (e ne contient alors pas de StateRef). Suppose _roe_validate deja passe (erreurs defensives)."""
+    if isinstance(e, StateRef):
+        if prefix is not None:
+            raise ValueError("m.roe_dissipation : marqueur left()/right() imbrique interdit")
+        return _cpp_roe(e.expr, e.side + "_")
+    if isinstance(e, Const):
+        return repr(e.value)
+    if isinstance(e, RuntimeParamRef):
+        return e.to_cpp()
+    if isinstance(e, Var):
+        if prefix is None:
+            raise ValueError("m.roe_dissipation : variable '%s' hors marqueur left()/right()"
+                             % e.name)
+        return prefix + e.name
+    if isinstance(e, Neg):
+        return "(-%s)" % _cpp_roe(e.a, prefix)
+    if isinstance(e, Sqrt):
+        return "std::sqrt(%s)" % _cpp_roe(e.a, prefix)
+    if isinstance(e, Abs):
+        return "std::fabs(%s)" % _cpp_roe(e.a, prefix)
+    if isinstance(e, Pow):
+        return "std::pow(%s, %s)" % (_cpp_roe(e.a, prefix), _cpp_roe(e.b, prefix))
+    if isinstance(e, _Bin):
+        return "(%s %s %s)" % (_cpp_roe(e.a, prefix), e.op, _cpp_roe(e.b, prefix))
+    raise TypeError("m.roe_dissipation : expression non geree par le codegen : %r" % (e,))
+
+
 # --- Modele hyperbolique declaratif -----------------------------------------
 class HyperbolicModel:
     """Modele hyperbolique ecrit en FORMULES : variables conservatives, primitives (definies par
@@ -853,6 +1105,7 @@ class HyperbolicModel:
         self._src_jac = None     # [[Expr]] n x n : Jacobien ANALYTIQUE dS/dU (None = diff. finies)
         self._hllc = False       # True : emettre la capability HLLC (contact_speed + star state)
         self._roe = False        # True : emettre la capability ROE (roe_dissipation depuis les roles)
+        self._roe_rows = None    # {"x": [Expr], "y": [Expr]} : roe_dissipation FOURNIE (hors roles)
         self.prim_state = []    # noms ordonnes de l'etat primitif (layout de Prim) ; pour le codegen
         self.cons_from = None   # liste d'Expr : conservatif en fonction des primitives (to_conservative)
         self.cons_roles = None  # override explicite des roles conservatifs (sinon mapping canonique)
@@ -958,8 +1211,76 @@ class HyperbolicModel:
           entropique (ligne identique a la quantite de mouvement tangentielle, phi = q/rho).
 
         EXIGE : roles Density/MomentumX/MomentumY declares + primitive 'p' (erreur explicite a
-        l'emission sinon). Sans appel : rien d'emis, riemann='roe' reste Euler-4-var-only."""
+        l'emission sinon). Sans appel : rien d'emis, riemann='roe' reste Euler-4-var-only.
+
+        EXCLUSIF de m.roe_dissipation : la capability depuis les roles et la dissipation FOURNIE par
+        l'utilisateur sont deux fournisseurs du MEME hook roe_dissipation -- les declarer toutes deux
+        leve (un seul fournisseur)."""
+        if self._roe_rows is not None:
+            raise ValueError("enable_roe : roe_dissipation(...) deja fournie -- un seul fournisseur "
+                             "du hook roe_dissipation (capability depuis les roles OU fournie)")
         self._roe = True
+
+    def roe_dissipation(self, x, y):
+        """Dissipation de Roe FOURNIE par l'utilisateur (hors familles a roles fluides) : n_vars
+        expressions par direction (lignes d_i), emises comme le hook C++
+        ``roe_dissipation(UL, AL, UR, AR, dir)`` = d (trait HasRoeDissipation ; le coeur fait
+        F = 1/2(FL+FR) - 1/2 d, cf. RoeFlux). C'est le pendant 'fourni' de m.enable_roe (genere
+        depuis les ROLES) : ici l'utilisateur ecrit SON eigenstructure -- meme esprit que
+        m.source_jacobian (fourni, pas invente). Le helper m.flux_jacobian(dir) (A = dF/dU
+        auto-derive par dsl.diff) assiste cette ecriture.
+
+        VOCABULAIRE DEUX ETATS : chaque variable/primitive doit etre encadree par dsl.left(...) (etat
+        UL) ou dsl.right(...) (etat UR) ; une moyenne de Roe se note donc explicitement
+        (left(sqrt(rho))*left(u) + right(sqrt(rho))*right(u)) / (left(sqrt(rho)) + right(sqrt(rho))).
+        Une variable NUE (sans marqueur) leve a la declaration (etat indetermine).
+
+        @p x, @p y : listes de n_vars expressions (lignes pour dir=0 et dir=1). DEUX jeux EXPLICITES
+        (pas de mapping de roles ici) : a dir=0 la composante normale est l'axe x, a dir=1 l'axe y.
+
+        Garde-fous : longueur n_vars par direction ; chaque variable sous left/right ; conflit avec
+        enable_roe (un seul fournisseur du hook) -> erreur. SANS appel : rien d'emis (bit-identique).
+        Requiert le backend 'aot' ou 'production' (le hook est emis dans la brique generee)."""
+        if self._roe:
+            raise ValueError("roe_dissipation : enable_roe() deja appele -- un seul fournisseur du "
+                             "hook roe_dissipation (capability depuis les roles OU fournie)")
+        rx, ry = list(x), list(y)
+        if len(rx) != self.n_vars or len(ry) != self.n_vars:
+            raise ValueError("roe_dissipation : %d expressions attendues par direction (recu x=%d, "
+                             "y=%d)" % (self.n_vars, len(rx), len(ry)))
+        rows = {"x": [_wrap(e) for e in rx], "y": [_wrap(e) for e in ry]}
+        for key in ("x", "y"):
+            for e in rows[key]:
+                _roe_validate(e, False)  # rejette toute variable hors marqueur left()/right()
+        self._roe_rows = rows
+
+    def flux_jacobian(self, dir):
+        """Jacobien de flux A = dF_dir/dU : matrice n_vars x n_vars d'expressions, A[i][j] =
+        d(flux_dir[i])/d(cons[j]), auto-derivee des flux declares (via dsl.diff avec substitution des
+        primitives). HELPER de CONSTRUCTION (l'utilisateur s'en sert pour ecrire m.roe_dissipation) :
+        N'EMET RIEN par lui-meme. @p dir : 0/'x' (axe x) ou 1/'y' (axe y). EXIGE set_flux(...).
+
+        Les primitives sont developpees par leur definition (chaine) ; une primitive non derivee
+        reste un symbole dans le resultat (l'evaluer numeriquement exige un env contenant ses valeurs,
+        p.ex. HyperbolicModel._env)."""
+        if not self._flux:
+            raise ValueError("flux_jacobian : appeler set_flux(...) d'abord")
+        key = _dir_key(dir)
+        comps = self._flux.get(key, [])
+        if len(comps) != self.n_vars:
+            raise ValueError("flux_jacobian : flux %s attendu avec %d composantes (recu %d)"
+                             % (key, self.n_vars, len(comps)))
+        defs = self.prim_defs
+        return [[diff(comps[i], self.cons_names[j], defs) for j in range(self.n_vars)]
+                for i in range(self.n_vars)]
+
+    def left(self, expr):
+        """Marque @p expr comme evaluee sur l'etat GAUCHE UL (sucre pour dsl.left, m.roe_dissipation)."""
+        return left(expr)
+
+    def right(self, expr):
+        """Marque @p expr comme evaluee sur l'etat DROIT UR (sucre pour dsl.right, m.roe_dissipation)."""
+        return right(expr)
 
     def set_gamma(self, gamma):
         """Indice adiabatique du bloc (EOS compressible). Transporte par le .so genere via le symbole
@@ -1037,6 +1358,9 @@ class HyperbolicModel:
                   [e for e in (self._stab_speed, self._stab_dt, self._src_freq)
                    if e is not None],
                   [e for row in (self._src_jac or []) for e in row]]
+        if self._roe_rows is not None:
+            groups.append(self._roe_rows["x"])
+            groups.append(self._roe_rows["y"])
         for e in self.prim_defs.values():
             used |= e.deps()
         for grp in groups:
@@ -1057,6 +1381,15 @@ class HyperbolicModel:
             raise ValueError("modele '%s' : source_jacobian(...) declare sans source "
                              "(appeler m.source([...]) -- le Jacobien est emis sur la brique de "
                              "source generee)" % self.name)
+        # roe_dissipation et enable_roe sont deux fournisseurs du MEME hook : exclusifs (defensif ;
+        # deja rejete a la declaration). Re-controle structurel des lignes (left/right) au passage.
+        if self._roe_rows is not None:
+            if self._roe:
+                raise ValueError("modele '%s' : enable_roe() et roe_dissipation(...) declares "
+                                 "ensemble -- un seul fournisseur du hook roe_dissipation" % self.name)
+            for key in ("x", "y"):
+                for e in self._roe_rows[key]:
+                    _roe_validate(e, False)
         return True
 
     def check_model(self, samples=None, n_samples=64, seed=0, aux=None, rtol=1e-8, atol=1e-10,
@@ -1183,6 +1516,8 @@ class HyperbolicModel:
             out += list(self.cons_from)
         if self._elliptic is not None:
             out.append(self._elliptic)
+        if self._roe_rows is not None:  # lignes Roe fournies : decouvrir leurs params runtime (via StateRef)
+            out += self._roe_rows["x"] + self._roe_rows["y"]
         return out
 
     def runtime_param_nodes(self):
@@ -1540,6 +1875,36 @@ class HyperbolicModel:
                          "+ al5 * a5 * ft;" % cpa)
                 S.append("    }")
             S += ["    return d;", "  }", ""]
+
+        # CAPABILITY ROE FOURNIE (m.roe_dissipation) : pendant 'utilisateur' de enable_roe. Les lignes
+        # d_i viennent de l'utilisateur (son eigenstructure), ecrites en left()/right() des deux etats.
+        # On emet le MEME hook roe_dissipation(UL, AL, UR, AR, dir) que la voie roles (trait
+        # HasRoeDissipation, le coeur fait F = 1/2(FL+FR) - 1/2 d). left(e) -> e sur les locales L_
+        # (calculees depuis UL), right(e) -> locales R_ (depuis UR). _roe_rows et _roe sont exclusifs
+        # (garde-fou a la declaration et dans check()).
+        if self._roe_rows is not None:
+            has_aux = bool(self.aux_names)  # parametres Aux nommes aL/aR uniquement si des aux existent
+            aL = "const adc::Aux& aL" if has_aux else "const adc::Aux&"
+            aR = "const adc::Aux& aR" if has_aux else "const adc::Aux&"
+            S.append("  // CAPABILITY ROE FOURNIE (m.roe_dissipation) : dissipation d ecrite par")
+            S.append("  // l'utilisateur via left()/right() des deux etats ; hook HasRoeDissipation.")
+            S.append("  ADC_HD State roe_dissipation(const State& UL, %s, const State& UR, %s, "
+                     "int dir) const {" % (aL, aR))
+            # locales des DEUX etats : conservatives, primitives (def avec prefixe), puis aux lus.
+            for side, U, av in (("L_", "UL", "aL"), ("R_", "UR", "aR")):
+                S += ["    const adc::Real %s%s = %s[%d];" % (side, c, U, i)
+                      for i, c in enumerate(self.cons_names)]
+                S += ["    const adc::Real %s%s = %s;" % (side, p, _cpp_roe(e, side))
+                      for p, e in self.prim_defs.items()]
+                if has_aux:
+                    S += ["    const adc::Real %s%s = %s.%s;" % (side, n, av, n)
+                          for n in self.aux_names]
+            S.append("    State d{};")
+            S.append("    if (dir == 0) {")
+            S += ["      d[%d] = %s;" % (i, _cpp_roe(self._roe_rows["x"][i], None)) for i in range(nc)]
+            S.append("    } else {")
+            S += ["      d[%d] = %s;" % (i, _cpp_roe(self._roe_rows["y"][i], None)) for i in range(nc)]
+            S += ["    }", "    return d;", "  }", ""]
 
         # Bornes de pas OPTIONNELLES (m.stability_speed / m.stability_dt) : emises comme les traits
         # C++ HasStabilitySpeed / HasStabilityDt (cf. adc/core/physical_model.hpp). Une seule
@@ -2035,6 +2400,11 @@ class HyperbolicModel:
                                      if m._src_jac is not None else ""))
         parts.append("hllc=%d" % (1 if m._hllc else 0))
         parts.append("roe=%d" % (1 if getattr(m, "_roe", False) else 0))
+        # roe_dissipation FOURNIE : ajoute au hash UNIQUEMENT si presente (sans appel, hash inchange
+        # -> bit-identite de la cle de cache des modeles existants preservee).
+        if getattr(m, "_roe_rows", None) is not None:
+            parts.append("roe_rows=%s" % ";".join(repr(e) for k in ("x", "y")
+                                                  for e in m._roe_rows[k]))
         parts.append("n_aux=%d" % aux_n_aux(m.aux_names))
         parts.append("gamma=%r" % m.gamma)
         # Les params entrent dans le hash par (nom, valeur de DECLARATION, kind). La valeur d'un param
@@ -2308,7 +2678,7 @@ class CompiledModel:
                  gamma, n_aux, params, caps, abi_key, model_hash, cxx, std, target="system",
                  hllc=False, roe=False):
         self.has_hllc = bool(hllc)   # capability HLLC emise (enable_hllc) : hllc dispo hors Euler 4-var
-        self.has_roe = bool(roe)     # capability ROE emise (enable_roe) : roe dispo hors Euler 4-var
+        self.has_roe = bool(roe)     # hook ROE emis (enable_roe roles OU m.roe_dissipation fournie) : roe dispo hors Euler 4-var
         self.so_path = so_path
         self.backend = backend       # "prototype" | "aot" | "production"
         self.target = target         # "system" | "amr_system" : facade visee (loader natif AMR si amr_system)
@@ -2534,6 +2904,28 @@ class Model:
         fluides = scalaires passifs sur l'onde entropique). Delegue a HyperbolicModel.enable_roe."""
         self._m.enable_roe()
 
+    def roe_dissipation(self, x, y):
+        """Dissipation de Roe FOURNIE par l'utilisateur (hors roles fluides) : n_vars expressions par
+        direction (x=, y=), ecrites en m.left(...)/m.right(...) (ou dsl.left/right) des deux etats,
+        emises comme le hook C++ roe_dissipation(UL, AL, UR, AR, dir). Pendant 'fourni' de enable_roe
+        (un seul fournisseur : les deux ensemble levent). Le helper m.flux_jacobian assiste l'ecriture.
+        Delegue a HyperbolicModel.roe_dissipation (cf. sa doc)."""
+        self._m.roe_dissipation(x, y)
+
+    def flux_jacobian(self, dir):
+        """Jacobien de flux A = dF_dir/dU (matrice n_vars x n_vars d'Expr, A[i][j]=d(F_i)/d(U_j)),
+        auto-derive des flux declares par dsl.diff (primitives developpees). HELPER de construction
+        de m.roe_dissipation, n'emet rien. @p dir : 0/'x' ou 1/'y'. Delegue a HyperbolicModel."""
+        return self._m.flux_jacobian(dir)
+
+    def left(self, expr):
+        """Marque @p expr comme evaluee sur l'etat GAUCHE UL (m.roe_dissipation). Sucre pour dsl.left."""
+        return left(expr)
+
+    def right(self, expr):
+        """Marque @p expr comme evaluee sur l'etat DROIT UR (m.roe_dissipation). Sucre pour dsl.right."""
+        return right(expr)
+
     def elliptic_rhs(self, e):
         """Contribution au second membre elliptique (couplage Poisson ; delegue a set_elliptic_rhs)."""
         self._m.set_elliptic_rhs(e)
@@ -2679,7 +3071,8 @@ class Model:
             n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_n_aux(m.aux_names),
             params=self.params, caps=_BACKEND_CAPS[backend],
             abi_key=abi_key, model_hash=model_hash,
-            cxx=eff_cxx, std=eff_std, hllc=m._hllc, roe=getattr(m, '_roe', False))
+            cxx=eff_cxx, std=eff_std, hllc=m._hllc,
+            roe=(m._roe or getattr(m, '_roe_rows', None) is not None))
         # Trace de la politique 'auto' (ADC-63) : None si le backend etait explicite. Diagnostic,
         # jamais un choix muet -- cm.backend dit ce qui a ete construit, ceci dit POURQUOI.
         cm.backend_auto_reason = auto_reason

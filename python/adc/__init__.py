@@ -2121,9 +2121,12 @@ def capabilities():
                         "HasHLLCStructure -- emise par le DSL via m.enable_hllc() (roles + 'p', "
                         "y compris 3-var non Euler, scalaires passifs advectes)",
                 "roe": "Euler 2D gaz parfait canonique OU capability modele HasRoeDissipation "
-                       "-- emise par le DSL via m.enable_roe() (roles + 'p' : avec Energy = "
-                       "algebre canonique transcrite, sans Energy = c=sqrt(p/rho) moyenne Roe, "
-                       "scalaires passifs sur l'onde entropique)",
+                       "-- DEUX voies DSL : (a) m.enable_roe() genere depuis les roles (roles + "
+                       "'p' : avec Energy = algebre canonique transcrite, sans Energy = "
+                       "c=sqrt(p/rho) moyenne Roe, scalaires passifs sur l'onde entropique) ; (b) "
+                       "m.roe_dissipation(x=, y=) FOURNIE par l'utilisateur (eigenstructure propre, "
+                       "left()/right() des deux etats, helper m.flux_jacobian auto-derive). Voies "
+                       "exclusives (un seul fournisseur du hook). has_roe couvre les deux",
             },
         },
         "time": {

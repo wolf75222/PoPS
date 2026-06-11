@@ -309,6 +309,7 @@ foreach(t
     test_v3_features          # vague 3 : CoupledSource.frequency, options Newton AMR (multi natif / rejets mono+diagnostics), set_conservative_state multi-blocs, enable_hllc + source_jacobian DSL (auto-skip)
     test_amr_newton_full      # vague 3 solde : options Newton AMR mono-bloc (coupleur) + newton_diagnostics multi-blocs (newton_report), no-default-change, rejets .so
     test_dsl_roe              # solde audit pt 11 : m.enable_roe() emis depuis les ROLES -- parite 4-var avec le Roe canonique, 3-var isotherme accepte (cisaillement exact), rejets explicites (auto-skip)
+    test_dsl_autodiff_roe     # ADC-68 voie FOURNIE : dsl.diff (autodiff Expr) + m.flux_jacobian + m.roe_dissipation(x=,y=) (left/right) reproduisant le Roe isotherme a la main == enable_roe (~1e-12) ; (a)(b)(d) symboliques, (c) compile (auto-skip)
     test_coupled_freq_expr    # frequence PAR CELLULE des sources couplees (GENERICITY 7) : constante (regression), Expr mu(U)=k*rho (dt==cfl/(k*max rho)), suivi d'etat, rejet (bloc,role) non declare, AMR grossier
     test_backend_auto         # ADC-63 : backend par defaut 'auto' = production si parite toolchain etablie, aot sinon (raison posee, jamais muet) ; explicite inchange (auto-skip)
     test_native_abi_std)      # regression ABI : le std du modele natif (backend="production") suit le loader (c++20 sous Kokkos, c++23 sinon) -> add_native_block charge sans "ABI incompatible"

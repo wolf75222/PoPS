@@ -368,10 +368,24 @@ est cable l'est reellement ; ce qui ne l'est pas est documente avec fichier:lign
     AMR** (un groupe/dataset par niveau + boites, ADC-65), **checkpoint redemarrable HDF5 parallele**
     (le checkpoint reste npz gather-rang-0 ; `checkpoint(parallel=True)` leve), **checkpoint AMR**
     (rejet explicite, ABI des etats fins par patch manquante), champs externes (B_z dans le checkpoint).
-11. **Roe cote DSL** : FAIT (solde) — `m.enable_roe()` emet `roe_dissipation` depuis les ROLES :
-    avec Energy = transcription exacte de l'algebre canonique Euler du coeur (parite BIT-EXACTE
-    constatee sur 8 pas), sans Energy = meme decomposition avec c = sqrt(p/rho) moyenne a la Roe,
-    composantes hors roles fluides = scalaires passifs sur l'onde entropique (test_dsl_roe :
-    cisaillement stationnaire preserve exactement en 3-var). Reste : une linearisation de Roe
-    SYMBOLIQUE generee depuis les flux d'un modele arbitraire (hors familles a roles fluides)
-    n'est pas tentee — hors de portee d'une emission generique honnete.
+11. **Roe cote DSL** : FAIT (solde) — DEUX voies complementaires pour le hook `roe_dissipation`
+    (trait `HasRoeDissipation`, le coeur faisant F = 1/2(FL+FR) - 1/2 d).
+    - **Voie ROLES** — `m.enable_roe()` emet `roe_dissipation` depuis les ROLES : avec Energy =
+      transcription exacte de l'algebre canonique Euler du coeur (parite BIT-EXACTE constatee sur
+      8 pas), sans Energy = meme decomposition avec c = sqrt(p/rho) moyenne a la Roe, composantes
+      hors roles fluides = scalaires passifs sur l'onde entropique (test_dsl_roe : cisaillement
+      stationnaire preserve exactement en 3-var).
+    - **Voie FOURNIE** — `m.roe_dissipation(x=rows_x, y=rows_y)` : pour un modele ARBITRAIRE (hors
+      familles a roles fluides), l'utilisateur fournit lui-meme les n lignes d_i de son
+      eigenstructure (meme esprit que `m.source_jacobian`), ecrites en `dsl.left(...)`/`dsl.right(...)`
+      des deux etats UL/UR (une variable nue, sans marqueur, leve). L'**autodiff symbolique** du DSL
+      assiste cette ecriture : `dsl.diff(expr, var)` derive l'arbre Expr (linearite, produit,
+      quotient, chaine pow/sqrt ; primitives developpees par leur definition ; noeud inconnu ->
+      NotImplementedError), et `m.flux_jacobian(dir)` en deduit le Jacobien de flux A = dF/dU. La
+      DIAGONALISATION symbolique automatique de A (eigenstructure generale) reste hors perimetre —
+      hors de portee d'une emission generique honnete : la voie fournie la delegue a l'utilisateur.
+
+    Les deux voies sont EXCLUSIVES (un seul fournisseur du hook ; les declarer ensemble leve) et
+    `CompiledModel.has_roe` couvre les deux (test_dsl_autodiff_roe : dsl.diff sur cas analytiques,
+    flux_jacobian de l'isotherme 3-var, m.roe_dissipation reproduisant le Roe isotherme a la main
+    == enable_roe a ~1e-12, rejets).
