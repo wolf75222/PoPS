@@ -209,6 +209,34 @@ def module_header_signature():
     return None
 
 
+def resolve_auto_backend(include=None):
+    """Politique du backend PAR DEFAUT (backend='auto', decision actee -- ADC-63).
+
+    'production' (loader natif zero-copie, parite stricte add_block) DES QUE la parite
+    toolchain avec le module _adc est etablie : module chargeable + compilateur bake connu +
+    signature d'en-tetes de @p include == celle bakee dans le module. SINON 'aot' (defaut
+    historique : host-marshale, fonctionne sans module ni parite). Jamais silencieux : renvoie
+    (backend, raison) et les facades posent la raison sur CompiledModel.backend_auto_reason.
+    Un backend EXPLICITE passe par l'appelant court-circuite cette politique (inchange)."""
+    mod = _adc_module()
+    if mod is None:
+        return "aot", "module _adc non chargeable (le chemin production exige le module)"
+    if not loader_cxx_compiler():
+        return "aot", "compilateur du module inconnu (vieux module ou build manuel)"
+    baked = module_header_signature()
+    if not baked:
+        return "aot", "signature d'en-tetes absente du module (build manuel)"
+    try:
+        inc = include if include is not None else adc_include()
+        sig = adc_header_signature(inc)
+    except Exception as e:  # en-tetes introuvables / illisibles -> defaut sur
+        return "aot", "en-tetes adc introuvables pour la parite (%s)" % e
+    if sig != baked:
+        return "aot", ("en-tetes != module (rebatir le module ou pointer les en-tetes du build ; "
+                       "production refuserait, cf. _check_headers_match_module)")
+    return "production", "parite toolchain etablie (module + compilateur bake + en-tetes concordants)"
+
+
 def _check_headers_match_module(include):
     """GARDE PRE-DLOPEN du chemin natif (bug reel) : si les en-tetes sous @p include ont change depuis
     le build de _adc (pull recent, autre clone...), le loader compile contre eux reference des
@@ -2043,7 +2071,7 @@ class HyperbolicModel:
                 "retomberait sur le fallback du System (roles 'custom' / gamma 1.4)"
                 % (self.name, " ni ".join(missing)))
 
-    def compile(self, so_path=None, include=None, backend="aot", name=None, cxx=None, std=None,
+    def compile(self, so_path=None, include=None, backend="auto", name=None, cxx=None, std=None,
                 require_metadata=False, target="system"):
         """Facade de compilation par INTENTION : compile le modele en une .so via le moteur designe
         par @p backend et renvoie son chemin. Wrappe les moteurs existants (compile_so / compile_aot /
@@ -2088,8 +2116,12 @@ class HyperbolicModel:
         Pour connaitre l'adder System a employer : voir adder_for(backend)."""
         import os
         import shutil
+        # DEFAUT 'auto' (ADC-63) : production si la parite toolchain avec le module est etablie,
+        # aot sinon (defaut historique). Un backend explicite court-circuite (inchange).
+        if backend == "auto":
+            backend, _auto_reason = resolve_auto_backend(include)
         if backend not in self._BACKENDS:
-            raise ValueError("compile : backend %r inconnu (attendus %s)"
+            raise ValueError("compile : backend %r inconnu (attendus %s + 'auto')"
                              % (backend, sorted(self._BACKENDS)))
         if target not in ("system", "amr_system"):
             raise ValueError("compile : target 'system' | 'amr_system' (recu %r)" % (target,))
@@ -2557,7 +2589,7 @@ class Model:
         les Param de la facade (sinon deux modeles ne differant que par un param auraient le meme hash)."""
         return self._m._model_hash(params=self.params)
 
-    def compile(self, so_path=None, include=None, backend="aot", target="system", name=None,
+    def compile(self, so_path=None, include=None, backend="auto", target="system", name=None,
                 cxx=None, std=None, require_metadata=False):
         """Compile le modele en un CompiledModel (Phase A). Delegue la GENERATION + compilation a
         HyperbolicModel.compile (moteurs inchanges : compile_so / compile_aot / compile_native), puis
@@ -2584,8 +2616,13 @@ class Model:
         caps, abi_key, model_hash, cxx, std."""
         import os
         import shutil
+        # DEFAUT 'auto' (ADC-63) : production si parite toolchain etablie, aot sinon. La raison
+        # est posee sur le CompiledModel (backend_auto_reason) -- jamais un choix muet.
+        auto_reason = None
+        if backend == "auto":
+            backend, auto_reason = resolve_auto_backend(include)
         if backend not in HyperbolicModel._BACKENDS:
-            raise ValueError("compile : backend %r inconnu (attendus %s)"
+            raise ValueError("compile : backend %r inconnu (attendus %s + 'auto')"
                              % (backend, sorted(HyperbolicModel._BACKENDS)))
         if target not in ("system", "amr_system"):
             raise ValueError("compile : target 'system' | 'amr_system' (recu %r)" % (target,))
@@ -2636,13 +2673,17 @@ class Model:
 
         adder = HyperbolicModel.adder_for(backend)
         cons_roles = roles_for(m.cons_names, m.cons_roles)
-        return CompiledModel(
+        cm = CompiledModel(
             so_path=out_path, backend=backend, adder=adder, target=target,
             cons_names=m.cons_names, cons_roles=cons_roles, prim_names=m.prim_state,
             n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_n_aux(m.aux_names),
             params=self.params, caps=_BACKEND_CAPS[backend],
             abi_key=abi_key, model_hash=model_hash,
             cxx=eff_cxx, std=eff_std, hllc=m._hllc, roe=getattr(m, '_roe', False))
+        # Trace de la politique 'auto' (ADC-63) : None si le backend etait explicite. Diagnostic,
+        # jamais un choix muet -- cm.backend dit ce qui a ete construit, ceci dit POURQUOI.
+        cm.backend_auto_reason = auto_reason
+        return cm
 
 
 # === Phase B (prototype) : composition HYBRIDE brique native + brique DSL dans UN modele ========

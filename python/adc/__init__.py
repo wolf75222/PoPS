@@ -1960,6 +1960,9 @@ def capabilities():
                    ">2 niveaux/MPI/multi-blocs) a faire",
         },
         "backends_dsl": {
+            "default": "auto (ADC-63) : production si parite toolchain etablie (module charge + "
+                       "compilateur bake + en-tetes concordants), aot sinon ; raison posee sur "
+                       "CompiledModel.backend_auto_reason ; backend explicite = court-circuit",
             "prototype": {"adder": "add_dynamic_block", "riemann": ["rusanov"],
                           "limiter": ["none", "minmod", "vanleer"], "stride": False,
                           "evolve_false": False, "mpi": False, "amr": False},

@@ -296,8 +296,13 @@ est cable l'est reellement ; ce qui ne l'est pas est documente avec fichier:lign
    CELLULE mu(U) en bytecode, reduite (MAX) a chaque pas (cf. sec. 2 ; AMR : borne sur le grossier).
    RESTE : la borne AMR ne voit pas une sous-estimation locale de mu sous un patch fin (evaluee sur
    le grossier, choix assume).
-8. **Backends** : `compile(backend="aot")` reste le defaut (decision utilisateur a trancher ;
-   adc.capabilities() publie la matrice). **Registry des tags FACTORISE (fait)** : la VALIDATION des
+8. **Backends** : DECISION ACTEE (ADC-63) — le defaut devient `backend="auto"` : PRODUCTION
+   (loader natif zero-copie) quand la parite toolchain avec le module _adc est etablie (module
+   chargeable + compilateur bake + signature d'en-tetes concordante), AOT sinon (defaut
+   historique sur, sans module). Jamais muet : CompiledModel.backend dit ce qui a ete construit,
+   CompiledModel.backend_auto_reason dit pourquoi ; un backend explicite court-circuite la
+   politique (inchange). Perimetre : Model.compile / HyperbolicModel.compile (modeles de BLOC) ;
+   les briques hybrides gardent leur defaut aot (pipeline distinct, suivi). **Registry des tags FACTORISE (fait)** : la VALIDATION des
    tags (limiteurs + flux de Riemann) et les n_ghost sont desormais une SOURCE UNIQUE
    (include/adc/runtime/dispatch_tags.hpp : kLimiters / kRiemanns + validate_limiter / validate_riemann
    / limiter_n_ghost). make_block, dispatch_amr_block, dispatch_amr_compiled et make_block_polar
