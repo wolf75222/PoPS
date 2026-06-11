@@ -399,7 +399,7 @@ class PolarCondensedSchurSourceStepper {
     // 1b) ASSEMBLER le second membre condense rhs_polar = Lap_polar phi^n + g div_polar(rho B^{-1} v^n).
     //     Lap_polar phi^n : apply_polar_tensor avec A = I (coefficients a 1), MEME stencil que le solve.
     device_fence();
-    fill_ghosts(phi, geom_.domain, bcPhi_);  // ghosts de phi^n pour le Laplacien de bord
+    fill_ghosts(phi, geom_.domain, phi_bc());  // ghosts de phi^n pour le Laplacien de bord
     apply_polar_tensor(phi, geom_, lap_, &one_rr_, &one_tt_, nullptr, nullptr);  // lap_ = Lap_polar phi^n
     // flux explicite F = B^{-1}(mr, mtheta) au centre (1 ghost pour la div centree).
     for (int li = 0; li < state.local_size(); ++li) {
@@ -434,7 +434,7 @@ class PolarCondensedSchurSourceStepper {
 
     // 3) RECONSTRUIRE v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi^{n+theta}) ; mom = rho v.
     device_fence();
-    fill_ghosts(phi, geom_.domain, bcPhi_);  // grad_polar centre lit phi(i+-1), phi(j+-1)
+    fill_ghosts(phi, geom_.domain, phi_bc());  // grad_polar centre lit phi(i+-1), phi(j+-1)
     for (int li = 0; li < state.local_size(); ++li)
       for_each_cell(state.box(li),
                     detail::PolarSchurReconstructKernel{
@@ -470,7 +470,7 @@ class PolarCondensedSchurSourceStepper {
     // 6) REMPLIR les ghosts de l'etat et du potentiel avant de rendre la main.
     device_fence();
     fill_ghosts(state, geom_.domain, bcU_default());
-    fill_ghosts(phi, geom_.domain, bcPhi_);
+    fill_ghosts(phi, geom_.domain, phi_bc());
   }
 
   /// Diagnostic du dernier solve (iterations BiCGStab, residu relatif, convergence).
@@ -502,6 +502,23 @@ class PolarCondensedSchurSourceStepper {
     BCRec b;
     b.xlo = fo(bc.xlo); b.xhi = fo(bc.xhi);
     b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;  // theta toujours periodique
+    return b;
+  }
+
+  /// CL du POTENTIEL pour les fill_ghosts du stepper : radial de l'appelant (type + valeur Dirichlet)
+  /// conserve, theta FORCE periodique. Sur l'anneau, theta n'a pas de bord physique ; le contrat du
+  /// ctor ("theta toujours periodique cote solveur") est appliquee par PolarTensorKrylovSolver et
+  /// coeff_bc, mais les ghosts de phi etaient remplis avec bcPhi_ BRUT : un appelant posant Dirichlet
+  /// en y (System::poisson_bc met Dirichlet sur les 4 faces) obtenait au raccord theta=0/2pi des
+  /// ghosts par REFLEXION IMPAIRE (ghost = 2*0 - miroir = -phi) au lieu du wrap. Le gradient azimutal
+  /// centre de la reconstruction y lisait une erreur ~2 phi/(2 r dtheta), soit un kick de quantite de
+  /// mouvement radiale O(1/(theta dtheta)) en dipole anti-symetrique aux deux colonnes du seam --
+  /// la derive parasite ||R_eq||_inf ~ 83 du cas Hoffart polaire (adc_cases ADC-62), qui croissait
+  /// en O(1/h) et faisait diverger le run perturbe a t~0.01.
+  BCRec phi_bc() const {
+    BCRec b = bcPhi_;
+    b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;  // theta toujours periodique
+    b.ylo_val = Real(0); b.yhi_val = Real(0);
     return b;
   }
 

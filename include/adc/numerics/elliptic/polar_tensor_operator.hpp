@@ -327,7 +327,7 @@ class PolarTensorKrylovSolver {
   PolarTensorKrylovSolver(const PolarGeometry& geom, const BoxArray& ba, const BCRec& bc,
                           PolarPrecond precond = PolarPrecond::RadialLine)
       : geom_(geom),
-        bc_(bc),
+        bc_(force_theta_periodic(bc)),
         precond_(precond),
         dm_(ba.size(), n_ranks()),
         phi_(ba, dm_, 1, 1), rhs_(ba, dm_, 1, 0),
@@ -466,6 +466,18 @@ class PolarTensorKrylovSolver {
             "franchir une frontiere de box. Utiliser un decoupage azimutal, ou le repli "
             "PolarPrecond::Jacobi (par cellule, sans contrainte de layout) si r doit etre coupe.");
     }
+  }
+
+  /// theta est PERIODIQUE par contrat (anneau, cf. en-tete "CONDITIONS AUX LIMITES") ; on l'IMPOSE a
+  /// la construction. Un appelant posant une CL azimutale physique (System::poisson_bc met Dirichlet
+  /// sur les QUATRE faces) polluait sinon le matvec inhomogene (fill_ghosts de la solution candidate
+  /// avec bc_ -> reflexion impaire au seam theta=0/2pi) : operateur faux au raccord. Pendant solveur
+  /// du fix stepper phi_bc (derive parasite Hoffart polaire, adc_cases ADC-62).
+  static BCRec force_theta_periodic(const BCRec& bc) {
+    BCRec b = bc;
+    b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;
+    b.ylo_val = Real(0); b.yhi_val = Real(0);
+    return b;
   }
 
   /// CL des champs de coefficient : periodique conserve (theta), bord physique radial -> Foextrap.

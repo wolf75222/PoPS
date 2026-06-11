@@ -506,6 +506,53 @@ int main(int argc, char** argv) {
     chk(ratio > 1.5, "C_ordre_un_decroissance");
   }
 
+  // ----------------------------------------------------------------------------------------------
+  // (D) REGRESSION seam theta (adc_cases ADC-62) : un BCRec "a la System::poisson_bc" (Dirichlet sur
+  //     les QUATRE faces, y compris theta) doit produire un pas BIT-IDENTIQUE au BCRec canonique
+  //     (theta periodique) : l'anneau n'a pas de bord physique azimutal, le stepper et le solveur
+  //     NORMALISENT (phi_bc / force_theta_periodic). Avant le fix, les ghosts azimutaux de phi
+  //     etaient remplis par reflexion impaire (ghost = -phi) au seam theta=0/2pi -> dipole parasite
+  //     O(phi/(r dtheta)) dans mom_r aux deux colonnes du seam (||R_eq||~83 du cas Hoffart polaire,
+  //     divergence a t~0.01). theta=0.5 pour exercer aussi l'extrapolation pas-plein.
+  // ----------------------------------------------------------------------------------------------
+  {
+    const Real dt = Real(8.0 * dt_stable);
+    auto one_step = [&](const BCRec& bc, MultiFab& st, MultiFab& phi) {
+      st.set_val(0.0);
+      make_state(st, phi);
+      PolarCondensedSchurSourceStepper stepper(vars, S.geom, S.ba, bc, alpha);
+      stepper.step(st, phi, bz, 0, Real(0.5), dt);
+    };
+    MultiFab stP(S.ba, S.dm, vars.size, 1), phiP(S.ba, S.dm, 1, 1);
+    one_step(S.bc, stP, phiP);  // canonique : Dirichlet radial, theta periodique
+    BCRec bcSys = S.bc;         // "System::poisson_bc" : Dirichlet sur les 4 faces
+    bcSys.ylo = bcSys.yhi = BCType::Dirichlet;
+    bcSys.ylo_val = bcSys.yhi_val = 0.0;
+    MultiFab stD(S.ba, S.dm, vars.size, 1), phiD(S.ba, S.dm, 1, 1);
+    one_step(bcSys, stD, phiD);
+
+    sync_host();
+    double dmax_st = 0, dmax_phi = 0;
+    for (int li = 0; li < stP.local_size(); ++li) {
+      const ConstArray4 a = stP.fab(li).const_array(), b = stD.fab(li).const_array();
+      const ConstArray4 pa = phiP.fab(li).const_array(), pb = phiD.fab(li).const_array();
+      const Box2D bx = stP.box(li);
+      for (int j = bx.lo[1]; j <= bx.hi[1]; ++j)
+        for (int i = bx.lo[0]; i <= bx.hi[0]; ++i) {
+          for (int c = 0; c < vars.size; ++c)
+            dmax_st = std::max(dmax_st, std::abs(static_cast<double>(a(i, j, c)) - b(i, j, c)));
+          dmax_phi = std::max(dmax_phi, std::abs(static_cast<double>(pa(i, j, 0)) - pb(i, j, 0)));
+        }
+    }
+    dmax_st = all_reduce_max(dmax_st);
+    dmax_phi = all_reduce_max(dmax_phi);
+    if (me == 0)
+      std::printf("(D) seam theta : max|U_dir4 - U_per| = %.3e | max|phi_dir4 - phi_per| = %.3e "
+                  "(0 attendu, BC theta normalisee)\n", dmax_st, dmax_phi);
+    chk(dmax_st == 0.0, "D_seam_etat_bit_identique");
+    chk(dmax_phi == 0.0, "D_seam_phi_bit_identique");
+  }
+
   fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
   if (me == 0 && fails == 0)
     std::printf("OK test_polar_condensed_schur_source_stepper\n");
