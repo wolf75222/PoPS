@@ -178,6 +178,16 @@ struct AmrSystem::Impl {
   // Restauration de la phase de cadence regrid du mono-bloc (IO v1, parite System::set_clock) : le
   // builder peuple ce hook (ecrit le step_state du coupleur). VIDE tant que le bloc n'est pas installe.
   std::function<void(int)> set_macro_step_fn;
+  // CHECKPOINT / RESTART AMR mono-rang (ADC-65) : accesseurs d'etat par niveau + imposition de
+  // hierarchie, peuples par build_amr_compiled (mono-bloc, coupleur AmrCouplerMP). Le multi-blocs
+  // (moteur runtime) ne les peuple PAS -> les methodes facade rejettent runtime != nullptr.
+  std::function<int()> n_levels_fn;
+  std::function<int()> n_vars_fn;
+  std::function<std::vector<double>(int)> level_state_fn;
+  std::function<void(int, const std::vector<double>&)> set_level_state_fn;
+  std::function<std::vector<double>(int)> level_potential_fn;
+  std::function<void(int, const std::vector<double>&)> set_level_potential_fn;
+  std::function<void(const std::vector<PatchBox>&)> set_hierarchy_fn;
   // --- chemin multi-blocs (AmrRuntime, hierarchie partagee + Poisson somme) ---
   std::shared_ptr<adc::AmrRuntime> runtime;
   double t = 0;
@@ -275,6 +285,13 @@ struct AmrSystem::Impl {
     source_frequency_fn = std::move(h.source_frequency);  // vides sans trait (bit-identique)
     stability_dt_fn = std::move(h.stability_dt);
     set_macro_step_fn = std::move(h.set_macro_step);  // restauration phase cadence (IO v1)
+    n_levels_fn = std::move(h.n_levels);              // checkpoint/restart AMR mono-rang (ADC-65)
+    n_vars_fn = std::move(h.n_vars);
+    level_state_fn = std::move(h.level_state);
+    set_level_state_fn = std::move(h.set_level_state);
+    level_potential_fn = std::move(h.level_potential);
+    set_level_potential_fn = std::move(h.set_level_potential);
+    set_hierarchy_fn = std::move(h.set_hierarchy);
     built = true;
   }
 
@@ -1064,6 +1081,53 @@ std::vector<double> AmrSystem::potential() {
   p_->ensure_built();
   if (p_->runtime) return p_->runtime->potential();  // aux partage (commun a tous les blocs)
   return p_->potential_fn();
+}
+
+namespace {
+// Message commun des accesseurs de checkpoint AMR (ADC-65) : la reprise BIT-IDENTIQUE n'est cablee
+// qu'en MONO-BLOC (coupleur AmrCouplerMP). Le multi-blocs (moteur AmrRuntime) partage le layout ET
+// l'aux entre blocs et n'expose pas encore l'etat par niveau/bloc ni l'imposition de hierarchie sur
+// la grille partagee -> rejet EXPLICITE plutot qu'un etat partiel/faux en silence (suite documentee).
+const char* const kAmrCkptMonoOnly =
+    "checkpoint/restart AMR (etat par niveau, imposition de hierarchie) cable en MONO-BLOC seulement "
+    "(coupleur AmrCouplerMP) ; ce systeme est multi-blocs (moteur AmrRuntime : layout + aux partages "
+    "= suite). Utiliser un seul add_block, ou un System mono-niveau (checkpoint/restart bit-identique).";
+}  // namespace
+
+int AmrSystem::n_levels() {
+  p_->ensure_built();
+  if (p_->runtime) throw std::runtime_error(kAmrCkptMonoOnly);
+  return p_->n_levels_fn();
+}
+int AmrSystem::n_vars() {
+  p_->ensure_built();
+  if (p_->runtime) throw std::runtime_error(kAmrCkptMonoOnly);
+  return p_->n_vars_fn();
+}
+std::vector<double> AmrSystem::level_state(int k) {
+  p_->ensure_built();
+  if (p_->runtime) throw std::runtime_error(kAmrCkptMonoOnly);
+  return p_->level_state_fn(k);
+}
+void AmrSystem::set_level_state(int k, const std::vector<double>& s) {
+  p_->ensure_built();
+  if (p_->runtime) throw std::runtime_error(kAmrCkptMonoOnly);
+  p_->set_level_state_fn(k, s);
+}
+std::vector<double> AmrSystem::level_potential(int k) {
+  p_->ensure_built();
+  if (p_->runtime) throw std::runtime_error(kAmrCkptMonoOnly);
+  return p_->level_potential_fn(k);
+}
+void AmrSystem::set_level_potential(int k, const std::vector<double>& p) {
+  p_->ensure_built();
+  if (p_->runtime) throw std::runtime_error(kAmrCkptMonoOnly);
+  p_->set_level_potential_fn(k, p);
+}
+void AmrSystem::set_hierarchy(const std::vector<PatchBox>& boxes) {
+  p_->ensure_built();
+  if (p_->runtime) throw std::runtime_error(kAmrCkptMonoOnly);
+  p_->set_hierarchy_fn(boxes);
 }
 
 }  // namespace adc

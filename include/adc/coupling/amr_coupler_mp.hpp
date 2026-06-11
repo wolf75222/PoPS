@@ -308,6 +308,127 @@ class AmrCouplerMP {
   const Box2D& domain() const { return stack_.domain(); }
   int nlev() const { return stack_.nlev(); }
 
+  // ----------------------------------------------------------------------------------------------
+  // CHECKPOINT / RESTART AMR mono-rang (ADC-65). Le coupleur mono-bloc porte l'ETAT CONSERVATIF
+  // COMPLET par niveau (toutes composantes) + le phi (warm-start du multigrille), et sait IMPOSER
+  // une hierarchie fine SAUVEE (au lieu du clustering Berger-Rigoutsos sur tags). MONO-RANG : les
+  // accesseurs bouclent sur local_size() + device_fence(), SANS gather MPI (la facade rejette np>1
+  // ET le multi-blocs en amont ; la reprise multi-rangs/multi-blocs est une suite documentee).
+  // ----------------------------------------------------------------------------------------------
+
+  // Lit l'etat conservatif COMPLET (toutes composantes) du niveau @p k en un champ plat
+  // composante-majeur c*nf*nf + j*nf + i, nf = n << k (n = cote du grossier). Les cellules HORS
+  // patchs (niveau fin non couvert) restent a 0 : un niveau fin n'est defini que dans ses patchs
+  // (au restart on ne reecrit QUE les cellules des patchs, cf. set_level_state).
+  std::vector<double> level_state(int k) {
+    std::vector<AmrLevelMP>& L = stack_.L();
+    if (k < 0 || k >= static_cast<int>(L.size()))
+      throw std::runtime_error("AmrCouplerMP::level_state : niveau hors bornes");
+    MultiFab& U = L[k].U;
+    const int nc = U.ncomp();
+    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
+    std::vector<double> out(static_cast<std::size_t>(nc) * nf * nf, 0.0);
+    device_fence();
+    for (int li = 0; li < U.local_size(); ++li) {
+      const ConstArray4 u = U.fab(li).const_array();
+      const Box2D v = U.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          for (int c = 0; c < nc; ++c)
+            out[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
+                static_cast<std::size_t>(i)] = u(i, j, c);
+    }
+    return out;
+  }
+
+  // Restaure l'etat conservatif complet du niveau @p k depuis @p s (meme layout que level_state).
+  // Ecrit UNIQUEMENT les cellules VALIDES des fabs locaux (les patchs) : les ghosts sont refaits au
+  // prochain update()/advance (exactement comme apres un regrid), et une cellule fine hors patch
+  // n'existe pas. NO RE-PROLONGATION : l'etat est restaure TEL QUEL (pas d'injection coarse->fine).
+  void set_level_state(int k, const std::vector<double>& s) {
+    std::vector<AmrLevelMP>& L = stack_.L();
+    if (k < 0 || k >= static_cast<int>(L.size()))
+      throw std::runtime_error("AmrCouplerMP::set_level_state : niveau hors bornes");
+    MultiFab& U = L[k].U;
+    const int nc = U.ncomp();
+    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
+    if (s.size() != static_cast<std::size_t>(nc) * nf * nf)
+      throw std::runtime_error("AmrCouplerMP::set_level_state : taille de l'etat != ncomp*nf*nf");
+    device_fence();
+    for (int li = 0; li < U.local_size(); ++li) {
+      Array4 u = U.fab(li).array();
+      const Box2D v = U.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          for (int c = 0; c < nc; ++c)
+            u(i, j, c) = s[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
+                           static_cast<std::size_t>(i)];
+    }
+  }
+
+  // Lit le potentiel phi du niveau @p k, champ plat nf*nf row-major (nf = n << k), zeros hors patchs.
+  // Niveau 0 : le WARM-START du multigrille -- mg_.phi() (cellules VALIDES), l'etat reellement
+  // reutilise par le PROCHAIN solve (GeometricMG::solve conserve phi entre appels). Niveau >= 1 :
+  // aux(k) composante 0 (informatif ; recompute a l'update). C'est mg_.phi() niveau 0 qui rend la
+  // reprise BIT-IDENTIQUE (le 1er solve post-restart repart du meme guess que le run continu).
+  std::vector<double> level_potential(int k) {
+    if (k < 0 || k >= stack_.nlev())
+      throw std::runtime_error("AmrCouplerMP::level_potential : niveau hors bornes");
+    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
+    std::vector<double> out(nf * nf, 0.0);
+    device_fence();
+    const MultiFab& P = (k == 0) ? mg_.phi() : stack_.aux(k);
+    for (int li = 0; li < P.local_size(); ++li) {
+      const ConstArray4 p = P.fab(li).const_array();
+      const Box2D v = P.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          out[static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)] = p(i, j, 0);
+    }
+    return out;
+  }
+
+  // Restaure le potentiel du niveau @p k. Niveau 0 : warm-start mg_.phi() (cellules valides) -> la
+  // reprise du multigrille est BIT-IDENTIQUE (le 1er solve post-restart repart du meme guess). Niveau
+  // >= 1 : aux(k) comp 0 (recompute a l'update ; restauration idempotente, sans effet sur la dynamique).
+  void set_level_potential(int k, const std::vector<double>& p) {
+    if (k < 0 || k >= stack_.nlev())
+      throw std::runtime_error("AmrCouplerMP::set_level_potential : niveau hors bornes");
+    const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
+    if (p.size() != nf * nf)
+      throw std::runtime_error("AmrCouplerMP::set_level_potential : taille phi != nf*nf");
+    device_fence();
+    MultiFab& P = (k == 0) ? mg_.phi() : stack_.aux(k);
+    for (int li = 0; li < P.local_size(); ++li) {
+      Array4 q = P.fab(li).array();
+      const Box2D v = P.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          q(i, j, 0) = p[static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)];
+    }
+  }
+
+  // Impose la hierarchie du niveau fin (restart) : reconstruit le niveau 1 sur le BoxArray @p
+  // fine_boxes SAUVE (au lieu du clustering Berger-Rigoutsos sur tags), via la MEME mecanique que le
+  // regrid (regrid_field_on_layout : interp parent + report fin), puis reattache l'aux du niveau 1.
+  // Le contenu valide reconstruit est ECRASE ensuite par set_level_state (restauration tel quel) : on
+  // ne s'appuie ici que sur le LAYOUT impose. MONO-RANG, hierarchie mono-bloc a 2 niveaux (on n'impose
+  // donc QUE le niveau 1). Rejet clair si la hierarchie n'a pas de niveau fin ou si aucune boite sauvee.
+  void set_hierarchy(const std::vector<Box2D>& fine_boxes) {
+    std::vector<AmrLevelMP>& L = stack_.L();
+    if (L.size() < 2)
+      throw std::runtime_error("AmrCouplerMP::set_hierarchy : hierarchie mono-niveau (aucun patch "
+                               "fin a imposer)");
+    if (fine_boxes.empty())
+      throw std::runtime_error("AmrCouplerMP::set_hierarchy : aucune boite fine sauvee (restart d'une "
+                               "hierarchie a patchs fins requis)");
+    const int ngf = L[1].U.n_grow();  // herite la largeur de ghost du fin courant (parite schema)
+    BoxArray fb(fine_boxes);
+    DistributionMapping dmap(static_cast<int>(fb.size()), n_ranks());  // mono-rang -> tout sur rang 0
+    L[1].U = regrid_field_on_layout(fb, dmap, L[0].U, L[1].U, /*pk=*/0, ngf, replicated_coarse_);
+    stack_.reattach_aux(1);  // realloc aux[1] sur le nouveau layout + recable L[1].aux
+  }
+
   void sync_down() {  // moyenne fin -> grossier sur toute la hierarchie (multi-box)
     auto& L = stack_.L();
     for (int k = stack_.nlev() - 1; k >= 1; --k) mf_average_down_mb(L[k].U, L[k - 1].U);

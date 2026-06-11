@@ -305,6 +305,27 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     }
     return out;
   };
+  // CHECKPOINT / RESTART AMR mono-rang (ADC-65) : etat conservatif COMPLET par niveau + phi
+  // (warm-start) + imposition de la hierarchie fine sauvee. Capturent le MEME cpl (shared_ptr) que
+  // les autres hooks (aucun nouveau souci de duree de vie). Mono-rang : les accesseurs du coupleur
+  // bouclent sur local_size() (pas de gather) -- la facade rejette np>1 / multi-blocs en amont. Ces
+  // hooks sont des QUERIES/SETTERS entre les pas : zero cout chemin chaud (h.step intouche).
+  h.n_levels = [cpl] { return cpl->nlev(); };
+  h.n_vars = [] { return Model::n_vars; };
+  h.level_state = [cpl](int k) { return cpl->level_state(k); };
+  h.set_level_state = [cpl](int k, const std::vector<double>& s) { cpl->set_level_state(k, s); };
+  h.level_potential = [cpl](int k) { return cpl->level_potential(k); };
+  h.set_level_potential = [cpl](int k, const std::vector<double>& p) {
+    cpl->set_level_potential(k, p);
+  };
+  h.set_hierarchy = [cpl](const std::vector<adc::PatchBox>& boxes) {
+    // Mono-bloc : tous les patchs vivent au niveau 1 -> on filtre level == 1 et on convertit en Box2D
+    // (coins INCLUSIFS, espace d'indices du niveau fin), puis on impose ce BoxArray au coupleur.
+    std::vector<adc::Box2D> fb;
+    for (const adc::PatchBox& b : boxes)
+      if (b.level == 1) fb.push_back(adc::Box2D{{b.ilo, b.jlo}, {b.ihi, b.jhi}});
+    cpl->set_hierarchy(fb);
+  };
   const int nn = bp.n;
   const bool repl = !bp.distribute_coarse;
   h.density = [cpl, nn, repl] { return coupler_read_coarse(cpl->coarse(), nn, repl); };

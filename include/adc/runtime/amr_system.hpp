@@ -143,6 +143,17 @@ struct AmrCompiledHooks {
   // ce hook l'ecrit au restart). VIDE n'est jamais le cas (le builder le peuple toujours) ; le garde
   // adc_native_abi_key force la regeneration des .so anterieurs (ajout purement additif en queue).
   std::function<void(int)> set_macro_step;   ///< restaure la phase de cadence (regrid) du mono-bloc
+  // AJOUTES EN QUEUE (checkpoint/restart AMR mono-rang, ADC-65 ; additif comme set_macro_step) : etat
+  // CONSERVATIF COMPLET par niveau (toutes composantes) + phi (warm-start) + imposition d'une
+  // hierarchie fine SAUVEE. Le coupleur mono-bloc (AmrCouplerMP) les porte ; le builder les peuple
+  // toujours (jamais vides). Le garde adc_native_abi_key force la regeneration des .so anterieurs.
+  std::function<int()> n_levels;                                ///< nombre de niveaux (>= 1)
+  std::function<int()> n_vars;                                  ///< composantes conservees du bloc
+  std::function<std::vector<double>(int)> level_state;          ///< etat complet niveau k (c*nf*nf+j*nf+i)
+  std::function<void(int, const std::vector<double>&)> set_level_state;       ///< restaure l'etat niveau k
+  std::function<std::vector<double>(int)> level_potential;      ///< phi niveau k (nf*nf row-major)
+  std::function<void(int, const std::vector<double>&)> set_level_potential;   ///< restaure phi niveau k
+  std::function<void(const std::vector<PatchBox>&)> set_hierarchy;  ///< impose les patchs fins sauves
 };
 
 /// Builder DIFFERE d'un bloc COMPILE sur la hierarchie multi-blocs : recoit le layout PARTAGE (cree
@@ -446,6 +457,26 @@ class AmrSystem {
   /// conversion en [0, L]^2 se fait cote Python (qui connait n via nx() et L). Force le build
   /// paresseux (ensure_built) comme n_patches()/mass()/density().
   std::vector<PatchBox> patch_boxes();
+
+  /// CHECKPOINT / RESTART AMR mono-rang (ADC-65), MONO-BLOC : accesseurs d'ETAT par niveau +
+  /// imposition de hierarchie pour une reprise BIT-IDENTIQUE (cf. AmrSystem.checkpoint/restart cote
+  /// Python). Tous REJETTENT le multi-blocs (moteur AmrRuntime : layout + aux PARTAGES, suite
+  /// documentee) ; la facade rejette en plus MPI np>1 (gather par niveau : suite). Forcent le build
+  /// paresseux (ensure_built) comme patch_boxes()/mass(). @p k : niveau (0 = grossier, >= 1 = fin).
+  int n_levels();                 ///< nombre de niveaux de la hierarchie (>= 1)
+  int n_vars();                   ///< nombre de composantes conservees (mono-bloc)
+  /// Etat conservatif COMPLET du niveau @p k, plat composante-majeur c*nf*nf + j*nf + i (nf = n << k ;
+  /// zeros hors patchs au niveau fin -- seul l'interieur des patchs est defini).
+  std::vector<double> level_state(int k);
+  void set_level_state(int k, const std::vector<double>& s);  ///< restaure l'etat du niveau @p k (tel quel)
+  /// Potentiel phi du niveau @p k, plat nf*nf row-major. Niveau 0 = warm-start du multigrille
+  /// (reprise bit-identique) ; niveau >= 1 = aux comp 0 (recompute a l'update).
+  std::vector<double> level_potential(int k);
+  void set_level_potential(int k, const std::vector<double>& p);  ///< restaure phi du niveau @p k
+  /// Impose la hierarchie fine SAUVEE (au restart) au lieu du clustering Berger-Rigoutsos : @p boxes
+  /// sont les empreintes patch_boxes() du checkpoint (filtrees niveau 1 en mono-bloc).
+  void set_hierarchy(const std::vector<PatchBox>& boxes);
+
   double mass();                  ///< masse du 1er bloc sur le grossier (conservee au reflux)
   double mass(const std::string& name);     ///< masse du bloc nomme sur le grossier (conservee PAR BLOC)
   std::vector<double> density();  ///< densite grossiere du 1er bloc (composante 0), n*n row-major

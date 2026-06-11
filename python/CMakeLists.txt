@@ -306,6 +306,7 @@ foreach(t
     test_amr_weno5_hllc_roe   # registry des tags (§8) : alignement System/AMR weno5 x {hllc,roe} (mono dispatch_amr_compiled + multi dispatch_amr_block), garde de capability intacte
     test_schur_roles          # roles/champs Schur transportes dans l'ABI (vague 2) : descripteurs par nom == canonique bit-identique, rejets explicites (inconnu/polaire/amr)
     test_io_checkpoint        # IO v1 (vague 2) : checkpoint/restart bit-identique (stride=2 via macro_step), write npz/vtk, rejets composition/grille
+    test_amr_checkpoint       # checkpoint/restart AMR bit-identique mono-bloc mono-rang (ADC-65) : etat complet par niveau + phi warm-start + hierarchie imposee, rejets multi-blocs/n/regrid_every
     test_v3_features          # vague 3 : CoupledSource.frequency, options Newton AMR (multi natif / rejets mono+diagnostics), set_conservative_state multi-blocs, enable_hllc + source_jacobian DSL (auto-skip)
     test_amr_newton_full      # vague 3 solde : options Newton AMR mono-bloc (coupleur) + newton_diagnostics multi-blocs (newton_report), no-default-change, rejets .so
     test_dsl_roe              # solde audit pt 11 : m.enable_roe() emis depuis les ROLES -- parite 4-var avec le Roe canonique, 3-var isotherme accepte (cisaillement exact), rejets explicites (auto-skip)

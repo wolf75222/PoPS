@@ -2208,8 +2208,10 @@ def capabilities():
             "checkpoint_restart": "v1 npz mono-rang/gather-rang-0 (System ; etats + phi + t/macro_step ; "
                                   "composition rejouee par le script ; reprise bit-identique ; "
                                   "checkpoint(parallel=True) leve, reste npz gather-rang-0) ; "
-                                  "AMR (multi-niveaux) et CHECKPOINT HDF5 parallele = PR-IO-3 "
-                                  "(docs/IO_CHECKPOINT_PLAN.md ; AmrSystem.checkpoint leve)",
+                                  "AMR mono-bloc mono-rang regrid_every=0 (ADC-65 : etat conservatif "
+                                  "complet par niveau + phi warm-start + hierarchie imposee ; reprise "
+                                  "bit-identique) ; AMR multi-blocs / np>1 et CHECKPOINT HDF5 "
+                                  "parallele = suite (docs/IO_CHECKPOINT_PLAN.md ; rejets explicites)",
         },
         "amr_layout": {
             "set_conservative_state": "mono-bloc ET multi-blocs natifs (vague 3 ; loaders .so : "
@@ -2275,6 +2277,9 @@ class AmrSystem:
         _first_system_built = True
         self._s = _AmrSystem(config)
         self._L = float(config.L)  # cote de [0, L]^2 (pour patch_rectangles : index -> physique)
+        # Cadence regrid (checkpoint/restart ADC-65) : une reprise BIT-IDENTIQUE exige regrid_every == 0
+        # (sinon le regrid post-restart re-divergerait la hierarchie). Memorise pour la garde de restart.
+        self._regrid_every = int(config.regrid_every)
 
     def patch_rectangles(self):
         """Rectangles physiques (x0, y0, largeur, hauteur) des patchs fins courants, dans [0, L]^2.
@@ -2382,43 +2387,133 @@ class AmrSystem:
         raise ValueError("AmrSystem.write : format 'npz' | 'vtk' (recu %r)" % (format,))
 
     def checkpoint(self, path):
-        """NON CABLE sur AMR (PR-IO-3 du plan, docs/IO_CHECKPOINT_PLAN.md). Un checkpoint AMR
-        BIT-IDENTIQUE est IMPOSSIBLE avec l'ABI actuelle, et un repli "grossier seul" serait a la fois
-        LOSSY et non bit-identique -- on rejette donc explicitement plutot que d'ecrire un checkpoint
-        silencieusement faux. Ce qui MANQUE PRECISEMENT dans l'ABI (a cabler en PR-IO-3) :
+        """CHECKPOINT AMR REDEMARRABLE BIT-IDENTIQUE v1 (npz), MONO-BLOC MONO-RANG (ADC-65). Ecrit
+        l'ETAT CONSERVATIF COMPLET de CHAQUE niveau (toutes composantes ; le grossier ET les patchs
+        fins, cellules valides), le phi de chaque niveau (le niveau 0 = WARM-START du multigrille,
+        load-bearing pour la reprise bit-identique), la HIERARCHIE (patch_boxes), l'horloge (t,
+        macro_step) et la cadence regrid. CONTRAT (parite System.checkpoint) : restart NE reconstruit
+        PAS la composition -- le script rejoue ses add_block/set_poisson/set_refinement/set_density
+        puis appelle sim.restart(path), qui VERIFIE la coherence et leve sinon. @return le chemin.
 
-          1. Lecture des ETATS FINS PAR PATCH (toutes composantes, tous niveaux >= 1) : la facade
-             n'expose que density() (composante 0 du GROSSIER) et patch_boxes() (empreintes
-             index-space des patchs, PAS leurs donnees). Sans les etats fins on ne peut pas restaurer
-             la hierarchie telle quelle.
-          2. Lecture de l'ETAT CONSERVATIF COMPLET du grossier : meme au niveau 0, seul density()
-             (comp0) est lisible -- la quantite de mouvement / l'energie d'un modele multi-var (fluide
-             isotherme : rho, mom_r, mom_theta) ne sont PAS recuperables. Un repli grossier perdrait
-             donc tout sauf la densite.
-          3. Serialisation de la HIERARCHIE + OWNERSHIP (BoxArray fin par niveau, DistributionMapping)
-             pour reconstruire le MEME decoupage au restart.
-          4. ECRITURE des etats fins par patch (set_conservative_state ne fait que SEEDER le grossier
-             puis PROLONGER -- ce n'est pas une restauration bit-identique des patchs fins).
+        PERIMETRE (rejets EXPLICITES, jamais un checkpoint silencieusement faux/partiel) :
+          - MONO-BLOC seulement : le multi-blocs (moteur AmrRuntime) partage layout ET aux entre blocs
+            et n'expose pas l'etat par niveau/bloc -> suite (les accesseurs C++ rejettent aussi).
+          - MONO-RANG (np == 1) : les accesseurs de niveau lisent les fabs LOCAUX sans gather MPI ;
+            un gather par niveau (BoxArray + DistributionMapping) est une suite.
+          - regrid_every == 0 : une reprise bit-identique exige une hierarchie FIGEE (sinon le regrid
+            re-divergerait apres le restart). On rejette des le checkpoint (echec tot, message clair).
 
-        Repli : AmrSystem.write (visualisation, champs grossiers + empreintes patchs) ou un System
-        mono-niveau (System.checkpoint/restart, bit-identique y compris sous MPI)."""
-        raise NotImplementedError(
-            "AmrSystem.checkpoint : non cable (PR-IO-3). ABI manquante pour une reprise bit-identique : "
-            "(1) lecture des etats fins par patch (tous niveaux/composantes ; la facade n'expose que "
-            "density() = comp0 du grossier + patch_boxes() = empreintes sans donnees) ; "
-            "(2) lecture de l'etat conservatif COMPLET (meme au grossier : mom/energie non lisibles) ; "
-            "(3) serialisation hierarchie + ownership ; (4) ecriture des etats fins par patch "
-            "(set_conservative_state ne fait que seeder le grossier + prolonger). Un repli grossier "
-            "seul serait LOSSY (densite seule) ET non bit-identique -> rejet. Utiliser AmrSystem.write "
-            "(visualisation) ou un System mono-niveau (checkpoint/restart bit-identique).")
+        Repli hors perimetre : AmrSystem.write (visualisation) ou un System mono-niveau."""
+        import os
+        import numpy as np
+        from . import _adc
+        if _adc.n_ranks() != 1:
+            raise NotImplementedError(
+                "AmrSystem.checkpoint : MPI np>1 non cable (ADC-65 mono-rang : les etats par niveau "
+                "sont lus sur les fabs LOCAUX, le gather par niveau = suite). Lancer en mono-rang, ou "
+                "utiliser un System mono-niveau (checkpoint/restart bit-identique y compris sous MPI).")
+        if self._s.n_blocks() != 1:
+            raise NotImplementedError(
+                "AmrSystem.checkpoint : multi-blocs non cable (ADC-65 mono-bloc : le moteur AmrRuntime "
+                "partage layout ET aux entre blocs et n'expose pas l'etat par niveau/bloc = suite). "
+                "Utiliser un seul add_block, ou un System mono-niveau (checkpoint/restart bit-identique).")
+        if self._regrid_every != 0:
+            raise ValueError(
+                "AmrSystem.checkpoint : reprise bit-identique cablee pour regrid_every == 0 seulement "
+                "(hierarchie figee) ; ce systeme a regrid_every=%d (le regrid post-restart re-divergerait "
+                "la hierarchie). Reconstruire le systeme avec regrid_every=0." % self._regrid_every)
+        nlev = int(self._s.n_levels())
+        pb = self._s.patch_boxes()  # (level, ilo, jlo, ihi, jhi) inclusifs, espace d'indices du niveau
+        out = {"adc_amr_checkpoint_version": 1,
+               "t": self._s.time(), "macro_step": self._s.macro_step(),
+               "n": self._s.nx(), "L": self._L, "regrid_every": self._regrid_every,
+               "abi_key": abi_key(), "blocks": np.array(list(self._s.block_names())),
+               "n_vars": int(self._s.n_vars()), "n_levels": nlev,
+               "patch_boxes": (np.asarray(pb, dtype=np.int64) if pb
+                               else np.zeros((0, 5), dtype=np.int64))}
+        for k in range(nlev):
+            # Etat conservatif COMPLET du niveau k (c*nf*nf + j*nf + i) + phi (nf*nf). Niveau fin : seules
+            # les cellules des patchs sont definies (0 ailleurs) ; le restart ne reecrit que ces cellules.
+            out["state_%d" % k] = np.asarray(self._s.level_state(k), dtype=np.float64)
+            out["phi_%d" % k] = np.asarray(self._s.level_potential(k), dtype=np.float64)
+        target = path if path.endswith(".npz") else path + ".npz"
+        tmp = target + ".tmp"  # ecriture ATOMIQUE (.tmp + os.replace : un crash ne corrompt rien)
+        with open(tmp, "wb") as f:
+            np.savez_compressed(f, **out)
+        os.replace(tmp, target)
+        return target
 
     def restart(self, path):
-        """NON CABLE sur AMR (cf. checkpoint : la lecture/ecriture des etats fins par patch et de
-        l'etat conservatif complet manque a l'ABI -> une reprise bit-identique est impossible)."""
-        raise NotImplementedError(
-            "AmrSystem.restart : non cable (PR-IO-3 ; meme manque ABI que AmrSystem.checkpoint : "
-            "etats fins par patch + etat conservatif complet illisibles/inecrivables). Utiliser un "
-            "System mono-niveau (checkpoint/restart bit-identique, y compris sous MPI).")
+        """REPREND un checkpoint AMR v1 (BIT-IDENTIQUE, MONO-BLOC MONO-RANG, ADC-65). VERIFIE la
+        coherence (version, grille, blocs, composantes, regrid_every == 0) puis : (1) IMPOSE la
+        hierarchie fine sauvee (set_hierarchy, au lieu du clustering Berger-Rigoutsos) ; (2) restaure
+        l'etat conservatif COMPLET de chaque niveau TEL QUEL (pas de re-prolongation) ; (3) restaure le
+        phi de chaque niveau (le niveau 0 = warm-start du multigrille -> le 1er solve post-restart
+        repart du meme guess) ; (4) restaure l'horloge (t, macro_step). La COMPOSITION (add_block /
+        set_poisson / set_refinement / set_density) doit avoir ete REJOUEE par le script AVANT l'appel.
+
+        ORDRE : set_hierarchy AVANT set_level_state (l'imposition du layout precede la restauration des
+        cellules valides) ; phi et horloge ensuite. Le 1er step rejoue update() (sync_down + solve
+        warm-start) puis advance -- les ghosts (grossier ET fins) sont refaits par le step, exactement
+        comme apres un regrid, d'ou la reprise bit-identique sans restaurer de ghosts."""
+        import numpy as np
+        from . import _adc
+        if _adc.n_ranks() != 1:
+            raise NotImplementedError(
+                "AmrSystem.restart : MPI np>1 non cable (ADC-65 mono-rang ; cf. checkpoint). Lancer en "
+                "mono-rang, ou utiliser un System mono-niveau.")
+        if self._s.n_blocks() != 1:
+            raise NotImplementedError(
+                "AmrSystem.restart : multi-blocs non cable (ADC-65 mono-bloc ; cf. checkpoint). Utiliser "
+                "un seul add_block, ou un System mono-niveau.")
+        if self._regrid_every != 0:
+            raise ValueError(
+                "AmrSystem.restart : exige regrid_every == 0 (hierarchie figee ; sinon le regrid "
+                "post-restart re-divergerait la hierarchie restauree). Reconstruire le systeme avec "
+                "regrid_every=0 avant restart. (regrid_every courant = %d)" % self._regrid_every)
+        target = path if path.endswith(".npz") else path + ".npz"
+        d = np.load(target, allow_pickle=False)
+        if int(d["adc_amr_checkpoint_version"]) != 1:
+            raise ValueError("restart : version de checkpoint AMR %r non supportee (attendu 1)"
+                             % (d["adc_amr_checkpoint_version"],))
+        if int(d["n"]) != self._s.nx():
+            raise ValueError("restart : grille du checkpoint (n=%d) != systeme (n=%d)"
+                             % (int(d["n"]), self._s.nx()))
+        if float(d["L"]) != self._L:
+            raise ValueError("restart : domaine du checkpoint (L=%r) != systeme (L=%r) -- dx different"
+                             % (float(d["L"]), self._L))
+        if int(d["regrid_every"]) != 0:
+            raise ValueError("restart : checkpoint pris avec regrid_every=%d != 0 (reprise "
+                             "bit-identique impossible)" % int(d["regrid_every"]))
+        chk_blocks = [str(b) for b in d["blocks"]]
+        cur_blocks = list(self._s.block_names())
+        if chk_blocks != cur_blocks:
+            raise ValueError("restart : blocs du checkpoint %r != composition courante %r "
+                             "(rejouer la MEME composition avant restart)" % (chk_blocks, cur_blocks))
+        if int(d["n_vars"]) != int(self._s.n_vars()):
+            raise ValueError("restart : %d composantes dans le checkpoint, %d ici"
+                             % (int(d["n_vars"]), int(self._s.n_vars())))
+        nlev = int(d["n_levels"])
+        if nlev != int(self._s.n_levels()):
+            raise ValueError("restart : %d niveaux dans le checkpoint, %d ici (la composition / le "
+                             "raffinement different ?)" % (nlev, int(self._s.n_levels())))
+        # (1) IMPOSER la hierarchie fine sauvee (le coupleur filtre le niveau 1), sauf hierarchie
+        # MONO-NIVEAU (n_levels == 1, p.ex. chemin amr-schur sans patch fin) : rien a imposer alors.
+        boxes = [tuple(int(x) for x in row) for row in np.asarray(d["patch_boxes"], dtype=np.int64)]
+        if nlev >= 2:
+            if not any(b[0] == 1 for b in boxes):
+                raise ValueError("restart : hierarchie a %d niveaux mais aucun patch fin (niveau 1) "
+                                 "dans le checkpoint (incoherent)." % nlev)
+            self._s.set_hierarchy(boxes)
+        # (2) restaurer l'etat conservatif COMPLET de chaque niveau TEL QUEL (pas de re-prolongation) ;
+        # set_level_state applatit le tableau et n'ecrit que les cellules valides (les patchs).
+        for k in range(nlev):
+            self._s.set_level_state(k, np.asarray(d["state_%d" % k], dtype=np.float64))
+        # (3) restaurer le phi (niveau 0 = warm-start du multigrille : reprise bit-identique).
+        for k in range(nlev):
+            self._s.set_level_potential(k, np.asarray(d["phi_%d" % k], dtype=np.float64).ravel())
+        # (4) restaurer l'horloge APRES l'etat (parite System ; macro_step pousse la phase de cadence).
+        self._s.set_clock(float(d["t"]), int(d["macro_step"]))
 
     def add_equation(self, name, model, spatial=None, time=None, substeps=None):
         """Ajoute l'UNIQUE equation/bloc AMR en aiguillant sur le TYPE de @p model (DSL Phase D) :

@@ -20,6 +20,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <tuple>  // std::tuple : argument de AmrSystem.set_hierarchy (boites patch_boxes) (ADC-65)
 #include <vector>
 
 namespace py = pybind11;
@@ -576,5 +577,37 @@ PYBIND11_MODULE(_adc, m) {
       // phi du niveau grossier (base), (n, n). MEME observable que System.potential() : le niveau 0
       // couvre tout le domaine -> suffit a echantillonner un cercle median (FFT azimutale). En
       // multi-blocs, phi resulte du Poisson de SYSTEME (Sum_b q_b n_b co-localise), partage par tous.
-      .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.nx(), s.nx()); });
+      .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.nx(), s.nx()); })
+      // CHECKPOINT / RESTART AMR mono-rang (ADC-65) : etat conservatif COMPLET par niveau + phi
+      // (warm-start) + imposition de la hierarchie fine sauvee. MONO-BLOC SERIE (multi-blocs : rejet
+      // C++ ; np>1 : rejet facade -- gather par niveau = suite). level_state / level_potential rendent
+      // des champs PLATS (c*nf*nf + j*nf + i / nf*nf, nf = nx << k) ; la facade reshape. set_*
+      // applatissent n'importe quel tableau C-contigu (flat). set_hierarchy : liste de tuples
+      // (level, ilo, jlo, ihi, jhi) comme patch_boxes() (le coupleur filtre le niveau 1).
+      .def("n_levels", &AmrSystem::n_levels)
+      .def("n_vars", [](AmrSystem& s) { return s.n_vars(); })
+      .def("level_state", [](AmrSystem& s, int k) { return s.level_state(k); }, py::arg("k"))
+      .def("set_level_state",
+           [](AmrSystem& s, int k,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             s.set_level_state(k, flat(arr));
+           },
+           py::arg("k"), py::arg("state"))
+      .def("level_potential", [](AmrSystem& s, int k) { return s.level_potential(k); }, py::arg("k"))
+      .def("set_level_potential",
+           [](AmrSystem& s, int k,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             s.set_level_potential(k, flat(arr));
+           },
+           py::arg("k"), py::arg("phi"))
+      .def("set_hierarchy",
+           [](AmrSystem& s, const std::vector<std::tuple<int, int, int, int, int>>& boxes) {
+             std::vector<adc::PatchBox> bx;
+             bx.reserve(boxes.size());
+             for (const auto& b : boxes)
+               bx.push_back(adc::PatchBox{std::get<0>(b), std::get<1>(b), std::get<2>(b),
+                                          std::get<3>(b), std::get<4>(b)});
+             s.set_hierarchy(bx);
+           },
+           py::arg("boxes"));
 }
