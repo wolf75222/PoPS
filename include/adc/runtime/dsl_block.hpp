@@ -45,7 +45,8 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
                         const std::string& time = "explicit", double gamma = 1.4,
-                        int substeps = 1, bool evolve = true, int stride = 1) {
+                        int substeps = 1, bool evolve = true, int stride = 1,
+                        double positivity_floor = 0) {
   const bool imex = (time == "imex");
   const bool recon_prim = (recon == "primitive");
   // Schema RK EXPLICITE marshale par le chemin de production (add_native_block -> adc_install_native
@@ -60,7 +61,8 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   // pour que la fermeture lise un aux assez large. Modele de base (3) -> no-op, inchange.
   sys.ensure_aux_width(aux_comps<Model>());
   const GridContext ctx = sys.grid_context();
-  BlockClosures clo = make_block(model, limiter, riemann, ctx, imex, recon_prim, method);
+  BlockClosures clo = make_block(model, limiter, riemann, ctx, imex, recon_prim, method, {}, {},
+                                 nullptr, static_cast<Real>(positivity_floor));
   std::function<Real(const MultiFab&)> ms = make_max_speed(model, ctx);
   std::function<void(const MultiFab&, MultiFab&)> pr = make_poisson_rhs(model);
   sys.install_block(name, Model::n_vars, Model::conservative_vars(), Model::primitive_vars(),

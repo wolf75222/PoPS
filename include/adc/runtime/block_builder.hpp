@@ -54,9 +54,10 @@ struct BlockRhsEval {
   Model model;
   const GridContext* ctx;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts(U, ctx->dom, ctx->bc);
-    assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim);
+    assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, pos_floor);
   }
 };
 
@@ -69,9 +70,10 @@ struct AdvanceExplicit {
   Model m;
   GridContext ctx;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim};
+    const BlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim, pos_floor};
     for (int s = 0; s < n; ++s) Stepper{}.take_step(rhs, U, h);
   }
 };
@@ -88,10 +90,11 @@ struct AdvanceImex {
   ImplicitMask<Model::n_vars> mask{};
   NewtonOptions nopts{};            // options Newton du bloc (defauts = historique : 2 iters, 1e-7)
   NewtonReport* nreport = nullptr;  // diagnostics OPT-IN (adresse stable, possedee par System::Impl)
+  Real pos_floor = Real(0);         ///< limiteur de positivite Zhang-Shu (<= 0 : inactif)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
     const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m}, &ctx,
-                                                                  recon_prim};
+                                                                  recon_prim, pos_floor};
     if (nreport) nreport->reset();  // rapport AGREGE sur les n sous-pas de CETTE avance
     for (int s = 0; s < n; ++s) {
       ForwardEuler{}.take_step(rhs, U, h);     // demi-pas explicite : transport sans source
@@ -142,6 +145,7 @@ struct AdvanceImexRkArs222 {
   bool recon_prim;
   NewtonOptions nopts{};            // options Newton des solves d'etage (defauts = historique)
   NewtonReport* nreport = nullptr;  // diagnostics OPT-IN (adresse stable, possedee par System::Impl)
+  Real pos_floor = Real(0);         ///< limiteur de positivite Zhang-Shu (<= 0 : inactif)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
     const Real gamma = Real(1) - Real(1) / std::sqrt(Real(2));
@@ -150,7 +154,7 @@ struct AdvanceImexRkArs222 {
     const ImplicitMask<Model::n_vars> mask{};    // source PLEINEMENT implicite (masque inactif)
     // Residu de transport SANS source (L = -div F) : MEME mecanisme que le demi-pas explicite d'AdvanceImex.
     const BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m}, &ctx,
-                                                                  recon_prim};
+                                                                  recon_prim, pos_floor};
     const int nc = U.ncomp();
     MultiFab Un(U.box_array(), U.dmap(), nc, 0);     // U^n
     MultiFab L1(U.box_array(), U.dmap(), nc, 0);     // L(U^n)
@@ -183,9 +187,10 @@ struct RhsInto {
   Model m;
   GridContext ctx;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts(U, ctx.dom, ctx.bc);
-    assemble_rhs<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, recon_prim);
+    assemble_rhs<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, recon_prim, pos_floor);
   }
 };
 
@@ -207,9 +212,11 @@ struct BlockRhsEvalMasked {
   const GridContext* ctx;
   const MultiFab* mask;  // Impl::disc_mask_ (NON possede ; adresse stable)
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts(U, ctx->dom, ctx->bc);
-    assemble_rhs_masked<Limiter, Flux>(model, U, *ctx->aux, *mask, ctx->geom, R, recon_prim);
+    assemble_rhs_masked<Limiter, Flux>(model, U, *ctx->aux, *mask, ctx->geom, R, recon_prim,
+                                       pos_floor);
   }
 };
 
@@ -224,10 +231,11 @@ struct BlockRhsEvalEb {
   const GridContext* ctx;
   const DiscDomain* disc;  // Impl::disc_ (NON possede ; adresse stable)
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts(U, ctx->dom, ctx->bc);
     assemble_rhs_eb<Limiter, Flux>(model, U, *ctx->aux, disc_level_set(*disc), ctx->geom, R,
-                                   recon_prim);
+                                   recon_prim, kEbKappaMin, pos_floor);
   }
 };
 
@@ -239,9 +247,10 @@ struct AdvanceExplicitMasked {
   GridContext ctx;
   const MultiFab* mask;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalMasked<Limiter, Flux, Model> rhs{m, &ctx, mask, recon_prim};
+    const BlockRhsEvalMasked<Limiter, Flux, Model> rhs{m, &ctx, mask, recon_prim, pos_floor};
     for (int s = 0; s < n; ++s) Stepper{}.take_step(rhs, U, h);
   }
 };
@@ -254,9 +263,10 @@ struct AdvanceExplicitEb {
   GridContext ctx;
   const DiscDomain* disc;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalEb<Limiter, Flux, Model> rhs{m, &ctx, disc, recon_prim};
+    const BlockRhsEvalEb<Limiter, Flux, Model> rhs{m, &ctx, disc, recon_prim, pos_floor};
     for (int s = 0; s < n; ++s) Stepper{}.take_step(rhs, U, h);
   }
 };
@@ -275,10 +285,11 @@ struct AdvanceImexMasked {
   ImplicitMask<Model::n_vars> mask_impl{};
   NewtonOptions nopts{};
   NewtonReport* nreport = nullptr;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEvalMasked<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m},
-                                                                        &ctx, mask, recon_prim};
+    const BlockRhsEvalMasked<Limiter, Flux, SourceFreeModel<Model>> rhs{
+        SourceFreeModel<Model>{m}, &ctx, mask, recon_prim, pos_floor};
     if (nreport) nreport->reset();
     for (int s = 0; s < n; ++s) {
       ForwardEuler{}.take_step(rhs, U, h);
@@ -298,10 +309,11 @@ struct AdvanceImexEb {
   ImplicitMask<Model::n_vars> mask_impl{};
   NewtonOptions nopts{};
   NewtonReport* nreport = nullptr;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
     const BlockRhsEvalEb<Limiter, Flux, SourceFreeModel<Model>> rhs{SourceFreeModel<Model>{m}, &ctx,
-                                                                    disc, recon_prim};
+                                                                    disc, recon_prim, pos_floor};
     if (nreport) nreport->reset();
     for (int s = 0; s < n; ++s) {
       ForwardEuler{}.take_step(rhs, U, h);
@@ -348,7 +360,7 @@ BlockClosures build_block(const Model& m, const GridContext& ctx, bool imex, boo
                           const std::string& method = "ssprk2",
                           const std::vector<int>& implicit_components = {},
                           const NewtonOptions& newton_opts = {},
-                          NewtonReport* newton_report = nullptr) {
+                          NewtonReport* newton_report = nullptr, Real pos_floor = Real(0)) {
   const MultiFab* disc_mask = ctx.disc_mask;
   const detail::DiscDomain* disc = ctx.disc;
   BlockClosures bc;
@@ -361,39 +373,41 @@ BlockClosures build_block(const Model& m, const GridContext& ctx, bool imex, boo
       // -> un mode geometrie disque sur ce bloc leve une erreur EXPLICITE au pas
       // (SystemStepper::advance_transport_n), jamais un cartesien silencieux.
       bc.advance = detail::AdvanceImexRkArs222<Limiter, Flux, Model>{m, ctx, recon_prim, newton_opts,
-                                                                     newton_report};
+                                                                     newton_report, pos_floor};
     } else {
       // IMEX historique (backward-Euler local, ordre 1) : INTOUCHE, bit-identique.
       bc.advance = detail::AdvanceImex<Limiter, Flux, Model>{m, ctx, recon_prim, impl_mask,
-                                                             newton_opts, newton_report};
+                                                             newton_opts, newton_report, pos_floor};
       if (disc_mask)
         bc.advance_masked = detail::AdvanceImexMasked<Limiter, Flux, Model>{
-            m, ctx, disc_mask, recon_prim, impl_mask, newton_opts, newton_report};
+            m, ctx, disc_mask, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
       if (disc)
         bc.advance_eb = detail::AdvanceImexEb<Limiter, Flux, Model>{
-            m, ctx, disc, recon_prim, impl_mask, newton_opts, newton_report};
+            m, ctx, disc, recon_prim, impl_mask, newton_opts, newton_report, pos_floor};
     }
   } else if (method == "ssprk3") {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{m, ctx, recon_prim};
+    bc.advance =
+        detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{m, ctx, recon_prim, pos_floor};
     if (disc_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK3Step>{
-          m, ctx, disc_mask, recon_prim};
+          m, ctx, disc_mask, recon_prim, pos_floor};
     if (disc)
-      bc.advance_eb =
-          detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK3Step>{m, ctx, disc, recon_prim};
+      bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK3Step>{
+          m, ctx, disc, recon_prim, pos_floor};
   } else if (method == "ssprk2") {
-    bc.advance = detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{m, ctx, recon_prim};
+    bc.advance =
+        detail::AdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{m, ctx, recon_prim, pos_floor};
     if (disc_mask)
       bc.advance_masked = detail::AdvanceExplicitMasked<Limiter, Flux, Model, SSPRK2Step>{
-          m, ctx, disc_mask, recon_prim};
+          m, ctx, disc_mask, recon_prim, pos_floor};
     if (disc)
-      bc.advance_eb =
-          detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK2Step>{m, ctx, disc, recon_prim};
+      bc.advance_eb = detail::AdvanceExplicitEb<Limiter, Flux, Model, SSPRK2Step>{
+          m, ctx, disc, recon_prim, pos_floor};
   } else {
     throw std::runtime_error("System : methode temporelle explicite inconnue '" + method +
                              "' (ssprk2|ssprk3)");
   }
-  bc.rhs_into = detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim};
+  bc.rhs_into = detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor};
   return bc;
 }
 
@@ -410,7 +424,7 @@ BlockClosures make_block(const Model& m, const std::string& lim, const std::stri
                          const std::string& method = "ssprk2",
                          const std::vector<int>& implicit_components = {},
                          const NewtonOptions& newton_opts = {},
-                         NewtonReport* newton_report = nullptr) {
+                         NewtonReport* newton_report = nullptr, Real pos_floor = Real(0)) {
   // VALIDATION CENTRALISEE (registry dispatch_tags.hpp) AVANT le dispatch : memes acceptations /
   // rejets de tags qu'avant, messages identiques (validate_* reprend la formulation historique). Le
   // dispatch if/else qui suit est INCHANGE (Limiter / Flux sont des types compile-time) ; ses throws
@@ -420,10 +434,10 @@ BlockClosures make_block(const Model& m, const std::string& lim, const std::stri
   validate_riemann(riem, /*polar=*/false, "System");
   validate_limiter(lim, "System");
   if (riem == "rusanov") {
-    if (lim == "none") return build_block<NoSlope, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-    if (lim == "minmod") return build_block<Minmod, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-    if (lim == "vanleer") return build_block<VanLeer, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-    if (lim == "weno5") return build_block<Weno5, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
+    if (lim == "none") return build_block<NoSlope, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+    if (lim == "minmod") return build_block<Minmod, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+    if (lim == "vanleer") return build_block<VanLeer, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+    if (lim == "weno5") return build_block<Weno5, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
     throw_registry_dispatch_mismatch("System", "limiteur", lim);
   }
   if (riem == "hll") {
@@ -438,10 +452,10 @@ BlockClosures make_block(const Model& m, const std::string& lim, const std::stri
     if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                     mm.wave_speeds(s, a, 0, r, r);
                   }) {
-      if (lim == "none") return build_block<NoSlope, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "minmod") return build_block<Minmod, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "vanleer") return build_block<VanLeer, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "weno5") return build_block<Weno5, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
+      if (lim == "none") return build_block<NoSlope, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "minmod") return build_block<Minmod, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "vanleer") return build_block<VanLeer, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "weno5") return build_block<Weno5, HLLFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
       throw_registry_dispatch_mismatch("System", "limiteur", lim);
     } else {
       throw std::runtime_error("System : flux 'hll' exige des vitesses d'onde signees "
@@ -457,10 +471,10 @@ BlockClosures make_block(const Model& m, const std::string& lim, const std::stri
     if constexpr (HasHLLCStructure<Model> ||
                   (Model::n_vars == 4 &&
                    requires(const Model mm, typename Model::State s) { mm.pressure(s); })) {
-      if (lim == "none") return build_block<NoSlope, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "minmod") return build_block<Minmod, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "vanleer") return build_block<VanLeer, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "weno5") return build_block<Weno5, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
+      if (lim == "none") return build_block<NoSlope, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "minmod") return build_block<Minmod, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "vanleer") return build_block<VanLeer, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "weno5") return build_block<Weno5, HLLCFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
       throw_registry_dispatch_mismatch("System", "limiteur", lim);
     } else {
       throw std::runtime_error("System : flux 'hllc' exige un transport compressible Euler 2D "
@@ -476,10 +490,10 @@ BlockClosures make_block(const Model& m, const std::string& lim, const std::stri
     if constexpr (HasRoeDissipation<Model> ||
                   (Model::n_vars == 4 &&
                    requires(const Model mm, typename Model::State s) { mm.pressure(s); })) {
-      if (lim == "none") return build_block<NoSlope, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "minmod") return build_block<Minmod, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "vanleer") return build_block<VanLeer, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
-      if (lim == "weno5") return build_block<Weno5, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report);
+      if (lim == "none") return build_block<NoSlope, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "minmod") return build_block<Minmod, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "vanleer") return build_block<VanLeer, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
+      if (lim == "weno5") return build_block<Weno5, RoeFlux>(m, ctx, imex, recon_prim, method, implicit_components, newton_opts, newton_report, pos_floor);
       throw_registry_dispatch_mismatch("System", "limiteur", lim);
     } else {
       throw std::runtime_error("System : flux 'roe' exige un transport compressible Euler 2D "

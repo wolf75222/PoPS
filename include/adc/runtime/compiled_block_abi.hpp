@@ -183,13 +183,14 @@ void model_param_defaults(double* out) {
 template <class Model>
 void residual(const double* U, double* R, const double* aux_in, int n, double dx, double dy,
               bool periodic, const std::string& lim, const std::string& riem, bool recon_prim,
-              const double* pvals = nullptr, int npar = 0) {
+              const double* pvals = nullptr, int npar = 0, double pos_floor = 0) {
   LocalGrid lg = make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
   MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim)), Rmf(lg.ba, lg.dm, Model::n_vars, 0);
   fill_interior(Umf, U, n, Model::n_vars);
   const GridContext ctx{lg.dom, lg.bc, lg.geom, &lg.aux};
   Model model = make_model_with_params<Model>(pvals, npar);  // P7-b : params runtime (no-op si const)
-  BlockClosures clo = make_block(model, lim, riem, ctx, /*imex=*/false, recon_prim);
+  BlockClosures clo = make_block(model, lim, riem, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {},
+                                 nullptr, static_cast<Real>(pos_floor));
   clo.rhs_into(Umf, Rmf);
   extract(Rmf, R, n, Model::n_vars);
 }
@@ -198,14 +199,16 @@ void residual(const double* U, double* R, const double* aux_in, int n, double dx
 template <class Model>
 void advance(double* U, const double* aux_in, int n, double dx, double dy, bool periodic,
              const std::string& lim, const std::string& riem, bool recon_prim, bool imex,
-             double dt, int nsub, const double* pvals = nullptr, int npar = 0) {
+             double dt, int nsub, const double* pvals = nullptr, int npar = 0,
+             double pos_floor = 0) {
   LocalGrid lg = make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
   // block_n_ghost(lim) : 3 pour weno5 (stencil 5 points), 2 MUSCL sinon. cf. residual ci-dessus.
   MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim));
   fill_interior(Umf, U, n, Model::n_vars);
   const GridContext ctx{lg.dom, lg.bc, lg.geom, &lg.aux};
   Model model = make_model_with_params<Model>(pvals, npar);  // P7-b : params runtime (no-op si const)
-  BlockClosures clo = make_block(model, lim, riem, ctx, imex, recon_prim);
+  BlockClosures clo = make_block(model, lim, riem, ctx, imex, recon_prim, "ssprk2", {}, {}, nullptr,
+                                 static_cast<Real>(pos_floor));
   clo.advance(Umf, dt, nsub);
   extract(Umf, U, n, Model::n_vars);
 }
@@ -310,9 +313,9 @@ void poisson_rhs(const double* U, double* rhs_out, int n, const double* pvals = 
   extern "C" void adc_compiled_residual_p(const double* U, double* R, const double* aux, int n,     \
                                           double dx, double dy, int periodic, const char* lim,      \
                                           const char* riem, int recon_prim, const double* pvals,    \
-                                          int npar) {                                               \
+                                          int npar, double pos_floor) {                             \
     adc::compiled_block::residual<MODEL>(U, R, aux, n, dx, dy, periodic != 0, lim, riem,            \
-                                         recon_prim != 0, pvals, npar);                             \
+                                         recon_prim != 0, pvals, npar, pos_floor);                  \
   }                                                                                                 \
   extern "C" void adc_compiled_advance(double* U, const double* aux, int n, double dx, double dy,   \
                                        int periodic, const char* lim, const char* riem,             \
@@ -323,9 +326,10 @@ void poisson_rhs(const double* U, double* rhs_out, int n, const double* pvals = 
   extern "C" void adc_compiled_advance_p(double* U, const double* aux, int n, double dx, double dy, \
                                          int periodic, const char* lim, const char* riem,           \
                                          int recon_prim, int imex, double dt, int nsub,             \
-                                         const double* pvals, int npar) {                           \
+                                         const double* pvals, int npar, double pos_floor) {         \
     adc::compiled_block::advance<MODEL>(U, aux, n, dx, dy, periodic != 0, lim, riem,                \
-                                        recon_prim != 0, imex != 0, dt, nsub, pvals, npar);         \
+                                        recon_prim != 0, imex != 0, dt, nsub, pvals, npar,          \
+                                        pos_floor);                                                 \
   }                                                                                                 \
   extern "C" double adc_compiled_max_speed(const double* U, const double* aux, int n, double dx,    \
                                            double dy, int periodic) {                               \

@@ -121,9 +121,11 @@ struct PolarBlockRhsEval {
   const PolarGridContext* ctx;
   bool recon_prim;
   bool wall_radial;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts_polar(U, ctx->dom, ctx->bc);
-    assemble_rhs_polar<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, wall_radial);
+    assemble_rhs_polar<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, wall_radial,
+                                      pos_floor);
   }
 };
 
@@ -135,9 +137,10 @@ struct PolarAdvanceExplicit {
   PolarGridContext ctx;
   bool recon_prim;
   bool wall_radial;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const PolarBlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim, wall_radial};
+    const PolarBlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim, wall_radial, pos_floor};
     for (int s = 0; s < n; ++s) Stepper{}.take_step(rhs, U, h);
   }
 };
@@ -149,9 +152,11 @@ struct PolarRhsInto {
   PolarGridContext ctx;
   bool recon_prim;
   bool wall_radial;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
   void operator()(MultiFab& U, MultiFab& R) const {
     fill_ghosts_polar(U, ctx.dom, ctx.bc);
-    assemble_rhs_polar<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, recon_prim, wall_radial);
+    assemble_rhs_polar<Limiter, Flux>(m, U, *ctx.aux, ctx.geom, R, recon_prim, wall_radial,
+                                      pos_floor);
   }
 };
 
@@ -249,19 +254,20 @@ inline void derive_aux_polar(const MultiFab& phi, MultiFab& aux, const PolarGeom
 /// @p wall_radial : paroi solide radiale (no-penetration) -> conservation de masse a la machine.
 template <class Limiter, class Flux, class Model>
 BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, bool recon_prim,
-                                const std::string& method, bool wall_radial) {
+                                const std::string& method, bool wall_radial,
+                                Real pos_floor = Real(0)) {
   BlockClosures bc;
   if (method == "ssprk3") {
-    bc.advance =
-        detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{m, ctx, recon_prim, wall_radial};
+    bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK3Step>{
+        m, ctx, recon_prim, wall_radial, pos_floor};
   } else if (method == "ssprk2") {
-    bc.advance =
-        detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{m, ctx, recon_prim, wall_radial};
+    bc.advance = detail::PolarAdvanceExplicit<Limiter, Flux, Model, SSPRK2Step>{
+        m, ctx, recon_prim, wall_radial, pos_floor};
   } else {
     throw std::runtime_error("System (polaire) : methode temporelle explicite inconnue '" + method +
                              "' (ssprk2|ssprk3)");
   }
-  bc.rhs_into = detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial};
+  bc.rhs_into = detail::PolarRhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, wall_radial, pos_floor};
   return bc;
 }
 
@@ -281,7 +287,8 @@ BlockClosures build_block_polar(const Model& m, const PolarGridContext& ctx, boo
 template <class Model>
 BlockClosures make_block_polar(const Model& m, const std::string& lim, const std::string& riem,
                                const PolarGridContext& ctx, bool recon_prim,
-                               const std::string& method, bool wall_radial) {
+                               const std::string& method, bool wall_radial,
+                               Real pos_floor = Real(0)) {
   // VALIDATION CENTRALISEE (registry dispatch_tags.hpp) AVANT le dispatch : en polaire, rusanov ET
   // hll sont cables (hll depuis le solde de l'audit) ; HLLC/Roe et les tags inconnus levent le
   // message polaire du registre. La GARDE DE CAPABILITE (hll exige model.wave_speeds) reste un
@@ -289,10 +296,10 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
   validate_riemann(riem, /*polar=*/true, "System (polaire)");
   validate_limiter(lim, "System (polaire)");
   if (riem == "rusanov") {
-    if (lim == "none") return build_block_polar<NoSlope, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
-    if (lim == "minmod") return build_block_polar<Minmod, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
-    if (lim == "vanleer") return build_block_polar<VanLeer, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
-    if (lim == "weno5") return build_block_polar<Weno5, RusanovFlux>(m, ctx, recon_prim, method, wall_radial);
+    if (lim == "none") return build_block_polar<NoSlope, RusanovFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
+    if (lim == "minmod") return build_block_polar<Minmod, RusanovFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
+    if (lim == "vanleer") return build_block_polar<VanLeer, RusanovFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
+    if (lim == "weno5") return build_block_polar<Weno5, RusanovFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
     throw_registry_dispatch_mismatch("System (polaire)", "limiteur", lim);
   }
   if (riem == "hll") {
@@ -305,10 +312,10 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
     if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                     mm.wave_speeds(s, a, 0, r, r);
                   }) {
-      if (lim == "none") return build_block_polar<NoSlope, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
-      if (lim == "minmod") return build_block_polar<Minmod, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
-      if (lim == "vanleer") return build_block_polar<VanLeer, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
-      if (lim == "weno5") return build_block_polar<Weno5, HLLFlux>(m, ctx, recon_prim, method, wall_radial);
+      if (lim == "none") return build_block_polar<NoSlope, HLLFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
+      if (lim == "minmod") return build_block_polar<Minmod, HLLFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
+      if (lim == "vanleer") return build_block_polar<VanLeer, HLLFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
+      if (lim == "weno5") return build_block_polar<Weno5, HLLFlux>(m, ctx, recon_prim, method, wall_radial, pos_floor);
       throw_registry_dispatch_mismatch("System (polaire)", "limiteur", lim);
     } else {
       throw std::runtime_error(

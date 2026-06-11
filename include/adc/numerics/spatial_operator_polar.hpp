@@ -118,17 +118,19 @@ struct PolarFaceFluxRKernel {
   // comptent plus) -> masse Sum n r dr dtheta conservee a la machine, quel que soit v_r (paroi solide).
   bool wall_radial;
   int i_lo_face, i_hi_face;  // indices de FACE des bords physiques (lo et hi+1) ; ignores si !wall_radial
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
     const Real rf = r_min + i * dr;  // r_face(i) (positif sur l'anneau : r_min >= 0, i >= 0)
     if (wall_radial && (i == i_lo_face || i == i_hi_face)) {
       for (int c = 0; c < Model::n_vars; ++c) fr(i, j, c) = Real(0);  // paroi : flux radial nul
       return;
     }
-    // Etats reconstruits de part et d'autre de la face radiale i (REUTILISE reconstruct<> cartesien,
+    // Etats reconstruits de part et d'autre de la face radiale i (REUTILISE reconstruct_pp<> cartesien,
     // dir == 0). L = extrapolation depuis la cellule i-1 vers sa face + ; R = depuis la cellule i
     // vers sa face -.
-    const auto L = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
-    const auto Rr = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
+    const auto L = reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
                          load_aux<aux_comps<Model>()>(ax, i, j), 0);
     for (int c = 0; c < Model::n_vars; ++c) fr(i, j, c) = rf * F[c];
@@ -149,9 +151,11 @@ struct PolarFaceFluxThetaKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
-    const auto L = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
-    const auto Rr = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
+    const auto L = reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
                          load_aux<aux_comps<Model>()>(ax, i, j), 1);
     for (int c = 0; c < Model::n_vars; ++c) ft(i, j, c) = F[c];
@@ -210,7 +214,8 @@ struct PolarAssembleRhsKernel {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& aux,
                         const PolarGeometry& geom, MultiFab& R, bool recon_prim = false,
-                        bool wall_radial = false) {
+                        bool wall_radial = false, Real pos_floor = Real(0)) {
+  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   const Real r_min = geom.r_min, dr = geom.dr(), dtheta = geom.dtheta();
   // Faces radiales physiques de bord (paroi) : r_min a la face lo du domaine d'indices, r_max a la face
   // hi+1. geom.domain est le domaine GLOBAL (la PolarGeometry de System couvre tout l'anneau, mono-box).
@@ -240,10 +245,10 @@ void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& a
     for_each_cell(xface_box(v),
                   detail::PolarFaceFluxRKernel<Limiter, NumericalFlux, Model>{
                       model, u, ax, fr, r_min, dr, lim, nflux, recon_prim, wall_radial, i_lo_face,
-                      i_hi_face});
+                      i_hi_face, pos_floor, pos_comp});
     // Faces azimutales : i dans [lo..hi], j dans [lo..hi+1] (cf. yface_box).
     for_each_cell(yface_box(v), detail::PolarFaceFluxThetaKernel<Limiter, NumericalFlux, Model>{
-                                    model, u, ax, ft, lim, nflux, recon_prim});
+                                    model, u, ax, ft, lim, nflux, recon_prim, pos_floor, pos_comp});
   }
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();

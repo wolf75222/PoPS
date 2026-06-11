@@ -130,7 +130,8 @@ class System {
                  int newton_max_iters = 2, double newton_rel_tol = 0.0,
                  double newton_abs_tol = 0.0, double newton_fd_eps = 1e-7,
                  bool newton_diagnostics = false, double newton_damping = 1.0,
-                 const std::string& newton_fail_policy = "none");
+                 const std::string& newton_fail_policy = "none",
+                 double positivity_floor = 0.0);
 
   /// Rapport du Newton de la source implicite (IMEX) d'un bloc, AGREGE sur les sous-pas de la
   /// DERNIERE avance du bloc. N'existe que si le bloc a ete ajoute avec newton_diagnostics=true
@@ -172,7 +173,8 @@ class System {
                           const std::string& riemann = "rusanov",
                           const std::string& recon = "conservative",
                           const std::string& time = "explicit", int substeps = 1,
-                          const std::vector<std::string>& names = {});
+                          const std::vector<std::string>& names = {},
+                          double positivity_floor = 0.0);
 
   /// Change les valeurs des parametres RUNTIME d'un bloc AOT (add_compiled_block) SANS recompiler le
   /// .so (P7-b). @p values est le bloc COMPLET des valeurs (ordre = ordre trie des noms cote DSL, cf.
@@ -202,7 +204,8 @@ class System {
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
                         const std::string& time = "explicit", double gamma = 1.4,
-                        int substeps = 1, bool evolve = true, int stride = 1);
+                        int substeps = 1, bool evolve = true, int stride = 1,
+                        double positivity_floor = 0.0);
 
   /// Cle d'ABI du module (compilateur + standard C++ + signature des en-tetes adc, figee a la
   /// compilation). Comparee a la cle baked dans un loader natif .so par add_native_block ; exposee

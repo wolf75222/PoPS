@@ -164,6 +164,8 @@ struct EbFaceFluxXKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
     const Real xL = geom.x_cell(i - 1), xR = geom.x_cell(i), yc = geom.y_cell(j);
     const Real lL = ls(xL, yc), lR = ls(xR, yc);
@@ -182,8 +184,8 @@ struct EbFaceFluxXKernel {
       for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = Real(0);
       return;
     }
-    const auto L = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
-    const auto Rr = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
+    const auto L = reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
                          load_aux<aux_comps<Model>()>(ax, i, j), 0);
     for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = alpha * F[c];
@@ -203,6 +205,8 @@ struct EbFaceFluxYKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
     const Real xc = geom.x_cell(i), yL = geom.y_cell(j - 1), yR = geom.y_cell(j);
     const Real lL = ls(xc, yL), lR = ls(xc, yR);
@@ -221,8 +225,8 @@ struct EbFaceFluxYKernel {
       for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = Real(0);
       return;
     }
-    const auto L = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
-    const auto Rr = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
+    const auto L = reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
                          load_aux<aux_comps<Model>()>(ax, i, j), 1);
     for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = alpha * F[c];
@@ -305,10 +309,11 @@ struct EbAssembleRhsKernel {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model, class LevelSet>
 void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux, const LevelSet& ls,
                      const Geometry& geom, MultiFab& R, bool recon_prim = false,
-                     Real kappa_min = detail::kEbKappaMin) {
+                     Real kappa_min = detail::kEbKappaMin, Real pos_floor = Real(0)) {
   const Real dx = geom.dx(), dy = geom.dy();
   const Limiter lim{};
   const NumericalFlux nflux{};
+  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   // BoxArrays de FACE (cf. compute_face_fluxes / operateur polaire) : faces x = surroundingNodes en x
   // (xface_box), faces y en y (yface_box). fx(i, .) est la face entre i-1 et i, fy(., j) entre j-1 et j.
   std::vector<Box2D> xfaces, yfaces;
@@ -329,10 +334,10 @@ void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux,
     const Box2D v = R.box(li);
     for_each_cell(xface_box(v),
                   detail::EbFaceFluxXKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim});
+                      model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp});
     for_each_cell(yface_box(v),
                   detail::EbFaceFluxYKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim});
+                      model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp});
   }
   // PASSE 2 : divergence EB / kappa_eff + source ; cellule inactive -> residu 0.
   for (int li = 0; li < U.local_size(); ++li) {

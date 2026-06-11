@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <concepts>
+#include <stdexcept>  // positivity_comp : modele sans role Density -> erreur claire
 
 // Operateur spatial : assemble le residu R(U, aux) = -div F(U, aux) + S(U, aux)
 // sur les cellules valides d'un niveau. Fleche "PDE -> systeme d'ODE" de la
@@ -113,6 +114,13 @@ struct SourceFreeModel {
     }
   {
     m.wave_speeds(u, a, dir, smin, smax);
+  }
+  // Forward de l'introspection VariableSet (HOTE) : laisse positivity_comp resoudre le role Density
+  // a travers le demi-pas explicite IMEX. Conditionnel (requires), comme pressure / wave_speeds.
+  static VariableSet conservative_vars()
+    requires requires { M::conservative_vars(); }
+  {
+    return M::conservative_vars();
   }
 };
 
@@ -406,6 +414,66 @@ ADC_HD inline typename Model::State reconstruct(const Model& model, const ConstA
   return s;
 }
 
+/// zhang_shu_scale : limiteur de POSITIVITE sur un etat de face reconstruit -- REPLI A L'ORDRE 1
+/// LOCAL (variante robuste-au-vide du scaling de Zhang & Shu, JCP 2010).
+///
+/// Si la composante @p pos_comp (role Density) de l'etat de face @p s passe sous @p floor, l'etat
+/// de face ENTIER est remplace par la moyenne de sa cellule SOURCE u(i,j,.) (pente nulle locale).
+/// POURQUOI pas le theta-scaling colineaire du papier (s <- ubar + theta (s - ubar), theta tel que
+/// rho_face = floor) : en variables CONSERVATIVES au bord du QUASI-VIDE (fond 1e-6 du diocotron
+/// Hoffart), il pose rho_face = floor en laissant un moment de face O(moyenne) -> la VITESSE de
+/// face v = m/rho diverge (~1e6) -> la vitesse d'onde Rusanov explose alors que dt a ete choisi
+/// AVANT sur les vitesses de cellule -> blow-up immediat (mesure : NaN au pas 2 du cas Hoffart,
+/// quel que soit le floor). Le papier couple son limiteur a la borne CFL recalculee ; ici le repli
+/// a la moyenne borne la vitesse de face par CONSTRUCTION (v_face = v_cellule), reste conservatif
+/// (la moyenne n'est pas touchee), positif des que la moyenne l'est, et ne degrade l'ordre que sur
+/// les faces fautives (WENO5 intact partout ailleurs).
+/// Inactif si floor <= 0 (chemin bit-identique) ou si la face est deja >= floor. Motivation : WENO5
+/// sous-shoote au saut top-hat contraste 1e6 -> rho de face negatif -> 1/rho et la source Lorentz
+/// detonent -> NaN (adc_cases ADC-62/ADC-74, ticket ADC-76). Fonction PONCTUELLE device-clean. ADC_HD.
+template <class Model>
+ADC_HD inline void zhang_shu_scale(typename Model::State& s, const ConstArray4& u,
+                                   int i, int j, Real floor, int pos_comp) {
+  if (!(floor > Real(0))) return;            // opt-in strict : floor <= 0 -> aucun effet
+  if (!(s[pos_comp] < floor)) return;        // face deja au-dessus du plancher
+  for (int c = 0; c < Model::n_vars; ++c) s[c] = u(i, j, c);  // repli ordre 1 : face = moyenne
+}
+
+/// reconstruct_pp : reconstruct + limiteur de positivite zhang_shu_scale sur l'etat rendu.
+///
+/// (i, j) est la cellule SOURCE de la reconstruction : c'est vers SA moyenne que l'etat de face est
+/// ramene. pos_floor <= 0 -> strictement identique a reconstruct (court-circuit). ADC_HD.
+template <class Model, class Limiter>
+ADC_HD inline typename Model::State reconstruct_pp(const Model& model, const ConstArray4& u,
+                                                   int i, int j, int dir, Real sgn,
+                                                   const Limiter& lim, bool prim,
+                                                   Real pos_floor, int pos_comp) {
+  typename Model::State s = reconstruct<Model>(model, u, i, j, dir, sgn, lim, prim);
+  zhang_shu_scale<Model>(s, u, i, j, pos_floor, pos_comp);
+  return s;
+}
+
+namespace detail {
+/// Composante du role Density pour le limiteur de positivite (HOTE, resolu une fois par appel
+/// d'operateur spatial, jamais par cellule). pos_floor <= 0 -> 0 (jamais lu, le scaling est
+/// court-circuite dans zhang_shu_scale). Un modele sans introspection VariableSet ou sans role
+/// Density ne peut pas demander la positivite : erreur claire plutot qu'un scaling muet d'une
+/// composante arbitraire.
+template <class Model>
+inline int positivity_comp(Real pos_floor) {
+  if (!(pos_floor > Real(0))) return 0;
+  if constexpr (requires { Model::conservative_vars(); }) {
+    const int c = Model::conservative_vars().index_of(VariableRole::Density);
+    if (c >= 0) return c;
+    throw std::runtime_error(
+        "positivity_floor > 0 : le modele n'expose pas le role Density (cible du scaling)");
+  } else {
+    throw std::runtime_error(
+        "positivity_floor > 0 : modele sans introspection VariableSet (conservative_vars)");
+  }
+}
+}  // namespace detail
+
 /// xface_box / yface_box : boites de face normales a x (resp. y) associees a une boite de cellules.
 ///
 /// xface_box(v) : nx+1 x ny (i dans [lo..hi+1], j dans [lo..hi]).
@@ -460,9 +528,11 @@ struct FaceFluxXKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
-    const auto L = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
-    const auto Rr = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
+    const auto L = reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
                          load_aux<aux_comps<Model>()>(ax, i, j), 0);
     for (int c = 0; c < Model::n_vars; ++c) fx(i, j, c) = F[c];
@@ -485,9 +555,11 @@ struct FaceFluxYKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
-    const auto L = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
-    const auto Rr = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
+    const auto L = reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rr = reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
                          load_aux<aux_comps<Model>()>(ax, i, j), 1);
     for (int c = 0; c < Model::n_vars; ++c) fy(i, j, c) = F[c];
@@ -531,9 +603,10 @@ struct FaceFluxYKernel {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& aux,
                          MultiFab& Fx, MultiFab& Fy, Real dx = 0, Real dy = 0,
-                         bool recon_prim = false) {
+                         bool recon_prim = false, Real pos_floor = Real(0)) {
   const Limiter lim{};
   const NumericalFlux nflux{};
+  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
@@ -541,9 +614,9 @@ void compute_face_fluxes(const Model& model, const MultiFab& U, const MultiFab& 
     Array4 fy = Fy.fab(li).array();
     const Box2D v = U.box(li);
     for_each_cell(xface_box(v), detail::FaceFluxXKernel<Limiter, NumericalFlux, Model>{
-                                    model, u, ax, fx, dx, lim, nflux, recon_prim});
+                                    model, u, ax, fx, dx, lim, nflux, recon_prim, pos_floor, pos_comp});
     for_each_cell(yface_box(v), detail::FaceFluxYKernel<Limiter, NumericalFlux, Model>{
-                                    model, u, ax, fy, dy, lim, nflux, recon_prim});
+                                    model, u, ax, fy, dy, lim, nflux, recon_prim, pos_floor, pos_comp});
   }
 }
 
@@ -569,6 +642,8 @@ struct AssembleRhsKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
     const Aux Axm = load_aux<aux_comps<Model>()>(ax, i - 1, j);
@@ -577,18 +652,18 @@ struct AssembleRhsKernel {
     const Aux Ayp = load_aux<aux_comps<Model>()>(ax, i, j + 1);
 
     // faces x : reconstruction des etats de part et d'autre de chaque face
-    const auto Lxm = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
-    const auto Rxm = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
-    const auto Lxp = reconstruct<Model>(model, u, i, j, 0, +1, lim, recon_prim);
-    const auto Rxp = reconstruct<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim);
+    const auto Lxm = reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rxm = reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Lxp = reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rxp = reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
     const auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
 
     // faces y
-    const auto Lym = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
-    const auto Rym = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
-    const auto Lyp = reconstruct<Model>(model, u, i, j, 1, +1, lim, recon_prim);
-    const auto Ryp = reconstruct<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim);
+    const auto Lym = reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rym = reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Lyp = reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Ryp = reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
     const auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
     const auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
 
@@ -621,17 +696,19 @@ struct AssembleRhsKernel {
 // MUSCL au choix de l'appelant + Rusanov. Tous deux device-callable (ADC_HD).
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void assemble_rhs(const Model& model, const MultiFab& U, const MultiFab& aux,
-                  const Geometry& geom, MultiFab& R, bool recon_prim = false) {
+                  const Geometry& geom, MultiFab& R, bool recon_prim = false,
+                  Real pos_floor = Real(0)) {
   const Real dx = geom.dx(), dy = geom.dy();
   const Limiter lim{};
   const NumericalFlux nflux{};
+  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
     for_each_cell(v, detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>{
-                         model, u, ax, r, dx, dy, lim, nflux, recon_prim});
+                         model, u, ax, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp});
   }
 }
 
@@ -675,6 +752,8 @@ struct AssembleRhsMaskedKernel {
   Limiter lim;
   NumericalFlux nflux;
   bool recon_prim;
+  Real pos_floor = Real(0);  ///< limiteur de positivite Zhang-Shu (<= 0 : inactif, bit-identique)
+  int pos_comp = 0;          ///< composante du role Density (resolue par l'appelant hote)
   ADC_HD void operator()(int i, int j) const {
     if (!mask_active(mask, i, j)) {  // cellule hors sous-domaine actif : residu nul, non avancee
       for (int c = 0; c < Model::n_vars; ++c) r(i, j, c) = Real(0);
@@ -688,20 +767,20 @@ struct AssembleRhsMaskedKernel {
 
     // faces x : reconstruction de part et d'autre, flux numerique, PUIS porte du masque (face fermee
     // -> flux normal nul) -- une cellule voisine inactive ferme la face entre elle et (i, j).
-    const auto Lxm = reconstruct<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim);
-    const auto Rxm = reconstruct<Model>(model, u, i, j, 0, -1, lim, recon_prim);
-    const auto Lxp = reconstruct<Model>(model, u, i, j, 0, +1, lim, recon_prim);
-    const auto Rxp = reconstruct<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim);
+    const auto Lxm = reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rxm = reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Lxp = reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rxp = reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
     auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
     if (!mask_active(mask, i - 1, j)) Fxm = typename Model::State{};
     if (!mask_active(mask, i + 1, j)) Fxp = typename Model::State{};
 
     // faces y
-    const auto Lym = reconstruct<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim);
-    const auto Rym = reconstruct<Model>(model, u, i, j, 1, -1, lim, recon_prim);
-    const auto Lyp = reconstruct<Model>(model, u, i, j, 1, +1, lim, recon_prim);
-    const auto Ryp = reconstruct<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim);
+    const auto Lym = reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Rym = reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Lyp = reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
+    const auto Ryp = reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
     auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
     auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
     if (!mask_active(mask, i, j - 1)) Fym = typename Model::State{};
@@ -727,10 +806,11 @@ struct AssembleRhsMaskedKernel {
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void assemble_rhs_masked(const Model& model, const MultiFab& U, const MultiFab& aux,
                          const MultiFab& mask, const Geometry& geom, MultiFab& R,
-                         bool recon_prim = false) {
+                         bool recon_prim = false, Real pos_floor = Real(0)) {
   const Real dx = geom.dx(), dy = geom.dy();
   const Limiter lim{};
   const NumericalFlux nflux{};
+  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   for (int li = 0; li < U.local_size(); ++li) {
     const ConstArray4 u = U.fab(li).const_array();
     const ConstArray4 ax = aux.fab(li).const_array();
@@ -738,7 +818,7 @@ void assemble_rhs_masked(const Model& model, const MultiFab& U, const MultiFab& 
     Array4 r = R.fab(li).array();
     const Box2D v = R.box(li);
     for_each_cell(v, detail::AssembleRhsMaskedKernel<Limiter, NumericalFlux, Model>{
-                         model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim});
+                         model, u, ax, mk, r, dx, dy, lim, nflux, recon_prim, pos_floor, pos_comp});
   }
 }
 

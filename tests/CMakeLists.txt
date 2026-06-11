@@ -301,6 +301,10 @@ adc_add_test(test_block_builder)
 #     du tag temporel, no-default-change (SSPRK2 bit-identique), convergence > O2 ---
 adc_add_test(test_weno5_ssprk3)
 
+# --- limiteur de POSITIVITE Zhang-Shu (pos_floor, ADC-76) : mecanique du scaling, no-default-change
+#     (floor=0 bit-identique), garantie rho_face >= floor sur le top-hat 1e6, rejet sans role Density ---
+adc_add_test(test_positivity_floor)
+
 # --- parite bloc compile AOT (add_compiled_model) == bloc natif (add_block) ---
 # Compile le runtime System (python/system.cpp) avec le test : add_compiled_model branche un
 # CompositeModel connu a la compilation sur la grille reelle, comme un bloc natif (sans marshaling).

@@ -2304,14 +2304,18 @@ class HyperbolicModel:
                '  return ADC_ABI_KEY_LITERAL;\n'
                '}\n')
         if target == "system":
+            # pos_floor (ADC-76, limiteur de positivite Zhang-Shu) : argument plat final, marshale
+            # jusqu'au make_block du loader via add_compiled_model. Vieille signature = vieux .so =
+            # rejete par la cle d'ABI (les en-tetes ont change), jamais un layout d'arguments errone.
             install = ('extern "C" void adc_install_native(void* sys, const char* name, const char* limiter,\n'
                        '                                    const char* riemann, const char* recon,\n'
                        '                                    const char* time, double gamma, int substeps,\n'
-                       '                                    int evolve, int stride) {\n'
+                       '                                    int evolve, int stride, double pos_floor) {\n'
                        '  adc::System* s = reinterpret_cast<adc::System*>(sys);\n'
                        '  adc::add_compiled_model<adc_generated::ProdModel>(*s, name, adc_generated::ProdModel{},\n'
                        '                                                    limiter, riemann, recon, time, gamma,\n'
-                       '                                                    substeps, evolve != 0, stride);\n'
+                       '                                                    substeps, evolve != 0, stride,\n'
+                       '                                                    pos_floor);\n'
                        '}\n')
         else:  # amr_system : surcharge AmrSystem (pas de parametre evolve, AMR mono-bloc)
             install = ('extern "C" void adc_install_native_amr(void* sys, const char* name,\n'
@@ -3533,14 +3537,18 @@ class HybridModel:
                '  return ADC_ABI_KEY_LITERAL;\n'
                '}\n')
         if target == "system":
+            # pos_floor (ADC-76, limiteur de positivite Zhang-Shu) : argument plat final, marshale
+            # jusqu'au make_block du loader via add_compiled_model. Vieille signature = vieux .so =
+            # rejete par la cle d'ABI (les en-tetes ont change), jamais un layout d'arguments errone.
             install = ('extern "C" void adc_install_native(void* sys, const char* name, const char* limiter,\n'
                        '                                    const char* riemann, const char* recon,\n'
                        '                                    const char* time, double gamma, int substeps,\n'
-                       '                                    int evolve, int stride) {\n'
+                       '                                    int evolve, int stride, double pos_floor) {\n'
                        '  adc::System* s = reinterpret_cast<adc::System*>(sys);\n'
                        '  adc::add_compiled_model<adc_generated::ProdModel>(*s, name, adc_generated::ProdModel{},\n'
                        '                                                    limiter, riemann, recon, time, gamma,\n'
-                       '                                                    substeps, evolve != 0, stride);\n'
+                       '                                                    substeps, evolve != 0, stride,\n'
+                       '                                                    pos_floor);\n'
                        '}\n')
         else:  # amr_system : surcharge AmrSystem (pas de parametre evolve, AMR mono-bloc)
             install = ('extern "C" void adc_install_native_amr(void* sys, const char* name,\n'

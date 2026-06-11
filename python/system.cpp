@@ -497,10 +497,12 @@ void System::add_block(const std::string& name, const ModelSpec& model,
                        const std::vector<std::string>& implicit_roles,
                        int newton_max_iters, double newton_rel_tol, double newton_abs_tol,
                        double newton_fd_eps, bool newton_diagnostics, double newton_damping,
-                       const std::string& newton_fail_policy) {
+                       const std::string& newton_fail_policy, double positivity_floor) {
   Impl* P = p_.get();
   if (substeps < 1) throw std::runtime_error("System::add_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("System::add_block : stride >= 1");
+  if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
+    throw std::runtime_error("System::add_block : positivity_floor >= 0 et fini (0 = inactif)");
   if (newton_max_iters < 1)
     throw std::runtime_error("System::add_block : newton_max_iters >= 1");
   if (newton_rel_tol < 0.0 || newton_abs_tol < 0.0 || newton_fd_eps <= 0.0)
@@ -584,7 +586,8 @@ void System::add_block(const std::string& name, const ModelSpec& model,
       // wall_radial = true : paroi solide aux deux bords radiaux (no-penetration) -> flux radial nul
       // a r_min / r_max -> masse Sum n r dr dtheta conservee A LA MACHINE (l'anneau diocotron est borne
       // par deux parois conductrices). C'est la BC qui rend le pas couple conservatif.
-      clo = make_block_polar(m, limiter, riemann, pctx, recon_prim, method, /*wall_radial=*/true);
+      clo = make_block_polar(m, limiter, riemann, pctx, recon_prim, method, /*wall_radial=*/true,
+                             static_cast<Real>(positivity_floor));
       // StabilityPolicy POLAIRE (audit vague 3) : meme politique que le cartesien -- lambda* de
       // stabilite (trait) sinon max_wave_speed ; bornes source/pas admissible si declarees,
       // fermetures VIDES sinon (politique de pas historique, bit-identique).
@@ -640,7 +643,7 @@ void System::add_block(const std::string& name, const ModelSpec& model,
     // membres de Impl). Elles restent INERTES tant que le System n'est pas mis en mode Staircase /
     // CutCell (cf. step()) : construites a l'ajout, selectionnees seulement sur opt-in.
     clo = make_block(m, limiter, riemann, ctx, imex, recon_prim, method, impl_components, nopts,
-                     nreport);
+                     nreport, static_cast<Real>(positivity_floor));
     max_speed = make_max_speed(m, ctx);  // stability_speed (trait) ou max_wave_speed (fallback)
     add_poisson_rhs = make_poisson_rhs(m);
     // Bornes de pas optionnelles (traits HasSourceFrequency / HasStabilityDt) : fonctions VIDES si
@@ -756,9 +759,12 @@ void System::add_dynamic_block(const std::string& name, const std::string& so_pa
 void System::add_compiled_block(const std::string& name, const std::string& so_path,
                                 const std::string& limiter, const std::string& riemann,
                                 const std::string& recon, const std::string& time, int substeps,
-                                const std::vector<std::string>& names) {
+                                const std::vector<std::string>& names, double positivity_floor) {
+  if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
+    throw std::runtime_error(
+        "System::add_compiled_block : positivity_floor >= 0 et fini (0 = inactif)");
   native_loader::add_compiled_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
-                                    substeps, names);
+                                    substeps, names, positivity_floor);
 }
 
 // P7-b : ecrase le bloc PARTAGE des valeurs de parametres runtime du bloc @p name. add_compiled_block
@@ -787,9 +793,12 @@ void System::set_block_params(const std::string& name, const std::vector<double>
 void System::add_native_block(const std::string& name, const std::string& so_path,
                               const std::string& limiter, const std::string& riemann,
                               const std::string& recon, const std::string& time, double gamma,
-                              int substeps, bool evolve, int stride) {
+                              int substeps, bool evolve, int stride, double positivity_floor) {
+  if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
+    throw std::runtime_error(
+        "System::add_native_block : positivity_floor >= 0 et fini (0 = inactif)");
   native_loader::add_native_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
-                                  gamma, substeps, evolve, stride);
+                                  gamma, substeps, evolve, stride, positivity_floor);
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver,

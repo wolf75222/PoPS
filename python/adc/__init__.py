@@ -754,10 +754,16 @@ class Spatial:
       ce ne sont PAS des solveurs generiques (cf. EulerHLLCFlux2D / EulerRoeFlux2D cote C++).
     - ``recon`` : "conservative" | "primitive" (variables reconstruites ; primitif plus robuste
       pour Euler : positivite de rho et p ; raccourci primitive=).
+    - ``positivity_floor`` : plancher de DENSITE des etats de face reconstruits (limiteur de
+      positivite Zhang-Shu, ADC-76) : scaling conservatif de l'etat de face vers la moyenne de
+      cellule pour que rho_face >= floor. 0/None (defaut) = inactif, chemin bit-identique.
+      Motive par le saut top-hat contraste 1e6 du diocotron Hoffart, ou WENO5 reconstruit une
+      densite negative -> NaN. Exige un modele exposant le role Density.
     """
 
     def __init__(self, limiter="minmod", flux="rusanov", recon="conservative", *, none=False,
-                 minmod=False, vanleer=False, weno5=False, primitive=False):
+                 minmod=False, vanleer=False, weno5=False, primitive=False,
+                 positivity_floor=None):
         if none:
             limiter = "none"
         elif minmod:
@@ -771,9 +777,15 @@ class Spatial:
         self.limiter = limiter
         self.flux = flux
         self.recon = recon
+        pf = 0.0 if positivity_floor is None else float(positivity_floor)
+        if not (pf >= 0.0):
+            raise ValueError("Spatial : positivity_floor >= 0 (0/None = inactif ; recu %r)"
+                             % (positivity_floor,))
+        self.positivity_floor = pf
 
 
-def FiniteVolume(limiter="minmod", riemann="rusanov", variables="conservative"):
+def FiniteVolume(limiter="minmod", riemann="rusanov", variables="conservative",
+                 positivity_floor=None):
     """Schema volumes finis (surface stable Phase A) : remappe sur l'objet Spatial existant.
 
     Le flux NUMERIQUE de Riemann s'appelle ``riemann`` (NON ``flux``, reserve au flux PHYSIQUE du modele
@@ -785,8 +797,10 @@ def FiniteVolume(limiter="minmod", riemann="rusanov", variables="conservative"):
     - ``variables`` -> Spatial.recon ("conservative" | "primitive")
 
     cf. docs/DSL_MODEL_DESIGN.md section 6. Renvoie un Spatial (consomme tel quel par add_block /
-    add_equation). adc.Spatial reste disponible a l'identique."""
-    return Spatial(limiter=limiter, flux=riemann, recon=variables)
+    add_equation). adc.Spatial reste disponible a l'identique. ``positivity_floor`` (ADC-76) :
+    plancher de densite des etats de face (limiteur Zhang-Shu), None/0 = inactif."""
+    return Spatial(limiter=limiter, flux=riemann, recon=variables,
+                   positivity_floor=positivity_floor)
 
 
 class Explicit:
@@ -1368,7 +1382,8 @@ class System:
                           getattr(time, "newton_fd_eps", 1e-7),
                           getattr(time, "newton_diagnostics", False),
                           getattr(time, "newton_damping", 1.0),
-                          getattr(time, "newton_fail_policy", "none"))
+                          getattr(time, "newton_fail_policy", "none"),
+                          getattr(spatial, "positivity_floor", 0.0))
 
     def add_equation(self, name, model, spatial=None, time=None, substeps=None, names=None,
                      evolve=True, stride=None):
@@ -1432,7 +1447,8 @@ class System:
                               getattr(time, "newton_fd_eps", 1e-7),
                               getattr(time, "newton_diagnostics", False),
                           getattr(time, "newton_damping", 1.0),
-                          getattr(time, "newton_fail_policy", "none"))
+                          getattr(time, "newton_fail_policy", "none"),
+                          getattr(spatial, "positivity_floor", 0.0))
             return
 
         # Masque implicite (IMEX) : seul le chemin natif compose (ModelSpec -> add_block) le cable. Les
@@ -1526,6 +1542,13 @@ class System:
                     "ne transporte pas evolve ; le bloc serait avance en silence). Utiliser un modele "
                     "natif compose adc.Model(...) -> add_block(..., evolve=False) (ou add_background) "
                     "pour un champ gele.")
+            # positivity_floor (ADC-76) n'est PAS cable sur le chemin JIT hote (pas d'assemble_rhs,
+            # residu Rusanov ordre 1 dedie) : rejet explicite plutot qu'un floor ignore en silence.
+            if getattr(spatial, "positivity_floor", 0.0) > 0.0:
+                raise ValueError(
+                    "add_equation : positivity_floor non supporte sur backend 'prototype' (residu "
+                    "hote dedie, sans reconstruction haut-ordre) ; utiliser backend='aot'/'production' "
+                    "ou un modele compose adc.Model(...) -> add_block.")
             self._s.add_dynamic_block(name, compiled.so_path, nsub, names_arg, spatial.limiter)
             return
         if adder == "add_compiled_block":
@@ -1552,7 +1575,8 @@ class System:
                     "backend='production' (chemin natif, evolve cable) ou un modele natif compose "
                     "adc.Model(...) -> add_block(..., evolve=False) (ou add_background) pour un champ gele.")
             self._s.add_compiled_block(name, compiled.so_path, spatial.limiter, spatial.flux,
-                                       spatial.recon, time.kind, nsub, names_arg)
+                                       spatial.recon, time.kind, nsub, names_arg,
+                                       getattr(spatial, "positivity_floor", 0.0))
             return
         if adder == "add_native_block":
             # NATIF zero-copie (#85) : bloc installe sur le CONTEXTE REEL du System (meme chemin que
@@ -1567,7 +1591,8 @@ class System:
             dsl.check_compiled_matches_module(getattr(compiled, "abi_key", ""))
             gamma = compiled.gamma if compiled.gamma is not None else 1.4
             self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
-                                     spatial.recon, time.kind, gamma, nsub, evolve, nstride)
+                                     spatial.recon, time.kind, gamma, nsub, evolve, nstride,
+                                     getattr(spatial, "positivity_floor", 0.0))
             return
         raise ValueError("add_equation : adder %r inconnu (backend %r)" % (adder, backend))
 
@@ -2386,6 +2411,12 @@ class AmrSystem:
                 "supporte que par add_equation (qui branche l'etage source) ; utiliser "
                 "add_equation(..., time=adc.Strang(hyperbolic=adc.Explicit(...), "
                 "source=adc.CondensedSchur(...))).")
+        # positivity_floor (ADC-76) n'est PAS cable sur le chemin AMR (AmrSystem::add_block ne le
+        # transporte pas) : rejet explicite plutot qu'un floor ignore en silence.
+        if getattr(spatial, "positivity_floor", 0.0) > 0.0:
+            raise ValueError(
+                "AmrSystem.add_block : positivity_floor non supporte sur le chemin AMR (chantier "
+                "separe) ; retirer positivity_floor ou utiliser le System uniforme.")
         # On thread substeps/stride (multirate, capstone iv), le masque IMEX partiel, les OPTIONS Newton
         # ET newton_diagnostics (vague 3, solde). Resolus / valides cote C++ (AmrSystem::add_block) contre
         # les noms/roles du bloc : vides -> backward-Euler plein. Les options sont cablees en mono-bloc
@@ -2623,6 +2654,13 @@ class AmrSystem:
 
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
+
+        # positivity_floor (ADC-76) n'est PAS cable sur le chemin AMR (ni AmrSystem::add_block ni
+        # l'ABI du loader amr_system ne le transportent) : rejet explicite, pas d'ignore silencieux.
+        if getattr(spatial, "positivity_floor", 0.0) > 0.0:
+            raise ValueError(
+                "AmrSystem.add_equation : positivity_floor non supporte sur le chemin AMR (chantier "
+                "separe) ; retirer positivity_floor ou utiliser le System uniforme.")
 
         # --- adc.Split (Lie) / adc.Strang (2e ordre) : CHEMIN amr-schur (etage source condense GLOBAL) --
         # Pendant AMR de System.add_equation (cf. ~ligne 925) : on ajoute d'abord le bloc avec son seul

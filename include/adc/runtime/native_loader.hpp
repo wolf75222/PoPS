@@ -376,7 +376,7 @@ template <typename ImplT>
 void add_compiled_block(System* self, ImplT* P, const std::string& name, const std::string& so_path,
                         const std::string& limiter, const std::string& riemann,
                         const std::string& recon, const std::string& time, int substeps,
-                        const std::vector<std::string>& names) {
+                        const std::vector<std::string>& names, double pos_floor = 0) {
   (void)self;
   if (substeps < 1) throw std::runtime_error("System::add_compiled_block : substeps >= 1");
   if (recon != "conservative" && recon != "primitive")
@@ -434,9 +434,9 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   auto nparams_fn = reinterpret_cast<nv_fn_t>(dlsym(h, "adc_compiled_nparams"));
   const int nparams = nparams_fn ? nparams_fn() : 0;
   using res_p_fn_t = void (*)(const double*, double*, const double*, int, double, double, int,
-                              const char*, const char*, int, const double*, int);
+                              const char*, const char*, int, const double*, int, double);
   using adv_p_fn_t = void (*)(double*, const double*, int, double, double, int, const char*,
-                              const char*, int, int, double, int, const double*, int);
+                              const char*, int, int, double, int, const double*, int, double);
   using max_p_fn_t = double (*)(const double*, const double*, int, double, double, int,
                                 const double*, int);
   using poi_p_fn_t = void (*)(const double*, double*, int, const double*, int);
@@ -450,6 +450,13 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // alors les symboles historiques (chemin const). pv non nul declenche le chemin `_p`.
   std::shared_ptr<std::vector<double>> pv;
   const bool use_params = (nparams > 0 && res_p_fn && adv_p_fn && max_p_fn && poi_p_fn);
+  // LIMITEUR DE POSITIVITE (ADC-76) : pos_floor > 0 passe par les variantes `_p` (seules signatures
+  // qui le transportent). Un vieux .so sans `_p` ne peut pas l'appliquer -> erreur claire (jamais un
+  // chemin silencieux sans positivite). pos_floor <= 0 : chemins historiques, bit-identiques.
+  if (pos_floor > 0 && (!res_p_fn || !adv_p_fn))
+    throw std::runtime_error(
+        "add_compiled_block : positivity_floor > 0 exige l'ABI `_p` du .so (regenerer le module "
+        "compile avec les en-tetes courants)");
   if (use_params) {
     pv = std::make_shared<std::vector<double>>(static_cast<std::size_t>(nparams), 0.0);
     auto defs_fn = reinterpret_cast<void (*)(double*)>(dlsym(h, "adc_compiled_param_defaults"));
@@ -469,31 +476,32 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   const std::string lim = limiter, riem = riemann;
 
   std::function<void(MultiFab&, MultiFab&)> rhs_into =
-      [P, lib, res_fn, res_p_fn, pv, nv, n, dx, dy, per, lim, riem, recon_prim](MultiFab& U,
-                                                                                MultiFab& R) {
+      [P, lib, res_fn, res_p_fn, pv, nv, n, dx, dy, per, lim, riem, recon_prim,
+       pos_floor](MultiFab& U, MultiFab& R) {
         // Chemin HOTE (bloc compile .so) : meme garde MPI que add_poisson. Sur un rang sans box
         // locale (local_size()==0 a np>1) il n'y a rien a marshaler ; le rang proprietaire porte
         // la physique complete. Pas de collectif ici -> no-op unilateral, aucun interblocage.
         if (U.local_size() == 0) return;
         std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, P->aux_ncomp_);
         std::vector<double> r(static_cast<std::size_t>(nv) * n * n, 0.0);
-        if (pv)  // params RUNTIME : variante `_p` avec le bloc PARTAGE des valeurs courantes (P7-b)
+        if (pv || pos_floor > 0)  // variante `_p` : params RUNTIME (P7-b) et/ou positivite (ADC-76)
           res_p_fn(u.data(), r.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(),
-                   recon_prim, pv->data(), static_cast<int>(pv->size()));
+                   recon_prim, pv ? pv->data() : nullptr, pv ? static_cast<int>(pv->size()) : 0,
+                   pos_floor);
         else
           res_fn(u.data(), r.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(), recon_prim);
         P->write_state(R, nv, r);
       };
   std::function<void(MultiFab&, Real, int)> advance =
-      [P, lib, adv_fn, adv_p_fn, pv, nv, n, dx, dy, per, lim, riem, recon_prim, imex](MultiFab& U,
-                                                                                      Real dt,
-                                                                                      int nsub) {
+      [P, lib, adv_fn, adv_p_fn, pv, nv, n, dx, dy, per, lim, riem, recon_prim, imex,
+       pos_floor](MultiFab& U, Real dt, int nsub) {
         // Meme garde MPI : rang vide -> no-op. Pas de collectif -> sans interblocage.
         if (U.local_size() == 0) return;
         std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, P->aux_ncomp_);
-        if (pv)  // params RUNTIME (P7-b)
+        if (pv || pos_floor > 0)  // variante `_p` : params RUNTIME (P7-b) et/ou positivite (ADC-76)
           adv_p_fn(u.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(), recon_prim, imex,
-                   static_cast<double>(dt), nsub, pv->data(), static_cast<int>(pv->size()));
+                   static_cast<double>(dt), nsub, pv ? pv->data() : nullptr,
+                   pv ? static_cast<int>(pv->size()) : 0, pos_floor);
         else
           adv_fn(u.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(), recon_prim, imex,
                  static_cast<double>(dt), nsub);
@@ -591,7 +599,7 @@ template <typename ImplT>
 void add_native_block(System* self, ImplT* P, const std::string& name, const std::string& so_path,
                       const std::string& limiter, const std::string& riemann,
                       const std::string& recon, const std::string& time, double gamma,
-                      int substeps, bool evolve, int stride) {
+                      int substeps, bool evolve, int stride, double pos_floor = 0) {
   (void)P;
   if (substeps < 1) throw std::runtime_error("System::add_native_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("System::add_native_block : stride >= 1");
@@ -666,15 +674,19 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
   // loader reconstruit imex/recon_prim et appelle le gabarit. evolve est passe pour qu'un bloc fond
   // fixe (non avance) soit possible comme via add_block.
   using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                const char*, double, int, int, int);
+                                const char*, double, int, int, int, double);
   auto install = reinterpret_cast<install_fn_t>(dlsym(h, "adc_install_native"));
   if (!install) {
     dlclose(h);
     throw std::runtime_error("add_native_block : adc_install_native absent du .so (regenerer via "
                              "dsl.compile_native / compile(backend='production'))");
   }
+  // NB signature : adc_install_native transporte desormais pos_floor (limiteur de positivite,
+  // ADC-76) en argument plat final. Un loader genere AVANT cet ajout a une autre signature C --
+  // il est REJETE en amont par la cle d'ABI (ADC_HEADER_SIG change avec les en-tetes), jamais
+  // appele avec un layout d'arguments errone.
   install(static_cast<void*>(self), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-          time.c_str(), gamma, substeps, evolve ? 1 : 0, stride);
+          time.c_str(), gamma, substeps, evolve ? 1 : 0, stride, pos_floor);
   // Le .so reste charge (RTLD_GLOBAL) pour la duree du process : le bloc installe pointe du code
   // (fermetures de block_builder, foncteurs nommes) qui y vit. On NE le ferme PAS (pas de propriete
   // partagee a accrocher : les fermetures sont copiees dans le registre du System mais leur CODE est

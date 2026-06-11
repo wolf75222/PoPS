@@ -177,7 +177,11 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("newton_max_iters") = 2, py::arg("newton_rel_tol") = 0.0,
            py::arg("newton_abs_tol") = 0.0, py::arg("newton_fd_eps") = 1e-7,
            py::arg("newton_diagnostics") = false, py::arg("newton_damping") = 1.0,
-           py::arg("newton_fail_policy") = "none")
+           py::arg("newton_fail_policy") = "none",
+           // Limiteur de POSITIVITE Zhang-Shu (ADC-76) : plancher de densite des etats de face
+           // reconstruits (scaling conservatif vers la moyenne de cellule). 0 (defaut) = inactif,
+           // chemin bit-identique. Exige un modele exposant le role Density.
+           py::arg("positivity_floor") = 0.0)
       // Rapport Newton (diagnostics IMEX OPT-IN) : dict {enabled, converged, max_residual,
       // max_iters_used, n_failed, failed_cell, failed_component}, agrege sur les sous-pas de la
       // DERNIERE avance du bloc. failed_cell = (i, j) d'UNE cellule fautive ou None.
@@ -206,7 +210,7 @@ PYBIND11_MODULE(_adc, m) {
       .def("add_compiled_block", &System::add_compiled_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("substeps") = 1,
-           py::arg("names") = std::vector<std::string>{})
+           py::arg("names") = std::vector<std::string>{}, py::arg("positivity_floor") = 0.0)
       // P7-b : change les parametres RUNTIME d'un bloc AOT SANS recompiler le .so. values = bloc
       // complet (ordre trie des noms cote DSL). cf. System::set_block_params.
       .def("set_block_params", &System::set_block_params, py::arg("name"), py::arg("values"))
@@ -216,7 +220,8 @@ PYBIND11_MODULE(_adc, m) {
       .def("add_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
-           py::arg("substeps") = 1, py::arg("evolve") = true, py::arg("stride") = 1)
+           py::arg("substeps") = 1, py::arg("evolve") = true, py::arg("stride") = 1,
+           py::arg("positivity_floor") = 0.0)
       .def("add_ionization", &System::add_ionization, py::arg("electron"), py::arg("ion"),
            py::arg("neutral"), py::arg("rate"))
       .def("add_collision", &System::add_collision, py::arg("a"), py::arg("b"), py::arg("rate"))
