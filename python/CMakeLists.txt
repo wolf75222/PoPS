@@ -283,6 +283,7 @@ foreach(t
     test_dsl_jit_te           # T_e (derive p/rho) via add_dynamic_block (.so JIT)
     test_dsl_aot_bz           # B_z via add_compiled_block (.so AOT)
     test_dsl_aot_te           # T_e via add_compiled_block (.so AOT)
+    test_aux_named            # ADC-70 phase 1 : champs aux NOMMES par modele (m.aux_field) sur System cartesien
     test_block_names_dynamic  # block_names() voit le bloc dynamique (.so JIT), pas seulement add_block
     test_dsl_abi_metadata     # noms/roles/gamma transportes par l'ABI du .so (AOT+JIT) + retro-compat
     test_dsl_compile_facade   # facade m.compile(backend=...) -> moteurs JIT/AOT + metadonnees preservees

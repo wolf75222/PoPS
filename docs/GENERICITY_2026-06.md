@@ -299,8 +299,19 @@ est cable l'est reellement ; ce qui ne l'est pas est documente avec fichier:lign
    tensoriel sait decouper theta, mais le System (transport + Poisson direct) non, et il n'existe
    AUCUNE plomberie (BoxArray decoupe + DistributionMap + halos fill_boundary du transport polaire)
    pour le rendre multi-box. Rien n'est donc expose ; le verrou est documente, pas masque.
-4. **Aux** : toujours extensible PAR LISTE CANONIQUE (ADC_AUX_FIELDS + AUX_CANONICAL miroir
-   Python), pas d'auxiliaire arbitraire par modele.
+4. **Aux** : extensible par LISTE CANONIQUE (ADC_AUX_FIELDS + AUX_CANONICAL miroir Python : phi/grad/
+   B_z/T_e) **ET, depuis ADC-70 (phase 1), par champ NOMME declare par le modele** : `m.aux_field("nom")`
+   reserve une composante du canal aux a partir de `kAuxNamedBase = 5` (apres T_e), lue en C++ via
+   `aux.extra_field(k)` (tableau POD `Real extra[kAuxMaxExtra]`, device-clean ; `load_aux<NComp>` la
+   charge sous `if constexpr (NComp > kAuxNamedBase)` -> zero codegen au defaut, bit-identique). Cote
+   facade : `System.set_aux_field(bloc, nom, array)` / `aux_field(bloc, nom)` (resolution nom -> comp
+   dans la facade Python a partir de `CompiledModel.aux_extra_names`, le C++ ne manipule que des indices
+   via `set_aux_field_component`). Champs STATIQUES persistants (re-appliques apres `ensure_aux_width`,
+   comme B_z) ; au plus `kAuxMaxExtra = 4` par modele. B_z / T_e restent sur leurs chemins dedies (rejet
+   explicite redirigeant dans `set_aux_field`). PERIMETRE phase 1 = **System CARTESIEN** ; le `.so`
+   exporte un symbole optionnel `adc_compiled_aux_extra_names` (auto-description). SUIVI (phase 2) : AMR
+   (canal aux par niveau + regrid), polaire (validation), halos custom par champ, et table nom -> comp
+   cote C++ `System::Impl` (resolution sans la facade Python).
 5. **Briques natives ROLE-AWARE (fait)** : source.hpp (PotentialForce / GravityForce /
    MagneticLorentzForce) et elliptic.hpp (ChargeDensity / BackgroundDensity / GravityCoupling)
    portent desormais des MEMBRES d'indices (c_rho / c_mx / c_my / c_E, entiers POD -> device-clean),

@@ -227,6 +227,9 @@ struct System::Impl {
     if (c.geometry == "polar") return Box2D::from_extents(polar_nr(c), polar_ntheta(c));
     return Box2D::from_extents(c.n, c.n);
   }
+  // Nombre de cellules d'un champ defini par cellule (n*n cartesien / nr*ntheta polaire), pour la
+  // verification de taille des champs aux nommes (set_aux_field).
+  std::size_t aux_field_cell_count() const;
   // BoxArray du domaine d'INDICES. Cartesien (et polaire mono-box, theta_boxes <= 1) : UNE box couvrant
   // tout le domaine -> STRICTEMENT bit-identique a l'historique (ba = {index_domain}). Polaire avec
   // theta_boxes > 1 : decoupage en BANDES theta -- chaque box couvre tout le rayon [0, nr-1] et une
@@ -288,6 +291,7 @@ struct System::Impl {
     aux = MultiFab(ba, dm, aux_ncomp_, 1);
     fields_.apply_bz();
     fields_.apply_te();
+    fields_.apply_named_aux();  // re-applique les champs aux NOMMES (ADC-70) : le MultiFab reparti a zero
   }
 
   // apply_bz (peuplement de la composante B_z du canal aux) EXTRAIT vers fields_ (SystemFieldSolver).
@@ -946,6 +950,67 @@ void System::set_electron_temperature_from(const std::string& name) {
   // T_e (comp canonique 4) DERIVE : recalcule a chaque solve_fields. Inerte tant qu'aucun bloc ne
   // lit T_e (n_aux=5 -> ensure_aux_width(5)), comme set_magnetic_field pour B_z.
   p_->fields_.apply_te();
+}
+
+// Taille attendue d'un champ defini par cellule (cartesien n*n / polaire nr*ntheta). Membre de Impl :
+// un appelant libre ne pourrait pas nommer le type prive System::Impl.
+std::size_t System::Impl::aux_field_cell_count() const {
+  if (polar_) {
+    const int nr = polar_nr(cfg), nth = polar_ntheta(cfg);
+    return static_cast<std::size_t>(nr) * nth;
+  }
+  return static_cast<std::size_t>(cfg.n) * cfg.n;
+}
+
+void System::set_aux_field_component(int comp, const std::vector<double>& field) {
+  Impl* P = p_.get();
+  // Composantes RESERVEES (phi/grad/B_z/T_e) : un champ aux nomme commence a kAuxNamedBase (= 5).
+  // B_z et T_e gardent leurs chemins dedies -> message redirigeant (la facade Python intercepte deja
+  // les noms canoniques, cette garde couvre un appel C++ direct).
+  if (comp < kAuxNamedBase)
+    throw std::runtime_error(
+        "System::set_aux_field : composante " + std::to_string(comp) +
+        " reservee (phi/grad_x/grad_y/B_z/T_e) ; un champ aux nomme commence a l'indice " +
+        std::to_string(kAuxNamedBase) + " (B_z -> set_magnetic_field, T_e -> "
+        "set_electron_temperature_from)");
+  const std::size_t expect = P->aux_field_cell_count();
+  if (field.size() != expect)
+    throw std::runtime_error("System::set_aux_field : taille " + std::to_string(field.size()) +
+                             " != " + std::to_string(expect) + " (cellules de la grille)");
+  // Le canal aux doit etre assez large : un bloc declarant ce champ (n_aux = kAuxNamedBase + k + 1) a
+  // deja appele ensure_aux_width a son ajout. Sinon le champ ne serait lu par aucun modele -> erreur.
+  if (comp >= P->aux_ncomp_)
+    throw std::runtime_error(
+        "System::set_aux_field : le canal aux n'a que " + std::to_string(P->aux_ncomp_) +
+        " composantes ; aucun bloc ne declare de champ aux a l'indice " + std::to_string(comp) +
+        " (ajouter le bloc qui le lit avant set_aux_field)");
+  std::vector<Real> f(field.begin(), field.end());
+  p_->fields_.apply_named_aux_one(comp, f);  // peuple tout de suite (canal assez large)
+  p_->fields_.named_aux_[comp] = std::move(f);  // conserve pour une reallocation ulterieure du canal
+}
+
+std::vector<double> System::aux_field_component(int comp) const {
+  Impl* P = p_.get();
+  if (comp < kAuxNamedBase)
+    throw std::runtime_error(
+        "System::aux_field : composante " + std::to_string(comp) +
+        " reservee (phi/grad_x/grad_y/B_z/T_e) ; lire phi via potential(), un champ aux nomme commence "
+        "a l'indice " + std::to_string(kAuxNamedBase));
+  if (comp >= P->aux_ncomp_)
+    throw std::runtime_error(
+        "System::aux_field : le canal aux n'a que " + std::to_string(P->aux_ncomp_) +
+        " composantes ; aucun bloc ne declare de champ aux a l'indice " + std::to_string(comp));
+  device_fence();
+  // Rang sans box (MPI mono-box) : retour VIDE (cf. potential / copy_comp0). La facade Python est
+  // mono-rang ; le champ global multi-rangs serait un accesseur collectif dedie (suivi).
+  if (P->aux.local_size() == 0) return {};
+  const ConstArray4 a = P->aux.fab(0).const_array();
+  const Box2D v = P->aux.box(0);
+  std::vector<double> out;
+  out.reserve(static_cast<std::size_t>(v.nx()) * v.ny());
+  for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+    for (int i = v.lo[0]; i <= v.hi[0]; ++i) out.push_back(static_cast<double>(a(i, j, comp)));
+  return out;
 }
 
 void System::add_ionization(const std::string& electron, const std::string& ion,

@@ -93,6 +93,12 @@ ADC_HD StateVec<N> operator*(Real s, StateVec<N> a) {
   X(B_z, 3)               \
   X(T_e, 4)
 
+// Nombre MAXIMAL de champs aux NOMMES (declares par un modele via aux_field("...") cote DSL, ADC-70
+// phase 1) qu'un Aux peut transporter. Borne FIXE : Aux reste un POD trivialement copiable (tableau C
+// brut, device-clean) -- aucune allocation, pas de std::vector. Mettre a jour ICI et AUX_NAMED_MAX
+// cote DSL (python/adc/dsl.py) si on veut plus de quatre champs nommes par modele.
+inline constexpr int kAuxMaxExtra = 4;
+
 struct Aux {
   Real phi{};     // potentiel       (composante aux 0)
   Real grad_x{};  // d phi / d x     (composante aux 1)
@@ -103,11 +109,39 @@ struct Aux {
 #define ADC_AUX_DECL(name, idx) Real name{};
   ADC_AUX_FIELDS(ADC_AUX_DECL)
 #undef ADC_AUX_DECL
+  // Champs aux NOMMES par le modele (ADC-70 phase 1). Composantes du canal aux a partir de
+  // kAuxNamedBase (= 5, juste apres T_e) : extra[k] <-> composante (kAuxNamedBase + k). A 0 par
+  // defaut ; load_aux ne les charge QUE si le modele declare n_aux > kAuxNamedBase (if constexpr,
+  // zero cout au defaut). Lu dans une formule DSL via aux.extra_field(k).
+  Real extra[kAuxMaxExtra]{};
+
+  /// Lecture BORNEE d'un champ aux nomme (composante kAuxNamedBase + k). Renvoie 0 hors borne : la
+  /// brique generee n'appelle jamais extra_field avec un k que le modele n'a pas declare, mais la
+  /// garde rend l'acces sur (toujours device-clean, pas de branche dynamique sur k connu au codegen).
+  ADC_HD Real extra_field(int k) const {
+    return (k >= 0 && k < kAuxMaxExtra) ? extra[k] : Real(0);
+  }
 };
 
 // Largeur du canal aux du contrat de base (phi, grad phi). Un modele lisant des champs
 // supplementaires declare un n_aux plus grand ; cf. aux_comps()/load_aux().
 inline constexpr int kAuxBaseComps = 3;
+
+// Premiere composante des champs aux NOMMES (ADC-70 phase 1) : juste APRES les champs canoniques
+// B_z (3) et T_e (4), donc indice 5. Un modele declarant K champs nommes pose n_aux = kAuxNamedBase +
+// K ; extra[k] est la composante (kAuxNamedBase + k). Place APRES le canal canonique pour que les
+// noms utilisateur n'empietent jamais sur B_z / T_e (qui gardent leurs chemins dedies
+// set_magnetic_field / set_electron_temperature_from). MIROIR Python : AUX_NAMED_BASE (dsl.py).
+inline constexpr int kAuxNamedBase = kAuxBaseComps + 2;  // = 5 (apres B_z=3, T_e=4)
+
+// Garde-fou : la base des champs nommes doit etre STRICTEMENT au-dela du dernier champ canonique
+// extra (le plus grand indice d'ADC_AUX_FIELDS + 1). Si on ajoute un champ canonique au-dela de T_e,
+// ce static_assert force a remonter kAuxNamedBase (et AUX_NAMED_BASE cote DSL) en consequence.
+#define ADC_AUX_NAMED_BASE_CHECK(name, idx) \
+  static_assert(kAuxNamedBase > (idx),      \
+      "kAuxNamedBase doit etre au-dela du champ aux canonique '" #name "'");
+ADC_AUX_FIELDS(ADC_AUX_NAMED_BASE_CHECK)
+#undef ADC_AUX_NAMED_BASE_CHECK
 
 // Garde-fou : les indices declares dans ADC_AUX_FIELDS sont strictement EXTRA (>= base) et
 // commencent juste apres le contrat de base. Verifie a la compilation que la table reste

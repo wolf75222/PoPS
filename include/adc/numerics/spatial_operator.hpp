@@ -153,6 +153,16 @@ ADC_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
   if constexpr (NComp > (idx)) x.name = a(i, j, idx);
   ADC_AUX_FIELDS(ADC_AUX_LOAD)
 #undef ADC_AUX_LOAD
+  // Champs aux NOMMES (ADC-70 phase 1) : composantes a partir de kAuxNamedBase (= 5). Charges
+  // SEULEMENT si le modele declare n_aux > kAuxNamedBase (sinon if constexpr faux -> aucun codegen,
+  // NComp = kAuxBaseComps reste strictement bit-identique). La borne n_extra est connue a la
+  // compilation (NComp template) : la boucle est deroulee et clampee a kAuxMaxExtra (taille de
+  // x.extra) -- jamais d'acces hors du tableau C, device-clean.
+  if constexpr (NComp > kAuxNamedBase) {
+    constexpr int n_extra =
+        (NComp - kAuxNamedBase) < kAuxMaxExtra ? (NComp - kAuxNamedBase) : kAuxMaxExtra;
+    for (int k = 0; k < n_extra; ++k) x.extra[k] = a(i, j, kAuxNamedBase + k);
+  }
   return x;
 }
 

@@ -329,6 +329,21 @@ class System {
   /// ADC_EXPORT : appelee par add_compiled_model (en-tete) -> doit etre exportee pour le loader .so.
   ADC_EXPORT void ensure_aux_width(int ncomp);
 
+  /// Fixe un champ aux NOMME (ADC-70 phase 1) sur la composante canonique @p comp (>= kAuxNamedBase
+  /// = 5), tableau row-major n*n (cartesien) / nr*ntheta (polaire). Le System ne connait PAS les
+  /// noms : la FACADE (adc.System.set_aux_field) resout nom -> comp via la table du bloc (issue de
+  /// CompiledModel.aux_extra_names) et appelle ceci. Champ STATIQUE PERSISTANT : stocke (re-applique
+  /// apres une reallocation du canal) et peuple tout de suite si le canal est assez large. @throws si
+  /// comp < kAuxNamedBase (composantes reservees phi/grad/B_z/T_e : chemins dedies), si la taille ne
+  /// correspond pas a la grille, ou si aucun bloc ne declare un champ a cet indice (canal trop etroit).
+  void set_aux_field_component(int comp, const std::vector<double>& field);
+
+  /// Lit un champ aux NOMME (composante @p comp >= kAuxNamedBase) : cellules valides du canal aux,
+  /// row-major n*n (cartesien) / nr*ntheta (polaire). Pendant de potential() pour une composante
+  /// nommee. Vaut 0 partout tant qu'aucun set_aux_field_component n'a ecrit cette composante (le canal
+  /// aux est initialise a zero et solve_fields ne touche jamais les composantes >= kAuxNamedBase).
+  std::vector<double> aux_field_component(int comp) const;
+
   /// Fixe la densite d'une espece (composante 0), tableau n*n row-major. Les autres
   /// composantes (qte de mouvement, energie) sont posees a l'equilibre au repos.
   void set_density(const std::string& name, const std::vector<double>& rho);

@@ -1339,6 +1339,12 @@ class System:
         global _first_system_built
         _first_system_built = True
         self._s = _System(config)  # geometry == 'polar' construit un anneau global (Phase 2b, cf. PolarMesh)
+        # Table des champs aux NOMMES par bloc (ADC-70 phase 1) : bloc -> {nom: composante canonique}.
+        # Remplie par add_equation depuis CompiledModel.aux_extra_names (la composante du k-ieme nom =
+        # dsl.AUX_NAMED_BASE + k). C'est la FACADE qui detient les noms : le C++ ne manipule que des
+        # indices de composante (set_aux_field_component / aux_field_component). Vide pour un bloc sans
+        # champ aux nomme. cf. set_aux_field / aux_field.
+        self._aux_field_index = {}
 
     def add_block(self, name, model, spatial=None, time=None, evolve=True):
         spatial = spatial if spatial is not None else Spatial()
@@ -1463,6 +1469,13 @@ class System:
                              % (len(names), name, compiled.n_vars))
         names_arg = list(names) if names is not None else []
 
+        # Champs aux NOMMES (ADC-70 phase 1) : table nom -> composante du bloc, depuis les noms ORDONNES
+        # du modele compile (le k-ieme nom = composante dsl.AUX_NAMED_BASE + k, miroir de l'emission C++).
+        # Consommee par set_aux_field / aux_field. add_compiled_block / add_native_block / add_dynamic_block
+        # ont deja elargi le canal aux (adc_compiled_naux -> ensure_aux_width), donc la composante existe.
+        extra = list(getattr(compiled, "aux_extra_names", []) or [])
+        self._aux_field_index[name] = {nm: dsl.AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
+
         backend = compiled.backend
         # Garde-fou flux numerique : HLLC/Roe exigent une pression -> la brique generee n'emet
         # pressure()/wave_speeds() que si une primitive 'p' est declaree. Sans 'p', make_block ne
@@ -1557,6 +1570,56 @@ class System:
                                      spatial.recon, time.kind, gamma, nsub, evolve, nstride)
             return
         raise ValueError("add_equation : adder %r inconnu (backend %r)" % (adder, backend))
+
+    def _resolve_aux_field(self, block, name):
+        """Resout (bloc, nom de champ aux NOMME) -> composante canonique du canal aux (ADC-70 phase 1).
+        Regle de resolution : un nom CANONIQUE (phi/grad/B_z/T_e) est REJETE ici -- ces champs ont
+        leurs chemins dedies (B_z -> set_magnetic_field, T_e -> set_electron_temperature_from, phi/grad
+        derives par solve_fields). Sinon on cherche dans la table du bloc (remplie a add_equation depuis
+        le modele compile). Leve ValueError avec un message actionnable sur bloc/nom inconnu."""
+        from . import dsl  # import tardif (cycle dsl <-> __init__)
+        if name == "B_z":
+            raise ValueError(
+                "set_aux_field : 'B_z' (champ magnetique) se fixe via sim.set_magnetic_field(Bz), "
+                "PAS via set_aux_field (B_z est un champ aux canonique, pas un champ nomme).")
+        if name == "T_e":
+            raise ValueError(
+                "set_aux_field : 'T_e' (temperature electronique) est DERIVE d'un bloc fluide via "
+                "sim.set_electron_temperature_from(bloc), PAS fixe via set_aux_field.")
+        if name in dsl.AUX_CANONICAL:
+            raise ValueError(
+                "set_aux_field : '%s' est un champ aux CANONIQUE (derive par le solveur, non fixable) ; "
+                "set_aux_field ne porte que les champs NOMMES declares par m.aux_field(...)." % name)
+        table = self._aux_field_index.get(block)
+        if table is None:
+            raise ValueError(
+                "set_aux_field : bloc '%s' inconnu (ou ajoute sans champ aux nomme) ; ajouter le bloc "
+                "via add_equation(model=...) avec un modele declarant m.aux_field('%s')." % (block, name))
+        if name not in table:
+            known = sorted(table) if table else "(aucun)"
+            raise ValueError(
+                "set_aux_field : champ aux '%s' non declare par le bloc '%s' ; champs nommes connus : %s"
+                % (name, block, known))
+        return table[name]
+
+    def set_aux_field(self, block, name, field):
+        """Fixe un champ aux NOMME (ADC-70 phase 1) d'un bloc : @p name doit avoir ete declare par le
+        modele via m.aux_field(name) (et le bloc ajoute par add_equation). @p field : tableau 2D (ny, nx)
+        ou plat (n*n), row-major. Le champ est STATIQUE (fourni par l'utilisateur, comme B_z) et PERSISTE
+        d'un pas a l'autre (solve_fields ne reecrit jamais les composantes nommees). Pour B_z / T_e,
+        utiliser leurs chemins dedies (set_magnetic_field / set_electron_temperature_from)."""
+        import numpy as np
+        comp = self._resolve_aux_field(block, name)
+        arr = np.asarray(field, dtype=float)
+        self._s.set_aux_field_component(comp, arr.reshape(-1))
+
+    def aux_field(self, block, name):
+        """Lit un champ aux NOMME (ADC-70 phase 1) d'un bloc -> tableau 2D (ny, nx). Vaut 0 partout tant
+        qu'aucun set_aux_field ne l'a ecrit (canal aux initialise a zero, jamais reecrit par solve_fields
+        au-dela des composantes derivees). @p name : declare par m.aux_field(name)."""
+        import numpy as np
+        comp = self._resolve_aux_field(block, name)
+        return np.asarray(self._s.aux_field_component(comp), dtype=float)
 
     def run(self, t_end, cfl=0.4, max_steps=1_000_000):
         """Avance jusqu'a t_end par pas CFL (sucre : `while time() < t_end: step_cfl(cfl)`).
@@ -2216,6 +2279,16 @@ def capabilities():
         "amr_layout": {
             "set_conservative_state": "mono-bloc ET multi-blocs natifs (vague 3 ; loaders .so : "
                                       "rejet explicite)",
+        },
+        "aux": {
+            "canonical": "phi/grad_x/grad_y (base) + B_z (set_magnetic_field) + T_e "
+                         "(set_electron_temperature_from), liste fermee ADC_AUX_FIELDS/AUX_CANONICAL",
+            "named": "champs NOMMES par modele (ADC-70 phase 1) : m.aux_field('nom') -> composantes "
+                     ">= 5 (kAuxNamedBase) ; set_aux_field(bloc, nom, array) / aux_field(bloc, nom) sur "
+                     "System CARTESIEN ; au plus kAuxMaxExtra=4 par modele ; statiques, persistants",
+            "named_followups": "AMR (canal aux par niveau / regrid), polaire (validation), halos "
+                               "custom par champ, table nom->comp cote C++ Impl (resolution sans "
+                               "Python) = SUIVI ; phase 1 = System cartesien seulement",
         },
     }
 

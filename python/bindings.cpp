@@ -315,6 +315,19 @@ PYBIND11_MODULE(_adc, m) {
              s.set_magnetic_field(flat(arr));
            },
            py::arg("bz"))
+      // Champs aux NOMMES (ADC-70 phase 1) : par COMPOSANTE canonique (>= 5). La resolution nom ->
+      // comp vit dans la facade Python (adc.System.set_aux_field), qui appelle ces deux methodes.
+      .def("set_aux_field_component",
+           [](System& s, int comp,
+              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+             s.set_aux_field_component(comp, flat(arr));
+           },
+           py::arg("comp"), py::arg("field"))
+      .def("aux_field_component",
+           [](const System& s, int comp) {
+             return to_2d(s.aux_field_component(comp), s.ny(), s.nx());
+           },
+           py::arg("comp"))
       .def("set_electron_temperature_from", &System::set_electron_temperature_from,
            py::arg("name"))
       .def("set_density",

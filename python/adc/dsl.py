@@ -548,6 +548,14 @@ def _native_kokkos_flags():
 AUX_CANONICAL = {"phi": 0, "grad_x": 1, "grad_y": 2, "B_z": 3, "T_e": 4}
 AUX_BASE_COMPS = 3
 
+# Champs aux NOMMES par le modele (ADC-70 phase 1) : m.aux_field("nom"). Composantes a partir de
+# AUX_NAMED_BASE (= 5, juste apres T_e=4) -- le k-ieme nom declare est la composante AUX_NAMED_BASE + k,
+# lue en C++ via aux.extra_field(k). MIROIRS de kAuxNamedBase / kAuxMaxExtra (include/adc/core/state.hpp,
+# source unique C++). Decouple les noms utilisateur du canal canonique : B_z / T_e gardent leurs indices
+# 3 / 4 et leurs chemins dedies (set_magnetic_field / set_electron_temperature_from).
+AUX_NAMED_BASE = 5
+AUX_NAMED_MAX = 4  # nombre maximal de champs aux nommes par modele (= kAuxMaxExtra cote C++)
+
 # Borne du nombre de parametres RUNTIME par bloc (P7-b). MIROIR de kMaxRuntimeParams
 # (include/adc/runtime/runtime_params.hpp) : le porteur C++ RuntimeParams a un tableau de cette taille
 # FIXE (device-copiable sans allocation), donc un modele depassant la borne est rejete au codegen.
@@ -555,14 +563,24 @@ _K_MAX_RUNTIME_PARAMS = 32
 
 
 def aux_n_aux(aux_names):
-    """Largeur du canal aux requise par ces champs : max(3, plus grand indice canonique + 1).
-    Leve ValueError sur un nom inconnu (un champ aux DOIT etre une composante de adc::Aux)."""
+    """Largeur du canal aux requise par ces champs CANONIQUES : max(3, plus grand indice + 1).
+    Leve ValueError sur un nom inconnu (un champ aux canonique DOIT etre une composante de adc::Aux)."""
     w = AUX_BASE_COMPS
     for nm in aux_names:
         if nm not in AUX_CANONICAL:
             raise ValueError("champ aux '%s' inconnu : attendus %s (composantes de adc::Aux)"
                              % (nm, sorted(AUX_CANONICAL)))
         w = max(w, AUX_CANONICAL[nm] + 1)
+    return w
+
+
+def aux_total_n_aux(aux_names, aux_extra_names):
+    """Largeur TOTALE du canal aux : max de la largeur canonique (aux_n_aux) et, si des champs NOMMES
+    (aux_field) sont declares, AUX_NAMED_BASE + nombre de noms (le dernier nomme = composante
+    AUX_NAMED_BASE + len-1). Sans champ nomme -> aux_n_aux (chemin historique, bit-identique)."""
+    w = aux_n_aux(aux_names)
+    if aux_extra_names:
+        w = max(w, AUX_NAMED_BASE + len(aux_extra_names))
     return w
 
 
@@ -1094,7 +1112,8 @@ class HyperbolicModel:
         self.name = name
         self.cons_names = []
         self.prim_defs = {}     # nom -> Expr (en fonction des cons / prims precedents / aux)
-        self.aux_names = []
+        self.aux_names = []      # champs aux CANONIQUES lus (phi/grad/B_z/T_e), cf. AUX_CANONICAL
+        self.aux_extra_names = []  # champs aux NOMMES (aux_field) : ordre = indice AUX_NAMED_BASE + k
         self._flux = {}         # "x" / "y" -> liste d'Expr (une par composante conservative)
         self._eig = {}          # "x" / "y" -> liste d'Expr (valeurs propres)
         self._source = None     # liste d'Expr (une par composante) ou None
@@ -1134,9 +1153,57 @@ class HyperbolicModel:
         return Var(name, "prim")
 
     def aux(self, name):
-        """Champ auxiliaire (p.ex. E_x, E_y, B_z) fourni a l'execution."""
+        """Champ auxiliaire CANONIQUE (p.ex. grad_x, grad_y, B_z, T_e) fourni a l'execution. Le nom
+        DOIT etre une clef de AUX_CANONICAL. Pour un champ NOMME arbitraire, voir aux_field."""
         self.aux_names.append(name)
         return Var(name, "aux")
+
+    def aux_field(self, name):
+        """Champ auxiliaire NOMME (ADC-70 phase 1) fourni a l'execution par bloc via
+        System.set_aux_field(bloc, name, array). Contrairement a aux(...) (composantes CANONIQUES
+        phi/grad/B_z/T_e), name est ARBITRAIRE : le k-ieme appel reserve la composante
+        AUX_NAMED_BASE + k du canal aux (lue en C++ via aux.extra_field(k)). Renvoie une Var
+        utilisable dans flux / source / eigenvalues / elliptic_rhs comme toute autre variable aux.
+
+        Au plus AUX_NAMED_MAX champs nommes par modele (borne FIXE cote C++, Aux POD). Un nom deja
+        canonique (B_z, T_e, phi...) est REJETE : ces champs ont leurs chemins dedies (aux('B_z') +
+        set_magnetic_field, etc.) ; un doublon de nom nomme est aussi rejete."""
+        # Le nom devient une LOCALE C++ dans la formule generee (cf. _aux_locals_lines) ET la cle de la
+        # table de la facade : il doit etre un identifiant C++ valide (lettres/chiffres/_, pas un
+        # chiffre en tete). Rejet explicite plutot qu'un .so qui ne compile pas.
+        if not (isinstance(name, str) and name.isidentifier()):
+            raise ValueError("aux_field(%r) : nom invalide (identifiant C++ attendu : "
+                             "lettres/chiffres/_, sans chiffre initial)" % (name,))
+        if name in AUX_CANONICAL:
+            raise ValueError(
+                "aux_field('%s') : '%s' est un champ aux CANONIQUE ; utiliser aux('%s') (et le "
+                "chemin dedie, p.ex. set_magnetic_field pour B_z, set_electron_temperature_from "
+                "pour T_e)" % (name, name, name))
+        if name in self.aux_extra_names:
+            raise ValueError("aux_field('%s') : champ deja declare" % name)
+        if len(self.aux_extra_names) >= AUX_NAMED_MAX:
+            raise ValueError("aux_field('%s') : au plus %d champs aux nommes par modele "
+                             "(borne kAuxMaxExtra cote C++)" % (name, AUX_NAMED_MAX))
+        self.aux_extra_names.append(name)
+        return Var(name, "aux")
+
+    def _aux_locals_lines(self):
+        """Locales C++ pour les champs aux lus dans une formule : canonique '<n>' <- a.<n> ;
+        nomme '<n>' <- a.extra_field(k) (k = position dans aux_extra_names). Le nom de la locale est
+        IDENTIQUE a celui que l'Expr emet (Var.to_cpp), donc la formule la reference directement."""
+        lines = ["    const adc::Real %s = a.%s;" % (n, n) for n in self.aux_names]
+        lines += ["    const adc::Real %s = a.extra_field(%d);" % (n, k)
+                  for k, n in enumerate(self.aux_extra_names)]
+        return lines
+
+    def _reads_aux(self):
+        """Vrai si une formule lit un champ aux (canonique ou nomme) : pilote le nommage du parametre
+        Aux ('a' vs anonyme) pour ne pas declencher d'avertissement de parametre inutilise."""
+        return bool(self.aux_names) or bool(self.aux_extra_names)
+
+    def _total_n_aux(self):
+        """Largeur TOTALE du canal aux du modele (canonique + champs nommes)."""
+        return aux_total_n_aux(self.aux_names, self.aux_extra_names)
 
     def set_flux(self, x, y): self._flux = {"x": list(x), "y": list(y)}
     def set_eigenvalues(self, x, y): self._eig = {"x": list(x), "y": list(y)}
@@ -1351,7 +1418,8 @@ class HyperbolicModel:
     def check(self):
         """Verifie que toute variable referencee (primitives, flux, valeurs propres, source) est
         bien declaree (cons / prim / aux). Leve ValueError sinon (verification de dependances)."""
-        known = set(self.cons_names) | set(self.prim_defs) | set(self.aux_names)
+        known = (set(self.cons_names) | set(self.prim_defs) | set(self.aux_names)
+                 | set(self.aux_extra_names))  # champs aux nommes (aux_field) : ADC-70
         used = set()
         groups = [self._flux.get("x", []), self._flux.get("y", []),
                   self._eig.get("x", []), self._eig.get("y", []), self._source or [],
@@ -1434,7 +1502,7 @@ class HyperbolicModel:
             U = np.asarray(samples, dtype=float)
             if U.ndim != 2 or U.shape[0] != nv:
                 raise ValueError("check_model : samples doit etre (n_vars=%d, N)" % nv)
-        a = {n: np.zeros(U.shape[1]) for n in self.aux_names}
+        a = {n: np.zeros(U.shape[1]) for n in (self.aux_names + self.aux_extra_names)}
         if aux:
             for k, v in aux.items():
                 a[k] = np.broadcast_to(np.asarray(v, dtype=float), (U.shape[1],)).copy()
@@ -1640,11 +1708,11 @@ class HyperbolicModel:
             return ["    const adc::Real %s = %s;" % (p, e.to_cpp()) for p, e in self.prim_defs.items()]
 
         def aux_locals():
-            return ["    const adc::Real %s = a.%s;" % (n, n) for n in self.aux_names]
+            return self._aux_locals_lines()  # canonique (a.<n>) + nommes (a.extra_field(k)), ADC-70
 
-        # parametre Aux nomme 'a' uniquement si une formule lit un champ auxiliaire (sinon anonyme,
-        # pour ne pas declencher d'avertissement de parametre inutilise).
-        aux_param = "const Aux& a" if self.aux_names else "const Aux&"
+        # parametre Aux nomme 'a' uniquement si une formule lit un champ auxiliaire (canonique OU
+        # nomme ; sinon anonyme, pour ne pas declencher d'avertissement de parametre inutilise).
+        aux_param = "const Aux& a" if self._reads_aux() else "const Aux&"
 
         def eig_reduce(cpps, ind):
             # cpps : C++ deja genere (eventuellement CSE) des valeurs propres. Noms internes a suffixe
@@ -1700,9 +1768,11 @@ class HyperbolicModel:
         ]
         if rt_member:  # membre adc::RuntimeParams params{count, {defauts}} (P7-b)
             S.append(rt_member.rstrip("\n"))
-        # n_aux si une formule (flux / valeurs propres) lit un champ aux supplementaire (B_z...).
-        if aux_n_aux(self.aux_names) > AUX_BASE_COMPS:
-            S.append("  static constexpr int n_aux = %d;" % aux_n_aux(self.aux_names))
+        # n_aux si une formule (flux / valeurs propres) lit un champ aux supplementaire : canonique
+        # (B_z...) OU nomme (aux_field -> kAuxNamedBase + k). Sans champ extra -> pas de n_aux emis,
+        # brique strictement bit-identique a l'historique.
+        if self._total_n_aux() > AUX_BASE_COMPS:
+            S.append("  static constexpr int n_aux = %d;" % self._total_n_aux())
         S += [
             "",
             "  ADC_HD State flux(const State& U, %s, int dir) const {" % aux_param,
@@ -1976,9 +2046,9 @@ class HyperbolicModel:
             return ["    const adc::Real %s = %s;" % (p, e.to_cpp()) for p, e in self.prim_defs.items()]
 
         def aux_locals():
-            return ["    const adc::Real %s = a.%s;" % (nm_, nm_) for nm_ in self.aux_names]
+            return self._aux_locals_lines()  # canonique (a.<n>) + nommes (a.extra_field(k)), ADC-70
 
-        na = aux_n_aux(self.aux_names)  # largeur aux requise (B_z... -> > 3)
+        na = self._total_n_aux()  # largeur aux requise (B_z / T_e / champs nommes -> > 3)
         rt_member = self._runtime_params_member()  # P7-b : indices runtime AVANT tout to_cpp()
         S = [
             "#include <cmath>",  # autosuffisant pour std::sqrt / std::pow
@@ -2085,6 +2155,16 @@ class HyperbolicModel:
         out = "\nADC_EXPORT_BLOCK_METADATA(%s)\n" % model_alias
         if self.gamma is not None:
             out += "ADC_EXPORT_BLOCK_GAMMA(%r)\n" % self.gamma
+        # Table des noms d'aux NOMMES (aux_field, ADC-70), CSV ordonne (ordre = indice AUX_NAMED_BASE +
+        # k). Symbole OPTIONNEL, motif des noms/roles : rend le .so AUTO-DESCRIPTIF (un loader C++
+        # pourrait resoudre nom -> composante ; cote Python la table vit deja dans CompiledModel). Emis
+        # SEULEMENT si le modele declare des champs nommes -> retro-compatible (.so sans champ nomme
+        # inchange, symbole absent).
+        if self.aux_extra_names:
+            # Noms = identifiants C++ valides (valides dans aux_field) -> CSV sans guillemet, litteral
+            # C sur (uniquement [A-Za-z0-9_,]).
+            out += ('extern "C" const char* adc_compiled_aux_extra_names() { return "%s"; }\n'
+                    % ",".join(self.aux_extra_names))
         return out
 
     def emit_cpp_so_source(self, name=None):
@@ -2405,7 +2485,14 @@ class HyperbolicModel:
         if getattr(m, "_roe_rows", None) is not None:
             parts.append("roe_rows=%s" % ";".join(repr(e) for k in ("x", "y")
                                                   for e in m._roe_rows[k]))
-        parts.append("n_aux=%d" % aux_n_aux(m.aux_names))
+        
+        parts.append("n_aux=%d" % aux_total_n_aux(m.aux_names, m.aux_extra_names))
+        # Champs aux NOMMES (aux_field, ADC-70) : leur ORDRE fixe l'indice (AUX_NAMED_BASE + k) -> ils
+        # entrent dans le hash (deux modeles ne differant que par un nom/ordre d'aux nomme sont
+        # distincts). N'ajoute la cle QUE si des champs nommes existent : un modele sans aux_field garde
+        # ainsi un hash STRICTEMENT identique a l'historique (cache .so + tracabilite preserves).
+        if m.aux_extra_names:
+            parts.append("aux_extra=%s" % ",".join(m.aux_extra_names))
         parts.append("gamma=%r" % m.gamma)
         # Les params entrent dans le hash par (nom, valeur de DECLARATION, kind). La valeur d'un param
         # RUNTIME (P7-b) y figure car elle SEEDE le defaut du membre RuntimeParams genere (donc deux .so
@@ -2676,7 +2763,7 @@ class CompiledModel:
 
     def __init__(self, so_path, backend, adder, cons_names, cons_roles, prim_names, n_vars,
                  gamma, n_aux, params, caps, abi_key, model_hash, cxx, std, target="system",
-                 hllc=False, roe=False):
+                 hllc=False, roe=False, aux_extra_names=None):
         self.has_hllc = bool(hllc)   # capability HLLC emise (enable_hllc) : hllc dispo hors Euler 4-var
         self.has_roe = bool(roe)     # hook ROE emis (enable_roe roles OU m.roe_dissipation fournie) : roe dispo hors Euler 4-var
         self.so_path = so_path
@@ -2689,6 +2776,10 @@ class CompiledModel:
         self.n_vars = int(n_vars)
         self.gamma = gamma           # None = defaut historique 1.4 cote System
         self.n_aux = int(n_aux)
+        # Noms des champs aux NOMMES (aux_field, ADC-70), ORDONNES : indice de la composante = position
+        # AUX_NAMED_BASE + k. La facade System.add_equation en construit la table nom -> composante par
+        # bloc, consommee par System.set_aux_field / aux_field. Vide pour un modele sans champ nomme.
+        self.aux_extra_names = list(aux_extra_names) if aux_extra_names else []
         self.params = dict(params)   # {name: Param}
         self.caps = dict(caps)       # {cpu/mpi/amr/gpu: bool}
         self.abi_key = abi_key       # cle ABI miroir d'adc_header_signature + compilateur/std
@@ -2833,8 +2924,15 @@ class Model:
         return None
 
     def aux(self, name):
-        """Champ auxiliaire (doit etre une clef de AUX_CANONICAL : phi/grad_x/grad_y/B_z/T_e)."""
+        """Champ auxiliaire CANONIQUE (doit etre une clef de AUX_CANONICAL : phi/grad_x/grad_y/B_z/T_e)."""
         return self._m.aux(name)
+
+    def aux_field(self, name):
+        """Champ auxiliaire NOMME (ADC-70 phase 1) fourni par bloc via System.set_aux_field(bloc, name,
+        array). name est ARBITRAIRE (identifiant) ; le k-ieme appel reserve la composante du canal aux
+        AUX_NAMED_BASE + k (lue en C++ via aux.extra_field(k)). Au plus AUX_NAMED_MAX par modele.
+        Renvoie une Var utilisable dans flux / source / eigenvalues. Delegue a HyperbolicModel.aux_field."""
+        return self._m.aux_field(name)
 
     def conservative_from(self, exprs):
         """Inverse prim -> cons (le DSL ne sait pas inverser symboliquement)."""
@@ -3068,11 +3166,12 @@ class Model:
         cm = CompiledModel(
             so_path=out_path, backend=backend, adder=adder, target=target,
             cons_names=m.cons_names, cons_roles=cons_roles, prim_names=m.prim_state,
-            n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_n_aux(m.aux_names),
+            n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_total_n_aux(m.aux_names, m.aux_extra_names),
             params=self.params, caps=_BACKEND_CAPS[backend],
             abi_key=abi_key, model_hash=model_hash,
             cxx=eff_cxx, std=eff_std, hllc=m._hllc,
-            roe=(m._roe or getattr(m, '_roe_rows', None) is not None))
+            roe=(m._roe or getattr(m, '_roe_rows', None) is not None),
+            aux_extra_names=m.aux_extra_names)
         # Trace de la politique 'auto' (ADC-63) : None si le backend etait explicite. Diagnostic,
         # jamais un choix muet -- cm.backend dit ce qui a ete construit, ceci dit POURQUOI.
         cm.backend_auto_reason = auto_reason

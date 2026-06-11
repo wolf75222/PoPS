@@ -16,6 +16,7 @@
 #include <cstdio>   // ADC_TRACE_SOLVE_FIELDS : trace de diagnostic device (env-gate, inerte par defaut)
 #include <cstdlib>  // getenv
 #include <functional>
+#include <map>      // named_aux_ : champs aux NOMMES (comp -> champ), re-appliques apres realloc du canal
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -124,6 +125,13 @@ class SystemFieldSolver {
   std::optional<MultiFab> phi_src_polar_;
   std::vector<Real> bz_field_;        // champ B_z(x) n*n row-major (vide si non fourni)
   int te_src_ = -1;                   // indice du bloc fluide source de T_e (-1 = aucune)
+  // Champs aux NOMMES (ADC-70 phase 1) fournis par l'utilisateur via System::set_aux_field : cle =
+  // composante canonique (>= kAuxNamedBase = 5), valeur = champ n*n (cartesien) / nr*ntheta (polaire)
+  // row-major. PERSISTANTS comme bz_field_ : solve_fields ne touche QUE les composantes 0..2 (phi,
+  // grad) et 4 (T_e via apply_te), donc les composantes >= 5 survivent d'un pas a l'autre ; mais une
+  // REALLOCATION du canal aux (ensure_aux_width) repart d'un MultiFab a zero -> on les re-applique
+  // alors (apply_named_aux), exactement comme apply_bz / apply_te.
+  std::map<int, std::vector<Real>> named_aux_;
 
   /// Peuple la composante B_z (indice kAuxBaseComps) du canal partage depuis bz_field_, sur les
   /// cellules valides. No-op si B_z non fourni ou si aucun bloc ne le lit (largeur de base). Les
@@ -168,6 +176,32 @@ class SystemFieldSolver {
           a(i, j, kTeComp) = p / rho;  // T = p / rho
         }
     }
+  }
+
+  /// Peuple UNE composante aux NOMMEE (indice canonique @p comp >= kAuxNamedBase) du canal partage
+  /// depuis @p field (row-major), sur les cellules valides. No-op si le canal est trop etroit
+  /// (aucun bloc ne lit cette composante) ou si le champ est vide. MEME patron que apply_bz : champ
+  /// STATIQUE fourni par l'utilisateur, jamais reecrit par solve_fields ; ses halos sont remplis par
+  /// solve_fields (fill_ghosts/fill_boundary sur tout le canal). Peuplement LOCAL au rang (iteration
+  /// sur les fabs locaux, no-op sur un rang sans box a np>1).
+  void apply_named_aux_one(int comp, const std::vector<Real>& field) {
+    if (field.empty() || owner_->aux_ncomp_ <= comp) return;
+    // LARGEUR DE LIGNE (axe rapide i) : n en cartesien (carre n x n), nr en polaire (anneau nr x
+    // ntheta). Index flat[j * row + i], identique a apply_bz / set_density.
+    const int row = owner_->polar_ ? owner_->aux.box(0).nx() : owner_->cfg.n;
+    for (int li = 0; li < owner_->aux.local_size(); ++li) {
+      Array4 a = owner_->aux.fab(li).array();
+      const Box2D v = owner_->aux.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          a(i, j, comp) = field[static_cast<std::size_t>(j) * row + i];
+    }
+  }
+
+  /// Re-applique TOUS les champs aux nommes stockes (cf. named_aux_). Appele par ensure_aux_width
+  /// apres une reallocation du canal aux (qui repart d'un MultiFab a zero), comme apply_bz / apply_te.
+  void apply_named_aux() {
+    for (const auto& kv : named_aux_) apply_named_aux_one(kv.first, kv.second);
   }
 
   // --- solveur elliptique (Poisson de systeme) -----------------------------
