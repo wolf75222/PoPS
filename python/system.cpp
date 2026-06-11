@@ -227,14 +227,37 @@ struct System::Impl {
     if (c.geometry == "polar") return Box2D::from_extents(polar_nr(c), polar_ntheta(c));
     return Box2D::from_extents(c.n, c.n);
   }
+  // BoxArray du domaine d'INDICES. Cartesien (et polaire mono-box, theta_boxes <= 1) : UNE box couvrant
+  // tout le domaine -> STRICTEMENT bit-identique a l'historique (ba = {index_domain}). Polaire avec
+  // theta_boxes > 1 : decoupage en BANDES theta -- chaque box couvre tout le rayon [0, nr-1] et une
+  // bande azimutale contigue (memes bornes que theta_split de test_polar_schur_multibox). Les bandes
+  // pavent EXACTEMENT [0, ntheta-1] (longueurs base + reste, mais theta_boxes divise ntheta -> bandes
+  // egales). check_geometry valide deja 1 <= theta_boxes <= ntheta et la divisibilite.
+  static BoxArray index_boxarray(const SystemConfig& c) {
+    if (c.geometry != "polar" || c.theta_boxes <= 1)
+      return BoxArray(std::vector<Box2D>{index_domain(c)});
+    const int nr = polar_nr(c), nth = polar_ntheta(c), nseg = c.theta_boxes;
+    std::vector<Box2D> boxes;
+    boxes.reserve(static_cast<std::size_t>(nseg));
+    int base = nth / nseg, rem = nth % nseg, cur = 0;
+    for (int k = 0; k < nseg; ++k) {
+      const int len = base + (k < rem ? 1 : 0);
+      boxes.push_back(Box2D{{0, cur}, {nr - 1, cur + len - 1}});
+      cur += len;
+    }
+    return BoxArray(std::move(boxes));
+  }
 
   explicit Impl(const SystemConfig& c)
       : cfg(c),
         geom{Box2D::from_extents(c.n, c.n), 0.0, c.L, 0.0, c.L},
         polar_(c.geometry == "polar"),
         pgeom_{index_domain(c), Real(c.r_min), Real(c.r_max)},
-        ba(std::vector<Box2D>{index_domain(c)}),
-        dm(1, n_ranks()),
+        // ba : UNE box (cartesien ou polaire mono-box) ; bandes theta si polaire theta_boxes > 1
+        // (decoupage du TRANSPORT). dm : round-robin (nboxes, nranks) -- 1 box -> dm(1, n_ranks())
+        // bit-identique a l'historique.
+        ba(index_boxarray(c)),
+        dm(ba.size(), n_ranks()),
         bc_(make_bc(c)),
         dom(index_domain(c)),
         per_{!polar_ && c.periodic, !polar_ && c.periodic},
@@ -349,12 +372,62 @@ struct System::Impl {
   // device_fence, le layout (composante-majeur) et l'erreur de taille a l'identique. Conserves comme
   // helpers de Impl car native_loader et les methodes de facade les appellent via P->copy_state /
   // P->write_state / P->copy_comp0 (point d'acces inchange, zero churn hors de ce fichier).
-  std::vector<double> copy_comp0(const MultiFab& mf) const { return blocks_.copy_comp0(mf); }
+  //
+  // MULTI-BOX (decoupage theta du transport polaire, ADC-67). Le store marshale via fab(0) -- valable
+  // pour l'unique box locale du cartesien et du polaire mono-box (local_size() <= 1, y compris MPI mono-
+  // box ou un rang sans box rend {}). Avec theta_boxes > 1, un rang porte PLUSIEURS boites locales
+  // (local_size() > 1) : on reconstruit alors le champ GLOBAL (taille dom.nx() x dom.ny()) en placant
+  // chaque box a ses indices GLOBAUX, exactement comme density_global / state_global (gather collectif,
+  // all_reduce_sum ; identite mono-rang). On NE TOUCHE PAS le store (extraction VERBATIM bit-identique) :
+  // le branchement local_size() <= 1 delegue tel quel -> cartesien et polaire mono-box INCHANGES.
+  std::vector<double> copy_comp0(const MultiFab& mf) const {
+    if (mf.local_size() <= 1) return blocks_.copy_comp0(mf);
+    device_fence();
+    const int gnx = dom.nx(), gny = dom.ny();
+    std::vector<double> out(static_cast<std::size_t>(gnx) * gny, 0.0);
+    for (int li = 0; li < mf.local_size(); ++li) {
+      const ConstArray4 u = mf.fab(li).const_array();
+      const Box2D v = mf.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          out[static_cast<std::size_t>(j) * gnx + i] = static_cast<double>(u(i, j, 0));
+    }
+    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
+  }
   std::vector<double> copy_state(const MultiFab& mf, int ncomp) const {
-    return blocks_.copy_state(mf, ncomp);
+    if (mf.local_size() <= 1) return blocks_.copy_state(mf, ncomp);
+    device_fence();
+    const int gnx = dom.nx(), gny = dom.ny();
+    std::vector<double> out(static_cast<std::size_t>(ncomp) * gnx * gny, 0.0);
+    for (int li = 0; li < mf.local_size(); ++li) {
+      const ConstArray4 u = mf.fab(li).const_array();
+      const Box2D v = mf.box(li);
+      for (int c = 0; c < ncomp; ++c)
+        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+            out[(static_cast<std::size_t>(c) * gny + j) * gnx + i] = static_cast<double>(u(i, j, c));
+    }
+    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
   }
   void write_state(MultiFab& mf, int ncomp, const std::vector<double>& in) {
-    blocks_.write_state(mf, ncomp, in);
+    if (mf.local_size() <= 1) { blocks_.write_state(mf, ncomp, in); return; }
+    // SCATTER multi-box : @p in est le champ GLOBAL (composante-majeur (c*gny + j)*gnx + i, meme layout
+    // que copy_state). Chaque rang ecrit UNIQUEMENT les cellules de ses boites locales (lecture aux
+    // indices globaux) -- aucune communication. Mono-rang : ecrit toutes les bandes.
+    const int gnx = dom.nx(), gny = dom.ny();
+    const std::size_t need = static_cast<std::size_t>(ncomp) * gnx * gny;
+    if (in.size() != need)
+      throw std::runtime_error("System::set_state : taille != ncomp*nr*ntheta (multi-box theta)");
+    for (int li = 0; li < mf.local_size(); ++li) {
+      Array4 u = mf.fab(li).array();
+      const Box2D v = mf.box(li);
+      for (int c = 0; c < ncomp; ++c)
+        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+            u(i, j, c) = in[(static_cast<std::size_t>(c) * gny + j) * gnx + i];
+    }
   }
 
   // push_dynamic<NV> (bloc DYNAMIQUE IModel<NV> charge depuis un .so) a ete EXTRAIT VERBATIM vers
@@ -385,6 +458,22 @@ void check_geometry(const SystemConfig& c) {
       throw std::runtime_error(
           "System : geometry='polar' exige nr >= 3 (stencil radial decentre d'ordre 2 aux parois ; "
           "phi sans ghost) ; cf. adc.PolarMesh");
+    // DECOUPAGE THETA du transport (theta_boxes, ADC-67). 1 (defaut) = mono-box, bit-identique. > 1 :
+    // bandes theta -- on exige 1 <= theta_boxes <= ntheta (au moins une cellule azimutale par bande) ET
+    // theta_boxes DIVISE ntheta (bandes EGALES : le decoupage par boite ne doit pas dependre du reste,
+    // et l'anneau periodique se recolle proprement). PolarMesh valide deja cote Python ; un appelant qui
+    // construit le SystemConfig a la main est protege ici.
+    const int nth = c.ntheta > 0 ? c.ntheta : c.n;
+    if (c.theta_boxes < 1)
+      throw std::runtime_error("System : geometry='polar' exige theta_boxes >= 1 (cf. adc.PolarMesh)");
+    if (c.theta_boxes > nth)
+      throw std::runtime_error(
+          "System : geometry='polar' exige theta_boxes <= ntheta (au moins une cellule azimutale par "
+          "bande) ; cf. adc.PolarMesh");
+    if (nth % c.theta_boxes != 0)
+      throw std::runtime_error(
+          "System : geometry='polar' exige que theta_boxes DIVISE ntheta (bandes azimutales egales) ; "
+          "cf. adc.PolarMesh");
     return;
   }
   throw std::runtime_error("System : geometry '" + c.geometry +
@@ -1279,6 +1368,29 @@ void System::set_gauss_policy(const std::string& policy) {
 
 void System::set_density(const std::string& name, const std::vector<double>& rho) {
   Impl::Species& s = p_->find(name);
+  const Real gm1 = Real(s.gamma) - Real(1);
+  // Helper local : pose densite + etat au repos sur UNE cellule (memes formules que l'historique).
+  auto set_cell = [&](Array4& u, int i, int j, Real r) {
+    u(i, j, 0) = r;
+    if (s.ncomp >= 3) { u(i, j, 1) = 0; u(i, j, 2) = 0; }  // qte de mvt au repos
+    if (s.ncomp == 4) u(i, j, 3) = r / gm1;                // E = p/(g-1), p = rho
+  };
+  // MULTI-BOX (theta_boxes > 1, polaire) : @p rho est le champ GLOBAL (nr x ntheta, layout flat[j*gnx+i]
+  // identique au mono-box ci-dessous). On ecrit chaque box locale a ses indices GLOBAUX. local_size() <= 1
+  // (cartesien / polaire mono-box, y compris MPI mono-box) : chemin historique INCHANGE, bit-identique.
+  if (s.U.local_size() > 1) {
+    const int gnx = p_->dom.nx(), gny = p_->dom.ny();
+    if (static_cast<int>(rho.size()) != gnx * gny)
+      throw std::runtime_error("System::set_density : taille != nr*ntheta (multi-box theta)");
+    for (int li = 0; li < s.U.local_size(); ++li) {
+      Array4 u = s.U.fab(li).array();
+      const Box2D b = s.U.box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+          set_cell(u, i, j, rho[static_cast<std::size_t>(j) * gnx + i]);
+    }
+    return;
+  }
   // Layout row-major du tableau d'entree : (ni x nj) = extents de la box de l'etat. En cartesien
   // ni = nj = cfg.n (indexation et taille bit-identiques a avant). En polaire ni = nr, nj = ntheta :
   // on indexe par les extents reels de la box (et non n*n), donc nr != ntheta est correctement gere.
@@ -1286,19 +1398,14 @@ void System::set_density(const std::string& name, const std::vector<double>& rho
   const int ni = v.nx(), nj = v.ny();
   if (static_cast<int>(rho.size()) != ni * nj)
     throw std::runtime_error("System::set_density : taille != nr*ntheta (ou n*n en cartesien)");
-  const Real gm1 = Real(s.gamma) - Real(1);
   Array4 u = s.U.fab(0).array();
   // CONVENTION DE LAYOUT (inchangee vs l'historique) : axe lent = 2nd indice de box (j), axe rapide =
   // 1er (i), i.e. flat[(j-lo) * ni + (i-lo)]. En cartesien ni = n, lo = 0 -> flat[j*n+i] (bit-identique
   // a avant). En polaire le tableau est donc (nr, ntheta) ligne-par-ligne radiale (i = r lent par
   // rapport a... non : j = theta lent, i = r rapide), MEME ordre que density()/copy_comp0 -> coherent.
   for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-    for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-      const Real r = rho[static_cast<std::size_t>(j - v.lo[1]) * ni + (i - v.lo[0])];
-      u(i, j, 0) = r;
-      if (s.ncomp >= 3) { u(i, j, 1) = 0; u(i, j, 2) = 0; }  // qte de mvt au repos
-      if (s.ncomp == 4) u(i, j, 3) = r / gm1;                // E = p/(g-1), p = rho
-    }
+    for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+      set_cell(u, i, j, rho[static_cast<std::size_t>(j - v.lo[1]) * ni + (i - v.lo[0])]);
 }
 
 ADC_EXPORT void System::set_block_conversion(const std::string& name, CellConvert prim_to_cons,

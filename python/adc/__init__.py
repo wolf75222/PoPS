@@ -326,17 +326,27 @@ class PolarMesh:
       clair). 'hllc'/'roe' restent leves cote C++ (Euler 4 var, sans brique polaire) ;
     - Poisson polaire DIRECT (PolarPoissonSolver) : mono-rang, une box couvrant l'anneau ;
     - etage Schur polaire TENSORIEL (PolarCondensedSchurSourceStepper, via adc.Split/CondensedSchur) :
-      le solveur C++ est multi-rang/multi-box (decoupage theta), mais la FACADE construit encore une
-      box globale (system.cpp Impl ctor : ba mono-box ; set_source_stage L.~1095-1103 : pas de
-      decoupage theta pilotable cote facade). DECOUPAGE THETA NON EXPOSE volontairement : le transport
-      polaire (System.step) reste lui-meme mono-box -- exposer un parametre de decoupage serait une
-      facade mensongere (le solveur Schur tensoriel sait le faire, le System non). Cf.
-      docs/GENERICITY_2026-06.md section 3.
-    Pas de couplage cartesien<->polaire (anneau global). Bornes de pas optionnelles
-    (stability_speed/stability_dt/source_frequency) NON cablees sur le chemin polaire (transport
-    max_wave_speed seulement)."""
+      le solveur C++ est multi-rang/multi-box (decoupage theta).
 
-    def __init__(self, r_min, r_max, nr, ntheta):
+    DECOUPAGE THETA DU TRANSPORT (theta_boxes, ADC-67). theta_boxes=1 (defaut) = mono-box,
+    STRICTEMENT bit-identique a l'historique. theta_boxes>1 = l'anneau est decoupe en BANDES theta
+    (chaque boite couvre tout le rayon et une bande azimutale ; theta_boxes doit DIVISER ntheta et
+    rester <= ntheta) et le TRANSPORT polaire (assemble_rhs_polar + fill_ghosts collectif) tourne
+    multi-box. MATRICE des capacites multi-box :
+    - TRANSPORT polaire (System transport, get/set state, eval_rhs, density) : multi-box OK
+      (assemblage par boite + halos collectifs ; l'etat global est reconstruit a la lecture) ;
+    - Poisson polaire DIRECT (PolarPoissonSolver) : MONO-BOX ONLY. Un System a theta_boxes>1 qui
+      resout le champ direct (solve_fields / step / potential, p.ex. un bloc ExB scalaire couple)
+      leve une erreur AMONT claire (le solveur direct exige lignes theta + colonnes r completes sur
+      une box) : utiliser theta_boxes=1 OU l'etage Schur tensoriel ;
+    - etage Schur tensoriel polaire (adc.Split + adc.CondensedSchur) : multi-box (solveur C++
+      multi-box ; le decoupage theta est desormais pilotable par theta_boxes).
+    Mono-rang (le Poisson polaire direct refuse MPI). Pas de couplage cartesien<->polaire (anneau
+    global). Bornes de pas optionnelles (stability_speed/stability_dt/source_frequency) NON cablees
+    sur le chemin polaire (transport max_wave_speed seulement). Cf. docs/GENERICITY_2026-06.md
+    section 3 et adc.capabilities()['geometry']."""
+
+    def __init__(self, r_min, r_max, nr, ntheta, theta_boxes=1):
         if not (r_max > r_min >= 0.0):
             raise ValueError("PolarMesh : exige r_max > r_min >= 0 (anneau)")
         # nr >= 3 : la derive radiale de l'aux (System.solve_fields_polar) utilise un stencil DECENTRE
@@ -346,10 +356,21 @@ class PolarMesh:
             raise ValueError("PolarMesh : nr >= 3 (stencil radial decentre d'ordre 2 aux parois)")
         if ntheta < 1:
             raise ValueError("PolarMesh : ntheta >= 1")
+        # theta_boxes : decoupage du transport en bandes theta (1 = mono-box, defaut). On valide ICI
+        # (cote Python, message clair) ET cote C++ (check_geometry, pour un SystemConfig construit a la
+        # main) : 1 <= theta_boxes <= ntheta ET theta_boxes DIVISE ntheta (bandes azimutales egales).
+        tb = int(theta_boxes)
+        if tb < 1:
+            raise ValueError("PolarMesh : theta_boxes >= 1 (1 = mono-box)")
+        if tb > int(ntheta):
+            raise ValueError("PolarMesh : theta_boxes <= ntheta (au moins une cellule azimutale par bande)")
+        if int(ntheta) % tb != 0:
+            raise ValueError("PolarMesh : theta_boxes doit DIVISER ntheta (bandes azimutales egales)")
         self.r_min = float(r_min)
         self.r_max = float(r_max)
         self.nr = int(nr)
         self.ntheta = int(ntheta)
+        self.theta_boxes = tb
 
     def _apply(self, config):
         config.geometry = "polar"
@@ -357,6 +378,7 @@ class PolarMesh:
         config.ntheta = self.ntheta
         config.r_min = self.r_min
         config.r_max = self.r_max
+        config.theta_boxes = self.theta_boxes
         config.n = self.nr  # n sert de taille par defaut au reste de la config (diagnostics)
 
 
@@ -2069,8 +2091,19 @@ def capabilities():
         "poisson": {
             "system_cartesian": ["geometric_mg (paroi, eps(x), aniso, ecrante)",
                                  "fft (periodique, n = 2^k, eps constant, mono-box)"],
-            "system_polar": ["polar direct (mono-rang, une box)"],
+            "system_polar": ["polar direct (mono-rang, une box) -- REJET AMONT clair si theta_boxes>1"],
             "amr": ["geometric_mg seulement ; rhs charge_density|composite"],
+        },
+        "geometry": {
+            "system_cartesian": "carre n x n ; mono-box (multi-box = AmrSystem ou MPI mono-box)",
+            "system_polar": "anneau (r, theta) global ; theta_boxes=1 mono-box (defaut) OU "
+                            "theta_boxes>1 decoupage en bandes theta (divise ntheta). MATRICE "
+                            "multi-box (ADC-67) : TRANSPORT (assemble_rhs_polar + fill_ghosts "
+                            "collectif) multi-box OK ; Poisson polaire DIRECT mono-box only (rejet "
+                            "amont si theta_boxes>1) ; etage Schur tensoriel polaire multi-box. "
+                            "get/set state (et eval_rhs/density) reconstruisent l'anneau global "
+                            "multi-box ; mono-rang (le Poisson direct refuse MPI).",
+            "amr": "hierarchie de niveaux (BoxArray par niveau, regrid dynamique)",
         },
         "schur": {
             "system_cartesian": "complet ; roles/champs configurables (density=/momentum=/energy=/"

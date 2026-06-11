@@ -374,6 +374,19 @@ class SystemFieldSolver {
       throw std::runtime_error(
           "System::set_poisson (polaire) : permittivite variable / anisotrope / reaction non supportee "
           "par le Poisson polaire direct (Phase 2b ; operateur (1/r) d_r(r d_r) + (1/r^2) d_theta^2)");
+    // GARDE MULTI-BOX (ADC-67) : le Poisson polaire DIRECT (FFT-en-theta + tridiag-en-r) exige des
+    // LIGNES theta et des COLONNES radiales completes sur UNE box (PolarPoissonSolver rejette deja
+    // ba.size()!=1). On leve ICI un message AMONT clair -- avant la construction du solveur, donc des le
+    // 1er solve_fields / potential / set_potential d'un System a theta_boxes > 1 -- plutot que de laisser
+    // remonter le rejet bas niveau de PolarPoissonSolver. Le DECOUPAGE theta (theta_boxes > 1) ne sert
+    // qu'au TRANSPORT ; pour un champ electrostatique multi-box, passer par l'etage Schur tensoriel.
+    if (owner_->ba.size() != 1)
+      throw std::runtime_error(
+          "System : Poisson polaire DIRECT incompatible avec le decoupage theta (theta_boxes=" +
+          std::to_string(owner_->ba.size()) +
+          " boites) ; il exige une grille mono-box (theta_boxes=1). Pour un decoupage theta multi-box, "
+          "utiliser l'etage Schur tensoriel polaire (adc.Split + adc.CondensedSchur), multi-box, ou "
+          "revenir a theta_boxes=1.");
     // BC radiale : Dirichlet/Neumann depuis poisson_bc() (xlo/xhi). theta toujours periodique.
     const BCRec pbc = poisson_bc();
     pell_.emplace(owner_->pgeom_, owner_->ba, pbc);

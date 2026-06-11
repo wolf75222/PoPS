@@ -214,8 +214,30 @@ est cable l'est reellement ; ce qui ne l'est pas est documente avec fichier:lign
    `python/tests/test_polar_hll.py` (rusanov reproductible, hll fini ET distinct de rusanov) +
    `test_polar_rejections.test_polar_rejects_hll_on_scalar_exb`.
 
-2. **Decoupage theta polaire : NON expose** (decision honnete, cf. point 3 ci-dessous). Verifie :
-   le System polaire est mono-box ; aucune plomberie multi-box du transport. Rien expose.
+2. **Decoupage theta polaire : EXPOSE (ADC-67, met a jour la decision "NON expose" ci-dessus).**
+   `adc.PolarMesh(..., theta_boxes=N)` decoupe l'anneau en N BANDES theta (chaque boite couvre tout le
+   rayon `[0, nr-1]` et une bande azimutale ; `theta_boxes` doit DIVISER `ntheta` et rester
+   `<= ntheta`). `theta_boxes=1` (defaut) = mono-box, STRICTEMENT bit-identique. Plomberie : `system.cpp`
+   `Impl::index_boxarray` construit le BoxArray en bandes (reutilise la decoupe `theta_split` du test
+   `test_polar_schur_multibox`) + `DistributionMapping(ba.size(), n_ranks())` round-robin ;
+   `SystemConfig.theta_boxes` (append-only) + binding ; validation aux DEUX niveaux (`PolarMesh` cote
+   Python, `check_geometry` cote C++). MATRICE multi-box (honnete) :
+   - **TRANSPORT polaire multi-box OK** : `assemble_rhs_polar` itere `local_size()` et le residu de bloc
+     (`PolarBlockRhsEval`) remplit les ghosts par `fill_ghosts` COLLECTIF (halos inter-boites + theta
+     periodique + r physique) AVANT l'assemblage -- pas de raccourci mono-box (deja valide multi-box par
+     `test_polar_schur_multibox`, theta-split 8 boites). Le marshaling hote (`copy_state`/`copy_comp0`/
+     `write_state` cote `Impl`, et `set_density`) reconstruit/scatter l'anneau GLOBAL quand
+     `local_size()>1` (place chaque boite a ses indices globaux, comme `state_global`) -- le store reste
+     VERBATIM (chemin `local_size()<=1` delegue tel quel, bit-identique cartesien + polaire mono-box).
+   - **Poisson polaire DIRECT mono-box only** : `ensure_elliptic_polar` leve une erreur AMONT claire si
+     `ba.size()!=1` (avant la construction du `PolarPoissonSolver`, des le 1er `solve_fields`/`step`/
+     `potential`). Le solveur direct (FFT-en-theta + tridiag-en-r) exige lignes theta + colonnes r
+     completes sur une box. Message : pointer vers `theta_boxes=1` OU l'etage Schur tensoriel.
+   - **etage Schur tensoriel polaire multi-box** : le solveur C++ est deja multi-box ; `theta_boxes`
+     pilote desormais le decoupage cote facade.
+   Mono-rang (le Poisson direct refuse MPI). Tests : `python/tests/test_polar_theta_boxes.py`
+   (transport isotherme bit-identique theta_boxes=1/2/4 ; ExB scalaire ; rejets divisibilite + Poisson
+   direct multi-box ; round-trip get/set state multi-box). `adc.capabilities()['geometry']`.
 
 3. **IO System MULTI-RANGS** (`python/system.cpp` + `include/adc/runtime/system.hpp` + bindings +
    `python/adc/__init__.py`). Constat : `copy_state` / `copy_comp0` / `potential` lisaient `fab(0)`

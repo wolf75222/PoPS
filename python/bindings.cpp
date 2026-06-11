@@ -136,7 +136,8 @@ PYBIND11_MODULE(_adc, m) {
       .def_readwrite("nr", &SystemConfig::nr)
       .def_readwrite("ntheta", &SystemConfig::ntheta)
       .def_readwrite("r_min", &SystemConfig::r_min)
-      .def_readwrite("r_max", &SystemConfig::r_max);
+      .def_readwrite("r_max", &SystemConfig::r_max)
+      .def_readwrite("theta_boxes", &SystemConfig::theta_boxes);
 
   // ModelSpec : composition de briques generiques (transport/source/elliptic + parametres).
   // Aucun scenario nomme ; le sucre adc.Model(...) cote Python remplit ces champs.

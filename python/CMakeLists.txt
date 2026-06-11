@@ -293,6 +293,7 @@ foreach(t
     test_schur_via_system     # System -> run_source_stage -> etage Schur condense, briques natives (no AOT)
     test_amr_schur_via_system # AmrSystem -> etage source condense GLOBAL (amr-schur) mono-niveau, briques natives (no AOT)
     test_polar_schur_via_system  # System POLAIRE -> run_source_stage -> etage Schur condense POLAIRE (Voie A etape 2c -> PR6), briques natives
+    test_polar_theta_boxes    # System POLAIRE multi-box (decoupage theta, ADC-67) : transport bit-identique theta_boxes=1/2/4, rejets (divisibilite + Poisson direct multi-box), round-trip get/set state multi-box
     test_schur_conservation   # conservation discrete masse/momentum/energie + positivite du chemin cartesien-fluide-Schur (briques natives, no AOT)
     test_disc_domain_mask     # chantier T2 : contrat masque de domaine disque (inerte par defaut) -- disc_mask() tout-actif, inertie de step(), masque == level set, garde-fous
     test_fv_hll_minmod        # chemin generique HLL+minmod VISIBLE : FiniteVolume(riemann="hll") sur isotherme 3-var (non Euler), System + AMR, rejets explicites (hll sans wave_speeds, hllc hors Euler)

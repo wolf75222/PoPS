@@ -49,6 +49,15 @@ struct SystemConfig {
   int ntheta = 0;        ///< cellules azimutales (polaire ; 0 => prend n)
   double r_min = 0.0;    ///< rayon interieur de l'anneau (polaire)
   double r_max = 1.0;    ///< rayon exterieur de l'anneau (polaire)
+  // --- decoupage multi-box du TRANSPORT polaire (decoupage en BANDES theta, ADC-67) -----------------
+  // Nombre de boites de l'anneau, decoupe en theta (chaque boite couvre tout le rayon [0, nr-1] et une
+  // bande azimutale). 1 (defaut) = mono-box STRICTEMENT bit-identique a l'historique. theta_boxes > 1 :
+  // le transport polaire (assemble_rhs_polar + fill_ghosts collectif) tourne multi-box. CONTRAINTES (cf.
+  // PolarMesh / check_geometry) : 1 <= theta_boxes <= ntheta ET theta_boxes divise ntheta. INERTE en
+  // cartesien (le decoupage cartesien passe par AmrSystem / le multi-box MPI mono-box historique).
+  // PORTEE : transport multi-box OK ; Poisson polaire DIRECT mono-box only (rejet AMONT clair si
+  // theta_boxes > 1, cf. ensure_elliptic_polar) ; etage Schur tensoriel polaire multi-box.
+  int theta_boxes = 1;   ///< boites du decoupage theta du transport polaire (1 = mono-box)
 };
 
 /// Systeme multi-especes couple, compose a l'execution a partir de briques generiques.
