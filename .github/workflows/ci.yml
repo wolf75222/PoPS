@@ -86,8 +86,13 @@ jobs:
               - 'python/bindings.cpp'
               - 'python/CMakeLists.txt'
               - '.github/workflows/ci.yml'
+              # L'action composite installe le Kokkos des DEUX gates : la modifier (bump de
+              # version, flags) DOIT re-executer les gates, sinon une PR la touchant seule
+              # passerait au vert sans jamais construire (finding revue ADC-171).
+              - '.github/actions/**'
             python:
               - 'python/**'
+              - '.github/actions/**'
 
   # Calcule si la suite COMPLETE (MPI + Kokkos OpenMP) doit tourner. Plein si :
   #  - push sur master, OU
@@ -282,6 +287,35 @@ jobs:
       - name: ccache stats (Python module)
         if: always()
         run: ccache -s
+
+  # Agregation REQUISE : l'UNIQUE check a referencer dans la branch protection (ADC-166). Resout
+  # trois faiblesses structurelles du routage par chemins (findings revue ADC-171) :
+  #  (1) GitHub traite un required check SKIPPED comme PASSANT -> sans agregateur, une PR touchant
+  #      uniquement des fichiers hors filtres mergerait au vert sans jamais construire ;
+  #  (2) si le job `changes` echoue (action paths-filter, API), les gates sont skip en silence ->
+  #      ici gate ECHOUE explicitement (routage non fiable = pas de verdict) ;
+  #  (3) le nom du check reste STABLE meme si les gates sont re-decoupes plus tard.
+  # Un gate skip PAR LE ROUTAGE (changes en succes) reste un succes : c'est le but du routage.
+  gate:
+    name: gate (agregation requise)
+    runs-on: ubuntu-latest
+    needs: [changes, gate-cpp, gate-python]
+    if: always()
+    steps:
+      - name: Verdict
+        run: |
+          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python=${{ needs.gate-python.result }}"
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::routage (job changes) en echec : impossible de garantir quels gates devaient tourner"
+            exit 1
+          fi
+          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python.result }}"; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::un gate obligatoire a echoue ou ete annule ($r)" ; exit 1 ;;
+            esac
+          done
+          echo "gates OK"
 
   mpi:
     name: ubuntu-latest / MPI + Kokkos Serial
