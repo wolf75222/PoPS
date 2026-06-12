@@ -106,17 +106,17 @@ par cible : [docs/BACKEND_COVERAGE.md](docs/BACKEND_COVERAGE.md).
 
 | Plateforme | Role | Compilateur(s) | Backends valides |
 |---|---|---|---|
-| `x86_64-linux` (ubuntu-latest) | CI (gate + quality) | gcc (defaut runner), clang (jobs fuzz/tidy) | Kokkos Serial + OpenMP, MPI |
+| `x86_64-linux` (ubuntu-latest) | CI (gate + quality) | gcc (defaut runner), clang (job tidy ; fuzz des la vague 2 qualite) | Kokkos Serial + OpenMP, MPI |
 | `aarch64-darwin` (macOS) | dev local | AppleClang (build) ; LLVM Homebrew pour clang-format/clang-tidy/fuzzing | Kokkos Serial + OpenMP, MPI conda |
 | `aarch64-linux + CUDA` (GH200 / cluster ROMEO) | production HPC | gcc + nvcc CUDA 12.x | Kokkos CUDA, MPI multi-GPU |
 | `WSL2 Ubuntu` (Windows 11) | en cours (epic ADC-90) | comme Linux | port Windows v1 |
 
 ### Pieges connus par plateforme
 
-- **macOS** : l'ASan du LLVM Homebrew deadlocke AVANT `main` (initialisation re-entrante via dyld) ->
-  faire tourner le fuzzing local avec `-DADC_FUZZ_SANITIZERS=undefined` (cf.
-  [docs/QUALITY_TOOLING.md](docs/QUALITY_TOOLING.md)) ; `MallocNanoZone=0` ne suffit pas. L'ASan
-  d'AppleClang, lui, fonctionne.
+- **macOS** : l'ASan du LLVM Homebrew deadlocke AVANT `main` (initialisation re-entrante via dyld) ;
+  `MallocNanoZone=0` ne suffit pas. L'ASan d'AppleClang, lui, fonctionne (preset `ci-asan`, cf.
+  [docs/QUALITY_TOOLING.md](docs/QUALITY_TOOLING.md)). Pour le fuzzing local (harnais `fuzz/`,
+  livre par la vague 2 qualite), passer `-DADC_FUZZ_SANITIZERS=undefined` au configure.
 - **nvcc CUDA 12.x** : pas de `-std=c++23` -> forcer `ADC_CXX_STD=20` sous Kokkos (impacte la cle
   d'ABI du DSL).
 - **conda-forge** : le paquet Kokkos est souvent Serial-only -> `scripts/kokkos_openmp_conda.sh`
