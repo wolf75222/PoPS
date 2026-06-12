@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <dlfcn.h>  // dlopen/dlsym : chargement d'une brique generee (.so)
+#include <adc/runtime/dynlib.hpp>  // couche portable dlopen<->LoadLibraryW (ADC-99) ; inclut <dlfcn.h> sur POSIX
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -178,11 +178,11 @@ inline VariableSet parse_var_set(VariableKind kind, const std::string& names_csv
 /// Lit (par dlsym, tous OPTIONNELS) les symboles de metadonnees d'un .so deja ouvert (@p h). Renvoie
 /// noms+roles deserialises et gamma s'il est present. Les symboles absents laissent les champs vides /
 /// has_gamma=false : le caller decide alors du fallback. Format des chaines : "cons_csv|prim_csv".
-inline BlockMeta read_block_meta(void* h) {
+inline BlockMeta read_block_meta(adc::dynlib::handle h) {
   BlockMeta m;
-  auto names_fn = reinterpret_cast<const char* (*)()>(dlsym(h, "adc_compiled_var_names"));
-  auto roles_fn = reinterpret_cast<const char* (*)()>(dlsym(h, "adc_compiled_roles"));
-  auto gamma_fn = reinterpret_cast<double (*)()>(dlsym(h, "adc_compiled_gamma"));
+  auto names_fn = reinterpret_cast<const char* (*)()>(adc::dynlib::sym(h,"adc_compiled_var_names"));
+  auto roles_fn = reinterpret_cast<const char* (*)()>(adc::dynlib::sym(h,"adc_compiled_roles"));
+  auto gamma_fn = reinterpret_cast<double (*)()>(adc::dynlib::sym(h,"adc_compiled_gamma"));
   std::string names = names_fn ? std::string(names_fn()) : std::string();
   std::string roles = roles_fn ? std::string(roles_fn()) : std::string();
   // "cons|prim" : indice 0 = jeu conservatif, indice 1 = jeu primitif (chacun eventuellement vide).
@@ -201,16 +201,16 @@ inline BlockMeta read_block_meta(void* h) {
 /// shared_ptr possede le modele : il appelle adc_destroy_model puis ferme le .so a la destruction.
 /// VERBATIM de l'ancien Impl::push_dynamic ; @p ImplT est System::Impl (instancie cote system.cpp).
 template <typename ImplT, int NV>
-void push_dynamic(ImplT* P, const std::string& name, void* h, int substeps,
+void push_dynamic(ImplT* P, const std::string& name, adc::dynlib::handle h, int substeps,
                   std::vector<std::string> names, int recon) {
-  auto mk = reinterpret_cast<void* (*)()>(dlsym(h, "adc_make_model"));
-  auto del = reinterpret_cast<void (*)(void*)>(dlsym(h, "adc_destroy_model"));
+  auto mk = reinterpret_cast<void* (*)()>(adc::dynlib::sym(h,"adc_make_model"));
+  auto del = reinterpret_cast<void (*)(void*)>(adc::dynlib::sym(h,"adc_destroy_model"));
   if (!mk || !del) {
-    dlclose(h);
+    adc::dynlib::close(h);
     throw std::runtime_error("add_dynamic_block : adc_make_model / adc_destroy_model absents du .so");
   }
   std::shared_ptr<IModel<NV>> im(static_cast<IModel<NV>*>(mk()),
-                                 [del, h](IModel<NV>* p) { del(p); dlclose(h); });
+                                 [del, h](IModel<NV>* p) { del(p); adc::dynlib::close(h); });
   // Le modele charge peut lire des champs aux supplementaires (n_aux > 3, p.ex. B_z) : on
   // elargit le canal aux PARTAGE pour que set_magnetic_field le peuple et que le marshaling hote
   // les transporte. Modele de base (3) -> no-op. Les fermetures lisent P->aux_ncomp_ a l'appel.
@@ -348,15 +348,15 @@ void add_dynamic_block(System* self, ImplT* P, const std::string& name, const st
   else if (recon == "vanleer") recon_id = 2;
   else throw std::runtime_error("System::add_dynamic_block : recon 'none' | 'minmod' | 'vanleer' "
                                 "(recu '" + recon + "')");
-  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  adc::dynlib::handle h = adc::dynlib::open(so_path);
   if (!h) {
-    const char* e = dlerror();
+    const std::string e = adc::dynlib::last_error();
     throw std::runtime_error("add_dynamic_block : dlopen('" + so_path + "') : " +
-                             std::string(e ? e : "?"));
+                             (e.empty() ? std::string("?") : e));
   }
-  auto nv_fn = reinterpret_cast<int (*)()>(dlsym(h, "adc_model_nvars"));
+  auto nv_fn = reinterpret_cast<int (*)()>(adc::dynlib::sym(h,"adc_model_nvars"));
   if (!nv_fn) {
-    dlclose(h);
+    adc::dynlib::close(h);
     throw std::runtime_error("add_dynamic_block : adc_model_nvars absent du .so");
   }
   const int nv = nv_fn();
@@ -365,7 +365,7 @@ void add_dynamic_block(System* self, ImplT* P, const std::string& name, const st
     case 3: push_dynamic<ImplT, 3>(P, name, h, substeps, names, recon_id); break;
     case 4: push_dynamic<ImplT, 4>(P, name, h, substeps, names, recon_id); break;
     default:
-      dlclose(h);
+      adc::dynlib::close(h);
       throw std::runtime_error("add_dynamic_block : n_vars=" + std::to_string(nv) +
                                " non supporte (1, 3, 4)");
   }
@@ -396,11 +396,11 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   const int recon_prim = (recon == "primitive") ? 1 : 0;
   const int imex = (time == "imex") ? 1 : 0;
 
-  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  adc::dynlib::handle h = adc::dynlib::open(so_path);
   if (!h) {
-    const char* e = dlerror();
+    const std::string e = adc::dynlib::last_error();
     throw std::runtime_error("add_compiled_block : dlopen('" + so_path + "') : " +
-                             std::string(e ? e : "?"));
+                             (e.empty() ? std::string("?") : e));
   }
   // ABI extern "C" du bloc compile (compiled_block_abi.hpp). Le .so tourne le chemin de production
   // (assemble_rhs<Limiter, Flux>, SSPRK2/IMEX) sur le modele genere ; seuls des tableaux plats
@@ -412,20 +412,20 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
                             const char*, int, int, double, int);
   using max_fn_t = double (*)(const double*, const double*, int, double, double, int);
   using poi_fn_t = void (*)(const double*, double*, int);
-  auto nv_fn = reinterpret_cast<nv_fn_t>(dlsym(h, "adc_model_nvars"));
-  auto res_fn = reinterpret_cast<res_fn_t>(dlsym(h, "adc_compiled_residual"));
-  auto adv_fn = reinterpret_cast<adv_fn_t>(dlsym(h, "adc_compiled_advance"));
-  auto max_fn = reinterpret_cast<max_fn_t>(dlsym(h, "adc_compiled_max_speed"));
-  auto poi_fn = reinterpret_cast<poi_fn_t>(dlsym(h, "adc_compiled_poisson_rhs"));
+  auto nv_fn = reinterpret_cast<nv_fn_t>(adc::dynlib::sym(h,"adc_model_nvars"));
+  auto res_fn = reinterpret_cast<res_fn_t>(adc::dynlib::sym(h,"adc_compiled_residual"));
+  auto adv_fn = reinterpret_cast<adv_fn_t>(adc::dynlib::sym(h,"adc_compiled_advance"));
+  auto max_fn = reinterpret_cast<max_fn_t>(adc::dynlib::sym(h,"adc_compiled_max_speed"));
+  auto poi_fn = reinterpret_cast<poi_fn_t>(adc::dynlib::sym(h,"adc_compiled_poisson_rhs"));
   if (!nv_fn || !res_fn || !adv_fn || !max_fn || !poi_fn) {
-    dlclose(h);
+    adc::dynlib::close(h);
     throw std::runtime_error("add_compiled_block : ABI bloc compile absente du .so (regenerer via "
                              "dsl.compile_aot / compile_or_jit(mode='compile'))");
   }
   const int nv = nv_fn();
   // Largeur du canal aux que le modele compile LIT (B_z, T_e...). Symetrique du chemin JIT
   // (IModel::n_aux). Optionnel : un vieux .so sans ce symbole retombe sur le contrat de base (3).
-  auto naux_fn = reinterpret_cast<nv_fn_t>(dlsym(h, "adc_compiled_naux"));
+  auto naux_fn = reinterpret_cast<nv_fn_t>(adc::dynlib::sym(h,"adc_compiled_naux"));
   const int naux = naux_fn ? naux_fn() : kAuxBaseComps;
   // PARAMS RUNTIME (P7-b) : variantes SUFFIXEES `_p` qui prennent un bloc plat (const double*, int) de
   // valeurs de parametres runtime, injectees dans le modele avant l'execution. OPTIONNELLES : un .so
@@ -433,7 +433,7 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // on garde les symboles historiques (chemin params-const, bit-identique). On SEEDE le bloc de valeurs
   // aux defauts de declaration (adc_compiled_param_defaults) pour qu'un set_param ulterieur n'ecrase
   // qu'une entree sans remettre les autres a zero.
-  auto nparams_fn = reinterpret_cast<nv_fn_t>(dlsym(h, "adc_compiled_nparams"));
+  auto nparams_fn = reinterpret_cast<nv_fn_t>(adc::dynlib::sym(h,"adc_compiled_nparams"));
   const int nparams = nparams_fn ? nparams_fn() : 0;
   using res_p_fn_t = void (*)(const double*, double*, const double*, int, double, double, int,
                               const char*, const char*, int, const double*, int, double);
@@ -442,10 +442,10 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   using max_p_fn_t = double (*)(const double*, const double*, int, double, double, int,
                                 const double*, int);
   using poi_p_fn_t = void (*)(const double*, double*, int, const double*, int);
-  auto res_p_fn = reinterpret_cast<res_p_fn_t>(dlsym(h, "adc_compiled_residual_p"));
-  auto adv_p_fn = reinterpret_cast<adv_p_fn_t>(dlsym(h, "adc_compiled_advance_p"));
-  auto max_p_fn = reinterpret_cast<max_p_fn_t>(dlsym(h, "adc_compiled_max_speed_p"));
-  auto poi_p_fn = reinterpret_cast<poi_p_fn_t>(dlsym(h, "adc_compiled_poisson_rhs_p"));
+  auto res_p_fn = reinterpret_cast<res_p_fn_t>(adc::dynlib::sym(h,"adc_compiled_residual_p"));
+  auto adv_p_fn = reinterpret_cast<adv_p_fn_t>(adc::dynlib::sym(h,"adc_compiled_advance_p"));
+  auto max_p_fn = reinterpret_cast<max_p_fn_t>(adc::dynlib::sym(h,"adc_compiled_max_speed_p"));
+  auto poi_p_fn = reinterpret_cast<poi_p_fn_t>(adc::dynlib::sym(h,"adc_compiled_poisson_rhs_p"));
   // Bloc PARTAGE des valeurs courantes : capture par les fermetures ET enregistre dans P->block_params_
   // (set_block_params y ecrit -> les fermetures voient la nouvelle valeur au prochain pas). Vide si le
   // bloc n'a aucun param runtime ou si l'ABI `_p` est absente (vieux .so) : les fermetures appellent
@@ -461,7 +461,7 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
         "compile avec les en-tetes courants)");
   if (use_params) {
     pv = std::make_shared<std::vector<double>>(static_cast<std::size_t>(nparams), 0.0);
-    auto defs_fn = reinterpret_cast<void (*)(double*)>(dlsym(h, "adc_compiled_param_defaults"));
+    auto defs_fn = reinterpret_cast<void (*)(double*)>(adc::dynlib::sym(h,"adc_compiled_param_defaults"));
     if (defs_fn) defs_fn(pv->data());  // seed aux defauts de declaration
   }  // enregistrement dans P->block_params_ DIFFERE juste avant push_back (apres les validations qui
      // peuvent lever : evite une entree orpheline sans bloc associe si l'ajout echoue).
@@ -471,7 +471,9 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // Elargit le canal aux PARTAGE pour que set_magnetic_field/T_e le peuplent et que le marshaling
   // transporte les composantes extra vers le .so. Modele de base (3) -> no-op (bit-identique).
   P->ensure_aux_width(naux);
-  std::shared_ptr<void> lib(h, [](void* p) { dlclose(p); });  // ferme le .so a la mort des fermetures
+  std::shared_ptr<void> lib(h, [](void* p) {  // ferme le .so a la mort des fermetures
+    adc::dynlib::close(static_cast<adc::dynlib::handle>(p));
+  });
   const int n = P->cfg.n;
   const double dx = P->geom.dx(), dy = P->geom.dy();
   const int per = P->periodic_ ? 1 : 0;
@@ -569,13 +571,13 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // OPTIONNELS : un .so genere avant ce chantier ne les expose pas -> conversion vide -> identite (le
   // chemin set/get_primitive_state retombe alors sur prim == cons, exact pour un scalaire).
   using cv_fn_t = void (*)(const double*, double*, int);
-  auto p2c_fn = reinterpret_cast<cv_fn_t>(dlsym(h, "adc_compiled_to_conservative"));
-  auto c2p_fn = reinterpret_cast<cv_fn_t>(dlsym(h, "adc_compiled_to_primitive"));
+  auto p2c_fn = reinterpret_cast<cv_fn_t>(adc::dynlib::sym(h,"adc_compiled_to_conservative"));
+  auto c2p_fn = reinterpret_cast<cv_fn_t>(adc::dynlib::sym(h,"adc_compiled_to_primitive"));
   // P7-b : si le bloc a des params runtime, les conversions cons<->prim doivent les voir aussi (la
   // conversion peut lire un param runtime). On prefere alors les variantes `_p` avec le bloc PARTAGE.
   using cv_p_fn_t = void (*)(const double*, double*, int, const double*, int);
-  auto p2c_p_fn = reinterpret_cast<cv_p_fn_t>(dlsym(h, "adc_compiled_to_conservative_p"));
-  auto c2p_p_fn = reinterpret_cast<cv_p_fn_t>(dlsym(h, "adc_compiled_to_primitive_p"));
+  auto p2c_p_fn = reinterpret_cast<cv_p_fn_t>(adc::dynlib::sym(h,"adc_compiled_to_conservative_p"));
+  auto c2p_p_fn = reinterpret_cast<cv_p_fn_t>(adc::dynlib::sym(h,"adc_compiled_to_primitive_p"));
   if (pv && p2c_p_fn)
     block.prim_to_cons = [lib, p2c_p_fn, pv](const double* in, double* out) {
       p2c_p_fn(in, out, 1, pv->data(), static_cast<int>(pv->size()));
@@ -635,6 +637,19 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
   // portee globale (RTLD_NOLOAD = sans le recharger, juste promouvoir ; RTLD_GLOBAL OR'e dans les
   // flags de l'objet deja charge). Le chemin du module est trouve par dladdr sur un symbole exporte
   // (adc::abi_key). Sur macOS c'est inoffensif (le loader resout deja par dynamic_lookup).
+#if defined(_WIN32)
+  // Chemin "production" du DSL : il resout des symboles de _adc A TRAVERS le chargement de la lib
+  // (promotion RTLD_GLOBAL + dladdr sous POSIX). Pas d'equivalent direct Windows : il faudra
+  // __declspec(dllexport) sur les methodes System + une import library de _adc liee a la .dll
+  // generee (cf. export.hpp / ADC_EXPORT). Tant que ce maillon n'est pas livre (ADC-100), on refuse
+  // PROPREMENT plutot que de produire une .dll qui ne resoudrait pas ses symboles a l'execution.
+  (void)self; (void)name; (void)so_path; (void)limiter; (void)riemann; (void)recon; (void)time;
+  (void)gamma; (void)substeps; (void)evolve; (void)stride; (void)pos_floor;
+  throw std::runtime_error(
+      "add_native_block : backend DSL 'production' (.dll) pas encore supporte sous Windows natif "
+      "(resolution des symboles _adc via __declspec/import library a livrer, ADC-100) ; "
+      "utiliser WSL2 ou un backend non-production.");
+#else
   {
     Dl_info info;
     if (dladdr(reinterpret_cast<void*>(&adc::abi_key), &info) && info.dli_fname)
@@ -656,16 +671,16 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
   // module (a SA compilation). Un ecart = en-tetes / compilateur / standard divergents -> agencement
   // memoire de System/GridContext/BlockClosures potentiellement different a travers la frontiere ->
   // UB. On leve une erreur CLAIRE plutot que de laisser passer un loader incompatible.
-  auto key_fn = reinterpret_cast<const char* (*)()>(dlsym(h, "adc_native_abi_key"));
+  auto key_fn = reinterpret_cast<const char* (*)()>(adc::dynlib::sym(h,"adc_native_abi_key"));
   if (!key_fn) {
-    dlclose(h);
+    adc::dynlib::close(h);
     throw std::runtime_error("add_native_block : adc_native_abi_key absent du .so (regenerer via "
                              "dsl.compile_native / compile(backend='production'))");
   }
   const std::string loader_key = key_fn();
   const std::string module_key = abi_key();
   if (loader_key != module_key) {
-    dlclose(h);
+    adc::dynlib::close(h);
     throw std::runtime_error("add_native_block : ABI incompatible -- cle du loader '" + loader_key +
                              "' != cle du module '" + module_key +
                              "'. Recompiler le loader avec le MEME compilateur, standard C++ et "
@@ -677,9 +692,9 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
   // fixe (non avance) soit possible comme via add_block.
   using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
                                 const char*, double, int, int, int, double);
-  auto install = reinterpret_cast<install_fn_t>(dlsym(h, "adc_install_native"));
+  auto install = reinterpret_cast<install_fn_t>(adc::dynlib::sym(h,"adc_install_native"));
   if (!install) {
-    dlclose(h);
+    adc::dynlib::close(h);
     throw std::runtime_error("add_native_block : adc_install_native absent du .so (regenerer via "
                              "dsl.compile_native / compile(backend='production'))");
   }
@@ -693,6 +708,7 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
   // (fermetures de block_builder, foncteurs nommes) qui y vit. On NE le ferme PAS (pas de propriete
   // partagee a accrocher : les fermetures sont copiees dans le registre du System mais leur CODE est
   // dans le .so). Cohrent avec un binaire de production ou le modele est lie a vie.
+#endif  // _WIN32 (chemin production POSIX-only ; Windows = throw, cf. ADC-100)
 }
 
 }  // namespace native_loader

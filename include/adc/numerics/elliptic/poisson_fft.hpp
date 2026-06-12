@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <complex>
+#include <numbers>  // std::numbers::pi (portable ; std::numbers::pi n'est pas standard, absent sous MSVC)
 #include <utility>
 #include <vector>
 
@@ -49,7 +50,7 @@ inline void dft1d_direct(cplx* a, int n, bool inv) {
   for (int k = 0; k < n; ++k) {
     cplx acc(0.0, 0.0);
     for (int j = 0; j < n; ++j) {
-      const double ang = s * 2.0 * M_PI * (static_cast<double>(k) * j / n);
+      const double ang = s * 2.0 * std::numbers::pi * (static_cast<double>(k) * j / n);
       acc += a[j] * cplx(std::cos(ang), std::sin(ang));
     }
     out[static_cast<std::size_t>(k)] = inv ? acc / static_cast<double>(n) : acc;
@@ -72,7 +73,7 @@ inline void fft1d(cplx* a, int n, bool inv) {
     if (i < j) std::swap(a[i], a[j]);
   }
   for (int len = 2; len <= n; len <<= 1) {
-    const double ang = 2.0 * M_PI / len * (inv ? 1.0 : -1.0);
+    const double ang = 2.0 * std::numbers::pi / len * (inv ? 1.0 : -1.0);
     const cplx wl(std::cos(ang), std::sin(ang));
     for (int i = 0; i < n; i += len) {
       cplx w(1.0, 0.0);
@@ -118,10 +119,10 @@ class PoissonFFT {
 
     for (int il = 0; il < nxl_; ++il) {
       const int kx = rank_ * nxl_ + il;
-      const double lx = (2.0 * std::cos(2.0 * M_PI * kx / Nx_) - 2.0) / (dx_ * dx_);
+      const double lx = (2.0 * std::cos(2.0 * std::numbers::pi * kx / Nx_) - 2.0) / (dx_ * dx_);
       for (int ky = 0; ky < Ny_; ++ky) {
         const double ly =
-            (2.0 * std::cos(2.0 * M_PI * ky / Ny_) - 2.0) / (dy_ * dy_);
+            (2.0 * std::cos(2.0 * std::numbers::pi * ky / Ny_) - 2.0) / (dy_ * dy_);
         const double lam = lx + ly;
         cplx& v = B[il * Ny_ + ky];
         v = (std::abs(lam) < 1e-14) ? cplx(0.0, 0.0) : v / lam;

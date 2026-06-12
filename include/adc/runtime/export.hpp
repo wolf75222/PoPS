@@ -12,8 +12,15 @@
 /// On exporte donc EXACTEMENT ces methodes + adc::abi_key (surface minimale). MSVC / Windows : sans
 /// effet ici (chemin POSIX dlopen ; un futur portage Windows utiliserait __declspec(dllexport)).
 
+// Windows : le module _adc (qui DEFINIT ces symboles) doit definir ADC_EXPORT_BUILDING_MODULE a sa
+// compilation -> dllexport ; le loader .dll genere qui les IMPORTE retombe sur dllimport. Unix :
+// visibilite par defaut (le module est compile -fvisibility=hidden). cf. ADC-99 (couche portable).
 #if defined(_WIN32)
-#define ADC_EXPORT
+#if defined(ADC_EXPORT_BUILDING_MODULE)
+#define ADC_EXPORT __declspec(dllexport)
+#else
+#define ADC_EXPORT __declspec(dllimport)
+#endif
 #else
 #define ADC_EXPORT __attribute__((visibility("default")))
 #endif

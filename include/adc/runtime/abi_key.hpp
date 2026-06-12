@@ -64,6 +64,17 @@
 #define ADC_ABI_STDLIB "unknown"
 #endif
 
+// Jeton compilateur : __VERSION__ (GCC/Clang/AppleClang) est deja un LITTERAL de chaine ; MSVC ne le
+// definit PAS -> on stringifie _MSC_FULL_VER. Garde la cle comparable cross-compilateur (port natif
+// Windows, ADC-99/100). POSIX inchange (ADC_ABI_COMPILER == __VERSION__).
+#if defined(__VERSION__)
+#define ADC_ABI_COMPILER __VERSION__
+#elif defined(_MSC_FULL_VER)
+#define ADC_ABI_COMPILER "MSVC_" ADC_ABI_STR(_MSC_FULL_VER)
+#else
+#define ADC_ABI_COMPILER "unknown"
+#endif
+
 // Cle d'ABI de l'UNITE DE TRADUCTION courante, en LITTERAL pur concatene par le preprocesseur :
 // "compiler=<__VERSION__>;std=<__cplusplus>;headers=<ADC_HEADER_SIG>;kokkos=<0|1>;stdlib=<...>".
 // Tous les jetons sont des litteraux de chaine (__VERSION__ et ADC_HEADER_SIG en sont deja), donc
@@ -80,7 +91,7 @@
 // NB : les parsers (dsl._adc_cxx_std_from_module / module_header_signature) scannent par prefixe
 // de jeton ("std=", "headers=") -> insensibles a l'AJOUT de jetons en queue.
 #define ADC_ABI_KEY_LITERAL                                                          \
-  "compiler=" __VERSION__ ";std=" ADC_ABI_STR(__cplusplus) ";headers=" ADC_HEADER_SIG \
+  "compiler=" ADC_ABI_COMPILER ";std=" ADC_ABI_STR(__cplusplus) ";headers=" ADC_HEADER_SIG \
   ";kokkos=" ADC_ABI_KOKKOS ";stdlib=" ADC_ABI_STDLIB
 
 namespace adc {

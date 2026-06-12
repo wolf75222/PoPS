@@ -33,7 +33,7 @@
 #include <cmath>
 #include <cstdio>   // ADC_TRACE_SOLVE_FIELDS : trace de diagnostic device (env-gate, inerte par defaut)
 #include <cstdlib>  // getenv
-#include <dlfcn.h>  // dlopen/dlsym : chargement d'une brique generee (.so)
+#include <adc/runtime/dynlib.hpp>  // couche portable dlopen<->LoadLibraryW (ADC-99) ; <dlfcn.h> sur POSIX
 #include <functional>
 #include <limits>  // std::numeric_limits (CFL par bloc : dt = min sur les blocs)
 #include <map>     // std::map (registre des params runtime par bloc, P7-b)

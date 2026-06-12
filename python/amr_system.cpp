@@ -10,7 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>  // std::numeric_limits (bornes globales de pas : neutralisation en +inf avant le min)
-#include <dlfcn.h>  // dlopen/dlsym : chargement du loader natif AMR genere (.so)
+#include <adc/runtime/dynlib.hpp>  // couche portable dlopen<->LoadLibraryW (ADC-99) ; <dlfcn.h> sur POSIX
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -681,6 +681,16 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // ADRESSE de CE module : amr_native_anchor (fonction locale a cette TU). On evite ainsi de dependre
   // de adc::abi_key (defini dans system.cpp) -- ce qui couplerait au link tout test compilant
   // amr_system.cpp seul. Sur macOS, inoffensif (le loader resout par dynamic_lookup).
+#if defined(_WIN32)
+  // Backend DSL 'production' (.dll) AMR : meme verrou que cote System -- resolution des symboles _adc
+  // via RTLD_GLOBAL/dladdr (POSIX), sans equivalent natif Windows (__declspec + import library a
+  // livrer, ADC-100). Refus PROPRE tant que non livre.
+  (void)name; (void)so_path; (void)limiter; (void)riemann; (void)recon; (void)time; (void)gamma;
+  (void)substeps;
+  throw std::runtime_error(
+      "AmrSystem::add_native_block : backend DSL 'production' (.dll) pas encore supporte sous Windows "
+      "natif (ADC-100) ; utiliser WSL2 ou un backend non-production.");
+#else
   {
     Dl_info info;
     if (dladdr(reinterpret_cast<void*>(&amr_native_anchor), &info) && info.dli_fname)
@@ -738,6 +748,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
           time.c_str(), gamma, substeps);
   // Le .so reste charge (RTLD_GLOBAL) pour la duree du process : le builder type-erase installe par
   // set_compiled_block capture du code (gabarit en-tete) qui y vit. On NE le ferme PAS.
+#endif  // _WIN32 (production AMR POSIX-only ; Windows = throw, ADC-100)
 }
 
 void AmrSystem::set_refinement(double threshold) { p_->refine_threshold = threshold; }
