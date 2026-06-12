@@ -1,0 +1,267 @@
+# docmap.toml -- carte anti-rot de la documentation adc_cpp.
+#
+# Format TOML (parse par tomllib, stdlib Python 3.11+ ; aucune dependance externe). Les issues
+# Linear parlaient d'un .yml ; la contrainte "stdlib sans dependance" prime, d'ou le TOML.
+#
+# A quoi ca sert
+# --------------
+# docs/check_docs.py lit ce fichier pour :
+#   - PRESENCE : toute page docs/sphinx/**.md (hors [exclude]) doit avoir une entree ici, et tout
+#     chemin depends_on / tested_by doit exister sur le disque (anti-rot de la carte elle-meme) ;
+#   - FRAICHEUR : si un fichier de depends_on a ete commite APRES la derniere relecture du doc
+#     (champ reviewed, sinon dernier commit touchant le doc), le doc est suspect. mode strict =>
+#     violation (exit 1) ; mode warning => avertissement non bloquant.
+# docs/run_doc_examples.py lit tested_by pour rejouer les scripts d'exemple (--quick).
+#
+# Champs d'une entree [docs."<chemin repo-relatif>"]
+# --------------------------------------------------
+#   owner       proprietaire humain du doc.
+#   mode        "strict" (fraicheur bloquante) ou "warning" (fraicheur informative).
+#   depends_on  fichiers/dossiers du code dont le doc decrit le comportement ; un commit sur l'un
+#               d'eux rend le doc suspect tant qu'il n'est pas relu/acquitte.
+#   tested_by   scripts d'exemple (acceptant --quick --outdir) qui executent le doc de bout en bout.
+#   testable    true si les blocs de code porteurs du doc doivent venir d'un literalinclude.
+#   reviewed    optionnel : sha acquittant la fraicheur ("relu a jour a ce commit"). A l'echelle de
+#               cette carte, toutes les entrees avec depends_on sont baselinees sur le commit de
+#               creation (origin/master ffb9022) ; un futur changement de toolchain les reactivera.
+
+[exclude]
+patterns = ["_generated/**", "tutorials/_assets*/**", "doxygen/**", "__pycache__/**"]
+
+
+# --- Prise en main (getting_started) ---------------------------------------------------------------
+
+[docs."docs/sphinx/getting_started/installation.md"]
+owner = "Romain"
+mode = "strict"
+depends_on = ["CMakePresets.json", "pyproject.toml", "scripts/setup_env.sh", "environment.yml", "CMakeLists.txt", "scripts/kokkos_openmp_conda.sh"]
+tested_by = []
+testable = true
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/getting_started/first_run.md"]
+owner = "Romain"
+mode = "strict"
+depends_on = ["python/adc/__init__.py", "python/system.cpp", "include/adc/physics/bricks.hpp", "include/adc/runtime/system.hpp"]
+tested_by = []
+testable = true
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/getting_started/tutorial.md"]
+owner = "Romain"
+mode = "strict"
+depends_on = ["docs/sphinx/tutorials/diocotron_tutorial.py", "python/adc/dsl.py", "include/adc/physics/hyperbolic.hpp", "include/adc/physics/elliptic.hpp", "include/adc/runtime/dsl_block.hpp"]
+tested_by = ["docs/sphinx/tutorials/diocotron_tutorial.py"]
+testable = true
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/getting_started/backend.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["CMakePresets.json", "scripts/kokkos_openmp_conda.sh", "python/adc/__init__.py"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/getting_started/organisation.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["CMakeLists.txt", "include/adc", "python/adc"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/getting_started/presentation.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = []
+tested_by = []
+testable = false
+
+[docs."docs/sphinx/getting_started/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = []
+tested_by = []
+testable = false
+
+[docs."docs/sphinx/getting_started/windows_native.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["CMakePresets.json", "CMakeLists.txt"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/getting_started/windows_wsl2.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["scripts/setup_env.sh", "environment.yml", "CMakePresets.json"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+
+# --- Sections thematiques --------------------------------------------------------------------------
+
+[docs."docs/sphinx/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = []
+tested_by = []
+testable = false
+
+[docs."docs/sphinx/advanced/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc/runtime"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/amr/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc/amr", "include/adc/runtime/amr_system.hpp"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/backends/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["CMakePresets.json", "include/adc/parallel", "scripts/kokkos_openmp_conda.sh"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/models/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc/physics"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/simulation/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc/runtime", "include/adc/runtime/system.hpp"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+
+# --- Reference -------------------------------------------------------------------------------------
+
+[docs."docs/sphinx/reference/index.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = []
+tested_by = []
+testable = false
+
+[docs."docs/sphinx/reference/api_cpp.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["docs/Doxyfile", "include/adc"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/reference/api_python.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["python/adc", "python/bindings.cpp", "python/system.cpp", "python/amr_system.cpp"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/reference/backend_matrix.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["CMakePresets.json", "docs/BACKEND_COVERAGE.md"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/reference/bricks_reference.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc/physics", "include/adc/physics/bricks.hpp"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/reference/dsl_reference.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["python/adc/dsl.py", "include/adc/runtime/dsl_block.hpp"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/reference/bibliography.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["docs/BIBLIOGRAPHY.md"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/sphinx/reference/limitations.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = []
+tested_by = []
+testable = false
+
+
+# --- Guides racine (docs/*.md normatifs) -----------------------------------------------------------
+
+[docs."docs/ARCHITECTURE.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc", "include/adc/runtime"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/ALGORITHMS.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc/numerics"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/BACKEND_COVERAGE.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["CMakePresets.json", "tests"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/CHOICES.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = []
+tested_by = []
+testable = false
+
+[docs."docs/DSL_API.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["python/adc/dsl.py", "include/adc/runtime/dsl_block.hpp"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
+
+[docs."docs/CONSERVATION_SUMMARY.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["include/adc/numerics"]
+tested_by = []
+testable = false
+reviewed = "ffb9022a66dab2c466008f21b45ac0b0b9a47958"
