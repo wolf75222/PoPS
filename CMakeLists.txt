@@ -50,6 +50,13 @@ option(ADC_BUILD_BENCH    "Build the standalone profiling harness (bench/, OFF b
 option(ADC_USE_KOKKOS     "Enable Kokkos backend (the only on-node backend, mandatory)" ON)
 option(ADC_USE_MPI        "Enable the MPI backend (distributed comm seam)" OFF)
 option(ADC_USE_HDF5       "Enable the HDF5 DataWriter (parallel output)" OFF)
+# Kokkos en bibliotheque PARTAGEE (DLL/.so). REQUIS pour le backend DSL "production" sous Windows
+# natif (ADC-100) : le module _adc ET la .dll JIT generee doivent partager UN SEUL runtime Kokkos
+# (registre global des execution spaces) -- deux Kokkos statiques = deux singletons = comportement
+# indefini. Sur une install Kokkos trouvee (-DKokkos_ROOT=...), l'option est INFORMATIVE (l'install
+# est deja partagee ou non). Sur le chemin FetchContent, elle construit Kokkos en DLL (BUILD_SHARED_LIBS
+# + export auto des symboles sous Windows). POSIX : inoffensif (le .so DSL resout par RTLD_GLOBAL).
+option(ADC_KOKKOS_SHARED  "Build/use Kokkos as a SHARED library (required for the Windows native DSL 'production' backend)" OFF)
 # Version de Kokkos recuperee par FetchContent quand aucune install n'est trouvee (release tarball +
 # verification SHA256). Surchargeables ensemble (changer la version impose de changer le SHA256, sinon
 # la verification d'integrite echoue). Le SHA256 est publie sur la page des releases Kokkos.
@@ -161,6 +168,18 @@ adc_apple_libomp_hints()
 find_package(Kokkos 4.2 QUIET CONFIG)
 if(Kokkos_FOUND)
   message(STATUS "Kokkos trouve (install ${Kokkos_VERSION}) : for_each_cell backend = Kokkos (${Kokkos_DEVICES})")
+  # ADC_KOKKOS_SHARED + install trouvee : verifier qu'elle est bien PARTAGEE. Une install statique
+  # silencieuse ferait echouer le backend DSL production a l'execution (deux runtimes Kokkos) ; on
+  # prefere un avertissement clair au configure. (Sur le chemin FetchContent, on FORCE le shared plus bas.)
+  if(ADC_KOKKOS_SHARED AND TARGET Kokkos::kokkoscore)
+    get_target_property(_adc_kk_type Kokkos::kokkoscore TYPE)
+    if(_adc_kk_type STREQUAL "STATIC_LIBRARY")
+      message(WARNING "adc: ADC_KOKKOS_SHARED demande mais l'install Kokkos trouvee (${Kokkos_DIR}) est "
+                      "STATIQUE. Le backend DSL 'production' exige un Kokkos PARTAGE (kokkoscore.dll) commun "
+                      "au module et a la .dll JIT. Pointer Kokkos_ROOT vers une install shared, ou laisser "
+                      "FetchContent le construire (-DCMAKE_DISABLE_FIND_PACKAGE_Kokkos=ON).")
+    endif()
+  endif()
 else()
   message(STATUS "Kokkos introuvable -> FetchContent (release ${ADC_KOKKOS_FETCH_VERSION}). "
                  "Cible on-node via -DKokkos_ENABLE_SERIAL/_OPENMP/_CUDA (defaut : Serial).")
@@ -170,6 +189,15 @@ else()
   if(NOT DEFINED Kokkos_ENABLE_SERIAL AND NOT DEFINED Kokkos_ENABLE_OPENMP
      AND NOT DEFINED Kokkos_ENABLE_CUDA AND NOT DEFINED Kokkos_ENABLE_HIP)
     set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Kokkos Serial backend (defaut adc FetchContent)" FORCE)
+  endif()
+  # Kokkos PARTAGE (ADC_KOKKOS_SHARED) : Kokkos honore BUILD_SHARED_LIBS -> kokkoscore.dll/.so unique,
+  # partage par _adc et la .dll DSL production. Sous Windows, MSVC n'exporte rien d'une DLL par defaut :
+  # WINDOWS_EXPORT_ALL_SYMBOLS genere l'import lib kokkoscore.lib avec tous les symboles.
+  if(ADC_KOKKOS_SHARED)
+    set(BUILD_SHARED_LIBS ON CACHE BOOL "Kokkos partage (ADC_KOKKOS_SHARED)" FORCE)
+    if(WIN32)
+      set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON CACHE BOOL "Export des symboles Kokkos (DLL Windows)" FORCE)
+    endif()
   endif()
   set(_adc_kokkos_url
       "https://github.com/kokkos/kokkos/releases/download/${ADC_KOKKOS_FETCH_VERSION}/kokkos-${ADC_KOKKOS_FETCH_VERSION}.tar.gz")

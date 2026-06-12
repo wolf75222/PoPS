@@ -160,6 +160,33 @@
         "ADC_BUILD_BENCH": "ON",
         "ADC_BUILD_TESTS": "OFF"
       }
+    },
+    {
+      "name": "win-native",
+      "inherits": "conda",
+      "displayName": "Windows natif : module _adc + DSL production (MSVC, Kokkos partage)",
+      "description": "Build natif Windows en UNE commande (ADC-100). Kokkos en DLL PARTAGEE (ADC_KOKKOS_SHARED : install trouvee via Kokkos_ROOT, sinon recuperee+construite shared par FetchContent) ; _adc.lib (import lib) + kokkos*.dll deposes a cote du .pyd ; backend DSL 'production' (.dll compilee par cl) operationnel. Exige un env conda ACTIF (Python) et un environnement vcvars (cl dans le PATH). Flux : cmake --preset win-native && cmake --build --preset win-native.",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build-pywin",
+      "cacheVariables": {
+        "ADC_BUILD_PYTHON": "ON",
+        "ADC_BUILD_TESTS": "OFF",
+        "ADC_USE_KOKKOS": "ON",
+        "ADC_KOKKOS_SHARED": "ON",
+        "Python_ROOT_DIR": "$env{CONDA_PREFIX}"
+      }
+    },
+    {
+      "name": "win-native-clang",
+      "inherits": "win-native",
+      "displayName": "Windows natif clang-cl (socle OpenMP natif, ADC-167)",
+      "description": "Comme win-native mais compilateur clang-cl (LLVM) au lieu de MSVC cl : prerequis du futur OpenMP natif (cl ne fournit qu'OpenMP 2.0 ; clang-cl fournit OpenMP >= 3 via -fopenmp). Generateur Ninja (combiner Visual Studio + clang-cl est fragile). Exige clang-cl + ninja dans le PATH.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-pywin-clang",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_C_COMPILER": "clang-cl"
+      }
     }
   ],
   "buildPresets": [
@@ -224,6 +251,21 @@
       "name": "ci-bench",
       "configurePreset": "ci-bench",
       "jobs": 2
+    },
+    {
+      "name": "win-native",
+      "configurePreset": "win-native",
+      "configuration": "Release",
+      "targets": [
+        "_adc"
+      ]
+    },
+    {
+      "name": "win-native-clang",
+      "configurePreset": "win-native-clang",
+      "targets": [
+        "_adc"
+      ]
     }
   ],
   "testPresets": [

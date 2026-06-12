@@ -90,12 +90,53 @@ message(STATUS "adc Python module: signature en-tetes ADC_HEADER_SIG=${_adc_head
 set(ADC_PY_PKG ${CMAKE_CURRENT_BINARY_DIR}/adc)
 set_target_properties(_adc PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${ADC_PY_PKG})
 
+# --- Windows natif : rendre le module exploitable par le backend DSL "production" (ADC-100) ----------
+# Sous POSIX, la .so DSL generee resout les symboles System par RTLD_GLOBAL (dladdr sur le module deja
+# charge). Windows n'a pas d'equivalent : la .dll JIT doit etre LIEE contre une IMPORT LIBRARY _adc.lib
+# qui EXPOSE les symboles System (add_compiled_model & co), et charger le MEME runtime Kokkos partage.
+# On industrialise ici ces maillons (avant : passes a la main via -DCMAKE_CXX_FLAGS au configure).
+if(WIN32)
+  # 1) ADC_EXPORT -> __declspec(dllexport) sur les methodes System (runtime/export.hpp) : c'est ce qui
+  #    fait apparaitre ces symboles dans _adc.lib. Sans le define, ADC_EXPORT retombe sur dllimport et
+  #    l'import lib ne contiendrait que PyInit__adc (la .dll DSL echouerait au LINK : symboles absents).
+  target_compile_definitions(_adc PRIVATE ADC_EXPORT_BUILDING_MODULE)
+  # 2) NOMINMAX : windows.h (tire par runtime/dynlib.hpp) ne doit pas definir min/max (casse la STL).
+  #    /bigobj : les TU geantes (system.cpp/amr_system.cpp, briques+AMR instanciees) depassent la limite
+  #    de sections objet MSVC. Memes besoins que la .dll DSL (cf. dsl.compile_native). MSVC == clang-cl.
+  target_compile_definitions(_adc PRIVATE NOMINMAX)
+  if(MSVC)
+    target_compile_options(_adc PRIVATE /bigobj)
+  endif()
+  # 3) Import library _adc.lib DEPOSEE A COTE du .pyd : adc.dsl._adc_import_lib() la cherche la pour
+  #    linker la .dll DSL. ARCHIVE_OUTPUT_DIRECTORY pilote la .lib (LIBRARY = le .pyd, deja sur ADC_PY_PKG).
+  #    Les variantes _<CONFIG> couvrent les generateurs multi-config (Visual Studio) qui, sinon, suffixent
+  #    un sous-dossier Release/ et placeraient _adc.lib hors du paquet.
+  set_target_properties(_adc PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY                ${ADC_PY_PKG}
+    ARCHIVE_OUTPUT_DIRECTORY_RELEASE        ${ADC_PY_PKG}
+    ARCHIVE_OUTPUT_DIRECTORY_DEBUG          ${ADC_PY_PKG}
+    ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO ${ADC_PY_PKG})
+  # 4) Deploiement du runtime Kokkos PARTAGE (kokkoscore.dll, ...) A COTE du .pyd : le module ET la .dll
+  #    DSL doivent charger la MEME kokkos*.dll (Python >= 3.8 ne cherche PAS les deps d'extension dans le
+  #    PATH). $<TARGET_RUNTIME_DLLS> enumere les DLL des cibles partagees liees ; vide si Kokkos statique
+  #    -> on ne pose la commande QUE sous ADC_KOKKOS_SHARED (sinon copy_if_different sans source = erreur).
+  if(ADC_KOKKOS_SHARED)
+    add_custom_command(TARGET _adc POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_RUNTIME_DLLS:_adc>" "$<TARGET_FILE_DIR:_adc>"
+      COMMAND_EXPAND_LISTS
+      COMMENT "adc: deploiement du runtime Kokkos partage (DLL) a cote de _adc.pyd")
+  endif()
+endif()
+
 # Build PIP (scikit-build-core definit SKBUILD) : la wheel embarque le paquet pur python/adc/
 # (wheel.packages du pyproject) ; ICI on n'installe QUE l'extension compilee a cote, dans
 # site-packages/adc/. Resultat : `pip install .` -> `import adc` SANS PYTHONPATH (pattern
 # pyAMReX/WarpX). Le flux dev presets+PYTHONPATH reste inchange (SKBUILD absent).
 if(SKBUILD)
-  install(TARGETS _adc LIBRARY DESTINATION adc)
+  # Windows : ARCHIVE = _adc.lib (import lib) embarquee dans le paquet pour le backend DSL production.
+  # Les kokkos*.dll partagees relevent d'un repair de wheel (delvewheel) -- hors scope ici.
+  install(TARGETS _adc LIBRARY DESTINATION adc ARCHIVE DESTINATION adc)
 endif()
 foreach(pyf adc/__init__.py adc/integrate.py adc/dsl.py adc/moments.py)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${pyf} ${CMAKE_CURRENT_BINARY_DIR}/${pyf} COPYONLY)
