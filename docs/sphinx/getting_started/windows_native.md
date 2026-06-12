@@ -12,7 +12,7 @@ qui couvre le **GPU**. Le natif est utile si tu veux eviter WSL2 pour du travail
 
 - **Visual Studio 2022** (MSVC, `cl.exe`, C++23 via `/std:c++20`/`/std:c++latest`) + **CMake**.
 - **LLVM/clang-cl** (`winget install LLVM.LLVM`) **uniquement pour OpenMP** : MSVC garde
-  `_OPENMP=2.0` meme avec `/openmp:llvm`, donc Kokkos OpenMP (3.0 ou plus) exige clang-cl (qui rapporte 5.1).
+  `_OPENMP=2.0` meme avec `/openmp:llvm`, donc Kokkos OpenMP (>=3.0) exige clang-cl (qui rapporte 5.1).
 - **Python** (Miniforge conseille) + `numpy`, `pybind11`.
 - Toute compilation au runtime (DSL `production`, `adc_cases.common.native`) lance `cl`/`clang-cl` :
   lancer Python depuis un invite **"x64 Native Tools"** (vcvars) pour avoir `INCLUDE`/`LIB`.
@@ -64,7 +64,7 @@ import adc; adc.doctor(); s = adc.System(n=64); a = adc.AmrSystem(n=64)   # OK n
 chemin briques. `adc_cases.common.native.build_shared` produit des `.dll` standalone (ctypes) de la
 meme facon.
 
-> Attention : les `.cpp` custom des cas doivent exporter leurs entry points en `__declspec(dllexport)` sous
+> Attention : Les `.cpp` custom des cas doivent exporter leurs entry points en `__declspec(dllexport)` sous
 > Windows (`extern "C"` seul n'exporte pas sous `/LD`).
 
 ## Ecarts notables vs Linux
