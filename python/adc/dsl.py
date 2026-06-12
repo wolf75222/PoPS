@@ -60,7 +60,7 @@ def adc_header_signature(include):
         for fn in files:
             if fn.endswith((".hpp", ".h")):
                 p = os.path.join(root, fn)
-                rel = os.path.relpath(p, include)
+                rel = os.path.relpath(p, include).replace(os.sep, "/")  # CMake ecrit les chemins en '/' (meme Windows)
                 with open(p, "rb") as f:
                     digest = hashlib.sha256(f.read()).hexdigest()
                 entries.append("%s\n%s\n" % (rel, digest))
@@ -317,6 +317,8 @@ def _run_compile(cmd, what):
     r = subprocess.run(cmd, capture_output=True)
     if r.returncode != 0:
         err = (r.stderr or b"").decode(errors="replace").strip()
+        out = (r.stdout or b"").decode(errors="replace").strip()  # MSVC cl ecrit les erreurs sur STDOUT
+        err = (err + "\n" + out).strip() if out else err
         raise RuntimeError(
             "adc.dsl : la compilation du .so (%s) a echoue (exit %d).\n"
             "Commande : %s\n"
@@ -340,6 +342,8 @@ def _probe_cxx_std(cc, std):
     import subprocess
     if "nvcc" in os.path.basename(cc or ""):
         return std
+    if sys.platform == "win32":
+        return std  # cl/clang-cl : sonde -fsyntax-only inapplicable ; std traduit en /std: au compile
     cached = _probe_cache.get((cc, std))
     if cached is not None:
         return cached
@@ -528,6 +532,17 @@ def _native_kokkos_compiler(cxx):
     return _default_cxx(None)
 
 
+def _adc_import_lib():
+    """(Windows, ADC-100) Chemin de l'import library _adc.lib (symboles System ADC_EXPORT) contre
+    laquelle linker la .dll DSL. Cherchee a cote du module _adc. None si absente."""
+    mod = _adc_module()
+    if mod is None:
+        return None
+    d = os.path.dirname(getattr(mod, "__file__", "") or "")
+    cand = os.path.join(d, "_adc.lib")
+    return cand if os.path.exists(cand) else None
+
+
 def _native_kokkos_flags():
     """Flags compile/link pour que le loader DSL production instancie add_compiled_model AVEC Kokkos.
 
@@ -538,6 +553,11 @@ def _native_kokkos_flags():
     if not root:
         return [], []
     inc = os.path.join(root, "include")
+    if sys.platform == "win32":
+        # MSVC/clang-cl : Kokkos en DLL PARTAGEE -> linker l'import lib kokkoscore.lib (UN seul runtime ;
+        # _adc charge la meme kokkoscore.dll). cl accepte -D/-I. Pas de -fopenmp/-ldl/-pthread (POSIX).
+        return (["-DADC_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc],
+                [os.path.join(root, "lib", "kokkoscore.lib")])
     compile_flags = ["-DADC_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc]
     # NE PAS linker libkokkos* DANS le .so : le module _adc a deja charge le runtime Kokkos, un
     # SINGLETON (registre global des execution spaces), et add_native_block le promeut en portee
@@ -2743,24 +2763,36 @@ class HyperbolicModel:
             raise ValueError("emit_cpp_native_loader : target 'system' | 'amr_system' (recu %r)"
                              % (target,))
         nv, bricks, composite = self._emit_bricks(name)
-        head = ('#include <adc/runtime/abi_key.hpp>\n'         # ADC_ABI_KEY_LITERAL (cle figee a la compil)
+        # En-tetes std EN TETE (avant tout namespace). MSVC : un #include <std> tandis qu'un namespace
+        # adc est ouvert fait voir std comme adc::std (erreurs <vector>) ; g++ tolere car deja inclus via
+        # guard. Les hisser ici rend les #include std internes aux briques inoffensifs (no-op guard).
+        head = ('#include <cmath>\n'
+                '#include <vector>\n'
+                '#include <array>\n'
+                '#include <cstddef>\n'
+                '#include <string>\n'
+                '#include <adc/runtime/abi_key.hpp>\n'         # ADC_ABI_KEY_LITERAL (cle figee a la compil)
                 '#include <adc/physics/bricks.hpp>\n'          # CompositeModel + NoSource + briques
-                '#include <adc/core/variables.hpp>\n'
-                '#include <string>\n')
+                '#include <adc/core/variables.hpp>\n')
         # Gabarit en-tete de la cible : dsl_block.hpp (System) ou amr_dsl_block.hpp (AmrSystem). Inclus
         # selectivement pour ne pas tirer la machinerie AMR dans un loader System (et inversement).
         head += ('#include <adc/runtime/dsl_block.hpp>\n' if target == "system"
                  else '#include <adc/runtime/amr_dsl_block.hpp>\n')
         # LITTERAL preprocesseur, pas d'appel a abi_key_string() : une inline serait interposee
         # (ELF/RTLD_GLOBAL) vers la copie du module -> cle du module renvoyee -> garde tautologique.
-        key = ('extern "C" const char* adc_native_abi_key() {\n'
+        key = ('#if defined(_WIN32)\n'
+               '#define ADC_LOADER_API extern "C" __declspec(dllexport)\n'
+               '#else\n'
+               '#define ADC_LOADER_API extern "C"\n'
+               '#endif\n'
+               'ADC_LOADER_API const char* adc_native_abi_key() {\n'
                '  return ADC_ABI_KEY_LITERAL;\n'
                '}\n')
         if target == "system":
             # pos_floor (ADC-76, limiteur de positivite Zhang-Shu) : argument plat final, marshale
             # jusqu'au make_block du loader via add_compiled_model. Vieille signature = vieux .so =
             # rejete par la cle d'ABI (les en-tetes ont change), jamais un layout d'arguments errone.
-            install = ('extern "C" void adc_install_native(void* sys, const char* name, const char* limiter,\n'
+            install = ('ADC_LOADER_API void adc_install_native(void* sys, const char* name, const char* limiter,\n'
                        '                                    const char* riemann, const char* recon,\n'
                        '                                    const char* time, double gamma, int substeps,\n'
                        '                                    int evolve, int stride, double pos_floor) {\n'
@@ -2771,7 +2803,7 @@ class HyperbolicModel:
                        '                                                    pos_floor);\n'
                        '}\n')
         else:  # amr_system : surcharge AmrSystem (pas de parametre evolve, AMR mono-bloc)
-            install = ('extern "C" void adc_install_native_amr(void* sys, const char* name,\n'
+            install = ('ADC_LOADER_API void adc_install_native_amr(void* sys, const char* name,\n'
                        '                                        const char* limiter, const char* riemann,\n'
                        '                                        const char* recon, const char* time,\n'
                        '                                        double gamma, int substeps) {\n'
@@ -2844,20 +2876,39 @@ class HyperbolicModel:
         # -march=native : le .so etant JIT-compile sur la machine -> ~0.88x du natif generique ; non
         # defaut car cache .so partage reutilise sur une micro-archi differente = risque illegal-instr).
         kokkos_compile_flags, kokkos_link_flags = _native_kokkos_flags()
-        optflags = os.environ.get("ADC_DSL_OPTFLAGS", "-O3 -DNDEBUG").split()
-        flags = ["-shared", "-fPIC", "-std=" + std, *optflags,
-                 "-DADC_HEADER_SIG=\"%s\"" % sig, *kokkos_compile_flags]
-        # macOS/Apple-ld : il FAUT autoriser explicitement les indefinis (resolus a l'execution). Sur
-        # ELF/Linux, -shared autorise deja les indefinis ; '-undefined dynamic_lookup' n'est PAS une
-        # option ld GNU (elle creerait un symbole indefini parasite 'dynamic_lookup'), donc darwin SEUL.
-        if sys.platform == "darwin":
-            flags += ["-undefined", "dynamic_lookup"]
         with tempfile.TemporaryDirectory() as tmp:
             cpp = os.path.join(tmp, "model_native.cpp")
+            # Windows : baker ADC_HEADER_SIG via #define EN TETE de la source (le quoting d'un macro
+            # string en ligne de commande cl est ingerable) ; POSIX garde le -D historique ci-dessous.
+            src_eff = ('#define ADC_HEADER_SIG "%s"\n' % sig + src) if sys.platform == "win32" else src
             with open(cpp, "w") as f:
-                f.write(src)
-            _run_compile([cc, *flags, "-I", include, cpp, "-o", so_path, *kokkos_link_flags],
-                         "backend production, compile_native")
+                f.write(src_eff)
+            if sys.platform == "win32":
+                # MSVC/clang-cl (ADC-100) : .dll liee contre kokkoscore.lib (Kokkos PARTAGE) + _adc.lib
+                # (symboles System ADC_EXPORT). cl accepte -D/-I ; sortie /Fe ; libs apres /link. Pas de
+                # RTLD_GLOBAL : les indefinis sont resolus au LINK de la .dll (import libraries).
+                adc_lib = _adc_import_lib()
+                if not adc_lib:
+                    raise RuntimeError(
+                        "compile_native : _adc.lib introuvable a cote du module _adc (necessaire pour "
+                        "lier la .dll DSL ; rebatir _adc avec ADC_EXPORT_BUILDING_MODULE).")
+                # /DNOMINMAX : windows.h (tire par dynlib.hpp) ne doit pas definir min/max (casse la STL).
+                # /bigobj : gros TU template. PAS de /Zc:__cplusplus : garder __cplusplus aligne sur le
+                # build du module (sinon la cle d'ABI diverge).
+                cl_flags = ["/nologo", "/LD", "/std:" + std, "/O2", "/DNDEBUG", "/EHsc",
+                            "/permissive-", "/Zc:preprocessor", "/DNOMINMAX", "/bigobj"] + kokkos_compile_flags
+                cmd = ([cc] + cl_flags + ["-I", include, cpp,
+                        "/Fe:" + so_path, "/Fo" + tmp + os.sep,
+                        "/link"] + kokkos_link_flags + [adc_lib])
+            else:
+                optflags = os.environ.get("ADC_DSL_OPTFLAGS", "-O3 -DNDEBUG").split()
+                flags = ["-shared", "-fPIC", "-std=" + std, *optflags,
+                         "-DADC_HEADER_SIG=\"%s\"" % sig, *kokkos_compile_flags]
+                # macOS/Apple-ld : autoriser explicitement les indefinis (resolus a l'execution).
+                if sys.platform == "darwin":
+                    flags += ["-undefined", "dynamic_lookup"]
+                cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *kokkos_link_flags]
+            _run_compile(cmd, "backend production, compile_native")
         return so_path
 
     def compile_or_jit(self, so_path, include=None, mode="jit", name=None, cxx=None, std="c++20",
@@ -4041,14 +4092,19 @@ class HybridModel:
                  else '#include <adc/runtime/amr_dsl_block.hpp>\n')
         # LITTERAL preprocesseur, pas d'appel a abi_key_string() : une inline serait interposee
         # (ELF/RTLD_GLOBAL) vers la copie du module -> cle du module renvoyee -> garde tautologique.
-        key = ('extern "C" const char* adc_native_abi_key() {\n'
+        key = ('#if defined(_WIN32)\n'
+               '#define ADC_LOADER_API extern "C" __declspec(dllexport)\n'
+               '#else\n'
+               '#define ADC_LOADER_API extern "C"\n'
+               '#endif\n'
+               'ADC_LOADER_API const char* adc_native_abi_key() {\n'
                '  return ADC_ABI_KEY_LITERAL;\n'
                '}\n')
         if target == "system":
             # pos_floor (ADC-76, limiteur de positivite Zhang-Shu) : argument plat final, marshale
             # jusqu'au make_block du loader via add_compiled_model. Vieille signature = vieux .so =
             # rejete par la cle d'ABI (les en-tetes ont change), jamais un layout d'arguments errone.
-            install = ('extern "C" void adc_install_native(void* sys, const char* name, const char* limiter,\n'
+            install = ('ADC_LOADER_API void adc_install_native(void* sys, const char* name, const char* limiter,\n'
                        '                                    const char* riemann, const char* recon,\n'
                        '                                    const char* time, double gamma, int substeps,\n'
                        '                                    int evolve, int stride, double pos_floor) {\n'
@@ -4059,7 +4115,7 @@ class HybridModel:
                        '                                                    pos_floor);\n'
                        '}\n')
         else:  # amr_system : surcharge AmrSystem (pas de parametre evolve, AMR mono-bloc)
-            install = ('extern "C" void adc_install_native_amr(void* sys, const char* name,\n'
+            install = ('ADC_LOADER_API void adc_install_native_amr(void* sys, const char* name,\n'
                        '                                        const char* limiter, const char* riemann,\n'
                        '                                        const char* recon, const char* time,\n'
                        '                                        double gamma, int substeps) {\n'

@@ -638,17 +638,40 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
   // flags de l'objet deja charge). Le chemin du module est trouve par dladdr sur un symbole exporte
   // (adc::abi_key). Sur macOS c'est inoffensif (le loader resout deja par dynamic_lookup).
 #if defined(_WIN32)
-  // Chemin "production" du DSL : il resout des symboles de _adc A TRAVERS le chargement de la lib
-  // (promotion RTLD_GLOBAL + dladdr sous POSIX). Pas d'equivalent direct Windows : il faudra
-  // __declspec(dllexport) sur les methodes System + une import library de _adc liee a la .dll
-  // generee (cf. export.hpp / ADC_EXPORT). Tant que ce maillon n'est pas livre (ADC-100), on refuse
-  // PROPREMENT plutot que de produire une .dll qui ne resoudrait pas ses symboles a l'execution.
-  (void)self; (void)name; (void)so_path; (void)limiter; (void)riemann; (void)recon; (void)time;
-  (void)gamma; (void)substeps; (void)evolve; (void)stride; (void)pos_floor;
-  throw std::runtime_error(
-      "add_native_block : backend DSL 'production' (.dll) pas encore supporte sous Windows natif "
-      "(resolution des symboles _adc via __declspec/import library a livrer, ADC-100) ; "
-      "utiliser WSL2 ou un backend non-production.");
+  // Windows (ADC-100) : PAS de RTLD_GLOBAL. La .dll generee est liee a la COMPILATION contre les
+  // import libraries : _adc.lib (symboles System ADC_EXPORT : install_block/grid_context/...) et
+  // kokkoscore.lib (runtime Kokkos PARTAGE en DLL). Ses indefinis sont donc resolus par l'OS-loader
+  // contre _adc.pyd et kokkos*.dll deja charges -- pas besoin de promouvoir un scope global. On
+  // charge simplement la .dll et on resout adc_install_native.
+  adc::dynlib::handle h = adc::dynlib::open(so_path);
+  if (!h)
+    throw std::runtime_error("add_native_block : LoadLibrary('" + so_path + "') : " +
+                             adc::dynlib::last_error() +
+                             " (la .dll doit etre liee contre _adc.lib + kokkoscore.lib ; cf. ADC-100)");
+  {
+    auto key_fn = reinterpret_cast<const char* (*)()>(adc::dynlib::sym(h, "adc_native_abi_key"));
+    if (!key_fn) {
+      adc::dynlib::close(h);
+      throw std::runtime_error("add_native_block : adc_native_abi_key absent de la .dll");
+    }
+    const std::string loader_key = key_fn();
+    const std::string module_key = abi_key();
+    if (loader_key != module_key) {
+      adc::dynlib::close(h);
+      throw std::runtime_error("add_native_block : ABI incompatible -- cle loader '" + loader_key +
+                               "' != cle module '" + module_key + "'");
+    }
+    using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
+                                  const char*, double, int, int, int, double);
+    auto install = reinterpret_cast<install_fn_t>(adc::dynlib::sym(h, "adc_install_native"));
+    if (!install) {
+      adc::dynlib::close(h);
+      throw std::runtime_error("add_native_block : adc_install_native absent de la .dll");
+    }
+    install(static_cast<void*>(self), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
+            time.c_str(), gamma, substeps, evolve ? 1 : 0, stride, pos_floor);
+  }
+  // .dll laissee chargee pour la duree du process (le bloc pointe du code qui y vit).
 #else
   {
     Dl_info info;

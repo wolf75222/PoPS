@@ -682,14 +682,37 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // de adc::abi_key (defini dans system.cpp) -- ce qui couplerait au link tout test compilant
   // amr_system.cpp seul. Sur macOS, inoffensif (le loader resout par dynamic_lookup).
 #if defined(_WIN32)
-  // Backend DSL 'production' (.dll) AMR : meme verrou que cote System -- resolution des symboles _adc
-  // via RTLD_GLOBAL/dladdr (POSIX), sans equivalent natif Windows (__declspec + import library a
-  // livrer, ADC-100). Refus PROPRE tant que non livre.
-  (void)name; (void)so_path; (void)limiter; (void)riemann; (void)recon; (void)time; (void)gamma;
-  (void)substeps;
-  throw std::runtime_error(
-      "AmrSystem::add_native_block : backend DSL 'production' (.dll) pas encore supporte sous Windows "
-      "natif (ADC-100) ; utiliser WSL2 ou un backend non-production.");
+  // Windows (ADC-100) : pas de RTLD_GLOBAL. La .dll AMR generee est liee contre _adc.lib (symbole
+  // AmrSystem::set_compiled_block ADC_EXPORT) + kokkoscore.lib (Kokkos partage). Indefinis resolus
+  // par l'OS-loader contre _adc.pyd + kokkos*.dll deja charges. On charge + resout adc_install_native_amr.
+  adc::dynlib::handle h = adc::dynlib::open(so_path);
+  if (!h)
+    throw std::runtime_error("AmrSystem::add_native_block : LoadLibrary('" + so_path + "') : " +
+                             adc::dynlib::last_error() +
+                             " (.dll liee contre _adc.lib + kokkoscore.lib ; cf. ADC-100)");
+  {
+    auto key_fn = reinterpret_cast<const char* (*)()>(adc::dynlib::sym(h, "adc_native_abi_key"));
+    if (!key_fn) {
+      adc::dynlib::close(h);
+      throw std::runtime_error("AmrSystem::add_native_block : adc_native_abi_key absent de la .dll");
+    }
+    const std::string loader_key = key_fn();
+    const std::string module_key = detail::abi_key_string();
+    if (loader_key != module_key) {
+      adc::dynlib::close(h);
+      throw std::runtime_error("AmrSystem::add_native_block : ABI incompatible -- loader '" +
+                               loader_key + "' != module '" + module_key + "'");
+    }
+    using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
+                                  const char*, double, int);
+    auto install = reinterpret_cast<install_fn_t>(adc::dynlib::sym(h, "adc_install_native_amr"));
+    if (!install) {
+      adc::dynlib::close(h);
+      throw std::runtime_error("AmrSystem::add_native_block : adc_install_native_amr absent de la .dll");
+    }
+    install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
+            time.c_str(), gamma, substeps);
+  }
 #else
   {
     Dl_info info;
