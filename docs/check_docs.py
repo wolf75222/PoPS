@@ -122,7 +122,11 @@ def last_commit(doc_rel: str, root: pathlib.Path) -> str | None:
 
 
 def commits_touching(ref: str, deps: list[str], root: pathlib.Path) -> list[str] | None:
-    res = _git(["rev-list", f"{ref}..HEAD", "--", *deps], root)
+    # --no-merges : un merge ne modifie pas un depends_on, il propage du contenu deja committe
+    # (les commits porteurs sont detectes par ailleurs) ; sans ce filtre, la simplification
+    # d'historique de rev-list peut remonter des commits de merge en faux positifs, notamment
+    # quand `ref` acquitte un commit d'une branche soeur pas encore fusionnee.
+    res = _git(["rev-list", "--no-merges", f"{ref}..HEAD", "--", *deps], root)
     if res is None:
         return None
     return [c for c in res.splitlines() if c]
