@@ -17,6 +17,11 @@
 # reparties sur 2 GH200). Invariants globaux DOIVENT etre bit-identiques. Modele = B_z device
 # (fonction pure de la position) : c'est le SUBSTRAT halos/MPI que le .so hyqmom15 emprunte,
 # pas le modele hyqmom15 lui-meme (cf. note GH200_HYQMOM15.md, perimetre).
+#
+# Reproductibilite : le binaire gpu_amr_bz_mpi_validate est VERSIONNE dans le depot
+# (python/tests/gpu/gpu_amr_bz_mpi_validate.cpp) et se construit par le script versionne
+# python/tests/gpu/romeo_gpuval2_mpi_build.sh (nvcc_wrapper + OpenMPI CUDA-aware). On le
+# reutilise ici ; ce script ne reconstruit que la partie multi-GPU specifique a ADC-181.
 set -u
 module load cuda/12.6
 romeo_load_armgpu_env

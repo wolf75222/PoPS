@@ -9,13 +9,8 @@ le seam de compilation `adc::add_compiled_model` (chemin natif complet : `assemb
 device, halos).
 
 `dense_eig.hpp` a ete concu pour nvcc mais n'avait jamais ete EXECUTE sur device. Cette
-note apporte la preuve d'execution device et la parite hote/device sur le meme noeud.
-
-Artefact teste (identique au depot) :
-
-```
-md5(include/adc/numerics/dense_eig.hpp) = 86fb1cbbec0e265cd255559434ce83c6   (worktree == ROMEO ~/adc_cpp)
-```
+note apporte la preuve d'execution device et la parite hote/device sur le meme noeud (les
+md5 des sources/artefacts testes sont en section Reproductibilite ci-dessous).
 
 Complement de `docs/GPU_ROMEO.md` (qui valide le flux d'une brique generee) : ici on
 valide le chemin EIGEN (bornes de vitesses signees du HLL) bout en bout dans un run.
@@ -25,13 +20,44 @@ valide le chemin EIGEN (bornes de vitesses signees du HLL) bout en bout dans un 
 Noeud `armgpu` (Grace-Hopper, aarch64), `module load cuda/12.6` + `romeo_load_armgpu_env`.
 Compilateur device = `nvcc_wrapper` du Kokkos installe `~/adc_gpu_p1/kinstall`
 (SERIAL;CUDA, sm_90). Le driver `diocotron_gpu.cpp` (briques `Hyqmom15Hyp/Src/Ell` +
-`adc::System` + Poisson `geometric_mg`) lit l'etat initial binaire `ic_128.raw` (produit
-par le python valide) et avance le diocotron 15 moments. Sources et recette completes :
-`~/runs_hyqmom/gpu/` sur ROMEO (driver, `hyqmom15_brick.hpp`, `CMakeLists.txt`, IC).
+`adc::System` + Poisson `geometric_mg`) lit l'etat initial binaire `ic_128.raw` et avance le
+diocotron 15 moments.
 
-Scripts versionnes (reproductibilite) : `docs/validation/parity181.sbatch` (parite
-hote/device + timing, section 2 et 4), `docs/validation/mpi181.sbatch` (substrat
-multi-GPU, section 3), `docs/validation/compare_snap.cpp` (comparateur d'etats finaux).
+## Reproductibilite (sources versionnees)
+
+Tout ce qui produit les chiffres ci-dessous est dans le depot, sous `docs/validation/` :
+
+* `make_brick_and_ic.py` : generateur de la brique DSL `hyqmom15_brick.hpp` (emise par
+  `emit_cpp_{brick,source,elliptic}` depuis le modele hyqmom15 valide) ET de l'etat initial
+  `ic_<n>.raw` (`diocotron_state` du python valide) ;
+* `diocotron_gpu.cpp` : driver (lit l'IC binaire, assemble le composite par
+  `add_compiled_model`, avance, dump `snap_*.raw` + `growth.csv`) ;
+* `CMakeLists.txt` : build du driver (compile aussi `python/system.cpp`) ;
+* `compare_snap.cpp` : comparateur d'etats finaux ;
+* `parity181.sbatch` (parite + timing, sections 2 et 4), `mpi181.sbatch` (substrat
+  multi-GPU, section 3).
+
+`hyqmom15_brick.hpp` et `ic_<n>.raw` ne sont PAS versionnes : ce sont des artefacts derives,
+regeneres a l'identique par `make_brick_and_ic.py` sur une machine disposant du module python
+adc (le module C++ n'est pas requis pour l'emission DSL, pure-python) :
+
+```
+ADC_CASES=/chemin/adc_cases PYTHONPATH=/chemin/adc_cpp/python \
+  python docs/validation/make_brick_and_ic.py --ns 128 256 --out $WORK
+```
+
+Determinisme verifie (regeneration locale vs artefacts du run ROMEO, bit-pour-bit) :
+
+```
+md5(ic_128.raw)          = da245ba8934546986508976a64156d2e   (regenere == ROMEO)
+md5(hyqmom15_brick.hpp)  = d785b13ac0da1dd349ff4775368c8ff2   (--ns 128 256, 1940 lignes, == ROMEO)
+md5(include/.../dense_eig.hpp) = 86fb1cbbec0e265cd255559434ce83c6   (worktree == ROMEO ~/adc_cpp)
+```
+
+Le binaire device n'est plus stage a la main : `parity181.sbatch` recompile les DEUX
+variantes (device nvcc_wrapper / hote g++ Serial) depuis les MEMES sources versionnees
+stagees dans `$WORK`, sur le noeud GH200. Seules la brique et l'IC (regeneres) doivent etre
+deposes dans `$WORK` au prealable (cf. entete du script).
 
 ## 1. Execution device (acquis, job 654562)
 
@@ -53,11 +79,12 @@ device. C'est la premiere preuve que le chemin Hessenberg+QR `ADC_HD` s'execute 
 
 Protocole A==B des campagnes precedentes. Le MEME `diocotron_gpu.cpp` + `hyqmom15_brick.hpp`
 + le MEME arbre d'en-tetes `~/adc_cpp/include` sont compiles en deux variantes sur le
-noeud GH200 :
+noeud GH200, par `parity181.sbatch`, depuis les MEMES sources versionnees stagees dans
+`$WORK` (plus aucun binaire stage a la main) :
 
-* device : binaire reutilise du job 654562 (nvcc_wrapper, `DefaultExecutionSpace=Cuda`) ;
-* hote   : recompile `g++ -O3` contre un Kokkos Serial aarch64 construit sur le noeud
-  (`DefaultExecutionSpace=Serial`).
+* device : `nvcc_wrapper` du `kinstall` GPU, `DefaultExecutionSpace=Cuda` ;
+* hote   : `g++` contre un Kokkos Serial aarch64 construit sur le noeud,
+  `DefaultExecutionSpace=Serial`.
 
 Sous Serial, `DefaultExecutionSpace == DefaultHostExecutionSpace` : la garde `if constexpr`
 de `for_each_cell` (#165) prend la boucle hote sequentielle sur les petites boites (niveaux
@@ -81,21 +108,33 @@ max rel              = 6.456023e-10
 
 Lecture :
 
-* **Chemin `dense_eig` lui-meme : bit-identique.** Le pas de temps `dt` (colonne `dt` de
-  `growth.csv`) est issu de `step_cfl` = CFL sur le MAX des bornes de vitesses rendues par
-  `real_eig_minmax` cellule par cellule. Une reduction MAX est exacte quel que soit l'ordre :
-  `dt` est identique device/hote a tous les pas, et l'horloge cumulee `t` ne differe que de
-  2.4e-17 apres 20 pas (rel 1.5e-15). Les bornes de vitesses produites par le QR `ADC_HD`
-  sont donc identiques en device et en hote. Le mode physique du diocotron `a4` (l=4, magnitude
-  ~5.94e-2) est lui aussi bit-identique device/hote dans `growth.csv`.
-* **Ecart residuel = potentiel multigrille, pas le solveur de vitesses.** `max |a-b|` =
-  3.45e-13 tombe a l'index 256884, dans la zone `phi` (>= 245760). Le potentiel sort du
-  V-cycle Poisson dont le critere de residu repose sur une reduction SOMME : sa reassociation
-  en `parallel_for` (device) vs boucle serie (hote) change le dernier bit du residu, donc
-  marginalement les corrections, accumule sur les pas. Ecart absolu 3e-13 sur des champs
-  d'ordre 1 a 1.7e3 : niveau bruit machine. `max rel` 6.5e-10 porte sur une entree de
-  magnitude quasi nulle (relatif gonfle). Comportement attendu et documente des reductions
-  paralleles ; le chemin vitesses exactes (l'objet de ADC-181) n'en est pas la cause.
+* **Chemin `dense_eig` : accord a la precision imprimee (~1 ULP), pas une preuve bit-exacte.**
+  Le pas de temps `dt` (colonne `dt` de `growth.csv`) est issu de `step_cfl` = CFL sur le MAX
+  des bornes de vitesses rendues par `real_eig_minmax` cellule par cellule. La reduction MAX
+  est exacte quel que soit l'ordre : a entree identique, le QR `ADC_HD` rend des bornes
+  identiques device/hote (c'est la propriete algorithmique du chemin eigen, deterministe et
+  de MEME source host/device). Mais ce qu'on OBSERVE n'est qu'un accord a la precision
+  IMPRIMEE : `growth.csv` n'ecrit `dt` qu'en `%.3e` (4 chiffres) et les modes `a_l` qu'en
+  `%.6e` (7 chiffres), pas les 16 chiffres d'un double. L'horloge cumulee `t` differe de
+  2.4e-17 apres 20 pas (rel 1.5e-15, ~1 ULP) : c'est la preuve DIRECTE que les `dt` ne sont
+  PAS tous strictement bit-identiques (sinon, sommes dans le meme ordre, `t` serait egal au
+  bit). L'origine est la retroaction phi -> source (bullet suivant) qui perturbe au niveau
+  bruit l'etat lu par `real_eig_minmax` des le pas 2. Sur le mode physique du diocotron, `a4`
+  (l=4, ~5.94e-2) coincide sur les 7 chiffres imprimes device/hote ; les petits modes de
+  bruit `a2/a3/a5/a6` (~1e-16) different deja dans le CSV imprime. Formulation juste : accord
+  ~1 ULP sur l'observable, pas une egalite bit-a-bit.
+* **Ecarts DIFFUS au niveau bruit machine, MAXIMUM dans le potentiel multigrille.** Le
+  comparateur ne donne que 27710/262144 = 10.57% de doubles bit-identiques : ~89% du payload
+  differe, champs de moments COMPRIS (cf. `a2/a3/a5/a6` ci-dessus). Les ecarts sont donc
+  DIFFUS, pas confines a `phi`. Le MAXIMUM `|a-b|` = 3.45e-13 tombe, lui, a l'index 256884
+  (zone `phi` >= 245760). Origine commune : le V-cycle Poisson a un critere de residu en
+  reduction SOMME, dont la reassociation `parallel_for` (device) vs boucle serie (hote) change
+  le dernier bit ; le potentiel corrige se propage ensuite par le terme source electrique a
+  TOUT l'etat (couplage phi -> source -> moments), d'ou la diffusion. Ecart absolu 3e-13 sur
+  des champs d'ordre 1 a 1.7e3 : bruit machine. `max rel` 6.5e-10 porte sur une entree de
+  magnitude quasi nulle (relatif gonfle). Comportement attendu des reductions paralleles : le
+  solveur de vitesses (objet de ADC-181) n'est pas la SOURCE de la divergence, il propage
+  fidelement l'etat qu'on lui donne.
 
 ## 3. Multi-GPU MPI (substrat halos, job 654863) et perimetre
 
@@ -156,7 +195,17 @@ la divergence reste celle, benigne, d'un solveur dense minuscule par thread.
 
 * `dense_eig` (`real_eig_minmax`, Hessenberg+QR `ADC_HD`) EXECUTE et CORRECT sur GH200
   device a travers le `.so` hyqmom15 (`exact_speeds`, `hll`) : section 1 (24706 pas) +
-  section 2 (parite hote/device meme noeud).
+  section 2 (parite hote/device meme noeud, accord ~1 ULP sur l'observable, ecarts diffus au
+  niveau bruit machine maximaux dans le potentiel multigrille).
 * substrat multi-GPU MPI re-confirme bit-identique (max) / dernier ulp (sommes) sur le
   noeud post-#254 : section 3.
-* reste : driver hyqmom15 multi-boite + MPI dedie (section 3, perimetre).
+* sources de validation entierement versionnees (`docs/validation/`), brique + IC regeneres
+  bit-pour-bit par `make_brick_and_ic.py`, les deux variantes (device/hote) recompilees par
+  `parity181.sbatch` depuis ces sources.
+
+ADC-181 RESTE OUVERTE : cette note (et la PR associee) AVANCE l'issue, elle ne la ferme pas.
+Reste a livrer pour la fermer : un driver hyqmom15 MULTI-BOITE + MPI dedie (soit `AmrSystem`
+multi-box cablant le composite `Hyqmom15Hyp/Src/Ell` + Poisson, soit une decomposition MPI de
+`System`). Le multi-GPU specifique hyqmom15 n'est ici couvert que par SUBSTRAT (harnais
+`gpu_amr_bz_mpi_validate`, modele B_z, #59/#254) + l'argument de localite cellule de
+`real_eig_minmax`, pas par un run hyqmom15 multi-rang direct.
