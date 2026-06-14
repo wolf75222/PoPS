@@ -187,20 +187,8 @@ class GeometricMG {
   // EXACTE a chaque resolution grossiere, ce qui preserve l'ordre 2. Appeler une fois
   // apres construction, avant solve. NE PAS appeler => eps uniforme (chemin historique).
   void set_epsilon(std::function<Real(Real, Real)> eps_fn) {
-    const BCRec ebc = eps_bc();
-    for (auto& L : lev_) {
-      L.eps = MultiFab(L.ba, L.dm, 1, 1);  // 1 ghost : voisins de bord de box lus
-      const Geometry& g = L.geom;
-      for (int li = 0; li < L.eps.local_size(); ++li) {
-        Array4 e = L.eps.fab(li).array();
-        const Box2D b = L.eps.box(li);
-        // initialisation hote (fonction std::function non device-callable)
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            e(i, j) = eps_fn(g.x_cell(i), g.y_cell(j));
-      }
-      fill_ghosts(L.eps, g.domain, ebc);
-    }
+    // 1 ghost (voisins de bord de box lus), ghosts remplis (do_fill).
+    sample_per_level(&MGLevel::eps, eps_fn, 1, true, eps_bc());
     has_eps_ = true;
   }
 
@@ -210,21 +198,8 @@ class GeometricMG {
   // sont remplis a chaque niveau. A utiliser quand eps vient d'un champ par cellule
   // (pas d'une formule analytique) : c'est le point d'entree pour le cablage System.
   void set_epsilon(const MultiFab& eps_fine) {
-    const BCRec ebc = eps_bc();
-    for (auto& L : lev_) L.eps = MultiFab(L.ba, L.dm, 1, 1);
-    // niveau fin : copie de la composante 0
-    for (int li = 0; li < lev_[0].eps.local_size(); ++li) {
-      Array4 e = lev_[0].eps.fab(li).array();
-      const ConstArray4 s = eps_fine.fab(li).const_array();
-      const Box2D b = lev_[0].eps.box(li);
-      for_each_cell(b, detail::CopyComp0Kernel{e, s});
-    }
-    fill_ghosts(lev_[0].eps, lev_[0].geom.domain, ebc);
-    // niveaux grossiers : moyenne conservative du milieu, puis ghosts
-    for (int l = 1; l < num_levels(); ++l) {
-      average_down(lev_[l - 1].eps, lev_[l].eps, 2);
-      fill_ghosts(lev_[l].eps, lev_[l].geom.domain, ebc);
-    }
+    // copie sur le fin + restriction vers les grossiers ; 1 ghost, ghosts remplis a chaque niveau.
+    restrict_and_fill(&MGLevel::eps, eps_fine, 1, true, eps_bc());
     has_eps_ = true;
   }
 
@@ -239,19 +214,8 @@ class GeometricMG {
   void set_epsilon_anisotropic(std::function<Real(Real, Real)> eps_x_fn,
                                std::function<Real(Real, Real)> eps_y_fn) {
     set_epsilon(std::move(eps_x_fn));  // faces x : reutilise le cablage eps isotrope
-    const BCRec ebc = eps_bc();
-    for (auto& L : lev_) {
-      L.eps_y = MultiFab(L.ba, L.dm, 1, 1);  // 1 ghost : voisins de bord de box lus
-      const Geometry& g = L.geom;
-      for (int li = 0; li < L.eps_y.local_size(); ++li) {
-        Array4 e = L.eps_y.fab(li).array();
-        const Box2D b = L.eps_y.box(li);
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            e(i, j) = eps_y_fn(g.x_cell(i), g.y_cell(j));
-      }
-      fill_ghosts(L.eps_y, g.domain, ebc);
-    }
+    // faces y : second champ eps_y, meme convention (1 ghost, ghosts remplis).
+    sample_per_level(&MGLevel::eps_y, eps_y_fn, 1, true, eps_bc());
     has_eps_y_ = true;
   }
 
@@ -261,19 +225,8 @@ class GeometricMG {
   // (ex. depuis System). eps_x porte les faces x, eps_y les faces y.
   void set_epsilon_anisotropic(const MultiFab& eps_x_fine, const MultiFab& eps_y_fine) {
     set_epsilon(eps_x_fine);  // faces x : reutilise le cablage eps isotrope (+ restriction)
-    const BCRec ebc = eps_bc();
-    for (auto& L : lev_) L.eps_y = MultiFab(L.ba, L.dm, 1, 1);
-    for (int li = 0; li < lev_[0].eps_y.local_size(); ++li) {
-      Array4 e = lev_[0].eps_y.fab(li).array();
-      const ConstArray4 s = eps_y_fine.fab(li).const_array();
-      const Box2D b = lev_[0].eps_y.box(li);
-      for_each_cell(b, detail::CopyComp0Kernel{e, s});
-    }
-    fill_ghosts(lev_[0].eps_y, lev_[0].geom.domain, ebc);
-    for (int l = 1; l < num_levels(); ++l) {
-      average_down(lev_[l - 1].eps_y, lev_[l].eps_y, 2);
-      fill_ghosts(lev_[l].eps_y, lev_[l].geom.domain, ebc);
-    }
+    // faces y : second champ eps_y, copie + restriction (1 ghost, ghosts remplis a chaque niveau).
+    restrict_and_fill(&MGLevel::eps_y, eps_y_fine, 1, true, eps_bc());
     has_eps_y_ = true;
   }
 
@@ -285,17 +238,9 @@ class GeometricMG {
   // grossiers (meme valeur physique echantillonnee). NE PAS appeler => kappa = 0 (Poisson, chemin
   // historique strictement inchange). Composable avec set_epsilon (eps(x) et kappa(x) ensemble).
   void set_reaction(std::function<Real(Real, Real)> kappa_fn) {
-    for (auto& L : lev_) {
-      L.kappa = MultiFab(L.ba, L.dm, 1, 0);
-      const Geometry& g = L.geom;
-      for (int li = 0; li < L.kappa.local_size(); ++li) {
-        Array4 k = L.kappa.fab(li).array();
-        const Box2D b = L.kappa.box(li);
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            k(i, j) = kappa_fn(g.x_cell(i), g.y_cell(j));
-      }
-    }
+    // kappa : DIAGONAL, lu en (i,j) seul -> 0 ghost et do_fill=false (AUCUN fill_ghosts, historique).
+    // L'ebc est alors inutilise (BCRec{} jamais lu).
+    sample_per_level(&MGLevel::kappa, kappa_fn, 0, false, BCRec{});
     has_kappa_ = true;
   }
 
@@ -303,14 +248,8 @@ class GeometricMG {
   // niveau fin puis RESTREINT (average_down) vers les grossiers. Point d'entree pour le cablage
   // System (un champ kappa par cellule).
   void set_reaction(const MultiFab& kappa_fine) {
-    for (auto& L : lev_) L.kappa = MultiFab(L.ba, L.dm, 1, 0);
-    for (int li = 0; li < lev_[0].kappa.local_size(); ++li) {
-      Array4 k = lev_[0].kappa.fab(li).array();
-      const ConstArray4 s = kappa_fine.fab(li).const_array();
-      const Box2D b = lev_[0].kappa.box(li);
-      for_each_cell(b, detail::CopyComp0Kernel{k, s});
-    }
-    for (int l = 1; l < num_levels(); ++l) average_down(lev_[l - 1].kappa, lev_[l].kappa, 2);
+    // kappa : DIAGONAL -> 0 ghost et do_fill=false (AUCUN fill_ghosts, ni fin ni grossier, historique).
+    restrict_and_fill(&MGLevel::kappa, kappa_fine, 0, false, BCRec{});
     has_kappa_ = true;
   }
 
@@ -553,6 +492,56 @@ class GeometricMG {
                            MultiFab(ba, dm, 1, 0), MultiFab(ba, dm, 1, 0),
                            MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{},
                            MultiFab{}, MultiFab{}, MultiFab{}, MultiFab{}});
+  }
+
+  // FACTORISATION (cablage des coefficients d'operateur, partie COMMUNE) : un champ scalaire
+  // (eps, eps_y, kappa, ...) designe par un pointeur-vers-membre MGLevel::*, soit ECHANTILLONNE
+  // PAR NIVEAU depuis une fonction analytique (sample_per_level), soit COPIE sur le niveau fin
+  // puis RESTREINT (average_down) vers les grossiers (restrict_and_fill). Les deux preservent EXACTEMENT
+  // les corps inlines d'origine, y compris les DIFFERENCES entre coefficients :
+  //   - nghost : 1 pour eps/eps_y (voisins de face lus), 0 pour kappa (diagonal, lu en (i,j) seul) ;
+  //   - do_fill : eps/eps_y remplissent leurs ghosts (fill_ghosts) ; kappa NE LES REMPLIT PAS
+  //     (0 ghost, omission HISTORIQUE conservee a l'identique -- AUCUN fill_ghosts ajoute ici).
+
+  // Echantillonnage hote PAR NIVEAU d'un champ depuis fn (std::function non device-callable) : alloue
+  // MultiFab(L.ba, L.dm, 1, nghost) a chaque niveau, ecrit f(x_cell, y_cell) au centre, puis ghosts
+  // (fill_ghosts avec ebc) UNIQUEMENT si do_fill. Corps extrait mot-pour-mot de set_epsilon(fn) etc.
+  void sample_per_level(MultiFab MGLevel::* field, const std::function<Real(Real, Real)>& fn,
+                        int nghost, bool do_fill, const BCRec& ebc) {
+    for (auto& L : lev_) {
+      MultiFab& F = L.*field;
+      F = MultiFab(L.ba, L.dm, 1, nghost);
+      const Geometry& g = L.geom;
+      for (int li = 0; li < F.local_size(); ++li) {
+        Array4 e = F.fab(li).array();
+        const Box2D b = F.box(li);
+        // initialisation hote (fonction std::function non device-callable)
+        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+            e(i, j) = fn(g.x_cell(i), g.y_cell(j));
+      }
+      if (do_fill) fill_ghosts(F, g.domain, ebc);
+    }
+  }
+
+  // Copie comp 0 du champ fin (deja discretise) sur le niveau fin puis RESTRICTION (average_down,
+  // moyenne 2x2) vers les grossiers : alloue MultiFab(L.ba, L.dm, 1, nghost) a chaque niveau, ghosts
+  // (fill_ghosts avec ebc) du niveau fin PUIS de chaque niveau grossier apres sa moyenne, UNIQUEMENT
+  // si do_fill. Corps extrait mot-pour-mot de set_epsilon(const MultiFab&) / set_reaction(const MultiFab&).
+  void restrict_and_fill(MultiFab MGLevel::* field, const MultiFab& fine, int nghost, bool do_fill,
+                         const BCRec& ebc) {
+    for (auto& L : lev_) L.*field = MultiFab(L.ba, L.dm, 1, nghost);
+    for (int li = 0; li < (lev_[0].*field).local_size(); ++li) {
+      Array4 e = (lev_[0].*field).fab(li).array();
+      const ConstArray4 s = fine.fab(li).const_array();
+      const Box2D b = (lev_[0].*field).box(li);
+      for_each_cell(b, detail::CopyComp0Kernel{e, s});
+    }
+    if (do_fill) fill_ghosts(lev_[0].*field, lev_[0].geom.domain, ebc);
+    for (int l = 1; l < num_levels(); ++l) {
+      average_down(lev_[l - 1].*field, lev_[l].*field, 2);
+      if (do_fill) fill_ghosts(lev_[l].*field, lev_[l].geom.domain, ebc);
+    }
   }
 
   void vcycle_rec(int l, const BCRec& bc) {
