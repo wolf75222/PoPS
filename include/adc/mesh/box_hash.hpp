@@ -14,6 +14,7 @@
 #include <adc/mesh/box_array.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -68,13 +69,13 @@ class BoxHash {
   int fdiv(int x) const {
     return x >= 0 ? x / bin_ : -((-x + bin_ - 1) / bin_);
   }
-  static long key(int bx, int by) {
-    return (static_cast<long>(bx) << 32) |
-           (static_cast<long>(static_cast<unsigned>(by)) & 0xffffffffL);
+  static std::int64_t key(int bx, int by) {
+    return (static_cast<std::int64_t>(bx) << 32) |
+           (static_cast<std::int64_t>(static_cast<std::uint32_t>(by)) & INT64_C(0xffffffff));
   }
 
   int bin_;
-  std::unordered_map<long, std::vector<int>> bins_;
+  std::unordered_map<std::int64_t, std::vector<int>> bins_;
 };
 
 // Taille de bin raisonnable : la plus grande extension de box du BoxArray, de
