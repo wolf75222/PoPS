@@ -12,7 +12,7 @@ ne se melangent pas, et identifier les morceaux a factoriser, archiver ou renfor
 n'est pas une roadmap scientifique : c'est un audit de code.
 
 Convention de commentaires associee : voir
-[`CODE_DOCUMENTATION_CONVENTION.md`](CODE_DOCUMENTATION_CONVENTION.md). Chaque fichier doit porter
+`docs/CODE_DOCUMENTATION_CONVENTION.md`. Chaque fichier doit porter
 une entete de responsabilite, chaque classe non triviale doit exposer son contrat et ses contraintes,
 et les commentaires internes doivent expliquer les invariants numeriques/MPI/GPU plutot que
 paraphraser les lignes.
