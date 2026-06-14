@@ -47,7 +47,7 @@ reviewed = "6526688ad882c01ebc5eda737b082cefac490348"
 [docs."docs/sphinx/getting_started/first_run.md"]
 owner = "Romain"
 mode = "strict"
-depends_on = ["python/adc/__init__.py", "python/system.cpp", "include/adc/physics/bricks.hpp", "include/adc/runtime/system.hpp"]
+depends_on = ["python/adc/__init__.py", "include/adc/physics/bricks.hpp", "include/adc/runtime/system.hpp"]
 tested_by = []
 testable = true
 reviewed = "16c928ea027fda0260ab639378f5398612ee4d51"

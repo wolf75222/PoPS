@@ -6,8 +6,10 @@ name: Docs
 #   - push master AVEC "[docs]" dans le message de commit : publie la doc du nouveau master ;
 #   - workflow_dispatch : build + validation a la demande (deploie seulement depuis master) ;
 #   - schedule (dimanche 05:00 UTC, decale de quality.yml a 04:00 et du nightly ci-full a 03:17) :
-#     rebuild hebdo pour attraper toute derive d'environnement (image runner, deps). Un gate
-#     anti-gaspillage saute le gros build si master n'a pas bouge depuis le dernier build docs reussi.
+#     rebuild hebdo INCONDITIONNEL pour attraper toute derive d'environnement (image runner, deps),
+#     y compris master fige. Un build/semaine est le cout assume de ce filet. (Pas de gate
+#     anti-gaspillage : un gate compare-au-dernier-sha se neutralisait lui-meme -- un run cron saute
+#     re-declarait le meme sha 'success', donc la semaine suivante il re-sautait, indefiniment.)
 # scripts/build_docs.sh est la SOURCE UNIQUE des etapes (identique en local et en CI). Apres le
 # build, deux passes INFORMATIVES non bloquantes : linkcheck (liens, externes flaky toleres) et
 # rejeu des exemples de doc (docs/run_doc_examples.py, scripts du champ tested_by du docmap).
@@ -22,12 +24,10 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# Moindre privilege au niveau workflow : le job build ne lit que le contenu. pages:write +
+# id-token:write sont eleves au seul job deploy (le seul qui publie).
 permissions:
   contents: read
-  pages: write
-  id-token: write
-  # actions: read => le gate cron lit la liste des runs de docs.yml via l'API (gh api).
-  actions: read
 
 jobs:
   build:
@@ -36,51 +36,19 @@ jobs:
       github.event_name == 'schedule' ||
       contains(github.event.head_commit.message, '[docs]')
     runs-on: ubuntu-latest
-    # built = 'true' UNIQUEMENT si l'artefact a reellement ete produit (build non saute par le gate
-    # cron). deploy s'y conditionne pour ne JAMAIS publier sans build.
-    outputs:
-      built: ${{ steps.mark.outputs.built }}
     steps:
-      # Gate anti-gaspillage, schedule UNIQUEMENT. Sur un cron, on ne relance le gros build que si
-      # master a bouge depuis le dernier run docs.yml REUSSI : on lit le head_sha de ce run via
-      # l'API GitHub et on le compare au sha courant. Identique -> skip=true, et TOUS les steps
-      # suivants (jusqu'a l'upload) sont sautes -> deploy ne tourne pas (pas d'artefact).
-      # Hors schedule, ce step ne tourne pas : steps.gate.outputs.skip reste vide ('' != 'true'),
-      # donc les steps suivants tournent normalement (push [docs] / dispatch = build inconditionnel).
-      # En cas de pepin API, on retombe sur skip=false (fail-open : on construit).
-      - name: Gate cron (skip si master inchange)
-        id: gate
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          last=$(gh api \
-            "repos/${{ github.repository }}/actions/workflows/docs.yml/runs?branch=master&status=success&per_page=1" \
-            --jq '.workflow_runs[0].head_sha // ""' || echo "")
-          echo "Dernier build docs reussi sur master : ${last:-<aucun>}"
-          echo "SHA courant                          : ${{ github.sha }}"
-          if [ -n "$last" ] && [ "$last" = "${{ github.sha }}" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "master inchange depuis le dernier build docs reussi -> on saute le gros build."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       # fetch-depth: 0 = historique complet, requis par la fraicheur de check_docs.py (appele par
       # build_docs.sh) -- sinon git_state() voit un clone shallow et saute le check.
       - uses: actions/checkout@v5
-        if: steps.gate.outputs.skip != 'true'
         with:
           fetch-depth: 0
 
       - name: System deps
-        if: steps.gate.outputs.skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libeigen3-dev doxygen graphviz ninja-build
 
       - uses: actions/setup-python@v5
-        if: steps.gate.outputs.skip != 'true'
         with:
           python-version: '3.12'
 
@@ -89,7 +57,6 @@ jobs:
       # docs/run_doc_examples.py rejoue : make_figures() importe matplotlib et ecrit un GIF via
       # PillowWriter. On installe avant de compiler/importer adc.
       - name: Python deps
-        if: steps.gate.outputs.skip != 'true'
         run: |
           pip install --upgrade pip
           pip install numpy matplotlib
@@ -99,40 +66,35 @@ jobs:
       # dans scripts/build_docs.sh : SOURCE UNIQUE, identique en local et en CI. Le script construit
       # le module via le preset `python` (pin interpreteur de setup-python ; ninja fourni par apt).
       - name: Build docs (lint + module + sphinx + doxygen)
-        if: steps.gate.outputs.skip != 'true'
         run: bash scripts/build_docs.sh
 
       # INFORMATIF : verification des liens. Les liens externes flaky ne cassent rien (continue-on-error).
       - name: Linkcheck (informatif)
-        if: steps.gate.outputs.skip != 'true'
         continue-on-error: true
         run: python -m sphinx -b linkcheck docs/sphinx docs/_build/linkcheck
 
       # INFORMATIF : rejeu des scripts d'exemple references par tested_by (docmap), en --quick. Le
       # module build-py vient d'etre construit par build_docs.sh ; run_doc_examples.py le localise seul.
       - name: Exemples de doc (informatif)
-        if: steps.gate.outputs.skip != 'true'
         continue-on-error: true
         run: python docs/run_doc_examples.py --timeout 600
 
-      # Marqueur : l'artefact a ete produit (build reel, non saute par le gate). deploy s'y conditionne.
-      - name: Marqueur build effectif
-        id: mark
-        if: steps.gate.outputs.skip != 'true'
-        run: echo "built=true" >> "$GITHUB_OUTPUT"
-
       - uses: actions/upload-pages-artifact@v3
-        if: steps.gate.outputs.skip != 'true'
         with:
           path: docs/_site
 
   deploy:
     needs: build
-    # Ne PUBLIE que depuis master ET seulement si le build a reellement produit l'artefact
-    # (built == 'true' : ni saute par le gate cron, ni echoue). Un workflow_dispatch sur une branche
-    # construit et valide la doc (job build) SANS pousser un build non-merge sur le site Pages live.
-    if: ${{ github.ref == 'refs/heads/master' && needs.build.outputs.built == 'true' }}
+    # Ne PUBLIE que depuis master. Un workflow_dispatch sur une branche construit et valide la doc
+    # (job build) SANS pousser un build non-merge sur le site Pages live. deploy ne tourne que si
+    # build a reussi (needs: build) ; build ayant l'upload de l'artefact en derniere etape
+    # inconditionnelle, un build vert implique toujours un artefact present.
+    if: ${{ github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
+    # pages:write + id-token:write eleves ici : seul job qui publie sur Pages.
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

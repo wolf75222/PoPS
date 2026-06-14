@@ -225,6 +225,13 @@ def check_links_and_inline(p: pathlib.Path, text: str, rel: str, testable: bool,
         path = target.split("#")[0]
         if (not path or target.startswith(("http://", "https://", "mailto:", "data:", "#"))):
             continue
+        # URL externe sans schema explicite : tout autre schema (ftp://, ssh://...) ou cible de forme
+        # hote (www.x, domaine.tld/...) n'est PAS un chemin de fichier du depot. Sans ce garde-fou un
+        # futur lien externe ecrit sans http(s):// casserait la lane PR (faux "fichier introuvable").
+        first = path.split("/", 1)[0]
+        looks_host = "/" in path and "." in first and first.rsplit(".", 1)[-1].isalpha()
+        if "://" in target or first.startswith("www.") or looks_host:
+            continue
         # ne traiter que ce qui ressemble a un chemin de fichier (extension ou separateur),
         # pour ne pas confondre une notation type out[l-1](c) avec un lien.
         if "/" not in path and "." not in pathlib.PurePosixPath(path).name:
