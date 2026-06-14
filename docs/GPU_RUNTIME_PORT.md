@@ -1,398 +1,398 @@
-# Portage de la pile runtime sur GPU (feuille de route)
+# Porting the runtime stack to GPU (roadmap)
 
-Le DSL et le coeur de calcul sont verifies jusqu'au GPU GH200 (flux, brique generee, CAS Euler complet
-via le seam Kokkos `for_each_cell` ; cf. docs/GPU_ROMEO.md). Ce qui reste pour une PRODUCTION GPU de
-bout en bout, c'est porter la PILE RUNTIME entiere (System / MultiFab / Poisson / AMR / MPI) sur device.
-ETAT (juin 2026) : le solveur MONO-GRILLE complet (transport + BCs + couplages + Poisson + pas de
-temps, orchestre par le System) tourne sur GH200, verifie == CPU (phases 1-5, 7) ; les ops de champ
-AMR (reflux, transferts) tournent sur device (phase 5) ; l'echange de halos MULTI-GPU est valide
-(phase 6, np=1/2/4 bit-identiques) ; le backend AOT .so d'un modele genere par le DSL tourne sur
-device (phase 8, avec marshaling hote). La VALIDATION INTEGREE AmrSystem + MPI + GPU (les trois axes
-ensemble dans UN SEUL run) est desormais FAITE sur GH200 (phase 10) : np=1/2/4 BIT-IDENTIQUES (dmax=0)
-et masse conservee a 0. Ce qui RESTE : la perf full-device (le run integre ne scale pas, le grossier
-etant replique -- voir phase 10) et la parite AOT zero-copie sur device. Ce document decoupe en phases.
+The DSL and the compute core are verified up to the GH200 GPU (flux, generated brick, full Euler CASE
+via the Kokkos seam `for_each_cell` ; cf. docs/GPU_ROMEO.md). What remains for an end-to-end GPU
+PRODUCTION is porting the ENTIRE RUNTIME STACK (System / MultiFab / Poisson / AMR / MPI) onto device.
+STATUS (June 2026) : the full SINGLE-GRID solver (transport + BCs + couplings + Poisson + time
+step, orchestrated by the System) runs on GH200, verified == CPU (phases 1-5, 7) ; the AMR field ops
+(reflux, transfers) run on device (phase 5) ; the MULTI-GPU halo exchange is validated
+(phase 6, np=1/2/4 bit-identical) ; the AOT .so backend of a DSL-generated model runs on
+device (phase 8, with host marshaling). The INTEGRATED VALIDATION AmrSystem + MPI + GPU (the three axes
+together in ONE SINGLE run) is now DONE on GH200 (phase 10) : np=1/2/4 BIT-IDENTICAL (dmax=0)
+and mass conserved to 0. What REMAINS : full-device perf (the integrated run does not scale, the coarse
+being replicated, see phase 10) and zero-copy AOT parity on device. This document breaks it down into phases.
 
-## Modele d'execution : MPI + Kokkos (PAS de CUDA ecrit a la main)
+## Execution model : MPI + Kokkos (NO hand-written CUDA)
 
-L'architecture est **MPI + Kokkos**, pas "trois couches Kokkos+CUDA+MPI". MPI distribue les
-sous-domaines entre rangs (un GPU par rang) ; Kokkos parallelise le calcul LOCAL et abstrait le
-materiel via son ExecutionSpace : backend **Cuda** pour GPU NVIDIA, **Serial/OpenMP** pour CPU. Le MEME
-code source (`for_each_cell`, `assemble_rhs`, les briques) cible donc CPU et GPU selon le backend choisi
-A LA COMPILATION ; on n'ecrit AUCUN kernel CUDA a la main. Dans les sorties ci-dessous, `exec=Cuda` est
-simplement le backend Kokkos actif ; les memes .cpp passent en `exec=Serial`/`OpenMP` sur CPU (c'est ce
-que verifie la CI MPI cote hote). `nvcc_wrapper` n'est que le compilateur exige par le backend Cuda de
-Kokkos. Le coeur est desormais **100% Kokkos** : l'allocateur unifie utilise
-`Kokkos::kokkos_malloc<Kokkos::SharedSpace>` + `Kokkos::fence` (et non plus `cudaMallocManaged` /
-`cudaDeviceSynchronize`), et `ADC_HD` delegue a `KOKKOS_FUNCTION`. Plus AUCUNE API CUDA ecrite a la
-main ; seul subsiste un repli `__host__ __device__` dans la branche HORS Kokkos de `ADC_HD` (inerte
-chez nous). `SharedSpace` etant un alias portable (`CudaUVMSpace` / `HIPManagedSpace` /
-`SYCLSharedUSMSpace` / `HostSpace`), le meme coeur ciblerait aussi AMD/Intel via les backends Kokkos.
+The architecture is **MPI + Kokkos**, not "three layers Kokkos+CUDA+MPI". MPI distributes the
+subdomains across ranks (one GPU per rank) ; Kokkos parallelizes the LOCAL compute and abstracts the
+hardware via its ExecutionSpace : **Cuda** backend for NVIDIA GPU, **Serial/OpenMP** for CPU. The SAME
+source code (`for_each_cell`, `assemble_rhs`, the bricks) therefore targets CPU and GPU depending on the backend chosen
+AT COMPILE TIME ; we write NO CUDA kernel by hand. In the outputs below, `exec=Cuda` is
+simply the active Kokkos backend ; the same .cpp files switch to `exec=Serial`/`OpenMP` on CPU (that is what
+the host-side MPI CI verifies). `nvcc_wrapper` is only the compiler required by the Kokkos Cuda backend.
+The core is now **100% Kokkos** : the unified allocator uses
+`Kokkos::kokkos_malloc<Kokkos::SharedSpace>` + `Kokkos::fence` (no longer `cudaMallocManaged` /
+`cudaDeviceSynchronize`), and `ADC_HD` delegates to `KOKKOS_FUNCTION`. NO hand-written CUDA API
+remains ; only a `__host__ __device__` fallback survives in the NON-Kokkos branch of `ADC_HD` (inert
+in our case). `SharedSpace` being a portable alias (`CudaUVMSpace` / `HIPManagedSpace` /
+`SYCLSharedUSMSpace` / `HostSpace`), the same core would also target AMD/Intel via the Kokkos backends.
 
-## Atout de conception : le seam ne change pas les sites d'appel
+## Design asset : the seam does not change the call sites
 
-`adc/mesh/for_each.hpp` (`for_each_cell`, `for_each_cell_reduce_*`) bascule CPU <-> GPU a la
-COMPILATION sans toucher les operateurs. `ADC_HD` rend tout le coeur device-callable. Donc le portage
-GPU est surtout un travail de RESIDENCE des donnees sur device + de portage des etapes encore hote,
-pas une reecriture des noyaux de calcul.
+`adc/mesh/for_each.hpp` (`for_each_cell`, `for_each_cell_reduce_*`) switches CPU <-> GPU at
+COMPILE TIME without touching the operators. `ADC_HD` makes the whole core device-callable. So the GPU
+port is mostly a job of data RESIDENCE on device + porting of the still-host steps,
+not a rewrite of the compute kernels.
 
-## Deja device-ready (verifie sur GH200)
+## Already device-ready (verified on GH200)
 
-- `for_each_cell` / reductions -> `Kokkos::parallel_for` / `parallel_reduce` (espace `Cuda`).
-- `ADC_HD`, `StateVec`, `Aux` : device-callable ; flux + `eigenvalues` + briques (Euler/iso/ExB).
-- Brique generee par le DSL : compile nvcc `sm_90`, == `adc::Euler` au bit (CUDA) / a 1 ULP (Kokkos).
-- Cas Euler 2D complet (80 pas, CFL, Rusanov, periodique) sur GH200 : masse conservee, == CPU.
+- `for_each_cell` / reductions -> `Kokkos::parallel_for` / `parallel_reduce` (`Cuda` space).
+- `ADC_HD`, `StateVec`, `Aux` : device-callable ; flux + `eigenvalues` + bricks (Euler/iso/ExB).
+- DSL-generated brick : compiles with nvcc `sm_90`, == `adc::Euler` to the bit (CUDA) / to 1 ULP (Kokkos).
+- Full 2D Euler case (80 steps, CFL, Rusanov, periodic) on GH200 : mass conserved, == CPU.
 
-## Phases du portage runtime (par dependance croissante)
+## Runtime port phases (by increasing dependency)
 
-1. **MultiFab device-resident.** ✅ FAIT (verifie GH200). Constat : `fab_allocator` sous
-   `ADC_HAS_KOKKOS + __CUDACC__` est `ManagedAllocator` (cudaMallocManaged) -> les Fab sont en MEMOIRE
-   UNIFIEE, donc deja device-accessibles, et `assemble_rhs` (via `for_each_cell` -> Kokkos) tourne sur
-   le device par CONSTRUCTION. Un transport Euler COMPLET (80 pas, fill_boundary + assemble_rhs +
-   maj SSPRK/FE sur la VRAIE pile adc) donne sur GH200 un resultat BIT-IDENTIQUE au CPU
-   (`python/tests/gpu/phase1_transport.cpp`, masse 4096 / energie identiques). A leve + corrige un bug
-   nvcc dans `numerics/spatial_operator.hpp` (capture `dx`/`dy` en contexte `constexpr-if`, interdite
-   pour une lambda `__host__ __device__` etendue). Optimisation restante : eviter le va-et-vient hote
-   de `fill_boundary` (phase 2) ; la memoire unifiee assure la correction mais pas la perf optimale.
-2. **Conditions aux limites sur device.** ✅ FAIT (verifie GH200). `copy_shifted` (ghosts
-   PERIODIQUES, `mesh/fill_boundary.hpp`) etait deja `for_each` -> device. `fill_physical_bc`
-   (Foextrap / Dirichlet, `mesh/physical_bc.hpp`) porte des boucles HOTE vers `for_each_cell` ;
-   `device_fence` interne supprime (les kernels BC s'ordonnent apres `copy_shifted`, et les faces y
-   apres les faces x, sur le meme flux). Un transport NON-periodique (sortie Foextrap) sur GH200 donne
-   un resultat BIT-IDENTIQUE au CPU (`python/tests/gpu/phase2_transport.cpp` ; la masse decroit comme
-   il se doit, sortie libre). Les ctests coeur (dont test_physical_bc, poisson_disc, cut_cell) verts.
-3. **Poisson sur device.** ✅ FAIT (verifie GH200) -- et SANS modification de code. Toute la boucle
-   V-cycle de `GeometricMG` etait DEJA en `for_each` -> device : smoother red-black GS, residu, Laplacien
+1. **Device-resident MultiFab.** [x] DONE (verified GH200). Observation : `fab_allocator` under
+   `ADC_HAS_KOKKOS + __CUDACC__` is `ManagedAllocator` (cudaMallocManaged) -> the Fabs are in UNIFIED
+   MEMORY, hence already device-accessible, and `assemble_rhs` (via `for_each_cell` -> Kokkos) runs on
+   the device by CONSTRUCTION. A FULL Euler transport (80 steps, fill_boundary + assemble_rhs +
+   SSPRK/FE update on the REAL adc stack) gives on GH200 a result BIT-IDENTICAL to the CPU
+   (`python/tests/gpu/phase1_transport.cpp`, mass 4096 / energy identical). Surfaced + fixed an nvcc
+   bug in `numerics/spatial_operator.hpp` (capture of `dx`/`dy` in a `constexpr-if` context, forbidden
+   for an extended `__host__ __device__` lambda). Remaining optimization : avoid the host round-trip
+   of `fill_boundary` (phase 2) ; unified memory ensures correctness but not optimal perf.
+2. **Boundary conditions on device.** [x] DONE (verified GH200). `copy_shifted` (PERIODIC
+   ghosts, `mesh/fill_boundary.hpp`) was already `for_each` -> device. `fill_physical_bc`
+   (Foextrap / Dirichlet, `mesh/physical_bc.hpp`) ports HOST loops to `for_each_cell` ;
+   the internal `device_fence` removed (the BC kernels order after `copy_shifted`, and the y faces
+   after the x faces, on the same stream). A NON-periodic transport (Foextrap outflow) on GH200 gives
+   a result BIT-IDENTICAL to the CPU (`python/tests/gpu/phase2_transport.cpp` ; mass decreases as
+   it should, free outflow). The core ctests (including test_physical_bc, poisson_disc, cut_cell) green.
+3. **Poisson on device.** [x] DONE (verified GH200), and WITHOUT code modification. The whole
+   V-cycle loop of `GeometricMG` was ALREADY `for_each` -> device : red-black GS smoother, residual, Laplacian
    (`poisson_operator.hpp`), restriction `average_down` + prolongation `interpolate` (`mesh/refinement.hpp`),
-   norme via `for_each_cell_reduce_max` (`mf_arith.hpp`). Seul le SETUP (masque + coefs cut-cell depuis
-   des `std::function`) reste hote (one-shot, ecrit la memoire unifiee). Un solve Poisson Dirichlet
-   (n=128) sur GH200 donne un resultat BIT-IDENTIQUE au CPU : cycles=9, sum/max(phi) identiques
-   (`python/tests/gpu/phase3_poisson.cpp`). Le "gros morceau" etait deja porte par le seam for_each.
-   (Le solveur a COEFFICIENTS VARIABLES eps(x) reste un ajout numerique a part, non requis ici.)
-4. **Couplages inter-especes sur device.** ✅ FAIT (verifie GH200). Les 3 couplages
-   (ionisation, collision, echange thermique, `system.cpp`) portes de boucles HOTE vers `for_each_cell`
-   (kernels device lisant/ecrivant PLUSIEURS blocs au meme point) ; `device_fence` prealable de
-   `apply_couplings` supprime (kernels ordonnes apres le transport). Le kernel d'ionisation sur GH200
-   donne un resultat BIT-IDENTIQUE au CPU, n_i + n_g conserve (`python/tests/gpu/phase4_coupling.cpp`).
-   Host : `test_bindings` (conservation des 3 couplages) vert. => jalon 1->2->4 atteint : TRANSPORT
-   MULTI-ESPECES complet (transport + BCs + couplages) sur GPU, sans Poisson.
-5. **AMR (ops de champ) sur device.** ✅ FAIT (verifie GH200) -- sans modif de code. Les tests
-   self-checking `test_flux_register` (registre de flux / reflux 2-niveaux, conservation) et
-   `test_amr_diffusion` (transport multi-niveaux) PASSENT sur GH200 : transferts `average_down` /
-   `interpolate` + reflux + transport sont des `for_each` -> device. Le CLUSTERING / la hierarchie
-   (`cluster.hpp`, `regrid.hpp`) est de la METADATA hote (box lists, predicats `std::function`) : reste
-   hote (correct, infrequent ; nvcc ne la compile pas, ce qui est normal -- ce n'est pas un kernel).
-   Les registres de flux gardent des boucles hote (corrects via memoire unifiee ; full-device reflux =
+   norm via `for_each_cell_reduce_max` (`mf_arith.hpp`). Only the SETUP (mask + cut-cell coefs from
+   `std::function`) remains host (one-shot, writes unified memory). A Dirichlet Poisson solve
+   (n=128) on GH200 gives a result BIT-IDENTICAL to the CPU : cycles=9, sum/max(phi) identical
+   (`python/tests/gpu/phase3_poisson.cpp`). The "big chunk" was already ported by the for_each seam.
+   (The VARIABLE-COEFFICIENT solver eps(x) remains a separate numerical addition, not required here.)
+4. **Inter-species couplings on device.** [x] DONE (verified GH200). The 3 couplings
+   (ionization, collision, thermal exchange, `system.cpp`) ported from HOST loops to `for_each_cell`
+   (device kernels reading/writing SEVERAL blocks at the same point) ; the prior `device_fence` of
+   `apply_couplings` removed (kernels ordered after transport). The ionization kernel on GH200
+   gives a result BIT-IDENTICAL to the CPU, n_i + n_g conserved (`python/tests/gpu/phase4_coupling.cpp`).
+   Host : `test_bindings` (conservation of the 3 couplings) green. => milestone 1->2->4 reached : full
+   MULTI-SPECIES TRANSPORT (transport + BCs + couplings) on GPU, without Poisson.
+5. **AMR (field ops) on device.** [x] DONE (verified GH200), without code mod. The
+   self-checking tests `test_flux_register` (flux register / 2-level reflux, conservation) and
+   `test_amr_diffusion` (multi-level transport) PASS on GH200 : `average_down` /
+   `interpolate` transfers + reflux + transport are `for_each` -> device. The CLUSTERING / the hierarchy
+   (`cluster.hpp`, `regrid.hpp`) is host METADATA (box lists, `std::function` predicates) : stays
+   host (correct, infrequent ; nvcc does not compile it, which is normal, it is not a kernel).
+   The flux registers keep host loops (correct via unified memory ; full-device reflux =
    perf follow-up). python/tests/gpu/{amr_CMakeLists.txt, romeo_amr_build.sh}.
-6. **MPI multi-GPU (backend Kokkos Cuda + OpenMPI CUDA-aware).** ✅ FAIT (verifie GH200). `fill_boundary`
-   distribue (echange de halos cross-rang) tourne sur 1/2/4 GH200, un GPU par rang, avec OpenMPI
-   `+cuda` (UCX). Le MEME `mpi6_fillboundary.cpp` (= `tests/test_mpi_fillboundary.cpp` + init Kokkos +
-   `device_fence` avant lecture hote) donne `gfails=0` en np=1/2/4 (`exec=Cuda`) : ghosts distants
-   bit-identiques a la valeur periodique attendue, donc transfert device-to-device correct. La memoire
-   unifiee + le `device_fence` suffisent ; aucune modif de `fill_boundary`. `python/tests/gpu/mpi6_fillboundary.cpp`.
-   RESTE (perf) : halos device sans rebond hote (GPUDirect direct), FFT distribuee device.
-7. **Validation bout-en-bout via le System.** ✅ FAIT (verifie GH200) -- sans modif de code.
-   `system.cpp` ENTIER (dispatch des modeles, transport HLLC, source de gravite, solve Poisson a CHAQUE
-   pas, pas de temps CFL) compile sous nvcc, et le cas `euler_poisson` complet tourne sur GH200 : `max|phi|`
-   et `sum(phi)` bit-identiques au CPU, masse a ~1.7e-15 relatif (FMA dans la reduction CFL). Les
-   correctifs nvcc des phases 1/2 + le design for_each suffisent. `python/tests/gpu/phase7_system.cpp`.
-   RESTE pour la prod multi-GPU : phase 6 (MPI CUDA-aware) + perf (full-device reflux, eviter les
-   sync hote des reductions par pas).
-8. **Backend AOT sur device (modele genere par le DSL).** ✅ FAIT pour le chemin .so avec
-   MARSHALING HOTE (verifie GH200). Un modele `euler_poisson` ECRIT EN FORMULES, compile AOT
-   (`compile_or_jit(mode="compile")`) en .so via `compiled_block_abi.hpp` (`add_compiled_block`),
-   execute le chemin de production (`assemble_rhs<Minmod, HLLCFlux>` recon primitif + SSPRK2) sur
-   le GH200 : residu, masse, quantite de mouvement et energie BIT-IDENTIQUES au build serie hote
-   (`sim_aot/`). A leve + corrige un vrai bug : `extract()` lisait la memoire unifiee AVANT la fin
-   du kernel async ; ajout d'un `device_fence()`. Le marshaling de tableaux plats traverse le
-   dlopen sans partage d'objet C++ (ABI propre) ; ce chemin .so ne porte ni AMR ni MPI.
-   RESTE (non fait) : la variante ZERO-COPIE NATIVE (`add_compiled_model` / `dsl_block.hpp`, modele
-   compile dans le meme binaire que le System, sans marshaling) est validee BIT-IDENTIQUE a
-   `add_block` sur CPU/Serial (`test_compiled_model_parity`), mais sur GPU (backend Cuda) la variante
-   a LAMBDAS ETENDUES butait sur une limite nvcc : une lambda etendue `__host__ __device__` instanciee
-   dans une TU EXTERNE n'etait pas acceptee. Cette limite a ete levee par le chemin a FONCTEURS NOMMES
+6. **Multi-GPU MPI (Kokkos Cuda backend + CUDA-aware OpenMPI).** [x] DONE (verified GH200). `fill_boundary`
+   distributed (cross-rank halo exchange) runs on 1/2/4 GH200, one GPU per rank, with OpenMPI
+   `+cuda` (UCX). The SAME `mpi6_fillboundary.cpp` (= `tests/test_mpi_fillboundary.cpp` + Kokkos init +
+   `device_fence` before host read) gives `gfails=0` at np=1/2/4 (`exec=Cuda`) : remote ghosts
+   bit-identical to the expected periodic value, hence device-to-device transfer correct. Unified
+   memory + the `device_fence` suffice ; no modification of `fill_boundary`. `python/tests/gpu/mpi6_fillboundary.cpp`.
+   REMAINS (perf) : device halos without host bounce (direct GPUDirect), distributed device FFT.
+7. **End-to-end validation via the System.** [x] DONE (verified GH200), without code mod.
+   The ENTIRE `system.cpp` (model dispatch, HLLC transport, gravity source, Poisson solve at EVERY
+   step, CFL time step) compiles under nvcc, and the full `euler_poisson` case runs on GH200 : `max|phi|`
+   and `sum(phi)` bit-identical to the CPU, mass at ~1.7e-15 relative (FMA in the CFL reduction). The
+   phase 1/2 nvcc fixes + the for_each design suffice. `python/tests/gpu/phase7_system.cpp`.
+   REMAINS for multi-GPU prod : phase 6 (CUDA-aware MPI) + perf (full-device reflux, avoiding the
+   host syncs of the per-step reductions).
+8. **AOT backend on device (DSL-generated model).** [x] DONE for the .so path with
+   HOST MARSHALING (verified GH200). A `euler_poisson` model WRITTEN IN FORMULAS, compiled AOT
+   (`compile_or_jit(mode="compile")`) into a .so via `compiled_block_abi.hpp` (`add_compiled_block`),
+   runs the production path (`assemble_rhs<Minmod, HLLCFlux>` primitive recon + SSPRK2) on
+   the GH200 : residual, mass, momentum and energy BIT-IDENTICAL to the host serial build
+   (`sim_aot/`). Surfaced + fixed a real bug : `extract()` read unified memory BEFORE the end
+   of the async kernel ; added a `device_fence()`. The flat-array marshaling crosses the
+   dlopen without sharing a C++ object (clean ABI) ; this .so path carries neither AMR nor MPI.
+   REMAINS (not done) : the NATIVE ZERO-COPY variant (`add_compiled_model` / `dsl_block.hpp`, model
+   compiled in the same binary as the System, without marshaling) is validated BIT-IDENTICAL to
+   `add_block` on CPU/Serial (`test_compiled_model_parity`), but on GPU (Cuda backend) the variant
+   with EXTENDED LAMBDAS hit an nvcc limit : an extended `__host__ __device__` lambda instantiated
+   in an EXTERNAL TU was not accepted. This limit has been lifted by the NAMED FUNCTOR path
    (cf. point 9).
-9. **Parite multi-box MPI du chemin compile a foncteurs nommes.** ✅ FAIT (verifie GH200).
-   Le residu des fermetures de `make_block` (`block_builder.hpp` ; la machinerie exacte
-   d'`add_compiled_model`, instanciee depuis une UNITE DE TRADUCTION EXTERNE via des foncteurs NOMMES,
-   le chemin device-clean qui contourne la limite nvcc des lambdas etendues du point 8) doit etre
-   invariant au decoupage du domaine en boites ET au nombre de rangs. Le test compare une decomposition
-   16-boites distribuee par SFC a une reference mono-boite : `max|R|` BIT-IDENTIQUE (`dmax = 0`), L2 a
-   l'arrondi pres de l'ordre de sommation. Porte en test de regression header-only `tests/test_mpi_mbox_parity.cpp`
-   (job CI MPI, np=1/2/4, Kokkos Serial sur CPU) ET execute sur GH200 (Kokkos Cuda) : le MEME source,
-   compile par nvcc_wrapper et lance par `srun -n {1,2,4} --gpus-per-task=1` (OpenMPI 4.1.7 CUDA-aware,
-   noeud armgpu), donne `dmax = 0.00e+00` aux trois comptes de rangs, `maxK`/`max1`/`L2` identiques au
-   run CPU. Un `Kokkos::fence()` (garde `ADC_HAS_KOKKOS`) precede la lecture HOTE du residu (kernels
-   `for_each_cell` async sous Cuda). Ce que cela valide HONNETEMENT sur device : le chemin
-   `make_block`/`add_compiled_model` (foncteurs nommes) + `fill_ghosts` multi-box intra-rang ET
-   cross-rang MPI multi-GPU, pour le residu d'un pas. Ce que cela ne valide PAS : l'integration AMR
-   dans le meme run, ni la perf full-device (le test lit le residu cote hote, donc fence par pas).
-10. **Validation INTEGREE AmrSystem + MPI + GPU (les trois axes dans UN SEUL run).** ✅ FAIT (verifie
-   GH200). C'etait le dernier verrou : phases 5/6/9 validaient l'AMR, le MPI multi-GPU et le chemin
-   compile SEPAREMENT, jamais ensemble. Un harness branche un modele euler_poisson COMPILE via
-   `add_compiled_model(AmrSystem, ...)` (chemin `runtime/amr_dsl_block.hpp`, PR #45) sur une vraie
-   hierarchie AMR (`AmrSystem` : grossier replique 128^2 + niveau fin 256^2 multi-patch suivi par
-   regrid Berger-Rigoutsos, reflux conservatif, Poisson grossier a chaque pas), et DISTRIBUE les
-   patchs fins sur `n_ranks()` GH200 (un GPU par rang, halos cross-rang via `fill_boundary`, reflux
-   et masse reduits par `all_reduce`). Le MEME source tourne en `srun -n {1,2,4} --gpus-per-task=1`
-   (OpenMPI 4.1.7 CUDA-aware, noeud armgpu) sous Kokkos Cuda (`exec=Cuda`), 4 patchs fins, 40 pas
-   apres warmup. Resultat (`AMRMPI np=...`) :
-   - **BIT-IDENTIQUE au nombre de rangs** : `mass`, `csum`, `csumsq`, `cmax` de la densite grossiere
-     IDENTIQUES aux 17 chiffres a np=1 (oracle mono-GPU), np=2 et np=4. `PARITE dmax = 0.00e+00`.
-   - **grossier bit-identique cross-rang** : `crossrank_spread = 0.00e+00` (le niveau 0 replique est
-     le meme champ sur chaque GPU, donc halos/reflux/injection distants corrects).
-   - **masse conservee a 0** : `dm = |mass - m0| = 0.00e+00` (reflux conservatif exact sur device).
-   - perf : `per_step_ms` ~221 (np=1), ~266 (np=2), ~272 (np=4) sur un noeud GH200. Le run NE SCALE
-     PAS : c'est ATTENDU et HONNETE. Le grossier est REPLIQUE (defaut `replicated_coarse=true`), donc
-     le Poisson grossier + le transport grossier sont REDONDANTS sur chaque GPU (compute O(NX*NY) x
-     nrangs, zero communication) ; seuls les patchs fins se repartissent (4 patchs -> 2/GPU a np=2,
-     1/GPU a np=4). A cette taille le grossier domine -> ajouter des GPU n'accelere pas, ajoute juste
-     le cout des halos fins cross-rang. Le mode SCALABLE (`replicated_coarse=false`, grossier reparti)
-     existe dans `AmrCouplerMP` mais degrade le MG geometrique (cf. son commentaire) et n'est pas
-     cable dans `AmrSystem` : c'est le vrai chantier perf restant pour le strong-scaling AMR.
-   Un BUG LATENT a ete corrige au passage : `add_compiled_model(AmrSystem)` ET le chemin natif
-   `AmrSystem::build` construisaient le grossier mono-box en `DistributionMapping(1, n_ranks())`
-   (round-robin) -> la box ne vivait que sur le rang 0, et `coarse().fab(0)` segfaultait sur les
-   autres rangs des le premier write/inject/read sous np>1. Or `AmrCouplerMP` (et `GeometricMG`)
-   attendent un grossier REPLIQUE (`DistributionMapping(vector<int>(ba.size(), my_rank()))`). Le
-   chemin AMR runtime n'avait simplement jamais ete exerce sous MPI. Corrige (grossier replique) ;
-   en serie `my_rank()=0` -> identique bit a bit a l'historique. Porte en test de regression
-   header-only `tests/test_mpi_amr_compiled_parity.cpp` (job CI MPI, np=1/2/4, Kokkos Serial sur CPU,
-   les memes invariants : `crossrank_spread=0`, conservation, parite au nb de rangs) ; harness GPU
+9. **Multi-box MPI parity of the compiled path with named functors.** [x] DONE (verified GH200).
+   The residual of the `make_block` closures (`block_builder.hpp` ; the exact machinery
+   of `add_compiled_model`, instantiated from an EXTERNAL TRANSLATION UNIT via NAMED functors,
+   the device-clean path that bypasses the nvcc limit of the extended lambdas of point 8) must be
+   invariant to the splitting of the domain into boxes AND to the number of ranks. The test compares a
+   16-box decomposition distributed by SFC to a single-box reference : `max|R|` BIT-IDENTICAL (`dmax = 0`), L2 to
+   rounding of the summation order. Ported as a header-only regression test `tests/test_mpi_mbox_parity.cpp`
+   (MPI CI job, np=1/2/4, Kokkos Serial on CPU) AND run on GH200 (Kokkos Cuda) : the SAME source,
+   compiled by nvcc_wrapper and launched by `srun -n {1,2,4} --gpus-per-task=1` (OpenMPI 4.1.7 CUDA-aware,
+   armgpu node), gives `dmax = 0.00e+00` at the three rank counts, `maxK`/`max1`/`L2` identical to the
+   CPU run. A `Kokkos::fence()` (guarded by `ADC_HAS_KOKKOS`) precedes the HOST read of the residual (async
+   `for_each_cell` kernels under Cuda). What this validates HONESTLY on device : the
+   `make_block`/`add_compiled_model` path (named functors) + multi-box `fill_ghosts` intra-rank AND
+   cross-rank MPI multi-GPU, for the residual of one step. What it does NOT validate : AMR integration
+   in the same run, nor full-device perf (the test reads the residual host-side, hence a fence per step).
+10. **INTEGRATED validation AmrSystem + MPI + GPU (the three axes in ONE SINGLE run).** [x] DONE (verified
+   GH200). This was the last blocker : phases 5/6/9 validated the AMR, the multi-GPU MPI and the
+   compiled path SEPARATELY, never together. A harness wires a `euler_poisson` model COMPILED via
+   `add_compiled_model(AmrSystem, ...)` (`runtime/amr_dsl_block.hpp` path, PR #45) onto a real
+   AMR hierarchy (`AmrSystem` : replicated coarse 128^2 + fine level 256^2 multi-patch tracked by
+   Berger-Rigoutsos regrid, conservative reflux, coarse Poisson at every step), and DISTRIBUTES the
+   fine patches across `n_ranks()` GH200 (one GPU per rank, cross-rank halos via `fill_boundary`, reflux
+   and mass reduced by `all_reduce`). The SAME source runs in `srun -n {1,2,4} --gpus-per-task=1`
+   (OpenMPI 4.1.7 CUDA-aware, armgpu node) under Kokkos Cuda (`exec=Cuda`), 4 fine patches, 40 steps
+   after warmup. Result (`AMRMPI np=...`) :
+   - **BIT-IDENTICAL to the rank count** : `mass`, `csum`, `csumsq`, `cmax` of the coarse density
+     IDENTICAL to 17 digits at np=1 (single-GPU oracle), np=2 and np=4. `PARITE dmax = 0.00e+00`.
+   - **coarse bit-identical cross-rank** : `crossrank_spread = 0.00e+00` (the replicated level 0 is
+     the same field on each GPU, hence remote halos/reflux/injection correct).
+   - **mass conserved to 0** : `dm = |mass - m0| = 0.00e+00` (exact conservative reflux on device).
+   - perf : `per_step_ms` ~221 (np=1), ~266 (np=2), ~272 (np=4) on one GH200 node. The run DOES NOT
+     SCALE : this is EXPECTED and HONEST. The coarse is REPLICATED (default `replicated_coarse=true`), so
+     the coarse Poisson + the coarse transport are REDUNDANT on each GPU (compute O(NX*NY) x
+     nranks, zero communication) ; only the fine patches get split (4 patches -> 2/GPU at np=2,
+     1/GPU at np=4). At this size the coarse dominates -> adding GPUs does not accelerate, it just adds
+     the cost of the cross-rank fine halos. The SCALABLE mode (`replicated_coarse=false`, distributed coarse)
+     exists in `AmrCouplerMP` but degrades the geometric MG (cf. its comment) and is not
+     wired in `AmrSystem` : that is the real remaining perf work item for AMR strong-scaling.
+   A LATENT BUG was fixed along the way : `add_compiled_model(AmrSystem)` AND the native path
+   `AmrSystem::build` built the single-box coarse in `DistributionMapping(1, n_ranks())`
+   (round-robin) -> the box only lived on rank 0, and `coarse().fab(0)` segfaulted on the
+   other ranks on the first write/inject/read under np>1. But `AmrCouplerMP` (and `GeometricMG`)
+   expect a REPLICATED coarse (`DistributionMapping(vector<int>(ba.size(), my_rank()))`). The
+   runtime AMR path had simply never been exercised under MPI. Fixed (replicated coarse) ;
+   in serial `my_rank()=0` -> bit-for-bit identical to history. Ported as a regression test
+   header-only `tests/test_mpi_amr_compiled_parity.cpp` (MPI CI job, np=1/2/4, Kokkos Serial on CPU,
+   the same invariants : `crossrank_spread=0`, conservation, parity to the rank count) ; GPU harness
    `python/tests/gpu/{amrmpi_integrated.cpp, amrmpi_CMakeLists.txt, amrmpi_romeo_build.sh}`.
 
-11. **Strong-scaling AMR : grossier REPARTI cable dans AmrSystem.** ⚠️ FAIT (cable + correct sur
-    GH200) mais NE SCALE PAS (resultat NEGATIF, chiffre, honnete). Le verrou perf de la phase 10
-    etait que le grossier REPLIQUE rend le Poisson + le transport grossiers redondants sur chaque
-    GPU. Le mode SCALABLE (`replicated_coarse=false`, grossier multi-box reparti) existait dans
-    `AmrCouplerMP` mais n'etait pas CABLE dans `AmrSystem`. Cable ici : `AmrSystemConfig::distribute_coarse`
-    (+ `coarse_max_grid`) -> les deux chemins de build (natif `AmrSystem::Impl::build` et compile
-    `amr_dsl_block::build_amr_compiled`) construisent le niveau 0 en `BoxArray::from_domain(dom, n/2)`
-    (2x2) REPARTI round-robin et passent `replicated_coarse=false` au coupleur, au `GeometricMG` et a
-    `advance_amr`. Helpers de grossier centralises (`detail::coupler_{make_coarse_layout,write_coarse,
+11. **AMR strong-scaling : distributed coarse wired into AmrSystem.** [!] DONE (wired + correct on
+    GH200) but DOES NOT SCALE (NEGATIVE result, quantified, honest). The perf blocker of phase 10
+    was that the REPLICATED coarse makes the coarse Poisson + transport redundant on each
+    GPU. The SCALABLE mode (`replicated_coarse=false`, distributed multi-box coarse) existed in
+    `AmrCouplerMP` but was not WIRED in `AmrSystem`. Wired here : `AmrSystemConfig::distribute_coarse`
+    (+ `coarse_max_grid`) -> the two build paths (native `AmrSystem::Impl::build` and compiled
+    `amr_dsl_block::build_amr_compiled`) build level 0 in `BoxArray::from_domain(dom, n/2)`
+    (2x2) distributed round-robin and pass `replicated_coarse=false` to the coupler, the `GeometricMG` and
+    `advance_amr`. Centralized coarse helpers (`detail::coupler_{make_coarse_layout,write_coarse,
     read_coarse,inject_coarse_to_fine_mb}`, amr_coupler_mp.hpp) multi-box + distribution-aware
-    (lecture/ecriture par boites GLOBALES, reconstruction `density()` n*n par `all_reduce_sum_inplace`
-    sur les boites disjointes). Le regrid Berger-Rigoutsos a ete rendu MPI-correct pour un grossier
-    reparti : `tag_cells` ne voit que les boites locales -> OU global des tags (`all_reduce_or_inplace`,
-    nouveau collectif) avant le clustering, sinon la BoxArray fine differerait par rang ; et le
-    remplissage des nouveaux patchs depuis le parent passe par `parallel_copy` quand le parent est
-    reparti (au lieu de `mf_find_box`, qui ne voit pas les boites distantes).
-    - **CORRECTION (host CI, Kokkos Serial) : grossier reparti == replique BIT A BIT.** Test de
-      regression `tests/test_mpi_amr_distributed_coarse.cpp` (np=1/2/4) : meme cas 4 bulles
-      euler_poisson, le reparti compare a l'oracle replique dans le MEME binaire ->
-      `dist_vs_repl_dmax = 0.00e+00`, `cmax_crossrank_spread = 0`, masse conservee a ~1e-15. Le MG
-      CONVERGE sur le grossier 2x2 (champ fini, non trivial, identique au mono-box).
-    - **CONVERGENCE MG mesuree (mono-box vs multi-box, MMS).** Diagnostic local (Dirichlet + pic
-      gaussien decentre, critere 1e-9) : 2x2 converge en AUTANT de cycles que le mono-box (7-8 a
-      n=64/128/256, residus identiques), 4x4 +0/+1 cycle, 8x8 degrade nettement (~13-14 cycles,
-      ~1.75x). DONC le 2x2 (defaut, et le seul decoupage utile jusqu'a 4 rangs) NE degrade PAS le
-      multigrille ; la degenerescence annoncee n'apparait qu'a decoupage agressif (>=8x8). C'est
-      pourquoi `coarse_max_grid` defaut = n/2.
-    - **CORRECTION (GH200, Kokkos Cuda, srun -n 1/2/4 --gpus-per-task=1).** np=2 et np=4 reparti :
-      `csum`/`csumsq`/`cmax` BIT-IDENTIQUES au replique, masse conservee a 2.2e-16, `cmax` bit-identique
-      cross-rang. Un BUG DEVICE a ete trouve+corrige au passage : `parallel_copy` lance des kernels de
-      copie ASYNC sous Cuda et, a np=1, RETOURNE SANS fence (la barriere interne n'est que sur le
-      chemin np>1) ; le remplissage parent du regrid lisait alors `parloc` (memoire device fraiche)
-      avant la fin de la copie -> NaN a np=1 reparti UNIQUEMENT sur Cuda (host Serial: `dmax=0`).
-      Corrige par un `device_fence()` apres ce `parallel_copy` (amr_regrid_coupler.hpp).
-    - **SCALING (per_step_ms, max sur les rangs, n=128, 40 pas mesures, 1 noeud GH200) -- NEGATIF :**
+    (read/write by GLOBAL boxes, reconstruction of `density()` n*n by `all_reduce_sum_inplace`
+    over the disjoint boxes). The Berger-Rigoutsos regrid was made MPI-correct for a distributed
+    coarse : `tag_cells` only sees the local boxes -> global OR of the tags (`all_reduce_or_inplace`,
+    new collective) before the clustering, otherwise the fine BoxArray would differ per rank ; and the
+    filling of the new patches from the parent goes through `parallel_copy` when the parent is
+    distributed (instead of `mf_find_box`, which does not see the remote boxes).
+    - **CORRECTNESS (host CI, Kokkos Serial) : distributed coarse == replicated BIT FOR BIT.** Regression
+      test `tests/test_mpi_amr_distributed_coarse.cpp` (np=1/2/4) : same 4-bubble case
+      euler_poisson, the distributed compared to the replicated oracle in the SAME binary ->
+      `dist_vs_repl_dmax = 0.00e+00`, `cmax_crossrank_spread = 0`, mass conserved to ~1e-15. The MG
+      CONVERGES on the 2x2 coarse (finite field, non-trivial, identical to single-box).
+    - **MEASURED MG CONVERGENCE (single-box vs multi-box, MMS).** Local diagnostic (Dirichlet + off-center
+      Gaussian pulse, criterion 1e-9) : 2x2 converges in AS MANY cycles as single-box (7-8 at
+      n=64/128/256, identical residuals), 4x4 +0/+1 cycle, 8x8 degrades noticeably (~13-14 cycles,
+      ~1.75x). SO the 2x2 (default, and the only useful split up to 4 ranks) does NOT degrade the
+      multigrid ; the announced degeneracy only appears at aggressive splitting (>=8x8). That is
+      why `coarse_max_grid` default = n/2.
+    - **CORRECTNESS (GH200, Kokkos Cuda, srun -n 1/2/4 --gpus-per-task=1).** np=2 and np=4 distributed :
+      `csum`/`csumsq`/`cmax` BIT-IDENTICAL to the replicated, mass conserved to 2.2e-16, `cmax` bit-identical
+      cross-rank. A DEVICE BUG was found+fixed along the way : `parallel_copy` launches ASYNC copy
+      kernels under Cuda and, at np=1, RETURNS WITHOUT a fence (the internal barrier is only on the
+      np>1 path) ; the regrid parent filling then read `parloc` (fresh device memory)
+      before the end of the copy -> NaN at np=1 distributed ONLY on Cuda (host Serial: `dmax=0`).
+      Fixed by a `device_fence()` after this `parallel_copy` (amr_regrid_coupler.hpp).
+    - **SCALING (per_step_ms, max over the ranks, n=128, 40 steps measured, 1 GH200 node), NEGATIVE :**
 
-      | np | REPLIQUE (defaut) | REPARTI (2x2) |
+      | np | REPLICATED (default) | DISTRIBUTED (2x2) |
       |----|-------------------|---------------|
       | 1  | 222 ms            | 705 ms        |
       | 2  | 269 ms            | 999 ms        |
       | 4  | 278 ms            | 1403 ms       |
 
-      Run complet refait apres le fix device-fence (np=1 reparti mesure : pas de NaN, dm=2.2e-16,
-      cmax bit-identique cross-rang aux 6 points). Le grossier reparti est ~3.7x (np=2) a ~5.0x
-      (np=4) PLUS LENT que le replique, et EMPIRE avec le nombre de rangs (705 -> 999 -> 1403 ms).
-      Le strong-scaling N'EST PAS atteint. RAISON, honnete : a
-      cette taille (grossier 128^2) le compute grossier est trivial, mais le `GeometricMG` multi-box
-      echange des halos `fill_boundary` entre boites grossieres a CHAQUE niveau de chaque V-cycle (~7
-      niveaux), CROSS-RANG sous MPI, et le pas AMR ajoute `parallel_copy` (inject aux, reflux, regrid)
-      device-to-device via UCX. Ce trafic de LATENCE domine largement le compute economise. Distribuer
-      un grossier deja petit ECHANGE du compute redondant bon marche contre de la communication chere.
-    - **RECO (honnete).** Le cablage est PROPRE, correct et bit-identique au replique (mergeable comme
-      OPTION, defaut inchange), mais le strong-scaling AMR par grossier reparti n'est PAS rentable a
-      cette echelle. Chemins realistes pour un vrai scaling, non faits ici : (a) grossier reparti
-      seulement quand sa MEMOIRE est le verrou (tres grand NX*NY), pas son temps ; (b) MG HYBRIDE :
-      multigrille distribue sur les niveaux fins du grossier mais bottom-solve sur un grossier
-      RASSEMBLE (gather sur 1 rang) au lieu d'un GS multi-box cross-rang par niveau ; (c) reduire le
-      trafic (halos GPUDirect, agglomeration des `parallel_copy`). En l'etat, GARDER le replique par
-      defaut (rapide, bit-identique, valide phase 10) et n'activer `distribute_coarse` que comme
-      echappatoire memoire. Cable + test de regression CI (`test_mpi_amr_distributed_coarse`, np=1/2/4
-      Serial) + harness GH200 (`amrmpi_integrated` mesure replique ET reparti) ; resultat de perf
-      documente ici comme NEGATIF chiffre.
+      Full run redone after the device-fence fix (np=1 distributed measured : no NaN, dm=2.2e-16,
+      cmax bit-identical cross-rank at the 6 points). The distributed coarse is ~3.7x (np=2) to ~5.0x
+      (np=4) SLOWER than the replicated, and WORSENS with the number of ranks (705 -> 999 -> 1403 ms).
+      Strong-scaling is NOT reached. REASON, honest : at
+      this size (coarse 128^2) the coarse compute is trivial, but the multi-box `GeometricMG`
+      exchanges `fill_boundary` halos between coarse boxes at EVERY level of every V-cycle (~7
+      levels), CROSS-RANK under MPI, and the AMR step adds `parallel_copy` (inject aux, reflux, regrid)
+      device-to-device via UCX. This LATENCY traffic dominates by far the compute saved. Distributing
+      an already small coarse TRADES cheap redundant compute for expensive communication.
+    - **RECOMMENDATION (honest).** The wiring is CLEAN, correct and bit-identical to the replicated (mergeable as
+      an OPTION, default unchanged), but AMR strong-scaling by distributed coarse is NOT worthwhile at
+      this scale. Realistic paths for real scaling, not done here : (a) distributed coarse
+      only when its MEMORY is the blocker (very large NX*NY), not its time ; (b) HYBRID MG :
+      multigrid distributed on the fine levels of the coarse but bottom-solve on a GATHERED
+      coarse (gather on 1 rank) instead of a multi-box cross-rank GS per level ; (c) reduce the
+      traffic (GPUDirect halos, agglomeration of the `parallel_copy`). As it stands, KEEP the replicated by
+      default (fast, bit-identical, validated phase 10) and only enable `distribute_coarse` as a
+      memory escape hatch. Wired + CI regression test (`test_mpi_amr_distributed_coarse`, np=1/2/4
+      Serial) + GH200 harness (`amrmpi_integrated` measures replicated AND distributed) ; perf result
+      documented here as NEGATIVE quantified.
 
-## Validation device des features post-#48 (round 2)
+## Device validation of post-#48 features (round 2)
 
-La CI ne joue que Release / Python / MPI / Kokkos SERIAL (CPU). Plusieurs briques fusionnees sur
-master APRES #48 ont un CHEMIN DEVICE mais n'avaient ete exercees que CPU. On les a confirmees sur
-GH200 (noeud `armgpu`, `module load cuda/12.6`, Kokkos 4.4.01 `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`),
-chacune par la MEME logique compilee en `exec=Cuda` (backend Kokkos Cuda, `srun -n 1 --gpus-per-task=1`)
-ET en oracle `exec=Serial` (g++, `ADC_HAS_KOKKOS` off), avec comparaison BIT-A-BIT cellule par cellule
-(`diff_bin`, `dmax = max|cuda - serial|`). `for_each_cell` est ASYNC sous Cuda : chaque harness fait
-`device_fence()` avant la lecture hote / le dump. Harness versionnes (hors CI, gardes par `srun`/sbatch) :
+The CI only runs Release / Python / MPI / Kokkos SERIAL (CPU). Several bricks merged on
+master AFTER #48 have a DEVICE PATH but had only been exercised on CPU. We confirmed them on
+GH200 (`armgpu` node, `module load cuda/12.6`, Kokkos 4.4.01 `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`),
+each by the SAME logic compiled in `exec=Cuda` (Kokkos Cuda backend, `srun -n 1 --gpus-per-task=1`)
+AND in `exec=Serial` oracle (g++, `ADC_HAS_KOKKOS` off), with BIT-BY-BIT comparison cell by cell
+(`diff_bin`, `dmax = max|cuda - serial|`). `for_each_cell` is ASYNC under Cuda : each harness does
+`device_fence()` before the host read / the dump. Versioned harnesses (outside CI, guarded by `srun`/sbatch) :
 `python/tests/gpu/{gpu_aux_validate,gpu_epm_validate,gpu_amr_bz_validate,diff_bin}.cpp`,
-`gpuval2_CMakeLists.txt`, `romeo_gpuval2_build.sh`. Resultats REELS (job sbatch GH200) :
+`gpuval2_CMakeLists.txt`, `romeo_gpuval2_build.sh`. REAL results (GH200 sbatch job) :
 
-- **T_e lu via `load_aux<5>` (composante aux 4) (#50/#51).** ✅ VALIDE DEVICE. Le portage precedent
-  n'avait valide que `load_aux<4>` (B_z, comp 3) ; on ajoute la comp 4 (T_e). Un modele jouet `n_aux=5`
-  (flux nul, source `S = T_e u`) lit `a.T_e = a(i,j,4)` dans `assemble_rhs` -> `load_aux<5>` (fonceur
-  nomme `AssembleRhsKernel`, `for_each_cell` ADC_HD) sur device. Profil NON CONSTANT `T_e = 1 + x + 2y`.
-  exec=Cuda : `R = T_e u` dans [2.1875, 7.8125] (lecture par cellule), `max|R - T_e u| = 0`.
-  **`dmax = 0.000e+00`** vs Serial (256 cellules). Bit-identique.
-  NOTE D'HONNETETE : on valide ICI le chemin device REEL de la lecture de T_e (`assemble_rhs`, fonceurs
-  nommes), PAS le chemin `System::add_compiled_model`. Ce dernier instancie des lambdas etendues
-  `__host__ __device__` dans la TU appelante (limite nvcc connue, documentee dans
-  `runtime/dsl_block.hpp` et `tests/test_compiled_model_parity.cpp`) et SEGFAUTE a l'execution sur Cuda
-  -- independamment de T_e (un harness System+`add_compiled_model`+`eval_rhs` a bien crashe sur GH200,
-  `compute-sanitizer memcheck` = 0 erreur device, donc crash cote hote/lambda etendue). Le marshaling
-  T_e du chemin System (`apply_te`, `copy_state` comp 4) reste donc couvert uniquement en CI Serial.
+- **T_e read via `load_aux<5>` (aux component 4) (#50/#51).** [x] VALIDATED DEVICE. The previous
+  port had only validated `load_aux<4>` (B_z, comp 3) ; we add comp 4 (T_e). A toy model `n_aux=5`
+  (zero flux, source `S = T_e u`) reads `a.T_e = a(i,j,4)` in `assemble_rhs` -> `load_aux<5>` (named
+  functor `AssembleRhsKernel`, `for_each_cell` ADC_HD) on device. NON-CONSTANT profile `T_e = 1 + x + 2y`.
+  exec=Cuda : `R = T_e u` in [2.1875, 7.8125] (per-cell read), `max|R - T_e u| = 0`.
+  **`dmax = 0.000e+00`** vs Serial (256 cells). Bit-identical.
+  HONESTY NOTE : we validate HERE the REAL device path of the T_e read (`assemble_rhs`, named
+  functors), NOT the `System::add_compiled_model` path. The latter instantiates extended lambdas
+  `__host__ __device__` in the calling TU (known nvcc limit, documented in
+  `runtime/dsl_block.hpp` and `tests/test_compiled_model_parity.cpp`) and SEGFAULTS at execution on Cuda
+  , independently of T_e (a System+`add_compiled_model`+`eval_rhs` harness did crash on GH200,
+  `compute-sanitizer memcheck` = 0 device error, so the crash is host-side/extended lambda). The T_e
+  marshaling of the System path (`apply_te`, `copy_state` comp 4) thus stays covered only in Serial CI.
 
-- **EPM ECRANTE / Helmholtz `div(eps grad phi) - kappa phi = f` (#44, `GeometricMG::set_reaction`).**
-  ✅ VALIDE DEVICE. Le terme `kappa` vit dans les `for_each_cell` ADC_HD du smoother red-black, du
-  residu et de l'apply (`numerics/elliptic/poisson_operator.hpp`) -> device sous Cuda. MMS `eps=1+0.5x`
-  + `kappa=50`, Dirichlet exact, V-cycles avec le meme critere que `tests/test_screened_poisson.cpp`.
-  exec=Cuda : cycles 8/9/9 (IDENTIQUES a Serial), convergence ordre 2 (ratios Linf 3.69 / 3.85).
-  **`dmax = 0.000e+00`** vs Serial sur phi (n=64, 4096 cellules). Memes cycles, meme phi au bit pres.
+- **SCREENED EPM / Helmholtz `div(eps grad phi) - kappa phi = f` (#44, `GeometricMG::set_reaction`).**
+  [x] VALIDATED DEVICE. The `kappa` term lives in the ADC_HD `for_each_cell` of the red-black smoother, the
+  residual and the apply (`numerics/elliptic/poisson_operator.hpp`) -> device under Cuda. MMS `eps=1+0.5x`
+  + `kappa=50`, exact Dirichlet, V-cycles with the same criterion as `tests/test_screened_poisson.cpp`.
+  exec=Cuda : cycles 8/9/9 (IDENTICAL to Serial), order 2 convergence (Linf ratios 3.69 / 3.85).
+  **`dmax = 0.000e+00`** vs Serial on phi (n=64, 4096 cells). Same cycles, same phi to the bit.
 
-- **EPM ANISOTROPE `div(diag(eps_x, eps_y) grad phi) = f` (#52/#56, `set_epsilon_anisotropic`).**
-  ✅ VALIDE DEVICE. Le second champ `eps_y` (faces normales a y) est lu dans les memes
-  `for_each_cell` ADC_HD que ci-dessus. MMS `eps_x=1+0.5x`, `eps_y=1+0.3y` (cf.
-  `tests/test_anisotropic_epsilon.cpp`). exec=Cuda : cycles 9/10/11 (IDENTIQUES a Serial), ordre 2
-  (ratios Linf 4.00 / 4.00). **`dmax = 0.000e+00`** vs Serial sur phi (n=64, 4096 cellules).
+- **ANISOTROPIC EPM `div(diag(eps_x, eps_y) grad phi) = f` (#52/#56, `set_epsilon_anisotropic`).**
+  [x] VALIDATED DEVICE. The second field `eps_y` (faces normal to y) is read in the same
+  ADC_HD `for_each_cell` as above. MMS `eps_x=1+0.5x`, `eps_y=1+0.3y` (cf.
+  `tests/test_anisotropic_epsilon.cpp`). exec=Cuda : cycles 9/10/11 (IDENTICAL to Serial), order 2
+  (Linf ratios 4.00 / 4.00). **`dmax = 0.000e+00`** vs Serial on phi (n=64, 4096 cells).
 
-- **B_z par niveau dans le chemin AMR (#53, `AmrSystemCoupler::fill_bz`).** ✅ VALIDE DEVICE. B_z(x,y)
-  est pose aux centres DE CHAQUE NIVEAU (`geom.refine(1<<k)`, dx = dx_coarse / 2^k) sur la comp
-  `kAuxBaseComps` du canal aux partage ; le modele le lit `load_aux<4>` dans le noyau source AMR
-  (`for_each_cell` ADC_HD) niveau par niveau. Profil NON CONSTANT `B_z = 1 + sin(2 pi x) cos(2 pi y)`
-  pour distinguer les niveaux. exec=Cuda : `B_z` relu = 0.80865828 au niveau 0 (centre (4,4)),
-  0.90245484 au niveau 1 (centre (8,8)) -- VALEURS DISTINCTES, chacune == son centre de niveau ; la
-  source consomme le bon B_z par niveau (grossier et fin evoluent avec LEUR B_z). **`dmax = 0.000e+00`**
-  vs Serial sur U grossier+fin (512 cellules, 2 niveaux), conservation respectee.
-  Validation initiale par `advance_amr` (HEADER-ONLY, le moteur que `AmrSystemCoupler` appelle niveau
-  par niveau). La FACADE `AmrSystemCoupler` ENTIERE est desormais validee sous nvcc elle aussi (limite
-  device (b) LEVEE) : le concept `CoupledSystemLike` sondait `for_each_block` avec une LAMBDA GENERIQUE
-  en contexte non evalue (`requires s.for_each_block([](auto&){})`), que le frontend nvcc/EDG refusait
-  -> `CoupledSystemLike<CoupledSystem<...>>` faux sous Cuda -> CTAD du coupleur impossible. La sonde
-  est passee a un FONCTEUR NOMME `detail::ForEachBlockProbe` (meme recette que les foncteurs nommes,
-  point 8). Harness `python/tests/gpu/gpu_amrsys_facade_validate.cpp` (instancie la facade entiere :
-  CoupledSystem 2 blocs + Poisson de systeme + `solve_fields` + `step` sur AMR 2 niveaux) : GH200
-  `CUDA_BUILD_OK`, `exec=Cuda` OK, U(grossier+fin, 2 blocs) **`dmax = 0.000e+00`** vs Serial,
-  avant/apres confirme (sonde lambda remise -> nvcc echoue sur la CTAD).
+- **Per-level B_z in the AMR path (#53, `AmrSystemCoupler::fill_bz`).** [x] VALIDATED DEVICE. B_z(x,y)
+  is set at the centers OF EACH LEVEL (`geom.refine(1<<k)`, dx = dx_coarse / 2^k) on the
+  `kAuxBaseComps` comp of the shared aux channel ; the model reads it `load_aux<4>` in the AMR source kernel
+  (`for_each_cell` ADC_HD) level by level. NON-CONSTANT profile `B_z = 1 + sin(2 pi x) cos(2 pi y)`
+  to distinguish the levels. exec=Cuda : `B_z` re-read = 0.80865828 at level 0 (center (4,4)),
+  0.90245484 at level 1 (center (8,8)), DISTINCT VALUES, each == its level center ; the
+  source consumes the right B_z per level (coarse and fine evolve with THEIR B_z). **`dmax = 0.000e+00`**
+  vs Serial on coarse+fine U (512 cells, 2 levels), conservation respected.
+  Initial validation by `advance_amr` (HEADER-ONLY, the engine that `AmrSystemCoupler` calls level
+  by level). The ENTIRE `AmrSystemCoupler` FACADE is now validated under nvcc too (device limit
+  (b) LIFTED) : the `CoupledSystemLike` concept probed `for_each_block` with a GENERIC LAMBDA
+  in an unevaluated context (`requires s.for_each_block([](auto&){})`), which the nvcc/EDG frontend refused
+  -> `CoupledSystemLike<CoupledSystem<...>>` false under Cuda -> coupler CTAD impossible. The probe
+  switched to a NAMED FUNCTOR `detail::ForEachBlockProbe` (same recipe as the named functors,
+  point 8). Harness `python/tests/gpu/gpu_amrsys_facade_validate.cpp` (instantiates the entire facade :
+  CoupledSystem 2 blocks + system Poisson + `solve_fields` + `step` on AMR 2 levels) : GH200
+  `CUDA_BUILD_OK`, `exec=Cuda` OK, U(coarse+fine, 2 blocks) **`dmax = 0.000e+00`** vs Serial,
+  before/after confirmed (lambda probe put back -> nvcc fails on the CTAD).
 
-- **B_z multi-box AMR distribue sur plusieurs GPU (#59).** ⚠️ FONCTIONNEL DEVICE multi-GPU, mais PAS
-  bit-identique au sens strict sur les sommes globales. #59 a fusionne sur master la couverture
-  multi-box (mono-rang + MPI np=2/4, CI Kokkos Serial). Sur GH200 (np=1/2/4, un GH200 par rang,
-  exec=Cuda, OpenMPI CUDA-aware, grossier 2x2 boites + 2 patchs fins disjoints repartis SFC,
-  `coarse_replicated=false`) : B_z est correctement echantillonne PAR NIVEAU et PAR BOITE locale
-  (`bz_bad = 0` a chaque np) et la source `S = B_z u` le lit par boite sur le device. `cmax`
-  (reduction max, insensible a l'ordre) est BIT-IDENTIQUE aux trois np (`dcmax = 0`). En revanche les
-  invariants ADDITIFS globaux (mass/csum/csumsq, `all_reduce_sum` sur les boites locales) DIFFERENT au
-  niveau de l'arrondi entre np : `dmass ~ 1e-15`, `dcsum ~ 3e-13`, `PARITE dmax = 9.1e-13` (np=2/4 vs
-  oracle np=1) -- effet d'ORDRE DE REDUCTION FMA (le grossier multi-box est genuinement reparti, donc
-  la somme partielle change d'ordre selon le decoupage par rang). Ce n'est pas un bug : le calcul
-  device par cellule est correct et le max est exact ; seules les sommes flottantes dependent de
-  l'ordre. Contraste avec phase 10 (`amrmpi_integrated`, dmax=0) ou le grossier est REPLIQUE -> chaque
-  rang somme le MEME domaine entier -> reductions identiques. Honnetement : multi-GPU FONCTIONNELLEMENT
-  CORRECT (B_z par boite/niveau lu sur device, conservation a l'arrondi) mais bit-identite stricte NON
-  atteinte sur les quantites sommees quand le grossier est reparti. Harness
+- **Multi-box B_z AMR distributed across several GPUs (#59).** [!] FUNCTIONAL DEVICE multi-GPU, but NOT
+  bit-identical in the strict sense on the global sums. #59 merged on master the multi-box
+  coverage (single-rank + MPI np=2/4, CI Kokkos Serial). On GH200 (np=1/2/4, one GH200 per rank,
+  exec=Cuda, CUDA-aware OpenMPI, coarse 2x2 boxes + 2 disjoint fine patches distributed SFC,
+  `coarse_replicated=false`) : B_z is correctly sampled PER LEVEL and PER local BOX
+  (`bz_bad = 0` at each np) and the source `S = B_z u` reads it per box on the device. `cmax`
+  (max reduction, order-insensitive) is BIT-IDENTICAL at the three np (`dcmax = 0`). However the
+  global ADDITIVE invariants (mass/csum/csumsq, `all_reduce_sum` over the local boxes) DIFFER at
+  the rounding level between np : `dmass ~ 1e-15`, `dcsum ~ 3e-13`, `PARITE dmax = 9.1e-13` (np=2/4 vs
+  np=1 oracle), an FMA REDUCTION ORDER effect (the multi-box coarse is genuinely distributed, so
+  the partial sum changes order according to the per-rank split). This is not a bug : the device
+  per-cell compute is correct and the max is exact ; only the float sums depend on the
+  order. Contrast with phase 10 (`amrmpi_integrated`, dmax=0) where the coarse is REPLICATED -> each
+  rank sums the SAME entire domain -> identical reductions. Honestly : multi-GPU FUNCTIONALLY
+  CORRECT (B_z per box/level read on device, conservation to rounding) but strict bit-identity NOT
+  reached on the summed quantities when the coarse is distributed. Harness
   `python/tests/gpu/{gpu_amr_bz_mpi_validate.cpp, gpuval2_mpi_CMakeLists.txt, romeo_gpuval2_mpi_build.sh}`.
 
-Bilan round 2 : les 4 features mono-GPU a chemin device (T_e, EPM Helmholtz, EPM anisotrope, B_z par
-niveau AMR) sont confirmees BIT-IDENTIQUES (dmax=0) sur GH200 en exec=Cuda vs Serial ; pour chaque
-elliptique, memes cycles MG ; conservation respectee. Le B_z multi-box distribue multi-GPU (#59) est
-fonctionnellement correct (B_z par boite/niveau lu sur device, `bz_bad=0`, `dcmax=0`) mais les sommes
-globales ne sont pas bit-identiques entre np (ordre de reduction, dmax ~ 9e-13). Reserve honnete : le
-chemin `System::add_compiled_model` sur Cuda reste limite par les lambdas etendues cross-TU (suivi
-existant phase 8) -- la lecture des champs aux (B_z, T_e) a ete validee device via `assemble_rhs` /
-`advance_amr` (fonceurs nommes), qui sont les chemins device reels.
+Round 2 summary : the 4 single-GPU device-path features (T_e, EPM Helmholtz, EPM anisotropic, per-level
+AMR B_z) are confirmed BIT-IDENTICAL (dmax=0) on GH200 in exec=Cuda vs Serial ; for each
+elliptic, same MG cycles ; conservation respected. The distributed multi-box B_z multi-GPU (#59) is
+functionally correct (B_z per box/level read on device, `bz_bad=0`, `dcmax=0`) but the global sums
+are not bit-identical between np (reduction order, dmax ~ 9e-13). Honest reservation : the
+`System::add_compiled_model` path on Cuda remains limited by the cross-TU extended lambdas (existing
+follow-up phase 8), the read of the aux fields (B_z, T_e) was validated on device via `assemble_rhs` /
+`advance_amr` (named functors), which are the real device paths.
 
-## Strategie suggeree
+## Suggested strategy
 
-- Avancer phase par phase, chacune validee CPU == GPU (le seam autorise a basculer une etape a la
-  fois). Demarrer par 1 -> 2 -> 4 (transport pur multi-blocs sur GPU, sans Poisson) : deja un jalon
-  utile et testable. Poisson device (3) ensuite, puis AMR (5) et MPI (6).
-- Outillage ROMEO : `module load cuda/12.6`, build Kokkos+CUDA (`Kokkos_ARCH_HOPPER90`), `srun
-  --account=<compte> -p instant --constraint=armgpu --gres=gpu:1` (cf. docs/GPU_ROMEO.md). nvcc ne
-  s'execute QUE sur le noeud GPU (aarch64), pas sur le login (x86).
-- Orchestration : un workflow multi-agent par backend (Kokkos-Serial / OpenMP / CUDA) + verificateurs
-  adverses comparant a l'oracle CPU est le bon outil pour la phase de validation (cf. sessions DSL).
+- Advance phase by phase, each validated CPU == GPU (the seam allows switching one step at a
+  time). Start with 1 -> 2 -> 4 (pure multi-block transport on GPU, without Poisson) : already a
+  useful and testable milestone. Device Poisson (3) next, then AMR (5) and MPI (6).
+- ROMEO tooling : `module load cuda/12.6`, build Kokkos+CUDA (`Kokkos_ARCH_HOPPER90`), `srun
+  --account=<account> -p instant --constraint=armgpu --gres=gpu:1` (cf. docs/GPU_ROMEO.md). nvcc only
+  runs on the GPU node (aarch64), not on the login (x86).
+- Orchestration : a multi-agent workflow per backend (Kokkos-Serial / OpenMP / CUDA) + adversarial
+  verifiers comparing to the CPU oracle is the right tool for the validation phase (cf. DSL sessions).
 
-## Etat
+## Status
 
-Le reste de la vision (DSL symbolique : interprete, codegen flux/brique/source/elliptique, CSE, JIT
-.so, dispatch type-erased dans le System, AOT bloc compile a parite native sur CPU/Serial ; flux Roe ;
-VariableRole present mais pas encore cable ; eps(x) variable cote coeur, cablage System/Python a faire ;
-reorg physics/ numerics/) est COMPLET au niveau PROTOTYPE, teste (71 ctests C++ coeur, +21 entrees
-ctest MPI, 26 tests Python) et verifie jusqu'au GH200. La VALIDATION INTEGREE AmrSystem + MPI + GPU (les trois axes dans un seul run)
-est FAITE (phase 10, GH200, dmax=0, masse conservee a 0). Les briques a chemin device fusionnees
-APRES #48 (T_e via `load_aux<5>`, EPM ecrante/Helmholtz #44, EPM anisotrope #52/#56, B_z par niveau
-AMR #53) sont confirmees BIT-IDENTIQUES sur GH200 (round 2, dmax=0, memes cycles MG, conservation).
-Restent, cote PERF et non plus correction : le strong-scaling AMR full-device (grossier reparti
-`replicated_coarse=false` cable dans `AmrSystem`, reflux sans rebond hote, halos GPUDirect
-device-direct, FFT distribuee device) et la parite AOT zero-copie sur device (limite nvcc, phase 8 ;
-c'est aussi pourquoi T_e a ete valide device via `assemble_rhs` et non `add_compiled_model`).
+The rest of the vision (symbolic DSL : interpreter, codegen flux/brick/source/elliptic, CSE, JIT
+.so, type-erased dispatch in the System, AOT compiled block at native parity on CPU/Serial ; Roe flux ;
+VariableRole present but not yet wired ; variable eps(x) core-side, System/Python wiring to do ;
+physics/ numerics/ reorg) is COMPLETE at the PROTOTYPE level, tested (71 C++ core ctests, +21 MPI ctest
+entries, 26 Python tests) and verified up to the GH200. The INTEGRATED VALIDATION AmrSystem + MPI + GPU (the three axes in one single run)
+is DONE (phase 10, GH200, dmax=0, mass conserved to 0). The device-path bricks merged
+AFTER #48 (T_e via `load_aux<5>`, screened EPM/Helmholtz #44, anisotropic EPM #52/#56, per-level B_z
+AMR #53) are confirmed BIT-IDENTICAL on GH200 (round 2, dmax=0, same MG cycles, conservation).
+What remains, on the PERF side and no longer correctness : AMR full-device strong-scaling (distributed coarse
+`replicated_coarse=false` wired in `AmrSystem`, reflux without host bounce, device-direct GPUDirect
+halos, distributed device FFT) and zero-copy AOT parity on device (nvcc limit, phase 8 ;
+this is also why T_e was validated on device via `assemble_rhs` and not `add_compiled_model`).
 
-## Validation MPI + Kokkos Cuda multi-GPU (2026-06-06, GH200)
+## MPI + Kokkos Cuda multi-GPU validation (2026-06-06, GH200)
 
-Cloture du trou "MPI + Kokkos Cuda multi-GPU" de la matrice `BACKEND_COVERAGE` (colonne marquee `?`).
-Le mono-GPU Kokkos Cuda etant device-clean (6/6 apres #150+#152), on exerce ici l'INVARIANCE AU NOMBRE
-DE RANGS de la pile ELLIPTIQUE / Schur / Poisson / system-solve sous MPI + Kokkos Cuda sur PLUSIEURS
-GH200 (1 GPU par rang).
+Closing the "MPI + Kokkos Cuda multi-GPU" gap of the `BACKEND_COVERAGE` matrix (column marked `?`).
+The single-GPU Kokkos Cuda being device-clean (6/6 after #150+#152), we exercise here the RANK-COUNT
+INVARIANCE of the ELLIPTIC / Schur / Poisson / system-solve stack under MPI + Kokkos Cuda on SEVERAL
+GH200 (1 GPU per rank).
 
-- Provenance : `origin/master` 2674d64 (archive, rsync frais sous `~/adc_gpu_p1/mpicuda/` sur ROMEO).
-- Noeud `romeo-a057` (`armgpu`), 4x GH200 visibles. Kokkos SERIAL+CUDA, `Kokkos_ARCH_HOPPER90`,
+- Provenance : `origin/master` 2674d64 (archive, fresh rsync under `~/adc_gpu_p1/mpicuda/` on ROMEO).
+- Node `romeo-a057` (`armgpu`), 4x GH200 visible. Kokkos SERIAL+CUDA, `Kokkos_ARCH_HOPPER90`,
   `nvcc_wrapper`. MPI = OpenMPI 4.1.7 CUDA-aware (`+cuda cuda_arch=90 fabrics=ucx schedulers=slurm`,
-  hash `nkokjyt`). Lancement `srun -n {1,2,4} --gpus-per-task=1` (1 GPU/rang). Build unique
-  `-DADC_USE_KOKKOS=ON -DADC_USE_MPI=ON`. np=1 = oracle mono-GPU Cuda.
-- Harness : script `mpicuda_run.sh` (configure unique, build des cibles MPI, run np=1/2/4, parse
-  l'invariant imprime par chaque test, calcule le dmax cross-np).
+  hash `nkokjyt`). Launch `srun -n {1,2,4} --gpus-per-task=1` (1 GPU/rank). Single build
+  `-DADC_USE_KOKKOS=ON -DADC_USE_MPI=ON`. np=1 = single-GPU Cuda oracle.
+- Harness : script `mpicuda_run.sh` (single configure, build of the MPI targets, run np=1/2/4, parses
+  the invariant printed by each test, computes the cross-np dmax).
 
-Tableau par test (rc + invariance cross-np vs np=1, dmax sur les invariants imprimes) :
+Table per test (rc + cross-np invariance vs np=1, dmax on the printed invariants) :
 
 | Test | np=1 | np=2 | np=4 | dmax np2-vs-np1 | dmax np4-vs-np1 | invariance |
 |------|------|------|------|-----------------|-----------------|------------|
-| test_krylov_solver (BiCGStab) | OK | OK | OK | 0 (iters=4) | 0 (iters=4) | BIT-IDENTIQUE |
-| test_condensed_schur_source_stepper | OK | OK | OK | 0 (all_reduce_max) | 0 | BIT-IDENTIQUE |
-| test_mpi_poisson | OK | OK | OK | 0 (res=1.832e-14) | 0 | BIT-IDENTIQUE |
-| test_mpi_system_solve_fields | OK | OK | OK | 0 (\|phi\|max=3.125e-2) | 0 | BIT-IDENTIQUE |
-| test_mpi_system_fft | OK | OK | OK | n/a (refuse fft si MPI) | n/a | comportement attendu |
-| test_mpi_amr_compiled_parity | OK | OK | OK | 0 (mass/csum/csumsq/cmax %.17e) | 0 | BIT-IDENTIQUE |
-| test_mpi_amr_distributed_coarse | OK | OK | OK | 0 (cmax=1.41585803814656397) | 0 | BIT-IDENTIQUE |
-| test_mpi_coupled_source | OK | OK | OK | 0 (n_e/n_i/n_g) | 0 | BIT-IDENTIQUE |
-| test_mpi_mbox_parity | OK | OK | OK | 0 (== mono-box) | 0 | BIT-IDENTIQUE |
-| test_mpi_cutcell_multibox | OK | OK | OK | 0 (== mono-box) | 0 | BIT-IDENTIQUE |
-| test_schur_condensation | FAIL | FAIL | FAIL | -- | -- | echec BACKEND (voir reserve) |
+| test_krylov_solver (BiCGStab) | OK | OK | OK | 0 (iters=4) | 0 (iters=4) | BIT-IDENTICAL |
+| test_condensed_schur_source_stepper | OK | OK | OK | 0 (all_reduce_max) | 0 | BIT-IDENTICAL |
+| test_mpi_poisson | OK | OK | OK | 0 (res=1.832e-14) | 0 | BIT-IDENTICAL |
+| test_mpi_system_solve_fields | OK | OK | OK | 0 (\|phi\|max=3.125e-2) | 0 | BIT-IDENTICAL |
+| test_mpi_system_fft | OK | OK | OK | n/a (refuses fft if MPI) | n/a | expected behavior |
+| test_mpi_amr_compiled_parity | OK | OK | OK | 0 (mass/csum/csumsq/cmax %.17e) | 0 | BIT-IDENTICAL |
+| test_mpi_amr_distributed_coarse | OK | OK | OK | 0 (cmax=1.41585803814656397) | 0 | BIT-IDENTICAL |
+| test_mpi_coupled_source | OK | OK | OK | 0 (n_e/n_i/n_g) | 0 | BIT-IDENTICAL |
+| test_mpi_mbox_parity | OK | OK | OK | 0 (== single-box) | 0 | BIT-IDENTICAL |
+| test_mpi_cutcell_multibox | OK | OK | OK | 0 (== single-box) | 0 | BIT-IDENTICAL |
+| test_schur_condensation | FAIL | FAIL | FAIL | -- | -- | BACKEND failure (see reservation) |
 
-Tous les invariants %.17e (AMR compiled parity, AMR distributed coarse) sont BIT-A-BIT identiques entre
-np=1/2/4 (dmax = 0.000e+00, pas meme un drift de reassociation FMA) ; `crossrank_spread = 0` ;
-masse conservee ; iterations de Krylov invariantes (min=max=4 a tout np). `test_mpi_system_fft` REFUSE
-`fft` sous MPI (np=2/4) avec une erreur collective, comme concu (#93), donc rien a comparer cross-np.
-Aucun interblocage, aucun rang vide non-garde.
+All the %.17e invariants (AMR compiled parity, AMR distributed coarse) are BIT-FOR-BIT identical between
+np=1/2/4 (dmax = 0.000e+00, not even an FMA reassociation drift) ; `crossrank_spread = 0` ;
+mass conserved ; Krylov iterations invariant (min=max=4 at any np). `test_mpi_system_fft` REFUSES
+`fft` under MPI (np=2/4) with a collective error, as designed (#93), so nothing to compare cross-np.
+No deadlock, no unguarded empty rank.
 
-RESERVE HONNETE -- `test_schur_condensation` : echoue sur Cuda DES np=1 (eps assemblage = 1.026827
-au lieu de ~1, RHS dmax = 4.892e+01, checks `B_rhs_analytique_interieur` / `C1_eps_*_diag` /
-`C2_rhs_eq_neg_laplacien_bitident`). L'echec est IDENTIQUE a np=1/2/4 : c'est un defaut du chemin
-d'ASSEMBLAGE device (backend Cuda) du condenseur de Schur, PAS un probleme d'invariance MPI. Il passe
-sur Serial / Kokkos Serial (ci-full). Coherent avec la colonne `Kokkos Cuda` de ce test deja marquee
-`?` dans `BACKEND_COVERAGE` : non device-clean, donc sa variante MPI ne peut pas etre declaree
-multi-GPU-clean. A traiter cote assembleur device (hors perimetre de cette session MPI).
+HONEST RESERVATION, `test_schur_condensation` : fails on Cuda FROM np=1 (assembly eps = 1.026827
+instead of ~1, RHS dmax = 4.892e+01, checks `B_rhs_analytique_interieur` / `C1_eps_*_diag` /
+`C2_rhs_eq_neg_laplacien_bitident`). The failure is IDENTICAL at np=1/2/4 : it is a defect of the device
+ASSEMBLY path (Cuda backend) of the Schur condenser, NOT an MPI invariance issue. It passes
+on Serial / Kokkos Serial (ci-full). Consistent with the `Kokkos Cuda` column of this test already marked
+`?` in `BACKEND_COVERAGE` : not device-clean, so its MPI variant cannot be declared
+multi-GPU-clean. To be handled on the device assembler side (outside the scope of this MPI session).
 
 compute-sanitizer (memcheck) :
-- Sur les binaires LIES MPI, compute-sanitizer est INUTILISABLE sur ce noeud : OpenMPI `mtl:ofi`
-  ne s'ouvre pas sous le wrapper sanitizer (`Target application terminated before first instrumented
-  API call`), meme a `-n 1` ; et l'OpenMPI CUDA-aware sonde chaque pointeur via `cuPointerGetAttribute`
-  (qui renvoie `INVALID_VALUE` pour un pointeur HOTE par conception), que le sanitizer compte comme
-  "erreur" (708 flags d'API sur `test_mpi_system_solve_fields`, mais `0 bytes leaked`, aucun OOB,
-  aucun read/write invalide -- bruit MPI benin, pas un defaut du code).
-- Memcheck PROPRE du chemin elliptique device (meme checkout, build Kokkos-Cuda SANS MPI) :
-  `test_krylov_solver` et `test_polar_poisson_mms` -> `ERROR SUMMARY: 0 errors`, `LEAK SUMMARY:
-  0 bytes leaked in 0 allocations`. Les noyaux device de la pile elliptique sont donc memory-clean ;
-  les "erreurs" du run MPI etaient exclusivement le sondage de pointeurs CUDA-aware d'OpenMPI.
+- On the MPI-LINKED binaries, compute-sanitizer is UNUSABLE on this node : OpenMPI `mtl:ofi`
+  does not open under the sanitizer wrapper (`Target application terminated before first instrumented
+  API call`), even at `-n 1` ; and the CUDA-aware OpenMPI probes every pointer via `cuPointerGetAttribute`
+  (which returns `INVALID_VALUE` for a HOST pointer by design), which the sanitizer counts as
+  an "error" (708 API flags on `test_mpi_system_solve_fields`, but `0 bytes leaked`, no OOB,
+  no invalid read/write, benign MPI noise, not a code defect).
+- CLEAN memcheck of the device elliptic path (same checkout, Kokkos-Cuda build WITHOUT MPI) :
+  `test_krylov_solver` and `test_polar_poisson_mms` -> `ERROR SUMMARY: 0 errors`, `LEAK SUMMARY:
+  0 bytes leaked in 0 allocations`. The device kernels of the elliptic stack are thus memory-clean ;
+  the "errors" of the MPI run were exclusively OpenMPI's CUDA-aware pointer probing.
 
-VERDICT : multi-GPU rank-invariant = OUI pour la pile elliptique / Schur(stepper) / Poisson /
-system-solve / AMR sous MPI + Kokkos Cuda (10 tests OK a np=1/2/4, dmax cross-np = 0, memcheck noyaux
-propre), avec UNE reserve : `test_schur_condensation` echoue cote backend Cuda des np=1 (defaut
-d'assemblage device, independant du nombre de rangs) et reste donc `?`/echec sur la colonne
-Kokkos Cuda et MPI+Kokkos Cuda. Aucun interblocage observe.
+VERDICT : multi-GPU rank-invariant = YES for the elliptic / Schur(stepper) / Poisson /
+system-solve / AMR stack under MPI + Kokkos Cuda (10 tests OK at np=1/2/4, cross-np dmax = 0, clean kernel
+memcheck), with ONE reservation : `test_schur_condensation` fails on the Cuda backend side from np=1 (device
+assembly defect, independent of the number of ranks) and thus remains `?`/failure on the
+Kokkos Cuda and MPI+Kokkos Cuda column. No deadlock observed.

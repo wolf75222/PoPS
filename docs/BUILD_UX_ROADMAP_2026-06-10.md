@@ -1,87 +1,87 @@
-# Build & UX d'installation -- audit complet et feuille de route (2026-06-10)
+# Build and install UX, complete audit and roadmap (2026-06-10)
 
-Suite de [TOOLCHAIN_ROBUSTESSE_AUDIT_2026-06-10.md](TOOLCHAIN_ROBUSTESSE_AUDIT_2026-06-10.md).
-Audit par workflow multi-agents (6 lentilles : projets similaires **via web**, CMake moderne
-**via web**, build-system complet, CI, **critique adversariale de nos propres changements**,
-parcours utilisateur sur 3 personas) + contre-vérification adversariale des findings critiques.
+Follow-up to [TOOLCHAIN_ROBUSTESSE_AUDIT_2026-06-10.md](TOOLCHAIN_ROBUSTESSE_AUDIT_2026-06-10.md).
+Audit by multi-agent workflow (6 lenses: similar projects **via web**, modern CMake
+**via web**, full build system, CI, **adversarial critique of our own changes**,
+user journey across 3 personas) + adversarial cross-check of the critical findings.
 
 ---
 
-## 1. Ce que font les projets jumeaux (recherche web, sources primaires)
+## 1. What the twin projects do (web research, primary sources)
 
-Projets étudiés : **pyAMReX / WarpX** (AMR+GPU+MPI+pybind11 -- les plus proches d'adc_cpp),
-openPMD-api, PyKokkos, FEniCSx/dolfinx, OpenMC, PyBaMM, doc officielle pybind11, Scientific
+Projects studied: **pyAMReX / WarpX** (AMR+GPU+MPI+pybind11, the closest to adc_cpp),
+openPMD-api, PyKokkos, FEniCSx/dolfinx, OpenMC, PyBaMM, official pybind11 doc, Scientific
 Python Development Guide.
 
-| Sujet | Pattern dominant 2025-2026 | adc_cpp aujourd'hui |
+| Topic | Dominant 2025-2026 pattern | adc_cpp today |
 |---|---|---|
-| Install du module Python | **`pip install .` via scikit-build-core** (1er choix de la doc pybind11) ou cible CMake **`pip_install`** (pyAMReX/WarpX) → site-packages | PYTHONPATH manuel (béquille dev chez les jumeaux, pas un mode de distribution) |
-| Backends optionnels (GPU/MPI) | env vars mappées 1:1 sur des `-D` CMake au moment du `pip install` (`WARPX_COMPUTE=CUDA WARPX_MPI=ON pip install .`) ; variantes conda `=*=mpi_openmpi` ; variants Spack | options CMake + presets (équivalent local, pas pip) |
-| Bugs « JIT/runtime avec une autre toolchain » | classe RÉELLE et documentée (cppyy/Cling ABI GCC vs Clang, Numba/JAX PTX vs toolkit). Anti-pattern : **figer/baker la toolchain** | exactement ce qu'on a implémenté (`__cxx_compiler__` baké, probes, clé d'ABI enrichie) ✓ |
-| Reproductibilité d'env | `environment.yml` jugé non reproductible (pas de lock) → **pixi** (lockfile auto multi-plateforme, env dans le projet -- HPC-friendly) ou conda-lock | environment.yml (suffisant pour démarrer, lock à considérer) |
-| Doc d'install exemplaire | WarpX/openPMD : 3 voies (Users / Developers / **HPC avec profils machine sourçables** `Tools/machines/<cluster>/*.profile.example`) | 1 page installation + tutoriel ; pas de profil ROMEO |
+| Install of the Python module | **`pip install .` via scikit-build-core** (1st choice in the pybind11 doc) or CMake target **`pip_install`** (pyAMReX/WarpX) -> site-packages | manual PYTHONPATH (dev crutch at the twins, not a distribution mode) |
+| Optional backends (GPU/MPI) | env vars mapped 1:1 onto CMake `-D` at `pip install` time (`WARPX_COMPUTE=CUDA WARPX_MPI=ON pip install .`) ; conda variants `=*=mpi_openmpi` ; Spack variants | CMake options + presets (local equivalent, not pip) |
+| Bugs "JIT/runtime with another toolchain" | a REAL and documented class (cppyy/Cling ABI GCC vs Clang, Numba/JAX PTX vs toolkit). Anti-pattern: **freeze/bake the toolchain** | exactly what we implemented (`__cxx_compiler__` baked, probes, enriched ABI key) ok |
+| Env reproducibility | `environment.yml` judged non-reproducible (no lock) -> **pixi** (auto multi-platform lockfile, env inside the project, HPC-friendly) or conda-lock | environment.yml (enough to get started, lock to consider) |
+| Exemplary install doc | WarpX/openPMD: 3 paths (Users / Developers / **HPC with sourceable machine profiles** `Tools/machines/<cluster>/*.profile.example`) | 1 installation page + tutorial ; no ROMEO profile |
 
-## 2. Corrigé AUJOURD'HUI (2e vague, après l'audit complet)
+## 2. Fixed TODAY (2nd wave, after the full audit)
 
-| Fix | Détail | Validation |
+| Fix | Detail | Validation |
 |---|---|---|
-| **Clé d'ABI enrichie `kokkos=` + `stdlib=`** (les 2 trous UB confirmés) | [abi_key.hpp](../include/adc/runtime/abi_key.hpp) : `;kokkos=<0|1>` (ADC_HAS_KOKKOS, layouts allocator/types) + `;stdlib=libc++_NNN|libstdc++_NNN` (panachage libc++/libstdc++). Une seule fonction inline → module ET loader cohérents automatiquement | clé imprimée avec/sans `-DADC_HAS_KOKKOS` ; parsers Python (`std=`, `headers=`) insensibles (testé) |
-| **Kokkos OpenMP "via conda" en 1 commande** | [scripts/kokkos_openmp_conda.sh](../scripts/kokkos_openmp_conda.sh) : compile Kokkos Serial+OpenMP dans `$CONDA_PREFIX` (~2 min, outillage déjà fourni par l'env). Réponse au paquet conda-forge Serial-only | **testé réellement** : build OK, `KOKKOS_ENABLE_OPENMP` présent, configure adc_cpp → `Kokkos found = (OPENMP;SERIAL)` |
-| Hints libomp avant `find_package(Kokkos)` | `KokkosConfig.cmake` fait `find_dependency(OpenMP REQUIRED)` → échouait sur macOS ; macro `adc_apple_libomp_hints()` factorisée (conda puis brew), appelée pour OpenMP ET Kokkos | configure contre le Kokkos OpenMP de test : OK |
-| **Consommateur FetchContent ne compile plus les tests** (HIGH confirmé) | `option(ADC_BUILD_TESTS ${PROJECT_IS_TOP_LEVEL})` + bump `cmake_minimum_required(3.21)` (aligné presets) | super-projet de test : **0 cible test** tirée, `app` lie `adc::adc` et tourne ; top-level inchangé (120 cibles) |
-| **Version unifiée 0.1.0 + `adc.__version__`** | `project(VERSION 0.1.0)` (Doxygen/Sphinx disaient déjà 0.1.0, CMake disait 0.0.1) → bakée `ADC_VERSION` → `adc.__version__` | bindings compile avec `ADC_VERSION="0.1.0"` |
-| Presets durcis | preset caché `conda` avec **`condition: CONDA_PREFIX != ""`** (échec clair au lieu de roots vides silencieux) ; `CMAKE_EXPORT_COMPILE_COMMANDS=ON` (clangd/IDE) ; description `python-parallel` honnête (note Serial-only + remède) | `cmake --list-presets` OK |
-| Labels + timeouts ctest | `adc_add_test` → `LABELS core TIMEOUT 600` ; `adc_add_mpi_test` → `LABELS mpi` (un deadlock MPI ne bloque plus le runner) → `ctest -L mpi` possible | configure top-level OK |
-| Garde **cache-HIT** (trou trouvé par autocritique) | `check_compiled_matches_module()` au **branchement** (System+AmrSystem `add_equation`) : un `.so` en cache + module périmé → erreur actionnable, plus de dlopen cryptique. Le vérificateur adversarial l'a ensuite **confirmée comme déjà suffisante** | scénario simulé : lève/n-op correctement |
-| Divers confirmés | un seul walk+sha256 (réutilisation de la signature) ; `.adc_cache*/` gitignoré ; mention Catch2 fantôme supprimée ; `build-master/python` → `build-py-kokkos/python` ; tutoriel Étape 16 : chemin conda `$CONDA_PREFIX` vs custom `$KOKKOS_ROOT` ; pin pybind11 `<3` levé (le build prend l'env actif, 3.0.4 validé) ; mémoïsation du probe `-std` ; `OMP_PROC_BIND=false` **seulement sur macOS** (NUMA cluster préservé) | py_compile/configure/0 warning |
+| **ABI key enriched with `kokkos=` + `stdlib=`** (the 2 confirmed UB holes) | [abi_key.hpp](../include/adc/runtime/abi_key.hpp): `;kokkos=<0|1>` (ADC_HAS_KOKKOS, allocator/types layouts) + `;stdlib=libc++_NNN|libstdc++_NNN` (libc++/libstdc++ mix). A single inline function -> module AND loader consistent automatically | key printed with/without `-DADC_HAS_KOKKOS` ; Python parsers (`std=`, `headers=`) insensitive (tested) |
+| **Kokkos OpenMP "via conda" in 1 command** | [scripts/kokkos_openmp_conda.sh](../scripts/kokkos_openmp_conda.sh): builds Kokkos Serial+OpenMP into `$CONDA_PREFIX` (~2 min, tooling already provided by the env). Answer to the conda-forge Serial-only package | **actually tested**: build OK, `KOKKOS_ENABLE_OPENMP` present, configure adc_cpp -> `Kokkos found = (OPENMP;SERIAL)` |
+| libomp hints before `find_package(Kokkos)` | `KokkosConfig.cmake` does `find_dependency(OpenMP REQUIRED)` -> was failing on macOS ; macro `adc_apple_libomp_hints()` factored out (conda then brew), called for both OpenMP AND Kokkos | configure against the test Kokkos OpenMP: OK |
+| **FetchContent consumer no longer compiles the tests** (HIGH confirmed) | `option(ADC_BUILD_TESTS ${PROJECT_IS_TOP_LEVEL})` + bump `cmake_minimum_required(3.21)` (aligned with presets) | test super-project: **0 test target** pulled, `app` links `adc::adc` and runs ; top-level unchanged (120 targets) |
+| **Version unified to 0.1.0 + `adc.__version__`** | `project(VERSION 0.1.0)` (Doxygen/Sphinx already said 0.1.0, CMake said 0.0.1) -> baked `ADC_VERSION` -> `adc.__version__` | bindings compile with `ADC_VERSION="0.1.0"` |
+| Hardened presets | hidden preset `conda` with **`condition: CONDA_PREFIX != ""`** (clear failure instead of silently empty roots) ; `CMAKE_EXPORT_COMPILE_COMMANDS=ON` (clangd/IDE) ; honest `python-parallel` description (Serial-only note + remedy) | `cmake --list-presets` OK |
+| ctest labels + timeouts | `adc_add_test` -> `LABELS core TIMEOUT 600` ; `adc_add_mpi_test` -> `LABELS mpi` (an MPI deadlock no longer blocks the runner) -> `ctest -L mpi` possible | top-level configure OK |
+| **cache-HIT** guard (hole found by self-critique) | `check_compiled_matches_module()` at the **wiring point** (System+AmrSystem `add_equation`): a cached `.so` + stale module -> actionable error, no more cryptic dlopen. The adversarial verifier then **confirmed it as already sufficient** | simulated scenario: raises/no-ops correctly |
+| Misc confirmed | a single walk+sha256 (reuse of the signature) ; `.adc_cache*/` gitignored ; phantom Catch2 mention removed ; `build-master/python` -> `build-py-kokkos/python` ; tutorial Step 16: conda path `$CONDA_PREFIX` vs custom `$KOKKOS_ROOT` ; pybind11 pin `<3` lifted (the build takes the active env, 3.0.4 validated) ; memoization of the `-std` probe ; `OMP_PROC_BIND=false` **only on macOS** (cluster NUMA preserved) | py_compile/configure/0 warning |
 
-## 3. Autocritique : verdicts sur notre propre travail
+## 3. Self-critique: verdicts on our own work
 
-- **Réfuté-en-notre-faveur ×3** : les vérificateurs adversariaux ont tenté de casser nos gardes
-  et ont conclu qu'elles couvrent déjà les cas signalés (résolution compilateur, probe c++2b,
-  garde cache-HIT).
-- **Confirmé contre nous et corrigé** : presets sans condition CONDA_PREFIX ; pin pybind11
-  incohérent ; `OMP_PROC_BIND=false` pénalisant cluster ; probe non mémoïsé ; displayName
-  `python-parallel` trompeur. → tous corrigés (§2).
-- **Connu et assumé** : `set_threads` se base sur un drapeau Python (`_first_system_built`) qui
-  ne voit pas une init Kokkos déclenchée par un autre chemin (.so DSL direct). Fix propre =
-  exposer `Kokkos::is_initialized()` dans les bindings (roadmap P2).
-- **Généreux mais réel** : `generator: Ninja` forcé dans les presets -- assumé (l'env conda
-  fournit ninja ; documenté).
+- **Refuted-in-our-favor x3**: the adversarial verifiers tried to break our guards
+  and concluded that they already cover the reported cases (compiler resolution, c++2b probe,
+  cache-HIT guard).
+- **Confirmed against us and fixed**: presets without a CONDA_PREFIX condition ; inconsistent
+  pybind11 pin ; `OMP_PROC_BIND=false` penalizing the cluster ; non-memoized probe ; displayName
+  `python-parallel` misleading. -> all fixed (section 2).
+- **Known and accepted**: `set_threads` relies on a Python flag (`_first_system_built`) that
+  does not see a Kokkos init triggered by another path (direct DSL .so). Clean fix =
+  expose `Kokkos::is_initialized()` in the bindings (roadmap P2).
+- **Generous but real**: `generator: Ninja` forced in the presets, accepted (the conda env
+  provides ninja ; documented).
 
-## 4. Feuille de route restante (priorisée)
+## 4. Remaining roadmap (prioritized)
 
-### P1 -- la marche « distribution » (décision de design, PR dédiée)
-- **`pyproject.toml` + scikit-build-core** : `pip install .` pilote le CMake existant (une seule
-  source de vérité), `pip install -e .` remplace le PYTHONPATH. Backends via env vars → `-D`
-  (pattern WarpX : `ADC_KOKKOS=ON ADC_MPI=ON pip install .`). C'est LE standard 2025-2026
-  (pybind11, Scientific Python Guide, pyAMReX/WarpX/PyBaMM). Caveat PyBaMM : tester tôt sur
+### P1, the "distribution" step (design decision, dedicated PR)
+- **`pyproject.toml` + scikit-build-core**: `pip install .` drives the existing CMake (a single
+  source of truth), `pip install -e .` replaces PYTHONPATH. Backends via env vars -> `-D`
+  (WarpX pattern: `ADC_KOKKOS=ON ADC_MPI=ON pip install .`). This is THE 2025-2026 standard
+  (pybind11, Scientific Python Guide, pyAMReX/WarpX/PyBaMM). PyBaMM caveat: test early on
   aarch64 (ROMEO Grace).
-- **`install()`/export package-config** (~30 lignes) : `find_package(adc)` pour les consommateurs
-  hors FetchContent + prérequis d'un éventuel feedstock conda/Spack. Gardé par `ADC_INSTALL`.
+- **`install()`/export package-config** (~30 lines): `find_package(adc)` for consumers
+  outside FetchContent + prerequisite for a possible conda/Spack feedstock. Guarded by `ADC_INSTALL`.
 
-### P2 -- robustesse/confort incrémental
-- `_adc.kokkos_is_initialized()` exposé → `set_threads` fiable sur toutes les voies d'init.
-- CI : utiliser `cmake --preset` (single source of truth ; la CI réécrit les flags à la main --
-  duplication confirmée, chiffrée différemment selon les jobs) ; étendre
-  `adc_cap_opt_for_kokkos_ram`/pool aux ~39 cibles qui compilent system/amr_system.cpp.
-- Étape configure+build du `bench/` dans ci-full (pourriture silencieuse aujourd'hui).
-- Profil machine ROMEO versionné (`Tools/machines/romeo/...profile.example`, pattern WarpX) +
-  section « cluster Spack sans root » dans installation.md.
-- Doc en une commande (cible `docs` ou script : sphinx+doxygen+deps conda-forge).
+### P2, incremental robustness/convenience
+- `_adc.kokkos_is_initialized()` exposed -> `set_threads` reliable on all init paths.
+- CI: use `cmake --preset` (single source of truth ; the CI rewrites the flags by hand,
+  duplication confirmed, counted differently across the jobs) ; extend
+  `adc_cap_opt_for_kokkos_ram`/pool to the ~39 targets that compile system/amr_system.cpp.
+- configure+build step of `bench/` in ci-full (silent rot today).
+- Versioned ROMEO machine profile (`Tools/machines/romeo/...profile.example`, WarpX pattern) +
+  "Spack cluster without root" section in installation.md.
+- One-command doc (target `docs` or script: sphinx+doxygen+conda-forge deps).
 
-### P3 -- opportuniste
-- **pixi** (ou conda-lock) pour le lock reproductible multi-plateforme ; pixi stocke l'env dans
-  le projet (quotas $HOME cluster).
-- cibuildwheel/wheels PyPI le jour où la distribution publique compte ; feedstock conda-forge
-  (avec `pybind11-abi` pour la cohérence ABI inter-modules).
-- `import numpy` paresseux dans dsl.py (production n'en a pas besoin) ; presets debug/asan ;
-  version Kokkos dans la feature-key du cache DSL.
+### P3, opportunistic
+- **pixi** (or conda-lock) for the reproducible multi-platform lock ; pixi stores the env inside
+  the project (cluster $HOME quotas).
+- cibuildwheel/PyPI wheels the day public distribution matters ; conda-forge feedstock
+  (with `pybind11-abi` for inter-module ABI consistency).
+- lazy `import numpy` in dsl.py (production does not need it) ; debug/asan presets ;
+  Kokkos version in the DSL cache feature-key.
 
-## 5. Réponse nette à « Kokkos parallèle avec conda ? »
+## 5. Clear answer to "parallel Kokkos with conda?"
 
-Le **paquet** conda-forge `kokkos` : non (Serial-only, CUDA = paquet séparé, pas d'OpenMP).
-Mais **oui en pratique** : `bash scripts/kokkos_openmp_conda.sh` compile un Kokkos Serial+OpenMP
-**dans l'env conda** en ~2 min avec l'outillage de l'env -- testé de bout en bout sur cette
-machine (build + `Kokkos found = (OPENMP;SERIAL)` au configure d'adc_cpp). Le GPU reste
+The conda-forge `kokkos` **package**: no (Serial-only, CUDA = separate package, no OpenMP).
+But **yes in practice**: `bash scripts/kokkos_openmp_conda.sh` builds a Kokkos Serial+OpenMP
+**inside the conda env** in ~2 min with the env tooling, tested end to end on this
+machine (build + `Kokkos found = (OPENMP;SERIAL)` at adc_cpp configure). The GPU stays
 ROMEO/Spack.

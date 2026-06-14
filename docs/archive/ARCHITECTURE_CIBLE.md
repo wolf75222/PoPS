@@ -1,15 +1,15 @@
-# Architecture cible (north star)
+# Target architecture (north star)
 
-Doc de VISION (pas l'etat actuel), issu de la description du tuteur. A relire avant la seance
-tableau. Deux niveaux :
-- **(A)** l'architecture OO en couches (modeles composables) : DEJA largement realisee dans adc_cpp ;
-- **(B)** le DSL symbolique ou Python ECRIT les formules : interprete CPU + codegen C++
-  (flux / brique / source / elliptique) + CSE + JIT dlopen du noyau faits (`adc.dsl`) ; restent le
-  dispatch dans le solveur template (type-erased) et Kokkos/CUDA + run GPU.
+VISION doc (not the current state), drawn from the supervisor's description. To re-read before the
+whiteboard session. Two levels:
+- **(A)** the layered OO architecture (composable models): ALREADY largely realized in adc_cpp;
+- **(B)** the symbolic DSL where Python WRITES the formulas: CPU interpreter + C++ codegen
+  (flux / brick / source / elliptic) + CSE + JIT dlopen of the kernel done (`adc.dsl`); remaining are the
+  dispatch in the template solver (type-erased) and Kokkos/CUDA + GPU run.
 
 ---
 
-## 0. Principe (a graver)
+## 0. Principle (to carve in stone)
 
 ```
 Un modele physique ne sait pas avancer le temps.
@@ -20,7 +20,7 @@ Une source couplee lit plusieurs blocs.
 Le driver orchestre, mais ne contient pas la physique.
 ```
 
-PDE :
+PDE:
 ```
 HPM : d_t U + div F(U, aux) = S(U, U_all, aux)
 EPM : D(phi, aux) = f(U_all, aux)
@@ -30,7 +30,7 @@ Chaine : Variables -> Flux physique -> Flux numerique -> SpaceMethod -> TimeMeth
 
 ---
 
-## 1. Arbre cible (condense)
+## 1. Target tree (condensed)
 
 ```
 solver/
@@ -51,44 +51,44 @@ solver/
   python/  bindings.cpp
 ```
 
-### Etat de l'arborescence REELLE (juin 2026)
+### State of the REAL tree (June 2026)
 
-L'arbre `include/adc/` a ete reorganise vers cette cible (prefixe `<adc/...>` conserve) :
-`core/`, `physics/` (euler + hyperbolic / source / elliptic / composite, cf. scission de `bricks.hpp`),
+The `include/adc/` tree was reorganized toward this target (the `<adc/...>` prefix is kept):
+`core/`, `physics/` (euler + hyperbolic / source / elliptic / composite, cf. the split of `bricks.hpp`),
 `numerics/` (flux + spatial_operator + `time/` + `elliptic/`), `mesh/`, `amr/`, `runtime/`,
-`coupling/`, `parallel/`. Les categories de briques sont desormais des fichiers separes
-(`physics/{hyperbolic,source,elliptic,composite}.hpp`), `physics/bricks.hpp` restant un umbrella de
-compat. Restent flat (pas de sous-dossiers fins `numerics/{flux,space,reconstruction}`) faute de
-correspondance 1:1 fichier<->concept ; `physical_model.hpp` (concepts) et `variables.hpp` restent dans
-`core/` (contrats fondamentaux). Renommages : `Variables`->`VariableSet`, `HyperbolicModel`->
-`HyperbolicPhysicalModel` (alias de compat conserves).
+`coupling/`, `parallel/`. The brick categories are now separate files
+(`physics/{hyperbolic,source,elliptic,composite}.hpp`), with `physics/bricks.hpp` remaining an umbrella for
+compat. Some remain flat (no fine subdirectories `numerics/{flux,space,reconstruction}`) for lack of a
+1:1 file<->concept correspondence; `physical_model.hpp` (concepts) and `variables.hpp` remain in
+`core/` (fundamental contracts). Renames: `Variables`->`VariableSet`, `HyperbolicModel`->
+`HyperbolicPhysicalModel` (compat aliases kept).
 
 ---
 
-## 2. Couches OO (et etat actuel)
+## 2. OO layers (and current state)
 
-| Couche cible | Etat dans adc_cpp aujourd'hui |
+| Target layer | State in adc_cpp today |
 |---|---|
-| `Variables` (cons/prim, conversions) | FAIT : `core/variables.hpp` (kind, names, size) + `using State/Prim` + `to_primitive`/`to_conservative` sur la brique hyperbolique. MANQUE : `VariableRole` semantique (Density/MomentumX/...), `index_of(role)`. |
-| `HyperbolicModel` (Vars + flux + lambda) | FAIT : concept `HyperbolicModel` + briques Euler / IsothermalFlux / ExBVelocity. MANQUE : `eigenvalues()` rendant le VECTEUR complet (on a `max_wave_speed` + `wave_speeds` signees) ; `Direction` enum (on a `int dir`). |
-| `LocalSource` / `CoupledSource` | FAIT : briques source locale (PotentialForce/GravityForce/NoSource) ; sources couplees ionisation/collision/echange (operator-split). MANQUE : hierarchie `CoupledSource` objet propre + composition `source = a + b`. |
-| `EllipticPhysicalModel` | FAIT (1er ordre) : `add_elliptic_model` + briques (div_eps_grad, charge_density, electric_field_from_potential). MANQUE : eps(x) variable, operateurs alternatifs (diffusion, projection), rhs au niveau EPM. |
-| `PhysicalModel` = HPM + source + elliptic | FAIT : `CompositeModel<Hyperbolic, Source, Elliptic>`. |
-| `EquationBlock` (model + space + time + bc + evolve) | FAIT : blocs du runtime System (model + spatial + time + substeps + evolve). |
-| `SpaceMethod` / `FiniteVolume` | FAIT : `assemble_rhs<Limiter, Flux>` (volumes finis, generique sur le modele). |
-| `Reconstruction` (cons|prim) | FAIT : recon cons/prim + minmod/vanleer/weno. |
-| `NumericalFlux` (Rusanov/HLL/HLLC) | FAIT : generiques sur le modele (`m.flux`, `m.max_wave_speed`). |
-| `TimeMethod` (explicit/imex/ssprk/scheduler) | FAIT : ForwardEuler/SSPRK2 + IMEX partiel + multirate (`step_adaptive`). MANQUE : implicite TOTAL, `stride` (every-N) expose proprement. |
-| `CoupledSystem` + `Assembler`/`Driver` | FAIT : le runtime System (vector de blocs + Poisson + couplages) ; split Assembler/Driver fait cote coeur. |
-| `mesh` / `amr` / `runtime` / `python` | FAIT : MultiFab/Geometry/BC, AMR (hierarchie, regrid, reflux), factory (dispatch), Simulation (System), bindings. |
+| `Variables` (cons/prim, conversions) | DONE: `core/variables.hpp` (kind, names, size) + `using State/Prim` + `to_primitive`/`to_conservative` on the hyperbolic brick. MISSING: semantic `VariableRole` (Density/MomentumX/...), `index_of(role)`. |
+| `HyperbolicModel` (Vars + flux + lambda) | DONE: concept `HyperbolicModel` + bricks Euler / IsothermalFlux / ExBVelocity. MISSING: `eigenvalues()` returning the full VECTOR (we have `max_wave_speed` + signed `wave_speeds`); `Direction` enum (we have `int dir`). |
+| `LocalSource` / `CoupledSource` | DONE: local source bricks (PotentialForce/GravityForce/NoSource); coupled ionization/collision/exchange sources (operator-split). MISSING: a proper `CoupledSource` object hierarchy + composition `source = a + b`. |
+| `EllipticPhysicalModel` | DONE (1st order): `add_elliptic_model` + bricks (div_eps_grad, charge_density, electric_field_from_potential). MISSING: variable eps(x), alternative operators (diffusion, projection), rhs at the EPM level. |
+| `PhysicalModel` = HPM + source + elliptic | DONE: `CompositeModel<Hyperbolic, Source, Elliptic>`. |
+| `EquationBlock` (model + space + time + bc + evolve) | DONE: blocks of the runtime System (model + spatial + time + substeps + evolve). |
+| `SpaceMethod` / `FiniteVolume` | DONE: `assemble_rhs<Limiter, Flux>` (finite volume, generic over the model). |
+| `Reconstruction` (cons|prim) | DONE: recon cons/prim + minmod/vanleer/weno. |
+| `NumericalFlux` (Rusanov/HLL/HLLC) | DONE: generic over the model (`m.flux`, `m.max_wave_speed`). |
+| `TimeMethod` (explicit/imex/ssprk/scheduler) | DONE: ForwardEuler/SSPRK2 + partial IMEX + multirate (`step_adaptive`). MISSING: FULL implicit, `stride` (every-N) exposed cleanly. |
+| `CoupledSystem` + `Assembler`/`Driver` | DONE: the runtime System (vector of blocks + Poisson + couplings); Assembler/Driver split done on the core side. |
+| `mesh` / `amr` / `runtime` / `python` | DONE: MultiFab/Geometry/BC, AMR (hierarchy, regrid, reflux), factory (dispatch), Simulation (System), bindings. |
 
-Bilan : **les couches 1-12 du design OO sont ~80 % en place** (organisation et noms differents, mais l'abstraction y est, et le refactor recent l'a renforcee : HyperbolicModel, Variables contrat, EPM, sources couplees, recon primitive).
+Summary: **layers 1-12 of the OO design are ~80% in place** (different organization and names, but the abstraction is there, and the recent refactor has reinforced it: HyperbolicModel, Variables contract, EPM, coupled sources, primitive recon).
 
 ---
 
-## 3. Le DSL symbolique (l'endgame, NOUVEAU)
+## 3. The symbolic DSL (the endgame, NEW)
 
-But : Python ECRIT les formules (pas une fonction appelee par cellule), ADC en fait un solveur.
+Goal: Python WRITES the formulas (not a function called per cell), ADC turns them into a solver.
 
 ```python
 e = adc.dsl.HyperbolicModel("electrons")
@@ -101,113 +101,113 @@ e.set_eigenvalues(x=[u - c, u, u + c], y=[...])
 e.set_source([...]); e.set_elliptic_rhs(-qe * rho / me)
 ```
 
-`rho`, `u`, `p`... ne sont pas des floats : ce sont des EXPRESSIONS SYMBOLIQUES. Python construit un
-GRAPHE de formules ; ADC peut alors : (1) l'interpreter en CPU (proto), (2) generer du C++,
-(3) generer du Kokkos/CUDA, (4) JIT, (5) verifier les dependances entre variables. `Euler`,
-`diocotron`, `two-fluid` deviennent de simples fichiers Python de formules.
+`rho`, `u`, `p`... are not floats: they are SYMBOLIC EXPRESSIONS. Python builds a
+GRAPH of formulas; ADC can then: (1) interpret it on CPU (proto), (2) generate C++,
+(3) generate Kokkos/CUDA, (4) JIT, (5) verify the dependencies between variables. `Euler`,
+`diocotron`, `two-fluid` become simple Python files of formulas.
 
-Arbre additionnel :
+Additional tree:
 ```
 adc/symbolic/  expression (Var/Const/Add/Mul/Sqrt...), vector_expr, formula_graph, simplifier, codegen
 ```
 
-### Avis honnete (ingenierie)
+### Honest assessment (engineering)
 
-- C'est un **compilateur de domaine**, pas un raffinement. Effort realiste : **pluri-mois**, pas un
-  refactor. Le risque principal : le codegen GPU (un graphe Python -> kernel Kokkos/CUDA correct et
-  performant) est exactement la partie difficile.
-- **Ca existe** par briques : SymPy (codegen C/Fortran), **Pystencils** (stencils -> C/CUDA),
-  **Devito** (DSL differences finies -> C optimise), UFL/Firedrake (elements finis). Pour le
-  volume-fini hyperbolique (flux + valeurs propres + reconstruction), moins d'off-the-shelf, mais
-  les fondations existent ; ne pas reconstruire un moteur symbolique de zero (reutiliser SymPy).
-- **Tradeoff vs l'actuel** : aujourd'hui on a deux chemins, briques COMPILEES (template, GPU/MPI,
-  production) + `adc.PythonFlux` (proto CPU numpy). Le double-codage (une formule ecrite en C++ ET
-  en numpy) est le cout que le DSL supprimerait : UNE source de formules -> interprete CPU + kernel
-  GPU genere. Le gain croit avec le nombre de modeles (plasma multi-especes : beaucoup de variantes).
-- **Recommandation** : garder le solveur compile actuel (il marche, GPU-ready) comme cible de
-  production ; demarrer le DSL en **prototype separe** (`adc/dsl.py`), d'abord un interprete CPU
-  d'un graphe de formules (valider le concept sur Euler), PUIS un codegen C++. Ne PAS reecrire le
-  solveur en attendant que le DSL soit mur.
+- It is a **domain compiler**, not a refinement. Realistic effort: **multi-month**, not a
+  refactor. The main risk: GPU codegen (a Python graph -> correct and performant Kokkos/CUDA kernel)
+  is exactly the hard part.
+- **It exists** in pieces: SymPy (C/Fortran codegen), **Pystencils** (stencils -> C/CUDA),
+  **Devito** (finite-difference DSL -> optimized C), UFL/Firedrake (finite elements). For the
+  hyperbolic finite-volume case (flux + eigenvalues + reconstruction), less off-the-shelf, but
+  the foundations exist; do not rebuild a symbolic engine from scratch (reuse SymPy).
+- **Tradeoff vs the current state**: today we have two paths, COMPILED bricks (template, GPU/MPI,
+  production) + `adc.PythonFlux` (CPU numpy proto). The double-coding (a formula written in C++ AND
+  in numpy) is the cost the DSL would remove: ONE source of formulas -> CPU interpreter + generated
+  GPU kernel. The gain grows with the number of models (multi-species plasma: many variants).
+- **Recommendation**: keep the current compiled solver (it works, GPU-ready) as the production
+  target; start the DSL as a **separate prototype** (`adc/dsl.py`), first a CPU interpreter
+  of a formula graph (validate the concept on Euler), THEN a C++ codegen. Do NOT rewrite the
+  solver while waiting for the DSL to mature.
 
-### Etat : interprete CPU PROTOTYPE fait (`adc.dsl`)
+### State: CPU interpreter PROTOTYPE done (`adc.dsl`)
 
-Le module `python/adc/dsl.py` realise l'etape (1) (interpreter en CPU) et (5) (verifier les
-dependances) :
-- arbre d'expressions (`Expr` : `Const`, `Var`, `Add/Sub/Mul/Div/Pow/Neg`, `Sqrt`) construit par
-  surcharge d'operateurs ; `eval(env)` l'applique a des tableaux numpy (tout le domaine d'un coup) ;
-- `HyperbolicModel` declaratif : `conservative_vars` / `primitive` (formules) / `aux` / `set_flux` /
-  `set_eigenvalues` / `set_source` / `set_elliptic_rhs` / `check()` (dependances) ;
-- `to_python_flux()` branche l'arbre sur le backend hote `adc.PythonFlux` -> **le modele TOURNE**.
+The `python/adc/dsl.py` module realizes step (1) (interpret on CPU) and (5) (verify the
+dependencies):
+- expression tree (`Expr`: `Const`, `Var`, `Add/Sub/Mul/Div/Pow/Neg`, `Sqrt`) built by
+  operator overloading; `eval(env)` applies it to numpy arrays (the whole domain at once);
+- declarative `HyperbolicModel`: `conservative_vars` / `primitive` (formulas) / `aux` / `set_flux` /
+  `set_eigenvalues` / `set_source` / `set_elliptic_rhs` / `check()` (dependencies);
+- `to_python_flux()` wires the tree onto the host backend `adc.PythonFlux` -> **the model RUNS**.
 
-Verifie : `python/tests/test_dsl.py` (flux symbolique d'Euler == flux de reference numpy,
-`max_wave_speed` coherent, `check()` detecte une variable non definie, masse conservee a l'execution)
-et le cas `adc_cases/dsl_euler/` (Euler ecrit en formules, expansion acoustique, masse conservee).
+Verified: `python/tests/test_dsl.py` (symbolic Euler flux == reference numpy flux,
+`max_wave_speed` consistent, `check()` detects an undefined variable, mass conserved at runtime)
+and the `adc_cases/dsl_euler/` case (Euler written as formulas, acoustic expansion, mass conserved).
 
-Etape (2) FAITE pour Euler (codegen hote + emballage en brique) :
-- `emit_cpp()` genere la fonction flux `template <class Real> void <nom>_flux(const Real*, Real*, int)`
-  depuis l'arbre (chaque noeud `Expr` sait s'ecrire via `to_cpp()`) ;
-- `emit_cpp_brick()` genere une BRIQUE complete : un struct (`StateVec` / `Aux` / `ADC_HD`) avec flux,
-  max_wave_speed, to_primitive, to_conservative, conservative_vars / primitive_vars, qui SATISFAIT le
-  concept `adc::HyperbolicModel` (donc utilisable dans un CompositeModel / le solveur). Les conversions
-  non inversibles (to_conservative) sont fournies par l'utilisateur (`set_conservative_from`), le DSL
-  ne sachant pas inverser symboliquement.
+Step (2) DONE for Euler (host codegen + wrapping as a brick):
+- `emit_cpp()` generates the flux function `template <class Real> void <name>_flux(const Real*, Real*, int)`
+  from the tree (each `Expr` node knows how to write itself via `to_cpp()`);
+- `emit_cpp_brick()` generates a complete BRICK: a struct (`StateVec` / `Aux` / `ADC_HD`) with flux,
+  max_wave_speed, to_primitive, to_conservative, conservative_vars / primitive_vars, which SATISFIES the
+  `adc::HyperbolicModel` concept (so usable in a CompositeModel / the solver). The
+  non-invertible conversions (to_conservative) are provided by the user (`set_conservative_from`), the DSL
+  not knowing how to invert symbolically.
 
-- `emit_cpp_source()` genere une BRIQUE de SOURCE composable (`apply(U, a)`), avec locals aux lus
-  comme `a.<champ>` (convention : noms aux = champs de `adc::Aux`, p.ex. grad_x / grad_y).
+- `emit_cpp_source()` generates a composable SOURCE BRICK (`apply(U, a)`), with aux locals read
+  as `a.<field>` (convention: aux names = fields of `adc::Aux`, e.g. grad_x / grad_y).
 
-Verifie (tous en CI) :
-- `test_dsl_codegen.py` : flux genere == interprete numpy ;
-- `test_dsl_brick.py` : la brique COMPILE contre les en-tetes adc, `static_assert(adc::HyperbolicModel<...>)`,
-  et == `adc::Euler` (4 var, sans aux) ET `adc::ExBVelocity` (1 var, flux dependant des aux), ecart nul ;
-- `test_dsl_source.py` : la source generee == `adc::PotentialForce` ;
-- `test_dsl_compose.py` : `CompositeModel<EulerGen, NoSource, ChargeDensity>` satisfait `adc::PhysicalModel`
-  et egale la version ecrite a la main ;
-- `test_dsl_jit.py` : JIT-lite end-to-end (formules Python -> `.hpp` genere -> g++ compile un driver
-  volumes-finis -> residu Rusanov identique a `adc::Euler`).
-Verifie aussi sur ROMEO (g++ 11, C++20) : compilation et egalite au bit pres.
+Verified (all in CI):
+- `test_dsl_codegen.py`: generated flux == numpy interpreter;
+- `test_dsl_brick.py`: the brick COMPILES against the adc headers, `static_assert(adc::HyperbolicModel<...>)`,
+  and == `adc::Euler` (4 vars, no aux) AND `adc::ExBVelocity` (1 var, aux-dependent flux), zero deviation;
+- `test_dsl_source.py`: the generated source == `adc::PotentialForce`;
+- `test_dsl_compose.py`: `CompositeModel<EulerGen, NoSource, ChargeDensity>` satisfies `adc::PhysicalModel`
+  and equals the hand-written version;
+- `test_dsl_jit.py`: JIT-lite end-to-end (Python formulas -> generated `.hpp` -> g++ compiles a finite-volume
+  driver -> Rusanov residual identical to `adc::Euler`).
+Also verified on ROMEO (g++ 11, C++20): compilation and bit-exact equality.
 
-FAIT depuis : codegen elliptique (`emit_cpp_elliptic`, == `adc::ChargeDensity`) ; CSE (`cse=True` par
-defaut : H / c factorises en locales `cseK_`, verifie identique a la version sans CSE et a `adc::Euler`) ;
-JIT REEL du noyau (`test_dsl_jitlib` : flux genere -> `.so` compile a la volee -> charge dans le process
-Python via ctypes -> == interprete numpy).
+DONE since: elliptic codegen (`emit_cpp_elliptic`, == `adc::ChargeDensity`); CSE (`cse=True` by
+default: H / c factored into locals `cseK_`, verified identical to the version without CSE and to `adc::Euler`);
+REAL JIT of the kernel (`test_dsl_jitlib`: generated flux -> `.so` compiled on the fly -> loaded into the
+Python process via ctypes -> == numpy interpreter).
 
-RUN GPU FAIT : la brique generee compile avec nvcc (`-arch=sm_90`) et s'execute sur NVIDIA GH200
-(ROMEO, noeud aarch64), resultat BIT-IDENTIQUE a `adc::Euler` (cf. docs/GPU_ROMEO.md). Elle est
-device-ready par construction (`ADC_HD` -> `__host__ __device__`, ops device-safe, `std::sqrt`).
+GPU RUN DONE: the generated brick compiles with nvcc (`-arch=sm_90`) and runs on NVIDIA GH200
+(ROMEO, aarch64 node), result BIT-IDENTICAL to `adc::Euler` (cf. docs/GPU_ROMEO.md). It is
+device-ready by construction (`ADC_HD` -> `__host__ __device__`, device-safe ops, `std::sqrt`).
 
-KOKKOS FAIT (verification de la brique) : la brique generee tourne via `Kokkos::parallel_for` sur
-l'espace d'execution `Cuda` (GH200 ; Kokkos 4.4 + CUDA 12.6, `HOPPER90`), == `adc::Euler` a un ULP
-(5.6e-17, contraction FMA), cf. docs/GPU_ROMEO.md. C'est le meme primitif de dispatch que
+KOKKOS DONE (brick verification): the generated brick runs via `Kokkos::parallel_for` on
+the `Cuda` execution space (GH200; Kokkos 4.4 + CUDA 12.6, `HOPPER90`), == `adc::Euler` to one ULP
+(5.6e-17, FMA contraction), cf. docs/GPU_ROMEO.md. It is the same dispatch primitive as
 `adc/mesh/for_each.hpp`.
 
-(a) FAIT : interface TYPE-ERASED `adc::IModel<NV>` + `ModelAdapter` (include/adc/runtime/dynamic_model.hpp)
-ET cablage dans le runtime. `System::add_dynamic_block(name, so)` charge a l'execution (dlopen) une brique
-generee compilee en `.so` et cree un bloc pilote par l'IModel (host Rusanov ordre 1), avance par
-eval_rhs / step / step_cfl comme n'importe quel bloc ; `dsl.HyperbolicModel.compile_so` fait le JIT.
-Bout-en-bout verifie : `test_dsl_block` (DSL -> .so -> add_dynamic_block ; eval_rhs == adc.PythonFlux a
-9e-16 ; 25 pas dans le System, masse conservee) ; `test_dynamic_model` (C++) et `test_dsl_dynamic`
-(dlopen depuis un main ignorant le type) verrouillent le mecanisme. Chemin HOTE (vtable, hors GPU ;
-pendant COMPILE de PythonFlux). Le hot path GPU reste le chemin TEMPLATE.
+(a) DONE: TYPE-ERASED interface `adc::IModel<NV>` + `ModelAdapter` (include/adc/runtime/dynamic_model.hpp)
+AND wiring into the runtime. `System::add_dynamic_block(name, so)` loads at runtime (dlopen) a generated
+brick compiled into a `.so` and creates a block driven by the IModel (host Rusanov order 1), advanced via
+eval_rhs / step / step_cfl like any block; `dsl.HyperbolicModel.compile_so` does the JIT.
+End-to-end verified: `test_dsl_block` (DSL -> .so -> add_dynamic_block; eval_rhs == adc.PythonFlux to
+9e-16; 25 steps in the System, mass conserved); `test_dynamic_model` (C++) and `test_dsl_dynamic`
+(dlopen from a main ignorant of the type) lock down the mechanism. HOST path (vtable, off GPU;
+during COMPILE of PythonFlux). The GPU hot path remains the TEMPLATE path.
 
-(b) FAIT : un CAS Euler 2D COMPLET (80 pas, CFL, Rusanov, periodique) avance sur GH200 a travers le
-seam Kokkos d'adc (`for_each_cell` / `for_each_cell_reduce_*`), masse exactement conservee, brique
-generee == `adc::Euler` a 9e-16 sur 80 pas (cf. docs/GPU_ROMEO.md). Reste : la pile runtime ENTIERE
-(System / AMR / MPI) sur GPU, et `sim.add_dynamic_block` cote Python (item (a)).
+(b) DONE: a COMPLETE 2D Euler CASE (80 steps, CFL, Rusanov, periodic) advances on GH200 through the
+Kokkos seam of adc (`for_each_cell` / `for_each_cell_reduce_*`), mass exactly conserved, generated
+brick == `adc::Euler` to 9e-16 over 80 steps (cf. docs/GPU_ROMEO.md). Remaining: the ENTIRE runtime
+stack (System / AMR / MPI) on GPU, and `sim.add_dynamic_block` on the Python side (item (a)).
 
-Le codegen hote et le dispatch type-erased NE remplacent PAS les briques compilees de production (chemin
-template, GPU/MPI).
+The host codegen and the type-erased dispatch do NOT replace the production compiled bricks (template
+path, GPU/MPI).
 
 ---
 
-## 4. Chemin pragmatique (incremental, sans bloquer sur le DSL)
+## 4. Pragmatic path (incremental, without blocking on the DSL)
 
-Petits pas concrets qui rapprochent du tableau SANS le compilateur :
-1. `VariableRole` (Density/MomentumX/.../Pressure/Temperature) + `index_of(role)` sur `Variables` :
-   donne du sens aux composantes (utile aux sources couplees : « la vitesse de telle espece »).
-2. `eigenvalues()` rendant le vecteur complet des valeurs propres (au-dela de `max_wave_speed`).
-3. `Direction` enum (X/Y) au lieu de `int dir` (lisibilite, type-safe).
-4. Composition de sources locales : `source = ElectricForce(...) + LorentzForce(...)`.
-5. Reorg progressive des repertoires vers l'arbre cible (cosmetique, a faire quand on touche un coin).
+Small concrete steps that get closer to the whiteboard WITHOUT the compiler:
+1. `VariableRole` (Density/MomentumX/.../Pressure/Temperature) + `index_of(role)` on `Variables`:
+   gives meaning to the components (useful for coupled sources: "the velocity of such-and-such species").
+2. `eigenvalues()` returning the full vector of eigenvalues (beyond `max_wave_speed`).
+3. `Direction` enum (X/Y) instead of `int dir` (readability, type-safe).
+4. Composition of local sources: `source = ElectricForce(...) + LorentzForce(...)`.
+5. Progressive reorg of the directories toward the target tree (cosmetic, to do when touching a corner).
 
-Le DSL symbolique (section 3) est le cap a long terme, traite comme un sous-projet a part.
+The symbolic DSL (section 3) is the long-term goal, treated as a separate sub-project.
 ```

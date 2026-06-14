@@ -1,312 +1,312 @@
 # Roadmap
 
-Liste vivante de ce qui est fait et de ce qui reste, par intention.
+Living list of what is done and what remains, by intent.
 
-> Note de perimetre. Ce depot (`adc_cpp`) est la BIBLIOTHEQUE : coeur + briques physiques +
-> bindings Python. Les EXEMPLES C++ (`examples/`), les SCRIPTS de figures (`scripts/`), les
-> TUTORIELS et les tests de validation APPLICATIFS (taux diocotron, runs ROMEO, invariants
-> physiques, ordre de convergence des modeles) vivent desormais dans `adc_cases`. Plusieurs
-> entrees ci-dessous citent des fichiers (`examples/...`, `test_euler`, `test_diocotron_*`,
-> `magnetic_euler_poisson.hpp`, etc.) qui ne sont PAS dans ce depot : ce sont des resultats
-> obtenus / a obtenir cote `adc_cases`, conserves ici comme memoire de projet. Les tests
-> presents dans CE depot sont les ~53 ctests coeur + ~16 tests Python (cf. `tests/` et
+> Scope note. This repository (`adc_cpp`) is the LIBRARY: core + physical bricks +
+> Python bindings. The C++ EXAMPLES (`examples/`), the figure SCRIPTS (`scripts/`), the
+> TUTORIALS and the APPLICATIVE validation tests (diocotron rate, ROMEO runs, physical
+> invariants, convergence order of the models) now live in `adc_cases`. Several
+> entries below cite files (`examples/...`, `test_euler`, `test_diocotron_*`,
+> `magnetic_euler_poisson.hpp`, etc.) that are NOT in this repository: these are results
+> obtained / to obtain on the `adc_cases` side, kept here as project memory. The tests
+> present in THIS repository are the ~53 core ctests + ~16 Python tests (cf. `tests/` and
 > `python/tests/`).
 
-## Fait
+## Done
 
-### Cœur numérique
+### Numerical core
 
-- Volumes finis Godunov, flux Rusanov / HLL / HLLC, reconstruction MUSCL (NoSlope / Minmod /
-  VanLeer), intégration SSPRK2 / SSPRK3, splitting de Strang / Lie.
-- Poisson : multigrille géométrique (V-cycle, GS rouge-noir, on-device) ET FFT spectrale
-  directe, derrière le concept `EllipticSolver`.
-- Pile mesh maison : `MultiFab` / `BoxArray` / `DistributionMapping` / `Geometry`,
-  `fill_boundary`, CL physiques, seam `for_each_cell` série / OpenMP / Kokkos.
+- Finite volumes Godunov, Rusanov / HLL / HLLC fluxes, MUSCL reconstruction (NoSlope / Minmod /
+  VanLeer), SSPRK2 / SSPRK3 integration, Strang / Lie splitting.
+- Poisson: geometric multigrid (V-cycle, red-black GS, on-device) AND direct spectral FFT,
+  behind the `EllipticSolver` concept.
+- In-house mesh stack: `MultiFab` / `BoxArray` / `DistributionMapping` / `Geometry`,
+  `fill_boundary`, physical BCs, `for_each_cell` seam serial / OpenMP / Kokkos.
 
-### Modèle et couplage
+### Model and coupling
 
-- Cœur AGNOSTIQUE au modèle : aucun scénario nommé dans le cœur, seulement des briques
-  génériques (état, transport, source, second membre elliptique) composées en `CompositeModel`
-  par le `model_factory`. Les compositions nommées (diocotron, Euler-Poisson, deux-fluides...)
-  vivent côté application (`adc_cases`). Couplage par le canal `aux` : contrat de base
-  `(phi, grad_x, grad_y)` (3 composantes), désormais EXTENSIBLE (`load_aux<NComp>`, `aux_comps<Model>()`)
-  pour des champs supplémentaires que le modèle déclare via `n_aux` : `B_z` (comp 3, fourni par
-  l'utilisateur) et `T_e` (comp 4, dérivé `p/rho` d'un bloc fluide). Rétro-compat bit-exacte si `n_aux=3`.
-- DSL symbolique au niveau PROTOTYPE, complet et testé : formules -> brique C++ (`emit_cpp_brick`)
-  + source + second membre elliptique + CSE ; chemin JIT (`.so`, `IModel` virtuel,
-  `System.add_dynamic_block`) ; chemin AOT (`compile_or_jit(mode="compile")`,
-  `System.add_compiled_block` via `compiled_block_abi.hpp`) ; bloc compilé NATIF à parité avec
-  `add_block` (`add_compiled_model` / `dsl_block.hpp`, validé bit-identique sur CPU/Serial par
-  `test_compiled_model_parity`). Reconstruction MUSCL au choix (`none`/`minmod`/`vanleer`) pour
-  le bloc dynamique.
-- Flux de Roe dans le cœur (`RusanovFlux` / `HLLFlux` / `HLLCFlux` / `RoeFlux`) ; opérateur
-  elliptique à permittivité VARIABLE `eps(x)` côté cœur (`GeometricMG::set_epsilon`) ET câblé
-  System/Python (`set_epsilon_field`), plus opérateur écranté/Helmholtz et anisotrope ; `VariableSet` /
-  `VariableRole` désormais UTILISÉS dans les couplages inter-espèces (`index_of(role)`) et émis par
-  le DSL sur les briques générées ; réorganisation `physics/` + `numerics/`.
-- Schéma AP deux-fluides (Lorentz implicite, Poisson reformulé `beta0`), dispersion isotrope
-  validée (3.1%), borne AP à `omega_pe = 1e3`.
-- Continuité upwind MUSCL (anti-Gibbs) en option ; champ magnétique : push de Boris E+B
-  combiné (`tfap_boris`, fréquence cyclotron exacte à 0.00%, dérive E x B préservée sans
-  croissance séculaire), à la place du splitting de Strang externe.
+- Core AGNOSTIC to the model: no scenario named in the core, only generic
+  bricks (state, transport, source, elliptic right-hand side) composed into `CompositeModel`
+  by the `model_factory`. Named compositions (diocotron, Euler-Poisson, two-fluid...)
+  live on the application side (`adc_cases`). Coupling via the `aux` channel: base contract
+  `(phi, grad_x, grad_y)` (3 components), now EXTENSIBLE (`load_aux<NComp>`, `aux_comps<Model>()`)
+  for additional fields that the model declares via `n_aux`: `B_z` (comp 3, provided by
+  the user) and `T_e` (comp 4, derived `p/rho` from a fluid block). Bit-exact backward compat if `n_aux=3`.
+- Symbolic DSL at PROTOTYPE level, complete and tested: formulas -> C++ brick (`emit_cpp_brick`)
+  + source + elliptic right-hand side + CSE; JIT path (`.so`, virtual `IModel`,
+  `System.add_dynamic_block`); AOT path (`compile_or_jit(mode="compile")`,
+  `System.add_compiled_block` via `compiled_block_abi.hpp`); NATIVE compiled block at parity with
+  `add_block` (`add_compiled_model` / `dsl_block.hpp`, validated bit-identical on CPU/Serial by
+  `test_compiled_model_parity`). MUSCL reconstruction by choice (`none`/`minmod`/`vanleer`) for
+  the dynamic block.
+- Roe flux in the core (`RusanovFlux` / `HLLFlux` / `HLLCFlux` / `RoeFlux`); elliptic
+  operator with VARIABLE permittivity `eps(x)` on the core side (`GeometricMG::set_epsilon`) AND wired
+  System/Python (`set_epsilon_field`), plus screened/Helmholtz and anisotropic operator; `VariableSet` /
+  `VariableRole` now USED in inter-species couplings (`index_of(role)`) and emitted by
+  the DSL on the generated bricks; reorganization `physics/` + `numerics/`.
+- Two-fluid AP scheme (implicit Lorentz, Poisson reformulated `beta0`), isotropic dispersion
+  validated (3.1%), AP bound at `omega_pe = 1e3`.
+- MUSCL upwind continuity (anti-Gibbs) as an option; magnetic field: combined E+B Boris
+  push (`tfap_boris`, cyclotron frequency exact to 0.00%, E x B drift preserved without
+  secular growth), instead of the external Strang splitting.
 
 ### AMR
 
-- Reflux 2-niveaux et N-niveaux mono-box (`amr_step_multilevel_mf`), bit-identiques à la pile
-  Fab2D de référence.
-- Multi-patch N-niveaux (`amr_step_multilevel_multipatch`) : reflux coverage-aware, routage
-  vers la box parente, validé sur deux axes à `0` exact.
-- Reflux 2-niveaux multi-patch DISTRIBUÉ MPI (`test_mpi_amr_multipatch`, np=1/2/4 bit-identique,
-  grossier répliqué + gather `average_down`/reflux).
-- Reflux N-niveaux multi-patch DISTRIBUÉ MPI (`amr_step_multilevel_multipatch` /
-  `subcycle_level_mp`, `test_mpi_amr_multipatch3`, 3 niveaux avec niveau intermédiaire
-  multi-box réparti dont le parent d'un patch fin tombe sur un autre rang ; np=1/2/4
-  bit-identique). Niveau 0 répliqué, niveaux >0 répartis ; ghost-fill et échantillonnage du
-  flux grossier par `parallel_copy` quand le parent est réparti, `average_down` et reflux par
-  buffer grossier global + `all_reduce_sum`.
-- Clustering Berger-Rigoutsos + regrid dynamique ; coupleurs `AmrCoupler` (mono-box) et
-  `AmrCouplerMP` (multi-patch + regrid), conservatifs.
+- 2-level and N-level mono-box reflux (`amr_step_multilevel_mf`), bit-identical to the reference
+  Fab2D stack.
+- N-level multi-patch (`amr_step_multilevel_multipatch`): coverage-aware reflux, routing
+  to the parent box, validated on two axes at `0` exact.
+- 2-level multi-patch reflux DISTRIBUTED MPI (`test_mpi_amr_multipatch`, np=1/2/4 bit-identical,
+  coarse replicated + gather `average_down`/reflux).
+- N-level multi-patch reflux DISTRIBUTED MPI (`amr_step_multilevel_multipatch` /
+  `subcycle_level_mp`, `test_mpi_amr_multipatch3`, 3 levels with an intermediate level
+  multi-box distributed whose parent of a fine patch falls on another rank; np=1/2/4
+  bit-identical). Level 0 replicated, levels >0 distributed; ghost-fill and sampling of the
+  coarse flux by `parallel_copy` when the parent is distributed, `average_down` and reflux by
+  global coarse buffer + `all_reduce_sum`.
+- Berger-Rigoutsos clustering + dynamic regrid; couplers `AmrCoupler` (mono-box) and
+  `AmrCouplerMP` (multi-patch + regrid), conservative.
 
-### Parallélisme et outils
+### Parallelism and tools
 
-- OpenMP autonome (déterministe vs série, mais **déprécié** au profit de Kokkos), MPI
-  (bit-identique np=1/2/4, 7 tests `mpirun` dans ce dépôt), backend Kokkos (CPU Serial/OpenMP
-  ET GPU Cuda, sans CUDA écrit à la main). La CI joue 3 jobs : Release, MPI, Kokkos (Serial).
-- GPU GH200 : composants validés SÉPARÉMENT et bit-identiques au CPU (System mono-grille,
-  ops de champ AMR, halos MPI multi-GPU, backend AOT d'un modèle DSL). Validation INTÉGRÉE
-  AmrSystem + MPI + GPU désormais FAITE (un seul run, euler_poisson compilé sur AMR multi-patch
-  distribué, `exec=Cuda`, np=1/2/4 bit-identiques `dmax=0`, masse conservée). RESTE : la perf
-  full-device (le run intégré ne scale pas, grossier répliqué). Cf. `docs/GPU_RUNTIME_PORT.md`.
-- Validation numérique (au-delà du bit-identique) : ordre du Laplacien 5 points, ordre WENO5-Z
-  (`test_weno_convergence`), discrétisations, IMEX/AP. Les ordres de convergence APPLICATIFS
-  (tourbillon isentropique Euler, MUSCL/Rusanov, loi de Gauss du couplage, invariants diocotron)
-  sont mesurés côté `adc_cases`.
-- Bindings Python de la lib (`python/`, module `adc`, `-DADC_BUILD_PYTHON=ON`) : `adc.System`
-  (composition bloc par bloc via `add_block`, `set_poisson`, `set_density`, `step`/`advance`/`step_cfl`,
-  primitives `eval_rhs`/`get_state`/`set_state` + `adc.integrate.ssprk2_step`), la composition
-  AMR `adc.AmrSystem` (mono-bloc, explicite ; partage désormais l'opérateur spatial de `System` :
-  reconstruction primitive et flux HLLC/Roe via `advance_amr`, cf. `test_amr_spatial_parity`.
-  L'intégrateur AP deux-fluides sur mesure n'est pas une brique générique mais un scénario : il a
-  quitté le cœur pour `adc_cases/two_fluid_ap/`), plus le mini-DSL symbolique (suite `test_dsl_*`).
-- Docs : README, ALGORITHMS, ARCHITECTURE (5 couches), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
-  two_fluid_ap, Doxygen + Sphinx (les tutoriels et figures vivent dans `adc_cases`).
+- Standalone OpenMP (deterministic vs serial, but **deprecated** in favor of Kokkos), MPI
+  (bit-identical np=1/2/4, 7 `mpirun` tests in this repository), Kokkos backend (CPU Serial/OpenMP
+  AND GPU Cuda, without hand-written CUDA). The CI runs 3 jobs: Release, MPI, Kokkos (Serial).
+- GPU GH200: components validated SEPARATELY and bit-identical to the CPU (mono-grid System,
+  AMR field ops, multi-GPU MPI halos, AOT backend of a DSL model). INTEGRATED validation
+  AmrSystem + MPI + GPU now DONE (a single run, euler_poisson compiled on AMR multi-patch
+  distributed, `exec=Cuda`, np=1/2/4 bit-identical `dmax=0`, mass conserved). REMAINS: the full-device
+  perf (the integrated run does not scale, coarse replicated). Cf. `docs/GPU_RUNTIME_PORT.md`.
+- Numerical validation (beyond bit-identical): order of the 5-point Laplacian, WENO5-Z order
+  (`test_weno_convergence`), discretizations, IMEX/AP. The APPLICATIVE convergence orders
+  (Euler isentropic vortex, MUSCL/Rusanov, Gauss law of the coupling, diocotron invariants)
+  are measured on the `adc_cases` side.
+- Python bindings of the lib (`python/`, module `adc`, `-DADC_BUILD_PYTHON=ON`): `adc.System`
+  (block-by-block composition via `add_block`, `set_poisson`, `set_density`, `step`/`advance`/`step_cfl`,
+  primitives `eval_rhs`/`get_state`/`set_state` + `adc.integrate.ssprk2_step`), the AMR
+  composition `adc.AmrSystem` (mono-block, explicit; now shares the spatial operator of `System`:
+  primitive reconstruction and HLLC/Roe flux via `advance_amr`, cf. `test_amr_spatial_parity`.
+  The custom two-fluid AP integrator is not a generic brick but a scenario: it has
+  left the core for `adc_cases/two_fluid_ap/`), plus the symbolic mini-DSL (`test_dsl_*` suite).
+- Docs: README, ALGORITHMS, ARCHITECTURE (5 layers), CHOICES, BIBLIOGRAPHY, PERFORMANCE,
+  two_fluid_ap, Doxygen + Sphinx (the tutorials and figures live in `adc_cases`).
 
-## En file
+## In queue
 
-### Durcissement de l'architecture (revue de conception)
+### Architecture hardening (design review)
 
-Issu d'une revue : la faiblesse structurelle est le mélange discrétisation / stockage /
-exécution, et un AMR multi-patch pas encore pensé distribué. Voir
-[ARCHITECTURE.md](ARCHITECTURE.md) (modèle en cinq couches, sections marquées « cible »).
+From a review: the structural weakness is the mixing of discretization / storage /
+execution, and a multi-patch AMR not yet thought out distributed. See
+[ARCHITECTURE.md](ARCHITECTURE.md) (five-layer model, sections marked "target").
 
-1. **AMR multi-patch nativement distribué (priorité absolue).** Fait pour le 2-niveaux :
-   `amr_step_2level_multipatch` tourne **réellement distribué** (`test_mpi_amr_multipatch`,
-   np=1/2/4 **bit à bit identiques**, masse conservée). Le grossier mono-box est répliqué
-   (copie par-rang + remplissage périodique local), les patchs fins répartis, `average_down`
-   (écrasement couvert) et reflux (addition bordante) remontent par deux buffers grossiers +
-   `all_reduce_sum_inplace`. Au passage, un bug mono-rang corrigé : les face-box des flux fins
-   se bâtissaient sur les boxes **locales** avec le dmap **global** (tailles incohérentes sous
-   MPI). Le même bug latent corrigé dans `subcycle_level_mp`. **Fait aussi pour le N-niveaux :**
-   `subcycle_level_mp` / `amr_step_multilevel_multipatch` tourne **réellement distribué**
-   (`test_mpi_amr_multipatch3`, 3 niveaux, niveau intermédiaire multi-box réparti dont le parent
-   d'un patch fin tombe sur un autre rang ; np=1/2/4 **bit à bit identiques**, masse conservée).
-   Niveau 0 répliqué, niveaux >0 répartis. Les cinq points sont résolus : (1) ghost-fill
-   parent->enfant et (2) échantillonnage du registre grossier par `parallel_copy` quand le
-   parent est réparti (lecture locale quand il est répliqué) ; (3) `average_down` et (4) reflux
-   par buffer grossier global + `all_reduce_sum_inplace`, appliqué aux boxes parentes locales ;
-   (5) couverture déjà globale. Le coupleur `AmrCouplerMP` est lui aussi distribué : son
-   injection d'aux `coupler_inject_aux_mb` passe par `parallel_copy` quand le parent est réparti
-   (niveau 0 répliqué : lecture locale), vérifié contre l'analytique np=1/2/4 par
-   `test_mpi_coupler_inject`. Vers la cible finale : le `load_balance` SFC (Z-order de Morton,
-   `make_sfc_distribution`) est désormais BRANCHÉ sur l'AMR distribué et vérifié, pas seulement
-   testé comme algorithme en série : `test_mpi_amr_multipatch3` exécute le pas 3-niveaux sous
-   répartition Morton et obtient `maxdiff = 0` vs la référence (rang 0) à np=1/2/4, déséquilibre
-   1.000. Le registre de flux est aussi RESTREINT À L'INTERFACE coarse-fine : son `all_reduce`
-   ne porte plus sur tout le domaine grossier (`O(NX*NY)`) mais sur la boîte englobante des
-   empreintes fines (`O(interface)`), bit-identique (les cellules hors interface étaient nulles,
-   sautées à l'application ; np=1/2/4 `maxdiff = 0`). Une conception dédiée (workflow lecture
-   seule) a tranché le reste : le gather collectif RÉSIDUEL est irréductible tant que le grossier
-   est répliqué (chaque rang doit voir la correction) ; le supprimer entièrement (registre point
-   à point pur, zéro collective) exige de DÉ-RÉPLIQUER le niveau 0, ce qui casse le Poisson MG,
-   `fill_periodic_local` et la mesure de masse locale des tests pour un gain marginal sur un
-   grossier petit. Décision : **NO-GO sur la dé-réplication** pour ce cas (diocotron / Euler-Poisson,
-   base 32x32) ; le goulot `O(NX*NY)` est déjà éliminé sans elle. Reste, optionnel : `owner_rank` /
-   `global_box_id` explicites par patch (aujourd'hui dans `DistributionMapping` + indice `BoxArray`),
-   et la dé-réplication seulement si un jour le niveau de base devient gros.
-2. **Moteur AMR unifié.** Entrée unifiée faite : `advance_amr(m, LevelHierarchy&, dt)` + le
-   type `LevelHierarchy`, vérifiée façade-fidèle en **2 et 3 niveaux** (`maxdiff = 0` vs l'appel
-   direct, dérive masse `< 1e-12`) et conservatif (`test_advance_amr`). Promotion des rôles en
-   types commencée : `OwnershipPolicy` est un alias réel de `DistributionMapping` ;
-   `FluxRegister` est un VRAI TYPE (registre grossier indexé global sur une région : `set`
-   écrase, `add` accumule borné, `gather` fait l'`all_reduce`), substitué aux quatre buffers
-   manuels du reflux (2-niveaux avg/ref, N-niveaux avg/ref) bit-identique (np=1/2/4 `maxdiff=0`),
-   contrat figé par `test_flux_register`. `CoverageMask` est aussi un VRAI TYPE (masque grossier
-   sur une région : `mark(box)` marque une empreinte fine clippée, `covered(I,J)` borné), la part
-   « couverture » de `CoarseFineInterface` (le masque anti-double-reflux), substitué aux trois
-   masques manuels, bit-identique (np=1/2/4 `maxdiff=0`), contrat figé par `test_coverage_mask`.
-   Reste : promouvoir les rôles restants (`PatchRange`, le routage bordant de `CoarseFineInterface`,
-   `SubcyclingSchedule`, `RegridPolicy`, encore inlines dans `subcycle_level_mp`) et y replier la
-   famille `amr_step_*` (qui encode le cas dans le nom).
-3. **Découper l'elliptique.** Avancé : l'`EllipticOperator` existe déjà séparé
-   (`poisson_operator.hpp` : `apply_laplacian`, `poisson_residual`, lisseur) ; le
-   `LinearSolver` est le concept `EllipticSolver` (MG, FFT) ; l'identité MG = FFT est rendue
-   STRUCTURELLE et vérifiée (`test_elliptic_operator` applique le même opérateur canonique aux
-   deux solutions, résidus ~1e-14). Fait : `EllipticProblem` (coeff `eps`, CL `BCRec`, nullspace
-   `nullspace_const` en un objet, jusqu'ici implicites) et `FieldPostProcess` (convention de
-   dérivation `E = -grad phi` via `GradSign::Plus`/`Minus`, jadis la fonction libre
-   `coupler_grad_phi`) sont nommés dans `elliptic/elliptic_problem.hpp`. Refactor structurel
-   bit-identique : `eps = 1` reste descriptif (le stencil ne le lit pas encore), la fabrique
-   `make_elliptic_solver(EllipticProblem)` délègue à la `BCRec`, et `field_postprocess` reproduit
-   à l'identique l'expression du coupleur. `test_elliptic_problem` prouve l'égalité bit-à-bit
-   (`operator==` strict, pas une tolérance). Reste hors-périmètre tant qu'on veut le bit-identique :
-   recâbler les sites en forme `/(2*dx)` (`amr_coupler`, `amr_coupler_mp`, `spectral_coupler`,
-   `two_fluid_ap`), division qui peut différer au dernier bit de la forme multiplicative `*cx`.
-4. **API mémoire explicite.** Réductions `sum` / `norm_inf` faites ; `sync_host()` /
-   `sync_device()` explicites désormais posés. Le seam `for_each.hpp` porte désormais
-   `for_each_cell_reduce_sum` et `for_each_cell_reduce_max`, à côté de `for_each_cell` et
-   `device_fence()` : sous Kokkos une vraie `parallel_reduce` (MDRangePolicy, `Kokkos::Sum`
-   / `Kokkos::Max`, bloquante côté hôte donc sans `device_fence()` préalable) ; en série et
-   sous OpenMP une boucle hôte séquentielle. `sum` et `norm_inf` (multifab.hpp / mf_arith.hpp)
-   appellent ce seam par fab local puis agrègent ; les deux `device_fence()` qui protégeaient
-   leur boucle hôte ont disparu (absorbés par la réduction), les autres `device_fence()` (accès
-   hôte ailleurs) restent.
-   Conséquence FP : `sum` n'est plus bit-identique à la boucle hôte SOUS KOKKOS (la somme par
-   tuile réassocie l'addition flottante, non associative en IEEE754). En série et sous OpenMP
-   `sum` reste exact : on garde volontairement la boucle hôte séquentielle pour OpenMP, car
-   `reduction(+:)` réordonnerait la somme par thread et casserait la garantie « OpenMP identique
-   à la série » du repo. `norm_inf` reste EXACT partout (un max de valeurs absolues, sans
-   arrondi et invariant par réordonnancement). `Kokkos::Sum` est déterministe par tuile (pas
-   d'atomics flottants), donc deux `sum` sur des données inchangées rendent le même bit
-   (idempotence, clé pour `test_fill_boundary/sum_unchanged`). Contrat verrouillé par
-   `test_reduce` (sum_constant exact, sum varié en écart relatif < 1e-10, norm_inf strict,
+1. **Natively distributed multi-patch AMR (absolute priority).** Done for the 2-level:
+   `amr_step_2level_multipatch` runs **really distributed** (`test_mpi_amr_multipatch`,
+   np=1/2/4 **bit-for-bit identical**, mass conserved). The mono-box coarse is replicated
+   (per-rank copy + local periodic fill), the fine patches distributed, `average_down`
+   (covered overwrite) and reflux (border addition) come back up via two coarse buffers +
+   `all_reduce_sum_inplace`. Along the way, a mono-rank bug fixed: the face-boxes of the fine fluxes
+   were built on the **local** boxes with the **global** dmap (inconsistent sizes under
+   MPI). The same latent bug fixed in `subcycle_level_mp`. **Done also for the N-level:**
+   `subcycle_level_mp` / `amr_step_multilevel_multipatch` runs **really distributed**
+   (`test_mpi_amr_multipatch3`, 3 levels, intermediate level multi-box distributed whose parent
+   of a fine patch falls on another rank; np=1/2/4 **bit-for-bit identical**, mass conserved).
+   Level 0 replicated, levels >0 distributed. The five points are resolved: (1) ghost-fill
+   parent->child and (2) sampling of the coarse register by `parallel_copy` when the
+   parent is distributed (local read when it is replicated); (3) `average_down` and (4) reflux
+   by global coarse buffer + `all_reduce_sum_inplace`, applied to the local parent boxes;
+   (5) coverage already global. The coupler `AmrCouplerMP` is also distributed: its
+   aux injection `coupler_inject_aux_mb` goes through `parallel_copy` when the parent is distributed
+   (level 0 replicated: local read), verified against the analytic np=1/2/4 by
+   `test_mpi_coupler_inject`. Toward the final target: the SFC `load_balance` (Morton Z-order,
+   `make_sfc_distribution`) is now WIRED on the distributed AMR and verified, not only
+   tested as a serial algorithm: `test_mpi_amr_multipatch3` executes the 3-level step under
+   Morton distribution and obtains `maxdiff = 0` vs the reference (rank 0) at np=1/2/4, imbalance
+   1.000. The flux register is also RESTRICTED TO THE COARSE-FINE INTERFACE: its `all_reduce`
+   no longer covers the whole coarse domain (`O(NX*NY)`) but the bounding box of the
+   fine footprints (`O(interface)`), bit-identical (the cells outside the interface were null,
+   skipped at application; np=1/2/4 `maxdiff = 0`). A dedicated design (read-only workflow)
+   has settled the rest: the RESIDUAL collective gather is irreducible as long as the coarse
+   is replicated (each rank must see the correction); removing it entirely (pure point-to-point
+   register, zero collective) requires DE-REPLICATING level 0, which breaks the MG Poisson,
+   `fill_periodic_local` and the local mass measurement of the tests for a marginal gain on a
+   small coarse. Decision: **NO-GO on de-replication** for this case (diocotron / Euler-Poisson,
+   base 32x32); the `O(NX*NY)` bottleneck is already eliminated without it. Remains, optional: `owner_rank` /
+   `global_box_id` explicit per patch (today in `DistributionMapping` + `BoxArray` index),
+   and de-replication only if one day the base level becomes large.
+2. **Unified AMR engine.** Unified entry done: `advance_amr(m, LevelHierarchy&, dt)` + the
+   type `LevelHierarchy`, verified facade-faithful in **2 and 3 levels** (`maxdiff = 0` vs the
+   direct call, mass drift `< 1e-12`) and conservative (`test_advance_amr`). Promotion of the roles into
+   types begun: `OwnershipPolicy` is a real alias of `DistributionMapping`;
+   `FluxRegister` is a REAL TYPE (coarse register global-indexed on a region: `set`
+   overwrites, `add` accumulates bounded, `gather` does the `all_reduce`), substituted for the four
+   manual buffers of the reflux (2-level avg/ref, N-level avg/ref) bit-identical (np=1/2/4 `maxdiff=0`),
+   contract frozen by `test_flux_register`. `CoverageMask` is also a REAL TYPE (coarse mask
+   on a region: `mark(box)` marks a clipped fine footprint, `covered(I,J)` bounded), the
+   "coverage" part of `CoarseFineInterface` (the anti-double-reflux mask), substituted for the three
+   manual masks, bit-identical (np=1/2/4 `maxdiff=0`), contract frozen by `test_coverage_mask`.
+   Remains: promote the remaining roles (`PatchRange`, the border routing of `CoarseFineInterface`,
+   `SubcyclingSchedule`, `RegridPolicy`, still inlines in `subcycle_level_mp`) and fold into them
+   the `amr_step_*` family (which encodes the case in the name).
+3. **Split the elliptic.** Advanced: the `EllipticOperator` already exists separated
+   (`poisson_operator.hpp`: `apply_laplacian`, `poisson_residual`, smoother); the
+   `LinearSolver` is the `EllipticSolver` concept (MG, FFT); the MG = FFT identity is made
+   STRUCTURAL and verified (`test_elliptic_operator` applies the same canonical operator to the
+   two solutions, residuals ~1e-14). Done: `EllipticProblem` (coeff `eps`, BC `BCRec`, nullspace
+   `nullspace_const` in one object, until now implicit) and `FieldPostProcess` (derivation convention
+   `E = -grad phi` via `GradSign::Plus`/`Minus`, formerly the free function
+   `coupler_grad_phi`) are named in `elliptic/elliptic_problem.hpp`. Structural refactor
+   bit-identical: `eps = 1` remains descriptive (the stencil does not read it yet), the factory
+   `make_elliptic_solver(EllipticProblem)` delegates to the `BCRec`, and `field_postprocess` reproduces
+   identically the expression of the coupler. `test_elliptic_problem` proves bit-for-bit equality
+   (`operator==` strict, not a tolerance). Remains out-of-scope as long as we want bit-identical:
+   rewire the sites in form `/(2*dx)` (`amr_coupler`, `amr_coupler_mp`, `spectral_coupler`,
+   `two_fluid_ap`), division that may differ at the last bit from the multiplicative form `*cx`.
+4. **Explicit memory API.** Reductions `sum` / `norm_inf` done; explicit `sync_host()` /
+   `sync_device()` now laid out. The `for_each.hpp` seam now carries
+   `for_each_cell_reduce_sum` and `for_each_cell_reduce_max`, alongside `for_each_cell` and
+   `device_fence()`: under Kokkos a real `parallel_reduce` (MDRangePolicy, `Kokkos::Sum`
+   / `Kokkos::Max`, blocking on the host side so without prior `device_fence()`); in serial and
+   under OpenMP a sequential host loop. `sum` and `norm_inf` (multifab.hpp / mf_arith.hpp)
+   call this seam per local fab then aggregate; the two `device_fence()` that protected
+   their host loop have disappeared (absorbed by the reduction), the other `device_fence()` (host access
+   elsewhere) remain.
+   FP consequence: `sum` is no longer bit-identical to the host loop UNDER KOKKOS (the sum per
+   tile reassociates the floating addition, non-associative in IEEE754). In serial and under OpenMP
+   `sum` remains exact: we keep deliberately the sequential host loop for OpenMP, because
+   `reduction(+:)` would reorder the sum per thread and break the "OpenMP identical
+   to serial" guarantee of the repo. `norm_inf` remains EXACT everywhere (a max of absolute values, without
+   rounding and invariant under reordering). `Kokkos::Sum` is deterministic per tile (no
+   floating atomics), so two `sum` on unchanged data give the same bit
+   (idempotence, key for `test_fill_boundary/sum_unchanged`). Contract locked by
+   `test_reduce` (sum_constant exact, varied sum in relative gap < 1e-10, norm_inf strict,
    idempotence).
-   Résidence explicite des données : `sync_host()` / `sync_device()` (fonctions libres du seam
-   `for_each.hpp` + méthodes `MultiFab`) encodent l'INTENTION d'accès, là où la cohérence
-   reposait sur des `device_fence()` épars sans dire quelle résidence rendre valide. Sous mémoire
-   unifiée (`Kokkos::SharedSpace`) `sync_host()` est un `device_fence()` ciblé (drainer les kernels
-   en vol avant un accès hôte) et `sync_device()` un no-op (les écritures hôte sont déjà visibles
-   du device) : le comportement reste BIT-IDENTIQUE à l'ancien code (au plus un fence, jamais de
-   copie). `MultiFab::set_val` appelle `sync_host()` au lieu d'un `device_fence()` nu (même
-   sémantique, intention nommée). C'est volontairement du scaffolding sous mémoire unifiée ; la
-   valeur est l'abstraction : un futur chemin NON unifié (buffers hôte/device séparés) y branchera
-   un `deep_copy` directionnel et le suivi de résidence par fab, SANS toucher les opérateurs (tous
-   les accès hôte passent déjà par `sync_host()`), exactement comme `for_each_cell` isole le
-   passage CPU -> GPU des sites d'appel. Idempotence et no-op verrouillés par `test_sync_residence`.
-5. **Séparer les trois familles de ghosts** en briques nommées testables. Largement fait :
-   `fill_physical_bc` (BoundaryCondition, testé seul `test_physical_bc`), `fill_boundary`
-   (GhostExchange, testé `test_mpi_fillboundary`), `mf_fill_fine_ghosts_*`
-   (AMRBoundaryInterpolation) sont déjà séparés ; `fill_ghosts` n'est qu'une composition
-   explicite de (1) + (2). Reste : remonter le coarse-fine en helper nommé de premier niveau.
-6. **CouplingPolicy mince (FAIT).** Hiérarchie, regrid et diagnostics sortis des coupleurs
-   AMR en composants nommés : `coupling/amr_level_storage.hpp` (`AmrLevelStack<Level>`,
-   stockage niveaux + aux, câblage et réallocation d'aux), `coupling/amr_regrid_coupler.hpp`
-   (`amr_regrid_finest`, Berger-Rigoutsos en free function template, `comm.hpp` inclus
-   explicitement pour `n_ranks()`), `coupling/amr_diagnostics.hpp` (`amr_mass`,
-   `amr_max_drift_speed`). `AmrCoupler` / `AmrCouplerMP` ne font plus qu'ordonner
-   (`sync_down -> compute_aux -> step`, `regrid()` délégué) ; les primitives d'injection
-   restent des helpers `detail::`. Extraction structurelle bit-identique : équivalence
-   `max|dUc| = 0` et conservation de masse à l'arrondi inchangées
+   Explicit data residency: `sync_host()` / `sync_device()` (free functions of the seam
+   `for_each.hpp` + `MultiFab` methods) encode the access INTENT, where the coherence
+   relied on scattered `device_fence()` without saying which residency to make valid. Under unified
+   memory (`Kokkos::SharedSpace`) `sync_host()` is a targeted `device_fence()` (drain the kernels
+   in flight before a host access) and `sync_device()` a no-op (the host writes are already visible
+   to the device): the behavior remains BIT-IDENTICAL to the old code (at most one fence, never a
+   copy). `MultiFab::set_val` calls `sync_host()` instead of a bare `device_fence()` (same
+   semantics, named intent). It is deliberately scaffolding under unified memory; the
+   value is the abstraction: a future NON-unified path (separate host/device buffers) will wire into it
+   a directional `deep_copy` and the per-fab residency tracking, WITHOUT touching the operators (all
+   the host accesses already go through `sync_host()`), exactly as `for_each_cell` isolates the
+   CPU -> GPU transition of the call sites. Idempotence and no-op locked by `test_sync_residence`.
+5. **Separate the three ghost families** into named testable bricks. Largely done:
+   `fill_physical_bc` (BoundaryCondition, tested alone `test_physical_bc`), `fill_boundary`
+   (GhostExchange, tested `test_mpi_fillboundary`), `mf_fill_fine_ghosts_*`
+   (AMRBoundaryInterpolation) are already separated; `fill_ghosts` is only an explicit composition
+   of (1) + (2). Remains: raise the coarse-fine into a named first-level helper.
+6. **Thin CouplingPolicy (DONE).** Hierarchy, regrid and diagnostics taken out of the AMR
+   couplers into named components: `coupling/amr_level_storage.hpp` (`AmrLevelStack<Level>`,
+   levels + aux storage, aux wiring and reallocation), `coupling/amr_regrid_coupler.hpp`
+   (`amr_regrid_finest`, Berger-Rigoutsos in free function template, `comm.hpp` included
+   explicitly for `n_ranks()`), `coupling/amr_diagnostics.hpp` (`amr_mass`,
+   `amr_max_drift_speed`). `AmrCoupler` / `AmrCouplerMP` only orchestrate now
+   (`sync_down -> compute_aux -> step`, `regrid()` delegated); the injection primitives
+   remain `detail::` helpers. Structural extraction bit-identical: equivalence
+   `max|dUc| = 0` and mass conservation to rounding unchanged
    (`test_amr_coupler`, `test_amr_coupler_mp`).
-7. **Suite de validation numérique (FAIT).** Le bit-identique ne prouve pas la justesse.
-   DANS CE DÉPÔT (cœur) : ordre du Laplacien 5 points (`test_poisson_convergence`, Dirichlet +
-   périodique + nullspace) ; limite AP quantifiée sur plusieurs décades de raideur
-   (`test_ap_limit`) ; ordre 5 de la reconstruction WENO5-Z (`test_weno_convergence`, mesuré
-   5.00) ; diffusion AMR conservative (`test_amr_diffusion`) ; reflux exact (`test_flux_register`,
-   `test_coverage_mask`). CÔTÉ `adc_cases` (modèle physique requis) : tourbillon isentropique
-   d'Euler (ordre VanLeer), ordres MUSCL / Rusanov, loi de Gauss discrète du couplage, invariants
-   diocotron (masse, principe du maximum, enstrophie, énergie de champ, moment angulaire) et la
-   valeur propre complexe (rotation Re + croissance Im). Les tests `test_euler`,
+7. **Numerical validation suite (DONE).** Bit-identical does not prove correctness.
+   IN THIS REPOSITORY (core): order of the 5-point Laplacian (`test_poisson_convergence`, Dirichlet +
+   periodic + nullspace); AP limit quantified over several decades of stiffness
+   (`test_ap_limit`); order 5 of the WENO5-Z reconstruction (`test_weno_convergence`, measured
+   5.00); conservative AMR diffusion (`test_amr_diffusion`); exact reflux (`test_flux_register`,
+   `test_coverage_mask`). ON THE `adc_cases` SIDE (physical model required): Euler isentropic
+   vortex (VanLeer order), MUSCL / Rusanov orders, discrete Gauss law of the coupling, diocotron
+   invariants (mass, maximum principle, enstrophy, field energy, angular momentum) and the
+   complex eigenvalue (Re rotation + Im growth). The tests `test_euler`,
    `test_muscl_convergence`, `test_gauss_law`, `test_diocotron_*`, `test_amr_reflux`,
-   `test_amr_coupler*` cités historiquement ici vivent désormais dans `adc_cases`.
+   `test_amr_coupler*` historically cited here now live in `adc_cases`.
 
-### Physique magnétisée (cible Hoffart)
+### Magnetized physics (Hoffart target)
 
-- **Push de Boris E+B combiné : FAIT.** `tfap_boris` avance la quantité de mouvement sous E
-  ET B en un pas symétrique (demi-impulsion électrique, rotation magnétique complète,
-  demi-impulsion), au lieu du splitting de Strang externe (rotation autour de tout le pas
-  électrostatique). Câblé dans `TwoFluidAP2D::step` (seul le cas magnétisé change ; à `wc = 0`
-  le push se réduit exactement à `tfap_lorentz`, donc tous les tests `B = 0` restent
-  bit-identiques ; à `E = 0` c'est la rotation pure, donc le cyclotron reste exact à 0.00 %).
-  `test_two_fluid_boris` fige les trois propriétés : rotation conservant `|m|` sous B seul,
-  réduction à l'impulsion électrique sans B, et surtout le point fixe `E x B` discret
-  `m* = h cot(theta/2) (Ey, -Ex)` préservé avec rayon de giration constant (pas de croissance
-  séculaire de l'énergie). `test_two_fluid_ap_amplitude` (B activé) valide le push dans la pile
-  AP self-consistante.
-- Reste : reformulation AP tensorielle sous champ fort.
+- **Combined E+B Boris push: DONE.** `tfap_boris` advances the momentum under E
+  AND B in one symmetric step (electric half-impulse, full magnetic rotation,
+  half-impulse), instead of the external Strang splitting (rotation around the whole electrostatic
+  step). Wired in `TwoFluidAP2D::step` (only the magnetized case changes; at `wc = 0`
+  the push reduces exactly to `tfap_lorentz`, so all the `B = 0` tests remain
+  bit-identical; at `E = 0` it is the pure rotation, so the cyclotron remains exact to 0.00 %).
+  `test_two_fluid_boris` freezes the three properties: rotation conserving `|m|` under B alone,
+  reduction to the electric impulse without B, and above all the discrete `E x B` fixed point
+  `m* = h cot(theta/2) (Ey, -Ex)` preserved with constant gyration radius (no secular
+  growth of the energy). `test_two_fluid_ap_amplitude` (B enabled) validates the push in the
+  self-consistent AP stack.
+- Remains: tensorial AP reformulation under strong field.
 
-### Reproduction Hoffart (arXiv:2510.11808) : objectif du stage
+### Hoffart reproduction (arXiv:2510.11808): internship objective
 
-> Travail APPLICATIF : les milestones M1 à M4 ci-dessous sont réalisés CÔTÉ `adc_cases`
-> (binaires `examples/`, scripts de figures, tests applicatifs, runs ROMEO). Les fichiers et
-> tests cités (`diocotron_column_amr.cpp`, `diocotron_highorder.cpp`,
-> `integrator/magnetic_euler_poisson.hpp`, `test_magnetic_euler_poisson`, etc.) ne sont PAS dans
-> ce dépôt. Conservés ici comme mémoire de projet ; le cœur (`adc_cpp`) ne fournit que les briques.
+> APPLICATIVE work: the milestones M1 to M4 below are done ON THE `adc_cases` SIDE
+> (`examples/` binaries, figure scripts, applicative tests, ROMEO runs). The cited files and
+> tests (`diocotron_column_amr.cpp`, `diocotron_highorder.cpp`,
+> `integrator/magnetic_euler_poisson.hpp`, `test_magnetic_euler_poisson`, etc.) are NOT in
+> this repository. Kept here as project memory; the core (`adc_cpp`) provides only the bricks.
 
-Le papier (Euler-Poisson magnétique, structure-preserving FEM) valide en Section 5 l'instabilité
-**diocotron** par ses taux de croissance, dans la **limite de dérive magnétique** (eq 2.7 :
-`v_dr = -∇φ×Ω/|Ω|²`, `∂tρ + ∇·(ρ v_dr) = 0`, `ωd = ρα/|Ω| = ωp²/ωc`). Cette limite est la
-composition de briques `ExB` + `BackgroundDensity` (scénario "diocotron" côté `adc_cases`).
-Aucune AMR dans le papier : l'objectif est de reproduire avec NOTRE solveur puis d'y ajouter
-notre AMR, puis SAMRAI.
+The paper (magnetic Euler-Poisson, structure-preserving FEM) validates in Section 5 the
+**diocotron** instability by its growth rates, in the **magnetic drift limit** (eq 2.7:
+`v_dr = -∇φ×Ω/|Ω|²`, `∂tρ + ∇·(ρ v_dr) = 0`, `ωd = ρα/|Ω| = ωp²/ωc`). This limit is the
+composition of `ExB` + `BackgroundDensity` bricks ("diocotron" scenario on the `adc_cases` side).
+No AMR in the paper: the objective is to reproduce with OUR solver then add to it
+our AMR, then SAMRAI.
 
-- **M1 (en cours) : taux de croissance numérique vs analytique.** Pipeline construit et validé.
-  L'analytique (`diocotron_growth.hpp`, valeurs propres de Petri/Davidson-Felice) redonne déjà les
-  taux du papier (`γ₃≈0.772, γ₄≈0.911, γ₅≈0.683`, pic au mode 4). La simu non-linéaire
-  (`diocotron_column`, géométrie `0.15:0.20:0.40 = 6:8:16`) reproduit **qualitativement**
-  l'instabilité mode 4 (croissance linéaire puis saturation). `scripts/validate_diocotron_growth.py`
-  ajuste le taux numérique sur la phase linéaire et le normalise par `ωD = ρ̄/(2π)`. Étude de
-  résolution (`docs/fig_diocotron_reproduction.png`) : `γ_norm = 0.52 → 0.54 → 0.55` à `n =
-  128/192/256`, croissance monotone vers `0.911` mais **limitée par la diffusion numérique du bord
-  d'anneau** (anneau fin de 6 à 13 cellules). Conclusion chiffrée : sur grille uniforme, atteindre
-  `0.911` demande une très haute résolution -> motive directement l'AMR (M2).
-- **M2 : avec notre AMR (mono-rang, FAIT).** `examples/diocotron_column_amr.cpp` : colonne creuse
-  (anneau + paroi conductrice circulaire `r=0.40` portée par le multigrille, `AmrCouplerMP` accepte
-  désormais le prédicat `active`) sur AMR 2 niveaux, raffinant le **bord d'anneau** (tag couronne
-  `[0.13,0.22]`, regrid Berger-Rigoutsos), diagnostic d'amplitude du mode `l` de phi à `r0`, dérive
-  masse `~3e-15`. Même binaire pour les deux branches (`refine=0/1`, numériques identiques).
-  Résultat (mode 4, `docs/fig_diocotron_amr_vs_uniforme.png`) : à BASE GROSSIÈRE ÉGALE (96), l'AMR
-  **triple le taux** (`γ_norm = 0.38` vs uniforme `0.12`) en raffinant le transport au bord, pour
-  1.8x les cellules ; il est sur une MEILLEURE courbe taux/cellule que l'uniforme (0.38 à 16k
-  cellules vs ~0.22 par interpolation uniforme).
-- **M2b : Poisson MULTI-NIVEAU (FAIT, mode `ml=1`).** L'étape M2 bridait le taux parce que le
-  **Poisson restait résolu sur le grossier** (le coupleur injecte l'aux grossier aux patchs). Le mode
-  `ml` (`diocotron_column_amr <out> <nc> <nsteps> <refine> <l> <ml>`) assemble une densité composite
-  sur la grille fine (grossier prolongé + patchs fins écrasés), résout un `GeometricMG` fin dessus,
-  puis restreint le potentiel vers le grossier (gradient pour `auxc`) et garde le gradient fin direct
-  (`auxf`). À base 96 (mêmes 16 392 cellules) le taux remonte de `γ_norm = 0.38` à `0.42` : le Poisson
-  grossier bridait bien le taux. HYPOTHÈSE CONFIRMÉE.
-- **M2b-conv : convergence vérifiée par balayage de base** (`docs/fig_diocotron_ml_convergence.png`).
-  En montant la base (96 -> 128 -> 160, résolution effective au bord 192 -> 256 -> 320), l'AMR
-  multi-niveau converge vers l'uniforme à MÊME résolution effective, pour ~43 % des cellules :
+- **M1 (in progress): numerical vs analytic growth rate.** Pipeline built and validated.
+  The analytic (`diocotron_growth.hpp`, Petri/Davidson-Felice eigenvalues) already gives back the
+  rates of the paper (`γ₃≈0.772, γ₄≈0.911, γ₅≈0.683`, peak at mode 4). The nonlinear simulation
+  (`diocotron_column`, geometry `0.15:0.20:0.40 = 6:8:16`) reproduces **qualitatively**
+  the mode 4 instability (linear growth then saturation). `scripts/validate_diocotron_growth.py`
+  fits the numerical rate on the linear phase and normalizes it by `ωD = ρ̄/(2π)`. Resolution
+  study (`docs/fig_diocotron_reproduction.png`): `γ_norm = 0.52 → 0.54 → 0.55` at `n =
+  128/192/256`, monotone growth toward `0.911` but **limited by the numerical diffusion of the ring
+  edge** (thin ring of 6 to 13 cells). Quantified conclusion: on a uniform grid, reaching
+  `0.911` demands a very high resolution -> directly motivates the AMR (M2).
+- **M2: with our AMR (mono-rank, DONE).** `examples/diocotron_column_amr.cpp`: hollow column
+  (ring + circular conducting wall `r=0.40` carried by the multigrid, `AmrCouplerMP` now accepts
+  the `active` predicate) on 2-level AMR, refining the **ring edge** (crown tag
+  `[0.13,0.22]`, Berger-Rigoutsos regrid), amplitude diagnostic of the mode `l` of phi at `r0`, mass
+  drift `~3e-15`. Same binary for the two branches (`refine=0/1`, identical numerics).
+  Result (mode 4, `docs/fig_diocotron_amr_vs_uniforme.png`): at EQUAL COARSE BASE (96), the AMR
+  **triples the rate** (`γ_norm = 0.38` vs uniform `0.12`) by refining the transport at the edge, for
+  1.8x the cells; it is on a BETTER rate/cell curve than the uniform (0.38 at 16k
+  cells vs ~0.22 by uniform interpolation).
+- **M2b: MULTI-LEVEL Poisson (DONE, mode `ml=1`).** Step M2 capped the rate because the
+  **Poisson stayed solved on the coarse** (the coupler injects the coarse aux to the patches). The mode
+  `ml` (`diocotron_column_amr <out> <nc> <nsteps> <refine> <l> <ml>`) assembles a composite density
+  on the fine grid (coarse prolonged + fine patches overwritten), solves a fine `GeometricMG` on it,
+  then restricts the potential toward the coarse (gradient for `auxc`) and keeps the direct fine gradient
+  (`auxf`). At base 96 (same 16 392 cells) the rate rises from `γ_norm = 0.38` to `0.42`: the coarse
+  Poisson was indeed capping the rate. HYPOTHESIS CONFIRMED.
+- **M2b-conv: convergence verified by base sweep** (`docs/fig_diocotron_ml_convergence.png`).
+  By raising the base (96 -> 128 -> 160, effective edge resolution 192 -> 256 -> 320), the
+  multi-level AMR converges toward the uniform at SAME effective resolution, for ~43 % of the cells:
 
-  | résolution effective | AMR `ml` (γ_norm / cellules) | uniforme (γ_norm / cellules) | cellules AMR/unif |
+  | effective resolution | AMR `ml` (γ_norm / cells) | uniform (γ_norm / cells) | AMR/unif cells |
   |---|---|---|---|
   | 192 | 0.42 / 16 392 | 0.50 / 36 864 | 44 % |
   | 256 | 0.526 / 28 352 | 0.526 / 65 536 | 43 % |
   | 320 | 0.563 / 44 192 | 0.565 / 102 400 | 43 % |
   | 448 | **0.592** / 82 808 | 0.577 / 200 704 | 41 % |
 
-  À base >= 128 le taux AMR COÏNCIDE avec l'uniforme à résolution effective égale, pour moins de la
-  moitié du coût ; à eff 448 il le DÉPASSE (0.592 vs 0.577) pour 41 % des cellules. La convergence
-  vers `0.911` est nette et monotone (0.42 -> 0.526 -> 0.563 -> 0.592) mais LENTE : la diffusion
-  numérique du bord d'anneau (limite de M1) demande une résolution bien plus haute pour atteindre
-  `0.911`. C'est la SCIENCE de l'étape 3 du hero-run : pousser la résolution (l'AMR multi-niveau y
-  arrive pour ~41-44 % des cellules de l'uniforme). Atteindre `0.911` à pleine échelle demande le
-  driver AMR distribué (étape 2 dé-réplication + durcissement des primitives, cf. `docs/HERO_RUN_AMR.md`).
-- **M2b-conv-HR : balayage poussé au-delà de eff 448 (instabilité haute résolution corrigée).**
-  Le balayage plafonnait à eff 448 parce que la simu partait en `nan` au-dessus : le multigrille
-  géométrique DIVERGEAIT au bord embedded sur grille fine (correction grossière incohérente avec le
-  cercle re-discrétisé par niveau, rayon spectral du V-cycle > 1, ERRATIQUE selon l'alignement du
-  cercle). Le warm start propageait la divergence d'un pas à l'autre -> `phi` puis le champ en `nan`.
-  Ce n'était NI le pas de temps (déjà plafonné), NI le plancher de densité (la densité reste bornée
-  dans `[1e-3, 1]` pendant la divergence ; seul `phi` explose). Correctif : `GeometricMG::solve_robust`
-  (cf. [HERO_RUN_AMR.md](HERO_RUN_AMR.md)), qui lance le V-cycle standard (BIT-IDENTIQUE quand il
-  converge ou stagne) et, SEULEMENT en cas de vraie divergence (résidu final > résidu initial),
-  durcit le lissage GS (sticky) et repart à froid jusqu'à redevenir contractant. Les 8 runs
-  enregistrés ci-dessus restent BIT À BIT identiques (vérifié) ; la suite elliptique reste verte.
-  Le balayage monte alors sans `nan` jusqu'à eff 1024 (uniforme ET AMR `ml`, masse `~1e-14`) :
+  At base >= 128 the AMR rate COINCIDES with the uniform at equal effective resolution, for less than
+  half the cost; at eff 448 it EXCEEDS it (0.592 vs 0.577) for 41 % of the cells. The convergence
+  toward `0.911` is clear and monotone (0.42 -> 0.526 -> 0.563 -> 0.592) but SLOW: the numerical
+  diffusion of the ring edge (limit of M1) demands a much higher resolution to reach
+  `0.911`. This is the SCIENCE of step 3 of the hero-run: push the resolution (the multi-level AMR
+  reaches it for ~41-44 % of the cells of the uniform). Reaching `0.911` at full scale demands the
+  distributed AMR driver (step 2 de-replication + hardening of the primitives, cf. `docs/HERO_RUN_AMR.md`).
+- **M2b-conv-HR: sweep pushed beyond eff 448 (high-resolution instability corrected).**
+  The sweep capped at eff 448 because the simulation went to `nan` above: the geometric
+  multigrid DIVERGED at the embedded edge on the fine grid (coarse correction inconsistent with the
+  circle re-discretized per level, V-cycle spectral radius > 1, ERRATIC depending on the alignment of the
+  circle). The warm start propagated the divergence from one step to the next -> `phi` then the field to `nan`.
+  It was NEITHER the time step (already capped), NOR the density floor (the density stays bounded
+  in `[1e-3, 1]` during the divergence; only `phi` explodes). Fix: `GeometricMG::solve_robust`
+  (cf. [HERO_RUN_AMR.md](HERO_RUN_AMR.md)), which runs the standard V-cycle (BIT-IDENTICAL when it
+  converges or stagnates) and, ONLY in case of true divergence (final residual > initial residual),
+  hardens the GS smoothing (sticky) and restarts from cold until it becomes contracting again. The 8 runs
+  recorded above remain bit-for-bit identical (verified); the elliptic suite stays green.
+  The sweep then climbs without `nan` up to eff 1024 (uniform AND AMR `ml`, mass `~1e-14`):
 
-  | eff | AMR `ml` γ (lin / sat) | uniforme γ (lin / sat) | cellules AMR / unif |
+  | eff | AMR `ml` γ (lin / sat) | uniform γ (lin / sat) | AMR / unif cells |
   |---|---|---|---|
   | 448  | 0.631 / 0.591 | 0.632 / 0.577 | 82 808 / 200 704 = 41 % |
   | 512  | 0.664 / 0.582 | 0.650 / 0.579 | 104 632 / 262 144 = 40 % |
@@ -314,136 +314,136 @@ notre AMR, puis SAMRAI.
   | 896  | 0.695 / 0.570 | 0.699 / 0.561 | 314 340 / 802 816 = 39 % |
   | 1024 | 0.706 / 0.565 | 0.706 / 0.558 | 409 008 / 1 048 576 = 39 % |
 
-  Deux mesures du taux. `sat` = fenêtre relative au pic (méthode historique de la table ci-dessus).
-  `lin` = fenêtre PHYSIQUE FIXE en phase linéaire (`validate_diocotron_growth.py --window 5,14`,
-  nouvelle option), plus robuste pour COMPARER des résolutions. La mesure `sat` PLAFONNE vers ~0.58
-  puis décline au-delà de eff 448 : ce n'est PAS la physique mais un biais de fenêtre (le rollover de
-  saturation se raidit avec la résolution et contamine la pente). La mesure `lin`, qui isole le régime
-  exponentiel, CONTINUE sa montée MONOTONE vers `0.911` (0.63 -> 0.65 -> 0.67 -> 0.70 -> 0.71 de eff
-  448 à 1024, uniforme comme AMR ; trend robuste au choix de fenêtre, `--window 6,16` donne 0.55 ->
-  0.63, même montée). L'AMR `ml` SUIT l'uniforme à ~39-40 % des cellules jusqu'à eff 1024 : la promesse
-  M2b (même physique, < moitié du coût) tient à l'échelle. Le verrou numérique qui bloquait le balayage
-  est levé ; atteindre `0.911` reste une affaire de résolution encore plus haute (hero-run distribué).
-- **M2b-recon : le vrai verrou vers `0.911` est l'ORDRE de reconstruction, pas la résolution.** M1
-  attribuait le plafond à la diffusion numérique du bord d'anneau ; le transport tournait en `NoSlope`
-  (reconstruction premier ordre, la plus diffusive). En passant à MUSCL ordre 2 (`VanLeer`, pente
-  limitée, option `recon=1` de `diocotron_column_amr` ; 2 ghosts) le bord reste net et le taux MONTE
-  FORTEMENT à résolution FIXE :
+  Two measurements of the rate. `sat` = window relative to the peak (historical method of the table above).
+  `lin` = FIXED PHYSICAL window in linear phase (`validate_diocotron_growth.py --window 5,14`,
+  new option), more robust to COMPARE resolutions. The `sat` measurement CAPS toward ~0.58
+  then declines beyond eff 448: this is NOT the physics but a window bias (the saturation rollover
+  stiffens with resolution and contaminates the slope). The `lin` measurement, which isolates the
+  exponential regime, CONTINUES its MONOTONE climb toward `0.911` (0.63 -> 0.65 -> 0.67 -> 0.70 -> 0.71 from eff
+  448 to 1024, uniform as AMR; trend robust to the choice of window, `--window 6,16` gives 0.55 ->
+  0.63, same climb). The AMR `ml` FOLLOWS the uniform at ~39-40 % of the cells up to eff 1024: the promise
+  M2b (same physics, < half the cost) holds at scale. The numerical blocker that blocked the sweep
+  is lifted; reaching `0.911` remains a matter of even higher resolution (distributed hero-run).
+- **M2b-recon: the true blocker toward `0.911` is the reconstruction ORDER, not the resolution.** M1
+  attributed the ceiling to the numerical diffusion of the ring edge; the transport ran in `NoSlope`
+  (first-order reconstruction, the most diffusive). By switching to MUSCL order 2 (`VanLeer`, limited
+  slope, option `recon=1` of `diocotron_column_amr`; 2 ghosts) the edge stays sharp and the rate RISES
+  STRONGLY at FIXED resolution:
 
-  | eff | `NoSlope` (lin 5,14) | `VanLeer` (lin 5,14) | `VanLeer` (lin 4,11, phase expo. propre) |
+  | eff | `NoSlope` (lin 5,14) | `VanLeer` (lin 5,14) | `VanLeer` (lin 4,11, clean expo. phase) |
   |---|---|---|---|
-  | 256 | 0.561 | 0.760 | **0.864** (95 % de 0.911) |
+  | 256 | 0.561 | 0.760 | **0.864** (95 % of 0.911) |
   | 512 | 0.650 | 0.753 | 0.851 |
 
-  À eff 256 déjà, `VanLeer` atteint `γ_norm ~ 0.86` dans la fenêtre exponentielle propre (`--window
-  4,11`), soit ~95 % de l'analytique `0.911`, contre `0.56` en `NoSlope` : +0.30 de taux pour la SEULE
-  montée en ordre, sans toucher la résolution. Le taux `VanLeer` est quasi PLAT en résolution (0.864 ->
-  0.851 de eff 256 à 512) : il est déjà CONVERGÉ en reconstruction, ce qui CONFIRME directement
-  l'hypothèse M1 (le plafond ~0.58 du `NoSlope` venait de la diffusion du schéma, pas de la physique).
-  Stable (limiteur TVD, aucun `nan`) et conservatif (`~1.9e-14`), uniforme ET AMR `ml` (base 320 à 66
-  patchs incluse). Le défaut `recon=0` (`NoSlope`) reste BIT À BIT identique aux runs enregistrés. Les
-  ~5 % restants vers `0.911` (transitoire initial, intégration en temps Euler explicite d'ordre 1,
-  représentation embedded du bord) sont la cible fine ; le gros du gain est acquis à coût modeste.
-- **M2b-HO : voie haute precision WENO5-Z + SSPRK3 (ordre eleve espace ET temps), erreur vs analytique.**
-  La recherche (papier Hoffart, methodes classiques : Jiang-Shu, Borges WENO-Z, Gottlieb-Shu-Tadmor)
-  confirme les deux leviers : reconstruction ordre 5 ET temps ordre 3 (forward Euler biaise un mode en
-  croissance exponentielle, instable sur l'axe imaginaire). `examples/diocotron_highorder.cpp` :
-  diocotron uniforme WENO5-Z + SSPRK3, Poisson RE-RESOLU a chaque etage RK (`solve_robust`). On compare
-  au papier (modes 3/4/5 vs analytique 0.772 / 0.911 / 0.683, erreur relative). L'analytique du depot
-  (`diocotron_growth.hpp`, Petri/Davidson-Felice) est INSENSIBLE au lissage du profil (mode 4 = 0.9118
-  au profil net), donc 0.911 est bien la cible du pas net qu'on simule, et la normalisation
-  (`omega_D = rho_bar/2pi`) est coherente analytique/simu.
-  Resultat (fenetre du papier, eff 256, WENO5+SSPRK3) : `gamma_norm` mode 3 = 0.838 (+8.5 %), mode 4 =
-  0.985 (+8.1 %), mode 5 = 0.730 (+6.9 %). Donc l'ordre eleve fait passer le mode 4 de 0.56 (sous-evalue,
-  `NoSlope`+Euler, trop diffusif) a ~0.98 (SUR-evalue), du BON cote (comme le maillage grossier du papier,
-  0.935), mais PAS encore < 1 %. Le sur-tir est UNIFORME (~7-8.5 %) sur les trois modes, PLAT en resolution
-  (eff 256 ~ eff 512 ~ eff 1024) et PLAT en ordre de reconstruction (WENO5 ~ VanLeer) : ce n'est donc NI
-  le schema NI la resolution, mais l'absence de PLATEAU exponentiel propre (le transitoire initial decline
-  directement vers la saturation, sans phase lineaire nette ou lire le mode propre), liee a la geometrie
-  CARTESIENNE en escalier (paroi conductrice + bords d'anneau non alignes) la ou le papier emploie une
-  geometrie EPOUSANT le bord (FEM structure-preserving, disque courbe exact). Atteindre < 0.5 % comme le
-  papier demande donc un bord conducteur EPOUSANT (cellules coupees / grille polaire), prochain chantier ;
-  la reconstruction et l'integration d'ordre eleve, elles, sont en place et verifiees
-  (`test_weno_convergence` : ordre 5.00).
-  CONFIRMATION multi-mesures (balayage ROMEO `diocotron_highorder_hero`, modes 3/4/5 x eff 256/512/1024,
-  fenetres du papier, R2 = 1.00) : sur-tir `gamma_norm` UNIFORME et PLAT EN RESOLUTION, mode 4 =
-  0.985 / 0.988 / 0.987, mode 3 = 0.838 / 0.850 / 0.853, mode 5 = 0.730 / 0.731 / 0.729 (la resolution
-  ne referme PAS l'ecart). Trois diagnostics ecartent les causes simples : (a) balayage en delta : la
-  LIMITE LINEAIRE (delta -> 0) monte a ~+27 % au lieu de baisser -> pas une contamination nonlineaire,
-  et l'accord apparent a delta=0.1 etait une compensation par la saturation ; (b) rapport SANS DIMENSION
-  `gamma / |Re(omega)|` (normalisation-independant, via la valeur propre complexe `diocotron_eigenvalue`)
-  = 0.31 mesure vs 0.331 analytique -> ~5 % est une distorsion STRUCTURELLE de la valeur propre, ~3 % un
-  decalage de normalisation `omega_D` ; (c) WENO5 ~ VanLeer -> pas l'ordre. Verdict ROBUSTE : la cause est
-  la GEOMETRIE cartesienne (paroi en escalier + symetrie 4 du carre brisant l'invariance de rotation du
-  probleme circulaire), INDEPENDANTE de la resolution et du schema. La voie < 1 % est donc un bord
-  EPOUSANT (cut-cell Shortley-Weller, ou grille polaire comme les methodes semi-Lagrangiennes diocotron),
-  pas plus de resolution. Invariants physiques verts sur tout le run (masse exacte, enstrophie = mesure
-  de diffusion, energie/moment ~conserves, principe du maximum) : le transport lui-meme est fidele.
-  MISE A JOUR (mai 2026) : le bord cut-cell Shortley-Weller a ete IMPLEMENTE et valide (`test_cut_cell` :
-  ordre 2, erreur Poisson 3459x plus faible) et il ne change PAS le taux (gamma identique a 3 chiffres,
-  cut vs escalier). La paroi en escalier n'etait donc PAS le verrou : le mode est trop loin de la paroi
-  (effet d'image `(0.44)^8 ~ 1e-3`). Reste la distorsion STRUCTURELLE (b) de la valeur propre cartesienne
-  (symetrie 4 grille/mode) plus la normalisation. Recit complet et unique : `docs/DIOCOTRON_GROWTH_RATE.md`.
-- **M3 : système magnétique complet (eq 2.4, FAIT côté `adc_cases`).** Au-delà de la limite de
-  dérive : Euler compressible + énergie + Poisson + force de Lorentz `m × Ω`. L'architecture du
-  cœur était déjà prête (briques `CompressibleFlux` + `PotentialForce`/`GravityForce` +
-  `GravityCoupling`) ; il ne manquait que la rotation cyclotron `m × Ω`, ajoutée APPLICATIVEMENT
-  (le fichier `magnetic_euler_poisson.hpp` cité ici vit dans `adc_cases`, pas dans ce dépôt).
-  `magnetic_rotate` (rotation EXACTE de la quantité de
-  mouvement, `ρ` et `E` inchangés, conserve `|m|`) + `MagneticEulerPoissonCoupler`, splitting de
-  Strang autour de `Coupler<EulerPoisson>` (½ rotation, transport+électrostatique SSPRK2 avec Poisson
-  par étage, ½ rotation). La rotation exacte est inconditionnellement stable : schéma
-  ASYMPTOTIC-PRESERVING, le pas de temps reste gouverné par la CFL hydro et NON par la fréquence
-  cyclotron `ω_c = |Ω|`. `test_magnetic_euler_poisson` (60/60) prouve : rotation `ρ`/`E` bit à bit
-  conservés et `|m|` préservé ; à `Ω=0` le pas est BIT À BIT le `Coupler` nu (tout le chemin
-  Euler-Poisson testé est préservé) ; le point fixe de la carte de Strang converge à l'ORDRE 2
-  (ratio `4.00`) vers la dérive E×B `v = (-∂_yφ, ∂_xφ)/Ω`, donc le système complet se RÉDUIT à la
-  limite de dérive (M1/M2) quand `Ω` grandit. Démo `examples/magnetic_diocotron.cpp` : bande de charge
-  sous le système complet, initialisée sur la variété de dérive ; tourne stablement à grand `Ω`
-  (CFL hydro), masse conservée à l'arrondi (`~4e-11`), énergie du gaz quasi conservée sur la dérive
-  (`docs/anim_magnetic_diocotron.gif`). La reproduction quantitative du taux à `0.911` dans le système
-  complet est limitée par la diffusion (même constat que M1) et vise le hero-run.
-- **M4 : SAMRAI.** Porter le diocotron sur l'AMR de SAMRAI (FetchContent + adaptateur).
+  At eff 256 already, `VanLeer` reaches `γ_norm ~ 0.86` in the clean exponential window (`--window
+  4,11`), i.e. ~95 % of the analytic `0.911`, against `0.56` in `NoSlope`: +0.30 of rate for the SOLE
+  rise in order, without touching the resolution. The `VanLeer` rate is almost FLAT in resolution (0.864 ->
+  0.851 from eff 256 to 512): it is already CONVERGED in reconstruction, which directly CONFIRMS
+  the M1 hypothesis (the ~0.58 ceiling of the `NoSlope` came from the scheme diffusion, not the physics).
+  Stable (TVD limiter, no `nan`) and conservative (`~1.9e-14`), uniform AND AMR `ml` (base 320 with 66
+  patches included). The default `recon=0` (`NoSlope`) remains bit-for-bit identical to the recorded runs. The
+  ~5 % remaining toward `0.911` (initial transient, explicit Euler order 1 time integration,
+  embedded representation of the edge) are the fine target; the bulk of the gain is acquired at modest cost.
+- **M2b-HO: high precision path WENO5-Z + SSPRK3 (high order space AND time), error vs analytic.**
+  The research (Hoffart paper, classical methods: Jiang-Shu, Borges WENO-Z, Gottlieb-Shu-Tadmor)
+  confirms the two levers: order 5 reconstruction AND order 3 time (forward Euler biases a mode in
+  exponential growth, unstable on the imaginary axis). `examples/diocotron_highorder.cpp`:
+  uniform diocotron WENO5-Z + SSPRK3, Poisson RE-SOLVED at each RK stage (`solve_robust`). We compare
+  to the paper (modes 3/4/5 vs analytic 0.772 / 0.911 / 0.683, relative error). The analytic of the repo
+  (`diocotron_growth.hpp`, Petri/Davidson-Felice) is INSENSITIVE to the smoothing of the profile (mode 4 = 0.9118
+  at the sharp profile), so 0.911 is indeed the target of the sharp step we simulate, and the normalization
+  (`omega_D = rho_bar/2pi`) is consistent analytic/sim.
+  Result (paper window, eff 256, WENO5+SSPRK3): `gamma_norm` mode 3 = 0.838 (+8.5 %), mode 4 =
+  0.985 (+8.1 %), mode 5 = 0.730 (+6.9 %). So the high order makes mode 4 pass from 0.56 (under-evaluated,
+  `NoSlope`+Euler, too diffusive) to ~0.98 (OVER-evaluated), on the RIGHT side (like the coarse mesh of the paper,
+  0.935), but NOT yet < 1 %. The overshoot is UNIFORM (~7-8.5 %) on the three modes, FLAT in resolution
+  (eff 256 ~ eff 512 ~ eff 1024) and FLAT in reconstruction order (WENO5 ~ VanLeer): so it is NEITHER
+  the scheme NOR the resolution, but the absence of a clean exponential PLATEAU (the initial transient declines
+  directly toward saturation, without a clear linear phase to read the eigenmode), tied to the
+  CARTESIAN staircase geometry (conducting wall + ring edges not aligned) where the paper uses a
+  geometry MATCHING the edge (structure-preserving FEM, exact curved disk). Reaching < 0.5 % like the
+  paper thus demands a MATCHING conducting edge (cut cells / polar grid), next work item;
+  the high-order reconstruction and integration, themselves, are in place and verified
+  (`test_weno_convergence`: order 5.00).
+  CONFIRMATION multi-measurements (ROMEO sweep `diocotron_highorder_hero`, modes 3/4/5 x eff 256/512/1024,
+  paper windows, R2 = 1.00): `gamma_norm` overshoot UNIFORM and FLAT IN RESOLUTION, mode 4 =
+  0.985 / 0.988 / 0.987, mode 3 = 0.838 / 0.850 / 0.853, mode 5 = 0.730 / 0.731 / 0.729 (the resolution
+  does NOT close the gap). Three diagnostics rule out the simple causes: (a) delta sweep: the
+  LINEAR LIMIT (delta -> 0) rises to ~+27 % instead of dropping -> not a nonlinear contamination,
+  and the apparent agreement at delta=0.1 was a compensation by the saturation; (b) DIMENSIONLESS ratio
+  `gamma / |Re(omega)|` (normalization-independent, via the complex eigenvalue `diocotron_eigenvalue`)
+  = 0.31 measured vs 0.331 analytic -> ~5 % is a STRUCTURAL distortion of the eigenvalue, ~3 % a
+  shift of normalization `omega_D`; (c) WENO5 ~ VanLeer -> not the order. ROBUST verdict: the cause is
+  the cartesian GEOMETRY (staircase wall + symmetry 4 of the square breaking the rotation invariance of the
+  circular problem), INDEPENDENT of the resolution and the scheme. The < 1 % path is thus a MATCHING
+  edge (cut-cell Shortley-Weller, or polar grid like the semi-Lagrangian diocotron methods),
+  not more resolution. Physical invariants green over the whole run (exact mass, enstrophy = measure
+  of diffusion, energy/momentum ~conserved, maximum principle): the transport itself is faithful.
+  UPDATE (May 2026): the cut-cell Shortley-Weller edge has been IMPLEMENTED and validated (`test_cut_cell`:
+  order 2, Poisson error 3459x lower) and it does NOT change the rate (gamma identical to 3 digits,
+  cut vs staircase). The staircase wall was thus NOT the blocker: the mode is too far from the wall
+  (image effect `(0.44)^8 ~ 1e-3`). Remains the STRUCTURAL distortion (b) of the cartesian eigenvalue
+  (symmetry 4 grid/mode) plus the normalization. Complete and single account: `docs/DIOCOTRON_GROWTH_RATE.md`.
+- **M3: full magnetic system (eq 2.4, DONE on the `adc_cases` side).** Beyond the drift
+  limit: compressible Euler + energy + Poisson + Lorentz force `m × Ω`. The architecture of the
+  core was already ready (bricks `CompressibleFlux` + `PotentialForce`/`GravityForce` +
+  `GravityCoupling`); only the cyclotron rotation `m × Ω` was missing, added APPLICATIVELY
+  (the file `magnetic_euler_poisson.hpp` cited here lives in `adc_cases`, not in this repository).
+  `magnetic_rotate` (EXACT rotation of the momentum,
+  `ρ` and `E` unchanged, conserves `|m|`) + `MagneticEulerPoissonCoupler`, Strang splitting
+  around `Coupler<EulerPoisson>` (½ rotation, transport+electrostatic SSPRK2 with Poisson
+  per stage, ½ rotation). The exact rotation is unconditionally stable: ASYMPTOTIC-PRESERVING
+  scheme, the time step remains governed by the hydro CFL and NOT by the cyclotron
+  frequency `ω_c = |Ω|`. `test_magnetic_euler_poisson` (60/60) proves: rotation `ρ`/`E` bit-for-bit
+  conserved and `|m|` preserved; at `Ω=0` the step is bit-for-bit the bare `Coupler` (the whole
+  Euler-Poisson path tested is preserved); the fixed point of the Strang map converges at ORDER 2
+  (ratio `4.00`) toward the E×B drift `v = (-∂_yφ, ∂_xφ)/Ω`, so the full system REDUCES to the
+  drift limit (M1/M2) when `Ω` grows. Demo `examples/magnetic_diocotron.cpp`: charge band
+  under the full system, initialized on the drift manifold; runs stably at large `Ω`
+  (hydro CFL), mass conserved to rounding (`~4e-11`), gas energy quasi conserved on the drift
+  (`docs/anim_magnetic_diocotron.gif`). The quantitative reproduction of the rate at `0.911` in the full
+  system is limited by the diffusion (same observation as M1) and targets the hero-run.
+- **M4: SAMRAI.** Port the diocotron onto the SAMRAI AMR (FetchContent + adapter).
 
-Hero run ROMEO (`romeo/`) : scripts SLURM prets pour le diocotron a grande echelle sur GH200,
-hybride **MPI + Kokkos/CUDA** (1 rang MPI par H100, les noyaux `for_each_cell` sur GPU ; les
-232 H100 multi-noeud par Infiniband). C'est le « full machine » reel sur `armgpu` (OpenMP+MPI
-est le mode CPU separe sur `x64cpu`). **Grille UNIFORME, pas d'AMR** : le binaire `diocotron_mpi`
-utilise `SpectralCoupler` (Poisson FFT, bandes), donc force brute (pousser la resolution uniforme
-jusqu'a resoudre le bord d'anneau et atteindre 0.911). Un hero-run AMR DYNAMIQUE est un objectif
-distinct (convergence du reflux distribue fait + coupleur AMR porte multi-GPU + benchmark colonne,
-cf. M2) ; le run uniforme sert de reference chiffree pour mesurer le gain de l'AMR.
-`diocotron_hero.sbatch` (run) + `diocotron_scaling.sbatch` (scaling fort/faible) +
-`romeo/README.md` (build + soumission).
+Hero run ROMEO (`romeo/`): SLURM scripts ready for the large-scale diocotron on GH200,
+hybrid **MPI + Kokkos/CUDA** (1 MPI rank per H100, the `for_each_cell` kernels on GPU; the
+232 H100 multi-node by Infiniband). It is the real "full machine" on `armgpu` (OpenMP+MPI
+is the separate CPU mode on `x64cpu`). **UNIFORM grid, no AMR**: the binary `diocotron_mpi`
+uses `SpectralCoupler` (Poisson FFT, bands), so brute force (push the uniform resolution
+until resolving the ring edge and reaching 0.911). A DYNAMIC AMR hero-run is a distinct
+objective (convergence of the distributed reflux done + AMR coupler ported multi-GPU + column benchmark,
+cf. M2); the uniform run serves as a quantified reference to measure the gain of the AMR.
+`diocotron_hero.sbatch` (run) + `diocotron_scaling.sbatch` (strong/weak scaling) +
+`romeo/README.md` (build + submission).
 
-Hero run AMR DYNAMIQUE (le vrai but de comparaison uniforme vs AMR sur ROMEO) : c'est la
-convergence de plusieurs briques et le plus gros morceau restant. A l'echelle hero, le grossier
-8192^2 NE PEUT PAS etre replique sur chaque rang -> il faut un **grossier decompose** (multi-box
-distribue) + **Poisson MG distribue** dessus (`GeometricMG` distribue deja un grossier multi-box
-via `DistributionMapping(ba.size(), n_ranks())`, mais le diocotron a un grossier MONO-box -> a
-decomposer) + **reflux sans replication** (notre reflux distribue suppose le niveau 0 replique ;
-les niveaux >0 sont deja distribues via `parallel_copy` + gather, a etendre au niveau 0) +
-**regrid distribue** (clustering BR + redistribution des patchs) + le tout en **Kokkos/CUDA**.
-Autrement dit, la **de-replication du grossier (objectif B)**, declaree NO-GO pour un PETIT
-grossier, redevient REQUISE a l'echelle hero. Chemin propre : M2 d'abord (AMR sur la colonne,
-mono-rang, science) pour chiffrer le gain cellules, puis assembler le driver distribue (B +
-MG/regrid distribues + GPU), puis comparer les deux hero runs. Conception-d'abord recommandee
-(gate conservation `maxdiff=0` np=1/2/4 a chaque etape).
+Hero run DYNAMIC AMR (the true goal of uniform vs AMR comparison on ROMEO): it is the
+convergence of several bricks and the biggest remaining piece. At hero scale, the coarse
+8192^2 CANNOT be replicated on each rank -> a **decomposed coarse** is needed (multi-box
+distributed) + **distributed MG Poisson** on it (`GeometricMG` already distributes a multi-box coarse
+via `DistributionMapping(ba.size(), n_ranks())`, but the diocotron has a MONO-box coarse -> to
+decompose) + **reflux without replication** (our distributed reflux assumes level 0 replicated;
+the levels >0 are already distributed via `parallel_copy` + gather, to extend to level 0) +
+**distributed regrid** (BR clustering + redistribution of the patches) + the whole in **Kokkos/CUDA**.
+In other words, the **de-replication of the coarse (objective B)**, declared NO-GO for a SMALL
+coarse, becomes REQUIRED again at hero scale. Clean path: M2 first (AMR on the column,
+mono-rank, science) to quantify the cell gain, then assemble the distributed driver (B +
+MG/regrid distributed + GPU), then compare the two hero runs. Design-first recommended
+(conservation gate `maxdiff=0` np=1/2/4 at each step).
 
-Le PLAN etage de ce hero-run AMR distribue est ecrit dans
-[HERO_RUN_AMR.md](HERO_RUN_AMR.md) : l'insight clef est qu'un diocotron a 2 NIVEAUX
-(grossier replique + 1 niveau fin reparti) ne touche AUCUN des deux verrous durs (le regrid
-tague le niveau 0 REPLIQUE, donc pas de gather-tags ; pas de de-replication tant que le grossier
-reste modere), ce qui permet de livrer les etapes 0 (driver CPU) et 1 (portage GPU) en
-s'appuyant sur le reflux distribue deja prouve, et de repousser le risque dur (solveur de fond
-reparti + gather-tags, etape 2) jusqu'a ce qu'il devienne necessaire.
+The staged PLAN of this distributed AMR hero-run is written in
+[HERO_RUN_AMR.md](HERO_RUN_AMR.md): the key insight is that a 2-LEVEL diocotron
+(coarse replicated + 1 distributed fine level) touches NONE of the two hard blockers (the regrid
+tags level 0 REPLICATED, so no gather-tags; no de-replication as long as the coarse
+stays moderate), which allows delivering steps 0 (CPU driver) and 1 (GPU port) by
+relying on the distributed reflux already proven, and pushing back the hard risk (distributed background
+solver + gather-tags, step 2) until it becomes necessary.
 
 ### Performance
 
-- Région OpenMP consolidée au-dessus de la boucle de niveaux du multigrille (le seul levier
-  identifié pour les charges MG-dominées).
+- OpenMP region consolidated above the level loop of the multigrid (the only lever
+  identified for MG-dominated loads).
 
-### Confort
+### Comfort
 
-- MUSCL sur le momentum du deux-fluides ; GIF du coupleur multi-patch ; tutoriels
-  supplémentaires si besoin.
+- MUSCL on the two-fluid momentum; GIF of the multi-patch coupler; additional tutorials
+  if needed.

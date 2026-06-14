@@ -1,250 +1,250 @@
-> **ARCHIVE -- document non-normatif.** Plan/spec interne conservee pour l'historique. La source de verite courante est le code + les docs canoniques (ARCHITECTURE.md, ALGORITHMS.md, BACKEND_COVERAGE.md). Ne pas s'y fier comme etat courant.
+> **ARCHIVE, non-normative document.** Internal plan/spec kept for the historical record. The current source of truth is the code plus the canonical docs (ARCHITECTURE.md, ALGORITHMS.md, BACKEND_COVERAGE.md). Do not rely on it as the current status.
 
-# Plan de nettoyage documentaire
+# Documentation cleanup plan
 
-PLAN UNIQUEMENT. Ce document ne modifie aucun fichier existant. Il recense les chevauchements
-entre les docs actuels et propose un decoupage net des sources de verite, puis un plan de
-raccourcissement du README.
+PLAN ONLY. This document does not modify any existing file. It lists the overlaps
+between the current docs and proposes a clean split of the sources of truth, then a plan to
+shorten the README.
 
 ---
 
-## 1. Sources de verite cibles
+## 1. Target sources of truth
 
-Apres nettoyage, chaque document a un perimetre exclusif :
+After cleanup, each document has an exclusive scope:
 
-| Document | Source de verite exclusive |
+| Document | Exclusive source of truth |
 |---|---|
-| `README.md` | Vue d'ensemble (quoi / pourquoi / GIF), liens vers les autres docs, installation, CI status |
-| `ARCHITECTURE.md` | Cinq couches, seams, concepts C++, frontiere lib/application, etat reel des composants |
-| `ALGORITHMS.md` | Methodes numeriques generiques : formules, code, validation, tests nommement |
-| `DSL_MODEL_DESIGN.md` (ou futur Sphinx) | API utilisateur Python : facade `dsl.Model`, `CompositeModel`, `add_equation`, statut par phase |
-| `GPU_RUNTIME_PORT.md` | Journal de validation GH200 : phases, resultats chiffres, bugs corriges, caveats de perf |
-| `PAPER_ROADMAP.md` | Science : cible Hoffart, balayage O5, verrou bord d'anneau, paniers 1-4 |
-| `COUPLER_HIERARCHY.md` | Reference exhaustive des coupleurs de `include/adc/coupling/` |
-| `SCHUR_CONDENSATION_DESIGN.md` | Spec de l'etage source Schur (design seulement, PR0-PR8) |
-| `AMR_MULTIBLOCK_DESIGN.md` | Spec de l'AMR multi-blocs Phase 1 (design seulement, PR i-viii) |
-| `BACKEND_COVERAGE.md` (a creer) | Matrice backend : quel chemin (add_block/aot/production/amr), quel GPU/MPI/AMR, quelle limite |
-| `PERFORMANCE.md` | Profil ROMEO, banc bench_amr, chiffres mesures, leviers (OncePerStep, FFT vs MG) |
-| `CHOICES.md` | Justification des decisions d'architecture (pourquoi, pas quoi) |
-| `BIBLIOGRAPHY.md` | References bibliographiques uniquement |
+| `README.md` | Overview (what / why / GIF), links to the other docs, installation, CI status |
+| `ARCHITECTURE.md` | Five layers, seams, C++ concepts, lib/application boundary, real status of the components |
+| `ALGORITHMS.md` | Generic numerical methods: formulas, code, validation, tests by name |
+| `DSL_MODEL_DESIGN.md` (or future Sphinx) | Python user API: facade `dsl.Model`, `CompositeModel`, `add_equation`, status by phase |
+| `GPU_RUNTIME_PORT.md` | GH200 validation log: phases, numeric results, fixed bugs, perf caveats |
+| `PAPER_ROADMAP.md` | Science: Hoffart target, O5 sweep, ring-edge blocker, baskets 1-4 |
+| `COUPLER_HIERARCHY.md` | Exhaustive reference of the couplers in `include/adc/coupling/` |
+| `SCHUR_CONDENSATION_DESIGN.md` | Spec of the Schur source stage (design only, PR0-PR8) |
+| `AMR_MULTIBLOCK_DESIGN.md` | Spec of the Phase 1 multi-block AMR (design only, PR i-viii) |
+| `BACKEND_COVERAGE.md` (to create) | Backend matrix: which path (add_block/aot/production/amr), which GPU/MPI/AMR, which limit |
+| `PERFORMANCE.md` | ROMEO profile, bench_amr benchmark, measured numbers, levers (OncePerStep, FFT vs MG) |
+| `CHOICES.md` | Justification of the architecture decisions (why, not what) |
+| `BIBLIOGRAPHY.md` | Bibliographic references only |
 
 ---
 
-## 2. Etat actuel des chevauchements, doc par doc
+## 2. Current state of the overlaps, doc by doc
 
 ### 2.1 README.md
 
-Le README fait 373 lignes et contient :
+The README is 373 lines and contains:
 
-- (a) Vue d'ensemble + GIF (ligne 1-48) : GARDE ici.
-- (b) Tableau "Ce que fournit le coeur" (lignes 56-82) : DUPLIQUE ARCHITECTURE.md section 6
-  (carte des modules) et section 13 (arborescence detaillee). A DEPLACER vers ARCHITECTURE.md,
-  remplace dans le README par un lien.
-- (c) Section "DSL symbolique" avec le gros exemple Python (lignes 87-148) : contenu de
-  documentation API (DSL_MODEL_DESIGN.md perimetre). Le README peut garder 5-6 lignes de
-  presentation + un exemple minimal, le reste se deplace ou pointe vers DSL_MODEL_DESIGN.md.
-- (d) Tableau "Quatre chemins de modele" (lignes 129-141) : DUPLIQUE la matrice de capacites de
-  DSL_MODEL_DESIGN.md section 5. A deplacer vers DSL_MODEL_DESIGN.md ou BACKEND_COVERAGE.md,
-  garder une reference dans le README.
-- (e) Section "Limites actuelles" (lignes 152-173) : contenu honnete, mais DUPLIQUE
-  DSL_MODEL_DESIGN.md section 0bis (GAP/SHIPPE) et GPU_RUNTIME_PORT.md (caveats). A deplacer,
-  remplace par un lien vers les deux.
-- (f) Section "Systemes multi-especes" (lignes 174-196) : DUPLIQUE partiellement ARCHITECTURE.md
-  section 5 (couche temps/couplage, SystemCoupler). A raccourcir a 4-5 lignes + lien vers
+- (a) Overview + GIF (line 1-48): KEEP here.
+- (b) Table "What the core provides" (lines 56-82): DUPLICATES ARCHITECTURE.md section 6
+  (module map) and section 13 (detailed tree). TO MOVE to ARCHITECTURE.md,
+  replaced in the README by a link.
+- (c) Section "Symbolic DSL" with the large Python example (lines 87-148): API
+  documentation content (DSL_MODEL_DESIGN.md scope). The README can keep 5-6 lines of
+  presentation + a minimal example, the rest moves to or points at DSL_MODEL_DESIGN.md.
+- (d) Table "Four model paths" (lines 129-141): DUPLICATES the capability matrix of
+  DSL_MODEL_DESIGN.md section 5. To move to DSL_MODEL_DESIGN.md or BACKEND_COVERAGE.md,
+  keep a reference in the README.
+- (e) Section "Current limits" (lines 152-173): honest content, but DUPLICATES
+  DSL_MODEL_DESIGN.md section 0bis (GAP/SHIPPED) and GPU_RUNTIME_PORT.md (caveats). To move,
+  replaced by a link to both.
+- (f) Section "Multi-species systems" (lines 174-196): partially DUPLICATES ARCHITECTURE.md
+  section 5 (time/coupling layer, SystemCoupler). To shorten to 4-5 lines + link to
   ARCHITECTURE.md.
-- (g) Section "Backends" (lignes 198-213) : contenu ARCHITECTURE.md section 9. A reduire a
-  2-3 lignes + lien.
-- (h) Section "Utiliser le coeur" (lignes 215-228) : snippet CMake + contrat PhysicalModel. A
-  garder en bref (c'est l'accroche), mais la description detaillee (tableau de modules) se
-  trouve dans ARCHITECTURE.md.
-- (i) Section "Module Python adc" (lignes 230-302) : tres longue. L'essentiel (exemple
-  add_block, add_equation, AmrSystem) reste dans le README ; le detail de chaque adder et les
-  chemins avances/legacy vont dans DSL_MODEL_DESIGN.md.
-- (j) Section "Ecosysteme" (lignes 304-312) : GARDE ici (c'est de la navigation).
-- (k) "Build et tests" (lignes 314-337) : GARDE ici (point d'entree obligatoire).
-- (l) "Organisation du depot" (lignes 339-354) : GARDE, mais peut etre raccourcie a la liste
-  de dossiers sans les descriptions (qui sont dans ARCHITECTURE.md section 13).
-- (m) "Validation (coeur)" (lignes 356-373) : DUPLIQUE GPU_RUNTIME_PORT.md. A raccourcir a
-  3-4 lignes + lien.
+- (g) Section "Backends" (lines 198-213): ARCHITECTURE.md section 9 content. To reduce to
+  2-3 lines + link.
+- (h) Section "Using the core" (lines 215-228): CMake snippet + PhysicalModel contract. To
+  keep in brief (it is the hook), but the detailed description (module table) is
+  in ARCHITECTURE.md.
+- (i) Section "Python module adc" (lines 230-302): very long. The essentials (add_block,
+  add_equation, AmrSystem example) stay in the README; the detail of each adder and the
+  advanced/legacy paths go in DSL_MODEL_DESIGN.md.
+- (j) Section "Ecosystem" (lines 304-312): KEEP here (this is navigation).
+- (k) "Build and tests" (lines 314-337): KEEP here (required entry point).
+- (l) "Repository organization" (lines 339-354): KEEP, but can be shortened to the folder
+  list without the descriptions (which are in ARCHITECTURE.md section 13).
+- (m) "Validation (core)" (lines 356-373): DUPLICATES GPU_RUNTIME_PORT.md. To shorten to
+  3-4 lines + link.
 
 ### 2.2 ARCHITECTURE.md
 
-Contient deja les sections justes (couches 1-5, seams, elliptique, AMR distribue, backends, carte
-des modules, arborescence detaillee). Chevauchements a corriger :
+Already contains the right sections (layers 1-5, seams, elliptic, distributed AMR, backends, module
+map, detailed tree). Overlaps to fix:
 
-- Section 1 et section 6 reprennent le tableau de modules que le README presente aussi (points
-  (b) et (i) ci-dessus). Apres raccourcissement du README, ces sections RESTENT dans ARCHITECTURE
-  et deviennent la source de verite unique.
-- Section 8 (AMR distribue) mentionne le regrid d'un niveau intermediaire comme cible ; cela
-  CHEVAUCHE AMR_MULTIBLOCK_DESIGN.md section 5 (algorithme de regrid). AMR_MULTIBLOCK_DESIGN est
-  la spec de conception ; ARCHITECTURE.md en donne l'etat courant. Garder les deux mais ajouter
-  un lien croise.
-- Section 11 (Validation) liste les tests ; DUPLIQUE partiellement GPU_RUNTIME_PORT.md (les
-  validations device). A reduire : garder la liste des ctests coeur et les chiffres CI ; renvoyer
-  vers GPU_RUNTIME_PORT.md pour les validations GH200.
-- Section 13 (arborescence detaillee) est exhaustive et NE DUPLIQUE PAS vraiment le README
-  (qui est moins detaille). OK en l'etat apres raccourcissement du README.
+- Section 1 and section 6 reuse the module table that the README also presents (points
+  (b) and (i) above). After shortening the README, these sections STAY in ARCHITECTURE
+  and become the single source of truth.
+- Section 8 (distributed AMR) mentions the regrid of an intermediate level as a target; this
+  OVERLAPS AMR_MULTIBLOCK_DESIGN.md section 5 (regrid algorithm). AMR_MULTIBLOCK_DESIGN is
+  the design spec; ARCHITECTURE.md gives its current status. Keep both but add
+  a cross-link.
+- Section 11 (Validation) lists the tests; partially DUPLICATES GPU_RUNTIME_PORT.md (the
+  device validations). To reduce: keep the list of core ctests and the CI numbers; refer
+  to GPU_RUNTIME_PORT.md for the GH200 validations.
+- Section 13 (detailed tree) is exhaustive and does NOT really DUPLICATE the README
+  (which is less detailed). OK as is after shortening the README.
 
 ### 2.3 ALGORITHMS.md
 
-Contient les methodes numeriques avec formules, code, validation. Chevauchements :
+Contains the numerical methods with formulas, code, validation. Overlaps:
 
-- Introduction (lignes 1-29) reprend le principe du coeur (equation + canal aux) deja dans
-  ARCHITECTURE.md section 2. A raccourcir a 3-4 lignes avec lien vers ARCHITECTURE.
-- Section 18 (composition runtime et systeme multi-especes) CHEVAUCHE DSL_MODEL_DESIGN.md
-  section 0bis et ARCHITECTURE.md section 10 (frontiere lib/application). A deplacer les
-  aspects "comment composer en Python" vers DSL_MODEL_DESIGN.md ; garder ici uniquement
-  le point de vue algorithmique (CoupledSystem, SystemCoupler, secondmembre).
-- Section 19 (DSL JIT/AOT) DUPLIQUE DSL_MODEL_DESIGN.md sections 0 et 7 (sequencement). Les
-  aspectscodegen + test (test_dynamic_model, test_block_builder, test_compiled_model_parity)
-  RESTENT dans ALGORITHMS ; les explications sur l'API Python et les backends vont vers
+- Introduction (lines 1-29) reuses the core principle (equation + aux channel) already in
+  ARCHITECTURE.md section 2. To shorten to 3-4 lines with a link to ARCHITECTURE.
+- Section 18 (runtime composition and multi-species system) OVERLAPS DSL_MODEL_DESIGN.md
+  section 0bis and ARCHITECTURE.md section 10 (lib/application boundary). To move the
+  "how to compose in Python" aspects to DSL_MODEL_DESIGN.md; keep here only
+  the algorithmic point of view (CoupledSystem, SystemCoupler, right-hand side).
+- Section 19 (DSL JIT/AOT) DUPLICATES DSL_MODEL_DESIGN.md sections 0 and 7 (sequencing). The
+  codegen + test aspects (test_dynamic_model, test_block_builder, test_compiled_model_parity)
+  STAY in ALGORITHMS; the explanations about the Python API and the backends go to
   DSL_MODEL_DESIGN.md.
-- Section 20 (seam dispatch) : contenu ARCHITECTURE.md section 4. A reduire a un lien.
+- Section 20 (seam dispatch): ARCHITECTURE.md section 4 content. To reduce to a link.
 
 ### 2.4 DSL_MODEL_DESIGN.md
 
-Document de spec/API (API Python, statut par phase). Chevauchements :
+Spec/API document (Python API, status by phase). Overlaps:
 
-- La section 0 (etat actuel) et 0bis (statut d'implementation) DUPLIQUENT le tableau "Quatre
-  chemins" du README (point (d) ci-dessus). Apres suppression du tableau du README, cette
-  section devient source unique.
-- La matrice de capacites (section 5) DUPLIQUE le tableau "Quatre chemins" du README. Source
-  unique : DSL_MODEL_DESIGN.md.
-- Les references de fichiers (python/system.cpp lignes) sont rapidement perimeees. A marquer
-  "indicatives" et a ne pas synchroniser a chaque PR.
+- Section 0 (current status) and 0bis (implementation status) DUPLICATE the "Four
+  paths" table of the README (point (d) above). After removing the README table, this
+  section becomes the single source.
+- The capability matrix (section 5) DUPLICATES the "Four paths" table of the README. Single
+  source: DSL_MODEL_DESIGN.md.
+- The file references (python/system.cpp lines) go stale quickly. To mark
+  "indicative" and not to sync on every PR.
 
 ### 2.5 GPU_RUNTIME_PORT.md
 
-Journal de validation GH200 par phases. Chevauchements :
+GH200 validation log by phase. Overlaps:
 
-- L'en-tete (lignes 1-13) reprend l'etat global deja dans README section "Validation (coeur)".
-  Apres raccourcissement du README, c'est GPU_RUNTIME_PORT.md qui reste source de verite.
-- Les phases 1-11 sont des resultats uniques (chiffres, bugs, harness). PAS de doublon.
-- La section "Validation device des features post-#48 (round 2)" et la section "Strategie
-  suggeree" n'ont pas de doublon ailleurs.
+- The header (lines 1-13) reuses the global status already in the README "Validation (core)" section.
+  After shortening the README, GPU_RUNTIME_PORT.md is the one that stays the source of truth.
+- Phases 1-11 are unique results (numbers, bugs, harness). NO duplicate.
+- The "Device validation of the post-#48 features (round 2)" section and the "Suggested
+  strategy" section have no duplicate elsewhere.
 
 ### 2.6 PAPER_ROADMAP.md
 
-Document science. Chevauchements :
+Science document. Overlaps:
 
-- Reprend l'etat des chemins GPU/MPI en production (section "Etat des chemins d'execution") :
-  DUPLIQUE GPU_RUNTIME_PORT.md (phases 7, 9, 10) et DSL_MODEL_DESIGN.md (section 0bis, SHIPPE).
-  A raccourcir a 4-5 lignes + lien.
-- La section "API publique recommandee" DUPLIQUE DSL_MODEL_DESIGN.md (section 0 + decisions
-  tranchees). A remplacer par un lien.
-- Les paniers 1-4 et le plan ordonne : contenu UNIQUE (science, verrou bord d'anneau). GARDE ici.
+- Reuses the status of the GPU/MPI paths in production (section "Status of the execution paths"):
+  DUPLICATES GPU_RUNTIME_PORT.md (phases 7, 9, 10) and DSL_MODEL_DESIGN.md (section 0bis, SHIPPED).
+  To shorten to 4-5 lines + link.
+- The "Recommended public API" section DUPLICATES DSL_MODEL_DESIGN.md (section 0 + settled
+  decisions). To replace with a link.
+- Baskets 1-4 and the ordered plan: UNIQUE content (science, ring-edge blocker). KEEP here.
 
 ### 2.7 COUPLER_HIERARCHY.md
 
-Reference exhaustive des coupleurs. Chevauchements :
+Exhaustive reference of the couplers. Overlaps:
 
-- Section 1 (arbre des coupleurs) CHEVAUCHE ARCHITECTURE.md section 5 (couche temps et
-  couplage). ARCHITECTURE.md en donne le principe, COUPLER_HIERARCHY.md les details. OK
-  en l'etat : les deux peuvent coexister avec une reference croisee.
-- Sections 2-11 (par coupleur) sont uniques (responsabilites, signatures, quand utiliser).
-  Pas de doublon.
+- Section 1 (coupler tree) OVERLAPS ARCHITECTURE.md section 5 (time and
+  coupling layer). ARCHITECTURE.md gives the principle, COUPLER_HIERARCHY.md the details. OK
+  as is: the two can coexist with a cross-reference.
+- Sections 2-11 (per coupler) are unique (responsibilities, signatures, when to use).
+  No duplicate.
 
 ### 2.8 SCHUR_CONDENSATION_DESIGN.md
 
-Spec de conception (design-only). Chevauchements :
+Design spec (design-only). Overlaps:
 
-- Introduction mentionne les sources lues (ARCHITECTURE, ALGORITHMS, PAPER_ROADMAP, etc.) :
-  OK, c'est un ancrage intentionnel, pas un doublon.
-- Section 9 (sequencement PR0-PR8) CHEVAUCHE le "Prochain verrou" de PAPER_ROADMAP.md, mais
-  chaque document a son angle (SCHUR = design algorithmique ; PAPER_ROADMAP = angle science).
-  Ajouter un lien croise suffit.
+- Introduction mentions the sources read (ARCHITECTURE, ALGORITHMS, PAPER_ROADMAP, etc.):
+  OK, this is an intentional anchoring, not a duplicate.
+- Section 9 (PR0-PR8 sequencing) OVERLAPS the "Next blocker" of PAPER_ROADMAP.md, but
+  each document has its own angle (SCHUR = algorithmic design; PAPER_ROADMAP = science angle).
+  Adding a cross-link is enough.
 
 ### 2.9 AMR_MULTIBLOCK_DESIGN.md
 
-Spec de conception Phase 1. Chevauchements :
+Phase 1 design spec. Overlaps:
 
-- Section 0 (note d'honnetete) et section 2.2 (roles exacts d'AmrSystemCoupler) reprennent
-  ARCHITECTURE.md section 8 (AMR distribue) et COUPLER_HIERARCHY.md section 6
-  (AmrSystemCoupler). C'est intentionnel (spec s'appuie sur le code existant). OK avec
-  references croisees.
-- Section 4 (decoupage en PR) est unique a ce document.
+- Section 0 (honesty note) and section 2.2 (exact roles of AmrSystemCoupler) reuse
+  ARCHITECTURE.md section 8 (distributed AMR) and COUPLER_HIERARCHY.md section 6
+  (AmrSystemCoupler). This is intentional (the spec builds on the existing code). OK with
+  cross-references.
+- Section 4 (split into PRs) is unique to this document.
 
 ### 2.10 PERFORMANCE.md
 
-Mesures de perf (methodologie CS:APP). Chevauchements :
+Perf measurements (CS:APP methodology). Overlaps:
 
-- Chapeau reprend que les mesures viennent d'adc_cases : OK (honnetete, pas un doublon).
-- Chiffres (OncePerStep, FFT vs MG, bench_amr) sont UNIQUES ici. Pas de doublon.
-- Note sur le scaling GH200 negatif (phrase finale) CHEVAUCHE GPU_RUNTIME_PORT.md phase 11.
-  A renvoyer vers GPU_RUNTIME_PORT.md pour les chiffres GPU.
+- The header reuses that the measurements come from adc_cases: OK (honesty, not a duplicate).
+- The numbers (OncePerStep, FFT vs MG, bench_amr) are UNIQUE here. No duplicate.
+- The note on the negative GH200 scaling (final sentence) OVERLAPS GPU_RUNTIME_PORT.md phase 11.
+  To refer to GPU_RUNTIME_PORT.md for the GPU numbers.
 
 ### 2.11 CHOICES.md
 
-Justifications des decisions (D-1 a D-7). PAS de doublon reel : ARCHITECTURE.md decrit l'etat,
-CHOICES.md explique le pourquoi. Garder les deux.
+Justifications of the decisions (D-1 to D-7). NO real duplicate: ARCHITECTURE.md describes the status,
+CHOICES.md explains the why. Keep both.
 
 ### 2.12 BIBLIOGRAPHY.md
 
-References uniquement. Pas de doublon (les citations apparaissent dans les autres docs comme
-ancres, la definition complete est ici). OK en l'etat.
+References only. No duplicate (the citations appear in the other docs as
+anchors, the full definition is here). OK as is.
 
 ---
 
-## 3. Matrice "ou vit chaque affirmation"
+## 3. Matrix "where each statement lives"
 
-| Affirmation / contenu | Actuellement dans | Source de verite cible |
+| Statement / content | Currently in | Target source of truth |
 |---|---|---|
-| Equation generique dU/dt + div F = S, D phi = f(U) | README, ARCHITECTURE, ALGORITHMS | ARCHITECTURE section 2 (principe) ; README 2-3 lignes |
-| Tableau des modules du coeur (PhysicalModel, assemble_rhs, GeometricMG...) | README + ARCHITECTURE | ARCHITECTURE section 6 uniquement |
-| Quatre chemins de modele (a)/(b)/(c)/(d) | README + DSL_MODEL_DESIGN | DSL_MODEL_DESIGN section 5 (matrice capacites) uniquement |
-| Limites actuelles (AmrSystem mono-bloc, fft refusee MPI, AmrSystem.potential() EN COURS) | README + DSL_MODEL_DESIGN 0bis | DSL_MODEL_DESIGN 0bis uniquement |
-| Exemple Python add_block multi-especes | README + DSL_MODEL_DESIGN | README (bref) + DSL_MODEL_DESIGN (detail) |
-| Etat de validation GH200 (phases 1-11, chiffres) | README "Validation" + GPU_RUNTIME_PORT | GPU_RUNTIME_PORT uniquement |
-| Backends CMake (ADC_USE_KOKKOS, ADC_USE_MPI...) | README + ARCHITECTURE | README (snippet CMake, 6 lignes) ; ARCHITECTURE section 9 (detail) |
-| Seam for_each_cell + device_fence | README + ARCHITECTURE + ALGORITHMS | ARCHITECTURE section 4 + ALGORITHMS section 20 (1 lien) |
-| Matrice de capacites backend (GPU/MPI/AMR par chemin) | DSL_MODEL_DESIGN section 5 | DSL_MODEL_DESIGN section 5 ET BACKEND_COVERAGE.md (a creer) |
-| Etat des chemins GPU/MPI production | README + PAPER_ROADMAP + DSL_MODEL_DESIGN + GPU_RUNTIME_PORT | GPU_RUNTIME_PORT uniquement, avec liens dans les autres |
-| API publique recommandee (add_block vs dsl.Model) | README + PAPER_ROADMAP + DSL_MODEL_DESIGN | DSL_MODEL_DESIGN "decisions tranchees" uniquement |
-| Verrou bord d'anneau cartesien, sweep O5 | PAPER_ROADMAP | PAPER_ROADMAP uniquement |
-| Formules SSPRK2/3, MUSCL, WENO5, multigrille | ALGORITHMS | ALGORITHMS uniquement |
-| Justification pile from scratch vs pde_core_cpp | CHOICES | CHOICES uniquement |
-| Perf : 86% elliptique, OncePerStep x2.6, FFT vs MG | PERFORMANCE | PERFORMANCE uniquement |
+| Generic equation dU/dt + div F = S, D phi = f(U) | README, ARCHITECTURE, ALGORITHMS | ARCHITECTURE section 2 (principle); README 2-3 lines |
+| Core module table (PhysicalModel, assemble_rhs, GeometricMG...) | README + ARCHITECTURE | ARCHITECTURE section 6 only |
+| Four model paths (a)/(b)/(c)/(d) | README + DSL_MODEL_DESIGN | DSL_MODEL_DESIGN section 5 (capability matrix) only |
+| Current limits (AmrSystem mono-block, fft refused with MPI, AmrSystem.potential() IN PROGRESS) | README + DSL_MODEL_DESIGN 0bis | DSL_MODEL_DESIGN 0bis only |
+| Python add_block multi-species example | README + DSL_MODEL_DESIGN | README (brief) + DSL_MODEL_DESIGN (detail) |
+| GH200 validation status (phases 1-11, numbers) | README "Validation" + GPU_RUNTIME_PORT | GPU_RUNTIME_PORT only |
+| CMake backends (ADC_USE_KOKKOS, ADC_USE_MPI...) | README + ARCHITECTURE | README (CMake snippet, 6 lines); ARCHITECTURE section 9 (detail) |
+| Seam for_each_cell + device_fence | README + ARCHITECTURE + ALGORITHMS | ARCHITECTURE section 4 + ALGORITHMS section 20 (1 link) |
+| Backend capability matrix (GPU/MPI/AMR per path) | DSL_MODEL_DESIGN section 5 | DSL_MODEL_DESIGN section 5 AND BACKEND_COVERAGE.md (to create) |
+| Status of the GPU/MPI production paths | README + PAPER_ROADMAP + DSL_MODEL_DESIGN + GPU_RUNTIME_PORT | GPU_RUNTIME_PORT only, with links in the others |
+| Recommended public API (add_block vs dsl.Model) | README + PAPER_ROADMAP + DSL_MODEL_DESIGN | DSL_MODEL_DESIGN "settled decisions" only |
+| Cartesian ring-edge blocker, O5 sweep | PAPER_ROADMAP | PAPER_ROADMAP only |
+| SSPRK2/3, MUSCL, WENO5, multigrid formulas | ALGORITHMS | ALGORITHMS only |
+| Justification from-scratch stack vs pde_core_cpp | CHOICES | CHOICES only |
+| Perf: 86% elliptic, OncePerStep x2.6, FFT vs MG | PERFORMANCE | PERFORMANCE only |
 
 ---
 
-## 4. Plan de raccourcissement du README
+## 4. README shortening plan
 
-### Principe
+### Principle
 
-Le README cible est un PORTAIL de navigation, pas une documentation technique. Cible : 120-150
-lignes (contre 373 actuelles), soit une reduction de 60-65%.
+The target README is a navigation PORTAL, not technical documentation. Target: 120-150
+lines (vs 373 today), i.e. a reduction of 60-65%.
 
-### Ce qui RESTE dans le README (vue d'ensemble + portail)
+### What STAYS in the README (overview + portal)
 
-1. Header (1-23) : titre, badge CI, GIF, legende. GARDE.
-2. Paragraph d'introduction (lignes 25-51) : quoi est adc_cpp, equation generique, canal aux,
-   agnostique au modele. RACCOURCI a 10-12 lignes (garder le coeur, supprimer les repetitions
-   du canal extensible).
-3. Tableau "Ce que fournit le coeur" : REMPLACE par 4-5 lignes + lien vers ARCHITECTURE.md
+1. Header (1-23): title, CI badge, GIF, caption. KEEP.
+2. Introduction paragraph (lines 25-51): what adc_cpp is, generic equation, aux channel,
+   model-agnostic. SHORTENED to 10-12 lines (keep the core, remove the repetitions
+   of the extensible channel).
+3. Table "What the core provides": REPLACED by 4-5 lines + link to ARCHITECTURE.md
    section 6.
-4. Section DSL : GARDE 8-10 lignes (concept + exemple minimal de 6 lignes) + lien vers
-   DSL_MODEL_DESIGN.md pour le detail et les chemins avances.
-5. Section multi-especes : RACCOURCI a 5-6 lignes + lien vers ARCHITECTURE.md section 5.
-6. Section Backends : RACCOURCI a CMake snippet (4 lignes) + lien vers ARCHITECTURE.md section 9.
-7. "Utiliser le coeur" : snippet FetchContent (6 lignes). GARDE.
-8. "Module Python adc" : RACCOURCI a l'exemple minimal add_block/set_poisson/step_cfl (12 lignes)
-   + breve description de AmrSystem + lien vers DSL_MODEL_DESIGN.md et ARCHITECTURE.md.
-9. "Ecosysteme" : GARDE (navigation, tableau 6 lignes).
-10. "Build et tests" : GARDE (snippet + tableau options CMake, ~15 lignes).
-11. "Organisation du depot" : RACCOURCI a la liste des dossiers (4-5 lignes), sans les
-    descriptions (qui sont dans ARCHITECTURE.md section 13).
-12. "Validation" : RACCOURCI a 4-5 lignes + lien vers GPU_RUNTIME_PORT.md.
+4. DSL section: KEEP 8-10 lines (concept + minimal example of 6 lines) + link to
+   DSL_MODEL_DESIGN.md for the detail and the advanced paths.
+5. Multi-species section: SHORTENED to 5-6 lines + link to ARCHITECTURE.md section 5.
+6. Backends section: SHORTENED to CMake snippet (4 lines) + link to ARCHITECTURE.md section 9.
+7. "Using the core": FetchContent snippet (6 lines). KEEP.
+8. "Python module adc": SHORTENED to the minimal example add_block/set_poisson/step_cfl (12 lines)
+   + brief description of AmrSystem + link to DSL_MODEL_DESIGN.md and ARCHITECTURE.md.
+9. "Ecosystem": KEEP (navigation, 6-line table).
+10. "Build and tests": KEEP (snippet + CMake options table, ~15 lines).
+11. "Repository organization": SHORTENED to the folder list (4-5 lines), without the
+    descriptions (which are in ARCHITECTURE.md section 13).
+12. "Validation": SHORTENED to 4-5 lines + link to GPU_RUNTIME_PORT.md.
 
-### Ce qui QUITTE le README
+### What LEAVES the README
 
-- Tableau detaille de 20 lignes "Ce que fournit le coeur" -> ARCHITECTURE.md section 6.
-- Tableau "Quatre chemins de modele" (10 lignes) -> DSL_MODEL_DESIGN.md section 5.
-- Section "Limites actuelles" (22 lignes) -> DSL_MODEL_DESIGN.md section 0bis.
-- Tableau multi-especes (12 lignes) -> ARCHITECTURE.md section 5 + lien.
-- Sous-section detail des adders (add_dynamic_block, add_compiled_block, etc.) -> DSL_MODEL_DESIGN.
-- Validation device detaillee (18 lignes) -> GPU_RUNTIME_PORT.md.
+- Detailed 20-line table "What the core provides" -> ARCHITECTURE.md section 6.
+- Table "Four model paths" (10 lines) -> DSL_MODEL_DESIGN.md section 5.
+- Section "Current limits" (22 lines) -> DSL_MODEL_DESIGN.md section 0bis.
+- Multi-species table (12 lines) -> ARCHITECTURE.md section 5 + link.
+- Adder detail subsection (add_dynamic_block, add_compiled_block, etc.) -> DSL_MODEL_DESIGN.
+- Detailed device validation (18 lines) -> GPU_RUNTIME_PORT.md.
 
-### Structure cible du README (ordre des sections, longueurs indicatives)
+### Target README structure (section order, indicative lengths)
 
 ```
 1. Header + GIF + legende         (15 lignes)
@@ -265,13 +265,13 @@ Total : ~120 lignes
 
 ---
 
-## 5. Document a creer : BACKEND_COVERAGE.md
+## 5. Document to create: BACKEND_COVERAGE.md
 
-Ce document n'existe pas encore. Il materialise la matrice de capacites de facon canonique,
-aujourd'hui dispersee entre README (tableau "Quatre chemins") et DSL_MODEL_DESIGN.md
-(section 5, matrice `_BACKEND_CAPS`).
+This document does not exist yet. It materializes the capability matrix in a canonical way,
+today scattered between the README (table "Four paths") and DSL_MODEL_DESIGN.md
+(section 5, matrix `_BACKEND_CAPS`).
 
-Contenu propose :
+Proposed content:
 
 ```
 | Chemin       | Adder Python         | CPU serie | MPI | AMR | GPU | zero-copie | Limites |
@@ -282,36 +282,36 @@ Contenu propose :
 | (b) prototype | add_dynamic_block   | oui       | non | non | non | non        | Rusanov ordre 1, hote |
 ```
 
-Chaque cellule ancre vers la source (DSL_MODEL_DESIGN, GPU_RUNTIME_PORT) pour le detail.
+Each cell anchors to the source (DSL_MODEL_DESIGN, GPU_RUNTIME_PORT) for the detail.
 
 ---
 
-## 6. Ordre de priorite des interventions
+## 6. Priority order of the interventions
 
-Classement par valeur / effort :
+Ranking by value / effort:
 
-1. (HAUTE VALEUR, FAIBLE EFFORT) Raccourcir README : supprimer les 4 sections identifiees
-   ci-dessus, ajouter des liens. Objectif 120-150 lignes. Aucun contenu perdu.
-2. (HAUTE VALEUR, FAIBLE EFFORT) Creer BACKEND_COVERAGE.md : materialize la matrice
-   (contenu deja present dans DSL_MODEL_DESIGN section 5).
-3. (VALEUR MOYENNE, EFFORT FAIBLE) Nettoyer les introductions ALGORITHMS.md et GPU_RUNTIME_PORT.md
-   (supprimer les duplications d'entree avec ARCHITECTURE et README).
-4. (VALEUR MOYENNE, EFFORT FAIBLE) Ajouter des liens croises entre SCHUR_CONDENSATION_DESIGN,
-   AMR_MULTIBLOCK_DESIGN et PAPER_ROADMAP (sections qui se referent mutuellement).
-5. (VALEUR FAIBLE, EFFORT ELEVE) Migration vers Sphinx/ReadTheDocs pour DSL_MODEL_DESIGN.md :
-   utile seulement si le public utilisateur de l'API grossit (hors stage).
+1. (HIGH VALUE, LOW EFFORT) Shorten README: remove the 4 sections identified
+   above, add links. Goal 120-150 lines. No content lost.
+2. (HIGH VALUE, LOW EFFORT) Create BACKEND_COVERAGE.md: materialize the matrix
+   (content already present in DSL_MODEL_DESIGN section 5).
+3. (MEDIUM VALUE, LOW EFFORT) Clean up the introductions of ALGORITHMS.md and GPU_RUNTIME_PORT.md
+   (remove the entry duplications with ARCHITECTURE and README).
+4. (MEDIUM VALUE, LOW EFFORT) Add cross-links between SCHUR_CONDENSATION_DESIGN,
+   AMR_MULTIBLOCK_DESIGN and PAPER_ROADMAP (sections that refer to each other).
+5. (LOW VALUE, HIGH EFFORT) Migration to Sphinx/ReadTheDocs for DSL_MODEL_DESIGN.md:
+   useful only if the API user audience grows (out of internship scope).
 
 ---
 
-## 7. Regles de maintenance futures
+## 7. Future maintenance rules
 
-Pour eviter que les doublons se reconstituent :
+To prevent the duplicates from reappearing:
 
-- Toute validation GH200 nouvelle -> GPU_RUNTIME_PORT.md uniquement. README pointe.
-- Toute evolution d'API Python -> DSL_MODEL_DESIGN.md section 0bis (SHIPPE/GAP). README ne
-  liste pas les limites.
-- Toute methode numerique nouvelle -> ALGORITHMS.md. Pas de formule dans le README.
-- Tout changement de schema de coupleur -> COUPLER_HIERARCHY.md. ARCHITECTURE.md decrit
-  le principe, pas les signatures.
-- Le tableau "Quatre chemins" (matrice capacites) vit dans BACKEND_COVERAGE.md. Les deux
-  autres docs qui le referenciaient pointent vers lui.
+- Any new GH200 validation -> GPU_RUNTIME_PORT.md only. README points.
+- Any Python API change -> DSL_MODEL_DESIGN.md section 0bis (SHIPPED/GAP). README does not
+  list the limits.
+- Any new numerical method -> ALGORITHMS.md. No formula in the README.
+- Any coupler schema change -> COUPLER_HIERARCHY.md. ARCHITECTURE.md describes
+  the principle, not the signatures.
+- The "Four paths" table (capability matrix) lives in BACKEND_COVERAGE.md. The two
+  other docs that referenced it point to it.

@@ -1,39 +1,39 @@
-# Audit perf scaling et frontends ADC - 2026-06-08
+# ADC perf scaling and frontends audit - 2026-06-08
 
-Audit redige le 2026-06-08 14:47 CEST.
+Audit written on 2026-06-08 14:47 CEST.
 
-But : definir une campagne reproductible pour mesurer le scaling CPU/GPU/MPI
-d'`adc_cpp`, et estimer ou se perd la performance entre C++ natif, Python
-briques natives et Python DSL `production`. Hoffart ne doit pas servir de cas
-benchmark principal ici : il reste un cas scientifique delicat, pas un banc de
-performance neutre.
+Goal: define a reproducible campaign to measure the CPU/GPU/MPI scaling of
+`adc_cpp`, and estimate where performance is lost between native C++, Python
+native bricks and Python DSL `production`. Hoffart must not serve as the main
+benchmark case here: it remains a delicate scientific case, not a neutral
+performance bench.
 
-Ce document est volontairement separe de `docs/PAPER_ROADMAP.md` et de
-`docs/HOFFART_GEOMETRY_VERDICT.md`. Il parle de couts runtime, de frontieres
-Python/C++, de scaling et d'instrumentation.
+This document is deliberately separated from `docs/PAPER_ROADMAP.md` and from
+`docs/HOFFART_GEOMETRY_VERDICT.md`. It deals with runtime costs, Python/C++
+boundaries, scaling and instrumentation.
 
-## 1. Etat Git fige
+## 1. Frozen Git status
 
-Les checkouts locaux sont en retard au moment de l'audit. Les mesures doivent
-donc etre etiquetees par commit exact et ne doivent pas melanger `HEAD` local,
-`origin/master` et branches de PR.
+The local checkouts are behind at audit time. Measurements must therefore
+be labeled by exact commit and must not mix local `HEAD`,
+`origin/master` and PR branches.
 
-| repo | local HEAD | origin/master | statut local |
+| repo | local HEAD | origin/master | local status |
 |---|---:|---:|---|
-| `adc_cpp` | `0187329` | `075255b` | local derriere `origin/master` de 18 commits |
-| `adc_cases` | `1affec1` | `6483e37` | local derriere `origin/master` de 16 commits |
+| `adc_cpp` | `0187329` | `075255b` | local behind `origin/master` by 18 commits |
+| `adc_cases` | `1affec1` | `6483e37` | local behind `origin/master` by 16 commits |
 
-Branches/PR ouvertes a isoler des mesures `master` :
+Open branches/PRs to isolate from `master` measurements:
 
-| repo | PR | branche | role perf/science |
+| repo | PR | branch | perf/science role |
 |---|---:|---|---|
-| `adc_cpp` | #239 | `feat/isothermal-hll-flux` | flux HLL pour modeles 3 variables ; peut changer cout transport et robustesse |
-| `adc_cpp` | #238 | `docs/hoffart-spatial-diagnostics` | documentation Hoffart ; hors benchmark perf neutre |
-| `adc_cpp` | #237 | `feat/gauss-policy` | politique de Gauss ; peut changer cout et dynamique des runs couples |
-| `adc_cpp` | #232 | `docs/amr-condensed-schur-design` | design Schur AMR ; pas une cible runtime a mesurer comme implementation |
-| `adc_cases` | #30 | `docs/hoffart-imre-case-verdict` | diagnostic Hoffart ; hors benchmark perf neutre |
+| `adc_cpp` | #239 | `feat/isothermal-hll-flux` | HLL flux for 3-variable models; may change transport cost and robustness |
+| `adc_cpp` | #238 | `docs/hoffart-spatial-diagnostics` | Hoffart documentation; outside neutral perf benchmark |
+| `adc_cpp` | #237 | `feat/gauss-policy` | Gauss policy; may change cost and dynamics of coupled runs |
+| `adc_cpp` | #232 | `docs/amr-condensed-schur-design` | AMR Schur design; not a runtime target to measure as an implementation |
+| `adc_cases` | #30 | `docs/hoffart-imre-case-verdict` | Hoffart diagnostic; outside neutral perf benchmark |
 
-Regle de publication : chaque tableau de perf doit commencer par :
+Publication rule: each perf table must begin with:
 
 ```text
 adc_cpp_commit=<sha>
@@ -46,25 +46,25 @@ machine=<CPU/GPU/node>
 case=<euler-periodic|poisson-mms|halo|amr-synthetic|frontend-euler>
 ```
 
-## 2. Verdict anti-MUFFIN
+## 2. Anti-MUFFIN verdict
 
-Le probleme signale par le tuteur sur MUFFIN est reel, mais il faut le nommer
-precisement : ce n'est pas seulement "des copies Python". Dans
-`alvarezlaguna/MUFFIN_Release`, plusieurs couts se superposent :
+The problem flagged by the supervisor about MUFFIN is real, but it must be named
+precisely: it is not only "Python copies". In
+`alvarezlaguna/MUFFIN_Release`, several costs add up:
 
-- stockage coeur dans des `py::array_t` (`Simulation1D.cpp`, `MeshData.hpp`) ;
-- callbacks Python dans des fonctions de modele (`PythonPhysicalModel.cpp`) ;
-- creation de vues NumPy par cellule via `CellDataRef::getView()` ;
-- callbacks Python de source et de condition limite (`PythonSourceTerm.cpp`,
-  `PythonBC.cpp`) ;
-- I/O HDF5 via Python (`h5py`) avec allocation NumPy et `memcpy` par sortie
-  (`DataWriter1DH5Py.cpp`) ;
-- solveur lineaire periodique passant par `numpy.linalg.solve`, avec copie de
-  matrice et de second membre (`ThomasAlgorithmPeriodic.cpp`) ;
-- `py::print` et retours d'arrays depuis la boucle de simulation
+- core storage in `py::array_t` (`Simulation1D.cpp`, `MeshData.hpp`);
+- Python callbacks in model functions (`PythonPhysicalModel.cpp`);
+- creation of NumPy views per cell via `CellDataRef::getView()`;
+- Python source and boundary condition callbacks (`PythonSourceTerm.cpp`,
+  `PythonBC.cpp`);
+- HDF5 I/O via Python (`h5py`) with NumPy allocation and `memcpy` per output
+  (`DataWriter1DH5Py.cpp`);
+- periodic linear solver going through `numpy.linalg.solve`, with copy of
+  matrix and right-hand side (`ThomasAlgorithmPeriodic.cpp`);
+- `py::print` and array returns from the simulation loop
   (`Simulation1D::simulate`, `advance_one`).
 
-Sources amont :
+Upstream sources:
 
 - https://github.com/alvarezlaguna/MUFFIN_Release/blob/main/src/PhysicalModel/PythonPhysicalModel.cpp
 - https://github.com/alvarezlaguna/MUFFIN_Release/blob/main/src/MeshData/CellDataRef.hpp
@@ -72,7 +72,7 @@ Sources amont :
 - https://github.com/alvarezlaguna/MUFFIN_Release/blob/main/src/LinearSolver/ThomasAlgorithmPeriodic.cpp
 - https://github.com/alvarezlaguna/MUFFIN_Release/blob/main/src/Simulation1D.cpp
 
-Le risque a auditer dans ADC est donc :
+The risk to audit in ADC is therefore:
 
 ```text
 cout catastrophique = callback Python par cellule/face
@@ -81,31 +81,31 @@ cout acceptable = appel pybind par macro-pas si le calcul reste C++
 cout acceptable = compilation DSL froide, si amortie par cache et run long
 ```
 
-Etat observe dans ADC au moment de l'audit :
+Status observed in ADC at audit time:
 
-- `include/adc/runtime/system.hpp` documente le contrat : Python compose, le
-  calcul cellule par cellule reste C++ compile ; aucun callback Python dans le
-  hot path, sauf integrateur custom via `eval_rhs/get_state/set_state`.
-- `python/bindings.cpp` expose `step` et `advance` directement. Les copies
-  visibles sont aux frontieres `set_*` (`flat(arr)`) et diagnostics
-  `get_state`, `density`, `potential` (`to_2d`, `to_3d` avec `memcpy`).
-- `python/adc/integrate.py` est le chemin a bannir des mesures production :
-  il appelle `eval_rhs`, `get_state`, `set_state` depuis Python et copie donc
-  des champs complets a chaque etage.
-- `python/adc/dsl.py` distingue `prototype`, `aot` et `production`. Pour les
-  mesures de production, il faut exiger `backend="production"` et verifier que
-  l'adder est `add_native_block`.
+- `include/adc/runtime/system.hpp` documents the contract: Python composes, the
+  cell-by-cell compute stays compiled C++; no Python callback in the
+  hot path, except custom integrator via `eval_rhs/get_state/set_state`.
+- `python/bindings.cpp` exposes `step` and `advance` directly. The visible
+  copies are at the `set_*` boundaries (`flat(arr)`) and diagnostics
+  `get_state`, `density`, `potential` (`to_2d`, `to_3d` with `memcpy`).
+- `python/adc/integrate.py` is the path to ban from production measurements:
+  it calls `eval_rhs`, `get_state`, `set_state` from Python and therefore copies
+  full fields at each stage.
+- `python/adc/dsl.py` distinguishes `prototype`, `aot` and `production`. For
+  production measurements, you must require `backend="production"` and check that
+  the adder is `add_native_block`.
 
-Verdict : ADC n'a pas, sur les chemins briques natives et DSL `production`, le
-profil MUFFIN "Python dans la boucle cellule". Les couts Python attendus sont
-principalement setup, compilation DSL, appel pybind par `step`, et copies de
-diagnostic. Le risque principal est l'usage accidentel d'un mauvais chemin
-(`integrate.py`, `eval_rhs` dans une boucle Python, DSL `aot/prototype`, ou
-diagnostics trop frequents).
+Verdict: ADC does not have, on the native bricks and DSL `production` paths, the
+MUFFIN profile "Python in the cell loop". The expected Python costs are
+mainly setup, DSL compilation, pybind call per `step`, and diagnostic copies.
+The main risk is the accidental use of a wrong path
+(`integrate.py`, `eval_rhs` in a Python loop, DSL `aot/prototype`, or
+diagnostics that are too frequent).
 
-## 3. Modele theorique de cout
+## 3. Theoretical cost model
 
-Le temps total doit etre modele ainsi :
+The total time must be modeled as follows:
 
 ```text
 T_total =
@@ -125,41 +125,41 @@ T_step =
 + T_py_boundary
 ```
 
-Interpretation :
+Interpretation:
 
-- C++ natif : `T_py_boundary = 0`.
-- Python briques natives avec `advance(dt, nsteps)` :
-  `T_py_boundary ~= un appel pybind pour tout le run`, donc amorti.
-- Python briques natives avec boucle `for step(dt)` :
-  `T_py_boundary ~= Nsteps * cout_pybind_step`. Le cout reste par pas, pas par
-  cellule.
-- Python DSL `production` warm cache :
-  `T_compile_dsl ~= 0`, puis meme hot path que `add_block`.
-- Python DSL `production` cold cache :
-  `T_compile_dsl` peut dominer un petit run, mais doit disparaitre dans un run
-  long ou cache.
-- Python DSL `aot` :
-  marshaling de tableaux plats, pas MPI/AMR, pas zero-copie ; utile comme
-  contre-exemple, pas comme cible.
-- Python `integrate.py` :
-  copies full-array par etage. A traiter comme baseline "mauvais usage" et non
-  comme performance ADC production.
+- Native C++: `T_py_boundary = 0`.
+- Python native bricks with `advance(dt, nsteps)`:
+  `T_py_boundary ~= un appel pybind pour tout le run`, hence amortized.
+- Python native bricks with `for step(dt)` loop:
+  `T_py_boundary ~= Nsteps * cout_pybind_step`. The cost remains per step, not per
+  cell.
+- Python DSL `production` warm cache:
+  `T_compile_dsl ~= 0`, then same hot path as `add_block`.
+- Python DSL `production` cold cache:
+  `T_compile_dsl` may dominate a small run, but must disappear in a long
+  run or cache.
+- Python DSL `aot`:
+  flat-array marshaling, no MPI/AMR, no zero-copy; useful as a
+  counter-example, not as a target.
+- Python `integrate.py`:
+  full-array copies per stage. To be treated as a "bad usage" baseline and not
+  as ADC production performance.
 
-Ordres de grandeur utiles avant mesure :
+Useful orders of magnitude before measurement:
 
-- Un callback Python par cellule/face est incompatible avec GPU/MPI performant.
-  Meme `1 us` par callback donne deja environ `1 s` pour `10^6` appels.
-- Une copie host d'un etat Euler `4*n*n*8` vaut `32 MiB` a `n=1024`. Le minimum
-  bande passante peut etre sub-ms sur CPU, mais allocation NumPy, GIL, cache et
-  synchronisation GPU peuvent la rendre bien plus chere.
-- Une lecture hote sur GPU peut forcer un `Kokkos::fence` ou une migration de
-  memoire unifiee. Il faut donc mesurer diagnostics avec et sans extraction.
-- Le cout pybind par appel `step` ne doit pas apparaitre dans le profil par
-  phase C++ ; il doit etre mesure par comparaison `advance` vs boucle Python.
+- A Python callback per cell/face is incompatible with performant GPU/MPI.
+  Even `1 us` per callback already gives about `1 s` for `10^6` calls.
+- A host copy of an Euler state `4*n*n*8` is `32 MiB` at `n=1024`. The minimum
+  bandwidth may be sub-ms on CPU, but NumPy allocation, GIL, cache and
+  GPU synchronization can make it much more expensive.
+- A host read on GPU can force a `Kokkos::fence` or a unified-memory
+  migration. Diagnostics must therefore be measured with and without extraction.
+- The pybind cost per `step` call must not appear in the per-phase C++ profile;
+  it must be measured by comparing `advance` vs Python loop.
 
-## 4. Cas de benchmark neutres
+## 4. Neutral benchmark cases
 
-Cas principal, frontends :
+Main case, frontends:
 
 ```text
 case=frontend-euler-periodic
@@ -170,29 +170,29 @@ dt=fixe pour comparer step/advance, pas step_cfl pour la comparaison frontend
 diagnostics=off pendant la boucle, extraction finale separee
 ```
 
-Cas kernels isoles :
+Isolated kernel cases:
 
-| case | objectif | source actuelle |
+| case | objective | current source |
 |---|---|---|
-| `transport-fv` | cout kernel transport pur | a extraire de `tests/test_mpi_mbox_parity.cpp` ou d'un futur bench dedie |
-| `poisson-mms` | cout solve elliptique controle | tests Poisson MMS et `GeometricMG` |
-| `halo-mpi` | cout halos seuls | `python/tests/gpu/mpi6_fillboundary.cpp` |
-| `reduction` | cout reductions globales | `MultiFab` reductions / `profile_step` |
-| `amr-synthetic` | scaling AMR hors Hoffart | `python/tests/gpu/amrmpi_integrated.cpp` |
+| `transport-fv` | pure transport kernel cost | to be extracted from `tests/test_mpi_mbox_parity.cpp` or a future dedicated bench |
+| `poisson-mms` | controlled elliptic solve cost | Poisson MMS tests and `GeometricMG` |
+| `halo-mpi` | halos-only cost | `python/tests/gpu/mpi6_fillboundary.cpp` |
+| `reduction` | global reductions cost | `MultiFab` reductions / `profile_step` |
+| `amr-synthetic` | AMR scaling outside Hoffart | `python/tests/gpu/amrmpi_integrated.cpp` |
 
-Cas existant a ne pas utiliser comme benchmark principal :
+Existing case not to be used as main benchmark:
 
-- `bench/profile_step.cpp` : utile pour breakdown phase, mais son modele est
-  ExB/diocotron et la decomposition MPI est mono-box dans le style `System`.
-  Il ne doit pas etre vendu comme strong/weak scaling distribue general.
+- `bench/profile_step.cpp`: useful for phase breakdown, but its model is
+  ExB/diocotron and the MPI decomposition is mono-box in the `System` style.
+  It must not be sold as general distributed strong/weak scaling.
 
-## 5. Campagne scaling
+## 5. Scaling campaign
 
 ### Strong scaling
 
-Definition : taille globale fixe, ressources croissantes.
+Definition: fixed global size, growing resources.
 
-CPU on-node :
+CPU on-node:
 
 ```text
 backend=kokkos-openmp
@@ -202,7 +202,7 @@ OMP_PLACES=cores
 KOKKOS_NUM_THREADS=<threads>
 ```
 
-MPI + Kokkos CPU :
+MPI + Kokkos CPU:
 
 ```text
 backend=mpi+kokkos-openmp
@@ -212,7 +212,7 @@ conserver ranks*threads <= coeurs physiques
 ne pas utiliser Kokkos Serial comme cible perf
 ```
 
-GPU :
+GPU:
 
 ```text
 backend=kokkos-cuda
@@ -222,7 +222,7 @@ np=1,2,4,... avec un GPU par rang
 srun -n <np> --gpus-per-task=1
 ```
 
-Metriques :
+Metrics:
 
 ```text
 per_step_ms = temps mur max sur rangs / pas mesures
@@ -232,12 +232,12 @@ efficiency(np) = speedup(np) / np
 
 ### Weak scaling
 
-Definition : taille locale fixe, taille globale croissante.
+Definition: fixed local size, growing global size.
 
-Pour un domaine carre, prendre `n_global = n_local * sqrt(np)` quand `np` est
-un carre parfait. Sinon imposer une decomposition rectangulaire documentee.
+For a square domain, take `n_global = n_local * sqrt(np)` when `np` is
+a perfect square. Otherwise impose a documented rectangular decomposition.
 
-Metriques :
+Metrics:
 
 ```text
 weak_eff(np) = per_step_ms(np=1) / per_step_ms(np)
@@ -246,46 +246,46 @@ communication_pct = (halos + reductions + fences MPI) / total
 
 ### AMR
 
-Le seul cas AMR a utiliser pour la perf neutre est synthetique, pas Hoffart.
-`python/tests/gpu/amrmpi_integrated.cpp` mesure deja un cas quatre bulles
-Euler-Poisson AMR et compare grossier replique vs reparti.
+The only AMR case to use for neutral perf is synthetic, not Hoffart.
+`python/tests/gpu/amrmpi_integrated.cpp` already measures a four-bubble
+Euler-Poisson AMR case and compares coarse replicated vs distributed.
 
-Resultat deja documente dans `docs/GPU_RUNTIME_PORT.md` : a petite echelle
-GH200, le strong scaling AMR par grossier reparti est negatif. Ce resultat ne
-doit pas etre cache : distribuer un grossier trop petit economise peu de calcul
-et ajoute beaucoup de latence MPI/MG.
+Result already documented in `docs/GPU_RUNTIME_PORT.md`: at small scale on
+GH200, the strong scaling of AMR by distributed coarse is negative. This result must
+not be hidden: distributing a too-small coarse saves little compute
+and adds a lot of MPI/MG latency.
 
-## 6. Campagne frontends C++ vs Python
+## 6. C++ vs Python frontends campaign
 
-Executer exactement le meme cas Euler periodique lisse en trois variantes :
+Run exactly the same smooth periodic Euler case in three variants:
 
-1. `cpp-native` : C++ natif, sans Python.
-2. `python-bricks` : `adc.Model(FluidState, CompressibleFlux, NoSource, ...)`.
-3. `python-dsl-production` : `dsl.Model(...).compile(backend="production")`.
+1. `cpp-native`: native C++, without Python.
+2. `python-bricks`: `adc.Model(FluidState, CompressibleFlux, NoSource, ...)`.
+3. `python-dsl-production`: `dsl.Model(...).compile(backend="production")`.
 
-Controles obligatoires :
+Required controls:
 
 - `python-dsl-production.compiled.adder == "add_native_block"`.
 - `compiled.backend == "production"`.
-- `compiled.target == "system"` pour uniforme, `"amr_system"` seulement pour AMR.
-- Aucun appel `eval_rhs/get_state/set_state` dans la boucle mesuree.
-- Mesurer `advance(dt, nsteps)` et la boucle Python `for step(dt)` separement.
-- Mesurer `get_state` final dans une phase `extract_final`, pas dans `step`.
-- Vider ou isoler `ADC_CACHE_DIR` pour la mesure cold compile, puis refaire
-  warm cache avec le meme modele.
+- `compiled.target == "system"` for uniform, `"amr_system"` only for AMR.
+- No `eval_rhs/get_state/set_state` call in the measured loop.
+- Measure `advance(dt, nsteps)` and the Python `for step(dt)` loop separately.
+- Measure final `get_state` in an `extract_final` phase, not in `step`.
+- Clear or isolate `ADC_CACHE_DIR` for the cold compile measurement, then redo
+  warm cache with the same model.
 
-Table cible :
+Target table:
 
 | frontend | setup_ms | compile_ms | advance_ms | python_step_loop_ms | extract_ms | notes |
 |---|---:|---:|---:|---:|---:|---|
-| C++ natif | | | | n/a | | reference |
-| Python briques | | 0 | | | | `ModelSpec` natif |
+| native C++ | | | | n/a | | reference |
+| Python bricks | | 0 | | | | native `ModelSpec` |
 | Python DSL production cold | | | | | | compile + run |
 | Python DSL production warm | | ~0 | | | | cache hit |
-| Python DSL aot | | | | | | contre-exemple |
-| Python custom integrate | | 0 | n/a | | | mauvais usage controle |
+| Python DSL aot | | | | | | counter-example |
+| Python custom integrate | | 0 | n/a | | | controlled bad usage |
 
-Ratios a publier :
+Ratios to publish:
 
 ```text
 R_bricks_hot = python_bricks.advance_ms / cpp_native.advance_ms
@@ -295,20 +295,20 @@ R_dsl_cold_warm = dsl_cold_total_ms / dsl_warm_total_ms
 R_extract = extract_ms / advance_ms
 ```
 
-Interpretation attendue :
+Expected interpretation:
 
-- `R_bricks_hot` et `R_dsl_hot` proches de 1 si le hot path est bien natif.
-- Si `R_step_boundary` est eleve, recommander `advance(dt, nsteps)` pour les
-  runs longs depuis Python.
-- Si `R_extract` est eleve sur GPU, reduire les diagnostics hote ou les faire
-  cote device/reduction.
+- `R_bricks_hot` and `R_dsl_hot` close to 1 if the hot path is properly native.
+- If `R_step_boundary` is high, recommend `advance(dt, nsteps)` for
+  long runs from Python.
+- If `R_extract` is high on GPU, reduce host diagnostics or do them
+  on the device/reduction side.
 
-## 7. Graphes a produire
+## 7. Graphs to produce
 
-Les graphes ne doivent etre produits qu'a partir de CSV de campagne, jamais a
-partir de valeurs inventees.
+The graphs must only be produced from campaign CSVs, never from
+invented values.
 
-Fichiers resultats recommandes :
+Recommended result files:
 
 ```text
 bench/results/perf_scaling_master_<sha>.csv
@@ -316,27 +316,27 @@ bench/results/perf_frontends_master_<sha>.csv
 bench/results/perf_phases_master_<sha>.csv
 ```
 
-Colonnes minimales `perf_scaling` :
+Minimal `perf_scaling` columns:
 
 ```text
 commit,repo,case,scaling,backend,machine,np,threads,gpus,n_global,n_local,steps,warmup,
 wall_s,per_step_ms,speedup,efficiency,notes
 ```
 
-Colonnes minimales `perf_frontends` :
+Minimal `perf_frontends` columns:
 
 ```text
 commit,case,frontend,backend,n,steps,dt,cache_state,setup_ms,compile_ms,
 advance_ms,step_loop_ms,extract_ms,total_ms,ratio_vs_cpp,notes
 ```
 
-Colonnes minimales `perf_phases` :
+Minimal `perf_phases` columns:
 
 ```text
 commit,case,backend,np,threads,n,steps,phase,total_s,per_step_ms,pct
 ```
 
-Graphes obligatoires :
+Required graphs:
 
 - `strong_scaling_speedup.png`
 - `strong_scaling_efficiency.png`
@@ -346,97 +346,97 @@ Graphes obligatoires :
 - `dsl_cold_warm.png`
 - `diagnostics_io_impact.png`
 
-Script de tracage ajoute :
+Plotting script added:
 
 ```bash
 python3 bench/plot_perf_campaign.py --results-dir bench/results --out-dir docs/perf_figures
 ```
 
-Le script lit `perf_scaling*.csv`, `perf_frontends*.csv` et
-`perf_phases*.csv`. Il saute les graphes dont les donnees manquent ; il ne
-genere jamais de valeurs synthetiques.
+The script reads `perf_scaling*.csv`, `perf_frontends*.csv` and
+`perf_phases*.csv`. It skips graphs whose data is missing; it never
+generates synthetic values.
 
-## 8. Recommandations
+## 8. Recommendations
 
-1. Ne pas utiliser Hoffart pour conclure sur C++ vs Python.
-2. Ne pas utiliser `bench/profile_step` comme preuve de strong scaling MPI : il
-   profile un pas mono-box representatif de `System`, pas une charge repartie.
-3. Pour les frontends, faire de `advance(dt, nsteps)` la mesure primaire et de
-   `for step(dt)` une mesure de cout de frontiere pybind.
-4. Pour le DSL, publier separement cold compile, warm cache et hot loop.
-5. Bannir `python/adc/integrate.py` des chiffres production ; le garder comme
-   anti-exemple chiffre.
-6. Sur GPU, mettre les diagnostics dans leur propre phase : toute extraction
-   hote peut cacher un `fence` ou une migration de memoire unifiee.
-7. Pour MPI + GPU, publier le temps max sur rangs, pas la moyenne.
-8. Pour AMR, commencer par le cas synthetique quatre bulles et documenter le
-   mode grossier replique/reparti.
-9. Toute PR ouverte doit etre mesuree comme variante explicite, jamais melee a
+1. Do not use Hoffart to conclude on C++ vs Python.
+2. Do not use `bench/profile_step` as proof of MPI strong scaling: it
+   profiles a representative mono-box step of `System`, not a distributed load.
+3. For frontends, make `advance(dt, nsteps)` the primary measurement and
+   `for step(dt)` a measurement of the pybind boundary cost.
+4. For the DSL, publish cold compile, warm cache and hot loop separately.
+5. Ban `python/adc/integrate.py` from production numbers; keep it as
+   a quantified anti-example.
+6. On GPU, put diagnostics in their own phase: any host
+   extraction may hide a `fence` or a unified-memory migration.
+7. For MPI + GPU, publish the max time over ranks, not the mean.
+8. For AMR, start with the synthetic four-bubble case and document the
+   coarse replicated/distributed mode.
+9. Any open PR must be measured as an explicit variant, never mixed with
    `master`.
 
-## 9. Critere d'acceptation de la campagne
+## 9. Campaign acceptance criterion
 
-La campagne est exploitable seulement si elle permet de repondre a ces
-questions :
+The campaign is usable only if it lets us answer these
+questions:
 
-- Le hot loop Python briques est-il a parite avec C++ natif ?
-- Le hot loop DSL `production` warm cache est-il a parite avec C++ natif ?
-- Quelle part du surcout vient de `step` appele depuis Python au lieu de
-  `advance` ?
-- Quelle part vient des copies `set_state/get_state/density/potential` ?
-- Quelle part vient de Poisson, halos, reductions et fences ?
-- Le scaling weak degrade-t-il par communication ou par kernel local ?
-- Le scaling strong AMR est-il limite par grossier replique, grossier reparti,
-  MG multi-box, regrid ou diagnostics ?
+- Is the Python bricks hot loop at parity with native C++?
+- Is the DSL `production` warm cache hot loop at parity with native C++?
+- What share of the overhead comes from `step` called from Python instead of
+  `advance`?
+- What share comes from the `set_state/get_state/density/potential` copies?
+- What share comes from Poisson, halos, reductions and fences?
+- Does weak scaling degrade through communication or through local kernel?
+- Is AMR strong scaling limited by coarse replicated, coarse distributed,
+  multi-box MG, regrid or diagnostics?
 
-Tant que ces questions n'ont pas de tableau chiffre, ne pas annoncer de gain ou
-de perte definitive C++ vs Python.
+Until these questions have a quantified table, do not announce a definitive gain or
+loss of C++ vs Python.
 
-## 10. Resultats ROMEO du 2026-06-08
+## 10. ROMEO results of 2026-06-08
 
-Cette section ajoute les premiers runs lances sur ROMEO le 2026-06-08. Elle ne
-remplace pas le protocole ci-dessus : elle donne un etat mesure, avec ses
-limites.
+This section adds the first runs launched on ROMEO on 2026-06-08. It does not
+replace the protocol above: it gives a measured status, with its
+limits.
 
-### 10.1 Etat Git et jobs
+### 10.1 Git status and jobs
 
-Les runs scaling ont ete figes sur :
+The scaling runs were frozen on:
 
 ```text
 adc_cpp=1f9fb4a
 adc_cases=b8bccbe
 ```
 
-Pendant le rattrapage frontend, `origin/master` de `adc_cpp` a avance vers
-`0c3eae1`, puis vers `adde23b` pendant le rattrapage transport multi-box.
-Les resultats ci-dessous restent donc volontairement rattaches a
-`1f9fb4a` pour ne pas melanger les commits.
+During the frontend catch-up, `origin/master` of `adc_cpp` advanced to
+`0c3eae1`, then to `adde23b` during the multi-box transport catch-up.
+The results below therefore remain deliberately tied to
+`1f9fb4a` so as not to mix commits.
 
-Jobs ROMEO :
+ROMEO jobs:
 
-| job | cible | statut | temps | remarque |
+| job | target | status | time | remark |
 |---:|---|---|---:|---|
-| `647780` | CPU `x64cpu`, OpenMP + MPI/OpenMP | `COMPLETED` | `00:17:51` | scaling CPU + C++ frontend |
-| `647781` | GPU `armgpu`, CUDA + MPI/CUDA | `COMPLETED` | `00:13:32` | scaling GPU + AMR synthetique |
-| `647809` | rattrapage frontend CPU | `FAILED` | `00:00:10` | harness Python absent |
-| `647813` | rattrapage frontend CPU | `CANCELLED` | `00:03:23` | annule pour eviter un build C++ inutile |
-| `647815` | frontend CPU Python-only, Kokkos PIC | `COMPLETED` | `00:03:55` | Python briques + DSL production |
+| `647780` | CPU `x64cpu`, OpenMP + MPI/OpenMP | `COMPLETED` | `00:17:51` | CPU scaling + C++ frontend |
+| `647781` | GPU `armgpu`, CUDA + MPI/CUDA | `COMPLETED` | `00:13:32` | GPU scaling + synthetic AMR |
+| `647809` | CPU frontend catch-up | `FAILED` | `00:00:10` | Python harness missing |
+| `647813` | CPU frontend catch-up | `CANCELLED` | `00:03:23` | cancelled to avoid a useless C++ build |
+| `647815` | CPU Python-only frontend, Kokkos PIC | `COMPLETED` | `00:03:55` | Python bricks + DSL production |
 
-Resultats locaux :
+Local results:
 
 ```text
 bench/romeo_results_final_647780_647781_647815/
 docs/perf_figures_647780_647781_647815/
 ```
 
-Resultats ROMEO :
+ROMEO results:
 
 ```text
 /home/rmdraux/adc_perf_20260608/results/
 /home/rmdraux/adc_perf_20260608/logs/
 ```
 
-Graphes generes :
+Generated graphs:
 
 - `docs/perf_figures_647780_647781_647815/strong_scaling_speedup.png`
 - `docs/perf_figures_647780_647781_647815/strong_scaling_efficiency.png`
@@ -446,7 +446,7 @@ Graphes generes :
 - `docs/perf_figures_647780_647781_647815/dsl_cold_warm.png`
 - `docs/perf_figures_647780_647781_647815/diagnostics_io_impact.png`
 
-Graphes finaux apres rattrapages `647836` et `647848` :
+Final graphs after catch-ups `647836` and `647848`:
 
 - `docs/perf_figures_647780_647781_647815_647836_647848/strong_scaling_speedup.png`
 - `docs/perf_figures_647780_647781_647815_647836_647848/strong_scaling_efficiency.png`
@@ -456,109 +456,109 @@ Graphes finaux apres rattrapages `647836` et `647848` :
 - `docs/perf_figures_647780_647781_647815_647836_647848/dsl_cold_warm.png`
 - `docs/perf_figures_647780_647781_647815_647836_647848/diagnostics_io_impact.png`
 
-### 10.2 Verrou observe : Poisson domine
+### 10.2 Observed blocker: Poisson dominates
 
-Sur `bench/profile_step`, le temps est presque entierement dans Poisson :
+On `bench/profile_step`, the time is almost entirely in Poisson:
 
-| backend | ressources | n | per_step_ms | part Poisson |
+| backend | resources | n | per_step_ms | Poisson share |
 |---|---:|---:|---:|---:|
-| `kokkos-openmp` | 1 rang, 1 thread | 256 | 194.19 | 96.5 % |
-| `kokkos-openmp` | 1 rang, 8 threads | 256 | 347.04 | 99.0 % |
-| `mpi+kokkos-openmp` | 1 rang, 4 threads | 256 | 183.15 | 98.8 % |
-| `mpi+kokkos-openmp` | 8 rangs, 4 threads/rang | 256 | 4313.26 | 95.7 % |
+| `kokkos-openmp` | 1 rank, 1 thread | 256 | 194.19 | 96.5 % |
+| `kokkos-openmp` | 1 rank, 8 threads | 256 | 347.04 | 99.0 % |
+| `mpi+kokkos-openmp` | 1 rank, 4 threads | 256 | 183.15 | 98.8 % |
+| `mpi+kokkos-openmp` | 8 ranks, 4 threads/rank | 256 | 4313.26 | 95.7 % |
 | `kokkos-cuda` | 1 GPU | 256 | 238.38 | 99.1 % |
 | `mpi+kokkos-cuda` | 4 GPU | 256 | 292.73 | 98.8 % |
 
-Interpretation : cette campagne mesure surtout le solveur elliptique et les
-reductions associees. Elle ne suffit pas a conclure sur le cout du transport FV
-pur. Le prochain bench doit isoler transport, Poisson, halos et reductions.
+Interpretation: this campaign mainly measures the elliptic solver and the
+associated reductions. It is not enough to conclude on the cost of pure FV
+transport. The next bench must isolate transport, Poisson, halos and reductions.
 
-### 10.3 Strong scaling CPU/GPU
+### 10.3 CPU/GPU strong scaling
 
-CPU OpenMP, taille globale `n=256` :
+CPU OpenMP, global size `n=256`:
 
-| backend | ressources | per_step_ms |
+| backend | resources | per_step_ms |
 |---|---:|---:|
 | `kokkos-openmp` | 1 thread | 194.19 |
 | `kokkos-openmp` | 2 threads | 855.31 |
 | `kokkos-openmp` | 4 threads | 576.57 |
 | `kokkos-openmp` | 8 threads | 347.04 |
 
-MPI + OpenMP, taille globale `n=256`, `threads=4` par rang :
+MPI + OpenMP, global size `n=256`, `threads=4` per rank:
 
-| backend | rangs | per_step_ms |
+| backend | ranks | per_step_ms |
 |---|---:|---:|
 | `mpi+kokkos-openmp` | 1 | 183.15 |
 | `mpi+kokkos-openmp` | 2 | 474.94 |
 | `mpi+kokkos-openmp` | 4 | 2722.01 |
 | `mpi+kokkos-openmp` | 8 | 4313.26 |
 
-GPU, taille globale `n=256` :
+GPU, global size `n=256`:
 
-| backend | GPU/rangs | per_step_ms |
+| backend | GPU/ranks | per_step_ms |
 |---|---:|---:|
 | `kokkos-cuda` | 1 | 238.38 |
 | `mpi+kokkos-cuda` | 1 | 234.06 |
 | `mpi+kokkos-cuda` | 2 | 284.61 |
 | `mpi+kokkos-cuda` | 4 | 292.73 |
 
-Conclusion limitee : `n=256` est trop petit et trop Poisson-dominant pour
-montrer un scaling positif. Le resultat utile est negatif mais informatif :
-augmenter les rangs ajoute plus de couts de solveur/reductions/coordination
-qu'il ne retire de calcul local.
+Limited conclusion: `n=256` is too small and too Poisson-dominant to
+show a positive scaling. The useful result is negative but informative:
+increasing ranks adds more solver/reductions/coordination costs
+than it removes of local compute.
 
-### 10.4 Weak scaling : smoke-test seulement
+### 10.4 Weak scaling: smoke-test only
 
-Les lignes weak lancees dans ce premier job utilisent `n = 128*np`. Ce n'est
-pas encore le weak scaling canonique recommande plus haut
-(`n_global = n_local*sqrt(np)` pour garder la taille locale constante en 2D).
-Elles doivent donc etre lues comme smoke-test, pas comme courbe weak finale.
+The weak lines launched in this first job use `n = 128*np`. This is
+not yet the canonical weak scaling recommended above
+(`n_global = n_local*sqrt(np)` to keep the local size constant in 2D).
+They must therefore be read as a smoke-test, not as a final weak curve.
 
-| backend | ressources | n | per_step_ms |
+| backend | resources | n | per_step_ms |
 |---|---:|---:|---:|
-| `mpi+kokkos-openmp` | 1 rang, 4 threads | 128 | 59.60 |
-| `mpi+kokkos-openmp` | 4 rangs, 4 threads/rang | 512 | 8414.39 |
+| `mpi+kokkos-openmp` | 1 rank, 4 threads | 128 | 59.60 |
+| `mpi+kokkos-openmp` | 4 ranks, 4 threads/rank | 512 | 8414.39 |
 | `mpi+kokkos-cuda` | 1 GPU | 128 | 219.76 |
 | `mpi+kokkos-cuda` | 4 GPU | 512 | 328.74 |
 
-Action : relancer un vrai weak scaling avec decomposition 2D et taille locale
-fixe par rang/GPU.
+Action: relaunch a real weak scaling with 2D decomposition and local size
+fixed per rank/GPU.
 
-### 10.5 AMR synthetique GPU
+### 10.5 Synthetic AMR GPU
 
-`amrmpi_integrated` a ete lance sur GH200 en `np=1,2,4`. Les diagnostics
-`cmax_crossrank_spread=0.0` et la conservation de masse montrent que le test
-reste coherent numeriquement.
+`amrmpi_integrated` was launched on GH200 in `np=1,2,4`. The diagnostics
+`cmax_crossrank_spread=0.0` and the mass conservation show that the test
+remains numerically coherent.
 
-| mode AMR | GPU/rangs | per_step_ms | observation |
+| AMR mode | GPU/ranks | per_step_ms | observation |
 |---|---:|---:|---|
 | `replique` | 1 | 216.37 | reference |
-| `replique` | 2 | 273.15 | scaling negatif |
+| `replique` | 2 | 273.15 | negative scaling |
 | `replique` | 4 | 272.66 | plateau |
-| `reparti` | 1 | 696.85 | deja plus cher que replique |
-| `reparti` | 2 | 1014.36 | degrade |
-| `reparti` | 4 | 1373.70 | degrade |
+| `reparti` | 1 | 696.85 | already more expensive than replicated |
+| `reparti` | 2 | 1014.36 | degraded |
+| `reparti` | 4 | 1373.70 | degraded |
 
-Conclusion : sur ce petit cas AMR, distribuer le grossier ne paie pas. C'est
-un resultat coherent avec le risque annonce : le cout de coordination/MG domine
-le calcul economise.
+Conclusion: on this small AMR case, distributing the coarse does not pay. This is
+a result consistent with the announced risk: the coordination/MG cost dominates
+the saved compute.
 
-### 10.6 Frontends C++ vs Python
+### 10.6 C++ vs Python frontends
 
-Le premier build Python a echoue avec la Kokkos OpenMP existante :
+The first Python build failed with the existing Kokkos OpenMP:
 
 ```text
 relocation R_X86_64_32 ... libkokkoscore.a ... recompile with -fPIC
 ```
 
-Correction de campagne : construire une Kokkos OpenMP PIC dediee dans
-`/home/rmdraux/adc_perf_20260608/kinstall_omp_pic`, puis relancer seulement le
-frontend Python sur le meme commit `1f9fb4a`.
+Campaign correction: build a dedicated PIC Kokkos OpenMP in
+`/home/rmdraux/adc_perf_20260608/kinstall_omp_pic`, then relaunch only the
+Python frontend on the same commit `1f9fb4a`.
 
-Les lignes C++ natives viennent du job `647780`; les lignes Python viennent du
-job `647815`. Les ratios doivent donc etre lus comme premiere indication, pas
-comme benchmark definitif meme noeud/meme build. Ils suffisent toutefois a
-exclure un profil MUFFIN catastrophique sur `python-bricks`.
+The native C++ lines come from job `647780`; the Python lines come from
+job `647815`. The ratios must therefore be read as a first indication, not
+as a definitive same-node/same-build benchmark. They are however enough to
+exclude a catastrophic MUFFIN profile on `python-bricks`.
 
 | threads | frontend | advance_ms | ratio vs C++ | compile_ms | total_ms |
 |---:|---|---:|---:|---:|---:|
@@ -575,43 +575,43 @@ exclure un profil MUFFIN catastrophique sur `python-bricks`.
 | 8 | `python-dsl-production warm` | 339.35 | 1.87 | 6.66 | 346.24 |
 | 8 | `python-dsl-production cold` | 339.54 | 1.87 | 11746.57 | 12086.72 |
 
-Lecture :
+Reading:
 
-- `python-bricks` n'a pas de perte MUFFIN visible : le hot loop reste du C++
-  appele par `advance`, pas un callback Python par cellule.
-- `step_loop_ms` et `advance_ms` sont presque identiques sur ces mesures, donc
-  le cout pybind par `step` est faible face au cout du pas pour `n=128`.
-- l'extraction finale `get_state` vaut environ `0.07-0.21 ms`, donc
-  ne domine pas ce cas CPU.
-- le DSL `production` cold compile vaut environ `11.7 s`; warm cache vaut
-  environ `6-7 ms`.
-- le hot loop DSL `production` warm est plus lent et quasi invariant avec les
-  threads dans ce harness. Il faut isoler si cela vient du chemin
-  `add_native_block`, du modele genere, d'une absence de scaling Kokkos dans le
-  bloc DSL, ou d'un artefact de comparaison avec les lignes C++ du job `647780`.
+- `python-bricks` has no visible MUFFIN loss: the hot loop stays C++
+  called by `advance`, not a Python callback per cell.
+- `step_loop_ms` and `advance_ms` are almost identical on these measurements, so
+  the pybind cost per `step` is small compared to the step cost for `n=128`.
+- the final `get_state` extraction is about `0.07-0.21 ms`, so
+  it does not dominate this CPU case.
+- the DSL `production` cold compile is about `11.7 s`; warm cache is
+  about `6-7 ms`.
+- the DSL `production` warm hot loop is slower and almost invariant with the
+  threads in this harness. We must isolate whether this comes from the
+  `add_native_block` path, the generated model, a lack of Kokkos scaling in the
+  DSL block, or an artifact of comparison with the C++ lines of job `647780`.
 
-### 10.7 Rattrapage transport pur multi-box CPU
+### 10.7 Pure multi-box transport CPU catch-up
 
-Un benchmark dedie a ete ajoute dans `bench/profile_transport_mbox.cpp` pour
-isoler un cas Euler 2D periodique lisse, sans Poisson, sans disque, sans Schur
-et avec une vraie decomposition multi-box distribuee par MPI. Le script ROMEO
-associe est `bench/romeo_perf_transport_mbox_cpu.sbatch`.
+A dedicated benchmark was added in `bench/profile_transport_mbox.cpp` to
+isolate a smooth periodic 2D Euler case, without Poisson, without disk, without Schur
+and with a real multi-box decomposition distributed by MPI. The associated ROMEO
+script is `bench/romeo_perf_transport_mbox_cpu.sbatch`.
 
-Run ROMEO :
+ROMEO run:
 
-| job | commit | cible | statut | temps |
+| job | commit | target | status | time |
 |---:|---|---|---|---:|
-| `647836` | `adde23b` | CPU `x64cpu`, transport multi-box | `COMPLETED` | `00:02:34` |
+| `647836` | `adde23b` | CPU `x64cpu`, multi-box transport | `COMPLETED` | `00:02:34` |
 
-Resultats locaux :
+Local results:
 
 ```text
 bench/romeo_results_transport_mbox_adde23b_647836/
 ```
 
-Strong OpenMP, `n=1024`, 1 rang :
+Strong OpenMP, `n=1024`, 1 rank:
 
-| threads | per_step_ms | speedup vs 1 thread | efficacite |
+| threads | per_step_ms | speedup vs 1 thread | efficiency |
 |---:|---:|---:|---:|
 | 1 | 524.13 | 1.00 | 1.00 |
 | 2 | 434.25 | 1.21 | 0.60 |
@@ -619,68 +619,68 @@ Strong OpenMP, `n=1024`, 1 rang :
 | 8 | 157.82 | 3.32 | 0.42 |
 | 16 | 89.31 | 5.87 | 0.37 |
 
-Lecture : le transport pur scale positivement en OpenMP, contrairement au
-premier `profile_step` Poisson-dominant. L'efficacite baisse quand les threads
-augmentent, mais le signal est exploitable.
+Reading: pure transport scales positively in OpenMP, contrary to the
+first Poisson-dominant `profile_step`. The efficiency drops as the threads
+increase, but the signal is usable.
 
-Strong MPI + OpenMP, `n=1024`, `threads=4` par rang :
+Strong MPI + OpenMP, `n=1024`, `threads=4` per rank:
 
-| rangs | per_step_ms | phase dominante |
+| ranks | per_step_ms | dominant phase |
 |---:|---:|---|
 | 1 | 188.35 | transport 96.9 % |
 | 2 | 371.05 | halos 50.3 %, transport 43.0 % |
 | 4 | 419.46 | transport 45.2 %, halos 34.3 %, reductions 20.6 % |
 | 8 | 594.75 | halos 37.3 %, transport 35.1 %, reductions 27.6 % |
 
-Lecture : le strong scaling MPI reste negatif meme sans Poisson. Le verrou
-n'est donc pas seulement `GeometricMG` : le passage multi-rang rend
-`fill_boundary` et les reductions globales assez chers pour dominer une partie
-du pas.
+Reading: MPI strong scaling stays negative even without Poisson. The blocker
+is therefore not only `GeometricMG`: going multi-rank makes
+`fill_boundary` and the global reductions expensive enough to dominate part
+of the step.
 
-Weak MPI + OpenMP 2D, `n_global ~= 384*sqrt(np)`, `threads=4` par rang :
+Weak MPI + OpenMP 2D, `n_global ~= 384*sqrt(np)`, `threads=4` per rank:
 
-| rangs | n_global | per_step_ms | weak_eff vs np=1 | phase dominante |
+| ranks | n_global | per_step_ms | weak_eff vs np=1 | dominant phase |
 |---:|---:|---:|---:|---|
 | 1 | 384 | 25.23 | 1.00 | transport 97.5 % |
 | 2 | 543 | 207.13 | 0.12 | halos 68.4 % |
 | 4 | 768 | 350.46 | 0.07 | halos 45.9 %, transport 31.2 %, reductions 22.9 % |
 | 8 | 1086 | 659.29 | 0.04 | transport 51.7 %, halos 32.3 %, reductions 16.0 % |
 
-Lecture : ce weak scaling est le resultat negatif le plus actionnable de la
-campagne. A taille locale a peu pres constante, le cout par pas explose des
-`np=2`, principalement par `fill_boundary`; a `np=4/8`, les reductions
-`max_wave_speed_mf` et `dot` deviennent aussi visibles. Il faut donc profiler
-la construction des jobs de halo, le nombre de messages, pack/unpack, le choix
-SFC des boites, les collectives MPI et l'affinite `ranks x threads`.
+Reading: this weak scaling is the most actionable negative result of the
+campaign. At roughly constant local size, the per-step cost explodes from
+`np=2`, mainly through `fill_boundary`; at `np=4/8`, the reductions
+`max_wave_speed_mf` and `dot` also become visible. We must therefore profile
+the construction of the halo jobs, the number of messages, pack/unpack, the
+SFC choice of boxes, the MPI collectives and the `ranks x threads` affinity.
 
-Point metodologique : cette mesure remplace le smoke-test weak de la section
-10.4 pour le CPU. Elle ne donne pas encore le weak GPU, qui doit rester separe
-et ne pas etre lance pendant un autre job GH200 actif.
+Methodological point: this measurement replaces the weak smoke-test of section
+10.4 for the CPU. It does not yet give the GPU weak, which must stay separate
+and not be launched during another active GH200 job.
 
-### 10.8 Rattrapage frontends meme job
+### 10.8 Same-job frontends catch-up
 
-Le job `647848` a relance C++ natif, Python briques et Python DSL `production`
-dans le meme job ROMEO, sur le meme noeud `x64cpu`, avec la meme Kokkos OpenMP
-PIC (`/home/rmdraux/adc_perf_20260608/kinstall_omp_pic`) et le meme commit
+Job `647848` relaunched native C++, Python bricks and Python DSL `production`
+in the same ROMEO job, on the same `x64cpu` node, with the same PIC Kokkos OpenMP
+(`/home/rmdraux/adc_perf_20260608/kinstall_omp_pic`) and the same commit
 `adc_cpp=adde23b`.
 
-| job | commit | cible | statut | temps |
+| job | commit | target | status | time |
 |---:|---|---|---|---:|
-| `647848` | `adde23b` | frontends CPU, Kokkos PIC | `COMPLETED` | `00:19:42` |
+| `647848` | `adde23b` | CPU frontends, Kokkos PIC | `COMPLETED` | `00:19:42` |
 
-Resultats locaux :
+Local results:
 
 ```text
 bench/romeo_results_frontends_adde23b_647848/
 ```
 
-Le build C++ frontend a ete le cout froid dominant : `frontend_cpp` a passe
-environ 15 minutes a compiler `python/system.cpp` en `-O3` avant les mesures.
-Conclusion pratique : les futures campagnes doivent separer build et mesure,
-ou reutiliser un build prepare, sinon le temps de campagne mesure surtout le
-compilateur.
+The C++ frontend build was the dominant cold cost: `frontend_cpp` spent
+about 15 minutes compiling `python/system.cpp` in `-O3` before the measurements.
+Practical conclusion: future campaigns must separate build and measurement,
+or reuse a prepared build, otherwise the campaign time mostly measures the
+compiler.
 
-Table hot-loop `advance(dt, 40)` :
+Hot-loop `advance(dt, 40)` table:
 
 | threads | frontend | advance_ms | ratio vs C++ PIC | compile_ms | total_ms |
 |---:|---|---:|---:|---:|---:|
@@ -697,33 +697,33 @@ Table hot-loop `advance(dt, 40)` :
 | 8 | `python-dsl-production warm` | 341.09 | 1.92 | 7.49 | 348.81 |
 | 8 | `python-dsl-production cold` | 341.29 | 1.92 | 15350.63 | 15692.59 |
 
-Lecture :
+Reading:
 
-- `python-bricks` n'a pas de penalite hot-loop visible par rapport au C++
-  natif PIC sur ce cas. L'apparent avantage de quelques pourcents ne doit pas
-  etre vendu comme "Python plus rapide" ; il signifie surtout que le cout
-  Python n'est pas dans la boucle cellule.
-- `step_loop_ms` et `advance_ms` restent tres proches. Le cout pybind par
-  `step(dt)` est donc faible face au cout d'un pas a `n=128`.
-- `get_state` final reste sub-ms ; les diagnostics hote ne dominent pas ce cas
-  CPU. Ce point doit etre recontrole sur GPU, ou une lecture hote peut forcer
-  synchronisation et migration.
-- DSL `production` warm reste autour de `341 ms`, presque invariant avec les
-  threads. Le ratio se degrade quand C++/bricks scalent (`1.17`, `1.43`,
-  `1.92`). C'est maintenant un vrai sujet : verifier le code genere, les
-  chemins Kokkos effectivement utilises, et le fait que le bloc DSL passe bien
-  par le meme noyau/limiteur/flux que le bloc natif.
-- DSL cold compile vaut environ `15.3-15.5 s` sur ce setup. Ce cout est
-  acceptable seulement s'il est amorti par cache ou par un run long.
+- `python-bricks` has no visible hot-loop penalty compared to native C++
+  PIC on this case. The apparent few-percent advantage must not be
+  sold as "Python faster"; it mainly means that the Python cost
+  is not in the cell loop.
+- `step_loop_ms` and `advance_ms` stay very close. The pybind cost per
+  `step(dt)` is therefore small compared to the cost of a step at `n=128`.
+- final `get_state` stays sub-ms; host diagnostics do not dominate this CPU
+  case. This point must be re-checked on GPU, where a host read can force
+  synchronization and migration.
+- DSL `production` warm stays around `341 ms`, almost invariant with the
+  threads. The ratio degrades when C++/bricks scale (`1.17`, `1.43`,
+  `1.92`). This is now a real subject: check the generated code, the
+  Kokkos paths actually used, and that the DSL block goes through
+  the same kernel/limiter/flux as the native block.
+- DSL cold compile is about `15.3-15.5 s` on this setup. This cost is
+  acceptable only if it is amortized by cache or by a long run.
 
-### 10.9 Mesures separees branche `feat/perf-campaign-bench`
+### 10.9 Separate measurements branch `feat/perf-campaign-bench`
 
-Des jobs externes ROMEO `647857` et `647858` ont produit des JSONL sur la
-branche `feat/perf-campaign-bench`, commit
-`0162d5f4a8f2ef559325acce64decc1dede83e40`. Ces resultats sont utiles pour
-l'audit, mais ils ne doivent pas etre melanges aux tableaux `adde23b/master`.
+External ROMEO jobs `647857` and `647858` produced JSONL on the
+branch `feat/perf-campaign-bench`, commit
+`0162d5f4a8f2ef559325acce64decc1dede83e40`. These results are useful for
+the audit, but they must not be mixed with the `adde23b/master` tables.
 
-Fichiers locaux ajoutes :
+Local files added:
 
 ```text
 bench/romeo_results_matrix_647857_647858/matrix_cpu_0162d5f4a8_647857.jsonl
@@ -733,7 +733,7 @@ bench/romeo_results_matrix_647857_647858/perf_phases_matrix_0162d5f4a8_647857_64
 docs/perf_figures_matrix_647857_647858/
 ```
 
-CPU OpenMP transport, `n=4096`, 1 rang :
+CPU OpenMP transport, `n=4096`, 1 rank:
 
 | threads | per_step_ms | speedup vs 1 thread |
 |---:|---:|---:|
@@ -743,12 +743,12 @@ CPU OpenMP transport, `n=4096`, 1 rang :
 | 8 | 1483.22 | 3.53 |
 | 16 | 912.96 | 5.74 |
 
-Lecture : a plus grande taille, le transport pur OpenMP scale nettement mieux
-que le premier cas `profile_step`, et confirme que le probleme initial venait
-du cas Poisson-dominant. Le passage `1 -> 2 threads` reste mauvais, donc
-l'affinite et le choix `OMP/Kokkos` doivent rester controles.
+Reading: at larger size, pure OpenMP transport scales clearly better
+than the first `profile_step` case, and confirms that the initial problem came
+from the Poisson-dominant case. The `1 -> 2 threads` step stays bad, so
+the affinity and the `OMP/Kokkos` choice must stay controlled.
 
-CPU weak OpenMP local par thread, taille globale croissante :
+CPU weak OpenMP local per thread, growing global size:
 
 | threads | n_global | per_step_ms |
 |---:|---:|---:|
@@ -756,32 +756,32 @@ CPU weak OpenMP local par thread, taille globale croissante :
 | 4 | 1024 | 194.13 |
 | 16 | 2048 | 252.23 |
 
-Lecture : ce weak scaling OpenMP on-node est plus propre que le smoke-test
-initial, mais ce n'est pas le weak MPI final. Il mesure l'effet taille/threads
-dans un seul rang.
+Reading: this OpenMP on-node weak scaling is cleaner than the initial
+smoke-test, but it is not the final MPI weak. It measures the size/threads effect
+within a single rank.
 
-GPU GH200 mono-rang, transport size sweep :
+GPU GH200 single-rank, transport size sweep:
 
-| n_global | per_step_ms | cellules/s |
+| n_global | per_step_ms | cells/s |
 |---:|---:|---:|
 | 1024 | 30.09 | 3.48e7 |
 | 2048 | 123.73 | 3.39e7 |
 | 4096 | 497.12 | 3.37e7 |
 
-Lecture : le throughput GPU mono-rang est stable quand la taille augmente.
-Cette table est un size sweep, pas une preuve de strong scaling multi-GPU.
-Elle donne une bonne reference `np=1` pour le futur MPI+CUDA transport.
+Reading: the single-rank GPU throughput is stable as the size increases.
+This table is a size sweep, not a proof of multi-GPU strong scaling.
+It gives a good `np=1` reference for the future MPI+CUDA transport.
 
-GPU GH200 Poisson mono-rang :
+GPU GH200 Poisson single-rank:
 
 | n_global | per_step_ms |
 |---:|---:|
 | 512 | 6.35 |
 | 1024 | 19.54 |
 
-AMR synthetique GPU, grossier reparti pour `np>1` :
+Synthetic AMR GPU, coarse distributed for `np>1`:
 
-| n | rangs/GPU | per_step_ms |
+| n | ranks/GPU | per_step_ms |
 |---:|---:|---:|
 | 128 | 1 | 215.44 |
 | 128 | 2 | 1012.82 |
@@ -790,52 +790,52 @@ AMR synthetique GPU, grossier reparti pour `np>1` :
 | 256 | 2 | 1079.72 |
 | 256 | 4 | 1485.32 |
 
-Lecture : le resultat AMR reste negatif en multi-GPU, ce qui renforce le
-diagnostic deja pose : le grossier distribue et les coordinations AMR/MG
-dominent sur ces tailles. En revanche, ces jobs ne ferment pas encore le TODO
-MPI+CUDA transport weak/strong : il manque le cas transport pur multi-rang GPU
-avec un GPU par rang.
+Reading: the AMR result stays negative in multi-GPU, which reinforces the
+diagnostic already made: the distributed coarse and the AMR/MG coordinations
+dominate at these sizes. On the other hand, these jobs do not yet close the TODO
+MPI+CUDA transport weak/strong: the pure multi-rank GPU transport case
+with one GPU per rank is missing.
 
-### 10.10 Diagnostic DSL `production` et Kokkos
+### 10.10 DSL `production` and Kokkos diagnostic
 
-Le rattrapage `647848` a montre que `python-dsl-production` warm reste autour
-de `341 ms` quel que soit le nombre de threads. L'enquete code indique une
-cause plausible et actionnable : le loader DSL `production` est zero-copie et
-utilise bien `add_native_block`, mais il compilait ses templates header-only
-sans propager explicitement `ADC_HAS_KOKKOS`, les includes Kokkos et
+The `647848` catch-up showed that `python-dsl-production` warm stays around
+`341 ms` regardless of the number of threads. The code investigation indicates a
+plausible and actionable cause: the DSL `production` loader is zero-copy and
+correctly uses `add_native_block`, but it compiled its header-only templates
+without explicitly propagating `ADC_HAS_KOKKOS`, the Kokkos includes and
 `-fopenmp`.
 
-Consequence : sur un module Python `_adc` compile avec Kokkos OpenMP, le bloc
-DSL pouvait rester sur le fallback serie dans les portions inline du loader,
-tout en ayant l'apparence d'un chemin production natif. Ce n'est pas un
-probleme MUFFIN de copies Python ; c'est une incoherence de backend C++ entre
-le module `_adc` et le `.so` genere par le DSL.
+Consequence: on a Python module `_adc` compiled with Kokkos OpenMP, the DSL
+block could stay on the serial fallback in the inline portions of the loader,
+while looking like a native production path. This is not a
+MUFFIN problem of Python copies; it is a C++ backend inconsistency between
+the `_adc` module and the `.so` generated by the DSL.
 
-Correctif local experimental ajoute dans cette worktree :
+Experimental local fix added in this worktree:
 
-- `include/adc/runtime/abi_key.hpp` encode maintenant les features ABI
-  `kokkos=on/off` et `mpi=on/off`. Un loader compile sans Kokkos ne peut plus
-  etre considere ABI-equivalent a un module `_adc` compile avec Kokkos.
-- `python/adc/dsl.py` detecte `ADC_KOKKOS_ROOT`/`Kokkos_ROOT`/`KOKKOS_ROOT`,
-  utilise `ADC_KOKKOS_CXX` ou `nvcc_wrapper` si disponible, ajoute
-  `-DADC_HAS_KOKKOS`, les includes Kokkos, `-fopenmp` en OpenMP, et met ces
-  features dans la cle de cache DSL. Dans la version courante de la worktree,
-  le loader ne linke plus `libkokkos*` ; il laisse les symboles se resoudre
-  contre `_adc`.
-- `bench/romeo_perf_frontends_cpu.sbatch` sait superposer ces deux fichiers
-  patchés sur un checkout ROMEO explicite, et reutiliser les lignes C++
-  natives deja mesurees pour relancer seulement le frontend Python.
+- `include/adc/runtime/abi_key.hpp` now encodes the ABI features
+  `kokkos=on/off` and `mpi=on/off`. A loader compiled without Kokkos can no longer
+  be considered ABI-equivalent to an `_adc` module compiled with Kokkos.
+- `python/adc/dsl.py` detects `ADC_KOKKOS_ROOT`/`Kokkos_ROOT`/`KOKKOS_ROOT`,
+  uses `ADC_KOKKOS_CXX` or `nvcc_wrapper` if available, adds
+  `-DADC_HAS_KOKKOS`, the Kokkos includes, `-fopenmp` in OpenMP, and puts these
+  features in the DSL cache key. In the current version of the worktree,
+  the loader no longer links `libkokkos*`; it lets the symbols resolve
+  against `_adc`.
+- `bench/romeo_perf_frontends_cpu.sbatch` knows how to overlay these two
+  patched files on an explicit ROMEO checkout, and reuse the native C++
+  lines already measured to relaunch only the Python frontend.
 
-Attention : cette variante locale est plus stricte que la branche amont
-`origin/feat/dsl-production-optflags`. La branche amont met le backend Kokkos
-dans la cle de cache Python et evite de linker `libkokkos*` dans le `.so`
-production ; elle ne modifie pas la cle ABI C++ publique
-`include/adc/runtime/abi_key.hpp`. La modification ABI locale doit donc etre
-lue comme une experience de securite, pas comme un patch a merger sans revue.
-La partie `HybridModel.compile()` a aussi ete etendue localement et demande un
-test dedie avant integration.
+Warning: this local variant is stricter than the upstream branch
+`origin/feat/dsl-production-optflags`. The upstream branch puts the Kokkos backend
+in the Python cache key and avoids linking `libkokkos*` in the production `.so`;
+it does not modify the public C++ ABI key
+`include/adc/runtime/abi_key.hpp`. The local ABI modification must therefore be
+read as a safety experiment, not as a patch to merge without review.
+The `HybridModel.compile()` part was also extended locally and requires a
+dedicated test before integration.
 
-Validation ROMEO ciblee :
+Targeted ROMEO validation:
 
 ```text
 jobs=648017, 648031, 648034
@@ -845,31 +845,31 @@ reference_cpp=job 647848, lignes cpp-native uniquement
 objectif=verifier si DSL warm suit enfin les threads Kokkos OpenMP
 ```
 
-Deux essais intermediaires (`648017`, `648031`) ont echoue avant mesure DSL car
-le patch choisissait automatiquement `bin/nvcc_wrapper` des que le fichier
-existait dans le root Kokkos PIC. Sur ROMEO CPU, cette installation OpenMP
-fournit bien `nvcc_wrapper`, mais `nvcc` n'est pas charge. Le correctif final
-est donc volontairement explicite : `nvcc_wrapper` n'est utilise que si
-`ADC_KOKKOS_CXX` le designe ou si `ADC_KOKKOS_USE_NVCC_WRAPPER=1`; OpenMP prend
-le compilateur hote `g++` avec `-fopenmp`.
+Two intermediate attempts (`648017`, `648031`) failed before the DSL measurement
+because the patch automatically chose `bin/nvcc_wrapper` as soon as the file
+existed in the PIC Kokkos root. On ROMEO CPU, this OpenMP installation
+does provide `nvcc_wrapper`, but `nvcc` is not loaded. The final fix
+is therefore deliberately explicit: `nvcc_wrapper` is used only if
+`ADC_KOKKOS_CXX` designates it or if `ADC_KOKKOS_USE_NVCC_WRAPPER=1`; OpenMP takes
+the host compiler `g++` with `-fopenmp`.
 
-Le job `648034` a alors produit les lignes completes. Le processus Python
-termine ensuite avec `rc=134` sur `Kokkos::finalize()` ("Execution space
-instance to be removed couldn't be found!") apres ecriture du CSV. La branche
-amont `origin/feat/dsl-production-optflags` corrige cette cause : il ne faut
-pas linker `libkokkos*` dans le `.so` production, car le module `_adc` a deja
-charge le runtime Kokkos. Le loader doit laisser les symboles Kokkos indefinis
-et les resoudre au chargement contre `_adc` promu en `RTLD_GLOBAL`; sinon on
-cree deux singletons Kokkos et la finalisation abort.
+Job `648034` then produced the complete lines. The Python process
+ends afterward with `rc=134` on `Kokkos::finalize()` ("Execution space
+instance to be removed couldn't be found!") after writing the CSV. The upstream
+branch `origin/feat/dsl-production-optflags` fixes this cause: you must
+not link `libkokkos*` in the production `.so`, because the `_adc` module has already
+loaded the Kokkos runtime. The loader must leave the Kokkos symbols undefined
+and resolve them at load time against `_adc` promoted to `RTLD_GLOBAL`; otherwise
+you create two Kokkos singletons and finalization aborts.
 
-Resultats locaux :
+Local results:
 
 ```text
 bench/romeo_results_frontends_dslkokkosfix_648034/
 docs/perf_figures_frontends_dslkokkosfix_648034/
 ```
 
-Table `advance(dt, 40)` apres correctif partiel DSL/Kokkos local :
+Table `advance(dt, 40)` after partial local DSL/Kokkos fix:
 
 | threads | frontend | advance_ms | ratio vs C++ PIC | compile_ms | total_ms |
 |---:|---|---:|---:|---:|---:|
@@ -880,49 +880,49 @@ Table `advance(dt, 40)` apres correctif partiel DSL/Kokkos local :
 | 8 | `python-bricks` | 164.26 | 0.93 | 0.00 | 165.49 |
 | 8 | `python-dsl-production warm` | 192.72 | 1.09 | 6.80 | 201.24 |
 
-Avant correctif (`647848`), DSL warm valait `341.10`, `342.05`, `341.09 ms`
-pour `1,4,8` threads. Apres correctif partiel (`648034`), il vaut `345.96`,
-`261.31`, `192.72 ms`. Le verrou principal etait donc bien l'absence de backend
-Kokkos correct dans le loader DSL, pas une copie Python. En revanche `648034`
-n'est pas une mesure finale publiable du DSL : le processus a ecrit le CSV puis
-a abort sur `Kokkos::finalize()` parce que cette variante linkait encore un
-runtime Kokkos dans le `.so`. Les ratios `648034` servent donc a diagnostiquer
-le retour du scaling OpenMP, pas a donner le cout final du frontend.
+Before fix (`647848`), DSL warm was `341.10`, `342.05`, `341.09 ms`
+for `1,4,8` threads. After partial fix (`648034`), it is `345.96`,
+`261.31`, `192.72 ms`. The main blocker was therefore indeed the absence of a correct
+Kokkos backend in the DSL loader, not a Python copy. On the other hand `648034`
+is not a final publishable measurement of the DSL: the process wrote the CSV then
+aborted on `Kokkos::finalize()` because this variant still linked a
+Kokkos runtime in the `.so`. The `648034` ratios therefore serve to diagnose
+the return of the OpenMP scaling, not to give the final cost of the frontend.
 
-La branche amont ajoute aussi `-O3 -DNDEBUG` par defaut pour le `.so` production
-(`ADC_DSL_OPTFLAGS` permet de surcharger, par exemple `-march=native`) et ne
-linke pas `libkokkos*` dans le loader. D'apres son rapport adc_cases
-`origin/feat/perf-campaign-harness`, cette variante ramene le DSL a la parite
-serie (`1.04x`) et a la parite threadee OpenMP (`1.02x` a 8 threads) avec sortie
-propre. La prochaine optimisation locale consiste donc a s'aligner proprement
-sur cette branche, puis a relancer une validation courte, pas a chercher des
-copies Python.
+The upstream branch also adds `-O3 -DNDEBUG` by default for the production `.so`
+(`ADC_DSL_OPTFLAGS` allows overriding, for example `-march=native`) and does not
+link `libkokkos*` in the loader. According to its adc_cases report
+`origin/feat/perf-campaign-harness`, this variant brings the DSL to serial
+parity (`1.04x`) and to OpenMP threaded parity (`1.02x` at 8 threads) with clean
+output. The next local optimization therefore consists in aligning cleanly
+on this branch, then relaunching a short validation, not in looking for
+Python copies.
 
-### 10.10-b Fix halo MPI multi-box
+### 10.10-b MPI multi-box halo fix
 
-Apres fetch, `origin/master` contient `f3e1bf9 fix(mesh): halos MPI en memoire
-hote epinglee (fin du deadlock multi-box GPU) (#254)` ; au moment de cette
-mise a jour, `origin/master=5e0b3f6` inclut toujours ce correctif. Cela vise
-directement le blocage signale plus haut pour MPI multi-box GPU : les tampons
-de communication MPI doivent passer par une memoire hote epinglee plutot que
-par un pointeur UVM/device qui declenche CUDA IPC sous cgroups GPU ROMEO.
+After fetch, `origin/master` contains `f3e1bf9 fix(mesh): halos MPI en memoire
+hote epinglee (fin du deadlock multi-box GPU) (#254)`; at the time of this
+update, `origin/master=5e0b3f6` still includes this fix. This directly targets
+the blocking signaled above for MPI multi-box GPU: the MPI communication
+buffers must go through pinned host memory rather than
+through a UVM/device pointer that triggers CUDA IPC under ROMEO GPU cgroups.
 
-Nuance de provenance : la worktree locale de ce rapport est encore sur
-`HEAD=0187329` et son `include/adc/mesh/fill_boundary.hpp` montre les anciens
-tampons `fab_allocator` en memoire unifiee. Le code audite pour `#254` est
-donc `origin/master`/la branche ROMEO, pas le fichier local actuellement
-checkout. Cette distinction evite de melanger audit de code local et code
-execute sur ROMEO.
+Provenance nuance: the local worktree of this report is still on
+`HEAD=0187329` and its `include/adc/mesh/fill_boundary.hpp` shows the old
+`fab_allocator` buffers in unified memory. The code audited for `#254` is
+therefore `origin/master`/the ROMEO branch, not the local file currently
+checked out. This distinction avoids mixing audit of local code and code
+executed on ROMEO.
 
-Avant relance v2, cela changeait le run utile : il ne fallait plus relancer
-l'ancien diagnostic de deadlock, mais tester une vraie campagne
-validation/scaling MPI+CUDA transport pur sur `origin/master` recent, ou sur
-une branche combinant `#254` et les harnais `feat/perf-campaign-bench`. Les
-resultats precedents restaient valides comme diagnostic historique, mais ne
-devaient pas etre utilises seuls pour conclure que MPI+CUDA transport etait
-toujours bloque.
+Before the v2 relaunch, this changed the useful run: it was no longer necessary to relaunch
+the old deadlock diagnostic, but to test a real pure MPI+CUDA transport
+validation/scaling campaign on a recent `origin/master`, or on
+a branch combining `#254` and the `feat/perf-campaign-bench` harnesses. The
+previous results stayed valid as historical diagnostic, but must not
+be used alone to conclude that MPI+CUDA transport was
+still blocked.
 
-Relance v2 observee ensuite :
+v2 relaunch observed afterward:
 
 ```text
 adc_cpp=1d4cd25e25d244cd7c4f6cfd4c0eb815cd997790
@@ -932,166 +932,166 @@ resultats=bench/romeo_results_mpi_v2_648114_648115/
 figures=docs/perf_figures_mpi_v2_648114_648115/
 ```
 
-Table des points qui terminent :
+Table of the points that finish:
 
-| job | backend | rangs/GPU | workload | n | per_step_ms | statut |
+| job | backend | ranks/GPU | workload | n | per_step_ms | status |
 |---:|---|---:|---|---:|---:|---|
-| `648114` | `mpi-omp` | 1 rang, 16 threads | transport | 4096 | 764.73 | OK |
+| `648114` | `mpi-omp` | 1 rank, 16 threads | transport | 4096 | 764.73 | OK |
 | `648115` | `mpi-cuda` | 1 GPU | transport | 4096 | 502.91 | OK |
 | `648115` | `mpi-cuda` | 1 GPU | poisson | 1024 | 20.68 | OK |
 
-Les points multi-rang restent en timeout :
+The multi-rank points stay in timeout:
 
-| job | cas | resultat |
+| job | case | result |
 |---:|---|---|
-| `648114` | transport `2 rangs x 8 threads` | timeout `300 s` |
-| `648114` | transport `4 rangs x 4 threads` | timeout `300 s` |
+| `648114` | transport `2 ranks x 8 threads` | timeout `300 s` |
+| `648114` | transport `4 ranks x 4 threads` | timeout `300 s` |
 | `648115` | transport `2 GPU` | timeout `300 s` |
 | `648115` | poisson `2 GPU` | timeout `300 s` |
-| `648115` | transport/poisson suivants | timeout dans la meme campagne |
+| `648115` | next transport/poisson | timeout in the same campaign |
 
-Conclusion : `#254` et la memoire hote epinglee ne suffisent pas a debloquer
-ce harnais multi-box `scaling_step` sur ROMEO. Le blocage restant n'est donc
-plus a presenter comme "CUDA IPC uniquement" ; il faut ouvrir un chantier code
-dedie `fill_boundary`/progress MPI/ordonnancement halos, avec test minimal
-multi-box CPU et GPU, avant toute nouvelle campagne weak/strong MPI+CUDA.
+Conclusion: `#254` and the pinned host memory are not enough to unblock
+this multi-box `scaling_step` harness on ROMEO. The remaining blocking is therefore
+no longer to be presented as "CUDA IPC only"; we must open a dedicated code work item
+`fill_boundary`/MPI progress/halo scheduling, with a minimal
+multi-box CPU and GPU test, before any new weak/strong MPI+CUDA campaign.
 
-Nuance importante : cela ne prouve pas que tout MPI CPU ADC est bloque. Le
-bench CPU dedie `profile_transport_mbox` du job `647836` termine bien en
-`np=1/2/4/8`, meme avec un scaling negatif. Le timeout v2 concerne le harnais
-`scaling_step` a grande taille et les chemins testes dans `648114/648115`.
-Il peut donc venir d'un deadlock restant, d'un cout extremement pathologique,
-du lanceur ROMEO, ou d'une difference de code path ; il ne faut pas le convertir
-en conclusion generale sans test minimal.
+Important nuance: this does not prove that all ADC MPI CPU is blocked. The
+dedicated CPU bench `profile_transport_mbox` of job `647836` does finish in
+`np=1/2/4/8`, even with a negative scaling. The v2 timeout concerns the
+`scaling_step` harness at large size and the paths tested in `648114/648115`.
+It can therefore come from a remaining deadlock, an extremely pathological cost,
+the ROMEO launcher, or a code path difference; it must not be converted
+into a general conclusion without a minimal test.
 
-### 10.10-c Interpretation theorie vs mesures
+### 10.10-c Theory vs measurements interpretation
 
-Le modele de cout pose au debut du rapport explique bien les observations :
+The cost model posed at the start of the report explains the observations well:
 
 ```text
 T_step = T_kernel + T_halo + T_reduction + T_poisson + T_fence + T_py_boundary
 ```
 
-1. `python-bricks` suit le C++ natif parce que `T_py_boundary` est amorti par
-   `advance(dt, nsteps)` et que le calcul cellule reste C++ compile. Les
-   mesures `647848/648034` montrent des ratios autour de `0.93-0.97x`, a lire
-   comme bruit de mesure et non comme "Python plus rapide".
-2. Le DSL `production` n'etait pas ralenti par Python mais par le "comment" de
-   compilation du loader : sans `ADC_HAS_KOKKOS`, les templates inline
-   utilisent le fallback serie ; avec `libkokkos*` linke dans le `.so`, on cree
-   un second runtime Kokkos ; avec `-O2` sans `-DNDEBUG`, le hot loop garde des
-   checks/optimisations insuffisantes. La theorie dit que `T_py_boundary` doit
-   etre quasi nul ; les runs confirment que le verrou etait `T_kernel` cote
-   loader, pas la frontiere Python.
-3. Le transport FV pur est surtout `T_kernel` memory-bound. En OpenMP il scale
-   positivement mais sous-lineaire (`5.7x` a 16 threads sur le grand cas),
-   ce qui est coherent avec une bande passante memoire partagee et des
-   allocations temporaires visibles.
-4. Le bench MPI transport multi-box qui termine (`647836`) fait exploser
-   `T_halo` et `T_reduction`. Sur CPU, son weak scaling tombe de `25.23 ms` a
-   `659.29 ms` entre `1` et `8` rangs malgre une taille locale comparable :
-   ce n'est pas un manque de calcul local, c'est la communication. Les timeouts
-   `648114/648115` disent autre chose : le harnais `scaling_step` multi-rang
-   ne fournit pas encore de point exploitable apres `#254`.
-5. Poisson/MG est domine par `T_poisson`, `T_reduction` et les synchronisations
-   de niveaux grossiers. Le premier `profile_step` et les matrices
-   `647857/647858` montrent que les petits solveurs elliptique/AMR ne scalent
-   pas simplement avec les ressources ; la theorie MG predit ce mur des niveaux
-   grossiers et des collectives.
-6. Sur GPU, une lecture hote ou un diagnostic peut ajouter `T_fence`, mais les
-   runs actuels montrent surtout que le transport mono-GPU a un debit stable
-   autour de `3.3-3.5e7 cells/s`. Le multi-GPU ne peut pas etre interprete tant
-   que le harnais multi-rang time-out avant de produire un point valide.
+1. `python-bricks` follows native C++ because `T_py_boundary` is amortized by
+   `advance(dt, nsteps)` and because the cell compute stays compiled C++. The
+   measurements `647848/648034` show ratios around `0.93-0.97x`, to read
+   as measurement noise and not as "Python faster".
+2. The DSL `production` was not slowed by Python but by the "how" of
+   the loader compilation: without `ADC_HAS_KOKKOS`, the inline templates
+   use the serial fallback; with `libkokkos*` linked in the `.so`, you create
+   a second Kokkos runtime; with `-O2` without `-DNDEBUG`, the hot loop keeps
+   insufficient checks/optimizations. The theory says that `T_py_boundary` must
+   be near zero; the runs confirm that the blocker was `T_kernel` on the
+   loader side, not the Python boundary.
+3. Pure FV transport is mostly `T_kernel` memory-bound. In OpenMP it scales
+   positively but sub-linear (`5.7x` at 16 threads on the large case),
+   which is consistent with shared memory bandwidth and visible
+   temporary allocations.
+4. The MPI transport multi-box bench that finishes (`647836`) makes
+   `T_halo` and `T_reduction` explode. On CPU, its weak scaling drops from `25.23 ms` to
+   `659.29 ms` between `1` and `8` ranks despite a comparable local size:
+   it is not a lack of local compute, it is the communication. The timeouts
+   `648114/648115` say something else: the multi-rank `scaling_step` harness
+   does not yet provide a usable point after `#254`.
+5. Poisson/MG is dominated by `T_poisson`, `T_reduction` and the coarse-level
+   synchronizations. The first `profile_step` and the matrices
+   `647857/647858` show that the small elliptic/AMR solvers do not scale
+   simply with the resources; the MG theory predicts this wall of coarse
+   levels and collectives.
+6. On GPU, a host read or a diagnostic can add `T_fence`, but the current
+   runs show mostly that the single-GPU transport has a stable throughput
+   around `3.3-3.5e7 cells/s`. The multi-GPU cannot be interpreted as long
+   as the multi-rank harness times out before producing a valid point.
 
-Synthese : le probleme observe n'est pas "C++ vs Python" mais "hot path natif
-correctement specialise" et "communication/synchronisation". Pour les fronts
-Python, la theorie attend une quasi-parite si le calcul reste en C++ ; c'est ce
-qui est mesure. Pour MPI/GPU, la theorie attend que halos, reductions et
-fences dominent des que le calcul local est trop petit ou que les echanges se
-bloquent ; c'est exactement ce que montrent les campagnes.
+Synthesis: the observed problem is not "C++ vs Python" but "native hot path
+correctly specialized" and "communication/synchronization". For the Python
+frontends, the theory expects near-parity if the compute stays in C++; this is what
+is measured. For MPI/GPU, the theory expects halos, reductions and
+fences to dominate as soon as the local compute is too small or the exchanges
+block; this is exactly what the campaigns show.
 
-### 10.10-d Graphes integres et lecture
+### 10.10-d Integrated graphs and reading
 
-Cette section embarque les graphes produits par les CSV/JSONL de campagne. Les
-figures ne remplacent pas les tableaux : elles servent a voir d'un coup les
-regimes dominants.
+This section embeds the graphs produced by the campaign CSVs/JSONL. The
+figures do not replace the tables: they serve to see at a glance the
+dominant regimes.
 
-#### Frontends apres correction partielle DSL/Kokkos locale
+#### Frontends after partial local DSL/Kokkos fix
 
-![Ratios frontends apres correction partielle DSL/Kokkos locale](perf_figures_frontends_dslkokkosfix_648034/frontend_ratios.png)
+![Frontend ratios after partial local DSL/Kokkos fix](perf_figures_frontends_dslkokkosfix_648034/frontend_ratios.png)
 
-Lecture : `python-bricks` reste au niveau C++ dans le bruit de mesure. Le DSL
-`production` n'est plus plat a tous les threads : il suit enfin le scaling
-OpenMP, mais garde dans ce run local un residu d'environ `+9 %` a `4/8`
-threads. Comme `648034` finit en `rc=134`, ce graphe est une preuve de
-diagnostic, pas une mesure finale. La branche amont
-`feat/dsl-production-optflags` explique ce residu par les flags du `.so` et le
-runtime Kokkos unique.
+Reading: `python-bricks` stays at the C++ level within measurement noise. The DSL
+`production` is no longer flat across all threads: it finally follows the OpenMP
+scaling, but keeps in this local run a residual of about `+9 %` at `4/8`
+threads. Since `648034` ends in `rc=134`, this graph is a diagnostic
+proof, not a final measurement. The upstream branch
+`feat/dsl-production-optflags` explains this residual by the `.so` flags and the
+single Kokkos runtime.
 
-![Impact cold/warm DSL apres correction partielle](perf_figures_frontends_dslkokkosfix_648034/dsl_cold_warm.png)
+![Cold/warm DSL impact after partial fix](perf_figures_frontends_dslkokkosfix_648034/dsl_cold_warm.png)
 
-Lecture : le cout froid du DSL est un cout de compilation, pas un cout de
-runtime. Le cache warm ramene `compile_ms` a quelques millisecondes. La theorie
-`T_total = T_compile + Nsteps*T_step` est donc confirmee : pour un petit run,
-le cold compile domine; pour un run long ou cache warm, il s'amortit. La valeur
-cold de ce graphe ne doit pas etre extrapolee au correctif amont final, qui ne
-linke plus `libkokkos*`.
+Reading: the cold cost of the DSL is a compilation cost, not a runtime
+cost. The warm cache brings `compile_ms` back to a few milliseconds. The theory
+`T_total = T_compile + Nsteps*T_step` is therefore confirmed: for a small run,
+the cold compile dominates; for a long run or warm cache, it amortizes. The
+cold value of this graph must not be extrapolated to the final upstream fix, which
+no longer links `libkokkos*`.
 
-![Impact diagnostics frontends apres correction partielle](perf_figures_frontends_dslkokkosfix_648034/diagnostics_io_impact.png)
+![Frontend diagnostics impact after partial fix](perf_figures_frontends_dslkokkosfix_648034/diagnostics_io_impact.png)
 
-Lecture : sur CPU, l'extraction finale ne domine pas ce cas. Elle reste a
-recontroler sur GPU, ou une lecture hote peut ajouter un `Kokkos::fence` et une
-migration memoire.
+Reading: on CPU, the final extraction does not dominate this case. It remains to
+be re-checked on GPU, where a host read can add a `Kokkos::fence` and a
+memory migration.
 
-#### Campagne finale CPU/Poisson/frontends avant correction DSL amont
+#### Final CPU/Poisson/frontends campaign before upstream DSL fix
 
-![Strong scaling speedup campagne finale](perf_figures_647780_647781_647815_647836_647848/strong_scaling_speedup.png)
+![Strong scaling speedup final campaign](perf_figures_647780_647781_647815_647836_647848/strong_scaling_speedup.png)
 
-![Strong scaling efficiency campagne finale](perf_figures_647780_647781_647815_647836_647848/strong_scaling_efficiency.png)
+![Strong scaling efficiency final campaign](perf_figures_647780_647781_647815_647836_647848/strong_scaling_efficiency.png)
 
-Lecture : les premiers points `profile_step` sont Poisson-dominants et ne
-doivent pas etre lus comme transport FV pur. Le rattrapage transport multi-box
-montre un scaling OpenMP positif, mais MPI devient negatif des que halos et
-reductions prennent le dessus.
+Reading: the first `profile_step` points are Poisson-dominant and must not
+be read as pure FV transport. The multi-box transport catch-up
+shows a positive OpenMP scaling, but MPI becomes negative as soon as halos and
+reductions take over.
 
-![Weak scaling efficiency campagne finale](perf_figures_647780_647781_647815_647836_647848/weak_scaling_efficiency.png)
+![Weak scaling efficiency final campaign](perf_figures_647780_647781_647815_647836_647848/weak_scaling_efficiency.png)
 
-Lecture : le weak scaling CPU multi-box degrade fortement. A taille locale
-comparable, `T_halo` puis `T_reduction` croissent trop vite; ce n'est pas un
-probleme de Python ni de Poisson dans le cas transport pur.
+Reading: the CPU multi-box weak scaling degrades strongly. At comparable local
+size, `T_halo` then `T_reduction` grow too fast; it is not a
+problem of Python nor of Poisson in the pure transport case.
 
-![Breakdown phases campagne finale](perf_figures_647780_647781_647815_647836_647848/phase_breakdown_stacked.png)
+![Phase breakdown final campaign](perf_figures_647780_647781_647815_647836_647848/phase_breakdown_stacked.png)
 
-Lecture : ce graphe justifie les conclusions par phase. Poisson domine le
-premier bench system-like; halos/reductions dominent le multi-rang transport.
-Il faut donc optimiser/profiler par phase, pas seulement regarder un temps
-total.
+Reading: this graph justifies the per-phase conclusions. Poisson dominates the
+first system-like bench; halos/reductions dominate the multi-rank transport.
+We must therefore optimize/profile per phase, not just look at a total
+time.
 
-![Ratios frontends campagne finale](perf_figures_647780_647781_647815_647836_647848/frontend_ratios.png)
+![Frontend ratios final campaign](perf_figures_647780_647781_647815_647836_647848/frontend_ratios.png)
 
-![Cold/warm DSL campagne finale](perf_figures_647780_647781_647815_647836_647848/dsl_cold_warm.png)
+![Cold/warm DSL final campaign](perf_figures_647780_647781_647815_647836_647848/dsl_cold_warm.png)
 
-Lecture : avant la correction amont, le DSL warm restait quasi invariant avec
-les threads; c'est le signal qui a conduit au diagnostic "loader compile sans
-backend Kokkos". Les graphes apres correction montrent que ce verrou a ete
-leve.
+Reading: before the upstream fix, the DSL warm stayed almost invariant with
+the threads; it is the signal that led to the diagnostic "loader compiles without
+Kokkos backend". The graphs after fix show that this blocker has been
+lifted.
 
-#### Matrice CPU/GPU branche `feat/perf-campaign-bench`
+#### CPU/GPU matrix branch `feat/perf-campaign-bench`
 
-![Strong scaling speedup matrice](perf_figures_matrix_647857_647858/strong_scaling_speedup.png)
+![Strong scaling speedup matrix](perf_figures_matrix_647857_647858/strong_scaling_speedup.png)
 
-![Strong scaling efficiency matrice](perf_figures_matrix_647857_647858/strong_scaling_efficiency.png)
+![Strong scaling efficiency matrix](perf_figures_matrix_647857_647858/strong_scaling_efficiency.png)
 
-![Weak scaling efficiency matrice](perf_figures_matrix_647857_647858/weak_scaling_efficiency.png)
+![Weak scaling efficiency matrix](perf_figures_matrix_647857_647858/weak_scaling_efficiency.png)
 
-![Breakdown phases matrice](perf_figures_matrix_647857_647858/phase_breakdown_stacked.png)
+![Phase breakdown matrix](perf_figures_matrix_647857_647858/phase_breakdown_stacked.png)
 
-Lecture : la matrice separe mieux transport, Poisson et AMR. Le transport GPU
-mono-rang atteint un debit stable, mais ce graphe ne prouve pas un scaling
-multi-GPU. L'AMR multi-GPU reste negatif sur les petites tailles, conforme a
-un regime communication/coarse-grid bound.
+Reading: the matrix separates transport, Poisson and AMR better. The single-rank
+GPU transport reaches a stable throughput, but this graph does not prove a multi-GPU
+scaling. The multi-GPU AMR stays negative at small sizes, consistent with
+a communication/coarse-grid bound regime.
 
-#### Relance MPI v2 apres merge `#254`
+#### MPI v2 relaunch after `#254` merge
 
 ![Strong scaling MPI v2](perf_figures_mpi_v2_648114_648115/strong_scaling_speedup.png)
 
@@ -1099,126 +1099,127 @@ un regime communication/coarse-grid bound.
 
 ![Breakdown MPI v2](perf_figures_mpi_v2_648114_648115/phase_breakdown_stacked.png)
 
-Lecture : seules les lignes mono-rang terminent. Les points `2/4` rangs CPU et
-`2` GPU time-out et ne sont pas visibles comme speedup mesurable. Le graphe est
-donc surtout une trace de reference `np=1`; le verdict multi-rang vient des
-timeouts documentes dans les logs et tableaux, pas d'une courbe absente.
+Reading: only the single-rank lines finish. The `2/4` ranks CPU and
+`2` GPU points time out and are not visible as measurable speedup. The graph is
+therefore mostly a `np=1` reference trace; the multi-rank verdict comes from the
+timeouts documented in the logs and tables, not from an absent curve.
 
-### 10.10-e Audit critique des resultats et de la campagne
+### 10.10-e Critical audit of the results and of the campaign
 
-Cette section corrige explicitement les risques d'interpretation de la
-campagne. Elle ne retire pas les resultats precedents ; elle indique leur
-niveau de preuve.
+This section explicitly corrects the interpretation risks of the
+campaign. It does not remove the previous results; it indicates their
+level of proof.
 
-Ce qui est solide :
+What is solid:
 
-1. `python-bricks` ne reproduit pas le modele MUFFIN. La boucle chaude reste
-   dans `advance(dt, nsteps)` cote C++ ; les ratios `0.93-0.97x` face au C++
-   PIC sont du bruit de mesure et ne doivent pas etre lus comme "Python plus
-   rapide". La conclusion fiable est la parite pratique quand les diagnostics
-   et extractions NumPy sont hors boucle.
-2. Le DSL `production` avant correctif avait un vrai probleme de specialisation
-   C++ : temps warm presque invariant avec `1/4/8` threads. Le passage de
-   `341/342/341 ms` a `346/261/193 ms` apres propagation de Kokkos prouve que
-   le cout venait du backend du loader, pas d'une copie Python.
-3. La theorie de cout est respectee : quand le calcul reste natif,
-   `T_py_boundary` est petit ; quand les halos/reductions ou le Poisson sont
-   actifs, `T_halo`, `T_reduction`, `T_poisson` et `T_fence` dominent. Les
-   breakdowns par phase sont donc plus importants que les temps totaux seuls.
-4. `adc::Real` vaut actuellement `double`, donc les appels MPI en `MPI_DOUBLE`
-   ne sont pas une erreur de type aujourd'hui.
+1. `python-bricks` does not reproduce the MUFFIN model. The hot loop stays
+   in `advance(dt, nsteps)` on the C++ side; the ratios `0.93-0.97x` against the C++
+   PIC are measurement noise and must not be read as "Python faster". The reliable
+   conclusion is the practical parity when the diagnostics
+   and NumPy extractions are outside the loop.
+2. The DSL `production` before fix had a real C++ specialization
+   problem: warm time almost invariant with `1/4/8` threads. The move from
+   `341/342/341 ms` to `346/261/193 ms` after Kokkos propagation proves that
+   the cost came from the loader backend, not from a Python copy.
+3. The cost theory is respected: when the compute stays native,
+   `T_py_boundary` is small; when the halos/reductions or Poisson are
+   active, `T_halo`, `T_reduction`, `T_poisson` and `T_fence` dominate. The
+   per-phase breakdowns are therefore more important than the total times alone.
+4. `adc::Real` is currently `double`, so the MPI calls in `MPI_DOUBLE`
+   are not a type error today.
 
-Ce qui est seulement diagnostic, pas une conclusion finale :
+What is only diagnostic, not a final conclusion:
 
-1. Le job `648034` est utile pour identifier le verrou DSL/Kokkos, mais il
-   n'est pas publiable comme performance finale du DSL : il termine par
-   `rc=134` apres ecriture du CSV a cause du double runtime Kokkos. Les chiffres
-   de `648034` disent "le DSL re-scale avec OpenMP", pas "le DSL final coute
+1. Job `648034` is useful to identify the DSL/Kokkos blocker, but it
+   is not publishable as final DSL performance: it ends with
+   `rc=134` after writing the CSV because of the double Kokkos runtime. The numbers
+   of `648034` say "the DSL re-scales with OpenMP", not "the final DSL costs
    +9 %".
-2. Le cout cold DSL de `648034` inclut une variante locale de build. La branche
-   amont qui ne linke pas `libkokkos*` et ajoute `-O3 -DNDEBUG` peut avoir un
-   cold compile different ; il faut mesurer cette branche pour figer ce nombre.
-3. Les graphes MPI v2 n'affichent que les lignes terminees. Les timeouts
-   multi-rangs sont une information experimentale forte, mais ils ne produisent
-   pas de points de speedup. Toute courbe v2 doit donc etre lue comme reference
-   `np=1`, pas comme scaling.
-4. Les JSONL GPU du harnais `scaling_step` contiennent `gpus:0` meme sur des
-   runs GPU. Les CSV consolides ont ete corriges quand l'information etait
-   connue par le job, mais le champ brut du harnais est un bug de metadonnees.
-   Il n'affecte pas les temps, mais il affaiblit la provenance automatique.
-5. Les JSONL v2 indiquent `adc_cpp_branch=unknown`; la provenance repose donc
-   sur les logs Slurm et le SHA `1d4cd25e25`, pas sur le champ branche du JSON.
+2. The cold DSL cost of `648034` includes a local build variant. The upstream
+   branch that does not link `libkokkos*` and adds `-O3 -DNDEBUG` may have a
+   different cold compile; this branch must be measured to freeze this number.
+3. The MPI v2 graphs only display the finished lines. The multi-rank
+   timeouts are strong experimental information, but they do not produce
+   speedup points. Any v2 curve must therefore be read as a `np=1`
+   reference, not as scaling.
+4. The GPU JSONL of the `scaling_step` harness contains `gpus:0` even on
+   GPU runs. The consolidated CSVs were corrected when the information was
+   known by the job, but the raw field of the harness is a metadata bug.
+   It does not affect the times, but it weakens the automatic provenance.
+5. The v2 JSONL indicate `adc_cpp_branch=unknown`; the provenance therefore relies
+   on the Slurm logs and the SHA `1d4cd25e25`, not on the branch field of the JSON.
 
-Auto-critique de ce que j'ai fait :
+Self-critique of what I did:
 
-1. J'ai d'abord presente trop vite le correctif local DSL comme "apres
-   correction". La formulation correcte est "apres correction partielle
-   DSL/Kokkos locale". Le resultat utile est le changement de pente avec les
-   threads ; la mesure finale doit venir de la branche amont propre.
-2. J'ai aussi ete trop direct dans la lecture de `#254`. Le correctif pinned
-   host existe bien dans `origin/master`, mais la worktree locale courante ne le
-   contient pas encore. Les conclusions v2 concernent le code ROMEO a SHA
-   `1d4cd25e25`, pas le fichier local checkout.
-3. Les timeouts `648114/648115` ne suffisent pas a declarer "MPI CPU casse".
-   Le job `647836` prouve que `profile_transport_mbox` CPU termine en
-   `np=1/2/4/8`. Le probleme restant est plus precis : le harnais
-   `scaling_step` multi-rang, a grande taille et apres merge `#254`, time-out.
-4. Les ratios inferieurs a `1.0` pour `python-bricks` ne prouvent pas que
-   Python accelere ADC. Ils signalent la variabilite du banc et la difficulte
-   de comparer des executables/processus separes. Pour une publication, il faut
-   des repetitions appariees, mediane/IC, et pinning CPU plus strict.
-5. Le patch local `include/adc/runtime/abi_key.hpp` est potentiellement trop
-   invasif. Il protege contre un mismatch backend header-only, mais il change
-   une cle ABI publique. La branche amont resout le meme probleme par la cle de
-   cache Python ; c'est probablement le chemin de moindre risque.
+1. I first presented the local DSL fix too quickly as "after
+   fix". The correct phrasing is "after partial fix
+   local DSL/Kokkos". The useful result is the change of slope with the
+   threads; the final measurement must come from the clean upstream branch.
+2. I was also too direct in the reading of `#254`. The pinned host fix
+   does exist in `origin/master`, but the current local worktree does not yet
+   contain it. The v2 conclusions concern the ROMEO code at SHA
+   `1d4cd25e25`, not the local checked-out file.
+3. The timeouts `648114/648115` are not enough to declare "MPI CPU broken".
+   Job `647836` proves that `profile_transport_mbox` CPU finishes in
+   `np=1/2/4/8`. The remaining problem is more precise: the
+   multi-rank `scaling_step` harness, at large size and after `#254` merge,
+   times out.
+4. The ratios below `1.0` for `python-bricks` do not prove that
+   Python speeds up ADC. They signal the variability of the bench and the difficulty
+   of comparing separate executables/processes. For a publication, we need
+   paired repetitions, median/CI, and stricter CPU pinning.
+5. The local patch `include/adc/runtime/abi_key.hpp` is potentially too
+   invasive. It protects against a header-only backend mismatch, but it changes
+   a public ABI key. The upstream branch solves the same problem through the
+   Python cache key; it is probably the path of least risk.
 
-Risques code a investiguer avant de relancer une grosse campagne :
+Code risks to investigate before relaunching a big campaign:
 
-1. Dans `origin/master`, `fill_boundary` utilise des tampons
-   `comm_allocator<Real>` en `Kokkos::SharedHostPinnedSpace`. Cela evite le
-   piege CUDA IPC, mais peut encore couter cher : les kernels pack/unpack
-   lisent/ecrivent de la memoire hote epinglee depuis le device. Il faut mesurer
-   separement `pack`, `MPI_Waitall`, `unpack` et les fences.
-2. Le protocole halo repose sur une enumeration deterministe des jobs et un
-   tag MPI unique `0`. Si deux rangs divergent sur l'ordre ou la taille des
-   jobs, `MPI_Waitall` peut bloquer. Le prochain test minimal doit imprimer ou
-   reduire par voisin `send_bytes`, `recv_bytes`, `n_jobs` et un hash d'ordre
-   avant de poster MPI.
-3. `MPI_DOUBLE` est correct tant que `Real=double`. Pour rendre le code robuste,
-   ajouter un `static_assert(std::is_same_v<Real,double>)` pres des appels MPI,
-   ou centraliser un `mpi_datatype<Real>()`.
-4. Les diagnostics GPU restent sous-instrumentes : toute extraction hote peut
-   cacher un `Kokkos::fence`. Les prochains runs doivent separer diagnostics
-   off, diagnostics reduction-only, extraction NumPy, et I/O.
+1. In `origin/master`, `fill_boundary` uses
+   `comm_allocator<Real>` buffers in `Kokkos::SharedHostPinnedSpace`. This avoids the
+   CUDA IPC pitfall, but may still be expensive: the pack/unpack kernels
+   read/write pinned host memory from the device. We must measure
+   separately `pack`, `MPI_Waitall`, `unpack` and the fences.
+2. The halo protocol relies on a deterministic enumeration of jobs and a
+   unique MPI tag `0`. If two ranks diverge on the order or size of the
+   jobs, `MPI_Waitall` may block. The next minimal test must print or
+   reduce per neighbor `send_bytes`, `recv_bytes`, `n_jobs` and an order hash
+   before posting MPI.
+3. `MPI_DOUBLE` is correct as long as `Real=double`. To make the code robust,
+   add a `static_assert(std::is_same_v<Real,double>)` near the MPI calls,
+   or centralize a `mpi_datatype<Real>()`.
+4. The GPU diagnostics remain under-instrumented: any host extraction can
+   hide a `Kokkos::fence`. The next runs must separate diagnostics
+   off, reduction-only diagnostics, NumPy extraction, and I/O.
 
-Interpretation revisee :
+Revised interpretation:
 
-Le resultat principal n'est pas "C++ bat Python" ni "Python coute cher". Le
-resultat principal est que Python production coute peu si la frontiere est au
-niveau `advance` et si le loader DSL est compile avec le meme backend que le
-module natif. Les pertes de performance observees viennent surtout des mauvais
-chemins natifs : loader DSL mal specialise, halos/reductions, Poisson/MG,
-fences et metadonnees MPI. La prochaine etape technique prioritaire n'est donc
-pas une nouvelle campagne de courbes, mais un micro-benchmark halo MPI qui
-prouve la correspondance des buffers et decompose pack/comm/unpack.
+The main result is not "C++ beats Python" nor "Python is expensive". The
+main result is that production Python costs little if the boundary is at the
+`advance` level and if the DSL loader is compiled with the same backend as the
+native module. The observed performance losses come mostly from the wrong native
+paths: poorly specialized DSL loader, halos/reductions, Poisson/MG,
+fences and MPI metadata. The next priority technical step is therefore
+not a new campaign of curves, but a halo MPI micro-benchmark that
+proves the buffer correspondence and decomposes pack/comm/unpack.
 
-### 10.11 Conclusion de cloture du TODO perf
+### 10.11 Closing conclusion of the perf TODO
 
-Les runs ROMEO et les branches amont confirment quatre points solides :
+The ROMEO runs and the upstream branches confirm four solid points:
 
-1. Le chemin Python briques ADC ne reproduit pas le probleme MUFFIN : pas de
-   callback Python par cellule, pas de copie full-array par pas dans `advance`.
-2. Le verrou perf observe n'est pas Python. Selon le cas, il est soit
-   Poisson/MG/reductions (`profile_step`), soit halos/reductions MPI
+1. The ADC Python bricks path does not reproduce the MUFFIN problem: no
+   Python callback per cell, no full-array copy per step in `advance`.
+2. The observed perf blocker is not Python. Depending on the case, it is either
+   Poisson/MG/reductions (`profile_step`), or MPI halos/reductions
    (`profile_transport_mbox`).
-3. Le DSL `production` est corrige cote amont par
-   `feat/dsl-production-optflags` : parite backend Kokkos, `-O3 -DNDEBUG`,
-   runtime Kokkos unique. Le diff restant n'est pas une copie Python.
-4. Le multi-rang `scaling_step` reste bloque/time-out meme apres merge de
-   `#254` dans `feat/perf-campaign-bench` (`1d4cd25e25`). Ce n'est pas un
-   verdict general contre MPI CPU, mais ce n'est plus une tache de campagne
-   perf : c'est un chantier code MPI/halo a isoler.
+3. The DSL `production` is fixed on the upstream side by
+   `feat/dsl-production-optflags`: Kokkos backend parity, `-O3 -DNDEBUG`,
+   single Kokkos runtime. The remaining diff is not a Python copy.
+4. The multi-rank `scaling_step` stays blocked/timed-out even after the merge of
+   `#254` into `feat/perf-campaign-bench` (`1d4cd25e25`). This is not a
+   general verdict against MPI CPU, but it is no longer a perf campaign task:
+   it is an MPI/halo code work item to isolate.
 
-Le TODO perf est donc clos : les mesures disponibles permettent d'interpreter
-ou part le temps, et les manques restants sont des blocages techniques
-identifies, pas des courbes manquantes a relancer telles quelles.
+The perf TODO is therefore closed: the available measurements allow interpreting
+where the time goes, and the remaining gaps are identified technical
+blockings, not missing curves to relaunch as-is.

@@ -1,62 +1,62 @@
-> **STATUT : IMPLÉMENTÉ.** Ce document est la spec de conception d'origine. L'étage Schur condensé est livré (`CondensedSchur`, `schur_condensation.hpp`, exposé Python `adc.CondensedSchur` ; tests test_schur_via_system / test_schur_conservation). Lire ce fichier comme historique de conception, pas comme état courant.
+> **STATUS: IMPLEMENTED.** This document is the original design spec. The condensed Schur source stage is delivered (`CondensedSchur`, `schur_condensation.hpp`, exposed in Python as `adc.CondensedSchur`; tests test_schur_via_system / test_schur_conservation). Read this file as design history, not as current state.
 
-# Conception : source implicite condensee par Schur (reproduction arXiv:2510.11808)
+# Design: implicit source condensed by Schur (reproduction of arXiv:2510.11808)
 
-DESIGN-ONLY, aucune implementation. Ce document est une SPEC raisonnee, honnete sur ses
-limites, d'une nouvelle ABSTRACTION numerique pour `adc_cpp` : la condensation de Schur de la
-source implicite couplee (potentiel / vitesse / Lorentz) du schema de Hoffart, Maier, Shadid,
-Tomas (arXiv:2510.11808). Il decrit la cible, les contraintes et le sequencement ; il ne
-promet PAS la reproduction du papier (voir section 9, la feuille de route en est volontairement
-prudente).
+DESIGN-ONLY, no implementation. This document is a reasoned SPEC, honest about its
+limits, of a new numerical ABSTRACTION for `adc_cpp`: the Schur condensation of the
+coupled implicit source (potential / velocity / Lorentz) of the scheme of Hoffart, Maier, Shadid,
+Tomas (arXiv:2510.11808). It describes the target, the constraints and the sequencing; it does NOT
+promise the reproduction of the paper (see section 9, the roadmap there is deliberately
+cautious).
 
-Le document s'appuie sur l'architecture deja en place (sources lues) :
-- `docs/ARCHITECTURE.md` sections 1 (cinq couches orthogonales), 6 (modele physique generique
-  `CompositeModel`), 7 (etage elliptique : `EllipticProblem` / `EllipticOperator` /
-  `LinearSolver` / `FieldPostProcess`), 8 (AMR distribue) ;
-- `docs/ALGORITHMS.md` (briques FV, operateur elliptique, cut-cell Shortley-Weller) ;
-- `docs/PAPER_ROADMAP.md` (etat de reproduction Hoffart, verrou du bord d'anneau cartesien) ;
-- `docs/DSL_MODEL_DESIGN.md` (facade `dsl.Model`, roles physiques, `add_native_block`) ;
-- `docs/GPU_RUNTIME_PORT.md` (recette device-clean : foncteurs nommes, pas de lambda etendue) ;
-- la Phase 1 polaire MERGEE (#116, commit `004efca`) : l'abstraction MAILLAGE
-  (`adc.CartesianMesh` / `adc.PolarMesh` -> `System(mesh=)`), avec `adc.FiniteVolume` = recon +
-  Riemann + variables UNIQUEMENT (aucun argument de geometrie) ;
-- `include/adc/core/variables.hpp` (`VariableRole` : `Density`, `MomentumX`, `MomentumY`,
-  `MomentumZ`, `Energy`, ...) ;
-- `docs/BIBLIOGRAPHY.md` section 3 (entree Hoffart).
+The document relies on the architecture already in place (sources read):
+- `docs/ARCHITECTURE.md` sections 1 (five orthogonal layers), 6 (generic physical model
+  `CompositeModel`), 7 (elliptic stage: `EllipticProblem` / `EllipticOperator` /
+  `LinearSolver` / `FieldPostProcess`), 8 (distributed AMR);
+- `docs/ALGORITHMS.md` (FV bricks, elliptic operator, cut-cell Shortley-Weller);
+- `docs/PAPER_ROADMAP.md` (Hoffart reproduction status, Cartesian ring-edge blocker);
+- `docs/DSL_MODEL_DESIGN.md` (`dsl.Model` facade, physical roles, `add_native_block`);
+- `docs/GPU_RUNTIME_PORT.md` (device-clean harness: named functors, no extended lambda);
+- the MERGED polar Phase 1 (#116, commit `004efca`): the MESH abstraction
+  (`adc.CartesianMesh` / `adc.PolarMesh` -> `System(mesh=)`), with `adc.FiniteVolume` = recon +
+  Riemann + variables ONLY (no geometry argument);
+- `include/adc/core/variables.hpp` (`VariableRole`: `Density`, `MomentumX`, `MomentumY`,
+  `MomentumZ`, `Energy`, ...);
+- `docs/BIBLIOGRAPHY.md` section 3 (Hoffart entry).
 
-NOTE D'HONNETETE LIMINAIRE. Ce qui suit decrit une CIBLE. Rien n'est livre. Le verrou
-scientifique du diocotron (bord d'anneau cartesien, `docs/PAPER_ROADMAP.md` panier 3) est
-ORTHOGONAL a ce chantier : la condensation de Schur est un schema en TEMPS pour la source
-couplee, elle ne corrige PAS la diffusion spatiale du transport. Les deux peuvent atterrir
-independamment.
-
-
-## 1. Le splitting du papier
-
-Hoffart et al. integrent le systeme deux-fluides de derive en SEPARANT trois operateurs, ce qui
-est exactement le style de `TimeIntegrator` de la couche 5 (`docs/ARCHITECTURE.md` section 1 :
-splitting / IMEX / AP composant des operateurs sans connaitre leur interieur) :
-
-1. **Transport hyperbolique** : l'advection conservative des champs fluides (densite, quantite
-   de mouvement, energie le cas echeant). C'est exactement le chemin FV existant
-   (`numerics/spatial_operator.hpp`, reconstruction + flux numerique), explicite, SSPRK2/SSPRK3.
-2. **Source implicite couplee** : le sous-systeme potentiel / vitesse / force de Lorentz, traite
-   IMPLICITEMENT (theta-schema) parce que la rotation cyclotron et le rappel electrostatique sont
-   raides dans la limite de derive.
-3. **Condensation de Schur** : on ELIMINE algebriquement la vitesse du sous-systeme implicite, ce
-   qui reduit l'etage source a un unique solve elliptique de type Poisson MODIFIE pour le
-   potentiel, suivi d'une reconstruction explicite de la vitesse. C'est la cle du cout : un solve
-   elliptique par etage source au lieu d'une inversion couplee dense.
-
-Le decoupage (1) explicite + (2)-(3) implicite est une IMEX au sens de la couche temps. La
-contribution de ce document est l'etage (2)-(3) : la condensation, et surtout l'operateur
-elliptique MODIFIE qu'elle produit.
+PRELIMINARY HONESTY NOTE. What follows describes a TARGET. Nothing is delivered. The scientific
+blocker of the diocotron (Cartesian ring edge, `docs/PAPER_ROADMAP.md` basket 3) is
+ORTHOGONAL to this work item: the Schur condensation is a TIME scheme for the coupled
+source, it does NOT correct the spatial diffusion of the transport. The two can land
+independently.
 
 
-## 2. Les equations de la source
+## 1. The splitting of the paper
 
-Sous-systeme source (transport gele), avec `rho` la densite, `v` la vitesse, `phi` le potentiel,
-`Omega` le vecteur cyclotron (porte par `B_z` hors-plan), `alpha` une constante de couplage :
+Hoffart et al. integrate the drift two-fluid system by SEPARATING three operators, which
+is exactly the style of the `TimeIntegrator` of layer 5 (`docs/ARCHITECTURE.md` section 1:
+splitting / IMEX / AP composing operators without knowing their interior):
+
+1. **Hyperbolic transport**: the conservative advection of the fluid fields (density, momentum,
+   energy where applicable). This is exactly the existing FV path
+   (`numerics/spatial_operator.hpp`, reconstruction + numerical flux), explicit, SSPRK2/SSPRK3.
+2. **Coupled implicit source**: the potential / velocity / Lorentz-force subsystem, treated
+   IMPLICITLY (theta-scheme) because the cyclotron rotation and the electrostatic restoring are
+   stiff in the drift limit.
+3. **Schur condensation**: the velocity of the implicit subsystem is ELIMINATED algebraically, which
+   reduces the source stage to a single MODIFIED Poisson-type elliptic solve for the
+   potential, followed by an explicit reconstruction of the velocity. This is the key to the cost: one elliptic
+   solve per source stage instead of a dense coupled inversion.
+
+The split (1) explicit + (2)-(3) implicit is an IMEX in the sense of the time layer. The
+contribution of this document is the (2)-(3) stage: the condensation, and above all the MODIFIED
+elliptic operator that it produces.
+
+
+## 2. The equations of the source
+
+Source subsystem (transport frozen), with `rho` the density, `v` the velocity, `phi` the potential,
+`Omega` the cyclotron vector (carried by `B_z` out of plane), `alpha` a coupling constant:
 
 ```
 d_t rho = 0
@@ -64,29 +64,29 @@ d_t v   = -grad(phi) + v x Omega
 d_t(-Lap phi) = -alpha div(rho v)
 ```
 
-La densite est gelee dans la source (tout son transport est dans l'etage (1)). La vitesse subit
-le rappel electrostatique `-grad(phi)` et la rotation de Lorentz `v x Omega`. La derniere
-equation est la contrainte de Poisson differentiee en temps (la charge evolue par la divergence
-du courant `rho v`).
+The density is frozen in the source (all its transport is in stage (1)). The velocity undergoes
+the electrostatic restoring `-grad(phi)` and the Lorentz rotation `v x Omega`. The last
+equation is the Poisson constraint differentiated in time (the charge evolves through the divergence
+of the current `rho v`).
 
-### 2.1 Theta-schema et condensation
+### 2.1 Theta-scheme and condensation
 
-On discretise en temps par un theta-schema (`theta in [0,1]`, `theta=1/2` = Crank-Nicolson). On
-note `B` l'operateur LOCAL (point par point) de rotation implicite :
+We discretize in time by a theta-scheme (`theta in [0,1]`, `theta=1/2` = Crank-Nicolson). We
+denote by `B` the LOCAL operator (point by point) of implicit rotation:
 
 ```
 B v = v - theta dt (v x Omega)
 ```
 
-`B` est une matrice 2x2 par cellule (plan (x,y)), inversible des que `theta dt |Omega|` est fini ;
-son inverse `B^{-1}` est CLOS (rotation-dilatation 2x2). La vitesse implicite s'ecrit alors
+`B` is a 2x2 matrix per cell (plane (x,y)), invertible as soon as `theta dt |Omega|` is finite;
+its inverse `B^{-1}` is CLOSED (2x2 rotation-dilation). The implicit velocity then writes
 
 ```
 v^{n+theta} = B^{-1} (v^n - theta dt grad phi^{n+theta})
 ```
 
-En injectant cette expression dans la contrainte de Poisson differentiee, on ELIMINE `v` (c'est
-le complement de Schur du bloc vitesse) et on obtient une equation pour le SEUL `phi^{n+theta}` :
+By injecting this expression into the differentiated Poisson constraint, we ELIMINATE `v` (this is
+the Schur complement of the velocity block) and we obtain an equation for the SOLE `phi^{n+theta}`:
 
 ```
 -Lap phi^{n+theta}
@@ -95,187 +95,186 @@ le complement de Schur du bloc vitesse) et on obtient une equation pour le SEUL 
   - theta dt alpha div( rho^n B^{-1} v^n )
 ```
 
-puis on RECONSTRUIT la vitesse :
+then we RECONSTRUCT the velocity:
 
 ```
 v^{n+theta} = B^{-1} ( v^n - theta dt grad phi^{n+theta} )
 ```
 
-et, le cas echeant, on extrapole l'etat complet `U^{n+theta}` (et l'energie) avant de remplir les
+and, where applicable, we extrapolate the full state `U^{n+theta}` (and the energy) before filling the
 ghosts.
 
 
-## 3. POINT-CLE : pourquoi `source(U, aux)` ne suffit pas
+## 3. KEY POINT: why `source(U, aux)` does not suffice
 
-L'erreur de conception a eviter est de traiter cet etage comme une source LOCALE de plus, du type
-`source(U, aux)` (la signature des briques source actuelles, `docs/ARCHITECTURE.md` section 6 :
-une source ne voit qu'une cellule et ses champs `Aux`). C'est IMPOSSIBLE ici, pour une raison
-STRUCTURELLE et non d'ergonomie :
+The design mistake to avoid is to treat this stage as one more LOCAL source, of the type
+`source(U, aux)` (the signature of the current source bricks, `docs/ARCHITECTURE.md` section 6:
+a source sees only one cell and its `Aux` fields). This is IMPOSSIBLE here, for a reason
+STRUCTURAL and not of ergonomics:
 
-> La condensation de Schur MODIFIE l'operateur elliptique lui-meme.
+> The Schur condensation MODIFIES the elliptic operator itself.
 
-L'equation condensee n'est pas `-Lap phi = f(rho, v)` (un Poisson standard avec un second membre
-recalcule, ce que le couplage actuel sait deja faire via `elliptic_rhs(U)`). C'est
+The condensed equation is not `-Lap phi = f(rho, v)` (a standard Poisson with a recomputed
+right-hand side, which the current coupling already knows how to do via `elliptic_rhs(U)`). It is
 
 ```
 L_schur(phi) = -Lap phi - theta^2 dt^2 alpha div( A grad phi )    avec A = rho B^{-1}
 ```
 
-soit un operateur `-div(A grad phi) + (terme Laplacien)` dont le COEFFICIENT TENSORIEL `A`
-2x2 :
-- depend de l'etat (`rho^n` et `Omega` par cellule), donc CHANGE a chaque pas de temps ;
-- est en general NON SYMETRIQUE : `B^{-1}` est une rotation-dilatation (partie antisymetrique non
-  nulle des que `Omega != 0`), donc `A = rho B^{-1}` a une partie antisymetrique. L'operateur
-  `-div(A grad .)` n'est donc PAS auto-adjoint en general.
+that is an operator `-div(A grad phi) + (Laplacian term)` whose TENSORIAL COEFFICIENT `A`
+2x2:
+- depends on the state (`rho^n` and `Omega` per cell), so CHANGES at every time step;
+- is in general NON SYMMETRIC: `B^{-1}` is a rotation-dilation (nonzero antisymmetric part as
+  soon as `Omega != 0`), so `A = rho B^{-1}` has an antisymmetric part. The operator
+  `-div(A grad .)` is therefore NOT self-adjoint in general.
 
-Une source locale ne peut pas exprimer cela : `source(U, aux)` produit une contribution PAR
-CELLULE au residu, alors que `div(A grad phi)` est un OPERATEUR GLOBAL (stencil couplant les
-voisins, a inverser). Le terme appartient au membre de GAUCHE de l'etage elliptique, pas au
-membre de droite. Concretement :
-- l'`elliptic_rhs(U)` actuel (`physics/elliptic.hpp`, second membre de Poisson, cote couche 5)
-  ne touche que le RHS : il ne peut PAS injecter un terme dans l'OPERATEUR ;
-- `poisson_operator.hpp` (le Laplacien 5 points canonique, `docs/ARCHITECTURE.md` section 7) est
-  un Laplacien SCALAIRE a coefficient constant : il n'a pas de place pour un coefficient tensoriel
-  `A(x)` par cellule.
+A local source cannot express this: `source(U, aux)` produces a contribution PER
+CELL to the residual, whereas `div(A grad phi)` is a GLOBAL OPERATOR (stencil coupling the
+neighbors, to be inverted). The term belongs to the LEFT-hand side of the elliptic stage, not to the
+right-hand side. Concretely:
+- the current `elliptic_rhs(U)` (`physics/elliptic.hpp`, Poisson right-hand side, layer 5 side)
+  touches only the RHS: it CANNOT inject a term into the OPERATOR;
+- `poisson_operator.hpp` (the canonical 5-point Laplacian, `docs/ARCHITECTURE.md` section 7) is
+  a SCALAR constant-coefficient Laplacian: it has no room for a tensorial coefficient
+  `A(x)` per cell.
 
-Donc l'etage source de Schur exige (a) un NOUVEL operateur elliptique tensoriel, et (b) un schema
-local-global qui le CONSTRUIT a partir de l'etat, le RESOUT, puis reconstruit la vitesse. Ce
-n'est ni une source locale ni un Poisson standard : c'est une abstraction numerique a part
-entiere.
+So the Schur source stage requires (a) a NEW tensorial elliptic operator, and (b) a
+local-global scheme that BUILDS it from the state, SOLVES it, then reconstructs the velocity. This
+is neither a local source nor a standard Poisson: it is a numerical abstraction in its own
+right.
 
 
-## 4. POINT-CLE : ne PAS coder un `DiocotronSchurSolver` dans le coeur
+## 4. KEY POINT: do NOT code a `DiocotronSchurSolver` in the core
 
-La tentation symetrique est de baker un solveur nomme `DiocotronSchurSolver` dans le coeur. C'est
-contraire au principe directeur d'`adc_cpp` (`docs/ARCHITECTURE.md` : "le coeur est AGNOSTIQUE au
-modele, il ne nomme aucun scenario"). La separation correcte est :
+The symmetric temptation is to bake a solver named `DiocotronSchurSolver` into the core. This is
+contrary to the guiding principle of `adc_cpp` (`docs/ARCHITECTURE.md`: "the core is AGNOSTIC to the
+model, it names no scenario"). The correct separation is:
 
-- **Modele = PHYSIQUE.** Un modele declare ses variables et leurs ROLES (`VariableRole` :
-  `Density`, `MomentumX`, `MomentumY`, `Energy`, ...), son flux, sa source LOCALE, son second
-  membre elliptique, ses parametres. Il ne sait rien de Schur ni du theta-schema.
-- **SchurCondensation = ALGORITHME numerique local-global.** C'est une politique de la couche
-  numerique + temps (couches 2 et 5) : a partir d'un etat qui EXPOSE les bons roles, elle
-  assemble l'operateur tensoriel, le resout, reconstruit la vitesse. Elle ne nomme aucun
+- **Model = PHYSICS.** A model declares its variables and their ROLES (`VariableRole`:
+  `Density`, `MomentumX`, `MomentumY`, `Energy`, ...), its flux, its LOCAL source, its elliptic right-hand
+  side, its parameters. It knows nothing of Schur or the theta-scheme.
+- **SchurCondensation = local-global numerical ALGORITHM.** It is a policy of the numerical
+  + time layer (layers 2 and 5): from a state that EXPOSES the right roles, it
+  assembles the tensorial operator, solves it, reconstructs the velocity. It names no
   scenario.
 
-Premiere implementation concrete : **`ElectrostaticLorentzCondensation`**, GENERIQUE sur toute
-espece fluide qui expose les roles
-- `Density`, `MomentumX`, `MomentumY` (et `Energy` optionnellement),
-- plus l'acces a `phi`, `grad phi`, le champ `B_z` / `Omega`, et la constante `alpha`.
+First concrete implementation: **`ElectrostaticLorentzCondensation`**, GENERIC over any
+fluid species that exposes the roles
+- `Density`, `MomentumX`, `MomentumY` (and `Energy` optionally),
+- plus access to `phi`, `grad phi`, the field `B_z` / `Omega`, and the constant `alpha`.
 
-Elle marche pour un modele ecrit en BRIQUES C++ (`CompositeModel`, `add_block`) OU en DSL compile
-(`dsl.Model` -> `add_native_block`), pourvu que les ROLES soient presents. Le diocotron de derive
-n'est qu'UN client ; un modele a deux especes magnetisees en serait un autre, sans une ligne de
-code Schur supplementaire. C'est l'inverse exact d'un solveur nomme par scenario.
+It works for a model written in C++ BRICKS (`CompositeModel`, `add_block`) OR in compiled DSL
+(`dsl.Model` -> `add_native_block`), provided the ROLES are present. The drift diocotron
+is only ONE client; a model with two magnetized species would be another, without an extra line of
+Schur code. This is the exact inverse of a scenario-named solver.
 
-CONTRAT MINIMAL exige du modele par `ElectrostaticLorentzCondensation` :
-1. un role `Density` (lecture de `rho^n`) ;
-2. les roles `MomentumX`/`MomentumY` (ou `VelocityX`/`VelocityY`) pour lire/reconstruire `v` ;
-3. un champ aux `B_z` (ou `Omega`) deja peuple (canal `Aux`, comme `set_magnetic_field`
-   aujourd'hui) ;
-4. un potentiel `phi` et un acces `grad phi` (deja fournis par l'etage elliptique couple) ;
-5. la constante de couplage `alpha`.
-Tout modele qui satisfait ce contrat est eligible, qu'il vienne des briques ou du DSL.
-
-
-## 5. Architecture C++ cible (descriptive, AUCUNE implementation)
-
-Cinq niveaux, alignes sur les cinq couches existantes. Chaque niveau est device-callable la ou il
-tourne dans la boucle chaude, sans allocation, sans `std::function`, sans polymorphisme dynamique
-(`docs/ARCHITECTURE.md` section 1 ; recette device-clean de `docs/GPU_RUNTIME_PORT.md`).
-
-### Niveau 1 : `TensorEllipticOperator` (couche numerique)
-
-L'operateur discret `L(phi) = -div(A grad phi) + kappa phi`, avec `A` un coefficient TENSORIEL 2x2
-par cellule (potentiellement non symetrique) et `kappa` un terme de masse scalaire optionnel. Il
-GENERALISE `poisson_operator.hpp` (Laplacien scalaire 5 points) : meme role d'`OperatorSpec`
-partage (`apply`, `residual`, restriction/prolongation pour le MG), mais avec un stencil a flux de
-face tensoriel. Les coefficients `A` vivent dans un `MultiFab` (composante par composante du 2x2,
-ou stockage compact des 4 entrees), restreints par `average_down` pour les niveaux grossiers du
-MG, comme `eps(x)` aujourd'hui (`set_epsilon(eps_fine)`, `docs/ARCHITECTURE.md` section 7). Le cas
-`A = I`, `kappa = 0` doit retomber EXACTEMENT (bit-identique) sur le Laplacien canonique : c'est le
-garde-fou de non-regression.
-
-### Niveau 2 : le solveur, et la QUESTION de la non-symetrie (NOTE TECHNIQUE A TRANCHER)
-
-Le solveur lineaire depend de la symetrie de `A`, qui depend de la PHYSIQUE :
-
-- **`A` symetrique** quand la partie antisymetrique de `B^{-1}` s'annule, c.-a-d. `Omega = 0`
-  (pas de champ magnetique : on retombe sur un Poisson a coefficient `rho`, symetrique defini
-  positif si `rho > 0`). Le cas `B_z` constant ne suffit PAS a lui seul : `B^{-1}` reste une
-  rotation des que `Omega != 0`. Le cas reellement symetrique est donc `Omega = 0`. Le cas
-  `B_z` constant ET `rho` constant donne un operateur a coefficient CONSTANT mais toujours NON
-  symetrique (rotation pure) : il est juste plus facile a preconditionner, pas symetrique.
-- **`A` non symetrique** des que `Omega != 0` (cas diocotron magnetise), et a fortiori quand
-  `rho` varie en espace (coefficient variable ET non symetrique).
-
-Consequence : le `GeometricMG` actuel (V-cycle, lisseur Gauss-Seidel rouge-noir) suppose un
-operateur symetrique defini positif. Pour `A` non symetrique, le V-cycle MG seul n'est PAS un
-solveur fiable. Direction CIBLE (a CONFIRMER, c'est le point technique a trancher avant
-l'implementation du niveau 2) :
-
-> Un solveur de KRYLOV non symetrique (GMRES ou BiCGStab) PRECONDITIONNE par un V-cycle MG
-> applique a la PARTIE SYMETRIQUE de l'operateur (le `-div(rho B^{-1}_sym grad .)` symetrise, ou
-> simplement le Poisson scalaire `rho`-pondere).
-
-Cette piste est PLAUSIBLE (le terme antisymetrique est en `theta^2 dt^2 alpha`, donc petit a CFL
-source raisonnable : le preconditionneur symetrique devrait capturer l'essentiel). Mais elle reste
-A VALIDER : on ne sait pas a ce stade (a) le nombre d'iterations Krylov reel, (b) la robustesse du
-preconditionnement MG-sur-partie-symetrique quand `theta dt |Omega|` grandit, (c) si un simple
-preconditionneur de Jacobi par blocs 2x2 suffirait pour les regimes vises. Aucune brique GMRES /
-BiCGStab n'existe aujourd'hui dans `numerics/elliptic/` (le concept `EllipticSolver` n'a que MG et
-FFT). C'est donc un AJOUT, derriere le concept `EllipticSolver` existant (`rhs`/`phi`/`solve`/
-`residual`/`geom`), pour ne casser aucun appelant. FLAG : trancher (Krylov + preconditionneur) en
-PR3 avant tout cablage facade.
-
-### Niveau 3 : `LocalLorentzEliminator` (couche numerique, device-callable)
-
-Le coeur LOCAL : par cellule, construire `B = I - theta dt [Omega]_x` (la matrice 2x2 de rotation
-implicite) et son inverse `B^{-1}` en forme close (pas de solve, pas d'allocation). Device-callable
-(`ADC_HD`), foncteur NOMME (pas de lambda etendue, cf. `docs/GPU_RUNTIME_PORT.md` : la limite nvcc
-des lambdas etendues premiere-instanciees cross-TU est contournee par des foncteurs nommes, recette
-deja validee GH200 pour le transport #64 et l'elliptique #97). Sert a deux endroits : (a) assembler
-le coefficient `A = rho B^{-1}` du niveau 1, (b) reconstruire `v^{n+theta}` au niveau 4. Aucune
-matrice n'est materialisee globalement : `B^{-1}` est recalcule a la volee par cellule.
-
-### Niveau 4 : `CondensedSchurSourceStepper` (couche temps / couplage)
-
-L'orchestrateur de l'etage source, joue UNE fois par etage IMEX (frequence portee par
-`CouplingPolicy`, `PerStage` ou `OncePerStep`, `docs/ARCHITECTURE.md` section 7). Sequence :
-1. **Construire l'operateur** : remplir le `MultiFab` de coefficients `A = rho^n B^{-1}` (niveau 3
-   par cellule) ; configurer `L_schur` (niveau 1) avec `theta`, `dt`, `alpha`.
-2. **Construire le RHS** : `-Lap phi^n - theta dt alpha div( rho^n B^{-1} v^n )` (divergence
-   discrete d'un flux de face tensoriel ; reutilise l'assemblage de face existant).
-3. **Resoudre `phi^{n+theta}`** : appeler le solveur du niveau 2 derriere le concept
-   `EllipticSolver`.
-4. **Reconstruire `U^{n+theta}`** : `v^{n+theta} = B^{-1}(v^n - theta dt grad phi^{n+theta})`
-   (niveau 3), puis recomposer momentum/energie selon les roles du modele.
-5. **Extrapoler** : passer de l'etat `n+theta` a `n+1` selon le theta-schema (extrapolation
-   lineaire ; `phi^{n+1}`, `v^{n+1}` deduits).
-6. **Mise a jour energie** : si le modele porte un role `Energy`, recalculer l'energie coherente
-   avec la nouvelle vitesse (travail de la force electrostatique).
-7. **Remplir les ghosts** (`fill_boundary`, halos MPI) avant de rendre la main a l'etage transport.
-
-Le stepper ne nomme aucun scenario : il lit les roles, appelle les niveaux 1-3, et delegue le
-solve au concept `EllipticSolver`. C'est lui qui materialise le local-global (assemblage local du
-coefficient -> solve global -> reconstruction locale).
-
-### Niveau 5 : exposition DSL (couche facade)
-
-Au depart, le DSL n'a RIEN a ajouter : la condensation est selectionnee par la PRESENCE des roles
-requis (`Density`/`MomentumX`/`MomentumY` + `phi`/`B_z`/`alpha`) et par le choix de l'integrateur
-cote facade (section 6). Un modele DSL existant (`dsl.Model`) qui declare ces roles est
-directement eligible via `add_native_block` (chemin natif zero-copie, GPU/MPI, `docs/
-DSL_MODEL_DESIGN.md`). PLUS TARD seulement, un declarateur explicite `m.implicit_coupling(...)`
-(nommant `phi`, `v`, `Omega`, `alpha`, `theta`) pourrait rendre l'intention lisible dans la
-formule et lever des erreurs au plus tot ; ce n'est PAS requis pour le premier client (roles
-suffisent) et reste differe.
+MINIMAL CONTRACT required of the model by `ElectrostaticLorentzCondensation`:
+1. a `Density` role (read of `rho^n`);
+2. the `MomentumX`/`MomentumY` roles (or `VelocityX`/`VelocityY`) to read/reconstruct `v`;
+3. an aux field `B_z` (or `Omega`) already populated (`Aux` channel, like `set_magnetic_field`
+   today);
+4. a potential `phi` and an access `grad phi` (already provided by the coupled elliptic stage);
+5. the coupling constant `alpha`.
+Any model that satisfies this contract is eligible, whether it comes from the bricks or from the DSL.
 
 
-## 6. API Python cible
+## 5. Target C++ architecture (descriptive, NO implementation)
 
-Le point d'entree est un splitting EXPLICITE/IMPLICITE explicite, qui compose un integrateur
-hyperbolique et un etage source condense :
+Five levels, aligned on the five existing layers. Each level is device-callable where it
+runs in the hot loop, with no allocation, no `std::function`, no dynamic polymorphism
+(`docs/ARCHITECTURE.md` section 1; device-clean harness of `docs/GPU_RUNTIME_PORT.md`).
+
+### Level 1: `TensorEllipticOperator` (numerical layer)
+
+The discrete operator `L(phi) = -div(A grad phi) + kappa phi`, with `A` a 2x2 TENSORIAL coefficient
+per cell (potentially non symmetric) and `kappa` an optional scalar mass term. It
+GENERALIZES `poisson_operator.hpp` (scalar 5-point Laplacian): same role of shared `OperatorSpec`
+(`apply`, `residual`, restriction/prolongation for the MG), but with a tensorial face-flux
+stencil. The coefficients `A` live in a `MultiFab` (component by component of the 2x2,
+or compact storage of the 4 entries), restricted by `average_down` for the coarse MG levels, like `eps(x)`
+today (`set_epsilon(eps_fine)`, `docs/ARCHITECTURE.md` section 7). The case
+`A = I`, `kappa = 0` must fall back EXACTLY (bit-identical) on the canonical Laplacian: this is the
+non-regression guard.
+
+### Level 2: the solver, and the QUESTION of non-symmetry (TECHNICAL NOTE TO DECIDE)
+
+The linear solver depends on the symmetry of `A`, which depends on the PHYSICS:
+
+- **`A` symmetric** when the antisymmetric part of `B^{-1}` vanishes, i.e. `Omega = 0`
+  (no magnetic field: we fall back on a Poisson with coefficient `rho`, symmetric positive
+  definite if `rho > 0`). The constant `B_z` case is NOT enough on its own: `B^{-1}` remains a
+  rotation as soon as `Omega != 0`. The truly symmetric case is therefore `Omega = 0`. The case
+  constant `B_z` AND constant `rho` gives a CONSTANT-coefficient operator but still NON
+  symmetric (pure rotation): it is just easier to precondition, not symmetric.
+- **`A` non symmetric** as soon as `Omega != 0` (magnetized diocotron case), and a fortiori when
+  `rho` varies in space (variable coefficient AND non symmetric).
+
+Consequence: the current `GeometricMG` (V-cycle, red-black Gauss-Seidel smoother) assumes a
+symmetric positive definite operator. For `A` non symmetric, the MG V-cycle alone is NOT a
+reliable solver. TARGET direction (to be CONFIRMED, this is the technical point to decide before
+the implementation of level 2):
+
+> A non-symmetric KRYLOV solver (GMRES or BiCGStab) PRECONDITIONED by a V-cycle MG
+> applied to the SYMMETRIC PART of the operator (the `-div(rho B^{-1}_sym grad .)` symmetrized, or
+> simply the `rho`-weighted scalar Poisson).
+
+This lead is PLAUSIBLE (the antisymmetric term is in `theta^2 dt^2 alpha`, so small at a reasonable
+source CFL: the symmetric preconditioner should capture the essentials). But it remains
+TO VALIDATE: at this stage we do not know (a) the real number of Krylov iterations, (b) the robustness of
+the MG-on-symmetric-part preconditioning when `theta dt |Omega|` grows, (c) whether a simple
+2x2 block Jacobi preconditioner would suffice for the targeted regimes. No GMRES /
+BiCGStab brick exists today in `numerics/elliptic/` (the `EllipticSolver` concept has only MG and
+FFT). It is therefore an ADDITION, behind the existing `EllipticSolver` concept (`rhs`/`phi`/`solve`/
+`residual`/`geom`), so as to break no caller. FLAG: decide (Krylov + preconditioner) in
+PR3 before any facade wiring.
+
+### Level 3: `LocalLorentzEliminator` (numerical layer, device-callable)
+
+The LOCAL core: per cell, build `B = I - theta dt [Omega]_x` (the 2x2 matrix of implicit
+rotation) and its inverse `B^{-1}` in closed form (no solve, no allocation). Device-callable
+(`ADC_HD`), NAMED functor (no extended lambda, cf. `docs/GPU_RUNTIME_PORT.md`: the nvcc limit
+on cross-TU first-instantiated extended lambdas is worked around by named functors, harness
+already validated on GH200 for transport #64 and elliptic #97). It serves two places: (a) assemble
+the coefficient `A = rho B^{-1}` of level 1, (b) reconstruct `v^{n+theta}` at level 4. No
+matrix is materialized globally: `B^{-1}` is recomputed on the fly per cell.
+
+### Level 4: `CondensedSchurSourceStepper` (time / coupling layer)
+
+The orchestrator of the source stage, played ONCE per IMEX stage (frequency carried by
+`CouplingPolicy`, `PerStage` or `OncePerStep`, `docs/ARCHITECTURE.md` section 7). Sequence:
+1. **Build the operator**: fill the coefficient `MultiFab` `A = rho^n B^{-1}` (level 3
+   per cell); configure `L_schur` (level 1) with `theta`, `dt`, `alpha`.
+2. **Build the RHS**: `-Lap phi^n - theta dt alpha div( rho^n B^{-1} v^n )` (discrete
+   divergence of a tensorial face flux; reuses the existing face assembly).
+3. **Solve `phi^{n+theta}`**: call the level 2 solver behind the `EllipticSolver` concept.
+4. **Reconstruct `U^{n+theta}`**: `v^{n+theta} = B^{-1}(v^n - theta dt grad phi^{n+theta})`
+   (level 3), then recompose momentum/energy according to the model roles.
+5. **Extrapolate**: pass from the state `n+theta` to `n+1` according to the theta-scheme (linear
+   extrapolation; `phi^{n+1}`, `v^{n+1}` deduced).
+6. **Energy update**: if the model carries an `Energy` role, recompute the energy coherent
+   with the new velocity (work of the electrostatic force).
+7. **Fill the ghosts** (`fill_boundary`, MPI halos) before handing back to the transport stage.
+
+The stepper names no scenario: it reads the roles, calls levels 1-3, and delegates the
+solve to the `EllipticSolver` concept. It is the one that materializes the local-global (local assembly of
+the coefficient -> global solve -> local reconstruction).
+
+### Level 5: DSL exposure (facade layer)
+
+At the start, the DSL has NOTHING to add: the condensation is selected by the PRESENCE of the
+required roles (`Density`/`MomentumX`/`MomentumY` + `phi`/`B_z`/`alpha`) and by the choice of the integrator
+on the facade side (section 6). An existing DSL model (`dsl.Model`) that declares these roles is
+directly eligible via `add_native_block` (native zero-copy path, GPU/MPI, `docs/
+DSL_MODEL_DESIGN.md`). ONLY LATER, an explicit declarator `m.implicit_coupling(...)`
+(naming `phi`, `v`, `Omega`, `alpha`, `theta`) could make the intention readable in the
+formula and raise errors as early as possible; this is NOT required for the first client (roles
+suffice) and stays deferred.
+
+
+## 6. Target Python API
+
+The entry point is an EXPLICIT/IMPLICIT explicit splitting, which composes a hyperbolic
+integrator and a condensed source stage:
 
 ```python
 sim.add_equation(
@@ -296,112 +295,112 @@ sim.add_equation(
 )
 ```
 
-Principes de cette API :
-- `adc.Split(hyperbolic=, source=)` est un nouvel integrateur de la couche temps : il joue
-  l'etage hyperbolique explicite puis l'etage source `CondensedSchur` (IMEX au sens couche 5).
-- `adc.CondensedSchur(kind=, theta=, ...)` NOMME l'algorithme et MAPPE les champs sur les roles.
-  `kind="electrostatic_lorentz"` selectionne `ElectrostaticLorentzCondensation` (niveau 4-3) ;
-  d'autres `kind` pourront s'ajouter sans toucher la facade.
-- **Le chemin par defaut est INCHANGE.** Rien ne casse : `adc.Explicit`, `adc.IMEX`,
-  `adc.Implicit`, `add_block`, `add_equation` continuent de fonctionner a l'identique. Un modele
-  qui n'emploie pas `adc.Split(... source=adc.CondensedSchur ...)` ne voit jamais le nouvel etage.
-  La selection est OPT-IN, comme la grille polaire (#116, defaut cartesien bit-identique).
+Principles of this API:
+- `adc.Split(hyperbolic=, source=)` is a new integrator of the time layer: it plays the
+  explicit hyperbolic stage then the `CondensedSchur` source stage (IMEX in the layer-5 sense).
+- `adc.CondensedSchur(kind=, theta=, ...)` NAMES the algorithm and MAPS the fields onto the roles.
+  `kind="electrostatic_lorentz"` selects `ElectrostaticLorentzCondensation` (level 4-3);
+  other `kind` will be able to be added without touching the facade.
+- **The default path is UNCHANGED.** Nothing breaks: `adc.Explicit`, `adc.IMEX`,
+  `adc.Implicit`, `add_block`, `add_equation` continue to work identically. A model
+  that does not use `adc.Split(... source=adc.CondensedSchur ...)` never sees the new stage.
+  The selection is OPT-IN, like the polar grid (#116, Cartesian default bit-identical).
 
-ENCART -- `adc.SourceImplicit` (LOCAL) vs `adc.CondensedSchur` (GLOBAL). Deux mecanismes
-distincts traitent une source raide implicitement ; ne pas les confondre.
-- `adc.SourceImplicit` (= IMEX source-only) est LOCAL : l'implicite ne couple que les composantes
-  d'UNE MEME cellule (backward-Euler resolu par Newton a la cellule), AUCUN couplage spatial.
-  C'est le bon choix pour les termes raides purement locaux (relaxation, reactions, friction) :
-  pas de solve elliptique, donc bien moins cher.
-- `adc.CondensedSchur` (via `adc.Split`, cf. sections 2 a 5) est GLOBAL : il assemble l'operateur
-  elliptique tensoriel condense et le resout par Krylov (BiCGStab), couplant TOUT le domaine.
-  C'est le bon choix UNIQUEMENT pour un couplage raide non local (Lorentz / electrostatique, ex.
-  Euler-Poisson magnetise de Hoffart). Une source raide locale n'a pas besoin de Schur.
-
-
-## 7. Geometrie = abstraction MAILLAGE, pas une option de `FiniteVolume`
-
-CONTRAINTE STRUCTURELLE, deja posee par la Phase 1 polaire MERGEE (#116, commit `004efca`). Le
-CHOIX de geometrie vit dans un objet MAILLAGE, jamais dans le schema :
-- `adc.CartesianMesh(...)` / `adc.PolarMesh(...)` -> `adc.System(mesh=...)` portent la geometrie
-  (`SystemConfig` porte `geometry`, `nr`, `ntheta`, `r_min`, `r_max`).
-- `adc.FiniteVolume(limiter=, riemann=, variables=)` reste reconstruction + flux numerique +
-  variables UNIQUEMENT. Il N'A AUCUN argument de geometrie, et n'en aura jamais.
-
-Pour la condensation de Schur, cela impose que le `TensorEllipticOperator` (niveau 1) et son
-assemblage de flux de face respectent la GEOMETRIE portee par le `Mesh` (metriques cartesiennes ou
-polaires). La divergence `div(A grad phi)` et l'inverse de Lorentz `B^{-1}` doivent etre exprimes
-dans la base de la geometrie active (en polaire : la divergence ponderee par le rayon de face
-`(1/r) d_r(r F_r) + (1/r) d_theta F_theta`, comme `assemble_rhs_polar` de #116 ; et l'inverse de
-Lorentz en base locale `(r, theta)`, comme `ExBVelocityPolar`). La condensation est donc
-parametree par le `Mesh`, pas par `FiniteVolume`. C'est coherent avec le verrou du
-`docs/PAPER_ROADMAP.md` (panier 3) : si l'on veut un jour combiner Schur + grille polaire pour le
-diocotron, le seam est deja a la bonne place (le maillage), mais ce sont deux chantiers distincts.
+BOX -- `adc.SourceImplicit` (LOCAL) vs `adc.CondensedSchur` (GLOBAL). Two distinct mechanisms
+treat a stiff source implicitly; do not confuse them.
+- `adc.SourceImplicit` (= IMEX source-only) is LOCAL: the implicit couples only the components
+  of the SAME cell (backward-Euler solved by Newton at the cell), NO spatial coupling.
+  It is the right choice for purely local stiff terms (relaxation, reactions, friction):
+  no elliptic solve, so much cheaper.
+- `adc.CondensedSchur` (via `adc.Split`, cf. sections 2 to 5) is GLOBAL: it assembles the condensed
+  tensorial elliptic operator and solves it by Krylov (BiCGStab), coupling the WHOLE domain.
+  It is the right choice ONLY for a nonlocal stiff coupling (Lorentz / electrostatic, e.g.
+  the magnetized Euler-Poisson of Hoffart). A local stiff source does not need Schur.
 
 
-## 8. GPU / MPI des le depart, AMR ensuite
+## 7. Geometry = MESH abstraction, not an option of `FiniteVolume`
 
-Contrainte non negociable, alignee sur l'etat de production du coeur
-(`docs/DSL_MODEL_DESIGN.md` section 5, `docs/GPU_RUNTIME_PORT.md`) :
-- **Foncteurs NOMMES**, pas de lambda etendue `__host__ __device__` premiere-instanciee cross-TU
-  (limite nvcc contournee, validee GH200 pour le transport #64 et l'elliptique #97). Les niveaux 1
-  et 3 (operateur tensoriel, eliminateur de Lorentz) doivent etre des foncteurs nommes
-  device-clean des l'ecriture.
-- **Coefficients en `MultiFab`** : `A = rho B^{-1}` est un champ par cellule (4 composantes du
-  2x2, ou stockage compact), pas un parametre scalaire ; restreint par `average_down` pour le MG,
-  comme `eps(x)`.
-- **`local_size() == 0` sur, MPI-propre** : tout post-traitement par cellule garde les rangs sans
-  box (cf. le correctif `solve_fields` MPI #99 : `fab(0)` sans garde segfaute sur un rang vide).
-  L'assemblage du coefficient et la reconstruction de vitesse doivent etre gardes.
-- **Aucun Python dans le hot path** : la facade Python ne fait que CONFIGURER l'etage (roles,
-  `theta`, `alpha`) ; la boucle est entierement C++ (chemin `add_native_block` zero-copie).
-- **AMR seulement APRES le chemin uniforme**. Le `TensorEllipticOperator` sur hierarchie AMR
-  (restriction/prolongation du coefficient tensoriel, reflux coherent avec l'etage source) est un
-  chantier a part, a ne PAS tenter avant que l'uniforme mono-niveau soit valide CPU + GPU + MPI.
-  Reserve connue : `AmrSystem` n'est pas a parite avec `System` (mono-bloc, explicite,
-  `docs/ARCHITECTURE.md` section 8) ; brancher la condensation sur AMR demandera d'abord cette
-  parite.
+STRUCTURAL CONSTRAINT, already laid by the MERGED polar Phase 1 (#116, commit `004efca`). The
+CHOICE of geometry lives in a MESH object, never in the scheme:
+- `adc.CartesianMesh(...)` / `adc.PolarMesh(...)` -> `adc.System(mesh=...)` carry the geometry
+  (`SystemConfig` carries `geometry`, `nr`, `ntheta`, `r_min`, `r_max`).
+- `adc.FiniteVolume(limiter=, riemann=, variables=)` stays reconstruction + numerical flux +
+  variables ONLY. It HAS NO geometry argument, and never will.
+
+For the Schur condensation, this requires that the `TensorEllipticOperator` (level 1) and its
+face-flux assembly respect the GEOMETRY carried by the `Mesh` (Cartesian or
+polar metrics). The divergence `div(A grad phi)` and the Lorentz inverse `B^{-1}` must be expressed
+in the basis of the active geometry (in polar: the divergence weighted by the face radius
+`(1/r) d_r(r F_r) + (1/r) d_theta F_theta`, like `assemble_rhs_polar` of #116; and the Lorentz
+inverse in the local basis `(r, theta)`, like `ExBVelocityPolar`). The condensation is therefore
+parameterized by the `Mesh`, not by `FiniteVolume`. This is coherent with the blocker of the
+`docs/PAPER_ROADMAP.md` (basket 3): if one wants one day to combine Schur + polar grid for the
+diocotron, the seam is already in the right place (the mesh), but these are two distinct work items.
 
 
-## 9. Sequencement des PR (feuille de route, HONNETE sur l'horizon)
+## 8. GPU / MPI from the start, AMR afterwards
 
-PR doc-only d'abord, puis une montee progressive. Cette liste est une CIBLE, pas un engagement de
-calendrier ; les PR tardives sont LOIN et certaines dependent de questions non tranchees (le
-solveur non symetrique du niveau 2, l'AMR). Ce document NE PROMET PAS la reproduction du papier :
-au mieux, il pose l'INFRASTRUCTURE numerique de l'etage source condense, qui est NECESSAIRE mais
-PAS SUFFISANTE (le verrou du bord d'anneau cartesien, `docs/PAPER_ROADMAP.md` panier 3, est
-orthogonal et reste ouvert).
+Non-negotiable constraint, aligned on the production state of the core
+(`docs/DSL_MODEL_DESIGN.md` section 5, `docs/GPU_RUNTIME_PORT.md`):
+- **NAMED functors**, no `__host__ __device__` cross-TU first-instantiated extended lambda
+  (nvcc limit worked around, validated on GH200 for transport #64 and elliptic #97). Levels 1
+  and 3 (tensorial operator, Lorentz eliminator) must be device-clean named functors
+  from the writing.
+- **Coefficients in `MultiFab`**: `A = rho B^{-1}` is a per-cell field (4 components of the
+  2x2, or compact storage), not a scalar parameter; restricted by `average_down` for the MG,
+  like `eps(x)`.
+- **`local_size() == 0` safe, MPI-clean**: any per-cell post-processing keeps the ranks without
+  a box safe (cf. the `solve_fields` MPI #99 fix: `fab(0)` without a guard segfaults on an empty
+  rank). The coefficient assembly and the velocity reconstruction must be guarded.
+- **No Python in the hot path**: the Python facade only CONFIGURES the stage (roles,
+  `theta`, `alpha`); the loop is entirely C++ (`add_native_block` zero-copy path).
+- **AMR only AFTER the uniform path**. The `TensorEllipticOperator` on an AMR hierarchy
+  (restriction/prolongation of the tensorial coefficient, reflux coherent with the source stage) is a
+  separate work item, NOT to be attempted before the uniform single-level is validated CPU + GPU + MPI.
+  Known reservation: `AmrSystem` is not at parity with `System` (mono-block, explicit,
+  `docs/ARCHITECTURE.md` section 8); wiring the condensation onto AMR will require this
+  parity first.
 
-- **PR0 (ce document)** : la SPEC de conception. Doc-only.
-- **PR1** : `TensorEllipticOperator` (niveau 1) en SCALAIRE generalise + non-regression bit-
-  identique au Laplacien canonique pour `A = I`, `kappa = 0`. MMS ordre 2 sur un coefficient
-  tensoriel constant SYMETRIQUE (cas test analytique, pas de physique). CPU serie.
-- **PR2** : `LocalLorentzEliminator` (niveau 3), foncteur nomme device-clean, test unitaire
-  `B B^{-1} = I` par cellule. Assemblage du coefficient `A = rho B^{-1}` en `MultiFab`.
-- **PR3** : le solveur non symetrique du niveau 2. C'est le POINT TECHNIQUE A TRANCHER (Krylov
-  GMRES/BiCGStab + preconditionneur MG sur la partie symetrique, ou Jacobi par blocs). PR de
-  recherche : on mesure les iterations et la robustesse en `theta dt |Omega|` avant de figer le
-  choix. Risque le plus eleve de la sequence.
-- **PR4** : `CondensedSchurSourceStepper` (niveau 4) + `adc.Split` / `adc.CondensedSchur` (API
-  Python, section 6), chemin natif `add_native_block`. Defaut inchange. Validation : un cas
-  manufacture (MMS sur le sous-systeme source seul, transport gele) ; PAS encore le diocotron.
-- **PR5** : portage GPU (foncteurs nommes deja en place ; valider parite Serial vs Cuda sur GH200,
-  comme #97).
-- **PR6** : portage MPI (parite bit-invariante au nombre de rangs, `local_size()==0` garde, comme
+
+## 9. PR sequencing (roadmap, HONEST about the horizon)
+
+PR doc-only first, then a progressive ramp-up. This list is a TARGET, not a calendar
+commitment; the late PRs are FAR and some depend on undecided questions (the
+non-symmetric solver of level 2, the AMR). This document does NOT PROMISE the reproduction of the paper:
+at best, it lays the numerical INFRASTRUCTURE of the condensed source stage, which is NECESSARY but
+NOT SUFFICIENT (the Cartesian ring-edge blocker, `docs/PAPER_ROADMAP.md` basket 3, is
+orthogonal and remains open).
+
+- **PR0 (this document)**: the design SPEC. Doc-only.
+- **PR1**: `TensorEllipticOperator` (level 1) in SCALAR generalized + non-regression bit-
+  identical to the canonical Laplacian for `A = I`, `kappa = 0`. MMS order 2 on a constant SYMMETRIC
+  tensorial coefficient (analytical test case, no physics). CPU serial.
+- **PR2**: `LocalLorentzEliminator` (level 3), device-clean named functor, unit test
+  `B B^{-1} = I` per cell. Assembly of the coefficient `A = rho B^{-1}` in `MultiFab`.
+- **PR3**: the non-symmetric solver of level 2. This is the TECHNICAL POINT TO DECIDE (Krylov
+  GMRES/BiCGStab + MG preconditioner on the symmetric part, or block Jacobi). Research
+  PR: we measure the iterations and the robustness in `theta dt |Omega|` before freezing the
+  choice. Highest risk of the sequence.
+- **PR4**: `CondensedSchurSourceStepper` (level 4) + `adc.Split` / `adc.CondensedSchur` (Python
+  API, section 6), native `add_native_block` path. Default unchanged. Validation: a manufactured
+  case (MMS on the source subsystem alone, transport frozen); NOT yet the diocotron.
+- **PR5**: GPU port (named functors already in place; validate Serial vs Cuda parity on GH200,
+  like #97).
+- **PR6**: MPI port (parity bit-invariant to the number of ranks, `local_size()==0` guarded, like
   #99/#93).
-- **PR7** : declarateur DSL optionnel `m.implicit_coupling(...)` (niveau 5, sucre + erreurs au plus
-  tot). Non bloquant.
-- **PR8** : AMR (`TensorEllipticOperator` sur hierarchie, restriction du coefficient, reflux).
-  LOIN, conditionne par la parite `AmrSystem` <-> `System` (`docs/ARCHITECTURE.md` section 8).
+- **PR7**: optional DSL declarator `m.implicit_coupling(...)` (level 5, sugar + errors as early as
+  possible). Non blocking.
+- **PR8**: AMR (`TensorEllipticOperator` on a hierarchy, restriction of the coefficient, reflux).
+  FAR, conditioned on the parity `AmrSystem` <-> `System` (`docs/ARCHITECTURE.md` section 8).
 
-LIMITES connues a garder en tete (ne PAS les masquer) :
-- la non-symetrie du niveau 2 est un VRAI risque numerique non resolu (PR3) ;
-- aucune de ces PR ne traite le bord d'anneau cartesien : la reproduction QUANTITATIVE du taux
-  diocotron de Hoffart restera bornee par ce verrou (`docs/PAPER_ROADMAP.md`) meme avec un etage
-  source condense parfait ;
-- le modele deux-fluides MAGNETISE complet (couplage E x B + diamagnetique inhomogene au transport,
-  au-dela de la limite de derive) est encore au-dela de cet etage source (`docs/PAPER_ROADMAP.md`
-  panier 4) ;
-- l'horizon est LONG : PR1-PR4 sont l'ossature credible a moyen terme ; PR5-PR8 dependent de
-  validations materielles (GH200) et de chantiers transverses (parite AMR) qui ne sont pas
-  garantis sur l'horizon du stage.
+Known LIMITS to keep in mind (do NOT hide them):
+- the non-symmetry of level 2 is a REAL unresolved numerical risk (PR3);
+- none of these PRs treats the Cartesian ring edge: the QUANTITATIVE reproduction of the
+  Hoffart diocotron rate will stay bounded by this blocker (`docs/PAPER_ROADMAP.md`) even with a perfect
+  condensed source stage;
+- the full MAGNETIZED two-fluid model (E x B + inhomogeneous diamagnetic coupling to the transport,
+  beyond the drift limit) is still beyond this source stage (`docs/PAPER_ROADMAP.md`
+  basket 4);
+- the horizon is LONG: PR1-PR4 are the credible backbone in the medium term; PR5-PR8 depend on
+  hardware validations (GH200) and transverse work items (AMR parity) that are not
+  guaranteed on the horizon of the internship.

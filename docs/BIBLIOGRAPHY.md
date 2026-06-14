@@ -1,64 +1,64 @@
-# Bibliographie
+# Bibliography
 
-Les références qui ont informé la conception et l'implémentation d'`adc_cpp` : codes AMR /
-plasma existants consultés, manuels, articles clés. Aucun n'a été copié ; chacun a apporté
-une idée.
+The references that informed the design and implementation of `adc_cpp`: existing AMR /
+plasma codes consulted, textbooks, key papers. None was copied; each contributed
+an idea.
 
-## 1. Codes AMR / plasma consultés
+## 1. AMR / plasma codes consulted
 
 ### AMReX
 
-Framework AMR block-structured de référence (LBNL), C++17 + GPU. La pile `adc_cpp` en est
-un mini-clone écrit *from scratch* : les correspondances directes sont `MultiFab`,
-`BoxArray` / `DistributionMapping`, `Geometry`, `FillBoundary`, le FluxRegister (reflux),
-le MLMG (~ `GeometricMG`). Divergences assumées : pas de `MFIter` (on itère `for_each_cell`
-+ fab local, GPU-ready), Laplacien à coefficient variable mais EB en escalier (cut-cell
-Shortley-Weller pour le bord courbe). Le multi-patch est distribué MPI (bit-identique np=1/2/4).
+Reference block-structured AMR framework (LBNL), C++17 + GPU. The `adc_cpp` stack is
+a mini-clone of it written *from scratch*: the direct correspondences are `MultiFab`,
+`BoxArray` / `DistributionMapping`, `Geometry`, `FillBoundary`, the FluxRegister (reflux),
+the MLMG (~ `GeometricMG`). Accepted divergences: no `MFIter` (we iterate `for_each_cell`
++ local fab, GPU-ready), variable-coefficient Laplacian but staircase EB (Shortley-Weller
+cut-cell for the curved boundary). The multi-patch is MPI-distributed (bit-identical np=1/2/4).
 [Repo](https://github.com/AMReX-Codes/amrex), Zhang et al. 2019, *AMReX*, JOSS 4(37).
 
 ### WarpX
 
-Code PIC-AMR électromagnétique (sur AMReX) pour la physique des plasmas et des
-accélérateurs. Contexte du couplage hyperbolique-elliptique sur AMR pour les plasmas non
-neutres (diocotron) et le modèle de fluide.
+Electromagnetic PIC-AMR code (on AMReX) for the physics of plasmas and
+accelerators. Context for the hyperbolic-elliptic coupling on AMR for non-neutral
+plasmas (diocotron) and the fluid model.
 [Repo](https://github.com/ECP-WarpX/WarpX).
 
 ### Athena++ / PLUTO
 
-Frameworks hydro/MHD astrophysiques. Le design à **axes orthogonaux** de PLUTO (équation x
-reconstruction x Riemann x intégrateur) a inspiré le découpage concept-templé d'`adc_cpp`
-(`PhysicalModel` / `NumericalFlux` / `EllipticSolver` / couplage).
+Astrophysical hydro/MHD frameworks. The **orthogonal-axes** design of PLUTO (equation x
+reconstruction x Riemann x integrator) inspired the concept-template decomposition of `adc_cpp`
+(`PhysicalModel` / `NumericalFlux` / `EllipticSolver` / coupling).
 [Athena++](https://github.com/PrincetonUniversity/athena),
 [PLUTO](http://plutocode.ph.unito.it).
 
-## 2. Manuels
+## 2. Textbooks
 
-- **Birdsall & Langdon**, *Plasma Physics via Computer Simulation*, 1985. Dérive E x B,
-  fréquences plasma et cyclotron, instabilité diocotron.
-- **Chen**, *Introduction to Plasma Physics and Controlled Fusion*, 3e éd., 2016. Oscillation
-  de Langmuir, dispersion de Bohm-Gross `omega^2 = omega_p^2 + 3 k^2 v_th^2`, longueur de
-  Debye : côté répulsif d'Euler-Poisson (`InteractionKind::Plasma`).
-- **Binney & Tremaine**, *Galactic Dynamics*, 2e éd., 2008. Instabilité de Jeans, dispersion
-  gravitationnelle `omega^2 = c_s^2 k^2 - 4 pi G rho0` : côté attractif d'Euler-Poisson
+- **Birdsall & Langdon**, *Plasma Physics via Computer Simulation*, 1985. E x B drift,
+  plasma and cyclotron frequencies, diocotron instability.
+- **Chen**, *Introduction to Plasma Physics and Controlled Fusion*, 3rd ed., 2016. Langmuir
+  oscillation, Bohm-Gross dispersion `omega^2 = omega_p^2 + 3 k^2 v_th^2`, Debye
+  length: repulsive side of Euler-Poisson (`InteractionKind::Plasma`).
+- **Binney & Tremaine**, *Galactic Dynamics*, 2nd ed., 2008. Jeans instability, gravitational
+  dispersion `omega^2 = c_s^2 k^2 - 4 pi G rho0`: attractive side of Euler-Poisson
   (`InteractionKind::Gravity`).
-- **Toro**, *Riemann Solvers and Numerical Methods for Fluid Dynamics*, 3e éd., 2009.
-  Solveurs de Riemann (Rusanov, HLL, HLLC), reconstruction MUSCL, forme conservative.
-- **Trottenberg, Oosterlee & Schüller**, *Multigrid*, 2001. V-cycle, lisseur Gauss-Seidel
-  rouge-noir, restriction / prolongation.
+- **Toro**, *Riemann Solvers and Numerical Methods for Fluid Dynamics*, 3rd ed., 2009.
+  Riemann solvers (Rusanov, HLL, HLLC), MUSCL reconstruction, conservative form.
+- **Trottenberg, Oosterlee & Schüller**, *Multigrid*, 2001. V-cycle, red-black Gauss-Seidel
+  smoother, restriction / prolongation.
 
-## 3. Articles clés
+## 3. Key papers
 
 - **Berger & Oliger**, 1984, *Adaptive mesh refinement for hyperbolic partial differential
-  equations*, JCP 53. Sous-cyclage en temps des niveaux fins.
+  equations*, JCP 53. Time subcycling of the fine levels.
 - **Berger & Colella**, 1989, *Local adaptive mesh refinement for shock hydrodynamics*,
-  JCP 82. Reflux (FluxRegister) à l'interface fin-grossier, conservation.
+  JCP 82. Reflux (FluxRegister) at the fine-coarse interface, conservation.
 - **Berger & Rigoutsos**, 1991, *An algorithm for point clustering and grid generation*,
-  IEEE Trans. SMC 21. Clustering par signature pour le regrid.
-- **Hoffart**, 2025, arXiv:2510.11808. Modèle deux-fluides isotherme, cible de validation
-  du schéma asymptotic-preserving (scénario applicatif, `adc_cases/two_fluid_ap/` ; note de
-  méthode archivée dans [`archive/two_fluid_ap.md`](archive/two_fluid_ap.md)).
+  IEEE Trans. SMC 21. Signature clustering for the regrid.
+- **Hoffart**, 2025, arXiv:2510.11808. Isothermal two-fluid model, validation target
+  of the asymptotic-preserving scheme (application scenario, `adc_cases/two_fluid_ap/` ; method
+  note archived in [`archive/two_fluid_ap.md`](archive/two_fluid_ap.md)).
 
-## 4. Méthodologie performance
+## 4. Performance methodology
 
-- **Bryant & O'Hallaron**, *Computer Systems: A Programmer's Perspective*, 3e éd., 2016.
-  Profiler d'abord, identifier le goulot, transformer, re-mesurer (voir `PERFORMANCE.md`).
+- **Bryant & O'Hallaron**, *Computer Systems: A Programmer's Perspective*, 3rd ed., 2016.
+  Profile first, identify the bottleneck, transform, re-measure (see `PERFORMANCE.md`).

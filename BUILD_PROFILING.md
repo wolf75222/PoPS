@@ -1,64 +1,64 @@
-# Rapport — Profilage de compilation de `adc_cpp`
+# Report - Compilation profiling of `adc_cpp`
 
-**Worktree audité :** `/Users/romaindespoulain/.codex/worktrees/8a24/adc_cpp_audit`
-**Date :** 2026-06-10 · **Toolchain mesurée :** AppleClang (Xcode), macOS arm64, `-O3 -std=c++2b`, Release
-**Objectif :** réduire le temps de compilation **sans changer la numérisation ni le comportement scientifique** (le niveau `-O` ne change pas les résultats IEEE tant que `-ffast-math` n'est pas utilisé — ce qui est le cas ici).
+**Audited worktree:** `/Users/romaindespoulain/.codex/worktrees/8a24/adc_cpp_audit`
+**Date:** 2026-06-10 - **Measured toolchain:** AppleClang (Xcode), macOS arm64, `-O3 -std=c++2b`, Release
+**Goal:** reduce compilation time **without changing the numerics or the scientific behavior** (the `-O` level does not change the IEEE results as long as `-ffast-math` is not used, which is the case here).
 
 ---
 
 ## TL;DR
 
-| Constat | Preuve mesurée | Levier |
+| Finding | Measured evidence | Lever |
 |---|---|---|
-| **`system.cpp` = 469 s, `amr_system.cpp` = 218 s** par compilation (mono-thread) | `/usr/bin/time -p` sur la TU isolée | — |
-| Le coût est à **93 % dans le backend LLVM `-O3`**, pas dans le parsing ni le frontend | `-ftime-trace` : Backend 435 s / 468 s ; `-O0` retombe à **41 s** | baisser `-O`, réduire le nb d'instanciations |
-| `_adc` ne compile que **3 fichiers** → `-j` plafonne à 3 cœurs, chemin critique = `system.cpp` (~469 s) | `python/CMakeLists.txt:9` | **splitter la TU** |
-| `system.cpp`/`amr_system.cpp` recompilés **20×** dans le build de tests (6 + 14) | `grep` sur `build.ninja` | **bibliothèque objet unique** |
-| Cause racine = **explosion combinatoire** (≈36 CompositeModels × 4 flux × 4 limiteurs × ~3 intégrateurs ≈ 1700 chemins) toute optimisée à `-O3` dans **une** TU | `model_factory.hpp` + top OptFunction du trace | réduire l'éventail / split |
-| Le **linking n'est PAS un problème** (< 1 s par exécutable) | `.ninja_log` : top link = 0,85 s | — |
+| **`system.cpp` = 469 s, `amr_system.cpp` = 218 s** per compilation (single-threaded) | `/usr/bin/time -p` on the isolated TU | - |
+| The cost is **93 % in the LLVM `-O3` backend**, not in parsing nor the frontend | `-ftime-trace`: Backend 435 s / 468 s; `-O0` drops back to **41 s** | lower `-O`, reduce the number of instantiations |
+| `_adc` compiles only **3 files** -> `-j` caps at 3 cores, critical path = `system.cpp` (~469 s) | `python/CMakeLists.txt:9` | **split the TU** |
+| `system.cpp`/`amr_system.cpp` recompiled **20x** in the test build (6 + 14) | `grep` on `build.ninja` | **single object library** |
+| Root cause = **combinatorial explosion** (~36 CompositeModels x 4 fluxes x 4 limiters x ~3 integrators ~ 1700 paths) all optimized at `-O3` in **one** TU | `model_factory.hpp` + top OptFunction of the trace | reduce the spread / split |
+| **Linking is NOT a problem** (< 1 s per executable) | `.ninja_log`: top link = 0.85 s | - |
 
-**Sensibilité au niveau d'optimisation (`system.cpp`, mono-thread, mesuré) :**
+**Sensitivity to the optimization level (`system.cpp`, single-threaded, measured):**
 
-| `-O` | temps | gain vs `-O3` |
+| `-O` | time | gain vs `-O3` |
 |------|-------|---------------|
-| `-O3` (actuel) | **469 s** | référence |
-| `-O2` | 363 s | **−23 %** |
-| `-O1` | 284 s | **−39 %** |
-| `-O0` | 41 s | **−91 %** |
+| `-O3` (current) | **469 s** | reference |
+| `-O2` | 363 s | **-23 %** |
+| `-O1` | 284 s | **-39 %** |
+| `-O0` | 41 s | **-91 %** |
 
-Les ~41 s à `-O0` sont le coût incompressible (parsing + frontend + codegen non optimisé). Tout le reste (~428 s) est l'optimiseur travaillant sur les ~1700 fonctions feuilles instanciées.
-
----
-
-## 1. Périmètre & méthode
-
-- **Fichiers de build lus :** [`CMakeLists.txt`](CMakeLists.txt), [`python/CMakeLists.txt`](python/CMakeLists.txt), [`tests/CMakeLists.txt`](tests/CMakeLists.txt), [`.github/workflows/ci.yml`](.github/workflows/ci.yml), [`.github/workflows/docs.yml`](.github/workflows/docs.yml).
-- **Builds réutilisés** (dossier principal `Documents/Stage_Romain/adc_cpp/`, même base de code, Release/AppleClang/série) : `build-docs`, `build-audit` (Ninja, `.ninja_log` exploitables), `build-master`, `build-py` (Makefiles, périmé). **Aucun fichier supprimé, aucun clean build.**
-- **Mesures propres :** compilation isolée, **mono-thread**, sortie vers `/tmp`, flags repris à l'identique du build de tests (`-O3 -DNDEBUG -std=c++2b -arch arm64 -isysroot … -I include`), avec `-ftime-trace` pour la ventilation interne.
-
-> **Caveat 1.** Les builds réutilisés vivent dans le dépôt principal (`adc_cpp/`), pas dans ce worktree ; les `CMakeLists` sont identiques, donc les `.ninja_log` sont représentatifs. Les sources mesurées (`system.cpp`/`amr_system.cpp`) viennent **du worktree audité**.
-> **Caveat 2.** Les durées des `.ninja_log` de `build-docs` (600–934 s par TU) sont **gonflées par la contention** (build parallèle + docs concurrentes). Les chiffres autoritaires de ce rapport sont les compilations **mono-thread isolées** (469 s / 218 s).
+The ~41 s at `-O0` are the incompressible cost (parsing + frontend + unoptimized codegen). Everything else (~428 s) is the optimizer working on the ~1700 instantiated leaf functions.
 
 ---
 
-## 2. Architecture du build (ce qui compile réellement)
+## 1. Scope & method
 
-- **Le cœur `adc` est `INTERFACE` (header-only)** — `CMakeLists.txt:57`. Il ne compile rien en soi ; tout le coût est porté par les TU qui *l'instancient*.
-- **Module Python `_adc` = 3 TU seulement** : `bindings.cpp`, `system.cpp`, `amr_system.cpp` — `python/CMakeLists.txt:9`. C'est ici que se trouve ta douleur « même `_adc` est lent » : il n'y a rien à paralléliser au-delà de 3 cœurs, et le chemin critique est la TU la plus lente (`system.cpp`).
-- **Tests = ~113 exécutables** (`grep -c CXX_EXECUTABLE_LINKER build.ninja` → 113 ; 133 objets `.cpp.o`). La majorité sont de petites TU, **mais 20 d'entre elles re-listent `python/system.cpp` ou `python/amr_system.cpp` comme source supplémentaire** (ex. `tests/CMakeLists.txt:204, 304, 334-336, 349, 374, 393, 411, 426, 435…`), donc recompilent intégralement la TU lourde.
+- **Build files read:** [`CMakeLists.txt`](CMakeLists.txt), [`python/CMakeLists.txt`](python/CMakeLists.txt), [`tests/CMakeLists.txt`](tests/CMakeLists.txt), [`.github/workflows/ci.yml`](.github/workflows/ci.yml), [`.github/workflows/docs.yml`](.github/workflows/docs.yml).
+- **Reused builds** (main folder `Documents/Stage_Romain/adc_cpp/`, same code base, Release/AppleClang/serial): `build-docs`, `build-audit` (Ninja, usable `.ninja_log`), `build-master`, `build-py` (Makefiles, stale). **No file deleted, no clean build.**
+- **Clean measurements:** isolated compilation, **single-threaded**, output to `/tmp`, flags taken verbatim from the test build (`-O3 -DNDEBUG -std=c++2b -arch arm64 -isysroot ... -I include`), with `-ftime-trace` for the internal breakdown.
+
+> **Caveat 1.** The reused builds live in the main repository (`adc_cpp/`), not in this worktree; the `CMakeLists` are identical, so the `.ninja_log` are representative. The measured sources (`system.cpp`/`amr_system.cpp`) come **from the audited worktree**.
+> **Caveat 2.** The durations in the `.ninja_log` of `build-docs` (600-934 s per TU) are **inflated by contention** (parallel build + concurrent docs). The authoritative numbers in this report are the **isolated single-threaded** compilations (469 s / 218 s).
 
 ---
 
-## 3. Mesures détaillées
+## 2. Build architecture (what actually compiles)
 
-### 3.1 Coût par translation unit (mono-thread, propre)
+- **The `adc` core is `INTERFACE` (header-only)** - `CMakeLists.txt:57`. It compiles nothing on its own; all the cost is carried by the TUs that *instantiate* it.
+- **Python module `_adc` = 3 TUs only**: `bindings.cpp`, `system.cpp`, `amr_system.cpp` - `python/CMakeLists.txt:9`. This is where your pain "even `_adc` is slow" comes from: there is nothing to parallelize beyond 3 cores, and the critical path is the slowest TU (`system.cpp`).
+- **Tests = ~113 executables** (`grep -c CXX_EXECUTABLE_LINKER build.ninja` -> 113; 133 `.cpp.o` objects). Most are small TUs, **but 20 of them re-list `python/system.cpp` or `python/amr_system.cpp` as an extra source** (e.g. `tests/CMakeLists.txt:204, 304, 334-336, 349, 374, 393, 411, 426, 435...`), so they fully recompile the heavy TU.
 
-| TU | `-O3` réel | user | Backend % |
+---
+
+## 3. Detailed measurements
+
+### 3.1 Cost per translation unit (single-threaded, clean)
+
+| TU | `-O3` real | user | Backend % |
 |---|---|---|---|
-| `python/system.cpp` | **469,4 s** | 379 s | 93 % |
-| `python/amr_system.cpp` | **217,6 s** | 192 s | 93 % |
+| `python/system.cpp` | **469.4 s** | 379 s | 93 % |
+| `python/amr_system.cpp` | **217.6 s** | 192 s | 93 % |
 
-### 3.2 Où part le temps — `-ftime-trace` (`system.cpp`)
+### 3.2 Where the time goes - `-ftime-trace` (`system.cpp`)
 
 ```
 ExecuteCompiler                 468,1 s
@@ -70,7 +70,7 @@ ExecuteCompiler                 468,1 s
   PerformPendingInstantiations   18,6 s
 ```
 
-**Lecture :** ni les en-têtes (1,2 s) ni l'instanciation frontend (31 s) ne sont le goulot. C'est **l'optimiseur backend `-O3`** qui domine. Et il ne s'agit d'aucune fonction chaude isolée : le top OptFunction plafonne à **0,25 s** par fonction — le coût est la **somme de milliers** de petites fonctions instanciées :
+**Reading:** neither the headers (1.2 s) nor the frontend instantiation (31 s) are the bottleneck. It is the **`-O3` backend optimizer** that dominates. And it is not any single hot function: the top OptFunction caps at **0.25 s** per function - the cost is the **sum of thousands** of small instantiated functions:
 
 ```
 0,25s  SSPRK3Step::take_step<BlockRhsEvalEb<VanLeer, RusanovFlux, …>>
@@ -80,9 +80,9 @@ ExecuteCompiler                 468,1 s
 …  (× ~1700 combinaisons)
 ```
 
-### 3.3 Cause racine — explosion combinatoire des fabriques de dispatch
+### 3.3 Root cause - combinatorial explosion of the dispatch factories
 
-`include/adc/runtime/model_factory.hpp` imbrique trois dispatchers :
+`include/adc/runtime/model_factory.hpp` nests three dispatchers:
 
 ```
 dispatch_transport : exb | compressible | isothermal                         (3)
@@ -90,83 +90,83 @@ dispatch_transport : exb | compressible | isothermal                         (3)
     × dispatch_elliptic : charge | background | gravity                       (3)
 ```
 
-≈ **36 `CompositeModel`** ; chacun traverse ensuite `make_block`/`build_block` qui dispatche sur **4 flux** (rusanov/hll/hllc/roe) × **4 limiteurs** (noslope/minmod/vanleer/weno5) × **~3 intégrateurs** (ssprk2/ssprk3/imex) → **~1700 chemins feuilles**, tous **entièrement instanciés et optimisés `-O3` dans une seule TU**. C'est exactement le motif déjà décrit dans le commentaire de `tests/CMakeLists.txt:10-25` (« ~33 CompositeModels × familles de flux × limiteurs »).
+~ **36 `CompositeModel`**; each then goes through `make_block`/`build_block` which dispatches on **4 fluxes** (rusanov/hll/hllc/roe) x **4 limiters** (noslope/minmod/vanleer/weno5) x **~3 integrators** (ssprk2/ssprk3/imex) -> **~1700 leaf paths**, all **fully instantiated and optimized at `-O3` in a single TU**. This is exactly the pattern already described in the comment in `tests/CMakeLists.txt:10-25` ("~33 CompositeModels x flux families x limiters").
 
-### 3.4 Duplication des TU lourdes (build de tests, série)
+### 3.4 Duplication of the heavy TUs (test build, serial)
 
 ```
 python/system.cpp      compilé  6×   (grep -c "python/system.cpp.o:" build.ninja)
 python/amr_system.cpp  compilé 14×
 ```
 
-- **Coût CPU dupliqué (série) :** 6 × 469 + 14 × 218 ≈ **5 866 s-CPU**.
-- **Si compilé une seule fois :** 469 + 218 = **687 s**. → **~88 % de travail gaspillé** (~5 200 s-CPU récupérables).
-- Avec `ADC_USE_MPI=ON`, ~8 variantes de test supplémentaires re-compilent ces TU (`test_mpi_amr_*`, `test_mpi_system_*`) → la duplication empire.
+- **Duplicated CPU cost (serial):** 6 x 469 + 14 x 218 ~ **5866 CPU-s**.
+- **If compiled only once:** 469 + 218 = **687 s**. -> **~88 % of work wasted** (~5200 CPU-s recoverable).
+- With `ADC_USE_MPI=ON`, ~8 additional test variants recompile these TUs (`test_mpi_amr_*`, `test_mpi_system_*`) -> the duplication gets worse.
 
-### 3.5 Impact CI
+### 3.5 CI impact
 
-`ci.yml` build **6 configurations** (`build`, `build-py`, `build-mpi`, `build-kokkos`, `build-kokkos-omp`, `build-kokkos-py`), **toutes en `--parallel 2`** (contrainte mémoire runner ~7 Go, `ci.yml:111-119`). Chaque config recompile ces TU lourdes depuis zéro :
+`ci.yml` builds **6 configurations** (`build`, `build-py`, `build-mpi`, `build-kokkos`, `build-kokkos-omp`, `build-kokkos-py`), **all at `--parallel 2`** (runner memory constraint ~7 GB, `ci.yml:111-119`). Each config recompiles these heavy TUs from scratch:
 
-- `_adc` en CI (`--parallel 2`) : ~469 s + le reste ≈ **8 min minimum**, borné par `system.cpp`.
-- Le build de tests complet (`build`, 20 TU lourdes + 113 petites en `--parallel 2`) ≈ **~1 h** sur runner (plus lent que ce Mac).
-- Les configs **Kokkos** sont encore plus lourdes (instanciation device via `nvcc_wrapper`).
-
----
-
-## 4. Causes probables, classées par impact
-
-1. **[Dominant] Optimiseur backend `-O3` sur une explosion combinatoire d'instanciations.** 93 % du temps ; ~1700 fonctions feuilles. Preuve : `-ftime-trace` (Backend 435/468 s), scaling `-O0`→41 s.
-2. **[Structurel] `_adc` n'a que 3 TU** → impossible de paralléliser ; chemin critique = `system.cpp` (469 s). Preuve : `python/CMakeLists.txt:9`.
-3. **[Gaspillage] `system.cpp`/`amr_system.cpp` recompilés 20× dans les tests** (×6 en CI). Preuve : `grep` sur `build.ninja`.
-4. **[Secondaire] Frontend / instanciation 31 s** par TU — réel mais 7× plus petit que le backend.
-5. **Non-causes (écartées par les mesures) :** gros headers (Source = 1,2 s), linking (< 1 s/exe), LTO (désactivé — à laisser OFF), Kokkos/pybind dans `system.cpp` (la TU mesurée n'a ni l'un ni l'autre et coûte déjà 469 s).
+- `_adc` in CI (`--parallel 2`): ~469 s + the rest ~ **8 min minimum**, bounded by `system.cpp`.
+- The full test build (`build`, 20 heavy TUs + 113 small ones at `--parallel 2`) ~ **~1 h** on the runner (slower than this Mac).
+- The **Kokkos** configs are even heavier (device instantiation via `nvcc_wrapper`).
 
 ---
 
-## 5. Cibles les plus coûteuses
+## 4. Likely causes, ranked by impact
 
-| Rang | Cible | Coût `-O3` mono-thread | Multiplicité |
+1. **[Dominant] `-O3` backend optimizer on a combinatorial explosion of instantiations.** 93 % of the time; ~1700 leaf functions. Evidence: `-ftime-trace` (Backend 435/468 s), scaling `-O0`->41 s.
+2. **[Structural] `_adc` has only 3 TUs** -> impossible to parallelize; critical path = `system.cpp` (469 s). Evidence: `python/CMakeLists.txt:9`.
+3. **[Waste] `system.cpp`/`amr_system.cpp` recompiled 20x in the tests** (x6 in CI). Evidence: `grep` on `build.ninja`.
+4. **[Secondary] Frontend / instantiation 31 s** per TU - real but 7x smaller than the backend.
+5. **Non-causes (ruled out by the measurements):** large headers (Source = 1.2 s), linking (< 1 s/exe), LTO (disabled - leave it OFF), Kokkos/pybind in `system.cpp` (the measured TU has neither and already costs 469 s).
+
+---
+
+## 5. Most expensive targets
+
+| Rank | Target | `-O3` single-threaded cost | Multiplicity |
 |---|---|---|---|
-| 1 | `python/system.cpp` | **469 s** | ×1 dans `_adc`, ×6 dans tests |
-| 2 | `python/amr_system.cpp` | **218 s** | ×1 dans `_adc`, ×14 dans tests |
-| 3 | `bindings.cpp` | non isolé (inclut pybind11 + façade) | ×1 dans `_adc` |
-| 4 | petites TU de test instanciant `make_block` (`test_block_builder`, `test_compiled_model_parity`…) | 15–35 s chacune | ×113 |
+| 1 | `python/system.cpp` | **469 s** | x1 in `_adc`, x6 in tests |
+| 2 | `python/amr_system.cpp` | **218 s** | x1 in `_adc`, x14 in tests |
+| 3 | `bindings.cpp` | not isolated (includes pybind11 + facade) | x1 in `_adc` |
+| 4 | small test TUs instantiating `make_block` (`test_block_builder`, `test_compiled_model_parity`...) | 15-35 s each | x113 |
 
 ---
 
-## 6. Feuille de route P0 / P1 / P2
+## 6. Roadmap P0 / P1 / P2
 
-> Toutes les pistes ci-dessous préservent les résultats numériques : soit elles ne touchent pas au code généré (partition de TU, bibliothèque objet), soit elles ne changent que le niveau d'optimisation (résultats IEEE identiques sans `-ffast-math`).
+> All the leads below preserve the numerical results: either they do not touch the generated code (TU partition, object library), or they only change the optimization level (identical IEEE results without `-ffast-math`).
 
-### P0 — fort impact, risque ~nul
+### P0 - high impact, ~zero risk
 
-- **P0-A. Compiler `system.cpp` + `amr_system.cpp` UNE fois dans une bibliothèque objet partagée.**
-  `add_library(adc_runtime STATIC python/system.cpp python/amr_system.cpp)` liée par `_adc` **et** par les 20 exécutables de test (remplacer les `add_executable(test_x test_x.cpp …/system.cpp)` par un lien vers `adc_runtime`).
-  → supprime ~18 recompilations (série) / ~26 (MPI) par config, **×6 en CI**. Gain build de tests : **~88 %** du coût des TU lourdes.
-  *Attention :* certains tests passent des `-D` spécifiques (`ADC_TEST_CXX`, `ENABLE_EXPORTS`) — ceux-là restent sur leur propre `.cpp` de test ; seul l'objet `system.cpp`/`amr_system.cpp` est mutualisé. `adc_cap_opt_for_kokkos_ram` (le `-O0` ciblé) s'appliquerait alors une fois à la lib, pas N fois.
+- **P0-A. Compile `system.cpp` + `amr_system.cpp` ONCE into a shared object library.**
+  `add_library(adc_runtime STATIC python/system.cpp python/amr_system.cpp)` linked by `_adc` **and** by the 20 test executables (replace the `add_executable(test_x test_x.cpp .../system.cpp)` with a link to `adc_runtime`).
+  -> removes ~18 recompilations (serial) / ~26 (MPI) per config, **x6 in CI**. Test build gain: **~88 %** of the heavy TU cost.
+  *Caution:* some tests pass specific `-D` (`ADC_TEST_CXX`, `ENABLE_EXPORTS`) - those stay on their own test `.cpp`; only the `system.cpp`/`amr_system.cpp` object is shared. `adc_cap_opt_for_kokkos_ram` (the targeted `-O0`) would then apply once to the lib, not N times.
 
-- **P0-B. Splitter chaque TU lourde par axe de dispatch pour paralléliser.**
-  Partitionner les instanciations de `system.cpp` (p.ex. un `.cpp` par famille de flux, ou par transport) avec instanciation explicite. `_adc` passe alors de 3 à ~8-12 TU → `-j` redevient utile, chemin critique `469 s → ~469/N`.
-  → c'est **LE** correctif de ta douleur « `_adc` seul est lent ». Comportement identique (mêmes instanciations, simplement réparties).
+- **P0-B. Split each heavy TU by dispatch axis to parallelize.**
+  Partition the instantiations of `system.cpp` (e.g. one `.cpp` per flux family, or per transport) with explicit instantiation. `_adc` then goes from 3 to ~8-12 TUs -> `-j` becomes useful again, critical path `469 s -> ~469/N`.
+  -> this is **THE** fix for your pain "`_adc` alone is slow". Identical behavior (same instantiations, simply spread out).
 
-### P1 — fort impact, à valider
+### P1 - high impact, to be validated
 
-- **P1-A. Baisser `-O` sur ces 2 TU.** `-O2` = **−23 %** gratuit, `-O1` = **−39 %**. La quasi-totalité des ~1700 fonctions instanciées sont du **câblage de dispatch froid** (exécuté une fois au montage), pas la boucle chaude `for_each_cell`. → mesurer l'impact runtime de `-O2` sur un cas représentatif ; si < 5 %, basculer ces TU (et leurs doublons de test) en `-O2`.
-- **P1-B. Découpe chirurgicale du `-O`.** Marquer **uniquement** les fabriques froides (`dispatch_*`, `make_block` glue) en `__attribute__((optnone))` / `#pragma clang optimize off`, en gardant les kernels (`take_step`, `for_each_cell`) à `-O3`. → gros gain compile, **zéro** impact sur le chemin chaud. Plus invasif (il faut isoler le froid).
-- **P1-C. Réduire l'éventail combinatoire.** Gater à la compilation les combinaisons (flux × limiteur × modèle) jamais exercées à l'exécution. → moins de feuilles à optimiser. Nécessite de savoir quels combos sont réellement utilisés (décision applicative, pas numérique).
+- **P1-A. Lower `-O` on these 2 TUs.** `-O2` = **-23 %** for free, `-O1` = **-39 %**. The vast majority of the ~1700 instantiated functions are **cold dispatch wiring** (run once at setup), not the hot `for_each_cell` loop. -> measure the runtime impact of `-O2` on a representative case; if < 5 %, switch these TUs (and their test duplicates) to `-O2`.
+- **P1-B. Surgical `-O` partitioning.** Mark **only** the cold factories (`dispatch_*`, `make_block` glue) with `__attribute__((optnone))` / `#pragma clang optimize off`, keeping the kernels (`take_step`, `for_each_cell`) at `-O3`. -> big compile gain, **zero** impact on the hot path. More invasive (the cold code must be isolated).
+- **P1-C. Reduce the combinatorial spread.** Gate at compile time the combinations (flux x limiter x model) never exercised at runtime. -> fewer leaves to optimize. Requires knowing which combos are actually used (application decision, not numerical).
 
-### P2 — confort / non-régression
+### P2 - convenience / non-regression
 
-- **P2-A. `ccache`** (`-DCMAKE_CXX_COMPILER_LAUNCHER=ccache`) pour l'itération locale : aucun gain au 1er build ni quand un en-tête change (la signature `ADC_HEADER_SIG` invalide), mais utile quand seul un `.cpp` de test change.
-- **P2-B. Garde-fou CI `-ftime-trace`** : budget de temps de compilation par TU pour détecter une régression (un nouveau flux/limiteur qui rajoute une dimension au produit combinatoire).
-- **P2-C. Laisser LTO OFF** (l'activer aggraverait nettement le backend). Le linking n'est pas un sujet (< 1 s/exe) — inutile d'investir dans mold/lld.
-- **PCH : faible valeur ici** (le frontend ne pèse que 31 s ; le gain plafonne sous 30 s/TU alors que le backend en coûte 435).
+- **P2-A. `ccache`** (`-DCMAKE_CXX_COMPILER_LAUNCHER=ccache`) for local iteration: no gain on the 1st build nor when a header changes (the `ADC_HEADER_SIG` signature invalidates), but useful when only a test `.cpp` changes.
+- **P2-B. CI `-ftime-trace` safeguard**: per-TU compilation time budget to detect a regression (a new flux/limiter that adds a dimension to the combinatorial product).
+- **P2-C. Leave LTO OFF** (enabling it would clearly worsen the backend). Linking is not an issue (< 1 s/exe) - no need to invest in mold/lld.
+- **PCH: low value here** (the frontend only weighs 31 s; the gain caps below 30 s/TU while the backend costs 435).
 
-**Ordre recommandé :** P0-A (CI/tests, sûr et immédiat) → P0-B (débloque ta douleur `_adc`) → P1-A/P1-B (raboter le backend) → P1-C (réduire l'éventail).
+**Recommended order:** P0-A (CI/tests, safe and immediate) -> P0-B (unblocks your `_adc` pain) -> P1-A/P1-B (shave the backend) -> P1-C (reduce the spread).
 
 ---
 
-## 7. Commandes utilisées (reproductibilité)
+## 7. Commands used (reproducibility)
 
 ```bash
 # Inventaire des builds et options
@@ -190,4 +190,4 @@ grep -c "python/system.cpp.o:"     <build-audit>/build.ninja  # → 6
 grep -c "python/amr_system.cpp.o:" <build-audit>/build.ninja  # → 14
 ```
 
-> Les artefacts temporaires (`/tmp/adc_*.o`, traces JSON ~150 Mo) ont été supprimés après analyse. Aucun fichier du projet n'a été modifié ou supprimé ; aucun clean build n'a été lancé.
+> The temporary artifacts (`/tmp/adc_*.o`, JSON traces ~150 MB) were removed after analysis. No project file was modified or deleted; no clean build was launched.

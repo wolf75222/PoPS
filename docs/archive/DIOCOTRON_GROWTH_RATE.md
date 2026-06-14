@@ -1,178 +1,178 @@
-# Reproduction du taux de croissance diocotron (vs Hoffart arXiv:2510.11808)
+# Diocotron growth rate reproduction (vs Hoffart arXiv:2510.11808)
 
-Document consolide : reproduction quantitative du taux de croissance de l'instabilite diocotron
-avec adc_cpp, comparaison au papier de reference (Hoffart, Maier, Shadid, Tomas, *Structure-preserving
+Consolidated document: quantitative reproduction of the diocotron instability growth rate
+with adc_cpp, compared to the reference paper (Hoffart, Maier, Shadid, Tomas, *Structure-preserving
 finite-element approximations of the magnetic Euler-Poisson equations*, arXiv:2510.11808, Section 5.3).
-Resultats ROMEO bruts : [romeo/HERO_RESULTS.md](../romeo/HERO_RESULTS.md).
+Raw ROMEO results: [romeo/HERO_RESULTS.md](../romeo/HERO_RESULTS.md).
 
-Cible analytique (Petri / Davidson-Felice, geometrie de l'anneau `r0:r1:Rwall = 6:8:16`, reproduite
-par `analysis/diocotron_growth.hpp`) : `gamma_3 = 0.772`, `gamma_4 = 0.911`, `gamma_5 = 0.683`.
+Analytic target (Petri / Davidson-Felice, ring geometry `r0:r1:Rwall = 6:8:16`, reproduced
+by `analysis/diocotron_growth.hpp`): `gamma_3 = 0.772`, `gamma_4 = 0.911`, `gamma_5 = 0.683`.
 
-## 1. Verrou de STABILITE leve (prerequis a tout balayage)
+## 1. STABILITY blocker lifted (prerequisite for any sweep)
 
-Au-dela d'une resolution effective ~448, la simu partait en `nan` des les premiers pas. Diagnostic :
-le **multigrille geometrique DIVERGEAIT** au bord conducteur embedded sur grille fine (coarsening
-non-Galerkin + masque du cercle re-evalue par niveau -> correction grossiere incoherente, rayon
-spectral du V-cycle > 1, erratique selon l'alignement du cercle). Le warm start propageait la
-divergence -> `phi` puis le champ en `nan`. Ce n'etait NI le pas de temps (deja plafonne), NI le
-plancher de densite (la densite reste bornee ; seul `phi` explose, au RAYON DE LA PAROI r=0.398).
+Beyond an effective resolution of ~448, the simulation went to `nan` in the very first steps. Diagnosis:
+the **geometric multigrid DIVERGED** at the embedded conducting boundary on the fine mesh (non-Galerkin
+coarsening + circle mask re-evaluated per level -> inconsistent coarse correction, V-cycle spectral
+radius > 1, erratic depending on the circle alignment). The warm start propagated the
+divergence -> `phi` then the field went to `nan`. It was NEITHER the time step (already capped), NOR the
+density floor (the density stays bounded; only `phi` blows up, at the WALL RADIUS r=0.398).
 
-Correctif : `GeometricMG::solve_robust` (`include/adc/elliptic/geometric_mg.hpp`). Phase 1 = le
-V-cycle standard (BIT-IDENTIQUE quand il converge ou stagne) ; SEULEMENT en cas de vraie divergence
-(residu final > residu initial) : durcissement STICKY du lissage GS + restart a froid jusqu'a
-redevenir contractant. Resultat : stable jusqu'a eff 1024 (uniforme ET AMR `ml`), masse `~1e-14`,
-les 8 runs enregistres (eff <= 448) restent BIT A BIT identiques. Details : `docs/HERO_RUN_AMR.md`.
+Fix: `GeometricMG::solve_robust` (`include/adc/elliptic/geometric_mg.hpp`). Phase 1 = the
+standard V-cycle (BIT-IDENTICAL when it converges or stalls); ONLY in case of true divergence
+(final residual > initial residual): STICKY hardening of the GS smoothing + cold restart until
+it becomes contractant again. Result: stable up to eff 1024 (uniform AND AMR `ml`), mass `~1e-14`,
+the 8 recorded runs (eff <= 448) stay BIT FOR BIT identical. Details: `docs/HERO_RUN_AMR.md`.
 
-## 2. Methodes (montee en ordre vers le taux analytique)
+## 2. Methods (order ramp-up toward the analytic rate)
 
-Le plafond de M1 (`gamma_norm ~ 0.58`) venait de la DIFFUSION du schema (ordre 1 en espace ET en
-temps), pas de la physique. Deux leviers classiques, confirmes par la litterature (Jiang-Shu,
-Borges WENO-Z, Gottlieb-Shu-Tadmor SSPRK, Ern-Guermond RK ordre 3) :
+The M1 ceiling (`gamma_norm ~ 0.58`) came from the scheme DIFFUSION (order 1 in space AND in
+time), not from physics. Two classic levers, confirmed by the literature (Jiang-Shu,
+Borges WENO-Z, Gottlieb-Shu-Tadmor SSPRK, Ern-Guermond RK order 3):
 
-- **Reconstruction d'ordre eleve** : `NoSlope` (ordre 1) -> `VanLeer`/`Minmod` (MUSCL ordre 2) ->
-  **`Weno5`** (WENO5-Z, ordre 5, `operator/reconstruction.hpp`, ordre 5.00 verifie par
-  `test_weno_convergence`). Option `recon` de `examples/diocotron_column_amr.cpp` ; `recon=0`
-  bit-identique a l'historique.
-- **Integration en temps d'ordre eleve** : forward Euler BIAISE positivement un mode en croissance
-  exponentielle (instable sur l'axe imaginaire, terme `+ 1/2 omega_r^2 dt`). **SSPRK3** (Shu-Osher)
-  enleve ce biais a l'ordre 3. `examples/diocotron_highorder.cpp` : WENO5-Z + SSPRK3, Poisson
-  RE-RESOLU a chaque etage RK (couplage stade par stade, `solve_robust`).
+- **High-order reconstruction**: `NoSlope` (order 1) -> `VanLeer`/`Minmod` (MUSCL order 2) ->
+  **`Weno5`** (WENO5-Z, order 5, `operator/reconstruction.hpp`, order 5.00 verified by
+  `test_weno_convergence`). Option `recon` of `examples/diocotron_column_amr.cpp`; `recon=0`
+  bit-identical to history.
+- **High-order time integration**: forward Euler positively BIASES an exponentially growing
+  mode (unstable on the imaginary axis, term `+ 1/2 omega_r^2 dt`). **SSPRK3** (Shu-Osher)
+  removes this bias at order 3. `examples/diocotron_highorder.cpp`: WENO5-Z + SSPRK3, Poisson
+  RE-SOLVED at each RK stage (stage-by-stage coupling, `solve_robust`).
 
-## 3. Resultats
+## 3. Results
 
-### 3a. Convergence colonne : l'AMR suit l'uniforme (ROMEO 613945)
+### 3a. Column convergence: AMR tracks uniform (ROMEO 613945)
 
-A resolution effective egale, l'AMR `ml` (Poisson multi-niveau) COINCIDE avec l'uniforme pour ~40 %
-des cellules (la promesse M2b, a l'echelle) ; VanLeer depasse largement NoSlope :
+At equal effective resolution, AMR `ml` (multi-level Poisson) MATCHES uniform for ~40 %
+of the cells (the M2b promise, at scale); VanLeer largely exceeds NoSlope:
 
-| cas | eff 512 (lin) | eff 1024 (lin) | cellules vs unif |
+| case | eff 512 (lin) | eff 1024 (lin) | cells vs unif |
 |---|---|---|---|
-| uniforme NoSlope | 0.650 | 0.706 | 100 % |
-| uniforme VanLeer | 0.753 | 0.748 | 100 % |
+| uniform NoSlope | 0.650 | 0.706 | 100 % |
+| uniform VanLeer | 0.753 | 0.748 | 100 % |
 | AMR `ml` VanLeer | 0.762 | 0.747 | ~40 % |
 
-### 3b. Taux haute precision, modes 3/4/5 (ROMEO 613961, WENO5+SSPRK3)
+### 3b. High-precision rate, modes 3/4/5 (ROMEO 613961, WENO5+SSPRK3)
 
-Fenetre du papier, R^2 = 1.00. L'ordre eleve fait passer le mode 4 de 0.56 (NoSlope+Euler,
-sous-evalue, trop diffusif) a ~0.99, du BON cote de 0.911 :
+Paper window, R^2 = 1.00. The high order moves mode 4 from 0.56 (NoSlope+Euler,
+under-estimated, too diffusive) to ~0.99, on the RIGHT side of 0.911:
 
-| mode l | analytique | eff 256 | eff 512 | eff 1024 |
+| mode l | analytic | eff 256 | eff 512 | eff 1024 |
 |---|---|---|---|---|
 | 3 | 0.772 | +8 % | +10 % | +11 % |
 | 4 | 0.911 | +8 % | +8 % | +8 % |
 | 5 | 0.683 | +7 % | +7 % | +7 % |
 
-## 4. Diagnostic : un sur-tir ~+8 % UNIFORME et PLAT en resolution
+## 4. Diagnosis: an overshoot ~+8 % UNIFORM and FLAT in resolution
 
-Cinq mesures independantes ecartent les causes "faciles" ET le bord conducteur :
+Five independent measurements rule out the "easy" causes AND the conducting boundary:
 
-1. **Plat en resolution** : eff 256 ~ 512 ~ 1024 (meme +8 %). Plus de cellules ne referme PAS l'ecart.
-2. **Plat en ordre de reconstruction** : `WENO5 ~ VanLeer`. Ce n'est pas l'ordre spatial.
-3. **Balayage en delta** : la LIMITE LINEAIRE (delta -> 0) MONTE a +27 % au lieu de baisser. L'accord
-   apparent a delta=0.1 etait une compensation fortuite par la saturation. Ce n'est donc PAS une
-   contamination nonlineaire ni un effet de fenetre.
-4. **Rapport SANS DIMENSION** `gamma / |Re(omega)|` (independant de la normalisation, via la valeur
-   propre COMPLEXE `diocotron_eigenvalue` : analytique Re_norm = -2.08 / -2.75 / -3.44 pour l=3/4/5) :
-   mesure 0.31 vs analytique 0.331 -> ~5 % de DISTORSION STRUCTURELLE de la valeur propre + ~3 % de
-   decalage de normalisation `omega_D`.
-5. **Plat en traitement du bord (cut-cell vs escalier)** : le bord embedded Shortley-Weller d'ordre 2
-   a ete implemente (`GeometricMG`, option `cut_cell`, validation `test_cut_cell` : ordre L2 1.93,
-   erreur de Poisson 3459x plus faible qu'en escalier a nc=512). Sur le diocotron (nc=256, VanLeer,
-   `cut=1` vs `cut=0`), le taux est **IDENTIQUE a 3 chiffres** (gamma_norm 0.945, 0.838, 0.738 ... aux
-   memes fenetres). Le bord conducteur n'est donc PAS la cause du +8 %.
+1. **Flat in resolution**: eff 256 ~ 512 ~ 1024 (same +8 %). More cells do NOT close the gap.
+2. **Flat in reconstruction order**: `WENO5 ~ VanLeer`. It is not the spatial order.
+3. **Sweep in delta**: the LINEAR LIMIT (delta -> 0) RISES to +27 % instead of dropping. The apparent
+   agreement at delta=0.1 was a fortuitous compensation by saturation. So it is NOT a
+   nonlinear contamination nor a window effect.
+4. **DIMENSIONLESS ratio** `gamma / |Re(omega)|` (independent of normalization, via the COMPLEX
+   eigenvalue `diocotron_eigenvalue`: analytic Re_norm = -2.08 / -2.75 / -3.44 for l=3/4/5):
+   measured 0.31 vs analytic 0.331 -> ~5 % STRUCTURAL DISTORTION of the eigenvalue + ~3 % of
+   `omega_D` normalization offset.
+5. **Flat in boundary treatment (cut-cell vs staircase)**: the order-2 Shortley-Weller embedded
+   boundary was implemented (`GeometricMG`, option `cut_cell`, validation `test_cut_cell`: L2 order 1.93,
+   Poisson error 3459x lower than staircase at nc=512). On the diocotron (nc=256, VanLeer,
+   `cut=1` vs `cut=0`), the rate is **IDENTICAL to 3 digits** (gamma_norm 0.945, 0.838, 0.738 ... at the
+   same windows). So the conducting boundary is NOT the cause of the +8 %.
 
-Cause : ce n'est PAS le traitement de la paroi. Le mode-l instable vit sur l'**anneau** (r ~ 0.175),
-loin de la paroi (r = 0.40) : l'effet d'image de la paroi sur le mode l au rayon de l'anneau decroit
-en `(r_anneau/Rwall)^(2l)` = `(0.44)^8 ~ 1e-3` pour l=4, electrostatiquement negligeable. Le sur-tir
-est **structurel** : distorsion ~5 % de la valeur propre sur la dynamique E x B cartesienne (la
-symetrie 4 de la grille carree resonne avec le mode 4) plus ~3 % de normalisation `omega_D` (mesure 4),
-et non un biais O(1) de bord. Le transport lui-meme est fidele (invariants verts, section 6).
+Cause: it is NOT the wall treatment. The unstable mode-l lives on the **ring** (r ~ 0.175),
+far from the wall (r = 0.40): the image effect of the wall on the mode l at the ring radius decays
+as `(r_ring/Rwall)^(2l)` = `(0.44)^8 ~ 1e-3` for l=4, electrostatically negligible. The overshoot
+is **structural**: ~5 % distortion of the eigenvalue on the Cartesian E x B dynamics (the
+4-fold symmetry of the square grid resonates with mode 4) plus ~3 % of `omega_D` normalization (measurement 4),
+and not an O(1) boundary bias. The transport itself is faithful (green invariants, section 6).
 
-## 5. Comparaison directe au papier (lecture de l'arXiv)
+## 5. Direct comparison to the paper (reading the arXiv)
 
-Methode et physique **identiques** (verifie dans le texte du papier, Section 5.3) :
-- vitesse initiale `v0 = -(grad phi0 x Omega)/|Omega|^2` (derive E x B) = notre modele `Diocotron` ;
-- mesure : *"DFT du potentiel phi a rayon FIXE r=r0, module du coefficient du mode l"* = notre
-  `mode_amplitude`, normalise a l'initial, ajustement exponentiel sur une fenetre etroite ;
-- memes cibles analytiques 0.772 / 0.911 / 0.683, memes fenetres de fit ;
-- temps : RK explicite ordre 3 (le notre : SSPRK3) ; espace : ordre 2 graph-viscosity dG (le notre :
-  WENO5, ordre 5, DONC notre schema n'est PAS la limite).
+Method and physics **identical** (checked in the paper text, Section 5.3):
+- initial velocity `v0 = -(grad phi0 x Omega)/|Omega|^2` (E x B drift) = our `Diocotron` model;
+- measurement: *"DFT of the potential phi at FIXED radius r=r0, modulus of the mode l coefficient"* = our
+  `mode_amplitude`, normalized to the initial value, exponential fit over a narrow window;
+- same analytic targets 0.772 / 0.911 / 0.683, same fit windows;
+- time: explicit RK order 3 (ours: SSPRK3); space: order 2 graph-viscosity dG (ours:
+  WENO5, order 5, SO our scheme is NOT the limit).
 
-La DIFFERENCE decisive est la GEOMETRIE, prouvee par la table de convergence du papier (Fig 5.4d) :
+The decisive DIFFERENCE is the GEOMETRY, proven by the paper convergence table (Fig 5.4d):
 
-| mode 4 | papier (dofs) | gamma_h | ecart | | nous (eff) | gamma_h |
+| mode 4 | paper (dofs) | gamma_h | gap | | us (eff) | gamma_h |
 |---|---|---|---|---|---|---|
 | | 196 608 | 0.935 | +2.6 % | | 256 | 0.985 (+8 %) |
 | | 786 432 | 0.919 | +0.9 % | | 512 | 0.988 (+8 %) |
 | | 3 145 728 | **0.913** | **+0.2 %** | | 1024 | 0.987 (+8 %) |
 
-Le papier **CONVERGE** (0.935 -> 0.919 -> 0.913) sur un maillage de **DISQUE** epousant ; nous sommes
-**PLATS** a +8 % sur une boite carree. L'ecart est reel, mais l'experience cut-cell (section 4,
-mesure 5) montre qu'il ne vient PAS du *stencil* de paroi : poser Dirichlet sur le vrai cercle (ordre
-2) au lieu de l'escalier ne change pas le taux. La difference tient a la representation cartesienne de
-la **dynamique de l'anneau** elle-meme (advection E x B sur grille carree, dont la symetrie 4 resonne
-avec le mode 4), pas au bord conducteur lointain. Reste a confirmer la cause structurelle exacte
-(symetrie de grille vs methode de mesure DFT-phi vs normalisation), cf. section 7.
+The paper **CONVERGES** (0.935 -> 0.919 -> 0.913) on a fitted **DISK** mesh; we are
+**FLAT** at +8 % on a square box. The gap is real, but the cut-cell experiment (section 4,
+measurement 5) shows that it does NOT come from the wall *stencil*: setting Dirichlet on the real circle (order
+2) instead of the staircase does not change the rate. The difference lies in the Cartesian representation of the
+**ring dynamics** itself (E x B advection on a square grid, whose 4-fold symmetry resonates
+with mode 4), not in the distant conducting boundary. The exact structural cause remains to be confirmed
+(grid symmetry vs DFT-phi measurement method vs normalization), see section 7.
 
-## 6. Indicateurs physiques verifies (fidelite du transport)
+## 6. Verified physical indicators (transport fidelity)
 
-`analysis/diocotron_invariants.hpp` + `test_diocotron_invariants` (mode 4, WENO5+SSPRK3, eff 256) :
+`analysis/diocotron_invariants.hpp` + `test_diocotron_invariants` (mode 4, WENO5+SSPRK3, eff 256):
 
-| invariant | resultat | role |
+| invariant | result | role |
 |---|---|---|
-| masse `int rho` | exacte (derive 0) | conservativite (forme flux) |
-| energie `1/2 int \|grad phi\|^2` | < 1 % | invariant du systeme ideal |
-| moment angulaire `int rho r^2` | < 1 % | invariant diocotron (Davidson) |
-| enstrophie `int rho^2` | -5.5 % | Casimir : MESURE la diffusion numerique |
-| principe du maximum | `rho in [floor, rho_max]` | pas de valeurs parasites |
-| `Re(omega)` (rotation) | reproduit (~+8 %) | 2e moitie de la dispersion |
+| mass `int rho` | exact (drift 0) | conservativity (flux form) |
+| energy `1/2 int \|grad phi\|^2` | < 1 % | invariant of the ideal system |
+| angular momentum `int rho r^2` | < 1 % | diocotron invariant (Davidson) |
+| enstrophy `int rho^2` | -5.5 % | Casimir: MEASURES the numerical diffusion |
+| maximum principle | `rho in [floor, rho_max]` | no spurious values |
+| `Re(omega)` (rotation) | reproduced (~+8 %) | 2nd half of the dispersion |
 
-Figures : `docs/fig_diocotron_highorder.png` (taux vs ordre), `docs/fig_diocotron_invariants.png`
-(invariants vs temps).
+Figures: `docs/fig_diocotron_highorder.png` (rate vs order), `docs/fig_diocotron_invariants.png`
+(invariants vs time).
 
-## 7. Conclusion et prochaine etape
+## 7. Conclusion and next step
 
-Les leviers de RECONSTRUCTION et d'INTEGRATION d'ordre eleve sont en place et verifies (depuis -39 %
-en ordre 1). Avec une fenetre de fit lineaire propre ([3,9], R^2=1.00), le mode 4 est meme a **+1 %**
-de l'analytique a eff 1024 et le mode 3 EXACT (voir le diagnostic ci-dessous) ; le sur-taux residuel
-se concentre sur les modes de haut l.
+The high-order RECONSTRUCTION and INTEGRATION levers are in place and verified (from -39 %
+at order 1). With a clean linear fit window ([3,9], R^2=1.00), mode 4 is even at **+1 %**
+of the analytic at eff 1024 and mode 3 EXACT (see the diagnosis below); the residual overshoot rate
+concentrates on the high-l modes.
 
-Le bord embedded **cut-cell Shortley-Weller** (`GeometricMG`, option `cut_cell`) a ete implemente et
-valide (`test_cut_cell` : ordre L2 1.93 au bord, erreur de Poisson 3459x plus faible qu'en escalier).
-**Resultat negatif important** : il ne bouge PAS le taux diocotron (section 4, mesure 5). Le bord
-conducteur n'etait donc pas le verrou suppose ; le mode instable est trop loin de la paroi pour la
-"voir" (effet d'image `(0.44)^8 ~ 1e-3`). Le cut-cell reste un gain de precision propre du solveur de
-Poisson, utile pour des configurations ou la charge approche la paroi.
+The **cut-cell Shortley-Weller** embedded boundary (`GeometricMG`, option `cut_cell`) was implemented and
+validated (`test_cut_cell`: L2 order 1.93 at the boundary, Poisson error 3459x lower than staircase).
+**Important negative result**: it does NOT move the diocotron rate (section 4, measurement 5). So the conducting
+boundary was not the supposed blocker; the unstable mode is too far from the wall to "see" it
+(image effect `(0.44)^8 ~ 1e-3`). The cut-cell remains a clean precision gain of the Poisson
+solver, useful for configurations where the charge approaches the wall.
 
-**Diagnostic tranche (workflow `diocotron-overshoot-diag` + confirmation ROMEO 614125, voir
-`romeo/CONV_RESULTS.md`).** Trois pistes ont ete CLOSES :
-- **symetrie de grille : ECARTEE.** Tourner la phase des lobes ne change gamma que de +0.04 %. Indice
-  decisif : sur grille uniforme c'est le mode 5 (NON couplable a une grille carree 4-fold) qui sur-tire
-  le plus, le mode 4 (candidat 4-fold) est benin -> l'oppose d'une resonance de grille ;
-- **methode de mesure : ELIMINEE.** `mode_amplitude` (lignes 242-262) lit DEJA le potentiel phi et fait
-  la DFT azimutale du mode l a r=r0 : c'est EXACTEMENT la methode du papier, pas un observable densite ;
-- **normalisation `omega_D` : REFUTEE.** Recalcul = 0.14324 (rho_bar = 1 - delta = 0.9, convention
-  Davidson), confirme par l'eigensolveur et la frequence de rotation simulee. C'est la bonne echelle.
+**Diagnosis settled (workflow `diocotron-overshoot-diag` + ROMEO confirmation 614125, see
+`romeo/CONV_RESULTS.md`).** Three leads were CLOSED:
+- **grid symmetry: RULED OUT.** Rotating the lobe phase only changes gamma by +0.04 %. Decisive
+  clue: on the uniform grid it is mode 5 (NOT couplable to a 4-fold square grid) that overshoots
+  the most, mode 4 (the 4-fold candidate) is benign -> the opposite of a grid resonance;
+- **measurement method: ELIMINATED.** `mode_amplitude` (lines 242-262) ALREADY reads the potential phi and does
+  the azimuthal DFT of mode l at r=r0: this is EXACTLY the paper method, not a density observable;
+- **`omega_D` normalization: REFUTED.** Recompute = 0.14324 (rho_bar = 1 - delta = 0.9, Davidson
+  convention), confirmed by the eigensolver and the simulated rotation frequency. It is the right scale.
 
-Ce qui RESTE (et que ROMEO a quantifie) : une distorsion de valeur propre **PLATE en resolution** (eff
-256 ~ 512 ~ 1024, l'ecart ne se referme pas en raffinant -> structurel, pas de la troncature) et
-**CROISSANTE avec le mode l**, NON uniforme. Fenetre lineaire [3,9], R^2=1.00, eff 1024 : mode 3 = 0.771
-(EXACT), mode 4 = 0.921 (**+1 %**, quasi converge), mode 5 = 0.881 (**+29 %**, aberrant). L'ancien
-"+8 % uniforme" etait un artefact de fenetre/schema (fenetre etroite + WENO5) ; le taux depend fortement
-de la fenetre faute de plateau exponentiel net. La dispersion analytique gamma(l) pique a l=4 et
-redescend en l=5 ; notre schema reproduit le pic mais pas le ROLL-OFF haut-l, car la fonction propre de
-mode 5 (radialement plus structuree) est la plus distordue par la representation CARTESIENNE de l'anneau.
+What REMAINS (and which ROMEO quantified): an eigenvalue distortion **FLAT in resolution** (eff
+256 ~ 512 ~ 1024, the gap does not close under refinement -> structural, not from truncation) and
+**GROWING with mode l**, NON uniform. Linear window [3,9], R^2=1.00, eff 1024: mode 3 = 0.771
+(EXACT), mode 4 = 0.921 (**+1 %**, near converged), mode 5 = 0.881 (**+29 %**, aberrant). The old
+"+8 % uniform" was a window/scheme artifact (narrow window + WENO5); the rate depends strongly
+on the window for lack of a clean exponential plateau. The analytic dispersion gamma(l) peaks at l=4 and
+drops back at l=5; our scheme reproduces the peak but not the high-l ROLL-OFF, because the eigenfunction of
+mode 5 (radially more structured) is the most distorted by the CARTESIAN representation of the ring.
 
-Voie vers < 1 % : faire EPOUSER les bords d'ANNEAU (r0, r1) ou vit le mode, pas la paroi :
-- **cut-cell / level-set sur r0 et r1** (le cut-cell de paroi existe deja, sans effet ici) ;
-- **grille polaire (r, theta)** pour transport + Poisson (supprime la brisure d'invariance de rotation).
-Le mode 3 exact et le mode 4 a +1 % montrent que le cadre est CORRECT ; le verrou est la fidelite de la
-fonction propre a haut l. Figure : `docs/fig_diocotron_conv_modes.png`.
+Path toward < 1 %: make the RING boundaries (r0, r1) where the mode lives FIT, not the wall:
+- **cut-cell / level-set on r0 and r1** (the wall cut-cell already exists, with no effect here);
+- **polar grid (r, theta)** for transport + Poisson (removes the rotation invariance breaking).
+The exact mode 3 and the +1 % mode 4 show that the framework is CORRECT; the blocker is the fidelity of the
+eigenfunction at high l. Figure: `docs/fig_diocotron_conv_modes.png`.
 
 ## 8. Reproduction
 
 ```
-# stabilite + AMR ; args : out nc nsteps refine l ml recon cut
+# stability + AMR ; args : out nc nsteps refine l ml recon cut
 #   recon : 0 NoSlope, 1 VanLeer, 2 Minmod   |   cut : 0 escalier, 1 cut-cell Shortley-Weller
 g++ -std=c++23 -O2 -I include examples/diocotron_column_amr.cpp -o dca
 ./dca out 640 3000 0 4 0 1 0      # uniforme VanLeer eff 640, escalier (stable)

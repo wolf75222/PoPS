@@ -1,23 +1,23 @@
-# Lancer adc_cpp sur un supercalculateur (Spack)
+# Running adc_cpp on a supercomputer (Spack)
 
-Guide generique pour compiler et executer adc_cpp (lib C++23 header-only +
-module Python `_adc`) sur n'importe quel cluster via Spack, avec les
-performances maximales. Backends optionnels : Kokkos (CPU OpenMP / GPU CUDA),
-MPI (OpenMPI), HDF5 parallele.
+Generic guide to compile and run adc_cpp (header-only C++23 lib +
+Python module `_adc`) on any cluster via Spack, at maximum
+performance. Optional backends: Kokkos (CPU OpenMP / GPU CUDA),
+MPI (OpenMPI), parallel HDF5.
 
-Le pendant specifique a ROMEO est `Tools/machines/romeo/romeo_adc.profile.example` :
-ce guide en est la version generique pour les autres clusters, et peut servir
-de modele a recopier en profil de site.
+The ROMEO-specific counterpart is `Tools/machines/romeo/romeo_adc.profile.example`:
+this guide is its generic version for other clusters, and can serve
+as a template to copy into a site profile.
 
-## 0. Pre-requis
+## 0. Prerequisites
 
-- CMake >= 3.21 et Ninja (peuvent venir de Spack, cf. section 2).
-- Un compilateur C++23 (gcc >= 13 conseille, cf. section 3).
-- Acces a un scratch rapide pour le cache des `.so` du DSL (section 5).
+- CMake >= 3.21 and Ninja (can come from Spack, see section 2).
+- A C++23 compiler (gcc >= 13 recommended, see section 3).
+- Access to a fast scratch for the DSL `.so` cache (section 5).
 
-## 1. Choisir : Spack du site ou bootstrap perso
+## 1. Choose: site Spack or personal bootstrap
 
-Beaucoup de centres fournissent deja Spack. Verifier d'abord :
+Many centers already provide Spack. Check first:
 
 ```sh
 module avail spack          # ou : which spack
@@ -25,7 +25,7 @@ module load spack           # si un module existe
 spack --version
 ```
 
-Si rien n'est disponible, bootstrap perso sans droits root :
+If nothing is available, personal bootstrap without root rights:
 
 ```sh
 git clone --depth=2 https://github.com/spack/spack.git ~/spack
@@ -33,13 +33,13 @@ git clone --depth=2 https://github.com/spack/spack.git ~/spack
 spack bootstrap now                     # construit les dependances internes
 ```
 
-Preferer le Spack du site quand il existe : il connait deja les fabrics
-reseau, les pilotes GPU et les compilateurs vendeur. Le bootstrap perso est le
-recours quand le site n'en fournit pas ou que la version est trop ancienne.
+Prefer the site Spack when it exists: it already knows the network
+fabrics, the GPU drivers and the vendor compilers. The personal bootstrap is the
+fallback when the site does not provide one or the version is too old.
 
-## 2. Installer la pile
+## 2. Install the stack
 
-Choisir le compilateur d'abord (section 3), puis :
+Choose the compiler first (section 3), then:
 
 ```sh
 # CPU (OpenMP)
@@ -61,7 +61,7 @@ spack install cmake ninja
 spack install hdf5 +mpi
 ```
 
-Retrouver les prefixes installes (utile pour CMake / les env vars) :
+Find the installed prefixes (useful for CMake / the env vars):
 
 ```sh
 spack location -i kokkos
@@ -69,19 +69,19 @@ spack location -i openmpi
 spack location -i hdf5
 ```
 
-`spack location -i <spec>` imprime le prefixe d'installation d'un paquet deja
-installe ; on s'en sert pour `-DKokkos_ROOT`, `ADC_KOKKOS_ROOT`, etc.
+`spack location -i <spec>` prints the install prefix of an already
+installed package; it is used for `-DKokkos_ROOT`, `ADC_KOKKOS_ROOT`, etc.
 
-## 3. Viser la microarchitecture (perf)
+## 3. Target the microarchitecture (perf)
 
-Lister ce que Spack reconnait :
+List what Spack recognizes:
 
 ```sh
 spack arch                       # arch courante detectee
 spack arch --known-targets       # toutes les cibles connues
 ```
 
-Cibler la micro-archi des noeuds de calcul (pas du login s'ils different) :
+Target the micro-arch of the compute nodes (not the login one if they differ):
 
 ```sh
 spack install kokkos +openmp target=zen4            # AMD Genoa
@@ -89,7 +89,7 @@ spack install kokkos +openmp target=sapphirerapids  # Intel SPR
 spack install kokkos +openmp target=neoverse_v2     # ARM Grace (GH200)
 ```
 
-Compilateur recent (gcc >= 13 pour C++23 complet) :
+Recent compiler (gcc >= 13 for full C++23):
 
 ```sh
 spack compiler find                 # enregistre les compilos deja presents
@@ -99,19 +99,19 @@ spack compiler find                 # re-detecte gcc@13 fraichement installe
 spack compiler list
 ```
 
-Puis epingler le compilateur sur chaque spec avec `%` :
+Then pin the compiler on each spec with `%`:
 
 ```sh
 spack install kokkos +openmp target=zen4 %gcc@13
 ```
 
-## 4. Compiler adc_cpp
+## 4. Compile adc_cpp
 
-Configurer sur le login si CMake/Ninja manquent sur les noeuds de calcul ;
-les binaires resteront lances par sbatch. Les options ADC_* sont aussi
-acceptees comme variables d'environnement.
+Configure on the login node if CMake/Ninja are missing on the compute nodes;
+the binaries will still be launched by sbatch. The ADC_* options are also
+accepted as environment variables.
 
-Coeur + tests, CPU :
+Core + tests, CPU:
 
 ```sh
 export KOKKOS_ROOT=$(spack location -i kokkos)
@@ -124,7 +124,7 @@ cmake --build build-cpu -j
 ctest --test-dir build-cpu
 ```
 
-GPU : compiler avec le `nvcc_wrapper` de Kokkos comme compilateur C++ :
+GPU: compile with Kokkos's `nvcc_wrapper` as the C++ compiler:
 
 ```sh
 export KOKKOS_ROOT=$(spack location -i kokkos)   # build +cuda +wrapper
@@ -136,7 +136,7 @@ cmake -S . -B build-gpu -G Ninja \
 cmake --build build-gpu -j
 ```
 
-Module Python `_adc` (scikit-build-core via pip) :
+Python module `_adc` (scikit-build-core via pip):
 
 ```sh
 export ADC_USE_KOKKOS=ON
@@ -147,13 +147,13 @@ export ADC_USE_MPI=ON
 pip install .                       # dans un venv ou conda env
 ```
 
-Le compilateur du build est bake dans `_adc` (le DSL le reappelle au runtime,
-cf. section 5) : il doit rester accessible sur les noeuds. Garder le `spack
-load` du compilateur (ou son module) dans le script sbatch.
+The build compiler is baked into `_adc` (the DSL calls it again at runtime,
+see section 5): it must remain accessible on the nodes. Keep the compiler's
+`spack load` (or its module) in the sbatch script.
 
-## 5. Variables runtime du DSL
+## 5. DSL runtime variables
 
-Le module compile des `.so` au runtime. A exporter sur les noeuds :
+The module compiles `.so` files at runtime. To export on the nodes:
 
 ```sh
 # parite loader / module : meme Kokkos que celui du build
@@ -166,14 +166,14 @@ export ADC_CACHE_DIR=$SCRATCH/adc_dsl_cache
 export ADC_DSL_OPTFLAGS="-O3 -DNDEBUG"
 ```
 
-`-march=native` est possible dans `ADC_DSL_OPTFLAGS` pour gagner quelques %,
-mais le cache `.so` n'est alors PAS partageable entre micro-architectures :
-utiliser un `ADC_CACHE_DIR` distinct par type de noeud, ou s'en passer si les
-noeuds sont heterogenes.
+`-march=native` is possible in `ADC_DSL_OPTFLAGS` to gain a few %,
+but the `.so` cache is then NOT shareable across microarchitectures:
+use a separate `ADC_CACHE_DIR` per node type, or do without it if the
+nodes are heterogeneous.
 
-## 6. Lancer avec perf max (sbatch)
+## 6. Launch at max perf (sbatch)
 
-### CPU (OpenMP, 1 rang MPI par socket NUMA)
+### CPU (OpenMP, 1 MPI rank per NUMA socket)
 
 ```sh
 #!/bin/sh
@@ -195,11 +195,11 @@ export OMP_PLACES=threads
 srun --cpu-bind=cores python run_case.py
 ```
 
-En Python, `adc.set_threads(n)` pose `OMP_NUM_THREADS` et `KOKKOS_NUM_THREADS`
-de maniere coherente ; le placement NUMA (`OMP_PROC_BIND` / `OMP_PLACES`)
-reste a fixer dans l'environnement comme ci-dessus.
+In Python, `adc.set_threads(n)` sets `OMP_NUM_THREADS` and `KOKKOS_NUM_THREADS`
+consistently; the NUMA placement (`OMP_PROC_BIND` / `OMP_PLACES`)
+still has to be set in the environment as above.
 
-### GPU (CUDA, 1 rang MPI par GPU)
+### GPU (CUDA, 1 MPI rank per GPU)
 
 ```sh
 #!/bin/sh
@@ -226,14 +226,14 @@ export OMPI_MCA_btl_smcuda_use_cuda_ipc=0
 srun --cpu-bind=cores python run_case.py
 ```
 
-1 rang MPI par GPU est la regle ; ne pas sur-souscrire. Si le job hang dans
-les halos multi-boites a np >= 2 sur GPU, le quick-fix ci-dessus contourne le
-routage CUDA-IPC impossible entre GPU cgroup-isoles (le fix propre est dans
-le code depuis la PR #254 ; le quick-fix reste utile sur un module ancien).
+1 MPI rank per GPU is the rule; do not oversubscribe. If the job hangs in
+the multi-box halos at np >= 2 on GPU, the quick-fix above works around the
+CUDA-IPC routing that is impossible between cgroup-isolated GPUs (the proper fix is in
+the code since PR #254; the quick-fix is still useful on an old module).
 
-## 7. Reproductibilite : environnement Spack par machine
+## 7. Reproducibility: a Spack environment per machine
 
-Figer la pile dans un environnement Spack versionne (un dossier par cluster) :
+Freeze the stack in a versioned Spack environment (one folder per cluster):
 
 ```sh
 spack env create adc-clusterX        # cree l'env
@@ -244,7 +244,7 @@ spack concretize                     # ecrit spack.lock
 spack install
 ```
 
-Ou ecrire directement un `spack.yaml` puis `spack env create adc-clusterX spack.yaml` :
+Or write a `spack.yaml` directly then `spack env create adc-clusterX spack.yaml`:
 
 ```yaml
 spack:
@@ -262,13 +262,13 @@ spack:
   view: true            # vue filesystem, ou un chemin : view: /chemin/vue
 ```
 
-Committer `spack.yaml` ET `spack.lock` par machine (ex. sous
-`Tools/machines/<cluster>/`) : `spack.lock` est l'etat concretise exact,
-rejouable a l'identique.
+Commit `spack.yaml` AND `spack.lock` per machine (e.g. under
+`Tools/machines/<cluster>/`): `spack.lock` is the exact concretized state,
+replayable identically.
 
-## 8. Adapter a votre cluster
+## 8. Adapt to your cluster
 
-Inspecter le site avant de fixer le placement :
+Inspect the site before fixing the placement:
 
 ```sh
 sinfo -o "%P %N %c %G %m"      # partitions, coeurs, GPU, RAM par noeud
@@ -276,12 +276,12 @@ module avail                    # modules du site (compilateurs, MPI, CUDA)
 spack arch --known-targets      # cibles micro-archi reconnues
 ```
 
-- Verifier `--cpus-per-task` contre le nombre de coeurs par socket de `sinfo`,
-  et `--gpus-per-task` contre la colonne GRES (`%G`).
-- Preferer le MPI / CUDA du site (via `module load` + Spack `externals`)
-  quand le centre les optimise pour la fabric reseau : c'est souvent plus
-  rapide et plus stable que de tout reconstruire. Declarer un paquet externe
-  dans `packages:` du `spack.yaml` si besoin.   # a verifier sur votre site
-- En cas de doute sur une commande Spack specifique au site, consulter la doc
-  du centre : la syntaxe des variants et des cibles peut etre contrainte par
-  les paquets externes deja declares.
+- Check `--cpus-per-task` against the number of cores per socket from `sinfo`,
+  and `--gpus-per-task` against the GRES column (`%G`).
+- Prefer the site MPI / CUDA (via `module load` + Spack `externals`)
+  when the center optimizes them for the network fabric: it is often faster
+  and more stable than rebuilding everything. Declare an external package
+  in `packages:` of the `spack.yaml` if needed.   # a verifier sur votre site
+- When in doubt about a site-specific Spack command, consult the center's
+  documentation: the syntax of variants and targets may be constrained by
+  the external packages already declared.

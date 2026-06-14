@@ -1,63 +1,63 @@
-# Profil d'un pas de temps representatif (mesure seule)
+# Profile of a representative time step (measurement only)
 
-Date : 2026-06-06. Branche : `feat/profiling-harness`. Auteur de la mesure : harnais
-`bench/profile_step` (cf. `bench/`), construit HORS du build par defaut (`-DADC_BUILD_BENCH=ON`).
+Date: 2026-06-06. Branch: `feat/profiling-harness`. Author of the measurement: harness
+`bench/profile_step` (cf. `bench/`), built OUTSIDE the default build (`-DADC_BUILD_BENCH=ON`).
 
-Ce document RAPPORTE des mesures. Il N'APPLIQUE AUCUNE optimisation et NE recommande aucun
-changement de code au-dela d'une piste a investiguer, conformement a la regle du proprietaire :
-"aucun refactor de performance sans profil montrant le goulot". Les fichiers historiques
-`docs/PERFORMANCE.md` et `docs/BACKEND_COVERAGE.md` ne sont PAS touches.
+This document REPORTS measurements. It APPLIES NO optimization and RECOMMENDS no
+code change beyond a lead to investigate, in line with the owner's rule:
+"no performance refactor without a profile showing the bottleneck". The historical files
+`docs/PERFORMANCE.md` and `docs/BACKEND_COVERAGE.md` are NOT touched.
 
-## 1. Methode
+## 1. Method
 
-### Ce qui est mesure
+### What is measured
 
-Le harnais reconstruit, a partir des SEAMS PUBLICS de la bibliotheque (en-tetes seuls, sans toucher
-`python/system.cpp` ni aucun en-tete du hot path), un pas de temps REPRESENTATIF du cas diocotron tel
-que l'orchestre `System::step` :
+The harness reconstructs, from the PUBLIC SEAMS of the library (headers only, without touching
+`python/system.cpp` nor any hot path header), a REPRESENTATIVE time step of the diocotron case as
+`System::step` orchestrates it:
 
-- modele `CompositeModel<ExBVelocity, NoSource, ChargeDensity>` (advection ExB scalaire + densite de
-  charge `q n` au second membre du Poisson) -- la composition exacte du diocotron ;
-- `solve_fields` : assemblage du second membre `f = q n`, solve elliptique, derivation
-  `(phi, grad phi)` vers le canal aux, remplissage des halos de aux ;
-- avance SSPRK2 du bloc : 2 etages, chacun `fill_ghosts(U)` + `assemble_rhs<Minmod, Rusanov>` (operateur
-  volumes finis) + combinaison lineaire ;
-- pas CFL : reduction `max_wave_speed_mf` (max de la vitesse d'onde, `all_reduce_max` sous MPI) ;
-- une reduction `dot(U, U)` (brique des produits scalaires Krylov / diagnostics).
+- model `CompositeModel<ExBVelocity, NoSource, ChargeDensity>` (scalar ExB advection + charge
+  density `q n` at the right-hand side of the Poisson) (the exact diocotron composition);
+- `solve_fields`: assembly of the right-hand side `f = q n`, elliptic solve, derivation
+  `(phi, grad phi)` to the aux channel, filling of the aux halos;
+- SSPRK2 advance of the block: 2 stages, each `fill_ghosts(U)` + `assemble_rhs<Minmod, Rusanov>` (finite
+  volume operator) + linear combination;
+- CFL step: reduction `max_wave_speed_mf` (max of the wave speed, `all_reduce_max` under MPI);
+- one reduction `dot(U, U)` (the Krylov / diagnostics dot product brick).
 
-Chaque PHASE est chronometree separement (`std::chrono`, encadree de `device_fence()` pour capturer
-l'execution device reelle sous Kokkos, qui est asynchrone) :
+Each PHASE is timed separately (`std::chrono`, surrounded by `device_fence()` to capture
+the actual device execution under Kokkos, which is asynchronous):
 
-| phase | contenu |
+| phase | content |
 |-------|---------|
-| `transport`  | `assemble_rhs<L,F>` (operateur FV) + combinaisons SSPRK |
-| `poisson`    | solve elliptique (`GeometricMG::solve()` = V-cycles, ou `PoissonFFTSolver::solve()`) |
-| `halos`      | `fill_boundary` / `fill_ghosts` (echange MPI + ghosts physiques) sur U et aux |
-| `aux_derive` | assemblage `f = q n` + derivation `(phi, grad phi)` -> aux (boucles hote par cellule) |
+| `transport`  | `assemble_rhs<L,F>` (FV operator) + SSPRK combinations |
+| `poisson`    | elliptic solve (`GeometricMG::solve()` = V-cycles, or `PoissonFFTSolver::solve()`) |
+| `halos`      | `fill_boundary` / `fill_ghosts` (MPI exchange + physical ghosts) on U and aux |
+| `aux_derive` | assembly `f = q n` + derivation `(phi, grad phi)` -> aux (host loops per cell) |
 | `reduction`  | `max_wave_speed_mf` (CFL) + `dot` |
-| `fence`      | cout d'une `device_fence()` isolee (~0 hors Kokkos) |
-| `alloc_tmp`  | (re)allocation des MultiFab temporaires par pas (residu R, etage SSPRK U1) |
+| `fence`      | cost of an isolated `device_fence()` (~0 outside Kokkos) |
+| `alloc_tmp`  | (re)allocation of temporary MultiFabs per step (residual R, SSPRK stage U1) |
 
-### Cas de reference
+### Reference case
 
-Grille 256x256, UNE box repartie en round-robin `DistributionMapping(1, n_ranks())` -- C'EST le layout
-de `System` (qui ne decoupe pas la box). `bc=periodic`, `solver=geometric_mg`, `limiter=minmod`,
-`cfl=0.4`, 5 pas de chauffe + 50 pas mesures (sauf indication contraire). Sous MPI le temps rapporte
-par phase est le MAX sur les rangs (chemin critique d'un pas collectif).
+256x256 grid, ONE box distributed round-robin `DistributionMapping(1, n_ranks())` (THAT is the layout
+of `System`, which does not split the box). `bc=periodic`, `solver=geometric_mg`, `limiter=minmod`,
+`cfl=0.4`, 5 warmup steps + 50 measured steps (unless stated otherwise). Under MPI the time reported
+per phase is the MAX across ranks (critical path of a collective step).
 
-### Plateformes exactes
+### Exact platforms
 
-- CPU local : Apple M-series (macOS, AppleClang 21), 8 coeurs logiques. OpenMPI 5.0.9 (Homebrew).
-  Kokkos Homebrew (device OpenMP, sans CUDA). NB : c'est un portable, pas un noeud de calcul ; les
-  chiffres ABSOLUS y sont indicatifs, les PARTS (%) et TENDANCES sont robustes.
-- GPU : ROMEO 2025, noeud `armgpu` `romeo-a057`, NVIDIA GH200 120GB (Grace-Hopper, aarch64),
+- Local CPU: Apple M-series (macOS, AppleClang 21), 8 logical cores. OpenMPI 5.0.9 (Homebrew).
+  Homebrew Kokkos (OpenMP device, without CUDA). NB: this is a laptop, not a compute node; the
+  ABSOLUTE numbers there are indicative, the SHARES (%) and TRENDS are robust.
+- GPU: ROMEO 2025, node `armgpu` `romeo-a057`, NVIDIA GH200 120GB (Grace-Hopper, aarch64),
   CUDA 12.6, Kokkos 4.x (SERIAL;CUDA, ARCH HOPPER90, nvcc_wrapper), OpenMPI 4.1.7 CUDA-aware.
 
-## 2. Tableau de profil (phase x backend, ms par pas et %)
+## 2. Profile table (phase x backend, ms per step and %)
 
-Toutes les valeurs en MILLISECONDES PAR PAS. `(pct)` = part de la phase dans le pas. 256x256.
+All values in MILLISECONDS PER STEP. `(pct)` = share of the phase in the step. 256x256.
 
-| phase \\ backend | Serie CPU | Kokkos OMP t=1 | Kokkos OMP t=4 | Kokkos OMP t=8 | Kokkos Cuda GH200 | MPI CPU np=2 | MPI CPU np=4 | MPI+Cuda np=2 | MPI+Cuda np=4 |
+| phase \\ backend | Serial CPU | Kokkos OMP t=1 | Kokkos OMP t=4 | Kokkos OMP t=8 | Kokkos Cuda GH200 | MPI CPU np=2 | MPI CPU np=4 | MPI+Cuda np=2 | MPI+Cuda np=4 |
 |---|---|---|---|---|---|---|---|---|---|
 | transport  | 1.29 | 1.29 | 0.49 | 0.57 | 0.57 | 3.62 | 3.88 | 0.40 | 0.40 |
 | poisson    | 138.08 | 169.41 | 1301.80 | 3378.23 | 261.14 | 259.91 | 912.04 | 284.66 | 284.31 |
@@ -69,10 +69,10 @@ Toutes les valeurs en MILLISECONDES PAR PAS. `(pct)` = part de la phase dans le 
 | **TOTAL**  | **139.68** | **171.03** | **1303.14** | **3380.82** | **263.53** | **269.92** | **933.02** | **288.03** | **287.67** |
 | poisson %  | 98.9% | 99.0% | 99.9% | 99.9% | 99.1% | 96.3% | 97.8% | 98.8% | 98.8% |
 
-(Serie CPU TOTAL 139.68 ms correspond au run direct ; la colonne `MPI CPU np=1` mesuree separement
-donne 136.83 ms, identique a la verticale serie a la variance pres.)
+(Serial CPU TOTAL 139.68 ms corresponds to the direct run; the `MPI CPU np=1` column measured separately
+gives 136.83 ms, identical to the serial vertical up to variance.)
 
-### Sensibilite (Serie CPU, 30 pas)
+### Sensitivity (Serial CPU, 30 steps)
 
 | variation | per_step (ms) | poisson % |
 |---|---|---|
@@ -82,80 +82,80 @@ donne 136.83 ms, identique a la verticale serie a la variance pres.)
 | **128**, geometric_mg, minmod | 40.6 | 99.0% |
 | **512**, geometric_mg, minmod | 532.2 | 98.8% |
 
-### Scaling isole du transport vs poisson (Kokkos OMP, 512x512, weno5)
+### Isolated scaling of transport vs poisson (Kokkos OMP, 512x512, weno5)
 
 | threads | transport (ms) | poisson (ms) |
 |---|---|---|
 | 1 | 45.21 | 738.95 |
-| 4 | 17.10 (x2.6 plus rapide) | 2229.55 (x3.0 plus LENT) |
+| 4 | 17.10 (x2.6 faster) | 2229.55 (x3.0 SLOWER) |
 
-## 3. Goulot identifie et recommandation (justifies par la mesure)
+## 3. Identified bottleneck and recommendation (justified by the measurement)
 
-### Constat principal : le Poisson elliptique domine TOUS les backends
+### Main finding: the elliptic Poisson dominates ALL backends
 
-Sur les six backends mesures, la phase `poisson` represente **96 a 99.9 %** du temps d'un pas. Le
-transport (l'operateur volumes finis `assemble_rhs`), les halos, les reductions et les allocations
-temporaires sont chacun **< 1 ms par pas** au cas de reference -- ensemble < 1.1 % du pas en serie.
-Le verrou de performance est donc, sans ambiguite, le **solve elliptique** (`GeometricMG::solve()`,
-appele a chaque `solve_fields`, donc a chaque pas).
+Across the six measured backends, the `poisson` phase represents **96 to 99.9 %** of the time of a step. The
+transport (the finite volume operator `assemble_rhs`), the halos, the reductions and the temporary
+allocations are each **< 1 ms per step** in the reference case (together < 1.1 % of the step in serial).
+The performance blocker is therefore, unambiguously, the **elliptic solve** (`GeometricMG::solve()`,
+called at each `solve_fields`, hence at each step).
 
-Deux faits chiffres aggravent ce constat :
+Two quantified facts aggravate this finding:
 
-1. **Le Poisson NE PROFITE PAS du parallelisme on-node ; il REGRESSE.** Sous Kokkos OpenMP, la phase
-   poisson passe de 169 ms (1 thread) a 1302 ms (4) puis 3378 ms (8) au cas de reference -- elle
-   RALENTIT d'un facteur ~20 a 8 threads. Le scaling isole (512x512) confirme la dichotomie : le
-   transport accelere proprement (x2.6 sur 4 threads) tandis que le poisson ralentit (x3.0). La cause
-   mesuree : le V-cycle multigrille descend jusqu'a des grilles grossieres minuscules (2x2, 4x4, ...)
-   et lance un `Kokkos::parallel_for` PAR balayage de lissage sur chacune ; sur une boite de quelques
-   cellules, le cout d'ouverture de la region parallele (fork/join OpenMP, ou lancement de kernel)
-   ecrase le calcul utile. `for_each_cell` (chemin Kokkos, le seul) bascule deja, sous un seuil de
-   taille de boite, vers une boucle hote SEQUENTIELLE executee SOUS l'espace hote Kokkos (une
-   optimisation interne au chemin Kokkos, pas un backend separe) ; mais ce seuil ne couvre pas le
-   lissage multigrille, qui dispatche un kernel quelle que soit la taille de la boite.
+1. **The Poisson DOES NOT BENEFIT from on-node parallelism; it REGRESSES.** Under Kokkos OpenMP, the
+   poisson phase goes from 169 ms (1 thread) to 1302 ms (4) then 3378 ms (8) in the reference case (it
+   SLOWS DOWN by a factor of ~20 at 8 threads). The isolated scaling (512x512) confirms the dichotomy: the
+   transport accelerates cleanly (x2.6 on 4 threads) while the poisson slows down (x3.0). The measured
+   cause: the multigrid V-cycle descends down to tiny coarse grids (2x2, 4x4, ...)
+   and launches a `Kokkos::parallel_for` PER smoothing sweep on each one; on a box of a few
+   cells, the cost of opening the parallel region (OpenMP fork/join, or kernel launch)
+   crushes the useful computation. `for_each_cell` (the Kokkos path, the only one) already switches, below a
+   box-size threshold, to a SEQUENTIAL host loop executed UNDER the Kokkos host space (an
+   optimization internal to the Kokkos path, not a separate backend); but this threshold does not cover the
+   multigrid smoothing, which dispatches a kernel regardless of the box size.
 
-2. **Sur GPU, le Poisson coute encore 261 ms/pas (GH200) et ne profite d'aucun GPU supplementaire.**
-   Kokkos Cuda mono-GPU : 263.5 ms/pas, poisson 99.1 %. MPI + Kokkos Cuda np=2 et np=4 : 288.0 et
-   287.7 ms/pas -- IDENTIQUES au mono-GPU. Le V-cycle enchaine des dizaines de lancements de kernels
-   sur des niveaux grossiers de plus en plus petits ; la LATENCE de lancement (et non la bande passante)
-   domine, donc ni un GPU plus large ni des GPU en plus n'aident. La non-amelioration np=2/4 vient
-   aussi du layout `System` MONO-BOX (une seule box, donc un seul rang porte le travail ; le solve
-   elliptique reste collectif et chaque rang supplementaire n'ajoute que de la latence de collective).
+2. **On GPU, the Poisson still costs 261 ms/step (GH200) and benefits from no additional GPU.**
+   Kokkos Cuda single-GPU: 263.5 ms/step, poisson 99.1 %. MPI + Kokkos Cuda np=2 and np=4: 288.0 and
+   287.7 ms/step (IDENTICAL to the single-GPU). The V-cycle chains dozens of kernel launches
+   on coarse levels that are smaller and smaller; the launch LATENCY (and not the bandwidth)
+   dominates, so neither a wider GPU nor more GPUs help. The non-improvement np=2/4 also comes
+   from the MONO-BOX `System` layout (a single box, so a single rank carries the work; the elliptic
+   solve remains collective and each additional rank only adds collective latency).
 
-3. **Cote MPI CPU, meme structure.** np=2 et np=4 ralentissent (270 et 933 ms/pas) au lieu d'accelerer,
-   et la phase `reduction` enfle (0.22 -> 6.08 -> 16.53 ms) : c'est le surcout des collectives
-   (`all_reduce` dans `dot` / `max_wave_speed_mf`) sur le decoupage mono-box, sans travail reparti en
-   face. (Les chiffres np=4 CPU local sont amplifies par l'oversubscription sur 8 coeurs : la TENDANCE
-   -- pas de speedup, mono-box -- est l'observable solide, pas le facteur exact.)
+3. **On the MPI CPU side, same structure.** np=2 and np=4 slow down (270 and 933 ms/step) instead of accelerating,
+   and the `reduction` phase swells (0.22 -> 6.08 -> 16.53 ms): this is the overhead of the collectives
+   (`all_reduce` in `dot` / `max_wave_speed_mf`) on the mono-box split, with no work distributed in
+   return. (The np=4 local CPU numbers are amplified by oversubscription on 8 cores: the TREND
+   (no speedup, mono-box) is the solid observable, not the exact factor.)
 
-### Ce qu'il faut investiguer EN PREMIER (sans l'implementer ici)
+### What to investigate FIRST (without implementing it here)
 
-Le profil pointe une seule cible prioritaire : **le solve elliptique `GeometricMG`**, et plus
-precisement le COMPORTEMENT DE DISPATCH DE SON V-CYCLE SUR LES NIVEAUX GROSSIERS sous backend
-parallele. Pistes a explorer, par ordre de rapport (gain attendu / risque), a chiffrer chacune par une
-nouvelle mesure AVANT tout code :
+The profile points to a single priority target: **the elliptic solve `GeometricMG`**, and more
+precisely the DISPATCH BEHAVIOR OF ITS V-CYCLE ON THE COARSE LEVELS under parallel
+backend. Leads to explore, in order of ratio (expected gain / risk), each to be quantified by a
+new measurement BEFORE any code:
 
-1. **Etendre au lissage multigrille le seuil de bascule vers la boucle hote sequentielle deja present
-   dans `for_each_cell`.** C'est la cause directement mesuree de la regression multi-thread/GPU du
-   V-cycle. A valider : un seuil sous lequel le lissage des niveaux grossiers s'execute via la boucle
-   hote sequentielle (ou en un seul kernel fusionne) restaure-t-il le scaling du poisson sans changer
-   le resultat numerique ? Mesure decisive : re-profiler poisson a t=1/4/8 et sur GH200 avec le seuil.
+1. **Extend to the multigrid smoothing the switch threshold to the sequential host loop already present
+   in `for_each_cell`.** This is the directly measured cause of the multi-thread/GPU regression of the
+   V-cycle. To validate: does a threshold below which the smoothing of the coarse levels executes via the host
+   sequential loop (or in a single fused kernel) restore the scaling of the poisson without changing
+   the numerical result? Decisive measurement: re-profile poisson at t=1/4/8 and on GH200 with the threshold.
 
-2. **Cout fixe par `solve()` : tolerance et nombre de V-cycles.** `GeometricMG::solve()` par defaut
-   fait `solve(1e-8, 50)` (jusqu'a 50 V-cycles, tolerance serree) a CHAQUE pas, sans warm start explicite
-   du `phi` precedent dans ce harnais. A chiffrer : combien de V-cycles sont reellement effectues par
-   pas en regime etabli (le diocotron evolue lentement, `phi^n` est un excellent point de depart) ?
-   Un warm start + un critere d'arret adapte reduiraient le nombre de cycles -- a MESURER avant de
-   conclure.
+2. **Fixed cost per `solve()`: tolerance and number of V-cycles.** `GeometricMG::solve()` by default
+   does `solve(1e-8, 50)` (up to 50 V-cycles, tight tolerance) at EACH step, without explicit warm start
+   of the previous `phi` in this harness. To quantify: how many V-cycles are actually performed per
+   step in steady state (the diocotron evolves slowly, `phi^n` is an excellent starting point)?
+   A warm start + an adapted stopping criterion would reduce the number of cycles (to MEASURE before
+   concluding).
 
-3. **Reductions collectives sous MPI** (`dot`, `max_wave_speed_mf`) : secondaires tant que le mono-box
-   du `System` n'est pas leve, mais leur croissance (reduction 0.22 -> 16.5 ms en CPU np=4) est a
-   garder a l'oeil des qu'un decoupage multi-box reel repartira le travail.
+3. **Collective reductions under MPI** (`dot`, `max_wave_speed_mf`): secondary as long as the mono-box
+   of the `System` is not lifted, but their growth (reduction 0.22 -> 16.5 ms in CPU np=4) is to
+   keep an eye on as soon as a real multi-box split distributes the work.
 
-Le transport, les halos, les fences et les allocations temporaires N'ONT PAS BESOIN d'optimisation au
-vu de ces chiffres (< 1 % du pas). Optimiser quoi que ce soit la serait du gold-plating non justifie
-par le profil.
+The transport, the halos, the fences and the temporary allocations DO NOT NEED optimization given
+these numbers (< 1 % of the step). Optimizing anything there would be gold-plating not justified
+by the profile.
 
-## 4. Reproduire
+## 4. Reproduce
 
 ```sh
 # Serie CPU
@@ -167,13 +167,13 @@ bench/run_bench.sh mpi 2
 # Kokkos Cuda / MPI+Cuda : sur ROMEO (GH200), cf. bench/run_bench.sh {kokkos-cuda,mpi-cuda} <Kroot> [NP]
 ```
 
-Le harnais accepte `--n --steps --warmup --cfl --solver {geometric_mg|fft} --limiter
-{none|minmod|vanleer|weno5} --bc {periodic|dirichlet}`. Il est HORS du build par defaut (option
-`ADC_BUILD_BENCH=OFF`) : le CI ne le configure ni ne le compile jamais.
+The harness accepts `--n --steps --warmup --cfl --solver {geometric_mg|fft} --limiter
+{none|minmod|vanleer|weno5} --bc {periodic|dirichlet}`. It is OUTSIDE the default build (option
+`ADC_BUILD_BENCH=OFF`): the CI never configures nor compiles it.
 
-## 5. Garanties
+## 5. Guarantees
 
-- AUCUNE optimisation, AUCUN refactor du hot path. `python/system.cpp` et les en-tetes du chemin chaud
-  ne sont PAS modifies. Seuls ajouts : `bench/` (nouveau) et l'option `ADC_BUILD_BENCH` (OFF par
-  defaut) + un `add_subdirectory(bench)` garde dans le `CMakeLists.txt` racine.
-- `docs/PERFORMANCE.md` (historique) et `docs/BACKEND_COVERAGE.md` ne sont PAS touches.
+- NO optimization, NO refactor of the hot path. `python/system.cpp` and the hot path headers
+  are NOT modified. Only additions: `bench/` (new) and the `ADC_BUILD_BENCH` option (OFF by
+  default) + an `add_subdirectory(bench)` guarded in the root `CMakeLists.txt`.
+- `docs/PERFORMANCE.md` (historical) and `docs/BACKEND_COVERAGE.md` are NOT touched.

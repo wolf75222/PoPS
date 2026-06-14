@@ -1,47 +1,47 @@
-# Backlog recherche / externe (items NON auto-completables)
+# Research / external backlog (items NOT auto-completable)
 
-Scope par workflow multi-agents (juin 2026). Ces items sont de la RECHERCHE numerique ou de l'INTEGRATION
-EXTERNE : ils ne se "terminent" pas comme une PR d'agent. Chacun a un etat factuel, un prochain pas concret,
-et un critere NO-GO / decision-gate. A reprendre par le proprietaire quand c'est pertinent.
+Scope by multi-agent workflow (June 2026). These items are numerical RESEARCH or EXTERNAL INTEGRATION:
+they do not "finish" like an agent PR. Each one has a factual status, a concrete next step,
+and a NO-GO / decision-gate criterion. To be picked up by the owner when relevant.
 
-## AP tensorielle sous champ fort -- RECHERCHE
+## Tensor AP under strong field -- RESEARCH
 
-- Etat : le Schur condense (schur_condensation.hpp, condensed_schur_source_stepper.hpp) gere DEJA le champ
-  fort INCONDITIONNELLEMENT (inversion 2x2 exacte LorentzEliminator). Il est stable, mais ne neutralise pas
-  la croissance des coefficients en omega_c*dt. Un AP tensoriel serait un gain d'EFFICACITE, PAS de stabilite
-  (deja acquise). L'AP deux-fluides existe seulement en modif scalaire du RHS (two_fluid_ap.md), pas en
-  reformulation d'operateur tensoriel.
-- Prochain pas (etude math, pas de code) : expansion asymptotique des eq. Schur condensees dans la limite
-  omega_c >> omega_d (analogue two_fluid_ap.md sec.3) ; identifier si un facteur d'echelle adimensionnel
-  emerge ; toy 1D (isotherme plan-parallele, B_z uniforme) comparant Schur actuel vs AP-tensoriel ; PR
-  seulement si valide.
-- NO-GO : si l'AP exige un operateur NON-LOCAL incompatible avec les roles/DSL -> differer indefiniment.
+- Status: the condensed Schur (schur_condensation.hpp, condensed_schur_source_stepper.hpp) ALREADY handles the
+  strong field UNCONDITIONALLY (exact 2x2 inversion LorentzEliminator). It is stable, but does not neutralize
+  the growth of the coefficients in omega_c*dt. A tensor AP would be an EFFICIENCY gain, NOT a stability one
+  (already acquired). The two-fluid AP exists only as a scalar modification of the RHS (two_fluid_ap.md), not as
+  a tensor-operator reformulation.
+- Next step (math study, no code): asymptotic expansion of the condensed Schur eqs. in the limit
+  omega_c >> omega_d (analogous to two_fluid_ap.md sec.3); identify whether a dimensionless scaling factor
+  emerges; 1D toy (isothermal plane-parallel, uniform B_z) comparing current Schur vs tensor AP; PR
+  only if validated.
+- NO-GO: if the AP requires a NON-LOCAL operator incompatible with the roles/DSL -> defer indefinitely.
 
-## Perf full-device scaling -- BESOIN ROMEO D'ABORD
+## Full-device perf scaling -- NEEDS ROMEO FIRST
 
-- Etat : la grille GROSSIERE est REPLIQUEE par CHOIX (amr_coupler_mp.hpp:224-234 coupler_make_coarse_layout,
-  amr_dsl_block.hpp:159-188 ; replicated_coarse=true). Le mode DISTRIBUE existe (distribute_coarse=true) mais
-  mesure 3-5x PLUS LENT (705-1403 ms/pas vs 222-278 replique) : le V-cycle MG echange des halos cross-rang a
-  chaque niveau grossier (~7 niveaux, fill_boundary latency-bound sur boites 2x2). Le Poisson domine 96-99.9%.
-- Prochain pas : profil ROMEO multi-GPU (instrumenter GeometricMG::vcycle_rec avec Kokkos::fence + timing par
-  niveau) sur np=2/4 GH200 -> isoler ou se passe le ralentissement 3-5x.
-- DECISION GATE : si la latence > 50% du temps grossier -> MG HYBRIDE (distribuer le fin, gather pour le
-  bottom-solve) vaut 2-3 semaines ; sinon la replication grossiere est le BON compromis -> clore le lot.
+- Status: the COARSE mesh is REPLICATED by CHOICE (amr_coupler_mp.hpp:224-234 coupler_make_coarse_layout,
+  amr_dsl_block.hpp:159-188; replicated_coarse=true). The DISTRIBUTED mode exists (distribute_coarse=true) but
+  measures 3-5x SLOWER (705-1403 ms/step vs 222-278 replicated): the MG V-cycle exchanges cross-rank halos at
+  each coarse level (~7 levels, fill_boundary latency-bound on 2x2 boxes). Poisson dominates 96-99.9%.
+- Next step: ROMEO multi-GPU profile (instrument GeometricMG::vcycle_rec with Kokkos::fence + per-level
+  timing) on np=2/4 GH200 -> isolate where the 3-5x slowdown happens.
+- DECISION GATE: if the latency > 50% of the coarse time -> HYBRID MG (distribute the fine, gather for the
+  bottom-solve) is worth 2-3 weeks; otherwise coarse replication is the RIGHT trade-off -> close the lot.
 
-## Integration SAMRAI -- EXTERNE-GROS, DIFFEREE
+## SAMRAI integration -- EXTERNAL-BIG, DEFERRED
 
-- Etat : adc a une pile AMR MAISON COMPLETE (Phase 1 hierarchie figee : substeps #175, sources couplees #179,
-  IMEX local #184 ; Phase 2 regrid union-tags #199 ; reflux/FluxRegister, multi-bloc, validee CPU Serial/
-  OpenMP/MPI np=1/2/4 + GPU Cuda GH200). SAMRAI (LLNL) = framework AMR externe.
-- VERDICT : DIFFERER tant que l'AMR maison couvre le chemin science (diocotron polaire convergent en
-  resolution via regrid union-tags). Critere de REOUVERTURE : un besoin que l'AMR maison ne couvre PAS
-  (ex. MG multi-niveau distribue mature, scaling hero-run multi-noeud) ET un cout d'integration justifie
-  (dependance C++, mapping structures, binding Python, maintenance).
+- Status: adc has a COMPLETE IN-HOUSE AMR stack (Phase 1 frozen hierarchy: substeps #175, coupled sources #179,
+  local IMEX #184; Phase 2 union-tags regrid #199; reflux/FluxRegister, multi-bloc, validated CPU Serial/
+  OpenMP/MPI np=1/2/4 + GPU Cuda GH200). SAMRAI (LLNL) = external AMR framework.
+- VERDICT: DEFER as long as the in-house AMR covers the science path (polar diocotron convergent in
+  resolution via union-tags regrid). REOPENING criterion: a need that the in-house AMR does NOT cover
+  (e.g. mature distributed multi-level MG, multi-node hero-run scaling) AND an integration cost that is justified
+  (C++ dependency, structure mapping, Python binding, maintenance).
 
-## P7-a implicit-total -- RECHERCHE
+## P7-a implicit-total -- RESEARCH
 
-- Etat : aujourd'hui splitting Lie (explicite-transport SSPRK3 + implicite-source-Schur theta). "implicit-total"
-  = schema TOTALEMENT implicite (transport + source), gros chantier numerique (Jacobien complet, solveur
-  non-lineaire). P7-b (params runtime DSL) est SEPARE et DOABLE (PR en cours).
-- Prochain pas : etude de schema (recherche) ; pas auto-completable. A ne lancer que si le splitting Lie
-  ordre 1 devient un facteur limitant mesure (sinon le Strang ordre 2, plus simple, suffit -- cf roadmap).
+- Status: today Lie splitting (explicit-transport SSPRK3 + implicit-source-Schur theta). "implicit-total"
+  = a TOTALLY implicit scheme (transport + source), a big numerical work item (full Jacobian, nonlinear
+  solver). P7-b (DSL runtime params) is SEPARATE and DOABLE (PR in progress).
+- Next step: scheme study (research); not auto-completable. Only launch if the order-1 Lie splitting
+  becomes a measured limiting factor (otherwise the simpler order-2 Strang is enough, cf. roadmap).
