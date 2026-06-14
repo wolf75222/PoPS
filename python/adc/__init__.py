@@ -1597,6 +1597,9 @@ class System:
                     "add_equation: positivity_floor not supported on backend 'prototype' (dedicated "
                     "host residual, without high-order reconstruction); use backend='aot'/'production' "
                     "or a composed model adc.Model(...) -> add_block.")
+            # NB wave_speed_cache (ADC-199): no dedicated guard here -- the cache requires riemann='hll',
+            # already rejected above on 'prototype' (rusanov order 1 only) -> never silently ignored on
+            # this backend.
             self._s.add_dynamic_block(name, compiled.so_path, nsub, names_arg, spatial.limiter)
             return
         if adder == "add_compiled_block":
@@ -1622,6 +1625,14 @@ class System:
                     "carry evolve; the block would be advanced silently). Use "
                     "backend='production' (native path, evolve wired) or a composed native model "
                     "adc.Model(...) -> add_block(..., evolve=False) (or add_background) for a frozen field.")
+            # wave_speed_cache (ADC-199): the AOT .so ABI does not carry the wave speed cache -> it would
+            # be silently ignored. Explicit rejection (the cache is only wired on the composed native
+            # add_block).
+            if getattr(spatial, "wave_speed_cache", False):
+                raise ValueError(
+                    "add_equation: wave_speed_cache not supported on backend 'aot' (the AOT .so ABI does "
+                    "not carry the HLL wave speed cache; it would be silently ignored). Use a composed "
+                    "native model adc.Model(...) -> add_block.")
             self._s.add_compiled_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                        spatial.recon, time.kind, nsub, names_arg,
                                        getattr(spatial, "positivity_floor", 0.0))
@@ -1636,6 +1647,15 @@ class System:
                     "roles are carried by the compiled model metadata (.so)")
             # PRE-DLOPEN guard at plug time: ALSO covers the cache HIT (where compile_native does not
             # run) -- a stale _adc module would otherwise give a cryptic dlopen 'symbol not found'.
+            # wave_speed_cache (ADC-199): the add_native_block ABI does not (yet) carry the wave speed
+            # cache -> it would be silently ignored. Explicit rejection BEFORE the C++ boundary (and
+            # before the ABI check: a clear message rather than a dlopen error). The cache is wired on
+            # the composed native add_block path (System.add_block).
+            if getattr(spatial, "wave_speed_cache", False):
+                raise ValueError(
+                    "add_equation: wave_speed_cache not supported on backend 'production' (the "
+                    "add_native_block ABI does not carry the HLL wave speed cache; it would be silently "
+                    "ignored). Use a composed native model adc.Model(...) -> add_block.")
             dsl.check_compiled_matches_module(getattr(compiled, "abi_key", ""))
             gamma = compiled.gamma if compiled.gamma is not None else 1.4
             self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
