@@ -148,21 +148,25 @@ def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
         print("skip  compilateur ou en-tetes adc absents -> test_strang_split saute (%s)" % INCLUDE)
+        if fails:  # ne pas masquer un echec des gardes (a) sans compilateur
+            raise SystemExit("test_strang_split : %d verification(s) en echec" % fails)
         print("test_strang_split : OK (rien a compiler)")
         return
 
     n, L, dt = 32, 1.0, 2.0e-3
     # adc_cpp est Kokkos-only (#263) : le .so AOT inclut les en-tetes adc (multifab/for_each) qui ne
     # compilent QUE sous ADC_HAS_KOKKOS, donc compile_aot exige un Kokkos installe (ADC_KOKKOS_ROOT).
-    # Sans lui, on saute proprement (b)/(c) -- meme convention que test_time_euler.py / test_dsl_aot.
+    # Sans lui, on saute proprement (b)/(c) -- meme convention que test_time_euler.py.
     try:
         compiled = isothermal_magnetized().compile(backend="aot", include=INCLUDE)
     except RuntimeError as ex:
-        if "Kokkos" in str(ex):
-            print("skip  Kokkos introuvable -> (b)/(c) sautes (%s)" % str(ex).splitlines()[0][:70])
-            print("test_strang_split : OK (rien a compiler)")
-            return
-        raise
+        if "Kokkos" not in str(ex):
+            raise
+        print("skip  Kokkos introuvable -> (b)/(c) sautes (%s)" % str(ex).splitlines()[0][:70])
+        if fails:  # ne pas masquer un echec des gardes (a) deja exercees
+            raise SystemExit("test_strang_split : %d verification(s) en echec" % fails)
+        print("test_strang_split : OK (rien a compiler)")
+        return
 
     # (b) RUN Strang : etat fini, quantite de mvt qui evolue (etage source engage sous Strang).
     sim_s = build_sim(compiled, strang(theta=1.0, alpha=3.0), n=n, L=L)
