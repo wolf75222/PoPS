@@ -115,7 +115,7 @@ reference/index
 :maxdepth: 1
 :caption: Development
 
-development/documentation
+development/index
 ```
 
 ```{toctree}
