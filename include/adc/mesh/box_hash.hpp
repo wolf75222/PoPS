@@ -65,10 +65,10 @@ class BoxHash {
   }
 
  private:
-  // division entiere par bin_ arrondie vers le bas (gere les coords negatives).
-  int fdiv(int x) const {
-    return x >= 0 ? x / bin_ : -((-x + bin_ - 1) / bin_);
-  }
+  // index de bin = division entiere par bin_ arrondie vers le bas (gere les coords negatives).
+  // Mince adaptateur vers floor_div (box2d.hpp) : bin_ > 0 (force par le constructeur) -> resultat
+  // bit-identique a l'ancien x >= 0 ? x / bin_ : -((-x + bin_ - 1) / bin_).
+  int fdiv(int x) const { return floor_div(x, bin_); }
   static std::int64_t key(int bx, int by) {
     return (static_cast<std::int64_t>(bx) << 32) |
            (static_cast<std::int64_t>(static_cast<std::uint32_t>(by)) & INT64_C(0xffffffff));
