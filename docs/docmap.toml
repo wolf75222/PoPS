@@ -42,7 +42,7 @@ mode = "strict"
 depends_on = ["CMakePresets.json", "pyproject.toml", "scripts/setup_env.sh", "environment.yml", "CMakeLists.txt", "scripts/kokkos_openmp_conda.sh"]
 tested_by = []
 testable = true
-reviewed = "17002977be149d4bdc1d14de889da2f072290a6e"
+reviewed = "71f02e7a2f4475254426eb88e2626202f455d5dc"
 
 [docs."docs/sphinx/getting_started/first_run.md"]
 owner = "Romain"
@@ -74,7 +74,7 @@ mode = "warning"
 depends_on = ["CMakeLists.txt", "include/adc", "python/adc"]
 tested_by = []
 testable = false
-reviewed = "17002977be149d4bdc1d14de889da2f072290a6e"
+reviewed = "71f02e7a2f4475254426eb88e2626202f455d5dc"
 
 [docs."docs/sphinx/getting_started/presentation.md"]
 owner = "Romain"
@@ -96,7 +96,7 @@ mode = "warning"
 depends_on = ["CMakePresets.json", "CMakeLists.txt"]
 tested_by = []
 testable = false
-reviewed = "17002977be149d4bdc1d14de889da2f072290a6e"
+reviewed = "71f02e7a2f4475254426eb88e2626202f455d5dc"
 
 [docs."docs/sphinx/getting_started/windows_wsl2.md"]
 owner = "Romain"

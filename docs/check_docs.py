@@ -122,7 +122,11 @@ def last_commit(doc_rel: str, root: pathlib.Path) -> str | None:
 
 
 def commits_touching(ref: str, deps: list[str], root: pathlib.Path) -> list[str] | None:
-    res = _git(["rev-list", f"{ref}..HEAD", "--", *deps], root)
+    # --no-merges : un merge ne modifie pas un depends_on, il propage du contenu deja committe
+    # (les commits porteurs sont detectes par ailleurs) ; sans ce filtre, la simplification
+    # d'historique de rev-list peut remonter des commits de merge en faux positifs, notamment
+    # quand `ref` acquitte un commit d'une branche soeur pas encore fusionnee.
+    res = _git(["rev-list", "--no-merges", f"{ref}..HEAD", "--", *deps], root)
     if res is None:
         return None
     return [c for c in res.splitlines() if c]
@@ -176,7 +180,21 @@ def check_freshness(data: dict, root: pathlib.Path, violations: list[str],
                 continue
         bad = commits_touching(ref, deps, root)
         if bad is None:
-            notices.append(f"{doc}: ref de fraicheur '{ref[:12]}' inconnue, fraicheur ignoree")
+            # ref ne resout pas. Un reviewed explicite qui pointe hors historique (sha d'une
+            # branche soeur non fusionnee, ou ramasse par gc) desactiverait SILENCIEUSEMENT la
+            # fraicheur, y compris en mode strict sur les pages porteuses. On le rend visible et
+            # fail-closed : meme escalade qu'un doc suspect, pour qu'un acquittement casse ne
+            # puisse jamais neutraliser la garantie sans bruit.
+            if reviewed:
+                msg = (f"{doc}: reviewed '{ref[:12]}' ne resout pas (hors historique) ; "
+                       f"acquittement invalide, fraicheur non verifiee -- corriger reviewed "
+                       f"avec un sha de master dans docs/docmap.toml")
+                if warn_only or meta.get("mode") == "warning":
+                    warnings.append(msg)
+                else:
+                    violations.append(msg)
+            else:
+                notices.append(f"{doc}: ref de fraicheur '{ref[:12]}' inconnue, fraicheur ignoree")
             continue
         if not bad:
             continue
