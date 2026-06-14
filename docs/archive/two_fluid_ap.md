@@ -1,51 +1,51 @@
-# Schema deux-fluides isotherme asymptotic-preserving
+# Isothermal two-fluid asymptotic-preserving scheme
 
-Note de methode sur le solveur deux-fluides : modele, raideur, schema AP, discretisation du
-transport, et enveloppe de robustesse mesuree. C'est un integrateur SUR MESURE, non composable
-bloc a bloc comme `System` ; ce n'est donc pas une brique generique mais un SCENARIO. Il a
-quitte le coeur `adc_cpp` et vit desormais dans `adc_cases/two_fluid_ap/` : le coeur portable
-GPU est dans `adc_cases/two_fluid_ap/two_fluid_ap.hpp`, expose via l'ABI C de
-`adc_cases/two_fluid_ap/_two_fluid_ap.cpp`. Ce dernier est compile a la volee contre les
-en-tetes GENERIQUES d'`adc_cpp` (maillage, elliptique, parallele) puis charge dans Python
-(ctypes) par `adc_cases/two_fluid_ap/run.py`. Reference physique : Hoffart, arXiv:2510.11808.
+Method note on the two-fluid solver: model, stiffness, AP scheme, transport
+discretization, and measured robustness envelope. It is a PURPOSE-BUILT integrator, not composable
+brick by brick like `System`; it is therefore not a generic brick but a SCENARIO. It has
+left the `adc_cpp` core and now lives in `adc_cases/two_fluid_ap/`: the GPU-portable core
+is in `adc_cases/two_fluid_ap/two_fluid_ap.hpp`, exposed via the C ABI of
+`adc_cases/two_fluid_ap/_two_fluid_ap.cpp`. The latter is compiled on the fly against the
+GENERIC headers of `adc_cpp` (mesh, elliptic, parallel) then loaded into Python
+(ctypes) by `adc_cases/two_fluid_ap/run.py`. Physical reference: Hoffart, arXiv:2510.11808.
 
-## 1. Modele
+## 1. Model
 
-Deux especes s (electrons e, ions i), densite `n_s`, quantite de mouvement `m_s = n_s u_s`,
-vitesse du son isotherme `c_s`. Charge `z_e = -1`, `z_i = +1`. Champ electrostatique
-`E = -grad phi`, frequences plasma `omega_ps`. Pour chaque espece :
+Two species s (electrons e, ions i), density `n_s`, momentum `m_s = n_s u_s`,
+isothermal sound speed `c_s`. Charge `z_e = -1`, `z_i = +1`. Electrostatic field
+`E = -grad phi`, plasma frequencies `omega_ps`. For each species:
 
 ```
 d_t n_s + div(m_s)                              = 0
 d_t m_s + div(m_s o m_s / n_s + c_s^2 n_s I)    = z_s omega_ps^2 n_s E
 ```
 
-couplees par le Poisson `lap(phi) = z_e n_e + z_i n_i = n_i - n_e` (n_0 = 1).
+coupled by the Poisson `lap(phi) = z_e n_e + z_i n_i = n_i - n_e` (n_0 = 1).
 
-## 2. La raideur
+## 2. The stiffness
 
-La frequence plasma `omega_pe` est la frequence des oscillations de Langmuir. Un schema
-explicite est stable seulement si `omega_pe * dt < O(1)`. En regime quasi-neutre
-`omega_pe` est grand : resoudre l'oscillation impose un pas minuscule alors que la
-dynamique d'interet (transport) est lente. Un schema explicite "explose" des que
-`omega_pe * dt` depasse l'ordre 1 (verifie par le test : le mode non stabilise diverge).
+The plasma frequency `omega_pe` is the frequency of Langmuir oscillations. An explicit
+scheme is stable only if `omega_pe * dt < O(1)`. In the quasi-neutral regime
+`omega_pe` is large: resolving the oscillation forces a tiny step while the
+dynamics of interest (transport) is slow. An explicit scheme "blows up" as soon as
+`omega_pe * dt` exceeds order 1 (verified by the test: the non-stabilized mode diverges).
 
-## 3. Schema asymptotic-preserving
+## 3. Asymptotic-preserving scheme
 
-Le terme de Lorentz est traite implicitement. En reportant la quantite de mouvement
-implicite `m^{n+1} = m* + dt z omega_ps^2 E` dans la continuite puis dans le Poisson, le
-champ obeit a une equation elliptique reformulee. A `beta0` constant (n_0 = 1) :
+The Lorentz term is treated implicitly. By carrying the implicit momentum
+`m^{n+1} = m* + dt z omega_ps^2 E` into the continuity then into the Poisson, the
+field obeys a reformulated elliptic equation. At constant `beta0` (n_0 = 1):
 
 ```
 beta0 = dt^2 (omega_pe^2 + omega_pi^2)
 lap(phi) = (n_e* - n_i*) / (1 + beta0)
 ```
 
-Le facteur `1 / (1 + beta0)` est ce qui rend le schema AP : quand `omega_pe -> inf`
-(`beta0 -> inf`), le RHS tend vers 0, donc `n_e -> n_i` (quasi-neutralite) et le pas reste
-stable independamment de `omega_pe * dt`. C'est l'option `stabilize` (defaut).
+The factor `1 / (1 + beta0)` is what makes the scheme AP: when `omega_pe -> inf`
+(`beta0 -> inf`), the RHS tends to 0, so `n_e -> n_i` (quasi-neutrality) and the step stays
+stable independently of `omega_pe * dt`. This is the `stabilize` option (default).
 
-Un pas (operateur scinde) :
+One step (split operator):
 
 ```
 1. m*   = m  - dt div(F_mom)         flux Rusanov (tfap_mstar)
@@ -56,75 +56,75 @@ Un pas (operateur scinde) :
 6. n^{n+1} = n  - dt div(m^{n+1})    continuite
 ```
 
-L'elliptique est delegue a un `EllipticSolver` template (`PoissonFFTSolver` en CPU,
-`GeometricMG` entierement on-device pour le GPU GH200).
+The elliptic part is delegated to an `EllipticSolver` template (`PoissonFFTSolver` on CPU,
+`GeometricMG` entirely on-device for the GPU GH200).
 
-## 4. Discretisation du transport
+## 4. Transport discretization
 
-La quantite de mouvement (etape 1) utilise un flux **Rusanov** dimensionnellement scinde
-(vitesse d'onde `a = |u| + c_s`), ordre 1. La continuite (etapes 2 et 6) propose deux
-schemas, selectionnes par `upwind_continuity` :
+The momentum (step 1) uses a dimensionally split **Rusanov** flux
+(wave speed `a = |u| + c_s`), order 1. The continuity (steps 2 and 6) offers two
+schemes, selected by `upwind_continuity`:
 
-- **centree** (defaut) : `div(m)` par differences centrees. C'est un flux de masse central
-  pur `F = 0.5 (m_i + m_{i+1})`, sans dissipation. Ordre 2, mais dispersif sur les fronts
-  raides.
-- **upwind MUSCL** : flux de masse Rusanov coherent avec la quantite de mouvement,
-  `F = 0.5 (m_i + m_{i+1}) - 0.5 a (n_R - n_L)`, ou `n_L, n_R` sont reconstruits a la face
-  avec une pente **minmod**. La dissipation est en `O(dx^2)` en regime lisse (pas de
-  sur-diffusion) et retombe a l'ordre 1 aux extrema (monotone). Necessite 2 ghosts sur la
-  densite. C'est un upwind ordre 2.
+- **centered** (default): `div(m)` by central differences. It is a pure central mass flux
+  `F = 0.5 (m_i + m_{i+1})`, without dissipation. Order 2, but dispersive on steep
+  fronts.
+- **upwind MUSCL**: Rusanov mass flux consistent with the momentum,
+  `F = 0.5 (m_i + m_{i+1}) - 0.5 a (n_R - n_L)`, where `n_L, n_R` are reconstructed at the face
+  with a **minmod** slope. The dissipation is `O(dx^2)` in the smooth regime (no
+  over-diffusion) and drops back to order 1 at extrema (monotone). Requires 2 ghosts on the
+  density. It is an order-2 upwind.
 
-## 5. Enveloppe de robustesse mesuree
+## 5. Measured robustness envelope
 
-Les invariants AP (borne, quasi-neutralite, conservation de la masse) sont verifies par le
-cas `adc_cases/two_fluid_ap/run.py`.
+The AP invariants (bound, quasi-neutrality, mass conservation) are verified by the
+case `adc_cases/two_fluid_ap/run.py`.
 
-**Perturbation lisse** (mode cosinus, regime raide AP `dt * omega_pe = 5`) : le schema est
-robuste jusqu'a une grande amplitude. A `eps = 0.8` la densite reste positive
-(`min n_e = 0.89`), bornee, quasi-neutre, masse conservee a l'arrondi. C'est le regime de
-conception du schema.
+**Smooth perturbation** (cosine mode, stiff AP regime `dt * omega_pe = 5`): the scheme is
+robust up to a large amplitude. At `eps = 0.8` the density stays positive
+(`min n_e = 0.89`), bounded, quasi-neutral, mass conserved to roundoff. This is the design
+regime of the scheme.
 
-**Front raide** (bosse acoustique etroite, couplage faible) : la continuite centree
-montre un sous-depassement de 17.6%. Point important verifie par l'upwind MUSCL : ce
-sous-depassement est presque **identique** (17.0%) avec le schema precis MUSCL. Les deux
-schemas precis s'accordent, donc ce sous-depassement est surtout la **rarefaction
-acoustique physique**, pas une oscillation de Gibbs numerique. Un flux de masse Rusanov de
-1er ordre le reduisait a 13.4%, mais c'etait de la sur-diffusion (perte de precision), pas
-une correction. Sur une bosse lisse bien resolue, MUSCL ne perd que 0.4% du pic par
-rapport au schema centre : c'est un upwind ordre 2 precis, c'est son apport reel.
+**Steep front** (narrow acoustic bump, weak coupling): the centered continuity
+shows an undershoot of 17.6%. Important point verified by the upwind MUSCL: this
+undershoot is almost **identical** (17.0%) with the accurate MUSCL scheme. The two
+accurate schemes agree, so this undershoot is mostly the **physical acoustic
+rarefaction**, not a numerical Gibbs oscillation. A 1st-order Rusanov mass flux
+reduced it to 13.4%, but that was over-diffusion (loss of accuracy), not
+a correction. On a smooth well-resolved bump, MUSCL loses only 0.4% of the peak relative
+to the centered scheme: it is an accurate order-2 upwind, that is its real contribution.
 
-Conclusion pratique : la continuite centree suffit pour le regime AP lisse vise ; l'option
-upwind MUSCL est un transport ordre 2 precis pour les cas a forts gradients, sans
-sur-diffusion.
+Practical conclusion: the centered continuity suffices for the targeted smooth AP regime; the
+upwind MUSCL option is an accurate order-2 transport for cases with strong gradients, without
+over-diffusion.
 
-## 6. Champ magnetique (extension Hoffart)
+## 6. Magnetic field (Hoffart extension)
 
-Un champ magnetique uniforme hors-plan `B = B_z z` ajoute la force de Lorentz magnetique
-`z (m x B)` a la quantite de mouvement. Avec `B` hors-plan elle ne fait que FAIRE TOURNER
-`(m_x, m_y)` a la frequence cyclotron `wc_s = |q_s B_z / m_s|`, sans changer `|m|` ni `n`.
-La rotation exacte d'angle `theta_s = z_s wc_s dt` est inconditionnellement stable (aucune
-limite `wc * dt`). Elle est composee au pas electrostatique par splitting de Strang :
-`R(theta/2) o pas-ES o R(theta/2)`, ordre 2.
+A uniform out-of-plane magnetic field `B = B_z z` adds the magnetic Lorentz force
+`z (m x B)` to the momentum. With `B` out-of-plane it only ROTATES
+`(m_x, m_y)` at the cyclotron frequency `wc_s = |q_s B_z / m_s|`, without changing `|m|` nor `n`.
+The exact rotation of angle `theta_s = z_s wc_s dt` is unconditionally stable (no
+`wc * dt` limit). It is composed with the electrostatic step by Strang splitting:
+`R(theta/2) o pas-ES o R(theta/2)`, order 2.
 
-Opt-in via `wce`, `wci` (frequences cyclotron par espece ; 0 = pas de champ, comportement
-electrostatique inchange). Valide analytiquement par
-[`tests/test_two_fluid_cyclotron.cpp`](../tests/test_two_fluid_cyclotron.cpp) : sur un
-plasma uniforme (charge nulle, `E = 0`, transport inerte) la quantite de mouvement tourne
-a `wce` a 0.00% d'ecart, `|m|` conservee a l'arrondi (`~1e-15`). Expose jusqu'a Python
+Opt-in via `wce`, `wci` (cyclotron frequencies per species; 0 = no field, electrostatic
+behavior unchanged). Validated analytically by
+[`tests/test_two_fluid_cyclotron.cpp`](../tests/test_two_fluid_cyclotron.cpp): on a uniform
+plasma (zero charge, `E = 0`, inert transport) the momentum rotates
+at `wce` to 0.00% deviation, `|m|` conserved to roundoff (`~1e-15`). Exposed up to Python
 (`TwoFluidAPConfig.omega_ce/omega_ci`).
 
-C'est la premiere brique vers le modele magnetise complet de Hoffart : reste a coupler le
-champ a la dynamique inhomogene (le `E x B` et le diamagnetique entrant dans le transport),
-au-dela de la rotation pure validee ici.
+It is the first brick toward the full magnetized Hoffart model: it remains to couple the
+field to the inhomogeneous dynamics (the `E x B` and the diamagnetic entering the transport),
+beyond the pure rotation validated here.
 
 ## 7. Validation
 
-- Dispersion isotrope sur mode diagonal : ecart theorie/mesure 3.1%.
-- Borne AP et quasi-neutralite a `omega_pe = 1e3`, `dt * omega_pe = 5`, la ou l'explicite
-  explose.
-- Conservation de la masse par espece a l'arrondi (`~1e-11`), centree et upwind.
-- Portable GPU GH200 (memes kernels `for_each_cell` + `ADC_HD`, multigrille on-device),
-  bit-identique au CPU.
-- Pilotable depuis Python par le scenario `adc_cases/two_fluid_ap/` : la classe `TwoFluidAP`
-  de `run.py` (config `n`, `omega_pe`, `upwind_continuity`, ...) charge l'ABI C compilee a la
-  volee ; hors API publique du coeur (scenario sur mesure, non composable).
+- Isotropic dispersion on diagonal mode: theory/measurement deviation 3.1%.
+- AP bound and quasi-neutrality at `omega_pe = 1e3`, `dt * omega_pe = 5`, where the explicit
+  blows up.
+- Mass conservation per species to roundoff (`~1e-11`), centered and upwind.
+- GPU-portable GH200 (same kernels `for_each_cell` + `ADC_HD`, on-device multigrid),
+  bit-identical to CPU.
+- Drivable from Python by the scenario `adc_cases/two_fluid_ap/`: the `TwoFluidAP` class
+  of `run.py` (config `n`, `omega_pe`, `upwind_continuity`, ...) loads the C ABI compiled on the
+  fly; outside the public API of the core (purpose-built scenario, not composable).

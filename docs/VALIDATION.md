@@ -1,35 +1,35 @@
-# Validation (coeur)
+# Validation (core)
 
-Etat de la validation du coeur `adc_cpp`. La matrice de couverture par backend est dans
-[BACKEND_COVERAGE.md](BACKEND_COVERAGE.md) ; le detail des portages device dans
-[GPU_RUNTIME_PORT.md](GPU_RUNTIME_PORT.md) ; la validation applicative (modeles nommes, diocotron,
-runs ROMEO) dans le depot [`adc_cases`](https://github.com/wolf75222/adc_cases).
+Validation status of the `adc_cpp` core. The per-backend coverage matrix is in
+[BACKEND_COVERAGE.md](BACKEND_COVERAGE.md) ; the device port details in
+[GPU_RUNTIME_PORT.md](GPU_RUNTIME_PORT.md) ; the application validation (named models, diocotron,
+ROMEO runs) in the [`adc_cases`](https://github.com/wolf75222/adc_cases) repository.
 
 ## CI
 
-- ctests du coeur en Release et en Kokkos (Serial).
-- MPI np=1/2/4, sorties bit-identiques.
-- module Python : suite supplementaire (bindings et DSL).
+- core ctests in Release and in Kokkos (Serial).
+- MPI np=1/2/4, bit-identical outputs.
+- Python module : additional suite (bindings and DSL).
 
 ## AMR
 
-- reflux multi-patch conservatif a l'arrondi machine (derive de masse ~ 1e-15).
-- le Poisson est resolu au niveau grossier puis injecte vers le fin : l'AMR raffine le transport, pas
-  le solve elliptique (pas de solve composite multi-niveaux, pas de Schur global sur AMR).
+- conservative multi-patch reflux to machine roundoff (mass drift ~ 1e-15).
+- the Poisson is solved at the coarse level then injected toward the fine : the AMR refines the transport, not
+  the elliptic solve (no multi-level composite solve, no global Schur on AMR).
 
-## GPU GH200 (hors CI)
+## GPU GH200 (outside CI)
 
-- System production np=1 valide (#97).
-- multigrille geometrique device-MPI np=1/2/4 valide (#93).
-- AmrSystem + MPI + GPU valides, bit-identiques (phase 10, dmax=0, #105).
-- Schur et polaire device : 7/7 device-clean en Kokkos Cuda single-GPU, et MPI+Kokkos Cuda multi-GPU
-  rank-invariant (10 tests, #157), plus Kokkos OpenMP en CI (#155). Couvre condensed_schur,
-  polar_transport, lorentz, full_tensor, polar_poisson, krylov, schur_condensation (tous device-clean
-  GH200, compute-sanitizer 0 erreur). Les 4 echecs initiaux venaient des tests (foncteurs ou pointeurs
-  hote appeles dans des kernels device, ou lecture hote d'une sortie async sans fence), corriges
-  #150/#152/#158 ; la bibliotheque elliptique / Schur / polaire est device-correcte.
+- System production np=1 validated (#97).
+- geometric multigrid device-MPI np=1/2/4 validated (#93).
+- AmrSystem + MPI + GPU validated, bit-identical (phase 10, dmax=0, #105).
+- Schur and polar device : 7/7 device-clean in Kokkos Cuda single-GPU, and MPI+Kokkos Cuda multi-GPU
+  rank-invariant (10 tests, #157), plus Kokkos OpenMP in CI (#155). Covers condensed_schur,
+  polar_transport, lorentz, full_tensor, polar_poisson, krylov, schur_condensation (all device-clean
+  GH200, compute-sanitizer 0 error). The 4 initial failures came from the tests (host functors or pointers
+  called in device kernels, or host read of an async output without fence), fixed
+  #150/#152/#158 ; the elliptic / Schur / polar library is device-correct.
 
-## FFT sous MPI
+## FFT under MPI
 
-`System` en MPI np>1 refuse la FFT proprement (#106, plus de segfault). `DistributedFFTSolver` existe
-et est teste a part, mais n'est pas route dans `System`.
+`System` in MPI np>1 refuses the FFT cleanly (#106, no more segfault). `DistributedFFTSolver` exists
+and is tested separately, but is not routed in `System`.

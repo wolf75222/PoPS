@@ -1,134 +1,134 @@
-# Surface de couplage : PUBLIC, INTERNE, DEPRECIE
+# Coupling surface: PUBLIC, INTERNAL, DEPRECATED
 
-Ce fichier est la source de verite pour la classification des classes de
-`include/adc/coupling/`. Il repond a la question : "Quelle classe est
-publique, interne ou depreciée ?"
-
----
-
-## Entree utilisateur (PUBLIC Python)
-
-L'entree utilisateur n'est PAS une classe de couplage C++ : c'est le couple
-Python `adc.System` / `adc.AmrSystem` + le DSL (`adc.dsl.HyperbolicModel`,
-`m.compile(...)`). Les classes ci-dessous sont des facades C++ internes ; elles
-ne font pas partie de l'API publique documentee.
+This file is the source of truth for classifying the classes in
+`include/adc/coupling/`. It answers the question: "Which class is
+public, internal or deprecated?"
 
 ---
 
-## Facades C++ internes (INTERNE)
+## User entry point (PUBLIC Python)
+
+The user entry point is NOT a C++ coupling class: it is the Python pair
+`adc.System` / `adc.AmrSystem` plus the DSL (`adc.dsl.HyperbolicModel`,
+`m.compile(...)`). The classes below are internal C++ facades; they
+are not part of the documented public API.
+
+---
+
+## Internal C++ facades (INTERNAL)
 
 ### `coupler.hpp` -- `adc::Coupler<Model, Elliptic>`
 
-Facade mono-modele, mono-niveau : ferme la boucle Poisson -> aux -> advance
-pour un seul `PhysicalModel` sur un unique niveau uniforme. Utilisee dans les
-tests unitaires et tutoriels mono-espece ; pas l'entree utilisateur.
-**Classification : INTERNE**
+Single-model, single-level facade: closes the Poisson -> aux -> advance loop
+for a single `PhysicalModel` on one uniform level. Used in the unit
+tests and single-species tutorials; not the user entry point.
+**Classification: INTERNAL**
 
 ### `system_coupler.hpp` -- `adc::SystemAssembler`, `adc::SystemDriver`, alias `adc::SystemCoupler`
 
-`SystemAssembler` assemble le RHS multi-especes (Poisson systeme, aux, residus
-par bloc) sans faire de pas de temps. `SystemDriver` avance (sous-cyclage
-par espece, IMEX). `SystemCoupler` est l'alias de compat vers `SystemDriver`.
-Portees par `adc.System` cote Python ; internes au C++ du noyau.
-**Classification : INTERNE**
+`SystemAssembler` assembles the multi-species RHS (system Poisson, aux, per-block
+residuals) without taking a time step. `SystemDriver` advances (per-species
+subcycling, IMEX). `SystemCoupler` is the compat alias to `SystemDriver`.
+Carried by `adc.System` on the Python side; internal to the core C++.
+**Classification: INTERNAL**
 
 ### `amr_coupler_mp.hpp` -- `adc::AmrCouplerMP<Model, Elliptic>`
 
-Coupleur AMR E x B multi-patch : hierarchie multi-box par niveau (moteur
-`advance_amr`, reflux coverage-aware, regrid Berger-Rigoutsos). Chemin de
-production mono-modele AMR (l'ancien `AmrCoupler` mono-box a ete supprime, #164).
-**Classification : INTERNE**
+Multi-patch ExB AMR coupler: multi-box hierarchy per level (engine
+`advance_amr`, coverage-aware reflux, Berger-Rigoutsos regrid). Single-model
+AMR production path (the old single-box `AmrCoupler` was removed, #164).
+**Classification: INTERNAL**
 
 ### `amr_system_coupler.hpp` -- `adc::AmrSystemCoupler<System, RhsAssembler, Elliptic>`, alias `adc::AmrSystemDriver`
 
-Coupleur de systeme sur AMR : porte un `CoupledSystem` sur une hierarchie AMR
-partagee par toutes les especes. Cable par `adc.AmrSystem` Python (#92/#105).
-`AmrSystemDriver` est l'alias "qui avance" (retour tuteur ss8.2 B).
-**Classification : INTERNE**
+System coupler over AMR: carries a `CoupledSystem` on an AMR hierarchy
+shared by all species. Wired through `adc.AmrSystem` Python (#92/#105).
+`AmrSystemDriver` is the "advancing" alias (advisor feedback ss8.2 B).
+**Classification: INTERNAL**
 
 ### `coupling_policy.hpp` -- `adc::PerStageCoupling`, `adc::OncePerStepCoupling`
 
-Tag types pour la politique de couplage temporel hyperbolique-elliptique
-(frequence de resolution elliptique). Selectionnes au site d'appel par template.
-**Classification : INTERNE**
+Tag types for the hyperbolic-elliptic temporal coupling policy
+(elliptic solve frequency). Selected at the call site by template.
+**Classification: INTERNAL**
 
 ### `elliptic_rhs.hpp` -- `adc::SingleModelEllipticRhs`, `adc::SystemEllipticRhs`
 
-Assemblage du second membre elliptique : isole la responsabilite du `Coupler`.
-`SingleModelEllipticRhs` pour un modele seul, `SystemEllipticRhs` pour plusieurs
-especes.
-**Classification : INTERNE**
+Elliptic right-hand side assembly: isolates the responsibility of the `Coupler`.
+`SingleModelEllipticRhs` for a single model, `SystemEllipticRhs` for several
+species.
+**Classification: INTERNAL**
 
 ### `coupled_source.hpp` -- concept `adc::CoupledSourceFor`
 
-Concept C++20 definissant le contrat d'une source de couplage inter-especes
-(collisions, echange thermique). Les sources concretes vivent dans `adc_cases`.
-**Classification : INTERNE**
+C++20 concept defining the contract of an inter-species coupling source
+(collisions, thermal exchange). The concrete sources live in `adc_cases`.
+**Classification: INTERNAL**
 
 ### `coupled_source_program.hpp` -- bytecode `CoupledSourceProgram`
 
-Evaluateur de source couplee generique par bytecode postfixe (POD device-clean).
-Permet d'executer des sources symboliques Python (`adc.dsl.CoupledSource`) dans
-un `for_each_cell` device sans callback Python par cellule.
-**Classification : INTERNE**
+Generic coupled-source evaluator by postfix bytecode (device-clean POD).
+Allows running symbolic Python sources (`adc.dsl.CoupledSource`) inside
+a `for_each_cell` device without a per-cell Python callback.
+**Classification: INTERNAL**
 
 ### `aux_fill.hpp` -- `adc::detail::derive_aux_bc`, `adc::detail::fill_bz_box`
 
-Helpers partages par les trois coupleurs (Coupler, SystemAssembler,
-AmrSystemCoupler) pour le canal aux (conditions aux limites de phi -> aux,
-peuplement de B_z). Extraction pure, corps bit-identiques.
-**Classification : INTERNE**
+Helpers shared by the three couplers (Coupler, SystemAssembler,
+AmrSystemCoupler) for the aux channel (boundary conditions of phi -> aux,
+populating B_z). Pure extraction, bit-identical bodies.
+**Classification: INTERNAL**
 
 ### `amr_level_storage.hpp` -- `adc::AmrLevelStack<Level>`
 
-Stockage de la hierarchie AMR (pile de niveaux + aux). Extrait des coupleurs
-AMR pour separer stockage et orchestration.
-**Classification : INTERNE**
+Storage of the AMR hierarchy (level stack + aux). Extracted from the AMR
+couplers to separate storage and orchestration.
+**Classification: INTERNAL**
 
 ### `amr_diagnostics.hpp` -- `adc::amr_mass`, `adc::amr_max_drift_speed`
 
-Diagnostics extraits des coupleurs AMR (masse integree, vitesse de derive max).
-Free functions de namespace, seam GPU.
-**Classification : INTERNE**
+Diagnostics extracted from the AMR couplers (integrated mass, max drift speed).
+Namespace free functions, GPU seam.
+**Classification: INTERNAL**
 
 ### `amr_regrid_coupler.hpp` -- `adc::amr_regrid_finest`
 
-Regrid Berger-Rigoutsos extrait d'`AmrCouplerMP` (responsabilite b). Reconstruit
-le niveau fin a la volee depuis un critere de raffinement fourni par l'appelant.
-**Classification : INTERNE**
+Berger-Rigoutsos regrid extracted from `AmrCouplerMP` (responsibility b). Rebuilds
+the fine level on the fly from a refinement criterion provided by the caller.
+**Classification: INTERNAL**
 
 ### `schur_condensation.hpp` -- `adc::ElectrostaticLorentzCondensation`
 
-Batisseur de l'etage source condense par Schur (couplage potentiel/vitesse/
-Lorentz, Hoffart et al. arXiv:2510.11808). Assemble l'operateur elliptique
-tensoriel A_op et le second membre ; ne resout pas.
-**Classification : INTERNE**
+Builder of the Schur-condensed source stage (potential/velocity/
+Lorentz coupling, Hoffart et al. arXiv:2510.11808). Assembles the tensor
+elliptic operator A_op and the right-hand side; does not solve.
+**Classification: INTERNAL**
 
 ### `condensed_schur_source_stepper.hpp` -- `adc::CondensedSchurSourceStepper`
 
-Etage source condense par Schur complet : compose `ElectrostaticLorentzCondensation`
-et `TensorKrylovSolver`. Etage source autonome (transport gele) ; cablage
-facade vers `System::step` prevu en PR5.
-**Classification : INTERNE**
+Full Schur-condensed source stage: composes `ElectrostaticLorentzCondensation`
+and `TensorKrylovSolver`. Standalone source stage (frozen transport); facade
+wiring to `System::step` planned in PR5.
+**Classification: INTERNAL**
 
 ---
 
-## Classe depreciée (DEPRECIE)
+## Deprecated class (DEPRECATED)
 
-> Note : l'ancien `amr_coupler.hpp` / `adc::AmrCoupler<Model, Elliptic>`
-> (coupleur AMR E x B mono-box) a ete **supprime (#164)**. Son role est entierement
-> repris par `AmrCouplerMP` (`amr_coupler_mp.hpp`), dont le mono-box est le cas
-> degenere bit-identique.
+> Note: the old `amr_coupler.hpp` / `adc::AmrCoupler<Model, Elliptic>`
+> (single-box ExB AMR coupler) was **removed (#164)**. Its role is entirely
+> taken over by `AmrCouplerMP` (`amr_coupler_mp.hpp`), whose single-box is the
+> bit-identical degenerate case.
 
 ### `spectral_coupler.hpp` -- `adc::SpectralCoupler<Model>`
 
-**DEPRECIE.** Coupleur periodique distribue (FFT par bandes). Aucun `#include`
-dans le noyau, les tests ou les bindings Python. Le role est repris par
-`Coupler<Model, DistributedFFTSolver>` (le solveur FFT distribue est devenu un
-`EllipticSolver` autonome, cf. `poisson_fft_solver.hpp`). Conserve pour
-reference historique (documente dans `docs/ARCHITECTURE.md`).
-**Remplacement recommande : `adc::Coupler<Model, DistributedFFTSolver>` (`coupler.hpp`)**
+**DEPRECATED.** Distributed periodic coupler (slab-decomposed FFT). No `#include`
+in the core, the tests or the Python bindings. The role is taken over by
+`Coupler<Model, DistributedFFTSolver>` (the distributed FFT solver became a
+standalone `EllipticSolver`, cf. `poisson_fft_solver.hpp`). Kept for
+historical reference (documented in `docs/ARCHITECTURE.md`).
+**Recommended replacement: `adc::Coupler<Model, DistributedFFTSolver>` (`coupler.hpp`)**
 
 ---
 
-*Derniere mise a jour : 2026-06-06 (P0.3 du CODEBASE_AUDIT.md).*
+*Last updated: 2026-06-06 (P0.3 of CODEBASE_AUDIT.md).*

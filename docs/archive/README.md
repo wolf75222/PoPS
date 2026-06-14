@@ -1,33 +1,33 @@
-# Archive documentaire
+# Documentation archive
 
-Documents conserves pour la trace mais HORS de la navigation principale : ce sont
-soit des notes de planification et de vision (l'etat reel est decrit par
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md), [`../ALGORITHMS.md`](../ALGORITHMS.md) et
-[`../GPU_RUNTIME_PORT.md`](../GPU_RUNTIME_PORT.md)), soit des notes applicatives dont le
-contenu execute vit maintenant dans le depot [`adc_cases`](https://github.com/wolf75222/adc_cases).
+Documents kept for the record but OUTSIDE the main navigation: these are
+either planning and vision notes (the actual state is described by
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md), [`../ALGORITHMS.md`](../ALGORITHMS.md) and
+[`../GPU_RUNTIME_PORT.md`](../GPU_RUNTIME_PORT.md)), or application notes whose
+executable content now lives in the [`adc_cases`](https://github.com/wolf75222/adc_cases) repository.
 
-Ils ne sont pas tenus a jour. En cas de divergence, la documentation hors archive fait foi.
+They are not kept up to date. In case of divergence, the non-archive documentation is authoritative.
 
-## Planification et vision
+## Planning and vision
 
-| Fichier | Contenu |
+| File | Content |
 |---|---|
-| `ROADMAP.md` | liste vivante des intentions, fait / a faire |
-| `TODO.md` | taches du chantier `PhysicalModel` -> systeme multi-especes |
-| `WORK_TODO.md` | liste de travail du chantier aux extensible / parite AMR / runtime |
-| `ETAT_DES_LIEUX.md` | synthese d'audits croises (architecture, numerique, robustesse, perf, HPC) |
-| `ARCHITECTURE_CIBLE.md` | doc de vision (north star), anterieure a l'etat actuel |
-| `DESIGN_MULTISPECIES.md` | conception du cap multi-especes (session tableau) |
-| `PLAN_VARIABLES_EPM.md` | plan du chantier niveau Variables + EPM |
+| `ROADMAP.md` | living list of intentions, done / to do |
+| `TODO.md` | tasks of the `PhysicalModel` -> multi-species system work item |
+| `WORK_TODO.md` | work list of the extensible aux / AMR parity / runtime work item |
+| `ETAT_DES_LIEUX.md` | synthesis of cross audits (architecture, numerics, robustness, perf, HPC) |
+| `ARCHITECTURE_CIBLE.md` | vision doc (north star), prior to the current state |
+| `DESIGN_MULTISPECIES.md` | design of the multi-species target (whiteboard session) |
+| `PLAN_VARIABLES_EPM.md` | plan of the Variables + EPM level work item |
 
-## Notes applicatives (scenarios, runs)
+## Application notes (scenarios, runs)
 
-Le coeur `adc_cpp` est agnostique au modele : ces notes decrivent des SCENARIOS ou des
-campagnes de mesure qui vivent cote application.
+The `adc_cpp` core is model-agnostic: these notes describe SCENARIOS or
+measurement campaigns that live on the application side.
 
-| Fichier | Contenu |
+| File | Content |
 |---|---|
-| `two_fluid_ap.md` | note de methode du schema deux-fluides AP (scenario, vit dans `adc_cases/two_fluid_ap/`) |
-| `DIOCOTRON_GROWTH_RATE.md` | reproduction du taux de croissance diocotron vs Hoffart arXiv:2510.11808 |
-| `HERO_RUN_AMR.md` | conception du hero-run AMR distribue sur ROMEO |
-| `ROMEO.md` | journal des runs ROMEO (GH200 + EPYC) |
+| `two_fluid_ap.md` | method note of the two-fluid AP scheme (scenario, lives in `adc_cases/two_fluid_ap/`) |
+| `DIOCOTRON_GROWTH_RATE.md` | reproduction of the diocotron growth rate vs Hoffart arXiv:2510.11808 |
+| `HERO_RUN_AMR.md` | design of the distributed AMR hero-run on ROMEO |
+| `ROMEO.md` | log of the ROMEO runs (GH200 + EPYC) |

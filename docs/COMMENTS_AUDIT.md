@@ -1,254 +1,254 @@
-# Audit des commentaires de `adc_cpp`
+# Audit of `adc_cpp` comments
 
-Date : 2026-06-12.
-Base relue : `origin/master` / `ffb9022`.
+Date: 2026-06-12.
+Reviewed base: `origin/master` / `ffb9022`.
 
-Perimetre : section Comments du Google C++ Style Guide appliquee a tout le code source du depot :
+Scope: the Comments section of the Google C++ Style Guide applied to all the source code of the repository:
 `include/adc/**/*.hpp`, `python/*.cpp`, `python/adc/*.py`, `tests/**`, `python/tests/**`, `bench/**`,
-plus les scripts CMake. Soit ~16 sous-systemes decoupes par couche (coeur/AMR/parallele/physique,
-maillage, numerique, couplage, runtime, bindings, tests, bench) et deux balayages transversaux
-(TODO et coherence de langue). L'audit porte sur la qualite des commentaires, pas sur la correction
-du code : un commentaire est juge fidele, perime, redondant ou absent par rapport au code qu'il decrit.
+plus the CMake scripts. That is ~16 subsystems split by layer (core/AMR/parallel/physics,
+mesh, numerics, coupling, runtime, bindings, tests, bench) and two cross-cutting sweeps
+(TODO and language consistency). The audit covers comment quality, not code correctness
+of the code: a comment is judged faithful, stale, redundant or missing relative to the code it describes.
 
-Methode : relecture integrale par sous-systeme, puis verification croisee de chaque constat non
-cosmetique sur piece (le commentaire est confronte ligne a ligne au code qu'il pretend decrire, et a
-ses commentaires voisins). Les constats marques `bloquant` sont des commentaires factuellement FAUX,
-tous re-verifies une seconde fois. Les chiffres de couverture (`@file`, types documentes) sont des
-comptages directs sur le worktree en lecture seule.
+Method: full review per subsystem, then cross-checking of every non-cosmetic finding
+on the spot (the comment is confronted line by line with the code it claims to describe, and with
+its neighboring comments). Findings marked `blocking` are comments that are factually FALSE,
+all re-verified a second time. The coverage figures (`@file`, documented types) are
+direct counts on the read-only worktree.
 
-Docs lies :
-- [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md) : audit de maintenabilite, meme en-tete et meme ton.
-- [`CODE_DOCUMENTATION_CONVENTION.md`](CODE_DOCUMENTATION_CONVENTION.md) : LA convention de
-  commentaires du projet (blocs `///`, `@file`/`@brief`, contrats, invariants threading/MPI/device).
-  CODEBASE_AUDIT.md la cite comme reference normative (lignes 15, 542, 643), `.clang-format` s'aligne
-  sur son esprit. PROBLEME : ce fichier est present dans le working tree principal mais N'EST PAS
-  COMMITE (`git status` le donne `??`). Il est donc ABSENT du commit `ffb9022` que les worktrees
-  checkoutent, et tout l'audit ci-dessous a du etre conduit contre la convention DE FAIT (patterns
-  dominants + CODEBASE_AUDIT.md) faute de pouvoir lire la norme. Recommandation prioritaire ADC-125 :
-  committer `docs/CODE_DOCUMENTATION_CONVENTION.md`, sans quoi le referentiel de tout l'effort de
-  documentation reste un lien mort dans l'arbre versionne.
-- [`check_docs.py`](check_docs.py) : ne lint que les `.md`, pas les en-tetes `.hpp`.
+Related docs:
+- [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md): maintainability audit, same header and same tone.
+- [`CODE_DOCUMENTATION_CONVENTION.md`](CODE_DOCUMENTATION_CONVENTION.md): THE comment
+  convention of the project (`///` blocks, `@file`/`@brief`, contracts, threading/MPI/device invariants).
+  CODEBASE_AUDIT.md cites it as a normative reference (lines 15, 542, 643), `.clang-format` aligns
+  with its spirit. PROBLEM: this file is present in the main working tree but IS NOT
+  COMMITTED (`git status` reports it as `??`). It is therefore ABSENT from the `ffb9022` commit that the worktrees
+  check out, and the entire audit below had to be conducted against the DE FACTO convention
+  (dominant patterns + CODEBASE_AUDIT.md) for lack of being able to read the standard. Priority recommendation ADC-125:
+  commit `docs/CODE_DOCUMENTATION_CONVENTION.md`, otherwise the reference framework of the whole documentation
+  effort remains a dead link in the versioned tree.
+- [`check_docs.py`](check_docs.py): only lints the `.md`, not the `.hpp` headers.
 
-## 1. Synthese chiffree
+## 1. Quantitative synthesis
 
-Couverture des en-tetes `@file`/`@brief` et constats par severite, par sous-systeme. La severite est
-celle apres verification croisee (un `bloquant` initial infirme a la verification est redescendu).
+Coverage of the `@file`/`@brief` headers and findings by severity, per subsystem. The severity is
+that after cross-checking (an initial `blocking` invalidated at verification is demoted).
 
-| Sous-systeme | Fichiers / lignes | En-tete @file | Bloq. | Import. | Cosm. |
+| Subsystem | Files / lines | @file header | Block. | Import. | Cosm. |
 |---|---|---|---|---|---|
-| coeur-amr-parallele-physique | 23 / 2861 | 21/23 | 1 | 5 | 5 |
-| maillage | 13 / 1912 | 12/13 | 1 | 1 | 6 |
-| numerique-1 (elliptique) | 12 / 3252 | 4/12 Doxygen | 1 | 8 | 7 |
-| numerique-2 (spatial/EB) | 10 / 3119 | 8/10 | 2 | 3 | 4 |
-| numerique-3 (temps/AMR) | 13 / 2198 | 0/13 Doxygen | 1 | 2 | 7 |
-| couplage-1 | 10 / 2499 | 10/10 | 1 | 1 | 8 |
-| couplage-2 | 7 / 1850 | 7/7 | 0 | 3 | 4 |
+| core-amr-parallel-physics | 23 / 2861 | 21/23 | 1 | 5 | 5 |
+| mesh | 13 / 1912 | 12/13 | 1 | 1 | 6 |
+| numerics-1 (elliptic) | 12 / 3252 | 4/12 Doxygen | 1 | 8 | 7 |
+| numerics-2 (spatial/EB) | 10 / 3119 | 8/10 | 2 | 3 | 4 |
+| numerics-3 (time/AMR) | 13 / 2198 | 0/13 Doxygen | 1 | 2 | 7 |
+| coupling-1 | 10 / 2499 | 10/10 | 1 | 1 | 8 |
+| coupling-2 | 7 / 1850 | 7/7 | 0 | 3 | 4 |
 | runtime-1 | 5 / 3163 | 5/5 | 1 | 2 | 2 |
 | runtime-2 | 13 / 2855 | 13/13 | 0 | 3 | 3 |
 | runtime-3 | 4 / 1380 | 4/4 | 0 | 1 | 5 |
 | python-bindings (.cpp) | 3 / 3654 | 0/3 | 2 | 3 | 4 |
 | python adc (core) | 3 / 3162 | 3/3 docstring | 0 | 5 | 4 |
 | python adc (dsl) | 1 / 4648 | 1/1 docstring | 0 | 1 | 9 |
-| tests + bench (transversal) | 246 / 27915 | 245/246 intention | 0 | 0 | 5 |
-| TODO + langue (transversal) | tout le depot | n/a | 0 | 1 | 5 |
+| tests + bench (cross-cutting) | 246 / 27915 | 245/246 intent | 0 | 0 | 5 |
+| TODO + language (cross-cutting) | whole repo | n/a | 0 | 1 | 5 |
 
-Total : 10 bloquants (commentaires faux), ~38 importants, ~68 cosmetiques, ~116 constats sur les 13
-sous-systemes de code plus deux balayages transversaux qui re-agregent certains constats (TODO,
-ilot anglais).
+Total: 10 blocking (false comments), ~38 important, ~68 cosmetic, ~116 findings across the 13
+code subsystems plus two cross-cutting sweeps that re-aggregate some findings (TODO,
+English island).
 
-Verdict global : la qualite documentaire est elevee et homogene, nettement au-dessus de la moyenne
-d'un projet de cette taille. Les commentaires d'IMPLEMENTATION sont le point fort recurrent : les
-pieges reels (deadlock CUDA-IPC des tampons MPI, securite async de l'arene Kokkos, derivation du
-terme geometrique polaire, contournements nvcc/EDG par foncteurs nommes, bornes CFL de stabilite,
-moyenne harmonique vs arithmetique de la permittivite) sont expliques avec leur justification, sans
-paraphrase de l'evident. La dette ne vient pas d'un manque de documentation mais de trois axes :
-(1) un noyau dur de 10 commentaires devenus FAUX (comment-rot), qui est la dette dangereuse ;
-(2) une migration Doxygen restee a mi-chemin (en-tetes et API publiques documentees en `//` non
-extractibles, doubles en-tetes `//`+`///` qui dupliquent la source de verite) ; (3) des references
-documentaires fragiles (numeros de ligne codes en dur, chemins de doc perimes).
+Overall verdict: documentation quality is high and homogeneous, clearly above the average
+for a project of this size. IMPLEMENTATION comments are the recurring strong point: the
+real pitfalls (CUDA-IPC deadlock of MPI buffers, async safety of the Kokkos arena, derivation of the
+polar geometric term, nvcc/EDG workarounds via named functors, CFL stability bounds,
+harmonic vs arithmetic mean of permittivity) are explained with their justification, without
+paraphrasing the obvious. The debt does not come from a lack of documentation but from three axes:
+(1) a hard core of 10 comments that have become FALSE (comment-rot), which is the dangerous debt;
+(2) a Doxygen migration left halfway (headers and public APIs documented in non-extractable `//`,
+double `//`+`///` headers that duplicate the source of truth); (3) fragile
+documentation references (hard-coded line numbers, stale doc paths).
 
-## 2. Etat des lieux par sous-section Google Comments
+## 2. Status by Google Comments subsection
 
 ### Comment Style
-Convention de fait claire et largement appliquee : `///` Doxygen pour l'API, `//` pour l'interne,
-`///<` trailing pour les membres, `#pragma once` unanime, aucun bloc `/* */` parasite. Trois ecarts
-structurants. (a) Migration Doxygen inachevee : `include/adc/numerics/elliptic` documente 8/12
-fichiers par une en-tete prose `//` (fidele mais invisible a Doxygen), `numerics/time` 0/13 en
-Doxygen, et plusieurs API publiques sont en `//` (cf. File/Function Comments). (b) Doubles en-tetes
-legacy : un bloc `//` paraphrase le `/// @file` dans ~12 fichiers du coeur, 12/13 du maillage, 7/10
-de couplage-1, 5/7 de couplage-2 - deux sources de verite a maintenir ensemble. Cas extreme :
-`compute_face_fluxes` documente TROIS fois dans `include/adc/numerics/spatial_operator.hpp:548,632,641`.
-(c) Ilot de style `/** */` Javadoc dans 4 fichiers `include/adc/physics/` (`euler.hpp:17`,
-`advection_diffusion.hpp`, `langmuir.hpp`, `two_fluid_isothermal.hpp`) la ou tout le reste utilise
-`///`. Anomalie isolee : un emoji dans `include/adc/runtime/amr_dsl_block.hpp:172`, seul caractere
-non-ASCII de ce type du depot.
+Clear de facto convention, widely applied: `///` Doxygen for the API, `//` for the internal,
+trailing `///<` for members, unanimous `#pragma once`, no stray `/* */` block. Three structural
+gaps. (a) Unfinished Doxygen migration: `include/adc/numerics/elliptic` documents 8/12
+files with a prose `//` header (faithful but invisible to Doxygen), `numerics/time` 0/13 in
+Doxygen, and several public APIs are in `//` (cf. File/Function Comments). (b) Legacy double headers:
+a `//` block paraphrases the `/// @file` in ~12 files of the core, 12/13 of the mesh, 7/10
+of coupling-1, 5/7 of coupling-2 - two sources of truth to maintain together. Extreme case:
+`compute_face_fluxes` documented THREE times in `include/adc/numerics/spatial_operator.hpp:548,632,641`.
+(c) Island of `/** */` Javadoc style in 4 files `include/adc/physics/` (`euler.hpp:17`,
+`advection_diffusion.hpp`, `langmuir.hpp`, `two_fluid_isothermal.hpp`) where everything else uses
+`///`. Isolated anomaly: an emoji in `include/adc/runtime/amr_dsl_block.hpp:172`, the only non-ASCII
+character of this kind in the repository.
 
 ### File Comments
-Couverture globale bonne mais inegale. Absents (demarrent sur `#include`/`namespace`) :
-`include/adc/parallel/comm.hpp:1` et `parallel/load_balance.hpp:1` (en-tete `//` seule),
-`include/adc/mesh/patch_box.hpp:1`, `include/adc/numerics/time/amr_advance.hpp:1` et
-`amr_flux_helpers.hpp:1`, et surtout `python/system.cpp:1` + `python/amr_system.cpp:1` (aucune
-en-tete du tout, 1831 et 1192 lignes). Placement non uniforme du `/// @file` (avant vs apres les
-includes) dans `numerics-2` (3 fichiers) et `couplage-1` (4 avant / 6 apres). Reference morte :
-`docs/CODEBASE_AUDIT.md:15` pointe vers `CODE_DOCUMENTATION_CONVENTION.md`, non commite (cf. en-tete).
+Good overall coverage but uneven. Absent (start on `#include`/`namespace`):
+`include/adc/parallel/comm.hpp:1` and `parallel/load_balance.hpp:1` (`//` header only),
+`include/adc/mesh/patch_box.hpp:1`, `include/adc/numerics/time/amr_advance.hpp:1` and
+`amr_flux_helpers.hpp:1`, and above all `python/system.cpp:1` + `python/amr_system.cpp:1` (no
+header at all, 1831 and 1192 lines). Non-uniform placement of the `/// @file` (before vs after the
+includes) in `numerics-2` (3 files) and `coupling-1` (4 before / 6 after). Dead reference:
+`docs/CODEBASE_AUDIT.md:15` points to `CODE_DOCUMENTATION_CONVENTION.md`, not committed (cf. header).
 
 ### Struct and Class Comments
-Quasi tous les types publics non triviaux portent un contrat. Defauts qualitatifs : le concept
-`EquationBlockLike` est resume FAUX (`include/adc/core/equation_block.hpp:76`, cf. comment rot) ;
-`struct Aux`, canal de couplage central, est decrit par un bloc `//` rattache a une X-macro et non
-par un `/// @brief` sur le type (`include/adc/core/state.hpp:102`), donc Doxygen ne lui associe
-aucune doc de classe alors que son voisin `StateVec` en a une ; les contraintes de
-`DistributedFFTSolver` sont sur- et sous-declarees (`include/adc/numerics/elliptic/poisson_fft_solver.hpp:102`).
+Nearly all non-trivial public types carry a contract. Qualitative defects: the concept
+`EquationBlockLike` is summarized FALSE (`include/adc/core/equation_block.hpp:76`, cf. comment rot);
+`struct Aux`, the central coupling channel, is described by a `//` block attached to an X-macro and not
+by a `/// @brief` on the type (`include/adc/core/state.hpp:102`), so Doxygen associates it
+with no class doc whereas its neighbor `StateVec` has one; the constraints of
+`DistributedFFTSolver` are over- and under-declared (`include/adc/numerics/elliptic/poisson_fft_solver.hpp:102`).
 
 ### Function Comments
-Tres bonne couverture (`@param`/`@return`/`@throws` systematiques sur l'API runtime). Trois familles
-de defauts. (a) Enumerations de parametres perimees, le cas le plus frequent : les `@param limiter`
-et `@param time` de `include/adc/runtime/system.hpp:79,169,198,199` retardent sur les validateurs
-reels (weno5, ssprk3, euler manquants), de meme `include/adc/runtime/amr_system.hpp:203` (`weno5 ;
-rusanov` suggere a tort une restriction). (b) Contrats faux : `set_conservative_state`
-(`include/adc/runtime/amr_system.hpp:363`, cf. comment rot). (c) Parametres non documentes :
-le ctor de `GeometricMG` couvre `active/replicated/cut_cell/levelset` mais omet
-`min_coarse/nu1/nu2/nbottom` (`include/adc/numerics/elliptic/geometric_mg.hpp:76`). Cote Python,
-`System.add_block`/`AmrSystem.add_block` (`python/adc/__init__.py:1365,2415`), points d'entree
-primaires, n'ont aucune docstring alors que `add_equation` est detaillee ; plusieurs `.def` pybind
-non triviaux sont exposes sans docstring (`python/bindings.cpp:362` : `step_cfl`, `step_adaptive`,
+Very good coverage (`@param`/`@return`/`@throws` systematic on the runtime API). Three families
+of defects. (a) Stale parameter enumerations, the most frequent case: the `@param limiter`
+and `@param time` of `include/adc/runtime/system.hpp:79,169,198,199` lag behind the actual validators
+(weno5, ssprk3, euler missing), likewise `include/adc/runtime/amr_system.hpp:203` (`weno5 ;
+rusanov` wrongly suggests a restriction). (b) False contracts: `set_conservative_state`
+(`include/adc/runtime/amr_system.hpp:363`, cf. comment rot). (c) Undocumented parameters:
+the ctor of `GeometricMG` covers `active/replicated/cut_cell/levelset` but omits
+`min_coarse/nu1/nu2/nbottom` (`include/adc/numerics/elliptic/geometric_mg.hpp:76`). On the Python side,
+`System.add_block`/`AmrSystem.add_block` (`python/adc/__init__.py:1365,2415`), primary entry points,
+have no docstring whereas `add_equation` is detailed; several non-trivial pybind `.def`
+are exposed without docstring (`python/bindings.cpp:362`: `step_cfl`, `step_adaptive`,
 `dt_hotspot`, `set_poisson`, `variable_names/roles`).
 
 ### Variable Comments
-Globalement soignee (membres non evidents annotes avec unites). Defauts : `phi_n_` decrit avec un
-cycle de vie et une API faux (`include/adc/coupling/condensed_schur_source_stepper.hpp:395`, cf.
-comment rot) ; `mg_` annonce un invariant "Dirichlet homogene" que le code ne garantit pas
-(`include/adc/numerics/elliptic/composite_fac_poisson.hpp:489`) ; membres de `MGLevel` partiellement
-nus (`geometric_mg.hpp:496`, `coef`/`mask` non decodables sur place) ; jetons de configuration
-Poisson sans doc par champ (`include/adc/runtime/system_field_solver.hpp:90`).
+Generally careful (non-obvious members annotated with units). Defects: `phi_n_` described with a
+false life cycle and API (`include/adc/coupling/condensed_schur_source_stepper.hpp:395`, cf.
+comment rot); `mg_` announces a "homogeneous Dirichlet" invariant that the code does not guarantee
+(`include/adc/numerics/elliptic/composite_fac_poisson.hpp:489`); members of `MGLevel` partially
+bare (`geometric_mg.hpp:496`, `coef`/`mask` not decodable on the spot); Poisson configuration
+tokens without per-field doc (`include/adc/runtime/system_field_solver.hpp:90`).
 
 ### Implementation Comments
-Point fort du depot, mais c'est aussi la ou vit la dette dangereuse. La majorite des commentaires
-substantiels verifies (>120 au total) sont EXACTS. Les defauts sont les commentaires de comment-rot
-(section 3) et les references documentaires fragiles : chemins de repertoire perimes apres un
-renommage (`integrator/` et `operator/` dans `include/adc/numerics/time/ssprk.hpp:13`,
-`implicit_stepper.hpp:31`, `amr_reflux.hpp:25`), renvois `bibliographie sect. 3.3`/`sect. 4.3` qui ne
-resolvent vers aucun ancrage (`include/adc/mesh/box_hash.hpp:4,20` + `fill_boundary.hpp:8,101,159`,
-5 sites), et numeros de ligne inter-fichiers codes en dur qui derivent a chaque edition du `.md`
-cible (`HOFFART_FIDELITY.md ligne 39` desormais vide, cite par `wall_predicate.hpp:41` et
-`cut_fraction.hpp:12`). Recommandation transverse : remplacer les numeros de ligne par des ancrages
-symboliques (titre de section, nom de fonction).
+Strong point of the repository, but it is also where the dangerous debt lives. The majority of substantial
+verified comments (>120 in total) are EXACT. The defects are the comment-rot comments
+(section 3) and the fragile documentation references: stale directory paths after a
+rename (`integrator/` and `operator/` in `include/adc/numerics/time/ssprk.hpp:13`,
+`implicit_stepper.hpp:31`, `amr_reflux.hpp:25`), `bibliographie sect. 3.3`/`sect. 4.3` cross-references that
+resolve to no anchor (`include/adc/mesh/box_hash.hpp:4,20` + `fill_boundary.hpp:8,101,159`,
+5 sites), and hard-coded inter-file line numbers that drift at each edit of the target
+`.md` (`HOFFART_FIDELITY.md ligne 39` now empty, cited by `wall_predicate.hpp:41` and
+`cut_fraction.hpp:12`). Cross-cutting recommendation: replace the line numbers with symbolic
+anchors (section title, function name).
 
 ### Punctuation, Spelling, and Grammar
-Coherence quasi totale (cf. section 5). Coquilles isolees : `referenceent`
+Near-total consistency (cf. section 5). Isolated typos: `referenceent`
 (`include/adc/core/coupled_system.hpp:40`), `apellent` (`numerics/spatial_operator.hpp:387`),
-`Exposes` au lieu d'`Expose` (`numerics/spatial_discretisation.hpp:32`), `Cohrent`
-(`runtime/native_loader.hpp:733`), `tolerree` (`python/adc/__init__.py:870`). Phrases agrammaticales
-ponctuelles : `for_each.hpp:113` (`acces hote sur sont sans course`), coupure `limite de / Debye`
-dans `numerics/time/imex.hpp:11`, auto-correction laissee en place `... non : ...` dans
-`python/system.cpp:1511`. Tag `@returns` (anglais) au lieu de `@return` : 2 occurrences
+`Exposes` instead of `Expose` (`numerics/spatial_discretisation.hpp:32`), `Cohrent`
+(`runtime/native_loader.hpp:733`), `tolerree` (`python/adc/__init__.py:870`). Occasional ungrammatical
+sentences: `for_each.hpp:113` (`acces hote sur sont sans course`), `limite de / Debye` line break
+in `numerics/time/imex.hpp:11`, self-correction left in place `... non : ...` in
+`python/system.cpp:1511`. `@returns` tag (English) instead of `@return`: 2 occurrences
 (`amr_coupler_mp.hpp:558`, `amr_system.hpp:439`).
 
 ### TODO Comments
-Voir section 4. En resume : 20 marqueurs, aucun au format Google, tous des etiquettes de feuille de
-route plutot que des taches.
+See section 4. In summary: 20 markers, none in the Google format, all roadmap labels
+rather than tasks.
 
-## 3. Comment rot : commentaires FAUX (severite bloquant)
+## 3. Comment rot: FALSE comments (blocking severity)
 
-Dette la plus dangereuse : un lecteur qui suit ces commentaires est activement induit en erreur.
-Chacun a ete confronte au code et re-verifie.
+The most dangerous debt: a reader who follows these comments is actively misled.
+Each one has been confronted with the code and re-verified.
 
-| Fichier:ligne | Affirmation du commentaire | Realite du code |
+| File:line | Comment claim | Code reality |
 |---|---|---|
-| `include/adc/core/equation_block.hpp:76` | concept requiert un membre `State` | le concept exige `B::Model` ; aucun alias `State` n'existe (lignes 80-87) |
-| `include/adc/mesh/fill_boundary.hpp:242` | MPI recoit des pointeurs UNIFIES (GPUDirect) | `sbuf`/`rbuf` sont en `SharedHostPinnedSpace` (hote epingle), vus HOST par MPI pour eviter CUDA-IPC ; contredit les lignes 118-124 et `core/allocator.hpp` |
-| `include/adc/numerics/elliptic/geometric_mg.hpp:425` | durcissement du lissage STICKY entre solves | le code sauve `nu1_/nu2_` (446) et les RESTAURE au retour (454,457) ; le paragraphe voisin (442-444) dit l'inverse |
-| `include/adc/numerics/elliptic/polar_tensor_operator.hpp:381` | `solve()` = BiCGStab preconditionne Jacobi | precond par defaut = RadialLine (Thomas radial), selectionnable via `precond_` ; omet le pinning de jauge |
-| `include/adc/numerics/spatial_operator_eb.hpp:136` | apertures de face fractionnaires `alpha in [1e-3,1]` entre cellules actives | `cut_distance` rend `h` pour tout voisin actif -> alpha = 1 ; apertures BINAIRES {0,1}, seul `kappa` est fractionnaire |
-| `include/adc/numerics/time/amr_reflux.hpp:19` | "version minimale" : sous-cyclage a venir, aux uniforme | `amr_step_2level` IMPLEMENTE deja le sous-cyclage Berger-Oliger (155-174) et lit un aux spatial ; fichier vivant (inclus par `spectral_coupler.hpp`) |
-| `include/adc/coupling/condensed_schur_source_stepper.hpp:395` | `phi_n_` alloue au premier `advance_source` | alloue inconditionnellement au ctor (234) ; la methode `advance_source` N'EXISTE PAS (l'API est `step()`, grep depot = 0 autre occurrence) |
-| `include/adc/runtime/amr_system.hpp:363` | `set_conservative_state` leve en multi-blocs | la facade `build_multi` thread l'etat aux blocs NATIFS (379) ; seul le chemin compile (.so) rejette (315) |
-| `python/bindings.cpp:70` | serie : `my_rank=1`, `n_ranks=0` | `comm.hpp` rend `my_rank()=0`, `n_ranks()=1` ; contredit les docstrings adjacents (73-74) |
-| `python/bindings.cpp:240` | descripteurs `set_source_stage` : "Cartesien seulement (polaire : rejet)" | l'etage polaire construit un `PolarCondensedSchurSourceStepper` et honore `bz_aux_component` sans rejet (`system.cpp:1410-1438`) |
+| `include/adc/core/equation_block.hpp:76` | concept requires a `State` member | the concept requires `B::Model`; no `State` alias exists (lines 80-87) |
+| `include/adc/mesh/fill_boundary.hpp:242` | MPI receives UNIFIED pointers (GPUDirect) | `sbuf`/`rbuf` are in `SharedHostPinnedSpace` (pinned host), seen as HOST by MPI to avoid CUDA-IPC; contradicts lines 118-124 and `core/allocator.hpp` |
+| `include/adc/numerics/elliptic/geometric_mg.hpp:425` | STICKY smoothing hardening between solves | the code saves `nu1_/nu2_` (446) and RESTORES them on return (454,457); the neighboring paragraph (442-444) says the opposite |
+| `include/adc/numerics/elliptic/polar_tensor_operator.hpp:381` | `solve()` = Jacobi-preconditioned BiCGStab | default precond = RadialLine (radial Thomas), selectable via `precond_`; omits the gauge pinning |
+| `include/adc/numerics/spatial_operator_eb.hpp:136` | fractional face apertures `alpha in [1e-3,1]` between active cells | `cut_distance` returns `h` for any active neighbor -> alpha = 1; BINARY apertures {0,1}, only `kappa` is fractional |
+| `include/adc/numerics/time/amr_reflux.hpp:19` | "minimal version": subcycling to come, uniform aux | `amr_step_2level` ALREADY IMPLEMENTS Berger-Oliger subcycling (155-174) and reads a spatial aux; living file (included by `spectral_coupler.hpp`) |
+| `include/adc/coupling/condensed_schur_source_stepper.hpp:395` | `phi_n_` allocated at the first `advance_source` | allocated unconditionally at the ctor (234); the `advance_source` method DOES NOT EXIST (the API is `step()`, repo grep = 0 other occurrence) |
+| `include/adc/runtime/amr_system.hpp:363` | `set_conservative_state` raises in multi-block | the `build_multi` facade threads the state to the NATIVE blocks (379); only the compiled path (.so) rejects (315) |
+| `python/bindings.cpp:70` | serial: `my_rank=1`, `n_ranks=0` | `comm.hpp` returns `my_rank()=0`, `n_ranks()=1`; contradicts the adjacent docstrings (73-74) |
+| `python/bindings.cpp:240` | `set_source_stage` descriptors: "Cartesian only (polar: reject)" | the polar stage builds a `PolarCondensedSchurSourceStepper` and honors `bz_aux_component` without rejection (`system.cpp:1410-1438`) |
 
-Tous sont des vestiges de refactors anterieurs (renommage d'API, correctif pinned-host, vague
-multi-blocs, retrait de garde-fou mono-rang). 6/10 sont auto-corrigeables en une ligne ; les 4 autres
-demandent une reformulation du contrat.
+All are vestiges of earlier refactors (API rename, pinned-host fix, multi-block
+wave, mono-rank safeguard removal). 6/10 are auto-correctable in one line; the other 4
+require a reformulation of the contract.
 
-Note de second rang : quatre constats initialement classes bloquants ont ete redescendus a important
-a la verification car le commentaire decrit une intention correcte ou un chemin sans rupture de
-comportement : `composite_fac_poisson.hpp:489` (Dirichlet homogene suppose), `elliptic_solver.hpp:12`
-(Coupler deja template), `elliptic_problem.hpp:41` (`FieldPostProcess::apply` inexistante, mecanisme
-correct documente plus bas), et les enumerations doc-only de `system.hpp` (weno5/ssprk3/euler).
+Second-rank note: four findings initially classified as blocking were demoted to important
+at verification because the comment describes a correct intent or a path with no break in
+behavior: `composite_fac_poisson.hpp:489` (homogeneous Dirichlet assumed), `elliptic_solver.hpp:12`
+(Coupler already templated), `elliptic_problem.hpp:41` (`FieldPostProcess::apply` nonexistent, correct mechanism
+documented further down), and the doc-only enumerations of `system.hpp` (weno5/ssprk3/euler).
 
-## 4. Inventaire TODO
+## 4. TODO inventory
 
-| Mesure | Valeur |
+| Measure | Value |
 |---|---|
-| Marqueurs TODO | 20 |
+| TODO markers | 20 |
 | FIXME / XXX / HACK | 0 / 0 / 0 |
-| Conformes au format Google `TODO(id):` | 0/20 |
-| Repartition | `include/` 9, `tests/` 11, `python` + `bench` + `cmake` + `scripts` 0 |
+| Conforming to Google format `TODO(id):` | 0/20 |
+| Distribution | `include/` 9, `tests/` 11, `python` + `bench` + `cmake` + `scripts` 0 |
 
-Aucun TODO ne signale un travail incomplet : ce sont 20 etiquettes de provenance renvoyant a une
-numerotation de feuille de route (`TODO 2.3`, `TODO 4`, `TODO 2.2.3`, `TODO 4.3`, `TODO 2.1.1`). Elles
-DECRIVENT du comportement deja implemente (`include/adc/coupling/amr_system_coupler.hpp:33,44,62`,
-`tests/test_two_species_minimal.cpp`) ou une generalisation future
-(`include/adc/numerics/spatial_operator.hpp:560,653`). Deux problemes : la numerotation n'est pas
-resolvable depuis le `todo.md` a la racine (renvois orphelins pour un lecteur neuf), et tout scan CI
-`grep TODO` remonterait ces 20 hits comme des taches en attente (faux positifs). Le seul renvoi vers
-un fichier concret (`composite_fac_poisson.hpp:30` -> `amr_reflux.hpp:20`) est EXACT. A noter aussi
-des differes REELS exprimes en prose sans marqueur, donc invisibles a l'outillage
-(`amr_diagnostics.hpp:29`, `amr_coupler_mp.hpp:289`, plusieurs `= Phase 4b`).
+No TODO signals incomplete work: these are 20 provenance labels referring to a
+roadmap numbering (`TODO 2.3`, `TODO 4`, `TODO 2.2.3`, `TODO 4.3`, `TODO 2.1.1`). They
+DESCRIBE behavior already implemented (`include/adc/coupling/amr_system_coupler.hpp:33,44,62`,
+`tests/test_two_species_minimal.cpp`) or a future generalization
+(`include/adc/numerics/spatial_operator.hpp:560,653`). Two problems: the numbering is not
+resolvable from the `todo.md` at the root (orphan cross-references for a fresh reader), and any CI scan
+`grep TODO` would surface these 20 hits as pending tasks (false positives). The only cross-reference to
+a concrete file (`composite_fac_poisson.hpp:30` -> `amr_reflux.hpp:20`) is EXACT. Also note
+REAL deferrals expressed in prose without a marker, hence invisible to tooling
+(`amr_diagnostics.hpp:29`, `amr_coupler_mp.hpp:289`, several `= Phase 4b`).
 
-Recommandation : reserver le token `TODO` au travail incomplet, au format `TODO(ADC-xxx):` ;
-remplacer les etiquettes de roadmap par `(jalon 2.3)` ou un renvoi au doc de design ; et marquer les
-vrais differes en prose par un `TODO(ADC-xxx)` reperable.
+Recommendation: reserve the `TODO` token for incomplete work, in the `TODO(ADC-xxx):` format;
+replace the roadmap labels with `(jalon 2.3)` or a cross-reference to the design doc; and mark the
+real deferrals in prose with a findable `TODO(ADC-xxx)`.
 
-## 5. Coherence de langue
+## 5. Language consistency
 
-Verdict : francais ECRIT SANS ACCENTS, applique a 99.99 %. Ratio marqueurs FR/EN par repertoire :
-`include` 6679/32, `python` 2309/9, `tests` 3202/8, `bench` 157/2. Les rares hits "anglais" sont
-presque tous des faux positifs (mots-cles de code en commentaire, titres d'articles cites en
-bibliographie, mot latin `via`).
+Verdict: French WRITTEN WITHOUT ACCENTS, applied at 99.99%. Ratio of FR/EN markers per directory:
+`include` 6679/32, `python` 2309/9, `tests` 3202/8, `bench` 157/2. The rare "English" hits are
+almost all false positives (code keywords in comments, titles of articles cited in
+the bibliography, the Latin word `via`).
 
-Trois entorses, toutes ponctuelles :
-- Prose anglaise authentique : un SEUL ilot, le bloc Doxygen de `max_wave_speed`
-  (`include/adc/coupling/amr_coupler_mp.hpp:553-559`), entoure de membres francais. A traduire.
-- Accents : 2 lignes dans tout le depot (`bench/scaling_step.cpp:329-330`). A delester.
-- ASCII : 1 emoji (`include/adc/runtime/amr_dsl_block.hpp:172`). A remplacer par `ATTENTION :`.
+Three breaches, all occasional:
+- Authentic English prose: a SINGLE island, the Doxygen block of `max_wave_speed`
+  (`include/adc/coupling/amr_coupler_mp.hpp:553-559`), surrounded by French members. To translate.
+- Accents: 2 lines in the whole repository (`bench/scaling_step.cpp:329-330`). To strip.
+- ASCII: 1 emoji (`include/adc/runtime/amr_dsl_block.hpp:172`). To replace with `ATTENTION :`.
 
-Regle proposee (a inscrire dans `CODE_DOCUMENTATION_CONVENTION.md`) : commentaires en francais sans
-accents, ASCII pur, tags Doxygen et identifiants en anglais ; `@return` canonique (pas `@returns`).
+Proposed rule (to be written into `CODE_DOCUMENTATION_CONVENTION.md`): comments in French without
+accents, pure ASCII, Doxygen tags and identifiers in English; `@return` canonical (not `@returns`).
 
-## 6. Plan de correction priorise
+## 6. Prioritized correction plan
 
-P0 : commentaires faux (section 3). C'est la seule dette qui trompe activement. 10 corrections,
-chacune locale a un fichier. Traitement : soit une PR ciblee unique "corriger le comment-rot
-(ADC-125)" qui touche les 10 sites, soit replier chaque correction dans la prochaine PR qui modifie
-le fichier concerne. 6/10 sont des one-liners ; les contrats de `set_conservative_state`,
-`polar_tensor_operator::solve`, `spatial_operator_eb::eb_face_aperture` et l'en-tete d'`amr_reflux`
-demandent une reformulation a relire. A faire en premier, independamment du reste.
+P0: false comments (section 3). This is the only debt that actively misleads. 10 corrections,
+each local to a file. Treatment: either a single targeted PR "fix the comment-rot
+(ADC-125)" that touches the 10 sites, or fold each correction into the next PR that modifies
+the concerned file. 6/10 are one-liners; the contracts of `set_conservative_state`,
+`polar_tensor_operator::solve`, `spatial_operator_eb::eb_face_aperture` and the header of `amr_reflux`
+require a reformulation to review. To do first, independently of the rest.
 
-P1 : API publique `include/adc/**` et `python/` non extractible ou non documentee. PR ciblees par
-sous-systeme (conversion mecanique, contenu deja present) :
-- Ajouter `@file`/`@brief` la ou il manque : `parallel/comm.hpp`, `parallel/load_balance.hpp`,
+P1: public API `include/adc/**` and `python/` non-extractable or undocumented. PRs targeted per
+subsystem (mechanical conversion, content already present):
+- Add `@file`/`@brief` where it is missing: `parallel/comm.hpp`, `parallel/load_balance.hpp`,
   `mesh/patch_box.hpp`, `numerics/time/amr_advance.hpp` + `amr_flux_helpers.hpp`, `python/system.cpp`,
   `python/amr_system.cpp`.
-- Migrer `//` -> `///` sur les API publiques documentees en prose : `numerics/time/*` (12 fichiers,
-  dont les helpers `mf_*` et `advance_amr`), checkpoint/restart d'`AmrCouplerMP`
+- Migrate `//` -> `///` on the public APIs documented in prose: `numerics/time/*` (12 files,
+  including the `mf_*` helpers and `advance_amr`), checkpoint/restart of `AmrCouplerMP`
   (`coupling/amr_coupler_mp.hpp:319+`), `runtime/amr_runtime.hpp:279,893`.
-- Combler les manques de contrat : `struct Aux` (`core/state.hpp:102`), parametres du ctor
-  `GeometricMG`, docstrings de `System.add_block`/`AmrSystem.add_block`, docstrings pybind des `.def`
-  non triviaux.
+- Fill the contract gaps: `struct Aux` (`core/state.hpp:102`), parameters of the `GeometricMG`
+  ctor, docstrings of `System.add_block`/`AmrSystem.add_block`, pybind docstrings of the non-trivial
+  `.def`.
 
-P2 : normalisation TODO + langue (sections 4 et 5). Une PR d'hygiene unique : reclasser les 20
-etiquettes de roadmap, traduire l'ilot anglais, retirer les 2 lignes accentuees et l'emoji,
-normaliser `@returns` -> `@return`. Committer `CODE_DOCUMENTATION_CONVENTION.md` dans la meme PR pour
-ancrer la regle.
+P2: TODO + language normalization (sections 4 and 5). A single hygiene PR: reclassify the 20
+roadmap labels, translate the English island, remove the 2 accented lines and the emoji,
+normalize `@returns` -> `@return`. Commit `CODE_DOCUMENTATION_CONVENTION.md` in the same PR to
+anchor the rule.
 
-P3 : cosmetique, au fil de l'eau. Supprimer les doubles en-tetes `//`+`///` (une source de verite),
-uniformiser l'ilot `/** */` de `physics/`, aligner le placement des `@file`, et remplacer les renvois
-documentaires fragiles (chemins de repertoire perimes, numeros de ligne inter-fichiers) par des
-ancrages symboliques. Ces points n'induisent personne en erreur aujourd'hui mais sont le terreau du
-prochain comment-rot : a traiter quand un fichier est de toute facon ouvert.
+P3: cosmetic, as you go. Remove the double `//`+`///` headers (one source of truth),
+unify the `/** */` island of `physics/`, align the placement of the `@file`, and replace the fragile
+documentation cross-references (stale directory paths, inter-file line numbers) with symbolic
+anchors. These points do not mislead anyone today but are the breeding ground for the
+next comment-rot: to handle when a file is open anyway.
 
-Note transverse : le maillon manquant de tout l'effort reste `CODE_DOCUMENTATION_CONVENTION.md`. Tant
-qu'il n'est pas commite, l'audit "fidelite a la convention projet" s'appuie sur des patterns de fait
-et non sur une norme ecrite ; le committer via ADC-125 est la condition prealable a un linting
-d'en-tetes reproductible.
+Cross-cutting note: the missing link of the whole effort remains `CODE_DOCUMENTATION_CONVENTION.md`. As long
+as it is not committed, the "fidelity to the project convention" audit relies on de facto patterns
+and not on a written standard; committing it via ADC-125 is the prerequisite for a reproducible
+header linting.

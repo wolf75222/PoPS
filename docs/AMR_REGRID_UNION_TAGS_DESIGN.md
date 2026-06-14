@@ -1,470 +1,470 @@
-# Conception : regrid par UNION DES TAGS sur la hierarchie multi-blocs partagee (Phase 2)
+# Design: regrid by TAG UNION on the shared multi-block hierarchy (Phase 2)
 
-DESIGN VALIDE + IMPLEMENTE (capstone Phase 2, C.6). Ce document a d'abord ete une SPEC raisonnee
-(DESIGN-ONLY) ; les decisions D1-D5 ont ete tranchees par l'owner et l'algorithme R0-R8 est
-desormais IMPLEMENTE dans le moteur multi-blocs runtime. Il decrit l'algorithme qui rend ADAPTATIVE
-la hierarchie AMR multi-blocs auparavant FIGEE.
+DESIGN VALIDATED + IMPLEMENTED (Phase 2 capstone, C.6). This document was first a reasoned SPEC
+(DESIGN-ONLY); decisions D1-D5 were settled by the owner and the R0-R8 algorithm is now
+IMPLEMENTED in the runtime multi-block engine. It describes the algorithm that makes the previously
+FROZEN multi-block AMR hierarchy ADAPTIVE.
 
-## ETAT D'AVANCEMENT (implementation Lot C.6)
+## PROGRESS STATUS (Lot C.6 implementation)
 
-LIVRE (moteur multi-blocs runtime AmrRuntime) :
-- [x] (R3) helper `tag_union(span<TagBox>)` (OU cellule a cellule) -> `include/adc/amr/tag_box.hpp`.
-- [x] REFACTOR (section 6) : `amr_regrid_finest` scinde en `regrid_compute_fine_layout`
+DELIVERED (runtime multi-block engine AmrRuntime):
+- [x] (R3) helper `tag_union(span<TagBox>)` (cell-by-cell OR) -> `include/adc/amr/tag_box.hpp`.
+- [x] REFACTOR (section 6): `amr_regrid_finest` split into `regrid_compute_fine_layout`
       (tags -> grow -> all_reduce_or -> berger_rigoutsos -> clamp -> (fb, dmap)) + `regrid_field_on_layout`
-      (re-grille UN champ sur un layout IMPOSE) -> `include/adc/coupling/amr_regrid_coupler.hpp`.
-      `amr_regrid_finest` reste l'enchainement des deux -> chemin mono-bloc BIT-IDENTIQUE (verifie).
-- [x] (R0-R8) `AmrRuntime::regrid()` : (R0) solve_fields, (R1) tags par bloc (predicat D1), (R2) tags
-      phi sur |grad phi| (D4), (R3) union + grow, (R4) all_reduce_or si grossier reparti, (R5) un seul
-      clustering -> layout partage, (R6) prolong/restrict de TOUS les blocs (y compris stride-tenus, D3)
-      avec ghost herite par bloc, (R7) rebuild aux partage + re-cablage, (R8) re-solve (cascade
-      couverture). (V3) `same_layout_or_throw` post-regrid. -> `include/adc/runtime/amr_runtime.hpp`.
-- [x] API d'enregistrement : `set_regrid(every, grow, margin)` (D2 : regrid AVANT le step, cadence
-      macro-pas), `set_block_tag_predicate(b, crit)` (D1), `set_phi_tag_predicate(crit)` (D4).
-- [x] cadence dans `AmrRuntime::step` : regrid tous les `regrid_every` macro-pas, AVANT le step ;
-      `regrid_every == 0` -> regrid jamais appele -> BIT-IDENTIQUE a la hierarchie figee (verifie).
-- [x] DEVERROUILLAGE FACADE (T7) : `python/amr_system.cpp` ne REFUSE plus multi-blocs +
-      `regrid_every > 0`. `build_multi` cable `runtime->set_regrid(cfg.regrid_every)` et pose le predicat
-      de tag PAR BLOC (D1 : densite composante 0 > `refine_threshold`, commun a tous les blocs en v1,
-      comme le mono-bloc AmrCouplerMP). `refine_threshold == 1e30` (defaut) -> aucun tag -> grille
-      inchangee. `regrid_every == 0` -> hierarchie FIGEE, bit-identique a la Phase 1.
-- [x] tests d'acceptation (a-e + T7) : `tests/test_amr_multiblock_regrid_union.cpp` (foncteurs de tag
-      NOMMES, nvcc-safe). (a) hierarchie qui evolue, (b)+(c) union A OU B OU |grad phi|, (d) bloc
-      stride-tenu re-grille, (e) regrid_every==0 bit-identique, (V1) conservation par bloc, (T7) facade
-      AmrSystem ne leve plus + figee bit-identique. Tests de contrat mis a jour (test_amr_system_contract,
-      test_amr_system_twoblock, python/tests/test_amr_multiblock.py : l'ancien refus devient une
-      acceptation).
-- [x] non-regression : 102/102 ctest verts (dont tous les `test_amr_*` et `test_mpi_amr_*` existants).
+      (re-grids ONE field on an IMPOSED layout) -> `include/adc/coupling/amr_regrid_coupler.hpp`.
+      `amr_regrid_finest` stays the chaining of the two -> mono-block path BIT-IDENTICAL (verified).
+- [x] (R0-R8) `AmrRuntime::regrid()`: (R0) solve_fields, (R1) per-block tags (predicate D1), (R2) phi
+      tags on |grad phi| (D4), (R3) union + grow, (R4) all_reduce_or if coarse distributed, (R5) a single
+      clustering -> shared layout, (R6) prolong/restrict of ALL blocks (including stride-held, D3)
+      with ghost inherited per block, (R7) rebuild shared aux + re-wiring, (R8) re-solve (coverage
+      cascade). (V3) `same_layout_or_throw` post-regrid. -> `include/adc/runtime/amr_runtime.hpp`.
+- [x] registration API: `set_regrid(every, grow, margin)` (D2: regrid BEFORE the step, macro-step
+      cadence), `set_block_tag_predicate(b, crit)` (D1), `set_phi_tag_predicate(crit)` (D4).
+- [x] cadence in `AmrRuntime::step`: regrid every `regrid_every` macro-steps, BEFORE the step;
+      `regrid_every == 0` -> regrid never called -> BIT-IDENTICAL to the frozen hierarchy (verified).
+- [x] FACADE UNLOCK (T7): `python/amr_system.cpp` no longer REFUSES multi-block +
+      `regrid_every > 0`. `build_multi` wires `runtime->set_regrid(cfg.regrid_every)` and sets the tag
+      predicate PER BLOCK (D1: density of component 0 > `refine_threshold`, common to all blocks in v1,
+      like the mono-block AmrCouplerMP). `refine_threshold == 1e30` (default) -> no tag -> mesh
+      unchanged. `regrid_every == 0` -> FROZEN hierarchy, bit-identical to Phase 1.
+- [x] acceptance tests (a-e + T7): `tests/test_amr_multiblock_regrid_union.cpp` (NAMED tag functors,
+      nvcc-safe). (a) hierarchy that evolves, (b)+(c) union A OR B OR |grad phi|, (d) stride-held block
+      re-gridded, (e) regrid_every==0 bit-identical, (V1) conservation per block, (T7) facade
+      AmrSystem no longer throws + frozen bit-identical. Contract tests updated (test_amr_system_contract,
+      test_amr_system_twoblock, python/tests/test_amr_multiblock.py: the old refusal becomes an
+      acceptance).
+- [x] non-regression: 102/102 ctest green (including all existing `test_amr_*` and `test_mpi_amr_*`).
 
-HORS SCOPE (conforme aux frontieres) :
-- > 2 niveaux (D5 : v1 a 2 niveaux), critere par espece produisant des grilles distinctes (Phase 3),
-  vrai solve elliptique composite : tous HORS scope, inchanges.
-- predicat de phi (|grad phi|, D4) et predicat utilisateur : exposes au niveau du MOTEUR AmrRuntime
-  (`set_phi_tag_predicate`) et testes la, mais NON cables par defaut depuis la facade Python (la facade
-  v1 pose le predicat de densite par bloc ; phi reste opt-in cote moteur, suivi mecanique si besoin).
+OUT OF SCOPE (conforming to the boundaries):
+- > 2 levels (D5: v1 at 2 levels), per-species criterion producing distinct meshes (Phase 3),
+  true composite elliptic solve: all OUT of scope, unchanged.
+- phi predicate (|grad phi|, D4) and user predicate: exposed at the AmrRuntime ENGINE level
+  (`set_phi_tag_predicate`) and tested there, but NOT wired by default from the Python facade (the v1
+  facade sets the per-block density predicate; phi stays opt-in on the engine side, mechanical to wire if needed).
 
-CADRE DU PROJET. Le runtime multi-blocs livre jusqu'ici (`AmrRuntime`,
-`include/adc/runtime/amr_runtime.hpp`, pendant runtime de `AmrSystemCoupler`,
-`include/adc/coupling/amr_system_coupler.hpp`) est la "Phase 1 multi-bloc a hierarchie FIGEE" :
-N blocs (electrons, ions, neutres, ...) co-localises sur UNE hierarchie AMR partagee, un seul
-Poisson grossier a second membre SOMME, sources couplees cellule a cellule, multirate par bloc
-(substeps / stride / evolve), mais une grille qui NE BOUGE JAMAIS apres la construction. Ni
-`AmrSystemCoupler` ni `AmrRuntime` n'ont de methode `regrid` (verifie : grep `regrid` dans les
-deux fichiers ne rend rien). La facade Python REFUSE donc explicitement la combinaison
-multi-blocs + `regrid_every > 0` (`python/amr_system.cpp:246-251`).
+PROJECT FRAME. The multi-block runtime delivered so far (`AmrRuntime`,
+`include/adc/runtime/amr_runtime.hpp`, runtime counterpart of `AmrSystemCoupler`,
+`include/adc/coupling/amr_system_coupler.hpp`) is "Phase 1 multi-block with FROZEN hierarchy":
+N blocks (electrons, ions, neutrals, ...) co-located on ONE shared AMR hierarchy, a single
+coarse Poisson with SUMMED right-hand side, cell-by-cell coupled sources, multirate per block
+(substeps / stride / evolve), but a mesh that NEVER MOVES after construction. Neither
+`AmrSystemCoupler` nor `AmrRuntime` has a `regrid` method (verified: grep `regrid` in the
+two files returns nothing). The Python facade therefore explicitly REFUSES the combination
+multi-block + `regrid_every > 0` (`python/amr_system.cpp:246-251`).
 
-OBJET DE CE DOCUMENT (Phase 2, la finale du capstone). Specifier le `regrid` par UNION DES TAGS
-qui transforme cette hierarchie figee en hierarchie ADAPTATIVE : un seul critere collectif
-(l'union de tous les blocs), un seul clustering Berger-Rigoutsos, un seul nouveau layout PARTAGE,
-puis prolongation / restriction / reflux PAR BLOC sur ce layout. Ce document DEVERROUILLE
-explicitement multi-blocs + `regrid_every > 0`, aujourd'hui refuse.
+PURPOSE OF THIS DOCUMENT (Phase 2, the capstone finale). Specify the `regrid` by TAG UNION
+that turns this frozen hierarchy into an ADAPTIVE hierarchy: a single collective criterion
+(the union of all blocks), a single Berger-Rigoutsos clustering, a single new SHARED layout,
+then prolongation / restriction / reflux PER BLOCK on this layout. This document UNLOCKS
+explicitly multi-block + `regrid_every > 0`, refused today.
 
-Le modele cible reste celui d'AMReX / FLASH / SAMRAI deja pose par
-`docs/AMR_MULTIBLOCK_DESIGN.md` (section 5) : UNE hierarchie commune raffinee par l'UNION des
-criteres de tous les champs, JAMAIS une hierarchie par espece.
-
-
-## 0. Note d'honnetete liminaire (etat reel du code a ce head)
-
-Le code a ete relu directement. Quatre faits structurent toute la suite.
-
-FAIT 1 : la BRIQUE DE REGRID MONO-BLOC EXISTE et est eprouvee. `amr_regrid_finest`
-(`include/adc/coupling/amr_regrid_coupler.hpp`) fait, pour UN bloc : tag du parent
-(`tag_cells`) -> `grow_tags` (nesting + marge) -> `all_reduce_or_inplace` si grossier reparti
--> `berger_rigoutsos` -> clamp de nesting (margin) -> nouveau `BoxArray` fin + un seul
-`DistributionMapping(nfine, n_ranks())` -> report des donnees fines existantes + interpolation
-depuis le parent ailleurs -> realloc de l'aux du niveau fin (adresse re-cablee). C'est exactement
-le squelette dont la version multi-blocs a besoin ; il manque uniquement l'orchestration "un seul
-layout pour tous les blocs".
-
-FAIT 2 : le REGRID MONO-BLOC EST DEJA CABLE A LA FACADE, mais SEULEMENT pour le chemin mono-bloc.
-`AmrCouplerMP::regrid` (`include/adc/coupling/amr_coupler_mp.hpp:321-325`) delegue a
-`amr_regrid_finest`, et la fermeture `h.step` du chemin mono-bloc l'appelle periodiquement
-(`include/adc/runtime/amr_dsl_block.hpp:101-104` :
-`if (regrid_every > 0 && *step_state % regrid_every == 0) cpl->regrid(crit);`). Le chemin
-multi-blocs, lui, passe par `AmrRuntime` qui n'a aucun `regrid` : sa hierarchie est figee.
-
-FAIT 3 : le REFUS multi-blocs + `regrid_every > 0` EST DEJA EN PLACE, par conception (correction
-owner, `docs/AMR_MULTIBLOCK_DESIGN.md` section 4). Il est cable a `ensure_built` de la facade
-(`python/amr_system.cpp:246-251`) : autoriser silencieusement `regrid_every > 0` en multi-blocs
-ferait PRETENDRE a l'API qu'elle fait de l'AMR dynamique alors que la grille ne bouge jamais
-(illusion dangereuse). LEVER ce refus est precisement ce que CE DESIGN autorise, une fois
-l'algorithme ci-dessous implemente et teste.
-
-FAIT 4 : le GARDE-FOU DE LAYOUT EXISTE et sera le filet de securite naturel de l'apres-regrid.
-`detail::same_layout_or_throw` (`include/adc/coupling/amr_system_coupler.hpp:122-140`, reutilise
-par `AmrRuntime` au ctor, `amr_runtime.hpp:213-218`) compare EXACTEMENT, entre tous les blocs :
-nombre de niveaux, puis par niveau `BoxArray` (boites ET ordre, via `ba.boxes() ==`),
-`DistributionMapping` (rang par boite, via `dm.ranks() ==`) et `dx`/`dy` (au bit pres). C'est la
-PRECONDITION exacte de l'aux partage : tous les blocs vivent sur EXACTEMENT le meme layout par
-niveau. Le regrid doit RE-ETABLIR cet invariant apres avoir bouge la grille (cf. section 4,
-verification (V3)). Le reutiliser comme assertion post-regrid coute une ligne et attrape toute
-incoherence de reconstruction.
-
-CONSEQUENCE. Le travail de Phase 2 n'est PAS d'inventer un regrid, mais d'ORCHESTRER la brique
-mono-bloc existante autour d'un critere COLLECTIF (union des tags) et d'un layout UNIQUE applique
-a TOUS les blocs, puis de lever le refus de la facade et d'ajouter les tests de changement de
-layout. Bonne nouvelle a dire franchement : la cible est plus proche qu'il n'y parait.
+The target model stays that of AMReX / FLASH / SAMRAI already laid out by
+`docs/AMR_MULTIBLOCK_DESIGN.md` (section 5): ONE common hierarchy refined by the UNION of the
+criteria of all fields, NEVER a per-species hierarchy.
 
 
-## 1. Decision d'architecture et pourquoi
+## 0. Preliminary honesty note (real state of the code at this head)
 
-DECISION (verrouillee par l'owner). UNE seule hierarchie AMR PARTAGEE pour TOUS les blocs, JAMAIS
-une hierarchie par espece en v1. Le regrid est pilote par l'UNION COLLECTIVE des tags de tous les
-blocs (tags = electrons OU ions OU neutres OU phi OU utilisateur), calculee a travers tous les
-blocs ET tous les rangs MPI, suivie d'UN SEUL clustering Berger-Rigoutsos qui produit UN SEUL
-nouveau layout partage. Prolongation / restriction / reflux sont appliques PAR BLOC sur ce
-nouveau layout partage : chaque bloc est re-grille sur le layout d'union ; TOUS les blocs evolues
-sont presents sur TOUS les patchs, JAMAIS spatialement absents.
+The code was re-read directly. Four facts structure everything that follows.
 
-POURQUOI un regrid d'UNION sur une hierarchie partagee, et NON un regrid par espece :
+FACT 1: the MONO-BLOCK REGRID BRICK EXISTS and is proven. `amr_regrid_finest`
+(`include/adc/coupling/amr_regrid_coupler.hpp`) does, for ONE block: tag the parent
+(`tag_cells`) -> `grow_tags` (nesting + margin) -> `all_reduce_or_inplace` if coarse distributed
+-> `berger_rigoutsos` -> nesting clamp (margin) -> new fine `BoxArray` + a single
+`DistributionMapping(nfine, n_ranks())` -> carry over existing fine data + interpolation
+from the parent elsewhere -> realloc of the fine-level aux (address re-wired). This is exactly
+the skeleton the multi-block version needs; only the "one single layout for all blocks"
+orchestration is missing.
 
-- AUX PARTAGE ET POISSON UNIQUE. L'aux (phi, grad phi, [B_z, T_e]) est PARTAGE par niveau
-  (`AmrRuntime::aux_`, un `MultiFab` par niveau, `amr_runtime.hpp:233-238` ; idem
-  `AmrSystemCoupler::aux_`). Le pointeur aux de chaque `AmrLevelMP` de chaque bloc pointe vers ce
-  meme `MultiFab` partage. Cela N'A DE SENS que si tous les blocs vivent sur EXACTEMENT le meme
-  layout par niveau. Un regrid qui produirait des layouts par espece casserait immediatement
-  l'aux unique et le Poisson unique : il faudrait interpoler chaque densite vers une grille
-  commune a chaque solve. L'union des tags garantit un layout unique par construction.
+FACT 2: the MONO-BLOCK REGRID IS ALREADY WIRED TO THE FACADE, but ONLY for the mono-block path.
+`AmrCouplerMP::regrid` (`include/adc/coupling/amr_coupler_mp.hpp:321-325`) delegates to
+`amr_regrid_finest`, and the `h.step` closure of the mono-block path calls it periodically
+(`include/adc/runtime/amr_dsl_block.hpp:101-104`:
+`if (regrid_every > 0 && *step_state % regrid_every == 0) cpl->regrid(crit);`). The
+multi-block path, in contrast, goes through `AmrRuntime` which has no `regrid`: its hierarchy is frozen.
 
-- CO-LOCALISATION DES SOURCES COUPLEES. Les sources inter-especes lisent plusieurs especes dans
-  la MEME cellule (`AmrRuntime::coupled_source_step`, `amr_runtime.hpp:372-407` : `kern.in[c]` et
-  `kern.out[t]` indexent le MEME `(i,j)`, meme `fab(li)`, par niveau). Cette lecture cellule-locale
-  exige que tous les blocs partagent le layout. Un regrid d'union le preserve ; un regrid par
-  espece le detruirait.
+FACT 3: the multi-block + `regrid_every > 0` REFUSAL IS ALREADY IN PLACE, by design (owner
+correction, `docs/AMR_MULTIBLOCK_DESIGN.md` section 4). It is wired into `ensure_built` of the facade
+(`python/amr_system.cpp:246-251`): silently allowing `regrid_every > 0` in multi-block
+would make the API CLAIM it does dynamic AMR while the mesh never moves
+(dangerous illusion). LIFTING this refusal is precisely what THIS DESIGN authorizes, once
+the algorithm below is implemented and tested.
 
-- CONSERVATION ET REFLUX PAR BLOC. Le reflux est deja bloc par bloc (chaque bloc a ses propres
-  registres de flux dans `advance_amr`, fermeture `AmrRuntimeBlock::advance`). Le regrid doit
-  conserver la masse de CHAQUE bloc independamment, ce qui suppose que la grille soit la meme pour
-  tous (sinon les interfaces coarse-fine differeraient par bloc et le reflux ne serait plus
-  comparable). Cf. section 3, etape (R5) et verification (V1).
+FACT 4: the LAYOUT GUARD EXISTS and will be the natural safety net of the post-regrid.
+`detail::same_layout_or_throw` (`include/adc/coupling/amr_system_coupler.hpp:122-140`, reused
+by `AmrRuntime` at the ctor, `amr_runtime.hpp:213-218`) compares EXACTLY, across all blocks:
+number of levels, then per level `BoxArray` (boxes AND order, via `ba.boxes() ==`),
+`DistributionMapping` (rank per box, via `dm.ranks() ==`) and `dx`/`dy` (bit for bit). It is the
+exact PRECONDITION of the shared aux: all blocks live on EXACTLY the same layout per
+level. The regrid must RE-ESTABLISH this invariant after moving the mesh (cf. section 4,
+verification (V3)). Reusing it as a post-regrid assertion costs one line and catches any
+reconstruction inconsistency.
 
-- MPI / KOKKOS : un seul plan de distribution. Une hierarchie partagee = un seul
-  `DistributionMapping` par niveau, donc une seule reduction collective des tags et un seul jeu de
-  halos. Le tag-union doit donc etre une COLLECTIVE cross-rang (cf. section 3, etape (R3), et
-  section 6) : tous les rangs doivent partir de la MEME grille de tags pour que Berger-Rigoutsos
-  produise des patchs IDENTIQUES par rang, sinon les `DistributionMapping` divergent et MPI
-  desynchronise. C'est exactement la garde MPI-safe deja presente dans `amr_regrid_finest:59-60`,
-  qu'il faut hisser au niveau de l'union.
-
-CE QU'ON N'OUVRE PAS (et pourquoi le dire). Pas de hierarchie par espece (Phase 3,
-`docs/AMR_MULTIBLOCK_DESIGN.md` section 7). Pas de critere par bloc qui produirait des grilles
-distinctes : en v1 le critere reste l'UNION, un seul layout. Pas d'absence spatiale locale d'un
-bloc sur un patch : un bloc est TOUJOURS present et conservatif partout, meme si son propre
-critere ne l'a pas declenche, parce qu'il est couple aux autres. Ces restrictions sont
-volontaires : elles preservent l'aux unique, le Poisson unique et la conservation cellule a
-cellule des sources, raison d'etre du partage.
+CONSEQUENCE. The Phase 2 work is NOT to invent a regrid, but to ORCHESTRATE the existing
+mono-block brick around a COLLECTIVE criterion (tag union) and a UNIQUE layout applied
+to ALL blocks, then lift the facade refusal and add the layout-change tests. Good
+news to state plainly: the target is closer than it looks.
 
 
-## 2. Perimetre : ce que la Phase 2 livre, et ce qu'elle ne livre pas
+## 1. Architecture decision and why
 
-LIVRE (cible v1 du regrid d'union) :
-- un regrid pilote par l'UNION des tags de tous les blocs + tags de phi + tags utilisateur ;
-- UN clustering, UN nouveau layout partage applique a TOUS les blocs ;
-- prolong / restrict / reflux par bloc sur le nouveau layout ;
-- conservation de masse PAR BLOC a travers le regrid (assertion d'invariant par bloc) ;
-- correction backend (MPI + Kokkos CPU et GPU) : union des tags collective cross-rang, layout
-  consistant sur chaque rang ;
-- la levee du refus facade : multi-blocs + `regrid_every > 0` devient SUPPORTE.
+DECISION (locked by the owner). ONE single SHARED AMR hierarchy for ALL blocks, NEVER
+a per-species hierarchy in v1. The regrid is driven by the COLLECTIVE UNION of the tags of all
+blocks (tags = electrons OR ions OR neutrals OR phi OR user), computed across all
+blocks AND all MPI ranks, followed by A SINGLE Berger-Rigoutsos clustering that produces A SINGLE
+new shared layout. Prolongation / restriction / reflux are applied PER BLOCK on this
+new shared layout: each block is re-gridded on the union layout; ALL evolved blocks
+are present on ALL patches, NEVER spatially absent.
 
-PAS LIVRE (reste conforme aux frontieres de `docs/AMR_MULTIBLOCK_DESIGN.md` section 7) :
-- le regrid MULTI-NIVEAUX (> 2 niveaux). Comme `amr_regrid_finest`, le regrid d'union v1 ne
-  reconstruit QUE le niveau le plus fin (grossier + 1 fin), ce que materialise le layout partage
-  `make_shared_amr_layout` (`amr_dsl_block.hpp`, grossier + 1 patch fin central FIXE). Au-dela de
-  2 niveaux, le regrid multi-niveaux n'existe pas encore meme en mono-bloc : limite a noter, pas a
-  resoudre ici.
-- les CRITERES PAR BLOC (Phase 2 etendue / Phase 3 : chaque bloc declare son critere, l'union
-  reste). En v1 le critere d'union peut etre un critere unique applique a chaque champ ; le
-  raffinement reste l'union.
-- le vrai SOLVE elliptique multi-niveaux (composite). Le Poisson reste "coarse + inject"
-  (`coupler_inject_aux_mb`), comme en Phase 1.
+WHY a UNION regrid on a shared hierarchy, and NOT a per-species regrid:
+
+- SHARED AUX AND SINGLE POISSON. The aux (phi, grad phi, [B_z, T_e]) is SHARED per level
+  (`AmrRuntime::aux_`, one `MultiFab` per level, `amr_runtime.hpp:233-238`; likewise
+  `AmrSystemCoupler::aux_`). The aux pointer of each `AmrLevelMP` of each block points to this
+  same shared `MultiFab`. This ONLY MAKES SENSE if all blocks live on EXACTLY the same
+  layout per level. A regrid that produced per-species layouts would immediately break
+  the single aux and the single Poisson: each density would have to be interpolated onto a mesh
+  common to each solve. The tag union guarantees a single layout by construction.
+
+- CO-LOCATION OF COUPLED SOURCES. The inter-species sources read several species in
+  the SAME cell (`AmrRuntime::coupled_source_step`, `amr_runtime.hpp:372-407`: `kern.in[c]` and
+  `kern.out[t]` index the SAME `(i,j)`, same `fab(li)`, per level). This cell-local read
+  requires all blocks to share the layout. A union regrid preserves it; a per-species
+  regrid would destroy it.
+
+- CONSERVATION AND REFLUX PER BLOCK. The reflux is already block by block (each block has its own
+  flux registers in `advance_amr`, closure `AmrRuntimeBlock::advance`). The regrid must
+  conserve the mass of EACH block independently, which assumes the mesh is the same for
+  all (otherwise the coarse-fine interfaces would differ per block and the reflux would no longer be
+  comparable). Cf. section 3, step (R5) and verification (V1).
+
+- MPI / KOKKOS: a single distribution plan. A shared hierarchy = a single
+  `DistributionMapping` per level, hence a single collective reduction of the tags and a single set of
+  halos. The tag-union must therefore be a cross-rank COLLECTIVE (cf. section 3, step (R3), and
+  section 6): all ranks must start from the SAME tag grid so that Berger-Rigoutsos
+  produces IDENTICAL patches per rank, otherwise the `DistributionMapping` diverge and MPI
+  desynchronizes. This is exactly the MPI-safe guard already present in `amr_regrid_finest:59-60`,
+  which must be hoisted to the union level.
+
+WHAT WE DON'T OPEN (and why say it). No per-species hierarchy (Phase 3,
+`docs/AMR_MULTIBLOCK_DESIGN.md` section 7). No per-block criterion that would produce distinct
+meshes: in v1 the criterion stays the UNION, a single layout. No local spatial absence of a
+block on a patch: a block is ALWAYS present and conservative everywhere, even if its own
+criterion did not trigger it, because it is coupled to the others. These restrictions are
+deliberate: they preserve the single aux, the single Poisson and the cell-by-cell
+conservation of the sources, the reason for the sharing.
 
 
-## 3. Algorithme de regrid d'union, etape par etape
+## 2. Scope: what Phase 2 delivers, and what it does not deliver
 
-Cible : une methode `AmrRuntime::regrid(...)` (et son pendant compile-time
-`AmrSystemCoupler::regrid(...)`), appelee periodiquement par la facade (cf. section 5). On note
-`pk` le niveau parent (grossier, `pk = 0` en v1 a 2 niveaux), `fk = pk + 1` le niveau fin a
-reconstruire, `nlev_` le nombre de niveaux.
+DELIVERED (v1 target of the union regrid):
+- a regrid driven by the UNION of the tags of all blocks + phi tags + user tags;
+- ONE clustering, ONE new shared layout applied to ALL blocks;
+- prolong / restrict / reflux per block on the new layout;
+- mass conservation PER BLOCK across the regrid (per-block invariant assertion);
+- backend correctness (MPI + Kokkos CPU and GPU): cross-rank collective tag union, layout
+  consistent on each rank;
+- the lifting of the facade refusal: multi-block + `regrid_every > 0` becomes SUPPORTED.
 
-(R0) PRECONDITION. Champs a jour : appeler `solve_fields()` une fois (aux par niveau a jour, pour
-le critere de gradient de phi, exactement comme `amr_runtime.hpp:413`). Snapshot des masses par
-bloc `mass(b)` AVANT regrid (pour la verification (V1)).
+NOT DELIVERED (stays conforming to the boundaries of `docs/AMR_MULTIBLOCK_DESIGN.md` section 7):
+- the MULTI-LEVEL regrid (> 2 levels). Like `amr_regrid_finest`, the v1 union regrid only
+  reconstructs the finest level (coarse + 1 fine), which the shared layout
+  `make_shared_amr_layout` materializes (`amr_dsl_block.hpp`, coarse + 1 FIXED central fine patch). Beyond
+  2 levels, the multi-level regrid does not exist yet even in mono-block: a limit to note, not to
+  solve here.
+- the PER-BLOCK CRITERIA (extended Phase 2 / Phase 3: each block declares its criterion, the union
+  stays). In v1 the union criterion can be a single criterion applied to each field; the
+  refinement stays the union.
+- the true multi-level elliptic SOLVE (composite). The Poisson stays "coarse + inject"
+  (`coupler_inject_aux_mb`), as in Phase 1.
 
-(R1) TAGS PAR BLOC SUR LE PARENT. Pour chaque bloc `b`, calculer une `TagBox` sur le niveau parent
+
+## 3. Union regrid algorithm, step by step
+
+Target: a method `AmrRuntime::regrid(...)` (and its compile-time counterpart
+`AmrSystemCoupler::regrid(...)`), called periodically by the facade (cf. section 5). We denote
+`pk` the parent level (coarse, `pk = 0` in v1 at 2 levels), `fk = pk + 1` the fine level to
+reconstruct, `nlev_` the number of levels.
+
+(R0) PRECONDITION. Up-to-date fields: call `solve_fields()` once (aux per level up to date, for
+the phi-gradient criterion, exactly like `amr_runtime.hpp:413`). Snapshot of the masses per
+block `mass(b)` BEFORE regrid (for verification (V1)).
+
+(R1) PER-BLOCK TAGS ON THE PARENT. For each block `b`, compute a `TagBox` on the parent level
 via `tag_cells((*blocks_[b].levels)[pk].U, pdom, crit_b)` (`include/adc/amr/regrid.hpp:36-47`).
-`crit_b` est un predicat `(ConstArray4 a, int i, int j) -> bool` sur la densite du bloc (composante
-0) ou un gradient. En v1 le critere peut etre commun a tous les blocs ; l'UNION ci-dessous reste
-le contrat. `TagBox` est une grille dense de `char` 0/1 sur `pdom` (`tag_box.hpp`).
+`crit_b` is a predicate `(ConstArray4 a, int i, int j) -> bool` on the density of the block (component
+0) or a gradient. In v1 the criterion can be common to all blocks; the UNION below stays
+the contract. `TagBox` is a dense grid of `char` 0/1 on `pdom` (`tag_box.hpp`).
 
-(R2) TAGS DE PHI ET TAGS UTILISATEUR. Calculer une `TagBox` sur le canal aux du parent `aux_[pk]`
-(composante 0 = phi, ou son gradient discret) : `tag_cells(aux_[pk], pdom, crit_phi)`. Ajouter les
-tags utilisateur optionnels (predicat fourni par l'appelant).
+(R2) PHI TAGS AND USER TAGS. Compute a `TagBox` on the parent's aux channel `aux_[pk]`
+(component 0 = phi, or its discrete gradient): `tag_cells(aux_[pk], pdom, crit_phi)`. Add the
+optional user tags (predicate provided by the caller).
 
-(R3) UNION DES TAGS (cellule a cellule). Composer toutes les `TagBox` de (R1)+(R2) en UNE `TagBox`
-d'union par OU logique cellule a cellule :
+(R3) TAG UNION (cell by cell). Compose all the `TagBox` of (R1)+(R2) into ONE union `TagBox`
+by cell-by-cell logical OR:
 
-    tags_union = tags_e OU tags_i OU tags_n OU tags_phi OU tags_user
+    tags_union = tags_e OR tags_i OR tags_n OR tags_phi OR tags_user
 
-Toutes les `TagBox` partagent la meme boite `pdom`, donc l'union est un `|=` par indice. NOUVEAU
-CODE : un helper `tag_union(span<const TagBox>) -> TagBox` (quelques lignes, pas de dependance
-physique). Puis `grow_tags(tags_union, grow, pdom)` (`regrid.hpp:52-64`) pour le nesting et la
-marge.
+All `TagBox` share the same box `pdom`, so the union is a `|=` per index. NEW
+CODE: a helper `tag_union(span<const TagBox>) -> TagBox` (a few lines, no physical
+dependency). Then `grow_tags(tags_union, grow, pdom)` (`regrid.hpp:52-64`) for nesting and the
+margin.
 
-(R4) REDUCTION COLLECTIVE CROSS-RANG (MPI). Si le grossier est REPARTI (`pk == 0 &&
-!replicated_coarse_`), chaque rang n'a tague que ses boites LOCALES (`tag_cells` ne parcourt que
-`mf.local_size()`, `regrid.hpp:38`). Reduire les tags UNIS par `all_reduce_or_inplace` sur le
-buffer `grown.t.data()` (MEME garde MPI-safe que `amr_regrid_finest:59-60`, hissee au niveau de
-l'union) pour que TOUS les rangs partent de la MEME grille de tags. Replique : la grille de tags
-est deja complete sur chaque rang -> `all_reduce_or` serait l'identite (no-op, on l'evite). Cette
-reduction est INDISPENSABLE a la consistance du layout cross-rang : sinon Berger-Rigoutsos
-produirait des patchs differents par rang et les `DistributionMapping` divergeraient.
+(R4) CROSS-RANK COLLECTIVE REDUCTION (MPI). If the coarse is DISTRIBUTED (`pk == 0 &&
+!replicated_coarse_`), each rank has only tagged its LOCAL boxes (`tag_cells` only iterates over
+`mf.local_size()`, `regrid.hpp:38`). Reduce the UNITED tags via `all_reduce_or_inplace` on the
+`grown.t.data()` buffer (SAME MPI-safe guard as `amr_regrid_finest:59-60`, hoisted to the union
+level) so that ALL ranks start from the SAME tag grid. Replicated: the tag grid
+is already complete on each rank -> `all_reduce_or` would be the identity (no-op, we avoid it). This
+reduction is INDISPENSABLE to cross-rank layout consistency: otherwise Berger-Rigoutsos
+would produce different patches per rank and the `DistributionMapping` would diverge.
 
-(R5) CLUSTERING UNIQUE -> LAYOUT PARTAGE. UN SEUL `berger_rigoutsos(grown, ClusterParams{})`
-(`include/adc/amr/cluster.hpp:171-181`) sur les tags d'union reduits. Appliquer le clamp de nesting
-(`margin`) et la conversion coords parent -> coords fin (parent x2) EXACTEMENT comme
-`amr_regrid_finest:62-68`. Construire UN SEUL `BoxArray fb` fin et UN SEUL
-`DistributionMapping((int)fb.size(), n_ranks())`. C'est LA REGLE D'OR : un rebuild, pas un par
-espece. Si `fb` est vide (rien a raffiner), retourner sans toucher la grille (no-op, comme
+(R5) UNIQUE CLUSTERING -> SHARED LAYOUT. A SINGLE `berger_rigoutsos(grown, ClusterParams{})`
+(`include/adc/amr/cluster.hpp:171-181`) on the reduced union tags. Apply the nesting clamp
+(`margin`) and the parent coords -> fine coords conversion (parent x2) EXACTLY like
+`amr_regrid_finest:62-68`. Build A SINGLE fine `BoxArray fb` and A SINGLE
+`DistributionMapping((int)fb.size(), n_ranks())`. This is THE GOLDEN RULE: one rebuild, not one per
+species. If `fb` is empty (nothing to refine), return without touching the mesh (no-op, like
 `amr_regrid_finest:69`).
 
-(R6) PROLONG / RESTRICT COHERENT DE TOUS LES BLOCS. Pour CHAQUE bloc `b`, reconstruire
-`(*blocks_[b].levels)[fk].U` sur le MEME `BoxArray fb` et le MEME `dmap`, avec la largeur de ghost
-HERITEE de `(*blocks_[b].levels)[fk].U.n_grow()` (un bloc MUSCL ordre 2 porte 2 ghosts, cf.
-`amr_regrid_finest:73`) et la largeur de composantes `U.ncomp()` du bloc. Remplir par :
-  (a) INTERP depuis le parent du bloc la ou le nouveau patch n'est pas couvert par l'ancien fin
-      (chemin replique : `mf_find_box` ; chemin reparti : `parallel_copy` vers une grille
-      enfant-coarsen LOCALE puis `device_fence`, EXACTEMENT `amr_regrid_finest:84-112`) ;
-  (b) REPORT des donnees fines existantes la ou l'ancien patch couvre le nouveau (intersection
+(R6) COHERENT PROLONG / RESTRICT OF ALL BLOCKS. For EACH block `b`, reconstruct
+`(*blocks_[b].levels)[fk].U` on the SAME `BoxArray fb` and the SAME `dmap`, with the ghost width
+INHERITED from `(*blocks_[b].levels)[fk].U.n_grow()` (a MUSCL order-2 block carries 2 ghosts, cf.
+`amr_regrid_finest:73`) and the component width `U.ncomp()` of the block. Fill by:
+  (a) INTERP from the block's parent where the new patch is not covered by the old fine
+      (replicated path: `mf_find_box`; distributed path: `parallel_copy` toward a LOCAL
+      child-coarsen grid then `device_fence`, EXACTLY `amr_regrid_finest:84-112`);
+  (b) CARRY OVER existing fine data where the old patch covers the new (intersection
       `nb.intersect(old.box(ol))`, `amr_regrid_finest:113-120`).
-C'est, par bloc, le CORPS de `amr_regrid_finest`, mais sur un layout `fb`/`dmap` IMPOSE de
-l'exterieur (le meme pour tous les blocs) au lieu d'etre recalcule par bloc. Tous les blocs
-utilisent le MEME `fb`/`dmap` : aucun bloc absent d'un patch.
+This is, per block, the BODY of `amr_regrid_finest`, but on an `fb`/`dmap` layout IMPOSED from
+the outside (the same for all blocks) instead of being recomputed per block. All blocks
+use the SAME `fb`/`dmap`: no block absent from a patch.
 
-(R7) REBUILD DE L'AUX PARTAGE + RE-CABLAGE. Reallouer l'aux PARTAGE du niveau fin sur le nouveau
-layout : `aux_[fk] = MultiFab(fb, dmap, aux_ncomp_, 1)` (largeur `aux_ncomp_` = max des aux_comps
-des blocs, `amr_runtime.hpp:226-228`). Re-cabler le pointeur aux de CHAQUE bloc :
-`(*blocks_[b].levels)[fk].aux = &aux_[fk]` (l'adresse `&aux_[fk]` reste stable apres reallocation
-en place du `MultiFab` dans le `std::vector` existant). Re-poser B_z par niveau si un bloc le lit
-(`fill_bz` cote `AmrSystemCoupler` ; l'`AmrRuntime` ne peuple pas B_z multi-bloc en v1, cf.
-`amr_runtime.hpp:222-225`). Puis re-`solve_fields()` pour que phi / grad phi soient coherents avec
-la nouvelle grille.
+(R7) REBUILD OF THE SHARED AUX + RE-WIRING. Reallocate the SHARED aux of the fine level on the new
+layout: `aux_[fk] = MultiFab(fb, dmap, aux_ncomp_, 1)` (width `aux_ncomp_` = max of the aux_comps
+of the blocks, `amr_runtime.hpp:226-228`). Re-wire the aux pointer of EACH block:
+`(*blocks_[b].levels)[fk].aux = &aux_[fk]` (the address `&aux_[fk]` stays stable after in-place
+reallocation of the `MultiFab` in the existing `std::vector`). Re-set B_z per level if a block reads it
+(`fill_bz` on the `AmrSystemCoupler` side; the `AmrRuntime` does not populate multi-block B_z in v1, cf.
+`amr_runtime.hpp:222-225`). Then re-`solve_fields()` so that phi / grad phi are coherent with
+the new mesh.
 
-(R8) RESTAURATION DE L'INVARIANT DE COUVERTURE. Comme apres une source ou un transport, restaurer
-la coherence des cellules grossieres couvertes par une cascade fin -> grossier
-(`mf_average_down_mb`, deja faite dans `solve_fields`, `amr_runtime.hpp:416-419`). Le re-solve de
-(R7) la declenche deja ; le noter explicitement evite qu'un diagnostic de masse (somme du seul
-grossier) compte une valeur grossiere fantome sous le patch.
+(R8) RESTORATION OF THE COVERAGE INVARIANT. As after a source or a transport, restore
+the coherence of the coarse cells covered by a fine -> coarse cascade
+(`mf_average_down_mb`, already done in `solve_fields`, `amr_runtime.hpp:416-419`). The re-solve of
+(R7) already triggers it; noting it explicitly avoids a mass diagnostic (sum of the coarse alone)
+counting a ghost coarse value under the patch.
 
-INVARIANT CENTRAL. Les etapes (R5) et (R6) garantissent que `(*blocks_[b].levels)[fk].U.box_array()
-== fb` et `... .dmap().ranks() == dmap.ranks()` pour TOUT bloc `b`. C'est exactement ce que
-`detail::same_layout_or_throw` verifie ; l'appeler en assertion post-regrid (verification (V3))
-attrape toute reconstruction incoherente.
-
-
-## 4. Verifications post-regrid (ce qu'on assert quand le layout change)
-
-Trois invariants doivent etre verifies a CHAQUE regrid (en debug, et par les tests d'acceptation
-de la section 7) :
-
-(V1) CONSERVATION PAR BLOC. La masse de chaque bloc (composante 0 integree sur le grossier,
-`AmrRuntime::mass(b)`, `amr_runtime.hpp:251`) est conservee a travers le regrid :
-`mass(b)` AVANT == `mass(b)` APRES, a la tolerance du report + interp conservatif. Le report des
-donnees fines + l'interp depuis le parent redistribuent sans creer ni detruire de masse. A tester
-POUR CHAQUE bloc independamment (le reflux et la conservation sont bloc par bloc).
-
-(V2) CONSISTANCE DES GHOSTS. Apres le re-`solve_fields()` de (R7), les ghosts du nouveau niveau fin
-(de `U` par bloc et de l'aux partage) sont coherents : injection coarse->fine de l'aux
-(`coupler_inject_aux_mb`, `amr_runtime.hpp:437-439`) et remplissage des ghosts de transport par
-`advance_amr`. Un patch reconstruit en MUSCL ordre 2 doit porter `n_grow() >= 2` (verification de
-la largeur de ghost heritee, (R6)) sinon la reconstruction lirait hors bornes au pas suivant.
-
-(V3) CONSISTANCE DE LAYOUT COLLECTIVE (cross-bloc ET cross-rang). Appeler
-`detail::same_layout_or_throw` sur la pile de niveaux reconstruite : tous les blocs partagent
-EXACTEMENT le meme `BoxArray` (boites ET ordre), `DistributionMapping` (rang par boite) et `dx`/`dy`
-par niveau. Cross-rang : la reduction collective (R4) garantit que chaque rang a calcule le MEME
-`fb` ; un test MPI np=1/2/4 doit donner des trajectoires bit-identiques (calque de
-`test_mpi_amr_twoblock_parity` cite dans `docs/AMR_MULTIBLOCK_DESIGN.md` section 8).
+CENTRAL INVARIANT. Steps (R5) and (R6) guarantee that `(*blocks_[b].levels)[fk].U.box_array()
+== fb` and `... .dmap().ranks() == dmap.ranks()` for EVERY block `b`. This is exactly what
+`detail::same_layout_or_throw` verifies; calling it as a post-regrid assertion (verification (V3))
+catches any incoherent reconstruction.
 
 
-## 5. Composition avec le chemin courant (cadence, multirate, hierarchie figee)
+## 4. Post-regrid verifications (what we assert when the layout changes)
 
-CADENCE `regrid_every`. La facade porte deja `regrid_every` (`amr_system.hpp:40,63` ; defaut 20).
-Le chemin mono-bloc l'utilise via la fermeture `h.step`
-(`amr_dsl_block.hpp:101-104`). Le chemin multi-blocs doit l'utiliser de facon analogue : appeler
-`runtime->regrid(...)` tous les `regrid_every` macro-pas, AVANT (ou apres) le `step(dt)` du
-macro-pas, selon la convention retenue (cf. decision ouverte (D2)). Le compteur de macro-pas
-existe deja (`AmrRuntime::macro_step_`, `amr_runtime.hpp:583`).
+Three invariants must be verified at EACH regrid (in debug, and by the acceptance tests
+of section 7):
 
-INTERACTION AVEC LE MULTIRATE (substeps / stride). Le regrid agit a la granularite du MACRO-PAS,
-PAS du sous-pas : il se place entre deux macro-pas, jamais au milieu d'une boucle de substeps
-(`amr_runtime.hpp:488-489`) ni entre deux rattrapages stride. Un bloc TENU par son stride (hors fin
-de fenetre, `(macro_step_+1) % stride != 0`, `amr_runtime.hpp:475`) est NEANMOINS re-grille comme
-les autres : il vit sur tous les patchs et contribue au Poisson avec son etat FIGE ; le regrid
-deplace sa grille mais ne l'avance pas. Le critere d'union doit donc tager AUSSI les blocs tenus
-(leur etat fige reste physiquement present). Interaction a tester explicitement (cf. (D3)).
+(V1) CONSERVATION PER BLOCK. The mass of each block (component 0 integrated over the coarse,
+`AmrRuntime::mass(b)`, `amr_runtime.hpp:251`) is conserved across the regrid:
+`mass(b)` BEFORE == `mass(b)` AFTER, to the tolerance of the carry-over + conservative interp. The carry-over of
+the fine data + the interp from the parent redistribute without creating or destroying mass. To test
+FOR EACH block independently (the reflux and the conservation are block by block).
 
-COMPOSITION AVEC LA HIERARCHIE FIGEE (transition de Phase 1 a Phase 2). Tant que `regrid_every ==
-0`, le chemin multi-blocs reste STRICTEMENT celui d'aujourd'hui (hierarchie figee, bit-identique) :
-le regrid n'est jamais appele. Le DEVERROUILLAGE consiste a REMPLACER le refus
-`python/amr_system.cpp:246-251` par l'activation de la cadence : multi-blocs + `regrid_every > 0`
-cesse de throw et cable la fermeture de regrid periodique. Le mono-bloc garde son chemin
-(`AmrCouplerMP`, intouche). Critere de non-regression : un cas multi-blocs avec `regrid_every == 0`
-doit rester BIT-IDENTIQUE a avant cette PR (le regrid d'union ne s'active que pour
+(V2) GHOST CONSISTENCY. After the re-`solve_fields()` of (R7), the ghosts of the new fine level
+(of `U` per block and of the shared aux) are coherent: coarse->fine injection of the aux
+(`coupler_inject_aux_mb`, `amr_runtime.hpp:437-439`) and ghost filling of transport by
+`advance_amr`. A patch reconstructed in MUSCL order 2 must carry `n_grow() >= 2` (verification of
+the inherited ghost width, (R6)) otherwise the reconstruction would read out of bounds at the next step.
+
+(V3) COLLECTIVE LAYOUT CONSISTENCY (cross-block AND cross-rank). Call
+`detail::same_layout_or_throw` on the reconstructed level stack: all blocks share
+EXACTLY the same `BoxArray` (boxes AND order), `DistributionMapping` (rank per box) and `dx`/`dy`
+per level. Cross-rank: the collective reduction (R4) guarantees that each rank computed the SAME
+`fb`; an MPI np=1/2/4 test must give bit-identical trajectories (mirror of
+`test_mpi_amr_twoblock_parity` cited in `docs/AMR_MULTIBLOCK_DESIGN.md` section 8).
+
+
+## 5. Composition with the current path (cadence, multirate, frozen hierarchy)
+
+CADENCE `regrid_every`. The facade already carries `regrid_every` (`amr_system.hpp:40,63`; default 20).
+The mono-block path uses it via the `h.step` closure
+(`amr_dsl_block.hpp:101-104`). The multi-block path must use it analogously: call
+`runtime->regrid(...)` every `regrid_every` macro-steps, BEFORE (or after) the `step(dt)` of the
+macro-step, according to the chosen convention (cf. open decision (D2)). The macro-step counter
+already exists (`AmrRuntime::macro_step_`, `amr_runtime.hpp:583`).
+
+INTERACTION WITH THE MULTIRATE (substeps / stride). The regrid acts at the granularity of the MACRO-STEP,
+NOT the substep: it sits between two macro-steps, never in the middle of a substep loop
+(`amr_runtime.hpp:488-489`) nor between two stride catch-ups. A block HELD by its stride (outside the end
+of the window, `(macro_step_+1) % stride != 0`, `amr_runtime.hpp:475`) is NONETHELESS re-gridded like
+the others: it lives on all patches and contributes to the Poisson with its FROZEN state; the regrid
+moves its mesh but does not advance it. The union criterion must therefore tag ALSO the held
+blocks (their frozen state stays physically present). Interaction to test explicitly (cf. (D3)).
+
+COMPOSITION WITH THE FROZEN HIERARCHY (transition from Phase 1 to Phase 2). As long as `regrid_every ==
+0`, the multi-block path stays STRICTLY that of today (frozen hierarchy, bit-identical):
+the regrid is never called. The UNLOCK consists in REPLACING the refusal
+`python/amr_system.cpp:246-251` by the activation of the cadence: multi-block + `regrid_every > 0`
+stops throwing and wires the periodic regrid closure. The mono-block keeps its path
+(`AmrCouplerMP`, untouched). Non-regression criterion: a multi-block case with `regrid_every == 0`
+must stay BIT-IDENTICAL to before this PR (the union regrid only activates for
 `regrid_every > 0`).
 
 
-## 6. Carte REUTILISATION vs CODE NOUVEAU
+## 6. REUSE vs NEW CODE map
 
-Pour chaque etape de la section 3, ce qui est REUTILISE tel quel vs ce qui est NOUVEAU.
+For each step of section 3, what is REUSED as-is vs what is NEW.
 
-| Etape | Reutilise (existant, verifie) | Nouveau code |
+| Step | Reused (existing, verified) | New code |
 |-------|-------------------------------|--------------|
-| (R0) solve + snapshot | `AmrRuntime::solve_fields` (`amr_runtime.hpp:413`), `mass(b)` (`:251`) | snapshot des masses par bloc |
-| (R1) tags par bloc | `tag_cells` (`amr/regrid.hpp:36`) | predicat `crit_b` par bloc (en v1 commun) |
-| (R2) tags phi / user | `tag_cells` sur `aux_[pk]` | `crit_phi`, predicat utilisateur optionnel |
-| (R3) union des tags | `TagBox` (`amr/tag_box.hpp`), `grow_tags` (`amr/regrid.hpp:52`) | helper `tag_union(span<TagBox>)` (OU cellule a cellule) |
-| (R4) reduction MPI | `all_reduce_or_inplace` (deja dans `amr_regrid_finest:59-60`) | hisser la garde au niveau de l'UNION (sur `tags_union`, pas par bloc) |
-| (R5) clustering unique | `berger_rigoutsos` (`amr/cluster.hpp:171`), `ClusterParams`, clamp nesting (`amr_regrid_coupler.hpp:62-68`) | calculer `fb`/`dmap` UNE fois, partager entre blocs |
-| (R6) prolong/restrict par bloc | CORPS de `amr_regrid_finest:73-121` (interp parent replique/reparti, `parallel_copy`, `device_fence`, report fin) | refactor : `amr_regrid_finest` prend un layout IMPOSE (`fb`/`dmap`) au lieu de le recalculer ; boucle sur les blocs |
-| (R7) rebuild aux + re-cablage | realloc aux + re-cablage (`amr_regrid_coupler.hpp:123-124` ; pattern aux partage `amr_runtime.hpp:233-238`), `coupler_inject_aux_mb`, `fill_bz` (cote `AmrSystemCoupler`) | orchestration : aux PARTAGE (un seul) re-cable vers TOUS les blocs |
-| (R8) cascade couverture | `mf_average_down_mb` (deja dans `solve_fields`) | aucun (declenche par le re-solve) |
-| (V1)-(V3) verifs | `mass(b)`, `same_layout_or_throw` (`amr_system_coupler.hpp:122`) | asserts post-regrid + tests (section 7) |
+| (R0) solve + snapshot | `AmrRuntime::solve_fields` (`amr_runtime.hpp:413`), `mass(b)` (`:251`) | snapshot of the masses per block |
+| (R1) per-block tags | `tag_cells` (`amr/regrid.hpp:36`) | predicate `crit_b` per block (common in v1) |
+| (R2) phi / user tags | `tag_cells` on `aux_[pk]` | `crit_phi`, optional user predicate |
+| (R3) tag union | `TagBox` (`amr/tag_box.hpp`), `grow_tags` (`amr/regrid.hpp:52`) | helper `tag_union(span<TagBox>)` (cell-by-cell OR) |
+| (R4) MPI reduction | `all_reduce_or_inplace` (already in `amr_regrid_finest:59-60`) | hoist the guard to the UNION level (on `tags_union`, not per block) |
+| (R5) unique clustering | `berger_rigoutsos` (`amr/cluster.hpp:171`), `ClusterParams`, nesting clamp (`amr_regrid_coupler.hpp:62-68`) | compute `fb`/`dmap` ONCE, share between blocks |
+| (R6) per-block prolong/restrict | BODY of `amr_regrid_finest:73-121` (replicated/distributed parent interp, `parallel_copy`, `device_fence`, fine carry-over) | refactor: `amr_regrid_finest` takes an IMPOSED layout (`fb`/`dmap`) instead of recomputing it; loop over the blocks |
+| (R7) rebuild aux + re-wiring | aux realloc + re-wiring (`amr_regrid_coupler.hpp:123-124`; shared aux pattern `amr_runtime.hpp:233-238`), `coupler_inject_aux_mb`, `fill_bz` (`AmrSystemCoupler` side) | orchestration: SHARED aux (single one) re-wired toward ALL blocks |
+| (R8) coverage cascade | `mf_average_down_mb` (already in `solve_fields`) | none (triggered by the re-solve) |
+| (V1)-(V3) verifs | `mass(b)`, `same_layout_or_throw` (`amr_system_coupler.hpp:122`) | post-regrid asserts + tests (section 7) |
 
-REFACTOR CLE (le seul changement non trivial). `amr_regrid_finest` calcule AUJOURD'HUI son propre
-`BoxArray`/`dmap` a partir des tags d'un seul bloc (`amr_regrid_coupler.hpp:52-74`). Pour l'union,
-il faut SCINDER cette fonction en deux responsabilites :
-  1. CALCUL DU LAYOUT : tags -> `grow` -> `all_reduce_or` -> `berger_rigoutsos` -> clamp ->
-     `(fb, dmap)`. C'est ce qu'on fait UNE fois sur l'union des tags (R3)-(R5).
-  2. RE-GRILLE D'UN CHAMP SUR UN LAYOUT DONNE : prend `(fb, dmap, ngf, ncomp)` en parametre et
-     reconstruit `U` (interp parent + report fin). C'est le corps `amr_regrid_coupler.hpp:73-124`
-     SANS le calcul du layout. On l'appelle PAR BLOC (R6).
-La fonction mono-bloc actuelle reste l'enchainement des deux (1 puis 2 sur un seul bloc), donc le
-chemin mono-bloc `AmrCouplerMP::regrid` reste BIT-IDENTIQUE (il appelle l'enchainement complet).
-Cette scission est interne a `amr_regrid_coupler.hpp` : pas de nouveau fichier, et le contrat
-mono-bloc est preserve.
+KEY REFACTOR (the only non-trivial change). `amr_regrid_finest` TODAY computes its own
+`BoxArray`/`dmap` from the tags of a single block (`amr_regrid_coupler.hpp:52-74`). For the union,
+this function must be SPLIT into two responsibilities:
+  1. LAYOUT COMPUTATION: tags -> `grow` -> `all_reduce_or` -> `berger_rigoutsos` -> clamp ->
+     `(fb, dmap)`. This is what we do ONCE on the tag union (R3)-(R5).
+  2. RE-GRID A FIELD ON A GIVEN LAYOUT: takes `(fb, dmap, ngf, ncomp)` as a parameter and
+     reconstructs `U` (parent interp + fine carry-over). This is the body `amr_regrid_coupler.hpp:73-124`
+     WITHOUT the layout computation. We call it PER BLOCK (R6).
+The current mono-block function stays the chaining of the two (1 then 2 on a single block), so the
+mono-block path `AmrCouplerMP::regrid` stays BIT-IDENTICAL (it calls the full chaining).
+This split is internal to `amr_regrid_coupler.hpp`: no new file, and the mono-block
+contract is preserved.
 
-NOUVELLE METHODE FACADE-SIDE. `AmrRuntime::regrid(crit, grow, margin, ...)` (et le pendant
-`AmrSystemCoupler::regrid`) orchestre (R0)-(R8). C'est le SEUL point d'entree multi-blocs ajoute.
-Le deverrouillage facade (`python/amr_system.cpp`) remplace le throw par le cablage de la cadence.
-
-
-## 7. Tests d'acceptation
-
-Chaque test laisse l'arbre vert ; les invariants (V1)-(V3) sont verifies a chaque regrid.
-
-(T1) UNION DES TAGS. Deux blocs dont les structures fines sont DISJOINTES spatialement (le bloc A
-tague une region, le bloc B une autre) : le layout d'union COUVRE les deux regions. Verifier que le
-`fb` contient des patchs sur les deux zones (pas seulement celle d'un bloc). Cas degenere : un seul
-bloc tague -> meme `fb` que le regrid mono-bloc de ce bloc (parite avec `amr_regrid_finest`).
-
-(T2) CONSERVATION PAR BLOC (V1). Sur N regrids successifs (un cas diocotron multi-blocs ou la
-structure se deplace), `mass(b)` reste constant a la tolerance POUR CHAQUE bloc. Un bloc dont le
-critere ne se declenche jamais conserve aussi sa masse (il est re-grille comme fond, present
-partout).
-
-(T3) CONSISTANCE DE LAYOUT (V3) + GHOSTS (V2). Apres regrid, `same_layout_or_throw` passe (tous les
-blocs sur le meme `fb`/`dmap`) ; la largeur de ghost du nouveau fin est >= celle requise par le
-schema le plus exigeant (MUSCL ordre 2 -> 2 ghosts). Un pas de transport apres regrid ne lit pas
-hors bornes (sanitizer / assertion).
-
-(T4) MPI np=1/2/4 BIT-IDENTIQUES. Calque de `test_mpi_amr_twoblock_parity`
-(`docs/AMR_MULTIBLOCK_DESIGN.md` section 8) : grossier reparti round-robin, regrid d'union avec
-`all_reduce_or_inplace` sur les tags unis -> `fb` IDENTIQUE par rang, trajectoires np=1/2/4
-bit-identiques apres plusieurs regrids. Le spread cross-rang du `BoxArray` fin est nul.
-
-(T5) KOKKOS Serial / OpenMP vert (multi-blocs + regrid actif). Backend-correct : les boucles de
-reconstruction (R6) et `coupler_inject_aux_mb` passent par les primitives `_mb` deja portees
-device. Un cas GPU (GH200) valide une fois l'instanciation device complete avec regrid
-(`parallel_copy` + `device_fence` du chemin reparti, deja dans `amr_regrid_finest:89-92`).
-
-(T6) NON-REGRESSION FIGEE. Multi-blocs avec `regrid_every == 0` reste BIT-IDENTIQUE a la Phase 1
-(le regrid n'est jamais appele). Mono-bloc reste BIT-IDENTIQUE (chemin `AmrCouplerMP` intouche,
-enchainement complet de `amr_regrid_finest`).
-
-(T7) DEVERROUILLAGE. Multi-blocs + `regrid_every > 0` ne throw PLUS (l'ancien refus
-`python/amr_system.cpp:246-251` est leve) et produit une hierarchie qui BOUGE effectivement entre
-deux pas (le `BoxArray` fin change quand la structure se deplace).
+NEW FACADE-SIDE METHOD. `AmrRuntime::regrid(crit, grow, margin, ...)` (and the counterpart
+`AmrSystemCoupler::regrid`) orchestrates (R0)-(R8). It is the SOLE multi-block entry point added.
+The facade unlock (`python/amr_system.cpp`) replaces the throw by the wiring of the cadence.
 
 
-## 8. Risques et decisions ouvertes (a faire valider par l'owner)
+## 7. Acceptance tests
 
-RISQUES.
+Each test leaves the tree green; the invariants (V1)-(V3) are verified at each regrid.
 
-- (X1) REDUCTION DES TAGS CROSS-RANG. Une union calculee localement puis reduite par
-  `all_reduce_or_inplace` doit l'etre sur la grille de tags COMPLETE (taille `pdom.num_cells()`),
-  pas par fab. Si le grossier est replique (`replicated_coarse_ == true`), la reduction est
-  l'identite et doit etre EVITEE (sinon cout MPI inutile). De-risk : copier la garde exacte de
+(T1) TAG UNION. Two blocks whose fine structures are spatially DISJOINT (block A
+tags one region, block B another): the union layout COVERS both regions. Verify that the
+`fb` contains patches over both zones (not only that of one block). Degenerate case: a single
+block tags -> same `fb` as the mono-block regrid of that block (parity with `amr_regrid_finest`).
+
+(T2) CONSERVATION PER BLOCK (V1). Over N successive regrids (a multi-block diocotron case where the
+structure moves), `mass(b)` stays constant to tolerance FOR EACH block. A block whose
+criterion never triggers also conserves its mass (it is re-gridded as background, present
+everywhere).
+
+(T3) LAYOUT CONSISTENCY (V3) + GHOSTS (V2). After regrid, `same_layout_or_throw` passes (all
+blocks on the same `fb`/`dmap`); the ghost width of the new fine is >= that required by the
+most demanding scheme (MUSCL order 2 -> 2 ghosts). A transport step after regrid does not read
+out of bounds (sanitizer / assertion).
+
+(T4) MPI np=1/2/4 BIT-IDENTICAL. Mirror of `test_mpi_amr_twoblock_parity`
+(`docs/AMR_MULTIBLOCK_DESIGN.md` section 8): coarse distributed round-robin, union regrid with
+`all_reduce_or_inplace` on the united tags -> `fb` IDENTICAL per rank, np=1/2/4 trajectories
+bit-identical after several regrids. The cross-rank spread of the fine `BoxArray` is zero.
+
+(T5) KOKKOS Serial / OpenMP green (multi-block + regrid active). Backend-correct: the
+reconstruction loops (R6) and `coupler_inject_aux_mb` go through the `_mb` primitives already ported
+device-side. A GPU case (GH200) validates once the full device instantiation with regrid is in place
+(`parallel_copy` + `device_fence` of the distributed path, already in `amr_regrid_finest:89-92`).
+
+(T6) FROZEN NON-REGRESSION. Multi-block with `regrid_every == 0` stays BIT-IDENTICAL to Phase 1
+(the regrid is never called). Mono-block stays BIT-IDENTICAL (`AmrCouplerMP` path untouched,
+full chaining of `amr_regrid_finest`).
+
+(T7) UNLOCK. Multi-block + `regrid_every > 0` no longer throws (the old refusal
+`python/amr_system.cpp:246-251` is lifted) and produces a hierarchy that effectively MOVES between
+two steps (the fine `BoxArray` changes when the structure moves).
+
+
+## 8. Risks and open decisions (to be validated by the owner)
+
+RISKS.
+
+- (X1) CROSS-RANK TAG REDUCTION. A union computed locally then reduced by
+  `all_reduce_or_inplace` must be done on the COMPLETE tag grid (size `pdom.num_cells()`),
+  not per fab. If the coarse is replicated (`replicated_coarse_ == true`), the reduction is
+  the identity and must be AVOIDED (otherwise useless MPI cost). De-risk: copy the exact guard of
   `amr_regrid_finest:59-60` (`if (pk == 0 && !coarse_replicated) all_reduce_or_inplace(...)`),
-  hissee sur `tags_union`.
+  hoisted onto `tags_union`.
 
-- (X2) CONSISTANCE DE `fb` PAR RANG. Si deux rangs partent de grilles de tags differentes,
-  `berger_rigoutsos` (deterministe mais data-dependant) produit des `fb` differents -> dmaps
-  incompatibles -> MPI desynchronise (deadlock ou corruption silencieuse). De-risk : la reduction
-  (R4) AVANT le clustering est la condition NECESSAIRE et SUFFISANTE ; test (T4) np=1/2/4
-  bit-identique comme garde permanente.
+- (X2) `fb` CONSISTENCY PER RANK. If two ranks start from different tag grids,
+  `berger_rigoutsos` (deterministic but data-dependent) produces different `fb` -> incompatible
+  dmaps -> MPI desynchronized (deadlock or silent corruption). De-risk: the reduction
+  (R4) BEFORE the clustering is the NECESSARY and SUFFICIENT condition; test (T4) np=1/2/4
+  bit-identical as a permanent guard.
 
-- (X3) MASSE NON CONSERVEE PAR INTERP NON CONSERVATIF. Le report fin est exact ; l'interp depuis le
-  parent doit etre CONSERVATIVE (la moyenne des enfants reconstruits egale le parent). Le chemin
-  actuel de `amr_regrid_finest` fait une injection piecewise-constante (chaque enfant = parent),
-  qui CONSERVE la masse au sens integral (4 enfants x valeur parente x dV_fin = valeur parente x
-  dV_parent). De-risk : test (T2) par bloc ; si un interp d'ordre superieur est introduit plus
-  tard, il devra rester conservatif (limiteur de pente borne).
+- (X3) MASS NOT CONSERVED BY NON-CONSERVATIVE INTERP. The fine carry-over is exact; the interp from the
+  parent must be CONSERVATIVE (the average of the reconstructed children equals the parent). The current
+  path of `amr_regrid_finest` does a piecewise-constant injection (each child = parent),
+  which CONSERVES the mass in the integral sense (4 children x parent value x dV_fine = parent value x
+  dV_parent). De-risk: test (T2) per block; if a higher-order interp is introduced
+  later, it will have to stay conservative (bounded slope limiter).
 
-- (X4) GHOST HERITE TROP ETROIT. Si la largeur de ghost du nouveau patch n'herite pas du
-  `n_grow()` du niveau remplace, un schema ordre 2 lit hors bornes. De-risk : `ngf =
-  (*blocks_[b].levels)[fk].U.n_grow()` PAR BLOC (un bloc Minmod et un bloc VanLeer peuvent differer ;
-  l'aux partage prend la largeur max). Verification (V2) + test (T3).
+- (X4) INHERITED GHOST TOO NARROW. If the ghost width of the new patch does not inherit the
+  `n_grow()` of the replaced level, an order-2 scheme reads out of bounds. De-risk: `ngf =
+  (*blocks_[b].levels)[fk].U.n_grow()` PER BLOCK (a Minmod block and a VanLeer block can differ;
+  the shared aux takes the max width). Verification (V2) + test (T3).
 
-- (X5) DOUBLE COMPTAGE COUVERTURE APRES REGRID. Le re-`solve_fields()` (R7) declenche la cascade
-  `mf_average_down_mb` qui restaure les cellules grossieres couvertes. Si on omet ce re-solve, le
-  diagnostic de masse (somme du seul grossier) compterait une valeur grossiere fantome sous le
-  nouveau patch. De-risk : (R8) explicite ; test (T2) qui somme la masse APRES regrid ET re-solve.
+- (X5) COVERAGE DOUBLE-COUNTING AFTER REGRID. The re-`solve_fields()` (R7) triggers the cascade
+  `mf_average_down_mb` which restores the covered coarse cells. If we omit this re-solve, the
+  mass diagnostic (sum of the coarse alone) would count a ghost coarse value under the
+  new patch. De-risk: (R8) explicit; test (T2) which sums the mass AFTER regrid AND re-solve.
 
-DECISIONS OUVERTES (signature owner requise).
+OPEN DECISIONS (owner signature required).
 
-- (D1) CRITERE D'UNION : COMMUN ou PAR BLOC en v1 ? Le design suppose un critere d'UNION (un seul
-  layout). Reste a trancher si chaque bloc fournit son propre predicat `crit_b` (puis OU des tags)
-  ou si un critere unique est applique a chaque champ. La structure (R1)-(R3) supporte les deux ;
-  la difference est l'API d'enregistrement du critere. RECOMMANDATION : predicat par bloc des v1
-  (l'union des tags est alors naturelle), critere de phi separe.
+- (D1) UNION CRITERION: COMMON or PER BLOCK in v1? The design assumes a UNION criterion (a single
+  layout). It remains to settle whether each block provides its own predicate `crit_b` (then OR of the tags)
+  or whether a single criterion is applied to each field. The structure (R1)-(R3) supports both;
+  the difference is the criterion registration API. RECOMMENDATION: predicate per block from v1
+  (the tag union is then natural), separate phi criterion.
 
-- (D2) CADENCE : regrid AVANT ou APRES le `step(dt)` du macro-pas ? Le mono-bloc regrid au DEBUT du
-  `h.step` (`amr_dsl_block.hpp:104`, avant l'avance). Pour la coherence, le multi-bloc devrait
-  faire de meme (regrid puis step). A confirmer (impacte la phase du compteur `macro_step_`).
+- (D2) CADENCE: regrid BEFORE or AFTER the `step(dt)` of the macro-step? The mono-block regrids at the START of
+  `h.step` (`amr_dsl_block.hpp:104`, before the advance). For coherence, the multi-block should
+  do the same (regrid then step). To confirm (impacts the phase of the `macro_step_` counter).
 
-- (D3) INTERACTION STRIDE / SUBSTEPS. Un bloc TENU par son stride est-il tague et re-grille au
-  macro-pas de regrid meme s'il n'avance pas ? RECOMMANDATION : OUI (son etat fige est present
-  partout et contribue au Poisson ; ne pas le re-griller le laisserait sur l'ancien layout et
-  casserait `same_layout_or_throw`). A valider : le regrid se place HORS des boucles de substeps et
-  des fenetres de stride (granularite macro-pas seulement).
+- (D3) STRIDE / SUBSTEPS INTERACTION. Is a block HELD by its stride tagged and re-gridded at the
+  regrid macro-step even if it does not advance? RECOMMENDATION: YES (its frozen state is present
+  everywhere and contributes to the Poisson; not re-gridding it would leave it on the old layout and
+  break `same_layout_or_throw`). To validate: the regrid sits OUTSIDE the substep loops and
+  the stride windows (macro-step granularity only).
 
-- (D4) TAGS DE PHI : sur phi ou sur grad phi ? Le critere physique du diocotron suit le gradient du
-  potentiel (bord d'anneau). RECOMMANDATION : tag sur |grad phi| (composantes 1,2 de l'aux), pas
-  sur phi (composante 0). A confirmer selon l'observable cible.
+- (D4) PHI TAGS: on phi or on grad phi? The physical criterion of the diocotron follows the gradient of the
+  potential (ring edge). RECOMMENDATION: tag on |grad phi| (components 1,2 of the aux), not
+  on phi (component 0). To confirm according to the target observable.
 
-- (D5) MULTI-NIVEAUX : v1 reste a 2 niveaux (grossier + 1 fin), comme `amr_regrid_finest`.
-  Confirmer que > 2 niveaux reste HORS scope Phase 2 (limite heritee du mono-bloc, cf. section 2).
+- (D5) MULTI-LEVEL: v1 stays at 2 levels (coarse + 1 fine), like `amr_regrid_finest`.
+  Confirm that > 2 levels stays OUT of Phase 2 scope (limit inherited from the mono-block, cf. section 2).
 
 
-## 9. References de code (toutes verifiees a ce head)
+## 9. Code references (all verified at this head)
 
-- `include/adc/coupling/amr_system_coupler.hpp` : engine multi-blocs AMR compile-time (hierarchie
-  FIGEE, PAS de regrid) ; `AmrHierarchyLayout`, `detail::same_layout_or_throw` (garde de layout).
-- `include/adc/runtime/amr_runtime.hpp` : moteur multi-blocs RUNTIME (registre type-erase par nom,
-  aux partage, Poisson somme, sources couplees, multirate) ; PAS de regrid (cible de ce design).
-- `include/adc/coupling/amr_coupler_mp.hpp` : coupleur AMR MONO-BLOC + `regrid` (`:321-325`,
-  delegue a `amr_regrid_finest`) ; chemin mono-bloc INTOUCHE.
-- `include/adc/coupling/amr_regrid_coupler.hpp` : `amr_regrid_finest` (Berger-Rigoutsos, niveau le
-  plus fin) ; brique a SCINDER en "calcul du layout" + "re-grille d'un champ sur un layout donne".
-- `include/adc/amr/tag_box.hpp` : `TagBox` (grille dense de tags 0/1 ; union = OU cellule a cellule).
-- `include/adc/amr/regrid.hpp` : `tag_cells`, `grow_tags`, `regrid_level` (briques generiques).
-- `include/adc/amr/cluster.hpp` : `berger_rigoutsos`, `ClusterParams` (clustering geometrique).
-- `include/adc/amr/amr_hierarchy.hpp` : `AmrHierarchy` (conteneur de niveaux ; note : "le futur AMR
-  multi-blocs conservatif devra partager une hierarchie commune", l. 31-32).
-- `include/adc/runtime/amr_system.hpp` + `python/amr_system.cpp` : facade RUNTIME (`regrid_every` ;
-  REFUS multi-blocs + `regrid_every > 0` a `amr_system.cpp:246-251`, leve par ce design).
-- `include/adc/runtime/amr_dsl_block.hpp` : cablage du regrid mono-bloc (`:101-104`), layout
-  partage 2 niveaux FIGE (`make_shared_amr_layout`) et allocation par bloc (`build_amr_block`).
-- `include/adc/parallel/comm.hpp` : `all_reduce_or_inplace`, `n_ranks`, `my_rank` (collectives MPI).
-- `docs/AMR_MULTIBLOCK_DESIGN.md` : capstone Phase 1 (engine multi-blocs, layout guard, frontiere
-  Phase 2 / Phase 3) ; ce document en est la Phase 2.
+- `include/adc/coupling/amr_system_coupler.hpp`: compile-time multi-block AMR engine (FROZEN
+  hierarchy, NO regrid); `AmrHierarchyLayout`, `detail::same_layout_or_throw` (layout guard).
+- `include/adc/runtime/amr_runtime.hpp`: RUNTIME multi-block engine (type-erased registry by name,
+  shared aux, summed Poisson, coupled sources, multirate); NO regrid (target of this design).
+- `include/adc/coupling/amr_coupler_mp.hpp`: MONO-BLOCK AMR coupler + `regrid` (`:321-325`,
+  delegates to `amr_regrid_finest`); mono-block path UNTOUCHED.
+- `include/adc/coupling/amr_regrid_coupler.hpp`: `amr_regrid_finest` (Berger-Rigoutsos, finest
+  level); brick to SPLIT into "layout computation" + "re-grid a field on a given layout".
+- `include/adc/amr/tag_box.hpp`: `TagBox` (dense grid of tags 0/1; union = cell-by-cell OR).
+- `include/adc/amr/regrid.hpp`: `tag_cells`, `grow_tags`, `regrid_level` (generic bricks).
+- `include/adc/amr/cluster.hpp`: `berger_rigoutsos`, `ClusterParams` (geometric clustering).
+- `include/adc/amr/amr_hierarchy.hpp`: `AmrHierarchy` (level container; note: "the future conservative
+  multi-block AMR will have to share a common hierarchy", l. 31-32).
+- `include/adc/runtime/amr_system.hpp` + `python/amr_system.cpp`: RUNTIME facade (`regrid_every`;
+  multi-block + `regrid_every > 0` REFUSAL at `amr_system.cpp:246-251`, lifted by this design).
+- `include/adc/runtime/amr_dsl_block.hpp`: mono-block regrid wiring (`:101-104`), shared 2-level
+  FROZEN layout (`make_shared_amr_layout`) and per-block allocation (`build_amr_block`).
+- `include/adc/parallel/comm.hpp`: `all_reduce_or_inplace`, `n_ranks`, `my_rank` (MPI collectives).
+- `docs/AMR_MULTIBLOCK_DESIGN.md`: Phase 1 capstone (multi-block engine, layout guard, Phase 2 /
+  Phase 3 boundary); this document is its Phase 2.

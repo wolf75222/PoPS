@@ -1,178 +1,178 @@
-> **STATUT : IMPLÉMENTÉ.** Le multi-bloc AMR est livré (`AmrSystem.multi_block()`/`build_multi()`, AmrCouplerMP, regrid union-tags #195/#199/#205, 7 tests capstone). Ce document décrit un état passé ('façade mono-bloc') ; lire comme historique de conception.
+> **STATUS: IMPLEMENTED.** The AMR multi-block is delivered (`AmrSystem.multi_block()`/`build_multi()`, AmrCouplerMP, regrid union-tags #195/#199/#205, 7 capstone tests). This document describes a past state ('mono-block facade'); read it as design history.
 
-# Conception : AMR multi-blocs sur une hierarchie partagee (capstone multi-especes)
+# Design: AMR multi-block on a shared hierarchy (multi-species capstone)
 
-DESIGN-ONLY. Aucune implementation. Ce document est une SPEC raisonnee, honnete sur ses
-limites, de la migration de l'AMR `adc` d'UN seul bloc explicite vers PLUSIEURS blocs
-(especes) sur la MEME hierarchie AMR partagee, conservativement couplee, calquee sur la
-facon dont la grille mono-niveau porte deja plusieurs blocs. C'est le capstone : electrons,
-ions et neutres sur les MEMES niveaux/patchs, un seul Poisson grossier dont le second membre
-est la SOMME des contributions elliptiques co-localisees, des sources couplees lues cellule a
-cellule, un regrid pilote par l'UNION des criteres.
+DESIGN-ONLY. No implementation. This document is a reasoned SPEC, honest about its
+limits, of the migration of the `adc` AMR from ONE single explicit block toward SEVERAL blocks
+(species) on the SAME shared AMR hierarchy, conservatively coupled, modeled on the
+way the mono-level mesh already carries several blocks. It is the capstone: electrons,
+ions and neutrals on the SAME levels/patches, a single coarse Poisson whose right-hand side
+is the SUM of the co-located elliptic contributions, coupled sources read cell by
+cell, a regrid driven by the UNION of the criteria.
 
-Le modele cible est celui d'AMReX / FLASH / SAMRAI : UNE hierarchie commune portant plusieurs
-champs, raffinement par l'union des criteres, jamais une hierarchie par espece.
+The target model is that of AMReX / FLASH / SAMRAI: ONE common hierarchy carrying several
+fields, refinement by the union of the criteria, never one hierarchy per species.
 
 
-## 0. Note d'honnetete liminaire (etat reel du code a ce head)
+## 0. Preliminary note of honesty (real state of the code at this head)
 
-Le code a ete relu directement. Deux faits structurent toute la suite.
+The code has been read directly. Two facts structure everything that follows.
 
-FAIT 1 : le MOTEUR multi-blocs AMR EXISTE DEJA, au niveau template C++, sous le nom
-`AmrSystemCoupler` (`include/adc/coupling/amr_system_coupler.hpp`). Il porte :
-- une hierarchie PARTAGEE par bloc (`std::vector<std::vector<AmrLevelMP>> block_levels_`).
-  Le ctor verifie au montage la coherence de layout entre blocs. ATTENTION (correction owner) :
-  l'ancien controle ne comparait QUE le NOMBRE de niveaux et le NOMBRE de boites par niveau
-  (`.size()`), PAS la grille exacte. Il NE garantissait donc PAS le meme `BoxArray`. Le premier
-  pas de ce capstone (cf. 2.2, point 1) introduit `detail::same_layout_or_throw` qui compare
-  EXACTEMENT, et qui REMPLACE ce controle de taille au ctor : nombre de niveaux, puis par niveau
-  `BoxArray` (les boites ET leur ordre), `DistributionMapping` (rang par boite) et `dx`/`dy` ;
-- un aux PARTAGE par niveau (`std::vector<MultiFab> aux_`, un par niveau, recable vers chaque
-  bloc, lignes 136-141) ;
-- un Poisson de SYSTEME a second membre SOMME (`rhs_assembler_(system_, mg_.rhs())` dans
-  `solve_fields`, ligne 183 ; l'assembleur est `ChargeDensityRhs`, cf. ci-dessous) ;
-- un schema spatial, des sous-pas et une cadence PAR BLOC (`block_time_treatment_v`,
-  `block_substeps_v`, `block_stride_v`, `step`, lignes 211-250) ;
-- l'IMEX / implicite par callback (`AmrImplicitSourceStepper`, lignes 361-369) ;
-- des sources couplees NIVEAU PAR NIVEAU (`coupled_source_step`, lignes 266-283) ;
-- un B_z partage par niveau (`fill_bz`, lignes 329-340).
+FACT 1: the multi-block AMR ENGINE ALREADY EXISTS, at the C++ template level, under the name
+`AmrSystemCoupler` (`include/adc/coupling/amr_system_coupler.hpp`). It carries:
+- a hierarchy SHARED per block (`std::vector<std::vector<AmrLevelMP>> block_levels_`).
+  The ctor checks at assembly the layout consistency between blocks. CAUTION (owner correction):
+  the old check compared ONLY the NUMBER of levels and the NUMBER of boxes per level
+  (`.size()`), NOT the exact mesh. It therefore did NOT guarantee the same `BoxArray`. The first
+  step of this capstone (cf. 2.2, point 1) introduces `detail::same_layout_or_throw` which compares
+  EXACTLY, and which REPLACES this size check at the ctor: number of levels, then per level
+  `BoxArray` (the boxes AND their order), `DistributionMapping` (rank per box) and `dx`/`dy`;
+- an aux SHARED per level (`std::vector<MultiFab> aux_`, one per level, rewired to each
+  block, lines 136-141);
+- a SYSTEM Poisson with a SUMMED right-hand side (`rhs_assembler_(system_, mg_.rhs())` in
+  `solve_fields`, line 183; the assembler is `ChargeDensityRhs`, cf. below);
+- a spatial scheme, substeps and a cadence PER BLOCK (`block_time_treatment_v`,
+  `block_substeps_v`, `block_stride_v`, `step`, lines 211-250);
+- the IMEX / implicit by callback (`AmrImplicitSourceStepper`, lines 361-369);
+- coupled sources LEVEL BY LEVEL (`coupled_source_step`, lines 266-283);
+- a B_z shared per level (`fill_bz`, lines 329-340).
 
-Ce que l'owner appelle "extraire un moteur multi-blocs" est donc en grande partie un travail
-de RECONNAISSANCE et de COMPLEMENT, pas de creation ex nihilo. C'est une bonne nouvelle a dire
-franchement : la cible Phase 1 est plus proche qu'il n'y parait.
+What the owner calls "extract a multi-block engine" is therefore in large part a work
+of RECOGNITION and COMPLETION, not of creation ex nihilo. It is good news to say
+frankly: the Phase 1 target is closer than it seems.
 
-FAIT 2 : la FACADE RUNTIME (celle exposee a Python) reste MONO-BLOC. `AmrSystem`
-(`include/adc/runtime/amr_system.hpp`, impl `python/amr_system.cpp`) REFUSE explicitement un
-2e bloc :
+FACT 2: the RUNTIME FACADE (the one exposed to Python) remains MONO-BLOCK. `AmrSystem`
+(`include/adc/runtime/amr_system.hpp`, impl `python/amr_system.cpp`) explicitly REFUSES a
+2nd block:
 ```
 // python/amr_system.cpp:129-130
 if (p_->has_block || p_->has_compiled)
   throw std::runtime_error("AmrSystem : un seul bloc (AMR mono-modele)");
 // idem set_compiled_block, ligne 152-153
 ```
-Elle enveloppe un seul `AmrCouplerMP<Model>` (`include/adc/coupling/amr_coupler_mp.hpp`),
-materialise par `detail::dispatch_amr_compiled` / `build_amr_compiled`
-(`include/adc/runtime/amr_dsl_block.hpp`). Le `AmrSystemCoupler` multi-blocs n'est PAS branche
-a cette facade.
+It wraps a single `AmrCouplerMP<Model>` (`include/adc/coupling/amr_coupler_mp.hpp`),
+materialized by `detail::dispatch_amr_compiled` / `build_amr_compiled`
+(`include/adc/runtime/amr_dsl_block.hpp`). The multi-block `AmrSystemCoupler` is NOT wired
+to this facade.
 
-Les DEUX vraies lacunes pour la cible Phase 1 sont donc :
-1. la FACADE RUNTIME multi-blocs et son binding Python. ATTENTION (correction owner) : en Python,
-   RETIRER le throw du 2e bloc (`amr_system.cpp:129-130 / 152-153`) NE SUFFIT PAS. C'est le GROS
-   morceau, le vrai travail de cette etape (et c'est la PROCHAINE PR, PAS le premier pas de layout
-   decrit en 2.2.1). Il faut un REGISTRE TYPE-ERASE PAR NOM qui detient, PAR BLOC : sa pile de
-   niveaux (`std::vector<AmrLevelMP>` sur le layout partage) ET ses fermetures type-erase
-   (`advance` / `rhs` elliptique / `source` / `max_speed` / `mass` / `density`), exactement comme
-   `System::Impl::sp` (la struct `Species`, `python/system.cpp:270-301`) detient les closures par
-   espece pour le chemin runtime mono-niveau. C'est l'ecart deja franchi entre `SystemCoupler`
-   compile-time et la facade runtime `System` : registre type-erase de blocs, `add_block` repete,
-   multirate `stride` / `evolve` / `substeps`, somme du Poisson ;
-2. le REGRID multi-blocs : `AmrSystemCoupler` n'a AUCUNE methode `regrid` (verifie : grep
-   `regrid` dans `amr_system_coupler.hpp` -> rien), contrairement a `AmrCouplerMP::regrid`
-   (lignes 321-325) qui delegue a `amr_regrid_finest`. Sa hierarchie est FIGEE a la
-   construction. Le regrid d'UNION des tags qui reconstruit la grille UNE fois et
-   prolonge/restreint TOUS les blocs est a ECRIRE.
+The TWO real gaps for the Phase 1 target are therefore:
+1. the multi-block RUNTIME FACADE and its Python binding. CAUTION (owner correction): in Python,
+   REMOVING the 2nd-block throw (`amr_system.cpp:129-130 / 152-153`) is NOT ENOUGH. It is the BIG
+   piece, the real work of this step (and it is the NEXT PR, NOT the first layout step
+   described in 2.2.1). It needs a TYPE-ERASED REGISTRY BY NAME that holds, PER BLOCK: its stack of
+   levels (`std::vector<AmrLevelMP>` on the shared layout) AND its type-erased closures
+   (`advance` / elliptic `rhs` / `source` / `max_speed` / `mass` / `density`), exactly like
+   `System::Impl::sp` (the `Species` struct, `python/system.cpp:270-301`) holds the closures per
+   species for the mono-level runtime path. It is the gap already crossed between the compile-time
+   `SystemCoupler` and the runtime facade `System`: type-erased registry of blocks, repeated
+   `add_block`, multirate `stride` / `evolve` / `substeps`, sum of the Poisson;
+2. the multi-block REGRID: `AmrSystemCoupler` has NO `regrid` method (verified: grep
+   `regrid` in `amr_system_coupler.hpp` -> nothing), unlike `AmrCouplerMP::regrid`
+   (lines 321-325) which delegates to `amr_regrid_finest`. Its hierarchy is FROZEN at
+   construction. The UNION-of-tags regrid which rebuilds the mesh ONCE and
+   prolongs/restricts ALL the blocks is to be WRITTEN.
 
-CONTRAINTE DURE (correction owner, point 4). TANT QUE le regrid par UNION des tags (cf. 5) n'est
-pas implemente, la combinaison MULTI-BLOCS (`n_blocks >= 2`) ET `regrid_every > 0` DOIT etre
-EXPLICITEMENT REFUSEE (throw clair) par la facade runtime. La hierarchie d'`AmrSystemCoupler`
-est FIGEE a la construction : autoriser silencieusement `regrid_every > 0` en multi-blocs ferait
-PRETENDRE a l'API qu'elle fait de l'AMR dynamique alors que la grille ne bouge jamais (illusion
-dangereuse). Le mono-bloc garde son regrid (chemin `AmrCouplerMP` intouche). Ce refus est
-implemente dans la PR du REGISTRE RUNTIME (la prochaine, point 3), PAS dans le premier pas de
-layout (2.2.1).
+HARD CONSTRAINT (owner correction, point 4). AS LONG AS the UNION-of-tags regrid (cf. 5) is
+not implemented, the MULTI-BLOCK combination (`n_blocks >= 2`) AND `regrid_every > 0` MUST be
+EXPLICITLY REFUSED (clear throw) by the runtime facade. The hierarchy of `AmrSystemCoupler`
+is FROZEN at construction: silently allowing `regrid_every > 0` in multi-block would make
+the API CLAIM it does dynamic AMR while the mesh never moves (dangerous illusion).
+The mono-block keeps its regrid (`AmrCouplerMP` path untouched). This refusal is
+implemented in the RUNTIME REGISTRY PR (the next one, point 3), NOT in the first layout
+step (2.2.1).
 
-Tout le reste de ce document s'appuie sur ces noms reels.
-
-
-## 1. Decision d'architecture et pourquoi
-
-DECISION. Une seule hierarchie AMR PARTAGEE par toutes les especes. Chaque espece est un
-`AmrBlock` : une pile de niveaux `std::vector<AmrLevelMP>` posee sur les MEMES `BoxArray` par
-niveau et le MEME `DistributionMapping`, plus son modele, son schema spatial, sa politique
-temporelle. TOUS les blocs vivent sur TOUS les patchs : un bloc n'est JAMAIS absent d'un
-patch, meme si son critere ne l'a pas declenche, parce qu'il est couple aux autres. Tous
-partagent le MEME aux par niveau (phi, grad phi, [B_z, T_e]) et le MEME Poisson grossier ; le
-second membre elliptique est la SOMME des contributions par bloc, assemblees a partir de
-champs CO-LOCALISES (memes cellules de la meme hierarchie). Le raffinement est l'UNION des
-criteres par bloc (plus les tags utilisateur et les tags de phi).
-
-POURQUOI une hierarchie partagee, conservativement couplee, et NON une par espece :
-
-- POISSON. Le couplage electrostatique est GLOBAL : `lap phi = Sum_s q_s n_s`. Sur une
-  hierarchie partagee, `solve_fields` lit toutes les densites au MEME index de cellule et
-  ecrit un seul phi. C'est exactement ce que fait deja `AmrSystemCoupler::solve_fields`
-  (lignes 177-206) : `rhs_assembler_(system_, mg_.rhs())` lit tous les blocs sur le grossier,
-  puis une seule injection coarse->fine de l'aux. Des grilles par espece exigeraient
-  d'interpoler chaque densite vers une grille commune A CHAQUE solve, et de redistribuer phi
-  vers chaque grille : un assemblage a partir de grilles NON CONFORMES, ce que la cible
-  proscrit.
-
-- SOURCES COUPLEES. Ionisation / collision / echange thermique lisent les etats de PLUSIEURS
-  especes dans la MEME cellule (cf. la formule cible `d_t n_e = +k n_e n_g`,
-  `d_t n_i = +k n_e n_g`, `d_t n_g = -k n_e n_g`). Sur une hierarchie partagee, la lecture est
-  LOCALE (meme `(i,j)`, meme fab), AUCUNE interpolation inter-especes. C'est le contrat de
-  `AmrSystemCoupler::coupled_source_step` (lignes 266-283) : a chaque niveau k, chaque bloc est
-  temporairement repointe vers son niveau k et la source lit tous les blocs + `aux_[k]`. Des
-  hierarchies disjointes rendraient ce splitting impossible sans projection conservative.
-  ATTENTION (correction owner, point 5) : appliquer la source NIVEAU PAR NIVEAU SUR-COMPTE une
-  source NON nulle dans les cellules grossieres COUVERTES par un niveau fin (appliquee au
-  grossier ET au fin qui sera moyenne-descendu). La conservation de la masse COMPOSITE exige soit
-  une application LEAF-ONLY (cellules non couvertes seulement), soit un `average_down` / sync
-  APRES la source. A tester explicitement (cf. PR (vi) et checklist).
-
-- CONSERVATION ET REFLUX. Le reflux est BLOC PAR BLOC (chaque bloc a ses propres registres de
-  flux, `FluxRegister` dans `amr_reflux_mf.hpp`). La source reste CELLULE-LOCALE, appliquee
-  apres le transport (`mf_apply_source_treatment`, lignes 75-82), JAMAIS dans les registres de
-  reflux : c'est exactement la propriete du Gap2 IMEX-on-AMR deja merge. Une source a
-  contributions exactement opposees dans la MEME cellule conserve la masse de paire a la
-  precision machine, ce qui ne tient que si les especes partagent la cellule.
-
-- MPI / KOKKOS. Une seule hierarchie = un seul plan de distribution
-  (`DistributionMapping(ba.size(), n_ranks())`), un seul jeu de halos, une seule reduction de
-  reflux. Des hierarchies disjointes multiplieraient les plans et les collectives.
-
-CE QU'ON N'OUVRE PAS (et pourquoi le dire). Pas de hierarchie par espece. Pas de niveaux
-differents par espece (invariant verifie au ctor d'`AmrSystemCoupler` par
-`detail::same_layout_or_throw` : meme nombre de niveaux, et par niveau meme `BoxArray` [boites
-ET ordre], meme `DistributionMapping`, meme `dx`/`dy`). Pas d'allocation partielle "patch actif
-pour une seule espece". Ces restrictions sont volontaires : elles preservent l'aux unique et le
-Poisson unique, raison d'etre du partage, et la conservation cellule a cellule des sources.
+All the rest of this document relies on these real names.
 
 
-## 2. Le moteur multi-blocs : API concrete (ce qui existe, ce qui se nomme)
+## 1. Architecture decision and why
 
-L'engine multi-blocs s'articule autour des types CONCRETS suivants. Quand ils existent deja,
-on les cite par leur nom de fichier reel ; quand ils sont a extraire, on indique le code dont
-ils promeuvent un role.
+DECISION. A single AMR hierarchy SHARED by all the species. Each species is an
+`AmrBlock`: a stack of levels `std::vector<AmrLevelMP>` placed on the SAME `BoxArray` per
+level and the SAME `DistributionMapping`, plus its model, its spatial scheme, its temporal
+policy. ALL the blocks live on ALL the patches: a block is NEVER absent from a
+patch, even if its criterion did not trigger it, because it is coupled to the others. They all
+share the SAME aux per level (phi, grad phi, [B_z, T_e]) and the SAME coarse Poisson; the
+elliptic right-hand side is the SUM of the contributions per block, assembled from
+CO-LOCATED fields (same cells of the same hierarchy). The refinement is the UNION of the
+criteria per block (plus the user tags and the phi tags).
 
-### 2.1 La couche de blocs compile-time (existe)
+WHY a shared hierarchy, conservatively coupled, and NOT one per species:
 
-- `EquationBlock<Model, Spatial, Time>` (`include/adc/core/equation_block.hpp`) : porte
-  `Model`, `Spatial` (limiter + flux), `Time` (politique), `MultiFab* state`, `BCRec bc`.
-- `CoupledSystem<Blocks...>` (`include/adc/core/coupled_system.hpp`) : tuple de blocs avec
-  `n_blocks`, `block<I>()`, `for_each_block(f)`. C'est le "registre" compile-time.
+- POISSON. The electrostatic coupling is GLOBAL: `lap phi = Sum_s q_s n_s`. On a
+  shared hierarchy, `solve_fields` reads all the densities at the SAME cell index and
+  writes a single phi. This is exactly what `AmrSystemCoupler::solve_fields` already does
+  (lines 177-206): `rhs_assembler_(system_, mg_.rhs())` reads all the blocks on the coarse,
+  then a single coarse->fine injection of the aux. Per-species meshes would require
+  interpolating each density to a common mesh AT EACH solve, and redistributing phi
+  to each mesh: an assembly from NON-CONFORMING meshes, which the target
+  proscribes.
+
+- COUPLED SOURCES. Ionization / collision / thermal exchange read the states of SEVERAL
+  species in the SAME cell (cf. the target formula `d_t n_e = +k n_e n_g`,
+  `d_t n_i = +k n_e n_g`, `d_t n_g = -k n_e n_g`). On a shared hierarchy, the read is
+  LOCAL (same `(i,j)`, same fab), NO inter-species interpolation. It is the contract of
+  `AmrSystemCoupler::coupled_source_step` (lines 266-283): at each level k, each block is
+  temporarily repointed to its level k and the source reads all the blocks + `aux_[k]`. Disjoint
+  hierarchies would make this splitting impossible without conservative projection.
+  CAUTION (owner correction, point 5): applying the source LEVEL BY LEVEL OVER-COUNTS a
+  NON-zero source in the coarse cells COVERED by a fine level (applied to the
+  coarse AND to the fine that will be averaged down). The conservation of the COMPOSITE mass requires either
+  a LEAF-ONLY application (uncovered cells only), or an `average_down` / sync
+  AFTER the source. To test explicitly (cf. PR (vi) and checklist).
+
+- CONSERVATION AND REFLUX. The reflux is BLOCK BY BLOCK (each block has its own flux
+  registers, `FluxRegister` in `amr_reflux_mf.hpp`). The source stays CELL-LOCAL, applied
+  after the transport (`mf_apply_source_treatment`, lines 75-82), NEVER in the reflux
+  registers: this is exactly the property of the Gap2 IMEX-on-AMR already merged. A source with
+  exactly opposite contributions in the SAME cell conserves the pair mass to machine
+  precision, which only holds if the species share the cell.
+
+- MPI / KOKKOS. A single hierarchy = a single distribution plan
+  (`DistributionMapping(ba.size(), n_ranks())`), a single set of halos, a single reflux
+  reduction. Disjoint hierarchies would multiply the plans and the collectives.
+
+WHAT WE DO NOT OPEN (and why to say it). No per-species hierarchy. No different levels
+per species (invariant verified at the ctor of `AmrSystemCoupler` by
+`detail::same_layout_or_throw`: same number of levels, and per level same `BoxArray` [boxes
+AND order], same `DistributionMapping`, same `dx`/`dy`). No partial allocation "patch active
+for a single species". These restrictions are deliberate: they preserve the unique aux and the
+unique Poisson, the raison d'etre of sharing, and the cell-by-cell conservation of the sources.
+
+
+## 2. The multi-block engine: concrete API (what exists, what is named)
+
+The multi-block engine is built around the following CONCRETE types. When they already exist,
+they are cited by their real file name; when they are to be extracted, the code whose role
+they promote is indicated.
+
+### 2.1 The compile-time block layer (exists)
+
+- `EquationBlock<Model, Spatial, Time>` (`include/adc/core/equation_block.hpp`): carries
+  `Model`, `Spatial` (limiter + flux), `Time` (policy), `MultiFab* state`, `BCRec bc`.
+- `CoupledSystem<Blocks...>` (`include/adc/core/coupled_system.hpp`): tuple of blocks with
+  `n_blocks`, `block<I>()`, `for_each_block(f)`. It is the compile-time "registry".
 - `AmrLevelMP { MultiFab U; const MultiFab* aux; Real dx, dy; }`
-  (`amr_reflux_mf.hpp`, lignes 791-795) : un niveau de la hierarchie multi-patch.
+  (`amr_reflux_mf.hpp`, lines 791-795): a level of the multi-patch hierarchy.
 - `LevelHierarchy { std::vector<AmrLevelMP> levels; Box2D base_dom; Periodicity base_per;
-  bool coarse_replicated; bool recon_prim; bool imex; }` (`amr_reflux_mf.hpp`, lignes
-  1012-1019) : la hierarchie comme OBJET nomme. C'est le grain du futur `AmrHierarchyLayout`
+  bool coarse_replicated; bool recon_prim; bool imex; }` (`amr_reflux_mf.hpp`, lines
+  1012-1019): the hierarchy as a named OBJECT. It is the grain of the future `AmrHierarchyLayout`
   (cf. 2.2).
-- `AmrLevelStack<Level>` (`include/adc/coupling/amr_level_storage.hpp`) : detient la pile de
-  niveaux ET la pile d'aux parallele, avec l'INVARIANT D'ADRESSES (aux dimensionne une fois,
-  `reattach_aux(k)` remplace en place). C'est la brique de stockage qui rend le recablage
-  `levels[k].aux = &aux_[k]` sur.
+- `AmrLevelStack<Level>` (`include/adc/coupling/amr_level_storage.hpp`): holds the stack of
+  levels AND the parallel aux stack, with the ADDRESS INVARIANT (aux dimensioned once,
+  `reattach_aux(k)` replaces in place). It is the storage brick that makes the rewiring
+  `levels[k].aux = &aux_[k]` safe.
 
-### 2.2 `AmrRuntime` : l'engine multi-blocs (a extraire, partiellement present)
+### 2.2 `AmrRuntime`: the multi-block engine (to extract, partially present)
 
-L'engine cible regroupe sept roles. Cinq sont DEJA portes par `AmrSystemCoupler` ; deux sont a
-ajouter. On donne des signatures C++ qui collent aux types existants.
+The target engine groups seven roles. Five are ALREADY carried by `AmrSystemCoupler`; two are to be
+added. C++ signatures that fit the existing types are given.
 
-- `AmrHierarchyLayout` (LIVRE, premier pas) : per-level `BoxArray` + `DistributionMapping` +
-  `dx`/`dy` + nombre de niveaux (`nlev() == ba.size()`). Cette grille etait jusqu'ici implicite :
-  chaque `AmrLevelMP` porte son `U.box_array()` / `U.dmap()` / `dx,dy`, et l'on s'appuyait sur le
-  controle de taille du ctor. Le type EXPLICITE est desormais la source unique de verite sur la
-  grille partagee, et c'est exactement ce que le garde-fou `same_layout_or_throw` compare. SHAPE
-  MINIMALE EFFECTIVEMENT LIVREE (point 2, premier pas) :
+- `AmrHierarchyLayout` (DELIVERED, first step): per-level `BoxArray` + `DistributionMapping` +
+  `dx`/`dy` + number of levels (`nlev() == ba.size()`). This mesh was until now implicit:
+  each `AmrLevelMP` carries its `U.box_array()` / `U.dmap()` / `dx,dy`, and we relied on the
+  size check of the ctor. The EXPLICIT type is now the single source of truth on the
+  shared mesh, and it is exactly what the `same_layout_or_throw` safeguard compares. MINIMAL
+  SHAPE ACTUALLY DELIVERED (point 2, first step):
   ```cpp
   struct AmrHierarchyLayout {
     std::vector<BoxArray>            ba;     // [niveau] : boites ET ordre
@@ -182,21 +182,21 @@ ajouter. On donne des signatures C++ qui collent aux types existants.
     static AmrHierarchyLayout from_levels(const std::vector<AmrLevelMP>&);
   };
   ```
-  PREMIER PAS MINIMAL (correction owner, point 2). On extrait UNIQUEMENT ce dont le garde-fou a
-  besoin (per-level `BoxArray` + `DistributionMapping` + `dx`/`dy` + nombre de niveaux) plus une
-  validation de layout et des tests bit-identiques. On N'introduit PAS la grande abstraction
-  `AmrBlock` ci-dessous si elle DUPLIQUE `EquationBlock` (qui porte deja `Model`/`Spatial`/`Time`/
-  `state`/`bc`) : `base_dom`, `base_per`, `coarse_replicated`, `ref_ratio` restent ailleurs
-  (champs du coupleur, `SubcyclingSchedule(2)` cable en dur) tant qu'ils ne sont pas requis par le
-  garde-fou. Toute extraction plus large est un pas ULTERIEUR, et SEULEMENT si necessaire.
+  MINIMAL FIRST STEP (owner correction, point 2). We extract ONLY what the safeguard needs
+  (per-level `BoxArray` + `DistributionMapping` + `dx`/`dy` + number of levels) plus a
+  layout validation and bit-identical tests. We do NOT introduce the big abstraction
+  `AmrBlock` below if it DUPLICATES `EquationBlock` (which already carries `Model`/`Spatial`/`Time`/
+  `state`/`bc`): `base_dom`, `base_per`, `coarse_replicated`, `ref_ratio` stay elsewhere
+  (coupler fields, `SubcyclingSchedule(2)` hard-wired) as long as they are not required by the
+  safeguard. Any wider extraction is a LATER step, and ONLY if necessary.
 
-- `AmrBlock` (PAS livre au premier pas ; a evaluer plus tard, et SEULEMENT si necessaire) : la
-  pile de niveaux d'UN bloc sur le layout partage, plus son identite numerique. ATTENTION
-  (correction owner, point 2) : ce type DUPLIQUERAIT `EquationBlock<Model,Spatial,Time>` qui porte
-  DEJA `Model`/`Spatial`/`Time`/`state`/`bc`. On NE l'introduit donc PAS au premier pas. Le
-  couplage `(block_levels_[b], system_.block<b>())` reste tel quel : `EquationBlock` est REUTILISE
-  sans re-wrap. Si une extraction plus large s'avere necessaire ulterieurement, elle reutilisera
-  `EquationBlock` plutot que de le redupliquer. Forme INDICATIVE (non livree) :
+- `AmrBlock` (NOT delivered at the first step; to evaluate later, and ONLY if necessary): the
+  stack of levels of ONE block on the shared layout, plus its numerical identity. CAUTION
+  (owner correction, point 2): this type WOULD DUPLICATE `EquationBlock<Model,Spatial,Time>` which
+  ALREADY carries `Model`/`Spatial`/`Time`/`state`/`bc`. We therefore do NOT introduce it at the first step. The
+  coupling `(block_levels_[b], system_.block<b>())` stays as is: `EquationBlock` is REUSED
+  without re-wrap. If a wider extraction proves necessary later, it will reuse
+  `EquationBlock` rather than re-duplicate it. INDICATIVE form (not delivered):
   ```cpp
   template <class Model, class Spatial, class Time>
   struct AmrBlock {
@@ -208,55 +208,55 @@ ajouter. On donne des signatures C++ qui collent aux types existants.
     // Spatial = {Limiter, NumericalFlux} ; Time = politique (treatment/substeps/stride/evolve)
   };
   ```
-  Invariant : `levels[k].U.box_array() == layout.ba[k]` pour tout k (desormais verifie EXACTEMENT
-  au ctor par `same_layout_or_throw`).
+  Invariant: `levels[k].U.box_array() == layout.ba[k]` for all k (now verified EXACTLY
+  at the ctor by `same_layout_or_throw`).
 
-- `AmrBlockRegistry` : la collection de blocs. En compile-time c'est `CoupledSystem<Blocks...>`
-  (deja la). En runtime ce sera un `std::vector<AmrSpecies>` type-erase calque sur
-  `System::Impl::sp` (`python/system.cpp:270-301`, la struct `Species`).
+- `AmrBlockRegistry`: the collection of blocks. At compile-time it is `CoupledSystem<Blocks...>`
+  (already there). At runtime it will be a type-erased `std::vector<AmrSpecies>` modeled on
+  `System::Impl::sp` (`python/system.cpp:270-301`, the `Species` struct).
 
-- `AmrFieldSolver` : le Poisson de SYSTEME a second membre SOMME, co-localise. C'est
-  `solve_fields` d'`AmrSystemCoupler` (lignes 177-206) cable sur `ChargeDensityRhs`
-  (`include/adc/coupling/elliptic_rhs.hpp`, lignes 117-133), qui EXIGE une `SpeciesCharge` par
-  bloc (`species.size() != System::n_blocks` -> erreur), somme `q_s n_s` via
-  `add_scaled_component`, puis injecte l'aux coarse->fine (`coupler_inject_aux_mb`) une seule
-  fois. Co-localise par construction : `rhs` est sur `block_levels_[0][k].U.box_array()`, la
-  grille partagee.
+- `AmrFieldSolver`: the SYSTEM Poisson with a SUMMED right-hand side, co-located. It is
+  `solve_fields` of `AmrSystemCoupler` (lines 177-206) wired on `ChargeDensityRhs`
+  (`include/adc/coupling/elliptic_rhs.hpp`, lines 117-133), which REQUIRES one `SpeciesCharge` per
+  block (`species.size() != System::n_blocks` -> error), sums `q_s n_s` via
+  `add_scaled_component`, then injects the aux coarse->fine (`coupler_inject_aux_mb`) a single
+  time. Co-located by construction: `rhs` is on `block_levels_[0][k].U.box_array()`, the
+  shared mesh.
 
-- `AmrScheduler` : honore `treatment` / `substeps` / `stride` / `evolve` par bloc. C'est
-  `AmrSystemCoupler::step` (lignes 211-250) plus la semantique stride de
-  `advance_subcycled` (`include/adc/numerics/time/scheduler.hpp`) et de `System` runtime
-  (`stride_due`, `python/system.cpp:327`). Le contrat cible (cf. 4.iv) :
-  - `Explicit` -> transport AMR par `advance_amr<Limiter,NumericalFlux>` ;
-  - `IMEX` -> transport explicite (`SourceFreeModel<Model>`) + source implicite par le
-    callback (reutilise `mf_apply_source_treatment` / `backward_euler_source` du Gap2) ;
-  - `Implicit` -> REJET tant qu'un vrai stepper global n'existe pas ;
-  - `evolve=false` -> bloc GELE (non avance, ne contraint pas la CFL) mais TOUJOURS lu par le
-    second membre du Poisson comme fond fixe ;
-  - `substeps=N` -> N sous-pas dans le pas du bloc ; `stride=M` -> tenu M-1 macro-pas puis
-    rattrapage d'un pas effectif M*dt.
+- `AmrScheduler`: honors `treatment` / `substeps` / `stride` / `evolve` per block. It is
+  `AmrSystemCoupler::step` (lines 211-250) plus the stride semantics of
+  `advance_subcycled` (`include/adc/numerics/time/scheduler.hpp`) and of runtime `System`
+  (`stride_due`, `python/system.cpp:327`). The target contract (cf. 4.iv):
+  - `Explicit` -> AMR transport by `advance_amr<Limiter,NumericalFlux>`;
+  - `IMEX` -> explicit transport (`SourceFreeModel<Model>`) + implicit source by the
+    callback (reuses `mf_apply_source_treatment` / `backward_euler_source` of the Gap2);
+  - `Implicit` -> REJECT as long as a true global stepper does not exist;
+  - `evolve=false` -> block FROZEN (not advanced, does not constrain the CFL) but ALWAYS read by the
+    right-hand side of the Poisson as a fixed background;
+  - `substeps=N` -> N substeps in the step of the block; `stride=M` -> held M-1 macro-steps then
+    catch-up of an effective step M*dt.
 
-- `AmrCouplingRegistry` : les sources couplees inter-especes appliquees niveau par niveau,
-  cellule par cellule, contributions exactement opposees. C'est `coupled_source_step`
-  (lignes 266-283) cable sur une `CoupledSource` (concept `CoupledSourceFor`,
-  `include/adc/coupling/coupled_source.hpp`). Le kernel device de production est
-  `CoupledSourceKernel` (`include/adc/coupling/coupled_source_program.hpp`, P5 #131) : POD
-  capture par valeur, ecritures ADDITIVES `out[t](i,j,c) += dt*S_t` ; deux termes opposes
-  (`+k n_e n_g` sur ion, `-k n_e n_g` sur neutre) y conservent la masse de paire exactement.
+- `AmrCouplingRegistry`: the inter-species coupled sources applied level by level,
+  cell by cell, exactly opposite contributions. It is `coupled_source_step`
+  (lines 266-283) wired on a `CoupledSource` (concept `CoupledSourceFor`,
+  `include/adc/coupling/coupled_source.hpp`). The production device kernel is
+  `CoupledSourceKernel` (`include/adc/coupling/coupled_source_program.hpp`, P5 #131): POD
+  captured by value, ADDITIVE writes `out[t](i,j,c) += dt*S_t`; two opposite terms
+  (`+k n_e n_g` on ion, `-k n_e n_g` on neutral) conserve the pair mass exactly there.
 
-- `AmrRegridPolicy` : l'union des tags + rebuild + prolong/restrict de TOUS les blocs. C'est la
-  PIECE MANQUANTE (cf. 5). La brique mono-bloc existe : `amr_regrid_finest`
-  (`include/adc/coupling/amr_regrid_coupler.hpp`) ; il faut un orchestrateur multi-blocs qui
-  tague l'UNION puis reconstruit la grille UNE fois pour tous.
+- `AmrRegridPolicy`: the union of the tags + rebuild + prolong/restrict of ALL the blocks. It is the
+  MISSING PIECE (cf. 5). The mono-block brick exists: `amr_regrid_finest`
+  (`include/adc/coupling/amr_regrid_coupler.hpp`); a multi-block orchestrator is needed that
+  tags the UNION then rebuilds the mesh ONCE for all.
 
-### 2.2.1 Garde-fou de layout `same_layout_or_throw` (LIVRE, premier pas MINIMAL)
+### 2.2.1 Layout safeguard `same_layout_or_throw` (DELIVERED, MINIMAL first step)
 
-Point 1. L'aux etant PARTAGE par niveau, tous les blocs doivent vivre sur EXACTEMENT la meme
-grille a chaque niveau, sinon le recablage `levels[k].aux = &aux_[k]` et l'avance lisent une
-grille incoherente (acces hors borne silencieux). Le controle de ctor ne comparait jusqu'ici que
-le NOMBRE de boites (`.size()`) : insuffisant (deux blocs a 2 boites de FORMES ou d'ORDRES
-differents passaient). Le garde-fou compare desormais EXACTEMENT, et REMPLACE ce controle de
-taille au point ou la coherence de layout est affirmee (ctor) :
+Point 1. The aux being SHARED per level, all the blocks must live on EXACTLY the same
+mesh at each level, otherwise the rewiring `levels[k].aux = &aux_[k]` and the advance read an
+inconsistent mesh (silent out-of-bounds access). The ctor check until now compared only
+the NUMBER of boxes (`.size()`): insufficient (two blocks with 2 boxes of different SHAPES
+or ORDERS passed). The safeguard now compares EXACTLY, and REPLACES this size
+check at the point where the layout consistency is asserted (ctor):
 
 ```cpp
 namespace detail {
@@ -270,401 +270,401 @@ void same_layout_or_throw(const std::vector<std::vector<AmrLevelMP>>& block_leve
 }
 ```
 
-Ce que `same_layout_or_throw` compare EXACTEMENT : (i) le nombre de niveaux ; et par niveau k :
-(ii) le `BoxArray` complet (les boites ET leur ordre, via `ba.boxes() ==`), (iii) le
-`DistributionMapping` (le vecteur de rangs `dm.ranks() ==`), (iv) `dx` et (v) `dy` (au bit pres).
-Egalite via `Box2D::operator==` (defaut) et `std::vector::operator==`. MONO-BLOC strictement
-bit-identique : un seul bloc concorde trivialement avec lui-meme (la boucle sur les autres blocs
-est vide), donc le chemin mono-bloc n'est pas touche (verifie par un test `dmax == 0`).
+What `same_layout_or_throw` compares EXACTLY: (i) the number of levels; and per level k:
+(ii) the complete `BoxArray` (the boxes AND their order, via `ba.boxes() ==`), (iii) the
+`DistributionMapping` (the rank vector `dm.ranks() ==`), (iv) `dx` and (v) `dy` (to the bit).
+Equality via `Box2D::operator==` (default) and `std::vector::operator==`. MONO-BLOCK strictly
+bit-identical: a single block trivially matches itself (the loop over the other blocks
+is empty), so the mono-block path is not touched (verified by a `dmax == 0` test).
 
-PERIMETRE DE CE PREMIER PAS (correction owner, point 2). Il est MINIMAL et se limite a : le type
-explicite `AmrHierarchyLayout`, la validation de layout (`same_layout_or_throw` substituee au
-controle de taille), et des tests bit-identiques. Il n'introduit AUCUNE grande abstraction
-`AmrBlock` qui dupliquerait `EquationBlock`. Le registre runtime (cf. 3) est un pas SEPARE et
-ULTERIEUR, PAS celui-ci.
+PERIMETER OF THIS FIRST STEP (owner correction, point 2). It is MINIMAL and limited to: the type
+explicit `AmrHierarchyLayout`, the layout validation (`same_layout_or_throw` substituted for the
+size check), and bit-identical tests. It introduces NO big abstraction
+`AmrBlock` that would duplicate `EquationBlock`. The runtime registry (cf. 3) is a SEPARATE and
+LATER step, NOT this one.
 
-### 2.3 Pourquoi un engine et non un n-ieme coupleur
+### 2.3 Why an engine and not yet another coupler
 
-`AmrSystemCoupler` melange deja "assemble" (Poisson + aux) et "avance" (step + reflux), comme
-le note son propre commentaire (lignes 371-375 : alias `AmrSystemDriver`). La scission
-Assembler/Driver est faite cote mono-niveau (`SystemAssembler` / `SystemDriver`,
-`include/adc/coupling/system_coupler.hpp`). L'engine `AmrRuntime` formalise la meme separation
-cote AMR, mais c'est un raffinement COSMETIQUE et reporte : la classe unifiee est deja validee.
-La priorite reste la FACADE RUNTIME et le REGRID, pas la jolie scission.
-
-
-## 3. Strategie COMPAT-FACADE : preserver le mono-bloc BIT-IDENTIQUE
-
-L'objectif est que l'`AmrSystem` mono-bloc actuel et ses tests restent BIT-IDENTIQUES. La
-regle est de NE PAS bricoler la classe mono-bloc en place, mais de la transformer en FACADE.
-
-PLAN. `AmrSystem` (runtime) devient une facade au-dessus d'un engine multi-blocs runtime
-`AmrRuntime` ; le chemin mono-bloc passe par un `AmrSingleBlockSystem` qui n'installe qu'UN
-bloc. Concretement :
-
-1. L'`AmrSystem::Impl` actuel construit un `AmrCouplerMP<Model>` unique via
-   `build_amr_compiled`. Le chemin mono-bloc DOIT rester ce chemin tant que le registre ne
-   contient qu'un bloc : `AmrCouplerMP<Model>` et `AmrSystemCoupler<CoupledSystem<Block>, ...>`
-   ne sont PAS le meme code. Pour garantir le bit-identique, la facade route :
-   - `n_blocks == 1` (et pas de couplage inter-especes, pas de bloc gele) -> chemin
-     `AmrCouplerMP<Model>` ACTUEL, INCHANGE -> tests mono-bloc bit-identiques par construction
-     (aucune ligne du chemin n'est touchee) ;
-   - `n_blocks >= 2` OU couplage demande -> nouveau chemin `AmrSystemCoupler`.
-2. Ce routage interne ne change PAS la signature publique d'`AmrSystem`. ATTENTION (correction
-   owner) : retirer le throw du 2e bloc n'est qu'une PETITE partie. Le vrai travail de cette PR
-   est le REGISTRE TYPE-ERASE PAR NOM : `add_block` doit ENREGISTRER, par bloc, sa pile de
-   niveaux PLUS ses fermetures type-erase (`advance` / `rhs` elliptique / `source` / `max_speed`
-   / `mass` / `density`), calque exact de la struct `Species` de `System::Impl::sp`
-   (`python/system.cpp:270-301`). Sans ce registre, deux blocs ne peuvent etre ni avances, ni
-   sommes dans le Poisson, ni couples : le throw n'est que le symptome. Le 1er `add_block` seul,
-   suivi de `step` / `step_cfl` / `mass` / `density` / `potential`, doit produire EXACTEMENT les
-   memes octets qu'aujourd'hui (chemin `AmrCouplerMP` mono-bloc intouche).
-3. Le critere de bit-identite est verifie par un test de NON-REGRESSION : un cas mono-bloc
-   (un des `test_amr_*` ou `test_dsl_production_amr.py`) doit donner `maxdiff == 0` entre la
-   facade refactorisee et le binaire actuel. Tant que ce test n'est pas vert, la PR (i) ne
-   merge pas.
-
-POURQUOI ne pas faire passer le mono-bloc par `AmrSystemCoupler` tout de suite. Parce que
-`AmrSystemCoupler` et `AmrCouplerMP` different sur des details qui CASSENT le bit-identique :
-- `AmrCouplerMP::compute_aux` ecrit grad phi inline (lignes 283-293) et appelle
-  `coupler_eval_rhs` (`f = model.elliptic_rhs(U)`), alors qu'`AmrSystemCoupler::solve_fields`
-  passe par `field_postprocess` + `ChargeDensityRhs` (somme). Les deux sont mathematiquement le
-  meme calcul a une espece de charge `q=1`, mais l'ordre des operations flottantes differe.
-- `AmrCouplerMP` porte le regrid periodique (via la fermeture `h.step`,
-  `amr_dsl_block.hpp:99-104`) ; `AmrSystemCoupler` n'en a pas.
-
-Donc : le mono-bloc reste sur `AmrCouplerMP` (intouche), et `AmrSystemCoupler` recoit le
-regrid + le routage facade. Quand `AmrSystemCoupler` aura prouve un mono-bloc strictement
-bit-identique a `AmrCouplerMP` (test maxdiff=0), on POURRA fusionner les deux chemins ; jusque
-la, ils coexistent. C'est exactement la prudence du commentaire `replicated_coarse`
-d'`AmrCouplerMP` (lignes 234-246) : la suppression d'un chemin est reportee tant que l'autre
-n'est pas strictement superieur.
+`AmrSystemCoupler` already mixes "assemble" (Poisson + aux) and "advance" (step + reflux), as
+its own comment notes (lines 371-375: alias `AmrSystemDriver`). The Assembler/Driver
+split is done on the mono-level side (`SystemAssembler` / `SystemDriver`,
+`include/adc/coupling/system_coupler.hpp`). The `AmrRuntime` engine formalizes the same separation
+on the AMR side, but it is a COSMETIC refinement and deferred: the unified class is already validated.
+The priority remains the RUNTIME FACADE and the REGRID, not the pretty split.
 
 
-## 4. Migration Phase 1 : decoupage en PR ordonnees
+## 3. COMPAT-FACADE strategy: preserve the BIT-IDENTICAL mono-block
 
-Chaque PR liste son WRITE-SET (fichiers), son test d'acceptation, et son verrou de
-bit-identite / conservation. L'ordre est strict : chaque PR laisse l'arbre vert.
+The objective is that the current mono-block `AmrSystem` and its tests stay BIT-IDENTICAL. The
+rule is to NOT tinker with the mono-block class in place, but to transform it into a FACADE.
 
-### PR (i) -- Introduire `AmrBlock` + registre, AUCUN changement de physique
-WRITE-SET :
-- `include/adc/coupling/amr_system_coupler.hpp` : extraire `AmrHierarchyLayout` (promotion des
-  `BoxArray`/`DistributionMapping`/`dx` deja imposes identiques), faire porter a chaque bloc un
-  `AmrBlock` (nom + levels + cons/prim VariableSet). Pas de nouveau comportement.
-- `include/adc/coupling/amr_level_storage.hpp` : reutilise tel quel (invariant d'adresses).
-ACCEPTATION : un cas 1 bloc explicite (`test_amr_compiled_model.cpp` style) tourne identique.
-BIT-IDENTITE : le `step` ne change pas de corps -> `maxdiff == 0` vs head actuel sur ce cas.
+PLAN. `AmrSystem` (runtime) becomes a facade above a runtime multi-block engine
+`AmrRuntime`; the mono-block path goes through an `AmrSingleBlockSystem` which installs only ONE
+block. Concretely:
 
-### PR (ii) -- Deux blocs explicites, schemas DIFFERENTS, sans source couplee
-WRITE-SET :
-- `include/adc/coupling/amr_system_coupler.hpp` : deja N-blocs ; ajouter un test instanciant
-  `CoupledSystem<BlockA, BlockB>` ou `BlockA::Spatial != BlockB::Spatial` (p.ex. Minmod/Rusanov
-  vs VanLeer/HLLC) sur la MEME hierarchie 2 niveaux.
-- `tests/CMakeLists.txt` + `tests/test_amr_system_twoblock.cpp` (nouveau test).
-ACCEPTATION : deux blocs AMR a schemas differents, stables sur N pas ; masse de chaque bloc
-conservee au reflux (`AmrSystemCoupler::mass(b)`, lignes 287-297).
-CONSERVATION : `mass(0)` et `mass(1)` constants a la tolerance de reflux (reflux bloc par bloc,
-chaque bloc a ses `FluxRegister`).
+1. The current `AmrSystem::Impl` builds a unique `AmrCouplerMP<Model>` via
+   `build_amr_compiled`. The mono-block path MUST stay this path as long as the registry
+   contains only one block: `AmrCouplerMP<Model>` and `AmrSystemCoupler<CoupledSystem<Block>, ...>`
+   are NOT the same code. To guarantee the bit-identical, the facade routes:
+   - `n_blocks == 1` (and no inter-species coupling, no frozen block) -> CURRENT
+     `AmrCouplerMP<Model>` path, UNCHANGED -> mono-block tests bit-identical by construction
+     (no line of the path is touched);
+   - `n_blocks >= 2` OR coupling requested -> new `AmrSystemCoupler` path.
+2. This internal routing does NOT change the public signature of `AmrSystem`. CAUTION (correction
+   owner): removing the 2nd-block throw is only a SMALL part. The real work of this PR
+   is the TYPE-ERASED REGISTRY BY NAME: `add_block` must REGISTER, per block, its stack of
+   levels PLUS its type-erased closures (`advance` / elliptic `rhs` / `source` / `max_speed`
+   / `mass` / `density`), an exact copy of the `Species` struct of `System::Impl::sp`
+   (`python/system.cpp:270-301`). Without this registry, two blocks can be neither advanced, nor
+   summed in the Poisson, nor coupled: the throw is only the symptom. The 1st `add_block` alone,
+   followed by `step` / `step_cfl` / `mass` / `density` / `potential`, must produce EXACTLY the
+   same bytes as today (mono-block `AmrCouplerMP` path untouched).
+3. The bit-identity criterion is verified by a NON-REGRESSION test: a mono-block case
+   (one of the `test_amr_*` or `test_dsl_production_amr.py`) must give `maxdiff == 0` between the
+   refactored facade and the current binary. As long as this test is not green, PR (i) does not
+   merge.
 
-### PR (iii) -- Poisson de SYSTEME a second membre SOMME (co-localise)
-WRITE-SET :
-- `include/adc/coupling/elliptic_rhs.hpp` : `ChargeDensityRhs` (deja la) ; verifier la garde
+WHY not to route the mono-block through `AmrSystemCoupler` right away. Because
+`AmrSystemCoupler` and `AmrCouplerMP` differ on details that BREAK the bit-identical:
+- `AmrCouplerMP::compute_aux` writes grad phi inline (lines 283-293) and calls
+  `coupler_eval_rhs` (`f = model.elliptic_rhs(U)`), whereas `AmrSystemCoupler::solve_fields`
+  goes through `field_postprocess` + `ChargeDensityRhs` (sum). The two are mathematically the
+  same computation for one charge species `q=1`, but the order of the floating-point operations differs.
+- `AmrCouplerMP` carries the periodic regrid (via the closure `h.step`,
+  `amr_dsl_block.hpp:99-104`); `AmrSystemCoupler` has none.
+
+So: the mono-block stays on `AmrCouplerMP` (untouched), and `AmrSystemCoupler` receives the
+regrid + the facade routing. When `AmrSystemCoupler` has proven a mono-block strictly
+bit-identical to `AmrCouplerMP` (maxdiff=0 test), the two paths CAN be merged; until
+then, they coexist. It is exactly the prudence of the `replicated_coarse` comment
+of `AmrCouplerMP` (lines 234-246): the removal of one path is deferred as long as the other
+is not strictly superior.
+
+
+## 4. Phase 1 migration: breakdown into ordered PRs
+
+Each PR lists its WRITE-SET (files), its acceptance test, and its bit-identity /
+conservation blocker. The order is strict: each PR leaves the tree green.
+
+### PR (i) -- Introduce `AmrBlock` + registry, NO change of physics
+WRITE-SET:
+- `include/adc/coupling/amr_system_coupler.hpp`: extract `AmrHierarchyLayout` (promotion of the
+  `BoxArray`/`DistributionMapping`/`dx` already imposed identical), have each block carry an
+  `AmrBlock` (name + levels + cons/prim VariableSet). No new behavior.
+- `include/adc/coupling/amr_level_storage.hpp`: reused as is (address invariant).
+ACCEPTANCE: a 1 explicit block case (`test_amr_compiled_model.cpp` style) runs identical.
+BIT-IDENTITY: the `step` does not change body -> `maxdiff == 0` vs current head on this case.
+
+### PR (ii) -- Two explicit blocks, DIFFERENT schemes, without coupled source
+WRITE-SET:
+- `include/adc/coupling/amr_system_coupler.hpp`: already N-blocks; add a test instantiating
+  `CoupledSystem<BlockA, BlockB>` where `BlockA::Spatial != BlockB::Spatial` (e.g. Minmod/Rusanov
+  vs VanLeer/HLLC) on the SAME 2-level hierarchy.
+- `tests/CMakeLists.txt` + `tests/test_amr_system_twoblock.cpp` (new test).
+ACCEPTANCE: two AMR blocks with different schemes, stable over N steps; mass of each block
+conserved at the reflux (`AmrSystemCoupler::mass(b)`, lines 287-297).
+CONSERVATION: `mass(0)` and `mass(1)` constant to the reflux tolerance (reflux block by block,
+each block has its `FluxRegister`).
+
+### PR (iii) -- SYSTEM Poisson with a SUMMED right-hand side (co-located)
+WRITE-SET:
+- `include/adc/coupling/elliptic_rhs.hpp`: `ChargeDensityRhs` (already there); verify the guard
   `species.size() == n_blocks`.
-- test : deux especes de charges opposees, `lap phi = q_i n_i + q_e n_e`, compare a un Poisson
-  mono-niveau assemble main.
-ACCEPTATION : `solve_fields` lit les deux blocs co-localises et resout UN phi. La somme du RHS
-egale (a la precision machine) la somme assemblee separement -> co-localisation prouvee.
-CONSERVATION : la charge totale integree sur le grossier reste la somme attendue.
+- test: two species of opposite charges, `lap phi = q_i n_i + q_e n_e`, compared to a Poisson
+  mono-level assembled by hand.
+ACCEPTANCE: `solve_fields` reads the two co-located blocks and solves ONE phi. The sum of the RHS
+equals (to machine precision) the sum assembled separately -> co-location proven.
+CONSERVATION: the total charge integrated on the coarse stays the expected sum.
 
 ### PR (iv) -- substeps / stride / evolve + step_cfl substeps-aware
-WRITE-SET :
-- `include/adc/coupling/amr_system_coupler.hpp` : ajouter `step_cfl(cfl)` calque sur
-  `System::step_cfl` (`python/system.cpp:1663-1693`), substeps-aware :
-  `dt <= cfl * h * substeps_b / (stride_b * w_b)`, min sur les blocs evolutifs ; un bloc
-  `evolve=false` NE contraint PAS le pas mais reste dans le RHS Poisson.
-- la semantique stride DOIT etre celle de `System` : HOLD-THEN-CATCH-UP, c'est-a-dire
-  `stride_due = (macro_step_ + 1) % stride == 0` (`python/system.cpp:320-327`), PAS celle de
-  `advance_subcycled` (`macro%M==0`, debut de fenetre). CORRECTION owner (point 6) : la condition
-  `macro_step_ % stride` ecrite plus haut dans une version anterieure de ce plan etait FAUSSE ; la
-  cadence correcte est bien `(macro_step_ + 1) % stride == 0` (rattrapage en FIN de fenetre, pas
-  au debut). `AmrSystemCoupler::step` utilise encore aujourd'hui la forme `macro_step_ % stride`
-  (sinon un bloc lent serait "dans le futur" au 1er pas, couplage faux) : son HARMONISATION sur
-  `stride_due` est faite par la PR STRIDE CONCURRENTE (qui possede cette condition), PAS par le
-  premier pas de layout (2.2.1), qui ne touche PAS la cadence pour eviter tout conflit.
-ACCEPTATION : electrons IMEX(substeps=10) + ions Explicit(substeps=1) stable, ET l'inverse ;
-neutres stride=20 toujours lus par la source et le Poisson entre deux rattrapages ;
-`evolve=False` present dans le RHS elliptique comme fond fixe.
-VERROU : `step_cfl` doit respecter A LA FOIS stride et substeps ; un dt calcule sur `w_max`
-seul puis multiplie par M violerait la CFL d'un facteur M (note explicite de `System::step_cfl`).
+WRITE-SET:
+- `include/adc/coupling/amr_system_coupler.hpp`: add `step_cfl(cfl)` modeled on
+  `System::step_cfl` (`python/system.cpp:1663-1693`), substeps-aware:
+  `dt <= cfl * h * substeps_b / (stride_b * w_b)`, min over the evolving blocks; a block
+  `evolve=false` does NOT constrain the step but stays in the Poisson RHS.
+- the stride semantics MUST be that of `System`: HOLD-THEN-CATCH-UP, that is to say
+  `stride_due = (macro_step_ + 1) % stride == 0` (`python/system.cpp:320-327`), NOT that of
+  `advance_subcycled` (`macro%M==0`, start of window). OWNER CORRECTION (point 6): the condition
+  `macro_step_ % stride` written higher up in an earlier version of this plan was WRONG; the
+  correct cadence is indeed `(macro_step_ + 1) % stride == 0` (catch-up at the END of window, not
+  at the start). `AmrSystemCoupler::step` still uses today the form `macro_step_ % stride`
+  (otherwise a slow block would be "in the future" at the 1st step, wrong coupling): its HARMONIZATION on
+  `stride_due` is done by the CONCURRENT STRIDE PR (which owns this condition), NOT by the
+  first layout step (2.2.1), which does NOT touch the cadence to avoid any conflict.
+ACCEPTANCE: electrons IMEX(substeps=10) + ions Explicit(substeps=1) stable, AND the inverse;
+neutrals stride=20 always read by the source and the Poisson between two catch-ups;
+`evolve=False` present in the elliptic RHS as a fixed background.
+BLOCKER: `step_cfl` must respect BOTH stride and substeps; a dt computed on `w_max`
+alone then multiplied by M would violate the CFL by a factor M (explicit note of `System::step_cfl`).
 
-### PR (v) -- DSL production multi-bloc (INSTALL d'un bloc NOMME)
-WRITE-SET :
-- `include/adc/runtime/amr_dsl_block.hpp` : `add_compiled_model(AmrSystem&, name, Model{}, ...)`
-  doit INSTALLER UN BLOC NOMME (et non remplacer le bloc unique) -> symetrique de
+### PR (v) -- Multi-block production DSL (INSTALL of a NAMED block)
+WRITE-SET:
+- `include/adc/runtime/amr_dsl_block.hpp`: `add_compiled_model(AmrSystem&, name, Model{}, ...)`
+  must INSTALL A NAMED BLOCK (and not replace the unique block) -> symmetric of
   `add_compiled_model(System&)` (`include/adc/runtime/dsl_block.hpp` + `block_builder.hpp`).
-- `include/adc/runtime/amr_system.hpp` + `python/amr_system.cpp` : `set_compiled_block` /
-  `add_native_block` cessent de throw au 2e appel (cf. 3) et empilent une spec.
-- `python/bindings.cpp` : exposer le 2e `add_block` (deja branche, `bindings.cpp:239`), valider
-  `dsl.Model(...).compile(target="amr_system", backend="production")` pour DEUX blocs.
-ACCEPTATION : `test_dsl_production_amr.py` etendu a deux blocs compiles natifs sur la meme
-hierarchie ; ABI key verifiee (`adc_native_abi_key`, `amr_system.cpp:218-235`).
-VERROU : foncteurs NOMMES device-clean (cf. `BlockRhsEval`/`AdvanceExplicit` de
-`block_builder.hpp` et `ForEachBlockProbe` de `coupled_system.hpp:59-63`) ; aucune lambda
-etendue cross-TU (recette #64/#97).
+- `include/adc/runtime/amr_system.hpp` + `python/amr_system.cpp`: `set_compiled_block` /
+  `add_native_block` stop throwing at the 2nd call (cf. 3) and stack a spec.
+- `python/bindings.cpp`: expose the 2nd `add_block` (already wired, `bindings.cpp:239`), validate
+  `dsl.Model(...).compile(target="amr_system", backend="production")` for TWO blocks.
+ACCEPTANCE: `test_dsl_production_amr.py` extended to two native compiled blocks on the same
+hierarchy; ABI key verified (`adc_native_abi_key`, `amr_system.cpp:218-235`).
+BLOCKER: NAMED device-clean functors (cf. `BlockRhsEval`/`AdvanceExplicit` of
+`block_builder.hpp` and `ForEachBlockProbe` of `coupled_system.hpp:59-63`); no extended
+lambda cross-TU (harness #64/#97).
 
-### PR (vi) -- Sources couplees sur AMR (meme cellule, contributions opposees)
-WRITE-SET :
-- `include/adc/coupling/amr_system_coupler.hpp` : `coupled_source_step` (deja la) cable sur les
-  couplages nommes (ionisation/collision/echange) ET sur `CoupledSourceKernel`
+### PR (vi) -- Coupled sources on AMR (same cell, opposite contributions)
+WRITE-SET:
+- `include/adc/coupling/amr_system_coupler.hpp`: `coupled_source_step` (already there) wired on the
+  named couplings (ionization/collision/exchange) AND on `CoupledSourceKernel`
   (`coupled_source_program.hpp`).
-- `python/amr_system.cpp` + `bindings.cpp` : `sim.add_coupling(adc.Ionization(...))` calque sur
+- `python/amr_system.cpp` + `bindings.cpp`: `sim.add_coupling(adc.Ionization(...))` modeled on
   `System::add_ionization` / `add_coupled_source` (`include/adc/runtime/system.hpp:266-329`).
-ACCEPTATION : ionisation `+k n_e n_g` / `-k n_e n_g` sur 3 blocs co-localises, niveau par
-niveau, sur tous les patchs.
-PIEGE DU DOUBLE COMPTAGE (correction owner, point 5). `coupled_source_step` applique la source
-NIVEAU PAR NIVEAU : une cellule grossiere COUVERTE par un niveau fin recoit la source DEUX FOIS
-(une fois sur le grossier, une fois via la cellule fine qui sera ensuite moyennee-descendue dans
-ce meme volume grossier). Pour une source NON nulle (creation/destruction de masse), cela
-SUR-COMPTE le terme dans les cellules couvertes et casse la conservation. CORRECTIONS valides :
-(a) application LEAF-ONLY (n'appliquer la source qu'aux cellules NON couvertes par un niveau plus
-fin, via le `CoverageMask`), OU (b) `average_down` / sync APRES la source pour que la valeur fine
-ecrase la valeur grossiere sur-comptee dans les cellules couvertes. L'invariant de paire
-(`n_i + n_g`) reste exact PAR CELLULE (termes opposes) meme en cas de double comptage ; ce qui se
-casse, c'est la MASSE TOTALE integree. La conservation par cellule ne suffit donc PAS comme test.
-ACCEPTATION (test OBLIGATOIRE, point 5) : un test de CONSERVATION COMPOSITE AMR sur une source
-NON nulle, ou la masse TOTALE integree sur la hierarchie composite (grossier non couvert + fin
-couvrant) est conservee a la tolerance ; un cas a 2 niveaux ou la zone source CHEVAUCHE
-l'interface coarse-fine, pour exercer specifiquement le double comptage.
-CONSERVATION : invariant de creation de paire et de masse lourde a la PRECISION MACHINE
-(`n_i + n_g` constant) PAR CELLULE ; ET masse COMPOSITE (integrale sur la hierarchie, leaf-only
-ou apres sync) conservee a la tolerance, pour ecarter le double comptage des cellules couvertes.
+ACCEPTANCE: ionization `+k n_e n_g` / `-k n_e n_g` on 3 co-located blocks, level by
+level, on all the patches.
+DOUBLE-COUNTING PITFALL (owner correction, point 5). `coupled_source_step` applies the source
+LEVEL BY LEVEL: a coarse cell COVERED by a fine level receives the source TWICE
+(once on the coarse, once via the fine cell that will then be averaged down into
+this same coarse volume). For a NON-zero source (creation/destruction of mass), this
+OVER-COUNTS the term in the covered cells and breaks the conservation. Valid CORRECTIONS:
+(a) LEAF-ONLY application (apply the source only to cells NOT covered by a finer
+level, via the `CoverageMask`), OR (b) `average_down` / sync AFTER the source so that the fine value
+overwrites the over-counted coarse value in the covered cells. The pair invariant
+(`n_i + n_g`) stays exact PER CELL (opposite terms) even in case of double counting; what
+breaks is the integrated TOTAL MASS. Per-cell conservation is therefore NOT sufficient as a test.
+ACCEPTANCE (REQUIRED test, point 5): a COMPOSITE AMR CONSERVATION test on a NON-zero source,
+where the integrated TOTAL mass on the composite hierarchy (uncovered coarse + covering fine)
+is conserved to the tolerance; a 2-level case where the source zone OVERLAPS
+the coarse-fine interface, to exercise specifically the double counting.
+CONSERVATION: pair-creation invariant and heavy mass to MACHINE PRECISION
+(`n_i + n_g` constant) PER CELL; AND COMPOSITE mass (integral on the hierarchy, leaf-only
+or after sync) conserved to the tolerance, to rule out the double counting of the covered cells.
 
-### PR (vii) -- IMEX local sur AMR
-WRITE-SET :
-- `include/adc/coupling/amr_system_coupler.hpp` : le callback IMEX reutilise
+### PR (vii) -- Local IMEX on AMR
+WRITE-SET:
+- `include/adc/coupling/amr_system_coupler.hpp`: the IMEX callback reuses
   `mf_apply_source_treatment(m, U, aux, dt, /*imex=*/true)` (`amr_reflux_mf.hpp:75-82`) ->
-  `backward_euler_source` (foncteur device nomme `BackwardEulerSourceKernel`). La source reste
-  cellule-locale, snapshotee, HORS reflux.
-ACCEPTATION : un bloc IMEX raide sur AMR stable la ou l'explicite diverge ; masse conservee.
-CONSERVATION : le split implicite ne touche pas les registres de reflux (source hors flux) ->
-conservation aux interfaces coarse-fine intacte (propriete Gap2).
+  `backward_euler_source` (named device functor `BackwardEulerSourceKernel`). The source stays
+  cell-local, snapshotted, OUTSIDE reflux.
+ACCEPTANCE: a stiff IMEX block on AMR stable where the explicit diverges; mass conserved.
+CONSERVATION: the implicit split does not touch the reflux registers (source out of flux) ->
+conservation at the coarse-fine interfaces intact (Gap2 property).
 
-### PR (viii) -- SEULEMENT ensuite : Schur / vrai implicite global / repro papier
-WRITE-SET : hors scope Phase 1. S'appuie sur `CondensedSchurSourceStepper`
-(`include/adc/coupling/condensed_schur_source_stepper.hpp`) et `schur_condensation.hpp`. Le
-`treatment == Implicit` reste REJETE par l'`AmrScheduler` jusqu'a ce qu'un vrai stepper global
-existe.
+### PR (viii) -- ONLY then: Schur / true global implicit / paper repro
+WRITE-SET: out of scope for Phase 1. Relies on `CondensedSchurSourceStepper`
+(`include/adc/coupling/condensed_schur_source_stepper.hpp`) and `schur_condensation.hpp`. The
+`treatment == Implicit` stays REJECTED by the `AmrScheduler` until a true global stepper
+exists.
 
 
-## 5. Algorithme de regrid (union des tags, rebuild une fois, prolong/restrict de TOUS les blocs)
+## 5. Regrid algorithm (union of the tags, rebuild once, prolong/restrict of ALL the blocks)
 
-CONTRAINTE DURE PREALABLE (correction owner, point 4). Tant que l'algorithme ci-dessous n'est
-pas implemente, `n_blocks >= 2` ET `regrid_every > 0` est EXPLICITEMENT REFUSE par la facade
-(throw clair). La hierarchie multi-blocs est FIGEE a la construction ; accepter `regrid_every`
-en multi-blocs ferait croire a un AMR dynamique inexistant. Le refus est cable dans la PR du
-registre runtime (point 3), pas dans le premier pas de layout.
+PRELIMINARY HARD CONSTRAINT (owner correction, point 4). As long as the algorithm below is
+not implemented, `n_blocks >= 2` AND `regrid_every > 0` is EXPLICITLY REFUSED by the facade
+(clear throw). The multi-block hierarchy is FROZEN at construction; accepting `regrid_every`
+in multi-block would make one believe in a nonexistent dynamic AMR. The refusal is wired in the PR of the
+runtime registry (point 3), not in the first layout step.
 
-C'est la piece manquante centrale. La brique mono-bloc est `amr_regrid_finest`
-(`include/adc/coupling/amr_regrid_coupler.hpp`) : tag du parent -> `grow_tags` -> `all_reduce_or`
-si grossier reparti -> `berger_rigoutsos` -> clamp nesting -> nouveau `BoxArray` fin ->
-report des donnees fines + interp parent -> realloc aux. Elle opere sur UN bloc.
+It is the central missing piece. The mono-block brick is `amr_regrid_finest`
+(`include/adc/coupling/amr_regrid_coupler.hpp`): tag of the parent -> `grow_tags` -> `all_reduce_or`
+if coarse distributed -> `berger_rigoutsos` -> clamp nesting -> new fine `BoxArray` ->
+carry-over of the fine data + parent interp -> realloc aux. It operates on ONE block.
 
-ALGORITHME MULTI-BLOCS (a ecrire, `AmrRegridPolicy` / `AmrSystemCoupler::regrid`) :
+MULTI-BLOCK ALGORITHM (to write, `AmrRegridPolicy` / `AmrSystemCoupler::regrid`):
 
-1. `solve_fields()` une fois (aux a jour, pour le critere de gradient de phi).
-2. UNION DES TAGS sur le niveau parent : pour chaque bloc, `tag_cells(block.levels[pk].U,
-   pdom, crit_block)` (`include/adc/amr/regrid.hpp:30-42`), puis OU logique des `TagBox` :
+1. `solve_fields()` once (aux up to date, for the phi gradient criterion).
+2. UNION OF THE TAGS on the parent level: for each block, `tag_cells(block.levels[pk].U,
+   pdom, crit_block)` (`include/adc/amr/regrid.hpp:30-42`), then logical OR of the `TagBox`:
    ```
    tags = tags_electrons OR tags_ions OR tags_neutrals OR tags_phi OR tags_user
    ```
-   `tags_phi` se tague sur `aux_[pk]` (composante 0 = phi, ou son gradient). `TagBox` est une
-   grille de char ; l'OU est un `|=` cellule a cellule. `grow_tags` ensuite (nesting + marge).
-3. Si grossier reparti : `all_reduce_or_inplace` sur les tags UNIS (meme garde MPI-safe que
-   `amr_regrid_finest:59-60`) pour que tous les rangs partent de la MEME grille de tags ->
-   `berger_rigoutsos` produit des patchs IDENTIQUES par rang (sinon les dmaps divergent).
-4. REBUILD DU LAYOUT UNE SEULE FOIS : `berger_rigoutsos(grown)` -> clamp nesting -> nouveau
-   `BoxArray` fin + un seul `DistributionMapping(nfine, n_ranks())`. Ce layout est PARTAGE par
-   tous les blocs (c'est la regle d'or : un rebuild, pas un par espece).
-5. PROLONG / RESTRICT COHERENT DE TOUS LES BLOCS sur ce nouveau layout : pour chaque bloc,
-   reconstruire `levels[fk].U` sur le nouveau `BoxArray` (largeur de ghost heritee de
-   `n_grow()`, cf. `amr_regrid_finest:73`), remplir par REPORT des donnees fines la ou
-   l'ancien patch couvre + INTERP depuis le parent ailleurs (exactement le corps de
-   `amr_regrid_finest:94-121`). TOUS les blocs utilisent le MEME `BoxArray`/`dmap` : aucun bloc
-   absent d'un patch.
-6. REBUILD AUX / PHI / RHS : realloc l'aux PARTAGE par niveau sur le nouveau layout
-   (`AmrLevelStack::reattach_aux` preserve l'adresse), recabler `levels[k].aux = &aux_[k]`,
-   re-poser B_z (`fill_bz`), re-`solve_fields`.
-7. VERIFICATION PAR BLOC : la masse de chaque bloc (composante 0 integree) doit etre conservee
-   par le regrid (le report + interp conservatif redistribue sans creer/detruire). Test :
-   `mass(b)` avant == `mass(b)` apres regrid, a la tolerance.
+   `tags_phi` tags on `aux_[pk]` (component 0 = phi, or its gradient). `TagBox` is a
+   char grid; the OR is a `|=` cell by cell. `grow_tags` next (nesting + margin).
+3. If coarse distributed: `all_reduce_or_inplace` on the UNITED tags (same MPI-safe guard as
+   `amr_regrid_finest:59-60`) so that all the ranks start from the SAME tag grid ->
+   `berger_rigoutsos` produces IDENTICAL patches per rank (otherwise the dmaps diverge).
+4. REBUILD OF THE LAYOUT A SINGLE TIME: `berger_rigoutsos(grown)` -> clamp nesting -> new
+   fine `BoxArray` + a single `DistributionMapping(nfine, n_ranks())`. This layout is SHARED by
+   all the blocks (it is the golden rule: one rebuild, not one per species).
+5. COHERENT PROLONG / RESTRICT OF ALL THE BLOCKS on this new layout: for each block,
+   rebuild `levels[fk].U` on the new `BoxArray` (ghost width inherited from
+   `n_grow()`, cf. `amr_regrid_finest:73`), fill by CARRY-OVER of the fine data where
+   the old patch covers + INTERP from the parent elsewhere (exactly the body of
+   `amr_regrid_finest:94-121`). ALL the blocks use the SAME `BoxArray`/`dmap`: no block
+   absent from a patch.
+6. REBUILD AUX / PHI / RHS: realloc the SHARED aux per level on the new layout
+   (`AmrLevelStack::reattach_aux` preserves the address), rewire `levels[k].aux = &aux_[k]`,
+   re-place B_z (`fill_bz`), re-`solve_fields`.
+7. VERIFICATION PER BLOCK: the mass of each block (component 0 integrated) must be conserved
+   by the regrid (the carry-over + conservative interp redistributes without creating/destroying). Test:
+   `mass(b)` before == `mass(b)` after regrid, to the tolerance.
 
-DIFFICULTE REELLE FLAGGEE. `amr_regrid_finest` est une free function qui ne regrid QUE le
-niveau le plus fin (`L.back()`), pas une hierarchie a N niveaux arbitraire. Pour Phase 1
-(grossier + 1 fin, ce que materialise `build_amr_compiled:71-78`) c'est suffisant. Au-dela de 2
-niveaux, le regrid multi-niveaux n'existe pas encore meme en mono-bloc : a noter comme limite,
-pas a resoudre ici.
-
-
-## 6. Registre des risques (avec de-risking)
-
-- MIXTE stride/substeps a travers les blocs dans `step_cfl`. RISQUE : un dt calcule sur `w_max`
-  seul, multiplie par stride, viole la CFL d'un facteur M. DE-RISK : copier LITTERALEMENT la
-  formule par bloc de `System::step_cfl` (`python/system.cpp:1667-1680`),
-  `dt = min_b cfl*h*substeps_b/(stride_b*w_b)`, blocs geles exclus. Test : un bloc stride=4
-  reste sous la CFL effective.
-
-- PRECISION ELLIPTIQUE MULTI-NIVEAUX. RISQUE : le Poisson de Phase 1 est resolu sur le GROSSIER
-  puis injecte coarse->fine (`coupler_inject_aux_mb`), ce n'est PAS un vrai solve multi-niveaux.
-  DE-RISK : Phase 1 assume "coarse + inject" (l'instabilite diocotron observable vit sur un
-  cercle median resolu par le grossier, cf. `AmrSystem::potential()`,
-  `amr_system.hpp:175-179`). Le vrai multi-niveaux (composite solve) est Phase 2, flagge comme
-  tel ; ne pas le promettre en Phase 1.
-
-- COHERENCE DU REGRID + CONSERVATION. RISQUE : reconstruire les blocs sur des layouts
-  legerement differents (ordre des boites, dmap) casse la co-localisation et la conservation.
-  DE-RISK : UN SEUL `BoxArray`/`DistributionMapping` calcule (etape 4), reutilise tel quel par
-  tous les blocs ; test `mass(b)` invariant au regrid, par bloc.
-
-- SOURCE COUPLEE : contributions exactement opposees, meme cellule. RISQUE : un decalage
-  d'index ou une lecture d'un etat deja modifie casse la conservation de paire. DE-RISK :
-  `CoupledSourceKernel` (`coupled_source_program.hpp:98-108`) evalue TOUS les termes sur l'etat
-  GELE au debut du pas (`reg` fige) avant d'ecrire ; l'ordre des `.add` n'importe pas au 1er
-  ordre. Sur hierarchie partagee, aucune interpolation inter-especes (meme `(i,j)`). Test :
-  `n_i + n_g` constant a la precision machine, par niveau.
-
-- SOURCE COUPLEE : DOUBLE COMPTAGE AMR (correction owner, point 5). RISQUE : `coupled_source_step`
-  applique la source NIVEAU PAR NIVEAU, donc une cellule grossiere COUVERTE par un niveau fin
-  recoit le terme DEUX FOIS (grossier + fin moyenne-descendu). Pour une source NON nulle, la
-  MASSE COMPOSITE integree est sur-comptee dans les cellules couvertes (l'invariant de paire PAR
-  CELLULE, lui, reste exact : il ne suffit donc pas a detecter ce bug). DE-RISK : application
-  LEAF-ONLY (cellules non couvertes seulement, via `CoverageMask`) OU `average_down` / sync APRES
-  la source. Test OBLIGATOIRE : CONSERVATION COMPOSITE AMR sur une source non nulle dont la zone
-  CHEVAUCHE l'interface coarse-fine (masse totale sur la hierarchie composite conservee).
-
-- INVARIANCE PAR RANG MPI. RISQUE : `fab(0)` sans garde `local_size()`, ou un grossier reparti
-  mal reduit. DE-RISK : iteration sur `local_size()` partout (cf. `mass`,
-  `amr_system_coupler.hpp:291`) ; `DistributionMapping(ba.size(), n_ranks())` ;
-  `all_reduce_or_inplace` sur les tags unis avant clustering (regrid reparti) ;
-  `FluxRegister::gather` = `all_reduce_sum_inplace` (identite en serie -> bit-identique np=1).
-  Test : np=1/2/4 bit-identiques (calque de `test_mpi_amr_multipatch`).
-
-- CONFORMITE nvcc DES FONCTEURS NOMMES. RISQUE : une lambda generique en contexte non evalue
-  (concept) ou une lambda etendue cross-TU fait buter nvcc (Heisenbug device). DE-RISK : la
-  recette est deja appliquee (`ForEachBlockProbe`, `coupled_system.hpp:59-63` ;
-  `BlockRhsEval`/`AdvanceExplicit`/`MaxSpeed`/`PoissonRhs`, `block_builder.hpp` ;
-  `CoupledSourceKernel`, `BackwardEulerSourceKernel`). Toute nouvelle premiere-instanciation
-  depuis une TU externe passe par un FONCTEUR NOMME, jamais une lambda (recette #64/#97).
-
-- PROPRETE DEVICE GH200. RISQUE (lecon recente) : un accesseur `Geometry`/`Box2D` NON `ADC_HD`
-  utilise dans un kernel device casse silencieusement la numerique device. DE-RISK : tout
-  nouvel accesseur lu dans un kernel device DOIT etre `ADC_HD` (cf.
-  `for_each_cell_reduce_sum` dans `mass`, `amr_system_coupler.hpp:293-294`). Valider une fois
-  un cas multi-bloc production sur GH200 (calque de `gpu_amrsys_facade_validate.cpp`, qui
-  instancie deja `CoupledSystem` 2 blocs + AMR 2 niveaux + Poisson + step).
+REAL DIFFICULTY FLAGGED. `amr_regrid_finest` is a free function that only regrids the
+finest level (`L.back()`), not a hierarchy with N arbitrary levels. For Phase 1
+(coarse + 1 fine, which `build_amr_compiled:71-78` materializes) it is sufficient. Beyond 2
+levels, the multi-level regrid does not exist yet even in mono-block: to note as a limit,
+not to solve here.
 
 
-## 7. Frontiere Phase 2 / Phase 3 (verrouillee)
+## 6. Risk registry (with de-risking)
 
-PHASE 1 (la cible v1) : une hierarchie commune ; N `AmrBlock` chacun sur TOUS les patchs avec
-son modele / schema / temps / substeps / stride / evolve ; Poisson somme co-localise ; sources
-couplees meme-cellule a contributions opposees ; regrid par union des tags (incl. tags_phi)
-avec prolong/restrict coherent de TOUS les blocs ; reflux / conservation bloc par bloc ;
-substeps / stride / evolve honores par le scheduler ET par `step_cfl`.
+- MIXED stride/substeps across the blocks in `step_cfl`. RISK: a dt computed on `w_max`
+  alone, multiplied by stride, violates the CFL by a factor M. DE-RISK: copy LITERALLY the
+  per-block formula of `System::step_cfl` (`python/system.cpp:1667-1680`),
+  `dt = min_b cfl*h*substeps_b/(stride_b*w_b)`, frozen blocks excluded. Test: a block stride=4
+  stays under the effective CFL.
 
-PHASE 2 (plus tard, RESTE CONSERVATIF) : criteres de raffinement PAR BLOC (l'union reste, mais
-chaque bloc declare son critere) ; poids de cout PAR BLOC pour l'equilibrage de charge ;
-exploitation d'evolve/stride/substeps pour un saut TEMPOREL UNIQUEMENT, c'est-a-dire un saut
-GLOBAL A UN BLOC dans le temps (stride / evolve=false au niveau du bloc), JAMAIS une absence
-spatiale locale d'un bloc sur un patch. EXPLICITEMENT : ne PAS sauter l'avance d'un bloc sur
-certains patchs ; un bloc est toujours present et conservatif partout. Vrai solve elliptique
-multi-niveaux (composite) ici.
+- MULTI-LEVEL ELLIPTIC PRECISION. RISK: the Poisson of Phase 1 is solved on the COARSE
+  then injected coarse->fine (`coupler_inject_aux_mb`), it is NOT a true multi-level solve.
+  DE-RISK: Phase 1 assumes "coarse + inject" (the observable diocotron instability lives on a
+  median circle resolved by the coarse, cf. `AmrSystem::potential()`,
+  `amr_system.hpp:175-179`). The true multi-level (composite solve) is Phase 2, flagged as
+  such; do not promise it in Phase 1.
 
-PHASE 3 (seulement si un besoin scientifique reel emerge) : hierarchies DISTINCTES par espece
-AVEC projections conservatives entre hierarchies. Beaucoup plus dur, explicitement PAS le
-premier objectif.
+- REGRID COHERENCE + CONSERVATION. RISK: rebuilding the blocks on slightly
+  different layouts (box order, dmap) breaks the co-location and the conservation.
+  DE-RISK: A SINGLE `BoxArray`/`DistributionMapping` computed (step 4), reused as is by
+  all the blocks; test `mass(b)` invariant at the regrid, per block.
 
-INVARIANT TRANSVERSE : toute optimisation future reste CONSERVATIVE et TEMPORELLE ; jamais une
-absence spatiale locale d'un bloc sur un patch.
+- COUPLED SOURCE: exactly opposite contributions, same cell. RISK: an index shift
+  or a read of an already-modified state breaks the pair conservation. DE-RISK:
+  `CoupledSourceKernel` (`coupled_source_program.hpp:98-108`) evaluates ALL the terms on the
+  state FROZEN at the start of the step (`reg` frozen) before writing; the order of the `.add` does not matter at 1st
+  order. On a shared hierarchy, no inter-species interpolation (same `(i,j)`). Test:
+  `n_i + n_g` constant to machine precision, per level.
 
+- COUPLED SOURCE: AMR DOUBLE COUNTING (owner correction, point 5). RISK: `coupled_source_step`
+  applies the source LEVEL BY LEVEL, so a coarse cell COVERED by a fine level
+  receives the term TWICE (coarse + fine averaged down). For a NON-zero source, the
+  integrated COMPOSITE MASS is over-counted in the covered cells (the pair invariant PER
+  CELL, for its part, stays exact: it is therefore not enough to detect this bug). DE-RISK: application
+  LEAF-ONLY (uncovered cells only, via `CoverageMask`) OR `average_down` / sync AFTER
+  the source. REQUIRED test: COMPOSITE AMR CONSERVATION on a non-zero source whose zone
+  OVERLAPS the coarse-fine interface (total mass on the composite hierarchy conserved).
 
-## 8. Checklist de tests d'acceptation (Phase 1)
+- INVARIANCE BY MPI RANK. RISK: `fab(0)` without `local_size()` guard, or a coarse distributed
+  badly reduced. DE-RISK: iteration over `local_size()` everywhere (cf. `mass`,
+  `amr_system_coupler.hpp:291`); `DistributionMapping(ba.size(), n_ranks())`;
+  `all_reduce_or_inplace` on the united tags before clustering (distributed regrid);
+  `FluxRegister::gather` = `all_reduce_sum_inplace` (identity in serial -> bit-identical np=1).
+  Test: np=1/2/4 bit-identical (modeled on `test_mpi_amr_multipatch`).
 
-- [x] LAYOUT (premier pas, LIVRE) : `same_layout_or_throw` JETTE sur tout mismatch (boites,
-      ORDRE des boites, dmap, dx/dy, nombre de niveaux) et PASSE sur un layout identique ;
-      mono-bloc bit-identique (`dmax == 0`). Test `tests/test_amr_layout_guard.cpp`.
-- [x] FACADE RUNTIME multi-blocs (LIVRE, PR registre runtime) : `AmrSystem` accepte N blocs natifs
-      co-localises sur UNE hierarchie partagee via le moteur type-erase `AmrRuntime`
-      (`include/adc/runtime/amr_runtime.hpp`), registre par nom de fermetures
-      (advance / add_elliptic_rhs / max_speed / mass / density / potential). Poisson de SYSTEME a
-      second membre SOMME co-localise (Sum_b elliptic_rhs_b(U_b) = q0 n0 + q1 n1 sur le grossier
-      partage). Tests `tests/test_amr_system_twoblock.cpp`, `python/tests/test_amr_multiblock.py`.
-- [x] Deux blocs AMR explicites a schemas DIFFERENTS, stables sur N pas (masse par bloc conservee).
-- [ ] electrons IMEX(substeps=10) + ions Explicit(substeps=1), stable ; ET l'inverse. (PR ulterieure)
-- [ ] neutres stride=20 toujours lus par les sources et le Poisson entre rattrapages. (PR ulterieure)
-- [ ] `evolve=False` present comme fond fixe dans le second membre elliptique. (PR ulterieure)
-- [x] MULTI-BLOCS + `regrid_every > 0` EXPLICITEMENT REFUSE tant que le regrid d'union n'existe
-      pas (point 4 ; throw clair, a `ensure_built` du registre runtime).
-- [ ] regrid conserve la masse de CHAQUE bloc (`mass(b)` avant == apres, par bloc). (regrid d'union
-      = PR ulterieure ; le multi-blocs est FIGE pour l'instant)
-- [x] DSL PRODUCTION MULTI-BLOC (capstone v, LIVRE) : add_compiled_model(AmrSystem&) installe un bloc
-      NOMME (pas un remplacement) -> PLUSIEURS blocs compiles (et MELANGE compile + natif) co-localises
-      sur la hierarchie partagee via AmrRuntime. add_compiled_model fige DEUX builders (mono AmrCouplerMP
-      + multi AmrRuntimeBlock) ; set_compiled_block EMPILE au lieu de lever ; build_multi invoque le
-      builder runtime du bloc compile sur le layout PARTAGE. Le 2e bloc compile NE LEVE PLUS.
-      Test `tests/test_amr_multiblock_compiled.cpp`. Loader .so recompile contre l'en-tete fournit le
-      builder runtime (ABI plate du loader inchangee ; un loader ANTERIEUR leve clairement a build_multi).
-      L'ABI plate du loader ne transporte NI le multirate (stride) NI le masque IMEX partiel
-      (implicit_vars / implicit_roles) : ce n'est PAS une perte acceptable en silence -> la facade
-      Python `AmrSystem.add_equation` les REJETTE explicitement (ValueError) sur le chemin production
-      (.so). Pour ces parametres : `AmrSystem.add_block` natif (ModelSpec) ou `add_compiled_model(
-      AmrSystem&)` en DIRECT (en-tete C++), qui exposent stride et le masque (le chemin DIRECT IMEX
-      multi-bloc est exerce par `tests/test_amr_multiblock_compiled.cpp`).
-- [ ] source couplee `+k n_e n_g` / `-k n_e n_g` : `n_i + n_g` constant a la precision machine,
-      par niveau, sur tous les patchs. (PR ulterieure)
-- [ ] CONSERVATION COMPOSITE AMR de la source couplee (point 5) : sur une source NON nulle dont la
-      zone CHEVAUCHE l'interface coarse-fine, la masse TOTALE integree sur la hierarchie composite
-      est conservee (leaf-only OU sync apres la source) -> ecarte le double comptage des cellules
-      couvertes. La conservation PAR CELLULE ne suffit PAS. (PR ulterieure)
-- [x] MPI np=1/2/4 bit-identiques (reflux par bloc ; grossier replique consistant cross-rang).
-      Test `tests/test_mpi_amr_twoblock_parity.cpp` (patch fin REPARTI round-robin -> pas de
-      sur-comptage du reflux ; np=1/2/4 bit-identiques, spread cross-rang == 0).
-- [x] Kokkos Serial / OpenMP vert (two-block + mono-bloc).
-- [ ] un cas multi-bloc production valide sur GH200 (instanciation device complete). (validation
-      device dediee a faire sur ROMEO ; le chemin est device-clean par construction, foncteurs nommes)
-- [x] NON-REGRESSION : un cas mono-bloc reste BIT-IDENTIQUE (maxdiff=0) a travers la facade
-      (le mono-bloc route TOUJOURS par AmrCouplerMP intouche ; jamais par AmrRuntime).
+- nvcc CONFORMANCE OF THE NAMED FUNCTORS. RISK: a generic lambda in an unevaluated context
+  (concept) or an extended lambda cross-TU trips nvcc (device Heisenbug). DE-RISK: the
+  harness is already applied (`ForEachBlockProbe`, `coupled_system.hpp:59-63`;
+  `BlockRhsEval`/`AdvanceExplicit`/`MaxSpeed`/`PoissonRhs`, `block_builder.hpp`;
+  `CoupledSourceKernel`, `BackwardEulerSourceKernel`). Any new first-instantiation
+  from an external TU goes through a NAMED FUNCTOR, never a lambda (harness #64/#97).
+
+- DEVICE CLEANLINESS GH200. RISK (recent lesson): a `Geometry`/`Box2D` accessor NOT `ADC_HD`
+  used in a device kernel silently breaks the device numerics. DE-RISK: every
+  new accessor read in a device kernel MUST be `ADC_HD` (cf.
+  `for_each_cell_reduce_sum` in `mass`, `amr_system_coupler.hpp:293-294`). Validate once
+  a multi-block production case on GH200 (modeled on `gpu_amrsys_facade_validate.cpp`, which
+  already instantiates `CoupledSystem` 2 blocks + AMR 2 levels + Poisson + step).
 
 
-## 9. References de code (toutes verifiees a ce head)
+## 7. Phase 2 / Phase 3 boundary (locked)
 
-- `include/adc/coupling/amr_system_coupler.hpp` : engine multi-blocs AMR (existe) ; PAS de
+PHASE 1 (the v1 target): one common hierarchy; N `AmrBlock` each on ALL the patches with
+its model / scheme / time / substeps / stride / evolve; co-located summed Poisson; coupled
+sources same-cell with opposite contributions; regrid by union of the tags (incl. tags_phi)
+with coherent prolong/restrict of ALL the blocks; reflux / conservation block by block;
+substeps / stride / evolve honored by the scheduler AND by `step_cfl`.
+
+PHASE 2 (later, STAYS CONSERVATIVE): refinement criteria PER BLOCK (the union stays, but
+each block declares its criterion); cost weights PER BLOCK for load balancing;
+exploitation of evolve/stride/substeps for a TEMPORAL jump ONLY, that is to say a jump
+GLOBAL TO A BLOCK in time (stride / evolve=false at the block level), NEVER a local spatial
+absence of a block on a patch. EXPLICITLY: do NOT skip the advance of a block on
+certain patches; a block is always present and conservative everywhere. True multi-level elliptic
+solve (composite) here.
+
+PHASE 3 (only if a real scientific need emerges): DISTINCT hierarchies per species
+WITH conservative projections between hierarchies. Much harder, explicitly NOT the
+first objective.
+
+CROSS-CUTTING INVARIANT: any future optimization stays CONSERVATIVE and TEMPORAL; never a local spatial
+absence of a block on a patch.
+
+
+## 8. Acceptance test checklist (Phase 1)
+
+- [x] LAYOUT (first step, DELIVERED): `same_layout_or_throw` THROWS on any mismatch (boxes,
+      ORDER of the boxes, dmap, dx/dy, number of levels) and PASSES on an identical layout;
+      mono-block bit-identical (`dmax == 0`). Test `tests/test_amr_layout_guard.cpp`.
+- [x] multi-block RUNTIME FACADE (DELIVERED, runtime registry PR): `AmrSystem` accepts N native blocks
+      co-located on ONE shared hierarchy via the type-erased engine `AmrRuntime`
+      (`include/adc/runtime/amr_runtime.hpp`), registry by name of closures
+      (advance / add_elliptic_rhs / max_speed / mass / density / potential). SYSTEM Poisson with a
+      SUMMED right-hand side co-located (Sum_b elliptic_rhs_b(U_b) = q0 n0 + q1 n1 on the shared
+      coarse). Tests `tests/test_amr_system_twoblock.cpp`, `python/tests/test_amr_multiblock.py`.
+- [x] Two explicit AMR blocks with DIFFERENT schemes, stable over N steps (mass per block conserved).
+- [ ] electrons IMEX(substeps=10) + ions Explicit(substeps=1), stable; AND the inverse. (later PR)
+- [ ] neutrals stride=20 always read by the sources and the Poisson between catch-ups. (later PR)
+- [ ] `evolve=False` present as a fixed background in the elliptic right-hand side. (later PR)
+- [x] MULTI-BLOCK + `regrid_every > 0` EXPLICITLY REFUSED as long as the union regrid does not
+      exist (point 4; clear throw, at `ensure_built` of the runtime registry).
+- [ ] regrid conserves the mass of EACH block (`mass(b)` before == after, per block). (union regrid
+      = later PR; the multi-block is FROZEN for now)
+- [x] MULTI-BLOCK PRODUCTION DSL (capstone v, DELIVERED): add_compiled_model(AmrSystem&) installs a block
+      NAMED (not a replacement) -> SEVERAL compiled blocks (and MIX compiled + native) co-located
+      on the shared hierarchy via AmrRuntime. add_compiled_model freezes TWO builders (mono AmrCouplerMP
+      + multi AmrRuntimeBlock); set_compiled_block STACKS instead of throwing; build_multi invokes the
+      runtime builder of the compiled block on the SHARED layout. The 2nd compiled block NO LONGER THROWS.
+      Test `tests/test_amr_multiblock_compiled.cpp`. A .so loader recompiled against the provided header supplies the
+      runtime builder (flat ABI of the loader unchanged; an EARLIER loader throws clearly at build_multi).
+      The flat ABI of the loader carries NEITHER the multirate (stride) NOR the partial IMEX mask
+      (implicit_vars / implicit_roles): it is NOT an acceptable silent loss -> the facade
+      Python `AmrSystem.add_equation` REJECTS them explicitly (ValueError) on the production path
+      (.so). For these parameters: native `AmrSystem.add_block` (ModelSpec) or `add_compiled_model(
+      AmrSystem&)` DIRECT (C++ header), which expose stride and the mask (the DIRECT IMEX
+      multi-block path is exercised by `tests/test_amr_multiblock_compiled.cpp`).
+- [ ] coupled source `+k n_e n_g` / `-k n_e n_g`: `n_i + n_g` constant to machine precision,
+      per level, on all the patches. (later PR)
+- [ ] COMPOSITE AMR CONSERVATION of the coupled source (point 5): on a NON-zero source whose
+      zone OVERLAPS the coarse-fine interface, the integrated TOTAL mass on the composite hierarchy
+      is conserved (leaf-only OR sync after the source) -> rules out the double counting of the covered
+      cells. Per-cell conservation is NOT sufficient. (later PR)
+- [x] MPI np=1/2/4 bit-identical (reflux per block; replicated coarse consistent cross-rank).
+      Test `tests/test_mpi_amr_twoblock_parity.cpp` (fine patch DISTRIBUTED round-robin -> no
+      over-counting of the reflux; np=1/2/4 bit-identical, cross-rank spread == 0).
+- [x] Kokkos Serial / OpenMP green (two-block + mono-block).
+- [ ] a multi-block production case validated on GH200 (full device instantiation). (dedicated
+      device validation to do on ROMEO; the path is device-clean by construction, named functors)
+- [x] NON-REGRESSION: a mono-block case stays BIT-IDENTICAL (maxdiff=0) through the facade
+      (the mono-block ALWAYS routes through AmrCouplerMP untouched; never through AmrRuntime).
+
+
+## 9. Code references (all verified at this head)
+
+- `include/adc/coupling/amr_system_coupler.hpp`: AMR multi-block engine (exists); NO
   regrid.
-- `include/adc/coupling/amr_coupler_mp.hpp` : coupleur AMR MONO-BLOC + `regrid` (delegue a
+- `include/adc/coupling/amr_coupler_mp.hpp`: MONO-BLOCK AMR coupler + `regrid` (delegates to
   `amr_regrid_finest`).
-- `include/adc/coupling/amr_regrid_coupler.hpp` : `amr_regrid_finest` (Berger-Rigoutsos, niveau
-  le plus fin).
-- `include/adc/coupling/elliptic_rhs.hpp` : `ChargeDensityRhs` (somme `Sum_s q_s n_s`,
-  une `SpeciesCharge` par bloc).
-- `include/adc/coupling/coupled_source.hpp` : concept `CoupledSourceFor`, `NoCoupledSource`.
-- `include/adc/coupling/coupled_source_program.hpp` : `CoupledSourceKernel` (P5 #131, POD
-  device-clean, ecritures additives opposees).
-- `include/adc/coupling/amr_level_storage.hpp` : `AmrLevelStack` (invariant d'adresses aux).
-- `include/adc/core/coupled_system.hpp` : `CoupledSystem<Blocks...>`, `for_each_block`,
-  `ForEachBlockProbe` (foncteur nomme device-clean).
-- `include/adc/core/equation_block.hpp` : `EquationBlock<Model, Spatial, Time>`.
-- `include/adc/numerics/time/amr_reflux_mf.hpp` : `AmrLevelMP`, `LevelHierarchy`, `advance_amr`,
+- `include/adc/coupling/amr_regrid_coupler.hpp`: `amr_regrid_finest` (Berger-Rigoutsos, finest
+  level).
+- `include/adc/coupling/elliptic_rhs.hpp`: `ChargeDensityRhs` (sum `Sum_s q_s n_s`,
+  one `SpeciesCharge` per block).
+- `include/adc/coupling/coupled_source.hpp`: concept `CoupledSourceFor`, `NoCoupledSource`.
+- `include/adc/coupling/coupled_source_program.hpp`: `CoupledSourceKernel` (P5 #131, POD
+  device-clean, opposite additive writes).
+- `include/adc/coupling/amr_level_storage.hpp`: `AmrLevelStack` (aux address invariant).
+- `include/adc/core/coupled_system.hpp`: `CoupledSystem<Blocks...>`, `for_each_block`,
+  `ForEachBlockProbe` (named device-clean functor).
+- `include/adc/core/equation_block.hpp`: `EquationBlock<Model, Spatial, Time>`.
+- `include/adc/numerics/time/amr_reflux_mf.hpp`: `AmrLevelMP`, `LevelHierarchy`, `advance_amr`,
   `FluxRegister`, `CoverageMask`, `CoarseFineInterface`, `mf_apply_source_treatment`,
   `mf_average_down_mb`.
-- `include/adc/numerics/time/scheduler.hpp` : `advance_subcycled`, `block_substeps_v`,
+- `include/adc/numerics/time/scheduler.hpp`: `advance_subcycled`, `block_substeps_v`,
   `block_stride_v`, `block_time_treatment_v`.
-- `include/adc/coupling/system_coupler.hpp` : `SystemAssembler` / `SystemDriver` (scission
-  mono-niveau), `step_cfl` substeps-aware (`cfl*h*substeps/(stride*w)`).
-- `include/adc/runtime/system.hpp` + `python/system.cpp` : facade RUNTIME multi-blocs (modele a
-  imiter), `Species`, `stride_due` (HOLD-THEN-CATCH-UP), `step_cfl` (lignes 1663-1693).
-- `include/adc/runtime/amr_system.hpp` + `python/amr_system.cpp` : facade RUNTIME AMR MONO-BLOC
-  (refus du 2e bloc, lignes 129-130 et 152-153).
-- `include/adc/runtime/amr_dsl_block.hpp` : `add_compiled_model(AmrSystem&)` (un seul bloc).
-- `include/adc/runtime/block_builder.hpp` : `make_block` / `make_max_speed` /
-  `make_poisson_rhs`, foncteurs nommes device-clean.
+- `include/adc/coupling/system_coupler.hpp`: `SystemAssembler` / `SystemDriver` (mono-level
+  split), `step_cfl` substeps-aware (`cfl*h*substeps/(stride*w)`).
+- `include/adc/runtime/system.hpp` + `python/system.cpp`: multi-block RUNTIME facade (model to
+  imitate), `Species`, `stride_due` (HOLD-THEN-CATCH-UP), `step_cfl` (lines 1663-1693).
+- `include/adc/runtime/amr_system.hpp` + `python/amr_system.cpp`: MONO-BLOCK AMR RUNTIME facade
+  (refusal of the 2nd block, lines 129-130 and 152-153).
+- `include/adc/runtime/amr_dsl_block.hpp`: `add_compiled_model(AmrSystem&)` (a single block).
+- `include/adc/runtime/block_builder.hpp`: `make_block` / `make_max_speed` /
+  `make_poisson_rhs`, named device-clean functors.
 - `docs/COUPLER_HIERARCHY.md`, `docs/SCHUR_CONDENSATION_DESIGN.md`, `docs/GPU_RUNTIME_PORT.md`
-  (recette device-clean), `docs/PAPER_ROADMAP.md`.
+  (device-clean harness), `docs/PAPER_ROADMAP.md`.

@@ -1,69 +1,69 @@
-# Plan : niveau Variables + HPM / EPM (chantier abstraction)
+# Plan: Variables level + HPM / EPM (abstraction work item)
 
-Reference de travail pour le chantier issu des reunions tuteur (01-02/06/2026). A relire
-avant la seance tableau avec Sacha. Le coeur `adc_cpp` est deja agnostique (briques) et son
-flux numerique est deja generique sur le modele ; l'abstraction manquante est le niveau
-**Variables** (conservatif U / primitif P + conversions + choix de reconstruction), et la
-seconde correction est de **ne pas hard-coder Poisson** mais d'en faire une instance d'un
+Working reference for the work item arising from the tutor meetings (01-02/06/2026). To re-read
+before the whiteboard session with Sacha. The `adc_cpp` core is already agnostic (bricks) and its
+numerical flow is already generic over the model; the missing abstraction is the
+**Variables** level (conservative U / primitive P + conversions + reconstruction choice), and the
+second correction is to **not hard-code Poisson** but to make it an instance of an
 **EllipticPhysicalModel (EPM)**.
 
 ---
 
-## 0. Etat actuel
+## 0. Current status
 
-### Fait (Phase 1, teste : ctest 46/46 + recon end-to-end Python)
-- Concept `PhysicalModel` etendu par l'extension OPTIONNELLE `HasPrimitiveVars`
-  (`core/physical_model.hpp`) : `using Prim`, `to_primitive(U)->P`, `to_conservative(P)->U`.
-- Conversions implementees dans les briques transport (`model/euler.hpp`, `model/bricks.hpp`) :
-  CompressibleFlux P=(rho,u,v,p), IsothermalFlux P=(rho,u,v), ExBVelocity P=cons (identite).
-  `CompositeModel` forwarde Prim + conversions.
-- `max_wave_speed` / `wave_speeds` calcules VIA le primitif (centralisation : plus de recalcul
-  u=rho u/rho, p=(g-1)(E-...) eparpille).
-- Reconstruction en variables primitives (`operator/spatial_operator.hpp`) : `reconstruct`
-  convertit le stencil U->P, limite sur P, reconvertit P->U ; flux numerique inchange ; update
-  toujours conservatif. Choix porte par un flag RUNTIME `recon_prim` (pas d'explosion de
-  templates), repli conservatif si le modele n'expose pas les conversions.
-- Expose : `add_block(..., recon="conservative"|"primitive", ...)` ; Python
-  `adc.Spatial(recon="primitive")` ou `Spatial(primitive=True)`. AMR rejette le primitif
-  proprement (les cas AMR utilisent NoSlope, ou prim == cons).
-- Tests : `tests/test_primitive_recon.cpp` (round-trip + concept) + test Python (Euler recon
-  cons vs prim : masse conservee ~1e-15 dans les deux, positivite, fini).
+### Done (Phase 1, tested: ctest 46/46 + end-to-end recon Python)
+- `PhysicalModel` concept extended by the OPTIONAL `HasPrimitiveVars` extension
+  (`core/physical_model.hpp`): `using Prim`, `to_primitive(U)->P`, `to_conservative(P)->U`.
+- Conversions implemented in the transport bricks (`model/euler.hpp`, `model/bricks.hpp`):
+  CompressibleFlux P=(rho,u,v,p), IsothermalFlux P=(rho,u,v), ExBVelocity P=cons (identity).
+  `CompositeModel` forwards Prim + conversions.
+- `max_wave_speed` / `wave_speeds` computed VIA the primitive (centralization: no more recomputing
+  u=rho u/rho, p=(g-1)(E-...) scattered around).
+- Reconstruction in primitive variables (`operator/spatial_operator.hpp`): `reconstruct`
+  converts the stencil U->P, limits on P, reconverts P->U; numerical flux unchanged; update
+  always conservative. Choice carried by a RUNTIME flag `recon_prim` (no template explosion),
+  conservative fallback if the model does not expose the conversions.
+- Exposed: `add_block(..., recon="conservative"|"primitive", ...)`; Python
+  `adc.Spatial(recon="primitive")` or `Spatial(primitive=True)`. AMR rejects the primitive
+  cleanly (the AMR cases use NoSlope, or prim == cons).
+- Tests: `tests/test_primitive_recon.cpp` (round-trip + concept) + Python test (Euler recon
+  cons vs prim: mass conserved ~1e-15 in both, positivity, finite).
 
-### Fait (priorites 5-7 + cas, ce chantier)
-- #57 cas "deux Euler independants" (adc_cases/two_euler) : meme schema HLLC + recon primitif,
-  multirate ; masse/bloc, positivite, electrons plus rapides.
-- #54 espece GELEE : flag `evolve` sur le bloc (non avance, vu par Poisson) + `add_background`.
-- #52 mecanisme CoupledSource : passe operator-split dans le runtime System (apres transport, lit
-  plusieurs blocs au meme point).
-- #53 briques de couplage : `add_ionization` (n_g -> n_i + n_e, masse n_i+n_g conservee),
-  `add_collision` (friction, qte de mvt conservee), `add_thermal_exchange` (energie conservee).
-- #55 (partiel) cas plasma (adc_cases/plasma) : e + i + n, Poisson + ionisation + collision cables
-  de bout en bout ; n_i+n_g conserve a ~1e-15, Poisson actif, densites positives. models.py :
-  recettes `euler()` et `neutral_isothermal()` ajoutees.
-- #58 EPM premier ordre : add_elliptic_model + briques (elliptic / div_eps_grad / charge_density /
-  electric_field_from_potential) ; Poisson = instance ; set_poisson raccourci ; eps!=1 et operateurs
-  alternatifs rejetes (raffinements). Pur Python au-dessus du solveur existant.
-- #55/#56/#59 : recettes systeme models.two_fluid / models.plasma ; objets de couplage
-  (adc.Ionization / Collision / ThermalExchange) + sim.add_coupling ; descripteur de variables
-  (sim.variable_names cons/prim par bloc, introspection).
-- Raffinements (faits) : concept `HyperbolicModel` (Vars + conversions + flux + vitesses d'onde,
-  Variables OBLIGATOIRE) ; `Euler` scinde en brique hyperbolique PURE (sans source ni elliptic_rhs) ;
-  `CompositeModel<Hyperbolic, Source, Elliptic>` (ex-Transport) avec static_assert(HyperbolicModel) ;
-  descripteur `Variables` (core/variables.hpp) porte par l'hyperbolique ; adc.PythonFlux (backend de
-  prototypage hote, residu Rusanov numpy, hors Kokkos/GPU).
-- Verifie : test_bindings (briques + frozen + 3 couplages + EPM + introspection + garde-fous),
-  cas two_euler et plasma, ctest coeur 46/46 inchange.
+### Done (priorities 5-7 + cases, this work item)
+- #57 case "two independent Euler" (adc_cases/two_euler): same HLLC scheme + primitive recon,
+  multirate; mass/block, positivity, electrons faster.
+- #54 FROZEN species: `evolve` flag on the block (not advanced, seen by Poisson) + `add_background`.
+- #52 CoupledSource mechanism: operator-split pass in the System runtime (after transport, reads
+  several blocks at the same point).
+- #53 coupling bricks: `add_ionization` (n_g -> n_i + n_e, mass n_i+n_g conserved),
+  `add_collision` (friction, momentum conserved), `add_thermal_exchange` (energy conserved).
+- #55 (partial) plasma case (adc_cases/plasma): e + i + n, Poisson + ionization + collision wired
+  end to end; n_i+n_g conserved at ~1e-15, Poisson active, densities positive. models.py:
+  `euler()` and `neutral_isothermal()` recipes added.
+- #58 first-order EPM: add_elliptic_model + bricks (elliptic / div_eps_grad / charge_density /
+  electric_field_from_potential); Poisson = instance; set_poisson shortcut; eps!=1 and alternative
+  operators rejected (refinements). Pure Python on top of the existing solver.
+- #55/#56/#59: system recipes models.two_fluid / models.plasma; coupling objects
+  (adc.Ionization / Collision / ThermalExchange) + sim.add_coupling; variable descriptor
+  (sim.variable_names cons/prim per block, introspection).
+- Refinements (done): `HyperbolicModel` concept (Vars + conversions + flux + wave speeds,
+  Variables REQUIRED); `Euler` split into a PURE hyperbolic brick (without source or elliptic_rhs);
+  `CompositeModel<Hyperbolic, Source, Elliptic>` (ex-Transport) with static_assert(HyperbolicModel);
+  `Variables` descriptor (core/variables.hpp) carried by the hyperbolic; adc.PythonFlux (host
+  prototyping backend, Rusanov numpy residual, outside Kokkos/GPU).
+- Verified: test_bindings (bricks + frozen + 3 couplings + EPM + introspection + safeguards),
+  two_euler and plasma cases, core ctest 46/46 unchanged.
 
-### Deja generique : NE PAS refaire
-- `RusanovFlux` / `HLLFlux` / `HLLCFlux` sont `template<class Model>` et appellent `m.flux`,
-  `m.max_wave_speed`, `m.wave_speeds`, `m.pressure` (`operator/numerical_flux.hpp`). Le schema
-  ne connait PAS Euler. (C'est `euler_cpp` qui avait ce probleme, pas `adc_cpp`.)
-- `System` / `AmrSystem` / dispatch (transport x source x elliptic), separation deux depots
-  (adc_cpp coeur, adc_cases cas), multirate, IMEX partiel, Poisson multi-especes Sum_s q_s n_s.
+### Already generic: DO NOT redo
+- `RusanovFlux` / `HLLFlux` / `HLLCFlux` are `template<class Model>` and call `m.flux`,
+  `m.max_wave_speed`, `m.wave_speeds`, `m.pressure` (`operator/numerical_flux.hpp`). The scheme
+  does NOT know Euler. (It is `euler_cpp` that had this problem, not `adc_cpp`.)
+- `System` / `AmrSystem` / dispatch (transport x source x elliptic), separation of two repos
+  (adc_cpp core, adc_cases cases), multirate, partial IMEX, multi-species Poisson Sum_s q_s n_s.
 
 ---
 
-## 1. Architecture cible (tableau du tuteur)
+## 1. Target architecture (tutor whiteboard)
 
 ```
 PhysicalModel
@@ -87,20 +87,20 @@ Coupler / Assembler
       des EPM ; reinjecte phi / E dans les sources des HPM. AMR = assembleur sur grille raffinee.
 ```
 
-### Cas plasma de reference (3 HPM couples par les sources)
-- H1 electrons (Euler + Lorentz, 4 var) : source = ionisation `m_e n_e n_g K_iz`, force
-  `-e n_e E`, magnetique `-e n_e (u_e x B)`, collisions `-m_e n_e nu_e u_e`, echange thermique
+### Reference plasma case (3 HPM coupled by the sources)
+- H1 electrons (Euler + Lorentz, 4 var): source = ionization `m_e n_e n_g K_iz`, force
+  `-e n_e E`, magnetic `-e n_e (u_e x B)`, collisions `-m_e n_e nu_e u_e`, thermal exchange
   `(3 m_e/M) n_e nu_e (T_e - T_g)`.
-- H2 ions (isotherme, 3 var) : ionisation `M n_e n_g K_iz`, force `e n_i E`, collisions
-  `-M n_i nu_i u_i` (ions non magnetises : pas de u_i x B).
-- H3 neutres (isotherme, 3 var) : `-M_n n_e n_g K_iz`, collisions `-M_n n_i nu_i (u_g - u_i)`.
-- Le MEME terme d'ionisation apparait avec des SIGNES OPPOSES : on perd un neutre, on gagne un
-  ion et un electron (conservation). Couplage NON mediatise par Poisson.
-- Poisson : `div(eps grad phi) = e(n_e - n_i)/eps0`, puis `E = -grad phi` revient dans les sources.
+- H2 ions (isothermal, 3 var): ionization `M n_e n_g K_iz`, force `e n_i E`, collisions
+  `-M n_i nu_i u_i` (unmagnetized ions: no u_i x B).
+- H3 neutrals (isothermal, 3 var): `-M_n n_e n_g K_iz`, collisions `-M_n n_i nu_i (u_g - u_i)`.
+- The SAME ionization term appears with OPPOSITE SIGNS: we lose a neutral, we gain an
+  ion and an electron (conservation). Coupling NOT mediated by Poisson.
+- Poisson: `div(eps grad phi) = e(n_e - n_i)/eps0`, then `E = -grad phi` comes back into the sources.
 
 ---
 
-## 2. Niveau Variables (FAIT) : pipeline de reconstruction
+## 2. Variables level (DONE): reconstruction pipeline
 
 ```
 Conservatif :  U_i  -> limiteur sur U -> U_L, U_R -> flux numerique -> update conservatif
@@ -108,23 +108,23 @@ Primitif    :  U_i  -> P_i = cons_to_prim(U_i) -> limiteur sur P -> P_L, P_R
                     -> U_L = prim_to_cons(P_L), U_R = prim_to_cons(P_R) -> flux numerique
             update TOUJOURS conservatif : U^{n+1} = U^n - dt div(F*) + dt S
 ```
-Pour Euler le primitif est plus robuste (positivite de rho et p).
+For Euler the primitive is more robust (positivity of rho and p).
 
-### Vars : portee par la brique HYPERBOLIQUE (choix de design)
+### Vars: carried by the HYPERBOLIC brick (design choice)
 
-Au tableau le prof dessine `PhysicalModel = Vars + Flux + Source` (trois enfants). DECISION
-d'implementation : `Vars` n'est PAS une brique independante combinable librement (on ne peut pas
-appairer les variables d'Euler avec le flux isotherme). `Vars`, les conversions cons<->prim et les
-vitesses d'onde sont PORTEES par la brique HYPERBOLIQUE (concept `HyperbolicModel`), parce qu'elles
-sont physiquement liees au flux. La composition se fait sur (hyperbolique, source, elliptique) :
+On the whiteboard the professor draws `PhysicalModel = Vars + Flux + Source` (three children). IMPLEMENTATION
+DECISION: `Vars` is NOT an independent freely combinable brick (you cannot pair Euler's variables
+with the isothermal flux). `Vars`, the cons<->prim conversions and the wave speeds are
+CARRIED by the HYPERBOLIC brick (`HyperbolicModel` concept), because they are physically tied to the
+flux. The composition is on (hyperbolic, source, elliptic):
 ```
 PhysicalModel = CompositeModel<Hyperbolic, Source, Elliptic>
    Hyperbolic --> Vars (cons U / prim P + conversions + descripteur Variables) + Flux + |lambda|max
    Source     --> S(U, aux)            (composable independamment)
    Elliptic   --> elliptic_rhs / EPM   (composable independamment)
 ```
-La brique hyperbolique (Euler, IsothermalFlux, ExBVelocity) expose donc un objet DESCRIPTEUR
-`Variables`, contrat OBLIGATOIRE (`conservative_vars()` / `primitive_vars()`) :
+The hyperbolic brick (Euler, IsothermalFlux, ExBVelocity) therefore exposes a `Variables`
+DESCRIPTOR object, a REQUIRED contract (`conservative_vars()` / `primitive_vars()`):
 ```cpp
 enum class VariableKind { Conservative, Primitive };
 struct Variables {
@@ -133,42 +133,42 @@ struct Variables {
   int size;
 };
 ```
-et le modele porte plusieurs jeux :
+and the model carries several sets:
 ```cpp
 Variables conservative_vars;   // (rho, rho u, rho v, rho E)
 Variables primitive_vars;      // (rho, u, v, p)
 State to_primitive(const State& U) const;
 State to_conservative(const State& P) const;
 ```
-Exemples (noms) :
+Examples (names):
 ```
 Euler      cons (rho, rho u, rho v, rho E)   prim (rho, u, v, p)
 isotherme  cons (rho, rho u, rho v)          prim (rho, u, v)
 diocotron  cons (n)                          prim (n)
 ```
-Le coeur numerique manipule ces objets Variables GENERIQUEMENT, sans savoir si les composantes
-sont rho/u/p, n, rho*u... La reconstruction s'ecrit conceptuellement :
+The numerical core manipulates these Variables objects GENERICALLY, without knowing whether the
+components are rho/u/p, n, rho*u... The reconstruction is written conceptually:
 ```cpp
 if (recon == Conservative) reconstruct(model.conservative_vars, U);
 if (recon == Primitive)  { P = model.to_primitive(U); reconstruct(model.primitive_vars, P);
                            U = model.to_conservative(P); }
 ```
-Etat (#59, FAIT) : un objet descripteur `Variables` (kind + names + size) est porte par la brique
-HYPERBOLIQUE (`core/variables.hpp` ; `conservative_vars()` / `primitive_vars()` sur Euler / isotherme /
-ExB, forwarde par `CompositeModel`), et c'est un CONTRAT OBLIGATOIRE du concept `HyperbolicModel` (pas
-une brique separee : Vars est physiquement liee au flux). Le runtime y puise les noms exposes par
-`sim.variable_names` (source unique de verite). Metadonnee hote, ne pilote pas le calcul (le coeur
-travaille par composante via les conversions cons<->prim).
+Status (#59, DONE): a `Variables` descriptor object (kind + names + size) is carried by the
+HYPERBOLIC brick (`core/variables.hpp`; `conservative_vars()` / `primitive_vars()` on Euler / isothermal /
+ExB, forwarded by `CompositeModel`), and it is a REQUIRED CONTRACT of the `HyperbolicModel` concept (not
+a separate brick: Vars is physically tied to the flux). The runtime draws from it the names exposed by
+`sim.variable_names` (single source of truth). Host metadata, does not drive the computation (the core
+works per component via the cons<->prim conversions).
 
 ---
 
-## 3. EPM : la correction (NE PAS hard-coder Poisson)
+## 3. EPM: the correction (DO NOT hard-code Poisson)
 
-Poisson ne doit pas etre un cas special au niveau architecture. Il faut un
-`EllipticPhysicalModel` ; Poisson n'en est qu'une instance (inconnue phi, operateur
-div(eps grad), rhs charge_density, sortie E = -grad phi).
+Poisson must not be a special case at the architecture level. It needs an
+`EllipticPhysicalModel`; Poisson is only one instance of it (unknown phi, operator
+div(eps grad), rhs charge_density, output E = -grad phi).
 
-### Cible API (au lieu de `set_poisson(...)` comme abstraction finale)
+### Target API (instead of `set_poisson(...)` as the final abstraction)
 ```python
 sim.add_elliptic_model(
     name="phi",
@@ -181,21 +181,21 @@ sim.add_elliptic_model(
     solver=adc.EllipticSolver("geometric_mg"),
 )
 ```
-`div_eps_grad`, `charge_density`, `electric_field_from_potential` sont des BRIQUES, pas
-`Poisson` code en dur. On peut remplacer UNIQUEMENT l'EPM sans toucher System/AmrSystem :
+`div_eps_grad`, `charge_density`, `electric_field_from_potential` are BRICKS, not
+`Poisson` hard-coded. You can replace ONLY the EPM without touching System/AmrSystem:
 ```python
 models.elliptic(unknown="T", operator=models.diffusion(coeff="kappa"), rhs=models.heat_source())
 models.elliptic(unknown="p", operator=models.pressure_projection(), rhs=models.divergence_constraint())
 ```
-`set_poisson(...)` RESTE comme raccourci pratique (= add_elliptic_model avec les briques de
-Poisson), mais pas comme architecture centrale.
+`set_poisson(...)` STAYS as a practical shortcut (= add_elliptic_model with the Poisson bricks),
+but not as the central architecture.
 
-Etat (premier ordre, FAIT, #58) : add_elliptic_model + briques exposes en Python ; Poisson = instance ;
-set_poisson raccourci. Pour l'instant operateur div(eps grad) a eps=1 + densite de charge (charges sur
-les blocs) ; eps(x), charges au niveau EPM, et autres operateurs (diffusion, projection) = raffinements
-(rejetes proprement par NotImplementedError).
+Status (first order, DONE, #58): add_elliptic_model + bricks exposed in Python; Poisson = instance;
+set_poisson shortcut. For now the operator div(eps grad) at eps=1 + charge density (charges on
+the blocks); eps(x), charges at the EPM level, and other operators (diffusion, projection) = refinements
+(rejected cleanly by NotImplementedError).
 
-### Forme math
+### Math form
 ```
 HPM : d_t U + div F(U) = S(U, aux)
 EPM : D(phi, aux) = f(U_all, aux)
@@ -204,40 +204,40 @@ Poisson : D = div(eps grad) ; f = e(n_e - n_i)/eps0 ; plus generalement f = Sum_
 
 ---
 
-## 4. Sources inter-especes (CoupledSource)
+## 4. Inter-species sources (CoupledSource)
 
-Aujourd'hui `source(U, aux)` ne voit qu'un etat + le champ ; le couplage direct (ionisation,
-collisions, echange thermique) doit lire les AUTRES especes. Signature cible :
+Today `source(U, aux)` only sees one state + the field; direct coupling (ionization,
+collisions, thermal exchange) must read the OTHER species. Target signature:
 ```
 source(block_id, local_state U_self, SystemView all, aux) -> S
 ```
-Place : au niveau Coupler/Assembler (comme le rhs elliptique somme deja Sum_s q_s n_s). Briques :
-ionisation `m n_e n_g K_iz` (signes opposes), collisions `nu (u_a - u_b)`, echange `(T_a - T_b)`.
-Depend des variables primitives (vitesses, temperatures). Test : somme des sources de masse = 0.
+Location: at the Coupler/Assembler level (as the elliptic rhs already sums Sum_s q_s n_s). Bricks:
+ionization `m n_e n_g K_iz` (opposite signs), collisions `nu (u_a - u_b)`, exchange `(T_a - T_b)`.
+Depends on the primitive variables (velocities, temperatures). Test: sum of mass sources = 0.
 
 ---
 
-## 5. Espece gelee (background evolue / non-evolue)
+## 5. Frozen species (evolved / non-evolved background)
 
-Un bloc peut etre GELE : `evolve=False`, non avance en temps, mais visible des sources couplees
-(l'ionisation a besoin de n_g) et du rhs des EPM. Generalise `BackgroundDensity` (n0 constant)
-vers une vraie espece de fond n_g(x). Passer evolue <-> gele doit etre "une ligne".
-
----
-
-## 6. Echelle de tests du tuteur (meme SpaceMethod partout, sans copier-coller)
-
-1. advection scalaire
-2. Euler isotherme
-3. Euler complet (1 bloc)
-4. DEUX Euler INDEPENDANTS (electrons + ions, rapport de masses, vitesses differentes, detente, non couples)
-5. + source couplee (ionisation / collisions)
-6. + EPM / Poisson (≈ multispecies actuel)
-7. modele plasma de Sacha
+A block can be FROZEN: `evolve=False`, not advanced in time, but visible to the coupled sources
+(ionization needs n_g) and to the EPM rhs. Generalizes `BackgroundDensity` (constant n0)
+toward a real background species n_g(x). Switching evolved <-> frozen must be "one line".
 
 ---
 
-## 7. TODO (ordre de priorite du tuteur)
+## 6. Tutor test scale (same SpaceMethod everywhere, without copy-paste)
+
+1. scalar advection
+2. isothermal Euler
+3. full Euler (1 block)
+4. TWO INDEPENDENT Euler (electrons + ions, mass ratio, different velocities, expansion, uncoupled)
+5. + coupled source (ionization / collisions)
+6. + EPM / Poisson (≈ current multispecies)
+7. Sacha's plasma model
+
+---
+
+## 7. TODO (tutor's priority order)
 
 ```
 [x] 1. Cons/Prim + conversions dans les modeles            (#47, #48)
@@ -255,15 +255,15 @@ vers une vraie espece de fond n_g(x). Passer evolue <-> gele doit etre "une lign
 [x] -- descripteur Variables : sim.variable_names (cons/prim par bloc), introspection (#59)
 ```
 
-Note : ordre des priorites = celui du tuteur. #59 (objet Variables descripteur) est un
-ENRICHISSEMENT conceptuel, non bloquant ; le calcul tourne deja avec le sous-ensemble fonctionnel
-de la Phase 1.
+Note: priority order = the tutor's. #59 (Variables descriptor object) is a conceptual
+ENRICHMENT, not blocking; the computation already runs with the functional subset
+of Phase 1.
 
-Chemin critique vers "deux Euler, meme code" demandé par le tuteur : 1-4 (fait) + 5.
+Critical path to "two Euler, same code" requested by the tutor: 1-4 (done) + 5.
 
 ---
 
-## 8. Esquisses de code (du tableau)
+## 8. Code sketches (from the whiteboard)
 
 ### HPM
 ```cpp
@@ -288,7 +288,7 @@ struct EPM {
 };
 ```
 
-### Flux numerique generique (deja en place dans adc_cpp)
+### Generic numerical flux (already in place in adc_cpp)
 ```cpp
 template <class Model>
 struct RusanovFlux {
@@ -301,7 +301,7 @@ struct RusanovFlux {
 };
 ```
 
-### Volumes finis + flux numerique a l'interface (convention du tableau)
+### Finite volumes + numerical flux at the interface (whiteboard convention)
 ```
 dU_ij/dt + (1/dx)(F*_{i+1/2,j} - F*_{i-1/2,j}) + (1/dy)(F*_{i,j+1/2} - F*_{i,j-1/2}) = S_ij
 F*_{i+1/2,j} = NF(U^R_{i,j}, U^L_{i+1,j})        # etats RECONSTRUITS (pas U_i et U_{i+1})
@@ -309,11 +309,11 @@ Rusanov directionnel : a = max(|lambda^x_max(U^L)|, |lambda^x_max(U^R)|)   (idem
 |lambda|_max = |sqrt(dp/drho) +- u| = |u| + c    # generique ; Euler : c = sqrt(gamma p/rho)
 valeurs propres (Euler, dir x) : u - c, u, u + c
 ```
-NF est GENERIQUE : il appelle `model.flux` et `model.max_wave_speed`, jamais Euler en dur (deja
-le cas dans adc_cpp). `|lambda|_max = |sqrt(dp/drho) +- u|` est la forme valable pour toute EOS,
-pas seulement le gaz parfait.
+NF is GENERIC: it calls `model.flux` and `model.max_wave_speed`, never Euler hard-coded (already
+the case in adc_cpp). `|lambda|_max = |sqrt(dp/drho) +- u|` is the form valid for any EOS,
+not only the ideal gas.
 
-### Cas diocotron, cible avec EPM explicite
+### Diocotron case, target with explicit EPM
 ```python
 sim = adc.AmrSystem(n=n, L=L, regrid_every=10, periodic=True)
 sim.add_block("ne", model=models.diocotron(B0=1.0, alpha=1.0),
@@ -327,31 +327,31 @@ sim.add_elliptic_model("phi", model=models.elliptic(
 
 ---
 
-## 9. Decision : interface unique (Vars + Flux + Source), deux backends de Flux
+## 9. Decision: single interface (Vars + Flux + Source), two Flux backends
 
-Design converge avec le user. L'INTERFACE du modele reste la meme partout : `Vars + Flux + Source`
-(+ EPM pour l'elliptique). Tout le numerique (reconstruction, flux numerique NF, assembleur) ne
-consomme QUE cette interface. Derriere l'interface `Flux`, deux implementations interchangeables :
+Design converged with the user. The model INTERFACE stays the same everywhere: `Vars + Flux + Source`
+(+ EPM for the elliptic). All the numerics (reconstruction, numerical flux NF, assembler) consume
+ONLY this interface. Behind the `Flux` interface, two interchangeable implementations:
 
-- **CompiledFlux** (defaut, PRODUCTION) : briques C++ compilees `ADC_HD` (CompressibleFlux=Euler,
-  IsothermalFlux, ExBVelocity...). Rapides, compatibles Kokkos / GPU / MPI. Vivent dans adc_cpp comme
-  operateurs generiques (au meme titre que Rusanov ou les limiteurs). C'est le chemin de production.
-- **PythonFlux** (PROTOTYPAGE) : une fonction fournie depuis Python / adc_cases (numpy vectorise :
-  flux(U)->F, max_wave_speed(U)->a, cons<->prim). Lent, CPU / HOTE uniquement. Permet de prototyper
-  un flux inedit sans recompiler. REGLE D'OR : ne doit JAMAIS etre utilisee dans un kernel Kokkos /
-  GPU (garde-fou : si backend Kokkos/GPU actif -> erreur claire).
+- **CompiledFlux** (default, PRODUCTION): compiled C++ bricks `ADC_HD` (CompressibleFlux=Euler,
+  IsothermalFlux, ExBVelocity...). Fast, compatible with Kokkos / GPU / MPI. They live in adc_cpp as
+  generic operators (on the same footing as Rusanov or the limiters). This is the production path.
+- **PythonFlux** (PROTOTYPING): a function supplied from Python / adc_cases (vectorized numpy:
+  flux(U)->F, max_wave_speed(U)->a, cons<->prim). Slow, CPU / HOST only. Allows prototyping
+  a novel flux without recompiling. GOLDEN RULE: must NEVER be used in a Kokkos / GPU kernel
+  (safeguard: if Kokkos/GPU backend active -> clear error).
 
-Cote Python, `adc.Model(...)` peut donc SOIT selectionner une brique compilee (`adc.CompressibleFlux()`),
-SOIT fournir une fonction prototype (PythonFlux). Meme interface, meme assembleur ; seul le backend de
-flux change. La performance impose CompiledFlux ; PythonFlux est pour iterer vite, hors hot path GPU/MPI.
+On the Python side, `adc.Model(...)` can therefore EITHER select a compiled brick (`adc.CompressibleFlux()`),
+OR supply a prototype function (PythonFlux). Same interface, same assembler; only the flux backend
+changes. Performance imposes CompiledFlux; PythonFlux is for iterating fast, outside the GPU/MPI hot path.
 
-Frontiere adc_cpp / adc_cases :
-- adc_cpp : moteur generique + briques compilees (flux, sources, operateurs elliptiques, numerique,
-  reconstruction, time steppers, Poisson) + le contrat d'interface. Aucun SCENARIO nomme.
-- adc_cases : SCENARIOS = compositions Python (diocotron, two-fluid, plasma...) + eventuels PythonFlux
-  de prototypage. Les NOMS de scenarios vivent ici.
+adc_cpp / adc_cases boundary:
+- adc_cpp: generic engine + compiled bricks (flux, sources, elliptic operators, numerics,
+  reconstruction, time steppers, Poisson) + the interface contract. No named SCENARIO.
+- adc_cases: SCENARIOS = Python compositions (diocotron, two-fluid, plasma...) + possible prototyping
+  PythonFlux. The scenario NAMES live here.
 
-Le pattern `custom_scheme` (tache #40) est l'ancetre du PythonFlux ; FAIT (#62) : `adc.PythonFlux`
-(flux + max_wave_speed en numpy, residu Rusanov volumes finis cote HOTE) formalise ce backend de
-prototypage, HORS Kokkos/GPU (chemin hote pur, jamais dans un kernel). Les flux nommes
-(Euler/isotherme/ExB) NE sont PAS deplaces hors de adc_cpp : ils sont le CompiledFlux (production).
+The `custom_scheme` pattern (task #40) is the ancestor of PythonFlux; DONE (#62): `adc.PythonFlux`
+(flux + max_wave_speed in numpy, finite-volume Rusanov residual on the HOST side) formalizes this
+prototyping backend, OUTSIDE Kokkos/GPU (pure host path, never in a kernel). The named fluxes
+(Euler/isothermal/ExB) are NOT moved out of adc_cpp: they are the CompiledFlux (production).

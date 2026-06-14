@@ -1,491 +1,491 @@
-# Audit de conformite aux standards C++ de `adc_cpp`
+# Audit of `adc_cpp` conformance to C++ standards
 
-Date : 2026-06-12.
-Base relue : `origin/master` / `ffb9022`.
-Perimetre : l'integralite du depot, soit 283 fichiers et ~56 700 lignes, decoupes en 14 unites
-d'audit : coeur/AMR/parallele/physique, maillage, numerique (3 lots), couplage (2 lots), runtime
-(3 lots), bindings Python, tests (2 lots) et bench/CMake/scripts. Sont relus tous les
+Date: 2026-06-12.
+Reviewed base: `origin/master` / `ffb9022`.
+Scope: the entire repository, that is 283 files and ~56,700 lines, split into 14 audit
+units: core/AMR/parallel/physics, mesh, numerics (3 batches), coupling (2 batches), runtime
+(3 batches), Python bindings, tests (2 batches) and bench/CMake/scripts. Reviewed are all the
 `include/adc/**/*.hpp`, `python/*.cpp`, `tests/**/*.cpp`, `python/tests/**/*.cpp`, `bench/*.cpp`,
-`CMakeLists.txt`, `CMakePresets.json`, `.clang-format`, `.clang-tidy` et les scripts de build.
+`CMakeLists.txt`, `CMakePresets.json`, `.clang-format`, `.clang-tidy` and the build scripts.
 
-Methode : relecture par sous-systeme, une unite a la fois. Chaque constat
-non cosmetique a ete verifie sur piece (lecture du `file:line` cite, du site jumeau et de la
-convention de fait du depot avant classification). Les constats qui se sont reveles infondes ou
-survendus a la verification ont ete soit retires, soit retrogrades en severite : 6 constats ont
-ete rejetes purement (cf. note de cloture en fin de section 6), et une vingtaine de "important" initiaux ont ete ramenes a
-"cosmetique" faute de trigger ou d'impact reel. Le document ne reporte que les ecarts INTERNES aux
-conventions du depot ou les regles de fond reellement enfreintes ; les regles-guides
-deliberement non suivies (snake_case, `#pragma once`, pas de `[[nodiscard]]`...) sont listees une
-fois en section 3 et NON comptees comme ecarts.
+Method: review by subsystem, one unit at a time. Each non-cosmetic finding was
+verified on the spot (reading the cited `file:line`, the twin site and the
+de facto convention of the repository before classification). Findings that turned out to be unfounded or
+oversold on verification were either removed, or downgraded in severity: 6 findings were
+rejected outright (cf. closing note at the end of section 6), and about twenty initial "important" ones were brought back to
+"cosmetic" for lack of a trigger or real impact. The document reports only the deviations INTERNAL to the
+repository conventions or the substantive rules actually broken; the guide-rules
+deliberately not followed (snake_case, `#pragma once`, no `[[nodiscard]]`...) are listed once
+in section 3 and are NOT counted as deviations.
 
-Ce document est un audit de style et de conformite, pas une roadmap scientifique ni un audit de
-maintenabilite. Il complete :
-- [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md) : audit de maintenabilite et de responsabilites.
-- `CODE_DOCUMENTATION_CONVENTION.md` : convention de commentaires/Doxygen. ATTENTION : ce fichier
-  est reference par `CODEBASE_AUDIT.md` mais n'a jamais ete commite : il n'existe que dans l'arbre
-  de travail principal, donc le lien est mort pour tout clone frais de `master`. A committer
-  (suivi via ADC-125).
-- `CODING_STANDARDS_DECISIONS.md` : registre des arbitrages entre Google / Core Guidelines / LLVM
-  pour le profil cible. C'est la que doivent etre actes les choix de la section 3 ; cet audit en
-  suppose le contenu et le designe comme la source de verite des conventions.
+This document is a style and conformance audit, not a scientific roadmap nor a maintainability
+audit. It complements:
+- [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md): maintainability and responsibilities audit.
+- `CODE_DOCUMENTATION_CONVENTION.md`: comments/Doxygen convention. WARNING: this file
+  is referenced by `CODEBASE_AUDIT.md` but has never been committed: it exists only in the main
+  working tree, so the link is dead for any fresh clone of `master`. To be committed
+  (tracked via ADC-125).
+- `CODING_STANDARDS_DECISIONS.md`: register of the arbitrations between Google / Core Guidelines / LLVM
+  for the target profile. This is where the choices of section 3 must be recorded; this audit
+  assumes its content and designates it as the source of truth of the conventions.
 
-## 1. Lecture globale
+## 1. Global reading
 
-Le depot est de tres bonne facture et, surtout, COHERENT avec lui-meme. Il ne suit pas un guide
-externe unique : il applique une convention maison stable (snake_case, header-only `#pragma once`,
-structs POD device-copyables, idiome `ADC_HD`, foncteurs nommes plutot que lambdas etendues sous
-`nvcc`, exceptions `std::runtime_error` prefixees, casts toujours explicites). Le verdict global de
-conformite n'est donc pas "suit Google" ou "suit Core Guidelines", mais : le depot suit
-majoritairement et fidelement une convention interne coherente, et les ecarts releves sont des
-ecarts a CETTE convention, plus quelques regles de fond (securite/UB/portabilite) que les trois
-guides partagent.
+The repository is of very good quality and, above all, COHERENT with itself. It does not follow a single
+external guide: it applies a stable in-house convention (snake_case, header-only `#pragma once`,
+device-copyable POD structs, `ADC_HD` idiom, named functors rather than extended lambdas under
+`nvcc`, prefixed `std::runtime_error` exceptions, always explicit casts). The global conformance
+verdict is therefore not "follows Google" or "follows Core Guidelines", but: the repository follows
+mostly and faithfully a coherent internal convention, and the deviations found are
+deviations from THIS convention, plus a few substantive rules (security/UB/portability) that the three
+guides share.
 
-Deux constats seulement sont bloquants, tous deux conditionnels au chantier de portage Windows
-(epic ADC-90) ou au chemin device :
-- `include/adc/mesh/box_hash.hpp:71-73` : `static_cast<long>(bx) << 32` suppose `long >= 64` bits ;
-  sur ABI LLP64 (Windows natif) `long` fait 32 bits, le decalage est un comportement indefini et la
-  cle perd `bx` -> hash spatial casse. Verifie sur piece.
-- `include/adc/numerics/elliptic/elliptic_problem.hpp:104` : `field_postprocess` dispatche via une
-  lambda etendue `[=] ADC_HD(int i, int j)` sur un chemin device, exactement le motif que le reste
-  du repertoire elliptique bannit (segfault `nvcc` cross-TU, doctrine #93). Verifie : c'est le seul
-  ADC_HD-lambda de tout `elliptic/`.
+Only two findings are blocking, both conditional on the Windows port work item
+(epic ADC-90) or on the device path:
+- `include/adc/mesh/box_hash.hpp:71-73`: `static_cast<long>(bx) << 32` assumes `long >= 64` bits;
+  on the LLP64 ABI (native Windows) `long` is 32 bits, the shift is undefined behavior and the
+  key loses `bx` -> spatial hash broken. Verified on the spot.
+- `include/adc/numerics/elliptic/elliptic_problem.hpp:104`: `field_postprocess` dispatches via an
+  extended lambda `[=] ADC_HD(int i, int j)` on a device path, exactly the pattern that the rest
+  of the elliptic directory bans (`nvcc` cross-TU segfault, doctrine #93). Verified: it is the only
+  ADC_HD-lambda in all of `elliptic/`.
 
-Aucun autre UB certain ni bug dur n'a ete trouve. Les autres risques (membres POD non initialises,
-pointeurs/references membres qui aliasent des stores sans regle des cinq, gardes `assert` perdues
-sous NDEBUG) sont LATENTS : neutralises par l'usage actuel mais a durcir.
+No other certain UB nor hard bug was found. The other risks (uninitialized POD members,
+member pointers/references that alias stores without the rule of five, `assert` guards lost
+under NDEBUG) are LATENT: neutralized by current usage but to be hardened.
 
-## 2. Synthese chiffree
+## 2. Quantified summary
 
-180 constats retenus apres verification (6 rejetes en plus, cf. note de cloture en fin de section 6).
-Le tableau ci-dessous fait foi pour le decompte ; les sections 4.x enumerent les constats
-representatifs par sous-systeme et regroupent les ecarts repetitifs, si bien que le comptage litteral
-des puces y derive de un a deux items par section.
+180 findings retained after verification (6 rejected in addition, cf. closing note at the end of section 6).
+The table below is authoritative for the count; sections 4.x enumerate the representative findings
+per subsystem and group the repetitive deviations, so that the literal count
+of bullets there drifts by one to two items per section.
 
-| Sous-systeme | Fichiers | Lignes | Bloquant | Important | Cosmetique | Total |
+| Subsystem | Files | Lines | Blocking | Important | Cosmetic | Total |
 |---|---|---|---|---|---|---|
-| coeur/AMR/parallele/physique | 23 | 2861 | 0 | 2 | 13 | 15 |
-| maillage | 13 | 1912 | 1 | 5 | 7 | 13 |
-| numerique-1 (elliptique) | 12 | 3252 | 1 | 5 | 14 | 20 |
-| numerique-2 (flux/operateurs) | 10 | 3119 | 0 | 2 | 12 | 14 |
-| numerique-3 (temps/AMR) | 13 | 2198 | 0 | 1 | 14 | 15 |
-| couplage-1 | 10 | 2499 | 0 | 0 | 14 | 14 |
-| couplage-2 | 7 | 1850 | 0 | 3 | 4 | 7 |
+| core/AMR/parallel/physics | 23 | 2861 | 0 | 2 | 13 | 15 |
+| mesh | 13 | 1912 | 1 | 5 | 7 | 13 |
+| numerics-1 (elliptic) | 12 | 3252 | 1 | 5 | 14 | 20 |
+| numerics-2 (flux/operators) | 10 | 3119 | 0 | 2 | 12 | 14 |
+| numerics-3 (time/AMR) | 13 | 2198 | 0 | 1 | 14 | 15 |
+| coupling-1 | 10 | 2499 | 0 | 0 | 14 | 14 |
+| coupling-2 | 7 | 1850 | 0 | 3 | 4 | 7 |
 | runtime-1 (DSL/AMR system) | 5 | 3163 | 0 | 1 | 10 | 11 |
 | runtime-2 (loader/ABI) | 13 | 2855 | 0 | 1 | 15 | 16 |
 | runtime-3 (stepper/store) | 4 | 1380 | 0 | 1 | 7 | 8 |
-| bindings Python | 3 | 3654 | 0 | 4 | 14 | 18 |
+| Python bindings | 3 | 3654 | 0 | 4 | 14 | 18 |
 | tests-a | 72 | 12888 | 0 | 1 | 7 | 8 |
 | tests-b | 86 | 13293 | 0 | 2 | 5 | 7 |
 | bench/CMake/scripts | 12 | 1734 | 0 | 2 | 12 | 14 |
 | TOTAL | 283 | 56658 | 2 | 30 | 148 | 180 |
 
-Repartition par dimension (importants et bloquants) : organisation/DRY domine (duplication de
-cascades de dispatch, de stencils, de pack/unpack, de harnais de test), devant securite (UB latent,
-gardes `assert` non durcies, modulo par zero non garde), types (regle des cinq incomplete, membres
-non initialises) et idiomes device (lambdas etendues residuelles).
+Breakdown by dimension (important and blocking): organization/DRY dominates (duplication of
+dispatch cascades, of stencils, of pack/unpack, of test harnesses), ahead of security (latent UB,
+`assert` guards not hardened, unguarded modulo by zero), types (incomplete rule of five, uninitialized
+members) and device idioms (residual extended lambdas).
 
-Verdict global : conforme a la convention interne, avec une dette de duplication structurelle
-concentree sur les chemins AMR/Schur/DSL et un point de portabilite reel (`long` 32 bits sur
-LLP64) qui devient bloquant des que le port Windows avance.
+Global verdict: conforms to the internal convention, with a structural duplication debt
+concentrated on the AMR/Schur/DSL paths and one real portability point (`long` 32 bits on
+LLP64) that becomes blocking as soon as the Windows port advances.
 
-## 3. Cadrage : pourquoi les trois guides ne sont pas superposables
+## 3. Framing: why the three guides are not superposable
 
-La cible est une bibliotheque C++23 header-only, HPC, Kokkos/CUDA (`nvcc`, chemin device) avec
-bindings pybind11. Sur ce profil, Google C++ Style, C++ Core Guidelines et LLVM Coding Standards
-divergent sur des axes mutuellement exclusifs : on ne peut pas satisfaire les trois a la fois.
+The target is a header-only C++23 library, HPC, Kokkos/CUDA (`nvcc`, device path) with
+pybind11 bindings. On this profile, Google C++ Style, C++ Core Guidelines and LLVM Coding Standards
+diverge on mutually exclusive axes: one cannot satisfy all three at once.
 
-- Casse des fonctions : `UpperCamelCase` (Google) vs `camelBack` (LLVM) vs `snake_case` (CG) :
-  trois styles incompatibles. Le depot tranche pour `snake_case` (CG).
-- Casse variables/membres et constantes : `snake_case` + `kCamelCase` (Google/CG) vs
-  `UpperCamelCase` (LLVM). Le depot suit `snake_case` pour les locaux, suffixe `_` pour les membres
-  prives, `kCamelCase` pour les magic-numbers.
-- Include guard : `#ifndef` impose (Google/LLVM) vs `#pragma once` tolere (CG SF.8). En header-only
-  le depot prend `#pragma once`, ergonomique.
-- Ordre des includes : std tot (Google) vs system en dernier (LLVM), ordres opposes. Le depot
-  impose son propre ordre : bloc `<adc/...>` d'abord, ligne vide, puis STL (avec `SortIncludes:false`).
-- Exceptions et RTTI : interdits (Google/LLVM) vs recommandes E.2/E.3 et `dynamic_cast` C.146 (CG).
-  Le code `__device__` ne peut ni `throw` ni `typeid` -> la position no-except/no-RTTI est imposee
-  de facto sur le chemin device ; les exceptions vivent cote hote uniquement.
-- Contrats : `assert`/`CHECK` (Google/LLVM, device avec reserves) vs `Expects()/Ensures()` GSL (CG,
-  non device-callable). Le depot utilise `assert` hote + `static_assert` de modelisation par concepts.
-- `[[nodiscard]]` : sous-specifie par les trois. Le depot le DESACTIVE volontairement
-  (`modernize-use-nodiscard` retire dans `.clang-tidy`).
+- Function case: `UpperCamelCase` (Google) vs `camelBack` (LLVM) vs `snake_case` (CG):
+  three incompatible styles. The repository settles on `snake_case` (CG).
+- Variable/member and constant case: `snake_case` + `kCamelCase` (Google/CG) vs
+  `UpperCamelCase` (LLVM). The repository follows `snake_case` for locals, `_` suffix for private
+  members, `kCamelCase` for magic numbers.
+- Include guard: `#ifndef` imposed (Google/LLVM) vs `#pragma once` tolerated (CG SF.8). In header-only
+  the repository takes `#pragma once`, ergonomic.
+- Include order: std early (Google) vs system last (LLVM), opposite orders. The repository
+  imposes its own order: `<adc/...>` block first, blank line, then STL (with `SortIncludes:false`).
+- Exceptions and RTTI: forbidden (Google/LLVM) vs recommended E.2/E.3 and `dynamic_cast` C.146 (CG).
+  `__device__` code can neither `throw` nor `typeid` -> the no-except/no-RTTI position is imposed
+  de facto on the device path; exceptions live on the host side only.
+- Contracts: `assert`/`CHECK` (Google/LLVM, device with reservations) vs `Expects()/Ensures()` GSL (CG,
+  not device-callable). The repository uses host `assert` + modeling `static_assert` by concepts.
+- `[[nodiscard]]`: under-specified by the three. The repository DISABLES it deliberately
+  (`modernize-use-nodiscard` removed in `.clang-tidy`).
 
-Consequence methodologique : ces choix sont coherents dans tout le depot et relevent d'un
-arbitrage, pas d'un defaut. Ils ne sont PAS comptes comme ecarts. Les arbitrages eux-memes doivent
-etre actes dans `CODING_STANDARDS_DECISIONS.md` ; le present audit ne juge que la conformite a la
-convention interne ainsi fixee, et les regles de fond communes aux trois guides (init des objets,
-pas de division par zero, regle des cinq, pas d'UB de decalage).
+Methodological consequence: these choices are coherent throughout the repository and stem from an
+arbitration, not a defect. They are NOT counted as deviations. The arbitrations themselves must
+be recorded in `CODING_STANDARDS_DECISIONS.md`; the present audit judges only conformance to the
+internal convention thus fixed, and the substantive rules common to the three guides (object init,
+no division by zero, rule of five, no shift UB).
 
-Regles-guides deliberement non suivies, valides dans tout le depot (rappel unique, NON reportees
-comme constats) : `snake_case` (vs CamelCase Google) ; `struct` a membres publics pour les
-POD/policies/foncteurs ; `#pragma once` ; absence de `[[nodiscard]]` ; commentaires en francais sans
-accents ; `Real(litteral)` idiomatique ; tableaux C `Real v[N]` (device-clean) ; out-params par
-reference pour les retours multiples device (F.21) ; capture du modele PAR VALEUR dans les foncteurs ;
-`using namespace adc;` au scope fichier dans les TU de test/bench/bindings (feuilles, pas d'en-tete).
+Guide-rules deliberately not followed, valid throughout the repository (single reminder, NOT reported
+as findings): `snake_case` (vs Google CamelCase); `struct` with public members for the
+POD/policies/functors; `#pragma once`; absence of `[[nodiscard]]`; comments in French without
+accents; idiomatic `Real(literal)`; C arrays `Real v[N]` (device-clean); out-params by
+reference for multiple device returns (F.21); model capture BY VALUE in the functors;
+`using namespace adc;` at file scope in the test/bench/bindings TUs (leaves, not a header).
 
-## 4. Constats par sous-systeme
+## 4. Findings by subsystem
 
-### 4.1 coeur/AMR/parallele/physique (23 fichiers)
+### 4.1 core/AMR/parallel/physics (23 files)
 
-Tres bonne facture : architecture concept-driven (`PhysicalModel`/`HyperbolicPhysicalModel`/
-`EquationBlockLike`), invariant device-clean rigoureux, AMR Berger-Rigoutsos solide, documentation
-dense. Aucun bug dur ; les deux risques reels sont latents.
+Very good quality: concept-driven architecture (`PhysicalModel`/`HyperbolicPhysicalModel`/
+`EquationBlockLike`), rigorous device-clean invariant, solid Berger-Rigoutsos AMR, dense
+documentation. No hard bug; the two real risks are latent.
 
-Important :
-- `include/adc/core/variables.hpp:32-44` (C.48/ES.20) : `struct Variable` laisse `role`/`component`
-  et `struct VariableSet` laisse `kind`/`size` sans initialiseur in-class, alors que `ArenaStats`/
-  `ClusterParams`/`Aux` en posent. Type public default-constructible -> lecture = UB. Fix trivial
-  sans casser l'agregat `{kind, names, size}`.
-- `include/adc/physics/hyperbolic.hpp:81-114` (DRY) : `ExBVelocityPolar` duplique octet pour octet
-  `ExBVelocity` (l.27-59) ; seule la semantique (cartesien vs base locale polaire) differe, portee
-  par les commentaires. Le meme fichier resout le cas jumeau par heritage (`IsothermalFluxPolar :
-  IsothermalFlux`). Aliaser ou factoriser.
+Important:
+- `include/adc/core/variables.hpp:32-44` (C.48/ES.20): `struct Variable` leaves `role`/`component`
+  and `struct VariableSet` leaves `kind`/`size` without an in-class initializer, whereas `ArenaStats`/
+  `ClusterParams`/`Aux` set them. Public default-constructible type -> read = UB. Trivial fix
+  without breaking the aggregate `{kind, names, size}`.
+- `include/adc/physics/hyperbolic.hpp:81-114` (DRY): `ExBVelocityPolar` duplicates byte for byte
+  `ExBVelocity` (l.27-59); only the semantics (Cartesian vs polar local basis) differ, carried
+  by the comments. The same file resolves the twin case by inheritance (`IsothermalFluxPolar :
+  IsothermalFlux`). Alias or factor out.
 
-Cosmetique (13) : `equation_block.hpp:63` (`string_view` membre potentiellement pendant, latent) ;
-usage pervasif de `long` pour les comptes de cellules -> 32 bits sur LLP64 ; `regrid_level` tague
-seulement les fabs locaux sans le `all_reduce_or` documente (correct en serie) ; `cluster_rec`
-imbrique 3-4 niveaux ; conversions `double(x)` ; locaux capitalises `Sx`/`Sy`/`D` ; placement non
-uniforme `@file`/`#pragma once` ; `comm.hpp`/`load_balance.hpp` sans en-tete Doxygen ; double
-documentation Doxygen+prose ; ilot `/** */` en `physics/` ; commentaire "16 bits" obsolete dans
-`part1by1` ; `ManagedArena::stats()` non-const ; `VariableSet::size` denormalise vs `names.size()`.
+Cosmetic (13): `equation_block.hpp:63` (`string_view` member potentially dangling, latent);
+pervasive use of `long` for cell counts -> 32 bits on LLP64; `regrid_level` tags
+only the local fabs without the documented `all_reduce_or` (correct in serial); `cluster_rec`
+nested 3-4 levels; `double(x)` conversions; capitalized locals `Sx`/`Sy`/`D`; non-uniform
+placement of `@file`/`#pragma once`; `comm.hpp`/`load_balance.hpp` without a Doxygen header; double
+Doxygen+prose documentation; `/** */` island in `physics/`; obsolete "16 bits" comment in
+`part1by1`; `ManagedArena::stats()` non-const; `VariableSet::size` denormalized vs `names.size()`.
 
-### 4.2 maillage (13 fichiers)
+### 4.2 mesh (13 files)
 
-Propre et coherent : `#pragma once` unanime, structs POD device-copyables, regle-de-0 respectee,
-const-correctness et `explicit` corrects.
+Clean and coherent: unanimous `#pragma once`, device-copyable POD structs, rule-of-0 respected,
+correct const-correctness and `explicit`.
 
-Bloquant :
-- `include/adc/mesh/box_hash.hpp:71-73` (Integer Types/ES.101) : `BoxHash::key()` fait
-  `static_cast<long>(bx) << 32` et stocke dans `unordered_map<long, ...>`. Sur LLP64 le `<< 32` est
-  un decalage >= largeur du type = UB, et `bx` est perdu -> collisions massives, hash casse. Passer
-  a `std::int64_t`.
+Blocking:
+- `include/adc/mesh/box_hash.hpp:71-73` (Integer Types/ES.101): `BoxHash::key()` does
+  `static_cast<long>(bx) << 32` and stores into `unordered_map<long, ...>`. On LLP64 the `<< 32` is
+  a shift >= width of the type = UB, and `bx` is lost -> massive collisions, broken hash. Move
+  to `std::int64_t`.
 
-Important :
-- `fab2d.hpp:45,95,123-127` + `box2d.hpp:54` + `box_array.hpp:52` : `long` natif pour
-  strides/tailles/offsets memoire ; overflow silencieux > 2^31 sur LLP64, compounde le bloquant.
-- `refinement.hpp:44-47` / `box2d.hpp:111-114` / `box_hash.hpp:68` : la division-plancher entiere
-  (gestion du negatif) est ECRITE TROIS FOIS, corps identiques. Factoriser un `floor_div` ADC_HD.
-- `refinement.hpp:179,209` + `multifab.hpp:137` : lambdas etendues `[=] ADC_HD` sur le chemin chaud
-  V-cycle MG, alors que `fill_boundary`/`mf_arith`/`physical_bc` ont migre vers des foncteurs nommes
-  (meme mode de panne `nvcc` cross-TU documente).
-- `patch_box.hpp:16-20` (C.48/C.49) : 5 membres `level/ilo/jlo/ihi/jhi` sans initialiseur alors que
-  tous les POD freres (`Box2D`, `Array4`, `Geometry`, `BCRec`) initialisent ; type exporte a Python.
-- `refinement.hpp:121-157` : `parallel_copy` emballe/deballe les messages MPI en boucles hote
-  4-imbriquees dupliquees envoi/reception avec `std::vector` `std::allocator`, alors que
-  `fill_boundary` fait le meme pack/unpack en `for_each` device + `comm_allocator` epingles.
+Important:
+- `fab2d.hpp:45,95,123-127` + `box2d.hpp:54` + `box_array.hpp:52`: native `long` for
+  memory strides/sizes/offsets; silent overflow > 2^31 on LLP64, compounds the blocker.
+- `refinement.hpp:44-47` / `box2d.hpp:111-114` / `box_hash.hpp:68`: integer floor division
+  (negative handling) is WRITTEN THREE TIMES, identical bodies. Factor out a `floor_div` ADC_HD.
+- `refinement.hpp:179,209` + `multifab.hpp:137`: extended lambdas `[=] ADC_HD` on the hot
+  V-cycle MG path, whereas `fill_boundary`/`mf_arith`/`physical_bc` have migrated to named functors
+  (same documented `nvcc` cross-TU failure mode).
+- `patch_box.hpp:16-20` (C.48/C.49): 5 members `level/ilo/jlo/ihi/jhi` without an initializer whereas
+  all the sibling PODs (`Box2D`, `Array4`, `Geometry`, `BCRec`) initialize; type exported to Python.
+- `refinement.hpp:121-157`: `parallel_copy` packs/unpacks the MPI messages in host loops
+  4-nested duplicated send/receive with `std::vector` `std::allocator`, whereas
+  `fill_boundary` does the same pack/unpack in `for_each` device + pinned `comm_allocator`.
 
-Cosmetique (7) : ordre d'includes inverse + `<cstdlib>/<cstdio>` inutilises dans `refinement.hpp` ;
-`fill_boundary_begin`/`parallel_copy` trop longues ; methodes POD `Box2D`/`Geometry` non `constexpr`
-(174 `constexpr` ailleurs) ; locaux camelCase ; doubles en-tetes Doxygen+prose ; `patch_box.hpp`
-sans `@file` ; divisions par `r` non gardees dans `coarsen`/`refine`.
+Cosmetic (7): inverted include order + unused `<cstdlib>/<cstdio>` in `refinement.hpp`;
+`fill_boundary_begin`/`parallel_copy` too long; POD methods `Box2D`/`Geometry` not `constexpr`
+(174 `constexpr` elsewhere); camelCase locals; double Doxygen+prose headers; `patch_box.hpp`
+without `@file`; divisions by `r` not guarded in `coarsen`/`refine`.
 
-### 4.3 numerique-1 elliptique (12 fichiers)
+### 4.3 numerics-1 elliptic (12 files)
 
-Sain et homogene : C++23, header-only, RAII, conception concept-driven, aucun cast C, divisions
-gardees, vrai soin device (foncteurs nommes, tampons sur la pile O(N^2)).
+Healthy and homogeneous: C++23, header-only, RAII, concept-driven design, no C cast, guarded
+divisions, real device care (named functors, stack buffers O(N^2)).
 
-Bloquant :
-- `elliptic_problem.hpp:104` : seul kernel de l'unite a dispatcher via lambda etendue `[=] ADC_HD`
-  sur un chemin device (phi -> aux grad consomme par le coupler), motif banni par
-  `poisson_operator.hpp:127-132`. Extraire un foncteur `detail::FieldPostprocessKernel`.
+Blocking:
+- `elliptic_problem.hpp:104`: only kernel of the unit dispatching via an extended lambda `[=] ADC_HD`
+  on a device path (phi -> aux grad consumed by the coupler), pattern banned by
+  `poisson_operator.hpp:127-132`. Extract a functor `detail::FieldPostprocessKernel`.
 
-Important :
-- `poisson_fft_solver.hpp:114` : garde `Ny % n_ranks() == 0` par `assert` (perdu sous NDEBUG) alors
-  que `nyl_` est deja tronque dans la liste d'init -> slabs mal dimensionnees, OOB en Release. Le
-  jumeau `PoissonFFTSolver` a justement migre vers `throw`. Durcir en `throw`.
-- `poisson_operator.hpp:150-166 / 203-219 / 332-349` : le bloc permittivite de face harmonique
-  (+ branche cut-cell) recopie a l'identique dans les trois foncteurs. Factoriser `face_weights(...)`.
-- `polar_poisson_solver.hpp:260-316` : `residual()` reconstruit a la main l'operateur deja assemble
-  par `solve()` (coeffs radiaux, valeur propre azimutale, repli BC, FFT par ligne). Risque de derive
-  solve/residu.
-- `geometric_mg.hpp:189-360` : 6 surcharges `set_*` repetant init-hote + restriction + ghosts ; le
-  repli `kappa` omet `fill_ghosts` (risque de bug silencieux). Un template prive `sample_per_level`.
-- `composite_fac_poisson.hpp:377-480` : `composite_coarse_residual()` ~103 lignes, residu base + 4
-  blocs C-F quasi symetriques (imbrication 4-5 niveaux) + norme inf. Decouper par direction.
+Important:
+- `poisson_fft_solver.hpp:114`: guards `Ny % n_ranks() == 0` by `assert` (lost under NDEBUG) whereas
+  `nyl_` is already truncated in the init list -> mis-sized slabs, OOB in Release. The
+  twin `PoissonFFTSolver` has precisely migrated to `throw`. Harden to `throw`.
+- `poisson_operator.hpp:150-166 / 203-219 / 332-349`: the harmonic face permittivity block
+  (+ cut-cell branch) copied identically into the three functors. Factor out `face_weights(...)`.
+- `polar_poisson_solver.hpp:260-316`: `residual()` rebuilds by hand the operator already assembled
+  by `solve()` (radial coeffs, azimuthal eigenvalue, BC fallback, FFT per line). Risk of
+  solve/residual drift.
+- `geometric_mg.hpp:189-360`: 6 `set_*` overloads repeating host-init + restriction + ghosts; the
+  `kappa` fallback omits `fill_ghosts` (risk of silent bug). A private template `sample_per_level`.
+- `composite_fac_poisson.hpp:377-480`: `composite_coarse_residual()` ~103 lines, base residual + 4
+  quasi-symmetric C-F blocks (4-5 level nesting) + inf norm. Split by direction.
 
-Cosmetique (14) : ctor convertisseur implicite `DistributedFFTSolver` ; `TensorKrylovSolver` a deux
-references-membres (lifetime) ; `hqr_minmax()` ~133 lignes (portage EISPACK verbatim) ; 8 fichiers
-sans `@file` ; ordre includes inverse `dense_eig.hpp` ; locaux matriciels MAJUSCULE ; `kPi_` litteral
-vs `std::numbers::pi` ; `std::function` par valeur sans `move` ; accesseurs `op_*()` non-const ;
-`x,y,z,w,s` non initialises ; init positionnel fragile de `MGLevel` ; helpers FFT dans `adc::` au
-lieu de `detail::` ; seuils numeriques magiques ; prefixes d'exception heterogenes.
+Cosmetic (14): implicit converting ctor `DistributedFFTSolver`; `TensorKrylovSolver` has two
+member-references (lifetime); `hqr_minmax()` ~133 lines (verbatim EISPACK port); 8 files
+without `@file`; inverted include order `dense_eig.hpp`; UPPERCASE matrix locals; `kPi_` literal
+vs `std::numbers::pi`; `std::function` by value without `move`; accessors `op_*()` non-const;
+`x,y,z,w,s` uninitialized; fragile positional init of `MGLevel`; FFT helpers in `adc::` instead
+of `detail::`; magic numeric thresholds; heterogeneous exception prefixes.
 
-### 4.4 numerique-2 flux/operateurs (10 fichiers)
+### 4.4 numerics-2 flux/operators (10 files)
 
-Mature et tres documente, discipline device forte (foncteurs nommes, gardes `if constexpr`,
-divisions protegees). Aucun UB franc dans les kernels.
+Mature and very documented, strong device discipline (named functors, `if constexpr` guards,
+protected divisions). No outright UB in the kernels.
 
-Important :
-- `amr_flux_helpers.hpp:85-90` : `mf_apply_source` (Model-template, chemin Euler par defaut) lance un
-  kernel via lambda etendue `[=] ADC_HD` capturant le modele et appelant `m.source(...)`, alors que
-  `AmrSspRhsKernel` juste au-dessus et toute l'unite imposent le foncteur nomme.
-- `polar_tensor_operator.hpp:726-727` : `PolarTensorKrylovSolver` porte des pointeurs `a_rr_`/`a_tt_`
-  qui aliasent ses propres stores `a_rr_store_`/`a_tt_store_`, sans copy/move/dtor (regle des cinq) ;
-  `MultiFab`/`Fab2D` etant copiables ET movables, une copie/move fait pendre les pointeurs (UB).
-  `= delete` la copie/move ou re-pointer dans un move ecrit a la main.
+Important:
+- `amr_flux_helpers.hpp:85-90`: `mf_apply_source` (Model-template, default Euler path) launches a
+  kernel via an extended lambda `[=] ADC_HD` capturing the model and calling `m.source(...)`, whereas
+  `AmrSspRhsKernel` just above and the whole unit impose the named functor.
+- `polar_tensor_operator.hpp:726-727`: `PolarTensorKrylovSolver` carries pointers `a_rr_`/`a_tt_`
+  that alias its own stores `a_rr_store_`/`a_tt_store_`, without copy/move/dtor (rule of five);
+  `MultiFab`/`Fab2D` being copyable AND movable, a copy/move makes the pointers dangle (UB).
+  `= delete` the copy/move or re-point in a hand-written move.
 
-Cosmetique (12) : `std::numeric_limits` sans `#include <limits>` (compile par transitivite) ;
-`assert(a_rr && a_tt)` au lieu de `throw` (deref nullptr en NDEBUG) ; helpers de stencil a 9-11
-parametres homogenes interchangeables ; sous-indentation `else` (auto-fixable) ; 2 fichiers sans
-`@file` ; `@file` apres includes ; documentation dupliquee 3x ; `__is_trivially_copyable`
-(identifiant reserve) ; out-params `Real&` (idiome device) ; locaux notation mathematique ;
-duplication structurelle des 4 assembleurs RHS.
+Cosmetic (12): `std::numeric_limits` without `#include <limits>` (compiles by transitivity);
+`assert(a_rr && a_tt)` instead of `throw` (nullptr deref in NDEBUG); stencil helpers with 9-11
+interchangeable homogeneous parameters; `else` under-indentation (auto-fixable); 2 files without
+`@file`; `@file` after includes; documentation duplicated 3x; `__is_trivially_copyable`
+(reserved identifier); out-params `Real&` (device idiom); math-notation locals;
+structural duplication of the 4 RHS assemblers.
 
-### 4.5 numerique-3 temps/AMR (13 fichiers)
+### 4.5 numerics-3 time/AMR (13 files)
 
-Deux familles : fichiers socle courts et propres (steppers, splitting, imex, ssprk) ; moteurs AMR et
-Newton implicite, corrects mais lourds. Securite globalement bonne (indexation `static_cast<size_t>`,
-encodage cellule borne).
+Two families: short and clean foundation files (steppers, splitting, imex, ssprk); AMR engines and
+implicit Newton, correct but heavy. Security generally good (`static_cast<size_t>` indexing,
+bounded cell encoding).
 
-Important :
-- `implicit_stepper.hpp:234-257 / 297-320` (F.3/DRY) : l'assemblage de la jacobienne Newton
-  (`if constexpr (HasSourceJacobian) {...} else {fd...}`) duplique ~24 lignes mot pour mot entre le
-  chemin 2a et le chemin 2b, censes etre bit-identiques -> risque de divergence silencieuse.
-  Extraire `assemble_newton_jacobian(...)`.
+Important:
+- `implicit_stepper.hpp:234-257 / 297-320` (F.3/DRY): the assembly of the Newton jacobian
+  (`if constexpr (HasSourceJacobian) {...} else {fd...}`) duplicates ~24 lines word for word between the
+  path 2a and the path 2b, supposed to be bit-identical -> risk of silent divergence.
+  Extract `assemble_newton_jacobian(...)`.
 
-Cosmetique (14) : `fab(bL/bR/bB/bT)` non garde sur `mf_find_box==-1` (protege par invariant
-parent-replique) ; constantes d'encodage `1048576`/`16` dupliquees encode/decode ; `fail_policy` en
-`int`+`kFail*` vs `enum class` ; `subcycle_level_mp` ~205 lignes ; `struct Reg` local == `RegMP` ;
-motif des 4 faces recopie ~8 fois (dont oracles volontaires) ; 13 fichiers sans `@file` ; `double`
-brut au lieu de `Real` dans les oracles ; `TimeTreatment::Explicit` nu vs prefixe `k` ;
-sous-indentation `else` ; pointeurs bruts non-detenant `aux`/`pOld`/`pNew` ; callables par valeur vs
-`Step&&` ; reuse de `r`/`L`/`m` ambigus ; `char msg[256]` snprintf au lieu de `std::string`.
+Cosmetic (14): `fab(bL/bR/bB/bT)` not guarded on `mf_find_box==-1` (protected by the
+parent-replica invariant); encoding constants `1048576`/`16` duplicated encode/decode; `fail_policy` in
+`int`+`kFail*` vs `enum class`; `subcycle_level_mp` ~205 lines; local `struct Reg` == `RegMP`;
+4-face pattern copied ~8 times (including deliberate oracles); 13 files without `@file`; raw `double`
+instead of `Real` in the oracles; `TimeTreatment::Explicit` bare vs `k` prefix;
+`else` under-indentation; non-owning raw pointers `aux`/`pOld`/`pNew`; callables by value vs
+`Step&&`; reuse of ambiguous `r`/`L`/`m`; `char msg[256]` snprintf instead of `std::string`.
 
-### 4.6 couplage-1 (10 fichiers)
+### 4.6 coupling-1 (10 files)
 
-Solide et coherent : `#pragma once`, ordre includes respecte, `ADC_HD` + foncteurs nommes,
-concepts/`requires`, `enum class`, exceptions, casts explicites, sink par valeur+`move`. Aucun ecart
-bloquant, aucun important apres verification (les 6 candidats importants ont ete retrogrades).
+Solid and coherent: `#pragma once`, include order respected, `ADC_HD` + named functors,
+concepts/`requires`, `enum class`, exceptions, explicit casts, sink by value+`move`. No blocking
+deviation, no important one after verification (the 6 important candidates were downgraded).
 
-Cosmetique (14) : triple duplication du mapping `BCRec->Foextrap` (`coeff_bc` x2 +
-`detail::derive_aux_bc`) alors que `aux_fill.hpp` centralise deja ; `shared_ptr` la ou `unique_ptr`
-suffit (incoherent avec la classe soeur) ; `CsProgram::eval` depile sans garde de pile (protege
-seulement cote Python) ; validation `n*n` en `int` debordable (la soeur evite en `size_t`) ;
-`max_wave_speed`/`level_state`/`level_potential` non-const ; `AmrCouplerMP` 626 lignes
-orchestration+marshaling ; `step_multilevel` dense ; locaux SCREAMING `PNX`/`PNY` ; doubles en-tetes
-Doxygen+prose ; prefixes d'exception heterogenes ; `same_box` reimplemente `operator==` ; tableau C
-`MultiFab* saved[]` ; `(void)dom` vs `[[maybe_unused]]` ; membre `bcPhi_` camelCase.
+Cosmetic (14): triple duplication of the mapping `BCRec->Foextrap` (`coeff_bc` x2 +
+`detail::derive_aux_bc`) whereas `aux_fill.hpp` already centralizes it; `shared_ptr` where `unique_ptr`
+suffices (inconsistent with the sister class); `CsProgram::eval` pops without a stack guard (protected
+only on the Python side); `n*n` validation in overflowable `int` (the sister avoids it in `size_t`);
+`max_wave_speed`/`level_state`/`level_potential` non-const; `AmrCouplerMP` 626 lines
+orchestration+marshaling; `step_multilevel` dense; SCREAMING locals `PNX`/`PNY`; double Doxygen+prose
+headers; heterogeneous exception prefixes; `same_box` reimplements `operator==`; C array
+`MultiFab* saved[]`; `(void)dom` vs `[[maybe_unused]]`; member `bcPhi_` camelCase.
 
-### 4.7 couplage-2 (7 fichiers)
+### 4.7 coupling-2 (7 files)
 
-Code soigne, device-clean, aucun constat bloquant.
+Carefully written code, device-clean, no blocking finding.
 
-Important :
-- `system_coupler.hpp:61-70` (C.21) : `ScopedBlockState` scope-guard a un dtor mutateur actif sans
-  `= delete` copie/move -> double-restauration possible si copie.
-- `system_coupler.hpp:244,292` (ES.45) : `Real(1e-30)` en dur alors que `kCflSpeedFloor` existe
-  (`core/types.hpp:49`) et est documente comme remplacant du "1e-30 disperse".
-- `system_coupler.hpp:143-147` (DRY) : `SystemAssembler::derive_aux` re-encode la convention
-  `FieldPostProcess{Plus,true}` inline au lieu du helper `detail::coupler_grad_phi` deja utilise par
-  `Coupler::derive_aux` -> risque de derive de convention.
+Important:
+- `system_coupler.hpp:61-70` (C.21): `ScopedBlockState` scope-guard has an active mutating dtor without
+  `= delete` copy/move -> possible double restoration if copied.
+- `system_coupler.hpp:244,292` (ES.45): hardcoded `Real(1e-30)` whereas `kCflSpeedFloor` exists
+  (`core/types.hpp:49`) and is documented as the replacement of the "scattered 1e-30".
+- `system_coupler.hpp:143-147` (DRY): `SystemAssembler::derive_aux` re-encodes the convention
+  `FieldPostProcess{Plus,true}` inline instead of the helper `detail::coupler_grad_phi` already used by
+  `Coupler::derive_aux` -> risk of convention drift.
 
-Cosmetique (4) : `step()` polaire ~118 lignes ; precondition `Ny/np_` non verifiee (classe
-DEPRECATED, code mort) ; locaux majuscules + `cmath` inutile + `@file` avant `#pragma once` ; double
-en-tete + forwarding de callback incoherent + phases polaires mal numerotees.
+Cosmetic (4): polar `step()` ~118 lines; precondition `Ny/np_` not checked (DEPRECATED class,
+dead code); UPPERCASE locals + useless `cmath` + `@file` before `#pragma once`; double
+header + inconsistent callback forwarding + polar phases mis-numbered.
 
-### 4.8 runtime-1 DSL/AMR system (5 fichiers)
+### 4.8 runtime-1 DSL/AMR system (5 files)
 
-Bonne tenue : `@file`/`@brief` partout, `#pragma once`, C++ moderne (concepts, `if constexpr`,
-PIMPL forward-declare), surete ABI (`abi_key.hpp`) et device-clean exemplaires.
+Good standing: `@file`/`@brief` everywhere, `#pragma once`, modern C++ (concepts, `if constexpr`,
+forward-declared PIMPL), ABI safety (`abi_key.hpp`) and device-clean exemplary.
 
-Important :
-- `amr_dsl_block.hpp:596-703 / 707-778` + `block_builder.hpp:443-528` (DRY) : la cascade de dispatch
-  riemann x limiteur (rusanov/hll/hllc/roe x none/minmod/vanleer/weno5) avec ses gardes `if constexpr`
-  est repliquee TROIS fois. Les commentaires (l.665-667, 750-752) actent une divergence de table
-  deja survenue (hllc AMR sans weno5). Extraire un gabarit de dispatch parametre par l'action
-  terminale.
+Important:
+- `amr_dsl_block.hpp:596-703 / 707-778` + `block_builder.hpp:443-528` (DRY): the dispatch cascade
+  riemann x limiter (rusanov/hll/hllc/roe x none/minmod/vanleer/weno5) with its `if constexpr` guards
+  is replicated THREE times. The comments (l.665-667, 750-752) record a table divergence
+  already occurred (hllc AMR without weno5). Extract a dispatch template parameterized by the
+  terminal action.
 
-Cosmetique (10) : `add_block` ~18 params dont 6 scalaires Newton a plat alors que `NewtonOptions`
-existe (les fonctions internes l'utilisent deja) ; locaux MAJUSCULE `I0/I1/J0/J1`/`PNX/PNY` ;
-`SourceNewtonReport` 8 membres non initialises ; macros d'aide `abi_key` non `#undef` ; lignes de
-code >100 col non reformatees (auto-fixable) ; `build_amr_compiled` ~250 lignes ; refs non-const vers
-l'etat interne ; prefixe d'exception classe-qualifie vs `adc (...)` ; `mutable` superflu sur
-`solve_count_` (auto-fixable) ; copie non `= delete` explicitement sur `AmrSystem` move-only.
+Cosmetic (10): `add_block` ~18 params including 6 flat Newton scalars whereas `NewtonOptions`
+exists (the internal functions already use it); UPPERCASE locals `I0/I1/J0/J1`/`PNX/PNY`;
+`SourceNewtonReport` 8 uninitialized members; `abi_key` helper macros not `#undef`; code lines
+>100 col not reformatted (auto-fixable); `build_amr_compiled` ~250 lines; non-const refs to
+the internal state; class-qualified exception prefix vs `adc (...)`; superfluous `mutable` on
+`solve_count_` (auto-fixable); copy not `= delete`-d explicitly on move-only `AmrSystem`.
 
-### 4.9 runtime-2 loader/ABI (13 fichiers)
+### 4.9 runtime-2 loader/ABI (13 files)
 
-Sain et tres documente, pas de bug/UB franc, marshaling host/device prudent (`static_cast`
-systematiques, gardes `local_size()==0`, `device_fence()` avant lecture hote). `dynlib.hpp`/
-`export.hpp`/`runtime_params.hpp`/`model_spec.hpp` sont des couches propres.
+Healthy and very documented, no outright bug/UB, prudent host/device marshaling (`static_cast`
+systematic, guards `local_size()==0`, `device_fence()` before host read). `dynlib.hpp`/
+`export.hpp`/`runtime_params.hpp`/`model_spec.hpp` are clean layers.
 
-Important :
-- `system.hpp:122-134` (I.23) : `add_block` ~19 params (8 `newton_*`), `set_source_stage` ~11,
-  `add_coupled_source` ~12 ; cote ABI `residual` 13 et `advance` 15. Parametres de memes types
-  adjacents = footgun d'ordre. Regrouper en POD (`NewtonOptions`, `SourceStageOptions`) comme
-  `ModelSpec` deja present.
+Important:
+- `system.hpp:122-134` (I.23): `add_block` ~19 params (8 `newton_*`), `set_source_stage` ~11,
+  `add_coupled_source` ~12; on the ABI side `residual` 13 and `advance` 15. Parameters of the same
+  adjacent types = ordering footgun. Group into POD (`NewtonOptions`, `SourceStageOptions`) like
+  `ModelSpec` already present.
 
-Cosmetique (15) : fonctions extraites VERBATIM de `system.cpp` sans redecoupage
-(`add_compiled_block` ~222 l.) ; `3` magique vs `kAuxBaseComps` ; `IModel<NV>` base polymorphe sans
-suppression de copie (abstraite, risque pratique nul) ; prefixes de message `System::` vs nu ;
-include `adc` intercale dans le bloc STL ; lignes >100 col (auto-fixable) ; sinks par valeur sans
-`move` ; variable morte `nn` (auto-fixable) ; SFINAE `void_t` vs `requires` ; locaux mono-lettre +
-max ecrit a la main ; entiers stockes en `double` dans `SourceNewtonReport` ; recon MUSCL en `int`
-magique 0/1/2 ; `reinterpret_cast` dlsym (~20 sites, a confiner) ; const-correctness `potential()`.
+Cosmetic (15): functions extracted VERBATIM from `system.cpp` without re-splitting
+(`add_compiled_block` ~222 l.); magic `3` vs `kAuxBaseComps`; `IModel<NV>` polymorphic base without
+copy suppression (abstract, null practical risk); message prefixes `System::` vs bare;
+include `adc` interleaved in the STL block; lines >100 col (auto-fixable); sinks by value without
+`move`; dead variable `nn` (auto-fixable); SFINAE `void_t` vs `requires`; single-letter locals +
+hand-written max; integers stored in `double` in `SourceNewtonReport`; MUSCL recon in magic
+`int` 0/1/2; `reinterpret_cast` dlsym (~20 sites, to confine); const-correctness `potential()`.
 
-### 4.10 runtime-3 stepper/store (4 fichiers)
+### 4.10 runtime-3 stepper/store (4 files)
 
-Sain et de bonne facture : C++ moderne maitrise, iteration MPI-safe systematique sur les fabs
-locaux, `@file`/`@brief` partout, `#pragma once`, messages d'erreur coherents.
+Healthy and of good quality: mastered modern C++, systematic MPI-safe iteration on the local
+fabs, `@file`/`@brief` everywhere, `#pragma once`, coherent error messages.
 
-Important :
-- `system_stepper.hpp:241-517` (DRY) : les 4 macro-pas (`step`/`step_strang`/`step_cfl`/
-  `step_adaptive`) repliquent verbatim la boucle d'avance de bloc, le calcul du pas physique `h`, la
-  boucle des bornes globales `dt_bounds_` (qui porte la semantique MPI `all_reduce_min` dont la
-  desync = deadlock) et le calcul `n_b`. Extraire `cfl_grid_h()`, `apply_global_dt_bounds()`,
+Important:
+- `system_stepper.hpp:241-517` (DRY): the 4 macro-steps (`step`/`step_strang`/`step_cfl`/
+  `step_adaptive`) replicate verbatim the block-advance loop, the computation of the physical step `h`, the
+  loop over the global bounds `dt_bounds_` (which carries the MPI semantics `all_reduce_min` whose
+  desync = deadlock) and the `n_b` computation. Extract `cfl_grid_h()`, `apply_global_dt_bounds()`,
   `for_each_due_block()`.
 
-Cosmetique (7) : `BlockState` membres `ncomp/substeps/evolve/gamma` non initialises (UB hypothetique,
-tous les sites construisent par agregat) ; sentinelle `1e30` au lieu de `numeric_limits` ; `reg[]`
-non zero-init (auto-fixable) ; `poisson_bc`/`wall_active` non-const ; surcharges `find()` dupliquees ;
-donnees publiques exposees via `class` + back-pointer brut (delibere, documente) ; bloc STL scinde
-en deux.
+Cosmetic (7): `BlockState` members `ncomp/substeps/evolve/gamma` uninitialized (hypothetical UB,
+all sites construct by aggregate); sentinel `1e30` instead of `numeric_limits`; `reg[]`
+not zero-init (auto-fixable); `poisson_bc`/`wall_active` non-const; `find()` overloads duplicated;
+public data exposed via `class` + raw back-pointer (deliberate, documented); STL block split
+in two.
 
-### 4.11 bindings Python (3 fichiers)
+### 4.11 Python bindings (3 files)
 
-Sain et tres defensif (gardes de taille avant memcpy, erreurs prefixees, lambdas device capturant
-par valeur, sink `std::function`/`BlockClosures` par valeur+`move`, aucun cast C, `reinterpret_cast`
-confine au dlopen). Aucun bug bloquant certain.
+Healthy and very defensive (size guards before memcpy, prefixed errors, device lambdas capturing
+by value, sink `std::function`/`BlockClosures` by value+`move`, no C cast, `reinterpret_cast`
+confined to the dlopen). No certain blocking bug.
 
-Important :
-- `amr_system.cpp:849-852` (ES.105) : `set_conservative_state` calcule `nn = cfg.n * cfg.n` puis
-  `U.size() % nn` ; `cfg.n==0` (settable depuis Python, ctor ne valide pas) -> modulo par zero = UB
-  atteignable. Valider `cfg.n >= 1` a la construction.
-- `system.cpp:57-93` + `amr_system.cpp:29-61` (DRY) : `resolve_implicit_components` copie quasi a
-  l'identique entre les deux TU (copie admise au commentaire). Extraire dans un header partage.
-- `system.cpp` (~12 sites, l.392/407/427/905/1038/1492/1716/1744/1759/1783/1823...) : la boucle de
-  marshaling `out[(c*gny+j)*gnx+i]` est repetee ~12 fois quasi identique. Helpers `gather_fab`/
+Important:
+- `amr_system.cpp:849-852` (ES.105): `set_conservative_state` computes `nn = cfg.n * cfg.n` then
+  `U.size() % nn`; `cfg.n==0` (settable from Python, ctor does not validate) -> modulo by zero = UB
+  reachable. Validate `cfg.n >= 1` at construction.
+- `system.cpp:57-93` + `amr_system.cpp:29-61` (DRY): `resolve_implicit_components` copies almost
+  identically between the two TUs (copy acknowledged in the comment). Extract into a shared header.
+- `system.cpp` (~12 sites, l.392/407/427/905/1038/1492/1716/1744/1759/1783/1823...): the marshaling
+  loop `out[(c*gny+j)*gnx+i]` is repeated ~12 times almost identically. Helpers `gather_fab`/
   `scatter_fab`.
-- `system.cpp:502-558` + `amr_system.cpp:498-518` (DRY) : validation des options Newton dupliquee, +
-  rapport Newton triple (lambda `py::dict` x2 dans `bindings.cpp`, conversion `SourceNewtonReport`
-  x2). Un `parse_newton_options(...)` partage + une fabrique unique du `py::dict`.
+- `system.cpp:502-558` + `amr_system.cpp:498-518` (DRY): Newton options validation duplicated, +
+  triple Newton report (lambda `py::dict` x2 in `bindings.cpp`, conversion `SourceNewtonReport`
+  x2). A shared `parse_newton_options(...)` + a single factory of the `py::dict`.
 
-Cosmetique (14) : `using namespace adc;` au scope fichier dans `bindings.cpp` ; fonctions tres
-longues (`add_block`, `add_coupled_source`, `build_multi`, `add_native_block`) ; `PYBIND11_MODULE`
-monolithique ~570 lignes ; `else` sous-indente (auto-fixable) ; include `adc` intercale dans la STL ;
-egalites flottantes exactes de detection de defaut ; helpers `static` vs `namespace {}` ; suffixe `_`
-de membres pimpl incoherent ; narrowing `size_t->int` ; `time_method` en `int` vs `enum class` ;
-accesseurs non-const ; `(void)ncomp` vs `[[maybe_unused]]` ; `reinterpret_cast` dlsym (a confiner) ;
-commentaire trompeur sur l'ordre d'inclusion.
+Cosmetic (14): `using namespace adc;` at file scope in `bindings.cpp`; very long functions
+(`add_block`, `add_coupled_source`, `build_multi`, `add_native_block`); `PYBIND11_MODULE`
+monolithic ~570 lines; under-indented `else` (auto-fixable); include `adc` interleaved in the STL;
+exact float equalities of defect detection; `static` helpers vs `namespace {}`; `_` suffix
+of pimpl members inconsistent; `size_t->int` narrowing; `time_method` in `int` vs `enum class`;
+non-const accessors; `(void)ncomp` vs `[[maybe_unused]]`; `reinterpret_cast` dlsym (to confine);
+misleading comment on the inclusion order.
 
-### 4.12 tests-a (72 fichiers)
+### 4.12 tests-a (72 files)
 
-Qualite elevee et homogene : chaque test autonome (`int main` 72/72), device-clean, sans new/delete,
-sans cast C, tests negatifs propres (catch type). Aucun UB declenche, scan printf propre.
+High and homogeneous quality: each test autonomous (`int main` 72/72), device-clean, without new/delete,
+without C cast, clean negative tests (catch type). No UB triggered, clean printf scan.
 
-Important :
-- `test_condensed_schur_source_stepper.cpp:490,530` (ES.50/Type.3) : `const_cast<Setup&>(S)` retire
-  la const d'un objet genuinement `const Setup S` pour le passer a un membre `Setup& S` de
-  `RefIntegrator` qui ne fait que lire. Pas d'UB aujourd'hui, fragile. Declarer `const Setup& S`.
+Important:
+- `test_condensed_schur_source_stepper.cpp:490,530` (ES.50/Type.3): `const_cast<Setup&>(S)` removes
+  the const from a genuinely `const Setup S` object to pass it to a member `Setup& S` of
+  `RefIntegrator` that only reads. No UB today, fragile. Declare `const Setup& S`.
 
-Cosmetique (7) : harnais de test triplique (lambda `chk`+`fails` redeclare, `raises`/`close_rel`/
-`checksum` copies, aucun en-tete `test_support.hpp`) ; `reinterpret_cast` void*->T* au lieu de
-`static_cast` dans 4 loaders natifs (auto-fixable) ; `std::system()` pour compiler un `.so` (4
-fichiers, entrees build-controlees) ; `main()` 180-290 lignes ; casts `double()` (28, auto-fixable) ;
-constantes ALL_CAPS `NC`/`KAPPA` ; compteur global mutable `static int fails`.
+Cosmetic (7): test harness triplicated (lambda `chk`+`fails` redeclared, `raises`/`close_rel`/
+`checksum` copied, no `test_support.hpp` header); `reinterpret_cast` void*->T* instead of
+`static_cast` in 4 native loaders (auto-fixable); `std::system()` to compile a `.so` (4
+files, build-controlled inputs); `main()` 180-290 lines; `double()` casts (28, auto-fixable);
+ALL_CAPS constants `NC`/`KAPPA`; mutable global counter `static int fails`.
 
-### 4.13 tests-b (86 fichiers)
+### 4.13 tests-b (86 files)
 
-Sain et conscient des contraintes device (helpers `ADC_HD`, foncteurs nommes). Includes coherents,
-`comm_init` toujours apparie a `comm_finalize`, accesseurs de taille `int` (pas de bug de format).
+Healthy and aware of the device constraints (`ADC_HD` helpers, named functors). Coherent includes,
+`comm_init` always paired with `comm_finalize`, `int` size accessors (no format bug).
 
-Important :
-- `test_geometry.cpp:12` (+ ~118 fichiers, DRY) : aucun framework de test ; chaque `.cpp`
-  reimplemente le meme harnais (lambda `chk` x50+, compteur `fails`, variante inline). Un changement
-  de format de rapport touche 86 fichiers. Extraire un `tests/test_harness.hpp`.
-- `test_polar_condensed_schur_source_stepper.cpp:449,485` (ES.50/Type.3) : `const_cast<Setup&>` sur
-  un `const Setup S` lu seulement (les solveurs polaires prennent deja des `const&`). Eliminable.
+Important:
+- `test_geometry.cpp:12` (+ ~118 files, DRY): no test framework; each `.cpp`
+  reimplements the same harness (lambda `chk` x50+, `fails` counter, inline variant). A change
+  of report format touches 86 files. Extract a `tests/test_harness.hpp`.
+- `test_polar_condensed_schur_source_stepper.cpp:449,485` (ES.50/Type.3): `const_cast<Setup&>` on
+  a `const Setup S` only read (the polar solvers already take `const&`). Eliminable.
 
-Cosmetique (5) : teardown Kokkos manuel `initialize/finalize` non exception-safe et incoherent avec
-`ScopeGuard` ; casts C-style/fonction `(double)x`/`double(x)` (~50, auto-fixable) ; constante `kPi`
-redupliquee (16 declarations + 28 litteraux) ; `main()` polaires 150-200 lignes ; `std::exit(2)` dans
-un helper `load()` avec fuite de `FILE*`.
+Cosmetic (5): manual Kokkos teardown `initialize/finalize` not exception-safe and inconsistent with
+`ScopeGuard`; C-style/function casts `(double)x`/`double(x)` (~50, auto-fixable); constant `kPi`
+re-duplicated (16 declarations + 28 literals); polar `main()` 150-200 lines; `std::exit(2)` in
+a `load()` helper with a `FILE*` leak.
 
-### 4.14 bench/CMake/scripts (12 fichiers)
+### 4.14 bench/CMake/scripts (12 files)
 
-Soigne : structure claire, `CMakeLists` racine moderne (cible INTERFACE `adc` isolee, FetchContent
-Kokkos avec verif SHA256, `adc_dev_options` en PRIVATE), scripts `set -euo pipefail` + quoting. Outils
-hors CI execute, pas l'API.
+Carefully written: clear structure, modern root `CMakeLists` (isolated INTERFACE target `adc`, FetchContent
+Kokkos with SHA256 check, `adc_dev_options` in PRIVATE), `set -euo pipefail` scripts + quoting. Tools
+outside CI executed, not the API.
 
-Important :
-- `frontend_cpp.cpp:251` + sites bench (DRY) : `percentile`/`timed`/`PhaseTimers`/`eat` byte-identiques
-  sur 4-5 fichiers, sans `bench/common.hpp`. Une divergence de fix (interpolation, semantique fence)
-  casse la coherence des mesures.
-- `profile_step.cpp:188-228` + `frontend_cpp.cpp` + `scaling_step.cpp` (device) : 3 benches ecrivent
-  les `Array4` par boucles HOTE brutes sans `sync_host`/`sync_device`, alors que
-  `profile_transport_mbox.cpp` montre le bon idiome (`for_each_cell`+`ADC_HD`+sync). Portables
-  uniquement par memoire host-accessible (UVM) ; casseraient sur backend device non-UVM, et `bench/`
-  n'etant que compile-teste l'ecart ne serait pas detecte.
+Important:
+- `frontend_cpp.cpp:251` + bench sites (DRY): `percentile`/`timed`/`PhaseTimers`/`eat` byte-identical
+  on 4-5 files, without `bench/common.hpp`. A fix divergence (interpolation, fence semantics)
+  breaks the consistency of the measurements.
+- `profile_step.cpp:188-228` + `frontend_cpp.cpp` + `scaling_step.cpp` (device): 3 benches write
+  the `Array4` by raw HOST loops without `sync_host`/`sync_device`, whereas
+  `profile_transport_mbox.cpp` shows the right idiom (`for_each_cell`+`ADC_HD`+sync). Portable
+  only by host-accessible memory (UVM); would break on a non-UVM device backend, and `bench/`
+  being only compile-tested the deviation would not be detected.
 
-Cosmetique (12) : `new`/`delete` proprietaire `fft_storage` ; `atoi`/`atof` sans rapport d'erreur ;
-signatures 11-14 params avec out-params `double&` ; argument inconnu ignore silencieusement ;
-`volatile Real s` comme barriere anti-elision (CP.200) ; casts `double()` (auto-fixable) ; `using
-namespace adc;` global ; `namespace {}` vs `static` non uniforme ; standard C++ pose deux fois dans
-`CMakeLists.txt` ; commentaire "cible 3.20" perime (3.21) ; `kPi` mort + `wall` non emis ; `printf`
-~34 args hors couverture `-Wformat=2`.
+Cosmetic (12): owning `new`/`delete` `fft_storage`; `atoi`/`atof` without error reporting;
+signatures 11-14 params with out-params `double&`; unknown argument silently ignored;
+`volatile Real s` as an anti-elision barrier (CP.200); `double()` casts (auto-fixable); `using
+namespace adc;` global; `namespace {}` vs `static` not uniform; C++ standard set twice in
+`CMakeLists.txt`; outdated "target 3.20" comment (3.21); dead `kPi` + `wall` not emitted; `printf`
+~34 args outside `-Wformat=2` coverage.
 
-## 5. Auto-corrigeable vs jugement
+## 5. Auto-fixable vs judgment
 
-Auto-corrigeable (outillage, a router vers le milestone "Qualite de code & CI durcie"). Le depot a
-deja `.clang-format` (`BasedOnStyle: Google`, `ReflowComments:false`, `SortIncludes:false`) et
-`.clang-tidy` (familles larges, `modernize-use-nodiscard`/`magic-numbers`/`identifier-length`
-desactives), tous deux INFORMATIFS (le job `format`/`tidy` ne fait que signaler) :
-- `clang-format` reglerait : sous-indentation des `else` de `if constexpr`
-  (`numerical_flux.hpp:207`, `implicit_stepper.hpp:243/306`, `system.cpp:605`), lignes de CODE >100
+Auto-fixable (tooling, to be routed to the "Code quality & hardened CI" milestone). The repository
+already has `.clang-format` (`BasedOnStyle: Google`, `ReflowComments:false`, `SortIncludes:false`) and
+`.clang-tidy` (broad families, `modernize-use-nodiscard`/`magic-numbers`/`identifier-length`
+disabled), both INFORMATIVE (the `format`/`tidy` job only signals):
+- `clang-format` would fix: `else` under-indentation of `if constexpr`
+  (`numerical_flux.hpp:207`, `implicit_stepper.hpp:243/306`, `system.cpp:605`), CODE lines >100
   col (`amr_dsl_block.hpp:615+`, `block_builder_polar.hpp:299`, `compiled_block_abi`).
-- `clang-tidy google-readability-casting` : tous les `double(x)`/`(double)x`/`(int)b` (tests-a ~28,
-  tests-b ~50, bench ~20, coeur, python). Distinguer de `Real(litteral)`, idiome conserve.
-- Edits triviaux : `/** */` -> `///` (`physics/`), initialiseurs in-class manquants
+- `clang-tidy google-readability-casting`: all the `double(x)`/`(double)x`/`(int)b` (tests-a ~28,
+  tests-b ~50, bench ~20, core, python). Distinguish from `Real(literal)`, idiom kept.
+- Trivial edits: `/** */` -> `///` (`physics/`), missing in-class initializers
   (`patch_box.hpp`, `Variable`/`VariableSet`, `BlockState`, `SourceNewtonReport`), `reg[] = {}`,
-  retrait de `mutable solve_count_`, variable morte `nn`, `reinterpret_cast` void*->T* -> `static_cast`
-  dans les loaders de test.
+  removal of `mutable solve_count_`, dead variable `nn`, `reinterpret_cast` void*->T* -> `static_cast`
+  in the test loaders.
 
-Ces corrections cosmetiques pourraient devenir bloquantes en CI une fois la convention actee dans
-`CODING_STANDARDS_DECISIONS.md` (passer `format`/certaines familles `tidy` de informatif a `WarningsAsErrors`).
+These cosmetic corrections could become blocking in CI once the convention is recorded in
+`CODING_STANDARDS_DECISIONS.md` (move `format`/some `tidy` families from informative to `WarningsAsErrors`).
 
-Jugement / refactor (ne pas confier a un outil) : les bloquants (`box_hash` int64, `field_postprocess`
-foncteur), tous les DRY structurels (cascades de dispatch x3, stencils x3, `set_*` x6, marshaling x12,
-jacobien Newton x2, macro-pas x4, harnais de test, `bench/common.hpp`), la regle des cinq
-(`PolarTensorKrylovSolver`, `ScopedBlockState`), les gardes a durcir (`assert`->`throw`,
-`cfg.n>=1`, garde de pile `CsProgram::eval`), le passage `long`->`int64_t` pour le port Windows, et
-les regroupements de parametres en POD.
+Judgment / refactor (not to be entrusted to a tool): the blockers (`box_hash` int64, `field_postprocess`
+functor), all the structural DRY (dispatch cascades x3, stencils x3, `set_*` x6, marshaling x12,
+Newton jacobian x2, macro-steps x4, test harness, `bench/common.hpp`), the rule of five
+(`PolarTensorKrylovSolver`, `ScopedBlockState`), the guards to harden (`assert`->`throw`,
+`cfg.n>=1`, `CsProgram::eval` stack guard), the `long`->`int64_t` move for the Windows port, and
+the parameter groupings into POD.
 
-## 6. Suites a donner (priorisees)
+## 6. Follow-ups (prioritized)
 
-Bloquants d'abord, puis dette structurelle a fort effet de levier, puis cosmetique outille. Ces
-suites sont tracees dans le milestone *Revue & audit qualite du code* : ADC-209 (1), ADC-210 (2 et 3),
-ADC-211 (4 et 6), ADC-212 (5), ADC-213 (7), ADC-214 (8), ADC-215 (9), ADC-216 (10), ADC-217 (11),
-ADC-219 (12) ; le critere d'acceptation #5 (ecarts bloquants corriges ou traces) est ainsi clos.
+Blockers first, then high-leverage structural debt, then tooled cosmetic. These
+follow-ups are tracked in the *Code review & quality audit* milestone: ADC-209 (1), ADC-210 (2 and 3),
+ADC-211 (4 and 6), ADC-212 (5), ADC-213 (7), ADC-214 (8), ADC-215 (9), ADC-216 (10), ADC-217 (11),
+ADC-219 (12); the acceptance criterion #5 (blocking deviations fixed or tracked) is thus closed.
 
-1. `box_hash.hpp:71-73` : passer la cle et `bins_` a `std::int64_t`, caster `bx` avant le decalage.
-   Gate du port Windows natif. A tracer en issue (lie a l'epic ADC-90).
-2. `elliptic_problem.hpp:104` : extraire `FieldPostprocessKernel` (foncteur nomme device-clean).
-   Risque segfault `nvcc` Release. A tracer en issue.
-3. `amr_flux_helpers.hpp:85` et `refinement.hpp:179/209` + `multifab.hpp:137` : convertir les lambdas
-   etendues residuelles en foncteurs nommes (meme classe de risque que 2). A tracer en issue.
-4. `amr_system.cpp:852` (`cfg.n==0` modulo par zero) : valider `n>=1` au ctor de `System`/`AmrSystem`.
-5. Regle des cinq : `= delete` ou implementer copie/move de `PolarTensorKrylovSolver`
-   (`polar_tensor_operator.hpp:726`) et `ScopedBlockState` (`system_coupler.hpp:61`).
-6. Durcir les gardes : `Ny%np` `assert`->`throw` (`poisson_fft_solver.hpp:114`), garde de pile
-   `CsProgram::eval` (mode debug), `mf_find_box==-1` (`amr_subcycling.hpp:523`).
-7. DRY a fort levier (chacun a tracer en issue) : cascade de dispatch x3 (runtime-1), stencil
-   eps/cut-cell x3 et `set_*` x6 (numerique-1), jacobien Newton x2 (numerique-3), 4 macro-pas du
+1. `box_hash.hpp:71-73`: move the key and `bins_` to `std::int64_t`, cast `bx` before the shift.
+   Gate of the native Windows port. To be tracked in an issue (linked to epic ADC-90).
+2. `elliptic_problem.hpp:104`: extract `FieldPostprocessKernel` (device-clean named functor).
+   `nvcc` segfault risk in Release. To be tracked in an issue.
+3. `amr_flux_helpers.hpp:85` and `refinement.hpp:179/209` + `multifab.hpp:137`: convert the residual
+   extended lambdas to named functors (same risk class as 2). To be tracked in an issue.
+4. `amr_system.cpp:852` (`cfg.n==0` modulo by zero): validate `n>=1` at the ctor of `System`/`AmrSystem`.
+5. Rule of five: `= delete` or implement copy/move of `PolarTensorKrylovSolver`
+   (`polar_tensor_operator.hpp:726`) and `ScopedBlockState` (`system_coupler.hpp:61`).
+6. Harden the guards: `Ny%np` `assert`->`throw` (`poisson_fft_solver.hpp:114`), stack guard
+   `CsProgram::eval` (debug mode), `mf_find_box==-1` (`amr_subcycling.hpp:523`).
+7. High-leverage DRY (each to be tracked in an issue): dispatch cascade x3 (runtime-1), stencil
+   eps/cut-cell x3 and `set_*` x6 (numerics-1), Newton jacobian x2 (numerics-3), 4 macro-steps of the
    stepper (runtime-3), marshaling x12 + Newton + `resolve_implicit_components` (bindings),
-   `floor_div` x3 + `parallel_copy` (maillage).
-8. Regrouper les longues listes de parametres en POD (`NewtonOptions`/`SourceStageOptions`) :
+   `floor_div` x3 + `parallel_copy` (mesh).
+8. Group the long parameter lists into POD (`NewtonOptions`/`SourceStageOptions`):
    `system.hpp:122`, `amr_system.hpp:232`, ABI `residual`/`advance`.
-9. Harnais de test partage `tests/test_harness.hpp` (`chk`/`raises`/`close_rel`/`kPi`) et
-   `bench/common.hpp` (`timed`/`percentile`/`PhaseTimers`/`eat`). A tracer en issue.
-10. Portabilite `long`->`std::int64_t`/`std::size_t`/`std::ptrdiff_t` pour les tailles/offsets
-    memoire (maillage, coeur). Gros perimetre, a tracer en issue dans l'epic Windows.
-11. En-tetes Doxygen manquantes (`comm.hpp`, `load_balance.hpp`, `patch_box.hpp`, 13 fichiers
-    numerique-3, 8 numerique-1, 2 numerique-2) et `CODE_DOCUMENTATION_CONVENTION.md` jamais
-    commite, a committer pour reparer le lien depuis `CODEBASE_AUDIT.md` (suivi via ADC-125).
-12. Passe outillee unique (section 5) une fois la convention actee, puis durcir le job `quality.yml`.
+9. Shared test harness `tests/test_harness.hpp` (`chk`/`raises`/`close_rel`/`kPi`) and
+   `bench/common.hpp` (`timed`/`percentile`/`PhaseTimers`/`eat`). To be tracked in an issue.
+10. Portability `long`->`std::int64_t`/`std::size_t`/`std::ptrdiff_t` for memory sizes/offsets
+    (mesh, core). Large scope, to be tracked in an issue in the Windows epic.
+11. Missing Doxygen headers (`comm.hpp`, `load_balance.hpp`, `patch_box.hpp`, 13 numerics-3 files,
+    8 numerics-1, 2 numerics-2) and `CODE_DOCUMENTATION_CONVENTION.md` never
+    committed, to be committed to repair the link from `CODEBASE_AUDIT.md` (tracked via ADC-125).
+12. Single tooled pass (section 5) once the convention is recorded, then harden the `quality.yml` job.
 
-Note honnetete methodologique : 6 constats ont ete rejetes purement a la verification (un par
-unite : coeur, couplage-1, couplage-2, runtime-1, runtime-3, bench), et une vingtaine de candidats
-"important" ont ete retrogrades faute de trigger reel ou d'impact (notamment `string_view` membre
-sans site declencheur, usage `long` borne par la box, `regrid_level` serie-only documente,
-`cluster_rec`/`hqr_minmax` cohesifs et de portage). Le decompte de 180 constats reflete cet etat
-apres verification croisee, pas la liste brute initiale.
+Methodological honesty note: 6 findings were rejected outright on verification (one per
+unit: core, coupling-1, coupling-2, runtime-1, runtime-3, bench), and about twenty
+"important" candidates were downgraded for lack of a real trigger or impact (notably `string_view` member
+without a triggering site, `long` usage bounded by the box, `regrid_level` serial-only documented,
+`cluster_rec`/`hqr_minmax` cohesive and ported). The count of 180 findings reflects this state
+after cross-verification, not the initial raw list.

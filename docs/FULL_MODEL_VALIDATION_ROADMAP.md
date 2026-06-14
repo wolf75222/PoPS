@@ -1,80 +1,80 @@
-# Roadmap : reproduction du modele COMPLET de Hoffart (Euler-Poisson magnetise)
+# Roadmap: reproducing the COMPLETE Hoffart model (magnetized Euler-Poisson)
 
-> SUPERSEDE (juin 2026, audit Phase 0 -- voir docs/HOFFART_FIDELITY.md et docs/HOFFART_STEP_SEQUENCE.md).
-> Deux affirmations de ce document sont CORRIGEES par l'audit code + relecture du papier :
-> 1. "le modele complet tourne DEJA, -0.38%" est FAUX : le -0.38% est le DIOCOTRON REDUIT ExB-scalaire
->    (diag_polar_omega.py, chemin POLAIRE). Le modele complet (run.py system-schur, CARTESIEN) n'est PAS
->    valide ; ses runs courts donnent ~0.035 (-95 % vs papier), croissance ECRASEE.
-> 2. "VOIE B cartesien recommandee, Voie A esthetique" est INVERSE : la geometrie est le suspect PRINCIPAL.
->    Le carre cartesien + mur Poisson circulaire diffuse le bord d'anneau et ecrase l'instabilite. Le
->    chemin retenu (Agent D) est un DOMAINE DISQUE CONSERVATIF (masque 2a -> cut-cell/EB), pas le carre.
-> RESOLU aussi : |Omega| = beta^2 = 1e12 est CORRECT (papier ligne 1082 "omega_c := beta^2"), donc
-> omega_d = 1 et la pente brute du modele complet est DIRECTEMENT comparable a 0.772/0.911/0.683, SANS
-> facteur 2pi (le 2pi ne concerne que le chemin reduit ExB). Le reste de ce fichier est conserve pour
-> l'historique mais lire HOFFART_FIDELITY.md en priorite.
+> SUPERSEDED (June 2026, Phase 0 audit, see docs/HOFFART_FIDELITY.md and docs/HOFFART_STEP_SEQUENCE.md).
+> Two claims in this document are CORRECTED by the code audit + re-reading of the paper:
+> 1. "the complete model ALREADY runs, -0.38%" is FALSE: the -0.38% is the REDUCED ExB-scalar DIOCOTRON
+>    (diag_polar_omega.py, POLAR path). The complete model (run.py system-schur, CARTESIAN) is NOT
+>    validated; its short runs give ~0.035 (-95% vs paper), CRUSHED growth.
+> 2. "CARTESIAN PATH B recommended, Path A cosmetic" is INVERTED: the geometry is the PRIMARY suspect.
+>    The cartesian square + circular Poisson wall diffuses the ring edge and crushes the instability. The
+>    retained path (Agent D) is a CONSERVATIVE DISK DOMAIN (2a mask -> cut-cell/EB), not the square.
+> ALSO RESOLVED: |Omega| = beta^2 = 1e12 is CORRECT (paper line 1082 "omega_c := beta^2"), so
+> omega_d = 1 and the raw slope of the complete model is DIRECTLY comparable to 0.772/0.911/0.683, WITHOUT
+> a 2pi factor (the 2pi only concerns the reduced ExB path). The rest of this file is kept for
+> history, but read HOFFART_FIDELITY.md first.
 
-## Fait majeur (OBSOLETE, voir note supra) : le modele COMPLET tourne DEJA (chemin cartesien)
+## Major fact (OBSOLETE, see note above): the COMPLETE model ALREADY runs (cartesian path)
 
-`adc_cases/hoffart_euler_poisson_dsl/run.py` construit le systeme COMPLET du papier :
-- modele 3 variables (rho, rho_u, rho_v), pression isotherme p = theta*rho (model.py:90-122),
-- force de Lorentz m x Omega = (omega*my, -omega*mx),
+`adc_cases/hoffart_euler_poisson_dsl/run.py` builds the COMPLETE system from the paper:
+- 3-variable model (rho, rho_u, rho_v), isothermal pressure p = theta*rho (model.py:90-122),
+- Lorentz force m x Omega = (omega*my, -omega*mx),
 - Gauss -alpha*rho (elliptic_rhs),
-- resolu par `adc.Split(hyperbolic=Explicit(ssprk3), source=adc.CondensedSchur(theta=0.5, alpha))`,
-  c'est-a-dire la pile Schur #118-128 (CondensedSchurSourceStepper, LorentzEliminator,
-  TensorEllipticOperator/GeometricMG, BiCGStab) branchee par system_stepper.hpp:86-90.
+- solved by `adc.Split(hyperbolic=Explicit(ssprk3), source=adc.CondensedSchur(theta=0.5, alpha))`,
+  that is, the Schur stack #118-128 (CondensedSchurSourceStepper, LorentzEliminator,
+  TensorEllipticOperator/GeometricMG, BiCGStab) wired in via system_stepper.hpp:86-90.
 
-Mesure : taux diocotron l=3 = -0.38% vs papier a n=512 (GH200). L'observable de taux est
-`sample_circle(phi, ring_inner)` + FFT-theta (mode azimutal du POTENTIEL sur un cercle) : deja propre
-en metrique polaire MEME sur grille cartesienne. La "diffusion du bord d'anneau" n'affecte que le rendu
-de DENSITE brute (schlieren), PAS la mesure de taux.
+Measurement: diocotron rate l=3 = -0.38% vs paper at n=512 (GH200). The rate observable is
+`sample_circle(phi, ring_inner)` + FFT-theta (azimuthal mode of the POTENTIAL on a circle): already clean
+in polar metric EVEN on a cartesian grid. The "ring edge diffusion" only affects the rendering of
+raw DENSITY (schlieren), NOT the rate measurement.
 
-## Decision de chemin : VOIE B (cartesien-fluide) -- recommandee
+## Path decision: PATH B (cartesian-fluid), recommended
 
-La Voie A (fluide POLAIRE + Schur polaire) reconstruirait a grand cout une capacite qui existe deja, et
-elle est de niveau RECHERCHE :
-- `dispatch_transport_polar` REJETTE le fluide (block_builder_polar.hpp:59-65) ;
-- `PolarPoissonSolver` est un solveur DIRECT scalaire (FFT-theta + tridiag-r) structurellement
-  INCOMPATIBLE avec l'operateur Schur A = I + c*rho*B^{-1} anisotrope croise (la FFT ne diagonalise plus
-  des que les termes croises a_xy/a_yx existent ; risque de stagnation MG sur l'anisotropie 1/r^2) ;
-- toute la pile Schur est cablee sur Geometry/dx/dy/GeometricMG cartesiens.
+Path A (POLAR fluid + polar Schur) would rebuild at high cost a capability that already exists, and
+it is at the RESEARCH level:
+- `dispatch_transport_polar` REJECTS the fluid (block_builder_polar.hpp:59-65);
+- `PolarPoissonSolver` is a scalar DIRECT solver (FFT-theta + tridiag-r) structurally
+  INCOMPATIBLE with the anisotropic crossed Schur operator A = I + c*rho*B^{-1} (the FFT no longer
+  diagonalizes once the crossed terms a_xy/a_yx exist; risk of MG stagnation on the 1/r^2 anisotropy);
+- the entire Schur stack is wired to cartesian Geometry/dx/dy/GeometricMG.
 
-=> Voie A = amelioration ESTHETIQUE ulterieure (figure de densite 2D sans diffusion de bord) SI un
-besoin visuel se confirme, PAS un chemin vers la fidelite au papier. A court terme : durcir/valider B.
+=> Path A = a later COSMETIC improvement (2D density figure without edge diffusion) IF a
+visual need is confirmed, NOT a path toward fidelity to the paper. In the short term: harden/validate B.
 
-## Le gap restant = VALIDATION + CONVERGENCE (pas de capacite manquante)
+## The remaining gap = VALIDATION + CONVERGENCE (no missing capability)
 
-1. Taux l=4/l=5 non-monotones (l=4 -4.9->-8.4%, l=5 +11->+16% de n=384 a n=512) = artefact de FENETRE
-   DE FIT (PAPER_FIT_WINDOWS statiques model.py:58, calibrees ~n=128, mordent dans la saturation des
-   modes rapides a haute resolution). l=3 converge proprement (-0.38%).
-2. Conservation discrete : briques structure-preserving manquantes (masse/momentum/energie/positivite).
+1. l=4/l=5 rates non-monotonic (l=4 -4.9->-8.4%, l=5 +11->+16% from n=384 to n=512) = artifact of the FIT
+   WINDOW (PAPER_FIT_WINDOWS static model.py:58, calibrated ~n=128, bite into the saturation of the
+   fast modes at high resolution). l=3 converges cleanly (-0.38%).
+2. Discrete conservation: missing structure-preserving bricks (mass/momentum/energy/positivity).
 
 ## Roadmap
 
-- [x] **PR1 conservation discrete (masse/momentum/energie/positivite)** -- FAIT #207. Tolerances MESUREES :
-  masse conservee a la machine (1.9e-16, domaine ferme) ; symetrie momentum a la machine ; impulsion
-  momentum = physique O(dt) convergente ; E>0, p>0 sous minmod/vanleer/weno5. Note honnete FV-vs-FE.
-  Decouverte : sur Dirichlet la masse fuit ~1e-2 par Foextrap (artefact de CL, pas du schema).
-- [ ] **PR2 doc CONSERVATION_SUMMARY** : tableau [propriete, test, assertion, borne] + note FV (momentum
-  non exact par construction, contrairement au FE du papier). (petit)
-- [ ] **PR3 re-fit fenetre precoce l=4/l=5** : detecter le debut de saturation (d2/dt2 log|a|), balayer
-  des fenetres, choisir le regime plat. BLOQUEUR : seul le gamma final (sweep_results.csv) est sauve sur
-  ROMEO, PAS l'amplitude(t) -> il faut MODIFIER sweep.py pour sauver amplitude(t) puis REJOUER n=384/512
-  (heures GH200). (moyen, ROMEO)
-- [ ] **PR4 table de validation haute resolution finale** : n=384 + n=512 O5 avec les fenetres re-fittees ;
-  table taux l=3/4/5 vs papier + figure de convergence. (moyen, ROMEO ; depend de PR3 + decision fidelite)
-- [ ] **PR5 (optionnel) splitting Strang ordre 2** : demi-pas source / pas transport / demi-pas source
-  (actuellement Lie ordre 1). Opt-in, Lie par defaut bit-identique. (moyen ; depend decision)
-- [ ] **PR6 (recherche, conditionnel) Voie A polaire-fluide** : SEULEMENT si une figure 2D de densite
-  nette (type Fig 5.1) est jugee indispensable. Flux fluide polaire (courbure 1/r) + elliptique polaire
-  ITERATIF pour le tenseur croise + stencils Schur polaires. 2-3 PR recherche. (recherche)
+- [x] **PR1 discrete conservation (mass/momentum/energy/positivity)** -- DONE #207. MEASURED tolerances:
+  mass conserved to machine precision (1.9e-16, closed domain); momentum symmetry to machine precision; momentum
+  impulse = physical O(dt) convergent; E>0, p>0 under minmod/vanleer/weno5. Honest FV-vs-FE note.
+  Finding: on Dirichlet the mass leaks ~1e-2 through Foextrap (BC artifact, not from the scheme).
+- [ ] **PR2 doc CONSERVATION_SUMMARY**: table [property, test, assertion, bound] + FV note (momentum
+  not exact by construction, unlike the paper's FE). (small)
+- [ ] **PR3 re-fit early window l=4/l=5**: detect the onset of saturation (d2/dt2 log|a|), sweep
+  windows, choose the flat regime. BLOCKER: only the final gamma (sweep_results.csv) is saved on
+  ROMEO, NOT amplitude(t) -> sweep.py must be MODIFIED to save amplitude(t) then RE-RUN n=384/512
+  (GH200 hours). (medium, ROMEO)
+- [ ] **PR4 final high-resolution validation table**: n=384 + n=512 O5 with the re-fitted windows;
+  table of l=3/4/5 rates vs paper + convergence figure. (medium, ROMEO; depends on PR3 + fidelity decision)
+- [ ] **PR5 (optional) order-2 Strang splitting**: half-step source / transport step / half-step source
+  (currently order-1 Lie). Opt-in, Lie default bit-identical. (medium; depends on decision)
+- [ ] **PR6 (research, conditional) Path A polar-fluid**: ONLY if a clean 2D density figure
+  (Fig 5.1 type) is judged indispensable. Polar fluid flux (1/r curvature) + ITERATIVE polar
+  elliptic for the crossed tensor + polar Schur stencils. 2-3 research PRs. (research)
 
-## DECISIONS PROPRIETAIRE (juin 2026)
+## OWNER DECISIONS (June 2026)
 
-- Q1 (figure 2D nette) : **OUI requise** => Voie A (fluide polaire) POURSUIVIE (plus optionnelle). Etape 1
-  = #209 (transport fluide polaire, en CI). Etape 2 = Schur polaire (a faire).
-- Q2 (cible fidelite) : **l=4/5 a +-2%** => re-fit fenetre precoce (ROMEO job 647356) + maj PAPER_FIT_WINDOWS
-  + table de validation finale (rejouer si besoin).
-- Q3 (structure-preservation FE formelle vs tests empiriques O(dt^2)) : OUVERTE.
-- Q4 (Lie vs Strang) : OUVERTE (Strang = PR optionnelle PR5).
+- Q1 (clean 2D figure): **YES required** => Path A (polar fluid) PURSUED (no longer optional). Step 1
+  = #209 (polar fluid transport, in CI). Step 2 = polar Schur (to be done).
+- Q2 (fidelity target): **l=4/5 to +-2%** => re-fit early window (ROMEO job 647356) + update PAPER_FIT_WINDOWS
+  + final validation table (re-run if needed).
+- Q3 (formal FE structure-preservation vs empirical O(dt^2) tests): OPEN.
+- Q4 (Lie vs Strang): OPEN (Strang = optional PR PR5).
 
-Etat des PR : PR1 conservation = #207 (merge). doc CONSERVATION_SUMMARY = #208 (CI). Voie A etape 1 = #209 (CI).
+PR status: PR1 conservation = #207 (merged). doc CONSERVATION_SUMMARY = #208 (CI). Path A step 1 = #209 (CI).

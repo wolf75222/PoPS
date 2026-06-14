@@ -1,13 +1,13 @@
-# Hierarchie des coupleurs hyperbolique-elliptique
+# Hyperbolic-elliptic coupler hierarchy
 
-Ce document decrit chaque classe de couplage presente dans `include/adc/coupling/`,
-sa responsabilite, ce qu'elle assemble ou avance, et quand la choisir.
-Il est un complement de reference a `ARCHITECTURE.md` (section 5 et 8) et ne
-duplique pas ce qui y est deja decrit.
+This document describes each coupling class present in `include/adc/coupling/`,
+its responsibility, what it assembles or advances, and when to choose it.
+It is a reference complement to `ARCHITECTURE.md` (sections 5 and 8) and does not
+duplicate what is already described there.
 
 ---
 
-## 1. Vue d'ensemble : arbre des coupleurs
+## 1. Overview: tree of couplers
 
 ```
 Coupler<Model, Elliptic>                  -- mono-modele, mono-niveau
@@ -21,388 +21,388 @@ Coupler<Model, Elliptic>                  -- mono-modele, mono-niveau
     +-- AmrSystemCoupler<System,RhsAsm,Elliptic>   -- multi-especes, AMR (= AmrSystemDriver)
 ```
 
-Le backend elliptique `Elliptic` est parametre partout via le concept `EllipticSolver`
-(fichier `numerics/elliptic/elliptic_solver.hpp`). La valeur par defaut est
-`GeometricMG` (multigrille geometrique V-cycle).
+The elliptic backend `Elliptic` is parameterized everywhere via the `EllipticSolver` concept
+(file `numerics/elliptic/elliptic_solver.hpp`). The default value is
+`GeometricMG` (geometric multigrid V-cycle).
 
 ---
 
-## 2. Coupler -- mono-modele, mono-niveau
+## 2. Coupler -- single-model, single-level
 
-**Fichier :** `include/adc/coupling/coupler.hpp`
+**File:** `include/adc/coupling/coupler.hpp`
 
-**Instanciation :** `adc::Coupler<Model, Elliptic = GeometricMG>`
+**Instantiation:** `adc::Coupler<Model, Elliptic = GeometricMG>`
 
 ### Role
 
-Ferme la boucle Poisson -> aux -> advance pour un seul modele physique sur un unique
-niveau de grille uniforme. C'est le coupleur le plus simple ; il est utilise directement
-dans les cas tests unitaires et dans les tutoriels mono-espece.
+Closes the Poisson -> aux -> advance loop for a single physical model on a unique
+uniform grid level. It is the simplest coupler; it is used directly
+in unit test cases and in single-species tutorials.
 
-### Ce qu'il assemble
+### What it assembles
 
-A chaque etage de l'integrateur (SSPRK2 ou SSPRK3) :
+At each stage of the integrator (SSPRK2 or SSPRK3):
 
-1. Second membre elliptique : `f = SingleModelEllipticRhs(model, U)`, c'est-a-dire
-   `model.elliptic_rhs(U)` cellule par cellule
-   (`coupler.hpp:52-54`, delegue a `elliptic_rhs.hpp:27-40`).
-2. Resolution de `lap(phi) = f` par le backend elliptique (`GeometricMG::solve`).
-3. Derivation `aux = (phi, d_x phi, d_y phi)` par differences centrees, stocke avec
-   signe `+grad phi` ; la convention `GradSign::Plus` est documentee dans
+1. Elliptic right-hand side: `f = SingleModelEllipticRhs(model, U)`, that is
+   `model.elliptic_rhs(U)` cell by cell
+   (`coupler.hpp:52-54`, delegated to `elliptic_rhs.hpp:27-40`).
+2. Solving `lap(phi) = f` by the elliptic backend (`GeometricMG::solve`).
+3. Derivation `aux = (phi, d_x phi, d_y phi)` by centered differences, stored with
+   sign `+grad phi`; the `GradSign::Plus` convention is documented in
    `elliptic_problem.hpp` (`coupler.hpp:61-65`).
-4. Si le modele declare `n_aux > 3` (champ `B_z` ou `T_e` supplementaire), peuplement
-   de la composante extra depuis le callback `bz` fourni au constructeur.
+4. If the model declares `n_aux > 3` (extra `B_z` or `T_e` field), populating
+   the extra component from the `bz` callback supplied to the constructor.
 
-### Ce qu'il avance
+### What it advances
 
-Les methodes `advance` (SSPRK2), `advance_ssprk3` (SSPRK3) et `step` (point d'entree
-unifie avec sous-cyclage) appellent `SSPRK2Step::take_step` /
-`SSPRK3Step::take_step` en leur passant l'evaluateur de residu
-(`coupler.hpp:115-162`). Le coupleur ne contient aucune logique d'integrateur propre.
+The methods `advance` (SSPRK2), `advance_ssprk3` (SSPRK3) and `step` (unified entry
+point with subcycling) call `SSPRK2Step::take_step` /
+`SSPRK3Step::take_step` passing them the residual evaluator
+(`coupler.hpp:115-162`). The coupler contains no integrator logic of its own.
 
-### Parametres de template notables
+### Notable template parameters
 
-| Parametre | Role |
+| Parameter | Role |
 |---|---|
-| `Limiter` | Reconstruction d'interface (NoSlope / Minmod / VanLeer / MC) |
-| `Policy` | Frequence du solve elliptique : `PerStageCoupling` (phi recalcule a chaque etage RK) ou `OncePerStepCoupling` (phi gele pendant le pas) |
-| `NumericalFlux` | Flux de Riemann (Rusanov / HLL / HLLC / Roe) |
+| `Limiter` | Interface reconstruction (NoSlope / Minmod / VanLeer / MC) |
+| `Policy` | Frequency of the elliptic solve: `PerStageCoupling` (phi recomputed at each RK stage) or `OncePerStepCoupling` (phi frozen during the step) |
+| `NumericalFlux` | Riemann flux (Rusanov / HLL / HLLC / Roe) |
 
-### Quand l'utiliser
+### When to use it
 
-- Un seul modele physique, un seul champ, un seul niveau.
-- Cas test unitaire, tutorial, validation rapide.
-- Le modele multi-especes doit passer par `SystemAssembler` / `SystemDriver`.
+- A single physical model, a single field, a single level.
+- Unit test case, tutorial, quick validation.
+- The multi-species model must go through `SystemAssembler` / `SystemDriver`.
 
 ---
 
-## 3. SystemAssembler / SystemDriver (alias SystemCoupler) -- multi-especes, mono-niveau
+## 3. SystemAssembler / SystemDriver (alias SystemCoupler) -- multi-species, single-level
 
-**Fichier :** `include/adc/coupling/system_coupler.hpp`
+**File:** `include/adc/coupling/system_coupler.hpp`
 
-**Instanciations :**
+**Instantiations:**
 - `adc::SystemAssembler<System, RhsAssembler, Elliptic = GeometricMG>`
 - `adc::SystemDriver<System, RhsAssembler, Elliptic = GeometricMG>`
-- `adc::SystemCoupler` est un alias de `SystemDriver` (compat historique).
+- `adc::SystemCoupler` is an alias of `SystemDriver` (historical compatibility).
 
-### Separation des responsabilites
+### Separation of responsibilities
 
-Le retour de conception (commentaire introductif de `system_coupler.hpp:29-40`)
-explique la scission en deux classes :
+The design rationale (introductory comment of `system_coupler.hpp:29-40`)
+explains the split into two classes:
 
-> "SystemAssembler : ASSEMBLE. [...] Il ne fait AUCUN pas de temps.
-> SystemDriver : AVANCE. [...] Avancer un assembleur n'a pas de sens.
-> Le Driver POSSEDE un Assembleur."
+> "SystemAssembler: ASSEMBLE. [...] It does NO time step.
+> SystemDriver: AVANCE. [...] Advancing an assembler makes no sense.
+> The Driver OWNS an Assembler."
 
-**SystemAssembler (lignes 63-167) :**
+**SystemAssembler (lines 63-167):**
 
-- Tient le `CoupledSystem` (tuple d'`EquationBlock`), le backend elliptique, le canal
-  `aux` partage (un `MultiFab` commun a TOUS les blocs).
-- `solve_fields()` : assemble `f = Sum_s q_s n_s` via le `RhsAssembler` fourni
-  (typiquement `ChargeDensityRhs`), resout Poisson, derive `aux = (phi, grad phi)`.
-- `block_residual<Limiter, NumericalFlux>(block, state, R, recompute_aux)` :
-  evaluateur de residu d'un bloc a un etage (appele par le Driver via le TimeStepper).
-- Largeur du canal `aux` = maximum de `aux_comps<Model>` sur tous les blocs
-  (`system_coupler.hpp:136-143`) : un bloc qui demande `B_z` (n_aux = 4) voit la
-  composante extra, un bloc de base (n_aux = 3) ne la voit pas ; bit-identique a
-  l'historique si aucun bloc ne demande d'extra.
+- Holds the `CoupledSystem` (tuple of `EquationBlock`), the elliptic backend, the shared
+  `aux` channel (a `MultiFab` common to ALL blocks).
+- `solve_fields()`: assembles `f = Sum_s q_s n_s` via the supplied `RhsAssembler`
+  (typically `ChargeDensityRhs`), solves Poisson, derives `aux = (phi, grad phi)`.
+- `block_residual<Limiter, NumericalFlux>(block, state, R, recompute_aux)`:
+  block residual evaluator at one stage (called by the Driver via the TimeStepper).
+- Width of the `aux` channel = maximum of `aux_comps<Model>` over all blocks
+  (`system_coupler.hpp:136-143`): a block requesting `B_z` (n_aux = 4) sees the
+  extra component, a base block (n_aux = 3) does not see it; bit-identical to
+  the history if no block requests an extra.
 
-**SystemDriver (lignes 169-361) :**
+**SystemDriver (lines 169-361):**
 
-- Possede un `SystemAssembler`.
-- `step(dt, [implicit_callback])` : sous-cyclage par bloc selon `block_stride_v<Block>`,
-  avance chaque bloc selon son `TimeTreatment` :
-  - `Explicit` : appel de `SSPRK2Step` / `SSPRK3Step` (ou un `TimeStepper` utilisateur)
-    en passant l'evaluateur de residu de l'assembleur.
-  - `Implicit` / `IMEX` : resolution des champs, transport explicite si IMEX, puis
-    deleguee au callback `implicit_advance(*this, block, dt, ...)`.
-- `step_adaptive(cfl)` : pas macro adaptatif ; chaque bloc calcule son propre `stride`
-  au runtime a partir du ratio des vitesses d'onde (`system_coupler.hpp:208-232`).
-- `step_cfl(cfl)` : calcule `dt_b = cfl * min(dx,dy) * substeps_b / (stride_b * w_b)` pour chaque
-  bloc evolutif, retient le minimum, puis avance d'un `step(dt)`. Formule substeps-aware (post-#121) :
-  bit-identique avec l'historique UNIQUEMENT pour `substeps=1`. Avec `substeps>1`, le dt retourne est
-  plus grand que l'ancienne formule `cfl*h/w_max` (chaque sous-pas reste a la limite de stabilite).
-  Pour reproduire un run calibre avec l'ancienne formule, utiliser `step(dt)` avec le dt explicite.
-- `coupled_source_step(src, dt)` : etape de source de couplage inter-especes (splitting
-  forward-Euler), lecture de tous les blocs + aux (`system_coupler.hpp:276-283`).
+- Owns a `SystemAssembler`.
+- `step(dt, [implicit_callback])`: per-block subcycling according to `block_stride_v<Block>`,
+  advances each block according to its `TimeTreatment`:
+  - `Explicit`: call of `SSPRK2Step` / `SSPRK3Step` (or a user `TimeStepper`)
+    passing the residual evaluator of the assembler.
+  - `Implicit` / `IMEX`: field solve, explicit transport if IMEX, then
+    delegated to the callback `implicit_advance(*this, block, dt, ...)`.
+- `step_adaptive(cfl)`: adaptive macro step; each block computes its own `stride`
+  at runtime from the ratio of wave speeds (`system_coupler.hpp:208-232`).
+- `step_cfl(cfl)`: computes `dt_b = cfl * min(dx,dy) * substeps_b / (stride_b * w_b)` for each
+  evolving block, keeps the minimum, then advances by one `step(dt)`. Substeps-aware formula (post-#121):
+  bit-identical with the history ONLY for `substeps=1`. With `substeps>1`, the returned dt is
+  larger than the old formula `cfl*h/w_max` (each substep stays at the stability limit).
+  To reproduce a run calibrated with the old formula, use `step(dt)` with the explicit dt.
+- `coupled_source_step(src, dt)`: inter-species coupling source stage (forward-Euler
+  splitting), reading all blocks + aux (`system_coupler.hpp:276-283`).
 
-### Ce que RhsAssembler doit exposer
+### What RhsAssembler must expose
 
-Le `RhsAssembler` est un callable `operator()(const System&, MultiFab& rhs)`.
-Le header `elliptic_rhs.hpp` fournit :
+The `RhsAssembler` is a callable `operator()(const System&, MultiFab& rhs)`.
+The header `elliptic_rhs.hpp` provides:
 
-- `SingleModelEllipticRhs<Model>` : `f = model.elliptic_rhs(U)` (mono-bloc).
-- `TwoBlockChargeDensityRhs` : `f = q0 * n0 + q1 * n1` (deux blocs, compat).
-- `ChargeDensityRhs` (recommande) : `f = Sum_s q_s n_s` generique a N blocs, exige
-  une entree `SpeciesCharge` par bloc (`elliptic_rhs.hpp:117-133`).
+- `SingleModelEllipticRhs<Model>`: `f = model.elliptic_rhs(U)` (single-block).
+- `TwoBlockChargeDensityRhs`: `f = q0 * n0 + q1 * n1` (two blocks, compatibility).
+- `ChargeDensityRhs` (recommended): `f = Sum_s q_s n_s` generic to N blocks, requires
+  a `SpeciesCharge` entry per block (`elliptic_rhs.hpp:117-133`).
 
-### Quand l'utiliser
+### When to use it
 
-- Plusieurs especes sur un maillage uniforme.
-- Transport explicite (SSPRK) ou IMEX, avec ou sans sous-cyclage par espece.
-- Utiliser `SystemAssembler` directement si l'on veut ecrire son propre ordonnanceur.
-- Utiliser `SystemDriver` (ou son alias `SystemCoupler`) dans tous les cas standard.
-
----
-
-## 4. AmrCoupler -- SUPPRIME (#164)
-
-L'ancien coupleur AMR E x B mono-box `adc::AmrCoupler<Model, Elliptic>`
-(`include/adc/coupling/amr_coupler.hpp`) a ete **supprime (#164)**. Son role est
-entierement repris par `AmrCouplerMP` (section 5), dont le mono-box est le cas
-degenere bit-identique (garde de validation `test_amr_multilevel_multipatch`).
+- Several species on a uniform mesh.
+- Explicit transport (SSPRK) or IMEX, with or without per-species subcycling.
+- Use `SystemAssembler` directly if you want to write your own scheduler.
+- Use `SystemDriver` (or its alias `SystemCoupler`) in all standard cases.
 
 ---
 
-## 5. AmrCouplerMP -- mono-modele, AMR multi-patch
+## 4. AmrCoupler -- REMOVED (#164)
 
-**Fichier :** `include/adc/coupling/amr_coupler_mp.hpp`
+The old single-box AMR E x B coupler `adc::AmrCoupler<Model, Elliptic>`
+(`include/adc/coupling/amr_coupler.hpp`) has been **removed (#164)**. Its role is
+entirely taken over by `AmrCouplerMP` (section 5), whose single-box is the
+bit-identical degenerate case (validation guard `test_amr_multilevel_multipatch`).
 
-**Instanciation :** `adc::AmrCouplerMP<Model, Elliptic = GeometricMG>`
+---
+
+## 5. AmrCouplerMP -- single-model, AMR multi-patch
+
+**File:** `include/adc/coupling/amr_coupler_mp.hpp`
+
+**Instantiation:** `adc::AmrCouplerMP<Model, Elliptic = GeometricMG>`
 
 ### Role
 
-Coupleur AMR E x B mono-modele, multi-patch a chaque niveau. Seul coupleur AMR
-mono-modele en production (l'ancien `AmrCoupler` mono-box a ete supprime, #164).
-Le mono-box est le cas degenere bit-identique (garde de validation
+Single-model AMR E x B coupler, multi-patch at each level. The only single-model
+AMR coupler in production (the old single-box `AmrCoupler` has been removed, #164).
+The single-box is the bit-identical degenerate case (validation guard
 `test_amr_multilevel_multipatch`).
 
-### Sequence d'un pas (`step`)
+### Sequence of a step (`step`)
 
-1. `update()` = `sync_down()` + `compute_aux()` :
-   - `sync_down` : moyenne conservatrice fin -> grossier sur toute la hierarchie
+1. `update()` = `sync_down()` + `compute_aux()`:
+   - `sync_down`: conservative fine -> coarse averaging over the whole hierarchy
      (`mf_average_down_mb`).
-   - Poisson grossier : `model.elliptic_rhs(U)` sur le niveau 0, solve MG.
-   - `aux(0)` = `(phi, d_x phi, d_y phi)` par differences centrees sur le grossier.
-   - Injection piecewise-constante `aux(k-1) -> aux(k)` pour chaque niveau fin via
+   - Coarse Poisson: `model.elliptic_rhs(U)` on level 0, MG solve.
+   - `aux(0)` = `(phi, d_x phi, d_y phi)` by centered differences on the coarse level.
+   - Piecewise-constant injection `aux(k-1) -> aux(k)` for each fine level via
      `detail::coupler_inject_aux_mb` (`amr_coupler_mp.hpp:56-96`).
-2. `advance_amr<Disc>(model, levels, domain, dt, ...)` : pas AMR conservatif
-   (Berger-Oliger + reflux coverage-aware, sous-cyclage par niveau).
+2. `advance_amr<Disc>(model, levels, domain, dt, ...)`: conservative AMR step
+   (Berger-Oliger + coverage-aware reflux, per-level subcycling).
 
-### Parametres de construction notables
+### Notable construction parameters
 
-- `replicated_coarse` (defaut `true`) : le niveau 0 est replique sur chaque rang
-  (une box, mono-rang). Passer `false` pour un grossier multi-box reparti
-  (scalabilite memoire ; penalise le MG si trop de boxes). Equivalence bit-a-bit
-  prouvee (`test_mpi_decoarse`, `maxdiff = 0`).
-- `active` : predicat optionnel "cellule de conducteur" (paroi circulaire du diocotron).
+- `replicated_coarse` (default `true`): level 0 is replicated on each rank
+  (one box, single-rank). Pass `false` for a distributed multi-box coarse level
+  (memory scalability; penalizes the MG if too many boxes). Bit-for-bit equivalence
+  proven (`test_mpi_decoarse`, `maxdiff = 0`).
+- `active`: optional "conductor cell" predicate (circular wall of the diocotron).
 
 ### Regrid
 
-`regrid(crit, grow, margin)` delegue a `amr_regrid_coupler.hpp::amr_regrid_finest`
-(Berger-Rigoutsos). L'appelant fournit le critere de raffinement ; le coupleur
-resynchronise `aux` apres regrid.
+`regrid(crit, grow, margin)` delegates to `amr_regrid_coupler.hpp::amr_regrid_finest`
+(Berger-Rigoutsos). The caller supplies the refinement criterion; the coupler
+resynchronizes `aux` after regrid.
 
 ### Diagnostics
 
-`mass()` et `max_drift_speed()` / `max_wave_speed()` delegues a `amr_diagnostics.hpp`.
+`mass()` and `max_drift_speed()` / `max_wave_speed()` delegated to `amr_diagnostics.hpp`.
 
-### Quand l'utiliser
+### When to use it
 
-- Un seul modele, AMR adaptatif avec ou sans multi-patch.
-- Pour un systeme multi-especes sur AMR, utiliser `AmrSystemCoupler`.
+- A single model, adaptive AMR with or without multi-patch.
+- For a multi-species system on AMR, use `AmrSystemCoupler`.
 
 ---
 
-## 6. AmrSystemCoupler (alias AmrSystemDriver) -- multi-especes, AMR
+## 6. AmrSystemCoupler (alias AmrSystemDriver) -- multi-species, AMR
 
-**Fichier :** `include/adc/coupling/amr_system_coupler.hpp`
+**File:** `include/adc/coupling/amr_system_coupler.hpp`
 
-**Instanciation :** `adc::AmrSystemCoupler<System, RhsAssembler, Elliptic = GeometricMG>`
+**Instantiation:** `adc::AmrSystemCoupler<System, RhsAssembler, Elliptic = GeometricMG>`
 
-`AmrSystemDriver` est un alias de `AmrSystemCoupler` (note de conception
-`amr_system_coupler.hpp:371-375` : scission cosmétique reportée, classe unifiée
-validée bit-identique).
+`AmrSystemDriver` is an alias of `AmrSystemCoupler` (design note
+`amr_system_coupler.hpp:371-375`: cosmetic split deferred, unified class
+validated bit-identical).
 
 ### Role
 
-Porte un `CoupledSystem` sur une hierarchie AMR. Toutes les especes partagent la
-MEME grille AMR par niveau (hypothese structurelle) et donc le MEME canal `aux`.
-Le Poisson ne se resout que sur le niveau grossier.
+Carries a `CoupledSystem` on an AMR hierarchy. All species share the
+SAME per-level AMR grid (structural assumption) and therefore the SAME `aux` channel.
+Poisson is only solved on the coarse level.
 
-### Structure interne
+### Internal structure
 
-- `block_levels_[b][k]` : `AmrLevelMP` du bloc b au niveau k (tableau 2D).
-- `aux_[k]` : un `MultiFab` commun a tous les blocs au niveau k
+- `block_levels_[b][k]`: `AmrLevelMP` of block b at level k (2D array).
+- `aux_[k]`: a `MultiFab` common to all blocks at level k
   (`amr_system_coupler.hpp:130-139`).
-- Largeur du canal `aux` partage = max de `aux_comps<Model>` sur les blocs (calque
-  exact de `SystemAssembler::system_aux_comps`, `amr_system_coupler.hpp:308-315`).
+- Width of the shared `aux` channel = max of `aux_comps<Model>` over the blocks (exact
+  mirror of `SystemAssembler::system_aux_comps`, `amr_system_coupler.hpp:308-315`).
 
-### Sequence de `solve_fields()`
+### Sequence of `solve_fields()`
 
-1. `sync_down` par bloc (fin -> grossier, `mf_average_down_mb`).
-2. `rhs_assembler_(system_, mg_.rhs())` : RHS de systeme (p. ex. `ChargeDensityRhs`).
-3. `mg_.solve()` : Poisson sur le grossier.
-4. `aux_[0]` = `(phi, grad phi)` via le meme chemin que `SystemAssembler::derive_aux`
-   (ghosts `bcPhi_`, `field_postprocess`, ghosts `aux_bc_`) :
+1. `sync_down` per block (fine -> coarse, `mf_average_down_mb`).
+2. `rhs_assembler_(system_, mg_.rhs())`: system RHS (e.g. `ChargeDensityRhs`).
+3. `mg_.solve()`: Poisson on the coarse level.
+4. `aux_[0]` = `(phi, grad phi)` via the same path as `SystemAssembler::derive_aux`
+   (ghosts `bcPhi_`, `field_postprocess`, ghosts `aux_bc_`):
    `amr_system_coupler.hpp:187-197`.
-5. Injection `aux_[k-1] -> aux_[k]` par `coupler_inject_aux_mb`.
-6. Re-peuplement eventuel de `B_z` par niveau si `bz_` fourni (apres injection, pour
-   preserver la resolution spatiale du champ : `amr_system_coupler.hpp:199-205`).
+5. Injection `aux_[k-1] -> aux_[k]` by `coupler_inject_aux_mb`.
+6. Possible re-populating of `B_z` per level if `bz_` supplied (after injection, to
+   preserve the spatial resolution of the field: `amr_system_coupler.hpp:199-205`).
 
-### Cadence Poisson (`PoissonCadence`)
+### Poisson cadence (`PoissonCadence`)
 
-- `OncePerStep` (defaut) : `phi` resolu une seule fois en tete de pas, gele pendant
-  l'avance des blocs. Le moins cher.
-- `PerSubstep` : `phi` re-resolu avant chaque sous-pas d'espece. Plus fidele pour un
-  transport fortement pilote par le champ.
+- `OncePerStep` (default): `phi` solved a single time at the head of the step, frozen during
+  the advance of the blocks. The cheapest.
+- `PerSubstep`: `phi` re-solved before each species substep. More faithful for a
+  transport strongly driven by the field.
 
-Note : le `SystemDriver` mono-niveau re-resout phi a CHAQUE etage RK
-(`recompute_aux = true`) car c'est la cadence maximale par construction.
+Note: the single-level `SystemDriver` re-solves phi at EACH RK stage
+(`recompute_aux = true`) because that is the maximal cadence by construction.
 
-### Avance des blocs (`step`)
+### Block advance (`step`)
 
-Pour chaque bloc (selon son `stride` compile-time) :
+For each block (according to its compile-time `stride`):
 
-- `Explicit` : `advance_amr<Disc::Limiter, Disc::NumericalFlux>(model, levels, dt)`
-  pour chaque sous-pas ; re-solve Poisson avant chaque sous-pas si `PerSubstep`.
-- `IMEX` : transport AMR sur `SourceFreeModel<Block::Model>` (operateur -div F seul)
-  puis callback `implicit_advance(*this, block, levels, dt)`.
-- `Implicit` : tout au callback.
+- `Explicit`: `advance_amr<Disc::Limiter, Disc::NumericalFlux>(model, levels, dt)`
+  for each substep; re-solve Poisson before each substep if `PerSubstep`.
+- `IMEX`: AMR transport on `SourceFreeModel<Block::Model>` (operator -div F only)
+  then callback `implicit_advance(*this, block, levels, dt)`.
+- `Implicit`: everything to the callback.
 
-### Source de couplage inter-especes
+### Inter-species coupling source
 
-`coupled_source_step(src, dt)` : re-pointe chaque bloc vers son niveau k pour chaque
-niveau, puis appelle `src.apply(system, aux[k], dt)` : parite exacte avec
+`coupled_source_step(src, dt)`: re-points each block to its level k for each
+level, then calls `src.apply(system, aux[k], dt)`: exact parity with
 `SystemDriver::coupled_source_step` (`amr_system_coupler.hpp:266-283`).
 
-### Defaut implicite : `AmrImplicitSourceStepper`
+### Implicit default: `AmrImplicitSourceStepper`
 
-Backward-Euler (Newton) sur la source, applique niveau par niveau
-(`amr_system_coupler.hpp:361-370`). Aucun solveur cote utilisateur requis.
+Backward-Euler (Newton) on the source, applied level by level
+(`amr_system_coupler.hpp:361-370`). No user-side solver required.
 
-### Quand l'utiliser
+### When to use it
 
-- Plusieurs especes, AMR adaptatif.
-- Meme grille AMR pour toutes les especes (hypothese centrale).
+- Several species, adaptive AMR.
+- Same AMR grid for all species (central assumption).
 
 ---
 
-## 7. RhsAssemblers : `elliptic_rhs.hpp`
+## 7. RhsAssemblers: `elliptic_rhs.hpp`
 
-**Fichier :** `include/adc/coupling/elliptic_rhs.hpp`
+**File:** `include/adc/coupling/elliptic_rhs.hpp`
 
-Ces types sont passes comme `RhsAssembler` aux coupleurs systeme. Ils ne sont pas
-des coupleurs eux-memes mais des briques de composition.
+These types are passed as `RhsAssembler` to the system couplers. They are not
+couplers themselves but composition bricks.
 
 | Type | Signature | Usage |
 |---|---|---|
-| `SingleModelEllipticRhs<Model>` | `operator()(const MultiFab& state, MultiFab& rhs)` | Mono-bloc : `f = model.elliptic_rhs(U)` |
-| `TwoFieldChargeDensityRhs` | `operator()(U0, U1, rhs)` | Deux champs decouples, compat legacy |
-| `TwoBlockChargeDensityRhs` | `operator()(system, rhs)` | Deux blocs d'un CoupledSystem |
-| `ChargeDensityRhs` | `operator()(system, rhs)` | N blocs : `f = Sum_s q_s n_s` ; **recommande** |
+| `SingleModelEllipticRhs<Model>` | `operator()(const MultiFab& state, MultiFab& rhs)` | Single-block: `f = model.elliptic_rhs(U)` |
+| `TwoFieldChargeDensityRhs` | `operator()(U0, U1, rhs)` | Two decoupled fields, legacy compatibility |
+| `TwoBlockChargeDensityRhs` | `operator()(system, rhs)` | Two blocks of a CoupledSystem |
+| `ChargeDensityRhs` | `operator()(system, rhs)` | N blocks: `f = Sum_s q_s n_s`; **recommended** |
 
-`ChargeDensityRhs` exige une entree `SpeciesCharge{.charge, .comp}` par bloc :
-si une espece est neutre, la declarer avec `charge = 0` est obligatoire
+`ChargeDensityRhs` requires a `SpeciesCharge{.charge, .comp}` entry per block:
+if a species is neutral, declaring it with `charge = 0` is required
 (`elliptic_rhs.hpp:122-125`).
 
 ---
 
-## 8. CoupledSource : `coupled_source.hpp`
+## 8. CoupledSource: `coupled_source.hpp`
 
-**Fichier :** `include/adc/coupling/coupled_source.hpp`
+**File:** `include/adc/coupling/coupled_source.hpp`
 
-Une `CoupledSource` modelise un terme source inter-especes qui depend de plusieurs
-blocs ET du potentiel. Le concept exige `apply(system, aux, dt)`.
+A `CoupledSource` models an inter-species source term that depends on several
+blocks AND on the potential. The concept requires `apply(system, aux, dt)`.
 
-- `NoCoupledSource` : no-op, zero cout, cas mono-espece ou couplage uniquement par
+- `NoCoupledSource`: no-op, zero cost, single-species case or coupling only through
   Poisson (`coupled_source.hpp:37-40`).
-- Les sources concretes (collisions, friction, echange de charge) vivent dans
-  `adc_cases` ou les tests du coeur, pas dans le coeur lui-meme.
+- The concrete sources (collisions, friction, charge exchange) live in
+  `adc_cases` or the core tests, not in the core itself.
 
 ---
 
-## 9. CondensedSchurSourceStepper -- etage source implicite Schur
+## 9. CondensedSchurSourceStepper -- implicit Schur source stage
 
-**Fichier :** `include/adc/coupling/condensed_schur_source_stepper.hpp`
+**File:** `include/adc/coupling/condensed_schur_source_stepper.hpp`
 
-Ajoute en PR #126 (branche `feat/schur-pr4-stepper`).
+Added in PR #126 (branch `feat/schur-pr4-stepper`).
 
 ### Role
 
-Etage source AUTONOME (transport gele) resolvant implicitement le couplage
-potentiel / vitesse / Lorentz d'un bloc fluide magnetise (Hoffart et al.,
-arXiv:2510.11808). Il NE remplace PAS et NE s'integre PAS encore dans le chemin
-`System::step` -- le cablage facade est prevu en PR5
+STANDALONE source stage (transport frozen) implicitly solving the
+potential / velocity / Lorentz coupling of a magnetized fluid block (Hoffart et al.,
+arXiv:2510.11808). It does NOT replace and does NOT yet integrate into the
+`System::step` path -- the facade wiring is planned in PR5
 (`condensed_schur_source_stepper.hpp:23`).
 
-### Ce qu'il compose
+### What it composes
 
-1. `ElectrostaticLorentzCondensation` (`schur_condensation.hpp`, PR #124) : assemble
-   l'operateur condense `A_op = I + c rho B^{-1}` (eps_x, eps_y diagonaux, a_xy/a_yx
-   croises) et le second membre condense.
-2. `TensorKrylovSolver` (`krylov_solver.hpp`, PR #122) : BiCGStab matrice-libre
-   preconditionne par un V-cycle `GeometricMG` sur la partie symetrique (l'operateur
-   est non auto-adjoint des que `B_z != 0`).
-3. `LorentzEliminator` (`lorentz_eliminator.hpp`, PR #118) : elimination `B^{-1}` 2x2
-   fermee pour la reconstruction de la vitesse.
+1. `ElectrostaticLorentzCondensation` (`schur_condensation.hpp`, PR #124): assembles
+   the condensed operator `A_op = I + c rho B^{-1}` (eps_x, eps_y diagonal, a_xy/a_yx
+   crossed) and the condensed right-hand side.
+2. `TensorKrylovSolver` (`krylov_solver.hpp`, PR #122): matrix-free BiCGStab
+   preconditioned by a `GeometricMG` V-cycle on the symmetric part (the operator
+   is non self-adjoint as soon as `B_z != 0`).
+3. `LorentzEliminator` (`lorentz_eliminator.hpp`, PR #118): closed 2x2 `B^{-1}`
+   elimination for velocity reconstruction.
 
-### Sequence d'un pas (`step`)
+### Sequence of a step (`step`)
 
-1. Geler `phi^n` ; extraire `v^n = (mx, my) / rho` ; copier `B_z` dans un tampon interne.
-2. Assembler `A_op` et `rhs_schur`.
-3. Resoudre `L_int(phi) = -rhs_schur` par BiCGStab (convention de signe documentee
-   dans l'en-tete : `L_schur = -L_int`, d'ou la negation du RHS).
-4. Reconstruire `v^{n+theta} = B^{-1}(v^n - theta dt grad phi^{n+theta})`.
-5. Extrapoler `phi` et `v` du theta-stage au pas plein.
-6. Mettre a jour l'energie cinetique si le role `Energy` est present.
-7. Remplir les ghosts de l'etat et du potentiel.
+1. Freeze `phi^n`; extract `v^n = (mx, my) / rho`; copy `B_z` into an internal buffer.
+2. Assemble `A_op` and `rhs_schur`.
+3. Solve `L_int(phi) = -rhs_schur` by BiCGStab (sign convention documented
+   in the header: `L_schur = -L_int`, hence the negation of the RHS).
+4. Reconstruct `v^{n+theta} = B^{-1}(v^n - theta dt grad phi^{n+theta})`.
+5. Extrapolate `phi` and `v` from the theta-stage to the full step.
+6. Update the kinetic energy if the `Energy` role is present.
+7. Fill the ghosts of the state and the potential.
 
-### Caracteristiques
+### Characteristics
 
-- Generique : lit les roles `Density / MomentumX / MomentumY` d'un `VariableSet`.
-  Tout bloc fluide qui les expose est eligible sans code Schur supplementaire.
-- Device-clean : tous les kernels sont des foncteurs nommes (pas de lambda etendue,
-  compatible nvcc/GH200).
-- Tampons alloues une seule fois au constructeur, reutilises a chaque `step()`.
-- MPI-propre : les boucles iterent sur `local_size()`, le solve Krylov est collectif.
+- Generic: reads the roles `Density / MomentumX / MomentumY` of a `VariableSet`.
+  Any fluid block that exposes them is eligible without additional Schur code.
+- Device-clean: all kernels are named functors (no extended lambda,
+  nvcc/GH200 compatible).
+- Buffers allocated a single time at the constructor, reused at each `step()`.
+- MPI-clean: the loops iterate over `local_size()`, the Krylov solve is collective.
 
-### Quand l'utiliser
+### When to use it
 
-- Source raide couplee potentiel / vitesse / Lorentz, traitement implicite requis.
-- Necessite un bloc fluide avec roles `Density / MomentumX / MomentumY`.
-- Non connecte a la facade `System::step` pour l'instant (PR5 a venir).
-
----
-
-## 10. Canal aux partage : canal extensible
-
-Le canal `aux` transporte au minimum trois composantes : `phi`, `d_x phi`, `d_y phi`
-(constante `kAuxBaseComps = 3`). Les briques extensibles ajoutent :
-
-- composante 3 : `B_z(x, y)` (champ magnetique hors-plan, statique, fourni par `bz_`).
-- composante 4 : `T_e` (temperature electronique, derivee de `p/rho`).
-
-La largeur est determinee par `aux_comps<Model>()`. Dans les coupleurs systeme, elle
-est le MAX sur tous les blocs : un bloc de base (n_aux = 3) reste bit-identique a
-l'historique. Le mecanisme est identique dans `SystemAssembler`, `AmrSystemCoupler`
-et `AmrCouplerMP` (voir respectivement `system_coupler.hpp:136`, `amr_system_coupler.hpp:308`,
-et la construction de `AmrLevelStack`).
+- Stiff source coupling potential / velocity / Lorentz, implicit treatment required.
+- Requires a fluid block with roles `Density / MomentumX / MomentumY`.
+- Not connected to the `System::step` facade for now (PR5 to come).
 
 ---
 
-## 11. Tableau de synthese
+## 10. Shared aux channel: extensible channel
 
-| Coupleur | Modeles | Niveaux | ASSEMBLE | AVANCE | Statut |
+The `aux` channel carries at minimum three components: `phi`, `d_x phi`, `d_y phi`
+(constant `kAuxBaseComps = 3`). The extensible bricks add:
+
+- component 3: `B_z(x, y)` (out-of-plane magnetic field, static, supplied by `bz_`).
+- component 4: `T_e` (electron temperature, derived from `p/rho`).
+
+The width is determined by `aux_comps<Model>()`. In the system couplers, it
+is the MAX over all blocks: a base block (n_aux = 3) stays bit-identical to
+the history. The mechanism is identical in `SystemAssembler`, `AmrSystemCoupler`
+and `AmrCouplerMP` (see respectively `system_coupler.hpp:136`, `amr_system_coupler.hpp:308`,
+and the construction of `AmrLevelStack`).
+
+---
+
+## 11. Summary table
+
+| Coupler | Models | Levels | ASSEMBLE | AVANCE | Status |
 |---|---|---|---|---|---|
-| `Coupler<M,E>` | 1 | 1 (uniforme) | oui (dans le coupleur) | oui | stable |
-| `SystemAssembler<Sys,Rhs,E>` | N | 1 (uniforme) | oui (Poisson systeme + aux) | NON | stable |
-| `SystemDriver<Sys,Rhs,E>` (= `SystemCoupler`) | N | 1 (uniforme) | via `SystemAssembler` possede | oui | stable |
-| `AmrCouplerMP<M,E>` | 1 | N (multi-box) | oui | oui | stable |
-| `AmrSystemCoupler<Sys,Rhs,E>` (= `AmrSystemDriver`) | N | N (multi-box) | oui | oui | stable |
-| `CondensedSchurSourceStepper` | 1 bloc fluide | 1 (uniforme) | operateur Schur | etage source seul | experimental (PR #126) |
+| `Coupler<M,E>` | 1 | 1 (uniform) | yes (in the coupler) | yes | stable |
+| `SystemAssembler<Sys,Rhs,E>` | N | 1 (uniform) | yes (system Poisson + aux) | NO | stable |
+| `SystemDriver<Sys,Rhs,E>` (= `SystemCoupler`) | N | 1 (uniform) | via owned `SystemAssembler` | yes | stable |
+| `AmrCouplerMP<M,E>` | 1 | N (multi-box) | yes | yes | stable |
+| `AmrSystemCoupler<Sys,Rhs,E>` (= `AmrSystemDriver`) | N | N (multi-box) | yes | yes | stable |
+| `CondensedSchurSourceStepper` | 1 fluid block | 1 (uniform) | Schur operator | source stage only | experimental (PR #126) |
 
-La distinction ASSEMBLE / AVANCE prend tout son sens au niveau de `SystemAssembler` vs
-`SystemDriver` : `SystemAssembler` peut etre reutilise dans un ordonnanceur
-specialise (Newton externe, integrateur AP) sans emporter l'ordonnancement interne
-de `SystemDriver`. `AmrSystemCoupler` n'a pas (encore) subi cette scission ; la note
-de conception (`amr_system_coupler.hpp:371-375`) la signale comme reportee.
+The ASSEMBLE / AVANCE distinction takes on full meaning at the level of `SystemAssembler` vs
+`SystemDriver`: `SystemAssembler` can be reused in a specialized scheduler
+(external Newton, AP integrator) without dragging in the internal scheduling
+of `SystemDriver`. `AmrSystemCoupler` has not (yet) undergone this split; the design
+note (`amr_system_coupler.hpp:371-375`) flags it as deferred.
 
 ---
 
-## 12. References dans le code source
+## 12. References in the source code
 
-| Symbole | Fichier | Ligne(s) |
+| Symbol | File | Line(s) |
 |---|---|---|
 | `Coupler<Model,Elliptic>` | `coupling/coupler.hpp` | 68 |
 | `detail::coupler_eval_rhs` | `coupling/coupler.hpp` | 51 |

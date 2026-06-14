@@ -1,71 +1,71 @@
-# adc : Cap multi-espèces : du `PhysicalModel` au `CoupledSystem`
+# adc : Multi-species milestone : from `PhysicalModel` to `CoupledSystem`
 
-*Document de conception pour la session tableau (avec Sacha). Met à jour la feuille de
-route après les remarques du tuteur et les incréments déjà réalisés.*
+*Design document for the whiteboard session (with Sacha). Updates the roadmap
+after the supervisor's remarks and the increments already done.*
 
 ---
 
-## 1. Le cadre (ce que le tuteur valide, ce qu'il manque)
+## 1. The frame (what the supervisor validates, what is missing)
 
-Le tuteur **ne remet pas en cause `PhysicalModel`**. Sur la transcription :
-« le modèle physique, je n'ai rien à dire, ça a l'air flexible ; la structure avec
-templates va dans le bon sens ». `PhysicalModel` est le **bon niveau local** : une
-équation d'une espèce (flux, max_wave_speed, source, elliptic_rhs), device-callable.
+The supervisor **does not call `PhysicalModel` into question**. From the transcript:
+"the physical model, I have nothing to say, it looks flexible; the structure with
+templates goes in the right direction". `PhysicalModel` is the **right local level**: an
+equation for one species (flux, max_wave_speed, source, elliptic_rhs), device-callable.
 
-Ce qui manque, c'est le **niveau au-dessus** : assembler **plusieurs** `PhysicalModel`,
-chacun avec **sa** méthode spatiale, **son** intégrateur temporel, **son** pas de temps,
-et des couplages **globaux** (Poisson et sources voient toutes les espèces).
+What is missing is the **level above**: assembling **several** `PhysicalModel`,
+each with **its** spatial method, **its** time integrator, **its** time step,
+and **global** couplings (Poisson and sources see all species).
 
 ```
-PhysicalModel   décrit une équation LOCALE          (déjà bon)
-EquationBlock   = State + Model + Spatial + Time     (fait, coeur)
-CoupledSystem   = plusieurs EquationBlock            (fait, coeur)
-Scheduler       = ordre des steps, sous-pas, IMEX    (fait, coeur)
-PoissonRHS      = assemblé depuis toutes les espèces (fait, coeur)
+PhysicalModel   describes a LOCAL equation             (already good)
+EquationBlock   = State + Model + Spatial + Time     (done, core)
+CoupledSystem   = several EquationBlock               (done, core)
+Scheduler       = order of steps, substeps, IMEX     (done, core)
+PoissonRHS      = assembled from all species          (done, core)
 ```
 
-Le cœur garantit que ces choix restent compatibles **AMR / MPI / GPU**.
+The core guarantees that these choices stay compatible with **AMR / MPI / GPU**.
 
-## 1bis. Posture (ce qu'il attend MAINTENANT)
+## 1bis. Posture (what he expects NOW)
 
-Quatre principes qui cadrent l'objectif immédiat (ne pas survendre, ne pas figer) :
+Four principles that frame the immediate objective (do not oversell, do not freeze):
 
-- **Un squelette, pas le solveur final.** L'objectif est de poser les bonnes briques et de
-  les **tester sur des cas simples**, pas de tout coder ni d'optimiser.
-- **Abstraction avant structure de données.** Il distingue trois niveaux : (1) abstraction,
-  (2) architecture / interaction des classes, (3) structure de données. La (3) « se change
-  facilement plus tard ». On montre d'abord *qui dépend de qui, qui assemble quoi*, pas le
-  layout mémoire (`MultiFab`, stockage stacké…).
-- **Performance après stabilisation.** « Optimiser, je saurai le faire quand le code sera
-  propre et figé. » Message : bonnes abstractions d'abord, optimisation ensuite, pas
-  l'inverse.
-- **Validé par un utilisateur, pas par le compilateur.** Sacha est un utilisateur clé. Le
-  vrai test n'est pas « est-ce que ça compile ? » mais : **un utilisateur peut-il décrire
-  son système physique sans comprendre l'AMR / MPI / GPU ?** Question centrale : *quelle API
-  minimale permet à Sacha de décrire son cas ?*
+- **A skeleton, not the final solver.** The objective is to lay down the right bricks and
+  **test them on simple cases**, not to code everything or optimize.
+- **Abstraction before data structure.** He distinguishes three levels: (1) abstraction,
+  (2) architecture / class interaction, (3) data structure. Level (3) "is easily
+  changed later". We first show *who depends on whom, who assembles what*, not the
+  memory layout (`MultiFab`, stacked storage, etc.).
+- **Performance after stabilization.** "Optimizing, I will know how to do it once the code is
+  clean and frozen." Message: good abstractions first, optimization next, not
+  the other way around.
+- **Validated by a user, not by the compiler.** Sacha is a key user. The
+  real test is not "does it compile?" but: **can a user describe
+  their physical system without understanding AMR / MPI / GPU?** Central question: *what minimal API
+  lets Sacha describe their case?*
 
-**Diffusion = un flux, pas une nouvelle couche.** Le parabolique est une contribution de
-flux supplémentaire dans l'opérateur spatial, pas une grande abstraction. (Fait sur grille
-uniforme via `DiffusiveModel` ; sur AMR le moteur travaille par **flux de face** pour le
-reflux, donc la diffusion doit y passer comme **flux de face diffusif** : c'est le
-follow-up, pas un nouveau niveau.)
+**Diffusion = a flux, not a new layer.** The parabolic part is one additional flux
+contribution in the spatial operator, not a large abstraction. (Done on uniform grid
+via `DiffusiveModel`; on AMR the engine works by **face flux** for the
+reflux, so diffusion must go through it as a **diffusive face flux**: this is the
+follow-up, not a new level.)
 
-## 2. Traduction des remarques du tuteur en exigences
+## 2. Translating the supervisor's remarks into requirements
 
-| Il dit | Ça veut dire |
+| He says | It means |
 |---|---|
-| « U pour les ions, U pour les électrons » | `State` ne doit plus être unique : plusieurs champs `U_k`. |
-| « ions isothermes, électrons Euler » | chaque espèce a son propre `PhysicalModel`. |
-| « 10 pas électrons, 1 pas ion » | un `Scheduler`/`TimePolicy` par bloc (sous-cyclage). |
-| « électrons implicites, ions explicites » | le `TimeIntegrator` est **par bloc**, pas global. |
-| « Rusanov ions, HLL électrons » | la `SpatialDiscretisation` est **par bloc**, pas globale. |
-| « ils interagissent dans `f(U)` et dans `S` » | `elliptic_rhs(u)` et `source(u,aux)` locaux sont trop étroits : il faut une source de **couplage** inter-espèces + un RHS elliptique **global**. |
+| "U for the ions, U for the electrons" | `State` must no longer be unique: several `U_k` fields. |
+| "isothermal ions, Euler electrons" | each species has its own `PhysicalModel`. |
+| "10 electron steps, 1 ion step" | one `Scheduler`/`TimePolicy` per block (subcycling). |
+| "implicit electrons, explicit ions" | the `TimeIntegrator` is **per block**, not global. |
+| "Rusanov ions, HLL electrons" | the `SpatialDiscretisation` is **per block**, not global. |
+| "they interact in `f(U)` and in `S`" | local `elliptic_rhs(u)` and `source(u,aux)` are too narrow: we need an inter-species **coupling** source + a **global** elliptic RHS. |
 
-Le `Coupler` cible n'est plus « hyperbolique + elliptique » mais un **assembleur de
-système** : il prend `{U_e, U_i, U_n, …}` + méthodes spatiales + méthodes temporelles +
-solveurs elliptiques + ordre d'exécution.
+The target `Coupler` is no longer "hyperbolic + elliptic" but a **system
+assembler**: it takes `{U_e, U_i, U_n, ...}` + spatial methods + time methods +
+elliptic solvers + execution order.
 
-## 3. Vision cible : abstractions C++
+## 3. Target vision: C++ abstractions
 
 ```cpp
 // Un bloc = un état + un modèle + une discrétisation spatiale + une politique temporelle.
@@ -88,42 +88,42 @@ struct CoupledSystem {
 SystemCoupler sim(system, geom, ba, bc_phi, rhs_assembler);
 ```
 
-- **`EquationBlock`** : fait. Il regroupe `PhysicalModel`, `SpatialDiscretisation`,
-  `TimePolicy`, état `MultiFab` et conditions au bord.
-- **`CoupledSystem`** : fait. Couche d'assemblage de N blocs.
-- **`Scheduler`** : fait. Encode l'ordre (ex. 10 sous-pas électrons par pas ion),
-  l'implicite ciblé (IMEX partiel) via `TimePolicy`.
-- **`PoissonCoupling`** : première brique faite. `elliptic_rhs.hpp` fournit le cas
-  mono-modele et le cas deux champs / deux blocs ; `SystemCoupler` accepte un assembleur
-  utilisateur pour generaliser `f = Σ_s α_s · model_s.elliptic_rhs(U_s)`.
-  Conforme à la demande : couplage dans `f(U)`, pas dans `F`.
+- **`EquationBlock`**: done. It groups `PhysicalModel`, `SpatialDiscretisation`,
+  `TimePolicy`, `MultiFab` state and boundary conditions.
+- **`CoupledSystem`**: done. Assembly layer for N blocks.
+- **`Scheduler`**: done. Encodes the order (e.g. 10 electron substeps per ion step),
+  the targeted implicit (partial IMEX) via `TimePolicy`.
+- **`PoissonCoupling`**: first brick done. `elliptic_rhs.hpp` provides the
+  single-model case and the two-field / two-block case; `SystemCoupler` accepts a user
+  assembler to generalize `f = Σ_s α_s · model_s.elliptic_rhs(U_s)`.
+  Compliant with the request: coupling in `f(U)`, not in `F`.
 
-Non-régression : `Coupler<Model>` reste le chemin mono-bloc ; `SystemCoupler` est ajouté
-à côté, sans casser l'API historique.
+Non-regression: `Coupler<Model>` stays the single-block path; `SystemCoupler` is added
+alongside, without breaking the historical API.
 
-### 3bis. Points d'architecture à acter
+### 3bis. Architecture points to settle
 
-- **Conditions au bord par bloc.** Aujourd'hui les `BCRec` sont globales dans les coupleurs.
-  Le multi-espèces exige des BC par bloc : électrons périodiques, ions mur/extrapolation,
-  neutres profil imposé. → `bc` dans `EquationBlock` (ci-dessus), plus de BC globale unique.
-- **L'AMR est un orchestrateur, pas une option de maillage.** Il prend une définition
-  *locale, cellule par cellule* et la projette sur toute une hiérarchie de grilles :
-  `fill_ghosts → subcycling → average_down → reflux → regrid`. Donc `AmrCoupler` /
-  `AmrCouplerMP` ne sont pas de simples variantes techniques mais des **orchestrateurs
-  d'exécution** : ils jouent déjà le rôle du futur `Scheduler` au niveau d'un bloc.
-- **`Coupler` : un nom historique.** Conceptuellement cette couche est un **Assembler /
-  Simulation Driver** (elle prend tous les ingrédients et les met sur le maillage). Le nom
-  « Coupler » vient de « coupler hyperbolique + elliptique » ; on ne le défend pas à tout
-  prix, on assume qu'il désigne l'assemblage.
-- **Templates, mais on dessine les concepts.** Le tuteur accepte les templates (« ça va
-  dans le bon sens ») tout en notant que c'est moins lisible que le virtuel. Donc on
-  présente les **objets conceptuels** (`PhysicalModel`, `SpatialDiscretisation`,
-  `TimeIntegrator`, `EquationBlock`, `CoupledSystem`, `Scheduler`), même si techniquement
-  ce sont des templates.
+- **Per-block boundary conditions.** Today the `BCRec` are global in the couplers.
+  Multi-species requires per-block BC: periodic electrons, wall/extrapolation ions,
+  neutrals with imposed profile. -> `bc` in `EquationBlock` (above), no more single global BC.
+- **AMR is an orchestrator, not a mesh option.** It takes a definition
+  that is *local, cell by cell* and projects it onto a whole hierarchy of grids:
+  `fill_ghosts → subcycling → average_down → reflux → regrid`. So `AmrCoupler` /
+  `AmrCouplerMP` are not simple technical variants but **execution
+  orchestrators**: they already play the role of the future `Scheduler` at the level of a block.
+- **`Coupler`: a historical name.** Conceptually this layer is an **Assembler /
+  Simulation Driver** (it takes all the ingredients and puts them on the mesh). The name
+  "Coupler" comes from "couple hyperbolic + elliptic"; we do not defend it at all
+  costs, we accept that it denotes the assembly.
+- **Templates, but we draw the concepts.** The supervisor accepts the templates ("it goes
+  in the right direction") while noting that it is less readable than virtual. So we
+  present the **conceptual objects** (`PhysicalModel`, `SpatialDiscretisation`,
+  `TimeIntegrator`, `EquationBlock`, `CoupledSystem`, `Scheduler`), even if technically
+  they are templates.
 
-## 4. API Python cible (composition, pas calcul)
+## 4. Target Python API (composition, not computation)
 
-Python **configure** le système ; les boucles cellules / AMR / MPI / GPU restent en C++.
+Python **configures** the system; the cell / AMR / MPI / GPU loops stay in C++.
 
 ```python
 import adc
@@ -151,101 +151,101 @@ sim.run(t_end=1.0, cfl=0.4,
                           fields=["electrons.rho", "ions.rho", "phi"]))
 ```
 
-Les chaînes (`flux="hllc"`, `time="imex"`) **sélectionnent des briques C++ compilées** ;
-elles ne sont jamais des callbacks cellule-par-cellule (lent, non GPU/MPI-friendly). Un
-utilisateur avancé écrit son `PhysicalModel` en C++ (`StateVec<N>`, `ADC_HD`) et l'expose
-ensuite à Python, toujours en composition, jamais en boucle interne Python.
+The strings (`flux="hllc"`, `time="imex"`) **select compiled C++ bricks**;
+they are never cell-by-cell callbacks (slow, not GPU/MPI-friendly). An
+advanced user writes their `PhysicalModel` in C++ (`StateVec<N>`, `ADC_HD`) and then exposes
+it to Python, always in composition, never in a Python inner loop.
 
-## 5. État actuel vs cible
+## 5. Current state vs target
 
-| | Aujourd'hui | Cible |
+| | Today | Target |
 |---|---|---|
-| États | un seul `U` | `{U_e, U_i, U_n, …}` |
-| Modèle | un `PhysicalModel` | un par bloc |
-| Spatial | sélectionnable (uniforme + AMR) | **par bloc** |
-| Temps | SSPRK2/3 sélectionnable au coupleur | **par bloc** (+ IMEX partiel, sous-cyclage) |
-| Poisson | `f = model.elliptic_rhs(U)` (1 état) | `f = Σ_s q_s n_s` (toutes espèces) |
-| Coupler | `Coupler<Model, Elliptic>` mono-bloc | `CoupledSystem<Blocks…>` |
-| Python | pilote des façades (`DiocotronSolver`, …) | compose un système |
+| States | a single `U` | `{U_e, U_i, U_n, ...}` |
+| Model | one `PhysicalModel` | one per block |
+| Spatial | selectable (uniform + AMR) | **per block** |
+| Time | SSPRK2/3 selectable at the coupler | **per block** (+ partial IMEX, subcycling) |
+| Poisson | `f = model.elliptic_rhs(U)` (1 state) | `f = Σ_s q_s n_s` (all species) |
+| Coupler | `Coupler<Model, Elliptic>` single-block | `CoupledSystem<Blocks...>` |
+| Python | drives facades (`DiocotronSolver`, ...) | composes a system |
 
-## 6. Ce qui est déjà fait (prépare le terrain, ne pré-empte pas la décision data)
+## 6. What is already done (prepares the ground, does not pre-empt the data decision)
 
-Tous poussés, tous verts (adc_cpp 30/30, adc_cases 44/44 ; MPI 7+7) :
+All pushed, all green (adc_cpp 30/30, adc_cases 44/44; MPI 7+7):
 
-1. **Split cœur/applications** : `adc_cpp` = moteur générique (zéro modèle), `adc_cases`
-   = modèles/façades/exemples/Python, via FetchContent (`adc::adc`).
+1. **Core/applications split**: `adc_cpp` = generic engine (zero model), `adc_cases`
+   = models/facades/examples/Python, via FetchContent (`adc::adc`).
 2. **`SpatialDiscretisation<Limiter, NumericalFlux>`** + tags `SSPRK2`/`SSPRK3` +
-   `Coupler::step<Disc, TimeInteg, Policy>` : discrétisation spatiale et intégrateur
-   temps **sélectionnables** (le futur « par bloc » se branchera dessus).
-3. **Diffusion comme un flux de plus** : trait `DiffusiveModel` (`+ν∆U` dans
-   `assemble_rhs`), modèle `AdvectionDiffusion`. (Grille uniforme ; AMR = follow-up.)
-4. **Solveur elliptique choisi à l'exécution** dans la façade diocotron (MG/FFT, pattern
-   `variant`).
-5. **AMR applique `model.source`** (le chemin AMR l'ignorait : bug de correction) +
-   **`SpatialDiscretisation` câblée en AMR** (`AmrCoupler/MP::step<Disc>`, MUSCL conservatif).
+   `Coupler::step<Disc, TimeInteg, Policy>`: spatial discretization and time
+   integrator **selectable** (the future "per block" will plug into it).
+3. **Diffusion as one more flux**: trait `DiffusiveModel` (`+ν∆U` in
+   `assemble_rhs`), model `AdvectionDiffusion`. (Uniform grid; AMR = follow-up.)
+4. **Elliptic solver chosen at runtime** in the diocotron facade (MG/FFT, `variant`
+   pattern).
+5. **AMR applies `model.source`** (the AMR path ignored it: correction bug) +
+   **`SpatialDiscretisation` wired in AMR** (`AmrCoupler/MP::step<Disc>`, conservative MUSCL).
 
-## 7. Modifications à faire (ordonnées)
+## 7. Modifications to make (ordered)
 
-**Décision-mère (au tableau), design des données :**
-- `tuple<Blocks…>` (chaque bloc garde son `StateVec<n_k>`, composition variadique) **vs**
-  `StateVec<N_total>` empilé (un bloc mémoire contigu, offsets par espèce). Conditionne
-  tout le reste (perf de localité, vues, GPU). À trancher avec Sacha.
+**Master decision (at the whiteboard), data design:**
+- `tuple<Blocks...>` (each block keeps its `StateVec<n_k>`, variadic composition) **vs**
+  stacked `StateVec<N_total>` (one contiguous memory block, per-species offsets). Conditions
+  everything else (locality perf, views, GPU). To be settled with Sacha.
 
-**Puis, dans l'ordre :**
-1. **`EllipticRhsAssembler` / `PoissonCoupling`** : sortir `elliptic_rhs` du chemin
-   mono-état. `f = Σ_s α_s · model_s.elliptic_rhs(U_s)`, φ partagé.
-   Fichiers : `coupling/coupler.hpp` (`detail::coupler_eval_rhs`), `core/physical_model.hpp`.
-2. **`EquationBlock<Model, Spatial, Time>`** : type d'agrégation (état + politiques).
-   Adaptateur `SingleFieldSystem<Model>` pour non-régression.
-3. **`CoupledSystem<Blocks…>` + `Scheduler`** : assemble N blocs ; gère l'ordre des
-   sous-pas et l'implicite/explicite par bloc.
-4. **Source de couplage inter-espèces** : distinguer `source` locale du modèle et
-   couplage (collisions, échange) qui voit les autres états.
-5. **IMEX partiel** : intégrateur traitant implicitement un **sous-ensemble** des
-   variables (électrons) et explicitement le reste (ions). Trait `which_implicit()`.
-6. **Sous-cyclage temporel par espèce** : réutiliser le sous-cyclage AMR (Berger-Oliger)
-   pour les blocs (10 pas électrons / 1 pas ion).
-7. **Façade compilée `MultiSpeciesSolver(vector<SpeciesConfig>)`** + **API Python de
-   composition** (`sim.add_equation(...)`, `sim.add_poisson(...)`, `sim.run()`).
-8. **Nettoyages** : `SpectralCoupler` ne doit plus coder la physique diocotron en dur
-   (appeler `model.elliptic_rhs` / `model.max_wave_speed`) ; clarifier le contrat `Aux`
-   (fixe `phi, grad φ` ou réellement `typename M::Aux`) ; diffusion sur AMR (flux de face
-   diffusif pour rester conservatif au reflux).
+**Then, in order:**
+1. **`EllipticRhsAssembler` / `PoissonCoupling`**: take `elliptic_rhs` out of the
+   single-state path. `f = Σ_s α_s · model_s.elliptic_rhs(U_s)`, shared φ.
+   Files: `coupling/coupler.hpp` (`detail::coupler_eval_rhs`), `core/physical_model.hpp`.
+2. **`EquationBlock<Model, Spatial, Time>`**: aggregation type (state + policies).
+   Adapter `SingleFieldSystem<Model>` for non-regression.
+3. **`CoupledSystem<Blocks...>` + `Scheduler`**: assembles N blocks; handles the order of
+   substeps and the implicit/explicit per block.
+4. **Inter-species coupling source**: distinguish the model's local `source` from
+   coupling (collisions, exchange) that sees the other states.
+5. **Partial IMEX**: integrator handling implicitly a **subset** of the
+   variables (electrons) and explicitly the rest (ions). Trait `which_implicit()`.
+6. **Per-species time subcycling**: reuse the AMR subcycling (Berger-Oliger)
+   for the blocks (10 electron steps / 1 ion step).
+7. **Compiled facade `MultiSpeciesSolver(vector<SpeciesConfig>)`** + **composition
+   Python API** (`sim.add_equation(...)`, `sim.add_poisson(...)`, `sim.run()`).
+8. **Cleanups**: `SpectralCoupler` must no longer hardcode the diocotron physics
+   (call `model.elliptic_rhs` / `model.max_wave_speed`); clarify the `Aux` contract
+   (fixed `phi, grad φ` or actually `typename M::Aux`); diffusion on AMR (diffusive face
+   flux to stay conservative at the reflux).
 
-## 7bis. Cas simples pour tester le squelette
+## 7bis. Simple cases to test the skeleton
 
-L'architecture se valide sur des cas **utilisateur** simples (pas un solveur de prod) :
+The architecture is validated on simple **user** cases (not a production solver):
 
-- électrons Euler + ions Euler **isothermes** + Poisson (le cas canonique deux-espèces) ;
-- **diocotron à ions fixes** (≈ ce qui existe : `n_i0` constant) ;
-- **diocotron à ions mobiles** (les ions deviennent un second bloc) ;
-- gaz / neutres **résolus** ou **prescrits** (profil imposé, pas résolu chaque pas).
+- Euler electrons + **isothermal** Euler ions + Poisson (the canonical two-species case);
+- **fixed-ion diocotron** (approx. what exists: constant `n_i0`);
+- **mobile-ion diocotron** (the ions become a second block);
+- **resolved** or **prescribed** gas / neutrals (imposed profile, not resolved each step).
 
-Critère de réussite : un utilisateur (Sacha) peut décrire ces cas **sans toucher** à
-l'AMR / MPI / GPU. Si l'API ne le permet pas, l'abstraction est incomplète.
+Success criterion: a user (Sacha) can describe these cases **without touching**
+AMR / MPI / GPU. If the API does not allow it, the abstraction is incomplete.
 
-## 7ter. Lexique (pour les slides, à définir avant de jeter les sigles)
+## 7ter. Glossary (for the slides, to define before dropping the acronyms)
 
-| Terme | Sens court |
+| Term | Short meaning |
 |---|---|
-| `BoxArray` | découpage du domaine en blocs (boîtes) |
-| `MultiFab` | les champs `U` stockés sur ces blocs (collection distribuée) |
-| `BCRec` | conditions aux limites d'un champ |
-| `aux` | variable auxiliaire transportée (ici `phi, grad phi`) |
-| seam | couture où vit le parallélisme (`for_each_cell`, `comm`) |
+| `BoxArray` | partition of the domain into blocks (boxes) |
+| `MultiFab` | the `U` fields stored on these blocks (distributed collection) |
+| `BCRec` | boundary conditions of a field |
+| `aux` | auxiliary variable transported (here `phi, grad phi`) |
+| seam | seam where parallelism lives (`for_each_cell`, `comm`) |
 
-Note Python : ne jamais appeler `flux()` cellule par cellule depuis Python (lent, non
-GPU/MPI). Python **configure** le système, ou fournit des champs **vectorisés** (numpy sur
-toutes les cellules). Le hot path cellule reste en C++.
+Python note: never call `flux()` cell by cell from Python (slow, not
+GPU/MPI). Python **configures** the system, or provides **vectorized** fields (numpy on
+all cells). The cell hot path stays in C++.
 
-## 8. Synthèse (phrase tableau)
+## 8. Summary (whiteboard sentence)
 
-> `adc` sait déjà prendre une **loi physique locale** et la faire tourner sur un maillage
-> avec Poisson, AMR, MPI et GPU. Ce qui manque pour devenir une **bibliothèque de
-> construction de solveurs**, c'est un niveau d'**assemblage multi-blocs** : plusieurs
-> états, plusieurs modèles, plusieurs méthodes numériques, plusieurs pas de temps, et des
-> couplages globaux dans Poisson et dans les sources.
+> `adc` already knows how to take a **local physical law** and run it on a mesh
+> with Poisson, AMR, MPI and GPU. What is missing to become a **solver-building
+> library** is a level of **multi-block assembly**: several
+> states, several models, several numerical methods, several time steps, and
+> global couplings in Poisson and in the sources.
 >
-> Le `PhysicalModel` décrit une équation locale. Le `CoupledSystem` décrit un système
-> physique. Le `Scheduler` décrit l'ordre d'exécution. Le cœur `adc` garantit que ces
-> choix restent compatibles AMR / MPI / GPU.
+> The `PhysicalModel` describes a local equation. The `CoupledSystem` describes a physical
+> system. The `Scheduler` describes the execution order. The `adc` core guarantees that these
+> choices stay compatible with AMR / MPI / GPU.

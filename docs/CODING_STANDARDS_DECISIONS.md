@@ -1,318 +1,318 @@
-# Note de decisions : conventions de codage de `adc_cpp`
+# Decision note: coding conventions of `adc_cpp`
 
-Date : 2026-06-12.
-Base relue : `origin/master` / `ffb9022`.
-Perimetre : conventions de codage C++ du coeur (`include/adc/**/*.hpp`, 110 fichiers, 25 089 lignes)
-et de la couche de liaison Python (`python/{bindings,system,amr_system}.cpp`). Hors perimetre : le
-code Python pur (`python/adc/*.py`) et `adc_cases`, qui ont leurs propres conventions.
+Date: 2026-06-12.
+Reviewed base: `origin/master` / `ffb9022`.
+Scope: C++ coding conventions of the core (`include/adc/**/*.hpp`, 110 files, 25,089 lines)
+and of the Python binding layer (`python/{bindings,system,amr_system}.cpp`). Out of scope: pure
+Python code (`python/adc/*.py`) and `adc_cases`, which have their own conventions.
 
-Methode : relecture par sous-systeme (nommage, en-tetes, commentaires, gestion d'erreurs, mise en
-forme, idiomes), confrontee a trois references publiques (Google C++ Style Guide, C++ Core Guidelines
-ci-apres CG, LLVM Coding Standards). Pour chaque axe ou les trois guides divergent, ou ou la pratique
-du depot diverge des trois, une regle unique est actee. Chaque constat non cosmetique est verifie sur
-piece (`fichier:ligne` cites). Lecture seule, aucun fichier source modifie.
+Method: review by subsystem (naming, headers, comments, error handling, formatting,
+idioms), confronted with three public references (Google C++ Style Guide, C++ Core Guidelines
+hereafter CG, LLVM Coding Standards). For each axis where the three guides diverge, or where the practice
+of the repository diverges from the three, a single rule is set. Every non-cosmetic finding is verified on
+the spot (`file:line` cited). Read-only, no source file modified.
 
-Docs lies : [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md) (audit de maintenabilite, 6 juin 2026),
-[`QUALITY_TOOLING.md`](QUALITY_TOOLING.md) (analyse statique, milestone *Qualite de code & CI
-durcie*, epic ADC-105). Le `CODEBASE_AUDIT.md` renvoie a
-`CODE_DOCUMENTATION_CONVENTION.md`, **present dans l'arbre de travail mais non commite**
-(donc hors suivi de version, a committer ; voir D9).
+Related docs: [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md) (maintainability audit, June 6, 2026),
+[`QUALITY_TOOLING.md`](QUALITY_TOOLING.md) (static analysis, milestone *Code quality & hardened
+CI*, epic ADC-105). The `CODEBASE_AUDIT.md` refers to
+`CODE_DOCUMENTATION_CONVENTION.md`, **present in the working tree but not committed**
+(therefore outside version control, to be committed; see D9).
 
-Principe directeur : la coherence avec l'existant prime. La base est saine ; on n'impose pas un
-renommage massif. Pour chaque axe on retient la regle la plus proche de la pratique dominante, sauf
-si cette pratique pose un probleme reel (securite, lisibilite, outillage). Les choix imposes par la
-contrainte device (`nvcc`, code `__device__`, header-only Kokkos) sont signales : la latitude y est
-nulle, pas seulement faible.
+Guiding principle: consistency with the existing code prevails. The base is healthy; we do not impose a
+massive rename. For each axis we keep the rule closest to the dominant practice, except
+if that practice poses a real problem (security, readability, tooling). The choices imposed by the
+device constraint (`nvcc`, `__device__` code, header-only Kokkos) are flagged: latitude there is
+zero, not just low.
 
-Statut : chaque decision est marquee **propose**. C'est une proposition soumise au mainteneur, pas
-une regle deja appliquee.
+Status: each decision is marked **proposed**. It is a proposal submitted to the maintainer, not
+a rule already applied.
 
-## D1 Nommage
+## D1 Naming
 
-Divergence : c'est l'axe le plus eclate. Sur la casse des fonctions les trois guides sont
-mutuellement exclusifs (Google `UpperCamelCase`, LLVM `camelBack`, CG `snake_case` NL.10) ; sur les
-variables LLVM est seul a imposer `UpperCamelCase` ; sur les constantes Google impose le prefixe `k`,
-LLVM `UpperCamelCase`, CG rien. Les macros sont le seul point de convergence (NL.9, `ALL_CAPS`).
+Divergence: this is the most fragmented axis. On the case of functions the three guides are
+mutually exclusive (Google `UpperCamelCase`, LLVM `camelBack`, CG `snake_case` NL.10); on the
+variables LLVM alone imposes `UpperCamelCase`; on the constants Google imposes the `k` prefix,
+LLVM `UpperCamelCase`, CG nothing. Macros are the only point of convergence (NL.9, `ALL_CAPS`).
 
-Pratique du depot et regle proposee :
+Repository practice and proposed rule:
 
-| Element | Pratique (chiffres, `fichier:ligne`) | Regle proposee | Guide proche |
+| Element | Practice (counts, `file:line`) | Proposed rule | Closest guide |
 |---|---|---|---|
-| Types, classes, enums | `PascalCase` ; 219 `struct` / 41 `class` (`mesh/box2d.hpp:35`) | `PascalCase` | Google, LLVM |
-| Alias-types | 71 `PascalCase` / 22 STL-like | `PascalCase`, sauf imitation STL (`value_type`) en `snake_case` | Google |
-| Fonctions, methodes | `snake_case` (`physics/euler.hpp:49`, `:54`) | `snake_case` | CG (NL.10) |
-| Variables locales | `snake_case` court, souvent `const` | `snake_case` | Google, CG |
-| Membres non publics | suffixe `_` ; 506 occ. (`mesh/multifab.hpp:49-53`) | suffixe `_` obligatoire | Google |
-| Membres publics de POD | sans suffixe (`Box2D::lo/hi`, `Euler::gamma` `physics/euler.hpp:40`) | sans suffixe | les trois |
-| Constantes litterales | `kCamelCase` (`kTwoPi` `mesh/geometry.hpp:72`, `kMaxRuntimeParams` `runtime/runtime_params.hpp:34`) | `kCamelCase` | Google |
-| Constantes-traits de concept | `snake_case` (`n_vars` `physics/euler.hpp:38`) | `snake_case`, nom impose par `requires` | contrainte |
-| Macros | `ADC_` + `SCREAMING_SNAKE` ; `ADC_HD` 338x, `ADC_EXPORT` 24x (hors sa definition) | `ADC_` + `SCREAMING_SNAKE` | les trois (NL.9) |
-| Fichiers | `.hpp` `snake_case` ; 110/110, zero `.h`/`.cc` | `.hpp` `snake_case` ; `.cpp` pour les TU | Google (adapte) |
-| Namespaces | minuscules ; `adc`, `adc::detail` 45 occ. (`amr/cluster.hpp:49`) | `adc` public, `adc::detail` interne | les trois |
-| Parametres template | `PascalCase` descriptif (`Model` 127x) ; lettre pour l'arithmetique (`M`, `N`) | idem | aucun |
+| Types, classes, enums | `PascalCase`; 219 `struct` / 41 `class` (`mesh/box2d.hpp:35`) | `PascalCase` | Google, LLVM |
+| Type aliases | 71 `PascalCase` / 22 STL-like | `PascalCase`, except STL imitation (`value_type`) in `snake_case` | Google |
+| Functions, methods | `snake_case` (`physics/euler.hpp:49`, `:54`) | `snake_case` | CG (NL.10) |
+| Local variables | short `snake_case`, often `const` | `snake_case` | Google, CG |
+| Non-public members | `_` suffix; 506 occ. (`mesh/multifab.hpp:49-53`) | `_` suffix required | Google |
+| Public POD members | without suffix (`Box2D::lo/hi`, `Euler::gamma` `physics/euler.hpp:40`) | without suffix | all three |
+| Literal constants | `kCamelCase` (`kTwoPi` `mesh/geometry.hpp:72`, `kMaxRuntimeParams` `runtime/runtime_params.hpp:34`) | `kCamelCase` | Google |
+| Concept-trait constants | `snake_case` (`n_vars` `physics/euler.hpp:38`) | `snake_case`, name imposed by `requires` | constraint |
+| Macros | `ADC_` + `SCREAMING_SNAKE`; `ADC_HD` 338x, `ADC_EXPORT` 24x (excluding its definition) | `ADC_` + `SCREAMING_SNAKE` | all three (NL.9) |
+| Files | `.hpp` `snake_case`; 110/110, zero `.h`/`.cc` | `.hpp` `snake_case`; `.cpp` for the TUs | Google (adapted) |
+| Namespaces | lowercase; `adc`, `adc::detail` 45 occ. (`amr/cluster.hpp:49`) | `adc` public, `adc::detail` internal | all three |
+| Template parameters | descriptive `PascalCase` (`Model` 127x); letter for arithmetic (`M`, `N`) | same | none |
 
-Justification : la pratique est deja homogene sur tous ces axes et n'admet, pour chaque ligne, qu'une
-seule des trois positions sans renommage massif. Trois points meritent une note. (1) La casse des
-fonctions retient `snake_case` (CG NL.10) parce que basculer vers Google ou LLVM renommerait toute
-l'API publique pour zero gain. (2) Les constantes ont deux registres assumes : litteral libre en
-`kCamelCase`, nom impose par un concept en `snake_case` ; ce n'est pas un flottement mais une
-distinction structurelle, a documenter pour ne pas passer pour une incoherence. (3) Le suffixe `_`
-sur les membres non publics leve l'ambiguite nom-de-membre / nom-local dans les listes d'init.
+Justification: practice is already homogeneous on all these axes and admits, for each line, only
+one of the three positions without a massive rename. Three points deserve a note. (1) The case of
+functions keeps `snake_case` (CG NL.10) because switching to Google or LLVM would rename the whole
+public API for zero gain. (2) Constants have two assumed registers: free literal in
+`kCamelCase`, name imposed by a concept in `snake_case`; this is not drift but a
+structural distinction, to be documented so as not to pass for an inconsistency. (3) The `_` suffix
+on non-public members removes the member-name / local-name ambiguity in init lists.
 
-Statut : propose.
+Status: proposed.
 
 ## D2 Include guard
 
-Divergence : Google et LLVM imposent `#ifndef ..._H_` et proscrivent `#pragma once` ; CG (SF.8)
-demande un guard sans imposer la forme et tolere `#pragma once`.
+Divergence: Google and LLVM impose `#ifndef ..._H_` and proscribe `#pragma once`; CG (SF.8)
+asks for a guard without imposing the form and tolerates `#pragma once`.
 
-Pratique du depot : `#pragma once` dans 110/110 en-tetes, zero `#ifndef` en garde d'inclusion (les
-seuls `#ifndef` servent la compilation conditionnelle : `ADC_HAS_KOKKOS`, `ADC_HEADER_SIG`,
-`NOMINMAX`/`WIN32_LEAN_AND_MEAN`). Unanime.
+Repository practice: `#pragma once` in 110/110 headers, zero `#ifndef` as include guard (the
+only `#ifndef` serve conditional compilation: `ADC_HAS_KOKKOS`, `ADC_HEADER_SIG`,
+`NOMINMAX`/`WIN32_LEAN_AND_MEAN`). Unanimous.
 
-Decision proposee : `#pragma once` en premiere ligne de chaque en-tete.
+Proposed decision: `#pragma once` on the first line of each header.
 
-Justification : en header-only profond, `#pragma once` supprime la maintenance des macros de garde et
-les collisions de nom. La position Google/LLVM repond a des contraintes de portage que les
-compilateurs cibles (gcc, clang, nvcc, MSVC) n'imposent plus. CG l'autorise.
+Justification: in deep header-only, `#pragma once` removes the maintenance of guard macros and
+name collisions. The Google/LLVM position answers porting constraints that the
+target compilers (gcc, clang, nvcc, MSVC) no longer impose. CG allows it.
 
-Statut : propose.
+Status: proposed.
 
-## D3 Ordre des includes
+## D3 Include order
 
-Divergence : Google place le C++ std tot (avant les libs tierces) ; LLVM place le system header en
-dernier ; ordres opposes. CG ne tranche pas.
+Divergence: Google places C++ std early (before third-party libs); LLVM places the system header
+last; opposite orders. CG does not decide.
 
-Pratique du depot : bloc `<adc/...>` d'abord, ligne vide, puis bloc STL `<...>` ; chevrons partout ;
-tri manuel (`SortIncludes: false`).
+Repository practice: `<adc/...>` block first, blank line, then STL block `<...>`; angle brackets everywhere;
+manual sort (`SortIncludes: false`).
 
-Decision proposee : deux groupes, `<adc/...>` puis STL, separes par une ligne vide ; chevrons pour
-tout ; ordre maintenu a la main, `SortIncludes` reste `false`.
+Proposed decision: two groups, `<adc/...>` then STL, separated by a blank line; angle brackets for
+everything; order maintained by hand, `SortIncludes` stays `false`.
 
-Justification : ni Google ni LLVM ne correspond a l'usage ; un tri automatique melangerait les deux
-blocs et casserait les dependances d'ordre voulues. L'ordre maison (module propre d'abord) est stable
-et lisible.
+Justification: neither Google nor LLVM matches the usage; an automatic sort would mix the two
+blocks and break the intended order dependencies. The in-house order (own module first) is stable
+and readable.
 
-Statut : propose.
+Status: proposed.
 
-## D4 Exceptions et gestion d'erreurs
+## D4 Exceptions and error handling
 
-Divergence : Google et LLVM interdisent les exceptions (LLVM compile `-fno-exceptions`) ; CG les
-recommande pour signaler l'echec (E.2, E.3).
+Divergence: Google and LLVM forbid exceptions (LLVM compiles `-fno-exceptions`); CG
+recommends them to signal failure (E.2, E.3).
 
-Pratique du depot : exceptions host dominantes (`throw std::runtime_error` : 134 dans `include/adc`,
-305 bindings Python inclus ; 3 `std::invalid_argument`, zero `std::logic_error`) ; message prefixe
-par un contexte puis ` : `
+Repository practice: host exceptions dominant (`throw std::runtime_error`: 134 in `include/adc`,
+305 including Python bindings; 3 `std::invalid_argument`, zero `std::logic_error`); message prefixed
+by a context then ` : `
 (`runtime/native_loader.hpp:210`, `runtime/wall_predicate.hpp:33`). Zero `std::expected`,
 `std::optional` marginal (3).
 
-Decision proposee : exceptions autorisees et idiomatiques sur le chemin host (validation de config,
-chargement de `.so`, erreurs d'API) ; `std::runtime_error` par defaut, `std::invalid_argument` pour
-un argument invalide ; message toujours prefixe par un contexte puis ` : `. Le chemin device (code
-sous `ADC_HD`) ne `throw` jamais.
+Proposed decision: exceptions allowed and idiomatic on the host path (config validation,
+loading of `.so`, API errors); `std::runtime_error` by default, `std::invalid_argument` for
+an invalid argument; message always prefixed by a context then ` : `. The device path (code
+under `ADC_HD`) never `throw`s.
 
-Justification : la contrainte device impose deja le ban Google/LLVM sur la partie chaude, mais le host
-n'a aucune raison de s'en priver et l'usage y est massif et homogene. On scinde selon le chemin
-d'execution plutot que d'imposer un ban global qui ne reflete pas le code.
+Justification: the device constraint already imposes the Google/LLVM ban on the hot part, but the host
+has no reason to deprive itself of it and the usage there is massive and homogeneous. We split according to the execution path
+rather than imposing a global ban that does not reflect the code.
 
-Statut : propose.
+Status: proposed.
 
-## D5 Asserts et contrats
+## D5 Asserts and contracts
 
-Divergence : LLVM "assert liberally" plus `llvm_unreachable` ; Google `assert()` plus macros maison
-`CHECK`/`DCHECK` ; CG `Expects()`/`Ensures()` (I.6, I.8) via GSL.
+Divergence: LLVM "assert liberally" plus `llvm_unreachable`; Google `assert()` plus in-house macros
+`CHECK`/`DCHECK`; CG `Expects()`/`Ensures()` (I.6, I.8) via GSL.
 
-Pratique du depot : 45 `static_assert` (contraintes compile-time), 8 `assert(` bruts seulement,
-aucune macro `ADC_ASSERT` (n'existe pas).
+Repository practice: 45 `static_assert` (compile-time constraints), 8 raw `assert(` only,
+no `ADC_ASSERT` macro (does not exist).
 
-Decision proposee : preference forte pour `static_assert`. `assert` runtime sur le chemin host
-uniquement, parcimonieux. Pas de GSL `Expects`/`Ensures`. Pas de macro `CHECK`/`ADC_ASSERT` tant
-qu'un besoin recurrent n'est pas etabli.
+Proposed decision: strong preference for `static_assert`. Runtime `assert` on the host path
+only, sparingly. No GSL `Expects`/`Ensures`. No `CHECK`/`ADC_ASSERT` macro as long
+as a recurring need is not established.
 
-Justification : `Expects`/`Ensures` ne sont pas appelables sur device et `assert` sur device est
-couteux ou desactive ; le compile-time (concepts, `static_assert`) couvre deja l'essentiel des
-contrats de cette base.
+Justification: `Expects`/`Ensures` are not callable on device and `assert` on device is
+costly or disabled; compile-time (concepts, `static_assert`) already covers the essential of the
+contracts of this base.
 
-Statut : propose.
+Status: proposed.
 
 ## D6 RTTI
 
-Divergence : Google et LLVM interdisent RTTI (LLVM a `isa<>`/`cast<>`/`dyn_cast<>` maison) ; CG
-(C.146) autorise `dynamic_cast` pour une navigation de hierarchie inevitable.
+Divergence: Google and LLVM forbid RTTI (LLVM has in-house `isa<>`/`cast<>`/`dyn_cast<>`); CG
+(C.146) allows `dynamic_cast` for an unavoidable hierarchy navigation.
 
-Pratique du depot : design statique par templates/concepts, invariant "device-clean" (pas de vtable
-dans les kernels) ; aucun usage significatif de `dynamic_cast`/`typeid`.
+Repository practice: static design by templates/concepts, "device-clean" invariant (no vtable
+in the kernels); no significant use of `dynamic_cast`/`typeid`.
 
-Decision proposee : pas de RTTI sur le chemin numerique ; le polymorphisme passe par templates et
+Proposed decision: no RTTI on the numerical path; polymorphism goes through templates and
 policies.
 
-Justification : `typeid`/`dynamic_cast` ne sont pas utilisables sur device ; la contrainte tranche
-pour Google/LLVM et l'architecture n'en a pas besoin.
+Justification: `typeid`/`dynamic_cast` are not usable on device; the constraint decides
+for Google/LLVM and the architecture does not need it.
 
-Statut : propose.
+Status: proposed.
 
 ## D7 `auto`
 
-Divergence : CG (ES.11) permissif (eviter la repetition de noms de type) ; LLVM et Google restrictifs
-(seulement si la lisibilite augmente).
+Divergence: CG (ES.11) permissive (avoid repeating type names); LLVM and Google restrictive
+(only if readability increases).
 
-Pratique du depot : 290 usages, dont 168 trailing-return `) -> ` et 10 structured bindings. Usage
-pragmatique.
+Repository practice: 290 uses, including 168 trailing-return `) -> ` and 10 structured bindings. Pragmatic
+usage.
 
-Decision proposee : `auto` quand il clarifie ou evite une repetition lourde (retours template,
-iterateurs, structured bindings) ; type explicite quand il porte une information utile (unites,
-semantique numerique). Trailing-return-type accepte comme idiome du depot.
+Proposed decision: `auto` when it clarifies or avoids a heavy repetition (template returns,
+iterators, structured bindings); explicit type when it carries useful information (units,
+numerical semantics). Trailing-return-type accepted as a repository idiom.
 
-Justification : la pratique se situe entre CG et Google, saine et lisible dans une base
-template-lourde. On retient une regle pragmatique plutot qu'un ban formel intenable ici.
+Justification: the practice sits between CG and Google, healthy and readable in a
+template-heavy base. We keep a pragmatic rule rather than a formal ban untenable here.
 
-Statut : propose.
+Status: proposed.
 
 ## D8 `struct` vs `class`
 
-Divergence : convergence d'esprit. Google `struct` pour donnees passives ; CG (C.2, C.8) `class` si
-invariant ou membre non public ; LLVM idem informellement.
+Divergence: convergence in spirit. Google `struct` for passive data; CG (C.2, C.8) `class` if
+invariant or non-public member; LLVM same informally.
 
-Pratique du depot : 219 `struct` (POD, foncteurs, policies sans invariant) contre 41 `class` portant
-les membres prives suffixes `_`.
+Repository practice: 219 `struct` (POD, functors, policies without invariant) against 41 `class` carrying
+the private members suffixed `_`.
 
-Decision proposee : `struct` pour un agregat sans invariant (POD, foncteur device, policy) ; `class`
-des qu'il existe un invariant a maintenir ou un membre non public, ce qui implique le suffixe `_`.
+Proposed decision: `struct` for an aggregate without invariant (POD, device functor, policy); `class`
+as soon as there is an invariant to maintain or a non-public member, which implies the `_` suffix.
 
-Justification : les trois guides convergent et la pratique suit deja cette ligne.
+Justification: the three guides converge and the practice already follows this line.
 
-Statut : propose.
+Status: proposed.
 
 ## D9 Documentation (Doxygen `///`)
 
-Divergence : LLVM impose Doxygen `///` ; Google privilegie `//` sans systeme impose ; CG (NL.1-NL.4)
-veut des commentaires d'intention sans systeme impose.
+Divergence: LLVM imposes Doxygen `///`; Google favors `//` without an imposed system; CG (NL.1-NL.4)
+wants intent comments without an imposed system.
 
-Pratique du depot : `///` pour l'API (5 057 lignes), `//` pour l'interne (5 079), `///<` trailing
-pour les membres (312). `/// @file` + `/// @brief` sur 84/110 fichiers (76 %) ; `@param` 137x,
-`@return` 17x (sous-employe). Blocs `/** */` isoles a 4 fichiers de `physics/`. Langue : francais sans
-accents, quasi exclusif. Subsistent 26 fichiers sans en-tete Doxygen et un double en-tete redondant
-(bloc prose `//` paraphrasant le `/// @brief`).
+Repository practice: `///` for the API (5,057 lines), `//` for the internal (5,079), `///<` trailing
+for the members (312). `/// @file` + `/// @brief` on 84/110 files (76%); `@param` 137x,
+`@return` 17x (under-used). `/** */` blocks isolated to 4 files of `physics/`. Language: French without
+accents, almost exclusively. There remain 26 files without a Doxygen header and one redundant double header
+(prose `//` block paraphrasing the `/// @brief`).
 
-Decision proposee : Doxygen `///` (balises `@`) pour l'API, `//` pour l'interne, `///<` trailing pour
-les membres ; `/// @file` + `/// @brief` sur chaque fichier ; proscrire `/** */` ; `@param` pour les
-parametres et `@return` des qu'une fonction renvoie une valeur signifiante ; francais sans accents
-(ASCII). Supprimer le double en-tete prose au fil des touches. **Committer
-`CODE_DOCUMENTATION_CONVENTION.md`** (cible du lien depuis `CODEBASE_AUDIT.md`, presente dans l'arbre
-de travail mais non commitee, donc hors suivi de version) pour reparer le lien, ou rediriger ce lien
-vers la presente note.
+Proposed decision: Doxygen `///` (`@` tags) for the API, `//` for the internal, `///<` trailing for
+the members; `/// @file` + `/// @brief` on each file; proscribe `/** */`; `@param` for the
+parameters and `@return` as soon as a function returns a meaningful value; French without accents
+(ASCII). Remove the prose double header as edits go. **Commit
+`CODE_DOCUMENTATION_CONVENTION.md`** (target of the link from `CODEBASE_AUDIT.md`, present in the working
+tree but not committed, therefore outside version control) to fix the link, or redirect this link
+to the present note.
 
-Justification : le depot a deja choisi Doxygen `///` (position LLVM) et le francais ASCII ; il reste a
-combler les trous (24 % des en-tetes, `@return`, ilot `/** */`) et a reparer les liens en commitant
-le fichier de convention deja present mais non suivi. Pas de changement de systeme, seulement une
-mise en conformite.
+Justification: the repository has already chosen Doxygen `///` (LLVM position) and ASCII French; it remains to
+fill the gaps (24% of the headers, `@return`, `/** */` island) and to fix the links by committing
+the convention file already present but not tracked. No change of system, only a
+conformance update.
 
-Statut : propose.
+Status: proposed.
 
-## D10 Format des TODO
+## D10 TODO format
 
-Divergence : Google impose `// TODO: <contexte>` (historiquement `// TODO(user):`) ; LLVM et CG ne
-prescrivent rien.
+Divergence: Google imposes `// TODO: <context>` (historically `// TODO(user):`); LLVM and CG do not
+prescribe anything.
 
-Pratique du depot : TODO presents mais sans format unique, souvent numerotes par chantier ("TODO 4"
-a `numerics/spatial_operator.hpp:560`, "TODO 2.2").
+Repository practice: TODOs present but without a single format, often numbered by work item ("TODO 4"
+at `numerics/spatial_operator.hpp:560`, "TODO 2.2").
 
-Decision proposee : `// TODO(<contexte>) : <description>` ou `<contexte>` identifie le chantier ou
-l'issue (ex. `// TODO(ADC-124) : ...`). Conserver les numeros de chantier existants comme contexte.
+Proposed decision: `// TODO(<context>) : <description>` where `<context>` identifies the work item or
+the issue (e.g. `// TODO(ADC-124) : ...`). Keep the existing work-item numbers as context.
 
-Justification : seul Google tranche ; un format unique rend les TODO greppables et tracables vers
-Linear, pour un cout faible.
+Justification: only Google decides; a single format makes TODOs greppable and traceable towards
+Linear, at a low cost.
 
-Statut : propose.
+Status: proposed.
 
 ## D11 `[[nodiscard]]`
 
-Divergence : aucun guide n'a de regle numerotee ; LLVM avait `LLVM_NODISCARD` ; CG l'encourage par
-l'esprit pour les fonctions renvoyant un statut.
+Divergence: no guide has a numbered rule; LLVM had `LLVM_NODISCARD`; CG encourages it by
+spirit for functions returning a status.
 
-Pratique du depot : 0 `[[nodiscard]]`, volontaire (`-modernize-use-nodiscard` desactive dans
+Repository practice: 0 `[[nodiscard]]`, deliberate (`-modernize-use-nodiscard` disabled in
 `.clang-tidy`).
 
-Decision proposee : pas d'introduction systematique. Le reserver, au cas par cas et avec
-justification, aux rares fonctions dont ignorer le retour est un bug certain (handle a liberer).
+Proposed decision: no systematic introduction. Reserve it, case by case and with
+justification, for the rare functions where ignoring the return is a certain bug (handle to release).
 
-Justification : la gestion d'erreur passe par exception (D4), pas par code de retour ; l'interet de
-`[[nodiscard]]` est marginal ici. Decision a rouvrir si des routines a code d'erreur apparaissent.
+Justification: error handling goes through exception (D4), not through return code; the interest of
+`[[nodiscard]]` is marginal here. Decision to reopen if error-code routines appear.
 
-Statut : propose.
+Status: proposed.
 
 ## D12 `explicit`
 
-Divergence : Google impose `explicit` sur les constructeurs a un argument et les conversions ; CG
-(C.46) "par defaut, declarer explicit les constructeurs mono-argument" ; LLVM silencieux.
+Divergence: Google imposes `explicit` on single-argument constructors and conversions; CG
+(C.46) "by default, declare single-argument constructors explicit"; LLVM silent.
 
-Pratique du depot : 39 `explicit` sur des constructeurs mono-argument (`mesh/box_array.hpp:30`,
+Repository practice: 39 `explicit` on single-argument constructors (`mesh/box_array.hpp:30`,
 `runtime/system.hpp:66`).
 
-Decision proposee : `explicit` obligatoire sur tout constructeur appelable avec un seul argument et
-sur les operateurs de conversion, sauf intention explicite de conversion implicite (rare, a justifier).
+Proposed decision: `explicit` required on any constructor callable with a single argument and
+on the conversion operators, except explicit intent of implicit conversion (rare, to be justified).
 
-Justification : convergence Google/CG, pratique deja installee, previent les conversions implicites
-silencieuses. Cout nul.
+Justification: Google/CG convergence, practice already installed, prevents the silent implicit conversions.
+Zero cost.
 
-Statut : propose.
+Status: proposed.
 
-## D13 Passage de parametres
+## D13 Parameter passing
 
-Divergence : CG detaille (F.16 valeur si copie peu couteuse sinon `const&` ; F.17 in-out `&` ; F.18
-`X&&` + `std::move` ; F.20 preferer le retour ; F.21 struct pour plusieurs sorties) ; Google "prefer
-return values over output parameters", sorties historiquement par pointeur ; LLVM silencieux.
+Divergence: CG detailed (F.16 by value if copy is cheap otherwise `const&`; F.17 in-out `&`; F.18
+`X&&` + `std::move`; F.20 prefer the return; F.21 struct for multiple outputs); Google "prefer
+return values over output parameters", outputs historically by pointer; LLVM silent.
 
-Pratique du depot : entrees `const&` ou par valeur pour les petits POD numeriques (`Real`, `State`) ;
-retour de valeur prefere ; `std::move` dans les listes d'init.
+Repository practice: inputs `const&` or by value for small numerical PODs (`Real`, `State`);
+return value preferred; `std::move` in init lists.
 
-Decision proposee : entree par valeur si la copie est peu couteuse (scalaires, petits POD passes aux
-kernels), sinon `const&` ; in-out par reference non-const ; preferer le retour aux parametres de
-sortie ; struct dediee pour plusieurs sorties liees ; `X&&` + `std::move` pour les ressources
-transferees. Pas de parametre de sortie par pointeur (CG, pas le legacy Google).
+Proposed decision: input by value if the copy is cheap (scalars, small PODs passed to the
+kernels), otherwise `const&`; in-out by non-const reference; prefer the return to output
+parameters; dedicated struct for multiple related outputs; `X&&` + `std::move` for transferred
+resources. No output parameter by pointer (CG, not the legacy Google).
 
-Justification : aligne CG/Google sur l'usage dominant ; le passage par valeur des petits POD est en
-outre requis par le chemin device.
+Justification: aligns CG/Google on the dominant usage; passing small PODs by value is moreover
+required by the device path.
 
-Statut : propose.
+Status: proposed.
 
-## D14 Early exits et imbrication
+## D14 Early exits and nesting
 
-Divergence : LLVM prescrit fortement les sorties anticipees (`return`/`continue`, pas de `else` apres
-un `return`) ; Google et CG n'ont pas de regle dediee equivalente.
+Divergence: LLVM strongly prescribes early exits (`return`/`continue`, no `else` after
+a `return`); Google and CG have no equivalent dedicated rule.
 
-Pratique du depot : pas de regle ecrite ; style globalement plat.
+Repository practice: no written rule; style globally flat.
 
-Decision proposee : encourager les sorties anticipees pour reduire l'imbrication, sans en faire une
-regle bloquante.
+Proposed decision: encourage early exits to reduce nesting, without making it a
+blocking rule.
 
-Justification : seul LLVM tranche ; la recommandation ameliore la lisibilite sans imposer de
-reecriture. Guide, pas contrainte verifiee. Statut : propose.
+Justification: only LLVM decides; the recommendation improves readability without imposing a
+rewrite. Guide, not a verified constraint. Status: proposed.
 
-## D15 Formatage automatique
+## D15 Automatic formatting
 
-Divergence : chaque guide a son `.clang-format` de reference ; le depot a deja le sien.
+Divergence: each guide has its reference `.clang-format`; the repository already has its own.
 
-Pratique du depot : `.clang-format` present (base Google, C++20, `IndentWidth 2`, `ColumnLimit 100`,
+Repository practice: `.clang-format` present (Google base, C++20, `IndentWidth 2`, `ColumnLimit 100`,
 `PointerAlignment`/`ReferenceAlignment Left`, `SortIncludes: false`, `ReflowComments: false`,
-`FixNamespaceComments: true`), plus `.editorconfig` (LF, 2 espaces C++, 4 espaces Python) et
-`.clang-tidy` informatif (`WarningsAsErrors` vide). `ReflowComments: false` laisse ~9 % de lignes
-au-dela de 100 colonnes (longs commentaires Doxygen FR). Les jobs `format`/`tidy` de `quality.yml` ne
-font que signaler.
+`FixNamespaceComments: true`), plus `.editorconfig` (LF, 2 spaces C++, 4 spaces Python) and
+`.clang-tidy` informative (`WarningsAsErrors` empty). `ReflowComments: false` leaves ~9% of lines
+beyond 100 columns (long FR Doxygen comments). The `format`/`tidy` jobs of `quality.yml` only
+report.
 
-Decision proposee : le `.clang-format` existant est la reference de mise en forme ; les decisions
-D1-D14 le completent sur ce qu'il ne couvre pas. La bascule des jobs `format`/`tidy` de l'informatif
-vers le bloquant est **deferree au milestone *Qualite de code & CI durcie* (epic ADC-105)**, qui
-decidera quels checks deviennent un gate une fois la base assainie.
+Proposed decision: the existing `.clang-format` is the formatting reference; decisions
+D1-D14 complete it on what it does not cover. The switch of the `format`/`tidy` jobs from informative
+to blocking is **deferred to the milestone *Code quality & hardened CI* (epic ADC-105)**, which
+will decide which checks become a gate once the base is cleaned up.
 
-Justification : la mise en forme mecanique est deja outillee et stable ; rien a trancher ici, seulement
-a renvoyer le durcissement au milestone qui le porte. Statut : propose.
+Justification: the mechanical formatting is already tooled and stable; nothing to decide here, only
+to refer the hardening to the milestone that carries it. Status: proposed.
 
-## Suites
+## Follow-ups
 
-Une fois validees, ces decisions alimentent `CODE_DOCUMENTATION_CONVENTION.md` (deja present, a committer, D9) et le
-durcissement progressif de `quality.yml` (D15, milestone ADC-105). Les incoherences relevees qui ne
-demandent pas d'arbitrage de style (`CODE_DOCUMENTATION_CONVENTION.md` present mais non commite,
-en-tetes Doxygen manquantes sur 26 fichiers, double
-en-tete redondant, ilot `/** */` de `physics/`) sont des mises en conformite a la presente note, pas
-des choix ouverts.
+Once validated, these decisions feed `CODE_DOCUMENTATION_CONVENTION.md` (already present, to be committed, D9) and the
+progressive hardening of `quality.yml` (D15, milestone ADC-105). The inconsistencies noted that do not
+require a style arbitration (`CODE_DOCUMENTATION_CONVENTION.md` present but not committed,
+Doxygen headers missing on 26 files, redundant double
+header, `/** */` island of `physics/`) are conformance updates to the present note, not
+open choices.

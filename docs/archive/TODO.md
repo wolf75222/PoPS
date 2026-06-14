@@ -1,374 +1,374 @@
-# adc : Tâches : du `PhysicalModel` au système multi-espèces
+# adc: Tasks: from `PhysicalModel` to the multi-species system
 
-Liste unique et actionnable de ce qui est **fait** et de ce qui **reste**, d'après la
-discussion tuteur et les incréments. Pas un solveur de production : on pose un **squelette
-testable**. `[x]` = fait et vert ; `[ ]` = à faire.
-
----
-
-## 0. Posture (cadre du tuteur)
-
-- Squelette d'abord, pas le solveur final ; tester le niveau d'abstraction sur des cas simples.
-- Abstraction et architecture **avant** la structure de données (elle se change plus tard).
-- Performance **après** stabilisation (« j'optimiserai quand le code sera propre et figé »).
-- Validé **par un utilisateur** (Sacha peut-il décrire son cas sans toucher AMR/MPI/GPU ?), pas par le compilateur.
-- `PhysicalModel` est validé : on **ajoute** le niveau au-dessus, on ne le remplace pas.
-- Diffusion = un flux de plus, pas une nouvelle couche.
-- Deux dépôts : `adc_cpp` = cœur générique, `adc_cases` = modèles / façades / Python / exemples.
+A single actionable list of what is **done** and what **remains**, based on the
+tutor discussion and the increments. Not a production solver: we lay down a **testable
+skeleton**. `[x]` = done and green; `[ ]` = to do.
 
 ---
 
-## 1. Fait (état actuel, tout vert)
+## 0. Posture (tutor's framing)
 
-### Architecture / dépôts
-- [x] Split cœur/applications : `adc_cpp` (moteur, zéro modèle) ↔ `adc_cases` (modèles, façades, Python) via FetchContent (`adc::adc`). Poussés.
-- [x] `adc_cpp` HEAD ne contient **aucune** application (vérifié) ; README recentré « bibliothèque cœur ».
+- Skeleton first, not the final solver; test the abstraction level on simple cases.
+- Abstraction and architecture **before** the data structure (it changes later).
+- Performance **after** stabilization ("I will optimize once the code is clean and frozen").
+- Validated **by a user** (can Sacha describe his case without touching AMR/MPI/GPU?), not by the compiler.
+- `PhysicalModel` is validated: we **add** the level above it, we do not replace it.
+- Diffusion = one more flux, not a new layer.
+- Two repositories: `adc_cpp` = generic core, `adc_cases` = models / facades / Python / examples.
 
-### Abstractions par bloc (le niveau manquant : squelette en place)
-- [x] `core/equation_block.hpp` : `EquationBlock<Model, Spatial, Time>` = state + modèle + discrétisation spatiale + politique temps + **BC par bloc**.
-- [x] `core/coupled_system.hpp` : `CoupledSystem<Blocks...>` (variadic), `for_each_block`, `block<I>()`. **→ design data = `tuple<Blocks...>` (MultiFab par bloc) retenu pour le squelette.**
-- [x] `integrator/time_integrator.hpp` : `TimePolicy<Method, Treatment, Substeps>` + `ExplicitTime` / `ImplicitTime` / `IMEXTime` / `PrescribedTime` ; tags `SSPRK2`/`SSPRK3` ; `UserTimeIntegrator`.
-- [x] `integrator/scheduler.hpp` : `advance_subcycled(system, dt, advance_block)` lit les sous-pas par bloc.
-- [x] `coupling/elliptic_rhs.hpp` : `SingleModelEllipticRhs` (mono) + `TwoFieldChargeDensityRhs` / `TwoBlockChargeDensityRhs` (RHS = q0·n0 + q1·n1, lit plusieurs blocs).
-- [x] `coupling/system_coupler.hpp` : `SystemCoupler` mono-niveau, RHS elliptique global, blocs explicites avancés par le cœur, **blocs implicites/IMEX délégués à un callback** (point de branchement Newton/linéaire/collisions), sous-pas par bloc.
-- [x] Tests `test_system_abstraction`, `test_system_coupler` (électrons implicite délégué + ions SSPRK3, sous-pas, RHS système) verts.
+---
 
-### Briques sélectionnables
-- [x] `SpatialDiscretisation<Limiter, NumericalFlux>` + `Coupler::step<Disc, TimePolicy>` (flux + intégrateur + sous-cyclage) sur grille uniforme.
-- [x] `SpatialDiscretisation` câblée en **AMR** (`AmrCoupler/MP::step<Disc>`, MUSCL conservatif avec 2 ghosts).
-- [x] Solveur elliptique choisi à l'exécution (façade diocotron MG/FFT, pattern `variant`).
+## 1. Done (current status, all green)
+
+### Architecture / repositories
+- [x] Core/applications split: `adc_cpp` (engine, zero model) <-> `adc_cases` (models, facades, Python) via FetchContent (`adc::adc`). Pushed.
+- [x] `adc_cpp` HEAD contains **no** application (verified); README refocused on "core library".
+
+### Per-block abstractions (the missing level: skeleton in place)
+- [x] `core/equation_block.hpp`: `EquationBlock<Model, Spatial, Time>` = state + model + spatial discretization + time policy + **per-block BC**.
+- [x] `core/coupled_system.hpp`: `CoupledSystem<Blocks...>` (variadic), `for_each_block`, `block<I>()`. **-> design data = `tuple<Blocks...>` (one MultiFab per block) kept for the skeleton.**
+- [x] `integrator/time_integrator.hpp`: `TimePolicy<Method, Treatment, Substeps>` + `ExplicitTime` / `ImplicitTime` / `IMEXTime` / `PrescribedTime`; tags `SSPRK2`/`SSPRK3`; `UserTimeIntegrator`.
+- [x] `integrator/scheduler.hpp`: `advance_subcycled(system, dt, advance_block)` reads the substeps per block.
+- [x] `coupling/elliptic_rhs.hpp`: `SingleModelEllipticRhs` (mono) + `TwoFieldChargeDensityRhs` / `TwoBlockChargeDensityRhs` (RHS = q0*n0 + q1*n1, reads several blocks).
+- [x] `coupling/system_coupler.hpp`: `SystemCoupler` single-level, global elliptic RHS, explicit blocks advanced by the core, **implicit/IMEX blocks delegated to a callback** (Newton/linear/collisions branch point), substeps per block.
+- [x] Tests `test_system_abstraction`, `test_system_coupler` (delegated implicit electrons + SSPRK3 ions, substeps, system RHS) green.
+
+### Selectable bricks
+- [x] `SpatialDiscretisation<Limiter, NumericalFlux>` + `Coupler::step<Disc, TimePolicy>` (flux + integrator + subcycling) on a uniform mesh.
+- [x] `SpatialDiscretisation` wired into **AMR** (`AmrCoupler/MP::step<Disc>`, conservative MUSCL with 2 ghosts).
+- [x] Elliptic solver chosen at runtime (diocotron facade MG/FFT, `variant` pattern).
 
 ### Corrections
-- [x] **AMR applique `model.source`** (le chemin AMR l'ignorait, bug) + test `test_amr_source`.
-- [x] Diffusion = flux : trait `DiffusiveModel` (`+ν∆U` dans `assemble_rhs`) + modèle `AdvectionDiffusion` (grille uniforme).
-- [x] `SpectralCoupler` appelle `model.elliptic_rhs` au lieu de coder `alpha*(u−n_i0)` du diocotron en dur.
+- [x] **AMR applies `model.source`** (the AMR path ignored it, bug) + test `test_amr_source`.
+- [x] Diffusion = flux: trait `DiffusiveModel` (`+nu*Delta U` in `assemble_rhs`) + model `AdvectionDiffusion` (uniform mesh).
+- [x] `SpectralCoupler` calls `model.elliptic_rhs` instead of hardcoding the diocotron's `alpha*(u-n_i0)`.
 
 ---
 
-## 2. À faire : compléter le squelette multi-espèces
+## 2. To do: complete the multi-species skeleton
 
-**Ordre conseillé** : (1) `ChargeDensityRhs` N-blocs ✅ → (2) `CoupledSource` ✅ → (3) interface
-implicite `ImplicitBlockStepper` + défaut ✅ → (4) **exemple C++ minimal** (électrons
-implicites + ions explicites, rhs = n_i − n_e, sans Python) ✅ → (5) `AmrSystemCoupler` ✅ →
-(6) API Python dans `adc_cases` ✅. Chaque étape validée par un test d'intégration (tous verts :
-adc_cpp 38/38, adc_cases 47/47 + bindings Python). **§2 et §3 entièrement faits** ; **§4** : 4.1
-(diffusion AMR) et 4.2 (contrat `Aux`) faits, 4.3 (max_drift_speed, change le dt) et 4.4 (dédup
-diagnostics) reportés avec justification. Reste surtout des **raffinements** (composition Python
-générique, modèle utilisateur C++ exposé à Python, perf).
+**Suggested order**: (1) `ChargeDensityRhs` N-blocks [done] -> (2) `CoupledSource` [done] -> (3) implicit
+interface `ImplicitBlockStepper` + default [done] -> (4) **minimal C++ example** (implicit
+electrons + explicit ions, rhs = n_i - n_e, no Python) [done] -> (5) `AmrSystemCoupler` [done] ->
+(6) Python API in `adc_cases` [done]. Each step validated by an integration test (all green:
+adc_cpp 38/38, adc_cases 47/47 + Python bindings). **Sections 2 and 3 entirely done**; **section 4**: 4.1
+(AMR diffusion) and 4.2 (`Aux` contract) done, 4.3 (max_drift_speed, changes the dt) and 4.4 (diagnostics
+dedup) deferred with justification. Mostly **refinements** remain (generic Python composition,
+user C++ model exposed to Python, perf).
 
-### 2.1 Couplage et RHS
-- [x] **`ChargeDensityRhs` à N blocs** : `f = Σ_s q_s n_s` (somme sur `for_each_block`),
-  **charge/composante/signe configurables** par espèce (`SpeciesCharge` + `add_scaled_component`),
-  dans `coupling/elliptic_rhs.hpp`. `TwoBlockChargeDensityRhs` conservé (compat). Testé
+### 2.1 Coupling and RHS
+- [x] **`ChargeDensityRhs` with N blocks**: `f = Sum_s q_s n_s` (sum over `for_each_block`),
+  **per-species configurable charge/component/sign** (`SpeciesCharge` + `add_scaled_component`),
+  in `coupling/elliptic_rhs.hpp`. `TwoBlockChargeDensityRhs` kept (compat). Tested
   (`test_two_species_minimal`, `test_amr_system_coupler`).
-- [x] **`CoupledSource` (sources inter-espèces)** : `coupling/coupled_source.hpp`, concept
-  `CoupledSourceFor`, `NoCoupledSource`, et `SystemCoupler::coupled_source_step(src, dt)`
-  (splitting forward-Euler) qui lit **plusieurs blocs + aux**. Distinct de `model.source`
-  (local). Testé (`test_coupled_source` : échange linéaire conservatif).
-- [x] **BC par bloc réellement appliquées** : `SystemCoupler::stage_rhs` remplit les halos
-  avec `block.bc` (pas une BC globale). Vérifié par `test_system_two_explicit` (périodique vs
-  outflow → champs divergents, même donnée initiale).
+- [x] **`CoupledSource` (inter-species sources)**: `coupling/coupled_source.hpp`, concept
+  `CoupledSourceFor`, `NoCoupledSource`, and `SystemCoupler::coupled_source_step(src, dt)`
+  (forward-Euler splitting) that reads **several blocks + aux**. Distinct from `model.source`
+  (local). Tested (`test_coupled_source`: conservative linear exchange).
+- [x] **Per-block BC actually applied**: `SystemCoupler::stage_rhs` fills the halos
+  with `block.bc` (not a global BC). Verified by `test_system_two_explicit` (periodic vs
+  outflow -> divergent fields, same initial data).
 
-### 2.2 Temps : implicite / IMEX réellement exécutés
-- [x] **Vraie interface implicite + défaut** : `integrator/implicit_stepper.hpp`, concept
-  `ImplicitBlockStepper`, `backward_euler_source` (Newton local, jacobienne par différences
-  finies : **inconditionnellement stable**, exact en 1 itération pour une relaxation linéaire,
-  là où Picard divergerait dès `dt·raideur > 1`), et `ImplicitSourceStepper` (défaut prêt à
-  l'emploi, **aucun Newton côté utilisateur**). Testé (`test_two_species_minimal` : `dt·k=100`).
-- [x] **IMEX partiel** : trait `Model::is_implicit(c)` (concept `PartiallyImplicitModel`).
-  `backward_euler_source` fait du forward-backward Euler : variables explicites en Euler avant,
-  variables implicites par Newton sur le **sous-système réduit** (`solve_dense` de taille
-  `m_impl ≤ n_vars`). Sans le trait → tout implicite (compat). Testé (`test_imex_partial` :
-  var raide implicite bornée, var douce explicite, le masque change bien le traitement).
-- [x] **Sous-cyclage temporel par espèce + cadence φ** : `substeps` exécuté (mono-niveau **et**
-  AMR). La cadence de re-résolution de φ est désormais **explicite** : `PoissonCadence`
-  (`OncePerStep` défaut / `PerSubstep`) dans `AmrSystemCoupler` ; le `SystemCoupler` mono-niveau
-  re-résout déjà φ à chaque étage RK. Testé (`test_amr_system_coupler` part C : 1 vs 4 solves).
+### 2.2 Time: implicit / IMEX actually executed
+- [x] **Real implicit interface + default**: `integrator/implicit_stepper.hpp`, concept
+  `ImplicitBlockStepper`, `backward_euler_source` (local Newton, Jacobian by finite
+  differences: **unconditionally stable**, exact in 1 iteration for a linear relaxation,
+  where Picard would diverge as soon as `dt*stiffness > 1`), and `ImplicitSourceStepper` (ready-to-use
+  default, **no Newton on the user side**). Tested (`test_two_species_minimal`: `dt*k=100`).
+- [x] **Partial IMEX**: trait `Model::is_implicit(c)` (concept `PartiallyImplicitModel`).
+  `backward_euler_source` does forward-backward Euler: explicit variables in forward Euler,
+  implicit variables by Newton on the **reduced subsystem** (`solve_dense` of size
+  `m_impl <= n_vars`). Without the trait -> all implicit (compat). Tested (`test_imex_partial`:
+  stiff implicit var bounded, soft explicit var, the mask does change the treatment).
+- [x] **Per-species time subcycling + phi cadence**: `substeps` executed (single-level **and**
+  AMR). The phi re-solve cadence is now **explicit**: `PoissonCadence`
+  (`OncePerStep` default / `PerSubstep`) in `AmrSystemCoupler`; the single-level `SystemCoupler`
+  already re-solves phi at each RK stage. Tested (`test_amr_system_coupler` part C: 1 vs 4 solves).
 
-### 2.3 AMR pour le système : `AmrSystemCoupler`
-- [x] `coupling/amr_system_coupler.hpp` : porte `CoupledSystem` sur AMR. Chaque bloc a **sa**
-  hiérarchie (`std::vector<AmrLevelMP>`), toutes les espèces **partagent** la grille AMR,
-  l'aux (φ, ∇φ) et le **Poisson grossier de système** (`f = Σ_s q_s n_s`). Orchestration :
-  `sync_down` (par bloc) → Poisson grossier → aux + injection fine → chaque bloc avancé par
-  `advance_amr<Disc_bloc>` (sous-cyclage Berger-Oliger + **reflux** + **average_down**), avec
-  ses **sous-pas d'espèce** ; implicites/IMEX délégués (défaut `AmrImplicitSourceStepper`,
-  backward-Euler par niveau). Testé (`test_amr_system_coupler` : conservation par bloc, RHS
-  système, φ non nul, relaxation implicite grossier+fin). Réutilise le moteur `advance_amr`
-  et les primitives `_mb` ; mono-box par niveau validé (comme `AmrCoupler`).
+### 2.3 AMR for the system: `AmrSystemCoupler`
+- [x] `coupling/amr_system_coupler.hpp`: ports `CoupledSystem` onto AMR. Each block has **its**
+  hierarchy (`std::vector<AmrLevelMP>`), all species **share** the AMR mesh,
+  the aux (phi, grad phi) and the **coarse system Poisson** (`f = Sum_s q_s n_s`). Orchestration:
+  `sync_down` (per block) -> coarse Poisson -> aux + fine injection -> each block advanced by
+  `advance_amr<Disc_block>` (Berger-Oliger subcycling + **reflux** + **average_down**), with
+  its **species substeps**; implicit/IMEX delegated (default `AmrImplicitSourceStepper`,
+  backward-Euler per level). Tested (`test_amr_system_coupler`: per-block conservation, system
+  RHS, nonzero phi, coarse+fine implicit relaxation). Reuses the `advance_amr` engine
+  and the `_mb` primitives; one box per level validated (like `AmrCoupler`).
 
-### 2.4 Cas de validation (squelette testable)
-- [x] **Exemple C++ minimal SANS Python** : `test_two_species_minimal`, électrons implicites
-  (relaxation raide) + ions explicites + `rhs Poisson = n_i − n_e` via `ChargeDensityRhs` +
-  `ImplicitSourceStepper`. Le test « un utilisateur peut-il composer son cas ? » : il
-  n'assemble que des briques (modèle, schéma, politique temps, charge), aucun solveur écrit.
-- [x] **électrons Euler + ions Euler isothermes + Poisson** (cas canonique deux-espèces) , 
-  `adc_cases` : modèles `ChargedEuler` (4 var) + `ChargedEulerIsothermal` (3 var) dans
-  `model/charged_fluid.hpp`, composés en blocs hétérogènes (`test_two_species_euler`).
-- [x] **diocotron à ions mobiles**, `adc_cases/test_diocotron_mobile_ions` : réutilise le
-  modèle `Diocotron` pour 2 blocs, `n_i0` figé devient un bloc transporté, Poisson `α(n_e − n_i)`.
-- [x] Garde : masse conservée par bloc (`test_amr_system_coupler`), RHS = q_i n_i + q_e n_e
-  correct (`test_two_species_minimal`, `test_amr_system_coupler`). Comparaison à une référence
-  analytique (backward-Euler exact, production exacte).
+### 2.4 Validation cases (testable skeleton)
+- [x] **Minimal C++ example WITHOUT Python**: `test_two_species_minimal`, implicit electrons
+  (stiff relaxation) + explicit ions + `rhs Poisson = n_i - n_e` via `ChargeDensityRhs` +
+  `ImplicitSourceStepper`. The "can a user compose his case?" test: he
+  assembles only bricks (model, scheme, time policy, charge), no solver written.
+- [x] **Euler electrons + isothermal Euler ions + Poisson** (canonical two-species case),
+  `adc_cases`: models `ChargedEuler` (4 var) + `ChargedEulerIsothermal` (3 var) in
+  `model/charged_fluid.hpp`, composed into heterogeneous blocks (`test_two_species_euler`).
+- [x] **diocotron with mobile ions**, `adc_cases/test_diocotron_mobile_ions`: reuses the
+  `Diocotron` model for 2 blocks, the frozen `n_i0` becomes a transported block, Poisson `alpha(n_e - n_i)`.
+- [x] Guard: mass conserved per block (`test_amr_system_coupler`), RHS = q_i n_i + q_e n_e
+  correct (`test_two_species_minimal`, `test_amr_system_coupler`). Comparison to an analytic
+  reference (exact backward-Euler, exact production).
 
-### 2.5 Tests d'intégration à ajouter
-- [x] `CoupledSystem` + **Poisson RHS non nul** (`ChargeDensityRhs`), `test_two_species_minimal`.
-- [x] `SystemCoupler` avec **deux blocs explicites différents** (schémas/sous-pas distincts), `test_system_two_explicit`.
-- [x] **Bloc implicite** branché et durci (relaxation raide `dt·k=100`, stabilité inconditionnelle), `test_two_species_minimal`.
-- [x] `AmrSystemCoupler` : conservation par bloc, reflux, RHS système, relaxation implicite multi-niveau, `test_amr_system_coupler`.
-
----
-
-## 3. À faire : API Python de composition (dans `adc_cases`, APRÈS l'exemple C++)
-
-But : Python **compose**, ne calcule pas cellule par cellule. Les chaînes sélectionnent
-des briques C++ compilées. À ne faire qu'**après** l'exemple C++ minimal (§2.4) qui valide
-l'architecture utilisateur.
-
-- [x] **Modèles physiques prêts à composer** (dans `adc_cases`) : `ChargedEuler`,
-  `ChargedEulerIsothermal`, `Diocotron`, `Euler`… servent de blocs (`EquationBlock`).
-- [x] Façade compilée `MultiSpeciesSolver` (PIMPL) instanciant un `CoupledSystem` +
-  `SystemCoupler` (`adc_cases/solver/multispecies_solver.{hpp,cpp}`), comme les autres façades.
-  Cas concret deux fluides ; la composition entièrement générique `vector<SpeciesConfig>`
-  (espèces arbitraires) reste un cap ultérieur (explosion combinatoire / type erasure).
-- [x] Bindings pybind11 : `adc.MultiSpeciesConfig`, `adc.MultiSpeciesSolver`
-  (`step/advance/density_e/density_i/potential/mass_e/mass_i/max_charge`), champs en numpy
-  (`python/bindings.cpp`, testé `python/test_bindings.py`).
-- [x] **Composition à l'exécution** : `adc.Simulation` (`solver/simulation.{hpp,cpp}`) , 
-  `add_species(name, charge)` ajoute N espèces à la volée, partageant un Poisson de système ;
-  `set_density` (numpy), `step/advance`, `density/potential/mass`. Esprit `sim.add_equation(...)`
-  du TODO, borné aux espèces de dérive (Diocotron, 1 var, CI simples) ; physique compilée,
-  pas de callback Python dans le hot path. Testé (`test_simulation`, `test_bindings.py`).
-  Étendre à Euler / IMEX = même patron + une CI par modèle.
-- [x] `model`/`flux`/`time` ↔ tags C++ : la physique est en C++ compilé (schémas et politiques
-  fixés à la compilation), aucun callback Python dans le hot path.
-- [x] (avancé) exposer un `PhysicalModel` C++ utilisateur, composable depuis Python : point
-  d'extension = le dispatch par tag de `Simulation::add_species(name, model, charge)`
-  (`adc_cases/src/simulation.cpp`). L'utilisateur écrit son modèle (header), ajoute un tag +
-  une fermeture d'avancée, recompile, compose depuis Python, physique compilée, pas de
-  callback dans le hot path. Plugin runtime sans recompiler = choix de design (futur).
-- [x] **Évolution (juin 2026)** : cette couche (`add_species`, blocs nommés `Diocotron`/`Euler`,
-  tags `model=`) est remplacée par la **composition générique par briques** : `CompositeModel`
-  en C++, `adc.Model(state, transport, source, elliptic)` en Python. `adc_cpp` ne nomme plus
-  aucun scénario ; les compositions nommées vivent côté application (`adc_cases/models.py`).
+### 2.5 Integration tests to add
+- [x] `CoupledSystem` + **nonzero Poisson RHS** (`ChargeDensityRhs`), `test_two_species_minimal`.
+- [x] `SystemCoupler` with **two different explicit blocks** (distinct schemes/substeps), `test_system_two_explicit`.
+- [x] **Implicit block** wired and hardened (stiff relaxation `dt*k=100`, unconditional stability), `test_two_species_minimal`.
+- [x] `AmrSystemCoupler`: per-block conservation, reflux, system RHS, multi-level implicit relaxation, `test_amr_system_coupler`.
 
 ---
 
-## 4. À faire : follow-ups cœur (nettoyages / cohérence)
+## 3. To do: Python composition API (in `adc_cases`, AFTER the C++ example)
 
-- [x] **Diffusion sur AMR** : portée comme **flux de face diffusif** `−ν(u_R−u_L)/h` dans
-  `compute_face_fluxes` (reçoit `dx/dy` du niveau), gardée par `DiffusiveModel` (chemin
-  hyperbolique strictement bit-identique). Vue par le reflux → conservative aux interfaces
-  coarse-fine. Testée (`test_amr_diffusion` : masse conservée à 1e-12 + lissage).
-- [x] **Contrat `Aux`** : tranché, `Aux` est **fixe** (`adc::Aux`). Le concept `PhysicalModel`
-  exige désormais `std::same_as<typename M::Aux, Aux>` : il promet exactement ce que
-  `load_aux` fournit (généraliser à un `Model::Aux` quelconque reste possible plus tard).
-- [x] **`SpectralCoupler::max_drift_speed`** : généralisé via `model.max_wave_speed` (plus de
-  `/model_.B0` codé en dur → coupleur spectral non lié au diocotron). ⚠️ **Change le `dt`
-  CFL** du diocotron (`max(|gx|,|gy|)/B0` par direction au lieu de `hypot(gx,gy)/B0`) : non
-  bit-identique sur la trajectoire, **à re-valider côté physique** (croissance diocotron).
-  Les tests MPI (identité inter-rangs) restent verts.
-- [x] **Dédup diagnostics** : `amr_diagnostics.hpp` porte désormais l'implémentation **unique**
-  multi-box (`amr_mass_mb`, `amr_max_drift_speed_mb`) ; les variantes mono-box s'y ramènent
-  (cas dégénéré 1 fab, bit-identique) et `AmrCouplerMP::mass()`/`max_drift_speed()` les
-  appellent (+ `all_reduce` selon l'ownership) au lieu de réimplémenter les boucles. Vérifié
-  bit-identique (adc_cpp 38/38, adc_cases 48/48 dont diocotron AMR).
-- [x] **`Coupler` fourre-tout** : l'orchestrateur est extrait, `SystemAssembler` (assemble) +
-  `SystemDriver` (avance), `SystemCoupler`/`SystemDriver` aliases. Le `Coupler` legacy mono-
-  modèle garde son nom historique (diocotron validé) ; le renommer globalement = churn pur,
-  laissé tel quel (décision tableau).
+Goal: Python **composes**, does not compute cell by cell. The strings select
+compiled C++ bricks. To be done only **after** the minimal C++ example (section 2.4) which validates
+the user architecture.
 
----
-
-## 5. Décision à acter au tableau (avec Sacha)
-
-- **Structure de données du système** : le squelette a retenu `tuple<Blocks...>` (un
-  `MultiFab` par bloc, `EquationBlock::state` = pointeur). Alternative : `StateVec<N_total>`
-  empilé (un bloc mémoire contigu, offsets par espèce, meilleure localité, plus complexe).
-  À confirmer/infléchir : c'est la décision qui pèse sur la perf (point 0 : structure de
-  données = plus tard, mais la décision d'interface se prend maintenant).
-  - **Retour d'expérience du remplissage** : `tuple<Blocks...>` a tenu sans friction pour
-    tous les cas livrés, y compris des blocs **hétérogènes** (Euler 4 var + isotherme 3 var :
-    un `StateVec<N_total>` empilé imposerait des espèces de même taille ou un layout AoS
-    irrégulier). Le `for_each_block`/`block<I>()` reste l'interface ; la structure interne
-    (un `MultiFab` par bloc) peut basculer en empilé plus tard **sans changer l'API** des
-    coupleurs. Recommandation : **garder `tuple` par bloc** comme défaut, mesurer avant
-    d'empiler ; n'empiler que si un cas homogène (mêmes `n_vars`) devient le goulot perf.
+- [x] **Physics models ready to compose** (in `adc_cases`): `ChargedEuler`,
+  `ChargedEulerIsothermal`, `Diocotron`, `Euler`... serve as blocks (`EquationBlock`).
+- [x] Compiled facade `MultiSpeciesSolver` (PIMPL) instantiating a `CoupledSystem` +
+  `SystemCoupler` (`adc_cases/solver/multispecies_solver.{hpp,cpp}`), like the other facades.
+  Concrete two-fluid case; the fully generic composition `vector<SpeciesConfig>`
+  (arbitrary species) remains a later milestone (combinatorial explosion / type erasure).
+- [x] pybind11 bindings: `adc.MultiSpeciesConfig`, `adc.MultiSpeciesSolver`
+  (`step/advance/density_e/density_i/potential/mass_e/mass_i/max_charge`), fields as numpy
+  (`python/bindings.cpp`, tested `python/test_bindings.py`).
+- [x] **Runtime composition**: `adc.Simulation` (`solver/simulation.{hpp,cpp}`),
+  `add_species(name, charge)` adds N species on the fly, sharing a system Poisson;
+  `set_density` (numpy), `step/advance`, `density/potential/mass`. The `sim.add_equation(...)`
+  spirit from the TODO, bounded to drift species (Diocotron, 1 var, simple IC); physics compiled,
+  no Python callback in the hot path. Tested (`test_simulation`, `test_bindings.py`).
+  Extending to Euler / IMEX = same pattern + one IC per model.
+- [x] `model`/`flux`/`time` <-> C++ tags: physics is in compiled C++ (schemes and policies
+  fixed at compile time), no Python callback in the hot path.
+- [x] (advanced) expose a user C++ `PhysicalModel`, composable from Python: extension point
+  = the tag dispatch of `Simulation::add_species(name, model, charge)`
+  (`adc_cases/src/simulation.cpp`). The user writes his model (header), adds a tag +
+  an advance closure, recompiles, composes from Python, compiled physics, no
+  callback in the hot path. Runtime plugin without recompiling = design choice (future).
+- [x] **Evolution (June 2026)**: this layer (`add_species`, named blocks `Diocotron`/`Euler`,
+  tags `model=`) is replaced by the **generic brick composition**: `CompositeModel`
+  in C++, `adc.Model(state, transport, source, elliptic)` in Python. `adc_cpp` no longer names
+  any scenario; the named compositions live on the application side (`adc_cases/models.py`).
 
 ---
 
-## 6. Lexique (pour les slides : définir avant de jeter les sigles)
+## 4. To do: core follow-ups (cleanups / consistency)
 
-| Terme | Sens court |
+- [x] **Diffusion on AMR**: carried as a **diffusive face flux** `-nu(u_R-u_L)/h` in
+  `compute_face_fluxes` (receives `dx/dy` from the level), guarded by `DiffusiveModel` (hyperbolic
+  path strictly bit-identical). Seen by the reflux -> conservative at the
+  coarse-fine interfaces. Tested (`test_amr_diffusion`: mass conserved to 1e-12 + smoothing).
+- [x] **`Aux` contract**: decided, `Aux` is **fixed** (`adc::Aux`). The `PhysicalModel` concept
+  now requires `std::same_as<typename M::Aux, Aux>`: it promises exactly what
+  `load_aux` provides (generalizing to an arbitrary `Model::Aux` remains possible later).
+- [x] **`SpectralCoupler::max_drift_speed`**: generalized via `model.max_wave_speed` (no more
+  hardcoded `/model_.B0` -> spectral coupler not tied to the diocotron). [warning] **Changes the
+  CFL `dt`** of the diocotron (`max(|gx|,|gy|)/B0` per direction instead of `hypot(gx,gy)/B0`): not
+  bit-identical on the trajectory, **to re-validate on the physics side** (diocotron growth).
+  The MPI tests (inter-rank identity) stay green.
+- [x] **Diagnostics dedup**: `amr_diagnostics.hpp` now carries the **single** multi-box
+  implementation (`amr_mass_mb`, `amr_max_drift_speed_mb`); the single-box variants reduce to it
+  (degenerate 1-fab case, bit-identical) and `AmrCouplerMP::mass()`/`max_drift_speed()`
+  call them (+ `all_reduce` depending on ownership) instead of reimplementing the loops. Verified
+  bit-identical (adc_cpp 38/38, adc_cases 48/48 including AMR diocotron).
+- [x] **Catch-all `Coupler`**: the orchestrator is extracted, `SystemAssembler` (assembles) +
+  `SystemDriver` (advances), `SystemCoupler`/`SystemDriver` aliases. The legacy single-model
+  `Coupler` keeps its historical name (diocotron validated); renaming it globally = pure churn,
+  left as is (board decision).
+
+---
+
+## 5. Decision to enact at the board (with Sacha)
+
+- **System data structure**: the skeleton kept `tuple<Blocks...>` (one
+  `MultiFab` per block, `EquationBlock::state` = pointer). Alternative: `StateVec<N_total>`
+  stacked (one contiguous memory block, offsets per species, better locality, more complex).
+  To confirm/adjust: this is the decision that weighs on perf (point 0: data
+  structure = later, but the interface decision is taken now).
+  - **Feedback from filling it in**: `tuple<Blocks...>` held without friction for
+    all delivered cases, including **heterogeneous** blocks (Euler 4 var + isothermal 3 var:
+    a stacked `StateVec<N_total>` would impose species of the same size or an irregular AoS
+    layout). The `for_each_block`/`block<I>()` stays the interface; the internal structure
+    (one `MultiFab` per block) can switch to stacked later **without changing the API** of the
+    couplers. Recommendation: **keep `tuple` per block** as the default, measure before
+    stacking; only stack if a homogeneous case (same `n_vars`) becomes the perf bottleneck.
+
+---
+
+## 6. Glossary (for the slides: define before throwing the acronyms around)
+
+| Term | Short meaning |
 |---|---|
-| `BoxArray` | découpage du domaine en blocs (boîtes) |
-| `MultiFab` | les champs `U` stockés sur ces blocs (collection distribuée) |
-| `BCRec` | conditions aux limites d'un champ |
-| `aux` | variable auxiliaire transportée (`phi, grad phi`) |
-| seam | couture où vit le parallélisme (`for_each_cell`, `comm`) |
-| `EquationBlock` | state + modèle + méthode spatiale + politique temps + BC (un bloc) |
-| `CoupledSystem` | plusieurs `EquationBlock` |
-| `SystemCoupler` | orchestrateur mono-niveau : RHS elliptique global + avance chaque bloc |
-| `AmrSystemCoupler` | le `SystemCoupler` porté sur AMR (Poisson grossier + reflux par bloc) |
-| `ChargeDensityRhs` | second membre de Poisson à N espèces : `f = Σ_s q_s n_s` |
-| `CoupledSource` | source inter-espèces (lit plusieurs blocs + φ), distincte de `model.source` |
-| `ImplicitSourceStepper` | défaut implicite : backward-Euler (Newton) sur la source, sans Newton utilisateur |
-| `is_implicit(c)` | trait IMEX partiel : quelles variables d'un bloc sont implicites |
-| `PoissonCadence` | fréquence de re-résolution de φ entre sous-pas (`OncePerStep`/`PerSubstep`) |
-| `MultiSpeciesSolver` / `Simulation` | façades `adc_cases` : composition multi-espèces (compilée / à l'exécution) |
+| `BoxArray` | partition of the domain into blocks (boxes) |
+| `MultiFab` | the fields `U` stored on these blocks (distributed collection) |
+| `BCRec` | boundary conditions of a field |
+| `aux` | transported auxiliary variable (`phi, grad phi`) |
+| seam | seam where the parallelism lives (`for_each_cell`, `comm`) |
+| `EquationBlock` | state + model + spatial method + time policy + BC (one block) |
+| `CoupledSystem` | several `EquationBlock` |
+| `SystemCoupler` | single-level orchestrator: global elliptic RHS + advances each block |
+| `AmrSystemCoupler` | the `SystemCoupler` ported onto AMR (coarse Poisson + per-block reflux) |
+| `ChargeDensityRhs` | Poisson right-hand side with N species: `f = Sum_s q_s n_s` |
+| `CoupledSource` | inter-species source (reads several blocks + phi), distinct from `model.source` |
+| `ImplicitSourceStepper` | implicit default: backward-Euler (Newton) on the source, no user Newton |
+| `is_implicit(c)` | partial IMEX trait: which variables of a block are implicit |
+| `PoissonCadence` | re-solve frequency of phi between substeps (`OncePerStep`/`PerSubstep`) |
+| `MultiSpeciesSolver` / `Simulation` | `adc_cases` facades: multi-species composition (compiled / at runtime) |
 
 ---
 
-## 7. Synthèse (phrase tableau)
+## 7. Synthesis (board sentence)
 
-> `adc` sait prendre une **loi physique locale** (`PhysicalModel`) et la faire tourner sur
-> un maillage avec Poisson, AMR, MPI et GPU. Le niveau d'**assemblage multi-blocs** est
-> désormais **rempli** (squelette testable, tous tests verts) : `EquationBlock` (state +
-> modèle + schéma spatial + politique temps + BC), `CoupledSystem` (plusieurs blocs),
-> `SystemCoupler` mono-niveau **et** `AmrSystemCoupler` sur AMR (RHS elliptique de système
-> `Σ_s q_s n_s`, explicite avancé par le cœur, implicite/IMEX délégué avec un défaut
-> backward-Euler sans Newton utilisateur, source de couplage inter-espèces, sous-pas par
-> bloc, conservation par reflux). Le squelette est **rempli ET exercé par de la vraie
-> physique** : modèles deux-fluides canoniques (électrons Euler + ions isothermes) et
-> diocotron à ions mobiles dans `adc_cases`, façade `MultiSpeciesSolver` + bindings Python
-> qui composent un `CoupledSystem` depuis Python sans callback dans le hot path ; diffusion
-> rendue conservative sur AMR (flux de face). Le `PhysicalModel` décrit une équation, le
-> `CoupledSystem` un système, le `Scheduler`/coupleur l'ordre d'exécution ; le cœur garantit
-> AMR / MPI / GPU. Restent des raffinements (composition Python générique, perf, §4.3/§4.4).
+> `adc` knows how to take a **local physical law** (`PhysicalModel`) and run it on
+> a mesh with Poisson, AMR, MPI and GPU. The **multi-block assembly** level is
+> now **filled in** (testable skeleton, all tests green): `EquationBlock` (state +
+> model + spatial scheme + time policy + BC), `CoupledSystem` (several blocks),
+> single-level `SystemCoupler` **and** `AmrSystemCoupler` on AMR (system elliptic RHS
+> `Sum_s q_s n_s`, explicit advanced by the core, implicit/IMEX delegated with a default
+> backward-Euler without user Newton, inter-species coupling source, substeps per
+> block, conservation by reflux). The skeleton is **filled in AND exercised by real
+> physics**: canonical two-fluid models (Euler electrons + isothermal ions) and
+> diocotron with mobile ions in `adc_cases`, `MultiSpeciesSolver` facade + Python bindings
+> that compose a `CoupledSystem` from Python without a callback in the hot path; diffusion
+> made conservative on AMR (face flux). The `PhysicalModel` describes an equation, the
+> `CoupledSystem` a system, the `Scheduler`/coupler the execution order; the core guarantees
+> AMR / MPI / GPU. Refinements remain (generic Python composition, perf, sections 4.3/4.4).
 
 ---
 
-## 8. Retour tuteur (2026-06-01) : niveau d'assemblage : couvert vs à extraire
+## 8. Tutor feedback (2026-06-01): assembly level: covered vs to extract
 
-Discussion : coupler ions / électrons / **neutres**, chacun son `PhysicalModel` ; les
-espèces interagissent dans le **second membre elliptique** `f` ET dans la **source `S`**
-(jamais dans le flux `F`). On veut choisir **par espèce** : le modèle (isotherme / profil
-constant donné / résolu ou non / pas à chaque pas), le **schéma spatial**, le **pas de
-temps** (sous-cyclage : 10 pas électrons pour 1 pas ions), le **traitement** implicite /
-explicite, et même **implicite sur une PARTIE seulement des variables** (coût). Côté
-archi : extraire l'**intégrateur en temps** comme objet (`take_step`) donné au coupleur,
-et **alléger le coupleur** qui « fait trop » (« avancer un coupleur » est philosophiquement
-bancal : un coupleur *assemble*, un *driver* avance).
+Discussion: couple ions / electrons / **neutrals**, each with its `PhysicalModel`; the
+species interact in the **elliptic right-hand side** `f` AND in the **source `S`**
+(never in the flux `F`). We want to choose **per species**: the model (isothermal / given
+constant profile / solved or not / not at every step), the **spatial scheme**, the **time
+step** (subcycling: 10 electron steps per 1 ion step), the implicit / explicit **treatment**,
+and even **implicit on ONLY PART of the variables** (cost). On the architecture
+side: extract the **time integrator** as an object (`take_step`) given to the coupler,
+and **lighten the coupler** that "does too much" ("advancing a coupler" is philosophically
+shaky: a coupler *assembles*, a *driver* advances).
 
-### 8.1 Déjà couvert (vérifié par test : réponses aux « est-ce qu'on peut ? »)
-- [x] **N espèces hétérogènes, chacune son `PhysicalModel`** → `CoupledSystem<Blocks...>`
-  (électrons Euler 4 var + ions isothermes 3 var, `test_two_species_euler`). Un **neutre**
-  = un bloc de plus (charge 0 → ne contribue pas à `f`, mais interagit via `S`).
-- [x] **Interaction dans `f`** (elliptique) : `f = Σ_s q_s n_s` → `ChargeDensityRhs`.
-- [x] **Interaction dans `S`** (collisions, échange ; pas dans `F`) → `CoupledSource`
-  (`coupled_source.hpp` ; `SystemCoupler::coupled_source_step` lit tous les blocs + φ).
-- [x] **Schéma spatial différent par espèce** (électrons MUSCL, ions ordre 1, limiteurs
-  distincts) → `SpatialDiscretisation` par bloc (`test_system_two_explicit`).
-- [x] **Sous-cyclage par espèce** (10 pas électrons : 1 pas ions) → `substeps` +
-  scheduler (`test_system_abstraction` : ne=10, ni=1).
-- [x] **Électrons implicites + ions explicites** → `TimeTreatment` par bloc
+### 8.1 Already covered (verified by test: answers to the "can we?")
+- [x] **N heterogeneous species, each with its `PhysicalModel`** -> `CoupledSystem<Blocks...>`
+  (Euler electrons 4 var + isothermal ions 3 var, `test_two_species_euler`). A **neutral**
+  = one more block (charge 0 -> does not contribute to `f`, but interacts via `S`).
+- [x] **Interaction in `f`** (elliptic): `f = Sum_s q_s n_s` -> `ChargeDensityRhs`.
+- [x] **Interaction in `S`** (collisions, exchange; not in `F`) -> `CoupledSource`
+  (`coupled_source.hpp`; `SystemCoupler::coupled_source_step` reads all blocks + phi).
+- [x] **Different spatial scheme per species** (electrons MUSCL, ions order 1, distinct
+  limiters) -> per-block `SpatialDiscretisation` (`test_system_two_explicit`).
+- [x] **Subcycling per species** (10 electron steps: 1 ion step) -> `substeps` +
+  scheduler (`test_system_abstraction`: ne=10, ni=1).
+- [x] **Implicit electrons + explicit ions** -> per-block `TimeTreatment`
   (`test_two_species_minimal`, `test_amr_system_coupler` part B).
-- [x] **Implicite sur une PARTIE des variables** (pas tout le modèle) → trait
-  `Model::is_implicit(c)` (`test_imex_partial`) = « dire quelles variables on step ».
-- [x] **Espèce en profil constant / non avancée** → `PrescribedTime` (le scheduler saute
-  les blocs `Prescribed`, qui contribuent quand même à `f`). *[à illustrer par un test]*
-- [x] **Résoudre l'elliptique tous les pas ou pas** → `PoissonCadence` (`OncePerStep`/`PerSubstep`).
-- [x] « numerical method » est **déjà** nommé `SpatialDiscretisation` (≠ time integrator).
-- [x] **Le « `PhysicalModel` plus grand » qui englobe tout** = `EquationBlock`
-  (`{Model, SpatialDiscretisation, TimePolicy, BC}`) ; `CoupledSystem` = plusieurs de ces
-  bundles. C'est déjà le « state physical model » composable décrit (chaque fluide a son
-  jeu d'équations : densité seule, ou tous les moments).
+- [x] **Implicit on PART of the variables** (not the whole model) -> trait
+  `Model::is_implicit(c)` (`test_imex_partial`) = "say which variables we step".
+- [x] **Species in constant profile / not advanced** -> `PrescribedTime` (the scheduler skips
+  the `Prescribed` blocks, which still contribute to `f`). *[to illustrate with a test]*
+- [x] **Solve the elliptic every step or not** -> `PoissonCadence` (`OncePerStep`/`PerSubstep`).
+- [x] "numerical method" is **already** named `SpatialDiscretisation` (!= time integrator).
+- [x] **The "bigger `PhysicalModel`" that encompasses everything** = `EquationBlock`
+  (`{Model, SpatialDiscretisation, TimePolicy, BC}`); `CoupledSystem` = several of these
+  bundles. This is already the composable "state physical model" described (each fluid has its
+  set of equations: density alone, or all the moments).
 
-### 8.2 À extraire (les vrais manques d'abstraction) : plan détaillé
+### 8.2 To extract (the real abstraction gaps): detailed plan
 
-**A. `TimeIntegrator` objet de premier plan (priorité 1).** Aujourd'hui SSPRK est codé en
-dur dans `SystemCoupler::advance_explicit_ssprk2/3` ET recopié dans `ssprk.hpp` et `Coupler` ;
-`Time` n'est qu'un *tag* template, `UserTimeIntegrator` n'a pas de `take_step`. Objectif :
-donner `{PhysicalModel, SpatialDiscretisation, TimeIntegrator}` au coupleur comme un trio,
-le `TimeIntegrator` étant un objet du cœur (ou fourni par l'utilisateur).
-- [x] **A1. Contrat** : concept `TimeStepper` exposant `take_step(rhs_eval, U, dt)`, où
-  `rhs_eval(U_stage, R)` remplit `R = −div F + S`. L'intégrateur ne voit QUE `rhs_eval` + les
-  ops MultiFab. (`integrator/time_steppers.hpp`.)
-- [x] **A2. Impls du cœur** : `ForwardEuler`, `SSPRK2Step`, `SSPRK3Step` comme objets
-  `take_step` génériques. `ssprk.hpp::advance_ssprk2` délègue désormais à `SSPRK2Step`.
-- [x] **A3. Câbler l'intégrateur utilisateur** : le `Method` d'un bloc explicite peut être
-  un tag du cœur (`SSPRK2`/`SSPRK3`) **ou un type `TimeStepper` écrit par l'utilisateur** , 
-  le coupleur l'instancie et appelle son `take_step` (`test_user_time_integrator`). Depuis
-  Python : sélection par tag (pas de callback hot path). *[BYO-stepper Python = futur]*
-- [x] **A4. Délégation** : `SystemCoupler::advance_explicit_block`, `ssprk.hpp`, **ET le
-  `Coupler` legacy mono-modèle** (`advance`/`advance_ssprk3`) délèguent désormais aux objets
-  `SSPRK2Step`/`SSPRK3Step`, plus aucune copie SSPRK inline. Le legacy gardait un
-  `recompute_aux` par étage (`true` à l'étage 0, `per` ensuite) : reproduit par un `rhs_eval`
-  qui compte les étages. **Bit-identique** (diocotron : adc_cases 48/48).
-- [x] **A5. Exemple** : `test_user_time_integrator` (intégrateur utilisateur) + tout le reste
-  tout-cœur. 
-- [x] Garde : **bit-identique** aux SSPRK actuels (adc_cpp 41/41, adc_cases 48/48).
+**A. `TimeIntegrator` as a first-class object (priority 1).** Today SSPRK is hardcoded
+in `SystemCoupler::advance_explicit_ssprk2/3` AND copied into `ssprk.hpp` and `Coupler`;
+`Time` is only a template *tag*, `UserTimeIntegrator` has no `take_step`. Goal:
+give `{PhysicalModel, SpatialDiscretisation, TimeIntegrator}` to the coupler as a trio,
+the `TimeIntegrator` being a core object (or supplied by the user).
+- [x] **A1. Contract**: concept `TimeStepper` exposing `take_step(rhs_eval, U, dt)`, where
+  `rhs_eval(U_stage, R)` fills `R = -div F + S`. The integrator sees ONLY `rhs_eval` + the
+  MultiFab ops. (`integrator/time_steppers.hpp`.)
+- [x] **A2. Core impls**: `ForwardEuler`, `SSPRK2Step`, `SSPRK3Step` as generic
+  `take_step` objects. `ssprk.hpp::advance_ssprk2` now delegates to `SSPRK2Step`.
+- [x] **A3. Wire the user integrator**: the `Method` of an explicit block can be
+  a core tag (`SSPRK2`/`SSPRK3`) **or a `TimeStepper` type written by the user**,
+  the coupler instantiates it and calls its `take_step` (`test_user_time_integrator`). From
+  Python: selection by tag (no hot-path callback). *[BYO-stepper Python = future]*
+- [x] **A4. Delegation**: `SystemCoupler::advance_explicit_block`, `ssprk.hpp`, **AND the
+  legacy single-model `Coupler`** (`advance`/`advance_ssprk3`) now delegate to the
+  `SSPRK2Step`/`SSPRK3Step` objects, no more inline SSPRK copy. The legacy kept a
+  `recompute_aux` per stage (`true` at stage 0, `per` afterwards): reproduced by an `rhs_eval`
+  that counts the stages. **Bit-identical** (diocotron: adc_cases 48/48).
+- [x] **A5. Example**: `test_user_time_integrator` (user integrator) + all the rest
+  all-core.
+- [x] Guard: **bit-identical** to the current SSPRK (adc_cpp 41/41, adc_cases 48/48).
 
-**B. Scinder le coupleur, Assembleur vs Driver (priorité 2 ; §9.6).** Un coupleur assemble
-l'elliptique + résout Poisson + dérive aux + calcule le RHS spatial + intègre + sous-cycle :
-trop. « Avancer un coupleur » est bancal, un coupleur *assemble*, un *driver* *avance*.
-- [x] **B1/B2. Extraction en DEUX classes** (`system_coupler.hpp`) : `SystemAssembler`
-  (`solve_fields` + `block_residual` = l'évaluateur de résidu ; phi/aux/geom/ba/dm ; AUCUN
-  pas) et `SystemDriver` (schedule, `advance_explicit_block` via `take_step`, IMEX,
-  `coupled_source_step`) qui **possède** un `SystemAssembler` (composition). Bit-identique
-  (adc_cpp 42/42, adc_cases 48/48). Testé `test_assembler_driver` (assembleur seul + driver).
-- [x] **B3. Nom « qui avance »** : `SystemCoupler` est désormais l'**alias** de `SystemDriver`
-  (le nom « qui avance ») ; `AmrSystemDriver` alias pour l'AMR. Compat préservée (tests, façades).
-- [x] **B4.** La façade compilée `MultiSpeciesSolver` (`adc_cases`) repose déjà sur
-  `SystemDriver` (via l'alias `SystemCoupler`). La `Simulation` runtime garde sa propre
-  orchestration (type-erased) par conception (espèces composées à l'exécution).
+**B. Split the coupler, Assembler vs Driver (priority 2; section 9.6).** A coupler assembles
+the elliptic + solves Poisson + derives aux + computes the spatial RHS + integrates + subcycles:
+too much. "Advancing a coupler" is shaky, a coupler *assembles*, a *driver* *advances*.
+- [x] **B1/B2. Extraction into TWO classes** (`system_coupler.hpp`): `SystemAssembler`
+  (`solve_fields` + `block_residual` = the residual evaluator; phi/aux/geom/ba/dm; NO
+  step) and `SystemDriver` (schedule, `advance_explicit_block` via `take_step`, IMEX,
+  `coupled_source_step`) which **owns** a `SystemAssembler` (composition). Bit-identical
+  (adc_cpp 42/42, adc_cases 48/48). Tested `test_assembler_driver` (assembler alone + driver).
+- [x] **B3. The "that advances" name**: `SystemCoupler` is now the **alias** of `SystemDriver`
+  (the "that advances" name); `AmrSystemDriver` alias for AMR. Compat preserved (tests, facades).
+- [x] **B4.** The compiled facade `MultiSpeciesSolver` (`adc_cases`) already rests on
+  `SystemDriver` (via the `SystemCoupler` alias). The runtime `Simulation` keeps its own
+  orchestration (type-erased) by design (species composed at runtime).
 
-**C. Multirate, `dt` propre par modèle (priorité 3).** `substeps` couvre le « plus souvent »
-(10 sous-pas électrons / 1 ion).
-- [x] **Espèce « résolue pas à chaque pas »** (every-N) : `TimePolicy` gagne un `Stride`
-  (`ExplicitTime<Method, Substeps, Stride>`). Un bloc de cadence N n'avance qu'1 macro-pas
-  sur N, alors d'un pas effectif `N·dt` (il rattrape le temps : total `M·dt` au bout de M
-  macro-pas, mais calculé N fois moins souvent, le « gaz pas résolu tous les pas »). Géré
-  par `block_stride_v` + `advance_subcycled(system, dt, macro_step, …)` ; `SystemDriver` et
-  `AmrSystemCoupler` portent `macro_step_`. `Stride=1` = historique bit-identique.
-  Testé (`test_multirate_stride` : rapide stride 1 + lent stride 3, synchronisés à M=3).
-- [x] **Pas macro choisi par CFL** : `SystemDriver::step_cfl(cfl)` / `cfl_dt(cfl)` calculent
-  `dt = cfl·min(dx,dy) / w_max`, `w_max` = plus grande vitesse d'onde **sur toutes les
-  espèces** (réduction `max_wave_speed_mf` par espèce, via `model.max_wave_speed`), l'espèce
-  la plus rapide contraint le pas. Combiné au `Stride` d'une espèce lente, cela donne le
-  **multirate pratique** (pas macro fixé par les rapides, lente avancée 1 fois sur stride).
-  Testé `test_cfl_dt`.
-- [x] **Multirate pleinement adaptatif** : `SystemDriver::step_adaptive(cfl)`, pas macro
-  fixé par l'espèce la plus rapide (CFL), et `stride` de CHAQUE espèce dérivé **au runtime**
-  du ratio `w_max / w_s` (`stride_s = max(1, ⌊w_max/w_s⌋)`). Une espèce N× plus lente avance
-  automatiquement 1 fois sur N, par un pas N× plus grand (= son dt stable). Le dispatch par
-  bloc est factorisé (`advance_block_dispatch`) et partagé avec `step` (pas de duplication).
-  Testé `test_adaptive_multirate` (rapide a=4 → stride 1 ; lent a=1 → stride 4, dérivés seuls).
+**C. Multirate, proper `dt` per model (priority 3).** `substeps` covers the "more often"
+(10 electron substeps / 1 ion).
+- [x] **Species "not solved at every step"** (every-N): `TimePolicy` gains a `Stride`
+  (`ExplicitTime<Method, Substeps, Stride>`). A block of cadence N advances only 1 macro-step
+  out of N, then by an effective step `N*dt` (it catches up the time: total `M*dt` after M
+  macro-steps, but computed N times less often, the "gas not solved every step"). Handled
+  by `block_stride_v` + `advance_subcycled(system, dt, macro_step, ...)`; `SystemDriver` and
+  `AmrSystemCoupler` carry `macro_step_`. `Stride=1` = historical bit-identical.
+  Tested (`test_multirate_stride`: fast stride 1 + slow stride 3, synchronized at M=3).
+- [x] **Macro step chosen by CFL**: `SystemDriver::step_cfl(cfl)` / `cfl_dt(cfl)` compute
+  `dt = cfl*min(dx,dy) / w_max`, `w_max` = largest wave speed **over all the
+  species** (`max_wave_speed_mf` reduction per species, via `model.max_wave_speed`), the fastest
+  species constrains the step. Combined with the `Stride` of a slow species, this gives the
+  **practical multirate** (macro step fixed by the fast ones, slow advanced once per stride).
+  Tested `test_cfl_dt`.
+- [x] **Fully adaptive multirate**: `SystemDriver::step_adaptive(cfl)`, macro step
+  fixed by the fastest species (CFL), and the `stride` of EACH species derived **at runtime**
+  from the ratio `w_max / w_s` (`stride_s = max(1, floor(w_max/w_s))`). A species N times slower advances
+  automatically once per N, by a step N times larger (= its stable dt). The per-block dispatch
+  is factored out (`advance_block_dispatch`) and shared with `step` (no duplication).
+  Tested `test_adaptive_multirate` (fast a=4 -> stride 1; slow a=1 -> stride 4, derived alone).
 
 ---
 
-## 9. Durcissement : revue Codex (2026-06-01) : TRAITÉ (2026-06-02)
+## 9. Hardening: Codex review (2026-06-01): HANDLED (2026-06-02)
 
-Revue indépendante de `multispecies-fill`. Verdict initial : squelette **fonctionnel + testé**
-mais points à durcir. **Les 6 points ont été traités** (adc_cpp 41/41, adc_cases 48/48, refactors
-bit-identiques sur l'existant). État final ci-dessous.
+Independent review of `multispecies-fill`. Initial verdict: skeleton **functional + tested**
+but points to harden. **The 6 points have been handled** (adc_cpp 41/41, adc_cases 48/48, refactors
+bit-identical on the existing). Final state below.
 
-- [x] **9.1 Vrai IMEX** *(recoupe §8.2 A)*. `SystemCoupler::step` ET `AmrSystemCoupler::step`
-  font, pour un bloc `IMEX` : **transport explicite par le cœur** (−div F via `SourceFreeModel`
-  + Euler avant / `advance_amr` source-free), **puis** source implicite par le callback.
-  Implicite pur : pas de transport. (`test_imex_transport` ; avant : champ figé.) Limite connue :
-  un bloc IMEX **diffusif** perd le flux Fickien au demi-pas explicite (`SourceFreeModel`
-  n'expose pas `diffusivity()`), raffinement à part.
-- [x] **9.2 `ChargeDensityRhs` : défaut de charge** → `SpeciesCharge{}` vaut **`q = 0`** (un
-  neutre / un bloc oublié ne pollue plus Poisson) ET `operator()` exige `species.size() ==
-  System::n_blocks` (throw sinon : une charge par bloc, neutre déclaré explicitement `q=0`).
+- [x] **9.1 Real IMEX** *(overlaps with section 8.2 A)*. `SystemCoupler::step` AND `AmrSystemCoupler::step`
+  do, for an `IMEX` block: **explicit transport by the core** (-div F via `SourceFreeModel`
+  + forward Euler / source-free `advance_amr`), **then** implicit source by the callback.
+  Pure implicit: no transport. (`test_imex_transport`; before: frozen field.) Known limit:
+  a **diffusive** IMEX block loses the Fickian flux at the explicit half-step (`SourceFreeModel`
+  does not expose `diffusivity()`), separate refinement.
+- [x] **9.2 `ChargeDensityRhs`: charge default** -> `SpeciesCharge{}` is worth **`q = 0`** (a
+  neutral / a forgotten block no longer pollutes Poisson) AND `operator()` requires `species.size() ==
+  System::n_blocks` (throw otherwise: one charge per block, neutral declared explicitly `q=0`).
   (`test_system_hardening`.)
-- [x] **9.3 `AmrSystemCoupler` garde-fous de construction** → le ctor **throw** si
-  `block_levels.size() != n_blocks`, si un bloc n'a pas le bon `nlev`, ou si les grilles par
-  niveau diffèrent (nombre de boîtes ≠ bloc 0). Plus d'out-of-bounds silencieux.
+- [x] **9.3 `AmrSystemCoupler` construction safeguards** -> the ctor **throws** if
+  `block_levels.size() != n_blocks`, if a block does not have the right `nlev`, or if the per-level
+  grids differ (number of boxes != block 0). No more silent out-of-bounds.
   (`test_system_hardening`.)
-- [x] **9.4 BC `phi`/`aux` AMR** → `AmrSystemCoupler::solve_fields` dérive aux par le **même
-  chemin** que le mono-niveau : `fill_ghosts(phi, bcPhi)` → `field_postprocess` →
-  `fill_ghosts(aux, aux_bc)`, `aux_bc` dérivé de `bcPhi` (Periodic→Periodic, sinon Foextrap).
-  Gère le non-périodique au lieu d'un `fill_boundary` périodique en dur.
-- [x] **9.5 `CoupledSource` sur AMR** → `AmrSystemCoupler::coupled_source_step` (splitting
-  **par niveau** : repointe chaque bloc vers son niveau k, lit tous les blocs + aux[k]).
-  (`test_amr_system_coupler` Partie D : échange conservatif.)
-- [x] **9.6 Nom `Coupler`** *(cosmétique)* → alias `SystemDriver` / `AmrSystemDriver` (le nom
-  « qui avance ») + doc des deux rôles (assembleur = `solve_fields` ; driver = `step`). La
-  scission en deux classes reste reportée (§8.2 B1/B2 : cosmétique sur code validé).
+- [x] **9.4 AMR `phi`/`aux` BC** -> `AmrSystemCoupler::solve_fields` derives aux by the **same
+  path** as the single-level: `fill_ghosts(phi, bcPhi)` -> `field_postprocess` ->
+  `fill_ghosts(aux, aux_bc)`, `aux_bc` derived from `bcPhi` (Periodic->Periodic, otherwise Foextrap).
+  Handles the non-periodic instead of a hardcoded periodic `fill_boundary`.
+- [x] **9.5 `CoupledSource` on AMR** -> `AmrSystemCoupler::coupled_source_step` (splitting
+  **per level**: repoints each block to its level k, reads all blocks + aux[k]).
+  (`test_amr_system_coupler` Part D: conservative exchange.)
+- [x] **9.6 `Coupler` name** *(cosmetic)* -> alias `SystemDriver` / `AmrSystemDriver` (the name
+  "that advances") + doc of the two roles (assembler = `solve_fields`; driver = `step`). The
+  split into two classes remains deferred (section 8.2 B1/B2: cosmetic on validated code).
 
-**Nuance (point TimeIntegrator)** : `ssprk.hpp` ne portait qu'`advance_ssprk2` générique ;
-SSPRK3 était recodé dans les coupleurs (duplication réelle). C'est résolu (§8.2 A) :
-`SystemCoupler` **délègue** SSPRK2/3 aux objets `SSPRK2Step`/`SSPRK3Step` du cœur,
-`ssprk.hpp` délègue aussi. Reste le `Coupler` legacy mono-modèle (non migré, diocotron validé,
-§8.2 A4).
+**Nuance (TimeIntegrator point)**: `ssprk.hpp` only carried a generic `advance_ssprk2`;
+SSPRK3 was recoded in the couplers (real duplication). This is resolved (section 8.2 A):
+`SystemCoupler` **delegates** SSPRK2/3 to the core `SSPRK2Step`/`SSPRK3Step` objects,
+`ssprk.hpp` delegates too. The legacy single-model `Coupler` remains (not migrated, diocotron validated,
+section 8.2 A4).

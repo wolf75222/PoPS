@@ -1,52 +1,52 @@
-# Outillage qualité & analyse statique
+# Quality tooling and static analysis
 
-`adc_cpp` est doté d'une chaîne d'analyse statique / qualité de code **volontairement séparée du
-chemin critique des PR**. Le gate `ci.yml` reste l'autorité sur la compilabilité et la correction
-(tests) ; la qualité tourne à part, sans ralentir le cycle de développement.
+`adc_cpp` has a static-analysis / code-quality chain that is **deliberately kept off the
+critical path of PRs**. The `ci.yml` gate remains the authority on compilability and correctness
+(tests) ; quality runs separately, without slowing down the development cycle.
 
-Suivi Linear : epic **ADC-105** (milestone *Qualité de code & CI durcie*).
+Linear tracking : epic **ADC-105** (milestone *Code quality and hardened CI*).
 
-## Déclencheurs (`.github/workflows/quality.yml`)
+## Triggers (`.github/workflows/quality.yml`)
 
-Le workflow `Quality` **ne tourne jamais sur un push ni sur une PR ordinaire**. Il se déclenche sur :
+The `Quality` workflow **never runs on a push or on an ordinary PR**. It is triggered on :
 
-| Déclencheur | Quand |
+| Trigger | When |
 | --- | --- |
-| `schedule` (cron `0 4 * * 0`) | chaque **dimanche** ~04:00 UTC |
-| `workflow_dispatch` | manuellement (onglet *Actions* → *Quality* → *Run workflow*) |
-| label `quality` sur une PR | passe complète **opt-in** sur cette PR (PR à risque) |
+| `schedule` (cron `0 4 * * 0`) | every **Sunday** ~04:00 UTC |
+| `workflow_dispatch` | manually (*Actions* tab -> *Quality* -> *Run workflow*) |
+| `quality` label on a PR | full **opt-in** pass on that PR (risky PR) |
 
-> Le label `quality` doit exister dans le dépôt :
-> `gh label create quality --description "Déclenche quality.yml sur cette PR" --color FBCA04`.
-> Le workflow ne prend effet (cron, dispatch, label) qu'une fois présent sur la branche par défaut
+> The `quality` label must exist in the repository :
+> `gh label create quality --description "Declenche quality.yml sur cette PR" --color FBCA04`.
+> The workflow only takes effect (cron, dispatch, label) once it is present on the default branch
 > (`master`).
 
-## Politique : informatif d'abord
+## Policy : informative first
 
-Au démarrage, **rien n'est bloquant** : les remontées apparaissent en annotations GitHub, en résumé
-de job et en artefacts, mais ne font pas échouer le run (pas de `-Werror`, `clang-format` en
-`--dry-run`, `clang-tidy` sans `WarningsAsErrors`). Toutes les options CMake sont **OFF par défaut**
-→ `ci.yml`, les builds locaux et `adc_cases` sont inchangés. Une fois la base assainie, on pourra
-basculer tel ou tel job en bloquant.
+At startup, **nothing is blocking** : findings appear as GitHub annotations, in the job summary
+and as artifacts, but they do not make the run fail (no `-Werror`, `clang-format` in
+`--dry-run`, `clang-tidy` without `WarningsAsErrors`). All CMake options are **OFF by default**
+-> `ci.yml`, local builds and `adc_cases` are unchanged. Once the base is cleaned up, we will be able
+to switch this or that job to blocking.
 
-## Les cinq jobs
+## The five jobs
 
-| Job | Outil | Config | Preset / option |
+| Job | Tool | Config | Preset / option |
 | --- | --- | --- | --- |
-| `format` | clang-format | `.clang-format` | -- (pas de build) |
+| `format` | clang-format | `.clang-format` | -- (no build) |
 | `warnings` | gcc `-Wall -Wextra …` | `cmake/AdcDevTooling.cmake` | preset `ci-warnings` (`ADC_ENABLE_WARNINGS`) |
 | `tidy` | clang-tidy | `.clang-tidy` | preset `ci-kokkos` (compile DB) |
 | `sanitizers` | ASan + UBSan | `cmake/AdcDevTooling.cmake` | preset `ci-asan` (`ADC_ENABLE_SANITIZERS`) |
-| `codeql` | CodeQL C++ | suite `security-and-quality` | preset `ci-kokkos` (build tracé) |
+| `codeql` | CodeQL C++ | suite `security-and-quality` | preset `ci-kokkos` (traced build) |
 
-Warnings et sanitizers sont portés par une cible **`INTERFACE adc_dev_options`** que **seules** les
-cibles internes lient en `PRIVATE` (les ~140 tests via `adc_add_test`, le module `_adc`). Le cœur
-public `adc::adc` n'est jamais touché → aucun flag ne fuit vers les consommateurs.
+Warnings and sanitizers are carried by an **`INTERFACE adc_dev_options`** target that **only** the
+internal targets link in `PRIVATE` (the ~140 tests via `adc_add_test`, the `_adc` module). The public
+core `adc::adc` is never touched -> no flag leaks to consumers.
 
-CodeQL est gratuit ici car le dépôt est **public** ; les résultats remontent dans
-**Security › Code scanning**.
+CodeQL is free here because the repository is **public** ; the results show up in
+**Security > Code scanning**.
 
-## Reproduire en local
+## Reproduce locally
 
 ```bash
 # Style
@@ -65,11 +65,11 @@ ASAN_OPTIONS=detect_leaks=0:detect_container_overflow=0 ctest --preset parallel 
 run-clang-tidy -p build 'tests/.*\.cpp'
 ```
 
-> En CI, les jobs réutilisent l'install Kokkos Serial **mise en cache** par le gate (`ci.yml`), via
-> l'action composite `.github/actions/setup-kokkos` (même clé de cache).
+> In CI, the jobs reuse the Kokkos Serial install **cached** by the gate (`ci.yml`), via
+> the composite action `.github/actions/setup-kokkos` (same cache key).
 
-## Hors scope (extensions futures)
+## Out of scope (future extensions)
 
-- Balayage `clang-format` de toute la base (reformat massif) -- PR séparée.
-- Passage en `-Werror` / blocage des PR -- après assainissement.
-- TSan, couverture, include-what-you-use, cppcheck.
+- `clang-format` sweep of the whole base (massive reformat) -- separate PR.
+- Switch to `-Werror` / blocking PRs -- after cleanup.
+- TSan, coverage, include-what-you-use, cppcheck.
