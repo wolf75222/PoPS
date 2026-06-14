@@ -1,5 +1,28 @@
 #pragma once
 
+/// @file
+/// @brief TensorKrylovSolver : solveur de Krylov MATRICE-LIBRE (BiCGStab) preconditionne MG, pour
+///        l'operateur elliptique a TENSEUR PLEIN L(phi) = -div(A grad phi) + kappa phi, A eventuellement non symetrique.
+///
+/// Couche : `include/adc/numerics/elliptic`.
+/// Role : resoudre l'elliptique quand A est NON SYMETRIQUE (terme croise Axy != Ayx, p.ex. la rotation
+/// B^{-1} de la condensation de Schur, arXiv:2510.11808), cas ou le V-cycle GeometricMG SEUL (lisseur
+/// Gauss-Seidel 5 points, bloc diagonal, termes croises explicites) stagne ou diverge. BiCGStab (et non
+/// GMRES) : empreinte memoire FIXE, pas de redemarrage. La matvec est apply_laplacian (operateur plein,
+/// strictement matrice-libre) ; le preconditionneur est N V-cycles du GeometricMG sur la PARTIE
+/// SYMETRIQUE (bloc diagonal). Modele le concept EllipticSolver.
+/// Contrat : convention alignee sur poisson_operator.hpp -- on resout L_int(phi) = rhs avec
+/// L_int = div(A grad phi) - kappa phi ; le cas A = I, kappa = 0 redonne le Laplacien canonique et
+/// converge vers la MEME solution que GeometricMG (a la tolerance).
+///
+/// Invariants / contraintes :
+/// - @p op et @p precond DOIVENT etre des GeometricMG DISTINCTS (assert au constructeur) : apply_precond
+///   ECRASE precond.rhs()/phi() a chaque iteration ; les confondre detruirait l'iterate du solve ;
+/// - precond porte la partie SYMETRIQUE (memes eps/eps_y/kappa, set_cross_terms NON appele) ;
+/// - DEVICE/MPI : foncteurs nommes uniquement ; les produits scalaires (dot, norm) sont COLLECTIFS
+///   (all_reduce_sum) et appeles sur TOUS les rangs, y compris un rang SANS box (pas d'interblocage) ;
+/// - ADDITIF : aucun chemin existant (GeometricMG / Poisson) ne passe par ce header (opt-in).
+
 #include <adc/core/types.hpp>
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/distribution_mapping.hpp>

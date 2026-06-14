@@ -19,6 +19,24 @@
 // Le scratch (R, etages U1/U2/U3) est alloue depuis le layout de U : aucun etat porte.
 // Ces objets remplacent les copies SSPRK de SystemCoupler / ssprk.hpp (dedup).
 
+/// @file
+/// @brief Integrateurs en temps comme OBJETS de premier plan a methode take_step : concept
+///        TimeStepper, et les schemas ForwardEuler, SSPRK2Step, SSPRK3Step (Shu-Osher).
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : faire vivre le schema mathematique dans le coeur, le coupleur l'APPELANT au lieu
+///        d'inliner SSPRK partout. Contrat "donner un TimeIntegrator au coupleur comme on donne
+///        un PhysicalModel" : l'utilisateur peut fournir le sien (meme signature
+///        take_step(rhs_eval, U, dt)).
+/// Contrat : un integrateur est agnostique du modele et de la discretisation -- il ne voit que
+///           rhs_eval(U_stage, R) (la fleche methode-des-lignes R = -div F + S) et les operations
+///           MultiFab (saxpy / lincomb).
+///
+/// Invariants :
+/// - aucun etat porte : le scratch (R, etages U1/U2/U3) est alloue depuis le layout de U ;
+/// - SSPRK2Step / SSPRK3Step reproduisent exactement les anciennes copies de SystemCoupler et
+///   ssprk.hpp (bit-identique).
+
 namespace adc {
 
 // Contrat : un integrateur sait avancer U de dt via un evaluateur de residu.

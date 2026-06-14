@@ -12,6 +12,28 @@
 
 #include <vector>
 
+/// @file
+/// @brief Briques MultiFab de base d'un pas AMR : enum AmrTimeMethod, foncteurs device-clean et
+///        helpers d'avance (divergence de flux, source explicite/IMEX, average_down 2x2,
+///        ghosts coarse-fine espace-temps mono-box), partages par tout le chemin de sous-cyclage.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : fournir les kernels reutilises par amr_level / amr_patch_range / amr_subcycling.
+///        mf_advance_faces (U -= dt div F), mf_apply_source (U += dt S, Euler avant),
+///        mf_apply_source_treatment (explicite OU IMEX backward-Euler selon drapeau runtime),
+///        mf_eval_rhs (R = -div F + S au meme etat, pour les etages SSPRK3), mf_average_down,
+///        fill_cf_ghost_cell / mf_fill_fine_ghosts_t.
+///
+/// Invariants :
+/// - kernels = foncteurs NOMMES (AmrSspRhsKernel, AmrAdvanceFacesKernel, ...) et non lambdas :
+///   premiere instanciation possible depuis une TU loader externe ou une lambda etendue
+///   ferait buter nvcc ;
+/// - la source est CELLULE-LOCALE (aucun flux de face) : elle n'entre pas dans le reflux, donc
+///   le split IMEX ne touche pas la conservation aux interfaces grossier-fin ;
+/// - mf_apply_source_treatment avec nopts={} (defaut) reproduit l'appel historique a 2 iters
+///   Newton -> bit-identique ;
+/// - les chemins device lisent/ecrivent en memoire unifiee : device_fence() avant lecture hote.
+
 namespace adc {
 
 // Methode temporelle d'un pas AMR (sous-cyclage Berger-Oliger). kEuler (DEFAUT) = avance Euler

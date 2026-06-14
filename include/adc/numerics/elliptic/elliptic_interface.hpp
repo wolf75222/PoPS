@@ -1,5 +1,26 @@
 #pragma once
 
+/// @file
+/// @brief Concepts C++20 NOMMANT les contrats communs de l'etage elliptique : EllipticOperator
+///        (role d'operateur), LinearSolver (sous-ensemble iteratif), FieldPostProcessor (derivation du champ).
+///
+/// Couche : `include/adc/numerics/elliptic`.
+/// Role : header PUREMENT DESCRIPTIF (metaprogrammation hote). Il formalise sous forme de concepts les
+/// contrats DEJA codes par les classes elliptiques existantes et le PROUVE par static_assert. Aucune
+/// logique flottante, aucune classe existante touchee : la pile elliptique device-validee reste
+/// bit-identique. Reutilise (ne redefinit pas) le concept EllipticSolver de elliptic_solver.hpp.
+/// Contrat : trois concepts -- EllipticOperator (geom/bc + pointeurs de coefficient du stencil pour une
+/// matvec coherente avec le residu MG, modele par GeometricMG), LinearSolver (EllipticSolver + variante
+/// a tolerance solve(rel_tol, max_iters) au retour non void), FieldPostProcessor (callable derivant le
+/// champ a partir de phi, signature de field_postprocess).
+///
+/// Invariants :
+/// - les concepts sont des predicats de COMPILATION, sans incidence device (ni kernel, ni lambda etendue) ;
+/// - LinearSolver est VOLONTAIREMENT separe de EllipticSolver : les solveurs DIRECTS (PoissonFFTSolver,
+///   DistributedFFTSolver, PolarPoissonSolver) modelent EllipticSolver mais PAS LinearSolver (pas de
+///   notion de tolerance iterative), et c'est correct ;
+/// - aucune des classes elliptiques n'est modifiee pour satisfaire un concept (refus assume).
+
 #include <adc/core/types.hpp>
 #include <adc/mesh/geometry.hpp>
 #include <adc/mesh/multifab.hpp>

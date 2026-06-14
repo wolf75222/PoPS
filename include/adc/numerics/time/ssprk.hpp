@@ -14,6 +14,15 @@
 // que fournir l'evaluateur de residu (fill_ghosts + assemble_rhs) et deleguer, pour
 // ne pas dupliquer la combinaison RK. aux est suppose fixe pendant le pas.
 
+/// @file
+/// @brief Fonction libre de commodite advance_ssprk2 : un pas SSP-RK2 mono-niveau qui assemble
+///        l'evaluateur de residu (fill_ghosts + assemble_rhs) et delegue a SSPRK2Step.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : sucre d'appel. Le SCHEMA RK vit dans time_steppers.hpp (objet SSPRK2Step) ; ce header
+///        ne fournit que l'evaluateur de residu et delegue, pour ne pas dupliquer la combinaison.
+/// Contrat : aux est suppose fixe pendant le pas.
+
 namespace adc {
 
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>

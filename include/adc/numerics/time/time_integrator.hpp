@@ -13,6 +13,25 @@
 //   ions      : ExplicitTime<SSPRK2, 1>
 // sans changer le PhysicalModel local.
 
+/// @file
+/// @brief Tags de schemas (SSPRK2, SSPRK3, UserTimeIntegrator), enum TimeTreatment et politiques
+///        temporelles par bloc : gabarit TimePolicy<Method, Treatment, Substeps, Stride>, ses
+///        traits (TimePolicyTraits) et les alias ExplicitTime / ImplicitTime / IMEXTime /
+///        PrescribedTime.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : separer DEUX niveaux -- le schema mathematique (SSPRK, IMEX, implicite utilisateur) et
+///        la politique d'emploi dans un systeme couple (explicite/implicite, sous-pas, cadence,
+///        ou champ prescrit). Le coeur garde les schemas generiques et le scheduler ; les cas
+///        choisissent une politique par bloc sans changer le PhysicalModel local.
+///
+/// Invariants :
+/// - SubstepsT >= 1 et StrideT >= 1 (static_assert) ;
+/// - SubstepsT = sous-pas PLUS FREQUENTS (n pas de dt/n) ; StrideT = cadence PLUS LENTE (avance 1
+///   macro-pas sur StrideT, alors d'un pas StrideT*dt). Les deux sont ORTHOGONAUX ;
+/// - StrideT=1 (defaut) = comportement historique ; TimePolicyTraits du cas par defaut traite un
+///   type quelconque comme Explicit, substeps=1, stride=1.
+
 namespace adc {
 
 struct SSPRK2 {};  // Shu-Osher SSP-RK2 (2 etages, ordre 2)

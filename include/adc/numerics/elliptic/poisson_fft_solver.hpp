@@ -1,5 +1,25 @@
 #pragma once
 
+/// @file
+/// @brief Backends EllipticSolver DIRECTS par FFT spectrale (CL periodiques), enveloppes MultiFab autour
+///        de PoissonFFT : PoissonFFTSolver (mono-rang, boite unique) et DistributedFFTSolver (distribue, bandes).
+///
+/// Couche : `include/adc/numerics/elliptic`.
+/// Role : resoudre le MEME Laplacien discret 5 points que GeometricMG (memes valeurs propres) mais en UNE
+/// transformee au lieu d'iterer -- bien moins cher quand l'elliptique domine le run (cf. PERFORMANCE.md).
+/// Memes signature de constructeur et interface que GeometricMG, donc interchangeables comme parametre
+/// Elliptic du Coupler. Les deux modelent le concept EllipticSolver (static_assert en bas).
+/// Contrat : PoissonFFTSolver est mono-rang/boite unique (le cas par defaut du Coupler et des facades) ;
+/// DistributedFFTSolver est le pendant distribue (1 bande par rang, transposee MPI interne de PoissonFFT).
+///
+/// Invariants :
+/// - PoissonFFTSolver leve (garde-fou DUR, actif en Release) si n_ranks() > 1 ou ba.size() != 1 :
+///   sinon un rang sans box locale dereferencerait fab(0) -> SIGSEGV ;
+/// - solve() ecrit phi de moyenne nulle (mode k=0 mis a zero) et remplit les ghosts periodiques de phi
+///   (fill_boundary) pour que la derivation de l'aux (grad phi centre) lise des ghosts a jour ;
+/// - residual() de DistributedFFTSolver est COLLECTIF (all_reduce_max) et remplit d'abord les halos
+///   inter-bandes (fill_boundary MPI).
+
 #include <adc/numerics/elliptic/elliptic_solver.hpp>
 #include <adc/numerics/elliptic/poisson_fft.hpp>
 #include <adc/numerics/elliptic/poisson_operator.hpp>
@@ -104,12 +124,27 @@ class PoissonFFTSolver {
 static_assert(EllipticSolver<PoissonFFTSolver>,
               "PoissonFFTSolver doit modeler EllipticSolver");
 
-// Variante DISTRIBUEE du meme backend FFT. Le domaine periodique est decoupe en BANDES (slabs,
-// 1 box par rang, le layout natif du solveur FFT) ; PoissonFFT fait la transposee parallele
-// (MPI_Alltoall) en interne. C'est un EllipticSolver AUTONOME : utilisable comme
-// Coupler<Model, DistributedFFTSolver>, au lieu d'enfermer la FFT distribuee dans SpectralCoupler.
-// Contrainte : Ny divisible par n_ranks(), Nx/Ny puissances de 2. En serie (n_ranks()==1) une
-// seule bande couvre le domaine, identique a PoissonFFTSolver.
+/// Solveur de Poisson periodique DIRECT (FFT spectrale) DISTRIBUE, modele EllipticSolver.
+///
+/// Role : variante distribuee de PoissonFFTSolver. Le domaine periodique est decoupe en BANDES (slabs,
+/// 1 box par rang -- le layout natif du solveur FFT) ; PoissonFFT fait la transposee parallele
+/// (MPI_Alltoall) en interne. C'est un EllipticSolver AUTONOME, utilisable comme
+/// Coupler<Model, DistributedFFTSolver>, au lieu d'enfermer la FFT distribuee dans SpectralCoupler.
+/// Usage : remplace GeometricMG/PoissonFFTSolver quand le Poisson periodique doit tourner sur n_ranks() > 1.
+///
+/// Preconditions :
+/// - geom.domain.ny() % n_ranks() == 0 : Ny doit etre divisible par le nombre de rangs (decoupage en
+///   bandes egales ; impose par un assert dans le constructeur) ;
+/// - geom.domain.nx() et geom.domain.ny() puissances de 2 : sinon PoissonFFT retombe sur la DFT directe
+///   O(n^2) par bande (correcte mais quadratique), et la transposee par bandes exige toujours la
+///   divisibilite par np ;
+/// - CL periodiques sur les deux axes (le BCRec passe est ignore : periodique par construction).
+///
+/// Invariants / contraintes :
+/// - solve() ecrit phi de moyenne nulle (mode k=0 mis a zero), une passe directe (pas de tolerance) ;
+/// - residual() est COLLECTIF : il remplit d'abord les halos inter-bandes (fill_boundary MPI) puis
+///   reduit la norme du residu sur tous les rangs (all_reduce_max) ;
+/// - en serie (n_ranks() == 1) une seule bande couvre le domaine -> identique a PoissonFFTSolver.
 class DistributedFFTSolver {
  public:
   DistributedFFTSolver(const Geometry& geom, const BCRec& = BCRec{},

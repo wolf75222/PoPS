@@ -7,6 +7,30 @@
 
 #include <algorithm>
 
+/// @file
+/// @brief Types nommes de l'interface coarse-fine multi-patch : PatchRange (empreinte grossiere
+///        d'un patch fin), FluxRegister (buffer grossier indexe GLOBAL + all_reduce), CoverageMask
+///        (cellules ombragees par un patch), SubcyclingSchedule (cadence Berger-Oliger) et
+///        CoarseFineInterface (couverture + routage du reflux), avec les helpers fill/avgdown
+///        multi-box (mf_fill_fine_ghosts_multi, mf_average_down_multi, fill_periodic_local).
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : promouvoir en TYPES les roles auparavant inlines/dupliques dans le sous-cyclage
+///        multi-patch (amr_subcycling.hpp). Centralisation a arithmetique strictement preservee.
+///
+/// Invariants :
+/// - PatchRange utilise la borne haute historique (hi-1)/2 (PAS Box2D::coarsen, floor des deux
+///   bornes) -> bit-identique aux empreintes inline d'origine ;
+/// - FluxRegister / CoverageMask sont batis sur le box_array GLOBAL (connu de tous les rangs) :
+///   MPI-safe. Chaque rang remplit ses contributions LOCALES (0 ailleurs), gather() somme par
+///   all_reduce_sum_inplace ; en serie all_reduce est l'identite -> bit a bit identique ;
+/// - CoverageMask empeche le double-reflux d'un joint fin-fin (seules les vraies interfaces
+///   fin-grossier sont corrigees) ;
+/// - AvgDownMultiKernel / route_reflux sont des foncteurs/fonctions NOMMES (pas de lambda
+///   generique) -> surs sous nvcc ;
+/// - fill_periodic_local sert au grossier REPLIQUE (dmap par-rang) : repli purement local sans
+///   plan MPI, lit valide / ecrit ghost (pas de course).
+
 namespace adc {
 
 // PatchRange (revue, point 5 : role promu en type). Empreinte GROSSIERE [I0..I1]x[J0..J1]

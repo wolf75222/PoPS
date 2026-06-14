@@ -161,8 +161,12 @@ class System {
   /// hote, dispatch virtuel IModel, Rusanov ordre 1), ce bloc tourne le chemin de PRODUCTION : la .so
   /// execute assemble_rhs<Limiter, Flux> (HLLC/Roe au choix, ordre 2) et SSPRK2/IMEX du coeur sur le
   /// modele genere ; seuls des tableaux plats transitent (ABI extern "C", cf. compiled_block_abi.hpp).
-  /// @param limiter "none" | "minmod" | "vanleer"   @param riemann "rusanov" | "hll" | "hllc" | "roe"
-  /// @param recon   "conservative" | "primitive"    @param time "explicit" | "imex"
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 : le .so alloue block_n_ghost = 3
+  ///                ghosts, cf. compiled_block_abi.hpp)
+  /// @param riemann "rusanov" | "hll" | "hllc" | "roe"
+  /// @param recon   "conservative" | "primitive"
+  /// @param time    "explicit" | "imex" SEULEMENT : l'ABI extern "C" du .so ne cable que SSPRK2 en
+  ///                explicite -- "ssprk3" / "euler" sont rejetes (cf. add_native_block, qui les porte)
   void add_compiled_block(const std::string& name, const std::string& so_path,
                           const std::string& limiter = "minmod",
                           const std::string& riemann = "rusanov",
@@ -190,8 +194,12 @@ class System {
   /// /grid_context/ensure_aux_width, exportees ADC_EXPORT), la frontiere n'est PAS une ABI plate :
   /// loader et module DOIVENT partager la meme ABI C++. add_native_block lit la cle d'ABI du loader
   /// (adc_native_abi_key) et la COMPARE a abi_key() ; un ecart leve une erreur EXPLICITE (pas d'UB).
-  /// @param limiter "none" | "minmod" | "vanleer"   @param riemann "rusanov" | "hll" | "hllc" | "roe"
-  /// @param recon   "conservative" | "primitive"    @param time "explicit" | "imex"
+  /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 : add_compiled_model reallue
+  ///                l'etat du bloc a block_n_ghost = 3 ghosts apres install_block, comme add_block)
+  /// @param riemann "rusanov" | "hll" | "hllc" | "roe"
+  /// @param recon   "conservative" | "primitive"
+  /// @param time    "explicit" (SSPRK2) | "ssprk3" | "euler" | "imex" (le gabarit marshale le schema
+  ///                RK explicite jusqu'au make_block du loader, parite avec add_block)
   /// @param gamma   indice adiabatique du bloc (set_density / couplages inter-especes)
   /// @param stride  cadence du bloc (1 = chaque pas, defaut ; cf. add_block)
   void add_native_block(const std::string& name, const std::string& so_path,

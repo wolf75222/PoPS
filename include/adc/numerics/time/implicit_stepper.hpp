@@ -38,6 +38,31 @@
 // explicites figees a leur valeur avancee, comme donnee connue). Sans le trait, tout
 // reste implicite -> comportement strictement identique a avant.
 
+/// @file
+/// @brief Pas implicite / IMEX d'un bloc comme CONTRAT nomme. Concept ImplicitBlockStepper,
+///        defaut pret a l'emploi backward_euler_source (Newton local sur la source raide du
+///        modele) et l'objet ImplicitSourceStepper qui le branche sur SystemCoupler::step.
+///        Inclut le masque IMEX partiel (ImplicitMask), le trait jacobien analytique
+///        (HasSourceJacobian) et les options Newton (NewtonOptions / NewtonReport).
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : offrir "un IMEX par defaut sans que l'utilisateur ecrive Newton". backward_euler_source
+///        resout EN PLACE W = U + dt S(W, aux) par Newton local (jacobienne par differences finies,
+///        ou analytique si le modele declare source_jacobian) ; exact en une iteration si S est
+///        lineaire, convergence quadratique sinon, inconditionnellement stable pour une relaxation
+///        rigide (la ou Picard divergerait des que dt*raideur > 1).
+///
+/// Invariants :
+/// - la source est LOCALE (cellule par cellule) : pas de couplage de flux, aucun reflux ;
+/// - IMEX PARTIEL : un modele peut declarer variable par variable lesquelles sont raides
+///   (PartiallyImplicitModel::is_implicit), ou un ImplicitMask porte par le BLOC override le
+///   defaut modele. Masque inactif (defaut) -> tout implicite -> bit-identique a avant ;
+/// - NewtonOptions par defaut {} = 2 iterations FIXES, pas de test d'arret, fd_eps=1e-7,
+///   damping=1, fail_policy=kFailNone -> reproduit EXACTEMENT le comportement historique ;
+/// - kernels device = foncteurs NOMMES (BackwardEulerSourceKernel, NewtonStat*Kernel) ;
+///   fail_policy != kFailNone et l'agregation du rapport Newton agissent cote HOTE, apres les
+///   reductions (aucun snprintf/throw en kernel).
+
 namespace adc {
 
 // Contrat d'un stepper implicite/IMEX de bloc. Tout objet (ou lambda) qui sait

@@ -99,6 +99,27 @@ ADC_HD StateVec<N> operator*(Real s, StateVec<N> a) {
 // cote DSL (python/adc/dsl.py) si on veut plus de quatre champs nommes par modele.
 inline constexpr int kAuxMaxExtra = 4;
 
+/// @brief Champs auxiliaires PONCTUELS partages avec la physique : canal de couplage unique.
+///
+/// Role : porter au point les sorties du solveur elliptique et les champs fournis par le systeme,
+/// que la physique consomme A LA FOIS dans le flux (transport a derive : vitesse E x B = grad phi)
+/// et dans la source (fluide auto-gravitant : S = -rho grad phi).
+///
+/// Usage : un PhysicalModel lit phi/grad_x/grad_y (contrat de BASE, composantes 0..2, toujours
+/// presentes). Les champs EXTRA canoniques (B_z = comp 3, T_e = comp 4) et les champs NOMMES par
+/// le modele (extra[k] <-> composante kAuxNamedBase + k) ne sont charges QUE si le modele declare
+/// un membre statique n_aux assez grand ; un modele sans n_aux reste strictement bit-identique.
+/// Lire un champ nomme via extra_field(k) (lecture bornee, renvoie 0 hors borne).
+///
+/// Contrat : POD trivialement copiable, device-clean (tableau C brut, aucune allocation) ;
+/// la disposition des champs EXTRA est generee depuis la X-macro ADC_AUX_FIELDS (source unique).
+///
+/// Invariants :
+/// - tous les champs au-dela du contrat de base valent 0 par defaut (load_aux ne les ecrase que
+///   sur demande du modele) ;
+/// - les indices doivent rester en phase avec AUX_CANONICAL / AUX_NAMED_BASE cote DSL
+///   (python/adc/dsl.py) : duplication inherente, Python ne lit pas les en-tetes C++ ;
+/// - kAuxMaxExtra borne le nombre de champs nommes pour garder le POD a taille fixe.
 struct Aux {
   Real phi{};     // potentiel       (composante aux 0)
   Real grad_x{};  // d phi / d x     (composante aux 1)

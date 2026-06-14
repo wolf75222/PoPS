@@ -8,6 +8,24 @@
 #include <numeric>
 #include <vector>
 
+/// @file
+/// @brief Equilibrage de charge AMR : construit un DistributionMapping (box -> rang) a partir d'un
+///        BoxArray, par courbe de remplissage Z-order (SFC) ou par knapsack LPT.
+///
+/// Couche : `include/adc/parallel`.
+/// Role : repartir les boxes sur les rangs en repliquant les metadonnees (facon AMReX). Deux
+/// strategies : make_sfc_distribution (segments contigus de charge egale le long de la courbe de
+/// Morton -> localite spatiale) et make_knapsack_distribution (box la plus lourde au rang le moins
+/// charge -> minimise le desequilibre maximal). load_imbalance mesure le ratio charge max / charge
+/// moyenne. Outillage Morton expose : part1by1, morton_key, morton_order.
+/// Contrat : le poids d'une box est son nombre de cellules (proxy du cout de calcul).
+///
+/// Invariants :
+/// - fonctions PURES, sans MPI : testables en serie ; elles alimenteront le seam comm une fois un
+///   backend MPI branche ;
+/// - SFC garantit qu'avec nboxes >= nranks chaque rang recoit au moins une box ;
+/// - cas degeneres (n == 0, nranks <= 1) : tout est assigne au rang 0.
+
 // Equilibrage de charge pour l'AMR a metadonnees repliquees (facon AMReX,
 // cf. la bibliographie sect. 4.2). Deux strategies construisent un
 // DistributionMapping a partir d'un BoxArray et d'un nombre de rangs :

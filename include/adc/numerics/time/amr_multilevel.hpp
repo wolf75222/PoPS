@@ -33,6 +33,24 @@
 // Resultat : conservation a l'arrondi sur toute la hierarchie, stabilite via le
 // FillPatch espace-temps (ghosts du fin interpoles entre parent ancien/nouveau).
 
+/// @file
+/// @brief AMR N-niveaux de REFERENCE sur Fab2D mono-box : struct AmrLevel et la recursion
+///        Berger-Oliger (subcycle_level, amr_step_multilevel). DEPRECATED.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : verite-terrain documentee (cf. docs/ARCHITECTURE.md) generalisant amr_step_2level :
+///        chaque niveau qui possede un enfant joue le "grossier" du pas 2-niveaux vis-a-vis de
+///        cet enfant. Conservation a l'arrondi par reflux a chaque interface coarse-fine,
+///        stabilite par FillPatch espace-temps des ghosts fins.
+///
+/// Invariants :
+/// - DEPRECATED : aucun include dans le coeur, les tests ou les bindings ; le moteur de
+///   production est amr_reflux_mf.hpp (pile MultiFab multi-patch) dont le mono-box est le cas
+///   degenere. A retirer apres migration des references vers amr_reflux_mf.hpp ;
+/// - hypothese single-box : chaque niveau l>=1 est UNE box raffinee ratio 2 d'un sous-domaine
+///   du parent, strictement interieure (>=1 cellule grossiere de marge) ;
+/// - aux detenu ailleurs (pointeur) ; rC* = region raffinee par l'enfant, valable si has_fine.
+
 namespace adc {
 
 // Un niveau de la hierarchie. aux est detenu ailleurs (recalcule par pas) ;

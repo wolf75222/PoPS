@@ -1,5 +1,27 @@
 #pragma once
 
+/// @file
+/// @brief Types DESCRIPTIFS de l'etage elliptique : EllipticProblem (definition du probleme) et
+///        FieldPostProcess (convention de derivation du champ), + fabriques additives.
+///
+/// Couche : `include/adc/numerics/elliptic`.
+/// Role : NOMMER des valeurs et conventions DEJA codees, sans modifier une seule operation flottante
+/// (refactor structurel bit-identique). EllipticProblem rassemble ce qui definit lap(eps phi) = f resolu
+/// par GeometricMG/PoissonFFTSolver (coefficient eps, BCRec physique, drapeau nullspace_const).
+/// FieldPostProcess nomme la derivation E = -grad phi et la convention de signe (GradSign::Plus pour le
+/// coupler qui stocke +grad phi, Minus pour un consommateur stockant -grad phi).
+/// Contrat : make_elliptic_solver(geom, ba, problem, ...) construit un EllipticSolver a partir d'un
+/// EllipticProblem nomme ; field_postprocess(phi, out, cx, cy, spec) ecrit out = (phi si demande,
+/// s*grad phi centre) avec s = +/-1 selon la spec, cx = 1/(2 dx), cy = 1/(2 dy).
+///
+/// Invariants :
+/// - eps est PUREMENT DESCRIPTIF : le stencil 5 points ne le lit pas (eps = 1 implicite) ; eps != 1 leve
+///   std::invalid_argument dans make_elliptic_solver (piege interdit, pas ignore silencieusement) ;
+/// - field_postprocess reproduit caractere pour caractere detail::coupler_grad_phi (meme ordre, memes
+///   facteurs *cx / *cy) : seul le signe s est un degre de liberte ;
+/// - FieldPostprocessKernel est un foncteur NOMME (et non lambda ADC_HD) car premiere-instancie depuis
+///   une TU externe : une lambda etendue ferait buter l'emission du kernel device sous nvcc.
+
 #include <adc/core/types.hpp>
 #include <adc/numerics/elliptic/geometric_mg.hpp>  // homogeneous(const BCRec&)
 #include <adc/mesh/box_array.hpp>

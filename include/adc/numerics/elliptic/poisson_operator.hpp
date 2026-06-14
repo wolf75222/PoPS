@@ -1,5 +1,31 @@
 #pragma once
 
+/// @file
+/// @brief Fonctions libres de l'operateur elliptique : apply_laplacian (matvec), poisson_residual
+///        (residu), gs_color/gs_smooth (lisseur Gauss-Seidel red-black), zero_conductor (Dirichlet embedded).
+///
+/// Couche : `include/adc/numerics/elliptic`.
+/// Role : briques de bas niveau de la multigrille geometrique (geometric_mg.hpp) et matvec du solveur de
+/// Krylov (krylov_solver.hpp). L'operateur est realise par des FONCTIONS LIBRES (pas un type) : aucun
+/// concept ne les contraint. Convention GLOBALE : on resout L(phi) = -div(A grad phi) + kappa phi = f_phys ;
+/// en interne les kernels assemblent L_int = div(A grad phi) - kappa phi et poisson_residual rend
+/// res = f - L_int.
+/// Contrat : tous les coefficients optionnels valent nullptr par defaut et redonnent ALORS EXACTEMENT le
+/// chemin historique bit-identique -- mask (embedded boundary, fige phi=0 dans le conducteur), coef
+/// (poids cut-cell Shortley-Weller, ordre 2 au bord), eps/eps_y (permittivite variable, isotrope ou
+/// anisotrope diagonale, moyenne harmonique de face), kappa (terme de reaction), a_xy/a_yx (tenseur
+/// PLEIN, termes croises EXPLICITES, A eventuellement non symetrique).
+///
+/// Invariants :
+/// - permittivite de FACE = moyenne HARMONIQUE des deux centres adjacents (flux normal continu, correct
+///   meme pour eps discontinu) ; le terme croise utilise la moyenne ARITHMETIQUE (pas un flux normal) ;
+/// - le lisseur gs_smooth reste 5 POINTS (bloc diagonal) : les termes croises a_xy/a_yx sont EXPLICITES,
+///   portes uniquement par le residu -> pour A fortement non symetrique le V-cycle GS peut NE PAS
+///   converger (un solveur de Krylov est alors requis, cf. krylov_solver.hpp) ;
+/// - les kernels sont des FONCTEURS NOMMES (et non lambdas ADC_HD) car premiere-instancies depuis une TU
+///   externe : une lambda etendue ferait buter l'emission du kernel device sous nvcc ;
+/// - le balayage red-black est parallelisable (une cellule rouge ne depend que de cellules noires).
+
 #include <adc/core/types.hpp>
 #include <adc/mesh/fab2d.hpp>
 #include <adc/mesh/for_each.hpp>

@@ -21,6 +21,27 @@
 // composite (FAC) est traite a part (elliptic/composite_fac_poisson.hpp) ; le
 // test de conservation valide ici l'arithmetique du reflux.
 
+/// @file
+/// @brief Brique conservation-critique de reference (Fab2D, 1 composante) : reflux 2-niveaux a la
+///        AMReX. Fournit les flux de Rusanov 1-comp (compute_fluxes_1c), l'avance Euler explicite
+///        (advance_fab_1c), les ghosts periodiques (fill_periodic_fab) et coarse-fine espace-temps
+///        (fill_fine_ghosts_t), average_down_fab, et le pas amr_step_2level.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : version minimale et testable du reflux AMR. Le flux numerique a l'interface coarse-fine
+///        est incoherent entre grille grossiere et fine ; le reflux corrige les cellules
+///        grossieres adjacentes (FluxRegister) pour retablir la conservation exacte. C'est la
+///        verite-terrain mono-box de la chaine de parite Fab2D -> MF -> MP.
+///
+/// Invariants :
+/// - cas minimal : 1 composante, Euler explicite, ratio 2, sous-cyclage Berger-Oliger (r=2 pas
+///   de dt/2, ghosts fins interpoles en temps), une box fine rectangulaire strictement interieure
+///   au domaine grossier periodique ;
+/// - le couplage Poisson composite (FAC) est traite ailleurs (elliptic/composite_fac_poisson) ;
+/// - kernels device = foncteurs NOMMES (RusanovFaceXKernel, AdvanceFab1cKernel, ...) et non
+///   lambdas ADC_HD : premiere instanciation depuis une TU loader externe ferait buter nvcc ;
+///   corps strictement identique aux lambdas precedentes -> bit-identique CPU et device.
+
 namespace adc {
 
 // xface_box / yface_box : fournis par numerics/spatial_operator.hpp (inclus ci-dessus),
