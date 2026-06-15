@@ -193,6 +193,44 @@ ADC_HD inline bool solve_dense(Real J[N][N], Real b[N], Real x[N], int n) {
   return ok;
 }
 
+// Assemble la jacobienne Newton du sous-systeme reduit aux composantes implicites :
+//   J[rr][cc] = (row == col ? 1 : 0) - dt * dS_row/dW_col,   row = impl[rr], col = impl[cc].
+// Trait HasSourceJacobian present => jacobien ANALYTIQUE (m.source_jacobian) ; sinon differences
+// finies (pas h = fd_eps*|W| + fd_eps, source perturbee colonne par colonne autour de S0 = S(W)).
+// Corps EXTRAIT mot-pour-mot des deux chemins (2a defauts, 2b instrumente) -> bit-identique ;
+// ADC_HD car appele depuis newton_source_solve (device-callable). S0 = m.source(W, a) deja calcule
+// par l'appelant (reutilise tel quel par les differences finies).
+template <class Model, int N>
+ADC_HD inline void assemble_newton_jacobian(const Model& m, const typename Model::State& W,
+                                            const Aux& a, Real dt, const NewtonOptions& opts,
+                                            const int impl[N], int m_impl,
+                                            const typename Model::State& S0, Real J[N][N]) {
+  if constexpr (HasSourceJacobian<Model>) {
+    // JACOBIEN ANALYTIQUE (trait, vague 3) : J = I - dt * dS/dU restreint aux implicites.
+    Real dS[N][N];
+    m.source_jacobian(W, a, dS);
+    for (int cc = 0; cc < m_impl; ++cc)
+      for (int rr = 0; rr < m_impl; ++rr) {
+        const int row = impl[rr], col = impl[cc];
+        J[rr][cc] = (row == col ? Real(1) : Real(0)) - dt * dS[row][col];
+      }
+  } else {
+    for (int cc = 0; cc < m_impl; ++cc) {
+      const int col = impl[cc];
+      const Real wc = W[col] < 0 ? -W[col] : W[col];
+      const Real h = opts.fd_eps * wc + opts.fd_eps;
+      typename Model::State Wp = W;
+      Wp[col] += h;
+      const typename Model::State Sp = m.source(Wp, a);
+      for (int rr = 0; rr < m_impl; ++rr) {
+        const int row = impl[rr];
+        const Real dSdW = (Sp[row] - S0[row]) / h;
+        J[rr][cc] = (row == col ? Real(1) : Real(0)) - dt * dSdW;
+      }
+    }
+  }
+}
+
 // Resout W tel que W = Un + dt*S(W,a) en forward-backward Euler (IMEX partiel) :
 //   - composantes EXPLICITES : Euler avant a l'etat d'entree, W_e = Un_e + dt*S_e(Un) ;
 //   - composantes IMPLICITES : Newton sur le sous-systeme reduit, F_i = W_i - Un_i -
@@ -231,30 +269,7 @@ ADC_HD inline typename Model::State newton_source_solve(
         F[r] = W[c] - Un[c] - dt * S0[c];
       }
       Real J[N][N];
-      if constexpr (HasSourceJacobian<Model>) {
-        // JACOBIEN ANALYTIQUE (trait, vague 3) : J = I - dt * dS/dU restreint aux implicites.
-        Real dS[N][N];
-        m.source_jacobian(W, a, dS);
-        for (int cc = 0; cc < m_impl; ++cc)
-          for (int rr = 0; rr < m_impl; ++rr) {
-            const int row = impl[rr], col = impl[cc];
-            J[rr][cc] = (row == col ? Real(1) : Real(0)) - dt * dS[row][col];
-          }
-      } else {
-      for (int cc = 0; cc < m_impl; ++cc) {
-        const int col = impl[cc];
-        const Real wc = W[col] < 0 ? -W[col] : W[col];
-        const Real h = opts.fd_eps * wc + opts.fd_eps;
-        typename Model::State Wp = W;
-        Wp[col] += h;
-        const typename Model::State Sp = m.source(Wp, a);
-        for (int rr = 0; rr < m_impl; ++rr) {
-          const int row = impl[rr];
-          const Real dSdW = (Sp[row] - S0[row]) / h;
-          J[rr][cc] = (row == col ? Real(1) : Real(0)) - dt * dSdW;
-        }
-      }
-      }
+      assemble_newton_jacobian<Model, N>(m, W, a, dt, opts, impl, m_impl, S0, J);
       Real delta[N];
       solve_dense<N>(J, F, delta, m_impl);
       for (int r = 0; r < m_impl; ++r) W[impl[r]] -= opts.damping * delta[r];
@@ -294,30 +309,7 @@ ADC_HD inline typename Model::State newton_source_solve(
       if (res <= opts.abs_tol + opts.rel_tol * res0) { converged = true; break; }
     }
     Real J[N][N];
-    if constexpr (HasSourceJacobian<Model>) {
-      // JACOBIEN ANALYTIQUE (trait, vague 3) : meme construction que le chemin (2a).
-      Real dS[N][N];
-      m.source_jacobian(W, a, dS);
-      for (int cc = 0; cc < m_impl; ++cc)
-        for (int rr = 0; rr < m_impl; ++rr) {
-          const int row = impl[rr], col = impl[cc];
-          J[rr][cc] = (row == col ? Real(1) : Real(0)) - dt * dS[row][col];
-        }
-    } else {
-    for (int cc = 0; cc < m_impl; ++cc) {
-      const int col = impl[cc];
-      const Real wc = W[col] < 0 ? -W[col] : W[col];
-      const Real h = opts.fd_eps * wc + opts.fd_eps;
-      typename Model::State Wp = W;
-      Wp[col] += h;
-      const typename Model::State Sp = m.source(Wp, a);
-      for (int rr = 0; rr < m_impl; ++rr) {
-        const int row = impl[rr];
-        const Real dSdW = (Sp[row] - S0[row]) / h;
-        J[rr][cc] = (row == col ? Real(1) : Real(0)) - dt * dSdW;
-      }
-    }
-    }
+    assemble_newton_jacobian<Model, N>(m, W, a, dt, opts, impl, m_impl, S0, J);
     Real delta[N];
     const bool ok = solve_dense<N>(J, F, delta, m_impl);
     if (!ok) failed = true;  // pivot degenere : marque SANS break, division inf/NaN comme (2a)

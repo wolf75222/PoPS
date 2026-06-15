@@ -28,6 +28,17 @@
 
 namespace adc {
 
+// Division entiere arrondie vers le bas (vers -inf), coherente de part et d'autre de zero : seule
+// division correcte pour des indices NEGATIFS (couches de ghosts) lors du coarsen / hachage spatial.
+// La division C++ tronque vers zero ; on retranche 1 quand le reste est non nul et de signe oppose au
+// diviseur (le quotient tronque a alors ete arrondi vers le haut). Brique bas-niveau partagee (coarsen
+// de Box2D, hachage des bins de BoxHash, indices coarse->fine de refinement.hpp). b != 0 attendu.
+/// Division entiere de a par b arrondie vers le bas (gere a < 0 ET b < 0). ADC_HD constexpr (kernels).
+ADC_HD constexpr int floor_div(int a, int b) {
+  const int q = a / b, rem = a % b;
+  return (rem != 0 && ((rem < 0) != (b < 0))) ? q - 1 : q;
+}
+
 /// Espace d'indices entier 2D, cellule au centre. Coins lo/hi INCLUSIFS ; box vide si hi < lo.
 /// POD pur (aucune donnee de champ) : trivialement copiable, capturable par valeur dans un kernel.
 /// INVARIANT : les indices peuvent etre negatifs (ghosts) ; refine/coarsen sont des bijections par
@@ -94,8 +105,8 @@ struct Box2D {
   // Inverse : division plancher (gere les indices negatifs des ghosts).
   /// Grossit d'un ratio r par division PLANCHER de chaque coin (gere les indices negatifs des ghosts).
   Box2D coarsen(int r) const {
-    return {{div_floor(lo[0], r), div_floor(lo[1], r)},
-            {div_floor(hi[0], r), div_floor(hi[1], r)}};
+    return {{floor_div(lo[0], r), floor_div(lo[1], r)},
+            {floor_div(hi[0], r), floor_div(hi[1], r)}};
   }
 
   /// Intersection des deux boxes (eventuellement vide : hi < lo si elles ne se recouvrent pas).
@@ -105,13 +116,6 @@ struct Box2D {
   }
 
   bool operator==(const Box2D&) const = default;
-
- private:
-  // division entiere arrondie vers le bas (gere a < 0), pour coarsen.
-  static int div_floor(int a, int r) {
-    int q = a / r, rem = a % r;
-    return (rem != 0 && ((rem < 0) != (r < 0))) ? q - 1 : q;
-  }
 };
 
 }  // namespace adc

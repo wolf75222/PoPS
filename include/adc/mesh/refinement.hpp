@@ -40,11 +40,9 @@
 namespace adc {
 
 /// Indice de la cellule grossiere contenant la cellule fine a (division PLANCHER par r, gere a < 0).
-/// ADC_HD : appele dans les kernels d'interpolation / injection coarse->fine.
-ADC_HD inline int coarsen_index(int a, int r) {
-  int q = a / r, rem = a % r;
-  return (rem != 0 && ((rem < 0) != (r < 0))) ? q - 1 : q;
-}
+/// ADC_HD : appele dans les kernels d'interpolation / injection coarse->fine. Mince adaptateur vers
+/// floor_div (box2d.hpp) : meme division plancher, resultat bit-identique.
+ADC_HD inline int coarsen_index(int a, int r) { return floor_div(a, r); }
 
 /// Grossit chaque box du BoxArray d'un ratio r (coarsen box a box, ordre preserve).
 inline BoxArray coarsen(const BoxArray& ba, int r) {

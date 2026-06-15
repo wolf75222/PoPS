@@ -98,6 +98,30 @@ ADC_HD inline Real eps_harmonic(Real ec, Real ev) {
 }
 
 namespace detail {
+// Poids des QUATRE faces (xm, xp, ym, yp) en (i,j) pour le chemin permittivite de FACE (he), avec ou
+// sans cut-cell. Chaque face = moyenne HARMONIQUE des deux centres adjacents (eps_x pour les faces x,
+// eps_y pour les faces y) ; en cut-cell (hc) on multiplie le poids Shortley-Weller de la face par sa
+// permittivite, sinon on applique 1/h^2 (idx2 / idy2). Foncteur libre ADC_HD (device-clean) partage
+// par les trois kernels he (apply / residu / lisseur) ; corps STRICTEMENT identique aux trois copies
+// d'origine -> sortie bit-identique. Sortie par reference (wxm/wxp/wym/wyp).
+ADC_HD inline void face_weights(const ConstArray4& ep, const ConstArray4& ey, int i, int j,
+                                Real idx2, Real idy2, bool hc, const ConstArray4& cf,
+                                Real& wxm, Real& wxp, Real& wym, Real& wyp) {
+  const Real ec = ep(i, j);    // eps_x au centre (faces x)
+  const Real ecy = ey(i, j);   // eps_y au centre (faces y) ; == ec en isotrope
+  const Real exm = eps_harmonic(ec, ep(i - 1, j));
+  const Real exp = eps_harmonic(ec, ep(i + 1, j));
+  const Real eym = eps_harmonic(ecy, ey(i, j - 1));
+  const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
+  if (hc) {  // cut-cell : eps_face multiplie chaque poids Shortley-Weller
+    wxm = cf(i, j, 0) * exm; wxp = cf(i, j, 1) * exp;
+    wym = cf(i, j, 2) * eym; wyp = cf(i, j, 3) * eyp;
+  } else {   // stencil 5 points a coefficient de face variable
+    wxm = exm * idx2; wxp = exp * idx2;
+    wym = eym * idy2; wyp = eyp * idy2;
+  }
+}
+
 // Divergence des FLUX CROISES du tenseur plein en (i,j) : d_x(Axy d_y phi) + d_y(Ayx d_x phi),
 // discretisee en volumes finis (stencil 9 points) comme decrit dans l'entete. Renvoie la
 // contribution a AJOUTER a div(A grad phi). Foncteur libre ADC_HD (device-clean) partage par
@@ -148,20 +172,8 @@ struct ApplyLaplacianKernel {
   ConstArray4 axy, ayx;
   ADC_HD void operator()(int i, int j) const {
     if (he) {  // permittivite de face (harmonique), avec ou sans cut-cell
-      const Real ec = ep(i, j);    // eps_x au centre (faces x)
-      const Real ecy = ey(i, j);   // eps_y au centre (faces y) ; == ec en isotrope
-      const Real exm = eps_harmonic(ec, ep(i - 1, j));
-      const Real exp = eps_harmonic(ec, ep(i + 1, j));
-      const Real eym = eps_harmonic(ecy, ey(i, j - 1));
-      const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
       Real wxm, wxp, wym, wyp;
-      if (hc) {  // cut-cell : eps_face multiplie chaque poids Shortley-Weller
-        wxm = cf(i, j, 0) * exm; wxp = cf(i, j, 1) * exp;
-        wym = cf(i, j, 2) * eym; wyp = cf(i, j, 3) * eyp;
-      } else {   // stencil 5 points a coefficient de face variable
-        wxm = exm * idx2; wxp = exp * idx2;
-        wym = eym * idy2; wyp = eyp * idy2;
-      }
+      face_weights(ep, ey, i, j, idx2, idy2, hc, cf, wxm, wxp, wym, wyp);
       L(i, j) = wxp * p(i + 1, j) + wxm * p(i - 1, j) + wyp * p(i, j + 1) +
                 wym * p(i, j - 1) - (wxm + wxp + wym + wyp) * p(i, j);
     } else if (hc)
@@ -201,20 +213,8 @@ struct PoissonResidualKernel {
     }
     Real lap;
     if (he) {  // permittivite de face (harmonique), avec ou sans cut-cell
-      const Real ec = ep(i, j);    // eps_x au centre (faces x)
-      const Real ecy = ey(i, j);   // eps_y au centre (faces y) ; == ec en isotrope
-      const Real exm = eps_harmonic(ec, ep(i - 1, j));
-      const Real exp = eps_harmonic(ec, ep(i + 1, j));
-      const Real eym = eps_harmonic(ecy, ey(i, j - 1));
-      const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
       Real wxm, wxp, wym, wyp;
-      if (hc) {
-        wxm = cf(i, j, 0) * exm; wxp = cf(i, j, 1) * exp;
-        wym = cf(i, j, 2) * eym; wyp = cf(i, j, 3) * eyp;
-      } else {
-        wxm = exm * idx2; wxp = exp * idx2;
-        wym = eym * idy2; wyp = eyp * idy2;
-      }
+      face_weights(ep, ey, i, j, idx2, idy2, hc, cf, wxm, wxp, wym, wyp);
       lap = wxp * p(i + 1, j) + wxm * p(i - 1, j) + wyp * p(i, j + 1) +
             wym * p(i, j - 1) - (wxm + wxp + wym + wyp) * p(i, j);
     } else if (hc)
@@ -330,20 +330,8 @@ struct GsColorKernel {
     if (hm && mk(i, j) == Real(0)) return;  // conducteur : fige phi=0
     Real off, diag;
     if (he) {  // permittivite de face (harmonique), avec ou sans cut-cell
-      const Real ec = ep(i, j);    // eps_x au centre (faces x)
-      const Real ecy = ey(i, j);   // eps_y au centre (faces y) ; == ec en isotrope
-      const Real exm = eps_harmonic(ec, ep(i - 1, j));
-      const Real exp = eps_harmonic(ec, ep(i + 1, j));
-      const Real eym = eps_harmonic(ecy, ey(i, j - 1));
-      const Real eyp = eps_harmonic(ecy, ey(i, j + 1));
       Real wxm, wxp, wym, wyp;
-      if (hc) {
-        wxm = cf(i, j, 0) * exm; wxp = cf(i, j, 1) * exp;
-        wym = cf(i, j, 2) * eym; wyp = cf(i, j, 3) * eyp;
-      } else {
-        wxm = exm * idx2; wxp = exp * idx2;
-        wym = eym * idy2; wyp = eyp * idy2;
-      }
+      face_weights(ep, ey, i, j, idx2, idy2, hc, cf, wxm, wxp, wym, wyp);
       off = wxp * p(i + 1, j) + wxm * p(i - 1, j) + wyp * p(i, j + 1) +
             wym * p(i, j - 1);
       diag = wxm + wxp + wym + wyp;
