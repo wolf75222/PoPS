@@ -1,13 +1,14 @@
 /// @file
-/// @brief Operateurs de transfert entre niveaux AMR (ratio entier r) + parallel_copy.
+/// @brief AMR inter-level transfer operators (integer ratio r) + parallel_copy.
 ///
-/// average_down (fin -> grossier) : moyenne CONSERVATIVE sur les blocs r x r (une cellule grossiere
-/// = moyenne des r^2 cellules fines). interpolate (grossier -> fin) : injection CONSTANTE par
-/// morceaux (chaque cellule fine recoit la valeur de sa cellule grossiere). Les deux passent par un
-/// MultiFab temporaire "fin coarsen" partageant la DistributionMapping du fin (calcul par bloc LOCAL),
-/// suivi d'un parallel_copy vers la cible (schema d'AMReX). parallel_copy : redistribution generale
-/// entre deux MultiFab sur le MEME domaine a decompositions eventuellement differentes (le ParallelCopy
-/// d'AMReX) ; mono-rang = copies directes, multi-rang = jobs enumeres deterministiquement (tag 1).
+/// average_down (fine -> coarse): CONSERVATIVE average over r x r blocks (one coarse cell
+/// = average of the r^2 fine cells). interpolate (coarse -> fine): piecewise-CONSTANT
+/// injection (each fine cell receives the value of its coarse cell). Both go through a
+/// temporary "fine coarsen" MultiFab sharing the fine DistributionMapping (LOCAL per-block
+/// computation), followed by a parallel_copy to the target (the AMReX scheme). parallel_copy:
+/// general redistribution between two MultiFab over the SAME domain with possibly different
+/// decompositions (the AMReX ParallelCopy); single-rank = direct copies, multi-rank = jobs
+/// enumerated deterministically (tag 1).
 
 #pragma once
 #include <cassert>
@@ -25,27 +26,14 @@
 #include <utility>
 #include <vector>
 
-// Operateurs de transfert entre niveaux AMR (ratio entier r).
-//
-//   average_down : fin -> grossier, moyenne conservative sur les blocs r x r
-//                  (une cellule grossiere = moyenne des r^2 cellules fines).
-//   interpolate  : grossier -> fin, injection constante par morceaux (chaque
-//                  cellule fine recoit la valeur de sa cellule grossiere).
-//
-// Les deux passent par un MultiFab temporaire "fin coarsen" partageant la
-// DistributionMapping du fin : le calcul par bloc est alors local (pas de
-// croisement de fabs), suivi d'un parallel_copy vers la cible. C'est le schema
-// d'AMReX (average_down via une copie parallele), et parallel_copy resservira
-// pour le regrid.
-
 namespace adc {
 
-/// Indice de la cellule grossiere contenant la cellule fine a (division PLANCHER par r, gere a < 0).
-/// ADC_HD : appele dans les kernels d'interpolation / injection coarse->fine. Mince adaptateur vers
-/// floor_div (box2d.hpp) : meme division plancher, resultat bit-identique.
+/// Index of the coarse cell containing the fine cell a (FLOOR division by r, handles a < 0).
+/// ADC_HD: called inside the interpolation / coarse->fine injection kernels. Thin adapter over
+/// floor_div (box2d.hpp): same floor division, bit-identical result.
 ADC_HD inline int coarsen_index(int a, int r) { return floor_div(a, r); }
 
-/// Grossit chaque box du BoxArray d'un ratio r (coarsen box a box, ordre preserve).
+/// Coarsens each box of the BoxArray by a ratio r (coarsen box by box, order preserved).
 inline BoxArray coarsen(const BoxArray& ba, int r) {
   std::vector<Box2D> b;
   b.reserve(ba.size());
@@ -53,31 +41,22 @@ inline BoxArray coarsen(const BoxArray& ba, int r) {
   return BoxArray{std::move(b)};
 }
 
-// Copie des regions valides qui se recouvrent : src -> dst (memes indices, pas
-// de decalage). Redistribution generale entre deux MultiFab sur le meme domaine
-// mais a decompositions (BoxArray + DistributionMapping) eventuellement
-// differentes (ex. tuiles 2D <-> bandes FFT). C'est le ParallelCopy d'AMReX.
-//
-// Mono-rang : copies memoire directes. Multi-rang : metadonnees repliquees ->
-// chaque rang enumere la meme liste de jobs (gd, gs, region) dans le meme ordre
-// (hash spatial sur la src, candidats tries), classe par appartenance, et agrege
-// un message par voisin (MPI_Isend/Irecv, tag 1). Tampons alignes sans handshake.
-/// Copie les regions valides qui SE RECOUVRENT de src vers dst (memes indices, sans decalage).
-/// Redistribution generale entre deux MultiFab sur le meme domaine a decompositions differentes.
-/// Copie min(ncomp) composantes. Une cellule de dst non couverte par src est laissee intacte.
+/// Copies the valid regions that OVERLAP from src to dst (same indices, no shift).
+/// General redistribution between two MultiFab over the same domain with different decompositions.
+/// Copies min(ncomp) components. A dst cell not covered by src is left intact.
 inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
   const int nc = std::min(dst.ncomp(), src.ncomp());
   const BoxArray& sba = src.box_array();
   const BoxArray& dba = dst.box_array();
   const BoxHash shash(sba, suggest_bin(sba));
 
-  // --- copies locales (dst locale ET src locale) ---
+  // --- local copies (dst local AND src local) ---
   for (int ld = 0; ld < dst.local_size(); ++ld) {
     Fab2D& D = dst.fab(ld);
     const Box2D vd = D.box();
     for (int gs : shash.query(vd)) {
       const int ls = src.local_index_of(gs);
-      if (ls < 0) continue;  // src non locale -> MPI ci-dessous
+      if (ls < 0) continue;  // src not local -> MPI below
       const Box2D region = vd.intersect(sba[gs]);
       if (region.empty()) continue;
       detail::copy_shifted(D, src.fab(ls), region, 0, 0, nc);
@@ -100,14 +79,14 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
     const Box2D vd = dba[gd];
     for (int gs : shash.query(vd)) {
       const int os = sdm[gs];
-      if (od != me && os != me) continue;  // ne nous concerne pas
-      if (od == me && os == me) continue;  // local, deja fait
+      if (od != me && os != me) continue;  // does not concern us
+      if (od == me && os == me) continue;  // local, already done
       const Box2D region = vd.intersect(sba[gs]);
       if (region.empty()) continue;
       if (os == me)
-        send[od].push_back({gs, gd, region});  // je possede la src
+        send[od].push_back({gs, gd, region});  // I own the src
       else
-        recv[os].push_back({gs, gd, region});  // je possede la dst
+        recv[os].push_back({gs, gd, region});  // I own the dst
     }
   }
 
@@ -116,7 +95,7 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
     for (const auto& j : js) n += j.region.num_cells() * nc;
     return n;
   };
-  device_fence();  // GPU : les copies locales (device) precedent le pack HOTE
+  device_fence();  // GPU: the local (device) copies precede the HOST pack
   std::vector<std::vector<Real>> sbuf(np), rbuf(np);
   std::vector<MPI_Request> reqs;
   for (int r = 0; r < np; ++r) {
@@ -144,7 +123,7 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
   if (!reqs.empty())
     MPI_Waitall(static_cast<int>(reqs.size()), reqs.data(), MPI_STATUSES_IGNORE);
 
-  device_fence();  // GPU : barriere avant l'ecriture HOTE des cellules recues
+  device_fence();  // GPU: barrier before the HOST write of the received cells
   for (int r = 0; r < np; ++r) {
     std::int64_t k = 0;
     for (const auto& j : recv[r]) {
@@ -160,12 +139,12 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
 
 namespace detail {
 
-// FONCTEURS NOMMES (et non lambdas ADC_HD) pour les kernels de transfert AMR. Memes raisons que le
-// reste du chemin maillage/elliptique (cf. fill_boundary.hpp) : refinement est premiere-instancie depuis
-// le V-cycle MG tire d'une TU externe ; une lambda etendue y fait buter l'emission du kernel device sous
-// nvcc. Corps strictement identique aux anciennes lambdas -> bit-identique CPU et device.
+// NAMED FUNCTORS (rather than ADC_HD lambdas) for the AMR transfer kernels. Same reasons as the
+// rest of the mesh/elliptic path (cf. fill_boundary.hpp): refinement is first instantiated from
+// the MG V-cycle pulled in by an external TU; an extended lambda there trips up device kernel
+// emission under nvcc. Body strictly identical to the old lambdas -> bit-identical CPU and device.
 
-/// Moyenne CONSERVATIVE d'un bloc r x r : C(I, J, c) = (somme des r^2 cellules fines) * inv.
+/// CONSERVATIVE average of an r x r block: C(I, J, c) = (sum of the r^2 fine cells) * inv.
 struct AverageDownKernel {
   ConstArray4 F;
   Array4 C;
@@ -181,17 +160,17 @@ struct AverageDownKernel {
 
 }  // namespace detail
 
-/// Moyenne CONSERVATIVE fin -> grossier (ratio r) : coarse(I, J) = moyenne des r^2 cellules fines du
-/// bloc. Ecrit les cellules de coarse couvertes par fine (via parallel_copy depuis une grille
-/// fine-coarsen locale) ; copie min(ncomp). Conserve l'integrale (somme * dV) du fin sur la zone couverte.
-// Variante a TAMPON FOURNI : @p cfine est la grille "fin coarsen" (layout coarsen(fine.box_array(), r),
-// dmap = fine.dmap(), >= min(ncomp) composantes, 0 ghost) ALLOUEE par l'appelant et reutilisee a chaque
-// appel (chemin chaud du V-cycle MG : evite une allocation MultiFab par restriction). Calcul STRICTEMENT
-// identique a la variante allouante ci-dessous.
+/// CONSERVATIVE average fine -> coarse (ratio r): coarse(I, J) = average of the r^2 fine cells of
+/// the block. Writes the coarse cells covered by fine (via parallel_copy from a local fine-coarsen
+/// grid); copies min(ncomp). Preserves the integral (sum * dV) of the fine over the covered area.
+// PROVIDED-BUFFER variant: @p cfine is the "fine coarsen" grid (layout coarsen(fine.box_array(), r),
+// dmap = fine.dmap(), >= min(ncomp) components, 0 ghost) ALLOCATED by the caller and reused on each
+// call (hot path of the MG V-cycle: avoids one MultiFab allocation per restriction). Computation
+// STRICTLY identical to the allocating variant below.
 inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
   assert(cfine.box_array().size() == fine.box_array().size() && cfine.ncomp() >= nc &&
-         "average_down(scratch) : cfine doit etre coarsen(fine, r) sur la dmap du fin");
+         "average_down(scratch): cfine must be coarsen(fine, r) on the fine dmap");
   const Real inv = Real(1) / (r * r);
   for (int li = 0; li < fine.local_size(); ++li) {
     const ConstArray4 F = fine.fab(li).const_array();
@@ -209,7 +188,7 @@ inline void average_down(const MultiFab& fine, MultiFab& coarse, int r) {
 
 namespace detail {
 
-/// Injection CONSTANTE par morceaux : F(i, j, c) recoit la valeur de sa cellule grossiere couvrante.
+/// Piecewise-CONSTANT injection: F(i, j, c) receives the value of its covering coarse cell.
 struct InterpolateKernel {
   Array4 F;
   ConstArray4 C;
@@ -221,17 +200,17 @@ struct InterpolateKernel {
 
 }  // namespace detail
 
-/// Interpolation grossier -> fin (ratio r) par injection CONSTANTE par morceaux : chaque cellule fine
-/// (y compris ghosts de la box) recoit la valeur de sa cellule grossiere (coarsen_index). Copie
-/// min(ncomp). Amene d'abord les valeurs grossieres sur une grille fine-coarsen locale (parallel_copy).
-// Variante a TAMPON FOURNI : @p cfine est la grille "fin coarsen" (meme contrat de layout que
-// average_down ci-dessus) allouee par l'appelant et reutilisee (chemin chaud du V-cycle MG : evite une
-// allocation par prolongation). Calcul STRICTEMENT identique a la variante allouante.
+/// Interpolation coarse -> fine (ratio r) by piecewise-CONSTANT injection: each fine cell
+/// (including the box ghosts) receives the value of its coarse cell (coarsen_index). Copies
+/// min(ncomp). First brings the coarse values onto a local fine-coarsen grid (parallel_copy).
+// PROVIDED-BUFFER variant: @p cfine is the "fine coarsen" grid (same layout contract as
+// average_down above) allocated by the caller and reused (hot path of the MG V-cycle: avoids one
+// allocation per prolongation). Computation STRICTLY identical to the allocating variant.
 inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
   assert(cfine.box_array().size() == fine.box_array().size() && cfine.ncomp() >= nc &&
-         "interpolate(scratch) : cfine doit etre coarsen(fine, r) sur la dmap du fin");
-  parallel_copy(cfine, coarse);  // amene les valeurs grossieres sur la grille fine-coarsen
+         "interpolate(scratch): cfine must be coarsen(fine, r) on the fine dmap");
+  parallel_copy(cfine, coarse);  // bring the coarse values onto the fine-coarsen grid
   for (int li = 0; li < fine.local_size(); ++li) {
     Array4 F = fine.fab(li).array();
     const ConstArray4 C = cfine.fab(li).const_array();

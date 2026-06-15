@@ -1,14 +1,14 @@
 /// @file
-/// @brief Conditions aux limites PHYSIQUES au bord du domaine (BCType, BCRec, fill_physical_bc,
+/// @brief PHYSICAL boundary conditions at the domain edge (BCType, BCRec, fill_physical_bc,
 ///        fill_ghosts).
 ///
-/// fill_boundary remplit deja les ghosts INTERIEURS et periodiques ; ici on remplit les ghosts qui
-/// tombent HORS du domaine sur les faces non periodiques. Foextrap : extrapolation d'ordre 0
-/// (gradient nul), ghost = cellule interne miroir (outflow / mur ordre 0). Dirichlet : valeur
-/// imposee a la FACE, ghost = 2 v - interne miroir (la moyenne ghost/interne vaut v sur la face).
-/// fill_ghosts compose les deux dans le bon ordre (interieur/periodique PUIS bord physique) et
-/// remplit les coins via faces-x puis faces-y sur l'extension complete. Les kernels de bord sont des
-/// FONCTEURS NOMMES device-clean (limite nvcc).
+/// fill_boundary already fills the INTERIOR and periodic ghosts; here we fill the ghosts that
+/// fall OUTSIDE the domain on non-periodic faces. Foextrap: zero-order extrapolation
+/// (zero gradient), ghost = mirror interior cell (outflow / order-0 wall). Dirichlet: value
+/// imposed at the FACE, ghost = 2 v - mirror interior (the ghost/interior average equals v at the face).
+/// fill_ghosts composes both in the right order (interior/periodic THEN physical edge) and
+/// fills the corners via x-faces then y-faces over the full extension. The edge kernels are
+/// device-clean NAMED FUNCTORS (nvcc limitation).
 
 #pragma once
 
@@ -18,27 +18,14 @@
 #include <adc/mesh/fill_boundary.hpp>
 #include <adc/mesh/multifab.hpp>
 
-// Conditions aux limites physiques au bord du domaine. fill_boundary remplit
-// deja les ghosts interieurs et periodiques ; ici on remplit les ghosts qui
-// tombent hors du domaine sur les faces non periodiques.
-//
-//   Foextrap  : extrapolation d'ordre 0 (gradient nul), ghost = cellule interne
-//               la plus proche. Sert d'outflow et de mur a l'ordre 0.
-//   Dirichlet : valeur imposee a la face, par reflexion ghost = 2 v - interne
-//               miroir (la moyenne ghost/interne vaut v sur la face).
-//
-// fill_ghosts compose les deux dans le bon ordre (interieur/periodique puis
-// bord physique), et remplit les coins via l'ordre faces-x puis faces-y sur
-// l'extension complete.
-
 namespace adc {
 
-/// Type de condition au bord d'une face : Periodic (gere par fill_boundary), Foextrap (gradient nul,
-/// outflow/mur ordre 0), Dirichlet (valeur imposee a la face par reflexion).
+/// Boundary condition type for a face: Periodic (handled by fill_boundary), Foextrap (zero gradient,
+/// outflow/order-0 wall), Dirichlet (value imposed at the face by reflection).
 enum class BCType { Periodic, Foextrap, Dirichlet };
 
-/// Conditions aux limites des QUATRE faces du domaine (type + valeur Dirichlet associee). Defaut
-/// tout periodique (xlo_val... ignores pour les faces non Dirichlet).
+/// Boundary conditions for the FOUR faces of the domain (type + associated Dirichlet value). Default
+/// is all periodic (xlo_val... ignored for non-Dirichlet faces).
 struct BCRec {
   BCType xlo = BCType::Periodic, xhi = BCType::Periodic;
   BCType ylo = BCType::Periodic, yhi = BCType::Periodic;
@@ -46,12 +33,12 @@ struct BCRec {
 };
 
 namespace detail {
-// FONCTEURS NOMMES (et non lambdas ADC_HD) pour les conditions aux limites physiques. Memes raisons
-// que le reste du chemin elliptique/maillage (#93, recette #64) : fill_physical_bc est appele depuis
-// fill_ghosts, lui-meme tire du V-cycle MG premiere-instancie depuis une TU externe ; une lambda
-// etendue y fait buter l'emission du kernel device sous nvcc. Corps identique aux anciennes lambdas
-// (Foextrap : copie de la cellule miroir interne ; Dirichlet : 2 v - reflexion) -> bit-identique.
-// Face x bas : i = lo - k (k = lo - i), miroir Dirichlet en 2 lo - i - 1.
+// NAMED FUNCTORS (not ADC_HD lambdas) for the physical boundary conditions. Same reasons as the
+// rest of the elliptic/mesh path (#93, recipe #64): fill_physical_bc is called from fill_ghosts,
+// itself pulled from the MG V-cycle first-instantiated from an external TU; an extended lambda there
+// trips up device kernel emission under nvcc. Body identical to the old lambdas (Foextrap: copy of
+// the mirror interior cell; Dirichlet: 2 v - reflection) -> bit-identical.
+// x low face: i = lo - k (k = lo - i), Dirichlet mirror at 2 lo - i - 1.
 struct BCFaceXLoKernel {
   Array4 a;
   int nc, lo;
@@ -94,49 +81,49 @@ struct BCFaceYHiKernel {
 };
 }  // namespace detail
 
-/// Remplit les ghosts HORS domaine des faces NON periodiques de @p mf selon @p bc (Foextrap ou
-/// Dirichlet), sur toutes les composantes. No-op si pas de ghost ou tout periodique. PRECONDITION :
-/// fill_boundary a deja rempli l'interieur/periodique (les faces x lisent les ghosts y/theta deja
-/// remplis pour etendre la CL radiale dans la halo, et les faces y lisent les ghosts x pour les coins).
-/// COINS du stencil a 9 points : la CL des faces x est etendue a la plage j ETENDUE (ghosts y/theta
-/// inclus), de sorte que le coin (x-physique CROISE y-periodique/voisin) -- lu par les termes croises
-/// d'un operateur a 9 points (ex. PolarTensorKrylovSolver) -- soit correct meme en MULTI-BOX.
+/// Fills the OUT-OF-domain ghosts of the NON-periodic faces of @p mf according to @p bc (Foextrap or
+/// Dirichlet), over all components. No-op if there is no ghost or everything is periodic. PRECONDITION:
+/// fill_boundary has already filled the interior/periodic (the x-faces read the y/theta ghosts already
+/// filled to extend the radial BC into the halo, and the y-faces read the x ghosts for the corners).
+/// CORNERS of the 9-point stencil: the x-face BC is extended to the EXTENDED j range (y/theta ghosts
+/// included), so that the corner (x-physical CROSSED with y-periodic/neighbor) -- read by the cross
+/// terms of a 9-point operator (e.g. PolarTensorKrylovSolver) -- is correct even in MULTI-BOX.
 inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
                              const BCRec& bc) {
   const int ng = mf.n_grow();
   if (ng == 0) return;
-  // Tout periodique : fill_boundary a deja tout fait, rien a lire/ecrire ici (et on
-  // evite une barriere inutile sur le chemin chaud de la multigrille periodique).
+  // All periodic: fill_boundary has already done everything, nothing to read/write here (and we
+  // avoid a useless barrier on the hot path of the periodic multigrid).
   if (bc.xlo == BCType::Periodic && bc.xhi == BCType::Periodic &&
       bc.ylo == BCType::Periodic && bc.yhi == BCType::Periodic)
     return;
-  // Bords physiques sur DEVICE (for_each_cell -> kernel) : ghost = cellule miroir (Foextrap : copie
-  // de la 1ere interne ; Dirichlet : 2 v - reflexion). Indice ghost <-> couche : pour x bas, i = lo-k
-  // donc le miroir Dirichlet est 2 lo - i - 1 (k = lo - i). Plus de device_fence ni d'acces hote : ces
-  // kernels s'ordonnent apres copy_shifted (meme espace d'execution), et les faces y (i ETENDU pour
-  // les coins) s'ordonnent apres les faces x sur le meme flux.
+  // Physical edges on DEVICE (for_each_cell -> kernel): ghost = mirror cell (Foextrap: copy of the
+  // 1st interior; Dirichlet: 2 v - reflection). Ghost index <-> layer: for x low, i = lo-k so the
+  // Dirichlet mirror is 2 lo - i - 1 (k = lo - i). No more device_fence nor host access: these
+  // kernels order after copy_shifted (same execution space), and the y-faces (i EXTENDED for the
+  // corners) order after the x-faces on the same stream.
   const int nc = mf.ncomp();
   for (int li = 0; li < mf.local_size(); ++li) {
     Fab2D& F = mf.fab(li);
     const Box2D v = F.box();
     Array4 a = F.array();
 
-    // --- faces x, sur la plage j ETENDUE (j-ghosts inclus) ---
-    // On etend la plage j aux GHOSTS en y/theta (j de v.lo[1]-ng a v.hi[1]+ng) au lieu de la seule
-    // plage VALIDE. Raison (coin du stencil a 9 points, multi-box) : un terme CROISE (a_rt/a_tr de
-    // l'operateur polaire) lit les voisins DIAGONAUX p(i+-1, j+-1) -> le ghost de COIN (x-physique
-    // CROISE y-ghost) doit etre rempli. Quand y/theta est PERIODIQUE ou borde une box VOISINE,
-    // fill_boundary a deja rempli la ligne j-ghost pour les colonnes x INTERIEURES ; la reflexion
-    // x-physique (qui lit a(lo, j) / a(2 lo - i - 1, j) a la MEME j) etend donc correctement le bord
-    // radial dans la halo y. Sans cette extension, le coin (x-ghost, y-ghost) reste a 0 et le terme
-    // croise est FAUX au bord de box (divergence multi-box, cf. test_polar_schur_multibox). La plage
-    // VALIDE seule suffisait en 5-points (pas de lecture diagonale) ; ce coin n'etait jamais lu.
-    // NOTE : un coin DOUBLE-physique (x ET y non periodiques) est ensuite ECRASE par la passe y (i
-    // etendu, plus bas, qui s'execute APRES) -> comportement cartesien inchange (y l'emporte). En
-    // y-physique on lit ici a(lo, j-ghost) potentiellement non rempli, mais le resultat est ecrase :
-    // sans effet sur la valeur finale du coin. Mono-box theta periodique : seuls les coins
-    // (precedemment a 0, jamais lus en 5-points) changent -> bit-identique pour tout stencil <=
-    // 9-points dont le 5-points cartesien (la nouvelle valeur de coin n'est lue que par un 9-points).
+    // --- x-faces, over the EXTENDED j range (j-ghosts included) ---
+    // We extend the j range to the y/theta GHOSTS (j from v.lo[1]-ng to v.hi[1]+ng) instead of the
+    // VALID range alone. Reason (9-point stencil corner, multi-box): a CROSS term (a_rt/a_tr of the
+    // polar operator) reads the DIAGONAL neighbors p(i+-1, j+-1) -> the CORNER ghost (x-physical
+    // CROSSED with y-ghost) must be filled. When y/theta is PERIODIC or borders a NEIGHBOR box,
+    // fill_boundary has already filled the j-ghost row for the INTERIOR x columns; the x-physical
+    // reflection (which reads a(lo, j) / a(2 lo - i - 1, j) at the SAME j) thus correctly extends the
+    // radial edge into the y halo. Without this extension, the corner (x-ghost, y-ghost) stays at 0
+    // and the cross term is WRONG at the box edge (multi-box divergence, cf. test_polar_schur_multibox).
+    // The VALID range alone was enough in 5-point (no diagonal read); that corner was never read.
+    // NOTE: a DOUBLE-physical corner (x AND y non-periodic) is then OVERWRITTEN by the y pass (i
+    // extended, below, which runs AFTER) -> Cartesian behavior unchanged (y wins). In y-physical we
+    // read a(lo, j-ghost) here, possibly not filled, but the result is overwritten: no effect on the
+    // final corner value. Mono-box theta periodic: only the corners (previously at 0, never read in
+    // 5-point) change -> bit-identical for any stencil <= 9-point including the 5-point Cartesian
+    // (the new corner value is only read by a 9-point).
     const int jglo = v.lo[1] - ng, jghi = v.hi[1] + ng;
     if (bc.xlo != BCType::Periodic && v.lo[0] == domain.lo[0]) {
       const int lo = domain.lo[0];
@@ -153,7 +140,7 @@ inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
                     detail::BCFaceXHiKernel{a, nc, hi, foe, val});
     }
 
-    // --- faces y, sur la plage i ETENDUE (coins via les ghosts-x deja remplis) ---
+    // --- y-faces, over the EXTENDED i range (corners via the already-filled x-ghosts) ---
     const int iglo = v.lo[0] - ng, ighi = v.hi[0] + ng;
     if (bc.ylo != BCType::Periodic && v.lo[1] == domain.lo[1]) {
       const int lo = domain.lo[1];
@@ -172,9 +159,8 @@ inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
   }
 }
 
-// Remplissage complet des ghosts : interieur + periodique, puis bord physique.
-/// Remplissage COMPLET des ghosts : fill_boundary (interieur + periodique, periodicite deduite de
-/// @p bc) PUIS fill_physical_bc (bords physiques). Point d'entree usuel avant un assemblage de residu.
+/// COMPLETE ghost filling: fill_boundary (interior + periodic, periodicity deduced from
+/// @p bc) THEN fill_physical_bc (physical edges). Usual entry point before assembling a residual.
 inline void fill_ghosts(MultiFab& mf, const Box2D& domain, const BCRec& bc) {
   Periodicity per{bc.xlo == BCType::Periodic, bc.ylo == BCType::Periodic};
   fill_boundary(mf, domain, per);

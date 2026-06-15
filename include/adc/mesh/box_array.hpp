@@ -1,10 +1,10 @@
 /// @file
-/// @brief BoxArray : l'ensemble des boxes qui pavent un niveau (disjointes, couvrantes).
+/// @brief BoxArray: the set of boxes tiling a level (disjoint, covering).
 ///
-/// Equivalent du BoxArray d'AMReX. from_domain decoupe un domaine en tuiles d'au plus
-/// max_grid_size par direction, reparties le plus EGALEMENT possible (meilleur equilibrage que
-/// des chunks gloutons). Ne porte AUCUNE donnee de champ ni repartition MPI (cf. MultiFab /
-/// DistributionMapping) : c'est uniquement le decoupage geometrique du niveau.
+/// Equivalent of AMReX's BoxArray. from_domain splits a domain into tiles of at most
+/// max_grid_size per direction, distributed as EVENLY as possible (better balancing than
+/// greedy chunks). Carries NO field data and no MPI distribution (cf. MultiFab /
+/// DistributionMapping): it is only the geometric decomposition of the level.
 
 #pragma once
 
@@ -14,24 +14,19 @@
 #include <utility>
 #include <vector>
 
-// BoxArray : l'ensemble des boxes qui pavent un niveau (disjointes, couvrantes).
-// Equivalent du BoxArray d'AMReX. from_domain decoupe un domaine en
-// tuiles d'au plus max_grid_size par direction, reparties le plus egalement
-// possible (meilleur equilibrage que des chunks gloutons).
-
 namespace adc {
 
-/// Liste ordonnee des boxes qui pavent un niveau. INVARIANT attendu (non verifie) : boxes
-/// disjointes et couvrant le domaine. L'ORDRE est significatif (indice global de box = position
-/// dans le vecteur ; partage par MultiFab / DistributionMapping). Copiable (vecteur de Box2D).
+/// Ordered list of boxes tiling a level. Expected INVARIANT (not checked): boxes
+/// disjoint and covering the domain. The ORDER is significant (global box index = position
+/// in the vector; shared by MultiFab / DistributionMapping). Copyable (vector of Box2D).
 class BoxArray {
  public:
   BoxArray() = default;
-  /// Construit depuis une liste de boxes deja calculee (move). L'ordre est conserve tel quel.
+  /// Build from an already-computed list of boxes (move). The order is kept as is.
   explicit BoxArray(std::vector<Box2D> boxes) : boxes_(std::move(boxes)) {}
 
-  /// Pave le domaine en tuiles d'au plus max_grid_size par direction, reparties egalement.
-  /// L'ordre de parcours est y externe, x interne (deterministe, identique sur tous les rangs).
+  /// Tile the domain into tiles of at most max_grid_size per direction, distributed evenly.
+  /// Traversal order is y outer, x inner (deterministic, identical on all ranks).
   static BoxArray from_domain(const Box2D& domain, int max_grid_size) {
     auto sx = split_range(domain.lo[0], domain.hi[0], max_grid_size);
     auto sy = split_range(domain.lo[1], domain.hi[1], max_grid_size);
@@ -42,21 +37,21 @@ class BoxArray {
     return BoxArray{std::move(boxes)};
   }
 
-  /// Nombre de boxes du pavage.
+  /// Number of boxes in the tiling.
   int size() const { return static_cast<int>(boxes_.size()); }
-  /// Box d'indice global i (0 <= i < size()) ; l'indice est l'identite de la box dans tout le code.
+  /// Box at global index i (0 <= i < size()); the index is the box identity throughout the code.
   const Box2D& operator[](int i) const { return boxes_[i]; }
-  /// Vue sur le vecteur sous-jacent (egalite element par element = memes boites ET meme ordre).
+  /// View on the underlying vector (element-by-element equality = same boxes AND same order).
   const std::vector<Box2D>& boxes() const { return boxes_; }
 
-  /// Nombre total de cellules valides (somme des num_cells de toutes les boxes).
+  /// Total number of valid cells (sum of num_cells over all boxes).
   std::int64_t num_cells() const {
     std::int64_t n = 0;
     for (const auto& b : boxes_) n += b.num_cells();
     return n;
   }
 
-  /// Plus petite box englobant toutes les boxes (box vide si le pavage est vide).
+  /// Smallest box enclosing all boxes (empty box if the tiling is empty).
   Box2D bounding_box() const {
     if (boxes_.empty()) return Box2D{};
     Box2D b = boxes_[0];
@@ -70,8 +65,8 @@ class BoxArray {
   }
 
  private:
-  // Decoupe [lo, hi] en segments de longueur <= m, repartis egalement :
-  // n = ceil(len/m) segments, les premiers `rem` d'un cran plus longs.
+  // Split [lo, hi] into segments of length <= m, distributed evenly:
+  // n = ceil(len/m) segments, the first `rem` of them one notch longer.
   static std::vector<std::pair<int, int>> split_range(int lo, int hi, int m) {
     std::vector<std::pair<int, int>> segs;
     int len = hi - lo + 1;
