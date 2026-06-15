@@ -1,12 +1,12 @@
 /// @file
-/// @brief BoxHash : hash spatial pour la recherche rapide des boxes intersectant une requete.
+/// @brief BoxHash: spatial hash for fast lookup of boxes intersecting a query.
 ///
-/// Une grille de bins uniforme (technique classique de hachage spatial) associe a chaque bin la liste des boxes
-/// qui le touchent : trouver les boxes dont la region peut intersecter une box requete devient
-/// ~O(1) par requete (la recherche des paires de halos passe de O(N) a ~O(n), n << N). Construit
-/// UNE fois par maillage, reutilisable tant qu'il ne change pas. INVARIANT de non-omission : si une
-/// box intersecte la requete, elles partagent une cellule donc un bin -> query() renvoie un
-/// SUR-ENSEMBLE trie sans doublon, l'appelant teste l'intersection exacte.
+/// A uniform bin grid (classic spatial-hash technique) maps each bin to the list of boxes that
+/// touch it: finding the boxes whose region may intersect a query box becomes ~O(1) per query
+/// (the halo-pair search drops from O(N) to ~O(n), n << N). Built ONCE per mesh, reusable as long
+/// as it does not change. Non-omission INVARIANT: if a box intersects the query, they share a cell
+/// hence a bin -> query() returns a sorted SUPERSET without duplicates, the caller tests the exact
+/// intersection.
 
 #pragma once
 
@@ -18,26 +18,15 @@
 #include <unordered_map>
 #include <vector>
 
-// Hash spatial (technique classique de hachage spatial) : une grille de bins uniforme
-// associe a chaque bin la liste des boxes qui le touchent. Trouver les boxes
-// dont la region valide peut intersecter une box requete devient ~O(1) par
-// requete au lieu de balayer tout le BoxArray (la recherche des paires de
-// halos passe de O(N) a ~O(n), n << N). Construit une fois par maillage,
-// reutilisable tant qu'il ne change pas (amorti sur les pas de temps).
-//
-// query() renvoie un SUR-ENSEMBLE trie, sans doublon : l'appelant teste
-// l'intersection exacte. Garantie de non-omission : si une box intersecte la
-// requete, elles partagent au moins une cellule, donc un bin.
-
 namespace adc {
 
-/// Index spatial des boxes d'un BoxArray par grille de bins. Reference la BoxArray par INDICE
-/// (les indices retournes par query() sont des indices globaux dans la BoxArray d'origine) ;
-/// valide tant que cette BoxArray ne change pas.
+/// Spatial index of a BoxArray's boxes via a bin grid. References the BoxArray by INDEX
+/// (the indices returned by query() are global indices into the original BoxArray);
+/// valid as long as that BoxArray does not change.
 class BoxHash {
  public:
-  /// Construit l'index : bin = cote d'un bin (cellules) ; bin <= 0 force bin = 1. Chaque box est
-  /// inseree dans tous les bins qu'elle recouvre. Cout proportionnel a la surface totale en bins.
+  /// Builds the index: bin = side of a bin (cells); bin <= 0 forces bin = 1. Each box is
+  /// inserted into all the bins it covers. Cost proportional to the total area in bins.
   BoxHash(const BoxArray& ba, int bin) : bin_(bin > 0 ? bin : 1) {
     for (int i = 0; i < ba.size(); ++i) {
       const Box2D& b = ba[i];
@@ -47,9 +36,8 @@ class BoxHash {
     }
   }
 
-  // indices (tries, sans doublon) des boxes susceptibles d'intersecter q.
-  /// Indices (TRIES, sans doublon) des boxes susceptibles d'intersecter q : SUR-ENSEMBLE garanti
-  /// (aucune box intersectante n'est omise). L'appelant teste l'intersection exacte. Vide si q vide.
+  /// Indices (SORTED, without duplicates) of the boxes that may intersect q: guaranteed SUPERSET
+  /// (no intersecting box is omitted). The caller tests the exact intersection. Empty if q is empty.
   std::vector<int> query(const Box2D& q) const {
     std::vector<int> out;
     if (q.empty()) return out;
@@ -65,9 +53,9 @@ class BoxHash {
   }
 
  private:
-  // index de bin = division entiere par bin_ arrondie vers le bas (gere les coords negatives).
-  // Mince adaptateur vers floor_div (box2d.hpp) : bin_ > 0 (force par le constructeur) -> resultat
-  // bit-identique a l'ancien x >= 0 ? x / bin_ : -((-x + bin_ - 1) / bin_).
+  // bin index = integer division by bin_ rounded down (toward -inf) (handles negative coords).
+  // Thin adapter over floor_div (box2d.hpp): bin_ > 0 (forced by the constructor) -> result
+  // bit-identical to the old x >= 0 ? x / bin_: -((-x + bin_ - 1) / bin_).
   int fdiv(int x) const { return floor_div(x, bin_); }
   static std::int64_t key(int bx, int by) {
     return (static_cast<std::int64_t>(bx) << 32) |
@@ -78,10 +66,8 @@ class BoxHash {
   std::unordered_map<std::int64_t, std::vector<int>> bins_;
 };
 
-// Taille de bin raisonnable : la plus grande extension de box du BoxArray, de
-// sorte que les boxes voisines tombent dans des bins adjacents.
-/// Taille de bin recommandee pour un BoxArray : la plus grande extension de box (au moins 1), de
-/// sorte que les boxes voisines tombent dans des bins adjacents (compromis memoire / selectivite).
+/// Recommended bin size for a BoxArray: the largest box extent (at least 1), so that
+/// neighboring boxes fall into adjacent bins (memory / selectivity trade-off).
 inline int suggest_bin(const BoxArray& ba) {
   int m = 1;
   for (int i = 0; i < ba.size(); ++i)

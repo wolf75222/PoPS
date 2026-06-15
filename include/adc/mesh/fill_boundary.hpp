@@ -1,14 +1,14 @@
 /// @file
-/// @brief fill_boundary : echange de halos INTRA-niveau (remplit les ghosts depuis les voisins).
+/// @brief fill_boundary: INTRA-level halo exchange (fills ghosts from neighbors).
 ///
-/// Remplit les ghosts de chaque Fab depuis les regions VALIDES des boxes voisines de la meme
-/// MultiFab, avec wrapping periodique optionnel. Mono-rang : copies memoire directes. Multi-rang
-/// (ADC_HAS_MPI + n_ranks()>1) : metadonnees REPLIQUEES -> chaque rang enumere DETERMINISTIQUEMENT
-/// la meme liste de jobs, donc les tampons coincident sans negocier les tailles (MPI_Isend/Irecv,
-/// tag 0). API en deux phases (recouvrement calcul/comm classique) : fill_boundary_begin poste les
-/// echanges, fill_boundary_end attend et deballe ; fill_boundary enchaine les deux (bloquant). Les
-/// ghosts HORS domaine sans periodicite ne sont PAS touches ici (ce sont les CL physiques,
-/// physical_bc.hpp). Les kernels de pack/unpack sont des FONCTEURS NOMMES device-clean (limite nvcc).
+/// Fills the ghosts of each Fab from the VALID regions of neighboring boxes in the same
+/// MultiFab, with optional periodic wrapping. Single-rank: direct memory copies. Multi-rank
+/// (ADC_HAS_MPI + n_ranks()>1): metadata is REPLICATED -> each rank enumerates DETERMINISTICALLY
+/// the same job list, so buffers line up without negotiating sizes (MPI_Isend/Irecv,
+/// tag 0). Two-phase API (classic compute/comm overlap): fill_boundary_begin posts the
+/// exchanges, fill_boundary_end waits and unpacks; fill_boundary chains both (blocking). Ghosts
+/// OUTSIDE the domain without periodicity are NOT touched here (those are the physical BCs,
+/// physical_bc.hpp). The pack/unpack kernels are device-clean NAMED FUNCTORS (nvcc limitation).
 
 #pragma once
 
@@ -23,27 +23,10 @@
 #include <utility>
 #include <vector>
 
-// fill_boundary : echange de halos intra-niveau. Remplit les ghosts de chaque
-// Fab depuis les regions valides des boxes voisines de la meme MultiFab, avec
-// wrapping periodique optionnel.
-//
-// Mono-rang : copies memoire directes (paires dst-locale / src-locale).
-//
-// Multi-rang (ADC_HAS_MPI + n_ranks()>1) : les metadonnees etant repliquees
-// (chaque rang connait tout le BoxArray + DistributionMapping), chaque rang
-// enumere DETERMINISTIQUEMENT la meme liste de jobs (src, dst, shift, region),
-// classe chacun par appartenance, et agrege un message par rang voisin
-// (MPI_Isend/Irecv, tag 0). Comme les deux rangs d'une paire enumerent dans le
-// meme ordre, la disposition du tampon coincide sans negocier les tailles. Le
-// pack lit la cellule source decalee S(i-sx, j-sy) ; l'unpack ecrit D(i, j).
-//
-// Les ghosts qui tombent hors du domaine sans wrapping periodique ne sont pas
-// touches ici : ce sont les conditions aux limites physiques (etape suivante).
-
 namespace adc {
 
-/// Periodicite par direction : wrapping des halos en x et/ou y lors de l'echange (faux = bord ouvert,
-/// laisse aux CL physiques).
+/// Per-direction periodicity: halo wrapping in x and/or y during the exchange (false = open edge,
+/// left to the physical BCs).
 struct Periodicity {
   bool x = false;
   bool y = false;
@@ -51,10 +34,10 @@ struct Periodicity {
 
 namespace detail {
 
-// FONCTEURS NOMMES (et non lambdas ADC_HD) pour les kernels d'echange de halos. Memes raisons que le
-// reste du chemin elliptique/maillage (#93, recette #64) : fill_boundary est premiere-instancie depuis
-// le V-cycle MG tire d'une TU externe ; une lambda etendue y fait buter l'emission du kernel device
-// sous nvcc (-O Release sans -g). Corps strictement identique -> bit-identique CPU et device.
+// NAMED FUNCTORS (not ADC_HD lambdas) for the halo-exchange kernels. Same reasons as the rest of the
+// elliptic/mesh path (#93, recipe #64): fill_boundary is first instantiated from the MG V-cycle pulled
+// from an external TU; an extended lambda there stalls device kernel emission under nvcc (-O Release
+// without -g). Strictly identical body -> bit-identical CPU and device.
 struct CopyShiftedKernel {
   Array4 d;
   ConstArray4 s;
@@ -62,7 +45,7 @@ struct CopyShiftedKernel {
   ADC_HD void operator()(int i, int j) const { d(i, j, c) = s(i - sx, j - sy, c); }
 };
 
-// dst(i, j, c) = src(i - sx, j - sy, c) pour (i, j) dans region.
+// dst(i, j, c) = src(i - sx, j - sy, c) for (i, j) in region.
 inline void copy_shifted(Fab2D& dst, const Fab2D& src, const Box2D& region,
                          int sx, int sy, int ncomp) {
   Array4 d = dst.array();
@@ -71,7 +54,7 @@ inline void copy_shifted(Fab2D& dst, const Fab2D& src, const Box2D& region,
     for_each_cell(region, CopyShiftedKernel{d, s, sx, sy, c});
 }
 
-// Pack d'un job d'envoi : sb[b0 + c*rsz + off] = s(i - sx, jc - sy, c), off = (jc-lo1)*rnx + (i-lo0).
+// Pack of a send job: sb[b0 + c*rsz + off] = s(i - sx, jc - sy, c), off = (jc-lo1)*rnx + (i-lo0).
 struct PackKernel {
   Real* sb;
   ConstArray4 s;
@@ -84,7 +67,7 @@ struct PackKernel {
   }
 };
 
-// Unpack d'un job de reception : d(i, jc, c) = rb[b0 + c*rsz + off], off = (jc-lo1)*rnx + (i-lo0).
+// Unpack of a receive job: d(i, jc, c) = rb[b0 + c*rsz + off], off = (jc-lo1)*rnx + (i-lo0).
 struct UnpackKernel {
   const Real* rb;
   Array4 d;
@@ -99,40 +82,32 @@ struct UnpackKernel {
 
 }  // namespace detail
 
-// Handle d'echange de halos en deux phases (recouvrement calcul/comm classique).
-// fill_boundary_begin fait les copies locales et poste les Isend/Irecv ; entre
-// begin et end on peut avancer l'INTERIEUR (qui ne depend pas des ghosts
-// distants) pendant que les halos transitent ; fill_boundary_end attend la fin
-// des transferts et deballe le bord. Les tampons vivent dans le handle (les
-// Isend/Irecv les referencent jusqu'a end ; le move du handle preserve les
-// adresses des buffers heap).
-/// Etat opaque d'un echange de halos en cours, retourne par fill_boundary_begin et consomme par
-/// fill_boundary_end. POSSEDE les tampons d'envoi/reception et les MPI_Request : ils restent vivants
-/// (et a adresse stable apres move) jusqu'a l'appel de fill_boundary_end. Vide en mono-rang.
+/// Opaque state of an in-flight halo exchange, returned by fill_boundary_begin and consumed by
+/// fill_boundary_end. OWNS the send/receive buffers and the MPI_Request: they stay alive
+/// (and at a stable address after move) until fill_boundary_end is called. Empty in single-rank.
 struct HaloExchange {
 #ifdef ADC_HAS_MPI
   struct Job {
     int src, dst, sx, sy;
     Box2D region;
   };
-  std::vector<std::vector<Job>> recv;         // jobs de reception (deballage)
-  // Tampons en memoire HOTE EPINGLEE (comm_allocator = Kokkos::SharedHostPinnedSpace sous Kokkos,
-  // std::allocator sinon), PAS managee. Le pack/unpack en for_each (device sous Kokkos) ecrit/lit
-  // dedans directement car le pinned host est device-accessible ; MAIS le pointeur passe a MPI est
-  // vu comme de l'HOTE (cuPointerGetAttribute = HOST), donc une MPI CUDA-aware (BTL smcuda) ne tente
-  // PAS de CUDA IPC dessus. Un pointeur manage/UVM, lui, declenchait l'IPC, qui DEADLOCKE entre deux
-  // GPU isoles par cgroup (srun --gpus-per-task=1 : chaque rang ne voit que son GPU comme device 0,
-  // cuIpcOpenMemHandle du buffer du pair impossible). Cf. core/allocator.hpp (comm_allocator).
-  std::vector<std::vector<Real, comm_allocator<Real>>> sbuf, rbuf;  // vivants jusqu'a end
+  std::vector<std::vector<Job>> recv;         // receive jobs (unpacking)
+  // Buffers in PINNED HOST memory (comm_allocator = Kokkos::SharedHostPinnedSpace under Kokkos,
+  // std::allocator otherwise), NOT managed. The pack/unpack in for_each (device under Kokkos)
+  // writes/reads directly into them since pinned host is device-accessible; BUT the pointer passed to
+  // MPI is seen as HOST (cuPointerGetAttribute = HOST), so a CUDA-aware MPI (BTL smcuda) does NOT
+  // attempt CUDA IPC on it. A managed/UVM pointer, on the other hand, triggered IPC, which DEADLOCKS
+  // between two GPUs isolated by cgroup (srun --gpus-per-task=1: each rank sees only its GPU as device
+  // 0, cuIpcOpenMemHandle of the peer's buffer impossible). See core/allocator.hpp (comm_allocator).
+  std::vector<std::vector<Real, comm_allocator<Real>>> sbuf, rbuf;  // alive until end
   std::vector<MPI_Request> reqs;
   int nc = 0;
 #endif
 };
 
-// Phase 1 : copies locales + postage des echanges distants (non-bloquant).
-/// Phase 1 (non-bloquant) : fait les copies de halos LOCALES et poste les Isend/Irecv des halos
-/// distants. Retourne le handle a passer a fill_boundary_end. Entre begin et end l'appelant peut
-/// avancer l'interieur. No-op si mf n'a pas de ghost. @p domain sert au wrapping periodique @p per.
+/// Phase 1 (non-blocking): does the LOCAL halo copies and posts the Isend/Irecv of the distant halos.
+/// Returns the handle to pass to fill_boundary_end. Between begin and end the caller can advance the
+/// interior. No-op if mf has no ghost. @p domain is used for periodic wrapping @p per.
 inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
                                         Periodicity per = {}) {
   HaloExchange h;
@@ -157,10 +132,10 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
   for (int sx : sxv)
     for (int sy : syv) shifts.push_back({sx, sy});
 
-  // hash spatial : restreint la recherche des boxes voisines (cf. box_hash.hpp).
+  // spatial hash: restricts the neighbor-box search (see box_hash.hpp).
   const BoxHash hash(ba, suggest_bin(ba));
 
-  // --- copies locales (dst locale ET src locale) ---
+  // --- local copies (local dst AND local src) ---
   for (int li = 0; li < mf.local_size(); ++li) {
     Fab2D& F = mf.fab(li);
     const int gF = mf.global_index(li);
@@ -169,9 +144,9 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
     for (auto [sx, sy] : shifts) {
       const Box2D Q = gbox.shift(0, -sx).shift(1, -sy);
       for (int gB : hash.query(Q)) {
-        if (gB == gF && sx == 0 && sy == 0) continue;  // soi-meme, sans decalage
+        if (gB == gF && sx == 0 && sy == 0) continue;  // self, without shift
         const int srcLocal = mf.local_index_of(gB);
-        if (srcLocal < 0) continue;  // src non locale -> MPI ci-dessous
+        if (srcLocal < 0) continue;  // non-local src -> MPI below
         const Box2D region = gbox.intersect(ba[gB].shift(0, sx).shift(1, sy));
         if (region.empty()) continue;
         detail::copy_shifted(F, mf.fab(srcLocal), region, sx, sy, nc);
@@ -188,8 +163,8 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
   std::vector<std::vector<Job>> send(np);
   h.recv.assign(np, {});
 
-  // enumeration globale deterministe : (dst gF) x shifts x candidats hash (gB
-  // tries). Identique sur tous les rangs -> listes send/recv alignees.
+  // deterministic global enumeration: (dst gF) x shifts x hash candidates (gB
+  // sorted). Identical on all ranks -> aligned send/recv lists.
   for (int gF = 0; gF < ba.size(); ++gF) {
     const int od = dm[gF];
     const Box2D gbox = ba[gF].grow(ng);
@@ -217,10 +192,10 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
   };
   h.sbuf.assign(np, {});
   h.rbuf.assign(np, {});
-  // PACK device (for_each, parallele sous Kokkos) dans les tampons hote epingle. Disposition par job :
-  // c-majeur puis (jj, ii), IDENTIQUE a l'ancien ordre k++ -> tampon bit-identique au chemin hote
-  // (les ctests MPI CPU restent bit-identiques np=1/2/4). Le rang pair enumere dans le meme ordre,
-  // donc sbuf[A->B] et rbuf[B<-A] s'alignent sans negocier les tailles.
+  // device PACK (for_each, parallel under Kokkos) into the pinned host buffers. Per-job layout:
+  // c-major then (jj, ii), IDENTICAL to the old k++ order -> buffer bit-identical to the host path
+  // (the CPU MPI ctests stay bit-identical at np=1/2/4). The peer rank enumerates in the same order,
+  // so sbuf[A->B] and rbuf[B<-A] align without negotiating sizes.
   for (int r = 0; r < np; ++r) {
     if (send[r].empty()) continue;
     h.sbuf[r].resize(buf_size(send[r]));
@@ -237,10 +212,10 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
       base += rsz * nc;
     }
   }
-  for (int r = 0; r < np; ++r)  // allouer les tampons de reception
+  for (int r = 0; r < np; ++r)  // allocate the receive buffers
     if (!h.recv[r].empty()) h.rbuf[r].resize(buf_size(h.recv[r]));
-  device_fence();  // les kernels de pack (et les copies locales) doivent finir avant que MPI ne lise sbuf
-  for (int r = 0; r < np; ++r) {  // postage non-bloquant ; MPI recoit des pointeurs HOTE EPINGLE (vus HOST, pas de GPUDirect/CUDA IPC)
+  device_fence();  // the pack kernels (and the local copies) must finish before MPI reads sbuf
+  for (int r = 0; r < np; ++r) {  // non-blocking posting; MPI receives PINNED HOST pointers (seen HOST, no GPUDirect/CUDA IPC)
     if (!h.sbuf[r].empty()) {
       h.reqs.emplace_back();
       MPI_Isend(h.sbuf[r].data(), static_cast<int>(h.sbuf[r].size()), MPI_DOUBLE, r, 0,
@@ -256,16 +231,15 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain,
   return h;
 }
 
-// Phase 2 : attend la fin des transferts et deballe (no-op en serie).
-/// Phase 2 (bloquant) : MPI_Waitall sur les transferts postes par begin, puis deballe les tampons
-/// recus dans les ghosts. @p h DOIT venir du fill_boundary_begin correspondant sur le meme mf. No-op
-/// en serie (aucune requete).
+/// Phase 2 (blocking): MPI_Waitall on the transfers posted by begin, then unpacks the received
+/// buffers into the ghosts. @p h MUST come from the matching fill_boundary_begin on the same mf. No-op
+/// in serial (no request).
 inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 #ifdef ADC_HAS_MPI
   if (h.reqs.empty()) return;
   MPI_Waitall(static_cast<int>(h.reqs.size()), h.reqs.data(), MPI_STATUSES_IGNORE);
-  // UNPACK device (for_each) depuis les tampons HOTE EPINGLE recus. Waitall garantit le transfert
-  // termine ; le kernel lance ensuite lit le pinned host (device-accessible, coherent).
+  // device UNPACK (for_each) from the received PINNED HOST buffers. Waitall guarantees the transfer is
+  // complete; the kernel launched next reads the pinned host (device-accessible, coherent).
   for (std::size_t r = 0; r < h.recv.size(); ++r) {
     if (h.rbuf[r].empty()) continue;
     const Real* rb = h.rbuf[r].data();
@@ -281,9 +255,9 @@ inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
       base += rsz * ncl;
     }
   }
-  // Les kernels d'unpack ci-dessus sont ASYNC (device) et lisent h.rbuf ; comm_allocator (pinned
-  // host) libere IMMEDIATEMENT a la destruction de h (pas de free differe a la ManagedArena). On
-  // draine donc le device AVANT que les tampons epingles ne soient liberes -> pas de use-after-free.
+  // The unpack kernels above are ASYNC (device) and read h.rbuf; comm_allocator (pinned host) frees
+  // IMMEDIATELY on destruction of h (no deferred free like the ManagedArena). So we drain the device
+  // BEFORE the pinned buffers are freed -> no use-after-free.
   device_fence();
 #else
   (void)mf;
@@ -291,9 +265,8 @@ inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 #endif
 }
 
-// Version bloquante : begin puis end (comportement historique, inchange).
-/// Echange de halos BLOQUANT : begin puis end immediatement (pas de recouvrement). Remplit les
-/// ghosts intra-niveau + periodiques de @p mf ; @p per fixe le wrapping, @p domain le repli periodique.
+/// BLOCKING halo exchange: begin then end immediately (no overlap). Fills the intra-level +
+/// periodic ghosts of @p mf; @p per sets the wrapping, @p domain the periodic fold.
 inline void fill_boundary(MultiFab& mf, const Box2D& domain,
                           Periodicity per = {}) {
   HaloExchange h = fill_boundary_begin(mf, domain, per);

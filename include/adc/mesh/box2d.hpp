@@ -1,96 +1,84 @@
 /// @file
-/// @brief Box2D : l'espace d'indices entier d'une grille cartesienne 2D, cellule au centre.
+/// @brief Box2D: the integer index space of a 2D cell-centered Cartesian grid.
 ///
-/// Brique de base de la pile AMR, inspiree du Box d'AMReX. Coins lo / hi INCLUSIFS (convention
-/// AMReX) ; box VIDE si hi < lo par direction. Pure arithmetique entiere : aucune donnee, aucun
-/// parallelisme, entierement testable. Les indices peuvent etre NEGATIFS (couches de ghosts), d'ou
-/// la division PLANCHER de coarsen (coherente de part et d'autre de zero). length/nx/ny sont ADC_HD
-/// (appeles depuis Geometry::dx()/dy() dans un kernel device). 2D concret pour coller aux cibles
-/// physiques ; le passage Dim-template est une generalisation laissee pour plus tard.
+/// Building block of the AMR stack, inspired by AMReX's Box. Corners lo / hi INCLUSIVE (AMReX
+/// convention); box EMPTY if hi < lo along a direction. Pure integer arithmetic: no data, no
+/// parallelism, fully testable. Indices may be NEGATIVE (ghost layers), hence the FLOOR division
+/// in coarsen (consistent on both sides of zero). length/nx/ny are ADC_HD (called from
+/// Geometry::dx()/dy() inside a device kernel). Concrete 2D to match the physical targets; the
+/// move to a Dim-template is a generalization left for later.
 
 #pragma once
 
-#include <adc/core/types.hpp>  // ADC_HD : nx/ny/length appeles depuis Geometry::dx() dans un kernel device
+#include <adc/core/types.hpp>  // ADC_HD: nx/ny/length called from Geometry::dx() inside a device kernel
 
 #include <algorithm>
 #include <cstdint>
 
-// Box2D : l'espace d'indices entier d'une grille cartesienne 2D, cellule au
-// centre. C'est la brique de base de la pile AMR, inspiree du Box d'AMReX.
-// Coins lo / hi inclusifs (convention AMReX). Pure arithmetique
-// entiere : aucune donnee, aucun parallelisme, entierement testable.
-//
-// Les indices peuvent etre negatifs (couches de ghosts) ; coarsen utilise donc
-// une division plancher pour rester coherent de part et d'autre de zero.
-//
-// 2D concret pour coller aux cibles physiques (transport scalaire a derive,
-// fluide compressible auto-gravitant). Le passage Dim-template est une
-// generalisation mecanique laissee pour plus tard.
-
 namespace adc {
 
-// Division entiere arrondie vers le bas (vers -inf), coherente de part et d'autre de zero : seule
-// division correcte pour des indices NEGATIFS (couches de ghosts) lors du coarsen / hachage spatial.
-// La division C++ tronque vers zero ; on retranche 1 quand le reste est non nul et de signe oppose au
-// diviseur (le quotient tronque a alors ete arrondi vers le haut). Brique bas-niveau partagee (coarsen
-// de Box2D, hachage des bins de BoxHash, indices coarse->fine de refinement.hpp). b != 0 attendu.
-/// Division entiere de a par b arrondie vers le bas (gere a < 0 ET b < 0). ADC_HD constexpr (kernels).
+// Integer division rounded down (toward -inf), consistent on both sides of zero: the only correct
+// division for NEGATIVE indices (ghost layers) during coarsen / spatial hash. C++ division truncates
+// toward zero; we subtract 1 when the remainder is non-zero and of opposite sign to the divisor (the
+// truncated quotient was then rounded up). Shared low-level building block (Box2D coarsen, BoxHash bin
+// hashing, coarse->fine indices in refinement.hpp). b != 0 expected.
+/// Integer division of a by b rounded down (handles a < 0 AND b < 0). ADC_HD constexpr (kernels).
 ADC_HD constexpr int floor_div(int a, int b) {
   const int q = a / b, rem = a % b;
   return (rem != 0 && ((rem < 0) != (b < 0))) ? q - 1 : q;
 }
 
-/// Espace d'indices entier 2D, cellule au centre. Coins lo/hi INCLUSIFS ; box vide si hi < lo.
-/// POD pur (aucune donnee de champ) : trivialement copiable, capturable par valeur dans un kernel.
-/// INVARIANT : les indices peuvent etre negatifs (ghosts) ; refine/coarsen sont des bijections par
-/// blocs (refine puis coarsen redonne la box, mais coarsen puis refine l'arrondit au bloc).
+/// 2D integer index space, cell-centered. Corners lo/hi INCLUSIVE; box empty if hi < lo.
+/// Pure POD (no field data): trivially copyable, capturable by value inside a kernel.
+/// INVARIANT: indices may be negative (ghosts); refine/coarsen are block-wise bijections
+/// (refine then coarsen gives back the box, but coarsen then refine rounds it to the block).
 struct Box2D {
   int lo[2]{0, 0};
-  int hi[2]{-1, -1};  // vide par defaut (hi < lo)
+  int hi[2]{-1, -1};  // empty by default (hi < lo)
 
-  /// Box [0, nx-1] x [0, ny-1] couvrant nx*ny cellules a partir de l'origine d'indices.
+  /// Box [0, nx-1] x [0, ny-1] covering nx*ny cells from the index origin.
   static Box2D from_extents(int nx, int ny) {
     return Box2D{{0, 0}, {nx - 1, ny - 1}};
   }
 
-  // ADC_HD : Geometry::dx()/dy() (eux-memes ADC_HD) lisent domain.nx()/ny() ; un kernel device qui
-  // appelle geom.x_cell(i) descend jusqu'ici. Sans ADC_HD c'est un __host__ depuis __device__ -> nvcc
-  // rend du GARBAGE (souvent 0) sans erreur. Arithmetique entiere pure, device-safe, hote inchange.
-  /// Nombre de cellules dans la direction d (= hi[d] - lo[d] + 1) ; negatif si la box est vide. ADC_HD.
+  // ADC_HD: Geometry::dx()/dy() (themselves ADC_HD) read domain.nx()/ny(); a device kernel that
+  // calls geom.x_cell(i) descends down to here. Without ADC_HD this is a __host__ from __device__ ->
+  // nvcc yields GARBAGE (often 0) with no error. Pure integer arithmetic, device-safe, host unchanged.
+  /// Number of cells in direction d (= hi[d] - lo[d] + 1); negative if the box is empty. ADC_HD.
   ADC_HD int length(int d) const { return hi[d] - lo[d] + 1; }
-  /// Largeur (direction 0). ADC_HD (appele depuis Geometry::dx() en kernel device).
+  /// Width (direction 0). ADC_HD (called from Geometry::dx() in a device kernel).
   ADC_HD int nx() const { return length(0); }
-  /// Hauteur (direction 1). ADC_HD (appele depuis Geometry::dy() en kernel device).
+  /// Height (direction 1). ADC_HD (called from Geometry::dy() in a device kernel).
   ADC_HD int ny() const { return length(1); }
-  /// Nombre total de cellules (nx*ny, plancher 0 par direction) : 0 si la box est vide.
+  /// Total number of cells (nx*ny, floored at 0 per direction): 0 if the box is empty.
   std::int64_t num_cells() const {
     return static_cast<std::int64_t>(std::max(0, nx())) * std::max(0, ny());
   }
-  /// true si la box ne contient aucune cellule (hi < lo dans une direction).
+  /// true if the box contains no cell (hi < lo in one direction).
   bool empty() const { return hi[0] < lo[0] || hi[1] < lo[1]; }
 
-  /// true si la cellule (i, j) est dans la box (bornes lo/hi incluses).
+  /// true if cell (i, j) is inside the box (lo/hi bounds inclusive).
   bool contains(int i, int j) const {
     return i >= lo[0] && i <= hi[0] && j >= lo[1] && j <= hi[1];
   }
-  /// true si la box b (non vide) est entierement incluse dans *this.
+  /// true if box b (non-empty) is entirely contained in *this.
   bool contains(const Box2D& b) const {
     return !b.empty() && b.lo[0] >= lo[0] && b.hi[0] <= hi[0] &&
            b.lo[1] >= lo[1] && b.hi[1] <= hi[1];
   }
 
-  /// Dilate la box de n cellules dans TOUTES les directions (couche de ghosts uniforme).
+  /// Grows the box by n cells in ALL directions (uniform ghost layer).
   Box2D grow(int n) const {
     return {{lo[0] - n, lo[1] - n}, {hi[0] + n, hi[1] + n}};
   }
-  /// Dilate de n cellules dans la SEULE direction d (n peut etre negatif pour retrecir).
+  /// Grows by n cells in the SINGLE direction d (n may be negative to shrink).
   Box2D grow(int d, int n) const {
     Box2D b = *this;
     b.lo[d] -= n;
     b.hi[d] += n;
     return b;
   }
-  /// Translate la box de s cellules dans la direction d (lo et hi decales du meme s).
+  /// Translates the box by s cells in direction d (lo and hi shifted by the same s).
   Box2D shift(int d, int s) const {
     Box2D b = *this;
     b.lo[d] += s;
@@ -98,19 +86,17 @@ struct Box2D {
     return b;
   }
 
-  // Raffinement cellule-par-cellule : [lo, hi] -> [lo*r, hi*r + r-1].
-  /// Raffine d'un ratio r : chaque cellule devient un bloc r x r ([lo, hi] -> [lo*r, hi*r + r-1]).
+  /// Refines by a ratio r: each cell becomes an r x r block ([lo, hi] -> [lo*r, hi*r + r-1]).
   Box2D refine(int r) const {
     return {{lo[0] * r, lo[1] * r}, {hi[0] * r + r - 1, hi[1] * r + r - 1}};
   }
-  // Inverse : division plancher (gere les indices negatifs des ghosts).
-  /// Grossit d'un ratio r par division PLANCHER de chaque coin (gere les indices negatifs des ghosts).
+  /// Coarsens by a ratio r via FLOOR division of each corner (handles the negative ghost indices).
   Box2D coarsen(int r) const {
     return {{floor_div(lo[0], r), floor_div(lo[1], r)},
             {floor_div(hi[0], r), floor_div(hi[1], r)}};
   }
 
-  /// Intersection des deux boxes (eventuellement vide : hi < lo si elles ne se recouvrent pas).
+  /// Intersection of the two boxes (possibly empty: hi < lo if they do not overlap).
   Box2D intersect(const Box2D& o) const {
     return {{std::max(lo[0], o.lo[0]), std::max(lo[1], o.lo[1])},
             {std::min(hi[0], o.hi[0]), std::min(hi[1], o.hi[1])}};

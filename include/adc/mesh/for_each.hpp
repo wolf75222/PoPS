@@ -1,87 +1,69 @@
 /// @file
-/// @brief for_each_cell et reductions : le SEAM de parallelisme sur les cellules d'une Box2D ;
-///        sync_host / sync_device : le seam de COHERENCE de residence (pendant pour les acces hote).
+/// @brief for_each_cell and reductions: the parallelism SEAM over the cells of a Box2D;
+///        sync_host / sync_device: the residency COHERENCE seam (counterpart for host accesses).
 ///
-/// KOKKOS EST LE SEUL backend on-node : ce seam ne compile QUE sous ADC_HAS_KOKKOS (cf. CMake, qui
-/// rend Kokkos obligatoire ; sans lui, #error plus bas). Le fonctor est pris PAR VALEUR et recoit
-/// (i, j) ; il capture par valeur des handles Array4 (POD), jamais le Fab ni rien de virtuel :
-/// exactement la contrainte d'un kernel device. La cible on-node (sequentiel = Kokkos Serial, CPU
-/// multi-thread = Kokkos OpenMP, GPU = Kokkos Cuda/HIP) est choisie A L'INSTALLATION DE KOKKOS, pas
-/// par un drapeau adc : un seul appel for_each_cell (Kokkos::parallel_for sur MDRangePolicy<Rank<2>>)
-/// couvre les trois. Le passage CPU -> GPU ne change donc PAS les sites d'appel.
-/// CHOIX FP : la reduction SOMME (Kokkos::Sum) reassocie l'addition par tuile -> DETERMINISTE par
-/// tuile (idempotent : memes donnees, meme backend -> memes bits) mais PAS bit-identique a une somme
-/// lexicographique ; ceci vaut pour Serial, OpenMP et Cuda (un seul chemin, Kokkos). La reduction MAX
-/// est exacte partout (max associatif/commutatif en IEEE754). sync_host() = device_fence() cible
-/// avant un acces hote ; sync_device() = no-op sous memoire unifiee (scaffolding pour un futur chemin
-/// non unifie).
+/// KOKKOS IS THE ONLY on-node backend: this seam compiles ONLY under ADC_HAS_KOKKOS (cf. CMake, which
+/// makes Kokkos mandatory; without it, #error below). The functor is taken BY VALUE and receives
+/// (i, j); it captures Array4 handles by value (POD), never the Fab nor anything virtual:
+/// exactly the constraint of a device kernel. The on-node target (sequential = Kokkos Serial, CPU
+/// multi-thread = Kokkos OpenMP, GPU = Kokkos Cuda/HIP) is chosen AT KOKKOS INSTALLATION, not
+/// by an adc flag: a single for_each_cell call (Kokkos::parallel_for over MDRangePolicy<Rank<2>>)
+/// covers all three. The CPU -> GPU switch therefore does NOT change the call sites.
+/// FP CHOICE: the SUM reduction (Kokkos::Sum) reassociates the addition per tile -> DETERMINISTIC per
+/// tile (idempotent: same data, same backend -> same bits) but NOT bit-identical to a lexicographic
+/// sum; this holds for Serial, OpenMP and Cuda (a single path, Kokkos). The MAX reduction
+/// is exact everywhere (max associative/commutative in IEEE754). sync_host() = a targeted device_fence()
+/// before a host access; sync_device() = no-op under unified memory (scaffolding for a future
+/// non-unified path).
 
 #pragma once
 
-#include <adc/core/kokkos_env.hpp>  // detail::ensure_kokkos_initialized + device_fence (cycle de vie)
+#include <adc/core/kokkos_env.hpp>  // detail::ensure_kokkos_initialized + device_fence (life cycle)
 #include <adc/core/types.hpp>
 #include <adc/mesh/box2d.hpp>
 
-#include <cstdint>      // std::int64_t : comptes de cellules (portabilite LLP64, no-op LP64)
-#include <cstdlib>      // getenv / strtol : seuil de bascule serie surchargeable (#165)
-#include <type_traits>  // std::is_same_v : garde compile-time exec space hote vs device (#165)
+#include <cstdint>      // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
+#include <cstdlib>      // getenv / strtol: overridable serial fallback threshold (#165)
+#include <type_traits>  // std::is_same_v: compile-time guard host vs device exec space (#165)
 
 #ifndef ADC_HAS_KOKKOS
-// adc_cpp est KOKKOS-ONLY : il n'existe plus de backend OpenMP autonome ni de boucle hote manuelle
-// comme chemin de production. Configurer avec -DADC_USE_KOKKOS=ON (+ -DKokkos_ROOT=...) ; le serie
-// passe par une install Kokkos avec Kokkos_ENABLE_SERIAL=ON.
+// adc_cpp is KOKKOS-ONLY: there is no longer a standalone OpenMP backend nor a manual host loop
+// as a production path. Configure with -DADC_USE_KOKKOS=ON (+ -DKokkos_ROOT=...); serial
+// goes through a Kokkos install with Kokkos_ENABLE_SERIAL=ON.
 #error "adc_cpp is Kokkos-only: for_each_cell requires ADC_HAS_KOKKOS. Configure with -DADC_USE_KOKKOS=ON and a Kokkos Serial/OpenMP/Cuda install."
 #endif
 
 #include <Kokkos_Core.hpp>
 
-// for_each_cell : le seam de parallelisme sur les cellules d'une Box2D. Le
-// fonctor est pris par valeur et recoit (i, j) ; il capture par valeur des
-// handles Array4 (POD), jamais le Fab ni rien de virtuel : exactement la
-// contrainte d'un kernel device.
-//
-// Backend UNIQUE : Kokkos (ADC_HAS_KOKKOS obligatoire). Kokkos::parallel_for sur
-// MDRangePolicy<Rank<2>> s'execute sur l'espace par defaut de l'install Kokkos :
-//   - Kokkos Serial  : sequentiel mono-thread (Kokkos_ENABLE_SERIAL=ON) ;
-//   - Kokkos OpenMP  : CPU multi-thread       (Kokkos_ENABLE_OPENMP=ON) ;
-//   - Kokkos Cuda/HIP: GPU (p.ex. Cuda sur GH200, Kokkos_ENABLE_CUDA=ON).
-// Le fonctor doit etre device-callable (lambda annotee ADC_HD, capture POD par
-// valeur) et operer sur une donnee device-residente : c'est le MEME appel
-// for_each_cell quel que soit l'espace, CPU comme GPU.
-//
-// Le passage CPU -> GPU ne change donc PAS les sites d'appel : on change l'espace
-// d'execution a l'install Kokkos, les operateurs (assemble_rhs, coupleurs, demos)
-// restent inchanges.
-
 namespace adc {
 
-// detail::ensure_kokkos_initialized() et device_fence() : definis dans adc/core/kokkos_env.hpp
-// (cycle de vie Kokkos partage avec l'allocateur unifie, qui doit aussi initialiser Kokkos AVANT
-// son premier kokkos_malloc, sans quoi le build Kokkos plante a la construction d'un Fab).
+// detail::ensure_kokkos_initialized() and device_fence(): defined in adc/core/kokkos_env.hpp
+// (Kokkos life cycle shared with the unified allocator, which must also initialize Kokkos BEFORE
+// its first kokkos_malloc, otherwise the Kokkos build crashes when constructing a Fab).
 
-// SEUIL DE BASCULE SERIE pour for_each_cell (#165). Sous un espace d'execution Kokkos HOTE
-// (Serial/OpenMP), lancer un Kokkos::parallel_for(MDRangePolicy) sur une box minuscule paie un
-// fork/join (et la construction de la politique) qui ECRASE le calcul utile. Le V-cycle
-// multigrille descend jusqu'a des grilles ~2x2/4x4 ; sur ces niveaux le smoother GS, le residu,
-// la restriction/prolongation et les copies enchainent des dizaines de parallel_for sur quelques
-// cellules, et ce surcout de lancement DOMINE le temps de solve. En-dessous de ce seuil on execute
-// une boucle hote SEQUENTIELLE (interne au chemin Kokkos, ce n'est PAS un backend separe),
-// au-dessus on garde Kokkos parallel_for pour les grilles fines.
+// SERIAL FALLBACK THRESHOLD for for_each_cell (#165). Under a HOST Kokkos execution space
+// (Serial/OpenMP), launching a Kokkos::parallel_for(MDRangePolicy) on a tiny box pays a
+// fork/join (and the policy construction) that OVERWHELMS the useful work. The multigrid
+// V-cycle descends down to ~2x2/4x4 grids; on those levels the GS smoother, the residual,
+// the restriction/prolongation and the copies chain dozens of parallel_for over a few
+// cells, and this launch overhead DOMINATES the solve time. Below this threshold we run
+// a SEQUENTIAL host loop (internal to the Kokkos path, this is NOT a separate backend),
+// above it we keep Kokkos parallel_for for the fine grids.
 //
-// BIT-IDENTITE. for_each_cell n'a AUCUNE dependance inter-iteration : chaque f(i, j)
-// ecrit la seule cellule (i, j) de sa destination et lit des cellules QU'IL N'ECRIT PAS
-// dans le meme appel (le smoother GS est ROUGE-NOIR colore -- une couleur ne lit que
-// l'autre ; residu/restriction/prolongation/copies/saxpy ecrivent une destination
-// distincte de la source). Le resultat est donc INDEPENDANT DE L'ORDRE de parcours :
-// la boucle sequentielle rend exactement les memes bits que MDRangePolicy<Rank<2>>.
-// Le seuil ne touche QUE for_each_cell (pas les reductions for_each_cell_reduce_* :
-// la somme parallele Kokkos reassocie l'addition, donc y basculer en serie NE serait
-// PAS bit-identique -- on les laisse intactes ; le max est exact mais le smoother, lui,
-// passe bien par for_each_cell, ou se concentre le surcout des petites grilles).
+// BIT-IDENTITY. for_each_cell has NO inter-iteration dependency: each f(i, j)
+// writes only cell (i, j) of its destination and reads cells IT DOES NOT WRITE
+// in the same call (the GS smoother is RED-BLACK colored -- one color only reads
+// the other; residual/restriction/prolongation/copies/saxpy write a destination
+// distinct from the source). The result is therefore INDEPENDENT OF the traversal ORDER:
+// the sequential loop yields exactly the same bits as MDRangePolicy<Rank<2>>.
+// The threshold touches ONLY for_each_cell (not the reductions for_each_cell_reduce_*:
+// the Kokkos parallel sum reassociates the addition, so switching them to serial would
+// NOT be bit-identical -- we leave them intact; the max is exact but the smoother itself
+// does go through for_each_cell, where the overhead of the small grids concentrates).
 //
-// Surchargeable a l'execution par ADC_FOREACH_SERIAL_THRESHOLD (lu une fois) pour
-// rebalayer le seuil sans recompiler ; defaut 4096 (meme arbitrage fork/join vs calcul
-// que l'ancienne clause if() du chemin OpenMP retire).
+// Overridable at run time via ADC_FOREACH_SERIAL_THRESHOLD (read once) to
+// resweep the threshold without recompiling; default 4096 (same fork/join vs computation
+// trade-off as the old if() clause of the removed OpenMP path).
 namespace detail {
 inline std::int64_t foreach_serial_threshold() {
   static const std::int64_t thr = []() -> std::int64_t {
@@ -97,80 +79,74 @@ inline std::int64_t foreach_serial_threshold() {
 }  // namespace detail
 
 // ---------------------------------------------------------------------------
-// Residence des donnees : sync_host() / sync_device(). Le seam de COHERENCE, le
-// pendant de for_each_cell pour les acces hote.
+// Data residency: sync_host() / sync_device(). The COHERENCE seam, the
+// counterpart of for_each_cell for host accesses.
 //
-// Aujourd'hui le stockage Fab vit en memoire UNIFIEE (Kokkos::SharedSpace, cf.
-// allocator.hpp) : un meme buffer sert au code hote (operator(), boucles) ET
-// aux kernels device. La coherence ne demande donc PAS de copie, seulement de
-// l'ORDONNANCEMENT : un acces hote ne doit pas lire/ecrire un buffer pendant
-// qu'un kernel async le touche encore. Jusqu'ici cet ordonnancement etait pose a
-// la main par des device_fence() epars, sans jamais dire QUELLE residence on
-// veut rendre valide.
+// Today the Fab storage lives in UNIFIED memory (Kokkos::SharedSpace, cf.
+// allocator.hpp): the same buffer serves the host code (operator(), loops) AND
+// the device kernels. Coherence therefore does NOT require a copy, only
+// ORDERING: a host access must not read/write a buffer while
+// an async kernel still touches it. Until now this ordering was laid down by
+// hand by scattered device_fence() calls, without ever saying WHICH residency one
+// wants to make valid.
 //
-// sync_host()/sync_device() ENCODENT cette intention :
-//   - sync_host()   : "je vais lire/ecrire ces donnees DEPUIS L'HOTE ;
-//                      rends-les valides cote hote". Sous SharedSpace = un
-//                      device_fence() cible (attendre les kernels en vol), donc
-//                      les acces hote sont alors sans course (data race).
-//   - sync_device() : "je vais lire/ecrire ces donnees DEPUIS LE DEVICE
-//                      (un kernel) ; rends-les valides cote device". Sous
-//                      SharedSpace les ecritures hote precedentes sont visibles
-//                      du device sans barriere (pas de pipeline hote async a
-//                      drainer), donc c'est un VRAI no-op aujourd'hui ; la
-//                      fonction existe pour MARQUER l'intention au site d'appel.
+// sync_host()/sync_device() ENCODE that intent:
+//   - sync_host(): "I am going to read/write this data FROM THE HOST;
+//                      make it valid host-side". Under SharedSpace = a
+//                      targeted device_fence() (wait for in-flight kernels), so
+//                      host accesses are then race-free (data race).
+//   - sync_device(): "I am going to read/write this data FROM THE DEVICE
+//                      (a kernel); make it valid device-side". Under
+//                      SharedSpace the preceding host writes are visible
+//                      from the device without a barrier (no async host pipeline to
+//                      drain), so it is a REAL no-op today; the
+//                      function exists to MARK the intent at the call site.
 //
-// SEMANTIQUE SOUS SHAREDSPACE (etat actuel) : ces appels sont au plus un fence,
-// jamais une copie. Le comportement reste donc BIT-IDENTIQUE a l'ancien code
-// (sync_host == l'ancien device_fence() pose avant un acces hote ; sync_device
-// == rien). C'est volontairement du SCAFFOLDING : sous memoire unifiee il n'y a
-// rien d'autre a faire.
+// SEMANTICS UNDER SHAREDSPACE (current state): these calls are at most a fence,
+// never a copy. The behavior therefore stays BIT-IDENTICAL to the old code
+// (sync_host == the old device_fence() laid before a host access; sync_device
+// == nothing). This is deliberately SCAFFOLDING: under unified memory there is
+// nothing else to do.
 //
-// CHEMIN FUTUR NON UNIFIE (buffers hote/device separes + deep_copy) : c'est ICI
-// que se brancherait la migration. sync_host() ferait un Kokkos::deep_copy
-// device->hote (et un fence) si le device est la derniere residence ecrite ;
-// sync_device() un deep_copy hote->device dans l'autre sens. Le suivi "qui
-// possede la donnee a jour" (dirty flag par residence) vivrait sur le MultiFab,
-// pas ici : ce seam reste sans etat, les surcharges MultiFab portent l'etat.
-// Comme tous les sites d'acces hote passent deja par sync_host(), basculer vers
-// ce chemin ne touchera PAS les operateurs, exactement comme for_each_cell
-// isole le passage CPU -> GPU des sites d'appel.
+// FUTURE NON-UNIFIED PATH (separate host/device buffers + deep_copy): this is WHERE
+// the migration would plug in. sync_host() would do a Kokkos::deep_copy
+// device->host (and a fence) if the device is the last residency written;
+// sync_device() a deep_copy host->device in the other direction. Tracking "who
+// owns the up-to-date data" (per-residency dirty flag) would live on the MultiFab,
+// not here: this seam stays stateless, the MultiFab overloads carry the state.
+// Since all the host-access sites already go through sync_host(), switching to
+// that path will NOT touch the operators, exactly as for_each_cell
+// isolates the CPU -> GPU switch from the call sites.
 
-// Rend la residence HOTE valide avant un acces hote. Sous memoire unifiee : un
-// device_fence() cible (attend les kernels en vol).
-/// Rend la residence HOTE valide avant un acces hote (lecture/ecriture depuis l'hote). Sous memoire
-/// unifiee = un device_fence() cible (attend les kernels en vol).
+/// Makes the HOST residency valid before a host access (read/write from the host). Under unified memory
+/// = a targeted device_fence() (waits for in-flight kernels).
 inline void sync_host() { device_fence(); }
 
-// Marque une residence DEVICE (kernel a venir). Sous memoire unifiee : no-op
-// (les ecritures hote sont deja visibles du device, rien a drainer). Existe pour
-// documenter l'intention au site d'appel et accueillir un futur deep_copy
-// hote->device sur un chemin non unifie.
-/// Marque une residence DEVICE (kernel a venir). Sous memoire unifiee : NO-OP (les ecritures hote
-/// sont deja visibles du device) ; existe pour documenter l'intention et accueillir un futur
-/// deep_copy hote->device sur un chemin non unifie.
+/// Marks a DEVICE residency (upcoming kernel). Under unified memory: NO-OP (host writes
+/// are already visible from the device); exists to document the intent and to accommodate a future
+/// deep_copy host->device on a non-unified path.
 inline void sync_device() {}
 
-/// Applique @p f a CHAQUE cellule (i, j) de la box @p b (bornes incluses), via Kokkos::parallel_for
-/// (Serial / OpenMP / Cuda selon l'install Kokkos). @p f est pris par valeur et DOIT etre
-/// device-callable (annote ADC_HD, capture des POD par valeur). Aucune garantie d'ordre.
+/// Applies @p f to EACH cell (i, j) of box @p b (bounds inclusive), via Kokkos::parallel_for
+/// (Serial / OpenMP / Cuda depending on the Kokkos install). @p f is taken by value and MUST be
+/// device-callable (annotated ADC_HD, captures POD by value). No order guarantee.
 template <class F>
 void for_each_cell(const Box2D& b, F f) {
-  // PETITES BOITES (#165) : sous un espace d'execution Kokkos HOTE (Serial/OpenMP), le
-  // fork/join d'un parallel_for sur une grille minuscule (niveaux grossiers du V-cycle,
-  // ~2x2..32x32) ecrase le calcul. On execute alors une boucle hote sequentielle (interne
-  // au chemin Kokkos). BIT-IDENTIQUE : aucune dependance inter-iteration (cf. note du seuil),
-  // donc l'ordre n'affecte aucun bit.
+  // SMALL BOXES (#165): under a HOST Kokkos execution space (Serial/OpenMP), the
+  // fork/join of a parallel_for on a tiny grid (coarse V-cycle levels,
+  // ~2x2..32x32) overwhelms the computation. We then run a sequential host loop (internal
+  // to the Kokkos path). BIT-IDENTICAL: no inter-iteration dependency (cf. the threshold note),
+  // so the order affects no bit.
   //
-  // GARDE DEVICE (if constexpr) : la bascule serie n'est prise QUE si l'espace d'execution
-  // par defaut de Kokkos EST l'espace hote (Serial/OpenMP). Sous un espace DEVICE (Cuda
-  // sur GH200), DefaultExecutionSpace != DefaultHostExecutionSpace : la boucle hote
-  // tournerait sur le CPU pendant que les kernels device precedents sont en vol (pas de
-  // fence pose ici) -- course de donnees. On garde donc parallel_for sur device QUELLE QUE
-  // SOIT la taille -> chemin GPU STRICTEMENT inchange (le if constexpr s'evapore a la
-  // compilation, zero surcout). Sous SharedSpace + execution hote, la boucle est sans
-  // course : les seams de coherence existants (gs_rb_sweep pose ses device_fence autour des
-  // sweeps, sync_host avant les acces hote) restent en place et inchanges.
+  // DEVICE GUARD (if constexpr): the serial fallback is taken ONLY if the default execution space
+  // of Kokkos IS the host space (Serial/OpenMP). Under a DEVICE space (Cuda
+  // on GH200), DefaultExecutionSpace != DefaultHostExecutionSpace: the host loop
+  // would run on the CPU while the preceding device kernels are in flight (no
+  // fence laid here) -- data race. We therefore keep parallel_for on device WHATEVER
+  // THE size -> GPU path STRICTLY unchanged (the if constexpr evaporates at
+  // compile time, zero overhead). Under SharedSpace + host execution, the loop is
+  // race-free: the existing coherence seams (gs_rb_sweep lays its device_fence around the
+  // sweeps, sync_host before the host accesses) stay in place and unchanged.
   if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace,
                                Kokkos::DefaultHostExecutionSpace>) {
     const std::int64_t n_cells = static_cast<std::int64_t>(b.hi[0] - b.lo[0] + 1) *
@@ -182,9 +158,9 @@ void for_each_cell(const Box2D& b, F f) {
     }
   }
   detail::ensure_kokkos_initialized();
-  // IndexType<int> : indices SIGNES. Les boites de ghosts ont des bornes basses
-  // negatives (p.ex. lo = -ng pour copy_shifted) ; sans type signe explicite,
-  // MDRangePolicy rejette la borne -1 (conversion implicite jugee non sure).
+  // IndexType<int>: SIGNED indices. Ghost boxes have negative low
+  // bounds (e.g. lo = -ng for copy_shifted); without an explicit signed type,
+  // MDRangePolicy rejects the bound -1 (implicit conversion deemed unsafe).
   Kokkos::parallel_for(
       "adc_for_each_cell",
       Kokkos::MDRangePolicy<Kokkos::Rank<2>, Kokkos::IndexType<int>>(
@@ -192,30 +168,30 @@ void for_each_cell(const Box2D& b, F f) {
       f);
 }
 
-// Reductions device : le pendant reducteur de for_each_cell. Memes contraintes
-// sur le fonctor (POD device-callable, pris par valeur, capture un ConstArray4,
-// jamais le Fab) ; il recoit (i, j) et rend la valeur a accumuler. Le seam porte
-// l'ordonnancement device : sous Kokkos le scalaire est pret au retour sans
-// device_fence() prealable (parallel_reduce est bloquant cote hote et s'ordonne
-// apres les parallel_for deja soumis dans le meme espace).
+// Device reductions: the reducing counterpart of for_each_cell. Same constraints
+// on the functor (device-callable POD, taken by value, captures a ConstArray4,
+// never the Fab); it receives (i, j) and returns the value to accumulate. The seam carries
+// the device ordering: under Kokkos the scalar is ready on return without a
+// prior device_fence() (parallel_reduce is blocking host-side and orders itself
+// after the parallel_for already submitted in the same space).
 //
-// CHOIX FP IMPORTANT. Une vraie reduction parallele reassocie l'addition
-// flottante (non associative en IEEE754) : le resultat de la somme depend de
-// l'ordre de parcours.
-//   - SOMME : Kokkos::Sum, reduction par tuile DETERMINISTE (pas d'atomics
-//     flottants). Deux appels sur des donnees identiques rendent exactement le
-//     meme bit -> l'idempotence (sum_unchanged) tient. Mais l'ordre par tuile
-//     DIFFERE d'une somme lexicographique : la valeur n'est PAS bit-identique a
-//     une boucle (i, j) ecrite a la main. Comme Kokkos est le seul backend, ceci
-//     vaut pour TOUS les espaces (Serial, OpenMP, Cuda).
-//   - MAX : Kokkos::Max, exact partout (le max est associatif/commutatif et sans
-//     arrondi en IEEE754) -> bit-identique entre espaces Kokkos.
-// Bilan : la SOMME est deterministe-par-tuile (idempotente) mais reassociee ; le
-// MAX (norm_inf) est exact.
+// IMPORTANT FP CHOICE. A true parallel reduction reassociates floating-point
+// addition (non-associative in IEEE754): the result of the sum depends on
+// the traversal order.
+//   - SUM: Kokkos::Sum, DETERMINISTIC per-tile reduction (no floating-point
+//     atomics). Two calls on identical data return exactly the
+//     same bit -> idempotence (sum_unchanged) holds. But the per-tile order
+//     DIFFERS from a lexicographic sum: the value is NOT bit-identical to
+//     a hand-written (i, j) loop. Since Kokkos is the only backend, this
+//     holds for ALL spaces (Serial, OpenMP, Cuda).
+//   - MAX: Kokkos::Max, exact everywhere (max is associative/commutative and
+//     rounding-free in IEEE754) -> bit-identical across Kokkos spaces.
+// Summary: the SUM is deterministic-per-tile (idempotent) but reassociated; the
+// MAX (norm_inf) is exact.
 
-/// Reduction SOMME de @p f(i, j) sur la box @p b. @p f device-callable (ADC_HD) renvoyant la valeur
-/// a accumuler. ATTENTION FP : Kokkos::Sum reassocie la somme par tuile (deterministe/idempotent mais
-/// non bit-identique a une somme lexicographique), pour tous les espaces Kokkos. Bloquant cote hote.
+/// SUM reduction of @p f(i, j) over box @p b. @p f device-callable (ADC_HD) returning the value
+/// to accumulate. FP WARNING: Kokkos::Sum reassociates the sum per tile (deterministic/idempotent but
+/// not bit-identical to a lexicographic sum), for all Kokkos spaces. Blocking host-side.
 template <class F>
 Real for_each_cell_reduce_sum(const Box2D& b, F f) {
   detail::ensure_kokkos_initialized();
@@ -226,11 +202,11 @@ Real for_each_cell_reduce_sum(const Box2D& b, F f) {
           {b.lo[0], b.lo[1]}, {b.hi[0] + 1, b.hi[1] + 1}),
       KOKKOS_LAMBDA(int i, int j, Real& acc) { acc += f(i, j); },
       Kokkos::Sum<Real>{result});
-  return result;  // bloquant cote hote : valide au retour, sans device_fence()
+  return result;  // blocking host-side: valid on return, without device_fence()
 }
 
-/// Reduction MAX de @p f(i, j) sur la box @p b. @p f device-callable (ADC_HD). EXACT partout (le max
-/// est associatif/commutatif en IEEE754, sans arrondi) -> bit-identique entre espaces Kokkos. Bloquant.
+/// MAX reduction of @p f(i, j) over box @p b. @p f device-callable (ADC_HD). EXACT everywhere (max
+/// is associative/commutative in IEEE754, rounding-free) -> bit-identical across Kokkos spaces. Blocking.
 template <class F>
 Real for_each_cell_reduce_max(const Box2D& b, F f) {
   detail::ensure_kokkos_initialized();
@@ -244,19 +220,19 @@ Real for_each_cell_reduce_max(const Box2D& b, F f) {
         if (v > acc) acc = v;
       },
       Kokkos::Max<Real>{result});
-  return result;  // max exact (associatif/commutatif IEEE754), pas de fence
+  return result;  // exact max (associative/commutative IEEE754), no fence
 }
 
-// Variante MAX a FONCTEUR REDUCTEUR : @p f est passe DIRECTEMENT a Kokkos::parallel_reduce et
-// recoit (i, j, Real& acc) pour mettre acc a jour (acc = max(acc, valeur)). A la difference de
-// for_each_cell_reduce_max, AUCUNE lambda etendue n'enveloppe @p f : c'est le chemin device-clean
-// pour un noyau Model-template instancie depuis une UNITE DE TRADUCTION EXTERNE (add_compiled_model),
-// ou nvcc n'emet pas fiablement une lambda etendue (cf. les foncteurs nommes de spatial_operator.hpp).
-// Determinisme et bit-exactitude IDENTIQUES a for_each_cell_reduce_max (meme Kokkos::Max) : seul le
-// porteur du calcul change (foncteur nomme au lieu d'un wrapper lambda).
-/// Reduction MAX a FONCTEUR REDUCTEUR : @p f recoit (i, j, Real& acc) et met acc a jour, passe
-/// DIRECTEMENT a Kokkos::parallel_reduce sans lambda d'enveloppe (chemin device-clean pour un noyau
-/// instancie cross-TU). Bit-exactitude identique a for_each_cell_reduce_max.
+// MAX variant with a REDUCING FUNCTOR: @p f is passed DIRECTLY to Kokkos::parallel_reduce and
+// receives (i, j, Real& acc) to update acc (acc = max(acc, value)). Unlike
+// for_each_cell_reduce_max, NO extended lambda wraps @p f: this is the device-clean path
+// for a Model-template kernel instantiated from an EXTERNAL TRANSLATION UNIT (add_compiled_model),
+// where nvcc does not reliably emit an extended lambda (cf. the named functors of spatial_operator.hpp).
+// Determinism and bit-exactness IDENTICAL to for_each_cell_reduce_max (same Kokkos::Max): only the
+// carrier of the computation changes (named functor instead of a lambda wrapper).
+/// MAX reduction with a REDUCING FUNCTOR: @p f receives (i, j, Real& acc) and updates acc, passed
+/// DIRECTLY to Kokkos::parallel_reduce without a wrapper lambda (device-clean path for a kernel
+/// instantiated cross-TU). Bit-exactness identical to for_each_cell_reduce_max.
 template <class F>
 Real reduce_max_cell(const Box2D& b, F f) {
   detail::ensure_kokkos_initialized();
@@ -269,8 +245,8 @@ Real reduce_max_cell(const Box2D& b, F f) {
   return result;
 }
 
-// Variante MIN : pendant exact de reduce_max_cell pour Kokkos::Min (diagnostic dt_hotspot,
-// ADC-182 : reduction du plus petit indice encode parmi les cellules qui egalent le max).
+// MIN variant: exact counterpart of reduce_max_cell for Kokkos::Min (dt_hotspot diagnostic,
+// ADC-182: reduction of the smallest index encoded among the cells that equal the max).
 template <class F>
 Real reduce_min_cell(const Box2D& b, F f) {
   detail::ensure_kokkos_initialized();
@@ -283,16 +259,16 @@ Real reduce_min_cell(const Box2D& b, F f) {
   return result;
 }
 
-// Variante SOMME a FONCTEUR REDUCTEUR : pendant exact de reduce_max_cell pour Kokkos::Sum. @p f
-// recoit (i, j, Real& acc) et accumule (acc += valeur), passe DIRECTEMENT a parallel_reduce SANS
-// lambda etendue d'enveloppe (a la difference de for_each_cell_reduce_sum, qui en pose une). C'est
-// le chemin device-clean exige par un noyau instancie depuis une UNITE DE TRADUCTION EXTERNE (le
-// solveur de Krylov tire du harness/loader natif) : nvcc n'emet pas fiablement une lambda etendue
-// premiere-instanciee cross-TU (cf. les foncteurs nommes de mf_arith.hpp / spatial_operator.hpp).
-// Determinisme et FP IDENTIQUES a for_each_cell_reduce_sum : meme Kokkos::Sum deterministe par tuile.
-/// Reduction SOMME a FONCTEUR REDUCTEUR : @p f recoit (i, j, Real& acc) et accumule, passe DIRECTEMENT
-/// a Kokkos::parallel_reduce sans lambda d'enveloppe (chemin device-clean cross-TU). Memes garanties
-/// FP que for_each_cell_reduce_sum (Kokkos::Sum reassocie par tuile, deterministe/idempotent).
+// SUM variant with a REDUCING FUNCTOR: exact counterpart of reduce_max_cell for Kokkos::Sum. @p f
+// receives (i, j, Real& acc) and accumulates (acc += value), passed DIRECTLY to parallel_reduce WITHOUT
+// a wrapping extended lambda (unlike for_each_cell_reduce_sum, which lays one). This is
+// the device-clean path required by a kernel instantiated from an EXTERNAL TRANSLATION UNIT (the
+// Krylov solver drawn from the native harness/loader): nvcc does not reliably emit an extended lambda
+// first-instantiated cross-TU (cf. the named functors of mf_arith.hpp / spatial_operator.hpp).
+// Determinism and FP IDENTICAL to for_each_cell_reduce_sum: same per-tile deterministic Kokkos::Sum.
+/// SUM reduction with a REDUCING FUNCTOR: @p f receives (i, j, Real& acc) and accumulates, passed DIRECTLY
+/// to Kokkos::parallel_reduce without a wrapper lambda (device-clean cross-TU path). Same FP
+/// guarantees as for_each_cell_reduce_sum (Kokkos::Sum reassociated per tile, deterministic/idempotent).
 template <class F>
 Real reduce_sum_cell(const Box2D& b, F f) {
   detail::ensure_kokkos_initialized();

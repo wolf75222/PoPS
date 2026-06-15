@@ -1,13 +1,13 @@
 /// @file
-/// @brief Arithmetique de MultiFab (saxpy, lincomb, norm_inf, dot) sur les cellules VALIDES.
+/// @brief MultiFab arithmetic (saxpy, lincomb, norm_inf, dot) over VALID cells.
 ///
-/// Briques des etages des integrateurs et des solveurs de Krylov. Suppose des layouts IDENTIQUES
-/// (meme BoxArray, meme DistributionMapping). Operations point a point -> l'ALIASING est sans danger
-/// (x ou y == z autorise). norm_inf / dot passent par le seam reducteur (vraie reduction Kokkos).
-/// dot fait un all_reduce COLLECTIF : il DOIT etre appele sur CHAQUE rang (y compris un rang sans
-/// box) sous MPI, sinon interblocage. NOTE FP : dot/sum sont reassocies par tuile (Kokkos::Sum,
-/// deterministe/idempotent mais non bit-identique a une somme lexicographique, pour tous les espaces
-/// Kokkos) ; norm_inf est exact partout. Les kernels sont des FONCTEURS NOMMES device-clean (nvcc cross-TU).
+/// Building blocks for integrator stages and Krylov solvers. Assumes IDENTICAL layouts
+/// (same BoxArray, same DistributionMapping). Pointwise operations -> ALIASING is safe
+/// (x or y == z allowed). norm_inf / dot go through the reducer seam (true Kokkos reduction).
+/// dot performs a COLLECTIVE all_reduce: it MUST be called on EVERY rank (including a rank with no
+/// box) under MPI, otherwise deadlock. FP NOTE: dot/sum are re-associated per tile (Kokkos::Sum,
+/// deterministic/idempotent but not bit-identical to a lexicographic sum, for all Kokkos
+/// spaces); norm_inf is exact everywhere. The kernels are device-clean NAMED FUNCTORS (nvcc cross-TU).
 
 #pragma once
 
@@ -16,23 +16,18 @@
 #include <adc/mesh/fab2d.hpp>
 #include <adc/mesh/for_each.hpp>
 #include <adc/mesh/multifab.hpp>
-#include <adc/parallel/comm.hpp>  // all_reduce_sum : produit scalaire COLLECTIF (Krylov sous MPI)
+#include <adc/parallel/comm.hpp>  // all_reduce_sum: COLLECTIVE dot product (Krylov under MPI)
 
 #include <algorithm>
-
-// Combinaisons lineaires de MultiFab sur les cellules valides, pour les etages
-// des integrateurs. Suppose des layouts identiques (meme BoxArray, meme
-// DistributionMapping). Operations point a point, donc l'aliasing (x ou y == z)
-// est sans danger.
 
 namespace adc {
 
 namespace detail {
-// FONCTEURS NOMMES (et non lambdas ADC_HD) pour les kernels d'arithmetique MultiFab. Meme recette que
-// le chemin block (#64) : ces operations sont premiere-instanciees depuis le V-cycle MG, lui-meme tire
-// depuis une TU externe (harness/loader natif) ; une lambda etendue a cette place fait buter nvcc sur
-// l'emission du kernel device (kernel-stub nul -> segfault Cuda a -O Release sans -g, #93). Corps
-// strictement identique aux anciennes lambdas -> bit-identique sur CPU et device.
+// NAMED FUNCTORS (not ADC_HD lambdas) for the MultiFab arithmetic kernels. Same recipe as
+// the block path (#64): these operations are first-instantiated from the MG V-cycle, itself pulled
+// from an external TU (native harness/loader); an extended lambda at this spot makes nvcc stumble on
+// device kernel emission (null kernel-stub -> Cuda segfault in -O Release without -g, #93). Body
+// strictly identical to the old lambdas -> bit-identical on CPU and device.
 struct SaxpyKernel {
   Array4 Y;
   ConstArray4 X;
@@ -51,10 +46,10 @@ struct LincombKernel {
   }
 };
 
-// Reducteur |f(i,j,comp)| -> max, passe DIRECTEMENT a reduce_max_cell (aucune lambda etendue
-// d'enveloppe, a la difference de for_each_cell_reduce_max). C'est le chemin device-clean documente
-// dans for_each.hpp. Signature reducteur (i, j, Real& acc) ; meme Kokkos::Max / meme boucle hote
-// sequentielle -> bit-identique a l'ancien norm_inf (max et fabs sans arrondi).
+// Reducer |f(i,j,comp)| -> max, passed DIRECTLY to reduce_max_cell (no wrapping extended
+// lambda, unlike for_each_cell_reduce_max). This is the device-clean path documented
+// in for_each.hpp. Reducer signature (i, j, Real& acc); same Kokkos::Max / same sequential host
+// loop -> bit-identical to the old norm_inf (max and fabs without rounding).
 struct NormInfKernel {
   ConstArray4 a;
   int comp;
@@ -65,9 +60,9 @@ struct NormInfKernel {
   }
 };
 
-// Reducteur x(i,j,comp) * y(i,j,comp) -> somme, passe DIRECTEMENT a reduce_sum_cell (aucune lambda
-// etendue d'enveloppe). Foncteur NOMME device-clean (meme recette que NormInfKernel) pour le produit
-// scalaire du solveur de Krylov, tire d'une TU externe. Signature reducteur (i, j, Real& acc).
+// Reducer x(i,j,comp) * y(i,j,comp) -> sum, passed DIRECTLY to reduce_sum_cell (no wrapping
+// extended lambda). Device-clean NAMED functor (same recipe as NormInfKernel) for the Krylov
+// solver dot product, pulled from an external TU. Reducer signature (i, j, Real& acc).
 struct DotKernel {
   ConstArray4 x, y;
   int comp;
@@ -77,8 +72,7 @@ struct DotKernel {
 };
 }  // namespace detail
 
-// y <- y + a x
-/// y <- y + a x sur TOUTES les composantes des cellules valides. Layouts identiques exiges.
+/// y <- y + a x over ALL components of the valid cells. Identical layouts required.
 inline void saxpy(MultiFab& y, Real a, const MultiFab& x) {
   const int nc = y.ncomp();
   for (int li = 0; li < y.local_size(); ++li) {
@@ -90,27 +84,26 @@ inline void saxpy(MultiFab& y, Real a, const MultiFab& x) {
   }
 }
 
-// norme infinie sur les cellules valides d'une composante. Chaque fab local est
-// reduit par for_each_cell_reduce_max sur |f(i,j,comp)| (vraie reduction Kokkos,
-// Kokkos::Max), agrege par max hote sur les fabs.
+// Infinity norm over the valid cells of one component. Each local fab is
+// reduced by for_each_cell_reduce_max over |f(i,j,comp)| (true Kokkos reduction,
+// Kokkos::Max), aggregated by host max over the fabs.
 //
-// Plus de device_fence() en tete : sous Kokkos parallel_reduce est bloquant et
-// absorbe la barriere. EXACT partout : max et fabs sont sans arrondi et le max
-// est associatif/commutatif en IEEE754, donc bit-identique a l'ancien norm_inf
-// quel que soit le backend (l'ordre de reduction ne change aucun bit).
-/// Norme infinie max |f(.,.,comp)| sur les cellules valides (LOCALE, sans all_reduce MPI). EXACTE
-/// sur tous les backends (max sans arrondi, associatif/commutatif) -> bit-identique partout.
+// No more device_fence() up front: under Kokkos parallel_reduce is blocking and
+// absorbs the barrier. EXACT everywhere: max and fabs are without rounding and max
+// is associative/commutative in IEEE754, so bit-identical to the old norm_inf
+// regardless of backend (the reduction order changes no bit).
+/// Infinity norm max |f(.,.,comp)| over the valid cells (LOCAL, without MPI all_reduce). EXACT
+/// on all backends (max without rounding, associative/commutative) -> bit-identical everywhere.
 inline Real norm_inf(const MultiFab& mf, int comp = 0) {
   Real m = 0;
   for (int li = 0; li < mf.local_size(); ++li) {
     const ConstArray4 a = mf.fab(li).const_array();
     m = std::max(m, reduce_max_cell(mf.box(li), detail::NormInfKernel{a, comp}));
   }
-  return m;  // all-reduce max MPI plus tard (iso-comportement, non ajoute ici)
+  return m;  // MPI all-reduce max later (iso-behavior, not added here)
 }
 
-// z <- a x + b y
-/// z <- a x + b y sur TOUTES les composantes des cellules valides. Layouts identiques ; aliasing sur.
+/// z <- a x + b y over ALL components of the valid cells. Identical layouts; aliasing safe.
 inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b,
                     const MultiFab& y) {
   const int nc = z.ncomp();
@@ -124,24 +117,24 @@ inline void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b,
   }
 }
 
-// Produit scalaire sum_cells x . y sur les cellules VALIDES de la composante comp, reduit sur tous
-// les rangs (all-reduce). Brique des solveurs de Krylov (BiCGStab : rho, alpha, omega, betas). Chaque
-// fab local est reduit par reduce_sum_cell (vraie reduction Kokkos, Kokkos::Sum), les fabs locaux
-// agreges par somme hote, puis all_reduce_sum agrege les rangs.
+// Dot product sum_cells x . y over the VALID cells of component comp, reduced over all
+// ranks (all-reduce). Building block of Krylov solvers (BiCGStab: rho, alpha, omega, betas). Each
+// local fab is reduced by reduce_sum_cell (true Kokkos reduction, Kokkos::Sum), the local fabs
+// aggregated by host sum, then all_reduce_sum aggregates the ranks.
 //
-// COLLECTIF, OBLIGATOIRE SOUS MPI : all_reduce_sum est appele sur CHAQUE rang, y compris un rang
-// SANS box (local_size()==0, qui contribue alors 0 a la somme locale). Sans cet appel sur tous les
-// rangs, MPI_Allreduce interbloque (collective desynchronisee) ; le solveur de Krylov ne doit donc
-// JAMAIS court-circuiter dot() sur un rang vide. En serie all_reduce_sum est l'identite.
+// COLLECTIVE, MANDATORY UNDER MPI: all_reduce_sum is called on EVERY rank, including a rank
+// WITH NO box (local_size()==0, which then contributes 0 to the local sum). Without this call on all
+// ranks, MPI_Allreduce deadlocks (desynchronized collective); the Krylov solver must therefore
+// NEVER short-circuit dot() on an empty rank. In serial all_reduce_sum is the identity.
 //
-// NOTE FP (comme sum()) : Kokkos::Sum reassocie la somme par tuile, donc dot n'est pas bit-identique
-// a une somme lexicographique (deterministe/idempotent toutefois, tous espaces Kokkos). Sous MPI, l'all-reduce
-// rend la MEME valeur a tous les rangs (MPI_SUM sur un meme jeu de contributions locales), donc le
-// critere d'arret du Krylov se declenche a la MEME iteration partout (pas de desynchronisation).
-/// Produit scalaire Sum_cells x.y sur la composante comp, reduit sur TOUS les rangs (all_reduce).
-/// COLLECTIF, OBLIGATOIRE SOUS MPI : doit etre appele sur chaque rang (y compris vide), sinon
-/// interblocage. NOTE FP : non bit-identique entre backends sous Kokkos ; l'all-reduce rend la meme
-/// valeur a tous les rangs (pas de desynchronisation du critere d'arret Krylov).
+// FP NOTE (like sum()): Kokkos::Sum re-associates the sum per tile, so dot is not bit-identical
+// to a lexicographic sum (deterministic/idempotent nonetheless, all Kokkos spaces). Under MPI, the all-reduce
+// returns the SAME value to all ranks (MPI_SUM over one same set of local contributions), so the
+// Krylov stopping criterion triggers at the SAME iteration everywhere (no desynchronization).
+/// Dot product Sum_cells x.y over component comp, reduced over ALL ranks (all_reduce).
+/// COLLECTIVE, MANDATORY UNDER MPI: must be called on every rank (including empty), otherwise
+/// deadlock. FP NOTE: not bit-identical across backends under Kokkos; the all-reduce returns the same
+/// value to all ranks (no desynchronization of the Krylov stopping criterion).
 inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
   Real s = 0;
   for (int li = 0; li < x.local_size(); ++li) {
