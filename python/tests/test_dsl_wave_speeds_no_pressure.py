@@ -177,7 +177,7 @@ sim = adc.System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim.add_equation(
     "eig", model=c_eig, spatial=adc.FiniteVolume(limiter="none", riemann="hll"),
     time=adc.Explicit()))
-chk("vitesses d'onde" in msg or "wave_speeds" in msg,
+chk("wave_speeds" in msg,
     f"hll rejete par le gate C++ avec remede ({msg[:60]}...)")
 
 print("== (6) retro-compat : modele AVEC 'p' emet toujours wave_speeds ==")

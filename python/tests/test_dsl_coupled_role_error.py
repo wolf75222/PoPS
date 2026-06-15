@@ -44,7 +44,7 @@ def test_coupled_source_rejects_unknown_role_at_field():
         "CoupledSource.block().role('bogus_role') aurait du lever ValueError (role inconnu)"
     )
     # Message confirme : "CoupledSource : role 'bogus_role' inconnu (roles : ...)"
-    assert "inconnu" in msg or "bogus_role" in msg, "message inattendu : %r" % msg
+    assert "bogus_role" in msg, "message inattendu : %r" % msg
 
 
 def test_coupled_source_rejects_unknown_role_at_add():
@@ -59,7 +59,7 @@ def test_coupled_source_rejects_unknown_role_at_add():
         raised = True
         msg = str(e)
     assert raised, ".add(role='not_a_role') aurait du lever ValueError"
-    assert "inconnu" in msg or "not_a_role" in msg, "message inattendu : %r" % msg
+    assert "not_a_role" in msg, "message inattendu : %r" % msg
 
 
 def test_coupled_source_accepts_valid_role():
@@ -130,7 +130,7 @@ def test_add_coupled_source_rejects_unknown_role_direct():
         "(role_from_name -> VariableRole::Custom)"
     )
     # Message confirme : "System::add_coupled_source : role 'bogus_canonical' inconnu (bloc 'ne')"
-    assert "inconnu" in msg or "bogus_canonical" in msg, "message inattendu : %r" % msg
+    assert "bogus_canonical" in msg, "message inattendu : %r" % msg
 
 
 def test_add_coupled_source_rejects_role_not_exposed():

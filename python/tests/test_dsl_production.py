@@ -132,7 +132,7 @@ def main():
                                     recon="conservative", time="explicit", gamma=GAMMA)
         except RuntimeError as ex:
             raised = True
-            assert "ABI incompatible" in str(ex), "message inattendu : %s" % ex
+            assert "incompatible ABI" in str(ex), "message inattendu : %s" % ex
         assert raised, "add_native_block a accepte un loader a cle d'ABI fausse (UB silencieux)"
         print("OK  cle d'ABI divergente REJETEE explicitement par add_native_block")
 

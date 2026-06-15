@@ -151,7 +151,7 @@ def main():
             sysc._s.set_block_params("gas", [1.0])  # le bloc 'gas' de sysc est const-only
         except RuntimeError as ex:
             raised = True
-            assert "pas de parametre runtime" in str(ex), "message inattendu : %s" % ex
+            assert "kind='runtime'" in str(ex), "message inattendu : %s" % ex
         assert raised, "set_block_params sur un bloc const-only doit lever (sinon set silencieux)"
         print("OK  (5) set_block_params sur un bloc const-only REJETE explicitement")
 

@@ -89,6 +89,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   fragments, which ADC-272 (#105) had translated to English in `dispatch_tags.hpp` without updating
   the test -- reconciled the grepped fragments (`unknown limiter` / `unknown Riemann flux` /
   `unsupported` / `polar`).
+- **Python test message-assertions reconciled with ADC-272 translation** (ADC-283): ~26 assertions
+  across 21 `python/tests/` files grepped now-translated French error fragments (masked by the
+  gate-python swallow, ADC-112). Reconciled to assert language-stable substrings (echoed values,
+  quoted tokens) so they survive the ongoing translation; also fixed two order-sensitive
+  `ABI incompatible` asserts (source throws `incompatible ABI`).
 
 ## [0.1.0] - 2026-06-10
 

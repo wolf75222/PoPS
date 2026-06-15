@@ -133,7 +133,7 @@ try:
     monod.step(2e-3)  # build paresseux mono-bloc -> rejet explicite de newton_diagnostics
     chk(False, "mono-bloc + newton_diagnostics aurait du lever au build")
 except RuntimeError as e:
-    chk("MULTI-BLOCS" in str(e), f"mono-bloc diagnostics rejete : {str(e)[:70]}")
+    chk("MULTI-BLOC" in str(e), f"mono-bloc diagnostics rejete : {str(e)[:70]}")
 
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
@@ -256,7 +256,7 @@ try:
         mg.compile(os.path.join(tmp, "iso3_guard.so"), INCLUDE, backend="production")
         chk(False, "source_jacobian sans source aurait du lever au codegen")
     except ValueError as e:
-        chk("sans source" in str(e), f"codegen leve : {str(e)[:70]}")
+        chk("source_jacobian" in str(e), f"codegen leve : {str(e)[:70]}")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

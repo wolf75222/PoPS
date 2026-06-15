@@ -157,7 +157,7 @@ try:
                        time=pol)
     chk(False, "IMEXRK + implicit_vars aurait du lever")
 except (RuntimeError, ValueError) as e:
-    chk("imexrk" in str(e).lower() or "pleinement implicite" in str(e).lower(),
+    chk("imexrk" in str(e).lower() or "fully implicit" in str(e).lower(),
         f"masque partiel rejete : {e}")
 
 if fails:

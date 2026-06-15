@@ -100,7 +100,7 @@ def test_polar_rejects_non_exb_transport():
         "add_block avec transport compressible sur PolarMesh aurait du lever RuntimeError"
     )
     # Sous-chaine stable du message (confirme dans block_builder_polar.hpp : dispatch_transport_polar)
-    assert "non supporte" in msg or "Phase 2b" in msg or "exb" in msg.lower(), (
+    assert "compressible" in msg or "exb" in msg.lower(), (
         "message inattendu : %r" % msg
     )
 
@@ -224,7 +224,7 @@ def test_polar_rejects_variable_epsilon_on_step():
         "step() avec set_epsilon_field sur PolarMesh aurait du lever RuntimeError "
         "(ensure_elliptic_polar rejette la permittivite variable)"
     )
-    assert "permittivite" in msg or "variable" in msg or "polaire" in msg.lower(), (
+    assert "Phase 2b" in msg, (
         "message inattendu : %r" % msg
     )
 
@@ -254,7 +254,7 @@ def test_polar_rejects_anisotropic_epsilon_on_step():
     assert raised, (
         "step() avec set_epsilon_anisotropic_field sur PolarMesh aurait du lever RuntimeError"
     )
-    assert "polaire" in msg.lower() or "anisotrope" in msg or "non supportee" in msg, (
+    assert "Phase 2b" in msg, (
         "message inattendu : %r" % msg
     )
 
@@ -281,7 +281,7 @@ def test_polar_rejects_reaction_field_on_step():
     assert raised, (
         "step() avec set_reaction_field sur PolarMesh aurait du lever RuntimeError"
     )
-    assert "polaire" in msg.lower() or "reaction" in msg or "non supportee" in msg, (
+    assert "Phase 2b" in msg, (
         "message inattendu : %r" % msg
     )
 

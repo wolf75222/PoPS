@@ -77,7 +77,7 @@ chk(np.isfinite(d_hll).all() and d_hll.min() > 0, "(2) HLL : etat fini, densite 
 chk(abs(m_hll - m0) < 1e-7 * abs(m0), "(2) HLL : masse conservee (flux conservatif)")
 chk(float(np.max(np.abs(d_hll - d_rus))) > 1e-9, "(2) HLL DIFFERE de Rusanov (branche HLL active, moins diffusif)")
 # flux Riemann inconnu reste rejete
-chk("inconnu" in err_msg(lambda: run_gas("godunov")), "(1) flux inconnu 'godunov' toujours rejete")
+chk("godunov" in err_msg(lambda: run_gas("godunov")), "(1) flux inconnu 'godunov' toujours rejete")
 
 # --- (3)/(4) capacite DSL 3-var isotherme (avec compilateur) ---------------------------------------
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
@@ -129,7 +129,7 @@ try:
 
     # (4) HLL REJETE sur le 3-var SANS 'p' (pas de wave_speeds) -> erreur claire.
     msg = err_msg(lambda: build(cm_np, "hll"))
-    chk("onde" in msg or "wave_speeds" in msg,
+    chk("wave_speeds" in msg,
         "(4) HLL rejete sur DSL 3-var sans 'p' (message 'vitesses d'onde'): %r" % msg[:70])
 finally:
     shutil.rmtree(tmp, ignore_errors=True)

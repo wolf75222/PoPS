@@ -120,7 +120,7 @@ try:
     amr.newton_report("inconnu")
     chk(False, "newton_report('inconnu') aurait du lever")
 except RuntimeError as e:
-    chk("inconnu" in str(e) or "bloc" in str(e), f"newton_report bloc inconnu rejete : {str(e)[:60]}")
+    chk("inconnu" in str(e), f"newton_report bloc inconnu rejete : {str(e)[:60]}")
 
 # ---- (c) NO-DEFAULT-CHANGE (mono-bloc) : defauts explicites == chemin sans options --------------
 print("== (c) mono-bloc : options par defaut explicites == sans options (dmax == 0, bit-identique) ==")

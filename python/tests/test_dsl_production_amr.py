@@ -230,7 +230,7 @@ def main():
                                spatial=adc.Spatial(minmod=True, flux="hllc"))
         except ValueError as ex:
             raised = True
-            assert "pression" in str(ex) or "pressure" in str(ex) or "hllc" in str(ex).lower()
+            assert "hllc" in str(ex).lower()
         assert raised, "add_equation a accepte hllc sans primitive 'p'"
         print("OK  (3) garde-fou pression hllc/roe SANS primitive 'p' : rejet explicite")
 
@@ -312,7 +312,7 @@ def main():
                                   recon="conservative", time="explicit", gamma=GAMMA)
         except RuntimeError as ex:
             raised = True
-            assert "ABI incompatible" in str(ex), "message inattendu : %s" % ex
+            assert "ABI" in str(ex), "message inattendu : %s" % ex
         assert raised, "add_native_block a accepte un loader AMR a cle d'ABI fausse (UB silencieux)"
         print("OK  (5) cle d'ABI divergente REJETEE par AmrSystem.add_native_block")
 

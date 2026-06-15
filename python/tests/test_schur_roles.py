@@ -73,7 +73,7 @@ try:
     build(schur=adc.CondensedSchur(theta=1.0, alpha=3.0, density="rho_inconnue"))
     chk(False, "descripteur inconnu aurait du lever")
 except RuntimeError as e:
-    chk("ni un role" in str(e) or "n'expose pas" in str(e), f"erreur explicite : {str(e)[:80]}")
+    chk("rho_inconnue" in str(e), f"erreur explicite : {str(e)[:80]}")
 
 # --- (3) overrides sur l'etage POLAIRE : ACCEPTES depuis la vague 3 -----------------
 print("== (3) polaire : overrides cables (ctor a composantes explicites) ==")

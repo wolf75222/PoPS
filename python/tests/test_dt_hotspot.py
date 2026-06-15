@@ -96,7 +96,7 @@ chk((int(iu), int(ju)) == (0, 0), f"uniforme -> premiere cellule (0,0) (recu ({i
 
 print("== (5) garde ==")
 msg = err_msg(lambda: sim.dt_hotspot("fantome"))
-chk("fantome" in msg or "introuvable" in msg or "unknown" in msg.lower(),
+chk("fantome" in msg,
     f"bloc inconnu rejete ({msg[:50]}...)")
 
 print("FAILS =", fails)
