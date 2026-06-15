@@ -106,7 +106,7 @@ current instance. These bricks compose via `adc.elliptic(...)` then plug in via
 | `electric_field_from_potential` | `adc.electric_field_from_potential()` | Factory : returns an `ElectricFieldFromPotential`. |
 | `EllipticModel` | `adc.EllipticModel(unknown, operator, rhs, output)` | Carries the 4 slots of the EPM (unknown + operator + right-hand side + output). |
 | `elliptic` | `adc.elliptic(unknown="phi", operator=None, rhs=None, output=None)` | Composes an EPM. Defaults : `operator=DivEpsGrad()`, `rhs=CompositeRhs()`, `output=ElectricFieldFromPotential()`. |
-| `EllipticSolver` | `adc.EllipticSolver(kind="geometric_mg")` | Solver choice : `"geometric_mg"` (any case, walls) or `"fft"` (periodic, `n = 2^k`). |
+| `EllipticSolver` | `adc.EllipticSolver(kind="geometric_mg")` | Solver choice : `"geometric_mg"` (any case, walls), `"fft"` (periodic, `n = 2^k`), or `"fft_spectral"` (periodic, continuous spectral symbol `-(kx^2+ky^2)`, reference fidelity). |
 
 The canonical Poisson is thus written :
 
@@ -212,13 +212,14 @@ not by the model. It combines reconstruction (limiter) + Riemann numerical flux 
 variables.
 
 `adc.Spatial(limiter="minmod", flux="rusanov", recon="conservative", *, none=False,
-minmod=False, vanleer=False, weno5=False, primitive=False)` :
+minmod=False, vanleer=False, weno5=False, primitive=False, positivity_floor=None)` :
 
 | Argument | Values | Detail |
 |---|---|---|
 | `limiter` | `"none"`, `"minmod"`, `"vanleer"`, `"weno5"` | MUSCL reconstruction (none / minmod / vanleer, 2 ghosts) or WENO5-Z. `weno5` = order 5 in smooth zone, 5-point stencil -> 3 ghosts ; only the native `add_block` path (and the `aot` / `production` / AMR backends) expose it ; the `prototype` backend (JIT) rejects it. Boolean shortcuts `none=` / `minmod=` / `vanleer=` / `weno5=`. |
 | `flux` | `"rusanov"`, `"hll"`, `"hllc"`, `"roe"` | Riemann numerical flux. `rusanov` = minimal generic (only `max_wave_speed` required). `hll` = generic with signed waves : requires `model.wave_speeds` (native isothermal / compressible model, or DSL model with primitive `p` declared) ; it is the recommended path for a NON Euler model with signed waves (`hll` + `minmod`). `hllc` / `roe` = **2D Euler only** (4 variables + perfect gas pressure) ; they require a compressible transport and a primitive `p` declared (on a compiled model) ; without `p`, the wiring raises a `ValueError`. |
 | `recon` | `"conservative"`, `"primitive"` | Reconstructed variables. `primitive` is more stable for Euler (positivity of `rho` and `p`). Shortcut `primitive=`. |
+| `positivity_floor` | `None` or a float | Zhang-Shu positivity floor on reconstructed face densities (default `None` = off). Clamps the reconstructed value to `>= floor`, for high-contrast initial conditions where WENO5 can reconstruct a negative density. |
 
 `adc.FiniteVolume(limiter="minmod", riemann="rusanov", variables="conservative")` is the stable
 surface factory : it remaps onto `adc.Spatial`. The numerical flux is named `riemann` there (and not
@@ -245,7 +246,7 @@ model is reused with distinct policies.
 
 | Brick | Signature | Detail |
 |---|---|---|
-| `Explicit` | `adc.Explicit(substeps=1, method="ssprk2", stride=1, *, ssprk3=False)` | Explicit integration. `method="ssprk2"` (Shu-Osher 2-stage order 2, bit-identical default) or `"ssprk3"` (3-stage order 3, less dissipative, to pair with weno5) ; shortcut `ssprk3=True`. Exposes `.kind` = `"explicit"` or `"ssprk3"`. |
+| `Explicit` | `adc.Explicit(substeps=1, method="ssprk2", stride=1, *, ssprk3=False)` | Explicit integration. `method="ssprk2"` (Shu-Osher 2-stage order 2, bit-identical default), `"ssprk3"` (3-stage order 3, less dissipative, to pair with weno5 ; shortcut `ssprk3=True`), or `"euler"` (ForwardEuler order 1, first-order-reference fidelity / validation, never the default). Exposes `.kind` = `"explicit"`, `"ssprk3"`, or `"euler"`. |
 | `IMEX` | `adc.IMEX(substeps=1, stride=1, implicit_vars=None, implicit_roles=None)` | Explicit transport (SSPRK) + implicit stiff source (backward-Euler, cell-local Newton). Not a global implicit PDE solver. `kind="imex"`. |
 | `SourceImplicit` | `adc.SourceImplicit(substeps=1, stride=1, implicit_vars=None, implicit_roles=None)` | Clear name of the source-only IMEX scheme ; `kind="imex"` (same C++ path as `IMEX`, bit-identical). The doc contrasts local (this brick) vs global (`CondensedSchur`). |
 | `Implicit` | `adc.Implicit(dt_ratio=1, substeps=None, stride=1)` | Obsolete : alias of `IMEX`. Emits a `DeprecationWarning` (the name wrongly suggests a global implicit solver) and returns an `IMEX(...)`. Use `SourceImplicit` / `IMEX`. |
@@ -362,7 +363,7 @@ rest is delegated to the compiled C++ facade via `__getattr__`. Compact referenc
 
 C++ facade methods reached by `__getattr__` (with defaults) :
 
-- `set_poisson(rhs="charge_density", solver="geometric_mg", bc="auto", wall="none", wall_radius=0.0, epsilon=1.0)` : `bc` e.g. `"dirichlet"` ; `wall` e.g. `"circle"` + `wall_radius`.
+- `set_poisson(rhs="charge_density", solver="geometric_mg", bc="auto", wall="none", wall_radius=0.0, epsilon=1.0, abs_tol=0.0)` : `bc` e.g. `"dirichlet"` ; `wall` e.g. `"circle"` + `wall_radius` ; `abs_tol` = absolute floor for the GeometricMG V-cycle stopping criterion (`0` = relative criterion only).
 - `set_density(name, rho)` : `rho` array `n x n`.
 - `set_epsilon_field(eps)`, `set_epsilon_anisotropic_field(eps_x, eps_y)`, `set_reaction_field(kappa)`, `set_magnetic_field(bz)`, `set_electron_temperature_from(name)`.
 - `set_source_stage(name, kind, theta, alpha)`, `set_time_scheme(scheme)` (`"lie"` / `"strang"`).
