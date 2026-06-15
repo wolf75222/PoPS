@@ -1,5 +1,11 @@
 # TODO - adc_cpp
 
+> **Source of truth — read first.** Active work-tracking lives in **Linear** (team ADC), not here.
+> This file is a **historical method/worklog** : it records the reasoning behind work waves and is
+> cross-referenced by `docs/PAPER_ROADMAP.md` (e.g. "section 6", Hoffart M1/M2/M3) and kept per
+> `docs/DOC_REFONTE_AUDIT.md`. Open research items live in `docs/RESEARCH_BACKLOG.md`. Treat it as a
+> backlog/journal, **not** a task tracker — to act on something, open or update a Linear issue.
+
 > Living worklist. Synthesis of (1) the initial goal of the work item (extensible `aux`
 > channel + AMR parity + runtime / Python / DSL wiring), (2) what `docs/archive/ROADMAP.md` (ARCHIVE) marks "queued",
 > (3) what the agents explicitly noted as "still to do".
