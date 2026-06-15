@@ -17,6 +17,21 @@
 // sous-systeme EN PLACE. C'est l'equivalent maison de StrangSplitting /
 // FractionalTime2OSplitting de MUFFIN.
 
+/// @file
+/// @brief Splitting d'operateur : decompose dU/dt = T(U) + S(U) en sous-pas separes.
+///        lie_step (Godunov, 1er ordre) = T(dt) puis S(dt) ; strang_step (2e ordre) =
+///        S(dt/2), T(dt), S(dt/2).
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : traiter une source raide (relaxation, collisions, ionisation) par un integrateur
+///        DIFFERENT de celui du transport, sans melanger les deux raideurs.
+/// Contrat : T et S sont des callables (MultiFab&, Real)->void qui avancent leur sous-systeme
+///           EN PLACE ; l'integrateur est agnostique du contenu.
+///
+/// Invariants :
+/// - Strang est 2e ordre des que chaque sous-integrateur l'est (erreur de commutation [T,S] en
+///   O(dt^3) par pas, O(dt^2) globale).
+
 namespace adc {
 
 template <class TransportStep, class SourceStep>

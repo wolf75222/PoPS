@@ -24,6 +24,22 @@
 //   (Lorentz complet) : Newton local. C'est l'analogue de APIMEXTwoFluidIsothermal
 //   de MUFFIN, le pont entre notre modele reduit de derive et la physique complete.
 
+/// @file
+/// @brief Integrateur IMEX (implicit-explicit) asymptotic-preserving : imex_euler_step, pas
+///        d'Euler forward-backward d'ordre 1, U^{n+1} = U^n + dt T(U^n) + dt S(U^{n+1}).
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : prendre les termes RAIDES (Lorentz, limite de Debye, quasi-neutralite) en IMPLICITE et
+///        le transport en EXPLICITE. Propriete AP : quand le petit parametre (lambda_D^2, 1/omega_c)
+///        -> 0, le schema reste stable a dt FIXE et capture la dynamique limite.
+/// Contrat : Texpl(U, dt) avance le transport EN PLACE (apres l'appel U porte le membre connu
+///           U^n + dt T(U^n)) ; Simpl(U, dt) resout EN PLACE U <- W avec W = U + dt S(W), U etant
+///           le membre connu (relaxation lineaire : analytique ; Lorentz complet : Newton local).
+///
+/// Invariants :
+/// - integrateur agnostique du modele : Texpl/Simpl sont des callables (MultiFab&, Real)->void ;
+/// - l'ordre est impose -- explicite PUIS implicite ; aucun etat porte par l'integrateur.
+
 namespace adc {
 
 template <class TransportStep, class ImplicitSourceSolve>

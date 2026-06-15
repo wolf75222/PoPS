@@ -1,5 +1,19 @@
 #pragma once
 
+/// @file
+/// @brief PatchBox : empreinte index-space d'un patch fin AMR, exposee en lecture a Python.
+///
+/// Couche : `include/adc/mesh`.
+/// Role : POD trivial (level, ilo, jlo, ihi, jhi) decrivant la position d'une box dans l'espace
+/// d'indices de son niveau ; vue de lecture sur les boites deja stockees, recoltee entre les pas
+/// par AmrSystem::patch_boxes() (aucun cout sur le chemin chaud).
+/// Contrat : coins INCLUSIFS (convention Box2D / AMReX) ; la conversion en coordonnees physiques
+/// [0, L]^2 se fait cote Python, qui connait n et L.
+///
+/// Invariants :
+/// - level 0 = grossier, level >= 1 = fin (ratio 2 par niveau, n << level cellules par direction) ;
+/// - la box couvre (ihi - ilo + 1) x (jhi - jlo + 1) cellules.
+
 namespace adc {
 
 /// Empreinte INDEX-SPACE d'un patch fin AMR, exposee a Python par AmrSystem::patch_boxes().

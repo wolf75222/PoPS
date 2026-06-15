@@ -1368,6 +1368,29 @@ class System:
         self._aux_field_index = {}
 
     def add_block(self, name, model, spatial=None, time=None, evolve=True):
+        """Installe un bloc evolue compose de BRIQUES NATIVES sur le Poisson de systeme partage.
+
+        Point d'entree primaire pour un modele compose en Python a partir de briques natives
+        (adc.Model(...)). Pour un modele DSL compile (.so) ou un aiguillage automatique sur le type
+        du modele, utiliser add_equation. Les arguments sont marshales vers la facade C++
+        (System::add_block), qui valide le bloc (noms / roles / masque implicite) contre le modele.
+
+        @param name nom unique du bloc ; indexe set_density(name) / mass(name) / density(name).
+        @param model un adc.Model(...) (ModelSpec : etat + transport + source + brique elliptique).
+        @param spatial discretisation spatiale, un adc.Spatial(...) / adc.FiniteVolume(...) (defaut
+            minmod + rusanov + conservatif). Porte le limiteur (none / minmod / vanleer / weno5 --
+            weno5 n'est expose QUE par ce chemin natif), le flux de Riemann (rusanov / hll / hllc /
+            roe) et les variables reconstruites (conservative / primitive). positivity_floor est lu
+            ici (limiteur de positivite Zhang-Shu).
+        @param time traitement temporel, un adc.Explicit (defaut) / adc.IMEX / adc.SourceImplicit.
+            Porte substeps (sous-pas par macro-pas), stride (cadence multirate hold-then-catch-up),
+            le masque implicite (implicit_vars / implicit_roles) et les options Newton (IMEX). Tous
+            ces parametres sont transmis tels quels au C++.
+        @param evolve True (defaut) = bloc avance ; False = champ gele (background) qui contribue
+            tout de meme au second membre du Poisson de systeme.
+        @throws TypeError si time est un adc.Split / adc.Strang (etage source condense par Schur),
+            non cable ici : passer par add_equation(..., time=adc.Split(...)).
+        """
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
         # adc.Split (etage source condense) n'est cable que par add_equation (qui branche
@@ -2419,6 +2442,32 @@ class AmrSystem:
         return rects
 
     def add_block(self, name, model, spatial=None, time=None):
+        """Installe un bloc evolue compose de BRIQUES NATIVES sur la hierarchie AMR partagee.
+
+        Pendant raffine de System.add_block. Le 1er add_block ouvre le chemin mono-bloc
+        (AmrCouplerMP : regrid dynamique, reflux) ; chaque add_block suivant co-localise un bloc de
+        plus sur LA MEME hierarchie (moteur AmrRuntime, Poisson de systeme a second membre somme).
+        En multi-blocs le nom indexe set_density(name) / mass(name) / density(name). Les arguments
+        sont marshales vers la facade C++ (AmrSystem::add_block), qui valide le bloc contre le modele.
+        Pour un modele DSL compile (.so) ou un aiguillage sur le type du modele, utiliser add_equation.
+
+        @param name nom unique du bloc.
+        @param model un adc.Model(...) (ModelSpec : briques natives composees).
+        @param spatial discretisation spatiale, un adc.Spatial(...) / adc.FiniteVolume(...) (defaut
+            minmod + rusanov + conservatif). Limiteur (none / minmod / vanleer / weno5 ; weno5 = 3
+            ghosts, le coupleur alloue ses niveaux a Limiter::n_ghost et le regrid herite n_grow()),
+            flux de Riemann (rusanov / hll / hllc / roe) et variables reconstruites
+            (conservative / primitive).
+        @param time traitement temporel, un adc.Explicit (defaut) / adc.IMEX / adc.SourceImplicit.
+            Porte substeps, stride (multirate hold-then-catch-up), le masque implicite (implicit_vars
+            / implicit_roles) et les options Newton, threades vers le C++. newton_diagnostics est
+            cable en multi-blocs natif et rejete au build C++ en mono-bloc (le coupleur n'agrege pas
+            de rapport).
+        @throws TypeError si time est un adc.Split / adc.Strang (etage source condense par Schur) :
+            passer par add_equation(..., time=adc.Strang(...)) (chemin amr-schur).
+        @throws ValueError si spatial.positivity_floor > 0 : le limiteur de positivite (ADC-76) n'est
+            pas cable sur le chemin AMR (rejet explicite plutot qu'un floor ignore en silence).
+        """
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
         # adc.Split / adc.Strang (etage source condense par Schur) n'est cable que par add_equation (qui

@@ -9,6 +9,28 @@
 
 #include <cassert>  // assert (invariant parent-replique : mf_find_box toujours trouve)
 
+/// @file
+/// @brief Moteur de sous-cyclage AMR multi-patch (plusieurs boxes fines par niveau) : pas
+///        2-niveaux (amr_step_2level_multipatch), recursion N-niveaux (detail::subcycle_level_mp,
+///        detail::amr_step_multilevel_multipatch), avance SSPRK3 par etage, helpers multi-box
+///        (mf_fill_fine_ghosts_mb, mf_average_down_mb, mf_find_box, coarsen_grown) et types
+///        AmrLevelMP / RegMP. C'est le moteur derriere advance_amr.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : reflux COVERAGE-AWARE facon FluxRegister AMReX -- une cellule grossiere adjacente a un
+///        patch fin n'est corrigee QUE si elle n'est pas couverte par un autre patch (les
+///        interfaces fin-fin sont gerees par fill_boundary).
+///
+/// Invariants :
+/// - distribue (MPI) avec REPLICATION GROSSIERE : le grossier mono-box est replique sur chaque
+///   rang (fill periodique local), les patchs fins repartis ; average_down et reflux remontent
+///   par buffers grossiers indexes GLOBAL + all_reduce_sum_inplace, puis chaque rang applique a
+///   sa copie -> toutes restent identiques. En serie c'est bit a bit identique au chemin direct ;
+/// - validation : test_mpi_amr_multipatch (np=1/2/4 bit-identiques) ;
+/// - SSPRK3 reremplit les ghosts AVANT chaque evaluation de flux d'etage (ssprk3_refill_level_ghosts),
+///   et exige imex == false ;
+/// - saxpy/lincomb et les kernels des helpers sont device-clean (foncteurs nommes).
+
 namespace adc {
 
 // --- MULTI-PATCH (plusieurs boxes fines par niveau) ---

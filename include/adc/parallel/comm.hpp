@@ -1,5 +1,24 @@
 #pragma once
 
+/// @file
+/// @brief Seam parallele : abstraction MPI minimale (rang/taille + collectifs) avec repli serie.
+///
+/// Couche : `include/adc/parallel`.
+/// Role : exposer my_rank()/n_ranks() et un jeu fixe de reductions globales (somme/min/max sur
+/// double et long, somme-en-place sur tableau de double, OU-en-place sur tableau de marqueurs)
+/// derriere une facade unique. Sans ADC_HAS_MPI tout est compile en identite serie ; le reste du
+/// code ne voit jamais MPI_COMM_WORLD ni mpi.h directement.
+/// Contrat : toutes les collectives operent sur MPI_COMM_WORLD ; chaque rang doit les appeler
+/// dans le meme ordre (sinon deadlock). Les briques sum_inplace / or_inplace alimentent
+/// respectivement le reflux AMR multi-patch et le rassemblement des tags de regrid avant
+/// clustering ; all_reduce_min garantit un dt global identique sur tous les rangs.
+///
+/// Invariants :
+/// - meme compile avec MPI, si MPI n'est pas initialise my_rank()=0 / n_ranks()=1 (comm_active()
+///   teste Initialized && !Finalized) ; appeler comm_init() au debut de main() pour un run distribue ;
+/// - les fonctions all_reduce_* sont COLLECTIVES : tous les rangs participent ou aucun ;
+/// - en mode serie chaque fonction est l'identite (no-op ou retour de l'argument).
+
 // Le seam parallele. Sans ADC_HAS_MPI : rang unique (serie). Avec ADC_HAS_MPI :
 // MPI_Comm_rank/size + collectives sur MPI_COMM_WORLD. Tout le reste du code
 // passe par my_rank() / n_ranks() / all_reduce_* et ignore le backend.

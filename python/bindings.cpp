@@ -338,12 +338,28 @@ PYBIND11_MODULE(_adc, m) {
            // de registres que les termes). VIDES (defaut) = frequence constante seule, bit-identique.
            py::arg("freq_prog_ops") = std::vector<int>{},
            py::arg("freq_prog_args") = std::vector<int>{})
-      .def("variable_names", &System::variable_names, py::arg("name"),
-           py::arg("kind") = "conservative")
-      .def("variable_roles", &System::variable_roles, py::arg("name"),
-           py::arg("kind") = "conservative")
+      .def("variable_names", &System::variable_names,
+           "Noms des variables d'un bloc (introspection). kind = 'conservative' | 'primitive'.",
+           py::arg("name"), py::arg("kind") = "conservative")
+      .def("variable_roles", &System::variable_roles,
+           "Roles PHYSIQUES des variables d'un bloc, parallele a variable_names : 'density', "
+           "'momentum_x', 'energy', ... ou 'custom' si le bloc ne renseigne pas ses roles. C'est ce "
+           "que resolvent les couplages inter-especes (index_of(role)). kind = 'conservative' | "
+           "'primitive'.",
+           py::arg("name"), py::arg("kind") = "conservative")
       .def("block_gamma", &System::block_gamma, py::arg("name"))
-      .def("set_poisson", &System::set_poisson, py::arg("rhs") = "charge_density",
+      .def("set_poisson", &System::set_poisson,
+           "Configure le Poisson de systeme partage. rhs : 'charge_density' | 'composite' (etiquettes "
+           "du MEME second membre f = somme des briques elliptiques par bloc ; charge_density = alias "
+           "historique). solver : 'geometric_mg' (tout cas, paroi comprise) | 'fft' (periodique, "
+           "stencil discret ; n = 2^k pour la FFT rapide, sinon DFT directe O(n^2)) | 'fft_spectral' "
+           "(periodique, symbole continu -(kx^2+ky^2)). bc : 'auto' | 'periodic' | 'dirichlet' | "
+           "'neumann'. wall : 'none' | "
+           "'circle' (paroi conductrice centree en (L/2, L/2), rayon wall_radius). epsilon : "
+           "permittivite CONSTANTE de div(eps grad phi) = f (pour eps(x) variable : set_epsilon_field). "
+           "abs_tol : plancher absolu du critere d'arret du V-cycle GeometricMG (0 = critere relatif, "
+           "historique ; sans effet sur FFT).",
+           py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
            py::arg("wall") = "none", py::arg("wall_radius") = 0.0, py::arg("epsilon") = 1.0,
            py::arg("abs_tol") = 0.0)
@@ -424,9 +440,19 @@ PYBIND11_MODULE(_adc, m) {
       .def("solve_fields", &System::solve_fields)
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
-      .def("step_cfl", &System::step_cfl, py::arg("cfl"))
-      .def("dt_hotspot", &System::dt_hotspot, py::arg("name"))
-      .def("step_adaptive", &System::step_adaptive, py::arg("cfl"))
+      .def("step_cfl", &System::step_cfl,
+           "Avance d'UN pas a dt = cfl * h / vitesse d'onde max du systeme (honore aussi les bornes "
+           "optionnelles : substeps, stride, source_frequency, couplages, add_dt_bound). Renvoie le dt "
+           "utilise.",
+           py::arg("cfl"))
+      .def("dt_hotspot", &System::dt_hotspot,
+           "Diagnostic (ADC-182) : (w, i, j) de la cellule GLOBALE qui domine la borne CFL de transport "
+           "du bloc 'name' -- pour localiser un dt qui s'effondre. A la demande, hors chemin chaud.",
+           py::arg("name"))
+      .def("step_adaptive", &System::step_adaptive,
+           "Avance d'un macro-pas MULTIRATE : le bloc le plus lent fixe le macro-pas, chaque bloc plus "
+           "rapide est sous-cycle n = ceil(w_bloc / w_min) fois. Renvoie le macro-pas.",
+           py::arg("cfl"))
       // Primitives pour un integrateur temporel CUSTOM en Python (take_step) :
       .def("eval_rhs",
            [](System& s, const std::string& name) {
@@ -585,7 +611,13 @@ PYBIND11_MODULE(_adc, m) {
       // norme du gradient du potentiel depasse grad_threshold (bord d'anneau du diocotron). MULTI-BLOCS
       // + regrid_every > 0. <= 0 (defaut) -> phi DESACTIVE (bit-identique). cf. AmrSystem::set_phi_refinement.
       .def("set_phi_refinement", &AmrSystem::set_phi_refinement, py::arg("grad_threshold"))
-      .def("set_poisson", &AmrSystem::set_poisson, py::arg("rhs") = "charge_density",
+      .def("set_poisson", &AmrSystem::set_poisson,
+           "Configure le Poisson grossier de la hierarchie AMR (cf. System.set_poisson). Sur AMR le "
+           "solveur est TOUJOURS GeometricMG et le second membre TOUJOURS la somme des briques "
+           "elliptiques. rhs : 'charge_density' | 'composite'. solver : 'geometric_mg' uniquement (pas "
+           "de FFT sur la hierarchie). bc : 'auto' | 'periodic' | 'dirichlet' | 'neumann'. wall : "
+           "'none' | 'circle' (paroi conductrice circulaire, exige wall_radius > 0).",
+           py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
            py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
       // Borne GLOBALE de pas + borne ACTIVE (StabilityPolicy AMR, parite System.add_dt_bound).
@@ -672,7 +704,10 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("freq_prog_args") = std::vector<int>{})
       .def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
-      .def("step_cfl", &AmrSystem::step_cfl, py::arg("cfl"))
+      .def("step_cfl", &AmrSystem::step_cfl,
+           "Avance d'un macro-pas AMR a dt = cfl * dx_grossier / vitesse d'onde max (honore aussi la "
+           "cadence substeps/stride en multi-blocs et les bornes optionnelles). Renvoie le dt utilise.",
+           py::arg("cfl"))
       .def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
       // Horloge AMR (IO v1, parite System) : compteur de macro-pas + restauration (t, macro_step) ->

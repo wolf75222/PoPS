@@ -15,6 +15,23 @@
 //   ions      : 1 pas explicite
 // sans hard-coder cette logique dans un Coupler mono-modele.
 
+/// @file
+/// @brief Scheduler minimal des systemes couples : advance_subcycled lit la politique temporelle
+///        de chaque bloc (traits block_substeps_v / block_stride_v / block_time_treatment_v) et
+///        appelle un callable utilisateur sur les sous-pas.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : squelette agnostique de la physique. Permet, sans hard-coder de logique dans un Coupler
+///        mono-modele, des cadences par bloc (ex. electrons 10 sous-pas implicites, ions 1 pas
+///        explicite). Les blocs Prescribed sont sautes.
+///
+/// Invariants :
+/// - substeps (decoupe : n pas de dt_eff/n) et stride (cadence : avance 1 macro-pas sur stride,
+///   alors d'un pas EFFECTIF stride*dt) sont ORTHOGONAUX ; sur M macro-pas le total reste M*dt ;
+/// - un bloc de cadence stride n'avance qu'aux macro-pas multiples de stride (sinon return) ;
+/// - la surcharge sans macro_step force macro_step=0 (tous les blocs avancent, stride ignore) ->
+///   bit-identique a l'ancien advance_subcycled ; stride=1 = comportement historique.
+
 namespace adc {
 
 template <class Block>

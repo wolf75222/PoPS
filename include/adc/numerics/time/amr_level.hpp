@@ -3,6 +3,26 @@
 
 #include <adc/numerics/time/amr_flux_helpers.hpp>
 
+/// @file
+/// @brief Pile AMR MultiFab mono-box : struct detail::AmrLevelMF et le moteur recursif
+///        (amr_step_2level_mf, subcycle_level_mf, amr_step_multilevel_mf). ORACLE DE TEST,
+///        hors production.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : moteur AMR MONO-BOX d'origine, conserve en detail:: comme oracle de validation.
+///        Maillon intermediaire de la chaine de parite Fab2D (amr_reflux.hpp) -> MF (ici) ->
+///        MP (amr_subcycling.hpp), qui prouve le moteur multi-patch bit-identique au mono-box
+///        jusqu'a N niveaux (ce que le test Fab2D 2-niveaux/1-comp/Rusanov seul ne couvre pas).
+/// Contrat : un pas conservatif a sous-cyclage Berger-Oliger (ratio 2, dt/2 par sous-pas) avec
+///           reflux a chaque interface coarse-fine ; CL periodiques au niveau 0.
+///
+/// Invariants :
+/// - plus appele en production (AmrCoupler passe par advance_amr) ;
+/// - gardes de parite : test_amr_reflux_mf (vs Fab2D), test_amr_multilevel_mf,
+///   test_amr_multilevel_multipatch garde 1 (MP vs MF, max|dUc| == 0) ;
+/// - aux detenu ailleurs (pointeur) ; rC* = region (coords de CE niveau) raffinee par l'enfant,
+///   valable seulement si has_fine.
+
 namespace adc {
 
 // === PILE MF : ORACLE DE TEST, HORS PRODUCTION ===================================

@@ -1,5 +1,33 @@
 #pragma once
 
+/// @file
+/// @brief GeometricMG : multigrille geometrique maison (V-cycle) pour l'operateur elliptique, lisseur
+///        Gauss-Seidel et solveur de fond (bottom solve). Modele les concepts EllipticSolver et LinearSolver.
+///
+/// Couche : `include/adc/numerics/elliptic`.
+/// Role : resoudre L(phi) = f par V-cycle classique (pre-lissage, restriction du residu par average_down
+/// sur une grille deux fois plus grossiere, resolution recursive de la correction a CL homogenes,
+/// prolongation par interpolate, post-lissage ; au niveau le plus grossier, lissage long = bottom solve).
+/// La hierarchie est obtenue en grossissant le domaine par 2 jusqu'a une taille minimale ; restriction et
+/// prolongation reutilisent les operateurs de transfert AMR. C'est le SEUL type qui porte le role
+/// d'operateur (EllipticOperator : accesseurs op_eps()/op_kappa()/... + bc() + geom()), reutilise par le
+/// solveur de Krylov pour une matvec coherente avec le residu MG.
+/// Contrat : solve(rel_tol, max_cycles, abs_tol=0) renvoie le nombre de cycles ; critere d'arret MIXTE
+/// residu <= max(rel_tol * r0, abs_tol) (convention hypre/AMReX). solve() sans argument prend la tolerance
+/// par defaut (1e-8, 50 cycles). phi conservee entre appels (warm start). solve_robust durcit le lissage
+/// SEULEMENT en cas de vraie divergence du bord embedded (sinon bit-identique).
+///
+/// Invariants :
+/// - le coarsening s'arrete si une boite ne se coarsen pas PROPREMENT (refine(coarsen(b)) != b) : evite
+///   un BoxArray grossier degenere (boites 1x1 en doublon) ou average_down lirait hors bornes (bug MPI) ;
+/// - current_residual() fait un all_reduce_max OBLIGATOIRE (grossier multi-box reparti) : sinon le
+///   critere d'arret se declenche a des iterations differentes par rang -> desynchronisation MPI ;
+/// - replicated : niveau replique sur tous les rangs (V-cycle par-fab sans communication), ce qu'attend
+///   le coupleur AMR ; en serie identique au round-robin, bit a bit ;
+/// - cut_cell : poids Shortley-Weller d'ordre 2 au bord embedded (vs escalier) ; cut_cell=false
+///   bit-identique au stencil historique ;
+/// - les kernels device sont des FONCTEURS NOMMES (recette #93/#64) : lambda etendue interdite cross-TU sous nvcc.
+
 #include <adc/core/types.hpp>
 #include <adc/numerics/elliptic/cut_fraction.hpp>
 #include <adc/numerics/elliptic/poisson_operator.hpp>
@@ -73,6 +101,19 @@ class GeometricMG {
   // Chaque cellule active recoit 5 coefficients calcules a partir des distances au
   // bord (fraction de coupe theta par direction). active est alors deduit du signe de
   // levelset s'il n'est pas fourni. cut_cell=false => stencil escalier historique (bit-identique).
+  //
+  // Parametres du V-cycle (defauts eprouves) :
+  //   min_coarse (defaut 2) : taille minimale d'une dimension de grille au-dela de laquelle on ARRETE
+  //                           de coarsener. Le coarsening grossit le domaine par 2 tant que nx/2 et ny/2
+  //                           restent >= min_coarse (et que les boites se coarsenent proprement) ; la
+  //                           grille la plus grossiere (le bottom) garde donc >= min_coarse cellules par axe.
+  //   nu1 (defaut 2)        : nombre de balayages Gauss-Seidel de PRE-lissage (avant la descente vers la
+  //                           grille grossiere), a chaque niveau non-bottom.
+  //   nu2 (defaut 2)        : nombre de balayages Gauss-Seidel de POST-lissage (apres remontee et ajout de
+  //                           la correction prolongee), a chaque niveau non-bottom.
+  //   nbottom (defaut 50)   : nombre de balayages Gauss-Seidel au niveau le plus grossier (bottom solve) ;
+  //                           ce lissage long tient lieu de resolution exacte sur la petite grille de fond.
+  // (solve_robust double LOCALEMENT nu1/nu2 si le bord embedded fait diverger le cycle, puis les restaure.)
   GeometricMG(const Geometry& geom, const BoxArray& ba, const BCRec& bc,
               std::function<bool(Real, Real)> active = {}, bool replicated = false,
               int min_coarse = 2, int nu1 = 2, int nu2 = 2, int nbottom = 50,

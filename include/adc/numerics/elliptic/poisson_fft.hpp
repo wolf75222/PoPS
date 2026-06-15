@@ -1,5 +1,27 @@
 #pragma once
 
+/// @file
+/// @brief Brique FFT bas niveau : PoissonFFT (solveur de Poisson periodique spectral, distribue par
+///        bandes) + primitives FFT 1D radix-2 (fft1d) et repli DFT directe (dft1d_direct).
+///
+/// Couche : `include/adc/numerics/elliptic`.
+/// Role : resoudre EXACTEMENT le Laplacien periodique discret lap_h phi = rho avec phi de moyenne nulle,
+/// en UNE transformee (aucune iteration, aucune tolerance). Travaille sur des slabs (vecteurs plats par
+/// rang, PAS des MultiFab) : c'est la brique enveloppee par PoissonFFTSolver/DistributedFFTSolver
+/// (poisson_fft_solver.hpp). 2D FFT = FFT-x locale -> transpose parallele (MPI_Alltoall) -> FFT-y locale
+/// -> division par la valeur propre du Laplacien -> inverse.
+/// Contrat : chaque rang possede Ny/np lignes (x complet) ; solve(rho_local, phi_local) avec rho_local et
+/// phi_local de taille nyl_ x Nx_ (row-major). Le ctor prend spectral (false = valeur propre du stencil
+/// 5 points DISCRET, defaut bit-identique ; true = symbole CONTINU -(kx^2+ky^2), frequences signees).
+///
+/// Invariants :
+/// - la transposee par bandes impose Nx et Ny divisibles par np (n_ranks) ;
+/// - les longueurs puissance de 2 empruntent la FFT radix-2 ; toute autre taille retombe sur la DFT
+///   directe O(n^2) correcte (la butterfly radix-2 deborderait le buffer sur n quelconque), donc
+///   mono-rang accepte tout n ;
+/// - mode kx=ky=0 : valeur propre nulle -> phi_hat=0 (moyenne nulle imposee) ;
+/// - alltoall est l'identite quand np==1 (et sans MPI).
+
 #include <adc/parallel/comm.hpp>
 
 #include <cmath>

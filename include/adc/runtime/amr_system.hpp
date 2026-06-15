@@ -207,12 +207,12 @@ class AmrSystem {
   ///                multi-blocs le nom doit etre unique ; mono-bloc un nom vide cible le bloc unique.
   /// @param model   composition de briques (transport/source/elliptic + parametres)
   /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts ; rusanov)
-  /// @param riemann "rusanov" | "hllc" | "roe" (hllc/roe exigent un transport compressible)
-  /// @param recon   "conservative" | "primitive" (variables reconstruites ; primitif plus
-  ///                robuste pour Euler : positivite de rho et p)
-  /// @param time    "explicit" (source en Euler avant, portee par le pas AMR) ou "imex" (source
-  ///                raide traitee en IMPLICITE par backward_euler_source ; le transport reste
-  ///                explicite, porte par le reflux conservatif ; cf. capstone vii). Tout autre
+  /// @param riemann "rusanov" | "hll" (generique a ondes signees, exige model.wave_speeds) | "hllc"
+  ///                | "roe" (hllc/roe exigent un transport compressible)
+  /// @param time    "explicit" (SSPRK2, source en Euler avant portee par le pas AMR) | "ssprk3"
+  ///                (SSPRK3, ordre 3, reflux par etage ; transport explicite, EXCLUSIF d'imex) |
+  ///                "imex" (source raide traitee en IMPLICITE par backward_euler_source ; le transport
+  ///                reste explicite, porte par le reflux conservatif ; cf. capstone vii). Tout autre
   ///                traitement est refuse.
   /// @param substeps sous-pas explicites du bloc (>= 1) : le pas effectif est decoupe en substeps
   ///                morceaux egaux (MULTI-BLOCS uniquement ; en mono-bloc, porte par AmrCouplerMP).
@@ -227,8 +227,8 @@ class AmrSystem {
   ///                est une ERREUR (pas d'ignore silencieux). MULTI-BLOCS uniquement (le mono-bloc
   ///                AmrCouplerMP porte son IMEX sans masque ; un masque y est donc refuse).
   /// @throws std::runtime_error si un bloc est deja defini, si substeps < 1, si stride < 1, si time
-  ///         n'est pas dans {explicit, imex}, si recon n'est pas dans {conservative, primitive}, ou si
-  ///         un masque implicite est demande hors IMEX / avec un nom-role absent du bloc.
+  ///         n'est pas dans {explicit, ssprk3, imex}, si recon n'est pas dans {conservative,
+  ///         primitive}, ou si un masque implicite est demande hors IMEX / avec un nom-role absent du bloc.
   /// @param newton  options du Newton de la source IMEX regroupees en POD (ADC-214 ; cf.
   ///                 NewtonOptions ; parite System::add_block) : max_iters / rel_tol / abs_tol /
   ///                 fd_eps / damping / fail_policy. Defaut {} = constantes historiques, bit-identique.

@@ -3,6 +3,24 @@
 
 #include <adc/numerics/time/amr_subcycling.hpp>
 
+/// @file
+/// @brief Facade unifiee de production du moteur AMR temporel : type LevelHierarchy (hierarchie
+///        AMR comme objet nomme), alias OwnershipPolicy, et entree advance_amr.
+///
+/// Couche : `include/adc/numerics/time`.
+/// Role : exposer UNE entree de production, advance_amr, qui delegue au moteur N-niveaux
+///        multi-patch (detail::amr_step_multilevel_multipatch). Deux formes : "pieces" (le
+///        coupleur passe levels/base_dom/... directement) et LevelHierarchy (objet agrege).
+/// Contrat : advance_amr avance la hierarchie d'UN pas dt ; selecteurs figes a l'ajout du bloc
+///           (coarse_replicated, recon_prim, imex, time_method) transmis tels quels au moteur.
+///
+/// Invariants :
+/// - coarse_replicated=true (defaut) reproduit le comportement historique ; sans transmission
+///   un grossier de-replique repasserait a tort en replique ;
+/// - recon_prim selectionne la reconstruction primitive (cf. assemble_rhs) au lieu de
+///   conservative ; false (defaut) = strictement bit-identique ;
+/// - kSsprk3 exige imex == false (rejet sinon, applique cote moteur).
+
 namespace adc {
 
 // --- Moteur AMR unifie (revue, point 5) ---
