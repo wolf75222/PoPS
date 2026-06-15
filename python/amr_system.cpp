@@ -497,34 +497,31 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           const std::string& limiter, const std::string& riemann,
                           const std::string& recon, const std::string& time, int substeps,
                           int stride, const std::vector<std::string>& implicit_vars,
-                          const std::vector<std::string>& implicit_roles, int newton_max_iters,
-                          double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
-                          double newton_damping, const std::string& newton_fail_policy,
-                          bool newton_diagnostics) {
+                          const std::vector<std::string>& implicit_roles,
+                          const NewtonOptions& newton, bool newton_diagnostics) {
   if (p_->built)
     throw std::runtime_error("AmrSystem::add_block : le systeme est deja construit (appeler "
                              "add_block avant tout step/mass/density)");
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("AmrSystem::add_block : stride >= 1");
-  // Options du Newton de la source IMEX (audit vague 3, parite System::add_block). Defauts =
-  // constantes historiques (2 / 0 / 0 / 1e-7 / 1.0 / none), bit-identique. SUPPORT : moteur
-  // MULTI-BLOCS (AmrRuntime) seulement -- le mono-bloc (AmrCouplerMP) garde iters=2 fige, des
-  // options non-defaut y sont REJETEES au build (ensure_built), jamais ignorees.
-  if (newton_max_iters < 1)
+  // Options du Newton de la source IMEX regroupees en POD (ADC-214 ; audit vague 3, parite
+  // System::add_block). Defauts {} = constantes historiques (2 / 0 / 0 / 1e-7 / 1.0 / none),
+  // bit-identique. SUPPORT : moteur MULTI-BLOCS (AmrRuntime) seulement -- le mono-bloc (AmrCouplerMP)
+  // garde iters=2 fige, des options non-defaut y sont REJETEES au build (ensure_built), jamais ignorees.
+  if (newton.max_iters < 1)
     throw std::runtime_error("AmrSystem::add_block : newton_max_iters >= 1");
-  if (newton_rel_tol < 0.0 || newton_abs_tol < 0.0 || newton_fd_eps <= 0.0)
+  if (newton.rel_tol < 0.0 || newton.abs_tol < 0.0 || newton.fd_eps <= 0.0)
     throw std::runtime_error("AmrSystem::add_block : newton_rel_tol/abs_tol >= 0 et newton_fd_eps > 0");
-  if (!(newton_damping > 0.0 && newton_damping <= 1.0))
+  if (!(newton.damping > 0.0 && newton.damping <= 1.0))
     throw std::runtime_error("AmrSystem::add_block : newton_damping dans (0, 1]");
-  int nfail = NewtonOptions::kFailNone;
-  if (newton_fail_policy == "warn") nfail = NewtonOptions::kFailWarn;
-  else if (newton_fail_policy == "throw") nfail = NewtonOptions::kFailThrow;
-  else if (newton_fail_policy != "none")
-    throw std::runtime_error("AmrSystem::add_block : newton_fail_policy 'none'|'warn'|'throw' (recu '" +
-                             newton_fail_policy + "')");
-  const bool newton_non_default = newton_max_iters != 2 || newton_rel_tol != 0.0 ||
-                                  newton_abs_tol != 0.0 || newton_fd_eps != 1e-7 ||
-                                  newton_damping != 1.0 || nfail != NewtonOptions::kFailNone;
+  if (newton.fail_policy != NewtonOptions::kFailNone &&
+      newton.fail_policy != NewtonOptions::kFailWarn &&
+      newton.fail_policy != NewtonOptions::kFailThrow)
+    throw std::runtime_error("AmrSystem::add_block : newton_fail_policy invalide "
+                             "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
+  const bool newton_non_default = newton.max_iters != 2 || newton.rel_tol != 0.0 ||
+                                  newton.abs_tol != 0.0 || newton.fd_eps != 1e-7 ||
+                                  newton.damping != 1.0 || newton.fail_policy != NewtonOptions::kFailNone;
   if (time != "imex" && newton_non_default)
     throw std::runtime_error("AmrSystem::add_block : les options Newton exigent time='imex'");
   // newton_diagnostics (rapport newton_report) exige time='imex' (le rapport vient du Newton de la
@@ -583,12 +580,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.time_method = time_method;        // SSPRK3 (1) ou Euler avant (0) ; threade au build (mono/multi)
   b.implicit_vars = implicit_vars;    // masque IMEX partiel (resolu en indices au build, build_multi)
   b.implicit_roles = implicit_roles;
-  b.newton.max_iters = newton_max_iters;  // options Newton (vague 3 ; multi-blocs seulement)
-  b.newton.rel_tol = static_cast<Real>(newton_rel_tol);
-  b.newton.abs_tol = static_cast<Real>(newton_abs_tol);
-  b.newton.fd_eps = static_cast<Real>(newton_fd_eps);
-  b.newton.damping = static_cast<Real>(newton_damping);
-  b.newton.fail_policy = nfail;
+  b.newton = newton;  // options Newton regroupees en POD (ADC-214 ; vague 3, mono-bloc ET multi-blocs)
   b.newton_non_default = newton_non_default;
   b.newton_diagnostics = newton_diagnostics;  // rapport newton_report (multi-blocs natif ; mono/.so rejetes)
   b.substeps = substeps;
@@ -889,9 +881,16 @@ void AmrSystem::set_magnetic_field(const std::vector<double>& bz) {
 }
 
 void AmrSystem::set_source_stage(const std::string& name, const std::string& kind, double theta,
-                                 double alpha, double krylov_tol, int krylov_max_iters,
-                                 const std::string& density, const std::string& momentum_x,
-                                 const std::string& momentum_y, const std::string& energy) {
+                                 double alpha, const SourceStageOptions& opts) {
+  // Reglages regroupes en POD (ADC-214) : alias locaux pour garder le corps lisible (memes noms /
+  // semantique que les anciens parametres a plat). bz_aux_component du POD est ignore ici (l'etage
+  // AMR mono-bloc lit le canal canonique B_z, cf. set_source_stage dans amr_system.hpp).
+  const double krylov_tol = opts.krylov_tol;
+  const int krylov_max_iters = opts.krylov_max_iters;
+  const std::string& density = opts.density;
+  const std::string& momentum_x = opts.momentum_x;
+  const std::string& momentum_y = opts.momentum_y;
+  const std::string& energy = opts.energy;
   if (p_->built)
     throw std::runtime_error("AmrSystem::set_source_stage : le systeme est deja construit "
                              "(configurer l'etage source avant tout step)");
@@ -950,17 +949,8 @@ void AmrSystem::set_time_scheme(const std::string& scheme) {
                              "' inconnu (attendu 'lie' ou 'strang')");
 }
 
-void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,
-                                   const std::vector<std::string>& in_roles,
-                                   const std::vector<double>& consts,
-                                   const std::vector<std::string>& out_blocks,
-                                   const std::vector<std::string>& out_roles,
-                                   const std::vector<int>& prog_ops,
-                                   const std::vector<int>& prog_args,
-                                   const std::vector<int>& prog_lens, double frequency,
-                                   const std::string& label,
-                                   const std::vector<int>& freq_prog_ops,
-                                   const std::vector<int>& freq_prog_args) {
+void AmrSystem::add_coupled_source(const CoupledSourceProgram& prog, double frequency,
+                                   const std::string& label) {
   if (p_->built)
     throw std::runtime_error("AmrSystem::add_coupled_source : le systeme est deja construit "
                              "(enregistrer la source avant tout step/mass/density)");
@@ -971,15 +961,15 @@ void AmrSystem::add_coupled_source(const std::vector<std::string>& in_blocks,
     throw std::runtime_error("AmrSystem::add_coupled_source : source couplee inter-especes supportee "
                              "uniquement en MULTI-BLOCS (>= 2 add_block) ; le mono-bloc porte sa source "
                              "via le modele du bloc");
-  // Validation de forme MINIMALE ici (taille des listes) ; la validation FINE (roles, blocs, opcodes,
-  // registres) est faite par AmrRuntime::add_coupled_source a l'injection (build paresseux), exactement
-  // comme System delegue a CoupledSourceKernel. On stocke la spec plate telle quelle.
-  if (out_blocks.empty())
+  // Description bytecode regroupee en POD (ADC-214). Validation de forme MINIMALE ici (taille des
+  // listes) ; la validation FINE (roles, blocs, opcodes, registres) est faite par
+  // AmrRuntime::add_coupled_source a l'injection (build paresseux), exactement comme System delegue a
+  // CoupledSourceKernel. On stocke la spec plate telle quelle (champs du POD recopies un a un).
+  if (prog.out_blocks.empty())
     throw std::runtime_error("AmrSystem::add_coupled_source : aucun terme de source (out_blocks vide)");
-  p_->coupled_sources.push_back(Impl::CoupledSourceSpec{in_blocks, in_roles, consts, out_blocks,
-                                                        out_roles, prog_ops, prog_args, prog_lens,
-                                                        frequency, label, freq_prog_ops,
-                                                        freq_prog_args});
+  p_->coupled_sources.push_back(Impl::CoupledSourceSpec{
+      prog.in_blocks, prog.in_roles, prog.consts, prog.out_blocks, prog.out_roles, prog.prog_ops,
+      prog.prog_args, prog.prog_lens, frequency, label, prog.freq_prog_ops, prog.freq_prog_args});
 }
 
 void AmrSystem::step(double dt) {

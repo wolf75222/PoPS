@@ -180,8 +180,17 @@ static void register_ionization(AmrSystem& sim, const std::string& block_a, cons
   std::vector<int> prog_args = {0, 1, 0, 2, 0,
                                 0, 1, 0, 2, 0, 0};
   std::vector<int> prog_lens = {5, 6};
-  sim.add_coupled_source(in_blocks, in_roles, consts, out_blocks, out_roles, prog_ops, prog_args,
-                         prog_lens);
+  // ADC-214 : description bytecode regroupee dans le POD CoupledSourceProgram (appel auto-documente).
+  adc::CoupledSourceProgram prog;
+  prog.in_blocks = in_blocks;
+  prog.in_roles = in_roles;
+  prog.consts = consts;
+  prog.out_blocks = out_blocks;
+  prog.out_roles = out_roles;
+  prog.prog_ops = prog_ops;
+  prog.prog_args = prog_args;
+  prog.prog_lens = prog_lens;
+  sim.add_coupled_source(prog);
 }
 
 int main(int argc, char** argv) {

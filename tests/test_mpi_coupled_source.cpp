@@ -95,7 +95,18 @@ int main(int argc, char** argv) {
                            3, 0, 0, 2, 0,
                            3, 0, 0, 2, 0, 0};
   std::vector<int> lens = {5, 5, 6};
-  sys.add_coupled_source(in_blocks, in_roles, consts, out_blocks, out_roles, ops, args, lens);
+  // ADC-214 : la description bytecode est regroupee dans un POD CoupledSourceProgram (initialiseurs
+  // designes -> appel auto-documente, plus de liste de vecteurs du meme type intervertibles).
+  adc::CoupledSourceProgram prog;
+  prog.in_blocks = in_blocks;
+  prog.in_roles = in_roles;
+  prog.consts = consts;
+  prog.out_blocks = out_blocks;
+  prog.out_roles = out_roles;
+  prog.prog_ops = ops;
+  prog.prog_args = args;
+  prog.prog_lens = lens;
+  sys.add_coupled_source(prog);
 
   // REFERENCE forward-Euler (etat uniforme -> scalaire) : MEME recurrence que l'etage C++.
   double ne = ne0, ni = ni0, ng = ng0;

@@ -57,6 +57,18 @@ static std::vector<double> flat(
   return std::vector<double>(arr.data(), arr.data() + arr.size());
 }
 
+// ADC-214 : la SURFACE Python garde le kwarg newton_fail_policy en CHAINE ("none"/"warn"/"throw") ;
+// le POD NewtonOptions porte un entier (NewtonOptions::kFail*). Cette table de conversion vit donc
+// cote bindings (la ou les kwargs plats sont assembles en POD), avec le MEME message d'erreur explicite
+// qu'avant ce chantier. @p where nomme la methode appelante dans le message.
+static int newton_fail_policy_from_string(const std::string& policy, const char* where) {
+  if (policy == "none") return NewtonOptions::kFailNone;
+  if (policy == "warn") return NewtonOptions::kFailWarn;
+  if (policy == "throw") return NewtonOptions::kFailThrow;
+  throw std::runtime_error(std::string(where) + " : newton_fail_policy 'none'|'warn'|'throw' (recu '" +
+                           policy + "')");
+}
+
 PYBIND11_MODULE(_adc, m) {
   m.doc() =
       "adc_cpp (lib) : composition multi-especes a l'execution. System compose un "
@@ -162,7 +174,29 @@ PYBIND11_MODULE(_adc, m) {
       .def(py::init<const SystemConfig&>())
       // Composition par bloc : modele (briques) + schema spatial (limiter/riemann) + temps
       // (explicit/imex) + sous-pas. Python dit QUOI, le C++ compile fait le calcul.
-      .def("add_block", &System::add_block, py::arg("name"), py::arg("model"),
+      // ADC-214 : la SURFACE Python est INCHANGEE (memes kwargs newton_* a plat, memes defauts). La
+      // lambda les recoit a plat et CONSTRUIT le POD NewtonOptions en interne avant d'appeler la
+      // nouvelle methode C++ (qui regroupe ces parametres homogenes). adc_cases ne voit aucun changement.
+      .def("add_block",
+           [](System& s, const std::string& name, const ModelSpec& model,
+              const std::string& limiter, const std::string& riemann, const std::string& recon,
+              const std::string& time, int substeps, bool evolve, int stride,
+              const std::vector<std::string>& implicit_vars,
+              const std::vector<std::string>& implicit_roles, int newton_max_iters,
+              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
+              bool newton_diagnostics, double newton_damping, const std::string& newton_fail_policy,
+              double positivity_floor) {
+             NewtonOptions newton;
+             newton.max_iters = newton_max_iters;
+             newton.rel_tol = static_cast<Real>(newton_rel_tol);
+             newton.abs_tol = static_cast<Real>(newton_abs_tol);
+             newton.fd_eps = static_cast<Real>(newton_fd_eps);
+             newton.damping = static_cast<Real>(newton_damping);
+             newton.fail_policy = newton_fail_policy_from_string(newton_fail_policy, "System::add_block");
+             s.add_block(name, model, limiter, riemann, recon, time, substeps, evolve, stride,
+                         implicit_vars, implicit_roles, newton, newton_diagnostics, positivity_floor);
+           },
+           py::arg("name"), py::arg("model"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative",
            py::arg("time") = "explicit", py::arg("substeps") = 1,
@@ -230,8 +264,24 @@ PYBIND11_MODULE(_adc, m) {
       // Etage source condense par Schur (OPT-IN, adc.Split(source=adc.CondensedSchur(...))) : remplace
       // la source explicite / IMEX du bloc par l'etage condense C++ (CondensedSchurSourceStepper, #126)
       // apres le transport hyperbolique. kind='electrostatic_lorentz'. Defaut (sans appel) inchange.
-      .def("set_source_stage", &System::set_source_stage, py::arg("name"), py::arg("kind"),
-           py::arg("theta"), py::arg("alpha"),
+      // ADC-214 : surface Python INCHANGEE (memes kwargs krylov_* / descripteurs a plat, memes
+      // defauts). La lambda les recoit a plat et CONSTRUIT le POD SourceStageOptions avant l'appel C++.
+      .def("set_source_stage",
+           [](System& s, const std::string& name, const std::string& kind, double theta, double alpha,
+              double krylov_tol, int krylov_max_iters, const std::string& density,
+              const std::string& momentum_x, const std::string& momentum_y, const std::string& energy,
+              int bz_aux_component) {
+             SourceStageOptions opts;
+             opts.krylov_tol = krylov_tol;
+             opts.krylov_max_iters = krylov_max_iters;
+             opts.density = density;
+             opts.momentum_x = momentum_x;
+             opts.momentum_y = momentum_y;
+             opts.energy = energy;
+             opts.bz_aux_component = bz_aux_component;
+             s.set_source_stage(name, kind, theta, alpha, opts);
+           },
+           py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
            // Tolerance / budget du solve Krylov de l'etage (audit 2026-06) : <= 0 = defauts
            // historiques du stepper (1e-10 ; 400 cartesien / 600 polaire).
            py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0,
@@ -264,9 +314,23 @@ PYBIND11_MODULE(_adc, m) {
       // Source COUPLEE generique (adc.dsl.CoupledSource, P5) : ABI plate (bytecode postfixe). Lit des
       // champs (bloc, role) et ecrit des termes de source compiles en machine a pile, appliques par
       // splitting explicite apres le transport (meme seam que add_ionization). Sans appel, inchange.
-      .def("add_coupled_source", &System::add_coupled_source, py::arg("in_blocks"),
-           py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"), py::arg("out_roles"),
-           py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
+      // ADC-214 : surface Python INCHANGEE (memes kwargs plats in_blocks/.../freq_prog_args, memes
+      // defauts). La lambda assemble le POD CoupledSourceProgram avant l'appel C++ (frequency / label
+      // restent a plat, types distincts hors famille homogene).
+      .def("add_coupled_source",
+           [](System& s, const std::vector<std::string>& in_blocks,
+              const std::vector<std::string>& in_roles, const std::vector<double>& consts,
+              const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,
+              const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
+              const std::vector<int>& prog_lens, double frequency, const std::string& label,
+              const std::vector<int>& freq_prog_ops, const std::vector<int>& freq_prog_args) {
+             CoupledSourceProgram prog{in_blocks,  in_roles,  consts,        out_blocks,
+                                       out_roles,  prog_ops,  prog_args,     prog_lens,
+                                       freq_prog_ops, freq_prog_args};
+             s.add_coupled_source(prog, frequency, label);
+           },
+           py::arg("in_blocks"), py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"),
+           py::arg("out_roles"), py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
            // Frequence CONSTANTE declaree mu du couplage (CoupledSource.frequency, vague 3) : borne de
            // pas dt <= cfl/mu sur le macro-pas ; <= 0 = pas de borne (historique).
            py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
@@ -448,7 +512,28 @@ PYBIND11_MODULE(_adc, m) {
 
   py::class_<AmrSystem>(m, "AmrSystem")
       .def(py::init<const AmrSystemConfig&>())
-      .def("add_block", &AmrSystem::add_block, py::arg("name"), py::arg("model"),
+      // ADC-214 : surface Python INCHANGEE (memes kwargs newton_* a plat, memes defauts). La lambda
+      // assemble le POD NewtonOptions avant l'appel C++ (parite avec System.add_block).
+      .def("add_block",
+           [](AmrSystem& s, const std::string& name, const ModelSpec& model,
+              const std::string& limiter, const std::string& riemann, const std::string& recon,
+              const std::string& time, int substeps, int stride,
+              const std::vector<std::string>& implicit_vars,
+              const std::vector<std::string>& implicit_roles, int newton_max_iters,
+              double newton_rel_tol, double newton_abs_tol, double newton_fd_eps,
+              double newton_damping, const std::string& newton_fail_policy, bool newton_diagnostics) {
+             NewtonOptions newton;
+             newton.max_iters = newton_max_iters;
+             newton.rel_tol = static_cast<Real>(newton_rel_tol);
+             newton.abs_tol = static_cast<Real>(newton_abs_tol);
+             newton.fd_eps = static_cast<Real>(newton_fd_eps);
+             newton.damping = static_cast<Real>(newton_damping);
+             newton.fail_policy =
+                 newton_fail_policy_from_string(newton_fail_policy, "AmrSystem::add_block");
+             s.add_block(name, model, limiter, riemann, recon, time, substeps, stride, implicit_vars,
+                         implicit_roles, newton, newton_diagnostics);
+           },
+           py::arg("name"), py::arg("model"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit",
            py::arg("substeps") = 1, py::arg("stride") = 1,
@@ -515,8 +600,23 @@ PYBIND11_MODULE(_adc, m) {
              s.set_magnetic_field(flat(arr));
            },
            py::arg("bz"))
-      .def("set_source_stage", &AmrSystem::set_source_stage, py::arg("name"), py::arg("kind"),
-           py::arg("theta"), py::arg("alpha"),
+      // ADC-214 : surface Python INCHANGEE (memes kwargs krylov_* / descripteurs a plat, memes
+      // defauts ; pas de bz_aux_component cote AMR). La lambda assemble le POD SourceStageOptions.
+      .def("set_source_stage",
+           [](AmrSystem& s, const std::string& name, const std::string& kind, double theta,
+              double alpha, double krylov_tol, int krylov_max_iters, const std::string& density,
+              const std::string& momentum_x, const std::string& momentum_y,
+              const std::string& energy) {
+             SourceStageOptions opts;
+             opts.krylov_tol = krylov_tol;
+             opts.krylov_max_iters = krylov_max_iters;
+             opts.density = density;
+             opts.momentum_x = momentum_x;
+             opts.momentum_y = momentum_y;
+             opts.energy = energy;
+             s.set_source_stage(name, kind, theta, alpha, opts);
+           },
+           py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
            // Reglages transportes (vague 3, parite System) : tolerances Krylov du solve grossier
            // (<= 0 = defauts 1e-10/400) + descripteurs de champs ("" = role canonique).
            py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0,
@@ -550,9 +650,22 @@ PYBIND11_MODULE(_adc, m) {
       // hierarchie AMR PARTAGEE : appliquee apres le transport a chaque macro-pas, par splitting
       // explicite, niveau par niveau + cascade fin -> grossier (cellules couvertes coherentes). MEME
       // ABI plate que System.add_coupled_source. Sans appel, inchange. cf. AmrSystem::add_coupled_source.
-      .def("add_coupled_source", &AmrSystem::add_coupled_source, py::arg("in_blocks"),
-           py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"), py::arg("out_roles"),
-           py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
+      // ADC-214 : surface Python INCHANGEE (memes kwargs plats, memes defauts). La lambda assemble le
+      // POD CoupledSourceProgram avant l'appel C++ (parite avec System.add_coupled_source).
+      .def("add_coupled_source",
+           [](AmrSystem& s, const std::vector<std::string>& in_blocks,
+              const std::vector<std::string>& in_roles, const std::vector<double>& consts,
+              const std::vector<std::string>& out_blocks, const std::vector<std::string>& out_roles,
+              const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
+              const std::vector<int>& prog_lens, double frequency, const std::string& label,
+              const std::vector<int>& freq_prog_ops, const std::vector<int>& freq_prog_args) {
+             CoupledSourceProgram prog{in_blocks,  in_roles,  consts,        out_blocks,
+                                       out_roles,  prog_ops,  prog_args,     prog_lens,
+                                       freq_prog_ops, freq_prog_args};
+             s.add_coupled_source(prog, frequency, label);
+           },
+           py::arg("in_blocks"), py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"),
+           py::arg("out_roles"), py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
            py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
            // Frequence PAR CELLULE optionnelle mu(U) : evaluee sur le grossier (cf. System).
            py::arg("freq_prog_ops") = std::vector<int>{},

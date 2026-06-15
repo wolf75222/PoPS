@@ -1,7 +1,9 @@
 #pragma once
 
 #include <adc/core/variables.hpp>  // VariableSet (descripteur a roles porte par chaque bloc)
+#include <adc/numerics/time/implicit_stepper.hpp>  // NewtonOptions (options du Newton de la source IMEX)
 #include <adc/runtime/export.hpp>  // ADC_EXPORT (methodes resolues par le loader natif a travers le dlopen)
+#include <adc/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (PODs de facade, ADC-214)
 #include <adc/runtime/grid_context.hpp>  // GridContext + BlockClosures (seam bloc compile AOT)
 #include <adc/runtime/model_spec.hpp>
 
@@ -102,23 +104,19 @@ class System {
   /// @param implicit_roles IMEX seulement : meme masque implicite mais par ROLE physique ("density",
   ///                 "momentum_x", "energy", ...) au lieu du nom (cf. variable_roles). Union avec
   ///                 implicit_vars. Un role absent du bloc leve une erreur EXPLICITE.
-  /// @param newton_max_iters IMEX seulement : budget d'iterations du Newton local de la source
-  ///                 implicite (backward-Euler). Defaut 2 = la constante historique (bit-identique).
-  /// @param newton_rel_tol / newton_abs_tol IMEX seulement : critere d'arret par CELLULE
-  ///                 ||F||_inf <= abs_tol + rel_tol*||F0||_inf, evalue en tete d'iteration.
-  ///                 0/0 (defaut) = desactive -> boucle historique a iterations fixes, bit-identique.
-  /// @param newton_fd_eps IMEX seulement : pas (relatif + plancher) de la jacobienne par differences
-  ///                 finies (defaut 1e-7 = la constante historique).
+  /// @param newton IMEX seulement : options du Newton local de la source implicite (backward-Euler),
+  ///                 regroupees en POD (ADC-214 ; cf. NewtonOptions). max_iters (defaut 2 = constante
+  ///                 historique), rel_tol / abs_tol (critere d'arret par CELLULE
+  ///                 ||F||_inf <= abs_tol + rel_tol*||F0||_inf, 0/0 = desactive -> iterations fixes
+  ///                 historiques), fd_eps (pas de la jacobienne par differences finies, defaut 1e-7),
+  ///                 damping (amortissement W -= damping*delta dans (0, 1], 1 = Newton plein),
+  ///                 fail_policy (kFailNone / kFailWarn / kFailThrow : reaction aux cellules en echec).
+  ///                 Defaut {} = constantes historiques, bit-identique.
   /// @param newton_diagnostics IMEX seulement : active le rapport Newton du bloc (residu max,
   ///                 iterations max, cellules en echec -- non-fini / pivot degenere / non-convergence),
   ///                 agrege sur les sous-pas de chaque avance et consultable via newton_report(name).
-  ///                 OPT-IN : false (defaut) = chemin historique sans aucun cout supplementaire.
-  /// @param newton_damping IMEX seulement : amortissement de la mise a jour Newton W -= damping*delta
-  ///                 dans (0, 1]. 1 (defaut) = Newton plein, bit-identique.
-  /// @param newton_fail_policy IMEX seulement : reaction aux cellules en echec -- "none" (defaut,
-  ///                 enregistrer seulement), "warn" (avertissement stderr par avance), "throw"
-  ///                 (erreur dure avec la cellule fautive). != "none" active la detection (chemin
-  ///                 instrumente, observateur pur : W inchange).
+  ///                 OPT-IN : false (defaut) = chemin historique sans aucun cout supplementaire. Reste
+  ///                 a plat (un bool distinct, hors de la famille homogene des options de convergence).
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod",
                  const std::string& riemann = "rusanov",
@@ -127,10 +125,7 @@ class System {
                  bool evolve = true, int stride = 1,
                  const std::vector<std::string>& implicit_vars = {},
                  const std::vector<std::string>& implicit_roles = {},
-                 int newton_max_iters = 2, double newton_rel_tol = 0.0,
-                 double newton_abs_tol = 0.0, double newton_fd_eps = 1e-7,
-                 bool newton_diagnostics = false, double newton_damping = 1.0,
-                 const std::string& newton_fail_policy = "none",
+                 const NewtonOptions& newton = {}, bool newton_diagnostics = false,
                  double positivity_floor = 0.0);
 
   /// Rapport du Newton de la source implicite (IMEX) d'un bloc, AGREGE sur les sous-pas de la
@@ -434,23 +429,16 @@ class System {
   /// @param theta theta-schema in (0,1] (0.5 = Crank-Nicolson, 1 = Euler retrograde).
   /// @param alpha constante de couplage electrostatique du sous-systeme source (d_t(-Lap phi) =
   ///              -alpha div(rho v)).
-  /// @param krylov_tol / krylov_max_iters : tolerance et budget du solve Krylov (BiCGStab) de
-  ///              l'etage. <= 0 (defauts) = constantes historiques du stepper (1e-10 ; 400 en
-  ///              cartesien, 600 en polaire) -- rendues configurables par l'audit 2026-06.
-  /// @param density / momentum_x / momentum_y / energy : DESCRIPTEURS des champs de l'etage (audit
-  ///              vague 2 : roles transportes dans l'ABI au lieu d'etre figes). Chaine VIDE
-  ///              (defaut) = role canonique (Density / MomentumX / MomentumY / Energy optionnel),
-  ///              bit-identique. Sinon : un NOM DE ROLE stable ("density", "momentum_x", ...) ou
-  ///              un NOM DE VARIABLE du bloc -- pour un bloc a noms libres / roles Custom.
-  ///              energy = "none" desactive la mise a jour d'energie. CARTESIEN seulement (le
-  ///              stepper polaire ne prend pas encore d'override -> rejet explicite).
-  /// @param bz_aux_component : composante du canal aux lue comme champ magnetique Omega (audit
-  ///              vague 2). < 0 (defaut) = canal canonique B_z (kAuxBaseComps), bit-identique.
+  /// @param opts  reglages regroupes en POD (ADC-214 ; cf. SourceStageOptions) : tolerance / budget du
+  ///              solve Krylov (krylov_tol / krylov_max_iters, <= 0 = defauts historiques 1e-10 ;
+  ///              400 cartesien, 600 polaire), DESCRIPTEURS de champs (density / momentum_x /
+  ///              momentum_y / energy ; "" = role canonique, sinon nom de role stable ou de variable
+  ///              du bloc ; energy == "none" desactive l'energie ; CARTESIEN seulement pour un
+  ///              override, le stepper polaire le rejette), et bz_aux_component (< 0 = canal canonique
+  ///              B_z). Defaut {} = comportement historique bit-identique. Ces champs etaient une
+  ///              longue liste de quatre `std::string` adjacents intervertibles a l'appel.
   void set_source_stage(const std::string& name, const std::string& kind, double theta,
-                        double alpha, double krylov_tol = 0.0, int krylov_max_iters = 0,
-                        const std::string& density = "", const std::string& momentum_x = "",
-                        const std::string& momentum_y = "", const std::string& energy = "",
-                        int bz_aux_component = -1);
+                        double alpha, const SourceStageOptions& opts = {});
 
   /// POLITIQUE DE SPLITTING en temps du macro-pas (transport hyperbolique H + etage source S) :
   ///  - "lie"    (defaut) : H(dt) ; S(dt) une fois (Godunov, 1er ordre). BIT-IDENTIQUE a l'historique.
@@ -479,41 +467,29 @@ class System {
   /// local_size()==0 -> no-op).
   ///
   /// ABI PLATE (aucun objet C++ ne traverse la frontiere) :
-  /// @param in_blocks  noms des blocs lus en entree (un par registre d'entree) ;
-  /// @param in_roles   roles correspondants (resolus en composante par le descripteur du bloc) ;
-  /// @param consts     constantes (parametres .param()), chargees apres les entrees ;
-  /// @param out_blocks bloc cible de chaque terme de source ;
-  /// @param out_roles  role cible de chaque terme de source ;
-  /// @param prog_ops   opcodes concatenes de TOUS les termes (machine a pile, cf. CsOp) ;
-  /// @param prog_args  arguments paralleles a prog_ops (indice de registre pour PushReg) ;
-  /// @param prog_lens  longueur du programme de chaque terme (segmente prog_ops/prog_args dans l'ordre).
+  /// @param prog      description bytecode du couplage regroupee en POD (ADC-214 ; cf.
+  ///                  CoupledSourceProgram) : in_blocks / in_roles (entrees lues et leurs roles),
+  ///                  consts (parametres .param(), charges apres les entrees), out_blocks / out_roles
+  ///                  (cibles de chaque terme), prog_ops / prog_args / prog_lens (opcodes concatenes
+  ///                  de TOUS les termes, machine a pile cf. CsOp, arguments paralleles, et longueur
+  ///                  par terme), et freq_prog_ops / freq_prog_args (programme OPTIONNEL d'une
+  ///                  frequence PAR CELLULE mu(U), meme machine a pile / table de registres ; VIDES =
+  ///                  frequence constante seule, bit-identique). Ces tableaux etaient une longue liste
+  ///                  de `std::vector` du meme type, intervertibles a l'appel.
   /// @param frequency  frequence CONSTANTE declaree mu [1/s] du couplage (audit vague 3,
   ///                   CoupledSource.frequency) : borne de pas dt <= cfl / mu agregee par step_cfl /
   ///                   step_adaptive (les couplages s'appliquent UNE fois par macro-pas, la borne
   ///                   porte sur le macro-dt, sans facteur substeps/stride). <= 0 (defaut) = pas de
-  ///                   borne, bit-identique.
-  /// @param label      nom du couplage (raison "coupled_source:<label>" de last_dt_bound).
-  /// @param freq_prog_ops/freq_prog_args  programme bytecode postfixe OPTIONNEL d'une frequence PAR
-  ///                   CELLULE mu(U) (meme machine a pile que les termes, MEME table de registres :
-  ///                   entrees in_blocks/in_roles puis constantes consts). VIDES (defaut) = frequence
-  ///                   CONSTANTE seule (chemin historique, bit-identique). Non vides : a chaque pas,
-  ///                   step_cfl / step_adaptive reduit le MAX de mu sur les cellules (all_reduce_max
-  ///                   global) et borne dt <= cfl / max(mu) (raison "coupled_source:<label>", uniforme
-  ///                   avec la frequence constante). max(mu) <= 0 = pas de borne ce pas.
+  ///                   borne, bit-identique. Reste a plat (un double, hors famille homogene).
+  /// @param label      nom du couplage (raison "coupled_source:<label>" de last_dt_bound). Reste a
+  ///                   plat (une chaine, hors famille homogene). Quand prog.freq_prog_ops/_args sont
+  ///                   non vides, step_cfl / step_adaptive reduit le MAX de mu sur les cellules
+  ///                   (all_reduce_max global) et borne dt <= cfl / max(mu) (raison
+  ///                   "coupled_source:<label>"). max(mu) <= 0 = pas de borne ce pas.
   /// Les blocs / roles inconnus, une capacite depassee ou un programme mal forme levent une erreur
   /// EXPLICITE (avant tout pas). Sans appel, le chemin par defaut reste BIT-IDENTIQUE.
-  void add_coupled_source(const std::vector<std::string>& in_blocks,
-                          const std::vector<std::string>& in_roles,
-                          const std::vector<double>& consts,
-                          const std::vector<std::string>& out_blocks,
-                          const std::vector<std::string>& out_roles,
-                          const std::vector<int>& prog_ops,
-                          const std::vector<int>& prog_args,
-                          const std::vector<int>& prog_lens,
-                          double frequency = 0.0,
-                          const std::string& label = "coupled_source",
-                          const std::vector<int>& freq_prog_ops = {},
-                          const std::vector<int>& freq_prog_args = {});
+  void add_coupled_source(const CoupledSourceProgram& prog, double frequency = 0.0,
+                          const std::string& label = "coupled_source");
 
   void solve_fields();   ///< resout Poisson puis derive aux = (phi, grad phi)
   void step(double dt);  ///< solve_fields, puis avance chaque bloc selon son schema

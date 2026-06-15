@@ -4,6 +4,7 @@
 #include <adc/mesh/physical_bc.hpp>  // BCRec
 #include <adc/numerics/time/implicit_stepper.hpp>  // NewtonOptions (options du Newton de la source IMEX)
 #include <adc/runtime/export.hpp>    // ADC_EXPORT : set_compiled_block resolu par le loader natif AMR
+#include <adc/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (PODs de facade, ADC-214)
 #include <adc/runtime/model_spec.hpp>
 
 #include <functional>
@@ -228,12 +229,15 @@ class AmrSystem {
   /// @throws std::runtime_error si un bloc est deja defini, si substeps < 1, si stride < 1, si time
   ///         n'est pas dans {explicit, imex}, si recon n'est pas dans {conservative, primitive}, ou si
   ///         un masque implicite est demande hors IMEX / avec un nom-role absent du bloc.
-  /// Options Newton (vague 3, parite System::add_block) : defauts = constantes historiques,
-  /// bit-identique. SUPPORT (vague 3, solde) : les OPTIONS (newton_max_iters/rel_tol/abs_tol/fd_eps/
-  /// damping/fail_policy) sont desormais cablees EN MONO-BLOC (coupleur AmrCouplerMP) ET en MULTI-BLOCS
-  /// (moteur AmrRuntime) ; les loaders .so les rejettent (ABI plate). Le RAPPORT newton_diagnostics
-  /// (newton_report agrege) est cable en MULTI-BLOCS NATIF seulement : le mono-bloc le rejette au build,
-  /// les loaders .so a la facade ; fail_policy warn/throw fonctionne partout (detection sans rapport).
+  /// @param newton  options du Newton de la source IMEX regroupees en POD (ADC-214 ; cf.
+  ///                 NewtonOptions ; parite System::add_block) : max_iters / rel_tol / abs_tol /
+  ///                 fd_eps / damping / fail_policy. Defaut {} = constantes historiques, bit-identique.
+  ///                 SUPPORT (vague 3, solde) : ces OPTIONS sont cablees EN MONO-BLOC (coupleur
+  ///                 AmrCouplerMP) ET en MULTI-BLOCS (moteur AmrRuntime) ; les loaders .so les
+  ///                 rejettent (ABI plate). fail_policy warn/throw fonctionne partout.
+  /// @param newton_diagnostics  rapport Newton agrege (newton_report) : cable en MULTI-BLOCS NATIF
+  ///                 seulement (le mono-bloc le rejette au build, les loaders .so a la facade). Reste
+  ///                 a plat (un bool distinct, hors famille homogene des options de convergence).
   void add_block(const std::string& name, const ModelSpec& model,
                  const std::string& limiter = "minmod",
                  const std::string& riemann = "rusanov",
@@ -241,10 +245,7 @@ class AmrSystem {
                  const std::string& time = "explicit", int substeps = 1, int stride = 1,
                  const std::vector<std::string>& implicit_vars = {},
                  const std::vector<std::string>& implicit_roles = {},
-                 int newton_max_iters = 2, double newton_rel_tol = 0.0,
-                 double newton_abs_tol = 0.0, double newton_fd_eps = 1e-7,
-                 double newton_damping = 1.0, const std::string& newton_fail_policy = "none",
-                 bool newton_diagnostics = false);
+                 const NewtonOptions& newton = {}, bool newton_diagnostics = false);
 
   /// Rapport du Newton de la source implicite (IMEX) d'un bloc, AGREGE sur les niveaux et sous-pas de
   /// la DERNIERE avance du bloc. N'existe que si le bloc a ete ajoute avec newton_diagnostics=true EN
@@ -391,15 +392,15 @@ class AmrSystem {
   /// @throws std::runtime_error si le systeme est deja construit, en MULTI-BLOCS, si kind/theta sont
   ///         hors domaine, ou (au build) si le bloc n'expose pas Density/MomentumX/MomentumY ou si
   ///         set_magnetic_field n'a pas ete appele.
-  /// @param krylov_tol / krylov_max_iters : tolerance et budget du solve Krylov GROSSIER de
-  ///        l'etage (<= 0 = defauts historiques 1e-10 / 400 ; le solve composite FAC garde ses
-  ///        tolerances propres, Phase 4). @param density / momentum_x / momentum_y / energy :
-  ///        descripteurs des champs ("" = role canonique, bit-identique ; sinon nom de role stable
-  ///        ou de variable du bloc, resolus au build) -- parite avec System::set_source_stage.
+  /// @param opts  reglages regroupes en POD (ADC-214 ; cf. SourceStageOptions ; parite
+  ///        System::set_source_stage) : krylov_tol / krylov_max_iters (solve Krylov GROSSIER ; <= 0 =
+  ///        defauts historiques 1e-10 / 400 ; le solve composite FAC garde ses tolerances propres,
+  ///        Phase 4) et descripteurs density / momentum_x / momentum_y / energy ("" = role canonique,
+  ///        bit-identique ; sinon nom de role stable ou de variable du bloc, resolus au build). Le
+  ///        champ bz_aux_component du POD est IGNORE ici (l'etage AMR mono-bloc lit le canal canonique
+  ///        B_z). Defaut {} = comportement historique.
   void set_source_stage(const std::string& name, const std::string& kind, double theta,
-                        double alpha, double krylov_tol = 0.0, int krylov_max_iters = 0,
-                        const std::string& density = "", const std::string& momentum_x = "",
-                        const std::string& momentum_y = "", const std::string& energy = "");
+                        double alpha, const SourceStageOptions& opts = {});
 
   /// Choisit la politique de splitting en temps de l'etage source condense : "lie" (defaut, H(dt) S(dt))
   /// ou "strang" (H(dt/2) S(dt) H(dt/2), 2e ordre). Pendant AMR de System::set_time_scheme. Sans etage
@@ -422,24 +423,18 @@ class AmrSystem {
   ///
   /// @throws std::runtime_error si appele en mono-bloc, si le systeme est deja construit, ou si la
   ///         forme du bytecode / un role / un bloc est invalide (memes gardes que System).
+  /// @param prog      description bytecode du couplage regroupee en POD (ADC-214 ; cf.
+  ///                  CoupledSourceProgram ; parite System::add_coupled_source) : in_blocks /
+  ///                  in_roles / consts / out_blocks / out_roles + prog_ops / prog_args / prog_lens
+  ///                  (machine a pile) + freq_prog_ops / freq_prog_args (frequence PAR CELLULE mu(U)
+  ///                  optionnelle ; VIDES = frequence constante seule, bit-identique ; non vides :
+  ///                  evaluee sur le NIVEAU GROSSIER des blocs d'entree a chaque step_cfl, MAX +
+  ///                  all_reduce_max, borne dt <= cfl / max(mu) sur le grossier, pas les patchs).
   /// @param frequency frequence CONSTANTE declaree mu [1/s] du couplage (vague 3) : borne
   ///                  dt <= cfl/mu sur le macro-pas de step_cfl ; <= 0 (defaut) = pas de borne.
   /// @param label     nom du couplage (raison "coupled_source:<label>" de last_dt_bound).
-  /// @param freq_prog_ops/freq_prog_args  programme bytecode OPTIONNEL d'une frequence PAR CELLULE
-  ///                  mu(U) (meme machine a pile / table de registres que la source). VIDES (defaut) =
-  ///                  frequence constante seule (bit-identique). Non vides : evaluee sur le NIVEAU
-  ///                  GROSSIER des blocs d'entree a chaque step_cfl (MAX + all_reduce_max, borne
-  ///                  dt <= cfl / max(mu)). La borne est donc evaluee sur le grossier (pas les patchs).
-  void add_coupled_source(const std::vector<std::string>& in_blocks,
-                          const std::vector<std::string>& in_roles,
-                          const std::vector<double>& consts,
-                          const std::vector<std::string>& out_blocks,
-                          const std::vector<std::string>& out_roles,
-                          const std::vector<int>& prog_ops, const std::vector<int>& prog_args,
-                          const std::vector<int>& prog_lens, double frequency = 0.0,
-                          const std::string& label = "coupled_source",
-                          const std::vector<int>& freq_prog_ops = {},
-                          const std::vector<int>& freq_prog_args = {});
+  void add_coupled_source(const CoupledSourceProgram& prog, double frequency = 0.0,
+                          const std::string& label = "coupled_source");
 
   void step(double dt);  ///< un macro-pas AMR (regrid periodique inclus)
   void advance(double dt, int nsteps);

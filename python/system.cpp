@@ -495,26 +495,27 @@ void System::add_block(const std::string& name, const ModelSpec& model,
                        const std::string& recon, const std::string& time, int substeps,
                        bool evolve, int stride, const std::vector<std::string>& implicit_vars,
                        const std::vector<std::string>& implicit_roles,
-                       int newton_max_iters, double newton_rel_tol, double newton_abs_tol,
-                       double newton_fd_eps, bool newton_diagnostics, double newton_damping,
-                       const std::string& newton_fail_policy, double positivity_floor) {
+                       const NewtonOptions& newton, bool newton_diagnostics,
+                       double positivity_floor) {
   Impl* P = p_.get();
   if (substeps < 1) throw std::runtime_error("System::add_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("System::add_block : stride >= 1");
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error("System::add_block : positivity_floor >= 0 et fini (0 = inactif)");
-  if (newton_max_iters < 1)
+  // Validation des OPTIONS NEWTON (regroupees en POD, ADC-214) : memes bornes qu'avant, lues sur les
+  // champs du POD. fail_policy est deja un entier valide (NewtonOptions::kFail* ; les bindings le
+  // resolvent depuis la chaine "none"/"warn"/"throw"). On valide sa plage pour rester defensif.
+  if (newton.max_iters < 1)
     throw std::runtime_error("System::add_block : newton_max_iters >= 1");
-  if (newton_rel_tol < 0.0 || newton_abs_tol < 0.0 || newton_fd_eps <= 0.0)
+  if (newton.rel_tol < 0.0 || newton.abs_tol < 0.0 || newton.fd_eps <= 0.0)
     throw std::runtime_error("System::add_block : newton_rel_tol/abs_tol >= 0 et newton_fd_eps > 0");
-  if (!(newton_damping > 0.0 && newton_damping <= 1.0))
+  if (!(newton.damping > 0.0 && newton.damping <= 1.0))
     throw std::runtime_error("System::add_block : newton_damping dans (0, 1]");
-  int fail_policy = NewtonOptions::kFailNone;
-  if (newton_fail_policy == "warn") fail_policy = NewtonOptions::kFailWarn;
-  else if (newton_fail_policy == "throw") fail_policy = NewtonOptions::kFailThrow;
-  else if (newton_fail_policy != "none")
-    throw std::runtime_error("System::add_block : newton_fail_policy 'none'|'warn'|'throw' (recu '" +
-                             newton_fail_policy + "')");
+  if (newton.fail_policy != NewtonOptions::kFailNone &&
+      newton.fail_policy != NewtonOptions::kFailWarn &&
+      newton.fail_policy != NewtonOptions::kFailThrow)
+    throw std::runtime_error("System::add_block : newton_fail_policy invalide "
+                             "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
   // @p time porte le TRAITEMENT et, en explicite, le SCHEMA RK : "explicit"/"ssprk2" = SSPRK2
   // (defaut historique), "ssprk3" = SSPRK3 (ordre 3), "euler" = ForwardEuler (ordre 1, fidelite aux
   // references premier ordre -- validation), "imex" = transport explicite + source raide
@@ -552,10 +553,10 @@ void System::add_block(const std::string& name, const ModelSpec& model,
         "masque partiel, ou retirer implicit_vars / implicit_roles.");
   // Memes regles pour les options/diagnostics Newton : elles ne pilotent que le pas de source IMEX.
   // Des valeurs non-defaut en explicite seraient ignorees EN SILENCE -> erreur explicite.
-  const bool newton_non_default = newton_max_iters != 2 || newton_rel_tol != 0.0 ||
-                                  newton_abs_tol != 0.0 || newton_fd_eps != 1e-7 ||
-                                  newton_diagnostics || newton_damping != 1.0 ||
-                                  fail_policy != NewtonOptions::kFailNone;
+  const bool newton_non_default = newton.max_iters != 2 || newton.rel_tol != 0.0 ||
+                                  newton.abs_tol != 0.0 || newton.fd_eps != 1e-7 ||
+                                  newton_diagnostics || newton.damping != 1.0 ||
+                                  newton.fail_policy != NewtonOptions::kFailNone;
   if (!imex && newton_non_default)
     throw std::runtime_error("System::add_block : les options Newton (newton_max_iters/rel_tol/"
                              "abs_tol/fd_eps/diagnostics) exigent time='imex' (recu time='" +
@@ -604,15 +605,10 @@ void System::add_block(const std::string& name, const ModelSpec& model,
   } else {
   const GridContext ctx = P->grid_ctx();
   // Options du Newton de la source implicite IMEX (defauts = constantes historiques, bit-identique).
+  // Regroupees en POD (ADC-214) cote facade : on les transmet telles quelles au coeur numerique.
   // Le rapport (diagnostics OPT-IN) vit dans Impl::newton_reports_ en shared_ptr -> adresse STABLE
   // capturee par les fermetures meme quand sp realloue a un add_block ulterieur.
-  NewtonOptions nopts;
-  nopts.max_iters = newton_max_iters;
-  nopts.rel_tol = static_cast<Real>(newton_rel_tol);
-  nopts.abs_tol = static_cast<Real>(newton_abs_tol);
-  nopts.fd_eps = static_cast<Real>(newton_fd_eps);
-  nopts.damping = static_cast<Real>(newton_damping);
-  nopts.fail_policy = fail_policy;
+  const NewtonOptions& nopts = newton;
   NewtonReport* nreport = nullptr;
   if (newton_diagnostics) {
     auto rep = std::make_shared<NewtonReport>();
@@ -1158,17 +1154,20 @@ void System::add_thermal_exchange(const std::string& a, const std::string& b, do
   });
 }
 
-void System::add_coupled_source(const std::vector<std::string>& in_blocks,
-                                const std::vector<std::string>& in_roles,
-                                const std::vector<double>& consts,
-                                const std::vector<std::string>& out_blocks,
-                                const std::vector<std::string>& out_roles,
-                                const std::vector<int>& prog_ops,
-                                const std::vector<int>& prog_args,
-                                const std::vector<int>& prog_lens,
-                                double frequency, const std::string& label,
-                                const std::vector<int>& freq_prog_ops,
-                                const std::vector<int>& freq_prog_args) {
+void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double frequency,
+                                const std::string& label) {
+  // Description bytecode regroupee en POD (ADC-214) : alias locaux pour garder le corps lisible (les
+  // noms et la semantique sont strictement ceux des anciens parametres a plat).
+  const std::vector<std::string>& in_blocks = prog_desc.in_blocks;
+  const std::vector<std::string>& in_roles = prog_desc.in_roles;
+  const std::vector<double>& consts = prog_desc.consts;
+  const std::vector<std::string>& out_blocks = prog_desc.out_blocks;
+  const std::vector<std::string>& out_roles = prog_desc.out_roles;
+  const std::vector<int>& prog_ops = prog_desc.prog_ops;
+  const std::vector<int>& prog_args = prog_desc.prog_args;
+  const std::vector<int>& prog_lens = prog_desc.prog_lens;
+  const std::vector<int>& freq_prog_ops = prog_desc.freq_prog_ops;
+  const std::vector<int>& freq_prog_args = prog_desc.freq_prog_args;
   Impl* P = p_.get();
   const int n_in = static_cast<int>(in_blocks.size());
   const int n_const = static_cast<int>(consts.size());
@@ -1322,10 +1321,16 @@ void System::add_coupled_source(const std::vector<std::string>& in_blocks,
 }
 
 void System::set_source_stage(const std::string& name, const std::string& kind, double theta,
-                              double alpha, double krylov_tol, int krylov_max_iters,
-                              const std::string& density, const std::string& momentum_x,
-                              const std::string& momentum_y, const std::string& energy,
-                              int bz_aux_component) {
+                              double alpha, const SourceStageOptions& opts) {
+  // Reglages regroupes en POD (ADC-214) : alias locaux pour garder le corps lisible (les noms et la
+  // semantique sont strictement ceux des anciens parametres a plat).
+  const double krylov_tol = opts.krylov_tol;
+  const int krylov_max_iters = opts.krylov_max_iters;
+  const std::string& density = opts.density;
+  const std::string& momentum_x = opts.momentum_x;
+  const std::string& momentum_y = opts.momentum_y;
+  const std::string& energy = opts.energy;
+  const int bz_aux_component = opts.bz_aux_component;
   Impl* P = p_.get();
   Impl::Species& s = P->find(name);  // leve si bloc inconnu
   // SEUL kind cable pour l'instant : ElectrostaticLorentzCondensation (cf. CondensedSchurSourceStepper).
