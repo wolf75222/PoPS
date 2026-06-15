@@ -47,7 +47,8 @@ generated `.so` between runs (default `~/.cache/adc/dsl`).
    ```
 
 3. Declare the flux and the eigenvalues, one `Expr` per component and direction. Use
-   `dsl.sqrt` for the sound speed; it is the only named math function in the algebra.
+   `dsl.sqrt` for the sound speed. The named math functions in the algebra are `dsl.sqrt` and
+   `dsl.abs_` (absolute value).
 
    ```python
    H = (E + p) / rho
