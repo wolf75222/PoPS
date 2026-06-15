@@ -1,23 +1,23 @@
-"""Integrateurs temporels ecrits en Python, par-dessus les primitives de la lib.
+"""Time integrators written in Python, on top of the library primitives.
 
-On peut implementer son propre integrateur temporel en Python sans callback Python
-dans le hot path, via les primitives exposees par `System` :
+You can implement your own time integrator in Python without a Python callback
+in the hot path, via the primitives exposed by `System`:
 
-    sim.solve_fields()          # Poisson + aux = grad(phi)        (calcul C++)
-    R = sim.eval_rhs(name)      # residu -div F + S du bloc        (calcul C++, par cellule)
-    U = sim.get_state(name)     # etat du bloc (ndarray ncomp,n,n)
-    sim.set_state(name, U)      # ecrit l'etat
+    sim.solve_fields()          # Poisson + aux = grad(phi)        (C++ computation)
+    R = sim.eval_rhs(name)      # residual -div F + S of the block (C++ computation, per cell)
+    U = sim.get_state(name)     # block state (ndarray ncomp,n,n)
+    sim.set_state(name, U)      # writes the state
 
-Le residu et Poisson restent calcules dans la lib compilee (par cellule), seul
-l'assemblage des etages RK est en Python (par pas). On peut donc ecrire n'importe quel
-schema en temps (ici Euler avant et SSPRK2) sans toucher au C++. Ces integrateurs
-re-resolvent Poisson a chaque etage RK (couplage per-stage, plus precis que le couplage
-fige par pas du step() compile).
+The residual and Poisson stay computed in the compiled library (per cell), only
+the assembly of the RK stages is in Python (per step). You can thus write any
+time scheme (here forward Euler and SSPRK2) without touching the C++. These
+integrators re-solve Poisson at each RK stage (per-stage coupling, more accurate
+than the per-step frozen coupling of the compiled step()).
 """
 
 
 def euler_step(sim, dt, names=None):
-    """Euler avant, ecrit en Python : U <- U + dt * RHS(U). Poisson resolu une fois."""
+    """Forward Euler, written in Python: U <- U + dt * RHS(U). Poisson solved once."""
     names = names if names is not None else sim.block_names()
     sim.solve_fields()
     for n in names:
@@ -25,20 +25,20 @@ def euler_step(sim, dt, names=None):
 
 
 def ssprk2_step(sim, dt, names=None):
-    """SSPRK2 (Heun fort-stable) ecrit en Python, Poisson re-resolu a chaque etage.
+    """SSPRK2 (strong-stable Heun) written in Python, Poisson re-solved at each stage.
 
         U1 = U0 + dt R(U0)
         U  = 1/2 U0 + 1/2 (U1 + dt R(U1))
 
-    Tous les blocs avancent ensemble, Poisson (qui les couple) etant re-resolu entre
-    les deux etages : couplage hyperbolique/elliptique per-stage.
+    All blocks advance together, with Poisson (which couples them) re-solved
+    between the two stages: per-stage hyperbolic/elliptic coupling.
     """
     names = names if names is not None else sim.block_names()
     sim.solve_fields()
     U0 = {n: sim.get_state(n) for n in names}
-    for n in names:                                   # etage 1 : U1 = U0 + dt R(U0)
+    for n in names:                                   # stage 1: U1 = U0 + dt R(U0)
         sim.set_state(n, U0[n] + dt * sim.eval_rhs(n))
-    sim.solve_fields()                                # Poisson re-resolu (per-stage)
-    for n in names:                                   # etage 2 : combinaison fort-stable
+    sim.solve_fields()                                # Poisson re-solved (per-stage)
+    for n in names:                                   # stage 2: strong-stable combination
         U1 = sim.get_state(n)                         # = U0 + dt R(U0)
         sim.set_state(n, 0.5 * U0[n] + 0.5 * (U1 + dt * sim.eval_rhs(n)))

@@ -1,16 +1,16 @@
 #include <adc/runtime/amr_system.hpp>
 
-#include <adc/runtime/abi_key.hpp>         // detail::abi_key_string : cle d'ABI (header-only), comparee a celle du loader
-#include <adc/runtime/amr_dsl_block.hpp>   // detail::dispatch_amr_compiled + build_amr_compiled (chemin partage)
-#include <adc/runtime/amr_runtime.hpp>     // AmrRuntime + AmrRuntimeBlock (moteur multi-blocs runtime)
-#include <adc/runtime/model_factory.hpp>   // detail::dispatch_model + briques compilees
-#include <adc/runtime/wall_predicate.hpp>  // detail::wall_predicate (paroi partagee System/AmrSystem)
+#include <adc/runtime/abi_key.hpp>         // detail::abi_key_string: ABI key (header-only), compared to the loader's
+#include <adc/runtime/amr_dsl_block.hpp>   // detail::dispatch_amr_compiled + build_amr_compiled (shared path)
+#include <adc/runtime/amr_runtime.hpp>     // AmrRuntime + AmrRuntimeBlock (multi-block runtime engine)
+#include <adc/runtime/model_factory.hpp>   // detail::dispatch_model + compiled bricks
+#include <adc/runtime/wall_predicate.hpp>  // detail::wall_predicate (wall shared System/AmrSystem)
 
-#include <algorithm>  // std::find, std::sort (resolution du masque IMEX partiel : indices uniques tries)
+#include <algorithm>  // std::find, std::sort (partial IMEX mask resolution: sorted unique indices)
 #include <cmath>
 #include <cstddef>
-#include <limits>  // std::numeric_limits (bornes globales de pas : neutralisation en +inf avant le min)
-#include <adc/runtime/dynlib.hpp>  // couche portable dlopen<->LoadLibraryW (ADC-99) ; <dlfcn.h> sur POSIX
+#include <limits>  // std::numeric_limits (global step bounds: neutralization to +inf before the min)
+#include <adc/runtime/dynlib.hpp>  // portable dlopen<->LoadLibraryW layer (ADC-99); <dlfcn.h> on POSIX
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -20,12 +20,12 @@
 namespace adc {
 
 namespace {
-// Resout le MASQUE IMEX PARTIEL d'un bloc (implicit_vars / implicit_roles) en une liste d'indices de
-// composantes conservees, contre le descripteur @p cons du bloc (resolu au build paresseux, quand le
-// type Model concret -- donc cons_vars -- est connu). MEME logique que System::resolve_implicit_components
-// (python/system.cpp) : nom ou role absent -> erreur EXPLICITE (pas d'ignore silencieux) ; indices
-// UNIQUES tries (l'ordre est sans importance pour le masque). VIDE en entree -> vide -> masque inactif
-// -> backward-Euler plein (toutes les composantes implicites), bit-identique a l'IMEX sans masque.
+// Resolves the PARTIAL IMEX MASK of a block (implicit_vars / implicit_roles) into a list of conserved
+// component indices, against the block's @p cons descriptor (resolved at lazy build, when the concrete
+// Model type -- thus cons_vars -- is known). SAME logic as System::resolve_implicit_components
+// (python/system.cpp): absent name or role -> EXPLICIT error (no silent ignore); sorted UNIQUE
+// indices (order is irrelevant for the mask). EMPTY input -> empty -> inactive mask
+// -> full backward-Euler (all components implicit), bit-identical to IMEX without a mask.
 std::vector<int> resolve_implicit_components(const std::string& block, const VariableSet& cons,
                                              const std::vector<std::string>& names,
                                              const std::vector<std::string>& roles) {
@@ -44,7 +44,7 @@ std::vector<int> resolve_implicit_components(const std::string& block, const Var
         have += cons.names[i];
       }
       throw std::runtime_error("AmrSystem::add_block : implicit_vars : variable '" + nm +
-                               "' absente du bloc '" + block + "' (variables conservees : " + have + ")");
+                               "' missing from block '" + block + "' (conserved variables : " + have + ")");
     }
     push_unique(idx);
   }
@@ -53,7 +53,7 @@ std::vector<int> resolve_implicit_components(const std::string& block, const Var
     const int idx = cons.index_of(role);
     if (role == VariableRole::Custom || idx < 0)
       throw std::runtime_error("AmrSystem::add_block : implicit_roles : role '" + rn +
-                               "' absent du bloc '" + block + "' (le bloc ne renseigne pas ce role)");
+                               "' missing from block '" + block + "' (the block does not provide this role)");
     push_unique(idx);
   }
   std::sort(out.begin(), out.end());
@@ -64,102 +64,102 @@ std::vector<int> resolve_implicit_components(const std::string& block, const Var
 struct AmrSystem::Impl {
   AmrSystemConfig cfg;
 
-  // Specification d'UN bloc (figee a add_block, materialisee au build paresseux). Le facade detient
-  // un REGISTRE PAR NOM de blocs (cf. design AMR_MULTIBLOCK_DESIGN.md section 0/3) : le chemin
-  // mono-bloc passe par AmrCouplerMP (intouche, bit-identique) ; deux blocs ou plus passent par le
-  // moteur runtime multi-blocs AmrRuntime (hierarchie partagee, Poisson somme co-localise).
+  // Specification of ONE block (frozen at add_block, materialized at lazy build). The facade holds
+  // a REGISTRY BY NAME of blocks (cf. design AMR_MULTIBLOCK_DESIGN.md section 0/3): the single-block
+  // path goes through AmrCouplerMP (untouched, bit-identical); two or more blocks go through the
+  // multi-block runtime engine AmrRuntime (shared hierarchy, co-located summed Poisson).
   struct BlockSpec {
     std::string name;
-    // Chemin ModelSpec natif (briques composees) OU chemin compile (.so / add_compiled_model).
+    // Native ModelSpec path (composed bricks) OR compiled path (.so / add_compiled_model).
     bool is_compiled = false;
-    ModelSpec spec;                 // chemin ModelSpec (is_compiled == false)
+    ModelSpec spec;                 // ModelSpec path (is_compiled == false)
     std::string limiter = "minmod", riemann = "rusanov";
     bool recon_prim = false;        // recon == "primitive"
-    bool imex = false;              // time == "imex" : source raide implicite
-    // Masque IMEX partiel PORTE PAR LE BLOC (cf. System::add_block) : composantes conservees traitees
-    // en implicite, par NOM (implicit_vars) ou par ROLE physique (implicit_roles). On STOCKE les chaines
-    // brutes ici (le type Model concret -- donc cons_vars -- n'est resolu qu'au build paresseux, dans
-    // build_multi via dispatch_model) ; la resolution noms/roles -> indices se fait la, contre le
-    // descripteur conservatif du bloc. Vides (defaut) -> backward-Euler plein (toutes implicites).
+    bool imex = false;              // time == "imex": implicit stiff source
+    // Partial IMEX mask CARRIED BY THE BLOCK (cf. System::add_block): conserved components handled
+    // implicitly, by NAME (implicit_vars) or by physical ROLE (implicit_roles). We STORE the raw
+    // strings here (the concrete Model type -- thus cons_vars -- is only resolved at lazy build, in
+    // build_multi via dispatch_model); the names/roles -> indices resolution happens there, against the
+    // block's conservative descriptor. Empty (default) -> full backward-Euler (all implicit).
     std::vector<std::string> implicit_vars, implicit_roles;
     int substeps = 1;
-    int stride = 1;                 // cadence hold-then-catch-up (multi-blocs ; cf. AmrRuntimeBlock)
+    int stride = 1;                 // hold-then-catch-up cadence (multi-block; cf. AmrRuntimeBlock)
     double gamma = 1.4;
-    // Chemin compile MONO-BLOC : builder type-erase (AmrCompiledHooks d'un AmrCouplerMP concret),
-    // invoque au build paresseux quand le bloc compile est SEUL (chemin AmrCouplerMP, bit-identique).
+    // Compiled SINGLE-BLOCK path: type-erasing builder (AmrCompiledHooks of a concrete AmrCouplerMP),
+    // invoked at lazy build when the compiled block is ALONE (AmrCouplerMP path, bit-identical).
     std::function<AmrCompiledHooks(const AmrBuildParams&)> compiled_hooks_builder;
-    // Chemin compile MULTI-BLOCS (capstone v, DSL production multi-bloc) : builder type-erase qui, sur
-    // le layout PARTAGE materialise au build paresseux (build_multi), rend l'AmrRuntimeBlock du bloc
-    // compile -- exactement comme dispatch_amr_block pour un bloc natif, mais avec le Model/Limiter/
-    // Flux CONCRETS deja capturas a l'ajout (add_compiled_model) au lieu d'une dispatch ModelSpec. Le
-    // masque IMEX partiel (implicit_vars/roles ci-dessus) est resolu en indices DANS ce builder (le
-    // type Model concret -- donc cons_vars -- y est connu), comme le chemin natif le resout dans
-    // build_multi. Vide pour un bloc natif (is_compiled == false).
+    // Compiled MULTI-BLOCK path (capstone v, multi-block production DSL): type-erasing builder that, on
+    // the SHARED layout materialized at lazy build (build_multi), produces the AmrRuntimeBlock of the
+    // compiled block -- exactly like dispatch_amr_block for a native block, but with the Model/Limiter/
+    // Flux CONCRETE types already captured at add (add_compiled_model) instead of a ModelSpec dispatch.
+    // The partial IMEX mask (implicit_vars/roles above) is resolved into indices IN this builder (the
+    // concrete Model type -- thus cons_vars -- is known there), just as the native path resolves it in
+    // build_multi. Empty for a native block (is_compiled == false).
     AmrCompiledBlockBuilder compiled_block_builder;
-    // Densite initiale du bloc (composante 0), n*n row-major ; ciblee par set_density(name, rho).
+    // Initial density of the block (component 0), n*n row-major; targeted by set_density(name, rho).
     bool has_density = false;
     std::vector<double> density;
-    // Etat conservatif initial COMPLET (toutes les composantes), ncomp*n*n composante-majeur ; pose
-    // par set_conservative_state(name, U). Prioritaire sur density au seed (cf. make_build_params /
-    // build_amr_compiled). MONO-BLOC uniquement (build_multi leve si has_state).
+    // FULL initial conservative state (all components), ncomp*n*n component-major; set by
+    // set_conservative_state(name, U). Takes priority over density at seed (cf. make_build_params /
+    // build_amr_compiled). SINGLE-BLOCK only (build_multi throws if has_state).
     bool has_state = false;
     std::vector<double> state;
-    // ETAGE SOURCE condense par Schur (chemin amr-schur, pose par set_source_stage). schur==false ->
-    // chemin explicit/imex inchange. theta/alpha figes a l'appel. Le splitting (lie/strang) et le champ
-    // B_z sont PORTES PAR LE SYSTEME (Impl), pas le bloc : un seul etage condense en mono-bloc.
+    // SOURCE STAGE condensed by Schur (amr-schur path, set by set_source_stage). schur==false ->
+    // explicit/imex path unchanged. theta/alpha frozen at the call. The splitting (lie/strang) and the
+    // B_z field are CARRIED BY THE SYSTEM (Impl), not the block: a single condensed stage in single-block.
     bool schur = false;
     double schur_theta = 0.5, schur_alpha = 1.0;
-    double schur_krylov_tol = 0.0;      // <= 0 = defaut historique (1e-10)
-    int schur_krylov_max_iters = 0;     // <= 0 = defaut historique (400)
-    std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;  // "" = canonique
-    NewtonOptions newton{};             // options Newton IMEX (vague 3 ; mono-bloc ET multi-blocs)
-    bool newton_non_default = false;    // true -> options non-defaut (loader .so REJETE : ABI plate)
-    bool newton_diagnostics = false;    // rapport newton_report : MULTI-BLOCS natif (mono/.so REJETES)
-    // METHODE TEMPORELLE du bloc (time == "ssprk3" -> kSsprk3). 0 == kEuler avant historique (defaut),
-    // 1 == kSsprk3 (ordre 3 + reflux par etage). Materialise en AmrTimeMethod au build (mono-bloc via
-    // make_build_params -> bp.time_method ; multi-blocs via dispatch_amr_block). Exclusif d'imex.
+    double schur_krylov_tol = 0.0;      // <= 0 = historical default (1e-10)
+    int schur_krylov_max_iters = 0;     // <= 0 = historical default (400)
+    std::string schur_density, schur_momentum_x, schur_momentum_y, schur_energy;  // "" = canonical
+    NewtonOptions newton{};             // IMEX source Newton options (wave 3; single-block AND multi-block)
+    bool newton_non_default = false;    // true -> non-default options (.so loader REJECTED: flat ABI)
+    bool newton_diagnostics = false;    // newton_report: native MULTI-BLOCK (single/.so REJECTED)
+    // TEMPORAL METHOD of the block (time == "ssprk3" -> kSsprk3). 0 == historical forward Euler (default),
+    // 1 == kSsprk3 (order 3 + per-stage reflux). Materialized to AmrTimeMethod at build (single-block via
+    // make_build_params -> bp.time_method; multi-block via dispatch_amr_block). Mutually exclusive with imex.
     int time_method = 0;
   };
 
   std::vector<BlockSpec> blocks;
-  double gamma = 1.4;  // gamma du PREMIER bloc (compat : lu par le chemin mono-bloc)
+  double gamma = 1.4;  // gamma of the FIRST block (compat: read by the single-block path)
 
-  // Sources couplees inter-especes (adc.dsl.CoupledSource compilee, ABI plate bytecode P5) FIGEES a
-  // add_coupled_source et injectees dans le moteur runtime AmrRuntime au build paresseux (build_multi).
-  // Le runtime n'existe pas encore a l'enregistrement (construit a ensure_built) : on memorise donc la
-  // spec plate ici, puis on la rejoue sur le runtime juste apres sa construction (multi-blocs seul).
+  // Coupled inter-species sources (compiled adc.dsl.CoupledSource, flat P5 bytecode ABI) FROZEN at
+  // add_coupled_source and injected into the AmrRuntime runtime engine at lazy build (build_multi).
+  // The runtime does not yet exist at registration (built at ensure_built): so we store the flat
+  // spec here, then replay it on the runtime right after its construction (multi-block only).
   struct CoupledSourceSpec {
     std::vector<std::string> in_blocks, in_roles;
     std::vector<double> consts;
     std::vector<std::string> out_blocks, out_roles;
     std::vector<int> prog_ops, prog_args, prog_lens;
-    double frequency = 0.0;  // mu CONSTANTE declaree (borne dt <= cfl/mu ; 0 = pas de borne)
+    double frequency = 0.0;  // CONSTANT declared mu (bound dt <= cfl/mu; 0 = no bound)
     std::string label = "coupled_source";
-    // Frequence PAR CELLULE optionnelle mu(U) : programme bytecode (memes entrees/constantes/table de
-    // registres que la source). VIDES = frequence constante seule. Rejoue sur le runtime au build.
+    // Optional PER-CELL frequency mu(U): bytecode program (same inputs/constants/register table
+    // as the source). EMPTY = constant frequency only. Replayed on the runtime at build.
     std::vector<int> freq_prog_ops, freq_prog_args;
   };
   std::vector<CoupledSourceSpec> coupled_sources;
 
-  double refine_threshold = 1e30;  // 1e30 => aucun raffinement par defaut
-  // Seuil de tag de PHI sur |grad phi| (D4) : <= 0 => phi ne contribue PAS a l'union des tags (defaut,
-  // bit-identique). > 0 => en multi-blocs + regrid_every > 0, build_multi pose le predicat phi du moteur
-  // (set_phi_tag_predicate) : raffine la ou |grad phi| (composantes 1,2 de l'aux partage) depasse ce seuil.
+  double refine_threshold = 1e30;  // 1e30 => no refinement by default
+  // PHI tag threshold on |grad phi| (D4): <= 0 => phi does NOT contribute to the tag union (default,
+  // bit-identical). > 0 => in multi-block + regrid_every > 0, build_multi sets the engine's phi predicate
+  // (set_phi_tag_predicate): refines where |grad phi| (components 1,2 of the shared aux) exceeds this threshold.
   double phi_grad_threshold = 0.0;
 
-  // ETAGE SOURCE condense par Schur (chemin amr-schur) : politique de splitting (Lie/Strang) + champ
-  // B_z, PORTES PAR LE SYSTEME (mono-bloc : un seul etage condense, B_z partage). bz_field est exige
-  // des qu'un bloc porte schur==true (verifie au build : amr_write_coarse_bz leve si taille != n*n).
-  bool schur_strang = false;       // false : Lie (H(dt) S(dt)) ; true : Strang (H(dt/2) S(dt) H(dt/2))
-  std::vector<double> bz_field;    // B_z(x,y) grossier, n*n row-major (set_magnetic_field)
+  // SOURCE STAGE condensed by Schur (amr-schur path): splitting policy (Lie/Strang) + B_z field,
+  // CARRIED BY THE SYSTEM (single-block: a single condensed stage, shared B_z). bz_field is required
+  // as soon as a block carries schur==true (checked at build: amr_write_coarse_bz throws if size != n*n).
+  bool schur_strang = false;       // false: Lie (H(dt) S(dt)); true: Strang (H(dt/2) S(dt) H(dt/2))
+  std::vector<double> bz_field;    // coarse B_z(x,y), n*n row-major (set_magnetic_field)
 
   std::string p_rhs = "charge_density", p_solver = "geometric_mg", p_bc = "auto",
               p_wall = "none";
   double p_wall_radius = 0.0;
 
   bool built = false;
-  // --- chemin mono-bloc (AmrCouplerMP, intouche : bit-identique a l'historique) ---
-  std::shared_ptr<void> coupler_holder;  // maintient en vie l'AmrCouplerMP<Model> des hooks
+  // --- single-block path (AmrCouplerMP, untouched: bit-identical to history) ---
+  std::shared_ptr<void> coupler_holder;  // keeps the hooks' AmrCouplerMP<Model> alive
   std::function<void(double)> step_fn;
   std::function<double()> max_speed_fn;
   std::function<double()> mass_fn;
@@ -167,24 +167,24 @@ struct AmrSystem::Impl {
   std::function<std::vector<PatchBox>()> patch_boxes_fn;
   std::function<std::vector<double>()> density_fn;
   std::function<std::vector<double>()> potential_fn;
-  // Bornes de pas OPTIONNELLES du bloc mono (StabilityPolicy AMR, audit 2026-06) : hooks VIDES si
-  // le modele ne declare pas les traits -> step_cfl mono-bloc garde la formule historique.
+  // OPTIONAL step bounds of the single block (AMR StabilityPolicy, audit 2026-06): EMPTY hooks if
+  // the model does not declare the traits -> single-block step_cfl keeps the historical formula.
   std::function<double()> source_frequency_fn;
   std::function<double()> stability_dt_fn;
-  // Bornes GLOBALES (AmrSystem::add_dt_bound) : enregistrees AVANT le build paresseux, transmises
-  // au moteur multi-blocs a sa construction ; lues directement par le step_cfl mono-bloc.
+  // GLOBAL bounds (AmrSystem::add_dt_bound): registered BEFORE the lazy build, passed to the
+  // multi-block engine at its construction; read directly by the single-block step_cfl.
   struct GlobalDtBound {
     std::string label;
     std::function<double()> fn;
   };
   std::vector<GlobalDtBound> dt_bounds;
-  std::string last_dt_reason;  // borne ACTIVE du dernier step_cfl mono-bloc (multi : via runtime)
-  // Restauration de la phase de cadence regrid du mono-bloc (IO v1, parite System::set_clock) : le
-  // builder peuple ce hook (ecrit le step_state du coupleur). VIDE tant que le bloc n'est pas installe.
+  std::string last_dt_reason;  // ACTIVE bound of the last single-block step_cfl (multi: via runtime)
+  // Restoration of the single-block regrid cadence phase (IO v1, parity System::set_clock): the
+  // builder populates this hook (writes the coupler's step_state). EMPTY until the block is installed.
   std::function<void(int)> set_macro_step_fn;
-  // CHECKPOINT / RESTART AMR mono-rang (ADC-65) : accesseurs d'etat par niveau + imposition de
-  // hierarchie, peuples par build_amr_compiled (mono-bloc, coupleur AmrCouplerMP). Le multi-blocs
-  // (moteur runtime) ne les peuple PAS -> les methodes facade rejettent runtime != nullptr.
+  // AMR single-rank CHECKPOINT / RESTART (ADC-65): per-level state accessors + hierarchy
+  // imposition, populated by build_amr_compiled (single-block, AmrCouplerMP coupler). The multi-block
+  // (runtime engine) does NOT populate them -> the facade methods reject runtime != nullptr.
   std::function<int()> n_levels_fn;
   std::function<int()> n_vars_fn;
   std::function<std::vector<double>(int)> level_state_fn;
@@ -192,28 +192,28 @@ struct AmrSystem::Impl {
   std::function<std::vector<double>(int)> level_potential_fn;
   std::function<void(int, const std::vector<double>&)> set_level_potential_fn;
   std::function<void(const std::vector<PatchBox>&)> set_hierarchy_fn;
-  // --- chemin multi-blocs (AmrRuntime, hierarchie partagee + Poisson somme) ---
+  // --- multi-block path (AmrRuntime, shared hierarchy + summed Poisson) ---
   std::shared_ptr<adc::AmrRuntime> runtime;
   double t = 0;
-  // Compteur de MACRO-PAS AUTORITAIRE (parite System::Impl::macro_step_) : incremente par
-  // AmrSystem::step / step_cfl, lu par macro_step(). Les moteurs (AmrRuntime ; step_state du mono-bloc)
-  // tiennent leur PROPRE compteur de cadence, synchronise depuis celui-ci au build et a set_clock.
+  // AUTHORITATIVE MACRO-STEP counter (parity System::Impl::macro_step_): incremented by
+  // AmrSystem::step / step_cfl, read by macro_step(). The engines (AmrRuntime; single-block step_state)
+  // hold their OWN cadence counter, synchronized from this one at build and at set_clock.
   int macro_step_ = 0;
-  bool clock_restore_pending_ = false;  // un set_clock attend d'etre pousse au moteur (au prochain step)
+  bool clock_restore_pending_ = false;  // a set_clock is waiting to be pushed to the engine (at the next step)
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
 
-  // Pousse macro_step_ vers le compteur de cadence du moteur (regrid/stride) : runtime multi-blocs OU
-  // step_state du coupleur mono-bloc. Appele au 1er step apres un set_clock (clock_restore_pending_).
-  // Sans restauration la cadence part de 0 (defaut, bit-identique).
+  // Pushes macro_step_ to the engine's cadence counter (regrid/stride): multi-block runtime OR
+  // single-block coupler step_state. Called at the 1st step after a set_clock (clock_restore_pending_).
+  // Without restoration the cadence starts from 0 (default, bit-identical).
   void push_macro_step_to_engine() {
     if (runtime) runtime->set_macro_step(macro_step_);
     else if (set_macro_step_fn) set_macro_step_fn(macro_step_);
   }
 
-  // Index du bloc nomme @p name dans le registre (-1 si absent). Nom vide -> premier bloc (compat
-  // mono-bloc : le nom etait cosmetique). Plusieurs blocs sans nom n'est pas ambigu a l'ajout (un
-  // nom vide cible toujours le bloc 0), mais set_density(name) le resout precisement.
+  // Index of the block named @p name in the registry (-1 if absent). Empty name -> first block (compat
+  // single-block: the name was cosmetic). Multiple unnamed blocks is not ambiguous at add (an empty
+  // name always targets block 0), but set_density(name) resolves it precisely.
   int block_index(const std::string& name) const {
     if (name.empty()) return blocks.empty() ? -1 : 0;
     for (std::size_t i = 0; i < blocks.size(); ++i)
@@ -228,16 +228,16 @@ struct AmrSystem::Impl {
     if (mode == "periodic") return b;
     if (mode == "dirichlet") { b.xlo = b.xhi = b.ylo = b.yhi = BCType::Dirichlet; return b; }
     if (mode == "neumann") { b.xlo = b.xhi = b.ylo = b.yhi = BCType::Foextrap; return b; }
-    throw std::runtime_error("AmrSystem::set_poisson : bc inconnu '" + mode + "'");
+    throw std::runtime_error("AmrSystem::set_poisson : unknown bc '" + mode + "'");
   }
   std::function<bool(Real, Real)> wall_active() {
     return detail::wall_predicate(p_wall, p_wall_radius, cfg.L, "AmrSystem::set_poisson");
   }
 
-  // Materialise les parametres figes du build paresseux du chemin MONO-BLOC (AmrCouplerMP) a partir
-  // de la config + des choix refine/poisson/density + du SEUL bloc (blocks[0]). Communs aux deux
-  // chemins mono-bloc (ModelSpec natif et add_compiled_model) : les deux instancient le MEME builder
-  // partage (detail::build_amr_compiled). INTOUCHE par le multi-blocs -> mono-bloc bit-identique.
+  // Materializes the frozen parameters of the SINGLE-BLOCK path lazy build (AmrCouplerMP) from
+  // the config + the refine/poisson/density choices + the SINGLE block (blocks[0]). Common to both
+  // single-block paths (native ModelSpec and add_compiled_model): both instantiate the SAME shared
+  // builder (detail::build_amr_compiled). UNTOUCHED by multi-block -> single-block bit-identical.
   AmrBuildParams make_build_params() {
     const BlockSpec& b = blocks[0];
     AmrBuildParams bp;
@@ -248,17 +248,17 @@ struct AmrSystem::Impl {
     bp.substeps = b.substeps;
     bp.recon_prim = b.recon_prim;
     bp.imex = b.imex;
-    bp.time_method = b.time_method;  // SSPRK3 (1) / Euler avant (0) -> build_amr_compiled -> cpl->step
+    bp.time_method = b.time_method;  // SSPRK3 (1) / forward Euler (0) -> build_amr_compiled -> cpl->step
     bp.refine_threshold = refine_threshold;
     bp.poisson_bc = poisson_bc();
     bp.wall = wall_active();
     bp.has_density = b.has_density;
     bp.density = b.density;
-    bp.has_state = b.has_state;     // etat conservatif complet (set_conservative_state), prioritaire au seed
+    bp.has_state = b.has_state;     // full conservative state (set_conservative_state), takes priority at seed
     bp.state = b.state;
     bp.distribute_coarse = cfg.distribute_coarse;
     bp.coarse_max_grid = cfg.coarse_max_grid;
-    // ETAGE SOURCE condense par Schur (amr-schur) : theta/alpha du bloc + splitting/B_z du systeme.
+    // SOURCE STAGE condensed by Schur (amr-schur): block theta/alpha + system splitting/B_z.
     bp.schur = b.schur;
     bp.schur_theta = b.schur_theta;
     bp.schur_alpha = b.schur_alpha;
@@ -270,14 +270,14 @@ struct AmrSystem::Impl {
     bp.schur_energy = b.schur_energy;
     bp.schur_strang = schur_strang;
     bp.bz_field = bz_field;
-    // OPTIONS NEWTON de la source IMEX mono-bloc (vague 3 : desormais CABLEES sur le coupleur
-    // AmrCouplerMP). build_amr_compiled les capture depuis bp et les passe a cpl->step. Defaut
-    // (add_block sans option) = NewtonOptions{} historique -> chemin (2a) bit-identique.
+    // NEWTON OPTIONS of the single-block IMEX source (wave 3: now WIRED on the AmrCouplerMP
+    // coupler). build_amr_compiled captures them from bp and passes them to cpl->step. Default
+    // (add_block without option) = historical NewtonOptions{} -> path (2a) bit-identical.
     bp.newton_options = b.newton;
     return bp;
   }
 
-  // Installe les fermetures type-erased du chemin MONO-BLOC (AmrCouplerMP).
+  // Installs the type-erased closures of the SINGLE-BLOCK path (AmrCouplerMP).
   void install(AmrCompiledHooks&& h) {
     coupler_holder = std::move(h.coupler_holder);
     step_fn = std::move(h.step);
@@ -287,10 +287,10 @@ struct AmrSystem::Impl {
     patch_boxes_fn = std::move(h.patch_boxes);
     density_fn = std::move(h.density);
     potential_fn = std::move(h.potential);
-    source_frequency_fn = std::move(h.source_frequency);  // vides sans trait (bit-identique)
+    source_frequency_fn = std::move(h.source_frequency);  // empty without trait (bit-identical)
     stability_dt_fn = std::move(h.stability_dt);
-    set_macro_step_fn = std::move(h.set_macro_step);  // restauration phase cadence (IO v1)
-    n_levels_fn = std::move(h.n_levels);              // checkpoint/restart AMR mono-rang (ADC-65)
+    set_macro_step_fn = std::move(h.set_macro_step);  // cadence phase restoration (IO v1)
+    n_levels_fn = std::move(h.n_levels);              // AMR single-rank checkpoint/restart (ADC-65)
     n_vars_fn = std::move(h.n_vars);
     level_state_fn = std::move(h.level_state);
     set_level_state_fn = std::move(h.set_level_state);
@@ -302,74 +302,74 @@ struct AmrSystem::Impl {
 
   bool multi_block() const { return blocks.size() >= 2; }
 
-  // Construit le moteur runtime MULTI-BLOCS (AmrRuntime) : un SharedAmrLayout commun (hierarchie
-  // partagee, figee), puis CHAQUE bloc materialise dessus son AmrRuntimeBlock type-erase (via son
-  // block_builder, qui capture le Model/Limiter/Flux concret). Le Poisson grossier est SOMME et
-  // CO-LOCALISE (Sum_b elliptic_rhs_b(U_b) lu aux memes cellules du grossier partage).
+  // Builds the MULTI-BLOCK runtime engine (AmrRuntime): one common SharedAmrLayout (shared
+  // hierarchy, frozen), then EACH block materializes its type-erased AmrRuntimeBlock on it (via its
+  // block_builder, which captures the concrete Model/Limiter/Flux). The coarse Poisson is SUMMED and
+  // CO-LOCATED (Sum_b elliptic_rhs_b(U_b) read at the same cells of the shared coarse grid).
   void build_multi() {
-    // set_conservative_state MULTI-BLOCS (audit vague 3) : l'etat complet est desormais THREADE au
-    // builder NATIF (dispatch_amr_block -> build_amr_block, seed coupler_write_coarse_state +
-    // injection vers les fins, prioritaire sur density). Le chemin COMPILE (.so) ne le transporte
-    // pas (ABI du loader figee) -> rejet explicite, jamais un repli densite silencieux.
+    // MULTI-BLOCK set_conservative_state (wave 3 audit): the full state is now THREADED to the
+    // NATIVE builder (dispatch_amr_block -> build_amr_block, seed coupler_write_coarse_state +
+    // injection to the fine levels, takes priority over density). The COMPILED (.so) path does not
+    // transport it (frozen loader ABI) -> explicit rejection, never a silent density fallback.
     for (const auto& b : blocks)
       if (b.has_state && b.is_compiled)
         throw std::runtime_error(
-            "AmrSystem::set_conservative_state : non transporte par le loader .so compile (bloc '" +
-            b.name + "') en multi-blocs ; utiliser un bloc natif adc.Model(...), ou set_density.");
-    AmrBuildParams bp = make_build_params();  // geometrie + poisson_bc + wall + ownership communs
+            "AmrSystem::set_conservative_state : not transported by the compiled .so loader (block '" +
+            b.name + "') in multi-block ; use a native block adc.Model(...), or set_density.");
+    AmrBuildParams bp = make_build_params();  // geometry + poisson_bc + wall + common ownership
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
     std::vector<adc::AmrRuntimeBlock> rblocks;
     rblocks.reserve(blocks.size());
     for (auto& b : blocks) {
       if (b.is_compiled) {
-        // Un bloc compile sans builder runtime (multi_builder vide) ne peut PAS aller en multi-blocs :
-        // c'est le cas d'un loader .so ANCIEN (genere/compile contre un en-tete anterieur a ce
-        // capstone, qui n'appelait set_compiled_block qu'avec le mono_builder). On leve une erreur
-        // CLAIRE plutot qu'un appel d'une std::function vide (std::bad_function_call opaque) ; le
-        // remede est de regenerer le loader (dsl.compile_native(target='amr_system')).
+        // A compiled block without a runtime builder (empty multi_builder) CANNOT go multi-block:
+        // this is the case of an OLD .so loader (generated/compiled against a header earlier than this
+        // capstone, which only called set_compiled_block with the mono_builder). We raise a CLEAR
+        // error rather than calling an empty std::function (opaque std::bad_function_call); the
+        // remedy is to regenerate the loader (dsl.compile_native(target='amr_system')).
         if (!b.compiled_block_builder)
           throw std::runtime_error(
-              "AmrSystem : bloc compile '" + b.name +
-              "' sans builder multi-blocs (loader .so anterieur au support DSL production multi-bloc). "
-              "Regenerer le loader via dsl.compile_native(target='amr_system') / "
+              "AmrSystem : compiled block '" + b.name +
+              "' without multi-block builder (.so loader predating multi-block production DSL support). "
+              "Regenerate the loader via dsl.compile_native(target='amr_system') / "
               "compile(backend='production', target='amr_system').");
-        // Chemin compile MULTI-BLOCS (capstone v) : le Model/Limiter/Flux CONCRETS sont deja captures
-        // dans le builder (add_compiled_model), on l'invoque sur le layout PARTAGE. Il alloue la pile
-        // de niveaux du bloc sur S et capture le schema, EXACTEMENT comme dispatch_amr_block pour un
-        // bloc natif (le builder L'APPELLE en interne). Il resout LUI-MEME le masque IMEX partiel en
-        // indices de composantes contre cons_vars du Model concret (les implicit_vars/roles bruts lui
-        // sont passes). Aucun throw : le 2e bloc compile (ou un melange compile + natif) est cable.
-        // Options Newton NON transportees par le builder du loader .so (ABI figee a la generation) :
-        // rejet explicite plutot qu'un iters=2 silencieux (regenerer le loader = suivi dedie).
+        // Compiled MULTI-BLOCK path (capstone v): the CONCRETE Model/Limiter/Flux are already captured
+        // in the builder (add_compiled_model), we invoke it on the SHARED layout. It allocates the
+        // level stack of the block on S and captures the scheme, EXACTLY like dispatch_amr_block for a
+        // native block (the builder CALLS it internally). It resolves the partial IMEX mask ITSELF into
+        // component indices against cons_vars of the concrete Model (the raw implicit_vars/roles are
+        // passed to it). No throw: the 2nd compiled block (or a mix of compiled + native) is wired.
+        // Newton options NOT transported by the .so loader builder (ABI frozen at generation):
+        // explicit rejection rather than a silent iters=2 (regenerate the loader = dedicated follow-up).
         if (b.newton_non_default)
           throw std::runtime_error(
-              "AmrSystem : les options Newton ne sont pas transportees par le loader .so compile "
-              "(bloc '" + b.name + "') ; utiliser un bloc natif adc.Model(...) en multi-blocs.");
-        // Rapport newton_diagnostics idem : le builder du loader .so n'alloue pas de NewtonReport ni
-        // ne le thread (ABI plate). Rejet explicite (defense en profondeur ; la facade Python le filtre
-        // deja en amont) plutot qu'un rapport silencieusement vide.
+              "AmrSystem : Newton options are not transported by the compiled .so loader "
+              "(block '" + b.name + "') ; use a native block adc.Model(...) in multi-block.");
+        // newton_diagnostics report likewise: the .so loader builder allocates no NewtonReport nor
+        // threads it (flat ABI). Explicit rejection (defense in depth; the Python facade already
+        // filters it upstream) rather than a silently empty report.
         if (b.newton_diagnostics)
           throw std::runtime_error(
-              "AmrSystem : newton_diagnostics (rapport newton_report) n'est pas transporte par le "
-              "loader .so compile (bloc '" + b.name + "') ; utiliser un bloc natif adc.Model(...).");
+              "AmrSystem : newton_diagnostics (newton_report) is not transported by the "
+              "compiled .so loader (block '" + b.name + "') ; use a native block adc.Model(...).");
         rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.gamma,
                                                    b.substeps, b.recon_prim, b.imex, b.stride,
                                                    b.implicit_vars, b.implicit_roles));
         continue;
       }
-      // Chemin ModelSpec natif : dispatch du modele -> type concret, puis dispatch schema spatial
-      // -> build_amr_block (alloue la pile de niveaux du bloc sur le layout PARTAGE + fermetures).
-      // La densite du bloc est portee par le BlockSpec (set_density(name) la cible). Le MASQUE IMEX
-      // partiel (implicit_vars / implicit_roles) est resolu ICI en indices de composantes, contre le
-      // descripteur conservatif du type Model concret (cons_vars), puis thread a build_amr_block.
+      // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch
+      // -> build_amr_block (allocates the block's level stack on the SHARED layout + closures).
+      // The block density is carried by the BlockSpec (set_density(name) targets it). The partial IMEX
+      // mask (implicit_vars / implicit_roles) is resolved HERE into component indices, against the
+      // conservative descriptor of the concrete Model type (cons_vars), then threaded to build_amr_block.
       detail::dispatch_model(b.spec, [&](auto m) {
         using M = decltype(m);
         const std::vector<int> impl_components =
             b.imex ? resolve_implicit_components(b.name, M::conservative_vars(), b.implicit_vars,
                                                  b.implicit_roles)
                    : std::vector<int>{};
-        // METHODE TEMPORELLE du bloc (kSsprk3 si time='ssprk3') threadee a dispatch_amr_block ->
-        // build_amr_block -> fermeture advance -> advance_amr. 0 == kEuler avant historique, bit-identique.
+        // TEMPORAL METHOD of the block (kSsprk3 if time='ssprk3') threaded to dispatch_amr_block ->
+        // build_amr_block -> advance closure -> advance_amr. 0 == historical forward Euler, bit-identical.
         const AmrTimeMethod tmethod =
             b.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
         rblocks.push_back(detail::dispatch_amr_block(m, b.limiter, b.riemann, S, b.name, b.density,
@@ -383,36 +383,36 @@ struct AmrSystem::Impl {
     runtime = std::make_shared<adc::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc,
                                                 std::move(rblocks), S.base_per, S.replicated_coarse,
                                                 S.wall);
-    // Bornes GLOBALES enregistrees AVANT le build paresseux (add_dt_bound) : transmises au moteur
-    // (qui les agrege dans son step_cfl, all_reduce_min). Celles ajoutees APRES passent en direct.
+    // GLOBAL bounds registered BEFORE the lazy build (add_dt_bound): passed to the engine
+    // (which aggregates them in its step_cfl, all_reduce_min). Those added AFTER go in directly.
     for (const auto& g : dt_bounds) runtime->add_dt_bound(g.label, g.fn);
-    // Frequences declarees des sources couplees (CoupledSource.frequency, vague 3) : borne de pas
-    // dt <= cfl/mu sur le macro-pas du moteur runtime. Frequence CONSTANTE puis frequence PAR CELLULE
-    // (Expr) : la seconde est evaluee sur le grossier a chaque step_cfl (add_coupled_frequency_expr
-    // resout les entrees / valide le bytecode ; programme vide -> ignore).
+    // Declared frequencies of the coupled sources (CoupledSource.frequency, wave 3): step bound
+    // dt <= cfl/mu on the runtime engine macro-step. CONSTANT frequency then PER-CELL frequency
+    // (Expr): the second is evaluated on the coarse grid at each step_cfl (add_coupled_frequency_expr
+    // resolves the inputs / validates the bytecode; empty program -> ignored).
     for (const auto& cs : coupled_sources) {
       if (cs.frequency > 0.0)
         runtime->add_coupled_frequency(cs.label, static_cast<Real>(cs.frequency));
       runtime->add_coupled_frequency_expr(cs.label, cs.in_blocks, cs.in_roles, cs.consts,
                                           cs.freq_prog_ops, cs.freq_prog_args);
     }
-    // REGRID D'UNION DES TAGS (capstone Phase 2, C.6) : si regrid_every > 0, on ACTIVE la cadence du
-    // moteur et on pose le predicat de tag PAR BLOC (D1). En v1 le critere est COMMUN a tous les blocs
-    // (densite, composante 0 > refine_threshold), comme le chemin mono-bloc AmrCouplerMP (qui tague
-    // a(i,j,0) > threshold) -> l'UNION des tags des blocs raffine la ou N'IMPORTE QUEL bloc depasse le
-    // seuil. refine_threshold == 1e30 (defaut, aucun raffinement) -> aucun tag -> grille inchangee meme
-    // si regrid_every > 0 (no-op coherent, l'utilisateur n'a pas demande de raffinement). regrid_every
-    // == 0 -> set_regrid(0) -> hierarchie FIGEE, bit-identique a avant cette PR.
+    // TAG-UNION REGRID (capstone Phase 2, C.6): if regrid_every > 0, we ACTIVATE the engine's
+    // cadence and set the PER-BLOCK tag predicate (D1). In v1 the criterion is COMMON to all blocks
+    // (density, component 0 > refine_threshold), like the single-block path AmrCouplerMP (which tags
+    // a(i,j,0) > threshold) -> the UNION of the block tags refines where ANY block exceeds the
+    // threshold. refine_threshold == 1e30 (default, no refinement) -> no tag -> grid unchanged even
+    // if regrid_every > 0 (consistent no-op, the user did not request refinement). regrid_every
+    // == 0 -> set_regrid(0) -> FROZEN hierarchy, bit-identical to before this PR.
     const Real thr = static_cast<Real>(refine_threshold);
     runtime->set_regrid(cfg.regrid_every);
     if (cfg.regrid_every > 0) {
       const auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
       for (std::size_t b = 0; b < blocks.size(); ++b) runtime->set_block_tag_predicate(b, crit);
-      // PREDICAT DE PHI (D4) : si l'utilisateur a pose un seuil de |grad phi| (set_phi_refinement > 0),
-      // on cable le predicat phi du moteur (lu sur l'aux partage, composantes 1,2 = grad phi en x,y).
-      // Il s'AJOUTE a l'union des predicats de densite par bloc : la grille raffine la ou n'importe quel
-      // bloc depasse refine_threshold OU |grad phi| depasse gthr. Critere physique du diocotron (bord
-      // d'anneau = gradient du potentiel). <= 0 (defaut) -> non cable -> phi ne contribue pas (bit-identique).
+      // PHI PREDICATE (D4): if the user set a |grad phi| threshold (set_phi_refinement > 0),
+      // we wire the engine's phi predicate (read on the shared aux, components 1,2 = grad phi in x,y).
+      // It is ADDED to the union of the per-block density predicates: the grid refines where any
+      // block exceeds refine_threshold OR |grad phi| exceeds gthr. Physical diocotron criterion (ring
+      // edge = potential gradient). <= 0 (default) -> not wired -> phi does not contribute (bit-identical).
       if (phi_grad_threshold > 0.0) {
         const Real gthr = static_cast<Real>(phi_grad_threshold);
         runtime->set_phi_tag_predicate([gthr](const ConstArray4& a, int i, int j) {
@@ -421,10 +421,10 @@ struct AmrSystem::Impl {
         });
       }
     }
-    // Rejoue les sources couplees figees a add_coupled_source sur le moteur runtime juste construit :
-    // chacune resout (bloc, role) -> (indice, composante) contre les cons_vars des blocs et stocke sa
-    // fermeture (appliquee apres le transport a chaque macro-pas). Aucune source -> no-op (la boucle
-    // est vide), donc multi-blocs sans couplage reste bit-identique a avant.
+    // Replays the coupled sources frozen at add_coupled_source on the just-built runtime engine:
+    // each resolves (block, role) -> (index, component) against the blocks' cons_vars and stores its
+    // closure (applied after transport at each macro-step). No source -> no-op (the loop is empty),
+    // so multi-block without coupling stays bit-identical to before.
     for (const auto& cs : coupled_sources)
       runtime->add_coupled_source(cs.in_blocks, cs.in_roles, cs.consts, cs.out_blocks, cs.out_roles,
                                   cs.prog_ops, cs.prog_args, cs.prog_lens);
@@ -434,45 +434,45 @@ struct AmrSystem::Impl {
   void ensure_built() {
     if (built) return;
     if (blocks.empty())
-      throw std::runtime_error("AmrSystem : appeler add_block d'abord");
-    // DEVERROUILLAGE (capstone Phase 2, C.6) : multi-blocs + regrid_every > 0 EST DESORMAIS SUPPORTE
-    // (le moteur AmrRuntime porte le regrid d'union des tags, cf. build_multi -> set_regrid +
-    // set_block_tag_predicate). L'ancien REFUS (la hierarchie multi-blocs etait FIGEE) est leve : la
-    // grille re-grille effectivement a partir de l'union des tags de tous les blocs. regrid_every == 0
-    // reste une hierarchie figee (regrid jamais appele), bit-identique a la Phase 1.
+      throw std::runtime_error("AmrSystem : call add_block first");
+    // UNLOCK (capstone Phase 2, C.6): multi-block + regrid_every > 0 IS NOW SUPPORTED
+    // (the AmrRuntime engine carries the tag-union regrid, cf. build_multi -> set_regrid +
+    // set_block_tag_predicate). The old REFUSAL (the multi-block hierarchy was FROZEN) is lifted: the
+    // grid actually re-grids from the union of the tags of all blocks. regrid_every == 0
+    // stays a frozen hierarchy (regrid never called), bit-identical to Phase 1.
     if (multi_block()) { build_multi(); return; }
 
-    // --- chemin MONO-BLOC (AmrCouplerMP, intouche : bit-identique a l'historique) ---
+    // --- SINGLE-BLOCK path (AmrCouplerMP, untouched: bit-identical to history) ---
     const BlockSpec& b = blocks[0];
-    // Le mono-bloc IMEX passe par AmrCouplerMP (drapeau imex d'advance_amr), qui ne porte PAS de masque
-    // IMEX partiel (backward-Euler PLEIN). Un masque demande mais reste MONO-BLOC serait donc IGNORE en
-    // silence -> on le REFUSE explicitement (le masque partiel exige le moteur runtime multi-blocs).
+    // The single-block IMEX goes through AmrCouplerMP (advance_amr imex flag), which carries NO partial
+    // IMEX mask (FULL backward-Euler). A mask requested but staying SINGLE-BLOCK would thus be SILENTLY
+    // ignored -> we REFUSE it explicitly (the partial mask requires the multi-block runtime engine).
     if (!b.implicit_vars.empty() || !b.implicit_roles.empty())
       throw std::runtime_error(
-          "AmrSystem : implicit_vars / implicit_roles (masque IMEX partiel) ne sont cables qu'en "
-          "MULTI-BLOCS (>= 2 add_block, moteur runtime). En mono-bloc l'IMEX traite TOUTES les "
-          "composantes en implicite (backward-Euler plein) : retirer le masque ou ajouter un 2e bloc.");
-    // OPTIONS NEWTON mono-bloc (vague 3, solde) : DESORMAIS CABLEES sur le coupleur AmrCouplerMP
+          "AmrSystem : implicit_vars / implicit_roles (partial IMEX mask) are only wired in "
+          "MULTI-BLOCK (>= 2 add_block, runtime engine). In single-block the IMEX handles ALL "
+          "components implicitly (full backward-Euler) : remove the mask or add a 2nd block.");
+    // SINGLE-BLOCK NEWTON OPTIONS (wave 3, settled): NOW WIRED on the AmrCouplerMP coupler
     // (make_build_params -> bp.newton_options -> build_amr_compiled -> cpl->step -> advance_amr ->
-    // backward_euler_source). Plus de rejet de b.newton_non_default ici : un bloc unique IMEX avec
-    // newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy tourne correctement. Defaut = iters=2
-    // historique (bit-identique). Restent NON cables en mono-bloc : le RAPPORT newton_diagnostics
-    // (newton_report agrege = moteur multi-blocs seulement ; le threader dans le subcyclage du coupleur
-    // serait invasif) -> rejet EXPLICITE plutot qu'un rapport vide en silence.
+    // backward_euler_source). No more rejection of b.newton_non_default here: a single IMEX block with
+    // newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy runs correctly. Default = historical
+    // iters=2 (bit-identical). Still NOT wired in single-block: the newton_diagnostics REPORT
+    // (aggregated newton_report = multi-block engine only; threading it through the coupler subcycling
+    // would be invasive) -> EXPLICIT rejection rather than a silently empty report.
     if (b.newton_diagnostics)
       throw std::runtime_error(
-          "AmrSystem : newton_diagnostics (rapport newton_report) n'est cable qu'en MULTI-BLOCS "
-          "(moteur runtime AmrRuntime). En mono-bloc les OPTIONS Newton (newton_max_iters/rel_tol/"
-          "abs_tol/fd_eps/damping/fail_policy) sont cablees, mais pas le rapport agrege : ajouter un "
-          "2e bloc pour newton_report, utiliser newton_fail_policy='warn'/'throw', ou un System "
-          "mono-niveau pour le rapport complet.");
+          "AmrSystem : newton_diagnostics (newton_report) is only wired in MULTI-BLOCK "
+          "(AmrRuntime runtime engine). In single-block the Newton OPTIONS (newton_max_iters/rel_tol/"
+          "abs_tol/fd_eps/damping/fail_policy) are wired, but not the aggregated report : add a "
+          "2nd block for newton_report, use newton_fail_policy='warn'/'throw', or a single-level "
+          "System for the full report.");
     const AmrBuildParams bp = make_build_params();
-    if (b.is_compiled) {  // chemin compile : le builder fige les types (Model, Limiter, Flux)
+    if (b.is_compiled) {  // compiled path: the builder freezes the types (Model, Limiter, Flux)
       install(b.compiled_hooks_builder(bp));
       return;
     }
-    // Chemin ModelSpec natif : la dispatch de modele resout le type concret, puis le MEME
-    // dispatch schema spatial + build du coupleur que add_compiled_model (detail, partage).
+    // Native ModelSpec path: the model dispatch resolves the concrete type, then the SAME
+    // spatial scheme dispatch + coupler build as add_compiled_model (detail, shared).
     detail::dispatch_model(b.spec, [&](auto m) {
       install(detail::dispatch_amr_compiled(m, b.limiter, b.riemann, bp));
     });
@@ -480,13 +480,13 @@ struct AmrSystem::Impl {
 };
 
 AmrSystem::AmrSystem(const AmrSystemConfig& c) : p_(std::make_unique<Impl>(c)) {
-  // Garde de configuration AMONT : n >= 1 (cellules du grossier par direction). n settable depuis
-  // Python (AmrSystemConfig.n est def_readwrite, le ctor ne validait pas) ; n == 0 ferait nn = n*n = 0
-  // puis une division par zero (UB) dans set_conservative_state (U.size() % nn) et un grossier vide
-  // partout en aval. On le refuse ICI, seul point couvrant tous les usages de cfg.n.
+  // UPSTREAM configuration guard: n >= 1 (coarse cells per direction). n is settable from
+  // Python (AmrSystemConfig.n is def_readwrite, the ctor did not validate); n == 0 would make nn = n*n = 0
+  // then a division by zero (UB) in set_conservative_state (U.size() % nn) and an empty coarse grid
+  // everywhere downstream. We refuse it HERE, the single point covering all uses of cfg.n.
   if (p_->cfg.n < 1)
-    throw std::runtime_error("AmrSystem::AmrSystem : n >= 1 requis (cellules du grossier par "
-                             "direction) ; recu n = " +
+    throw std::runtime_error("AmrSystem::AmrSystem : n >= 1 required (coarse cells per "
+                             "direction) ; got n = " +
                              std::to_string(p_->cfg.n));
 }
 AmrSystem::~AmrSystem() = default;
@@ -500,74 +500,74 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
                           const std::vector<std::string>& implicit_roles,
                           const NewtonOptions& newton, bool newton_diagnostics) {
   if (p_->built)
-    throw std::runtime_error("AmrSystem::add_block : le systeme est deja construit (appeler "
-                             "add_block avant tout step/mass/density)");
+    throw std::runtime_error("AmrSystem::add_block : the system is already built (call "
+                             "add_block before any step/mass/density)");
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("AmrSystem::add_block : stride >= 1");
-  // Options du Newton de la source IMEX regroupees en POD (ADC-214 ; audit vague 3, parite
-  // System::add_block). Defauts {} = constantes historiques (2 / 0 / 0 / 1e-7 / 1.0 / none),
-  // bit-identique. SUPPORT : moteur MULTI-BLOCS (AmrRuntime) seulement -- le mono-bloc (AmrCouplerMP)
-  // garde iters=2 fige, des options non-defaut y sont REJETEES au build (ensure_built), jamais ignorees.
+  // IMEX source Newton options grouped into a POD (ADC-214; wave 3 audit, parity
+  // System::add_block). Defaults {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none),
+  // bit-identical. SUPPORT: MULTI-BLOCK engine (AmrRuntime) only -- the single-block (AmrCouplerMP)
+  // keeps iters=2 frozen, non-default options are REJECTED there at build (ensure_built), never ignored.
   if (newton.max_iters < 1)
     throw std::runtime_error("AmrSystem::add_block : newton_max_iters >= 1");
   if (newton.rel_tol < 0.0 || newton.abs_tol < 0.0 || newton.fd_eps <= 0.0)
-    throw std::runtime_error("AmrSystem::add_block : newton_rel_tol/abs_tol >= 0 et newton_fd_eps > 0");
+    throw std::runtime_error("AmrSystem::add_block : newton_rel_tol/abs_tol >= 0 and newton_fd_eps > 0");
   if (!(newton.damping > 0.0 && newton.damping <= 1.0))
-    throw std::runtime_error("AmrSystem::add_block : newton_damping dans (0, 1]");
+    throw std::runtime_error("AmrSystem::add_block : newton_damping in (0, 1]");
   if (newton.fail_policy != NewtonOptions::kFailNone &&
       newton.fail_policy != NewtonOptions::kFailWarn &&
       newton.fail_policy != NewtonOptions::kFailThrow)
-    throw std::runtime_error("AmrSystem::add_block : newton_fail_policy invalide "
+    throw std::runtime_error("AmrSystem::add_block : invalid newton_fail_policy "
                              "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
   const bool newton_non_default = newton.max_iters != 2 || newton.rel_tol != 0.0 ||
                                   newton.abs_tol != 0.0 || newton.fd_eps != 1e-7 ||
                                   newton.damping != 1.0 || newton.fail_policy != NewtonOptions::kFailNone;
   if (time != "imex" && newton_non_default)
-    throw std::runtime_error("AmrSystem::add_block : les options Newton exigent time='imex'");
-  // newton_diagnostics (rapport newton_report) exige time='imex' (le rapport vient du Newton de la
-  // source IMEX), parite avec System::add_block. SUPPORT : MULTI-BLOCS natif seulement -- le mono-bloc
-  // (coupleur) et les loaders .so le rejettent (au build / a la facade), jamais un rapport vide.
+    throw std::runtime_error("AmrSystem::add_block : Newton options require time='imex'");
+  // newton_diagnostics (newton_report) requires time='imex' (the report comes from the IMEX source
+  // Newton), parity with System::add_block. SUPPORT: native MULTI-BLOCK only -- the single-block
+  // (coupler) and the .so loaders reject it (at build / at the facade), never an empty report.
   if (time != "imex" && newton_diagnostics)
-    throw std::runtime_error("AmrSystem::add_block : newton_diagnostics exige time='imex'");
-  // time == "ssprk3" : SSPRK3 (ordre 3 + reflux par etage), transport explicite -> EXCLUSIF d'imex
-  // (selecteur unique time.kind, parite avec System). La source raide implicite (imex) ne se combine
-  // PAS avec SSPRK3 (combinaison non validee) : le moteur la rejette aussi en defense en profondeur.
+    throw std::runtime_error("AmrSystem::add_block : newton_diagnostics requires time='imex'");
+  // time == "ssprk3": SSPRK3 (order 3 + per-stage reflux), explicit transport -> MUTUALLY EXCLUSIVE
+  // with imex (single time.kind selector, parity with System). The implicit stiff source (imex) does
+  // NOT combine with SSPRK3 (unvalidated combination): the engine also rejects it as defense in depth.
   if (time != "explicit" && time != "imex" && time != "ssprk3") {
     if (time == "imexrk_ars222")
       throw std::runtime_error(
-          "AmrSystem : time 'imexrk_ars222' (famille IMEX-RK, schema ARS(2,2,2)) non cable sur AMR "
-          "(perimetre = System cartesien). Utiliser 'explicit'|'ssprk3'|'imex' sur AMR, ou un "
-          "System cartesien pour l'IMEX-RK.");
+          "AmrSystem : time 'imexrk_ars222' (IMEX-RK family, ARS(2,2,2) scheme) not wired on AMR "
+          "(scope = Cartesian System). Use 'explicit'|'ssprk3'|'imex' on AMR, or a "
+          "Cartesian System for IMEX-RK.");
     throw std::runtime_error("AmrSystem : time '" + time +
-                             "' inconnu sur AMR (explicit|ssprk3|imex)");
+                             "' unknown on AMR (explicit|ssprk3|imex)");
   }
   if (recon != "conservative" && recon != "primitive")
-    throw std::runtime_error("AmrSystem : recon inconnu '" + recon +
+    throw std::runtime_error("AmrSystem : unknown recon '" + recon +
                              "' (conservative|primitive)");
   const bool imex = (time == "imex");
   const int time_method = (time == "ssprk3") ? 1 : 0;  // adc::AmrTimeMethod (0 kEuler, 1 kSsprk3)
-  // Le MASQUE IMEX partiel (implicit_vars / implicit_roles) ne s'applique qu'au pas de source IMEX :
-  // le demander en explicite est une ERREUR (pas d'ignore silencieux ; meme garde que System::add_block).
+  // The partial IMEX mask (implicit_vars / implicit_roles) only applies to the IMEX source step:
+  // requesting it in explicit is an ERROR (no silent ignore; same guard as System::add_block).
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
-    throw std::runtime_error("AmrSystem::add_block : implicit_vars / implicit_roles exigent time='imex' "
-                             "(le masque implicite ne s'applique qu'au pas de source IMEX ; recu time='" +
+    throw std::runtime_error("AmrSystem::add_block : implicit_vars / implicit_roles require time='imex' "
+                             "(the implicit mask only applies to the IMEX source step ; got time='" +
                              time + "')");
-  // MULTI-BLOCS (capstone v) : un 2e bloc (ou plus) bascule sur le moteur runtime AmrRuntime
-  // (hierarchie partagee, Poisson somme co-localise). Le mono-bloc reste sur AmrCouplerMP
-  // (bit-identique). Un bloc deja COMPILE (set_compiled_block / add_compiled_model) PEUT desormais se
-  // melanger a un bloc natif : son builder runtime (compiled_block_builder) materialise un
-  // AmrRuntimeBlock sur le MEME layout partage, exactement comme un bloc natif (cf. build_multi). Une
-  // seule garde dure : le bloc compile doit avoir ete enregistre AVEC un builder runtime (un loader .so
-  // recompile contre cet en-tete le fournit ; build_multi leve clairement sinon).
-  // MULTI-BLOCS : le nom INDEXE le bloc (set_density/mass/density) -> il doit etre UNIQUE et non
-  // vide des qu'il y a (ou qu'on cree) plus d'un bloc. Mono-bloc : le nom reste cosmetique.
+  // MULTI-BLOCK (capstone v): a 2nd block (or more) switches to the AmrRuntime runtime engine
+  // (shared hierarchy, co-located summed Poisson). The single block stays on AmrCouplerMP
+  // (bit-identical). An already COMPILED block (set_compiled_block / add_compiled_model) CAN now mix
+  // with a native block: its runtime builder (compiled_block_builder) materializes an
+  // AmrRuntimeBlock on the SAME shared layout, exactly like a native block (cf. build_multi). A
+  // single hard guard: the compiled block must have been registered WITH a runtime builder (an .so
+  // loader recompiled against this header provides it; build_multi throws clearly otherwise).
+  // MULTI-BLOCK: the name INDEXES the block (set_density/mass/density) -> it must be UNIQUE and non
+  // empty as soon as there is (or we create) more than one block. Single-block: the name stays cosmetic.
   if (!p_->blocks.empty()) {
     if (name.empty())
-      throw std::runtime_error("AmrSystem::add_block : en multi-blocs chaque bloc doit avoir un nom "
-                               "NON vide (le nom indexe le bloc : set_density/mass/density)");
+      throw std::runtime_error("AmrSystem::add_block : in multi-block each block must have a NON "
+                               "empty name (the name indexes the block : set_density/mass/density)");
     if (p_->block_index(name) >= 0)
-      throw std::runtime_error("AmrSystem::add_block : nom de bloc deja utilise '" + name +
-                               "' (les noms de blocs doivent etre uniques en multi-blocs)");
+      throw std::runtime_error("AmrSystem::add_block : block name already used '" + name +
+                               "' (block names must be unique in multi-block)");
   }
   Impl::BlockSpec b;
   b.name = name;
@@ -577,16 +577,16 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.riemann = riemann;
   b.recon_prim = (recon == "primitive");
   b.imex = imex;
-  b.time_method = time_method;        // SSPRK3 (1) ou Euler avant (0) ; threade au build (mono/multi)
-  b.implicit_vars = implicit_vars;    // masque IMEX partiel (resolu en indices au build, build_multi)
+  b.time_method = time_method;        // SSPRK3 (1) or forward Euler (0); threaded at build (single/multi)
+  b.implicit_vars = implicit_vars;    // partial IMEX mask (resolved into indices at build, build_multi)
   b.implicit_roles = implicit_roles;
-  b.newton = newton;  // options Newton regroupees en POD (ADC-214 ; vague 3, mono-bloc ET multi-blocs)
+  b.newton = newton;  // Newton options grouped into a POD (ADC-214; wave 3, single-block AND multi-block)
   b.newton_non_default = newton_non_default;
-  b.newton_diagnostics = newton_diagnostics;  // rapport newton_report (multi-blocs natif ; mono/.so rejetes)
+  b.newton_diagnostics = newton_diagnostics;  // newton_report (native multi-block; single/.so rejected)
   b.substeps = substeps;
   b.stride = stride;
-  b.gamma = model.gamma;  // indice adiabatique du bloc (Euler), lu par coupler_write_coarse
-  if (p_->blocks.empty()) p_->gamma = model.gamma;  // compat : gamma du 1er bloc (chemin mono-bloc)
+  b.gamma = model.gamma;  // adiabatic index of the block (Euler), read by coupler_write_coarse
+  if (p_->blocks.empty()) p_->gamma = model.gamma;  // compat: gamma of the 1st block (single-block path)
   p_->blocks.push_back(std::move(b));
 }
 
@@ -596,30 +596,30 @@ ADC_EXPORT void AmrSystem::set_compiled_block(
     AmrCompiledBlockBuilder multi_builder, const std::string& name, bool recon_prim, bool imex,
     int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles) {
-  (void)ncomp;  // le nombre de variables est porte par le Model concret (Model::n_vars) dans les
-                // builders type-erases ; le parametre reste pour la symetrie d'API avec System.
+  (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
+                // type-erasing builders; the parameter stays for API symmetry with System.
   if (p_->built)
-    throw std::runtime_error("AmrSystem::set_compiled_block : le systeme est deja construit");
+    throw std::runtime_error("AmrSystem::set_compiled_block : the system is already built");
   if (substeps < 1) throw std::runtime_error("AmrSystem::set_compiled_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("AmrSystem::set_compiled_block : stride >= 1");
-  // Le MASQUE IMEX partiel ne s'applique qu'au pas de source IMEX (meme garde qu'add_block) : le
-  // demander en explicite est une ERREUR (pas d'ignore silencieux).
+  // The partial IMEX mask only applies to the IMEX source step (same guard as add_block):
+  // requesting it in explicit is an ERROR (no silent ignore).
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
-    throw std::runtime_error("AmrSystem::set_compiled_block : implicit_vars / implicit_roles exigent "
-                             "time='imex' (le masque implicite ne s'applique qu'au pas de source IMEX)");
-  // MULTI-BLOCS (capstone v) : un 2e bloc (ou plus) bascule sur AmrRuntime ; le bloc compile y est
-  // materialise par multi_builder (son AmrRuntimeBlock sur le layout partage). On EMPILE donc le bloc
-  // au lieu de lever. Comme add_block : des qu'il y a (ou qu'on cree) plus d'un bloc, le nom INDEXE le
-  // bloc -> il doit etre UNIQUE et non vide. En mono-bloc le nom reste cosmetique.
+    throw std::runtime_error("AmrSystem::set_compiled_block : implicit_vars / implicit_roles require "
+                             "time='imex' (the implicit mask only applies to the IMEX source step)");
+  // MULTI-BLOCK (capstone v): a 2nd block (or more) switches to AmrRuntime; the compiled block is
+  // materialized there by multi_builder (its AmrRuntimeBlock on the shared layout). So we STACK the
+  // block instead of throwing. Like add_block: as soon as there is (or we create) more than one block,
+  // the name INDEXES the block -> it must be UNIQUE and non empty. In single-block the name stays cosmetic.
   if (!p_->blocks.empty()) {
     if (name.empty())
-      throw std::runtime_error("AmrSystem::set_compiled_block : en multi-blocs chaque bloc doit avoir "
-                               "un nom NON vide (le nom indexe le bloc : set_density/mass/density)");
+      throw std::runtime_error("AmrSystem::set_compiled_block : in multi-block each block must have "
+                               "a NON empty name (the name indexes the block : set_density/mass/density)");
     if (p_->block_index(name) >= 0)
-      throw std::runtime_error("AmrSystem::set_compiled_block : nom de bloc deja utilise '" + name +
-                               "' (les noms de blocs doivent etre uniques en multi-blocs)");
+      throw std::runtime_error("AmrSystem::set_compiled_block : block name already used '" + name +
+                               "' (block names must be unique in multi-block)");
   }
-  if (p_->blocks.empty()) p_->gamma = gamma;  // compat : gamma du 1er bloc (chemin mono-bloc)
+  if (p_->blocks.empty()) p_->gamma = gamma;  // compat: gamma of the 1st block (single-block path)
   Impl::BlockSpec b;
   b.name = name;
   b.is_compiled = true;
@@ -628,18 +628,18 @@ ADC_EXPORT void AmrSystem::set_compiled_block(
   b.stride = stride;
   b.recon_prim = recon_prim;
   b.imex = imex;
-  b.implicit_vars = implicit_vars;   // masque IMEX partiel (resolu en indices par multi_builder au build)
+  b.implicit_vars = implicit_vars;   // partial IMEX mask (resolved into indices by multi_builder at build)
   b.implicit_roles = implicit_roles;
-  b.compiled_hooks_builder = std::move(mono_builder);   // chemin mono-bloc (AmrCouplerMP)
-  b.compiled_block_builder = std::move(multi_builder);  // chemin multi-blocs (AmrRuntime)
+  b.compiled_hooks_builder = std::move(mono_builder);   // single-block path (AmrCouplerMP)
+  b.compiled_block_builder = std::move(multi_builder);  // multi-block path (AmrRuntime)
   p_->blocks.push_back(std::move(b));
 }
 
 namespace {
-// Ancre de module pour dladdr : son ADRESSE vit dans l'image qui contient amr_system.cpp (le module
-// _adc, ou le binaire de test). add_native_block s'en sert pour localiser le module et le promouvoir
-// en portee globale (RTLD_NOLOAD). Une fonction locale a la TU suffit (pas besoin d'export) et evite
-// de dependre d'un symbole defini ailleurs (adc::abi_key, system.cpp).
+// Module anchor for dladdr: its ADDRESS lives in the image that contains amr_system.cpp (the _adc
+// module, or the test binary). add_native_block uses it to locate the module and promote it to
+// global scope (RTLD_NOLOAD). A TU-local function suffices (no need to export) and avoids
+// depending on a symbol defined elsewhere (adc::abi_key, system.cpp).
 void amr_native_anchor() {}
 }  // namespace
 
@@ -648,60 +648,60 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                                  const std::string& recon, const std::string& time, double gamma,
                                  int substeps) {
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_native_block : substeps >= 1");
-  // Validation AMONT du schema (comme add_block) : add_compiled_model(AmrSystem&) rejette deja
-  // time hors {explicit, imex} et recon hors {conservative, primitive}, mais on diagnostique ICI une
-  // faute de frappe avant la frontiere C++. time == "imex" => source raide traitee en IMPLICITE
-  // (backward_euler_source), transport explicite porte par le reflux. limiter (dont weno5, cable #105)
-  // et riemann (dont hllc/roe, cables a parite #113) sont valides par dispatch_amr_compiled dans le
-  // loader (exception claire).
+  // UPSTREAM scheme validation (like add_block): add_compiled_model(AmrSystem&) already rejects
+  // time outside {explicit, imex} and recon outside {conservative, primitive}, but we diagnose HERE a
+  // typo before the C++ boundary. time == "imex" => stiff source handled IMPLICITLY
+  // (backward_euler_source), explicit transport carried by the reflux. limiter (including weno5, wired #105)
+  // and riemann (including hllc/roe, wired at parity #113) are validated by dispatch_amr_compiled in the
+  // loader (clear exception).
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("AmrSystem::add_native_block : recon 'conservative' | 'primitive' "
-                             "(recu '" + recon + "')");
-  // time == "ssprk3" : SSPRK3 N'EST PAS transporte par l'ABI plate du loader .so AMR -- l'installateur
-  // extern "C" (adc_install_native_amr) ne marshale que la CHAINE time, et le gabarit add_compiled_model
-  // qu'il inline ne mappe que {explicit, imex} (il ne fige PAS AmrBuildParams::time_method). Plutot que de
-  // RETOMBER SILENCIEUSEMENT sur kEuler (option ignoree), on REJETTE explicitement ici : un bloc SSPRK3
-  // doit passer par un bloc NATIF adc.Model(...) (AmrSystem.add_block), pas par un loader .so compile.
+                             "(got '" + recon + "')");
+  // time == "ssprk3": SSPRK3 IS NOT transported by the AMR .so loader flat ABI -- the extern "C"
+  // installer (adc_install_native_amr) only marshals the time STRING, and the add_compiled_model
+  // template it inlines only maps {explicit, imex} (it does NOT freeze AmrBuildParams::time_method). Rather
+  // than SILENTLY FALLING BACK to kEuler (option ignored), we REJECT explicitly here: an SSPRK3 block
+  // must go through a NATIVE block adc.Model(...) (AmrSystem.add_block), not a compiled .so loader.
   if (time == "ssprk3")
     throw std::runtime_error(
-        "AmrSystem::add_native_block : time='ssprk3' non transporte par le loader .so compile (ABI "
-        "plate : seul {explicit, imex} est marshale) ; utiliser un bloc natif adc.Model(...) avec "
+        "AmrSystem::add_native_block : time='ssprk3' not transported by the compiled .so loader (flat "
+        "ABI : only {explicit, imex} is marshaled) ; use a native block adc.Model(...) with "
         "adc.Explicit(ssprk3=True) via AmrSystem.add_block.");
   if (time != "explicit" && time != "imex")
-    throw std::runtime_error("AmrSystem::add_native_block : time 'explicit' | 'imex' sur AMR (recu '" +
+    throw std::runtime_error("AmrSystem::add_native_block : time 'explicit' | 'imex' on AMR (got '" +
                              time + "')");
-  // Chemin "production" du DSL cote AMR : le loader .so genere (emit_cpp_native_loader avec
-  // target="amr_system") inline le gabarit en-tete add_compiled_model(AmrSystem&, ...), qui
-  // materialise un AmrCouplerMP<Model> concret au build paresseux et installe ses hooks via
-  // set_compiled_block -- chemin NATIF, MEME hierarchie AMR que add_block (reflux, regrid). Le loader
-  // appelle donc set_compiled_block (methode hors-ligne de adc::AmrSystem) DEFINIE dans CE module ;
-  // il faut la resoudre a travers le dlopen contre le module _adc deja charge.
-  // PORTABILITE ELF (Linux) : CPython charge _adc en RTLD_LOCAL, donc ses symboles ne sont PAS dans
-  // la portee globale. On PROMEUT le module courant en portee globale (RTLD_NOLOAD = sans le
-  // recharger ; RTLD_GLOBAL OR'e dans les flags de l'objet deja charge), localise par dladdr sur une
-  // ADRESSE de CE module : amr_native_anchor (fonction locale a cette TU). On evite ainsi de dependre
-  // de adc::abi_key (defini dans system.cpp) -- ce qui couplerait au link tout test compilant
-  // amr_system.cpp seul. Sur macOS, inoffensif (le loader resout par dynamic_lookup).
+  // DSL "production" path on the AMR side: the generated .so loader (emit_cpp_native_loader with
+  // target="amr_system") inlines the header template add_compiled_model(AmrSystem&, ...), which
+  // materializes a concrete AmrCouplerMP<Model> at lazy build and installs its hooks via
+  // set_compiled_block -- NATIVE path, SAME AMR hierarchy as add_block (reflux, regrid). The loader
+  // thus calls set_compiled_block (out-of-line method of adc::AmrSystem) DEFINED in THIS module;
+  // it must be resolved through the dlopen against the already-loaded _adc module.
+  // ELF PORTABILITY (Linux): CPython loads _adc with RTLD_LOCAL, so its symbols are NOT in
+  // the global scope. We PROMOTE the current module to global scope (RTLD_NOLOAD = without
+  // reloading it; RTLD_GLOBAL OR'd into the flags of the already-loaded object), located by dladdr on
+  // an ADDRESS of THIS module: amr_native_anchor (TU-local function). We thus avoid depending
+  // on adc::abi_key (defined in system.cpp) -- which would link-couple any test compiling
+  // amr_system.cpp alone. On macOS, harmless (the loader resolves via dynamic_lookup).
 #if defined(_WIN32)
-  // Windows (ADC-100) : pas de RTLD_GLOBAL. La .dll AMR generee est liee contre _adc.lib (symbole
-  // AmrSystem::set_compiled_block ADC_EXPORT) + kokkoscore.lib (Kokkos partage). Indefinis resolus
-  // par l'OS-loader contre _adc.pyd + kokkos*.dll deja charges. On charge + resout adc_install_native_amr.
+  // Windows (ADC-100): no RTLD_GLOBAL. The generated AMR .dll is linked against _adc.lib (symbol
+  // AmrSystem::set_compiled_block ADC_EXPORT) + kokkoscore.lib (shared Kokkos). Undefined symbols resolved
+  // by the OS loader against the already-loaded _adc.pyd + kokkos*.dll. We load + resolve adc_install_native_amr.
   adc::dynlib::handle h = adc::dynlib::open(so_path);
   if (!h)
     throw std::runtime_error("AmrSystem::add_native_block : LoadLibrary('" + so_path + "') : " +
                              adc::dynlib::last_error() +
-                             " (.dll liee contre _adc.lib + kokkoscore.lib ; cf. ADC-100)");
+                             " (.dll linked against _adc.lib + kokkoscore.lib ; cf. ADC-100)");
   {
     auto key_fn = reinterpret_cast<const char* (*)()>(adc::dynlib::sym(h, "adc_native_abi_key"));
     if (!key_fn) {
       adc::dynlib::close(h);
-      throw std::runtime_error("AmrSystem::add_native_block : adc_native_abi_key absent de la .dll");
+      throw std::runtime_error("AmrSystem::add_native_block : adc_native_abi_key missing from the .dll");
     }
     const std::string loader_key = key_fn();
     const std::string module_key = detail::abi_key_string();
     if (loader_key != module_key) {
       adc::dynlib::close(h);
-      throw std::runtime_error("AmrSystem::add_native_block : ABI incompatible -- loader '" +
+      throw std::runtime_error("AmrSystem::add_native_block : incompatible ABI -- loader '" +
                                loader_key + "' != module '" + module_key + "'");
     }
     using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
@@ -709,7 +709,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     auto install = reinterpret_cast<install_fn_t>(adc::dynlib::sym(h, "adc_install_native_amr"));
     if (!install) {
       adc::dynlib::close(h);
-      throw std::runtime_error("AmrSystem::add_native_block : adc_install_native_amr absent de la .dll");
+      throw std::runtime_error("AmrSystem::add_native_block : adc_install_native_amr missing from the .dll");
     }
     install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
             time.c_str(), gamma, substeps);
@@ -720,94 +720,94 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     if (dladdr(reinterpret_cast<void*>(&amr_native_anchor), &info) && info.dli_fname)
       dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
   }
-  // RTLD_GLOBAL : place les symboles du loader dans la portee globale ET autorise le loader a resoudre
-  // ses indefinis (set_compiled_block exportee ADC_EXPORT) contre les images deja chargees. RTLD_NOW :
-  // resolution immediate -> un symbole AmrSystem manquant echoue ICI, pas en vol.
+  // RTLD_GLOBAL: places the loader's symbols in the global scope AND lets the loader resolve
+  // its undefined symbols (set_compiled_block exported ADC_EXPORT) against the already-loaded images. RTLD_NOW:
+  // immediate resolution -> a missing AmrSystem symbol fails HERE, not in flight.
   void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
   if (!h) {
     const char* e = dlerror();
     throw std::runtime_error("AmrSystem::add_native_block : dlopen('" + so_path + "') : " +
                              std::string(e ? e : "?") +
-                             " (le symbole adc::AmrSystem::set_compiled_block doit etre exporte ET le "
-                             "module _adc charge globalement ; cf. ADC_EXPORT)");
+                             " (the symbol adc::AmrSystem::set_compiled_block must be exported AND the "
+                             "_adc module loaded globally ; cf. ADC_EXPORT)");
   }
-  // GARDE-FOU ABI EXPLICITE : la cle baked dans le loader (a SA compilation) doit egaler la cle du
-  // module. Un ecart = en-tetes / compilateur / standard divergents -> agencement memoire de
-  // AmrSystem/AmrBuildParams/AmrCompiledHooks potentiellement different a la frontiere -> UB. On leve
-  // une erreur CLAIRE plutot que de laisser passer un loader incompatible. MEME symbole de cle que le
-  // chemin System (adc_native_abi_key) : seul l'installateur (adc_install_native_amr) differe.
+  // EXPLICIT ABI GUARD: the key baked into the loader (at ITS compilation) must equal the module's
+  // key. A mismatch = divergent headers / compiler / standard -> potentially different memory layout
+  // of AmrSystem/AmrBuildParams/AmrCompiledHooks at the boundary -> UB. We raise
+  // a CLEAR error rather than let an incompatible loader through. SAME key symbol as the
+  // System path (adc_native_abi_key): only the installer (adc_install_native_amr) differs.
   auto key_fn = reinterpret_cast<const char* (*)()>(dlsym(h, "adc_native_abi_key"));
   if (!key_fn) {
     dlclose(h);
-    throw std::runtime_error("AmrSystem::add_native_block : adc_native_abi_key absent du .so "
-                             "(regenerer via dsl.compile_native(target='amr_system') / "
+    throw std::runtime_error("AmrSystem::add_native_block : adc_native_abi_key missing from the .so "
+                             "(regenerate via dsl.compile_native(target='amr_system') / "
                              "compile(backend='production', target='amr_system'))");
   }
   const std::string loader_key = key_fn();
-  // Cle du module = MEME calcul que adc::abi_key() (header-only detail::abi_key_string()) : evite la
-  // dependance au symbole hors-ligne adc::abi_key (system.cpp). Le loader bake la sienne a SA compil.
+  // Module key = SAME computation as adc::abi_key() (header-only detail::abi_key_string()): avoids the
+  // dependency on the out-of-line symbol adc::abi_key (system.cpp). The loader bakes its own at ITS compile.
   const std::string module_key = detail::abi_key_string();
   if (loader_key != module_key) {
     dlclose(h);
-    throw std::runtime_error("AmrSystem::add_native_block : ABI incompatible -- cle du loader '" +
-                             loader_key + "' != cle du module '" + module_key +
-                             "'. Recompiler le loader avec le MEME compilateur, standard C++ et "
-                             "en-tetes adc que le module _adc.");
+    throw std::runtime_error("AmrSystem::add_native_block : incompatible ABI -- loader key '" +
+                             loader_key + "' != module key '" + module_key +
+                             "'. Recompile the loader with the SAME compiler, C++ standard and "
+                             "adc headers as the _adc module.");
   }
-  // Installateur natif AMR du loader : reinterpret_cast<AmrSystem*>(this) puis
-  // add_compiled_model<ProdModel>(*amrsys, ...). Schema marshale en arguments plats extern "C". Pas
-  // de parametre evolve (AMR mono-bloc, pas de bloc fond gele comme System). SYMBOLE DISTINCT
-  // (adc_install_native_amr, vs adc_install_native cote System) : un loader genere pour System ne
-  // l'exporte PAS, donc le brancher ici echoue clairement au lieu d'un cast incoherent.
+  // AMR native installer of the loader: reinterpret_cast<AmrSystem*>(this) then
+  // add_compiled_model<ProdModel>(*amrsys, ...). Scheme marshaled as flat extern "C" arguments. No
+  // evolve parameter (single-block AMR, no frozen background block like System). DISTINCT SYMBOL
+  // (adc_install_native_amr, vs adc_install_native on the System side): a loader generated for System
+  // does NOT export it, so wiring it here fails clearly instead of an inconsistent cast.
   using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
                                 const char*, double, int);
   auto install = reinterpret_cast<install_fn_t>(dlsym(h, "adc_install_native_amr"));
   if (!install) {
     dlclose(h);
-    throw std::runtime_error("AmrSystem::add_native_block : adc_install_native_amr absent du .so "
-                             "(loader genere pour System, ou regenerer via "
+    throw std::runtime_error("AmrSystem::add_native_block : adc_install_native_amr missing from the .so "
+                             "(loader generated for System, or regenerate via "
                              "dsl.compile_native(target='amr_system'))");
   }
   install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
           time.c_str(), gamma, substeps);
-  // Le .so reste charge (RTLD_GLOBAL) pour la duree du process : le builder type-erase installe par
-  // set_compiled_block capture du code (gabarit en-tete) qui y vit. On NE le ferme PAS.
-#endif  // _WIN32 (production AMR POSIX-only ; Windows = throw, ADC-100)
+  // The .so stays loaded (RTLD_GLOBAL) for the duration of the process: the type-erasing builder
+  // installed by set_compiled_block captures code (header template) that lives there. We do NOT close it.
+#endif  // _WIN32 (production AMR POSIX-only; Windows = throw, ADC-100)
 }
 
 void AmrSystem::set_refinement(double threshold) { p_->refine_threshold = threshold; }
 
 void AmrSystem::set_phi_refinement(double grad_threshold) {
   if (p_->built)
-    throw std::runtime_error("AmrSystem::set_phi_refinement : le systeme est deja construit (poser le "
-                             "critere de raffinement avant tout step/mass/density)");
-  // <= 0 (defaut) -> phi DESACTIVE (build_multi ne pose pas le predicat phi) ; bit-identique. > 0 ->
-  // tag de phi sur |grad phi| ajoute a l'union des tags (D4), pose par build_multi. On N'IMPOSE PAS de
-  // garde sur le nombre de blocs ici : le routage mono/multi n'est arrete qu'a ensure_built (>= 2
-  // add_block), et l'ordre des appels de configuration est libre (set_phi_refinement peut preceder le
-  // 2e add_block). En MONO-BLOC le seuil reste sans effet : le chemin AmrCouplerMP regrid sur la seule
-  // densite (pas de predicat phi separe) et n'appelle pas build_multi -> phi_grad_threshold est ignore,
-  // sans illusion (le predicat phi n'a de sens que sur le moteur runtime multi-blocs).
+    throw std::runtime_error("AmrSystem::set_phi_refinement : the system is already built (set the "
+                             "refinement criterion before any step/mass/density)");
+  // <= 0 (default) -> phi DISABLED (build_multi does not set the phi predicate); bit-identical. > 0 ->
+  // phi tag on |grad phi| added to the tag union (D4), set by build_multi. We DO NOT impose a
+  // guard on the number of blocks here: the single/multi routing is only decided at ensure_built (>= 2
+  // add_block), and the order of configuration calls is free (set_phi_refinement may precede the
+  // 2nd add_block). In SINGLE-BLOCK the threshold stays without effect: the AmrCouplerMP path regrids on
+  // density alone (no separate phi predicate) and does not call build_multi -> phi_grad_threshold is ignored,
+  // without illusion (the phi predicate only makes sense on the multi-block runtime engine).
   p_->phi_grad_threshold = grad_threshold;
 }
 
 void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
                             const std::string& bc, const std::string& wall,
                             double wall_radius) {
-  // CONTRAT mono-bloc/explicite (cf. set_compiled_block) : l'AMR cable un SEUL solveur
-  // elliptique (GeometricMG, le defaut template d'AmrCouplerMP) et un SEUL second membre
-  // (f = model.elliptic_rhs(U), assemble par coupler_eval_rhs). On REFUSE donc explicitement
-  // toute valeur de rhs/solver hors du domaine reellement cable, au lieu de la stocker en
-  // silence (le no-op historique laissait croire que solver='fft' marchait sur la hierarchie).
-  // bc/wall sont reellement consommes par poisson_bc()/wall_active() : valides la-bas.
+  // single-block/explicit CONTRACT (cf. set_compiled_block): AMR wires a SINGLE elliptic
+  // solver (GeometricMG, the AmrCouplerMP template default) and a SINGLE right-hand side
+  // (f = model.elliptic_rhs(U), assembled by coupler_eval_rhs). We thus explicitly REFUSE
+  // any rhs/solver value outside the actually wired domain, instead of storing it
+  // silently (the historical no-op suggested solver='fft' worked on the hierarchy).
+  // bc/wall are actually consumed by poisson_bc()/wall_active(): validated there.
   if (rhs != "charge_density" && rhs != "composite")
-    throw std::runtime_error("AmrSystem::set_poisson : rhs '" + rhs +
-                             "' inconnu (charge_density|composite ; le second membre = somme des "
-                             "briques elliptiques du bloc)");
+    throw std::runtime_error("AmrSystem::set_poisson : unknown rhs '" + rhs +
+                             "' (charge_density|composite ; the right-hand side = sum of the "
+                             "block's elliptic bricks)");
   if (solver != "geometric_mg")
     throw std::runtime_error("AmrSystem::set_poisson : solver '" + solver +
-                             "' non supporte sur AMR (seul 'geometric_mg' est cable sur la "
-                             "hierarchie ; 'fft' n'existe que sur grille mono-niveau, cf. System)");
+                             "' unsupported on AMR (only 'geometric_mg' is wired on the "
+                             "hierarchy ; 'fft' only exists on a single-level grid, cf. System)");
   p_->p_rhs = rhs;
   p_->p_solver = solver;
   p_->p_bc = bc;
@@ -817,20 +817,20 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
 
 void AmrSystem::set_density(const std::string& name, const std::vector<double>& rho) {
   if (p_->built)
-    throw std::runtime_error("AmrSystem::set_density : le systeme est deja construit (poser la "
-                             "densite avant tout step/mass/density)");
+    throw std::runtime_error("AmrSystem::set_density : the system is already built (set the "
+                             "density before any step/mass/density)");
   if (p_->blocks.empty())
-    throw std::runtime_error("AmrSystem::set_density : appeler add_block d'abord");
-  // MONO-BLOC : le nom est COSMETIQUE (compat historique, chemins add_compiled_model /
-  // add_native_block qui ne nomment pas le BlockSpec) -> la densite vise l'unique bloc, quel que
-  // soit le nom passe. MULTI-BLOCS : le nom INDEXE le bloc (chaque bloc a SA densite initiale, pour
-  // le RHS Poisson somme Sum_b q_b n_b) ; un nom inconnu est une erreur explicite.
+    throw std::runtime_error("AmrSystem::set_density : call add_block first");
+  // SINGLE-BLOCK: the name is COSMETIC (historical compat, add_compiled_model /
+  // add_native_block paths that do not name the BlockSpec) -> the density targets the single block,
+  // whatever name is passed. MULTI-BLOCK: the name INDEXES the block (each block has ITS initial
+  // density, for the summed Poisson RHS Sum_b q_b n_b); an unknown name is an explicit error.
   std::size_t idx = 0;
   if (p_->blocks.size() >= 2) {
     const int i = p_->block_index(name);
     if (i < 0)
-      throw std::runtime_error("AmrSystem::set_density : aucun bloc nomme '" + name +
-                               "' (multi-blocs : le nom indexe le bloc)");
+      throw std::runtime_error("AmrSystem::set_density : no block named '" + name +
+                               "' (multi-block : the name indexes the block)");
     idx = static_cast<std::size_t>(i);
   }
   p_->blocks[idx].density = rho;
@@ -839,29 +839,29 @@ void AmrSystem::set_density(const std::string& name, const std::vector<double>& 
 
 void AmrSystem::set_conservative_state(const std::string& name, const std::vector<double>& U) {
   if (p_->built)
-    throw std::runtime_error("AmrSystem::set_conservative_state : le systeme est deja construit "
-                             "(poser l'etat avant tout step/mass/density)");
+    throw std::runtime_error("AmrSystem::set_conservative_state : the system is already built "
+                             "(set the state before any step/mass/density)");
   if (p_->blocks.empty())
-    throw std::runtime_error("AmrSystem::set_conservative_state : appeler add_block d'abord");
-  // Garde de taille AMONT : etat NON vide et multiple de n*n. La taille exacte ncomp*n*n est verifiee
-  // au build (coupler_write_coarse_state), seul endroit ou ncomp == Model::n_vars est connu -- meme
-  // report que la garde n*n de set_density. On rejette explicitement l'etat VIDE (0 % nn == 0 sinon
-  // poserait has_state=true avec un etat vide, qui ne leverait que profond dans le 1er step).
+    throw std::runtime_error("AmrSystem::set_conservative_state : call add_block first");
+  // UPSTREAM size guard: NON empty state and multiple of n*n. The exact size ncomp*n*n is checked
+  // at build (coupler_write_coarse_state), the only place where ncomp == Model::n_vars is known -- same
+  // deferral as the n*n guard of set_density. We explicitly reject an EMPTY state (0 % nn == 0 would
+  // otherwise set has_state=true with an empty state, which would only throw deep in the 1st step).
   const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.n);
   if (U.empty())
-    throw std::runtime_error("AmrSystem::set_conservative_state : etat vide (attendu ncomp*n*n)");
+    throw std::runtime_error("AmrSystem::set_conservative_state : empty state (expected ncomp*n*n)");
   if (U.size() % nn != 0)
-    throw std::runtime_error("AmrSystem::set_conservative_state : taille de l'etat (" +
-                             std::to_string(U.size()) + ") non multiple de n*n (" +
-                             std::to_string(nn) + ") ; attendu ncomp*n*n composante-majeur");
-  // MONO-BLOC : nom cosmetique. MULTI-BLOCS : le nom indexe le bloc (mais build_multi levera ensuite,
-  // l'etat complet n'etant cable que sur le chemin mono-bloc).
+    throw std::runtime_error("AmrSystem::set_conservative_state : state size (" +
+                             std::to_string(U.size()) + ") not a multiple of n*n (" +
+                             std::to_string(nn) + ") ; expected ncomp*n*n component-major");
+  // SINGLE-BLOCK: cosmetic name. MULTI-BLOCK: the name indexes the block (but build_multi will then throw,
+  // the full state only being wired on the single-block path).
   std::size_t idx = 0;
   if (p_->blocks.size() >= 2) {
     const int i = p_->block_index(name);
     if (i < 0)
-      throw std::runtime_error("AmrSystem::set_conservative_state : aucun bloc nomme '" + name +
-                               "' (multi-blocs : le nom indexe le bloc)");
+      throw std::runtime_error("AmrSystem::set_conservative_state : no block named '" + name +
+                               "' (multi-block : the name indexes the block)");
     idx = static_cast<std::size_t>(i);
   }
   p_->blocks[idx].state = U;
@@ -870,21 +870,21 @@ void AmrSystem::set_conservative_state(const std::string& name, const std::vecto
 
 void AmrSystem::set_magnetic_field(const std::vector<double>& bz) {
   if (p_->built)
-    throw std::runtime_error("AmrSystem::set_magnetic_field : le systeme est deja construit "
-                             "(poser B_z avant tout step)");
+    throw std::runtime_error("AmrSystem::set_magnetic_field : the system is already built "
+                             "(set B_z before any step)");
   const std::size_t nn = static_cast<std::size_t>(p_->cfg.n) * static_cast<std::size_t>(p_->cfg.n);
   if (bz.size() != nn)
-    throw std::runtime_error("AmrSystem::set_magnetic_field : B_z de taille " +
-                             std::to_string(bz.size()) + " (attendu n*n = " + std::to_string(nn) +
-                             ", grossier row-major)");
+    throw std::runtime_error("AmrSystem::set_magnetic_field : B_z of size " +
+                             std::to_string(bz.size()) + " (expected n*n = " + std::to_string(nn) +
+                             ", coarse row-major)");
   p_->bz_field = bz;
 }
 
 void AmrSystem::set_source_stage(const std::string& name, const std::string& kind, double theta,
                                  double alpha, const SourceStageOptions& opts) {
-  // Reglages regroupes en POD (ADC-214) : alias locaux pour garder le corps lisible (memes noms /
-  // semantique que les anciens parametres a plat). bz_aux_component du POD est ignore ici (l'etage
-  // AMR mono-bloc lit le canal canonique B_z, cf. set_source_stage dans amr_system.hpp).
+  // Settings grouped into a POD (ADC-214): local aliases to keep the body readable (same names /
+  // semantics as the old flat parameters). bz_aux_component of the POD is ignored here (the single-block
+  // AMR stage reads the canonical B_z channel, cf. set_source_stage in amr_system.hpp).
   const double krylov_tol = opts.krylov_tol;
   const int krylov_max_iters = opts.krylov_max_iters;
   const std::string& density = opts.density;
@@ -892,42 +892,42 @@ void AmrSystem::set_source_stage(const std::string& name, const std::string& kin
   const std::string& momentum_y = opts.momentum_y;
   const std::string& energy = opts.energy;
   if (p_->built)
-    throw std::runtime_error("AmrSystem::set_source_stage : le systeme est deja construit "
-                             "(configurer l'etage source avant tout step)");
-  // SEUL kind cable : ElectrostaticLorentzCondensation (cf. CondensedSchurSourceStepper), comme System.
+    throw std::runtime_error("AmrSystem::set_source_stage : the system is already built "
+                             "(configure the source stage before any step)");
+  // ONLY wired kind: ElectrostaticLorentzCondensation (cf. CondensedSchurSourceStepper), like System.
   if (kind != "electrostatic_lorentz")
-    throw std::runtime_error("AmrSystem::set_source_stage : kind '" + kind +
-                             "' inconnu (seul 'electrostatic_lorentz' est cable)");
+    throw std::runtime_error("AmrSystem::set_source_stage : unknown kind '" + kind +
+                             "' (only 'electrostatic_lorentz' is wired)");
   if (!(theta > 0.0 && theta <= 1.0))
-    throw std::runtime_error("AmrSystem::set_source_stage : theta doit etre dans (0, 1] (recu " +
+    throw std::runtime_error("AmrSystem::set_source_stage : theta must be in (0, 1] (got " +
                              std::to_string(theta) + ")");
-  // MONO-BLOC uniquement : l'etage condense AMR est cable sur le coupleur mono-bloc (AmrCouplerMP). Le
-  // chemin multi-blocs (AmrRuntime) ne le porte pas encore -> erreur claire plutot qu'un no-op silencieux.
+  // SINGLE-BLOCK only: the AMR condensed stage is wired on the single-block coupler (AmrCouplerMP). The
+  // multi-block path (AmrRuntime) does not carry it yet -> clear error rather than a silent no-op.
   if (p_->multi_block())
-    throw std::runtime_error("AmrSystem::set_source_stage : l'etage source condense par Schur n'est "
-                             "cable qu'en MONO-BLOC (1 add_block) ; ce systeme a >= 2 blocs.");
+    throw std::runtime_error("AmrSystem::set_source_stage : the Schur-condensed source stage is "
+                             "only wired in SINGLE-BLOCK (1 add_block) ; this system has >= 2 blocks.");
   const int idx = p_->block_index(name);
   if (idx < 0)
-    throw std::runtime_error("AmrSystem::set_source_stage : aucun bloc nomme '" + name + "'");
+    throw std::runtime_error("AmrSystem::set_source_stage : no block named '" + name + "'");
   Impl::BlockSpec& b = p_->blocks[static_cast<std::size_t>(idx)];
-  // L'etage condense REMPLACE la source : il exige un transport SOURCE-FREE (explicite, modele NoSource),
-  // pas l'IMEX local. Le demander sur un bloc imex est une ERREUR (les deux sources se cumuleraient).
+  // The condensed stage REPLACES the source: it requires SOURCE-FREE transport (explicit, NoSource model),
+  // not the local IMEX. Requesting it on an imex block is an ERROR (both sources would stack).
   if (b.imex)
-    throw std::runtime_error("AmrSystem::set_source_stage : l'etage source condense exige un transport "
-                             "EXPLICITE source-free (le bloc '" + name + "' est time='imex' ; la source "
-                             "IMEX locale et l'etage condense se cumuleraient). Ajouter le bloc en "
-                             "time='explicit' (modele a brique source NoSource).");
-  // Les roles Density/MomentumX/MomentumY et la presence de B_z sont valides AU BUILD (la ou le type
-  // Model concret -- donc cons_vars -- est connu) : le ctor de AmrCondensedSchurSourceStepper leve si un
-  // role manque, amr_write_coarse_bz leve si B_z est absent. Erreurs claires, comme System.
+    throw std::runtime_error("AmrSystem::set_source_stage : the condensed source stage requires "
+                             "EXPLICIT source-free transport (the block '" + name + "' is time='imex' ; the "
+                             "local IMEX source and the condensed stage would stack). Add the block in "
+                             "time='explicit' (model with NoSource source brick).");
+  // The Density/MomentumX/MomentumY roles and the presence of B_z are validated AT BUILD (where the
+  // concrete Model type -- thus cons_vars -- is known): the ctor of AmrCondensedSchurSourceStepper throws if a
+  // role is missing, amr_write_coarse_bz throws if B_z is absent. Clear errors, like System.
   b.schur = true;
   b.schur_theta = theta;
   b.schur_alpha = alpha;
-  // Reglages transportes (vague 3) : tolerances Krylov + descripteurs de champs ("" = canonique).
-  // Resolution/validation des descripteurs AU BUILD contre Model::conservative_vars() (la ou le
-  // type concret est connu), comme les roles canoniques. krylov_tol valide ici (forme).
+  // Transported settings (wave 3): Krylov tolerances + field descriptors ("" = canonical).
+  // Resolution/validation of the descriptors AT BUILD against Model::conservative_vars() (where the
+  // concrete type is known), like the canonical roles. krylov_tol validated here (form).
   if (krylov_tol > 0.0 && !(krylov_tol < 1.0))
-    throw std::runtime_error("AmrSystem::set_source_stage : krylov_tol doit etre dans (0, 1)");
+    throw std::runtime_error("AmrSystem::set_source_stage : krylov_tol must be in (0, 1)");
   b.schur_krylov_tol = krylov_tol;
   b.schur_krylov_max_iters = krylov_max_iters;
   b.schur_density = density;
@@ -938,35 +938,35 @@ void AmrSystem::set_source_stage(const std::string& name, const std::string& kin
 
 void AmrSystem::set_time_scheme(const std::string& scheme) {
   if (p_->built)
-    throw std::runtime_error("AmrSystem::set_time_scheme : le systeme est deja construit "
-                             "(choisir le splitting avant tout step)");
+    throw std::runtime_error("AmrSystem::set_time_scheme : the system is already built "
+                             "(choose the splitting before any step)");
   if (scheme == "lie")
     p_->schur_strang = false;
   else if (scheme == "strang")
     p_->schur_strang = true;
   else
-    throw std::runtime_error("AmrSystem::set_time_scheme : schema '" + scheme +
-                             "' inconnu (attendu 'lie' ou 'strang')");
+    throw std::runtime_error("AmrSystem::set_time_scheme : unknown scheme '" + scheme +
+                             "' (expected 'lie' or 'strang')");
 }
 
 void AmrSystem::add_coupled_source(const CoupledSourceProgram& prog, double frequency,
                                    const std::string& label) {
   if (p_->built)
-    throw std::runtime_error("AmrSystem::add_coupled_source : le systeme est deja construit "
-                             "(enregistrer la source avant tout step/mass/density)");
-  // MULTI-BLOCS uniquement : une source COUPLEE lit/ecrit PLUSIEURS blocs nommes ; le chemin mono-bloc
-  // (AmrCouplerMP) n'a pas de registre de blocs et porte sa source via le modele. On refuse donc une
-  // source couplee tant qu'il y a moins de deux blocs (erreur EXPLICITE plutot qu'un no-op silencieux).
+    throw std::runtime_error("AmrSystem::add_coupled_source : the system is already built "
+                             "(register the source before any step/mass/density)");
+  // MULTI-BLOCK only: a COUPLED source reads/writes SEVERAL named blocks; the single-block path
+  // (AmrCouplerMP) has no block registry and carries its source via the model. We thus refuse a
+  // coupled source as long as there are fewer than two blocks (EXPLICIT error rather than a silent no-op).
   if (p_->blocks.size() < 2)
-    throw std::runtime_error("AmrSystem::add_coupled_source : source couplee inter-especes supportee "
-                             "uniquement en MULTI-BLOCS (>= 2 add_block) ; le mono-bloc porte sa source "
-                             "via le modele du bloc");
-  // Description bytecode regroupee en POD (ADC-214). Validation de forme MINIMALE ici (taille des
-  // listes) ; la validation FINE (roles, blocs, opcodes, registres) est faite par
-  // AmrRuntime::add_coupled_source a l'injection (build paresseux), exactement comme System delegue a
-  // CoupledSourceKernel. On stocke la spec plate telle quelle (champs du POD recopies un a un).
+    throw std::runtime_error("AmrSystem::add_coupled_source : inter-species coupled source supported "
+                             "only in MULTI-BLOCK (>= 2 add_block) ; the single-block carries its source "
+                             "via the block model");
+  // Bytecode description grouped into a POD (ADC-214). MINIMAL form validation here (list size);
+  // the FINE validation (roles, blocks, opcodes, registers) is done by
+  // AmrRuntime::add_coupled_source at injection (lazy build), exactly as System delegates to
+  // CoupledSourceKernel. We store the flat spec as-is (POD fields copied one by one).
   if (prog.out_blocks.empty())
-    throw std::runtime_error("AmrSystem::add_coupled_source : aucun terme de source (out_blocks vide)");
+    throw std::runtime_error("AmrSystem::add_coupled_source : no source term (out_blocks empty)");
   p_->coupled_sources.push_back(Impl::CoupledSourceSpec{
       prog.in_blocks, prog.in_roles, prog.consts, prog.out_blocks, prog.out_roles, prog.prog_ops,
       prog.prog_args, prog.prog_lens, frequency, label, prog.freq_prog_ops, prog.freq_prog_args});
@@ -974,8 +974,8 @@ void AmrSystem::add_coupled_source(const CoupledSourceProgram& prog, double freq
 
 void AmrSystem::step(double dt) {
   p_->ensure_built();
-  // Restauration de phase de cadence en ATTENTE (set_clock avant le 1er pas) : maintenant que le
-  // moteur existe (ensure_built), on pousse macro_step_ vers son compteur regrid/stride.
+  // PENDING cadence phase restoration (set_clock before the 1st step): now that the
+  // engine exists (ensure_built), we push macro_step_ to its regrid/stride counter.
   if (p_->clock_restore_pending_) {
     p_->push_macro_step_to_engine();
     p_->clock_restore_pending_ = false;
@@ -983,39 +983,39 @@ void AmrSystem::step(double dt) {
   if (p_->runtime) p_->runtime->step(static_cast<Real>(dt));
   else p_->step_fn(dt);
   p_->t += dt;
-  ++p_->macro_step_;  // compteur autoritaire (parite System : un macro-pas = un increment)
+  ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
 }
 void AmrSystem::advance(double dt, int nsteps) {
   for (int s = 0; s < nsteps; ++s) step(dt);
 }
 double AmrSystem::step_cfl(double cfl) {
   p_->ensure_built();
-  if (p_->clock_restore_pending_) {  // restauration de phase en attente (cf. step)
+  if (p_->clock_restore_pending_) {  // pending phase restoration (cf. step)
     p_->push_macro_step_to_engine();
     p_->clock_restore_pending_ = false;
   }
-  const double hx = p_->cfg.L / p_->cfg.n;  // pas d'espace du grossier (dx_coarse)
+  const double hx = p_->cfg.L / p_->cfg.n;  // coarse grid spacing (dx_coarse)
   if (p_->runtime) {
-    // MULTI-BLOCS : pas CFL SUBSTEPS/STRIDE-AWARE, mirroir EXACT de System::step_cfl. Un bloc de
-    // cadence stride avance d'un pas effectif stride*dt en substeps sous-pas, donc chaque sous-pas
-    // vaut stride*dt/substeps ; la condition de stabilite par sous-pas donne le dt par bloc
-    // dt_b = cfl*h*substeps_b/(stride_b*w_b), et le dt GLOBAL est le min sur les blocs (le plus
-    // contraignant). AmrRuntime::step_cfl porte la formule (les w_b/substeps/stride y vivent), puis
-    // avance d'un step(dt) qui re-applique stride et substeps. RETRO-COMPAT : avec substeps=1 et
-    // stride=1 partout, dt = cfl*h*min_b(1/w_b) = cfl*h/w_max, identique a l'ancienne formule
-    // (max_speed = max_b w_b) -> facade multi-blocs substeps=1/stride=1 bit-identique.
+    // MULTI-BLOCK: SUBSTEPS/STRIDE-AWARE CFL step, EXACT mirror of System::step_cfl. A block of
+    // stride cadence advances an effective step stride*dt in substeps sub-steps, so each sub-step
+    // is worth stride*dt/substeps; the per-sub-step stability condition gives the per-block dt
+    // dt_b = cfl*h*substeps_b/(stride_b*w_b), and the GLOBAL dt is the min over the blocks (the most
+    // constraining). AmrRuntime::step_cfl carries the formula (the w_b/substeps/stride live there), then
+    // advances by a step(dt) which re-applies stride and substeps. BACKWARD-COMPAT: with substeps=1 and
+    // stride=1 everywhere, dt = cfl*h*min_b(1/w_b) = cfl*h/w_max, identical to the old formula
+    // (max_speed = max_b w_b) -> multi-block facade substeps=1/stride=1 bit-identical.
     const double dt = static_cast<double>(
         p_->runtime->step_cfl(static_cast<Real>(cfl), static_cast<Real>(hx)));
     p_->t += dt;
-    ++p_->macro_step_;  // compteur autoritaire (parite System : un macro-pas = un increment)
+    ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
     return dt;
   }
-  // MONO-BLOC (AmrCouplerMP) : borne TRANSPORT historique dt = cfl*h/w_max (formule INCHANGEE,
-  // bit-identique sans bornes optionnelles), puis agregation StabilityPolicy (audit 2026-06) :
-  //  - bornes du BLOC (hooks source_frequency / stability_dt, VIDES sans trait modele) appliquees
-  //    au SOUS-PAS effectif dt/substeps (step_fn decoupe dt en substeps morceaux ; pas de stride
-  //    mono-bloc) : dt <= cfl*substeps/mu et dt <= dt_adm*substeps ;
-  //  - bornes GLOBALES (add_dt_bound), all_reduce_min comme System (dt identique tous rangs).
+  // SINGLE-BLOCK (AmrCouplerMP): historical TRANSPORT bound dt = cfl*h/w_max (UNCHANGED formula,
+  // bit-identical without optional bounds), then StabilityPolicy aggregation (audit 2026-06):
+  //  - BLOCK bounds (source_frequency / stability_dt hooks, EMPTY without model trait) applied
+  //    to the effective SUB-STEP dt/substeps (step_fn splits dt into substeps pieces; no stride
+  //    in single-block): dt <= cfl*substeps/mu and dt <= dt_adm*substeps;
+  //  - GLOBAL bounds (add_dt_bound), all_reduce_min like System (identical dt on all ranks).
   double h = cfl * hx / p_->max_speed_fn();
   p_->last_dt_reason = "transport:" + p_->blocks[0].name;
   const double sub = static_cast<double>(p_->blocks[0].substeps);
@@ -1042,37 +1042,37 @@ double AmrSystem::step_cfl(double cfl) {
   }
   p_->step_fn(h);
   p_->t += h;
-  ++p_->macro_step_;  // compteur autoritaire (parite System : un macro-pas = un increment)
+  ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
   return h;
 }
 
-// Borne GLOBALE de pas (pendant AMR de System::add_dt_bound) : enregistree AVANT ou APRES le build
-// (mono-bloc : lue par step_cfl a chaque pas ; multi-blocs : transmise au moteur, ou ajoutee a chaud
-// s'il existe deja). fn() est evaluee PAR RANG puis reduite all_reduce_min cote consommateur.
+// GLOBAL step bound (AMR counterpart of System::add_dt_bound): registered BEFORE or AFTER the build
+// (single-block: read by step_cfl at each step; multi-block: passed to the engine, or added hot
+// if it already exists). fn() is evaluated PER RANK then reduced all_reduce_min on the consumer side.
 void AmrSystem::add_dt_bound(const std::string& label, std::function<double()> fn) {
-  if (!fn) throw std::runtime_error("AmrSystem::add_dt_bound : fonction de borne vide");
+  if (!fn) throw std::runtime_error("AmrSystem::add_dt_bound : empty bound function");
   p_->dt_bounds.push_back(Impl::GlobalDtBound{label, fn});
   if (p_->runtime) p_->runtime->add_dt_bound(label, std::move(fn));
 }
 
-// Borne ACTIVE du dernier step_cfl ("" avant le premier pas CFL).
+// ACTIVE bound of the last step_cfl ("" before the first CFL step).
 std::string AmrSystem::last_dt_bound() const {
   if (p_->runtime) return p_->runtime->last_dt_bound();
   return p_->last_dt_reason;
 }
 
-// Rapport Newton (diagnostics IMEX OPT-IN) du bloc, AGREGE sur les niveaux/sous-pas de sa DERNIERE
-// avance (reset en tete d'avance par AmrRuntime::step). MULTI-BLOCS natif seulement : le mono-bloc
-// (coupleur AmrCouplerMP) le rejette au build (ensure_built) ; un appel ICI sans moteur runtime (donc
-// mono-bloc construit) leve une erreur claire (parite System::newton_report : jamais un rapport vide).
+// Newton report (OPT-IN IMEX diagnostics) of the block, AGGREGATED over the levels/sub-steps of its
+// LAST advance (reset at the head of advance by AmrRuntime::step). Native MULTI-BLOCK only: the
+// single-block (AmrCouplerMP coupler) rejects it at build (ensure_built); a call HERE without a runtime
+// engine (thus single-block built) raises a clear error (parity System::newton_report: never an empty report).
 AmrSystem::SourceNewtonReport AmrSystem::newton_report(const std::string& name) {
-  p_->ensure_built();  // materialise le moteur (multi-blocs) ou le coupleur (mono-bloc)
+  p_->ensure_built();  // materializes the engine (multi-block) or the coupler (single-block)
   if (!p_->runtime)
     throw std::runtime_error(
-        "AmrSystem::newton_report : diagnostics Newton non disponibles en mono-bloc (le coupleur "
-        "AmrCouplerMP rejette newton_diagnostics au build) ; ajouter un 2e bloc (moteur multi-blocs), "
-        "ou utiliser un System mono-niveau pour le rapport complet.");
-  const NewtonReport& r = p_->runtime->newton_report(name);  // leve si bloc inconnu / diagnostics off
+        "AmrSystem::newton_report : Newton diagnostics not available in single-block (the AmrCouplerMP "
+        "coupler rejects newton_diagnostics at build) ; add a 2nd block (multi-block engine), "
+        "or use a single-level System for the full report.");
+  const NewtonReport& r = p_->runtime->newton_report(name);  // throws if unknown block / diagnostics off
   return SourceNewtonReport{r.enabled,
                             r.converged,
                             static_cast<double>(r.max_residual),
@@ -1091,9 +1091,9 @@ void AmrSystem::set_clock(double t, int macro_step) {
     throw std::runtime_error("AmrSystem::set_clock : macro_step >= 0 (restart)");
   p_->t = t;
   p_->macro_step_ = macro_step;
-  // Pousse la phase de cadence (regrid/stride) au moteur : tout de suite s'il est deja bati, sinon au
-  // 1er step (clock_restore_pending_). set_clock est typiquement appele AVANT le 1er pas (restart d'une
-  // composition rejouee, build paresseux), d'ou le drapeau.
+  // Pushes the cadence phase (regrid/stride) to the engine: right away if it is already built, otherwise at
+  // the 1st step (clock_restore_pending_). set_clock is typically called BEFORE the 1st step (restart of a
+  // replayed composition, lazy build), hence the flag.
   if (p_->built)
     p_->push_macro_step_to_engine();
   else
@@ -1113,42 +1113,42 @@ int AmrSystem::n_patches() {
 }
 std::vector<PatchBox> AmrSystem::patch_boxes() {
   p_->ensure_built();
-  if (p_->runtime) return p_->runtime->patch_boxes();  // MULTI-BLOCS : moteur AmrRuntime
-  return p_->patch_boxes_fn();                          // MONO-BLOC : hook AmrCouplerMP
+  if (p_->runtime) return p_->runtime->patch_boxes();  // MULTI-BLOCK: AmrRuntime engine
+  return p_->patch_boxes_fn();                          // SINGLE-BLOCK: AmrCouplerMP hook
 }
 double AmrSystem::mass() { return mass(std::string()); }
 double AmrSystem::mass(const std::string& name) {
   p_->ensure_built();
-  if (!p_->runtime) return p_->mass_fn();  // MONO-BLOC : nom cosmetique -> unique bloc
-  const int idx = p_->block_index(name);   // MULTI-BLOCS : le nom indexe le bloc
+  if (!p_->runtime) return p_->mass_fn();  // SINGLE-BLOCK: cosmetic name -> single block
+  const int idx = p_->block_index(name);   // MULTI-BLOCK: the name indexes the block
   if (idx < 0)
-    throw std::runtime_error("AmrSystem::mass : aucun bloc nomme '" + name + "'");
+    throw std::runtime_error("AmrSystem::mass : no block named '" + name + "'");
   return static_cast<double>(p_->runtime->mass(static_cast<std::size_t>(idx)));
 }
 std::vector<double> AmrSystem::density() { return density(std::string()); }
 std::vector<double> AmrSystem::density(const std::string& name) {
   p_->ensure_built();
-  if (!p_->runtime) return p_->density_fn();  // MONO-BLOC : nom cosmetique -> unique bloc
-  const int idx = p_->block_index(name);      // MULTI-BLOCS : le nom indexe le bloc
+  if (!p_->runtime) return p_->density_fn();  // SINGLE-BLOCK: cosmetic name -> single block
+  const int idx = p_->block_index(name);      // MULTI-BLOCK: the name indexes the block
   if (idx < 0)
-    throw std::runtime_error("AmrSystem::density : aucun bloc nomme '" + name + "'");
+    throw std::runtime_error("AmrSystem::density : no block named '" + name + "'");
   return p_->runtime->density(static_cast<std::size_t>(idx));
 }
 std::vector<double> AmrSystem::potential() {
   p_->ensure_built();
-  if (p_->runtime) return p_->runtime->potential();  // aux partage (commun a tous les blocs)
+  if (p_->runtime) return p_->runtime->potential();  // shared aux (common to all blocks)
   return p_->potential_fn();
 }
 
 namespace {
-// Message commun des accesseurs de checkpoint AMR (ADC-65) : la reprise BIT-IDENTIQUE n'est cablee
-// qu'en MONO-BLOC (coupleur AmrCouplerMP). Le multi-blocs (moteur AmrRuntime) partage le layout ET
-// l'aux entre blocs et n'expose pas encore l'etat par niveau/bloc ni l'imposition de hierarchie sur
-// la grille partagee -> rejet EXPLICITE plutot qu'un etat partiel/faux en silence (suite documentee).
+// Common message of the AMR checkpoint accessors (ADC-65): BIT-IDENTICAL restart is only wired
+// in SINGLE-BLOCK (AmrCouplerMP coupler). The multi-block (AmrRuntime engine) shares the layout AND
+// the aux between blocks and does not yet expose the per-level/per-block state nor hierarchy imposition on
+// the shared grid -> EXPLICIT rejection rather than a silent partial/false state (documented follow-up).
 const char* const kAmrCkptMonoOnly =
-    "checkpoint/restart AMR (etat par niveau, imposition de hierarchie) cable en MONO-BLOC seulement "
-    "(coupleur AmrCouplerMP) ; ce systeme est multi-blocs (moteur AmrRuntime : layout + aux partages "
-    "= suite). Utiliser un seul add_block, ou un System mono-niveau (checkpoint/restart bit-identique).";
+    "AMR checkpoint/restart (per-level state, hierarchy imposition) wired in SINGLE-BLOCK only "
+    "(AmrCouplerMP coupler) ; this system is multi-block (AmrRuntime engine : shared layout + aux "
+    "= follow-up). Use a single add_block, or a single-level System (bit-identical checkpoint/restart).";
 }  // namespace
 
 int AmrSystem::n_levels() {
