@@ -1,54 +1,54 @@
-// Bindings pybind11 de la LIB adc_cpp : le module compile `_adc`. On expose la
-// facade de composition a l'execution `System` (le "coupleur / systeme" du
-// tuteur) + sa config. Python compose QUOI assembler (modele + schema spatial +
-// traitement temporel + sous-pas par bloc, Poisson de systeme) ; tout le calcul
-// cellule par cellule reste dans la lib compilee. Le sucre lisible (Spatial,
-// Explicit, IMEX, System) est ajoute par le paquet Python adc/__init__.py.
-// Construit seulement avec -DADC_BUILD_PYTHON=ON.
+// pybind11 bindings of the adc_cpp LIB: compiles the `_adc` module. Exposes the
+// runtime composition facade `System` (the tutor's "coupler / system") + its
+// config. Python composes WHAT to assemble (model + spatial scheme + temporal
+// treatment + per-block substeps, system Poisson); all the cell-by-cell compute
+// stays in the compiled lib. The readable sugar (Spatial, Explicit, IMEX,
+// System) is added by the Python package adc/__init__.py.
+// Built only with -DADC_BUILD_PYTHON=ON.
 
-#include <pybind11/functional.h>  // std::function<double()> <- callable Python (add_dt_bound)
+#include <pybind11/functional.h>  // std::function<double()> <- Python callable (add_dt_bound)
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <adc/core/kokkos_env.hpp>  // Kokkos_Core sous ADC_HAS_KOKKOS (kokkos_is_initialized)
-#include <adc/parallel/comm.hpp>    // adc::my_rank / n_ranks : garde rang-0 de la facade IO multi-rangs
-#include <adc/runtime/abi_key.hpp>  // adc::abi_key : cle d'ABI exposee au DSL (chemin "production")
+#include <adc/core/kokkos_env.hpp>  // Kokkos_Core under ADC_HAS_KOKKOS (kokkos_is_initialized)
+#include <adc/parallel/comm.hpp>    // adc::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
+#include <adc/runtime/abi_key.hpp>  // adc::abi_key: ABI key exposed to the DSL ("production" path)
 #include <adc/runtime/amr_system.hpp>
 #include <adc/runtime/system.hpp>
 
 #include <cstring>
 #include <stdexcept>
 #include <string>
-#include <tuple>  // std::tuple : argument de AmrSystem.set_hierarchy (boites patch_boxes) (ADC-65)
+#include <tuple>  // std::tuple: argument of AmrSystem.set_hierarchy (patch_boxes boxes) (ADC-65)
 #include <vector>
 
 namespace py = pybind11;
 using namespace adc;
 
-// champ (ny*nx row-major, j lent / i rapide) -> tableau numpy (ny, nx) (copie). On dimensionne le tampon
-// avec les DEUX extents reels du domaine d'indices (rows = ny, cols = nx) : carre n x n en cartesien
-// (INCHANGE), mais nr x ntheta en polaire ou nr != ntheta. Un remodelage carre (n, n) y allouait nx^2
-// cases pour ny*nx valeurs -> memcpy deborde le tampon numpy (heap overflow, crash au teardown). On
-// VERIFIE l'accord taille du tampon == taille de la source avant le memcpy (garde-fou explicite).
+// field (ny*nx row-major, j slow / i fast) -> numpy array (ny, nx) (copy). We size the buffer
+// with BOTH real extents of the index domain (rows = ny, cols = nx): square n x n in Cartesian
+// (UNCHANGED), but nr x ntheta in polar where nr != ntheta. A square reshape (n, n) would allocate nx^2
+// slots for ny*nx values -> memcpy overflows the numpy buffer (heap overflow, crash at teardown). We
+// CHECK buffer size == source size before the memcpy (explicit guard).
 static py::array_t<double> to_2d(const std::vector<double>& v, int rows, int cols) {
   py::array_t<double> a({rows, cols});
   if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("adc (bindings) : taille du champ (" + std::to_string(v.size()) +
+    throw std::runtime_error("adc (bindings): field size (" + std::to_string(v.size()) +
                              ") != rows*cols (" + std::to_string(rows) + "*" + std::to_string(cols) +
-                             ") ; remodelage 2D incoherent");
+                             "); inconsistent 2D reshape");
   std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
   return a;
 }
-// etat (ncomp*ny*nx, ordre composante-majeur, j lent / i rapide) -> tableau numpy (ncomp, ny, nx).
-// Meme garde-fou que to_2d : rows = ny, cols = nx (carre en cartesien, nr x ntheta en polaire).
+// state (ncomp*ny*nx, component-major order, j slow / i fast) -> numpy array (ncomp, ny, nx).
+// Same guard as to_2d: rows = ny, cols = nx (square in Cartesian, nr x ntheta in polar).
 static py::array_t<double> to_3d(const std::vector<double>& v, int ncomp, int rows, int cols) {
   py::array_t<double> a({ncomp, rows, cols});
   if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("adc (bindings) : taille de l'etat (" + std::to_string(v.size()) +
+    throw std::runtime_error("adc (bindings): state size (" + std::to_string(v.size()) +
                              ") != ncomp*rows*cols (" + std::to_string(ncomp) + "*" +
                              std::to_string(rows) + "*" + std::to_string(cols) +
-                             ") ; remodelage 3D incoherent");
+                             "); inconsistent 3D reshape");
   std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
   return a;
 }
@@ -57,94 +57,94 @@ static std::vector<double> flat(
   return std::vector<double>(arr.data(), arr.data() + arr.size());
 }
 
-// ADC-214 : la SURFACE Python garde le kwarg newton_fail_policy en CHAINE ("none"/"warn"/"throw") ;
-// le POD NewtonOptions porte un entier (NewtonOptions::kFail*). Cette table de conversion vit donc
-// cote bindings (la ou les kwargs plats sont assembles en POD), avec le MEME message d'erreur explicite
-// qu'avant ce chantier. @p where nomme la methode appelante dans le message.
+// ADC-214: the Python SURFACE keeps the newton_fail_policy kwarg as a STRING ("none"/"warn"/"throw");
+// the NewtonOptions POD carries an integer (NewtonOptions::kFail*). This conversion table therefore
+// lives in the bindings (where the flat kwargs are assembled into a POD), with the SAME explicit error
+// message as before this work. @p where names the calling method in the message.
 static int newton_fail_policy_from_string(const std::string& policy, const char* where) {
   if (policy == "none") return NewtonOptions::kFailNone;
   if (policy == "warn") return NewtonOptions::kFailWarn;
   if (policy == "throw") return NewtonOptions::kFailThrow;
-  throw std::runtime_error(std::string(where) + " : newton_fail_policy 'none'|'warn'|'throw' (recu '" +
+  throw std::runtime_error(std::string(where) + ": newton_fail_policy 'none'|'warn'|'throw' (got '" +
                            policy + "')");
 }
 
 PYBIND11_MODULE(_adc, m) {
   m.doc() =
-      "adc_cpp (lib) : composition multi-especes a l'execution. System compose un "
-      "systeme bloc par bloc ; le calcul reste C++ compile.";
+      "adc_cpp (lib): runtime multi-species composition. System composes a "
+      "system block by block; the compute stays compiled C++.";
 
-  // Cle d'ABI du module (compilateur + standard C++ + signature des en-tetes adc). Le DSL la
-  // consulte (diagnostic) ; add_native_block la compare a la cle baked dans un loader natif.
+  // Module ABI key (compiler + C++ standard + signature of the adc headers). The DSL reads it
+  // (diagnostic); add_native_block compares it to the key baked into a native loader.
   m.def("abi_key", &adc::abi_key,
-        "Cle d'ABI du module (compilateur, standard C++, signature des en-tetes adc).");
+        "Module ABI key (compiler, C++ standard, signature of the adc headers).");
 
-  // Rang / nombre de rangs MPI du communicateur (0 / 1 en serie ou MPI non initialise, cf.
-  // adc/parallel/comm.hpp). Expose pour que la facade IO (sim.write / sim.checkpoint) n'ecrive le
-  // fichier que sur le rang 0 apres un gather collectif (state_global / potential_global).
-  m.def("my_rank", &adc::my_rank, "Rang MPI du processus (0 en serie).");
-  m.def("n_ranks", &adc::n_ranks, "Nombre de rangs MPI (1 en serie).");
+  // MPI rank / rank count of the communicator (0 / 1 in serial or when MPI is not initialized, cf.
+  // adc/parallel/comm.hpp). Exposed so the IO facade (sim.write / sim.checkpoint) writes the file
+  // only on rank 0 after a collective gather (state_global / potential_global).
+  m.def("my_rank", &adc::my_rank, "MPI rank of the process (0 in serial).");
+  m.def("n_ranks", &adc::n_ranks, "Number of MPI ranks (1 in serial).");
 
-  // Norme C++ du LOADER (ADC_CXX_STD injecte par le build : 20 sous Kokkos, 23 sinon). Le DSL
-  // backend="production" DOIT compiler le modele natif avec cette MEME norme, sinon __cplusplus
-  // diverge -> cle d'ABI differente -> add_native_block leve "ABI incompatible". On l'expose comme
-  // entier (20/23) ; dsl.compile en derive le flag -std=c++NN au lieu de figer c++23.
+  // C++ standard of the LOADER (ADC_CXX_STD injected by the build: 20 under Kokkos, 23 otherwise). The
+  // DSL backend="production" MUST compile the native model with this SAME standard, otherwise __cplusplus
+  // diverges -> different ABI key -> add_native_block raises "ABI incompatible". We expose it as an
+  // integer (20/23); dsl.compile derives the -std=c++NN flag from it instead of hardcoding c++23.
 #ifdef ADC_CXX_STD
   m.attr("__cxx_std__") = static_cast<int>(ADC_CXX_STD);
 #else
-  // Build manuel sans -DADC_CXX_STD : on retombe sur __cplusplus pour rester coherent avec la cle
-  // d'ABI (qui, elle, encode toujours __cplusplus). 202002L -> 20, au-dela -> 23.
+  // Manual build without -DADC_CXX_STD: we fall back on __cplusplus to stay consistent with the ABI
+  // key (which itself always encodes __cplusplus). 202002L -> 20, beyond -> 23.
   m.attr("__cxx_std__") = static_cast<int>(__cplusplus > 202002L ? 23 : 20);
 #endif
 
-  // Backend de calcul COMPILE dans le module : True si _adc a ete construit avec Kokkos
-  // (-DADC_USE_KOKKOS=ON -> ADC_HAS_KOKKOS), donc capable de multi-thread (device OpenMP) / GPU.
-  // adc.set_threads / adc.parallel_info s'en servent pour avertir qu'un module SERIE ignore le
-  // reglage de threads. Un build serie expose False ; pas de faux negatif.
+  // Compute backend COMPILED into the module: True if _adc was built with Kokkos
+  // (-DADC_USE_KOKKOS=ON -> ADC_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
+  // adc.set_threads / adc.parallel_info use it to warn that a SERIAL module ignores the thread
+  // setting. A serial build exposes False; no false negative.
 #ifdef ADC_HAS_KOKKOS
   m.attr("__has_kokkos__") = true;
 #else
   m.attr("__has_kokkos__") = false;
 #endif
 
-  // Chemin du COMPILATEUR qui a construit ce module (ADC_CXX_COMPILER, injecte par CMake). La cle
-  // d'ABI encodant __VERSION__, le DSL "production" DOIT recompiler ses loaders avec CE compilateur :
-  // dsl.py le prefere au `which c++` du PATH (qui, dans un env conda, designe souvent un autre
-  // compilateur -> "-std=c++23 invalide" ou rejet ABI). Build manuel sans -D : chaine vide, dsl.py
-  // retombe alors sur sa detection historique.
+  // Path of the COMPILER that built this module (ADC_CXX_COMPILER, injected by CMake). Since the ABI
+  // key encodes __VERSION__, the "production" DSL MUST recompile its loaders with THIS compiler:
+  // dsl.py prefers it to the PATH's `which c++` (which, in a conda env, often designates another
+  // compiler -> "-std=c++23 invalid" or ABI rejection). Manual build without -D: empty string, dsl.py
+  // then falls back on its historical detection.
 #ifdef ADC_CXX_COMPILER
   m.attr("__cxx_compiler__") = ADC_CXX_COMPILER;
 #else
   m.attr("__cxx_compiler__") = "";
 #endif
 
-  // Version du projet (ADC_VERSION = PROJECT_VERSION CMake, source unique). Reexposee en
-  // adc.__version__ par le paquet ; "unknown" sur un build manuel sans -D.
+  // Project version (ADC_VERSION = CMake PROJECT_VERSION, single source). Re-exposed as
+  // adc.__version__ by the package; "unknown" on a manual build without -D.
 #ifdef ADC_VERSION
   m.attr("__version__") = ADC_VERSION;
 #else
   m.attr("__version__") = "unknown";
 #endif
 
-  // Etat REEL de l'init Kokkos (lazy : 1re allocation de Fab, par N'IMPORTE quel chemin --
-  // System, AmrSystem, .so DSL...). adc.set_threads s'appuie dessus plutot que sur un drapeau
-  // Python qui ne voyait que System/AmrSystem : le warning "trop tard" devient fiable.
-  // Build serie : toujours False (rien a initialiser, le reglage de threads est sans objet).
+  // REAL state of the Kokkos init (lazy: first Fab allocation, through ANY path --
+  // System, AmrSystem, DSL .so...). adc.set_threads relies on this rather than on a Python
+  // flag that only saw System/AmrSystem: the "too late" warning becomes reliable.
+  // Serial build: always False (nothing to initialize, the thread setting is moot).
   m.def("kokkos_is_initialized", []() {
 #ifdef ADC_HAS_KOKKOS
     return Kokkos::is_initialized();
 #else
     return false;
 #endif
-  }, "True si le runtime Kokkos du module est deja initialise (set_threads arrive alors trop tard).");
+  }, "True if the module's Kokkos runtime is already initialized (set_threads then arrives too late).");
 
   py::class_<SystemConfig>(m, "SystemConfig")
       .def(py::init<>())
       .def_readwrite("n", &SystemConfig::n)
       .def_readwrite("L", &SystemConfig::L)
       .def_readwrite("periodic", &SystemConfig::periodic)
-      // Geometrie opt-in (chantier "grille polaire", Phase 1). "cartesian" (defaut) = bit-identique ;
-      // "polar" = anneau global porte par adc.PolarMesh. Champs polaires ignores si geometry=="cartesian".
+      // Opt-in geometry ("polar grid" work, Phase 1). "cartesian" (default) = bit-identical;
+      // "polar" = global ring carried by adc.PolarMesh. Polar fields ignored if geometry=="cartesian".
       .def_readwrite("geometry", &SystemConfig::geometry)
       .def_readwrite("nr", &SystemConfig::nr)
       .def_readwrite("ntheta", &SystemConfig::ntheta)
@@ -152,8 +152,8 @@ PYBIND11_MODULE(_adc, m) {
       .def_readwrite("r_max", &SystemConfig::r_max)
       .def_readwrite("theta_boxes", &SystemConfig::theta_boxes);
 
-  // ModelSpec : composition de briques generiques (transport/source/elliptic + parametres).
-  // Aucun scenario nomme ; le sucre adc.Model(...) cote Python remplit ces champs.
+  // ModelSpec: composition of generic bricks (transport/source/elliptic + parameters).
+  // No named scenario; the adc.Model(...) sugar on the Python side fills these fields.
   py::class_<ModelSpec>(m, "ModelSpec")
       .def(py::init<>())
       .def_readwrite("transport", &ModelSpec::transport)
@@ -172,11 +172,11 @@ PYBIND11_MODULE(_adc, m) {
 
   py::class_<System>(m, "System")
       .def(py::init<const SystemConfig&>())
-      // Composition par bloc : modele (briques) + schema spatial (limiter/riemann) + temps
-      // (explicit/imex) + sous-pas. Python dit QUOI, le C++ compile fait le calcul.
-      // ADC-214 : la SURFACE Python est INCHANGEE (memes kwargs newton_* a plat, memes defauts). La
-      // lambda les recoit a plat et CONSTRUIT le POD NewtonOptions en interne avant d'appeler la
-      // nouvelle methode C++ (qui regroupe ces parametres homogenes). adc_cases ne voit aucun changement.
+      // Per-block composition: model (bricks) + spatial scheme (limiter/riemann) + time
+      // (explicit/imex) + substeps. Python says WHAT, the compiled C++ does the compute.
+      // ADC-214: the Python SURFACE is UNCHANGED (same flat newton_* kwargs, same defaults). The
+      // lambda receives them flat and BUILDS the NewtonOptions POD internally before calling the
+      // new C++ method (which groups these homogeneous parameters). adc_cases sees no change.
       .def("add_block",
            [](System& s, const std::string& name, const ModelSpec& model,
               const std::string& limiter, const std::string& riemann, const std::string& recon,
@@ -201,24 +201,24 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("recon") = "conservative",
            py::arg("time") = "explicit", py::arg("substeps") = 1,
            py::arg("evolve") = true, py::arg("stride") = 1,
-           // Masque implicite PORTE PAR LE BLOC (IMEX) : variables conservees traitees en implicite par
-           // NOM (implicit_vars) ou par ROLE physique (implicit_roles). Vides (defaut) -> defaut modele,
-           // bit-identique. Resolus cote C++ contre les noms/roles du bloc (erreur sur un nom/role absent).
+           // Implicit mask CARRIED BY THE BLOCK (IMEX): conserved variables treated implicitly by
+           // NAME (implicit_vars) or by physical ROLE (implicit_roles). Empty (default) -> model default,
+           // bit-identical. Resolved on the C++ side against the block's names/roles (error on a missing name/role).
            py::arg("implicit_vars") = std::vector<std::string>{},
            py::arg("implicit_roles") = std::vector<std::string>{},
-           // Options du Newton de la source implicite IMEX (defauts = constantes historiques 2 / 1e-7,
-           // bit-identique). newton_diagnostics=True active le rapport (newton_report(name)).
+           // Options of the implicit IMEX source Newton (defaults = historical constants 2 / 1e-7,
+           // bit-identical). newton_diagnostics=True enables the report (newton_report(name)).
            py::arg("newton_max_iters") = 2, py::arg("newton_rel_tol") = 0.0,
            py::arg("newton_abs_tol") = 0.0, py::arg("newton_fd_eps") = 1e-7,
            py::arg("newton_diagnostics") = false, py::arg("newton_damping") = 1.0,
            py::arg("newton_fail_policy") = "none",
-           // Limiteur de POSITIVITE Zhang-Shu (ADC-76) : plancher de densite des etats de face
-           // reconstruits (scaling conservatif vers la moyenne de cellule). 0 (defaut) = inactif,
-           // chemin bit-identique. Exige un modele exposant le role Density.
+           // Zhang-Shu POSITIVITY limiter (ADC-76): density floor of the reconstructed face states
+           // (conservative scaling toward the cell mean). 0 (default) = inactive,
+           // bit-identical path. Requires a model exposing the Density role.
            py::arg("positivity_floor") = 0.0)
-      // Rapport Newton (diagnostics IMEX OPT-IN) : dict {enabled, converged, max_residual,
-      // max_iters_used, n_failed, failed_cell, failed_component}, agrege sur les sous-pas de la
-      // DERNIERE avance du bloc. failed_cell = (i, j) d'UNE cellule fautive ou None.
+      // Newton report (IMEX diagnostics OPT-IN): dict {enabled, converged, max_residual,
+      // max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the substeps of the
+      // LAST advance of the block. failed_cell = (i, j) of ONE faulty cell or None.
       .def("newton_report",
            [](const System& s, const std::string& name) {
              const System::SourceNewtonReport r = s.newton_report(name);
@@ -237,7 +237,7 @@ PYBIND11_MODULE(_adc, m) {
              return d;
            },
            py::arg("name"))
-      // Bloc dont le modele est charge a l'execution depuis un .so genere par le DSL (chemin hote).
+      // Block whose model is loaded at runtime from a .so generated by the DSL (host path).
       .def("add_dynamic_block", &System::add_dynamic_block, py::arg("name"), py::arg("so_path"),
            py::arg("substeps") = 1, py::arg("names") = std::vector<std::string>{},
            py::arg("recon") = "none")
@@ -245,12 +245,12 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("substeps") = 1,
            py::arg("names") = std::vector<std::string>{}, py::arg("positivity_floor") = 0.0)
-      // P7-b : change les parametres RUNTIME d'un bloc AOT SANS recompiler le .so. values = bloc
-      // complet (ordre trie des noms cote DSL). cf. System::set_block_params.
+      // P7-b: changes the RUNTIME parameters of an AOT block WITHOUT recompiling the .so. values =
+      // whole block (sorted name order on the DSL side). cf. System::set_block_params.
       .def("set_block_params", &System::set_block_params, py::arg("name"), py::arg("values"))
-      // Bloc NATIF charge depuis un loader .so genere par le DSL (backend "production",
-      // dsl.compile_native) : le .so inline add_compiled_model<ProdModel> -> bloc zero-copie sur le
-      // contexte reel du System, cle d'ABI verifiee. cf. System::add_native_block.
+      // NATIVE block loaded from a .so loader generated by the DSL (backend "production",
+      // dsl.compile_native): the .so inlines add_compiled_model<ProdModel> -> zero-copy block on the
+      // real System context, ABI key verified. cf. System::add_native_block.
       .def("add_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
@@ -261,11 +261,11 @@ PYBIND11_MODULE(_adc, m) {
       .def("add_collision", &System::add_collision, py::arg("a"), py::arg("b"), py::arg("rate"))
       .def("add_thermal_exchange", &System::add_thermal_exchange, py::arg("a"), py::arg("b"),
            py::arg("rate"))
-      // Etage source condense par Schur (OPT-IN, adc.Split(source=adc.CondensedSchur(...))) : remplace
-      // la source explicite / IMEX du bloc par l'etage condense C++ (CondensedSchurSourceStepper, #126)
-      // apres le transport hyperbolique. kind='electrostatic_lorentz'. Defaut (sans appel) inchange.
-      // ADC-214 : surface Python INCHANGEE (memes kwargs krylov_* / descripteurs a plat, memes
-      // defauts). La lambda les recoit a plat et CONSTRUIT le POD SourceStageOptions avant l'appel C++.
+      // Schur-condensed source stage (OPT-IN, adc.Split(source=adc.CondensedSchur(...))): replaces
+      // the block's explicit / IMEX source with the C++ condensed stage (CondensedSchurSourceStepper, #126)
+      // after the hyperbolic transport. kind='electrostatic_lorentz'. Default (without the call) unchanged.
+      // ADC-214: Python surface UNCHANGED (same flat krylov_* kwargs / descriptors, same
+      // defaults). The lambda receives them flat and BUILDS the SourceStageOptions POD before the C++ call.
       .def("set_source_stage",
            [](System& s, const std::string& name, const std::string& kind, double theta, double alpha,
               double krylov_tol, int krylov_max_iters, const std::string& density,
@@ -282,41 +282,41 @@ PYBIND11_MODULE(_adc, m) {
              s.set_source_stage(name, kind, theta, alpha, opts);
            },
            py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
-           // Tolerance / budget du solve Krylov de l'etage (audit 2026-06) : <= 0 = defauts
-           // historiques du stepper (1e-10 ; 400 cartesien / 600 polaire).
+           // Tolerance / budget of the stage's Krylov solve (audit 2026-06): <= 0 = historical
+           // stepper defaults (1e-10; 400 Cartesian / 600 polar).
            py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0,
-           // Descripteurs des champs (audit vague 2 : roles transportes dans l'ABI) : "" = role
-           // canonique (bit-identique) ; sinon nom de role stable ou de variable du bloc.
-           // bz_aux_component < 0 = canal canonique B_z. Honore en cartesien comme en polaire.
+           // Field descriptors (wave 2 audit: roles carried in the ABI): "" = canonical
+           // role (bit-identical); otherwise a stable role name or a block variable name.
+           // bz_aux_component < 0 = canonical B_z channel. Honored in Cartesian as in polar.
            py::arg("density") = "", py::arg("momentum_x") = "", py::arg("momentum_y") = "",
            py::arg("energy") = "", py::arg("bz_aux_component") = -1)
-      // Politique de splitting en temps : "lie" (defaut, bit-identique) ou "strang" (H(dt/2) S(dt)
-      // H(dt/2), 2e ordre). Cf. System::set_time_scheme / SystemStepper::step_strang.
+      // Time splitting policy: "lie" (default, bit-identical) or "strang" (H(dt/2) S(dt)
+      // H(dt/2), 2nd order). Cf. System::set_time_scheme / SystemStepper::step_strang.
       .def("set_time_scheme", &System::set_time_scheme, py::arg("scheme"))
-      // (System) -- voir aussi AmrSystem.add_coupled_source plus bas pour le pendant AMR.
-      // Borne GLOBALE de pas de temps (audit step_cfl) : fn() evaluee UNE fois par pas (hote) par
-      // step_cfl / step_adaptive ; dt <= fn() quand fn() > 0 et fini. Crochet des contraintes non
-      // locales-cellule (couplage, Schur/Poisson, scheduler, rampe utilisateur). Une callback
-      // Python est acceptable ici (jamais par cellule).
+      // (System) -- see also AmrSystem.add_coupled_source below for the AMR counterpart.
+      // GLOBAL time-step bound (step_cfl audit): fn() evaluated ONCE per step (host) by
+      // step_cfl / step_adaptive; dt <= fn() when fn() > 0 and finite. Hook for non
+      // cell-local constraints (coupling, Schur/Poisson, scheduler, user ramp). A Python
+      // callback is acceptable here (never per cell).
       .def("add_dt_bound", &System::add_dt_bound, py::arg("label"), py::arg("fn"))
-      // Borne ACTIVE du dernier step_cfl : "transport:<bloc>" | "source_frequency:<bloc>" |
-      // "stability_dt:<bloc>" | "global:<label>" | "degenerate" | "" (aucun pas CFL encore).
+      // ACTIVE bound of the last step_cfl: "transport:<block>" | "source_frequency:<block>" |
+      // "stability_dt:<block>" | "global:<label>" | "degenerate" | "" (no CFL step yet).
       .def("last_dt_bound", &System::last_dt_bound)
-      // Horloge (IO v1) : macro_step expose + restauration (t, macro_step) pour le restart -- la
-      // cadence stride depend de macro_step % stride, pas seulement de t.
+      // Clock (IO v1): macro_step exposed + restoration (t, macro_step) for the restart -- the
+      // stride cadence depends on macro_step % stride, not only on t.
       .def("macro_step", &System::macro_step)
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("set_potential", &System::set_potential, py::arg("phi"))
-      // Politique de la loi de Gauss (R0, repro Hoffart) : "restart" (defaut, re-resout Poisson chaque
-      // pas, bit-identique) ou "evolve" (apres phi^0, plus de re-solve ; l'etage Schur fait evoluer phi
-      // sans restart, comme le papier). Cf. System::set_gauss_policy.
+      // Gauss law policy (R0, Hoffart repro): "restart" (default, re-solves Poisson every
+      // step, bit-identical) or "evolve" (after phi^0, no more re-solve; the Schur stage evolves phi
+      // without restart, like the paper). Cf. System::set_gauss_policy.
       .def("set_gauss_policy", &System::set_gauss_policy, py::arg("policy"))
-      // Source COUPLEE generique (adc.dsl.CoupledSource, P5) : ABI plate (bytecode postfixe). Lit des
-      // champs (bloc, role) et ecrit des termes de source compiles en machine a pile, appliques par
-      // splitting explicite apres le transport (meme seam que add_ionization). Sans appel, inchange.
-      // ADC-214 : surface Python INCHANGEE (memes kwargs plats in_blocks/.../freq_prog_args, memes
-      // defauts). La lambda assemble le POD CoupledSourceProgram avant l'appel C++ (frequency / label
-      // restent a plat, types distincts hors famille homogene).
+      // Generic COUPLED source (adc.dsl.CoupledSource, P5): flat ABI (postfix bytecode). Reads
+      // fields (block, role) and writes source terms compiled into a stack machine, applied by
+      // explicit splitting after the transport (same seam as add_ionization). Without the call, unchanged.
+      // ADC-214: Python surface UNCHANGED (same flat kwargs in_blocks/.../freq_prog_args, same
+      // defaults). The lambda assembles the CoupledSourceProgram POD before the C++ call (frequency / label
+      // stay flat, distinct types outside the homogeneous family).
       .def("add_coupled_source",
            [](System& s, const std::vector<std::string>& in_blocks,
               const std::vector<std::string>& in_roles, const std::vector<double>& consts,
@@ -331,49 +331,49 @@ PYBIND11_MODULE(_adc, m) {
            },
            py::arg("in_blocks"), py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"),
            py::arg("out_roles"), py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
-           // Frequence CONSTANTE declaree mu du couplage (CoupledSource.frequency, vague 3) : borne de
-           // pas dt <= cfl/mu sur le macro-pas ; <= 0 = pas de borne (historique).
+           // CONSTANT declared frequency mu of the coupling (CoupledSource.frequency, wave 3): step
+           // bound dt <= cfl/mu on the macro-step; <= 0 = no bound (historical).
            py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
-           // Frequence PAR CELLULE optionnelle mu(U) : programme bytecode (meme machine a pile / table
-           // de registres que les termes). VIDES (defaut) = frequence constante seule, bit-identique.
+           // Optional PER-CELL frequency mu(U): bytecode program (same stack machine / register
+           // table as the terms). EMPTY (default) = constant frequency only, bit-identical.
            py::arg("freq_prog_ops") = std::vector<int>{},
            py::arg("freq_prog_args") = std::vector<int>{})
       .def("variable_names", &System::variable_names,
-           "Noms des variables d'un bloc (introspection). kind = 'conservative' | 'primitive'.",
+           "Variable names of a block (introspection). kind = 'conservative' | 'primitive'.",
            py::arg("name"), py::arg("kind") = "conservative")
       .def("variable_roles", &System::variable_roles,
-           "Roles PHYSIQUES des variables d'un bloc, parallele a variable_names : 'density', "
-           "'momentum_x', 'energy', ... ou 'custom' si le bloc ne renseigne pas ses roles. C'est ce "
-           "que resolvent les couplages inter-especes (index_of(role)). kind = 'conservative' | "
+           "PHYSICAL roles of a block's variables, parallel to variable_names: 'density', "
+           "'momentum_x', 'energy', ... or 'custom' if the block does not declare its roles. This is what "
+           "the inter-species couplings resolve (index_of(role)). kind = 'conservative' | "
            "'primitive'.",
            py::arg("name"), py::arg("kind") = "conservative")
       .def("block_gamma", &System::block_gamma, py::arg("name"))
       .def("set_poisson", &System::set_poisson,
-           "Configure le Poisson de systeme partage. rhs : 'charge_density' | 'composite' (etiquettes "
-           "du MEME second membre f = somme des briques elliptiques par bloc ; charge_density = alias "
-           "historique). solver : 'geometric_mg' (tout cas, paroi comprise) | 'fft' (periodique, "
-           "stencil discret ; n = 2^k pour la FFT rapide, sinon DFT directe O(n^2)) | 'fft_spectral' "
-           "(periodique, symbole continu -(kx^2+ky^2)). bc : 'auto' | 'periodic' | 'dirichlet' | "
-           "'neumann'. wall : 'none' | "
-           "'circle' (paroi conductrice centree en (L/2, L/2), rayon wall_radius). epsilon : "
-           "permittivite CONSTANTE de div(eps grad phi) = f (pour eps(x) variable : set_epsilon_field). "
-           "abs_tol : plancher absolu du critere d'arret du V-cycle GeometricMG (0 = critere relatif, "
-           "historique ; sans effet sur FFT).",
+           "Configures the shared system Poisson. rhs: 'charge_density' | 'composite' (labels "
+           "of the SAME right-hand side f = sum of the elliptic bricks per block; charge_density = historical "
+           "alias). solver: 'geometric_mg' (any case, wall included) | 'fft' (periodic, "
+           "discrete stencil; n = 2^k for the fast FFT, otherwise direct DFT O(n^2)) | 'fft_spectral' "
+           "(periodic, continuous symbol -(kx^2+ky^2)). bc: 'auto' | 'periodic' | 'dirichlet' | "
+           "'neumann'. wall: 'none' | "
+           "'circle' (conducting wall centered at (L/2, L/2), radius wall_radius). epsilon: "
+           "CONSTANT permittivity of div(eps grad phi) = f (for variable eps(x): set_epsilon_field). "
+           "abs_tol: absolute floor of the GeometricMG V-cycle stopping criterion (0 = relative criterion, "
+           "historical; no effect on FFT).",
            py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
            py::arg("wall") = "none", py::arg("wall_radius") = 0.0, py::arg("epsilon") = 1.0,
            py::arg("abs_tol") = 0.0)
-      // Domaine de transport DISQUE (chantiers T2 / T5-PR3) : materialise un masque 0/1 cellule-centre
-      // (cellule active si son centre est dans hypot(x-cx, y-cy) - R < 0) et CABLE le transport selon
-      // mode= : 'none' (defaut, transport plein cartesien, bit-identique meme avec le disque pose),
-      // 'staircase' (assemble_rhs_masked, porte de face 0/1), 'cutcell' (assemble_rhs_eb, cut-cell EB,
-      // apertures + kappa). Honore sous Lie ET Strang (set_time_scheme). cf. System::set_disc_domain.
+      // DISC transport domain (T2 / T5-PR3 work): materializes a cell-centered 0/1 mask (cell
+      // active if its center is in hypot(x-cx, y-cy) - R < 0) and WIRES the transport according to
+      // mode=: 'none' (default, full Cartesian transport, bit-identical even with the disc set),
+      // 'staircase' (assemble_rhs_masked, 0/1 face gate), 'cutcell' (assemble_rhs_eb, cut-cell EB,
+      // apertures + kappa). Honored under Lie AND Strang (set_time_scheme). cf. System::set_disc_domain.
       .def("set_disc_domain", &System::set_disc_domain, py::arg("cx"), py::arg("cy"), py::arg("R"),
            py::arg("mode") = "none")
-      // Bascule SEULE du mode de transport disque ('none'|'staircase'|'cutcell') sans (re)definir le
-      // disque. Un mode != 'none' exige un disque deja fixe (set_disc_domain) -> erreur sinon.
+      // Toggles ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
+      // disc. A mode != 'none' requires a disc already set (set_disc_domain) -> error otherwise.
       .def("set_geometry_mode", &System::set_geometry_mode, py::arg("mode"))
-      // Masque de domaine 0/1 (ny, nx) row-major (diagnostic / verification du contrat). Tout 1.0 sans
+      // Domain 0/1 mask (ny, nx) row-major (diagnostic / contract verification). All 1.0 without
       // set_disc_domain.
       .def("disc_mask", [](const System& s) { return to_2d(s.disc_mask(), s.ny(), s.nx()); })
       .def("set_epsilon_field",
@@ -401,8 +401,8 @@ PYBIND11_MODULE(_adc, m) {
              s.set_magnetic_field(flat(arr));
            },
            py::arg("bz"))
-      // Champs aux NOMMES (ADC-70 phase 1) : par COMPOSANTE canonique (>= 5). La resolution nom ->
-      // comp vit dans la facade Python (adc.System.set_aux_field), qui appelle ces deux methodes.
+      // NAMED aux fields (ADC-70 phase 1): by canonical COMPONENT (>= 5). The name -> comp
+      // resolution lives in the Python facade (adc.System.set_aux_field), which calls these two methods.
       .def("set_aux_field_component",
            [](System& s, int comp,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
@@ -422,16 +422,16 @@ PYBIND11_MODULE(_adc, m) {
              s.set_density(name, flat(arr));
            },
            py::arg("name"), py::arg("rho"))
-      // Init depuis les PRIMITIVES : prim = tableau (ncomp, n, n) composante-majeur dans l'ordre de
-      // primitive_vars(name) ; converti en conservatif par le modele du bloc. La facade Python
-      // (adc.System.set_primitive_state(**prims)) assemble ce tableau a partir des kwargs nommes.
+      // Init from the PRIMITIVES: prim = array (ncomp, n, n) component-major in the order of
+      // primitive_vars(name); converted to conservative by the block's model. The Python facade
+      // (adc.System.set_primitive_state(**prims)) assembles this array from the named kwargs.
       .def("set_primitive_state",
            [](System& s, const std::string& name,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
              s.set_primitive_state(name, flat(arr));
            },
            py::arg("name"), py::arg("prim"))
-      // Diagnostic : etat conservatif -> primitif (ncomp, n, n), ordre de primitive_vars(name).
+      // Diagnostic: conservative state -> primitive (ncomp, n, n), order of primitive_vars(name).
       .def("get_primitive_state",
            [](System& s, const std::string& name) {
              return to_3d(s.get_primitive_state(name), s.n_vars(name), s.ny(), s.nx());
@@ -441,19 +441,19 @@ PYBIND11_MODULE(_adc, m) {
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &System::step_cfl,
-           "Avance d'UN pas a dt = cfl * h / vitesse d'onde max du systeme (honore aussi les bornes "
-           "optionnelles : substeps, stride, source_frequency, couplages, add_dt_bound). Renvoie le dt "
-           "utilise.",
+           "Advances by ONE step at dt = cfl * h / max wave speed of the system (also honors the "
+           "optional bounds: substeps, stride, source_frequency, couplings, add_dt_bound). Returns the dt "
+           "used.",
            py::arg("cfl"))
       .def("dt_hotspot", &System::dt_hotspot,
-           "Diagnostic (ADC-182) : (w, i, j) de la cellule GLOBALE qui domine la borne CFL de transport "
-           "du bloc 'name' -- pour localiser un dt qui s'effondre. A la demande, hors chemin chaud.",
+           "Diagnostic (ADC-182): (w, i, j) of the GLOBAL cell that dominates the transport CFL bound "
+           "of block 'name' -- to locate a collapsing dt. On demand, off the hot path.",
            py::arg("name"))
       .def("step_adaptive", &System::step_adaptive,
-           "Avance d'un macro-pas MULTIRATE : le bloc le plus lent fixe le macro-pas, chaque bloc plus "
-           "rapide est sous-cycle n = ceil(w_bloc / w_min) fois. Renvoie le macro-pas.",
+           "Advances by ONE MULTIRATE macro-step: the slowest block sets the macro-step, each faster "
+           "block is sub-cycled n = ceil(w_block / w_min) times. Returns the macro-step.",
            py::arg("cfl"))
-      // Primitives pour un integrateur temporel CUSTOM en Python (take_step) :
+      // Primitives for a CUSTOM time integrator in Python (take_step):
       .def("eval_rhs",
            [](System& s, const std::string& name) {
              return to_3d(s.eval_rhs(name), s.n_vars(name), s.ny(), s.nx());
@@ -483,10 +483,10 @@ PYBIND11_MODULE(_adc, m) {
            },
            py::arg("name"))
       .def("potential", [](System& s) { return to_2d(s.potential(), s.ny(), s.nx()); })
-      // Accesseurs GLOBAUX (collectifs MPI-safe) : sorties / checkpoint multi-rangs (IO v1). Chaque
-      // rang DOIT les appeler (all_reduce interne) ; ils rendent le champ COMPLET (gather rang-0
-      // implicite par all_reduce_sum) -- mono-rang : bit-identique a density / get_state / potential.
-      // La facade sim.write / sim.checkpoint les utilise puis n'ecrit le fichier que sur le rang 0.
+      // GLOBAL accessors (MPI-safe collectives): multi-rank outputs / checkpoint (IO v1). Each
+      // rank MUST call them (internal all_reduce); they return the COMPLETE field (rank-0 gather
+      // implicit via all_reduce_sum) -- single-rank: bit-identical to density / get_state / potential.
+      // The sim.write / sim.checkpoint facade uses them then writes the file only on rank 0.
       .def("density_global",
            [](const System& s, const std::string& name) {
              return to_2d(s.density_global(name), s.ny(), s.nx());
@@ -498,35 +498,35 @@ PYBIND11_MODULE(_adc, m) {
            },
            py::arg("name"))
       .def("potential_global", [](System& s) { return to_2d(s.potential_global(), s.ny(), s.nx()); })
-      // Accesseurs LOCAUX par fab (NON collectifs) : ecriture HDF5 PARALLELE par hyperslabs (PR-IO-3,
-      // sim.write(format='hdf5', parallel=True)). local_boxes rend la liste des boites locales
-      // (ilo, jlo, ihi, jhi) en indices GLOBAUX ; local_state rend l'etat du fab li remodele
-      // (n_vars, bny, bnx) pour un hyperslab dset[:, jlo:jhi+1, ilo:ihi+1]. Un rang sans box rend une
-      // liste vide. Le System etant mono-box, le vrai parallelisme n'apparait que sur une geometrie
-      // multi-box (cf. AMR) ; l'API reste correcte dans le cas general.
+      // LOCAL per-fab accessors (NOT collective): PARALLEL HDF5 writing by hyperslabs (PR-IO-3,
+      // sim.write(format='hdf5', parallel=True)). local_boxes returns the list of local boxes
+      // (ilo, jlo, ihi, jhi) in GLOBAL indices; local_state returns the state of fab li reshaped
+      // (n_vars, bny, bnx) for a hyperslab dset[:, jlo:jhi+1, ilo:ihi+1]. A rank without a box returns an
+      // empty list. Since the System is single-box, real parallelism only appears on a multi-box
+      // geometry (cf. AMR); the API stays correct in the general case.
       .def("local_boxes", &System::local_boxes, py::arg("name"))
       .def("local_state",
            [](const System& s, const std::string& name, int li) {
              const auto boxes = s.local_boxes(name);
              if (li < 0 || li >= static_cast<int>(boxes.size()))
-               throw std::out_of_range("System.local_state : indice de fab local hors bornes");
+               throw std::out_of_range("System.local_state: local fab index out of bounds");
              const int bnx = boxes[li][2] - boxes[li][0] + 1;  // ihi - ilo + 1
              const int bny = boxes[li][3] - boxes[li][1] + 1;  // jhi - jlo + 1
              return to_3d(s.local_state(name, li), s.n_vars(name), bny, bnx);
            },
            py::arg("name"), py::arg("li"))
       .def_static("abi_key", &System::abi_key,
-                  "Cle d'ABI du module (cf. adc.abi_key) ; comparee a celle d'un loader natif.");
+                  "Module ABI key (cf. adc.abi_key); compared to that of a native loader.");
 
-  // --- AMR : composition mono-espece sur AMR multi-patch (brique generique composable) ---
-  // adc_cases la PILOTE depuis Python (pas de C++ cote cases) au meme titre que System.
+  // --- AMR: single-species composition on multi-patch AMR (generic composable brick) ---
+  // adc_cases DRIVES it from Python (no C++ on the cases side) just like System.
   //
-  // NB : l'integrateur AP deux-fluides (schema asymptotic-preserving SUR MESURE, non composable
-  // bloc a bloc) a quitte le coeur : ce n'est pas une brique generique mais un SCENARIO. Il vit
-  // desormais dans adc_cases (cf. adc_cases/two_fluid_ap/), compile a la volee contre les
-  // en-tetes generiques d'adc_cpp ; il n'est plus expose par le module _adc.
+  // NB: the two-fluid AP integrator (BESPOKE asymptotic-preserving scheme, not composable
+  // block by block) has left the core: it is not a generic brick but a SCENARIO. It now lives
+  // in adc_cases (cf. adc_cases/two_fluid_ap/), compiled on the fly against the generic
+  // headers of adc_cpp; it is no longer exposed by the _adc module.
 
-  // AmrSystem : composition mono-espece generique sur AMR.
+  // AmrSystem: generic single-species composition on AMR.
   py::class_<AmrSystemConfig>(m, "AmrSystemConfig")
       .def(py::init<>())
       .def_readwrite("n", &AmrSystemConfig::n)
@@ -538,8 +538,8 @@ PYBIND11_MODULE(_adc, m) {
 
   py::class_<AmrSystem>(m, "AmrSystem")
       .def(py::init<const AmrSystemConfig&>())
-      // ADC-214 : surface Python INCHANGEE (memes kwargs newton_* a plat, memes defauts). La lambda
-      // assemble le POD NewtonOptions avant l'appel C++ (parite avec System.add_block).
+      // ADC-214: Python surface UNCHANGED (same flat newton_* kwargs, same defaults). The lambda
+      // assembles the NewtonOptions POD before the C++ call (parity with System.add_block).
       .def("add_block",
            [](AmrSystem& s, const std::string& name, const ModelSpec& model,
               const std::string& limiter, const std::string& riemann, const std::string& recon,
@@ -563,22 +563,22 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit",
            py::arg("substeps") = 1, py::arg("stride") = 1,
-           // Masque IMEX partiel PORTE PAR LE BLOC (capstone vii) : variables conservees traitees en
-           // implicite par NOM (implicit_vars) ou par ROLE physique (implicit_roles). Vides (defaut)
-           // -> backward-Euler plein. N'ont de sens qu'en time="imex" et en MULTI-BLOCS (cf. add_block).
+           // Partial IMEX mask CARRIED BY THE BLOCK (capstone vii): conserved variables treated
+           // implicitly by NAME (implicit_vars) or by physical ROLE (implicit_roles). Empty (default)
+           // -> full backward-Euler. Only meaningful with time="imex" and MULTI-BLOCK (cf. add_block).
            py::arg("implicit_vars") = std::vector<std::string>{},
            py::arg("implicit_roles") = std::vector<std::string>{},
-           // Options Newton IMEX (vague 3, parite System) : OPTIONS cablees en MONO-BLOC (coupleur)
-           // ET MULTI-BLOCS (moteur). newton_diagnostics (rapport newton_report) : MULTI-BLOCS natif
-           // seulement (mono-bloc rejete au build ; loaders .so rejetes a la facade Python).
+           // IMEX Newton options (wave 3, System parity): OPTIONS wired in MONO-BLOCK (coupler)
+           // AND MULTI-BLOCK (engine). newton_diagnostics (newton_report report): native MULTI-BLOCK
+           // only (mono-block rejected at build; .so loaders rejected at the Python facade).
            py::arg("newton_max_iters") = 2, py::arg("newton_rel_tol") = 0.0,
            py::arg("newton_abs_tol") = 0.0, py::arg("newton_fd_eps") = 1e-7,
            py::arg("newton_damping") = 1.0, py::arg("newton_fail_policy") = "none",
            py::arg("newton_diagnostics") = false)
-      // Rapport Newton (diagnostics IMEX OPT-IN, MULTI-BLOCS natif) : dict {enabled, converged,
-      // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, agrege sur les
-      // niveaux/sous-pas de la DERNIERE avance du bloc. failed_cell = (i, j) ou None. Forme EXACTE du
-      // binding System.newton_report (parite, y compris failed_cell tuple/None).
+      // Newton report (IMEX diagnostics OPT-IN, native MULTI-BLOCK): dict {enabled, converged,
+      // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the
+      // levels/substeps of the LAST advance of the block. failed_cell = (i, j) or None. EXACT shape of
+      // the System.newton_report binding (parity, including failed_cell tuple/None).
       .def("newton_report",
            [](AmrSystem& s, const std::string& name) {
              const AmrSystem::SourceNewtonReport r = s.newton_report(name);
@@ -597,43 +597,43 @@ PYBIND11_MODULE(_adc, m) {
              return d;
            },
            py::arg("name"))
-      // Bloc NATIF AMR charge depuis un loader .so genere par le DSL (backend "production",
-      // target="amr_system") : le .so inline add_compiled_model(AmrSystem&) -> bloc natif sur la
-      // hierarchie AMR (reflux, regrid), cle d'ABI verifiee. cf. AmrSystem::add_native_block. PAS de
-      // evolve (AMR mono-bloc). Les LIMITES AMR (primitive/roe/hllc/weno5) sont gardees cote facade
-      // Python (AmrSystem.add_equation) avant ce binding.
+      // NATIVE AMR block loaded from a .so loader generated by the DSL (backend "production",
+      // target="amr_system"): the .so inlines add_compiled_model(AmrSystem&) -> native block on the
+      // AMR hierarchy (reflux, regrid), ABI key verified. cf. AmrSystem::add_native_block. NO
+      // evolve (mono-block AMR). The AMR LIMITS (primitive/roe/hllc/weno5) are guarded on the Python
+      // facade side (AmrSystem.add_equation) before this binding.
       .def("add_native_block", &AmrSystem::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
            py::arg("substeps") = 1)
       .def("set_refinement", &AmrSystem::set_refinement, py::arg("threshold"))
-      // Tag de PHI sur |grad phi| (D4) ajoute a l'union des tags du regrid : raffine aussi la ou la
-      // norme du gradient du potentiel depasse grad_threshold (bord d'anneau du diocotron). MULTI-BLOCS
-      // + regrid_every > 0. <= 0 (defaut) -> phi DESACTIVE (bit-identique). cf. AmrSystem::set_phi_refinement.
+      // PHI tag on |grad phi| (D4) added to the union of regrid tags: also refines where the
+      // norm of the potential gradient exceeds grad_threshold (diocotron ring edge). MULTI-BLOCK
+      // + regrid_every > 0. <= 0 (default) -> phi DISABLED (bit-identical). cf. AmrSystem::set_phi_refinement.
       .def("set_phi_refinement", &AmrSystem::set_phi_refinement, py::arg("grad_threshold"))
       .def("set_poisson", &AmrSystem::set_poisson,
-           "Configure le Poisson grossier de la hierarchie AMR (cf. System.set_poisson). Sur AMR le "
-           "solveur est TOUJOURS GeometricMG et le second membre TOUJOURS la somme des briques "
-           "elliptiques. rhs : 'charge_density' | 'composite'. solver : 'geometric_mg' uniquement (pas "
-           "de FFT sur la hierarchie). bc : 'auto' | 'periodic' | 'dirichlet' | 'neumann'. wall : "
-           "'none' | 'circle' (paroi conductrice circulaire, exige wall_radius > 0).",
+           "Configures the coarse Poisson of the AMR hierarchy (cf. System.set_poisson). On AMR the "
+           "solver is ALWAYS GeometricMG and the right-hand side ALWAYS the sum of the elliptic "
+           "bricks. rhs: 'charge_density' | 'composite'. solver: 'geometric_mg' only (no "
+           "FFT on the hierarchy). bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. wall: "
+           "'none' | 'circle' (circular conducting wall, requires wall_radius > 0).",
            py::arg("rhs") = "charge_density",
            py::arg("solver") = "geometric_mg", py::arg("bc") = "auto",
            py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
-      // Borne GLOBALE de pas + borne ACTIVE (StabilityPolicy AMR, parite System.add_dt_bound).
+      // GLOBAL step bound + ACTIVE bound (AMR StabilityPolicy, System.add_dt_bound parity).
       .def("add_dt_bound", &AmrSystem::add_dt_bound, py::arg("label"), py::arg("fn"))
       .def("last_dt_bound", &AmrSystem::last_dt_bound)
-      // CHEMIN amr-schur (pendant AMR de System.set_magnetic_field / set_source_stage / set_time_scheme).
-      // Etage source condense par Schur GLOBAL (electrostatique/Lorentz) sur la hierarchie mono-bloc, au
-      // lieu de la source IMEX locale. B_z (terme de Lorentz) accepte un numpy (n, n) aplati.
+      // amr-schur PATH (AMR counterpart of System.set_magnetic_field / set_source_stage / set_time_scheme).
+      // GLOBAL Schur-condensed source stage (electrostatic/Lorentz) on the mono-block hierarchy,
+      // instead of the local IMEX source. B_z (Lorentz term) accepts a flattened numpy (n, n).
       .def("set_magnetic_field",
            [](AmrSystem& s,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
              s.set_magnetic_field(flat(arr));
            },
            py::arg("bz"))
-      // ADC-214 : surface Python INCHANGEE (memes kwargs krylov_* / descripteurs a plat, memes
-      // defauts ; pas de bz_aux_component cote AMR). La lambda assemble le POD SourceStageOptions.
+      // ADC-214: Python surface UNCHANGED (same flat krylov_* kwargs / descriptors, same
+      // defaults; no bz_aux_component on the AMR side). The lambda assembles the SourceStageOptions POD.
       .def("set_source_stage",
            [](AmrSystem& s, const std::string& name, const std::string& kind, double theta,
               double alpha, double krylov_tol, int krylov_max_iters, const std::string& density,
@@ -649,8 +649,8 @@ PYBIND11_MODULE(_adc, m) {
              s.set_source_stage(name, kind, theta, alpha, opts);
            },
            py::arg("name"), py::arg("kind"), py::arg("theta"), py::arg("alpha"),
-           // Reglages transportes (vague 3, parite System) : tolerances Krylov du solve grossier
-           // (<= 0 = defauts 1e-10/400) + descripteurs de champs ("" = role canonique).
+           // Carried settings (wave 3, System parity): Krylov tolerances of the coarse solve
+           // (<= 0 = defaults 1e-10/400) + field descriptors ("" = canonical role).
            py::arg("krylov_tol") = 0.0, py::arg("krylov_max_iters") = 0,
            py::arg("density") = "", py::arg("momentum_x") = "", py::arg("momentum_y") = "",
            py::arg("energy") = "")
@@ -661,29 +661,29 @@ PYBIND11_MODULE(_adc, m) {
              s.set_density(name, flat(arr));
            },
            py::arg("name"), py::arg("rho"))
-      // Etat conservatif initial COMPLET (ncomp, n, n) -> demarre l'AMR depuis l'etat de derive du
-      // papier (rho, rho*u, rho*v) au lieu de m=0. Garde ndim==3 EXPLICITE : flat() applatit
-      // n'importe quel tableau C-contigu, donc une densite 2D (n, n) passee par erreur deviendrait un
-      // etat a 1 composante (compo 0 = densite, qty de mvt laissee a 0) -- une mascarade de densite
-      // silencieuse a la mauvaise physique. On exige (ncomp, n, n). flat() applatit ensuite en
-      // composante-majeur c*n*n + j*n + i (meme convention que to_3d / set_state).
+      // Full initial conservative state (ncomp, n, n) -> starts the AMR from the paper's drift
+      // state (rho, rho*u, rho*v) instead of m=0. Keeps ndim==3 EXPLICIT: flat() flattens
+      // any C-contiguous array, so a 2D density (n, n) passed by mistake would become a
+      // 1-component state (comp 0 = density, momentum left at 0) -- a silent density masquerade
+      // with the wrong physics. We require (ncomp, n, n). flat() then flattens in
+      // component-major c*n*n + j*n + i (same convention as to_3d / set_state).
       .def("set_conservative_state",
            [](AmrSystem& s, const std::string& name,
               py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
              if (arr.ndim() != 3)
                throw std::runtime_error(
-                   "AmrSystem.set_conservative_state : etat attendu de forme (ncomp, n, n) ; recu "
-                   "un tableau " + std::to_string(arr.ndim()) + "D (une densite 2D ? utiliser "
+                   "AmrSystem.set_conservative_state: state expected of shape (ncomp, n, n); got "
+                   "a " + std::to_string(arr.ndim()) + "D array (a 2D density? use "
                    "set_density)");
              s.set_conservative_state(name, flat(arr));
            },
            py::arg("name"), py::arg("U"))
-      // Source COUPLEE inter-especes (adc.dsl.CoupledSource compilee, P5 bytecode), MULTI-BLOCS sur la
-      // hierarchie AMR PARTAGEE : appliquee apres le transport a chaque macro-pas, par splitting
-      // explicite, niveau par niveau + cascade fin -> grossier (cellules couvertes coherentes). MEME
-      // ABI plate que System.add_coupled_source. Sans appel, inchange. cf. AmrSystem::add_coupled_source.
-      // ADC-214 : surface Python INCHANGEE (memes kwargs plats, memes defauts). La lambda assemble le
-      // POD CoupledSourceProgram avant l'appel C++ (parite avec System.add_coupled_source).
+      // Inter-species COUPLED source (compiled adc.dsl.CoupledSource, P5 bytecode), MULTI-BLOCK on the
+      // SHARED AMR hierarchy: applied after the transport at each macro-step, by explicit
+      // splitting, level by level + fine -> coarse cascade (consistent covered cells). SAME
+      // flat ABI as System.add_coupled_source. Without the call, unchanged. cf. AmrSystem::add_coupled_source.
+      // ADC-214: Python surface UNCHANGED (same flat kwargs, same defaults). The lambda assembles the
+      // CoupledSourceProgram POD before the C++ call (parity with System.add_coupled_source).
       .def("add_coupled_source",
            [](AmrSystem& s, const std::vector<std::string>& in_blocks,
               const std::vector<std::string>& in_roles, const std::vector<double>& consts,
@@ -699,29 +699,29 @@ PYBIND11_MODULE(_adc, m) {
            py::arg("in_blocks"), py::arg("in_roles"), py::arg("consts"), py::arg("out_blocks"),
            py::arg("out_roles"), py::arg("prog_ops"), py::arg("prog_args"), py::arg("prog_lens"),
            py::arg("frequency") = 0.0, py::arg("label") = "coupled_source",
-           // Frequence PAR CELLULE optionnelle mu(U) : evaluee sur le grossier (cf. System).
+           // Optional PER-CELL frequency mu(U): evaluated on the coarse level (cf. System).
            py::arg("freq_prog_ops") = std::vector<int>{},
            py::arg("freq_prog_args") = std::vector<int>{})
       .def("step", &AmrSystem::step, py::arg("dt"))
       .def("advance", &AmrSystem::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &AmrSystem::step_cfl,
-           "Avance d'un macro-pas AMR a dt = cfl * dx_grossier / vitesse d'onde max (honore aussi la "
-           "cadence substeps/stride en multi-blocs et les bornes optionnelles). Renvoie le dt utilise.",
+           "Advances by one AMR macro-step at dt = cfl * dx_coarse / max wave speed (also honors the "
+           "substeps/stride cadence in multi-block and the optional bounds). Returns the dt used.",
            py::arg("cfl"))
       .def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
-      // Horloge AMR (IO v1, parite System) : compteur de macro-pas + restauration (t, macro_step) ->
-      // la cadence regrid/stride reprend exactement apres un set_clock. Prerequis PR-IO-3.
+      // AMR clock (IO v1, System parity): macro-step counter + restoration (t, macro_step) ->
+      // the regrid/stride cadence resumes exactly after a set_clock. Prerequisite PR-IO-3.
       .def("macro_step", &AmrSystem::macro_step)
       .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
       .def("n_blocks", &AmrSystem::n_blocks)
       .def("block_names", &AmrSystem::block_names)
       .def("n_patches", &AmrSystem::n_patches)
-      // Empreintes index-space des patchs fins : liste de tuples (level, ilo, jlo, ihi, jhi), coins
-      // INCLUSIFS, dans l'espace d'indices du niveau (n << level cellules/direction, ratio 2). MEME
-      // source que n_patches() (le BoxArray fin GLOBAL) -> rank-independent, MPI-safe. Query entre les
-      // pas, zero cout chemin chaud. Le wrapper Python convertit en [0, L]^2 (il connait n via nx() et
-      // L) ; cf. AmrSystem.patch_rectangles() cote facade.
+      // Index-space footprints of the fine patches: list of tuples (level, ilo, jlo, ihi, jhi), INCLUSIVE
+      // corners, in the index space of the level (n << level cells/direction, ratio 2). SAME
+      // source as n_patches() (the GLOBAL fine BoxArray) -> rank-independent, MPI-safe. Query between
+      // steps, zero cost on the hot path. The Python wrapper converts to [0, L]^2 (it knows n via nx() and
+      // L); cf. AmrSystem.patch_rectangles() on the facade side.
       .def("patch_boxes",
            [](AmrSystem& s) {
              py::list out;
@@ -729,29 +729,29 @@ PYBIND11_MODULE(_adc, m) {
                out.append(py::make_tuple(b.level, b.ilo, b.jlo, b.ihi, b.jhi));
              return out;
            })
-      // mass / density : surcharge par NOM de bloc (multi-blocs ; nom vide -> 1er bloc, compat
-      // mono-bloc ou nom cosmetique). Le nom INDEXE le bloc en multi-blocs (chaque bloc a sa masse /
-      // densite, conservees PAR BLOC au reflux). Sans argument -> 1er bloc (retro-compat mono-bloc).
+      // mass / density: overload by BLOCK NAME (multi-block; empty name -> 1st block, mono-block
+      // compat or cosmetic name). The name INDEXES the block in multi-block (each block has its mass /
+      // density, conserved PER BLOCK at reflux). Without argument -> 1st block (mono-block back-compat).
       .def("mass", [](AmrSystem& s) { return s.mass(); })
       .def("mass", [](AmrSystem& s, const std::string& name) { return s.mass(name); },
            py::arg("name"))
-      // AMR : domaine CARRE (n x n), aucune geometrie polaire -> rows == cols == nx() (inchange).
+      // AMR: SQUARE domain (n x n), no polar geometry -> rows == cols == nx() (unchanged).
       .def("density", [](AmrSystem& s) { return to_2d(s.density(), s.nx(), s.nx()); })
       .def("density",
            [](AmrSystem& s, const std::string& name) {
              return to_2d(s.density(name), s.nx(), s.nx());
            },
            py::arg("name"))
-      // phi du niveau grossier (base), (n, n). MEME observable que System.potential() : le niveau 0
-      // couvre tout le domaine -> suffit a echantillonner un cercle median (FFT azimutale). En
-      // multi-blocs, phi resulte du Poisson de SYSTEME (Sum_b q_b n_b co-localise), partage par tous.
+      // phi of the coarse (base) level, (n, n). SAME observable as System.potential(): level 0
+      // covers the whole domain -> enough to sample a median circle (azimuthal FFT). In
+      // multi-block, phi results from the SYSTEM Poisson (Sum_b q_b n_b co-located), shared by all.
       .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.nx(), s.nx()); })
-      // CHECKPOINT / RESTART AMR mono-rang (ADC-65) : etat conservatif COMPLET par niveau + phi
-      // (warm-start) + imposition de la hierarchie fine sauvee. MONO-BLOC SERIE (multi-blocs : rejet
-      // C++ ; np>1 : rejet facade -- gather par niveau = suite). level_state / level_potential rendent
-      // des champs PLATS (c*nf*nf + j*nf + i / nf*nf, nf = nx << k) ; la facade reshape. set_*
-      // applatissent n'importe quel tableau C-contigu (flat). set_hierarchy : liste de tuples
-      // (level, ilo, jlo, ihi, jhi) comme patch_boxes() (le coupleur filtre le niveau 1).
+      // AMR CHECKPOINT / RESTART single-rank (ADC-65): full conservative state per level + phi
+      // (warm-start) + imposition of the saved fine hierarchy. SERIAL MONO-BLOCK (multi-block: C++
+      // rejection; np>1: facade rejection -- per-level gather = future). level_state / level_potential return
+      // FLAT fields (c*nf*nf + j*nf + i / nf*nf, nf = nx << k); the facade reshapes. set_*
+      // flatten any C-contiguous array (flat). set_hierarchy: list of tuples
+      // (level, ilo, jlo, ihi, jhi) like patch_boxes() (the coupler filters level 1).
       .def("n_levels", &AmrSystem::n_levels)
       .def("n_vars", [](AmrSystem& s) { return s.n_vars(); })
       .def("level_state", [](AmrSystem& s, int k) { return s.level_state(k); }, py::arg("k"))
