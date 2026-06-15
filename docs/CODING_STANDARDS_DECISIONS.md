@@ -24,8 +24,9 @@ if that practice poses a real problem (security, readability, tooling). The choi
 device constraint (`nvcc`, `__device__` code, header-only Kokkos) are flagged: latitude there is
 zero, not just low.
 
-Status: each decision is marked **proposed**. It is a proposal submitted to the maintainer, not
-a rule already applied.
+Status: decisions D1-D15 are now **adopted** (ratified on 2026-06-15 by the maintainer). They
+apply as the coding conventions of `adc_cpp` and remain revisable should practice or tooling warrant
+it.
 
 ## D1 Naming
 
@@ -59,7 +60,7 @@ public API for zero gain. (2) Constants have two assumed registers: free literal
 structural distinction, to be documented so as not to pass for an inconsistency. (3) The `_` suffix
 on non-public members removes the member-name / local-name ambiguity in init lists.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D2 Include guard
 
@@ -76,7 +77,7 @@ Justification: in deep header-only, `#pragma once` removes the maintenance of gu
 name collisions. The Google/LLVM position answers porting constraints that the
 target compilers (gcc, clang, nvcc, MSVC) no longer impose. CG allows it.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D3 Include order
 
@@ -93,7 +94,7 @@ Justification: neither Google nor LLVM matches the usage; an automatic sort woul
 blocks and break the intended order dependencies. The in-house order (own module first) is stable
 and readable.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D4 Exceptions and error handling
 
@@ -115,7 +116,7 @@ Justification: the device constraint already imposes the Google/LLVM ban on the 
 has no reason to deprive itself of it and the usage there is massive and homogeneous. We split according to the execution path
 rather than imposing a global ban that does not reflect the code.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D5 Asserts and contracts
 
@@ -133,7 +134,7 @@ Justification: `Expects`/`Ensures` are not callable on device and `assert` on de
 costly or disabled; compile-time (concepts, `static_assert`) already covers the essential of the
 contracts of this base.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D6 RTTI
 
@@ -149,7 +150,7 @@ policies.
 Justification: `typeid`/`dynamic_cast` are not usable on device; the constraint decides
 for Google/LLVM and the architecture does not need it.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D7 `auto`
 
@@ -166,7 +167,7 @@ numerical semantics). Trailing-return-type accepted as a repository idiom.
 Justification: the practice sits between CG and Google, healthy and readable in a
 template-heavy base. We keep a pragmatic rule rather than a formal ban untenable here.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D8 `struct` vs `class`
 
@@ -181,7 +182,7 @@ as soon as there is an invariant to maintain or a non-public member, which impli
 
 Justification: the three guides converge and the practice already follows this line.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D9 Documentation (Doxygen `///`)
 
@@ -207,15 +208,17 @@ fill the gaps (24% of the headers, `@return`, `/** */` island) and to fix the li
 the convention file already present but not tracked. No change of system, only a
 conformance update.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D10 TODO format
 
 Divergence: Google imposes `// TODO: <context>` (historically `// TODO(user):`); LLVM and CG do not
 prescribe anything.
 
-Repository practice: TODOs present but without a single format, often numbered by work item ("TODO 4"
-at `numerics/spatial_operator.hpp:560`, "TODO 2.2").
+Repository practice: no in-code TODO markers currently exist in `include/adc/` or `python/`
+(a `grep -ri todo` over the sources returns none; only the top-level `todo.md` backlog file). The
+rule below is therefore preventive: it fixes the format for future TODOs rather than normalizing an
+existing inconsistent set.
 
 Proposed decision: `// TODO(<context>) : <description>` where `<context>` identifies the work item or
 the issue (e.g. `// TODO(ADC-124) : ...`). Keep the existing work-item numbers as context.
@@ -223,7 +226,7 @@ the issue (e.g. `// TODO(ADC-124) : ...`). Keep the existing work-item numbers a
 Justification: only Google decides; a single format makes TODOs greppable and traceable towards
 Linear, at a low cost.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D11 `[[nodiscard]]`
 
@@ -239,14 +242,15 @@ justification, for the rare functions where ignoring the return is a certain bug
 Justification: error handling goes through exception (D4), not through return code; the interest of
 `[[nodiscard]]` is marginal here. Decision to reopen if error-code routines appear.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D12 `explicit`
 
 Divergence: Google imposes `explicit` on single-argument constructors and conversions; CG
 (C.46) "by default, declare single-argument constructors explicit"; LLVM silent.
 
-Repository practice: 39 `explicit` on single-argument constructors (`mesh/box_array.hpp:30`,
+Repository practice: ~10 `explicit` on single-argument constructors in `include/adc`, ~12 across the
+reviewed scope (`include/adc` + `python/{bindings,system,amr_system}.cpp`) (`mesh/box_array.hpp:30`,
 `runtime/system.hpp:66`).
 
 Proposed decision: `explicit` required on any constructor callable with a single argument and
@@ -255,7 +259,7 @@ on the conversion operators, except explicit intent of implicit conversion (rare
 Justification: Google/CG convergence, practice already installed, prevents the silent implicit conversions.
 Zero cost.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D13 Parameter passing
 
@@ -274,7 +278,7 @@ resources. No output parameter by pointer (CG, not the legacy Google).
 Justification: aligns CG/Google on the dominant usage; passing small PODs by value is moreover
 required by the device path.
 
-Status: proposed.
+Status: adopted (2026-06-15).
 
 ## D14 Early exits and nesting
 
@@ -287,7 +291,7 @@ Proposed decision: encourage early exits to reduce nesting, without making it a
 blocking rule.
 
 Justification: only LLVM decides; the recommendation improves readability without imposing a
-rewrite. Guide, not a verified constraint. Status: proposed.
+rewrite. Guide, not a verified constraint. Status: adopted (2026-06-15).
 
 ## D15 Automatic formatting
 
@@ -306,7 +310,7 @@ to blocking is **deferred to the milestone *Code quality & hardened CI* (epic AD
 will decide which checks become a gate once the base is cleaned up.
 
 Justification: the mechanical formatting is already tooled and stable; nothing to decide here, only
-to refer the hardening to the milestone that carries it. Status: proposed.
+to refer the hardening to the milestone that carries it. Status: adopted (2026-06-15).
 
 ## Follow-ups
 
