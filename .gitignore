@@ -28,3 +28,7 @@ docs/sphinx/tutorials/_assets/*.so
 
 # Environnement pixi (l'env vit DANS le projet ; seul pixi.lock se committe)
 .pixi/
+
+# Fichiers de contexte / garde-fous d'agent : LOCAL-only, jamais commites ni pousses.
+CLAUDE.md
+CLAUDE.local.md
