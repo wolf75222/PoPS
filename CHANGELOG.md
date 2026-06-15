@@ -50,6 +50,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   with an AMR guard on `add_block` and auto-skip without Kokkos (ADC-207).
 - **CI**: `ci.yml` split into parallel `gate-cpp` / `gate-python` lanes with `mold` and path
   routing (ADC-171).
+- **Moment-model documentation**: a step-by-step HyQMOM tutorial, a moments-and-closures concept
+  page, a moment-models reference, and `adc.moments` (`build_moment_model`, `gaussian_closure`,
+  `lorentz_sources`) added to the Python API reference (autodoc).
 
 ### Changed
 
@@ -68,6 +71,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   duplicated FV/MG and Newton-Jacobian code (ADC-213), residual extended device lambdas converted
   to named functors (ADC-210), hardened runtime guards (ADC-211), and a coding-standards and
   comments audit (ADC-124/125).
+- **Code comments and Python docstrings translated to English** (ADC-272): all of `include/adc/**`,
+  `python/adc/**` (including the pybind bindings) and the `CODE_DOCUMENTATION_CONVENTION` guide; the
+  published `/cpp/` Doxygen reference and the Python autodoc now render in English. Code structure is
+  byte-identical; codegen-template strings and cross-TU dispatch tokens are kept verbatim.
 
 ### Fixed
 
@@ -75,6 +82,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   (ADC-163).
 - Comment rot: 10 inaccurate comments corrected (ADC-208); broken sister-solver links in the docs
   index.
+- **Docs (Pages) build**: `suppress_warnings = ["docutils"]` set unconditionally in
+  `docs/sphinx/conf.py` so `sphinx -W` no longer fails on autodoc-rendered Doxygen `@param`
+  docstrings (the meaningful broken-reference and toctree checks stay strict).
 
 ## [0.1.0] - 2026-06-10
 
