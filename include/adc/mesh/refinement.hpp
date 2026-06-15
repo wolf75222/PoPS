@@ -170,7 +170,7 @@ struct AverageDownKernel {
 inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
   assert(cfine.box_array().size() == fine.box_array().size() && cfine.ncomp() >= nc &&
-         "average_down(scratch) : cfine doit etre coarsen(fine, r) sur la dmap du fin");
+         "average_down(scratch): cfine must be coarsen(fine, r) on the fine dmap");
   const Real inv = Real(1) / (r * r);
   for (int li = 0; li < fine.local_size(); ++li) {
     const ConstArray4 F = fine.fab(li).const_array();
@@ -209,7 +209,7 @@ struct InterpolateKernel {
 inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
   assert(cfine.box_array().size() == fine.box_array().size() && cfine.ncomp() >= nc &&
-         "interpolate(scratch) : cfine doit etre coarsen(fine, r) sur la dmap du fin");
+         "interpolate(scratch): cfine must be coarsen(fine, r) on the fine dmap");
   parallel_copy(cfine, coarse);  // bring the coarse values onto the fine-coarsen grid
   for (int li = 0; li < fine.local_size(); ++li) {
     Array4 F = fine.fab(li).array();
