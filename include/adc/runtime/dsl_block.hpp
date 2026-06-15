@@ -39,6 +39,15 @@ namespace adc {
 
 /// Adds @p model (CompositeModel) as a native block of @p sys with the requested scheme (limiter x
 /// riemann, reconstruction, time treatment). @p gamma is used by set_density (rest energy, 4 vars).
+///
+/// @code{.cpp}
+/// adc::System sys(cfg);
+/// // model: an adc::dsl model compiled into a CompositeModel at build time (the production seam;
+/// // runs the exact add_block path on the System's real grid, no copy).
+/// adc::add_compiled_model(sys, "flow", model, "minmod", "hll", "conservative", "explicit");
+/// sys.set_poisson("charge_density", "geometric_mg");
+/// sys.step_cfl(0.4);
+/// @endcode
 template <class Model>
 void add_compiled_model(System& sys, const std::string& name, Model model,
                         const std::string& limiter = "minmod",

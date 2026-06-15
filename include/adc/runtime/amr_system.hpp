@@ -178,6 +178,21 @@ using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
     const std::vector<std::string>& implicit_roles)>;
 
 /// Single block carried on an AMR hierarchy, composed at runtime.
+///
+/// @code{.cpp}
+/// adc::AmrSystemConfig cfg;                // base level: n x n on [0, L]^2
+/// cfg.n = 64;
+/// adc::AmrSystem amr(cfg);
+///
+/// adc::ModelSpec ne;
+/// ne.transport = "exb"; ne.source = "none"; ne.elliptic = "charge";
+/// amr.add_block("ne", ne, "minmod", "rusanov", "conservative", "explicit");
+/// amr.set_poisson("charge_density", "geometric_mg");
+/// amr.set_refinement(0.1);                 // refine where any block's field exceeds the threshold
+///
+/// amr.set_density("ne", rho0);             // rho0: initial density on the base level
+/// amr.step_cfl(0.4);                       // conservative refluxed step + composite FAC Poisson
+/// @endcode
 class AmrSystem {
  public:
   explicit AmrSystem(const AmrSystemConfig& cfg);
