@@ -162,3 +162,17 @@ are CPU-only (no MPI/AMR/GPU); `production` is CPU + MPI + AMR. See
 [backend matrix](backend-matrix.md) and [limitations](known-limitations.md). DSL design:
 [DSL_API.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_API.md), [DSL_MODEL_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_MODEL_DESIGN.md).
 ```
+
+## Moment models
+
+The `adc.moments` submodule generates a `dsl.Model` for a 2D velocity-moment hierarchy from a
+single closure: the central and standardized moments, the flux, and the signed wave speeds are
+derived, so you write only the closure (and, optionally, the sources). For the concept see
+[moments and closures](../concepts/moments-and-closures.md), for the worked example
+[the HyQMOM tutorial](../tutorials/moment-model-hyqmom15.md), and for the prose reference
+[moment models](moment-models.md).
+
+```{eval-rst}
+.. automodule:: adc.moments
+   :members: build_moment_model, gaussian_closure, lorentz_sources, moment_names, moment_indices
+```
