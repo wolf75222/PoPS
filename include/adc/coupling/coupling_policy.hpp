@@ -1,36 +1,21 @@
 /// @file
-/// @brief Politiques de couplage temporel hyperbolique-elliptique (tag types compile-time).
+/// @brief Hyperbolic-elliptic temporal coupling policies (compile-time tag types).
 ///
-/// A quelle FREQUENCE on resout l'elliptique dans un pas de temps. Tag types choisis par template au
-/// site d'appel (Coupler::advance<Limiter, Policy>), AUCUNE branche a l'execution. PerStageCoupling :
-/// phi (donc aux = grad phi) recalcule a CHAQUE etage RK -> couplage le plus precis, une resolution
-/// elliptique par etage. OncePerStepCoupling : phi resolu une SEULE fois (debut de pas), aux gele
-/// pendant les etages -> moins cher, splitting de fait. (AMR sous-cyclage et redistribution
-/// tuiles <-> bandes FFT sont des politiques de la meme famille, portees par AmrCoupler /
+/// How often the elliptic problem is solved within a time step. Tag types chosen by template at the
+/// call site (Coupler::advance<Limiter, Policy>), NO runtime branch. PerStageCoupling:
+/// phi (thus aux = grad phi) recomputed at EVERY RK stage -> most precise coupling, one elliptic
+/// solve per stage. OncePerStepCoupling: phi solved only ONCE (start of step), aux frozen
+/// during the stages -> cheaper, de facto splitting. (AMR sub-cycling and tile <-> FFT band
+/// redistribution are policies of the same family, carried by AmrCoupler /
 /// SpectralCoupler.)
 
 #pragma once
 
-// Politique de couplage temporel hyperbolique-elliptique : a quelle FREQUENCE on
-// resout l'elliptique dans un pas de temps. Tag types, choisis par template au
-// site d'appel (Coupler::advance<Limiter, Policy>), pas de branche a l'execution.
-//
-//   PerStageCoupling    : phi (donc aux = grad phi) recalcule a CHAQUE etage RK.
-//                         Le potentiel suit l'etat intermediaire -> couplage le
-//                         plus precis, mais une resolution elliptique par etage.
-//   OncePerStepCoupling : phi resolu une SEULE fois (debut de pas), aux gele
-//                         pendant les etages. Une resolution elliptique par pas
-//                         (moins cher), au prix d'un splitting de fait sur le
-//                         couplage. Utile quand l'elliptique domine le cout.
-//
-// (AMR sous-cyclage et redistribution tuiles<->bandes FFT sont des politiques de
-// la meme famille, portees par AmrCoupler / SpectralCoupler.)
-
 namespace adc {
 
-/// Tag : resout l'elliptique a CHAQUE etage RK (aux suit l'etat intermediaire, plus precis).
+/// Tag: solves the elliptic problem at EVERY RK stage (aux follows the intermediate state, more precise).
 struct PerStageCoupling {};
-/// Tag : resout l'elliptique UNE fois par pas (aux gele pendant les etages, moins cher).
+/// Tag: solves the elliptic problem ONCE per step (aux frozen during the stages, cheaper).
 struct OncePerStepCoupling {};
 
 }  // namespace adc

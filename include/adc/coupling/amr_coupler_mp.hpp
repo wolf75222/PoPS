@@ -5,7 +5,7 @@
 #include <adc/coupling/amr_level_storage.hpp>    // AmrLevelStack
 #include <adc/coupling/amr_regrid_coupler.hpp>   // amr_regrid_finest (Berger-Rigoutsos)
 #include <adc/coupling/coupler.hpp>  // detail::coupler_eval_rhs (f = model.elliptic_rhs(U))
-#include <adc/numerics/elliptic/composite_fac_poisson.hpp>  // solveur Poisson COMPOSITE FAC 2 niveaux (opt-in)
+#include <adc/numerics/elliptic/composite_fac_poisson.hpp>  // COMPOSITE FAC 2-level Poisson solver (opt-in)
 #include <adc/numerics/elliptic/elliptic_solver.hpp>
 #include <adc/numerics/elliptic/geometric_mg.hpp>
 #include <adc/numerics/time/amr_reflux_mf.hpp>  // AmrLevelMP, amr_step_multilevel_multipatch, mf_*_mb
@@ -18,55 +18,43 @@
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
 #include <adc/mesh/refinement.hpp>  // coarsen_index
-#include <adc/parallel/comm.hpp>    // all_reduce_sum / all_reduce_max (masse/derive distribuees)
+#include <adc/parallel/comm.hpp>    // all_reduce_sum / all_reduce_max (distributed mass/drift)
 
 #include <algorithm>   // std::max
 #include <cmath>       // std::hypot
 #include <cstddef>     // std::size_t
-#include <functional>  // std::function (predicat de paroi conductrice passe au MG)
-#include <stdexcept>   // std::runtime_error (garde de taille densite)
+#include <functional>  // std::function (conducting-wall predicate passed to the MG)
+#include <stdexcept>   // std::runtime_error (density size guard)
 #include <utility>     // std::pair, std::move
 #include <vector>
 
 /// @file
-/// @brief AmrCouplerMP : coupleur AMR E x B MULTI-PATCH (Poisson grossier -> aux = grad phi ->
-///        injection fine -> pas AMR conservatif), hierarchie multi-box par niveau.
+/// @brief AmrCouplerMP: MULTI-PATCH E x B AMR coupler (coarse Poisson -> aux = grad phi ->
+///        fine injection -> conservative AMR step), multi-box per-level hierarchy.
 ///
-/// Meme role qu'AmrCoupler mais chaque niveau est multi-box (std::vector<AmrLevelMP> detenu par un
-/// AmrLevelStack) et l'integration passe par amr_step_multilevel_multipatch (reflux coverage-aware).
-/// regrid() reconstruit le niveau fin a la volee par Berger-Rigoutsos. Niveau 0 = box unique pour le
-/// Poisson. La classe ne fait qu'ORDONNER les operations (hierarchie sortie dans AmrLevelStack,
-/// regrid dans amr_regrid_coupler.hpp, diagnostics dans amr_diagnostics.hpp). INVARIANT : se reduit
-/// BIT A BIT a AmrCoupler quand chaque niveau n'a qu'une box (garde de validation). Politique
-/// d'ownership du niveau 0 via replicated_coarse (replique vs reparti, equivalence prouvee bit a bit).
-/// Les detail:: sont les primitives DISTRIBUEES (injection aux, ecriture/lecture densite, layout).
-
-// Coupleur AMR E x B MULTI-PATCH : meme role qu'AmrCoupler (Poisson grossier -> aux =
-// grad phi -> injection -> pas AMR conservatif) mais la hierarchie est multi-box a chaque
-// niveau (std::vector<AmrLevelMP>, detenue par un AmrLevelStack) et l'integration passe par
-// amr_step_multilevel_multipatch (reflux coverage-aware route vers la box parente). De plus
-// regrid() reconstruit le niveau fin a la volee par Berger-Rigoutsos. Niveau 0 = box unique
-// (le domaine, pour le Poisson).
-//
-// La classe n'ORDONNE plus que les operations : la hierarchie est sortie dans AmrLevelStack,
-// le regrid Berger-Rigoutsos dans amr_regrid_coupler.hpp, les diagnostics dans
-// amr_diagnostics.hpp. Se reduit BIT A BIT a AmrCoupler quand chaque niveau n'a qu'une box
-// (garde de validation).
+/// Same role as AmrCoupler but each level is multi-box (std::vector<AmrLevelMP> held by an
+/// AmrLevelStack) and integration goes through amr_step_multilevel_multipatch (coverage-aware reflux).
+/// regrid() rebuilds the fine level on the fly via Berger-Rigoutsos. Level 0 = single box for the
+/// Poisson. The class only ORDERS the operations (hierarchy stored in AmrLevelStack,
+/// regrid in amr_regrid_coupler.hpp, diagnostics in amr_diagnostics.hpp). INVARIANT: reduces
+/// BIT FOR BIT to AmrCoupler when each level has a single box (validation guard). Level-0
+/// ownership policy via replicated_coarse (replicated vs distributed, equivalence proven bit for bit).
+/// The detail:: are the DISTRIBUTED primitives (aux injection, density write/read, layout).
 
 namespace adc {
 
 namespace detail {
-// Primitive de couplage (pas de la policy) : injection piecewise-constante de aux
-// parent multi-box -> enfant multi-box (valides + ghosts). DISTRIBUE, meme schema que
-// mf_fill_fine_ghosts_mb. Deux cas de parent :
-//  - REPLIQUE (niveau 0, replicated_parent=true) : parent entierement local sur chaque rang,
-//    lecture directe via mf_find_box. C'est le grossier replique (dmap par-rang) : parallel_copy
-//    violerait l'hypothese de metadonnees repliquees. Chemin bit-identique a l'historique.
-//  - REPARTI (intermediaire, replicated_parent=false) : le parent peut etre sur un autre rang,
-//    on amene ses regions valides sur une grille enfant-coarsen LOCALE par parallel_copy, puis
-//    on injecte. Une cellule enfant hors couverture parente (box_array GLOBAL) est laissee
-//    intacte, comme le chemin replique (qui la sautait via mf_find_box < 0).
-// En serie les deux chemins sont identiques (parent local partout, parallel_copy = copie memoire).
+// Coupling primitive (not policy): piecewise-constant injection of aux from
+// multi-box parent -> multi-box child (valid + ghosts). DISTRIBUTED, same scheme as
+// mf_fill_fine_ghosts_mb. Two parent cases:
+//  - REPLICATED (level 0, replicated_parent=true): parent fully local on each rank,
+//    direct read via mf_find_box. This is the replicated coarse (per-rank dmap): parallel_copy
+//    would violate the replicated-metadata assumption. Bit-identical path to the historical one.
+//  - DISTRIBUTED (intermediate, replicated_parent=false): the parent may be on another rank,
+//    we bring its valid regions onto a LOCAL child-coarsen grid via parallel_copy, then
+//    inject. A child cell outside the parent coverage (GLOBAL box_array) is left
+//    intact, like the replicated path (which skipped it via mf_find_box < 0).
+// In serial both paths are identical (parent local everywhere, parallel_copy = memory copy).
 inline void coupler_inject_aux_mb(const MultiFab& parent, MultiFab& child,
                                   bool replicated_parent = true) {
   const int nc = child.ncomp();
@@ -86,7 +74,7 @@ inline void coupler_inject_aux_mb(const MultiFab& parent, MultiFab& child,
     }
     return;
   }
-  const BoxArray& pba = parent.box_array();  // GLOBAL : couverture independante du rang
+  const BoxArray& pba = parent.box_array();  // GLOBAL: rank-independent coverage
   auto covered = [&](int ci, int cj) {
     for (int b = 0; b < pba.size(); ++b)
       if (pba[b].contains(ci, cj)) return true;
@@ -94,7 +82,7 @@ inline void coupler_inject_aux_mb(const MultiFab& parent, MultiFab& child,
   };
   const BoxArray ccoarse = coarsen_grown(child.box_array(), child.n_grow(), 2);
   MultiFab Pc(ccoarse, child.dmap(), parent.ncomp(), 0);
-  parallel_copy(Pc, parent);  // regions parentes (depuis n'importe quel rang) -> grille locale
+  parallel_copy(Pc, parent);  // parent regions (from any rank) -> local grid
   device_fence();
   for (int lc = 0; lc < child.local_size(); ++lc) {
     Array4 c = child.fab(lc).array();
@@ -103,21 +91,21 @@ inline void coupler_inject_aux_mb(const MultiFab& parent, MultiFab& child,
     for (int j = g.lo[1]; j <= g.hi[1]; ++j)
       for (int i = g.lo[0]; i <= g.hi[0]; ++i) {
         const int ci = coarsen_index(i, 2), cj = coarsen_index(j, 2);
-        if (!covered(ci, cj)) continue;  // hors couverture -> on laisse la valeur enfant
+        if (!covered(ci, cj)) continue;  // outside coverage -> keep the child value
         for (int k = 0; k < nc; ++k) c(i, j, k) = pp(ci, cj, k);
       }
   }
 }
-// Ecrit une densite initiale (composante 0, n*n row-major en indices GLOBAUX) sur le niveau
-// grossier, MULTI-BOX et DISTRIBUTION-AWARE : chaque rang ne touche que ses fabs LOCAUX et lit
-// rho a l'indice GLOBAL (i,j) de la cellule. Pour Euler (ncomp 4) pose aussi qty de mouvement
-// nulle + energie thermique r/(gamma-1) ; ncomp 1 ne touche que la densite. Mono-box replique :
-// un seul fab couvrant le domaine, indices globaux == locaux -> bit-identique a l'ecriture directe
-// historique. Multi-box reparti : chaque box locale lit sa fenetre de rho.
+// Writes an initial density (component 0, n*n row-major in GLOBAL indices) on the coarse
+// level, MULTI-BOX and DISTRIBUTION-AWARE: each rank touches only its LOCAL fabs and reads
+// rho at the cell GLOBAL index (i,j). For Euler (ncomp 4) it also sets zero momentum
+// + thermal energy r/(gamma-1); ncomp 1 touches only density. Replicated mono-box:
+// a single fab covering the domain, global == local indices -> bit-identical to the historical
+// direct write. Distributed multi-box: each local box reads its window of rho.
 inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, int n, int ncomp,
                                  double gamma) {
   if (static_cast<int>(rho.size()) != n * n)
-    throw std::runtime_error("AMR coupler : densite initiale de taille != n*n");
+    throw std::runtime_error("AMR coupler: initial density of size != n*n");
   const Real gm1 = Real(gamma) - Real(1);
   device_fence();
   for (int li = 0; li < U.local_size(); ++li) {
@@ -133,20 +121,20 @@ inline void coupler_write_coarse(MultiFab& U, const std::vector<double>& rho, in
   }
 }
 
-// Ecrit l'ETAT CONSERVATIF INITIAL COMPLET (toutes les composantes) sur le niveau grossier depuis un
-// champ plat @p state composante-majeur (c*n*n + j*n + i), de taille ncomp*n*n. Pendant exact de
-// coupler_write_coarse pour le seed multi-composantes : meme parcours de boites (mono-box replique
-// ET multi-box reparti, indices GLOBAUX (i,j)), seul l'ecriture par cellule differe -- ici on copie
-// les ncomp composantes positionnellement (pas de densite/qty-mvt/energie cables ; l'appelant fournit
-// deja le conservatif, p.ex. [rho, rho*u, rho*v]). gamma omis (pas d'energie deduite). Index calcule
-// en std::size_t (pas d'overflow int a grand n, contrairement a la validation int de
-// coupler_write_coarse). Sert au seed de derive (set_conservative_state, Probleme 2 hoffart).
+// Writes the FULL INITIAL CONSERVATIVE STATE (all components) on the coarse level from a
+// flat component-major field @p state (c*n*n + j*n + i), of size ncomp*n*n. Counterpart of
+// coupler_write_coarse for the multi-component seed: same box traversal (replicated mono-box
+// AND distributed multi-box, GLOBAL indices (i,j)), only the per-cell write differs -- here we copy
+// the ncomp components positionally (no density/momentum/energy wiring; the caller already provides
+// the conservative, e.g. [rho, rho*u, rho*v]). gamma omitted (no energy derived). Index computed
+// in std::size_t (no int overflow at large n, unlike the int validation of
+// coupler_write_coarse). Used for the drift seed (set_conservative_state, hoffart Problem 2).
 inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& state, int n,
                                        int ncomp) {
   const std::size_t nn = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
   if (state.size() != nn * static_cast<std::size_t>(ncomp))
-    throw std::runtime_error("AMR coupler : etat initial de taille != ncomp*n*n (etat conservatif "
-                             "complet ; ncomp == n_vars du modele)");
+    throw std::runtime_error("AMR coupler: initial state of size != ncomp*n*n (full conservative "
+                             "state; ncomp == model n_vars)");
   device_fence();
   for (int li = 0; li < U.local_size(); ++li) {
     Array4 u = U.fab(li).array();
@@ -160,12 +148,12 @@ inline void coupler_write_coarse_state(MultiFab& U, const std::vector<double>& s
   }
 }
 
-// Lit la densite grossiere (composante 0) en un champ n*n row-major GLOBAL, MULTI-BOX et
-// DISTRIBUTION-AWARE. Chaque rang ecrit ses cellules locales dans un buffer n*n initialise a 0
-// puis, si reparti, all_reduce_sum_inplace recompose le champ complet sur TOUS les rangs (les
-// boites sont disjointes -> la somme cross-rang reconstruit exactement le champ). Mono-box
-// replique : un seul fab couvre tout, le buffer est deja complet, all_reduce serait l'identite
-// -> on l'evite (bit-identique a la lecture directe historique fab(0)).
+// Reads the coarse density (component 0) into a GLOBAL n*n row-major field, MULTI-BOX and
+// DISTRIBUTION-AWARE. Each rank writes its local cells into an n*n buffer initialized to 0
+// then, if distributed, all_reduce_sum_inplace recomposes the full field on ALL ranks (the
+// boxes are disjoint -> the cross-rank sum reconstructs the field exactly). Replicated mono-box:
+// a single fab covers everything, the buffer is already complete, all_reduce would be the identity
+// -> we avoid it (bit-identical to the historical direct read fab(0)).
 inline std::vector<double> coupler_read_coarse(const MultiFab& U, int n, bool replicated) {
   device_fence();
   std::vector<double> out(static_cast<std::size_t>(n) * n, 0.0);
@@ -180,13 +168,13 @@ inline std::vector<double> coupler_read_coarse(const MultiFab& U, int n, bool re
   return out;
 }
 
-// Lit le potentiel phi du niveau grossier (composante 0 de aux(0), ecrite par compute_aux apres le
-// solve Poisson) en un champ n*n row-major GLOBAL, MULTI-BOX et DISTRIBUTION-AWARE. aux(0) partage
-// EXACTEMENT le layout du grossier U (meme BoxArray + DistributionMapping, cf. amr_level_storage :
-// aux_[0] est construit sur U.box_array()/U.dmap()), donc la recomposition est identique a
-// coupler_read_coarse : buffer local n*n, all_reduce_sum si reparti (boites disjointes -> somme
-// exacte), evitee en mono-box replique (champ deja complet). PRECONDITION : update()/compute_aux a
-// tourne au moins une fois (sinon aux(0) vaut 0). Pendant strict de coupler_read_coarse pour phi.
+// Reads the coarse-level potential phi (component 0 of aux(0), written by compute_aux after the
+// Poisson solve) into a GLOBAL n*n row-major field, MULTI-BOX and DISTRIBUTION-AWARE. aux(0) shares
+// EXACTLY the layout of the coarse U (same BoxArray + DistributionMapping, cf. amr_level_storage:
+// aux_[0] is built on U.box_array()/U.dmap()), so the recomposition is identical to
+// coupler_read_coarse: local n*n buffer, all_reduce_sum if distributed (disjoint boxes -> exact
+// sum), avoided in replicated mono-box (field already complete). PRECONDITION: update()/compute_aux
+// has run at least once (otherwise aux(0) is 0). Strict counterpart of coupler_read_coarse for phi.
 inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int n, bool replicated) {
   device_fence();
   std::vector<double> out(static_cast<std::size_t>(n) * n, 0.0);
@@ -201,12 +189,12 @@ inline std::vector<double> coupler_read_coarse_phi(const MultiFab& aux0, int n, 
   return out;
 }
 
-// Injecte le grossier dans les cellules valides d'un patch fin (constant par morceaux, ratio 2),
-// MULTI-BOX et DISTRIBUTION-AWARE. Rend la hierarchie coherente avant le premier sync_down (le
-// patch seed est a 0). Mono-box replique : grossier entierement local, lecture directe via
-// mf_find_box (toujours trouve) ; aucune collective -> bit-identique a l'historique fab(0).
-// Multi-box reparti : on amene les regions grossieres necessaires sur une grille enfant-coarsen
-// LOCALE par parallel_copy (meme schema que coupler_inject_aux_mb), puis on injecte.
+// Injects the coarse into the valid cells of a fine patch (piecewise constant, ratio 2),
+// MULTI-BOX and DISTRIBUTION-AWARE. Makes the hierarchy consistent before the first sync_down (the
+// seed patch is at 0). Replicated mono-box: coarse fully local, direct read via
+// mf_find_box (always found); no collective -> bit-identical to the historical fab(0).
+// Distributed multi-box: we bring the needed coarse regions onto a LOCAL child-coarsen grid
+// via parallel_copy (same scheme as coupler_inject_aux_mb), then inject.
 inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf, bool replicated) {
   const int nc = Uf.ncomp();
   if (replicated) {
@@ -225,9 +213,9 @@ inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf, b
     }
     return;
   }
-  const BoxArray ccoarse = coarsen(Uf.box_array(), 2);  // empreinte grossiere (cellules valides)
+  const BoxArray ccoarse = coarsen(Uf.box_array(), 2);  // coarse footprint (valid cells)
   MultiFab Pc(ccoarse, Uf.dmap(), Uc.ncomp(), 0);
-  parallel_copy(Pc, Uc);  // regions grossieres (depuis n'importe quel rang) -> grille locale
+  parallel_copy(Pc, Uc);  // coarse regions (from any rank) -> local grid
   device_fence();
   for (int li = 0; li < Uf.local_size(); ++li) {
     Array4 f = Uf.fab(li).array();
@@ -241,14 +229,14 @@ inline void coupler_inject_coarse_to_fine_mb(const MultiFab& Uc, MultiFab& Uf, b
   }
 }
 
-// Construit le niveau grossier (BoxArray + DistributionMapping) du chemin AmrSystem selon la
-// politique d'ownership, en un SEUL point pour les deux chemins de build (natif + compile) :
-//  - replique (distribute=false, DEFAUT) : mono-box couvrant le domaine, dmap = my_rank() partout
-//    (la box vit sur chaque rang). En serie my_rank()=0 -> identique au round-robin, bit a bit.
-//    C'est le layout qu'attend GeometricMG(replicated=true) et l'historique.
-//  - reparti (distribute=true) : multi-box BoxArray::from_domain(dom, max_grid) reparti round-robin
-//    DistributionMapping(ba.size(), n_ranks()). Chaque rang ne porte que ses tuiles -> le Poisson
-//    grossier et le transport grossier se distribuent (strong-scaling). max_grid<=0 => n/2 (2x2).
+// Builds the coarse level (BoxArray + DistributionMapping) of the AmrSystem path according to the
+// ownership policy, in a SINGLE point for both build paths (native + compiled):
+//  - replicated (distribute=false, DEFAULT): mono-box covering the domain, dmap = my_rank() everywhere
+//    (the box lives on each rank). In serial my_rank()=0 -> identical to round-robin, bit for bit.
+//    This is the layout GeometricMG(replicated=true) and the historical one expect.
+//  - distributed (distribute=true): multi-box BoxArray::from_domain(dom, max_grid) spread round-robin
+//    DistributionMapping(ba.size(), n_ranks()). Each rank carries only its tiles -> the coarse
+//    Poisson and coarse transport distribute (strong-scaling). max_grid<=0 => n/2 (2x2).
 inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(int n, bool distribute,
                                                                            int max_grid) {
   const Box2D dom = Box2D::from_extents(n, n);
@@ -263,32 +251,32 @@ inline std::pair<BoxArray, DistributionMapping> coupler_make_coarse_layout(int n
 
 }  // namespace detail
 
-/// Coupleur AMR E x B multi-patch. @tparam Model : PhysicalModel (flux, source, elliptic_rhs,
-/// max_wave_speed). @tparam Elliptic : backend elliptique (concept EllipticSolver, defaut GeometricMG).
-/// ORCHESTRE seulement : la hierarchie vit dans un AmrLevelStack<AmrLevelMP>, le solve Poisson dans
-/// mg_, le regrid dans amr_regrid_finest. Se reduit bit a bit a AmrCoupler en mono-box par niveau.
+/// Multi-patch E x B AMR coupler. @tparam Model: PhysicalModel (flux, source, elliptic_rhs,
+/// max_wave_speed). @tparam Elliptic: elliptic backend (EllipticSolver concept, default GeometricMG).
+/// ORCHESTRATES only: the hierarchy lives in an AmrLevelStack<AmrLevelMP>, the Poisson solve in
+/// mg_, the regrid in amr_regrid_finest. Reduces bit for bit to AmrCoupler in mono-box per level.
 template <class Model, class Elliptic = GeometricMG>
 class AmrCouplerMP {
-  static_assert(EllipticSolver<Elliptic>, "Elliptic doit modeler EllipticSolver");
+  static_assert(EllipticSolver<Elliptic>, "Elliptic must model EllipticSolver");
 
  public:
-  // active : predicat optionnel "cellule active" (interieur du conducteur), pour la paroi
-  // conductrice circulaire de l'instabilite colonne (passe tel quel au multigrille). Vide
-  // par defaut -> pas de paroi (comportement historique inchange). Seul le grossier porte la
-  // paroi : les patchs fins raffinent le bord d'anneau, strictement a l'interieur du mur.
-  // replicated_coarse : POLITIQUE D'OWNERSHIP du niveau 0 (grossier). Les DEUX modes sont
-  // stables et leur equivalence est prouvee bit a bit (test_mpi_decoarse, maxdiff=0) :
-  //   true  (DEFAUT performant) : grossier mono-box REPLIQUE sur tous les rangs. Meilleur solve
-  //          MG grossier (pas de degenerescence du multigrille), zero communication pour le
-  //          Poisson grossier, reference robuste -> le bon defaut pour les cas petits/moyens.
-  //   false (mode scalable EXPLICITE) : grossier multi-box REPARTI round-robin. Leve le verrou
-  //          memoire O(NX*NY*nrangs) du niveau 0, necessaire a tres grande echelle. Mais le MG
-  //          geometrique degenere pour un grossier finement decoupe (>2x2 boxes ne pavent pas la
-  //          grille la plus grossiere) : a reserver aux cas ou la memoire niveau-0 est le verrou.
-  // Critere : mettre false UNIQUEMENT quand la scalabilite memoire l'exige ; sinon garder true.
-  // La suppression du chemin replique est REPORTEE tant que le reparti n'est pas strictement
-  // superieur. Le mg_ recoit le meme drapeau (sinon, sous MPI replique, le grossier tomberait sur
-  // le seul rang 0 et compute_aux lirait un phi absent ailleurs). En serie, les deux coincident.
+  // active: optional "active cell" predicate (interior of the conductor), for the circular
+  // conducting wall of the column instability (passed as-is to the multigrid). Empty
+  // by default -> no wall (historical behavior unchanged). Only the coarse carries the
+  // wall: the fine patches refine the ring edge, strictly inside the wall.
+  // replicated_coarse: level-0 (coarse) OWNERSHIP POLICY. BOTH modes are
+  // stable and their equivalence is proven bit for bit (test_mpi_decoarse, maxdiff=0):
+  //   true  (performant DEFAULT): coarse mono-box REPLICATED on all ranks. Best coarse
+  //          MG solve (no multigrid degeneration), zero communication for the
+  //          coarse Poisson, robust reference -> the right default for small/medium cases.
+  //   false (EXPLICIT scalable mode): coarse multi-box DISTRIBUTED round-robin. Lifts the
+  //          O(NX*NY*nranks) memory lock of level 0, required at very large scale. But the
+  //          geometric MG degenerates for a finely-split coarse (>2x2 boxes do not tile the
+  //          coarsest grid): reserve for cases where the level-0 memory is the lock.
+  // Criterion: set false ONLY when memory scalability requires it; otherwise keep true.
+  // Removing the replicated path is DEFERRED as long as the distributed one is not strictly
+  // superior. mg_ receives the same flag (otherwise, under replicated MPI, the coarse would fall on
+  // the single rank 0 and compute_aux would read a phi absent elsewhere). In serial, both coincide.
   AmrCouplerMP(const Model& model, const Geometry& geom, const BoxArray& ba_coarse,
                const BCRec& bc, std::vector<AmrLevelMP> levels,
                std::function<bool(Real, Real)> active = {},
@@ -301,29 +289,29 @@ class AmrCouplerMP {
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }
   MultiFab& coarse() { return stack_.coarse(); }
   const MultiFab& coarse() const { return stack_.coarse(); }
-  // aux du niveau grossier : (phi, dphi/dx, dphi/dy), composante 0 = phi (cf. compute_aux). Meme
-  // layout que coarse(). Lu par le hook potential d'AmrSystem (coupler_read_coarse_phi).
+  // coarse-level aux: (phi, dphi/dx, dphi/dy), component 0 = phi (cf. compute_aux). Same
+  // layout as coarse(). Read by the AmrSystem potential hook (coupler_read_coarse_phi).
   MultiFab& aux0() { return stack_.aux(0); }
   const MultiFab& aux0() const { return stack_.aux(0); }
   const Box2D& domain() const { return stack_.domain(); }
   int nlev() const { return stack_.nlev(); }
 
   // ----------------------------------------------------------------------------------------------
-  // CHECKPOINT / RESTART AMR mono-rang (ADC-65). Le coupleur mono-bloc porte l'ETAT CONSERVATIF
-  // COMPLET par niveau (toutes composantes) + le phi (warm-start du multigrille), et sait IMPOSER
-  // une hierarchie fine SAUVEE (au lieu du clustering Berger-Rigoutsos sur tags). MONO-RANG : les
-  // accesseurs bouclent sur local_size() + device_fence(), SANS gather MPI (la facade rejette np>1
-  // ET le multi-blocs en amont ; la reprise multi-rangs/multi-blocs est une suite documentee).
+  // SINGLE-RANK AMR CHECKPOINT / RESTART (ADC-65). The mono-block coupler carries the FULL
+  // CONSERVATIVE STATE per level (all components) + the phi (multigrid warm-start), and can IMPOSE
+  // a SAVED fine hierarchy (instead of Berger-Rigoutsos clustering on tags). SINGLE-RANK: the
+  // accessors loop over local_size() + device_fence(), WITHOUT MPI gather (the facade rejects np>1
+  // AND multi-block upstream; multi-rank/multi-block restart is a documented follow-up).
   // ----------------------------------------------------------------------------------------------
 
-  // Lit l'etat conservatif COMPLET (toutes composantes) du niveau @p k en un champ plat
-  // composante-majeur c*nf*nf + j*nf + i, nf = n << k (n = cote du grossier). Les cellules HORS
-  // patchs (niveau fin non couvert) restent a 0 : un niveau fin n'est defini que dans ses patchs
-  // (au restart on ne reecrit QUE les cellules des patchs, cf. set_level_state).
+  // Reads the FULL conservative state (all components) of level @p k into a flat
+  // component-major field c*nf*nf + j*nf + i, nf = n << k (n = coarse side). The cells OUTSIDE
+  // patches (uncovered fine level) stay at 0: a fine level is only defined within its patches
+  // (at restart we rewrite ONLY the patch cells, cf. set_level_state).
   std::vector<double> level_state(int k) {
     std::vector<AmrLevelMP>& L = stack_.L();
     if (k < 0 || k >= static_cast<int>(L.size()))
-      throw std::runtime_error("AmrCouplerMP::level_state : niveau hors bornes");
+      throw std::runtime_error("AmrCouplerMP::level_state: level out of bounds");
     MultiFab& U = L[k].U;
     const int nc = U.ncomp();
     const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
@@ -341,19 +329,19 @@ class AmrCouplerMP {
     return out;
   }
 
-  // Restaure l'etat conservatif complet du niveau @p k depuis @p s (meme layout que level_state).
-  // Ecrit UNIQUEMENT les cellules VALIDES des fabs locaux (les patchs) : les ghosts sont refaits au
-  // prochain update()/advance (exactement comme apres un regrid), et une cellule fine hors patch
-  // n'existe pas. NO RE-PROLONGATION : l'etat est restaure TEL QUEL (pas d'injection coarse->fine).
+  // Restores the full conservative state of level @p k from @p s (same layout as level_state).
+  // Writes ONLY the VALID cells of the local fabs (the patches): the ghosts are redone at the
+  // next update()/advance (exactly like after a regrid), and a fine cell outside a patch
+  // does not exist. NO RE-PROLONGATION: the state is restored AS-IS (no coarse->fine injection).
   void set_level_state(int k, const std::vector<double>& s) {
     std::vector<AmrLevelMP>& L = stack_.L();
     if (k < 0 || k >= static_cast<int>(L.size()))
-      throw std::runtime_error("AmrCouplerMP::set_level_state : niveau hors bornes");
+      throw std::runtime_error("AmrCouplerMP::set_level_state: level out of bounds");
     MultiFab& U = L[k].U;
     const int nc = U.ncomp();
     const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
     if (s.size() != static_cast<std::size_t>(nc) * nf * nf)
-      throw std::runtime_error("AmrCouplerMP::set_level_state : taille de l'etat != ncomp*nf*nf");
+      throw std::runtime_error("AmrCouplerMP::set_level_state: state size != ncomp*nf*nf");
     device_fence();
     for (int li = 0; li < U.local_size(); ++li) {
       Array4 u = U.fab(li).array();
@@ -366,14 +354,14 @@ class AmrCouplerMP {
     }
   }
 
-  // Lit le potentiel phi du niveau @p k, champ plat nf*nf row-major (nf = n << k), zeros hors patchs.
-  // Niveau 0 : le WARM-START du multigrille -- mg_.phi() (cellules VALIDES), l'etat reellement
-  // reutilise par le PROCHAIN solve (GeometricMG::solve conserve phi entre appels). Niveau >= 1 :
-  // aux(k) composante 0 (informatif ; recompute a l'update). C'est mg_.phi() niveau 0 qui rend la
-  // reprise BIT-IDENTIQUE (le 1er solve post-restart repart du meme guess que le run continu).
+  // Reads the potential phi of level @p k, flat nf*nf row-major field (nf = n << k), zeros outside patches.
+  // Level 0: the multigrid WARM-START -- mg_.phi() (VALID cells), the state actually
+  // reused by the NEXT solve (GeometricMG::solve keeps phi between calls). Level >= 1:
+  // aux(k) component 0 (informational; recomputed at update). It is mg_.phi() level 0 that makes the
+  // restart BIT-IDENTICAL (the 1st post-restart solve starts from the same guess as the continuous run).
   std::vector<double> level_potential(int k) {
     if (k < 0 || k >= stack_.nlev())
-      throw std::runtime_error("AmrCouplerMP::level_potential : niveau hors bornes");
+      throw std::runtime_error("AmrCouplerMP::level_potential: level out of bounds");
     const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
     std::vector<double> out(nf * nf, 0.0);
     device_fence();
@@ -388,15 +376,15 @@ class AmrCouplerMP {
     return out;
   }
 
-  // Restaure le potentiel du niveau @p k. Niveau 0 : warm-start mg_.phi() (cellules valides) -> la
-  // reprise du multigrille est BIT-IDENTIQUE (le 1er solve post-restart repart du meme guess). Niveau
-  // >= 1 : aux(k) comp 0 (recompute a l'update ; restauration idempotente, sans effet sur la dynamique).
+  // Restores the potential of level @p k. Level 0: warm-start mg_.phi() (valid cells) -> the
+  // multigrid restart is BIT-IDENTICAL (the 1st post-restart solve starts from the same guess). Level
+  // >= 1: aux(k) comp 0 (recomputed at update; idempotent restore, no effect on the dynamics).
   void set_level_potential(int k, const std::vector<double>& p) {
     if (k < 0 || k >= stack_.nlev())
-      throw std::runtime_error("AmrCouplerMP::set_level_potential : niveau hors bornes");
+      throw std::runtime_error("AmrCouplerMP::set_level_potential: level out of bounds");
     const std::size_t nf = static_cast<std::size_t>(stack_.domain().nx()) << k;
     if (p.size() != nf * nf)
-      throw std::runtime_error("AmrCouplerMP::set_level_potential : taille phi != nf*nf");
+      throw std::runtime_error("AmrCouplerMP::set_level_potential: phi size != nf*nf");
     device_fence();
     MultiFab& P = (k == 0) ? mg_.phi() : stack_.aux(k);
     for (int li = 0; li < P.local_size(); ++li) {
@@ -408,58 +396,58 @@ class AmrCouplerMP {
     }
   }
 
-  // Impose la hierarchie du niveau fin (restart) : reconstruit le niveau 1 sur le BoxArray @p
-  // fine_boxes SAUVE (au lieu du clustering Berger-Rigoutsos sur tags), via la MEME mecanique que le
-  // regrid (regrid_field_on_layout : interp parent + report fin), puis reattache l'aux du niveau 1.
-  // Le contenu valide reconstruit est ECRASE ensuite par set_level_state (restauration tel quel) : on
-  // ne s'appuie ici que sur le LAYOUT impose. MONO-RANG, hierarchie mono-bloc a 2 niveaux (on n'impose
-  // donc QUE le niveau 1). Rejet clair si la hierarchie n'a pas de niveau fin ou si aucune boite sauvee.
+  // Imposes the fine-level hierarchy (restart): rebuilds level 1 on the SAVED @p
+  // fine_boxes BoxArray (instead of Berger-Rigoutsos clustering on tags), via the SAME mechanism as
+  // regrid (regrid_field_on_layout: parent interp + fine carry-over), then reattaches the level-1 aux.
+  // The rebuilt valid content is OVERWRITTEN afterwards by set_level_state (restore as-is): here we
+  // rely only on the IMPOSED LAYOUT. SINGLE-RANK, 2-level mono-block hierarchy (so we impose
+  // ONLY level 1). Clear rejection if the hierarchy has no fine level or if no box was saved.
   void set_hierarchy(const std::vector<Box2D>& fine_boxes) {
     std::vector<AmrLevelMP>& L = stack_.L();
     if (L.size() < 2)
-      throw std::runtime_error("AmrCouplerMP::set_hierarchy : hierarchie mono-niveau (aucun patch "
-                               "fin a imposer)");
+      throw std::runtime_error("AmrCouplerMP::set_hierarchy: mono-level hierarchy (no fine patch "
+                               "to impose)");
     if (fine_boxes.empty())
-      throw std::runtime_error("AmrCouplerMP::set_hierarchy : aucune boite fine sauvee (restart d'une "
-                               "hierarchie a patchs fins requis)");
-    const int ngf = L[1].U.n_grow();  // herite la largeur de ghost du fin courant (parite schema)
+      throw std::runtime_error("AmrCouplerMP::set_hierarchy: no saved fine box (restart of a "
+                               "fine-patch hierarchy required)");
+    const int ngf = L[1].U.n_grow();  // inherit the ghost width of the current fine (scheme parity)
     BoxArray fb(fine_boxes);
-    DistributionMapping dmap(static_cast<int>(fb.size()), n_ranks());  // mono-rang -> tout sur rang 0
+    DistributionMapping dmap(static_cast<int>(fb.size()), n_ranks());  // single-rank -> all on rank 0
     L[1].U = regrid_field_on_layout(fb, dmap, L[0].U, L[1].U, /*pk=*/0, ngf, replicated_coarse_);
-    stack_.reattach_aux(1);  // realloc aux[1] sur le nouveau layout + recable L[1].aux
+    stack_.reattach_aux(1);  // realloc aux[1] on the new layout + rewire L[1].aux
   }
 
-  void sync_down() {  // moyenne fin -> grossier sur toute la hierarchie (multi-box)
+  void sync_down() {  // average fine -> coarse over the whole hierarchy (multi-box)
     auto& L = stack_.L();
     for (int k = stack_.nlev() - 1; k >= 1; --k) mf_average_down_mb(L[k].U, L[k - 1].U);
   }
 
-  /// OPT-IN : remplace le Poisson AMR Option A (solve grossier + injection grad constant par morceaux)
-  /// par un solve elliptique COMPOSITE FAC (le patch fin RAFFINE l'elliptique). Cf. CompositeFacPoisson.
-  /// Perimetre Phase 2 : 2 niveaux, UN patch fin mono-box interieur, grossier replique (mono-rang).
-  /// Hors de ce cadre, compute_aux retombe sur Option A (bit-identique).
+  /// OPT-IN: replaces the Option A AMR Poisson (coarse solve + piecewise-constant gradient injection)
+  /// with a COMPOSITE FAC elliptic solve (the fine patch REFINES the elliptic). Cf. CompositeFacPoisson.
+  /// Phase 2 scope: 2 levels, ONE interior mono-box fine patch, replicated coarse (single-rank).
+  /// Outside this scope, compute_aux falls back to Option A (bit-identical).
   void set_composite_poisson(bool v) { composite_poisson_ = v; }
   bool composite_poisson() const { return composite_poisson_; }
 
-  void compute_aux() {  // Poisson grossier + grad phi + injection vers les fins
+  void compute_aux() {  // coarse Poisson + grad phi + injection to the fine levels
     auto& L = stack_.L();
     const Box2D& dom = stack_.domain();
     const Real dx = geom_.dx(), dy = geom_.dy();
-    // CHEMIN COMPOSITE (opt-in) : le patch fin raffine VRAIMENT l'elliptique. Cadre supporte = 2 niveaux,
-    // UN patch fin mono-box, grossier replique (Phase 2). Sinon Option A ci-dessous (bit-identique).
+    // COMPOSITE path (opt-in): the fine patch TRULY refines the elliptic. Supported scope = 2 levels,
+    // ONE mono-box fine patch, replicated coarse (Phase 2). Otherwise Option A below (bit-identical).
     if (composite_poisson_ && replicated_coarse_ && stack_.nlev() == 2 &&
         L[1].U.box_array().size() == 1) {
       compute_aux_composite();
       return;
     }
-    // second membre via le modele (pas de formule recopiee) : f = elliptic_rhs(U)
+    // right-hand side via the model (no copied formula): f = elliptic_rhs(U)
     detail::coupler_eval_rhs(L[0].U, mg_.rhs(), model_);
-    mg_.solve();  // laisse phi avec ses ghosts remplis (dernier gs_rb_sweep -> fill_ghosts)
+    mg_.solve();  // leaves phi with its ghosts filled (last gs_rb_sweep -> fill_ghosts)
     device_fence();
-    // aux = (phi, grad phi) par fab grossier LOCAL : couvre le mono-box replique (1 fab) comme
-    // le multi-box reparti (de-replication). Les derivees au bord de box lisent les ghosts de
-    // phi remplis par le solve (echange inter-box distribue via fill_boundary). mg_.phi() et
-    // aux(0) partagent le meme layout (meme BoxArray + DistributionMapping) -> fab(li) <-> box(li).
+    // aux = (phi, grad phi) per LOCAL coarse fab: covers the replicated mono-box (1 fab) as well as
+    // the distributed multi-box (de-replication). The box-edge derivatives read the ghosts of
+    // phi filled by the solve (distributed inter-box exchange via fill_boundary). mg_.phi() and
+    // aux(0) share the same layout (same BoxArray + DistributionMapping) -> fab(li) <-> box(li).
     for (int li = 0; li < mg_.phi().local_size(); ++li) {
       const ConstArray4 p = mg_.phi().fab(li).const_array();
       Array4 a = stack_.aux(0).fab(li).array();
@@ -472,35 +460,35 @@ class AmrCouplerMP {
         }
     }
     fill_boundary(stack_.aux(0), dom, Periodicity{true, true});
-    // parent aux(k-1) replique seulement si le niveau 0 l'est : sinon il est REPARTI (multi-box)
-    // et l'injection passe par parallel_copy. Au-dela du niveau 1, le parent est toujours reparti.
+    // parent aux(k-1) replicated only if level 0 is: otherwise it is DISTRIBUTED (multi-box)
+    // and the injection goes through parallel_copy. Beyond level 1, the parent is always distributed.
     for (int k = 1; k < stack_.nlev(); ++k)
       detail::coupler_inject_aux_mb(stack_.aux(k - 1), stack_.aux(k),
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
   }
 
-  /// Met la hierarchie a jour avant un pas : sync_down (fin -> grossier) puis compute_aux (Poisson
-  /// grossier + grad phi + injection vers les fins).
+  /// Updates the hierarchy before a step: sync_down (fine -> coarse) then compute_aux (coarse
+  /// Poisson + grad phi + injection to the fine levels).
   void update() { sync_down(); compute_aux(); }
 
-  // Discretisation spatiale selectionnable (defaut FirstOrder = NoSlope + Rusanov,
-  // strictement identique a l'ancien step()). recon_prim selectionne la reconstruction
-  // primitive (meme parametre qu'assemble_rhs / System) ; false (defaut) -> conservative.
-  // imex : traite la source raide en IMPLICITE (backward_euler) plutot qu'en Euler avant ;
-  // false (defaut) -> traitement explicite historique, bit-identique. La source restant
-  // cellule-locale (hors registres de reflux), le split implicite preserve la conservation.
-  /// Avance la hierarchie d'un pas dt : update() puis advance_amr (sous-cyclage Berger-Oliger +
-  /// reflux + average_down conservatifs). @tparam Disc : discretisation spatiale (limiteur + flux,
-  /// defaut FirstOrder bit-identique a l'historique). recon_prim : reconstruction primitive ; imex :
-  /// source raide en implicite (backward_euler). Defauts (false) -> chemin explicite historique.
-  /// @p nopts : OPTIONS du Newton de la source implicite IMEX (budget d'iterations, tolerances,
-  /// fd_eps, damping, fail_policy), threadees jusqu'a backward_euler_source par advance_amr ->
-  /// subcycle_level_mp -> mf_apply_source_treatment. DEFAUT {} = constantes historiques (2 iters,
-  /// 1e-7, ...) -> chemin (2a) BIT-IDENTIQUE a l'ancien appel. Sans effet si imex==false. Le masque
-  /// IMEX partiel n'est PAS porte par ce chemin mono-bloc (backward-Euler plein), seules les OPTIONS
-  /// le sont (AmrSystem mono-bloc cable les options Newton mais pas le masque ni les diagnostics).
-  /// @p tmethod : methode temporelle (kEuler par defaut = Euler avant historique bit-identique ;
-  /// kSsprk3 = SSPRK3 ordre 3 + reflux par etage). kSsprk3 exige imex == false (rejet sinon).
+  // Selectable spatial discretization (default FirstOrder = NoSlope + Rusanov,
+  // strictly identical to the old step()). recon_prim selects the primitive
+  // reconstruction (same parameter as assemble_rhs / System); false (default) -> conservative.
+  // imex: treats the stiff source IMPLICITLY (backward_euler) rather than forward Euler;
+  // false (default) -> historical explicit treatment, bit-identical. The source being
+  // cell-local (outside reflux registers), the implicit split preserves conservation.
+  /// Advances the hierarchy by one step dt: update() then advance_amr (Berger-Oliger subcycling +
+  /// reflux + conservative average_down). @tparam Disc: spatial discretization (limiter + flux,
+  /// default FirstOrder bit-identical to the historical one). recon_prim: primitive reconstruction; imex:
+  /// stiff source implicit (backward_euler). Defaults (false) -> historical explicit path.
+  /// @p nopts: OPTIONS of the IMEX implicit-source Newton (iteration budget, tolerances,
+  /// fd_eps, damping, fail_policy), threaded down to backward_euler_source by advance_amr ->
+  /// subcycle_level_mp -> mf_apply_source_treatment. DEFAULT {} = historical constants (2 iters,
+  /// 1e-7, ...) -> path (2a) BIT-IDENTICAL to the old call. No effect if imex==false. The
+  /// partial IMEX mask is NOT carried by this mono-block path (full backward-Euler), only the OPTIONS
+  /// are (the mono-block AmrSystem wires the Newton options but not the mask or the diagnostics).
+  /// @p tmethod: time method (kEuler by default = historical forward Euler bit-identical;
+  /// kSsprk3 = order-3 SSPRK3 + per-stage reflux). kSsprk3 requires imex == false (rejected otherwise).
   template <class Disc = FirstOrder>
   void step(Real dt, bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
             AmrTimeMethod tmethod = AmrTimeMethod::kEuler) {
@@ -510,14 +498,14 @@ class AmrCouplerMP {
         recon_prim, imex, nopts, tmethod);
   }
 
-  /// AVANCE DE TRANSPORT SEULE (hyperbolique), SANS update() ni source. Pendant de step() prive de
-  /// son solve de champ et avec imex==false : c'est l'avance HYPERBOLIQUE PURE (-div F) du chemin
-  /// amr-schur, ou le champ est resolu separement (update()) et la source est jouee par l'etage
-  /// condense global (AmrCondensedSchurSourceStepper), exactement comme le chemin uniforme entrelace
-  /// solve_fields / transport (s.advance) / etage source (run_source_stage). Le modele doit etre
-  /// SOURCE-FREE (brique source NoSource) pour que la source ne soit pas comptee deux fois (une fois
-  /// ici en Euler avant, une fois par l'etage Schur) : c'est le contrat du chemin amr-schur, miroir du
-  /// time=Strang(Explicit, CondensedSchur) uniforme ou le bloc est ajoute avec son seul transport.
+  /// TRANSPORT-ONLY ADVANCE (hyperbolic), WITHOUT update() or source. Counterpart of step() stripped
+  /// of its field solve and with imex==false: this is the PURE HYPERBOLIC advance (-div F) of the
+  /// amr-schur path, where the field is solved separately (update()) and the source is played by the
+  /// global condensed stage (AmrCondensedSchurSourceStepper), exactly like the uniform path interleaving
+  /// solve_fields / transport (s.advance) / source stage (run_source_stage). The model must be
+  /// SOURCE-FREE (NoSource source brick) so that the source is not counted twice (once
+  /// here in forward Euler, once by the Schur stage): this is the contract of the amr-schur path, mirror of
+  /// the uniform time=Strang(Explicit, CondensedSchur) where the block is added with its transport only.
   template <class Disc = FirstOrder>
   void advance_transport(Real dt, bool recon_prim = false) {
     advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
@@ -525,39 +513,39 @@ class AmrCouplerMP {
         recon_prim, /*imex=*/false);
   }
 
-  // Regrid du niveau FIN par Berger-Rigoutsos (delegue a amr_regrid_finest) :
-  // reconstruit les patchs (report des donnees fines, sinon interp parent) + l'aux.
-  // margin = nesting. Le coupleur ne fait qu'ordonner l'appel.
+  // Regrid of the FINE level by Berger-Rigoutsos (delegated to amr_regrid_finest):
+  // rebuilds the patches (carry over fine data, otherwise parent interp) + the aux.
+  // margin = nesting. The coupler only orders the call.
   template <class Crit>
   void regrid(Crit crit, int grow = 2, int margin = 2) {
     amr_regrid_finest(stack_.L(), stack_.aux(), stack_.domain(), crit, grow, margin,
                       aux_comps<Model>(), replicated_coarse_);
   }
 
-  // masse grossiere via le diagnostic partage amr_mass_mb (mono-box replique comme
-  // multi-box reparti). Grossier replique : la somme locale EST deja la masse totale
-  // (chaque rang detient tout) -> pas d'all_reduce. Reparti : part locale -> all_reduce_sum.
+  // coarse mass via the shared diagnostic amr_mass_mb (replicated mono-box as well as
+  // distributed multi-box). Replicated coarse: the local sum IS already the total mass
+  // (each rank holds everything) -> no all_reduce. Distributed: local part -> all_reduce_sum.
   Real mass() const {
     const Real M = amr_mass_mb(stack_.coarse(), geom_.dx(), geom_.dy());
     return replicated_coarse_ ? M : all_reduce_sum(M);
   }
 
-  // vitesse de derive max via amr_max_drift_speed_mb + plancher. all_reduce_max correct
-  // dans les DEUX cas : sous replication le max local est deja global (idempotent) ;
-  // reparti, on prend le max des parts.
+  // max drift speed via amr_max_drift_speed_mb + floor. all_reduce_max correct
+  // in BOTH cases: under replication the local max is already global (idempotent);
+  // distributed, we take the max of the parts.
   Real max_drift_speed() const {
     const Real v = amr_max_drift_speed_mb(stack_.aux(0), model_.B0);
     return all_reduce_max(std::max(v, Real(1e-12)));
   }
 
-  /// @brief Vitesse d'onde max sur le niveau grossier via `model.max_wave_speed`.
+  /// @brief Max wave speed on the coarse level via `model.max_wave_speed`.
   ///
-  /// Vitesse CFL generique au modele (tout `PhysicalModel`), contrairement a `max_drift_speed`
-  /// qui est specifique a la derive E x B (`model.B0`). Pour un transport E x B pur, elle egale
-  /// la vitesse de derive.
+  /// Model-generic CFL speed (any `PhysicalModel`), unlike `max_drift_speed`
+  /// which is specific to the E x B drift (`model.B0`). For a pure E x B transport, it equals
+  /// the drift speed.
   ///
-  /// @return le max sur les cellules grossieres et les deux directions, reduit sur les rangs.
-  /// @note `update()` doit avoir tourne pour que `aux(0)` porte le `grad phi` courant.
+  /// @return the max over the coarse cells and the two directions, reduced over the ranks.
+  /// @note `update()` must have run so that `aux(0)` carries the current `grad phi`.
   Real max_wave_speed() {
     Real w = Real(1e-12);
     MultiFab& U = stack_.coarse();
@@ -578,9 +566,9 @@ class AmrCouplerMP {
   }
 
  private:
-  /// Pas Poisson COMPOSITE FAC (chemin opt-in). Solve l'elliptique sur grossier + patch fin couple par
-  /// FAC, puis pose aux PAR NIVEAU depuis le phi DE CHAQUE NIVEAU : aux fin = (phi_f, grad fin) ou grad
-  /// fin = diff centree sur phi_f (resolu a la finesse), PAS l'injection grad grossier constant d'Option A.
+  /// COMPOSITE FAC Poisson step (opt-in path). Solves the elliptic on coarse + fine patch coupled by
+  /// FAC, then sets aux PER LEVEL from the phi OF EACH LEVEL: fine aux = (phi_f, fine grad) where fine
+  /// grad = centered diff on phi_f (solved at fine resolution), NOT the constant coarse-grad injection of Option A.
   void compute_aux_composite() {
     auto& L = stack_.L();
     const Box2D& dom = stack_.domain();
@@ -590,18 +578,18 @@ class AmrCouplerMP {
       fac_fine_box_ = fine_box;
       fac_built_ = true;
     }
-    // f = elliptic_rhs(U) PAR NIVEAU : le fin a son PROPRE second membre raffine (pas une injection).
+    // f = elliptic_rhs(U) PER LEVEL: the fine has its OWN refined right-hand side (not an injection).
     detail::coupler_eval_rhs(L[0].U, fac_->rhs_coarse(), model_);
     detail::coupler_eval_rhs(L[1].U, fac_->rhs_fine(), model_);
     fac_->solve();
     device_fence();
-    // aux niveau 0 (grossier) : phi + grad depuis phi_coarse (memes stencils centres que le chemin Option A).
+    // level-0 aux (coarse): phi + grad from phi_coarse (same centered stencils as the Option A path).
     fill_ghosts(fac_->phi_coarse(), dom, mg_.bc());
     detail::coupler_grad_phi(fac_->phi_coarse(), stack_.aux(0), Real(1) / (Real(2) * geom_.dx()),
                              Real(1) / (Real(2) * geom_.dy()));
     fill_boundary(stack_.aux(0), dom, Periodicity{true, true});
-    // aux niveau 1 (fin) : phi + grad depuis phi_fine -> grad FIN (diff centree fine, lit les ghosts C-F
-    // bilineaires) = le gain de fidelite vs le grad grossier constant injecte par Option A.
+    // level-1 aux (fine): phi + grad from phi_fine -> FINE grad (fine centered diff, reads the C-F
+    // bilinear ghosts) = the fidelity gain vs the constant coarse grad injected by Option A.
     detail::coupler_grad_phi(fac_->phi_fine(), stack_.aux(1), Real(1) / (Real(2) * L[1].dx),
                              Real(1) / (Real(2) * L[1].dy));
   }
@@ -614,9 +602,9 @@ class AmrCouplerMP {
   Geometry geom_;
   Elliptic mg_;
   AmrLevelStack<AmrLevelMP> stack_;
-  bool replicated_coarse_;  // niveau 0 replique (true) ou multi-box reparti (false, de-replication)
-  // Chemin Poisson COMPOSITE FAC (opt-in, set_composite_poisson). fac_ construit paresseusement sur le
-  // patch fin courant (reconstruit si le patch change apres regrid). Defaut OFF -> Option A bit-identique.
+  bool replicated_coarse_;  // level 0 replicated (true) or distributed multi-box (false, de-replication)
+  // COMPOSITE FAC Poisson path (opt-in, set_composite_poisson). fac_ built lazily on the
+  // current fine patch (rebuilt if the patch changes after regrid). Default OFF -> Option A bit-identical.
   bool composite_poisson_ = false;
   bool fac_built_ = false;
   std::shared_ptr<CompositeFacPoisson> fac_;

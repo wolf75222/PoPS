@@ -2,7 +2,7 @@
 
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/types.hpp>
-#include <adc/coupling/aux_fill.hpp>  // detail::derive_aux_bc + detail::fill_bz_box (partages)
+#include <adc/coupling/aux_fill.hpp>  // detail::derive_aux_bc + detail::fill_bz_box (shared)
 #include <adc/coupling/coupled_source.hpp>
 #include <adc/coupling/elliptic_rhs.hpp>
 #include <adc/numerics/elliptic/elliptic_problem.hpp>
@@ -26,30 +26,16 @@
 #include <utility>
 
 /// @file
-/// @brief Systeme couple multi-especes MONO-niveau : SystemAssembler (assemble) + SystemDriver (avance).
+/// @brief Single-level multi-species coupled system: SystemAssembler (assembles) + SystemDriver (advances).
 ///
-/// DEUX responsabilites, DEUX classes (retour tuteur 8.2 B). SystemAssembler ASSEMBLE : RHS de systeme
-/// (f = Sum_s q_s n_s), Poisson, aux = (phi, grad phi), et l'evaluateur de residu d'un bloc
-/// R = -div F + S ; il ne fait AUCUN pas de temps. SystemDriver AVANCE : porte le schedule
-/// (sous-cyclage par espece, multirate adaptatif, implicite/IMEX delegue), POSSEDE un Assembleur et
-/// appelle un TimeStepper. SystemCoupler reste un ALIAS de SystemDriver (compat tests / facade
-/// adc_cases). Le canal aux est PARTAGE par tous les blocs, alloue a la largeur MAXIMALE demandee
-/// (aux_comps) : un bloc lisant B_z (n_aux=4) le voit, un bloc de base (3) ignore la composante extra.
-/// Aucune des deux ne remplace PhysicalModel / assemble_rhs / GeometricMG : elles les CONNECTENT.
-
-// Systeme couple mono-niveau : DEUX responsabilites, DEUX classes (retour tuteur sec.8.2 B).
-//
-//   SystemAssembler : ASSEMBLE. Couple l'hyperbolique et l'elliptique : RHS de systeme
-//     (f = Sum_s q_s n_s), Poisson, aux = (phi, grad phi), et l'evaluateur de residu d'un
-//     bloc R = -div F + S. Il ne fait AUCUN pas de temps.
-//   SystemDriver    : AVANCE. Porte le schedule (sous-cyclage par espece, implicite/IMEX
-//     delegue) et appelle un TimeStepper (take_step). "Avancer un coupleur" etait bancal :
-//     ici un Assembleur assemble, un Driver avance. Le Driver POSSEDE un Assembleur.
-//
-// SystemCoupler reste comme ALIAS de SystemDriver (compat : tests, facades adc_cases).
-//
-// Aucune des deux ne remplace PhysicalModel (formules locales), assemble_rhs (operateur
-// spatial), ni GeometricMG (elliptique) : elles les connectent.
+/// Two responsibilities, two classes (advisor feedback 8.2 B). SystemAssembler ASSEMBLES: system RHS
+/// (f = Sum_s q_s n_s), Poisson, aux = (phi, grad phi), and a block residual evaluator
+/// R = -div F + S; it does NO time stepping. SystemDriver ADVANCES: carries the schedule
+/// (per-species subcycling, adaptive multirate, implicit/IMEX delegated), OWNS an Assembler and
+/// calls a TimeStepper. SystemCoupler stays an ALIAS of SystemDriver (test compat / adc_cases
+/// facade). The aux channel is SHARED by all blocks, allocated at the MAXIMUM requested width
+/// (aux_comps): a block reading B_z (n_aux=4) sees it, a base block (3) ignores the extra component.
+/// Neither replaces PhysicalModel / assemble_rhs / GeometricMG: they CONNECT them.
 
 namespace adc {
 
@@ -67,9 +53,9 @@ struct ScopedBlockState {
     block.state = &stage_state;
   }
 
-  // REGLE DES CINQ (C.21) : scope-guard a effet de bord dans le dtor (restaure block.state). Copie/move
-  // PAR DEFAUT -> double restauration ou restauration depuis une copie morte. Jamais copie ni move
-  // (toujours une variable locale de portee) : on supprime les quatre operations.
+  // RULE OF FIVE (C.21): scope-guard with a side effect in the dtor (restores block.state). Copy/move
+  // BY DEFAULT -> double restoration or restoration from a dead copy. Never copied nor moved
+  // (always a block-scoped local variable): delete the four operations.
   ScopedBlockState(const ScopedBlockState&) = delete;
   ScopedBlockState& operator=(const ScopedBlockState&) = delete;
   ScopedBlockState(ScopedBlockState&&) = delete;
@@ -79,22 +65,22 @@ struct ScopedBlockState {
 };
 }  // namespace detail
 
-// === ASSEMBLEUR : champs (Poisson de systeme + aux) + residu de bloc. Aucun pas. ======
-/// ASSEMBLE les champs (Poisson de systeme + aux partage) et l'evaluateur de residu d'un bloc. Aucun
-/// pas de temps. @tparam System : CoupledSystem. @tparam RhsAssembler : assembleur du RHS Poisson.
-/// @tparam Elliptic : backend elliptique (concept EllipticSolver, defaut GeometricMG).
+// === ASSEMBLER: fields (system Poisson + aux) + block residual. No stepping. ======
+/// ASSEMBLES the fields (system Poisson + shared aux) and a block residual evaluator. No time
+/// stepping. @tparam System: CoupledSystem. @tparam RhsAssembler: Poisson RHS assembler.
+/// @tparam Elliptic: elliptic backend (EllipticSolver concept, default GeometricMG).
 template <CoupledSystemLike System, class RhsAssembler,
           class Elliptic = GeometricMG>
 class SystemAssembler {
   static_assert(EllipticSolver<Elliptic>,
-                "le backend elliptique doit modeler EllipticSolver");
+                "the elliptic backend must model EllipticSolver");
 
  public:
-  // bz : champ magnetique hors-plan B_z(x, y) fourni par l'utilisateur (constante ou champ),
-  // partage par TOUS les blocs. Le canal aux PARTAGE est alloue a la largeur MAXIMALE demandee
-  // par les blocs (aux_comps) : un bloc qui lit B_z (n_aux=4) le voit, un bloc de base (3)
-  // ignore la composante. Sans bloc a champ extra, la largeur reste 3 -> allocation et numerique
-  // strictement bit-identiques a l'historique.
+  // bz: out-of-plane magnetic field B_z(x, y) supplied by the user (constant or field),
+  // shared by ALL blocks. The SHARED aux channel is allocated at the MAXIMUM width requested
+  // by the blocks (aux_comps): a block reading B_z (n_aux=4) sees it, a base block (3)
+  // ignores the component. Without an extra-field block the width stays 3 -> allocation and numerics
+  // strictly bit-identical to history.
   SystemAssembler(System system, const Geometry& geom, const BoxArray& ba,
                   const BCRec& bcPhi, RhsAssembler rhs_assembler,
                   std::function<bool(Real, Real)> active = {},
@@ -110,7 +96,7 @@ class SystemAssembler {
         aux_ncomp_(system_aux_comps(system_)),
         aux_(ba, dm_, aux_ncomp_, 1),
         bz_(std::move(bz)) {
-    fill_bz();  // peuple B_z (no-op si aucun bloc ne le demande ou si bz vide)
+    fill_bz();  // populates B_z (no-op if no block requests it or if bz is empty)
   }
 
   System& system() { return system_; }
@@ -122,20 +108,17 @@ class SystemAssembler {
   const BoxArray& ba() const { return ba_; }
   const DistributionMapping& dm() const { return dm_; }
 
-  // Resout le RHS de systeme (Sum_s q_s n_s), Poisson, puis aux = (phi, grad phi).
-  /// Resout le RHS de systeme (Sum_s q_s n_s), le Poisson, puis derive aux = (phi, grad phi). aux()
-  /// est a jour au retour.
+  /// Solves the system RHS (Sum_s q_s n_s), the Poisson, then derives aux = (phi, grad phi). aux()
+  /// is up to date on return.
   void solve_fields() {
     rhs_assembler_(system_, mg_.rhs());
     mg_.solve();
     derive_aux();
   }
 
-  // Residu d'un bloc a un etage : R = -div F + S (+ aux re-resolu si recompute_aux). C'est
-  // l'evaluateur (la fleche methode-des-lignes) que le Driver passe au TimeStepper.
-  /// Residu R = -div F + S d'un bloc a un etage (avec re-resolution des champs si @p recompute_aux).
-  /// C'est la fleche methode-des-lignes que le Driver passe au TimeStepper. Remplit les ghosts de
-  /// @p state selon block.bc avant l'assemblage.
+  /// Residual R = -div F + S of a block at a stage (with field re-solve if @p recompute_aux).
+  /// This is the method-of-lines arrow the Driver passes to the TimeStepper. Fills the ghosts of
+  /// @p state per block.bc before assembly.
   template <class Limiter, class NumericalFlux, class Block>
   void block_residual(Block& block, MultiFab& state, MultiFab& R,
                       bool recompute_aux) {
@@ -157,10 +140,10 @@ class SystemAssembler {
     fill_ghosts(aux_, geom_.domain, aux_bc_);
   }
 
-  // Largeur du canal aux PARTAGE : maximum des aux_comps<Model> sur tous les blocs (au moins
-  // kAuxBaseComps). Le canal partage doit etre au moins aussi large que le bloc le plus exigeant
-  // pour que load_aux<aux_comps<Model>> n'y lise jamais hors borne ; un bloc moins exigeant
-  // ignore simplement les composantes extra.
+  // Width of the SHARED aux channel: maximum of aux_comps<Model> over all blocks (at least
+  // kAuxBaseComps). The shared channel must be at least as wide as the most demanding block
+  // so that load_aux<aux_comps<Model>> never reads out of bounds; a less demanding block
+  // simply ignores the extra components.
   static int system_aux_comps(const System& sys) {
     int w = kAuxBaseComps;
     sys.for_each_block([&](const auto& b) {
@@ -171,15 +154,15 @@ class SystemAssembler {
     return w;
   }
 
-  // Peuple la composante aux B_z (indice kAuxBaseComps) du canal partage depuis bz_(x, y), une
-  // seule fois (B_z statique). No-op si aucun bloc ne declare B_z (largeur 3) ou si bz_ vide :
-  // garde RUNTIME sur aux_ncomp_ (la largeur n'est connue qu'a la construction). Halos ensuite
-  // maintenus par derive_aux (aux_bc_) ; field_postprocess n'ecrit que phi/grad (comp 0..2).
+  // Populates the aux B_z component (index kAuxBaseComps) of the shared channel from bz_(x, y), a
+  // single time (static B_z). No-op if no block declares B_z (width 3) or if bz_ is empty:
+  // RUNTIME guard on aux_ncomp_ (the width is only known at construction). Halos are then
+  // maintained by derive_aux (aux_bc_); field_postprocess only writes phi/grad (comp 0..2).
   void fill_bz() {
     if (!bz_ || aux_ncomp_ <= kAuxBaseComps) return;
     for (int li = 0; li < aux_.local_size(); ++li)
-      detail::fill_bz_box(aux_.fab(li), aux_.box(li), geom_, bz_);  // boite valide
-    fill_ghosts(aux_, geom_.domain, aux_bc_);  // halos de B_z avant le 1er solve
+      detail::fill_bz_box(aux_.fab(li), aux_.box(li), geom_, bz_);  // valid box
+    fill_ghosts(aux_, geom_.domain, aux_bc_);  // B_z halos before the 1st solve
   }
 
   System system_;
@@ -189,21 +172,21 @@ class SystemAssembler {
   DistributionMapping dm_;
   BCRec bcPhi_, aux_bc_;
   Elliptic mg_;
-  int aux_ncomp_;  // largeur du canal aux partage (max des blocs) ; init avant aux_
+  int aux_ncomp_;  // width of the shared aux channel (max over blocks); init before aux_
   MultiFab aux_;
-  std::function<Real(Real, Real)> bz_;  // B_z(x, y) externe (vide si non fourni)
+  std::function<Real(Real, Real)> bz_;  // external B_z(x, y) (empty if not supplied)
 };
 
-// === DRIVER : avance le systeme. Possede un Assembleur, lui delegue les champs. =========
-/// AVANCE le systeme : porte le schedule (sous-cyclage par espece, multirate adaptatif,
-/// implicite/IMEX delegue) et appelle un TimeStepper. POSSEDE un SystemAssembler et lui delegue les
-/// champs. Memes parametres de template que SystemAssembler.
+// === DRIVER: advances the system. Owns an Assembler, delegates the fields to it. =========
+/// ADVANCES the system: carries the schedule (per-species subcycling, adaptive multirate,
+/// implicit/IMEX delegated) and calls a TimeStepper. OWNS a SystemAssembler and delegates the
+/// fields to it. Same template parameters as SystemAssembler.
 template <CoupledSystemLike System, class RhsAssembler,
           class Elliptic = GeometricMG>
 class SystemDriver {
  public:
-  /// Construit le driver (qui construit l'assembleur sous-jacent). @p active : predicat de paroi
-  /// optionnel passe au MG ; @p bz : champ B_z(x, y) optionnel partage par les blocs.
+  /// Builds the driver (which builds the underlying assembler). @p active: optional wall predicate
+  /// passed to the MG; @p bz: optional B_z(x, y) field shared by the blocks.
   SystemDriver(System system, const Geometry& geom, const BoxArray& ba,
                const BCRec& bcPhi, RhsAssembler rhs_assembler,
                std::function<bool(Real, Real)> active = {},
@@ -211,7 +194,7 @@ class SystemDriver {
       : asm_(std::move(system), geom, ba, bcPhi, std::move(rhs_assembler),
              std::move(active), std::move(bz)) {}
 
-  // Acces delegues a l'assembleur (compat avec l'ancienne API SystemCoupler).
+  // Accessors delegated to the assembler (compat with the old SystemCoupler API).
   System& system() { return asm_.system(); }
   const System& system() const { return asm_.system(); }
   MultiFab& phi() { return asm_.phi(); }
@@ -219,34 +202,26 @@ class SystemDriver {
   void solve_fields() { asm_.solve_fields(); }
   SystemAssembler<System, RhsAssembler, Elliptic>& assembler() { return asm_; }
 
-  // Avance les blocs selon leur TimePolicy. Explicites SSPRK2/3 (ou TimeStepper utilisateur)
-  // executes via take_step ; implicites/IMEX delegues au callback (Newton, collisions, ...).
-  // IMEX = vrai forward-backward : transport explicite par le coeur, source au callback.
-  /// Avance les blocs d'un macro-pas dt selon leur TimePolicy : explicites via TimeStepper,
-  /// implicites/IMEX delegues a @p implicit_advance (block, h, s, n). Cadence stride par bloc.
+  /// Advances the blocks by a macro-step dt per their TimePolicy: explicit ones via TimeStepper,
+  /// implicit/IMEX delegated to @p implicit_advance (block, h, s, n). Per-block stride cadence.
   template <class ImplicitAdvance>
   void step(Real dt, ImplicitAdvance&& implicit_advance) {
     ImplicitAdvance& advance_implicit = implicit_advance;
-    // macro_step_ : un bloc de cadence `stride` n'avance qu'1 macro-pas sur stride
-    // (alors d'un pas effectif stride*dt). stride=1 -> chaque pas (historique).
+    // macro_step_: a block of cadence `stride` only advances 1 macro-step out of stride
+    // (then by an effective step stride*dt). stride=1 -> every step (history).
     advance_subcycled(asm_.system(), dt, macro_step_, [&](auto& block, Real h, int s, int n) {
       advance_block_dispatch(block, h, s, n, advance_implicit);
     });
     ++macro_step_;
   }
 
-  // Multirate PLEINEMENT ADAPTATIF (sec.8.2 C) : le pas macro est fixe par l'espece la plus
-  // rapide (CFL), et le `stride` de CHAQUE espece est derive AU RUNTIME du ratio des
-  // vitesses d'onde, stride_s = max(1, floor(w_max / w_s)). Une espece lente (gaz) avance
-  // donc automatiquement moins souvent, par un pas plus grand (stride_s * macro_dt ~ son dt
-  // stable). Retourne le pas macro. (vs `Stride` fixe a la compilation + `step_cfl`.)
-  /// Multirate PLEINEMENT ADAPTATIF : pas macro fixe par l'espece la plus rapide (CFL @p cfl), stride
-  /// de chaque espece derive au RUNTIME du ratio des vitesses d'onde (espece lente avancee moins
-  /// souvent, pas plus grand). Retourne le pas macro. @p implicit_advance traite les blocs implicites/IMEX.
+  /// FULLY ADAPTIVE multirate: macro-step fixed by the fastest species (CFL @p cfl), stride
+  /// of each species derived at RUNTIME from the wave-speed ratio (slow species advanced less
+  /// often, larger step). Returns the macro-step. @p implicit_advance handles implicit/IMEX blocks.
   template <class ImplicitAdvance>
   Real step_adaptive(Real cfl, ImplicitAdvance&& implicit_advance) {
     ImplicitAdvance& advance_implicit = implicit_advance;
-    asm_.solve_fields();  // aux a jour pour les vitesses d'onde
+    asm_.solve_fields();  // aux up to date for the wave speeds
     const Real h = std::min(asm_.geom().dx(), asm_.geom().dy());
     const Real wmax = system_max_wave_speed();
     const Real macro_dt = cfl * h / std::max(wmax, Real(1e-30));
@@ -272,28 +247,23 @@ class SystemDriver {
     return step_adaptive(cfl, [](auto&, auto& block, Real, int, int) {
       using Block = std::decay_t<decltype(block)>;
       static_assert(detail::always_false_v<Block>,
-                    "SystemDriver::step_adaptive(cfl) ne peut pas avancer un bloc "
-                    "implicite/IMEX sans callback");
+                    "SystemDriver::step_adaptive(cfl) cannot advance an "
+                    "implicit/IMEX block without a callback");
     });
   }
 
-  // Surcharge pratique pour un systeme entierement explicite.
+  // Convenience overload for a fully explicit system.
   void step(Real dt) {
     step(dt, [](auto&, auto& block, Real, int, int) {
       using Block = std::decay_t<decltype(block)>;
       static_assert(detail::always_false_v<Block>,
-                    "SystemDriver::step(dt) ne peut pas avancer un bloc "
-                    "implicite/IMEX sans callback");
+                    "SystemDriver::step(dt) cannot advance an "
+                    "implicit/IMEX block without a callback");
     });
   }
 
-  // Pas macro choisi par CFL multi-especes (sec.8.2 C) : dt = cfl * min(dx,dy) / w_max, ou
-  // w_max est la PLUS GRANDE vitesse d'onde sur TOUTES les especes (l'espece la plus rapide
-  // contraint le pas). Combine au `Stride` d'une espece lente (gaz), cela donne le multirate
-  // pratique : pas macro fixe par les rapides, lente avancee 1 fois sur stride. Retourne le
-  // dt utilise. aux est rafraichi avant la mesure (vitesses d'onde dependantes de phi).
-  /// Pas macro choisi par CFL multi-especes : dt = cfl * min(dx, dy) / w_max (w_max = plus grande
-  /// vitesse d'onde sur TOUTES les especes). Rafraichit aux avant la mesure.
+  /// Macro-step chosen by multi-species CFL: dt = cfl * min(dx, dy) / w_max (w_max = largest
+  /// wave speed over ALL species). Refreshes aux before the measurement.
   Real cfl_dt(Real cfl) {
     asm_.solve_fields();
     const Real h = std::min(asm_.geom().dx(), asm_.geom().dy());
@@ -311,21 +281,19 @@ class SystemDriver {
     return dt;
   }
 
-  // Source de couplage inter-especes (splitting forward-Euler) : rafraichit phi (aux) puis
-  // laisse la source lire tous les blocs + aux. Distinct de model.source (local au bloc).
-  /// Applique une source de COUPLAGE inter-especes (splitting forward-Euler) : rafraichit phi (aux)
-  /// puis appelle src.apply(system, aux, dt). Distinct de model.source (local au bloc).
+  /// Applies an inter-species COUPLING source (forward-Euler splitting): refreshes phi (aux)
+  /// then calls src.apply(system, aux, dt). Distinct from model.source (block-local).
   template <class CoupledSource>
   void coupled_source_step(CoupledSource&& src, Real dt) {
     static_assert(CoupledSourceFor<std::decay_t<CoupledSource>, System>,
-                  "coupled_source_step attend une CoupledSource : "
+                  "coupled_source_step expects a CoupledSource: "
                   "apply(system, aux, dt)");
     asm_.solve_fields();
     src.apply(asm_.system(), asm_.aux(), dt);
   }
 
  private:
-  // Plus grande vitesse d'onde sur TOUTES les especes (aux suppose a jour). Fixe le pas CFL.
+  // Largest wave speed over ALL species (aux assumed up to date). Fixes the CFL step.
   Real system_max_wave_speed() {
     Real wmax = 0;
     asm_.system().for_each_block([&](auto& block) {
@@ -334,10 +302,10 @@ class SystemDriver {
     return wmax;
   }
 
-  // Dispatch d'un (sous-)pas pour UN bloc, selon son traitement. Partage par step (cadence
-  // compile-time) et step_adaptive (cadence CFL runtime) : pas de duplication.
-  //   Explicite : avance via TimeStepper. Implicite/IMEX : re-resout les champs, (IMEX)
-  //   transport explicite, puis source implicite par le callback.
+  // Dispatch of a (sub-)step for ONE block, per its treatment. Shared by step (compile-time
+  // cadence) and step_adaptive (runtime CFL cadence): no duplication.
+  //   Explicit: advance via TimeStepper. Implicit/IMEX: re-solve the fields, (IMEX)
+  //   explicit transport, then implicit source via the callback.
   template <class Block, class ImplicitAdvance>
   void advance_block_dispatch(Block& block, Real h, int s, int n,
                               ImplicitAdvance& advance_implicit) {
@@ -352,8 +320,8 @@ class SystemDriver {
     }
   }
 
-  // Avance explicite d'un bloc : DELEGUE le schema a un objet TimeStepper (SSPRK2/3 du coeur
-  // ou integrateur utilisateur), en lui passant l'evaluateur de residu de l'assembleur.
+  // Explicit advance of a block: DELEGATES the scheme to a TimeStepper object (core SSPRK2/3
+  // or user integrator), passing it the assembler's residual evaluator.
   template <class Block>
   void advance_explicit_block(Block& block, Real dt) {
     using Time = TimePolicyTraits<typename Block::Time>;
@@ -361,7 +329,7 @@ class SystemDriver {
     using Limiter = typename Block::Spatial::Limiter;
     using NumericalFlux = typename Block::Spatial::NumericalFlux;
     static_assert(Time::treatment == TimeTreatment::Explicit,
-                  "advance_explicit_block attend un bloc explicite");
+                  "advance_explicit_block expects an explicit block");
 
     auto rhs_eval = [&](MultiFab& stage, MultiFab& R) {
       asm_.template block_residual<Limiter, NumericalFlux>(block, stage, R,
@@ -375,12 +343,12 @@ class SystemDriver {
       Method{}.take_step(rhs_eval, block.U(), dt);
     else
       static_assert(detail::always_false_v<Method>,
-                    "Method explicite doit etre SSPRK2, SSPRK3, ou un TimeStepper "
-                    "(objet a take_step(rhs_eval, U, dt)) fourni par l'utilisateur");
+                    "explicit Method must be SSPRK2, SSPRK3, or a TimeStepper "
+                    "(object with take_step(rhs_eval, U, dt)) supplied by the user");
   }
 
-  // Demi-pas EXPLICITE d'un bloc IMEX : transport seul (-div F, source-free), Euler avant.
-  // La source raide est traitee separement en implicite par le callback. aux suppose a jour.
+  // EXPLICIT half-step of an IMEX block: transport only (-div F, source-free), forward Euler.
+  // The stiff source is handled separately in implicit form by the callback. aux assumed up to date.
   template <class Block>
   void explicit_transport(Block& block, Real dt) {
     using Model = typename Block::Model;
@@ -394,11 +362,11 @@ class SystemDriver {
   }
 
   SystemAssembler<System, RhsAssembler, Elliptic> asm_;
-  int macro_step_ = 0;  // compteur de macro-pas (cadence stride par bloc)
+  int macro_step_ = 0;  // macro-step counter (per-block stride cadence)
 };
 
-// Compat / nommage historique : SystemCoupler == le Driver (qui avance). On garde l'alias
-// SystemCoupler (tests, facade MultiSpeciesSolver) ET SystemDriver (le nom "qui avance").
+// Compat / historical naming: SystemCoupler == the Driver (which advances). We keep the alias
+// SystemCoupler (tests, MultiSpeciesSolver facade) AND SystemDriver (the "advances" name).
 template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>
 using SystemCoupler = SystemDriver<System, RhsAssembler, Elliptic>;
 

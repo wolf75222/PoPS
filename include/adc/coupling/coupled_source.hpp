@@ -1,13 +1,13 @@
 /// @file
-/// @brief CoupledSourceFor / NoCoupledSource : contrat d'une source de COUPLAGE inter-especes.
+/// @brief CoupledSourceFor / NoCoupledSource: contract of an inter-species COUPLING source.
 ///
-/// model.source(U, aux) est PUREMENT LOCALE (etat du seul bloc). Un plasma multi-especes echange
-/// entre especes (collisions, transfert de charge, friction) : S_e depend de U_i, etc. Ce terme ne
-/// rentre PAS dans le PhysicalModel local : c'est une responsabilite du niveau systeme. Une
-/// CoupledSource lit l'etat de PLUSIEURS blocs (+ aux = phi, grad phi) et met a jour les blocs sur un
-/// pas dt, via le contrat minimal apply(system, aux, dt). Le squelette l'applique par splitting
-/// (forward-Euler additif, SystemCoupler::coupled_source_step). Les sources concretes vivent dans
-/// adc_cases / les tests (le coeur reste zero-modele).
+/// model.source(U, aux) is PURELY LOCAL (state of a single block only). A multi-species plasma exchanges
+/// between species (collisions, charge transfer, friction): S_e depends on U_i, etc. This term does NOT
+/// belong in the local PhysicalModel: it is a system-level responsibility. A CoupledSource reads the state
+/// of MULTIPLE blocks (+ aux = phi, grad phi) and updates the blocks over a step dt, via the minimal
+/// contract apply(system, aux, dt). The skeleton applies it by splitting (additive forward-Euler,
+/// SystemCoupler::coupled_source_step). The concrete sources live in adc_cases / the tests (the core stays
+/// model-free).
 
 #pragma once
 
@@ -15,29 +15,11 @@
 #include <adc/core/types.hpp>
 #include <adc/mesh/multifab.hpp>
 
-// Source de COUPLAGE inter-especes.
-//
-// model.source(U, aux) est PUREMENT LOCALE : elle ne voit que l'etat du bloc ou
-// elle vit. Or un plasma multi-especes echange entre especes (collisions,
-// transfert de charge, friction, echange q/m) : S_e depend de U_i, S_i depend de
-// U_e, et les deux peuvent dependre de phi (via aux). Ce terme ne rentre PAS dans
-// le PhysicalModel local ; c'est une responsabilite du niveau systeme.
-//
-// Une CoupledSource lit l'etat de PLUSIEURS blocs (+ aux = phi, grad phi) et met a
-// jour les blocs sur un pas dt. Le squelette l'applique par splitting (un pas
-// additif forward-Euler, via SystemCoupler::coupled_source_step) : c'est le point
-// de branchement ou viendront ensuite les sources raides traitees implicitement
-// (cf. time/implicit_stepper.hpp) sans changer le contrat.
-//
-// Le contrat est volontairement minimal : `apply(system, aux, dt)`. Les sources
-// concretes (echange lineaire, collisions, ...) vivent dans adc_cases / les tests,
-// pas dans le coeur (qui reste zero-modele).
-
 namespace adc {
 
-// Contrat d'une source de couplage pour un systeme donne.
-/// Concept : C est une source de couplage valide pour System si System est un CoupledSystem et si C
-/// expose apply(System&, const MultiFab& aux, Real dt) (met a jour les blocs sur le pas dt).
+// Contract of a coupling source for a given system.
+/// Concept: C is a valid coupling source for System if System is a CoupledSystem and if C
+/// exposes apply(System&, const MultiFab& aux, Real dt) (updates the blocks over the step dt).
 template <class C, class System>
 concept CoupledSourceFor =
     CoupledSystemLike<System> &&
@@ -45,10 +27,10 @@ concept CoupledSourceFor =
       c.apply(s, aux, dt);
     };
 
-// Defaut : aucune source de couplage. Cas mono-espece, ou couplage assure
-// uniquement par Poisson (le champ). No-op, aucun cout.
-/// Source de couplage NULLE (defaut) : apply() est un no-op. Cas mono-espece ou couplage assure
-/// uniquement par le champ (Poisson). Aucun cout.
+// Default: no coupling source. Single-species case, or coupling provided
+// solely by Poisson (the field). No-op, zero cost.
+/// NULL coupling source (default): apply() is a no-op. Single-species case or coupling provided
+/// solely by the field (Poisson). Zero cost.
 struct NoCoupledSource {
   template <CoupledSystemLike System>
   void apply(System&, const MultiFab&, Real) const {}

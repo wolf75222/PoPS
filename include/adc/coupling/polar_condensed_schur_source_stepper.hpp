@@ -8,112 +8,112 @@
 #include <adc/mesh/multifab.hpp>
 #include <adc/mesh/physical_bc.hpp>
 #include <adc/numerics/elliptic/polar_tensor_operator.hpp>  // PolarTensorKrylovSolver, apply_polar_tensor (#210)
-#include <adc/numerics/lorentz_eliminator.hpp>               // B^{-1} ferme (#118)
+#include <adc/numerics/lorentz_eliminator.hpp>               // B^{-1} closed form (#118)
 #include <adc/parallel/comm.hpp>
 
 #include <stdexcept>
 
 /// @file
-/// @brief PolarCondensedSchurSourceStepper : ETAGE SOURCE condense par Schur en geometrie POLAIRE
-///        (anneau (r, theta)). Pendant POLAIRE du CondensedSchurSourceStepper cartesien (#126,
-///        condensed_schur_source_stepper.hpp), pour la source implicite couplee potentiel / vitesse /
-///        Lorentz (Hoffart et al., arXiv:2510.11808) d'un fluide magnetise RAIDE sur un maillage
-///        annulaire. C'est un etage SOURCE AUTONOME (transport gele). CABLE dans la facade depuis la
-///        Voie A etape 2c : System::set_source_stage le construit quand la geometrie est polaire et
-///        SystemStepper::run_source_stage l'invoque apres le transport (cf. python/system.cpp) --
-///        l'ancienne mention "ne se branche pas" etait perimee (audit 2026-06).
+/// @brief PolarCondensedSchurSourceStepper: SOURCE STAGE condensed by Schur in POLAR geometry
+///        (ring (r, theta)). POLAR counterpart of the Cartesian CondensedSchurSourceStepper (#126,
+///        condensed_schur_source_stepper.hpp), for the implicit source coupling potential / velocity /
+///        Lorentz (Hoffart et al., arXiv:2510.11808) of a STIFF magnetized fluid on a ring mesh.
+///        It is a STANDALONE SOURCE stage (transport frozen). WIRED into the facade since
+///        Path A step 2c: System::set_source_stage builds it when the geometry is polar and
+///        SystemStepper::run_source_stage invokes it after transport (cf. python/system.cpp) --
+///        the old "does not get wired in" mention was stale (audit 2026-06).
 ///
-/// CHEMIN SEPARE, additif (Voie A etape 2b). Le Schur CARTESIEN reste BIT-IDENTIQUE
-/// (condensed_schur_source_stepper.hpp INTOUCHE) ; ce header ne touche aucun chemin existant. Il COMPOSE
-/// les briques deja sur master :
-///   - PolarTensorKrylovSolver (polar_tensor_operator.hpp, #210) : BiCGStab matrice-libre pour
-///     L_int(phi) = div(A grad phi) en METRIQUE POLAIRE, tenseur PLEIN A = [[a_rr, a_rt], [a_tr, a_tt]]
-///     non symetrique (preconditionneur RadialLine) ;
-///   - LorentzEliminator (lorentz_eliminator.hpp, #118) : B^{-1} ferme (rotation-dilatation 2x2).
+/// SEPARATE, ADDITIVE PATH (Path A step 2b). The CARTESIAN Schur stays BIT-IDENTICAL
+/// (condensed_schur_source_stepper.hpp UNTOUCHED); this header touches no existing path. It COMPOSES
+/// the bricks already on master:
+///   - PolarTensorKrylovSolver (polar_tensor_operator.hpp, #210): matrix-free BiCGStab for
+///     L_int(phi) = div(A grad phi) in POLAR METRIC, FULL non-symmetric tensor A = [[a_rr, a_rt], [a_tr, a_tt]]
+///     (RadialLine preconditioner);
+///   - LorentzEliminator (lorentz_eliminator.hpp, #118): B^{-1} closed form (2x2 rotation-dilation).
 ///
-/// POURQUOI LE MEME B^{-1} 2x2 QU'EN CARTESIEN. La vitesse polaire (v_r, v_theta) est exprimee dans le
-/// repere LOCAL ORTHONORME (e_r, e_theta). Le champ magnetique est porte par z (B = B_z z_hat,
-/// orthogonal au plan (r, theta)). La force de Lorentz v x B est une ROTATION dans le plan, INDEPENDANTE
-/// de l'orientation du repere orthonorme local : (v x B)_r = +B_z v_theta, (v x B)_theta = -B_z v_r,
-/// exactement la forme cartesienne (v x B)_x = +B_z v_y, (v x B)_y = -B_z v_x. Donc le MEME
-/// LorentzEliminator s'applique a (v_r, v_theta), et le tenseur condense A = I + c rho B^{-1} (c =
-/// theta^2 dt^2 alpha) a les memes entrees, simplement RE-ETIQUETEES (x -> r, y -> theta) :
+/// WHY THE SAME 2x2 B^{-1} AS IN CARTESIAN. The polar velocity (v_r, v_theta) is expressed in the
+/// LOCAL ORTHONORMAL frame (e_r, e_theta). The magnetic field is carried by z (B = B_z z_hat,
+/// orthogonal to the (r, theta) plane). The Lorentz force v x B is a ROTATION in the plane, INDEPENDENT
+/// of the orientation of the local orthonormal frame: (v x B)_r = +B_z v_theta, (v x B)_theta = -B_z v_r,
+/// exactly the Cartesian form (v x B)_x = +B_z v_y, (v x B)_y = -B_z v_x. Thus the SAME
+/// LorentzEliminator applies to (v_r, v_theta), and the condensed tensor A = I + c rho B^{-1} (c =
+/// theta^2 dt^2 alpha) has the same entries, simply RE-LABELED (x -> r, y -> theta):
 ///   a_rr = 1 + c rho binv_11      a_rt = c rho binv_12
 ///   a_tr = c rho binv_21          a_tt = 1 + c rho binv_22
-/// avec B^{-1} = (1/det)[[1, w], [-w, 1]], w = theta dt B_z, det = 1 + w^2. C'est EXACTEMENT le tenseur
-/// plein non symetrique que PolarTensorKrylovSolver (#210) accepte : le terme croise a_rt/a_tr EST la
-/// rotation de Lorentz. La METRIQUE POLAIRE (1/r, 1/r^2) est portee par l'operateur du solveur ; le
-/// stepper n'assemble QUE les coefficients AU CENTRE et le second membre.
+/// with B^{-1} = (1/det)[[1, w], [-w, 1]], w = theta dt B_z, det = 1 + w^2. This is EXACTLY the FULL
+/// non-symmetric tensor that PolarTensorKrylovSolver (#210) accepts: the cross term a_rt/a_tr IS the
+/// Lorentz rotation. The POLAR METRIC (1/r, 1/r^2) is carried by the solver operator; the
+/// stepper only assembles the cell-centered coefficients and the right-hand side.
 ///
-/// SEQUENCE (une fois par etage source), pendant polaire de docs/SCHUR_CONDENSATION_DESIGN.md niveau 4 :
-///   1. ASSEMBLER A = I + c rho^n B^{-1} (4 champs de coefficient au centre) et le second membre
-///      condense rhs_polar = Lap_polar phi^n + theta dt alpha div_polar(rho^n B^{-1} v^n)            ;
-///   2. RESOUDRE L_int(phi) = div(A grad phi) = rhs_polar via PolarTensorKrylovSolver                ;
-///   3. RECONSTRUIRE v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi^{n+theta}), mom = rho^n v    ;
-///   4. ENERGIE (si role Energy) : E^{n+1} = E^n + (1/2) rho (|v^{n+1}|^2 - |v^n|^2)                 ;
-///   5. EXTRAPOLER U^{n+theta} -> U^{n+1} : f^{n+1} = f^n + (1/theta)(f^{n+theta} - f^n)             ;
-///   6. REMPLIR les ghosts (theta periodique, r physique) avant de rendre la main.
+/// SEQUENCE (once per source stage), polar counterpart of docs/SCHUR_CONDENSATION_DESIGN.md level 4:
+///   1. ASSEMBLE A = I + c rho^n B^{-1} (4 cell-centered coefficient fields) and the condensed
+///      right-hand side rhs_polar = Lap_polar phi^n + theta dt alpha div_polar(rho^n B^{-1} v^n);
+///   2. SOLVE L_int(phi) = div(A grad phi) = rhs_polar via PolarTensorKrylovSolver;
+///   3. RECONSTRUCT v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi^{n+theta}), mom = rho^n v;
+///   4. ENERGY (if Energy role): E^{n+1} = E^n + (1/2) rho (|v^{n+1}|^2 - |v^n|^2);
+///   5. EXTRAPOLATE U^{n+theta} -> U^{n+1}: f^{n+1} = f^n + (1/theta)(f^{n+theta} - f^n);
+///   6. FILL the ghosts (theta periodic, r physical) before returning.
 ///
-/// CONVENTION DE SIGNE DU SOLVE (a lire avant toute modification). Le batisseur cartesien (#124) ecrit
-///   l'etage L_schur(phi) = rhs_schur avec L_schur(phi) = -div(A grad phi), et
+/// SOLVE SIGN CONVENTION (read before any modification). The Cartesian builder (#124) writes
+///   the stage L_schur(phi) = rhs_schur with L_schur(phi) = -div(A grad phi), and
 ///       rhs_schur = -Lap phi^n - theta dt alpha div(rho B^{-1} v^n).
-///   Le PolarTensorKrylovSolver (#210), lui, resout L_int(phi) = +div(A grad phi) = rhs (signe POSITIF,
-///   cf. test_polar_tensor_elliptic_mms : le RHS y vaut directement f = div(A grad phi_exact)). On a
-///   L_schur = -L_int, donc resoudre L_schur(phi) = rhs_schur revient a resoudre L_int(phi) = -rhs_schur.
-///   Le second membre POLAIRE fourni au solveur est donc -rhs_schur :
+///   The PolarTensorKrylovSolver (#210) solves L_int(phi) = +div(A grad phi) = rhs (POSITIVE sign,
+///   cf. test_polar_tensor_elliptic_mms: the RHS there equals directly f = div(A grad phi_exact)). We have
+///   L_schur = -L_int, so solving L_schur(phi) = rhs_schur amounts to solving L_int(phi) = -rhs_schur.
+///   The POLAR right-hand side fed to the solver is therefore -rhs_schur:
 ///       rhs_polar = -rhs_schur = +Lap_polar phi^n + theta dt alpha div_polar(rho B^{-1} v^n).
-///   Garde-fou : c = 0 et B_z = 0 -> A = I, le solve devient Lap_polar phi^{n+theta} = Lap_polar phi^n
-///   -> phi^{n+theta} = phi^n (a la jauge pres), et la reconstruction degenere en la poussee
-///   electrostatique explicite v^{n+theta} = v^n - theta dt grad_polar phi^n (cas B = 0).
+///   Safeguard: c = 0 and B_z = 0 -> A = I, the solve becomes Lap_polar phi^{n+theta} = Lap_polar phi^n
+///   -> phi^{n+theta} = phi^n (up to the gauge), and the reconstruction degenerates to the explicit
+///   electrostatic push v^{n+theta} = v^n - theta dt grad_polar phi^n (case B = 0).
 ///
-/// DISCRETISATION DU SECOND MEMBRE (coherente avec l'operateur polaire #210 et assemble_rhs_polar).
-///   - Lap_polar phi^n : applique apply_polar_tensor avec A = I (coefficients a 1) = (1/r) d_r(r d_r phi)
-///     + (1/r^2) d_theta^2 phi, stencil FV conservatif radial + FD azimutal 2 points (le MEME que
-///     l'operateur du solve, garantissant la degenerescence exacte en c=0,B_z=0).
-///   - div_polar(F), F = rho B^{-1} v^n = B^{-1}(mr, mtheta) au centre : divergence polaire FV centree
-///       div F (i,j) = (1/r_i) (r_{i+1/2} - r_{i-1/2} repartis par diff centree) ... discretisee par
-///       div F = (1/r_i)(d_r(r F_r))_centre + (1/r_i) (d_theta F_theta)_centre, soit
+/// RIGHT-HAND SIDE DISCRETIZATION (consistent with the polar operator #210 and assemble_rhs_polar).
+///   - Lap_polar phi^n: applies apply_polar_tensor with A = I (coefficients at 1) = (1/r) d_r(r d_r phi)
+///     + (1/r^2) d_theta^2 phi, conservative radial FV stencil + 2-point azimuthal FD (the SAME as
+///     the solve operator, guaranteeing the exact degeneracy at c=0, B_z=0).
+///   - div_polar(F), F = rho B^{-1} v^n = B^{-1}(mr, mtheta) at the center: centered FV polar divergence
+///       div F (i,j) = (1/r_i) (r_{i+1/2} - r_{i-1/2} spread by centered difference) ... discretized by
+///       div F = (1/r_i)(d_r(r F_r))_center + (1/r_i) (d_theta F_theta)_center, that is
 ///       div F = (1/r_i) [ (r_{i+1} F_r(i+1) - r_{i-1} F_r(i-1)) / (2 dr) + (F_th(i,j+1) - F_th(i,j-1)) / (2 dtheta) ].
-///     Centree d'ordre 2 (pendant polaire de la divergence centree cartesienne du batisseur #124).
+///     Centered, second order (polar counterpart of the Cartesian centered divergence of builder #124).
 ///
-/// GRADIENT POLAIRE (reconstruction). grad_polar phi = (d_r phi, (1/r) d_theta phi), differences CENTREES :
+/// POLAR GRADIENT (reconstruction). grad_polar phi = (d_r phi, (1/r) d_theta phi), CENTERED differences:
 ///       (grad phi)_r     = (phi(i+1,j) - phi(i-1,j)) / (2 dr)
 ///       (grad phi)_theta = (phi(i,j+1) - phi(i,j-1)) / (2 r_i dtheta).
-///   Memes differences centrees que la divergence du RHS (coherence terme a terme a la precision du
-///   solve, comme le SchurReconstructKernel cartesien utilise grad centre).
+///   Same centered differences as the RHS divergence (term-by-term consistency at solve precision,
+///   as the Cartesian SchurReconstructKernel uses a centered gradient).
 ///
-/// PORTEE : MULTI-RANG MPI ET MULTI-BOX (plusieurs boites PAR RANG) par decoupage AZIMUTAL (theta seul),
-///   comme PolarTensorKrylovSolver (#210). Le corps de step() itere deja sur local_size() partout et
-///   passe par fill_ghosts (echange de halos MPI + CL physique, COINS DIAGONAUX inclus pour les termes
-///   croises du stencil a 9 points) pour tous les champs (bz_/a_rr_/a_tt_/a_rt_/a_tr_/fr_/ft_/phi/state)
-///   : il est structurellement distribue et multi-box. Le solve elliptique (PolarTensorKrylovSolver)
-///   supporte le multi-rang ET le multi-box sous la contrainte de decoupage theta (chaque box couvre la
-///   plage radiale complete pour le preconditionneur RadialLine ; le garde-fou check_radial_columns du
-///   solveur l'impose -- repli Jacobi sans contrainte pour un pavage 2D coupant r). Mono-rang / boite
-///   unique : chemin BIT-IDENTIQUE. Validation multi-box : test_polar_schur_multibox (parite multi-box
-///   vs mono-box bit-proche, termes croises ET pavage 2D Jacobi). Device : tous les kernels du chemin
-///   sont des foncteurs NOMMES device-clean (recette #93) ; validation GH200 = ci-full.
+/// SCOPE: MULTI-RANK MPI AND MULTI-BOX (several boxes PER RANK) by AZIMUTHAL split (theta only),
+///   like PolarTensorKrylovSolver (#210). The body of step() already iterates over local_size() everywhere and
+///   goes through fill_ghosts (MPI halo exchange + physical BC, DIAGONAL CORNERS included for the cross
+///   terms of the 9-point stencil) for all fields (bz_/a_rr_/a_tt_/a_rt_/a_tr_/fr_/ft_/phi/state)
+///   : it is structurally distributed and multi-box. The elliptic solve (PolarTensorKrylovSolver)
+///   supports multi-rank AND multi-box under the theta-split constraint (each box covers the full
+///   radial range for the RadialLine preconditioner; the solver safeguard check_radial_columns
+///   enforces it -- Jacobi fallback without constraint for a 2D tiling that cuts r). Single-rank / single
+///   box: BIT-IDENTICAL path. Multi-box validation: test_polar_schur_multibox (multi-box vs mono-box parity
+///   bit-close, cross terms AND 2D Jacobi tiling). Device: all kernels of the path
+///   are NAMED device-clean functors (recipe #93); GH200 validation = ci-full.
 ///
-/// DEVICE. Tous les kernels sont des FONCTEURS NOMMES device-clean (recette #93 : pas de lambda etendue
-///   premiere-instanciee cross-TU, limite nvcc #64/#97). Les tampons sont ALLOUES UNE FOIS a la
-///   construction et REUTILISES a chaque step(). Le solveur de Krylov est cree par appel (tampons fixes).
+/// DEVICE. All kernels are NAMED device-clean FUNCTORS (recipe #93: no extended lambda
+///   first-instantiated cross-TU, nvcc limit #64/#97). The buffers are ALLOCATED ONCE at
+///   construction and REUSED on each step(). The Krylov solver is created per call (fixed buffers).
 
 namespace adc {
 
 namespace detail {
 
-/// Coefficients du tenseur condense POLAIRE A = I + c rho B^{-1} au centre des cellules. Re-etiquetage
-/// polaire des coefficients cartesiens (#124, SchurOperatorCoeffKernel) : x -> r, y -> theta. Le MEME
-/// B^{-1} 2x2 (rotation de Lorentz) car la force v x B est independante de l'orientation du repere
-/// orthonorme local (cf. entete). Foncteur NOMME device-clean.
+/// POLAR condensed tensor coefficients A = I + c rho B^{-1} at cell centers. Polar re-labeling
+/// of the Cartesian coefficients (#124, SchurOperatorCoeffKernel): x -> r, y -> theta. The SAME
+/// 2x2 B^{-1} (Lorentz rotation) because the force v x B is independent of the orientation of the local
+/// orthonormal frame (cf. header). NAMED device-clean functor.
 struct PolarSchurOperatorCoeffKernel {
-  ConstArray4 s;     ///< etat fluide (lecture rho)
-  ConstArray4 bz;    ///< champ B_z au centre
-  Array4 arr, att;   ///< sortie : a_rr, a_tt (diagonale de A)
-  Array4 art, atr;   ///< sortie : termes croises a_rt, a_tr
+  ConstArray4 s;     ///< fluid state (read rho)
+  ConstArray4 bz;    ///< B_z field at the center
+  Array4 arr, att;   ///< output: a_rr, a_tt (diagonal of A)
+  Array4 art, atr;   ///< output: cross terms a_rt, a_tr
   Real c;            ///< c = theta^2 dt^2 alpha
-  Real th_dt;        ///< theta * dt (w = th_dt * B_z, binv ne depend que de w)
-  int c_rho;         ///< composante Density
+  Real th_dt;        ///< theta * dt (w = th_dt * B_z, binv depends only on w)
+  int c_rho;         ///< Density component
   ADC_HD void operator()(int i, int j) const {
     const Real rho = s(i, j, c_rho);
     const LorentzEliminator le(th_dt, Real(1), bz(i, j, 0));  // w = th_dt * B_z
@@ -125,15 +125,15 @@ struct PolarSchurOperatorCoeffKernel {
   }
 };
 
-/// Flux EXPLICITE F = rho B^{-1} v^n = B^{-1}(mr, mtheta) au centre (composantes physiques (e_r,
-/// e_theta)). On applique B^{-1} DIRECTEMENT a la quantite de mouvement (evite la division par rho).
-/// Foncteur NOMME device-clean. Re-etiquetage polaire de SchurExplicitFluxKernel (#124).
+/// EXPLICIT flux F = rho B^{-1} v^n = B^{-1}(mr, mtheta) at the center (physical components (e_r,
+/// e_theta)). We apply B^{-1} DIRECTLY to the momentum (avoids the division by rho).
+/// NAMED device-clean functor. Polar re-labeling of SchurExplicitFluxKernel (#124).
 struct PolarSchurExplicitFluxKernel {
-  ConstArray4 s;     ///< etat fluide (mr, mtheta lus aux composantes c_mx, c_my)
-  ConstArray4 bz;    ///< champ B_z au centre
-  Array4 fr, ft;     ///< sortie : F_r, F_theta = B^{-1}(mr, mtheta)
+  ConstArray4 s;     ///< fluid state (mr, mtheta read at components c_mx, c_my)
+  ConstArray4 bz;    ///< B_z field at the center
+  Array4 fr, ft;     ///< output: F_r, F_theta = B^{-1}(mr, mtheta)
   Real th_dt;        ///< theta * dt (w = th_dt * B_z)
-  int c_mx, c_my;    ///< composantes MomentumX (= radiale), MomentumY (= azimutale)
+  int c_mx, c_my;    ///< MomentumX (= radial), MomentumY (= azimuthal) components
   ADC_HD void operator()(int i, int j) const {
     const LorentzEliminator le(th_dt, Real(1), bz(i, j, 0));
     Real Fr, Ft;
@@ -143,44 +143,44 @@ struct PolarSchurExplicitFluxKernel {
   }
 };
 
-/// rhs_polar(i,j) = lap_polar(i,j) (= Lap_polar phi^n) + g * div_polar F, divergence POLAIRE centree
-/// d'ordre 2 d'un champ vecteur F = (F_r, F_theta) au centre (ghosts remplis). g = theta dt alpha.
+/// rhs_polar(i,j) = lap_polar(i,j) (= Lap_polar phi^n) + g * div_polar F, second-order centered POLAR
+/// divergence of a vector field F = (F_r, F_theta) at the center (ghosts filled). g = theta dt alpha.
 ///   div_polar F = (1/r_i) [ (r_{i+1} F_r(i+1) - r_{i-1} F_r(i-1)) / (2 dr)
 ///                          + (F_th(i,j+1) - F_th(i,j-1)) / (2 dtheta) ].
-/// Le signe POSITIF de div (et de lap) est l'opposee de la convention schur cartesienne : on resout
-/// L_int = +div(A grad phi) = rhs_polar = -rhs_schur (cf. entete, convention de signe). Foncteur NOMME.
+/// The POSITIVE sign of div (and of lap) is the opposite of the Cartesian schur convention: we solve
+/// L_int = +div(A grad phi) = rhs_polar = -rhs_schur (cf. header, sign convention). NAMED functor.
 struct PolarSchurRhsAssembleKernel {
-  ConstArray4 lap;      ///< Lap_polar phi^n (signe positif, A=I)
-  ConstArray4 fr, ft;   ///< flux F au centre (ghosts remplis)
-  Array4 rhs;           ///< sortie : second membre condense (signe L_int)
+  ConstArray4 lap;      ///< Lap_polar phi^n (positive sign, A=I)
+  ConstArray4 fr, ft;   ///< flux F at the center (ghosts filled)
+  Array4 rhs;           ///< output: condensed right-hand side (L_int sign)
   Real g;               ///< theta dt alpha
   Real half_idr, half_idth;  ///< 1/(2 dr), 1/(2 dtheta)
-  Real r_min, dr;       ///< pour r_cell(i), r_cell(i+-1)
+  Real r_min, dr;       ///< for r_cell(i), r_cell(i+-1)
   ADC_HD void operator()(int i, int j) const {
     const Real ri = r_min + (i + Real(0.5)) * dr;
     const Real rip = r_min + (i + Real(1.5)) * dr;  // r_cell(i+1)
     const Real rim = r_min + (i - Real(0.5)) * dr;  // r_cell(i-1)
     const Real inv_r = Real(1) / ri;
-    const Real div_r = (rip * fr(i + 1, j, 0) - rim * fr(i - 1, j, 0)) * half_idr;  // d_r(r F_r) centre
-    const Real div_t = (ft(i, j + 1, 0) - ft(i, j - 1, 0)) * half_idth;             // d_theta(F_th) centre
+    const Real div_r = (rip * fr(i + 1, j, 0) - rim * fr(i - 1, j, 0)) * half_idr;  // d_r(r F_r) centered
+    const Real div_t = (ft(i, j + 1, 0) - ft(i, j - 1, 0)) * half_idth;             // d_theta(F_th) centered
     const Real divF = inv_r * (div_r + div_t);
     rhs(i, j, 0) = lap(i, j, 0) + g * divF;
   }
 };
 
-/// Reconstruit v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi^{n+theta}) et ecrit mom = rho^n
-/// v^{n+theta}. grad_polar phi est la difference CENTREE : (d_r phi, (1/r) d_theta phi). rho lu dans
-/// l'etat (role Density), GELE. Foncteur NOMME device-clean. Pendant polaire de SchurReconstructKernel.
+/// Reconstructs v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi^{n+theta}) and writes mom = rho^n
+/// v^{n+theta}. grad_polar phi is the CENTERED difference: (d_r phi, (1/r) d_theta phi). rho read from
+/// the state (Density role), FROZEN. NAMED device-clean functor. Polar counterpart of SchurReconstructKernel.
 struct PolarSchurReconstructKernel {
-  ConstArray4 phi;     ///< phi^{n+theta} (ghosts remplis : grad centre lit i+-1, j+-1)
-  ConstArray4 vr, vt;  ///< v^n (composantes 0 : vitesse, PAS quantite de mouvement)
-  ConstArray4 bz;      ///< champ B_z au centre
-  Array4 st;           ///< etat fluide (ECRITURE de mr, mtheta ; LECTURE de rho)
-  Array4 nvr, nvt;     ///< sortie : v^{n+theta} (composante 0) pour l'energie / le diagnostic
-  Real th_dt;          ///< theta * dt (w = th_dt * B_z, et facteur du gradient)
+  ConstArray4 phi;     ///< phi^{n+theta} (ghosts filled: centered grad reads i+-1, j+-1)
+  ConstArray4 vr, vt;  ///< v^n (components 0: velocity, NOT momentum)
+  ConstArray4 bz;      ///< B_z field at the center
+  Array4 st;           ///< fluid state (WRITE mr, mtheta; READ rho)
+  Array4 nvr, nvt;     ///< output: v^{n+theta} (component 0) for the energy / the diagnostic
+  Real th_dt;          ///< theta * dt (w = th_dt * B_z, and gradient factor)
   Real half_idr, half_idth;  ///< 1/(2 dr), 1/(2 dtheta)
-  Real r_min, dr;      ///< pour r_cell(i) (metrique azimutale 1/r)
-  int c_rho, c_mx, c_my;     ///< composantes Density / MomentumX (radial) / MomentumY (azimutal)
+  Real r_min, dr;      ///< for r_cell(i) (azimuthal metric 1/r)
+  int c_rho, c_mx, c_my;     ///< Density / MomentumX (radial) / MomentumY (azimuthal) components
   ADC_HD void operator()(int i, int j) const {
     const Real ri = r_min + (i + Real(0.5)) * dr;
     const Real gr = (phi(i + 1, j, 0) - phi(i - 1, j, 0)) * half_idr;             // d_r phi
@@ -192,30 +192,30 @@ struct PolarSchurReconstructKernel {
     le.apply_Binv(rhsr, rhst, nr, nt);  // v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi)
     nvr(i, j, 0) = nr;
     nvt(i, j, 0) = nt;
-    const Real rho = st(i, j, c_rho);   // rho^n (gele dans la source)
+    const Real rho = st(i, j, c_rho);   // rho^n (frozen in the source)
     st(i, j, c_mx) = rho * nr;          // mom^{n+theta} = rho^n v^{n+theta}
     st(i, j, c_my) = rho * nt;
   }
 };
 
-/// Extrapolation lineaire d'un champ SCALAIRE du theta-stage au pas plein : f^{n+1} = f^n + (1/theta)
-/// (f^{n+theta} - f^n). theta = 1 -> identite. Foncteur NOMME device-clean. (Local au header polaire
-/// pour ne pas dependre du chemin cartesien.)
+/// Linear extrapolation of a SCALAR field from the theta-stage to the full step: f^{n+1} = f^n + (1/theta)
+/// (f^{n+theta} - f^n). theta = 1 -> identity. NAMED device-clean functor. (Local to the polar header
+/// so as not to depend on the Cartesian path.)
 struct PolarSchurExtrapolateScalarKernel {
   ConstArray4 f_n;     ///< f^n
-  Array4 f;            ///< IN: f^{n+theta} ; OUT: f^{n+1}
+  Array4 f;            ///< IN: f^{n+theta}; OUT: f^{n+1}
   Real inv_theta;      ///< 1 / theta
   ADC_HD void operator()(int i, int j) const {
     f(i, j, 0) = f_n(i, j, 0) + inv_theta * (f(i, j, 0) - f_n(i, j, 0));
   }
 };
 
-/// Extrapolation lineaire de la VITESSE (vr, vtheta) du theta-stage au pas plein, puis recompose
-/// mom = rho^n v^{n+1}. rho gelee. Foncteur NOMME device-clean.
+/// Linear extrapolation of the VELOCITY (vr, vtheta) from the theta-stage to the full step, then recompose
+/// mom = rho^n v^{n+1}. rho frozen. NAMED device-clean functor.
 struct PolarSchurExtrapolateVelocityKernel {
   ConstArray4 vr_n, vt_n;  ///< v^n
-  Array4 vr, vt;           ///< IN: v^{n+theta} ; OUT: v^{n+1}
-  Array4 st;               ///< etat (ECRITURE mr, mtheta ; LECTURE rho)
+  Array4 vr, vt;           ///< IN: v^{n+theta}; OUT: v^{n+1}
+  Array4 st;               ///< state (WRITE mr, mtheta; READ rho)
   Real inv_theta;          ///< 1 / theta
   int c_rho, c_mx, c_my;
   ADC_HD void operator()(int i, int j) const {
@@ -229,12 +229,12 @@ struct PolarSchurExtrapolateVelocityKernel {
   }
 };
 
-/// Mise a jour de l'energie : E^{n+1} = E^n + (1/2) rho^n (|v^{n+1}|^2 - |v^n|^2). Applique seulement
-/// quand le role Energy est present (garde cote hote). Foncteur NOMME device-clean.
+/// Energy update: E^{n+1} = E^n + (1/2) rho^n (|v^{n+1}|^2 - |v^n|^2). Applied only
+/// when the Energy role is present (host-side guard). NAMED device-clean functor.
 struct PolarSchurEnergyKernel {
   ConstArray4 vr_n, vt_n;  ///< v^n
   ConstArray4 vr, vt;      ///< v^{n+1}
-  Array4 st;               ///< etat (ECRITURE E ; LECTURE rho)
+  Array4 st;               ///< state (WRITE E; READ rho)
   int c_rho, c_E;
   ADC_HD void operator()(int i, int j) const {
     const Real rho = st(i, j, c_rho);
@@ -244,8 +244,8 @@ struct PolarSchurEnergyKernel {
   }
 };
 
-/// Extrait la vitesse v = (mr, mtheta) / rho de l'etat vers deux champs scalaires vr, vt. rho = 0 ->
-/// vitesse 0 (garde-fou ; la source gele rho > 0). Foncteur NOMME device-clean.
+/// Extracts the velocity v = (mr, mtheta) / rho from the state into two scalar fields vr, vt. rho = 0 ->
+/// velocity 0 (safeguard; the source freezes rho > 0). NAMED device-clean functor.
 struct PolarExtractVelocityKernel {
   ConstArray4 st;
   Array4 vr, vt;
@@ -258,7 +258,7 @@ struct PolarExtractVelocityKernel {
   }
 };
 
-/// Copie le champ B_z (canal aux) vers un MultiFab scalaire interne. Foncteur NOMME device-clean.
+/// Copies the B_z field (aux channel) into an internal scalar MultiFab. NAMED device-clean functor.
 struct PolarCopyBzKernel {
   ConstArray4 bz_src;
   Array4 bz_dst;
@@ -266,8 +266,8 @@ struct PolarCopyBzKernel {
   ADC_HD void operator()(int i, int j) const { bz_dst(i, j, 0) = bz_src(i, j, c_bz); }
 };
 
-/// dst <- src (composante 0). Foncteur NOMME device-clean (local : le header polaire ne depend pas de
-/// geometric_mg.hpp, comme polar_tensor_operator.hpp).
+/// dst <- src (component 0). NAMED device-clean functor (local: the polar header does not depend on
+/// geometric_mg.hpp, like polar_tensor_operator.hpp).
 struct PolarSchurCopyComp0Kernel {
   Array4 d;
   ConstArray4 s;
@@ -276,25 +276,25 @@ struct PolarSchurCopyComp0Kernel {
 
 }  // namespace detail
 
-/// ETAGE SOURCE condense par Schur en geometrie POLAIRE, AUTONOME (transport gele), GENERIQUE sur tout
-/// bloc fluide polaire qui expose les roles Density / MomentumX (radial) / MomentumY (azimutal)
-/// (+ Energy optionnel). Pendant polaire de CondensedSchurSourceStepper ; chemin SEPARE, le cartesien
-/// reste BIT-IDENTIQUE.
+/// SOURCE STAGE condensed by Schur in POLAR geometry, STANDALONE (transport frozen), GENERIC over any
+/// polar fluid block that exposes the roles Density / MomentumX (radial) / MomentumY (azimuthal)
+/// (+ optional Energy). Polar counterpart of CondensedSchurSourceStepper; SEPARATE path, the Cartesian
+/// one stays BIT-IDENTICAL.
 ///
-/// CONVENTION DE ROLES EN POLAIRE : la quantite de mouvement RADIALE (rho v_r) porte le role MomentumX,
-/// la quantite de mouvement AZIMUTALE (rho v_theta) porte le role MomentumY (cf. IsothermalFluxPolar :
-/// composante 1 = radiale, composante 2 = azimutale, base locale orthonormee (e_r, e_theta)).
+/// ROLE CONVENTION IN POLAR: the RADIAL momentum (rho v_r) carries the MomentumX role,
+/// the AZIMUTHAL momentum (rho v_theta) carries the MomentumY role (cf. IsothermalFluxPolar:
+/// component 1 = radial, component 2 = azimuthal, local orthonormal basis (e_r, e_theta)).
 ///
-/// CYCLE DE VIE : construit UNE fois sur (PolarGeometry + BoxArray) fixe ; alloue ses tampons a la
-/// construction ; step() les REUTILISE. theta/dt peuvent changer entre appels.
+/// LIFECYCLE: built ONCE on a fixed (PolarGeometry + BoxArray); allocates its buffers at
+/// construction; step() REUSES them. theta/dt may change between calls.
 class PolarCondensedSchurSourceStepper {
  public:
-  /// @p vars  : descripteur du bloc fluide ; DOIT exposer Density / MomentumX / MomentumY (Energy
-  ///            optionnel). Contrat valide ICI (hote), avant tout kernel.
-  /// @p geom  : geometrie POLAIRE (anneau) ; @p ba : boite UNIQUE ; @p bcPhi : CL radiale du potentiel
-  ///            (xlo/xhi : Dirichlet ou Foextrap ; theta toujours periodique cote solveur).
-  /// @p alpha : constante de couplage electrostatique.
-  /// @p precond : preconditionneur du PolarTensorKrylovSolver (RadialLine par defaut).
+  /// @p vars: descriptor of the fluid block; MUST expose Density / MomentumX / MomentumY (Energy
+  ///            optional). Contract validated HERE (host), before any kernel.
+  /// @p geom: POLAR geometry (ring); @p ba: SINGLE box; @p bcPhi: radial BC of the potential
+  ///            (xlo/xhi: Dirichlet or Foextrap; theta always periodic on the solver side).
+  /// @p alpha: electrostatic coupling constant.
+  /// @p precond: preconditioner of the PolarTensorKrylovSolver (RadialLine by default).
   PolarCondensedSchurSourceStepper(const VariableSet& vars, const PolarGeometry& geom,
                                    const BoxArray& ba, const BCRec& bcPhi, Real alpha,
                                    PolarPrecond precond = PolarPrecond::RadialLine)
@@ -304,9 +304,9 @@ class PolarCondensedSchurSourceStepper {
                                          vars.index_of(VariableRole::Energy), geom, ba, bcPhi,
                                          alpha, precond) {}
 
-  /// Variante a COMPOSANTES EXPLICITES (audit vague 3, parite avec le stepper cartesien) :
-  /// l'appelant DESIGNE les composantes (rho, m_r, m_theta[, E]) -- bloc a noms libres / roles
-  /// Custom. Le ctor canonique ci-dessus DELEGUE ici (resolution par roles inchangee).
+  /// EXPLICIT-COMPONENT variant (audit wave 3, parity with the Cartesian stepper):
+  /// the caller DESIGNATES the components (rho, m_r, m_theta[, E]) -- block with free names / Custom
+  /// roles. The canonical ctor above DELEGATES here (role resolution unchanged).
   PolarCondensedSchurSourceStepper(const VariableSet& vars, int c_rho, int c_mx, int c_my, int c_E,
                                    const PolarGeometry& geom, const BoxArray& ba,
                                    const BCRec& bcPhi, Real alpha,
@@ -322,37 +322,37 @@ class PolarCondensedSchurSourceStepper {
         precond_(precond),
         ba_(ba),
         dm_(ba.size(), n_ranks()),
-        // coefficients du tenseur condense A = I + c rho B^{-1} (1 ghost : faces de l'operateur)
+        // condensed tensor coefficients A = I + c rho B^{-1} (1 ghost: operator faces)
         a_rr_(ba, dm_, 1, 1), a_tt_(ba, dm_, 1, 1), a_rt_(ba, dm_, 1, 1), a_tr_(ba, dm_, 1, 1),
-        // tampons du RHS condense
+        // condensed RHS buffers
         lap_(ba, dm_, 1, 0), rhs_(ba, dm_, 1, 0),
         fr_(ba, dm_, 1, 1), ft_(ba, dm_, 1, 1),
-        // un MultiFab a 1 (A=I) pour le Lap_polar scalaire du RHS
+        // a MultiFab at 1 (A=I) for the scalar Lap_polar of the RHS
         one_rr_(ba, dm_, 1, 1), one_tt_(ba, dm_, 1, 1),
         bz_(ba, dm_, 1, 1),
         phi_n_(ba, dm_, 1, 1),
         vr_n_(ba, dm_, 1, 0), vt_n_(ba, dm_, 1, 0),
         vr_t_(ba, dm_, 1, 0), vt_t_(ba, dm_, 1, 0) {
-    // MULTI-RANG MPI (decoupage theta seul) : plus de garde-fou mono-rang. La contrainte de layout
-    // (chaque box couvre la plage radiale complete, exigee par le preconditionneur RadialLine du solve
-    // elliptique) est verifiee par le PolarTensorKrylovSolver construit dans step() (check_radial_columns)
-    // -> une erreur claire est levee sur tous les rangs si le decoupage coupe r. Mono-rang / boite unique :
-    // chemin inchange (le check passe trivialement, all_reduce = identite en serie).
+    // MULTI-RANK MPI (theta-only split): no more single-rank safeguard. The layout constraint
+    // (each box covers the full radial range, required by the RadialLine preconditioner of the elliptic
+    // solve) is checked by the PolarTensorKrylovSolver built in step() (check_radial_columns)
+    // -> a clear error is raised on all ranks if the split cuts r. Single-rank / single box:
+    // path unchanged (the check passes trivially, all_reduce = identity in serial).
     if (c_rho_ < 0 || c_mx_ < 0 || c_my_ < 0)
       throw std::runtime_error(
-          "PolarCondensedSchurSourceStepper : le bloc fluide doit exposer les roles Density, MomentumX "
-          "(radial) et MomentumY (azimutal).");
+          "PolarCondensedSchurSourceStepper: the fluid block must expose the roles Density, MomentumX "
+          "(radial) and MomentumY (azimuthal).");
     one_rr_.set_val(Real(1));
     one_tt_.set_val(Real(1));
   }
 
-  /// true si le modele porte un role Energy (mise a jour d'energie active).
+  /// true if the model carries an Energy role (energy update active).
   bool has_energy() const { return c_E_ >= 0; }
 
-  /// ETAGE SOURCE condense POLAIRE, IN-PLACE sur @p state et @p phi.
-  ///   @p state : etat fluide (rho, mom_r, mom_theta [, E]) ; ECRIT mom (+ E) ; rho GELEE.
-  ///   @p phi   : potentiel ; ENTREE phi^n (warm start du solve) ; SORTIE phi^{n+1}.
-  ///   @p bz_field : champ B_z (canal aux), composante @p c_bz lue au centre. theta/dt : theta-schema.
+  /// POLAR condensed SOURCE STAGE, IN-PLACE on @p state and @p phi.
+  ///   @p state: fluid state (rho, mom_r, mom_theta [, E]); WRITES mom (+ E); rho FROZEN.
+  ///   @p phi: potential; INPUT phi^n (warm start of the solve); OUTPUT phi^{n+1}.
+  ///   @p bz_field: B_z field (aux channel), component @p c_bz read at the center. theta/dt: theta-scheme.
   void step(MultiFab& state, MultiFab& phi, const MultiFab& bz_field, int c_bz, Real theta, Real dt) {
     const Real th_dt = theta * dt;
     const Real c = theta * theta * dt * dt * alpha_;  // c = theta^2 dt^2 alpha
@@ -362,10 +362,10 @@ class PolarCondensedSchurSourceStepper {
     const Real half_idr = Real(1) / (Real(2) * dr);
     const Real half_idth = Real(1) / (Real(2) * dth);
 
-    // -1) figer phi^n (extrapolation finale).
+    // -1) freeze phi^n (final extrapolation).
     copy_comp0(phi_n_, phi);
 
-    // 0) extraire v^n = (mr, mtheta)/rho et copier B_z dans le tampon interne.
+    // 0) extract v^n = (mr, mtheta)/rho and copy B_z into the internal buffer.
     for (int li = 0; li < state.local_size(); ++li) {
       const ConstArray4 s = state.fab(li).const_array();
       for_each_cell(state.box(li),
@@ -378,7 +378,7 @@ class PolarCondensedSchurSourceStepper {
     device_fence();
     fill_ghosts(bz_, geom_.domain, ebc);
 
-    // 1a) ASSEMBLER les coefficients A = I + c rho B^{-1} au centre (4 champs).
+    // 1a) ASSEMBLE the coefficients A = I + c rho B^{-1} at the center (4 fields).
     for (int li = 0; li < state.local_size(); ++li) {
       const ConstArray4 s = state.fab(li).const_array();
       const ConstArray4 b = bz_.fab(li).const_array();
@@ -387,21 +387,21 @@ class PolarCondensedSchurSourceStepper {
                                                           a_tt_.fab(li).array(), a_rt_.fab(li).array(),
                                                           a_tr_.fab(li).array(), c, th_dt, c_rho_});
     }
-    // ghosts des coefficients (la moyenne de face de l'operateur lit le voisin a +-1) : periodique
-    // theta, radial Foextrap. PolarTensorKrylovSolver::set_coefficients remplit aussi ces ghosts, mais
-    // on les remplit ici par robustesse (assemble_rhs lit fr/ft -> coherence).
+    // ghosts of the coefficients (the operator face average reads the neighbor at +-1): theta
+    // periodic, radial Foextrap. PolarTensorKrylovSolver::set_coefficients also fills these ghosts, but
+    // we fill them here for robustness (assemble_rhs reads fr/ft -> consistency).
     device_fence();
     fill_ghosts(a_rr_, geom_.domain, ebc);
     fill_ghosts(a_tt_, geom_.domain, ebc);
     fill_ghosts(a_rt_, geom_.domain, ebc);
     fill_ghosts(a_tr_, geom_.domain, ebc);
 
-    // 1b) ASSEMBLER le second membre condense rhs_polar = Lap_polar phi^n + g div_polar(rho B^{-1} v^n).
-    //     Lap_polar phi^n : apply_polar_tensor avec A = I (coefficients a 1), MEME stencil que le solve.
+    // 1b) ASSEMBLE the condensed right-hand side rhs_polar = Lap_polar phi^n + g div_polar(rho B^{-1} v^n).
+    //     Lap_polar phi^n: apply_polar_tensor with A = I (coefficients at 1), SAME stencil as the solve.
     device_fence();
-    fill_ghosts(phi, geom_.domain, phi_bc());  // ghosts de phi^n pour le Laplacien de bord
+    fill_ghosts(phi, geom_.domain, phi_bc());  // ghosts of phi^n for the boundary Laplacian
     apply_polar_tensor(phi, geom_, lap_, &one_rr_, &one_tt_, nullptr, nullptr);  // lap_ = Lap_polar phi^n
-    // flux explicite F = B^{-1}(mr, mtheta) au centre (1 ghost pour la div centree).
+    // explicit flux F = B^{-1}(mr, mtheta) at the center (1 ghost for the centered div).
     for (int li = 0; li < state.local_size(); ++li) {
       const ConstArray4 s = state.fab(li).const_array();
       const ConstArray4 b = bz_.fab(li).const_array();
@@ -410,9 +410,9 @@ class PolarCondensedSchurSourceStepper {
                                                          ft_.fab(li).array(), th_dt, c_mx_, c_my_});
     }
     device_fence();
-    fill_ghosts(fr_, geom_.domain, ebc);  // div centree lit F(i+-1), F(j+-1)
+    fill_ghosts(fr_, geom_.domain, ebc);  // centered div reads F(i+-1), F(j+-1)
     fill_ghosts(ft_, geom_.domain, ebc);
-    // rhs_polar = Lap_polar phi^n + g div_polar F (signe L_int = -rhs_schur).
+    // rhs_polar = Lap_polar phi^n + g div_polar F (sign L_int = -rhs_schur).
     for (int li = 0; li < rhs_.local_size(); ++li)
       for_each_cell(rhs_.box(li),
                     detail::PolarSchurRhsAssembleKernel{lap_.fab(li).const_array(),
@@ -420,21 +420,21 @@ class PolarCondensedSchurSourceStepper {
                                                         ft_.fab(li).const_array(), rhs_.fab(li).array(),
                                                         g, half_idr, half_idth, geom_.r_min, dr});
 
-    // 2) RESOUDRE L_int(phi) = div(A grad phi) = rhs_polar via PolarTensorKrylovSolver.
+    // 2) SOLVE L_int(phi) = div(A grad phi) = rhs_polar via PolarTensorKrylovSolver.
     PolarTensorKrylovSolver kry(geom_, ba_, bcPhi_, precond_);
-    const bool cross = (c != Real(0));  // termes croises non triviaux des que c != 0 (B_z != 0 -> binv_12 != 0)
+    const bool cross = (c != Real(0));  // non-trivial cross terms as soon as c != 0 (B_z != 0 -> binv_12 != 0)
     if (cross)
       kry.set_coefficients(&a_rr_, &a_tt_, &a_rt_, &a_tr_);
     else
       kry.set_coefficients(&a_rr_, &a_tt_);
-    copy_comp0(kry.phi(), phi);  // warm start : phi^n -> kry.phi()
+    copy_comp0(kry.phi(), phi);  // warm start: phi^n -> kry.phi()
     copy_comp0(kry.rhs(), rhs_);
     last_result_ = kry.solve(krylov_tol_, krylov_max_iters_);
     copy_comp0(phi, kry.phi());  // phi <- phi^{n+theta}
 
-    // 3) RECONSTRUIRE v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi^{n+theta}) ; mom = rho v.
+    // 3) RECONSTRUCT v^{n+theta} = B^{-1}(v^n - theta dt grad_polar phi^{n+theta}); mom = rho v.
     device_fence();
-    fill_ghosts(phi, geom_.domain, phi_bc());  // grad_polar centre lit phi(i+-1), phi(j+-1)
+    fill_ghosts(phi, geom_.domain, phi_bc());  // centered grad_polar reads phi(i+-1), phi(j+-1)
     for (int li = 0; li < state.local_size(); ++li)
       for_each_cell(state.box(li),
                     detail::PolarSchurReconstructKernel{
@@ -442,9 +442,9 @@ class PolarCondensedSchurSourceStepper {
                         vt_n_.fab(li).const_array(), bz_.fab(li).const_array(), state.fab(li).array(),
                         vr_t_.fab(li).array(), vt_t_.fab(li).array(), th_dt, half_idr, half_idth,
                         geom_.r_min, dr, c_rho_, c_mx_, c_my_});
-    // vr_t_/vt_t_ portent v^{n+theta}.
+    // vr_t_/vt_t_ carry v^{n+theta}.
 
-    // 5) EXTRAPOLER phi et v du theta-stage au pas plein : f^{n+1} = f^n + (1/theta)(f^{n+theta}-f^n).
+    // 5) EXTRAPOLATE phi and v from the theta-stage to the full step: f^{n+1} = f^n + (1/theta)(f^{n+theta}-f^n).
     const Real inv_theta = Real(1) / theta;
     for (int li = 0; li < phi.local_size(); ++li)
       for_each_cell(phi.box(li),
@@ -457,7 +457,7 @@ class PolarCondensedSchurSourceStepper {
                         vr_t_.fab(li).array(), vt_t_.fab(li).array(), state.fab(li).array(),
                         inv_theta, c_rho_, c_mx_, c_my_});
 
-    // 4) ENERGIE (si role present) : E^{n+1} = E^n + (1/2) rho (|v^{n+1}|^2 - |v^n|^2).
+    // 4) ENERGY (if role present): E^{n+1} = E^n + (1/2) rho (|v^{n+1}|^2 - |v^n|^2).
     if (c_E_ >= 0)
       for (int li = 0; li < state.local_size(); ++li)
         for_each_cell(state.box(li),
@@ -467,21 +467,21 @@ class PolarCondensedSchurSourceStepper {
                                                      vt_t_.fab(li).const_array(), state.fab(li).array(),
                                                      c_rho_, c_E_});
 
-    // 6) REMPLIR les ghosts de l'etat et du potentiel avant de rendre la main.
+    // 6) FILL the ghosts of the state and the potential before returning.
     device_fence();
     fill_ghosts(state, geom_.domain, bcU_default());
     fill_ghosts(phi, geom_.domain, phi_bc());
   }
 
-  /// Diagnostic du dernier solve (iterations BiCGStab, residu relatif, convergence).
+  /// Diagnostic of the last solve (BiCGStab iterations, relative residual, convergence).
   const PolarKrylovResult& last_solve() const { return last_result_; }
 
-  /// Tolerance / budget d'iterations du solve Krylov polaire. DEFAUTS = constantes historiques
-  /// (1e-10, 600), rendues configurables par l'audit 2026-06. @throws std::invalid_argument.
+  /// Tolerance / iteration budget of the polar Krylov solve. DEFAULTS = historical constants
+  /// (1e-10, 600), made configurable by the audit 2026-06. @throws std::invalid_argument.
   void set_krylov(Real tol, int max_iters) {
     if (!(tol > Real(0)) || max_iters < 1)
       throw std::invalid_argument(
-          "PolarCondensedSchurSourceStepper::set_krylov : tol > 0, max_iters >= 1");
+          "PolarCondensedSchurSourceStepper::set_krylov: tol > 0, max_iters >= 1");
     krylov_tol_ = tol;
     krylov_max_iters_ = max_iters;
   }
@@ -492,37 +492,37 @@ class PolarCondensedSchurSourceStepper {
   int energy_comp() const { return c_E_; }
 
  private:
-  /// CL par defaut de l'etat pour le remplissage final des ghosts : periodique theta conserve, radial
-  /// Foextrap. L'etage source est local en espace ; la CL de l'etat n'influe que sur les ghosts publies.
+  /// Default state BC for the final ghost fill: theta periodic kept, radial
+  /// Foextrap. The source stage is local in space; the state BC only affects the published ghosts.
   BCRec bcU_default() const { return coeff_bc(bcPhi_); }
 
-  /// CL des champs de coefficient / flux : periodique theta conserve, bord physique radial -> Foextrap.
+  /// BC of the coefficient / flux fields: theta periodic kept, radial physical boundary -> Foextrap.
   static BCRec coeff_bc(const BCRec& bc) {
     auto fo = [](BCType t) { return t == BCType::Periodic ? t : BCType::Foextrap; };
     BCRec b;
     b.xlo = fo(bc.xlo); b.xhi = fo(bc.xhi);
-    b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;  // theta toujours periodique
+    b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;  // theta always periodic
     return b;
   }
 
-  /// CL du POTENTIEL pour les fill_ghosts du stepper : radial de l'appelant (type + valeur Dirichlet)
-  /// conserve, theta FORCE periodique. Sur l'anneau, theta n'a pas de bord physique ; le contrat du
-  /// ctor ("theta toujours periodique cote solveur") est appliquee par PolarTensorKrylovSolver et
-  /// coeff_bc, mais les ghosts de phi etaient remplis avec bcPhi_ BRUT : un appelant posant Dirichlet
-  /// en y (System::poisson_bc met Dirichlet sur les 4 faces) obtenait au raccord theta=0/2pi des
-  /// ghosts par REFLEXION IMPAIRE (ghost = 2*0 - miroir = -phi) au lieu du wrap. Le gradient azimutal
-  /// centre de la reconstruction y lisait une erreur ~2 phi/(2 r dtheta), soit un kick de quantite de
-  /// mouvement radiale O(1/(theta dtheta)) en dipole anti-symetrique aux deux colonnes du seam --
-  /// la derive parasite ||R_eq||_inf ~ 83 du cas Hoffart polaire (adc_cases ADC-62), qui croissait
-  /// en O(1/h) et faisait diverger le run perturbe a t~0.01.
+  /// POTENTIAL BC for the stepper fill_ghosts: caller radial (type + Dirichlet value)
+  /// kept, theta FORCED periodic. On the ring, theta has no physical boundary; the ctor contract
+  /// ("theta always periodic on the solver side") is applied by PolarTensorKrylovSolver and
+  /// coeff_bc, but the ghosts of phi were filled with RAW bcPhi_: a caller setting Dirichlet
+  /// in y (System::poisson_bc sets Dirichlet on the 4 faces) obtained at the theta=0/2pi seam
+  /// ghosts by ODD REFLECTION (ghost = 2*0 - mirror = -phi) instead of the wrap. The centered azimuthal
+  /// gradient of the reconstruction there read an error ~2 phi/(2 r dtheta), i.e. a radial momentum
+  /// kick O(1/(theta dtheta)) as an anti-symmetric dipole at the two seam columns --
+  /// the spurious drift ||R_eq||_inf ~ 83 of the polar Hoffart case (adc_cases ADC-62), which grew
+  /// as O(1/h) and made the perturbed run diverge at t~0.01.
   BCRec phi_bc() const {
     BCRec b = bcPhi_;
-    b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;  // theta toujours periodique
+    b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;  // theta always periodic
     b.ylo_val = Real(0); b.yhi_val = Real(0);
     return b;
   }
 
-  /// dst <- src (composante 0, cellules valides). Foncteur NOMME local (decouple du cartesien).
+  /// dst <- src (component 0, valid cells). NAMED local functor (decoupled from the Cartesian one).
   void copy_comp0(MultiFab& dst, const MultiFab& src) {
     for (int li = 0; li < dst.local_size(); ++li)
       for_each_cell(dst.box(li),
@@ -537,17 +537,17 @@ class PolarCondensedSchurSourceStepper {
   PolarPrecond precond_;
   BoxArray ba_;
   DistributionMapping dm_;
-  MultiFab a_rr_, a_tt_, a_rt_, a_tr_;  ///< coefficients A = I + c rho B^{-1} (reutilises)
-  MultiFab lap_, rhs_;                  ///< Lap_polar phi^n + RHS condense
-  MultiFab fr_, ft_;                    ///< flux explicite F = B^{-1}(mr, mtheta) au centre
-  MultiFab one_rr_, one_tt_;            ///< champs a 1 (A=I) pour le Lap_polar du RHS
-  MultiFab bz_;                         ///< B_z au centre (tampon interne, 1 ghost)
-  MultiFab phi_n_;                      ///< phi^n fige (extrapolation finale)
-  MultiFab vr_n_, vt_n_;                ///< v^n (extrait au debut de step)
-  MultiFab vr_t_, vt_t_;                ///< v^{n+theta} puis v^{n+1}
-  PolarKrylovResult last_result_;       ///< diagnostic du dernier solve
-  Real krylov_tol_ = Real(1e-10);       ///< tolerance du solve (defaut historique, cf. set_krylov)
-  int krylov_max_iters_ = 600;          ///< budget d'iterations (defaut historique, cf. set_krylov)
+  MultiFab a_rr_, a_tt_, a_rt_, a_tr_;  ///< coefficients A = I + c rho B^{-1} (reused)
+  MultiFab lap_, rhs_;                  ///< Lap_polar phi^n + condensed RHS
+  MultiFab fr_, ft_;                    ///< explicit flux F = B^{-1}(mr, mtheta) at the center
+  MultiFab one_rr_, one_tt_;            ///< fields at 1 (A=I) for the Lap_polar of the RHS
+  MultiFab bz_;                         ///< B_z at the center (internal buffer, 1 ghost)
+  MultiFab phi_n_;                      ///< phi^n frozen (final extrapolation)
+  MultiFab vr_n_, vt_n_;                ///< v^n (extracted at the start of step)
+  MultiFab vr_t_, vt_t_;                ///< v^{n+theta} then v^{n+1}
+  PolarKrylovResult last_result_;       ///< diagnostic of the last solve
+  Real krylov_tol_ = Real(1e-10);       ///< solve tolerance (historical default, cf. set_krylov)
+  int krylov_max_iters_ = 600;          ///< iteration budget (historical default, cf. set_krylov)
 };
 
 }  // namespace adc

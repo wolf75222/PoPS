@@ -11,30 +11,20 @@
 #include <vector>
 
 /// @file
-/// @brief Assembleurs du SECOND MEMBRE elliptique (Poisson) : mono-modele et a N especes.
+/// @brief Elliptic (Poisson) RIGHT-HAND-SIDE assemblers: single-model and N-species.
 ///
-/// model.elliptic_rhs(U) couvre le cas MONO-bloc (SingleModelEllipticRhs). Pour plusieurs especes le
-/// second membre est une quantite de SYSTEME (f = Sum_s q_s n_s) lisant plusieurs MultiFab. Ce header
-/// isole cette responsabilite du Coupler. ChargeDensityRhs (N especes) EXIGE une entree par bloc
-/// (species.size() == n_blocks) : un bloc oublie ne disparait pas silencieusement du second membre ;
-/// une espece neutre se declare explicitement avec charge = 0. add_scaled_component (rhs += q * U)
-/// est la brique d'accumulation. Les kernels supposent des layouts identiques entre U et rhs.
-
-// Assemblage du second membre elliptique.
-//
-// Le PhysicalModel historique expose model.elliptic_rhs(U) pour le cas mono-bloc.
-// Pour plusieurs especes, le second membre de Poisson est une quantite de systeme
-// (par exemple q_i n_i + q_e n_e) : il doit pouvoir lire plusieurs MultiFab.
-//
-// Ce header isole cette responsabilite du Coupler. Les coupleurs existants passent
-// par SingleModelEllipticRhs ; les futurs SystemCoupler pourront utiliser un
-// assembleur qui lit tous les EquationBlock.
+/// model.elliptic_rhs(U) covers the SINGLE-block case (SingleModelEllipticRhs). For several species the
+/// right-hand side is a SYSTEM quantity (f = Sum_s q_s n_s) reading several MultiFab. This header isolates
+/// that responsibility from the Coupler. ChargeDensityRhs (N species) REQUIRES one entry per block
+/// (species.size() == n_blocks): a forgotten block does not silently disappear from the right-hand side;
+/// a neutral species is declared explicitly with charge = 0. add_scaled_component (rhs += q * U) is the
+/// accumulation brick. The kernels assume identical layouts between U and rhs.
 
 namespace adc {
 
 namespace detail {
 
-/// Foncteur NOMME (et non lambda ADC_HD) du RHS mono-modele : f(i,j,0) = model.elliptic_rhs(U).
+/// NAMED functor (not an ADC_HD lambda) of the single-model RHS: f(i,j,0) = model.elliptic_rhs(U).
 template <class Model>
 struct SingleModelEllipticRhsKernel {
   Model m;
@@ -47,13 +37,13 @@ struct SingleModelEllipticRhsKernel {
 
 }  // namespace detail
 
-/// Assembleur de RHS MONO-modele : rhs(.,.,0) = model.elliptic_rhs(U) sur les cellules valides.
-/// @tparam Model : PhysicalModel exposant elliptic_rhs(State).
+/// SINGLE-model RHS assembler: rhs(.,.,0) = model.elliptic_rhs(U) over the valid cells.
+/// @tparam Model PhysicalModel exposing elliptic_rhs(State).
 template <class Model>
 struct SingleModelEllipticRhs {
   Model model;
 
-  /// rhs <- elliptic_rhs(state) cellule par cellule (layouts identiques entre state et rhs).
+  /// rhs <- elliptic_rhs(state) cell by cell (identical layouts between state and rhs).
   void operator()(const MultiFab& state, MultiFab& rhs) const {
     for (int li = 0; li < state.local_size(); ++li) {
       const ConstArray4 s = state.fab(li).const_array();
@@ -67,7 +57,7 @@ struct SingleModelEllipticRhs {
 
 namespace detail {
 
-/// Foncteur NOMME (et non lambda ADC_HD) du RHS deux champs : r(i,j,0) = a0 u0 + a1 u1.
+/// NAMED functor (not an ADC_HD lambda) of the two-field RHS: r(i,j,0) = a0 u0 + a1 u1.
 struct TwoFieldChargeDensityRhsKernel {
   Array4 r;
   ConstArray4 u0, u1;
@@ -80,14 +70,14 @@ struct TwoFieldChargeDensityRhsKernel {
 
 }  // namespace detail
 
-/// RHS deux champs : rhs = q0 * U0(.,.,comp0) + q1 * U1(.,.,comp1) (densite de charge a deux especes).
+/// Two-field RHS: rhs = q0 * U0(.,.,comp0) + q1 * U1(.,.,comp1) (two-species charge density).
 struct TwoFieldChargeDensityRhs {
   Real q0 = Real(1);
   Real q1 = Real(-1);
   int comp0 = 0;
   int comp1 = 0;
 
-  /// rhs <- q0 U0 + q1 U1 sur les cellules valides (layouts identiques).
+  /// rhs <- q0 U0 + q1 U1 over the valid cells (identical layouts).
   void operator()(const MultiFab& U0, const MultiFab& U1, MultiFab& rhs) const {
     for (int li = 0; li < rhs.local_size(); ++li) {
       const ConstArray4 u0 = U0.fab(li).const_array();
@@ -101,7 +91,7 @@ struct TwoFieldChargeDensityRhs {
   }
 };
 
-/// RHS deux blocs : meme calcul que TwoFieldChargeDensityRhs mais lit les blocs 0 et 1 d'un
+/// Two-block RHS: same computation as TwoFieldChargeDensityRhs but reads blocks 0 and 1 of a
 /// CoupledSystem (q0 n0 + q1 n1).
 struct TwoBlockChargeDensityRhs {
   Real q0 = Real(1);
@@ -109,7 +99,7 @@ struct TwoBlockChargeDensityRhs {
   int comp0 = 0;
   int comp1 = 0;
 
-  /// rhs <- q0 n_0 + q1 n_1 depuis les blocs 0 et 1 du systeme.
+  /// rhs <- q0 n_0 + q1 n_1 from blocks 0 and 1 of the system.
   template <CoupledSystemLike System>
   void operator()(const System& system, MultiFab& rhs) const {
     TwoFieldChargeDensityRhs two;
@@ -121,15 +111,10 @@ struct TwoBlockChargeDensityRhs {
   }
 };
 
-// Charge (ou masse) portee par une espece, pour l'assemblage du second membre
-// elliptique. `charge` inclut le signe (q_e < 0, q_i > 0) ; `comp` repere la
-// composante densite n_s dans le MultiFab du bloc (0 pour un scalaire, l'indice
-// rho pour un etat conserve Euler).
-//
-// Defaut `charge = 0` (revue Codex) : une espece NEUTRE, ou un bloc dont l'entree
-// serait oubliee, ne contribue PAS a Poisson (au lieu d'y verser q=+1 par accident).
-/// Charge (avec signe) et composante densite d'une espece pour l'assemblage du RHS elliptique. Defaut
-/// charge = 0 : une espece neutre (ou un bloc oublie) ne contribue PAS a Poisson.
+/// Charge (with sign) and density component of a species for the elliptic RHS assembly. Default
+/// charge = 0: a neutral species (or a forgotten block) does NOT contribute to Poisson.
+/// charge includes the sign (q_e < 0, q_i > 0); comp locates the density component n_s in the
+/// block MultiFab (0 for a scalar, the rho index for a conservative Euler state).
 struct SpeciesCharge {
   Real charge = Real(0);
   int comp = 0;
@@ -137,7 +122,7 @@ struct SpeciesCharge {
 
 namespace detail {
 
-/// Foncteur NOMME (et non lambda ADC_HD) de l'accumulation : r(i,j,0) += a * u(i,j,c).
+/// NAMED functor (not an ADC_HD lambda) of the accumulation: r(i,j,0) += a * u(i,j,c).
 struct AddScaledComponentKernel {
   Array4 r;
   ConstArray4 u;
@@ -148,10 +133,8 @@ struct AddScaledComponentKernel {
 
 }  // namespace detail
 
-// rhs += q * U(.,.,comp) sur les cellules valides. Brique d'accumulation du RHS
-// elliptique a N especes (suppose layouts identiques entre U et rhs).
-/// rhs(.,.,0) += q * U(.,.,comp) sur les cellules valides. Brique d'accumulation du RHS a N especes
-/// (layouts identiques entre U et rhs).
+/// rhs(.,.,0) += q * U(.,.,comp) over the valid cells. Accumulation brick of the N-species elliptic
+/// RHS (identical layouts between U and rhs).
 inline void add_scaled_component(const MultiFab& U, Real q, int comp,
                                  MultiFab& rhs) {
   for (int li = 0; li < rhs.local_size(); ++li) {
@@ -164,29 +147,22 @@ inline void add_scaled_component(const MultiFab& U, Real q, int comp,
   }
 }
 
-// Second membre de Poisson a N especes : f = Sum_s q_s n_s, somme sur TOUS les
-// blocs du systeme (generalise TwoBlockChargeDensityRhs aux N especes demandees
-// par le tuteur). `species[k]` decrit le bloc k dans l'ordre de CoupledSystem.
-//
-// Contrat (revue Codex) : EXIGER une entree par bloc (species.size() == n_blocks),
-// pour qu'un bloc oublie ne soit pas silencieusement absent du second membre. Une
-// espece neutre se declare explicitement avec `charge = 0`.
-//
-// Exemple deux fluides "rhs = n_i - n_e" :
-//   ChargeDensityRhs{{ {.charge=-1, .comp=0},   // bloc 0 : electrons
-//                      {.charge=+1, .comp=0} }} // bloc 1 : ions
-/// RHS de Poisson a N especes : f = Sum_s q_s n_s sur TOUS les blocs du systeme. species[k] decrit
-/// le bloc k dans l'ordre de CoupledSystem ; EXIGE species.size() == n_blocks (sinon exception).
+/// N-species Poisson RHS: f = Sum_s q_s n_s over ALL blocks of the system. species[k] describes
+/// block k in the CoupledSystem order; REQUIRES species.size() == n_blocks (otherwise an exception).
+///
+/// Two-fluid example "rhs = n_i - n_e":
+///   ChargeDensityRhs{{ {.charge=-1, .comp=0},   // block 0: electrons
+///                      {.charge=+1, .comp=0} }} // block 1: ions
 struct ChargeDensityRhs {
   std::vector<SpeciesCharge> species;
 
-  /// rhs <- 0 puis += q_s n_s pour chaque bloc. Jette si species.size() != n_blocks.
+  /// rhs <- 0 then += q_s n_s for each block. Throws if species.size() != n_blocks.
   template <CoupledSystemLike System>
   void operator()(const System& system, MultiFab& rhs) const {
     if (species.size() != System::n_blocks)
       throw std::runtime_error(
-          "ChargeDensityRhs : il faut exactement une SpeciesCharge par bloc "
-          "(une espece neutre se declare avec charge = 0)");
+          "ChargeDensityRhs: exactly one SpeciesCharge per block is required "
+          "(a neutral species is declared with charge = 0)");
     rhs.set_val(Real(0));
     std::size_t k = 0;
     system.for_each_block([&](const auto& block) {
