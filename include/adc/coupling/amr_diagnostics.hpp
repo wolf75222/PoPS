@@ -1,13 +1,13 @@
 /// @file
-/// @brief Diagnostics extraits des coupleurs AMR : masse et vitesse de derive max (responsabilite c).
+/// @brief Diagnostics extracted from the AMR couplers: mass and max drift speed (responsibility c).
 ///
-/// Free functions a portee de namespace (meme raison que detail:: dans coupler.hpp : seam GPU, un
-/// lambda etendu ne peut pas vivre dans une methode privee). amr_mass_mb passe par le seam reducteur
-/// (for_each_cell_reduce_sum : vraie reduction Kokkos, Kokkos::Sum reassociee par tuile --
-/// deterministe/idempotent). amr_max_drift_speed_mb reste une boucle hote
-/// (std::hypot non confirme device sous nvcc ; le router casserait le dernier bit). Les variantes
-/// mono-box (...) se ramenent aux variantes _mb (un seul fab couvrant le domaine, bit a bit). AUCUNE
-/// reduction MPI ici : le coupleur decide d'all_reduce selon sa politique d'ownership.
+/// Namespace-scope free functions (same reason as detail:: in coupler.hpp: GPU seam, an
+/// extended lambda cannot live in a private method). amr_mass_mb goes through the reducer seam
+/// (for_each_cell_reduce_sum: a real Kokkos reduction, Kokkos::Sum reassociated per tile --
+/// deterministic/idempotent). amr_max_drift_speed_mb stays a host loop
+/// (std::hypot not confirmed device-callable under nvcc; routing it would change the last bit). The
+/// mono-box variants (...) reduce to the _mb variants (a single fab covering the domain, bit for bit). NO
+/// MPI reduction here: the coupler decides whether to all_reduce according to its ownership policy.
 
 #pragma once
 
@@ -19,29 +19,17 @@
 #include <algorithm>
 #include <cmath>
 
-// Diagnostics extraits des coupleurs (responsabilite c : masse, vitesse de derive).
-// Free functions a portee de namespace (meme raison que detail:: dans coupler.hpp :
-// seam GPU, un lambda etendu ne peut pas vivre dans une methode privee).
-//
-// amr_mass passe par le seam reducteur (for_each_cell_reduce_sum) : vraie reduction
-// Kokkos (Kokkos::Sum), reassociee par tuile -- deterministe/idempotent mais pas
-// bit-identique a une somme lexicographique ecrite a la main (cf. for_each.hpp).
-// amr_max_drift_speed reste une boucle hote : son noyau utilise std::hypot, dont
-// l'appelabilite device sous Kokkos/nvcc n'est pas verifiee ici, et le remplacer par
-// sqrt(gx^2+gy^2) changerait le dernier bit. A router par le seam APRES confirmation
-// d'une compilation GPU sur ROMEO (sinon regression bit-identique ou de build).
-
 namespace adc {
 
-// --- forme MULTI-BOX (canonique) : somme/max sur les cellules valides de TOUS les fabs
-// locaux, SANS reduction MPI (le coupleur decide d'all_reduce ou non selon sa politique
-// d'ownership). C'est l'implementation unique ; les variantes mono-box ci-dessous s'y
-// ramenent (un seul fab dont la box vaut le domaine -> bit a bit identique). Cela retire
-// la duplication entre AmrCoupler (mono-box) et AmrCouplerMP (multi-box / distribue).
+// --- MULTI-BOX form (canonical): sum/max over the valid cells of ALL local fabs,
+// WITHOUT MPI reduction (the coupler decides whether to all_reduce according to its
+// ownership policy). This is the single implementation; the mono-box variants below reduce
+// to it (a single fab whose box equals the domain -> bit for bit identical). This removes
+// the duplication between AmrCoupler (mono-box) and AmrCouplerMP (multi-box / distributed).
 
-// somme locale de u(.,.,0) * dV sur les cellules valides. dV multiplie DANS le noyau.
-/// Masse LOCALE : somme de u(.,.,0) * dx * dy sur les cellules valides de TOUS les fabs locaux, SANS
-/// reduction MPI (l'appelant decide d'all_reduce). Forme canonique multi-box.
+// local sum of u(.,.,0) * dV over the valid cells. dV multiplied INSIDE the kernel.
+/// LOCAL mass: sum of u(.,.,0) * dx * dy over the valid cells of ALL local fabs, WITHOUT
+/// MPI reduction (the caller decides whether to all_reduce). Canonical multi-box form.
 inline Real amr_mass_mb(const MultiFab& coarse, Real dx, Real dy) {
   const Real dV = dx * dy;
   Real M = 0;
@@ -53,10 +41,10 @@ inline Real amr_mass_mb(const MultiFab& coarse, Real dx, Real dy) {
   return M;
 }
 
-// max local de |grad phi| / B0 (aux comp 1,2 = grad phi). Boucle hote (std::hypot non
-// confirme device : voir l'en-tete). SANS plancher (applique par l'appelant).
-/// Vitesse de derive max LOCALE : max de |grad phi| / B0 (aux comp 1, 2 = grad phi) sur les cellules
-/// valides, SANS plancher (applique par l'appelant) ni reduction MPI. Boucle hote (std::hypot).
+// local max of |grad phi| / B0 (aux comp 1,2 = grad phi). Host loop (std::hypot not
+// confirmed device: see the header). WITHOUT floor (applied by the caller).
+/// LOCAL max drift speed: max of |grad phi| / B0 (aux comp 1, 2 = grad phi) over the valid cells,
+/// WITHOUT floor (applied by the caller) nor MPI reduction. Host loop (std::hypot).
 inline Real amr_max_drift_speed_mb(const MultiFab& aux0, Real B0) {
   device_fence();
   Real v = 0;
@@ -70,16 +58,16 @@ inline Real amr_max_drift_speed_mb(const MultiFab& aux0, Real B0) {
   return v;
 }
 
-// masse de la composante 0 sur le niveau grossier (box unique) : cas degenere de
-// amr_mass_mb (un fab couvrant le domaine), bit a bit identique. dom conserve pour l'API.
-/// Masse mono-box : cas degenere de amr_mass_mb (bit a bit). @p dom est ignore (conserve pour l'API).
+// mass of component 0 on the coarse level (single box): degenerate case of
+// amr_mass_mb (one fab covering the domain), bit for bit identical. dom kept for the API.
+/// Mono-box mass: degenerate case of amr_mass_mb (bit for bit). @p dom is ignored (kept for the API).
 inline Real amr_mass(const MultiFab& coarse, const Box2D& dom, Real dx, Real dy) {
   (void)dom;
   return amr_mass_mb(coarse, dx, dy);
 }
 
-// vitesse de derive max sur le grossier (box unique) + plancher 1e-12 (garde-fou CFL).
-/// Vitesse de derive max mono-box + plancher 1e-12 (garde-fou CFL). @p dom ignore (conserve pour l'API).
+// max drift speed on the coarse level (single box) + floor 1e-12 (CFL guard).
+/// Mono-box max drift speed + floor 1e-12 (CFL guard). @p dom ignored (kept for the API).
 inline Real amr_max_drift_speed(const MultiFab& aux0, const Box2D& dom, Real B0) {
   (void)dom;
   return std::max(amr_max_drift_speed_mb(aux0, B0), Real(1e-12));

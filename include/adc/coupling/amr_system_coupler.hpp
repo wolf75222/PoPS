@@ -3,7 +3,7 @@
 #include <adc/core/coupled_system.hpp>
 #include <adc/core/types.hpp>
 #include <adc/coupling/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb
-#include <adc/coupling/aux_fill.hpp>        // detail::derive_aux_bc + detail::fill_bz_box (partages)
+#include <adc/coupling/aux_fill.hpp>        // detail::derive_aux_bc + detail::fill_bz_box (shared)
 #include <adc/coupling/coupled_source.hpp>  // CoupledSourceFor
 #include <adc/coupling/elliptic_rhs.hpp>
 #include <adc/numerics/elliptic/elliptic_problem.hpp>  // field_postprocess, FieldPostProcess
@@ -30,76 +30,46 @@
 #include <vector>
 
 /// @file
-/// @brief AmrSystemCoupler : coupleur de SYSTEME multi-especes sur AMR (jalon 2.3).
+/// @brief AmrSystemCoupler: multi-species SYSTEM coupler on AMR (milestone 2.3).
 ///
-/// Porte un CoupledSystem sur une hierarchie AMR : chaque bloc a SA hierarchie de niveaux, toutes les
-/// especes PARTAGENT la meme grille AMR, le meme champ aux (phi, grad phi [, B_z, ...]) et le meme
-/// Poisson grossier. Orchestration : sync_down (par bloc) -> Poisson grossier f = Sum_s q_s n_s ->
-/// aux grossier + injection vers les fins -> chaque bloc avance par advance_amr<Disc_bloc> (avec son
-/// schema et ses sous-pas ; blocs implicites/IMEX delegues a un callback). INVARIANT FORT : tous les
-/// blocs vivent sur EXACTEMENT la meme grille par niveau (l'aux est partage) ; same_layout_or_throw
-/// le verifie au ctor. PoissonCadence choisit la frequence de re-solve de phi (OncePerStep gele vs
-/// PerSubstep). Mono-bloc = chemin bit-identique a l'historique (boucles sur les autres blocs vides).
-
-// Coupleur de SYSTEME sur AMR (jalon 2.3).
-//
-// SystemCoupler porte un CoupledSystem mono-niveau. AmrSystemCoupler le porte sur une
-// hierarchie AMR : chaque bloc a SA propre hierarchie de niveaux (un MultiFab par
-// niveau), toutes les especes PARTAGENT la meme grille AMR, le meme champ aux
-// (phi, grad phi) et le meme Poisson grossier. L'orchestration reutilise le moteur
-// AMR existant :
-//   sync_down (fin -> grossier, par bloc)
-//   -> Poisson grossier f = Sum_s q_s n_s (RHS de systeme, lit tous les blocs)
-//   -> aux = grad phi (grossier) + injection vers les fins (aux partage)
-//   -> chaque bloc avance par advance_amr<Disc_bloc> (Berger-Oliger + reflux +
-//      average_down conservatifs), avec SON schema spatial et SES sous-pas ; les blocs
-//      implicites / IMEX sont delegues a un callback (meme contrat que SystemCoupler).
-//
-// Hypothese du squelette : tous les blocs partagent le BoxArray par niveau (grille AMR
-// commune a toutes les especes) -> un seul aux, un seul Poisson. Mono-rang / mono-box
-// par niveau valide (comme AmrCoupler) ; le multi-box reutilise les primitives _mb.
-//
-// CADENCE POISSON (jalon 2.2.3) : quand une espece fait plus de sous-pas qu'une autre, a
-// quelle frequence re-resoudre phi ? Le choix est explicite (PoissonCadence) plutot que
-// cable en dur :
-//   OncePerStep (defaut) : phi resolu une fois par macro-pas, GELE pendant l'avance des
-//     blocs. Le moins cher ; coherent quand le pas macro est petit devant l'echelle de phi.
-//   PerSubstep : phi re-resolu avant chaque sous-pas d'espece (la charge a bouge). Plus
-//     fidele pour un transport pilote par le champ (derive E x B), plus cher. Approximation
-//     dans tous les cas (les blocs avancent l'un apres l'autre, pas en lock-step multirate
-//     vrai ; ca, c'est un scheduler a part). Le SystemCoupler mono-niveau, lui, re-resout
-//     deja phi a CHAQUE etage RK (recompute_aux=true) : cadence maximale par construction.
+/// Carries a CoupledSystem on an AMR hierarchy: each block has ITS OWN level hierarchy, all species
+/// SHARE the same AMR grid, the same aux field (phi, grad phi [, B_z, ...]) and the same coarse
+/// Poisson. Orchestration: sync_down (per block) -> coarse Poisson f = Sum_s q_s n_s -> coarse aux +
+/// injection to the fine levels -> each block advances via advance_amr<Disc_block> (with its scheme
+/// and its substeps; implicit/IMEX blocks delegated to a callback). STRONG INVARIANT: all blocks live
+/// on EXACTLY the same grid per level (the aux is shared); same_layout_or_throw checks this at the
+/// ctor. PoissonCadence chooses the re-solve frequency of phi (OncePerStep frozen vs PerSubstep).
+/// Single-block = bit-identical path to history (loops over the other blocks are empty).
 
 namespace adc {
 
-/// Frequence de re-resolution du Poisson sur AMR : OncePerStep (phi resolu une fois par macro-pas,
-/// gele pendant l'avance ; le moins cher) ; PerSubstep (phi re-resolu avant chaque sous-pas d'espece,
-/// plus fidele pour un transport pilote par le champ, plus cher).
+/// Re-solve frequency of the Poisson on AMR: OncePerStep (phi solved once per macro-step, frozen
+/// during the advance; cheapest); PerSubstep (phi re-solved before each species substep, more
+/// faithful for a field-driven transport, more expensive).
 enum class PoissonCadence { OncePerStep, PerSubstep };
 
-// Layout EXPLICITE d'une hierarchie AMR partagee (point 2 du capstone multi-blocs, premier pas
-// MINIMAL). Source unique de verite sur la GRILLE que tous les blocs partagent : par niveau le
-// BoxArray (les boites ET leur ordre), le DistributionMapping (rang par boite), dx/dy, et le
-// nombre de niveaux (= ba.size()). Aujourd'hui cette information est implicite, eparpillee dans
-// chaque AmrLevelMP (U.box_array() / U.dmap() / dx,dy). Ce type ne fait que l'EXTRAIRE pour le
-// garde-fou same_layout_or_throw : il NE remplace PAS EquationBlock / AmrLevelMP et n'introduit
-// AUCUNE abstraction de bloc (l'AmrBlock large du design est un pas ULTERIEUR, et seulement si
-// necessaire). On lit le layout d'une pile de niveaux via from_levels.
-/// Source unique de verite sur la GRILLE partagee par tous les blocs : par niveau le BoxArray (boites
-/// ET ordre), le DistributionMapping (rang par boite) et dx/dy. EXTRAIT seulement (ne remplace ni
-/// EquationBlock ni AmrLevelMP) ; sert au garde-fou same_layout_or_throw.
+// EXPLICIT layout of a shared AMR hierarchy (point 2 of the multi-block capstone, first MINIMAL
+// step). Single source of truth on the GRID that all blocks share: per level the BoxArray (the boxes
+// AND their order), the DistributionMapping (rank per box), dx/dy, and the number of levels
+// (= ba.size()). Today this information is implicit, scattered across each AmrLevelMP (U.box_array() /
+// U.dmap() / dx,dy). This type only EXTRACTS it for the same_layout_or_throw guard: it does NOT
+// replace EquationBlock / AmrLevelMP and introduces NO block abstraction (the wide AmrBlock of the
+// design is a LATER step, and only if needed). The layout of a stack of levels is read via from_levels.
+/// Single source of truth on the GRID shared by all blocks: per level the BoxArray (boxes AND order),
+/// the DistributionMapping (rank per box) and dx/dy. EXTRACTED only (replaces neither EquationBlock nor
+/// AmrLevelMP); used by the same_layout_or_throw guard.
 struct AmrHierarchyLayout {
-  std::vector<BoxArray> ba;             // [niveau] : boites du niveau (ensemble ET ordre)
-  std::vector<DistributionMapping> dm;  // [niveau], parallele a ba : rang MPI par boite
-  std::vector<Real> dx, dy;             // [niveau] : pas d'espace (= dx_coarse / 2^k)
+  std::vector<BoxArray> ba;             // [level]: boxes of the level (set AND order)
+  std::vector<DistributionMapping> dm;  // [level], parallel to ba: MPI rank per box
+  std::vector<Real> dx, dy;             // [level]: grid spacing (= dx_coarse / 2^k)
 
-  /// Nombre de niveaux (= ba.size()).
+  /// Number of levels (= ba.size()).
   int nlev() const { return static_cast<int>(ba.size()); }
 
-  // Lit le layout porte par la pile de niveaux d'UN bloc (chaque AmrLevelMP porte
-  // U.box_array() / U.dmap() / dx,dy). Aucune copie de donnees de champ : seulement la grille.
-  /// Extrait le layout (BoxArray + DistributionMapping + dx/dy par niveau) de la pile de niveaux d'UN
-  /// bloc. Aucune copie de donnees de champ, seulement la grille.
+  // Reads the layout carried by the level stack of ONE block (each AmrLevelMP carries
+  // U.box_array() / U.dmap() / dx,dy). No copy of field data: only the grid.
+  /// Extracts the layout (BoxArray + DistributionMapping + dx/dy per level) from the level stack of ONE
+  /// block. No copy of field data, only the grid.
   static AmrHierarchyLayout from_levels(const std::vector<AmrLevelMP>& levels) {
     AmrHierarchyLayout L;
     const int n = static_cast<int>(levels.size());
@@ -121,10 +91,10 @@ namespace detail {
 template <class>
 inline constexpr bool amr_always_false_v = false;
 
-// Comparaison EXACTE des grilles de deux niveaux (point 1) : meme BoxArray (boites ET ordre),
-// meme DistributionMapping (rang par boite), meme dx/dy (au bit pres). Renvoie true si tout
-// concorde. dx/dy sont les pas du niveau, identiques par construction si les boites le sont ;
-// on les compare quand meme pour attraper une geometrie mal cablee.
+// EXACT comparison of the grids of two levels (point 1): same BoxArray (boxes AND order), same
+// DistributionMapping (rank per box), same dx/dy (bit-for-bit). Returns true if everything matches.
+// dx/dy are the level spacings, identical by construction if the boxes are; we compare them anyway to
+// catch a mis-wired geometry.
 inline bool same_level_layout(const BoxArray& a_ba, const DistributionMapping& a_dm, Real a_dx,
                               Real a_dy, const BoxArray& b_ba, const DistributionMapping& b_dm,
                               Real b_dx, Real b_dy) {
@@ -132,14 +102,13 @@ inline bool same_level_layout(const BoxArray& a_ba, const DistributionMapping& a
          a_dy == b_dy;
 }
 
-// Garde-fou de COHERENCE DE LAYOUT entre blocs (point 1 du capstone). L'aux est PARTAGE par
-// niveau : tous les blocs DOIVENT vivre sur EXACTEMENT la meme grille a chaque niveau, sinon le
-// recablage levels[k].aux = &aux_[k] et l'avance lisent une grille incoherente (acces hors borne
-// silencieux). L'ancien controle ne comparait que le NOMBRE de boites (.size()) ; ici on compare
-// EXACTEMENT : nombre de niveaux, puis par niveau BoxArray (boites ET ordre), DistributionMapping
-// et dx/dy. Jette une erreur claire au PREMIER ecart (bloc et niveau localises). Un seul bloc
-// concorde trivialement avec lui-meme -> chemin mono-bloc strictement bit-identique (la boucle
-// sur les autres blocs est vide).
+// LAYOUT CONSISTENCY guard between blocks (point 1 of the capstone). The aux is SHARED per level: all
+// blocks MUST live on EXACTLY the same grid at each level, otherwise the rewiring
+// levels[k].aux = &aux_[k] and the advance read an inconsistent grid (silent out-of-bound access).
+// The old check only compared the NUMBER of boxes (.size()); here we compare EXACTLY: number of
+// levels, then per level BoxArray (boxes AND order), DistributionMapping and dx/dy. Throws a clear
+// error at the FIRST discrepancy (block and level located). A single block matches itself trivially ->
+// single-block path strictly bit-identical (the loop over the other blocks is empty).
 inline void same_layout_or_throw(const std::vector<std::vector<AmrLevelMP>>& block_levels) {
   if (block_levels.empty()) return;
   const auto& ref = block_levels[0];
@@ -148,41 +117,41 @@ inline void same_layout_or_throw(const std::vector<std::vector<AmrLevelMP>>& blo
     const auto& cur = block_levels[b];
     if (static_cast<int>(cur.size()) != nlev)
       throw std::runtime_error(
-          "AmrSystemCoupler : tous les blocs doivent avoir le meme nombre de niveaux "
-          "(layout AMR partage)");
+          "AmrSystemCoupler: all blocks must have the same number of levels "
+          "(shared AMR layout)");
     for (int k = 0; k < nlev; ++k) {
       if (!same_level_layout(cur[k].U.box_array(), cur[k].U.dmap(), cur[k].dx, cur[k].dy,
                              ref[k].U.box_array(), ref[k].U.dmap(), ref[k].dx, ref[k].dy))
         throw std::runtime_error(
-            "AmrSystemCoupler : layout AMR incoherent entre blocs (l'aux partage exige le MEME "
-            "BoxArray [boites et ordre], le MEME DistributionMapping et le MEME dx/dy par niveau)");
+            "AmrSystemCoupler: inconsistent AMR layout between blocks (the shared aux requires the "
+            "SAME BoxArray [boxes and order], the SAME DistributionMapping and the SAME dx/dy per level)");
     }
   }
 }
 }  // namespace detail
 
-/// Coupleur de systeme multi-especes sur AMR. @tparam System : CoupledSystem (blocs/especes).
-/// @tparam RhsAssembler : assembleur du RHS de Poisson (f = Sum_s q_s n_s, p.ex. ChargeDensityRhs).
-/// @tparam Elliptic : backend elliptique (concept EllipticSolver, defaut GeometricMG). PRECONDITION :
-/// tous les blocs partagent EXACTEMENT le meme layout AMR par niveau (verifie au ctor).
+/// Multi-species system coupler on AMR. @tparam System: CoupledSystem (blocks/species).
+/// @tparam RhsAssembler: assembler of the Poisson RHS (f = Sum_s q_s n_s, e.g. ChargeDensityRhs).
+/// @tparam Elliptic: elliptic backend (EllipticSolver concept, default GeometricMG). PRECONDITION:
+/// all blocks share EXACTLY the same AMR layout per level (checked at the ctor).
 template <CoupledSystemLike System, class RhsAssembler,
           class Elliptic = GeometricMG>
 class AmrSystemCoupler {
   static_assert(EllipticSolver<Elliptic>,
-                "le backend elliptique doit modeler EllipticSolver");
+                "the elliptic backend must model EllipticSolver");
 
  public:
-  // block_levels[b] = hierarchie du bloc b (niveau 0 = grossier sur ba_coarse, niveaux
-  // > 0 = patchs fins). Les AmrLevelMP portent U + dx/dy par niveau ; leur pointeur aux
-  // est (re)cable ici vers l'aux PARTAGE. Le ctor re-pointe aussi block.state vers le
-  // niveau grossier de sa hierarchie, pour que le RHS de systeme (ChargeDensityRhs) lise
-  // bien les densites grossieres.
-  // bz : champ magnetique hors-plan B_z(x, y) fourni par l'utilisateur (constante ou champ),
-  // partage par TOUS les blocs. Pose sur la composante B_z (indice kAuxBaseComps) du canal aux
-  // PARTAGE de CHAQUE niveau, depuis les centres de cellule DE CE NIVEAU (chaque niveau a sa
-  // propre geometrie / dx). Calque AMR du bz_ de SystemAssembler (chemin non-AMR). Un bloc qui
-  // lit B_z (n_aux=4) le voit a tous les niveaux, un bloc de base (3) ignore la composante. Sans
-  // bloc a champ extra (largeur 3) ou si bz vide : no-op -> bit-identique a l'historique.
+  // block_levels[b] = hierarchy of block b (level 0 = coarse on ba_coarse, levels
+  // > 0 = fine patches). The AmrLevelMP carry U + dx/dy per level; their aux pointer
+  // is (re)wired here to the SHARED aux. The ctor also re-points block.state to the
+  // coarse level of its hierarchy, so that the system RHS (ChargeDensityRhs) reads
+  // the coarse densities correctly.
+  // bz: out-of-plane magnetic field B_z(x, y) provided by the user (constant or field),
+  // shared by ALL blocks. Set on the B_z component (index kAuxBaseComps) of the SHARED aux
+  // channel of EACH level, from the cell centers OF THAT LEVEL (each level has its own
+  // geometry / dx). AMR analog of the bz_ of SystemAssembler (non-AMR path). A block that
+  // reads B_z (n_aux=4) sees it at all levels, a base block (3) ignores the component. Without
+  // a block with an extra field (width 3) or if bz is empty: no-op -> bit-identical to history.
   AmrSystemCoupler(System system, const Geometry& geom, const BoxArray& ba_coarse,
                    const BCRec& bcPhi, RhsAssembler rhs_assembler,
                    std::vector<std::vector<AmrLevelMP>> block_levels,
@@ -203,26 +172,26 @@ class AmrSystemCoupler {
         mg_(geom, ba_coarse, bcPhi, std::move(active), replicated_coarse),
         block_levels_(std::move(block_levels)),
         bz_(std::move(bz)) {
-    // Verifications de construction (revue Codex) : sans elles, une hierarchie mal
-    // formee provoque un acces hors borne silencieux dans le cablage / l'avance.
+    // Construction checks (Codex review): without them, a malformed hierarchy
+    // causes a silent out-of-bound access in the wiring / the advance.
     if (block_levels_.size() != System::n_blocks)
       throw std::runtime_error(
-          "AmrSystemCoupler : block_levels doit avoir un vecteur de niveaux par bloc "
-          "(taille != n_blocks)");
+          "AmrSystemCoupler: block_levels must have one level vector per block "
+          "(size != n_blocks)");
     nlev_ = block_levels_.empty() ? 0
                                   : static_cast<int>(block_levels_[0].size());
     if (nlev_ == 0)
-      throw std::runtime_error("AmrSystemCoupler : au moins un niveau (grossier) requis");
-    // Coherence de layout EXACTE entre blocs (l'aux est partage par niveau) : meme nombre de
-    // niveaux, et par niveau meme BoxArray (boites ET ordre), meme DistributionMapping, meme
-    // dx/dy. Remplace l'ancien controle qui ne comparait que le NOMBRE de boites (.size()).
-    // Mono-bloc : la verification est triviale (un seul bloc) -> bit-identique a l'historique.
+      throw std::runtime_error("AmrSystemCoupler: at least one level (coarse) required");
+    // EXACT layout consistency between blocks (the aux is shared per level): same number of
+    // levels, and per level same BoxArray (boxes AND order), same DistributionMapping, same
+    // dx/dy. Replaces the old check that only compared the NUMBER of boxes (.size()).
+    // Single-block: the check is trivial (a single block) -> bit-identical to history.
     detail::same_layout_or_throw(block_levels_);
-    // aux PARTAGE : un MultiFab (phi, grad phi [, B_z, ...]) par niveau, sur la grille commune.
-    // Dimensionne une seule fois -> adresses stables pour les pointeurs aux des blocs. Largeur =
-    // max des aux_comps<Model> sur les blocs (au moins 3) : un bloc lisant B_z (n_aux > 3) dispose
-    // de la place a CHAQUE niveau, un bloc de base ignore les composantes extra. Sans bloc a champ
-    // extra -> largeur 3 -> allocation strictement bit-identique a l'historique.
+    // SHARED aux: one MultiFab (phi, grad phi [, B_z, ...]) per level, on the common grid.
+    // Sized once -> stable addresses for the blocks' aux pointers. Width =
+    // max of aux_comps<Model> over the blocks (at least 3): a block reading B_z (n_aux > 3) has
+    // the room at EACH level, a base block ignores the extra components. Without a block with an
+    // extra field -> width 3 -> allocation strictly bit-identical to history.
     aux_ncomp_ = system_aux_comps(system_);
     aux_.resize(nlev_);
     for (int k = 0; k < nlev_; ++k)
@@ -231,18 +200,18 @@ class AmrSystemCoupler {
     for (auto& levels : block_levels_)
       for (int k = 0; k < nlev_; ++k) levels[k].aux = &aux_[k];
 
-    // re-pointe chaque bloc vers SON niveau grossier (block.U() = grossier du bloc).
+    // re-point each block to ITS coarse level (block.U() = coarse of the block).
     std::size_t b = 0;
     system_.for_each_block([&](auto& block) {
       block.state = &block_levels_[b][0].U;
       ++b;
     });
 
-    fill_bz();  // peuple B_z par niveau (no-op si aucun bloc ne le demande ou si bz vide)
+    fill_bz();  // populates B_z per level (no-op if no block requests it or if bz is empty)
   }
 
-  // Setter (parite avec le ctor : alternative pour poser B_z apres construction). Re-peuple
-  // immediatement le canal aux de chaque niveau. No-op effectif si la largeur aux <= base.
+  // Setter (parity with the ctor: alternative to set B_z after construction). Immediately
+  // re-populates the aux channel of each level. Effective no-op if the aux width <= base.
   void set_bz(std::function<Real(Real, Real)> bz) {
     bz_ = std::move(bz);
     fill_bz();
@@ -253,20 +222,20 @@ class AmrSystemCoupler {
   MultiFab& phi() { return mg_.phi(); }
   int nlev() const { return nlev_; }
   const MultiFab& aux(int k) const { return aux_[k]; }
-  // Acces ECRITURE au canal aux partage du niveau k (parite avec SystemAssembler::aux()) :
-  // permet de peupler une composante extra (B_z, ...) que field_postprocess ne touche pas
-  // (il n'ecrit que phi/grad, comp 0..2). La largeur est aux_ncomp_ (max aux_comps des blocs).
+  // WRITE access to the shared aux channel of level k (parity with SystemAssembler::aux()):
+  // allows populating an extra component (B_z, ...) that field_postprocess does not touch
+  // (it only writes phi/grad, comp 0..2). The width is aux_ncomp_ (max aux_comps of the blocks).
   MultiFab& aux(int k) { return aux_[k]; }
   int aux_ncomp() const { return aux_ncomp_; }
   std::vector<AmrLevelMP>& levels(std::size_t b) { return block_levels_[b]; }
   MultiFab& coarse(std::size_t b) { return block_levels_[b][0].U; }
   const MultiFab& coarse(std::size_t b) const { return block_levels_[b][0].U; }
-  // nombre de resolutions Poisson du dernier step() : diagnostic de la cadence.
+  // number of Poisson solves of the last step(): diagnostic of the cadence.
   int solve_count() const { return solve_count_; }
 
-  // sync_down (par bloc) + Poisson grossier de systeme + aux grossier + injection fine.
-  /// Resout les champs : average_down par bloc, Poisson grossier de systeme (RHS = Sum_s q_s n_s),
-  /// aux grossier (phi, grad phi) puis injection vers les fins + re-pose B_z par niveau. Incremente
+  // sync_down (per block) + coarse system Poisson + coarse aux + fine injection.
+  /// Solves the fields: average_down per block, coarse system Poisson (RHS = Sum_s q_s n_s),
+  /// coarse aux (phi, grad phi) then injection to the fine levels + re-sets B_z per level. Increments
   /// solve_count().
   void solve_fields() {
     ++solve_count_;
@@ -274,13 +243,13 @@ class AmrSystemCoupler {
       for (int k = nlev_ - 1; k >= 1; --k)
         mf_average_down_mb(levels[k].U, levels[k - 1].U);
 
-    rhs_assembler_(system_, mg_.rhs());  // f = Sum_s q_s n_s sur le grossier
+    rhs_assembler_(system_, mg_.rhs());  // f = Sum_s q_s n_s on the coarse level
     mg_.solve();
 
-    // aux grossier = (phi, grad phi) via le MEME chemin propre que le SystemCoupler
-    // mono-niveau (revue Codex 9.4) : remplir les ghosts de phi selon bcPhi_, puis
-    // field_postprocess, puis remplir les ghosts d'aux selon aux_bc_ (derive de bcPhi_).
-    // Gere le non-periodique (Foextrap) au lieu d'un fill_boundary periodique en dur.
+    // coarse aux = (phi, grad phi) via the SAME clean path as the single-level
+    // SystemCoupler (Codex review 9.4): fill the ghosts of phi according to bcPhi_, then
+    // field_postprocess, then fill the ghosts of aux according to aux_bc_ (derived from bcPhi_).
+    // Handles the non-periodic case (Foextrap) instead of a hard-coded periodic fill_boundary.
     fill_ghosts(mg_.phi(), dom_, bcPhi_);
     const Real cx = Real(1) / (2 * geom_.dx()), cy = Real(1) / (2 * geom_.dy());
     field_postprocess(mg_.phi(), aux_[0], cx, cy,
@@ -290,21 +259,21 @@ class AmrSystemCoupler {
       detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
 
-    // B_z PAR NIVEAU (pas seulement propage) : coupler_inject_aux_mb recopie TOUTES les
-    // composantes du parent (dont B_z) vers les fins, ce qui ecraserait le B_z fin par un B_z
-    // grossier injecte (constant par cellule grossiere). On re-pose donc B_z depuis bz_ aux
-    // centres FINS apres l'injection, pour qu'un B_z spatialement variable soit echantillonne a
-    // la resolution du niveau. Statique et bon marche ; no-op si la largeur aux <= base ou bz vide
-    // (B_z constant : ce re-fill est idempotent, l'injection aurait suffi).
+    // B_z PER LEVEL (not just propagated): coupler_inject_aux_mb copies ALL the components
+    // of the parent (including B_z) to the fine levels, which would overwrite the fine B_z with a
+    // coarse B_z injected (constant per coarse cell). So we re-set B_z from bz_ at the FINE centers
+    // after the injection, so that a spatially varying B_z is sampled at the level resolution.
+    // Static and cheap; no-op if the aux width <= base or bz empty (constant B_z: this re-fill is
+    // idempotent, the injection would have sufficed).
     fill_bz();
   }
 
-  // Avance le systeme d'un pas. Blocs explicites : advance_amr avec leur Disc et leurs
-  // sous-pas d'espece. Blocs implicites / IMEX : delegues au callback (coupler, block,
-  // levels, dt), point de branchement Newton / IMEX (defaut AmrImplicitSourceStepper).
-  /// Avance le systeme d'un macro-pas dt. Blocs explicites via advance_amr (leur Disc + sous-pas) ;
-  /// blocs implicites/IMEX delegues a @p implicit_advance (coupler, block, levels, dt). La cadence
-  /// par bloc (stride) tient un bloc lent puis le rattrape (hold-then-catch-up).
+  // Advances the system by one step. Explicit blocks: advance_amr with their Disc and their
+  // species substeps. Implicit / IMEX blocks: delegated to the callback (coupler, block,
+  // levels, dt), Newton / IMEX branch point (default AmrImplicitSourceStepper).
+  /// Advances the system by one macro-step dt. Explicit blocks via advance_amr (their Disc + substeps);
+  /// implicit/IMEX blocks delegated to @p implicit_advance (coupler, block, levels, dt). The per-block
+  /// cadence (stride) holds a slow block then catches it up (hold-then-catch-up).
   template <class ImplicitAdvance>
   void step(Real dt, ImplicitAdvance&& implicit_advance) {
     solve_count_ = 0;
@@ -317,29 +286,29 @@ class AmrSystemCoupler {
       constexpr int n = block_substeps_v<Block>;
       constexpr int stride = block_stride_v<Block>;
       const std::size_t bi = b++;
-      // cadence HOLD-THEN-CATCH-UP (doc add_block, sec.8.2 C) : le bloc est TENU aux
-      // macro-pas 0..stride-2 et rattrape au macro-pas stride-1 (quand
-      // (macro_step_+1) % stride == 0). Evite qu'un bloc lent avance en avance
-      // au premier macro-pas (macro_step_=0, ancienne condition 0%stride==0 vraie),
-      // ce qui mettait le bloc lent DANS LE FUTUR par rapport aux blocs rapides.
-      // stride=1 : (macro_step_+1)%1==0 toujours vrai -> chaque pas, bit-identique.
+      // HOLD-THEN-CATCH-UP cadence (add_block doc, sec.8.2 C): the block is HELD at the
+      // macro-steps 0..stride-2 and catches up at macro-step stride-1 (when
+      // (macro_step_+1) % stride == 0). Avoids a slow block advancing ahead
+      // at the first macro-step (macro_step_=0, old condition 0%stride==0 true),
+      // which put the slow block IN THE FUTURE relative to the fast blocks.
+      // stride=1: (macro_step_+1)%1==0 always true -> every step, bit-identical.
       if ((macro_step_ + 1) % stride != 0) return;
       const Real bdt = dt * static_cast<Real>(stride);
       auto& levels = block_levels_[bi];
       if constexpr (treatment == TimeTreatment::Explicit) {
         const Real h = bdt / static_cast<Real>(n);
         for (int s = 0; s < n; ++s) {
-          // PerSubstep : re-resout phi avant chaque sous-pas suivant (la charge a
-          // bouge) ; le premier reutilise le solve de tete. OncePerStep : phi gele.
+          // PerSubstep: re-solves phi before each subsequent substep (the charge has
+          // moved); the first reuses the head solve. OncePerStep: phi frozen.
           if (cadence_ == PoissonCadence::PerSubstep && s > 0) solve_fields();
           advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
               block.model, levels, dom_, h, base_per_, replicated_coarse_);
         }
       } else if constexpr (treatment == TimeTreatment::Implicit ||
                            treatment == TimeTreatment::IMEX) {
-        // IMEX = vrai forward-backward (revue Codex 9.1) : transport explicite par le
-        // moteur AMR sur un modele SOURCE-FREE (-div F seul), puis source implicite par
-        // le callback. Implicite pur : tout au callback (pas de transport).
+        // IMEX = true forward-backward (Codex review 9.1): explicit transport by the
+        // AMR engine on a SOURCE-FREE model (-div F only), then implicit source by
+        // the callback. Pure implicit: everything to the callback (no transport).
         if constexpr (treatment == TimeTreatment::IMEX)
           advance_amr<typename Disc::Limiter, typename Disc::NumericalFlux>(
               SourceFreeModel<typename Block::Model>{block.model}, levels, dom_, bdt,
@@ -350,25 +319,25 @@ class AmrSystemCoupler {
     ++macro_step_;
   }
 
-  // Surcharge pour un systeme entierement explicite.
-  /// Surcharge pour un systeme ENTIEREMENT explicite (static_assert si un bloc implicite/IMEX y passe).
+  // Overload for a fully explicit system.
+  /// Overload for a FULLY explicit system (static_assert if an implicit/IMEX block goes through it).
   void step(Real dt) {
     step(dt, [](auto&, auto& block, auto&, Real) {
       using Block = std::decay_t<decltype(block)>;
       static_assert(detail::amr_always_false_v<Block>,
-                    "AmrSystemCoupler::step(dt) ne peut pas avancer un bloc "
-                    "implicite/IMEX sans callback");
+                    "AmrSystemCoupler::step(dt) cannot advance an "
+                    "implicit/IMEX block without a callback");
     });
   }
 
-  // Source de couplage inter-especes sur AMR (parite avec SystemCoupler, revue Codex
-  // 9.5) : splitting forward-Euler applique PAR NIVEAU. On rafraichit phi (aux par
-  // niveau) puis, a chaque niveau k, on repointe temporairement chaque bloc vers son
-  // niveau k et on laisse la source lire tous les blocs + aux[k]. NoCoupledSource => no-op.
+  // Inter-species coupling source on AMR (parity with SystemCoupler, Codex review
+  // 9.5): forward-Euler splitting applied PER LEVEL. We refresh phi (aux per
+  // level) then, at each level k, we temporarily re-point each block to its
+  // level k and let the source read all the blocks + aux[k]. NoCoupledSource => no-op.
   template <class CoupledSource>
   void coupled_source_step(CoupledSource&& src, Real dt) {
     static_assert(CoupledSourceFor<std::decay_t<CoupledSource>, System>,
-                  "coupled_source_step attend une CoupledSource : apply(system, aux, dt)");
+                  "coupled_source_step expects a CoupledSource: apply(system, aux, dt)");
     solve_fields();
     for (int k = 0; k < nlev_; ++k) {
       std::size_t b = 0;
@@ -382,23 +351,23 @@ class AmrSystemCoupler {
       b = 0;
       system_.for_each_block([&](auto& block) { block.state = saved[b++]; });
     }
-    // INVARIANT DE COUVERTURE : la source a ete appliquee independamment sur CHAQUE
-    // niveau, donc une cellule grossiere COUVERTE par un patch fin porte maintenant sa
-    // propre source grossiere, sans rapport avec la source vue par ses enfants fins. Une
-    // cellule grossiere couverte doit, par definition, etre la moyenne 2x2 de ses enfants
-    // (elle ne represente pas de matiere a elle seule, elle est une vue grossiere du fin).
-    // On restaure cette coherence par une cascade fin -> grossier identique a celle de
-    // solve_fields et du chemin transport-IMEX (subcycle_level_mp). Sans elle, le
-    // diagnostic amr_mass (qui somme le seul niveau grossier) compte une source grossiere
-    // fantome sous le patch. Hierarchie mono-niveau : aucune cellule couverte, la boucle
-    // ne s'execute pas -> strictement bit-identique a l'historique.
+    // COVERAGE INVARIANT: the source was applied independently on EACH
+    // level, so a coarse cell COVERED by a fine patch now carries its
+    // own coarse source, unrelated to the source seen by its fine children. A
+    // covered coarse cell must, by definition, be the 2x2 average of its children
+    // (it does not represent matter on its own, it is a coarse view of the fine).
+    // We restore this consistency by a fine -> coarse cascade identical to that of
+    // solve_fields and of the transport-IMEX path (subcycle_level_mp). Without it, the
+    // amr_mass diagnostic (which sums only the coarse level) counts a ghost coarse source
+    // under the patch. Single-level hierarchy: no covered cell, the loop
+    // does not execute -> strictly bit-identical to history.
     for (auto& levels : block_levels_)
       for (int k = nlev_ - 1; k >= 1; --k)
         mf_average_down_mb(levels[k].U, levels[k - 1].U);
   }
 
-  // masse de la composante 0 du grossier du bloc b (somme u*dV sur fabs locaux ;
-  // grossier replique -> somme locale = totale, sinon all_reduce).
+  // mass of component 0 of the coarse level of block b (sum u*dV over local fabs;
+  // replicated coarse -> local sum = total, otherwise all_reduce).
   Real mass(std::size_t b) const {
     const MultiFab& U = block_levels_[b][0].U;
     const Real dV = geom_.dx() * geom_.dy();
@@ -414,12 +383,12 @@ class AmrSystemCoupler {
  private:
   System system_;
   RhsAssembler rhs_assembler_;
-  // Largeur du canal aux PARTAGE : maximum des aux_comps<Model> sur tous les blocs (au moins
-  // kAuxBaseComps). Le canal partage par niveau doit etre au moins aussi large que le bloc le
-  // plus exigeant pour que load_aux<aux_comps<Model>> n'y lise jamais hors borne dans les chemins
-  // AMR (compute_face_fluxes, mf_apply_source, ...) ; un bloc moins exigeant ignore simplement les
-  // composantes extra. Calque exact de SystemAssembler::system_aux_comps (chemin non-AMR). Sans
-  // bloc a champ extra, la largeur reste 3 -> allocation strictement bit-identique a l'historique.
+  // Width of the SHARED aux channel: maximum of aux_comps<Model> over all the blocks (at least
+  // kAuxBaseComps). The shared channel per level must be at least as wide as the most demanding
+  // block so that load_aux<aux_comps<Model>> never reads out of bound in the AMR paths
+  // (compute_face_fluxes, mf_apply_source, ...); a less demanding block simply ignores the extra
+  // components. Exact analog of SystemAssembler::system_aux_comps (non-AMR path). Without a
+  // block with an extra field, the width stays 3 -> allocation strictly bit-identical to history.
   static int system_aux_comps(const System& sys) {
     int w = kAuxBaseComps;
     sys.for_each_block([&](const auto& b) {
@@ -429,26 +398,26 @@ class AmrSystemCoupler {
     });
     return w;
   }
-  // Peuple la composante aux B_z (indice kAuxBaseComps) du canal partage de CHAQUE niveau depuis
-  // bz_(x, y). B_z est statique (externe a l'elliptique) : pose une fois (au ctor / set_bz),
-  // preserve par solve_fields (field_postprocess n'ecrit que phi/grad, comp 0..2 ; on re-pose
-  // apres l'injection coarse->fine qui, elle, recopierait un B_z grossier) et par l'avance (le
-  // moteur AMR ne touche pas l'aux). Chaque niveau a SA geometrie : niveau k = geom_.refine(1 << k),
-  // memes extents physiques mais domaine d'indices raffine, donc x_cell/y_cell pointent au centre
-  // physique de la cellule FINE. On remplit la GROWN box (valides + halos) directement depuis
-  // bz_(x, y) : bz_ etant fonction pure de la position physique, son evaluation aux centres ghost
-  // donne le B_z physiquement correct la aussi (independant des BC du patch fin, sans ambiguite de
-  // periodicite sur un domaine de patch). No-op si la largeur aux <= kAuxBaseComps (aucun bloc ne
-  // lit B_z) ou si bz_ vide : garde RUNTIME (la largeur n'est connue qu'a la construction) ->
-  // modele de base strictement bit-identique a l'historique.
+  // Populates the aux B_z component (index kAuxBaseComps) of the shared channel of EACH level from
+  // bz_(x, y). B_z is static (external to the elliptic): set once (at the ctor / set_bz),
+  // preserved by solve_fields (field_postprocess only writes phi/grad, comp 0..2; we re-set
+  // after the coarse->fine injection which would copy a coarse B_z) and by the advance (the
+  // AMR engine does not touch the aux). Each level has ITS geometry: level k = geom_.refine(1 << k),
+  // same physical extents but refined index domain, so x_cell/y_cell point to the physical
+  // center of the FINE cell. We fill the GROWN box (valid + halos) directly from
+  // bz_(x, y): bz_ being a pure function of the physical position, its evaluation at the ghost
+  // centers gives the physically correct B_z there too (independent of the BC of the fine patch,
+  // without periodicity ambiguity on a patch domain). No-op if the aux width <= kAuxBaseComps (no
+  // block reads B_z) or if bz_ is empty: RUNTIME guard (the width is only known at construction) ->
+  // base model strictly bit-identical to history.
   void fill_bz() {
     if (!bz_ || aux_ncomp_ <= kAuxBaseComps) return;
     for (int k = 0; k < nlev_; ++k) {
-      const Geometry gk = geom_.refine(1 << k);  // geometrie du niveau k (dx = dx_coarse / 2^k)
+      const Geometry gk = geom_.refine(1 << k);  // geometry of level k (dx = dx_coarse / 2^k)
       MultiFab& A = aux_[k];
       for (int li = 0; li < A.local_size(); ++li) {
         Fab2D& f = A.fab(li);
-        // grown box (valides + halos) : B_z(x,y) correct partout, geometrie du niveau k.
+        // grown box (valid + halos): B_z(x,y) correct everywhere, geometry of level k.
         detail::fill_bz_box(f, f.grown_box(), gk, bz_);
       }
     }
@@ -461,21 +430,21 @@ class AmrSystemCoupler {
   bool replicated_coarse_;
   PoissonCadence cadence_;
   mutable int solve_count_ = 0;
-  int macro_step_ = 0;  // compteur de macro-pas (cadence stride par bloc)
+  int macro_step_ = 0;  // macro-step counter (per-block stride cadence)
   Elliptic mg_;
-  std::vector<std::vector<AmrLevelMP>> block_levels_;  // [bloc][niveau]
-  std::vector<MultiFab> aux_;                          // [niveau], partage
-  int aux_ncomp_ = kAuxBaseComps;  // largeur du canal aux partage (max aux_comps sur les blocs)
+  std::vector<std::vector<AmrLevelMP>> block_levels_;  // [block][level]
+  std::vector<MultiFab> aux_;                          // [level], shared
+  int aux_ncomp_ = kAuxBaseComps;  // width of the shared aux channel (max aux_comps over the blocks)
   int nlev_ = 0;
-  std::function<Real(Real, Real)> bz_;  // B_z(x, y) externe (vide si non fourni)
+  std::function<Real(Real, Real)> bz_;  // external B_z(x, y) (empty if not provided)
 };
 
-// Defaut implicite sur AMR : backward-Euler (Newton) sur la source du modele, applique
-// a CHAQUE niveau de la hierarchie du bloc. Pendant AMR d'ImplicitSourceStepper ; meme
-// stabilite (inconditionnelle pour une relaxation lineaire). Aucun solveur cote user.
-/// Callback implicite par defaut pour AmrSystemCoupler::step : backward-Euler (Newton) sur la source
-/// du modele, applique a CHAQUE niveau de la hierarchie, suivi d'une cascade fin -> grossier
-/// (coherence de couverture, cf. coupled_source_step). @p iters : iterations de Newton par etage.
+// Default implicit on AMR: backward-Euler (Newton) on the model source, applied
+// to EACH level of the block hierarchy. AMR pendant of ImplicitSourceStepper; same
+// stability (unconditional for a linear relaxation). No solver on the user side.
+/// Default implicit callback for AmrSystemCoupler::step: backward-Euler (Newton) on the model source,
+/// applied to EACH level of the hierarchy, followed by a fine -> coarse cascade
+/// (coverage consistency, cf. coupled_source_step). @p iters: Newton iterations per stage.
 struct AmrImplicitSourceStepper {
   int iters = 2;
 
@@ -484,21 +453,21 @@ struct AmrImplicitSourceStepper {
     const int nlev = static_cast<int>(levels.size());
     for (int k = 0; k < nlev; ++k)
       backward_euler_source(block.model, coupler.aux(k), levels[k].U, dt, iters);
-    // INVARIANT DE COUVERTURE (cf. coupled_source_step) : la source implicite a ete
-    // resolue independamment niveau par niveau, donc les cellules grossieres COUVERTES
-    // portent une source grossiere fantome au lieu de la moyenne 2x2 de leurs enfants
-    // fins. On retablit la coherence par la meme cascade fin -> grossier que le chemin
-    // transport-IMEX, pour qu'une cellule grossiere couverte reste la vue grossiere du fin
-    // (sinon amr_mass, somme du seul grossier, compte la source du patch en double).
-    // Mono-niveau : aucune cellule couverte, boucle vide -> bit-identique a l'historique.
+    // COVERAGE INVARIANT (cf. coupled_source_step): the implicit source was
+    // solved independently level by level, so the COVERED coarse cells
+    // carry a ghost coarse source instead of the 2x2 average of their fine
+    // children. We restore consistency by the same fine -> coarse cascade as the
+    // transport-IMEX path, so that a covered coarse cell stays the coarse view of the fine
+    // (otherwise amr_mass, sum of only the coarse level, double-counts the patch source).
+    // Single-level: no covered cell, empty loop -> bit-identical to history.
     for (int k = nlev - 1; k >= 1; --k)
       mf_average_down_mb(levels[k].U, levels[k - 1].U);
   }
 };
 
-// Alias "qui avance" (retour tuteur sec.8.2 B, sec.9.6) : AmrSystemCoupler assemble (Poisson de
-// systeme + aux par niveau) ET avance (step, reflux, sous-cyclage). Scission en deux classes
-// cosmetique et reportee (classe unifiee validee bit-identique).
+// "Advancing" alias (tutor feedback sec.8.2 B, sec.9.6): AmrSystemCoupler assembles (system
+// Poisson + aux per level) AND advances (step, reflux, subcycling). Splitting into two classes is
+// cosmetic and deferred (the unified class is validated bit-identical).
 template <CoupledSystemLike System, class RhsAssembler, class Elliptic = GeometricMG>
 using AmrSystemDriver = AmrSystemCoupler<System, RhsAssembler, Elliptic>;
 

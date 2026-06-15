@@ -1,23 +1,16 @@
 /// @file
-/// @brief SpectralCoupler : stepper couple periodique E x B DISTRIBUE (FFT par bandes). DEPRECATED.
+/// @brief SpectralCoupler: DISTRIBUTED periodic E x B coupled stepper (banded FFT). DEPRECATED.
 ///
-/// DEPRECATED : aucun #include dans le coeur, les tests ou les bindings Python. Le role est repris
-/// par Coupler<Model, DistributedFFTSolver> (le solveur FFT distribue est devenu un EllipticSolver
-/// autonome, cf. poisson_fft_solver.hpp) ; a retirer apres migration. Encapsule la boucle reecrite a
-/// la main dans chaque exemple : rho = elliptic_rhs(U) -> Poisson spectral distribue (FFT, bandes) ->
-/// aux = (phi, grad phi) avec halos -> advance (Rusanov, derive E x B). Decomposition en BANDES (1
-/// box par rang) ; Nx, Ny puissances de 2 divisibles par n_ranks(). Generique sur le modele.
+/// DEPRECATED: no #include in the core, the tests or the Python bindings. The role is taken over
+/// by Coupler<Model, DistributedFFTSolver> (the distributed FFT solver became a standalone
+/// EllipticSolver, cf. poisson_fft_solver.hpp); to remove after migration. Encapsulates the loop
+/// hand-rewritten in each example: rho = elliptic_rhs(U) -> distributed spectral Poisson (FFT, bands) ->
+/// aux = (phi, grad phi) with halos -> advance (Rusanov, E x B drift). BANDED decomposition (1
+/// box per rank); Nx, Ny powers of 2 divisible by n_ranks(). Generic over the model.
 
 #pragma once
 
-// DEPRECATED : coupleur periodique distribue (FFT par bandes, SpectralCoupler). Aucun
-// #include dans le coeur, les tests ou les bindings Python. Le role est repris par
-// Coupler<Model, DistributedFFTSolver> (le solveur FFT distribue est devenu un
-// EllipticSolver autonome, cf. poisson_fft_solver.hpp). Conserve car documente comme
-// API publique (docs/ARCHITECTURE.md). A retirer apres migration vers
-// Coupler<Model, DistributedFFTSolver>.
-
-#include <adc/numerics/elliptic/poisson_fft_solver.hpp>  // DistributedFFTSolver (enveloppe PoissonFFT)
+#include <adc/numerics/elliptic/poisson_fft_solver.hpp>  // DistributedFFTSolver (wraps PoissonFFT)
 #include <adc/numerics/time/amr_reflux.hpp>  // advance_fab_1c, xface_box, yface_box
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/box_array.hpp>
@@ -32,31 +25,16 @@
 #include <utility>
 #include <vector>
 
-// Stepper couple periodique E x B, DISTRIBUE et PRET A L'EMPLOI. Encapsule la
-// boucle qui etait reecrite a la main dans chaque exemple/test :
-//
-//   rho = alpha (n_e - n_i0)  ->  Poisson spectral distribue (FFT, bandes)
-//   ->  aux = (phi, grad phi) avec halos  ->  advance (Rusanov, derive E x B).
-//
-// Decomposition en bandes (1 box par rang), layout du solveur FFT ; Nx, Ny
-// puissances de 2 divisibles par n_ranks(). Generique sur le modele (tout modele
-// portant alpha, n_i0, B0 et un flux de derive E x B).
-//
-// L'exemple/test ne reimplemente plus rien : il construit le stepper, remplit
-// state() (densite initiale), puis boucle step(dt). C'est l'esprit "composant"
-// (cf. Simulation de MUFFIN), mais en compile-time/template (zero virtuel,
-// GPU-ready).
-
 namespace adc {
 
-/// Stepper couple periodique E x B distribue en BANDES (FFT). DEPRECATED (cf. @file). @tparam Model :
-/// modele a derive E x B (alpha, n_i0, B0, flux E x B). PRECONDITION : Nx, Ny puissances de 2,
-/// divisibles par n_ranks().
+/// Periodic E x B coupled stepper, BANDED-distributed (FFT). DEPRECATED (cf. @file). @tparam Model:
+/// E x B drift model (alpha, n_i0, B0, E x B flux). PRECONDITION: Nx, Ny powers of 2,
+/// divisible by n_ranks().
 template <class Model>
 class SpectralCoupler {
  public:
-  /// Construit le coupleur sur un domaine [0, Lx] x [0, Ly] discretise Nx x Ny, decoupe en bandes
-  /// (1 box par rang). Alloue l'etat U_ (1 composante) et l'aux Uaux_ (3 composantes), 1 ghost.
+  /// Builds the coupler on a domain [0, Lx] x [0, Ly] discretized Nx x Ny, split into bands
+  /// (1 box per rank). Allocates the state U_ (1 component) and the aux Uaux_ (3 components), 1 ghost.
   SpectralCoupler(const Model& model, int Nx, int Ny, double Lx, double Ly)
       : model_(model),
         Nx_(Nx),
@@ -73,15 +51,15 @@ class SpectralCoupler {
     for (int r = 0; r < np_; ++r)
       slabs.push_back(Box2D{{0, r * nyl_}, {Nx - 1, (r + 1) * nyl_ - 1}});
     ba_ = BoxArray(std::move(slabs));
-    dm_ = DistributionMapping(np_, np_);  // box r -> rang r
+    dm_ = DistributionMapping(np_, np_);  // box r -> rank r
     U_ = MultiFab(ba_, dm_, 1, 1);
     Uaux_ = MultiFab(ba_, dm_, 3, 1);
   }
 
-  // --- acces a l'etat (la bande locale de ce rang) ---
+  // --- access to the state (the local band of this rank) ---
   MultiFab& state() { return U_; }
   const MultiFab& state() const { return U_; }
-  Fab2D& local() { return U_.fab(0); }  // le fab de la bande locale
+  Fab2D& local() { return U_.fab(0); }  // the fab of the local band
   const Box2D& domain() const { return dom_; }
   int y_begin() const { return y0_; }
   int ny_local() const { return nyl_; }
@@ -89,17 +67,16 @@ class SpectralCoupler {
   double dx() const { return dx_; }
   double dy() const { return dy_; }
 
-  // Poisson + aux + halos sans avancer (pour fixer dt / diagnostiquer).
-  /// Poisson spectral distribue + aux = (phi, grad phi) + halos, SANS avancer en temps (pour fixer dt
-  /// ou diagnostiquer). Uaux_ a jour au retour.
+  /// Distributed spectral Poisson + aux = (phi, grad phi) + halos, WITHOUT advancing in time (to fix dt
+  /// or diagnose). Uaux_ up to date on return.
   void solve_aux() {
-    // rho dans le rhs du solveur FFT distribue (meme decoupage en bandes que U_, donc
-    // bit-identique a l'ancien chemin inline qui appelait PoissonFFT directement).
+    // rho into the rhs of the distributed FFT solver (same banded split as U_, so
+    // bit-identical to the old inline path that called PoissonFFT directly).
     const ConstArray4 u = U_.fab(0).const_array();
     Array4 r = fft_.rhs().fab(0).array();
-    // f = model.elliptic_rhs(U) : on appelle le PhysicalModel (comme le Coupler normal)
-    // au lieu de coder le couplage de fond alpha*(u - n0) en dur dans le coeur.
-    // Pour ce couplage c'est exactement la meme expression -> bit-identique.
+    // f = model.elliptic_rhs(U): we call the PhysicalModel (like the normal Coupler)
+    // instead of hard-coding the background coupling alpha*(u - n0) in the core.
+    // For this coupling it is exactly the same expression -> bit-identical.
     for (int j = y0_; j < y0_ + nyl_; ++j)
       for (int i = 0; i < Nx_; ++i)
         r(i, j) = model_.elliptic_rhs(typename Model::State{u(i, j)});
@@ -116,8 +93,7 @@ class SpectralCoupler {
     fill_boundary(Uaux_, dom_, Periodicity{true, true});
   }
 
-  // un pas couple complet.
-  /// Un pas couple complet : solve_aux puis advance (Rusanov, derive E x B) de la bande locale sur dt.
+  /// One full coupled step: solve_aux then advance (Rusanov, E x B drift) of the local band over dt.
   void step(double dt) {
     solve_aux();
     fill_boundary(U_, dom_, Periodicity{true, true});
@@ -125,13 +101,13 @@ class SpectralCoupler {
     advance_fab_1c(model_, U_.fab(0), Uaux_.fab(0), dx_, dy_, dt, fx, fy);
   }
 
-  // vitesse d'onde max (all-reduce), pour la CFL. GENERALISE (jalon 4.3) : via
-  // model.max_wave_speed au lieu de la derive /B0 codee en dur -> le coupleur spectral
-  // n'est plus lie a un flux de derive particulier. NB : pour la derive E x B c'est
-  // max(|gx|,|gy|)/B0 (par direction) au lieu de hypot(gx,gy)/B0 ; le dt CFL change donc legerement (a re-valider
-  // cote physique, ce n'est PAS bit-identique a l'ancien diagnostic).
+  // max wave speed (all-reduce), for the CFL. GENERALIZED (milestone 4.3): via
+  // model.max_wave_speed instead of the /B0 drift hard-coded -> the spectral coupler
+  // is no longer tied to a particular drift flux. NB: for the E x B drift it is
+  // max(|gx|,|gy|)/B0 (per direction) instead of hypot(gx,gy)/B0; the CFL dt thus changes slightly (to re-validate
+  // on the physics side, this is NOT bit-identical to the old diagnostic).
   double max_drift_speed() const {
-    device_fence();  // GPU : barriere avant lecture hote apres advance_fab_1c (device)
+    device_fence();  // GPU: barrier before host read after advance_fab_1c (device)
     const ConstArray4 u = U_.fab(0).const_array();
     const ConstArray4 a = Uaux_.fab(0).const_array();
     const Model m = model_;
@@ -148,11 +124,11 @@ class SpectralCoupler {
     return std::max(all_reduce_max(v), 1e-12);
   }
 
-  // masse totale (all-reduce).
+  // total mass (all-reduce).
   double mass() const {
-    // seam reducteur (bande locale = 1 fab) ; Kokkos::Sum reassocie la somme par tuile
-    // (deterministe/idempotent mais non bit-identique a une somme lexicographique) ;
-    // parallel_reduce absorbe la barriere, plus de device_fence en tete.
+    // reducer seam (local band = 1 fab); Kokkos::Sum reassociates the sum per tile
+    // (deterministic/idempotent but not bit-identical to a lexicographic sum);
+    // parallel_reduce absorbs the barrier, no more device_fence at the head.
     const ConstArray4 u = U_.fab(0).const_array();
     const Real s = for_each_cell_reduce_sum(U_.box(0), [u] ADC_HD(int i, int j) { return u(i, j); });
     return all_reduce_sum(static_cast<double>(s)) * dx_ * dy_;

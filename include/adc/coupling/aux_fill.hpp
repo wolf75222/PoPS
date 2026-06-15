@@ -7,23 +7,23 @@
 #include <adc/mesh/physical_bc.hpp>  // BCRec / BCType
 
 /// @file
-/// @brief Helpers partages par les trois coupleurs (Coupler mono-bloc, SystemAssembler,
-///        AmrSystemCoupler) pour le canal aux. Centralise deux corps qui etaient dupliques
-///        a l'identique :
-///          - derive_aux_bc : CL du canal aux derivees des CL de phi (periodique conserve,
-///            tout le reste -> Foextrap).
-///          - fill_bz_box   : noyau de pose de B_z(x, y) a la composante kAuxBaseComps sur
-///            une boite d'un Fab2D, depuis une geometrie donnee.
-///        Extraction PURE : les corps sont repris a l'identique (bit-identique). Ce qui DIFFERE
-///        entre coupleurs (garde compile-time vs runtime, boite valide vs grown, geometrie par
-///        niveau, appel a fill_ghosts) reste cote appelant ; seul le contenu commun est ici.
+/// @brief Helpers shared by the three couplers (single-block Coupler, SystemAssembler,
+///        AmrSystemCoupler) for the aux channel. Centralizes two bodies that were duplicated
+///        verbatim:
+///          - derive_aux_bc: aux-channel BC derived from the phi BC (periodic preserved,
+///            everything else -> Foextrap).
+///          - fill_bz_box:   kernel that writes B_z(x, y) at component kAuxBaseComps on
+///            a box of a Fab2D, from a given geometry.
+///        PURE extraction: the bodies are taken verbatim (bit-identical). What DIFFERS
+///        between couplers (compile-time vs runtime guard, valid vs grown box, per-level
+///        geometry, call to fill_ghosts) stays on the caller side; only the common content is here.
 
 namespace adc {
 namespace detail {
 
-/// CL du canal aux derivees des CL du potentiel phi : une CL periodique reste periodique,
-/// toute autre devient Foextrap (extrapolation d'ordre 0). Corps repris a l'identique des
-/// trois coupleurs.
+/// Aux-channel BC derived from the potential phi BC: a periodic BC stays periodic,
+/// any other becomes Foextrap (order-0 extrapolation). Body taken verbatim from the
+/// three couplers.
 inline BCRec derive_aux_bc(const BCRec& b) {
   auto t = [](BCType x) {
     return x == BCType::Periodic ? BCType::Periodic : BCType::Foextrap;
@@ -36,10 +36,10 @@ inline BCRec derive_aux_bc(const BCRec& b) {
   return a;
 }
 
-/// Pose B_z(x, y) a la composante kAuxBaseComps sur la boite @p box du fab @p f, en
-/// echantillonnant @p bz aux centres de cellule de la geometrie @p g. Noyau commun aux trois
-/// coupleurs : seule la boite parcourue (valide ou grown) et la geometrie (globale ou par
-/// niveau) different cote appelant ; le corps de boucle est bit-identique.
+/// Writes B_z(x, y) at component kAuxBaseComps on box @p box of fab @p f, sampling
+/// @p bz at the cell centers of geometry @p g. Kernel common to the three couplers:
+/// only the traversed box (valid or grown) and the geometry (global or per-level) differ
+/// on the caller side; the loop body is bit-identical.
 template <class Bz>
 inline void fill_bz_box(Fab2D& f, const Box2D& box, const Geometry& g, const Bz& bz) {
   for (int j = box.lo[1]; j <= box.hi[1]; ++j)

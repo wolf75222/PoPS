@@ -1,17 +1,17 @@
 /// @file
-/// @brief AmrLevelStack : stockage de la hierarchie AMR (niveaux + aux) extrait des coupleurs.
+/// @brief AmrLevelStack: AMR hierarchy storage (levels + aux) extracted from the couplers.
 ///
-/// Le coupleur n'ORDONNE plus que les operations ; ce stack DETIENT la pile de niveaux
-/// std::vector<Level>, la pile d'aux MultiFab parallele, et porte le cablage L_[k].aux = &aux_[k].
-/// Generique sur Level (AmrLevelMF mono-box ou AmrLevelMP multi-box) : seuls les membres U (MultiFab)
-/// et aux (const MultiFab*) sont touches ici ; la repartition vit dans les MultiFab (pas suppose
-/// mono-rang). INVARIANT D'ADRESSES : aux_ est dimensionne UNE seule fois au ctor puis jamais
-/// redimensionne (les pointeurs L_[k].aux pointent dans aux_) ; reattach_aux(k) remplace aux_[k] EN
-/// PLACE et recable. Largeur aux propagee en parametre (defaut kAuxBaseComps = 3, bit-identique).
+/// The coupler now only ORDERS the operations; this stack OWNS the level stack
+/// std::vector<Level>, the parallel aux MultiFab stack, and carries the wiring L_[k].aux = &aux_[k].
+/// Generic over Level (AmrLevelMF mono-box or AmrLevelMP multi-box): only the U (MultiFab)
+/// and aux (const MultiFab*) members are touched here; the distribution lives in the MultiFab (no
+/// mono-rank assumption). ADDRESS INVARIANT: aux_ is sized ONCE at the ctor then never
+/// resized (the L_[k].aux pointers point into aux_); reattach_aux(k) replaces aux_[k] IN
+/// PLACE and rewires. aux width propagated as a parameter (default kAuxBaseComps = 3, bit-identical).
 
 #pragma once
 
-#include <adc/core/state.hpp>  // kAuxBaseComps : largeur aux par defaut (canal de base phi/grad)
+#include <adc/core/state.hpp>  // kAuxBaseComps: default aux width (base phi/grad channel)
 #include <adc/core/types.hpp>
 #include <adc/mesh/box2d.hpp>
 #include <adc/mesh/multifab.hpp>
@@ -19,41 +19,21 @@
 #include <utility>
 #include <vector>
 
-// Hierarchie AMR extraite des coupleurs (responsabilite a : stockage des niveaux
-// + aux). Le coupleur n'ORDONNE plus que les operations ; ce stack DETIENT la pile
-// de niveaux std::vector<Level> et la pile d'aux MultiFab parallele, et porte le
-// cablage L_[k].aux = &aux_[k].
-//
-// Generique sur Level (AmrLevelMF mono-box ou AmrLevelMP multi-box) : les deux
-// portent un membre U (MultiFab) et un membre aux (const MultiFab*), seuls champs
-// touches ici. La repartition (DistributionMapping) est portee par les MultiFab,
-// jamais supposee mono-rang : le stack ne fige pas la repartition.
-//
-// Invariant d'adresses : aux_ est dimensionne UNE seule fois au ctor puis jamais
-// redimensionne (les pointeurs L_[k].aux pointent dans aux_). reattach_aux(k)
-// remplace l'element aux_[k] en place (pas de resize) et recable L_[k].aux.
-//
-// Largeur du canal aux : aux_ncomp (defaut kAuxBaseComps = 3, le contrat de base phi/grad).
-// Le coupleur, qui connait le Model, passe aux_comps<Model>() pour qu'un modele lisant des
-// champs extra (B_z, ... ; n_aux > 3) dispose de la place. Le Model n'etant pas a portee ici
-// (le stack est generique sur Level), la largeur est PROPAGEE en parametre. Defaut 3 ->
-// allocation MultiFab(..., 3, 1) strictement bit-identique a l'historique.
-
 namespace adc {
 
-/// Detient la pile de niveaux AMR et la pile d'aux parallele. @tparam Level : type de niveau portant
-/// U (MultiFab) et aux (const MultiFab*) (AmrLevelMF ou AmrLevelMP). INVARIANT : aux_ a une taille
-/// figee au ctor (adresses stables pour L_[k].aux).
+/// Owns the AMR level stack and the parallel aux stack. @tparam Level: level type carrying
+/// U (MultiFab) and aux (const MultiFab*) (AmrLevelMF or AmrLevelMP). INVARIANT: aux_ has a size
+/// fixed at the ctor (stable addresses for L_[k].aux).
 template <class Level>
 class AmrLevelStack {
  public:
-  /// Construit le stack : prend possession des @p levels, alloue un aux (aux_ncomp composantes, 1
-  /// ghost) sur le layout de chaque U, et cable L_[k].aux = &aux_[k]. @p dom : domaine du niveau 0.
+  /// Builds the stack: takes ownership of @p levels, allocates an aux (aux_ncomp components, 1
+  /// ghost) on the layout of each U, and wires L_[k].aux = &aux_[k]. @p dom: domain of level 0.
   AmrLevelStack(const Box2D& dom, std::vector<Level> levels,
                 int aux_ncomp = kAuxBaseComps)
       : dom_(dom), L_(std::move(levels)), aux_ncomp_(aux_ncomp) {
     nlev_ = static_cast<int>(L_.size());
-    aux_.resize(nlev_);  // addresses stables : aux_ n'est plus redimensionne
+    aux_.resize(nlev_);  // stable addresses: aux_ is no longer resized
     for (int k = 0; k < nlev_; ++k) {
       aux_[k] = MultiFab(L_[k].U.box_array(), L_[k].U.dmap(), aux_ncomp_, 1);
       L_[k].aux = &aux_[k];
@@ -72,12 +52,12 @@ class AmrLevelStack {
   MultiFab& aux(int k) { return aux_[k]; }
   const MultiFab& aux(int k) const { return aux_[k]; }
 
-  // Largeur du canal aux (composantes), telle que dimensionnee au ctor.
+  // aux channel width (components), as sized at the ctor.
   int aux_ncomp() const { return aux_ncomp_; }
 
-  // realloc en place de aux_[k] sur la box courante de L_[k].U + recablage du
-  // pointeur. Conserve la largeur du canal aux (aux_ncomp_) ; defaut 3 -> bit-identique
-  // au bloc inline d'origine (meme MultiFab(..., 3, 1)).
+  // In-place realloc of aux_[k] on the current box of L_[k].U + rewiring of the
+  // pointer. Keeps the aux channel width (aux_ncomp_); default 3 -> bit-identical
+  // to the original inline block (same MultiFab(..., 3, 1)).
   void reattach_aux(int k) {
     aux_[k] = MultiFab(L_[k].U.box_array(), L_[k].U.dmap(), aux_ncomp_, 1);
     L_[k].aux = &aux_[k];
@@ -88,7 +68,7 @@ class AmrLevelStack {
   std::vector<Level> L_;
   std::vector<MultiFab> aux_;
   int nlev_ = 0;
-  int aux_ncomp_ = kAuxBaseComps;  // largeur du canal aux (defaut : contrat de base)
+  int aux_ncomp_ = kAuxBaseComps;  // aux channel width (default: base contract)
 };
 
 }  // namespace adc
