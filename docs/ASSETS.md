@@ -1,5 +1,10 @@
 # Asset manifest (adc_cpp)
 
+> **Update (ADC-255, 2026-06-15):** the 21 assets marked `delete-orphan` below were removed
+> from `docs/` (no live reference; their only mentions were in this audit record). The rows
+> are kept as the historical record of what was deleted.
+
+
 This document lists the images tracked by git under `docs/` of the `adc_cpp`
 repository, their actual reference surface, their known producer and a
 management decision. It exists because almost all of these assets were produced
