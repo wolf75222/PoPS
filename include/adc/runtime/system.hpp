@@ -62,6 +62,22 @@ struct SystemConfig {
 };
 
 /// Coupled multi-species system, composed at runtime from generic bricks.
+///
+/// @code{.cpp}
+/// adc::SystemConfig cfg;                  // n x n cells on [0, L]^2, periodic
+/// cfg.n = 96;
+/// adc::System sys(cfg);
+///
+/// adc::ModelSpec ne;                       // reduced diocotron: scalar density advected by E x B
+/// ne.transport = "exb";
+/// ne.source = "none";
+/// ne.elliptic = "charge";
+/// sys.add_block("ne", ne, "minmod", "rusanov", "conservative", "explicit");
+/// sys.set_poisson("charge_density", "geometric_mg");
+///
+/// sys.set_density("ne", rho0);             // rho0: initial density, flattened row-major (n*n)
+/// const double dt = sys.step_cfl(0.4);     // one CFL-limited step of the coupled system
+/// @endcode
 class System {
  public:
   explicit System(const SystemConfig& cfg);
