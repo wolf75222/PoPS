@@ -218,6 +218,14 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void assemble_rhs_polar(const Model& model, const MultiFab& U, const MultiFab& aux,
                         const PolarGeometry& geom, MultiFab& R, bool recon_prim = false,
                         bool wall_radial = false, Real pos_floor = Real(0)) {
+  // STATE-GHOST WIDTH: exactly Limiter::n_ghost, like the Cartesian operator. The polar face kernels
+  // (PolarFaceFluxRKernel / PolarFaceFluxThetaKernel) reuse reconstruct_pp<> VERBATIM at the SAME
+  // i-1/i (radial) and j-1/j (azimuthal) offsets over the SAME face boxes (xface_box/yface_box, up
+  // to hi+1) as compute_face_fluxes -> identical reconstruction stencil (i+-Limiter::n_ghost at the
+  // edge of the valid box). The polar metric (r_face = r_min + i*dr, r_cell, 1/r) is computed from
+  // INDICES, never read from U, so it adds NO state-ghost width; aux is read at i+-1 only (1 ghost,
+  // narrower). HOST-only guard, BEFORE the pass-1/pass-2 loops -- never inside a kernel.
+  detail::require_reconstruction_ghosts<Limiter>(U);  // state ghosts >= stencil (otherwise OOB)
   const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   const Real r_min = geom.r_min, dr = geom.dr(), dtheta = geom.dtheta();
   // Physical radial boundary faces (wall): r_min at the lo face of the index domain, r_max at the
