@@ -142,7 +142,7 @@ def main():
     try:
         bad.compile(backend="production", verify_conservation=True)
     except ValueError as e:
-        raised = "conservatif" in str(e).lower()
+        raised = "verify_conservation" in str(e).lower()
     chk(raised, "verify_conservation attrape le couplage manuel non conservatif", fails)
     # le MEME couplage SANS le flag reste licite (retro-compat : opt-in)
     ok_without_flag = True

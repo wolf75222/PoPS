@@ -59,7 +59,7 @@ try:
     chk(bk == "production", f"resolve_auto_backend = production (raison : {reason[:60]})")
     cm = iso3("auto_prod").compile(os.path.join(tmp, "auto_prod.so"), INCLUDE)
     chk(cm.backend == "production", f"compile() sans backend -> {cm.backend!r}")
-    chk(cm.backend_auto_reason is not None and "parite" in cm.backend_auto_reason,
+    chk(cm.backend_auto_reason is not None and "toolchain" in cm.backend_auto_reason,
         f"raison posee : {str(cm.backend_auto_reason)[:60]}")
     n = 16
     sim = adc.System(n=n, L=1.0, periodic=True)

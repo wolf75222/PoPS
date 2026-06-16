@@ -95,7 +95,7 @@ try:
     dsl.diff(x ** x, x)
     chk(False, "x^x aurait du lever NotImplementedError")
 except NotImplementedError as ex:
-    chk("logarithme" in str(ex), f"d(x^x)/dx -> NotImplementedError ({str(ex)[:48]})")
+    chk("logarithm" in str(ex), f"d(x^x)/dx -> NotImplementedError ({str(ex)[:48]})")
 
 
 # === (b) m.flux_jacobian : A = dF/dU de l'isotherme 3-var == matrice analytique =================
@@ -178,21 +178,21 @@ try:
     m0.roe_dissipation(x=[L(rho0) - R(rho0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "dimension fausse aurait du lever")
 except ValueError as ex:
-    chk("expressions attendues" in str(ex), "dimensions fausses rejetees")
+    chk("roe_dissipation" in str(ex), "dimensions fausses rejetees")
 
 m0, rho0, mx0, my0 = iso_bare()
 try:
     m0.roe_dissipation(x=[L(rho0) - R(rho0), mx0, L(my0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "variable nue aurait du lever")
 except ValueError as ex:
-    chk("hors marqueur" in str(ex), "variable hors left()/right() rejetee")
+    chk("'mx'" in str(ex), "variable hors left()/right() rejetee")
 
 m0, rho0, mx0, my0 = iso_bare()
 try:
     m0.roe_dissipation(x=[L(R(rho0)), L(mx0), L(my0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "marqueur imbrique aurait du lever")
 except ValueError as ex:
-    chk("imbrique" in str(ex), "marqueur left()/right() imbrique rejete")
+    chk("left()/right()" in str(ex), "marqueur left()/right() imbrique rejete")
 
 m0, rho0, mx0, my0 = iso_bare()
 m0.enable_roe()
@@ -200,7 +200,7 @@ try:
     m0.roe_dissipation(x=[L(rho0), L(mx0), L(my0)], y=[L(rho0), L(mx0), L(my0)])
     chk(False, "enable_roe puis roe_dissipation aurait du lever")
 except ValueError as ex:
-    chk("un seul fournisseur" in str(ex), "enable_roe -> roe_dissipation rejete (un seul hook)")
+    chk("one single provider" in str(ex), "enable_roe -> roe_dissipation rejete (un seul hook)")
 
 m0, rho0, mx0, my0 = iso_bare()
 m0.roe_dissipation(x=[L(rho0), L(mx0), L(my0)], y=[L(rho0), L(mx0), L(my0)])
@@ -208,7 +208,7 @@ try:
     m0.enable_roe()
     chk(False, "roe_dissipation puis enable_roe aurait du lever")
 except ValueError as ex:
-    chk("un seul fournisseur" in str(ex), "roe_dissipation -> enable_roe rejete (un seul hook)")
+    chk("one single provider" in str(ex), "roe_dissipation -> enable_roe rejete (un seul hook)")
 
 
 # === (c) bout en bout : roe_dissipation a la main == enable_roe (compile) =======================

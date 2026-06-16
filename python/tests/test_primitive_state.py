@@ -148,7 +148,7 @@ def test_errors():
         s.set_primitive_state("e", rho=rho, u=u)  # v, p manquantes
         raise AssertionError("aucune erreur sur des primitives manquantes")
     except ValueError as ex:
-        assert "manquante" in str(ex), "message sans la mention 'manquante' : %s" % ex
+        assert "missing primitive(s)" in str(ex), "message sans la mention 'missing primitive(s)' : %s" % ex
     print("OK  erreurs claires : primitive inconnue + primitive manquante")
 
 

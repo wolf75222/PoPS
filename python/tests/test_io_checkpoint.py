@@ -103,7 +103,7 @@ try:
     small.restart(os.path.join(tmp, "chk"))
     chk(False, "grille differente aurait du lever")
 except ValueError as e:
-    chk("grille" in str(e), f"grille differente : {str(e)[:70]}")
+    chk("checkpoint grid" in str(e), f"grille differente : {str(e)[:70]}")
 
 # --- (3) write npz / vtk ---------------------------------------------------------------
 print("== (3) write npz / vtk ==")

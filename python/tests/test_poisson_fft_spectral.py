@@ -102,7 +102,7 @@ sim.add_block("ions",
 sim.set_poisson(rhs="charge_density", solver="fft_spectral", bc="dirichlet",
                 wall="circle", wall_radius=0.4)
 msg = err_msg(sim.solve_fields)
-chk("fft_spectral" in msg and "paroi" in msg, f"paroi refusee au kind effectif ({msg[:60]}...)")
+chk("fft_spectral" in msg and "wall" in msg, f"paroi refusee au kind effectif ({msg[:60]}...)")
 sim2 = adc.System(n=32, L=1.0, periodic=True)
 sim2.add_block("ions",
                adc.Model(state=adc.FluidState("isothermal", cs2=0.5),

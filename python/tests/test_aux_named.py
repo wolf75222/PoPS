@@ -131,7 +131,7 @@ def test_facade_rejects():
     try:
         sim.set_aux_field("inexistant", "kappa", field)
     except ValueError as ex:
-        assert "inconnu" in str(ex) or "nomme" in str(ex)
+        assert "inexistant" in str(ex)
     else:
         raise AssertionError("set_aux_field sur bloc inconnu aurait du lever")
     print("OK  facade : B_z/T_e/phi rediriges, bloc inconnu rejete")

@@ -253,7 +253,7 @@ print("== (8) gardes ==")
 msg = err_msg(lambda: build_moment_model("bad", 1, gaussian_closure(1)))
 chk("order >= 2" in msg, f"order=1 refuse ({msg[:42]}...)")
 msg = err_msg(lambda: build_moment_model("bad2", 2, lambda S: {"S30": 0.0}))
-chk("exactement les cles" in msg, f"fermeture incomplete refusee ({msg[:42]}...)")
+chk("S30" in msg, f"fermeture incomplete refusee ({msg[:42]}...)")
 
 cxx = dsl._default_cxx(None)
 if not cxx:
