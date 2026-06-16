@@ -296,7 +296,7 @@
     {
       "name": "ci-asan",
       "configurePreset": "ci-asan",
-      "jobs": 4
+      "jobs": 1
     },
     {
       "name": "ci-tsan",
@@ -311,7 +311,7 @@
     {
       "name": "ci-coverage",
       "configurePreset": "ci-coverage",
-      "jobs": 2
+      "jobs": 1
     }
   ],
   "testPresets": [
