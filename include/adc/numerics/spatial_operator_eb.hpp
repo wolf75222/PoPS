@@ -312,6 +312,14 @@ template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Mode
 void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux, const LevelSet& ls,
                      const Geometry& geom, MultiFab& R, bool recon_prim = false,
                      Real kappa_min = detail::kEbKappaMin, Real pos_floor = Real(0)) {
+  // STATE-GHOST WIDTH: exactly Limiter::n_ghost, like the Cartesian operator. The EB face kernels
+  // (EbFaceFluxXKernel / EbFaceFluxYKernel) reuse reconstruct_pp<> VERBATIM at the SAME i-1/i
+  // offsets over the SAME face boxes (xface_box/yface_box, up to hi+1) as compute_face_fluxes ->
+  // identical reconstruction stencil (i+-Limiter::n_ghost at the edge of the valid box). The EB
+  // geometry (level set ls, cut_fraction/cut_distance) is evaluated at cell-center COORDINATES
+  // (geom.x_cell/y_cell), never on U, so it adds NO state-ghost width; aux is read at i+-1 only
+  // (1 ghost, narrower). HOST-only guard, BEFORE the pass-1/pass-2 loops -- never inside a kernel.
+  detail::require_reconstruction_ghosts<Limiter>(U);  // state ghosts >= stencil (otherwise OOB)
   const Real dx = geom.dx(), dy = geom.dy();
   const Limiter lim{};
   const NumericalFlux nflux{};
