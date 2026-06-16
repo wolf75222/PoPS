@@ -1,11 +1,11 @@
 """Garde-fou de REGRESSION : la norme C++ du modele NATIF (backend="production") doit suivre celle du
-LOADER (module _adc), sinon add_native_block rejette le bloc avec "ABI incompatible".
+LOADER (module _adc), sinon add_native_block rejette le bloc avec "incompatible ABI".
 
 CONTEXTE (regression observee sur GH200). Le module _adc est compile en C++20 sous Kokkos (CUDA 12.x
 n'offre pas -std=c++23 ; cf. ADC_CXX_STD dans CMakeLists.txt), en C++23 sinon. Avant le fix, le DSL
 backend="production" figeait le std du modele natif a "c++23" en dur. Sous Kokkos cela donnait :
 loader C++20 (__cplusplus=202002L) vs modele C++23 (__cplusplus!=202002L) -> les cles d'ABI (qui
-encodent __cplusplus) divergeaient -> add_native_block levait "ABI incompatible" -> AUCUN cas ne
+encodent __cplusplus) divergeaient -> add_native_block levait "incompatible ABI" -> AUCUN cas ne
 pouvait tourner en natif sur GH200. Le fix derive le std du modele natif de la norme reelle du loader
 (adc.dsl.loader_cxx_std() / adc._adc.__cxx_std__), donc les cles concordent SUR TOUTE toolchain.
 
@@ -81,7 +81,7 @@ def check_std_invariant():
 
 def check_native_loads_without_abi_error(expected_std):
     """Le coeur du fix : compile(backend="production") avec le std PAR DEFAUT (derive du loader) puis
-    add_native_block doit charger SANS "ABI incompatible". Sous Kokkos avec l'ancien defaut c++23 en
+    add_native_block doit charger SANS "incompatible ABI". Sous Kokkos avec l'ancien defaut c++23 en
     dur, ce chemin levait ; avec le std aligne, il passe."""
     n = 16
     tmp = tempfile.mkdtemp()
@@ -92,12 +92,12 @@ def check_native_loads_without_abi_error(expected_std):
         assert os.path.exists(so), "compile(backend='production') n'a pas produit de .so"
 
         sys = adc.System(n=n, L=1.0, periodic=True)
-        # Si le std du modele != std du loader, add_native_block leve RuntimeError("ABI incompatible").
+        # Si le std du modele != std du loader, add_native_block leve RuntimeError("incompatible ABI").
         try:
             sys._s.add_native_block("gas", so, limiter="minmod", riemann="rusanov",
                                     recon="conservative", time="explicit", gamma=GAMMA, substeps=1)
         except RuntimeError as ex:
-            if "ABI incompatible" in str(ex):
+            if "incompatible ABI" in str(ex):
                 raise AssertionError(
                     "REGRESSION : add_native_block rejette le modele production (std du modele != "
                     "std du loader %s). C'est exactement le bug GH200 sous Kokkos. Detail : %s"
