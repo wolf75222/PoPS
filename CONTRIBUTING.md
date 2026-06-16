@@ -35,14 +35,22 @@ nothing; the full build runs on the weekly cron and on manual dispatch.
 
 The conventions are written down; follow the project's decision first, then the upstream guide.
 
-- **C++ style**: Google C++ Style, adapted. The ratified decisions (what we follow, adapt or
-  drop, D1-D15) are in [docs/CODING_STANDARDS_DECISIONS.md](docs/CODING_STANDARDS_DECISIONS.md);
-  `.clang-format` and `.clang-tidy` enforce the mechanical part.
-- **Documentation style**: the internal guide
-  [docs/sphinx/development/documentation.md](docs/sphinx/development/documentation.md) codifies the
-  Google developer documentation style and SWE-at-Google ch.10 (doc treated as code). Write in
-  English (en-US), ASCII for `docs/sphinx/**`, no em-dash; `check_docs.py` and `sphinx -W` enforce
-  it. Page classes and freshness are in [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md).
+- **C++ style**: the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html),
+  adapted. The ratified decisions (what we follow, adapt or drop, D1-D15) are in
+  [docs/CODING_STANDARDS_DECISIONS.md](docs/CODING_STANDARDS_DECISIONS.md); `.clang-format` and
+  `.clang-tidy` enforce the mechanical part.
+- **Python style**: the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
+  for `python/adc/**`, the bindings, the DSL and the tests; `ruff` (see `quality.yml`) enforces the
+  mechanical part.
+- **Documentation style**: the Google documentation guide is vendored verbatim under
+  [docs/docguide/](docs/docguide/) (philosophy, best practices, Markdown style, README files) and is
+  the canonical reference. Follow it, in particular *Update Docs with Code* (change the docs in the
+  same commit as the code), *Minimum viable documentation*, and *Duplication is evil* (link, do not
+  re-document). The internal guide
+  [docs/sphinx/development/documentation.md](docs/sphinx/development/documentation.md) codifies how
+  we apply it (Google developer documentation style and SWE-at-Google ch.10, doc treated as code).
+  Write in English (en-US), ASCII for `docs/sphinx/**`, no em-dash; `check_docs.py` and `sphinx -W`
+  enforce it. Page classes and freshness are in [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md).
 - **Templates**: open a PR with [the PR template](.github/PULL_REQUEST_TEMPLATE.md) (its five
   questions) and file issues with the forms under `.github/ISSUE_TEMPLATE/`.
 - **Automated checks** run before any review: the `ci.yml` gate (build and tests), `quality.yml`
@@ -92,9 +100,14 @@ tell a normal difference from a silent model change.
 
 The PR template asks five questions: what changed, why, how, how it was tested (with the
 commands run), and what to focus on. For a multi-file PR, give a suggested review order.
-Commit messages are local and technical (imperative, with a scope, e.g. `flux: add HLL
-state reconstruction helper`); the PR description carries the full context. Avoid `fix`,
-`wip`, `update`.
+
+Commit messages follow the [seven rules of a great commit message](https://cbea.ms/git-commit/):
+separate subject from body with a blank line, keep the subject a short (~50 characters) imperative
+with no trailing period, and wrap the body at 72 columns to explain what and why (not how). One
+project adaptation: keep a lowercase `scope:` prefix (e.g. `flux: add HLL state reconstruction
+helper`), so we do not capitalize the subject (cbeams rule 3 relaxed). A single-line subject is fine
+for a focused change, since the PR description carries the full context. Avoid `fix`, `wip`,
+`update`.
 
 ## Code review
 
