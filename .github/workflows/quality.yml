@@ -154,6 +154,7 @@ jobs:
   warnings:
     name: warnings stricts (build, informatif)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
     env:
@@ -205,6 +206,7 @@ jobs:
   tidy:
     name: clang-tidy (analyse statique, informatif)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
     env:
@@ -254,6 +256,7 @@ jobs:
   sanitizers:
     name: sanitizers ASan+UBSan (ctest, informatif)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
     env:
@@ -314,6 +317,7 @@ jobs:
   tsan:
     name: TSan races (ctest OpenMP, informatif)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
     env:
@@ -375,6 +379,7 @@ jobs:
   fuzz:
     name: fuzzing libFuzzer (90 s/cible, bloquant)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
     env:
@@ -454,6 +459,7 @@ jobs:
   coverage:
     name: couverture gcov (ctest + gcovr, informatif)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
     env:
