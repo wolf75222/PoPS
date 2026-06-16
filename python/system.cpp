@@ -151,6 +151,11 @@ struct System::Impl {
   detail::DiscDomain disc_;
   bool disc_set_ = false;
   MultiFab disc_mask_;  // 0/1 cell-centered, same layout as the blocks (ba/dm), 1 ghost; empty as long as !disc_set_
+  // At least one block requested wave_speed_cache (ADC-199, opt-in HLL cache). The cache is only wired
+  // on the FULL Cartesian advance (advance); the disc advances (advance_masked / advance_eb) do not
+  // carry it. This flag locks the switch to a disc transport mode (staircase/cutcell) -> explicit
+  // rejection in set_disc_domain / set_geometry_mode rather than a silently ignored cache.
+  bool ws_cache_block_ = false;
   // TRANSPORT GEOMETRY MODE (project T5-PR3, wiring the disc into step()). None (default):
   // full Cartesian transport (assemble_rhs) -> BIT-IDENTICAL. Staircase: assemble_rhs_masked (0/1
   // mask). CutCell: assemble_rhs_eb (cut-cell EB). The stepper reads this mode to ROUTE the transport
@@ -496,7 +501,7 @@ void System::add_block(const std::string& name, const ModelSpec& model,
                        bool evolve, int stride, const std::vector<std::string>& implicit_vars,
                        const std::vector<std::string>& implicit_roles,
                        const NewtonOptions& newton, bool newton_diagnostics,
-                       double positivity_floor) {
+                       double positivity_floor, bool wave_speed_cache) {
   Impl* P = p_.get();
   if (substeps < 1) throw std::runtime_error("System::add_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("System::add_block : stride >= 1");
@@ -533,6 +538,31 @@ void System::add_block(const std::string& name, const ModelSpec& model,
   const bool imexrk = (time == "imexrk_ars222");
   const bool imex = (time == "imex" || imexrk);  // both go through the implicit source step
   const bool recon_prim = (recon == "primitive");
+  // Wave speed cache (opt-in): only engages for the HLL flux and the explicit advance. Requesting it
+  // elsewhere would be SILENTLY without effect -> explicit error (no silent ignore). The polar path has
+  // its own factory (make_block_polar) without this cache.
+  if (wave_speed_cache) {
+    if (riemann != "hll")
+      throw std::runtime_error("System::add_block : wave_speed_cache requires riemann='hll' (the wave "
+                               "speed cache only applies to the HLL flux ; received riemann='" +
+                               riemann + "')");
+    if (imex)
+      throw std::runtime_error("System::add_block : wave_speed_cache not supported with time='" + time +
+                               "' (wired on the explicit advance ; use time "
+                               "'explicit'/'ssprk2'/'ssprk3'/'euler')");
+    if (P->polar_)
+      throw std::runtime_error("System::add_block : wave_speed_cache not supported on the polar "
+                               "geometry (ring)");
+    // DISC transport mode already active: the stepper routes to advance_masked / advance_eb, which do
+    // not carry the cache -> requesting it would be WITHOUT EFFECT. Explicit rejection (no silent
+    // ignore). The reverse order (set_disc_domain AFTER a cached block) is rejected by set_disc_domain
+    // / set_geometry_mode.
+    if (P->disc_set_ && P->geometry_mode_ != GeometryMode::None)
+      throw std::runtime_error("System::add_block : wave_speed_cache incompatible with an active disc "
+                               "transport mode (staircase/cutcell) ; the cache is only wired on the full "
+                               "Cartesian advance (remove wave_speed_cache or mode='none')");
+    P->ws_cache_block_ = true;  // a block requested the cache -> locks the switch to disc mode
+  }
   const std::string method = imexrk ? std::string("imexrk_ars222")
                                      : ((time == "ssprk3") ? std::string("ssprk3")
                                         : (time == "euler") ? std::string("euler")
@@ -641,7 +671,7 @@ void System::add_block(const std::string& name, const ModelSpec& model,
     // the Impl members). They stay INERT as long as the System is not put in Staircase /
     // CutCell mode (cf. step()): built at add time, selected only on opt-in.
     clo = make_block(m, limiter, riemann, ctx, imex, recon_prim, method, impl_components, nopts,
-                     nreport, static_cast<Real>(positivity_floor));
+                     nreport, static_cast<Real>(positivity_floor), wave_speed_cache);
     max_speed = make_max_speed(m, ctx);  // stability_speed (trait) or max_wave_speed (fallback)
     add_poisson_rhs = make_poisson_rhs(m);
     // Optional step bounds (HasSourceFrequency / HasStabilityDt traits): EMPTY functions if
@@ -857,6 +887,13 @@ void System::set_disc_domain(double cx, double cy, double R, const std::string& 
     throw std::runtime_error("System::set_disc_domain : radius R > 0 required");
   // Validate the mode BEFORE any mutation (an unknown mode must not leave the disc half-set).
   const GeometryMode gmode = parse_geometry_mode(mode, "System::set_disc_domain");
+  // wave_speed_cache (ADC-199) is only wired on the full Cartesian advance: a disc mode
+  // (staircase/cutcell) borrows advance_masked / advance_eb which ignore the cache -> explicit rejection.
+  if (gmode != GeometryMode::None && P->ws_cache_block_)
+    throw std::runtime_error("System::set_disc_domain : mode '" + mode +
+                             "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
+                             "cache, only wired on the full Cartesian advance ; remove wave_speed_cache "
+                             "or use mode='none')");
   P->disc_ = detail::DiscDomain{cx, cy, R};
   P->disc_set_ = true;
   // Materializes the 0/1 cell-centered mask (1 ghost, so the mask-aware transport reads the
@@ -888,6 +925,13 @@ void System::set_geometry_mode(const std::string& mode) {
     throw std::runtime_error(
         "System::set_geometry_mode : mode '" + mode +
         "' requested without a fixed disc ; call set_disc_domain(cx, cy, R) first");
+  // wave_speed_cache (ADC-199) is not carried by the disc advances -> explicit rejection (cf.
+  // set_disc_domain) rather than a cache silently ignored in staircase/cutcell mode.
+  if (gmode != GeometryMode::None && P->ws_cache_block_)
+    throw std::runtime_error("System::set_geometry_mode : mode '" + mode +
+                             "' incompatible with wave_speed_cache (a block enabled the HLL wave speed "
+                             "cache, only wired on the full Cartesian advance ; remove wave_speed_cache "
+                             "or use mode='none')");
   P->geometry_mode_ = gmode;
 }
 
