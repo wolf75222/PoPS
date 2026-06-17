@@ -256,7 +256,7 @@ jobs:
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
       - name: Build + test module Python `adc` (Kokkos Serial)
         run: |
-          pip install --upgrade pip numpy
+          pip install --upgrade pip numpy pytest
           SECONDS=0
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD
           cmake --build --preset ci-kokkos-python
@@ -267,8 +267,13 @@ jobs:
           # via Kokkos_ROOT / ADC_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _adc.
           export Kokkos_ROOT="${KOKKOS_PREFIX}" ADC_KOKKOS_ROOT="${KOKKOS_PREFIX}"
           SECONDS=0
+          # ADC-112 : capturer le code de sortie de python3 (rc) avant le echo final, sinon la
+          # valeur de retour du bash -c = celle du echo (toujours 0) et xargs avale les echecs.
+          # Avec exit $rc, un test rouge -> bash -c non nul -> xargs sort 123 -> l'etape echoue
+          # (le run a deja -eo pipefail). On garde -P 4 : tous les tests tournent, l'etape echoue
+          # si AU MOINS un a echoue.
           find python/tests -maxdepth 1 -name 'test_*.py' -print0 | sort -z \
-            | xargs -0 -P 4 -I {} bash -c 'echo "::group::{}"; python3 "{}"; echo "::endgroup::"'
+            | xargs -0 -P 4 -I {} bash -c 'echo "::group::{}"; python3 "{}"; rc=$?; echo "::endgroup::"; exit $rc'
           test_s=$SECONDS
           {
             echo "### gate-python (module _adc, Kokkos Serial)"
@@ -481,7 +486,7 @@ jobs:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 2G
         run: |
-          pip install --upgrade pip numpy
+          pip install --upgrade pip numpy pytest
           cmake --preset ci-kokkos-python
           cmake --build --preset ci-kokkos-python
 

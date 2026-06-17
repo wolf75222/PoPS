@@ -20,8 +20,8 @@ On verifie :
  (4) MEME semantique sur le backend aot (add_compiled_block, ABI .so marshalee
      adc_compiled_has_projection / adc_compiled_project_p) ;
  (5) GARDES : backend 'prototype' (JIT) rejette m.projection (ValueError explicite) ; un loader
-     production target='amr_system' avec projection est REJETE par add_native_block (AmrSystem)
-     avec une erreur claire (hook non cable sur AMR : perimetre suivant) ;
+     production target='amr_system' avec projection est desormais ACCEPTE par add_native_block
+     (AmrSystem) : la projection ponctuelle est cablee PAR NIVEAU apres le reflux (ADC-312) ;
  (6) PROJECTION LISANT L'AUX (production + aot) : un plancher par cellule q1 <- max(q1, w) ou w est un
      champ aux NOMME (set_aux_field) -- l'etat post-pas == transport puis projection numpy AVEC le meme
      w (egalite bit-exacte, W asymetrique => valide la convention d'index) ; un plancher 5.0 force
@@ -233,14 +233,17 @@ def main():
                                               backend="prototype"))
         chk("projection" in msg and "prototype" in msg,
             "backend prototype rejete : %s" % msg[:80])
+        # ADC-312 : la projection ponctuelle est desormais cablee sur AmrSystem (helper par niveau
+        # apres reflux). add_native_block d'un loader avec projection n'est donc PLUS rejete.
         so_amr = m_clamp.compile(os.path.join(tmp, "toy_amr.so"), INCLUDE,
                                  backend="production", target="amr_system")
         s_amr = adc.AmrSystem(n=N, L=L, periodic=True)
-        msg = err_msg(lambda: s_amr._s.add_native_block(
+        amr_err = err_msg(lambda: s_amr._s.add_native_block(
             "toy", so_amr, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=1.4, substeps=1))
-        chk("projection" in msg and "AMR" in msg,
-            "target amr_system rejete explicitement : %s" % msg[:90])
+        chk(amr_err == "",
+            "target amr_system : projection cablee (ADC-312), add_native_block accepte%s"
+            % ("" if amr_err == "" else " -- a leve : %s" % amr_err[:80]))
 
         print("== (6) projection LISANT l'aux : champ aux marshale ET consomme (production + aot) ==")
         m_aux = build_aux_model("floor")
