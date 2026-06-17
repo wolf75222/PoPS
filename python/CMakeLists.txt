@@ -401,11 +401,12 @@ foreach(t
     # ctest ; en CI ils etaient bien lances par auto-decouverte (find|xargs) mais l'echec etait
     # AVALE (le `bash -c '...; python3 {}; echo'` se termine sur un echo -> exit 0). Aucun garde-fou,
     # donc -- c'est ce trou qui a laisse passer la regression Kokkos-only #295.
-    # NB : test_dsl_hybrid et test_dsl_hybrid_bz (hybride AOT) sont VOLONTAIREMENT differes ici : ils
-    # echouent sur master tant que le correctif #295 (ADC-103 : flags Kokkos sur le chemin aot de
-    # HybridModel.compile) n'est pas merge. Ils seront enregistres dans le suivi gate sur #295 (un
-    # garde-fou vert ne peut pas preceder le correctif qu'il protege). Les hybrides du chemin
-    # "production" (hybrid_amr, hybrid_coupling) passent deja et sont enregistres ci-dessous. ---
+    # ADC-112 : test_dsl_hybrid et test_dsl_hybrid_bz (hybride AOT) etaient VOLONTAIREMENT differes ici
+    # car ils echouaient tant que #295 (ADC-103 : flags Kokkos sur le chemin aot de HybridModel.compile)
+    # n'etait pas merge. #295 etant merge (ils passent desormais), on les enregistre. Les hybrides du
+    # chemin "production" (hybrid_amr, hybrid_coupling) etaient deja enregistres ci-dessous. ---
+    test_dsl_hybrid           # hybride AOT (.so) : transport DSL + brique native sur le chemin aot Kokkos (ADC-103/#295), auto-skip sans compilateur
+    test_dsl_hybrid_bz        # hybride AOT avec champ magnetique B_z : meme chemin aot, auto-skip sans compilateur
     test_dsl_hybrid_amr       # hybride cote AMR : CompositeModel.compile(backend="production", target="amr_system") (.so), rejets aot/system, auto-skip
     test_dsl_hybrid_coupling  # hybride couple ions/elec : transport DSL + elliptic natif ChargeDensity compile production (.so), auto-skip
     test_dsl_coupled_source   # source COUPLEE inter-especes par le DSL (CoupledSource.compile(backend="production"), .so) == reference numpy forward-Euler

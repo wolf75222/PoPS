@@ -68,11 +68,11 @@ jobs:
       cpp: ${{ steps.filter.outputs.cpp }}
       python: ${{ steps.filter.outputs.python }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
       - id: filter
-        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         with:
           filters: |
             cpp:
@@ -142,7 +142,7 @@ jobs:
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -159,7 +159,7 @@ jobs:
       # du plus precis au plus large (meme job sur la branche -> sur master -> n'importe).
       # Cle INCHANGEE depuis l'ancien job build-and-test (kokkos-serial).
       - name: Cache ccache (Kokkos Serial)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-kokkos-serial-${{ github.ref }}-${{ github.sha }}
@@ -222,7 +222,7 @@ jobs:
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -240,7 +240,7 @@ jobs:
 
       # ccache du module Python : cle INCHANGEE depuis l'ancien job build-and-test (python).
       - name: Cache ccache (Python module)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-python-${{ github.ref }}-${{ github.sha }}
@@ -256,7 +256,7 @@ jobs:
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
       - name: Build + test module Python `adc` (Kokkos Serial)
         run: |
-          pip install --upgrade pip numpy
+          pip install --upgrade pip numpy pytest
           SECONDS=0
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD
           cmake --build --preset ci-kokkos-python
@@ -267,8 +267,13 @@ jobs:
           # via Kokkos_ROOT / ADC_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _adc.
           export Kokkos_ROOT="${KOKKOS_PREFIX}" ADC_KOKKOS_ROOT="${KOKKOS_PREFIX}"
           SECONDS=0
+          # ADC-112 : capturer le code de sortie de python3 (rc) avant le echo final, sinon la
+          # valeur de retour du bash -c = celle du echo (toujours 0) et xargs avale les echecs.
+          # Avec exit $rc, un test rouge -> bash -c non nul -> xargs sort 123 -> l'etape echoue
+          # (le run a deja -eo pipefail). On garde -P 4 : tous les tests tournent, l'etape echoue
+          # si AU MOINS un a echoue.
           find python/tests -maxdepth 1 -name 'test_*.py' -print0 | sort -z \
-            | xargs -0 -P 4 -I {} bash -c 'echo "::group::{}"; python3 "{}"; echo "::endgroup::"'
+            | xargs -0 -P 4 -I {} bash -c 'echo "::group::{}"; python3 "{}"; rc=$?; echo "::endgroup::"; exit $rc'
           test_s=$SECONDS
           {
             echo "### gate-python (module _adc, Kokkos Serial)"
@@ -331,7 +336,7 @@ jobs:
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -343,7 +348,7 @@ jobs:
       # Meme install Kokkos Serial (PIC) que le gate ; cle de cache partagee.
       - name: Cache Kokkos install (Serial ${{ env.KOKKOS_VERSION }})
         id: kokkos-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.KOKKOS_PREFIX }}
           key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-serial-cxx20-gcc-pic
@@ -359,7 +364,7 @@ jobs:
           cmake --build /tmp/kbuild --parallel 4 --target install
 
       - name: Cache ccache (MPI)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-mpi-${{ github.ref }}-${{ github.sha }}
@@ -405,7 +410,7 @@ jobs:
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-openmp-install
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -418,13 +423,13 @@ jobs:
       # La cle inclut "openmp" pour ne pas entrer en collision avec le cache serial.
       - name: Cache Kokkos install (OpenMP ${{ env.KOKKOS_VERSION }})
         id: kokkos-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.KOKKOS_PREFIX }}
           key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-openmp-cxx20-gcc-pic
 
       - name: Cache ccache (Kokkos OpenMP)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-kokkos-openmp-${{ github.ref }}-${{ github.sha }}
@@ -481,7 +486,7 @@ jobs:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 2G
         run: |
-          pip install --upgrade pip numpy
+          pip install --upgrade pip numpy pytest
           cmake --preset ci-kokkos-python
           cmake --build --preset ci-kokkos-python
 
@@ -531,7 +536,7 @@ jobs:
       CCACHE_MAXSIZE: 500M
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -541,7 +546,7 @@ jobs:
           sudo apt-get install -y libeigen3-dev ninja-build ccache
 
       - name: Cache ccache (bench)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-bench-${{ github.ref }}-${{ github.sha }}

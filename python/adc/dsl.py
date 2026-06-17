@@ -3909,6 +3909,13 @@ class Model:
         U: numpy (n_vars, ...); aux: dict name -> array; dir: 0=x, 1=y."""
         return self._m.flux(U, aux, dir)
 
+    def eval_source(self, U, aux):
+        """numpy EVALUATOR of the source term (debug / host proto; delegates to
+        HyperbolicModel.source_value). U: numpy (n_vars, ...); aux: dict name -> array. Returns
+        zeros when no source was declared. Lets a host test check the emitted source (e.g. a BGK
+        collision) against an oracle without compiling."""
+        return self._m.source_value(U, aux)
+
     def eigenvalues(self, x, y):
         """Eigenvalues (characteristic speeds) per direction (delegates to set_eigenvalues)."""
         self._m.set_eigenvalues(x, y)
