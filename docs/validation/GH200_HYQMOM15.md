@@ -51,7 +51,8 @@ Determinisme verifie (regeneration locale vs artefacts du run ROMEO, bit-pour-bi
 ```
 md5(ic_128.raw)          = da245ba8934546986508976a64156d2e   (regenere == ROMEO)
 md5(hyqmom15_brick.hpp)  = d785b13ac0da1dd349ff4775368c8ff2   (--ns 128 256, 1940 lignes, == ROMEO)
-md5(include/.../dense_eig.hpp) = 86fb1cbbec0e265cd255559434ce83c6   (worktree == ROMEO ~/adc_cpp)
+md5(include/.../dense_eig.hpp) = 86fb1cbbec0e265cd255559434ce83c6   (cap QR 30 ; sections 1/2/4)
+md5(include/.../dense_eig.hpp) = 0d5f0f3086814e5e2053af30bae8ae92   (cap QR 100 par defaut, ADC-195/#309 ; section 3 multi-GPU ; == ROMEO/worktree courant)
 ```
 
 Le binaire device n'est plus stage a la main : `parity181.sbatch` recompile les DEUX
@@ -193,8 +194,31 @@ Critere de validation (`diocotron_mpi.sbatch`, python embarque) : conservation d
 ET masse globale np=2/4 vs np=1 au niveau ulp (rel < 1e-12 ; ulp attendu ~4e-16, du fait de la
 reassociation de la somme du V-cycle Poisson -- PAS bit-exact, cf. section 3 / substrat ci-dessus).
 La ligne machine-parsable `HYQMOMPI np=.. mass=.. massdrift=..` du driver alimente directement le
-gate. Resultat (a coller apres soumission ROMEO, job <ID>, romeo-aNNN) : `<lignes np=1/2/4 +
-MULTIGPU_MPI_PASS>`.
+gate. Resultat ROMEO (job 656726, romeo-a058, GH200 120GB, partition `instant`, 4 GPU/noeud ;
+`dense_eig.hpp` cap QR 100, md5 0d5f0f30) :
+
+```
+HYQMOMPI np=1 n=128 t=0.12232851 steps=200 mass=1.71504800000000751e+03 massdrift=1.766e-13 l4=9.637906e-02
+HYQMOMPI np=2 n=128 t=0.12232851 steps=200 mass=1.71504800000000751e+03 massdrift=1.766e-13 l4=9.637906e-02
+HYQMOMPI np=4 n=128 t=0.12232851 steps=200 mass=1.71504800000000751e+03 massdrift=1.766e-13 l4=9.637906e-02
+np=1 masscons=1.766e-13(OK) massrel_vs_np1=0.000e+00(OK)
+np=2 masscons=1.766e-13(OK) massrel_vs_np1=0.000e+00(OK)
+np=4 masscons=1.766e-13(OK) massrel_vs_np1=0.000e+00(OK)
+MULTIGPU_MPI_PASS
+```
+
+Les 200 pas tournent sur device (Cuda, GH200) a np=1/2/4 ; la garde `DT_COLLAPSE` ne se declenche
+pas (t=0.122, masse conservee a 1.77e-13). La masse globale est ici BIT-IDENTIQUE entre np=1/2/4
+(`massrel_vs_np1 = 0`), PAS seulement au niveau ulp comme l'annoncait le critere : la topologie
+mono-boite round-robin place toute la boite sur le rang 0, les autres rangs ont `local_size()==0`
+et n'ajoutent que des zeros a l'all-reduce -- il n'y a donc PAS de reassociation de somme
+inter-rangs a perturber le dernier bit. La reassociation inter-rangs reelle (sommes qui different
+au dernier ulp entre nombres de rangs) est, elle, exercee par le substrat B_z multi-boite
+(#59/#254, debut de cette section). Ce run re-confirme aussi le chemin device de `real_eig_minmax`
+sur la revision COURANTE de `dense_eig.hpp` (cap QR 100, ADC-195/#309), posterieure aux sections
+1/2/4 (cap 30) : 200 pas par cellule sans NaN ni blocage QR. Les avertissements OpenMPI `mtl/ofi`
+du log sont des sondes de transport benignes (repli BTL automatique) ; les trois rangs terminent
+`COMPLETED 0:0`.
 
 Perimetre encore optionnel (variante distincte, hors-scope de cette validation non bloquante) :
 un driver hyqmom15 `AmrSystem` MULTI-BOITE cablant le composite `Hyqmom15Hyp/Src/Ell` + Poisson
@@ -229,19 +253,17 @@ la divergence reste celle, benigne, d'un solveur dense minuscule par thread.
   niveau bruit machine maximaux dans le potentiel multigrille).
 * substrat multi-GPU MPI re-confirme bit-identique (max) / dernier ulp (sommes) sur le
   noeud post-#254 : section 3.
-* harnais hyqmom15 multi-rang direct livre (section 3, `diocotron_mpi.sbatch`,
-  `-DADC_VALIDATION_MPI=ON`) : decomposition MPI de `System`, np=1/2/4 sur GH200, gate
-  conservation de masse + parite ulp np vs np=1. Les chiffres ROMEO sont un suivi (non
-  bloquant) : Romain soumet le sbatch et colle le resultat `MULTIGPU_MPI_PASS` ci-dessus.
+* harnais hyqmom15 multi-rang direct EXECUTE sur GH200 (section 3, `diocotron_mpi.sbatch`,
+  `-DADC_VALIDATION_MPI=ON`) : decomposition MPI de `System`, np=1/2/4 (job 656726, romeo-a058),
+  gate `MULTIGPU_MPI_PASS` -- masse conservee a 1.77e-13 par run, masse globale bit-identique
+  entre np=1/2/4 (round-robin mono-boite : seul le rang 0 porte la boite).
 * sources de validation entierement versionnees (`docs/validation/`), brique + IC regeneres
   bit-pour-bit par `make_brick_and_ic.py`, les deux variantes (device/hote) recompilees par
   `parity181.sbatch` depuis ces sources.
 
-ADC-181 : cette note (et la PR associee) FAIT AVANCER l'issue. La branche multi-GPU directe est
-desormais COUVERTE par un run hyqmom15 multi-rang dedie -- la decomposition MPI de `System`
-(`diocotron_mpi.sbatch`, section 3) -- en plus du substrat halos (`gpu_amr_bz_mpi_validate`,
-modele B_z, #59/#254) et de l'argument de localite cellule de `real_eig_minmax`. Le harnais et
-la recette sont livres ; les chiffres np=1/2/4 sur GH200 sont un suivi non bloquant (Romain
-soumet le sbatch sur ROMEO et colle le resultat en section 3). Reste optionnel, en issue
+ADC-181 : la branche multi-GPU directe est COUVERTE par un run hyqmom15 multi-rang dedie EXECUTE
+sur GH200 -- la decomposition MPI de `System` (`diocotron_mpi.sbatch`, section 3, job 656726,
+`MULTIGPU_MPI_PASS`) -- en plus du substrat halos (`gpu_amr_bz_mpi_validate`, modele B_z,
+#59/#254) et de l'argument de localite cellule de `real_eig_minmax`. Reste optionnel, en issue
 separee : la variante `AmrSystem` MULTI-BOITE cablant le composite `Hyqmom15Hyp/Src/Ell` +
-Poisson.
+Poisson (decomposition de domaine reelle, chaque rang portant une sous-boite avec halos).
