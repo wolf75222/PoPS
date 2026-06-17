@@ -18,3 +18,15 @@ target_include_directories(diocotron_gpu PRIVATE ${ADC_INCLUDE} ${CMAKE_CURRENT_
 target_link_libraries(diocotron_gpu PRIVATE Kokkos::kokkos)
 target_compile_definitions(diocotron_gpu PRIVATE ADC_HAS_KOKKOS)  # coeur Kokkos-only (#263)
 target_compile_features(diocotron_gpu PRIVATE cxx_std_20)
+
+# Validation multi-GPU + MPI (cf. diocotron_mpi.sbatch) : -DADC_VALIDATION_MPI=ON lie OpenMPI
+# CUDA-aware au MEME driver et definit ADC_HAS_MPI, ce qui bascule comm.hpp + les collectifs de
+# python/system.cpp (state_global / potential_global / step_cfl, deja compiles DANS le driver) sur
+# le vrai chemin MPI. Defaut OFF : le binaire serie (parity181) reste identique au bit pres.
+option(ADC_VALIDATION_MPI "Lier MPI au driver diocotron (validation multi-GPU + MPI)" OFF)
+if(ADC_VALIDATION_MPI)
+  enable_language(C)  # find_package(MPI) exige la cible MPI::MPI_C (cf. racine CMakeLists L9)
+  find_package(MPI REQUIRED)
+  target_link_libraries(diocotron_gpu PRIVATE MPI::MPI_CXX)
+  target_compile_definitions(diocotron_gpu PRIVATE ADC_HAS_MPI)
+endif()

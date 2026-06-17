@@ -27,7 +27,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   mass and momentum exactly (the M00/M10/M01 rows are identically zero). BGK is meant to be
   wired through the existing source brick (`m.source` / `m.source_frequency`, explicit split or
   IMEX), so it adds no core trait, kernel, or stepper path. Strictly additive: the
-  `build_moment_model` signature is unchanged.
+  `build_moment_model` signature is unchanged. `Model.eval_source` (numpy source evaluator,
+  parity with `eval_flux`) lets a host test check the emitted source without compiling.
+- **Multi-GPU + MPI hyqmom15 diocotron validation harness** (ADC-181): the `docs/validation`
+  diocotron driver gains an optional MPI bootstrap (`comm_init`/`comm_finalize` + rank-0 I/O
+  guards) behind the new `ADC_VALIDATION_MPI` CMake option, so the same `diocotron_gpu.cpp`
+  runs serial (unchanged at np=1) and under `srun -n N`. New `diocotron_mpi.sbatch` is the ROMEO
+  GH200 recipe: build with CUDA-aware OpenMPI, run np=1/2/4 (one GH200 per rank), gate on per-run
+  mass conservation (< 1e-12) and ulp-level global-mass parity vs np=1. Closes the System-MPI
+  branch named in `GH200_HYQMOM15.md` section 3.
 
 ## [0.2.0] - 2026-06-16
 
