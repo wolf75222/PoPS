@@ -37,12 +37,15 @@ purely native paths (`adc.Model(...)` / `add_block`) remain available.
   `.so` path (the loader ABI does not carry them). Detail in
   [DSL_MODEL_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_MODEL_DESIGN.md).
 
-## Poisson FFT: refused under MPI
+## Poisson FFT under MPI: periodic, constant coefficient, Ny divisible by n_ranks
 
-The spectral Poisson solver (`PoissonFFTSolver`) is single-rank by design. Under MPI (`n_ranks >
-1`), the FFT path is refused with a collective error; a test locks this
-non-regression. For a distributed MPI Poisson, use the geometric multigrid
-(`geometric_mg`).
+The direct `PoissonFFTSolver` is single-rank by design (it would dereference `fab(0)` on a rank
+without a box). Under MPI (`n_ranks > 1`), `System.set_poisson(..., "fft"|"fft_spectral")` instead
+selects `RemappedFFTSolver` (ADC-287), which presents the System single box outward and runs a
+box-slab scatter/gather around the distributed FFT. Constraints: periodic BCs, constant coefficient
+(no wall, no variable/anisotropic eps, no kappa), and `Ny` divisible by `n_ranks()`; those cases
+still raise and point to `geometric_mg`, which remains the MPI default. The potential matches
+`geometric_mg` to FP tolerance.
 
 ## AMR: global Schur on a single block only
 

@@ -1,19 +1,20 @@
-// Bug device+MPI du solveur Poisson FFT (#93) : avec set_poisson(..., "fft") sous mpirun -np>1,
-// System repartit UNE box unique en round-robin (DistributionMapping(1, n_ranks())), donc certains
-// rangs ont local_size()==0. PoissonFFTSolver::solve() dereferencait alors fab(0) / phi_.fab(0) sur
-// un rang sans box locale -> SIGSEGV (fault addr 0x28). L'assert(n_ranks()==1...) du constructeur
-// disparaissait en Release (NDEBUG) et la protection s'evanouissait en silence.
+// Poisson FFT sous MPI via remap box<->slabs (ADC-287). Avec set_poisson(..., "fft") sous mpirun
+// -np>1, System repartit UNE box unique en round-robin (DistributionMapping(1, n_ranks())), donc
+// certains rangs ont local_size()==0. Historiquement PoissonFFTSolver::solve() dereferencait fab(0)
+// sur un rang sans box -> SIGSEGV (#93), et le chemin (#93) REFUSAIT explicitement "fft" sous MPI.
 //
-// Le fix (chemin B) REFUSE explicitement "fft" sous MPI (n_ranks>1) avec une erreur claire, levee sur
-// TOUS les rangs (ensure_elliptic est appele collectivement par solve_fields) : pas de segfault, pas
-// d'interblocage. Le periodique distribue passe par DistributedFFTSolver (teste a part dans
-// test_mpi_fft_distributed). Garde-fou dur redondant dans le constructeur de PoissonFFTSolver.
+// ADC-287 remplace ce refus par un chemin distribue : RemappedFFTSolver presente vers l'exterieur la
+// MEME box unique (rhs()/phi() sur ba/dm, alignes avec l'aux) et cache un scatter/gather box<->slabs
+// autour de PoissonFFT dans solve(). Le chemin solve_fields reste donc intact. C'est un changement
+// STRUCTUREL en attente du vote de design ADC-273.
 //
 // Ce test, sous -np {1,2,4} :
 //   - np=1 : "fft" marche (solve_fields() tourne, potentiel fini non trivial), bit-coherent avec le
 //            chemin geometric_mg du meme probleme (a la tolerance FP du solveur direct vs iteratif).
-//   - np>1 : solve_fields() leve std::runtime_error sur CHAQUE rang (message clair), sans crash ni
-//            blocage. On verifie que TOUS les rangs ont bien leve (all_reduce), donc collectif.
+//   - np>1 : "fft" marche aussi (RemappedFFTSolver) : solve_fields() ne leve pas, le potentiel est
+//            fini non trivial, et il coincide avec geometric_mg du meme probleme (apres recentrage de
+//            moyenne pour neutraliser la jauge), a la tolerance FP. n=16 -> Ny=16 divisible par 1/2/4,
+//            donc la garde Ny % n_ranks() de RemappedFFTSolver passe.
 
 #include <adc/physics/composite.hpp>
 #include <adc/physics/hyperbolic.hpp>  // ExBVelocity
@@ -137,31 +138,68 @@ int main(int argc, char** argv) {
                 maxabs, rel);
     chk(rel < 5e-3, "np1_fft_matches_mg");
   } else {
-    // np>1 : "fft" doit etre REFUSE proprement. solve_fields() (-> ensure_elliptic) leve sur TOUS les
-    // rangs. On capture l'exception : pas de segfault, pas d'interblocage. Le message doit etre clair.
+    // np>1 : "fft" doit MARCHER (RemappedFFTSolver). solve_fields() (-> ensure_elliptic) construit le
+    // solveur distribue sur TOUS les rangs (collectif) ; aucun ne leve. Le scatter/gather box<->slabs
+    // est interne a solve(). On compare ensuite a geometric_mg du meme probleme.
     System sys(cfg);
     build_problem(sys, n, owns);  // set_poisson ne construit pas encore le solveur (paresseux)
     bool threw = false;
     std::string msg;
     try {
-      sys.solve_fields();  // construit le solveur -> doit lever ici, sur CE rang
+      sys.solve_fields();
+      sys.solve_fields();  // construit-puis-reutilise (le solveur paresseux n'est bati qu'une fois)
     } catch (const std::exception& e) {
       threw = true;
       msg = e.what();
     }
-    chk(threw, "npN_fft_refused");
-    // Message clair et explicite (sous-chaine stable du libelle verbatim).
-    chk(msg.find("fft solver unsupported under MPI") != std::string::npos, "npN_clear_message");
-    std::printf("[rank %d/%d] np=%d fft refuse (attendu) : %s\n", me, np, np,
-                threw ? msg.c_str() : "(pas d'exception !)");
+    if (threw)
+      std::printf("[rank %d/%d] np=%d inattendu : fft a leve : %s\n", me, np, np, msg.c_str());
+    chk(!threw, "npN_fft_runs");
 
-    // TOUS les rangs doivent avoir leve (sinon un rang serait entre dans le solve collectif et
-    // bloquerait). On reduit le compte de "a leve" : il doit valoir np.
-#ifdef ADC_HAS_MPI
-    long threw_local = threw ? 1 : 0, threw_all = 0;
-    MPI_Allreduce(&threw_local, &threw_all, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
-    chk(threw_all == np, "npN_all_ranks_threw");
-#endif
+    // potential_global() est COLLECTIF : il renvoie le champ global n*n sur CHAQUE rang (la box vit
+    // sur le rang 0, all_reduce_sum_inplace le diffuse). On verifie qu'il est fini et non trivial.
+    const std::vector<double> phi = sys.potential_global();
+    chk(phi.size() == nn, "npN_potential_size");
+    double maxabs = 0;
+    bool finite = true;
+    for (double v : phi) {
+      if (!std::isfinite(v)) finite = false;
+      maxabs = std::fmax(maxabs, std::fabs(v));
+    }
+    chk(finite, "npN_potential_finite");
+    chk(maxabs > 0.0, "npN_potential_nonzero");
+
+    // Reference : MEME probleme distribue via geometric_mg. La FFT remappee et le MG iteratif resolvent
+    // le MEME Laplacien 5-points periodique -> meme potentiel a la tolerance FP (jauge : moyenne nulle).
+    // On compare apres recentrage de moyenne pour neutraliser la constante de jauge.
+    System ref(cfg);
+    add_compiled_model(ref, "probe", ProbeModel{}, "minmod", "rusanov", "conservative", "explicit");
+    ref.set_poisson("composite", "geometric_mg");
+    if (owns) {
+      std::vector<double> q(nn, 0.0);
+      for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) q[static_cast<std::size_t>(j) * n + i] = (i < n / 2) ? 1.0 : -1.0;
+      ref.set_density("probe", q);
+    }
+    ref.solve_fields();
+    const std::vector<double> phi_ref = ref.potential_global();
+    chk(phi_ref.size() == nn, "npN_ref_size");
+
+    double mean_fft = 0, mean_ref = 0;
+    for (std::size_t k = 0; k < nn; ++k) { mean_fft += phi[k]; mean_ref += phi_ref[k]; }
+    mean_fft /= static_cast<double>(nn);
+    mean_ref /= static_cast<double>(nn);
+    double linf = 0, ampl = 0;
+    for (std::size_t k = 0; k < nn; ++k) {
+      const double a = phi[k] - mean_fft, b = phi_ref[k] - mean_ref;
+      linf = std::fmax(linf, std::fabs(a - b));
+      ampl = std::fmax(ampl, std::fabs(b));
+    }
+    const double rel = (ampl > 0) ? linf / ampl : linf;
+    if (me == 0)
+      std::printf("[rank 0/%d] np=%d fft OK : |phi|max=%.3e  ||phi_fft - phi_mg||inf/ampl=%.3e\n",
+                  np, np, maxabs, rel);
+    chk(rel < 5e-3, "npN_fft_matches_mg");
   }
 
 #ifdef ADC_HAS_MPI

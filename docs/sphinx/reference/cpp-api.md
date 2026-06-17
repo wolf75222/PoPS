@@ -35,6 +35,7 @@ to link for the core, you include the headers. The three design axes are orthogo
 | `AmrSystem` | Refined counterpart of `System`: one or more blocks on a block-structured AMR hierarchy (regrid, conservative reflux). Exposes `adc.AmrSystem`. |
 | `GeometricMG` | Multigrid Poisson solver (V-cycle, red-black Gauss-Seidel smoother); handles conducting wall and cut-cell. Any case (including non-periodic). |
 | `PoissonFFTSolver` | Direct spectral Poisson solver (FFT); periodic domain, `n = 2^k`. Single-rank by design (refuses MPI). |
+| `RemappedFFTSolver` | FFT Poisson under MPI (ADC-287): presents the System single box, box-slab scatter/gather around `PoissonFFT`. Periodic, constant coefficient, `Ny` divisible by `n_ranks()`. Selected by `set_poisson(..., "fft")` when `n_ranks() > 1`. |
 | `AmrCouplerMP` | Multi-patch AMR coupler: Berger-Rigoutsos regrid, time subcycling of the fine levels, coverage-aware reflux at the coarse-fine interface. |
 
 (The canonical definitions of these symbols live respectively in
