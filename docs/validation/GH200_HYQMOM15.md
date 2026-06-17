@@ -174,11 +174,32 @@ flottante) BIT-IDENTIQUE ; `mass`/`csum`/`csumsq` (reductions somme) au dernier 
 de rangs. `bz_bad=0` aux deux rangs. Le substrat multi-GPU est donc bit-identique sur le
 max et au dernier ulp sur les sommes : comportement attendu et documente.
 
-Perimetre NON couvert (a faire, distinct) : un driver hyqmom15 MULTI-BOITE + MPI dedie
-(soit `AmrSystem` multi-box cablant le composite `Hyqmom15Hyp/Src/Ell` + Poisson, soit une
-decomposition MPI de `System`). Plomberie reelle, non triviale : le seam existant
-`gpu_amr_bz_mpi_validate` valide les halos mais avec le modele B_z, pas hyqmom15. C'est le
-reste a livrer pour fermer entierement la branche 3 de l'issue.
+### hyqmom15 multi-rang direct (System, mono-boite round-robin) -- `diocotron_mpi.sbatch`
+
+Le MEME driver `diocotron_gpu.cpp` (briques `Hyqmom15Hyp/Src/Ell` + Poisson `geometric_mg`),
+lie a OpenMPI CUDA-aware par `-DADC_VALIDATION_MPI=ON` (option CMake qui definit `ADC_HAS_MPI`
+et bascule `comm.hpp` + les collectifs de `system.cpp` sur le vrai chemin MPI), tourne sous
+`srun -n {1,2,4} --gpus-per-task=1` (un GH200 par rang). Topologie = decomposition MPI de
+`System` mono-boite round-robin (boite 0 au rang 0 ; les autres rangs ont `local_size()==0` et
+contribuent 0 a l'all-reduce), identique a la topologie CPU deja validee par `run_mpi.py`. Les
+lectures de diagnostic et de snapshot passent par `state_global` / `potential_global` (all-reduce
+collectif, `system.cpp:1808/1824`) ; le pas `step_cfl` / `solve_fields` est collectif ; le vote
+`DT_COLLAPSE` passe par `all_reduce_max` (tous les rangs sortent ensemble, jamais de deadlock).
+Seul le rang 0 ecrit fichiers + stdout. Sans `ADC_HAS_MPI`, les stubs de `comm.hpp`
+(`my_rank()=0` / `n_ranks()=1`) rendent le chemin serie (`parity181.sbatch`) inchange au bit pres.
+
+Critere de validation (`diocotron_mpi.sbatch`, python embarque) : conservation de masse
+`massdrift < 1e-12` par run (le run mono-GPU de la section 1 montre deja 1.7e-13 sur 24706 pas),
+ET masse globale np=2/4 vs np=1 au niveau ulp (rel < 1e-12 ; ulp attendu ~4e-16, du fait de la
+reassociation de la somme du V-cycle Poisson -- PAS bit-exact, cf. section 3 / substrat ci-dessus).
+La ligne machine-parsable `HYQMOMPI np=.. mass=.. massdrift=..` du driver alimente directement le
+gate. Resultat (a coller apres soumission ROMEO, job <ID>, romeo-aNNN) : `<lignes np=1/2/4 +
+MULTIGPU_MPI_PASS>`.
+
+Perimetre encore optionnel (variante distincte, hors-scope de cette validation non bloquante) :
+un driver hyqmom15 `AmrSystem` MULTI-BOITE cablant le composite `Hyqmom15Hyp/Src/Ell` + Poisson
+(la branche System ci-dessus est, elle, livree). Plomberie reelle plus lourde, a filer en issue
+separee si besoin.
 
 ## 4. Divergence warp de real_eig_minmax (indicatif)
 
@@ -208,13 +229,19 @@ la divergence reste celle, benigne, d'un solveur dense minuscule par thread.
   niveau bruit machine maximaux dans le potentiel multigrille).
 * substrat multi-GPU MPI re-confirme bit-identique (max) / dernier ulp (sommes) sur le
   noeud post-#254 : section 3.
+* harnais hyqmom15 multi-rang direct livre (section 3, `diocotron_mpi.sbatch`,
+  `-DADC_VALIDATION_MPI=ON`) : decomposition MPI de `System`, np=1/2/4 sur GH200, gate
+  conservation de masse + parite ulp np vs np=1. Les chiffres ROMEO sont un suivi (non
+  bloquant) : Romain soumet le sbatch et colle le resultat `MULTIGPU_MPI_PASS` ci-dessus.
 * sources de validation entierement versionnees (`docs/validation/`), brique + IC regeneres
   bit-pour-bit par `make_brick_and_ic.py`, les deux variantes (device/hote) recompilees par
   `parity181.sbatch` depuis ces sources.
 
-ADC-181 RESTE OUVERTE : cette note (et la PR associee) AVANCE l'issue, elle ne la ferme pas.
-Reste a livrer pour la fermer : un driver hyqmom15 MULTI-BOITE + MPI dedie (soit `AmrSystem`
-multi-box cablant le composite `Hyqmom15Hyp/Src/Ell` + Poisson, soit une decomposition MPI de
-`System`). Le multi-GPU specifique hyqmom15 n'est ici couvert que par SUBSTRAT (harnais
-`gpu_amr_bz_mpi_validate`, modele B_z, #59/#254) + l'argument de localite cellule de
-`real_eig_minmax`, pas par un run hyqmom15 multi-rang direct.
+ADC-181 : cette note (et la PR associee) FAIT AVANCER l'issue. La branche multi-GPU directe est
+desormais COUVERTE par un run hyqmom15 multi-rang dedie -- la decomposition MPI de `System`
+(`diocotron_mpi.sbatch`, section 3) -- en plus du substrat halos (`gpu_amr_bz_mpi_validate`,
+modele B_z, #59/#254) et de l'argument de localite cellule de `real_eig_minmax`. Le harnais et
+la recette sont livres ; les chiffres np=1/2/4 sur GH200 sont un suivi non bloquant (Romain
+soumet le sbatch sur ROMEO et colle le resultat en section 3). Reste optionnel, en issue
+separee : la variante `AmrSystem` MULTI-BOITE cablant le composite `Hyqmom15Hyp/Src/Ell` +
+Poisson.
