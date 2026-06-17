@@ -42,8 +42,9 @@ Python) with the backends above. The legend distinguishes in particular:
 
 - The Python tests only exercise Kokkos Serial: the `_adc` module is built in CI in
   Kokkos Serial, without MPI or Cuda. No Python test covers MPI or Cuda.
-- The FFT Poisson path (`PoissonFFTSolver`) is rejected under MPI (single-rank by design);
-  a test locks this non-regression.
+- The FFT Poisson path runs under MPI via a box-slab remap (`RemappedFFTSolver`, ADC-287): periodic,
+  constant coefficient, `Ny` divisible by `n_ranks()`; a test checks parity with `geometric_mg`. The
+  direct `PoissonFFTSolver` stays single-rank by design.
 - The Kokkos Cuda and MPI + Kokkos Cuda columns are either `ROMEO` (validated by hand),
   or `?`. The detail of the remaining GPU gaps is in the "Notable gaps" section of the source
   document.

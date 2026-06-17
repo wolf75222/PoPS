@@ -20,6 +20,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Distributed FFT Poisson under MPI** (ADC-287): `System.set_poisson(..., "fft"|"fft_spectral")` now
+  runs with `n_ranks() > 1` via a box-slab remap (`RemappedFFTSolver`), replacing the previous explicit
+  rejection. The new solver presents the System single round-robin box outward (so the field-solve path
+  is unchanged) and hides a scatter/gather around `PoissonFFT` inside `solve()`. Periodic-only, constant
+  coefficient, requires `Ny % n_ranks() == 0`; the potential matches `geometric_mg` to FP tolerance.
+  `geometric_mg` stays the MPI default and the only option for walls, variable/anisotropic eps, or kappa.
+  Ratified by the ADC-273 multi-agent design vote (correctness sound on every load-bearing axis; the
+  elliptic `ell_` variant is not serialized, so no public-ABI break).
 - **BGK collision helpers** (ADC-277): `adc.moments.maxwellian_moments` builds the local
   Maxwellian equilibrium moments of a 2D moment hierarchy (Isserlis closure, generic in the
   order and closure-free), and `adc.moments.bgk_source` returns the relaxation source

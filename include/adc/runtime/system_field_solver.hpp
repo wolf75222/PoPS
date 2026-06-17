@@ -115,7 +115,7 @@ class SystemFieldSolver {
   // the first solve (the init of phi^0) always solves, whatever the policy.
   bool gauss_evolve_ = false;
   bool gauss_solved_once_ = false;
-  std::optional<std::variant<GeometricMG, PoissonFFTSolver>> ell_;
+  std::optional<std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>> ell_;
   // Direct POLAR Poisson solver (FFT-in-theta + tridiag-in-r), built lazily when
   // polar_ (cf. ensure_elliptic_polar). SEPARATE from ell_ (geom() returns a PolarGeometry, not a
   // Geometry): the cartesian path is never touched. INERT (nullopt) in cartesian.
@@ -251,17 +251,9 @@ class SystemFieldSolver {
     const BCRec pbc = poisson_bc();
     std::function<bool(Real, Real)> active = wall_active();
     if (p_solver == "fft" || p_solver == "fft_spectral") {
-      // Direct single-rank FFT: under MPI (n_ranks>1) System distributes ONE box round-robin, so
-      // some ranks have local_size()==0 and PoissonFFTSolver::solve() would dereference a nonexistent fab(0)
-      // (SIGSEGV, the old assert disappeared in Release). We REFUSE this explicitly here, on ALL
-      // ranks (ensure_elliptic is called collectively by solve_fields) -> no deadlock.
-      // The distributed periodic goes through DistributedFFTSolver (strips), not wired into System (its
-      // strip decomposition is incompatible with the single box of System -> rhs assembly /
-      // re-read of phi). PoissonFFTSolver also keeps a hard guard in its constructor.
-      if (n_ranks() > 1)
-        throw std::runtime_error(
-            "fft solver unsupported under MPI (n_ranks>1): use geometric_mg or the distributed fft "
-            "solver");
+      // The FFT path is CONSTANT-coefficient and PERIODIC only: reject walls, variable / anisotropic
+      // permittivity and reaction kappa FIRST (each guard fires identically on all ranks -> no
+      // deadlock), so only the pure periodic constant-coefficient case reaches the layout switch below.
       if (active)
         throw std::runtime_error("System: solver '" + p_solver + "' incompatible with a wall -> 'geometric_mg'");
       if (has_eps_field_)
@@ -275,8 +267,23 @@ class SystemFieldSolver {
                                  "reaction term kappa(x) -> use solver='geometric_mg'");
       // 'fft_spectral': same plumbing, CONTINUOUS symbol -(kx^2+ky^2) (fidelity to the spectral
       // references, e.g. poisson_fft.m of RIEMOM2D); 'fft' keeps the discrete stencil (bit-identical).
-      ell_.emplace(std::in_place_type<PoissonFFTSolver>, owner_->geom, owner_->ba, pbc, active,
-                   p_solver == "fft_spectral");
+      const bool spectral = (p_solver == "fft_spectral");
+      if (n_ranks() > 1) {
+        // ADC-287: distributed periodic FFT via a box<->slab remap. System distributes ONE box
+        // round-robin (DistributionMapping(1, n_ranks())), so a direct PoissonFFTSolver would
+        // dereference a nonexistent fab(0) on a rank without a box (SIGSEGV). RemappedFFTSolver presents
+        // the SAME single-box layout outward (rhs()/phi() on owner_->ba/dm, aligned with the aux) and
+        // hides a scatter/gather around PoissonFFT inside solve() -> the field-solve path is untouched.
+        // COLLECTIVE: every rank constructs the same type; its Ny % n_ranks() guard throws on all ranks
+        // (no deadlock). NOTE: pending the ADC-273 design vote (structural change to the ell_ variant).
+        ell_.emplace(std::in_place_type<RemappedFFTSolver>, owner_->geom, owner_->ba, pbc, active,
+                     spectral);
+      } else {
+        // Single-rank: the proven direct FFT on the System box. PoissonFFTSolver keeps a hard guard in
+        // its constructor (rejects n_ranks()>1 / ba.size()!=1).
+        ell_.emplace(std::in_place_type<PoissonFFTSolver>, owner_->geom, owner_->ba, pbc, active,
+                     spectral);
+      }
     } else if (p_solver == "geometric_mg") {
       ell_.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc, std::move(active));
       std::get<GeometricMG>(*ell_).set_abs_tol(p_abs_tol_);  // absolute floor of the V-cycle (0 = relative only)
@@ -389,7 +396,7 @@ class SystemFieldSolver {
           using T = std::decay_t<decltype(e)>;
           if (adc_trace_sf())
             adc_sf_mark(std::is_same_v<T, GeometricMG> ? "ell_solve: GeometricMG::solve() start"
-                                                       : "ell_solve: PoissonFFTSolver::solve() start");
+                                                       : "ell_solve: FFT solver::solve() start");
           e.solve();
           adc_sf_mark("ell_solve: solve() return");
         },
