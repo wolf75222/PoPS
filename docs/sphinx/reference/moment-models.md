@@ -84,6 +84,35 @@ electric field components (read the canonical `grad_x`/`grad_y` aux channels for
 field, with `E = -grad phi`); `q_over_m` and `omega_c = q B / m` are scalars. Wire it through the
 `sources=` argument of `build_moment_model`.
 
+## `maxwellian_moments` and `bgk_source`
+
+```python
+gmom.maxwellian_moments(M)        # -> list[Expr], one per moment: the equilibrium M_eq
+gmom.bgk_source(M, nu)            # -> list[Expr], one per moment: nu (M_eq - M)
+```
+
+`maxwellian_moments` returns the raw moments of the local Maxwellian (the Gaussian in velocity)
+that matches the density, mean velocity, and covariance of `M`. The mean is `(M10/M00, M01/M00)`
+and the covariance comes from the second central moments; every higher moment follows the Isserlis
+(Wick) rule, so `maxwellian_moments` is the closure-free equilibrium of the hierarchy at any order.
+
+`bgk_source` returns the BGK relaxation source toward that equilibrium:
+
+$$ S[M_{pq}] = \nu\,(M^{\mathrm{eq}}_{pq} - M_{pq}). $$
+
+Because the Maxwellian shares the mass, momentum, and covariance of `M`, the collisional invariants
+`M00`, `M10`, `M01` are exact equilibria: those rows are identically zero, so BGK conserves mass and
+momentum by construction. `M` is a dict mapping `(p, q)` to the moment value (a `Var` inside
+`build_moment_model`, or a number for a numeric check); `nu` is the collision frequency (an
+expression or a scalar).
+
+BGK relaxation is wired as a source, not a new hook: pass `bgk_source` (alone, or summed with
+`lorentz_sources`) through the `sources=` argument so it rides the existing source brick
+(`m.source`, with `m.source_frequency(nu)` for the explicit CFL bound, or `time="imex"` for the
+stiff path). It is independent of the pointwise realizability projection (`m.projection`): the
+Maxwellian is itself realizable, so a model may run BGK relaxation and a projection together
+(transport, then the BGK source, then the projection).
+
 ## `moment_names` and `moment_indices`
 
 ```python

@@ -18,6 +18,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ## [Unreleased]
 
+### Added
+
+- **BGK collision helpers** (ADC-277): `adc.moments.maxwellian_moments` builds the local
+  Maxwellian equilibrium moments of a 2D moment hierarchy (Isserlis closure, generic in the
+  order and closure-free), and `adc.moments.bgk_source` returns the relaxation source
+  `nu (M_eq - M)` toward it. Both work as DSL expressions or as a numeric oracle, and conserve
+  mass and momentum exactly (the M00/M10/M01 rows are identically zero). BGK is meant to be
+  wired through the existing source brick (`m.source` / `m.source_frequency`, explicit split or
+  IMEX), so it adds no core trait, kernel, or stepper path. Strictly additive: the
+  `build_moment_model` signature is unchanged.
+
 ## [0.2.0] - 2026-06-16
 
 ### Added

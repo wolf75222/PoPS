@@ -22,6 +22,10 @@ On verifie ici, sans dependance externe :
      etat sain ;
  (7) lorentz_sources : table d'ordre 2 derivee a la main, evaluee en flottants purs ;
      fermeture de la hierarchie (aucune reference hors variables transportees) ;
+ (7b) maxwellian_moments / bgk_source : oracle d'Isserlis INDEPENDANT (recurrence de Stein
+     sur moments BRUTS) ; point fixe (les moments d'une gaussienne == sa maxwellienne),
+     source BGK nulle a l'equilibre, invariants collisionnels (M00/M10/M01) identiquement 0,
+     gaussianisation d'un etat asymetrique (ordres <= 2 conserves, ordres >= 3 modifies) ;
  (8) gardes : order < 2 ; fermeture aux cles incompletes ;
  (9) [compilateur] compile AOT + System riemann='hll' : 10 pas finis, masse conservee.
 S'auto-saute (exit 0) pour (9) sans compilateur C++ ou sans Kokkos (coeur Kokkos-only).
@@ -34,8 +38,9 @@ import numpy as np
 
 import adc
 from adc import dsl
-from adc.moments import (build_moment_model, gaussian_closure, lorentz_sources,
-                         moment_indices, moment_names)
+from adc.moments import (bgk_source, build_moment_model, gaussian_closure,
+                         lorentz_sources, maxwellian_moments, moment_indices,
+                         moment_names)
 
 fails = 0
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
@@ -248,6 +253,39 @@ e7 = max(abs(a - b) for a, b in zip(src, expected))
 chk(e7 < 1e-14, f"6 termes == table manuelle (err {e7:.1e})")
 chk(len(lorentz_sources({pq: 1.0 for pq in moment_indices(4)}, ex, ey, qm, oc)) == 15,
     "ordre 4 : hierarchie fermee (15 termes, aucune cle hors variables transportees)")
+
+print("== (7b) maxwellian_moments / bgk_source : point fixe et gaussianisation ==")
+# Point fixe : les moments BRUTS d'une gaussienne (oracle de Stein, gauss_raw) SONT ceux de
+# sa maxwellienne -- maxwellian_moments doit les rendre a l'identique, et la source BGK doit
+# s'annuler. On le verifie aux ordres 2, 3 et 4 en flottants purs (pas de compilateur).
+for order in (2, 3, 4):
+    idxo = moment_indices(order)
+    Mg = {pq: RHO * gauss_raw(pq[0], pq[1], UU, VV, C20v, C11v, C02v) for pq in idxo}
+    meq = maxwellian_moments(Mg)
+    efp = max(abs(meq[k] - Mg[pq]) for k, pq in enumerate(idxo))
+    chk(efp < 1e-12, f"ordre {order} : maxwellian_moments(gaussienne) == elle-meme ({efp:.1e})")
+    s = bgk_source(Mg, 7.0)
+    chk(max(abs(float(x)) for x in s) < 1e-12,
+        f"ordre {order} : source BGK nulle a l'equilibre ({max(abs(float(x)) for x in s):.1e})")
+    inv = [s[k] for k, pq in enumerate(idxo) if pq in ((0, 0), (1, 0), (0, 1))]
+    chk(all(float(x) == 0.0 for x in inv),
+        f"ordre {order} : invariants collisionnels M00/M10/M01 identiquement 0")
+
+# Gaussianisation : sur un etat ASYMETRIQUE (le melange de 2 gaussiennes de (3b), moments
+# centres impairs non nuls), la maxwellienne CONSERVE masse/moyenne/covariance (ordres <= 2)
+# et MODIFIE les ordres >= 3 (elle annule les moments centres impairs). Etat gaussien =
+# aveugle ici (M_eq == M partout), d'ou le melange.
+Mne = {pq: RHO * mix[pq] for pq in moment_indices(4)}
+meq = maxwellian_moments(Mne)
+idx4 = moment_indices(4)
+elow = max(abs(meq[k] - Mne[pq]) for k, pq in enumerate(idx4) if pq[0] + pq[1] <= 2)
+dhi = max(abs(meq[k] - Mne[pq]) for k, pq in enumerate(idx4) if pq[0] + pq[1] >= 3)
+chk(elow < 1e-12, f"melange asymetrique : ordres <= 2 (masse/moyenne/cov) conserves ({elow:.1e})")
+chk(dhi > 1e-3, f"melange asymetrique : ordres >= 3 gaussianises (ecart {dhi:.2e} > 1e-3)")
+sne = bgk_source(Mne, 3.0)
+chk(all(float(sne[k]) == 0.0 for k, pq in enumerate(idx4)
+        if pq in ((0, 0), (1, 0), (0, 1))),
+    "melange asymetrique : invariants collisionnels toujours 0 (masse/qdm conservees)")
 
 print("== (8) gardes ==")
 msg = err_msg(lambda: build_moment_model("bad", 1, gaussian_closure(1)))
