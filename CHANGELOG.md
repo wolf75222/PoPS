@@ -20,6 +20,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **BGK collision helpers** (ADC-277): `adc.moments.maxwellian_moments` builds the local
+  Maxwellian equilibrium moments of a 2D moment hierarchy (Isserlis closure, generic in the
+  order and closure-free), and `adc.moments.bgk_source` returns the relaxation source
+  `nu (M_eq - M)` toward it. Both work as DSL expressions or as a numeric oracle, and conserve
+  mass and momentum exactly (the M00/M10/M01 rows are identically zero). BGK is meant to be
+  wired through the existing source brick (`m.source` / `m.source_frequency`, explicit split or
+  IMEX), so it adds no core trait, kernel, or stepper path. Strictly additive: the
+  `build_moment_model` signature is unchanged. `Model.eval_source` (numpy source evaluator,
+  parity with `eval_flux`) lets a host test check the emitted source without compiling.
 - **Multi-GPU + MPI hyqmom15 diocotron validation harness** (ADC-181): the `docs/validation`
   diocotron driver gains an optional MPI bootstrap (`comm_init`/`comm_finalize` + rank-0 I/O
   guards) behind the new `ADC_VALIDATION_MPI` CMake option, so the same `diocotron_gpu.cpp`
