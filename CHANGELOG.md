@@ -20,6 +20,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Coarse-level MPI ownership diagnostic** (ADC-319): `AmrSystem.coarse_local_boxes()` returns the
+  number of base (level-0) boxes owned by the calling rank and `AmrSystem.coarse_total_boxes()` the
+  total across all ranks. With `distribute_coarse=True` a distributed base gives `local < total` per
+  rank; a replicated or single-box base gives `local == total` everywhere. Wired through the mono-block
+  (`AmrCouplerMP`) and multi-block (`AmrRuntime`) paths, exposed in the pybind bindings and the Python
+  facade. A general MPI strong-scaling diagnostic; no change to the numerics or the hot path.
 - **Distributed FFT Poisson under MPI** (ADC-287): `System.set_poisson(..., "fft"|"fft_spectral")` now
   runs with `n_ranks() > 1` via a box-slab remap (`RemappedFFTSolver`), replacing the previous explicit
   rejection. The new solver presents the System single round-robin box outward (so the field-solve path

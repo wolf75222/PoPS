@@ -734,6 +734,12 @@ PYBIND11_MODULE(_adc, m) {
                out.append(py::make_tuple(b.level, b.ilo, b.jlo, b.ihi, b.jhi));
              return out;
            })
+      // COARSE-level (base) box counts (ADC-319, MPI ownership diagnostic): coarse_local_boxes() = base
+      // boxes OWNED by this rank (level-0 local_size()); coarse_total_boxes() = total base boxes (BoxArray
+      // size, identical on all ranks). distribute_coarse=True -> local < total per rank (distributed
+      // coarse transport); replicated / single-box -> local == total. Query between steps, no hot cost.
+      .def("coarse_local_boxes", &AmrSystem::coarse_local_boxes)
+      .def("coarse_total_boxes", &AmrSystem::coarse_total_boxes)
       // mass / density: overload by BLOCK NAME (multi-block; empty name -> 1st block, mono-block
       // compat or cosmetic name). The name INDEXES the block in multi-block (each block has its mass /
       // density, conserved PER BLOCK at reflux). Without argument -> 1st block (mono-block back-compat).
