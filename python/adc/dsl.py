@@ -3298,14 +3298,21 @@ class HyperbolicModel:
                        '                                                    pos_floor);\n'
                        '}\n')
         else:  # amr_system: AmrSystem overload (no evolve parameter, single-block AMR)
+            # pos_floor (ADC-322, Zhang-Shu positivity limiter): final flat argument, marshaled down to
+            # add_compiled_model -> set_compiled_block (mono via AmrBuildParams::pos_floor, multi via the
+            # AmrCompiledBlockBuilder slot). stride / implicit_vars / implicit_roles stay at their defaults
+            # (the AMR .so ABI does not transport them; rejected at the facade). An older 8-argument
+            # loader carries a pre-floor ABI key and is rejected at load, so the layout never mismatches.
             install = ('ADC_LOADER_API void adc_install_native_amr(void* sys, const char* name,\n'
                        '                                        const char* limiter, const char* riemann,\n'
                        '                                        const char* recon, const char* time,\n'
-                       '                                        double gamma, int substeps) {\n'
+                       '                                        double gamma, int substeps, double pos_floor) {\n'
                        '  adc::AmrSystem* s = reinterpret_cast<adc::AmrSystem*>(sys);\n'
                        '  adc::add_compiled_model<adc_generated::ProdModel>(*s, name, adc_generated::ProdModel{},\n'
                        '                                                    limiter, riemann, recon, time, gamma,\n'
-                       '                                                    substeps);\n'
+                       '                                                    substeps, /*stride=*/1,\n'
+                       '                                                    /*implicit_vars=*/{},\n'
+                       '                                                    /*implicit_roles=*/{}, pos_floor);\n'
                        '}\n')
         return (head
                 + bricks

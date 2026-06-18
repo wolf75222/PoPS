@@ -33,8 +33,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   ghost means (`fill_cf_ghost_cell`), the refined-patch interface the diocotron Hoffart failure
   exercised. Guarantee = face / C/F-ghost-mean Density positivity only (order-1 fallback), NOT
   updated-mean nor pressure positivity (parity with `System`). `positivity_floor == 0` is bit-identical
-  to before; a model without a Density role and the compiled `.so` AMR path (flat ABI, no floor slot)
-  reject `positivity_floor > 0` explicitly.
+  to before; a model without a Density role rejects `positivity_floor > 0` explicitly.
+- **Positivity floor on the compiled AMR `.so` path** (ADC-322): the production DSL loader
+  (`adc_install_native_amr`) now marshals `positivity_floor` as a trailing flat argument, threaded
+  through `add_compiled_model` / `set_compiled_block` into the same `compute_face_fluxes` leaf the native
+  path uses (mono via `AmrBuildParams::pos_floor`, multi via a new `AmrCompiledBlockBuilder` slot). A
+  `CompiledModel(target='amr_system')` block built with `positivity_floor > 0` now floors instead of
+  raising (`AmrSystem.add_equation` / `add_native_block`); `positivity_floor == 0` stays bit-identical. A
+  loader regenerated against pre-floor headers is rejected at load by the ABI key (the header signature
+  changed), so the 9-argument call never reaches a stale 8-argument `.so`. Follow-up to ADC-259.
 - **Distributed FFT Poisson under MPI** (ADC-287): `System.set_poisson(..., "fft"|"fft_spectral")` now
   runs with `n_ranks() > 1` via a box-slab remap (`RemappedFFTSolver`), replacing the previous explicit
   rejection. The new solver presents the System single round-robin box outward (so the field-solve path

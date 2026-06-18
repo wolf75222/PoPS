@@ -633,7 +633,10 @@ PYBIND11_MODULE(_adc, m) {
       .def("add_native_block", &AmrSystem::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
-           py::arg("substeps") = 1)
+           py::arg("substeps") = 1,
+           // Zhang-Shu positivity floor (ADC-322): marshaled down the regenerated .so loader
+           // (adc_install_native_amr). 0 (default) = inactive, bit-identical.
+           py::arg("positivity_floor") = 0.0)
       .def("set_refinement", &AmrSystem::set_refinement, py::arg("threshold"))
       // PHI tag on |grad phi| (D4) added to the union of regrid tags: also refines where the
       // norm of the potential gradient exceeds grad_threshold (diocotron ring edge). MULTI-BLOCK

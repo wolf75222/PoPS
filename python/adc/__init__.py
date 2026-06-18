@@ -2546,7 +2546,8 @@ class AmrSystem:
         coarse-fine fine ghost means to >= floor on the AMR transport (Zhang-Shu, parity with the
         uniform System). Guarantee = face / ghost-state Density positivity only (order-1 fallback),
         NOT updated-mean nor pressure positivity. A model without a Density role rejects it at the
-        first step; a COMPILED .so block rejects it at build (the flat ABI carries no floor slot).
+        first step. The COMPILED .so path carries it too now (ADC-322): a loader regenerated against
+        the current headers marshals the floor (add_equation on a CompiledModel, add_native_block).
         """
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
@@ -2560,8 +2561,8 @@ class AmrSystem:
                 "add_equation(..., time=adc.Strang(hyperbolic=adc.Explicit(...), "
                 "source=adc.CondensedSchur(...))).")
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
-        # C/F fine ghost means). Threaded to AmrSystem::add_block below; the C++ side rejects it on a
-        # compiled .so block (flat ABI) and on a model without a Density role.
+        # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
+        # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.
         # wave_speed_cache (ADC-199) is NOT wired on the AMR path (AmrSystem::add_block does not
         # transport it) : explicit rejection rather than a silently ignored cache.
         if getattr(spatial, "wave_speed_cache", False):
@@ -2809,7 +2810,8 @@ class AmrSystem:
         # positivity_floor (ADC-259) IS wired on the NATIVE AMR transport (Density-role face states +
         # C/F fine ghost means). It is threaded below on the ModelSpec (native) branch and on the
         # amr-schur transport (the recursive add_equation on time.hyperbolic). The COMPILED .so path
-        # carries no floor slot (flat ABI) -> rejected on the CompiledModel branch below.
+        # carries it too now (ADC-322): the regenerated loader marshals it (adc_install_native_amr),
+        # so the CompiledModel branch below forwards it to add_native_block instead of rejecting it.
 
         # --- adc.Split (Lie) / adc.Strang (2nd order): amr-schur PATH (GLOBAL condensed source stage) --
         # During AMR of System.add_equation (cf. ~line 925): we first add the block with its single
@@ -2935,14 +2937,10 @@ class AmrSystem:
         # through the .so loader. Explicit rejection (otherwise iters=2 / no report silently), parity with
         # the stride/mask rejection above and with System.add_equation (compiled backend).
         _reject_newton_amr_compiled("AmrSystem.add_equation", time)
-        # positivity_floor (ADC-259): same flat ABI -> the .so loader carries no floor slot, so it would
-        # be dropped SILENTLY. Explicit rejection (parity with the stride/mask/Newton rejects above).
-        # The NATIVE add_block / add_equation(ModelSpec) path threads it; loader regeneration = follow-up.
-        if getattr(spatial, "positivity_floor", 0.0) > 0.0:
-            raise ValueError(
-                "AmrSystem.add_equation: positivity_floor not transported by the production AMR path "
-                "(.so loader, flat ABI add_native_block: the floor would be dropped silently). Use "
-                "AmrSystem.add_block (native model adc.Model(...), wired floor) or the uniform System.")
+        # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now
+        # (adc_install_native_amr -> add_compiled_model -> set_compiled_block), so it is threaded
+        # through instead of rejected. 0 (default) = inactive, bit-identical. The C++
+        # add_native_block validates floor >= 0 and finite (parity with add_block).
 
         # PRE-DLOPEN guard at attach (covers the cache HIT, cf. System.add_equation): module
         # _adc stale vs .so compiled against the up-to-date headers -> actionable error, not a dlopen
@@ -2951,7 +2949,8 @@ class AmrSystem:
         _dsl_guard.check_compiled_matches_module(getattr(compiled, "abi_key", ""))
         gamma = compiled.gamma if compiled.gamma is not None else 1.4
         self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
-                                 spatial.recon, time.kind, gamma, nsub)
+                                 spatial.recon, time.kind, gamma, nsub,
+                                 getattr(spatial, "positivity_floor", 0.0))
 
     def add_coupling(self, coupling):
         """Add a generic inter-species COUPLED SOURCE (adc.dsl.CoupledSource(...).compile(...))
