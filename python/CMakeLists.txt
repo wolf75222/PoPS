@@ -283,6 +283,16 @@ add_test(NAME test_dsl_production_amr
 set_tests_properties(test_dsl_production_amr PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# positivity_floor (Zhang-Shu, ADC-322) sur le chemin COMPILE .so cote AMR : le loader regenere
+# (adc_install_native_amr) transporte le plancher jusqu'a la meme feuille compute_face_fluxes que le
+# chemin natif. add_equation(positivity_floor>0) ne leve plus, plancher porteur sur le pic contraste-1e6,
+# bit-identique a floor=0 sur un etat lisse, et threade via AmrCompiledBlockBuilder en multi-bloc.
+# Compile un .so (Kokkos-only) : s'auto-saute sans compilateur, valide sous ci-kokkos.
+add_test(NAME test_amr_compiled_positivity_floor
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_compiled_positivity_floor.py)
+set_tests_properties(test_amr_compiled_positivity_floor PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # AmrSystem::set_conservative_state (etat conservatif initial COMPLET sur AMR, mono-bloc) : demarrer
 # l'AMR depuis l'etat de derive (rho, rho*u, rho*v) au lieu de m=0. Gardes (ndim/vide/taille/multi-bloc),
 # NO-DEFAULT-CHANGE bit-identique au seed densite, conservation de masse, et la qty de mvt advecte la

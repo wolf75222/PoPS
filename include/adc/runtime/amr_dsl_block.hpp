@@ -877,6 +877,9 @@ inline std::vector<int> resolve_implicit_components_compiled(
 /// backward_euler_source, explicit transport carried by the reflux). Any other treatment is refused.
 /// @p stride: HOLD-THEN-CATCH-UP cadence of the block in multi-block (1 = each macro-step).
 /// @p implicit_vars / @p implicit_roles: partial IMEX mask of the block (multi-block; requires time=imex).
+/// @p pos_floor: Zhang-Shu positivity floor (ADC-322; 0 = inactive, bit-identical). Stored on the block
+///   (mono path reads AmrBuildParams::pos_floor) AND forwarded to the multi-block builder, so the .so
+///   floors the Density-role face states like a native add_block.
 /// @throws std::runtime_error if the system is already built or if time/recon are out of domain.
 template <class Model>
 void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
@@ -885,7 +888,8 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
                         const std::string& recon = "conservative",
                         const std::string& time = "explicit", double gamma = 1.4, int substeps = 1,
                         int stride = 1, const std::vector<std::string>& implicit_vars = {},
-                        const std::vector<std::string>& implicit_roles = {}) {
+                        const std::vector<std::string>& implicit_roles = {},
+                        double pos_floor = 0.0) {
   if (substeps < 1) throw std::runtime_error("add_compiled_model(AmrSystem): substeps >= 1");
   // PROJECTION PONCTUELLE post-pas (ADC-177) : DESORMAIS CABLEE sur AmrSystem. Appliquee PAR NIVEAU
   // a la fin de l'avance du pas (apres le reflux), aussi bien sur le coupleur mono-bloc
@@ -927,16 +931,22 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
                            const std::vector<double>& density, bool has_density, double bgamma,
                            int bsub, bool brecon_prim, bool bimex, int bstride,
                            const std::vector<std::string>& ivars,
-                           const std::vector<std::string>& iroles) {
+                           const std::vector<std::string>& iroles, double bpos_floor) {
     const std::vector<int> impl_components =
         bimex ? resolve_implicit_components_compiled(bname, Model::conservative_vars(), ivars, iroles)
               : std::vector<int>{};
+    // pos_floor (ADC-322): the .so flat ABI now carries the Zhang-Shu floor; forward it to the SAME
+    // dispatch_amr_block -> build_amr_block leaf as a native multi-block. The compiled path transports
+    // NEITHER Newton options/state/diagnostics NOR SSPRK3 (rejected at the facade / add_compiled_model),
+    // so those intermediate arguments stay at their historical defaults (kEuler, no Newton, no state).
     return detail::dispatch_amr_block(model, limiter, riemann, S, bname, density, has_density, bgamma,
-                                      bsub, brecon_prim, bimex, bstride, impl_components);
+                                      bsub, brecon_prim, bimex, bstride, impl_components, NewtonOptions{},
+                                      /*state=*/nullptr, /*newton_diagnostics=*/false,
+                                      AmrTimeMethod::kEuler, bpos_floor);
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(mono_builder),
                          std::move(multi_builder), name, recon_prim, imex, stride, implicit_vars,
-                         implicit_roles);
+                         implicit_roles, pos_floor);
 }
 
 }  // namespace adc

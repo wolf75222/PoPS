@@ -122,7 +122,8 @@ struct AmrSystem::Impl {
     // Zhang-Shu positivity floor (ADC-259): if > 0, the AMR transport floors the Density-role face
     // states + C/F fine ghost means to >= pos_floor. 0 (default) = inactive, bit-identical. Threaded
     // to dispatch_amr_block (multi-block) and to AmrBuildParams::pos_floor (single-block, build_amr_compiled).
-    // A COMPILED block rejects pos_floor > 0 (the flat ABI carries no floor slot).
+    // COMPILED blocks carry it too (ADC-322): set_compiled_block stores it here from the regenerated
+    // .so loader (adc_install_native_amr -> add_compiled_model), so both routings floor like a native block.
     double pos_floor = 0.0;
   };
 
@@ -364,16 +365,13 @@ struct AmrSystem::Impl {
           throw std::runtime_error(
               "AmrSystem : newton_diagnostics (newton_report) is not transported by the "
               "compiled .so loader (block '" + b.name + "') ; use a native block adc.Model(...).");
-        // Zhang-Shu positivity floor (ADC-259) likewise: the AmrCompiledBlockBuilder flat ABI carries
-        // no floor slot. Explicit rejection rather than a silently dropped floor (regenerate the
-        // loader = dedicated follow-up). Parity with the Newton rejects above.
-        if (b.pos_floor > 0.0)
-          throw std::runtime_error(
-              "AmrSystem : positivity_floor is not transported by the compiled .so loader (block '" +
-              b.name + "') ; use a native adc.Model(...) block, or regenerate the loader.");
+        // Zhang-Shu positivity floor (ADC-322): the AmrCompiledBlockBuilder now carries a floor slot,
+        // so a loader regenerated against this header floors the Density-role face states like a native
+        // block (forwarded to dispatch_amr_block -> build_amr_block). b.pos_floor == 0 for an OLDER .so
+        // (it never marshals the field) -> inactive, bit-identical. No reject.
         rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.gamma,
                                                    b.substeps, b.recon_prim, b.imex, b.stride,
-                                                   b.implicit_vars, b.implicit_roles));
+                                                   b.implicit_vars, b.implicit_roles, b.pos_floor));
         continue;
       }
       // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch
@@ -487,14 +485,10 @@ struct AmrSystem::Impl {
           "System for the full report.");
     const AmrBuildParams bp = make_build_params();
     if (b.is_compiled) {  // compiled path: the builder freezes the types (Model, Limiter, Flux)
-      // Zhang-Shu positivity floor (ADC-259): the .so loader inlines its OWN build_amr_compiled at
-      // generation time (flat ABI); an older loader does not read bp.pos_floor (append-only) and would
-      // SILENTLY drop the floor. Explicit rejection rather than a silent no-op (regenerate the loader
-      // = dedicated follow-up). Parity with the multi-block compiled reject in build_multi.
-      if (b.pos_floor > 0.0)
-        throw std::runtime_error(
-            "AmrSystem : positivity_floor is not transported by the compiled .so loader (block '" +
-            b.name + "') ; use a native adc.Model(...) block, or regenerate the loader.");
+      // Zhang-Shu positivity floor (ADC-322): bp.pos_floor (= b.pos_floor, set by set_compiled_block
+      // from the regenerated loader) flows into the SAME build_amr_compiled leaf as a native block ->
+      // cpl->step / advance_transport floor the Density-role face states. An OLDER .so never marshals
+      // the field, so b.pos_floor stays 0 -> inactive, bit-identical. No reject.
       install(b.compiled_hooks_builder(bp));
       return;
     }
@@ -628,7 +622,7 @@ ADC_EXPORT void AmrSystem::set_compiled_block(
     std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
     AmrCompiledBlockBuilder multi_builder, const std::string& name, bool recon_prim, bool imex,
     int stride, const std::vector<std::string>& implicit_vars,
-    const std::vector<std::string>& implicit_roles) {
+    const std::vector<std::string>& implicit_roles, double pos_floor) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
   if (p_->built)
@@ -663,6 +657,10 @@ ADC_EXPORT void AmrSystem::set_compiled_block(
   b.imex = imex;
   b.implicit_vars = implicit_vars;   // partial IMEX mask (resolved into indices by multi_builder at build)
   b.implicit_roles = implicit_roles;
+  // Zhang-Shu positivity floor (ADC-322): carried by the regenerated .so loader (adc_install_native_amr
+  // -> add_compiled_model). Stored on the block so the MONO path reads it via make_build_params ->
+  // AmrBuildParams::pos_floor, and the MULTI path forwards it through the AmrCompiledBlockBuilder.
+  b.pos_floor = pos_floor;
   b.compiled_hooks_builder = std::move(mono_builder);   // single-block path (AmrCouplerMP)
   b.compiled_block_builder = std::move(multi_builder);  // multi-block path (AmrRuntime)
   p_->blocks.push_back(std::move(b));
@@ -679,8 +677,14 @@ void amr_native_anchor() {}
 void AmrSystem::add_native_block(const std::string& name, const std::string& so_path,
                                  const std::string& limiter, const std::string& riemann,
                                  const std::string& recon, const std::string& time, double gamma,
-                                 int substeps) {
+                                 int substeps, double positivity_floor) {
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_native_block : substeps >= 1");
+  // Zhang-Shu positivity floor (ADC-322): eager validation (parity with add_block). 0 = inactive,
+  // bit-identical. Marshaled down to the loader (adc_install_native_amr) -> add_compiled_model; an
+  // older .so (no floor slot) ignores it, so a non-zero floor on such a loader is a silent no-op.
+  if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
+    throw std::runtime_error(
+        "AmrSystem::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
   // UPSTREAM scheme validation (like add_block): add_compiled_model(AmrSystem&) already rejects
   // time outside {explicit, imex} and recon outside {conservative, primitive}, but we diagnose HERE a
   // typo before the C++ boundary. time == "imex" => stiff source handled IMPLICITLY
@@ -738,14 +742,14 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                                loader_key + "' != module '" + module_key + "'");
     }
     using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                  const char*, double, int);
+                                  const char*, double, int, double);
     auto install = reinterpret_cast<install_fn_t>(adc::dynlib::sym(h, "adc_install_native_amr"));
     if (!install) {
       adc::dynlib::close(h);
       throw std::runtime_error("AmrSystem::add_native_block : adc_install_native_amr missing from the .dll");
     }
     install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-            time.c_str(), gamma, substeps);
+            time.c_str(), gamma, substeps, positivity_floor);
   }
 #else
   {
@@ -791,9 +795,11 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // add_compiled_model<ProdModel>(*amrsys, ...). Scheme marshaled as flat extern "C" arguments. No
   // evolve parameter (single-block AMR, no frozen background block like System). DISTINCT SYMBOL
   // (adc_install_native_amr, vs adc_install_native on the System side): a loader generated for System
-  // does NOT export it, so wiring it here fails clearly instead of an inconsistent cast.
+  // does NOT export it, so wiring it here fails clearly instead of an inconsistent cast. The trailing
+  // double is the Zhang-Shu positivity floor (ADC-322): old 8-argument loaders carry an ABI key from
+  // the pre-floor headers and are REJECTED above, so the 9-argument call never reaches a stale .so.
   using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                const char*, double, int);
+                                const char*, double, int, double);
   auto install = reinterpret_cast<install_fn_t>(dlsym(h, "adc_install_native_amr"));
   if (!install) {
     dlclose(h);
@@ -802,7 +808,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                              "dsl.compile_native(target='amr_system'))");
   }
   install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-          time.c_str(), gamma, substeps);
+          time.c_str(), gamma, substeps, positivity_floor);
   // The .so stays loaded (RTLD_GLOBAL) for the duration of the process: the type-erasing builder
   // installed by set_compiled_block captures code (header template) that lives there. We do NOT close it.
 #endif  // _WIN32 (production AMR POSIX-only; Windows = throw, ADC-100)
