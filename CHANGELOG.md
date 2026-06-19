@@ -20,6 +20,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **2D-core invariant published in `adc.capabilities()`** (ADC-294): `capabilities()` now exposes a
+  structured `dimension` scalar (`== 2`) declaring the core's two-dimensional scope as an
+  introspectable invariant, with a matching "Spatial dimension" section in
+  `docs/sphinx/reference/known-limitations.md` and a cross-link in `include/adc/mesh/box2d.hpp`.
+  Per ADR-0001 Decision 1 (Option A): purely additive, no API or ABI change;
+  `python/tests/test_capabilities.py` pins the key. The ND core (`BoxND` / `GeometryND`) stays
+  deferred to a future milestone.
 - **Varying-kappa coverage for the screened-Poisson reaction term** (ADC-251):
   `tests/test_screened_poisson.cpp` gains an MMS case with a spatially varying `kappa(x,y)`, run
   through both `GeometricMG::set_reaction` overloads (`fn` and `MultiFab`). The pre-existing cases

@@ -5,8 +5,10 @@
 /// convention); box EMPTY if hi < lo along a direction. Pure integer arithmetic: no data, no
 /// parallelism, fully testable. Indices may be NEGATIVE (ghost layers), hence the FLOOR division
 /// in coarsen (consistent on both sides of zero). length/nx/ny are ADC_HD (called from
-/// Geometry::dx()/dy() inside a device kernel). Concrete 2D to match the physical targets; the
-/// move to a Dim-template is a generalization left for later.
+/// Geometry::dx()/dy() inside a device kernel). Concrete 2D to match the physical targets: 2D is an
+/// official, introspectable invariant of the core (adc.capabilities()["dimension"] == 2, ADR-0001
+/// Decision 1; see docs/sphinx/reference/known-limitations.md), not an oversight. The move to a
+/// Dim-template (BoxND) is a generalization deferred to a future milestone (Option B).
 
 #pragma once
 

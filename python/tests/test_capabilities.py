@@ -20,6 +20,9 @@ documentation update:
        docstring regression.
   T5 - the AMR Schur stage is advertised as implemented (Phase 4a), not "to be done";
        guards the ALGORITHMS.md section 25 "the implementation does not exist" regression.
+  T6 - the spatial-dimension invariant is published as the structured scalar dimension == 2
+       (ADC-294 / ADR-0001 Decision 1: the 2D core is an official, introspectable limit, not
+       prose); guards against the key silently vanishing or drifting to a non-2D value.
 
 The test is pure Python: it only reads adc.capabilities() and adc.dsl._BACKEND_CAPS, so it
 needs the _adc extension to import but does not build or run any model.
@@ -28,7 +31,7 @@ import adc
 from adc import dsl
 
 EXPECTED_TOP_KEYS = {
-    "riemann", "time", "stability_policy", "poisson", "geometry", "schur",
+    "dimension", "riemann", "time", "stability_policy", "poisson", "geometry", "schur",
     "backends_dsl", "io", "amr_layout", "aux",
 }
 
@@ -73,10 +76,27 @@ def test_amr_schur_advertised_implemented():
     assert "the implementation does not" not in amr_schur
 
 
+def test_dimension_invariant_2d():
+    # ADC-294 / ADR-0001 Decision 1: the core is officially 2D. The limit is published as a
+    # structured scalar (not prose) so scripts and the limitations doc can introspect it, and it is
+    # a SEPARATE top-level key, NOT nested under "geometry" (polar is a second geometry at the SAME
+    # dimension, not a third axis).
+    caps = adc.capabilities()
+    dim = caps["dimension"]
+    assert dim == 2, "capabilities()['dimension'] should declare the 2D-core invariant, got %r" % (dim,)
+    # bool is a subclass of int in Python; pin to a plain int so True / 2.0 / "2" cannot pass.
+    assert isinstance(dim, int) and not isinstance(dim, bool), \
+        "capabilities()['dimension'] should be a plain int scalar, got %r" % (dim,)
+    assert "dimension" not in caps["geometry"], \
+        "the dimension invariant must stay a separate top-level key, not nested under geometry"
+
+
 if __name__ == "__main__":
     test_top_level_keys_present()
     test_riemann_surface_matches_dispatch()
     test_backends_dsl_flags_match_backend_caps()
     test_polar_stability_bounds_advertised_wired()
     test_amr_schur_advertised_implemented()
-    print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, AMR Schur)")
+    test_dimension_invariant_2d()
+    print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, "
+          "AMR Schur, 2D dimension)")

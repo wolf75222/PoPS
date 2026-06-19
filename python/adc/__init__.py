@@ -2295,6 +2295,16 @@ def capabilities():
     combinations outside the matrix raise an explicit error on the C++ side (never a silent ignore).
     """
     return {
+        # Spatial dimension of the core (ADC-294 / ADR-0001 Decision 1). The solver is structurally
+        # 2D: a load-bearing invariant baked into the data layout (Fab2D operator()(i, j, c)), the
+        # paired FaceFluxX / FaceFluxY kernels, the 2-component momentum, the 5-point Poisson and the
+        # Box2D / Geometry index space -- not a naming detail. Published as an explicit, introspectable
+        # structured scalar (hard limits are scalars, not prose) so scripts and the limitations doc can
+        # key off it. The polar mesh is a second GEOMETRY at the SAME dimension ((r, theta) is a
+        # 2-index Box2D), so this is a separate top-level key, NOT nested under "geometry". An ND core
+        # (BoxND / GeometryND) is deferred to a future milestone; see
+        # docs/sphinx/reference/known-limitations.md and include/adc/mesh/box2d.hpp.
+        "dimension": 2,
         "riemann": {
             "system_cartesian": ["rusanov", "hll", "hllc", "roe"],
             "system_polar": ["rusanov", "hll"],
