@@ -21,6 +21,7 @@ IEEE results bit-identical; guarded by the `dmax==0` parity suite).
 | Pinned per-OS conda toolchain + heavy-TU pool | ADC-338 | AppleClang (macOS) / conda gcc 14.2 (Linux) pinned; `ADC_HEAVY_TU_POOL` lets `-j` parallelize the now-small sub-TUs on a high-RAM host (CI keeps the size-1 OOM guard). |
 | `optnone` on the cold factories | ADC-337 | the once-per-block string->closure wiring is no longer `-O3`-optimized; the hot kernels stay `-O3`. |
 | Gate unused flux x limiter x integrator combos (P1-C) | ADC-340 | **NO-GO**: the `if constexpr` capability guards already prune the impossible combos (recoverable residual ~ 0); further gating would be a forbidden scenario allowlist. Documented and closed. |
+| Targeted PCH for the module (P2) | ADC-361 | **NO-GO**: a precompiled header for pybind11/Kokkos made a COLD `_adc` build **slower** (`361 s -> 416 s`, +15%) on AppleClang/macOS. The frontend is small relative to the `-O3` backend (cf. 3.2), so the PCH build + per-TU PCH load cost more than the parse they save. Cold AppleClang only (GCC-Linux and the warm/ccache path not re-measured -- both could only worsen it). Default OFF, not added. See the PCH note in section 6 (P2). |
 
 The CI `--parallel 2` (7 GB-runner memory bound) and the WSL2 `-j 6` (RAM bound) are intentionally kept.
 
@@ -180,7 +181,7 @@ python/amr_system.cpp  compilé 14×
 - **P2-A. `ccache`** (`-DCMAKE_CXX_COMPILER_LAUNCHER=ccache`) for local iteration: no gain on the 1st build nor when a header changes (the `ADC_HEADER_SIG` signature invalidates), but useful when only a test `.cpp` changes.
 - **P2-B. CI `-ftime-trace` safeguard**: per-TU compilation time budget to detect a regression (a new flux/limiter that adds a dimension to the combinatorial product).
 - **P2-C. Leave LTO OFF** (enabling it would clearly worsen the backend). Linking is not an issue (< 1 s/exe) - no need to invest in mold/lld.
-- **PCH: low value here** (the frontend only weighs 31 s; the gain caps below 30 s/TU while the backend costs 435).
+- **PCH: NO-GO, measured (ADC-361).** The prediction above (frontend ~31 s vs ~435 s backend per heavy TU) was confirmed by measurement: a precompiled header of `<pybind11/pybind11.h>` (+ `<Kokkos_Core.hpp>`) on the `_adc` module made a COLD build **slower**, 361 s -> 416 s (+15%, isolated empty ccache, `ADC_HEAVY_TU_POOL=4`, AppleClang macOS arm64). The extra PCH-build translation unit plus the per-TU cost of loading a large PCH exceed the parse time it removes, because the `-O3` backend pass -- not the frontend -- dominates this build. The cold number is the measured result; the warm/ccache path was reasoned, not benchmarked (it would need `CCACHE_SLOPPINESS=pch_defines,time_macros` to not defeat ccache on warm rebuilds, and PCH invalidation can only make it worse, never rescue it). Closed NO-GO; the opt-in flag was NOT merged (no dead config). Re-measure only if a future toolchain profile shows the frontend dominating; reproduce by adding `target_precompile_headers(_adc PRIVATE <pybind11/pybind11.h> <Kokkos_Core.hpp>)` and timing a cold `cmake --build --target _adc` with an isolated `CCACHE_DIR`, with vs without.
 
 **Recommended order:** P0-A (CI/tests, safe and immediate) -> P0-B (unblocks your `_adc` pain) -> P1-A/P1-B (shave the backend) -> P1-C (reduce the spread).
 
