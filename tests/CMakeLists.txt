@@ -415,9 +415,12 @@ add_test(NAME test_amr_compiled_model COMMAND test_amr_compiled_model)
 # set_refinement (refine_threshold == 1e30) la hierarchie compilee est MONO-NIVEAU (n_patches()==0),
 # avec set_refinement(seuil fini) le seed est alloue (n_patches()>=1). Verrouille la suppression du
 # patch fin rang-0 qui bridait le strong-scaling MPI quand le raffinement etait inactif.
-add_executable(test_amr_seed_no_refine test_amr_seed_no_refine.cpp
-               ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp)
-target_link_libraries(test_amr_seed_no_refine PRIVATE adc::adc ${CMAKE_DL_LIBS})
+# ADC-335: amr_system.cpp now delegates its dispatch to the per-transport seam TUs (ADC_AMR_SEAM),
+# so this ADC-324 test -- added on master after this branch forked and still re-listing amr_system.cpp
+# directly -- must pick the seam up too. Link the adc_runtime_amr object lib (amr_system.cpp + the seam,
+# compiled once at -O0 under the heavy-TU pool) like test_amr_compiled_model, instead of recompiling.
+add_executable(test_amr_seed_no_refine test_amr_seed_no_refine.cpp)
+target_link_libraries(test_amr_seed_no_refine PRIVATE adc::adc ${CMAKE_DL_LIBS} adc_runtime_amr)
 add_test(NAME test_amr_seed_no_refine COMMAND test_amr_seed_no_refine)
 
 # --- AmrSystem::potential() : phi du niveau grossier expose, pendant de System::potential() ---
