@@ -77,6 +77,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- **Pin the conda build toolchain and surface the heavy-TU pool** (ADC-338): `environment.yml` pins
+  `pybind11>=2.13,<3` (the conservative/validated 2.x line; 3.x still compiles, drop `<3` to opt in) and
+  documents the local-vs-validated Kokkos gap (conda ships a Serial CPU-dev `kokkos`, default per-platform
+  -- dry-run verified osx-arm64 ~4.7.01 / linux-64 ~4.3.00 -- a separate artifact from the source-built
+  GPU Kokkos 4.4.01 used on ROMEO/CI, so it is intentionally not hard-pinned). `scripts/setup_env.sh`
+  keeps AppleClang the macOS default and installs the conda `cxx-compiler` (gcc 14.2 via cxx-compiler
+  1.11.0) as the pinned Linux default -- the fix for the slow `-j40` Linux build (wrong floating host gcc)
+  -- and now prints how to widen `ADC_HEAVY_TU_POOL` on a high-RAM host so `-j` parallelizes the
+  (post-ADC-335) heavy sub-TUs, while CI/constrained machines keep the size-1 OOM guard. Pins verified to
+  resolve by `conda create --dry-run` on osx-arm64 and (`--platform`) linux-64.
 - **Parallelize the `_adc` build by splitting the heavy runtime TUs** (ADC-335): `python/system.cpp`
   and `python/amr_system.cpp` instantiated the full transport x source x elliptic x flux x limiter x
   integrator product (~1700 `-O3` leaves) in two giant TUs, so `_adc` had only 3 TUs and `-j` capped at
