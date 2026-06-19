@@ -45,8 +45,10 @@ silent changes).
 
 ## 3. Flux: explicit domain of validity, HLL aligned
 
-- HLLC/Roe documented EULER 2D ONLY (+ aliases `EulerHLLCFlux2D` / `EulerRoeFlux2D`); the entropy
-  fix of Roe is the NAMED constant `kRoeEntropyFixFraction = 0.1`, documented Euler/Roe-specific.
+- HLLC/Roe documented with their canonical Euler 2D fallback domain (+ aliases `EulerHLLCFlux2D` /
+  `EulerRoeFlux2D`); they are generic when the model supplies the capability hooks (cf. wave 2 sec.2,
+  `HasHLLCStructure` / `HasRoeDissipation`). The entropy fix of Roe is the NAMED constant
+  `kRoeEntropyFixFraction = 0.1`, documented Euler/Roe-specific.
 - `hll` (generic with signed waves, requires wave_speeds) is now also routed by the AMR
   (dispatch_amr_block + dispatch_amr_compiled, same requires-gate as System) and documented everywhere
   (Spatial / FiniteVolume / system.hpp / Sphinx). Visible test:
@@ -276,7 +278,9 @@ is wired really is; what is not is documented with file:line, never masked).
 
 ## Points still NOT generalized (explicit, updated wave 3)
 
-1. **AMR**: no `ssprk3`; coarse/fine assumes ratio 2; `set_poisson` limited to geometric_mg +
+1. **AMR**: native `add_block` carries `ssprk3` (per-stage reflux, mono- and multi-block, cf.
+   `test_amr_ssprk3`); only the compiled `.so` loader rejects it (flat ABI does not marshal the time
+   method). coarse/fine assumes ratio 2; `set_poisson` limited to geometric_mg +
    rhs charge_density|composite. Newton options: WIRED in mono-block (threaded on the AmrCouplerMP
    coupler: step -> advance_amr -> subcycle_level_mp -> mf_apply_source_treatment ->
    backward_euler_source, default {} bit-identical) AND in multi-block; the .so loaders reject them
@@ -284,21 +288,18 @@ is wired really is; what is not is documented with file:line, never masked).
    AmrRuntimeBlock, reset at the head of the advance in AmrRuntime::step, max/sum aggregation + all_reduce
    identical to System); mono-block AMR and .so loaders = explicit rejection (the report is not threaded
    into the coupler subcycling nor carried by the ABI).
-2. **AMR Schur Phase 4**: composite limited to 2 levels + ONE mono-box fine patch + mono-rank;
-   multi-patch, > 2 levels, MPI, multi-block = Phase 4 (explicit rejection, perimeter documented
-   in the header of the stepper). set_krylov AMR only drives the coarse stage.
-3. **Polar**: flux **Rusanov AND HLL** (HLL wired since wave 4, cf. below), but
-   **HLLC/Roe stay NOT wired** (assume n_vars==4 Euler with energy, without polar energy flux
-   brick -> explicit rejection, make_block_polar). Direct Poisson mono-rank/mono-box (tensor
-   Schur = multi-box). **theta splitting NOT exposed by the facade** (decision documented
-   below): the polar transport (System.step) is itself MONO-BOX
-   (`python/system.cpp` ctor Impl: `ba(std::vector<Box2D>{index_domain(c)})`, a single box;
-   `set_source_stage` L.~1095-1103: the facade builds ONE box covering the ring, the theta
-   splitting is only drivable at the level of the C++ API PolarCondensedSchurSourceStepper). Exposing a
-   `theta_boxes` parameter on `adc.PolarMesh` would be a **lying facade**: the tensor Schur
-   solver knows how to split theta, but the System (transport + direct Poisson) does not, and there is
-   NO plumbing (split BoxArray + DistributionMap + fill_boundary halos of the polar transport)
-   to make it multi-box. Nothing is therefore exposed; the blocker is documented, not masked.
+2. **AMR Schur Phase 4a**: composite supports 2 levels + 1..N disjoint, NON-adjacent fine patches +
+   replicated mono-block coarse (mono-rank); Phase 4b (adjacent patches / fine-fine join, > 2 levels,
+   MPI, multi-block) is an explicit rejection, perimeter documented in the header of the stepper.
+   set_krylov AMR only drives the coarse stage.
+3. **Polar**: flux **Rusanov AND HLL** (HLL on the isothermal fluid, wired since wave 4, cf. below),
+   but **HLLC/Roe stay NOT wired** (assume n_vars==4 Euler with energy, without polar energy flux
+   brick -> explicit rejection, make_block_polar). `theta_boxes` IS exposed
+   (`adc.PolarMesh(theta_boxes=N)`, ADC-67, cf. wave 4 sec.2): the polar transport is multi-box when
+   `theta_boxes > 1` (split BoxArray + DistributionMapping + collective fill_ghosts), and the tensor
+   Schur stage is multi-box / multi-rank by azimuthal split. Only the DIRECT polar Poisson stays
+   mono-box / mono-rank (upstream reject if `theta_boxes > 1`; use `theta_boxes = 1` or the tensor
+   Schur stage). The earlier "lying facade" rationale was reversed by ADC-67.
 4. **Aux**: extensible by CANONICAL LIST (ADC_AUX_FIELDS + AUX_CANONICAL Python mirror: phi/grad/
    B_z/T_e) **AND, since ADC-70 (phase 1), by NAMED field declared by the model**: `m.aux_field("name")`
    reserves a component of the aux channel starting from `kAuxNamedBase = 5` (after T_e), read in C++ via

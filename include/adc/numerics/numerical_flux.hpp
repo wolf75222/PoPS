@@ -10,11 +10,13 @@
 /// Accuracy hierarchy (intermediate-wave resolution) AND generality:
 ///   RusanovFlux: minimal GENERIC; only needs max_wave_speed (any PhysicalModel).
 ///   HLLFlux: GENERIC with signed waves; requires model.wave_speeds (sL, sR).
-///   HLLCFlux: EULER 2D ONLY (n_vars == 4, rho/m/E layout, pressure) -- alias
-///                  EulerHLLCFlux2D. Undefined behavior on any other model.
-///   RoeFlux: EULER 2D IDEAL GAS ONLY (Euler eigenstructure hard-coded, gamma-1
-///                  derived from the ideal-gas EOS, Harten entropy fix eps = 0.1*c -- an entropy
-///                  policy SPECIFIC to Euler/Roe) -- alias EulerRoeFlux2D.
+///   HLLCFlux: GENERIC contact-resolving solver when the model supplies HasHLLCStructure
+///                  (contact_speed + hllc_star_state); otherwise a canonical Euler 2D fallback
+///                  (n_vars == 4, rho/m/E layout, pressure) -- alias EulerHLLCFlux2D.
+///   RoeFlux: GENERIC Roe-like solver when the model supplies HasRoeDissipation
+///                  (full d = |A_roe| (UR - UL)); otherwise an ideal-gas Euler 2D fallback
+///                  (eigenstructure hard-coded, gamma-1 from the EOS, Harten entropy fix
+///                  eps = 0.1*c -- an entropy policy SPECIFIC to Euler/Roe) -- alias EulerRoeFlux2D.
 ///
 /// For a NON-Euler model (moment system, isothermal, scalar...), the generic path is RusanovFlux,
 /// or HLLFlux as soon as the model exposes wave_speeds.
@@ -159,12 +161,14 @@ concept HasRoeDissipation =
       { m.roe_dissipation(ul, al, ur, ar, dir) } -> std::same_as<typename M::State>;
     };
 
-/// HLLCFlux (HLL + Contact wave, Toro): 3 waves, captures the density discontinuity.
+/// HLLCFlux (HLL + Contact wave, Toro): 3 waves, resolves the contact discontinuity.
 ///
-/// Requires model.pressure and model.wave_speeds. Targets Euler 2D (n_vars == 4);
-/// normal/tangential momentum indices according to dir. Star speed sStar computed by Toro's
-/// formula eq. 10.37. Falls back to FL / FR in the supersonic region. ADC_HD.
-/// INVARIANT: n_vars == 4 assumed; undefined behavior on other models.
+/// GENERIC when the model satisfies HasHLLCStructure (contact_speed + hllc_star_state): applies
+/// F* = F_k + s_k (U*_k - U_k) with no layout or EOS assumption. Otherwise falls back to a canonical
+/// Euler 2D path (n_vars == 4, normal/tangential momentum by dir, star speed sStar via Toro's
+/// formula eq. 10.37), which requires model.pressure and model.wave_speeds and returns FL / FR in
+/// the supersonic region. ADC_HD.
+/// INVARIANT: the n_vars == 4 assumption applies ONLY to the Euler fallback branch.
 struct HLLCFlux {
   template <class Model>
   ADC_HD typename Model::State operator()(const Model& m,
@@ -239,12 +243,14 @@ inline constexpr Real kRoeEntropyFixFraction = Real(0.1);
 
 /// RoeFlux: Roe linearization + Harten entropy fix (acoustic waves).
 ///
-/// FULL decomposition into eigenwaves: F_R - F_L = A_roe (U_R - U_L) exactly.
-/// For a supersonic state, F* = exact upwind flux. Harten entropy fix
-/// (eps = 0.1*c) on acoustic waves: avoids non-entropic shocks (sonic glitch).
-/// Requires model.pressure; gamma-1 derived from the current state (ideal-gas assumption).
+/// GENERIC when the model satisfies HasRoeDissipation: F = 1/2 (F_L + F_R) - 1/2 d with the
+/// dissipation d = |A_roe| (U_R - U_L) (linearization, eigenstructure and entropy fix) supplied by
+/// the model, no Euler assumption. Otherwise falls back to a canonical Euler 2D ideal-gas path:
+/// FULL eigenwave decomposition F_R - F_L = A_roe (U_R - U_L) exactly, gamma-1 derived from the
+/// current state (ideal-gas EOS), Harten entropy fix eps = 0.1*c (see kRoeEntropyFixFraction) on the
+/// acoustic waves, requiring model.pressure.
 /// std::sqrt used for the Roe average (device-clean under Kokkos/nvcc). ADC_HD.
-/// INVARIANT: n_vars == 4 assumed (Euler 2D); undefined behavior on other models.
+/// INVARIANT: the n_vars == 4 / ideal-gas assumption applies ONLY to the Euler fallback branch.
 struct RoeFlux {
   template <class Model>
   ADC_HD typename Model::State operator()(const Model& m, const typename Model::State& UL,
@@ -320,10 +326,11 @@ struct RoeFlux {
   }
 };
 
-/// EXPLICIT validity-domain aliases: HLLCFlux and RoeFlux are EULER 2D solvers
-/// (n_vars == 4, rho/m_x/m_y/E layout, ideal-gas pressure), NOT generic solvers.
-/// The short names remain for compatibility (make_block and the generated .so reference them);
-/// new code that wants to name the assumption may use these aliases.
+/// VALIDITY-DOMAIN aliases naming the canonical Euler 2D fallback (n_vars == 4, rho/m_x/m_y/E
+/// layout, ideal-gas pressure). HLLCFlux/RoeFlux are GENERIC when the model supplies the
+/// HasHLLCStructure / HasRoeDissipation hooks and degrade to this Euler path otherwise; the aliases
+/// let a call site name the fallback assumption. The short names remain for compatibility
+/// (make_block and the generated .so reference them).
 using EulerHLLCFlux2D = HLLCFlux;
 using EulerRoeFlux2D = RoeFlux;
 

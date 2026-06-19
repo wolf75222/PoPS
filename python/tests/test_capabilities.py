@@ -1,0 +1,82 @@
+"""Coherence contract for adc.capabilities() (ADC-297).
+
+adc.capabilities() is the published source of truth for what the runtime can dispatch
+(Riemann fluxes, time methods, stability bounds, Poisson, geometry, Schur, DSL backends,
+IO, AMR layout, aux). It is a hand-written dict, so it can silently drift from the gates it
+claims to mirror. These checks pin the capability surface to facts that are verified
+elsewhere in the suite, so that changing a capability forces either a test update or a
+documentation update:
+
+  T1 - the published top-level keys stay present (the doc and the limitations pages key off
+       them; a vanished key means a stale reference).
+  T2 - the Riemann surface matches the dispatch gates: hllc/roe are exposed on the cartesian
+       and AMR facades but NOT on polar (no polar energy-flux brick, make_block_polar rejects
+       them); polar exposes only rusanov + hll (the isothermal fluid declares wave_speeds).
+       Guards the "hllc/roe = 2D Euler only" and "polar = scalar ExB only" doc regressions.
+  T3 - backends_dsl MPI/AMR flags agree (truthiness) with the dsl._BACKEND_CAPS table that
+       actually drives backend selection; catches drift between the two tables.
+  T4 - the polar stability bounds (stability_speed / stability_dt / source_frequency) are
+       advertised as wired (system_polar.cpp installs them); guards the PolarMesh "NOT wired"
+       docstring regression.
+  T5 - the AMR Schur stage is advertised as implemented (Phase 4a), not "to be done";
+       guards the ALGORITHMS.md section 25 "the implementation does not exist" regression.
+
+The test is pure Python: it only reads adc.capabilities() and adc.dsl._BACKEND_CAPS, so it
+needs the _adc extension to import but does not build or run any model.
+"""
+import adc
+from adc import dsl
+
+EXPECTED_TOP_KEYS = {
+    "riemann", "time", "stability_policy", "poisson", "geometry", "schur",
+    "backends_dsl", "io", "amr_layout", "aux",
+}
+
+
+def test_top_level_keys_present():
+    caps = adc.capabilities()
+    missing = EXPECTED_TOP_KEYS - set(caps)
+    assert not missing, "capabilities() lost published top-level key(s): %s" % sorted(missing)
+
+
+def test_riemann_surface_matches_dispatch():
+    riemann = adc.capabilities()["riemann"]
+    assert riemann["system_cartesian"] == ["rusanov", "hll", "hllc", "roe"], riemann["system_cartesian"]
+    assert riemann["amr"] == ["rusanov", "hll", "hllc", "roe"], riemann["amr"]
+    # Polar has no energy-flux brick: hllc/roe are rejected by make_block_polar, only
+    # rusanov (any model) + hll (isothermal fluid, declares wave_speeds) are wired.
+    assert riemann["system_polar"] == ["rusanov", "hll"], riemann["system_polar"]
+    assert "hllc" not in riemann["system_polar"] and "roe" not in riemann["system_polar"]
+
+
+def test_backends_dsl_flags_match_backend_caps():
+    caps_b = adc.capabilities()["backends_dsl"]
+    for backend in ("prototype", "aot", "production"):
+        ref = dsl._BACKEND_CAPS[backend]
+        got = caps_b[backend]
+        assert bool(got["mpi"]) == bool(ref["mpi"]), \
+            "%s: capabilities() mpi=%r disagrees with _BACKEND_CAPS mpi=%r" % (backend, got["mpi"], ref["mpi"])
+        assert bool(got["amr"]) == bool(ref["amr"]), \
+            "%s: capabilities() amr=%r disagrees with _BACKEND_CAPS amr=%r" % (backend, got["amr"], ref["amr"])
+
+
+def test_polar_stability_bounds_advertised_wired():
+    polar = " ".join(adc.capabilities()["stability_policy"]["system_polar"])
+    for bound in ("stability_speed", "stability_dt", "source_frequency"):
+        assert bound in polar, "polar stability bound %r missing from capabilities()" % bound
+
+
+def test_amr_schur_advertised_implemented():
+    amr_schur = adc.capabilities()["schur"]["amr"]
+    assert amr_schur and "Phase 4a" in amr_schur, \
+        "schur.amr should advertise the implemented Phase 4a composite stage, got: %r" % amr_schur
+    assert "the implementation does not" not in amr_schur
+
+
+if __name__ == "__main__":
+    test_top_level_keys_present()
+    test_riemann_surface_matches_dispatch()
+    test_backends_dsl_flags_match_backend_caps()
+    test_polar_stability_bounds_advertised_wired()
+    test_amr_schur_advertised_implemented()
+    print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, AMR Schur)")

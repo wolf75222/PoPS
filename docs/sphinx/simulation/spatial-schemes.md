@@ -26,8 +26,11 @@ The possible values:
   `"weno5"` (WENO5-Z, order 5 in a smooth zone, 5-point stencil / 3 ghosts, oscillation-free
   capture near a front). `weno5` is exposed only by the native `add_block` path and the
   compiled `aot`/`production` backends (the `prototype` JIT path rejects it);
-- Riemann flux: `"rusanov"` (the most stable, default for scalar transport), `"hllc"`,
-  `"roe"`. HLLC and Roe require a compressible transport (4 variables + pressure);
+- Riemann flux: `"rusanov"` (the most stable, default for scalar transport), `"hll"` (generic
+  signed-wave, requires `model.wave_speeds`), `"hllc"`, `"roe"`. HLLC and Roe run on the canonical
+  Euler 2D layout (4 variables + pressure), or generically on any model that supplies the capability
+  hooks (`HasHLLCStructure` / `HasRoeDissipation`, emitted in the DSL with `m.enable_hllc()` /
+  `m.enable_roe()`);
 - reconstruction: `"conservative"` or `"primitive"`. The primitive is more stable for Euler
   (positivity of `rho` and `p`).
 

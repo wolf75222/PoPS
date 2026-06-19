@@ -43,8 +43,10 @@ basis.
 
 Exact geometry comes at the price of reach. The polar path has sharp edges:
 
-- scalar `ExB` transport only; the fluid limiter and Riemann solver are not lifted to
-  the polar side, so you cannot run a compressible or isothermal Euler model on it.
+- transport is scalar `ExB` or the isothermal fluid (`IsothermalFluxPolar`): `rusanov` on any
+  polar model and `hll` on the isothermal fluid (it declares `wave_speeds`), with a limiter
+  (minmod / vanleer / weno5). Only `hllc` / `roe` stay unavailable on the polar side (no polar
+  energy flux brick).
 - the direct polar Poisson field solve (`PolarPoissonSolver`) is single-rank/single-box:
   it covers the ring with a single box and refuses MPI (`n_ranks > 1` is an error). The
   polar condensed Schur source stage, by contrast, is multi-rank/multi-box (theta

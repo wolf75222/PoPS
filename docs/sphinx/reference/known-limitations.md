@@ -57,17 +57,24 @@ the stage is available on any cartesian or polar grid. Design:
 [SCHUR_CONDENSATION_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/SCHUR_CONDENSATION_DESIGN.md),
 [AMR_MULTIBLOCK_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/AMR_MULTIBLOCK_DESIGN.md).
 
-## Polar geometry: single-rank, scalar ExB only
+## Polar geometry: direct Poisson single-box, no HLLC/Roe, no cartesian coupling
 
 The polar mesh (`adc.PolarMesh`, global ring (r, theta)) is wired into `System.step`
 (polar transport + polar Poisson + aux in local e_r/e_theta basis), but with sharp
 edges:
 
-- scalar ExB transport only: fluid limiter / Riemann are not lifted on the
-  polar side;
-- single-rank: the direct polar solver (single box covering the ring) refuses MPI
-  (`n_ranks > 1` raised); the polar counterpart of `CondensedSchur` is also single-rank;
+- transport is scalar ExB or the isothermal fluid (`IsothermalFluxPolar`): `rusanov` on any
+  polar model, `hll` on the isothermal fluid (it declares `wave_speeds`), with limiters
+  minmod / vanleer / weno5. `hllc` / `roe` are not lifted on the polar side (no polar energy
+  flux brick);
+- the DIRECT polar Poisson solver (one box covering the ring) is single-box / single-rank: it
+  refuses MPI (`n_ranks > 1` raised) and `theta_boxes > 1`. The polar transport and the
+  tensorial polar Schur stage (`PolarCondensedSchurSourceStepper`), by contrast, are multi-box
+  / multi-rank by azimuthal (theta) split (ADC-67);
 - no cartesian <-> polar coupling: the polar ring is a separate global domain.
+
+Source of truth: `adc.capabilities()['riemann']['system_polar']`,
+`['geometry']['system_polar']` and `['schur']['system_polar']` (revalidated 2026-06).
 
 ## Two-fluid AP: scenario in adc_cases, not a core brick
 
