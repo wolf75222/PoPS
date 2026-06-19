@@ -275,6 +275,15 @@ add_executable(test_facade_routing test_facade_routing.cpp)
 target_link_libraries(test_facade_routing PRIVATE adc::adc ${CMAKE_DL_LIBS} adc_runtime_system)
 add_test(NAME test_facade_routing COMMAND test_facade_routing)
 
+# ADC-299 + ADC-290 : validation amont de la config (System / AmrSystem, AVANT Impl) et contrat de
+# completude du ModelSpec (transport / elliptic explicites, pas de retombee compressible / charge).
+# Compile les deux runtimes (System + AmrSystem) -> link adc_runtime_system ET adc_runtime_amr. La
+# boucle de cap memoire en fin de fichier le passe automatiquement a -O0 + pool adc_heavy_tu.
+add_executable(test_config_model_validation test_config_model_validation.cpp)
+target_link_libraries(test_config_model_validation
+                      PRIVATE adc::adc ${CMAKE_DL_LIBS} adc_runtime_system adc_runtime_amr)
+add_test(NAME test_config_model_validation COMMAND test_config_model_validation)
+
 # --- canal aux extensible (n_aux + load_aux<NComp>) : champ extra B_z lu et peuple ---
 adc_add_test(test_aux_extra)
 adc_add_test(test_aux_coupler_bz)
