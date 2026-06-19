@@ -13,8 +13,10 @@
 #     (>1h24 vs 5min21). So we pin CC/CXX=AppleClang IN the env (`conda env config vars`): every
 #     `conda activate adc` exports them, taking priority over a polluted PATH (real case:
 #     /opt/homebrew/opt/llvm/bin at the head of PATH via ~/.zshrc).
-#   - Linux  : `cxx-compiler` conda-forge (gcc 14, C++23) -- a full toolchain without root rights;
-#     its activation scripts export CC/CXX automatically.
+#   - Linux  : `cxx-compiler` conda-forge (gcc 14.2 via cxx-compiler 1.11.0, C++23) -- full toolchain, no root,
+#     installed here as the pinned Linux default; its activation scripts export CC/CXX automatically.
+#     This is the fix for the slow `-j40` Linux build: a wrong/floating host gcc, plus the (now split,
+#     ADC-335) heavy TUs, made it crawl; a pinned conda gcc + the split restore a fast parallel build.
 # Overrides remain possible: CC/CXX set by hand before a build win, and the DSL runtime follows the
 # compiler baked into _adc anyway.
 #
@@ -146,6 +148,14 @@ echo ""
 echo "Env ready. Next:"
 echo "    conda activate $ENV_NAME"
 echo "    pip install . -v          # builds the Kokkos module (Kokkos is ON and mandatory)"
+echo ""
+# ADC-338: after the ADC-335 split, the heavy module TUs are small but a size-1 Ninja pool
+# (ADC_HEAVY_TU_POOL, the CI 7GB-runner OOM guard) still serializes them. On a high-RAM local box,
+# widen it so -j actually compiles the sub-TUs in parallel (this, not -j alone, bounds the heavy TUs):
+_ncpu="$( (nproc 2>/dev/null) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+echo "Fast local build (high-RAM host): widen the heavy-TU pool, e.g."
+echo "    pip install . -v -C cmake.define.ADC_HEAVY_TU_POOL=$_ncpu      # or a C++ preset: -DADC_HEAVY_TU_POOL=$_ncpu"
+echo "    (leave it at the default 1 on memory-constrained machines / CI -- it is the OOM guard.)"
 echo ""
 if conda run -n "$ENV_NAME" python -c "import adc" >/dev/null 2>&1; then
   echo "--- adc.doctor() ---"
