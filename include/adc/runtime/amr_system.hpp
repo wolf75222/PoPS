@@ -241,7 +241,9 @@ class AmrSystem {
   /// @param model   composition of bricks (transport/source/elliptic + parameters)
   /// @param limiter "none" | "minmod" | "vanleer" | "weno5" (weno5 = WENO5-Z, 3 ghosts; rusanov)
   /// @param riemann "rusanov" | "hll" (generic signed-wave, requires model.wave_speeds) | "hllc"
-  ///                | "roe" (hllc/roe require a compressible transport)
+  ///                | "roe" (generic when the model supplies the Riemann capability
+  ///                HasHLLCStructure / HasRoeDissipation; else the canonical Euler 2D layout,
+  ///                4 variables + pressure)
   /// @param time    "explicit" (SSPRK2, forward-Euler source carried by the AMR step) | "ssprk3"
   ///                (SSPRK3, order 3, reflux per stage; explicit transport, EXCLUSIVE of imex) |
   ///                "imex" (stiff source handled IMPLICITLY by backward_euler_source; the transport

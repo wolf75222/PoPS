@@ -652,7 +652,8 @@ AmrRuntimeBlock build_amr_block(const Model& model, const SharedAmrLayout& S,
 }
 
 /// Dispatch of the spatial scheme (limiter x Riemann flux) -> build_amr_block. SAME guards as
-/// dispatch_amr_compiled (hllc/roe require a 4-variable compressible transport + pressure).
+/// dispatch_amr_compiled (hllc/roe require the model's Riemann capability HasHLLCStructure /
+/// HasRoeDissipation, OR the canonical Euler 2D layout: 4 variables + pressure).
 /// Multi-block counterpart of dispatch_amr_compiled. @p implicit_components: partial IMEX mask carried
 /// by the block (indices of the implicit components; empty = full backward-Euler), threaded to build_amr_block.
 template <class Model>
@@ -734,7 +735,10 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
       throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
     } else {
       throw std::runtime_error("add_block(AmrSystem, multi-block): flux 'hllc' requires a "
-                               "compressible transport (4 variables + pressure)");
+                               "compressible Euler 2D transport (4 variables + pressure) OR the "
+                               "model's HLLC capability (pressure + wave_speeds + contact_speed + "
+                               "hllc_star_state, cf. HasHLLCStructure); this transport -> "
+                               "'hll'/'rusanov'");
     }
   }
   if (riem == "roe") {
@@ -759,14 +763,17 @@ AmrRuntimeBlock dispatch_amr_block(const Model& m, const std::string& lim, const
       throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "limiteur", lim);
     } else {
       throw std::runtime_error("add_block(AmrSystem, multi-block): flux 'roe' requires a "
-                               "compressible transport (4 variables + pressure)");
+                               "compressible Euler 2D transport (4 variables + pressure) OR the "
+                               "model's Roe capability (roe_dissipation, cf. HasRoeDissipation); "
+                               "this transport -> 'hll'/'rusanov'");
     }
   }
   throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "flux", riem);
 }
 
 /// Dispatch of the spatial scheme (limiter x Riemann flux) -> build_amr_compiled. Same guards as
-/// AmrSystem::add_block (hllc/roe require a 4-variable compressible transport + pressure).
+/// AmrSystem::add_block (hllc/roe require the model's Riemann capability HasHLLCStructure /
+/// HasRoeDissipation, OR the canonical Euler 2D layout: 4 variables + pressure).
 template <class Model>
 AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
                                        const std::string& riem, const AmrBuildParams& bp) {
@@ -817,7 +824,10 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
       throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
     } else {
       throw std::runtime_error("add_compiled_model(AmrSystem): flux 'hllc' requires a "
-                               "compressible transport (4 variables + pressure)");
+                               "compressible Euler 2D transport (4 variables + pressure) OR the "
+                               "model's HLLC capability (pressure + wave_speeds + contact_speed + "
+                               "hllc_star_state, cf. HasHLLCStructure); this transport -> "
+                               "'hll'/'rusanov'");
     }
   }
   if (riem == "roe") {
@@ -834,7 +844,9 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
       throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "limiteur", lim);
     } else {
       throw std::runtime_error("add_compiled_model(AmrSystem): flux 'roe' requires a "
-                               "compressible transport (4 variables + pressure)");
+                               "compressible Euler 2D transport (4 variables + pressure) OR the "
+                               "model's Roe capability (roe_dissipation, cf. HasRoeDissipation); "
+                               "this transport -> 'hll'/'rusanov'");
     }
   }
   throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "flux", riem);

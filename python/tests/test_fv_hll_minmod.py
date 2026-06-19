@@ -3,12 +3,14 @@
 
 adc.FiniteVolume(limiter="minmod", riemann="hll", variables="primitive") doit etre accepte par
 System ET AmrSystem des que le modele expose des vitesses d'onde signees (model.wave_speeds) --
-ici le fluide ISOTHERME 3 variables (rho, rho_u, rho_v), qui n'est PAS Euler 4 variables : hllc et
-roe le REJETTENT, hll doit l'accepter (c'est la baseline generique recommandee par l'audit).
+ici le fluide ISOTHERME 3 variables (rho, rho_u, rho_v), qui n'est PAS Euler 4 variables : ce
+modele NATIF n'expose pas les hooks HasHLLCStructure / HasRoeDissipation, donc hllc et roe le
+REJETTENT (un modele DSL avec enable_hllc / enable_roe les accepterait) ; hll doit l'accepter
+(c'est la baseline generique recommandee par l'audit).
 
 Verifie aussi :
   - hll sur un transport scalaire ExB (pas de wave_speeds) -> erreur EXPLICITE (pas de fallback) ;
-  - hllc sur le meme modele isotherme -> rejet explicite (Euler 2D seulement) ;
+  - hllc sur le meme modele isotherme NATIF -> rejet explicite (ni capability HLLC, ni Euler 2D) ;
   - quelques pas step_cfl : etat fini, masse conservee (domaine periodique).
 
 Invariants par assert ; imprime "OK test_fv_hll_minmod" en cas de succes.
@@ -72,7 +74,7 @@ except RuntimeError as e:
     chk("wave_speeds" in str(e) or "hll" in str(e), f"erreur explicite : {e}")
 
 # --- 3. hllc sur isotherme 3 var -> rejet explicite (Euler 2D seulement) ---------
-print("== hllc sur isotherme 3 var : rejet explicite (Euler 2D seulement) ==")
+print("== hllc sur isotherme 3 var natif : rejet explicite (ni capability HLLC, ni Euler 2D) ==")
 sim3 = adc.System(n=16, L=1.0, periodic=True)
 try:
     sim3.add_block("ions", iso_model(), spatial=adc.FiniteVolume(limiter="minmod", riemann="hllc"))

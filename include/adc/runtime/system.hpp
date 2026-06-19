@@ -89,8 +89,9 @@ class System {
   /// @param model    composition of bricks (transport/source/elliptic + parameters)
   /// @param limiter  reconstruction: "none" | "minmod" | "vanleer" | "weno5"
   /// @param riemann  numerical flux: "rusanov" (minimal generic) | "hll" (generic, requires
-  ///                 model.wave_speeds) | "hllc" | "roe" (hllc/roe: EULER 2D only, 4 variables
-  ///                 + ideal-gas pressure)
+  ///                 model.wave_speeds) | "hllc" | "roe" (generic when the model supplies the
+  ///                 HasHLLCStructure / HasRoeDissipation hooks; canonical Euler 2D fallback
+  ///                 otherwise: 4 variables + ideal-gas pressure)
   /// @param recon    reconstructed variables: "conservative" | "primitive" (Euler: primitive
   ///                 more robust, positivity of rho and p)
   /// @param time     "explicit" (SSPRK2) | "ssprk3" | "imex" (explicit transport, local implicit

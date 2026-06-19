@@ -24,9 +24,13 @@ Replace `riemann` with one of these values, matched to your model:
 - `hll`: a generic flux with signed waves. It requires `model.wave_speeds` (a native
   isothermal or compressible model, or a DSL model that declares the primitive `p`). It is the
   path for a non-Euler model with signed waves; pair it with `minmod`.
-- `hllc` and `roe`: 2D Euler only (4 variables and perfect-gas pressure). They require a
-  compressible transport and a declared primitive `p`. Without `p`, the wiring raises a
-  `ValueError`.
+- `hllc` and `roe`: contact-resolving (HLLC) and Roe-linearized solvers. They run on the canonical
+  2D Euler layout (4 variables and perfect-gas pressure: a compressible transport), and also
+  generically on any model that supplies the capability hooks -- `contact_speed` plus
+  `hllc_star_state` for `hllc` (`HasHLLCStructure`), or `roe_dissipation` for `roe`
+  (`HasRoeDissipation`), including some 3-variable non-Euler models. In the DSL, emit the hooks with
+  `m.enable_hllc()` / `m.enable_roe()`. Both read a pressure, so declare the primitive `p`; without
+  it (and without the capability) the wiring raises a `ValueError`.
 
 ## Wire the flux to a block
 
@@ -42,8 +46,11 @@ For the full list of limiters, fluxes and reconstruction variables, see the
 ## Declare a pressure for hllc or roe
 
 `hllc` and `roe` read a pressure. A native `FluidState(kind="compressible")` carries it. A DSL
-model must declare the primitive `p` and provide eigenvalues, which makes the generated brick
-expose `pressure` and `wave_speeds`. See
+model declares the primitive `p` and provides eigenvalues, which makes the generated brick expose
+`pressure` and `wave_speeds`. A DSL model can also become a generic `hllc`/`roe` model by emitting
+the capability hooks: `m.enable_hllc()` / `m.enable_roe()` generate them from the declared roles
+(including some 3-variable, non-Euler systems), or provide `m.roe_dissipation()` for a user-supplied
+eigenstructure. See `adc.capabilities()["riemann"]` for the exact gates and
 [write a model with the DSL](../tutorials/write-a-model-with-dsl.md).
 
 ## Check backend support
@@ -56,6 +63,8 @@ For the per-backend matrix, see the [backend matrix](../reference/backend-matrix
 ## Where to go next
 
 To add a flux that no native brick provides, write it as a hyperbolic brick in the DSL and
-compile it: see [write a model with the DSL](../tutorials/write-a-model-with-dsl.md). To prototype
-a flux in host Python without recompiling, see the `PythonFlux` entry in the
-[native bricks reference](../reference/native-bricks.md).
+compile it: see [write a model with the DSL](../tutorials/write-a-model-with-dsl.md). To make `hllc`
+or `roe` work on a non-Euler model, supply the Riemann capability hooks (`HasHLLCStructure` or
+`HasRoeDissipation`) from the DSL with `m.enable_hllc()` / `m.enable_roe()` rather than treating the
+flux as Euler-only. To prototype a flux in host Python without recompiling, see the `PythonFlux`
+entry in the [native bricks reference](../reference/native-bricks.md).

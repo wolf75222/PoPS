@@ -59,6 +59,11 @@ FORBIDDEN: list[tuple[str, str]] = [
     (r"regrid_every > 0` is refused", "fausse limitation : multi-blocs + regrid_every > 0 est SUPPORTE (capstone Phase 2)"),
     (r"reject(ed)? on the Python AMR facade", "fausse limitation : HLLC/Roe/primitive sont CABLES sur la facade AMR (garde pression p)"),
     (r"add_equation[^\n]{0,40}(reject|rejette)[^\n]{0,30}(Split|Strang)", "fausse limitation : AmrSystem.add_equation ACCEPTE Split/Strang (Schur AMR mono-bloc)"),
+    # ADC-298/293 : HLLC/Roe ne sont PAS Euler-only ; chemin generique via HasHLLCStructure /
+    # HasRoeDissipation (numerical_flux.hpp), Euler 2D n'est que le fallback sans hooks.
+    (r"(2D Euler|Euler[ -]?2D) only", "fausse limitation : HLLC/Roe sont generiques via HasHLLCStructure / HasRoeDissipation ; Euler 2D n'est que le fallback (numerical_flux.hpp)"),
+    # ADC-298 : le transport polaire couvre ExB ET le fluide isotherme (IsothermalFluxPolar, riemann hll).
+    (r"scalar `?ExB`?( transport)? only", "fausse limitation : le transport polaire couvre scalar ExB ET le fluide isotherme (IsothermalFluxPolar, riemann hll), pas ExB only"),
 ]
 
 
@@ -268,9 +273,19 @@ def check(freshness_warn_only: bool = False, root: pathlib.Path = ROOT) -> int:
     else:
         violations.append("docs/docmap.toml manquant (carte de documentation requise)")
 
+    # ADC-311 : les patterns [exclude] du docmap (_generated/**, doxygen/**, ...) sont honores AUSSI
+    # par les lints de CONTENU (em-dash / non-ASCII / termes interdits / liens / images), pas seulement
+    # par le check de presence -- sinon une page generee (gitignoree) presente sur le disque au moment du
+    # build (docs.yml genere docs/sphinx/doxygen/ avant sphinx) serait lintee a tort et casserait le
+    # deploy sous set -e.
+    exclude_patterns = data.get("exclude", {}).get("patterns", [])
+    sphinx_root = root / "docs" / "sphinx"
+
     img_re = re.compile(r"!\[[^\]]*\]\(([^)]+)\)|<img[^>]+src=[\"']([^\"']+)[\"']")
     for p in files:
         rel = str(p.relative_to(root))
+        if is_sphinx_page(p, root) and excluded(str(p.relative_to(sphinx_root)), exclude_patterns):
+            continue
         text = p.read_text(encoding="utf-8")
         if EM_DASH in text:
             violations.append(f"{rel}: {text.count(EM_DASH)} em-dash (U+2014) interdits (utiliser '--')")
@@ -388,6 +403,21 @@ def selftest() -> int:
     # cas 5 : stale strict + --freshness-warn-only -> exit 0.
     results.append(_selftest_case("stale strict + --freshness-warn-only -> exit 0",
                                   _stale_repo("strict"), ["--freshness-warn-only"], 0))
+
+    # cas 6 (ADC-311) : page Sphinx GENEREE sous un pattern [exclude], avec du non-ASCII -> NON
+    # lintee (exit 0). Sans le honoring des patterns par les lints de contenu, le non-ASCII de
+    # _generated/g.md ferait echouer (exit 1) : c'est exactement la classe de violations qui cassait
+    # le deploy sur du cruft genere.
+    def build_excluded_generated(root: pathlib.Path) -> None:
+        _write(root / "docs" / "sphinx" / "p.md", PAGE)
+        _write(root / "docs" / "sphinx" / "_generated" / "g.md",
+               "# G\n\ncafe \u00e9\u00e8 non-ASCII genere.\n")
+        _write(root / "docs" / "docmap.toml",
+               '[exclude]\npatterns = ["_generated/**"]\n\n'
+               '[docs."docs/sphinx/p.md"]\nowner = "t"\nmode = "warning"\n'
+               'depends_on = []\ntested_by = []\ntestable = false\n')
+    results.append(_selftest_case("page generee exclue non content-lintee -> exit 0",
+                                  build_excluded_generated, [], 0))
 
     passed = sum(results)
     print(f"SELFTEST : {passed}/{len(results)} PASS")

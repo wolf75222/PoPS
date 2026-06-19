@@ -371,10 +371,10 @@ class PolarMesh:
     - tensorial polar Schur stage (adc.Split + adc.CondensedSchur): multi-box (multi-box C++
       solver; the theta split is now driven by theta_boxes).
 
-    Single-rank (the direct polar Poisson refuses MPI). No Cartesian<->polar coupling (global
-    ring). Optional step bounds (stability_speed/stability_dt/source_frequency) NOT wired
-    on the polar path (transport max_wave_speed only). Cf. docs/GENERICITY_2026-06.md
-    section 3 and adc.capabilities()['geometry']."""
+    The DIRECT polar Poisson refuses MPI (single-rank). No Cartesian<->polar coupling (global
+    ring). Optional step bounds (stability_speed/stability_dt/source_frequency) ARE wired on the
+    polar path (default without trait = max_wave_speed, bit-identical). Cf. docs/GENERICITY_2026-06.md
+    section 3 and adc.capabilities()['geometry'] / ['stability_policy']['system_polar']."""
 
     def __init__(self, r_min, r_max, nr, ntheta, theta_boxes=1):
         if not (r_max > r_min >= 0.0):
@@ -782,8 +782,10 @@ class Spatial:
       or a DSL model declaring a primitive 'p'); less diffusive than rusanov, without requiring a
       pressure or n_vars == 4. This is the recommended path for a NON Euler model with signed waves
       (moment system, isothermal): ``hll`` + ``minmod``.
-      hllc / roe = EULER 2D ONLY (4 variables rho/rho_u/rho_v/E + ideal-gas pressure);
-      these are NOT generic solvers (cf. EulerHLLCFlux2D / EulerRoeFlux2D on the C++ side).
+      hllc / roe = contact-resolving (HLLC) and Roe-linearized solvers. Canonical path is 2D Euler
+      (4 variables rho/rho_u/rho_v/E + ideal-gas pressure); they are also generic when the model
+      supplies the hooks HasHLLCStructure / HasRoeDissipation (DSL m.enable_hllc()/m.enable_roe()),
+      with EulerHLLCFlux2D / EulerRoeFlux2D naming the Euler fallback on the C++ side.
     - ``recon``: "conservative" | "primitive" (reconstructed variables; primitive more robust
       for Euler: positivity of rho and p; shortcut primitive=).
     - ``positivity_floor``: DENSITY floor of the reconstructed face states (positivity limiter
@@ -833,7 +835,8 @@ def FiniteVolume(limiter="minmod", riemann="rusanov", variables="conservative",
 
     - ``limiter`` -> Spatial.limiter ("none" | "minmod" | "vanleer" | "weno5")
     - ``riemann`` -> Spatial.flux ("rusanov" | "hll" | "hllc" | "roe"); "hll" is the generic
-      signed-wave path (requires model.wave_speeds), "hllc"/"roe" are Euler 2D only
+      signed-wave path (requires model.wave_speeds), "hllc"/"roe" run on the canonical Euler 2D
+      layout or generically via the model hooks HasHLLCStructure / HasRoeDissipation
     - ``variables`` -> Spatial.recon ("conservative" | "primitive")
 
     cf. docs/DSL_MODEL_DESIGN.md section 6. Returns a Spatial (consumed as-is by add_block /
@@ -2364,9 +2367,9 @@ def capabilities():
             "system_polar": "configurable roles (density=/momentum=/energy=, wave 3) ; "
                             "magnetic_field freezes B_z ; multi-box C++ solver, facade one global box",
             "amr": "mono-block ; roles + configurable krylov_tol/max_iters (wave 3, "
-                   "magnetic_field freezes coarse B_z) ; complete mono-level + composite Phase 3c "
-                   "(2 levels, 1 fine mono-box patch, mono-rank) ; Phase 4 (multi-patch/"
-                   ">2 levels/MPI/multi-block) to be done",
+                   "magnetic_field freezes coarse B_z) ; complete mono-level + composite Phase 4a "
+                   "(2 levels, 1..N disjoint non-adjacent fine patches, mono-rank) ; Phase 4b "
+                   "(adjacent patches/>2 levels/MPI/multi-block) to be done",
         },
         "backends_dsl": {
             "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "

@@ -187,12 +187,14 @@ $$\hat F^{Roe} = \tfrac12\big(F_L + F_R\big) - \tfrac12 \sum_k |\tilde\lambda_k|
 
 waves $\{u_n - c,\ u_n,\ u_n,\ u_n + c\}$ with celerity $c$ deduced from the Roe enthalpy $H$, and
 Harten's entropy fix ($\varepsilon = 0.1\,c$) on the acoustic waves 1 and 5 to avoid
-the non-entropic shock (sonic glitch). HLLC and Roe target Euler 2D (`n_vars == 4`): normal/tangential
-momentum indices according to `dir`; $\gamma - 1$ is deduced from the state (ideal
-gas), no `gamma` member is required from the model.
+the non-entropic shock (sonic glitch). HLLC and Roe use the canonical Euler 2D layout
+(`n_vars == 4`) as a fallback -- normal/tangential momentum indices according to `dir`, $\gamma - 1$
+deduced from the state (ideal gas), no `gamma` member required -- but are GENERIC when the model
+supplies the optional hooks `contact_speed`/`hllc_star_state` (`HasHLLCStructure`) or
+`roe_dissipation` (`HasRoeDissipation`); the Euler path then stays bit-identical.
 
 ```
-function HLLC(m, UL, AL, UR, AR, dir):                 # n_vars == 4 (Euler 2D)
+function HLLC(m, UL, AL, UR, AR, dir):                 # canonical Euler 2D fallback (n_vars == 4)
     in = (dir==0 ? 1 : 2);  it = (dir==0 ? 2 : 1)      # qte de mvt normale / tangentielle
     rL, rR   = UL[0], UR[0]
     unL, unR = UL[in]/rL, UR[in]/rR
@@ -217,7 +219,10 @@ function HLLC(m, UL, AL, UR, AR, dir):                 # n_vars == 4 (Euler 2D)
 [`include/adc/numerics/numerical_flux.hpp`](../include/adc/numerics/numerical_flux.hpp): `RusanovFlux`,
 `HLLFlux`, `HLLCFlux`, `RoeFlux` (all `ADC_HD`). `RusanovFlux` loops component by component with
 `m.max_wave_speed`; `HLLFlux`/`HLLCFlux` share the free function `hll_speeds` (Davis estimates,
-requires `m.wave_speeds`); `HLLCFlux`/`RoeFlux` additionally require `m.pressure`. The
+requires `m.wave_speeds`); `HLLCFlux`/`RoeFlux` additionally require `m.pressure`. A non-Euler model
+may instead supply `HasHLLCStructure` (`contact_speed`, `hllc_star_state`) or `HasRoeDissipation`
+(`roe_dissipation`) to drive the generic HLLC/Roe path; absent these, the canonical Euler 2D branch
+is used. The
 compatibility function `rusanov_flux` (in `spatial_operator.hpp`) delegates to `RusanovFlux{}` for serial
 references. The flux is passed by template: `compute_face_fluxes<Limiter, NumericalFlux, Model>` and
 `assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen
@@ -228,8 +233,10 @@ IMEX half-step stays on an HLLC flux.
 **Constraints / remarks.** `RusanovFlux` is the only flux compatible with the minimal `PhysicalModel`
 (it reads only `max_wave_speed`): it is the robust default for scalar transport, at the cost of an
 increased diffusion ($\alpha$ upper bound). `HLLFlux` still smooths the contact discontinuity (a single
-star region). `HLLCFlux` and `RoeFlux` assume `n_vars == 4` (Euler 2D); undefined behavior on
-other models. HLLC on a vacuum state (zero density) divides by zero in the star factor and
+star region). `HLLCFlux`/`RoeFlux` assume `n_vars == 4` (Euler 2D) only on the fallback path; a model
+providing the `HasHLLCStructure` / `HasRoeDissipation` hooks drives the generic path. Undefined
+behavior arises only for a non-Euler model that supplies neither the canonical layout nor the hooks.
+HLLC on a vacuum state (zero density) divides by zero in the star factor and
 needs an upstream safeguard. Roe uses `std::sqrt` for the $\sqrt{\rho}$ average (device-clean
 under Kokkos/nvcc); its key property $F_R - F_L = \tilde A\,(U_R - U_L)$ gives the exact upwind flux in
 the supersonic regime, and the Harten fix avoids the non-physical expansion at the sonic point.
@@ -2094,15 +2101,15 @@ Cuda spaces give the same results (up to the FP choice of the Kokkos sum, docume
 What exists with a restricted scope, or what is written/designed without being on `master` as of the date
 of this page. The goal is not to present a partial capability as complete.
 
-- Runtime HLL flux. The `HLLFlux` brick exists in the core (section 2). The runtime exposure
-  `riemann="hll"` for a 3-variable model (wave speeds without pressure) is on a branch
-  (PR #239), not yet on `master`.
 - GaussPolicy restart/evolve. An experimental policy (re-imposing Gauss at each step, or keeping the
   `phi` evolved by Schur) on a branch (PR #237); the associated experiment is discarded. Not on
   `master`.
-- Global Schur on AMR. The Schur-condensed source step (section 13) has no AMR counterpart in
-  production: a design exists (PR #232), the implementation does not. On AMR, the Poisson is solved at the coarse
-  level then injected toward the fine, without a composite multi-level elliptic solve.
+- Global Schur on AMR. The Schur-condensed source step (section 13) IS implemented on AMR: a
+  mono-block coarse stage plus a composite multi-level path (FAC on coarse + fine, velocity
+  reconstruction per level, then the average_down cascade) for 2 levels + 1..N disjoint, NON-adjacent
+  fine patches + a replicated mono-block coarse (mono-rank); this is Phase 4a. The remaining gap
+  (Phase 4b) is adjacent patches / fine-fine join, > 2 levels, MPI, or multi-block, which `step()`
+  refuses explicitly. Cf. `adc.capabilities()['schur']['amr']`.
 - Distributed FFT under System. `DistributedFFTSolver` (section 10) exists and is tested separately, but
   `System` under MPI np > 1 refuses the FFT cleanly (no automatic routing); use the
   geometric multigrid.

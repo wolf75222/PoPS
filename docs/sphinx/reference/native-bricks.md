@@ -217,7 +217,7 @@ minmod=False, vanleer=False, weno5=False, primitive=False, positivity_floor=None
 | Argument | Values | Detail |
 |---|---|---|
 | `limiter` | `"none"`, `"minmod"`, `"vanleer"`, `"weno5"` | MUSCL reconstruction (none / minmod / vanleer, 2 ghosts) or WENO5-Z. `weno5` = order 5 in smooth zone, 5-point stencil -> 3 ghosts ; only the native `add_block` path (and the `aot` / `production` / AMR backends) expose it ; the `prototype` backend (JIT) rejects it. Boolean shortcuts `none=` / `minmod=` / `vanleer=` / `weno5=`. |
-| `flux` | `"rusanov"`, `"hll"`, `"hllc"`, `"roe"` | Riemann numerical flux. `rusanov` = minimal generic (only `max_wave_speed` required). `hll` = generic with signed waves : requires `model.wave_speeds` (native isothermal / compressible model, or DSL model with primitive `p` declared) ; it is the recommended path for a NON Euler model with signed waves (`hll` + `minmod`). `hllc` / `roe` = **2D Euler only** (4 variables + perfect gas pressure) ; they require a compressible transport and a primitive `p` declared (on a compiled model) ; without `p`, the wiring raises a `ValueError`. |
+| `flux` | `"rusanov"`, `"hll"`, `"hllc"`, `"roe"` | Riemann numerical flux. `rusanov` = minimal generic (only `max_wave_speed` required). `hll` = generic with signed waves : requires `model.wave_speeds` (native isothermal / compressible model, or DSL model with primitive `p` declared) ; it is the recommended path for a NON Euler model with signed waves (`hll` + `minmod`). `hllc` / `roe` = contact-resolving (HLLC) and Roe-linearized solvers. The canonical native path is 2D Euler (4 variables + perfect gas pressure : `FluidState(compressible)`) ; they are also GENERIC on a model that supplies the hooks `HasHLLCStructure` (`contact_speed` + `hllc_star_state`) or `HasRoeDissipation` (`roe_dissipation`), emitted in the DSL via `m.enable_hllc()` / `m.enable_roe()` (e.g. a 3-variable isothermal system). All paths read a pressure : declare a primitive `p` ; without `p` (and without the capability) the wiring raises a `ValueError`. |
 | `recon` | `"conservative"`, `"primitive"` | Reconstructed variables. `primitive` is more stable for Euler (positivity of `rho` and `p`). Shortcut `primitive=`. |
 | `positivity_floor` | `None` or a float | Zhang-Shu positivity floor on reconstructed face densities (default `None` = off). Clamps the reconstructed value to `>= floor`, for high-contrast initial conditions where WENO5 can reconstruct a negative density. |
 
@@ -325,10 +325,14 @@ passed as keywords.
 `PolarMesh` validation : `r_max > r_min >= 0` (otherwise `ValueError`), `nr >= 3` (the order-2 upwind radial
 stencil at the walls would otherwise read `phi` out of bounds), `ntheta >= 1`.
 
-Limits of the polar path (Phase 2b, wired in `System.step` : polar transport + polar Poisson
-+ aux in local basis `e_r` / `e_theta`) : scalar ExB transport only (fluid limiter / riemann raised on
-the C++ side), single-rank (the direct polar solver refuses MPI), no cartesian <-> polar coupling (global
-ring).
+Limits of the polar path (wired in `System.step` : polar transport + polar Poisson + aux in local
+basis `e_r` / `e_theta`) : transport is scalar `ExB` or the isothermal fluid (`IsothermalFluxPolar`),
+with `rusanov` on any polar model and `hll` on the isothermal fluid (it declares `wave_speeds`),
+limiters `minmod` / `vanleer` / `weno5` ; `hllc` / `roe` are raised (no polar energy flux brick). The
+DIRECT polar Poisson is single-box / single-rank (refuses MPI and `theta_boxes > 1`), while the polar
+transport and the tensorial Schur stage are multi-box by azimuthal (`theta_boxes`) split. No
+cartesian <-> polar coupling (global ring). Cf. `adc.capabilities()['riemann']['system_polar']` and
+`['geometry']['system_polar']`.
 
 ### Configuration fields
 
