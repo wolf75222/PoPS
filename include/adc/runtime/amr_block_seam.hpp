@@ -1,9 +1,9 @@
 #pragma once
 
-#include <adc/core/variables.hpp>          // VariableSet/VariableRole/role_from_name (resolve mask)
-#include <adc/runtime/amr_dsl_block.hpp>   // dispatch_amr_block / dispatch_amr_compiled + AmrBuildParams
-#include <adc/runtime/amr_runtime.hpp>     // AmrRuntimeBlock + AmrTimeMethod
-#include <adc/runtime/model_factory.hpp>   // dispatch_model_for + compiled bricks + ModelSpec
+#include <adc/core/variables.hpp>         // VariableSet/VariableRole/role_from_name (resolve mask)
+#include <adc/runtime/amr_dsl_block.hpp>  // dispatch_amr_block / dispatch_amr_compiled + AmrBuildParams
+#include <adc/runtime/amr_runtime.hpp>    // AmrRuntimeBlock + AmrTimeMethod
+#include <adc/runtime/model_factory.hpp>  // dispatch_model_for + compiled bricks + ModelSpec
 
 #include <algorithm>
 #include <stdexcept>
@@ -27,25 +27,32 @@ namespace adc::detail {
 /// AMR partial-IMEX-mask resolution, moved out of amr_system.cpp's anonymous namespace (ADC-335) so the
 /// per-transport seam TUs share one definition. Distinct from the System resolve_implicit_components
 /// (model_factory.hpp): the AmrSystem error wording differs, kept VERBATIM here.
-inline std::vector<int> resolve_implicit_components_amr(const std::string& block, const VariableSet& cons,
+inline std::vector<int> resolve_implicit_components_amr(const std::string& block,
+                                                        const VariableSet& cons,
                                                         const std::vector<std::string>& names,
                                                         const std::vector<std::string>& roles) {
   std::vector<int> out;
   auto push_unique = [&out](int c) {
-    if (std::find(out.begin(), out.end(), c) == out.end()) out.push_back(c);
+    if (std::find(out.begin(), out.end(), c) == out.end())
+      out.push_back(c);
   };
   for (const std::string& nm : names) {
     int idx = -1;
     for (int i = 0; i < static_cast<int>(cons.names.size()); ++i)
-      if (cons.names[i] == nm) { idx = i; break; }
+      if (cons.names[i] == nm) {
+        idx = i;
+        break;
+      }
     if (idx < 0) {
       std::string have;
       for (std::size_t i = 0; i < cons.names.size(); ++i) {
-        if (i) have += ", ";
+        if (i)
+          have += ", ";
         have += cons.names[i];
       }
       throw std::runtime_error("AmrSystem::add_block : implicit_vars : variable '" + nm +
-                               "' missing from block '" + block + "' (conserved variables : " + have + ")");
+                               "' missing from block '" + block +
+                               "' (conserved variables : " + have + ")");
     }
     push_unique(idx);
   }
@@ -54,7 +61,8 @@ inline std::vector<int> resolve_implicit_components_amr(const std::string& block
     const int idx = cons.index_of(role);
     if (role == VariableRole::Custom || idx < 0)
       throw std::runtime_error("AmrSystem::add_block : implicit_roles : role '" + rn +
-                               "' missing from block '" + block + "' (the block does not provide this role)");
+                               "' missing from block '" + block +
+                               "' (the block does not provide this role)");
     push_unique(idx);
   }
   std::sort(out.begin(), out.end());
@@ -95,7 +103,8 @@ AmrRuntimeBlock build_amr_block_for(TR tr, const AmrBlockBuildArgs& a, const Sha
         a.imex ? resolve_implicit_components_amr(a.name, M::conservative_vars(), a.implicit_vars,
                                                  a.implicit_roles)
                : std::vector<int>{};
-    const AmrTimeMethod tmethod = a.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
+    const AmrTimeMethod tmethod =
+        a.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
     out = dispatch_amr_block(m, a.limiter, a.riemann, S, a.name, a.density, a.has_density, a.gamma,
                              a.substeps, a.recon_prim, a.imex, a.stride, impl_components, a.newton,
                              a.state, a.newton_diagnostics, tmethod, a.pos_floor);
@@ -109,9 +118,41 @@ template <class TR>
 AmrCompiledHooks build_amr_compiled_for(TR tr, const ModelSpec& spec, const std::string& limiter,
                                         const std::string& riemann, const AmrBuildParams& bp) {
   AmrCompiledHooks out;
-  dispatch_model_for(spec, std::move(tr), [&](auto m) {
-    out = dispatch_amr_compiled(m, limiter, riemann, bp);
+  dispatch_model_for(spec, std::move(tr),
+                     [&](auto m) { out = dispatch_amr_compiled(m, limiter, riemann, bp); });
+  return out;
+}
+
+/// ADC-359 flux subdivision (compressible only): like build_amr_block_for, but the riemann dispatch is
+/// supplied by @p dispatch (a flux-pinned detail::dispatch_amr_block_<flux>), so each per-flux compressible
+/// seam TU instantiates ONE flux's build_amr_block leaves and they compile in parallel. The impl_components
+/// / tmethod resolution is IDENTICAL to build_amr_block_for; validate_riemann/limiter run once in the thin
+/// dispatcher (python/amr_block_compressible.cpp), so the reachable leaf set stays the same.
+template <class TR, class DispatchFn>
+AmrRuntimeBlock build_amr_block_for_flux(TR tr, const AmrBlockBuildArgs& a,
+                                         const SharedAmrLayout& S, DispatchFn dispatch) {
+  AmrRuntimeBlock out;
+  dispatch_model_for(a.spec, std::move(tr), [&](auto m) {
+    using M = decltype(m);
+    const std::vector<int> impl_components =
+        a.imex ? resolve_implicit_components_amr(a.name, M::conservative_vars(), a.implicit_vars,
+                                                 a.implicit_roles)
+               : std::vector<int>{};
+    const AmrTimeMethod tmethod =
+        a.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
+    out = dispatch(m, a, S, impl_components, tmethod);
   });
+  return out;
+}
+
+/// ADC-359 flux subdivision: like build_amr_compiled_for, with the riemann dispatch supplied by @p dispatch
+/// (a flux-pinned detail::dispatch_amr_compiled_<flux>).
+template <class TR, class DispatchFn>
+AmrCompiledHooks build_amr_compiled_for_flux(TR tr, const ModelSpec& spec,
+                                             const std::string& limiter, const AmrBuildParams& bp,
+                                             DispatchFn dispatch) {
+  AmrCompiledHooks out;
+  dispatch_model_for(spec, std::move(tr), [&](auto m) { out = dispatch(m, limiter, bp); });
   return out;
 }
 
@@ -124,8 +165,34 @@ AmrRuntimeBlock build_amr_block_compressible(const AmrBlockBuildArgs& a, const S
 AmrCompiledHooks build_amr_compiled_exb(const ModelSpec& spec, const std::string& limiter,
                                         const std::string& riemann, const AmrBuildParams& bp);
 AmrCompiledHooks build_amr_compiled_isothermal(const ModelSpec& spec, const std::string& limiter,
-                                               const std::string& riemann, const AmrBuildParams& bp);
+                                               const std::string& riemann,
+                                               const AmrBuildParams& bp);
 AmrCompiledHooks build_amr_compiled_compressible(const ModelSpec& spec, const std::string& limiter,
-                                                 const std::string& riemann, const AmrBuildParams& bp);
+                                                 const std::string& riemann,
+                                                 const AmrBuildParams& bp);
+
+// ADC-359 per-flux compressible seam leaves: each defined in its own .cpp (build_amr_block_for_flux /
+// build_amr_compiled_for_flux pinned to one flux), so they compile in parallel. The thin dispatchers
+// build_amr_block_compressible / build_amr_compiled_compressible route to them by the riemann string.
+AmrRuntimeBlock build_amr_block_compressible_rusanov(const AmrBlockBuildArgs& a,
+                                                     const SharedAmrLayout& S);
+AmrRuntimeBlock build_amr_block_compressible_hll(const AmrBlockBuildArgs& a,
+                                                 const SharedAmrLayout& S);
+AmrRuntimeBlock build_amr_block_compressible_hllc(const AmrBlockBuildArgs& a,
+                                                  const SharedAmrLayout& S);
+AmrRuntimeBlock build_amr_block_compressible_roe(const AmrBlockBuildArgs& a,
+                                                 const SharedAmrLayout& S);
+AmrCompiledHooks build_amr_compiled_compressible_rusanov(const ModelSpec& spec,
+                                                         const std::string& limiter,
+                                                         const AmrBuildParams& bp);
+AmrCompiledHooks build_amr_compiled_compressible_hll(const ModelSpec& spec,
+                                                     const std::string& limiter,
+                                                     const AmrBuildParams& bp);
+AmrCompiledHooks build_amr_compiled_compressible_hllc(const ModelSpec& spec,
+                                                      const std::string& limiter,
+                                                      const AmrBuildParams& bp);
+AmrCompiledHooks build_amr_compiled_compressible_roe(const ModelSpec& spec,
+                                                     const std::string& limiter,
+                                                     const AmrBuildParams& bp);
 
 }  // namespace adc::detail

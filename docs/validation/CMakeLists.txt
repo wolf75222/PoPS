@@ -43,9 +43,17 @@ set(ADC_AMR_SEAM_TUS
   ${ADC_INCLUDE}/../python/amr_block_exb.cpp
   ${ADC_INCLUDE}/../python/amr_block_isothermal.cpp
   ${ADC_INCLUDE}/../python/amr_block_compressible.cpp
+  ${ADC_INCLUDE}/../python/amr_block_compressible_rusanov.cpp
+  ${ADC_INCLUDE}/../python/amr_block_compressible_hll.cpp
+  ${ADC_INCLUDE}/../python/amr_block_compressible_hllc.cpp
+  ${ADC_INCLUDE}/../python/amr_block_compressible_roe.cpp
   ${ADC_INCLUDE}/../python/amr_compiled_exb.cpp
   ${ADC_INCLUDE}/../python/amr_compiled_isothermal.cpp
-  ${ADC_INCLUDE}/../python/amr_compiled_compressible.cpp)
+  ${ADC_INCLUDE}/../python/amr_compiled_compressible.cpp
+  ${ADC_INCLUDE}/../python/amr_compiled_compressible_rusanov.cpp
+  ${ADC_INCLUDE}/../python/amr_compiled_compressible_hll.cpp
+  ${ADC_INCLUDE}/../python/amr_compiled_compressible_hllc.cpp
+  ${ADC_INCLUDE}/../python/amr_compiled_compressible_roe.cpp)
 add_executable(diocotron_amr_gpu diocotron_amr_gpu.cpp ${ADC_AMR_SEAM_TUS})
 target_include_directories(diocotron_amr_gpu PRIVATE ${ADC_INCLUDE} ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(diocotron_amr_gpu PRIVATE Kokkos::kokkos)
