@@ -144,6 +144,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   compat forwarders that alias the type back into `adc::` (e.g. `adc::AdvectionDiffusion`), so existing
   and external includes keep compiling unchanged; `tests/test_physics_validation_compat.cpp` pins that
   both the new and legacy paths build and name the same types. No numerical behavior change.
+- **Flux-subdivide the AMR compressible runtime TUs** (ADC-359, follow-up to ADC-335/342): the
+  compressible (Euler 4-var) AMR seam was the heaviest remaining module TU because
+  `python/amr_block_compressible.cpp` and `python/amr_compiled_compressible.cpp` each instantiated all
+  four fluxes (the riemann dispatch lived inside `dispatch_amr_block` / `dispatch_amr_compiled`, whose
+  hllc/roe capability guards pass for Euler). Each per-flux branch of the two dispatchers is factored
+  into `dispatch_amr_block_<flux>` / `dispatch_amr_compiled_<flux>` (bodies moved verbatim), and the two
+  TUs become a thin riemann dispatcher plus one per-flux TU each (`amr_{block,compiled}_compressible_{rusanov,hll,hllc,roe}.cpp`),
+  so every flux compiles in parallel. `dispatch_amr_block` / `dispatch_amr_compiled` are unchanged and
+  still serve the exb/isothermal seam. The reachable `build_amr_block` / `build_amr_compiled` leaf set,
+  the validation, and the error messages are unchanged, so the numerics are byte-identical (guarded by
+  the `dmax==0` parity suite). The 8 new TUs are added to the module, tests, bench, and docs/validation
+  source lists.
 - **Factor the multi-box global-gather idiom** (ADC-264): the five copy-pasted collective gather sites
   in `python/system.cpp` (`Impl::copy_comp0` / `copy_state` multi-box branches and
   `System::density_global` / `state_global` / `potential_global`) now route through a single

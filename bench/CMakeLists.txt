@@ -41,9 +41,17 @@ add_executable(scaling_amr scaling_amr.cpp
                ${CMAKE_SOURCE_DIR}/python/amr_block_exb.cpp
                ${CMAKE_SOURCE_DIR}/python/amr_block_isothermal.cpp
                ${CMAKE_SOURCE_DIR}/python/amr_block_compressible.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_block_compressible_rusanov.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_block_compressible_hll.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_block_compressible_hllc.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_block_compressible_roe.cpp
                ${CMAKE_SOURCE_DIR}/python/amr_compiled_exb.cpp
                ${CMAKE_SOURCE_DIR}/python/amr_compiled_isothermal.cpp
-               ${CMAKE_SOURCE_DIR}/python/amr_compiled_compressible.cpp)
+               ${CMAKE_SOURCE_DIR}/python/amr_compiled_compressible.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_compiled_compressible_rusanov.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_compiled_compressible_hll.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_compiled_compressible_hllc.cpp
+               ${CMAKE_SOURCE_DIR}/python/amr_compiled_compressible_roe.cpp)
 target_link_libraries(scaling_amr PRIVATE adc::adc)
 target_include_directories(scaling_amr PRIVATE ${CMAKE_SOURCE_DIR}/python)
 # RAM CI : amr_system.cpp est une des TU geantes du module (cf. python/CMakeLists.txt) ; sous

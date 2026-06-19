@@ -94,9 +94,17 @@ set(ADC_AMR_SEAM
     ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_block_exb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_block_isothermal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_block_compressible.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_block_compressible_rusanov.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_block_compressible_hll.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_block_compressible_hllc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_block_compressible_roe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_exb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_isothermal.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_compressible.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_compressible.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_compressible_rusanov.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_compressible_hll.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_compressible_hllc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_compiled_compressible_roe.cpp)
 add_library(adc_runtime_amr    OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/amr_system.cpp ${ADC_AMR_SEAM})
 foreach(_rt adc_runtime_system adc_runtime_amr)
   target_link_libraries(${_rt} PUBLIC adc::adc ${CMAKE_DL_LIBS})
