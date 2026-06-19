@@ -50,7 +50,7 @@ mode = "strict"
 depends_on = ["python/adc/__init__.py", "include/adc/physics/bricks.hpp", "include/adc/runtime/system.hpp"]
 tested_by = []
 testable = true
-reviewed = "32719f44b40690599675a7737da8b1e92353d575"
+reviewed = "55a073a47c01c96145971fd64d852a109b7a1ff4"
 
 [docs."docs/sphinx/getting-started/tutorial.md"]
 owner = "Romain"
@@ -58,7 +58,7 @@ mode = "strict"
 depends_on = ["docs/sphinx/tutorials/diocotron_tutorial.py", "python/adc/dsl.py", "include/adc/physics/hyperbolic.hpp", "include/adc/physics/elliptic.hpp", "include/adc/runtime/dsl_block.hpp"]
 tested_by = ["docs/sphinx/tutorials/diocotron_tutorial.py"]
 testable = true
-reviewed = "32719f44b40690599675a7737da8b1e92353d575"
+reviewed = "55a073a47c01c96145971fd64d852a109b7a1ff4"
 
 [docs."docs/sphinx/getting-started/backend.md"]
 owner = "Romain"
