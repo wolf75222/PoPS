@@ -41,14 +41,16 @@ run under any of four resolvers, ordered by how many waves they reconstruct:
 |---|---|---|
 | Rusanov | one diffusion bump | most robust, most diffusive, needs only a wave speed |
 | HLL | two signal speeds | one star region, still smears the contact |
-| HLLC | the contact wave | sharper, assumes Euler 2D |
-| Roe | all waves, linearized | sharpest, needs an entropy fix and a pressure |
+| HLLC | the contact wave | sharper; canonical Euler 2D, or generic via the model's HLLC hooks |
+| Roe | all waves, linearized | sharpest, needs an entropy fix and a pressure; generic via the model's Roe hook |
 
 Rusanov is the safe default: it reads only `max_wave_speed`, so it applies to any model,
 including a plain scalar transport. The cost of that robustness is added numerical diffusion,
-which can erode a growth rate you care about. HLLC and Roe target the four-variable Euler
-state and need the model to expose a pressure; they sharpen the contact discontinuity at the
-price of a narrower domain of safety. You pick the policy where you build the spatial operator,
+which can erode a growth rate you care about. HLLC and Roe default to the canonical four-variable
+Euler state (a declared pressure), but are generic when the model supplies the capability hooks
+(`HasHLLCStructure` / `HasRoeDissipation`, emitted in the DSL with `m.enable_hllc()` /
+`m.enable_roe()`); they sharpen the contact discontinuity at the price of a narrower domain of
+safety. You pick the policy where you build the spatial operator,
 independently of the reconstruction limiter (see [the models guide](../models/index.md)).
 
 ## The source: change in place
