@@ -17,7 +17,7 @@ conda activate adc
 On macOS, the script sets `CC`/`CXX` to AppleClang inside the env itself (exported on each
 activation, taking priority over the PATH): a vanilla LLVM clang sitting at the head of PATH
 compiles the large units of the module more than 15 times slower, with no message. On Linux,
-it installs `cxx-compiler` (gcc 14, C++23), a full toolchain without root rights. A `CC`/`CXX`
+it installs `cxx-compiler` (gcc 14.2, C++23), a full toolchain without root rights. A `CC`/`CXX`
 set by hand before a build keeps priority.
 
 Manual equivalent, without the toolchain choice: `conda env create -f environment.yml`.
@@ -125,14 +125,19 @@ reinstalls are incremental.
 **Slow build?** Three checks, in order:
 
 1. the compiler. On macOS, an LLVM clang (Homebrew) at the head of PATH compiles the large
-   units of the module 4 to 5 times slower than AppleClang (measured: over an hour instead
-   of ~8 min). The configure step reports it; to force AppleClang:
+   units of the module more than 15 times slower than AppleClang (measured: ~1h24 vs
+   ~5min). The configure step reports it; to force AppleClang:
    `CXX=/usr/bin/clang++ pip install .`;
 2. ccache. Provided by the conda env and detected automatically: recompiling a file
    already seen becomes nearly instant;
-3. reinstalls. The cache under `build/` makes `pip install .` incremental: only what
-   changed recompiles. The first full build stays long (two large units at `-O3`), which is
-   the cost of an optimized module, paid once.
+3. parallelism. The heavy runtime dispatch is split into ~16 small translation units (so
+   `-j` compiles them in parallel, no longer two giant units); a size-1 Ninja pool
+   `ADC_HEAVY_TU_POOL` (default 1) still serializes them as an out-of-memory guard. On a
+   high-RAM machine, widen it for a faster first build:
+   `pip install . -C cmake.define.ADC_HEAVY_TU_POOL=$(nproc)` (leave it at 1 on a
+   memory-constrained host or in CI);
+4. reinstalls. The cache under `build/` makes `pip install .` incremental: only what
+   changed recompiles, so only the first full build pays the optimized `-O3` cost.
 
 ### Developer: presets + PYTHONPATH
 
