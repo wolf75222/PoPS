@@ -4,6 +4,29 @@ An honest and consolidated list of `adc_cpp`'s current limits, to avoid any wron
 expectations. Each item points to the corresponding source of truth. These are not bugs:
 they are the edges of the scope validated to date.
 
+## Spatial dimension: the core is 2D only
+
+The solver core is structurally two-dimensional, and this is a load-bearing invariant rather than
+a naming detail. The 2D assumption is baked into the data layout (`Fab2D operator()(i, j, c)`), the
+paired hand-written `FaceFluxX` / `FaceFluxY` kernels, the two-component momentum (`euler.hpp`
+`{rho, rho_u, rho_v, E}`), the five-point Poisson stencil, and the `Box2D` / `Geometry` index space.
+The polar mesh is a second geometry at the same dimension (the ring `(r, theta)` is a two-index
+`Box2D`), not a third axis; it does not make the core ND.
+
+This is the agreed short-term contract (ADR-0001, Decision 1): 2D is declared an explicit,
+introspectable invariant, not a step already taken toward an ND core. A real ND trajectory
+(`IndexSpace<Dim>` / `BoxND<Dim>` with 2D adapters and 2D bit-identity gates) is a milestone-sized
+change with genuine ABI and bit-identity risk, and no current scenario demands it; it is deferred
+to a dedicated future milestone.
+
+Do not confuse axis count with domain shape: this limit is about the number of axes (2D vs ND),
+whereas embedded-boundary / level-set domains (ADC-327) change the shape of the domain inside the
+fixed 2D plane and add no third index.
+
+Source of truth: `adc.capabilities()['dimension']` (`== 2`), the decision record
+[ADR-0001](https://github.com/wolf75222/adc_cpp/blob/master/docs/adr/ADR-0001-genericity-contracts.md),
+and the `include/adc/mesh/box2d.hpp` header comment.
+
 ## GPU: validated manually on ROMEO, not in CI
 
 CI never builds `-DADC_USE_KOKKOS=ON -DKokkos_ENABLE_CUDA=ON`. All GPU validation
