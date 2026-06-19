@@ -1695,6 +1695,23 @@ class System:
             return
         raise ValueError("add_equation: adder %r unknown (backend %r)" % (adder, backend))
 
+    def set_source_stage(self, name, kind, theta, alpha,
+                         krylov_tol=0.0, krylov_max_iters=0,
+                         density="", momentum_x="", momentum_y="", energy="",
+                         bz_aux_component=-1):
+        """Attach a Schur-condensed source stage to an already-added block (ADC-308).
+
+        Thin public pass-through to the C++ binding (_adc.System.set_source_stage): same flat
+        signature and defaults. add_equation(time=adc.Split(source=adc.CondensedSchur(...))) wires
+        this internally; this method exposes the same control for a block added with a plain
+        transport time scheme, so cases configure the stage without reaching into the private _s.
+        @p name: block; @p kind: 'electrostatic_lorentz'; @p theta in (0, 1]; @p alpha: stage
+        coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the
+        historical bit-identical behavior. Prerequisite: B_z set via set_magnetic_field beforehand.
+        """
+        self._s.set_source_stage(name, kind, theta, alpha, krylov_tol, krylov_max_iters,
+                                 density, momentum_x, momentum_y, energy, bz_aux_component)
+
     def _resolve_aux_field(self, block, name):
         """Resolve (block, NAMED aux field name) -> canonical component of the aux channel (ADC-70 phase 1).
         Resolution rule: a CANONICAL name (phi/grad/B_z/T_e) is REJECTED here -- these fields have
