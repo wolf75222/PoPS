@@ -95,6 +95,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   functions reached through `std::function` closures and stay `-O3`; the small closure-returning helpers
   (`make_max_speed` etc.) are left untouched. No `-ffast-math` and `-O0` vs `-O3` never changes IEEE
   results, so the numerics are byte-identical (guarded by the `dmax==0` parity suite). Stacks on ADC-335.
+- **Flux-subdivide the isothermal runtime TU** (ADC-342, follow-up to ADC-335): `python/system_isothermal.cpp`
+  instantiated both reachable fluxes (rusanov + hll) x 4 limiters x 15 models in one TU -- the post-split
+  long pole (~120 `-O3` leaves). It is now split one `.cpp` per flux (`system_isothermal_rusanov.cpp` +
+  `system_isothermal_hll.cpp`) via the existing per-flux seam, halving the leaves per TU so `-j` compiles
+  them in parallel. System dispatches the riemann string to the matching seam (after the same
+  `validate_riemann`/`validate_limiter` as `make_block`); hllc/roe (unreachable on a 3-var transport) hit
+  the explicit registry throw. Byte-identical codegen for the kept combos (verbatim `make_block_<flux>`;
+  guarded by the `dmax==0` parity suite), mirroring the ADC-335 compressible subdivision.
 - **Pin the conda build toolchain and surface the heavy-TU pool** (ADC-338): `environment.yml` pins
   `pybind11>=2.13,<3` (the conservative/validated 2.x line; 3.x still compiles, drop `<3` to opt in) and
   documents the local-vs-validated Kokkos gap (conda ships a Serial CPU-dev `kokkos`, default per-platform

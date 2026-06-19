@@ -79,7 +79,8 @@ endfunction()
 # bibliotheque est donc strictement tests-only et ne peut pas etre partagee avec _adc.
 add_library(adc_runtime_system OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/system.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../python/system_exb.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/system_isothermal.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/system_isothermal_rusanov.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/system_isothermal_hll.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../python/system_compressible_rusanov.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../python/system_compressible_hll.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../python/system_compressible_hllc.cpp

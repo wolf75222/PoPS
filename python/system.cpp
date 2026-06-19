@@ -624,7 +624,19 @@ void System::add_block(const std::string& name, const ModelSpec& model,
         throw_registry_dispatch_mismatch("System", "flux", riemann);
       }
     } else if (model.transport == "isothermal") {
-      bb = detail::build_block_isothermal(model, args);
+      // Isothermal is flux-subdivided (ADC-342): only rusanov + hll are reachable (3-var, no pressure
+      // for hllc/roe). The per-flux seams call make_block_<flux> directly, so -- like compressible --
+      // we run make_block's validation here (validate_riemann then validate_limiter, identical messages)
+      // before dispatching; hllc/roe and any unknown flux hit the registry throw (explicit, no UB).
+      validate_riemann(riemann, /*polar=*/false, "System");
+      validate_limiter(limiter, "System");
+      if (riemann == "rusanov") {
+        bb = detail::build_block_isothermal_rusanov(model, args);
+      } else if (riemann == "hll") {
+        bb = detail::build_block_isothermal_hll(model, args);
+      } else {
+        throw_registry_dispatch_mismatch("System", "flux", riemann);
+      }
     } else {
       throw std::runtime_error("unknown transport '" + model.transport +
                                "' (exb|compressible|isothermal)");

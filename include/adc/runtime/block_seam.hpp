@@ -109,7 +109,13 @@ BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& 
 // Per-transport seam functions (defined in python/system_<transport>.cpp). The TR construction matches
 // dispatch_transport's branches VERBATIM (ExBVelocity{B0} / CompressibleFlux{gamma} / IsothermalFlux{cs2}).
 BuiltBlock build_block_exb(const ModelSpec& model, const BlockBuildArgs& a);
-BuiltBlock build_block_isothermal(const ModelSpec& model, const BlockBuildArgs& a);
+
+// Isothermal (3-var fluid) carries two reachable fluxes (rusanov + hll; hllc/roe need 4-var + pressure)
+// x 4 limiters x 15 models -- the post-split long pole -- so it is FLUX-SUBDIVIDED like compressible
+// (ADC-342): one .cpp per reachable flux. System dispatches on the riemann string; an unsupported flux
+// (incl. hllc/roe) is caught by the shared validate_riemann + the registry throw.
+BuiltBlock build_block_isothermal_rusanov(const ModelSpec& model, const BlockBuildArgs& a);
+BuiltBlock build_block_isothermal_hll(const ModelSpec& model, const BlockBuildArgs& a);
 
 // Compressible (Euler, 4-var + pressure) is the heaviest transport: all four fluxes are valid, so it is
 // FLUX-SUBDIVIDED into one .cpp per flux (ADC-335) -- each instantiates only its flux's build_block
