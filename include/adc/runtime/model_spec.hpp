@@ -14,11 +14,21 @@ namespace adc {
 
 /// Brick composition of a block plus parameters. The fields are only read by the relevant
 /// brick (see dispatch_model in model_factory.hpp).
+///
+/// CONTRACT (ADC-290): a ModelSpec carries NO silent physics default. `transport` and `elliptic`
+/// are UNSET by default (empty string) and MUST be chosen explicitly; an unset tag is rejected with
+/// a clear message by validate_model_spec (model_factory.hpp) instead of silently selecting a model
+/// (the old defaults `transport="compressible"` / `elliptic="charge"` made a default-constructed
+/// ModelSpec mean Euler + Poisson-charge by accident). `source` keeps the only default, "none" --
+/// the EXPLICIT, neutral "no source" choice, not a physics selection. The numeric parameters keep
+/// their defaults: each is read only once its brick has been chosen by a tag, so it can never inject
+/// physics on its own. Historical shortcuts live at the Python edge (adc.Model(...)), which always
+/// sets the three tags. See docs/adr/ADR-0001-genericity-contracts.md.
 struct ModelSpec {
-  std::string transport = "compressible";  ///< "exb" | "compressible" | "isothermal"
-  std::string source = "none";             ///< "none" | "potential" | "gravity" | "magnetic"/"lorentz"
-                                           ///< | "potential_magnetic"/"potential_lorentz"
-  std::string elliptic = "charge";         ///< "charge" | "background" | "gravity"
+  std::string transport;                   ///< REQUIRED (unset): "exb" | "compressible" | "isothermal"
+  std::string source = "none";             ///< "none" (default, neutral: no force) | "potential" | "gravity"
+                                           ///< | "magnetic"/"lorentz" | "potential_magnetic"/"potential_lorentz"
+  std::string elliptic;                    ///< REQUIRED (unset): "charge" | "background" | "gravity"
 
   double B0 = 1.0;         ///< ExBVelocity: magnetic field
   double gamma = 1.4;      ///< CompressibleFlux: adiabatic index

@@ -20,6 +20,29 @@
 
 namespace adc::detail {
 
+/// Completeness contract of a ModelSpec (ADC-290): `transport` and `elliptic` MUST be chosen
+/// explicitly. An unset (empty) tag is rejected here with a clear message, instead of letting the
+/// old physics default (`compressible`/`charge`) be selected silently. `source` may stay "none" (the
+/// explicit, neutral no-source choice); an empty source is also rejected so a cleared tag fails loud
+/// rather than tripping dispatch_source's "invalid here" message. This is a CONTRACT guard (mirrors
+/// throw_registry_dispatch_mismatch in dispatch_tags.hpp), distinct from a user-tag typo: an unknown
+/// (non-empty) tag is still caught downstream by dispatch_transport / dispatch_source /
+/// dispatch_elliptic, which list the valid values. Call at every public ModelSpec entry point.
+inline void validate_model_spec(const ModelSpec& m) {
+  if (m.transport.empty())
+    throw std::runtime_error(
+        "ModelSpec: transport not set (required) -- choose 'exb' | 'compressible' | 'isothermal'. "
+        "The core infers no physics default (no silent 'compressible').");
+  if (m.elliptic.empty())
+    throw std::runtime_error(
+        "ModelSpec: elliptic not set (required) -- choose 'charge' | 'background' | 'gravity'. "
+        "The core infers no physics default (no silent 'charge').");
+  if (m.source.empty())
+    throw std::runtime_error(
+        "ModelSpec: source not set -- choose 'none' (no source) | 'potential' | 'gravity' | "
+        "'magnetic' | 'potential_magnetic'.");
+}
+
 /// Builds the transport brick and calls v(transport).
 template <class Visitor>
 ADC_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
@@ -103,6 +126,7 @@ ADC_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
 /// @throws std::runtime_error on unknown tag or invalid combination.
 template <class Visitor>
 ADC_COLD_FN void dispatch_model(const ModelSpec& m, Visitor&& visitor) {
+  validate_model_spec(m);  // explicit completeness contract (ADC-290): no silent physics default
   dispatch_transport(m, [&](auto tr) {
     using TR = decltype(tr);
     // Transport roles (host): used to resolve the indices of the source / elliptic bricks before

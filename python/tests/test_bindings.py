@@ -371,5 +371,39 @@ chk(raises(lambda: adc.Model(state=adc.Scalar(), transport=adc.CompressibleFlux(
                              source=adc.NoSource(), elliptic=adc.ChargeDensity())),
     "etat/transport incoherents refuses")
 
+
+def err(fn):
+    try:
+        fn()
+        return ""
+    except Exception as e:
+        return str(e)
+
+
+# --- ADC-290 : un ModelSpec INCOMPLET echoue clairement, jamais de retombee physique silencieuse. ---
+# Avant, transport defaut="compressible" / elliptic="charge" -> un ModelSpec nu valait Euler +
+# Poisson-charge par accident. adc.ModelSpec() est desormais NON POSE (transport="" et elliptic="").
+chk(raises(lambda: adc.System(n=16).add_block("m", adc.ModelSpec())),
+    "ModelSpec incomplet (transport non pose) refuse : pas de 'compressible' silencieux")
+chk("transport" in err(lambda: adc.System(n=16).add_block("m", adc.ModelSpec())).lower(),
+    "message ModelSpec incomplet nomme 'transport' (erreur lisible)")
+_only_transport = adc.ModelSpec()
+_only_transport.transport = "exb"  # elliptic encore non pose
+chk(raises(lambda: adc.System(n=16).add_block("m", _only_transport)),
+    "ModelSpec sans elliptic refuse : pas de 'charge' silencieux")
+# Parite AmrSystem : meme contrat a l'entree de add_block.
+chk(raises(lambda: adc.AmrSystem(n=16).add_block("m", adc.ModelSpec())),
+    "AmrSystem.add_block(ModelSpec incomplet) refuse")
+# Un modele COMPLET (via adc.Model) reste accepte : le garde-fou ne sur-rejette pas.
+chk(not raises(lambda: adc.System(n=16).add_block("ok", diocotron())),
+    "modele complet (adc.Model) accepte par add_block")
+
+# --- ADC-299 : une config invalide est REJETEE avant toute construction interne (System / AmrSystem). ---
+chk(raises(lambda: adc.System(n=0)), "System(n=0) refuse (n >= 1)")
+chk("n >= 1" in err(lambda: adc.System(n=0)), "message System(n=0) nomme la contrainte (lisible)")
+chk(raises(lambda: adc.System(n=16, L=0.0)), "System(L=0) refuse (L > 0)")
+chk(raises(lambda: adc.AmrSystem(n=0)), "AmrSystem(n=0) refuse (n >= 1)")
+chk(raises(lambda: adc.AmrSystem(n=32, regrid_every=-1)), "AmrSystem(regrid_every=-1) refuse (>= 0)")
+
 print("OK test_bindings" if fails == 0 else f"{fails} ECHEC(S)")
 sys.exit(0 if fails == 0 else 1)
