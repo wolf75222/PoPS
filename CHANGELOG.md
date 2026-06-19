@@ -92,6 +92,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- **Explicit `ModelSpec`, no silent physics defaults** (ADC-290): `ModelSpec` no longer hard-codes the
+  physics-selecting defaults `transport="compressible"` and `elliptic="charge"`; both tags are now unset
+  by default and a new `detail::validate_model_spec` (called at `dispatch_model` and at the top of
+  `System::add_block` / `AmrSystem::add_block`) rejects an unset `transport`/`elliptic` with a clear,
+  field-naming message instead of silently composing Euler + Poisson-charge. `source="none"` (the
+  explicit, neutral no-source choice) and all numeric defaults are unchanged; each numeric is read only
+  once its brick is chosen, so it cannot inject physics on its own. The historical shortcuts stay at the
+  Python edge (`adc.Model(...)` always sets the three tags). API note: a bare native `ModelSpec()` that
+  relied on `compressible`+`charge` now raises (pre-1.0, see ADR-0001 Decision 2). Anti-regression tests
+  (ADC-300): `tests/test_config_model_validation.cpp` and the `test_bindings.py` garde-fous assert the
+  incomplete-spec rejection and message, so a silent Euler/charge fallback cannot return.
+- **Validate `SystemConfig` / `AmrSystemConfig` before building the runtime** (ADC-299): `System` now
+  validates the config (`n >= 1`, `L > 0`, plus the existing geometry/polar invariants) BEFORE
+  constructing its `Impl`, which already derived the geometry, box array, distribution mapping and the
+  aux `MultiFab` (all sized from `n`) ahead of the old post-construction `check_geometry`. An invalid
+  `n`/`L` previously built a silent degenerate grid (`dx = L/0 = +inf` or negative `dx`); it is now
+  rejected upstream with a message naming the cause. `AmrSystem` gains the same upstream guard with
+  `L > 0`, `regrid_every >= 0` and `coarse_max_grid >= 0` (only `n >= 1` was checked, and after `Impl`).
+  Covered by `tests/test_config_model_validation.cpp` and `test_bindings.py` (ADC-300). C++ and Python
+  error messages stay aligned; no change to any valid run (bit-identical).
 - **No-optimize the cold model/block factories** (ADC-337, P1-B): the host string->closure wiring
   (`dispatch_transport/_source/_elliptic/_model/_model_for`, `bind_variable_roles`,
   `resolve_implicit_components`, `make_implicit_mask`, `build_block`, `make_block`/`make_block_*`) is

@@ -475,15 +475,34 @@ struct AmrSystem::Impl {
   }
 };
 
-AmrSystem::AmrSystem(const AmrSystemConfig& c) : p_(std::make_unique<Impl>(c)) {
-  // UPSTREAM configuration guard: n >= 1 (coarse cells per direction). n is settable from
-  // Python (AmrSystemConfig.n is def_readwrite, the ctor did not validate); n == 0 would make nn = n*n = 0
-  // then a division by zero (UB) in set_conservative_state (U.size() % nn) and an empty coarse grid
-  // everywhere downstream. We refuse it HERE, the single point covering all uses of cfg.n.
-  if (p_->cfg.n < 1)
-    throw std::runtime_error("AmrSystem::AmrSystem : n >= 1 required (coarse cells per "
-                             "direction) ; got n = " +
-                             std::to_string(p_->cfg.n));
+namespace {
+// UPSTREAM configuration guard (ADC-299): validate the AmrSystemConfig invariants BEFORE constructing
+// Impl. The AMR Impl ctor is trivial (it only stores cfg, allocating nothing from n), so unlike System
+// nothing is built before the check; we still validate ahead of Impl for parity with System and to keep
+// every config rejection at a single upstream point. n was already guarded (n == 0 -> nn = n*n = 0 -> a
+// division by zero in set_conservative_state, U.size() % nn, and an empty coarse grid downstream); L,
+// regrid_every and coarse_max_grid were unchecked and reach the lazy build (dx, regrid cadence, coarse
+// tiling) as is.
+void validate_amr_system_config(const AmrSystemConfig& c) {
+  if (c.n < 1)
+    throw std::runtime_error("AmrSystem : n >= 1 required (coarse cells per direction) ; got n = " +
+                             std::to_string(c.n));
+  if (!(c.L > 0.0))
+    throw std::runtime_error("AmrSystem : L > 0 required (square domain [0,L]^2) ; got L = " +
+                             std::to_string(c.L));
+  if (c.regrid_every < 0)
+    throw std::runtime_error("AmrSystem : regrid_every >= 0 required (0 = never regrid after init) ; "
+                             "got regrid_every = " + std::to_string(c.regrid_every));
+  if (c.coarse_max_grid < 0)
+    throw std::runtime_error("AmrSystem : coarse_max_grid >= 0 required (0 = default n/2 tile, "
+                             "distribute_coarse only) ; got coarse_max_grid = " +
+                             std::to_string(c.coarse_max_grid));
+}
+}  // namespace
+
+AmrSystem::AmrSystem(const AmrSystemConfig& c) {
+  validate_amr_system_config(c);  // BEFORE Impl (parity with System; single upstream config guard)
+  p_ = std::make_unique<Impl>(c);
 }
 AmrSystem::~AmrSystem() = default;
 AmrSystem::AmrSystem(AmrSystem&&) noexcept = default;
@@ -499,6 +518,11 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   if (p_->built)
     throw std::runtime_error("AmrSystem::add_block : the system is already built (call "
                              "add_block before any step/mass/density)");
+  // Completeness contract of the model (ADC-290, parity with System::add_block): transport / elliptic
+  // must be chosen explicitly. Validated before the transport string routing (build_multi /
+  // build_amr_compiled), so a default-constructed ModelSpec fails clearly instead of silently
+  // selecting Euler + Poisson-charge.
+  detail::validate_model_spec(model);
   if (substeps < 1) throw std::runtime_error("AmrSystem::add_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("AmrSystem::add_block : stride >= 1");
   // Zhang-Shu positivity floor (ADC-259): eager validation (parity with System::add_block). 0 =

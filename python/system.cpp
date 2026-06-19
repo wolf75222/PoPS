@@ -455,9 +455,29 @@ void check_geometry(const SystemConfig& c) {
   throw std::runtime_error("System : geometry '" + c.geometry +
                            "' unknown (cartesian | polar) ; cf. adc.CartesianMesh / adc.PolarMesh");
 }
+
+// UPSTREAM configuration guard (ADC-299): validate the SystemConfig invariants BEFORE constructing
+// Impl. Impl's constructor already derives the geometry, the box array, the distribution mapping and
+// allocates the shared aux MultiFab -- all sized from c.n. An invalid n / L does not crash there, it
+// silently builds a DEGENERATE grid (empty box, dx = L/0 = +inf or negative dx) that only surfaces
+// far downstream; we reject it here so the error names the real cause. n / L were wholly unchecked on
+// the Cartesian path (check_geometry returns immediately for "cartesian"); the geometry token and the
+// polar ring / nr / theta_boxes invariants stay in check_geometry, called last.
+void validate_system_config(const SystemConfig& c) {
+  if (c.n < 1)
+    throw std::runtime_error("System : n >= 1 required (cells per direction) ; got n = " +
+                             std::to_string(c.n));
+  if (!(c.L > 0.0))
+    throw std::runtime_error("System : L > 0 required (square domain [0,L]^2) ; got L = " +
+                             std::to_string(c.L));
+  check_geometry(c);  // geometry token + polar ring (r_max>r_min>=0, nr>=3, theta_boxes) invariants
+}
 }  // namespace
 
-System::System(const SystemConfig& c) : p_(std::make_unique<Impl>(c)) { check_geometry(c); }
+System::System(const SystemConfig& c) {
+  validate_system_config(c);          // BEFORE any allocation/derivation (Impl builds geom/ba/dm/aux)
+  p_ = std::make_unique<Impl>(c);
+}
 System::~System() = default;
 System::System(System&&) noexcept = default;
 System& System::operator=(System&&) noexcept = default;
@@ -470,6 +490,11 @@ void System::add_block(const std::string& name, const ModelSpec& model,
                        const NewtonOptions& newton, bool newton_diagnostics,
                        double positivity_floor, bool wave_speed_cache) {
   Impl* P = p_.get();
+  // Completeness contract of the model (ADC-290): transport / elliptic must be chosen explicitly.
+  // Validated HERE, before the transport string routing below (which would otherwise report a
+  // cryptic "unknown transport ''" for an unset tag) -- a default-constructed ModelSpec no longer
+  // means a silent Euler + Poisson-charge composition.
+  detail::validate_model_spec(model);
   if (substeps < 1) throw std::runtime_error("System::add_block : substeps >= 1");
   if (stride < 1) throw std::runtime_error("System::add_block : stride >= 1");
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
