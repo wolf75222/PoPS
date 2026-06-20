@@ -38,9 +38,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   complex/singular spectrum) -- the reference `flux_ROE` dissipation. It is the third (mutually
   exclusive) provider of the `roe_dissipation` hook and folds into the model cache key; without a
   call nothing is emitted (bit-identical). `adc.moments.build_moment_model` gains a `roe=False`
-  option (additive to `exact_speeds`, which still supplies `max_wave_speed`). Covered by
-  `python/tests/test_dsl_roe_from_jacobian.py` (codegen + AOT compile + `System` `riemann='roe'`
-  10-step mass conservation + rejection without the capability).
+  option (additive to `exact_speeds`, which still supplies `max_wave_speed`). This also fixes a
+  latent core gap: `SourceFreeModel` (the IMEX explicit-half-step wrapper) now forwards the Roe/HLLC
+  capability hooks (`roe_dissipation` / `contact_speed` / `hllc_star_state`), which it previously
+  dropped (it forwarded only `pressure` / `wave_speeds`) -- so a non-Euler model on `riemann='roe'`
+  (or `'hllc'`) lost the hook through the IMEX path and fell back to the Euler-4var branch, a compile
+  error for `n_vars != 4`. Covered by `python/tests/test_dsl_roe_from_jacobian.py` (codegen + AOT
+  compile + `System` `riemann='roe'` 10-step mass conservation + rejection without the capability).
 - **Configure-time guard: Kokkos CUDA is rejected on native Windows** (ADC-168): `cmake` now fails
   fast with a clear message (use WSL2 for the GPU; native Windows is CPU Serial/OpenMP only) when
   `Kokkos_ENABLE_CUDA=ON` is requested on a native Windows configuration, instead of letting the
