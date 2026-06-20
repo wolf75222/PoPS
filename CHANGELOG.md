@@ -226,6 +226,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   carry a `static_assert` so a future non-2 ratio fails loudly at exactly those sites. `capabilities()`
   now states `refinement_ratio = 2 only`. Behavior is bit-identical (the constant is 2);
   `test_ref_ratio` locks the invariant and the rejection.
+- **Share the Newton-options range validation** (ADC-213): the four-check defensive range validation
+  of the `NewtonOptions` POD (duplicated verbatim in `System::add_block` and `AmrSystem::add_block`)
+  is factored into `validate_newton_options(newton, where)` next to `NewtonOptions`
+  (`implicit_stepper.hpp`). The `time='imex'` gate and `newton_diagnostics` handling, which differ
+  between the two callers, stay inline. The AMR `newton_fail_policy` error text is harmonized to the
+  System wording (no test depends on it; the binding's string parser rejects bad policies first, so
+  the integer-range check is unreachable from Python). No behavior change.
 - **Elliptic solver headers organized by family** (ADC-334): `include/adc/numerics/elliptic/` is
   split into `interface/`, `poisson/`, `mg/`, `eb/`, `polar/`, and `linear/` subdirectories so the
   numeric surface shows its solver families instead of one flat directory. Every historical include

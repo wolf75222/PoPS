@@ -10,6 +10,7 @@
 #include <concepts>
 #include <cstdio>     // std::snprintf / fprintf (fail_policy: host message, never in kernel)
 #include <stdexcept>  // std::runtime_error (fail_policy = throw, host after reductions)
+#include <string>     // std::string (validate_newton_options message prefix)
 
 /// @file
 /// @brief Implicit / IMEX block step as a named CONTRACT. Concept ImplicitBlockStepper,
@@ -123,6 +124,26 @@ struct NewtonOptions {
   Real damping = Real(1);
   int fail_policy = kFailNone;
 };
+
+/// Range-validate a NewtonOptions POD; shared by System::add_block and AmrSystem::add_block, which
+/// carried this defensive check verbatim. @p where prefixes each message ("System::add_block" /
+/// "AmrSystem::add_block"). fail_policy is already a valid integer (the bindings resolve it from the
+/// string "none"/"warn"/"throw"); the range stays defensive. This does NOT decide whether non-default
+/// options are ALLOWED -- the time='imex' gate (and System's extra newton_diagnostics term in the
+/// non-default test) differ between the two callers and remain at each call site.
+inline void validate_newton_options(const NewtonOptions& newton, const char* where) {
+  const std::string ctx = std::string(where) + " : ";
+  if (newton.max_iters < 1) throw std::runtime_error(ctx + "newton_max_iters >= 1");
+  if (newton.rel_tol < 0.0 || newton.abs_tol < 0.0 || newton.fd_eps <= 0.0)
+    throw std::runtime_error(ctx + "newton_rel_tol/abs_tol >= 0 and newton_fd_eps > 0");
+  if (!(newton.damping > 0.0 && newton.damping <= 1.0))
+    throw std::runtime_error(ctx + "newton_damping in (0, 1]");
+  if (newton.fail_policy != NewtonOptions::kFailNone &&
+      newton.fail_policy != NewtonOptions::kFailWarn &&
+      newton.fail_policy != NewtonOptions::kFailThrow)
+    throw std::runtime_error(ctx + "newton_fail_policy invalid "
+                             "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
+}
 
 /// OUTPUT statistic of the Newton of ONE cell (device POD, written into the diagnostics scratch):
 /// res = ||F||_inf at exit; iters = iterations consumed; failed = 1 if the cell failed

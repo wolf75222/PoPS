@@ -7,6 +7,7 @@
 #include <adc/runtime/model_factory.hpp>   // detail::dispatch_model + compiled bricks
 #include <adc/runtime/model_registry.hpp>  // unknown_transport_msg: single-source transport rejection (ADC-331)
 #include <adc/runtime/wall_predicate.hpp>  // detail::wall_predicate (wall shared System/AmrSystem)
+#include <adc/numerics/time/implicit_stepper.hpp>  // NewtonOptions + validate_newton_options (shared range check)
 
 #include <algorithm>  // std::find, std::sort (partial IMEX mask resolution: sorted unique indices)
 #include <cmath>
@@ -579,17 +580,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   // System::add_block). Defaults {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none),
   // bit-identical. SUPPORT: MULTI-BLOCK engine (AmrRuntime) only -- the single-block (AmrCouplerMP)
   // keeps iters=2 frozen, non-default options are REJECTED there at build (ensure_built), never ignored.
-  if (newton.max_iters < 1)
-    throw std::runtime_error("AmrSystem::add_block : newton_max_iters >= 1");
-  if (newton.rel_tol < 0.0 || newton.abs_tol < 0.0 || newton.fd_eps <= 0.0)
-    throw std::runtime_error("AmrSystem::add_block : newton_rel_tol/abs_tol >= 0 and newton_fd_eps > 0");
-  if (!(newton.damping > 0.0 && newton.damping <= 1.0))
-    throw std::runtime_error("AmrSystem::add_block : newton_damping in (0, 1]");
-  if (newton.fail_policy != NewtonOptions::kFailNone &&
-      newton.fail_policy != NewtonOptions::kFailWarn &&
-      newton.fail_policy != NewtonOptions::kFailThrow)
-    throw std::runtime_error("AmrSystem::add_block : invalid newton_fail_policy "
-                             "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
+  // Range check shared with System::add_block (validate_newton_options, in implicit_stepper.hpp).
+  validate_newton_options(newton, "AmrSystem::add_block");
   const bool newton_non_default = newton.max_iters != 2 || newton.rel_tol != 0.0 ||
                                   newton.abs_tol != 0.0 || newton.fd_eps != 1e-7 ||
                                   newton.damping != 1.0 || newton.fail_policy != NewtonOptions::kFailNone;
