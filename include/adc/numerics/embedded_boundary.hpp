@@ -14,7 +14,7 @@
 /// (numerics/elliptic/cut_fraction.hpp, numerics/spatial_operator_eb.hpp) and the staircase mask path
 /// (numerics/spatial_operator.hpp) are ALREADY generic over any device-safe level-set callable; this
 /// header gives that contract a NAME and the two built-in instances:
-///   - @ref detail::DiscDomain   : the circle (Hoffart disc), the historical/canonical instance;
+///   - @ref detail::DiscDomain   : the circle, the historical/canonical instance;
 ///   - @ref detail::HalfPlaneDomain : a linear half-plane, the simplest NON-disc instance.
 ///
 /// CONTRACT (duck-typed; a domain type provides):
@@ -50,8 +50,9 @@ concept LevelSetDomain = requires(const D d, Real x, Real y) {
 namespace detail {
 
 /// CIRCLE / DISC level-set domain: the canonical instance of the contract and the SINGLE SOURCE of
-/// truth for the paper's physical domain (Hoffart et al., arXiv:2510.11808, Sec 5.3: disc D of radius
-/// R). It is the "transport" counterpart of the Poisson conductor wall: the wall acts only on the
+/// truth for the active circular domain (a disc of radius R; see docs/HOFFART_FIDELITY.md for the
+/// reference scenario it was validated against). It is the "transport" counterpart of the Poisson
+/// conductor wall: the wall acts only on the
 /// elliptic part (cf. runtime/wall_predicate.hpp / geometric_mg cut_cell), whereas this descriptor
 /// drives a cell-centered DOMAIN MASK / cut-cell aperture so the FV transport is disc-aware (the
 /// "Cartesian-ring-edge lock", cf. docs/HOFFART_FIDELITY.md).

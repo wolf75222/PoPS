@@ -9,8 +9,9 @@
 ///   - the elliptic solver (geometric_mg.hpp: Shortley-Weller weights of the Poisson wall),
 ///   - the future EB transport (FV aperture of the disc faces).
 /// Both MUST read the SAME aperture geometry so the FV aperture is bit-consistent with the
-/// elliptic wall (the "Cartesian ring edge" lock; cf. docs/HOFFART_FIDELITY.md, the
-/// "Domain (disc of radius R)" row of the fidelity table, the "Cartesian-ring-edge lock").
+/// elliptic wall (the "Cartesian ring edge" lock: the FV aperture and the elliptic wall must
+/// agree on the same disc-of-radius-R boundary; cf. docs/HOFFART_FIDELITY.md for the validation
+/// fidelity table).
 ///
 /// The canonical level-set is detail::DiscDomain::level_set (numerics/embedded_boundary.hpp):
 ///   ls(x, y) = hypot(x - cx, y - cy) - R, < 0 INSIDE, sign of the boundary.

@@ -21,15 +21,14 @@
 ///        CONSERVATIVE finite volumes with face apertures alpha_f and volume fraction
 ///        kappa derived from detail::cut_fraction (project T5-PR1).
 ///
-/// CONTEXT (the "Cartesian-ring-edge lock"; cf. docs/HOFFART_FIDELITY.md, line "Domain (disc of
-/// radius R)" of the fidelity table). The T2 path
+/// CONTEXT (the "Cartesian-ring-edge lock"; cf. docs/HOFFART_FIDELITY.md). The T2 path
 /// (spatial_operator.hpp: assemble_rhs_masked) approximates the disc with a STAIRCASE MASK: an
 /// active/inactive face is a 0/1 GATE (normal flux set to zero), the boundary is crenellated. This operator
 /// GENERALIZES the 0/1 gate to an APERTURE alpha_f in [0, 1] (the linear fraction of the face inside the
 /// disc, EXACTLY the cut_distance/h of the elliptic wall -> bit-for-bit consistency with Poisson) AND divides
 /// the residual by the cell's VOLUME FRACTION kappa (volume of the cut cell). This is a 2nd-order EB scheme
-/// for smooth transport inside the disc, which renders the growth of the diocotron mode
-/// without the structural l-dependent over-rate of the Cartesian baseline.
+/// for smooth transport inside the disc, which recovers the physical interior growth rate
+/// without the structural l-dependent over-rate of the staircase (Cartesian) baseline.
 ///
 /// NOTE ON alpha_f AND THE ACTIVITY MODEL. Cell activity follows the center-in-the-disc criterion
 /// (ls(center) < 0), like GeometricMG and the T2 mask. With this criterion, the geometric aperture

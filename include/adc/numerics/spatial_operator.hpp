@@ -429,17 +429,18 @@ ADC_HD inline typename Model::State reconstruct(const Model& model, const ConstA
 /// If component @p pos_comp (Density role) of the face state @p s falls below @p floor, the WHOLE
 /// face state is replaced by the average of its SOURCE cell u(i,j,.) (locally zero slope).
 /// WHY not the paper's colinear theta-scaling (s <- ubar + theta (s - ubar), theta such that
-/// rho_face = floor): in CONSERVATIVE variables at the edge of the QUASI-VACUUM (1e-6 background of
-/// the Hoffart diocotron), it sets rho_face = floor while leaving a face momentum O(average) -> the
+/// rho_face = floor): in CONSERVATIVE variables at the edge of a QUASI-VACUUM (a ~1e-6 background under a
+/// ~1e6 top-hat contrast), it sets rho_face = floor while leaving a face momentum O(average) -> the
 /// face VELOCITY v = m/rho diverges (~1e6) -> the Rusanov wave speed blows up whereas dt was chosen
-/// BEFORE on the cell velocities -> immediate blow-up (measured: NaN at step 2 of the Hoffart case,
-/// whatever the floor). The paper couples its limiter to the recomputed CFL bound; here the fallback
+/// BEFORE on the cell velocities -> immediate blow-up (measured: NaN within a couple of steps,
+/// independent of the floor value). The paper couples its limiter to the recomputed CFL bound; here the fallback
 /// to the average bounds the face velocity by CONSTRUCTION (v_face = v_cell), stays conservative
 /// (the average is not touched), positive as soon as the average is, and degrades the order only on
 /// the offending faces (WENO5 intact everywhere else).
 /// Inactive if floor <= 0 (bit-identical path) or if the face is already >= floor. Motivation: WENO5
 /// undershoots at the top-hat jump with 1e6 contrast -> negative face rho -> 1/rho and the Lorentz
-/// source detonate -> NaN (adc_cases ADC-62/ADC-74, ticket ADC-76). POINTWISE device-clean function. ADC_HD.
+/// source detonate -> NaN (positivity-fallback provenance: docs/validation/HEADER_PROVENANCE.md).
+/// POINTWISE device-clean function. ADC_HD.
 template <class Model>
 ADC_HD inline void zhang_shu_scale(typename Model::State& s, const ConstArray4& u,
                                    int i, int j, Real floor, int pos_comp) {
@@ -863,7 +864,7 @@ void assemble_rhs_hll_cached(const Model& model, const MultiFab& U, const MultiF
 // ============================================================================
 // DOMAIN MASK (T2 effort, conservative, OPT-IN -- default path untouched)
 // ============================================================================
-// The mask makes the FV transport aware of an ACTIVE sub-domain (e.g. the paper's disk).
+// The mask makes the FV transport aware of an ACTIVE sub-domain (e.g. a bounded disk-shaped region).
 // Convention: mask(i, j) >= 0.5 -> ACTIVE cell, otherwise INACTIVE. A face is OPEN (normal flux
 // computed) if BOTH adjacent cells are active; it is CLOSED (normal flux set to ZERO) if at least
 // one is inactive. Zeroing the normal flux at active/inactive faces makes the step CONSERVATIVE
@@ -873,8 +874,8 @@ void assemble_rhs_hll_cached(const Model& model, const MultiFab& U, const MultiF
 //
 // The residual is written ONLY on the active cells; an inactive cell keeps its residual at 0
 // (the caller does not advance it). This header does NOT wire this path into System::step: it
-// provides the mask-aware brick, exercised directly by the tests and, eventually, behind the disk
-// opt-in.
+// provides the mask-aware brick, exercised directly by the tests and, eventually, behind the
+// active-sub-domain opt-in.
 
 namespace detail {
 /// Activity indicator of a cell from a 0/1 cell-centered mask (>= 0.5 -> active).
@@ -889,9 +890,9 @@ ADC_HD inline bool mask_active(const ConstArray4& mask, int i, int j) {
 /// zero normal flux at the active/inactive boundary) -> mass conservation over the active
 /// sub-domain. Named functor (same device contract as AssembleRhsKernel). ADC_HD.
 ///
-/// NB: without a diffusive term (transport-only models targeted by the disk); a DiffusiveModel keeps
+/// NB: without a diffusive term (transport-only models); a DiffusiveModel keeps
 /// its UNmasked Laplacian here (separate refinement -- the conservative mask targets the hyperbolic
-/// flux, cf. the "ring edges" effort).
+/// flux only).
 template <class Limiter, class NumericalFlux, class Model>
 struct AssembleRhsMaskedKernel {
   Model model;
@@ -946,7 +947,7 @@ struct AssembleRhsMaskedKernel {
 /// cell-centered domain mask (OPT-IN, T2 effort). On an inactive cell R = 0 (not advanced); on an
 /// active cell, the normal flux of a face whose neighbor is inactive is set to zero (FV wall).
 /// Result: the mass over the active sub-domain is CONSERVED to machine precision (no flux crosses
-/// the boundary) -- property validated by the conservation test of the disk effort.
+/// the boundary) -- property validated by the active-sub-domain mass-conservation test.
 ///
 /// @p mask must have the SAME layout as @p U (same BoxArray / DistributionMapping) and carry at
 /// least 1 ghost (reading the neighbors i-1/i+1/j-1/j+1 up to the edge). This entry point is

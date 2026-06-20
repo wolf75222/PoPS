@@ -140,7 +140,7 @@ void for_each_cell(const Box2D& b, F f) {
   //
   // DEVICE GUARD (if constexpr): the serial fallback is taken ONLY if the default execution space
   // of Kokkos IS the host space (Serial/OpenMP). Under a DEVICE space (Cuda
-  // on GH200), DefaultExecutionSpace != DefaultHostExecutionSpace: the host loop
+  // on a CUDA device), DefaultExecutionSpace != DefaultHostExecutionSpace: the host loop
   // would run on the CPU while the preceding device kernels are in flight (no
   // fence laid here) -- data race. We therefore keep parallel_for on device WHATEVER
   // THE size -> GPU path STRICTLY unchanged (the if constexpr evaporates at

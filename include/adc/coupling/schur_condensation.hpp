@@ -13,7 +13,7 @@
 
 /// @file
 /// @brief BUILDER (NOT solver) of the Schur-condensed source stage of the implicit source
-///        coupling potential / velocity / Lorentz (Hoffart et al., arXiv:2510.11808;
+///        coupling potential / velocity / Lorentz (design and references in
 ///        docs/SCHUR_CONDENSATION_DESIGN.md). This header ONLY ASSEMBLES the coefficients of the tensor
 ///        elliptic operator A_op and the condensed right-hand side; it does NOT solve and does NOT
 ///        reconstruct the velocity (stage PR4, which will call the EllipticSolver concept, e.g. TensorKrylovSolver).

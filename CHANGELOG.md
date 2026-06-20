@@ -179,6 +179,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- **Generalize core public-header comments** (ADC-333): the headers under `include/adc/**` now read
+  as the generic math contract (invariants, preconditions, expected errors, maintainer warnings)
+  rather than the implementation of one scenario. The diocotron/Hoffart reproduction, the
+  ROMEO/GH200 machine names, and the cross-repo `adc_cases` ticket trails are reworded generically
+  and the provenance is relocated to the validation docs (new `docs/validation/HEADER_PROVENANCE.md`,
+  plus the existing `HOFFART_*`/`SCHUR_CONDENSATION_DESIGN`/`DIOCOTRON_GROWTH_RATE` docs). Comments
+  and docs only; no behavior change.
 - **Builtin model bricks behind a single registry** (ADC-331): the transport / source / elliptic
   tag lists are centralized in `include/adc/runtime/model_registry.hpp` (constexpr `kTransports` /
   `kSources` / `kElliptics` tables plus CSV / choices / validator helpers), the model-axis

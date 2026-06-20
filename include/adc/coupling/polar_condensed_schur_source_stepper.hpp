@@ -17,7 +17,7 @@
 /// @brief PolarCondensedSchurSourceStepper: SOURCE STAGE condensed by Schur in POLAR geometry
 ///        (ring (r, theta)). POLAR counterpart of the Cartesian CondensedSchurSourceStepper (#126,
 ///        condensed_schur_source_stepper.hpp), for the implicit source coupling potential / velocity /
-///        Lorentz (Hoffart et al., arXiv:2510.11808) of a STIFF magnetized fluid on a ring mesh.
+///        Lorentz of a STIFF magnetized fluid on a ring mesh.
 ///        It is a STANDALONE SOURCE stage (transport frozen). WIRED into the facade since
 ///        Path A step 2c: System::set_source_stage builds it when the geometry is polar and
 ///        SystemStepper::run_source_stage invokes it after transport (cf. python/system.cpp) --
@@ -92,7 +92,7 @@
 ///   enforces it -- Jacobi fallback without constraint for a 2D tiling that cuts r). Single-rank / single
 ///   box: BIT-IDENTICAL path. Multi-box validation: test_polar_schur_multibox (multi-box vs mono-box parity
 ///   bit-close, cross terms AND 2D Jacobi tiling). Device: all kernels of the path
-///   are NAMED device-clean functors (recipe #93); GH200 validation = ci-full.
+///   are NAMED device-clean functors (recipe #93); CUDA-device validation = ci-full.
 ///
 /// DEVICE. All kernels are NAMED device-clean FUNCTORS (recipe #93: no extended lambda
 ///   first-instantiated cross-TU, nvcc limit #64/#97). The buffers are ALLOCATED ONCE at
@@ -513,8 +513,8 @@ class PolarCondensedSchurSourceStepper {
   /// ghosts by ODD REFLECTION (ghost = 2*0 - mirror = -phi) instead of the wrap. The centered azimuthal
   /// gradient of the reconstruction there read an error ~2 phi/(2 r dtheta), i.e. a radial momentum
   /// kick O(1/(theta dtheta)) as an anti-symmetric dipole at the two seam columns --
-  /// the spurious drift ||R_eq||_inf ~ 83 of the polar Hoffart case (adc_cases ADC-62), which grew
-  /// as O(1/h) and made the perturbed run diverge at t~0.01.
+  /// a spurious O(1/h) seam drift that, left unhandled, makes a perturbed run diverge (measured
+  /// magnitude and provenance: docs/validation/HEADER_PROVENANCE.md).
   BCRec phi_bc() const {
     BCRec b = bcPhi_;
     b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;  // theta always periodic

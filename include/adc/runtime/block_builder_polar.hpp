@@ -38,7 +38,8 @@
 ///
 /// NAMED FUNCTORS (and not extended lambdas), like block_builder.hpp (#64/#97/#133): robust device
 /// emission if the Model-template kernel is first-instantiated cross-TU. assemble_rhs_polar and its
-/// kernels are already device-clean (7/7 GH200); these closures merely chain them.
+/// kernels are already device-clean (all validated on a CUDA device, e.g. GH200); these closures
+/// merely chain them.
 
 namespace adc {
 
@@ -85,7 +86,7 @@ void dispatch_transport_polar(const ModelSpec& m, Visitor&& v) {
 /// scalar ExB transport (1 var) -> only source 'none'; isothermal fluid transport (3 var) ->
 /// 'none' | 'potential' (-rho grad phi) | 'gravity' | 'magnetic'/'lorentz' (q v x B_z, B_z read from
 /// the aux, EXPLICIT regime) | 'potential_magnetic'/'potential_lorentz' (electrostatic + Lorentz sum =
-/// full force of the NATIVE polar diocotron) also valid. The Lorentz force is ALGEBRAIC and INVARIANT
+/// full magnetized-plasma force in polar geometry) also valid. The Lorentz force is ALGEBRAIC and INVARIANT
 /// under orientation of the local orthonormal frame: the SAME MagneticLorentzForce brick serves both
 /// geometries (cartesian and polar), like PotentialForce / GravityForce. The 1/r metric and the
 /// curvature stay carried by the transport.
