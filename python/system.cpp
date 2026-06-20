@@ -496,20 +496,10 @@ void System::add_block(const std::string& name, const ModelSpec& model,
   if (stride < 1) throw std::runtime_error("System::add_block : stride >= 1");
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error("System::add_block : positivity_floor >= 0 and finite (0 = inactive)");
-  // Validation of the NEWTON OPTIONS (grouped into a POD, ADC-214): same bounds as before, read on the
-  // POD fields. fail_policy is already a valid integer (NewtonOptions::kFail* ; the bindings
-  // resolve it from the string "none"/"warn"/"throw"). We validate its range to stay defensive.
-  if (newton.max_iters < 1)
-    throw std::runtime_error("System::add_block : newton_max_iters >= 1");
-  if (newton.rel_tol < 0.0 || newton.abs_tol < 0.0 || newton.fd_eps <= 0.0)
-    throw std::runtime_error("System::add_block : newton_rel_tol/abs_tol >= 0 and newton_fd_eps > 0");
-  if (!(newton.damping > 0.0 && newton.damping <= 1.0))
-    throw std::runtime_error("System::add_block : newton_damping in (0, 1]");
-  if (newton.fail_policy != NewtonOptions::kFailNone &&
-      newton.fail_policy != NewtonOptions::kFailWarn &&
-      newton.fail_policy != NewtonOptions::kFailThrow)
-    throw std::runtime_error("System::add_block : newton_fail_policy invalid "
-                             "(NewtonOptions::kFailNone|kFailWarn|kFailThrow)");
+  // Validation of the NEWTON OPTIONS POD (ADC-214): range check shared with AmrSystem::add_block
+  // (validate_newton_options, in implicit_stepper.hpp). Whether non-default options are ALLOWED
+  // (the time='imex' gate below) stays here -- it differs from the AMR path.
+  validate_newton_options(newton, "System::add_block");
   // @p time carries the TREATMENT and, in explicit, the RK SCHEME: "explicit"/"ssprk2" = SSPRK2
   // (historical default), "ssprk3" = SSPRK3 (order 3), "euler" = ForwardEuler (order 1, fidelity to
   // first-order references -- validation), "imex" = explicit transport + local backward-Euler implicit
