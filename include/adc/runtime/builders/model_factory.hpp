@@ -58,7 +58,7 @@ ADC_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
   validate_transport(m.transport);  // registry rejection (single source of the valid tags + message)
   if (m.transport == "exb") return v(ExBVelocity{Real(m.B0)});
   if (m.transport == "compressible") return v(CompressibleFlux{Real(m.gamma)});
-  if (m.transport == "isothermal") return v(IsothermalFlux{Real(m.cs2)});
+  if (m.transport == "isothermal") return v(IsothermalFlux{Real(m.cs2), Real(m.vacuum_floor)});
   // Reached only if a registry tag is not routed by the if-chain (a registry/dispatch inconsistency,
   // i.e. a programming bug); user typos were already rejected by validate_transport above.
   throw std::runtime_error("transport '" + m.transport +

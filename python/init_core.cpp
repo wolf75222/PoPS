@@ -135,6 +135,7 @@ void init_core(py::module_& m) {
       .def_readwrite("B0", &ModelSpec::B0)
       .def_readwrite("gamma", &ModelSpec::gamma)
       .def_readwrite("cs2", &ModelSpec::cs2)
+      .def_readwrite("vacuum_floor", &ModelSpec::vacuum_floor)
       .def_readwrite("qom", &ModelSpec::qom)
       .def_readwrite("q", &ModelSpec::q)
       .def_readwrite("alpha", &ModelSpec::alpha)

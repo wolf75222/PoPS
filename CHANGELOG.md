@@ -512,6 +512,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- **Quasi-vacuum velocity bound for the isothermal model** (ADC-77, third stability barrier of the
+  WENO5 rollup): when the diocotron rollup evacuates the background (rho -> ~1e-7) the Schur source
+  stage writes O(1) momentum onto those cells, so the raw u = m/rho exploded and collapsed the CFL.
+  `IsothermalFlux` (and the inherited `IsothermalFluxPolar`) now computes the velocity as
+  u = m/max(rho, vacuum_floor), which bounds both the wave speed and the advective flux at evacuated
+  cells; mass and momentum are untouched (only the velocity ESTIMATE is bounded, unlike a cell density
+  clamp). It is an independent opt-in knob set per model via
+  `adc.FluidState("isothermal", cs2=..., vacuum_floor=...)` (carried on `ModelSpec::vacuum_floor`);
+  it is deliberately SEPARATE from the spatial `positivity_floor` (the Zhang-Shu reconstruction
+  limiter), which addresses a different failure mode -- coupling them would change the CFL dt of
+  existing positivity_floor transport runs. With `vacuum_floor == 0` (default) the path is
+  bit-identical. Covered by `tests/test_isothermal_vacuum_floor.cpp` and
+  `python/tests/test_isothermal_vacuum_floor_system.py`. The energy (Euler) model is out of scope:
+  a velocity bound alone does not stabilize it (the sound speed c = sqrt(gamma p / rho) also diverges
+  at vacuum, a coupled pressure-positivity concern).
 - **GPU validation drivers broken by the TU split** (ADC-346): `docs/validation/diocotron_gpu.cpp` and
   `diocotron_amr_gpu.cpp` compile `python/system.cpp` / `amr_system.cpp` standalone, but after the
   ADC-335 split those TUs delegate to the `build_block_*` / `build_amr_*` seams now living in per-transport

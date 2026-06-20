@@ -407,6 +407,7 @@ foreach(t
     test_amr_production_stride_reject  # rejet stride/masque IMEX sur le chemin production AMR (.so loader, revue #195)
     test_primitive_state      # init/diagnostic en primitif (P4) : set/get_primitive_state, natif + DSL
     test_schur_via_system     # System -> run_source_stage -> etage Schur condense, briques natives (no AOT)
+    test_isothermal_vacuum_floor_system  # ADC-77 : FluidState(vacuum_floor) -> borne u=m/max(rho,floor) end-to-end (diff au quasi-vide, bit-identique au-dessus du floor, no AOT)
     test_set_source_stage_facade # ADC-308 : methode PUBLIQUE System.set_source_stage (wrapper facade explicite == chemin prive _s, bit-identique ; pas un simple __getattr__), briques natives
     test_amr_schur_via_system # AmrSystem -> etage source condense GLOBAL (amr-schur) mono-niveau, briques natives (no AOT)
     test_polar_schur_via_system  # System POLAIRE -> run_source_stage -> etage Schur condense POLAIRE (Voie A etape 2c -> PR6), briques natives

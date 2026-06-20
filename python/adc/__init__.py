@@ -449,12 +449,25 @@ class Scalar:
 
 
 class FluidState:
-    """Fluid state. kind = "compressible" (gamma) or "isothermal" (cs2)."""
+    """Fluid state. kind = "compressible" (gamma) or "isothermal" (cs2).
 
-    def __init__(self, kind="compressible", gamma=1.4, cs2=0.5):
+    vacuum_floor (isothermal only, ADC-77): quasi-vacuum density floor. When > 0 the model computes
+    the velocity as u = m/max(rho, vacuum_floor), bounding the wave speed and the advective flux where
+    the flow evacuates the background (rho -> ~0). It does NOT modify the conserved state (only the
+    velocity estimate). 0 (default) = inactive (bit-identical). This is independent of the spatial
+    positivity_floor (the Zhang-Shu reconstruction limiter): the two address different failure modes
+    and must be enabled separately. Honored on the native adc.Model(...) / System / AmrSystem path;
+    the compiled/DSL path (adc.CompositeModel / JIT / AOT) does not carry it yet, so set it on the
+    native path.
+    """
+
+    def __init__(self, kind="compressible", gamma=1.4, cs2=0.5, vacuum_floor=0.0):
         self.kind = kind
         self.gamma = float(gamma)
         self.cs2 = float(cs2)
+        if not (float(vacuum_floor) >= 0.0):
+            raise ValueError("FluidState: vacuum_floor >= 0 (0 = inactive)")
+        self.vacuum_floor = float(vacuum_floor)
 
 
 # --- Transport bricks ---------------------------------------------------
@@ -558,6 +571,7 @@ def Model(state, transport, source, elliptic):
                 raise ValueError("FluidState(compressible) requires transport=CompressibleFlux()")
         elif state.kind == "isothermal":
             spec.cs2 = state.cs2
+            spec.vacuum_floor = getattr(state, "vacuum_floor", 0.0)  # ADC-77 quasi-vacuum velocity bound
             if not isinstance(transport, IsothermalFlux):
                 raise ValueError("FluidState(isothermal) requires transport=IsothermalFlux()")
         else:

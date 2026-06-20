@@ -157,7 +157,8 @@ AmrCompiledHooks build_amr_compiled_for_flux(TR tr, const ModelSpec& spec,
 }
 
 // Per-transport seam functions (defined in python/amr_block_<transport>.cpp / amr_compiled_<transport>.cpp).
-// TR construction matches dispatch_transport VERBATIM (ExBVelocity{B0}/CompressibleFlux{gamma}/IsothermalFlux{cs2}).
+// TR construction matches dispatch_transport VERBATIM
+// (ExBVelocity{B0}/CompressibleFlux{gamma}/IsothermalFlux{cs2, vacuum_floor}).
 AmrRuntimeBlock build_amr_block_exb(const AmrBlockBuildArgs& a, const SharedAmrLayout& S);
 AmrRuntimeBlock build_amr_block_isothermal(const AmrBlockBuildArgs& a, const SharedAmrLayout& S);
 AmrRuntimeBlock build_amr_block_compressible(const AmrBlockBuildArgs& a, const SharedAmrLayout& S);

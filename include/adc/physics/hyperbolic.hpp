@@ -129,9 +129,21 @@ struct IsothermalFlux {
   using State = StateVec<3>;  ///< conservative variables (rho, rho u, rho v)
   using Prim = StateVec<3>;   ///< primitive variables (rho, u, v)
   Real cs2 = 1;
+  /// Quasi-vacuum density floor (ADC-77). When > 0, the velocity is computed as u = m / max(rho,
+  /// vacuum_floor) so it stays bounded where the rollup evacuates the background (rho -> ~0); this
+  /// bounds BOTH the CFL wave speed and the advective flux in one place (max_wave_speed and flux both
+  /// divide by rho here). Mass and momentum are NOT modified -- only the velocity ESTIMATE is bounded,
+  /// so the conservative state is untouched (unlike a cell density clamp). <= 0: inactive, and the raw
+  /// 1/rho path is taken verbatim (bit-identical, including for rho <= 0).
+  Real vacuum_floor = 0;
+  /// rho clamped from below by vacuum_floor for the velocity division ONLY. Manual max (device-safe,
+  /// no std:: in the kernel path). floor <= 0 -> returns rho unchanged (bit-identical).
+  ADC_HD Real velocity_rho(Real rho) const {
+    return (vacuum_floor > Real(0) && rho < vacuum_floor) ? vacuum_floor : rho;
+  }
   ADC_HD StateVec<3> flux(const StateVec<3>& u, const Aux&, int dir) const {
     const Real rho = u[0];
-    const Real vn = (dir == 0 ? u[1] : u[2]) / rho;
+    const Real vn = (dir == 0 ? u[1] : u[2]) / velocity_rho(rho);
     const Real p = cs2 * rho;
     StateVec<3> f{};
     f[0] = (dir == 0 ? u[1] : u[2]);
@@ -139,12 +151,14 @@ struct IsothermalFlux {
     f[2] = u[2] * vn + (dir == 1 ? p : Real(0));
     return f;
   }
-  /// Conservative -> primitive: (rho, rho u, rho v) -> (rho, u, v).
+  /// Conservative -> primitive: (rho, rho u, rho v) -> (rho, u, v). The velocity uses the quasi-vacuum
+  /// floored density (velocity_rho); rho itself (p[0]) stays the raw conserved value.
   ADC_HD Prim to_primitive(const StateVec<3>& u) const {
     Prim p{};
     p[0] = u[0];
-    p[1] = u[1] / u[0];
-    p[2] = u[2] / u[0];
+    const Real rho_v = velocity_rho(u[0]);
+    p[1] = u[1] / rho_v;
+    p[2] = u[2] / rho_v;
     return p;
   }
   /// Primitive -> conservative: (rho, u, v) -> (rho, rho u, rho v).
@@ -227,7 +241,7 @@ struct IsothermalFluxPolar : IsothermalFlux {
   /// p = cs2 rho. Component 0 (mass) is zero: mass is purely conservative in polar.
   ADC_HD StateVec<3> polar_geom_source(const StateVec<3>& u, Real r) const {
     const Real rho = u[0];
-    const Real inv_rho = Real(1) / rho;
+    const Real inv_rho = Real(1) / velocity_rho(rho);  // quasi-vacuum floored (ADC-77; bit-identical if off)
     const Real mr = u[1], mth = u[2];  // rho v_r, rho v_theta (local basis (e_r, e_theta))
     const Real p = cs2 * rho;
     const Real inv_r = Real(1) / r;
