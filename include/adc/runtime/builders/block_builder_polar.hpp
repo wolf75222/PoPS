@@ -69,7 +69,7 @@ namespace detail {
 template <class Visitor>
 void dispatch_transport_polar(const ModelSpec& m, Visitor&& v) {
   if (m.transport == "exb") return v(ExBVelocityPolar{Real(m.B0)});
-  if (m.transport == "isothermal") return v(IsothermalFluxPolar{IsothermalFlux{Real(m.cs2)}});
+  if (m.transport == "isothermal") return v(IsothermalFluxPolar{IsothermalFlux{Real(m.cs2), Real(m.vacuum_floor)}});
   // Wired polar transports = the registry rows with polar_ok (model_registry.hpp); the list is
   // single-sourced via transport_tags_csv(/*polar=*/true). 'compressible' (Euler with energy) has no
   // polar brick yet -> not polar_ok -> rejected here with the same explicit "unsupported" message.

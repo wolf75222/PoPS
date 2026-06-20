@@ -33,6 +33,11 @@ struct ModelSpec {
   double B0 = 1.0;         ///< ExBVelocity: magnetic field
   double gamma = 1.4;      ///< CompressibleFlux: adiabatic index
   double cs2 = 0.5;        ///< IsothermalFlux: sound speed squared
+  double vacuum_floor = 0.0;  ///< IsothermalFlux: quasi-vacuum density floor for u=m/max(rho,floor)
+                              ///< (ADC-77). Set from adc.FluidState(vacuum_floor=...) at compose;
+                              ///< INDEPENDENT of the spatial positivity_floor (deliberately decoupled --
+                              ///< coupling them shifts the CFL dt of existing positivity_floor runs).
+                              ///< 0 = off (bit-identical)
   double qom = 1.0;        ///< PotentialForce / MagneticLorentzForce: q/m (sign included)
   double q = 1.0;          ///< ChargeDensity: charge q
   double alpha = 1.0;      ///< BackgroundDensity: Poisson coupling

@@ -4,7 +4,7 @@
 namespace adc::detail {
 
 AmrRuntimeBlock build_amr_block_isothermal(const AmrBlockBuildArgs& a, const SharedAmrLayout& S) {
-  return build_amr_block_for(IsothermalFlux{Real(a.spec.cs2)}, a, S);
+  return build_amr_block_for(IsothermalFlux{Real(a.spec.cs2), Real(a.spec.vacuum_floor)}, a, S);
 }
 
 }  // namespace adc::detail

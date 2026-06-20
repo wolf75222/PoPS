@@ -655,6 +655,9 @@ adc_add_test(test_variable_role)
 # --- roles utilisateurs nommes + fallbacks canoniques stricts (ADC-292) ---
 adc_add_test(test_variable_user_role)
 
+# --- ADC-77 : borne de vitesse au quasi-vide (IsothermalFlux : u = m/max(rho, vacuum_floor)) ---
+adc_add_test(test_isothermal_vacuum_floor)
+
 # --- flux de Roe (Euler) + eigenvalues() ---
 adc_add_test(test_roe_flux)
 # Capabilities Riemann (audit 2026-06) : HLLC/Roe generiques par hooks modele (HasHLLCStructure /

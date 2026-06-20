@@ -107,7 +107,8 @@ BuiltBlock build_block_for(TR tr, const ModelSpec& model, const BlockBuildArgs& 
 }
 
 // Per-transport seam functions (defined in python/system_<transport>.cpp). The TR construction matches
-// dispatch_transport's branches VERBATIM (ExBVelocity{B0} / CompressibleFlux{gamma} / IsothermalFlux{cs2}).
+// dispatch_transport's branches VERBATIM (ExBVelocity{B0} / CompressibleFlux{gamma} /
+// IsothermalFlux{cs2, vacuum_floor}).
 BuiltBlock build_block_exb(const ModelSpec& model, const BlockBuildArgs& a);
 
 // Isothermal (3-var fluid) carries two reachable fluxes (rusanov + hll; hllc/roe need 4-var + pressure)
