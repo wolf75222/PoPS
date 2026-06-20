@@ -390,6 +390,7 @@ foreach(t
     test_dsl_aot_bz           # B_z via add_compiled_block (.so AOT)
     test_dsl_aot_te           # T_e via add_compiled_block (.so AOT)
     test_aux_named            # ADC-70 phase 1 + ADC-291 phase 2 : champs aux NOMMES (m.aux_field) sur System cartesien, polaire et AMR (auto-skip e2e sans compilateur)
+    test_aux_halo             # ADC-369 : halo/BC par champ aux nomme (adc.AuxHalo) sur System/polaire/AMR (auto-skip e2e sans compilateur)
     test_block_names_dynamic  # block_names() voit le bloc dynamique (.so JIT), pas seulement add_block
     test_dsl_abi_metadata     # noms/roles/gamma transportes par l'ABI du .so (AOT+JIT) + retro-compat
     test_dsl_compile_facade   # facade m.compile(backend=...) -> moteurs JIT/AOT + metadonnees preservees

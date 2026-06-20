@@ -311,6 +311,7 @@ add_test(NAME test_native_aux_named COMMAND test_native_aux_named)
 # --- canal aux extensible (n_aux + load_aux<NComp>) : champ extra B_z lu et peuple ---
 adc_add_test(test_aux_extra)
 adc_add_test(test_aux_names)  # ADC-291 : table de noms aux canonique C++ <-> Python (aux_names.hpp)
+adc_add_test(test_aux_halo)   # ADC-369 : halo/BC par champ aux nomme (fill_physical_bc scope par composant)
 adc_add_test(test_aux_coupler_bz)
 adc_add_test(test_aux_system_bz)  # B_z partage multi-blocs (SystemAssembler, aux = max sur les blocs)
 adc_add_test(test_aux_composite)  # CompositeModel propage n_aux depuis ses briques (B_z)

@@ -304,6 +304,11 @@ class AmrCouplerMP {
     named_aux_[comp] = std::move(field);
     apply_named_aux();  // stack_ exists at ctor: reflect onto the coarse aux right away
   }
+  /// Registers a per-field aux HALO policy (ADC-369) for the named component @p comp. compute_aux
+  /// applies it onto the COARSE aux AFTER the shared fill, overriding only that component's
+  /// physical-face ghosts (periodic faces stay periodic). Single-block AMR counterpart of
+  /// System::set_aux_field_halo_component. No-op default.
+  void set_named_aux_bc(int comp, AuxHaloPolicy policy) { named_aux_bc_[comp] = policy; }
   const Box2D& domain() const { return stack_.domain(); }
   int nlev() const { return stack_.nlev(); }
 
@@ -476,6 +481,8 @@ class AmrCouplerMP {
     // without a named field (bit-identical).
     apply_named_aux();
     fill_boundary(stack_.aux(0), dom, Periodicity{true, true});
+    apply_named_aux_bc();  // ADC-369: per-field halo override on the coarse physical ghosts (after the
+                           // shared fill); no-op on a periodic domain / without a policy.
     // parent aux(k-1) replicated only if level 0 is: otherwise it is DISTRIBUTED (multi-box)
     // and the injection goes through parallel_copy. Beyond level 1, the parent is always distributed.
     for (int k = 1; k < stack_.nlev(); ++k)
@@ -635,6 +642,9 @@ class AmrCouplerMP {
   // (n*n row-major). STATIC user fields re-applied by compute_aux each update (so they persist across
   // regrid). Empty by default -> bit-identical. cf. set_named_aux / apply_named_aux.
   std::map<int, std::vector<Real>> named_aux_;
+  // Per-field aux HALO policy (ADC-369): component -> uniform boundary policy, applied to the coarse aux
+  // after the shared fill (apply_named_aux_bc). Empty by default -> bit-identical.
+  std::map<int, AuxHaloPolicy> named_aux_bc_;
 
   // Re-applies the model-NAMED aux fields onto the COARSE shared aux valid cells. Mirror of
   // SystemFieldSolver::apply_named_aux_one and AmrRuntime::apply_named_aux: per local fab (MPI-safe),
@@ -652,6 +662,17 @@ class AmrCouplerMP {
           for (int i = v.lo[0]; i <= v.hi[0]; ++i)
             a(i, j, comp) = field[static_cast<std::size_t>(j) * row + i];
       }
+    }
+  }
+
+  // Per-field aux HALO override (ADC-369) on the COARSE aux, AFTER the shared fill. Overrides only each
+  // declared component's physical-face ghosts; aux_halo_override(mg_.bc(), policy) keeps periodic faces
+  // periodic (so on a periodic domain this is a no-op). Mirror of SystemFieldSolver::apply_named_aux_bc.
+  void apply_named_aux_bc() {
+    if (named_aux_bc_.empty()) return;
+    for (const auto& [comp, policy] : named_aux_bc_) {
+      if (comp >= stack_.aux(0).ncomp()) continue;
+      fill_physical_bc(stack_.aux(0), stack_.domain(), aux_halo_override(mg_.bc(), policy), comp);
     }
   }
 };

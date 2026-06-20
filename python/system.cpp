@@ -1059,6 +1059,27 @@ void System::set_aux_field_component(int comp, const std::vector<double>& field)
   p_->fields_.named_aux_[comp] = std::move(f);  // keep for a later reallocation of the channel
 }
 
+void System::set_aux_field_halo_component(int comp, int bc_type, double value) {
+  Impl* P = p_.get();
+  if (comp < kAuxNamedBase)
+    throw std::runtime_error(
+        "System::set_aux_field (halo) : component " + std::to_string(comp) +
+        " reserved (phi/grad_x/grad_y/B_z/T_e) ; a named aux field starts at index " +
+        std::to_string(kAuxNamedBase));
+  if (comp >= P->aux_ncomp_)
+    throw std::runtime_error(
+        "System::set_aux_field (halo) : the aux channel has only " + std::to_string(P->aux_ncomp_) +
+        " components ; no block declares an aux field at index " + std::to_string(comp));
+  // Only the PHYSICAL-face policies are meaningful per field (Foextrap / Dirichlet). A periodic face is
+  // a domain property kept by aux_halo_override, so a per-field 'periodic' is not offered.
+  if (bc_type != static_cast<int>(BCType::Foextrap) && bc_type != static_cast<int>(BCType::Dirichlet))
+    throw std::runtime_error(
+        "System::set_aux_field (halo) : unsupported halo type " + std::to_string(bc_type) +
+        " ; use foextrap or dirichlet");
+  P->fields_.named_aux_bc_[comp] =
+      AuxHaloPolicy{static_cast<BCType>(bc_type), static_cast<Real>(value)};
+}
+
 std::vector<double> System::aux_field_component(int comp) const {
   Impl* P = p_.get();
   if (comp < kAuxNamedBase)

@@ -373,6 +373,15 @@ class System {
   /// match the grid, or if no block declares a field at this index (channel too narrow).
   void set_aux_field_component(int comp, const std::vector<double>& field);
 
+  /// Declares a per-field aux HALO policy (ADC-369) for the NAMED component @p comp (>= kAuxNamedBase):
+  /// @p bc_type is adc::BCType (Foextrap=1 / Dirichlet=2), @p value the Dirichlet boundary value
+  /// (ignored for Foextrap). Applied by solve_fields AFTER the shared aux ghost fill, overriding only
+  /// this component's PHYSICAL-face ghosts (periodic faces -- periodic domain, polar theta -- keep their
+  /// wrap). The FACADE (adc.System.set_aux_field(..., halo=adc.AuxHalo(...))) resolves name -> comp and
+  /// calls this. No policy declared -> the shared aux BC, bit-identical. @throws on a reserved/too-narrow
+  /// component or an unsupported type.
+  void set_aux_field_halo_component(int comp, int bc_type, double value);
+
   /// Reads a NAMED aux field (component @p comp >= kAuxNamedBase): valid cells of the aux channel,
   /// row-major n*n (cartesian) / nr*ntheta (polar). Counterpart of potential() for a named
   /// component. Is 0 everywhere as long as no set_aux_field_component has written this component (the aux

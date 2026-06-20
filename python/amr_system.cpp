@@ -131,6 +131,9 @@ struct AmrSystem::Impl {
   // Pending until build: seeded into the single-block coupler (make_build_params -> bp.named_aux) AND
   // pushed to the multi-block runtime (build_multi). Empty -> bit-identical. cf. set_aux_field_component.
   std::map<int, std::vector<double>> named_aux_;
+  // Per-field aux HALO policies (ADC-369): component -> uniform policy. Pending until build, then seeded
+  // into the engine (bp.named_aux_bc for the coupler; runtime->set_named_aux_bc for the runtime).
+  std::map<int, AuxHaloPolicy> named_aux_bc_;
 
   std::string p_rhs = "charge_density", p_solver = "geometric_mg", p_bc = "auto",
               p_wall = "none";
@@ -252,6 +255,7 @@ struct AmrSystem::Impl {
     bp.schur_strang = schur_strang;
     bp.bz_field = bz_field;
     bp.named_aux = named_aux_;  // ADC-291: model-named aux fields seeded onto the single-block coupler
+    bp.named_aux_bc = named_aux_bc_;  // ADC-369: per-field aux halo policies
     // NEWTON OPTIONS of the single-block IMEX source (wave 3: now WIRED on the AmrCouplerMP
     // coupler). build_amr_compiled captures them from bp and passes them to cpl->step. Default
     // (add_block without option) = historical NewtonOptions{} -> path (2a) bit-identical.
@@ -380,6 +384,7 @@ struct AmrSystem::Impl {
     // and injects them to the fine levels. Empty -> no-op (bit-identical).
     for (const auto& kv : named_aux_)
       runtime->set_named_aux(kv.first, std::vector<Real>(kv.second.begin(), kv.second.end()));
+    for (const auto& kv : named_aux_bc_) runtime->set_named_aux_bc(kv.first, kv.second);  // ADC-369
     // GLOBAL bounds registered BEFORE the lazy build (add_dt_bound): passed to the engine
     // (which aggregates them in its step_cfl, all_reduce_min). Those added AFTER go in directly.
     for (const auto& g : dt_bounds) runtime->add_dt_bound(g.label, g.fn);
@@ -987,6 +992,21 @@ void AmrSystem::set_aux_field_component(int comp, const std::vector<double>& fie
                              std::to_string(field.size()) + " (expected n*n = " + std::to_string(nn) +
                              ", coarse row-major)");
   p_->named_aux_[comp] = field;  // pending: seeded into the engine at build (single + multi block)
+}
+
+void AmrSystem::set_aux_field_halo_component(int comp, int bc_type, double value) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_aux_field (halo) : the system is already built (set named "
+                             "aux halos before any step)");
+  if (comp < kAuxNamedBase)
+    throw std::runtime_error(
+        "AmrSystem::set_aux_field (halo) : component " + std::to_string(comp) +
+        " reserved ; a named aux field starts at index " + std::to_string(kAuxNamedBase));
+  if (bc_type != static_cast<int>(BCType::Foextrap) && bc_type != static_cast<int>(BCType::Dirichlet))
+    throw std::runtime_error(
+        "AmrSystem::set_aux_field (halo) : unsupported halo type " + std::to_string(bc_type) +
+        " ; use foextrap or dirichlet");
+  p_->named_aux_bc_[comp] = AuxHaloPolicy{static_cast<BCType>(bc_type), static_cast<Real>(value)};
 }
 
 void AmrSystem::set_source_stage(const std::string& name, const std::string& kind, double theta,

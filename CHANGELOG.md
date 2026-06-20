@@ -25,6 +25,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `Kokkos_ENABLE_CUDA=ON` is requested on a native Windows configuration, instead of letting the
   unsupported Kokkos CUDA build break deep inside configure. The supported GPU path stays WSL2
   (ADC-96); Linux, macOS, and WSL2 are unaffected.
+- **Per-field configurable aux halos for named aux** (ADC-369, follow-up of ADC-291): a model-declared
+  named aux field can now carry its OWN ghost boundary policy via `adc.AuxHalo("foextrap")` /
+  `adc.AuxHalo("dirichlet", value=v)` passed to `set_aux_field(block, name, field, halo=...)`, instead
+  of inheriting the single shared phi-derived aux BC. The policy is applied to the NON-PERIODIC faces
+  only (periodic faces -- a periodic domain, the polar theta direction -- keep their wrap, so a per-field
+  policy never breaks the domain periodicity). Implemented by a component-scoped `fill_physical_bc`
+  overload + `aux_halo_override` (`include/adc/mesh/physical_bc.hpp`), applied after the shared aux fill
+  in `SystemFieldSolver` (cartesian + polar), `AmrRuntime` and `AmrCouplerMP` (coarse level). For the
+  cartesian System COMPILED-block path the policy is carried to the `.so` via an append-only tail on the
+  marshaled aux array (read by `compiled_block_abi.hpp` `make_grid`); the header signature (`abi_key`)
+  bumps automatically so a stale `.so` is never mixed. `adc.capabilities()['aux']['named']['halo_policy']`
+  reports it. Default (no halo) is strictly bit-identical; canonical fields (`B_z`, `T_e`) unchanged.
+  Per-face asymmetric BC and the JIT host path remain follow-ups.
 - **Named aux phase 2: AMR, polar, and a declarative `kAuxMaxExtra`** (ADC-291): model-declared named
   auxiliary fields (`m.aux_field("name")`, component `kAuxNamedBase + k`, read via `aux.extra_field(k)`)
   now work beyond the cartesian `System`. The polar `System::add_block` path widens the shared aux
