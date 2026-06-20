@@ -234,6 +234,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- **Cartesian spatial operator split into focused modules** (ADC-328): the ~975-line
+  `include/adc/numerics/spatial_operator.hpp` is split into a one-way module DAG under
+  `include/adc/numerics/spatial/` (`state_access`, `positivity`, `face_flux`, `wave_speed`,
+  `cartesian_operator`, `masked_operator`), each documenting its own contract (state/aux access,
+  reconstruction + positivity, face flux, wave-speed reductions, residual assembly, masked path).
+  `spatial_operator.hpp` becomes an umbrella header that re-exports every symbol, so existing
+  `#include <adc/numerics/spatial_operator.hpp>` users are unaffected and the numerics are
+  bit-identical (pure code move, no behavior change).
 - **Reference and deprecated AMR headers moved out of the production surface** (ADC-332): the
   single-box Fab2D/MultiFab oracle headers `numerics/time/amr_reflux.hpp` and
   `numerics/time/amr_level.hpp` move to `numerics/time/reference/`, and the deprecated N-level
