@@ -540,9 +540,10 @@ ADC_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim,
   // wave speeds model.wave_speeds. Available as soon as a model exposes its signed eigenvalues (the
   // DSL emits wave_speeds as soon as a primitive 'p' is declared, even cold isothermal p=0 -> c=0 ->
   // HLL degenerates to upwind, still less diffusive than Rusanov at the contact). Does NOT REQUIRE
-  // n_vars==4 nor a pressure: usable by the 3-var isothermal model (rho, m_x, m_y) of the Hoffart
-  // diocotron, where hllc/roe are rejected. Gated on the presence of wave_speeds (otherwise a CLEAR
-  // error, not a compilation failure for a scalar model without a signed wave, e.g. ExB transport).
+  // n_vars==4 nor a pressure: usable by a 3-var isothermal model (rho, m_x, m_y) exposing signed
+  // wave speeds but no pressure, where hllc/roe are rejected. Gated on the presence of wave_speeds
+  // (otherwise a CLEAR error, not a compilation failure for a scalar model without a signed wave,
+  // e.g. ExB transport).
   if constexpr (requires(const Model mm, typename Model::State s, Aux a, Real r) {
                   mm.wave_speeds(s, a, 0, r, r);
                 }) {

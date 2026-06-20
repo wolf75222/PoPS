@@ -24,16 +24,17 @@
 /// (build_block via AdvanceExplicit/AdvanceImex/RhsInto/BlockRhsEval, make_max_speed via MaxSpeed;
 /// see block_builder.hpp), instead of lambdas first-instantiated from this calling TU. nvcc then
 /// reliably emits the nested device kernel (AssembleRhsKernel): the A==B parity (dres=0) of the
-/// transport residual is obtained on GH200 (#64). This is the "compiled" backend of the ideal
+/// transport residual is obtained on a CUDA device. This is the "compiled" backend of the ideal
 /// m.compile_or_jit() for a production binary.
 ///
 /// THE SAME limit held for the ELLIPTIC / MESH path of solve_fields (fill_boundary, physical BC,
 /// Poisson operator, GS smoother, MultiFab arithmetic), kept as inline extended lambdas and thus
-/// victims of the SAME nvcc bug: Release Cuda WITHOUT -g segfaults in solve_fields (#93,
-/// Heisenbug: OK Serial + compute-sanitizer + -g). These kernels are likewise converted to named
-/// functors (mf_arith / fill_boundary / physical_bc / poisson_operator / geometric_mg). The GH200
-/// parity of the FULL PRODUCTION path (solve_fields + transport, np=1) is validated once #93 is
-/// closed; the MPI multi-rank cases of the non-split System remain a separate follow-up.
+/// victims of the SAME nvcc bug: Release Cuda WITHOUT -g segfaults in solve_fields (Heisenbug:
+/// OK Serial + compute-sanitizer + -g). These kernels are likewise converted to named
+/// functors (mf_arith / fill_boundary / physical_bc / poisson_operator / geometric_mg). The CUDA
+/// parity of the FULL PRODUCTION path (solve_fields + transport, np=1) is validated once the
+/// solve_fields segfault above is closed; the MPI multi-rank cases of the non-split System remain a
+/// separate follow-up. Device-codegen provenance: docs/validation/HEADER_PROVENANCE.md.
 
 namespace adc {
 

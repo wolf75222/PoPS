@@ -20,7 +20,7 @@
 /// @brief Direct POLAR Poisson solver on an annulus (PolarGeometry), Phase 2a.
 ///
 /// Solves the polar Poisson equation on the ANNULAR mesh (r, theta) of the
-/// "polar diocotron grid" effort (Phase 1, PolarGeometry):
+/// annular polar grid (Phase 1, PolarGeometry):
 ///   (1/r) d_r(r d_r phi) + (1/r^2) d_theta^2 phi = f
 /// with theta PERIODIC (the annulus covers [0, 2pi)) and a PHYSICAL BC at r_min / r_max
 /// (Dirichlet or homogeneous Neumann). The annulus EXCLUDES r = 0 (r_min > 0): NO coordinate
@@ -43,7 +43,7 @@
 /// otherwise m - ntheta (aliasing); d_theta^2 e^{i k theta} = -k^2 e^{i k theta}, so the eigenvalue
 /// is -k(m)^2 (and NOT the 2-point stencil (2cos-2)/dtheta^2, which is only an O(dtheta^2) approximation
 /// of -k^2). Using -k(m)^2 makes the theta direction SPECTRAL (exact for band-limited data,
-/// like the diocotron: a small number of azimuthal modes). The azimuthal term at cell
+/// i.e. azimuthal content carried by a small number of modes). The azimuthal term at cell
 /// (i, m) is therefore (-k(m)^2 / r_i^2) phi_hat(i, m), DIAGONAL in m (1/r_i^2 local to row i).
 ///
 /// RADIAL DISCRETIZATION (conservative finite volumes, order 2, like assemble_rhs_polar):

@@ -6,7 +6,7 @@
 ///
 /// Layer: `include/adc/numerics/elliptic`.
 /// Role: solve the elliptic problem when A is NON-SYMMETRIC (cross term Axy != Ayx, e.g. the rotation
-/// B^{-1} of the Schur condensation, arXiv:2510.11808), the case where the GeometricMG V-cycle ALONE
+/// B^{-1} arising from a Schur condensation), the case where the GeometricMG V-cycle ALONE
 /// (5-point Gauss-Seidel smoother, diagonal block, explicit cross terms) stalls or diverges. BiCGStab
 /// (and not GMRES): FIXED memory footprint, no restart. The matvec is apply_laplacian (full operator,
 /// strictly matrix-free); the preconditioner is N V-cycles of GeometricMG on the SYMMETRIC PART

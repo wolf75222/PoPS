@@ -17,7 +17,7 @@
 /// @file
 /// @brief CondensedSchurSourceStepper: Schur-condensed SOURCE STAGE (level 4 of
 ///        docs/SCHUR_CONDENSATION_DESIGN.md) for the implicit source coupling potential / velocity /
-///        Lorentz (Hoffart et al., arXiv:2510.11808). This is a STANDALONE SOURCE stage (transport frozen):
+///        Lorentz. This is a STANDALONE SOURCE stage (transport frozen):
 ///        it does NOT replace the System::step path and does NOT hook into it (facade wiring = PR5). It
 ///        COMPOSES the bricks already on master:
 ///          - ElectrostaticLorentzCondensation (schur_condensation.hpp, #124): assembles A_op = I + c
@@ -246,7 +246,7 @@ class CondensedSchurSourceStepper {
   ///   @p state: fluid state (rho, mom_x, mom_y [, E]); WRITES mom (+ E); rho FROZEN.
   ///   @p phi: potential; INPUT phi^n (warm start of the solve); OUTPUT phi^{n+1}.
   ///   @p bz_field: B_z field (aux channel), component @p c_bz read at the center. theta/dt: theta-scheme.
-  /// No transport: this is the SOURCE stage alone (Hoffart et al., operator (2)-(3) of the splitting).
+  /// No transport: this is the SOURCE stage alone (the (2)-(3) implicit stage of docs/SCHUR_CONDENSATION_DESIGN.md).
   void step(MultiFab& state, MultiFab& phi, const MultiFab& bz_field, int c_bz, Real theta, Real dt) {
     const Real th_dt = theta * dt;
 

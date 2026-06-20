@@ -19,7 +19,8 @@
 ///          System(...).add_equation(time=Strang(hyperbolic=Explicit(ssprk3),
 ///                                                source=CondensedSchur(theta, alpha)))
 ///        and NOT a local cell-by-cell source (cf. the local IMEX backward_euler_source of the
-///        amr-imex path, which is NOT quantitatively comparable to the Hoffart paper arXiv:2510.11808).
+///        amr-imex path, which is NOT the quantitatively-validated reference source treatment;
+///        cf. docs/HOFFART_FIDELITY.md).
 ///
 /// STRATEGY (option A, mirror of the existing AMR Poisson compute_aux/solve_fields). The AMR elliptic
 /// solver of this code solves Poisson on the COARSE LEVEL then injects grad phi to the fine levels (the

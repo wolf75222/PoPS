@@ -73,8 +73,8 @@ ADC_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
 ///   - "magnetic" | "lorentz": MagneticLorentzForce q v x B_z (B_z read from aux, EXPLICIT
 ///                                    regime; the stiff regime goes through the condensed Schur);
 ///   - "potential_magnetic" | "potential_lorentz": CompositeSource<PotentialForce, MagneticLorentz>
-///                                    = electrostatic + Lorentz summed (full force of the NATIVE polar
-///                                    diocotron, without the centrifugal workaround).
+///                                    = electrostatic + Lorentz summed (the full magnetized force in a
+///                                    polar setup, with no centrifugal workaround needed).
 /// qom (q/m, sign included) is shared by the two charged forces (same species). The magnetized bricks
 /// declare n_aux = 4 -> CompositeModel propagates the aux width up to the system (B_z channel).
 template <int NV, class Visitor>

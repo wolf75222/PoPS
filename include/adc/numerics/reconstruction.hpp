@@ -32,7 +32,7 @@ struct NoSlope {
 ///
 /// Returns min(|a|,|b|)*sgn(a) if a and b have the same sign, 0 otherwise. Implemented without
 /// std::min / std::abs to stay device-safe (no <cmath> required). Order 1 locally at extrema
-/// (clips smooth peaks): prefer VanLeer for the Diocotron modes.
+/// (clips smooth peaks): prefer VanLeer when smooth growth modes must survive.
 struct Minmod {
   static constexpr int n_ghost = 2;
   ADC_HD Real operator()(Real a, Real b) const {
@@ -45,7 +45,7 @@ struct Minmod {
 /// van Leer limiter: smooth, 2 ghosts, better order at extrema than Minmod.
 ///
 /// Harmonic average of the differences: 2ab/(a+b) if same sign, 0 otherwise. No sign branch
-/// (no std::abs). Preferred over Minmod for preserving the Diocotron growth modes (less
+/// (no std::abs). Preferred over Minmod for preserving smooth growth modes (less
 /// dissipative at the density profile extrema).
 struct VanLeer {
   static constexpr int n_ghost = 2;

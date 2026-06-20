@@ -122,7 +122,7 @@ struct MagneticLorentzForce {
 
 /// SUM of two source bricks: S(U, aux) = A.apply(U, aux) + B.apply(U, aux). Allows COMPOSING
 /// several pointwise forces in the SINGLE Source slot of CompositeModel (e.g. electrostatic
-/// PotentialForce + magnetic MagneticLorentzForce for the diocotron). Generic over state size
+/// PotentialForce + magnetic MagneticLorentzForce for a magnetized E x B plasma). Generic over state size
 /// (StateVec addition is defined component-wise, cf. core/state.hpp).
 ///
 /// CONTRACT: pointwise SOURCE brick, device-callable (ADC_HD), no global state beyond the two

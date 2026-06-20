@@ -22,9 +22,9 @@
 /// @brief Iterative POLAR elliptic operator with anisotropic TENSOR coefficient (cross terms).
 ///        Path A stage 2a (foundational brick toward the polar Schur).
 ///
-/// CONTEXT. To build the FULL STIFF Euler-Poisson system in POLAR geometry (2D diocotron figure
-/// at high omega_c), the condensed Schur stage (CondensedSchurSourceStepper, level 4 of the Hoffart
-/// et al. splitting, arXiv:2510.11808) is needed on the polar side. The lock is the elliptic OPERATOR:
+/// CONTEXT. To build the FULL STIFF Euler-Poisson system in POLAR geometry (a strongly magnetized
+/// regime, high omega_c), the condensed Schur stage (CondensedSchurSourceStepper, level 4 of
+/// docs/SCHUR_CONDENSATION_DESIGN.md) is needed on the polar side. The lock is the elliptic OPERATOR:
 /// the Schur condenses a FULL TENSOR operator A = I + c rho B^{-1} where B^{-1} is the Lorentz
 /// rotation, which injects CROSS terms a_rt / a_tr (and a theta-dependent coefficient as soon as
 /// rho or B_z varies in theta). The existing DIRECT PolarPoissonSolver (FFT-in-theta + tridiag-in-r,
@@ -114,7 +114,7 @@
 /// REFUSED by an explicit guard (check_radial_columns, instead of a silent wrong result). The Jacobi
 /// fallback (PolarPrecond::Jacobi, per cell) has NO layout constraint: it accepts a full 2D TILING
 /// (cuts r AND theta), at the cost of an iteration count growing like 1/h^2. The theta splitting is
-/// legitimate anyway: theta is the PERIODIC direction and the azimuthal mode carrying the diocotron;
+/// legitimate anyway: theta is the PERIODIC direction and carries the unstable azimuthal mode;
 /// cutting r (few cells, strong radial coupling) would be counterproductive.
 /// SINGLE-RANK / SINGLE BOX: BIT-IDENTICAL path (all_reduce = identity in serial; the local_size()
 /// loop = the fab(0) loop when there is only one box covering the whole ring).
@@ -486,7 +486,8 @@ class PolarTensorKrylovSolver {
   /// construction. A caller setting a physical azimuthal BC (System::poisson_bc puts Dirichlet on all
   /// FOUR faces) would otherwise pollute the inhomogeneous matvec (fill_ghosts of the candidate
   /// solution with bc_ -> odd reflection at the theta=0/2pi seam): wrong operator at the junction.
-  /// Solver-side counterpart of the stepper phi_bc fix (spurious polar Hoffart drift, adc_cases ADC-62).
+  /// Solver-side counterpart of the stepper phi_bc fix (a spurious azimuthal-seam drift; see
+  /// docs/validation/HEADER_PROVENANCE.md).
   static BCRec force_theta_periodic(const BCRec& bc) {
     BCRec b = bc;
     b.ylo = BCType::Periodic; b.yhi = BCType::Periodic;

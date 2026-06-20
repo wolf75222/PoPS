@@ -198,7 +198,7 @@ template <class T>
 using fab_allocator = ManagedAllocator<T>;
 
 // Allocator for the MPI COMMUNICATION BUFFERS (sbuf/rbuf of fill_boundary), DISTINCT from
-// fab_allocator: definitely NO managed/device memory here. A CUDA-aware MPI (on ROMEO:
+// fab_allocator: definitely NO managed/device memory here. A CUDA-aware MPI (e.g.
 // OpenMPI 4.1.7, PML ob1 + BTL smcuda) detects a device/managed pointer (cuPointerGetAttribute)
 // and attempts a device->device transfer via CUDA IPC (cuIpcOpenMemHandle). Under GPU cgroup
 // isolation (srun --gpus-per-task=1, each rank sees ONLY its GPU as device 0), the IPC handle exported by
