@@ -357,6 +357,13 @@ class AmrRuntime {
     if (!aux_.empty()) apply_named_aux();  // reflect immediately if the hierarchy already exists
   }
 
+  /// Registers a per-field aux HALO policy (ADC-369) for the named component @p comp: solve_fields
+  /// applies it onto the COARSE aux AFTER the shared fill_ghosts, overriding only that component's
+  /// physical-face ghosts (periodic faces stay periodic). Coarse-level scope (fine patches touching the
+  /// domain boundary inherit the shared BC). No-op default. AMR counterpart of
+  /// System::set_aux_field_halo_component.
+  void set_named_aux_bc(int comp, AuxHaloPolicy policy) { named_aux_bc_[comp] = policy; }
+
   /// Registers an inter-species COUPLED SOURCE (DSL CoupledSource, P5 bytecode) on the runtime facade,
   /// counterpart of System::add_coupled_source. The ABI is FLAT (postfix bytecode): we resolve each
   /// (block, role) into (block index, component) then store a closure that, at each macro-step AFTER
@@ -548,6 +555,8 @@ class AmrRuntime {
     // phi/grad. This is what makes named aux survive a regrid (regrid re-solves -> re-applies).
     apply_named_aux();
     fill_ghosts(aux_[0], dom_, aux_bc_);
+    apply_named_aux_bc();  // ADC-369: per-field halo override on the coarse physical ghosts (after the
+                           // shared fill, before injection); no-op when no policy declared.
     // 4. coarse->fine injection of the aux (parent replicated only at level 1 if coarse replicated).
     for (int k = 1; k < nlev_; ++k)
       detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
@@ -987,6 +996,17 @@ class AmrRuntime {
     }
   }
 
+  // Per-field aux HALO override (ADC-369) on the COARSE aux, AFTER the shared fill_ghosts. Overrides
+  // only each declared component's physical-face ghosts (aux_halo_override keeps periodic faces
+  // periodic). No-op without a policy. Mirror of SystemFieldSolver::apply_named_aux_bc.
+  void apply_named_aux_bc() {
+    if (named_aux_bc_.empty() || aux_.empty()) return;
+    for (const auto& [comp, policy] : named_aux_bc_) {
+      if (comp >= aux_ncomp_) continue;
+      fill_physical_bc(aux_[0], dom_, aux_halo_override(aux_bc_, policy), comp);
+    }
+  }
+
   // Index of the block named @p name in the registry (-1 if absent). Counterpart of
   // AmrSystem::Impl::block_index (the facade names the blocks; the coupled sources target them by name,
   // resolved once at registration).
@@ -1053,6 +1073,9 @@ class AmrRuntime {
   // (n*n row-major). STATIC user fields re-applied by solve_fields each macro-step (so they persist
   // across regrid). Empty by default -> bit-identical. cf. set_named_aux / apply_named_aux.
   std::map<int, std::vector<Real>> named_aux_;
+  // Per-field aux HALO policy (ADC-369): component -> uniform boundary policy, applied to the coarse aux
+  // after the shared fill (apply_named_aux_bc). Empty by default -> bit-identical.
+  std::map<int, AuxHaloPolicy> named_aux_bc_;
   std::vector<CoupledSourceSpec> coupled_sources_;  // registered coupled sources (applied after transport)
   // UNION-TAGS REGRID (capstone Phase 2, C.6). regrid_every_ == 0 -> FROZEN hierarchy (default,
   // bit-identical). block_tag_: PER-BLOCK tag predicate (D1; same size as blocks_, empty = this block

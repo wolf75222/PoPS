@@ -109,6 +109,10 @@ struct AmrBuildParams {
   /// (n*n row-major). Seeded onto the coupler's shared aux at build (build_amr_compiled), like bz_field;
   /// the coupler re-applies them each update so they persist across regrid. Empty -> bit-identical.
   std::map<int, std::vector<double>> named_aux;
+  /// Per-field aux HALO policies (ADC-369): component -> uniform boundary policy, seeded onto the engine
+  /// at build (single-block coupler + multi-block runtime), applied after the shared aux fill. Empty ->
+  /// bit-identical.
+  std::map<int, AuxHaloPolicy> named_aux_bc;
   // Settings of the condensed stage TRANSPORTED by the ABI (audit wave 3, append-only like has_state).
   double schur_krylov_tol = 0.0;      ///< tolerance of the coarse Krylov solve (<= 0 = default 1e-10)
   int schur_krylov_max_iters = 0;     ///< iteration budget (<= 0 = default 400)
@@ -453,6 +457,13 @@ class AmrSystem {
   /// to @p comp and reshapes the array. Mono-rank facade (same as set_density). @throws if the system is
   /// already built, if @p comp is reserved (< kAuxNamedBase), or if @p field is not of size n*n.
   void set_aux_field_component(int comp, const std::vector<double>& field);
+
+  /// Declares a per-field aux HALO policy (ADC-369) for the NAMED component @p comp (>= kAuxNamedBase):
+  /// @p bc_type is adc::BCType (Foextrap=1 / Dirichlet=2), @p value the Dirichlet boundary value. Seeded
+  /// onto the engine at build and applied after the shared coarse aux fill (overriding only that
+  /// component's physical-face ghosts; periodic faces keep their wrap). AMR counterpart of
+  /// System::set_aux_field_halo_component. @throws on a reserved component or an unsupported type.
+  void set_aux_field_halo_component(int comp, int bc_type, double value);
 
   /// Enables the Schur-CONDENSED SOURCE STAGE (amr-schur path) on block @p name. AMR counterpart of
   /// System::set_source_stage: assembles and solves the GLOBAL electrostatic/Lorentz condensed operator

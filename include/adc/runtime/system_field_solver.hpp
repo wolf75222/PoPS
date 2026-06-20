@@ -137,6 +137,22 @@ class SystemFieldSolver {
   // REALLOCATION of the aux channel (ensure_aux_width) starts again from a zeroed MultiFab -> we re-apply
   // them then (apply_named_aux), exactly like apply_bz / apply_te.
   std::map<int, std::vector<Real>> named_aux_;
+  // Per-field aux HALO policy (ADC-369): key = canonical component (>= kAuxNamedBase), value = the
+  // uniform boundary policy declared via adc.AuxHalo. Applied by apply_named_aux_bc() AFTER the shared
+  // aux ghost fill, overriding only that component's PHYSICAL-face ghosts (periodic faces -- Cartesian
+  // periodic, polar theta -- keep their wrap). Empty -> shared aux BC for every field, bit-identical.
+  std::map<int, AuxHaloPolicy> named_aux_bc_;
+
+  /// Re-applies the per-field aux HALO policies (ADC-369) onto the shared channel, AFTER the shared
+  /// fill_ghosts/fill_boundary. For each declared component, overrides ONLY that component's
+  /// physical-face ghosts (aux_halo_override keeps periodic faces periodic). No-op when empty.
+  void apply_named_aux_bc() {
+    if (named_aux_bc_.empty()) return;  // hot-path fast exit (parity with the AMR counterparts)
+    for (const auto& kv : named_aux_bc_) {
+      if (kv.first >= owner_->aux_ncomp_) continue;
+      fill_physical_bc(owner_->aux, owner_->dom, aux_halo_override(owner_->bc_, kv.second), kv.first);
+    }
+  }
 
   /// Populates the B_z component (index kAuxBaseComps) of the shared channel from bz_field_, over the
   /// valid cells. No-op if B_z not provided or if no block reads it (base width). The
@@ -475,6 +491,7 @@ class SystemFieldSolver {
     // Aux ghosts: theta PERIODIC (joint 0/2pi), r PHYSICAL (extrapolation at the boundary). fill_ghosts
     // already routes through bc_ (xlo/xhi Foextrap, ylo/yhi Periodic) -> correct periodic azimuthal halo.
     fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
+    apply_named_aux_bc();  // ADC-369: per-field halo override on the RADIAL faces (theta stays periodic)
   }
 
   /// Solves the system Poisson then DERIVES the aux = (phi, grad phi[, B_z, T_e]). Routes to
@@ -547,6 +564,7 @@ class SystemFieldSolver {
       fill_boundary(owner_->aux, owner_->dom, owner_->per_);
     else
       fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);  // extrapolation at the boundary (wall / free outflow)
+    apply_named_aux_bc();  // ADC-369: per-field halo override (after the shared fill; no-op if none)
     adc_sf_mark("solve_fields: end (fill ghosts aux)");
   }
 

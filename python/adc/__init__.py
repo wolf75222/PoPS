@@ -296,7 +296,7 @@ def doctor(verbose=True):
 # the generic headers of adc_cpp. It is therefore neither re-exported here nor present in the _adc module.
 __all__ = [
     "System", "SystemConfig", "AmrSystem", "AmrSystemConfig", "Model", "CompositeModel",
-    "CartesianMesh", "PolarMesh",
+    "CartesianMesh", "PolarMesh", "AuxHalo",
     "Scalar", "FluidState", "ExB", "CompressibleFlux", "IsothermalFlux",
     "NoSource", "PotentialForce", "GravityForce", "MagneticLorentzForce", "PotentialMagneticForce",
     "ChargeDensity", "BackgroundDensity", "GravityCoupling",
@@ -410,6 +410,37 @@ class PolarMesh:
         config.r_max = self.r_max
         config.theta_boxes = self.theta_boxes
         config.n = self.nr  # n serves as the default size for the rest of the config (diagnostics)
+
+
+# --- Aux halo policy ("polar grid"/generalisation, ADC-369) ---------------
+class AuxHalo:
+    """Per-field aux halo/ghost boundary policy, passed to set_aux_field(..., halo=adc.AuxHalo(...)).
+
+    A model-NAMED aux field (m.aux_field(name)) normally inherits the SHARED aux ghost behavior derived
+    from the potential phi (periodic preserved, otherwise zero-gradient). adc.AuxHalo lets that ONE
+    field declare its own boundary policy instead, applied AFTER the shared fill to its component only:
+
+    - ``kind='foextrap'`` : zero-gradient (ghost = mirror interior cell);
+    - ``kind='dirichlet'`` : fixed boundary value (ghost = 2*value - interior), ``value`` the imposed value.
+
+    The policy is applied UNIFORMLY to the NON-PERIODIC faces; periodic faces (a fully periodic domain,
+    the polar theta direction) keep their wrap, so a per-field policy never breaks the domain's periodic
+    structure. Works on System (Cartesian + polar) and the AMR coarse level. No halo (default) -> the
+    shared aux BC, strictly bit-identical. Per-face asymmetric BC is a follow-up.
+    """
+
+    # Mirrors adc::BCType on the C++ side: Periodic=0, Foextrap=1, Dirichlet=2.
+    _KINDS = {"foextrap": 1, "dirichlet": 2}
+
+    def __init__(self, kind, value=0.0):
+        if kind not in self._KINDS:
+            raise ValueError("AuxHalo: kind must be 'foextrap' or 'dirichlet' (got %r)" % (kind,))
+        self.kind = kind
+        self.bc_type = self._KINDS[kind]
+        self.value = float(value)
+
+    def __repr__(self):
+        return "AuxHalo(%r, value=%g)" % (self.kind, self.value)
 
 
 # --- State bricks ---------------------------------------------------------
@@ -1743,16 +1774,22 @@ class System:
                 % (name, block, known))
         return table[name]
 
-    def set_aux_field(self, block, name, field):
+    def set_aux_field(self, block, name, field, halo=None):
         """Set a NAMED aux field (ADC-70 phase 1) of a block: @p name must have been declared by the
         model via m.aux_field(name) (and the block added via add_equation). @p field: 2D array (ny, nx)
         or flat (n*n), row-major. The field is STATIC (user-supplied, like B_z) and PERSISTS
         from one step to the next (solve_fields never rewrites named components). For B_z / T_e,
-        use their dedicated paths (set_magnetic_field / set_electron_temperature_from)."""
+        use their dedicated paths (set_magnetic_field / set_electron_temperature_from).
+
+        @p halo (ADC-369): an optional adc.AuxHalo declaring this field's own ghost boundary policy
+        (foextrap / dirichlet), applied to the non-periodic faces after the shared aux fill. Default
+        None inherits the shared aux BC (bit-identical)."""
         import numpy as np
         comp = self._resolve_aux_field(block, name)
         arr = np.asarray(field, dtype=float)
         self._s.set_aux_field_component(comp, arr.reshape(-1))
+        if halo is not None:
+            self._s.set_aux_field_halo_component(comp, halo.bc_type, halo.value)
 
     def aux_field(self, block, name):
         """Read a NAMED aux field (ADC-70 phase 1) of a block -> 2D array (ny, nx). Equals 0 everywhere as
@@ -2469,6 +2506,15 @@ def capabilities():
                 # a named field participates ; a per-field CONFIGURABLE radius is a follow-up).
                 "halo_radius": 1,
                 "persistent": True,
+                # Per-field aux HALO/BC policy (ADC-369): a named field can declare its own ghost BC via
+                # adc.AuxHalo(kind, value), applied to the NON-PERIODIC faces (periodic faces -- periodic
+                # domain, polar theta -- keep their wrap). Uniform over the 4 faces; per-face asymmetric
+                # BC is a follow-up. Default (no halo) inherits the shared aux BC, bit-identical.
+                "halo_policy": {
+                    "kinds": ["inherit", "foextrap", "dirichlet"],
+                    "faces": "uniform (non-periodic faces ; periodic faces keep their wrap)",
+                    "backends": ["system_cartesian", "system_polar", "amr_coarse"],
+                },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
                          "AMR path needs backend='production' target='amr_system', on polar a "
@@ -3051,15 +3097,21 @@ class AmrSystem:
                 % (name, block, sorted(table)))
         return table[name]
 
-    def set_aux_field(self, block, name, field):
+    def set_aux_field(self, block, name, field, halo=None):
         """Set a model-NAMED aux field of @p block (declared via m.aux_field(name)) on the AMR
         hierarchy. AMR counterpart of System.set_aux_field. @p field: 2D array (n, n) on the COARSE
         base level; it is STATIC (re-applied each step, injected to the fine levels, survives a regrid).
-        Call BEFORE the first step (like set_density). Mono-rank facade."""
+        Call BEFORE the first step (like set_density). Mono-rank facade.
+
+        @p halo (ADC-369): an optional adc.AuxHalo declaring this field's own coarse-level ghost
+        boundary policy (foextrap / dirichlet), applied to the non-periodic faces after the shared aux
+        fill. Default None inherits the shared aux BC (bit-identical)."""
         import numpy as np
         comp = self._resolve_aux_field(block, name)
         arr = np.asarray(field, dtype=float)
         self._s.set_aux_field_component(comp, arr.reshape(-1))
+        if halo is not None:
+            self._s.set_aux_field_halo_component(comp, halo.bc_type, halo.value)
 
     def add_coupling(self, coupling):
         """Add a generic inter-species COUPLED SOURCE (adc.dsl.CoupledSource(...).compile(...))

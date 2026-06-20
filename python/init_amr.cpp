@@ -146,6 +146,13 @@ void init_amr(py::module_& m) {
             s.set_aux_field_component(comp, flat(arr));
           },
           py::arg("comp"), py::arg("field"))
+      // ADC-369: per-field aux halo policy (bc_type = adc::BCType Foextrap=1 / Dirichlet=2).
+      .def(
+          "set_aux_field_halo_component",
+          [](AmrSystem& s, int comp, int bc_type, double value) {
+            s.set_aux_field_halo_component(comp, bc_type, value);
+          },
+          py::arg("comp"), py::arg("bc_type"), py::arg("value"))
       // ADC-214: Python surface UNCHANGED (same flat krylov_* kwargs / descriptors, same
       // defaults; no bz_aux_component on the AMR side). The lambda assembles the SourceStageOptions POD.
       .def(

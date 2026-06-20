@@ -39,57 +39,62 @@ namespace detail {
 // trips up device kernel emission under nvcc. Body identical to the old lambdas (Foextrap: copy of
 // the mirror interior cell; Dirichlet: 2 v - reflection) -> bit-identical.
 // x low face: i = lo - k (k = lo - i), Dirichlet mirror at 2 lo - i - 1.
+// Component range [c0, c1): the WHOLE channel for the all-component fill, or a single component for the
+// per-field aux halo override (ADC-369). The loop bounds are the only difference; the all-channel path
+// (c0=0, c1=ncomp) stays bit-identical.
 struct BCFaceXLoKernel {
   Array4 a;
-  int nc, lo;
+  int c0, c1, lo;
   bool foe;
   Real val;
   ADC_HD void operator()(int i, int j) const {
-    for (int c = 0; c < nc; ++c)
+    for (int c = c0; c < c1; ++c)
       a(i, j, c) = foe ? a(lo, j, c) : 2 * val - a(2 * lo - i - 1, j, c);
   }
 };
 struct BCFaceXHiKernel {
   Array4 a;
-  int nc, hi;
+  int c0, c1, hi;
   bool foe;
   Real val;
   ADC_HD void operator()(int i, int j) const {
-    for (int c = 0; c < nc; ++c)
+    for (int c = c0; c < c1; ++c)
       a(i, j, c) = foe ? a(hi, j, c) : 2 * val - a(2 * hi - i + 1, j, c);
   }
 };
 struct BCFaceYLoKernel {
   Array4 a;
-  int nc, lo;
+  int c0, c1, lo;
   bool foe;
   Real val;
   ADC_HD void operator()(int i, int j) const {
-    for (int c = 0; c < nc; ++c)
+    for (int c = c0; c < c1; ++c)
       a(i, j, c) = foe ? a(i, lo, c) : 2 * val - a(i, 2 * lo - j - 1, c);
   }
 };
 struct BCFaceYHiKernel {
   Array4 a;
-  int nc, hi;
+  int c0, c1, hi;
   bool foe;
   Real val;
   ADC_HD void operator()(int i, int j) const {
-    for (int c = 0; c < nc; ++c)
+    for (int c = c0; c < c1; ++c)
       a(i, j, c) = foe ? a(i, hi, c) : 2 * val - a(i, 2 * hi - j + 1, c);
   }
 };
 }  // namespace detail
 
 /// Fills the OUT-OF-domain ghosts of the NON-periodic faces of @p mf according to @p bc (Foextrap or
-/// Dirichlet), over all components. No-op if there is no ghost or everything is periodic. PRECONDITION:
-/// fill_boundary has already filled the interior/periodic (the x-faces read the y/theta ghosts already
-/// filled to extend the radial BC into the halo, and the y-faces read the x ghosts for the corners).
-/// CORNERS of the 9-point stencil: the x-face BC is extended to the EXTENDED j range (y/theta ghosts
-/// included), so that the corner (x-physical CROSSED with y-periodic/neighbor) -- read by the cross
-/// terms of a 9-point operator (e.g. PolarTensorKrylovSolver) -- is correct even in MULTI-BOX.
-inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
-                             const BCRec& bc) {
+/// Dirichlet), for the COMPONENT RANGE [c0, c1). No-op if there is no ghost or everything is periodic.
+/// PRECONDITION: fill_boundary has already filled the interior/periodic (the x-faces read the y/theta
+/// ghosts already filled to extend the radial BC into the halo, and the y-faces read the x ghosts for
+/// the corners). CORNERS of the 9-point stencil: the x-face BC is extended to the EXTENDED j range
+/// (y/theta ghosts included), so that the corner (x-physical CROSSED with y-periodic/neighbor) -- read
+/// by the cross terms of a 9-point operator (e.g. PolarTensorKrylovSolver) -- is correct even in
+/// MULTI-BOX. The all-component entry point fill_physical_bc(mf, domain, bc) and the single-component
+/// override fill_physical_bc(mf, domain, bc, comp) (ADC-369, per-field aux halo) both delegate here.
+inline void fill_physical_bc_range(MultiFab& mf, const Box2D& domain, const BCRec& bc, int c0,
+                                   int c1) {
   const int ng = mf.n_grow();
   if (ng == 0) return;
   // All periodic: fill_boundary has already done everything, nothing to read/write here (and we
@@ -97,12 +102,16 @@ inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
   if (bc.xlo == BCType::Periodic && bc.xhi == BCType::Periodic &&
       bc.ylo == BCType::Periodic && bc.yhi == BCType::Periodic)
     return;
+  // Clamp the component range to the channel (defensive; the per-field override passes a single,
+  // facade-validated component). An empty range is a no-op.
+  if (c0 < 0) c0 = 0;
+  if (c1 > mf.ncomp()) c1 = mf.ncomp();
+  if (c0 >= c1) return;
   // Physical edges on DEVICE (for_each_cell -> kernel): ghost = mirror cell (Foextrap: copy of the
   // 1st interior; Dirichlet: 2 v - reflection). Ghost index <-> layer: for x low, i = lo-k so the
   // Dirichlet mirror is 2 lo - i - 1 (k = lo - i). No more device_fence nor host access: these
   // kernels order after copy_shifted (same execution space), and the y-faces (i EXTENDED for the
   // corners) order after the x-faces on the same stream.
-  const int nc = mf.ncomp();
   for (int li = 0; li < mf.local_size(); ++li) {
     Fab2D& F = mf.fab(li);
     const Box2D v = F.box();
@@ -130,14 +139,14 @@ inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
       const bool foe = bc.xlo == BCType::Foextrap;
       const Real val = bc.xlo_val;
       for_each_cell(Box2D{{lo - ng, jglo}, {lo - 1, jghi}},
-                    detail::BCFaceXLoKernel{a, nc, lo, foe, val});
+                    detail::BCFaceXLoKernel{a, c0, c1, lo, foe, val});
     }
     if (bc.xhi != BCType::Periodic && v.hi[0] == domain.hi[0]) {
       const int hi = domain.hi[0];
       const bool foe = bc.xhi == BCType::Foextrap;
       const Real val = bc.xhi_val;
       for_each_cell(Box2D{{hi + 1, jglo}, {hi + ng, jghi}},
-                    detail::BCFaceXHiKernel{a, nc, hi, foe, val});
+                    detail::BCFaceXHiKernel{a, c0, c1, hi, foe, val});
     }
 
     // --- y-faces, over the EXTENDED i range (corners via the already-filled x-ghosts) ---
@@ -147,16 +156,54 @@ inline void fill_physical_bc(MultiFab& mf, const Box2D& domain,
       const bool foe = bc.ylo == BCType::Foextrap;
       const Real val = bc.ylo_val;
       for_each_cell(Box2D{{iglo, lo - ng}, {ighi, lo - 1}},
-                    detail::BCFaceYLoKernel{a, nc, lo, foe, val});
+                    detail::BCFaceYLoKernel{a, c0, c1, lo, foe, val});
     }
     if (bc.yhi != BCType::Periodic && v.hi[1] == domain.hi[1]) {
       const int hi = domain.hi[1];
       const bool foe = bc.yhi == BCType::Foextrap;
       const Real val = bc.yhi_val;
       for_each_cell(Box2D{{iglo, hi + 1}, {ighi, hi + ng}},
-                    detail::BCFaceYHiKernel{a, nc, hi, foe, val});
+                    detail::BCFaceYHiKernel{a, c0, c1, hi, foe, val});
     }
   }
+}
+
+/// Fills the physical-face ghosts of ALL components per @p bc (historical entry point, bit-identical).
+inline void fill_physical_bc(MultiFab& mf, const Box2D& domain, const BCRec& bc) {
+  fill_physical_bc_range(mf, domain, bc, 0, mf.ncomp());
+}
+
+/// ADC-369: fills the physical-face ghosts of a SINGLE component @p comp per @p bc -- the per-field aux
+/// halo override. Applied AFTER the shared aux fill so a model-named field (component kAuxNamedBase+k)
+/// can carry its own boundary policy (foextrap / dirichlet), overriding the shared aux BC for that
+/// component only. It can even override the domain periodicity for that component (a Foextrap/Dirichlet
+/// face re-fills a ghost that the shared periodic wrap had filled). Default paths never call this.
+inline void fill_physical_bc(MultiFab& mf, const Box2D& domain, const BCRec& bc, int comp) {
+  fill_physical_bc_range(mf, domain, bc, comp, comp + 1);
+}
+
+/// Per-field aux halo policy (ADC-369): a UNIFORM boundary policy for ONE model-named aux component,
+/// declared via adc.AuxHalo. It is applied (aux_halo_override + the single-component fill_physical_bc)
+/// to the NON-PERIODIC faces only -- periodic faces (a fully-periodic Cartesian domain, the polar
+/// theta direction) keep their wrap, so a per-field policy never breaks the domain's periodic structure.
+/// type is Foextrap (zero-gradient) or Dirichlet; value is the Dirichlet boundary value (ignored for
+/// Foextrap). Default (no policy declared) leaves the shared aux BC untouched -> bit-identical.
+struct AuxHaloPolicy {
+  BCType type = BCType::Foextrap;
+  Real value = Real(0);
+};
+
+/// Builds the effective override BCRec for a per-field aux halo: starts from the SHARED aux BC @p shared
+/// (so periodic faces stay periodic) and replaces each NON-PERIODIC face with the policy @p p
+/// (type + Dirichlet value). Feeding the result to fill_physical_bc(mf, domain, bc, comp) re-fills only
+/// that component's physical-face ghosts with the field's own policy.
+inline BCRec aux_halo_override(const BCRec& shared, const AuxHaloPolicy& p) {
+  BCRec b = shared;
+  if (b.xlo != BCType::Periodic) { b.xlo = p.type; b.xlo_val = p.value; }
+  if (b.xhi != BCType::Periodic) { b.xhi = p.type; b.xhi_val = p.value; }
+  if (b.ylo != BCType::Periodic) { b.ylo = p.type; b.ylo_val = p.value; }
+  if (b.yhi != BCType::Periodic) { b.yhi = p.type; b.yhi_val = p.value; }
+  return b;
 }
 
 /// COMPLETE ghost filling: fill_boundary (interior + periodic, periodicity deduced from

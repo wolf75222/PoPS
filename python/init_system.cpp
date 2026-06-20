@@ -254,6 +254,14 @@ void init_system(py::module_& m) {
             s.set_aux_field_component(comp, flat(arr));
           },
           py::arg("comp"), py::arg("field"))
+      // ADC-369: per-field aux halo policy (bc_type = adc::BCType Foextrap=1 / Dirichlet=2). The Python
+      // facade (adc.System.set_aux_field(..., halo=adc.AuxHalo(...))) resolves name -> comp and calls this.
+      .def(
+          "set_aux_field_halo_component",
+          [](System& s, int comp, int bc_type, double value) {
+            s.set_aux_field_halo_component(comp, bc_type, value);
+          },
+          py::arg("comp"), py::arg("bc_type"), py::arg("value"))
       .def(
           "aux_field_component",
           [](const System& s, int comp) {

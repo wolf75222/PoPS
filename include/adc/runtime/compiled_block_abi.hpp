@@ -70,6 +70,20 @@ inline LocalGrid make_grid(int n, double dx, double dy, bool periodic, const dou
       fill_boundary(aux, dom, Periodicity{true, true});
     else
       fill_ghosts(aux, dom, bc);
+    // ADC-369: per-field aux HALO override. The marshaled aux_in carries an APPEND-ONLY tail of
+    // 2*naux doubles AFTER the naux*nn valid cells: (type, value) per component (type 0 = none/inherit,
+    // 1 = Foextrap, 2 = Dirichlet -- adc::BCType). For each declared component, re-fill ITS physical-face
+    // ghosts with the field's own policy (aux_halo_override keeps periodic faces periodic, so a periodic
+    // domain is a no-op). The tail is appended by the System marshaling; an all-zero tail is bit-identical.
+    const std::size_t tail = static_cast<std::size_t>(naux) * nn;
+    for (int c = 0; c < naux; ++c) {
+      const int t = static_cast<int>(aux_in[tail + static_cast<std::size_t>(2) * c]);
+      if (t == static_cast<int>(BCType::Foextrap) || t == static_cast<int>(BCType::Dirichlet))
+        fill_physical_bc(aux, dom,
+                         aux_halo_override(bc, AuxHaloPolicy{static_cast<BCType>(t),
+                             static_cast<Real>(aux_in[tail + static_cast<std::size_t>(2) * c + 1])}),
+                         c);
+    }
   }
   return LocalGrid{dom, geom, ba, dm, bc, periodic, std::move(aux)};
 }

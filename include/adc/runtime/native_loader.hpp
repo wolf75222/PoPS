@@ -6,6 +6,7 @@
 #include <adc/mesh/box_array.hpp>
 #include <adc/mesh/geometry.hpp>
 #include <adc/mesh/multifab.hpp>
+#include <adc/mesh/physical_bc.hpp>  // AuxHaloPolicy (ADC-369: per-field aux halo tail marshaling)
 #include <adc/runtime/abi_key.hpp>          // adc::abi_key (ABI guard for the native loader)
 #include <adc/runtime/dynamic_model.hpp>    // IModel: model loaded at runtime (dynamic block)
 #include <adc/runtime/grid_context.hpp>     // GridContext
@@ -37,6 +38,26 @@
 
 namespace adc {
 namespace native_loader {
+
+/// ADC-369: marshal the aux for a COMPILED block -- the @p naux valid components (component-major,
+/// like copy_state) PLUS an APPEND-ONLY tail of 2*naux doubles: (type, value) per component, carrying
+/// the per-field halo policy that make_grid applies to that component's physical-face ghosts. The
+/// tail is all-zero (no override) by default -> the .so applies the shared aux BC, bit-identical. The
+/// tail offset (naux*nn) matches make_grid's read (it is told the same naux). The header signature
+/// (abi_key) bumps when this contract changes, so an old .so is never mixed with a tail-carrying array.
+template <class Impl>
+inline std::vector<double> marshal_aux_halo(Impl* P, int naux) {
+  std::vector<double> a = P->copy_state(P->aux, naux);
+  const std::size_t nn = static_cast<std::size_t>(P->cfg.n) * static_cast<std::size_t>(P->cfg.n);
+  a.resize(static_cast<std::size_t>(naux) * nn + static_cast<std::size_t>(2) * naux, 0.0);
+  for (const auto& kv : P->fields_.named_aux_bc_) {
+    if (kv.first < 0 || kv.first >= naux) continue;
+    const std::size_t base = static_cast<std::size_t>(naux) * nn + static_cast<std::size_t>(2) * kv.first;
+    a[base] = static_cast<double>(static_cast<int>(kv.second.type));
+    a[base + 1] = static_cast<double>(kv.second.value);
+  }
+  return a;
+}
 
 /// MUSCL limited slope of a cell from backward difference @p am and forward @p ap. ADC_HD
 /// (device-callable, without std::). @p recon: 0 = order 1 (zero slope), 1 = minmod (TVD), 2 = van Leer.
@@ -490,13 +511,14 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   const std::string lim = limiter, riem = riemann;
 
   std::function<void(MultiFab&, MultiFab&)> rhs_into =
-      [P, lib, res_fn, res_p_fn, pv, nv, n, dx, dy, per, lim, riem, recon_prim,
+      [P, lib, res_fn, res_p_fn, pv, nv, naux, n, dx, dy, per, lim, riem, recon_prim,
        pos_floor](MultiFab& U, MultiFab& R) {
         // HOST path (compiled block .so): same MPI guard as add_poisson. On a rank without a local
         // box (local_size()==0 at np>1) there is nothing to marshal; the owner rank carries
         // the full physics. No collective here -> one-sided no-op, no deadlock.
         if (U.local_size() == 0) return;
-        std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, P->aux_ncomp_);
+        // ADC-369: marshal naux comps + the per-field halo tail (read by make_grid in the .so).
+        std::vector<double> u = P->copy_state(U, nv), a = marshal_aux_halo(P, naux);
         std::vector<double> r(static_cast<std::size_t>(nv) * n * n, 0.0);
         if (pv || pos_floor > 0)  // `_p` variant: RUNTIME params (P7-b) and/or positivity (ADC-76)
           res_p_fn(u.data(), r.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(),
@@ -507,11 +529,11 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
         P->write_state(R, nv, r);
       };
   std::function<void(MultiFab&, Real, int)> advance =
-      [P, lib, adv_fn, adv_p_fn, pv, nv, n, dx, dy, per, lim, riem, recon_prim, imex,
+      [P, lib, adv_fn, adv_p_fn, pv, nv, naux, n, dx, dy, per, lim, riem, recon_prim, imex,
        pos_floor](MultiFab& U, Real dt, int nsub) {
         // Same MPI guard: empty rank -> no-op. No collective -> without deadlock.
         if (U.local_size() == 0) return;
-        std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, P->aux_ncomp_);
+        std::vector<double> u = P->copy_state(U, nv), a = marshal_aux_halo(P, naux);  // ADC-369 tail
         if (pv || pos_floor > 0)  // `_p` variant: RUNTIME params (P7-b) and/or positivity (ADC-76)
           adv_p_fn(u.data(), a.data(), n, dx, dy, per, lim.c_str(), riem.c_str(), recon_prim, imex,
                    static_cast<double>(dt), nsub, pv ? pv->data() : nullptr,
@@ -522,10 +544,10 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
         P->write_state(U, nv, u);
       };
   std::function<Real(const MultiFab&)> max_speed =
-      [P, lib, max_fn, max_p_fn, pv, nv, n, dx, dy, per](const MultiFab& U) -> Real {
+      [P, lib, max_fn, max_p_fn, pv, nv, naux, n, dx, dy, per](const MultiFab& U) -> Real {
         // Same MPI guard: empty rank -> local speed 0. The downstream all_reduce_max takes the global max.
         if (U.local_size() == 0) return Real(0);
-        std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, P->aux_ncomp_);
+        std::vector<double> u = P->copy_state(U, nv), a = marshal_aux_halo(P, naux);  // ADC-369 tail
         if (pv)  // RUNTIME params (P7-b)
           return max_p_fn(u.data(), a.data(), n, dx, dy, per, pv->data(),
                           static_cast<int>(pv->size()));
@@ -618,6 +640,8 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
       // Meme garde MPI que les autres fermetures marshalees : rang sans box locale -> no-op
       // unilateral (pas de collectif ici, aucun risque d'interblocage).
       if (U.local_size() == 0) return;
+      // NB (ADC-369): the projection reads the aux POINTWISE (compiled_block_abi::pointwise_project,
+      // no make_grid, no ghost) -> it needs NO per-field halo tail, so we marshal the plain aux here.
       std::vector<double> u = P->copy_state(U, nv), a = P->copy_state(P->aux, P->aux_ncomp_);
       proj_fn(u.data(), a.data(), n, pv ? pv->data() : nullptr,
               pv ? static_cast<int>(pv->size()) : 0);
