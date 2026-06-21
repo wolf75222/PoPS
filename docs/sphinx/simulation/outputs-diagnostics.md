@@ -41,8 +41,12 @@ The facade also writes files directly:
 - `sim.write(path, format="vtk", step=None, fields=None, parallel=False)`: visualization output.
   `format="vtk"` writes a cartesian ImageData `.vti` (one CellData array per conservative variable
   of each block plus `phi`, openable in ParaView / VisIt); `format="npz"` writes a compressed
-  `np.savez` archive (any backend, any geometry). `step` adds a numbered suffix; `fields` selects a
-  subset of blocks (`None` = all).
+  `np.savez` archive (any backend, any geometry); `format="hdf5"` writes one group per block (HDF5
+  output via the Python h5py facade, an optional dependency: a `RuntimeError` points to `npz` if
+  `h5py` is absent). `step` adds a numbered suffix; `fields` selects a subset of blocks (`None` =
+  all). `parallel=True` is valid only with `format="hdf5"` (else `ValueError`): per-rank hyperslabs
+  via `h5py` MPI plus `mpi4py`, with true parallelism only for multi-box runs (a cartesian `System`
+  is mono-box, so rank 0 writes it). The backend / format gate matrix is `adc.capabilities()["io"]`.
 - `sim.checkpoint(path, parallel=False)`: restartable npz checkpoint (full conservative state of
   every block plus the clock). Reload it with `sim.restart(path)` after replaying the same
   composition.
@@ -56,5 +60,6 @@ sim.write("out/state", format="vtk", step=42)
 sim.checkpoint("out/run.ckpt")
 ```
 
-Condensed API reference: [api](../reference/python-api.md). Complete recipes (figures, AMR):
+Condensed API reference: [api](../reference/python-api.md). Open a dump in ParaView:
+[visualize with ParaView](../how-to/visualize-with-paraview.md). Complete recipes (figures, AMR):
 [examples](../getting-started/repository-layout.md). A->Z tutorial: [tutoriels](../getting-started/tutorial.md).

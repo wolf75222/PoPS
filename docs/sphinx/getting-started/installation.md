@@ -25,6 +25,45 @@ Update: re-run the script (or `conda env update -f environment.yml --prune`).
 The env interpreter builds and imports the module: no cpython ABI divergence.
 Standard: C++20 (Kokkos, the only on-node backend, is compiled under nvcc for the Cuda target).
 
+(macos-fresh-install)=
+
+## macOS: fresh install
+
+On macOS the `adc` conda env carries Python, NumPy, Kokkos and the build tooling; the C++
+compiler is the system AppleClang (`setup_env.sh` pins `CC`/`CXX` to `/usr/bin/clang` in the
+env, far faster than a Homebrew LLVM at the head of PATH).
+
+**1. Xcode command line tools** (provide AppleClang; `setup_env.sh` stops with a message if
+they are missing).
+
+```bash
+xcode-select --install
+```
+
+**2. Miniforge** (conda-forge installer). Skip if conda is already on the PATH.
+
+```bash
+curl -L -o Miniforge3.sh \
+  "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
+bash Miniforge3.sh -b -p "$HOME/miniforge3"
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda init "$(basename "$SHELL")"        # then open a new shell
+```
+
+**3. Clone, create the env, build, check.**
+
+```bash
+git clone https://github.com/wolf75222/adc_cpp.git ~/adc_cpp
+cd ~/adc_cpp
+bash scripts/setup_env.sh             # CPU Kokkos; pins AppleClang in the env
+conda activate adc
+bash scripts/build_python.sh          # one-command build + install, ends on adc.doctor()
+python docs/sphinx/tutorials/diocotron_tutorial.py --quick
+```
+
+For CPU multithreading, the conda-forge `kokkos` is Serial-only; build a Serial+OpenMP Kokkos
+into the env with `bash scripts/kokkos_openmp_conda.sh` (see [Threads](#threads)).
+
 (linux-ubuntu-fresh-install)=
 
 ## Linux and Ubuntu: fresh install
@@ -87,6 +126,37 @@ python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 
 If a step fails, `adc.doctor()` names the broken link and prints the copy-paste fix; the
 [troubleshooting table](#troubleshooting) below maps each observed error to its remedy.
+
+(update-clean-rebuild)=
+
+## Update or clean rebuild
+
+After a `git pull`, or to rebuild from clean caches, the same two scripts re-sync the env and
+the module (works the same on macOS and Linux). `adc.doctor()` reports a module left stale by
+the pull (its baked header signature no longer matches the tree) before you hit it at runtime.
+
+```bash
+cd ~/adc_cpp
+git pull
+
+conda activate adc
+python -m pip uninstall -y adc-cpp || true   # drop any pip-installed copy
+unset PYTHONPATH                             # so an old build tree cannot mask the install
+
+rm -rf build/cp3* build-py build-py-kokkos build-py-conda .adc_cache   # wheel + DSL caches
+
+bash scripts/setup_env.sh                     # refresh the env + toolchain pins
+conda activate adc
+bash scripts/build_python.sh                  # rebuild + reinstall, ends on adc.doctor()
+
+python -c "import adc; print(adc.__file__)"
+python -c "import adc; adc.doctor()"          # expect: => healthy environment
+python docs/sphinx/tutorials/diocotron_tutorial.py --quick
+```
+
+`build_python.sh --fresh` does the cache wipe for you (drops the scikit-build wheel cache and
+clears ccache for a truly cold build); the explicit `rm -rf` above also removes the preset
+build trees (`build-py*`) and the DSL cache (`.adc_cache`).
 
 ## Python module
 
@@ -168,6 +238,8 @@ cmake -S . -B build-py -G Ninja -DADC_BUILD_PYTHON=ON -DADC_BUILD_TESTS=OFF \
 cmake --build build-py --target _adc -j
 ```
 
+(threads)=
+
 ### Threads
 
 The number of threads is not a model argument: you need a module built against a Kokkos
@@ -213,7 +285,7 @@ The per-backend test count is kept in
 | `ADC_BUILD_PYTHON` | `OFF` | pybind11 module `adc` |
 | `ADC_USE_KOKKOS` | `ON` | only on-node backend, **required** (`OFF` = fatal error); FetchContent if not installed |
 | `ADC_USE_MPI` | `OFF` | distributed `comm` seam |
-| `ADC_USE_HDF5` | `OFF` | HDF5 `DataWriter` |
+| `ADC_USE_HDF5` | `OFF` | links HDF5 + defines `ADC_HAS_HDF5`; HDF5 *output* itself goes through the Python `h5py` facade (`sim.write(format="hdf5")`), not a C++ writer |
 | `ADC_BUILD_BENCH` | `OFF` | profiling harness (`bench/`) |
 | `ADC_INSTALL` | `ON` at top-level | `cmake --install` rules + `find_package(adc)` |
 | `ADC_PY_LTO` | `OFF` | ThinLTO of the module (`OFF` = fast build) |

@@ -29,11 +29,18 @@ the compatible transport brick. It is the `state=` argument of `adc.Model(...)`.
 |---|---|---|---|
 | `Scalar` | `adc.Scalar()` | 1 conservative variable `n` (transported density) ; primitive = conservative (`n`). | `ExB` |
 | `FluidState` (compressible) | `adc.FluidState(kind="compressible", gamma=1.4)` | 4 variables `[rho, rho_u, rho_v, E]`, primitives `[rho, u, v, p]` ; carries `gamma` (reported into `spec.gamma`). | `CompressibleFlux` |
-| `FluidState` (isothermal) | `adc.FluidState(kind="isothermal", cs2=0.5)` | 3 variables `[rho, rho_u, rho_v]`, primitives `[rho, u, v]` ; carries `cs2` (reported into `spec.cs2`). | `IsothermalFlux` |
+| `FluidState` (isothermal) | `adc.FluidState(kind="isothermal", cs2=0.5, vacuum_floor=0.0)` | 3 variables `[rho, rho_u, rho_v]`, primitives `[rho, u, v]` ; carries `cs2` (reported into `spec.cs2`) and `vacuum_floor` (reported into `spec.vacuum_floor`). | `IsothermalFlux` |
 
 `FluidState(kind=...)` only accepts `"compressible"` or `"isothermal"` (any other value raises
 a `ValueError`). The `gamma` / `cs2` arguments are stored even when the `kind` does not use them
 ; only the one of the chosen `kind` is reported into the spec.
+
+`vacuum_floor` (isothermal only, native path only) bounds the velocity at quasi-vacuum : when
+`> 0` the model reads `u = m / max(rho, vacuum_floor)`, capping the wave speed and the advective
+flux where the flow evacuates the background (`rho -> ~0`). It leaves the conserved state
+untouched and is `0` (inactive, bit-identical) by default. It is distinct from the spatial
+Zhang-Shu `positivity_floor` (the reconstruction limiter) : the two address different failure
+modes and are enabled separately.
 
 ## Transport
 
@@ -60,6 +67,8 @@ The source brick adds the pointwise source term `S(U, aux)` to the block's RHS. 
 | `NoSource` | `adc.NoSource()` | nothing. Sets `spec.source="none"`. C++ struct `adc::NoSource`. | 1 |
 | `PotentialForce` | `adc.PotentialForce(charge=1.0)` | Potential force `(q/m) rho E` on the momentum (+ work term if 4 variables). Sets `spec.source="potential"`, `spec.qom=charge`. C++ struct `adc::PotentialForce`. | 3 |
 | `GravityForce` | `adc.GravityForce()` | Gravitational force `rho g` (+ work if 4 variables). Sets `spec.source="gravity"`. C++ struct `adc::GravityForce`. | 3 |
+| `MagneticLorentzForce` | `adc.MagneticLorentzForce(charge=1.0)` | Magnetic Lorentz force `q (v x B_z)` on the momentum (explicit regime, no work). Reads `B_z` (set via `System.set_magnetic_field`). Sets `spec.source="magnetic"`, `spec.qom=charge`. C++ struct `adc::MagneticLorentzForce`. | 3 |
+| `PotentialMagneticForce` | `adc.PotentialMagneticForce(charge=1.0)` | Electrostatic + magnetic Lorentz summed `(q/m) rho E + q (v x B_z)`. Reads `B_z` (set via `System.set_magnetic_field`). Sets `spec.source="potential_magnetic"`, `spec.qom=charge`. C++ struct `adc::CompositeSource<adc::PotentialForce, adc::MagneticLorentzForce>`. | 3 |
 
 Note : `PotentialForce(charge=...)` names the parameter `charge` on the Python side but reports it into
 `spec.qom` (charge/mass ratio `q/m`) on the C++ side.
@@ -153,7 +162,8 @@ native model object, consumed by `add_block` / `add_equation`). The validation o
 - `state` must be `Scalar` or `FluidState(...)` (otherwise `ValueError`) ;
 - the state <-> transport coherence is imposed : `Scalar` requires `ExB` ; `FluidState(compressible)`
   requires `CompressibleFlux` ; `FluidState(isothermal)` requires `IsothermalFlux` ;
-- `source` must be `NoSource` / `PotentialForce` / `GravityForce` ;
+- `source` must be `NoSource` / `PotentialForce` / `GravityForce` / `MagneticLorentzForce` /
+  `PotentialMagneticForce` ;
 - `elliptic` must be `ChargeDensity` / `BackgroundDensity` / `GravityCoupling`.
 
 ```python

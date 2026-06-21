@@ -70,12 +70,25 @@ sim.solve_fields()
 Write the current state to a visualization file with `sim.write(path, format="vtk", step=None,
 fields=None, parallel=False)`. The `vtk` format writes a cartesian ImageData `.vti` (one CellData
 array per conservative variable of each block plus the potential `phi`, openable in ParaView /
-VisIt); `npz` writes a compressed `np.savez` archive (any backend, any geometry). The `step`
-argument adds a numbered suffix, and `fields` selects a subset of blocks (`None` writes all).
+VisIt); `npz` writes a compressed `np.savez` archive (any backend, any geometry); `hdf5` writes one
+group per block (HDF5 output via the Python h5py facade, an optional dependency: if `h5py` is absent
+the call raises a `RuntimeError` pointing to `npz`). The `step` argument adds a numbered suffix, and
+`fields` selects a subset of blocks (`None` writes all).
 
 ```python
 sim.write("out/state", format="vtk", step=42)
 ```
+
+To open a `.vti` (or an `.h5`) in ParaView, see
+[Visualize with ParaView](visualize-with-paraview.md).
+
+`parallel=True` is valid only with `format="hdf5"` (any other format raises a `ValueError`): each rank
+writes its own boxes as hyperslabs into one file, which needs `h5py` built with MPI plus `mpi4py`
+(a clear `RuntimeError` names the missing piece otherwise). A cartesian `System` is mono-box, so rank 0
+writes it; true parallelism only appears for multi-box runs.
+
+For which `format` / `parallel` combinations a backend supports, read
+`adc.capabilities()["io"]` rather than a static table here.
 
 Write a restartable checkpoint with `sim.checkpoint(path, parallel=False)`. It saves the full
 conservative state of every block plus the clock; reload it with `sim.restart(path)` after you

@@ -68,6 +68,15 @@ cell on the shared layout, so no interpolation is needed between species. When y
 build the two contributions as exactly opposite terms, the pair mass is conserved to
 machine precision.
 
+A coupling resolves the component it targets by role, not by a literal index. It can
+use a user-defined role label, resolved via `index_of(name)`, in addition to the
+canonical `VariableRole` enum, so a block can expose a component whose role sits
+outside the enum. Resolution is strict and fail-loud: if a block declares roles but
+not the one a named coupling (collision, thermal exchange, ionization) requires, the
+lookup raises rather than silently falling back to a default component. Declaring the
+roles in the model is what makes this work; see
+[the symbolic DSL reference](../reference/symbolic-dsl.md).
+
 ## Conservation across blocks
 
 Conservation is checked per block, not only globally. On AMR each block owns its own
