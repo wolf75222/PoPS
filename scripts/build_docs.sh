@@ -72,11 +72,18 @@ if [ "$ONLY_SPHINX" != "--sphinx" ]; then
   # doxysphinx (sortie sous la racine sphinx, pas de treeview, pas de sous-repertoires ;
   # la recherche est celle de Sphinx). Regeneration complete a chaque build (le
   # repertoire est gitignore) pour ne pas trainer de pages orphelines perimees.
+  #
+  # HTML_EXTRA_STYLESHEET=  vide explicitement le theme doxygen-awesome pour la SEULE variante
+  # embarquee. doxysphinx inline la page Doxygen brute (avec son <head> et ses <link>) dans la
+  # page furo ; les selecteurs globaux de doxygen-awesome (body, a:link, variables :root, ~53
+  # regles !important) ecrasent alors le theme furo sur toute la page /doxygen/ (rendu casse).
+  # Le site Doxygen autonome /cpp/ (etape 5/5) garde le theme : il possede toute sa page.
   rm -rf docs/sphinx/doxygen
   ( cat docs/Doxyfile
     echo "PROJECT_NUMBER=$ADC_DOCS_VERSION"
     echo "OUTPUT_DIRECTORY=docs/sphinx"
     echo "HTML_OUTPUT=doxygen"
+    echo "HTML_EXTRA_STYLESHEET="
     echo "GENERATE_TREEVIEW=NO"
     echo "CREATE_SUBDIRS=NO"
     echo "SEARCHENGINE=NO"

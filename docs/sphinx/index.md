@@ -73,6 +73,7 @@ how-to/add-a-new-flux
 how-to/add-a-new-case
 how-to/define-initial-conditions
 how-to/configure-outputs-diagnostics
+how-to/visualize-with-paraview
 how-to/run-with-openmp
 how-to/run-with-mpi
 how-to/run-with-kokkos

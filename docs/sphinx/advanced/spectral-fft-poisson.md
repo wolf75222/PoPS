@@ -6,7 +6,7 @@ On a periodic domain, the Laplacian is diagonal in Fourier:
 FFT + division + inverse FFT solves Poisson exactly (machine residual), without
 iteration. Three variants exist, all models of the `EllipticSolver` concept:
 
-- `PoissonFFTSolver` (`numerics/elliptic/poisson_fft_solver.hpp`), single-rank, single
+- `PoissonFFTSolver` (`numerics/elliptic/poisson/poisson_fft_solver.hpp`), single-rank, single
   box. Its constructor raises a `std::runtime_error` as soon as `n_ranks() != 1` or
   `ba.size() != 1`. This safeguard is deliberate and active in Release (`NDEBUG` does not remove
   it): this direct solver would dereference `fab(0)` on a rank without a box (segfault). In

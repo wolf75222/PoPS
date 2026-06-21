@@ -58,11 +58,70 @@ Bound the thread count per rank with `OMP_NUM_THREADS` when you run the tests.
 OMP_NUM_THREADS=4 OMPI_MCA_rmaps_base_oversubscribe=true ctest --test-dir build-mpi-omp --output-on-failure
 ```
 
+## Multi-rank from Python
+
+The `adc` Python module is MPI-aware when `_adc` is built with `ADC_USE_MPI=ON`
+(the `mpi` CMake preset, which writes to `build-mpi` and relies on `ADC_USE_KOKKOS`
+defaulting to ON). Run a script across ranks the same way as a C++ binary, by
+launching the interpreter under `mpirun`.
+
+```bash
+cmake --preset mpi && cmake --build --preset mpi   # or the ad-hoc cmake above, conda-free
+mpirun -np 4 python your_script.py
+```
+
+`adc.my_rank()` and `adc.n_ranks()` report the rank and the rank count. The global
+accessors (`sim.state_global(name)`, `sim.density_global(name)`,
+`sim.potential_global()`) and `sim.write(...)` are collective: they `all_reduce`/gather
+across ranks, so **every** rank must call them or the run deadlocks. `sim.write` gathers
+the field collectively and then writes ONE file on rank 0 (the Cartesian `System` is
+mono-box); the other ranks return the path without I/O.
+
+```python
+import numpy as np
+import adc
+
+# Built and stepped identically on every rank.
+sim = adc.System(n=96, L=1.0, periodic=True)
+sim.add_block(
+    "ne",
+    model=adc.Model(
+        state=adc.Scalar(),
+        transport=adc.ExB(B0=1.0),
+        source=adc.NoSource(),
+        elliptic=adc.BackgroundDensity(alpha=1.0, n0=1.0),
+    ),
+)
+sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+sim.set_density("ne", np.ascontiguousarray(np.ones((96, 96))))
+
+for _ in range(20):
+    sim.step_cfl(0.4)
+
+# Collective: every rank calls it; rank 0 writes the single .vti file.
+sim.write("out/state", format="vtk")
+if adc.my_rank() == 0:
+    print("ranks =", adc.n_ranks(), "t =", sim.time())
+```
+
+For an advanced multi-box output, `sim.write(format="hdf5", parallel=True)` writes
+per-rank hyperslabs into one file (needs h5py built with MPI plus mpi4py); on the
+mono-box Cartesian `System` it falls back to a rank-0 write.
+
+## Plot the result
+
+Open the `.vti` output in ParaView following
+[visualize with ParaView](visualize-with-paraview.md).
+
 ## Next steps
 
 - To run multi-GPU on ROMEO, see the [parallel backends page](../backends/index.md).
 - A multi-thread (Kokkos OpenMP) Python module is available via the `python-parallel`
   CMake preset, with the thread count set by `adc.set_threads(n)` right after `import adc`;
-  there is no nvcc/CUDA Python module (GPU is C++-only) and the Python module does not
-  exercise the MPI code paths (MPI is validated through the C++/ctest path). See the
+  there is no nvcc/CUDA Python module (GPU is C++-only). See the
   [installation page](../getting-started/installation.md).
+- The multi-rank Python API above is real and works under `mpirun`. What is missing is
+  Python MPI *test* coverage: no Python test runs under MPI in CI, so the distributed
+  Python surface is exercised by hand, while the distributed numerics are validated through
+  the C++/ctest path. See
+  [BACKEND_COVERAGE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/BACKEND_COVERAGE.md).

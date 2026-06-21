@@ -11,7 +11,7 @@ stops cleanly as soon as a box no longer divides exactly (safeguard
 
 The same multigrid operator covers three generalizations of the Laplacian, all opt-in
 and bit-identical to the historical path as long as they are not activated. On the C++ side
-(`GeometricMG`, `numerics/elliptic/geometric_mg.hpp`):
+(`GeometricMG`, `numerics/elliptic/mg/geometric_mg.hpp`):
 
 - `set_epsilon(eps)`, variable permittivity `div(eps(x) grad phi) = f` (harmonic
   mean at faces);

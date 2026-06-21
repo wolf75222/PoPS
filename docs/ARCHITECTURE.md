@@ -532,12 +532,14 @@ couplers for the multi-block composition; it is they that the Python bindings ex
 The following limits are guarded in the code (they raise a clear error rather than drift
 silently), or are assumed scope boundaries.
 
-- AMR: no composite elliptic solve nor global Schur. The Poisson is solved at the coarse level
-  then injected toward the fine; `AmrSystem` has no condensed Schur stage (noted in
-  [`include/adc/runtime/amr_system.hpp`](../include/adc/runtime/amr_system.hpp), and
-  [`amr_system_coupler.hpp`](../include/adc/coupling/static_system/amr_system_coupler.hpp) describes "coarse Poisson +
-  reflux per block"). The full tensor operator of the Schur condensation goes through
-  `TensorKrylovSolver`, outside the symmetric `GeometricMG`, and is not wired on the refined hierarchy.
+- AMR composite elliptic and global Schur: present at Phase-4a scope. A 2-level composite FAC
+  Poisson (`CompositeFacPoisson`,
+  [`include/adc/numerics/elliptic/mg/composite_fac_poisson.hpp`](../include/adc/numerics/elliptic/mg/composite_fac_poisson.hpp))
+  and the AMR condensed Schur source stage (`AmrCondensedSchurSourceStepper`,
+  [`include/adc/coupling/schur/amr_condensed_schur_source_stepper.hpp`](../include/adc/coupling/schur/amr_condensed_schur_source_stepper.hpp))
+  are wired on the refined hierarchy. The supported scope is 2 levels, 1..N disjoint NON-adjacent fine
+  patches, a replicated mono-block coarse, mono-rank; adjacent patches, more than 2 levels, MPI and
+  multi-block are refused explicitly (Phase 4b). See ALGORITHMS.md section 25 for the full scope.
 
 - FFT under `System` in MPI np>1: supported since ADC-287. `System` distributes a single box in
   round-robin, so `PoissonFFTSolver` (which needs the whole grid) is kept only for `n_ranks()==1`; at
@@ -571,9 +573,9 @@ include/adc/
   mesh/               Box2D, BoxArray, Fab2D, MultiFab, Geometry (+ PolarGeometry), for_each_cell, fill_boundary, CL physiques, refinement AMR
   physics/            briques generiques (etat/transport/source/elliptique) -> CompositeModel ; flux Euler, hyperbolique iso, pendants polaires
   numerics/           flux de Riemann (Rusanov/HLL/HLLC/Roe), reconstruction (MUSCL/WENO5-Z), spatial_operator (cartesien, EB cut-cell, polaire), LorentzEliminator
-  numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Poisson FFT (mono + bandes), polaire direct + tensoriel, TensorKrylovSolver
+  numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Poisson FFT (mono + bandes), polaire direct + tensoriel, TensorKrylovSolver, composite FAC AMR (mg/composite_fac_poisson)
   numerics/time/      tags SSPRK, integrateurs objets, scheduler de sous-cyclage, IMEX/AP, splitting Lie/Strang, moteur AMR de production (amr_reflux_mf)
-  coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, source couplee, condensation de Schur (cartesien + polaire)
+  coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, source couplee, condensation de Schur (cartesien + polaire + AMR)
   runtime/            facades System / AmrSystem, model_factory (briques -> CompositeModel), block builders, chemins DSL (compiled/native/aot), canal aux extensible
   amr/                AmrHierarchy, tag_box, clustering Berger-Rigoutsos, regrid (proper nesting)
   parallel/           seam MPI (comm degenere en serie), load balance (round-robin / SFC)

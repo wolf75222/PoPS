@@ -557,6 +557,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- **Embedded C++ API page no longer inherits the doxygen-awesome theme** (ADC-388): the in-site
+  `/doxygen/` pages (doxysphinx) inline the raw Doxygen `<head>`, so the doxygen-awesome global
+  selectors (`body`, `a:link`, root variables, dozens of `!important` rules) were leaking into the
+  furo Sphinx theme and breaking the embedded layout. `scripts/build_docs.sh` now clears
+  `HTML_EXTRA_STYLESHEET` for the embed-only build; the standalone `/cpp/` site keeps the theme.
 - **Build robustness on bare / FetchContent / HPC paths the conda CI never exercises** (ADC-387,
   same bug class as ADC-386, found by a build-system audit):
   - The FetchContent Kokkos fallback now sets `CMAKE_POSITION_INDEPENDENT_CODE ON` before

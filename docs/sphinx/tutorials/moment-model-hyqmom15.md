@@ -6,9 +6,9 @@ state, write one closure, let `adc.moments` generate the fluxes and the wave spe
 workflow, not the golden-file validation: you will see how little physics you write (a single
 closure) and how the generator derives the rest.
 
-The snippets are faithful to the tested case at `adc_cases/hyqmom15` (`model.py`, `run_crossing.py`,
-`run_diocotron.py`). That case is the canonical, CI-tested source; this page explains how it is put
-together so you can write your own moment model the same way.
+The snippets are faithful to the tested case at `adc_cases/hyqmom15` (`model.py`,
+`runs/run_crossing.py`, `runs/run_diocotron.py`). That case is the canonical, CI-tested source; this
+page explains how it is put together so you can write your own moment model the same way.
 
 ## Prerequisites
 
@@ -176,6 +176,29 @@ sim.add_equation("mom", model=compiled,
 Asking for `riemann="hll"` on a model that has no signed wave speeds raises an error, which is your
 cue to rebuild with the exact path.
 
+### 5b-roe: generic Roe (matches the reference ROE scheme)
+
+For a smooth eigenmode the Roe flux is structurally less diffusive than HLL. Build with `roe=True`
+and the generator also emits the generic moment Roe (`m.roe_from_jacobian()`): the full flux Jacobian
+at the arithmetic-mean interface is eigendecomposed, `|A|(UR - UL)` is the dissipation, and `|A|` is
+the matrix sign with a spectral-radius Rusanov fallback. This needs no fluid roles and no primitive
+pressure, so it works for a moment hierarchy. It is additive to `exact_speeds` (which still provides
+the maximum wave speed for the CFL step), and it needs the `aot` or `production` backend.
+
+```python
+m_roe   = gmom.build_moment_model("hyqmom15_roe", 4, hyqmom_closure, roe=True)
+compiled = m_roe.compile("hyqmom15_roe.so", adc.adc_include(), backend="aot")
+
+sim = adc.System(n=64, L=1.0, periodic=True)
+sim.add_equation("mom", model=compiled,
+                 spatial=adc.FiniteVolume(limiter="none", riemann="roe"),
+                 time=adc.Explicit())
+```
+
+`riemann="roe"` matches the reference Matlab `space_scheme='ROE'`. The
+`adc_cases/hyqmom15/runs/run_fluid_wave.py` case uses this path and pins a one-step ROE golden against
+the reference `flux_ROE` to about `1e-17`; on a smooth eigenmode it measures `L2_roe < L2_hll`.
+
 ### 5c: Vlasov-Poisson coupling (sources plus multigrid)
 
 To couple the moments to a self-consistent electric field, build the model with the Lorentz sources
@@ -222,22 +245,30 @@ and the `spatial=` argument:
 | --------------------- | --------------------- | ----------------------------------------------------- |
 | Robust start          | (defaults)            | `FiniteVolume(limiter="none", riemann="rusanov")`     |
 | Sharper resolution    | `exact_speeds=True`   | `FiniteVolume(limiter="none", riemann="hll")`         |
+| Least diffusive (reference ROE) | `roe=True`  | `FiniteVolume(limiter="none", riemann="roe")`         |
 | Vlasov-Poisson        | `sources=...` + `elliptic_rhs` | `FiniteVolume(..., riemann="hll")` + `set_poisson(...)` |
 | Near-degenerate state | `robust=True`         | unchanged                                             |
-| Realizability (long/high-Ma) | `projection=True` (needs `exact_speeds=True`) | unchanged; native projector applied post-step |
+| Realizability (long/high-Ma) | `m.projection([...])` hook | unchanged; pointwise projector applied post-step |
 
-### Realizability: the native projection
+### Realizability: the pointwise projection hook
 
 On long or high-Mach runs the moment state can drift out of the realizable set; the reference applies
-a per-cell `relaxation15` projection each step. With `projection=True` (which requires
-`exact_speeds=True`) the model emits that projection NATIVELY -- `m.projection`, the
-`HasPointwiseProjection` trait -- so the system applies `U <- project(U, aux)` at the end of each
-whole macro-step in C++, instead of a per-cell Python callback. It runs on the flat `adc.System`,
-under MPI, and on `adc.AmrSystem` (per level after the reflux, ADC-312). Without the flag the model
-is unchanged.
+a per-cell `relaxation15` projection each step. Realizability is NOT a `build_moment_model` flag --
+the generator has no `projection` parameter. It is a separate pointwise hook on the model:
+`m.projection([...])` (ADC-177, the `HasPointwiseProjection` trait), one expression per conservative
+component. The system then applies `U <- project(U, aux)` to the valid cells at the end of each whole
+macro-step in C++, instead of a per-cell Python callback. It runs on the flat `adc.System`, under
+MPI, and on `adc.AmrSystem` (per level after the reflux, ADC-312). The projection must be idempotent
+and pointwise (no neighbor reads), and the clamps are written branchlessly with `dsl.abs_` / `sign`;
+`dsl.eig_all_real` builds the realizable-cone masks (ADC-362). Without the hook the model is
+unchanged.
+
+The `adc_cases/hyqmom15/model.py` case wrapper bundles this: its own `build_moment_model(...,
+projection=True)` -- a CASE-level wrapper, not the generic generator -- transcribes the reference
+`relaxation15` projector into the `m.projection([...])` hook for you.
 
 ```python
-m = build_moment_model(..., exact_speeds=True, projection=True)  # projecteur natif relaxation15
+m.projection([...])  # one expr per conservative component; relaxation15 in adc_cases
 ```
 
 Why it matters: on a Ma=20 crossing run without the projection, non-realizable cells blow up the

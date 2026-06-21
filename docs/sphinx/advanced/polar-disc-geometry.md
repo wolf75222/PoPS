@@ -65,4 +65,4 @@ callback path: a domain is a compile-time POD, never a `std::function`.
   `set_disc_domain`, `disc_mask`).
 - Generic contract: `include/adc/numerics/embedded_boundary.hpp` (`DiscDomain`, `HalfPlaneDomain`,
   the `LevelSetDomain` concept).
-- Polar solver: `include/adc/numerics/elliptic/polar_poisson_solver.hpp`.
+- Polar solver: `include/adc/numerics/elliptic/polar/polar_poisson_solver.hpp`.

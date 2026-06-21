@@ -26,6 +26,9 @@ GENERATE_LATEX         = NO
 
 # Modern theme: doxygen-awesome-css (MIT, vendored under docs/doxygen-awesome-css/).
 # The doxygen_custom.css override (image sizing on the main page) is kept and loaded last.
+# NOTE: this theme is for the STANDALONE /cpp/ site only. scripts/build_docs.sh clears
+# HTML_EXTRA_STYLESHEET for the doxysphinx-embedded /doxygen/ build, because its global
+# !important rules leak into the furo Sphinx theme when the page is inlined (see ADC-388).
 GENERATE_TREEVIEW      = YES
 DISABLE_INDEX          = NO
 FULL_SIDEBAR           = NO

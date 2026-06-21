@@ -48,6 +48,36 @@ With the OpenMP execution space, `for_each_cell` becomes a multi-thread `paralle
 reduction reassociates floating-point addition per tile, so a multi-thread total is deterministic
 for a fixed thread count but not bit-identical to a lexicographic sum; the max reduction stays exact.
 
+## Threading from Python (set_threads)
+
+The Python module sets its thread count with `adc.set_threads(n)`, which writes `OMP_NUM_THREADS`
+and `KOKKOS_NUM_THREADS` for you instead of exporting them in the shell. It is pure Python: no
+C++ call, so the value must be in place before Kokkos initializes.
+
+```python
+import adc
+
+adc.set_threads(8)          # or adc.set_threads() for all cores (os.cpu_count())
+print(adc.parallel_info())  # {'has_kokkos': True, 'omp_num_threads': '8', 'first_system_built': False}
+
+sim = adc.System(n=256)     # Kokkos initializes here and reads the thread count once
+```
+
+Three rules:
+
+1. Use a module built against a Kokkos OpenMP execution space (`python-parallel` preset). The
+   conda-forge Kokkos is often Serial-only; see [Kokkos OpenMP](../backends/kokkos-openmp.md) and
+   the Installation [Threads](#threads) section.
+2. Call `set_threads` right after `import adc` and before the first `System` or `AmrSystem`. Kokkos
+   reads the thread count once at that first object, so a later call cannot change it.
+3. A Serial-only module or a late call only emits a `RuntimeWarning` and is ignored; it never
+   raises. Confirm the state with `adc.has_kokkos()`, `adc.parallel_info()`, or `adc.doctor()`.
+
+The floating-point note above applies to the Python path too: the per-tile sum reduction is
+deterministic for a fixed thread count but not bit-identical to the serial sum; the max is exact.
+`ADC_FOREACH_SERIAL_THRESHOLD` keeps small grids on a serial loop, so small problems may not speed
+up regardless of the thread count.
+
 ## Next steps
 
 - To add distributed ranks on top of OpenMP, combine `-DADC_USE_MPI=ON` with the same OpenMP Kokkos

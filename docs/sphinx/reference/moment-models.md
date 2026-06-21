@@ -16,7 +16,8 @@ from adc import moments as gmom
 
 ```python
 gmom.build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
-                        robust=False, eps_m00=1e-12, eps_cov=1e-12, sources=None)
+                        robust=False, eps_m00=1e-12, eps_cov=1e-12, sources=None,
+                        roe=False)
 ```
 
 Builds and returns an `adc.dsl.Model` for the 2D velocity-moment hierarchy of the given `order`. The
@@ -32,6 +33,7 @@ returned model is ready to `compile`, or you may add an `elliptic_rhs` or extra 
 | `blocks`       | Optional block structure of the flux Jacobian, passed through to the wave-speed solve (a dict `{"x": [...], "y": [...]}` of index lists). Default: the full matrix. Ignored when `exact_speeds=False`. |
 | `eps_m00`, `eps_cov` | Floor thresholds used when `robust=True`.                                               |
 | `sources`      | Optional callable `(model, M) -> list[Expr]`, one source per moment, wired with `m.source(...)`. `M` is a dict mapping `(p, q)` to the conservative `Var`. Use `lorentz_sources` (below). |
+| `roe`          | `True`: also emit the generic moment Roe dissipation (`m.roe_from_jacobian`), with `|A|` via `adc::roe_abs_apply` and a spectral-radius Rusanov fallback. Additive to `exact_speeds`, so it enables `riemann="roe"` for a moment hierarchy. Needs the `aot` or `production` backend. `False` (default): no Roe path. |
 
 You do not call `m.flux(...)` or `m.eigenvalues(...)` on the returned model when you use the
 generator: both are derived from the closure. The flux is the order shift `Fx[M_pq] = M_{p+1,q}`,
@@ -139,8 +141,9 @@ sim.add_equation("mom", model=compiled,
 ```
 
 `riemann="hll"` requires the signed wave speeds that `exact_speeds=True` generates; `riemann="rusanov"`
-needs only the maximum speed and works either way. `riemann="hllc"` and `riemann="roe"` are specific
-to the four-variable Euler system and are rejected for a moment model. For the Riemann-solver choices
+needs only the maximum speed and works either way. `riemann="roe"` is available once the model is built
+with `build_moment_model(roe=True)`, which emits the generic moment Roe dissipation; only `riemann="hllc"`
+remains rejected for a moment model, being specific to the four-variable Euler system. For the Riemann-solver choices
 see [fluxes, sources, and eigenvalues](../concepts/fluxes-sources-eigenvalues.md); for the spatial and
 time classes see the [Python API](python-api.md).
 

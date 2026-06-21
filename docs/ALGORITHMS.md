@@ -228,7 +228,11 @@ references. The flux is passed by template: `compute_face_fluxes<Limiter, Numeri
 `assemble_rhs<Limiter, NumericalFlux, Model>` are templated on the flux policy, chosen
 independently of the limiter. The `SourceFreeModel` adapter (explicit IMEX half-step) forwards
 `pressure` and `wave_speeds` only if the wrapped model exposes them (`requires` clause), so that an
-IMEX half-step stays on an HLLC flux.
+IMEX half-step stays on an HLLC flux. A moment hierarchy (no fluid roles, no primitive `p`) can also
+drive a generic Roe via the DSL emitter `m.roe_from_jacobian()` (section 23): `|A|` is applied by
+`adc::roe_abs_apply`
+([`include/adc/numerics/dense_eig.hpp`](../include/adc/numerics/dense_eig.hpp)) behind a real-spectrum
+gate, with a spectral-radius Rusanov fallback when `|A|` is not a faithful real spectral function.
 
 **Constraints / remarks.** `RusanovFlux` is the only flux compatible with the minimal `PhysicalModel`
 (it reads only `max_wave_speed`): it is the robust default for scalar transport, at the cost of an
@@ -1249,6 +1253,12 @@ function cut_distance(lc, ln, h):
 writes them once per level into its `coef` field (5 components) at setup (host) then reads them
 on-device; it skips the conductor cells (`m(i,j) == 0`). It is the same `cut_fraction` that the
 EB transport consumes (section 15): aperture geometry bit-consistent between Poisson and transport.
+The cut-cell and mask geometry is a named generic level-set contract in
+[`include/adc/numerics/embedded_boundary.hpp`](../include/adc/numerics/embedded_boundary.hpp) (ADC-327):
+a domain exposes `ADC_HD Real level_set(x, y)` (negative inside) and is directly usable as the
+`LevelSet` argument of `cut_fraction` / `assemble_rhs_eb`. Built-ins are `DiscDomain` (circle) and
+`HalfPlaneDomain`; the `LevelSetDomain` concept in the same header is diagnostics-only (a `static_assert`
+on the built-ins), not a dispatch constraint.
 
 **Constraints / remarks.** The clamp $\theta \ge 10^{-3}$ bounds $w_{\mathrm{diag}}$ (without it a
 grazing face would make the weight diverge and would break the diagonal dominance of the smoother). Compatible with
@@ -1323,8 +1333,9 @@ function face_aperture(lc, ln):
 **Code.** `System::set_disc_domain(cx, cy, R, mode)` (#216,
 [`include/adc/runtime/system.hpp`](../include/adc/runtime/system.hpp), defined in
 [`python/system.cpp`](../python/system.cpp)) sets a `DiscDomain`
-([`include/adc/runtime/wall_predicate.hpp`](../include/adc/runtime/wall_predicate.hpp), `level_set`) and
-the transport mode; `set_geometry_mode(mode)` switches the mode alone; `disc_mask()` materializes the
+([`include/adc/numerics/embedded_boundary.hpp`](../include/adc/numerics/embedded_boundary.hpp),
+`level_set`) and the transport mode; `set_geometry_mode(mode)` switches the mode alone; `disc_mask()`
+materializes the
 mask (all-active if no disc). The stepper routes each block: `assemble_rhs` (full),
 `assemble_rhs_masked`
 ([`include/adc/numerics/spatial_operator.hpp`](../include/adc/numerics/spatial_operator.hpp), 0/1

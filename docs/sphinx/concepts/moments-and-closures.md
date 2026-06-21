@@ -71,6 +71,11 @@ is genuinely model-specific: optional Lorentz **sources** for a Vlasov-Lorentz c
 (Vlasov-Poisson). See [fluxes, sources, and eigenvalues](fluxes-sources-eigenvalues.md) for what each
 piece means to the core.
 
+Beyond the Rusanov and HLL resolvers the wave speeds feed, `build_moment_model(roe=True)` also emits a
+generic moment Roe dissipation so `riemann="roe"` is usable on the hierarchy. Realizability is not a
+generator concern: it is a separate pointwise projection hook (`m.projection`) the system applies
+after each step.
+
 ## Limits
 
 - The generator is 2D. A different velocity-space dimension is not generated.

@@ -21,11 +21,22 @@ map one to one to the functions of the `adc::PhysicalModel` concept read by the 
 | `conservative_vars(*names, roles=None)` | the conservative variables (the state `U`) ; returns a tuple of `Var` | `rho, mx, my, E = m.conservative_vars("rho","rho_u","rho_v","E")` |
 | `primitive(name, expr)` | a primitive by its formula ; returns a `Var` | `u = m.primitive("u", mx/rho)` |
 | `primitive_vars(*vars, roles=None, **named)` | the ordered layout of `Prim` (and, in kwargs, defines each primitive) | `prho,pu,pv,pp = m.primitive_vars(rho=rho,u=u,v=v,p=p)` |
-| `aux(name)` | a fixed auxiliary field read at runtime ; returns a `Var` | `gx = m.aux("grad_x")` |
+| `aux(name)` | a fixed canonical auxiliary field read at runtime ; returns a `Var` | `gx = m.aux("grad_x")` |
+| `aux_field(name)` | a NAMED auxiliary field, set per block (see [aux vs aux_field](#aux-vs-aux-field)) ; returns a `Var` | `mu = m.aux_field("mobility")` |
 | `flux(x, y)` | the physical flux `F(U)`, one `Expr` per component and direction | `m.flux(x=[...], y=[...])` |
 | `eigenvalues(x, y)` | the characteristic speeds per direction | `m.eigenvalues(x=[u-c,u,u+c], y=[v-c,v,v+c])` |
+| `wave_speeds(x, y)` | explicit signed speeds `(smin, smax)` per direction (enables `hll` without a primitive `p`) | `m.wave_speeds(x=(sl, sr), y=(sl, sr))` |
+| `wave_speeds_from_jacobian(...)` | signed speeds from the eigenvalues of the flux Jacobian (autodiff) | `m.wave_speeds_from_jacobian()` |
+| `enable_hllc()` | emit the HLLC capability from the roles + primitive `p` (enables `hllc` beyond Euler-4) | `m.enable_hllc()` |
+| `enable_roe()` | emit the Roe capability from the roles + primitive `p` (enables `roe` beyond Euler-4) | `m.enable_roe()` |
+| `roe_from_jacobian()` | generic moment Roe from the flux Jacobian, roles-free (see below) | `m.roe_from_jacobian()` |
 | `conservative_from(exprs)` | the inverse `Prim -> U` (to be supplied, the DSL does not invert) | `m.conservative_from([rho, rho*u, rho*v, ...])` |
 | `source(s)` | the source term `S(U, aux)` (optional), one `Expr` per component | `m.source([0.0, -rho*gx, -rho*gy, ...])` |
+| `source_frequency(mu)` | local source frequency `mu(U, aux)` driving the `source` step bound (requires `source`) | `m.source_frequency(nu_coll)` |
+| `source_jacobian(rows)` | analytic `dS/dU` for the implicit Newton (instead of finite differences ; requires `source`) | `m.source_jacobian([[...], ...])` |
+| `implicit_source(jacobian=None)` | sugar for the local implicit (residual from `source` ; optional analytic Jacobian) | `m.implicit_source()` |
+| `stability_speed(expr)` | custom stability speed `lambda*` driving the block CFL (default: `max(abs(eigenvalues))`) | `m.stability_speed(c_fast)` |
+| `stability_dt(expr_dt)` | direct admissible step bound `dt(U, aux)` (the CFL is not applied to it) | `m.stability_dt(dt_relax)` |
 | `elliptic_rhs(e)` | the contribution to the right-hand side of the system Poisson (optional) | `m.elliptic_rhs(-1.0*(rho - 1.0))` |
 | `projection(p)` | pointwise post-step projection `U <- P(U, aux)` (optional, realizability/positivity) | `m.projection([rho, (rhou+abs_(rhou))/2, ...])` |
 | `gamma(value)` | the adiabatic index (EOS), exported in the `.so` | `m.gamma(1.4)` |
@@ -96,6 +107,43 @@ channel.
 gx, gy = m.aux("grad_x"), m.aux("grad_y")   # field E = -grad phi
 ```
 
+(aux-vs-aux-field)=
+### aux vs aux_field
+
+`aux(name)` and `aux_field(name)` both return a `Var` read at runtime, but they target different
+parts of the `adc::Aux` channel:
+
+- `aux(name)` reads a CANONICAL component of the fixed table above (`phi` / `grad_x` / `grad_y` /
+  `B_z` / `T_e`, indices 0..4), DERIVED by the solver (the potential and its gradient come from the
+  Poisson solve). An unknown name raises.
+- `aux_field(name)` reserves a NAMED, user-supplied component. The name is arbitrary; the k-th
+  declared field is component `AUX_NAMED_BASE + k` (base 5, just after `T_e`), read in C++ via
+  `aux.extra_field(k)`. At most `AUX_NAMED_MAX` (= 4) named fields per model, so the named block
+  starts strictly after the canonical table and never collides with it.
+
+A named field is static (it persists across steps; the solver never rewrites it) and is provided per
+block via `System.set_aux_field(block, name, array, halo=None)` -- the `name` must have been declared
+by `m.aux_field(name)` and the block attached via `add_equation`; the array is 2D `(ny, nx)` or flat
+row-major. Read it back with `System.aux_field(block, name)`. The canonical `B_z` / `T_e` keep their
+dedicated paths (`set_magnetic_field` / `set_electron_temperature_from`) and are NOT settable through
+`set_aux_field`.
+
+By default a named field inherits the SHARED aux ghost behavior (periodic preserved, otherwise
+zero-gradient). Pass `halo=adc.AuxHalo(...)` (ADC-369) to give that one field its own non-periodic
+boundary policy instead: `adc.AuxHalo("foextrap")` (zero-gradient) or `adc.AuxHalo("dirichlet",
+value=v)` (fixed boundary value). The policy applies only to the non-periodic faces (periodic faces,
+and the polar `theta` direction, keep their wrap), works on `System` (Cartesian + polar) and the AMR
+coarse level, and is bit-identical to the shared behavior when omitted. The same `halo=` is accepted
+by `AmrSystem.set_aux_field`.
+
+```python
+mu = m.aux_field("mobility")               # named field, component 5
+m.source([0.0, -mu * mx, -mu * my, 0.0])
+# ... after add_equation("ions", compiled):
+s.set_aux_field("ions", "mobility", mob_2d)                       # static, per block
+s.set_aux_field("ions", "mobility", mob_2d, halo=adc.AuxHalo("foextrap"))  # per-field zero-gradient BC
+```
+
 ### flux
 
 Declares the physical flux `F(U)`. `x` and `y` are lists of `Expr`, one per conservative
@@ -118,6 +166,26 @@ the HLLC / Roe fluxes. Without `p`, the model stays limited to Rusanov.
 ```python
 m.eigenvalues(x=[u-c, u, u+c], y=[v-c, v, v+c])
 ```
+
+### Riemann capabilities (wave_speeds, enable_hllc/enable_roe, roe_from_jacobian)
+
+By default a model carries only the Rusanov bound from `eigenvalues`. Several declarators widen the
+set of `riemann=` fluxes a model accepts at `add_equation`:
+
+- `wave_speeds(x, y)` declares explicit signed speeds `(smin, smax)` per direction, which enables
+  `riemann="hll"` for a model WITHOUT a primitive `p` (a moment or isothermal system).
+  `wave_speeds_from_jacobian(...)` derives the same pair from the eigenvalues of the flux Jacobian.
+- `enable_hllc()` / `enable_roe()` emit the HLLC / Roe capability from the variable roles plus a
+  primitive `p`, so `riemann="hllc"` / `"roe"` work beyond the four-variable Euler system.
+- `m.roe_from_jacobian()` is the GENERIC moment Roe emitter: it builds the `roe_dissipation` hook as
+  `|A| (UR - UL)` with `A = dF/dU` the autodiff flux Jacobian at the mean interface state, applied via
+  the matrix-sign kernel `adc::roe_abs_apply` (spectral-radius Rusanov fallback on a complex or
+  singular spectrum). Unlike `enable_roe`, it needs NEITHER fluid roles NOR a primitive `p`, so it
+  makes `riemann="roe"` available for a full moment hierarchy. It is one of THREE mutually exclusive
+  providers of `roe_dissipation` (with `enable_roe` and the hand-written `roe_dissipation(x, y)`):
+  declaring more than one raises. Folded into the model cache key only when used, so an unused model
+  stays bit-identical. This is the path the moment generator emits -- see
+  [moment models](moment-models.md).
 
 ### conservative_from
 
@@ -170,6 +238,35 @@ m.projection([rho, (rhou + abs_(rhou)) / 2, ...])   # ex. plancher de positivite
   AMR (ADC-312) the projection is applied per level after the reflux and cascade, so the conservative
   correction is preserved. Only the `prototype` (JIT) backend rejects it. A model without a projection
   is bit-identical to the historical trajectory (opt-in via the trait).
+
+### Eigenvalue spectrum predicates
+
+`adc.dsl` exposes scalar `Expr` nodes built from the spectrum of a SMALL dense matrix assembled from
+expressions (a Jacobian sub-block, a companion matrix...). The matrix is `rows`, a list of `k` rows
+of `k` `Expr` (row-major, `k <= 16`), diagonalized device-clean by `adc::real_eig_minmax`
+(`dense_eig.hpp`). They are designed for the branch-free `m.projection`: a test like "if the spectrum
+is complex, correct" is written as a max/min/sign mask on these scalars, with no dynamic branch.
+
+| function | scalar value |
+|---|---|
+| `eig_max_im(rows)` | the largest `abs(Im(lambda))` (0 = a real, hyperbolic spectrum) |
+| `eig_lmin(rows)` | the smallest real part of the spectrum |
+| `eig_lmax(rows)` | the largest real part of the spectrum |
+| `eig_all_real(rows, im_tol=1e-5)` | `1.0` iff the block CONVERGED and its spectrum is real, else `0.0` |
+| `EigWitness(rows, field, im_tol=...)` | the node behind the four helpers (`field` selects `max_im` / `lmin` / `lmax` / `all_real`) |
+
+`eig_all_real` (ADC-362) maps to `adc::EigBounds::all_real`: it returns `1.0` only when the small
+dense block converged AND its spectrum is real (the largest imaginary part is within `im_tol` times a
+relative scale `max(abs(lmin), abs(lmax), 1)`), and `0.0` otherwise. Crucially it is
+CONVERGED-GATED, so a Gershgorin fallback (a non-converged block) yields `0.0` (not real). Prefer it
+to a raw `eig_max_im(rows) <= tol`, which would read the fallback's conventional `max_im = 0` as a
+real spectrum. Compose it branch-free, for example `complex = 1.0 - eig_all_real(rows)` and then a
+max/min blend:
+
+```python
+complex_mask = 1.0 - eig_all_real(rows)        # 1.0 if a complex pair (or non-converged), else 0.0
+m.projection([rho, mx + complex_mask * correction_x, ...])
+```
 
 ### gamma and param
 

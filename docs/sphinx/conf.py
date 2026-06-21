@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Rendre le module compile `adc` importable s'il a ete construit
-# (-DADC_BUILD_PYTHON=ON) : autodoc en a besoin pour reference/api_python.md. Non
+# (-DADC_BUILD_PYTHON=ON) : autodoc en a besoin pour reference/python-api.md. Non
 # fatal s'il manque (les classes apparaissent alors sans signature). On n'ajoute QUE
 # des dossiers de BUILD (qui contiennent l'extension `_adc*.so` a cote du paquet) :
 # surtout PAS le `python/` source, dont le paquet adc/ n'a pas de _adc.so -> il
