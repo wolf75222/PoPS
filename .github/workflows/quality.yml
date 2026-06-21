@@ -3,7 +3,7 @@ name: Quality
 # Analyse statique / qualite de code, VOLONTAIREMENT hors du chemin critique des PR : ce workflow
 # ne tourne JAMAIS sur un push ni sur une PR ordinaire (c'est ci.yml qui garde les PR). Il agrege
 # huit familles d'outils :
-#   - format       : clang-format --dry-run (style maison) + ruff (lint python/)      [non bloquant]
+#   - format       : clang-format --dry-run (.clang-format) [BLOQUANT] + ruff (lint python/) [info]
 #   - warnings     : build avec -Wall -Wextra -Wpedantic ... (ADC_ENABLE_WARNINGS)    [non bloquant]
 #   - tidy         : run-clang-tidy sur les TU de tests/ (.clang-tidy)                 [non bloquant]
 #   - sanitizers   : ctest sous ASan + UBSan (ADC_ENABLE_SANITIZERS, preset ci-asan)  [non bloquant]
@@ -19,7 +19,10 @@ name: Quality
 #     risque lance la passe complete sur cette PR (opt-in ; cf. job set-mode).
 # POLITIQUE : informatif d'abord. Aucune option CMake n'est ON par defaut ; la plupart des jobs ne
 # cassent PAS le run sur un finding (pas de -Werror) -> on observe l'etat reel, on durcit ensuite.
-# EXCEPTION deja actee (bascule ADC-120) : le job fuzz est BLOQUANT (un crash libFuzzer = vrai bug).
+# EXCEPTIONS deja actees au "non bloquant" :
+#   - fuzz est BLOQUANT (bascule ADC-120 : un crash libFuzzer = vrai bug reproductible) ;
+#   - le check clang-format du job format est BLOQUANT (bascule ADC-219 : le tronc est conforme au
+#     style depuis le balayage ADC-118, tout nouvel ecart = regression). ruff (python/) reste informatif.
 on:
   schedule:
     - cron: '0 4 * * 0'
@@ -61,7 +64,7 @@ jobs:
 
   # --- clang-format : verification de style, sans build ------------------------------------------
   format:
-    name: clang-format (style, informatif)
+    name: clang-format (style, bloquant)
     runs-on: ubuntu-latest
     needs: set-mode
     if: needs.set-mode.outputs.run == 'true'
@@ -71,7 +74,7 @@ jobs:
           fetch-depth: 1
       - name: Install clang-format
         run: sudo apt-get update && sudo apt-get install -y clang-format
-      - name: clang-format --dry-run (non bloquant)
+      - name: clang-format --dry-run (bloquant)
         run: |
           echo "$(clang-format --version)"
           mapfile -t files < <(find include python tests -type f \
@@ -90,10 +93,19 @@ jobs:
             echo "- Fichiers analyses : ${#files[@]}"
             echo "- Non conformes : **$bad**"
             echo ""
-            echo "_Informatif : applique localement avec_ \`clang-format -i <fichier>\` _ou_ \`git clang-format\`."
+            echo "_Corriger localement avec_ \`clang-format -i <fichier>\` _ou_ \`git clang-format\`."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "Non conformes : $bad / ${#files[@]} (run non bloquant)"
+          echo "Non conformes : $bad / ${#files[@]}"
+          # Bascule ADC-219 (informatif -> bloquant). Le tronc est conforme au style .clang-format
+          # depuis le balayage ADC-118, donc tout nouvel ecart est une regression : le job echoue.
+          # Les fichiers fautifs sont en ::warning ci-dessus et dans l'artefact format-diff.patch ;
+          # corriger avec 'clang-format -i <fichier>' ou 'git clang-format'.
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::clang-format : $bad fichier(s) non conforme(s) au style (.clang-format) -- job BLOQUANT (bascule ADC-219)"
+            exit 1
+          fi
       - name: ruff (lint Python, non bloquant)
+        if: always()  # le check clang-format precedent peut echouer (bloquant) ; ruff reste informatif
         run: |
           # Config : [tool.ruff] de pyproject.toml. --exit-zero : annotations sans casser le run.
           pipx run ruff check python --output-format github --exit-zero | tee ruff.log
