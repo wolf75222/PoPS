@@ -279,6 +279,27 @@ class SystemStepper {
     advance_transport_n(s, Real(0.5) * eff_dt, s.substeps);
   }
 
+  /// FULL-STEP advance of every DUE block over @p dt: effective step eff_dt = stride * dt (cadence
+  /// catch-up), then transport (dispatched by the geometry mode, cf. advance_transport) and the OPT-IN
+  /// Schur source stage (no-op otherwise, cf. run_source_stage). Frozen blocks (!evolve) and HELD blocks
+  /// (outside their stride window, cf. stride_due) are skipped. This is the verbatim per-block loop
+  /// shared by step (Lie) and step_cfl. The two OTHER macro-steps cannot reuse it: step_strang splits
+  /// transport into two HALF advances around a re-solved source stage (3 interleaved sub-loops), and
+  /// step_adaptive subcycles each block n_b times (advance_transport_n). It introduces NO NEW collective:
+  /// the underlying transport (halo exchanges) and Schur source stage (fill_ghosts + all_reduce in the
+  /// condensed solve) DO communicate, but this helper iterates the same blocks in the same order, so each
+  /// rank issues the SAME sequence of collectives as the inlined loops did -- no MPI desync, bit-identical.
+  void advance_due_blocks(double dt) {
+    Impl* P = owner_;
+    for (auto& s : P->sp) {
+      if (!s.evolve) continue;  // frozen block: not advanced
+      if (!stride_due(P->macro_step_, s.stride)) continue;  // hold: not at the stride window end
+      const Real eff_dt = Real(dt) * Real(s.stride);  // catch-up: effective step s.stride * dt
+      advance_transport(s, eff_dt);  // transport DISPATCHED by the geometry mode (None: assemble_rhs)
+      run_source_stage(s, eff_dt);  // OPT-IN: Schur-condensed source stage (no-op otherwise)
+    }
+  }
+
   /// One macro-step of length @p dt. ORDER INVARIANT per scheme (cf. SplitScheme):
   ///  - Lie (default, bit-identical): solve_fields; for each DUE block (stride cadence honored)
   ///    advance(dt) then run_source_stage(dt) interleaved; couplings; t += dt; ++macro_step.
@@ -292,13 +313,7 @@ class SystemStepper {
     // last advance, thus frozen until its next catch-up): stale density / charge in the Poisson sum as
     // long as it has not caught up. Assumed stride choice (loose coupling of the slow block).
     P->solve_fields();
-    for (auto& s : P->sp) {
-      if (!s.evolve) continue;  // frozen block: not advanced
-      if (!stride_due(P->macro_step_, s.stride)) continue;  // hold: not at the stride window end
-      const Real eff_dt = Real(dt) * Real(s.stride);  // catch-up: effective step s.stride * dt
-      advance_transport(s, eff_dt);  // transport DISPATCHED by the geometry mode (None: assemble_rhs)
-      run_source_stage(s, eff_dt);  // OPT-IN: Schur-condensed source stage (no-op otherwise)
-    }
+    advance_due_blocks(dt);  // DUE blocks: catch-up transport + opt-in source stage (shared with step_cfl)
     apply_couplings(Real(dt));  // inter-species coupled sources (splitting), after transport
     apply_projections();  // projection ponctuelle POST-PAS ENTIER (ADC-177) ; no-op sans projection
     P->t += dt;
@@ -465,13 +480,7 @@ class SystemStepper {
       reason = "degenerate";
     }
     last_dt_reason_ = std::move(reason);
-    for (auto& s : P->sp) {
-      if (!s.evolve) continue;
-      if (!stride_due(P->macro_step_, s.stride)) continue;  // hold: not at the stride window end
-      const Real eff_dt = Real(dt) * Real(s.stride);  // catch-up: effective step s.stride * dt
-      advance_transport(s, eff_dt);  // transport DISPATCHED by the geometry mode (None: assemble_rhs)
-      run_source_stage(s, eff_dt);  // OPT-IN: Schur-condensed source stage (no-op otherwise)
-    }
+    advance_due_blocks(dt);  // DUE blocks: catch-up transport + opt-in source stage (shared with step Lie)
     apply_couplings(Real(dt));
     apply_projections();  // projection ponctuelle POST-PAS ENTIER (ADC-177) ; no-op sans projection
     P->t += dt;

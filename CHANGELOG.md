@@ -334,6 +334,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   (`apply_global_dt_bounds(dt, reason*)`, mirroring the existing `apply_coupled_freq_expr_bounds`
   idiom, and `cfl_grid_h()`). Trajectory is bit-identical and the MPI collective count/order is
   unchanged (no behavior change).
+- **Factor the stepper due-block advance loop** (ADC-213): `step` (Lie) and `step_cfl` shared,
+  verbatim, the per-block loop that advances every DUE block by its catch-up step (transport plus the
+  opt-in Schur source stage). It is now a private `SystemStepper::advance_due_blocks(dt)` helper. The
+  two other macro-steps keep their own loops (`step_strang` interleaves a re-solved source stage
+  between two half advances; `step_adaptive` subcycles each block `n_b` times). The helper introduces
+  no new collective and iterates the same blocks in the same order, so each rank issues the same
+  sequence of transport/source halo and `all_reduce` calls as before: the trajectory is bit-identical
+  and the MPI collective count/order is unchanged (no behavior change).
 - **Builtin model bricks behind a single registry** (ADC-331): the transport / source / elliptic
   tag lists are centralized in `include/adc/runtime/model_registry.hpp` (constexpr `kTransports` /
   `kSources` / `kElliptics` tables plus CSV / choices / validator helpers), the model-axis
