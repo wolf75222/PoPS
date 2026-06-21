@@ -315,6 +315,12 @@ if(ADC_BUILD_PYTHON)
     # neutralise UNIQUEMENT autour de FetchContent_MakeAvailable, puis on restaure l'etat precedent :
     # les depreciations de notre propre code restent signalees.
     message(STATUS "adc Python module: pybind11 absent de l'environnement -> repli FetchContent (v2.13.6)")
+    # Python a deja ete trouve via find_package(... Development.Module) plus haut : on force le
+    # pybind11 telecharge a reutiliser ce Python moderne. Sinon il retombe sur sa detection classique,
+    # qui ne consomme PAS l'include de Development.Module -> "Python.h: No such file or directory" au
+    # build sur les machines sans pybind11 dans l'environnement (spack/HPC). Le chemin
+    # find_package(pybind11) ci-dessus n'est pas concerne (ADC-386).
+    set(PYBIND11_FINDPYTHON ON)
     set(_adc_warn_dep_saved "${CMAKE_WARN_DEPRECATED}")
     set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(pybind11
