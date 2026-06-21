@@ -133,7 +133,7 @@ adc_cpp is organized into five orthogonal layers. A high layer expresses the pro
 
 **Execution (seams).** The execution policy, reduced to seams that only see minimal views (Box2D, `Array4`, scalar, rank), never `BoxArray` nor `DistributionMapping`: `for_each_cell` ([`include/adc/mesh/for_each.hpp`](../include/adc/mesh/for_each.hpp), serial / OpenMP / Kokkos dispatch) takes a box and an `ADC_HD(i, j)` lambda; the POD view `Array4` ([`include/adc/mesh/fab2d.hpp`](../include/adc/mesh/fab2d.hpp)) is identical host/device; `comm` ([`include/adc/parallel/comm.hpp`](../include/adc/parallel/comm.hpp)) does rank/size, all-reduce, barrier (serial / MPI identity); the allocator ([`include/adc/core/allocator.hpp`](../include/adc/core/allocator.hpp)) manages the storage of the Fabs. The halo exchange (`fill_boundary`) and the reductions / `saxpy` (`mf_arith`) are not this layer: they are grid operators that orchestrate the seams.
 
-**Time / coupling.** The layer that composes the operators without knowing their internal implementation: SSPRK ([`include/adc/numerics/time/ssprk.hpp`](../include/adc/numerics/time/ssprk.hpp)), IMEX asymptotic-preserving ([`include/adc/numerics/time/imex.hpp`](../include/adc/numerics/time/imex.hpp)), splitting `lie_step` / `strang_step` ([`include/adc/numerics/time/splitting.hpp`](../include/adc/numerics/time/splitting.hpp)). A `TimePolicy` ([`include/adc/numerics/time/time_integrator.hpp`](../include/adc/numerics/time/time_integrator.hpp)) names, per block, the temporal treatment and the number of substeps; the scheduler reads this policy and calls the adapted operator without knowing the flux formula. The fluid <-> Poisson coupling is carried by a `CouplingPolicy` ([`include/adc/coupling/coupling_policy.hpp`](../include/adc/coupling/coupling_policy.hpp)) which decides the order of operations and the synchronizations, without owning the data nor knowing the backend: `Coupler` single-model ([`include/adc/coupling/coupler.hpp`](../include/adc/coupling/coupler.hpp)), `SystemCoupler` multi-species single-level ([`include/adc/coupling/system_coupler.hpp`](../include/adc/coupling/system_coupler.hpp)), `AmrCouplerMP` AMR multi-box ([`include/adc/coupling/amr_coupler_mp.hpp`](../include/adc/coupling/amr_coupler_mp.hpp)).
+**Time / coupling.** The layer that composes the operators without knowing their internal implementation: SSPRK ([`include/adc/numerics/time/ssprk.hpp`](../include/adc/numerics/time/ssprk.hpp)), IMEX asymptotic-preserving ([`include/adc/numerics/time/imex.hpp`](../include/adc/numerics/time/imex.hpp)), splitting `lie_step` / `strang_step` ([`include/adc/numerics/time/splitting.hpp`](../include/adc/numerics/time/splitting.hpp)). A `TimePolicy` ([`include/adc/numerics/time/time_integrator.hpp`](../include/adc/numerics/time/time_integrator.hpp)) names, per block, the temporal treatment and the number of substeps; the scheduler reads this policy and calls the adapted operator without knowing the flux formula. The fluid <-> Poisson coupling is carried by a `CouplingPolicy` ([`include/adc/coupling/base/coupling_policy.hpp`](../include/adc/coupling/base/coupling_policy.hpp)) which decides the order of operations and the synchronizations, without owning the data nor knowing the backend: `Coupler` single-model ([`include/adc/coupling/single/coupler.hpp`](../include/adc/coupling/single/coupler.hpp)), `SystemCoupler` multi-species single-level ([`include/adc/coupling/static_system/system_coupler.hpp`](../include/adc/coupling/static_system/system_coupler.hpp)), `AmrCouplerMP` AMR multi-box ([`include/adc/coupling/amr/amr_coupler_mp.hpp`](../include/adc/coupling/amr/amr_coupler_mp.hpp)).
 
 
 ## Grid conventions
@@ -515,13 +515,13 @@ struct.
 
 The model is then instantiated in a coupler, which closes the loop Poisson -> `aux` channel -> advance in
 time. For a single-level domain, it is `Coupler<Model, Elliptic = GeometricMG>`
-([`include/adc/coupling/coupler.hpp`](../include/adc/coupling/coupler.hpp)): the elliptic solver is a
+([`include/adc/coupling/single/coupler.hpp`](../include/adc/coupling/single/coupler.hpp)): the elliptic solver is a
 template parameter, `GeometricMG` by default. For the multi-patch AMR ExB, it is
 `AmrCouplerMP<Model, Elliptic = GeometricMG>`
-([`include/adc/coupling/amr_coupler_mp.hpp`](../include/adc/coupling/amr_coupler_mp.hpp)), which orders the
+([`include/adc/coupling/amr/amr_coupler_mp.hpp`](../include/adc/coupling/amr/amr_coupler_mp.hpp)), which orders the
 operations (coarse Poisson -> `aux = grad phi` -> advance + regrid Berger-Rigoutsos) and outputs the
 hierarchy in `AmrLevelStack`. The multi-species coupler carried over AMR is `AmrSystemCoupler`
-([`include/adc/coupling/amr_system_coupler.hpp`](../include/adc/coupling/amr_system_coupler.hpp)).
+([`include/adc/coupling/static_system/amr_system_coupler.hpp`](../include/adc/coupling/static_system/amr_system_coupler.hpp)).
 
 The runtime facades `System` ([`include/adc/runtime/system.hpp`](../include/adc/runtime/system.hpp)) and
 `AmrSystem` ([`include/adc/runtime/amr_system.hpp`](../include/adc/runtime/amr_system.hpp)) wrap these
@@ -535,7 +535,7 @@ silently), or are assumed scope boundaries.
 - AMR: no composite elliptic solve nor global Schur. The Poisson is solved at the coarse level
   then injected toward the fine; `AmrSystem` has no condensed Schur stage (noted in
   [`include/adc/runtime/amr_system.hpp`](../include/adc/runtime/amr_system.hpp), and
-  [`amr_system_coupler.hpp`](../include/adc/coupling/amr_system_coupler.hpp) describes "coarse Poisson +
+  [`amr_system_coupler.hpp`](../include/adc/coupling/static_system/amr_system_coupler.hpp) describes "coarse Poisson +
   reflux per block"). The full tensor operator of the Schur condensation goes through
   `TensorKrylovSolver`, outside the symmetric `GeometricMG`, and is not wired on the refined hierarchy.
 

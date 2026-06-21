@@ -51,9 +51,9 @@ To keep as the high-level surface:
   - `adc::runtime::AmrSystem`
 - `include/adc/runtime/amr_runtime.hpp`
   - runtime multi-block engine, shared hierarchy, regrid by union of tags.
-- `include/adc/coupling/amr_coupler_mp.hpp`
+- `include/adc/coupling/amr/amr_coupler_mp.hpp`
   - historical mono-block path.
-- `include/adc/coupling/amr_system_coupler.hpp`
+- `include/adc/coupling/static_system/amr_system_coupler.hpp`
   - compile-time multi-block path.
 - `include/adc/numerics/time/amr_advance.hpp`
   - `LevelHierarchy`, `advance_amr`.
@@ -94,7 +94,7 @@ Proposed addition: an optional backend selector, for example
 
 | Need | Current implementation | Current files |
 |---|---|---|
-| AMR levels | `AmrHierarchy`, `AmrLevelStack`, `AmrLevelMP` | `include/adc/amr/amr_hierarchy.hpp`, `include/adc/coupling/amr_level_storage.hpp`, `include/adc/numerics/time/amr_subcycling.hpp` |
+| AMR levels | `AmrHierarchy`, `AmrLevelStack`, `AmrLevelMP` | `include/adc/amr/amr_hierarchy.hpp`, `include/adc/coupling/amr/amr_level_storage.hpp`, `include/adc/numerics/time/amr_subcycling.hpp` |
 | Patches | `Box2D`, `BoxArray`, local/global index of `MultiFab` | `include/adc/mesh/box2d.hpp`, `include/adc/mesh/box_array.hpp`, `include/adc/mesh/multifab.hpp` |
 | Hierarchy | vectors of levels and `MultiFab`, fixed ref ratio 2 | `amr_hierarchy.hpp`, `amr_runtime.hpp`, `amr_coupler_mp.hpp` |
 | Distribution | `DistributionMapping` round-robin/explicit | `include/adc/mesh/distribution_mapping.hpp` |
@@ -103,10 +103,10 @@ Proposed addition: an optional backend selector, for example
 | Physical BC | `BCRec`, `fill_physical_bc`, `fill_ghosts` | `include/adc/mesh/physical_bc.hpp` |
 | Interpolation/restriction | `interpolate`, `average_down`, `parallel_copy` | `include/adc/mesh/refinement.hpp` |
 | Tags and clustering | `TagBox`, `tag_cells`, `grow_tags`, `berger_rigoutsos` | `include/adc/amr/tag_box.hpp`, `include/adc/amr/regrid.hpp`, `include/adc/amr/cluster.hpp` |
-| Regrid production | fine layout imposed, multi-block union already implemented | `include/adc/coupling/amr_regrid_coupler.hpp`, `include/adc/runtime/amr_runtime.hpp` |
+| Regrid production | fine layout imposed, multi-block union already implemented | `include/adc/coupling/amr/amr_regrid_coupler.hpp`, `include/adc/runtime/amr_runtime.hpp` |
 | Reflux | `FluxRegister`, `CoverageMask`, `CoarseFineInterface` | `include/adc/numerics/time/amr_patch_range.hpp`, `include/adc/numerics/time/amr_reflux*.hpp` |
 | Subcycling | Berger-Oliger ratio 2, average-down, reflux | `include/adc/numerics/time/amr_subcycling.hpp` |
-| Elliptic | `GeometricMG`, limited `CompositeFacPoisson`, coarse solve + injection by default | `include/adc/numerics/elliptic/*`, `include/adc/coupling/amr_coupler_mp.hpp` |
+| Elliptic | `GeometricMG`, limited `CompositeFacPoisson`, coarse solve + injection by default | `include/adc/numerics/elliptic/*`, `include/adc/coupling/amr/amr_coupler_mp.hpp` |
 | Physics | local models, fluxes, sources, CFL, DSL/native | `include/adc/physics`, `include/adc/numerics`, `include/adc/runtime` |
 
 Conclusion: SAMRAI must replace hierarchy management, patches,
@@ -480,7 +480,7 @@ Exit criterion:
 Files:
 
 - `include/adc/samrai/elliptic_adapter.hpp`
-- `include/adc/coupling/amr_coupler_mp.hpp`
+- `include/adc/coupling/amr/amr_coupler_mp.hpp`
 - `include/adc/runtime/amr_runtime.hpp`
 - `tests/test_samrai_amr_potential.cpp`
 

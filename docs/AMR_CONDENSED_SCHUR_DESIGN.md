@@ -55,7 +55,7 @@ Component layout (matches `to_3d`/`set_primitive_state`): **component-major, row
 - **`BlockSpec`** -- `python/amr_system.cpp:98-100`. Mirror: `bool has_state=false; std::vector<double> state;`.
 - **`AmrCompiledHooks`** -- unchanged.
 
-### 1.2 New kernel `coupler_write_coarse_state` -- `include/adc/coupling/amr_coupler_mp.hpp` (add after `coupler_write_coarse`, ~line 133)
+### 1.2 New kernel `coupler_write_coarse_state` -- `include/adc/coupling/amr/amr_coupler_mp.hpp` (add after `coupler_write_coarse`, ~line 133)
 
 New function; `coupler_write_coarse` (line 116) left untouched (density path provably bit-identical). Distribution-aware, multi-box; copies all `ncomp` components positionally (no rho/momentum/energy hardwired -- caller does prim->cons). `gamma` omitted (energy supplied by caller).
 
@@ -332,7 +332,7 @@ ROMEO-only = **V6**. Everything through V5 (incl. MPI up to np=4) runs on the la
 **Phase B -- changed:**
 - `include/adc/runtime/amr_system.hpp` -- `AmrBuildParams` += `has_state,state`; `AmrCompiledBlockBuilder` typedef += `state,has_state`; declare `set_conservative_state`, `coarse_state`.
 - `include/adc/runtime/abi_key.hpp` -- **add glob-independent ABI sentinel** (`amr_builder_v=2`) [phaseB C1/H1].
-- `include/adc/coupling/amr_coupler_mp.hpp` -- **new** `coupler_write_coarse_state`; **new** `coupler_read_coarse_all`.
+- `include/adc/coupling/amr/amr_coupler_mp.hpp` -- **new** `coupler_write_coarse_state`; **new** `coupler_read_coarse_all`.
 - `include/adc/runtime/amr_dsl_block.hpp` -- mono seed branch (90); `build_amr_block`/`dispatch_amr_block` (10 sites)/`multi_builder` += `state,has_state`.
 - `python/amr_system.cpp` -- `BlockSpec` += `has_state,state`; `make_build_params` packs state; 2 multi dispatches += args; **new** `set_conservative_state` + `coarse_state` bodies.
 - `python/bindings.cpp` -- **new** `set_conservative_state` (with `ndim()==3` guard) + `coarse_state` pybind.
@@ -342,7 +342,7 @@ ROMEO-only = **V6**. Everything through V5 (incl. MPI up to np=4) runs on the la
 **Phase C -- new:**
 - `include/adc/numerics/elliptic/amr_tensor_krylov_solver.hpp` -- multi-level BiCGStab; covered-excluded L2 reductions; per-level matvec with reflux + covered-slave; FGMRES fallback hook.
 - `include/adc/numerics/elliptic/amr_elliptic_reflux.hpp` -- `TensorFluxRegister` + `route_elliptic_reflux` (diagonal flux; conforming cross-flux if §2.3 option 1).
-- `include/adc/coupling/amr_condensed_schur_source_stepper.hpp` -- per-level scratch, `step()`, lazy build, full rebuild-on-regrid.
+- `include/adc/coupling/schur/amr_condensed_schur_source_stepper.hpp` -- per-level scratch, `step()`, lazy build, full rebuild-on-regrid.
 - `include/adc/numerics/elliptic/amr_mg_preconditioner.hpp` -- *(Tier 1 only)* MLAT V-cycle across AMR levels.
 - `python/tests/test_amr_schur_*.py` -- V0a/V0b/V1/V2/V3/V4 drivers.
 
