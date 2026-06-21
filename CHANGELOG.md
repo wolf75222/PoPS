@@ -239,6 +239,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Changed
 
+- **`quality.yml` clang-format check is now blocking** (ADC-219): with the tree conforming to
+  `.clang-format` since the ADC-118 sweep, the `format` job's `clang-format --dry-run` step fails the
+  job on any new style deviation (a regression) instead of only warning. `ruff` (Python) stays
+  informational (`if: always()`, so its signal survives a format failure). This is the D15 hardening;
+  the corresponding clang-tidy-family checks stay informative until their existing findings are fixed.
+  Note: `quality.yml` runs on schedule, manual dispatch, or a `quality`-labeled PR, not on every PR.
 - **Repo-wide clang-format sweep** (ADC-118): `include/`, `python/` and `tests/` reformatted to
   `.clang-format` in one mechanical commit (`78816b0`, no functional change), bringing the
   `format`-scanned trees to zero non-conforming. Its SHA is recorded in `.git-blame-ignore-revs` so
