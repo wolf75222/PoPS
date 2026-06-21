@@ -557,6 +557,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Fixed
 
+- **`_adc` builds on machines without pybind11 in the environment** (ADC-386): the FetchContent
+  fallback for pybind11 now sets `PYBIND11_FINDPYTHON ON` before fetching, so the downloaded pybind11
+  reuses the modern Python found via `find_package(... Development.Module)`. Without it pybind11 fell
+  back to classic discovery, which did not propagate the Python include, and the `_adc` compile failed
+  with `Python.h: No such file or directory` on bare/HPC/spack toolchains (the conda CI path, which
+  finds pybind11 via `find_package`, was unaffected). Verified on ROMEO (x64cpu, Kokkos OpenMP).
 - **Quasi-vacuum velocity bound for the isothermal model** (ADC-77, third stability barrier of the
   WENO5 rollup): when the diocotron rollup evacuates the background (rho -> ~1e-7) the Schur source
   stage writes O(1) momentum onto those cells, so the raw u = m/rho exploded and collapsed the CFL.
