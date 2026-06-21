@@ -192,7 +192,7 @@ Reference: [native-bricks](docs/sphinx/reference/native-bricks.md),
 | `numerics/` | reconstruction (Minmod / VanLeer / WENO5), flux (Rusanov / HLL / HLLC / Roe) | [reconstruction.hpp](include/adc/numerics/reconstruction.hpp) |
 | `numerics/elliptic/` | `EllipticSolver` concept, geometric multigrid, FFT, composite FAC | [elliptic_solver.hpp](include/adc/numerics/elliptic/elliptic_solver.hpp) |
 | `numerics/time/` | SSP-RK, multirate scheduler, IMEX, splitting, AMR engine | [numerics/time/](include/adc/numerics/time) |
-| `coupling/` | `Coupler`, `SystemCoupler`, `AmrSystemCoupler`, `AmrCouplerMP` | [coupler.hpp](include/adc/coupling/coupler.hpp) |
+| `coupling/` | `Coupler`, `SystemCoupler`, `AmrSystemCoupler`, `AmrCouplerMP` | [coupler.hpp](include/adc/coupling/single/coupler.hpp) |
 | `amr/`, `mesh/`, `parallel/` | Berger-Rigoutsos clustering, regrid, MultiFab, MPI comm seam | [amr/](include/adc/amr) |
 | `runtime/` | `System` / `AmrSystem` facades, `model_factory`, DSL, aux channel | [system.hpp](include/adc/runtime/system.hpp) |
 

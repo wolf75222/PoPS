@@ -116,7 +116,7 @@ are exposed without docstring (`python/bindings.cpp:362`: `step_cfl`, `step_adap
 
 ### Variable Comments
 Generally careful (non-obvious members annotated with units). Defects: `phi_n_` described with a
-false life cycle and API (`include/adc/coupling/condensed_schur_source_stepper.hpp:395`, cf.
+false life cycle and API (`include/adc/coupling/schur/condensed_schur_source_stepper.hpp:395`, cf.
 comment rot); `mg_` announces a "homogeneous Dirichlet" invariant that the code does not guarantee
 (`include/adc/numerics/elliptic/composite_fac_poisson.hpp:489`); members of `MGLevel` partially
 bare (`geometric_mg.hpp:496`, `coef`/`mask` not decodable on the spot); Poisson configuration
@@ -161,7 +161,7 @@ Each one has been confronted with the code and re-verified.
 | `include/adc/numerics/elliptic/polar_tensor_operator.hpp:381` | `solve()` = Jacobi-preconditioned BiCGStab | default precond = RadialLine (radial Thomas), selectable via `precond_`; omits the gauge pinning |
 | `include/adc/numerics/spatial_operator_eb.hpp:136` | fractional face apertures `alpha in [1e-3,1]` between active cells | `cut_distance` returns `h` for any active neighbor -> alpha = 1; BINARY apertures {0,1}, only `kappa` is fractional |
 | `include/adc/numerics/time/amr_reflux.hpp:19` | "minimal version": subcycling to come, uniform aux | `amr_step_2level` ALREADY IMPLEMENTS Berger-Oliger subcycling (155-174) and reads a spatial aux; living file (included by `spectral_coupler.hpp`) |
-| `include/adc/coupling/condensed_schur_source_stepper.hpp:395` | `phi_n_` allocated at the first `advance_source` | allocated unconditionally at the ctor (234); the `advance_source` method DOES NOT EXIST (the API is `step()`, repo grep = 0 other occurrence) |
+| `include/adc/coupling/schur/condensed_schur_source_stepper.hpp:395` | `phi_n_` allocated at the first `advance_source` | allocated unconditionally at the ctor (234); the `advance_source` method DOES NOT EXIST (the API is `step()`, repo grep = 0 other occurrence) |
 | `include/adc/runtime/amr_system.hpp:363` | `set_conservative_state` raises in multi-block | the `build_multi` facade threads the state to the NATIVE blocks (379); only the compiled path (.so) rejects (315) |
 | `python/bindings.cpp:70` | serial: `my_rank=1`, `n_ranks=0` | `comm.hpp` returns `my_rank()=0`, `n_ranks()=1`; contradicts the adjacent docstrings (73-74) |
 | `python/bindings.cpp:240` | `set_source_stage` descriptors: "Cartesian only (polar: reject)" | the polar stage builds a `PolarCondensedSchurSourceStepper` and honors `bz_aux_component` without rejection (`system.cpp:1410-1438`) |
@@ -187,7 +187,7 @@ documented further down), and the doc-only enumerations of `system.hpp` (weno5/s
 
 No TODO signals incomplete work: these are 20 provenance labels referring to a
 roadmap numbering (`TODO 2.3`, `TODO 4`, `TODO 2.2.3`, `TODO 4.3`, `TODO 2.1.1`). They
-DESCRIBE behavior already implemented (`include/adc/coupling/amr_system_coupler.hpp:33,44,62`,
+DESCRIBE behavior already implemented (`include/adc/coupling/static_system/amr_system_coupler.hpp:33,44,62`,
 `tests/test_two_species_minimal.cpp`) or a future generalization
 (`include/adc/numerics/spatial_operator.hpp:560,653`). Two problems: the numbering is not
 resolvable from the `todo.md` at the root (orphan cross-references for a fresh reader), and any CI scan
@@ -209,7 +209,7 @@ the bibliography, the Latin word `via`).
 
 Three breaches, all occasional:
 - Authentic English prose: a SINGLE island, the Doxygen block of `max_wave_speed`
-  (`include/adc/coupling/amr_coupler_mp.hpp:553-559`), surrounded by French members. To translate.
+  (`include/adc/coupling/amr/amr_coupler_mp.hpp:553-559`), surrounded by French members. To translate.
 - Accents: 2 lines in the whole repository (`bench/scaling_step.cpp:329-330`). To strip.
 - ASCII: 1 emoji (`include/adc/runtime/amr_dsl_block.hpp:172`). To replace with `ATTENTION :`.
 

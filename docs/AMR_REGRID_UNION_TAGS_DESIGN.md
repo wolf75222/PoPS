@@ -11,7 +11,7 @@ DELIVERED (runtime multi-block engine AmrRuntime):
 - [x] (R3) helper `tag_union(span<TagBox>)` (cell-by-cell OR) -> `include/adc/amr/tag_box.hpp`.
 - [x] REFACTOR (section 6): `amr_regrid_finest` split into `regrid_compute_fine_layout`
       (tags -> grow -> all_reduce_or -> berger_rigoutsos -> clamp -> (fb, dmap)) + `regrid_field_on_layout`
-      (re-grids ONE field on an IMPOSED layout) -> `include/adc/coupling/amr_regrid_coupler.hpp`.
+      (re-grids ONE field on an IMPOSED layout) -> `include/adc/coupling/amr/amr_regrid_coupler.hpp`.
       `amr_regrid_finest` stays the chaining of the two -> mono-block path BIT-IDENTICAL (verified).
 - [x] (R0-R8) `AmrRuntime::regrid()`: (R0) solve_fields, (R1) per-block tags (predicate D1), (R2) phi
       tags on |grad phi| (D4), (R3) union + grow, (R4) all_reduce_or if coarse distributed, (R5) a single
@@ -46,7 +46,7 @@ OUT OF SCOPE (conforming to the boundaries):
 
 PROJECT FRAME. The multi-block runtime delivered so far (`AmrRuntime`,
 `include/adc/runtime/amr_runtime.hpp`, runtime counterpart of `AmrSystemCoupler`,
-`include/adc/coupling/amr_system_coupler.hpp`) is "Phase 1 multi-block with FROZEN hierarchy":
+`include/adc/coupling/static_system/amr_system_coupler.hpp`) is "Phase 1 multi-block with FROZEN hierarchy":
 N blocks (electrons, ions, neutrals, ...) co-located on ONE shared AMR hierarchy, a single
 coarse Poisson with SUMMED right-hand side, cell-by-cell coupled sources, multirate per block
 (substeps / stride / evolve), but a mesh that NEVER MOVES after construction. Neither
@@ -70,7 +70,7 @@ criteria of all fields, NEVER a per-species hierarchy.
 The code was re-read directly. Four facts structure everything that follows.
 
 FACT 1: the MONO-BLOCK REGRID BRICK EXISTS and is proven. `amr_regrid_finest`
-(`include/adc/coupling/amr_regrid_coupler.hpp`) does, for ONE block: tag the parent
+(`include/adc/coupling/amr/amr_regrid_coupler.hpp`) does, for ONE block: tag the parent
 (`tag_cells`) -> `grow_tags` (nesting + margin) -> `all_reduce_or_inplace` if coarse distributed
 -> `berger_rigoutsos` -> nesting clamp (margin) -> new fine `BoxArray` + a single
 `DistributionMapping(nfine, n_ranks())` -> carry over existing fine data + interpolation
@@ -79,7 +79,7 @@ the skeleton the multi-block version needs; only the "one single layout for all 
 orchestration is missing.
 
 FACT 2: the MONO-BLOCK REGRID IS ALREADY WIRED TO THE FACADE, but ONLY for the mono-block path.
-`AmrCouplerMP::regrid` (`include/adc/coupling/amr_coupler_mp.hpp:321-325`) delegates to
+`AmrCouplerMP::regrid` (`include/adc/coupling/amr/amr_coupler_mp.hpp:321-325`) delegates to
 `amr_regrid_finest`, and the `h.step` closure of the mono-block path calls it periodically
 (`include/adc/runtime/amr_dsl_block.hpp:101-104`:
 `if (regrid_every > 0 && *step_state % regrid_every == 0) cpl->regrid(crit);`). The
@@ -93,7 +93,7 @@ would make the API CLAIM it does dynamic AMR while the mesh never moves
 the algorithm below is implemented and tested.
 
 FACT 4: the LAYOUT GUARD EXISTS and will be the natural safety net of the post-regrid.
-`detail::same_layout_or_throw` (`include/adc/coupling/amr_system_coupler.hpp:122-140`, reused
+`detail::same_layout_or_throw` (`include/adc/coupling/static_system/amr_system_coupler.hpp:122-140`, reused
 by `AmrRuntime` at the ctor, `amr_runtime.hpp:213-218`) compares EXACTLY, across all blocks:
 number of levels, then per level `BoxArray` (boxes AND order, via `ba.boxes() ==`),
 `DistributionMapping` (rank per box, via `dm.ranks() ==`) and `dx`/`dy` (bit for bit). It is the
@@ -450,13 +450,13 @@ OPEN DECISIONS (owner signature required).
 
 ## 9. Code references (all verified at this head)
 
-- `include/adc/coupling/amr_system_coupler.hpp`: compile-time multi-block AMR engine (FROZEN
+- `include/adc/coupling/static_system/amr_system_coupler.hpp`: compile-time multi-block AMR engine (FROZEN
   hierarchy, NO regrid); `AmrHierarchyLayout`, `detail::same_layout_or_throw` (layout guard).
 - `include/adc/runtime/amr_runtime.hpp`: RUNTIME multi-block engine (type-erased registry by name,
   shared aux, summed Poisson, coupled sources, multirate); NO regrid (target of this design).
-- `include/adc/coupling/amr_coupler_mp.hpp`: MONO-BLOCK AMR coupler + `regrid` (`:321-325`,
+- `include/adc/coupling/amr/amr_coupler_mp.hpp`: MONO-BLOCK AMR coupler + `regrid` (`:321-325`,
   delegates to `amr_regrid_finest`); mono-block path UNTOUCHED.
-- `include/adc/coupling/amr_regrid_coupler.hpp`: `amr_regrid_finest` (Berger-Rigoutsos, finest
+- `include/adc/coupling/amr/amr_regrid_coupler.hpp`: `amr_regrid_finest` (Berger-Rigoutsos, finest
   level); brick to SPLIT into "layout computation" + "re-grid a field on a given layout".
 - `include/adc/amr/tag_box.hpp`: `TagBox` (dense grid of tags 0/1; union = cell-by-cell OR).
 - `include/adc/amr/regrid.hpp`: `tag_cells`, `grow_tags`, `regrid_level` (generic bricks).

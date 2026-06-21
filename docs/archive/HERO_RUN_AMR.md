@@ -21,7 +21,7 @@ state), mass conserved to roundoff, and the GPU port bit-identical to the CPU.
   (`include/adc/integrator/amr_reflux_mf.hpp`.)
 - **Distributed AMR coupler**: `AmrCouplerMP` orchestrates everything; its aux injection
   `coupler_inject_aux_mb` goes through `parallel_copy` when the parent is distributed
-  (`test_mpi_coupler_inject`). (`include/adc/coupling/amr_coupler_mp.hpp`.)
+  (`test_mpi_coupler_inject`). (`include/adc/coupling/amr/amr_coupler_mp.hpp`.)
 - **SFC balancing**: `make_sfc_distribution` (Morton Z-order) WIRED IN and
   verified under distributed AMR (`maxdiff = 0` vs rank 0, `np=1/2/4`).
 - **Execution seam**: `for_each_cell` picks ONE backend at compile time
