@@ -20,6 +20,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **`adc.time.Program`: builder-mode IR for compiled time programs** (ADC-401): a new `adc.time`
+  module exposing `Program`, the central abstraction of the compiled time-program DSL (ADC-399).
+  Python builds a typed SSA IR -- `state`, `solve_fields`, `rhs(flux=, sources=)`, `linear_combine`,
+  `commit` -- with an affine algebra over the time step (`U + dt*R`, `0.5*U0 + 0.5*(U1 + dt*k1)`,
+  `dt/6.0*k1`) that records per-input coefficient polynomials in `dt`, so Forward Euler, SSPRK2/SSPRK3
+  and RK4 are all expressed without any scheme-specific class. Structural validation (each block
+  committed at most once, at least one commit), a deterministic coefficient-sensitive IR hash (future
+  cache key), and a guard that an IR value cannot be used as a Python bool. IR construction only: no
+  codegen and no C++ runtime yet (those are later ADC-399 phases). First slice of Phase 2 (ADC-401).
 - **Named physical-model sources: `m.source_term` and `m.linear_source`** (ADC-400): the DSL `Model`
   gains opt-in named local sources. `source_term(name, exprs)` declares a named `S_name(U, prim, aux,
   params)` with `n_cons` components; `linear_source(name, matrix)` declares a named `n_cons x n_cons`

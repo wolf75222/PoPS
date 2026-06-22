@@ -112,7 +112,7 @@ set_target_properties(_adc PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${ADC_PY_PKG})
 if(SKBUILD)
   install(TARGETS _adc LIBRARY DESTINATION adc)
 endif()
-foreach(pyf adc/__init__.py adc/integrate.py adc/dsl.py adc/moments.py)
+foreach(pyf adc/__init__.py adc/integrate.py adc/dsl.py adc/moments.py adc/time.py)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${pyf} ${CMAKE_CURRENT_BINARY_DIR}/${pyf} COPYONLY)
 endforeach()
 
@@ -195,6 +195,16 @@ set_tests_properties(test_dsl_moments PROPERTIES
 add_test(NAME test_dsl_named_sources
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_named_sources.py)
 set_tests_properties(test_dsl_named_sources PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
+# solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
+# linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit
+# unique par bloc, au moins un commit), garde "valeur runtime non utilisable comme bool Python",
+# hash IR deterministe et sensible. Pur Python, aucun codegen ni runtime, aucun compilateur.
+add_test(NAME test_time_program
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_program.py)
+set_tests_properties(test_time_program PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
 # Roe generique des systemes de moments (ADC-368, m.roe_from_jacobian) : cablage/codegen sans
