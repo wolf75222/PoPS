@@ -206,6 +206,14 @@ tested_by = []
 testable = false
 reviewed = "d51a01e30b393075abedaa76ef82768e88df9a4b"
 
+[docs."docs/sphinx/reference/time-program.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["python/adc/time.py"]
+tested_by = []
+testable = false
+reviewed = "278a07c466930e9cb3fe93a74aa0e49ad3d680ca"
+
 [docs."docs/sphinx/reference/moment-models.md"]
 owner = "Romain"
 mode = "warning"
