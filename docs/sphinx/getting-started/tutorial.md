@@ -28,7 +28,7 @@ cd adc_cpp
 
 ## Step 2: Dependencies
 
-- C++23 compiler (AppleClang 16+, GCC 13+, Clang 17+).
+- C++20 compiler (AppleClang 16+, GCC 13+, Clang 17+); the core compiles as C++20.
 - CMake >= 3.21, Ninja, Python >= 3.10 with `numpy` (and `matplotlib` for the figures);
   the simplest way is the repository conda env: `conda env create -f environment.yml && conda
   activate adc`. pybind11 is taken from the env, otherwise fetched by CMake.

@@ -38,13 +38,15 @@ CUDA-aware), via SBATCH harnesses in `python/tests/gpu/` (excluded from the CI g
 Several GPU cells of the matrix remain `?` (not yet exercised on device); see the
 "Notable gaps" section of the source document.
 
-## DSL: parity asserted only if a C++23 compiler is present
+## DSL: parity asserted only if a matching C++ compiler is present
 
 The symbolic DSL (`adc.dsl`) compiles a model to a `.so` at runtime (backends `aot` /
 `production`) by invoking the C++ compiler against `adc_cpp`'s headers. The parity
-verification (DSL vs native brick) therefore relies on the presence of a working C++23 compiler
-on the machine. Without a C++23 toolchain, compilation of DSL models fails; only the
-purely native paths (`adc.Model(...)` / `add_block`) remain available.
+verification (DSL vs native brick) therefore relies on the presence of a working C++ compiler
+that supports the module standard (with `std=None` the loader derives it: C++20 under Kokkos,
+since nvcc CUDA 12.x has no `-std=c++23`; see the [DSL reference](symbolic-dsl.md)). Without a
+working C++ toolchain, compilation of DSL models fails; only the purely native paths
+(`adc.Model(...)` / `add_block`) remain available.
 
 ## DSL backends: prototype/aot are CPU-only
 

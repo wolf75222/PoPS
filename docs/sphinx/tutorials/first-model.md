@@ -11,7 +11,7 @@ diocotron normalization benchmark, not the full Euler-Poisson system.
 
 ## Prerequisites
 
-- A C++23 compiler (AppleClang 16+, GCC 13+, or Clang 17+), CMake 3.21 or newer, Ninja, and
+- A C++20 compiler (AppleClang 16+, GCC 13+, or Clang 17+), CMake 3.21 or newer, Ninja, and
   Python 3.10 or newer with `numpy` and `matplotlib`. The simplest way to get all of these is the
   repository conda env, set up in [Installation](../getting-started/installation.md).
 - A clone of the repository. If you do not have one, run the clone step below.
