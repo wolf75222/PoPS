@@ -153,5 +153,44 @@ chk(emax < 1e-12, "compiled FE Program == reference one-step (max|d| = %.2e)" % 
 chk(prog.macro_step() == step0 + 1, "macro_step advanced (%d -> %d)" % (step0, prog.macro_step()))
 chk(change > 1e-9, "the step actually changed the state (change = %.2e)" % change)
 
+# ---- (C) cache + debug dump (reaching here means the toolchain compiled the .so in section B) ----
+print("== (C) compile_problem cache + debug dump ==")
+import os  # noqa: E402
+import tempfile  # noqa: E402
+
+
+def _fe_scaled(name, a):
+    """A Forward-Euler Program U <- U + a*dt*R (the dt coefficient varies with a)."""
+    P = adctime.Program(name)
+    U = P.state("ions")
+    f = P.solve_fields(U)
+    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    P.commit("ions", P.linear_combine("U1", U + a * P.dt * R))
+    return P
+
+
+# Cache HIT: compiling the same Program twice (no explicit so_path) returns the SAME cached .so.
+c1 = adc.compile_problem(time=_fe_program("cache_probe"))
+c2 = adc.compile_problem(time=_fe_program("cache_probe"))
+chk(c1.so_path == c2.so_path and os.path.isfile(c1.so_path),
+    "cache HIT: identical Program -> same cached .so")
+
+# Cache MISS: a different dt coefficient is a different IR -> different generated source -> different
+# cache key -> different .so (spec: a changed temporal coefficient must invalidate the cache).
+c_a = adc.compile_problem(time=_fe_scaled("cache_coeff", 1.0))
+c_b = adc.compile_problem(time=_fe_scaled("cache_coeff", 2.0))
+chk(c_a.so_path != c_b.so_path, "cache MISS: a changed dt coefficient invalidates the cache")
+
+# debug=True writes the generated .cpp next to the .so for inspection.
+dbg_so = os.path.join(tempfile.mkdtemp(), "dbg_problem.so")
+adc.compile_problem(dbg_so, time=_fe_program("debug_probe"), debug=True)
+dbg_cpp = os.path.splitext(dbg_so)[0] + ".cpp"
+chk(os.path.isfile(dbg_cpp), "debug=True writes the generated .cpp next to the .so")
+if os.path.isfile(dbg_cpp):
+    with open(dbg_cpp) as _f:
+        dumped = _f.read()
+    chk("adc_install_program" in dumped and "ProgramContext" in dumped,
+        "the dumped .cpp contains the ProgramContext closure")
+
 print("%s test_compile_problem" % ("FAIL (%d)" % fails if fails else "PASS"))
 sys.exit(1 if fails else 0)
