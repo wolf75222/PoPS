@@ -3,7 +3,10 @@
 > **SINGLE SOURCE OF TRUTH** for the backend coverage of the test suite.
 > README and Sphinx must POINT HERE, not duplicate this table.
 > Updated manually after each test or CI job addition.
-> Last revision: 2026-06-07 (Lot E.4: matrix <-> disk resynchronization,
+> Last revision: 2026-06-22 (freshness pass: section 4 base counts refreshed to the
+> `docs/gen_test_counts.py` output -- 141 C++ outside-MPI, 13 MPI binaries, 114 Python;
+> the per-test tables in sections 1-2 lag disk again, tracked as gap #7).
+> Prior revision: 2026-06-07 (Lot E.4: matrix <-> disk resynchronization,
 > +13 C++ tests and +10 Python tests that were missing from the table).
 
 ---
@@ -322,15 +325,21 @@ Validated on the ROMEO x64cpu node (`Kokkos_ENABLE_OPENMP=ON`, OpenMPI, cmake + 
 
 ## 4. Quantified summary
 
-Counting base (as of 2026-06-07, regenerable via `docs/gen_test_counts.py`): 109 ctest C++
-targets outside the MPI block (91 `adc_add_test` + 18 `add_executable` runtime, including the 7 multi-block
-AMR capstones of section 1g-bis), + 11 `add_executable` in the `ADC_HAS_MPI` block (each
-replays np=1/2/4), + 60 Python tests.
+Counting base (authoritative source: `docs/gen_test_counts.py`; run it after any test
+add/remove): 141 ctest C++ targets outside the MPI block (118 `adc_add_test` + 23
+`add_executable` runtime, including the 7 multi-block AMR capstones of section 1g-bis),
++ 13 `add_executable` in the `ADC_HAS_MPI` block (each replays np=1/2/4), + 114 Python
+tests. The per-test tables above lag this base; `gen_test_counts.py --check-matrix` lists
+the rows still missing.
+
+The per-status cell estimates below are derived from the matrix as drawn in sections 1-2;
+they predate the row backlog noted above and undercount the missing tests. Treat the base
+totals (141 C++ outside-MPI, 13 MPI binaries, 114 Python) as the authoritative figures.
 
 | Status | Number of cells (approx.) |
 |--------|------------------------------|
-| **ci-fast** | ~169 (109 C++ outside-MPI x Kokkos Serial [gate] + 60 Python x Kokkos Serial [gate]) |
-| **ci-full** | ~239 (109 C++ x Kokkos Serial + 109 x Kokkos OpenMP; ~21 MPI CPU entries) |
+| **ci-fast** | 141 C++ outside-MPI x Kokkos Serial [gate] + 114 Python x Kokkos Serial [gate] |
+| **ci-full** | 141 C++ x Kokkos Serial + 141 x Kokkos OpenMP; ~21 MPI CPU entries |
 | **ROMEO** | ~55 (mono and multi-GPU GPU harnesses covering ~15 functional groups) |
 | **self-skip** | ~350 (Kokkos-Serial tests on MPI columns, and MPI-only on columns without MPI) |
 | **?** | Kokkos Cuda of the runtime tests not yet exercised on device (including section 1g-bis multi-block AMR) + MPI+Kokkos Cuda of the majority of MPI tests + the entire Python block outside the Kokkos Serial gate |
@@ -343,12 +352,14 @@ replays np=1/2/4), + 60 Python tests.
 > - Kokkos OpenMP CI: CLOSED (#155, ci-full job, 91/91 ctest).
 > - MPI + Kokkos Cuda multi-GPU: CLOSED for the 10 Krylov/Schur/MPI-core tests (#157, rank-invariant dmax=0).
 > - MPI + Kokkos OpenMP ROMEO: VALIDATED (52/57 rank-invariant; 3 heavy tests too slow at np>1, perf, not deadlock).
-> - Doc <-> disk sync (Lot E.4): CLOSED. The audit confirmed that NO CPU backend-path was
+> - Doc <-> disk sync (Lot E.4): the audit then confirmed that NO CPU backend-path was
 >   without a test: every C++ test outside-MPI runs in the 4 CPU backends (Serial, Kokkos Serial, Kokkos
 >   OpenMP, MPI np=1) and every MPI test in the MPI job. The only gap was DOCUMENTARY: 13 C++ tests
 >   and 10 Python tests delivered by sister workstreams (multi-block AMR, polar, elliptic_interface,
->   DSL, schur_via_system) were missing from the table. They are now indexed (sections 1c/1d/1f/1g-bis,
->   1h for MPI, section 2). No renaming: the names were already explicit about their backend.
+>   DSL, schur_via_system) were missing from the table and got indexed at that time
+>   (sections 1c/1d/1f/1g-bis, 1h for MPI, section 2). No renaming: the names were already explicit
+>   about their backend. NOTE: this sync has since REOPENED -- see gap #7 (the per-test tables now lag
+>   disk again).
 
 1. **Kokkos OpenMP (all suites)** -- CLOSED (#155): ci-full job `Kokkos_ENABLE_OPENMP=ON`, 91/91 ctest.
    Columns filled `ci-full` for all non-MPI tests (sections 1a-1g, including 1g-bis multi-block
@@ -387,3 +398,10 @@ replays np=1/2/4), + 60 Python tests.
    ROMEO harness (Kokkos Cuda columns = "?"). Device leg of the multi-block capstone, to be ported when
    the `add_compiled_model` device path (gap #4) is closed. The MPI CPU parity is covered by
    `test_mpi_amr_twoblock_parity_np1/2/4` (section 1h).
+
+7. **Per-test tables lag disk (documentary)** -- the matrix in sections 1-2 no longer enumerates
+   every test on disk. The base totals in section 4 are current (via `docs/gen_test_counts.py`),
+   but `gen_test_counts.py --check-matrix` reports rows added by later workstreams that still need a
+   line (extra elliptic/composite-FAC, embedded-boundary, model-registry, polar, and DSL tests, plus
+   new Python tests). This is a DOCUMENTARY gap only -- the missing tests still run in the CPU backends
+   of the gate; the table just needs to catch up. Re-run `--check-matrix` before re-acking this doc.
