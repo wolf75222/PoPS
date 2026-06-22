@@ -574,13 +574,16 @@ class System {
   /// @{
   /// Install the macro-step body. When set, SystemStepper::step calls it instead of the historical
   /// path (and keeps t / macro_step coherent). Pass an empty std::function to clear it.
-  void install_program_step(std::function<void(double)> step);
+  /// ADC_EXPORT: a generated problem.so resolves these across the dlopen boundary (RTLD_GLOBAL), like
+  /// install_block / grid_context; without default visibility the .so could not find them (_adc is
+  /// built with hidden visibility).
+  ADC_EXPORT void install_program_step(std::function<void(double)> step);
   /// Number of blocks (species) installed.
-  int n_blocks() const;
+  ADC_EXPORT int n_blocks() const;
   /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).
-  MultiFab& block_state(int b);
+  ADC_EXPORT MultiFab& block_state(int b);
   /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
-  void block_rhs_into(int b, MultiFab& U, MultiFab& R);
+  ADC_EXPORT void block_rhs_into(int b, MultiFab& U, MultiFab& R);
   /// @}
 
   /// @name Diagnostics

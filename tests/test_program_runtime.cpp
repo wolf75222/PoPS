@@ -9,11 +9,11 @@
 // charge (NoEll), so the result is pure gas dynamics and deterministic across two System instances.
 
 #include <adc/mesh/storage/multifab.hpp>
-#include <adc/physics/bricks/source.hpp>                 // NoSource
-#include <adc/physics/composition/composite.hpp>         // CompositeModel
-#include <adc/physics/fluids/euler.hpp>                  // Euler
-#include <adc/runtime/builders/compiled/dsl_block.hpp>   // add_compiled_model
-#include <adc/runtime/program/program_context.hpp>       // ProgramContext (the seam under test)
+#include <adc/physics/bricks/source.hpp>                // NoSource
+#include <adc/physics/composition/composite.hpp>        // CompositeModel
+#include <adc/physics/fluids/euler.hpp>                 // Euler
+#include <adc/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
+#include <adc/runtime/program/program_context.hpp>      // ProgramContext (the seam under test)
 #include <adc/runtime/system.hpp>
 
 #include <cmath>
@@ -42,13 +42,15 @@ static void fill_ic(std::vector<double>& U, int n, double gamma) {
   const double pi = 3.14159265358979323846;
   for (int j = 0; j < n; ++j)
     for (int i = 0; i < n; ++i) {
-      const std::size_t k = static_cast<std::size_t>(j) * n + i;  // j slow, i fast (get_state layout)
+      const std::size_t k =
+          static_cast<std::size_t>(j) * n + i;  // j slow, i fast (get_state layout)
       const double x = (i + 0.5) / n, y = (j + 0.5) / n;
-      const double p = 3.0 + 0.5 * std::cos(2 * pi * x) * std::cos(2 * pi * y);  // periodic, non-uniform
-      U[0 * nn + k] = 1.0;                // rho
-      U[1 * nn + k] = 0.0;                // rho u
-      U[2 * nn + k] = 0.0;                // rho v
-      U[3 * nn + k] = p / (gamma - 1.0);  // E (u = v = 0)
+      const double p =
+          3.0 + 0.5 * std::cos(2 * pi * x) * std::cos(2 * pi * y);  // periodic, non-uniform
+      U[0 * nn + k] = 1.0;                                          // rho
+      U[1 * nn + k] = 0.0;                                          // rho u
+      U[2 * nn + k] = 0.0;                                          // rho v
+      U[3 * nn + k] = p / (gamma - 1.0);                            // E (u = v = 0)
     }
 }
 
@@ -127,8 +129,9 @@ int main(int argc, char** argv) {
   }
 
   if (fails == 0)
-    std::printf("OK test_program_runtime (program Forward Euler == eval_rhs reference; "
-                "max|d| = %.2e, change = %.2e)\n",
-                err, change);
+    std::printf(
+        "OK test_program_runtime (program Forward Euler == eval_rhs reference; "
+        "max|d| = %.2e, change = %.2e)\n",
+        err, change);
   return fails ? 1 : 0;
 }

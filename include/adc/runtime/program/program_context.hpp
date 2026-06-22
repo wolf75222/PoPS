@@ -3,10 +3,10 @@
 #include <functional>
 #include <utility>
 
-#include <adc/core/foundation/types.hpp>   // Real
-#include <adc/mesh/storage/mf_arith.hpp>   // saxpy (linear combine over a MultiFab)
-#include <adc/mesh/storage/multifab.hpp>   // MultiFab
-#include <adc/runtime/system.hpp>          // System (the runtime this facade forwards to)
+#include <adc/core/foundation/types.hpp>  // Real
+#include <adc/mesh/storage/mf_arith.hpp>  // saxpy (linear combine over a MultiFab)
+#include <adc/mesh/storage/multifab.hpp>  // MultiFab
+#include <adc/runtime/system.hpp>         // System (the runtime this facade forwards to)
 
 /// @file
 /// @brief ProgramContext -- the C++-side facade a generated problem.so calls to run a compiled time
@@ -40,7 +40,9 @@ class ProgramContext {
 
   /// Register the macro-step body. @p step advances ONE macro-step over dt (it owns solve_fields,
   /// the RHS, the linear combine and the commit). Empty std::function clears it.
-  void install(std::function<void(double)> step) const { sys_->install_program_step(std::move(step)); }
+  void install(std::function<void(double)> step) const {
+    sys_->install_program_step(std::move(step));
+  }
 
   void solve_fields() const { sys_->solve_fields(); }
   int n_blocks() const { return sys_->n_blocks(); }
