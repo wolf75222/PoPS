@@ -325,6 +325,16 @@ class SystemStepper {
       return;
     }
     Impl* P = owner_;
+    // Compiled time Program (epic ADC-399): when a problem.so has installed a macro-step body, IT owns
+    // the whole step (solve_fields, RHS, combine, commit -- all via ProgramContext). The runtime only
+    // keeps the clock coherent. No implicit solve_fields / couplings / projections here: the Program
+    // expresses them explicitly. (step_cfl/step_adaptive do not yet support a Program -- ADC-401 2c.)
+    if (P->program_step_) {
+      P->program_step_(dt);
+      P->t += dt;
+      P->macro_step_++;
+      return;
+    }
     // COUPLING / POISSON: solve_fields assembles f = Sum_s elliptic_rhs_s(U_s) on the CURRENT state of
     // each block. A HELD block (cadence M, outside the window end) contributes with its STALE state (its
     // last advance, thus frozen until its next catch-up): stale density / charge in the Poisson sum as

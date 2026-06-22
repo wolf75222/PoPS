@@ -161,6 +161,7 @@ struct System::Impl {
   std::map<std::string, std::shared_ptr<NewtonReport>> newton_reports_;
   double t = 0;
   int macro_step_ = 0;  // macro-step counter (0-indexed): feeds the per-block stride filter
+  std::function<void(double)> program_step_;  // compiled time Program macro-step body (ADC-399); empty = historical path
   std::vector<std::function<void(Real)>> couplings;  // inter-species coupled sources (splitting)
   // GLOBAL time-step bounds (System::add_dt_bound): evaluated ONCE per step (host) by
   // step_cfl / step_adaptive. Hook for non-cell-local constraints (multi-block coupling,
@@ -1840,6 +1841,17 @@ std::vector<double> System::eval_rhs(const std::string& name) {
   MultiFab R(p_->ba, p_->dm, s.ncomp, 0);
   s.rhs_into(s.U, R);
   return p_->copy_state(R, s.ncomp);
+}
+
+// Compiled time-program seam (epic ADC-399 / ADC-401): a generated problem.so installs its macro-step
+// body and reaches per-block storage through these accessors (Impl is private to this TU).
+void System::install_program_step(std::function<void(double)> step) {
+  p_->program_step_ = std::move(step);
+}
+int System::n_blocks() const { return static_cast<int>(p_->sp.size()); }
+MultiFab& System::block_state(int b) { return p_->sp[static_cast<std::size_t>(b)].U; }
+void System::block_rhs_into(int b, MultiFab& U, MultiFab& R) {
+  p_->sp[static_cast<std::size_t>(b)].rhs_into(U, R);
 }
 std::vector<double> System::get_state(const std::string& name) {
   Impl::Species& s = p_->find(name);

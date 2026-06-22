@@ -567,6 +567,22 @@ class System {
   double block_gamma(const std::string& name) const;
   /// @}
 
+  /// @name Compiled time-program seam (epic ADC-399 / ADC-401)
+  /// Lets a generated problem.so (via adc::runtime::program::ProgramContext) run a time Program during
+  /// sim.step(dt): install a macro-step body and reach per-block storage. The .so reimplements nothing
+  /// -- it composes these primitives (solve_fields(); block_rhs_into(b, U, R); saxpy(U, dt, R)).
+  /// @{
+  /// Install the macro-step body. When set, SystemStepper::step calls it instead of the historical
+  /// path (and keeps t / macro_step coherent). Pass an empty std::function to clear it.
+  void install_program_step(std::function<void(double)> step);
+  /// Number of blocks (species) installed.
+  int n_blocks() const;
+  /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).
+  MultiFab& block_state(int b);
+  /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
+  void block_rhs_into(int b, MultiFab& U, MultiFab& R);
+  /// @}
+
   /// @name Diagnostics
   /// @{
   int nx() const;
