@@ -305,7 +305,7 @@ __all__ = [
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
-    "PythonFlux", "dsl", "abi_key", "capabilities",
+    "PythonFlux", "dsl", "time", "abi_key", "capabilities",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
 ]
 
@@ -3191,6 +3191,7 @@ class PythonFlux:
 
 
 from . import integrate  # noqa: E402  (after the definition of System; without numpy dependency)
+from . import time  # noqa: E402  (adc.time.Program IR; pure stdlib, no numpy/_adc dependency)
 
 
 # LAZY adc.dsl (PEP 562): dsl.py does `import numpy` at module level (host evaluator of the
