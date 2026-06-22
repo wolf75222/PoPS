@@ -21,6 +21,7 @@ are on the application side (repository `adc_cases`).
 python-api
 native-bricks
 symbolic-dsl
+time-program
 moment-models
 cpp-api
 backend-matrix

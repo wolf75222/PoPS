@@ -20,6 +20,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Compiled time-program reference doc + runnable example** (ADC-407, Phase 8b):
+  `docs/sphinx/reference/time-program.md` explains the Model-vs-Program split, the builder API,
+  `compile_problem` / `install_program` / `CompiledTime`, and a status table (Forward Euler runs
+  end to end; multi-stage / split-sources / control-flow / Krylov / histories are tracked as
+  follow-ups). `examples/time_programs/forward_euler_program.py` compiles + installs + runs a
+  Forward-Euler `Program` and checks parity with the native `adc.Explicit("euler")` step.
 - **`adc.compile_problem` + `sim.install_program` + `adc.CompiledTime`: run a compiled time Program
   end to end** (ADC-401, Phase 2c-ii): `compile_problem(model=, time=)` lowers an `adc.time.Program`
   to C++ (`emit_cpp_program`) and compiles it into a `problem.so` against the adc headers with the
