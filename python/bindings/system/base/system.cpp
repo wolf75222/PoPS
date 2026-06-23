@@ -173,6 +173,11 @@ struct System::Impl {
   // install_program records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
   // Program is rejected fail-loud (mismatched buffers / cadence would be meaningless).
   std::string installed_program_hash_;
+  // COMPILED-PROGRAM SCALAR DIAGNOSTICS (ADC-414, spec op 23): name -> last value recorded by the
+  // installed program via P.record_scalar (ProgramContext::record_scalar). Retrievable AFTER a step
+  // (System::program_diagnostic / program_diagnostics). Lives HERE (not in the .so) so it outlives the
+  // step closure and Python can read it; not referenced by SystemStepper -> no MockImpl impact.
+  std::map<std::string, Real> program_diagnostics_;
   // MULTISTEP HISTORY (ADC-406a): SYSTEM-OWNED ring buffers for multistep schemes (Adams-Bashforth and
   // friends). A name maps to a ring of (depth = max lag + 1) MultiFabs, newest at [0], each
   // co-distributed with block 0's state (ba/dm, the block's ncomp). The history lives HERE (not in the
@@ -2133,8 +2138,8 @@ ADC_EXPORT void System::install_program(const std::string& so_path) {
   if (loader_key != module_key) {
     adc::dynlib::close(h);
     throw std::runtime_error(
-        "System::install_program: incompatible ABI -- loader key '" + loader_key +
-        "' != module key '" + module_key +
+        "System::install_program: compiled program ABI mismatch: expected '" + module_key +
+        "', got '" + loader_key +
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "adc headers as the _adc module.");
   }
@@ -2154,6 +2159,28 @@ ADC_EXPORT void System::install_program(const std::string& so_path) {
 }
 std::string System::installed_program_hash() const {
   return p_->installed_program_hash_;
+}
+// Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
+// spec op 21). REUSES the block's own projection closure; a block without one is a no-op.
+void System::block_project(int b, MultiFab& u) {
+  std::function<void(MultiFab&)>& proj = p_->sp[static_cast<std::size_t>(b)].project;
+  if (proj)
+    proj(u);
+}
+// Compiled-Program scalar diagnostics (ADC-414, spec op 23): the installed program writes named scalars
+// via P.record_scalar (ProgramContext::record_scalar); Python reads them after the step.
+void System::record_program_diagnostic(const std::string& name, Real value) {
+  p_->program_diagnostics_[name] = value;
+}
+Real System::program_diagnostic(const std::string& name) const {
+  auto it = p_->program_diagnostics_.find(name);
+  if (it == p_->program_diagnostics_.end())
+    throw std::out_of_range("System::program_diagnostic: no diagnostic named '" + name +
+                            "' has been recorded (the installed Program must P.record_scalar it)");
+  return it->second;
+}
+std::map<std::string, Real> System::program_diagnostics() const {
+  return p_->program_diagnostics_;
 }
 std::vector<double> System::get_state(const std::string& name) {
   Impl::Species& s = p_->find(name);

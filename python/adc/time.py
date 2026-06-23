@@ -443,6 +443,20 @@ class Program:
         return self._new("state", "solve_local_linear", inputs,
                          {"linear_source": lname, "a_coeff": a}, name, rhs.block)
 
+    def solve_local_nonlinear(self, name=None, residual=None, initial_guess=None, method="newton",
+                              tol=1e-8, max_iter=20):
+        """Solve a LOCAL non-linear system ``residual(U) = 0`` cell by cell (spec op 10). DEFERRED:
+        the per-cell Newton iteration (the IR for a non-linear residual + its Jacobian) is out of
+        scope for this epic; this builder raises a clean NotImplementedError rather than mis-lowering.
+        For a LOCAL LINEAR operator ``(I +/- a*L) U = rhs`` use `solve_local_linear`, which IS lowered
+        (a per-cell dense inverse). @p residual / @p initial_guess / @p method / @p tol / @p max_iter
+        document the intended signature so a caller's program reads cleanly when the feature lands."""
+        raise NotImplementedError(
+            "solve_local_nonlinear is deferred: the per-cell Newton solve of a non-linear residual is "
+            "out of scope for this epic (no IR for the residual / Jacobian yet). Use "
+            "P.solve_local_linear for a local LINEAR operator (I +/- a*L) U = rhs, which is lowered to "
+            "a per-cell dense inverse.")
+
     def _linear_source_name(self, operator, where):
         """Resolve `operator` (a `linear_source` value, its name, or a single unit-coefficient
         ``_Operator`` term) to the linear-source name."""
@@ -639,6 +653,34 @@ class Program:
         """Map of committed block -> committed State value (copy)."""
         return dict(self._commits)
 
+    # --- ghost fill / positivity projection (spec ops 22 / 21) ---
+    def fill_boundary(self, x):
+        """Fill the ghost cells (halos) of a State/scalar_field @p x in place: the transport BC
+        (periodic by default), the same exchange `laplacian` / `gradient` / `divergence` do internally
+        before differencing (spec op 22). Returns @p x (the SAME value -- a side effect on its ghosts,
+        the valid cells are untouched). Lowered to ``ctx.fill_boundary(x)``."""
+        if not _is_field_value(x):
+            raise ValueError("fill_boundary: a State/RHS/scalar_field value is required (got %r)"
+                             % (x,))
+        return self._new(x.vtype, "fill_boundary", (x,), {}, x.name, x.block)
+
+    def project(self, name=None, state=None, projection="block"):
+        """Apply the block's post-step positivity projection to @p state in place (spec op 21):
+        ``U <- project(U, aux)`` over the valid cells, the SAME Zhang-Shu / floor projection the native
+        per-step path runs (ADC-177). Returns a State value (the projected state). @p projection selects
+        the projection primitive; only ``"block"`` (the block's own, set at add_block time) is supported
+        -- a custom projection is a later phase. Lowered to ``ctx.apply_projection(0, state)``."""
+        if isinstance(name, Value) and state is None:
+            name, state = None, name
+        if not (isinstance(state, Value) and state.vtype == "state"):
+            raise ValueError("project: a State value is required (state=...)")
+        if projection != "block":
+            raise NotImplementedError(
+                "project: only projection='block' (the block's own positivity projection) is "
+                "supported; a custom projection is a later phase (got %r)" % (projection,))
+        return self._new("state", "project", (state,), {"projection": projection}, name,
+                         state.block)
+
     # --- reductions / comparisons / control flow (ADC-404a) ---
     def norm2(self, state):
         """The Euclidean norm ``||u||_2`` of a State (a collective all_reduce). Returns a Scalar value.
@@ -664,6 +706,58 @@ class Program:
         if not (isinstance(state, Value) and state.is_field()):
             raise ValueError("norm_inf: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm_inf"}, None, state.block)
+
+    def sum(self, state):
+        """The sum ``sum_cells u`` of a State over component 0 (a collective all_reduce). Returns a
+        Scalar value. Lowered as ``adc::reduce_sum(u, 0)`` -- COLLECTIVE, called on every rank (empty
+        ranks included), the same seam adc::dot uses. Like norm2/dot it reduces COMPONENT 0 only (a
+        full multi-component reduction is a later phase). For a specific component use
+        `sum_component`."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("sum: a State/RHS value is required")
+        return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": 0}, None, state.block)
+
+    def max(self, state):
+        """The maximum ``max_cells u`` of a State over component 0 (a collective all_reduce). Returns a
+        Scalar value. Lowered as ``adc::reduce_max(u, 0)`` (the SIGNED max, not the magnitude -- use
+        `norm_inf` for max|u|). COLLECTIVE: called on every rank. Component 0 only."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("max: a State/RHS value is required")
+        return self._new("scalar", "reduce", (state,), {"kind": "max", "comp": 0}, None, state.block)
+
+    def min(self, state):
+        """The minimum ``min_cells u`` of a State over component 0 (a collective all_reduce). Returns a
+        Scalar value. Lowered as ``adc::reduce_min(u, 0)``. COLLECTIVE: called on every rank.
+        Component 0 only."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("min: a State/RHS value is required")
+        return self._new("scalar", "reduce", (state,), {"kind": "min", "comp": 0}, None, state.block)
+
+    def sum_component(self, state, comp):
+        """The sum ``sum_cells u(.,comp)`` of a State over conservative component @p comp (a collective
+        all_reduce). Returns a Scalar value. Lowered as ``adc::reduce_sum(u, comp)``. COLLECTIVE:
+        called on every rank. @p comp must be a Python int >= 0 (a runtime component is meaningless)."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("sum_component: a State/RHS value is required")
+        if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
+            raise ValueError("sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
+        return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": int(comp)}, None,
+                         state.block)
+
+    def record_scalar(self, name, value):
+        """Record a runtime Scalar @p value (e.g. ``P.norm2(R)``) into the System diagnostics map under
+        @p name, retrievable after the step via ``sim.program_diagnostic(name)`` /
+        ``sim.program_diagnostics()`` (spec op 23). A side-effecting op (no value): it stores the scalar
+        for inspection / logging, it does not feed the numerics. @p name must be a non-empty string;
+        @p value must be a Scalar value (a P.norm2 / P.dot / P.sum / ... result), not a field. Lowered
+        to ``ctx.record_scalar("<name>", <scalar>)``."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("record_scalar: name must be a non-empty string")
+        if not (isinstance(value, Value) and value.vtype == "scalar"):
+            raise ValueError("record_scalar: value must be a Scalar value (e.g. P.norm2(R)); got %r"
+                             % (value,))
+        return self._new("scalar", "record_scalar", (value,), {"diagnostic": name}, name,
+                         value.block)
 
     def _compare(self, lhs, rhs, cmp):
         """Build a Bool predicate ``s_lhs <cmp> rhs`` (re-evaluated each loop pass). @p rhs is a Python
@@ -937,7 +1031,8 @@ class Program:
     _ALLOWED_OPS = frozenset({"state", "solve_fields", "rhs", "linear_combine", "linear_source",
                               "reduce", "compare", "while", "range", "if", "matrix_free_operator",
                               "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
-                              "apply_in", "apply_out", "history", "store_history"})
+                              "apply_in", "apply_out", "history", "store_history",
+                              "fill_boundary", "project", "record_scalar"})
 
     def _all_ops(self):
         """Iterate over every op of the Program, descending into control-flow + apply sub-blocks (a flat
@@ -1078,6 +1173,27 @@ class Program:
             lines.append("ctx.store_history(%s, %s);"
                          % (json.dumps(v.attrs["history"]), var[value_in.id]))
             var[v.id] = var[value_in.id]
+        elif v.op == "fill_boundary":
+            # Side effect on the field's ghosts (the valid cells are untouched). The result aliases the
+            # input field (any subsequent op reading it sees the same C++ MultiFab, now with filled
+            # halos). Forwards to ctx.fill_boundary (the shared transport-BC ghost exchange).
+            (x,) = v.inputs
+            lines.append("ctx.fill_boundary(%s);" % var[x.id])
+            var[v.id] = var[x.id]
+        elif v.op == "project":
+            # In-place positivity projection of the state (the block's own project closure). The result
+            # aliases the input state. Forwards to ctx.apply_projection(0, state).
+            (state_in,) = v.inputs
+            lines.append("ctx.apply_projection(0, %s);" % var[state_in.id])
+            var[v.id] = var[state_in.id]
+        elif v.op == "record_scalar":
+            # Store the (already-computed) Scalar into the System diagnostics map under its name. A
+            # side-effecting op; its var maps to the recorded scalar (a harmless alias). The scalar input
+            # is a 'reduce' result emitted earlier in the body (a const adc::Real local).
+            (scalar_in,) = v.inputs
+            lines.append("ctx.record_scalar(%s, %s);"
+                         % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
+            var[v.id] = var[scalar_in.id]
         elif v.op == "rhs":
             state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
             var[v.id] = "r%d" % v.id
@@ -1130,16 +1246,23 @@ class Program:
         elif v.op == "solve_linear":
             self._emit_solve_linear(v, base, var, prelude, lines)
         elif v.op == "reduce":
-            # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly. Both
-            # MUST run on every rank (adc::dot is collective); they sit at the top of the loop body.
+            # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly;
+            # sum/max/min (over a component) via the matching adc reduction. All MUST run on every rank
+            # (the reductions are collective all_reduce); they sit at the top of the loop body.
             var[v.id] = "s%d" % v.id
-            if v.attrs["kind"] == "norm2":
+            kind = v.attrs["kind"]
+            if kind == "norm2":
                 (u,) = v.inputs
                 lines.append("const adc::Real %s = std::sqrt(adc::dot(%s, %s));"
                              % (var[v.id], var[u.id], var[u.id]))
-            elif v.attrs["kind"] == "norm_inf":
+            elif kind == "norm_inf":
                 (u,) = v.inputs
                 lines.append("const adc::Real %s = adc::norm_inf(%s);" % (var[v.id], var[u.id]))
+            elif kind in ("sum", "max", "min"):
+                (u,) = v.inputs
+                comp = int(v.attrs.get("comp", 0))
+                lines.append("const adc::Real %s = adc::reduce_%s(%s, %d);"
+                             % (var[v.id], kind, var[u.id], comp))
             else:  # dot
                 a, b = v.inputs
                 lines.append("const adc::Real %s = adc::dot(%s, %s);"

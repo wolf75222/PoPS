@@ -9,6 +9,7 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -687,6 +688,27 @@ class System {
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
   /// a DIFFERENT compiled Program is rejected fail-loud (the buffers / cadence would be meaningless).
   ADC_EXPORT std::string installed_program_hash() const;
+  /// Apply block @p b's post-step positivity projection to @p u in place (ADC-177): U <- project(U,
+  /// aux) over the valid cells, the SAME closure the native per-step path runs (s.project). A compiled
+  /// time Program reaches it through ProgramContext::apply_projection (spec op 21). REUSES the block's
+  /// own projection (set at add_block time); a block without a projection is a NO-OP (cost-free).
+  /// ADC_EXPORT so a generated problem.so resolves it across the dlopen boundary.
+  ADC_EXPORT void block_project(int b, MultiFab& u);
+  /// @name Compiled-Program scalar diagnostics (epic ADC-399 / ADC-414, spec op 23)
+  /// A name -> Real map a compiled Program writes via P.record_scalar (ProgramContext::record_scalar),
+  /// retrievable AFTER sim.step for inspection / logging. Lives in Impl (private to the _adc TU) so it
+  /// survives across the dlopen boundary; the .so writes it through the ADC_EXPORT setter below.
+  /// @{
+  /// Store @p value under @p name (overwrites a prior value of the same name). Called by the installed
+  /// program closure each step. ADC_EXPORT: the generated problem.so resolves it via RTLD_GLOBAL.
+  ADC_EXPORT void record_program_diagnostic(const std::string& name, Real value);
+  /// The recorded value of diagnostic @p name. @throws std::out_of_range if @p name was never
+  /// recorded (a typo / a diagnostic the installed program does not write fails loud, not 0).
+  ADC_EXPORT Real program_diagnostic(const std::string& name) const;
+  /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
+  /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
+  ADC_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  /// @}
   /// @}
 
   /// @name Diagnostics

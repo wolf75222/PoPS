@@ -20,6 +20,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Program op-set completeness** (ADC-414, spec ops 10/16/21/22/23 + validation #18/#19): the
+  `adc.time.Program` builder gains `P.sum` / `P.max` / `P.min` / `P.sum_component` (collective
+  reductions lowered to new `adc::reduce_sum` / `reduce_max` / `reduce_min` in `mf_arith.hpp`, with
+  matching `ProgramContext::sum_component` / `max_component` / `min_component`), `P.fill_boundary`
+  (the shared ghost exchange, `ProgramContext::fill_boundary`), `P.project` (the block's own
+  positivity projection, reusing the native `s.project` closure via `System::block_project` ->
+  `ProgramContext::apply_projection`), and `P.record_scalar` (a named scalar stored in a System-side
+  diagnostics map, retrievable after `sim.step` via `sim.program_diagnostic(name)` /
+  `sim.program_diagnostics()`). `P.solve_local_nonlinear` is a clean `NotImplementedError` stub
+  (per-cell Newton deferred; points at `solve_local_linear` for the linear case). Restart now fails
+  loud when the checkpoint lacks a required Program history ("checkpoint does not contain required
+  Program history '<name>'"), and `System::install_program` reports an ABI mismatch explicitly
+  ("compiled program ABI mismatch: expected '<...>', got '<...>'"). New
+  `python/tests/test_time_ops_polish.py`.
 - **Divergence primitive + condensed-Schur partial** (ADC-412, acceptance 32): a centered
   finite-volume divergence is factored as `adc::apply_divergence` (next to `adc::apply_laplacian` in
   `poisson_operator.hpp`; the native Schur condensation keeps its bit-identical inline copy),
