@@ -20,6 +20,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Control flow + reductions in the time-program codegen** (ADC-404, Phase 5): `adc.time.Program`
+  gains `Scalar`/`Bool` IR value types, the reductions `P.norm2(state)` and `P.dot(a, b)` (lowered to
+  the collective `adc::dot`, an MPI all-reduce), scalar comparisons (`>`, `<`, `>=`, `<=` -> a `Bool`),
+  and `P.while_(state, cond, body)` which lowers to a C++ convergence loop in the generated closure
+  (an infinite loop with a break that RE-EVALUATES the condition each pass and mutates the loop-variable
+  state in place; the condition and body ops are recorded in a separate sub-block so the top-level SSA
+  invariants hold). A runtime `Scalar`/`Bool` can no longer silently collapse to a Python value:
+  `bool(scalar)` and `range(scalar)` raise loud (`use P.while_ / P.if_ ...`). The convergence loop
+  runs entirely C++-side with a runtime-dependent iteration count and matches an offline geometric
+  reference to machine precision (`python/tests/test_time_control_flow.py`). `ctx.range` (static/dynamic
+  for) and `ctx.if_` are a follow-up (ADC-404b).
 - **Named-source RHS in the time-program codegen + predictor-corrector** (ADC-403, Phase 4): a
   `P.rhs(..., sources=["electric", ...])` now lowers to `-div F` plus the requested named
   `source_term`s (each assembled by the same per-cell kernel as `P.source`), so a compiled Program can

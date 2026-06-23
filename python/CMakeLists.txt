@@ -263,6 +263,19 @@ add_test(NAME test_time_local_solve_run
 set_tests_properties(test_time_local_solve_run PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# Control flow + reductions codegen (ADC-404a) : emit_cpp_program LOWERS a convergence loop --
+# P.norm2 / P.dot (-> adc::dot collective all_reduce), scalar comparisons (-> a Bool predicate), and
+# P.while_ (-> an infinite C++ loop with a break that RE-EVALUATES the condition each pass, mutating
+# the loop-variable state in place; cond / body ops recorded in a separate sub-block). Section (A) pins
+# the generated loop + scalar/bool value types + the loud Python guards (a Scalar/Bool never collapses
+# to a Python bool / index), pure Python. Section (B) compiles a convergent fixed-point program.so,
+# installs it, steps once, and checks parity with the offline geometric reference; it self-skips
+# without a compiler / Kokkos / install_program (never faking the engine).
+add_test(NAME test_time_control_flow
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_control_flow.py)
+set_tests_properties(test_time_control_flow PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # Named-source RHS codegen (ADC-403) : emit_cpp_program LOWERS a rhs(sources=[name,...]) with NAMED
 # sources -- ctx.rhs_into (-div F + default source) + the same per-cell m.source_term kernel as the
 # standalone source op, accumulated via ctx.axpy. Section (A) pins the generated body + the validation
