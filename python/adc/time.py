@@ -184,6 +184,7 @@ class Value:
     """A typed SSA node in a Program IR. Field-like values (State, RHS) support affine arithmetic."""
 
     _FIELD = ("state", "rhs")
+    _SCALAR = ("scalar", "bool")  # runtime scalars / predicates: never a Python bool / index
 
     def __init__(self, prog, vid, vtype, op, inputs, attrs, name, block):
         self.prog = prog
@@ -199,8 +200,42 @@ class Value:
         return self.vtype in Value._FIELD
 
     def __bool__(self):
-        raise TypeError("runtime Scalar cannot be used as a Python bool; use ctx.if_ or "
-                        "Program control flow")
+        # A runtime Scalar/Bool is decided at step time, not at IR-build time: it must NEVER silently
+        # collapse to a Python bool (which would make `while P.norm2(d) > tol:` loop in Python). Fields
+        # (State/RHS) keep their own loud refusal too.
+        if self.vtype in Value._SCALAR:
+            raise TypeError(
+                "a Program %s (%r) cannot be used as a Python bool; use P.while_ / P.if_ for runtime "
+                "control flow" % (self.vtype, self.name))
+        raise TypeError(
+            "a Program %s value (%r) cannot be used as a Python bool; it is a runtime field, not a "
+            "compile-time condition" % (self.vtype, self.name))
+
+    def __index__(self):
+        # range(scalar) / using a Scalar as a Python index is just as loud: the value is unknown until
+        # the step runs.
+        raise TypeError(
+            "a Program %s (%r) cannot be used as a Python index; use P.while_ / P.if_ for runtime "
+            "control flow" % (self.vtype, self.name))
+
+    # --- scalar comparisons (scalar values only): build a Bool predicate, do not compare in Python ---
+    def _compare(self, other, cmp):
+        if self.vtype != "scalar":
+            raise TypeError("%s value %r is not a scalar; only P.norm2 / P.dot results compare"
+                            % (self.vtype, self.name))
+        return self.prog._compare(self, other, cmp)
+
+    def __gt__(self, other):
+        return self._compare(other, ">")
+
+    def __lt__(self, other):
+        return self._compare(other, "<")
+
+    def __ge__(self, other):
+        return self._compare(other, ">=")
+
+    def __le__(self, other):
+        return self._compare(other, "<=")
 
     # --- affine algebra (field values only) ---
     def _affine(self):
@@ -255,6 +290,7 @@ class Program:
         self._values = []
         self._next_id = 0
         self._commits = {}      # block -> State value
+        self._recording = []    # stack of sub-block lists (a control-flow body); see _new / while_
         self.dt = _Coeff({1: 1.0})   # symbolic time step; participates in coefficient arithmetic
 
     # --- node construction ---
@@ -266,7 +302,13 @@ class Program:
         self._next_id += 1
         v = Value(self, vid, vtype, op, [i for i in inputs if isinstance(i, Value)],
                   attrs, name or ("%s%d" % (op, vid)), block)
-        self._values.append(v)
+        # Inside a control-flow recording scope (cond_fn / body_fn of a while_), ops go into the active
+        # sub-block, NOT the flat self._values: a while body must RE-EXECUTE each iteration, so its ops
+        # are owned by the while op and re-emitted in the loop, never walked once at the top level.
+        if self._recording:
+            self._recording[-1].append(v)
+        else:
+            self._values.append(v)
         return v
 
     def state(self, block):
@@ -411,6 +453,78 @@ class Program:
         """Map of committed block -> committed State value (copy)."""
         return dict(self._commits)
 
+    # --- reductions / comparisons / control flow (ADC-404a) ---
+    def norm2(self, state):
+        """The Euclidean norm ``||u||_2`` of a State (a collective all_reduce). Returns a Scalar value.
+        Lowered as ``sqrt(adc::dot(u, u))`` -- the same collective reduction every rank must run. NOTE:
+        ``adc::dot`` reduces COMPONENT 0 only, so for a multi-component State this is the L2 norm of the
+        first conserved variable, not the full state norm; a full multi-component reduction is a later
+        phase (the convergence loops this enables are single-residual-component for now)."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("norm2: a State/RHS value is required")
+        return self._new("scalar", "reduce", (state,), {"kind": "norm2"}, None, state.block)
+
+    def dot(self, a, b):
+        """The inner product ``<a, b>`` of two State values (a collective all_reduce). Returns a Scalar.
+        Lowered as ``adc::dot(a, b)`` -- COLLECTIVE, called on every rank (empty ranks included)."""
+        if not (isinstance(a, Value) and a.is_field() and isinstance(b, Value) and b.is_field()):
+            raise ValueError("dot: two State/RHS values are required")
+        return self._new("scalar", "reduce", (a, b), {"kind": "dot"}, None, a.block)
+
+    def _compare(self, lhs, rhs, cmp):
+        """Build a Bool predicate ``s_lhs <cmp> rhs`` (re-evaluated each loop pass). @p rhs is a Python
+        float tolerance (stored as a literal) or another Scalar value (compared at runtime). Inputs are
+        the Scalar operand(s); the float bound lives in attrs['rhs']."""
+        if isinstance(rhs, (int, float)):
+            return self._new("bool", "compare", (lhs,), {"cmp": cmp, "rhs": float(rhs)}, None,
+                             lhs.block)
+        if isinstance(rhs, Value) and rhs.vtype == "scalar":
+            return self._new("bool", "compare", (lhs, rhs), {"cmp": cmp}, None, lhs.block)
+        raise TypeError("compare: the right-hand side must be a float tolerance or a Scalar value, "
+                        "got %r" % (rhs,))
+
+    def while_(self, state, cond_fn, body_fn):
+        """A convergence loop: starting from @p state, while ``cond_fn(self, x)`` holds, replace x by
+        ``body_fn(self, x)``; return the final State.
+
+        The condition and body are RE-EVALUATED each iteration, so the ops they build are captured into
+        a separate recording sub-block (NOT the flat SSA list) and re-emitted inside a C++ loop. The
+        loop variable is the SAME C++ MultiFab across passes (mutated in place).
+
+          - ``cond_fn(self, x)`` must return a Bool value (e.g. ``self.norm2(diff) > tol``);
+          - ``body_fn(self, x)`` must return the next-iteration State (e.g. a linear_combine)."""
+        if not (isinstance(state, Value) and state.vtype == "state"):
+            raise ValueError("while_: the loop variable must be a State value")
+        if self._recording:
+            raise NotImplementedError(
+                "while_: nested control flow is a later phase; a while_ body cannot itself open a "
+                "while_ yet")
+        cond_block, cond_val = self._record(cond_fn, state)
+        if not (isinstance(cond_val, Value) and cond_val.vtype == "bool"):
+            raise ValueError("while_: cond_fn must return a Bool value (e.g. P.norm2(d) > tol)")
+        body_block, next_state = self._record(body_fn, state)
+        if not (isinstance(next_state, Value) and next_state.vtype == "state"):
+            raise ValueError("while_: body_fn must return the next-iteration State value")
+        if next_state.block != state.block:
+            raise ValueError("while_: body_fn must return a State of the same block as the loop "
+                             "variable")
+        return self._new("state", "while", (state,),
+                         {"cond_block": cond_block, "cond": cond_val,
+                          "body_block": body_block, "body": next_state},
+                         None, state.block)
+
+    def _record(self, fn, x):
+        """Run a control-flow callable ``fn(self, x)`` with a fresh recording scope active, capturing the
+        ops it builds into a sub-block (returned with the value fn produced). The sub-block ops are NOT
+        appended to self._values (they belong to the owning control-flow op)."""
+        sub = []
+        self._recording.append(sub)
+        try:
+            out = fn(self, x)
+        finally:
+            self._recording.pop()
+        return sub, out
+
     def validate(self):
         """Structural validation of the IR. Raises ValueError on a malformed program."""
         if not self._commits:
@@ -422,19 +536,41 @@ class Program:
                 if inp.id not in seen:
                     raise ValueError("IR value '%s' used before definition" % inp.name)
             seen.add(v.id)
+            if v.op == "while":
+                self._validate_block(v.attrs["cond_block"], seen)
+                self._validate_block(v.attrs["body_block"], seen)
         return True
 
+    def _validate_block(self, block, outer_seen):
+        """Validate a control-flow sub-block: each op may read values defined earlier in the SAME block
+        or in the enclosing scope (the loop variable / anything defined before the while). @p outer_seen
+        is the enclosing scope's def set (copied, not mutated -- the sub-block ops are not visible
+        outside)."""
+        seen = set(outer_seen)
+        for v in block:
+            for inp in v.inputs:
+                if inp.id not in seen:
+                    raise ValueError("IR value '%s' used before definition" % inp.name)
+            seen.add(v.id)
+
     # --- serialization / hash ---
+    @staticmethod
+    def _serialize_node(v):
+        attrs = dict(v.attrs)
+        if "coeffs" in attrs:  # dict keys (powers) -> sorted [power, value] for stable JSON
+            attrs["coeffs"] = [sorted((int(p), c) for p, c in d.items()) for d in attrs["coeffs"]]
+        if "a_coeff" in attrs:  # solve_local_linear: the dt-polynomial a in (I - a*L)
+            attrs["a_coeff"] = sorted((int(p), c) for p, c in attrs["a_coeff"].items())
+        if v.op == "while":  # the cond/body sub-blocks are nested node lists; the results are ids
+            attrs["cond_block"] = [Program._serialize_node(w) for w in attrs["cond_block"]]
+            attrs["body_block"] = [Program._serialize_node(w) for w in attrs["body_block"]]
+            attrs["cond"] = attrs["cond"].id
+            attrs["body"] = attrs["body"].id
+        return {"id": v.id, "vtype": v.vtype, "op": v.op, "block": v.block,
+                "inputs": [i.id for i in v.inputs], "attrs": attrs}
+
     def _serialize(self):
-        nodes = []
-        for v in self._values:
-            attrs = dict(v.attrs)
-            if "coeffs" in attrs:  # dict keys (powers) -> sorted [power, value] for stable JSON
-                attrs["coeffs"] = [sorted((int(p), c) for p, c in d.items()) for d in attrs["coeffs"]]
-            if "a_coeff" in attrs:  # solve_local_linear: the dt-polynomial a in (I - a*L)
-                attrs["a_coeff"] = sorted((int(p), c) for p, c in attrs["a_coeff"].items())
-            nodes.append({"id": v.id, "vtype": v.vtype, "op": v.op, "block": v.block,
-                          "inputs": [i.id for i in v.inputs], "attrs": attrs})
+        nodes = [Program._serialize_node(v) for v in self._values]
         commits = sorted((b, s.id) for b, s in self._commits.items())
         return {"name": self.name, "version": 1, "nodes": nodes, "commits": commits}
 
@@ -500,51 +636,10 @@ class Program:
             raise NotImplementedError(
                 "emit_cpp_program currently supports a single block state (one P.state(...)); got %d"
                 % len(states))
-        # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime
-        # work (it is consumed by apply / solve_local_linear, which read the model coefficients), so it
-        # lowers to nothing -- always allowed, model or not.
-        allowed = {"state", "solve_fields", "rhs", "linear_combine", "linear_source"}
         for v in self._values:
-            if v.op in Program._MODEL_OPS:
-                if model is None:
-                    raise NotImplementedError(
-                        "emit_cpp_program cannot lower op '%s' (value '%s') without the physical model "
-                        "that declares its named source / linear source; pass model= "
-                        "(compile_problem threads it through)" % (v.op, v.name))
-                continue  # _emit_body lowers it from the model's symbolic coefficients
-            if v.op not in allowed:
-                raise NotImplementedError(
-                    "emit_cpp_program cannot lower op '%s' (value '%s') yet; supported ops are %s "
-                    "(+ %s with a model; control flow / Krylov are later phases)"
-                    % (v.op, v.name, sorted(allowed), sorted(Program._MODEL_OPS)))
-            if v.op == "rhs":
-                extra = [s for s in (v.attrs.get("sources") or []) if s != "default"]
-                if not extra:
-                    continue
-                # A named source in an rhs reads the model's symbolic source_term coefficients (same as
-                # the standalone 'source' op): lowering needs the model.
-                if model is None:
-                    raise NotImplementedError(
-                        "emit_cpp_program cannot lower rhs '%s' with named sources %r without the "
-                        "physical model that declares them (m.source_term); pass model= "
-                        "(compile_problem threads it through)" % (v.name, extra))
-                impl = _model_impl(model)
-                # ctx.rhs_into already folds the model's DEFAULT/composite source (m.source -> _source).
-                # Adding a named source on top of a non-empty default would DOUBLE-COUNT, so the named-
-                # source rhs is only sound when the default source is empty (the named-source-only model
-                # the predictor-corrector uses). A flux-only seam ('default' / no sources) is unaffected.
-                if getattr(impl, "_source", None):
-                    raise NotImplementedError(
-                        "rhs with named sources needs a model whose default source is empty (no "
-                        "m.source), or a flux-only seam; rhs '%s' requests %r but the model has a "
-                        "non-empty default source (deferred)" % (v.name, extra))
-                for s in extra:
-                    if s not in impl._source_terms:
-                        raise ValueError(
-                            "unknown source_term '%s' in rhs '%s'; declared source_terms: %s"
-                            % (s, v.name, sorted(impl._source_terms)))
+            self._check_op_lowerable(v, model)
         # Per-cell dense fallback bound for solve_local_linear (mat_inverse<N> uses fixed stack buffers).
-        if model is not None and any(v.op == "solve_local_linear" for v in self._values):
+        if model is not None and any(v.op == "solve_local_linear" for v in self._all_ops()):
             impl = _model_impl(model)
             n_cons = len(getattr(impl, "cons_names", []) or [])
             if n_cons > 8:
@@ -552,78 +647,84 @@ class Program:
                     "solve_local_linear dense fallback currently supports n_cons <= 8 (got %d)"
                     % n_cons)
 
+    # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work
+    # (consumed by apply / solve_local_linear, which read the model coefficients), so it lowers to
+    # nothing -- always allowed, model or not. 'reduce' / 'compare' / 'while' are the ADC-404a control
+    # flow / reduction ops (lowered inline via adc::dot; no model needed).
+    _ALLOWED_OPS = frozenset({"state", "solve_fields", "rhs", "linear_combine", "linear_source",
+                              "reduce", "compare", "while"})
+
+    def _all_ops(self):
+        """Iterate over every op of the Program, descending into while sub-blocks (a flat view used by
+        the lowerability guards: the sub-block ops are not in self._values)."""
+        for v in self._values:
+            yield v
+            if v.op == "while":
+                for w in v.attrs["cond_block"]:
+                    yield w
+                for w in v.attrs["body_block"]:
+                    yield w
+
+    def _check_op_lowerable(self, v, model):
+        """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
+        Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
+        if v.op in Program._MODEL_OPS:
+            if model is None:
+                raise NotImplementedError(
+                    "emit_cpp_program cannot lower op '%s' (value '%s') without the physical model "
+                    "that declares its named source / linear source; pass model= "
+                    "(compile_problem threads it through)" % (v.op, v.name))
+            return  # _emit_op lowers it from the model's symbolic coefficients
+        if v.op not in Program._ALLOWED_OPS:
+            raise NotImplementedError(
+                "emit_cpp_program cannot lower op '%s' (value '%s') yet; supported ops are %s "
+                "(+ %s with a model; nested control flow / Krylov are later phases)"
+                % (v.op, v.name, sorted(Program._ALLOWED_OPS), sorted(Program._MODEL_OPS)))
+        if v.op == "while":  # recurse: the cond / body sub-blocks must lower op by op too
+            for w in v.attrs["cond_block"]:
+                self._check_op_lowerable(w, model)
+            for w in v.attrs["body_block"]:
+                self._check_op_lowerable(w, model)
+            return
+        if v.op == "rhs":
+            extra = [s for s in (v.attrs.get("sources") or []) if s != "default"]
+            if not extra:
+                return
+            # A named source in an rhs reads the model's symbolic source_term coefficients (same as the
+            # standalone 'source' op): lowering needs the model.
+            if model is None:
+                raise NotImplementedError(
+                    "emit_cpp_program cannot lower rhs '%s' with named sources %r without the "
+                    "physical model that declares them (m.source_term); pass model= "
+                    "(compile_problem threads it through)" % (v.name, extra))
+            impl = _model_impl(model)
+            # ctx.rhs_into already folds the model's DEFAULT/composite source (m.source -> _source).
+            # Adding a named source on top of a non-empty default would DOUBLE-COUNT, so the named-
+            # source rhs is only sound when the default source is empty (the named-source-only model the
+            # predictor-corrector uses). A flux-only seam ('default' / no sources) is unaffected.
+            if getattr(impl, "_source", None):
+                raise NotImplementedError(
+                    "rhs with named sources needs a model whose default source is empty (no "
+                    "m.source), or a flux-only seam; rhs '%s' requests %r but the model has a "
+                    "non-empty default source (deferred)" % (v.name, extra))
+            for s in extra:
+                if s not in impl._source_terms:
+                    raise ValueError(
+                        "unknown source_term '%s' in rhs '%s'; declared source_terms: %s"
+                        % (s, v.name, sorted(impl._source_terms)))
+
     def _emit_body(self, model=None):
         """Generate the C++ lines of the install-closure body (each indented 4 spaces). Assumes
         `_check_lowerable` has passed: one block state (the base = ctx.state(0)), one commit. @p model
         supplies the symbolic coefficients of the Phase-4b source / apply / solve_local_linear ops."""
         base = next(v for v in self._values if v.op == "state")
         committed = next(iter(self._commits.values()))
-        var = {}  # IR value id -> C++ MultiFab variable name (states + RHS scratches)
+        # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
+        # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
+        var = {}
         lines = []
         for v in self._values:
-            if v.op == "state":
-                var[v.id] = "u%d" % v.id
-                lines.append("adc::MultiFab& %s = ctx.state(0);" % var[v.id])
-            elif v.op == "solve_fields":
-                lines.append("ctx.solve_fields();")
-            elif v.op == "rhs":
-                state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
-                var[v.id] = "r%d" % v.id
-                lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
-                             % (var[v.id], var[state_in.id]))
-                # R <- -div F + default/composite source (ctx.rhs_into). _check_lowerable guarantees the
-                # model's default source is EMPTY when named sources are requested, so rhs_into here is
-                # flux-only (-div F) and the named sources below are added without double-counting.
-                lines.append("ctx.rhs_into(0, %s, %s);" % (var[state_in.id], var[v.id]))
-                named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
-                for s in named:
-                    # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
-                    # the standalone 'source' op) and axpy it onto R.
-                    ssrc = "%s_%s" % (var[v.id], s)
-                    lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
-                                 % (ssrc, var[state_in.id]))
-                    lines += _emit_source_kernel(model, s, var[state_in.id], ssrc)
-                    lines.append("ctx.axpy(%s, static_cast<adc::Real>(1), %s);" % (var[v.id], ssrc))
-            elif v.op == "source":
-                state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
-                var[v.id] = "r%d" % v.id
-                lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
-                             % (var[v.id], var[state_in.id]))
-                lines += _emit_source_kernel(model, v.attrs["source"], var[state_in.id], var[v.id])
-            elif v.op == "apply":
-                state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
-                var[v.id] = "r%d" % v.id
-                lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
-                             % (var[v.id], var[state_in.id]))
-                lines += _emit_apply_kernel(model, v.attrs["linear_source"], var[state_in.id],
-                                            var[v.id])
-            elif v.op == "solve_local_linear":
-                rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
-                var[v.id] = "u%d" % v.id
-                lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);"
-                             % (var[v.id], var[base.id]))
-                lines += _emit_solve_local_linear_kernel(
-                    model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id])
-            elif v.op == "linear_combine":
-                terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
-                if v.id == committed.id:
-                    # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
-                    c_base = {0: 0.0}
-                    acc = "acc%d" % v.id
-                    lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);" % (acc, var[base.id]))
-                    for inp, coeff in terms:
-                        if inp.id == base.id:
-                            c_base = coeff
-                        else:
-                            lines.append("ctx.axpy(%s, %s, %s);" % (acc, _coeff_cpp(coeff), var[inp.id]))
-                    lines.append("ctx.lincomb(%s, %s, %s, static_cast<adc::Real>(1), %s);"
-                                 % (var[base.id], _coeff_cpp(c_base), var[base.id], acc))
-                    var[v.id] = var[base.id]  # the commit wrote the block state in place (no final copy)
-                else:
-                    var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
-                    lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], var[base.id]))
-                    for inp, coeff in terms:
-                        lines.append("ctx.axpy(%s, %s, %s);" % (var[v.id], _coeff_cpp(coeff), var[inp.id]))
+            self._emit_op(v, base, committed.id, var, model, lines)
         # The committed value may be an op that wrote into a SCRATCH (e.g. solve_local_linear): copy it
         # into the block state. A linear_combine commit already wrote ctx.state(0) in place (var ==
         # base), so this is a no-op there (skipped).
@@ -631,6 +732,129 @@ class Program:
             lines.append("ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
                          % (var[base.id], var[base.id], var[committed.id]))
         return "\n".join("    " + ln for ln in lines)
+
+    def _emit_op(self, v, base, committed_id, var, model, lines):
+        """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
+        by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
+        reductions / compares / linear_combine all lower identically inside the loop. @p base is the
+        block-state value (its C++ var is the loop variable inside a while sub-block); @p committed_id
+        is the committed value's id (None inside a sub-block: a body combine is never the commit)."""
+        if v.op == "state":
+            var[v.id] = "u%d" % v.id
+            lines.append("adc::MultiFab& %s = ctx.state(0);" % var[v.id])
+        elif v.op == "solve_fields":
+            lines.append("ctx.solve_fields();")
+        elif v.op == "rhs":
+            state_in = v.inputs[0]  # rhs inputs = (state[, fields]); the state is first
+            var[v.id] = "r%d" % v.id
+            lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                         % (var[v.id], var[state_in.id]))
+            # R <- -div F + default/composite source (ctx.rhs_into). _check_lowerable guarantees the
+            # model's default source is EMPTY when named sources are requested, so rhs_into here is
+            # flux-only (-div F) and the named sources below are added without double-counting.
+            lines.append("ctx.rhs_into(0, %s, %s);" % (var[state_in.id], var[v.id]))
+            named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
+            for s in named:
+                # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
+                # the standalone 'source' op) and axpy it onto R.
+                ssrc = "%s_%s" % (var[v.id], s)
+                lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                             % (ssrc, var[state_in.id]))
+                lines += _emit_source_kernel(model, s, var[state_in.id], ssrc)
+                lines.append("ctx.axpy(%s, static_cast<adc::Real>(1), %s);" % (var[v.id], ssrc))
+        elif v.op == "source":
+            state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
+            var[v.id] = "r%d" % v.id
+            lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                         % (var[v.id], var[state_in.id]))
+            lines += _emit_source_kernel(model, v.attrs["source"], var[state_in.id], var[v.id])
+        elif v.op == "apply":
+            state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
+            var[v.id] = "r%d" % v.id
+            lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                         % (var[v.id], var[state_in.id]))
+            lines += _emit_apply_kernel(model, v.attrs["linear_source"], var[state_in.id], var[v.id])
+        elif v.op == "solve_local_linear":
+            rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
+            var[v.id] = "u%d" % v.id
+            lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);"
+                         % (var[v.id], var[base.id]))
+            lines += _emit_solve_local_linear_kernel(
+                model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id])
+        elif v.op == "reduce":
+            # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly. Both
+            # MUST run on every rank (adc::dot is collective); they sit at the top of the loop body.
+            var[v.id] = "s%d" % v.id
+            if v.attrs["kind"] == "norm2":
+                (u,) = v.inputs
+                lines.append("const adc::Real %s = std::sqrt(adc::dot(%s, %s));"
+                             % (var[v.id], var[u.id], var[u.id]))
+            else:  # dot
+                a, b = v.inputs
+                lines.append("const adc::Real %s = adc::dot(%s, %s);"
+                             % (var[v.id], var[a.id], var[b.id]))
+        elif v.op == "compare":
+            # A predicate over scalars -> an inline boolean C++ expression (no statement of its own; the
+            # while op embeds it directly in `if (!(<expr>)) break;`).
+            lhs = v.inputs[0]
+            if len(v.inputs) == 2:  # scalar vs scalar
+                rhs_tok = var[v.inputs[1].id]
+            else:  # scalar vs float tolerance
+                rhs_tok = "static_cast<adc::Real>(%s)" % repr(float(v.attrs["rhs"]))
+            var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
+        elif v.op == "while":
+            self._emit_while(v, base, var, model, lines)
+        elif v.op == "linear_combine":
+            terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
+            if v.id == committed_id:
+                # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
+                c_base = {0: 0.0}
+                acc = "acc%d" % v.id
+                lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);" % (acc, var[base.id]))
+                for inp, coeff in terms:
+                    if inp.id == base.id:
+                        c_base = coeff
+                    else:
+                        lines.append("ctx.axpy(%s, %s, %s);" % (acc, _coeff_cpp(coeff), var[inp.id]))
+                lines.append("ctx.lincomb(%s, %s, %s, static_cast<adc::Real>(1), %s);"
+                             % (var[base.id], _coeff_cpp(c_base), var[base.id], acc))
+                var[v.id] = var[base.id]  # the commit wrote the block state in place (no final copy)
+            else:
+                var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
+                lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], var[base.id]))
+                for inp, coeff in terms:
+                    lines.append("ctx.axpy(%s, %s, %s);" % (var[v.id], _coeff_cpp(coeff), var[inp.id]))
+
+    def _emit_while(self, v, base, var, model, lines):
+        """Lower a while op to an infinite C++ loop with a break (the condition re-evaluates each pass).
+        The loop variable is a single MultiFab mutated IN PLACE across iterations; the cond / body sub-
+        blocks re-run the per-op lowering each pass, with the loop-variable value id seeded to the loop
+        var so their references resolve to it."""
+        loop_in = v.inputs[0]  # the initial loop-variable state
+        x = "x%d" % v.id
+        var[v.id] = x
+        # Hoist + initialize the loop variable from the entry state (x <- loop_in).
+        lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
+        lines.append("ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
+                     % (x, x, var[loop_in.id]))
+        lines.append("for (;;) {")
+        # The sub-blocks see the loop variable in place of the entry-state value id (the body / cond were
+        # built reading the loop-var State; they resolve to x here). A fresh sub-var map keeps the inner
+        # scratch names from leaking out, but inherits the outer bindings (the loop var, target, ...).
+        sub = dict(var)
+        sub[loop_in.id] = x
+        body_lines = []
+        for w in v.attrs["cond_block"]:
+            self._emit_op(w, base, None, sub, model, body_lines)
+        cond_expr = sub[v.attrs["cond"].id]
+        body_lines.append("if (!(%s)) break;" % cond_expr)
+        for w in v.attrs["body_block"]:
+            self._emit_op(w, base, None, sub, model, body_lines)
+        # Write the next state into the loop variable in place (x <- body result).
+        body_lines.append("ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
+                          % (x, x, sub[v.attrs["body"].id]))
+        lines += ["  " + ln for ln in body_lines]
+        lines.append("}")
 
 
 def _coeff_cpp(powers):
