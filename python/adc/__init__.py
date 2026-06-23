@@ -2388,7 +2388,19 @@ class System:
         # continue) bit-for-bit. The program re-registers the rings on its first post-restart step;
         # restoring them here (before that step) seeds the slots and the initialized flag so the first
         # post-restart read sees the true R_{n-1} (no phantom cold-start re-fill).
-        if "history_names" in d:
+        available = set(str(h) for h in d["history_names"]) if "history_names" in d else set()
+        # MISSING-HISTORY GUARD (ADC-414, spec error 18): a history the CURRENT program already
+        # registered (it stepped at least once before this restart, or was re-installed and run) but the
+        # checkpoint never recorded cannot be restored -> the multistep scheme would silently cold-start.
+        # Fail loud, distinct from the hash-mismatch message above. A fresh program that has not yet
+        # registered any ring (the common install-then-restart flow) has no required history -> no false
+        # positive; the rings it re-registers on its first post-restart step are restored below.
+        if hasattr(self._s, "history_names"):
+            for hname in self._s.history_names():
+                if hname not in available:
+                    raise RuntimeError(
+                        "checkpoint does not contain required Program history '%s'" % hname)
+        if available:
             for hname in (str(h) for h in d["history_names"]):
                 depth = int(d["history_depth_" + hname])
                 for k in range(depth):

@@ -19,6 +19,7 @@
 #include <adc/parallel/comm.hpp>  // all_reduce_sum: COLLECTIVE dot product (Krylov under MPI)
 
 #include <algorithm>
+#include <limits>
 
 namespace adc {
 
@@ -66,6 +67,34 @@ struct DotKernel {
   ConstArray4 x, y;
   int comp;
   ADC_HD void operator()(int i, int j, Real& acc) const { acc += x(i, j, comp) * y(i, j, comp); }
+};
+
+// Reducer f(i,j,comp) -> sum / signed max / signed min over one component. Same device-clean named
+// functor recipe as DotKernel / NormInfKernel (the compiled time Program reductions are first
+// instantiated from a generated problem.so, an external TU). MaxKernel/MinKernel are SIGNED (no fabs,
+// unlike NormInfKernel): they reduce the value itself, the contract of P.max / P.min.
+struct SumKernel {
+  ConstArray4 a;
+  int comp;
+  ADC_HD void operator()(int i, int j, Real& acc) const { acc += a(i, j, comp); }
+};
+struct MaxKernel {
+  ConstArray4 a;
+  int comp;
+  ADC_HD void operator()(int i, int j, Real& acc) const {
+    const Real v = a(i, j, comp);
+    if (v > acc)
+      acc = v;
+  }
+};
+struct MinKernel {
+  ConstArray4 a;
+  int comp;
+  ADC_HD void operator()(int i, int j, Real& acc) const {
+    const Real v = a(i, j, comp);
+    if (v < acc)
+      acc = v;
+  }
 };
 }  // namespace detail
 
@@ -139,6 +168,43 @@ inline Real dot(const MultiFab& x, const MultiFab& y, int comp = 0) {
     s += reduce_sum_cell(x.box(li), detail::DotKernel{X, Y, comp});
   }
   return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
+}
+
+/// Sum Sum_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_sum) -- the
+/// compiled-Program P.sum / P.sum_component reduction. COLLECTIVE, MANDATORY UNDER MPI: called on every
+/// rank (an empty rank contributes 0), like dot. Same per-tile Kokkos::Sum FP guarantees as dot.
+inline Real reduce_sum(const MultiFab& mf, int comp = 0) {
+  Real s = 0;
+  for (int li = 0; li < mf.local_size(); ++li) {
+    const ConstArray4 a = mf.fab(li).const_array();
+    s += reduce_sum_cell(mf.box(li), detail::SumKernel{a, comp});
+  }
+  return static_cast<Real>(all_reduce_sum(static_cast<double>(s)));
+}
+
+/// Signed maximum max_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_max)
+/// -- the compiled-Program P.max reduction (SIGNED, not the magnitude -- use norm_inf for max|f|).
+/// COLLECTIVE, MANDATORY UNDER MPI: an empty rank seeds -inf so the all_reduce_max ignores it. EXACT
+/// everywhere (max without rounding, associative/commutative).
+inline Real reduce_max(const MultiFab& mf, int comp = 0) {
+  Real m = -std::numeric_limits<Real>::infinity();
+  for (int li = 0; li < mf.local_size(); ++li) {
+    const ConstArray4 a = mf.fab(li).const_array();
+    m = std::max(m, reduce_max_cell(mf.box(li), detail::MaxKernel{a, comp}));
+  }
+  return static_cast<Real>(all_reduce_max(static_cast<double>(m)));
+}
+
+/// Signed minimum min_cells f(.,.,comp) over component comp, reduced over ALL ranks (all_reduce_min)
+/// -- the compiled-Program P.min reduction. COLLECTIVE, MANDATORY UNDER MPI: an empty rank seeds +inf
+/// so the all_reduce_min ignores it. EXACT everywhere (min without rounding, associative/commutative).
+inline Real reduce_min(const MultiFab& mf, int comp = 0) {
+  Real m = std::numeric_limits<Real>::infinity();
+  for (int li = 0; li < mf.local_size(); ++li) {
+    const ConstArray4 a = mf.fab(li).const_array();
+    m = std::min(m, reduce_min_cell(mf.box(li), detail::MinKernel{a, comp}));
+  }
+  return static_cast<Real>(all_reduce_min(static_cast<double>(m)));
 }
 
 }  // namespace adc

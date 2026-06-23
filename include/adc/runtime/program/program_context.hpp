@@ -180,6 +180,43 @@ class ProgramContext {
   /// the step body (after the commit), so the next step reads lag k as the value k stores ago.
   void rotate_histories() const { sys_->rotate_histories(); }
 
+  /// @name Reductions (spec op 16)
+  /// COLLECTIVE all_reduce over one component of a field (sum / signed max / signed min). The codegen
+  /// lowers P.sum / P.sum_component / P.max / P.min DIRECTLY to the adc:: free functions (like norm2 ->
+  /// adc::dot), but these wrappers expose them on the context for hand-rolled C++ stages and mirror
+  /// norm2 / dot above. MANDATORY UNDER MPI: called on EVERY rank (empty ranks included), like dot.
+  /// @{
+  Real sum_component(const MultiFab& u, int comp) const { return adc::reduce_sum(u, comp); }
+  Real max_component(const MultiFab& u, int comp) const { return adc::reduce_max(u, comp); }
+  Real min_component(const MultiFab& u, int comp) const { return adc::reduce_min(u, comp); }
+  Real sum(const MultiFab& u) const { return adc::reduce_sum(u, 0); }
+  Real max(const MultiFab& u) const { return adc::reduce_max(u, 0); }
+  Real min(const MultiFab& u) const { return adc::reduce_min(u, 0); }
+  /// @}
+
+  /// Fill the ghost cells (halos) of @p x in place: the transport BC (periodic by default), the SAME
+  /// exchange laplacian / gradient / divergence run internally before differencing (spec op 22). The
+  /// valid cells are untouched; only the halos change. Forwards to the shared adc::fill_ghosts.
+  void fill_boundary(MultiFab& x) const {
+    const GridContext gc = sys_->grid_context();
+    fill_ghosts(x, gc.geom.domain, gc.bc);
+  }
+
+  /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
+  /// valid cells, the SAME Zhang-Shu / floor projection the native per-step path runs (ADC-177, spec
+  /// op 21). REUSES the block's own projection closure (set at add_block time); a block WITHOUT a
+  /// projection is a no-op. Forwards to System::block_project -- it reimplements no positivity.
+  void apply_projection(int b, MultiFab& u) const { sys_->block_project(b, u); }
+
+  /// Store a runtime Scalar @p value into the System diagnostics map under @p name (spec op 23),
+  /// retrievable after the step via System::program_diagnostic / program_diagnostics (exposed to
+  /// Python as sim.program_diagnostic / sim.program_diagnostics). A pure side effect: the scalar is
+  /// recorded for inspection / logging, it does not feed the numerics. Forwards to
+  /// System::record_program_diagnostic.
+  void record_scalar(const std::string& name, Real value) const {
+    sys_->record_program_diagnostic(name, value);
+  }
+
  private:
   System* sys_;
 };

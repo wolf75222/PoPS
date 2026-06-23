@@ -373,6 +373,19 @@ add_test(NAME test_time_step_cfl
 set_tests_properties(test_time_step_cfl PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# Program op-set completeness (ADC-414, spec ops 10/16/21/22/23 + validation #18/#19):
+# solve_local_nonlinear is a clean NotImplementedError stub (Newton deferred); the reductions
+# P.sum/max/min/sum_component lower to adc::reduce_sum/max/min; P.fill_boundary -> ctx.fill_boundary;
+# P.project -> ctx.apply_projection (the block's own positivity); P.record_scalar -> ctx.record_scalar,
+# retrievable after the step via sim.program_diagnostic(s). Section (A) pins IR + codegen (pure Python);
+# (B) checks the reductions vs analytic values + record_scalar retrieval + a fill_boundary/project run;
+# (C.1) the missing-history restart message (#18, pure-Python mock); (C.2) the explicit ABI-mismatch
+# message (#19). Sections self-skip without numpy / _adc / a compiler / a visible Kokkos.
+add_test(NAME test_time_ops_polish
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_ops_polish.py)
+set_tests_properties(test_time_ops_polish PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # Named-source RHS codegen (ADC-403) : emit_cpp_program LOWERS a rhs(sources=[name,...]) with NAMED
 # sources -- ctx.rhs_into (-div F + default source) + the same per-cell m.source_term kernel as the
 # standalone source op, accumulated via ctx.axpy. Section (A) pins the generated body + the validation

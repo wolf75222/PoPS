@@ -106,6 +106,11 @@ void init_system(py::module_& m) {
       // ADC-406b: IR hash of the installed compiled Program (the .so's adc_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
+      // ADC-414 (spec op 23): scalar diagnostics a compiled Program records via P.record_scalar,
+      // retrievable AFTER sim.step. program_diagnostic(name) reads one (raises if never recorded);
+      // program_diagnostics() returns the whole name -> value dict.
+      .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
+      .def("program_diagnostics", &System::program_diagnostics)
       // Multistep history checkpoint/restart seam (ADC-406b): the facade gathers/restores the
       // System-owned rings DIRECTLY (no .so checkpoint_extra ABI). history_global mirrors state_global
       // (collective gather, component-major); restore_history mirrors set_state (owner-rank scatter).
