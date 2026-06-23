@@ -752,6 +752,86 @@ class Program:
         return self._new("state", "project", (state,), {"projection": projection}, name,
                          state.block)
 
+    # --- per-cell conditional select (spec op 17, ADC-418) ---
+    _CELL_CMPS = {">": "cell_gt", ">=": "cell_ge", "<": "cell_lt", "<=": "cell_le"}
+
+    def cell_compare(self, field, value, cmp, name=None):
+        """A PER-CELL comparison ``field <cmp> value`` -> a fresh 1-component 0/1 mask scalar_field (1.0
+        where the comparison holds, 0.0 otherwise), evaluated cell by cell on component 0 of @p field
+        (its sole / first conserved component). @p field is a State/RHS/scalar_field value; @p value is a
+        Python float threshold (a per-cell field threshold is a later phase); @p cmp is one of
+        ``'>' '>=' '<' '<='``. The mask is the input the per-cell `where` selects on. Lowered to a
+        for_each_cell kernel ``maskA(i,j,0) = fieldA(i,j,0) <cmp> value ? 1 : 0``. Convenience wrappers:
+        `cell_gt` / `cell_ge` / `cell_lt` / `cell_le`."""
+        if not _is_field_value(field):
+            raise ValueError("cell_compare: a State/RHS/scalar_field value is required (got %r)"
+                             % (field,))
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("cell_compare: value must be a Python float threshold (a per-cell field "
+                            "threshold is a later phase); got %r" % (value,))
+        if cmp not in Program._CELL_CMPS:
+            raise ValueError("cell_compare: cmp must be one of %s; got %r"
+                             % (sorted(Program._CELL_CMPS), cmp))
+        return self._new("scalar_field", "cell_compare", (field,),
+                         {"cmp": cmp, "value": float(value)}, name, field.block)
+
+    def cell_gt(self, field, value, name=None):
+        """Per-cell ``field > value`` mask (1.0 / 0.0). See `cell_compare`."""
+        return self.cell_compare(field, value, ">", name)
+
+    def cell_ge(self, field, value, name=None):
+        """Per-cell ``field >= value`` mask (1.0 / 0.0). See `cell_compare`."""
+        return self.cell_compare(field, value, ">=", name)
+
+    def cell_lt(self, field, value, name=None):
+        """Per-cell ``field < value`` mask (1.0 / 0.0). See `cell_compare`."""
+        return self.cell_compare(field, value, "<", name)
+
+    def cell_le(self, field, value, name=None):
+        """Per-cell ``field <= value`` mask (1.0 / 0.0). See `cell_compare`."""
+        return self.cell_compare(field, value, "<=", name)
+
+    def where(self, mask, a, b, name=None):
+        """A PER-CELL conditional select (spec op 17): ``out(i,j,c) = mask(i,j,*) != 0 ? a(i,j,c) :
+        b(i,j,c)`` COMPONENT-WISE over the field. This is NOT the scalar runtime branch `if_` -- the
+        condition is decided per cell INSIDE a Kokkos kernel.
+
+          - @p mask: a 0/1 (or any nonzero/zero) mask field. Either 1-component (one mask shared by all
+            components -- read at component 0) or with the SAME ncomp as @p a / @p b (a per-component
+            mask). Built with `cell_ge` / `cell_gt` / ... (a threshold) or any scalar_field.
+          - @p a, @p b: the two field values to choose between, on the SAME grid and ncomp (a State or a
+            scalar_field). The result has @p a's vtype / block / ncomp.
+
+        Lowered to a for_each_cell select kernel (a ternary, no branch divergence concern at MVP)."""
+        for nm, fv in (("mask", mask), ("a", a), ("b", b)):
+            if not _is_field_value(fv):
+                raise ValueError("where: %s must be a State/RHS/scalar_field value (got %r)"
+                                 % (nm, fv))
+        if a.vtype != b.vtype:
+            raise ValueError("where: a and b must have the same value type (a is %s, b is %s)"
+                             % (a.vtype, b.vtype))
+        if a.block != b.block:
+            raise ValueError("where: a and b must belong to the same block (a is %r, b is %r)"
+                             % (a.block, b.block))
+        na, nb, nm_ = self._ncomp(a), self._ncomp(b), self._ncomp(mask)
+        if na is not None and nb is not None and na != nb:
+            raise ValueError("where: a and b must have the same ncomp (a has %d, b has %d)" % (na, nb))
+        ncomp = na if na is not None else nb
+        if nm_ is not None and ncomp is not None and nm_ not in (1, ncomp):
+            raise ValueError("where: mask must be 1-component or match a/b's ncomp (mask has %d, "
+                             "a/b have %d)" % (nm_, ncomp))
+        attrs = {"ncomp": ncomp} if ncomp is not None else {}
+        return self._new(a.vtype, "where", (mask, a, b), attrs, name, a.block)
+
+    @staticmethod
+    def _ncomp(value):
+        """The statically-known component count of a field value, or None when it is not pinned in the
+        IR (a State / RHS ncomp is the model's n_cons, known only at codegen): a scalar_field carries its
+        own ``ncomp`` attr. Used by `where` for the static a/b/mask ncomp consistency check."""
+        if value.vtype == "scalar_field":
+            return int(value.attrs.get("ncomp", 1))
+        return None
+
     # --- reductions / comparisons / control flow (ADC-404a) ---
     def norm2(self, state):
         """The Euclidean norm ``||u||_2`` of a State (a collective all_reduce). Returns a Scalar value.
@@ -1227,7 +1307,8 @@ class Program:
                               "reduce", "compare", "while", "range", "if", "matrix_free_operator",
                               "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
                               "apply_in", "apply_out", "history", "store_history",
-                              "fill_boundary", "project", "record_scalar"})
+                              "fill_boundary", "project", "record_scalar",
+                              "cell_compare", "where"})
 
     def _all_ops(self):
         """Iterate over every op of the Program, descending into control-flow + apply sub-blocks (a flat
@@ -1381,6 +1462,23 @@ class Program:
             (state_in,) = v.inputs
             lines.append("ctx.apply_projection(0, %s);" % var[state_in.id])
             var[v.id] = var[state_in.id]
+        elif v.op == "cell_compare":
+            # A PER-CELL threshold (spec op 17, ADC-418): mask(i,j,0) = field(i,j,0) <cmp> value ? 1 : 0,
+            # a fresh 1-component scalar_field. Lowered to a for_each_cell select kernel (the mask the
+            # `where` op selects on); no aux / model needed -- it reads component 0 of the input field.
+            (field_in,) = v.inputs
+            var[v.id] = "m%d" % v.id
+            lines.append("adc::MultiFab %s = ctx.alloc_scalar_field(1, 1);" % var[v.id])
+            lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
+                                               v.attrs["value"])
+        elif v.op == "where":
+            # A PER-CELL conditional select (spec op 17, ADC-418): out(i,j,c) = mask ? a(i,j,c) :
+            # b(i,j,c), COMPONENT-WISE. A fresh scratch the same shape as `a` (its vtype / ncomp); the
+            # ternary is decided per cell inside the kernel (NOT a scalar runtime branch -- that is if_).
+            mask_in, a_in, b_in = v.inputs
+            var[v.id] = "w%d" % v.id
+            lines.append("adc::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], var[a_in.id]))
+            lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
         elif v.op == "record_scalar":
             # Store the (already-computed) Scalar into the System diagnostics map under its name. A
             # side-effecting op; its var maps to the recorded scalar (a harmless alias). The scalar input
@@ -1862,6 +1960,54 @@ def _kernel_open(out_var, state_var):
 
 def _kernel_close():
     return ["  });", "}"]
+
+
+# --- per-cell conditional select (spec op 17, ADC-418): model-free for_each_cell kernels --------------
+# `cell_compare` and `where` are pure layout ops over co-distributed MultiFabs (no aux / no model
+# coefficients): they reuse the SAME for_each_cell + Array4 per-fab pattern as the source kernels, but
+# bind several read handles (no auxA) and loop over the runtime component count `<out>.ncomp()`. Pairing
+# by local fab index li is sound: a cell_compare mask is alloc_scalar_field (the System (ba, dm)), a
+# where scratch is scratch_state_like(a) (a's (ba, dm)) and the inputs are the same co-distributed
+# states / scalar_fields, so fab(li) is the same box on every rank.
+
+
+def _emit_cell_compare_kernel(field_var, mask_var, cmp, value):
+    """Lower ``cell_compare``: maskA(i,j,0) = fieldA(i,j,0) <cmp> value ? 1 : 0 over the valid cells of
+    the 1-component mask. Reads component 0 of @p field_var; writes the 0/1 mask into @p mask_var."""
+    return [
+        "for (int li = 0; li < %s.local_size(); ++li) {" % mask_var,
+        "  const adc::Array4 maskA = %s.fab(li).array();" % mask_var,
+        "  const adc::ConstArray4 fieldA = %s.fab(li).const_array();" % field_var,
+        "  adc::for_each_cell(%s.box(li), [=] ADC_HD(int i, int j) {" % mask_var,
+        "    maskA(i, j, 0) = (fieldA(i, j, 0) %s static_cast<adc::Real>(%s)) "
+        "? static_cast<adc::Real>(1) : static_cast<adc::Real>(0);" % (cmp, repr(float(value))),
+        "  });",
+        "}",
+    ]
+
+
+def _emit_where_kernel(mask_var, a_var, b_var, out_var):
+    """Lower ``where``: outA(i,j,c) = maskA(i,j,mc) != 0 ? aA(i,j,c) : bA(i,j,c) COMPONENT-WISE over the
+    valid cells of @p out_var (out's runtime ncomp). The mask component mc is 0 when the mask is
+    1-component (a shared mask) and c when the mask has the SAME ncomp as a/b (a per-component mask) --
+    decided per cell from the mask's own ncomp, so both layouts lower with ONE kernel."""
+    return [
+        "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
+        "  const adc::Array4 outA = %s.fab(li).array();" % out_var,
+        "  const adc::ConstArray4 maskA = %s.fab(li).const_array();" % mask_var,
+        "  const adc::ConstArray4 aA = %s.fab(li).const_array();" % a_var,
+        "  const adc::ConstArray4 bA = %s.fab(li).const_array();" % b_var,
+        "  const int ncomp_ = %s.ncomp();" % out_var,
+        "  const int mask_ncomp_ = %s.ncomp();" % mask_var,
+        "  adc::for_each_cell(%s.box(li), [=] ADC_HD(int i, int j) {" % out_var,
+        "    for (int c = 0; c < ncomp_; ++c) {",
+        "      const int mc = (mask_ncomp_ == 1) ? 0 : c;",
+        "      outA(i, j, c) = (maskA(i, j, mc) != static_cast<adc::Real>(0)) ? aA(i, j, c) "
+        ": bA(i, j, c);",
+        "    }",
+        "  });",
+        "}",
+    ]
 
 
 def _emit_source_kernel(model, name, state_var, out_var):

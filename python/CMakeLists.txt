@@ -299,6 +299,18 @@ add_test(NAME test_time_control_flow_b
 set_tests_properties(test_time_control_flow_b PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# Per-cell conditional select (spec section 17, ADC-418) : emit_cpp_program LOWERS P.where(mask, a, b)
+# to a for_each_cell select kernel -- out(i,j,c) = mask ? a(i,j,c) : b(i,j,c) COMPONENT-WISE (a ternary
+# INSIDE the kernel, NOT the scalar runtime branch if_) -- and P.cell_ge / cell_gt / cell_lt / cell_le
+# to a per-cell 0/1 mask scalar_field. Section (A) pins the generated select kernel + the a/b/mask ncomp
+# / vtype validation, pure Python. Section (B) compiles a per-cell clamp where(U >= floor, U, 0.5*U),
+# installs, steps once, and checks bit-exact parity with offline numpy np.where (non-vacuous : some
+# cells take a, some take b); it self-skips without a compiler / Kokkos / install_program.
+add_test(NAME test_time_where
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_where.py)
+set_tests_properties(test_time_where PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # Matrix-free DYNAMIC linear solve (ADC-405 Phase 6b) : emit_cpp_program LOWERS a matrix_free_operator
 # (apply out = in - alpha*Lap(in), built from P.laplacian + the affine algebra -> an adc::ApplyFn
 # lambda) and P.solve_linear -> the runtime Krylov loop (adc::cg_solve / bicgstab_solve /

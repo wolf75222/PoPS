@@ -39,6 +39,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   when `ncomp > 1`, so every component converges (a component-0-only norm would leave the others
   unsolved); the bare `adc::apply_laplacian` matvec now runs per component. The scalar (`ncomp == 1`)
   path is unchanged and bit-identical. New `python/tests/test_time_multicomp_solve.py`.
+- **Per-cell conditional select** (ADC-418, spec section 17): the `adc.time.Program` builder gains
+  `P.where(mask, a, b)` -- a PER-CELL select `out(i,j,c) = mask ? a(i,j,c) : b(i,j,c)` lowered to a
+  ternary INSIDE a `for_each_cell` kernel (component-wise over the field; NOT the scalar runtime
+  branch `P.if_`) -- plus `P.cell_ge` / `cell_gt` / `cell_lt` / `cell_le` (and `P.cell_compare`)
+  building a per-cell 0/1 mask scalar_field from a threshold on a field's component 0. The select
+  kernel is emitted purely into the generated `problem.so` (reusing the existing `ProgramContext`
+  per-cell kernel pattern; no new `_adc` header). New `python/tests/test_time_where.py`.
 - **Program op-set completeness** (ADC-414, spec ops 10/16/21/22/23 + validation #18/#19): the
   `adc.time.Program` builder gains `P.sum` / `P.max` / `P.min` / `P.sum_component` (collective
   reductions lowered to new `adc::reduce_sum` / `reduce_max` / `reduce_min` in `mf_arith.hpp`, with
