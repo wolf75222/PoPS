@@ -492,16 +492,34 @@ class SystemFieldSolver {
     pell_.emplace(owner_->pgeom_, owner_->ba, pbc);
   }
 
+  /// Assembles the system Poisson RIGHT-HAND SIDE into @p rhs: f = Sum_s elliptic_rhs_s(U_s),
+  /// the elliptic brick of EACH block, summed in place (rhs is zeroed first). When
+  /// @p target_block >= 0 and @p U_stage != nullptr, the target block reads @p U_stage INSTEAD of
+  /// its live s.U (the rest of the blocks keep s.U); this is what solve_fields_from_state needs to
+  /// re-solve a field-coupled multi-stage scheme from a per-stage state. With the default
+  /// (target_block = -1) it is BIT-IDENTICAL to the historical inline loop (every block from s.U).
+  /// STRIDE: a held (hold-then-catch-up) block stays FROZEN at its last advance, so its charge enters
+  /// the sum with a STALE state until its next catch-up (loose Poisson coupling, assumed).
+  void assemble_poisson_rhs(MultiFab& rhs, int target_block = -1,
+                            const MultiFab* U_stage = nullptr) {
+    rhs.set_val(Real(0));
+    for (std::size_t b = 0; b < owner_->sp.size(); ++b) {
+      auto& s = owner_->sp[b];
+      const bool override_here = (U_stage != nullptr && static_cast<int>(b) == target_block);
+      s.add_poisson_rhs(override_here ? *U_stage : s.U, rhs);
+    }
+  }
+
   /// POLAR solve_fields: assembles f = Sum_s elliptic_rhs_s(U_s) (host loop per cell), solves the
   /// polar Poisson, then DERIVES the aux in the local basis (e_r, e_theta):
   ///   aux[0] = phi;  aux[1] = grad_r = d phi/dr;  aux[2] = grad_theta = (1/r) d phi/d theta.
   /// This is the layout expected by ExBVelocityPolar (v_r = -grad_theta/B, v_theta = grad_r/B).
-  void solve_fields_polar() {
+  /// @p target_block / @p U_stage: per-stage state override for the target block (default -1: every
+  /// block from s.U, bit-identical to the historical path).
+  void solve_fields_polar(int target_block = -1, const MultiFab* U_stage = nullptr) {
     ensure_elliptic_polar();
     MultiFab& rhs = pell_->rhs();
-    rhs.set_val(Real(0));
-    for (auto& s : owner_->sp)
-      s.add_poisson_rhs(s.U, rhs);
+    assemble_poisson_rhs(rhs, target_block, U_stage);
     // CONSTANT permittivity eps != 1: lap phi = f/eps (1/eps scaling of the rhs), like the
     // cartesian. (variable/aniso eps(x) is refused by ensure_elliptic_polar.)
     if (p_eps_ != Real(1)) {
@@ -533,9 +551,17 @@ class SystemFieldSolver {
   /// solve_fields_polar() in polar geometry. device INVARIANT: the device_fence() between ell_solve()
   /// and the derivation of grad phi MUST stay atomic (without it the GPU V-cycle is not finished when
   /// phi is read); the derivation / population loops iterate over the LOCAL fabs (MPI-safe).
-  void solve_fields() {
+  ///
+  /// @p target_block / @p U_stage: when set (target_block >= 0, U_stage != nullptr), the target
+  /// block's Poisson RHS is assembled from @p U_stage INSTEAD of its live s.U -- the seam
+  /// solve_fields_from_state uses so a field-coupled multi-stage scheme re-solves phi from each STAGE
+  /// state (the compiled Program runs stages sequentially: stage k's solve overwrites the shared aux
+  /// before stage k's RHS reads it). The default (-1 / nullptr) keeps every block at s.U: the
+  /// historical solve_fields(), BIT-IDENTICAL. Inert under the gauss_evolve_ skip (no RHS assembled).
+  void solve_fields(int target_block = -1, const MultiFab* U_stage = nullptr) {
     if (owner_->polar_)
-      return solve_fields_polar();  // ring: polar Poisson + aux in local basis (e_r, e_theta)
+      // ring: polar Poisson + aux in local basis (e_r, e_theta)
+      return solve_fields_polar(target_block, U_stage);
     adc_sf_mark("solve_fields: start");
     ensure_elliptic();
     adc_sf_mark("solve_fields: after ensure_elliptic");
@@ -546,14 +572,9 @@ class SystemFieldSolver {
     // The derivation of the aux (phi, grad phi) below ALWAYS runs, on the current phi.
     if (!(gauss_evolve_ && gauss_solved_once_)) {
       MultiFab& rhs = ell_rhs();
-      rhs.set_val(Real(0));
-      adc_sf_mark("solve_fields: after rhs.set_val(0)");
-      // f = Sum_s elliptic_rhs_s(U_s) on the CURRENT state of each block. STRIDE: a block of cadence M
-      // is held (hold-then-catch-up) between two catch-ups, so U_s stays FROZEN there at its last advance;
-      // its density / charge enters this sum with a STALE state until its next catch-up
-      // (loose Poisson coupling of the slow block, assumed by the stride choice).
-      for (auto& s : owner_->sp)
-        s.add_poisson_rhs(s.U, rhs);
+      // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
+      // target_block / U_stage override the target block reads U_stage (per-stage field solve, ADC-409).
+      assemble_poisson_rhs(rhs, target_block, U_stage);
       adc_sf_mark("solve_fields: after add_poisson_rhs");
       // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps, so we scale the rhs by
       // 1/eps. With a VARIABLE or ANISOTROPIC eps(x) field we DO NOT do it: the GeometricMG
@@ -605,6 +626,21 @@ class SystemFieldSolver {
                   owner_->bc_);  // extrapolation at the boundary (wall / free outflow)
     apply_named_aux_bc();  // ADC-369: per-field halo override (after the shared fill; no-op if none)
     adc_sf_mark("solve_fields: end (fill ghosts aux)");
+  }
+
+  /// Per-stage field solve (ADC-409): SAME solve + derive-aux as solve_fields(), but the target
+  /// block @p block_idx assembles its Poisson RHS from @p U_stage instead of its live s.U (the other
+  /// blocks keep s.U). This re-fills the SHARED aux (phi, grad phi) with phi(U_stage); a compiled
+  /// Program's stage-k RHS, called right after this, then reads phi solved from stage k's own state --
+  /// removing the "solve from current state only" limitation for sequential multi-stage schemes. The
+  /// next stage's solve overwrites the aux, so no distinct per-stage buffer is needed. With
+  /// block_idx == 0 and U_stage == U^n (the first stage) this is identical to solve_fields().
+  /// @throws std::out_of_range if @p block_idx is not a valid block index.
+  void solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+    if (block_idx < 0 || block_idx >= static_cast<int>(owner_->sp.size()))
+      throw std::out_of_range("solve_fields_from_state: block index " + std::to_string(block_idx) +
+                              " out of range (" + std::to_string(owner_->sp.size()) + " blocks)");
+    solve_fields(block_idx, &U_stage);
   }
 
  private:

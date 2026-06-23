@@ -21,6 +21,7 @@
 /// It REIMPLEMENTS NOTHING. Each method forwards to an existing adc::System primitive:
 ///   install(fn)          -> System::install_program_step(fn)   (registers the macro-step body)
 ///   solve_fields()       -> System::solve_fields()             (elliptic solve + aux at current U)
+///   solve_fields_from_state(b, U) -> System::solve_fields_from_state(b, U) (aux at a stage state)
 ///   n_blocks()           -> System::n_blocks()
 ///   state(b)             -> System::block_state(b)             (the block's live MultiFab, zero-copy)
 ///   rhs_into(b, U, R)    -> System::block_rhs_into(b, U, R)    (R <- -div F + S, Poisson frozen)
@@ -51,6 +52,14 @@ class ProgramContext {
   }
 
   void solve_fields() const { sys_->solve_fields(); }
+  /// Per-stage field solve (ADC-409): re-solve the elliptic fields and re-fill the shared aux from
+  /// block @p b's STAGE state @p u_stage (not its live state), so a field-coupled multi-stage
+  /// Program's stage k reads phi solved from stage k's own state. Forwards to
+  /// System::solve_fields_from_state. With b = 0 and u_stage = U^n (the first stage) it matches
+  /// solve_fields(); the codegen lowers every solve_fields op to this, passing the stage's state var.
+  void solve_fields_from_state(int b, MultiFab& u_stage) const {
+    sys_->solve_fields_from_state(b, u_stage);
+  }
   int n_blocks() const { return sys_->n_blocks(); }
   MultiFab& state(int b) const { return sys_->block_state(b); }
   void rhs_into(int b, MultiFab& u, MultiFab& r) const { sys_->block_rhs_into(b, u, r); }

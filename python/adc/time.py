@@ -873,10 +873,12 @@ class Program:
         non-empty ``m.source`` is refused (deferred). More than one block, control flow or Krylov remain
         later phases and raise NotImplementedError, never a silent mis-lowering.
 
-        NOTE: ``solve_fields()`` solves from the block's CURRENT state, so a multi-stage scheme that
-        needs the elliptic fields re-solved from each STAGE state (a field-coupled model) is not yet
-        exact; for an uncoupled model (no Poisson feedback into the flux) the field solve is inert and
-        the scheme is exact. ``solve_fields_from_state`` is a later phase."""
+        Each ``solve_fields(state=...)`` op lowers to ``ctx.solve_fields_from_state(0, <stage state>)``
+        (ADC-409): the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's
+        state, not the block's current state. So a field-coupled multi-stage scheme (Poisson feedback
+        into the flux) is exact: stage k's RHS reads phi solved from stage k's own state. For the first
+        stage the stage state is U^n, so this is identical to the historical ``solve_fields()``; for an
+        uncoupled model the field solve is inert either way."""
         self.validate()
         self._check_lowerable(model)
         prelude, body = self._emit_body(model)
@@ -1041,7 +1043,12 @@ class Program:
             var[v.id] = "u%d" % v.id
             lines.append("adc::MultiFab& %s = ctx.state(0);" % var[v.id])
         elif v.op == "solve_fields":
-            lines.append("ctx.solve_fields();")
+            # Per-stage field solve (ADC-409): solve from the EXPLICIT stage state recorded by
+            # P.solve_fields(state=...) so a field-coupled multi-stage scheme re-solves phi from each
+            # stage's own state (the shared aux is re-filled before this stage's RHS reads it). For the
+            # first stage state == U^n, so this is identical to the old ctx.solve_fields().
+            (state_in,) = v.inputs  # solve_fields inputs = (state,)
+            lines.append("ctx.solve_fields_from_state(0, %s);" % var[state_in.id])
         elif v.op == "history":
             # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
             # is bound to a C++ name the affine combine then reads like any other state/RHS term.

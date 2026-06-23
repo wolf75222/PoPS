@@ -534,6 +534,15 @@ class System {
   ADC_EXPORT void solve_fields();  ///< solves Poisson then derives aux = (phi, grad phi); exported
                                    ///< so a compiled program .so resolves it via ProgramContext
                                    ///< (the other seam accessors below are likewise ADC_EXPORT)
+  /// Per-stage field solve (ADC-409): SAME elliptic solve + aux derivation as solve_fields(), but
+  /// block @p block_idx assembles its Poisson RHS from @p U_stage instead of its live state (the
+  /// other blocks keep theirs). This re-fills the SHARED aux with phi(U_stage) so a field-coupled
+  /// multi-stage compiled Program can re-solve the fields from each STAGE state -- the stages run
+  /// sequentially, so stage k's RHS (called right after this) reads phi from stage k's own state
+  /// before the next stage overwrites the aux. With block_idx 0 and U_stage = U^n (the first stage)
+  /// it is identical to solve_fields(). ADC_EXPORT: resolved by a compiled program .so (ProgramContext)
+  /// across the dlopen boundary. @throws std::out_of_range if @p block_idx is not a valid block.
+  ADC_EXPORT void solve_fields_from_state(int block_idx, const MultiFab& U_stage);
   void step(double dt);  ///< solve_fields, then advances each block according to its scheme
   void advance(double dt, int nsteps);
 

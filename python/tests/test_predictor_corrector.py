@@ -25,12 +25,11 @@ against a model with a non-empty ``m.source`` is refused; an unknown source name
     RHS evaluations, two implicit Lorentz local solves I -/+ a*dt*L, one Lorentz apply) compiled +
     installed + stepped, vs an OFFLINE replay of the EXACT same stages built from the runtime
     primitives (set_state + solve_fields + eval_rhs for -div F + electric) plus the analytic Lorentz
-    solve / apply. The replay mirrors the compiled program faithfully: R_n re-solves the fields from
-    U_n, but R_star reads the fields FROZEN at U_n -- ctx.solve_fields() solves from the block's live
-    state, which the program never updates mid-step, so the predictor stage reads grad(U_n) not
-    grad(U_star) (solve_fields_from_state is a later phase; cf. emit_cpp_program). With that frozen-aux
-    replay the match is to round-off. Also asserts the program runs, conserves mass (sum rho), changed
-    the state.
+    solve / apply. The replay mirrors the compiled program faithfully: BOTH R_n and R_star re-solve the
+    fields from their OWN stage state (U_n resp. U_star) -- each solve_fields(state) op lowers to
+    ctx.solve_fields_from_state(0, stage state) (ADC-409), so the predictor stage reads grad(U_star).
+    With that per-stage solve the match is to round-off. Also asserts the program runs, conserves mass
+    (sum rho), changed the state.
 
 Skips cleanly (exit 0) without the install_program binding / numpy / a compiler / a visible Kokkos --
 never fakes the engine.
@@ -232,20 +231,6 @@ def offline_rhs_with_electric(ref, U):
     return np.array(ref.eval_rhs("plasma"))
 
 
-def offline_rhs_with_electric_frozen(ref, U, U_fields):
-    """Same -div F + electric at state U, but with the elliptic fields (grad) FROZEN at ``U_fields``.
-
-    This mirrors what the compiled Program actually computes: ``ctx.solve_fields()`` solves the elliptic
-    problem from the block's LIVE state, which the program never updates mid-step (the block state is
-    written only at commit). So a stage RHS that names ``solve_fields(U_star)`` still reads the fields
-    of U_n -- ``solve_fields_from_state`` is a later phase (see emit_cpp_program's docstring). The
-    honest parity replays that: freeze the aux at U_fields, then evaluate the flux + electric at U."""
-    ref.set_state("plasma", U_fields)
-    ref.solve_fields()              # aux <- grad(U_fields); frozen for the eval_rhs below
-    ref.set_state("plasma", U)      # state <- U WITHOUT re-solving (Poisson frozen, as block_rhs_into)
-    return np.array(ref.eval_rhs("plasma"))
-
-
 def analytic_lorentz_solve(U, a):
     """(I - a*L) U' = U with L = [[0,0,0],[0,0,B],[0,-B,0]], a a scalar: rho unchanged, (mx, my)
     rotated. k = a*B, den = 1 + k^2, mx' = (mx + k*my)/den, my' = (-k*mx + my)/den."""
@@ -300,15 +285,15 @@ sim_pc.step(DT)
 U_pc = np.array(sim_pc.get_state("plasma"))
 
 # Offline replay of the EXACT same stages (a fresh reference System with the default-source model).
-# R_n re-solves the fields from U_n; R_star reads the fields FROZEN at U_n (= what the compiled
-# program does, since ctx.solve_fields() solves from the block's live state and the program never
-# updates it mid-step -- solve_fields_from_state is a later phase). The implicit Lorentz solve and the
-# Lorentz apply are local and have a closed form. This replays the compiled step bit-for-bit.
+# BOTH R_n and R_star re-solve the fields from their OWN stage state: each solve_fields(state) op lowers
+# to ctx.solve_fields_from_state(0, stage state) (ADC-409), so R_star reads grad(U_star) not grad(U_n).
+# The implicit Lorentz solve and the Lorentz apply are local and have a closed form. This replays the
+# compiled step bit-for-bit.
 refc = make_sim(default_source_model("pc_ref_block"))[0]
-R_n = offline_rhs_with_electric(refc, U0)            # R_n = -div F(U_n) + electric(U_n)
+R_n = offline_rhs_with_electric(refc, U0)            # R_n = -div F(U_n) + electric(U_n; grad U_n)
 U_star_rhs = U0 + DT * R_n
 U_star = analytic_lorentz_solve(U_star_rhs, DT)      # (I - dt*L) U_star = U_star_rhs
-R_star = offline_rhs_with_electric_frozen(refc, U_star, U0)  # -div F(U_star) + electric(U_star; gradU_n)
+R_star = offline_rhs_with_electric(refc, U_star)     # -div F(U_star) + electric(U_star; grad U_star)
 C_star = analytic_lorentz_apply(U_star)              # C_star = L U_star
 Q = U0 + 0.5 * DT * R_n + 0.5 * DT * R_star + 0.5 * DT * C_star
 U_np1_ref = analytic_lorentz_solve(Q, 0.5 * DT)      # (I - 0.5*dt*L) U_np1 = Q

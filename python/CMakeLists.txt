@@ -335,6 +335,18 @@ add_test(NAME test_predictor_corrector
 set_tests_properties(test_predictor_corrector PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# Per-stage elliptic field solve (ADC-409, solve_fields_from_state): each P.solve_fields(state) op now
+# lowers to ctx.solve_fields_from_state(0, stage state), so a field-coupled multi-stage scheme re-solves
+# phi from each stage's own state. (A) codegen: the per-stage lowering + distinct stage vars (pure
+# Python). (B) a field-coupled 2-stage Heun compiled + stepped equals an offline reference that
+# re-solves phi per stage, and a frozen-aux reference does NOT match (the per-stage solve mattered);
+# auto-skips without a compiler / Kokkos.
+add_test(NAME test_time_solve_fields_from_state
+         COMMAND ${Python_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_solve_fields_from_state.py)
+set_tests_properties(test_time_solve_fields_from_state PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # Roe generique des systemes de moments (ADC-368, m.roe_from_jacobian) : cablage/codegen sans
 # compilateur, puis (AOT + System riemann='roe') 10 pas finis + masse conservee, et rejet de
 # riemann='roe' sans capability ; la partie compilee s'auto-saute sans compilateur ou sans Kokkos.
