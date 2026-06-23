@@ -20,6 +20,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Named-source RHS in the time-program codegen + predictor-corrector** (ADC-403, Phase 4): a
+  `P.rhs(..., sources=["electric", ...])` now lowers to `-div F` plus the requested named
+  `source_term`s (each assembled by the same per-cell kernel as `P.source`), so a compiled Program can
+  build `-div F + S_named` without folding sources implicitly. Validated: an unknown source name
+  raises `"unknown source_term '<name>'"`, and a named-source RHS on a model that also has a default
+  source is rejected (deferred; avoids double-counting). The full predictor-corrector Poisson/Lorentz
+  program (spec example 5) now compiles + runs and matches an offline replay of the same steps to
+  machine precision (`python/tests/test_predictor_corrector.py`). Closes ADC-403. (Per-stage field
+  re-solve from a stage state still awaits `solve_fields_from_state`, a later phase.)
 - **`adc.time.Program` split-source / local-linear-operator IR ops** (ADC-403, Phase 4): `P.source`
   (a single named model source as an RHS-like value), `P.linear_source` (reference a model
   `m.linear_source` operator), `P.apply` (`LU = L U`), and `P.solve_local_linear(operator=P.I - a*L,

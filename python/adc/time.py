@@ -465,9 +465,14 @@ class Program:
         physical ``model`` (the ``adc.dsl`` model whose ``source_term`` / ``linear_source`` they name)
         is provided: the codegen reads the model's symbolic coefficients to emit the per-cell kernels.
         Without ``model`` those ops raise NotImplementedError (the Program cannot be lowered in
-        isolation); ``model=None`` still lowers FE / SSPRK / RK4 (no model needed). More than one block,
-        named ``rhs`` sources beyond ``"default"``, control flow or Krylov remain later phases and raise
-        NotImplementedError, never a silent mis-lowering.
+        isolation); ``model=None`` still lowers FE / SSPRK / RK4 (no model needed). A ``rhs`` with NAMED
+        sources (``sources=[...]`` beyond ``"default"``) also lowers with a model: ``ctx.rhs_into`` (=
+        ``-div F`` + the model's default source) plus, for each named source, the same per-cell
+        ``m.source_term`` kernel as the standalone ``source`` op, accumulated onto ``R`` via ``axpy``.
+        That is sound only when the model's DEFAULT source is empty (else ``rhs_into`` already folds a
+        source and adding named ones double-counts), so a named-source ``rhs`` against a model with a
+        non-empty ``m.source`` is refused (deferred). More than one block, control flow or Krylov remain
+        later phases and raise NotImplementedError, never a silent mis-lowering.
 
         NOTE: ``solve_fields()`` solves from the block's CURRENT state, so a multi-stage scheme that
         needs the elliptic fields re-solved from each STAGE state (a field-coupled model) is not yet
@@ -514,10 +519,30 @@ class Program:
                     % (v.op, v.name, sorted(allowed), sorted(Program._MODEL_OPS)))
             if v.op == "rhs":
                 extra = [s for s in (v.attrs.get("sources") or []) if s != "default"]
-                if extra:
+                if not extra:
+                    continue
+                # A named source in an rhs reads the model's symbolic source_term coefficients (same as
+                # the standalone 'source' op): lowering needs the model.
+                if model is None:
                     raise NotImplementedError(
-                        "emit_cpp_program currently supports the 'default' source only; rhs '%s' uses "
-                        "named sources %r (source masks are Phase 4)" % (v.name, extra))
+                        "emit_cpp_program cannot lower rhs '%s' with named sources %r without the "
+                        "physical model that declares them (m.source_term); pass model= "
+                        "(compile_problem threads it through)" % (v.name, extra))
+                impl = _model_impl(model)
+                # ctx.rhs_into already folds the model's DEFAULT/composite source (m.source -> _source).
+                # Adding a named source on top of a non-empty default would DOUBLE-COUNT, so the named-
+                # source rhs is only sound when the default source is empty (the named-source-only model
+                # the predictor-corrector uses). A flux-only seam ('default' / no sources) is unaffected.
+                if getattr(impl, "_source", None):
+                    raise NotImplementedError(
+                        "rhs with named sources needs a model whose default source is empty (no "
+                        "m.source), or a flux-only seam; rhs '%s' requests %r but the model has a "
+                        "non-empty default source (deferred)" % (v.name, extra))
+                for s in extra:
+                    if s not in impl._source_terms:
+                        raise ValueError(
+                            "unknown source_term '%s' in rhs '%s'; declared source_terms: %s"
+                            % (s, v.name, sorted(impl._source_terms)))
         # Per-cell dense fallback bound for solve_local_linear (mat_inverse<N> uses fixed stack buffers).
         if model is not None and any(v.op == "solve_local_linear" for v in self._values):
             impl = _model_impl(model)
@@ -546,7 +571,19 @@ class Program:
                 var[v.id] = "r%d" % v.id
                 lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
                              % (var[v.id], var[state_in.id]))
+                # R <- -div F + default/composite source (ctx.rhs_into). _check_lowerable guarantees the
+                # model's default source is EMPTY when named sources are requested, so rhs_into here is
+                # flux-only (-div F) and the named sources below are added without double-counting.
                 lines.append("ctx.rhs_into(0, %s, %s);" % (var[state_in.id], var[v.id]))
+                named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
+                for s in named:
+                    # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
+                    # the standalone 'source' op) and axpy it onto R.
+                    ssrc = "%s_%s" % (var[v.id], s)
+                    lines.append("adc::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                                 % (ssrc, var[state_in.id]))
+                    lines += _emit_source_kernel(model, s, var[state_in.id], ssrc)
+                    lines.append("ctx.axpy(%s, static_cast<adc::Real>(1), %s);" % (var[v.id], ssrc))
             elif v.op == "source":
                 state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
                 var[v.id] = "r%d" % v.id

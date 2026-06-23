@@ -263,6 +263,18 @@ add_test(NAME test_time_local_solve_run
 set_tests_properties(test_time_local_solve_run PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# Named-source RHS codegen (ADC-403) : emit_cpp_program LOWERS a rhs(sources=[name,...]) with NAMED
+# sources -- ctx.rhs_into (-div F + default source) + the same per-cell m.source_term kernel as the
+# standalone source op, accumulated via ctx.axpy. Section (A) pins the generated body + the validation
+# (unknown source -> ValueError, non-empty default source -> deferred, no model -> NotImplementedError),
+# pure Python. Sections (B)/(C) compile the spec predictor-corrector Poisson/Lorentz program, install it,
+# step once, and check parity (focused named==default, full staged replay) to round-off; they self-skip
+# without a compiler / Kokkos / install_program (never faking the engine).
+add_test(NAME test_predictor_corrector
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_predictor_corrector.py)
+set_tests_properties(test_predictor_corrector PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # Roe generique des systemes de moments (ADC-368, m.roe_from_jacobian) : cablage/codegen sans
 # compilateur, puis (AOT + System riemann='roe') 10 pas finis + masse conservee, et rejet de
 # riemann='roe' sans capability ; la partie compilee s'auto-saute sans compilateur ou sans Kokkos.
