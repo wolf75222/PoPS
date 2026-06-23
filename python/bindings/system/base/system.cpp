@@ -392,6 +392,11 @@ struct System::Impl {
   // (SystemFieldSolver, Batch B). Pure delegation: the Cartesian/polar dispatch, the device_fence and
   // the order of fill_ghosts/fill_boundary now live in the header (bit-identical).
   void solve_fields() { fields_.solve_fields(); }
+  // Per-stage field solve (ADC-409): re-solve + re-fill the shared aux from a stage state of the
+  // target block (the rest of the blocks keep their live s.U). Same delegation idiom as solve_fields.
+  void solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+    fields_.solve_fields_from_state(block_idx, U_stage);
+  }
 
   // State marshaling DELEGATED to the store (Batch B.3): copy_comp0 / copy_state / write_state carry the
   // device_fence, the layout (component-major) and the size error identically. Kept as
@@ -1787,6 +1792,10 @@ void System::solve_fields() {
   p_->solve_fields();
 }
 
+void System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
+  p_->solve_fields_from_state(block_idx, U_stage);
+}
+
 // Time advance EXTRACTED into stepper_ (SystemStepper, Batch B). Pure delegation: the Cartesian/polar
 // dispatch of the physical step h, the per-block CFL formula (substeps/stride), the
 // hold-then-catch-up semantics of the macro-step counter, the condensed source stage and the couplings live
@@ -2047,9 +2056,12 @@ void System::restore_history(const std::string& name, int slot, const std::vecto
     }
     p_->hist_.depth[name] = static_cast<int>(ring.size());
   }
-  // Scatter the GLOBAL component-major buffer into the slot's fab (owner rank writes, others no-op):
-  // reuse the block store's write_state, the EXACT inverse of gather_global / state_global.
-  p_->blocks_.write_state(ring[static_cast<std::size_t>(slot)], ring[0].ncomp(), values);
+  // Scatter the GLOBAL component-major buffer into the slot's fab: reuse the Impl multi-box
+  // write_state (the SAME scatter set_state uses), the true inverse of the multi-box gather
+  // (gather_global / state_global). It dispatches on the slot's local_size(): the mono-box / MPI
+  // mono-box path (owner rank writes its box, others no-op) and, for theta_boxes > 1, the multi-box
+  // scatter that places each local band at its global indices -- matching how history_global gathers.
+  p_->write_state(ring[static_cast<std::size_t>(slot)], ring[0].ncomp(), values);
 }
 void System::set_history_initialized(const std::string& name, bool initialized) {
   auto it = p_->hist_.initialized.find(name);

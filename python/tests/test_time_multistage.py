@@ -9,8 +9,10 @@ drives -- so the match is to machine precision. SSPRK2 is additionally checked a
 `adc.Explicit("ssprk2")` step (spec test 32).
 
 Uses a pure-transport (isothermal, no field coupling) model so the per-stage `solve_fields` is inert
-and identical along both paths (the compiled codegen solves fields from the block's current state;
-field-coupled multi-stage needs solve_fields_from_state, a later phase). Skips cleanly (exit 0)
+and identical along both paths (the compiled codegen now lowers each solve_fields to a per-stage
+solve_fields_from_state, ADC-409; with no Poisson feedback into the flux the field solve changes
+nothing, so re-solving from a stage state vs the current state is bit-identical here -- the
+field-coupled case is exercised by test_time_solve_fields_from_state). Skips cleanly (exit 0)
 without the install_program binding / numpy / a compiler / a visible Kokkos -- never fakes the engine.
 """
 import sys

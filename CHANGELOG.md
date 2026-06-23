@@ -20,6 +20,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Per-stage elliptic field solve in the time program** (ADC-409, Phase 8): a compiled `problem.so`
+  can now re-solve the Poisson fields from an arbitrary stage state, so a field-coupled multi-stage
+  scheme is exact. New `System::solve_fields_from_state(block_idx, U_stage)` (`ADC_EXPORT`) assembles
+  the target block's Poisson RHS from `U_stage` (the other blocks keep their live state), runs the same
+  elliptic solve, and re-fills the shared aux with `phi(U_stage)`; `ProgramContext` forwards it. The
+  `adc.time` codegen lowers every `solve_fields(state=...)` op to `ctx.solve_fields_from_state(0,
+  <stage state>)`, so stage k's RHS reads phi solved from stage k's own state. This REMOVES the
+  documented "solve from the block's current state only" limitation of `emit_cpp_program` (for an
+  uncoupled model the field solve is inert, so the lowering stays bit-identical).
+
 - **Multistep histories + Adams-Bashforth 2 in the time program** (ADC-406, Phase 7a): a compiled
   `problem.so` can declare, read, and write a history field carried across macro-steps. The history is
   SYSTEM-owned (a `HistoryManager` in `System::Impl`, ring buffer per name) rather than closure-captured,
@@ -408,6 +418,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   no change to the library, the API, or the hot path.
 
 ### Changed
+
+- **`restore_history` scatter uses the multi-box `write_state`** (ADC-406b follow-up): the history
+  checkpoint restore now scatters through `Impl::write_state` (the multi-box dispatcher `set_state`
+  uses, the true inverse of the multi-box `gather_global`/`history_global`) instead of the mono-box
+  `blocks_.write_state`. The mono-box / MPI mono-box round-trip is unchanged; `theta_boxes > 1` now
+  restores correctly. The inline comment that overclaimed "the EXACT inverse of gather_global /
+  state_global" was corrected.
 
 - **Matrix-free apply allocates nothing per Krylov iteration** (ADC-408, follow-up of ADC-405
   Phase 6b): the time-program codegen for a `matrix_free_operator` no longer allocates the
