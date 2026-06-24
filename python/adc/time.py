@@ -1356,6 +1356,34 @@ class Program:
         """Build a :class:`StageStateSet` -- a coherent set of stage states for a field solve."""
         return StageStateSet(name, mapping)
 
+    def record(self, name, value):
+        """Record a scalar diagnostic (board sugar over :meth:`record_scalar`).
+
+        ``value`` is a Program scalar -- a reduction result such as ``P.sum(U)`` or
+        ``P.norm2(U)`` (the runtime value of a generic invariant). The automatic
+        reduction of an arbitrary ``integral(expr)`` over a per-cell expression is a
+        follow-up (it needs the scheduler / a generated reduction kernel, ADC-458)."""
+        if not (isinstance(value, Value) and value.vtype == "scalar"):
+            raise ValueError(
+                "record(%r): value must be a Program scalar (e.g. P.sum / P.norm2); got %r"
+                % (name, value))
+        return self.record_scalar(name, value)
+
+    def check_invariant(self, name, before=None, after=None, tolerance=1e-10):
+        """Record the drift of a generic invariant between two stages (board diagnostic).
+
+        ``before`` / ``after`` are Program scalars (reduction results); the recorded
+        diagnostic ``"<name>_drift"`` is ``after - before``. ``tolerance`` is carried as
+        metadata for a later assertion stage (the scheduled runtime check is ADC-458)."""
+        if not (isinstance(before, Value) and before.vtype == "scalar"
+                and isinstance(after, Value) and after.vtype == "scalar"):
+            raise ValueError(
+                "check_invariant(%r): before/after must be Program scalars" % (name,))
+        drift = after - before
+        out = self.record_scalar(name + "_drift", drift)
+        out.attrs["tolerance"] = float(tolerance)
+        return out
+
     # --- decorator mode (ADC-423): record the step body from a function ---
     def step(self, fn):
         """Record this Program's IR by calling @p fn(self) ONCE, at build time (decorator mode).

@@ -131,6 +131,26 @@ def test_rate_bundle_typed_multi_output():
         rb.require("electrons", i)  # wrong Rate on wrong StateSpace -> rejected
 
 
+def test_record_and_check_invariant_lower_to_record_scalar():
+    P = Program("inv")
+    e = P.state("electrons")
+    before = P.sum(e)                      # a Program scalar (reduction)
+    P.record("mass", before)               # board diagnostic
+    e1 = P.linear_combine("e1", 2.0 * e)
+    after = P.sum(e1)
+    out = P.check_invariant("mass", before=before, after=after, tolerance=1e-9)
+    assert out.vtype == "scalar"
+    assert out.attrs.get("tolerance") == 1e-9
+    assert [v for v in P._values if v.op == "record_scalar"]  # both recorded
+
+
+def test_record_rejects_non_scalar():
+    P = Program("inv")
+    e = P.state("electrons")
+    with pytest.raises(ValueError, match="must be a Program scalar"):
+        P.record("bad", e)  # a State, not a scalar
+
+
 def test_rate_bundle_arbitrary_arity():
     spaces = {name: _model.StateSpace(name + "_state", ["n", "mx", "my"])
               for name in ("a", "b", "c", "d")}
