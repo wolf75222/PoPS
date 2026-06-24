@@ -407,6 +407,34 @@ class Program:
         attrs = {"field": field} if field is not None else {}
         return self._new("fields", "solve_fields", (state,), attrs, name, state.block)
 
+    def solve_fields_from_blocks(self, states, name=None):
+        """Solve the elliptic fields from the SIMULTANEOUS stage states of MULTIPLE blocks (spec
+        \"Multi-blocs\"): a coupled Poisson where each listed block reads its own @p states[k] override
+        at once, returning a FieldContext.
+
+        RUNTIME STATUS (ADC-426): this is the multi-target coupled solve. The native field solver
+        assembles the system Poisson RHS as ``Sum_s elliptic_rhs_s(U_s)`` and overrides exactly ONE
+        target block per call (``System::assemble_poisson_rhs(rhs, target_block, U_stage)``); it has no
+        multi-target stage override. So a TRUE simultaneous multi-block override is DEFERRED: the op is
+        recorded (the IR / hash read cleanly when the runtime lands) but ``emit_cpp_program`` lowers it
+        to a clear NotImplementedError -- it is never faked as a sequence of single-target solves (those
+        would each see the OTHER block's live, not stage, state -- a different operator).
+
+        Use per-block ``P.solve_fields(state=Ub)`` instead: that IS a coupled solve (block b at its
+        stage state, every other block at its live state into the one shared phi/aux), which suffices
+        whenever the blocks advance in sequence (the common explicit case)."""
+        if not (isinstance(states, (list, tuple)) and states):
+            raise ValueError("solve_fields_from_blocks: a non-empty list of State values is required")
+        seen = set()
+        for s in states:
+            if not (isinstance(s, Value) and s.vtype == "state"):
+                raise ValueError("solve_fields_from_blocks: every entry must be a State value")
+            if s.block in seen:
+                raise ValueError("solve_fields_from_blocks: block '%s' listed twice" % s.block)
+            seen.add(s.block)
+        # The FieldContext is attached to the first listed block (an arbitrary but stable owner).
+        return self._new("fields", "solve_fields_from_blocks", tuple(states), {}, name, states[0].block)
+
     def rhs(self, name=None, state=None, fields=None, flux=True, sources=None, fluxes=None):
         """Build R = -div F(U) + sum of the requested named ``sources``. ``fields`` is the explicit
         FieldContext any field-dependent source reads (no implicit global aux). Named sources are
@@ -996,7 +1024,8 @@ class Program:
         ``U <- project(U, aux)`` over the valid cells, the SAME Zhang-Shu / floor projection the native
         per-step path runs (ADC-177). Returns a State value (the projected state). @p projection selects
         the projection primitive; only ``"block"`` (the block's own, set at add_block time) is supported
-        -- a custom projection is a later phase. Lowered to ``ctx.apply_projection(0, state)``."""
+        -- a custom projection is a later phase. Lowered to ``ctx.apply_projection(idx, state)`` for the
+        state's own block (ADC-426)."""
         if isinstance(name, Value) and state is None:
             name, state = None, name
         if not (isinstance(state, Value) and state.vtype == "state"):
@@ -1191,8 +1220,9 @@ class Program:
     def max_wave_speed(self, state):
         """The maximum |wave speed| of @p state's block (a collective reduction): the SAME per-block
         wave speed the native CFL uses (BlockState::max_speed). Returns a Scalar value. Lowered to
-        ``ctx.max_wave_speed(0, u)``. The denominator of a CFL-style dt bound cfl * hmin / w (spec s18).
-        REUSES the block's wave-speed closure -- it does not recompute the speed."""
+        ``ctx.max_wave_speed(idx, u)`` for @p state's own block (ADC-426). The denominator of a
+        CFL-style dt bound cfl * hmin / w (spec s18). REUSES the block's wave-speed closure -- it does
+        not recompute the speed."""
         if not (isinstance(state, Value) and state.vtype == "state"):
             raise ValueError("max_wave_speed: a State value is required")
         return self._new("scalar", "max_wave_speed", (state,), {}, None, state.block)
@@ -1477,11 +1507,19 @@ class Program:
         primitives only (no MultiFab / flux / solver reimplementation). It is the source the C++ loader
         (`System::install_program`) compiles, dlopens, and runs.
 
-        Lowers a SINGLE-BLOCK Program by a topological walk of the SSA IR: the block's current state is
-        the base (``ctx.state(0)``); ``solve_fields()`` runs the elliptic solve; each RHS becomes a
+        Lowers the Program by a topological walk of the SSA IR: each block's current state is its base
+        (``ctx.state(idx)``); ``solve_fields()`` runs the elliptic solve; each RHS becomes a
         scratch + ``rhs_into``; each intermediate ``linear_combine`` becomes a zero scratch accumulated
         with ``axpy``; the committed combine writes the block state via ``lincomb``. Forward Euler,
         SSPRK2/SSPRK3 and RK4 all lower this way -- no per-scheme class.
+
+        Multi-block (ADC-426): N ``P.state(\"a\")`` / ``P.state(\"b\")`` declarations + N ``P.commit``
+        are lowered -- each op routes to its own block's runtime index (``_block_indices``, in the order
+        the blocks are first declared via ``P.state``). The System blocks (``sim.add_equation`` /
+        ``sim.add_block``) MUST be added in that SAME order: the generated ``.so`` addresses them by
+        index. A block declared but never committed is a READ-ONLY block (allowed; e.g. a passive field
+        whose charge couples the others through the shared Poisson). A commit of a block no ``P.state``
+        declares is rejected. A single-block Program lowers byte-identically (its one block is index 0).
 
         Phase-4b also lowers the SPLIT-SOURCE / LOCAL-LINEAR ops -- ``source`` (a named ``m.source_term``
         evaluated per cell), ``apply`` (LU for a named ``m.linear_source``) and ``solve_local_linear``
@@ -1498,15 +1536,23 @@ class Program:
         same per-cell ``m.source_term`` kernel as the standalone ``source`` op, accumulated onto ``R`` via
         ``axpy``. So ``sources=[]`` is flux only, ``sources=["default"]`` is flux + default source
         (unchanged), ``sources=["a","b"]`` is flux + a + b -- the named ones never double-count the
-        default (it is folded in iff "default" was listed). More than one block, control flow or Krylov
-        remain later phases and raise NotImplementedError, never a silent mis-lowering.
+        default (it is folded in iff "default" was listed). More than one block now lowers (ADC-426):
+        each op routes to its block's runtime index and control flow (while/range/if) inside a block
+        lowers per block; a SIMULTANEOUS multi-target coupled field solve
+        (``solve_fields_from_blocks([Ua, Ub])``) is refused (see below), never a silent mis-lowering.
 
-        Each ``solve_fields(state=...)`` op lowers to ``ctx.solve_fields_from_state(0, <stage state>)``
+        Each ``solve_fields(state=...)`` op lowers to ``ctx.solve_fields_from_state(idx, <stage state>)``
         (ADC-409): the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's
         state, not the block's current state. So a field-coupled multi-stage scheme (Poisson feedback
         into the flux) is exact: stage k's RHS reads phi solved from stage k's own state. For the first
         stage the stage state is U^n, so this is identical to the historical ``solve_fields()``; for an
-        uncoupled model the field solve is inert either way."""
+        uncoupled model the field solve is inert either way. This is already a COUPLED multi-block solve:
+        the system Poisson RHS is ``Sum_s elliptic_rhs_s(U_s)`` (``assemble_poisson_rhs``), so block
+        ``idx`` reads its stage state while every OTHER block contributes its LIVE state into the one
+        shared phi/aux. A per-block ``P.solve_fields(state=Ub)`` therefore sees all blocks' charge. What
+        is NOT representable is a SIMULTANEOUS multi-target override (two blocks at stage states in one
+        solve): ``assemble_poisson_rhs`` overrides exactly one target block, so
+        ``P.solve_fields_from_blocks`` raises NotImplementedError (the coupled-solve deferral, ADC-426)."""
         self.validate()
         self._check_lowerable(model)
         prelude, body = self._emit_body(model)
@@ -1523,17 +1569,22 @@ class Program:
         """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
         adc_program_has_dt_bound returns and the C++ body of adc_program_dt_bound. No bound -> ("false",
         a +inf return that is never reached). The bound is a READ-ONLY scalar sub-program: it reuses the
-        same per-op lowering (state -> ctx.state(0), reductions, cfl/hmin/max_wave_speed, scalar_op) and
-        returns the final scalar. base = the sub-block's state op (if any); committed_id None (no commit
-        in a dt bound)."""
+        same per-op lowering (state -> ctx.state(idx), reductions, cfl/hmin/max_wave_speed, scalar_op) and
+        returns the final scalar. ADC-426: a multi-block dt bound may read several blocks' states (e.g.
+        the min over blocks of cfl*hmin/max_wave_speed), so each op resolves its OWN block index / base.
+        No commit lives in a dt bound (empty committed_ids)."""
         if self._dt_bound is None:
             return "false", "    return std::numeric_limits<adc::Real>::infinity();"
         sub, result = self._dt_bound
+        block_idx = self._block_indices()
+        bases = {}
+        for v in sub:
+            if v.op == "state" and v.block not in bases:
+                bases[v.block] = v
         var = {}
         lines = []
-        base = next((v for v in sub if v.op == "state"), None)
         for v in sub:
-            self._emit_op(v, base, None, var, model, lines, None)
+            self._emit_op(v, bases.get(v.block), frozenset(), var, model, lines, None, block_idx)
         lines.append("return %s;" % var[result.id])
         body = "\n".join("    " + ln for ln in lines)
         return "true", body
@@ -1542,19 +1593,34 @@ class Program:
     # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
     _MODEL_OPS = ("source", "apply", "solve_local_linear", "solve_local_nonlinear")
 
+    def _block_indices(self):
+        """Map each block name to a stable runtime block index, in the order the Program FIRST declares
+        it via ``P.state(...)`` (ADC-426). Index 0 is the first declared block, 1 the second, ...; the
+        single-block program keeps index 0 (byte-identical lowering). The generated ``.so`` addresses
+        blocks by this index, so the System blocks (``sim.add_equation`` / ``sim.add_block``) MUST be
+        added in the SAME order as the Program's ``P.state`` declarations (the order the .so expects)."""
+        order = {}
+        for v in self._values:
+            if v.op == "state" and v.block not in order:
+                order[v.block] = len(order)
+        return order
+
     def _check_lowerable(self, model=None):
         """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
         naming the offending construct (never a silent mis-lowering). @p model: the physical model that
-        declares the named sources / linear sources; required for the Phase-4b ops."""
-        if len(self._commits) != 1:
-            raise NotImplementedError(
-                "emit_cpp_program currently supports a single committed block; this Program commits "
-                "%d (multi-block is a later phase)" % len(self._commits))
-        states = [v for v in self._values if v.op == "state"]
-        if len(states) != 1:
-            raise NotImplementedError(
-                "emit_cpp_program currently supports a single block state (one P.state(...)); got %d"
-                % len(states))
+        declares the named sources / linear sources; required for the Phase-4b ops.
+
+        Multi-block (ADC-426): N ``P.state`` blocks + N ``P.commit`` are supported -- each op routes to
+        its block's index (``_block_indices``). Validation: a block is committed AT MOST once (enforced
+        at ``commit`` time); a read-only block (declared via ``P.state`` but never committed) is allowed
+        (e.g. a passive field whose charge couples the others); a commit of a block that was never
+        declared by ``P.state`` is rejected (an unknown-block commit cannot route to an index)."""
+        blocks = self._block_indices()
+        for b in self._commits:
+            if b not in blocks:
+                raise ValueError(
+                    "commit of unknown block '%s': no P.state('%s') declares it (declared blocks: %s)"
+                    % (b, b, sorted(blocks)))
         for v in self._values:
             self._check_op_lowerable(v, model)
         # Per-cell dense fallback bound for the local dense solves (mat_inverse<N> uses fixed stack
@@ -1597,6 +1663,18 @@ class Program:
     def _check_op_lowerable(self, v, model):
         """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
         Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
+        if v.op == "solve_fields_from_blocks":
+            # The SIMULTANEOUS multi-target coupled solve (ADC-426): the native field solver overrides
+            # exactly ONE target block per assemble_poisson_rhs call, so a true multi-block stage
+            # override is deferred -- never faked as a sequence of single-target solves. Use a per-block
+            # P.solve_fields(state=...) (already a coupled solve) instead.
+            raise NotImplementedError(
+                "emit_cpp_program cannot lower solve_fields_from_blocks ('%s'): a SIMULTANEOUS "
+                "multi-block coupled field solve (every listed block at its stage state at once) is "
+                "deferred -- the native field solver (System::assemble_poisson_rhs) overrides a single "
+                "target block per solve. Use per-block P.solve_fields(state=Ub): that IS a coupled "
+                "solve (block b at its stage state, every other block at its live state into the one "
+                "shared phi/aux)." % v.name)
         if v.op in Program._MODEL_OPS:
             if model is None:
                 raise NotImplementedError(
@@ -1688,22 +1766,31 @@ class Program:
 
     def _emit_body(self, model=None):
         """Generate the C++ of the install function in TWO phases (each list indented uniformly by the
-        template). Assumes `_check_lowerable` has passed: one block state (the base = ctx.state(0)), one
-        commit. @p model supplies the symbolic coefficients of the Phase-4b source / apply /
-        solve_local_linear ops. Returns ``(prelude, body)``:
+        template). Assumes `_check_lowerable` has passed. @p model supplies the symbolic coefficients of
+        the Phase-4b source / apply / solve_local_linear ops. Returns ``(prelude, body)``:
 
           - ``prelude``: INSTALL-TIME C++ (before ``ctx.install``) -- persistent scratch fields (held
             via ``std::shared_ptr`` so they outlive the install call and are reused across every step
             and every Krylov iteration) and the matrix-free apply lambdas. Captured by value into the
             step closure (shared_ptr / lambda / ctx all copy cheaply).
-          - ``body``: the STEP closure body (one macro-step over dt)."""
-        base = next(v for v in self._values if v.op == "state")
-        committed = next(iter(self._commits.values()))
+          - ``body``: the STEP closure body (one macro-step over dt).
+
+        Multi-block (ADC-426): the SSA walk allocates a per-block base (``ctx.state(idx)`` for each
+        declared block) and routes every op to ITS block's index via ``_block_indices`` / ``v.block``.
+        Each committed block's final value is copied into that block's state (a scratch commit) or was
+        written in place (a linear_combine commit). A single block reduces to the historical lowering."""
+        block_idx = self._block_indices()
+        # The first-declared state Value per block: the "base" any op of that block clones / commits into.
+        bases = {}
+        for v in self._values:
+            if v.op == "state" and v.block not in bases:
+                bases[v.block] = v
         # IR value id -> C++ token: a MultiFab variable name (states / RHS scratches), a scalar variable
         # name (reductions, ``s{id}``) or a parenthesized boolean expression (compares).
         var = {}
         prelude = []
         lines = []
+        committed_ids = {s.id for s in self._commits.values()}
         # Multistep histories (ADC-406a): register each declared history at its MAX lag FIRST (a
         # registration-only call, NOT a read -- a read before the first store fails loud), so the ring
         # depth is locked before any store. The first ctx.store_history then cold-start-fills every
@@ -1712,13 +1799,17 @@ class Program:
         for name, lag in sorted(self._histories.items()):
             lines.append("ctx.register_history(%s, %d);" % (json.dumps(name), int(lag)))
         for v in self._values:
-            self._emit_op(v, base, committed.id, var, model, lines, prelude)
-        # The committed value may be an op that wrote into a SCRATCH (e.g. solve_local_linear,
-        # solve_linear): copy it into the block state. A linear_combine commit already wrote ctx.state(0)
-        # in place (var == base), so this is a no-op there (skipped).
-        if var[committed.id] != var[base.id]:
-            lines.append("ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
-                         % (var[base.id], var[base.id], var[committed.id]))
+            base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
+            self._emit_op(v, base, committed_ids, var, model, lines, prelude, block_idx)
+        # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
+        # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
+        # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).
+        for block, committed in self._commits.items():
+            base = bases[block]
+            if var[committed.id] != var[base.id]:
+                lines.append(
+                    "ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
+                    % (var[base.id], var[base.id], var[committed.id]))
         # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
         # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
         if self._histories:
@@ -1727,24 +1818,30 @@ class Program:
         body_src = "\n".join("    " + ln for ln in lines)
         return prelude_src, body_src
 
-    def _emit_op(self, v, base, committed_id, var, model, lines, prelude=None):
+    def _emit_op(self, v, base, committed_ids, var, model, lines, prelude=None, block_idx=None):
         """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
         by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
         reductions / compares / linear_combine all lower identically inside the loop. @p base is the
-        block-state value (its C++ var is the loop variable inside a while sub-block); @p committed_id
-        is the committed value's id (None inside a sub-block: a body combine is never the commit).
-        @p prelude collects INSTALL-TIME lines (persistent scratch + apply lambdas) for the matrix-free
-        Krylov ops; None inside a sub-block (those ops only appear at the top level for now)."""
+        block-state value of THIS op's block (its C++ var is the loop variable inside a while sub-block);
+        @p committed_ids is the set of committed value ids (empty inside a sub-block: a body combine is
+        never a commit). @p prelude collects INSTALL-TIME lines (persistent scratch + apply lambdas) for
+        the matrix-free Krylov ops; None inside a sub-block (those ops only appear at the top level for
+        now). @p block_idx maps a block name to its runtime index (ADC-426); None inside a sub-block,
+        where every op shares the single enclosing block, so a missing map resolves to index 0."""
+        bidx = (block_idx or {}).get(v.block, 0)  # this op's runtime block index (0 single-block)
         if v.op == "state":
             var[v.id] = "u%d" % v.id
-            lines.append("adc::MultiFab& %s = ctx.state(0);" % var[v.id])
+            lines.append("adc::MultiFab& %s = ctx.state(%d);" % (var[v.id], bidx))
         elif v.op == "solve_fields":
             # Per-stage field solve (ADC-409): solve from the EXPLICIT stage state recorded by
             # P.solve_fields(state=...) so a field-coupled multi-stage scheme re-solves phi from each
             # stage's own state (the shared aux is re-filled before this stage's RHS reads it). For the
-            # first stage state == U^n, so this is identical to the old ctx.solve_fields().
+            # first stage state == U^n, so this is identical to the old ctx.solve_fields(). Multi-block
+            # (ADC-426): solve_fields_from_state(idx, U_stage) is a genuinely COUPLED solve -- the system
+            # Poisson RHS is Sum_s elliptic_rhs_s(U_s) (assemble_poisson_rhs), so block idx reads its
+            # stage state while every OTHER block contributes its live state into the shared phi/aux.
             (state_in,) = v.inputs  # solve_fields inputs = (state,)
-            lines.append("ctx.solve_fields_from_state(0, %s);" % var[state_in.id])
+            lines.append("ctx.solve_fields_from_state(%d, %s);" % (bidx, var[state_in.id]))
         elif v.op == "history":
             # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
             # is bound to a C++ name the affine combine then reads like any other state/RHS term.
@@ -1768,9 +1865,10 @@ class Program:
             var[v.id] = var[x.id]
         elif v.op == "project":
             # In-place positivity projection of the state (the block's own project closure). The result
-            # aliases the input state. Forwards to ctx.apply_projection(0, state).
+            # aliases the input state. Forwards to ctx.apply_projection(idx, state) (ADC-426: the op's
+            # own block, so each block runs its own projection).
             (state_in,) = v.inputs
-            lines.append("ctx.apply_projection(0, %s);" % var[state_in.id])
+            lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
             var[v.id] = var[state_in.id]
         elif v.op == "cell_compare":
             # A PER-CELL threshold (spec op 17, ADC-418): mask(i,j,0) = field(i,j,0) <cmp> value ? 1 : 0,
@@ -1811,16 +1909,16 @@ class Program:
             want_default_source = requested is None or "default" in requested
             if named_fluxes is None:
                 if want_default_source:
-                    # R <- -div F + default/composite source (ctx.rhs_into), the historical path:
-                    # sources is None (legacy) or "default" is requested. UNCHANGED / bit-identical.
-                    lines.append("ctx.rhs_into(0, %s, %s);" % (var[state_in.id], var[v.id]))
+                    # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
+                    # bidx), the historical path: sources is None (legacy) or "default" is requested.
+                    lines.append("ctx.rhs_into(%d, %s, %s);" % (bidx, var[state_in.id], var[v.id]))
                 else:
                     # FLUX-ONLY (ADC-425): "default" is NOT among the requested sources (the empty list
                     # [] or a named-only list) -> R <- -div F(U) WITHOUT the model's default source
-                    # (ctx.neg_div_flux_default_into). The named source_terms below are then axpy'd on
-                    # top -- so sources=[] is flux only, sources=["a","b"] is flux + a + b.
-                    lines.append("ctx.neg_div_flux_default_into(0, %s, %s);"
-                                 % (var[state_in.id], var[v.id]))
+                    # (ctx.neg_div_flux_default_into), for THIS op's block (bidx). The named source_terms
+                    # below are then axpy'd on top -- sources=[] is flux only, ["a","b"] is flux + a + b.
+                    lines.append("ctx.neg_div_flux_default_into(%d, %s, %s);"
+                                 % (bidx, var[state_in.id], var[v.id]))
             else:
                 # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
                 # the flux expressions per direction into two n_cons scratch fields (fx / fy) by a
@@ -1982,11 +2080,13 @@ class Program:
             var[v.id] = "s%d" % v.id
             lines.append("const adc::Real %s = ctx.hmin();" % var[v.id])
         elif v.op == "max_wave_speed":
-            # Max |wave speed| of the block on the state (ctx.max_wave_speed(0, u)): the SAME per-block
+            # Max |wave speed| of the block on the state (ctx.max_wave_speed(idx, u)): the SAME per-block
             # reduction the native CFL reads, REUSED (spec s18). A collective reduction -> a scalar local.
+            # ADC-426: the wave speed of the input state's OWN block (idx of u.block).
             (u,) = v.inputs
             var[v.id] = "s%d" % v.id
-            lines.append("const adc::Real %s = ctx.max_wave_speed(0, %s);" % (var[v.id], var[u.id]))
+            lines.append("const adc::Real %s = ctx.max_wave_speed(%d, %s);"
+                         % (var[v.id], (block_idx or {}).get(u.block, 0), var[u.id]))
         elif v.op == "scalar_op":
             # Scalar arithmetic (add/sub/mul/div) over scalar locals / literal constants -> a new scalar
             # local. Used by the dt_bound expression cfl * hmin / max_wave_speed (spec s18).
@@ -2010,14 +2110,14 @@ class Program:
                 rhs_tok = "static_cast<adc::Real>(%s)" % repr(float(v.attrs["rhs"]))
             var[v.id] = "(%s %s %s)" % (var[lhs.id], v.attrs["cmp"], rhs_tok)
         elif v.op == "while":
-            self._emit_while(v, base, var, model, lines)
+            self._emit_while(v, base, var, model, lines, block_idx)
         elif v.op == "range":
-            self._emit_range(v, base, var, model, lines)
+            self._emit_range(v, base, var, model, lines, block_idx)
         elif v.op == "if":
-            self._emit_if(v, base, var, model, lines)
+            self._emit_if(v, base, var, model, lines, block_idx)
         elif v.op == "linear_combine":
             terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
-            if v.id == committed_id:
+            if v.id in committed_ids:
                 # Commit: block state <- c_base * base + sum(non-base coeff * term), in place.
                 c_base = {0: 0.0}
                 acc = "acc%d" % v.id
@@ -2036,7 +2136,7 @@ class Program:
                 for inp, coeff in terms:
                     lines.append("ctx.axpy(%s, %s, %s);" % (var[v.id], _coeff_cpp(coeff), var[inp.id]))
 
-    def _emit_while(self, v, base, var, model, lines):
+    def _emit_while(self, v, base, var, model, lines, block_idx=None):
         """Lower a while op to an infinite C++ loop with a break (the condition re-evaluates each pass).
         The loop variable is a single MultiFab mutated IN PLACE across iterations; the cond / body sub-
         blocks re-run the per-op lowering each pass, with the loop-variable value id seeded to the loop
@@ -2056,18 +2156,18 @@ class Program:
         sub[loop_in.id] = x
         body_lines = []
         for w in v.attrs["cond_block"]:
-            self._emit_op(w, base, None, sub, model, body_lines)
+            self._emit_op(w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
         cond_expr = sub[v.attrs["cond"].id]
         body_lines.append("if (!(%s)) break;" % cond_expr)
         for w in v.attrs["body_block"]:
-            self._emit_op(w, base, None, sub, model, body_lines)
+            self._emit_op(w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
         # Write the next state into the loop variable in place (x <- body result).
         body_lines.append("ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
                           % (x, x, sub[v.attrs["body"].id]))
         lines += ["  " + ln for ln in body_lines]
         lines.append("}")
 
-    def _emit_range(self, v, base, var, model, lines):
+    def _emit_range(self, v, base, var, model, lines, block_idx=None):
         """Lower a range op to a C++ ``for`` over a fixed count. Like a while, the loop variable is one
         MultiFab mutated in place and the body sub-block is emitted ONCE inside the loop (re-run each
         pass at runtime); the loop-variable value id is seeded to the loop var for the sub-block."""
@@ -2083,13 +2183,13 @@ class Program:
         sub[loop_in.id] = x
         body_lines = []
         for w in v.attrs["body_block"]:
-            self._emit_op(w, base, None, sub, model, body_lines)
+            self._emit_op(w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
         body_lines.append("ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
                           % (x, x, sub[v.attrs["body"].id]))
         lines += ["  " + ln for ln in body_lines]
         lines.append("}")
 
-    def _emit_if(self, v, base, var, model, lines):
+    def _emit_if(self, v, base, var, model, lines, block_idx=None):
         """Lower an if op to a C++ branch. @p cond was emitted at the top level (its boolean expression
         is var[cond.id]); the loop variable is a copy of the input state, overwritten in place only when
         the branch is taken (so the result is the input state when the condition is false at runtime)."""
@@ -2104,7 +2204,7 @@ class Program:
         sub[state_in.id] = x
         body_lines = []
         for w in v.attrs["body_block"]:
-            self._emit_op(w, base, None, sub, model, body_lines)
+            self._emit_op(w, base, frozenset(), sub, model, body_lines, block_idx=block_idx)
         body_lines.append("ctx.lincomb(%s, static_cast<adc::Real>(0), %s, static_cast<adc::Real>(1), %s);"
                           % (x, x, sub[v.attrs["body"].id]))
         lines += ["  " + ln for ln in body_lines]

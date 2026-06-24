@@ -265,6 +265,17 @@ add_test(NAME test_time_codegen
 set_tests_properties(test_time_codegen PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# Multi-block compiled Programs (ADC-399 / ADC-426, spec "Multi-blocs") : emit_cpp_program lowers N
+# P.state / N P.commit, routing each op to its block index. Section (A) pins per-block ctx.state /
+# rhs_into indices, the read-only-block / double-commit / unknown-block rules, and the deferred
+# solve_fields_from_blocks (pure Python). Section (B) compiles a 2-block passive-transport program,
+# steps it, and checks parity vs two independent single-block runs; it self-skips without a compiler /
+# Kokkos / install_program (never faking the engine).
+add_test(NAME test_time_multiblock
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_multiblock.py)
+set_tests_properties(test_time_multiblock PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # compile_problem + sim.install_program + CompiledTime end-to-end (ADC-401 Phase 2c-ii) : validation
 # (backend/target/multi-stage/CompiledTime rejections, always run) + parity of a compiled Forward-Euler
 # Program against the reference one-step U0 + dt*eval_rhs. The parity part auto-skips without the

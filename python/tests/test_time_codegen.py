@@ -4,10 +4,11 @@
 This test pins the generated source: the stable .so ABI (adc_program_abi_key via the
 ADC_ABI_KEY_LITERAL preprocessor literal -- never the interposable inline -- plus adc_program_name /
 adc_program_hash / adc_install_program), the Forward-Euler body, and that a multi-stage scheme
-(SSPRK2) now lowers (a scratch state + a second rhs + a lincomb commit). Constructs the codegen
-cannot lower yet -- more than one block, named sources beyond 'default' -- must be REFUSED with a
-clear NotImplementedError, never silently mis-lowered. Pure Python (no compile); skips if adc is
-unavailable.
+(SSPRK2) now lowers (a scratch state + a second rhs + a lincomb commit). Multi-block (ADC-426) now
+lowers too -- N P.state / N P.commit, each op routed to its block index. Constructs the codegen still
+cannot lower -- named sources beyond 'default', a commit of an undeclared block, the SIMULTANEOUS
+multi-target solve_fields_from_blocks -- must be REFUSED with a clear error, never silently
+mis-lowered. Pure Python (no compile); skips if adc is unavailable.
 """
 import sys
 
@@ -107,8 +108,11 @@ def test_named_source_refused(t):
         raise AssertionError("expected NotImplementedError for a non-default named source")
 
 
-def test_multiblock_refused(t):
-    # Two committed blocks -> multi-block is a later phase; refuse with a clear message.
+def test_multiblock_lowers(t):
+    # Two committed blocks (ADC-426): multi-block now LOWERS -- each op routes to its block's index in
+    # declaration order (a=0, b=1). (It previously raised NotImplementedError; that restriction is
+    # lifted.) The default-Poisson solve_fields is per-block (a coupled solve, the block at its stage
+    # state). State / RHS / projection / field solve each target the right index.
     P = t.Program("two_block")
     dt = P.dt
     for blk in ("a", "b"):
@@ -116,12 +120,44 @@ def test_multiblock_refused(t):
         f = P.solve_fields(U)
         R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
+    src = P.emit_cpp_program()
+    assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
+    assert "ctx.state(1)" in src, "block b should bind ctx.state(1)"
+    assert "ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block"
+    assert "ctx.solve_fields_from_state(0, " in src and "ctx.solve_fields_from_state(1, " in src, \
+        "per-block field solve routed by index"
+
+
+def test_unknown_block_commit_refused(t):
+    # A commit of a block no P.state declares cannot route to an index (ADC-426): reject fail-loud.
+    P = t.Program("bad_commit")
+    U = P.state("a")
+    Ua = P.linear_combine("a_next", U + P.dt * P.rhs(state=U, fields=P.solve_fields(U),
+                                                     sources=["default"]))
+    P.commit("ghost", Ua)  # 'ghost' was never declared by P.state
+    try:
+        P.emit_cpp_program()
+    except ValueError as exc:
+        assert "unknown block" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError for a commit of an undeclared block")
+
+
+def test_solve_fields_from_blocks_deferred(t):
+    # The SIMULTANEOUS multi-target coupled field solve is deferred (ADC-426): the IR records it but the
+    # codegen refuses it with a clear message (never faked as a sequence of single-target solves).
+    P = t.Program("coupled")
+    Ua = P.state("a")
+    Ub = P.state("b")
+    P.solve_fields_from_blocks([Ua, Ub])
+    P.commit("a", P.linear_combine("a1", Ua + P.dt * P.rhs(state=Ua, sources=["default"])))
+    P.commit("b", P.linear_combine("b1", Ub + P.dt * P.rhs(state=Ub, sources=["default"])))
     try:
         P.emit_cpp_program()
     except NotImplementedError as exc:
-        assert "block" in str(exc).lower()
+        assert "solve_fields_from_blocks" in str(exc) and "deferred" in str(exc).lower()
     else:
-        raise AssertionError("expected NotImplementedError for a multi-block Program")
+        raise AssertionError("expected NotImplementedError for solve_fields_from_blocks")
 
 
 def test_uncommitted_refused(t):
