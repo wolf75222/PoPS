@@ -223,6 +223,14 @@ add_test(NAME test_operator_module
 set_tests_properties(test_operator_module PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# Macros standard operator-first (ADC-440, spec 2) : predictor_corrector_local_linear / explicit_rk /
+# imex_local_linear prennent des NOMS d'operateurs types (pas de termes physiques) et les composent
+# via P.call ; model-free (source sans physique) et reutilisables sur tout Module aux memes signatures.
+add_test(NAME test_operator_macros
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_macros.py)
+set_tests_properties(test_operator_macros PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
 # linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit

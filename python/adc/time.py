@@ -3716,12 +3716,132 @@ def bdf(P, block, order, *, linear_source=None, sources=("default",), flux=True,
 
 
 # adc.time.std.<scheme>(Program, block, ...) -- the spec's standard library entry point.
+# --- operator-first standard macros (Spec 2) --------------------------------------------------
+# These macros are MODEL-FREE: they take typed operator NAMES (not physical terms) and compose them
+# with P.call against the registry bound to the Program (P.bind_operators(module)). The SAME macro
+# runs against any Module that provides operators with the expected signatures. They never mention
+# flux / source / poisson / lorentz / rho / mx / my.
+def _op_space_arity(P, name):
+    """Number of space-typed inputs (State / FieldSpace) of operator @p name in the bound registry."""
+    if P._registry is None:
+        raise ValueError("operator-first macro: bind a module first (P.bind_operators(module))")
+    op = P._registry.get(name)
+    return sum(1 for t in op.signature.inputs if getattr(t, "kind", None) in ("state", "field"))
+
+
+def _opcall(P, name, *candidate_args, value_name=None):
+    """Call operator @p name passing exactly as many leading args as its signature's space inputs
+    (so an operator that ignores the fields is called with the state alone, and a fields-free linear
+    operator with no args)."""
+    arity = _op_space_arity(P, name)
+    return P.call(name, *candidate_args[:arity], name=value_name)
+
+
+def predictor_corrector_local_linear(P, block, *, fields_operator, explicit_rate_operator,
+                                     implicit_operator, state_space="U", commit=True):
+    """Generic predictor-corrector for ``dU/dt = R(U, fields) + L(fields) U`` (Spec 2, operator-first).
+
+    Composes THREE typed operators by name -- a field operator ``fields_operator: U -> Fields``, an
+    explicit rate ``explicit_rate_operator: (U, Fields) -> Rate(U)`` and a local linear operator
+    ``implicit_operator: Fields -> LocalLinearOperator(U, U)`` -- into one trapezoidal step with the
+    L term treated implicitly via local solves::
+
+        U*    = (I - dt L_n)^{-1} (U^n + dt R_n)
+        U^n+1 = (I - 1/2 dt L*)^{-1} (U^n + 1/2 dt R_n + 1/2 dt R* + 1/2 dt L* U*)
+
+    It mentions no physics; ``state_space`` is informational. Requires ``P.bind_operators(module)``.
+    """
+    u_n = P.state(block)
+    fields_n = _opcall(P, fields_operator, u_n, value_name="fields_n")
+    r_n = _opcall(P, explicit_rate_operator, u_n, fields_n, value_name="R_n")
+    l_n = _opcall(P, implicit_operator, fields_n, value_name="L_n")
+    u_star = P.solve_local_linear("U_star", operator=P.I - P.dt * l_n,
+                                  rhs=P.linear_combine("U_star_rhs", u_n + P.dt * r_n),
+                                  fields=fields_n)
+    fields_star = _opcall(P, fields_operator, u_star, value_name="fields_star")
+    r_star = _opcall(P, explicit_rate_operator, u_star, fields_star, value_name="R_star")
+    l_star = _opcall(P, implicit_operator, fields_star, value_name="L_star")
+    c_star = P.apply(l_star, u_star, fields=fields_star, name="C_star")
+    q = P.linear_combine("Q", u_n + 0.5 * P.dt * r_n + 0.5 * P.dt * r_star + 0.5 * P.dt * c_star)
+    u_np1 = P.solve_local_linear("U_np1", operator=P.I - 0.5 * P.dt * l_star, rhs=q,
+                                 fields=fields_star)
+    if commit:
+        P.commit(block, u_np1)
+    return u_np1
+
+
+def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A=None, b=None,
+                c=None, state_space="U"):
+    """Generic explicit Runge-Kutta over a typed rate operator (Spec 2, operator-first).
+
+    Each stage is ``k_i = rhs_operator(U_i[, fields_operator(U_i)])``; the tableau lowers to the same
+    affine stage chain as :func:`rk`. Pass a ``ButcherTableau`` / ``(A, b, c)`` via ``tableau`` or the
+    raw ``A`` / ``b`` / ``c``. ``fields_operator`` is optional (a pure-flux rate needs no fields).
+    """
+    if tableau is None:
+        if A is None or b is None:
+            raise ValueError("explicit_rk: provide a tableau or A and b")
+        tableau = ButcherTableau(A, b, c)
+    elif not isinstance(tableau, ButcherTableau):
+        ta, tb, tc = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
+        tableau = ButcherTableau(ta, tb, tc)
+    tag = (tableau.name + "_") if tableau.name else "rk_"
+    u0 = P.state(block)
+    ks = []
+    for i in range(tableau.stages):
+        if i == 0:
+            u_i = u0
+        else:
+            expr = u0
+            for j in range(i):
+                aij = tableau.A[i][j]
+                if aij != 0.0:
+                    expr = expr + (P.dt * aij) * ks[j]
+            u_i = P.linear_combine("%sU%d" % (tag, i), expr)
+        if fields_operator is not None:
+            f_i = _opcall(P, fields_operator, u_i)
+            ks.append(_opcall(P, rhs_operator, u_i, f_i, value_name="%sk%d" % (tag, i)))
+        else:
+            ks.append(_opcall(P, rhs_operator, u_i, value_name="%sk%d" % (tag, i)))
+    final = u0
+    for i in range(tableau.stages):
+        bi = tableau.b[i]
+        if bi != 0.0:
+            final = final + (P.dt * bi) * ks[i]
+    P.commit(block, P.linear_combine("%sstep" % tag, final))
+
+
+def imex_local_linear(P, block, *, explicit_operator, implicit_operator, fields_operator=None,
+                      theta=1.0, state_space="U"):
+    """Generic IMEX with an explicit rate and an implicit local linear operator (Spec 2).
+
+    One theta-implicit step of ``dU/dt = R(U[, fields]) + L([fields]) U``::
+
+        U^{n+1} = (I - theta dt L)^{-1} (U^n + dt R)
+
+    composing the typed ``explicit_operator`` and ``implicit_operator`` (and an optional
+    ``fields_operator``) by name. Requires ``P.bind_operators(module)``.
+    """
+    if not (0.0 < theta <= 1.0):
+        raise ValueError("imex_local_linear: theta must be in (0, 1]")
+    u = P.state(block)
+    fields = _opcall(P, fields_operator, u, value_name="fields") if fields_operator else None
+    r = _opcall(P, explicit_operator, u, fields, value_name="R")
+    lin = _opcall(P, implicit_operator, fields, value_name="L")
+    q = P.linear_combine("imex_rhs", u + P.dt * r)
+    u1 = P.solve_local_linear("imex_step", operator=P.I - theta * P.dt * lin, rhs=q, fields=fields)
+    P.commit(block, u1)
+    return u1
+
+
 std = types.SimpleNamespace(forward_euler=forward_euler, ssprk2=ssprk2, ssprk3=ssprk3, rk4=rk4,
                             rk=rk, RK4_TABLEAU=RK4_TABLEAU, SSPRK2_TABLEAU=SSPRK2_TABLEAU,
                             ButcherTableau=ButcherTableau,
                             adams_bashforth=adams_bashforth, adams_bashforth2=adams_bashforth2,
                             strang=strang, lie=lie, imex_local=imex_local, bdf=bdf,
-                            condensed_schur=condensed_schur)
+                            condensed_schur=condensed_schur,
+                            predictor_corrector_local_linear=predictor_corrector_local_linear,
+                            explicit_rk=explicit_rk, imex_local_linear=imex_local_linear)
 
 
 class CompiledTime:

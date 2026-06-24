@@ -20,6 +20,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Operator-first standard macros** (ADC-440, epic ADC-436, spec 2): `adc.time.std`.
+  `predictor_corrector_local_linear`, `explicit_rk` and `imex_local_linear` take typed operator NAMES
+  (a field operator `U -> Fields`, an explicit rate `(U, Fields) -> Rate(U)`, a local linear operator
+  `Fields -> LocalLinearOperator(U, U)`) and compose them with `P.call` against the bound Module. They
+  are model-free (their source mentions no physics term) and reusable across any Module with matching
+  signatures; an arity-aware helper calls each operator with exactly the inputs its signature declares.
+  New `python/tests/test_operator_macros.py`.
 - **Public `adc.model.Module`** (ADC-439, epic ADC-436, spec 2 "operator-first"): the model-free
   front-end. `Module` holds typed spaces and a registry of typed operators
   (`state_space` / `field_space` / `parameters` / `aux_fields` / `operator` as a builder or a
