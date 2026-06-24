@@ -20,6 +20,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Compiled operator introspection** (ADC-441, epic ADC-436, spec 2): `list_operators` /
+  `operator_signature` / `operator_requirements` / `operator_capabilities` / `list_state_spaces` /
+  `list_field_spaces` on `adc.model.Module`, `dsl.Model` and `CompiledProblem` (the compiled handle
+  reads the carried model's metadata, no `.so` load). New `python/tests/test_operator_introspection.py`.
+- **ModuleSpec hash** (ADC-443, epic ADC-436, spec 2): `adc.model.Module.module_hash` folds the
+  spaces, parameters, aux and -- per operator -- name / kind / signature / capabilities / requirements
+  and a body identity (callable source or repr), namespaced by a spec2 tag; deterministic and
+  invalidated by any operator-spec change. The dsl codegen sensitivity stays with
+  `dsl.Model._model_hash`; the module hash adds the operator-spec layer for a compiled module
+  artifact. New `python/tests/test_module_hash.py`.
 - **Operator-first standard macros** (ADC-440, epic ADC-436, spec 2): `adc.time.std`.
   `predictor_corrector_local_linear`, `explicit_rk` and `imex_local_linear` take typed operator NAMES
   (a field operator `U -> Fields`, an explicit rate `(U, Fields) -> Rate(U)`, a local linear operator

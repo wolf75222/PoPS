@@ -20,6 +20,7 @@ codegen consumption (S2-6) build on these primitives in later phases.
 The module imports only the standard library so it can be exercised without the
 compiled ``_adc`` extension.
 """
+import hashlib
 
 # The ten operator kinds of Spec 2. A kind is metadata only; the Signature carries
 # the actual type contract that Program validation checks.
@@ -457,7 +458,7 @@ class Module:
         """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
         return self._registry
 
-    # --- introspection ---
+    # --- introspection (Spec 2, S2-5) ---
     def state_spaces(self):
         return dict(self._state_spaces)
 
@@ -470,5 +471,70 @@ class Module:
     def aux(self):
         return dict(self._aux)
 
+    def list_state_spaces(self):
+        """Names of the declared state spaces."""
+        return list(self._state_spaces)
+
+    def list_field_spaces(self):
+        """Names of the declared field spaces."""
+        return list(self._field_spaces)
+
+    def list_operators(self):
+        """Operator names in registration (id) order."""
+        return self._registry.names()
+
+    def operator_signature(self, name):
+        """The :class:`Signature` of operator ``name``."""
+        return self._registry.get(name).signature
+
+    def operator_requirements(self, name):
+        """The requirements dict of operator ``name`` (aux / solver / params / ...)."""
+        return dict(self._registry.get(name).requirements)
+
+    def operator_capabilities(self, name):
+        """The capabilities dict of operator ``name``."""
+        return dict(self._registry.get(name).capabilities)
+
+    def module_hash(self):
+        """Stable hash of the ModuleSpec for the compiled-artifact cache (Spec 2, S2-7).
+
+        Folds the spaces, parameters, aux declarations and -- for every operator -- the name,
+        kind, signature, capabilities, requirements and a body identity (the source of a callable
+        body, else its repr). Sensitive to an operator body, signature, capability or space change;
+        deterministic for an identical module. A spec2 tag namespaces it away from any spec1 key.
+        """
+        parts = ["spec2-module", self.name]
+        for nm in sorted(self._state_spaces):
+            s = self._state_spaces[nm]
+            parts.append("state:%s:%s:%s" % (
+                s.name, ",".join(s.components), sorted(s.roles.items())))
+        for nm in sorted(self._field_spaces):
+            f = self._field_spaces[nm]
+            parts.append("field:%s:%s" % (f.name, ",".join(f.components)))
+        for nm in sorted(self._params):
+            p = self._params[nm]
+            parts.append("param:%s:%r:%s" % (p.name, p.default, p.dtype))
+        for nm in sorted(self._aux):
+            a = self._aux[nm]
+            parts.append("aux:%s:%s" % (a.name, a.kind))
+        for op in self._registry:  # registration (id) order
+            parts.append("op:%s:%s:%s:caps=%s:reqs=%s:body=%s" % (
+                op.name, op.kind, repr(op.signature),
+                sorted(op.capabilities.items()), sorted(op.requirements.items()),
+                _body_identity(op.body)))
+        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
     def __repr__(self):
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))
+
+
+def _body_identity(body):
+    """A stable string identifying an operator body for the module hash: the source of a callable
+    (so editing it invalidates the cache), else its repr; never raises."""
+    if body is None:
+        return "none"
+    try:
+        import inspect
+        return inspect.getsource(body)
+    except (OSError, TypeError):
+        return repr(body)

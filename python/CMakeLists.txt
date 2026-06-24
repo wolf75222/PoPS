@@ -231,6 +231,22 @@ add_test(NAME test_operator_macros
 set_tests_properties(test_operator_macros PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# Introspection des operateurs compiles (ADC-441, spec 2) : list_operators / operator_signature /
+# operator_requirements / operator_capabilities / list_state_spaces / list_field_spaces sur Module,
+# dsl.Model et CompiledProblem (metadonnees lues du modele porte, sans charger le .so). Pur Python.
+add_test(NAME test_operator_introspection
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_introspection.py)
+set_tests_properties(test_operator_introspection PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
+# Hash de ModuleSpec (ADC-443, spec 2) : Module.module_hash couvre espaces + operateurs (nom, kind,
+# signature, capabilities, requirements, identite du corps) ; deterministe, invalide a tout changement
+# de corps / signature / capability / espace. Le codegen dsl reste couvert par _model_hash. Pur Python.
+add_test(NAME test_module_hash
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_module_hash.py)
+set_tests_properties(test_module_hash PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
 # linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit

@@ -4513,6 +4513,38 @@ class CompiledProblem:
     def __fspath__(self):
         return self.so_path
 
+    # --- operator introspection (Spec 2, S2-5): metadata read from the carried model,
+    # no need to load or run the .so.
+    def _intro_model(self):
+        if self.model is None:
+            raise ValueError("this CompiledProblem carries no model; operator introspection "
+                             "is unavailable")
+        return self.model
+
+    def list_operators(self):
+        """Names of the typed operators of the compiled module (registration order)."""
+        return self._intro_model().operator_registry().names()
+
+    def list_state_spaces(self):
+        """Names of the compiled module's state spaces."""
+        return self._intro_model().list_state_spaces()
+
+    def list_field_spaces(self):
+        """Names of the compiled module's field spaces."""
+        return self._intro_model().list_field_spaces()
+
+    def operator_signature(self, name):
+        """The adc.model.Signature of operator ``name`` in the compiled module."""
+        return self._intro_model().operator_registry().get(name).signature
+
+    def operator_requirements(self, name):
+        """The requirements dict of operator ``name``."""
+        return dict(self._intro_model().operator_registry().get(name).requirements)
+
+    def operator_capabilities(self, name):
+        """The capabilities dict of operator ``name``."""
+        return dict(self._intro_model().operator_registry().get(name).capabilities)
+
     def __repr__(self):
         return "<CompiledProblem %r -> %s>" % (self.program_name, self.so_path)
 
@@ -5024,6 +5056,31 @@ class Model:
         mod.field_space(fs.name, fs.components, layout=fs.layout)
         mod.adopt_registry(self._m.operator_registry())
         return mod
+
+    # --- operator introspection (Spec 2, S2-5) ---
+    def list_operators(self):
+        """Names of the typed operators this model exposes (registration order)."""
+        return self._m.operator_registry().names()
+
+    def list_state_spaces(self):
+        """Names of the model's state spaces (one, the conservative state)."""
+        return [self._m.state_space().name]
+
+    def list_field_spaces(self):
+        """Names of the model's field spaces (one, the auxiliary surface)."""
+        return [self._m.field_space().name]
+
+    def operator_signature(self, name):
+        """The adc.model.Signature of operator ``name``."""
+        return self._m.operator_registry().get(name).signature
+
+    def operator_requirements(self, name):
+        """The requirements dict of operator ``name``."""
+        return dict(self._m.operator_registry().get(name).requirements)
+
+    def operator_capabilities(self, name):
+        """The capabilities dict of operator ``name``."""
+        return dict(self._m.operator_registry().get(name).capabilities)
 
     def _model_hash(self):
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
