@@ -28,6 +28,9 @@ typed-ir
 spec2-builder-layer
 native-numerics
 typed-bricks
+multispecies
+program-scheduler
+custom-solvers
 moment-models
 cpp-api
 backend-matrix
