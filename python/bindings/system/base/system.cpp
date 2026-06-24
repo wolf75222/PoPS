@@ -2260,7 +2260,7 @@ ADC_EXPORT void System::install_program(const std::string& so_path) {
           throw std::runtime_error(
               "System::install_program: operator '" + op.name + "' requires aux field '" + aux +
               "', but simulation did not provide it (B_z -> set_magnetic_field, T_e -> "
-              "set_electron_temperature, before install_program)");
+              "set_electron_temperature_from, before install_program)");
         }
       }
     }
