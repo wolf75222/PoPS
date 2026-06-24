@@ -305,7 +305,7 @@ __all__ = [
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
-    "PythonFlux", "dsl", "time", "model", "abi_key", "capabilities",
+    "PythonFlux", "dsl", "time", "model", "math", "physics", "lib", "abi_key", "capabilities",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "compile_problem", "CompiledProblem", "CompiledTime",
 ]
@@ -3252,6 +3252,9 @@ class PythonFlux:
 from . import integrate  # noqa: E402  (after the definition of System; without numpy dependency)
 from . import time  # noqa: E402  (adc.time.Program IR; pure stdlib, no numpy/_adc dependency)
 from . import model  # noqa: E402  (adc.model operator-first type system; pure stdlib, Spec 2)
+from . import math  # noqa: E402  (adc.math board operators; pure stdlib, Spec 3, dsl lazy)
+from . import lib  # noqa: E402  (adc.lib typed-brick descriptor catalog; pure stdlib, Spec 3)
+from . import physics  # noqa: E402  (adc.physics board model authoring; numpy-free import, Spec 3)
 from .time import CompiledTime  # noqa: E402,F401  (re-export: compiled-Program time policy)
 
 

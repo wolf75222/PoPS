@@ -23,6 +23,7 @@ native-bricks
 symbolic-dsl
 time-program
 operator-modules
+board-like-dsl
 moment-models
 cpp-api
 backend-matrix
