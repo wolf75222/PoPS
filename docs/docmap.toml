@@ -268,7 +268,7 @@ testable = false
 owner = "Romain"
 mode = "warning"
 depends_on = ["python/adc/time.py"]
-tested_by = ["python/tests/test_time_policy.py"]
+tested_by = ["python/tests/test_schedule_authoring.py", "python/tests/test_time_policy.py"]
 testable = false
 
 [docs."docs/sphinx/reference/custom-solvers.md"]

@@ -20,6 +20,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Spec 3 unified-scheduler authoring** (ADC-458, epic ADC-450): `adc.time` schedules
+  (`always`/`every(N)`/`when`/`on_start`/`on_end`/`subcycle`) with policy chaining
+  (`.hold`/`.skip`/`.zero`/`.accumulate_dt`/`.error`), a `schedule=` kwarg on `Program.call`
+  recording the schedule on the IR node (shown by `dump_operator_ir`), and the cacheable
+  validation: a caching policy (`hold`/`accumulate_dt`) on a non-cacheable operator is rejected,
+  with `Module.operator_capabilities(name, cacheable=True)` to declare it. A non-`always`
+  schedule refuses to lower (`NotImplementedError`, ADC-458) rather than silently no-op; the
+  cache/checkpoint runtime is the C++ follow-up. New `python/tests/test_schedule_authoring.py`
+  and `examples/spec3/scheduled_fields_subcycled_transport.py`.
 - **Spec 3 native Riemann capability validation** (ADC-456, epic ADC-450): board `m.riemann(...)`
   and `m.finite_volume_rate(riemann=...)` now validate the model's capabilities for the chosen
   native solver and canonicalize board roles (`density` -> `Density`, `momentum_x` -> `MomentumX`,
