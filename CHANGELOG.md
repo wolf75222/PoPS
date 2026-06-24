@@ -20,6 +20,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Internal typed operator registry** (ADC-437, epic ADC-436, spec 2 "operator-first"):
+  new `adc.model` type system (`StateSpace`, `FieldSpace`, `RateSpace`/`Rate(U)`,
+  `LocalLinearOperator`, `MatrixFreeOperator`, `Signature`, `Operator`, `OperatorRegistry`)
+  and a DERIVED, typed view of a `dsl.Model` via `m.operator_registry()` / `m.state_space()` /
+  `m.field_space()`. The PDE shortcuts lower into typed operators -- `flux` to a `grid_operator`
+  `(State) -> Rate(State)`, `source_term` to a `local_source` `(State[, Fields]) -> Rate(State)`,
+  `linear_source` to a `local_linear_operator` `(Fields?) -> LocalLinearOperator(State, State)`,
+  `elliptic_field` to a `field_operator` `(State) -> FieldSpace`, `projection` to a `projection`
+  `(State) -> State` -- with stable integer operator ids for hot-path dispatch. Pure introspective
+  view: no change to the public PDE API, the model hash, or the codegen. Foundation for `P.call`
+  (operator-first Programs). New `python/tests/test_operator_registry.py`.
 - **Multi-block compiled time Programs** (ADC-426, epic ADC-399, spec "Multi-blocs"):
   `Program.emit_cpp_program` lowers N `P.state("a")` / N `P.commit` -- the SSA walk allocates a base
   per block and routes every op (state, rhs, solve_fields, projection, max_wave_speed) to its block's

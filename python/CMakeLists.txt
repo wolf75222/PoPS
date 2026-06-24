@@ -112,7 +112,7 @@ set_target_properties(_adc PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${ADC_PY_PKG})
 if(SKBUILD)
   install(TARGETS _adc LIBRARY DESTINATION adc)
 endif()
-foreach(pyf adc/__init__.py adc/integrate.py adc/dsl.py adc/moments.py adc/time.py)
+foreach(pyf adc/__init__.py adc/integrate.py adc/dsl.py adc/model.py adc/moments.py adc/time.py)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${pyf} ${CMAKE_CURRENT_BINARY_DIR}/${pyf} COPYONLY)
 endforeach()
 
@@ -196,6 +196,15 @@ add_test(NAME test_dsl_named_sources
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_named_sources.py)
 set_tests_properties(test_dsl_named_sources PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# Registre d'operateurs type (ADC-437, spec 2 operator-first) : adc.model (StateSpace / FieldSpace /
+# Rate / LocalLinearOperator / Signature / OperatorRegistry) et la vue typee DERIVEE d'un dsl.Model
+# (m.operator_registry) -- flux / source_term / linear_source / elliptic_field / projection abaisses
+# en operateurs types, sans impact sur l'API PDE, le hash modele ni le codegen. Pur Python.
+add_test(NAME test_operator_registry
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_registry.py)
+set_tests_properties(test_operator_registry PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
 
 # adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
