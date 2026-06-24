@@ -46,8 +46,9 @@ F = m.flux("F", on=U,
            waves={"x": [u - c, u, u + c], "y": [v - c, v, v + c]})
 
 phi = m.field("phi")
+alpha, rho_ref = m.param("alpha", 1.0), m.param("rho_ref", 1.0)
 m.solve_field("fields_from_state",
-              equation=(-laplacian(phi) == cs2 * (rho - 1.0)),
+              equation=(-laplacian(phi) == alpha * (rho - rho_ref)),
               outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
               solver="geometric_mg")
 E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
@@ -96,8 +97,9 @@ The `P.call` / `P.solve_local_linear` builder style is unchanged and still avail
 
 `adc.lib` is a catalog of descriptors and IR macros, never a Python numerics library.
 `adc.lib.riemann.HLLC()` and `adc.lib.reconstruction.WENO5Z()` compute nothing: they
-name native C++ bricks (`adc::numerics::fv::HLLCFlux`, `adc::numerics::fv::Weno5`) and
-carry the requirements those bricks place on the model. `adc.lib.time.*` are macros
+name native C++ bricks (`adc::HLLCFlux`, `adc::Weno5`) and carry the requirements
+those bricks place on the model. A catalogued brick with no native symbol yet carries
+`available=False` and an empty `native_id` (never a fabricated id). `adc.lib.time.*` are macros
 that build Program IR (they forward to `adc.time` `std`). Other namespaces:
 `limiters`, `spatial`, `fields`, `solvers`, `preconditioners`, `diagnostics`,
 `projections`, `invariants`.

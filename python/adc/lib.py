@@ -2,8 +2,9 @@
 
 adc.lib is NOT a Python numerics library. Every entry is one of:
 
-* a NATIVE brick -- a descriptor naming a C++ type already in ``include/adc``
-  (``adc.lib.riemann.HLLC()`` -> ``adc::numerics::fv::HLLCFlux``);
+* a NATIVE brick -- a descriptor naming a C++ symbol already in ``include/adc``
+  (``adc.lib.riemann.HLLC()`` -> ``adc::HLLCFlux``); a catalogued brick with no native
+  symbol yet carries ``available=False`` and an empty ``native_id`` (never a fake id);
 * a GENERATED brick -- a descriptor of a DSL-authored brick compiled to C++;
 * a MACRO brick -- a Python function that builds Program IR
   (``adc.lib.time.predictor_corrector`` delegates to :mod:`adc.time` ``std``);
@@ -67,11 +68,25 @@ class BrickDescriptor:
             self.name, self.brick_type, self.scheme)
 
 
+# Native ids below are the REAL C++ symbols in include/adc (verified): the FV bricks
+# live at top level in ``namespace adc`` (e.g. adc::HLLCFlux), not under a numerics/fv
+# namespace. Some catalogued bricks have no native type yet -- they are emitted with
+# ``available=False`` and an EMPTY native_id rather than a fabricated symbol.
 def _native(name, native_id, scheme, *, category, caps=None, **options):
     """A native-brick descriptor; ``caps`` lists required model capabilities."""
     req = {"capabilities": list(caps)} if caps is not None else {}
     return BrickDescriptor(name, "native", category=category, native_id=native_id,
                            scheme=scheme, requirements=req, options=options or None)
+
+
+def _planned(name, scheme, *, category, **options):
+    """A catalogued brick with NO native C++ symbol yet (available=False, no id).
+
+    It names the slot in the catalog without overclaiming a symbol; wiring a native
+    type for it is tracked as a follow-up.
+    """
+    return BrickDescriptor(name, "native", category=category, native_id="",
+                           scheme=scheme, options=options or None, available=False)
 
 
 # --- riemann ---------------------------------------------------------------
@@ -80,15 +95,12 @@ def _riemann(name, native_id, caps):
 
 
 riemann = SimpleNamespace(
-    Rusanov=lambda: _riemann("rusanov", "adc::numerics::fv::RusanovFlux",
-                             ["max_wave_speed"]),
-    HLL=lambda: _riemann("hll", "adc::numerics::fv::HLLFlux",
-                         ["physical_flux", "wave_speeds"]),
-    HLLC=lambda: _riemann("hllc", "adc::numerics::fv::HLLCFlux",
+    Rusanov=lambda: _riemann("rusanov", "adc::RusanovFlux", ["max_wave_speed"]),
+    HLL=lambda: _riemann("hll", "adc::HLLFlux", ["physical_flux", "wave_speeds"]),
+    HLLC=lambda: _riemann("hllc", "adc::HLLCFlux",
                           ["physical_flux", "pressure", "wave_speeds",
                            "contact_speed", "hllc_star_state"]),
-    Roe=lambda: _riemann("roe", "adc::numerics::fv::RoeFlux",
-                         ["physical_flux", "roe_average"]),
+    Roe=lambda: _riemann("roe", "adc::RoeFlux", ["physical_flux", "roe_average"]),
     User=lambda native_id, **opts: BrickDescriptor(
         native_id, "external_cpp", category="riemann", native_id=native_id,
         scheme="user", options=opts or None),
@@ -96,16 +108,15 @@ riemann = SimpleNamespace(
 
 
 # --- reconstruction --------------------------------------------------------
+# adc::Weno5 IS the WENO5-Z reconstruction (it wraps weno5z()); WENO5 and WENO5Z both
+# select it. MUSCL is reconstruction-by-limiter; its native limiter type is adc::Minmod.
 reconstruction = SimpleNamespace(
-    FirstOrder=lambda: _native("firstorder", "adc::numerics::fv::NoSlope",
-                               "firstorder", category="reconstruction"),
+    FirstOrder=lambda: _native("firstorder", "adc::NoSlope", "firstorder",
+                               category="reconstruction"),
     MUSCL=lambda limiter="minmod": _native(
-        "muscl", "adc::numerics::fv::Minmod", limiter,
-        category="reconstruction", limiter=limiter),
-    WENO5=lambda: _native("weno5", "adc::numerics::fv::Weno5", "weno5",
-                          category="reconstruction"),
-    WENO5Z=lambda: _native("weno5z", "adc::numerics::fv::Weno5", "weno5",
-                           category="reconstruction"),
+        "muscl", "adc::Minmod", limiter, category="reconstruction", limiter=limiter),
+    WENO5=lambda: _native("weno5", "adc::Weno5", "weno5", category="reconstruction"),
+    WENO5Z=lambda: _native("weno5z", "adc::Weno5", "weno5", category="reconstruction"),
     User=lambda native_id, **opts: BrickDescriptor(
         native_id, "external_cpp", category="reconstruction", native_id=native_id,
         scheme="user", options=opts or None),
@@ -114,74 +125,69 @@ reconstruction = SimpleNamespace(
 
 # --- limiters --------------------------------------------------------------
 limiters = SimpleNamespace(
-    Minmod=lambda: _native("minmod", "adc::numerics::fv::Minmod", "minmod",
-                           category="limiter"),
-    VanLeer=lambda: _native("vanleer", "adc::numerics::fv::VanLeer", "vanleer",
-                            category="limiter"),
-    # MC / Superbee are catalogued but not yet wired natively (available=False).
-    MC=lambda: BrickDescriptor("mc", "native", category="limiter", scheme="mc",
-                               available=False),
-    Superbee=lambda: BrickDescriptor("superbee", "native", category="limiter",
-                                     scheme="superbee", available=False),
+    Minmod=lambda: _native("minmod", "adc::Minmod", "minmod", category="limiter"),
+    VanLeer=lambda: _native("vanleer", "adc::VanLeer", "vanleer", category="limiter"),
+    # MC / Superbee are catalogued but have no native type yet (available=False).
+    MC=lambda: _planned("mc", "mc", category="limiter"),
+    Superbee=lambda: _planned("superbee", "superbee", category="limiter"),
 )
 
 
 # --- spatial ---------------------------------------------------------------
+# The finite-volume residual is assembled by the adc::SpatialDiscretisation<Limiter,
+# NumericalFlux> tag-type bundle (spatial_discretisation.hpp); there are no separate
+# residual/divergence/source-assembly types, so these name that bundle.
 spatial = SimpleNamespace(
     FiniteVolumeResidual=lambda **o: _native(
-        "fv_residual", "adc::numerics::fv::SpatialOperator", "fv",
-        category="spatial", **o),
+        "fv_residual", "adc::SpatialDiscretisation", "fv", category="spatial", **o),
     FluxDivergence=lambda **o: _native(
-        "flux_divergence", "adc::numerics::fv::SpatialOperator", "fv",
-        category="spatial", **o),
+        "flux_divergence", "adc::SpatialDiscretisation", "fv", category="spatial", **o),
     SourceAssembly=lambda **o: _native(
-        "source_assembly", "adc::numerics::fv::SpatialOperator", "fv",
-        category="spatial", **o),
+        "source_assembly", "adc::SpatialDiscretisation", "fv", category="spatial", **o),
 )
 
 
 # --- fields (elliptic) -----------------------------------------------------
+# The default Poisson coupling is solved by adc::GeometricMG (geometric_mg.hpp); there
+# is no standalone adc::Poisson / Helmholtz / FieldSolver type yet.
 fields = SimpleNamespace(
-    Poisson=lambda **o: _native("poisson", "adc::numerics::elliptic::Poisson",
-                                "poisson", category="field", **o),
-    Helmholtz=lambda **o: _native("helmholtz", "adc::numerics::elliptic::Helmholtz",
-                                  "helmholtz", category="field", **o),
-    EllipticSolve=lambda **o: _native(
-        "elliptic_solve", "adc::numerics::elliptic::FieldSolver", "elliptic",
-        category="field", **o),
-    GeometricMG=lambda **o: _native(
-        "geometric_mg", "adc::numerics::elliptic::GeometricMG", "geometric_mg",
-        category="field", **o),
+    Poisson=lambda **o: _planned("poisson", "poisson", category="field", **o),
+    Helmholtz=lambda **o: _planned("helmholtz", "helmholtz", category="field", **o),
+    EllipticSolve=lambda **o: _planned("elliptic_solve", "elliptic",
+                                       category="field", **o),
+    GeometricMG=lambda **o: _native("geometric_mg", "adc::GeometricMG", "geometric_mg",
+                                    category="field", **o),
 )
 
 
 # --- solvers (linear / nonlinear) ------------------------------------------
+# The matrix-free Krylov solvers are FREE FUNCTIONS in namespace adc (generic_krylov.hpp);
+# Newton/FixedPoint have no standalone solver type (Newton is the implicit_stepper kernel).
 def _solver(name, native_id, **o):
     return _native(name, native_id, name, category="solver", **o)
 
 
 solvers = SimpleNamespace(
-    CG=lambda **o: _solver("cg", "adc::numerics::linear::CG", **o),
-    BiCGStab=lambda **o: _solver("bicgstab", "adc::numerics::linear::BiCGStab", **o),
-    GMRES=lambda **o: _solver("gmres", "adc::numerics::linear::GMRES", **o),
-    Richardson=lambda **o: _solver("richardson", "adc::numerics::linear::Richardson", **o),
-    Newton=lambda **o: _solver("newton", "adc::numerics::local::Newton", **o),
-    FixedPoint=lambda **o: _solver("fixed_point", "adc::numerics::local::FixedPoint", **o),
-    Schur=lambda **o: _solver("schur", "adc::coupling::SchurCondensation", **o),
+    CG=lambda **o: _solver("cg", "adc::cg_solve", **o),
+    BiCGStab=lambda **o: _solver("bicgstab", "adc::bicgstab_solve", **o),
+    GMRES=lambda **o: _solver("gmres", "adc::gmres_solve", **o),
+    Richardson=lambda **o: _solver("richardson", "adc::richardson_solve", **o),
+    Newton=lambda **o: _planned("newton", "newton", category="solver", **o),
+    FixedPoint=lambda **o: _planned("fixed_point", "fixed_point", category="solver", **o),
+    Schur=lambda **o: _solver("schur", "adc::SchurCondensationOperator", **o),
 )
 
 
 # --- preconditioners -------------------------------------------------------
+# Only the geometric-multigrid preconditioner has a native type; identity/jacobi/
+# block-jacobi have none yet (the polar solver has its own PolarPrecond enum).
 preconditioners = SimpleNamespace(
-    Identity=lambda: _native("identity", "adc::numerics::linear::Identity",
-                             "identity", category="preconditioner"),
-    Jacobi=lambda: _native("jacobi", "adc::numerics::linear::Jacobi", "jacobi",
-                           category="preconditioner"),
-    BlockJacobi=lambda: _native("block_jacobi", "adc::numerics::linear::BlockJacobi",
-                                "block_jacobi", category="preconditioner"),
-    GeometricMG=lambda **o: _native(
-        "geometric_mg", "adc::numerics::elliptic::GeometricMG", "geometric_mg",
-        category="preconditioner", **o),
+    Identity=lambda: _planned("identity", "identity", category="preconditioner"),
+    Jacobi=lambda: _planned("jacobi", "jacobi", category="preconditioner"),
+    BlockJacobi=lambda: _planned("block_jacobi", "block_jacobi",
+                                 category="preconditioner"),
+    GeometricMG=lambda **o: _native("geometric_mg", "adc::GeometricMG", "geometric_mg",
+                                    category="preconditioner", **o),
     User=lambda native_id, **opts: BrickDescriptor(
         native_id, "external_cpp", category="preconditioner", native_id=native_id,
         scheme="user", options=opts or None),
@@ -206,12 +212,13 @@ diagnostics = SimpleNamespace(
 
 
 # --- projections -----------------------------------------------------------
+# Positivity is the adc::zhang_shu_scale free function (face_flux.hpp); the others have
+# no native symbol yet (a generated brick or a planned native type).
 projections = SimpleNamespace(
-    positivity=lambda **o: _native("positivity", "adc::numerics::fv::Positivity",
-                                   "positivity", category="projection", **o),
-    bound_preserving=lambda **o: _native(
-        "bound_preserving", "adc::numerics::fv::BoundPreserving",
-        "bound_preserving", category="projection", **o),
+    positivity=lambda **o: _native("positivity", "adc::zhang_shu_scale", "positivity",
+                                   category="projection", **o),
+    bound_preserving=lambda **o: _planned("bound_preserving", "bound_preserving",
+                                          category="projection", **o),
     conservative_fix=lambda **o: BrickDescriptor(
         "conservative_fix", "generated", category="projection",
         scheme="conservative_fix", options=o or None),

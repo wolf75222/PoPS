@@ -1290,7 +1290,7 @@ class Program:
             if named and self._registry is not None:
                 return self.call(operator, states[0], name=name)
             return self.solve_fields(name, states[0])
-        if operator is not None and self._registry is not None:
+        if named and self._registry is not None:
             return self.call(operator, *states, name=name)
         return self.solve_fields_from_blocks(states, name=name)
 
@@ -1335,7 +1335,8 @@ class Program:
     def commit_many(self, mapping, fields=None):
         """Atomically commit several coupled blocks (Spec 3). ALL entries are validated before any
         commit, so a partial or double commit of a coupled group is rejected as a unit and no block
-        is left half-committed. ``fields`` (optional) is the coherent FieldContext of the new states."""
+        is left half-committed. ``fields`` (optional) is validated as a coherent FieldContext but is
+        RESERVED: the IR commit has no fields slot yet (the runtime association lands with ADC-457)."""
         if not isinstance(mapping, dict) or not mapping:
             raise ValueError("commit_many: a non-empty {block: State} mapping is required")
         if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):

@@ -166,6 +166,7 @@ class Model:
         self._invariants = {}
         self._riemann = None        # selected Riemann descriptor (board surface)
         self._reconstruction = None
+        self._riemann_hooks = {}    # capability formulas for the native-hook codegen (ADC-456)
         self._field_solvers = {}    # field-operator name -> solver descriptor
 
     # --- escape hatches ---
@@ -318,8 +319,9 @@ class Model:
         self._reconstruction = reconstruction
         src_names = [s.reg_name if isinstance(s, SourceHandle) else _safe_name(s)
                      for s in sources]
-        self._dsl.rate_operator(_safe_name(name), flux=flux is not None or True,
-                                sources=src_names)
+        # A finite-volume rate always assembles -div F; the flux selection is recorded
+        # for the native bricks (riemann/reconstruction), not toggled off here.
+        self._dsl.rate_operator(_safe_name(name), flux=True, sources=src_names)
         return name
 
     def operator(self, name, handle):

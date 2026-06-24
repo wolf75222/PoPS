@@ -13,15 +13,38 @@ lib = pytest.importorskip("adc.lib")
 def test_riemann_hllc_is_a_native_descriptor():
     d = lib.riemann.HLLC()
     assert d.brick_type == "native"
-    assert "HLLC" in d.native_id            # adc::numerics::fv::HLLCFlux
+    assert d.available
+    assert d.native_id == "adc::HLLCFlux"   # the EXACT C++ symbol (namespace adc)
     assert d.scheme == "hllc"               # the runtime scheme string
+
+
+def test_riemann_native_ids_are_exact():
+    # Guard against the wrong-namespace overclaim: ids must be the real adc:: symbols.
+    assert lib.riemann.Rusanov().native_id == "adc::RusanovFlux"
+    assert lib.riemann.HLL().native_id == "adc::HLLFlux"
+    assert lib.riemann.Roe().native_id == "adc::RoeFlux"
 
 
 def test_reconstruction_weno5z_is_native():
     d = lib.reconstruction.WENO5Z()
     assert d.brick_type == "native"
-    assert "Weno" in d.native_id or "WENO" in d.native_id
+    assert d.native_id == "adc::Weno5"      # adc::Weno5 IS the WENO5-Z reconstruction
     assert d.scheme == "weno5"
+
+
+def test_catalogued_but_unwired_bricks_are_marked_unavailable():
+    # No native symbol is fabricated: planned bricks carry available=False, empty id.
+    for d in (lib.fields.Poisson(), lib.solvers.Newton(),
+              lib.preconditioners.Jacobi(), lib.limiters.MC()):
+        assert d.available is False
+        assert d.native_id == ""
+
+
+def test_available_native_ids_exist_and_are_namespaced():
+    for d in (lib.fields.GeometricMG(), lib.solvers.CG(), lib.solvers.GMRES(),
+              lib.solvers.Schur(), lib.projections.positivity()):
+        assert d.available
+        assert d.native_id.startswith("adc::")
 
 
 def test_riemann_descriptors_compute_nothing():
