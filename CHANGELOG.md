@@ -20,6 +20,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Operator-first perf benchmark** (ADC-445, epic ADC-436, spec 2 "operator-first"):
+  `bench/operator_first_perf.py` times the SSPRK3 step loop for the same 2D Euler model two ways --
+  the native stepper (`adc.Explicit("ssprk3")`) vs a compiled time Program (`adc.time.std.ssprk3`
+  -> `compile_problem` -> `install_program`) -- and reports the generated/native ms-per-step ratio.
+  The HPC contract is that the generated Program is a specialized scheduler over the same adc_cpp
+  primitives (no alternative runtime, no per-step Python, no silent CPU fallback), so the ratio is
+  near 1. Run on a Kokkos build (ROMEO); skips cleanly without a compiler/Kokkos.
 - **GeneratedModule metadata in the compiled `.so`** (ADC-442, epic ADC-436, spec 2 "operator-first"):
   a combined model+program `problem.so` now carries, alongside `GeneratedProgram` (the installed
   step), a **GeneratedModule** descriptor -- `extern "C"` accessors (`adc_module_operator_count` /
