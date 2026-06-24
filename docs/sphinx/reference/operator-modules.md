@@ -125,3 +125,15 @@ The compiled handle and the module expose the registry metadata without loading 
 `list_operators()`, `operator_signature(name)`, `operator_requirements(name)`,
 `operator_capabilities(name)`, `list_state_spaces()`, `list_field_spaces()`. For example
 `compiled.operator_signature("explicit_rhs").output == adc.model.Rate("U")`.
+
+## The compiled module (`.so`)
+
+A combined model+program `problem.so` carries two parts. **GeneratedProgram** is the installed step
+(`adc_install_program`, driven by `sim.step`). **GeneratedModule** is a descriptor of the typed
+operator registry: `extern "C"` accessors (`adc_module_operator_count` / `_name` / `_kind` /
+`_signature` / `_requirements`, and the state/field space names) keyed by integer `OperatorId` -- the
+operator's registration index. The C++ side reads it from a dlopen'd handle with
+`adc::runtime::program::read_module_metadata` (`include/adc/runtime/program/module_metadata.hpp`),
+which returns `present=false` for a pre-Spec-2 `.so`. The descriptor is read once at install (for
+introspection and requirement validation); the step body never references it, so operators stay
+inlined and there is no string lookup in any hot kernel.
