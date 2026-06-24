@@ -947,6 +947,29 @@ class Program:
         """Map of committed block -> committed State value (copy)."""
         return dict(self._commits)
 
+    # --- decorator mode (ADC-423): record the step body from a function ---
+    def step(self, fn):
+        """Record this Program's IR by calling @p fn(self) ONCE, at build time (decorator mode).
+
+        ``@P.step`` is sugar for an inline builder body: the decorated function receives the Program
+        and builds the IR exactly as if its statements had been written at module scope. It is a
+        BUILD-TIME callback -- it runs once, here, to populate the SSA value list; it is NEVER executed
+        numerically during ``sim.step`` (the compiled ``.so`` owns the runtime step). So
+
+            P = adc.time.Program("fe")
+
+            @P.step
+            def _(P):
+                adc.time.std.forward_euler(P, "plasma")
+
+        produces byte-identical IR (same ``_ir_hash``) to calling ``std.forward_euler(P, "plasma")``
+        inline. Returns the Program so a one-liner ``P = adc.time.Program("p").step(build)`` also reads
+        cleanly. @p fn must be callable; it is invoked with the Program as its single argument."""
+        if not callable(fn):
+            raise TypeError("Program.step expects a callable build_fn(P); got %r" % (fn,))
+        fn(self)
+        return self
+
     # --- ghost fill / positivity projection (spec ops 22 / 21) ---
     def fill_boundary(self, x):
         """Fill the ghost cells (halos) of a State/scalar_field @p x in place: the transport BC
@@ -2821,25 +2844,60 @@ def rk4(P, block, *, sources=("default",), flux=True):
         "rk4_step", U0 + P.dt / 6.0 * k1 + P.dt / 3.0 * k2 + P.dt / 3.0 * k3 + P.dt / 6.0 * k4))
 
 
-def adams_bashforth2(P, block, *, sources=("default",), flux=True):
-    """Adams-Bashforth 2 (explicit 2-step), expressed over the System-owned history (ADC-406a):
+# Adams-Bashforth weights b_j on R_{n-j} (j = 0..order-1), per order (ADC-423). AB1 is Forward Euler.
+_AB_WEIGHTS = {
+    1: (1.0,),
+    2: (1.5, -0.5),                       # 3/2, -1/2
+    3: (23.0 / 12.0, -16.0 / 12.0, 5.0 / 12.0),
+}
 
-        R_n   = R(U)
-        U^{n+1} = U + dt * (3/2 R_n - 1/2 R_{n-1})     with R_{n-1} = history(block.R, lag=1)
+
+def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
+    """Adams-Bashforth, explicit ``order``-step, over the System-owned history ring (ADC-406a / ADC-423):
+
+        R_n     = R(U)
+        U^{n+1} = U + dt * sum_{j=0}^{order-1} b_j * R_{n-j}
         store_history(block.R, R_n)
 
-    COLD START: the store is recorded BEFORE the lag-1 read, and the runtime fills every history slot on
-    the FIRST store, so step 0 reads R_{n-1} = R_0 and degenerates to one Forward-Euler step
-    (U^1 = U^0 + dt R_0). From step 1 on it is the true AB2 recurrence. This is deterministic and exact;
-    an offline reference mirrors it by taking a Forward-Euler step 0 then AB2. The history name is
-    ``"<block>.R"`` (the block's previous RHS)."""
+    ``order`` selects the classic AB weights b_j:
+      - **AB1** == Forward Euler (b = 1), with NO history (it never reads or stores the ring);
+      - **AB2** == (3/2, -1/2) on (R_n, R_{n-1});
+      - **AB3** == (23/12, -16/12, 5/12) on (R_n, R_{n-1}, R_{n-2}).
+
+    COLD START: the store of R_n is recorded BEFORE the lag reads, and the runtime fills EVERY history
+    slot on the FIRST store, so step 0 reads R_{n-j} = R_0 for all j and the recurrence degenerates to a
+    single Forward-Euler step (U^1 = U^0 + dt*R_0, since sum_j b_j = 1). From step ``order-1`` on it is
+    the true AB recurrence; in between it runs the same partially-filled ring the runtime exposes. This
+    is deterministic and exact; an offline reference mirrors it (FE-fill cold start then AB). The history
+    name is ``"<block>.R"`` (the block's previous RHS).
+
+    AB1 keeps Forward Euler's exact IR (no history op); AB2 keeps the historical ``"ab2_step"`` combine
+    so a pre-ADC-423 AB2 program's ``.so`` cache key is byte-identical."""
+    if isinstance(order, bool) or not isinstance(order, int) or order not in _AB_WEIGHTS:
+        raise ValueError("adams_bashforth: order must be an int in %s (got %r)"
+                         % (sorted(_AB_WEIGHTS), order))
+    b = _AB_WEIGHTS[order]
+    if order == 1:  # AB1 == Forward Euler: no history, identical IR to forward_euler.
+        forward_euler(P, block, sources=sources, flux=flux)
+        return
     name = block + ".R"
+    step_name = "ab2_step" if order == 2 else ("ab%d_step" % order)
     U = P.state(block)
     R_n = _stage_rhs(P, U, sources, flux)
-    # Store R_n FIRST (so the first store cold-start-fills the ring), then read R_{n-1} = lag 1.
+    # Store R_n FIRST (so the first store cold-start-fills the ring), then read R_{n-j} = lag j.
     P.store_history(name, R_n)
-    R_nm1 = P.history(name, lag=1)
-    P.commit(block, P.linear_combine("ab2_step", U + P.dt * (1.5 * R_n - 0.5 * R_nm1)))
+    expr = U + (P.dt * b[0]) * R_n
+    for j in range(1, order):
+        expr = expr + (P.dt * b[j]) * P.history(name, lag=j)
+    P.commit(block, P.linear_combine(step_name, expr))
+
+
+def adams_bashforth2(P, block, *, sources=("default",), flux=True):
+    """Adams-Bashforth 2, a thin back-compat alias for ``adams_bashforth(P, block, 2)`` (ADC-423).
+
+    Kept so existing callers and the historical ``"ab2_step"`` IR are unchanged: this lowers to the
+    SAME IR as before (R_n stored first, R_{n-1} read at lag 1, weights 3/2 / -1/2)."""
+    adams_bashforth(P, block, 2, sources=sources, flux=flux)
 
 
 def strang(P, block, half_flow, source, *, commit=True):
@@ -2936,9 +2994,196 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
     return out
 
 
+def lie(P, block, half_flow, source, *, commit=True):
+    """Lie (Godunov) splitting macro H(dt); S(dt) -- the sequential first-order sibling of `strang`
+    (ADC-423). @p half_flow and @p source are the SAME IR-building callables `strang` takes
+    ``(prog, state, frac) -> state`` (each advances its sub-flow by a fraction @p frac of dt); Lie
+    just composes them sequentially over the FULL step (H over dt, then S over dt) with no half-steps.
+    Lowers to the SAME IR primitives as `strang` (no scheme-specific class). Returns the final state
+    (committed when @p commit)."""
+    U = P.state(block)
+    U1 = half_flow(P, U, 1.0)
+    U2 = source(P, U1, 1.0)
+    if commit:
+        P.commit(block, U2)
+    return U2
+
+
+# Classic explicit Butcher tableaux (A lower-triangular, b weights, c nodes) for `rk` (ADC-423).
+class ButcherTableau:
+    """An explicit Butcher tableau ``(A, b, c)`` for `rk`: ``A`` is strictly lower-triangular (stage i
+    depends only on stages j < i), ``b`` the final weights, ``c`` the (unused-by-the-lowering) nodes.
+    Validated as explicit and consistent (``len(A) == len(b)``, row i has i entries, ``sum(b) == 1``)."""
+
+    def __init__(self, A, b, c=None, name=None):
+        self.A = [list(row) for row in A]
+        self.b = list(b)
+        self.c = list(c) if c is not None else [sum(row) for row in self.A]
+        self.name = name
+        s = len(self.b)
+        if len(self.A) != s or len(self.c) != s:
+            raise ValueError("ButcherTableau: A, b, c must share the stage count")
+        for i, row in enumerate(self.A):
+            if len(row) > i and any(row[j] != 0.0 for j in range(i, len(row))):
+                raise ValueError(
+                    "ButcherTableau: A must be strictly lower-triangular (stage %d reads stage >= %d); "
+                    "rk lowers EXPLICIT tableaux only" % (i, i))
+        if abs(sum(self.b) - 1.0) > 1e-12:
+            raise ValueError("ButcherTableau: weights b must sum to 1 (got %r)" % (sum(self.b),))
+
+    @property
+    def stages(self):
+        return len(self.b)
+
+
+# RK4 (classic): the same tableau the rk4 macro hard-codes, written data-driven.
+RK4_TABLEAU = ButcherTableau(
+    A=[[],
+       [0.5],
+       [0.0, 0.5],
+       [0.0, 0.0, 1.0]],
+    b=[1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0],
+    c=[0.0, 0.5, 0.5, 1.0],
+    name="rk4")
+
+# SSPRK2 (Heun) in NON-Shu-Osher Butcher form: k1 at U, k2 at U+dt*k1, U^{n+1}=U+dt(1/2 k1+1/2 k2).
+SSPRK2_TABLEAU = ButcherTableau(
+    A=[[],
+       [1.0]],
+    b=[0.5, 0.5],
+    c=[0.0, 1.0],
+    name="ssprk2")
+
+
+def rk(P, block, tableau, *, sources=("default",), flux=True):
+    """Generic explicit Runge-Kutta from a Butcher @p tableau (ADC-423), lowered to the SAME stage chain
+    the hard-coded `rk4` macro emits -- ``solve_fields`` + ``rhs`` + ``linear_combine``, no RK class:
+
+        k_i      = R( U + dt * sum_{j<i} A[i][j] * k_j )       (the i-th stage RHS)
+        U^{n+1}  = U + dt * sum_i b[i] * k_i
+
+    @p tableau is a `ButcherTableau` (or a raw ``(A, b, c)`` triple); ``A`` must be strictly
+    lower-triangular (explicit). ``RK4_TABLEAU`` and ``SSPRK2_TABLEAU`` are provided as the classic
+    constants: ``rk(P, blk, RK4_TABLEAU)`` builds the identical final affine combination as
+    ``rk4(P, blk)`` (a permutation of the same ``U0 + dt(1/6 k1 + 1/3 k2 + 1/3 k3 + 1/6 k4)`` inputs),
+    and ``rk(P, blk, SSPRK2_TABLEAU)`` matches Heun's ``U + dt(1/2 k1 + 1/2 k2)``."""
+    if not isinstance(tableau, ButcherTableau):
+        A, b, c = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
+        tableau = ButcherTableau(A, b, c)
+    tag = (tableau.name + "_") if tableau.name else "rk_"
+    U0 = P.state(block)
+    ks = []
+    for i in range(tableau.stages):
+        if i == 0:
+            Ui = U0  # the first stage reads U^n directly (no scratch combine, like rk4)
+        else:
+            expr = U0
+            for j in range(i):
+                aij = tableau.A[i][j]
+                if aij != 0.0:
+                    expr = expr + (P.dt * aij) * ks[j]
+            Ui = P.linear_combine("%sU%d" % (tag, i), expr)
+        ks.append(_stage_rhs(P, Ui, sources, flux))
+    final = U0
+    for i in range(tableau.stages):
+        bi = tableau.b[i]
+        if bi != 0.0:
+            final = final + (P.dt * bi) * ks[i]
+    P.commit(block, P.linear_combine("%sstep" % tag, final))
+
+
+def imex_local(P, block, *, linear_source, sources=("default",), flux=True, theta=1.0):
+    """IMEX with an EXPLICIT flux/source and an IMPLICIT cell-local linear source (ADC-423).
+
+    One step of a theta-implicit splitting of ``dU/dt = R_explicit(U) + L U`` where ``L`` is a named
+    model ``m.linear_source`` (e.g. a Lorentz operator) solved cell by cell:
+
+        R   = R_explicit(U)                                     (P.rhs: -div F + the named sources)
+        U^{n+1} = (I - theta*dt*L)^{-1} (U + dt*R)              (P.solve_local_linear)
+
+    The explicit part is assembled with `P.rhs` (flux + the requested named @p sources, on the fields
+    solved from U); the implicit part is the local solve of ``(I - theta*dt*L) U^{n+1} = U + dt*R``
+    via `P.solve_local_linear`, exactly the predictor half of the codebase's predictor-corrector
+    pattern (``test_time_local_solve``). At ``theta == 1`` this is backward Euler on the L term and
+    forward Euler on R; ``theta == 0`` would drop the implicit solve (use `forward_euler` instead) and
+    is rejected. @p linear_source is the name of the model ``m.linear_source``; @p theta the
+    implicitness of the L term (0 < theta <= 1)."""
+    if not (isinstance(linear_source, str) and linear_source):
+        raise ValueError("imex_local: linear_source must be a non-empty m.linear_source name")
+    if not (0.0 < float(theta) <= 1.0):
+        raise ValueError(
+            "imex_local: theta must be in (0, 1] (got %r); theta == 0 is fully explicit -- use "
+            "forward_euler instead" % (theta,))
+    U = P.state(block)
+    fields = P.solve_fields(U) if flux else None
+    R = P.rhs(state=U, fields=fields, flux=flux, sources=list(sources))
+    rhs = P.linear_combine(block + "_imex_rhs", U + P.dt * R)
+    operator = P.I - (float(theta) * P.dt) * P.linear_source(linear_source)
+    out = P.solve_local_linear(name=block + "_imex_step", operator=operator, rhs=rhs, fields=fields)
+    P.commit(block, out)
+    return out
+
+
+def bdf(P, block, order, *, linear_source=None, sources=("default",), flux=True):
+    """Backward Differentiation Formula, IMPLICIT ``order``-step (ADC-423, STRETCH).
+
+    BDF lowers cleanly to the existing IR ONLY for a cell-local linear source (the BDF system is then
+    block-diagonal and the per-cell ``(c0*I - dt*L)`` solve is exactly `P.solve_local_linear`):
+
+      - **BDF1** (backward Euler): ``(I - dt*L) U^{n+1} = U^n``;
+      - **BDF2**: ``(3/2 I - dt*L) U^{n+1} = 2 U^n - 1/2 U^{n-1}`` over the System history ring, with a
+        BDF1 cold start (the first store fills every slot, so U^{n-1} = U^n and step 0 is backward
+        Euler).
+
+    @p linear_source is REQUIRED and names a model ``m.linear_source`` ``L``; the BDF operator is
+    ``c0*I - dt*L`` solved by `P.solve_local_linear`. There is no general implicit-FLUX BDF lowering:
+    an implicit ``-div F`` needs a GLOBAL Newton/Krylov solve over the coupled stencil, which the
+    current per-cell local-solve IR cannot express -- so a BDF with an implicit flux raises a clear
+    NotImplementedError naming the gap (the explicit-flux + implicit-local-L case is the supported one,
+    matching `imex_local`'s implicit term). @p flux / @p sources add an EXPLICIT flux/source RHS to the
+    BDF right-hand side (lagged, like `imex_local`); pass ``flux=False, sources=()`` for a pure
+    relaxation BDF."""
+    if isinstance(order, bool) or not isinstance(order, int) or order not in (1, 2):
+        raise ValueError("bdf: order must be the int 1 or 2 (got %r)" % (order,))
+    if not (isinstance(linear_source, str) and linear_source):
+        raise NotImplementedError(
+            "bdf currently lowers only a cell-LOCAL linear source (operator c0*I - dt*L solved by "
+            "solve_local_linear); pass linear_source='<m.linear_source name>'. A BDF over an implicit "
+            "FLUX (-div F) needs a global Newton/Krylov solve over the coupled stencil, which the "
+            "per-cell local-solve IR cannot express -- that lowering is deferred.")
+    U = P.state(block)
+    fields = P.solve_fields(U) if flux else None
+    # Optional EXPLICIT flux/source RHS folded into the BDF right-hand side (lagged at U^n).
+    R = P.rhs(state=U, fields=fields, flux=flux, sources=list(sources)) if (flux or sources) else None
+
+    def _with_explicit(expr):
+        return (expr + P.dt * R) if R is not None else expr
+
+    if order == 1:  # (I - dt*L) U^{n+1} = U^n [+ dt R]
+        rhs = P.linear_combine(block + "_bdf1_rhs", _with_explicit(1.0 * U))
+        operator = P.I - P.dt * P.linear_source(linear_source)
+        out = P.solve_local_linear(name=block + "_bdf1_step", operator=operator, rhs=rhs, fields=fields)
+        P.commit(block, out)
+        return out
+    # BDF2: (3/2 I - dt*L) U^{n+1} = 2 U^n - 1/2 U^{n-1} [+ dt R], over the history ring.
+    name = block + ".U"
+    P.store_history(name, U)                       # store U^n first (cold-start fills the ring)
+    U_nm1 = P.history(name, lag=1)                 # U^{n-1} (== U^n on step 0 -> BDF1 cold start)
+    rhs = P.linear_combine(block + "_bdf2_rhs", _with_explicit(2.0 * U - 0.5 * U_nm1))
+    operator = P.I - (P.dt * (2.0 / 3.0)) * P.linear_source(linear_source)
+    # Divide both sides by 3/2: (I - (2/3) dt L) U^{n+1} = (2/3)(2 U^n - 1/2 U^{n-1} [+ dt R]).
+    rhs = P.linear_combine(block + "_bdf2_rhs_scaled", (2.0 / 3.0) * rhs)
+    out = P.solve_local_linear(name=block + "_bdf2_step", operator=operator, rhs=rhs, fields=fields)
+    P.commit(block, out)
+    return out
+
+
 # adc.time.std.<scheme>(Program, block, ...) -- the spec's standard library entry point.
 std = types.SimpleNamespace(forward_euler=forward_euler, ssprk2=ssprk2, ssprk3=ssprk3, rk4=rk4,
-                            adams_bashforth2=adams_bashforth2, strang=strang,
+                            rk=rk, RK4_TABLEAU=RK4_TABLEAU, SSPRK2_TABLEAU=SSPRK2_TABLEAU,
+                            ButcherTableau=ButcherTableau,
+                            adams_bashforth=adams_bashforth, adams_bashforth2=adams_bashforth2,
+                            strang=strang, lie=lie, imex_local=imex_local, bdf=bdf,
                             condensed_schur=condensed_schur)
 
 

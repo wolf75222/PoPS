@@ -46,11 +46,37 @@ scalar used as a Python `bool`, an unknown source, etc. all raise with an action
 
 ### Standard library
 
-`adc.time.std` provides macros that *lower to the same IR* (they are not separate C++ steppers):
-`forward_euler`, `ssprk2`, `ssprk3`, `rk4`, `adams_bashforth2` (over a System-owned history), a
-`strang` splitting combinator, and `condensed_schur` (the implicit electrostatic-Lorentz source stage;
-see the table below). A macro is an ordinary Python function that builds IR nodes -- it never computes
-arrays.
+`adc.time.std` provides macros that *lower to the same IR* (they are not separate C++ steppers). A
+macro is an ordinary Python function that builds IR nodes -- it never computes arrays.
+
+| Macro | Scheme | Lowers to |
+|---|---|---|
+| `forward_euler(P, block)` | explicit Euler | `rhs` + `linear_combine` |
+| `ssprk2` / `ssprk3` / `rk4` | SSP / classic Runge-Kutta | the stage chain (`rhs` + `linear_combine`) |
+| `rk(P, block, tableau)` | generic explicit RK from a Butcher `tableau` | the data-driven stage chain (`RK4_TABLEAU`/`SSPRK2_TABLEAU` reproduce `rk4`/`ssprk2`) |
+| `adams_bashforth(P, block, order)` | explicit AB, `order` in {1,2,3} | `history`/`store_history` ring (AB1 == `forward_euler`; `adams_bashforth2` aliases order 2) |
+| `strang(P, block, H, S)` | Strang splitting H(dt/2);S(dt);H(dt/2) | three sub-flow stages |
+| `lie(P, block, H, S)` | Lie (Godunov) splitting H(dt);S(dt) | two sub-flow stages |
+| `imex_local(P, block, linear_source=)` | explicit flux/source + implicit cell-local linear source | `rhs` + `solve_local_linear` ((I - theta*dt*L)^{-1}) |
+| `bdf(P, block, order, linear_source=)` | implicit BDF1/BDF2 (cell-local L only) | `solve_local_linear` (+ history for BDF2) |
+| `condensed_schur(P, block, alpha=)` | implicit electrostatic-Lorentz source stage | the Schur assemble / Krylov / reconstruct chain |
+
+`bdf` lowers only a cell-local linear source (its block-diagonal solve is `solve_local_linear`); a BDF
+over an implicit flux needs a global Newton/Krylov solve and raises a clear `NotImplementedError`. The
+`imex_local` / `bdf` / `condensed_schur` macros need the physical model at codegen (they name an
+`m.linear_source` whose coefficients the per-cell kernel reads).
+
+A program body can also be recorded with the `@P.step` **decorator**: the decorated `build_fn(P)` runs
+**once at build time** to populate the IR (never numerically during a step) and yields IR identical to
+the inline builder body.
+
+```python
+P = adc.time.Program("fe")
+
+@P.step
+def _(P):
+    adc.time.std.forward_euler(P, "plasma")   # same IR as calling it inline
+```
 
 ## Compiling and running
 
@@ -103,6 +129,7 @@ compile path (`m.compile`, `m.source`) keep working unchanged.
 | Reductions `P.sum` / `P.max` / `P.min` / `P.sum_component`, `P.fill_boundary`, `P.project` (block positivity), `P.record_scalar` diagnostics (`sim.program_diagnostic`) | available, runs end-to-end |
 | Anisotropic coefficient assembly (`P.schur_coeffs` / `P.apply_laplacian_coeff` / `P.schur_rhs` / `P.schur_reconstruct`) | available, runs end-to-end |
 | `condensed_schur` as a Program macro (ADC-421) | available (`theta == 1` backward-Euler source stage from `phi^n = 0`); near-match to native `adc.CondensedSchur` (no preconditioner); cross-step phi carry / `theta < 1` extrapolation / energy update deferred |
+| `std.rk` (generic Butcher tableau) / `std.lie` / `std.imex_local` / `std.adams_bashforth(order)` / `std.bdf` + `@P.step` decorator (ADC-423) | available (all lower to the existing IR); `bdf` is cell-local-`L` only (implicit-flux BDF deferred) |
 
 Each lowered path is verified against an independent reference to machine precision: Forward Euler /
 SSPRK2 / SSPRK3 reproduce the native `adc.Explicit` step bit-for-bit; the compiled `strang` macro
