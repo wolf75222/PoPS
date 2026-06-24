@@ -83,6 +83,35 @@ def test_call_matches_source_and_flux():
     print("OK  P.call(electric)/P.call(flux_default) == source / flux-only rhs")
 
 
+def test_call_default_source():
+    """P.call('source_default', ...) reaches the default source (m._source), which is NOT a named
+    source_term: it must lower to the source-only rhs, identical to P.rhs(flux=False,
+    sources=['default'])."""
+    m = dsl.Model("ds")
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    gx = m.aux("grad_x")
+    gy = m.aux("grad_y")
+    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
+    m.source_term("default", [dsl.Const(0.0), -rho * gx, -rho * gy])  # reads the fields
+    m.elliptic_rhs(rho - 1.0)
+
+    def shortcut(P, _m):
+        U = P.state("plasma")
+        f = P.solve_fields(U)
+        s = P.rhs(state=U, fields=f, flux=False, sources=["default"])
+        P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
+
+    def opfirst(P, _m):
+        P.bind_operators(_m)
+        U = P.state("plasma")
+        f = P.call("fields_from_state", U)
+        s = P.call("source_default", U, f)
+        P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
+
+    assert _emit(shortcut, m) == _emit(opfirst, m)
+    print("OK  P.call(source_default) == default-source-only rhs (m._source path)")
+
+
 def test_call_linear_operator_matches_solve_local_linear():
     m = build_model()
 
@@ -171,6 +200,7 @@ def test_rate_operator_alias_not_in_hash():
 def main():
     test_call_matches_shortcut_predictor()
     test_call_matches_source_and_flux()
+    test_call_default_source()
     test_call_linear_operator_matches_solve_local_linear()
     test_call_typing_errors()
     test_default_resolution_and_ambiguity()

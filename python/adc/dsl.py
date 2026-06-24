@@ -39,7 +39,19 @@ import sys
 
 import numpy as np
 
-from . import model as _model  # operator-first type system (Spec 2): typed view only
+# Operator-first type system (Spec 2): a typed VIEW only. dsl.py is sometimes loaded as a
+# top-level module without its package (the standalone-import test trick, e.g.
+# test_projection_eig loads dsl.py via spec_from_file_location), where a relative import has no
+# parent package; fall back to loading the sibling model.py by path (it is stdlib-only).
+try:
+    from . import model as _model
+except ImportError:  # pragma: no cover - exercised only by the standalone-import path
+    import importlib.util as _ilu
+
+    _mspec = _ilu.spec_from_file_location(
+        "adc_model", os.path.join(os.path.dirname(__file__), "model.py"))
+    _model = _ilu.module_from_spec(_mspec)
+    _mspec.loader.exec_module(_model)
 
 
 # --- Signature of the core header tree (ABI key of the "production" path) -------------
@@ -2375,8 +2387,11 @@ class HyperbolicModel:
         if self._elliptic is not None:
             reg.register(_model.Operator(
                 "fields_from_state", "field_operator",
+                # The Poisson solve PRODUCES the canonical electrostatic triple; an externally
+                # imposed aux (e.g. B_z) read by sources is part of field_space() but not produced
+                # here, so the produced FieldSpace is the triple, not the full read surface.
                 _model.Signature([state], _model.FieldSpace(
-                    "phi", components=("phi", "grad_x", "grad_y"))),
+                    "fields", components=("phi", "grad_x", "grad_y"))),
                 capabilities={"requires_solver": True, "supports_device": True,
                               "default": True},
                 requirements={"elliptic_operator": "poisson"},

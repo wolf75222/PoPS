@@ -108,6 +108,22 @@ def test_capability_and_space_change_invalidate():
     print("OK  a capability or a state-space change invalidates module_hash")
 
 
+def test_requirements_change_invalidates():
+    u = model.StateSpace("U", ("rho",))
+    f = model.FieldSpace("fields", ("phi",))
+
+    def build(reqs):
+        mod = model.Module("m")
+        mod.state_space("U", ("rho",))
+        mod.field_space("fields", ("phi",))
+        mod.operator(name="op", signature=(f,) >> model.LocalLinearOperator(u, u),
+                     kind="local_linear_operator", requirements=reqs, expr="E")
+        return mod
+
+    assert build({"aux": ["B_z"]}).module_hash() != build({"aux": ["E_x"]}).module_hash()
+    print("OK  a requirements change invalidates module_hash")
+
+
 def test_dsl_backed_module_hashes():
     m = dsl.Model("ep")
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
@@ -124,6 +140,7 @@ def main():
     test_expr_body_change_invalidates()
     test_callable_body_change_invalidates()
     test_capability_and_space_change_invalidate()
+    test_requirements_change_invalidates()
     test_dsl_backed_module_hashes()
     print("OK  test_module_hash")
 

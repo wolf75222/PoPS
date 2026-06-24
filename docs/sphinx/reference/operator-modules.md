@@ -99,6 +99,8 @@ same macro runs against any module that provides operators with the expected sig
 | `m.source_term("electric", ...)` | `electric` local_source | `(U[, Fields]) -> Rate(U)`                  |
 | `m.linear_source("lorentz", ...)`| `lorentz` local_linear_operator | `(Fields?) -> LocalLinearOperator(U, U)` |
 | `m.elliptic_rhs(...)`        | `fields_from_state` field_operator | `(U) -> Fields`                      |
+| `m.elliptic_field("psi", ...)` | `psi` field_operator      | `(U) -> FieldSpace("psi", ...)`             |
+| `m.projection([...])`        | `projection` projection     | `(U) -> U`                                  |
 | `m.rate_operator("explicit_rhs", flux=True, sources=["electric"])` | `explicit_rhs` local_rate | `(U[, Fields]) -> Rate(U)` |
 
 `m.rate_operator` names a composite `-div F + sources` rate so a program can call it by name

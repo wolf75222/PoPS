@@ -476,6 +476,12 @@ class Program:
             return self.solve_fields(name=name, state=args[0], field=field)
         if kind == "local_source":
             fields = args[1] if len(args) > 1 else None
+            if operator_name == "source_default":
+                # The default source lives in m._source, not as a named source_term; reach it
+                # through the source-only RHS path (byte-identical to P.rhs(flux=False,
+                # sources=["default"])), since ctx.source(name) only resolves named source_terms.
+                return self.rhs(name=name, state=args[0], fields=fields, flux=False,
+                                sources=["default"])
             return self.source(operator_name, state=args[0], fields=fields)
         if kind in ("grid_operator", "local_rate"):
             fields = args[1] if len(args) > 1 else None
