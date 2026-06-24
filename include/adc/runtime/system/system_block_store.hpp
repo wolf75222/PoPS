@@ -142,7 +142,10 @@ class SystemBlockStore {
     std::function<void(MultiFab&)> project;
     // FLUX-ONLY residual R <- -div F(U) (NO default/composite source), Poisson frozen (ADC-425). The
     // SAME transport assembly as rhs_into evaluated on SourceFreeModel<Model> (zero source), so the
-    // flux / ghost / geometry handling is bit-identical -- only the source is dropped. Read by
+    // flux / ghost / geometry handling is bit-identical -- only the source is dropped (with
+    // limiter='none'; the HLL wave-speed cache -- rejected on the aot/production backends compiled
+    // Programs use -- is the only path where cached cell-center speeds differ from the per-face
+    // reconstruction). Read by
     // System::block_neg_div_flux_into, which a compiled time Program's hyperbolic stage calls so a
     // Lie/Strang split assembles "flux but no source" (spec criterion 17). EMPTY (default) for paths
     // that do not build it (the host .so prototype loader); block_neg_div_flux_into fails loud then.
