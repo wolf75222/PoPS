@@ -112,7 +112,7 @@ set_target_properties(_adc PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${ADC_PY_PKG})
 if(SKBUILD)
   install(TARGETS _adc LIBRARY DESTINATION adc)
 endif()
-foreach(pyf adc/__init__.py adc/integrate.py adc/dsl.py adc/moments.py adc/time.py)
+foreach(pyf adc/__init__.py adc/integrate.py adc/dsl.py adc/model.py adc/moments.py adc/time.py)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${pyf} ${CMAKE_CURRENT_BINARY_DIR}/${pyf} COPYONLY)
 endforeach()
 
@@ -196,6 +196,56 @@ add_test(NAME test_dsl_named_sources
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_named_sources.py)
 set_tests_properties(test_dsl_named_sources PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# Registre d'operateurs type (ADC-437, spec 2 operator-first) : adc.model (StateSpace / FieldSpace /
+# Rate / LocalLinearOperator / Signature / OperatorRegistry) et la vue typee DERIVEE d'un dsl.Model
+# (m.operator_registry) -- flux / source_term / linear_source / elliptic_field / projection abaisses
+# en operateurs types, sans impact sur l'API PDE, le hash modele ni le codegen. Pur Python.
+add_test(NAME test_operator_registry
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_registry.py)
+set_tests_properties(test_operator_registry PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
+# P.call type + m.rate_operator (ADC-438, spec 2 operator-first) : P.call resout un operateur du
+# registre type, verifie les arguments contre sa Signature, puis abaisse vers le raccourci PDE
+# equivalent -> C++ genere IDENTIQUE au chemin spec 1 (solve_fields / source / rhs / linear_source).
+# m.rate_operator nomme un -div F + sources composite (alias cote Program). Pur Python.
+add_test(NAME test_operator_call
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_call.py)
+set_tests_properties(test_operator_call PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
+# adc.model.Module API + dsl.Model facade (ADC-439, spec 2 operator-first) : Module (espaces types +
+# registre d'operateurs), sucre de signature >>, operateurs builder/decorateur, parametres/aux, et
+# dsl.Model.module qui expose le registre derive. Un meme Program generique reutilise sur deux modules.
+add_test(NAME test_operator_module
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_module.py)
+set_tests_properties(test_operator_module PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
+# Macros standard operator-first (ADC-440, spec 2) : predictor_corrector_local_linear / explicit_rk /
+# imex_local_linear prennent des NOMS d'operateurs types (pas de termes physiques) et les composent
+# via P.call ; model-free (source sans physique) et reutilisables sur tout Module aux memes signatures.
+add_test(NAME test_operator_macros
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_macros.py)
+set_tests_properties(test_operator_macros PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
+# Introspection des operateurs compiles (ADC-441, spec 2) : list_operators / operator_signature /
+# operator_requirements / operator_capabilities / list_state_spaces / list_field_spaces sur Module,
+# dsl.Model et CompiledProblem (metadonnees lues du modele porte, sans charger le .so). Pur Python.
+add_test(NAME test_operator_introspection
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_introspection.py)
+set_tests_properties(test_operator_introspection PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
+# Hash de ModuleSpec (ADC-443, spec 2) : Module.module_hash couvre espaces + operateurs (nom, kind,
+# signature, capabilities, requirements, identite du corps) ; deterministe, invalide a tout changement
+# de corps / signature / capability / espace. Le codegen dsl reste couvert par _model_hash. Pur Python.
+add_test(NAME test_module_hash
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_module_hash.py)
+set_tests_properties(test_module_hash PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
 
 # adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de

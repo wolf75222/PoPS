@@ -39,6 +39,20 @@ import sys
 
 import numpy as np
 
+# Operator-first type system (Spec 2): a typed VIEW only. dsl.py is sometimes loaded as a
+# top-level module without its package (the standalone-import test trick, e.g.
+# test_projection_eig loads dsl.py via spec_from_file_location), where a relative import has no
+# parent package; fall back to loading the sibling model.py by path (it is stdlib-only).
+try:
+    from . import model as _model
+except ImportError:  # pragma: no cover - exercised only by the standalone-import path
+    import importlib.util as _ilu
+
+    _mspec = _ilu.spec_from_file_location(
+        "adc_model", os.path.join(os.path.dirname(__file__), "model.py"))
+    _model = _ilu.module_from_spec(_mspec)
+    _mspec.loader.exec_module(_model)
+
 
 # --- Signature of the core header tree (ABI key of the "production" path) -------------
 # The "production" backend (compile_native) emits a .so loader that inlines the header template
@@ -1666,6 +1680,11 @@ class HyperbolicModel:
         self.gamma = None       # adiabatic index of the block (EOS), read by the inter-species couplings
                                 # on the System side. None -> symbol adc_compiled_gamma not emitted (the System
                                 # then falls back to its historical default 1.4, strict backward compatibility).
+        self._rate_operators = {}  # NAMED composite rate operators (rate_operator, Spec 2): name ->
+                                   # {"flux": bool, "sources": [str], "fluxes": [str] | None}. A pure
+                                   # Program-side ALIAS for ctx.rhs(flux=..., sources=..., fluxes=...): a
+                                   # typed P.call(name) lowers to the SAME rhs IR, so the alias never enters
+                                   # the model hash nor the codegen (its flux/sources are already hashed).
 
     def cons(self, name):
         self.cons_names.append(name)
@@ -2004,6 +2023,32 @@ class HyperbolicModel:
             raise ValueError("linear_source('%s'): name collides with a source_term" % name)
         self._linear_sources[name] = wrapped
 
+    def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None):
+        """Declare a NAMED composite rate operator ``R_name = -div F + sum(sources)`` (Spec 2,
+        operator-first). It is a Program-side ALIAS for ``ctx.rhs(flux=, sources=, fluxes=)``: a typed
+        ``P.call(name, U[, fields])`` lowers to the SAME rhs IR as the explicit ``P.rhs(...)`` shortcut,
+        so a model-free Program can address the RHS by one operator name instead of spelling out
+        flux/sources. The alias carries no new numerics (its flux/sources are already in the model and
+        the hash) -- it never enters the model hash nor the codegen. ``flux`` / ``sources`` / ``fluxes``
+        have the same meaning as :meth:`Program.rhs`. ``name`` must be a valid identifier, unique among
+        rate operators, and must not collide with a source_term / linear_source."""
+        if self.n_vars == 0:
+            raise ValueError("rate_operator(%r): declare conservative_vars(...) first" % (name,))
+        if not (isinstance(name, str) and name.isidentifier()):
+            raise ValueError("rate_operator(%r): name must be a valid identifier "
+                             "(letters/digits/_, no leading digit)" % (name,))
+        if name in self._rate_operators:
+            raise ValueError("rate_operator('%s'): already declared" % name)
+        if name in self._source_terms or name in self._linear_sources:
+            raise ValueError("rate_operator('%s'): name collides with a source_term/linear_source"
+                             % name)
+        flx = list(fluxes) if fluxes else None
+        if not flux and flx:
+            raise ValueError("rate_operator('%s'): named fluxes require flux=True "
+                             "(a source-only rate has no flux to divide)" % name)
+        srcs = list(sources) if sources is not None else None
+        self._rate_operators[name] = {"flux": bool(flux), "sources": srcs, "fluxes": flx}
+
     def stability_speed(self, expr):
         """STABILITY speed lambda* (expression of cons / prims / aux): drives the block CFL
         instead of ``max(|eigenvalues|)``. Emitted as ``stability_speed(U, aux, dir)`` (C++ trait
@@ -2231,6 +2276,166 @@ class HyperbolicModel:
 
     @property
     def n_vars(self): return len(self.cons_names)
+
+    # --- operator-first typed view (Spec 2, S2-1) --------------------------------
+    # A DERIVED, typed view of the model as spaces + a registry of typed operators
+    # (adc.model). It carries NO numerics and does NOT touch the model hash or the
+    # codegen: source_term / linear_source / elliptic_field / flux lower into typed
+    # operators so a model-free Program can address them by signature (P.call, S2-2)
+    # and the C++ codegen can dispatch by integer id (S2-6). The public
+    # adc.model.Module front-end (S2-3) builds on the same primitives.
+    def _aux_name_set(self):
+        """Names that denote an auxiliary field read by a formula (canonical + named)."""
+        return set(AUX_CANONICAL) | set(self.aux_extra_names)
+
+    def _aux_requirements(self, exprs):
+        """{'aux': [...]} of the aux fields the expressions read, or {} if none."""
+        aux_set = self._aux_name_set()
+        read = sorted({d for e in exprs for d in (e.deps() & aux_set)})
+        return {"aux": read} if read else {}
+
+    def state_space(self, name="U"):
+        """Typed :class:`adc.model.StateSpace` view of the conservative state: its
+        components and canonical physical roles. Derived; carries no data."""
+        role_list = roles_for(self.cons_names, self.cons_roles)
+        roles = dict(zip(self.cons_names, role_list, strict=True))
+        return _model.StateSpace(name=name, components=tuple(self.cons_names),
+                                 roles=roles, layout="cell")
+
+    def field_space(self, name="fields"):
+        """Typed :class:`adc.model.FieldSpace` view of the auxiliary surface the model
+        reads (canonical aux + named aux fields, in read order, de-duplicated)."""
+        comps = []
+        for nm in list(self.aux_names) + list(self.aux_extra_names):
+            if nm not in comps:
+                comps.append(nm)
+        return _model.FieldSpace(name=name, components=tuple(comps), layout="cell")
+
+    def operator_registry(self, state_name="U"):
+        """Typed :class:`adc.model.OperatorRegistry` derived from this model.
+
+        Lowers the PDE shortcuts into typed operators (ids follow registration order):
+        flux -> grid_operator ``(State) -> Rate(State)``; source_term -> local_source
+        ``(State[, Fields]) -> Rate(State)``; linear_source -> local_linear_operator
+        ``(Fields?) -> LocalLinearOperator(State, State)``; elliptic_field ->
+        field_operator ``(State) -> FieldSpace``; projection -> projection
+        ``(State) -> State``. The implicit defaults surface as ``flux_default`` /
+        ``source_default`` / ``fields_from_state``. Pure view: no hash / codegen impact.
+        """
+        reg = _model.OperatorRegistry()
+        state = self.state_space(state_name)
+        fields = self.field_space()
+        aux_set = self._aux_name_set()
+
+        def reads_fields(exprs):
+            return any(e.deps() & aux_set for e in exprs)
+
+        # Flux divergence (grid_operator: State -> Rate(State)).
+        if self._flux:
+            reg.register(_model.Operator(
+                "flux_default", "grid_operator",
+                _model.Signature([state], _model.Rate(state)),
+                capabilities={"local": False, "linear": False, "produces_rate": True,
+                              "requires_ghosts": 1, "supports_device": True,
+                              "default": True},
+                source="dsl.flux"))
+        for nm in sorted(self._flux_terms):
+            reg.register(_model.Operator(
+                nm, "grid_operator", _model.Signature([state], _model.Rate(state)),
+                capabilities={"local": False, "linear": False, "produces_rate": True,
+                              "requires_ghosts": 1, "supports_device": True},
+                source="dsl.flux_term"))
+
+        # Local sources (local_source: State[, Fields] -> Rate(State)).
+        if self._source is not None:
+            rf = reads_fields(self._source)
+            reg.register(_model.Operator(
+                "source_default", "local_source",
+                _model.Signature([state, fields] if rf else [state],
+                                 _model.Rate(state)),
+                capabilities={"local": True, "linear": False, "requires_fields": rf,
+                              "produces_rate": True, "supports_device": True,
+                              "default": True},
+                requirements=self._aux_requirements(self._source),
+                source="dsl.source"))
+        for nm in sorted(self._source_terms):
+            exprs = self._source_terms[nm]
+            rf = reads_fields(exprs)
+            reg.register(_model.Operator(
+                nm, "local_source",
+                _model.Signature([state, fields] if rf else [state],
+                                 _model.Rate(state)),
+                capabilities={"local": True, "linear": False, "requires_fields": rf,
+                              "produces_rate": True, "supports_device": True},
+                requirements=self._aux_requirements(exprs),
+                source="dsl.source_term"))
+
+        # Local linear operators (local_linear_operator: Fields? -> L(State, State)).
+        for nm in sorted(self._linear_sources):
+            coeffs = [c for row in self._linear_sources[nm] for c in row]
+            rf = reads_fields(coeffs)
+            reg.register(_model.Operator(
+                nm, "local_linear_operator",
+                _model.Signature([fields] if rf else [],
+                                 _model.LocalLinearOperator(state, state)),
+                capabilities={"local": True, "linear": True, "solve_i_minus_a": True,
+                              "matrix_available": True, "supports_device": True},
+                requirements=self._aux_requirements(coeffs),
+                source="dsl.linear_source"))
+
+        # Field operators (field_operator: State -> FieldSpace).
+        if self._elliptic is not None:
+            reg.register(_model.Operator(
+                "fields_from_state", "field_operator",
+                # The Poisson solve PRODUCES the canonical electrostatic triple; an externally
+                # imposed aux (e.g. B_z) read by sources is part of field_space() but not produced
+                # here, so the produced FieldSpace is the triple, not the full read surface.
+                _model.Signature([state], _model.FieldSpace(
+                    "fields", components=("phi", "grad_x", "grad_y"))),
+                capabilities={"requires_solver": True, "supports_device": True,
+                              "default": True},
+                requirements={"elliptic_operator": "poisson"},
+                source="dsl.elliptic_rhs"))
+        for nm in sorted(self._elliptic_fields):
+            info = self._elliptic_fields[nm]
+            reg.register(_model.Operator(
+                nm, "field_operator",
+                _model.Signature([state],
+                                 _model.FieldSpace(nm, components=tuple(info["aux"]))),
+                capabilities={"requires_solver": True, "supports_device": True},
+                requirements={"elliptic_operator": info["operator"]},
+                source="dsl.elliptic_field"))
+
+        # Pointwise projection (projection: State -> State).
+        if self._proj is not None:
+            reg.register(_model.Operator(
+                "projection", "projection", _model.Signature([state], state),
+                capabilities={"local": True, "idempotent": True,
+                              "supports_device": True},
+                source="dsl.projection"))
+
+        # Composite rate operators (local_rate: State[, Fields] -> Rate(State)); aliases
+        # for ctx.rhs(flux=, sources=, fluxes=), carried as a lowering hint for P.call.
+        for nm in sorted(self._rate_operators):
+            cfg = self._rate_operators[nm]
+            src_names = cfg["sources"] if cfg["sources"] is not None else ["default"]
+            needs = False
+            for s in src_names:
+                if s == "default":
+                    needs = needs or (self._source is not None
+                                      and reads_fields(self._source))
+                elif s in self._source_terms:
+                    needs = needs or reads_fields(self._source_terms[s])
+            reg.register(_model.Operator(
+                nm, "local_rate",
+                _model.Signature([state, fields] if needs else [state],
+                                 _model.Rate(state)),
+                capabilities={"local": False, "linear": False, "requires_fields": needs,
+                              "produces_rate": True, "supports_device": True},
+                lowering={"flux": cfg["flux"], "sources": cfg["sources"],
+                          "fluxes": cfg["fluxes"]},
+                source="dsl.rate_operator"))
+        return reg
 
     # --- evaluation (CPU interpreter, numpy) ---
     def _env(self, U, aux):
@@ -4323,6 +4528,38 @@ class CompiledProblem:
     def __fspath__(self):
         return self.so_path
 
+    # --- operator introspection (Spec 2, S2-5): metadata read from the carried model,
+    # no need to load or run the .so.
+    def _intro_model(self):
+        if self.model is None:
+            raise ValueError("this CompiledProblem carries no model; operator introspection "
+                             "is unavailable")
+        return self.model
+
+    def list_operators(self):
+        """Names of the typed operators of the compiled module (registration order)."""
+        return self._intro_model().operator_registry().names()
+
+    def list_state_spaces(self):
+        """Names of the compiled module's state spaces."""
+        return self._intro_model().list_state_spaces()
+
+    def list_field_spaces(self):
+        """Names of the compiled module's field spaces."""
+        return self._intro_model().list_field_spaces()
+
+    def operator_signature(self, name):
+        """The adc.model.Signature of operator ``name`` in the compiled module."""
+        return self._intro_model().operator_registry().get(name).signature
+
+    def operator_requirements(self, name):
+        """The requirements dict of operator ``name``."""
+        return dict(self._intro_model().operator_registry().get(name).requirements)
+
+    def operator_capabilities(self, name):
+        """The capabilities dict of operator ``name``."""
+        return dict(self._intro_model().operator_registry().get(name).capabilities)
+
     def __repr__(self):
         return "<CompiledProblem %r -> %s>" % (self.program_name, self.so_path)
 
@@ -4663,6 +4900,12 @@ class Model:
         never folded into m.source or ctx.rhs."""
         self._m.linear_source(name, matrix)
 
+    def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None):
+        """NAMED composite rate operator R_name = -div F + sum(sources) (Spec 2, operator-first):
+        a Program-side alias for ctx.rhs(flux=, sources=, fluxes=) so a model-free Program can call
+        P.call(name, U[, fields]) instead of P.rhs(...). Delegates to HyperbolicModel.rate_operator."""
+        self._m.rate_operator(name, flux=flux, sources=sources, fluxes=fluxes)
+
     def source_frequency(self, expr_mu):
         """Local frequency mu(U, aux) [1/s] of the source -- the 'source' step bound from the meeting
         (dt <= cfl*substeps/(stride*max mu), without a space step). Emitted on the generated SOURCE
@@ -4795,6 +5038,64 @@ class Model:
 
     @property
     def n_vars(self): return self._m.n_vars
+
+    def state_space(self, name="U"):
+        """Typed adc.model.StateSpace view of the conservative state (Spec 2).
+        Delegates to HyperbolicModel.state_space."""
+        return self._m.state_space(name)
+
+    def field_space(self, name="fields"):
+        """Typed adc.model.FieldSpace view of the auxiliary surface (Spec 2).
+        Delegates to HyperbolicModel.field_space."""
+        return self._m.field_space(name)
+
+    def operator_registry(self, state_name="U"):
+        """Typed adc.model.OperatorRegistry derived from this model (Spec 2): the PDE
+        shortcuts (source_term / linear_source / elliptic_field / flux) lower into
+        typed operators. Pure view -- no hash or codegen impact. Delegates to
+        HyperbolicModel.operator_registry."""
+        return self._m.operator_registry(state_name)
+
+    @property
+    def module(self):
+        """The adc.model.Module view of this PDE model (Spec 2, operator-first): its typed
+        StateSpace / FieldSpace and the OperatorRegistry that source_term / linear_source /
+        elliptic_field / flux / rate_operator populate. dsl.Model is the PDE convenience
+        facade; the Module is the model-free view a generic Program binds to (P.bind_operators).
+        The Module carries no numerics; codegen still reads this Model via compile_problem."""
+        mod = _model.Module(self.name)
+        st = self._m.state_space()
+        mod.state_space(st.name, st.components, roles=st.roles, layout=st.layout,
+                        storage=st.storage)
+        fs = self._m.field_space()
+        mod.field_space(fs.name, fs.components, layout=fs.layout)
+        mod.adopt_registry(self._m.operator_registry())
+        return mod
+
+    # --- operator introspection (Spec 2, S2-5) ---
+    def list_operators(self):
+        """Names of the typed operators this model exposes (registration order)."""
+        return self._m.operator_registry().names()
+
+    def list_state_spaces(self):
+        """Names of the model's state spaces (one, the conservative state)."""
+        return [self._m.state_space().name]
+
+    def list_field_spaces(self):
+        """Names of the model's field spaces (one, the auxiliary surface)."""
+        return [self._m.field_space().name]
+
+    def operator_signature(self, name):
+        """The adc.model.Signature of operator ``name``."""
+        return self._m.operator_registry().get(name).signature
+
+    def operator_requirements(self, name):
+        """The requirements dict of operator ``name``."""
+        return dict(self._m.operator_registry().get(name).requirements)
+
+    def operator_capabilities(self, name):
+        """The capabilities dict of operator ``name``."""
+        return dict(self._m.operator_registry().get(name).capabilities)
 
     def _model_hash(self):
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +

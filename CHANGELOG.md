@@ -20,6 +20,58 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Operator-first example and docs** (ADC-444, epic ADC-436, spec 2):
+  `examples/operator_modules/predictor_corrector_operator_first.py` builds the spec-1 Example 5
+  physics with `adc.model` + the generic `predictor_corrector_local_linear` macro (no physics term in
+  the program), validated against the same analytic reference. New reference page
+  `docs/sphinx/reference/operator-modules.md` (Module vs Simulation, spaces, operators, signatures,
+  capabilities / requirements, `P.call`, `dsl.Model` compatibility, migration from the PDE shortcuts);
+  an "Operator-first programs" section in `time-program.md`.
+- **Compiled operator introspection** (ADC-441, epic ADC-436, spec 2): `list_operators` /
+  `operator_signature` / `operator_requirements` / `operator_capabilities` / `list_state_spaces` /
+  `list_field_spaces` on `adc.model.Module`, `dsl.Model` and `CompiledProblem` (the compiled handle
+  reads the carried model's metadata, no `.so` load). New `python/tests/test_operator_introspection.py`.
+- **ModuleSpec hash** (ADC-443, epic ADC-436, spec 2): `adc.model.Module.module_hash` folds the
+  spaces, parameters, aux and -- per operator -- name / kind / signature / capabilities / requirements
+  and a body identity (callable source or repr), namespaced by a spec2 tag; deterministic and
+  invalidated by any operator-spec change. The dsl codegen sensitivity stays with
+  `dsl.Model._model_hash`; the module hash adds the operator-spec layer for a compiled module
+  artifact. New `python/tests/test_module_hash.py`.
+- **Operator-first standard macros** (ADC-440, epic ADC-436, spec 2): `adc.time.std`.
+  `predictor_corrector_local_linear`, `explicit_rk` and `imex_local_linear` take typed operator NAMES
+  (a field operator `U -> Fields`, an explicit rate `(U, Fields) -> Rate(U)`, a local linear operator
+  `Fields -> LocalLinearOperator(U, U)`) and compose them with `P.call` against the bound Module. They
+  are model-free (their source mentions no physics term) and reusable across any Module with matching
+  signatures; an arity-aware helper calls each operator with exactly the inputs its signature declares.
+  New `python/tests/test_operator_macros.py`.
+- **Public `adc.model.Module`** (ADC-439, epic ADC-436, spec 2 "operator-first"): the model-free
+  front-end. `Module` holds typed spaces and a registry of typed operators
+  (`state_space` / `field_space` / `parameters` / `aux_fields` / `operator` as a builder or a
+  decorator), with `(U, Fields) >> Rate(U)` signature sugar and `ParameterSpace` / `AuxSpace`.
+  `dsl.Model` becomes the PDE convenience facade: `m.module` exposes the typed spaces and the
+  derived OperatorRegistry that `source_term` / `linear_source` / `elliptic_field` / `flux`
+  populate. `adc.model` is exported from the package; the same generic operator-first Program is
+  reusable across any Module with matching signatures. New `python/tests/test_operator_module.py`.
+- **Typed `P.call` and `m.rate_operator`** (ADC-438, epic ADC-436, spec 2 "operator-first"):
+  `Program.bind_operators(model)` binds the typed registry; `P.call(name, *args, name=None)` resolves
+  an operator by name, type-checks the arguments against its `Signature` (clear errors on unknown
+  operator / arity / vtype / no-bind), and lowers to the matching PDE shortcut (`solve_fields` /
+  `source` / `rhs` / `linear_source` / `project`) so the generated C++ is byte-identical to the Spec 1
+  path. `m.rate_operator(name, flux=, sources=, fluxes=)` names a composite `-div F + sources` rate as
+  a Program-side alias (lowers to the same `rhs` IR; no model-hash impact).
+  `OperatorRegistry.default_of_kind` resolves a privileged default and raises a clear ambiguity error.
+  New `python/tests/test_operator_call.py`.
+- **Internal typed operator registry** (ADC-437, epic ADC-436, spec 2 "operator-first"):
+  new `adc.model` type system (`StateSpace`, `FieldSpace`, `RateSpace`/`Rate(U)`,
+  `LocalLinearOperator`, `MatrixFreeOperator`, `Signature`, `Operator`, `OperatorRegistry`)
+  and a DERIVED, typed view of a `dsl.Model` via `m.operator_registry()` / `m.state_space()` /
+  `m.field_space()`. The PDE shortcuts lower into typed operators -- `flux` to a `grid_operator`
+  `(State) -> Rate(State)`, `source_term` to a `local_source` `(State[, Fields]) -> Rate(State)`,
+  `linear_source` to a `local_linear_operator` `(Fields?) -> LocalLinearOperator(State, State)`,
+  `elliptic_field` to a `field_operator` `(State) -> FieldSpace`, `projection` to a `projection`
+  `(State) -> State` -- with stable integer operator ids for hot-path dispatch. Pure introspective
+  view: no change to the public PDE API, the model hash, or the codegen. Foundation for `P.call`
+  (operator-first Programs). New `python/tests/test_operator_registry.py`.
 - **Multi-block compiled time Programs** (ADC-426, epic ADC-399, spec "Multi-blocs"):
   `Program.emit_cpp_program` lowers N `P.state("a")` / N `P.commit` -- the SSA walk allocates a base
   per block and routes every op (state, rhs, solve_fields, projection, max_wave_speed) to its block's
