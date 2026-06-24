@@ -20,6 +20,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Multi-block compiled time Programs** (ADC-426, epic ADC-399, spec "Multi-blocs"):
+  `Program.emit_cpp_program` lowers N `P.state("a")` / N `P.commit` -- the SSA walk allocates a base
+  per block and routes every op (state, rhs, solve_fields, projection, max_wave_speed) to its block's
+  runtime index, assigned in `P.state` declaration order (the System blocks must be added in that same
+  order). A block declared but never committed is a read-only block (e.g. a passive field coupling the
+  others through the shared Poisson); a commit of an undeclared block, and a double commit, are
+  rejected. The per-block `P.solve_fields(state=Ub)` is already a coupled solve (block b at its stage
+  state, every other block at its live state into the one shared phi/aux). New
+  `Program.solve_fields_from_blocks([Ua, Ub])` records the simultaneous multi-target coupled solve in
+  the IR but `emit_cpp_program` raises `NotImplementedError` for it (the native field solver overrides
+  a single target block per solve; the coupled multi-target solve is deferred, never faked). New
+  `python/tests/test_time_multiblock.py`.
 - **`adc.time.std` library completion + `@P.step` decorator** (ADC-423, epic ADC-399): pure-Python
   macros that lower to the existing Program IR (no new C++ stepper) -- `std.rk` (generic explicit
   Butcher tableau; `RK4_TABLEAU` reproduces the `rk4` macro IR byte for byte, `SSPRK2_TABLEAU` gives
