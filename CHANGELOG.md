@@ -20,6 +20,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Spec 3 reference docs (multispecies / scheduler / custom-solvers) + multi-species example**
+  (ADC-455, epic ADC-450): `docs/sphinx/reference/multispecies.md` (species as BlockInstances,
+  arbitrary-arity operators, `RateBundle` typed multi-output, `commit_many`, `StageStateSet`),
+  `program-scheduler.md` (the unified-scheduler design: `every`/`hold`/`skip`/`accumulate_dt`,
+  cacheable capabilities, checkpointed caches; current substeps/stride mechanism) and
+  `custom-solvers.md` (native Krylov solvers + the generated solver-DSL design), plus
+  `examples/spec3/multispecies_three_fluids.py` (a 3-species step over the operator-first
+  multi-block kernel: multi-state `Module` + `RateBundle` + multi-block `Program` + atomic
+  `commit_many`, IR-level). These complete the Spec 3 reference set; the not-yet-wired runtime
+  pieces are flagged as ADC-457/458 follow-ups.
 - **Spec 3 reference docs** (ADC-455, epic ADC-450): `docs/sphinx/reference/native-numerics.md`
   (the native C++ Riemann solvers + reconstruction bricks and the model capabilities they need)
   and `typed-bricks.md` (the `adc.lib` catalog: NativeBrick / GeneratedBrick / MacroBrick /
