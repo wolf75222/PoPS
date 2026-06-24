@@ -217,6 +217,34 @@ add_test(NAME test_time_std
 set_tests_properties(test_time_std PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
+# adc.time.Program.step decorator mode (ADC-423) : @P.step records the IR by calling the decorated
+# function ONCE at build time (never executed numerically during a step) and produces IR identical to
+# the inline builder body (equal _ir_hash). Pure Python, always runs.
+add_test(NAME test_time_std_decorator
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_std_decorator.py)
+set_tests_properties(test_time_std_decorator PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# adc.time.std.rk -- generic explicit Runge-Kutta from a Butcher tableau (ADC-423). (A) pure Python :
+# rk(RK4_TABLEAU) lowers to byte-identical IR as the rk4 macro (equal _ir_hash) and rk(SSPRK2_TABLEAU)
+# matches Heun ; the tableau validation rejects an implicit / inconsistent tableau. (B) compiled
+# trajectory parity (rk(RK4) == rk4 bit-for-bit) auto-skips without install_program / a compiler / a
+# visible Kokkos (ADC_KOKKOS_ROOT).
+add_test(NAME test_time_std_rk
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_std_rk.py)
+set_tests_properties(test_time_std_rk PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# adc.time.std.imex_local / lie / adams_bashforth(order) (ADC-423) : all lower to the existing IR (no
+# new C++ stepper). (A) pure Python : each macro builds + lowers (imex/bdf to the per-cell solve kernel
+# with a model, AB3 to two history reads + rotate), guards fire. (B) offline parity (compiled program
+# vs an independent numpy reference of the identical recurrence : implicit Lorentz IMEX, sequential Lie
+# split, AB3) auto-skips without numpy / install_program / a compiler / a visible Kokkos.
+add_test(NAME test_time_std_imex_lie_ab
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_std_imex_lie_ab.py)
+set_tests_properties(test_time_std_imex_lie_ab PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
 # Compiled adc.time.std.strang reproduces native adc.Strang on a simple case (ADC-410). (A) pure Python:
 # the std.strang macro lowers to two half-flow stages (U + dt/2 * R) around a no-op source, and
 # emit_cpp_program produces the matching C++. (B) native bit-parity: an uncoupled isothermal NoSource

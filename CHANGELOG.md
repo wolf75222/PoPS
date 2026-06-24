@@ -20,6 +20,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **`adc.time.std` library completion + `@P.step` decorator** (ADC-423, epic ADC-399): pure-Python
+  macros that lower to the existing Program IR (no new C++ stepper) -- `std.rk` (generic explicit
+  Butcher tableau; `RK4_TABLEAU` reproduces the `rk4` macro IR byte for byte, `SSPRK2_TABLEAU` gives
+  Heun, the Butcher form of an SSPRK2 step), `std.lie` (sequential Lie splitting), `std.imex_local`
+  (explicit flux/source + implicit
+  cell-local linear source via `solve_local_linear`), `std.adams_bashforth(order in {1,2,3})`
+  (`adams_bashforth2` kept as a thin alias), and `std.bdf` (cell-local-`L` BDF1/BDF2; implicit-flux
+  BDF raises `NotImplementedError`). `Program.step` records a body from a decorated `build_fn(P)` run
+  once at build time. New `python/tests/test_time_std_decorator.py`, `test_time_std_rk.py`,
+  `test_time_std_imex_lie_ab.py`.
 - **GMRES Krylov solver** (ADC-420, epic ADC-399): `adc.time.Program.solve_linear(method="gmres",
   restart=)` lowers to a new `adc::gmres_solve` (restarted GMRES(m), matrix-free `ApplyFn`, modified
   Gram-Schmidt Arnoldi + Givens rotations, identity preconditioner) in `generic_krylov.hpp`, alongside
