@@ -611,7 +611,9 @@ class System {
   /// model's default/composite source (Poisson frozen, ghosts filled identically). The block's
   /// flux-only closure is the rhs_into path on SourceFreeModel<Model> (the zero-source adapter the
   /// IMEX explicit half-step already uses), so the flux / ghost / geometry handling is bit-identical
-  /// -- only the source is dropped. A compiled time Program's hyperbolic stage
+  /// -- only the source is dropped (with limiter='none'; the HLL wave-speed cache -- rejected on the
+  /// aot/production backends compiled Programs use -- is the only path where cached cell-center speeds
+  /// differ from the per-face reconstruction). A compiled time Program's hyperbolic stage
   /// (ProgramContext::neg_div_flux_default_into) reads it so a Lie/Strang split assembles "flux but no
   /// source" without the default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). FAILS
   /// LOUD (std::runtime_error) on a block whose path did not build the closure (the host .so prototype

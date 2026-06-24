@@ -508,8 +508,11 @@ ADC_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, bo
   // default/composite source is dropped. A compiled time Program's hyperbolic stage reads it so a
   // Lie/Strang split assembles "flux but no source" without the default source leaking in (spec
   // criterion 17). NO HLL cache: the explicit/IMEX advances and rhs_into share ws_cache (never
-  // concurrent), but a flux-only RHS can interleave with them, so it keeps the per-face path (the
-  // residual is identical either way -- the cache is a perf scratch, not a numerics change).
+  // concurrent), but a flux-only RHS can interleave with them, so it keeps the per-face path. The
+  // residual is identical either way with limiter='none'; the HLL wave-speed cache -- rejected on the
+  // aot/production backends compiled Programs use -- is the only path where cached cell-center speeds
+  // differ from the per-face reconstruction, so for a compiled Program the cache is a perf scratch,
+  // not a numerics change.
   bc.rhs_flux_only = detail::RhsInto<Limiter, Flux, SourceFreeModel<Model>>{
       SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr};
   bc.hotspot =
