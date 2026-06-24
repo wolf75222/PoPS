@@ -124,6 +124,44 @@ inline ModuleMetadata read_module_metadata(void* dl_handle) {
   return meta;
 }
 
+/// Extract the aux-field names an operator requires from its ``requirements`` JSON -- the ``"aux"``
+/// array, e.g. {"kind":"local_source","aux":["grad_x","B_z"]} -> {"grad_x","B_z"}. A dependency-free
+/// scan: the core has no JSON library on the install path and the shape is a flat, closed vocabulary
+/// (the codegen emits only ``"kind"``, ``"aux"`` and ``"elliptic_operator"``). It locates the
+/// ``"aux"`` key, the following ``[``, and collects the quoted tokens up to the closing ``]``.
+/// Returns empty when there is no ``"aux"`` array. Used by install-time requirement validation
+/// (Spec-2 criterion 24, ADC-446).
+inline std::vector<std::string> required_aux(const std::string& requirements_json) {
+  std::vector<std::string> out;
+  const std::string key = "\"aux\"";
+  const std::size_t k = requirements_json.find(key);
+  if (k == std::string::npos) {
+    return out;
+  }
+  const std::size_t lb = requirements_json.find('[', k + key.size());
+  if (lb == std::string::npos) {
+    return out;
+  }
+  const std::size_t rb = requirements_json.find(']', lb);
+  if (rb == std::string::npos) {
+    return out;
+  }
+  std::size_t p = lb + 1;
+  while (p < rb) {
+    const std::size_t q1 = requirements_json.find('"', p);
+    if (q1 == std::string::npos || q1 >= rb) {
+      break;
+    }
+    const std::size_t q2 = requirements_json.find('"', q1 + 1);
+    if (q2 == std::string::npos || q2 > rb) {
+      break;
+    }
+    out.push_back(requirements_json.substr(q1 + 1, q2 - q1 - 1));
+    p = q2 + 1;
+  }
+  return out;
+}
+
 }  // namespace program
 }  // namespace runtime
 }  // namespace adc

@@ -30,6 +30,7 @@
 #include <adc/runtime/dynamic/dynamic_model.hpp>  // IModel: model loaded at runtime (dynamic block)
 #include <adc/runtime/builders/compiled/native_loader.hpp>  // .so loading (JIT/AOT/native) + ABI guard: VERBATIM, included after the Impl def below (templates instantiated lower down)
 #include <adc/runtime/context/wall_predicate.hpp>  // detail::wall_predicate (wall shared by System/AmrSystem)
+#include <adc/runtime/program/module_metadata.hpp>  // read_module_metadata / required_aux: install-time requirement validation (ADC-446)
 #include <adc/runtime/program/program_context.hpp>  // ProgramContext: wraps the System for the .so dt_bound call (ADC-417)
 
 #include <algorithm>
@@ -2242,6 +2243,29 @@ ADC_EXPORT void System::install_program(const std::string& so_path) {
     throw std::runtime_error("System::install_program: adc_install_program missing from '" +
                              so_path + "'");
   }
+#if !defined(_WIN32)
+  // Spec-2 criterion 24 (ADC-446): install-time requirement validation. The problem.so carries, per
+  // operator, the aux fields its body reads (adc_module_operator_requirements -> read_module_metadata).
+  // Reject BEFORE installing the program if the simulation did not provide a required field, with a
+  // spec-style message, instead of a cryptic failure mid-step. A pre-Spec-2 .so (present == false) or
+  // an operator with no aux requirement carries nothing to check -> skip (backward compatible). Only
+  // the user-supplied application fields (B_z, T_e) are hard requirements; derived/lazy fields cannot
+  // block (see SystemFieldSolver::provides_aux). POSIX only: read_module_metadata uses dlsym directly.
+  {
+    const auto meta = adc::runtime::program::read_module_metadata(h);
+    for (const auto& op : meta.operators) {
+      for (const auto& aux : adc::runtime::program::required_aux(op.requirements)) {
+        if (!p_->fields_.provides_aux(aux)) {
+          adc::dynlib::close(h);
+          throw std::runtime_error(
+              "System::install_program: operator '" + op.name + "' requires aux field '" + aux +
+              "', but simulation did not provide it (B_z -> set_magnetic_field, T_e -> "
+              "set_electron_temperature_from, before install_program)");
+        }
+      }
+    }
+  }
+#endif
   install(static_cast<void*>(this));
   // Record the program's IR hash (ADC-406b): the optional adc_program_hash export (a stable IR key,
   // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT

@@ -99,6 +99,30 @@ to the dsl method of its kind: `grid_operator` to `flux`, `local_source` to `sou
 `module.to_dsl()` to build the block model for `sim.add_equation`. `examples/operator_modules/
 predictor_corrector_operator_first.py` is authored this way.
 
+## Install-time requirement validation
+
+The compiled `problem.so` carries, per operator, the aux fields its body reads. When the program is
+installed, `System.install_program` reads that descriptor and fails loud -- BEFORE installing --
+if the simulation did not provide a required field: e.g. an operator reading `B_z` raises "operator
+'lorentz' requires aux field 'B_z', but simulation did not provide it" unless `set_magnetic_field`
+was called first.
+
+Scope (what is and is not checked):
+
+- The **hard requirements** are the user-supplied application fields `B_z` (`set_magnetic_field`) and
+  `T_e` (`set_electron_temperature_from`) -- the only resources a simulation can fail to provide.
+- Derived fields (`phi`, `grad_x`, `grad_y`) are always built lazily by the elliptic solve, and a
+  generic named aux (`m.aux_field`) is keyed only by component on the C++ side -- its name is not
+  retained -- so neither can be a hard failure (no false positives); they always pass.
+- The check is over the model's **whole operator set**, not just the operators the time program
+  applies: a model that declares an operator reading `B_z` requires `B_z` even if the program never
+  uses it.
+- The validated requirements are **inferred** from operator bodies (the aux a body reads). A
+  hand-authored `Module.operator(..., requirements=...)` dict is re-inferred when the Module lowers
+  to a `dsl.Model`, so explicit `requirements=` affects `module_hash`/introspection, not this check.
+- POSIX only (the descriptor reader uses `dlsym`); a pre-Spec-2 `.so` carries no descriptor and is
+  unaffected.
+
 ## Compatibility with `adc.dsl.Model`
 
 `adc.dsl.Model` is the **PDE convenience facade** over a module: its `flux` / `source_term` /
