@@ -60,5 +60,5 @@ if __name__ == "__main__":
     print("state spaces:", {n: s.components for n, s in mod.state_spaces().items()})
     print("field spaces:", list(mod.field_spaces()))
     print("operators:", mod.list_operators())
-    print("explicit_rate signature:", mod.operator_signature("explicit_rate"))
-    print("lorentz signature:     ", mod.operator_signature("lorentz"))
+    print("explicit_rate signature:    ", mod.operator_signature("explicit_rate"))
+    print("implicit_operator signature:", mod.operator_signature("implicit_operator"))

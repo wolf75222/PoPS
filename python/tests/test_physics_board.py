@@ -93,7 +93,7 @@ def test_board_model_lowers_to_operator_first_ir():
     ops = set(mod.list_operators())
     assert "explicit_rate" in ops          # local_rate (flux + electric source)
     assert "electric" in ops               # local_source
-    assert "lorentz" in ops                # local_linear_operator
+    assert "implicit_operator" in ops      # local_linear_operator (registered via m.operator)
 
 
 def test_explicit_rate_is_a_local_rate_operator():
@@ -105,11 +105,64 @@ def test_explicit_rate_is_a_local_rate_operator():
     assert sig.output == _model.Rate("U")
 
 
-def test_lorentz_is_a_local_linear_operator():
+def test_implicit_operator_is_a_local_linear_operator():
     m = _euler_poisson_lorentz()
-    op = m.module.operator_registry().get("lorentz")
+    op = m.module.operator_registry().get("implicit_operator")
     assert op.kind == "local_linear_operator"
     assert op.signature.output == _model.LocalLinearOperator("U", "U")
+
+
+def test_local_linear_operator_object_is_not_callable():
+    # Spec 3 amendment: m.local_linear_operator builds a MATH object, not a callable
+    # operator; calling it directly is a clear error pointing at m.operator(...).
+    m = physics.Model("plasma")
+    U = m.state("U", components=["rho", "mx", "my"])
+    bz = m.aux("B_z")
+    c_b = m.local_linear_operator("C(B)", on=U,
+                                  matrix=[[0.0, 0.0, 0.0],
+                                          [0.0, 0.0, bz],
+                                          [0.0, -bz, 0.0]])
+    with pytest.raises(TypeError, match="is not a callable operator"):
+        c_b(object())
+    # registering it yields a callable operator
+    impl = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
+    assert "implicit_operator" in m.module.list_operators()
+    assert callable(impl)
+
+
+def test_rate_and_operator_return_callables_usable_in_a_program():
+    # Spec 3 amendment: m.rate / m.operator return callable operators so a board program
+    # can write explicit_rate(U_n, fields_n) and get the same IR as P.call(...).
+    from adc.math import sqrt, grad, div, laplacian, ddt
+    from adc.time import Program
+    m = physics.Model("ep")
+    U = m.state("U", components=["rho", "mx", "my"])
+    rho, mx, my = U
+    u, v = m.primitive("u", mx / rho), m.primitive("v", my / rho)
+    cs2 = m.param("cs2", 1.0)
+    p, c = m.scalar("p", cs2 * rho), m.scalar("c", sqrt(cs2))
+    flux = m.flux("F", on=U, x=[mx, mx * u + p, mx * v], y=[my, my * u, my * v + p],
+                  waves={"x": [u - c, u, u + c], "y": [v - c, v, v + c]})
+    phi = m.field("phi")
+    m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho),
+                  outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+                  solver="geometric_mg")
+    e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
+    a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
+    bz = m.aux("B_z")
+    c_b = m.local_linear_operator("C(B)", on=U,
+                                  matrix=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    explicit_rate = m.rate("explicit_rate", ddt(U) == -div(flux) + a_src)
+    implicit_operator = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
+    assert callable(explicit_rate) and callable(implicit_operator)
+
+    P = Program("board_calls")
+    U_n = P.state("plasma")
+    f_n = P.solve_fields("f_n", U_n)
+    R = explicit_rate(U_n, f_n)         # -> P.call("explicit_rate", U_n, f_n)
+    L = implicit_operator(f_n)          # -> P.call("implicit_operator", f_n)
+    assert R.vtype == "rhs"
+    assert L.vtype == "operator"
 
 
 def test_board_model_check_passes():

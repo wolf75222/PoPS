@@ -140,6 +140,41 @@ operator-first level. `examples/spec3/board_time_predictor_corrector.py` asserts
 runtime (the board program and the primitive program have identical IR), and the
 `test_time_board.py` IR-identity tests gate it.
 
+```{admonition} One semantic kernel
+:class: important
+There is a single semantic kernel: `adc.model.Module` (spaces, signatures, operators,
+RateBundle) and `adc.time.Program` (P.call / linear_combine / solve_local_linear /
+solve_linear / commit / commit_many). The board facade has NO registry, type system,
+scheduler, codegen, runtime, solve semantics or commit semantics of its own; it only
+builds or calls these Spec 2 objects. If the board and the operator-first level ever seem
+to disagree, the operator-first level is the source of truth.
+```
+
+### `local_linear_operator` is a math object, not a callable operator
+
+`m.local_linear_operator("C(B)", on=U, matrix=[...])` builds a *math object*
+(`LocalLinearOperatorExpr`), not a registry operator. It carries the matrix but cannot be
+called: a Program cannot resolve its field inputs until it is registered. Register it to
+obtain a callable, typed operator:
+
+```python
+C_B = m.local_linear_operator("C(B)", on=U, matrix=[[0, 0, 0], [0, 0, Bz], [0, -Bz, 0]])
+implicit_operator = m.operator("implicit_operator", returns=C_B, inputs=[fields])
+# -> @module.operator(name="implicit_operator",
+#                     signature=(Fields,) >> LocalLinearOperator(U, U),
+#                     kind="local_linear_operator")
+```
+
+`m.rate(...)` and `m.operator(...)` return a callable operator so a board program can write
+`explicit_rate(U_n, fields_n)` / `implicit_operator(fields_n)`, which lower to
+`P.call("explicit_rate", U_n, fields_n)` / `P.call("implicit_operator", fields_n)`. Calling
+the unregistered math object raises a clear error:
+
+```text
+local_linear_operator object 'C(B)' is not a callable operator. Register it with
+m.operator('C(B)', returns=...) or @module.operator(...) first.
+```
+
 ## Typed brick catalog (`adc.lib`)
 
 `adc.lib` is a catalog of descriptors and IR macros, never a Python numerics library.

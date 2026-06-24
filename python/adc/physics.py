@@ -23,8 +23,8 @@ import re
 
 from . import math as _bm
 
-__all__ = ["Model", "Invariant", "FluxHandle", "SourceHandle",
-           "FieldsHandle", "OperatorHandle", "StateHandle", "VectorHandle"]
+__all__ = ["Model", "Invariant", "FluxHandle", "SourceHandle", "FieldsHandle",
+           "LocalLinearOperatorExpr", "CallableOperator", "StateHandle", "VectorHandle"]
 
 
 def _safe_name(name):
@@ -110,15 +110,55 @@ class SourceHandle(_bm.RateTerm):
         return "SourceHandle(%r)" % (self.name,)
 
 
-class OperatorHandle:
-    """A declared local linear operator ``L: U -> U`` (e.g. a Lorentz rotation)."""
+class LocalLinearOperatorExpr:
+    """A LOCAL linear operator object ``L: U -> U`` -- a MATH object, not a callable operator.
 
-    def __init__(self, display_name, reg_name):
+    ``m.local_linear_operator(...)`` returns this; it carries the matrix but is NOT yet a
+    typed registry operator. Register it with ``m.operator(name, returns=...)`` (or
+    ``@module.operator``) to obtain a callable operator. Calling the math object directly
+    is an error -- it cannot resolve its field inputs without a registration.
+    """
+
+    def __init__(self, display_name, matrix, on=None):
         self.name = str(display_name)
-        self.reg_name = str(reg_name)
+        self.matrix = matrix
+        self.on = on
+
+    def __call__(self, *args, **kwargs):
+        raise TypeError(
+            "local_linear_operator object %r is not a callable operator. Register it with "
+            "m.operator(%r, returns=...) or @module.operator(...) first." % (self.name, self.name))
 
     def __repr__(self):
-        return "OperatorHandle(%r)" % (self.name,)
+        return "LocalLinearOperatorExpr(%r)" % (self.name,)
+
+
+class CallableOperator:
+    """A registered, typed operator usable in a time Program: ``op(U, fields, ...)``.
+
+    Returned by ``m.rate`` / ``m.operator``. Calling it with Program values lowers to
+    ``P.call(name, ...)`` on the values' Program (binding the model's operator registry on
+    first use), so a board-style program can write ``explicit_rate(U_n, fields_n)`` and get
+    the same IR as the explicit operator-first ``P.call("explicit_rate", U_n, fields_n)``.
+    """
+
+    def __init__(self, name, model):
+        self.name = str(name)
+        self.reg_name = self.name
+        self._model = model     # bound to its FRESH module at call time (sees all operators)
+
+    def __call__(self, *args, name=None):
+        prog = next((a.prog for a in args if hasattr(a, "prog")), None)
+        if prog is None:
+            raise ValueError(
+                "operator %r must be called with time-Program values (inside a Program); "
+                "got %r" % (self.name, args))
+        if getattr(prog, "_registry", None) is None and self._model is not None:
+            prog.bind_operators(self._model.module)
+        return prog.call(self.name, *args, name=name)
+
+    def __repr__(self):
+        return "CallableOperator(%r)" % (self.name,)
 
 
 class FieldsHandle:
@@ -162,6 +202,7 @@ class Model:
         self._fluxes = {}
         self._sources = {}
         self._operators = {}
+        self._operator_inputs = {}  # registered op name -> declared field-input names
         self._aliases = {}          # board operator name -> registered op name
         self._invariants = {}
         self._riemann = None        # selected Riemann descriptor (board surface)
@@ -264,14 +305,13 @@ class Model:
         return h
 
     def local_linear_operator(self, name, on=None, matrix=None):
-        """Declare a named local linear operator ``L: U -> U`` (an n x n matrix)."""
+        """Build a local linear operator ``L: U -> U`` as a MATH object (not a callable
+        operator). It carries the matrix; register it with :meth:`operator` (or
+        ``@module.operator``) to obtain a callable operator. Calling the math object
+        directly raises a clear error -- see :class:`LocalLinearOperatorExpr`."""
         if matrix is None:
             raise ValueError("local_linear_operator(%r) requires matrix=" % (name,))
-        reg = _safe_name(name)
-        self._dsl.linear_source(reg, [[self._to_expr(e) for e in row] for row in matrix])
-        h = OperatorHandle(name, reg)
-        self._operators[reg] = h
-        return h
+        return LocalLinearOperatorExpr(name, matrix, on=on)
 
     def solve_field(self, name, equation=None, outputs=None, solver=None):
         """Declare an elliptic field solve ``-laplacian(phi) == rhs``.
@@ -305,7 +345,7 @@ class Model:
             raise ValueError("rate left-hand side must be ddt(U) / rate(U)")
         flux, sources = self._destructure_rate(equation.rhs)
         self._dsl.rate_operator(_safe_name(name), flux=flux, sources=sources)
-        return name
+        return CallableOperator(_safe_name(name), self)
 
     def finite_volume_rate(self, name, flux=None, riemann=None, reconstruction=None,
                            sources=()):
@@ -324,14 +364,31 @@ class Model:
         self._dsl.rate_operator(_safe_name(name), flux=True, sources=src_names)
         return name
 
-    def operator(self, name, handle):
-        """Give an operator a role name (e.g. ``implicit_operator``) without
-        re-registering it: records ``name -> handle`` so a Program can resolve it."""
-        reg = getattr(handle, "reg_name", None)
-        if reg is None:
-            raise TypeError("operator(%r) expects an operator handle" % (name,))
-        self._aliases[name] = reg
-        return handle
+    def operator(self, name, handle=None, *, inputs=None, returns=None):
+        """Register a typed, callable operator under ``name`` from a math object.
+
+        ``returns`` (or the positional ``handle``) is the operator body; ``inputs`` names
+        its field dependencies (metadata for requirements). A
+        :class:`LocalLinearOperatorExpr` registers as a ``local_linear_operator``
+        ``Fields -> LocalLinearOperator(U, U)``. Returns a :class:`CallableOperator`.
+        """
+        obj = returns if returns is not None else handle
+        if obj is None:
+            raise TypeError("operator(%r) requires returns= (or a positional handle)" % (name,))
+        reg = _safe_name(name)
+        if isinstance(obj, LocalLinearOperatorExpr):
+            self._dsl.linear_source(
+                reg, [[self._to_expr(e) for e in row] for row in obj.matrix])
+            self._operators[reg] = obj
+            self._operator_inputs[reg] = tuple(inputs) if inputs else ()
+            return CallableOperator(reg, self)
+        if isinstance(obj, CallableOperator):
+            # aliasing an already-registered operator under a new role name
+            self._aliases[name] = obj.reg_name
+            return obj
+        raise TypeError(
+            "operator(%r): returns= must be a local_linear_operator object or a "
+            "registered operator; got %r" % (name, obj))
 
     def riemann(self, name, flux=None, pressure=None, velocity=None, sound_speed=None,
                 wave_speeds=None, contact_speed=None, star_state=None):
