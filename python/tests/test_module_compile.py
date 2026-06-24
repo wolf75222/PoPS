@@ -83,10 +83,44 @@ def test_module_requires_one_state_space():
     print("OK  a Module to compile must declare exactly one StateSpace")
 
 
+def test_decorator_body_rejected():
+    mod = model.Module("deco")
+    u = mod.state_space("U", ("rho",))
+    fields = mod.field_space("fields", ("phi",))
+
+    @mod.operator(name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source")
+    def electric(state, flds):  # a callable body, not an IR expression
+        return None
+
+    try:
+        mod.to_dsl()
+        raise AssertionError("expected a no-IR-body error for a decorator-authored operator")
+    except ValueError as exc:
+        assert "no IR body" in str(exc)
+    print("OK  a decorator/callable operator body is rejected at compile")
+
+
+def test_multiple_field_operators_rejected():
+    mod = model.Module("twofields")
+    u = mod.state_space("U", ("rho",))
+    f1 = mod.field_space("fields", ("phi",))
+    rho = dsl.Var("rho", "cons")
+    mod.operator(name="fields_from_state", signature=(u,) >> f1, kind="field_operator", expr=rho)
+    mod.operator(name="psi", signature=(u,) >> f1, kind="field_operator", expr=rho)
+    try:
+        mod.to_dsl()
+        raise AssertionError("expected a single-field_operator error")
+    except ValueError as exc:
+        assert "one field_operator" in str(exc)
+    print("OK  multiple field_operators are rejected (single elliptic solve)")
+
+
 def main():
     test_module_lowers_to_dsl()
     test_pure_module_program_emits()
     test_module_requires_one_state_space()
+    test_decorator_body_rejected()
+    test_multiple_field_operators_rejected()
     print("OK  test_module_compile")
 
 

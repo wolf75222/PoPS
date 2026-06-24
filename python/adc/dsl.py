@@ -4601,8 +4601,18 @@ def _module_to_model(module):
         _declare_aux(a.name)
     if module._eigenvalues is not None:
         m.eigenvalues(x=module._eigenvalues["x"], y=module._eigenvalues["y"])
+    # Codegen kinds need an IR (Expr) body, supplied via Module.operator(..., expr=...). A
+    # decorator-authored operator stores a Python callable instead, which the dsl methods cannot
+    # lower; reject it loud rather than fail cryptically deep in the codegen.
+    _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
+                      "projection")
+    n_field_ops = 0
     for op in module.operator_registry():
         body = op.body
+        if op.kind in _CODEGEN_KINDS and (body is None or callable(body)):
+            raise ValueError(
+                "compile_problem: operator %r (%s) has no IR body; a compilable Module operator "
+                "needs an expression body (Module.operator(..., expr=...))" % (op.name, op.kind))
         if op.kind == "grid_operator":
             if op.name in ("flux", "flux_default"):
                 m.flux(x=body["x"], y=body["y"])
@@ -4613,6 +4623,11 @@ def _module_to_model(module):
         elif op.kind == "local_linear_operator":
             m.linear_source(op.name, body)
         elif op.kind == "field_operator":
+            n_field_ops += 1
+            if n_field_ops > 1:
+                raise ValueError(
+                    "compile_problem: a Module currently supports one field_operator (the default "
+                    "elliptic solve); multiple solved fields are deferred (operator %r)" % op.name)
             m.elliptic_rhs(body)
         elif op.kind == "local_rate":
             low = op.lowering
