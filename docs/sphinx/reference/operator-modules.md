@@ -99,6 +99,16 @@ to the dsl method of its kind: `grid_operator` to `flux`, `local_source` to `sou
 `module.to_dsl()` to build the block model for `sim.add_equation`. `examples/operator_modules/
 predictor_corrector_operator_first.py` is authored this way.
 
+## Install-time requirement validation
+
+The compiled `problem.so` carries, per operator, the aux fields its body reads. When the program is
+installed, `System.install_program` reads that descriptor and fails loud -- BEFORE installing --
+if the simulation did not provide a required field: e.g. an operator reading `B_z` raises "operator
+'lorentz' requires aux field 'B_z', but simulation did not provide it" unless `set_magnetic_field`
+was called first. The hard requirements are the user-supplied application fields `B_z`
+(`set_magnetic_field`) and `T_e`; derived fields (`phi`, `grad_x`, `grad_y`) are always available
+from the elliptic solve and never block. A pre-Spec-2 `.so` carries no descriptor and is unaffected.
+
 ## Compatibility with `adc.dsl.Model`
 
 `adc.dsl.Model` is the **PDE convenience facade** over a module: its `flux` / `source_term` /

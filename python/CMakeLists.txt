@@ -271,6 +271,14 @@ add_test(NAME test_module_compile
 set_tests_properties(test_module_compile PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# Validation des prerequis a l'installation (ADC-446, spec 2 critere 24) : le problem.so porte, par
+# operateur, les champs aux que son corps lit ; System.install_program rejette AVANT installation une
+# simulation qui ne fournit pas un champ requis (B_z), avec un message spec. Compile+install sur ROMEO.
+add_test(NAME test_install_requirement_validation
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_install_requirement_validation.py)
+set_tests_properties(test_install_requirement_validation PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
 # linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit

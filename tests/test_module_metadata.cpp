@@ -10,6 +10,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using namespace adc::runtime::program;
 
@@ -58,6 +59,20 @@ int main() {
   if (self != nullptr) {
     dlclose(self);
   }
+
+  // (4) required_aux parses the "aux" array of an operator's requirements JSON (ADC-446, the
+  // install-time validation input). A flat, closed vocabulary, scanned without a JSON library.
+  check(required_aux("{\"kind\":\"local_source\",\"aux\":[\"grad_x\",\"grad_y\"]}") ==
+            std::vector<std::string>({"grad_x", "grad_y"}),
+        "required_aux extracts a two-name aux array");
+  check(required_aux("{\"kind\":\"local_linear_operator\",\"aux\":[\"B_z\"]}") ==
+            std::vector<std::string>({"B_z"}),
+        "required_aux extracts a single-name aux array");
+  check(required_aux("{\"kind\":\"local_rate\"}").empty(),
+        "required_aux on requirements without an aux key is empty");
+  check(required_aux("{\"kind\":\"field_operator\",\"aux\":[]}").empty(),
+        "required_aux on an empty aux array is empty");
+  check(required_aux("").empty(), "required_aux on an empty string is empty");
 
   std::printf(failures == 0 ? "OK  test_module_metadata\n" : "FAILED test_module_metadata\n");
   return failures == 0 ? 0 : 1;

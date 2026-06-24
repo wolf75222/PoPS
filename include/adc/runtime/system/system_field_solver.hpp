@@ -88,6 +88,22 @@ class SystemFieldSolver {
   /// Canonical component of T_e (after phi/grad/B_z); cf. adc::Aux and AUX_CANONICAL on the DSL side.
   static constexpr int kTeComp = kAuxBaseComps + 1;  // = 4
 
+  /// True if the named aux field is provided at install time, for Spec-2 criterion 24 install-time
+  /// requirement validation (ADC-446). Only the user-supplied APPLICATION fields can be a hard
+  /// requirement: B_z (System::set_magnetic_field) and T_e (System::set_electron_temperature). The
+  /// derived fields phi/grad_x/grad_y are always available (the elliptic solver builds lazily from
+  /// the default Poisson config), and a generic named aux is keyed only by component C++-side (its
+  /// name is not retained), so neither can be a hard failure here -- they return true (cannot block).
+  bool provides_aux(const std::string& name) const {
+    if (name == "B_z") {
+      return !bz_field_.empty();
+    }
+    if (name == "T_e") {
+      return te_src_ >= 0;
+    }
+    return true;
+  }
+
   // --- OWNED state (elliptic solve + coefficient fields + application buffers) --------
   // Poisson configuration (elliptic solver built lazily).
   std::string p_rhs = "charge_density";

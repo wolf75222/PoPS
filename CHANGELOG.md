@@ -20,6 +20,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Install-time operator-requirement validation** (ADC-446, epic ADC-436, spec 2 criterion 24):
+  `System.install_program` now reads the compiled `problem.so`'s GeneratedModule descriptor and
+  rejects, BEFORE installing the program, a simulation that does not provide an aux field an operator
+  requires -- e.g. "operator 'lorentz' requires aux field 'B_z', but simulation did not provide it"
+  -- instead of a cryptic failure mid-step. The user-supplied application fields `B_z`
+  (`set_magnetic_field`) and `T_e` are the hard requirements; derived/lazy fields cannot block. A
+  pre-Spec-2 `.so` carries no descriptor and is unaffected. New `required_aux` parser in
+  `module_metadata.hpp` (covered by `tests/test_module_metadata.cpp`) and
+  `python/tests/test_install_requirement_validation.py` (ROMEO).
 - **Pure `adc.model.Module` compiles** (ADC-447, epic ADC-436, spec 2 "model-free"): a Module
   authored directly -- typed spaces, operators with IR (`dsl.Expr`) bodies (builder mode `expr=`),
   the Riemann wave speeds via `Module.eigenvalues`, and a composite rate via `Module.rate_operator`
