@@ -524,9 +524,18 @@ class Module:
         """The requirements dict of operator ``name`` (aux / solver / params / ...)."""
         return dict(self._registry.get(name).requirements)
 
-    def operator_capabilities(self, name):
-        """The capabilities dict of operator ``name``."""
-        return dict(self._registry.get(name).capabilities)
+    def operator_capabilities(self, name, **caps):
+        """Get or set the capabilities of operator ``name``.
+
+        Called with only a name it is a getter (returns a copy of the dict). Called with
+        keyword capabilities (e.g. ``cacheable=True``, ``stale_allowed=True``,
+        ``requires_fresh_inputs=True``) it UPDATES them in place and returns the new dict.
+        ``cacheable`` is consumed by the Program scheduler to validate a ``hold`` schedule.
+        """
+        op = self._registry.get(name)
+        if caps:
+            op.capabilities.update(caps)
+        return dict(op.capabilities)
 
     def module_hash(self):
         """Stable hash of the ModuleSpec for the compiled-artifact cache (Spec 2, S2-7).
