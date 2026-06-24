@@ -66,6 +66,22 @@ class Space:
         return "%s(%r, components=%r)" % (
             type(self).__name__, self.name, list(self.components))
 
+    # Operator-first signature sugar: ``U >> Fields`` and ``(U, Fields) >> Rate(U)``.
+    def __rshift__(self, output):
+        """``space >> output`` -- a Signature with this space as the sole input."""
+        return Signature((self,), output)
+
+    def __rrshift__(self, inputs):
+        """``(a, b) >> space`` -- this space is the output, the left tuple the inputs."""
+        return Signature(_as_signature_inputs(inputs), self)
+
+
+def _as_signature_inputs(inputs):
+    """Normalize the left side of ``>>`` to a tuple of input types."""
+    if isinstance(inputs, (tuple, list)):
+        return tuple(inputs)
+    return (inputs,)
+
 
 class StateSpace(Space):
     """A conservative state space: the components of ``U`` plus optional physical
@@ -134,6 +150,10 @@ class LocalLinearOperator:
     def __hash__(self):
         return hash(self._key())
 
+    def __rrshift__(self, inputs):
+        """``(fields,) >> LocalLinearOperator(U, U)`` signature sugar."""
+        return Signature(_as_signature_inputs(inputs), self)
+
     def __repr__(self):
         return "LocalLinearOperator(%r, %r)" % (self.domain_name, self.range_name)
 
@@ -155,6 +175,10 @@ class MatrixFreeOperator:
 
     def __hash__(self):
         return hash(self._key())
+
+    def __rrshift__(self, inputs):
+        """``(v,) >> MatrixFreeOperator(V, V)`` signature sugar."""
+        return Signature(_as_signature_inputs(inputs), self)
 
     def __repr__(self):
         return "MatrixFreeOperator(%r, %r)" % (self.domain_name, self.range_name)
@@ -195,7 +219,7 @@ class Operator:
     numerics; the body lives in the model / codegen."""
 
     def __init__(self, name, kind, signature, capabilities=None,
-                 requirements=None, source=None, lowering=None):
+                 requirements=None, source=None, lowering=None, body=None):
         if kind not in OPERATOR_KINDS:
             raise ValueError("operator %r: unknown kind %r (expected one of %s)"
                              % (name, kind, ", ".join(OPERATOR_KINDS)))
@@ -210,6 +234,9 @@ class Operator:
         # Codegen hint consumed by the lowering of a typed P.call (e.g. a composite
         # rate operator carries {"flux", "sources", "fluxes"}); empty for primitives.
         self.lowering = dict(lowering) if lowering else {}
+        # OPTIONAL body: the callable / expression that builds the operator IR when the
+        # operator is declared via Module.operator; None for a derived dsl operator.
+        self.body = body
 
     def __repr__(self):
         return "Operator(%r, kind=%r, %r)" % (
@@ -295,3 +322,153 @@ class OperatorRegistry:
 
     def __repr__(self):
         return "OperatorRegistry(%s)" % ", ".join(self._order)
+
+
+class ParameterSpace:
+    """A named scalar parameter of a Module: a default value and a dtype. The Module
+    holds only the declaration; the runtime value belongs to the Simulation (read in a
+    generated kernel via ProgramContext / ModuleContext, never frozen at codegen)."""
+
+    def __init__(self, name, default=0.0, dtype="real"):
+        self.name = str(name)
+        self.default = default
+        self.dtype = str(dtype)
+
+    def __repr__(self):
+        return "ParameterSpace(%r, default=%r, dtype=%r)" % (
+            self.name, self.default, self.dtype)
+
+
+class AuxSpace:
+    """A named auxiliary field provided or updated by the Simulation (e.g. an externally
+    imposed magnetic field, a mask). Distinct from a FieldSpace, which an operator
+    produces; an AuxSpace is imposed runtime data the operators may read."""
+
+    def __init__(self, name, kind="cell_scalar"):
+        self.name = str(name)
+        self.kind = str(kind)
+
+    def __repr__(self):
+        return "AuxSpace(%r, kind=%r)" % (self.name, self.kind)
+
+
+class Module:
+    """A model as typed spaces + a registry of typed operators (Spec 2, operator-first).
+
+    A Module owns the RULES -- state/field spaces, parameters, aux declarations and the
+    typed operators a Program composes by signature. The Simulation owns the DATA
+    (grid, arrays, solvers, clock). :class:`adc.dsl.Model` is the PDE convenience facade
+    that populates a Module's registry (``source_term`` / ``linear_source`` /
+    ``elliptic_field`` / ``flux`` register typed operators); a Module can also be built
+    directly with ``state_space`` / ``field_space`` / ``parameters`` / ``aux_fields`` /
+    ``operator``. A generic Program bound to ``module.operator_registry()`` runs against
+    any Module that provides operators with the expected signatures.
+    """
+
+    def __init__(self, name):
+        self.name = str(name)
+        self._state_spaces = {}
+        self._field_spaces = {}
+        self._params = {}
+        self._aux = {}
+        self._registry = OperatorRegistry()
+
+    # --- spaces ---
+    def state_space(self, name="U", components=(), roles=None, layout="cell",
+                    storage="multifab"):
+        """Declare and return a :class:`StateSpace`."""
+        space = StateSpace(name, components, roles, layout, storage)
+        self._state_spaces[space.name] = space
+        return space
+
+    def field_space(self, name, components=(), layout="cell"):
+        """Declare and return a :class:`FieldSpace`."""
+        space = FieldSpace(name, components, layout)
+        self._field_spaces[space.name] = space
+        return space
+
+    # --- parameters / aux ---
+    def param(self, name, default=0.0, dtype="real"):
+        """Declare and return one :class:`ParameterSpace`."""
+        p = ParameterSpace(name, default, dtype)
+        self._params[p.name] = p
+        return p
+
+    def parameters(self, **defaults):
+        """Declare several parameters by keyword; return ``{name: ParameterSpace}``."""
+        return {k: self.param(k, v) for k, v in defaults.items()}
+
+    def aux_field(self, name, kind="cell_scalar"):
+        """Declare and return one :class:`AuxSpace`."""
+        a = AuxSpace(name, kind)
+        self._aux[a.name] = a
+        return a
+
+    def aux_fields(self, **kinds):
+        """Declare several aux fields by keyword; return ``{name: AuxSpace}``."""
+        return {k: self.aux_field(k, v) for k, v in kinds.items()}
+
+    # --- operators ---
+    def operator(self, name=None, signature=None, kind=None, capabilities=None,
+                 requirements=None, lowering=None, expr=None):
+        """Register a typed operator.
+
+        Builder mode (``expr`` given) registers the operator immediately and returns the
+        :class:`Operator`. Decorator mode (no ``expr``) returns a decorator that records
+        the decorated body as the operator and returns it unchanged::
+
+            @module.operator(name="explicit_rhs",
+                             signature=(U, Fields) >> Rate(U), kind="local_rate")
+            def explicit_rhs(U, fields):
+                ...
+        """
+        if name is None or signature is None or kind is None:
+            raise ValueError("module.operator requires name, signature and kind")
+        if not isinstance(signature, Signature):
+            raise TypeError(
+                "module.operator(%r): signature must be a Signature (use the >> sugar or "
+                "Signature(inputs, output)); got %r" % (name, signature))
+
+        def _register(body):
+            op = Operator(name, kind, signature, capabilities=capabilities,
+                          requirements=requirements, lowering=lowering, source="module",
+                          body=body)
+            self._registry.register(op)
+            return op
+
+        if expr is not None:
+            return _register(expr)
+
+        def decorator(func):
+            _register(func)
+            return func
+
+        return decorator
+
+    def adopt_registry(self, registry):
+        """Use ``registry`` as this Module's operator registry (the dsl.Model facade adopts
+        the derived registry of its HyperbolicModel). Returns ``self``."""
+        if not isinstance(registry, OperatorRegistry):
+            raise TypeError("adopt_registry expects an OperatorRegistry")
+        self._registry = registry
+        return self
+
+    def operator_registry(self):
+        """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
+        return self._registry
+
+    # --- introspection ---
+    def state_spaces(self):
+        return dict(self._state_spaces)
+
+    def field_spaces(self):
+        return dict(self._field_spaces)
+
+    def params(self):
+        return dict(self._params)
+
+    def aux(self):
+        return dict(self._aux)
+
+    def __repr__(self):
+        return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))

@@ -5009,6 +5009,22 @@ class Model:
         HyperbolicModel.operator_registry."""
         return self._m.operator_registry(state_name)
 
+    @property
+    def module(self):
+        """The adc.model.Module view of this PDE model (Spec 2, operator-first): its typed
+        StateSpace / FieldSpace and the OperatorRegistry that source_term / linear_source /
+        elliptic_field / flux / rate_operator populate. dsl.Model is the PDE convenience
+        facade; the Module is the model-free view a generic Program binds to (P.bind_operators).
+        The Module carries no numerics; codegen still reads this Model via compile_problem."""
+        mod = _model.Module(self.name)
+        st = self._m.state_space()
+        mod.state_space(st.name, st.components, roles=st.roles, layout=st.layout,
+                        storage=st.storage)
+        fs = self._m.field_space()
+        mod.field_space(fs.name, fs.components, layout=fs.layout)
+        mod.adopt_registry(self._m.operator_registry())
+        return mod
+
     def _model_hash(self):
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)

@@ -20,6 +20,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Public `adc.model.Module`** (ADC-439, epic ADC-436, spec 2 "operator-first"): the model-free
+  front-end. `Module` holds typed spaces and a registry of typed operators
+  (`state_space` / `field_space` / `parameters` / `aux_fields` / `operator` as a builder or a
+  decorator), with `(U, Fields) >> Rate(U)` signature sugar and `ParameterSpace` / `AuxSpace`.
+  `dsl.Model` becomes the PDE convenience facade: `m.module` exposes the typed spaces and the
+  derived OperatorRegistry that `source_term` / `linear_source` / `elliptic_field` / `flux`
+  populate. `adc.model` is exported from the package; the same generic operator-first Program is
+  reusable across any Module with matching signatures. New `python/tests/test_operator_module.py`.
 - **Typed `P.call` and `m.rate_operator`** (ADC-438, epic ADC-436, spec 2 "operator-first"):
   `Program.bind_operators(model)` binds the typed registry; `P.call(name, *args, name=None)` resolves
   an operator by name, type-checks the arguments against its `Signature` (clear errors on unknown

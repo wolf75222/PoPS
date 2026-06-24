@@ -215,6 +215,14 @@ add_test(NAME test_operator_call
 set_tests_properties(test_operator_call PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# adc.model.Module API + dsl.Model facade (ADC-439, spec 2 operator-first) : Module (espaces types +
+# registre d'operateurs), sucre de signature >>, operateurs builder/decorateur, parametres/aux, et
+# dsl.Model.module qui expose le registre derive. Un meme Program generique reutilise sur deux modules.
+add_test(NAME test_operator_module
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_module.py)
+set_tests_properties(test_operator_module PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
 # linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit
