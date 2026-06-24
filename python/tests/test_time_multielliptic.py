@@ -178,6 +178,26 @@ def _amr_named():
 chk(raises(NotImplementedError, _amr_named),
     "a named elliptic field on target='amr_system' raises NotImplementedError (deferred)")
 
+
+# The flat-ABI backends (aot: ADC_DEFINE_COMPILED_BLOCK; jit: extern "C" factory) emit the named RHS
+# brick via the shared _emit_bricks but have NO hook to register the field on the System. Reject them
+# loud at the EMIT boundary, not silently (a dropped field would only fail at runtime: "System: unknown
+# named elliptic field"). Mirrors the target='amr_system' guard.
+def _aot_named():
+    named_model("me_aot")._m.emit_cpp_aot_source()
+
+
+chk(raises(NotImplementedError, _aot_named),
+    "a named elliptic field on backend='aot' raises NotImplementedError at emit (deferred)")
+
+
+def _jit_named():
+    named_model("me_jit")._m.emit_cpp_so_source()
+
+
+chk(raises(NotImplementedError, _jit_named),
+    "a named elliptic field on backend='jit' raises NotImplementedError at emit (deferred)")
+
 # NO REGRESSION: a default-only model lowers IDENTICALLY whether or not the named feature exists. We
 # assert the default program never emits the named (3-arg) ctx call (above) AND that adding a named
 # field to a SECOND model leaves the default model's lowering untouched.

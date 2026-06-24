@@ -3519,6 +3519,15 @@ class HyperbolicModel:
             raise ValueError("backend 'prototype' (JIT, IModel) : projection ponctuelle "
                              "(m.projection) non transportee par ce chemin ; utiliser "
                              "backend='aot' ou 'production'")
+        # NAMED elliptic fields (ADC-428): the JIT path (extern "C" factory, IModel virtual dispatch)
+        # has NO hook to register the field on the System -- _emit_bricks would emit the named RHS brick
+        # but it would be silently dropped, failing only at runtime ("System: unknown named elliptic
+        # field"). Reject loud here, like the target='amr_system' guard; available on backend='production'.
+        if self._elliptic_fields:
+            raise NotImplementedError(
+                "elliptic_field (named multi-elliptic, ADC-428) on backend='jit' is not supported "
+                "yet; the JIT extern-C factory has no hook to register named elliptic fields on the "
+                "System. Use backend='production'. Declared: %s" % sorted(self._elliptic_fields))
         nv, bricks, composite = self._emit_bricks(name, hoist_reciprocals=hoist_reciprocals)
         return ('#include <adc/runtime/dynamic/dynamic_model.hpp>\n'
                 '#include <adc/physics/bricks/bricks.hpp>\n'  # CompositeModel + NoSource + bricks
@@ -3562,6 +3571,16 @@ class HyperbolicModel:
         behind the extern "C" ABI of compiled_block_abi.hpp. The .so RUNS the PRODUCTION path
         (assemble_rhs<Limiter, Flux>, the core's SSPRK2/IMEX) on the generated model: inlined numerics,
         identical to a native add_block block. As opposed to the "jit" backend (IModel, virtual dispatch)."""
+        # NAMED elliptic fields (ADC-428): the flat-ABI loader macro (ADC_DEFINE_COMPILED_BLOCK) has NO
+        # mechanism to call register_elliptic_field / set_block_elliptic_field, so _emit_bricks would emit
+        # the named RHS brick but the field would be silently dropped, failing only at runtime ("System:
+        # unknown named elliptic field"). Reject loud here, like the target='amr_system' guard in
+        # emit_cpp_native_loader; the named runtime is available on backend='production' (native loader).
+        if self._elliptic_fields:
+            raise NotImplementedError(
+                "elliptic_field (named multi-elliptic, ADC-428) on backend='aot' is not supported yet; "
+                "the flat-ABI compiled block cannot register named elliptic fields on the System. Use "
+                "backend='production'. Declared: %s" % sorted(self._elliptic_fields))
         nv, bricks, composite = self._emit_bricks(name, hoist_reciprocals=hoist_reciprocals)
         return ('#include <adc/runtime/builders/compiled/compiled_block_abi.hpp>\n'
                 '#include <adc/physics/bricks/bricks.hpp>\n'  # CompositeModel + NoSource + bricks

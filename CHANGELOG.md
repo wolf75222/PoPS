@@ -54,9 +54,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   of raising `NotImplementedError`; a source/flux reads the solved field via its named aux. The default
   Poisson path (`solve_fields` without `field=`) is byte-identical. New `System` seam
   (`solve_fields_from_state(field, ...)`, `register_elliptic_field`, `set_block_elliptic_field`) +
-  `ProgramContext` overload. Deferred (documented, rejected loud): the `aot` flat-ABI named symbols,
-  the `amr_system` target, and the polar (ring) named path. New
-  `python/tests/test_time_multielliptic.py`.
+  `ProgramContext` overload. Deferred, rejected loud at the emit boundary (not silently dropped to a
+  runtime error): the `aot` and `jit` flat-ABI backends (`emit_cpp_aot_source` /
+  `emit_cpp_so_source` raise `NotImplementedError` when a named field is declared, since the loader
+  macro / extern-C factory cannot register it), the `amr_system` target, and the polar (ring) named
+  path. New `python/tests/test_time_multielliptic.py`.
 - **`adc.time.std` library completion + `@P.step` decorator** (ADC-423, epic ADC-399): pure-Python
   macros that lower to the existing Program IR (no new C++ stepper) -- `std.rk` (generic explicit
   Butcher tableau; `RK4_TABLEAU` reproduces the `rk4` macro IR byte for byte, `SSPRK2_TABLEAU` gives
