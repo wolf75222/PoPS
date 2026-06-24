@@ -20,6 +20,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **GeneratedModule metadata in the compiled `.so`** (ADC-442, epic ADC-436, spec 2 "operator-first"):
+  a combined model+program `problem.so` now carries, alongside `GeneratedProgram` (the installed
+  step), a **GeneratedModule** descriptor -- `extern "C"` accessors (`adc_module_operator_count` /
+  `_name` / `_kind` / `_signature` / `_requirements`, `_state_space_*`, `_field_space_*`) exposing the
+  typed operator registry by integer `OperatorId` (the registration index). New
+  `include/adc/runtime/program/module_metadata.hpp` reads the descriptor from a dlopen'd handle
+  (`OperatorId` / `SpaceId`, `OperatorMetadata`, `ModuleMetadata`, `read_module_metadata`), degrading
+  to `present=false` on a pre-Spec-2 `.so`. The descriptor is read once at install (introspection /
+  requirement validation); the step body never references it, so operators stay inlined and there is
+  no string lookup in any hot kernel. New `tests/test_module_metadata.cpp` and
+  `python/tests/test_module_codegen.py`.
+
 - **Operator-first example and docs** (ADC-444, epic ADC-436, spec 2):
   `examples/operator_modules/predictor_corrector_operator_first.py` builds the spec-1 Example 5
   physics with `adc.model` + the generic `predictor_corrector_local_linear` macro (no physics term in

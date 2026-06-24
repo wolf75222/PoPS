@@ -247,6 +247,14 @@ add_test(NAME test_module_hash
 set_tests_properties(test_module_hash PROPERTIES
   ENVIRONMENT "${_adc_py_test_env}")
 
+# Bloc GeneratedModule emis dans la .so (ADC-442, spec 2) : les accesseurs extern "C" adc_module_*
+# (registre type par OperatorId) coexistent avec adc_install_program et N'APPARAISSENT PAS dans le
+# corps du pas (operateurs inlines -> pas de lookup string en chemin chaud). Codegen-text, pur Python.
+add_test(NAME test_module_codegen
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_module_codegen.py)
+set_tests_properties(test_module_codegen PROPERTIES
+  ENVIRONMENT "${_adc_py_test_env}")
+
 # adc.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
 # linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit

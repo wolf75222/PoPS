@@ -1730,7 +1730,54 @@ class Program:
         has_dt_bound, dt_bound_body = self._emit_dt_bound(model)
         return _PROGRAM_CPP_TEMPLATE.format(
             name=json.dumps(self.name), hash=self._ir_hash(), prelude=prelude, body=body,
-            has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body)
+            has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
+            module_metadata=self._emit_module_metadata(model))
+
+    def _emit_module_metadata(self, model=None):
+        """C++ source of the GeneratedModule metadata the .so exports (Spec 2 / ADC-442).
+
+        A combined model+program .so carries, alongside ``GeneratedProgram`` (the step), a
+        ``GeneratedModule`` descriptor: ``extern "C"`` accessors exposing the typed operator registry
+        -- a count and, per integer ``OperatorId`` (the array index), the operator name / kind /
+        signature / requirements -- plus the state and field space names. These are read ONCE at
+        install (introspection + requirement validation, ``module_metadata.hpp``); the step body never
+        calls them, so operators stay inlined and there is no string lookup in any hot kernel.
+        ``model=None`` emits an empty module (count 0). The metadata is derived from the model's typed
+        registry, so it does not perturb the program IR hash.
+        """
+        ops, states, fields = [], [], []
+        if model is not None and hasattr(model, "operator_registry"):
+            reg = model.operator_registry()
+            ops = [reg.get(nm) for nm in reg.names()]
+            if hasattr(model, "state_space"):
+                states = [model.state_space().name]
+            if hasattr(model, "field_space"):
+                fields = [model.field_space().name]
+
+        def table(accessor, values):
+            cases = "".join('    case %d: return %s;\n' % (i, json.dumps(v))
+                            for i, v in enumerate(values))
+            return ('extern "C" const char* adc_module_%s(int i) {\n'
+                    '  switch (i) {\n%s    default: return "";\n  }\n}\n' % (accessor, cases))
+
+        def req_json(op):
+            return json.dumps({"kind": op.kind, **op.requirements})
+
+        parts = [
+            "// GeneratedModule metadata (Spec 2 / ADC-442): the typed operator registry exposed by\n"
+            "// the .so for introspection + install-time validation. OperatorId = the array index.\n"
+            "// NOT called from any hot kernel -- operators are inlined at codegen.\n",
+            'extern "C" int adc_module_operator_count() { return %d; }\n' % len(ops),
+            'extern "C" int adc_module_state_space_count() { return %d; }\n' % len(states),
+            'extern "C" int adc_module_field_space_count() { return %d; }\n' % len(fields),
+            table("operator_name", [op.name for op in ops]),
+            table("operator_kind", [op.kind for op in ops]),
+            table("operator_signature", [repr(op.signature) for op in ops]),
+            table("operator_requirements", [req_json(op) for op in ops]),
+            table("state_space_name", states),
+            table("field_space_name", fields),
+        ]
+        return "".join(parts)
 
     def _emit_dt_bound(self, model=None):
         """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
@@ -3174,6 +3221,7 @@ extern "C" const char* adc_program_abi_key() {{ return ADC_ABI_KEY_LITERAL; }}
 extern "C" const char* adc_program_name() {{ return {name}; }}
 extern "C" const char* adc_program_hash() {{ return "{hash}"; }}
 
+{module_metadata}
 extern "C" void adc_install_program(void* sys) {{
   adc::runtime::program::ProgramContext ctx(sys);
 {prelude}

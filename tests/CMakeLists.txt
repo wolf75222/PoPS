@@ -676,6 +676,15 @@ target_compile_definitions(test_program_loader PRIVATE
   ADC_TEST_TMPDIR="${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME test_program_loader COMMAND test_program_loader)
 
+# --- GeneratedModule metadata reader (ADC-442, spec 2) : module_metadata.hpp lit le registre
+# d'operateurs type qu'une problem.so exporte (introspection + validation a l'install). Lien dl
+# (dlopen/dlsym) comme les autres tests de chargement ; le read d'une vraie .so generee est valide
+# sur le chemin Kokkos/AOT (ROMEO), ici on epingle la structure + la degradation pre-Spec-2. ---
+add_executable(test_module_metadata test_module_metadata.cpp)
+target_link_libraries(test_module_metadata PRIVATE adc::adc ${CMAKE_DL_LIBS} adc_dev_options)
+add_test(NAME test_module_metadata COMMAND test_module_metadata)
+set_tests_properties(test_module_metadata PROPERTIES LABELS "core" TIMEOUT 600)
+
 # --- descripteur de variables : roles physiques (index_of(role)) ---
 adc_add_test(test_variable_role)
 
