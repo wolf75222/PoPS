@@ -25,7 +25,7 @@ import hashlib
 import json
 import types
 
-__all__ = ["Program", "std", "CompiledTime"]
+__all__ = ["Program", "std", "CompiledTime", "StageStateSet"]
 
 
 class _Coeff:
@@ -347,6 +347,18 @@ class Value:
             return self._scalar_op(other, "div", swap=True)
         return NotImplemented
 
+    # --- operator application (Spec 3 board notation): operator @ state -> apply ---
+    def __matmul__(self, other):
+        """``L @ U`` -- apply a linear-source operator value ``L`` to a state ``U``.
+
+        Returns the RHS-like value ``P.apply(operator=L, state=U)``. For
+        ``operator @ unknown(name)`` (a board solve), this returns ``NotImplemented``
+        so :meth:`adc.math.Unknown.__rmatmul__` builds the solve left-hand side.
+        """
+        if self.vtype == "operator" and isinstance(other, Value) and other.vtype == "state":
+            return self.prog.apply(operator=self, state=other)
+        return NotImplemented
+
     def __repr__(self):
         return "<%s %s #%d>" % (self.vtype, self.name, self.id)
 
@@ -361,6 +373,45 @@ def _state_base_name(space):
     if kind == "rate":
         return getattr(space, "base_name", None)
     return None
+
+
+class StageStateSet:
+    """A coherent set of stage states (Spec 3): ``{block -> State value}``.
+
+    Built by :meth:`Program.state_set`; consumed by :meth:`Program.fields` to solve
+    fields from a chosen stage of several blocks at once, without ambiguity about
+    which version of each block is read. Every entry must be a State value.
+    """
+
+    def __init__(self, name, mapping):
+        self.name = str(name)
+        self._states = {}
+        for block, st in dict(mapping).items():
+            if not (isinstance(st, Value) and st.vtype == "state"):
+                raise ValueError("StageStateSet[%r] must be a State value" % (block,))
+            self._states[str(block)] = st
+
+    def states(self):
+        """The stage states in insertion order."""
+        return list(self._states.values())
+
+    def __getitem__(self, block):
+        return self._states[str(block)]
+
+    def __contains__(self, block):
+        return str(block) in self._states
+
+    def keys(self):
+        return list(self._states)
+
+    def items(self):
+        return list(self._states.items())
+
+    def __len__(self):
+        return len(self._states)
+
+    def __repr__(self):
+        return "StageStateSet(%r, blocks=%s)" % (self.name, list(self._states))
 
 
 class Program:
@@ -1211,6 +1262,127 @@ class Program:
     def commits(self):
         """Map of committed block -> committed State value (copy)."""
         return dict(self._commits)
+
+    # --- board-like sugar (Spec 3): T.define / T.fields / T.solve / T.commit_many ---
+    # These lower to the SAME primitive ops as the P.call / linear_combine /
+    # solve_local_linear / commit style; they are blackboard notation, not a new IR.
+    def op(self, name):
+        """Return a callable board handle for a bound operator: ``expl = P.op("explicit_rate")``
+        then ``expl(U, fields)`` builds ``P.call("explicit_rate", U, fields)``."""
+        def _handle(*args, value_name=None):
+            return self.call(name, *args, name=value_name)
+        _handle.__name__ = str(name)
+        return _handle
+
+    def fields(self, name, from_state=None, from_states=None, from_state_set=None, operator=None):
+        """Board sugar for a field solve. Lowers to ``P.call(operator, ...)`` when a named operator
+        is bound, else to ``P.solve_fields`` (single state) or ``P.solve_fields_from_blocks``."""
+        if from_state_set is not None:
+            states = from_state_set.states()
+        elif from_states is not None:
+            states = list(from_states)
+        elif from_state is not None:
+            states = [from_state]
+        else:
+            raise ValueError("fields: provide from_state=, from_states= or from_state_set=")
+        named = operator is not None and operator != "fields_from_state"
+        if len(states) == 1:
+            if named and self._registry is not None:
+                return self.call(operator, states[0], name=name)
+            return self.solve_fields(name, states[0])
+        if named and self._registry is not None:
+            return self.call(operator, *states, name=name)
+        return self.solve_fields_from_blocks(states, name=name)
+
+    def define(self, name, value):
+        """Board sugar to name a value. An affine combination of states materializes via
+        ``linear_combine``; a ``rate(U) == <expr>`` equation keeps its right-hand side; any other
+        Value is named in place."""
+        from . import math as _bm
+        if isinstance(value, _bm.Equation):
+            if not isinstance(value.lhs, _bm.TimeDerivative):
+                raise ValueError("define(%r): an equation must read 'rate(U) == <rate expression>'"
+                                 % (name,))
+            value = value.rhs
+        if isinstance(value, _Affine):
+            return self.linear_combine(name, value)
+        if isinstance(value, Value):
+            value.name = name
+            return value
+        raise TypeError(
+            "define(%r): expected a Value, an affine combination, or a rate equation; got %r"
+            % (name, value))
+
+    def solve(self, name, equation):
+        """Board sugar for an implicit local solve ``(I -/+ a*L) @ unknown("x") == rhs``.
+
+        Lowers to ``linear_combine`` (if the rhs is an affine combination) then
+        ``solve_local_linear``; identical IR to writing those two calls by hand.
+        """
+        from . import math as _bm
+        if not isinstance(equation, _bm.Equation):
+            raise TypeError("solve(%r): expected '(I - dt*C) @ unknown(\"x\") == rhs'" % (name,))
+        lhs, rhs = equation.lhs, equation.rhs
+        if not isinstance(lhs, _bm.OpApply):
+            raise ValueError("solve(%r): left-hand side must be 'operator @ unknown(name)'" % (name,))
+        if isinstance(rhs, _Affine):
+            rhs = self.linear_combine(name + "_rhs", rhs)
+        elif not (isinstance(rhs, Value) and rhs.vtype == "state"):
+            raise ValueError("solve(%r): right-hand side must be a State or an affine of States"
+                             % (name,))
+        return self.solve_local_linear(name=name, operator=lhs.operator, rhs=rhs)
+
+    def commit_many(self, mapping, fields=None):
+        """Atomically commit several coupled blocks (Spec 3). ALL entries are validated before any
+        commit, so a partial or double commit of a coupled group is rejected as a unit and no block
+        is left half-committed. ``fields`` (optional) is validated as a coherent FieldContext but is
+        RESERVED: the IR commit has no fields slot yet (the runtime association lands with ADC-457)."""
+        if not isinstance(mapping, dict) or not mapping:
+            raise ValueError("commit_many: a non-empty {block: State} mapping is required")
+        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
+            raise ValueError("commit_many: fields must be a FieldContext from solve_fields")
+        for block, state in mapping.items():
+            if not (isinstance(state, Value) and state.vtype in ("state", "scalar_field")):
+                raise ValueError("commit_many: block %r needs a State value" % (block,))
+            if state.prog is not self:
+                raise ValueError("commit_many: the State for %r belongs to a different Program"
+                                 % (block,))
+            if block in self._commits:
+                raise ValueError("block '%s' committed more than once" % (block,))
+        for block, state in mapping.items():
+            self._commits[block] = state
+
+    def state_set(self, name, mapping):
+        """Build a :class:`StageStateSet` -- a coherent set of stage states for a field solve."""
+        return StageStateSet(name, mapping)
+
+    def record(self, name, value):
+        """Record a scalar diagnostic (board sugar over :meth:`record_scalar`).
+
+        ``value`` is a Program scalar -- a reduction result such as ``P.sum(U)`` or
+        ``P.norm2(U)`` (the runtime value of a generic invariant). The automatic
+        reduction of an arbitrary ``integral(expr)`` over a per-cell expression is a
+        follow-up (it needs the scheduler / a generated reduction kernel, ADC-458)."""
+        if not (isinstance(value, Value) and value.vtype == "scalar"):
+            raise ValueError(
+                "record(%r): value must be a Program scalar (e.g. P.sum / P.norm2); got %r"
+                % (name, value))
+        return self.record_scalar(name, value)
+
+    def check_invariant(self, name, before=None, after=None, tolerance=1e-10):
+        """Record the drift of a generic invariant between two stages (board diagnostic).
+
+        ``before`` / ``after`` are Program scalars (reduction results); the recorded
+        diagnostic ``"<name>_drift"`` is ``after - before``. ``tolerance`` is carried as
+        metadata for a later assertion stage (the scheduled runtime check is ADC-458)."""
+        if not (isinstance(before, Value) and before.vtype == "scalar"
+                and isinstance(after, Value) and after.vtype == "scalar"):
+            raise ValueError(
+                "check_invariant(%r): before/after must be Program scalars" % (name,))
+        drift = after - before
+        out = self.record_scalar(name + "_drift", drift)
+        out.attrs["tolerance"] = float(tolerance)
+        return out
 
     # --- decorator mode (ADC-423): record the step body from a function ---
     def step(self, fn):

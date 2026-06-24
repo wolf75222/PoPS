@@ -20,6 +20,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Added
 
+- **Blackboard-style physics DSL** (ADC-451/452/453/454, epic ADC-450, spec 3): a layer-1 user API
+  that reads like the blackboard and lowers to the spec-2 operator-first IR. `adc.math` adds the
+  notation (`ddt`, `div`, `grad`, `laplacian`, `dx`/`dy`, `rate`, `unknown`, `integral`, `sqrt`,
+  `==` equations, `@` operator application); `adc.physics.Model` authors a model from equations
+  (`m.rate("explicit_rate", ddt(U) == -div(F) + S)`, `m.solve_field(-laplacian(phi) == rho)`,
+  `m.flux`/`m.source`/`m.local_linear_operator`/`m.riemann`/`m.invariant`) and exposes the typed
+  `adc.model.Module` via `m.module`. `adc.time.Program` gains board sugar (`T.fields`/`T.define`/
+  `T.solve`/`T.commit_many`/`T.state_set`) that lowers to the SAME IR as the `P.call` /
+  `linear_combine` / `solve_local_linear` / `commit` style. `adc.lib` is a catalog of typed brick
+  descriptors and IR macros (riemann/reconstruction/limiters/fields/solvers/.../time) that compute
+  nothing in Python and name native C++ ids. New types: `adc.model.RateBundle` (typed multi-output,
+  arbitrary arity), `adc.time.StageStateSet`, generic `physics.Invariant`. Pure-Python, additive;
+  the spec-1 `adc.dsl` and the `P` builder styles are unchanged. New `python/tests/test_physics_board.py`,
+  `test_lib_descriptors.py`, `test_invariants.py`, `test_time_board.py`; examples under
+  `examples/spec3/`. The native HLLC/Roe hook codegen, the generic multi-species runtime, the unified
+  Program scheduler and profiling remain follow-ups (ADC-456/457/458/459).
 - **Install-time operator-requirement validation** (ADC-446, epic ADC-436, spec 2 criterion 24):
   `System.install_program` now reads the compiled `problem.so`'s GeneratedModule descriptor and
   rejects, BEFORE installing the program, a simulation that does not provide an aux field an operator
