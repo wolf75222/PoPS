@@ -2755,6 +2755,22 @@ class Program:
                             "operator %r block %r references %s var %r; the MVP per-cell binding is "
                             "cons-only (node %r)" % (op_name, blk, node.kind, node.name, v.name))
             components[blk] = list(comps)
+        # Every cons var a formula references must be a component of SOME input state (an output block
+        # OR a read-only catalyst input). A name in no input state -- a typo, or a name the author
+        # forgot to add to a P.state(space=...) -- would emit an undefined C++ identifier that only
+        # fails at the AOT compile, far from the authoring site; reject it loud here, like prim/aux.
+        all_cons = {c for s in v.inputs if getattr(s, "space", None) is not None
+                    for c in s.space.components}
+        referenced = set()
+        for comps in components.values():
+            for e in comps:
+                referenced |= e.deps()
+        missing = referenced - all_cons
+        if missing:
+            raise NotImplementedError(
+                "coupled_rate operator %r references cons var(s) %s that are a component of no input "
+                "state; declare them via P.state(space=...) or fix the formula (ADC-457, node %r)"
+                % (op_name, sorted(missing), v.name))
         return components
 
     @staticmethod
@@ -3849,8 +3865,9 @@ def _emit_coupled_rate_kernel(components, by_block, var, scratch):
         for e in comps:
             referenced |= e.deps()
     cons_source = {}                             # cons name -> (state token, component index)
-    for blk in blocks:
-        st = by_block[blk]
+    for st in by_block.values():                 # ALL input states, incl. read-only catalysts
+        if getattr(st, "space", None) is None:
+            continue
         for idx, c in enumerate(st.space.components):
             if c not in referenced:
                 continue
@@ -3864,16 +3881,17 @@ def _emit_coupled_rate_kernel(components, by_block, var, scratch):
     def state_handle(token):
         return "%sA" % token                     # read handle for an input state token (u0A / u1A)
 
-    lines = ["adc::MultiFab& %s_aux = ctx.aux();" % driver,
-             "for (int li = 0; li < %s.local_size(); ++li) {" % driver]
-    # Bind a write handle per block scratch and a read handle per DISTINCT input state, all inside the
-    # per-fab loop and BEFORE for_each_cell so the device lambda captures them by value.
+    lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
+    # Bind a write handle per OUTPUT block scratch, then a read handle per DISTINCT input state that a
+    # formula actually reads (incl. a read-only catalyst input that is not an output block), all inside
+    # the per-fab loop and BEFORE for_each_cell so the device lambda captures them by value.
     for blk in blocks:
         lines.append("  const adc::Array4 %sA = %s.fab(li).array();" % (scratch[blk], scratch[blk]))
+    read_tokens = {src[0] for src in cons_source.values()}
     seen_states = []
-    for blk in blocks:
-        tok = var[by_block[blk].id]
-        if tok not in seen_states:
+    for st in by_block.values():                 # input order (v.inputs); deterministic
+        tok = var[st.id]
+        if tok in read_tokens and tok not in seen_states:
             seen_states.append(tok)
             lines.append("  const adc::ConstArray4 %s = %s.fab(li).const_array();"
                          % (state_handle(tok), tok))

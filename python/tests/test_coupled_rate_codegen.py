@@ -145,6 +145,45 @@ def test_coupled_rate_codegen_emits_no_forbidden_cpp_tokens():
         assert tok not in src, "emitted coupled-rate .cpp must not contain %r" % tok
 
 
+def test_read_only_catalyst_input_is_bound():
+    # A coupled_rate may take a READ-ONLY catalyst input state that is NOT an output block (e.g. a
+    # background neutral in an ionization rate); the kernel must still bind that input's Array4 + its
+    # cons var so the formula can read it -- not only the output (bundle) blocks.
+    mod = model.Module("ioniz")
+    e = mod.state_space("e_st", ("ne",))
+    i = mod.state_space("i_st", ("ni",))
+    n = mod.state_space("n_st", ("nn",))  # the catalyst: an input, NOT an output block
+    bundle = model.RateBundle({"e": model.Rate(e), "i": model.Rate(i)})
+    ne, ni, nn = dsl.Var("ne", "cons"), dsl.Var("ni", "cons"), dsl.Var("nn", "cons")
+    mod.operator(name="ioniz", signature=model.Signature((e, i, n), bundle), kind="coupled_rate",
+                 expr={"e": [ni + nn], "i": [ne + nn]})  # both rates read the catalyst nn
+    P = adctime.Program("ioniz_step").bind_operators(mod)
+    e_n, i_n, n_n = P.state("e", space=e), P.state("i", space=i), P.state("n", space=n)
+    C = P.call("ioniz", e_n, i_n, n_n)
+    P.commit_many({"e": P.linear_combine("e1", e_n + P.dt * C["e"]),
+                   "i": P.linear_combine("i1", i_n + P.dt * C["i"])})
+    src = P.emit_cpp_program(model=None)
+    # the catalyst's read handle (3rd input -> u2) and its cons local must be emitted
+    assert "u2.fab(li).const_array()" in src, "the catalyst input state's read handle is bound"
+    assert "const adc::Real nn = u2A(i, j, 0);" in src, "the catalyst cons var nn binds from u2"
+    assert "= (ni + nn);" in src and "= (ne + nn);" in src, "both rates read the catalyst nn"
+
+
+def test_undefined_cons_var_is_rejected():
+    # A cons var a formula references but that is a component of NO input state (a typo, or a name the
+    # author forgot to add to a P.state space) must raise the ADC-457 deferral at emit -- never emit an
+    # undefined C++ identifier that only fails at the AOT compile, far from the authoring site.
+    ne, ni, zzz = dsl.Var("ne", "cons"), dsl.Var("ni", "cons"), dsl.Var("ZZZ", "cons")
+    mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + zzz, ne, ne])  # ZZZ is in no state
+    P = adctime.Program("two_fluid_typo").bind_operators(mod)
+    e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
+    C = P.call("collision", e_n, i_n)
+    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
+                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    with pytest.raises(NotImplementedError, match="ADC-457"):
+        P._check_lowerable(None)
+
+
 def _run():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
