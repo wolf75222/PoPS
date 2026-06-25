@@ -2044,20 +2044,40 @@ class Program:
         return self._dt_bound is not None
 
     # --- IR optimization passes (Spec 3 s28, ADC-465) --------------------------------------------
-    # Ops whose result is unobservable yet whose evaluation has an OBSERVABLE side effect (a ghost /
-    # aux fill, a recorded diagnostic, a history store): a dead-node pass must NEVER drop them, even
-    # when nothing reads their result. Conservative by construction -- when in doubt, an op belongs
-    # here. The field solves fill the shared phi/aux and ghosts; record_* and check_invariant are
-    # diagnostics; store_history mutates the history ring; fill_boundary / project mutate ghosts /
-    # the state in place. Control-flow / sub-block ops are handled separately (always live: v1 never
-    # rewrites inside a sub-block, so a node feeding one is kept).
-    _SIDE_EFFECT_OPS = frozenset({
-        "fill_boundary", "record_scalar", "record", "store_history", "check_invariant",
-        "solve_fields", "solve_fields_from_blocks", "project",
+    # SAFE-BY-DEFAULT ALLOW-LIST. A flat node is removable ONLY if its op is enumerated here; EVERY
+    # other op (known side-effecting, buffer-writing, sub-block-owning, OR new/unknown) is treated as
+    # live even when its result looks unconsumed. This is the inverse of a blacklist: a buffer-writing
+    # op whose ``_emit_op`` lowering ALIASES a caller-allocated input buffer (``var[v.id] =
+    # var[out_in.id]``) is side-effecting on that buffer even though it has no dataflow output edge --
+    # e.g. ``schur_rhs`` fills the ``rhs`` scratch that ``solve_linear`` then reads by BUFFER IDENTITY,
+    # not via an input edge. A blacklist silently drops such an op (corrupting the codegen while
+    # ``validate()`` stays True); a whitelist cannot, because the op is not listed.
+    #
+    # An op qualifies for this list ONLY if its ``_emit_op`` branch was verified to (a) ALLOCATE A
+    # FRESH result scratch (``ctx.rhs_scratch_like`` / ``ctx.scratch_state_like`` / ``ctx.alloc_*`` /
+    # a fresh ``s%d`` scalar local), NOT alias an input, AND (b) have no other observable side effect.
+    #   rhs / source / apply  -> ``r%d = ctx.rhs_scratch_like(state)`` then a pure compute fill
+    #   linear_combine        -> ``u%d = ctx.scratch_state_like(base)`` (the NON-commit branch; a
+    #                            committed linear_combine is a commit root, never a dead-node candidate)
+    #   linear_source         -> a pure operator DECLARATION node (no inputs, no emitted statement)
+    #   solve_local_linear    -> ``u%d = ctx.scratch_state_like(base)`` (fresh; per-cell dense solve)
+    #   cell_compare / where  -> a fresh ``ctx.alloc_scalar_field`` / ``ctx.scratch_state_like`` mask
+    #   reduce / scalar_op    -> a fresh ``s%d`` scalar local (a collective reduce is recomputed if
+    #                            re-added later; dropping an UNCONSUMED one removes only dead arithmetic)
+    #   compare               -> an inline boolean expression, no statement of its own
+    # Deliberately EXCLUDED (kept live): the buffer-writers schur_rhs / schur_explicit_flux / laplacian
+    # / gradient / divergence / apply_laplacian_coeff / schur_coeffs / schur_reconstruct / schur_energy
+    # (alias an input buffer); the side-effecting solve_fields[_from_blocks] / project / fill_boundary /
+    # store_history / record_scalar; solve_linear (reads its rhs by buffer identity); scalar_field /
+    # state / history (scratch/state bindings other ops fill or alias); and the sub-block ops below.
+    _REMOVABLE_OPS = frozenset({
+        "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
+        "cell_compare", "where", "reduce", "scalar_op", "compare",
     })
     # Ops that own a recorded sub-block (a while / if / range body, a matrix-free apply, a Newton
     # residual). v1 does NOT descend into sub-blocks, so these are treated as always-live roots and
-    # every value they (or their sub-blocks) read is conservatively kept.
+    # every value they (or their sub-blocks) read is conservatively kept. They are simply absent from
+    # the allow-list above (hence live); listed here only to drive the sub-block reference walk.
     _SUBBLOCK_OPS = frozenset({
         "while", "if", "range", "matrix_free_operator", "solve_local_nonlinear",
     })
@@ -2086,9 +2106,11 @@ class Program:
                     yield from Program._subblock_value_refs(w)
 
     def _live_value_ids(self):
-        """The set of value ids reverse-reachable from the commits + every side-effecting / sub-block
-        op (the live roots). A flat-list node not in this set has no consumer and no side effect: it is
-        dead. Sub-block-internal values are included so a dead-node clone keeps a self-consistent IR."""
+        """The set of value ids reverse-reachable from the live roots: the commits plus every flat node
+        whose op is NOT on the ``_REMOVABLE_OPS`` allow-list (safe-by-default -- a buffer-writing,
+        side-effecting, sub-block-owning, or unknown op is a live root). A flat node is DEAD only if its
+        op IS allow-listed AND no live op consumes its result. Sub-block-internal values are included so
+        a dead-node clone keeps a self-consistent IR."""
         by_id = {v.id: v for v in self._values}
         # Sub-block ops are not in self._values (they belong to their owning op); index them too so a
         # reference from one sub-block op to another resolves during the walk.
@@ -2097,7 +2119,7 @@ class Program:
                 by_id.setdefault(w.id, w)
         roots = [s.id for s in self._commits.values()]
         for v in self._values:
-            if v.op in Program._SIDE_EFFECT_OPS or v.op in Program._SUBBLOCK_OPS:
+            if v.op not in Program._REMOVABLE_OPS:
                 roots.append(v.id)
         live, stack = set(), list(roots)
         while stack:
@@ -2117,16 +2139,19 @@ class Program:
         elimination, ADC-465). An OPT-IN pass: call it explicitly to optimize a copy -- it NEVER runs
         on the default ``emit_cpp_program`` path, so it cannot change an existing compiled program.
 
-        A flat node is DEAD iff its result is consumed by no commit and no side-effecting / sub-block
-        op -- directly or transitively -- AND its own op has no side effect. The live set is built by
-        reverse-reachability from the commits plus every side-effecting op (``_SIDE_EFFECT_OPS``:
-        fill_boundary, record_scalar/record, store_history, check_invariant, solve_fields[_from_blocks],
-        project) and every sub-block-owning op (``_SUBBLOCK_OPS``: while/if/range, matrix_free_operator,
-        solve_local_nonlinear). The pass is CONSERVATIVE: a value feeding a control-flow sub-block is
-        kept (v1 never rewrites inside a sub-block). The surviving nodes are renumbered to contiguous
-        ids in their original order, so a program with no dead node round-trips byte-for-byte (same
-        ``_ir_hash`` and emitted C++) and one with a dead node matches the same program written without
-        it. The histories, optional dt bound and bound operator registry carry over unchanged."""
+        The pass is SAFE-BY-DEFAULT: a flat node is DEAD only if its op is on the ``_REMOVABLE_OPS``
+        allow-list (ops verified to allocate a FRESH result scratch and have no other side effect: rhs,
+        source, apply, linear_combine, linear_source, solve_local_linear, cell_compare, where, reduce,
+        scalar_op, compare) AND no live op consumes its result. EVERY other op -- the buffer-writers
+        that alias a caller-allocated input buffer (schur_rhs, laplacian, gradient, divergence,
+        schur_*), the side-effecting ops (solve_fields, project, fill_boundary, store_history,
+        record_scalar), solve_linear, and the sub-block-owning ops (while/if/range,
+        matrix_free_operator, solve_local_nonlinear) -- is treated as LIVE even when its result looks
+        unconsumed, so an unknown/new op is NEVER wrongly dropped. The live set is reverse-reachability
+        from the commits plus those non-removable nodes. The surviving nodes are renumbered to
+        contiguous ids in their original order, so a program with no dead node round-trips byte-for-byte
+        (same ``_ir_hash`` and emitted C++) and one with a dead node matches the same program written
+        without it. The histories, optional dt bound and bound operator registry carry over unchanged."""
         live = self._live_value_ids()
         return self._rebuild(lambda v: v.id in live)
 
@@ -2163,20 +2188,35 @@ class Program:
                     attrs[key] = val
             return attrs
 
-        def clone(v):
-            if v in idmap:
-                return idmap[v]
-            # Clone the sub-block ops first so their ids precede the owning op, matching how a fresh
-            # build records the body before the control-flow node. Inputs / attr refs are remapped
-            # through idmap (every referenced value is live, hence already mappable on its own clone).
+        def deps(v):
+            """The values v depends on that must be cloned (hence id-assigned) BEFORE v, in their
+            ORIGINAL creation order. A fresh build records the inputs and most sub-blocks before the
+            owning node, BUT a matrix_free_operator is created (its node id assigned) BEFORE
+            ``set_apply`` records its apply sub-block -- the node id precedes the sub-block ids. Ordering
+            every dependency by its original id (ascending) reproduces the build order verbatim for both
+            shapes, so a no-drop clone is byte-identical (same renumbering) rather than reordering the
+            matrix_free_operator node after its own sub-block."""
+            seen = []
+            for inp in v.inputs:
+                seen.append(inp)
             for key in ("cond_block", "body_block", "apply_block", "residual_block"):
                 block = v.attrs.get(key)
                 if block:
-                    for w in block:
-                        clone(w)
-            for inp in v.inputs:
-                if inp not in idmap:
-                    clone(inp)
+                    seen.extend(block)
+            # A matrix_free_operator's sub-block ops are created AFTER the node, so they must NOT be
+            # forced ahead of it; an input / control-flow body is created BEFORE. Keep only the deps
+            # whose original id precedes v's (the genuine predecessors) and visit them id-ascending.
+            return sorted((w for w in seen if w.id < v.id), key=lambda w: w.id)
+
+        def clone(v):
+            if v in idmap:
+                return idmap[v]
+            # Assign new ids in ORIGINAL creation order: clone every predecessor (id < v.id) first,
+            # id-ascending, then v, then any sub-block op created AFTER v (e.g. a matrix_free_operator's
+            # apply ops, whose original ids exceed the operator node's). Inputs / attr refs are remapped
+            # through idmap (every referenced value is live, hence already mappable on its own clone).
+            for w in deps(v):
+                clone(w)
             vid = out._next_id
             out._next_id += 1
             nv = Value(out, vid, v.vtype, v.op, [idmap[i] for i in v.inputs],
@@ -2185,7 +2225,13 @@ class Program:
             idmap[v] = nv
             return nv
 
-        out._values = [clone(v) for v in self._values if keep(v)]
+        # Clone all surviving flat nodes (and, transitively, their sub-block ops and any later-created
+        # sub-block ops) in ascending original id, so the contiguous renumbering matches the original
+        # build order exactly -- a no-op clone is byte-for-byte identical.
+        kept = sorted((v for v in self._values if keep(v)), key=lambda v: v.id)
+        for v in kept:
+            clone(v)
+        out._values = [idmap[v] for v in kept]
         out._commits = {b: idmap[s] for b, s in self._commits.items()}
         if self._dt_bound is not None:
             sub, result = self._dt_bound

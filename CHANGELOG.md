@@ -24,15 +24,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - **Spec 3 IR dead-node elimination pass** (ADC-465, epic ADC-450): `adc.time.eliminate_dead_nodes(P)`
   (also `P.eliminate_dead_nodes()`) returns a NEW Program with the unconsumed flat SSA nodes removed.
   An OPT-IN pass: it never runs on the default `emit_cpp_program` path, so it cannot change an existing
-  compiled program. A node is dead iff no commit and no side-effecting / sub-block op reads its result
-  (transitively) and its own op has no side effect; the live set is built by reverse-reachability from
-  the commits plus the side-effecting ops (fill_boundary, record_scalar/record, store_history,
-  check_invariant, solve_fields[_from_blocks], project) and the sub-block-owning ops (while/if/range,
-  matrix_free_operator, solve_local_nonlinear), which are kept conservatively. Surviving nodes are
-  renumbered to contiguous ids, so the pass is a byte-for-byte no-op when nothing is dead and a program
-  with a dead node emits C++ identical to the same program written without it. New
-  `python/tests/test_ir_passes.py` pins removal, the two parity byte-identities, the side-effect
-  exemptions and the IR-hash-changes-but-outputs-same contract.
+  compiled program. SAFE-BY-DEFAULT: a node is removable ONLY if its op is on an explicit allow-list of
+  ops proven to allocate a FRESH result scratch and have no other side effect (rhs, source, apply,
+  linear_combine, linear_source, solve_local_linear, cell_compare, where, reduce, scalar_op, compare)
+  AND no live op consumes its result. Every other op -- the buffer-writers that alias a caller-allocated
+  input buffer (schur_rhs, laplacian, gradient, divergence, the schur_* family), the side-effecting ops
+  (solve_fields, project, fill_boundary, store_history, record_scalar), solve_linear, and the sub-block
+  ops (while/if/range, matrix_free_operator, solve_local_nonlinear) -- is kept even with an unconsumed
+  result, so a new/unknown op is never wrongly dropped. Surviving nodes are renumbered to contiguous ids
+  in their original creation order, so the pass is a byte-for-byte no-op when nothing is dead and a
+  program with a dead node emits C++ identical to the same program written without it. New
+  `python/tests/test_ir_passes.py` pins removal, the parity byte-identities, the side-effect and
+  buffer-writer (condensed_schur) exemptions and the IR-hash-changes-but-outputs-same contract.
 - **Spec 3 profiling wired into System** (ADC-459, epic ADC-450): `sim.enable_profiling()` /
   `disable_profiling()` / `is_profiling()` / `reset_profiling()` / `profile_report()` drive a
   System-owned `adc::runtime::program::Profiler`; `System::step` and `solve_fields` wrap themselves

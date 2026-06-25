@@ -1,9 +1,14 @@
 """adc.time IR optimization passes -- dead-node elimination (ADC-465, Spec 3 s28).
 
 ``eliminate_dead_nodes`` is an OPT-IN pass: it returns a NEW Program whose flat SSA list has the
-dead nodes removed (a node is dead iff its result is never consumed by a commit, a side-effecting
-node, or -- transitively -- one of those, and its op is not itself side-effecting). It NEVER runs on
-the default ``emit_cpp_program`` path, so it cannot change an existing compiled program.
+dead nodes removed. It is SAFE-BY-DEFAULT: a node is removable ONLY if its op is on an explicit
+allow-list of ops proven to allocate a FRESH result scratch and have no other side effect (rhs,
+source, apply, linear_combine, linear_source, solve_local_linear, cell_compare, where, reduce,
+scalar_op, compare) AND no live op consumes its result. EVERY other op -- the buffer-writers that
+alias a caller-allocated input buffer (schur_rhs, laplacian, ...), the side-effecting ops, solve_linear
+and the sub-block ops -- is kept even with an unconsumed result, so an unknown/new op is never wrongly
+dropped. It NEVER runs on the default ``emit_cpp_program`` path, so it cannot change an existing
+compiled program.
 
 The contract this test pins:
 
@@ -13,6 +18,8 @@ The contract this test pins:
     that node;
   - side-effecting nodes (fill_boundary / record_scalar / solve_fields) are NEVER removed even with an
     unused result;
+  - BUFFER-WRITERS (schur_rhs and the generic laplacian/gradient/divergence) whose result is discarded
+    but whose buffer a later op reads by identity are NEVER removed (the safe-by-default whitelist);
   - the ``_ir_hash`` genuinely changes (the IR changed) yet the committed outputs are unchanged.
 
 Pure Python: no compilation, no .so. ``model=None`` still lowers FE / SSPRK, so the parity checks run
@@ -150,6 +157,64 @@ def test_chained_dead_nodes_removed():
     names = {v.name for v in Q._values}
     assert "dead0" not in names and "dead1" not in names
     assert {"R", "U1"} <= names
+
+
+_ALPHA = 1.0
+
+
+def test_condensed_schur_buffer_writers_never_removed():
+    """REGRESSION (the safe-by-default whitelist). ``adc.time.condensed_schur`` assembles its RHS with
+    ``P.schur_rhs(rhs, phi_n, U, ...)`` -- a top-level op whose RESULT is DISCARDED. Its real effect is
+    filling the caller-allocated ``rhs`` scalar_field buffer, which ``P.solve_linear(rhs=rhs)`` then
+    reads BY BUFFER IDENTITY, not via a dataflow input edge. A blacklist marks ``schur_rhs`` dead and
+    drops it -> the emitted C++ loses ``ctx.assemble_schur_rhs`` and the Schur solve runs on a zero RHS
+    (silent corruption, ``validate()`` stays True). Under the allow-list ``schur_rhs`` (and every other
+    buffer-writer) is NOT removable, so the pass is a no-op: the emitted C++ is byte-identical and still
+    contains ``assemble_schur_rhs``. Covers theta == 1 (historical IR) and theta < 1 + energy (the
+    extra linear_combine copy / extrapolation / schur_energy buffer-writers)."""
+    for theta, c_E in ((1.0, None), (0.5, None), (0.5, 3), (1.0, 3)):
+        P = adctime.Program("cs")
+        adctime.std.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, c_E=c_E)
+        before = P.emit_cpp_program()
+        assert "assemble_schur_rhs" in before, "fixture lost its schur RHS assembly"
+
+        Q = adctime.eliminate_dead_nodes(P)
+
+        after = Q.emit_cpp_program()
+        msg = "theta=%r c_E=%r" % (theta, c_E)
+        assert "assemble_schur_rhs" in after, "schur_rhs wrongly dropped (%s)" % msg
+        # Nothing is dead: a pure no-op, byte-for-byte (the buffer-writers + solve are all live).
+        assert after == before, "pass corrupted the condensed_schur C++ (%s)" % msg
+        assert Q._ir_hash() == P._ir_hash(), "no-op pass changed the IR hash (%s)" % msg
+
+
+def test_buffer_writing_op_with_discarded_result_kept():
+    """GENERIC buffer-writer: a top-level ``P.laplacian(buf, buf)`` whose RESULT is discarded fills the
+    caller-allocated ``buf`` that ``P.solve_linear`` then reads by BUFFER IDENTITY. The op is absent
+    from the allow-list, so the safe-by-default pass keeps it -- a buffer-writer that aliases an input
+    is never wrongly dropped, even with an unconsumed result."""
+    P = adctime.Program("buf_writer")
+    U = P.state("plasma")
+    buf = P.scalar_field("buf")
+    P.laplacian(buf, buf)  # buffer-writer: writes buf in place, RESULT DISCARDED
+    A = P.matrix_free_operator("op")
+
+    def apply(p, out, x):
+        lap = p.scalar_field("lap")
+        p.laplacian(lap, x)
+        return -1.0 * lap
+
+    P.set_apply(A, apply)
+    P.solve_linear(operator=A, rhs=buf, method="cg", max_iter=10)  # reads buf by BUFFER IDENTITY
+    P.commit("plasma", P.linear_combine("U1", 1.0 * U))
+
+    before = P.emit_cpp_program()
+    Q = adctime.eliminate_dead_nodes(P)
+    after_ops = [(v.op, v.name) for v in Q._values]
+    assert ("laplacian", "buf") in after_ops, "top-level buffer-writing laplacian wrongly removed"
+    # No node is dead here -> exact no-op.
+    assert Q.emit_cpp_program() == before
+    assert Q._ir_hash() == P._ir_hash()
 
 
 def test_control_flow_input_kept():
