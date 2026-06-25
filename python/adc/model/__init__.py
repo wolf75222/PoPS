@@ -20,17 +20,17 @@ codegen consumption (S2-6) build on these primitives in later phases.
 The package imports only the standard library so it can be exercised without the
 compiled ``_adc`` extension.
 """
-from adc.model.bundles import RateBundle
-from adc.model.module import Module
-from adc.model.operators import (
+from .bundles import RateBundle
+from .module import Module
+from .operators import (
     OPERATOR_KINDS,
     LocalLinearOperator,
     MatrixFreeOperator,
     Operator,
 )
-from adc.model.registry import OperatorRegistry
-from adc.model.signatures import Signature
-from adc.model.spaces import (
+from .registry import OperatorRegistry
+from .signatures import Signature
+from .spaces import (
     AuxSpace,
     FieldSpace,
     ParameterSpace,

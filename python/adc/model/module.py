@@ -10,10 +10,10 @@ lazily inside :meth:`Module.to_dsl` to avoid an import cycle.
 """
 import hashlib
 
-from adc.model.operators import Operator
-from adc.model.registry import OperatorRegistry
-from adc.model.signatures import Signature
-from adc.model.spaces import (
+from .operators import Operator
+from .registry import OperatorRegistry
+from .signatures import Signature
+from .spaces import (
     AuxSpace,
     FieldSpace,
     ParameterSpace,

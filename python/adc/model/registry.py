@@ -3,7 +3,7 @@
 Insertion order fixes each operator's integer ``OperatorId`` so the C++ codegen
 can dispatch by integer in hot kernels while strings stay for debug / validation.
 """
-from adc.model.operators import Operator
+from .operators import Operator
 
 
 class OperatorRegistry:

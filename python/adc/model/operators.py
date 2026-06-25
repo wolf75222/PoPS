@@ -6,8 +6,8 @@ by a local-linear or Krylov solve), and the named :class:`Operator` that pairs a
 kind with a :class:`adc.model.signatures.Signature`. Carries no numerics; the body
 lives in the model / codegen.
 """
-from adc.model.signatures import Signature
-from adc.model.spaces import Space, _as_signature_inputs
+from .signatures import Signature
+from .spaces import Space, _as_signature_inputs
 
 # The ten operator kinds of Spec 2. A kind is metadata only; the Signature carries
 # the actual type contract that Program validation checks.

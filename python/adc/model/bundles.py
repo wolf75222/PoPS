@@ -4,7 +4,7 @@ A coupled rate (``collisions(e, i, n) -> RateBundle``) returns one tangent per
 participating block; :meth:`RateBundle.require` enforces that a block's rate lives
 over the expected :class:`adc.model.spaces.StateSpace`.
 """
-from adc.model.spaces import Rate, RateSpace, Space
+from .spaces import Rate, RateSpace, Space
 
 
 def _block_name(key):

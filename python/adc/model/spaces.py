@@ -43,12 +43,12 @@ class Space:
     # Operator-first signature sugar: ``U >> Fields`` and ``(U, Fields) >> Rate(U)``.
     def __rshift__(self, output):
         """``space >> output`` -- a Signature with this space as the sole input."""
-        from adc.model.signatures import Signature
+        from .signatures import Signature
         return Signature((self,), output)
 
     def __rrshift__(self, inputs):
         """``(a, b) >> space`` -- this space is the output, the left tuple the inputs."""
-        from adc.model.signatures import Signature
+        from .signatures import Signature
         return Signature(_as_signature_inputs(inputs), self)
 
 
