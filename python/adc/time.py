@@ -628,17 +628,18 @@ class Program:
         \"Multi-blocs\"): a coupled Poisson where each listed block reads its own @p states[k] override
         at once, returning a FieldContext.
 
-        RUNTIME STATUS (ADC-426): this is the multi-target coupled solve. The native field solver
-        assembles the system Poisson RHS as ``Sum_s elliptic_rhs_s(U_s)`` and overrides exactly ONE
-        target block per call (``System::assemble_poisson_rhs(rhs, target_block, U_stage)``); it has no
-        multi-target stage override. So a TRUE simultaneous multi-block override is DEFERRED: the op is
-        recorded (the IR / hash read cleanly when the runtime lands) but ``emit_cpp_program`` lowers it
-        to a clear NotImplementedError -- it is never faked as a sequence of single-target solves (those
-        would each see the OTHER block's live, not stage, state -- a different operator).
+        RUNTIME (Spec 3 criterion 24, ADC-457): this is the multi-target coupled solve. It lowers to
+        ``ctx.solve_fields_from_blocks(u_stages)``, a per-block pointer vector the native field solver
+        (``System::solve_fields_from_blocks`` ->
+        ``SystemFieldSolver::assemble_poisson_rhs_from_blocks``) assembles the system Poisson RHS from as
+        ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state AT ONCE (a true
+        simultaneous override, not a sequence of single-target solves). A block NOT listed contributes
+        its live state. The listed states slot at their block index (the P.state declaration order), so
+        the runtime sees each coupled block at its stage state into the one shared phi/aux.
 
-        Use per-block ``P.solve_fields(state=Ub)`` instead: that IS a coupled solve (block b at its
-        stage state, every other block at its live state into the one shared phi/aux), which suffices
-        whenever the blocks advance in sequence (the common explicit case)."""
+        A per-block ``P.solve_fields(state=Ub)`` remains the right choice when the blocks advance in
+        sequence (block b at its stage state, every other block at its live state); this op is for the
+        SIMULTANEOUS case where multiple coupled blocks must each contribute their stage state at once."""
         if not (isinstance(states, (list, tuple)) and states):
             raise ValueError("solve_fields_from_blocks: a non-empty list of State values is required")
         seen = set()
@@ -2379,7 +2380,7 @@ class Program:
         listed). More than one block now lowers (ADC-426): each op routes to its block's runtime index
         (``_block_indices``, in P.state declaration order) and control flow (while/range/if) inside a
         block lowers per block; a SIMULTANEOUS multi-target coupled field solve
-        (``solve_fields_from_blocks([Ua, Ub])``) is refused (see below), never a silent mis-lowering.
+        (``solve_fields_from_blocks([Ua, Ub])``) lowers to ``ctx.solve_fields_from_blocks`` (see below).
 
         Each ``solve_fields(state=...)`` op lowers to ``ctx.solve_fields_from_state(idx, <stage state>)``
         (ADC-409): the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's
@@ -2389,10 +2390,12 @@ class Program:
         uncoupled model the field solve is inert either way. This is already a COUPLED multi-block solve:
         the system Poisson RHS is ``Sum_s elliptic_rhs_s(U_s)`` (``assemble_poisson_rhs``), so block
         ``idx`` reads its stage state while every OTHER block contributes its LIVE state into the one
-        shared phi/aux. A per-block ``P.solve_fields(state=Ub)`` therefore sees all blocks' charge. What
-        is NOT representable is a SIMULTANEOUS multi-target override (two blocks at stage states in one
-        solve): ``assemble_poisson_rhs`` overrides exactly one target block, so
-        ``P.solve_fields_from_blocks`` raises NotImplementedError (the coupled-solve deferral, ADC-426)."""
+        shared phi/aux. A per-block ``P.solve_fields(state=Ub)`` therefore sees all blocks' charge. A
+        SIMULTANEOUS multi-target override (several blocks at their stage states in ONE solve) lowers to
+        ``ctx.solve_fields_from_blocks(<vec>)`` (Spec 3 criterion 24, ADC-457): the RHS is
+        ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once
+        (``assemble_poisson_rhs_from_blocks``), each slotted at its block index (nullptr = the block's
+        live state) -- the coupled multi-species field solve."""
         self.validate()
         self._check_lowerable(model)
         prelude, body = self._emit_body(model)
@@ -2555,7 +2558,8 @@ class Program:
     # 'scalar_field' / 'laplacian' / 'gradient' / 'divergence' / 'solve_linear' are the ADC-405 / ADC-412
     # matrix-free Krylov ops (the operator declaration carries an apply sub-block; solve_linear lowers to
     # adc::*_solve; divergence is the centered FV divergence of a gradient field).
-    _ALLOWED_OPS = frozenset({"state", "solve_fields", "rhs", "linear_combine", "linear_source",
+    _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "rhs",
+                              "linear_combine", "linear_source",
                               "reduce", "compare", "while", "range", "if", "matrix_free_operator",
                               "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
                               "apply_in", "apply_out", "history", "store_history",
@@ -2584,18 +2588,6 @@ class Program:
     def _check_op_lowerable(self, v, model):
         """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
         Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
-        if v.op == "solve_fields_from_blocks":
-            # The SIMULTANEOUS multi-target coupled solve (ADC-426): the native field solver overrides
-            # exactly ONE target block per assemble_poisson_rhs call, so a true multi-block stage
-            # override is deferred -- never faked as a sequence of single-target solves. Use a per-block
-            # P.solve_fields(state=...) (already a coupled solve) instead.
-            raise NotImplementedError(
-                "emit_cpp_program cannot lower solve_fields_from_blocks ('%s'): a SIMULTANEOUS "
-                "multi-block coupled field solve (every listed block at its stage state at once) is "
-                "deferred -- the native field solver (System::assemble_poisson_rhs) overrides a single "
-                "target block per solve. Use per-block P.solve_fields(state=Ub): that IS a coupled "
-                "solve (block b at its stage state, every other block at its live state into the one "
-                "shared phi/aux)." % v.name)
         if v.op in Program._MODEL_OPS:
             if model is None:
                 raise NotImplementedError(
@@ -2807,6 +2799,29 @@ class Program:
                 lines.append("}")
             else:
                 lines.append(solve_stmt)
+        elif v.op == "solve_fields_from_blocks":
+            # Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): a SIMULTANEOUS solve where
+            # EVERY listed block reads its OWN stage state at once -- the system Poisson RHS is
+            # Sum_s elliptic_rhs_s(U_s) over all coupled blocks (assemble_poisson_rhs_from_blocks), not a
+            # single-target override. Lowers to ctx.solve_fields_from_blocks(u_stages), a vector indexed
+            # BY BLOCK INDEX (size == ctx.n_blocks(); a nullptr entry uses the block's live state). The
+            # listed states are slotted at their block index, so the runtime sees each coupled block at
+            # its stage state and every other (unlisted) block at its live state -- the seam a multi-
+            # species step uses (the IR commit_many guarantee: no operator observes a partial group).
+            # The input order == the P.state declaration order (the block index order); we assert it
+            # here so a stale binding fails at emit, not silently mis-routed at runtime.
+            bmap = block_idx or {}
+            vec = "u_stages_%d" % v.id
+            lines.append("std::vector<const adc::MultiFab*> %s(ctx.n_blocks(), nullptr);" % vec)
+            for k, st in enumerate(v.inputs):  # inputs = the N state values, in listed order
+                kbidx = bmap.get(st.block, 0)
+                assert st.block == v.inputs[k].block  # invariant: inputs[k] is this slot's state
+                lines.append("%s[%d] = &%s;" % (vec, kbidx, var[st.id]))
+            lines.append("ctx.solve_fields_from_blocks(%s);" % vec)
+            # solve_fields_from_blocks returns a FieldContext (the shared aux); its var aliases the first
+            # listed state so a downstream rhs(state, fields) reads the refreshed shared aux like any
+            # solve_fields result (the FieldContext carries no readable buffer of its own).
+            var[v.id] = var[v.inputs[0].id]
         elif v.op == "history":
             # Read the SYSTEM-OWNED history slot (a MultiFab&, ADC-406a): lag steps back. The reference
             # is bound to a C++ name the affine combine then reads like any other state/RHS term.
@@ -3964,6 +3979,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)
+#include <vector>                              // std::vector (coupled multi-block field-solve pointer list, ADC-457)
 
 extern "C" const char* adc_program_abi_key() {{ return ADC_ABI_KEY_LITERAL; }}
 extern "C" const char* adc_program_name() {{ return {name}; }}

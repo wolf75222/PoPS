@@ -191,6 +191,17 @@ class ProgramContext {
   void solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     sys_->solve_fields_from_state(field, b, u_stage);
   }
+  /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve the elliptic fields and
+  /// re-fill the shared aux from the SIMULTANEOUS stage states of MULTIPLE blocks at once -- the system
+  /// Poisson RHS is Sum_s elliptic_rhs_s(U_s), every coupled block reading its OWN stage state (not a
+  /// single-target override). @p u_stages is indexed BY BLOCK INDEX (size == n_blocks()); a nullptr
+  /// entry uses that block's live state. Forwards to System::solve_fields_from_blocks. The codegen
+  /// lowers P.solve_fields_from_blocks([U0, U1, ...]) to this, building the per-block pointer vector
+  /// from the listed stage-state vars (their declaration order == the block index order, asserted at
+  /// emit time). This is the multi-target counterpart of solve_fields_from_state.
+  void solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
+    sys_->solve_fields_from_blocks(u_stages);
+  }
   int n_blocks() const { return sys_->n_blocks(); }
   MultiFab& state(int b) const { return sys_->block_state(b); }
   void rhs_into(int b, MultiFab& u, MultiFab& r) const { sys_->block_rhs_into(b, u, r); }

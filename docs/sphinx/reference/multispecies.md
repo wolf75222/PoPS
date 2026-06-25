@@ -58,7 +58,9 @@ a field solve reads an unambiguous version of each block (see
 The operator-first multi-block kernel is in place at the IR level: multiple StateSpaces on a
 `Module`, a multi-block `Program` (`P.state` per block, `solve_fields_from_blocks`),
 `RateBundle`, `commit_many` (atomic, validated). `examples/spec3/multispecies_three_fluids.py`
-builds a 3-species step. The board sugar (`m.species` for N > 1, `m.coupled_rate` -> a
-`RateBundle` operator) and the RUNTIME for a coupled multi-block field solve / a coupled-rate
-operator (codegen + execution) are tracked by ADC-457; a single-species board model is
-authored today via {doc}`board-like-dsl`.
+builds a 3-species step. The coupled multi-block field solve now lowers to C++:
+`P.solve_fields_from_blocks([...])` emits `ctx.solve_fields_from_blocks` over a per-block stage-state
+vector (Spec 3 criterion 24, ADC-457; the compiled `.so` coupled solve is validated on ROMEO). The
+board sugar (`m.species` for N > 1, `m.coupled_rate` -> a `RateBundle` operator) and the coupled-rate
+KERNEL codegen + execution remain tracked by ADC-457; a single-species board model is authored today
+via {doc}`board-like-dsl`.

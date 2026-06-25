@@ -548,6 +548,17 @@ class System {
   /// it is identical to solve_fields(). ADC_EXPORT: resolved by a compiled program .so (ProgramContext)
   /// across the dlopen boundary. @throws std::out_of_range if @p block_idx is not a valid block.
   ADC_EXPORT void solve_fields_from_state(int block_idx, const MultiFab& U_stage);
+  /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
+  /// derivation as solve_fields(), but the system Poisson RHS is assembled from the SIMULTANEOUS stage
+  /// states of MULTIPLE blocks at once -- every coupled block reads its OWN stage state, not a single-
+  /// target override. @p U_stages is indexed BY BLOCK INDEX (its size must equal n_blocks()); entry b
+  /// != nullptr -> block b contributes its stage state, entry b == nullptr -> block b contributes its
+  /// live state. With every entry pointing at the corresponding live state it is bit-identical to
+  /// solve_fields(). The codegen lowers P.solve_fields_from_blocks([...]) to this -- the seam a multi-
+  /// species field-coupled step uses (the IR commit_many guarantee: no operator observes a partially
+  /// committed group). ADC_EXPORT: resolved by a compiled program .so (ProgramContext) across the
+  /// dlopen boundary. @throws std::invalid_argument if @p U_stages is not sized to n_blocks().
+  ADC_EXPORT void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages);
   /// @name Named multi-elliptic fields (ADC-428)
   /// A SECOND elliptic solve (beyond the default Poisson) for a user-named field
   /// (m.elliptic_field("phi2", rhs=..., aux=[...])). The named field owns its RHS (a per-block brick,

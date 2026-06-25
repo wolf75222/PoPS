@@ -558,6 +558,31 @@ class SystemFieldSolver {
     }
   }
 
+  /// Assembles the system Poisson RIGHT-HAND SIDE into @p rhs for a SIMULTANEOUS coupled multi-block
+  /// solve (Spec 3 criterion 24, ADC-457): f = Sum_s elliptic_rhs_s(U_s) where EVERY block reads its
+  /// OWN stage state at once, instead of overriding a single target block (assemble_poisson_rhs). @p
+  /// U_stages is indexed BY BLOCK INDEX (size == the number of blocks): U_stages[b] != nullptr -> block
+  /// b contributes its stage state, U_stages[b] == nullptr -> block b contributes its live s.U. With
+  /// every entry pointing at the corresponding live s.U it is the same f as assemble_poisson_rhs(rhs)
+  /// (the default head solve), so a coupled solve from the live states is bit-identical to solve_fields.
+  /// This is the multi-target stage override solve_fields_from_blocks needs: a field-coupled multi-
+  /// species step re-solves phi from the SIMULTANEOUS stage states of all coupled blocks (no operator
+  /// observes a partially committed group, the IR commit_many guarantee). @throws std::invalid_argument
+  /// if @p U_stages is not sized to the block count (a stale binding cannot silently mis-route).
+  void assemble_poisson_rhs_from_blocks(MultiFab& rhs,
+                                        const std::vector<const MultiFab*>& U_stages) {
+    if (U_stages.size() != owner_->sp.size())
+      throw std::invalid_argument(
+          "assemble_poisson_rhs_from_blocks: U_stages size " + std::to_string(U_stages.size()) +
+          " != block count " + std::to_string(owner_->sp.size()) +
+          " (index U_stages by block index; nullptr = use the block's live state)");
+    rhs.set_val(Real(0));
+    for (std::size_t b = 0; b < owner_->sp.size(); ++b) {
+      auto& s = owner_->sp[b];
+      s.add_poisson_rhs(U_stages[b] != nullptr ? *U_stages[b] : s.U, rhs);
+    }
+  }
+
   /// POLAR solve_fields: assembles f = Sum_s elliptic_rhs_s(U_s) (host loop per cell), solves the
   /// polar Poisson, then DERIVES the aux in the local basis (e_r, e_theta):
   ///   aux[0] = phi;  aux[1] = grad_r = d phi/dr;  aux[2] = grad_theta = (1/r) d phi/d theta.
@@ -689,6 +714,90 @@ class SystemFieldSolver {
       throw std::out_of_range("solve_fields_from_state: block index " + std::to_string(block_idx) +
                               " out of range (" + std::to_string(owner_->sp.size()) + " blocks)");
     solve_fields(block_idx, &U_stage);
+  }
+
+  /// POLAR coupled multi-block solve (Spec 3 criterion 24, ADC-457): same solve + aux derivation as
+  /// solve_fields_polar(), but the Poisson RHS is assembled from the SIMULTANEOUS stage states of all
+  /// blocks (assemble_poisson_rhs_from_blocks) instead of a single-target override. @p U_stages is
+  /// indexed by block index (nullptr = the block's live state). Mirrors solve_fields_polar() step for
+  /// step (eps scaling, pell_->solve, device_fence, derive_aux_polar, apply_te, fill_ghosts, named-aux
+  /// halo) -- only the RHS assembly differs, so a coupled solve from the live states is bit-identical.
+  void solve_fields_polar_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+    ensure_elliptic_polar();
+    MultiFab& rhs = pell_->rhs();
+    assemble_poisson_rhs_from_blocks(rhs, U_stages);
+    if (p_eps_ != Real(1)) {
+      const Real inv = Real(1) / p_eps_;
+      for (int li = 0; li < rhs.local_size(); ++li) {
+        Array4 r = rhs.fab(li).array();
+        const Box2D v = rhs.box(li);
+        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+            r(i, j, 0) *= inv;
+      }
+    }
+    pell_->solve();
+    device_fence();
+    derive_aux_polar(pell_->phi(), owner_->aux, owner_->pgeom_);
+    apply_te();
+    fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
+    apply_named_aux_bc();
+  }
+
+  /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
+  /// derivation as solve_fields(), but the system Poisson RHS is assembled from the SIMULTANEOUS stage
+  /// states of MULTIPLE blocks (assemble_poisson_rhs_from_blocks) -- every coupled block reads its OWN
+  /// stage state at once, not a single-target override. @p U_stages is indexed by block index
+  /// (nullptr = the block's live state). Routes to solve_fields_polar_from_blocks() in polar geometry.
+  /// Mirrors solve_fields() step for step (the device_fence between ell_solve and the grad derivation,
+  /// the LOCAL-fab loops, the order of fill_ghosts/fill_boundary); only the RHS assembly differs, so a
+  /// coupled solve from the live states is bit-identical to solve_fields(). The codegen lowers
+  /// P.solve_fields_from_blocks([...]) to this; the seam a multi-species field-coupled step uses to
+  /// re-solve phi from all coupled blocks' stage states simultaneously. @throws (via
+  /// assemble_poisson_rhs_from_blocks) if @p U_stages is not sized to the block count.
+  void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+    if (owner_->polar_)
+      return solve_fields_polar_from_blocks(U_stages);
+    ensure_elliptic();
+    // Coupled multi-block solve always re-solves the Poisson (it is requested explicitly with the
+    // stage states); it is NOT subject to the gauss_evolve_ skip (that policy is for the single
+    // default head solve). The aux derivation below runs on the freshly solved phi.
+    {
+      MultiFab& rhs = ell_rhs();
+      assemble_poisson_rhs_from_blocks(rhs, U_stages);
+      if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
+        const Real inv = Real(1) / p_eps_;
+        for (int li = 0; li < rhs.local_size(); ++li) {
+          Array4 r = rhs.fab(li).array();
+          const Box2D v = rhs.box(li);
+          for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+            for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+              r(i, j, 0) *= inv;
+        }
+      }
+      ell_solve();
+      gauss_solved_once_ = true;
+    }
+    device_fence();
+    const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
+    MultiFab& phi_mf = ell_phi();
+    for (int li = 0; li < owner_->aux.local_size(); ++li) {
+      const ConstArray4 p = phi_mf.fab(li).const_array();
+      Array4 a = owner_->aux.fab(li).array();
+      const Box2D v = owner_->aux.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+          a(i, j, 0) = p(i, j);
+          a(i, j, 1) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
+          a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
+        }
+    }
+    apply_te();
+    if (owner_->periodic_)
+      fill_boundary(owner_->aux, owner_->dom, owner_->per_);
+    else
+      fill_ghosts(owner_->aux, owner_->dom, owner_->bc_);
+    apply_named_aux_bc();
   }
 
   // --- NAMED multi-elliptic field (ADC-428) ----------------------------------
