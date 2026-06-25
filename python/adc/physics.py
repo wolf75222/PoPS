@@ -14,10 +14,14 @@ The board notation lives in :mod:`adc.math` (``ddt`` / ``div`` / ``grad`` /
 is reachable through :pyattr:`Model.module`; the codegen model through
 :pyattr:`Model.dsl`.
 
-Multi-species board authoring (``m.species`` for N > 1, ``RateBundle``,
-``commit_many``) lowers to a multi-block runtime tracked by ADC-457; this module
-implements the single-state board model and the multi-species *authoring types*
-that do not need that runtime.
+Multi-species board authoring (``m.species`` for N >= 2, ``m.coupled_rate``,
+``m.solve_fields_from_species``) LOWERS to the existing operator-first multi-block
+IR (an :class:`adc.model.Module` with N :class:`adc.model.StateSpace`, a
+``coupled_rate`` operator over a :class:`adc.model.RateBundle`, and a multi-input
+field operator), not a second runtime: the board surface produces the SAME typed
+operators a hand-written ``adc.model.Module`` registers (ADC-457). The single-species
+path is byte-identical to the single-state board model. The compiled multi-block
+``.so`` run is validated on ROMEO (Kokkos-only AOT).
 """
 import re
 
@@ -63,15 +67,24 @@ def _roles_for(hyp):
 class StateHandle:
     """A declared state: a name plus the ordered :mod:`adc.dsl` component vars.
 
-    Unpacks into its components (``rho, mx, my = U``) and remembers its name and
-    roles for the typed :class:`adc.model.StateSpace`.
+    Unpacks into its components (``rho, mx, my = U``), indexes them by position
+    (``U[0]``) or by component name (``e["ne"]`` -- the board access of Spec 3
+    section 12.3/16), and remembers its name and roles for the typed
+    :class:`adc.model.StateSpace`. The string index returns the conservative
+    :class:`adc.dsl.Var` of that component, so a board coupled-rate formula
+    written as ``e["ni"] - e["ne"]`` is the same IR as the hand-written
+    operator-first ``dsl.Var("ni", "cons") - dsl.Var("ne", "cons")``.
     """
 
-    def __init__(self, name, components, vars_, roles):
+    def __init__(self, name, components, vars_, roles, space=None):
         self.name = str(name)
         self.components = tuple(components)
         self.vars = tuple(vars_)
         self.roles = dict(roles or {})
+        # The typed adc.model.StateSpace this species instantiates (multi-species
+        # mode); None for the single-state dsl-backed path, where the space is
+        # derived on demand from the dsl model.
+        self.space = space
 
     def __iter__(self):
         return iter(self.vars)
@@ -79,8 +92,15 @@ class StateHandle:
     def __len__(self):
         return len(self.vars)
 
-    def __getitem__(self, i):
-        return self.vars[i]
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            try:
+                return self.vars[self.components.index(key)]
+            except ValueError:
+                raise KeyError(
+                    "state %r has no component %r (have: %s)"
+                    % (self.name, key, ", ".join(self.components))) from None
+        return self.vars[key]
 
     def __repr__(self):
         return "StateHandle(%r, %r)" % (self.name, list(self.components))
@@ -236,6 +256,12 @@ class Model:
         self._reconstruction = None
         self._riemann_hooks = {}    # capability formulas for the native-hook codegen (ADC-456)
         self._field_solvers = {}    # field-operator name -> solver descriptor
+        # Multi-species mode (Spec 3 sections 12, 16): once a SECOND species is declared the
+        # model owns a multi-block adc.model.Module directly (N StateSpaces + a coupled_rate +
+        # a multi-block field operator). The single-species path stays byte-identical: it keeps
+        # the dsl.Model and exposes dsl.Model.module. _multi_module is None until N > 1.
+        self._multi_module = None
+        self._species = {}          # species name -> StateHandle (multi-species mode)
 
     # --- escape hatches ---
     @property
@@ -245,7 +271,15 @@ class Model:
 
     @property
     def module(self):
-        """The typed :class:`adc.model.Module` view (operator-first IR)."""
+        """The typed :class:`adc.model.Module` view (operator-first IR).
+
+        Single-species: the dsl-derived Module (one StateSpace). Multi-species: the
+        multi-block Module this model assembled directly (N StateSpaces, a
+        ``coupled_rate`` operator, a multi-block field operator) -- the SAME
+        operator-first IR a hand-written :class:`adc.model.Module` would build.
+        """
+        if self._multi_module is not None:
+            return self._multi_module
         return self._dsl.module
 
     # --- state / species ---
@@ -265,18 +299,61 @@ class Model:
         return handle
 
     def species(self, name, state=(), roles=None):
-        """Declare a named species (a :class:`StateHandle`).
+        """Declare a named species: a named block instance of its own StateSpace.
 
-        For a single species this is exactly :meth:`state` under the species name.
-        Multiple species lower to a multi-block runtime tracked by ADC-457; a
-        second species raises a clear error rather than silently mis-lowering.
+        Each species lowers to one :class:`adc.model.StateSpace` and a named block
+        (Spec 3 sections 12, 16). The returned :class:`StateHandle` unpacks into its
+        component vars and indexes them by name (``e["ne"]``) for a coupled-rate
+        formula. Arbitrary arity: declare 2, 3, 4, ... species. The single-species
+        case is byte-identical to :meth:`state` (no multi-block Module is created);
+        the multi-block path engages only from the SECOND species, lowering to the
+        existing operator-first multi-block IR (``adc.model.Module`` with N spaces +
+        ``coupled_rate`` + ``solve_fields_from_blocks``), never a parallel runtime.
         """
-        if self._states:
-            raise NotImplementedError(
-                "multi-species board models (a second species %r) lower to the "
-                "multi-block runtime tracked by ADC-457; this build supports one "
-                "species per physics.Model" % (name,))
-        return self.state(name, components=state, roles=roles)
+        if not self._species and not self._multi_module:
+            # First species: keep the single-state dsl-backed path byte-identical to state().
+            handle = self.state(name, components=state, roles=roles)
+            self._species[handle.name] = handle
+            return handle
+        # Second (or later) species: promote to multi-species mode. The first species was
+        # authored on the dsl model; re-realize it as a typed StateSpace on the multi-block
+        # Module so all species live in the SAME operator-first IR.
+        self._promote_to_multispecies()
+        return self._add_species(name, components=state, roles=roles)
+
+    def _promote_to_multispecies(self):
+        """Build the multi-block :class:`adc.model.Module` and migrate the first species into it.
+
+        The single-state dsl model authored the first species; multi-species mode realizes every
+        species as a typed StateSpace on a shared Module so N >= 2 species lower to the existing
+        operator-first multi-block IR (N spaces + coupled_rate + multi-block field solve), not a
+        second runtime. The first species' :class:`StateHandle` is updated IN PLACE (its ``.space``
+        is set) so the reference the caller already holds stays valid after promotion."""
+        if self._multi_module is not None:
+            return
+        from . import model as _model
+        self._multi_module = _model.Module(self.name)
+        for nm, h in self._species.items():
+            self._add_species(nm, components=h.components, roles=h.roles, handle=h)
+
+    def _add_species(self, name, components=(), roles=None, handle=None):
+        """Add one typed StateSpace to the multi-block Module and return its StateHandle.
+
+        ``handle`` updates an existing :class:`StateHandle` in place (promotion of the first
+        species); otherwise a fresh handle is created and recorded."""
+        from . import dsl as _dsl
+        comps = tuple(components)
+        canon = {c: _canon_role(roles.get(c)) for c in comps} if roles else {}
+        space = self._multi_module.state_space(str(name), comps, roles=canon)
+        vars_ = tuple(_dsl.Var(c, "cons") for c in comps)
+        if handle is None:
+            handle = StateHandle(name, comps, vars_, roles, space=space)
+        else:
+            handle.vars = vars_
+            handle.space = space
+        self._species[handle.name] = handle
+        self._states[handle.name] = handle
+        return handle
 
     # --- quantities ---
     def primitive(self, name, expr):
@@ -378,6 +455,108 @@ class Model:
         flux, sources = self._destructure_rate(equation.rhs)
         self._dsl.rate_operator(_safe_name(name), flux=flux, sources=sources)
         return CallableOperator(_safe_name(name), self)
+
+    def coupled_rate(self, name, inputs=(), outputs=None, preserves=None, dissipates=None):
+        """Declare a coupled rate over several species (collisions, ionization, radiation).
+
+        ``inputs`` is the ordered list of participating species (:class:`StateHandle`); a species
+        may appear as a READ-ONLY catalyst input without being an output block. ``outputs`` maps
+        each output species to its per-component rate formulas (one expression per cons component,
+        written over the input species' cons vars via ``e["ne"]``). Arbitrary arity: 2, 3, 4, ...
+        inputs, no two-input limit.
+
+        Lowers to the existing operator-first ``coupled_rate`` operator (the SAME kind #287/#300
+        lower): a :class:`adc.model.RateBundle` signature over the input :class:`StateSpace` set,
+        with the per-block component formulas as the operator body. ``preserves`` / ``dissipates``
+        are recorded as capabilities (a generic invariant tag), not numerics. Requires multi-species
+        mode (declare the species with :meth:`species`).
+        """
+        from . import model as _model
+        if self._multi_module is None:
+            raise ValueError(
+                "coupled_rate(%r) needs at least two species; declare them with m.species(...)"
+                % (name,))
+        in_handles = self._as_species_list("coupled_rate", name, inputs)
+        if not outputs:
+            raise ValueError("coupled_rate(%r) requires outputs={species: [per-component exprs]}"
+                             % (name,))
+        in_spaces = tuple(h.space for h in in_handles)
+        bundle = _model.RateBundle()
+        expr = {}
+        for sp, comps in outputs.items():
+            h = self._species_handle("coupled_rate", name, sp)
+            comp_list = [self._to_expr(c) for c in self._as_iter(comps)]
+            if len(comp_list) != len(h.components):
+                raise ValueError(
+                    "coupled_rate(%r) output %r has %d component formula(s) but its state %r has %d"
+                    % (name, h.name, len(comp_list), h.name, len(h.components)))
+            bundle.add(h.name, h.space)
+            expr[h.name] = comp_list
+        caps = {}
+        if preserves is not None:
+            caps["preserves"] = preserves
+        if dissipates is not None:
+            caps["dissipates"] = dissipates
+        reg = _safe_name(name)
+        self._multi_module.operator(name=reg, kind="coupled_rate",
+                                    signature=_model.Signature(in_spaces, bundle),
+                                    capabilities=caps or None, expr=expr)
+        return CallableOperator(reg, self)
+
+    def solve_fields_from_species(self, name, inputs=(), equation=None, outputs=None, solver=None):
+        """Declare a coupled field solve over several species (multi-block Poisson).
+
+        ``inputs`` is the ordered list of contributing species; the field RHS reads every listed
+        species' stage state at once. Lowers to a typed ``field_operator`` over the N input
+        :class:`StateSpace` set, the operator-first surface of ``P.solve_fields_from_blocks``
+        (the existing multi-block field solve, Spec 3 criterion 24). ``equation`` /  ``outputs`` /
+        ``solver`` record the elliptic problem and the produced fields for introspection.
+        """
+        from . import model as _model
+        if self._multi_module is None:
+            raise ValueError(
+                "solve_fields_from_species(%r) needs at least two species; declare them with "
+                "m.species(...)" % (name,))
+        in_handles = self._as_species_list("solve_fields_from_species", name, inputs)
+        in_spaces = tuple(h.space for h in in_handles)
+        out_comps = tuple(outputs.keys()) if outputs else ("phi",)
+        fields = self._multi_module.field_space(_safe_name(name), out_comps)
+        reg = _safe_name(name)
+        reqs = {"solver": solver} if solver is not None else None
+        self._multi_module.operator(name=reg, kind="field_operator",
+                                    signature=_model.Signature(in_spaces, fields),
+                                    requirements=reqs,
+                                    expr={"blocks": [h.name for h in in_handles]})
+        h = FieldsHandle(name, outputs, solver)
+        self._fields[name] = h
+        if solver is not None:
+            self._field_solvers[name] = solver
+        return h
+
+    def _as_species_list(self, op, name, items):
+        """Resolve a list of species handles / names to StateHandles (multi-species mode)."""
+        if not items:
+            raise ValueError("%s(%r) requires inputs=[species, ...]" % (op, name))
+        return [self._species_handle(op, name, s) for s in self._as_iter(items)]
+
+    def _species_handle(self, op, name, sp):
+        """Resolve one species (a StateHandle or a species name) to its StateHandle."""
+        if isinstance(sp, StateHandle):
+            handle = self._species.get(sp.name)
+        else:
+            handle = self._species.get(str(sp))
+        if handle is None:
+            known = ", ".join(self._species) or "<none>"
+            raise KeyError("%s(%r): unknown species %r (declared: %s)"
+                           % (op, name, sp, known))
+        return handle
+
+    @staticmethod
+    def _as_iter(x):
+        """A list view of a single item or an iterable (so inputs=e and inputs=[e, i] both work)."""
+        if isinstance(x, (list, tuple)):
+            return list(x)
+        return [x]
 
     def finite_volume_rate(self, name, flux=None, riemann=None, reconstruction=None,
                            sources=()):
@@ -511,15 +690,34 @@ class Model:
 
     # --- validation / compile ---
     def check(self):
-        """Validate that every referenced quantity is declared (delegates to dsl)."""
+        """Validate that every referenced quantity is declared (single-species path).
+
+        Multi-species models compose their blocks in a time Program and validate at emit
+        (``P.emit_cpp_program`` / ``P._check_lowerable``), so a model-level ``check`` is a
+        single-species notion; it is a no-op for a multi-species model."""
+        if self._multi_module is not None:
+            return None
         return self._dsl.check()
 
     def compile(self, *args, **kwargs):
-        """Compile the model to a ``.so`` (delegates to :meth:`adc.dsl.Model.compile`)."""
+        """Compile the single-species model to a ``.so`` (delegates to
+        :meth:`adc.dsl.Model.compile`).
+
+        A multi-species model is compiled as a multi-block time Program (the operator-first
+        path: ``m.module`` bound to a :class:`adc.time.Program`, then ``P.compile_problem`` /
+        ``emit_cpp_program``), not through this single-state shortcut, so this raises a clear
+        error rather than compiling an empty single-state model."""
+        if self._multi_module is not None:
+            raise NotImplementedError(
+                "a multi-species physics.Model compiles as a multi-block time Program: bind "
+                "m.module to an adc.time.Program and emit/compile that (the operator-first "
+                "multi-block path), not via m.compile() (ADC-457)")
         return self._dsl.compile(*args, **kwargs)
 
     # --- introspection ---
     def list_operators(self):
+        if self._multi_module is not None:
+            return self._multi_module.list_operators()
         return self._dsl.list_operators()
 
     def operator_alias(self, name):
