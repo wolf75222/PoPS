@@ -159,7 +159,7 @@ the `adc.time.std` operator-first macros are documented in {doc}`operator-module
 | `condensed_schur` as a Program macro (ADC-421) | available (`theta == 1` backward-Euler source stage from `phi^n = 0`); near-match to native `adc.CondensedSchur` (no preconditioner); cross-step phi carry / `theta < 1` extrapolation / energy update deferred |
 | `std.rk` (generic Butcher tableau) / `std.lie` / `std.imex_local` / `std.adams_bashforth(order)` + `@P.step` decorator (ADC-423) | available (all lower to the existing IR) |
 | `std.bdf` implicit-flux BDF1/BDF2 (matrix-free Newton-Krylov; `P.rhs_jacvec` FD Jacobian-vector + GMRES) (ADC-431) (`test_time_bdf.py`) | available, runs end-to-end (cell-local-`L` fast path unchanged) |
-| Multi-block programs: N `P.state` / N `P.commit`, each op routed to its block index (ADC-426) | available, runs end-to-end (add the System blocks in `P.state` declaration order); per-block `P.solve_fields(state=)` is a coupled solve; the simultaneous multi-target `P.solve_fields_from_blocks` is deferred |
+| Multi-block programs: N `P.state` / N `P.commit`, each op routed to its block index (ADC-426) | available, runs end-to-end (add the System blocks in `P.state` declaration order); per-block `P.solve_fields(state=)` is a coupled solve; the simultaneous multi-target `P.solve_fields_from_blocks` lowers to `ctx.solve_fields_from_blocks` (Spec 3 crit 24, ADC-457) |
 
 Each lowered path is verified against an independent reference to machine precision: Forward Euler /
 SSPRK2 / SSPRK3 reproduce the native `adc.Explicit` step bit-for-bit; the compiled `strang` macro

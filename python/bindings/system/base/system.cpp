@@ -422,6 +422,12 @@ struct System::Impl {
   void solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
     fields_.solve_fields_from_state(block_idx, U_stage);
   }
+  // Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve + re-fill the shared aux
+  // from the SIMULTANEOUS stage states of all blocks (assemble_poisson_rhs_from_blocks). Same
+  // delegation idiom as solve_fields / solve_fields_from_state.
+  void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+    fields_.solve_fields_from_blocks(U_stages);
+  }
   // NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve for the user-named @p field, from a
   // stage state of @p block_idx, written to the field's OWN aux components. The default Poisson path
   // (solve_fields / solve_fields_from_state) is untouched. Same delegation idiom.
@@ -1864,6 +1870,15 @@ ADC_EXPORT adc::runtime::program::Profiler& System::profiler() {
 
 void System::solve_fields_from_state(int block_idx, const MultiFab& U_stage) {
   p_->solve_fields_from_state(block_idx, U_stage);
+}
+
+// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): forwards to the field solver, which
+// assembles the system Poisson RHS as Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at
+// once (U_stages indexed by block index; nullptr -> the block's live state), then re-fills the shared
+// aux. ADC_EXPORT: resolved by a generated problem.so (ProgramContext) across the dlopen boundary.
+ADC_EXPORT void System::solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+  adc::runtime::program::ProfileScope s(p_->profiler_, "field_solve");
+  p_->solve_fields_from_blocks(U_stages);
 }
 
 // NAMED multi-elliptic field (ADC-428): a SECOND elliptic solve for @p field from block @p block_idx's

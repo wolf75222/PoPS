@@ -304,6 +304,18 @@ add_executable(test_facade_routing test_facade_routing.cpp)
 target_link_libraries(test_facade_routing PRIVATE adc::adc ${CMAKE_DL_LIBS} adc_runtime_system)
 add_test(NAME test_facade_routing COMMAND test_facade_routing)
 
+# ADC-457 (Spec 3 criterion 24) : solve elliptique couple multi-blocs. assemble_poisson_rhs_from_blocks
+# somme la brique elliptique de CHAQUE bloc a son etat de stage (vecteur indexe par index de bloc ;
+# nullptr -> etat vivant) ; System::solve_fields_from_blocks l'enveloppe (le seam que le codegen abaisse
+# pour P.solve_fields_from_blocks). On valide via l'API publique System (les assemble_* sont prives au
+# field solver template) : (a) solve couple depuis les etats vivants == solve_fields historique (RHS ==
+# somme des blocs, BIT-A-BIT) ; (b) un override de stage par bloc (charge du bloc 1 a zero) retombe sur
+# la reference bloc-0-seul ; (c) un vecteur mal dimensionne leve. Compile le runtime System -> link
+# adc_runtime_system (capote -O0 + pool adc_heavy_tu par la boucle de fin de fichier).
+add_executable(test_coupled_fieldsolve test_coupled_fieldsolve.cpp)
+target_link_libraries(test_coupled_fieldsolve PRIVATE adc::adc ${CMAKE_DL_LIBS} adc_runtime_system)
+add_test(NAME test_coupled_fieldsolve COMMAND test_coupled_fieldsolve)
+
 # ADC-299 + ADC-290 : validation amont de la config (System / AmrSystem, AVANT Impl) et contrat de
 # completude du ModelSpec (transport / elliptic explicites, pas de retombee compressible / charge).
 # Compile les deux runtimes (System + AmrSystem) -> link adc_runtime_system ET adc_runtime_amr. La

@@ -9,7 +9,7 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
 (A) Validation + codegen (pure Python, always runs when adc.time imports): a 2-block program lowers
     with per-block ctx.state / rhs_into indices; a read-only block (declared but never committed) is
     allowed; a double commit and a commit of an undeclared block are rejected; the SIMULTANEOUS
-    multi-target solve_fields_from_blocks is deferred with a clear message.
+    multi-target solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks (Spec 3 crit 24).
 
 (B) End-to-end parity (skips unless the full toolchain is present): a 2-block passive-transport model
     (a scalar with a non-trivial flux + a NAMED source_term, EMPTY default source -- avoids the
@@ -138,15 +138,20 @@ def section_a(t):
     chk(raises(ValueError, lambda: Pu.emit_cpp_program()),
         "a commit of an undeclared block is rejected")
 
-    # The SIMULTANEOUS multi-target coupled field solve is deferred (never faked).
+    # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): every
+    # listed block contributes its stage state at once into the shared phi/aux.
     Pc = t.Program("coupled")
     Uac = Pc.state("a")
     Ubc = Pc.state("b")
     Pc.solve_fields_from_blocks([Uac, Ubc])
     Pc.commit("a", Pc.linear_combine("a1", Uac + Pc.dt * Pc.rhs(state=Uac, sources=["default"])))
     Pc.commit("b", Pc.linear_combine("b1", Ubc + Pc.dt * Pc.rhs(state=Ubc, sources=["default"])))
-    chk(raises(NotImplementedError, lambda: Pc.emit_cpp_program()),
-        "solve_fields_from_blocks (simultaneous multi-target solve) is deferred")
+    src_c = Pc.emit_cpp_program()
+    chk("ctx.solve_fields_from_blocks(" in src_c,
+        "solve_fields_from_blocks lowers to the coupled multi-block solve")
+    chk("std::vector<const adc::MultiFab*>" in src_c,
+        "the coupled solve builds a per-block MultiFab pointer vector")
+    chk(src_c.count("] = &") >= 2, "each listed block slots its stage state by index")
 
     # The builder rejects malformed solve_fields_from_blocks arguments.
     Pb = t.Program("b")

@@ -5,10 +5,11 @@ This test pins the generated source: the stable .so ABI (adc_program_abi_key via
 ADC_ABI_KEY_LITERAL preprocessor literal -- never the interposable inline -- plus adc_program_name /
 adc_program_hash / adc_install_program), the Forward-Euler body, and that a multi-stage scheme
 (SSPRK2) now lowers (a scratch state + a second rhs + a lincomb commit). Multi-block (ADC-426) now
-lowers too -- N P.state / N P.commit, each op routed to its block index. Constructs the codegen still
-cannot lower -- named sources beyond 'default', a commit of an undeclared block, the SIMULTANEOUS
-multi-target solve_fields_from_blocks -- must be REFUSED with a clear error, never silently
-mis-lowered. Pure Python (no compile); skips if adc is unavailable.
+lowers too -- N P.state / N P.commit, each op routed to its block index; the SIMULTANEOUS multi-target
+solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks (Spec 3 crit 24, ADC-457). Constructs
+the codegen still cannot lower -- named sources beyond 'default', a commit of an undeclared block --
+must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if adc
+is unavailable.
 """
 import sys
 
@@ -143,21 +144,21 @@ def test_unknown_block_commit_refused(t):
         raise AssertionError("expected ValueError for a commit of an undeclared block")
 
 
-def test_solve_fields_from_blocks_deferred(t):
-    # The SIMULTANEOUS multi-target coupled field solve is deferred (ADC-426): the IR records it but the
-    # codegen refuses it with a clear message (never faked as a sequence of single-target solves).
+def test_solve_fields_from_blocks_lowers(t):
+    # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): the
+    # codegen emits ctx.solve_fields_from_blocks(<vec>), a per-block MultiFab pointer vector sized to
+    # ctx.n_blocks() with each listed block slotted at its index (nullptr = the block's live state).
     P = t.Program("coupled")
     Ua = P.state("a")
     Ub = P.state("b")
     P.solve_fields_from_blocks([Ua, Ub])
     P.commit("a", P.linear_combine("a1", Ua + P.dt * P.rhs(state=Ua, sources=["default"])))
     P.commit("b", P.linear_combine("b1", Ub + P.dt * P.rhs(state=Ub, sources=["default"])))
-    try:
-        P.emit_cpp_program()
-    except NotImplementedError as exc:
-        assert "solve_fields_from_blocks" in str(exc) and "deferred" in str(exc).lower()
-    else:
-        raise AssertionError("expected NotImplementedError for solve_fields_from_blocks")
+    src = P.emit_cpp_program()
+    assert "ctx.solve_fields_from_blocks(" in src
+    assert "std::vector<const adc::MultiFab*>" in src
+    assert "ctx.n_blocks()" in src
+    assert src.count("] = &") >= 2  # both listed blocks slot their stage state by index
 
 
 def test_uncommitted_refused(t):

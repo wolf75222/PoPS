@@ -362,13 +362,23 @@ set_tests_properties(test_time_codegen PROPERTIES
 
 # Multi-block compiled Programs (ADC-399 / ADC-426, spec "Multi-blocs") : emit_cpp_program lowers N
 # P.state / N P.commit, routing each op to its block index. Section (A) pins per-block ctx.state /
-# rhs_into indices, the read-only-block / double-commit / unknown-block rules, and the deferred
-# solve_fields_from_blocks (pure Python). Section (B) compiles a 2-block passive-transport program,
-# steps it, and checks parity vs two independent single-block runs; it self-skips without a compiler /
-# Kokkos / install_program (never faking the engine).
+# rhs_into indices, the read-only-block / double-commit / unknown-block rules, and the coupled
+# solve_fields_from_blocks lowering (pure Python). Section (B) compiles a 2-block passive-transport
+# program, steps it, and checks parity vs two independent single-block runs; it self-skips without a
+# compiler / Kokkos / install_program (never faking the engine).
 add_test(NAME test_time_multiblock
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_multiblock.py)
 set_tests_properties(test_time_multiblock PROPERTIES
+  ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+
+# Coupled multi-block field-solve codegen (Spec 3 section 12.3 criterion 24, ADC-457) : a multi-block
+# Program with P.solve_fields_from_blocks([...]) lowers to ctx.solve_fields_from_blocks over a per-block
+# stage-state pointer vector (sized to ctx.n_blocks(), each listed block slotted by index). Pure Python
+# (no compile): _check_lowerable accepts the op and emit_cpp_program produces the expected C++; the
+# compiled .so coupled solve is validated on ROMEO. Self-skips if adc.time is unavailable.
+add_test(NAME test_coupled_fieldsolve_codegen
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_coupled_fieldsolve_codegen.py)
+set_tests_properties(test_coupled_fieldsolve_codegen PROPERTIES
   ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 
 # compile_problem + sim.install_program + CompiledTime end-to-end (ADC-401 Phase 2c-ii) : validation
