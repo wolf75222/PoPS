@@ -144,10 +144,43 @@ def test_install_params_routing():
     except ValueError as exc:
         assert "declared by no instance" in str(exc)
         print("OK  install rejects a param declared by no instance")
-    # NOTE: the positive routing (a DECLARED runtime param resolves through the CompiledModel's
-    # runtime_param_names -- the fix that stopped reading the raw dsl.Model, which has none) needs a
-    # really-compiled model with a declared runtime param; it is exercised by the Kokkos end-to-end
-    # below (and tracked for a dedicated positive test). _install_params now takes the RESOLVED models.
+    # The POSITIVE branch (a DECLARED runtime param IS routed) is covered host-side by
+    # test_install_params_routes_declared_runtime_param below.
+
+
+def test_install_params_routes_declared_runtime_param():
+    """install ROUTES a DECLARED runtime param to set_block_params in sorted-name order -- the
+    positive branch test_install_params_routing leaves to here. The fix reads the RESOLVED
+    CompiledModel's runtime_param_names; a raw dsl.Model has none, so routing it UNRESOLVED would drop
+    the param into 'unknown' (surfaced as 'declared by no instance') -- exactly the bug install's
+    resolve step (install step 2) prevents. Host-testable via the pure router
+    System._route_block_params (no compile, no engine call)."""
+    # A RESOLVED model declaring two runtime params + one const (const excluded; names SORTED).
+    resolved = _fake_compiled(params={
+        "nu": dsl.Param("nu", 0.0, kind="runtime"),
+        "cs2": dsl.Param("cs2", 1.0, kind="runtime"),
+        "g": dsl.Param("g", 9.8, kind="const")})
+    assert resolved.runtime_param_names == ["cs2", "nu"], \
+        "runtime params SORTED, const excluded (got %r)" % resolved.runtime_param_names
+    # Positive: a declared param is routed (NOT 'unknown'); the vector handed to set_block_params is in
+    # sorted-name order, keeping the declaration default for the unspecified name.
+    per_block, unknown = adc.System._route_block_params({"plasma": resolved}, {"nu": 2.5})
+    assert unknown == [], "a declared runtime param must NOT be 'unknown' (got %r)" % unknown
+    assert per_block == {"plasma": [1.0, 2.5]}, \
+        "set_block_params vector sorted by name: cs2 keeps default 1.0, nu set to 2.5 (got %r)" \
+        % per_block
+    print("OK  install routes a declared runtime param to set_block_params in sorted-name order")
+
+    # Contrast (the bug): the SAME param via a RAW dsl.Model (no runtime_param_names accessor) is
+    # dropped into 'unknown' -- which install would surface as 'declared by no instance'. This is why
+    # install RESOLVES each model before routing (install step 2 -> _route_block_params).
+    raw = dsl.Model("adc466_raw_rt")
+    raw.param("cs2", 1.0, kind="runtime")
+    raw.param("nu", 0.0, kind="runtime")
+    _, unknown_raw = adc.System._route_block_params({"plasma": raw}, {"nu": 2.5})
+    assert unknown_raw == ["nu"], \
+        "a RAW dsl.Model exposes no runtime_param_names -> the param is dropped (the bug)"
+    print("OK  routing a RAW dsl.Model drops the param (the bug install's resolve step prevents)")
 
 
 def _lorentz_model(name="adc466_model"):
@@ -226,6 +259,92 @@ def test_install_end_to_end_kokkos():
     print("OK  unified install wires instance + aux + solver and installs the program")
 
 
+def _iso_runtime_model(name="adc466_rt_model"):
+    """An isothermal fluid with a DECLARED RUNTIME param cs2 (sound speed^2), no required aux. install
+    resolves a runtime-param dsl.Model via AOT (production/native FREEZES runtime params; cf.
+    System._resolve_instance_model), so set_block_params can change cs2 at runtime."""
+    m = dsl.Model(name)
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    cs2 = m.param("cs2", 0.5, kind="runtime")
+    cs = dsl.sqrt(cs2)
+    m.flux(x=[mx, mx * mx / rho + cs2 * rho, mx * my / rho],
+           y=[my, mx * my / rho, my * my / rho + cs2 * rho])
+    m.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
+                  y=[my / rho - cs, my / rho, my / rho + cs])
+    m.primitive_vars(rho, mx, my)
+    m.conservative_from([rho, mx, my])
+    m.elliptic_rhs(rho)
+    m.rate_operator("explicit_rhs", flux=True)
+    return m
+
+
+def test_install_routes_runtime_param_kokkos():
+    """End-to-end (Kokkos-gated): the HEADLINE unified-install path -- compile_problem(model=<dsl.Model
+    declaring a runtime param>) + install(params={...}) with NO explicit instance model and the
+    default SSPRK2 time -- routes the param to set_block_params on the real block. install resolves a
+    runtime-param dsl.Model via AOT (production freezes runtime params; cf. _resolve_instance_model),
+    so the param is settable; the pre-fix router (reading the raw dsl.Model's absent
+    runtime_param_names) raised 'declared by no instance' here. Self-skips without a compiler / Kokkos
+    (mirrors test_install_end_to_end_kokkos)."""
+    if not hasattr(adc.System(n=8, L=1.0, periodic=True), "install_program"):
+        print("skip test_install_routes_runtime_param_kokkos (_adc lacks install_program; rebuild _adc)")
+        return
+    m = _iso_runtime_model()
+    try:
+        compiled = adc.compile_problem(model=m, time=_lie_program())  # compiled.model is the raw dsl.Model
+    except RuntimeError as exc:
+        print("skip test_install_routes_runtime_param_kokkos (no Kokkos to build the .so: %s)"
+              % str(exc)[:120])
+        return
+
+    x = (np.arange(N) + 0.5) / N
+    xx, yy = np.meshgrid(x, x, indexing="ij")
+    rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
+    u0 = np.stack([rho, np.zeros_like(rho), np.zeros_like(rho)])  # u=0 -> momentum residual ~ cs2*rho
+
+    sim = adc.System(n=N, L=1.0, periodic=True)
+    sim.install(
+        compiled,
+        # No "model" key -> install uses compiled.model (the raw dsl.Model) and AUTO-resolves it via
+        # AOT (it declares a runtime param); the default adc.Explicit() == SSPRK2 is AOT-compatible.
+        instances={"plasma": {"state": "U", "initial": u0,
+                              "spatial": adc.FiniteVolume(limiter="none", riemann="rusanov"),
+                              "time": adc.Explicit()}},
+        params={"cs2": 1.0},
+        solvers={"phi": adc.lib.fields.GeometricMG()})
+    assert "plasma" in sim.block_names(), "instance bound by name (no 'declared by no instance' raise)"
+    print("OK  headline install(params=) routes a runtime param (raw dsl.Model auto-resolved via AOT)")
+
+    # The routed param is LIVE on the block: with u=0 the momentum residual is -div(cs2*rho), so cs2
+    # 1 -> 4 scales it x4 -- proof set_block_params reached the real block (P7-b).
+    sim._s.set_block_params("plasma", [1.0])
+    R1 = np.array(sim._s.eval_rhs("plasma")).reshape(3, N, N)
+    sim._s.set_block_params("plasma", [4.0])
+    R4 = np.array(sim._s.eval_rhs("plasma")).reshape(3, N, N)
+    assert np.max(np.abs(R1[1])) > 1e-3, "momentum residual non-trivial at cs2=1"
+    assert np.allclose(R4[1], 4.0 * R1[1], rtol=1e-9, atol=1e-12), \
+        "momentum residual -div(cs2*rho) must scale x4 when cs2 1 -> 4 (param routed to the block)"
+    print("OK  the routed runtime param is live on the block (eval_rhs scales with cs2)")
+
+    # A runtime-param instance must use an AOT-compatible time: the AOT block path gates the integrator
+    # to SSPRK2 + backward-Euler, so euler raises clearly at add_equation (the installed Program drives
+    # the step regardless; use the default Explicit()).
+    sim_euler = adc.System(n=N, L=1.0, periodic=True)
+    try:
+        sim_euler.install(
+            compiled,
+            instances={"plasma": {"state": "U", "initial": u0,
+                                  "spatial": adc.FiniteVolume(limiter="none", riemann="rusanov"),
+                                  "time": adc.Explicit(method="euler")}},
+            params={"cs2": 1.0},
+            solvers={"phi": adc.lib.fields.GeometricMG()})
+        raise AssertionError("MISMATCH: a runtime-param (AOT) block should reject euler")
+    except RuntimeError as exc:
+        assert "ssprk" in str(exc).lower() or "backward" in str(exc).lower() or "aot" in str(exc).lower(), \
+            "AOT time-gating message (got %r)" % str(exc)
+        print("OK  a runtime-param instance rejects an AOT-incompatible time (euler) at install")
+
+
 def main():
     test_lower_spatial_accepts_runtime_and_lib()
     test_solver_token_lowering()
@@ -233,7 +352,9 @@ def main():
     test_riemann_capability_verbatim()
     test_install_aux_derived_rejected()
     test_install_params_routing()
+    test_install_params_routes_declared_runtime_param()
     test_install_end_to_end_kokkos()
+    test_install_routes_runtime_param_kokkos()
     return 0
 
 

@@ -1875,13 +1875,24 @@ class System:
     def _resolve_instance_model(self, model):
         """Resolve an instance's block model to something add_equation accepts. A ModelSpec
         (adc.Model(...)) or a dsl.CompiledModel passes through unchanged. A dsl.Model (the PDE
-        builder, e.g. carried by compile_problem(model=...)) is compiled to its production
-        CompiledModel so the block is added on the real System context."""
+        builder, e.g. carried by compile_problem(model=...)) is compiled to a CompiledModel so the
+        block is added on the real System context.
+
+        Backend choice (P7-b): a dsl.Model declaring RUNTIME params is compiled via AOT, because the
+        production/native backend FREEZES runtime params at their declaration value (so
+        install(params=...) -> set_block_params would raise 'block ... has no runtime parameter'); a
+        const-only model keeps the native production path (no .so dlopen). The AOT block gates its OWN
+        time integrator to SSPRK2 + backward-Euler, but that is harmless here: a unified install runs
+        the compiled time Program, which drives the step (the per-instance ``time`` is not the stepper;
+        cf. compile_problem). A runtime-param instance must therefore use an AOT-compatible
+        ``time`` (the default adc.Explicit() == SSPRK2 is fine; euler/ssprk3 raise at add_equation)."""
         from . import dsl  # late import (dsl <-> __init__ cycle)
         if isinstance(model, (ModelSpec, dsl.CompiledModel)):
             return model
         if isinstance(model, dsl.Model):
-            return model.compile(backend="production")
+            has_runtime = any(getattr(p, "kind", "const") == "runtime"
+                              for p in model.params.values())
+            return model.compile(backend="aot" if has_runtime else "production")
         return model  # unknown -> let add_equation raise its own clear error
 
     def _validate_riemann_capability(self, model, spatial):
@@ -1955,12 +1966,17 @@ class System:
                 return block
         return None
 
-    def _install_params(self, resolved_models, params):
-        """Route flat {param_name: value} to set_block_params per instance: build each instance's
-        sorted runtime-param vector (declaration defaults for unspecified names) and push it. A param
-        name declared by no instance raises (no silent drop). @p resolved_models maps each instance
-        name to its RESOLVED CompiledModel (the raw dsl.Model has no runtime_param_names accessor)."""
+    @staticmethod
+    def _route_block_params(resolved_models, params):
+        """Pure routing core of _install_params (no engine call -> host-testable). Map a flat
+        {param_name: value} to {block: sorted runtime-param value vector} using each RESOLVED model's
+        runtime_param_names (declaration defaults for unspecified names), and return the param names
+        declared by no instance. @p resolved_models maps each instance name to its RESOLVED
+        CompiledModel: the raw dsl.Model has no runtime_param_names accessor, so a model passed
+        UNRESOLVED here contributes no params (the bug install's resolve step prevents -- see
+        install step (2)). @return (per_block, unknown), per_block only listing blocks with params."""
         consumed = set()
+        per_block = {}
         for name, model in resolved_models.items():
             # runtime_param_names is a @property (list); runtime_param_values is a method.
             rt_names = list(getattr(model, "runtime_param_names", []) or [])
@@ -1975,8 +1991,18 @@ class System:
                     consumed.add(pname)
                 else:
                     values.append(float(defaults[k]) if defaults[k] is not None else 0.0)
-            self._s.set_block_params(name, values)
+            per_block[name] = values
         unknown = sorted(set(params) - consumed)
+        return per_block, unknown
+
+    def _install_params(self, resolved_models, params):
+        """Route flat {param_name: value} to set_block_params per instance: build each instance's
+        sorted runtime-param vector (declaration defaults for unspecified names) and push it. A param
+        name declared by no instance raises (no silent drop). @p resolved_models maps each instance
+        name to its RESOLVED CompiledModel (the raw dsl.Model has no runtime_param_names accessor)."""
+        per_block, unknown = self._route_block_params(resolved_models, params)
+        for name, values in per_block.items():
+            self._s.set_block_params(name, values)
         if unknown:
             raise ValueError("install: params %s declared by no instance's runtime parameters"
                              % (unknown,))
