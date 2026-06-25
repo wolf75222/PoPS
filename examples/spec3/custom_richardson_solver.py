@@ -25,9 +25,12 @@ def richardson(ctx, A, b, *, omega=0.5, tol=1e-8, max_iter=200):
     """
     x = ctx.zeros_like(b)
     it = ctx.scalar_int(0)
-    converging = ctx.norm2(ctx.residual(A, x, b)) > tol
-    within_budget = it < ctx.scalar_int(max_iter)
-    with ctx.while_(ctx.logical_and(converging, within_budget)):
+    # The convergence predicate is a BUILDER re-evaluated against the loop-updated x / it
+    # each pass; it never freezes on the initial (zero) iterate.
+    def converging():
+        return ctx.logical_and(ctx.norm2(ctx.residual(A, x, b)) > tol,
+                               it < ctx.scalar_int(max_iter))
+    with ctx.while_(converging):
         r = ctx.residual(A, x, b)        # r = b - A x  (an affine IR combine)
         x = ctx.combine(x + omega * r)   # x <- x + omega*r  (omega is an IR literal)
         it = it + ctx.scalar_int(1)

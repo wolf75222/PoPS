@@ -292,8 +292,8 @@ class SolverIR:
     def nodes(self):
         """The IR value nodes the builder authored, including control-flow body ops.
 
-        Walks the flat SSA list AND the recorded sub-blocks of ``while`` bodies (a loop
-        body is owned by its op, not the top-level list), in build order."""
+        Walks the flat SSA list AND the recorded ``cond``/``body`` sub-blocks of ``while``
+        nodes (those blocks are owned by the op, not the top-level list), in build order."""
         out = []
         _walk_nodes(self.program._values, out)
         return out
@@ -379,39 +379,66 @@ class SolverContext:
         return self._p._new("bool", "logical_and", (a, b), {}, None, a.block)
 
     # --- control flow -------------------------------------------------------
-    def while_(self, condition):
-        """A convergence loop as a context manager: ``with ctx.while_(cond):`` records the
-        body and emits an IR ``while`` node on exit. @p condition is a Bool IR value
-        (built from ``norm2`` / ``logical_and``); the loop is DYNAMIC (C++-side), it
-        never iterates in Python."""
-        if not (hasattr(condition, "vtype") and condition.vtype == "bool"):
-            raise TypeError("while_: condition must be a Bool IR value (e.g. ctx.norm2(r) > tol)")
-        return _SolverWhile(self._p, condition, self._block)
+    def while_(self, cond_fn):
+        """A convergence loop as a context manager: ``with ctx.while_(cond_fn):`` records the
+        loop body, then RE-EVALUATES the convergence predicate against the loop-updated
+        iterate and emits one IR ``while`` node owning both blocks.
+
+        @p cond_fn is a zero-argument builder that BUILDS a Bool IR value each time it is
+        called (e.g. ``lambda: ctx.norm2(ctx.residual(A, x, b)) > tol``). It is recorded
+        into a SEPARATE ``cond_block`` after the body, so the predicate references the
+        mutated iterate -- not the pre-loop ``x`` -- and re-runs every pass (mirroring
+        :meth:`adc.time.Program.while_`). The loop is DYNAMIC (C++-side); it never iterates
+        in Python.
+
+        Wiring the predicate to a pre-built Bool value would freeze it on the initial
+        iterate (a constant convergence test), so a bare Bool value is rejected loud."""
+        if not callable(cond_fn):
+            raise TypeError(
+                "while_: condition must be a zero-argument builder that BUILDS the Bool "
+                "predicate against the loop-updated iterate (e.g. "
+                "lambda: ctx.norm2(ctx.residual(A, x, b)) > tol), not a pre-built Bool value "
+                "(that would freeze the test on the initial iterate)")
+        return _SolverWhile(self._p, cond_fn, self._block)
 
 
 class _SolverWhile:
-    """The context manager :meth:`SolverContext.while_` returns: it records the loop
-    body ops into a sub-block and, on exit, emits one ``while`` IR node owning them
-    (mirroring :meth:`adc.time.Program.while_`). The body is re-emitted inside the
-    generated C++ loop; it is never replayed in Python."""
+    """The context manager :meth:`SolverContext.while_` returns: it records the loop body
+    ops into a sub-block and, on exit, RE-RECORDS the convergence predicate into a separate
+    ``cond_block`` so it references the loop-updated iterate (mirroring
+    :meth:`adc.time.Program.while_`). It then emits one ``while`` IR node owning both blocks.
+    The blocks are re-emitted inside the generated C++ loop; they are never replayed in
+    Python."""
 
-    def __init__(self, program, condition, block):
+    def __init__(self, program, cond_fn, block):
         self._p = program
-        self._cond = condition
+        self._cond_fn = cond_fn
         self._block = block
-        self._sub = None
+        self._body = None
 
     def __enter__(self):
-        self._sub = []
-        self._p._recording.append(self._sub)
+        self._body = []
+        self._p._recording.append(self._body)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         self._p._recording.pop()
         if exc_type is not None:
             return False
+        # Record the predicate AFTER the body so it builds against the loop-updated iterate.
+        # Its ops live in a separate cond_block (re-run each pass), not the body block.
+        cond_block = []
+        self._p._recording.append(cond_block)
+        try:
+            cond = self._cond_fn()
+        finally:
+            self._p._recording.pop()
+        if not (hasattr(cond, "vtype") and cond.vtype == "bool"):
+            raise TypeError("while_: the condition builder must return a Bool IR value "
+                            "(e.g. ctx.norm2(r) > tol); got %r" % (cond,))
         self._p._new("state", "while", (),
-                     {"cond": self._cond, "body_block": self._sub}, None, self._block)
+                     {"cond_block": cond_block, "cond": cond, "body_block": self._body},
+                     None, self._block)
         return False
 
 
@@ -454,13 +481,17 @@ def generate_solver_cpp(solver_brick):
 
 
 def _walk_nodes(values, out):
-    """Append @p values and any ops recorded in their ``while`` body sub-blocks to @p out,
-    depth-first in build order (a loop body is owned by its op, not the flat list)."""
+    """Append @p values and any ops recorded in their ``while`` cond/body sub-blocks to @p
+    out, depth-first in build order (a loop's cond and body blocks are owned by its op, not
+    the flat list). The cond block is walked too so the re-evaluated convergence predicate's
+    ops (its ``residual`` / ``apply`` over the loop-updated iterate) are visible."""
     for node in values:
         out.append(node)
-        body = node.attrs.get("body_block") if hasattr(node, "attrs") else None
-        if isinstance(body, list):
-            _walk_nodes(body, out)
+        attrs = node.attrs if hasattr(node, "attrs") else {}
+        for key in ("cond_block", "body_block"):
+            block = attrs.get(key)
+            if isinstance(block, list):
+                _walk_nodes(block, out)
 
 
 def _require_field(value, where):

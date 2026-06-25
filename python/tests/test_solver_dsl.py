@@ -19,12 +19,17 @@ lib = pytest.importorskip("adc.lib")
 def _richardson(ctx, A, b, *, omega=0.5, tol=1e-8, max_iter=100):
     """A textbook Richardson iteration authored as IR: x <- x + omega*(b - A x).
 
-    Builds IR only -- omega / tol are IR literals, never multiplied against data.
+    Builds IR only -- omega / tol are IR literals, never multiplied against data. The
+    convergence predicate is a BUILDER re-evaluated against the loop-updated x each pass
+    (it never freezes on the initial zero iterate).
     """
     x = ctx.zeros_like(b)
     it = ctx.scalar_int(0)
-    with ctx.while_(ctx.logical_and(ctx.norm2(ctx.residual(A, x, b)) > tol,
-                                    it < ctx.scalar_int(max_iter))):
+
+    def converging():
+        return ctx.logical_and(ctx.norm2(ctx.residual(A, x, b)) > tol,
+                               it < ctx.scalar_int(max_iter))
+    with ctx.while_(converging):
         r = ctx.residual(A, x, b)          # r = b - A x
         x = ctx.combine(x + omega * r)     # affine IR combine, no Python float math
         it = it + ctx.scalar_int(1)
@@ -69,6 +74,68 @@ def test_builder_builds_an_ir_with_the_expected_ops():
     assert "while" in ops
     # The solution value the builder returned is a State-like IR value.
     assert ir.result.vtype == "state"
+
+
+def test_while_records_a_cond_block_over_the_loop_updated_iterate():
+    """The convergence predicate must be RE-RECORDED against the loop-updated iterate.
+
+    A condition captured once (before the loop) over the initial zero ``x`` is a constant
+    test -- the loop would never see the iterate change. Assert the ``while`` node carries a
+    separate ``cond_block`` whose convergence ``apply`` (the A(x) inside the residual) reads
+    a State produced INSIDE the body (the updated x), not the initial zero iterate.
+    """
+    @lib.solver(name="cond_block_shape", signature="(A, b)")
+    def s(ctx, A, b):
+        return _richardson(ctx, A, b)
+
+    ir = lib.build_solver_ir(s)
+    whiles = [n for n in ir.nodes() if n.op == "while"]
+    assert whiles, "the convergence loop must emit a while node"
+    w = whiles[0]
+
+    # The predicate lives in its OWN cond_block (re-run each pass), not only the body block.
+    cond_block = w.attrs.get("cond_block")
+    assert isinstance(cond_block, list) and cond_block, (
+        "the while node must carry a non-empty cond_block (the re-evaluated predicate); "
+        "a missing cond_block freezes the test on the initial iterate")
+    assert "body_block" in w.attrs and w.attrs["body_block"]
+
+    # The recorded condition is the Bool the predicate built, and it lives in the cond_block.
+    cond = w.attrs.get("cond")
+    assert cond is not None and cond.vtype == "bool"
+    assert cond in cond_block, "the recorded condition Bool must be in the cond_block"
+
+    # The iterate A(x) is applied to the LOOP-UPDATED x. The body produces a fresh State
+    # (the linear_combine) with a higher SSA id than the initial zero iterate; the cond_block
+    # apply must read that updated State, not the initial one.
+    body_states = [n.id for n in w.attrs["body_block"]
+                   if n.vtype == "state" and n.op == "linear_combine"]
+    assert body_states, "the body must produce an updated-iterate State (the affine combine)"
+    updated_iterate_id = max(body_states)
+
+    cond_applies = [n for n in cond_block if n.op == "apply"]
+    assert cond_applies, "the convergence residual must apply A(x) inside the cond_block"
+    applied_state_ids = {inp.id for n in cond_applies for inp in n.inputs
+                         if getattr(inp, "vtype", None) == "state"}
+    assert any(sid >= updated_iterate_id for sid in applied_state_ids), (
+        "the convergence test must re-evaluate A(x) on the loop-updated iterate "
+        "(id >= %d), not on the initial zero x; got applied state ids %s"
+        % (updated_iterate_id, sorted(applied_state_ids)))
+
+
+def test_while_rejects_a_pre_built_bool_condition():
+    """A pre-built Bool freezes the convergence test on the initial iterate, so ``while_``
+    must reject it and require a builder callback instead."""
+    @lib.solver(name="reject_prebuilt_cond")
+    def s(ctx, A, b):
+        x = ctx.zeros_like(b)
+        frozen = ctx.norm2(ctx.residual(A, x, b)) > 1e-8  # a pre-built Bool over the zero x
+        with ctx.while_(frozen):                          # must raise, not freeze
+            x = ctx.combine(x + 0.5 * ctx.residual(A, x, b))
+        return x
+
+    with pytest.raises(TypeError):
+        lib.build_solver_ir(s)
 
 
 def test_richardson_example_builds_an_affine_update_loop():
