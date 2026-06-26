@@ -199,7 +199,7 @@ def test_read_back_rejects_an_abi_mismatch(tmp_path):
     compiling with a mismatched POPS_HEADER_SIG, then confirm read_library_manifest rejects it."""
     cc, cflags, lflags = _toolchain_or_skip()
     dsl = pytest.importorskip("pops.dsl")
-    from pops.library_codegen import emit_library_cpp
+    from pops.codegen.library_codegen import emit_library_cpp
     import os
     import subprocess
     import tempfile

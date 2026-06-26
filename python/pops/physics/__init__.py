@@ -42,7 +42,8 @@ from .multispecies import CoupledSource, CompiledCoupledSource
 from .board import Model
 from .board_handles import (
     Invariant, FluxHandle, SourceHandle, FieldsHandle, FieldHandle,
-    LocalLinearOperatorExpr, CallableOperator, StateHandle, VectorHandle)
+    LocalLinearOperatorExpr, CallableOperator, StateHandle, VectorHandle,
+    _roles_for)  # restore the flat physics.py module-level access (test_riemann_capabilities)
 
 __all__ = [
     # board surface (the historical pops.physics public names)
