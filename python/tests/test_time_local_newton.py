@@ -25,10 +25,10 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # noqa: BLE001 -- adc not importable here -> skip, never fake
+    except Exception as exc:  # noqa: BLE001 -- pops not importable here -> skip, never fake
         print("skip test_time_local_newton (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -189,7 +189,7 @@ def section_b(t):
         import pops
         from pops import dsl
     except Exception as exc:  # noqa: BLE001
-        print("-- (B) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
 
     if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
@@ -277,7 +277,7 @@ def section_b(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     section_a(t)
     section_b(t)
     print("%s test_time_local_newton" % ("FAIL (%d)" % fails if fails else "PASS"))

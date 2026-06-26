@@ -6,7 +6,7 @@ between the two writing fronts: native bricks and the symbolic DSL. For the conc
 model, see [The physical model](../concepts/physical-model.md). For the full step-by-step
 walkthrough of each front, follow the two write-a-model tutorials linked below.
 
-This page assumes you have already built the `adc` Python module. If you have not, follow the
+This page assumes you have already built the `pops` Python module. If you have not, follow the
 [installation guide](../getting-started/installation.md) first.
 
 ## Choose a writing front

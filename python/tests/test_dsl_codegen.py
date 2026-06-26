@@ -3,7 +3,7 @@
 Verifie : (1) emit_cpp() produit une source C++ plausible (signature, locals, assignations) ;
 (2) si un compilateur C++ est present, la fonction flux GENEREE est compilee, executee sur des
 etats deterministes, et son resultat compare a l'interprete numpy (meme arbre, deux backends).
-Pur Python ; lance avec python3 (PYTHONPATH = paquet adc construit). Le compilateur est celui qui
+Pur Python ; lance avec python3 (PYTHONPATH = paquet pops construit). Le compilateur est celui qui
 a deja servi a batir _pops, donc disponible dans le job CI correspondant.
 """
 import os

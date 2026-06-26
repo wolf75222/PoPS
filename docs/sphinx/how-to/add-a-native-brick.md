@@ -14,7 +14,7 @@ For the full registry of bricks, signatures, parameters and constraints, see the
 
 ## Before you begin
 
-Build and import `adc`. For a first local run, use the Kokkos Serial backend (see
+Build and import `pops`. For a first local run, use the Kokkos Serial backend (see
 [Installation](../getting-started/installation.md)). The bricks in this recipe run on the
 native `add_block` path, which preserves MPI, AMR and GPU.
 

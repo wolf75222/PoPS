@@ -17,7 +17,7 @@ endif()
 
 function(pops_add_test name)
   add_executable(${name} ${name}.cpp)
-  # pops_dev_options : cible INTERFACE vide par defaut (cf. cmake/AdcDevTooling.cmake) ; ne porte des
+  # pops_dev_options : cible INTERFACE vide par defaut (cf. cmake/PopsDevTooling.cmake) ; ne porte des
   # flags QUE si POPS_ENABLE_WARNINGS / POPS_ENABLE_SANITIZERS sont ON (workflow quality.yml). PRIVATE :
   # n'affecte que la compilation/edition de liens de ce test, jamais l'API publique pops::pops.
   target_link_libraries(${name} PRIVATE pops::pops pops_dev_options)
@@ -235,18 +235,18 @@ pops_add_test(test_generic_krylov)
 # Un interprete Python (n'importe lequel) suffit : le codegen est PUR Python (aucune extension _pops).
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
-  set(_adc_gen_solver_hpp "${CMAKE_CURRENT_BINARY_DIR}/pops_generated_solver.hpp")
+  set(_pops_gen_solver_hpp "${CMAKE_CURRENT_BINARY_DIR}/pops_generated_solver.hpp")
   add_custom_command(
-    OUTPUT "${_adc_gen_solver_hpp}"
+    OUTPUT "${_pops_gen_solver_hpp}"
     COMMAND ${CMAKE_COMMAND} -E env "PYTHONDONTWRITEBYTECODE=1"
             "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/gen_solver_kernel.py"
-            "${_adc_gen_solver_hpp}"
+            "${_pops_gen_solver_hpp}"
     DEPENDS "${CMAKE_SOURCE_DIR}/scripts/gen_solver_kernel.py"
             "${CMAKE_SOURCE_DIR}/python/pops/lib.py"
             "${CMAKE_SOURCE_DIR}/python/pops/time.py"
     COMMENT "Generating custom-solver C++ kernel (pops.lib.generate_solver_cpp, ADC-462)"
     VERBATIM)
-  add_custom_target(pops_gen_solver_kernel DEPENDS "${_adc_gen_solver_hpp}")
+  add_custom_target(pops_gen_solver_kernel DEPENDS "${_pops_gen_solver_hpp}")
   pops_add_test(test_solver_codegen_generated)
   target_include_directories(test_solver_codegen_generated PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   add_dependencies(test_solver_codegen_generated pops_gen_solver_kernel)
@@ -788,7 +788,7 @@ if(POPS_HAS_MPI)
   # est par construction un test MPI -> on lui (re)pose LABELS "mpi" + TIMEOUT 600 a la fin du bloc.
   # Difference d'ensemble exacte (aucune selection par motif de nom, fragile) ; idempotent pour les
   # tests deja labellises par pops_add_mpi_test.
-  get_property(_adc_tests_before_mpi DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
+  get_property(_pops_tests_before_mpi DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
   function(pops_add_mpi_test name nproc)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} PRIVATE pops::pops)
@@ -1067,16 +1067,16 @@ if(POPS_HAS_MPI)
   # set_tests_properties LABELS : ne JAMAIS ecraser un autre label deja pose ; TIMEOUT pose uniquement
   # s'il n'en existe pas, pour respecter un timeout choisi explicitement. list(FIND) plutot que
   # IN_LIST : pas de dependance a CMP0057.
-  get_property(_adc_tests_after_mpi DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
-  foreach(_t ${_adc_tests_after_mpi})
-    list(FIND _adc_tests_before_mpi "${_t}" _adc_mpi_seen)
-    if(_adc_mpi_seen EQUAL -1)
-      get_test_property(${_t} LABELS _adc_mpi_labels)
-      if(NOT _adc_mpi_labels MATCHES "(^|;)mpi(;|$)")
+  get_property(_pops_tests_after_mpi DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
+  foreach(_t ${_pops_tests_after_mpi})
+    list(FIND _pops_tests_before_mpi "${_t}" _pops_mpi_seen)
+    if(_pops_mpi_seen EQUAL -1)
+      get_test_property(${_t} LABELS _pops_mpi_labels)
+      if(NOT _pops_mpi_labels MATCHES "(^|;)mpi(;|$)")
         set_property(TEST ${_t} APPEND PROPERTY LABELS "mpi")
       endif()
-      get_test_property(${_t} TIMEOUT _adc_mpi_timeout)
-      if(NOT _adc_mpi_timeout)
+      get_test_property(${_t} TIMEOUT _pops_mpi_timeout)
+      if(NOT _pops_mpi_timeout)
         set_property(TEST ${_t} PROPERTY TIMEOUT 600)
       endif()
     endif()
@@ -1098,9 +1098,9 @@ pops_add_test(test_elliptic_interface)
 # (jamais deux TU lourdes concurrentes). La boucle couvre les cibles FUTURES automatiquement :
 # plus d'appel manuel a oublier. Benefice annexe : build des tests nettement plus rapide
 # (TU lourde a -O0 ~ 40 s contre ~470 s a -O3).
-get_property(_adc_dir_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
-set(_adc_capped 0)
-foreach(_t ${_adc_dir_targets})
+get_property(_pops_dir_targets DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY BUILDSYSTEM_TARGETS)
+set(_pops_capped 0)
+foreach(_t ${_pops_dir_targets})
   get_target_property(_t_sources ${_t} SOURCES)
   get_target_property(_t_libs ${_t} LINK_LIBRARIES)
   # Cap (-O0 + size-1 pool pops_heavy_tu) every target that EITHER compiles a heavy runtime TU directly
@@ -1112,7 +1112,7 @@ foreach(_t ${_adc_dir_targets})
   # not -O0 alone, is the structural anti-OOM guard (see the head-of-file note), so we re-attach it here.
   if(_t_sources MATCHES "python/(amr_)?system\.cpp" OR _t_libs MATCHES "pops_runtime_(system|amr)")
     pops_cap_opt_for_kokkos_ram(${_t})
-    math(EXPR _adc_capped "${_adc_capped}+1")
+    math(EXPR _pops_capped "${_pops_capped}+1")
   endif()
 endforeach()
-message(STATUS "pops tests: ${_adc_capped} cibles a TU lourde capees (-O0 + pool pops_heavy_tu)")
+message(STATUS "pops tests: ${_pops_capped} cibles a TU lourde capees (-O0 + pool pops_heavy_tu)")

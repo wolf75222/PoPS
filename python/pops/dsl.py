@@ -23,7 +23,7 @@ Target (target=) :
   - "AmrSystem" : AMR-wired system (#92/#105), only with backend "production".
 
 Ergonomics :
-  - m.compile() auto-detects the adc includes and caches the .so by (model_hash, abi_key) (#103).
+  - m.compile() auto-detects the pops includes and caches the .so by (model_hash, abi_key) (#103).
   - The physical roles (gamma, n_aux, B_z, T_e) are preserved and passed through to the C++.
 
 Inter-species coupling (#131, #167) :
@@ -44,7 +44,7 @@ import numpy as np
 # test_projection_eig loads dsl.py via spec_from_file_location), where a relative import has no
 # parent package; fall back to loading the sibling model/ PACKAGE by path (it is stdlib-only).
 # The package uses relative intra-imports, so we register it under a name and give the spec its
-# submodule search path; `from .spaces import ...` then resolves without importing adc/_pops.
+# submodule search path; `from .spaces import ...` then resolves without importing pops/_pops.
 try:
     from . import model as _model
 except ImportError:  # pragma: no cover - exercised only by the standalone-import path
@@ -63,12 +63,12 @@ except ImportError:  # pragma: no cover - exercised only by the standalone-impor
 # The "production" backend (compile_native) emits a .so loader that inlines the header template
 # pops::add_compiled_model and calls off-line methods of the already-loaded _pops module. Loader and
 # module MUST share the same C++ ABI (same headers, compiler, standard). We materialize the
-# "header signature" in the ABI key (adc/runtime/abi_key.hpp, token POPS_HEADER_SIG) ; the
+# "header signature" in the ABI key (pops/runtime/abi_key.hpp, token POPS_HEADER_SIG) ; the
 # module build bakes it (CMake) and compile_native re-bakes it (-D flag) by computing it IDENTICALLY.
 # The computation MUST be bit-for-bit identical on the CMake side (python/CMakeLists.txt) and here : sha256 of the
 # sorted concatenation "<relpath>\n<sha256(content)>\n" of each .hpp/.h under include/. cf. abi_key.hpp.
 def pops_header_signature(include):
-    """Stable signature of the adc header tree under @p include : sha256 of the sorted concatenation
+    """Stable signature of the pops header tree under @p include : sha256 of the sorted concatenation
     "<relative path>\\n<sha256 of content>\\n" of each .hpp/.h. EXACT MIRROR of the CMake computation
     (python/CMakeLists.txt) : if a header changes, the signature changes on both sides, so the ABI
     key diverges and add_native_block raises an explicit error (never silent UB)."""
@@ -87,19 +87,19 @@ def pops_header_signature(include):
     return hashlib.sha256(blob).hexdigest()
 
 
-# --- Auto-detection of the adc include directory -----------------------------------
-# To make m.compile(...) ergonomic, the adc headers directory is deduced automatically
+# --- Auto-detection of the pops include directory -----------------------------------
+# To make m.compile(...) ergonomic, the pops headers directory is deduced automatically
 # when the caller does not pass it. MIRROR of adc_cases/common/native.py::pops_include : we try
-# $POPS_INCLUDE (explicit override), then we climb from the installed `adc` package (build-py/python/
-# adc/ -> ../../../include), then the neighboring repo ../adc_cpp/include. Validity criterion : the
-# canonical file adc/mesh/multifab.hpp exists. No hard import of adc here (the dsl module may be loaded
+# $POPS_INCLUDE (explicit override), then we climb from the installed `pops` package (build-py/python/
+# pops/ -> ../../../include), then the neighboring repo ../adc_cpp/include. Validity criterion : the
+# canonical file pops/mesh/multifab.hpp exists. No hard import of pops here (the dsl module may be loaded
 # outside the package) : we resolve `pops.__file__` lazily.
 def pops_include():
     """include/ directory of adc_cpp (header-only headers of the core), auto-detected.
 
-    Priority : $POPS_INCLUDE (override), otherwise from the installed `adc` package
-    (.../adc -> ../../../include), otherwise the neighboring repo (.../adc_cpp/include from this module).
-    Requires that adc/mesh/storage/multifab.hpp exists. Raises RuntimeError if not found (diagnostic listing the
+    Priority : $POPS_INCLUDE (override), otherwise from the installed `pops` package
+    (.../pops -> ../../../include), otherwise the neighboring repo (.../adc_cpp/include from this module).
+    Requires that pops/mesh/storage/multifab.hpp exists. Raises RuntimeError if not found (diagnostic listing the
     candidates), so as to NEVER compile against a silently wrong include."""
     import os
     here = os.path.dirname(os.path.abspath(__file__))           # .../python/pops
@@ -108,25 +108,25 @@ def pops_include():
     if env:
         candidates.append(env)
     try:
-        import pops as _adc_pkg
-        pkg = os.path.dirname(os.path.abspath(_adc_pkg.__file__))   # .../adc
+        import pops as _pops_pkg
+        pkg = os.path.dirname(os.path.abspath(_pops_pkg.__file__))   # .../pops
         candidates.append(os.path.normpath(os.path.join(pkg, "..", "..", "..", "include")))
     except Exception:
         pass
     # from this file (python/pops/dsl.py) : python/pops -> python -> repo root -> include
     candidates.append(os.path.normpath(os.path.join(here, "..", "..", "include")))
     for c in candidates:
-        if c and os.path.isfile(os.path.join(c, "adc", "mesh", "storage", "multifab.hpp")):
+        if c and os.path.isfile(os.path.join(c, "pops", "mesh", "storage", "multifab.hpp")):
             return c
     raise RuntimeError(
-        "adc headers not found (looking for adc/mesh/storage/multifab.hpp). "
+        "pops headers not found (looking for pops/mesh/storage/multifab.hpp). "
         "Pass include=<adc_cpp>/include or set POPS_INCLUDE. Candidates tried : "
         + ", ".join(repr(c) for c in candidates))
 
 
 # --- C++ standard of the native loader (ABI boundary of the "production" path) ----------
 # The "production" backend generates a .so loader that inlines add_compiled_model<> and calls off-line
-# methods of the ALREADY-loaded _pops module. The ABI key (adc/runtime/abi_key.hpp) encodes __cplusplus :
+# methods of the ALREADY-loaded _pops module. The ABI key (pops/runtime/abi_key.hpp) encodes __cplusplus :
 # the loader and the module must therefore share the SAME C++ standard, otherwise add_native_block rejects
 # ("incompatible ABI"). The module bakes its real standard (POPS_CXX_STD : 20 under Kokkos because CUDA 12.x
 # has no -std=c++23, 23 otherwise) and exposes it as _pops.__cxx_std__. We derive the expected -std flag of the
@@ -142,14 +142,14 @@ def loader_cxx_std():
         import _pops
     except Exception:
         try:
-            from . import _pops  # adc package : the extension is a submodule
+            from . import _pops  # pops package : the extension is a submodule
         except Exception:
             _pops = None
-    std = _adc_cxx_std_from_module(_pops) if _pops is not None else None
+    std = _pops_cxx_std_from_module(_pops) if _pops is not None else None
     return std or "c++23"
 
 
-def _adc_cxx_std_from_module(mod):
+def _pops_cxx_std_from_module(mod):
     """C++ standard of the module @p mod as 'c++NN', or None if undeterminable. Priority to the integer
     __cxx_std__ (baked by the build) ; otherwise we extract std=<__cplusplus> from the ABI key."""
     n = getattr(mod, "__cxx_std__", None)
@@ -178,7 +178,7 @@ def _adc_cxx_std_from_module(mod):
 # cf. abi_key.hpp) would reject the .so ("incompatible ABI"). The ONLY guaranteed-compatible compiler
 # is the one from the _pops build : CMake bakes it (POPS_CXX_COMPILER -> _pops.__cxx_compiler__) and we
 # prefer it here over the PATH. $POPS_CXX remains the conscious override (chosen conda toolchain, wrapper...).
-def _adc_module():
+def _pops_module():
     """The _pops extension module if it is loadable, otherwise None (dsl.py stays usable alone)."""
     try:
         import _pops
@@ -201,7 +201,7 @@ def loader_cxx_compiler():
     clang while resolving the SDK : same __VERSION__, hence same ABI key -- so we prefer the shim
     (pitfall and remedy identical to compile_loader of the native C++ tests)."""
     import sys
-    mod = _adc_module()
+    mod = _pops_module()
     cc = getattr(mod, "__cxx_compiler__", "") if mod is not None else ""
     if not (cc and os.path.isfile(cc) and os.access(cc, os.X_OK)):
         return None
@@ -214,7 +214,7 @@ def loader_cxx_compiler():
 def module_header_signature():
     """Header signature BAKED into the loaded _pops module (token headers= of abi_key()), or None
     if the module is not loadable / the key is absent ("unknown" from a manual build -> None too)."""
-    mod = _adc_module()
+    mod = _pops_module()
     abi = getattr(mod, "abi_key", None) if mod is not None else None
     if not callable(abi):
         return None
@@ -238,7 +238,7 @@ def resolve_auto_backend(include=None):
     default : host-marshaled, works without module or parity). Never silent : returns
     (backend, reason) and the facades set the reason on CompiledModel.backend_auto_reason.
     An EXPLICIT backend passed by the caller short-circuits this policy (unchanged)."""
-    mod = _adc_module()
+    mod = _pops_module()
     if mod is None:
         return "aot", "_pops module not loadable (the production path requires the module)"
     if not loader_cxx_compiler():
@@ -250,7 +250,7 @@ def resolve_auto_backend(include=None):
         inc = include if include is not None else pops_include()
         sig = pops_header_signature(inc)
     except Exception as e:  # headers not found / unreadable -> fall back on default
-        return "aot", "adc headers not found for parity (%s)" % e
+        return "aot", "pops headers not found for parity (%s)" % e
     if sig != baked:
         return "aot", ("headers != module (rebuild the module or point at the build headers ; "
                        "production would refuse, cf. _check_headers_match_module)")
@@ -268,10 +268,10 @@ def _check_headers_match_module(include):
     baked = module_header_signature()
     current = pops_header_signature(include)
     if baked is not None and current != baked:
-        mod = _adc_module()
+        mod = _pops_module()
         so = getattr(mod, "__file__", "(unknown)")
         raise RuntimeError(
-            "pops.dsl : the adc headers of %r DO NOT MATCH those with which the _pops module "
+            "pops.dsl : the pops headers of %r DO NOT MATCH those with which the _pops module "
             "was built (%s).\n"
             "  current header signature : %s\n"
             "  signature baked in _pops  : %s\n"
@@ -300,14 +300,14 @@ def check_compiled_matches_module(abi_key):
     so_sig = str(abi_key).split("|", 1)[0]
     if so_sig and so_sig != baked:
         raise RuntimeError(
-            "adc : the compiled model (.so) was produced against adc headers DIFFERENT from those "
+            "pops : the compiled model (.so) was produced against pops headers DIFFERENT from those "
             "of the loaded _pops module (signature %s... vs %s... baked in the module).\n"
             "Typical cause : stale _pops module (built before a `git pull`) while the .so has just "
             "been (re)compiled on the up-to-date headers -- the dlopen would fail with a cryptic "
             "'symbol not found'.\n"
             "Remedy : REBUILD the module then re-run :\n"
             "  cmake --preset python && cmake --build --preset python\n"
-            "Full diagnostic : python -c \"import adc; pops.doctor()\"."
+            "Full diagnostic : python -c \"import pops; pops.doctor()\"."
             % (so_sig[:12], baked[:12]))
 
 
@@ -342,7 +342,7 @@ def _run_compile(cmd, what):
             "pops.dsl: compiling the .so (%s) failed (exit %d).\n"
             "Command: %s\n"
             "Compiler output:\n%s\n"
-            "Hints: `python -c \"import adc; pops.doctor()\"` diagnoses the environment "
+            "Hints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment "
             "(compiler/standard/headers); POPS_CXX forces a specific compiler."
             % (what, r.returncode, " ".join(cmd), err[:4000] or "(empty)"))
 
@@ -413,13 +413,13 @@ def _probe_cxx_std(cc, std):
 def pops_cache_dir():
     """Cache directory for the .so files generated by m.compile() without an explicit so_path.
 
-    $POPS_CACHE_DIR (override), else $XDG_CACHE_HOME/adc/dsl, else ~/.cache/adc/dsl. Created as needed.
+    $POPS_CACHE_DIR (override), else $XDG_CACHE_HOME/pops/dsl, else ~/.cache/pops/dsl. Created as needed.
     Out-of-source by construction (never inside the repo tree), so nothing to ignore on the git side."""
     import os
     base = os.environ.get("POPS_CACHE_DIR")
     if not base:
         xdg = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-        base = os.path.join(xdg, "adc", "dsl")
+        base = os.path.join(xdg, "pops", "dsl")
     os.makedirs(base, exist_ok=True)
     return base
 
@@ -485,7 +485,7 @@ def _record_so_backend(so_path, backend):
 def _native_kokkos_root():
     """Kokkos root to compile the DSL loaders with the SAME backend as the _pops module.
 
-    adc_cpp is KOKKOS-ONLY: every DSL .so that includes the adc headers (aot, native) MUST be compiled
+    adc_cpp is KOKKOS-ONLY: every DSL .so that includes the pops headers (aot, native) MUST be compiled
     with Kokkos (for_each.hpp #error otherwise). The root is read from POPS_KOKKOS_ROOT / Kokkos_ROOT /
     KOKKOS_ROOT; None if not found (the caller then raises an explicit error)."""
     for key in ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT"):
@@ -535,7 +535,7 @@ def _native_feature_key():
     # compiled code (real comm vs serial stubs n_ranks()=1/my_rank()=0) -> it MUST enter the cache,
     # else a SERIAL-stub .so would be reused on an MPI module and any distributed layout built inside
     # the loader (e.g. AmrSystem(distribute_coarse=True)) would replicate on every rank (no scaling).
-    mod = _adc_module()
+    mod = _pops_module()
     mpi = "mpi=on" if (mod is not None and getattr(mod, "__has_mpi__", False)) else "mpi=off"
     return "%s;%s" % (kk, mpi)
 
@@ -569,11 +569,11 @@ def _warn_kokkos_parity():
     - Kokkos module + serial loader (POPS_KOKKOS_ROOT missing) -> the DSL block falls back to the
       SERIAL path silently: zero-copy but DOES NOT SCALE with threads/GPU (ROMEO measurement: DSL warm
       invariant threads=1/4/8). This is a silent PERF degradation, not a crash -> explicit warning.
-    - serial module + POPS_KOKKOS_ROOT defined -> the loader would instantiate -DADC_HAS_KOKKOS against a
+    - serial module + POPS_KOKKOS_ROOT defined -> the loader would instantiate -DPOPS_HAS_KOKKOS against a
       module that is not (divergent allocator/type layouts, not covered by the ABI key).
     Source of truth: _pops.__has_kokkos__ (baked by the build) vs _native_kokkos_root() (env)."""
     import warnings
-    mod = _adc_module()
+    mod = _pops_module()
     has = getattr(mod, "__has_kokkos__", None) if mod is not None else None
     root = _native_kokkos_root()
     if has is True and root is None:
@@ -585,7 +585,7 @@ def _warn_kokkos_parity():
     elif has is False and root is not None:
         warnings.warn(
             "pops.dsl: POPS_KOKKOS_ROOT is defined but the _pops module is SERIAL (compiled without "
-            "-DADC_USE_KOKKOS=ON) -> the loader would be compiled with Kokkos against a module that is "
+            "-DPOPS_USE_KOKKOS=ON) -> the loader would be compiled with Kokkos against a module that is "
             "not (divergent memory layouts, not covered by the ABI key). Remove "
             "POPS_KOKKOS_ROOT or rebuild _pops with Kokkos (preset python-parallel).",
             RuntimeWarning, stacklevel=3)
@@ -613,10 +613,10 @@ def _native_kokkos_compiler(cxx):
     return _default_cxx(None)
 
 
-def _adc_import_lib():
+def _pops_import_lib():
     """(Windows, ADC-100) Path of the import library _pops.lib (System POPS_EXPORT symbols) against
     which to link the DSL .dll. Searched next to the _pops module. None if absent."""
-    mod = _adc_module()
+    mod = _pops_module()
     if mod is None:
         return None
     d = os.path.dirname(getattr(mod, "__file__", "") or "")
@@ -637,9 +637,9 @@ def _native_kokkos_flags():
     if sys.platform == "win32":
         # MSVC/clang-cl: Kokkos as a SHARED DLL -> link the import lib kokkoscore.lib (ONE single runtime;
         # _pops loads the same kokkoscore.dll). cl accepts -D/-I. No -fopenmp/-ldl/-pthread (POSIX).
-        return (["-DADC_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc],
+        return (["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc],
                 [os.path.join(root, "lib", "kokkoscore.lib")])
-    compile_flags = ["-DADC_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc]
+    compile_flags = ["-DPOPS_HAS_KOKKOS", "-DKOKKOS_DEPENDENCE", "-I", inc]
     # Do NOT link libkokkos* INTO the .so: the _pops module has already loaded the Kokkos runtime, a
     # SINGLETON (global registry of execution spaces), and add_native_block promotes it to global
     # scope (RTLD_GLOBAL). Linking a 2nd copy of Kokkos into the loader gives two runtimes: the
@@ -676,15 +676,15 @@ def _native_mpi_flags():
     Compiled WITHOUT POPS_HAS_MPI while _pops is built WITH MPI, comm.hpp falls back to its SERIAL stubs
     (n_ranks()=1, my_rank()=0): any distributed layout built INSIDE the loader then collapses to a
     single owner on EVERY rank -- e.g. AmrSystem(distribute_coarse=True) replicates the coarse
-    transport on all ranks (no MPI strong-scaling, ADC-319). We compile WITH -DADC_HAS_MPI + the SAME
+    transport on all ranks (no MPI strong-scaling, ADC-319). We compile WITH -DPOPS_HAS_MPI + the SAME
     MPI include dir as _pops (baked as __mpi_include__) and leave the MPI symbols UNDEFINED, resolved at
     load time against the libmpi already loaded by _pops / mpi4py (RTLD_GLOBAL) -- no 2nd libmpi linked,
     exactly like the Kokkos runtime. Empty (no flag) when _pops is a serial build (__has_mpi__ False),
     so the serial loader path stays bit-identical."""
-    mod = _adc_module()
+    mod = _pops_module()
     if mod is None or not getattr(mod, "__has_mpi__", False):
         return []
-    flags = ["-DADC_HAS_MPI"]
+    flags = ["-DPOPS_HAS_MPI"]
     inc = getattr(mod, "__mpi_include__", "") or ""
     for d in inc.split("|"):  # CMake bakes the include dirs joined by '|' (paths may contain ';')
         if d:
@@ -693,7 +693,7 @@ def _native_mpi_flags():
 
 
 def pops_loader_build_flags(cxx=None):
-    """Flags to compile OUTSIDE CMake a .so that INCLUDES the adc headers and will be loaded into the
+    """Flags to compile OUTSIDE CMake a .so that INCLUDES the pops headers and will be loaded into the
     _pops module (DSL loaders, ABI tests). adc_cpp being Kokkos-only, the .so MUST be compiled with
     Kokkos (for_each.hpp #error otherwise). Returns (compiler, compile_flags, link_flags): Kokkos +
     (macOS) -undefined dynamic_lookup. The Kokkos symbols stay UNDEFINED, resolved at load time
@@ -3046,7 +3046,7 @@ class HyperbolicModel:
             # cpps : C++ already generated (possibly CSE) for the eigenvalues. Internal names suffixed
             # '_' : they shadow neither a user variable nor the Aux parameter 'a' (see adversarial review).
             lines = ["%sconst pops::Real lam%d_ = %s;" % (ind, k, c) for k, c in enumerate(cpps)]
-            lines.append("%sadc::Real mws_ = lam0_ < 0 ? -lam0_ : lam0_;" % ind)
+            lines.append("%spops::Real mws_ = lam0_ < 0 ? -lam0_ : lam0_;" % ind)
             for k in range(1, len(cpps)):
                 lines.append("%s{ const pops::Real cand_ = lam%d_ < 0 ? -lam%d_ : lam%d_;"
                              " if (cand_ > mws_) mws_ = cand_; }" % (ind, k, k, k))
@@ -3096,7 +3096,7 @@ class HyperbolicModel:
             L = []
             if ws["eig"] == "fd":
                 L.append("%sconst State F0_ = flux(U, a, dir);" % ind)
-                L.append("%sadc::Real Jf_[%d][%d];" % (ind, nv, nv))
+                L.append("%spops::Real Jf_[%d][%d];" % (ind, nv, nv))
                 L.append("%sconst pops::Real eps_ = pops::Real(1e-6) * (U[0] < 0 ? -U[0] : U[0])"
                          " + pops::Real(1e-30);" % ind)
                 L.append("%sfor (int k_ = 0; k_ < %d; ++k_) {" % (ind, nv))
@@ -3539,7 +3539,7 @@ class HyperbolicModel:
             S += ["    return d;", "  }", ""]
 
         # OPTIONAL step bounds (m.stability_speed / m.stability_dt): emitted like the C++
-        # traits HasStabilitySpeed / HasStabilityDt (cf. adc/core/physical_model.hpp). A single
+        # traits HasStabilitySpeed / HasStabilityDt (cf. pops/core/physical_model.hpp). A single
         # expression (isotropic): dir is ignored. WITHOUT a call, nothing emitted -> strict fallback
         # max_wave_speed (historical step policy).
         if self._stab_speed is not None:
@@ -3594,11 +3594,11 @@ class HyperbolicModel:
 
     def emit_cpp_source(self, name=None, namespace="pops_generated", cse=True,
                         hoist_reciprocals=False):
-        """Generate a composable C++ SOURCE BRICK (in the adc sense) from self._source.
+        """Generate a composable C++ SOURCE BRICK (in the pops sense) from self._source.
 
         The produced struct exposes apply(U, a) returning the source term S(U, aux), with one line per
         conservative component (S[i] = self._source[i].to_cpp()). It has the same form as the source
-        bricks written by hand (NoSource, PotentialForce in adc/model/bricks.hpp) and can therefore
+        bricks written by hand (NoSource, PotentialForce in pops/model/bricks.hpp) and can therefore
         enter as the Source parameter of a CompositeModel.
 
         CONVENTION: the auxiliary names (set via aux(...)) must be FIELDS of pops::Aux,
@@ -3766,7 +3766,7 @@ class HyperbolicModel:
 
         @p model_alias must be an alias WITHOUT a top-level comma (the preprocessor splits
         macro arguments on commas): callers pass a `using ... = CompositeModel<...>`."""
-        out = "\nADC_EXPORT_BLOCK_METADATA(%s)\n" % model_alias
+        out = "\nPOPS_EXPORT_BLOCK_METADATA(%s)\n" % model_alias
         if self.gamma is not None:
             out += "POPS_EXPORT_BLOCK_GAMMA(%r)\n" % self.gamma
         # Table of NAMED aux names (aux_field, ADC-70), ordered CSV (order = AUX_NAMED_BASE +
@@ -3818,7 +3818,7 @@ class HyperbolicModel:
         """JIT: generate the FULL MODEL (emit_cpp_so_source) and compile a shared library
         loadable by System.add_dynamic_block (dlopen). The .so exposes a CompositeModel<hyperbolic,
         source, elliptic>: the dynamic block applies the flux AND the source, and contributes to the
-        system Poisson via elliptic_rhs (a real coupled block, no longer just transport). include = adc
+        system Poisson via elliptic_rhs (a real coupled block, no longer just transport). include = pops
         headers directory (None -> auto-detected via pops_include()); cxx = compiler (default
         c++/g++/clang++). Returns so_path. Requires set_primitive_state(...) and
         set_conservative_from([...]) (like emit_cpp_brick)."""
@@ -3870,10 +3870,10 @@ class HyperbolicModel:
         loadable by System.add_compiled_block. Unlike the "jit" backend (compile_so: IModel,
         virtual dispatch, host Rusanov), the block here runs the PRODUCTION path (HLLC/Roe flux at
         will, order 2, SSPRK2/IMEX) on the generated model -- numerics identical to a native block.
-        include = adc headers directory (None -> auto-detected via pops_include()); cxx = compiler.
+        include = pops headers directory (None -> auto-detected via pops_include()); cxx = compiler.
         Returns so_path.
 
-        KOKKOS-ONLY: the AOT model includes the adc headers (multifab/for_each), which do NOT compile
+        KOKKOS-ONLY: the AOT model includes the pops headers (multifab/for_each), which do NOT compile
         without POPS_HAS_KOKKOS. So we compile the .so WITH Kokkos (same flags as the native loader), which
         also aligns its ABI with the _pops module (also Kokkos). An installed Kokkos must be visible
         via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial is enough on CPU)."""
@@ -3885,10 +3885,10 @@ class HyperbolicModel:
         src = self.emit_cpp_aot_source(name=name, hoist_reciprocals=hoist_reciprocals)
         if _native_kokkos_root() is None:
             raise RuntimeError(
-                "compile_aot: adc_cpp is Kokkos-only -- the AOT model includes the adc headers which "
+                "compile_aot: adc_cpp is Kokkos-only -- the AOT model includes the pops headers which "
                 "require Kokkos. Point at an installed Kokkos via POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. "
                 "`export POPS_KOKKOS_ROOT=/path/to/kokkos` (Serial is enough on CPU). "
-                "Run `python -c \"import adc; pops.doctor()\"` for a full diagnosis and copy-paste fixes.")
+                "Run `python -c \"import pops; pops.doctor()\"` for a full diagnosis and copy-paste fixes.")
         cc = _native_kokkos_compiler(cxx)
         if not cc:
             raise RuntimeError("compile_aot: no C++ compiler found")
@@ -3951,7 +3951,7 @@ class HyperbolicModel:
         nv, bricks, composite = self._emit_bricks(name, hoist_reciprocals=hoist_reciprocals)
         nm = name or (self.name.capitalize() + "Gen")  # brick struct prefix (matches _emit_bricks)
         ell_field_regs = self._elliptic_field_registrations(nm)  # ADC-428 named elliptic fields
-        # std headers FIRST (before any namespace). MSVC: a #include <std> while an adc namespace
+        # std headers FIRST (before any namespace). MSVC: a #include <std> while an pops namespace
         # is open makes std seen as pops::std (<vector> errors); g++ tolerates it because already included via
         # guard. Hoisting them here makes the brick-internal #include std harmless (no-op guard).
         head = ('#include <cmath>\n'
@@ -4046,11 +4046,11 @@ class HyperbolicModel:
         ensure_aux_width on the System side; set_compiled_block on the AmrSystem side) DEFINED elsewhere: so we
         compile with '-undefined dynamic_lookup' (macOS) to allow these undefined ones (resolved at
         runtime against the already-loaded module; cf. add_native_block). We also bake
-        -DADC_HEADER_SIG=<signature> IDENTICAL to the module's so that the ABI keys match when
+        -DPOPS_HEADER_SIG=<signature> IDENTICAL to the module's so that the ABI keys match when
         the headers match. std: a std different from the module would change __cplusplus hence the key ->
         explicit rejection; the callers (Model.compile/HybridModel.compile) therefore default to the
         loader's standard (loader_cxx_std: c++20 under Kokkos, c++23 otherwise) and not c++23 hard-coded.
-        include = adc headers directory (None -> auto-detected via pops_include()); cxx = compiler.
+        include = pops headers directory (None -> auto-detected via pops_include()); cxx = compiler.
         Returns so_path."""
         import os
         import sys
@@ -4060,7 +4060,7 @@ class HyperbolicModel:
             include = pops_include()
         # PRE-DLOPEN GUARD: headers != those of the _pops build -> clear error HERE ("rebuild the
         # module") instead of a cryptic dlopen 'symbol not found' in add_native_block. Returns the
-        # computed signature (reused for -DADC_HEADER_SIG: a single walk+sha256, not two).
+        # computed signature (reused for -DPOPS_HEADER_SIG: a single walk+sha256, not two).
         sig = _check_headers_match_module(include)
         _warn_kokkos_parity()  # Kokkos module + serial loader (or the reverse) -> warn, do not block
         src = self.emit_cpp_native_loader(name=name, target=target,
@@ -4072,14 +4072,14 @@ class HyperbolicModel:
         # gcc/clang of a conda env picked from the PATH), an actionable error instead of the raw error
         # "invalid value 'c++23'". May fall back to the c++2b spelling (same level).
         std = _probe_cxx_std(cc, std)
-        # -DADC_HEADER_SIG: SAME signature as the module build (ABI key concordance).
+        # -DPOPS_HEADER_SIG: SAME signature as the module build (ABI key concordance).
         #
         # (1) BACKEND PARITY (most important for scaling): if _pops is compiled with Kokkos
         # (OpenMP/CUDA), the loader MUST be too. The header-only templates (assemble_rhs /
-        # for_each_cell) compiled WITHOUT -DADC_HAS_KOKKOS instantiate on the SERIAL fallback: the
+        # for_each_cell) compiled WITHOUT -DPOPS_HAS_KOKKOS instantiate on the SERIAL fallback: the
         # DSL block stays zero-copy but does NOT scale with threads/GPU (ROMEO measurement: DSL warm ~341 ms
         # invariant for threads=1/4/8 whereas the native scales 292->239->177). _native_kokkos_flags() adds
-        # -DADC_HAS_KOKKOS + Kokkos includes/libs + -fopenmp when POPS_KOKKOS_ROOT (or Kokkos_ROOT)
+        # -DPOPS_HAS_KOKKOS + Kokkos includes/libs + -fopenmp when POPS_KOKKOS_ROOT (or Kokkos_ROOT)
         # points at an install; otherwise the historical serial behavior. The compiler follows the backend:
         # g++ (OpenMP) by default, nvcc_wrapper ONLY if explicit (CUDA).
         #
@@ -4101,7 +4101,7 @@ class HyperbolicModel:
                 # MSVC/clang-cl (ADC-100): .dll linked against kokkoscore.lib (Kokkos SHARED) + _pops.lib
                 # (System POPS_EXPORT symbols). cl accepts -D/-I; output /Fe; libs after /link. No
                 # RTLD_GLOBAL: undefined symbols are resolved at the .dll LINK step (import libraries).
-                pops_lib = _adc_import_lib()
+                pops_lib = _pops_import_lib()
                 if not pops_lib:
                     raise RuntimeError(
                         "compile_native: _pops.lib not found next to the _pops module (required to "
@@ -4118,7 +4118,7 @@ class HyperbolicModel:
             else:
                 optflags = _dsl_optflags()
                 flags = ["-shared", "-fPIC", "-std=" + std, *optflags,
-                         "-DADC_HEADER_SIG=\"%s\"" % sig, *kokkos_compile_flags, *mpi_compile_flags]
+                         "-DPOPS_HEADER_SIG=\"%s\"" % sig, *kokkos_compile_flags, *mpi_compile_flags]
                 # macOS/Apple-ld: explicitly allow undefined symbols (resolved at runtime).
                 if sys.platform == "darwin":
                     flags += ["-undefined", "dynamic_lookup"]
@@ -4321,7 +4321,7 @@ class HyperbolicModel:
         n_aux, B_z and T_e (the same bricks + ABI metadata as compile_or_jit).
 
         ERGONOMICS (does not change the numerics):
-          - @p include None -> auto-detected (pops_include(): $POPS_INCLUDE, installed adc package, neighbor
+          - @p include None -> auto-detected (pops_include(): $POPS_INCLUDE, installed pops package, neighbor
             repository); passing include= remains possible (back-compat);
           - @p so_path None -> compiles into an out-of-source cache (pops_cache_dir()), with a file name
             keyed on model_hash + abi_key (+ backend/target/name). On a cache HIT (.so already
@@ -4373,7 +4373,7 @@ class HyperbolicModel:
         if std is None:  # default per backend: native shares the module's ABI (c++20 under Kokkos,
             # c++23 otherwise -- derived from the loader, cf. loader_cxx_std), the others stay on c++20.
             std = loader_cxx_std() if mode == "native" else "c++20"
-        if include is None:  # ergonomics: auto-detection of the adc headers directory
+        if include is None:  # ergonomics: auto-detection of the pops headers directory
             include = pops_include()
 
         # Metadata guard rails (before any cache: they depend only on the model + backend, and a
@@ -4385,7 +4385,7 @@ class HyperbolicModel:
         # recompilation. Cache MISS -> compilation in the keyed path (thus stored for next
         # time). Explicit so_path -> forced path, always recompiled (strict back-compat).
         if so_path is None:
-            # The backends that compile the adc headers (native production and aot) follow the real Kokkos
+            # The backends that compile the pops headers (native production and aot) follow the real Kokkos
             # (compiler + kokkos feature-key in the cache key): under Kokkos-only, their .so is
             # always compiled WITH Kokkos (cf. compile_aot / compile_native), the key must reflect it.
             kokkos_like = backend in ("production", "aot")
@@ -4425,7 +4425,7 @@ class HyperbolicModel:
         """Generates a composable elliptic RIGHT-HAND SIDE BRICK from self._elliptic.
 
         The produced struct exposes rhs(U) -> Real (charge density, background, gravity...), same shape as
-        the manual bricks (ChargeDensity, BackgroundDensity in adc/model/bricks.hpp): it enters
+        the manual bricks (ChargeDensity, BackgroundDensity in pops/model/bricks.hpp): it enters
         as the Elliptic parameter of a CompositeModel. Inlined constants, cons/primitives -> locals,
         cse=True factors out common sub-expressions. ValueError if set_elliptic_rhs(...) is missing."""
         if self._elliptic is None:
@@ -4586,7 +4586,7 @@ class CompiledProblem:
     AFTER the physical block has been added (`sim.add_equation` / `sim.add_block`); the Program then
     drives `sim.step(dt)` entirely in C++ via `ProgramContext`.
 
-    The `.so` is compiled against the adc headers with the SAME Kokkos toolchain as the loaded _pops
+    The `.so` is compiled against the pops headers with the SAME Kokkos toolchain as the loaded _pops
     module (cf. `pops_loader_build_flags`), so its ABI key matches and `System::install_program`
     accepts it. `os.fspath(compiled)` returns `so_path` (it can be passed where a path is expected)."""
 
@@ -4741,7 +4741,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
                     force=False, cxx=None, include=None, std=None, debug=False, libraries=None):
     """Compile an `pops.time.Program` into a `problem.so` the runtime loads via `sim.install_program`.
 
-    Lowers the Program IR to C++ (`Program.emit_cpp_program`) and compiles it against the adc headers
+    Lowers the Program IR to C++ (`Program.emit_cpp_program`) and compiles it against the pops headers
     with the SAME Kokkos toolchain as the loaded _pops module (`pops_loader_build_flags`), so the `.so`
     is ABI-compatible and runs in-process. Returns a `CompiledProblem` (`.so_path` + metadata).
 
@@ -4811,7 +4811,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
             except OSError:
                 pass
         flags = ["-shared", "-fPIC", "-std=" + eff_std, *optflags,
-                 "-DADC_HEADER_SIG=\"%s\"" % sig, *cflags]
+                 "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags]
         cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *lflags]
         _run_compile(cmd, "compile_problem (backend production)")
     return CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
@@ -5346,11 +5346,11 @@ class Model:
             raise ValueError("compile: target='amr_system' only exists for backend='production' "
                              "(native AMR path); got backend=%r" % (backend,))
         eff_std = std if std is not None else (loader_cxx_std() if mode == "native" else "c++20")
-        # native AND aot (mode "compile") compile the adc headers -> real Kokkos (compiler +
+        # native AND aot (mode "compile") compile the pops headers -> real Kokkos (compiler +
         # kokkos feature-key) so that the cache key MATCHES the produced .so (cf. compile_aot).
         kokkos_like = mode in ("native", "compile")
         eff_cxx = _native_kokkos_compiler(cxx) if kokkos_like else _default_cxx(cxx)
-        if include is None:  # ergonomics: auto-detection of the adc headers folder
+        if include is None:  # ergonomics: auto-detection of the pops headers folder
             include = pops_include()
 
         # Metadata guards BEFORE the cache (a HIT must not mask them; cf.
@@ -5727,7 +5727,7 @@ class HybridModel:
         """ABI metadata symbols (names/roles from conservative_vars, optional gamma), SHARED
         by the backends. @p alias: an alias WITHOUT a top-level comma (the preprocessor splits
         macro arguments on commas)."""
-        out = '\nADC_EXPORT_BLOCK_METADATA(%s)\n' % alias
+        out = '\nPOPS_EXPORT_BLOCK_METADATA(%s)\n' % alias
         if self.gamma is not None:
             out += 'POPS_EXPORT_BLOCK_GAMMA(%r)\n' % self.gamma
         return out
@@ -5848,7 +5848,7 @@ class HybridModel:
             std = loader_cxx_std() if mode == "native" else "c++20"
         # NATIVE (production) AND AOT: compiler following the Kokkos backend (g++ by default,
         # nvcc_wrapper if explicit), Kokkos flags without linking libkokkos (single runtime), feature-key
-        # kokkos in the cache. KOKKOS-ONLY: the hybrid aot includes the adc headers
+        # kokkos in the cache. KOKKOS-ONLY: the hybrid aot includes the pops headers
         # (compiled_block_abi.hpp -> multifab/for_each) which require POPS_HAS_KOKKOS, same flags as
         # compile_aot; only the jit (prototype) stays pure host (-O2, dynamic_model/bricks without
         # multifab). kokkos_like also serves the cache key.
@@ -5856,10 +5856,10 @@ class HybridModel:
         kokkos_like = native or mode == "aot"
         if mode == "aot" and _native_kokkos_root() is None:
             raise RuntimeError(
-                "HybridModel.compile: adc_cpp is Kokkos-only -- the AOT model includes the adc "
+                "HybridModel.compile: adc_cpp is Kokkos-only -- the AOT model includes the pops "
                 "headers which require Kokkos. Point to an installed Kokkos via POPS_KOKKOS_ROOT (or "
                 "Kokkos_ROOT), e.g. `export POPS_KOKKOS_ROOT=/path/to/kokkos` (Serial is enough "
-                "on CPU). Run `python -c \"import adc; pops.doctor()\"` for a full diagnosis.")
+                "on CPU). Run `python -c \"import pops; pops.doctor()\"` for a full diagnosis.")
         if native:  # pre-dlopen guard: headers != build of _pops -> clear remedy (cf. compile_native)
             _check_headers_match_module(include)
             _warn_kokkos_parity()
@@ -5900,7 +5900,7 @@ class HybridModel:
                 flags += ["-undefined", "dynamic_lookup"]
         else:  # native: header signature + Kokkos backend parity (cf. compile_native / _native_kokkos_flags)
             source = self._emit_native_source(target=target)  # undefined symbols resolved at load time (_pops module)
-            flags.append('-DADC_HEADER_SIG="%s"' % pops_header_signature(include))
+            flags.append('-DPOPS_HEADER_SIG="%s"' % pops_header_signature(include))
             kokkos_compile_flags, kokkos_link_flags = _native_kokkos_flags()
             flags += kokkos_compile_flags
             if sys.platform == "darwin":  # Apple-ld: explicitly allow undefined symbols (cf. compile_native)

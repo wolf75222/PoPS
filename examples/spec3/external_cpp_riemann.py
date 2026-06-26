@@ -8,7 +8,7 @@ time and exports an ``pops_brick_manifest()`` reader; the Python side dlopens it
 the external brick, and lowers the IR -- all pure Python. The compiled-run section (the real dlopen
 + the AOT Kokkos build) is guarded: it requires the brick ``.so`` and a matching toolchain (ROMEO).
 
-The C++ an advanced user writes (built into ``my_riemann.so`` with the adc headers)::
+The C++ an advanced user writes (built into ``my_riemann.so`` with the pops headers)::
 
     #include <pops/runtime/program/external_brick.hpp>
 

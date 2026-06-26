@@ -31,7 +31,7 @@ try:
     from pops import model
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip predictor_corrector_operator_first (adc/numpy unavailable: %s)" % exc)
+    print("skip predictor_corrector_operator_first (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 N = 16

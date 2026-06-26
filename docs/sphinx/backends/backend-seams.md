@@ -18,7 +18,7 @@ No CUDA kernel is written by hand: the same `.cpp` targets CPU and GPU depending
 backend active at compile time. `nvcc_wrapper` is only the compiler required by the Kokkos
 Cuda backend.
 
-> **The Python `adc` module is serial by default.** The `_pops` extension (pybind11) is
+> **The Python `pops` module is serial by default.** The `_pops` extension (pybind11) is
 > built in CI only in Kokkos Serial (without MPI). No Python test exercises the Kokkos
 > OpenMP, Cuda or MPI paths. Multi-thread, GPU and distributed are driven from the
 > C++ facade (`System` / `AmrSystem`), not from Python.

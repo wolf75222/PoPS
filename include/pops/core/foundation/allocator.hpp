@@ -44,7 +44,7 @@ namespace pops {
 
 static_assert(
     Kokkos::has_shared_space,
-    "adc: the Kokkos backend must provide SharedSpace (unified memory) for the device "
+    "pops: the Kokkos backend must provide SharedSpace (unified memory) for the device "
     "Fab; enable a Cuda/HIP/SYCL backend (or a host backend, where SharedSpace is HostSpace)");
 
 // Cache of unified-memory allocations (Kokkos::SharedSpace), free-list by size (bytes).
@@ -221,7 +221,7 @@ using fab_allocator = ManagedAllocator<T>;
 // HOST memory by MPI -> normal host path, NEVER IPC, robust whatever the launch environment.
 // Kokkos host backend: SharedHostPinnedSpace == HostSpace (nothing changes). See fill_boundary.hpp.
 static_assert(Kokkos::has_shared_host_pinned_space,
-              "adc: the Kokkos backend must provide SharedHostPinnedSpace (pinned host memory) "
+              "pops: the Kokkos backend must provide SharedHostPinnedSpace (pinned host memory) "
               "for the MPI communication buffers of fill_boundary");
 
 /// std::allocator_traits adapter over Kokkos::SharedHostPinnedSpace (pinned host, device-accessible).

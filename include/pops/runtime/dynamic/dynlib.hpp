@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief PORTABLE dynamic loading: `dlopen`/`dlsym`/`dlclose` (POSIX) <-> `LoadLibraryW`/
-///        `GetProcAddress`/`FreeLibrary` (Windows). Minimal surface for the adc runtime (native
+///        `GetProcAddress`/`FreeLibrary` (Windows). Minimal surface for the pops runtime (native
 ///        loader / DSL `.dll`), ADC-99.
 ///
 /// POSIX: strictly equivalent to the historical usage (`RTLD_NOW | RTLD_LOCAL`). The DSL

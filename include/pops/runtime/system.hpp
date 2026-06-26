@@ -240,7 +240,7 @@ class System {
                         const std::string& time = "explicit", double gamma = 1.4, int substeps = 1,
                         bool evolve = true, int stride = 1, double positivity_floor = 0.0);
 
-  /// ABI key of the module (compiler + C++ standard + signature of the adc headers, frozen at
+  /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
   /// compilation). Compared to the key baked into a native loader .so by add_native_block; also exposed
   /// on the Python side so that emit_cpp_native_loader (or a diagnostic) can consult it.
   static std::string abi_key();
@@ -248,7 +248,7 @@ class System {
   /// @name AOT-COMPILED block seam (native parity, no marshaling)
   /// To wire a DSL-generated model by COMPOSING at COMPILATION time (production Kokkos + MPI + AMR
   /// binary), via the free template pops::add_compiled_model<Model> of
-  /// adc/runtime/dsl_block.hpp: it builds the closures with block_builder.hpp on the REAL
+  /// pops/runtime/dsl_block.hpp: it builds the closures with block_builder.hpp on the REAL
   /// CONTEXT of the System (grid_context) -- so the block runs the same path as add_block (fill_boundary
   /// = MPI halos, assemble_rhs device), without copying the arrays. That is the difference with
   /// add_compiled_block (.so + host marshaling, runtime CPU prototyping).

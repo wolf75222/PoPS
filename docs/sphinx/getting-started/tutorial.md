@@ -4,7 +4,7 @@ This tutorial runs a complete diocotron simulation, from `git clone` to the figu
 and the uniform/AMR comparison. All the code shown below comes from a single, reproducible
 script, [`diocotron_tutorial.py`](https://github.com/wolf75222/adc_cpp/blob/master/docs/sphinx/tutorials/diocotron_tutorial.py): the doc includes it
 via `literalinclude` (the code is never copied by hand). The script is self-contained; it depends
-only on `adc`, `numpy` and `matplotlib`, not on `adc_cases`, and runs as follows:
+only on `pops`, `numpy` and `matplotlib`, not on `adc_cases`, and runs as follows:
 
 ```bash
 python docs/sphinx/tutorials/diocotron_tutorial.py            # --n 96 --steps 60
@@ -31,13 +31,13 @@ cd adc_cpp
 - C++20 compiler (AppleClang 16+, GCC 13+, Clang 17+); the core compiles as C++20.
 - CMake >= 3.21, Ninja, Python >= 3.10 with `numpy` (and `matplotlib` for the figures);
   the simplest way is the repository conda env: `conda env create -f environment.yml && conda
-  activate adc`. pybind11 is taken from the env, otherwise fetched by CMake.
+  activate pops`. pybind11 is taken from the env, otherwise fetched by CMake.
 
 Detail and options: [Installation](installation.md).
 
 ## Step 3: Build the Python module
 
-The core is header-only; only the Python module `adc` is compiled (a few minutes). Two
+The core is header-only; only the Python module `pops` is compiled (a few minutes). Two
 equivalent paths:
 
 ```bash
@@ -66,17 +66,17 @@ export POPS_CACHE_DIR=$PWD/.pops_cache
   adc_cpp is Kokkos-only`) and the backend fallback chain (`production` then `aot`) cannot wire any
   block. It is the same variable used for the multi-thread build in Step 16.
 - `POPS_CACHE_DIR`: caches the generated `.so` for reruns (optional; default
-  `~/.cache/adc/dsl`, already out of source).
+  `~/.cache/pops/dsl`, already out of source).
 - `PYTHONPATH`: only for the developer path; the build drops the full package into
   `build-py/python`, this single path is enough.
 
 The extension is pinned to the interpreter that built it (`cpython-312`): import with the
 same python. On an import error, the message gives the cause and the rebuild
-command; `python -c "import adc; pops.doctor()"` checks the whole environment.
+command; `python -c "import pops; pops.doctor()"` checks the whole environment.
 
 ## Step 5: Import and detect the backend
 
-The script imports `adc` and the DSL, then prints the running backend (serial for a
+The script imports `pops` and the DSL, then prints the running backend (serial for a
 Python module; see [Check your backend](backend.md)).
 
 ```{literalinclude} ../tutorials/diocotron_tutorial.py
@@ -116,7 +116,7 @@ Then we compile the model into a `.so` and wire it in: the script first tries th
 (numerically identical, marshaled host-side), as in the application cases. The default of
 `m.compile(...)` is the `auto` policy (ADC-63): it selects `production` as soon as `_pops`, the
 headers and the compiler match (toolchain parity), and falls back to `aot` otherwise -- `production`
-requires that `_pops` and the `.so` were compiled with the same adc headers (ABI guard). This is also
+requires that `_pops` and the `.so` were compiled with the same pops headers (ABI guard). This is also
 where we choose the spatial scheme (finite volume,
 minmod limiter, Rusanov flux), the time (explicit) and the system Poisson.
 
@@ -245,7 +245,7 @@ difference in the title.
 
 ## Step 16: Kokkos OpenMP (CPU parallelism)
 
-There is no Python parameter of the form `threads=8`. `import adc` drives the simulation, but the
+There is no Python parameter of the form `threads=8`. `import pops` drives the simulation, but the
 per-cell computation inherits the backend with which `_pops` was compiled (see
 [Check your backend](backend.md)). The number of cores therefore depends on the build of `_pops` and the
 OpenMP variables at launch, not on a script flag; the distributed module runs in Kokkos Serial
@@ -259,7 +259,7 @@ with OpenMP (`Kokkos_ENABLE_OPENMP=ON` at the Kokkos build).
 is Serial-only, `scripts/kokkos_openmp_conda.sh` first installs a Kokkos OpenMP (~2 min):
 
 ```bash
-conda activate adc
+conda activate pops
 bash scripts/kokkos_openmp_conda.sh        # if needed: Kokkos OpenMP into $CONDA_PREFIX
 cmake --preset python-parallel && cmake --build --preset python-parallel
 ```
@@ -269,9 +269,9 @@ cmake --preset python-parallel && cmake --build --preset python-parallel
 
 ```bash
 cmake -S . -B build-py-kokkos -G Ninja \
-  -DADC_BUILD_PYTHON=ON \
-  -DADC_BUILD_TESTS=OFF \
-  -DADC_USE_KOKKOS=ON \
+  -DPOPS_BUILD_PYTHON=ON \
+  -DPOPS_BUILD_TESTS=OFF \
+  -DPOPS_USE_KOKKOS=ON \
   -DKokkos_ROOT="$KOKKOS_ROOT" \
   -DCMAKE_BUILD_TYPE=Release \
   -DPython_EXECUTABLE=$(which python3.12)
@@ -312,7 +312,7 @@ ctest --preset mpi                                   # replays np=1/2/4 via mpir
 ```
 
 `comm.hpp` then goes through `MPI_Comm_rank/size` + collectives. MPI and Kokkos combine (one GPU
-per rank) for the GPU. The GPU itself requires ROMEO: `-DADC_USE_KOKKOS=ON` +
+per rank) for the GPU. The GPU itself requires ROMEO: `-DPOPS_USE_KOKKOS=ON` +
 `Kokkos_ARCH_HOPPER90` + `nvcc_wrapper`, validated manually on GH200 (never in CI). See
 [Check your backend](backend.md) and [`GPU_ROMEO.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/GPU_ROMEO.md).
 

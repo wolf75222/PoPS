@@ -1,4 +1,4 @@
-# cmake/AdcDevTooling.cmake
+# cmake/PopsDevTooling.cmake
 #
 # Outillage QUALITE opt-in (OFF par defaut) : warnings stricts et sanitizers, portes par une cible
 # INTERFACE `pops_dev_options` que SEULES les cibles internes lient en PRIVATE (les ~140 executables
@@ -29,7 +29,7 @@ endif()
 # propres warnings sont deja filtres, on ne voit que ceux du code pops + des tests.
 if(POPS_ENABLE_WARNINGS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")  # couvre GNU, Clang et AppleClang
-    set(_adc_warn_flags
+    set(_pops_warn_flags
       -Wall -Wextra -Wpedantic
       -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
       -Wcast-qual -Wdouble-promotion -Wformat=2
@@ -38,13 +38,13 @@ if(POPS_ENABLE_WARNINGS)
     # -Wduplicated-cond / -Wduplicated-branches / -Wlogical-op sont specifiques a GCC : clang et
     # AppleClang les rejettent ("unknown warning option"). On ne les ajoute donc que sur GNU.
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-      list(APPEND _adc_warn_flags
+      list(APPEND _pops_warn_flags
         -Wduplicated-cond -Wduplicated-branches -Wlogical-op)
     endif()
     # Volontairement EXCLUS au demarrage (trop bruyants sur du code numerique generique) :
     # -Wconversion, -Wsign-conversion, -Wold-style-cast. A reintroduire une fois la base assainie.
     target_compile_options(pops_dev_options INTERFACE
-      "$<$<COMPILE_LANGUAGE:CXX>:${_adc_warn_flags}>")
+      "$<$<COMPILE_LANGUAGE:CXX>:${_pops_warn_flags}>")
   elseif(MSVC)
     target_compile_options(pops_dev_options INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:/W4>")
   endif()
@@ -58,12 +58,12 @@ endif()
 # positifs de frontiere instrumente / non instrumente (cf. quality.yml).
 if(POPS_ENABLE_SANITIZERS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set(_adc_san_flags
+    set(_pops_san_flags
       -fsanitize=address,undefined
       -fno-omit-frame-pointer
       -fno-sanitize-recover=undefined)
-    target_compile_options(pops_dev_options INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:${_adc_san_flags}>")
-    target_link_options(pops_dev_options INTERFACE ${_adc_san_flags})
+    target_compile_options(pops_dev_options INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:${_pops_san_flags}>")
+    target_link_options(pops_dev_options INTERFACE ${_pops_san_flags})
     message(STATUS "pops: POPS_ENABLE_SANITIZERS=ON -> ASan+UBSan sur les cibles internes "
                    "(Kokkos non instrumente ; voir ASAN_OPTIONS dans quality.yml).")
   else()
@@ -105,9 +105,9 @@ if(POPS_ENABLE_TSAN)
                         "OU ci-asan, pas les deux.")
   endif()
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set(_adc_tsan_flags -fsanitize=thread -fno-omit-frame-pointer)
-    target_compile_options(pops_dev_options INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:${_adc_tsan_flags}>")
-    target_link_options(pops_dev_options INTERFACE ${_adc_tsan_flags})
+    set(_pops_tsan_flags -fsanitize=thread -fno-omit-frame-pointer)
+    target_compile_options(pops_dev_options INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:${_pops_tsan_flags}>")
+    target_link_options(pops_dev_options INTERFACE ${_pops_tsan_flags})
     message(STATUS "pops: POPS_ENABLE_TSAN=ON -> TSan sur les cibles internes "
                    "(clang + libomp requis ; Kokkos non instrumente, voir tsan-suppressions.txt).")
   else()

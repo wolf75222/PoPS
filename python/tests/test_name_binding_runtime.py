@@ -80,7 +80,7 @@ def _run():
         import pops.time as t
         from pops import dsl
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops / pops.time unavailable
-        _skip("adc / pops.time / numpy unavailable: %s" % exc)
+        _skip("pops / pops.time / numpy unavailable: %s" % exc)
 
     if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
         _skip("_pops lacks the install_program binding (rebuild _pops)")

@@ -37,7 +37,7 @@ import numpy as np
 try:
     import pops
 except ImportError as e:
-    print("skip  module adc absent (PYTHONPATH ?) : %s" % e)
+    print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
 
 

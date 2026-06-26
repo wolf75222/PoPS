@@ -126,7 +126,7 @@ def end_to_end_checks():
     forme explicite (retro-compat)."""
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> bout-en-bout saute")
+        print("skip  compilateur ou en-tetes pops absents -> bout-en-bout saute")
         return
 
     n = 24

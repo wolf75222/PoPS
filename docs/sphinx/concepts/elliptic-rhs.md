@@ -1,13 +1,13 @@
 # Elliptic right-hand side and the aux channel
 
 This page explains how a hyperbolic block couples to the elliptic (Poisson)
-solve in `adc`. The coupling is a contract with two halves: a model declares
+solve in `pops`. The coupling is a contract with two halves: a model declares
 what it pushes into the elliptic right-hand side, and it reads back what the
 solve produces through a shared channel called `aux`.
 
 ## Why the coupling exists
 
-The systems `adc` targets are not pure conservation laws. The transport of a
+The systems `pops` targets are not pure conservation laws. The transport of a
 density depends on a field (a potential `phi` and its gradient) that the density
 itself sources. A drift-advected plasma and a self-gravitating fluid are both
 this shape: an evolving state `U` feeds an elliptic equation, the elliptic

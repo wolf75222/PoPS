@@ -41,8 +41,8 @@ to `Kokkos::parallel_for` (Serial / OpenMP / Cuda execution space depending on t
 Device-callable POD `Array4`, `device_fence()`, `comm.hpp` for MPI.
 
 **Why.** The physics is written once and runs everywhere. Kokkos is the only on-node
-backend and it is required (`-DADC_USE_KOKKOS=ON`, ON by default); the seam does not compile
-without `POPS_HAS_KOKKOS`. The backend remains a **property of the `adc` target**
+backend and it is required (`-DPOPS_USE_KOKKOS=ON`, ON by default); the seam does not compile
+without `POPS_HAS_KOKKOS`. The backend remains a **property of the `pops` target**
 (target_compile_definitions INTERFACE), not a per-solver flag: the on-node target is
 chosen at the Kokkos install (`Kokkos_ENABLE_SERIAL` / `_OPENMP` / `_CUDA`), nothing in
 the code.

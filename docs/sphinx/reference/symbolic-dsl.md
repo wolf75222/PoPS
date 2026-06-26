@@ -397,11 +397,11 @@ require_metadata, target`) and returns the `so_path` (string).
 Argument semantics :
 
 - `so_path=None` : out-of-source cache (`pops_cache_dir()` : `$POPS_CACHE_DIR`, otherwise
-  `$XDG_CACHE_HOME/adc/dsl`, otherwise `~/.cache/adc/dsl`). The file name is keyed on `model_hash`
+  `$XDG_CACHE_HOME/pops/dsl`, otherwise `~/.cache/pops/dsl`). The file name is keyed on `model_hash`
   + `abi_key` (+ backend / target / name). Cache hit (the `.so` already exists for this key) -> no
   recompilation. Passing `so_path=` forces that path and always recompiles.
-- `include=None` : auto-detected by `pops_include()` (`$POPS_INCLUDE`, otherwise the installed `adc`
-  package, otherwise the sibling repo). Validity criterion : `adc/mesh/storage/multifab.hpp` exists ; otherwise `RuntimeError`.
+- `include=None` : auto-detected by `pops_include()` (`$POPS_INCLUDE`, otherwise the installed `pops`
+  package, otherwise the sibling repo). Validity criterion : `pops/mesh/storage/multifab.hpp` exists ; otherwise `RuntimeError`.
 - `cxx=None` : autodetect `c++` / `g++` / `clang++` (via `shutil.which`).
 - `std=None` : default per backend. For `production` (native), the loader standard via
   `loader_cxx_std()` (= `_pops.__cxx_std__` : c++20 under Kokkos because CUDA 12.x has no `-std=c++23`,
@@ -441,7 +441,7 @@ be a DSL brick (otherwise use `pops.Model(...)`). Brick catalog and example :
 
 The `production` loader calls off-line methods of the already-loaded `_pops` module
 (`install_block` / `grid_context` / `ensure_aux_width` ; `set_compiled_block` for AMR), so it
-is compiled with `-undefined dynamic_lookup` on macOS and bakes `-DADC_HEADER_SIG=<signature>`
+is compiled with `-undefined dynamic_lookup` on macOS and bakes `-DPOPS_HEADER_SIG=<signature>`
 identical to the module's build. Loader and module must share the same ABI (headers + compiler
 + C++ standard). `add_native_block` compares `pops_native_abi_key()` to `module.abi_key()` and rejects with
 "ABI incompatible" if they diverge. A different `std` changes `__cplusplus` so the ABI key : that is
@@ -541,7 +541,7 @@ layout, the validity of the roles, nor conservation. These errors surface later 
 ## Complete example
 
 Euler model with gravity-Poisson coupling, from declaration to run (copy-paste). Compilation
-requires adc headers and a C++ compiler ; without them, `compile` raises.
+requires pops headers and a C++ compiler ; without them, `compile` raises.
 
 ```python
 import numpy as np

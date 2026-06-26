@@ -35,7 +35,7 @@ try:
     from pops import dsl, model
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- _pops unavailable in this interpreter
-    _skip("adc unavailable: %s" % exc)
+    _skip("pops unavailable: %s" % exc)
 
 
 # --- builders ---------------------------------------------------------------

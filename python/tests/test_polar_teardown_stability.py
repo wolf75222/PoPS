@@ -75,7 +75,7 @@ _CHILD = textwrap.dedent(
 
 
 def test_unstable_polar_profile_does_not_crash_at_teardown():
-    # On herite du PYTHONPATH courant (le module compile adc) : meme interpreteur que pytest.
+    # On herite du PYTHONPATH courant (le module compile pops) : meme interpreteur que pytest.
     proc = subprocess.run([sys.executable, "-c", _CHILD], capture_output=True, text=True, timeout=120)
 
     # Un crash dur (SIGSEGV=11 -> rc -11 ; SIGABRT=6 -> rc -6 ; etc.) se manifeste par un returncode

@@ -77,7 +77,7 @@ Before **each** compilation: `_probe_cxx_std()` checks `-std=` (probe `-fsyntax-
 |---|---|---|---|
 | P1 | `kokkos=<0|1>` token **in `abi_key_string()`** (C++ + CMake + dsl) | Kokkos mismatch = undetected UB (confirmed); the Python warning is a mitigation, not a guarantee | dedicated PR (changes the ABI key -> invalidates caches, touches the ABI tests) |
 | P1 | `stdlib=` token (`_LIBCPP_VERSION`/`__GLIBCXX__`) in the ABI key | libc++ vs libstdc++ = undetected divergent std::string/function ABI (confirmed) | same PR as above |
-| P2 | lazy `import numpy` in `dsl.py` | numpy missing kills the whole `import adc` whereas the production path does not need it | small dsl refactor |
+| P2 | lazy `import numpy` in `dsl.py` | numpy missing kills the whole `import pops` whereas the production path does not need it | small dsl refactor |
 | P2 | Sign the **Kokkos version** in the cache feature-key | a different Kokkos between build and runtime does not invalidate the `.so` cache | dsl.py |
 | P2 | configure warning if `CONDA_PREFIX` is empty when a conda preset is used | parallel/mpi presets assume the env is activated | CMakePresets/CMake |
 | P3 | macOS SDK in the cache key | low risk, documented | optional |
@@ -86,17 +86,17 @@ Before **each** compilation: `_probe_cxx_std()` checks `-std=` (probe `-fsyntax-
 
 ```bash
 # 1x : all the tooling (recent cmake, ninja, ccache, python, numpy, pybind11, kokkos*, openmpi)
-conda env create -f environment.yml && conda activate adc
+conda env create -f environment.yml && conda activate pops
 
 # one command per mode (flags baked into CMakePresets.json)
 cmake --preset python          && cmake --build --preset python            # serie
 cmake --preset python-parallel && cmake --build --preset python-parallel   # Kokkos*
 
 # diagnostic en 1 commande (a donner aux collegues au moindre souci)
-python -c "import adc; pops.doctor()"
+python -c "import pops; pops.doctor()"
 
 # threads en 1 ligne (plus de variables d'env a connaitre)
-python -c "import adc; pops.set_threads(); ..."
+python -c "import pops; pops.set_threads(); ..."
 ```
 
 \* subject to the Kokkos-Serial caveat of sec.5 for real scaling.

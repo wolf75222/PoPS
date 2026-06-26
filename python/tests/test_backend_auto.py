@@ -49,7 +49,7 @@ def iso3(name):
 
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip test_backend_auto : compilateur ou en-tetes adc absents")
+    print("skip test_backend_auto : compilateur ou en-tetes pops absents")
     sys.exit(0)
 
 tmp = tempfile.mkdtemp()
@@ -77,7 +77,7 @@ try:
     print("== (2) parite cassee -> repli aot EXPLIQUE et fonctionnel ==")
     stale = os.path.join(tmp, "include_stale")
     shutil.copytree(INCLUDE, stale)
-    with open(os.path.join(stale, "adc", "core", "types.hpp"), "a") as f:
+    with open(os.path.join(stale, "pops", "core", "types.hpp"), "a") as f:
         f.write("\n// drift de signature pour test_backend_auto (copie jetable)\n")
     bk2, reason2 = dsl.resolve_auto_backend(stale)
     chk(bk2 == "aot" and "module" in reason2 or "en-tetes" in reason2,

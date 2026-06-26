@@ -20,7 +20,7 @@ RESULTS="$BASE/results"
 LOGS="$BASE/logs"
 mkdir -p "$RESULTS" "$LOGS"
 
-echo "=== ADC GPU PERF job=$SLURM_JOBID node=$(hostname) arch=$(uname -m) date=$(date) ==="
+echo "=== PoPS GPU PERF job=$SLURM_JOBID node=$(hostname) arch=$(uname -m) date=$(date) ==="
 
 module load cuda/12.6
 romeo_load_armgpu_env
@@ -108,8 +108,8 @@ configure_bench () {
   local build="$1"; shift
   rm -rf "$build"
   cmake -S "$SRC" -B "$build" "$@" \
-    -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" -DCMAKE_CXX_COMPILER="$NW" \
-    -DADC_BUILD_BENCH=ON -DADC_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+    -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" -DCMAKE_CXX_COMPILER="$NW" \
+    -DPOPS_BUILD_BENCH=ON -DPOPS_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
     > "$LOGS/$(basename "$build")_cfg.log" 2>&1
   local rc=$?
   echo "CONFIG $(basename "$build") rc=$rc"
@@ -131,7 +131,7 @@ if configure_bench "$BUILD_CUDA"; then
 fi
 
 BUILD_MPI_CUDA="$BASE/build_gpu_mpi_kokkos"
-if configure_bench "$BUILD_MPI_CUDA" -DADC_USE_MPI=ON; then
+if configure_bench "$BUILD_MPI_CUDA" -DPOPS_USE_MPI=ON; then
   for np in 1 2 4; do
     log="$LOGS/profile_gpu_strong_mpi-kokkos-cuda_np${np}_n${N_STRONG}.log"
     echo "RUN mpi+kokkos-cuda strong np=$np n=$N_STRONG"
@@ -156,7 +156,7 @@ cp "$SRC/python/tests/gpu/amrmpi_CMakeLists.txt" "$AMR_SRC/CMakeLists.txt"
 AMR_BUILD="$BASE/build_gpu_amrmpi"
 rm -rf "$AMR_BUILD"
 if cmake -S "$AMR_SRC" -B "$AMR_BUILD" -DCMAKE_CXX_COMPILER="$NW" -DKokkos_ROOT="$KROOT" \
-    -DADC_INCLUDE="$SRC/include" -DADC_SRC="$SRC/python" -DCMAKE_BUILD_TYPE=Release > "$LOGS/amrmpi_cfg.log" 2>&1 && \
+    -DPOPS_INCLUDE="$SRC/include" -DPOPS_SRC="$SRC/python" -DCMAKE_BUILD_TYPE=Release > "$LOGS/amrmpi_cfg.log" 2>&1 && \
    cmake --build "$AMR_BUILD" -j 8 > "$LOGS/amrmpi_build.log" 2>&1; then
   AMR_OUT="$LOGS/amrmpi_gpu_${POPS_CPP_COMMIT}_${SLURM_JOBID}.txt"
   : > "$AMR_OUT"

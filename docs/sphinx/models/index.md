@@ -1,6 +1,6 @@
 # Models
 
-A *model* in `adc` describes an equation: its pointwise formulas (flux, source,
+A *model* in `pops` describes an equation: its pointwise formulas (flux, source,
 wave speeds, elliptic right-hand side). There are three ways to write a model, which
 all produce the same computational object on the C++ core side and plug into
 an `pops.System` the same way:

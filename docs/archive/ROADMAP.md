@@ -81,7 +81,7 @@ Living list of what is done and what remains, by intent.
   (`test_weno_convergence`), discretizations, IMEX/AP. The APPLICATIVE convergence orders
   (Euler isentropic vortex, MUSCL/Rusanov, Gauss law of the coupling, diocotron invariants)
   are measured on the `adc_cases` side.
-- Python bindings of the lib (`python/`, module `adc`, `-DADC_BUILD_PYTHON=ON`): `pops.System`
+- Python bindings of the lib (`python/`, module `pops`, `-DPOPS_BUILD_PYTHON=ON`): `pops.System`
   (block-by-block composition via `add_block`, `set_poisson`, `set_density`, `step`/`advance`/`step_cfl`,
   primitives `eval_rhs`/`get_state`/`set_state` + `pops.integrate.ssprk2_step`), the AMR
   composition `pops.AmrSystem` (mono-block, explicit; now shares the spatial operator of `System`:

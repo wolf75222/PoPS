@@ -1,16 +1,16 @@
-# Harnais de PROFILAGE (mesure seule). HORS du build par defaut : active par -DADC_BUILD_BENCH=ON.
+# Harnais de PROFILAGE (mesure seule). HORS du build par defaut : active par -DPOPS_BUILD_BENCH=ON.
 # Le CI ne passe JAMAIS ce drapeau, donc cette cible n'est ni configuree ni compilee en CI (ci-fast,
 # MPI, Kokkos restent inchanges). La cible lie pops::pops (interface header-only) : elle herite donc
 # AUTOMATIQUEMENT du backend choisi pour la lib (POPS_HAS_KOKKOS + Kokkos::kokkos, POPS_HAS_MPI +
 # MPI::MPI_CXX) configure dans le CMakeLists racine -- aucun find_package redondant ici.
 #
-# Construire (Kokkos-only : -DADC_USE_KOKKOS=ON obligatoire ; la cible se choisit a l'install Kokkos) :
-#   Kokkos Serial CPU   : cmake -B build-bench -DADC_BUILD_BENCH=ON -DADC_USE_KOKKOS=ON -DKokkos_ROOT=$K
-#   Kokkos OpenMP       : cmake -B build-bench -DADC_BUILD_BENCH=ON -DADC_USE_KOKKOS=ON \
+# Construire (Kokkos-only : -DPOPS_USE_KOKKOS=ON obligatoire ; la cible se choisit a l'install Kokkos) :
+#   Kokkos Serial CPU   : cmake -B build-bench -DPOPS_BUILD_BENCH=ON -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT=$K
+#   Kokkos OpenMP       : cmake -B build-bench -DPOPS_BUILD_BENCH=ON -DPOPS_USE_KOKKOS=ON \
 #                              -DKokkos_ROOT=$K  (Kokkos installe ENABLE_OPENMP)
 #   Kokkos Cuda (GH200) : idem avec un Kokkos installe Cuda + -DCMAKE_CXX_COMPILER=$K/bin/nvcc_wrapper
-#   MPI + Kokkos Serial : cmake -B build-bench -DADC_BUILD_BENCH=ON -DADC_USE_MPI=ON -DADC_USE_KOKKOS=ON -DKokkos_ROOT=$K
-#   MPI + Kokkos Cuda   : -DADC_BUILD_BENCH=ON -DADC_USE_MPI=ON -DADC_USE_KOKKOS=ON -DKokkos_ROOT=$K ...
+#   MPI + Kokkos Serial : cmake -B build-bench -DPOPS_BUILD_BENCH=ON -DPOPS_USE_MPI=ON -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT=$K
+#   MPI + Kokkos Cuda   : -DPOPS_BUILD_BENCH=ON -DPOPS_USE_MPI=ON -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT=$K ...
 # Lancer : ./build-bench/bin/profile_step [--n 256 --steps 50 --solver geometric_mg --limiter minmod]
 #   sous MPI : mpirun -np 2 ./build-bench/bin/profile_step ...
 
@@ -19,7 +19,7 @@ target_link_libraries(profile_step PRIVATE pops::pops)
 
 # Front C++ DIRECT (campagne de perf : C++ vs Python briques vs DSL) et driver de SCALING. Memes
 # conventions que profile_step (lib header-only, backend herite). SHA/branche injectes a la
-# configuration (-DADC_BUILD_SHA / -DADC_BUILD_BRANCH) : le binaire ne lance pas git (noeud de calcul).
+# configuration (-DPOPS_BUILD_SHA / -DPOPS_BUILD_BRANCH) : le binaire ne lance pas git (noeud de calcul).
 add_executable(frontend_cpp frontend_cpp.cpp)
 target_link_libraries(frontend_cpp PRIVATE pops::pops)
 

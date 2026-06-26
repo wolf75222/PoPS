@@ -23,10 +23,10 @@ validation errors #18/#19.
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_ops_polish (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -303,7 +303,7 @@ def _run_section_b(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops unavailable
-        print("-- (B) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     n = 8
@@ -390,7 +390,7 @@ def _run_section_b2(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001
-        print("-- (B.2) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B.2) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     n = 8
@@ -475,7 +475,7 @@ def test_restart_missing_history_fails_loud(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001
-        print("-- (C.1) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (C.1) skipped: pops/numpy unavailable: %s --" % exc)
         return
     import os
     import tempfile
@@ -520,7 +520,7 @@ def _run_section_c2(t):
     try:
         import pops
     except Exception as exc:  # noqa: BLE001
-        print("-- (C.2) skipped: adc unavailable: %s --" % exc)
+        print("-- (C.2) skipped: pops unavailable: %s --" % exc)
         return None
 
     n = 4
@@ -563,7 +563,7 @@ def _run_section_c2(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

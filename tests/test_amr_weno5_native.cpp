@@ -19,7 +19,7 @@
 // Le modele est un transport pur (CompositeModel<Euler, NoSource, BackgroundDensity{alpha=0}>) : la
 // brique elliptique vaut 0, donc le solve MG donne phi=0 partout (zero bruit FP), parite STRICTE.
 //
-// CMake injecte POPS_TEST_CXX (compilateur), POPS_TEST_INCLUDE (en-tetes adc), POPS_TEST_CXX_STD (norme
+// CMake injecte POPS_TEST_CXX (compilateur), POPS_TEST_INCLUDE (en-tetes pops), POPS_TEST_CXX_STD (norme
 // C++ du build : la cle d'ABI du loader concorde avec celle du test) et POPS_TEST_TMPDIR.
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>

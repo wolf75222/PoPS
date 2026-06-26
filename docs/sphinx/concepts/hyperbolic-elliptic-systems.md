@@ -1,13 +1,13 @@
 # Hyperbolic-elliptic systems
 
-This page explains what a coupled hyperbolic-elliptic system is in adc, why the code
+This page explains what a coupled hyperbolic-elliptic system is in pops, why the code
 splits the problem in two, and how the two halves exchange information each time step.
 It is the mental model behind every scenario the solver runs, from diocotron to
 self-gravitating Euler.
 
 ## Two parts, two natures
 
-The problems adc solves have two pieces with opposite mathematical character.
+The problems pops solves have two pieces with opposite mathematical character.
 
 The hyperbolic part is a conservation law. A state `U` (a density, or a fluid with
 momentum and energy) is advanced in time by a flux balance with a source,
@@ -70,7 +70,7 @@ by the same field stage, so adding a coupling does not change the step skeleton.
 
 ## A model declares both halves
 
-A model in adc names the pointwise laws of both parts at once. The C++ contract,
+A model in pops names the pointwise laws of both parts at once. The C++ contract,
 the `pops::PhysicalModel` concept, asks for four pure functions: `flux`, `source`,
 `max_wave_speed` (for the CFL and the Riemann solver), and `elliptic_rhs`. The first three
 describe the hyperbolic part; `elliptic_rhs` is the `f(U)` that feeds the Poisson solve.

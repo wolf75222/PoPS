@@ -9,7 +9,7 @@ res = -div(F*) (flux numerique de Rusanov en x et en y), pour DEUX modeles compo
   - Gen = CompositeModel<pops_generated::EulerGen, NoSource, ChargeDensity> (brique GENEREE par le DSL)
   - Ref = CompositeModel<pops::Euler,            NoSource, ChargeDensity> (oracle ECRIT A LA MAIN)
 a partir d'un MEME champ initial deterministe (rho=1, vitesse nulle, bulle de pression). Il imprime
-l'ecart max sur tout le residu, qu'on exige < 1e-10. Gate sur compilateur + en-tetes adc (SKIP propre
+l'ecart max sur tout le residu, qu'on exige < 1e-10. Gate sur compilateur + en-tetes pops (SKIP propre
 sinon). Lance avec python3.
 """
 import os
@@ -153,7 +153,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> JIT-lite saute (%s)" % INCLUDE)
+        print("skip  compilateur ou en-tetes pops absents -> JIT-lite saute (%s)" % INCLUDE)
         print("test_dsl_jit : OK (forme du struct seulement)")
         return
 

@@ -29,7 +29,7 @@ try:
     from pops import dsl
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip adams_bashforth2_program (adc/numpy unavailable: %s)" % exc)
+    print("skip adams_bashforth2_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 C = 0.75  # source coefficient: S(rho) = C * rho (a linear ODE rho' = c rho; R changes every step)

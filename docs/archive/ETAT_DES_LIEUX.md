@@ -161,7 +161,7 @@ Large suite (63 serial tests plus 14 MPI, all green), CI serial plus MPI plus Py
 
 - **Doc bug: recon=3 (WENO5) announced for column_amr while it does not exist.** Location: `docs/DIOCOTRON_GROWTH_RATE.md:137`, `examples/diocotron_column_amr.cpp:14,306-311` (dispatch accepts only 0/1/2; recon=3 falls into the `else` which runs NoSlope, the most diffusive scheme). Recommendation: fix it to `(recon: 0 NoSlope, 1 VanLeer, 2 Minmod)` for column_amr and reserve WENO5 (recon=3) for `diocotron_highorder`; or actually add the recon=3 toward Weno5 branch in column_amr.
 
-- **No CI guard for OpenMP, Kokkos and HDF5.** Location: `.github/workflows/ci.yml` (serial, MPI, Python only), `CMakeLists.txt:11-18`. `test_hdf5_io` is never compiled in CI; the OpenMP seam can break silently. Recommendation: add an OpenMP job (`-DADC_USE_OPENMP=ON` plus ctest) and an HDF5 job (`libhdf5-dev` plus `-DADC_USE_HDF5=ON`, at minimum build plus `test_hdf5_io`); for Kokkos, failing a GPU runner, aim for a build-only of the Kokkos OpenMP backend.
+- **No CI guard for OpenMP, Kokkos and HDF5.** Location: `.github/workflows/ci.yml` (serial, MPI, Python only), `CMakeLists.txt:11-18`. `test_hdf5_io` is never compiled in CI; the OpenMP seam can break silently. Recommendation: add an OpenMP job (`-DPOPS_USE_OPENMP=ON` plus ctest) and an HDF5 job (`libhdf5-dev` plus `-DPOPS_USE_HDF5=ON`, at minimum build plus `test_hdf5_io`); for Kokkos, failing a GPU runner, aim for a build-only of the Kokkos OpenMP backend.
 
 - **Stale README: the reconstruction table omits WENO5.** Location: `README.md:67`. Recommendation: mention WENO5-Z order 5 (`Weno5`) alongside MUSCL order 2 (Minmod/VanLeer).
 

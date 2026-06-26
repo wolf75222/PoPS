@@ -23,7 +23,7 @@ whether ``"default"`` is among the requested sources.
     Self-skips if _pops lacks install_program, numpy/_pops is absent, or no compiler/Kokkos is visible --
     never faking the engine.
 
-Run with python3 (PYTHONPATH = built adc package).
+Run with python3 (PYTHONPATH = built pops package).
 """
 import sys
 

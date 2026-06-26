@@ -8,7 +8,7 @@ Deux niveaux :
 (1) GARDE-FOUS pur-Python (aucun compilateur requis) : backend inconnu, mapping backend -> adder,
     et erreurs EXPLICITES quand require_metadata est demande sur un modele sans roles/gamma ou sur le
     backend prototype (JIT, dispatch virtuel hote, non device-clean).
-(2) BOUT EN BOUT (saute si aucun compilateur C++ / en-tetes adc) : compile(backend=...) produit une
+(2) BOUT EN BOUT (saute si aucun compilateur C++ / en-tetes pops) : compile(backend=...) produit une
     .so qui, branchee sur l'adder correspondant, expose les BONS noms/roles/gamma (pas le fallback) et
     lit bien le canal aux etendu (B_z). On prouve aussi que compile() == compile_or_jit() pour le
     backend equivalent (la facade ne fait qu'aiguiller, elle ne regresse pas la numerique).
@@ -134,7 +134,7 @@ def test_end_to_end():
     """(2) Bout en bout : compile(backend=...) -> .so -> adder -> metadonnees + B_z preserves."""
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> bout-en-bout saute")
+        print("skip  compilateur ou en-tetes pops absents -> bout-en-bout saute")
         return
 
     e = build_meta_euler()

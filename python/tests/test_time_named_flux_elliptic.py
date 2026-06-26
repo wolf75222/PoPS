@@ -25,17 +25,17 @@ Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- 
 import sys
 
 
-def _adc_mods():
+def _pops_mods():
     try:
         from pops import dsl
         from pops import time as adctime
-    except Exception as exc:  # adc not importable here -> skip, never fake
-        print("skip test_time_named_flux_elliptic (adc unavailable: %s)" % exc)
+    except Exception as exc:  # pops not importable here -> skip, never fake
+        print("skip test_time_named_flux_elliptic (pops unavailable: %s)" % exc)
         sys.exit(0)
     return dsl, adctime
 
 
-dsl, adctime = _adc_mods()
+dsl, adctime = _pops_mods()
 
 fails = 0
 

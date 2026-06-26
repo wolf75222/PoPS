@@ -137,7 +137,7 @@ chk(amr3.last_dt_bound() == "global:cap_multi",
 # --- (B) DSL stability_speed / stability_dt (avec compilateur) ---------------------
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (B) : compilateur ou en-tetes adc absents")
+    print("skip  (B) : compilateur ou en-tetes pops absents")
     if fails:
         print(f"FAIL test_dt_bounds : {fails} echec(s)")
         sys.exit(1)

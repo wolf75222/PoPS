@@ -29,7 +29,7 @@ def _skip(msg):
     sys.exit(0)
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # noqa: BLE001 -- pops.time needs _pops; skip cleanly, never fake
@@ -187,7 +187,7 @@ def section_b(t):
         import pops
         from pops import dsl
     except Exception as exc:  # noqa: BLE001 -- numpy or _pops unavailable
-        print("-- (B) skipped: adc/numpy unavailable (%s) --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return
 
     if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
@@ -266,7 +266,7 @@ def section_b(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     section_a(t)
     section_b(t)
     print("%s test_time_multiblock" % ("FAIL (%d)" % fails if fails else "PASS"))

@@ -16,7 +16,7 @@ via pops.moments (Gaussian closure, NO dependency on adc_cases):
  (d) _is_zero: a closure returning dsl.Const(0.0) does not emit the higher-order
      reconstruction primitives (same behavior as the float zero 0.0).
 
-Points (b) and (c) compile a STANDALONE brick (header-only adc headers, without Kokkos) on the
+Points (b) and (c) compile a STANDALONE brick (header-only pops headers, without Kokkos) on the
 model of test_dsl_brick: auto-skip if the compiler or the headers are absent.
 """
 import os
@@ -181,7 +181,7 @@ def main():
     if cxx and os.path.isdir(INCLUDE):
         check_bc_numerique(M.build_moment_model("mom", ORDER, M.gaussian_closure(ORDER))._m, cxx)
     else:
-        print("skip  (b)/(c): compiler or adc headers absent (%s)" % INCLUDE)
+        print("skip  (b)/(c): compiler or pops headers absent (%s)" % INCLUDE)
     print("FAILS =", fails)
     sys.exit(1 if fails else 0)
 

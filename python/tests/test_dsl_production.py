@@ -47,7 +47,7 @@ def _initial_state(n):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents")
+        print("skip  compilateur ou en-tetes pops absents")
         print("test_dsl_production : OK (rien a compiler)")
         return
 
@@ -120,7 +120,7 @@ def main():
         print("OK  12 pas SSPRK2 : etat de production BIT-IDENTIQUE au bloc natif add_block")
 
         # (3) GARDE-FOU ABI : on compile un loader dont la SIGNATURE D'EN-TETES bakee est volontairement
-        # FAUSSE (-DADC_HEADER_SIG different). Sa cle pops_native_abi_key differe alors de celle du module
+        # FAUSSE (-DPOPS_HEADER_SIG different). Sa cle pops_native_abi_key differe alors de celle du module
         # -> add_native_block doit lever une erreur EXPLICITE. (On ne patche PAS le binaire : sur macOS
         # ARM cela invaliderait la signature ad-hoc et le noyau tuerait le process ; on recompile un .so
         # valide a la cle differente, ce qui teste exactement la frontiere d'ABI.)
@@ -142,20 +142,20 @@ def main():
 
 
 def _compile_wrong_abi(model, dst_so, cxx):
-    """Compile le MEME loader natif mais avec une signature d'en-tetes FAUSSE (-DADC_HEADER_SIG bidon) :
+    """Compile le MEME loader natif mais avec une signature d'en-tetes FAUSSE (-DPOPS_HEADER_SIG bidon) :
     le .so produit est valide (signe par le compilateur) mais sa cle d'ABI differe de celle du module,
     ce qui doit declencher le rejet d'add_native_block. Renvoie le chemin du .so."""
     import subprocess
     import tempfile
     from pops.dsl import pops_loader_build_flags
     src = model.emit_cpp_native_loader()
-    # adc_cpp est Kokkos-only : le loader inclut les en-tetes adc (for_each), il faut donc Kokkos +
+    # adc_cpp est Kokkos-only : le loader inclut les en-tetes pops (for_each), il faut donc Kokkos +
     # (macOS) -undefined dynamic_lookup. pops_loader_build_flags fournit compilateur + flags ; on garde
-    # une SIGNATURE D'EN-TETES FAUSSE (-DADC_HEADER_SIG bidon) pour que le .so compile mais soit REJETE
+    # une SIGNATURE D'EN-TETES FAUSSE (-DPOPS_HEADER_SIG bidon) pour que le .so compile mais soit REJETE
     # a l'ABI par add_native_block (le but du test).
     cc, kflags_c, kflags_l = pops_loader_build_flags(cxx)
     flags = ["-shared", "-fPIC", "-std=c++20", "-O2",
-             "-DADC_HEADER_SIG=\"deadbeef_signature_volontairement_fausse\"", *kflags_c]
+             "-DPOPS_HEADER_SIG=\"deadbeef_signature_volontairement_fausse\"", *kflags_c]
     with tempfile.TemporaryDirectory() as t:
         cpp = os.path.join(t, "wrong.cpp")
         with open(cpp, "w") as f:

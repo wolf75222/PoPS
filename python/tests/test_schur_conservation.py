@@ -64,7 +64,7 @@ import numpy as np
 try:
     import pops
 except ImportError as e:  # pragma: no cover - environnement sans build
-    print("skip  module adc absent (PYTHONPATH ? build ?) : %s" % e)
+    print("skip  module pops absent (PYTHONPATH ? build ?) : %s" % e)
     sys.exit(0)
 
 

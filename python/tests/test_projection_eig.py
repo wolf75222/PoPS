@@ -14,7 +14,7 @@ On verifie :
      matrices 2x2 et 3x3 ; tolerance 1e-12) ;
  (2) codegen : la brique #include dense_eig.hpp et declare le foncteur nomme pops_eig_max_im_KxK
      (pas de lambda ; appel scalaire compatible CSE) ;
- (3) [compilateur] la brique GENEREE compile contre les en-tetes adc et son hook project(U, aux),
+ (3) [compilateur] la brique GENEREE compile contre les en-tetes pops et son hook project(U, aux),
      execute sur un CHAMP de matrices construites des vars, reproduit la reference numpy CELLULE PAR
      CELLULE : projection jouet "si max_im > tol alors q <- cible" branchless == numpy (atol 1e-10) ;
  (4) [_pops] semantique POST-PAS de bout en bout (production + aot) : le hook tourne dans le System et
@@ -33,7 +33,7 @@ import numpy as np
 
 # Import DIRECT du module dsl (pur Python) : le temoin VP, son eval numpy et son codegen ne dependent
 # pas de l'extension compilee _pops. La partie System (4) est gardee par la disponibilite de _pops.
-_DSL_PATH = os.path.join(os.path.dirname(__file__), "..", "adc", "dsl.py")
+_DSL_PATH = os.path.join(os.path.dirname(__file__), "..", "pops", "dsl.py")
 _spec = importlib.util.spec_from_file_location("pops_dsl_eig", os.path.abspath(_DSL_PATH))
 dsl = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dsl)
@@ -159,7 +159,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
         chk(False, "compilation de la brique generee (voir stderr)")
         print(cp.stderr[:2000])
         return
-    chk(True, "la brique generee compile contre les en-tetes adc")
+    chk(True, "la brique generee compile contre les en-tetes pops")
 
     out = os.path.join(tmp, "q2.txt")
     args = [exe, out]
@@ -203,7 +203,7 @@ def test_additive():
 
 def test_system_end_to_end():
     """(4) Bout en bout via _pops : le hook tourne dans le System, etat post-pas == projection numpy.
-    Garde sur la disponibilite de l'extension compilee (import adc) ; sinon ignore."""
+    Garde sur la disponibilite de l'extension compilee (import pops) ; sinon ignore."""
     print("== (4) [_pops] semantique POST-PAS (production + aot) == reference numpy ==")
     try:
         import pops
@@ -297,7 +297,7 @@ def main():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     else:
-        print("== (3) skip : compilateur ou en-tetes adc absents ==")
+        print("== (3) skip : compilateur ou en-tetes pops absents ==")
 
     test_system_end_to_end()
 

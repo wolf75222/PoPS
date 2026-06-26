@@ -14,7 +14,7 @@ if ! ls kinstall/lib*/cmake/Kokkos/KokkosConfig.cmake >/dev/null 2>&1; then
 fi
 echo KOKKOS_OK
 cmake -S sim -B sbuild -DCMAKE_CXX_COMPILER="$PWD/kinstall/bin/nvcc_wrapper" \
-  -DKokkos_ROOT="$PWD/kinstall" -DADC_INCLUDE="$PWD/include" \
+  -DKokkos_ROOT="$PWD/kinstall" -DPOPS_INCLUDE="$PWD/include" \
   -DCMAKE_BUILD_TYPE=Release > scfg.log 2>&1 || { echo SCFG_FAIL; tail -30 scfg.log; exit 1; }
 cmake --build sbuild -j 8 > sbuild.log 2>&1 || { echo SBUILD_FAIL; tail -40 sbuild.log; exit 1; }
 echo SIM_OK

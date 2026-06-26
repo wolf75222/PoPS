@@ -53,7 +53,7 @@ def build_euler_poisson():
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> bloc dynamique couple saute")
+        print("skip  compilateur ou en-tetes pops absents -> bloc dynamique couple saute")
         print("test_dsl_coupled : OK (rien a compiler)")
         return
 

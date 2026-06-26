@@ -5,12 +5,12 @@
 on CPU. `for_each_cell` becomes a multi-thread `parallel_for` (with a serial-switch threshold
 for the small V-cycle grids, cf. `POPS_FOREACH_SERIAL_THRESHOLD`).
 
-**Build.** Kokkos installed with `Kokkos_ENABLE_OPENMP=ON`. The `-DADC_USE_KOKKOS=ON` on the
+**Build.** Kokkos installed with `Kokkos_ENABLE_OPENMP=ON`. The `-DPOPS_USE_KOKKOS=ON` on the
 `adc_cpp` side is identical to config 1; it is the Kokkos install that changes:
 
 ```bash
 cmake -S . -B build-kokkos-omp -DCMAKE_BUILD_TYPE=Release \
-  -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KOKKOS_OPENMP_PREFIX"
+  -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KOKKOS_OPENMP_PREFIX"
 cmake --build build-kokkos-omp -j
 ```
 

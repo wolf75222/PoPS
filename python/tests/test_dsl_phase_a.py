@@ -267,7 +267,7 @@ def main():
     modelspec_substeps_check()
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  bout-en-bout (compilateur ou en-tetes adc absents)")
+        print("skip  bout-en-bout (compilateur ou en-tetes pops absents)")
     else:
         end_to_end_checks(cxx)
     print("test_dsl_phase_a : tout est vert")

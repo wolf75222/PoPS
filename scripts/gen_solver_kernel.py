@@ -18,14 +18,14 @@ import types
 
 
 def _load_lib():
-    """Load ``pops.lib`` (and its ``pops.time`` dependency) WITHOUT importing the ``adc``
+    """Load ``pops.lib`` (and its ``pops.time`` dependency) WITHOUT importing the ``pops``
     package ``__init__`` (which needs the compiled ``_pops`` extension). The IR-authoring
     and codegen layers are pure Python, so they load standalone from source."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    pops_dir = os.path.join(root, "python", "adc")
-    pkg = types.ModuleType("adc")
+    pops_dir = os.path.join(root, "python", "pops")
+    pkg = types.ModuleType("pops")
     pkg.__path__ = [pops_dir]
-    sys.modules["adc"] = pkg
+    sys.modules["pops"] = pkg
 
     def load(name):
         spec = importlib.util.spec_from_file_location(

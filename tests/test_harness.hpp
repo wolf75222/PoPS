@@ -3,7 +3,7 @@
 /// @file
 /// @brief Helpers partages des tests autonomes du coeur (assertions, tolerances, sommes de controle).
 ///
-/// Couche : `tests/` (hors `include/adc`, reserve aux executables de test ; non installe).
+/// Couche : `tests/` (hors `include/pops`, reserve aux executables de test ; non installe).
 /// Role : factoriser les briques copiees a l'identique dans des dizaines de tests -- le compteur
 ///   d'echecs + la fonction d'assertion `chk`, le predicat d'exception `raises`, la comparaison
 ///   relative `close_rel`, la somme de controle `checksum`, la constante `kPi`.

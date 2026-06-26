@@ -5,12 +5,12 @@ run it, and confirm it produces a result bit-identical to the same model built f
 
 ## Prerequisites
 
-- A built `adc` Python module. If you have not built it yet, follow
+- A built `pops` Python module. If you have not built it yet, follow
   [Installation](../getting-started/installation.md). For this tutorial, use the build from
   `cmake --preset python` or `pip install .`; the Kokkos Serial backend is enough.
 - `numpy` and `matplotlib` in the same Python environment.
 - The repository headers on disk, because the DSL compiles a `.so` against them. The `production`
-  backend needs `_pops` and the generated `.so` built with the same adc headers (the ABI guard).
+  backend needs `_pops` and the generated `.so` built with the same pops headers (the ABI guard).
 - Background, if you want it: the [models overview](../models/index.md) explains the three ways to
   write a model, and the [physical model concept](../concepts/physical-model.md) explains the
   `flux` / `max_wave_speed` / `source` / `elliptic_rhs` contract that the DSL fills in.
@@ -28,7 +28,7 @@ code by hand.
 
 ## Step 1: Open a Python session next to the script
 
-Change into the repository and start the same Python interpreter that built `adc`.
+Change into the repository and start the same Python interpreter that built `pops`.
 
 ```bash
 cd adc_cpp
@@ -48,7 +48,7 @@ export POPS_INCLUDE=$PWD/include
 `POPS_INCLUDE` tells the DSL where the headers are when it compiles the `.so`. Replace `$PWD` only if
 you run from another directory; it must point at the repository root.
 
-## Step 2: Import `adc` and the DSL
+## Step 2: Import `pops` and the DSL
 
 Import the module and the `dsl` submodule, then print the running parallelism backend (a Python
 module built in CI runs Kokkos Serial).
@@ -117,7 +117,7 @@ python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 
 ### Expected result
 
-The script prints the path `adc` was imported from and the parallelism backend, then the compiled
+The script prints the path `pops` was imported from and the parallelism backend, then the compiled
 backend it retained (`production` or, after fallback, `aot`). It reports that the perturbation
 amplitude grew over the run and that mass stays conserved by the periodic advective transport; it
 asserts both, so a failed assertion means one of these did not hold. It then writes the figures and a
@@ -153,10 +153,10 @@ formulas reproduce exactly the conventions of the native `ExB` and `BackgroundDe
 
 ## Troubleshooting
 
-- Import error on `import adc`: the extension is pinned to the interpreter that built it. Import with
-  the same Python, and run `python -c "import adc; pops.doctor()"` to check the environment.
+- Import error on `import pops`: the extension is pinned to the interpreter that built it. Import with
+  the same Python, and run `python -c "import pops; pops.doctor()"` to check the environment.
 - `RuntimeError` about headers when compiling: set `POPS_INCLUDE` to the repository `include`
-  directory (Step 1). The DSL validates it by checking that `adc/mesh/storage/multifab.hpp` exists there.
+  directory (Step 1). The DSL validates it by checking that `pops/mesh/storage/multifab.hpp` exists there.
 - The script reports that the `production` backend is unavailable and continues on `aot`: this is the
   documented fallback when `_pops` and the `.so` were not built with the same headers. The `aot` run is
   numerically identical; nothing further is required for this tutorial.

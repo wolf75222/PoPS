@@ -70,7 +70,7 @@ inline double dt_for(int n) { return kCflForDt * (kL / n) / wmax(); }
 }  // namespace safecase
 
 #ifndef POPS_BUILD_SHA
-#define POPS_BUILD_SHA "unknown"  // injecte par CMake (-DADC_BUILD_SHA=...) via run_frontend.sh
+#define POPS_BUILD_SHA "unknown"  // injecte par CMake (-DPOPS_BUILD_SHA=...) via run_frontend.sh
 #endif
 #ifndef POPS_BUILD_BRANCH
 #define POPS_BUILD_BRANCH "unknown"

@@ -80,10 +80,10 @@ msg_bad = err_msg(lambda: ss.add_native_block("x", "/inexistant.so", limiter="mi
 chk(msg_bad != "" and ("explicit'" in msg_bad and "imex'" in msg_bad),
     "time='rk4' (inconnu) reste rejete par la garde amont (pas de dlopen)")
 
-# --- (2)/(3) PARITE + NON-TRIVIALITE (necessite un compilateur + en-tetes adc) ---------------------
+# --- (2)/(3) PARITE + NON-TRIVIALITE (necessite un compilateur + en-tetes pops) ---------------------
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (2)/(3) : compilateur ou en-tetes adc absents")
+    print("skip  (2)/(3) : compilateur ou en-tetes pops absents")
     print("test_ssprk3_production : OK (garde amont verte, parite non compilee)"
           if fails == 0 else f"{fails} ECHEC(S)")
     sys.exit(0 if fails == 0 else 1)

@@ -3,7 +3,7 @@
 A Module is the model-free view: typed spaces + a registry of typed operators. dsl.Model
 encapsulates a Module (its source_term / linear_source / elliptic_field / flux register
 typed operators). A generic Program -- written only with operator names and signatures --
-runs against any Module that provides the expected signatures. Pure Python; skips if adc
+runs against any Module that provides the expected signatures. Pure Python; skips if pops
 is not importable.
 """
 import sys
@@ -11,8 +11,8 @@ import sys
 try:
     from pops import dsl, model
     from pops import time as adctime
-except Exception as exc:  # adc not importable here -> skip, never fake
-    print("skip test_operator_module (adc unavailable: %s)" % exc)
+except Exception as exc:  # pops not importable here -> skip, never fake
+    print("skip test_operator_module (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 

@@ -34,10 +34,10 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_history (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -184,7 +184,7 @@ def _run_section_b(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     n = 16
@@ -249,7 +249,7 @@ def _run_section_c(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001
-        print("-- (C) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (C) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     n = 8
@@ -294,7 +294,7 @@ def _run_section_c(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

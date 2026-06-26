@@ -47,7 +47,7 @@ import numpy as np
 
 # Import DIRECT du module dsl (pur Python) : le predicat, son eval numpy et son codegen ne dependent
 # pas de l'extension compilee _pops.
-_DSL_PATH = os.path.join(os.path.dirname(__file__), "..", "adc", "dsl.py")
+_DSL_PATH = os.path.join(os.path.dirname(__file__), "..", "pops", "dsl.py")
 _spec = importlib.util.spec_from_file_location("pops_dsl_eig_pred", os.path.abspath(_DSL_PATH))
 dsl = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(dsl)
@@ -262,7 +262,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")
         print(cp.stderr[:2000]); return
-    chk(True, "la brique generee compile contre les en-tetes adc")
+    chk(True, "la brique generee compile contre les en-tetes pops")
 
     out = os.path.join(tmp, "q2.txt")
     args = [exe, out]
@@ -299,7 +299,7 @@ def main():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     else:
-        print("== (4)+(5) skip : compilateur ou en-tetes adc absents ==")
+        print("== (4)+(5) skip : compilateur ou en-tetes pops absents ==")
 
     print("FAILS =", fails)
     sys.exit(1 if fails else 0)

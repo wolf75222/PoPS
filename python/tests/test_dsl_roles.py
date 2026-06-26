@@ -9,7 +9,7 @@ Ce test verifie :
     MomentumY, Energy / Pressure) ; un layout NON STANDARD (qte de mvt avant densite) avec roles=
     explicites emet ces roles dans l'ordre demande ; un modele aux noms inconnus n'emet PAS de roles
     (retro-compat stricte : le 4e champ VariableSet::roles reste absent, fallback indices historiques).
-(2) RESOLUTION (si compilateur + en-tetes adc) : la brique au layout non standard compile, satisfait
+(2) RESOLUTION (si compilateur + en-tetes pops) : la brique au layout non standard compile, satisfait
     pops::HyperbolicModel, et index_of(MomentumX/MomentumY/Density/Energy) retrouve la BONNE composante
     QUELLE QUE SOIT sa position -- c'est exactement ce dont depend la resolution par role des couplages.
 Lance avec python3.
@@ -134,7 +134,7 @@ def main():
     # (2) RESOLUTION par role a travers le C++ (si compilateur dispo) --------------------------
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> resolution sautee (%s)" % INCLUDE)
+        print("skip  compilateur ou en-tetes pops absents -> resolution sautee (%s)" % INCLUDE)
         print("test_dsl_roles : OK (forme des roles seulement)")
         return
 

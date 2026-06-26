@@ -168,7 +168,7 @@ finally:
 # --- (D) DSL : enable_hllc + source_jacobian (compilateur requis) ---------------------
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (D) : compilateur ou en-tetes adc absents")
+    print("skip  (D) : compilateur ou en-tetes pops absents")
     if fails:
         print(f"FAIL test_v3_features : {fails} echec(s)")
         sys.exit(1)

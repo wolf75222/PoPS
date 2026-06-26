@@ -18,7 +18,7 @@ This uses the same Kokkos Serial install as the reference build, plus the MPI se
    Replace `KOKKOS_PREFIX` with the path to your Kokkos Serial install.
 
    ```bash
-   cmake -S . -B build-mpi -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON -DADC_USE_MPI=ON -DKokkos_ROOT=KOKKOS_PREFIX
+   cmake -S . -B build-mpi -DCMAKE_BUILD_TYPE=Release -DPOPS_USE_KOKKOS=ON -DPOPS_USE_MPI=ON -DKokkos_ROOT=KOKKOS_PREFIX
    ```
 
 2. Compile.
@@ -49,7 +49,7 @@ To use all cores of every rank, build the MPI plus Kokkos OpenMP hybrid against 
 Kokkos OpenMP install. Replace `KOKKOS_OPENMP_PREFIX` with the path to that install.
 
 ```bash
-cmake -S . -B build-mpi-omp -DCMAKE_BUILD_TYPE=Release -DADC_USE_MPI=ON -DADC_USE_KOKKOS=ON -DKokkos_ROOT=KOKKOS_OPENMP_PREFIX
+cmake -S . -B build-mpi-omp -DCMAKE_BUILD_TYPE=Release -DPOPS_USE_MPI=ON -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT=KOKKOS_OPENMP_PREFIX
 ```
 
 Bound the thread count per rank with `OMP_NUM_THREADS` when you run the tests.
@@ -60,7 +60,7 @@ OMP_NUM_THREADS=4 OMPI_MCA_rmaps_base_oversubscribe=true ctest --test-dir build-
 
 ## Multi-rank from Python
 
-The `adc` Python module is MPI-aware when `_pops` is built with `POPS_USE_MPI=ON`
+The `pops` Python module is MPI-aware when `_pops` is built with `POPS_USE_MPI=ON`
 (the `mpi` CMake preset, which writes to `build-mpi` and relies on `POPS_USE_KOKKOS`
 defaulting to ON). Run a script across ranks the same way as a C++ binary, by
 launching the interpreter under `mpirun`.
@@ -117,7 +117,7 @@ Open the `.vti` output in ParaView following
 
 - To run multi-GPU on ROMEO, see the [parallel backends page](../backends/index.md).
 - A multi-thread (Kokkos OpenMP) Python module is available via the `python-parallel`
-  CMake preset, with the thread count set by `pops.set_threads(n)` right after `import adc`;
+  CMake preset, with the thread count set by `pops.set_threads(n)` right after `import pops`;
   there is no nvcc/CUDA Python module (GPU is C++-only). See the
   [installation page](../getting-started/installation.md).
 - The multi-rank Python API above is real and works under `mpirun`. What is missing is

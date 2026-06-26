@@ -7,7 +7,7 @@
 /// (i, j); it captures Array4 handles by value (POD), never the Fab nor anything virtual:
 /// exactly the constraint of a device kernel. The on-node target (sequential = Kokkos Serial, CPU
 /// multi-thread = Kokkos OpenMP, GPU = Kokkos Cuda/HIP) is chosen AT KOKKOS INSTALLATION, not
-/// by an adc flag: a single for_each_cell call (Kokkos::parallel_for over MDRangePolicy<Rank<2>>)
+/// by an pops flag: a single for_each_cell call (Kokkos::parallel_for over MDRangePolicy<Rank<2>>)
 /// covers all three. The CPU -> GPU switch therefore does NOT change the call sites.
 /// FP CHOICE: the SUM reduction (Kokkos::Sum) reassociates the addition per tile -> DETERMINISTIC per
 /// tile (idempotent: same data, same backend -> same bits) but NOT bit-identical to a lexicographic
@@ -28,17 +28,17 @@
 
 #ifndef POPS_HAS_KOKKOS
 // adc_cpp is KOKKOS-ONLY: there is no longer a standalone OpenMP backend nor a manual host loop
-// as a production path. Configure with -DADC_USE_KOKKOS=ON (+ -DKokkos_ROOT=...); serial
+// as a production path. Configure with -DPOPS_USE_KOKKOS=ON (+ -DKokkos_ROOT=...); serial
 // goes through a Kokkos install with Kokkos_ENABLE_SERIAL=ON.
 #error \
-    "adc_cpp is Kokkos-only: for_each_cell requires POPS_HAS_KOKKOS. Configure with -DADC_USE_KOKKOS=ON and a Kokkos Serial/OpenMP/Cuda install."
+    "adc_cpp is Kokkos-only: for_each_cell requires POPS_HAS_KOKKOS. Configure with -DPOPS_USE_KOKKOS=ON and a Kokkos Serial/OpenMP/Cuda install."
 #endif
 
 #include <Kokkos_Core.hpp>
 
 namespace pops {
 
-// detail::ensure_kokkos_initialized() and device_fence(): defined in adc/core/kokkos_env.hpp
+// detail::ensure_kokkos_initialized() and device_fence(): defined in pops/core/kokkos_env.hpp
 // (Kokkos life cycle shared with the unified allocator, which must also initialize Kokkos BEFORE
 // its first kokkos_malloc, otherwise the Kokkos build crashes when constructing a Fab).
 

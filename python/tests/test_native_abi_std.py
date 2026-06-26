@@ -16,7 +16,7 @@ Ce test :
      se charge SANS erreur d'ABI -- c'est exactement ce qui cassait sous Kokkos. Le test echouerait
      sous Kokkos avec l'ancien defaut c++23 (mismatch __cplusplus), il passe avec le std aligne.
 
-S'auto-saute (exit 0) si aucun compilateur C++ ou les en-tetes adc sont absents (chemins JIT/AOT/natif
+S'auto-saute (exit 0) si aucun compilateur C++ ou les en-tetes pops sont absents (chemins JIT/AOT/natif
 ont la meme convention). Cable au job CI Kokkos (OpenMP) : c'est le SEUL job ou loader != c++23, donc
 le seul ou cette regression se manifeste.
 """
@@ -120,7 +120,7 @@ def check_native_loads_without_abi_error(expected_std):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents")
+        print("skip  compilateur ou en-tetes pops absents")
         print("test_native_abi_std : OK (rien a compiler)")
         return
 

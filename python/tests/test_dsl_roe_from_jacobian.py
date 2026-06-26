@@ -80,7 +80,7 @@ chk(hasattr(mr, "roe_from_jacobian") and callable(mr.roe_from_jacobian),
 # --- (B) compile AOT + System riemann='roe' (compiler-gated) ------------------
 cxx = dsl._default_cxx(None)
 if not cxx or not os.path.isdir(INCLUDE):
-    print("== (B) saute : compilateur C++ ou en-tetes adc absents ==")
+    print("== (B) saute : compilateur C++ ou en-tetes pops absents ==")
     print("FAILS =", fails)
     sys.exit(1 if fails else 0)
 

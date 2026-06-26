@@ -1,5 +1,5 @@
-# Python package `adc` built by scikit-build-core: `pip install .` DRIVES the existing CMakeLists
-# (single source of truth) and installs the module into site-packages -> `import adc` WITHOUT
+# Python package `pops` built by scikit-build-core: `pip install .` DRIVES the existing CMakeLists
+# (single source of truth) and installs the module into site-packages -> `import pops` WITHOUT
 # PYTHONPATH. This is the standard pattern of the twin projects (pybind11 docs, pyAMReX, WarpX).
 #
 #   pip install . -v                                # builds the Kokkos module (Kokkos is ON, mandatory)

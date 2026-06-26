@@ -4,7 +4,7 @@ These tests exercise the LOWERING of a blackboard-style model to the Spec 2
 operator-first IR (pops.model.Module) and to the pops.dsl codegen engine. They are
 pure-Python: only pops.physics / pops.math / pops.model / pops.dsl are needed; no
 compiled time-program run, so they pass without a freshly built _pops beyond what
-``import adc`` requires.
+``import pops`` requires.
 """
 import pytest
 

@@ -16,7 +16,7 @@ brick model that the [A->Z tutorial](../getting-started/tutorial.md) validates a
 
 ## Prerequisites
 
-- A working install of the `adc` Python module. If you do not have one, follow
+- A working install of the `pops` Python module. If you do not have one, follow
   [Installation](../getting-started/installation.md). For a first local run, use the Kokkos Serial
   backend (the default of `pip install .`).
 - `numpy`.
@@ -36,7 +36,7 @@ git clone https://github.com/wolf75222/adc_cpp.git
 cd adc_cpp
 ```
 
-Build and install the `adc` module into your environment. The core is header-only, so only the
+Build and install the `pops` module into your environment. The core is header-only, so only the
 Python module is compiled.
 
 ```bash
@@ -46,7 +46,7 @@ pip install .
 The full build, the developer build tree, and the optional environment variables are covered in
 [Installation](../getting-started/installation.md).
 
-## Step 2: Start a Python session and import `adc`
+## Step 2: Start a Python session and import `pops`
 
 Start Python from the repository root and import the module.
 
@@ -227,8 +227,8 @@ and AMR runs.
 
 - `ValueError` at `pops.Model(...)`: the four roles are inconsistent. `Scalar` must be paired with
   `ExB`; check the pairing against the [native bricks reference](../reference/native-bricks.md).
-- `ImportError` on `import adc`: the module is not built or not on the path. The error message gives
-  the cause and the rebuild command; run `python -c "import adc; pops.doctor()"` to check the
+- `ImportError` on `import pops`: the module is not built or not on the path. The error message gives
+  the cause and the rebuild command; run `python -c "import pops; pops.doctor()"` to check the
   environment, and see [Installation](../getting-started/installation.md).
 
 ## Next

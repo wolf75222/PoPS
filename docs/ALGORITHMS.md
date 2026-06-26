@@ -2041,7 +2041,7 @@ limit (phase 8).
 **Intuition.** Not a numerical algorithm but the switch point that makes them all portable.
 `for_each_cell(box, f)` dispatches the loop over the cells of a `Box2D` to Kokkos, the only on-node
 backend; the execution space (Serial sequential, OpenMP multi-thread, Cuda/HIP GPU) is chosen AT
-THE INSTALLATION OF KOKKOS, not by an adc flag. The operators (assemble_rhs, V-cycle, couplers)
+THE INSTALLATION OF KOKKOS, not by an pops flag. The operators (assemble_rhs, V-cycle, couplers)
 never see the execution space and no CUDA kernel is hand-written. Detail in
 [ARCHITECTURE.md](ARCHITECTURE.md) section 4 (execution layer).
 

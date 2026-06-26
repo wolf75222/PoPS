@@ -171,7 +171,7 @@ Three execution paths exist on the C++ side:
 > SHIPPED (#89). `dsl.Model` now EXISTS (`dsl.py:Model`, module `pops.dsl`). It is the facade
 > that COMPOSES a private `HyperbolicModel` (`_m`) and delegates each call. The name `pops.Model`
 > (`__init__.py:Model`) remains the distinct function that composes a `ModelSpec` of NATIVE bricks
-> (path (a)); the two coexist as planned (one in `pops.dsl`, the other in `adc`).
+> (path (a)); the two coexist as planned (one in `pops.dsl`, the other in `pops`).
 
 
 ## 1. Stable `dsl.Model` facade

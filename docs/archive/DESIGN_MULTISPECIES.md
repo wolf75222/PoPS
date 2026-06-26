@@ -1,4 +1,4 @@
-# adc : Multi-species milestone : from `PhysicalModel` to `CoupledSystem`
+# pops : Multi-species milestone : from `PhysicalModel` to `CoupledSystem`
 
 *Design document for the whiteboard session (with Sacha). Updates the roadmap
 after the supervisor's remarks and the increments already done.*
@@ -240,12 +240,12 @@ all cells). The cell hot path stays in C++.
 
 ## 8. Summary (whiteboard sentence)
 
-> `adc` already knows how to take a **local physical law** and run it on a mesh
+> `pops` already knows how to take a **local physical law** and run it on a mesh
 > with Poisson, AMR, MPI and GPU. What is missing to become a **solver-building
 > library** is a level of **multi-block assembly**: several
 > states, several models, several numerical methods, several time steps, and
 > global couplings in Poisson and in the sources.
 >
 > The `PhysicalModel` describes a local equation. The `CoupledSystem` describes a physical
-> system. The `Scheduler` describes the execution order. The `adc` core guarantees that these
+> system. The `Scheduler` describes the execution order. The `pops` core guarantees that these
 > choices stay compatible with AMR / MPI / GPU.

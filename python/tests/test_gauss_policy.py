@@ -51,10 +51,10 @@ s.set_gauss_policy("evolve")
 chk(True, "(a) set_gauss_policy('restart'/'evolve') acceptes")
 chk(raises(lambda: s.set_gauss_policy("rejoindre")), "(a) politique inconnue rejetee")
 
-# --- (b)/(c) comportement (necessite un compilateur + en-tetes adc) --------------------------------
+# --- (b)/(c) comportement (necessite un compilateur + en-tetes pops) --------------------------------
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (b)/(c) : compilateur ou en-tetes adc absents")
+    print("skip  (b)/(c) : compilateur ou en-tetes pops absents")
     print("test_gauss_policy : OK (API verte)" if fails == 0 else f"{fails} ECHEC(S)")
     sys.exit(0 if fails == 0 else 1)
 

@@ -40,15 +40,15 @@ history runtime path); each step solves from phi^n = 0.
     deferred (see the macro docstring).
 
 Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
-fakes the engine (project policy: no fake adc in tests).
+fakes the engine (project policy: no fake pops in tests).
 """
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_condensed_schur (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -321,7 +321,7 @@ def _run_section_b(t):
         import pops
         from pops import dsl
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable here
-        print("-- (B) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     sim_probe = pops.System(n=8, L=_L, periodic=True)
@@ -453,7 +453,7 @@ def _run_section_b(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

@@ -117,9 +117,9 @@ Core + tests, CPU:
 export KOKKOS_ROOT=$(spack location -i kokkos)
 cmake -S . -B build-cpu -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DADC_USE_KOKKOS=ON -DKokkos_ROOT=$KOKKOS_ROOT \
-  -DADC_USE_MPI=ON \
-  -DADC_USE_HDF5=ON
+  -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT=$KOKKOS_ROOT \
+  -DPOPS_USE_MPI=ON \
+  -DPOPS_USE_HDF5=ON
 cmake --build build-cpu -j
 ctest --test-dir build-cpu
 ```
@@ -131,8 +131,8 @@ export KOKKOS_ROOT=$(spack location -i kokkos)   # build +cuda +wrapper
 cmake -S . -B build-gpu -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_COMPILER=$KOKKOS_ROOT/bin/nvcc_wrapper \
-  -DADC_USE_KOKKOS=ON -DKokkos_ROOT=$KOKKOS_ROOT \
-  -DADC_USE_MPI=ON
+  -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT=$KOKKOS_ROOT \
+  -DPOPS_USE_MPI=ON
 cmake --build build-gpu -j
 ```
 

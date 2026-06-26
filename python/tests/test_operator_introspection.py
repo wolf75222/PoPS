@@ -10,8 +10,8 @@ import sys
 try:
     from pops import dsl, model
     from pops import time as adctime
-except Exception as exc:  # adc not importable here -> skip, never fake
-    print("skip test_operator_introspection (adc unavailable: %s)" % exc)
+except Exception as exc:  # pops not importable here -> skip, never fake
+    print("skip test_operator_introspection (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 

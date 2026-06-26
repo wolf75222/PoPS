@@ -29,7 +29,7 @@ try:
     from pops import dsl
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip operator_first_perf (adc/numpy unavailable: %s)" % exc)
+    print("skip operator_first_perf (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 GAMMA = 1.4

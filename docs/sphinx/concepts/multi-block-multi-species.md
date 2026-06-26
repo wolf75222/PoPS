@@ -1,6 +1,6 @@
 # Multi-block and multi-species systems
 
-A system in `adc` is a set of blocks, one per model or species, that all live on a
+A system in `pops` is a set of blocks, one per model or species, that all live on a
 single mesh and couple through one shared elliptic solve. This page explains what a
 block is, why several blocks share the same hierarchy and auxiliary channel, and how
 the coupling between species reduces to a summed right-hand side.

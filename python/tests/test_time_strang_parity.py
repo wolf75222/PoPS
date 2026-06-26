@@ -38,7 +38,7 @@ U + (dt/2)*(-div F), identical to the compiled half-flow stage; an RK scheme (e.
 the half-flow to reproduce the multi-stage native advance, which it can but only the offline-same-steps
 reference would witness it -- Euler keeps the native cross-check exact.
 
-Run with python3 (PYTHONPATH = built adc package).
+Run with python3 (PYTHONPATH = built pops package).
 """
 import sys
 
@@ -118,9 +118,9 @@ try:
     import pops
 except Exception:  # noqa: BLE001  -- numpy / _pops unavailable: (A) codegen is still checked below
     np = None
-    adc = None
+    pops = None
 
-if adc is not None:
+if pops is not None:
     def transport_model():
         """Uncoupled isothermal fluid (no field coupling into the flux), NO source brick: native H is a
         pure Euler transport step and native S (run_source_stage) is a no-op."""
@@ -144,7 +144,7 @@ print("  (A) PASS")
 
 
 # ============================ (B) native bit-parity: skip without the toolchain ================
-if adc is None:
+if pops is None:
     _skip("pops/numpy unavailable (A passed)")
 if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
     _skip("_pops lacks the install_program binding (rebuild _pops) (A passed)")

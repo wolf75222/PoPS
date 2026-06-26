@@ -12,7 +12,7 @@ plus the cache-key contract:
     a byte-identical hash to before the feature (golden), while changing a named source or a
     linear_source matrix invalidates the cache.
 
-Run with python3 (PYTHONPATH = built adc package).
+Run with python3 (PYTHONPATH = built pops package).
 """
 import numpy as np
 

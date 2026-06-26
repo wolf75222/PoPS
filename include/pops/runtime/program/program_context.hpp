@@ -762,7 +762,7 @@ class ProgramContext {
   /// Fail loud: a node with an `error` policy was reached off its schedule cadence (a stale value would
   /// be read). The codegen emits this on the not-due branch of an `error`-policy node.
   [[noreturn]] void scheduler_error(const std::string& what) const {
-    throw std::runtime_error("adc Program scheduler: " + what);
+    throw std::runtime_error("pops Program scheduler: " + what);
   }
   /// @}
 

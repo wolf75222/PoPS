@@ -3,12 +3,12 @@
 
 This script is the SOURCE of truth for the A->Z tutorial in the Sphinx documentation: the
 `getting-started/tutorial` page includes it via `literalinclude` (the doc code is NOT copied by
-hand). It is deliberately SELF-CONTAINED: it depends only on `adc` (the compiled module), `numpy`
+hand). It is deliberately SELF-CONTAINED: it depends only on `pops` (the compiled module), `numpy`
 and `matplotlib` -- no dependency on the `adc_cases` application package.
 
 What it does, in tutorial order
 --------------------------------
-1. imports `adc` and detects the running backend;
+1. imports `pops` and detects the running backend;
 2. WRITES THE MODEL AS FORMULAS with `pops.dsl.Model` (conservative variable, auxiliary fields
    phi/grad, E x B advection flux, eigenvalues, elliptic right-hand side);
 3. COMPILES the model: tries the `production` backend (zero-copy native path, preferred) then
@@ -126,7 +126,7 @@ def compile_and_build(model: "dsl.Model", ne0: np.ndarray, L: float, outdir: Pat
     Tries `production` first (zero-copy native path `add_native_block`, the plan's target), then
     falls back to `aot` (`add_compiled_block`, numerically identical, host-marshalled) -- exactly the
     cases' strategy (cf. `adc_cases/diocotron_dsl`). The native path requires the `_pops` module and the
-    model `.so` to have BEEN COMPILED WITH THE SAME adc headers (ABI guard); a fresh module (built as in
+    model `.so` to have BEEN COMPILED WITH THE SAME pops headers (ABI guard); a fresh module (built as in
     getting-started/installation) takes the native path, otherwise `aot` applies. Returns (sim, backend)."""
     last = None
     for backend in ("production", "aot"):
@@ -289,7 +289,7 @@ def git_sha(path: Path) -> str:
 def detect_backend_runtime() -> str:
     """Parallelism backend compiled into the module (cf. getting-started/backend)."""
     for attr in ("backend", "parallel_backend", "build_info"):
-        val = getattr(adc, attr, None)
+        val = getattr(pops, attr, None)
         if callable(val):
             try:
                 return str(val())
@@ -314,7 +314,7 @@ def main() -> None:
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
     L = 1.0
 
-    print(f"adc imported from: {pops.__file__}")
+    print(f"pops imported from: {pops.__file__}")
     print(f"parallelism backend: {detect_backend_runtime()}")
 
     ne0 = band_density(args.n, L, amp=1.0, width=0.05, mode=2, disp=0.02)

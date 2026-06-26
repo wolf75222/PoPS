@@ -1,5 +1,5 @@
 """Genere un CAS COMPLET Euler 2D (time-stepping CFL, Rusanov, periodique) qui tourne sur GPU a
-travers le seam Kokkos d'adc (for_each_cell / for_each_cell_reduce_*). On simule avec la brique
+travers le seam Kokkos d'pops (for_each_cell / for_each_cell_reduce_*). On simule avec la brique
 GENEREE EulerGen ET avec pops::Euler, et on compare les champs finaux (+ conservation de la masse).
 Placeholder __BRICK__."""
 import sys
@@ -8,7 +8,7 @@ from test_dsl_brick import build_euler_brick
 
 brick = build_euler_brick().emit_cpp_brick(name="EulerGen")
 
-HARNESS = r"""// CAS COMPLET Euler 2D sur GPU via le seam Kokkos d'adc (for_each_cell).
+HARNESS = r"""// CAS COMPLET Euler 2D sur GPU via le seam Kokkos d'pops (for_each_cell).
 #define POPS_HAS_KOKKOS 1
 #include <Kokkos_Core.hpp>
 #include <pops/mesh/execution/for_each.hpp>

@@ -20,8 +20,8 @@ try:
 
     import pops
     from pops import time as adctime
-except Exception as exc:  # noqa: BLE001  -- adc/numpy unavailable in this interpreter
-    print("skip forward_euler_program (adc/numpy unavailable: %s)" % exc)
+except Exception as exc:  # noqa: BLE001  -- pops/numpy unavailable in this interpreter
+    print("skip forward_euler_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 

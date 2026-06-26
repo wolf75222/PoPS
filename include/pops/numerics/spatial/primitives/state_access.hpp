@@ -25,7 +25,7 @@
 namespace pops {
 
 // aux_comps<Model>() (aux channel width of a model) now lives in the contract header
-// adc/core/physical_model.hpp (included above) so that CompositeModel can propagate it.
+// pops/core/physical_model.hpp (included above) so that CompositeModel can propagate it.
 
 /// DiffusiveModel: optional concept for models with isotropic scalar diffusion.
 ///

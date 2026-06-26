@@ -10,7 +10,7 @@ via `all_reduce_*`. Single-thread CPU per rank.
 
 ```bash
 cmake -S . -B build-mpi -DCMAKE_BUILD_TYPE=Release \
-  -DADC_USE_KOKKOS=ON -DADC_USE_MPI=ON -DKokkos_ROOT="$KOKKOS_PREFIX"
+  -DPOPS_USE_KOKKOS=ON -DPOPS_USE_MPI=ON -DKokkos_ROOT="$KOKKOS_PREFIX"
 cmake --build build-mpi -j
 ```
 

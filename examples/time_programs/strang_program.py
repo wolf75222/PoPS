@@ -29,7 +29,7 @@ try:
     import pops
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip strang_program (adc/numpy unavailable: %s)" % exc)
+    print("skip strang_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 

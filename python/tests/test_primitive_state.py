@@ -158,7 +158,7 @@ def test_dsl_compiled():
     (add_dynamic_block, IModel virtuel). S'auto-saute sans compilateur C++."""
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  DSL compile : compilateur ou en-tetes adc absents")
+        print("skip  DSL compile : compilateur ou en-tetes pops absents")
         return
     # build_euler_poisson : Euler 4 var (rho, u, v, p) avec to_primitive / to_conservative declares
     # (set_primitive_state / set_conservative_from dans le DSL). cf. test_dsl_coupled.

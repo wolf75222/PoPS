@@ -33,7 +33,7 @@ using namespace pops;
 inline py::array_t<double> to_2d(const std::vector<double>& v, int rows, int cols) {
   py::array_t<double> a({rows, cols});
   if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("adc (bindings): field size (" + std::to_string(v.size()) +
+    throw std::runtime_error("pops (bindings): field size (" + std::to_string(v.size()) +
                              ") != rows*cols (" + std::to_string(rows) + "*" +
                              std::to_string(cols) + "); inconsistent 2D reshape");
   std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(double));
@@ -44,7 +44,7 @@ inline py::array_t<double> to_2d(const std::vector<double>& v, int rows, int col
 inline py::array_t<double> to_3d(const std::vector<double>& v, int ncomp, int rows, int cols) {
   py::array_t<double> a({ncomp, rows, cols});
   if (static_cast<std::size_t>(a.size()) != v.size())
-    throw std::runtime_error("adc (bindings): state size (" + std::to_string(v.size()) +
+    throw std::runtime_error("pops (bindings): state size (" + std::to_string(v.size()) +
                              ") != ncomp*rows*cols (" + std::to_string(ncomp) + "*" +
                              std::to_string(rows) + "*" + std::to_string(cols) +
                              "); inconsistent 3D reshape");

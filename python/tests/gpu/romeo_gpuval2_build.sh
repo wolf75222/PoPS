@@ -26,7 +26,7 @@ mkdir -p "$RES"
 # --- build device (Kokkos Cuda) ------------------------------------------------------------------
 rm -rf gpuval2_build
 cmake -S "$SRC" -B gpuval2_build -DCMAKE_CXX_COMPILER="$NW" -DKokkos_ROOT="$PWD/kinstall" \
-  -DADC_INCLUDE="$INC" -DCMAKE_BUILD_TYPE=Release \
+  -DPOPS_INCLUDE="$INC" -DCMAKE_BUILD_TYPE=Release \
   > "$RES/cfg.log" 2>&1 || { echo CFG_FAIL; tail -50 "$RES/cfg.log"; exit 1; }
 cmake --build gpuval2_build -j 16 > "$RES/build.log" 2>&1 \
   || { echo BUILD_FAIL; grep -iE "error" "$RES/build.log" | head -40; exit 1; }

@@ -26,7 +26,7 @@ flux=False stage WRONGLY re-added -div F. ADC-430 adds the source-only runtime p
     the offline split (was double-flux). Self-skips if _pops lacks install_program, numpy/_pops is absent,
     or no compiler/Kokkos is visible -- never faking the engine.
 
-Run with python3 (PYTHONPATH = built adc package).
+Run with python3 (PYTHONPATH = built pops package).
 """
 import sys
 

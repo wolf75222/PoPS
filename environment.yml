@@ -33,10 +33,10 @@
 #     CONDA_OVERRIDE_CUDA="" conda env create -f environment.yml
 #
 # KNOWN COMPILER TRAP (real bug): some conda/mambaforge envs expose an OLD `gcc`/`c++` on the PATH;
-# the adc DSL (backend "production") compiling .so at runtime could pick it up and fail
+# the pops DSL (backend "production") compiling .so at runtime could pick it up and fail
 # ("error: invalid value 'c++23' in '-std=c++23'"). Protections in place: the DSL prefers the compiler
 # that built _pops (baked into the module), `export POPS_CXX=...` wins explicitly, and
-# `python -c "import adc; pops.doctor()"` diagnoses the whole chain.
+# `python -c "import pops; pops.doctor()"` diagnoses the whole chain.
 #
 # GPU / cluster NOTE: GPU validation (Grace-Hopper) and heavy parallelism run on ROMEO via Spack/modules,
 # NOT via conda. The backends below serve LOCAL (CPU) development.

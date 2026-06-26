@@ -69,7 +69,7 @@ def init_state(n):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> rien a compiler")
+        print("skip  compilateur ou en-tetes pops absents -> rien a compiler")
         print("test_dsl_hybrid : OK (rien a compiler)")
         return
 

@@ -1,8 +1,8 @@
-// Phase 1 du portage runtime GPU : un pas de transport Euler via la VRAIE machinerie adc
+// Phase 1 du portage runtime GPU : un pas de transport Euler via la VRAIE machinerie pops
 // (MultiFab + fill_boundary + assemble_rhs + for_each_cell), portable seriel <-> Kokkos.
 // Sous un build Kokkos+CUDA, les Fab sont en memoire unifiee (ManagedAllocator) et assemble_rhs
 // dispatche via for_each_cell -> Kokkos::parallel_for sur le device. On imprime un checksum
-// (masse, energie) pour comparer CPU vs GPU. Compiler seriel (sans -DADC_HAS_KOKKOS) ou Kokkos+CUDA.
+// (masse, energie) pour comparer CPU vs GPU. Compiler seriel (sans -DPOPS_HAS_KOKKOS) ou Kokkos+CUDA.
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/boundary/fill_boundary.hpp>

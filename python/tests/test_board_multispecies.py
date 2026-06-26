@@ -28,7 +28,7 @@ import pytest
 
 adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
-from pops import dsl, model  # noqa: E402 (after importorskip so a missing adc skips cleanly)
+from pops import dsl, model  # noqa: E402 (after importorskip so a missing pops skips cleanly)
 
 
 def _three_fluid_board():

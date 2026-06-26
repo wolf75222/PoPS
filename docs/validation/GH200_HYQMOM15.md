@@ -36,7 +36,7 @@ Everything that produces the figures below is in the repository, under `docs/val
   section 3).
 
 `hyqmom15_brick.hpp` and `ic_<n>.raw` are NOT versioned: they are derived artifacts, regenerated
-identically by `make_brick_and_ic.py` on a machine with the adc python module (the C++ module is not
+identically by `make_brick_and_ic.py` on a machine with the pops python module (the C++ module is not
 required for the DSL emission, pure-python):
 
 ```
@@ -170,7 +170,7 @@ and documented behavior.
 ### Direct multi-rank hyqmom15 (System, mono-box round-robin) -- `diocotron_mpi.sbatch`
 
 The SAME driver `diocotron_gpu.cpp` (`Hyqmom15Hyp/Src/Ell` bricks + Poisson `geometric_mg`), linked
-to CUDA-aware OpenMPI by `-DADC_VALIDATION_MPI=ON` (a CMake option that defines `POPS_HAS_MPI` and
+to CUDA-aware OpenMPI by `-DPOPS_VALIDATION_MPI=ON` (a CMake option that defines `POPS_HAS_MPI` and
 switches `comm.hpp` + the collectives of `system.cpp` onto the real MPI path), runs under
 `srun -n {1,2,4} --gpus-per-task=1` (one GH200 per rank). Topology = MPI decomposition of `System`
 mono-box round-robin (box 0 on rank 0; the other ranks have `local_size()==0` and contribute 0 to the
@@ -262,7 +262,7 @@ across all np and in both modes.
 `python/bindings/amr/amr_system.cpp` -- NOT `system.cpp`) + `diocotron_amr_mpi.sbatch`. Brick + IC: the SAME
 generated artifacts as section 3 (`make_brick_and_ic.py --ns 128`, md5 `ic_128.raw`
 da245ba8934546986508976a64156d2e, brick d785b13ac0da1dd349ff4775368c8ff2). Device build with the GPU
-`kinstall` `nvcc_wrapper`, CUDA-aware OpenMPI (`-DADC_VALIDATION_MPI=ON`),
+`kinstall` `nvcc_wrapper`, CUDA-aware OpenMPI (`-DPOPS_VALIDATION_MPI=ON`),
 `srun -n {1,2,4} --gpus-per-task=1` (one GH200 per rank), `OMPI_MCA_btl_smcuda_use_cuda_ipc=0`.
 
 ### Result (nvcc build job 657120 `BUILD_OK`, gate job 657147 `PASS`, romeo-a057, GH200 120GB, partition instant)
@@ -317,7 +317,7 @@ Reading:
 * multi-GPU MPI substrate re-confirmed bit-identical (max) / last ulp (sums) on the node post-#254:
   section 3.
 * direct multi-rank hyqmom15 harness EXECUTED on GH200 (section 3, `diocotron_mpi.sbatch`,
-  `-DADC_VALIDATION_MPI=ON`): MPI decomposition of `System`, np=1/2/4 (job 656726, romeo-a058), gate
+  `-DPOPS_VALIDATION_MPI=ON`): MPI decomposition of `System`, np=1/2/4 (job 656726, romeo-a058), gate
   `MULTIGPU_MPI_PASS` -- mass conserved to 1.77e-13 per run, global mass bit-identical across np=1/2/4
   (mono-box round-robin: only rank 0 carries the box).
 * REAL hyqmom15 domain decomposition EXECUTED on GH200 (ADC-320, section 5,

@@ -1,6 +1,6 @@
-<!-- Title: ADC-NN short imperative description. One Linear issue = one PR. -->
+<!-- Title: PoPS-NN short imperative description. One Linear issue = one PR. -->
 
-Fixes ADC-NN
+Fixes PoPS-NN
 
 ## What / why
 

@@ -28,7 +28,7 @@ Two levels in Hoffart (Section 5.3):
    REPRODUCED to 3 digits in numpy on the `adc_cases/diocotron/run.py` side:
    `gamma_3 = 0.772`, `gamma_4 = 0.912`, `gamma_5 = 0.687` (see case README). Out of the core
    scope: this is pure analytic numpy verification.
-2. **Numerical rate measured by `adc`**: full pipeline (composition `ExB` + `BackgroundDensity`,
+2. **Numerical rate measured by `pops`**: full pipeline (composition `ExB` + `BackgroundDensity`,
    Poisson of a system with a circular conducting wall `wall="circle"`, measurement of mode `l` of
    `phi` by azimuthal FFT, fit of `exp(gamma t)`). Runs, captures the instability (exponential
    growth, correct mode ordering, `l=4` dominant), but UNDERESTIMATES the rate:

@@ -9,7 +9,7 @@ An id that was never loaded raises a CLEAR error.
 
 The manifest-parsing seam (``_register_manifest``) is exercised directly so the
 test needs no compiled ``.so``; ``load_cpp_library`` is the real ``.so`` path on
-top of it. The real ``pops.lib`` functions are used -- adc is never faked.
+top of it. The real ``pops.lib`` functions are used -- pops is never faked.
 """
 import os
 import json
@@ -134,11 +134,11 @@ def test_load_cpp_library_rejects_a_missing_path():
 
 def test_load_cpp_library_dlopens_a_real_so_and_surfaces_the_descriptor(tmp_path):
     """The deferred half: compile a REAL brick .so, dlopen it via load_cpp_library, and assert
-    riemann.User surfaces its manifest. Self-skips if no C++ compiler / adc headers are present
+    riemann.User surfaces its manifest. Self-skips if no C++ compiler / pops headers are present
     (the registry-seam tests above cover the parsing without a toolchain)."""
     so = _compile_brick_so(str(tmp_path))
     if so is None:
-        pytest.skip("no C++ compiler or adc headers to build the brick .so")
+        pytest.skip("no C++ compiler or pops headers to build the brick .so")
     # The registry .so is header-light (only external_brick.hpp): plain flags, no Kokkos needed.
     n = lib.load_cpp_library(so)
     assert n == 1
@@ -151,7 +151,7 @@ def test_load_cpp_library_dlopens_a_real_so_and_surfaces_the_descriptor(tmp_path
 
 def test_load_cpp_library_rejects_a_non_brick_so(tmp_path):
     """A loadable library that does NOT export pops_brick_manifest() is rejected clearly (it is not an
-    adc brick .so), never silently treated as carrying zero bricks."""
+    pops brick .so), never silently treated as carrying zero bricks."""
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx:
         pytest.skip("no C++ compiler to build the non-brick .so")

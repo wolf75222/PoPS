@@ -58,8 +58,8 @@ The coupling flows through the `aux` channel at each step. The base contract is
 - **CMake >= 3.21**: the build is driven by presets ([CMakePresets.json](CMakePresets.json)).
 - **[Kokkos](https://kokkos.org) 4.2+**: the only on-node backend, required. No need to
   pre-install it; if it is not found, CMake fetches and builds it (FetchContent).
-- **MPI** *(optional, `-DADC_USE_MPI=ON`: halos and distributed FFT)*.
-- **HDF5** parallel *(optional, `-DADC_USE_HDF5=ON`: DataWriter)*.
+- **MPI** *(optional, `-DPOPS_USE_MPI=ON`: halos and distributed FFT)*.
+- **HDF5** parallel *(optional, `-DPOPS_USE_HDF5=ON`: DataWriter)*.
 - **Python 3.12 + numpy** *(optional, the `pops` bindings; conda env via `scripts/setup_env.sh`)*.
 
 Per-platform backend coverage and known pitfalls (macOS, CUDA, conda, CI runners):

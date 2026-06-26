@@ -2,7 +2,7 @@ name: CI
 
 # adc_cpp est KOKKOS-ONLY : Kokkos est le seul backend on-node (Serial / OpenMP / Cuda selon
 # l'install Kokkos). Il n'existe plus de build non-Kokkos -- TOUS les jobs configurent avec
-# -DADC_USE_KOKKOS=ON. Topologie (ADC-171) :
+# -DPOPS_USE_KOKKOS=ON. Topologie (ADC-171) :
 #  - changes : routage par chemins (dorny/paths-filter). Calcule deux drapeaux cpp / python a
 #    partir des fichiers modifies pour ne lancer que le gate utile sur une pull_request.
 #  - gate-cpp + gate-python (sur pull_request, gate OBLIGATOIRE) : Kokkos SERIAL, scindes et
@@ -608,7 +608,7 @@ jobs:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
           # PARITE KOKKOS du loader runtime : le module _pops est compile AVEC Kokkos ; sans cette
-          # variable, dsl.py compile le loader SANS -DADC_HAS_KOKKOS -> cle d'ABI kokkos=0 vs
+          # variable, dsl.py compile le loader SANS -DPOPS_HAS_KOKKOS -> cle d'ABI kokkos=0 vs
           # kokkos=1 du module -> rejet explicite (jeton ajoute expres : cette divergence etait
           # auparavant un fallback serie MUET). Le step suit desormais la regle documentee partout :
           # exporter POPS_KOKKOS_ROOT = la racine Kokkos du build.

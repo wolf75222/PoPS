@@ -29,10 +29,10 @@ tests/test_generic_krylov.cpp, which is fully validatable on every backend witho
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_gmres (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -245,7 +245,7 @@ def _passive_model(dsl, name):
     return m
 
 
-def _run_one(t, adc, np, program, name):
+def _run_one(t, pops, np, program, name):
     """Compile + install + step @p program on a 1-variable block, return the stepped state and rho0,
     or None if the toolchain is unavailable."""
     n = 16
@@ -283,12 +283,12 @@ def _run_section_b(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     tol = 1e-9
     # (a) SPD: gmres matches the offline CG on the same discrete Helmholtz system.
-    res = _run_one(t, adc, np, _spd_program(t, name="gmres_spd_step", tol=tol, max_iter=300, restart=30),
+    res = _run_one(t, pops, np, _spd_program(t, name="gmres_spd_step", tol=tol, max_iter=300, restart=30),
                    "spd")
     if res is None:
         return None
@@ -305,9 +305,9 @@ def _run_section_b(t):
     # offline operator-stencil match (expressing a pure d/dx in the IR is approximate). An offline CG on
     # a proxy of the same operator stagnates, confirming the operator is genuinely non-self-adjoint
     # (CG-hostile, the regime where gmres/bicgstab are needed and cg is not).
-    res_g = _run_one(t, adc, np, _nonsym_program(t, name="gmres_nsy_g", tol=tol, max_iter=400,
+    res_g = _run_one(t, pops, np, _nonsym_program(t, name="gmres_nsy_g", tol=tol, max_iter=400,
                                                  restart=40, method="gmres"), "nsy_g")
-    res_b = _run_one(t, adc, np, _nonsym_program(t, name="gmres_nsy_b", tol=tol, max_iter=400,
+    res_b = _run_one(t, pops, np, _nonsym_program(t, name="gmres_nsy_b", tol=tol, max_iter=400,
                                                  method="bicgstab"), "nsy_b")
     if res_g is None or res_b is None:
         return None
@@ -326,7 +326,7 @@ def _run_section_b(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

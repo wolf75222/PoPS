@@ -30,7 +30,7 @@ in our case). `SharedSpace` being a portable alias (`CudaUVMSpace` / `HIPManaged
 
 ## Design asset : the seam does not change the call sites
 
-`adc/mesh/execution/for_each.hpp` (`for_each_cell`, `for_each_cell_reduce_*`) switches CPU <-> GPU at
+`pops/mesh/execution/for_each.hpp` (`for_each_cell`, `for_each_cell_reduce_*`) switches CPU <-> GPU at
 COMPILE TIME without touching the operators. `POPS_HD` makes the whole core device-callable. So the GPU
 port is mostly a job of data RESIDENCE on device + porting of the still-host steps,
 not a rewrite of the compute kernels.
@@ -48,7 +48,7 @@ not a rewrite of the compute kernels.
    `POPS_HAS_KOKKOS + __CUDACC__` is `ManagedAllocator` (cudaMallocManaged) -> the Fabs are in UNIFIED
    MEMORY, hence already device-accessible, and `assemble_rhs` (via `for_each_cell` -> Kokkos) runs on
    the device by CONSTRUCTION. A FULL Euler transport (80 steps, fill_boundary + assemble_rhs +
-   SSPRK/FE update on the REAL adc stack) gives on GH200 a result BIT-IDENTICAL to the CPU
+   SSPRK/FE update on the REAL pops stack) gives on GH200 a result BIT-IDENTICAL to the CPU
    (`python/tests/gpu/phase1_transport.cpp`, mass 4096 / energy identical). Surfaced + fixed an nvcc
    bug in `numerics/spatial_operator.hpp` (capture of `dx`/`dy` in a `constexpr-if` context, forbidden
    for an extended `__host__ __device__` lambda). Remaining optimization : avoid the host round-trip
@@ -345,7 +345,7 @@ GH200 (1 GPU per rank).
 - Node `romeo-a057` (`armgpu`), 4x GH200 visible. Kokkos SERIAL+CUDA, `Kokkos_ARCH_HOPPER90`,
   `nvcc_wrapper`. MPI = OpenMPI 4.1.7 CUDA-aware (`+cuda cuda_arch=90 fabrics=ucx schedulers=slurm`,
   hash `nkokjyt`). Launch `srun -n {1,2,4} --gpus-per-task=1` (1 GPU/rank). Single build
-  `-DADC_USE_KOKKOS=ON -DADC_USE_MPI=ON`. np=1 = single-GPU Cuda oracle.
+  `-DPOPS_USE_KOKKOS=ON -DPOPS_USE_MPI=ON`. np=1 = single-GPU Cuda oracle.
 - Harness : script `mpicuda_run.sh` (single configure, build of the MPI targets, run np=1/2/4, parses
   the invariant printed by each test, computes the cross-np dmax).
 

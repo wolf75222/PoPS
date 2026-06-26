@@ -71,7 +71,7 @@ else
   test -x "$NVCC" || { echo "nvcc_wrapper introuvable: $NVCC"; exit 2; }
   rm -rf "$SCR/build"
   cmake -S "$WORK" -B "$SCR/build" -DCMAKE_CXX_COMPILER="$NVCC" -DKokkos_ROOT="$KGPU" \
-    -DADC_INCLUDE="$ADCINC" -DADC_VALIDATION_MPI=ON -DCMAKE_BUILD_TYPE=Release \
+    -DPOPS_INCLUDE="$ADCINC" -DPOPS_VALIDATION_MPI=ON -DCMAKE_BUILD_TYPE=Release \
     > "$SCR/cfg.log" 2>&1 || { echo CFG_FAIL; tail -50 "$SCR/cfg.log"; exit 1; }
   cmake --build "$SCR/build" --target diocotron_amr_gpu -j "${SLURM_CPUS_PER_TASK:-8}" > "$SCR/build.log" 2>&1 \
     || { echo BUILD_FAIL; grep -iE "error" "$SCR/build.log" | head -40; exit 1; }

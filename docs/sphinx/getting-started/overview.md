@@ -22,7 +22,7 @@ no scenario: it provides generic bricks that one composes.
   `comm` layer. No CUDA kernel is written by hand: Kokkos abstracts the hardware.
 - Two Poisson solvers: geometric multigrid (`GeometricMG`, red-black Gauss-Seidel
   V-cycle) and direct spectral FFT (`PoissonFFTSolver`).
-- Python bindings via pybind11. The `adc` module is the composition facade: Python
+- Python bindings via pybind11. The `pops` module is the composition facade: Python
   says what (which blocks, which scheme, which Poisson), the compiled C++ does the computation cell by
   cell. No numpy back-and-forth in the hot path.
 
@@ -42,7 +42,7 @@ mostly a data-residence task, not a rewrite of the compute kernels.
 
 ## Honest scope
 
-- Kokkos is the only on-node backend, and it is required (`-DADC_USE_KOKKOS=ON`, ON by
+- Kokkos is the only on-node backend, and it is required (`-DPOPS_USE_KOKKOS=ON`, ON by
   default; configuring without Kokkos is a fatal CMake error). The target is chosen at the
   Kokkos installation: sequential (Serial), multi-threaded CPU (OpenMP) or GPU (Cuda/HIP).
   The standalone OpenMP backend (the `POPS_USE_OPENMP` option) has been removed; MPI remains optional
@@ -53,7 +53,7 @@ mostly a data-residence task, not a rewrite of the compute kernels.
   Kokkos OpenMP. See [Check your backend](backend.md).
 - The Python module (`_pops`) is built in Kokkos Serial: it does not route to MPI. The multi-thread
   CPU or the GPU are obtained by building the facade against a Kokkos OpenMP
-  or Cuda/HIP install; the distributed case, by adding `-DADC_USE_MPI=ON`.
+  or Cuda/HIP install; the distributed case, by adding `-DPOPS_USE_MPI=ON`.
 - The diocotron tutorial is a reduced model (one density advected by the ExB drift), the
   normalization benchmark, not a reproduction of the full Euler-Poisson system.
 

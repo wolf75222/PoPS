@@ -1,4 +1,4 @@
-"""adc : Python bindings for the adc_cpp library.
+"""pops : Python bindings for the adc_cpp library.
 
 The core exposes generic compiled BRICKS (transport, source, elliptic right-hand
 side) ; a MODEL is a composition of bricks, named on the application side. Python
@@ -45,7 +45,7 @@ def _explain_missing_extension(exc):
                 % here)
     elif not any(cur in s for s in sos):
         hint = ("extension(s) present : %s, but the current interpreter is %s (%s). Use the "
-                "python that built the module (conda env `adc`), or rebuild with this interpreter "
+                "python that built the module (conda env `pops`), or rebuild with this interpreter "
                 "(-DPython_EXECUTABLE=%s)." % (", ".join(sos), cur, _sys.executable, _sys.executable))
     else:
         hint = ("the extension %s matches the interpreter (%s) but its import fails : missing "
@@ -54,13 +54,13 @@ def _explain_missing_extension(exc):
 
 
 if hasattr(_sys, "setdlopenflags") and hasattr(_sys, "getdlopenflags"):
-    _adc_old_dlopenflags = _sys.getdlopenflags()
-    _adc_global_dlopenflags = _adc_old_dlopenflags
+    _pops_old_dlopenflags = _sys.getdlopenflags()
+    _pops_global_dlopenflags = _pops_old_dlopenflags
     if hasattr(_os, "RTLD_NOW"):
-        _adc_global_dlopenflags |= _os.RTLD_NOW
+        _pops_global_dlopenflags |= _os.RTLD_NOW
     if hasattr(_os, "RTLD_GLOBAL"):
-        _adc_global_dlopenflags |= _os.RTLD_GLOBAL
-    _sys.setdlopenflags(_adc_global_dlopenflags)
+        _pops_global_dlopenflags |= _os.RTLD_GLOBAL
+    _sys.setdlopenflags(_pops_global_dlopenflags)
     try:
         from ._pops import (SystemConfig, ModelSpec, System as _System,
                            AmrSystemConfig, AmrSystem as _AmrSystem,
@@ -68,8 +68,8 @@ if hasattr(_sys, "setdlopenflags") and hasattr(_sys, "getdlopenflags"):
     except ImportError as _e:
         raise _explain_missing_extension(_e) from _e
     finally:
-        _sys.setdlopenflags(_adc_old_dlopenflags)
-    del _adc_old_dlopenflags, _adc_global_dlopenflags
+        _sys.setdlopenflags(_pops_old_dlopenflags)
+    del _pops_old_dlopenflags, _pops_global_dlopenflags
 else:
     try:
         from ._pops import (SystemConfig, ModelSpec, System as _System,
@@ -90,10 +90,10 @@ except ImportError:
 
 # --- Parallelism : a single runtime knob --------------------------------------------------------
 # The compute backend is COMPILED into _pops. Multi-threading (and the GPU) are possible ONLY if
-# _pops was built with -DADC_USE_KOKKOS=ON (OpenMP device). At runtime, Kokkos initializes
+# _pops was built with -DPOPS_USE_KOKKOS=ON (OpenMP device). At runtime, Kokkos initializes
 # LAZILY at the creation of the 1st System/AmrSystem and reads OMP_NUM_THREADS at that exact moment.
 # pops.set_threads(n) writes OMP_NUM_THREADS BEFORE this init : a single call replaces the ritual
-# `OMP_NUM_THREADS=n python ...`. To be called right after `import adc`, before creating the 1st system.
+# `OMP_NUM_THREADS=n python ...`. To be called right after `import pops`, before creating the 1st system.
 _first_system_built = False
 
 
@@ -109,7 +109,7 @@ def set_threads(n=None):
     """Set the number of compute threads (Kokkos OpenMP backend) in ONE line.
 
     Equivalent to exporting OMP_NUM_THREADS=n before launching Python, but without touching the shell. Has
-    an effect only if _pops was compiled with -DADC_USE_KOKKOS=ON (preset 'python-parallel'), and MUST
+    an effect only if _pops was compiled with -DPOPS_USE_KOKKOS=ON (preset 'python-parallel'), and MUST
     be called BEFORE the 1st System/AmrSystem (Kokkos initializes lazily at that moment and
     reads OMP_NUM_THREADS only once) :
 
@@ -134,13 +134,13 @@ def set_threads(n=None):
     if _kokkos_started or _first_system_built:
         warnings.warn(
             "pops.set_threads : called AFTER the runtime initialization (1st System/AmrSystem or "
-            "1st allocation) -> NO EFFECT. Call set_threads right after `import adc`.",
+            "1st allocation) -> NO EFFECT. Call set_threads right after `import pops`.",
             RuntimeWarning, stacklevel=2)
         return
     if has_kokkos() is False:
         warnings.warn(
-            "pops.set_threads : _pops is SERIAL (compiled without -DADC_USE_KOKKOS=ON) -> the thread "
-            "setting is ignored at compute time. Rebuild with -DADC_USE_KOKKOS=ON "
+            "pops.set_threads : _pops is SERIAL (compiled without -DPOPS_USE_KOKKOS=ON) -> the thread "
+            "setting is ignored at compute time. Rebuild with -DPOPS_USE_KOKKOS=ON "
             "-DKokkos_ROOT=$CONDA_PREFIX for multi-threading.", RuntimeWarning, stacklevel=2)
     # We write the env even in case of doubt (harmless) : a DSL .so with backend='production' compiled with
     # Kokkos will also read OMP_NUM_THREADS at its initialization.
@@ -170,7 +170,7 @@ def parallel_info():
 
 
 def doctor(verbose=True):
-    """Diagnose the adc environment in ONE command : python -c "import adc; pops.doctor()".
+    """Diagnose the pops environment in ONE command : python -c "import pops; pops.doctor()".
 
     Checks each link on which the module AND the runtime compilation of the DSL depend (the class of
     bugs "build environment != execution environment", e.g. the `which c++` of a conda env
@@ -226,7 +226,7 @@ def doctor(verbose=True):
                                                     "backend. export POPS_CXX=%r to force the one "
                                                     "from the build." % (cc, baked, baked))
 
-        # 5. adc headers (production DSL : the signature must match the one baked into _pops)
+        # 5. pops headers (production DSL : the signature must match the one baked into _pops)
         try:
             inc = _dsl.pops_include()
             checks["include"] = (True, inc)
@@ -245,10 +245,10 @@ def doctor(verbose=True):
                                                      "build-py --target _pops (otherwise : dlopen "
                                                      "'symbol not found' on production backend)")
         except RuntimeError as e:
-            checks["include"] = (False, "adc headers not found (set POPS_INCLUDE) : %s" % e)
+            checks["include"] = (False, "pops headers not found (set POPS_INCLUDE) : %s" % e)
 
         # 5c. Kokkos root for the DSL production/aot backend (the tutorial's "no DSL backend" blocker).
-        # adc_cpp is Kokkos-only : every DSL .so that includes the adc headers MUST compile against an
+        # adc_cpp is Kokkos-only : every DSL .so that includes the pops headers MUST compile against an
         # installed Kokkos (Serial is enough on CPU), found via POPS_KOKKOS_ROOT / Kokkos_ROOT.
         kroot = _dsl._native_kokkos_root()
         if kroot is None:
@@ -257,7 +257,7 @@ def doctor(verbose=True):
                 "(the tutorial dead-ends on 'no DSL backend'). Fix (conda) :\n"
                 "      conda env config vars set POPS_KOKKOS_ROOT=\"$CONDA_PREFIX\"\n"
                 "      conda env config vars set Kokkos_ROOT=\"$CONDA_PREFIX\"\n"
-                "      conda deactivate && conda activate adc")
+                "      conda deactivate && conda activate pops")
         else:
             checks["kokkos_root"] = (True, kroot)
             # 5d. A CUDA Kokkos on a host without nvcc breaks BOTH `pip install .` (find_package picks it
@@ -623,7 +623,7 @@ def Model(state, transport, source, elliptic):
 # generates a 100% DSL model. pops.CompositeModel(...) fills the in-between: MIX, in ONE SINGLE
 # model, NATIVE bricks (pops.ExB / PotentialForce / ChargeDensity ...) and PARTIAL compiled DSL
 # bricks (pops.dsl.HyperbolicBrick(...).compile() / SourceBrick / EllipticBrick). The
-# mix is compiled into ONE composite .so (prototype: backend 'aot'). cf. adc/dsl.py (Phase B).
+# mix is compiled into ONE composite .so (prototype: backend 'aot'). cf. pops/dsl.py (Phase B).
 def _native_to_brick(obj, role):
     """Translate a NATIVE brick (pops.* object) into a dsl.NativeBrick descriptor for the @p role slot.
     An already-compiled DSL brick (dsl.CompiledBrick) passes through unchanged (after slot check)."""
@@ -2111,7 +2111,7 @@ class System:
         transport according to mode= (T2 / T5-PR3 work). Materializes a 0/1 cell-centered mask (cell
         active when its center is inside the disc, level set hypot(x-cx, y-cy) - R < 0, SAME convention
         as the conducting wall of Poisson). This is the finite-volume counterpart of the elliptic wall: the paper
-        (Hoffart et al., arXiv:2510.11808) transports on a REAL disc whereas ADC transports on the
+        (Hoffart et al., arXiv:2510.11808) transports on a REAL disc whereas PoPS transports on the
         full Cartesian square, the circle acting only in the Poisson wall (lock from the Cartesian ring
         edges, cf. docs/HOFFART_FIDELITY.md).
 
@@ -2179,7 +2179,7 @@ class System:
 
     @staticmethod
     def abi_key():
-        """Module ABI key (compiler, C++ standard, signature of the adc headers). Compared to
+        """Module ABI key (compiler, C++ standard, signature of the pops headers). Compared to
         that of a native loader by add_native_block. Also exposed as a class attribute (the
         __getattr__ delegate only covers instances), so pops.System.abi_key() works."""
         return _System.abi_key()
@@ -2720,9 +2720,9 @@ def capabilities():
     actually coded (make_block / dispatch_amr_* / block_builder_polar / dsl._BACKENDS) ; the
     combinations outside the matrix raise an explicit error on the C++ side (never a silent ignore).
     """
-    from . import _pops as _adc_mod  # ADC-291: read the aux limit from the SINGLE C++ source
+    from . import _pops as _pops_mod  # ADC-291: read the aux limit from the SINGLE C++ source
     from . import dsl as _dsl_caps  # fallback mirror (no second hardcoded literal)
-    aux_max_extra = int(getattr(_adc_mod, "__aux_max_extra__", _dsl_caps.AUX_NAMED_MAX))
+    aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", _dsl_caps.AUX_NAMED_MAX))
     return {
         # Spatial dimension of the core (ADC-294 / ADR-0001 Decision 1). The solver is structurally
         # 2D: a load-bearing invariant baked into the data layout (Fab2D operator()(i, j, c)), the
@@ -2864,7 +2864,7 @@ def capabilities():
         "aux": {
             "canonical": "phi/grad_x/grad_y (base) + B_z (set_magnetic_field) + T_e "
                          "(set_electron_temperature_from), closed list POPS_AUX_FIELDS / AUX_CANONICAL "
-                         "(C++ name table adc/core/aux_names.hpp, mirror of Python AUX_CANONICAL)",
+                         "(C++ name table pops/core/aux_names.hpp, mirror of Python AUX_CANONICAL)",
             "named": {
                 # Model-declared NAMED aux fields (ADC-70 phase 1 + ADC-291 phase 2): m.aux_field('name')
                 # reserves component AUX_NAMED_BASE + k (read in C++ via aux.extra_field(k));
@@ -3561,9 +3561,9 @@ from .time import CompiledTime  # noqa: E402,F401  (re-export: compiled-Program 
 
 
 # LAZY pops.dsl (PEP 562): dsl.py does `import numpy` at module level (host evaluator of the
-# prototype). The eager import made numpy mandatory for the ENTIRE `import adc`, whereas the
+# prototype). The eager import made numpy mandatory for the ENTIRE `import pops`, whereas the
 # native path (System/add_block) and the production backend do not need it. With this
-# __getattr__, `pops.dsl.Model(...)` and `from adc import dsl` work identically, but numpy
+# __getattr__, `pops.dsl.Model(...)` and `from pops import dsl` work identically, but numpy
 # is required ONLY AT the first use of the DSL -- and its absence gives a targeted message (doctor too).
 def __getattr__(name):
     if name == "dsl":
@@ -3573,10 +3573,10 @@ def __getattr__(name):
         except ImportError as exc:
             raise ImportError(
                 "pops.dsl requires numpy in this interpreter (host evaluator of the DSL): "
-                "`pip install numpy` / `conda install numpy`. The rest of adc (System, add_block) "
+                "`pip install numpy` / `conda install numpy`. The rest of pops (System, add_block) "
                 "works without it. Cause: %s" % exc) from exc
     # pops.compile_problem / pops.CompiledProblem live in pops.dsl (which imports numpy); expose them at
-    # the top level LAZILY so `import adc` stays numpy-free until the DSL/compile path is first used.
+    # the top level LAZILY so `import pops` stays numpy-free until the DSL/compile path is first used.
     if name in ("compile_problem", "CompiledProblem"):
         return getattr(__getattr__("dsl"), name)
     raise AttributeError("module %r has no attribute %r" % (__name__, name))

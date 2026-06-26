@@ -64,7 +64,7 @@ The ~41 s at `-O0` are the incompressible cost (parsing + frontend + unoptimized
 
 ## 2. Build architecture (what actually compiles)
 
-- **The `adc` core is `INTERFACE` (header-only)** - `CMakeLists.txt:57`. It compiles nothing on its own; all the cost is carried by the TUs that *instantiate* it.
+- **The `pops` core is `INTERFACE` (header-only)** - `CMakeLists.txt:57`. It compiles nothing on its own; all the cost is carried by the TUs that *instantiate* it.
 - **Python module `_pops` = 3 TUs only**: `bindings.cpp`, `system.cpp`, `amr_system.cpp` - `python/CMakeLists.txt:9`. This is where your pain "even `_pops` is slow" comes from: there is nothing to parallelize beyond 3 cores, and the critical path is the slowest TU (`system.cpp`).
 - **Tests = ~113 executables** (`grep -c CXX_EXECUTABLE_LINKER build.ninja` -> 113; 133 `.cpp.o` objects). Most are small TUs, **but 20 of them re-list `python/bindings/system/base/system.cpp` or `python/bindings/amr/amr_system.cpp` as an extra source** (e.g. `tests/CMakeLists.txt:204, 304, 334-336, 349, 374, 393, 411, 426, 435...`), so they fully recompile the heavy TU.
 

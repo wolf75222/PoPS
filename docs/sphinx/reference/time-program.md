@@ -95,9 +95,9 @@ sim.install_program(compiled.so_path)        # dlopen + ABI-key check + install 
 sim.step(dt)                                  # the compiled program drives the step, C++-side
 ```
 
-`compile_problem` lowers the IR (`Program.emit_cpp_program`), compiles it against the adc headers
+`compile_problem` lowers the IR (`Program.emit_cpp_program`), compiles it against the pops headers
 with the **same Kokkos toolchain** as the loaded `_pops` module (so the `.so` is ABI-compatible and
-loads in-process), and caches the `.so` out-of-source keyed by the generated source + the adc header
+loads in-process), and caches the `.so` out-of-source keyed by the generated source + the pops header
 signature + the compiler + the C++ standard. A changed temporal coefficient changes the IR, hence
 the cache key, hence forces a recompile -- a stale `.so` is never reused. `debug=True` writes the
 generated `.cpp` next to the `.so` for inspection. `backend` must be `"production"` and `target`

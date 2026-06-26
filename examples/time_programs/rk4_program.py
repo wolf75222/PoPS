@@ -21,7 +21,7 @@ try:
     import pops
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip rk4_program (adc/numpy unavailable: %s)" % exc)
+    print("skip rk4_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 

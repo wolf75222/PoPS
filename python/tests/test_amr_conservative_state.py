@@ -115,7 +115,7 @@ chk(np.all(np.isfinite(np.asarray(s.density("a")))),
 # --- (A)/(D)/(E) : necessitent un compilateur (modele isotherme 3-var compile production) -----------
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (A)/(D)/(E) : compilateur ou en-tetes adc absents")
+    print("skip  (A)/(D)/(E) : compilateur ou en-tetes pops absents")
     print("test_amr_conservative_state : OK (gardes vertes)" if fails == 0 else f"{fails} ECHEC(S)")
     sys.exit(0 if fails == 0 else 1)
 

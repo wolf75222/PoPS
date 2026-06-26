@@ -4,7 +4,7 @@
 /// @brief Scalar advection-diffusion model (AdvectionDiffusion): VALIDATION/REFERENCE brick.
 ///
 /// Canonical home of the validation/reference bricks (ADC-329): kept OUT of the production
-/// brick surface (adc/physics/{hyperbolic,source,elliptic,composite}.hpp) and exposed under the
+/// brick surface (pops/physics/{hyperbolic,source,elliptic,composite}.hpp) and exposed under the
 /// dedicated namespace pops::validation so it cannot be mistaken for a generic production brick.
 ///
 /// Used in the core C++ tests (tests/test_weno5_ssprk3.cpp) as a reference model for WENO5/SSPRK3;

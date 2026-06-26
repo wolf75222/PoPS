@@ -1,7 +1,7 @@
 # Native Windows (without WSL2)
 
-> **Status: native Windows works for the CPU** -- Serial, OpenMP, the `adc` Python module
-> (`import adc`, `System`, `AmrSystem`), **DSL production** (`.dll`, bit-identical results) and
+> **Status: native Windows works for the CPU** -- Serial, OpenMP, the `pops` Python module
+> (`import pops`, `System`, `AmrSystem`), **DSL production** (`.dll`, bit-identical results) and
 > compilation of custom C++ (`adc_cases.common.native`). **The GPU stays on [WSL2](windows-wsl2.md)**
 > (Kokkos CUDA is not supported natively on Windows).
 
@@ -44,11 +44,11 @@ no longer uses the `PATH` for extension dependencies) or via `os.add_dll_directo
 
 ```bat
 cmake -S adc_cpp -B build-pywin -G "Visual Studio 17 2022" -A x64 ^
-  -DADC_BUILD_PYTHON=ON -DADC_USE_KOKKOS=ON -DKokkos_ROOT=...\kokkos-shared ^
-  -DPython_EXECUTABLE=...\python.exe -DCMAKE_CXX_FLAGS="/DADC_EXPORT_BUILDING_MODULE /DNOMINMAX /bigobj"
+  -DPOPS_BUILD_PYTHON=ON -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT=...\kokkos-shared ^
+  -DPython_EXECUTABLE=...\python.exe -DCMAKE_CXX_FLAGS="/DPOPS_EXPORT_BUILDING_MODULE /DNOMINMAX /bigobj"
 cmake --build build-pywin --config Release --target _pops
 ```
-`/DADC_EXPORT_BUILDING_MODULE` exports the `System` methods (`__declspec(dllexport)`, see
+`/DPOPS_EXPORT_BUILDING_MODULE` exports the `System` methods (`__declspec(dllexport)`, see
 `export.hpp`) -> produces the **import library `_pops.lib`** against which the DSL `.dll` links. Copy
 `_pops.cp3XX-win_amd64.pyd`, `_pops.lib` and `kokkos*.dll` next to `python/pops/`.
 

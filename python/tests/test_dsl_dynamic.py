@@ -62,7 +62,7 @@ def main():
     brick = build_euler_brick().emit_cpp_brick(name="EulerGen")
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> dispatch a l'execution saute")
+        print("skip  compilateur ou en-tetes pops absents -> dispatch a l'execution saute")
         print("test_dsl_dynamic : OK (rien a compiler)")
         return
 

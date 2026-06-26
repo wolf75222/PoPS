@@ -34,7 +34,7 @@ try:
     from pops import dsl
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip condensed_schur_program (adc/numpy unavailable: %s)" % exc)
+    print("skip condensed_schur_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*div(grad) is SPD (no null space)

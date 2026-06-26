@@ -214,7 +214,7 @@ except ValueError as ex:
 # === (c) bout en bout : roe_dissipation a la main == enable_roe (compile) =======================
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip (c) test_dsl_autodiff_roe : compilateur ou en-tetes adc absents")
+    print("skip (c) test_dsl_autodiff_roe : compilateur ou en-tetes pops absents")
     if fails:
         print(f"FAIL test_dsl_autodiff_roe : {fails} echec(s)")
         sys.exit(1)

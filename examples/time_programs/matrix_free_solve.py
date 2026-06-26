@@ -27,8 +27,8 @@ try:
     import pops
     from pops import dsl
     from pops import time as adctime
-except Exception as exc:  # noqa: BLE001  -- adc/numpy unavailable in this interpreter
-    print("skip matrix_free_solve (adc/numpy unavailable: %s)" % exc)
+except Exception as exc:  # noqa: BLE001  -- pops/numpy unavailable in this interpreter
+    print("skip matrix_free_solve (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap is SPD positive-definite (no null space)

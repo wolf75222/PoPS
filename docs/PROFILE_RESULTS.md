@@ -1,7 +1,7 @@
 # Profile of a representative time step (measurement only)
 
 Date: 2026-06-06. Branch: `feat/profiling-harness`. Author of the measurement: harness
-`bench/profile_step` (cf. `bench/`), built OUTSIDE the default build (`-DADC_BUILD_BENCH=ON`).
+`bench/profile_step` (cf. `bench/`), built OUTSIDE the default build (`-DPOPS_BUILD_BENCH=ON`).
 
 This document REPORTS measurements. It APPLIES NO optimization and RECOMMENDS no
 code change beyond a lead to investigate, in line with the owner's rule:

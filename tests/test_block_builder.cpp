@@ -1,4 +1,4 @@
-// Le constructeur de fermetures de bloc (adc/runtime/block_builder.hpp) est extrait de System::Impl
+// Le constructeur de fermetures de bloc (pops/runtime/block_builder.hpp) est extrait de System::Impl
 // pour etre instanciable HORS de l'unite system.cpp : c'est la fondation du backend AOT (un modele
 // genere par le DSL, compile ahead-of-time, entre dans le System par le chemin de PRODUCTION
 // template -- HLLC, ordre 2 -- et non plus par le seul chemin hote virtuel du bloc dynamique).

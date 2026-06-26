@@ -11,8 +11,8 @@ parallel configurations, see the [parallel backends](../backends/index.md) page.
 
 A multi-thread (Kokkos OpenMP) Python module is available too: build it with the
 `python-parallel` CMake preset, then set the thread count from Python with `pops.set_threads(n)`
-called right after `import adc`. The remaining caveats are real: there is no nvcc/CUDA Python
-module (GPU runs are C++-only), and the Python `adc` module does not exercise the MPI code paths
+called right after `import pops`. The remaining caveats are real: there is no nvcc/CUDA Python
+module (GPU runs are C++-only), and the Python `pops` module does not exercise the MPI code paths
 (MPI is validated through the C++/ctest path).
 
 ## Steps
@@ -24,11 +24,11 @@ module (GPU runs are C++-only), and the Python `adc` module does not exercise th
    export KOKKOS_OPENMP_PREFIX=/path/to/kokkos-openmp
    ```
 
-2. Configure the build against that Kokkos. The `-DADC_USE_KOKKOS=ON` flag is the same as for the
+2. Configure the build against that Kokkos. The `-DPOPS_USE_KOKKOS=ON` flag is the same as for the
    Serial build; only the Kokkos install pointed at by `-DKokkos_ROOT` changes.
 
    ```bash
-   cmake -S . -B build-kokkos-omp -DCMAKE_BUILD_TYPE=Release -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KOKKOS_OPENMP_PREFIX"
+   cmake -S . -B build-kokkos-omp -DCMAKE_BUILD_TYPE=Release -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KOKKOS_OPENMP_PREFIX"
    ```
 
 3. Compile the facade and the tests.
@@ -68,7 +68,7 @@ Three rules:
 1. Use a module built against a Kokkos OpenMP execution space (`python-parallel` preset). The
    conda-forge Kokkos is often Serial-only; see [Kokkos OpenMP](../backends/kokkos-openmp.md) and
    the Installation [Threads](#threads) section.
-2. Call `set_threads` right after `import adc` and before the first `System` or `AmrSystem`. Kokkos
+2. Call `set_threads` right after `import pops` and before the first `System` or `AmrSystem`. Kokkos
    reads the thread count once at that first object, so a later call cannot change it.
 3. A Serial-only module or a late call only emits a `RuntimeWarning` and is ignored; it never
    raises. Confirm the state with `pops.has_kokkos()`, `pops.parallel_info()`, or `pops.doctor()`.
@@ -80,7 +80,7 @@ up regardless of the thread count.
 
 ## Next steps
 
-- To add distributed ranks on top of OpenMP, combine `-DADC_USE_MPI=ON` with the same OpenMP Kokkos
+- To add distributed ranks on top of OpenMP, combine `-DPOPS_USE_MPI=ON` with the same OpenMP Kokkos
   install, described on the [parallel backends](../backends/index.md) page.
 - To check which execution space a build actually runs, read
   [Checking your backend](../getting-started/backend.md).

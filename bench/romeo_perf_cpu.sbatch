@@ -19,7 +19,7 @@ RESULTS="$BASE/results"
 LOGS="$BASE/logs"
 mkdir -p "$RESULTS" "$LOGS"
 
-echo "=== ADC CPU PERF job=$SLURM_JOBID node=$(hostname) arch=$(uname -m) date=$(date) ==="
+echo "=== PoPS CPU PERF job=$SLURM_JOBID node=$(hostname) arch=$(uname -m) date=$(date) ==="
 
 romeo_load_x64cpu_env >/dev/null 2>&1
 eval "$(spack load --sh /fmrcj5j 2>/dev/null)"   # gcc 14.2.0
@@ -124,8 +124,8 @@ configure_bench () {
   local build="$1"; shift
   rm -rf "$build"
   cmake -S "$SRC" -B "$build" "$@" \
-    -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
-    -DADC_BUILD_BENCH=ON -DADC_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+    -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
+    -DPOPS_BUILD_BENCH=ON -DPOPS_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
     > "$LOGS/$(basename "$build")_cfg.log" 2>&1
   local rc=$?
   echo "CONFIG $(basename "$build") rc=$rc"
@@ -151,7 +151,7 @@ if configure_bench "$BUILD_KOKKOS"; then
 fi
 
 BUILD_MPI="$BASE/build_cpu_mpi_kokkos"
-if configure_bench "$BUILD_MPI" -DADC_USE_MPI=ON -DCMAKE_CXX_COMPILER=mpicxx -DCMAKE_C_COMPILER=mpicc; then
+if configure_bench "$BUILD_MPI" -DPOPS_USE_MPI=ON -DCMAKE_CXX_COMPILER=mpicxx -DCMAKE_C_COMPILER=mpicc; then
   for np in 1 2 4 8; do
     thr=4
     export OMP_NUM_THREADS="$thr"
@@ -272,7 +272,7 @@ CMAKE
 
 BUILD_FRONT_CPP="$BASE/build_frontend_cpp"
 rm -rf "$BUILD_FRONT_CPP"
-if cmake -S "$FRONT" -B "$BUILD_FRONT_CPP" -DKokkos_ROOT="$KROOT" -DADC_SRC="$SRC" -DCMAKE_BUILD_TYPE=Release > "$LOGS/frontend_cpp_cfg.log" 2>&1 && \
+if cmake -S "$FRONT" -B "$BUILD_FRONT_CPP" -DKokkos_ROOT="$KROOT" -DPOPS_SRC="$SRC" -DCMAKE_BUILD_TYPE=Release > "$LOGS/frontend_cpp_cfg.log" 2>&1 && \
    cmake --build "$BUILD_FRONT_CPP" -j 16 > "$LOGS/frontend_cpp_build.log" 2>&1; then
   for thr in 1 4 8; do
     export OMP_NUM_THREADS="$thr"
@@ -299,7 +299,7 @@ fi
 BUILD_PY="$BASE/build_python_kokkos"
 rm -rf "$BUILD_PY"
 if cmake -S "$SRC" -B "$BUILD_PY" \
-    -DADC_BUILD_PYTHON=ON -DADC_BUILD_TESTS=OFF -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
+    -DPOPS_BUILD_PYTHON=ON -DPOPS_BUILD_TESTS=OFF -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
     -DPython_EXECUTABLE="$(which python3)" -DCMAKE_BUILD_TYPE=Release > "$LOGS/python_cfg.log" 2>&1 && \
    cmake --build "$BUILD_PY" --target _pops -j 16 > "$LOGS/python_build.log" 2>&1; then
   cat > "$FRONT/frontend_bench.py" <<'PY'

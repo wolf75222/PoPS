@@ -49,7 +49,7 @@ Repository practice and proposed rule:
 | Concept-trait constants | `snake_case` (`n_vars` `physics/euler.hpp:38`) | `snake_case`, name imposed by `requires` | constraint |
 | Macros | `POPS_` + `SCREAMING_SNAKE`; `POPS_HD` 338x, `POPS_EXPORT` 24x (excluding its definition) | `POPS_` + `SCREAMING_SNAKE` | all three (NL.9) |
 | Files | `.hpp` `snake_case`; 110/110, zero `.h`/`.cc` | `.hpp` `snake_case`; `.cpp` for the TUs | Google (adapted) |
-| Namespaces | lowercase; `adc`, `pops::detail` 45 occ. (`amr/cluster.hpp:49`) | `adc` public, `pops::detail` internal | all three |
+| Namespaces | lowercase; `pops`, `pops::detail` 45 occ. (`amr/cluster.hpp:49`) | `pops` public, `pops::detail` internal | all three |
 | Template parameters | descriptive `PascalCase` (`Model` 127x); letter for arithmetic (`M`, `N`) | same | none |
 
 Justification: practice is already homogeneous on all these axes and admits, for each line, only
@@ -101,7 +101,7 @@ Status: adopted (2026-06-15).
 Divergence: Google and LLVM forbid exceptions (LLVM compiles `-fno-exceptions`); CG
 recommends them to signal failure (E.2, E.3).
 
-Repository practice: host exceptions dominant (`throw std::runtime_error`: 134 in `include/adc`,
+Repository practice: host exceptions dominant (`throw std::runtime_error`: 134 in `include/pops`,
 305 including Python bindings; 3 `std::invalid_argument`, zero `std::logic_error`); message prefixed
 by a context then ` : `
 (`runtime/native_loader.hpp:210`, `runtime/wall_predicate.hpp:33`). Zero `std::expected`,
@@ -249,8 +249,8 @@ Status: adopted (2026-06-15).
 Divergence: Google imposes `explicit` on single-argument constructors and conversions; CG
 (C.46) "by default, declare single-argument constructors explicit"; LLVM silent.
 
-Repository practice: ~10 `explicit` on single-argument constructors in `include/adc`, ~12 across the
-reviewed scope (`include/adc` + `python/{bindings,system,amr_system}.cpp`) (`mesh/box_array.hpp:30`,
+Repository practice: ~10 `explicit` on single-argument constructors in `include/pops`, ~12 across the
+reviewed scope (`include/pops` + `python/{bindings,system,amr_system}.cpp`) (`mesh/box_array.hpp:30`,
 `runtime/system.hpp:66`).
 
 Proposed decision: `explicit` required on any constructor callable with a single argument and

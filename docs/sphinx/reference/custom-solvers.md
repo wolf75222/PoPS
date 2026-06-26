@@ -1,6 +1,6 @@
 # Custom solvers
 
-A solver in adc is a typed brick. It can be native C++, written in the Python DSL and
+A solver in pops is a typed brick. It can be native C++, written in the Python DSL and
 generated to C++, provided by an external C++ library, or specialized into `problem.so`. In
 every case it runs in C++ and uses the shared HPC primitives (dot, norm, axpy, MPI
 reductions, the scratch manager, the profiler); Python never iterates a Krylov loop.

@@ -4,15 +4,15 @@ A Module authored directly -- typed spaces + operators with IR (dsl.Expr) bodies
 is a self-contained, compilable model. ``Module.to_dsl`` lowers it to a dsl.Model (reusing the dsl
 backend, not a second codegen), and ``compile_problem(model=module, time=P)`` accepts it. This test
 validates the translation + the emitted .so source (codegen-text); the full Kokkos/AOT compile+run
-is on ROMEO. Pure Python; skips if adc is not importable.
+is on ROMEO. Pure Python; skips if pops is not importable.
 """
 import sys
 
 try:
     from pops import dsl, model
     from pops import time as adctime
-except Exception as exc:  # adc not importable here -> skip, never fake
-    print("skip test_module_compile (adc unavailable: %s)" % exc)
+except Exception as exc:  # pops not importable here -> skip, never fake
+    print("skip test_module_compile (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 

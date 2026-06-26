@@ -1,7 +1,7 @@
 # API Python
 
-Curated reference for the `adc` module (pybind11 bindings of `libadc` plus the object sugar of the
-`adc/` package). Python composes a system block by block; all the cell-by-cell computation stays
+Curated reference for the `pops` module (pybind11 bindings of `libadc` plus the object sugar of the
+`pops/` package). Python composes a system block by block; all the cell-by-cell computation stays
 in the compiled C++ lib (no numpy loop on the hot path, GPU/MPI preserved).
 
 Only the public surface is documented here (internal symbols are not listed). For
@@ -9,8 +9,8 @@ annotated walkthroughs, see the [quickstart](../getting-started/first-run.md); n
 (scenarios) live in the [`adc_cases`](https://github.com/wolf75222/adc_cases) repository.
 
 ```{note}
-The `autoclass` / `autofunction` blocks below only render if the `adc` module has been
-built (`-DADC_BUILD_PYTHON=ON`) and is importable at doc build time. See
+The `autoclass` / `autofunction` blocks below only render if the `pops` module has been
+built (`-DPOPS_BUILD_PYTHON=ON`) and is importable at doc build time. See
 [installation](../getting-started/installation.md) and the [quickstart](../getting-started/first-run.md); watch out for the interpreter
 footgun (the `.so` is linked to a specific cpython), detailed in [limitations](known-limitations.md).
 ```

@@ -7,7 +7,7 @@
 // (a) et (c) se verifient en compilant CE fichier contre le header AVANT patch (sans -DHARNESS_ABS)
 // et APRES patch (avec -DHARNESS_ABS) : la ligne "BASE ..." doit etre identique caractere pour
 // caractere. Compilation type (Kokkos OpenMP/Serial conda) :
-//   c++ -std=c++20 -O2 -DADC_HAS_KOKKOS [-DHARNESS_ABS] -Xpreprocessor -fopenmp \
+//   c++ -std=c++20 -O2 -DPOPS_HAS_KOKKOS [-DHARNESS_ABS] -Xpreprocessor -fopenmp \
 //       -I <libomp>/include -I <worktree>/include -I $POPS_KOKKOS_ROOT/include \
 //       mg_cold_tolerance.cpp -L $POPS_KOKKOS_ROOT/lib -lkokkoscore -lkokkossimd -ldl \
 //       -L <libomp>/lib -lomp -o mg_cold_tolerance

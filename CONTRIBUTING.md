@@ -1,6 +1,6 @@
 # Contributing to adc_cpp
 
-`adc_cpp` is the header-only C++23 core of the ADC solver, with its Python bindings
+`adc_cpp` is the header-only C++23 core of the PoPS solver, with its Python bindings
 (pybind11), its DSL path and its CMake packaging. This guide summarizes the workflow; the
 technical detail lives in the [README](README.md) and in
 [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md).
@@ -63,9 +63,9 @@ The conventions are written down; follow the project's decision first, then the 
 
 ## Workflow
 
-- **Linear** is the source of truth for tasks: one `ADC-NN` issue = one PR.
-- Branch: `adc-<n>-short-description`. PR title: `ADC-<n> Description`. PR body:
-  `Fixes ADC-<n>`.
+- **Linear** is the source of truth for tasks: one `PoPS-NN` issue = one PR.
+- Branch: `adc-<n>-short-description`. PR title: `PoPS-<n> Description`. PR body:
+  `Fixes PoPS-<n>`.
 - `master` is the default branch; never commit directly to it. Deliver through a branch or
   an isolated `git worktree` off `master`.
 - Minimal diffs, scoped to the issue; no incidental reformatting.

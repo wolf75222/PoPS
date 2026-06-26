@@ -2,7 +2,7 @@
 
 pops.lib is NOT a Python numerics library. Every entry is one of:
 
-* a NATIVE brick -- a descriptor naming a C++ symbol already in ``include/adc``
+* a NATIVE brick -- a descriptor naming a C++ symbol already in ``include/pops``
   (``pops.lib.riemann.HLLC()`` -> ``pops::HLLCFlux``); a catalogued brick with no native
   symbol yet carries ``available=False`` and an empty ``native_id`` (never a fake id);
 * a GENERATED brick -- a descriptor of a DSL-authored brick compiled to C++;
@@ -150,7 +150,7 @@ def load_cpp_library(path):
         manifest_fn = handle.pops_brick_manifest
     except AttributeError as err:
         raise ValueError("external brick library %r does not export pops_brick_manifest(); it "
-                         "is not an adc brick .so" % (path,)) from err
+                         "is not an pops brick .so" % (path,)) from err
     manifest_fn.restype = ctypes.c_char_p
     raw = manifest_fn()
     if raw is None:
@@ -191,7 +191,7 @@ def external(brick_id):
     return _external_descriptor(brick_id)
 
 
-# Native ids below are the REAL C++ symbols in include/adc (verified): the FV bricks
+# Native ids below are the REAL C++ symbols in include/pops (verified): the FV bricks
 # live at top level in ``namespace pops`` (e.g. pops::HLLCFlux), not under a numerics/fv
 # namespace. Some catalogued bricks have no native type yet -- they are emitted with
 # ``available=False`` and an EMPTY native_id rather than a fabricated symbol.

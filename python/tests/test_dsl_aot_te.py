@@ -43,7 +43,7 @@ def gas_model(gamma):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> AOT T_e saute")
+        print("skip  compilateur ou en-tetes pops absents -> AOT T_e saute")
         print("test_dsl_aot_te : OK (rien a compiler)")
         return
 

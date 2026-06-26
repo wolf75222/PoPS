@@ -32,10 +32,10 @@ import sys
 import tempfile
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_history_checkpoint (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -112,7 +112,7 @@ def _passive_source_model(dsl, name):
     return m
 
 
-def _build_system(adc, np, n):
+def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
     sim = pops.System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
@@ -135,7 +135,7 @@ def _rho0(np, n):
     return 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 
 
-def _compile_program(adc, dsl, t, builder, prog_name, model_name):
+def _compile_program(pops, dsl, t, builder, prog_name, model_name):
     """compile_problem for the program built by @p builder (e.g. t.std.adams_bashforth2). Returns the
     handle or None if the toolchain is absent."""
     P = t.Program(prog_name)
@@ -154,16 +154,16 @@ def _run_section_b(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops unavailable
-        print("-- (B) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     n = 16
-    sim_cont, dsl = _build_system(adc, np, n)
+    sim_cont, dsl = _build_system(pops, np, n)
     if sim_cont is None:
         print("-- (B) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
         return None
 
-    compiled = _compile_program(adc, dsl, t, t.std.adams_bashforth2, "ab2_ckpt", "ab2_prog_b")
+    compiled = _compile_program(pops, dsl, t, t.std.adams_bashforth2, "ab2_ckpt", "ab2_prog_b")
     if compiled is None:
         return None
 
@@ -178,7 +178,7 @@ def _run_section_b(t):
     state_a = np.array(sim_cont.get_state("blk"))[0]
 
     # (2) RUN N/2, CHECKPOINT.
-    sim1, _ = _build_system(adc, np, n)
+    sim1, _ = _build_system(pops, np, n)
     sim1.set_state("blk", np.stack([rho0]))
     sim1.install_program(compiled.so_path)
     for _ in range(half):
@@ -187,7 +187,7 @@ def _run_section_b(t):
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
 
         # (3) FRESH system, re-add block, re-install the SAME program, RESTART, run N/2 more -> B.
-        sim2, _ = _build_system(adc, np, n)
+        sim2, _ = _build_system(pops, np, n)
         sim2.install_program(compiled.so_path)  # the hash guard needs the program installed first
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, \
@@ -240,17 +240,17 @@ def _run_section_c(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001
-        print("-- (C) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (C) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     n = 8
-    sim, dsl = _build_system(adc, np, n)
+    sim, dsl = _build_system(pops, np, n)
     if sim is None:
         print("-- (C) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
         return None
 
-    ab2 = _compile_program(adc, dsl, t, t.std.adams_bashforth2, "ab2_c", "ab2_prog_c")
-    fe = _compile_program(adc, dsl, t, t.std.forward_euler, "fe_c", "fe_prog_c")
+    ab2 = _compile_program(pops, dsl, t, t.std.adams_bashforth2, "ab2_c", "ab2_prog_c")
+    fe = _compile_program(pops, dsl, t, t.std.forward_euler, "fe_c", "fe_prog_c")
     if ab2 is None or fe is None:
         return None
     assert ab2.program_hash != fe.program_hash, \
@@ -264,7 +264,7 @@ def _run_section_c(t):
         ckpt = sim.checkpoint(os.path.join(tmp, "ab2_for_mismatch"))
 
         # A fresh system that installs the WRONG (Forward Euler) program, then restarts the AB2 ckpt.
-        sim2, _ = _build_system(adc, np, n)
+        sim2, _ = _build_system(pops, np, n)
         sim2.install_program(fe.so_path)
         try:
             sim2.restart(ckpt)
@@ -278,7 +278,7 @@ def _run_section_c(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

@@ -147,14 +147,14 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> test_strang_split saute (%s)" % INCLUDE)
+        print("skip  compilateur ou en-tetes pops absents -> test_strang_split saute (%s)" % INCLUDE)
         if fails:  # ne pas masquer un echec des gardes (a) sans compilateur
             raise SystemExit("test_strang_split : %d verification(s) en echec" % fails)
         print("test_strang_split : OK (rien a compiler)")
         return
 
     n, L, dt = 32, 1.0, 2.0e-3
-    # adc_cpp est Kokkos-only (#263) : le .so AOT inclut les en-tetes adc (multifab/for_each) qui ne
+    # adc_cpp est Kokkos-only (#263) : le .so AOT inclut les en-tetes pops (multifab/for_each) qui ne
     # compilent QUE sous POPS_HAS_KOKKOS, donc compile_aot exige un Kokkos installe (POPS_KOKKOS_ROOT).
     # Sans lui, on saute proprement (b)/(c) -- meme convention que test_time_euler.py.
     try:

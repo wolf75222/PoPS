@@ -4,7 +4,7 @@ adc_cpp is the header-only C++20 core for coupled hyperbolic-elliptic systems on
 adaptive mesh (AMR), written for MPI + Kokkos (Kokkos is the ONLY on-node backend: Serial /
 OpenMP / Cuda depending on the install; the standalone OpenMP backend was removed). The generic physics bricks
 ([`include/pops/physics/`](../include/pops/physics)) and the library's Python bindings (module
-`adc`, compiled extension `_pops`, composition facades `System` / `AmrSystem`) live here; the
+`pops`, compiled extension `_pops`, composition facades `System` / `AmrSystem`) live here; the
 neighboring repository `adc_cases` only contains Python use cases that import this module. The
 core is model-agnostic: it names no scenario, it provides bricks composed in
 `CompositeModel`. The layers are orthogonal (physics, numerics, data/mesh, execution,
@@ -28,7 +28,7 @@ time/coupling) and a high layer never depends on an execution detail.
 ---
 ## Overview
 
-The diagram below shows the public modules of [`include/pops/`](../include/adc), the
+The diagram below shows the public modules of [`include/pops/`](../include/pops), the
 real external dependencies, and the consumers of the core. The arrows are the inclusions
 actually present in the headers (verified by `grep '#include <pops/...>'`). The
 external edges: **Kokkos is required** (the only on-node backend: `POPS_USE_KOKKOS` ON by default,
@@ -41,7 +41,7 @@ framework).
 
 ```mermaid
 flowchart TD
-  subgraph adc["include/pops/ (coeur header-only)"]
+  subgraph pops["include/pops/ (coeur header-only)"]
     direction TB
     core["core<br/>types, state, PhysicalModel,<br/>EquationBlock, CoupledSystem"]
     physics["physics<br/>bricks, composite, euler,<br/>hyperbolic, source, elliptic"]
@@ -450,7 +450,7 @@ The library distinguishes two safety nets (cf. [`docs/ARCHITECTURE.md`](ARCHITEC
 
 **Mass conservation at round-off.** The finite-volume scheme is conservative by telescoping of the fluxes; at the coarse-fine reflux (FluxRegister), the global mass stays conserved at machine precision. The source test `python/tests/test_schur_conservation.py` (cf. [`docs/CONSERVATION_SUMMARY.md`](CONSERVATION_SUMMARY.md)) measures on 64x64 periodic, axisymmetric ring, 40 steps a relative mass drift of the order of $1.9\times 10^{-16}$ (machine precision), well below the threshold $10^{-12}$. On the AMR side, the extraction of the couplers into thin schedulers has been validated at unchanged mass conservation at round-off (`amr_mass`, section 5 of the architecture). The momentum is only exact ($\sim 5\times 10^{-18}$) when the net force is zero by discrete symmetry; under real electrostatic/Lorentz force it is not conserved by construction, which is the expected behavior of an FV scheme (and not of a structure-preserving weak-form scheme).
 
-**MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DADC_USE_MPI=ON`, np=1/2/4). See [`docs/BACKEND_COVERAGE.md`](BACKEND_COVERAGE.md) section 1h: `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_krylov_solver`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
+**MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). See [`docs/BACKEND_COVERAGE.md`](BACKEND_COVERAGE.md) section 1h: `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_krylov_solver`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
 
 **Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). These harnesses live in `python/tests/gpu/` (out of CI for lack of GPU runner); the detail is in [`docs/GPU_RUNTIME_PORT.md`](GPU_RUNTIME_PORT.md). Device caveats: `add_compiled_model` with extended lambdas is not zero-copy on device (host bounce, nvcc cross-TU limit), the multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
 
@@ -458,7 +458,7 @@ The library distinguishes two safety nets (cf. [`docs/ARCHITECTURE.md`](ARCHITEC
 
 ## Backends
 
-The backends (Kokkos, MPI, HDF5) are a property of the library, not a flag per target. They are attached to the interface target `adc`: everything that links `adc` (core tests, downstream applications) inherits the backend chosen at configuration. Kokkos is the ONLY on-node backend and it is required (the serial goes through Kokkos Serial, not through a manual C++ loop). One configures once (cf. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) section 9):
+The backends (Kokkos, MPI, HDF5) are a property of the library, not a flag per target. They are attached to the interface target `pops`: everything that links `pops` (core tests, downstream applications) inherits the backend chosen at configuration. Kokkos is the ONLY on-node backend and it is required (the serial goes through Kokkos Serial, not through a manual C++ loop). One configures once (cf. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) section 9):
 
 ```
 # Kokkos est obligatoire mais PAS forcement pre-installe : trouve s'il existe (-DKokkos_ROOT),
@@ -467,12 +467,12 @@ cmake -B build                                       # serie : Kokkos fetch+buil
 cmake -B build -DKokkos_ENABLE_OPENMP=ON             # CPU multi-thread (Kokkos OpenMP, fetch)
 cmake -B build -DKokkos_ROOT=$K                       # reutilise une install Kokkos existante
 cmake -B build -DKokkos_ROOT=$K -DCMAKE_CXX_COMPILER=$K/bin/nvcc_wrapper  # GPU Cuda (install nvcc_wrapper)
-cmake -B build -DADC_USE_MPI=ON                       # + distribue (POPS_HAS_MPI + MPI::MPI_CXX)
+cmake -B build -DPOPS_USE_MPI=ON                       # + distribue (POPS_HAS_MPI + MPI::MPI_CXX)
 ```
 
-**Kokkos: the only on-node backend.** Kokkos covers the sequential (Serial), the multi-thread CPU (OpenMP) AND the GPU (Cuda/HIP) with a single code, without any CUDA kernel written by hand nor `#pragma omp`. The target is chosen by the options `Kokkos_ENABLE_SERIAL` / `Kokkos_ENABLE_OPENMP` / `Kokkos_ENABLE_CUDA` -- at config (FetchContent path) or at the install of Kokkos (`-DKokkos_ROOT` path), not by an adc flag. Kokkos is REQUIRED but does not need to be pre-installed: CMake does `find_package(Kokkos)` then, failing that, fetches it via FetchContent (version `POPS_KOKKOS_FETCH_VERSION`, default 4.4.01, tarball verified by SHA256). Configuring without Kokkos (`-DADC_USE_KOKKOS=OFF`) is a fatal error, and the seam `for_each_cell` does not compile without `POPS_HAS_KOKKOS`. The standard is C++20 (nvcc CUDA 12.x does not offer `-std=c++23`); the kernels marked `POPS_HD` and the seam `for_each_cell` are compiled for the chosen execution space. CI plays Kokkos Serial (gate `build-and-test`, C++ + Python) and, since the `ci-full` job, Kokkos OpenMP (`Kokkos_ENABLE_OPENMP=ON`). CI never builds `-DKokkos_ENABLE_CUDA=ON`: all the Kokkos Cuda cells are therefore ROMEO (manual GH200 validation) or unknown.
+**Kokkos: the only on-node backend.** Kokkos covers the sequential (Serial), the multi-thread CPU (OpenMP) AND the GPU (Cuda/HIP) with a single code, without any CUDA kernel written by hand nor `#pragma omp`. The target is chosen by the options `Kokkos_ENABLE_SERIAL` / `Kokkos_ENABLE_OPENMP` / `Kokkos_ENABLE_CUDA` -- at config (FetchContent path) or at the install of Kokkos (`-DKokkos_ROOT` path), not by an pops flag. Kokkos is REQUIRED but does not need to be pre-installed: CMake does `find_package(Kokkos)` then, failing that, fetches it via FetchContent (version `POPS_KOKKOS_FETCH_VERSION`, default 4.4.01, tarball verified by SHA256). Configuring without Kokkos (`-DPOPS_USE_KOKKOS=OFF`) is a fatal error, and the seam `for_each_cell` does not compile without `POPS_HAS_KOKKOS`. The standard is C++20 (nvcc CUDA 12.x does not offer `-std=c++23`); the kernels marked `POPS_HD` and the seam `for_each_cell` are compiled for the chosen execution space. CI plays Kokkos Serial (gate `build-and-test`, C++ + Python) and, since the `ci-full` job, Kokkos OpenMP (`Kokkos_ENABLE_OPENMP=ON`). CI never builds `-DKokkos_ENABLE_CUDA=ON`: all the Kokkos Cuda cells are therefore ROMEO (manual GH200 validation) or unknown.
 
-**MPI: distributed, optional.** `-DADC_USE_MPI=ON` defines `POPS_HAS_MPI` and links `MPI::MPI_CXX`. The `if(POPS_HAS_MPI)` block of the CMake compiles the MPI-only tests (section 1h of [`docs/BACKEND_COVERAGE.md`](BACKEND_COVERAGE.md)), each replayed at np=1/2/4. Out of MPI (a single process), the seam `comm` ([`include/pops/parallel/comm.hpp`](../include/pops/parallel/comm.hpp)) degenerates to the identity (rank 0, size 1, all-reduce and barrier no-op), so that a binary linked MPI but launched single-process behaves like a single-rank run. MPI + Kokkos Cuda multi-GPU is validated on ROMEO for 10 Krylov/Schur/MPI-kernel tests (rank-invariant np=1/2/4, `dmax=0`).
+**MPI: distributed, optional.** `-DPOPS_USE_MPI=ON` defines `POPS_HAS_MPI` and links `MPI::MPI_CXX`. The `if(POPS_HAS_MPI)` block of the CMake compiles the MPI-only tests (section 1h of [`docs/BACKEND_COVERAGE.md`](BACKEND_COVERAGE.md)), each replayed at np=1/2/4. Out of MPI (a single process), the seam `comm` ([`include/pops/parallel/comm.hpp`](../include/pops/parallel/comm.hpp)) degenerates to the identity (rank 0, size 1, all-reduce and barrier no-op), so that a binary linked MPI but launched single-process behaves like a single-rank run. MPI + Kokkos Cuda multi-GPU is validated on ROMEO for 10 Krylov/Schur/MPI-kernel tests (rank-invariant np=1/2/4, `dmax=0`).
 
 **The seam `for_each_cell`.** The seam point that makes all this possible is `for_each_cell(box, f)` in [`include/pops/mesh/execution/for_each.hpp`](../include/pops/mesh/execution/for_each.hpp). It expresses an execution policy, not numerical logic: it takes a `Box` and an `POPS_HD(i, j)` lambda, and compiles into `Kokkos::parallel_for` (Serial / OpenMP / Cuda depending on the Kokkos install). The numerical logic stays in the lambda (layer 2: discretization), never in the seam; growing it into `for_each_cell(U, grid, ghosts, mpi, bc, amr, ...)` would recreate an opaque framework. A grid operator sees a local view `Array4` + `Box`, but neither the `DistributionMapping` nor the loop policy. The reductions share the same philosophy: `for_each_cell_reduce_sum` / `_max` carry the deterministic reducers `Kokkos::Sum` / `Max` (the `sum` reassociates the addition by tile -- deterministic/idempotent but not bit-identical to a lexicographic sum, for all the Kokkos spaces; the `max` stays exact).
 

@@ -27,10 +27,10 @@ component 0 alone and leave the rest unsolved.
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_multicomp_solve (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -213,7 +213,7 @@ def _passive_model(dsl, name, cons):
     return m
 
 
-def _run_one(t, adc, np, ncomp, init):
+def _run_one(t, pops, np, ncomp, init):
     """Compile + install + step the (I - alpha*Lap) solve on an ncomp-component block, compare to the
     offline numpy CG on the SAME discrete operator. @p init is (ncomp, n, n) the initial state. Returns
     (out, phi_ref, iters) or None if the toolchain is unavailable."""
@@ -255,7 +255,7 @@ def _run_section_b(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
     n = 16
@@ -268,7 +268,7 @@ def _run_section_b(t):
     c1 = 0.5 - 0.4 * np.cos(2 * np.pi * X) * np.sin(4 * np.pi * Y)
     init2 = np.stack([c0, c1])
 
-    res2 = _run_one(t, adc, np, 2, init2)
+    res2 = _run_one(t, pops, np, 2, init2)
     if res2 is None:
         return None
     out2, ref2, iters2 = res2
@@ -284,7 +284,7 @@ def _run_section_b(t):
     assert iters2 > 1, "the offline (and compiled) solve must take > 1 iteration, got %d" % iters2
 
     # A scalar (ncomp=1) solve still matches the offline CG bit-for-bit (the scalar path is unchanged).
-    res1 = _run_one(t, adc, np, 1, np.stack([c0]))
+    res1 = _run_one(t, pops, np, 1, np.stack([c0]))
     if res1 is None:
         return None
     out1, ref1, _ = res1
@@ -295,7 +295,7 @@ def _run_section_b(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

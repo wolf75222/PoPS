@@ -31,7 +31,7 @@ import numpy as np
 try:
     import pops
 except ImportError as e:  # module pas construit : on se saute proprement (comme les freres)
-    print("skip  module adc absent (PYTHONPATH ?) : %s" % e)
+    print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
 
 

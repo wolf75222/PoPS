@@ -11,7 +11,7 @@ later lowered to C++ (other ADC-399 phases). This test exercises ONLY the IR con
   - the IR hash is deterministic and sensitive to a coefficient change.
 
 It does NOT compile or run anything (no ProgramContext, no .so) -- that is Phase 2b/2c.
-Run with python3 (PYTHONPATH = built adc package).
+Run with python3 (PYTHONPATH = built pops package).
 """
 from pops import time as adctime
 

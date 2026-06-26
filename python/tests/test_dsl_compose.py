@@ -92,7 +92,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> verification sautee (%s)" % INCLUDE)
+        print("skip  compilateur ou en-tetes pops absents -> verification sautee (%s)" % INCLUDE)
         print("test_dsl_compose : OK (forme du struct seulement)")
         return
 
@@ -102,7 +102,7 @@ def main():
         exe = os.path.join(tmp, "compose")
         with open(cpp, "w") as f:
             f.write(prog)
-        # le coeur adc est propre en C++20 (concepts) ; -I include suffit (header-only).
+        # le coeur pops est propre en C++20 (concepts) ; -I include suffit (header-only).
         subprocess.run([cxx, "-std=c++20", "-O2", "-I", INCLUDE, cpp, "-o", exe], check=True)
         out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
 

@@ -52,10 +52,10 @@ def main():
         pass
     print("OK  aux_n_aux rejette un nom aux inconnu")
 
-    # (5) compile-check : la brique B_z compile et lit bien B_z (sur les vrais en-tetes adc).
+    # (5) compile-check : la brique B_z compile et lit bien B_z (sur les vrais en-tetes pops).
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> compile-check sautee (%s)" % INCLUDE)
+        print("skip  compilateur ou en-tetes pops absents -> compile-check sautee (%s)" % INCLUDE)
         print("test_dsl_aux_naux : OK (forme seulement)")
         return
 

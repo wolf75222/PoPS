@@ -169,7 +169,7 @@ echo ""
 # scripts/build_python.sh sizes this automatically (cores capped by RAM); the manual knob:
 _ncpu="$( (nproc 2>/dev/null) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 echo "Manual heavy-TU pool (build_python.sh does this for you):"
-echo "    pip install . -v -C cmake.define.POPS_HEAVY_TU_POOL=$_ncpu      # or a C++ preset: -DADC_HEAVY_TU_POOL=$_ncpu"
+echo "    pip install . -v -C cmake.define.POPS_HEAVY_TU_POOL=$_ncpu      # or a C++ preset: -DPOPS_HEAVY_TU_POOL=$_ncpu"
 echo "    (leave it at the default 1 on memory-constrained machines / CI -- it is the OOM guard.)"
 echo ""
 if conda run -n "$ENV_NAME" python -c "import pops" >/dev/null 2>&1; then

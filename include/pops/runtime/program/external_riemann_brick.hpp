@@ -98,7 +98,7 @@ void external_residual(const double* U, double* R, const double* aux_in, int n, 
 // This is the C++ counterpart of pops.lib.load_cpp_library: the Python path surfaces the descriptor
 // (requirements/capabilities) for the board/install layer; this path resolves the numerical entry
 // point for a host that drives the brick from C++. A brick `.so` not exporting the expected symbols
-// is rejected with a clear error (it is not an adc external Riemann brick `.so`).
+// is rejected with a clear error (it is not an pops external Riemann brick `.so`).
 class ExternalBrickHandle {
  public:
   // Function-pointer type of the brick's residual entry point (POPS_DEFINE_EXTERNAL_RIEMANN_BRICK).
@@ -107,7 +107,7 @@ class ExternalBrickHandle {
 
   // dlopen @p so_path, read + register its manifest, and resolve the entry points for brick @p id.
   // Throws std::runtime_error if the library cannot be opened, does not export pops_brick_manifest /
-  // pops_brick_residual (not an adc external Riemann brick), or does not register @p id as a riemann
+  // pops_brick_residual (not an pops external Riemann brick), or does not register @p id as a riemann
   // brick (a clear, actionable message naming the id and the loaded ids).
   ExternalBrickHandle(const std::string& so_path, const std::string& id) : id_(id) {
     handle_ = dynlib::open(so_path);
@@ -119,7 +119,7 @@ class ExternalBrickHandle {
     if (manifest_fn == nullptr)
       throw std::runtime_error(
           "external riemann brick '" + so_path +
-          "' does not export pops_brick_manifest(); it is not an adc brick .so");
+          "' does not export pops_brick_manifest(); it is not an pops brick .so");
     // The .so's static initializers already ran POPS_REGISTER_BRICK against the registry of the .so's
     // OWN image; reading its manifest and re-registering here makes the ids visible in THIS image's
     // process catalog too (RTLD_LOCAL keeps the .so's statics private otherwise). Done via the same
@@ -236,7 +236,7 @@ class ExternalBrickHandle {
 // pops_brick_naux let the host size its marshaling arrays (same role as pops_compiled_nvars/_naux).
 //
 // ABI WARNING: the brick `.so` MUST be compiled against the SAME Kokkos backend and version (and the
-// same adc headers) as the host binary that dlopens it -- the residual runs the host's Kokkos
+// same pops headers) as the host binary that dlopens it -- the residual runs the host's Kokkos
 // runtime. A mismatched `.so` may dlopen yet fail unpredictably. There is no load-time Kokkos-ABI
 // check yet (a future safeguard); for now this is the caller's contract, mirroring the AOT
 // compiled-block path (POPS_DEFINE_COMPILED_BLOCK), which carries the same requirement.

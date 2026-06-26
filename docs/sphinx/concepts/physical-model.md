@@ -1,6 +1,6 @@
 # PhysicalModel
 
-A model in `adc` is the equation, not the run: it is the set of pointwise laws that
+A model in `pops` is the equation, not the run: it is the set of pointwise laws that
 describe transport, sources, and the elliptic coupling, and it names no scenario. This page
 explains what the `PhysicalModel` concept captures, why it is kept this narrow, and how a model
 emerges as a composition of generic bricks.

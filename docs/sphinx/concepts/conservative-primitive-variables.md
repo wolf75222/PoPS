@@ -1,6 +1,6 @@
 # Conservative and primitive variables
 
-A hyperbolic model in `adc` carries its state in two complementary layouts: the conservative
+A hyperbolic model in `pops` carries its state in two complementary layouts: the conservative
 variables `U`, which the scheme evolves and conserves, and the primitive variables `P`, which the
 closures and the wave speeds read. This page explains why both exist and where each is used.
 

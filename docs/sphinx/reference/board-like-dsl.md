@@ -11,7 +11,7 @@ primitive calls.
 :class: note
 Layer 1 (this page) is the blackboard notation. Layer 2 is the typed operator-first
 IR (`pops.model.Module`: spaces, signatures, operators). Layer 3 is the C++ that
-executes -- native bricks in `include/adc` and the generated `problem.so`. Python
+executes -- native bricks in `include/pops` and the generated `problem.so`. Python
 describes and composes; C++ runs.
 ```
 

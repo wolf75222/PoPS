@@ -1,9 +1,9 @@
 # Build des harness de validation device "round 2" (features post-#48 a chemin device).
 # Usage (sur le noeud armgpu, cf. romeo_gpuval2_build.sh) :
 #   cmake -S . -B build -DCMAKE_CXX_COMPILER=<nvcc_wrapper> -DKokkos_ROOT=<kinstall> \
-#         -DADC_INCLUDE=<include> -DCMAKE_BUILD_TYPE=Release
+#         -DPOPS_INCLUDE=<include> -DCMAKE_BUILD_TYPE=Release
 # Les trois harness sont HEADER-ONLY (assemble_rhs / advance_amr / GeometricMG via for_each POPS_HD).
-# Le MEME source compile aussi en Serial pur (g++ -DADC_HAS_KOKKOS off) pour l'oracle hote.
+# Le MEME source compile aussi en Serial pur (g++ -DPOPS_HAS_KOKKOS off) pour l'oracle hote.
 cmake_minimum_required(VERSION 3.16)
 project(gpuval2 CXX)
 find_package(Kokkos REQUIRED)
@@ -55,10 +55,10 @@ add_executable(gpu_dsl_production_validate gpu_dsl_production_validate.cpp ${POP
 target_include_directories(gpu_dsl_production_validate PRIVATE ${POPS_INCLUDE})
 target_compile_definitions(gpu_dsl_production_validate PRIVATE POPS_HAS_KOKKOS)
 target_link_libraries(gpu_dsl_production_validate PRIVATE Kokkos::kokkos)
-# MPI OPTIONNEL et EXPLICITE (option -DADC_DSLPROD_MPI=ON) : par defaut OFF -> binaire mono-process
+# MPI OPTIONNEL et EXPLICITE (option -DPOPS_DSLPROD_MPI=ON) : par defaut OFF -> binaire mono-process
 # (comm.hpp donne des stubs no-op sans POPS_HAS_MPI), ce qui suffit a la PARITE DEVICE (exec=Cuda) vs
 # Serial (dmax_abs sous tolerance ; PAS bit-exact, reductions Kokkos) sans toucher au MPI_Init (UCX/OFI). Quand on veut le run np=1/2/4, on
-# configure un build SEPARE avec -DADC_DSLPROD_MPI=ON contre le MEME OpenMPI CUDA-aware que les harness
+# configure un build SEPARE avec -DPOPS_DSLPROD_MPI=ON contre le MEME OpenMPI CUDA-aware que les harness
 # MPI freres (spack load openmpi +cuda) -> MPI::MPI_CXX + POPS_HAS_MPI activent la seam comm.hpp.
 option(POPS_DSLPROD_MPI "Lie gpu_dsl_production_validate a MPI (run np=1/2/4)" OFF)
 if(POPS_DSLPROD_MPI)

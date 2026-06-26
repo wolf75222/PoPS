@@ -1,4 +1,4 @@
-// Source UNIQUE de la disposition aux (X-macro POPS_AUX_FIELDS, adc/core/state.hpp). Ce test
+// Source UNIQUE de la disposition aux (X-macro POPS_AUX_FIELDS, pops/core/state.hpp). Ce test
 // prouve que la GENERATION couvre TOUS les champs extra et ferme le trou #51 (T_e oublie dans
 // le marshaling) : un champ ne peut plus etre lu sur un chemin et muet sur l'autre, car les deux
 // derivent de la meme table. On verifie a la compilation ET a l'execution :

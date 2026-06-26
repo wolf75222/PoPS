@@ -47,8 +47,8 @@ that after cross-checking (an initial `blocking` invalidated at verification is 
 | runtime-2 | 13 / 2855 | 13/13 | 0 | 3 | 3 |
 | runtime-3 | 4 / 1380 | 4/4 | 0 | 1 | 5 |
 | python-bindings (.cpp) | 3 / 3654 | 0/3 | 2 | 3 | 4 |
-| python adc (core) | 3 / 3162 | 3/3 docstring | 0 | 5 | 4 |
-| python adc (dsl) | 1 / 4648 | 1/1 docstring | 0 | 1 | 9 |
+| python pops (core) | 3 / 3162 | 3/3 docstring | 0 | 5 | 4 |
+| python pops (dsl) | 1 / 4648 | 1/1 docstring | 0 | 1 | 9 |
 | tests + bench (cross-cutting) | 246 / 27915 | 245/246 intent | 0 | 0 | 5 |
 | TODO + language (cross-cutting) | whole repo | n/a | 0 | 1 | 5 |
 
@@ -196,9 +196,9 @@ a concrete file (`composite_fac_poisson.hpp:30` -> `amr_reflux.hpp:20`) is EXACT
 REAL deferrals expressed in prose without a marker, hence invisible to tooling
 (`amr_diagnostics.hpp:29`, `amr_coupler_mp.hpp:289`, several `= Phase 4b`).
 
-Recommendation: reserve the `TODO` token for incomplete work, in the `TODO(ADC-xxx):` format;
+Recommendation: reserve the `TODO` token for incomplete work, in the `TODO(PoPS-xxx):` format;
 replace the roadmap labels with `(jalon 2.3)` or a cross-reference to the design doc; and mark the
-real deferrals in prose with a findable `TODO(ADC-xxx)`.
+real deferrals in prose with a findable `TODO(PoPS-xxx)`.
 
 ## 5. Language consistency
 

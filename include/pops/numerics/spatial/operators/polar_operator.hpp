@@ -19,7 +19,7 @@
 /// @brief Additive POLAR spatial operator: R = -div_polar F + S on an annular grid (r, theta).
 ///
 /// "Annular polar grid" work, Phase 1 (TRANSPORT only). This is a SEPARATE assemble_rhs from the
-/// Cartesian history (adc/numerics/spatial_operator.hpp): that one stays STRICTLY UNTOUCHED, so a
+/// Cartesian history (pops/numerics/spatial_operator.hpp): that one stays STRICTLY UNTOUCHED, so a
 /// run on a Cartesian mesh is bit-identical. The polar path is PURELY ADDITIVE, opt-in (the caller
 /// chooses assemble_rhs_polar with a PolarGeometry).
 ///

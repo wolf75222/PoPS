@@ -557,7 +557,7 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
     if (opts.fail_policy == NewtonOptions::kFailThrow)
       throw std::runtime_error(msg);
     if (my_rank() == 0)
-      std::fprintf(stderr, "[adc] WARNING %s\n", msg);
+      std::fprintf(stderr, "[pops] WARNING %s\n", msg);
   }
 }
 

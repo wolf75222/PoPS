@@ -106,7 +106,7 @@ std::vector<double> host_residual(const IModel<NV>& m, const std::vector<double>
       a.phi = AUX[k];
       a.grad_x = AUX[nn + k];
       a.grad_y = AUX[2 * nn + k];
-      // Extra fields marshaled from the SINGLE SOURCE POPS_AUX_FIELDS (adc/core/state.hpp):
+      // Extra fields marshaled from the SINGLE SOURCE POPS_AUX_FIELDS (pops/core/state.hpp):
       // same table as load_aux on the device side. An extra component is read only if the channel is
       // wide enough ((idx+1)*nn elements). Adding an aux field => 1 line in POPS_AUX_FIELDS,
       // this site (and the other, further down) transports it AUTOMATICALLY. Closes gap #51.
@@ -853,7 +853,7 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
     throw std::runtime_error("add_native_block: incompatible ABI -- loader key '" + loader_key +
                              "' != module key '" + module_key +
                              "'. Recompile the loader with the SAME compiler, C++ standard and "
-                             "adc headers as the _pops module.");
+                             "pops headers as the _pops module.");
   }
   // Native installer of the loader: reinterpret_cast<System*>(this) then add_compiled_model<ProdModel>.
   // Scheme (limiter/riemann/recon/time/gamma/substeps) marshaled as flat extern "C" arguments: the

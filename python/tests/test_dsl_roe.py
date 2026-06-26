@@ -87,7 +87,7 @@ def iso3_dsl(name, roe=False, p_decl=True):
 
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
-    print("skip test_dsl_roe : compilateur ou en-tetes adc absents")
+    print("skip test_dsl_roe : compilateur ou en-tetes pops absents")
     sys.exit(0)
 
 tmp = tempfile.mkdtemp()

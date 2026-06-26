@@ -25,7 +25,7 @@
 #      make_brick_and_ic.py. Defaut $HOME/adc_cpp/docs/validation (override ADC181_SRC).
 #   3. La brique DSL hyqmom15_brick.hpp et l'etat initial ic_128.raw sont GENERES (pas
 #      versionnes : artefacts derives, bit-reproductibles) par make_brick_and_ic.py sur une
-#      machine disposant du module python adc (ex. build local) puis rsync dans WORK :
+#      machine disposant du module python pops (ex. build local) puis rsync dans WORK :
 #        POPS_CASES=/chemin/adc_cases PYTHONPATH=/chemin/adc_cpp/python \
 #          python docs/validation/make_brick_and_ic.py --ns 128 --out WORK
 #      (IC + brique sont deterministes : md5 stable d'un run a l'autre.)
@@ -79,7 +79,7 @@ echo "[device] build diocotron_gpu (Cuda, nvcc_wrapper)"
 test -x "$NVCC" || { echo "nvcc_wrapper introuvable: $NVCC"; exit 2; }
 rm -rf "$SCR/dev_build"
 cmake -S "$WORK" -B "$SCR/dev_build" -DCMAKE_CXX_COMPILER="$NVCC" \
-  -DKokkos_ROOT="$KGPU" -DADC_INCLUDE="$ADCINC" -DCMAKE_BUILD_TYPE=Release \
+  -DKokkos_ROOT="$KGPU" -DPOPS_INCLUDE="$ADCINC" -DCMAKE_BUILD_TYPE=Release \
   > "$SCR/dev_cfg.log" 2>&1 || { echo DEV_CFG_FAIL; tail -40 "$SCR/dev_cfg.log"; exit 1; }
 # -j 8 (half the 16-core allocation) caps memory: nvcc_wrapper expands each heavy
 # template TU per device pass, so the full allocation can exhaust node RAM. Intentional.
@@ -93,7 +93,7 @@ test -x "$DEV" || { echo "DEV introuvable apres build"; exit 2; }
 echo "[host] build diocotron_gpu (Serial)"
 rm -rf "$SCR/ser_build"
 cmake -S "$WORK" -B "$SCR/ser_build" -DCMAKE_CXX_COMPILER=g++ \
-  -DKokkos_ROOT="$KSER" -DADC_INCLUDE="$ADCINC" -DCMAKE_BUILD_TYPE=Release \
+  -DKokkos_ROOT="$KSER" -DPOPS_INCLUDE="$ADCINC" -DCMAKE_BUILD_TYPE=Release \
   > "$SCR/ser_cfg.log" 2>&1 || { echo SER_CFG_FAIL; tail -40 "$SCR/ser_cfg.log"; exit 1; }
 # -j 8 mirrors the device build cap above: keep the host parity build symmetric. Intentional.
 cmake --build "$SCR/ser_build" -j 8 > "$SCR/ser_build.log" 2>&1 \

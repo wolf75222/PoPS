@@ -33,7 +33,7 @@ def build_bz_source():
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> hybride B_z saute")
+        print("skip  compilateur ou en-tetes pops absents -> hybride B_z saute")
         print("test_dsl_hybrid_bz : OK (rien a compiler)")
         return
 

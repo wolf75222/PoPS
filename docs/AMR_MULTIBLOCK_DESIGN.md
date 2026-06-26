@@ -3,7 +3,7 @@
 # Design: AMR multi-block on a shared hierarchy (multi-species capstone)
 
 DESIGN-ONLY. No implementation. This document is a reasoned SPEC, honest about its
-limits, of the migration of the `adc` AMR from ONE single explicit block toward SEVERAL blocks
+limits, of the migration of the `pops` AMR from ONE single explicit block toward SEVERAL blocks
 (species) on the SAME shared AMR hierarchy, conservatively coupled, modeled on the
 way the mono-level mesh already carries several blocks. It is the capstone: electrons,
 ions and neutrals on the SAME levels/patches, a single coarse Poisson whose right-hand side

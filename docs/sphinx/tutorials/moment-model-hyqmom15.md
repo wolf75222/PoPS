@@ -12,7 +12,7 @@ page explains how it is put together so you can write your own moment model the 
 
 ## Prerequisites
 
-- A built `adc` Python module. If you have not built it yet, follow
+- A built `pops` Python module. If you have not built it yet, follow
   [Installation](../getting-started/installation.md); the Kokkos Serial backend is enough.
 - `numpy` in the same Python environment.
 - The repository headers on disk, because the model is compiled to a `.so` against them. Set

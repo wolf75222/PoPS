@@ -9,7 +9,7 @@ Date: 2026-06-11
 > native vs SAMRAI: SAMRAI lifts the coarse-replicated / `DistributionMapping`
 > round-robin / global-collective ceilings; native stays more capable on the *physics*
 > side, anisotropic elliptic/Schur). The 7 open decisions (section 10) are settled unanimously
-> (CPU/MPI-first, `distribute_coarse=false`->error, constant C/F interp, adc reflux kept,
+> (CPU/MPI-first, `distribute_coarse=false`->error, constant C/F interp, pops reflux kept,
 > regrid coverage/nesting, restart out of scope). **Consequence**: distributed elliptic
 > (scalar HYPRE/FAC) is *scaling-critical*, a long pole, not optional; M8 = parity tier
 > only. Tracking: Linear milestone "SAMRAI AMR Backend", gate **ADC-126**,
@@ -111,7 +111,7 @@ Proposed addition: an optional backend selector, for example
 
 Conclusion: SAMRAI must replace hierarchy management, patches,
 AMR transfers and regridding. The physics models, numerical kernels,
-DSL/Python, coupled sources and adc diagnostics must stay on top.
+DSL/Python, coupled sources and pops diagnostics must stay on top.
 
 ## 3. What SAMRAI brings
 
@@ -186,19 +186,19 @@ Proposed new components:
   - conversions `Box2D <-> hier::Box`, `BoxArray <-> BoxContainer`.
 - `include/pops/samrai/cell_data_view.hpp`
   - view from `pdat::CellData<double>` to a `Fab2D` /
-    `Array4` compatible access to reuse the adc kernels.
+    `Array4` compatible access to reuse the pops kernels.
 - `include/pops/samrai/hierarchy_adapter.hpp`
   - owner of `PatchHierarchy`, `CartesianGridGeometry`,
     `CURRENT`, `NEW`, `SCRATCH` contexts, patch data ids.
 - `include/pops/samrai/transfer_adapter.hpp`
   - `RefineAlgorithm`, `CoarsenAlgorithm`, schedule cache, physical BC.
 - `include/pops/samrai/regrid_adapter.hpp`
-  - adc implementation of `mesh::TagAndInitializeStrategy`.
+  - pops implementation of `mesh::TagAndInitializeStrategy`.
 - `include/pops/samrai/flux_register_adapter.hpp`
-  - phase 1: reuse the adc logic on SAMRAI views.
+  - phase 1: reuse the pops logic on SAMRAI views.
   - phase 2: migration to SAMRAI face/side flux if worthwhile.
 - `include/pops/samrai/elliptic_adapter.hpp`
-  - phase 1: parity with the current adc solver.
+  - phase 1: parity with the current pops solver.
   - phase 2: SAMRAI/HYPRE FAC.
 - `include/pops/runtime/amr_system_samrai.hpp`
   - concrete backend called by `AmrSystem`.
@@ -237,19 +237,19 @@ Responsibilities remaining in adc_cpp:
 | `AmrHierarchy` | `hier::PatchHierarchy` | `hierarchy_adapter.hpp` | The native backend keeps `AmrHierarchy`; the SAMRAI backend exposes an equivalent facade. |
 | `AmrLevelMP` | `{level_number, data_id, aux_id, dx, dy}` | `level_view.hpp` | Must no longer own `MultiFab`; it references the SAMRAI patch data. |
 | `AmrLevelStack` | `PatchHierarchy` + contexts | `hierarchy_adapter.hpp` | Replaces the vectors of levels and aux. |
-| `TagBox` | integer tag patch data (`CellData<int>`) | `regrid_adapter.hpp` | `tagCellsForRefinement` calls the adc predicates then sets `tag_index` to 1. |
+| `TagBox` | integer tag patch data (`CellData<int>`) | `regrid_adapter.hpp` | `tagCellsForRefinement` calls the pops predicates then sets `tag_index` to 1. |
 | `ClusterParams`, `berger_rigoutsos` | `BergerRigoutsos` + `GriddingAlgorithm` input DB | `regrid_adapter.hpp` | Map `max_grid`, `grow`, `margin`, proper nesting and efficiency. |
 | `fill_boundary` | intra-level `xfer::RefineSchedule` | `transfer_adapter.hpp` | Schedules cached and invalidated after regrid. |
 | `fill_physical_bc` | `xfer::RefinePatchStrategy` | `transfer_adapter.hpp` | Port `BCRec` to SAMRAI callbacks. |
-| `fill_cf_ghost_cell`, `mf_fill_fine_ghosts_*` | `RefineAlgorithm` coarse->fine with time/space interpolation | `transfer_adapter.hpp` | First reproduce the constant adc interpolation; add linear afterward. |
+| `fill_cf_ghost_cell`, `mf_fill_fine_ghosts_*` | `RefineAlgorithm` coarse->fine with time/space interpolation | `transfer_adapter.hpp` | First reproduce the constant pops interpolation; add linear afterward. |
 | `parallel_copy` | xfer schedule between data ids/contexts | `transfer_adapter.hpp` | Useful for regrid and old/new contexts. |
 | `average_down` | `CoarsenAlgorithm`, `CoarsenSchedule` | `transfer_adapter.hpp` | Conservative operator for conserved fields. |
-| `FluxRegister` | phase 1: adc adapter; phase 2: `FaceData`/`SideData` + SAMRAI sync | `flux_register_adapter.hpp` | Risk of numerical change; keep adc for initial parity. |
+| `FluxRegister` | phase 1: pops adapter; phase 2: `FaceData`/`SideData` + SAMRAI sync | `flux_register_adapter.hpp` | Risk of numerical change; keep pops for initial parity. |
 | `CoverageMask` | `PatchHierarchy` + regions covered by fine levels | `coverage_adapter.hpp` | Can be derived from the SAMRAI hierarchy; keep current tests. |
-| `GeometricMG` | phase 1: adc solver; phase 2: `CellPoissonFACSolver` | `elliptic_adapter.hpp` | SAMRAI composite FAC is a separate decision. |
+| `GeometricMG` | phase 1: pops solver; phase 2: `CellPoissonFACSolver` | `elliptic_adapter.hpp` | SAMRAI composite FAC is a separate decision. |
 | `CompositeFacPoisson` | `CellPoissonFACSolver`/`CellPoissonFACOps` | `elliptic_adapter.hpp` | Long-term target for multi-level composite solve. |
 | `AmrRuntime` | orchestration kept, storage delegated | `amr_system_samrai.hpp` | Keep tag union and multi-block; change data/hierarchy backend. |
-| Physics models | no SAMRAI mapping | `cell_data_view.hpp` | The kernels keep reading/writing adc views. |
+| Physics models | no SAMRAI mapping | `cell_data_view.hpp` | The kernels keep reading/writing pops views. |
 
 ## 6. APIs to preserve and acceptable changes
 
@@ -267,7 +267,7 @@ Responsibilities remaining in adc_cpp:
 
 - `AmrSystemConfig::amr_backend`.
 - `AmrSystemConfig::poisson_backend`, later:
-  `"adc"` by default, `"samrai_fac"` opt-in.
+  `"pops"` by default, `"samrai_fac"` opt-in.
 - `POPS_USE_SAMRAI` in CMake; without this option, requesting `"samrai"` raises an
   explicit error.
 - Parity tests comparing `"native"` and `"samrai"`.
@@ -436,7 +436,7 @@ Files:
 Work:
 
 - Implement `SamraiTagAndInitializeStrategy`.
-- In `tagCellsForRefinement`, call the adc predicates per block and do
+- In `tagCellsForRefinement`, call the pops predicates per block and do
   the union of the tags.
 - In `initializeLevelData`, allocate the data, interpolate from coarse
   and copy the old fine if available.
@@ -464,7 +464,7 @@ Files:
 
 Work:
 
-- Phase 1: keep the adc flux registers on SAMRAI views.
+- Phase 1: keep the pops flux registers on SAMRAI views.
 - Adapt `PatchRange`, `CoverageMask`, `CoarseFineInterface`.
 - Keep ratio 2 and the current cadence.
 - Compare the reflux corrections against the native backend.
@@ -475,7 +475,7 @@ Exit criterion:
   `test_patch_range`, `test_amr_diffusion`.
 - Mass conservation on coarse/fine interfaces.
 
-### M8 - Elliptic, adc parity phase
+### M8 - Elliptic, pops parity phase
 
 Files:
 
@@ -488,7 +488,7 @@ Work:
 
 - Keep the current behavior: coarse solve + aux injection, or temporary native
   mirror for `GeometricMG`.
-- Copy RHS/phi between SAMRAI patch data and adc views/mirrors.
+- Copy RHS/phi between SAMRAI patch data and pops views/mirrors.
 - Do not enable SAMRAI FAC by default.
 
 Exit criterion:
@@ -661,7 +661,7 @@ Python:
 
 4. Reflux
    - This is the most sensitive area for conservation.
-   - Phase 1 must keep the adc arithmetic; migration to `FaceData` /
+   - Phase 1 must keep the pops arithmetic; migration to `FaceData` /
      `SideData` only after parity.
 
 5. Composite elliptic
@@ -699,7 +699,7 @@ Python:
 - `distribute_coarse=false`: emulation, explicit error, or ignored option?
 - Coarse/fine interpolation v1: constant for strict parity, or SAMRAI linear
   directly with a change of reference?
-- Flux: keep the adc `FluxRegister` in v1, or switch to `FaceData` /
+- Flux: keep the pops `FluxRegister` in v1, or switch to `FaceData` /
   `SideData` immediately?
 - SAMRAI FAC: separate milestone with `poisson_backend="samrai_fac"`?
 - Regrid tests: do we require the same boxes as the native backend, or only
@@ -714,7 +714,7 @@ The least-risky path is:
 2. Build a SAMRAI adaptation layer that exposes views compatible
    with the adc_cpp kernels.
 3. Port hierarchy/data/ghosts/transfers/regrid first.
-4. Keep adc reflux and elliptic for the first parity.
+4. Keep pops reflux and elliptic for the first parity.
 5. Enable SAMRAI/HYPRE FAC only after validating the baseline AMR backend.
 
 This way, SAMRAI takes the responsibilities it is built for

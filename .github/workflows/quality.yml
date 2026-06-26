@@ -573,13 +573,13 @@ jobs:
       #  - CodeQL analyse un en-tete des qu'il est compile dans UN SEUL TU : la reunion des
       #    tranches couvre l'essentiel de include/pops/ SAUF les facades runtime System/AmrSystem
       #    (instanciees uniquement par les TU geantes) -- trade-off assume, cf. ADC-173.
-      #  - ccache OFF (-DADC_USE_CCACHE=OFF) GARDE : un hit ccache court-circuiterait la
+      #  - ccache OFF (-DPOPS_USE_CCACHE=OFF) GARDE : un hit ccache court-circuiterait la
       #    compilation et masquerait le TU a l'extracteur.
       - name: Build cible (sous-ensemble leger, trace CodeQL)
         env:
           KOKKOS_PREFIX: ${{ steps.kokkos.outputs.kokkos-prefix }}
         run: |
-          cmake --preset ci-kokkos -DADC_USE_CCACHE=OFF
+          cmake --preset ci-kokkos -DPOPS_USE_CCACHE=OFF
           cmake --build --preset ci-kokkos --target \
             test_box2d test_fab2d test_box_array test_multifab test_reduce \
             test_fill_boundary test_physical_bc test_geometry test_dense_eig \

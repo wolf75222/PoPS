@@ -35,7 +35,7 @@ def build_bz_scalar():
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> JIT B_z saute")
+        print("skip  compilateur ou en-tetes pops absents -> JIT B_z saute")
         print("test_dsl_jit_bz : OK (rien a compiler)")
         return
 

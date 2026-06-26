@@ -28,7 +28,7 @@ facade AmrSystem.add_equation. It checks, on the compiled .so path:
 The guarantee is face / C/F-ghost-mean Density positivity only (order-1 fallback), parity with the
 native path (tests/test_amr_positivity_floor.cpp, python/tests/test_amr_positivity_floor.py).
 
-Needs a C++ compiler + the adc headers + POPS_KOKKOS_ROOT (the production loader is Kokkos-only):
+Needs a C++ compiler + the pops headers + POPS_KOKKOS_ROOT (the production loader is Kokkos-only):
 auto-skips (exit 0) without a compiler, like test_dsl_production_amr. Validated under CI (ci-kokkos*).
 """
 import os
@@ -114,7 +114,7 @@ def compiled_single(cm, pf, state):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  no C++ compiler or adc headers")
+        print("skip  no C++ compiler or pops headers")
         print("test_amr_compiled_positivity_floor : OK (nothing to compile)")
         return
 

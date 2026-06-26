@@ -3,7 +3,7 @@
 pops.time.std.predictor_corrector_local_linear / explicit_rk / imex_local_linear take typed
 operator NAMES (not physical terms) and compose them with P.call against the Module bound to
 the Program. The macros are model-free (their source mentions no physics) and reusable across
-any Module with matching signatures. Pure Python (emit only); skips if adc is not importable.
+any Module with matching signatures. Pure Python (emit only); skips if pops is not importable.
 """
 import inspect
 import sys
@@ -11,8 +11,8 @@ import sys
 try:
     from pops import dsl
     from pops import time as adctime
-except Exception as exc:  # adc not importable here -> skip, never fake
-    print("skip test_operator_macros (adc unavailable: %s)" % exc)
+except Exception as exc:  # pops not importable here -> skip, never fake
+    print("skip test_operator_macros (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 _PHYSICS_TOKENS = ("electric", "lorentz", "poisson", "rho", "grad_x", "grad_y", "B_z")

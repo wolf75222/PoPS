@@ -71,7 +71,7 @@ def _check_codegen_non_regression():
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents")
+        print("skip  compilateur ou en-tetes pops absents")
         print("test_dsl_runtime_params : OK (rien a compiler)")
         return
 

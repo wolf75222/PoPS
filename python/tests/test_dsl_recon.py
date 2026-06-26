@@ -50,7 +50,7 @@ def muscl_residual(e, U, h, recon):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents")
+        print("skip  compilateur ou en-tetes pops absents")
         print("test_dsl_recon : OK (rien a compiler)")
         return
 

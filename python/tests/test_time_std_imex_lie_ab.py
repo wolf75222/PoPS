@@ -20,10 +20,10 @@ All three LOWER to the existing Program IR (no new C++ stepper):
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_std_imex_lie_ab (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -207,7 +207,7 @@ def _run_ab3(t):
         import pops
         from pops import dsl
     except Exception as exc:  # noqa: BLE001
-        print("-- (B AB3) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B AB3) skipped: pops/numpy unavailable: %s --" % exc)
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
@@ -249,7 +249,7 @@ def _run_imex(t):
         import pops
         from pops import dsl
     except Exception as exc:  # noqa: BLE001
-        print("-- (B imex) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B imex) skipped: pops/numpy unavailable: %s --" % exc)
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
@@ -300,7 +300,7 @@ def _run_lie(t):
         import pops
         from pops import dsl
     except Exception as exc:  # noqa: BLE001
-        print("-- (B lie) skipped: adc/numpy unavailable: %s --" % exc)
+        print("-- (B lie) skipped: pops/numpy unavailable: %s --" % exc)
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
@@ -348,7 +348,7 @@ def _run_lie(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

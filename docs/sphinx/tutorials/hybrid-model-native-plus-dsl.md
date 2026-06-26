@@ -11,7 +11,7 @@ physics already exists as a native brick and part is best expressed symbolically
 
 ## Before you start
 
-- A built `adc` Python module and the DSL toolchain (adc headers plus a C++ compiler). See the
+- A built `pops` Python module and the DSL toolchain (pops headers plus a C++ compiler). See the
   [installation guide](../getting-started/installation.md).
 - The three model-writing fronts (native bricks, DSL, hybrid) from the
   [models overview](../models/index.md).
@@ -39,7 +39,7 @@ right-hand side as native bricks. The excerpt comes from `python/tests/test_dsl_
 `CS2` with the isothermal sound speed squared, `QOM` with the charge-to-mass ratio of the source
 force, and `Q` with the charge of the elliptic coupling.
 
-1. Import `adc` and the DSL, and fix the physical constants.
+1. Import `pops` and the DSL, and fix the physical constants.
 
    ```python
    import pops

@@ -25,7 +25,7 @@ What a version bump is allowed to break is exactly this surface:
   `pops.parallel_info`, `pops.has_kokkos`, `pops.__version__`).
 - DSL surface: the fixed aux names (`phi`, `grad_x`, `grad_y`, `B_z`, `T_e`) and the
   documented builders.
-- Consumable CMake: the `pops::pops` target, `find_package(adc)`, and the documented options
+- Consumable CMake: the `pops::pops` target, `find_package(pops)`, and the documented options
   (`POPS_USE_MPI`, `POPS_USE_HDF5`, `POPS_USE_KOKKOS`, ...) and presets.
 
 ## Internal (no guarantee, may change in any release)

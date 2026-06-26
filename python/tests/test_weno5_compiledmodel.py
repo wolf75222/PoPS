@@ -15,7 +15,7 @@ On verifie, pour le MEME euler_poisson et limiter="weno5", flux rusanov :
   (3) NO-DEFAULT-CHANGE : none/minmod restent <= 2 ghosts (set_block_ghosts no-op) -> AOT a la meme
       tolerance serree et production reste BIT-IDENTIQUE au natif. Allocation inchangee.
 
-S'auto-saute (exit 0) sans compilateur / en-tetes adc, comme test_dsl_aot / test_dsl_production.
+S'auto-saute (exit 0) sans compilateur / en-tetes pops, comme test_dsl_aot / test_dsl_production.
 """
 import os
 import shutil
@@ -47,7 +47,7 @@ def _initial_state(n):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents")
+        print("skip  compilateur ou en-tetes pops absents")
         print("test_weno5_compiledmodel : OK (rien a compiler)")
         return
 

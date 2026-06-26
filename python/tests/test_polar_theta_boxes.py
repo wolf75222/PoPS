@@ -31,7 +31,7 @@ import numpy as np
 try:
     import pops
 except ImportError as e:  # PYTHONPATH non pose : skip CI-safe (comme les autres tests Python)
-    print("skip  module adc absent (PYTHONPATH ?) : %s" % e)
+    print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
     sys.exit(0)
 
 

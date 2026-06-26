@@ -1,4 +1,4 @@
-# adc: Tasks: from `PhysicalModel` to the multi-species system
+# pops: Tasks: from `PhysicalModel` to the multi-species system
 
 A single actionable list of what is **done** and what **remains**, based on the
 tutor discussion and the increments. Not a production solver: we lay down a **testable
@@ -220,7 +220,7 @@ the user architecture.
 
 ## 7. Synthesis (board sentence)
 
-> `adc` knows how to take a **local physical law** (`PhysicalModel`) and run it on
+> `pops` knows how to take a **local physical law** (`PhysicalModel`) and run it on
 > a mesh with Poisson, AMR, MPI and GPU. The **multi-block assembly** level is
 > now **filled in** (testable skeleton, all tests green): `EquationBlock` (state +
 > model + spatial scheme + time policy + BC), `CoupledSystem` (several blocks),

@@ -1,6 +1,6 @@
 # Reference : the native bricks (composition)
 
-This page is the exhaustive registry of `adc`'s composable native bricks: each brick,
+This page is the exhaustive registry of `pops`'s composable native bricks: each brick,
 its signature, its parameters, what it declares or adds, and its constraints. It is the
 detailed complement of the [models page](../models/index.md) (which presents the three ways
 to write a model) and of the [Python API](python-api.md) (curated autodoc) ; here the detail at
@@ -10,7 +10,7 @@ A native model is a composition of four role bricks via
 `pops.Model(state=, transport=, source=, elliptic=)` : the cell-by-cell math stays compiled
 C++ (no numpy loop on the hot path, GPU/MPI preserved), Python only assembles
 objects. The core stays agnostic to the scenario : no physical name (diocotron,
-Euler-Poisson, two-fluid) lives in `adc` ; the named compositions live in
+Euler-Poisson, two-fluid) lives in `pops` ; the named compositions live in
 [`adc_cases`](https://github.com/wolf75222/adc_cases). `pops.Model(...)` validates the
 state <-> transport coherence and reports the parameters into a `ModelSpec` (tags read on the C++ side by the
 model factory) ; an incoherent pairing raises an immediate `ValueError`. The builtin tags
@@ -418,7 +418,7 @@ conservation. In multi-blocks the block name indexes `set_density(name)` / `mass
 
 ```{note}
 `patch_boxes()` / `patch_rectangles()` expose the geometry of the fine patches (recent
-addition). If the `adc` module built on your branch is earlier than this addition, these methods
+addition). If the `pops` module built on your branch is earlier than this addition, these methods
 may not exist yet ; they are listed here for the complete reference of the API.
 ```
 

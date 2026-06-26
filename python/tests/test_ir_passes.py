@@ -23,7 +23,7 @@ The contract this test pins:
   - the ``_ir_hash`` genuinely changes (the IR changed) yet the committed outputs are unchanged.
 
 Pure Python: no compilation, no .so. ``model=None`` still lowers FE / SSPRK, so the parity checks run
-on real emitted C++ without a model. Run with python3 (PYTHONPATH = built adc package).
+on real emitted C++ without a model. Run with python3 (PYTHONPATH = built pops package).
 """
 import pytest
 

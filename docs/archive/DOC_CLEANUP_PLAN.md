@@ -57,7 +57,7 @@ The README is 373 lines and contains:
 - (h) Section "Using the core" (lines 215-228): CMake snippet + PhysicalModel contract. To
   keep in brief (it is the hook), but the detailed description (module table) is
   in ARCHITECTURE.md.
-- (i) Section "Python module adc" (lines 230-302): very long. The essentials (add_block,
+- (i) Section "Python module pops" (lines 230-302): very long. The essentials (add_block,
   add_equation, AmrSystem example) stay in the README; the detail of each adder and the
   advanced/legacy paths go in DSL_MODEL_DESIGN.md.
 - (j) Section "Ecosystem" (lines 304-312): KEEP here (this is navigation).
@@ -227,7 +227,7 @@ lines (vs 373 today), i.e. a reduction of 60-65%.
 5. Multi-species section: SHORTENED to 5-6 lines + link to ARCHITECTURE.md section 5.
 6. Backends section: SHORTENED to CMake snippet (4 lines) + link to ARCHITECTURE.md section 9.
 7. "Using the core": FetchContent snippet (6 lines). KEEP.
-8. "Python module adc": SHORTENED to the minimal example add_block/set_poisson/step_cfl (12 lines)
+8. "Python module pops": SHORTENED to the minimal example add_block/set_poisson/step_cfl (12 lines)
    + brief description of AmrSystem + link to DSL_MODEL_DESIGN.md and ARCHITECTURE.md.
 9. "Ecosystem": KEEP (navigation, 6-line table).
 10. "Build and tests": KEEP (snippet + CMake options table, ~15 lines).
@@ -254,7 +254,7 @@ lines (vs 373 today), i.e. a reduction of 60-65%.
 5. Systemes multi-especes         (6 lignes + lien ARCHITECTURE)
 6. Backends CMake                 (6 lignes + lien ARCHITECTURE)
 7. Utiliser le coeur (FetchContent) (8 lignes)
-8. Module Python adc (exemple)    (15 lignes, lien DSL_MODEL_DESIGN)
+8. Module Python pops (exemple)    (15 lignes, lien DSL_MODEL_DESIGN)
 9. Ecosysteme                     (10 lignes)
 10. Build et tests                (15 lignes)
 11. Organisation du depot         (8 lignes, lien ARCHITECTURE section 13)

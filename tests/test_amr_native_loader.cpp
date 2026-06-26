@@ -14,7 +14,7 @@
 // Le modele est un transport pur (CompositeModel<Euler, NoSource, BackgroundDensity{alpha=0}>) : la
 // brique elliptique vaut 0, donc le solve MG donne phi=0 des deux cotes (zero bruit FP), parite stricte.
 //
-// CMake injecte POPS_TEST_CXX (compilateur), POPS_TEST_INCLUDE (dossier des en-tetes adc) et
+// CMake injecte POPS_TEST_CXX (compilateur), POPS_TEST_INCLUDE (dossier des en-tetes pops) et
 // POPS_TEST_CXX_STD (norme C++ du build, pour que la cle d'ABI du loader concorde avec celle du test).
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
@@ -49,7 +49,7 @@ std::vector<double> bubble(int n) {  // bulle de densite lisse, periodique
 
 // Source du loader AMR : MEME forme que dsl.emit_cpp_native_loader(target="amr_system"). Le modele est
 // ecrit en dur (CompositeModel<Euler, NoSource, BackgroundDensity>) pour un test autonome. @p fake_sig
-// remplace -DADC_HEADER_SIG par une valeur bidon (cle d'ABI fausse) quand vrai.
+// remplace -DPOPS_HEADER_SIG par une valeur bidon (cle d'ABI fausse) quand vrai.
 std::string loader_source() {
   // Generated C++ source raw string: clang-format would reindent (or, with the
   // interleaved R"CPP( delimiters, runaway-indent) the inner content. Fence it to keep the
@@ -80,7 +80,7 @@ extern "C" void pops_install_native_amr(void* sys, const char* name, const char*
   // clang-format on
 }
 
-// Compile le loader en .so (g++/c++ a l'execution). @p extra : flags supplementaires (-DADC_HEADER_SIG
+// Compile le loader en .so (g++/c++ a l'execution). @p extra : flags supplementaires (-DPOPS_HEADER_SIG
 // bidon pour le test de rejet d'ABI). Renvoie true si la compilation reussit.
 bool compile_loader(const std::string& src_path, const std::string& so_path,
                     const std::string& extra) {
@@ -118,7 +118,7 @@ AmrSystemConfig make_cfg(int n) {
 int main(int argc, char** argv) {
 #if defined(POPS_HAS_KOKKOS)
   // Backend Kokkos : le loader serait recompile a l'execution par un g++ NU (sans les flags/headers
-  // Kokkos ni -DADC_HAS_KOKKOS) -> ABI incompatible avec ce module Kokkos (kernels for_each device),
+  // Kokkos ni -DPOPS_HAS_KOKKOS) -> ABI incompatible avec ce module Kokkos (kernels for_each device),
   // donc on SAUTE. La parite CPU complete est couverte par le job Release (backend hote, sans Kokkos)
   // et par le test Python test_dsl_production_amr (qui compile le loader via le DSL). exit 0.
   (void)argc;
@@ -201,7 +201,7 @@ int main(int argc, char** argv) {
   // (C) GARDE-FOU ABI : un loader a cle pops_native_abi_key falsifiee est REJETE par add_native_block.
   const std::string so_bad = tmp + "_bad.so";
   const bool built_bad =
-      compile_loader(src, so_bad, "-DADC_HEADER_SIG=\\\"deadbeef_fausse_signature\\\"");
+      compile_loader(src, so_bad, "-DPOPS_HEADER_SIG=\\\"deadbeef_fausse_signature\\\"");
   if (built_bad) {
     AmrSystem C(make_cfg(n));
     bool raised = false;

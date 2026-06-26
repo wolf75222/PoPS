@@ -81,12 +81,12 @@ def check_default_flags():
 
 def check_env_override_honored():
     """$POPS_DSL_OPTFLAGS must be honored by compile_aot (same variable as the native path)."""
-    cmd = _capture_compile_aot_cmd("-O2 -DADC_TEST_FLAG")
+    cmd = _capture_compile_aot_cmd("-O2 -DPOPS_TEST_FLAG")
     assert "-O2" in cmd, "POPS_DSL_OPTFLAGS=-O2 ... not honored (got %r)" % (cmd,)
-    assert "-DADC_TEST_FLAG" in cmd, "POPS_DSL_OPTFLAGS tracer define not forwarded (got %r)" % (cmd,)
+    assert "-DPOPS_TEST_FLAG" in cmd, "POPS_DSL_OPTFLAGS tracer define not forwarded (got %r)" % (cmd,)
     assert "-O3" not in cmd and "-DNDEBUG" not in cmd, \
         "the default -O3 -DNDEBUG leaks despite the override (got %r)" % (cmd,)
-    print("OK  compile_aot honors $POPS_DSL_OPTFLAGS (-O2 -DADC_TEST_FLAG, tracer define forwarded)")
+    print("OK  compile_aot honors $POPS_DSL_OPTFLAGS (-O2 -DPOPS_TEST_FLAG, tracer define forwarded)")
 
 
 def _old_cache_path(model_hash, abi_key, backend, target, name):
@@ -147,7 +147,7 @@ def check_numeric_parity():
     cleanly if the local env does not allow it. Auto-skip too without compiler / Kokkos."""
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE) or dsl._native_kokkos_root() is None:
-        print("skip  numeric parity (compiler, adc headers or Kokkos absent)")
+        print("skip  numeric parity (compiler, pops headers or Kokkos absent)")
         return
     n = 32
     tmp = tempfile.mkdtemp()

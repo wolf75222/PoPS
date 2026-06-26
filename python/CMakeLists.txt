@@ -3,7 +3,7 @@
 # Spatial/Explicit/IMEX/System + pops.integrate). Avec PYTHONPATH = <build>/python,
 # `import pops` charge le paquet, qui importe l'extension _pops.
 #
-#   cmake -B build-py -DADC_BUILD_PYTHON=ON && cmake --build build-py --target _pops
+#   cmake -B build-py -DPOPS_BUILD_PYTHON=ON && cmake --build build-py --target _pops
 #   PYTHONPATH=build-py/python python3 -c "import pops; print(pops.System)"
 
 # LTO du module _pops. OFF par defaut : le LTO (re)optimise au LINK et rallongerait fortement le build
@@ -25,7 +25,7 @@ else()
   pybind11_add_module(_pops NO_EXTRAS bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_system.cpp bindings/core/init/init_amr.cpp bindings/system/base/system.cpp bindings/system/base/system_exb.cpp bindings/system/isothermal/system_isothermal_rusanov.cpp bindings/system/isothermal/system_isothermal_hll.cpp bindings/system/compressible/system_compressible_rusanov.cpp bindings/system/compressible/system_compressible_hll.cpp bindings/system/compressible/system_compressible_hllc.cpp bindings/system/compressible/system_compressible_roe.cpp bindings/system/base/system_polar.cpp bindings/amr/amr_system.cpp bindings/amr/block/base/amr_block_exb.cpp bindings/amr/block/base/amr_block_isothermal.cpp bindings/amr/block/compressible/amr_block_compressible.cpp bindings/amr/block/compressible/amr_block_compressible_rusanov.cpp bindings/amr/block/compressible/amr_block_compressible_hll.cpp bindings/amr/block/compressible/amr_block_compressible_hllc.cpp bindings/amr/block/compressible/amr_block_compressible_roe.cpp bindings/amr/compiled/base/amr_compiled_exb.cpp bindings/amr/compiled/base/amr_compiled_isothermal.cpp bindings/amr/compiled/compressible/amr_compiled_compressible.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_rusanov.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_hll.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_hllc.cpp bindings/amr/compiled/compressible/amr_compiled_compressible_roe.cpp)
   set_target_properties(_pops PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 endif()
-target_link_libraries(_pops PRIVATE pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : add_dynamic_block (dlopen) ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/AdcDevTooling.cmake)
+target_link_libraries(_pops PRIVATE pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : add_dynamic_block (dlopen) ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
 target_compile_features(_pops PRIVATE cxx_std_${POPS_CXX_STD})
 
 # RAM CI : sous Kokkos, cc1plus a -O3 sur les TU geantes du module (system.cpp / bindings/amr/amr_system.cpp =
@@ -63,22 +63,22 @@ target_compile_definitions(_pops PRIVATE POPS_VERSION="${PROJECT_VERSION}")
 target_compile_definitions(_pops PRIVATE POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 
 # ADC-319 : dossier(s) d'include MPI du build, bake dans le module (expose en pops._pops.__mpi_include__).
-# Le module herite deja -DADC_HAS_MPI via l'INTERFACE pops (cible MPI::MPI_CXX, racine), mais le DSL
-# backend "production"/"aot" compile ses loaders HORS CMake et n'en herite rien : sans -DADC_HAS_MPI +
+# Le module herite deja -DPOPS_HAS_MPI via l'INTERFACE pops (cible MPI::MPI_CXX, racine), mais le DSL
+# backend "production"/"aot" compile ses loaders HORS CMake et n'en herite rien : sans -DPOPS_HAS_MPI +
 # l'include MPI, comm.hpp y retombe sur ses stubs serie (n_ranks()=1, my_rank()=0) et toute disposition
 # distribuee construite DANS le loader (p.ex. AmrSystem(distribute_coarse=True)) se replique sur chaque
 # rang (pas de strong-scaling). dsl.py (_native_mpi_flags) lit cet attribut pour recompiler le loader
 # avec le MEME MPI que le module. Sans MPI (build serie) : attribut absent -> loader serie inchange.
 if(TARGET MPI::MPI_CXX)
-  get_target_property(_adc_mpi_inc MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
-  if(_adc_mpi_inc)
-    string(REPLACE ";" "|" _adc_mpi_inc "${_adc_mpi_inc}")
-    target_compile_definitions(_pops PRIVATE POPS_MPI_INCLUDE="${_adc_mpi_inc}")
+  get_target_property(_pops_mpi_inc MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
+  if(_pops_mpi_inc)
+    string(REPLACE ";" "|" _pops_mpi_inc "${_pops_mpi_inc}")
+    target_compile_definitions(_pops PRIVATE POPS_MPI_INCLUDE="${_pops_mpi_inc}")
   endif()
 endif()
 
 # Signature de l'arbre d'en-tetes du coeur, BAKED dans la cle d'ABI du module (pops/runtime/abi_key.hpp
-# via -DADC_HEADER_SIG). Le backend DSL "production" (dsl.compile_native) recalcule la MEME signature
+# via -DPOPS_HEADER_SIG). Le backend DSL "production" (dsl.compile_native) recalcule la MEME signature
 # (pops.dsl.pops_header_signature) et la bake dans le loader .so : les cles concordent quand les en-tetes
 # concordent, divergent sinon -> add_native_block leve une erreur explicite (pas d'UB silencieux).
 # CALCUL (miroir bit-pour-bit de pops_header_signature) : sha256 du concatene TRIE, pour chaque .hpp/.h
@@ -88,18 +88,18 @@ endif()
 # une signature perimee -> compile_native rejetterait les loaders (erreur EXPLICITE, jamais d'UB). Le
 # flux standard `cmake -S . -B build-py ... && cmake --build` reconfigure et recalcule : c'est le mode
 # nominal. Apres une edition d'en-tete sans reconfigure, relancer la configuration (re-`cmake -S`).
-set(_adc_include "${CMAKE_CURRENT_SOURCE_DIR}/../include")
-file(GLOB_RECURSE _adc_headers CONFIGURE_DEPENDS RELATIVE "${_adc_include}"
-     "${_adc_include}/*.hpp" "${_adc_include}/*.h")
-list(SORT _adc_headers)
-set(_adc_hdr_blob "")
-foreach(_h ${_adc_headers})
-  file(SHA256 "${_adc_include}/${_h}" _h_digest)
-  string(APPEND _adc_hdr_blob "${_h}\n${_h_digest}\n")
+set(_pops_include "${CMAKE_CURRENT_SOURCE_DIR}/../include")
+file(GLOB_RECURSE _pops_headers CONFIGURE_DEPENDS RELATIVE "${_pops_include}"
+     "${_pops_include}/*.hpp" "${_pops_include}/*.h")
+list(SORT _pops_headers)
+set(_pops_hdr_blob "")
+foreach(_h ${_pops_headers})
+  file(SHA256 "${_pops_include}/${_h}" _h_digest)
+  string(APPEND _pops_hdr_blob "${_h}\n${_h_digest}\n")
 endforeach()
-string(SHA256 _adc_header_sig "${_adc_hdr_blob}")
-target_compile_definitions(_pops PRIVATE POPS_HEADER_SIG="${_adc_header_sig}")
-message(STATUS "pops Python module: signature en-tetes POPS_HEADER_SIG=${_adc_header_sig}")
+string(SHA256 _pops_header_sig "${_pops_hdr_blob}")
+target_compile_definitions(_pops PRIVATE POPS_HEADER_SIG="${_pops_header_sig}")
+message(STATUS "pops Python module: signature en-tetes POPS_HEADER_SIG=${_pops_header_sig}")
 
 # L'extension va dans le paquet pops/ ; on y copie aussi les sources Python du paquet.
 set(POPS_PY_PKG ${CMAKE_CURRENT_BINARY_DIR}/pops)
@@ -116,8 +116,8 @@ endif()
 # GLOB_RECURSE + CONFIGURE_DEPENDS so new modules / sub-packages are picked up automatically (a flat
 # explicit list silently dropped a new module from the build tree -- "partially initialized module"
 # import errors that the source tree did not show). configure_file creates the destination sub-dirs.
-file(GLOB_RECURSE _adc_py_sources CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} pops/*.py)
-foreach(pyf ${_adc_py_sources})
+file(GLOB_RECURSE _pops_py_sources CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} pops/*.py)
+foreach(pyf ${_pops_py_sources})
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${pyf} ${CMAKE_CURRENT_BINARY_DIR}/${pyf} COPYONLY)
 endforeach()
 
@@ -138,13 +138,13 @@ endforeach()
 # de l'install Kokkos resolu par find_package (cible Kokkos::kokkos) pour que `ctest` soit AUTONOME.
 # Reste vide pour un Kokkos FetchContent (pas d'install <root>/include) : on retombe alors sur
 # PYTHONPATH seul et l'env du dev/CI tranche, comportement historique inchange.
-set(_adc_py_test_env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
+set(_pops_py_test_env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}")
 if(POPS_HAS_KOKKOS AND TARGET Kokkos::kokkos)
-  get_target_property(_adc_kokkos_incs Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
-  foreach(_inc IN LISTS _adc_kokkos_incs)
+  get_target_property(_pops_kokkos_incs Kokkos::kokkos INTERFACE_INCLUDE_DIRECTORIES)
+  foreach(_inc IN LISTS _pops_kokkos_incs)
     if(EXISTS "${_inc}/Kokkos_Core.hpp")
-      get_filename_component(_adc_kokkos_root "${_inc}/.." ABSOLUTE)
-      list(APPEND _adc_py_test_env "POPS_KOKKOS_ROOT=${_adc_kokkos_root}")
+      get_filename_component(_pops_kokkos_root "${_inc}/.." ABSOLUTE)
+      list(APPEND _pops_py_test_env "POPS_KOKKOS_ROOT=${_pops_kokkos_root}")
       break()
     endif()
   endforeach()
@@ -153,7 +153,7 @@ endif()
 add_test(NAME test_bindings
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_bindings.py)
 set_tests_properties(test_bindings PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Methode temporelle explicite "euler" (ForwardEuler, ADC-174) : identite de Shu-Osher
 # bit-exacte (ssprk2 == 0.5 U0 + 0.5 euler(euler(.))), no-default-change, rejet AMR.
@@ -182,7 +182,7 @@ set_tests_properties(test_poisson_fft_spectral PROPERTIES
 add_test(NAME test_dsl
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl.py)
 set_tests_properties(test_dsl PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Generateur generique de modeles de moments 2D (pops.moments) : l'algebre M->C->S->C'->M'
 # est derivee en boucles sur l'AST, seule la fermeture est fournie (ADC-164). Oracle
@@ -209,7 +209,7 @@ set_tests_properties(test_dsl_named_sources PROPERTIES
 add_test(NAME test_operator_registry
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_registry.py)
 set_tests_properties(test_operator_registry PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # P.call type + m.rate_operator (ADC-438, spec 2 operator-first) : P.call resout un operateur du
 # registre type, verifie les arguments contre sa Signature, puis abaisse vers le raccourci PDE
@@ -218,7 +218,7 @@ set_tests_properties(test_operator_registry PROPERTIES
 add_test(NAME test_operator_call
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_call.py)
 set_tests_properties(test_operator_call PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # pops.model.Module API + dsl.Model facade (ADC-439, spec 2 operator-first) : Module (espaces types +
 # registre d'operateurs), sucre de signature >>, operateurs builder/decorateur, parametres/aux, et
@@ -226,7 +226,7 @@ set_tests_properties(test_operator_call PROPERTIES
 add_test(NAME test_operator_module
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_module.py)
 set_tests_properties(test_operator_module PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Macros standard operator-first (ADC-440, spec 2) : predictor_corrector_local_linear / explicit_rk /
 # imex_local_linear prennent des NOMS d'operateurs types (pas de termes physiques) et les composent
@@ -234,7 +234,7 @@ set_tests_properties(test_operator_module PROPERTIES
 add_test(NAME test_operator_macros
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_macros.py)
 set_tests_properties(test_operator_macros PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Introspection des operateurs compiles (ADC-441, spec 2) : list_operators / operator_signature /
 # operator_requirements / operator_capabilities / list_state_spaces / list_field_spaces sur Module,
@@ -242,7 +242,7 @@ set_tests_properties(test_operator_macros PROPERTIES
 add_test(NAME test_operator_introspection
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_introspection.py)
 set_tests_properties(test_operator_introspection PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Hash de ModuleSpec (ADC-443, spec 2) : Module.module_hash couvre espaces + operateurs (nom, kind,
 # signature, capabilities, requirements, identite du corps) ; deterministe, invalide a tout changement
@@ -250,7 +250,7 @@ set_tests_properties(test_operator_introspection PROPERTIES
 add_test(NAME test_module_hash
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_module_hash.py)
 set_tests_properties(test_module_hash PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Bloc GeneratedModule emis dans la .so (ADC-442, spec 2) : les accesseurs extern "C" pops_module_*
 # (registre type par OperatorId) coexistent avec pops_install_program et N'APPARAISSENT PAS dans le
@@ -258,7 +258,7 @@ set_tests_properties(test_module_hash PROPERTIES
 add_test(NAME test_module_codegen
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_module_codegen.py)
 set_tests_properties(test_module_codegen PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Diagnostics de validation operator-first (ADC-448, spec 2) : un etat tague d'un StateSpace ne peut
 # pas alimenter un operateur type pour un autre, un Rate(U) ne se combine pas avec un State(V), et un
@@ -266,7 +266,7 @@ set_tests_properties(test_module_codegen PROPERTIES
 add_test(NAME test_operator_validation
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_operator_validation.py)
 set_tests_properties(test_operator_validation PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Module pur compilable (ADC-447, spec 2) : un pops.model.Module (espaces + operateurs a corps IR +
 # eigenvalues) s'abaisse en dsl.Model (Module.to_dsl) et compile_problem(model=module) l'accepte ;
@@ -274,7 +274,7 @@ set_tests_properties(test_operator_validation PROPERTIES
 add_test(NAME test_module_compile
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_module_compile.py)
 set_tests_properties(test_module_compile PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Validation des prerequis a l'installation (ADC-446, spec 2 critere 24) : le problem.so porte, par
 # operateur, les champs aux que son corps lit ; System.install_program rejette AVANT installation une
@@ -282,7 +282,7 @@ set_tests_properties(test_module_compile PROPERTIES
 add_test(NAME test_install_requirement_validation
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_install_requirement_validation.py)
 set_tests_properties(test_install_requirement_validation PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Unified install (ADC-466, spec 3 sections 22 + 24) : sim.install(compiled, instances=, params=,
 # aux=, solvers=) cable + installe en UN appel (lowering vers add_equation / set_poisson /
@@ -292,7 +292,7 @@ set_tests_properties(test_install_requirement_validation PROPERTIES
 add_test(NAME test_unified_install
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_unified_install.py)
 set_tests_properties(test_unified_install PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # pops.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
@@ -485,7 +485,7 @@ set_tests_properties(test_time_rhs_flux_false PROPERTIES
 add_test(NAME test_time_local_newton
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_local_newton.py)
 set_tests_properties(test_time_local_newton PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Control flow + reductions codegen (ADC-404a) : emit_cpp_program LOWERS a convergence loop --
 # P.norm2 / P.dot (-> pops::dot collective all_reduce), scalar comparisons (-> a Bool predicate), and
@@ -498,7 +498,7 @@ set_tests_properties(test_time_local_newton PROPERTIES
 add_test(NAME test_time_control_flow
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_control_flow.py)
 set_tests_properties(test_time_control_flow PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Structured for-loops + if + norm_inf codegen (ADC-404b) : emit_cpp_program LOWERS P.static_range
 # (compile-time UNROLL -- N body copies, no C++ loop), P.range (a C++ for over a fixed count, body
@@ -509,7 +509,7 @@ set_tests_properties(test_time_control_flow PROPERTIES
 add_test(NAME test_time_control_flow_b
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_control_flow_b.py)
 set_tests_properties(test_time_control_flow_b PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Per-cell conditional select (spec section 17, ADC-418) : emit_cpp_program LOWERS P.where(mask, a, b)
 # to a for_each_cell select kernel -- out(i,j,c) = mask ? a(i,j,c) : b(i,j,c) COMPONENT-WISE (a ternary
@@ -521,7 +521,7 @@ set_tests_properties(test_time_control_flow_b PROPERTIES
 add_test(NAME test_time_where
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_where.py)
 set_tests_properties(test_time_where PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Matrix-free DYNAMIC linear solve (ADC-405 Phase 6b) : emit_cpp_program LOWERS a matrix_free_operator
 # (apply out = in - alpha*Lap(in), built from P.laplacian + the affine algebra -> an pops::ApplyFn
@@ -534,7 +534,7 @@ set_tests_properties(test_time_where PROPERTIES
 add_test(NAME test_time_solve_linear
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_solve_linear.py)
 set_tests_properties(test_time_solve_linear PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # GMRES Krylov solver (ADC-420): P.solve_linear(method="gmres") -> pops::gmres_solve (restarted
 # GMRES(m), matrix-free, Givens). Section A pins the lowering; Section B checks gmres on the SPD
@@ -542,7 +542,7 @@ set_tests_properties(test_time_solve_linear PROPERTIES
 add_test(NAME test_time_gmres
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_gmres.py)
 set_tests_properties(test_time_gmres PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Centered divergence primitive + a div(grad) Helmholtz matrix-free solve (ADC-412, acceptance 32).
 # P.divergence(out, fx, fy) lowers to ctx.divergence (pops::apply_divergence); since div(grad) == Lap, a
@@ -556,7 +556,7 @@ set_tests_properties(test_time_gmres PROPERTIES
 add_test(NAME test_time_divergence
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_divergence.py)
 set_tests_properties(test_time_divergence PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Multi-component (vector / state-valued) matrix-free solve (ADC-416): P.matrix_free_operator now takes
 # domain/range_ in {scalar,vector,state} + an ncomp, and P.solve_linear / the codegen allocate the
@@ -570,7 +570,7 @@ set_tests_properties(test_time_divergence PROPERTIES
 add_test(NAME test_time_multicomp_solve
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_multicomp_solve.py)
 set_tests_properties(test_time_multicomp_solve PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Condensed-Schur implicit source stage as a compiled Program (ADC-421, acceptance 32). The anisotropic
 # position-dependent operator-coefficient assembly (P.schur_coeffs -> ctx.assemble_schur_coeffs, the
@@ -586,7 +586,7 @@ set_tests_properties(test_time_multicomp_solve PROPERTIES
 add_test(NAME test_time_condensed_schur
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_condensed_schur.py)
 set_tests_properties(test_time_condensed_schur PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Multistep histories + Adams-Bashforth 2 (ADC-406a) : emit_cpp_program lowers P.history /
 # P.store_history (a SYSTEM-OWNED ring buffer, not a closure capture) and pops.time.std.adams_bashforth2.
@@ -598,7 +598,7 @@ set_tests_properties(test_time_condensed_schur PROPERTIES
 add_test(NAME test_time_history
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_history.py)
 set_tests_properties(test_time_history PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Checkpoint/restart of compiled-Program histories + the program-hash-mismatch guard (ADC-406b, spec
 # Phase 7 + tests 39/45/46). Section (A) is pure Python: the NPZ facade writes / reads the program_hash
@@ -609,7 +609,7 @@ set_tests_properties(test_time_history PROPERTIES
 add_test(NAME test_time_history_checkpoint
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_history_checkpoint.py)
 set_tests_properties(test_time_history_checkpoint PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Scheduler value-cache checkpoint/restart (ADC-458, Spec 3 section 30). Section (A) is pure Python:
 # the NPZ facade cache key scheme (cache_nodes / cache_names / cache_ncomp_<id> / cache_last_update_<id>
@@ -620,7 +620,7 @@ set_tests_properties(test_time_history_checkpoint PROPERTIES
 add_test(NAME test_scheduler_cache_checkpoint
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_scheduler_cache_checkpoint.py)
 set_tests_properties(test_scheduler_cache_checkpoint PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Compiled-Program macro-step cadence: substeps + stride (ADC-411). Section (A) is pure Python: the
 # CompiledTime(substeps=, stride=) guards are GONE (the values are stored; negative/zero raise). Section
@@ -632,7 +632,7 @@ set_tests_properties(test_scheduler_cache_checkpoint PROPERTIES
 add_test(NAME test_time_substeps_stride
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_substeps_stride.py)
 set_tests_properties(test_time_substeps_stride PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # step_cfl routes through an installed compiled program (ADC-413, epic ADC-399 criterion 7 / spec 19).
 # step_cfl conserves the existing CFL logic (the per-block CFL dt is still computed in adc_cpp on the
@@ -645,7 +645,7 @@ set_tests_properties(test_time_substeps_stride PROPERTIES
 add_test(NAME test_time_step_cfl
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_step_cfl.py)
 set_tests_properties(test_time_step_cfl PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Optional per-Program dt bound (ADC-417, epic ADC-399 spec section 18). A compiled Program may export a
 # dt bound (@P.dt_bound / P.set_dt_bound); step_cfl then uses min(native CFL dt, program dt bound) -- a
@@ -656,7 +656,7 @@ set_tests_properties(test_time_step_cfl PROPERTIES
 add_test(NAME test_time_dt_bound
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_dt_bound.py)
 set_tests_properties(test_time_dt_bound PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Program op-set completeness (ADC-414, spec ops 10/16/21/22/23 + validation #18/#19):
 # solve_local_nonlinear is a clean NotImplementedError stub (Newton deferred); the reductions
@@ -669,7 +669,7 @@ set_tests_properties(test_time_dt_bound PROPERTIES
 add_test(NAME test_time_ops_polish
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_ops_polish.py)
 set_tests_properties(test_time_ops_polish PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Named-source RHS codegen (ADC-403) : emit_cpp_program LOWERS a rhs(sources=[name,...]) with NAMED
 # sources -- ctx.rhs_into (-div F + default source) + the same per-cell m.source_term kernel as the
@@ -681,7 +681,7 @@ set_tests_properties(test_time_ops_polish PROPERTIES
 add_test(NAME test_predictor_corrector
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_predictor_corrector.py)
 set_tests_properties(test_predictor_corrector PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Named fluxes (m.flux_term) + named elliptic fields (m.elliptic_field), ADC-419. (A) pure-Python
 # validation / hash / codegen: rhs(fluxes=['default']) lowers byte-identically to the default rhs, a
@@ -692,7 +692,7 @@ set_tests_properties(test_predictor_corrector PROPERTIES
 add_test(NAME test_time_named_flux_elliptic
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_named_flux_elliptic.py)
 set_tests_properties(test_time_named_flux_elliptic PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Per-stage elliptic field solve (ADC-409, solve_fields_from_state): each P.solve_fields(state) op now
 # lowers to ctx.solve_fields_from_state(0, stage state), so a field-coupled multi-stage scheme re-solves
@@ -704,7 +704,7 @@ add_test(NAME test_time_solve_fields_from_state
          COMMAND ${Python_EXECUTABLE}
                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_solve_fields_from_state.py)
 set_tests_properties(test_time_solve_fields_from_state PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Roe generique des systemes de moments (ADC-368, m.roe_from_jacobian) : cablage/codegen sans
 # compilateur, puis (AOT + System riemann='roe') 10 pas finis + masse conservee, et rejet de
@@ -718,7 +718,7 @@ set_tests_properties(test_dsl_roe_from_jacobian PROPERTIES
 add_test(NAME test_dsl_codegen
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_codegen.py)
 set_tests_properties(test_dsl_codegen PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Emballage en brique compilee : compile la brique generee contre les en-tetes pops, verifie le
 # concept HyperbolicModel et l'egalite avec pops::Euler (4 var, sans aux) et pops::ExBVelocity
@@ -726,70 +726,70 @@ set_tests_properties(test_dsl_codegen PROPERTIES
 add_test(NAME test_dsl_brick
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_brick.py)
 set_tests_properties(test_dsl_brick PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Codegen de la SOURCE : la brique de source generee == pops::PotentialForce ecrite a la main.
 add_test(NAME test_dsl_source
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_source.py)
 set_tests_properties(test_dsl_source PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Composition : CompositeModel<EulerGen, NoSource, ChargeDensity> satisfait PhysicalModel et egale
 # la version ecrite a la main.
 add_test(NAME test_dsl_compose
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_compose.py)
 set_tests_properties(test_dsl_compose PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # JIT-lite end-to-end : formules Python -> .hpp genere -> g++ compile un driver volumes-finis ->
 # residu Rusanov identique a pops::Euler.
 add_test(NAME test_dsl_jit
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_jit.py)
 set_tests_properties(test_dsl_jit PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Codegen elliptique : la brique de second membre generee == pops::ChargeDensity.
 add_test(NAME test_dsl_elliptic
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_elliptic.py)
 set_tests_properties(test_dsl_elliptic PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # CSE : cse=True et cse=False donnent le meme resultat ; la version CSE factorise (moins de sqrt).
 add_test(NAME test_dsl_cse
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_cse.py)
 set_tests_properties(test_dsl_cse PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # JIT reel : flux genere compile en .so, charge dans le process (ctypes), == interprete numpy.
 add_test(NAME test_dsl_jitlib
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_jitlib.py)
 set_tests_properties(test_dsl_jitlib PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Dispatch type-erased a l'execution : brique generee -> .so -> dlopen -> pops::IModel<4> == pops::Euler.
 add_test(NAME test_dsl_dynamic
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_dynamic.py)
 set_tests_properties(test_dsl_dynamic PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Bloc dynamique de bout en bout : DSL -> compile_so -> System.add_dynamic_block -> eval_rhs/step.
 add_test(NAME test_dsl_block
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_block.py)
 set_tests_properties(test_dsl_block PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Bloc dynamique COUPLE : euler_poisson en formules -> .so (CompositeModel) -> add_dynamic_block ;
 # elliptic_rhs cable au Poisson (== compile) + eval_rhs == flux + source de gravite.
 add_test(NAME test_dsl_coupled
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_coupled.py)
 set_tests_properties(test_dsl_coupled PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Backend AOT : euler_poisson compile_or_jit(mode="compile") -> add_compiled_block == bloc natif.
 add_test(NAME test_dsl_aot
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_aot.py)
 set_tests_properties(test_dsl_aot PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Backend NATIF "production" : euler_poisson compile(backend="production") -> loader .so qui inline
 # add_compiled_model<ProdModel> -> add_native_block. Parite BIT-IDENTIQUE au bloc natif add_block
@@ -797,7 +797,7 @@ set_tests_properties(test_dsl_aot PROPERTIES
 add_test(NAME test_dsl_production
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_production.py)
 set_tests_properties(test_dsl_production PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Backend NATIF "production" cote AMR (DSL Phase D) : euler compile(backend="production",
 # target="amr_system") -> loader .so inline add_compiled_model(AmrSystem&) -> AmrSystem.add_native_block.
@@ -807,7 +807,7 @@ set_tests_properties(test_dsl_production PROPERTIES
 add_test(NAME test_dsl_production_amr
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_production_amr.py)
 set_tests_properties(test_dsl_production_amr PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # positivity_floor (Zhang-Shu, ADC-322) sur le chemin COMPILE .so cote AMR : le loader regenere
 # (pops_install_native_amr) transporte le plancher jusqu'a la meme feuille compute_face_fluxes que le
@@ -817,7 +817,7 @@ set_tests_properties(test_dsl_production_amr PROPERTIES
 add_test(NAME test_amr_compiled_positivity_floor
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_compiled_positivity_floor.py)
 set_tests_properties(test_amr_compiled_positivity_floor PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # AmrSystem::set_conservative_state (etat conservatif initial COMPLET sur AMR, mono-bloc) : demarrer
 # l'AMR depuis l'etat de derive (rho, rho*u, rho*v) au lieu de m=0. Gardes (ndim/vide/taille/multi-bloc),
@@ -826,26 +826,26 @@ set_tests_properties(test_amr_compiled_positivity_floor PROPERTIES
 add_test(NAME test_amr_conservative_state
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_conservative_state.py)
 set_tests_properties(test_amr_conservative_state PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Choix de reconstruction (ordre) du bloc dynamique : recon none/minmod/vanleer == reference MUSCL numpy.
 add_test(NAME test_dsl_recon
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_recon.py)
 set_tests_properties(test_dsl_recon PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Operateur elliptique a permittivite constante : phi(eps=2) == phi(eps=1)/2.
 add_test(NAME test_poisson_eps
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_poisson_eps.py)
 set_tests_properties(test_poisson_eps PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # WENO5-Z + SSPRK3 exposes depuis l'API : pops.Spatial(limiter="weno5") + pops.Explicit(method="ssprk3")
 # end-to-end, defaut SSPRK2 inchange (bit-identique), garde-fous sur les chemins compiles (.so).
 add_test(NAME test_weno5_ssprk3
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_weno5_ssprk3.py)
 set_tests_properties(test_weno5_ssprk3 PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # SSPRK3 sur le chemin de PRODUCTION (loader natif .so), pas seulement add_block : add_native_block
 # accepte time="ssprk3" et add_compiled_model threade le schema RK jusqu'au make_block du .so. Garde
@@ -854,7 +854,7 @@ set_tests_properties(test_weno5_ssprk3 PROPERTIES
 add_test(NAME test_ssprk3_production
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ssprk3_production.py)
 set_tests_properties(test_ssprk3_production PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # SSPRK3 (ordre 3) sur AMR avec REFLUX PAR ETAGE (ADC-64) : pops.Explicit(ssprk3=True) cable mono-bloc
 # (AmrCouplerMP) ET multi-blocs (AmrRuntime), reflux du FLUX EFFECTIF Feff = 1/6 F0 + 1/6 F1 + 2/3 F2.
@@ -864,7 +864,7 @@ set_tests_properties(test_ssprk3_production PROPERTIES
 add_test(NAME test_amr_ssprk3
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_ssprk3.py)
 set_tests_properties(test_amr_ssprk3 PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Politique de la loi de Gauss (R0, repro Hoffart) : System.set_gauss_policy "restart" (defaut,
 # re-resout Poisson chaque pas, bit-identique) vs "evolve" (apres phi^0, plus de re-solve : l'etage
@@ -873,7 +873,7 @@ set_tests_properties(test_amr_ssprk3 PROPERTIES
 add_test(NAME test_gauss_policy
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gauss_policy.py)
 set_tests_properties(test_gauss_policy PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # Flux HLL expose pour les modeles a vitesses d'onde signees SANS exiger une pression (3-var) :
 # make_block accepte riemann="hll" des que model.wave_speeds existe (requires-gate, pas n_vars==4 ni
@@ -882,7 +882,7 @@ set_tests_properties(test_gauss_policy PROPERTIES
 add_test(NAME test_hll_isothermal
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hll_isothermal.py)
 set_tests_properties(test_hll_isothermal PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # WENO5 sur les chemins .so / CompiledModel : add_compiled_block (AOT) ET add_native_block (production)
 # allouent block_n_ghost(limiter)=3 ghosts -> weno5 accepte ; parite eval_rhs/potentiel au bloc natif
@@ -891,14 +891,14 @@ set_tests_properties(test_hll_isothermal PROPERTIES
 add_test(NAME test_weno5_compiledmodel
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_weno5_compiledmodel.py)
 set_tests_properties(test_weno5_compiledmodel PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # DSL Phase A : API utilisateur stable (dsl.Model + Param + CompiledModel + add_equation +
 # FiniteVolume + run). Erreurs explicites + aot/production end-to-end (production -> add_native_block).
 add_test(NAME test_dsl_phase_a
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dsl_phase_a.py)
 set_tests_properties(test_dsl_phase_a PROPERTIES
-  ENVIRONMENT "${_adc_py_test_env}")
+  ENVIRONMENT "${_pops_py_test_env}")
 
 # --- Garde-fou : tests des chantiers aux extensible / EPM / roles, jusqu'ici lances en CI
 # (ci.yml) mais PAS enregistres en ctest -> on les rend visibles a `ctest` (et donc enforces
@@ -978,7 +978,7 @@ foreach(t
   add_test(NAME ${t}
            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}.py)
   set_tests_properties(${t} PROPERTIES
-    ENVIRONMENT "${_adc_py_test_env}")
+    ENVIRONMENT "${_pops_py_test_env}")
 endforeach()
 
 # Critere d'arret mixte rel/abs du GeometricMG expose par set_poisson(abs_tol=...) : early-exit hors

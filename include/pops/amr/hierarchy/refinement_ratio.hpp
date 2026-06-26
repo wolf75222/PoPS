@@ -34,7 +34,7 @@ inline constexpr int kAmrRefRatio = 2;
 /// @throws std::invalid_argument if @p ratio is not the supported value.
 inline void require_supported_ref_ratio(int ratio) {
   if (ratio != kAmrRefRatio) {
-    throw std::invalid_argument("adc: AMR refinement ratio " + std::to_string(ratio) +
+    throw std::invalid_argument("pops: AMR refinement ratio " + std::to_string(ratio) +
                                 " is not supported; the native AMR hierarchy only supports ratio " +
                                 std::to_string(kAmrRefRatio) +
                                 " (centralized in include/pops/amr/refinement_ratio.hpp)");

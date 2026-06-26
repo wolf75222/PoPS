@@ -1,17 +1,17 @@
 # Installation
 
 The core of `adc_cpp` is header-only: nothing to compile to consume it in C++. What gets
-built is the test suite (C++) and the Python module `adc` (pybind11), either through
+built is the test suite (C++) and the Python module `pops` (pybind11), either through
 `pip install .` or through CMake directly.
 
 ## conda environment
 
-A single command creates the `adc` env (full tooling: CMake, Ninja, ccache, Python 3.12, NumPy,
+A single command creates the `pops` env (full tooling: CMake, Ninja, ccache, Python 3.12, NumPy,
 pybind11, Kokkos, OpenMPI, libomp) **and pins the best toolchain for the platform in it**:
 
 ```bash
 bash scripts/setup_env.sh
-conda activate adc
+conda activate pops
 ```
 
 On macOS, the script sets `CC`/`CXX` to AppleClang inside the env itself (exported on each
@@ -29,7 +29,7 @@ Standard: C++20 (Kokkos, the only on-node backend, is compiled under nvcc for th
 
 ## macOS: fresh install
 
-On macOS the `adc` conda env carries Python, NumPy, Kokkos and the build tooling; the C++
+On macOS the `pops` conda env carries Python, NumPy, Kokkos and the build tooling; the C++
 compiler is the system AppleClang (`setup_env.sh` pins `CC`/`CXX` to `/usr/bin/clang` in the
 env, far faster than a Homebrew LLVM at the head of PATH).
 
@@ -56,7 +56,7 @@ conda init "$(basename "$SHELL")"        # then open a new shell
 git clone https://github.com/wolf75222/adc_cpp.git ~/adc_cpp
 cd ~/adc_cpp
 bash scripts/setup_env.sh             # CPU Kokkos; pins AppleClang in the env
-conda activate adc
+conda activate pops
 bash scripts/build_python.sh          # one-command build + install, ends on pops.doctor()
 python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 ```
@@ -73,7 +73,7 @@ environment. `bash scripts/setup_env.sh` automates steps 3-6; the manual steps a
 transparency.
 
 **1. System prerequisites** (Debian/Ubuntu). Install only git + curl; do NOT `apt install` Python or
-g++ for this workflow -- the `adc` conda env provides the interpreter AND the C++ compiler, and mixing
+g++ for this workflow -- the `pops` conda env provides the interpreter AND the C++ compiler, and mixing
 a system toolchain in is a common source of ABI surprises.
 
 ```bash
@@ -100,7 +100,7 @@ configures conda-forge to survive HTTP 429. Pass `--cuda` only if you really wan
 git clone https://github.com/wolf75222/adc_cpp.git ~/adc_cpp   # if not already cloned
 cd ~/adc_cpp
 bash scripts/setup_env.sh            # CPU; or: bash scripts/setup_env.sh --cuda
-conda activate adc
+conda activate pops
 ```
 
 **4. Build the module.**
@@ -114,13 +114,13 @@ pip install . -v
 `production`/`aot` backend finds its Kokkos and its headers. They take effect on the next activation:
 
 ```bash
-conda deactivate && conda activate adc
+conda deactivate && conda activate pops
 ```
 
 **6. Check, then first run.**
 
 ```bash
-python -c "import adc; pops.doctor()"     # expect: => healthy environment
+python -c "import pops; pops.doctor()"     # expect: => healthy environment
 python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 ```
 
@@ -139,18 +139,18 @@ the pull (its baked header signature no longer matches the tree) before you hit 
 cd ~/adc_cpp
 git pull
 
-conda activate adc
+conda activate pops
 python -m pip uninstall -y adc-cpp || true   # drop any pip-installed copy
 unset PYTHONPATH                             # so an old build tree cannot mask the install
 
 rm -rf build/cp3* build-py build-py-kokkos build-py-conda .pops_cache   # wheel + DSL caches
 
 bash scripts/setup_env.sh                     # refresh the env + toolchain pins
-conda activate adc
+conda activate pops
 bash scripts/build_python.sh                  # rebuild + reinstall, ends on pops.doctor()
 
-python -c "import adc; print(pops.__file__)"
-python -c "import adc; pops.doctor()"          # expect: => healthy environment
+python -c "import pops; print(pops.__file__)"
+python -c "import pops; pops.doctor()"          # expect: => healthy environment
 python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 ```
 
@@ -173,18 +173,18 @@ shared ccache, installs with `--no-build-isolation`, then runs `pops.doctor()`. 
 section is what that does, step by step.
 
 `pip install .` drives the CMakeLists through scikit-build-core (`pyproject.toml`) and installs the
-package into `site-packages`: `import adc` then works without `PYTHONPATH`. Backends are
+package into `site-packages`: `import pops` then works without `PYTHONPATH`. Backends are
 chosen through environment variables, mapped onto the CMake options:
 
 ```bash
-conda activate adc
+conda activate pops
 pip install . -v                               # builds the Kokkos module (Kokkos is ON, mandatory)
 Kokkos_ROOT=$CONDA_PREFIX pip install . -v     # reuse the env Kokkos (OpenMP if available)
 POPS_USE_MPI=ON pip install . -v                # MPI
 ```
 
 `POPS_USE_KOKKOS` is ON by default and mandatory: `pip install .` always builds with Kokkos. With the
-`adc` env active, `find_package(Kokkos)` finds the env Kokkos first (it is only fetched when none is
+`pops` env active, `find_package(Kokkos)` finds the env Kokkos first (it is only fetched when none is
 installed). On a host with an NVIDIA driver, conda may have resolved the **CUDA** Kokkos variant; the
 build then fails with `Could not find nvcc`. Use `bash scripts/setup_env.sh` (it forces a CPU Kokkos),
 or see the [Linux / Ubuntu fresh install](#linux-ubuntu-fresh-install) section below.
@@ -233,7 +233,7 @@ A single path is enough: the configuration copies the package sources next to th
 Equivalent without preset:
 
 ```bash
-cmake -S . -B build-py -G Ninja -DADC_BUILD_PYTHON=ON -DADC_BUILD_TESTS=OFF \
+cmake -S . -B build-py -G Ninja -DPOPS_BUILD_PYTHON=ON -DPOPS_BUILD_TESTS=OFF \
   -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE=$(which python3.12)
 cmake --build build-py --target _pops -j
 ```
@@ -282,20 +282,20 @@ The per-backend test count is kept in
 | CMake option | Default | Role |
 |---|---|---|
 | `POPS_BUILD_TESTS` | `ON` at top-level, `OFF` in a subproject | test suite (`tests/`) |
-| `POPS_BUILD_PYTHON` | `OFF` | pybind11 module `adc` |
+| `POPS_BUILD_PYTHON` | `OFF` | pybind11 module `pops` |
 | `POPS_USE_KOKKOS` | `ON` | only on-node backend, **required** (`OFF` = fatal error); FetchContent if not installed |
 | `POPS_USE_MPI` | `OFF` | distributed `comm` seam |
 | `POPS_USE_HDF5` | `OFF` | links HDF5 + defines `POPS_HAS_HDF5`; HDF5 *output* itself goes through the Python `h5py` facade (`sim.write(format="hdf5")`), not a C++ writer |
 | `POPS_BUILD_BENCH` | `OFF` | profiling harness (`bench/`) |
-| `POPS_INSTALL` | `ON` at top-level | `cmake --install` rules + `find_package(adc)` |
+| `POPS_INSTALL` | `ON` at top-level | `cmake --install` rules + `find_package(pops)` |
 | `POPS_PY_LTO` | `OFF` | ThinLTO of the module (`OFF` = fast build) |
 | `POPS_USE_CCACHE` | `ON` | ccache if present (ignored under nvcc) |
 
 Each option is also readable from the environment (`Kokkos_ROOT=... pip install .`);
-an explicit `-D` keeps priority. The backend is a property of the `adc` target: everything
+an explicit `-D` keeps priority. The backend is a property of the `pops` target: everything
 that links it inherits it, no flag in the code. adc_cpp is **Kokkos-only**: there is no longer a
 standalone OpenMP backend nor a non-Kokkos build; Serial, OpenMP and Cuda are Kokkos
-execution spaces chosen at install (or fetch) of Kokkos, not separate adc flags.
+execution spaces chosen at install (or fetch) of Kokkos, not separate pops flags.
 **Kokkos does not need to be pre-installed**: if not found, it is fetched + built
 automatically (FetchContent, release tarball verified by SHA256).
 
@@ -304,7 +304,7 @@ Serial backend only. The build passes, but does not scale with threads, check th
 `Kokkos found ... = (...)` at configure. On a host with an NVIDIA driver, conda may instead resolve
 the **CUDA** Kokkos variant (it drags in `cuda-cudart`); `pip install .` then fails with
 `Could not find nvcc`. Force a CPU Kokkos with `bash scripts/setup_env.sh` (it sets
-`CONDA_OVERRIDE_CUDA=""`) or `CONDA_OVERRIDE_CUDA="" conda env update -n adc -f environment.yml --prune`.
+`CONDA_OVERRIDE_CUDA=""`) or `CONDA_OVERRIDE_CUDA="" conda env update -n pops -f environment.yml --prune`.
 For a Kokkos Serial+OpenMP in the env (~2 min, same compiler as the project):
 
 ```bash
@@ -316,7 +316,7 @@ export POPS_KOKKOS_ROOT="$CONDA_PREFIX"
 **GPU**: `nvcc_wrapper` as the compiler, validated on ROMEO (not via conda):
 
 ```bash
-cmake -S . -B build-gpu -DADC_USE_KOKKOS=ON \
+cmake -S . -B build-gpu -DPOPS_USE_KOKKOS=ON \
       -DCMAKE_CXX_COMPILER=$KOKKOS/bin/nvcc_wrapper -DKokkos_ROOT=$KOKKOS
 ```
 
@@ -341,7 +341,7 @@ compilation and SLURM launch with thread/GPU placement. Minimal schema:
 
 ```bash
 spack load cmake ninja kokkos openmpi            # or module load <site env>
-cmake -S . -B build-kokkos -G Ninja -DADC_USE_KOKKOS=ON \
+cmake -S . -B build-kokkos -G Ninja -DPOPS_USE_KOKKOS=ON \
       -DKokkos_ROOT=$(spack location -i kokkos)
 # configure on the LOGIN node; inside the allocation, only re-run: ninja -C build-kokkos
 ```
@@ -358,7 +358,7 @@ exists on the nodes.
 First reflex, whatever the symptom:
 
 ```bash
-python -c "import adc; pops.doctor()"
+python -c "import pops; pops.doctor()"
 ```
 
 Each line checks a link (interpreter/ABI, numpy, Kokkos, DSL compiler and its standard, the Kokkos
@@ -370,14 +370,14 @@ Common fresh-install errors and their fix:
 | Error | Cause | Fix |
 |---|---|---|
 | `conda: command not found` | Miniforge not installed or not sourced | install Miniforge, or `source "$HOME/miniforge3/etc/profile.d/conda.sh"` |
-| `python: command not found` | outside the conda env | `conda activate adc` |
-| `EnvironmentNameNotFound: adc` | env not created | `bash scripts/setup_env.sh` |
+| `python: command not found` | outside the conda env | `conda activate pops` |
+| `EnvironmentNameNotFound: pops` | env not created | `bash scripts/setup_env.sh` |
 | `CondaHTTPError: HTTP 429` | conda-forge rate limiting | `setup_env.sh` sets retries + libmamba; otherwise wait and retry |
 | `Could not find nvcc` | a CUDA Kokkos was selected on a CPU host | `CONDA_OVERRIDE_CUDA="" bash scripts/setup_env.sh` (forces CPU Kokkos) |
-| `[FAIL] include` (adc headers not found) | `POPS_INCLUDE` not set | `conda env config vars set POPS_INCLUDE="$HOME/adc_cpp/include"`, then reactivate |
+| `[FAIL] include` (pops headers not found) | `POPS_INCLUDE` not set | `conda env config vars set POPS_INCLUDE="$HOME/adc_cpp/include"`, then reactivate |
 | `[FAIL] kokkos_root` / `POPS_KOKKOS_ROOT is not defined` | DSL backend has no Kokkos root | `conda env config vars set POPS_KOKKOS_ROOT="$CONDA_PREFIX"` and `Kokkos_ROOT="$CONDA_PREFIX"`, then reactivate |
-| `no DSL backend could be wired` | DSL backend compile failed | run `python -c "import adc; pops.doctor()"` and apply the fixes it names |
-| `ModuleNotFoundError: matplotlib` | tutorial plotting deps missing | `conda install -n adc -c conda-forge matplotlib pillow` |
+| `no DSL backend could be wired` | DSL backend compile failed | run `python -c "import pops; pops.doctor()"` and apply the fixes it names |
+| `ModuleNotFoundError: matplotlib` | tutorial plotting deps missing | `conda install -n pops -c conda-forge matplotlib pillow` |
 
 `setup_env.sh` already handles the first six on a fresh install; the table is the manual fallback.
 

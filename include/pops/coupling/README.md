@@ -1,4 +1,4 @@
-# `adc/coupling` -- hyperbolic/elliptic coupling headers
+# `pops/coupling` -- hyperbolic/elliptic coupling headers
 
 The coupling layer wires the finite-volume transport (`numerics/`) to the elliptic
 solve (`numerics/elliptic/`): it fills the auxiliary channel from the field, builds the
@@ -22,7 +22,7 @@ stub (ADC-326), so the move is source-compatible.
 ## Layout
 
 ```text
-adc/coupling/
+pops/coupling/
   base/            coupling_policy.hpp  aux_fill.hpp  elliptic_rhs.hpp
   source/          coupled_source.hpp  coupled_source_program.hpp
   single/          coupler.hpp

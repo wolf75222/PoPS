@@ -19,7 +19,7 @@ def _skip(msg):
     sys.exit(0)
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # noqa: BLE001 -- pops.time needs _pops; skip cleanly, never fake
@@ -62,7 +62,7 @@ def coupled_program(t, name, blocks):
 
 
 def main():
-    t = _adc_time()
+    t = _pops_time()
     print("== coupled multi-block field-solve codegen (ADC-457) ==")
 
     # (1) _check_lowerable no longer raises for solve_fields_from_blocks (3 blocks, N>2).

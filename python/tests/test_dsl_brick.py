@@ -1,8 +1,8 @@
 """Test de l'emballage en BRIQUE compilee (etape 2bis du DSL).
 
 emit_cpp_brick() produit un struct C++ cense satisfaire le concept pops::HyperbolicModel. Ce test :
-(1) genere la brique pour Euler ; (2) si un compilateur + les en-tetes adc sont presents, compile un
-programme qui inclut les vrais en-tetes adc, AFFIRME static_assert(pops::HyperbolicModel<brique>), et
+(1) genere la brique pour Euler ; (2) si un compilateur + les en-tetes pops sont presents, compile un
+programme qui inclut les vrais en-tetes pops, AFFIRME static_assert(pops::HyperbolicModel<brique>), et
 compare chaque methode (flux, max_wave_speed, to_primitive, to_conservative) a la brique ECRITE A LA
 MAIN pops::Euler sur des etats deterministes. La compilation echoue si le concept n'est pas satisfait ;
 le programme imprime l'ecart max, qu'on exige < 1e-12. Lance avec python3.
@@ -133,7 +133,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> verification sautee (%s)" % INCLUDE)
+        print("skip  compilateur ou en-tetes pops absents -> verification sautee (%s)" % INCLUDE)
         print("test_dsl_brick : OK (forme du struct seulement)")
         return
 
@@ -143,7 +143,7 @@ def main():
         exe = os.path.join(tmp, "brick")
         with open(cpp, "w") as f:
             f.write(prog)
-        # le coeur adc est propre en C++20 (concepts) ; -I include suffit (header-only).
+        # le coeur pops est propre en C++20 (concepts) ; -I include suffit (header-only).
         subprocess.run([cxx, "-std=c++20", "-O2", "-I", INCLUDE, cpp, "-o", exe], check=True)
         out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
 

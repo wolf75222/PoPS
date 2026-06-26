@@ -25,7 +25,7 @@ add_compiled_model). On verifie :
      CompiledModel target="system" est refuse par AmrSystem.add_equation (loader sans pops_install_native_amr).
   5) GARDE-FOU ABI : un loader AMR a cle pops_native_abi_key falsifiee est rejete par add_native_block.
 
-S'auto-saute (exit 0) sans compilateur C++ ou en-tetes adc (comme test_dsl_production).
+S'auto-saute (exit 0) sans compilateur C++ ou en-tetes pops (comme test_dsl_production).
 """
 import os
 import shutil
@@ -103,7 +103,7 @@ def _amr(n, L, branch, refine=1.2):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents")
+        print("skip  compilateur ou en-tetes pops absents")
         print("test_dsl_production_amr : OK (rien a compiler)")
         return
 
@@ -322,19 +322,19 @@ def main():
 
 
 def _compile_wrong_abi(model, dst_so, cxx):
-    """Compile le MEME loader natif AMR mais avec une signature d'en-tetes FAUSSE (-DADC_HEADER_SIG
+    """Compile le MEME loader natif AMR mais avec une signature d'en-tetes FAUSSE (-DPOPS_HEADER_SIG
     bidon) : le .so est valide mais sa cle d'ABI differe de celle du module -> rejet d'add_native_block.
     On regenere (pas de patch binaire : sur macOS ARM cela invaliderait la signature et tuerait le
     process). Renvoie le chemin du .so."""
     from pops.dsl import pops_loader_build_flags
     # model est une facade dsl.Model : le HyperbolicModel backing (_m) porte emit_cpp_native_loader.
     src = model._m.emit_cpp_native_loader(target="amr_system")
-    # adc_cpp est Kokkos-only : le loader inclut les en-tetes adc -> Kokkos + (macOS) -undefined
+    # adc_cpp est Kokkos-only : le loader inclut les en-tetes pops -> Kokkos + (macOS) -undefined
     # dynamic_lookup via pops_loader_build_flags. SIGNATURE D'EN-TETES FAUSSE conservee (le .so compile
     # mais doit etre REJETE a l'ABI par add_native_block).
     cc, kflags_c, kflags_l = pops_loader_build_flags(cxx)
     flags = ["-shared", "-fPIC", "-std=c++20", "-O2",
-             "-DADC_HEADER_SIG=\"deadbeef_signature_volontairement_fausse\"", *kflags_c]
+             "-DPOPS_HEADER_SIG=\"deadbeef_signature_volontairement_fausse\"", *kflags_c]
     with tempfile.TemporaryDirectory() as t:
         cpp = os.path.join(t, "wrong_amr.cpp")
         with open(cpp, "w") as f:

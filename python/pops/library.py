@@ -218,7 +218,7 @@ def _emit_and_compile(manifest, *, so_path=None, cxx=None, force=False):
         with open(cpp, "w") as f:
             f.write(src)
         flags = ["-shared", "-fPIC", "-std=" + eff_std, *optflags,
-                 "-DADC_HEADER_SIG=\"%s\"" % sig, *cflags]
+                 "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags]
         cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *lflags]
         dsl._run_compile(cmd, "compile_library (backend production)")
     return so_path
@@ -273,7 +273,7 @@ def _read_so_manifest(so_path):
     against the loaded ``_pops`` module's ABI key, and a mismatch raises a HARD :class:`RuntimeError`
     (the bricks were compiled against a different toolchain -- dlopen-ing them into a problem would
     fail with a cryptic symbol error or, worse, silent UB). A ``.so`` lacking ``pops_library_*``
-    exports is not an adc library (clear error). The static-init ``POPS_REGISTER_BRICK`` calls also
+    exports is not an pops library (clear error). The static-init ``POPS_REGISTER_BRICK`` calls also
     populate the in-process external-brick catalog as a side effect of the load.
     """
     import ctypes
@@ -285,7 +285,7 @@ def _read_so_manifest(so_path):
             fn = getattr(handle, symbol)
         except AttributeError as err:
             raise ValueError(
-                "library %r does not export %s(); it is not an adc compiled brick library "
+                "library %r does not export %s(); it is not an pops compiled brick library "
                 "(pops.compile_library(..., emit=True))" % (so_path, symbol)) from err
         fn.restype = ctypes.c_char_p
         raw = fn()

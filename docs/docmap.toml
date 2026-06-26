@@ -71,7 +71,7 @@ reviewed = "86526007676c737380d0e76c01f68c8de1fcaeb5"
 [docs."docs/sphinx/getting-started/repository-layout.md"]
 owner = "Romain"
 mode = "warning"
-depends_on = ["CMakeLists.txt", "include/adc", "python/pops"]
+depends_on = ["CMakeLists.txt", "include/pops", "python/pops"]
 tested_by = []
 testable = false
 reviewed = "d51a01e30b393075abedaa76ef82768e88df9a4b"
@@ -169,7 +169,7 @@ testable = false
 [docs."docs/sphinx/reference/cpp-api.md"]
 owner = "Romain"
 mode = "warning"
-depends_on = ["docs/Doxyfile", "include/adc"]
+depends_on = ["docs/Doxyfile", "include/pops"]
 tested_by = []
 testable = false
 reviewed = "6f84dc22b95d6f69edd347e153ae037f6dfe1401"
@@ -327,7 +327,7 @@ testable = false
 [docs."docs/ARCHITECTURE.md"]
 owner = "Romain"
 mode = "warning"
-depends_on = ["include/adc", "include/pops/runtime"]
+depends_on = ["include/pops", "include/pops/runtime"]
 tested_by = []
 testable = false
 reviewed = "6f84dc22b95d6f69edd347e153ae037f6dfe1401"

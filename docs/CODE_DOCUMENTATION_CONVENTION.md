@@ -208,7 +208,7 @@ Python API classes must say whether they are:
 - compatibility/legacy;
 - simple configuration object.
 
-For `adc` in particular, each API class must say whether it keeps the GPU/MPI path or whether it
+For `pops` in particular, each API class must say whether it keeps the GPU/MPI path or whether it
 falls back through a host/prototype path. This is a user contract, not a detail.
 
 ## 9. Application process

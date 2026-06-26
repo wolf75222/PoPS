@@ -1,6 +1,6 @@
 # First run
 
-The smallest `adc` program: we build a periodic system, we place in it a
+The smallest `pops` program: we build a periodic system, we place in it a
 diocotron block composed of native bricks, we wire in the system Poisson, we set a numpy
 initial condition, we advance a few steps and we read the density back. Copyable as is (it assumes
 only that the module is [installed](installation.md) and importable).

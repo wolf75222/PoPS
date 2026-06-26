@@ -596,7 +596,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   Forward-Euler `Program` and checks parity with the native `pops.Explicit("euler")` step.
 - **`pops.compile_problem` + `sim.install_program` + `pops.CompiledTime`: run a compiled time Program
   end to end** (ADC-401, Phase 2c-ii): `compile_problem(model=, time=)` lowers an `pops.time.Program`
-  to C++ (`emit_cpp_program`) and compiles it into a `problem.so` against the adc headers with the
+  to C++ (`emit_cpp_program`) and compiles it into a `problem.so` against the pops headers with the
   SAME Kokkos toolchain as the loaded `_pops` (reusing `pops.dsl.pops_loader_build_flags`), so the `.so`
   is ABI-compatible and loads in-process; it returns a `CompiledProblem` handle and caches the `.so`
   out-of-source keyed by [program source + header signature + compiler + std]. `sim.install_program`
@@ -776,7 +776,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   source stage without reaching into the private `_s`. Purely additive: the public call is
   bit-identical to the historical `_s.set_source_stage` path
   (`python/tests/test_set_source_stage_facade.py`).
-- **One-command Python build** (ADC-358): `scripts/build_python.sh` activates the `adc` env, sizes the
+- **One-command Python build** (ADC-358): `scripts/build_python.sh` activates the `pops` env, sizes the
   heavy-TU Ninja pool (`POPS_HEAVY_TU_POOL`) from cores capped by RAM, exports the Kokkos/CMake
   discovery vars (`Kokkos_ROOT`, `POPS_KOKKOS_ROOT`, `CMAKE_PREFIX_PATH`) and a stable cross-worktree
   ccache, runs `pip install . --no-build-isolation`, and ends on `pops.doctor()`; `--clean` drops the
@@ -911,7 +911,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   the lambda), zeroed with `set_val(0)` and reused each iteration, matching the alloc-once runtime
   Krylov scratch (`generic_krylov.hpp`). The emitted result is unchanged (bit-identical over the
   valid cells the axpy / lincomb touch); only the allocation is hoisted.
-- **`include/adc` deep re-nest, phase 5 (final): runtime split + coupling families finished**
+- **`include/pops` deep re-nest, phase 5 (final): runtime split + coupling families finished**
   (ADC-396, follow-up of ADC-395): `runtime/` keeps only the public facade at top (system,
   amr_system, facade_options, export); `detail/` splits into `config/` (runtime_params,
   dispatch_tags, model_spec), `context/` (grid_context, wall_predicate) and `dynamic/` (abi_key,
@@ -919,8 +919,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `factory/`. `coupling/static_system/` is renamed `coupling/system/`, and `coupling/schur/` splits
   into `core/`, `source/` and `amr/`. Every internal `#include <pops/...>` and the DSL emit (runtime
   config/dynamic/builders paths) are repointed. Public include-path break (pre-1.0). Completes the
-  include/adc family layout.
-- **`include/adc` deep re-nest, phase 4: numerics split into sub-families** (ADC-395, follow-up of
+  include/pops family layout.
+- **`include/pops` deep re-nest, phase 4: numerics split into sub-families** (ADC-395, follow-up of
   ADC-394): top-level numerics headers move to `linalg/` (dense_eig, lorentz_eliminator) and `fv/`
   (numerical_flux, reconstruction, spatial_discretisation); `spatial/` splits into `primitives/`
   (state_access, positivity, face_flux, wave_speed), `operators/` (cartesian_operator,
@@ -929,13 +929,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   splitting, scheduler) and `amr/` (levels, advance, reflux). The `numerics/spatial_operator.hpp`
   umbrella (ADC-328) is kept and repointed. Every internal `#include <pops/...>` and the DSL emit
   (`numerics/dense_eig.hpp`) are repointed. Public include-path break (pre-1.0).
-- **`include/adc` deep re-nest, phase 3: mesh split into sub-families** (ADC-394, follow-up of
+- **`include/pops` deep re-nest, phase 3: mesh split into sub-families** (ADC-394, follow-up of
   ADC-393): `mesh/` now groups `index/` (box2d, box_hash), `layout/` (box_array, patch_box,
   distribution_mapping, refinement), `storage/` (fab2d, multifab, mf_arith), `geometry/`
   (geometry), `boundary/` (physical_bc, halo_schedule, fill_boundary) and `execution/` (for_each).
   Every internal `#include <pops/...>` is repointed. Public include-path break (pre-1.0); the
   adc_cases two_fluid_ap mesh includes are updated in a companion PR.
-- **`include/adc` deep re-nest, phase 2: core / physics / amr split into sub-families** (ADC-393,
+- **`include/pops` deep re-nest, phase 2: core / physics / amr split into sub-families** (ADC-393,
   follow-up of ADC-392): `core/` now groups `foundation/` (types, cold, allocator, kokkos_env),
   `state/` (state, variables, aux_names) and `model/` (physical_model, equation_block,
   coupled_system); `physics/` groups `bricks/` (bricks, hyperbolic, elliptic, source),
@@ -964,7 +964,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `git blame` skips it (`git config blame.ignoreRevsFile .git-blame-ignore-revs`, wired into
   `scripts/setup_env.sh`; GitHub's blame UI honors the file automatically). The four tests carrying a
   generated-C++ raw string are fenced with `// clang-format off` to keep the emitted source verbatim.
-- **`adc/coupling` headers grouped by family** (ADC-326): the 18 flat coupling headers are moved into
+- **`pops/coupling` headers grouped by family** (ADC-326): the 18 flat coupling headers are moved into
   abstraction families (`base/`, `source/`, `single/`, `static_system/`, `amr/`, `schur/`,
   `deprecated/`) so the API surface is legible; internal cross-includes now use the canonical family
   paths and a new `include/pops/coupling/README.md` documents each family's stability tier (stable,
@@ -1264,16 +1264,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Removed
 
-- **`include/adc` forwarding shims deleted; one canonical family path per header** (ADC-392): the 54
+- **`include/pops` forwarding shims deleted; one canonical family path per header** (ADC-392): the 54
   transition stubs left at the old flat include paths by the M2 generalisation reorgs (ADC-326
   coupling, ADC-329 physics, ADC-330 runtime, ADC-332 reference/deprecated, ADC-334 elliptic) are
-  gone, so `install(DIRECTORY include/adc)` no longer ships duplicate header paths. Every internal
+  gone, so `install(DIRECTORY include/pops)` no longer ships duplicate header paths. Every internal
   `#include <pops/...>` (~290 references across include/python/tests/bench/docs) and the DSL emitted
   includes in `python/pops/dsl.py` now point at the canonical family path, e.g.
   `<pops/runtime/builders/block_builder.hpp>`, `<pops/coupling/single/coupler.hpp>`,
   `<pops/numerics/elliptic/mg/geometric_mg.hpp>`. Public include-path break, acceptable while the
   public API still moves (pre-1.0; One-Version rule: one pinned `_pops`, adc_cases regenerates its
-  bricks from the DSL). Phase 1 of the include/adc reorganization; the per-layer deep re-nest follows.
+  bricks from the DSL). Phase 1 of the include/pops reorganization; the per-layer deep re-nest follows.
 
 ### Fixed
 
@@ -1385,11 +1385,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   already keyed by backend; the three compile facades (`HyperbolicModel`, `Model`, `HybridModel`)
   share the redirect. Regression test: `test_compile_cache_backend`.
 - **DSL production/AOT loaders now compile with MPI** (ADC-319): the `backend="production"` and
-  `backend="aot"` model `.so` were compiled without `-DADC_HAS_MPI` even when `_pops` is built with
+  `backend="aot"` model `.so` were compiled without `-DPOPS_HAS_MPI` even when `_pops` is built with
   MPI, so `comm.hpp` fell back to its serial stubs (`n_ranks()=1`, `my_rank()=0`) inside the loader.
   Any distributed layout built in the loader then collapsed to a single owner on every rank: an
   `AmrSystem(distribute_coarse=True)` replicated the whole coarse transport on all ranks (no MPI
-  strong-scaling). `dsl.py` now re-bakes `-DADC_HAS_MPI` plus the module's MPI include dir (exposed as
+  strong-scaling). `dsl.py` now re-bakes `-DPOPS_HAS_MPI` plus the module's MPI include dir (exposed as
   `_pops.__has_mpi__` / `__mpi_include__`), leaving the MPI symbols undefined to resolve at load against
   the libmpi already loaded by `_pops`/mpi4py (no second libmpi linked, like the Kokkos runtime). The
   MPI seam enters the loader cache key (`mpi=on|off`). Measured on ROMEO (hyqmom15 diocotron, N=256,
@@ -1630,7 +1630,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   ADC-281/283.
 - **CI hardening**: the weekly quality jobs are bounded against cold-cache OOM (serial instrumented
   `ci-asan` / `ci-coverage` builds, `timeout-minutes` caps, and a single Ninja pool for the heavy
-  Kokkos translation units; ADC-284/290), CodeQL is scoped to the adc sources to drop 187
+  Kokkos translation units; ADC-284/290), CodeQL is scoped to the pops sources to drop 187
   vendored-Kokkos findings (ADC-285), seven orphan DSL tests are registered in ctest with a
   self-contained `POPS_KOKKOS_ROOT` (ADC-104), and a `no-ai-authors` guard rejects AI authorship or
   co-author trailers.
@@ -1643,7 +1643,7 @@ First numbered release (previously `0.0.1`, never exposed; Doxygen/Sphinx alread
 ### Added
 - `pip install .` via scikit-build-core: module in site-packages, no PYTHONPATH; backends via
   environment variables (`POPS_USE_KOKKOS=ON Kokkos_ROOT=... pip install .`).
-- `find_package(adc)`: install/export rules for the header-only core (`POPS_INSTALL`).
+- `find_package(pops)`: install/export rules for the header-only core (`POPS_INSTALL`).
 - `pops.__version__`, `pops.doctor()` (full diagnostic), `pops.set_threads()` /
   `pops.parallel_info()` / `pops.has_kokkos()`, `_pops.kokkos_is_initialized()`.
 - CMake presets (`python`, `python-parallel`, `serial`, `parallel`, `mpi` plus the `ci-*` series
@@ -1662,7 +1662,7 @@ First numbered release (previously `0.0.1`, never exposed; Doxygen/Sphinx alread
 ### Changed
 - `POPS_BUILD_TESTS` follows `PROJECT_IS_TOP_LEVEL`: a FetchContent consumer no longer builds the
   test suite.
-- `import adc` works without numpy (`pops.dsl` is lazy, with a targeted error at use).
+- `import pops` works without numpy (`pops.dsl` is lazy, with a targeted error at use).
 - DSL `.so` cache: machine-aware key (arch + optflags) and fingerprint of the Kokkos install
   (`KokkosCore_config.h`); a different Kokkos invalidates the cache.
 - Tests: ctest labels (`core`/`mpi`) plus timeouts; memory guard `-O0` plus the ninja pool

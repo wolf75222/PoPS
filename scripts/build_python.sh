@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # One command to build + install the Python module `_pops` for END USERS, applying the build knobs that
 # scripts/setup_env.sh only *recommends*. Run `bash scripts/setup_env.sh` ONCE first (it creates the
-# `adc` env and pins the per-platform toolchain); then this script, on every (re)build:
+# `pops` env and pins the per-platform toolchain); then this script, on every (re)build:
 #
-#   - activates the conda env `adc` (override: POPS_ENV_NAME), without tripping `set -u`;
+#   - activates the conda env `pops` (override: POPS_ENV_NAME), without tripping `set -u`;
 #   - sizes the heavy-TU Ninja pool (POPS_HEAVY_TU_POOL) from cores AND free RAM so the split module TUs
 #     compile in PARALLEL without OOM (each -O3 leaf peaks at several GB; the CMake default is 1, the
 #     CI out-of-memory guard). Pre-set POPS_HEAVY_TU_POOL to pin it by hand.
@@ -12,7 +12,7 @@
 #     worktree is reused instead of recompiled);
 #   - runs `pip install . --no-build-isolation` so the build reuses the env's pinned
 #     scikit-build-core / pybind11 (the SAME stack as the toolchain) instead of a fresh pip build env;
-#   - ends on `import adc; pops.doctor()`.
+#   - ends on `import pops; pops.doctor()`.
 #
 #   bash scripts/build_python.sh            # build + install into the active env
 #   bash scripts/build_python.sh --clean    # drop the scikit-build wheel cache first
@@ -24,7 +24,7 @@
 # NOT `set -u`: `conda activate` references unset variables in its own shell hook.
 set -eo pipefail
 
-ENV_NAME="${POPS_ENV_NAME:-adc}"
+ENV_NAME="${POPS_ENV_NAME:-pops}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- arguments --------------------------------------------------------------------------------------
@@ -124,5 +124,5 @@ python -m pip "${pip_args[@]}" "${EXTRA_PIP[@]}"
 
 # --- diagnose ---------------------------------------------------------------------------------------
 echo ""
-echo "--- import adc; pops.doctor() ---"
-python -c "import adc; print('adc', pops.__version__); pops.doctor()"
+echo "--- import pops; pops.doctor() ---"
+python -c "import pops; print('pops', pops.__version__); pops.doctor()"

@@ -895,7 +895,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     throw std::runtime_error("AmrSystem::add_native_block : incompatible ABI -- loader key '" +
                              loader_key + "' != module key '" + module_key +
                              "'. Recompile the loader with the SAME compiler, C++ standard and "
-                             "adc headers as the _pops module.");
+                             "pops headers as the _pops module.");
   }
   // AMR native installer of the loader: reinterpret_cast<AmrSystem*>(this) then
   // add_compiled_model<ProdModel>(*amrsys, ...). Scheme marshaled as flat extern "C" arguments. No

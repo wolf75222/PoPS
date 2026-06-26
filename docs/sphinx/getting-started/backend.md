@@ -8,8 +8,8 @@ always the one you think.
 
 ## The golden rule: the backend is fixed at compile time
 
-The backend is not a runtime argument. It is a property of the `adc` target, attached to
-the CMake interface: everything that links `adc` (the compiled facade, the tests) inherits it, and the
+The backend is not a runtime argument. It is a property of the `pops` target, attached to
+the CMake interface: everything that links `pops` (the compiled facade, the tests) inherits it, and the
 `for_each_cell` seam switches to the chosen execution space. To change backend, you
 reconfigure and recompile (see [Installation](installation.md)). So there is nothing to
 enable in a Python script.
@@ -18,7 +18,7 @@ enable in a Python script.
 
 Often surprising: the `_pops` module shipped/tested in CI is built
 only in Kokkos Serial (no MPI in the Python job). Any
-Python script that does `import adc` therefore runs sequentially, whatever the hardware. This is
+Python script that does `import pops` therefore runs sequentially, whatever the hardware. This is
 documented in the [`BACKEND_COVERAGE.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/BACKEND_COVERAGE.md) matrix (section 2:
 "the Python binding only routes to Kokkos Serial").
 
@@ -55,9 +55,9 @@ is not built in CUDA on the compute nodes.
 | Backend | How to get it | Where it is validated |
 |---|---|---|
 | Kokkos Serial | default build (`Kokkos_ENABLE_SERIAL=ON`) ; Python module | CI (gate `build-and-test`, C++ + Python) |
-| MPI CPU | `-DADC_USE_MPI=ON`, launched via `mpirun -np {1,2,4}` | CI (ci-full) |
+| MPI CPU | `-DPOPS_USE_MPI=ON`, launched via `mpirun -np {1,2,4}` | CI (ci-full) |
 | Kokkos OpenMP | Kokkos installed with `Kokkos_ENABLE_OPENMP=ON` | CI (ci-full, 91/91 ctest) |
-| Kokkos CUDA (GH200) | `-DADC_USE_KOKKOS=ON` + `Kokkos_ARCH_HOPPER90` + `nvcc_wrapper` | ROMEO, manual (never in CI) |
+| Kokkos CUDA (GH200) | `-DPOPS_USE_KOKKOS=ON` + `Kokkos_ARCH_HOPPER90` + `nvcc_wrapper` | ROMEO, manual (never in CI) |
 | MPI + Kokkos CUDA | same build + OpenMPI CUDA-aware, `srun --gpus-per-task=1` | ROMEO, manual |
 
 CI never builds with CUDA enabled (the runners have no GPU): all the
@@ -84,6 +84,6 @@ typical `srun` harness and the proofs (`maxdiff=0` against the CPU) are in
 ## What to remember
 
 - The `_pops` module as CI builds it = Kokkos Serial ; Python drives, compiled C++ computes.
-- For multi-thread CPU / GPU: recompile the C++ facade against a Kokkos installed for the wanted space (OpenMP, CUDA) ; for the distributed case, add `-DADC_USE_MPI=ON`.
+- For multi-thread CPU / GPU: recompile the C++ facade against a Kokkos installed for the wanted space (OpenMP, CUDA) ; for the distributed case, add `-DPOPS_USE_MPI=ON`.
 - The GPU is ROMEO-manual, via generated C++ harnesses ; CI is CPU only.
 - The source of truth for "which test, which backend" is [`BACKEND_COVERAGE.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/BACKEND_COVERAGE.md).

@@ -3669,7 +3669,7 @@ class Program:
             self._emit_solve_linear(v, base, var, prelude, lines)
         elif v.op == "reduce":
             # A collective all_reduce -> a C++ scalar. norm2 = sqrt(dot(u, u)); dot(a, b) directly;
-            # sum/max/min (over a component) via the matching adc reduction. All MUST run on every rank
+            # sum/max/min (over a component) via the matching pops reduction. All MUST run on every rank
             # (the reductions are collective all_reduce); they sit at the top of the loop body.
             var[v.id] = "s%d" % v.id
             kind = v.attrs["kind"]

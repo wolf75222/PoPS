@@ -43,7 +43,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> comparaison numerique sautee")
+        print("skip  compilateur ou en-tetes pops absents -> comparaison numerique sautee")
         print("test_dsl_cse : OK (forme seulement)")
         return
 

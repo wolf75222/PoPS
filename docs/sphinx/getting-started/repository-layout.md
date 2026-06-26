@@ -12,7 +12,7 @@ This is that repository. It contains:
 
 - the header-only C++ core (`include/pops/`): physics bricks, numerical schemes, the AMR
   mesh stack, Poisson solvers, parallelism seams;
-- the library's Python bindings (`python/`): the `adc` module (pybind11), that is, the
+- the library's Python bindings (`python/`): the `pops` module (pybind11), that is, the
   composition facades `System` / `AmrSystem` and the `pops.dsl` DSL;
 - the test suite (`tests/`, `python/tests/`) and the design docs (`docs/`).
 
@@ -31,7 +31,7 @@ the core. It lives on the applications side, compiled on the fly against the gen
 
 <https://github.com/wolf75222/adc_cases>
 
-Sibling repository. It contains only Python code that imports the `adc` module and composes the
+Sibling repository. It contains only Python code that imports the `pops` module and composes the
 bricks into named scenarios: `diocotron`, `euler_poisson`, two species, magnetic isothermal,
 two-fluid AP... Each case is a composition recipe (which bricks, which scheme, which
 Poisson, which initial condition), not new core.
@@ -47,9 +47,9 @@ A few reference demonstrators (run in CI on the `adc_cases` side):
 ## Who depends on whom
 
 ```
-adc_cpp  (coeur generique + bindings adc)   <-- agnostique, ne nomme aucun scenario
+adc_cpp  (coeur generique + bindings pops)   <-- agnostique, ne nomme aucun scenario
    ^
-   | import adc  /  FetchContent pops::pops
+   | import pops  /  FetchContent pops::pops
    |
 adc_cases  (scenarios Python nommes)         --> diocotron, euler_poisson, ...
 ```
@@ -61,6 +61,6 @@ no reverse dependency: the core does not know the cases.
 In practice: a new "well-known" model (a diocotron, an Euler-Poisson) is coded in
 `adc_cases` by composing bricks. A new generic brick (a new flux, a
 new elliptic closure) is coded in `adc_cpp`. The [A->Z tutorial](tutorial.md), for its part, remains
-deliberately self-contained: it imports only `adc`, `numpy` and `matplotlib`, and rebuilds the
+deliberately self-contained: it imports only `pops`, `numpy` and `matplotlib`, and rebuilds the
 diocotron model by hand (with no dependency on `adc_cases`) so that it stays reproducible from this single
 repository.

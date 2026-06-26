@@ -411,7 +411,7 @@ struct System::Impl {
   // --- compiled spatial schemes -------------------------------------------
   // Method-of-lines evaluator of a block (L/F/Model frozen): ghosts then R = -div F + S.
   // Construction of the block closures (advance + residual + Poisson) moved to the header
-  // (adc/runtime/block_builder.hpp: make_block / make_max_speed / make_poisson_rhs) so that the
+  // (pops/runtime/block_builder.hpp: make_block / make_max_speed / make_poisson_rhs) so that the
   // production template path is instantiable outside this unit (AOT compilation of a
   // generated model). Here we only provide the grid context to pass to them.
   // GridContext: mesh + BC + aux + EMBEDDED-BOUNDARY geometry (project T5-PR3). domain_mask_ /
@@ -2295,7 +2295,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     pops::dynlib::close(h);
     throw std::runtime_error("System::install_program: pops_program_abi_key missing from '" +
                              so_path +
-                             "' (regenerate the problem module with the current adc headers)");
+                             "' (regenerate the problem module with the current pops headers)");
   }
   const std::string loader_key = key_fn();
   const std::string module_key = pops::abi_key();
@@ -2305,7 +2305,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
         "System::install_program: compiled program ABI mismatch: expected '" + module_key +
         "', got '" + loader_key +
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
-        "adc headers as the _pops module.");
+        "pops headers as the _pops module.");
   }
   auto install = reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program"));
   if (!install) {

@@ -300,7 +300,7 @@ Cosmetic (10): `add_block` ~18 params including 6 flat Newton scalars whereas `N
 exists (the internal functions already use it); UPPERCASE locals `I0/I1/J0/J1`/`PNX/PNY`;
 `SourceNewtonReport` 8 uninitialized members; `abi_key` helper macros not `#undef`; code lines
 >100 col not reformatted (auto-fixable); `build_amr_compiled` ~250 lines; non-const refs to
-the internal state; class-qualified exception prefix vs `adc (...)`; superfluous `mutable` on
+the internal state; class-qualified exception prefix vs `pops (...)`; superfluous `mutable` on
 `solve_count_` (auto-fixable); copy not `= delete`-d explicitly on move-only `AmrSystem`.
 
 ### 4.9 runtime-2 loader/ABI (13 files)
@@ -318,7 +318,7 @@ Important:
 Cosmetic (15): functions extracted VERBATIM from `system.cpp` without re-splitting
 (`add_compiled_block` ~222 l.); magic `3` vs `kAuxBaseComps`; `IModel<NV>` polymorphic base without
 copy suppression (abstract, null practical risk); message prefixes `System::` vs bare;
-include `adc` interleaved in the STL block; lines >100 col (auto-fixable); sinks by value without
+include `pops` interleaved in the STL block; lines >100 col (auto-fixable); sinks by value without
 `move`; dead variable `nn` (auto-fixable); SFINAE `void_t` vs `requires`; single-letter locals +
 hand-written max; integers stored in `double` in `SourceNewtonReport`; MUSCL recon in magic
 `int` 0/1/2; `reinterpret_cast` dlsym (~20 sites, to confine); const-correctness `potential()`.
@@ -362,7 +362,7 @@ Important:
 
 Cosmetic (14): `using namespace pops;` at file scope in `bindings.cpp`; very long functions
 (`add_block`, `add_coupled_source`, `build_multi`, `add_native_block`); `PYBIND11_MODULE`
-monolithic ~570 lines; under-indented `else` (auto-fixable); include `adc` interleaved in the STL;
+monolithic ~570 lines; under-indented `else` (auto-fixable); include `pops` interleaved in the STL;
 exact float equalities of defect detection; `static` helpers vs `namespace {}`; `_` suffix
 of pimpl members inconsistent; `size_t->int` narrowing; `time_method` in `int` vs `enum class`;
 non-const accessors; `(void)ncomp` vs `[[maybe_unused]]`; `reinterpret_cast` dlsym (to confine);
@@ -403,7 +403,7 @@ a `load()` helper with a `FILE*` leak.
 
 ### 4.14 bench/CMake/scripts (12 files)
 
-Carefully written: clear structure, modern root `CMakeLists` (isolated INTERFACE target `adc`, FetchContent
+Carefully written: clear structure, modern root `CMakeLists` (isolated INTERFACE target `pops`, FetchContent
 Kokkos with SHA256 check, `pops_dev_options` in PRIVATE), `set -euo pipefail` scripts + quoting. Tools
 outside CI executed, not the API.
 

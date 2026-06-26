@@ -14,7 +14,7 @@ que dlopen recharge un handle neuf. Le cache hors-source reste keye par backend 
 
 On verifie :
  (1) PUR-PYTHON (aucun compilateur) : semantique du registre + redirection backend ;
- (2) DECISION (compilateur + en-tetes adc requis ; auto-skip sinon) :
+ (2) DECISION (compilateur + en-tetes pops requis ; auto-skip sinon) :
      (a) so_path explicite, aot PUIS production au meme chemin -> chemins RETENUS distincts, chacun
          portant les symboles de SON backend (production exporte pops_native_abi_key, aot non) ;
      (b) l'inverse production puis aot -> idem ;
@@ -128,7 +128,7 @@ def _compile_probe():
     """Tente une compilation aot minimale ; renvoie (ok, raison) -- sert a auto-skip sans compilateur
     ni en-tetes (ni Kokkos sous Kokkos-only)."""
     if not os.path.isdir(INCLUDE):
-        return False, "en-tetes adc introuvables (%s)" % INCLUDE
+        return False, "en-tetes pops introuvables (%s)" % INCLUDE
     if not (shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")):
         return False, "aucun compilateur C++"
     try:

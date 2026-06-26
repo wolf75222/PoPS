@@ -22,7 +22,7 @@ KROOT="${POPS_KOKKOS_CUDA_ROOT:-$HOME/pops_gpu_p1/kinstall}"
 NW="$KROOT/bin/nvcc_wrapper"
 mkdir -p "$RESULTS" "$LOGS"
 
-echo "=== ADC MPI+CUDA HALO job=$SLURM_JOBID node=$(hostname) date=$(date) ==="
+echo "=== PoPS MPI+CUDA HALO job=$SLURM_JOBID node=$(hostname) date=$(date) ==="
 
 module load cuda/12.6
 romeo_load_armgpu_env
@@ -60,10 +60,10 @@ fi
 BUILD="$BASE/build_mpicuda_halo"
 rm -rf "$BUILD"
 cmake -S "$SRC" -B "$BUILD" \
-  -DADC_USE_MPI=ON -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
+  -DPOPS_USE_MPI=ON -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
   -DCMAKE_CXX_COMPILER="$NW" \
-  -DADC_BUILD_BENCH=ON -DADC_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
-  -DADC_BUILD_SHA="$POPS_CPP_COMMIT" -DADC_BUILD_BRANCH="$POPS_CPP_BRANCH" \
+  -DPOPS_BUILD_BENCH=ON -DPOPS_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+  -DPOPS_BUILD_SHA="$POPS_CPP_COMMIT" -DPOPS_BUILD_BRANCH="$POPS_CPP_BRANCH" \
   > "$LOGS/cfg_${SLURM_JOBID}.log" 2>&1
 rc=$?
 echo "CONFIG rc=$rc"

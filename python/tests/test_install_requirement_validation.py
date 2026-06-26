@@ -17,7 +17,7 @@ try:
     from pops import dsl
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip test_install_requirement_validation (adc/numpy unavailable: %s)" % exc)
+    print("skip test_install_requirement_validation (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 N = 16

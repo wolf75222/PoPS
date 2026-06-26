@@ -13,7 +13,7 @@
 // trajectoire est courte (walltime short) et les snapshots suffisent pour reprendre une
 // analyse ; la reprise bit-stable reste le chemin python (CPU).
 //
-// Multi-GPU + MPI (optionnel, -DADC_VALIDATION_MPI=ON, cf. diocotron_mpi.sbatch) : le MEME
+// Multi-GPU + MPI (optionnel, -DPOPS_VALIDATION_MPI=ON, cf. diocotron_mpi.sbatch) : le MEME
 // driver tourne sous srun -n N. comm_init/comm_finalize ouvrent/ferment MPI ; les lectures de
 // diagnostic et de snapshot passent par sys.state_global / sys.potential_global (all-reduce
 // collectif, system.cpp) et le pas sys.step_cfl / sys.solve_fields est collectif, donc chaque

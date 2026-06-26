@@ -1,6 +1,6 @@
 # Run your first model
 
-Go from nothing to a real run: build the `adc` Python module, run the smallest model (the reduced
+Go from nothing to a real run: build the `pops` Python module, run the smallest model (the reduced
 diocotron, a scalar density advected by the E x B drift), and see it produce output.
 
 This is the shortest path. The model is the
@@ -36,11 +36,11 @@ diocotron normalization benchmark, not the full Euler-Poisson system.
    ```
 
    ```bash
-   conda activate adc
+   conda activate pops
    ```
 
-3. Build and install the `adc` module. `pip install .` drives the build through scikit-build-core
-   and installs the package into `site-packages`, so `import adc` works without setting
+3. Build and install the `pops` module. `pip install .` drives the build through scikit-build-core
+   and installs the package into `site-packages`, so `import pops` works without setting
    `PYTHONPATH`. The build uses the Kokkos Serial backend, the standard path for a first local run.
 
    ```bash
@@ -55,11 +55,11 @@ diocotron normalization benchmark, not the full Euler-Poisson system.
    any failure.
 
    ```bash
-   python -c "import adc; pops.doctor()"
+   python -c "import pops; pops.doctor()"
    ```
 
 5. Run the model. The tested example script `diocotron_tutorial.py` is self-contained; it depends
-   only on `adc`, `numpy`, and `matplotlib`. The `--quick` flag reduces the resolution and the step
+   only on `pops`, `numpy`, and `matplotlib`. The `--quick` flag reduces the resolution and the step
    count for a fast first run.
 
    ```bash
@@ -101,7 +101,7 @@ produce an identical numerical kernel. The brick catalog is in the
 
 ## Expected result
 
-The script prints its progress as it runs: where `adc` was imported from, the parallelism backend
+The script prints its progress as it runs: where `pops` was imported from, the parallelism backend
 in use (serial for the Python module), the time taken to compile and wire in the DSL model, the
 growth of the perturbation amplitude over the run, and the mass drift. It then reports the
 binary-level equivalence between the native bricks and the DSL formulas, and a uniform versus AMR
@@ -125,9 +125,9 @@ If those files appear and the script ends on its `OK` line, you have run your fi
 
 ## Troubleshooting
 
-If `import adc` raises an `ImportError` on `pops._pops`, the extension is pinned to the interpreter
+If `import pops` raises an `ImportError` on `pops._pops`, the extension is pinned to the interpreter
 that built it (suffix `cpython-312`): build and import with the same Python, the one from the conda
-env. Whatever the symptom, run `python -c "import adc; pops.doctor()"` first; each line names the
+env. Whatever the symptom, run `python -c "import pops; pops.doctor()"` first; each line names the
 failing link and its remedy.
 
 ## Next

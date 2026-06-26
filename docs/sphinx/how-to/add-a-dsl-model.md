@@ -9,7 +9,7 @@ already build the Python module and run a case. For the syntax of every declarat
 
 ## Before you start
 
-Set the environment variables the DSL needs to find the adc headers and cache the generated
+Set the environment variables the DSL needs to find the pops headers and cache the generated
 `.so`. Replace `REPO` with the path to your `adc_cpp` checkout.
 
 ```bash
@@ -21,7 +21,7 @@ export POPS_CACHE_DIR=REPO/.pops_cache
 ```
 
 `POPS_INCLUDE` points at the headers the `.so` compiles against; `POPS_CACHE_DIR` caches the
-generated `.so` between runs (default `~/.cache/adc/dsl`).
+generated `.so` between runs (default `~/.cache/pops/dsl`).
 
 ## Steps
 

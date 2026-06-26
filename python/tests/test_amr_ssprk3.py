@@ -188,7 +188,7 @@ def _check_native_loader_rejects_ssprk3(n=16):
     s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     # add_native_block valide time AVANT le dlopen : aucun .so reel requis pour observer le rejet.
     try:
-        s._s.add_native_block("b", "/tmp/_adc_ssprk3_inexistant.so", "minmod", "rusanov",
+        s._s.add_native_block("b", "/tmp/_pops_ssprk3_inexistant.so", "minmod", "rusanov",
                               "conservative", "ssprk3", 1.4, 1)
     except Exception as e:
         assert "ssprk3" in str(e), "rejet .so present mais message inattendu : %s" % e
@@ -198,7 +198,7 @@ def _check_native_loader_rejects_ssprk3(n=16):
     # SPECIFIQUE a ssprk3, pas un refus generique de add_native_block. NB : chemin SANS 'ssprk3'
     # dans le nom -- dlopen echoie le chemin dans son message, ce qui piegerait l'assertion.
     try:
-        s._s.add_native_block("b", "/tmp/_adc_loader_inexistant.so", "minmod", "rusanov",
+        s._s.add_native_block("b", "/tmp/_pops_loader_inexistant.so", "minmod", "rusanov",
                               "conservative", "explicit", 1.4, 1)
     except Exception as e:
         assert "ssprk3" not in str(e), "explicit rejete pour cause de ssprk3 (rejet trop large)"

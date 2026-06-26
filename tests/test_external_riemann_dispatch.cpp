@@ -123,7 +123,7 @@ bool compile_brick(const std::string& src, const std::string& so) {
       }
     }
   }
-  cmd += " -DADC_HAS_KOKKOS";
+  cmd += " -DPOPS_HAS_KOKKOS";
 #endif
 #if defined(__APPLE__)
   cmd += " -undefined dynamic_lookup";

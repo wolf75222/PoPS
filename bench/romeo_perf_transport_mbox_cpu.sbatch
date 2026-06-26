@@ -23,7 +23,7 @@ KROOT="${POPS_KOKKOS_CPU_ROOT:-$HOME/pops_cpu_mpiomp/kinstall_omp}"
 
 mkdir -p "$RESULTS" "$LOGS"
 
-echo "=== ADC TRANSPORT MBOX CPU job=$SLURM_JOBID node=$(hostname) date=$(date) ==="
+echo "=== PoPS TRANSPORT MBOX CPU job=$SLURM_JOBID node=$(hostname) date=$(date) ==="
 
 romeo_load_x64cpu_env >/dev/null 2>&1
 eval "$(spack load --sh /fmrcj5j 2>/dev/null)"   # gcc 14.2.0
@@ -132,8 +132,8 @@ configure_bench () {
   local build="$1"; shift
   rm -rf "$build"
   cmake -S "$SRC" -B "$build" "$@" \
-    -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
-    -DADC_BUILD_BENCH=ON -DADC_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
+    -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
+    -DPOPS_BUILD_BENCH=ON -DPOPS_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release \
     > "$LOGS/$(basename "$build")_cfg_${SLURM_JOBID}.log" 2>&1
   local rc=$?
   echo "CONFIG $(basename "$build") rc=$rc"
@@ -160,7 +160,7 @@ if configure_bench "$BUILD_KOKKOS"; then
 fi
 
 BUILD_MPI="$BASE/build_transport_mbox_cpu_mpi_kokkos"
-if configure_bench "$BUILD_MPI" -DADC_USE_MPI=ON -DCMAKE_CXX_COMPILER=mpicxx -DCMAKE_C_COMPILER=mpicc; then
+if configure_bench "$BUILD_MPI" -DPOPS_USE_MPI=ON -DCMAKE_CXX_COMPILER=mpicxx -DCMAKE_C_COMPILER=mpicc; then
   for np in 1 2 4 8; do
     thr=4
     export OMP_NUM_THREADS="$thr"

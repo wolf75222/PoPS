@@ -31,7 +31,7 @@ try:
     from pops import dsl
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
-    print("skip predictor_corrector_poisson_lorentz (adc/numpy unavailable: %s)" % exc)
+    print("skip predictor_corrector_poisson_lorentz (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 N = 16

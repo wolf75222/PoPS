@@ -200,21 +200,21 @@ def test_polar_conservation_with_nonzero_radial_flux():
 
 
 if __name__ == "__main__":
-    import pops as _adc_mod
+    import pops as _pops_mod
     import numpy as _np2
     import math as _math2
 
-    _sim = _adc_mod.System(mesh=_adc_mod.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    _sim = _pops_mod.System(mesh=_pops_mod.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
     _sim.add_block(
         "ne",
-        model=_adc_mod.Model(
-            state=_adc_mod.Scalar(),
-            transport=_adc_mod.ExB(B0=1.0),
-            source=_adc_mod.NoSource(),
-            elliptic=_adc_mod.ChargeDensity(charge=1.0),
+        model=_pops_mod.Model(
+            state=_pops_mod.Scalar(),
+            transport=_pops_mod.ExB(B0=1.0),
+            source=_pops_mod.NoSource(),
+            elliptic=_pops_mod.ChargeDensity(charge=1.0),
         ),
-        spatial=_adc_mod.Spatial(minmod=True),
-        time=_adc_mod.Explicit(),
+        spatial=_pops_mod.Spatial(minmod=True),
+        time=_pops_mod.Explicit(),
     )
     _sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     _sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))

@@ -1,4 +1,4 @@
-// ADC-291: the C++ canonical aux name<->component table (adc/core/aux_names.hpp) is the mirror of
+// ADC-291: the C++ canonical aux name<->component table (pops/core/aux_names.hpp) is the mirror of
 // AUX_CANONICAL (python/pops/dsl.py), generated from the SAME single source as pops::Aux (the base
 // contract phi/grad_x/grad_y + the POPS_AUX_FIELDS X-macro B_z/T_e). It lets a C++ caller resolve a
 // canonical aux field by name WITHOUT the Python facade. This test pins the C++ side; the

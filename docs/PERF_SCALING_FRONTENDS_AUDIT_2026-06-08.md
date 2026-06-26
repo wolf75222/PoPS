@@ -1,4 +1,4 @@
-# ADC perf scaling and frontends audit - 2026-06-08
+# PoPS perf scaling and frontends audit - 2026-06-08
 
 Audit written on 2026-06-08 14:47 CEST.
 
@@ -72,7 +72,7 @@ Upstream sources:
 - https://github.com/alvarezlaguna/MUFFIN_Release/blob/main/src/LinearSolver/ThomasAlgorithmPeriodic.cpp
 - https://github.com/alvarezlaguna/MUFFIN_Release/blob/main/src/Simulation1D.cpp
 
-The risk to audit in ADC is therefore:
+The risk to audit in PoPS is therefore:
 
 ```text
 cout catastrophique = callback Python par cellule/face
@@ -81,7 +81,7 @@ cout acceptable = appel pybind par macro-pas si le calcul reste C++
 cout acceptable = compilation DSL froide, si amortie par cache et run long
 ```
 
-Status observed in ADC at audit time:
+Status observed in PoPS at audit time:
 
 - `include/pops/runtime/system.hpp` documents the contract: Python composes, the
   cell-by-cell compute stays compiled C++; no Python callback in the
@@ -96,7 +96,7 @@ Status observed in ADC at audit time:
   production measurements, you must require `backend="production"` and check that
   the adder is `add_native_block`.
 
-Verdict: ADC does not have, on the native bricks and DSL `production` paths, the
+Verdict: PoPS does not have, on the native bricks and DSL `production` paths, the
 MUFFIN profile "Python in the cell loop". The expected Python costs are
 mainly setup, DSL compilation, pybind call per `step`, and diagnostic copies.
 The main risk is the accidental use of a wrong path
@@ -143,7 +143,7 @@ Interpretation:
   counter-example, not as a target.
 - Python `integrate.py`:
   full-array copies per stage. To be treated as a "bad usage" baseline and not
-  as ADC production performance.
+  as PoPS production performance.
 
 Useful orders of magnitude before measurement:
 
@@ -818,7 +818,7 @@ Experimental local fix added in this worktree:
   be considered ABI-equivalent to an `_pops` module compiled with Kokkos.
 - `python/pops/dsl.py` detects `POPS_KOKKOS_ROOT`/`Kokkos_ROOT`/`KOKKOS_ROOT`,
   uses `POPS_KOKKOS_CXX` or `nvcc_wrapper` if available, adds
-  `-DADC_HAS_KOKKOS`, the Kokkos includes, `-fopenmp` in OpenMP, and puts these
+  `-DPOPS_HAS_KOKKOS`, the Kokkos includes, `-fopenmp` in OpenMP, and puts these
   features in the DSL cache key. In the current version of the worktree,
   the loader no longer links `libkokkos*`; it lets the symbols resolve
   against `_pops`.
@@ -956,7 +956,7 @@ no longer to be presented as "CUDA IPC only"; we must open a dedicated code work
 `fill_boundary`/MPI progress/halo scheduling, with a minimal
 multi-box CPU and GPU test, before any new weak/strong MPI+CUDA campaign.
 
-Important nuance: this does not prove that all ADC MPI CPU is blocked. The
+Important nuance: this does not prove that all PoPS MPI CPU is blocked. The
 dedicated CPU bench `profile_transport_mbox` of job `647836` does finish in
 `np=1/2/4/8`, even with a negative scaling. The v2 timeout concerns the
 `scaling_step` harness at large size and the paths tested in `648114/648115`.
@@ -1165,7 +1165,7 @@ Self-critique of what I did:
    multi-rank `scaling_step` harness, at large size and after `#254` merge,
    times out.
 4. The ratios below `1.0` for `python-bricks` do not prove that
-   Python speeds up ADC. They signal the variability of the bench and the difficulty
+   Python speeds up PoPS. They signal the variability of the bench and the difficulty
    of comparing separate executables/processes. For a publication, we need
    paired repetitions, median/CI, and stricter CPU pinning.
 5. The local patch `include/pops/runtime/abi_key.hpp` is potentially too
@@ -1207,7 +1207,7 @@ proves the buffer correspondence and decomposes pack/comm/unpack.
 
 The ROMEO runs and the upstream branches confirm four solid points:
 
-1. The ADC Python bricks path does not reproduce the MUFFIN problem: no
+1. The PoPS Python bricks path does not reproduce the MUFFIN problem: no
    Python callback per cell, no full-array copy per step in `advance`.
 2. The observed perf blocker is not Python. Depending on the case, it is either
    Poisson/MG/reductions (`profile_step`), or MPI halos/reductions

@@ -22,7 +22,7 @@ import sys
 import pytest
 
 adctime = pytest.importorskip("pops.time")
-from pops import dsl, model  # noqa: E402 (after importorskip so a missing adc skips cleanly)
+from pops import dsl, model  # noqa: E402 (after importorskip so a missing pops skips cleanly)
 
 
 def _two_fluid_module(electron_expr=None):

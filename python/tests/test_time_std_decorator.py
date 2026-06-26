@@ -11,10 +11,10 @@ Pure Python (IR construction only); skips cleanly if pops.time is unavailable, n
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable here -> skip, never fake
+    except Exception as exc:  # pops not importable here -> skip, never fake
         print("skip test_time_std_decorator (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -86,7 +86,7 @@ def test_decorator_works_for_a_multistage_body(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

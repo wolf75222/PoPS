@@ -30,7 +30,7 @@ RUN_CPP_FRONTEND="${RUN_CPP_FRONTEND:-1}"
 
 mkdir -p "$RESULTS" "$LOGS" "$FRONT"
 
-echo "=== ADC CPU FRONTENDS job=$SLURM_JOBID node=$(hostname) date=$(date) ==="
+echo "=== PoPS CPU FRONTENDS job=$SLURM_JOBID node=$(hostname) date=$(date) ==="
 
 romeo_load_x64cpu_env >/dev/null 2>&1
 eval "$(spack load --sh /fmrcj5j 2>/dev/null)"   # gcc 14.2.0
@@ -146,7 +146,7 @@ else
   BUILD_FRONT_CPP="$BASE/build_frontend_cpp_pic"
   rm -rf "$BUILD_FRONT_CPP"
   cmake -S "$FRONT" -B "$BUILD_FRONT_CPP" \
-    -DKokkos_ROOT="$KROOT" -DADC_SRC="$SRC" -DCMAKE_BUILD_TYPE=Release \
+    -DKokkos_ROOT="$KROOT" -DPOPS_SRC="$SRC" -DCMAKE_BUILD_TYPE=Release \
     > "$LOGS/frontend_cpp_pic_cfg_${SLURM_JOBID}.log" 2>&1
   rc=$?
   echo "CONFIG frontend_cpp_pic rc=$rc"
@@ -178,8 +178,8 @@ fi
 BUILD_PY="$BASE/build_python_kokkos_pic"
 rm -rf "$BUILD_PY"
 cmake -S "$SRC" -B "$BUILD_PY" \
-  -DADC_BUILD_PYTHON=ON -DADC_BUILD_TESTS=OFF \
-  -DADC_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
+  -DPOPS_BUILD_PYTHON=ON -DPOPS_BUILD_TESTS=OFF \
+  -DPOPS_USE_KOKKOS=ON -DKokkos_ROOT="$KROOT" \
   -DPython_EXECUTABLE="$(which python3)" \
   -DCMAKE_BUILD_TYPE=Release \
   > "$LOGS/python_pic_cfg_${SLURM_JOBID}.log" 2>&1

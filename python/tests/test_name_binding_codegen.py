@@ -24,7 +24,7 @@ def _skip(msg):
     sys.exit(0)
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # noqa: BLE001 -- pops.time needs _pops; skip cleanly, never fake
@@ -90,19 +90,19 @@ def section_b(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     section_a(t)
     section_b(t)
     print("%s test_name_binding_codegen" % ("FAIL (%d)" % fails if fails else "PASS"))
     sys.exit(1 if fails else 0)
 
 
-# pytest entry points (the CI also runs the file as a script). _adc_time() exits via sys.exit(0) when
-# adc is unimportable (a clean skip in script mode); translate that SystemExit to a pytest skip rather
+# pytest entry points (the CI also runs the file as a script). _pops_time() exits via sys.exit(0) when
+# pops is unimportable (a clean skip in script mode); translate that SystemExit to a pytest skip rather
 # than let it surface as a FAILED test.
 def test_block_name_abi_export():
     try:
-        section_a(_adc_time())
+        section_a(_pops_time())
     except SystemExit as exc:  # noqa: BLE001
         if exc.code:
             raise
@@ -112,7 +112,7 @@ def test_block_name_abi_export():
 
 def test_block_names_in_ir_hash():
     try:
-        section_b(_adc_time())
+        section_b(_pops_time())
     except SystemExit as exc:  # noqa: BLE001
         if exc.code:
             raise

@@ -7,7 +7,7 @@ add_compiled_block, AOT) doit donc y figurer, sinon l'integrateur le SAUTE silen
 On compose un bloc natif (add_block) puis on charge un bloc dynamique (formules Python ->
 .so JIT -> add_dynamic_block) et on verifie que block_names() retourne les DEUX, dans l'ordre
 d'ajout, et coherent avec n_species(). On verifie aussi que l'integrateur Python avance bien le
-bloc dynamique (etat modifie). Gate sur compilateur + en-tetes adc : SKIP propre (exit 0) sinon,
+bloc dynamique (etat modifie). Gate sur compilateur + en-tetes pops : SKIP propre (exit 0) sinon,
 mais on teste TOUJOURS la partie sans .so (un add_block seul est deja visible).
 """
 import os
@@ -38,7 +38,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> bloc dynamique saute")
+        print("skip  compilateur ou en-tetes pops absents -> bloc dynamique saute")
         print("test_block_names_dynamic : OK (add_block seul)")
         return
 

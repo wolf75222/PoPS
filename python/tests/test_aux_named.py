@@ -141,7 +141,7 @@ def test_end_to_end():
     """Bout en bout : source lisant aux_field('kappa'), branchee via add_equation (backend AOT)."""
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> bout-en-bout saute (%s)" % INCLUDE)
+        print("skip  compilateur ou en-tetes pops absents -> bout-en-bout saute (%s)" % INCLUDE)
         print("test_aux_named : OK (forme seulement)")
         return
 

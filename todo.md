@@ -1,6 +1,6 @@
 # TODO - adc_cpp
 
-> **Source of truth — read first.** Active work-tracking lives in **Linear** (team ADC), not here.
+> **Source of truth — read first.** Active work-tracking lives in **Linear** (team PoPS), not here.
 > This file is a **historical method/worklog** : it records the reasoning behind work waves and is
 > cross-referenced by `docs/PAPER_ROADMAP.md` (e.g. "section 6", Hoffart M1/M2/M3) and kept per
 > `docs/DOC_REFONTE_AUDIT.md`. Open research items live in `docs/RESEARCH_BACKLOG.md`. Treat it as a
@@ -228,7 +228,7 @@ invariants NOT to violate:
 - **Schur PR6 = CARTESIAN only** (measurement of the TEMPORAL effect on a stiff magnetized fluid). The
   POLAR path is EXPLICIT-ONLY: the Schur stage is NOT wired there. Do NOT claim that "polar
   Schur" works; wiring it would be a later feature. (The Hoffart PAPER, for its part, does the
-  COMPLETE stiff Euler-Poisson system with its Schur complement; the adc Schur stack #118-128 is its
+  COMPLETE stiff Euler-Poisson system with its Schur complement; the pops Schur stack #118-128 is its
   FV analogue: reproducing the paper's METHOD = a separate work item, not Schur PR6.)
 - **RING EDGE = TRANSPORTED density discontinuity, NOT a wall.** Do NOT put a transport
   "wall" on it (physically wrong); valid levers = polar / high order / AMR.
@@ -522,7 +522,7 @@ without breaking the existing one, in bit-exact backward compatibility (`n_aux` 
       tests suffice (the scheme is FV, momentum not exact by construction)?
 - [x] **M2 / M2b**: AMR on the ring edge (triples the rate at equal base) + multi-level Poisson.
 - [~] Resolution increase / convergence toward the analytical rate: DONE (n=384/512 GH200, l=3 -0.38%).
-      SAMRAI integration = EXTERNAL-BIG, DEFERRED (adc's homemade AMR is capstone-complete and covers the
+      SAMRAI integration = EXTERNAL-BIG, DEFERRED (pops's homemade AMR is capstone-complete and covers the
       science path; cf docs/RESEARCH_BACKLOG.md for the reopening criterion). NOT auto-completable.
 
 ## 7. Cleanup / consolidation (wave P1/P2, June 2026)
@@ -570,9 +570,9 @@ domain, Schur EPM, multi-block AMR, Hoffart repro): all DEFERRED. One PR per blo
       to `aot`. ELF portability (promotion of `_pops` to global scope). CPU parity bit-identical to
       `add_block`. (#85)
 
-## 8. Ideal ADC Plan: write the model in Python, run in native C++
+## 8. Ideal PoPS Plan: write the model in Python, run in native C++
 
-Goal: the user writes the equations in Python (symbolic DSL), ADC generates/compiles a NATIVE
+Goal: the user writes the equations in Python (symbolic DSL), PoPS generates/compiles a NATIVE
 C++ brick wired into `adc_cpp` like a hand-written model; no cell-by-cell loop
 in Python on the performant path. Three backends: `prototype` (NumPy/host), `aot` (.so flat ABI),
 `production` (zero-copy native, target MPI/GPU/AMR).

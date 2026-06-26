@@ -8,16 +8,16 @@ pops_program_hash / pops_install_program), the Forward-Euler body, and that a mu
 lowers too -- N P.state / N P.commit, each op routed to its block index; the SIMULTANEOUS multi-target
 solve_fields_from_blocks lowers to ctx.solve_fields_from_blocks (Spec 3 crit 24, ADC-457). Constructs
 the codegen still cannot lower -- named sources beyond 'default', a commit of an undeclared block --
-must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if adc
+must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if pops
 is unavailable.
 """
 import sys
 
 
-def _adc_time():
+def _pops_time():
     try:
         import pops.time as t
-    except Exception as exc:  # adc not importable in this environment -> skip, never fake
+    except Exception as exc:  # pops not importable in this environment -> skip, never fake
         print("skip test_time_codegen (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
@@ -173,7 +173,7 @@ def test_uncommitted_refused(t):
 
 
 def _run():
-    t = _adc_time()
+    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)

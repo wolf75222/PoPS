@@ -3,12 +3,12 @@
 /// @file
 /// @brief Helpers partages des harnais de bench/profilage (chronometrage, percentiles, argparse).
 ///
-/// Couche : `bench/` (hors `include/adc` ; harnais de MESURE, hors du build par defaut, jamais en CI).
+/// Couche : `bench/` (hors `include/pops` ; harnais de MESURE, hors du build par defaut, jamais en CI).
 /// Role : factoriser les briques copiees a l'identique dans profile_step / frontend_cpp /
 ///   profile_transport_mbox / scaling_step / scaling_amr -- le chronometre `timed` (avec fences
 ///   device autour de la phase), le `percentile` interpole, l'accumulateur `PhaseTimers` par phase,
 ///   et la lambda d'argparse `eat`.
-/// Contrat : header-only, zero dependance externe HORMIS `adc/core/kokkos_env.hpp` pour `device_fence()`
+/// Contrat : header-only, zero dependance externe HORMIS `pops/core/kokkos_env.hpp` pour `device_fence()`
 ///   (deja tire transitivement par tous les harnais : c'est le seam qui porte le backend Kokkos/serie).
 ///   Les harnais restent des main() autonomes ; ce header ne fournit que les briques de mesure.
 ///

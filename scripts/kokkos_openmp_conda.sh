@@ -6,7 +6,7 @@
 # ne scale pas en threads. Ce script comble le trou : UNE commande, et l'env conda possede un
 # Kokkos OpenMP -- l'outillage (cmake, ninja, libomp) vient deja d'environment.yml.
 #
-#   conda activate adc
+#   conda activate pops
 #   bash scripts/kokkos_openmp_conda.sh
 #   cmake --preset python-parallel && cmake --build --preset python-parallel
 #
@@ -17,7 +17,7 @@
 # exactement comme le CMakeLists d'adc_cpp le fait pour POPS_USE_OPENMP.
 set -euo pipefail
 
-: "${CONDA_PREFIX:?Activez d'abord l'env conda : conda activate adc}"
+: "${CONDA_PREFIX:?Activez d'abord l'env conda : conda activate pops}"
 VER="${KOKKOS_VERSION:-4.7.01}"
 PREFIX="${KOKKOS_INSTALL_PREFIX:-$CONDA_PREFIX}"
 SRC="${KOKKOS_SRC_DIR:-${TMPDIR:-/tmp}/kokkos-src-$VER}"

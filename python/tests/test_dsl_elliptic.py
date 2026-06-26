@@ -1,7 +1,7 @@
 """Test du codegen elliptique (emit_cpp_elliptic) : meme mecanique que source / flux.
 
 La brique de second membre generee (rhs(U)) doit reproduire pops::ChargeDensity ecrite a la main.
-Pur Python ; gate sur compilateur + en-tetes adc, sinon skip propre.
+Pur Python ; gate sur compilateur + en-tetes pops, sinon skip propre.
 """
 import os
 import shutil
@@ -51,7 +51,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> verification sautee")
+        print("skip  compilateur ou en-tetes pops absents -> verification sautee")
         print("test_dsl_elliptic : OK (forme du struct seulement)")
         return
 

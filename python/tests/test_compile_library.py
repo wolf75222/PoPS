@@ -11,7 +11,7 @@ is visible -- the real emit + compile + read-back + the ABI-mismatch hard error.
 """
 import pytest
 
-adc = pytest.importorskip("adc")
+pops = pytest.importorskip("pops")
 lib = pytest.importorskip("pops.lib")
 
 
@@ -215,7 +215,7 @@ def test_read_back_rejects_an_abi_mismatch(tmp_path):
             f.write(src)
         # WRONG header signature on purpose -> the .so's POPS_ABI_KEY_LITERAL diverges from _pops.
         flags = ["-shared", "-fPIC", "-std=" + eff_std,
-                 '-DADC_HEADER_SIG="deadbeef-not-the-real-signature"', *cflags]
+                 '-DPOPS_HEADER_SIG="deadbeef-not-the-real-signature"', *cflags]
         cmd = [cc, *flags, "-I", include, cpp, "-o", so, *lflags]
         r = subprocess.run(cmd, capture_output=True)
         if r.returncode != 0:

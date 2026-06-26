@@ -42,7 +42,7 @@
 
 namespace pops {
 
-// GridContext and BlockClosures: defined in adc/runtime/grid_context.hpp (lightweight header, also
+// GridContext and BlockClosures: defined in pops/runtime/grid_context.hpp (lightweight header, also
 // included by system.hpp to expose grid_context() / install_block() without pulling in the numerics).
 
 namespace detail {

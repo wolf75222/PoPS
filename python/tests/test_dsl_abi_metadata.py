@@ -10,7 +10,7 @@ Ce test verifie sur les DEUX chemins (.so AOT et JIT) :
 (2) RETRO-COMPATIBILITE : un .so ANCIEN (ABI legacy, SANS les symboles de metadonnees) charge toujours
     et retombe proprement sur le fallback (noms u0.., roles 'custom', gamma 1.4) -- aucune regression.
 
-Exige un compilateur C++ + les en-tetes adc (sinon saute, comme test_dsl_aot). Lance avec python3.
+Exige un compilateur C++ + les en-tetes pops (sinon saute, comme test_dsl_aot). Lance avec python3.
 """
 import os
 import shutil
@@ -107,7 +107,7 @@ def legacy_jit_so(so_path):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents")
+        print("skip  compilateur ou en-tetes pops absents")
         print("test_dsl_abi_metadata : OK (rien a compiler)")
         return
 

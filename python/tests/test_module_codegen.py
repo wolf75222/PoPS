@@ -4,15 +4,15 @@ A combined model+program .so carries GeneratedProgram (pops_install_program, the
 GeneratedModule descriptor: extern "C" pops_module_* accessors exposing the typed operator registry
 by integer OperatorId. The descriptor is read once at install (introspection + requirement
 validation, module_metadata.hpp); it must NOT appear in the step body, so operators stay inlined and
-there is no string lookup in a hot kernel. Pure-Python codegen-text check; skips if adc is absent.
+there is no string lookup in a hot kernel. Pure-Python codegen-text check; skips if pops is absent.
 """
 import sys
 
 try:
     from pops import dsl
     from pops import time as adctime
-except Exception as exc:  # adc not importable here -> skip, never fake
-    print("skip test_module_codegen (adc unavailable: %s)" % exc)
+except Exception as exc:  # pops not importable here -> skip, never fake
+    print("skip test_module_codegen (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 

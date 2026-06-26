@@ -15,22 +15,22 @@
 
 | Symbole | Signification |
 |---------|---------------|
-| **ci-fast** | Runs in the REQUIRED gate **build-and-test** (ubuntu-latest, g++, Release, Kokkos Serial: `-DADC_USE_KOKKOS=ON`, Kokkos 4.4.01 `Kokkos_ENABLE_SERIAL=ON`, C++ + Python module). Trigger: any ordinary `pull_request`. |
-| **ci-full** | Runs in full mode (push `master`, nightly cron, `workflow_dispatch`, or PR labeled `ci-full`). Adds the **MPI** (`-DADC_USE_MPI=ON` + Kokkos Serial) and **Kokkos-OpenMP** (`-DADC_USE_KOKKOS=ON`, Kokkos 4.4.01 `Kokkos_ENABLE_OPENMP=ON`, multi-thread CPU) jobs. |
+| **ci-fast** | Runs in the REQUIRED gate **build-and-test** (ubuntu-latest, g++, Release, Kokkos Serial: `-DPOPS_USE_KOKKOS=ON`, Kokkos 4.4.01 `Kokkos_ENABLE_SERIAL=ON`, C++ + Python module). Trigger: any ordinary `pull_request`. |
+| **ci-full** | Runs in full mode (push `master`, nightly cron, `workflow_dispatch`, or PR labeled `ci-full`). Adds the **MPI** (`-DPOPS_USE_MPI=ON` + Kokkos Serial) and **Kokkos-OpenMP** (`-DPOPS_USE_KOKKOS=ON`, Kokkos 4.4.01 `Kokkos_ENABLE_OPENMP=ON`, multi-thread CPU) jobs. |
 | **ROMEO** | Validated manually on GH200 (`armgpu` node, Kokkos 4.4.01, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, CUDA-aware OpenMPI). Harness cited in parentheses. Evidence in `docs/GPU_ROMEO.md` and/or `docs/GPU_RUNTIME_PORT.md`. |
 | **self-skip** | The test detects the absence of the backend and returns without error (exit 0). Note: in the **MPI CPU** column, a non-MPI test (sections 1a-1g) marked "self-skip" actually means "runs at np=1 in the MPI build (linked against MPI, mono-process)" -- it IS compiled and launched in the `mpi` job, outside the CMake `if(POPS_HAS_MPI)` block. This is NOT a real skip: the binary executes, it simply ignores the optional MPI calls. |
 | **?** | Unknown / not exercised -- see the Gaps section. |
 
 Columns:
 
-- **Serial**: `build-and-test` gate, `-DADC_USE_KOKKOS=ON` with `Kokkos_ENABLE_SERIAL=ON`, mono-thread CPU, without MPI (g++). This is the Kokkos Serial path of the required gate (ci-fast).
-- **MPI CPU**: build `-DADC_USE_MPI=ON -DADC_USE_KOKKOS=ON` (Kokkos Serial), CPU only (MPI job).
+- **Serial**: `build-and-test` gate, `-DPOPS_USE_KOKKOS=ON` with `Kokkos_ENABLE_SERIAL=ON`, mono-thread CPU, without MPI (g++). This is the Kokkos Serial path of the required gate (ci-fast).
+- **MPI CPU**: build `-DPOPS_USE_MPI=ON -DPOPS_USE_KOKKOS=ON` (Kokkos Serial), CPU only (MPI job).
 - **Kokkos Serial**: same Kokkos Serial backend as the Serial column. The `build-and-test` gate runs in ALL modes (fast as well as full), so Kokkos Serial is also covered every time ci-full executes.
-- **Kokkos OpenMP**: build `-DADC_USE_KOKKOS=ON` with `Kokkos_ENABLE_OPENMP=ON`, CPU.
+- **Kokkos OpenMP**: build `-DPOPS_USE_KOKKOS=ON` with `Kokkos_ENABLE_OPENMP=ON`, CPU.
 - **Kokkos Cuda (GH200)**: Kokkos build + `Kokkos_ARCH_HOPPER90`, one GPU per rank.
 - **MPI + Kokkos Cuda**: same build + CUDA-aware OpenMPI, `srun -n {1,2,4} --gpus-per-task=1`.
 
-> **Important note**: CI NEVER builds with `-DADC_USE_KOKKOS=ON -DKokkos_ENABLE_CUDA=ON`.
+> **Important note**: CI NEVER builds with `-DPOPS_USE_KOKKOS=ON -DKokkos_ENABLE_CUDA=ON`.
 > All "Kokkos Cuda" and "MPI + Kokkos Cuda" cells are therefore either ROMEO or "?".
 > Kokkos OpenMP is now enabled in CI via the **ci-full** job (job added #155,
 > `Kokkos_ENABLE_OPENMP=ON`, 91/91 ctest, 0 failure / 0 skipped).
@@ -216,9 +216,9 @@ backends as section 1g; not yet exercised on device (Cuda columns = ?).
 ## 2. Python tests (`python/tests/test_*.py`)
 
 All exercise the `_pops` module (pybind11), built **with Kokkos** (the Python module is linked against the
-Kokkos backend like everything that links `adc`; Kokkos is required). The COMPLETE suite runs in the
+Kokkos backend like everything that links `pops`; Kokkos is required). The COMPLETE suite runs in the
 `build-and-test` gate, where the module is compiled in **Kokkos Serial**
-(`-DADC_BUILD_PYTHON=ON -DADC_USE_KOKKOS=ON`, without MPI); ci-fast and ci-full are identical for
+(`-DPOPS_BUILD_PYTHON=ON -DPOPS_USE_KOKKOS=ON`, without MPI); ci-fast and ci-full are identical for
 the Python suite (not in `mpi`). In ci-full, the `kokkos-openmp` job recompiles the module in **Kokkos
 OpenMP** but only replays a targeted subset there (ABI std guard: `test_native_abi_std`,
 `test_dsl_production`, `test_dsl_production_amr`).

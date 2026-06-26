@@ -9,13 +9,13 @@ void init_core(py::module_& m) {
       "adc_cpp (lib): runtime multi-species composition. System composes a "
       "system block by block; the compute stays compiled C++.";
 
-  // Module ABI key (compiler + C++ standard + signature of the adc headers). The DSL reads it
+  // Module ABI key (compiler + C++ standard + signature of the pops headers). The DSL reads it
   // (diagnostic); add_native_block compares it to the key baked into a native loader.
   m.def("abi_key", &pops::abi_key,
-        "Module ABI key (compiler, C++ standard, signature of the adc headers).");
+        "Module ABI key (compiler, C++ standard, signature of the pops headers).");
 
   // MPI rank / rank count of the communicator (0 / 1 in serial or when MPI is not initialized, cf.
-  // adc/parallel/comm.hpp). Exposed so the IO facade (sim.write / sim.checkpoint) writes the file
+  // pops/parallel/comm.hpp). Exposed so the IO facade (sim.write / sim.checkpoint) writes the file
   // only on rank 0 after a collective gather (state_global / potential_global).
   m.def("my_rank", &pops::my_rank, "MPI rank of the process (0 in serial).");
   m.def("n_ranks", &pops::n_ranks, "Number of MPI ranks (1 in serial).");
@@ -27,13 +27,13 @@ void init_core(py::module_& m) {
 #ifdef POPS_CXX_STD
   m.attr("__cxx_std__") = static_cast<int>(POPS_CXX_STD);
 #else
-  // Manual build without -DADC_CXX_STD: we fall back on __cplusplus to stay consistent with the ABI
+  // Manual build without -DPOPS_CXX_STD: we fall back on __cplusplus to stay consistent with the ABI
   // key (which itself always encodes __cplusplus). 202002L -> 20, beyond -> 23.
   m.attr("__cxx_std__") = static_cast<int>(__cplusplus > 202002L ? 23 : 20);
 #endif
 
   // Compute backend COMPILED into the module: True if _pops was built with Kokkos
-  // (-DADC_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
+  // (-DPOPS_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
   // pops.set_threads / pops.parallel_info use it to warn that a SERIAL module ignores the thread
   // setting. A serial build exposes False; no false negative.
 #ifdef POPS_HAS_KOKKOS
@@ -42,10 +42,10 @@ void init_core(py::module_& m) {
   m.attr("__has_kokkos__") = false;
 #endif
 
-  // MPI seam COMPILED into the module (POPS_HAS_MPI via the adc INTERFACE under -DADC_USE_MPI=ON) plus
+  // MPI seam COMPILED into the module (POPS_HAS_MPI via the pops INTERFACE under -DPOPS_USE_MPI=ON) plus
   // the MPI include dir(s) used by the build (POPS_MPI_INCLUDE, baked by CMake; '|'-joined). The DSL
   // "production"/"aot" loaders are compiled OUTSIDE CMake and inherit none of this: dsl.py reads these
-  // attributes (_native_mpi_flags) to re-bake -DADC_HAS_MPI + -I<inc> so the loader uses comm.hpp's
+  // attributes (_native_mpi_flags) to re-bake -DPOPS_HAS_MPI + -I<inc> so the loader uses comm.hpp's
   // REAL MPI rather than its serial stubs (n_ranks()=1). Without it a distributed layout built inside
   // the loader replicates on every rank (ADC-319). A serial module exposes False / empty.
 #if defined(POPS_HAS_MPI)
@@ -80,7 +80,7 @@ void init_core(py::module_& m) {
 #endif
 
   // AUX channel limits + canonical name table (ADC-291), exposed from the SINGLE C++ source
-  // (adc/core/state.hpp + aux_names.hpp). The DSL/capabilities() read these so the Python mirrors
+  // (pops/core/state.hpp + aux_names.hpp). The DSL/capabilities() read these so the Python mirrors
   // (AUX_NAMED_MAX / AUX_NAMED_BASE / AUX_CANONICAL in dsl.py) cannot SILENTLY drift from C++:
   // test_capabilities.py asserts they match. kAuxMaxExtra is the only remaining compile-time aux
   // limit and is now declarative + introspectable here.

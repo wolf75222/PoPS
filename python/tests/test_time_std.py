@@ -8,7 +8,7 @@ acceptance: "RK4 is expressed without a special RK4 class"). This test exercises
 polynomials in dt on the committed state. Parity vs the old C++ steppers needs compile_problem (Phase 2c)
 and is deferred.
 
-Run with python3 (PYTHONPATH = built adc package).
+Run with python3 (PYTHONPATH = built pops package).
 """
 from pops import time as adctime
 

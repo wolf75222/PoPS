@@ -29,7 +29,7 @@ and the `include/pops/mesh/index/box2d.hpp` header comment.
 
 ## GPU: validated manually on ROMEO, not in CI
 
-CI never builds `-DADC_USE_KOKKOS=ON -DKokkos_ENABLE_CUDA=ON`. All GPU validation
+CI never builds `-DPOPS_USE_KOKKOS=ON -DKokkos_ENABLE_CUDA=ON`. All GPU validation
 (Kokkos Cuda single-GPU, and MPI + Kokkos Cuda multi-GPU) is done by hand on the
 ROMEO supercomputer (GH200 node, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI
 CUDA-aware), via SBATCH harnesses in `python/tests/gpu/` (excluded from the CI glob). A
@@ -107,7 +107,7 @@ The two-fluid isothermal asymptotic-preserving integrator is not a composable br
 core: it is a scenario. Its AP stabilization couples the stiffness to the time step in
 the elliptic, which `System` composition does not reproduce. Its C++ physics lives in
 `adc_cases/two_fluid_ap/` (`two_fluid_ap.hpp`), compiled on the fly against the generic
-headers of `adc_cpp`; the `_pops` module does not expose it and `adc` does not re-export it.
+headers of `adc_cpp`; the `_pops` module does not expose it and `pops` does not re-export it.
 
 ## Hoffart full model: reproduction not established
 
@@ -129,7 +129,7 @@ The Python module (`pops._pops`) is a `.so` linked to the interpreter that compi
 
 - importing it under an interpreter of another version (e.g. a system `python3` 3.9) fails,
   with a message that now names the expected tag and the rebuild command;
-- without numpy, `import adc` and `pops.System` work; only `pops.dsl` (host evaluator)
+- without numpy, `import pops` and `pops.System` work; only `pops.dsl` (host evaluator)
   fails, with a message that asks for numpy.
 
 You must therefore use exactly the 3.12 interpreter that built the module (with numpy), and

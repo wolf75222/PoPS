@@ -25,7 +25,7 @@ Python Development Guide.
 
 | Fix | Detail | Validation |
 |---|---|---|
-| **ABI key enriched with `kokkos=` + `stdlib=`** (the 2 confirmed UB holes) | [abi_key.hpp](../include/pops/runtime/dynamic/abi_key.hpp): `;kokkos=<0|1>` (POPS_HAS_KOKKOS, allocator/types layouts) + `;stdlib=libc++_NNN|libstdc++_NNN` (libc++/libstdc++ mix). A single inline function -> module AND loader consistent automatically | key printed with/without `-DADC_HAS_KOKKOS` ; Python parsers (`std=`, `headers=`) insensitive (tested) |
+| **ABI key enriched with `kokkos=` + `stdlib=`** (the 2 confirmed UB holes) | [abi_key.hpp](../include/pops/runtime/dynamic/abi_key.hpp): `;kokkos=<0|1>` (POPS_HAS_KOKKOS, allocator/types layouts) + `;stdlib=libc++_NNN|libstdc++_NNN` (libc++/libstdc++ mix). A single inline function -> module AND loader consistent automatically | key printed with/without `-DPOPS_HAS_KOKKOS` ; Python parsers (`std=`, `headers=`) insensitive (tested) |
 | **Kokkos OpenMP "via conda" in 1 command** | [scripts/kokkos_openmp_conda.sh](../scripts/kokkos_openmp_conda.sh): builds Kokkos Serial+OpenMP into `$CONDA_PREFIX` (~2 min, tooling already provided by the env). Answer to the conda-forge Serial-only package | **actually tested**: build OK, `KOKKOS_ENABLE_OPENMP` present, configure adc_cpp -> `Kokkos found = (OPENMP;SERIAL)` |
 | libomp hints before `find_package(Kokkos)` | `KokkosConfig.cmake` does `find_dependency(OpenMP REQUIRED)` -> was failing on macOS ; macro `pops_apple_libomp_hints()` factored out (conda then brew), called for both OpenMP AND Kokkos | configure against the test Kokkos OpenMP: OK |
 | **FetchContent consumer no longer compiles the tests** (HIGH confirmed) | `option(POPS_BUILD_TESTS ${PROJECT_IS_TOP_LEVEL})` + bump `cmake_minimum_required(3.21)` (aligned with presets) | test super-project: **0 test target** pulled, `app` links `pops::pops` and runs ; top-level unchanged (120 targets) |
@@ -57,7 +57,7 @@ Python Development Guide.
   (WarpX pattern: `POPS_KOKKOS=ON POPS_MPI=ON pip install .`). This is THE 2025-2026 standard
   (pybind11, Scientific Python Guide, pyAMReX/WarpX/PyBaMM). PyBaMM caveat: test early on
   aarch64 (ROMEO Grace).
-- **`install()`/export package-config** (~30 lines): `find_package(adc)` for consumers
+- **`install()`/export package-config** (~30 lines): `find_package(pops)` for consumers
   outside FetchContent + prerequisite for a possible conda/Spack feedstock. Guarded by `POPS_INSTALL`.
 
 ### P2, incremental robustness/convenience

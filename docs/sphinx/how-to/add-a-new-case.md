@@ -2,17 +2,17 @@
 
 A *case* is a named scenario that builds a model, wires it into an `pops.System`, sets the
 initial data, and runs the time loop. Cases are not part of `adc_cpp`: they live in the
-companion `adc_cases` repository, one folder per case, each importing the installed `adc`
-Python package. This guide assumes you can already build and import `adc`; if not, start
+companion `adc_cases` repository, one folder per case, each importing the installed `pops`
+Python package. This guide assumes you can already build and import `pops`; if not, start
 with the [installation guide](../getting-started/installation.md).
 
 The convention is one folder per case under `adc_cases`. The folder holds a runnable
-Python script that imports `adc`, composes a model, plugs it into a system, and steps it.
+Python script that imports `pops`, composes a model, plugs it into a system, and steps it.
 
 ## Steps
 
-1. Build and install `adc` so the case can import it. Use the `python` preset, which builds the
-   importable `adc` module. The `serial` preset leaves `POPS_BUILD_PYTHON=OFF`, so `import adc`
+1. Build and install `pops` so the case can import it. Use the `python` preset, which builds the
+   importable `pops` module. The `serial` preset leaves `POPS_BUILD_PYTHON=OFF`, so `import pops`
    would later fail. Use the `python-parallel` preset instead for the multi-thread (Kokkos
    OpenMP) variant.
 

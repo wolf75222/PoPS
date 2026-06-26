@@ -8,7 +8,7 @@ scheme string, requirements, capabilities); the codegen and runtime consume it.
 
 | Kind | Meaning | Example |
 | --- | --- | --- |
-| NativeBrick | a C++ type already in `include/adc` | `pops.lib.riemann.HLLC()` -> `pops::HLLCFlux` |
+| NativeBrick | a C++ type already in `include/pops` | `pops.lib.riemann.HLLC()` -> `pops::HLLCFlux` |
 | GeneratedBrick | a DSL-authored brick compiled to C++ | a custom source / local matrix |
 | MacroBrick | a Python function that builds Program IR | `pops.lib.time.predictor_corrector` |
 | ExternalCppBrick | a user C++ brick registered by id | `pops.lib.riemann.User("my_hllc")` |
@@ -38,7 +38,7 @@ lib.solvers.GMRES().native_id   # 'pops::gmres_solve' (a native free function)
 lib.fields.Poisson().available  # False (no standalone native type yet; solved via GeometricMG)
 ```
 
-The native ids resolve to real symbols in `include/adc` (verified by the test suite); see
+The native ids resolve to real symbols in `include/pops` (verified by the test suite); see
 {doc}`native-numerics` for the FV solver/reconstruction bricks.
 
 ## Macros (time schemes)
@@ -89,7 +89,7 @@ resolves that entry point ONCE; the only runtime string left is the limiter (a 4
 once at install, never per cell).
 
 ```cpp
-// my_riemann.cpp -- compiled to my_riemann.so against the adc headers
+// my_riemann.cpp -- compiled to my_riemann.so against the pops headers
 struct MyRiemann {
   template <class Model>
   POPS_HD typename Model::State operator()(const Model& m, const typename Model::State& UL,

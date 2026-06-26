@@ -13,7 +13,7 @@ ROMEO: x86_64 login, aarch64 GPU nodes (Grace-Hopper, `armgpu`, 4x H100/GH200), 
 nvcc must run ON the GPU node (aarch64 binary), so we compile and run inside the allocation.
 
 ```bash
-# 1. generer le harnais CUDA (depuis la racine du repo, paquet adc construit dans build-py)
+# 1. generer le harnais CUDA (depuis la racine du repo, paquet pops construit dans build-py)
 PYTHONPATH=$PWD/build-py/python python3 python/tests/gpu/gen_cuda_harness.py   # -> /tmp/euler_gpu.cu
 
 # 2. envoyer en-tetes + harnais + script
@@ -44,12 +44,12 @@ GPU.
 ## Kokkos (parallel_for dispatch, CUDA backend)
 
 Beyond raw CUDA, we verify the generated brick through the REAL parallel dispatch that the solver
-uses (`adc/mesh/execution/for_each.hpp` -> `Kokkos::parallel_for`). We build Kokkos from sources
+uses (`pops/mesh/execution/for_each.hpp` -> `Kokkos::parallel_for`). We build Kokkos from sources
 (no module on ROMEO) then a `Kokkos::parallel_for(KOKKOS_LAMBDA ...)` harness that computes the flux
 of `EulerGen` on the device and compares it against `pops::Euler` on the host.
 
 ```bash
-# 1. generer le harnais Kokkos (depuis la racine, paquet adc construit dans build-py)
+# 1. generer le harnais Kokkos (depuis la racine, paquet pops construit dans build-py)
 PYTHONPATH=$PWD/build-py/python python3 python/tests/gpu/gen_kokkos_harness.py   # -> /tmp/kokkos_euler.cpp
 
 # 2. envoyer en-tetes + harnais (+ CMakeLists) + script, cloner Kokkos
@@ -79,11 +79,11 @@ The default execution space is `Cuda` (the kernel does run on the GPU). The devi
 (5.55e-17), due to the FMA contraction of nvcc_wrapper differing from the host, not a bug: the generated
 brick is correct through the Kokkos dispatch on GH200.
 
-## COMPLETE case (time-stepping) on GPU via adc's Kokkos seam
+## COMPLETE case (time-stepping) on GPU via pops's Kokkos seam
 
 We go beyond an isolated flux: a complete 2D Euler case (80 steps, CFL, Rusanov order 1, periodic)
 advances ENTIRELY on GPU through `pops::for_each_cell` / `for_each_cell_reduce_max|sum`
-(`adc/mesh/execution/for_each.hpp` -> `Kokkos::parallel_for` / `parallel_reduce`). We simulate the SAME thing with
+(`pops/mesh/execution/for_each.hpp` -> `Kokkos::parallel_for` / `parallel_reduce`). We simulate the SAME thing with
 the generated brick `EulerGen` and with `pops::Euler`, and we compare the final fields + the mass.
 
 ```bash
@@ -94,7 +94,7 @@ ssh romeo 'cd ~/pops_dsl_kk && srun --account=<compte> -p instant --constraint=a
            --gres=gpu:1 --mem=16G -c 16 -t 25 bash kk_sim_build.sh'
 ```
 
-The harness defines `#define POPS_HAS_KOKKOS` then includes `adc/mesh/execution/for_each.hpp`: the cell
+The harness defines `#define POPS_HAS_KOKKOS` then includes `pops/mesh/execution/for_each.hpp`: the cell
 loops therefore go through the solver's REAL Kokkos dispatch (the same call site as on CPU).
 
 Result (obtained):
@@ -104,11 +104,11 @@ exec=Cuda  n=64 steps=80  mass_drel=0.000e+00  rho[min,max]=[0.8912,1.0464]  max
 
 80 time steps on GH200: mass EXACTLY conserved, non-trivial dynamics (the pressure bubble
 makes the density vary), and the generated brick == `pops::Euler` to machine precision (8.9e-16 accumulated
-over 80 steps). The complete case therefore runs on GPU through adc's Kokkos machinery.
+over 80 steps). The complete case therefore runs on GPU through pops's Kokkos machinery.
 
 ## Limits / next steps
 
-- The complete case goes through `adc/mesh/execution/for_each.hpp` (the solver's REAL Kokkos seam), but we do not
+- The complete case goes through `pops/mesh/execution/for_each.hpp` (the solver's REAL Kokkos seam), but we do not
   rebuild the whole runtime stack (System / AMR / MPI) on GPU here: the cell loops
   use the same dispatch as production, which is enough to validate the device.
 - Type-erased dispatch at runtime: DONE elsewhere (pops::IModel, see python/tests/test_dsl_dynamic.py).

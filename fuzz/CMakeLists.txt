@@ -19,17 +19,17 @@ endif()
 # POPS_FUZZ_SANITIZERS surchargeable : sur macOS, l'ASan du LLVM Homebrew DEADLOCKE avant main
 # (init re-entrante : InitializeShadowMemory -> get_dyld_hdr -> Block_copy -> malloc -> re-entre
 # AsanInit -> spinlock ; verifie par `sample`, MallocNanoZone=0 ne suffit PAS). En local Mac :
-# -DADC_FUZZ_SANITIZERS=undefined (fuzzer+UBSan, pas d'ASan). Le CI Linux garde le defaut complet.
+# -DPOPS_FUZZ_SANITIZERS=undefined (fuzzer+UBSan, pas d'ASan). Le CI Linux garde le defaut complet.
 set(POPS_FUZZ_SANITIZERS "address,undefined" CACHE STRING
     "Sanitizers combines au moteur libFuzzer (defaut address,undefined ; 'undefined' seul sur macOS)")
 if(POPS_FUZZ_SANITIZERS)
-  set(_adc_fuzz_san "fuzzer,${POPS_FUZZ_SANITIZERS}")
+  set(_pops_fuzz_san "fuzzer,${POPS_FUZZ_SANITIZERS}")
 else()
-  set(_adc_fuzz_san "fuzzer")
+  set(_pops_fuzz_san "fuzzer")
 endif()
-set(POPS_FUZZ_FLAGS -fsanitize=${_adc_fuzz_san} -fno-omit-frame-pointer
+set(POPS_FUZZ_FLAGS -fsanitize=${_pops_fuzz_san} -fno-omit-frame-pointer
                    -fno-sanitize-recover=undefined)
-message(STATUS "pops: fuzz/ -> -fsanitize=${_adc_fuzz_san}")
+message(STATUS "pops: fuzz/ -> -fsanitize=${_pops_fuzz_san}")
 
 function(pops_add_fuzzer name)
   add_executable(${name} ${name}.cpp)

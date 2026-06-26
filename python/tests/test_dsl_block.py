@@ -19,7 +19,7 @@ INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "i
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes adc absents -> bloc dynamique saute")
+        print("skip  compilateur ou en-tetes pops absents -> bloc dynamique saute")
         print("test_dsl_block : OK (rien a compiler)")
         return
 
