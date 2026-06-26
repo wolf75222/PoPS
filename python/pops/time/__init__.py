@@ -14,6 +14,7 @@ cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
 """
 from pops.time.equations import (  # noqa: F401  (re-export the std builder surface)
     ButcherTableau,
+    _stage_rhs,
     adams_bashforth,
     adams_bashforth2,
     condensed_schur,

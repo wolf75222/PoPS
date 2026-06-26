@@ -15,6 +15,7 @@ from .cache import pops_cache_dir  # noqa: F401
 from .abi import check_compiled_matches_module  # noqa: F401
 from .compile import compile_problem  # noqa: F401
 from .loader import CompiledProblem  # noqa: F401
+from .library_codegen import emit_library_cpp  # noqa: F401
 
 __all__ = [
     "pops_header_signature",
@@ -26,4 +27,5 @@ __all__ = [
     "check_compiled_matches_module",
     "compile_problem",
     "CompiledProblem",
+    "emit_library_cpp",
 ]

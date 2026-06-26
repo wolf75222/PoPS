@@ -11,7 +11,7 @@ library-descriptor reader (:func:`read_library_manifest`) and by
 
 The manifest, the ABI key and the content hash are numerics-free (no Python solve).
 ``compile_library(..., emit=True)`` ALSO emits the C++ of the library's bricks
-(:mod:`pops.library_codegen`) and compiles a real ``.so`` with the same Kokkos toolchain a
+(:mod:`pops.codegen.library_codegen`) and compiles a real ``.so`` with the same Kokkos toolchain a
 problem ``.so`` uses (:func:`pops.dsl.pops_loader_build_flags`, ``POPS_KOKKOS_ROOT``), exporting
 the metadata, the ABI key, the brick list / signatures / requirements / capabilities and the
 generated symbols. :func:`read_library_manifest` reads that descriptor back from the ``.so``
@@ -158,7 +158,7 @@ def compile_library(name, objects, *, backend="production", emit=False, so_path=
 
     With ``emit=False`` (default) it returns the MANIFEST only (numerics-free, no
     compiler needed). With ``emit=True`` it ALSO emits the library C++
-    (:func:`pops.library_codegen.emit_library_cpp`) and compiles a REAL ``.so`` with the
+    (:func:`pops.codegen.library_codegen.emit_library_cpp`) and compiles a REAL ``.so`` with the
     same Kokkos toolchain a problem ``.so`` uses (:func:`pops.dsl.pops_loader_build_flags`,
     ``POPS_KOKKOS_ROOT``); the returned manifest carries the artifact ``so_path``. Without
     an explicit ``so_path`` the ``.so`` is cached out-of-source keyed by the content hash +
@@ -197,7 +197,7 @@ def _emit_and_compile(manifest, *, so_path=None, cxx=None, force=False):
     import tempfile
 
     from . import dsl
-    from .library_codegen import emit_library_cpp
+    from .codegen.library_codegen import emit_library_cpp
 
     src = emit_library_cpp(manifest)
     include = dsl.pops_include()
