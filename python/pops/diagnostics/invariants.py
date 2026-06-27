@@ -1,4 +1,4 @@
-"""pops.lib.diagnostics.invariants -- the conservation-invariant brick catalog (Spec 3).
+"""pops.diagnostics.invariants -- the conservation-invariant brick catalog (Spec 3 / Spec 5).
 
 An ``invariant`` descriptor names a conserved quantity (an optional board-value
 expression kept off the identity key); ``conservation_check`` names a tolerance
@@ -6,7 +6,7 @@ check. Both are macro descriptors -- they compute nothing.
 """
 from types import SimpleNamespace
 
-from ..descriptors import BrickDescriptor
+from pops.descriptors import BrickDescriptor
 
 
 def _invariant(name, expression=None, over=None):

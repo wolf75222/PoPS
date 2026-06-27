@@ -1,15 +1,16 @@
-"""pops.lib.diagnostics -- the diagnostic brick catalog (Spec 3).
+"""pops.diagnostics -- the diagnostic brick catalog (Spec 3 / Spec 5).
 
 Scalar reductions (integral / norm / mass / momentum / energy / ...) as macro
 descriptors. The conservation-invariant descriptors are catalogued separately in
-:mod:`pops.lib.diagnostics.invariants` (re-exported as ``lib.invariants``).
+:mod:`pops.diagnostics.invariants`.
 
-DEFER (no catalogued source): a ``reductions.py`` impl file -- lib does no numeric
-Python (see the PR-D blueprint DEFER list).
+Spec 5 (sec.4 / sec.5.13) homes diagnostics in the top-level ``pops.diagnostics``
+package (formerly ``pops.lib.diagnostics``). The reduction macros stay inert
+descriptors; nothing here computes in Python.
 """
 from types import SimpleNamespace
 
-from ..descriptors import BrickDescriptor
+from pops.descriptors import BrickDescriptor
 from .invariants import invariants
 
 
@@ -28,4 +29,14 @@ diagnostics = SimpleNamespace(
     residual=lambda **o: _diag("residual", **o),
 )
 
-__all__ = ["diagnostics", "invariants"]
+# Spec 5: expose the reductions at module scope (``from pops.diagnostics import norm``).
+integral = diagnostics.integral
+norm = diagnostics.norm
+mass = diagnostics.mass
+momentum = diagnostics.momentum
+energy = diagnostics.energy
+invariant_error = diagnostics.invariant_error
+residual = diagnostics.residual
+
+__all__ = ["diagnostics", "invariants", "integral", "norm", "mass", "momentum",
+           "energy", "invariant_error", "residual"]

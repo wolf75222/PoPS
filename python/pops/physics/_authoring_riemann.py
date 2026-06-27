@@ -52,7 +52,7 @@ class _RiemannMixin:
                 raise NotImplementedError(
                     "riemann hook %r does not yet accept an arbitrary board formula (its C++ "
                     "signature spans two states); pass a capability-hook descriptor "
-                    "(e.g. pops.lib.riemann.hllc.contact_speed.euler()) for the role-derived "
+                    "(e.g. pops.numerics.riemann.hllc.contact_speed.euler()) for the role-derived "
                     "default. Formula override is available for: %s"
                     % (name, ", ".join(self._FORMULA_HOOKS)))
             self._riemann_hook_forms[name] = form

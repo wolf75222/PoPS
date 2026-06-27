@@ -1,4 +1,4 @@
-"""pops.lib.moments.speeds -- the wave-speed strategy descriptor (inert).
+"""pops.moments.speeds -- the wave-speed strategy descriptor (inert).
 
 Maps the moment-model wave-speed strategy onto the engine's ``exact_speeds`` / ``roe``
 flags:

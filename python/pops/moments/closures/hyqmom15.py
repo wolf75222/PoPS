@@ -1,4 +1,4 @@
-"""pops.lib.moments.closures.hyqmom15 -- the HyQMOM15 (order-4) closure.
+"""pops.moments.closures.hyqmom15 -- the HyQMOM15 (order-4) closure.
 
 The HyQMOM15 system is the 15-variable order-4 2D moment hierarchy. Its provided
 closure is the Levermore / Gaussian closure of order 4 (:func:`gaussian_closure(4)`),

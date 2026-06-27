@@ -1,4 +1,4 @@
-"""pops.lib.moments.closures -- the moment-closure surface (the only physics).
+"""pops.moments.closures -- the moment-closure surface (the only physics).
 
 Public surface:
   closure          -- a decorator that validates a closure returns exactly the order

@@ -23,7 +23,23 @@ import os
 import tempfile
 
 import pops
-import pops.lib as lib
+import types as _t
+import pops.lib as _lib
+import pops.numerics as _num
+import pops.descriptors as _desc
+# Spec 5 (sec.4): catalogs moved out of pops.lib; transitional alias onto the new homes.
+lib = _t.SimpleNamespace(
+    riemann=_num.riemann.riemann, reconstruction=_num.reconstruction.reconstruction,
+    limiters=_num.limiters, projections=_num.projections.projections,
+    BrickDescriptor=_desc.BrickDescriptor, external=_desc.external,
+    load_cpp_library=_desc.load_cpp_library,
+    _register_manifest=_desc._register_manifest,
+    _clear_external_catalog=_desc._clear_external_catalog,
+    solvers=_lib.solvers, preconditioners=_lib.preconditioners, solver=_lib.solver,
+    build_solver_ir=_lib.build_solver_ir, generate_solver_cpp=_lib.generate_solver_cpp,
+    SolverContext=_lib.SolverContext, SolverIR=_lib.SolverIR,
+    spatial=_lib.spatial, fields=_lib.fields,
+)
 
 
 def build_manifest():

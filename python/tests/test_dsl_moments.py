@@ -38,7 +38,7 @@ import numpy as np
 
 import pops
 from pops.codegen.toolchain import _default_cxx
-from pops.lib.moments import (bgk_source, build_moment_model, gaussian_closure,
+from pops.moments import (bgk_source, build_moment_model, gaussian_closure,
                          lorentz_sources, maxwellian_moments, moment_indices,
                          moment_names)
 

@@ -276,7 +276,7 @@ class Model(_MultiSpeciesMixin):
         ADC-456: passing an explicit board formula for a capability quantity (e.g.
         ``pressure=<pops.math expr>``) overrides the role-derived hook with that formula's codegen
         (lowered via :meth:`pops.dsl.Model.set_riemann_hooks`). A capability hook DESCRIPTOR
-        (``pops.lib.riemann.hllc.contact_speed.euler()``) or ``None`` keeps the role-derived default.
+        (``pops.numerics.riemann.hllc.contact_speed.euler()``) or ``None`` keeps the role-derived default.
         A formula referencing a quantity the model cannot provide still raises the clear capability
         error at codegen.
         """

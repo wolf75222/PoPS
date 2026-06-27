@@ -20,7 +20,7 @@ deleted; no backward-compatibility shims exist.
 | `pops.model` | Typed model core: `Module`, spaces, `Operator`, `OperatorRegistry`. Imports `pops.ir` only. |
 | `pops.physics` | Math/physics authoring facade (`pops.physics.Model`). Lowers to a `pops.model.Module`. |
 | `pops.time` | Temporal language: `Program`, schedules, equations. |
-| `pops.lib` | Descriptors, time schemes, moment closures (`pops.lib.moments`), provided standard models. |
+| `pops.lib` | Descriptors, time schemes, moment closures (`pops.moments`), provided standard models. |
 | `pops.codegen` | The only C++ emitter. Free functions (`emit_cpp_*`, `module_codegen`) that take a model. |
 
 Key rule: `pops.physics`, `pops.time`, and `pops.lib` never import `pops.codegen` or `_pops`.
@@ -237,7 +237,7 @@ are CPU-only (no MPI/AMR/GPU); `production` is CPU + MPI + AMR. See
 
 ## Moment models
 
-The `pops.lib.moments` submodule generates a `pops.physics.facade.Model` for a 2D velocity-moment hierarchy from a
+The `pops.moments` submodule generates a `pops.physics.facade.Model` for a 2D velocity-moment hierarchy from a
 single closure: the central and standardized moments, the flux, and the signed wave speeds are
 derived, so you write only the closure (and, optionally, the sources). For the concept see
 [moments and closures](../concepts/moments-and-closures.md), for the worked example
@@ -245,7 +245,7 @@ derived, so you write only the closure (and, optionally, the sources). For the c
 [moment models](moment-models.md).
 
 ```{eval-rst}
-.. automodule:: pops.lib.moments
+.. automodule:: pops.moments
    :members: build_moment_model, gaussian_closure, lorentz_sources, moment_names, moment_indices
 ```
 

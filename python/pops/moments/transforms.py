@@ -1,4 +1,4 @@
-"""pops.lib.moments.transforms -- the binomial / standardization transform descriptors (inert).
+"""pops.moments.transforms -- the binomial / standardization transform descriptors (inert).
 
 Document the two transforms the generator performs:
 

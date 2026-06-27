@@ -164,7 +164,7 @@ extern "C" int pops_library_generated_symbol_count() {{ return {gen_count}; }}
 extern "C" const char* pops_brick_manifest() {{ return {manifest_json}; }}
 
 // Register every brick into the process-global BrickRegistry at static-init time, so this library
-// .so is ALSO a self-describing external-brick .so (pops.lib.riemann.User(id) resolves after load).
+// .so is ALSO a self-describing external-brick .so (pops.numerics.riemann.User(id) resolves after load).
 namespace {{
 const bool pops_library_registered = [] {{
 {register}

@@ -1,15 +1,15 @@
 # Moment models
 
-Reference for `pops.lib.moments`, the generic 2D moment-hierarchy generator. It turns a single closure
+Reference for `pops.moments`, the generic 2D moment-hierarchy generator. It turns a single closure
 into a full [symbolic DSL model](symbolic-dsl.md): the central and standardized moments, the flux,
 and the signed wave speeds are all derived, so you write only the closure (and, optionally, the
 sources). For the concept see [moments and closures](../concepts/moments-and-closures.md); for a
 worked example see [the HyQMOM tutorial](../tutorials/moment-model-hyqmom15.md).
 
-`pops.lib.moments` is a specialized generator and is imported explicitly:
+`pops.moments` is a specialized generator and is imported explicitly:
 
 ```python
-from pops.lib import moments as gmom
+from pops import moments as gmom
 ```
 
 ## `build_moment_model`

@@ -1,24 +1,34 @@
 """Spec 3 external C++ bricks (ADC-463, criterion 20).
 
 A Spec 3 brick is native / generated / macro / external-C++. These tests cover
-the last category: ``pops.lib.load_cpp_library(path)`` dlopens a user ``.so``,
+the last category: ``pops.descriptors.load_cpp_library(path)`` dlopens a user ``.so``,
 reads its JSON manifest (over the C++ ``BrickRegistry``), and registers the ids
-in an in-process catalog; ``pops.lib.riemann.User(id)`` / ``pops.lib.external(id)``
+in an in-process catalog; ``pops.numerics.riemann.User(id)`` / ``pops.descriptors.external(id)``
 then surface an ``external_cpp`` descriptor carrying the manifest's requirements.
 An id that was never loaded raises a CLEAR error.
 
 The manifest-parsing seam (``_register_manifest``) is exercised directly so the
 test needs no compiled ``.so``; ``load_cpp_library`` is the real ``.so`` path on
-top of it. The real ``pops.lib`` functions are used -- pops is never faked.
+top of it. The real functions are used -- pops is never faked.
 """
 import os
 import json
 import shutil
 import subprocess
+import types
 
 import pytest
 
-lib = pytest.importorskip("pops.lib")
+# Spec 5 (sec.4): the brick-loader + generic external() live in pops.descriptors, and
+# the riemann ``User`` selector in pops.numerics.riemann (formerly all under pops.lib).
+_desc = pytest.importorskip("pops.descriptors")
+lib = types.SimpleNamespace(
+    riemann=pytest.importorskip("pops.numerics.riemann").riemann,
+    external=_desc.external,
+    load_cpp_library=_desc.load_cpp_library,
+    _register_manifest=_desc._register_manifest,
+    _clear_external_catalog=_desc._clear_external_catalog,
+)
 
 _INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
 

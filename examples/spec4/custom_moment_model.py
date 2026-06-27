@@ -5,8 +5,8 @@ The moment-model kit is the Spec 4 replacement for the banned ``custom.py`` esca
 a closure is a decorated callable, and a model is a recorded specification that builds a
 ``pops.physics`` model on demand.
 
-    from pops.lib.moments import CartesianVelocityMoments, MomentModel
-    from pops.lib.moments.closures import closure
+    from pops.moments import CartesianVelocityMoments, MomentModel
+    from pops.moments.closures import closure
 
 ``@closure(order=N)`` validates that the wrapped callable returns EXACTLY the standardized
 moments of order ``N+1`` (the keys ``S{p}{q}`` with ``p + q == N + 1``); a wrong key set
@@ -23,8 +23,8 @@ Run::
 """
 import sys
 
-from pops.lib.moments import CartesianVelocityMoments, MomentModel
-from pops.lib.moments.closures import closure
+from pops.moments import CartesianVelocityMoments, MomentModel
+from pops.moments.closures import closure
 
 
 @closure(order=2)

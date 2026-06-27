@@ -24,7 +24,7 @@ import numpy as np
 
 import pops
 from pops.codegen.toolchain import _default_cxx
-from pops.lib.moments import build_moment_model, gaussian_closure
+from pops.moments import build_moment_model, gaussian_closure
 
 fails = 0
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))

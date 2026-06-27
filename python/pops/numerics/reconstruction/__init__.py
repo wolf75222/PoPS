@@ -1,15 +1,15 @@
-"""pops.lib.reconstruction -- the spatial-reconstruction brick catalog (Spec 3).
+"""pops.numerics.reconstruction -- the spatial-reconstruction brick catalog (Spec 3 / Spec 5).
 
 FirstOrder / MUSCL / WENO5 / WENO5Z selectors plus a ``User`` selector for an
 external C++ reconstruction brick. The slope limiters are catalogued separately
-in :mod:`pops.lib.reconstruction.limiters` (re-exported as ``lib.limiters``).
+in :mod:`pops.numerics.reconstruction.limiters`.
 
 pops::Weno5 IS the WENO5-Z reconstruction (it wraps weno5z()); WENO5 and WENO5Z both
 select it. MUSCL is reconstruction-by-limiter; its native limiter type is pops::Minmod.
 """
 from types import SimpleNamespace
 
-from ..descriptors import _native, _external_descriptor
+from pops.descriptors import _native, _external_descriptor
 from .limiters import limiters
 
 reconstruction = SimpleNamespace(
@@ -22,4 +22,11 @@ reconstruction = SimpleNamespace(
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="reconstruction"),
 )
 
-__all__ = ["reconstruction", "limiters"]
+# Spec 5: expose the schemes at module scope (``from pops.numerics.reconstruction import MUSCL``).
+FirstOrder = reconstruction.FirstOrder
+MUSCL = reconstruction.MUSCL
+WENO5 = reconstruction.WENO5
+WENO5Z = reconstruction.WENO5Z
+User = reconstruction.User
+
+__all__ = ["reconstruction", "limiters", "FirstOrder", "MUSCL", "WENO5", "WENO5Z", "User"]

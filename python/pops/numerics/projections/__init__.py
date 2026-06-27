@@ -1,15 +1,14 @@
-"""pops.lib.operators -- the cell-wise projection brick catalog (Spec 3).
+"""pops.numerics.projections -- the cell-wise projection brick catalog (Spec 3 / Spec 5).
 
 Positivity is the pops::zhang_shu_scale free function (positivity.hpp); the others have
 no native symbol yet (a generated brick or a planned native type).
 
-DEFER (no catalogued source): ``operators.local_source`` / ``operators.local_matrix`` /
-``operators.split`` -- not in the Spec-3 catalog, so creating them would invent surface
-(see the PR-D blueprint DEFER list).
+Spec 5 (sec.4) homes these post-step projection bricks under ``pops.numerics`` (formerly
+``pops.lib.operators``).
 """
 from types import SimpleNamespace
 
-from ..descriptors import _native, _planned, BrickDescriptor
+from pops.descriptors import _native, _planned, BrickDescriptor
 
 projections = SimpleNamespace(
     positivity=lambda **o: _native("positivity", "pops::zhang_shu_scale", "positivity",
@@ -24,4 +23,11 @@ projections = SimpleNamespace(
         scheme="divergence_cleaning", options=o or None),
 )
 
-__all__ = ["projections"]
+# Spec 5: expose the projections at module scope.
+positivity = projections.positivity
+bound_preserving = projections.bound_preserving
+conservative_fix = projections.conservative_fix
+divergence_cleaning = projections.divergence_cleaning
+
+__all__ = ["projections", "positivity", "bound_preserving",
+           "conservative_fix", "divergence_cleaning"]
