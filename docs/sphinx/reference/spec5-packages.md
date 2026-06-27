@@ -65,8 +65,12 @@ A face Dirichlet is `Dirichlet(value=0.0, on=XMin)`. See {doc}`../concepts/ellip
 ## `pops.mesh`: meshes, layouts, AMR, geometry
 
 Meshes (`CartesianMesh` / `PolarMesh`), `layouts` (`Uniform` / `AMR`), `amr` (the refinement
-criteria and policies), `geometry` (`Disc` / `HalfPlane` / `EmbeddedBoundary` / `LevelSet`),
-`masks`, and `boundaries`. Refinement is authored with the `Refine` builder
+criteria and policies), `geometry` (`Disc` / `NoWall` / `HalfPlane` / `EmbeddedBoundary` /
+`LevelSet` / `DiscDomain`), `masks` (`NoMask` / `Staircase` / `CutCell`), and `boundaries`. The
+disc-domain geometry is typed (Spec 5 sec.8.16): `sim.set_disc_domain(DiscDomain(center=(cx, cy),
+radius=R, mode=CutCell()))` and `sim.set_poisson(wall=Disc(radius=R))` replace the legacy
+`mode=` / `wall=` strings, lowering to the identical native call. Refinement is authored with the
+`Refine` builder
 (`Refine.on(subject).above(threshold)` / `.below(...)`); the regrid cadence, proper nesting,
 patch layout, and output are typed policies, not loose keyword strings.
 

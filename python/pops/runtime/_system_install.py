@@ -13,6 +13,33 @@ from pops.runtime.bricks import (
 )
 
 
+def _lower_wall(wall):
+    """Lower a Poisson ``wall`` to the native ``(wall_token, wall_radius)`` (Spec 5 sec.8.16).
+
+    Accepts the legacy string (``"none"`` / ``"circle"``) -> ``(wall, 0.0)`` (the caller supplies
+    ``wall_radius`` separately, so the string path stays byte-identical), OR a typed
+    :mod:`pops.mesh.geometry` wall (``NoWall`` -> ``("none", 0.0)``, ``Disc`` ->
+    ``("circle", radius)``) -> ``(token, radius)``. A typed geometry that is NOT a wall raises a
+    clear :class:`TypeError` (that surface is new, so there is no legacy behavior to preserve). Any
+    STRING passes straight through to the native ``set_poisson``, which validates an unknown token
+    with its own error exactly as before -- the coercion never adds a stricter string rejection of
+    its own (cf. the ``lower_backend(None)`` regression: a transparent coercion keeps the legacy
+    error path intact).
+
+    Returns:
+        A ``(wall_token, wall_radius)`` pair, or ``None`` when ``wall`` is a string (the caller
+        keeps its own ``wall_radius=`` argument so the legacy call is byte-identical).
+    """
+    if isinstance(wall, str):
+        return None
+    lower_wall = getattr(wall, "lower_wall", None)
+    if lower_wall is None:
+        raise TypeError(
+            "set_poisson: wall must be a 'none' / 'circle' string or a typed "
+            "pops.mesh.geometry wall (NoWall / Disc), got %r" % (type(wall).__name__,))
+    return lower_wall()
+
+
 class _SystemInstall:
     """Block/equation/coupling installation methods of System."""
 
@@ -333,6 +360,29 @@ class _SystemInstall:
         followed by set_density."""
         self.add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
+
+    def set_poisson(self, rhs="charge_density", solver="geometric_mg", bc="auto",
+                    wall="none", wall_radius=0.0, epsilon=1.0, abs_tol=0.0):
+        """Configure the shared system Poisson solve (thin wrapper over the native binding).
+
+        Spec 5 sec.8.16 lets ``wall`` be a TYPED conducting wall in addition to the legacy
+        string::
+
+            from pops.mesh.geometry import Disc, NoWall
+            sim.set_poisson(bc="dirichlet", wall=Disc(radius=0.4))   # == wall="circle", wall_radius=0.4
+            sim.set_poisson(wall=NoWall())                           # == wall="none"
+
+        A typed :class:`pops.mesh.geometry.Disc` lowers to ``wall="circle"`` + its radius (the
+        ``wall_radius=`` argument is then ignored in favour of the disc's radius); a
+        :class:`pops.mesh.geometry.NoWall` lowers to ``wall="none"``. The legacy string form is
+        passed through unchanged (byte-identical native call). All the other arguments mirror the
+        native ``set_poisson`` defaults verbatim.
+        """
+        lowered = _lower_wall(wall)
+        if lowered is not None:
+            wall, wall_radius = lowered  # typed wall overrides the wall string + radius
+        self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
+                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol)
 
     def add_elliptic_model(self, name, model, solver=None, bc="auto", wall="none",
                            wall_radius=0.0):
