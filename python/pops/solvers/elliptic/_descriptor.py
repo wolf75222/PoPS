@@ -9,8 +9,9 @@ parameter surface, not the bare string ``solver="geometric_mg"``:
   tolerance (:class:`pops.solvers.tolerances.Relative` / :class:`~pops.solvers.tolerances.Absolute`)
   and a V-cycle cap (``max_cycles``). It declares its capabilities (uniform / amr / mpi / gpu /
   variable_epsilon) so an unsupported route is refused before the runtime is touched.
-* :class:`FFT` -- a PLANNED spectral Poisson solver (periodic BC, power-of-two grid); no native
-  symbol yet, so ``available()`` reports ``partial`` and points at :class:`GeometricMG`.
+* :class:`FFT` -- the real ``pops::PoissonFFTSolver`` (periodic BC, constant coefficient,
+  power-of-two grid); ``available()`` reports ``partial`` for those route constraints (not
+  because it is unimplemented) and points at :class:`GeometricMG` for the general case.
 
 Both are inert (Spec 5 sec.6): they record the choice and answer ``available`` / ``lower`` /
 ``inspect``; the C++ kernel performs the multigrid V-cycles. The ``scheme`` attribute mirrors
@@ -88,17 +89,19 @@ class GeometricMG(Descriptor):
 
 
 class FFT(Descriptor):
-    """A PLANNED FFT-based spectral Poisson solver (periodic BC, power-of-two grid).
+    """An FFT-based spectral Poisson solver (``pops::PoissonFFTSolver``).
 
-    No native symbol exists yet, so :meth:`available` reports ``partial`` (it names the slot
-    and the constraints and points at :class:`GeometricMG`) and :attr:`native_id` is ``None``.
-    ``spectral=True`` selects the continuous symbol ``-(kx^2 + ky^2)`` over the discrete
-    stencil. Inert.
+    A real, runtime-wired elliptic solver selectable today via the ``fft`` / ``fft_spectral``
+    tokens (validated to ~1e-12); under MPI it routes through the remapped FFT path. Its
+    availability is :meth:`available` ``partial`` because the spectral route carries genuine
+    constraints, not because it is unimplemented: it requires a PERIODIC boundary, a
+    CONSTANT-coefficient operator (no wall / embedded boundary) and a power-of-two grid.
+    ``spectral=True`` selects the continuous symbol ``-(kx^2 + ky^2)`` (token ``fft_spectral``)
+    over the discrete stencil (token ``fft``). Inert -- the C++ runs the transform.
     """
 
     category = "elliptic_solver"
-    native_id = None
-    scheme = "fft"
+    native_id = "pops::PoissonFFTSolver"
 
     def __init__(self, spectral=False):
         self.spectral = bool(spectral)
@@ -106,6 +109,10 @@ class FFT(Descriptor):
     @property
     def name(self):
         return "fft"
+
+    @property
+    def scheme(self):
+        return "fft_spectral" if self.spectral else "fft"
 
     def capabilities(self):
         return capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True)
@@ -115,15 +122,16 @@ class FFT(Descriptor):
 
     def available(self, context=None):
         return Availability.partial(
-            "the FFT spectral Poisson solver has no native C++ symbol yet; it also requires a "
-            "periodic boundary and a power-of-two grid",
-            missing=["pops::FFT native symbol", "periodic BC", "power-of-two grid"],
+            "the FFT Poisson solver requires a periodic boundary, a constant-coefficient "
+            "operator (no wall / embedded boundary) and a power-of-two grid; under MPI it uses "
+            "the remapped FFT route",
+            missing=["periodic BC", "constant coefficient", "power-of-two grid"],
             alternatives=["pops.solvers.elliptic.GeometricMG()"])
 
     def inspect(self):
         view = super().inspect()
         view["scheme"] = self.scheme
-        view["available"] = False
+        view["available"] = "partial"
         return view
 
 

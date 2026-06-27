@@ -152,17 +152,24 @@ def test_geometric_mg_rejects_string_for_typed_subdescriptor():
         Relative(rel=1e-6, floor=1e-12)
 
 
-# --- the planned FFT elliptic solver -----------------------------------------------------
+# --- the FFT elliptic solver (real pops::PoissonFFTSolver) --------------------------------
 
-def test_fft_is_planned_and_explains_itself():
+def test_fft_is_a_real_solver_with_route_constraints():
     f = elliptic.FFT()
     assert f.name == "fft"
-    assert f.native_id is None
+    # A real, runtime-wired solver -- not unimplemented.
+    assert f.native_id == "pops::PoissonFFTSolver"
+    assert f.scheme == "fft"
     status = f.available()
+    # partial = genuine route constraints (periodic / const-coeff / power-of-two), not "no symbol".
     assert status.status == "partial"
+    assert any("periodic" in m for m in status.missing)
     assert "pops.solvers.elliptic.GeometricMG()" in status.alternatives
-    assert f.inspect()["available"] is False
-    assert elliptic.FFT(spectral=True).options() == {"spectral": True}
+    assert f.inspect()["available"] == "partial"
+    # spectral=True selects the fft_spectral token.
+    spectral = elliptic.FFT(spectral=True)
+    assert spectral.scheme == "fft_spectral"
+    assert spectral.options() == {"spectral": True}
 
 
 # --- preconditioners ---------------------------------------------------------------------
