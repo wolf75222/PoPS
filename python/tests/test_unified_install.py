@@ -373,6 +373,71 @@ def test_install_cadence_routing():
     print("OK  install(cadence=) routes CompiledTime -> set_program_cadence; rejects bad type / cfl")
 
 
+def test_install_native_cadence_rejected():
+    """A native sim (compiled=None) has no compiled Program, so install(cadence=) is rejected -- the
+    cadence is a compiled-program concept. Host-testable (the guard fires before any engine run)."""
+    sim = pops.System(n=N, L=1.0, periodic=True)
+    try:
+        sim.install(None, cadence=adctime.CompiledTime(substeps=2, stride=1))
+        raise AssertionError("install(compiled=None, cadence=) was accepted")
+    except ValueError as exc:
+        assert "cadence" in str(exc) and "native" in str(exc), exc
+    print("OK  native install rejects cadence= (no compiled Program)")
+
+
+def test_install_native_end_to_end_kokkos():
+    """install(compiled=None, ...) builds a NATIVE sim (no compiled Program): each instance carries
+    its own native model + native time, install_program is skipped, the native advance loop steps it.
+    Bit-parity vs the manual add_equation/set_*/set_state sequence (the pre-amendment native path).
+    Needs a compiler + Kokkos -> ROMEO / CI-Kokkos."""
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+        print("skip test_install_native_end_to_end_kokkos (_pops lacks install_program; rebuild _pops)")
+        return
+    m = _lorentz_model("adc489_native")
+    x = (np.arange(N) + 0.5) / N
+    xx, yy = np.meshgrid(x, x, indexing="ij")
+    rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
+    u0 = np.stack([rho, 0.4 * rho, -0.2 * rho])
+    bz = 3.0 * np.ones(N * N)
+
+    def _fv():
+        return pops.FiniteVolume(limiter="none", riemann="rusanov")
+
+    # NATIVE via the unified entry: compiled=None, the instance carries the native model + time.
+    sim_install = pops.System(n=N, L=1.0, periodic=True)
+    try:
+        sim_install.install(
+            None,
+            instances={"plasma": {"model": m, "initial": u0, "spatial": _fv(),
+                                  "time": pops.Explicit(method="euler")}},
+            aux={"B_z": bz},
+            solvers={"phi": pops.lib.fields.GeometricMG()})
+    except RuntimeError as exc:
+        print("skip test_install_native_end_to_end_kokkos (no Kokkos to build the native block: %s)"
+              % str(exc)[:120])
+        return
+    assert "plasma" in sim_install.block_names(), "native install bound the instance by name"
+
+    # MANUAL native path (the pre-amendment sequence): same lower-layer calls, no install_program.
+    # add_equation needs a resolved model (ModelSpec/CompiledModel), the same resolution install does
+    # internally via _resolve_instance_model -- so both paths add the SAME native block.
+    sim_manual = pops.System(n=N, L=1.0, periodic=True)
+    sim_manual.set_poisson(solver="geometric_mg")
+    resolved = sim_manual._resolve_instance_model(m)
+    sim_manual.add_equation("plasma", resolved, spatial=_fv(), time=pops.Explicit(method="euler"))
+    sim_manual.set_magnetic_field(bz)
+    sim_manual.set_state("plasma", u0)
+
+    for sim in (sim_install, sim_manual):
+        n = sim.run(t_end=0.01, cfl=0.4)
+        assert n > 0, "native sim did not advance"
+    a = np.array(sim_install.get_state("plasma"))
+    b = np.array(sim_manual.get_state("plasma"))
+    assert np.array_equal(a, b), "native install != manual add_equation (max|d|=%.3e)" % \
+        float(np.max(np.abs(a - b)))
+    print("OK  native install == manual add_equation sequence (bit-identical after run)")
+
+
 def main():
     test_lower_spatial_accepts_runtime_and_lib()
     test_solver_token_lowering()
@@ -382,7 +447,9 @@ def main():
     test_install_params_routing()
     test_install_params_routes_declared_runtime_param()
     test_install_cadence_routing()
+    test_install_native_cadence_rejected()
     test_install_end_to_end_kokkos()
+    test_install_native_end_to_end_kokkos()
     test_install_routes_runtime_param_kokkos()
     return 0
 
