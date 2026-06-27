@@ -21,7 +21,7 @@ libraries=[...])`` reads + validates the compiled ``.so`` (the consume path).
 import hashlib
 import json
 
-from ..lib import BrickDescriptor
+from pops.descriptors import BrickDescriptor
 
 __all__ = ["LibraryManifest", "compile_library", "read_library_manifest"]
 
@@ -44,7 +44,7 @@ def _brick_entry(obj):
     if not isinstance(obj, BrickDescriptor):
         raise TypeError(
             "compile_library objects must be pops.lib brick descriptors "
-            "(e.g. pops.lib.solvers.GMRES(), pops.lib.riemann.HLLC(), an "
+            "(e.g. pops.lib.solvers.GMRES(), pops.numerics.riemann.HLLC(), an "
             "@pops.lib.solver generated brick); got %r" % (obj,))
     return {
         "id": obj.name,
@@ -151,8 +151,8 @@ def compile_library(name, objects, *, backend="production", emit=False, so_path=
     """Build a reusable brick library from a set of brick descriptors.
 
     @p name is the library ``.so`` name; @p objects is a non-empty list of
-    :class:`pops.lib.BrickDescriptor` (native / generated / macro / external bricks,
-    e.g. ``pops.lib.solvers.GMRES()``, ``pops.lib.riemann.HLLC()``, an
+    :class:`pops.descriptors.BrickDescriptor` (native / generated / macro / external bricks,
+    e.g. ``pops.lib.solvers.GMRES()``, ``pops.numerics.riemann.HLLC()``, an
     ``@pops.lib.solver`` generated brick). Returns a :class:`LibraryManifest`
     carrying the brick metadata, the loaded-module ABI key and a stable content hash.
 

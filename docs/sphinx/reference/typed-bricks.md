@@ -8,10 +8,10 @@ scheme string, requirements, capabilities); the codegen and runtime consume it.
 
 | Kind | Meaning | Example |
 | --- | --- | --- |
-| NativeBrick | a C++ type already in `include/pops` | `pops.lib.riemann.HLLC()` -> `pops::HLLCFlux` |
+| NativeBrick | a C++ type already in `include/pops` | `pops.numerics.riemann.HLLC()` -> `pops::HLLCFlux` |
 | GeneratedBrick | a DSL-authored brick compiled to C++ | a custom source / local matrix |
 | MacroBrick | a Python function that builds Program IR | `pops.lib.time.predictor_corrector` |
-| ExternalCppBrick | a user C++ brick registered by id | `pops.lib.riemann.User("my_hllc")` |
+| ExternalCppBrick | a user C++ brick registered by id | `pops.numerics.riemann.User("my_hllc")` |
 
 A descriptor carries `brick_type` (`native` / `generated` / `macro` / `external_cpp`),
 `native_id`, `scheme`, `requirements`, `capabilities`, `options`, and `available`. A
@@ -60,16 +60,16 @@ A user ships a brick in a standalone `.so` that registers a manifest entry at st
 with the C++ macro `POPS_REGISTER_BRICK(id, category, requirements)`
 (`include/pops/runtime/program/external_brick.hpp`) and exports a C function
 `const char* pops_brick_manifest()` returning JSON over the process-global `BrickRegistry`.
-`pops.lib.load_cpp_library(path)` dlopens the `.so`, reads that manifest, and registers the ids
-in an in-process catalog; `pops.lib.riemann.User(id)` (and the category-agnostic
-`pops.lib.external(id)`) then surface an `external_cpp` descriptor carrying the manifest's
+`pops.descriptors.load_cpp_library(path)` dlopens the `.so`, reads that manifest, and registers the ids
+in an in-process catalog; `pops.numerics.riemann.User(id)` (and the category-agnostic
+`pops.descriptors.external(id)`) then surface an `external_cpp` descriptor carrying the manifest's
 requirements/capabilities. An id that was never loaded raises a clear `LookupError`
-("external brick 'x' not loaded; call pops.lib.load_cpp_library(...)") rather than fabricate a
+("external brick 'x' not loaded; call pops.descriptors.load_cpp_library(...)") rather than fabricate a
 descriptor.
 
 ```python
-n = pops.lib.load_cpp_library("./my_bricks.so")   # registers every brick the .so manifests
-d = pops.lib.riemann.User("my_hllc")
+n = pops.descriptors.load_cpp_library("./my_bricks.so")   # registers every brick the .so manifests
+d = pops.numerics.riemann.User("my_hllc")
 d.brick_type     # 'external_cpp'
 d.native_id      # 'my_hllc'
 d.requirements   # {'capabilities': ['pressure', 'wave_speeds']}
@@ -104,7 +104,7 @@ POPS_DEFINE_BRICK_MANIFEST();  // exports pops_brick_manifest() once per .so
 ## Status
 
 The descriptor catalog, the native ids, the time macros and external C++ bricks are in place:
-`pops.lib.load_cpp_library` + the C++ `BrickRegistry` / `POPS_REGISTER_BRICK` / `POPS_DEFINE_BRICK_MANIFEST`
+`pops.descriptors.load_cpp_library` + the C++ `BrickRegistry` / `POPS_REGISTER_BRICK` / `POPS_DEFINE_BRICK_MANIFEST`
 register and surface a brick, and `POPS_DEFINE_EXTERNAL_RIEMANN_BRICK` + `ExternalBrickHandle`
 statically dispatch an external Riemann brick's flux (CPU/OpenMP Kokkos validated on macOS; the
 GPU/GH200 dispatch is a ROMEO follow-up). `pops.compile_library(name, objects, emit=True)` compiles a

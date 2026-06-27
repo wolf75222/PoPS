@@ -1,4 +1,4 @@
-"""pops.lib.moments.projection -- the realizability-projection descriptor (inert).
+"""pops.moments.projection -- the realizability-projection descriptor (inert).
 
 Maps the moment-model realizability floors onto the engine's ``robust`` / ``eps_m00`` /
 ``eps_cov`` knobs. The engine applies a smooth floor ``max(x, eps)`` on M00 (division)

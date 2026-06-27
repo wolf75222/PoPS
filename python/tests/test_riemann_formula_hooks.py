@@ -2,7 +2,7 @@
 
 ``m.riemann("hllc", pressure=<board formula>, ...)`` codegen's THAT formula into the
 ``pressure(U)`` capability hook of the generated brick, overriding the role-derived default.
-Capability-hook descriptors (``pops.lib.riemann.hllc.contact_speed.euler()``) and ``None`` keep
+Capability-hook descriptors (``pops.numerics.riemann.hllc.contact_speed.euler()``) and ``None`` keep
 the canonical role-derived hook. A formula that references a quantity the model cannot provide
 still raises the clear capability error.
 
@@ -10,11 +10,13 @@ EMIT-LEVEL: these assert the EMITTED C++ string + the Python wiring. The brick `
 run need POPS_KOKKOS_ROOT (ROMEO) and are out of scope here.
 """
 import re
+import types
 
 import pytest
 
 physics = pytest.importorskip("pops.physics")
-lib = pytest.importorskip("pops.lib")
+# Spec 5 (sec.4): the riemann capability-hook catalog lives in pops.numerics.riemann.
+lib = types.SimpleNamespace(riemann=pytest.importorskip("pops.numerics.riemann").riemann)
 
 
 def _euler(custom_pressure=None):

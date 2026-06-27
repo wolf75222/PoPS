@@ -7,7 +7,25 @@ lightweight metadata that lower to native ids -- not numerical code.
 """
 import pytest
 
-lib = pytest.importorskip("pops.lib")
+import types as _t
+_lib = pytest.importorskip("pops.lib")
+_num = pytest.importorskip("pops.numerics")
+_desc = pytest.importorskip("pops.descriptors")
+# Spec 5 (sec.4): the catalogs moved out of pops.lib into pops.numerics / pops.descriptors;
+# this transitional alias maps the old pops.lib attribute surface onto the new homes so the
+# Spec-3 descriptor tests keep exercising the real (relocated) descriptors.
+lib = _t.SimpleNamespace(
+    riemann=_num.riemann.riemann, reconstruction=_num.reconstruction.reconstruction,
+    limiters=_num.limiters, projections=_num.projections.projections,
+    BrickDescriptor=_desc.BrickDescriptor, external=_desc.external,
+    load_cpp_library=_desc.load_cpp_library,
+    _register_manifest=_desc._register_manifest,
+    _clear_external_catalog=_desc._clear_external_catalog,
+    solvers=_lib.solvers, preconditioners=_lib.preconditioners, solver=_lib.solver,
+    build_solver_ir=_lib.build_solver_ir, generate_solver_cpp=_lib.generate_solver_cpp,
+    SolverContext=_lib.SolverContext, SolverIR=_lib.SolverIR,
+    spatial=_lib.spatial, fields=_lib.fields,
+)
 
 
 def test_riemann_hllc_is_a_native_descriptor():

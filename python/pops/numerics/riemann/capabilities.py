@@ -1,4 +1,4 @@
-"""pops.lib.riemann.capabilities -- the Riemann capability-hook selectors (Spec 3).
+"""pops.numerics.riemann.capabilities -- the Riemann capability-hook selectors (Spec 3).
 
 The canonical capability-hook selectors used by
 ``m.riemann(..., wave_speeds=, contact_speed=, star_state=)``: ``riemann.speeds``
@@ -8,7 +8,7 @@ hook; the hook C++ is generated from the model roles by the dsl backend.
 """
 from types import SimpleNamespace
 
-from ..descriptors import BrickDescriptor
+from pops.descriptors import BrickDescriptor
 
 
 def _hook(name, scheme):

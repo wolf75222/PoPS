@@ -178,7 +178,7 @@ m.operator('C(B)', returns=...) or @module.operator(...) first.
 ## Typed brick catalog (`pops.lib`)
 
 `pops.lib` is a catalog of descriptors and IR macros, never a Python numerics library.
-`pops.lib.riemann.HLLC()` and `pops.lib.reconstruction.WENO5Z()` compute nothing: they
+`pops.numerics.riemann.HLLC()` and `pops.numerics.reconstruction.WENO5Z()` compute nothing: they
 name native C++ bricks (`pops::HLLCFlux`, `pops::Weno5`) and carry the requirements
 those bricks place on the model. A catalogued brick with no native symbol yet carries
 `available=False` and an empty `native_id` (never a fabricated id). `pops.lib.time.*` are macros

@@ -1,4 +1,4 @@
-"""pops.lib.moments.basis -- the moment-basis descriptor (inert).
+"""pops.moments.basis -- the moment-basis descriptor (inert).
 
 Tracks which representation a stage of the generator works in (the engine's ``C``
 central-moment dict and ``S`` standardized-moment dict): RAW raw moments M_pq,

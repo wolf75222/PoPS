@@ -1,7 +1,7 @@
 # Build and simulate a moment model (HyQMOM, 15 moments)
 
 Build the 2D fifteen-moment kinetic model the way the `hyqmom15` case does: declare the moment
-state, write one closure, let `pops.lib.moments` generate the fluxes and the wave speeds, compile to a
+state, write one closure, let `pops.moments` generate the fluxes and the wave speeds, compile to a
 `.so`, and run the same model under three numerical methods. The point of this tutorial is the
 workflow, not the golden-file validation: you will see how little physics you write (a single
 closure) and how the generator derives the rest.
@@ -50,7 +50,7 @@ The order above is the canonical order of the generic generator. You do not rety
 generator for it, which also guarantees your indices match what the kernel expects.
 
 ```python
-from pops.lib import moments as gmom
+from pops import moments as gmom
 
 names = gmom.moment_names(4)     # ['M00','M10','M20','M30','M40','M01', ... ,'M04'], 15 entries
 pq    = gmom.moment_indices(4)   # [(0,0),(1,0),(2,0), ... ,(0,4)], the (p,q) exponents
@@ -292,7 +292,7 @@ projection applied at every step `dt` stays stable (around `1.2e-3`) over the fu
 
 - The [moments and closures concept](../concepts/moments-and-closures.md) for why the standardization
   and the closure problem look the way they do.
-- The [moment models reference](../reference/moment-models.md) for the full `pops.lib.moments` API: the
+- The [moment models reference](../reference/moment-models.md) for the full `pops.moments` API: the
   closure contract, `gaussian_closure`, `lorentz_sources`, and the `robust` / `exact_speeds` flags.
 - The tested case at `adc_cases/hyqmom15` for the complete model, the realizable state generators,
   and the validation against the reference solution.

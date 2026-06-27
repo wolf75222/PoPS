@@ -7,7 +7,7 @@ This module contains the ``@solver`` decorator, the ``SolverIR`` / ``SolverConte
 
 The builder AUTHORS a solver IR over the matrix-free Krylov primitives; it computes
 NOTHING in Python. ``BrickDescriptor`` is imported at module scope from the sibling
-:mod:`pops.lib.descriptors` (no cycle, no codegen). :class:`pops.time.Program` is the
+:mod:`pops.descriptors` (no cycle, no codegen). :class:`pops.time.Program` is the
 IR backing store and is imported lazily (``time`` is a heavy package). The C++ lowering
 lives in :mod:`pops.lib.solvers.solver_cpp`.
 """

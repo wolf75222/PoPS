@@ -27,7 +27,7 @@ import tempfile
 
 import numpy as np
 
-import pops.lib.moments as M
+import pops.moments as M
 from pops.ir.expr import Const
 
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))

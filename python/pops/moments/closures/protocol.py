@@ -1,4 +1,4 @@
-"""pops.lib.moments.closures.protocol -- the moment-closure typing protocol.
+"""pops.moments.closures.protocol -- the moment-closure typing protocol.
 
 A closure is the ONLY physics of a moment model: a callable that maps the standardized
 moments ``S`` (a dict of ``S{p}{q}`` for ``2 <= p+q <= order``) to the standardized

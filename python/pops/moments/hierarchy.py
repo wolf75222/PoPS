@@ -1,8 +1,8 @@
-"""pops.lib.moments.hierarchy -- the moment-model facade (CartesianVelocityMoments / MomentModel).
+"""pops.moments.hierarchy -- the moment-model facade (CartesianVelocityMoments / MomentModel).
 
 A thin, numerics-free facade over the generic generator in
-:mod:`pops.lib.moments.model_builder` (``build_moment_model``) and
-:mod:`pops.lib.moments.sources` (``lorentz_sources`` / ``maxwellian_moments`` /
+:mod:`pops.moments.model_builder` (``build_moment_model``) and
+:mod:`pops.moments.sources` (``lorentz_sources`` / ``maxwellian_moments`` /
 ``bgk_source``).
 
 The facade carries NO numeric Python: chainable methods RECORD options on a small dict
