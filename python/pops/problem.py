@@ -42,10 +42,33 @@ class _AMRPolicyHandle:
     def _layout(self):
         return self._problem._layout
 
+    def _refine_context(self):
+        """The block model the refine subject is checked against, or ``None`` when ambiguous.
+
+        Returns the single block's physics model so ``Refine.validate`` can confirm the subject
+        exists. Returns ``None`` when there is not exactly one block (the subject would be
+        ambiguous across blocks) so the subject check DEFERS rather than guesses -- no false
+        positive.
+        """
+        blocks = self._problem._blocks
+        if len(blocks) != 1:
+            return None
+        (spec,) = blocks.values()
+        return spec.get("physics")
+
     def refine(self, criterion=None, *, regrid=None, nesting=None, patches=None):
-        """Record the refinement criterion / regrid / nesting / patch policies (chains)."""
+        """Record the refinement criterion / regrid / nesting / patch policies (chains).
+
+        When a @p criterion is recorded, its subject (role / state component / named aux) is
+        validated against the problem's block model HERE -- the one place the model is available
+        -- so a refinement on a bogus role is refused before runtime with a clear, declared-roles
+        message (Spec 5 sec.8.6 / criterion 31). The discipline is NO FALSE POSITIVE: the check
+        only runs when exactly one block model is present and it advertises its subjects.
+        """
         layout = self._layout
         if criterion is not None:
+            if hasattr(criterion, "validate"):
+                criterion.validate(self._refine_context())
             layout.refine = criterion
         if regrid is not None:
             layout.regrid = regrid
