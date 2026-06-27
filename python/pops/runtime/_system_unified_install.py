@@ -13,7 +13,7 @@ from pops.runtime.bricks import Spatial, FiniteVolume
 class _SystemUnifiedInstall:
     """The unified ``install`` lowering surface of System."""
 
-    def install(self, compiled, *, instances=None, params=None, aux=None, solvers=None, cadence=None):
+    def install(self, compiled=None, *, instances=None, params=None, aux=None, solvers=None, cadence=None):
         """Unified install (Spec 3 section 22): wire a compiled handle + per-instance state/spatial +
         params + aux + field solvers in ONE call, then install the compiled time Program.
 
@@ -23,8 +23,14 @@ class _SystemUnifiedInstall:
         available and unchanged; sim.install just sequences them in the right order so the
         install-time validation (section 24) sees a fully-configured simulation.
 
-        @param compiled the compiled problem handle (compile_problem(...) result) carrying ``so_path``;
-            installed via install_program after every instance/solver/aux is wired.
+        install() is the ONE entry for BOTH runtime modes (Spec 4 amendment): a COMPILED-program sim
+        (pass the compile_problem(...) handle as ``compiled``) and a NATIVE sim (``compiled=None``;
+        each instance carries its own native model + native time policy, no compiled .so).
+
+        @param compiled the compiled problem handle (compile_problem(...) result) carrying ``so_path``,
+            installed via install_program after every instance/solver/aux is wired. Pass ``None`` for a
+            NATIVE sim: no Program is installed; each instance must supply its own native ``"model"``
+            and (optionally) ``"time"`` policy, and the native per-block advance loop drives stepping.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <pops.Model>,
             "time": <pops.Explicit/IMEX>}}. The block is bound by the dict KEY @p name (Spec criterion
             23), not a "state" field. Each entry adds the named block (add_equation), sets its
@@ -64,14 +70,22 @@ class _SystemUnifiedInstall:
         # "model" if given, else the PHYSICAL model carried by the compiled handle
         # (CompiledProblem.model) -- NOT the handle itself (which is the time Program .so installed in
         # step 5). For a single-instance plasma case the carried model is the block.
-        # Validate the compiled handle up front, BEFORE any System mutation, so a misuse cannot leave a
-        # half-configured System.
-        so_path = getattr(compiled, "so_path", None)
-        if so_path is None:
-            raise TypeError("install: compiled handle has no .so_path (got %r); pass a "
-                            "compile_problem(...) result" % type(compiled).__name__)
-
-        compiled_model = getattr(compiled, "model", None)
+        # COMPILED vs NATIVE mode. COMPILED: `compiled` is a compile_problem(...) handle carrying a
+        # .so_path time Program (installed in step 5, with the section-24 validation). NATIVE:
+        # `compiled is None` -- there is no compiled Program; each instance carries its OWN native model
+        # + native time policy (pops.Explicit / pops.Strang), step 5 is skipped, and the native
+        # per-block advance loop drives stepping. Validate the handle up front, BEFORE any System
+        # mutation, so a misuse cannot leave a half-configured System.
+        so_path = None
+        compiled_model = None
+        if compiled is not None:
+            so_path = getattr(compiled, "so_path", None)
+            if so_path is None:
+                raise TypeError(
+                    "install: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
+                    "result, or compiled=None for a native sim (each instance carries its own native "
+                    "model)." % type(compiled).__name__)
+            compiled_model = getattr(compiled, "model", None)
         resolved_models = {}  # instance name -> RESOLVED (CompiledModel), reused by the params step
         for name, spec in instances.items():
             if not isinstance(spec, dict):
@@ -103,14 +117,23 @@ class _SystemUnifiedInstall:
         if params:
             self._install_params(resolved_models, params)
 
-        # (5) Install the compiled time Program (binds blocks by name + runs the section-24 .so
-        # requirement validation: aux / solver / block instance, verbatim messages).
-        self.install_program(so_path)
+        # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
+        # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
+        # NATIVE mode (compiled=None) there is no Program -- the blocks added in step 2 are driven by
+        # the native per-block advance loop, so this step is skipped.
+        if so_path is not None:
+            self.install_program(so_path)
 
         # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
         # its macro-step cadence is GLOBAL (not per-block). Apply it AFTER install_program (the cadence
-        # wraps the installed closure).
+        # wraps the installed closure). It is a compiled-program concept; a native sim sets substeps /
+        # stride on its native time policy (pops.Explicit(substeps=, stride=)) instead.
         if cadence is not None:
+            if so_path is None:
+                raise ValueError(
+                    "install(cadence=): a cadence applies to a compiled time Program; a native sim "
+                    "(compiled=None) has no Program -- set substeps / stride on the native time policy "
+                    "(pops.Explicit(substeps=, stride=)) instead.")
             self._install_cadence(cadence)
 
     def _install_cadence(self, cadence):
