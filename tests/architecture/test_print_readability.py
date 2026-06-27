@@ -42,6 +42,13 @@ def _objects():
 
     Every object is INERT (a typed descriptor / authoring record); nothing here touches
     _pops, numpy, the runtime or codegen.
+
+    The three non-inert headline objects are covered ELSEWHERE, not here: ``pops.System`` /
+    ``pops.AmrSystem`` allocate Fabs + initialise Kokkos on construction (they need ``_pops``,
+    which this source-only gate runs without), and ``pops.codegen.CompiledProblem`` is normally a
+    Kokkos-gated ``compile_problem`` artifact. They each define a short ``__str__`` too; their
+    print contract is asserted by ``python/tests/test_print_readability_runtime.py``, which runs
+    after the ``_pops`` extension is built.
     """
     mesh = pops.CartesianMesh(n=8, L=1.0)
     phi = pmath.Unknown("phi")
