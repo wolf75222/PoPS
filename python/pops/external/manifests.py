@@ -2,10 +2,15 @@
 
 A manifest is the JSON ``pops_brick_manifest()`` exports (``{"bricks": [{"id", "category",
 "requirements", "capabilities"}, ...]}``). It can be read from a ``.json`` file or from a
-``.so`` (dlopened). Both register the ids in the in-process catalog owned by
-:mod:`pops.descriptors`; nothing here computes.
+``.so`` (dlopened). :func:`register` / :func:`register_manifest_file` register the ids in the
+in-process catalog owned by :mod:`pops.descriptors`; :func:`read_manifest` is the read-only
+counterpart that returns the metadata WITHOUT registering or executing anything. Nothing here
+computes.
 """
-from pops.descriptors import load_cpp_library, _register_manifest
+import ctypes
+import json
+
+from pops.descriptors import load_cpp_library, _register_manifest, _split_csv
 
 
 def register_manifest_file(path):
@@ -27,4 +32,92 @@ def register(path):
     return load_cpp_library(p)
 
 
-__all__ = ["register", "register_manifest_file"]
+class CompiledManifest:
+    """The read-only metadata of a compiled-brick manifest (Spec 5 sec.5.17).
+
+    A plain value holding the parsed manifest: the ABI key (when the manifest carries one) and
+    the per-brick records (id / category / requirements / capabilities). It is inert -- it
+    NEITHER registers the bricks in the in-process catalog NOR dlopens / executes anything, so a
+    caller can inspect a third-party brick before deciding to load it. Use
+    :func:`pops.external.register` to actually register the bricks.
+    """
+
+    def __init__(self, bricks, *, abi_key=None):
+        self.bricks = list(bricks)
+        self.abi_key = abi_key
+
+    @property
+    def ids(self):
+        """The brick ids in declaration order."""
+        return [b["id"] for b in self.bricks]
+
+    @property
+    def categories(self):
+        """The set of brick categories the manifest declares."""
+        return sorted({b["category"] for b in self.bricks})
+
+    def to_dict(self):
+        """A plain-dict view of the manifest (abi_key + brick records)."""
+        return {"abi_key": self.abi_key, "bricks": [dict(b) for b in self.bricks]}
+
+    def __repr__(self):
+        return "CompiledManifest(ids=%r, abi_key=%r)" % (self.ids, self.abi_key)
+
+
+def _parse_manifest_metadata(manifest_json):
+    """Parse manifest JSON into a :class:`CompiledManifest` WITHOUT registering it.
+
+    Mirrors the shape :func:`pops.descriptors._register_manifest` accepts
+    (``{"bricks": [...], "abi_key": ...}``) but builds an inert value instead of mutating the
+    in-process catalog. A malformed manifest or an entry missing its id raises ``ValueError``.
+    """
+    try:
+        doc = json.loads(manifest_json)
+    except (json.JSONDecodeError, TypeError) as err:
+        raise ValueError("brick manifest is not valid JSON: %s" % (err,)) from err
+    bricks = doc.get("bricks") if isinstance(doc, dict) else None
+    if not isinstance(bricks, list):
+        raise ValueError("brick manifest must be {\"bricks\": [...]}; got %r" % (manifest_json,))
+    records = []
+    for entry in bricks:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            raise ValueError("brick manifest entry must carry a non-empty 'id'; got %r"
+                             % (entry,))
+        records.append({
+            "id": str(entry["id"]),
+            "category": str(entry.get("category") or "brick"),
+            "requirements": _split_csv(entry.get("requirements")),
+            "capabilities": _split_csv(entry.get("capabilities")),
+        })
+    abi_key = doc.get("abi_key") if isinstance(doc, dict) else None
+    return CompiledManifest(records, abi_key=abi_key)
+
+
+def read_manifest(path):
+    """Read a brick manifest (``.json`` or ``.so``) for INSPECTION only (Spec 5 sec.5.17).
+
+    Returns a :class:`CompiledManifest` with the manifest's ids / categories / requirements /
+    capabilities (and the ``abi_key`` when present). It does NOT register the bricks in the
+    in-process catalog and does NOT execute any brick code: a ``.json`` path is parsed directly;
+    a ``.so`` path is dlopened ONLY to read the exported ``pops_brick_manifest()`` string (its
+    static initializers run as a side effect of any dlopen, but no brick is registered or
+    invoked). Use :func:`register` when you actually want to register the bricks.
+    """
+    p = str(path)
+    if p.endswith(".json"):
+        with open(p, "r", encoding="utf-8") as handle:
+            return _parse_manifest_metadata(handle.read())
+    handle = ctypes.CDLL(p)  # raises OSError if the path is not a loadable library
+    try:
+        manifest_fn = handle.pops_brick_manifest
+    except AttributeError as err:
+        raise ValueError("brick library %r does not export pops_brick_manifest(); it is not an "
+                         "pops brick .so" % (p,)) from err
+    manifest_fn.restype = ctypes.c_char_p
+    raw = manifest_fn()
+    if raw is None:
+        raise ValueError("brick library %r: pops_brick_manifest() returned NULL" % (p,))
+    return _parse_manifest_metadata(raw.decode("utf-8"))
+
+
+__all__ = ["register", "register_manifest_file", "read_manifest", "CompiledManifest"]

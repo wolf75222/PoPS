@@ -8,13 +8,15 @@ in-process catalog + the low-level loader live in :mod:`pops.descriptors`; this 
 typed user surface over them.
 """
 from .bricks import CompiledBrickRef, ExternalBrick
-from .manifests import register, register_manifest_file
+from .manifests import (register, register_manifest_file, read_manifest,
+                        CompiledManifest)
 from pops.descriptors import load_cpp_library, external
+
 from . import bricks, manifests
 
 __all__ = [
     "CompiledBrickRef", "ExternalBrick",
-    "register", "register_manifest_file",
+    "register", "register_manifest_file", "read_manifest", "CompiledManifest",
     "load_cpp_library", "external",
     "bricks", "manifests",
 ]

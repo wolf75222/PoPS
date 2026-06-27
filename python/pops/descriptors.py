@@ -14,6 +14,7 @@ DSL bricks) are NOT here: they live permanently in :mod:`pops.physics.bricks` an
 only.
 """
 import json
+import typing
 
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
@@ -62,6 +63,29 @@ class BrickDescriptor:
     def __repr__(self):
         return "BrickDescriptor(%r, %r, scheme=%r)" % (
             self.name, self.brick_type, self.scheme)
+
+    # --- DescriptorProtocol surface (Spec 5 sec.6). The metadata stays carried by the
+    # ``requirements`` / ``capabilities`` / ``options`` / ``available`` ATTRIBUTES above
+    # (this descriptor's documented identity); these inert methods only expose the same
+    # protocol member NAMES the ``Descriptor`` base does. They add no computation.
+    def lower(self, context=None):
+        """The inert lowering record for this brick (metadata only; no computation)."""
+        return {"name": self.name, "category": self.category, "native_id": self.native_id,
+                "scheme": self.scheme, "options": dict(self.options)}
+
+    def inspect(self):
+        """A plain-dict view of the brick descriptor (Spec 5 sec.12.1)."""
+        return {"name": self.name, "category": self.category, "native_id": self.native_id,
+                "scheme": self.scheme, "options": dict(self.options),
+                "requirements": dict(self.requirements),
+                "capabilities": dict(self.capabilities), "available": self.available}
+
+    def validate(self, context=None):
+        """Raise a clear error when this brick has no native symbol yet (``available`` False)."""
+        if not self.available:
+            raise ValueError("%s [%s] is not available: it has no native C++ symbol yet"
+                             % (self.name, self.category))
+        return True
 
 
 # --- shared descriptor factories (imported by every catalog namespace) ------
@@ -272,6 +296,10 @@ class Descriptor:
     """
 
     category = "descriptor"
+    #: The native C++ symbol this descriptor selects, or ``None`` when it names a
+    #: pure-Python / planned route with no compiled symbol yet. Subclasses that wrap a
+    #: native brick set this (as a class or instance attribute).
+    native_id = None
 
     @property
     def name(self):
@@ -295,9 +323,21 @@ class Descriptor:
             raise ValueError("%s is not available for this route:\n%s" % (self.name, status))
         return True
 
+    def lower(self, context=None):
+        """Return the inert lowering record for this route (Spec 5 sec.6 / sec.7).
+
+        The lowering is metadata ONLY -- the name, the category, the native id and the
+        chosen options the C++ runtime will materialise. It NEVER runs a numeric loop, opens
+        an extension or touches a cell; a descriptor computes nothing. Subclasses that carry a
+        richer payload may extend the dict, but the contract stays inert.
+        """
+        return {"name": self.name, "category": self.category,
+                "native_id": self.native_id, "options": self.options()}
+
     def inspect(self):
-        return {"name": self.name, "category": self.category, "options": self.options(),
-                "requirements": self.requirements(), "capabilities": self.capabilities()}
+        return {"name": self.name, "category": self.category, "native_id": self.native_id,
+                "options": self.options(), "requirements": self.requirements(),
+                "capabilities": self.capabilities()}
 
     def _summary(self):
         return ", ".join("%s=%r" % (k, v) for k, v in self.options().items())
@@ -309,3 +349,68 @@ class Descriptor:
         body = self._summary()
         head = "%s [%s]" % (self.name, self.category)
         return "%s(%s)" % (head, body) if body else head
+
+
+# --- the formal descriptor protocol (Spec 5 sec.6 / sec.7 / sec.13.12.1) ----------------
+@typing.runtime_checkable
+class DescriptorProtocol(typing.Protocol):
+    """The semantic contract every route-choosing object honours (Spec 5 sec.6).
+
+    Spec 5 stabilises "every object that chooses a route is a typed descriptor that declares
+    its requirements / capabilities / options and answers ``available(context)`` with an
+    EXPLAINABLE status". This :class:`typing.Protocol` documents that contract so it can be
+    type-checked structurally; the concrete families (:class:`Descriptor` /
+    :class:`BrickDescriptor` / the mesh descriptors) satisfy it by duck typing, they need not
+    inherit from it. A descriptor is INERT -- :meth:`lower` returns metadata, it never runs a
+    numeric loop or touches the runtime.
+
+    Attributes:
+        name: A short, stable identifier for the route (typically the class name).
+        category: The descriptor family ("riemann", "layout", "output", ...).
+        native_id: The native C++ symbol selected, or ``None`` for a pure-Python / planned
+            route with no compiled symbol.
+
+    Methods:
+        requirements(): What the route NEEDS from the context (a plain dict).
+        capabilities(): What the route PROVIDES / supports (a plain dict).
+        options(): The configured knobs and their chosen values (a plain dict).
+        available(context): An :class:`Availability` (yes / no / partial), never a bare bool.
+        validate(context): Raise a clear error when the route cannot be used in @p context.
+        lower(context): The inert lowering record (metadata only, no computation).
+        inspect(): A plain-dict view of the descriptor for tooling and printing.
+    """
+
+    name: str
+    category: str
+    native_id: typing.Optional[str]
+
+    def requirements(self) -> dict: ...
+
+    def capabilities(self) -> dict: ...
+
+    def options(self) -> dict: ...
+
+    def available(self, context=None) -> "Availability": ...
+
+    def validate(self, context=None): ...
+
+    def lower(self, context=None) -> dict: ...
+
+    def inspect(self) -> dict: ...
+
+
+def reject_string_selector(value, param, suggestion):
+    """Raise a clear :class:`TypeError` for a free-string algorithm selector (Spec 5 sec.7).
+
+    Spec 5 forbids naming a brick / scheme / layout with a bare string; every route is a typed
+    descriptor. A public API that still receives a string for @p param raises through this
+    helper with a uniform, actionable message that points at the typed @p suggestion. It is a
+    pure guard -- it always raises, so a caller wires it on the string branch of a parameter.
+
+    Args:
+        value: The rejected string the caller passed.
+        param: The parameter / keyword name the string was passed for.
+        suggestion: The typed alternative to use instead (e.g. ``pops.numerics.riemann.HLL()``).
+    """
+    raise TypeError("String algorithm selector rejected: %s=%r. Use %s."
+                    % (param, value, suggestion))
