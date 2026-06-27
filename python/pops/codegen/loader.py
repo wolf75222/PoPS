@@ -169,6 +169,21 @@ class CompiledProblem:
         from pops.codegen.inspect_compiled import build_arguments
         return build_arguments(self)
 
+    def manifest(self):
+        """The RICH self-describing manifest of this artifact (Spec 5 sec.13.12, #36).
+
+        Returns a :class:`pops.external.CompiledArtifactManifest`: the ABI identity (``abi_key`` /
+        ``required_headers_sig``), the model name, the blocks / variables / roles, the required
+        aux, the const / runtime params, the ghost depth, the field outputs and the ``supports_*``
+        capability flags (uniform / AMR / MPI / GPU known from the backend caps; stride /
+        partial-IMEX mask / named fields honestly ``None`` until the C++ codegen emits them). It
+        AGGREGATES the metadata this handle already carries (via :meth:`arguments` + the carried
+        model + ``abi_key``); it binds, dlopens and runs nothing. The widening of the thin
+        :class:`pops.external.CompiledManifest` (a brick-id / category list) into the full
+        artifact self-description Spec 5 sec.13.12 requires."""
+        from pops.external.artifact_manifest import build_compiled_manifest
+        return build_compiled_manifest(self)
+
     def estimate_memory(self, mesh, *, platform=None, layout=None):
         """A FORMULA-based memory estimate on ``mesh`` (Spec 5 sec.12.3, #46).
 
@@ -183,6 +198,21 @@ class CompiledProblem:
         full-refinement worst case)."""
         from pops.codegen.inspect_compiled import build_memory_estimate
         return build_memory_estimate(self, mesh, platform=platform, layout=layout)
+
+    def scratch_plan(self):
+        """The scratch-buffer liveness plan of this artifact's time Program (Spec 5 sec.13.11.3, #38).
+
+        Returns a :class:`pops.codegen.scratch_plan.ScratchPlan`: the per-category scratch counts
+        (state / rhs / scalar-field), the PROVABLY-reusable buffers (scratch nodes whose SSA live
+        ranges are disjoint, so the codegen may share one buffer), the REJECTED reuse (with the
+        reason -- a still-live occupant or an aux/field barrier) and the PERSISTENT Krylov / multigrid
+        solver buffers. Computed by a liveness analysis over the carried Program IR
+        (``Program.scratch_liveness`` / ``buffer_reuse_report``); the step-body reuse is EXACT, the
+        persistent solver counts are conservative and labelled so. It NEVER binds, dlopens or
+        allocates -- it is inspectable BEFORE ``System.install``. Raises a clear error if this handle
+        carries no Program."""
+        from pops.codegen.scratch_plan import build_scratch_plan
+        return build_scratch_plan(self._require_program("scratch_plan"), model=self.model)
 
     # --- inspection completeness (Spec 5 sec.12.1, criterion #15) -------------
     # The print(compiled) reports + the codegen/IR dumps. All INERT metadata-reading (they aggregate
