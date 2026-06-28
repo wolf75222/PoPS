@@ -120,14 +120,17 @@ floors only where they protect the divisions and square roots.
 
 ```python
 import pops
-compiled = m.compile("hyqmom15.so", pops.pops_include(), backend="aot")
+from pops.codegen import AOT
+compiled = m.compile("hyqmom15.so", pops.pops_include(), backend=AOT())
 ```
 
-`compile` runs the code generator and a C++ compiler once and returns a `CompiledModel`. `backend="aot"`
-is the portable host path, fine for a first run; `backend="production"` is the native zero-copy path
-(preferred under MPI and AMR) and needs the headers and compiler to match the build of `_pops`. The
-default (`backend="auto"`) picks one for you. `pops.pops_include()` locates the headers; you can pass an
-explicit path instead.
+`compile` runs the code generator and a C++ compiler once and returns a `CompiledModel`. The backend is
+a typed descriptor from `pops.codegen`: `AOT()` is the portable host path, fine for a first run;
+`Production()` is the native zero-copy path (preferred under MPI and AMR) and needs the headers and
+compiler to match the build of `_pops`; `JIT()` is the host prototyping path. The default
+(`backend="auto"`) picks one for you, and the legacy strings (`"aot"` / `"production"` / `"prototype"`)
+are still accepted unchanged. `pops.pops_include()` locates the headers; you can pass an explicit path
+instead.
 
 ## Step 5: simulate -- one model, several methods
 
@@ -165,11 +168,12 @@ Rusanov. It needs *signed* wave speeds, which the generator produces when you bu
 path:
 
 ```python
+from pops.codegen import AOT
 from pops.numerics.riemann import HLL
 from pops.numerics.reconstruction import FirstOrder
 
 m_exact  = gmom.build_moment_model("hyqmom15_exact", 4, hyqmom_closure, exact_speeds=True)
-compiled = m_exact.compile("hyqmom15_exact.so", pops.pops_include(), backend="aot")
+compiled = m_exact.compile("hyqmom15_exact.so", pops.pops_include(), backend=AOT())
 
 sim = pops.System(n=64, L=1.0, periodic=True)
 sim.add_equation("mom", model=compiled,
@@ -188,14 +192,15 @@ and the generator also emits the generic moment Roe (`m.roe_from_jacobian()`): t
 at the arithmetic-mean interface is eigendecomposed, `|A|(UR - UL)` is the dissipation, and `|A|` is
 the matrix sign with a spectral-radius Rusanov fallback. This needs no fluid roles and no primitive
 pressure, so it works for a moment hierarchy. It is additive to `exact_speeds` (which still provides
-the maximum wave speed for the CFL step), and it needs the `aot` or `production` backend.
+the maximum wave speed for the CFL step), and it needs the `AOT()` or `Production()` backend.
 
 ```python
+from pops.codegen import AOT
 from pops.numerics.riemann import Roe
 from pops.numerics.reconstruction import FirstOrder
 
 m_roe   = gmom.build_moment_model("hyqmom15_roe", 4, hyqmom_closure, roe=True)
-compiled = m_roe.compile("hyqmom15_roe.so", pops.pops_include(), backend="aot")
+compiled = m_roe.compile("hyqmom15_roe.so", pops.pops_include(), backend=AOT())
 
 sim = pops.System(n=64, L=1.0, periodic=True)
 sim.add_equation("mom", model=compiled,
@@ -215,6 +220,7 @@ and a Poisson right-hand side, then turn on the system Poisson solver. The sourc
 
 ```python
 import pops
+from pops.codegen import AOT
 from pops.numerics.riemann import HLL
 from pops.numerics.reconstruction import FirstOrder
 
@@ -231,7 +237,7 @@ rho_bg = m_vp.param("rho_background", rho_mean)      # neutralizing background =
 M00 = pops.ir.expr.Var("M00", "cons")
 m_vp.elliptic_rhs(inv_l2 * (M00 - rho_bg))           # Delta(phi) = (M00 - rho_bg) / lam^2
 m_vp.check()
-compiled = m_vp.compile("hyqmom15_vp.so", pops.pops_include(), backend="aot")
+compiled = m_vp.compile("hyqmom15_vp.so", pops.pops_include(), backend=AOT())
 
 sim = pops.System(n=64, L=1.0, periodic=True)
 sim.add_equation("mom", model=compiled,

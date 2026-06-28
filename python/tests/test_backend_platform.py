@@ -11,6 +11,9 @@ These checks pin the typed backend/platform surface added under epic ADC-479:
   - the consumer (``compile_problem`` / ``compile_model``) accepts BOTH a string and a typed
     backend -- a typed AOT() hits the SAME production-only guard as the string "aot", proving the
     lowering runs before the guard;
+  - the higher-level AUTHORING FACADES the docs teach (the PDE ``Model`` facade, the ``HybridModel``
+    composer, the ``CoupledSource`` compiler) accept a typed backend too -- each validated/stored
+    ``backend`` itself before reaching a driver, so each wires the same additive lowering;
   - ``Production(platform=KokkosOpenMP())`` records the platform (inert) and refuses a string;
   - the platform descriptors (KokkosSerial / KokkosOpenMP / KokkosCuda / KokkosHIP / MPI) declare
     host/gpu/mpi capabilities and answer ``available()`` with an EXPLAINABLE Availability that names
@@ -139,6 +142,65 @@ def test_compile_model_lowers_typed_backend_past_unknown_guard():
     # A genuinely unknown string still raises the unknown-backend ValueError (additive, not lossy).
     with pytest.raises(ValueError, match="backend 'nope' unknown"):
         compile_model(_FakeModel(), backend="nope")
+
+
+# --- the authoring FACADES accept a typed backend too (Spec 5 sec.8.15) ------------------------
+# The tests above pin the DRIVERS (compile_problem / compile_model). The higher-level authoring
+# facades the docs teach -- the PDE Model facade, the hybrid composer, the coupled-source compiler
+# -- each validated/stored `backend` ITSELF before (or instead of) reaching a driver, so each needs
+# the same additive `lower_backend` coercion. Compile-free: every assertion trips a validation guard
+# (or stores the lowered token) BEFORE any toolchain/compiler is invoked.
+
+def test_facade_model_compile_lowers_typed_backend():
+    # pops.physics.facade.Model.compile validated `backend not in _BACKENDS` itself; a typed
+    # Production() must lower so it is NOT rejected as unknown. A deliberately bogus target pushes
+    # PAST the (now-passing) backend guard and trips the target guard -- proving the coercion ran
+    # without reaching any heavy Kokkos compile.
+    from pops.physics.facade import Model
+    with pytest.raises(ValueError) as excinfo:
+        Model("t").compile(backend=Production(), target="__bogus__")
+    msg = str(excinfo.value)
+    assert "__bogus__" in msg and "target" in msg
+    assert "unknown backend" not in msg
+
+
+def test_hybrid_compile_lowers_typed_backend():
+    # HybridModel.compile validated `backend not in (...)` itself; same proof via a bogus target.
+    # The composite is stitched from inert native-brick descriptors (no _pops, no compile invoked).
+    from pops.physics import HybridModel
+    from pops.physics.bricks import NativeBrick
+    hyp = NativeBrick("pops::Dummy", "hyperbolic", var_names=["rho", "mx", "E"], n_vars=3, gamma=1.4)
+    src = NativeBrick("pops::NoSource", "source")
+    ell = NativeBrick("pops::ZeroRhs", "elliptic")
+    with pytest.raises(ValueError) as excinfo:
+        HybridModel(hyp, src, ell).compile(backend=Production(), target="__bogus__")
+    msg = str(excinfo.value)
+    assert "__bogus__" in msg and "target" in msg
+    assert "got Production" not in msg
+
+
+def test_coupled_source_compile_lowers_typed_backend():
+    # CoupledSource.compile STORES backend on the compiled handle (introspection / API parity); a
+    # typed Production() must be lowered to its string so the handle stays string-typed. Pure Python
+    # (the coupling is interpreted as bytecode; no .so is produced).
+    from pops.physics import CoupledSource
+    src = CoupledSource("ion")
+    ne = src.block("e").role("density")
+    src.add("e", role="density", expr=ne)
+    compiled = src.compile(backend=Production())
+    assert compiled.backend == "production"
+
+
+def test_hyperbolic_model_compile_already_lowers_typed_backend():
+    # The thin authoring delegator HyperbolicModel.compile forwards to compile_model, which already
+    # lowers (additive) -- pin that a typed backend reaches PAST the backend guard, so the delegation
+    # path stays coercing (regression guard; no change was needed in the delegator itself).
+    from pops.physics.model import HyperbolicModel
+    with pytest.raises(ValueError) as excinfo:
+        HyperbolicModel("z").compile(backend=Production(), target="__bogus__")
+    msg = str(excinfo.value)
+    assert "__bogus__" in msg
+    assert "unknown backend" not in msg
 
 
 # --- Production(platform=...) records the platform / refuses a string --------------------------

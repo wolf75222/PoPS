@@ -41,15 +41,19 @@ g = m.param("gamma", 1.4)
 ## 2. Compile
 
 ```python
+from pops.codegen import Production
 # The DEFAULT of m.compile(...) is backend="auto": it picks "production" under toolchain parity
 # (module loadable + baked compiler + matching header signature) and falls back to "aot" otherwise.
-# Request "production" explicitly to force the native zero-copy path (recommended in MPI/AMR).
-compiled = m.compile(backend="production", target="system")
+# Pass the backend as a typed descriptor -- Production() / AOT() / JIT() from pops.codegen -- to
+# force a path (Production() = native zero-copy, recommended in MPI/AMR). The legacy strings
+# "production" / "aot" / "prototype" are still accepted unchanged (the coercion is additive).
+compiled = m.compile(backend=Production(), target="system")
 # Pour AMR :
-compiled_amr = m.compile(backend="production", target="amr_system")
+compiled_amr = m.compile(backend=Production(), target="amr_system")
 ```
 
-Available backends (`backend=` ; the default `auto` picks `production` under toolchain parity, else `aot`) :
+Available backends (`backend=` accepts a typed descriptor `Production()` / `AOT()` / `JIT()` or the
+equivalent legacy string ; the default `auto` picks `production` under toolchain parity, else `aot`) :
 
 | backend | CPU | MPI | AMR | GPU | Note |
 |---|---|---|---|---|---|
@@ -94,7 +98,7 @@ amr.add_equation("fluide",
 Important points :
 - `riemann=` names the NUMERICAL flux (`rusanov`/`hllc`/`roe`) ; `m.flux(...)` is the PHYSICAL flux.
 - `fft` / `fft_spectral` now run under `System` in MPI `np>1` (distributed via a box-slab remap, `RemappedFFTSolver`, ADC-287) ; periodic constant-coefficient only -- use `geometric_mg` for walls, variable/anisotropic eps, or kappa.
-- `backend="production"` with `target="amr_system"` : `AmrSystem` is single- AND multi-block,
+- `backend=Production()` with `target="amr_system"` : `AmrSystem` is single- AND multi-block,
   explicit ; HLLC/Roe/`primitive` are wired on the Python AMR facade with a pressure guard: HLLC/Roe require a
   declared primitive `p` (or the `enable_hllc()` / `enable_roe()` capability), otherwise `add_equation` raises.
 
@@ -117,6 +121,7 @@ Important points :
   on the `aot` backend : the value is modifiable WITHOUT recompiling via `System.set_block_params`.
 
   ```python
+  from pops.codegen import AOT
   from pops.numerics.riemann import Rusanov
   from pops.numerics.reconstruction.limiters import Minmod
 
@@ -131,7 +136,7 @@ Important points :
   cs = pops.ir.ops.sqrt(cs2)
   m.eigenvalues(x=[u-cs, u, u+cs], y=[v-cs, v, v+cs])
 
-  compiled = m.compile(backend="aot")                 # cache key inclut les params
+  compiled = m.compile(backend=AOT())                 # cache key inclut les params (runtime -> AOT)
   compiled.runtime_param_names                         # -> ['cs2'] (ordre des indices C++)
 
   sim = pops.System(n=64, periodic=True)
