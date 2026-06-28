@@ -205,6 +205,37 @@ def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
     prelude.append("};")
 
 
+def _precond_applyfn(v, prelude):
+    """Return the C++ expression for the preconditioner ApplyFn of a solve_linear node @p v, emitting any
+    real callback into @p prelude (install-time, captured by the step closure -- alloc-once, like the
+    operator apply lambda).
+
+      - ``"identity"`` -> ``pops::ApplyFn{}`` (an EMPTY std::function = unpreconditioned; the historical
+        path, byte-identical);
+      - ``"geometric_mg"`` -> a named ``pops::ApplyFn precond_mg{id}`` lambda capturing the context that
+        forwards each apply ``out <- M^{-1}(in)`` to ``ctx.geometric_mg_precond_apply`` -- ONE V-cycle of
+        the already-wired pops::GeometricMG (the field-solve multigrid), no new numerical kernel (ADC-516).
+
+    A scheme other than these two never reaches here: the Python layer
+    (pops.time.program_solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
+    rejects every other preconditioner upstream."""
+    scheme = v.attrs.get("preconditioner", "identity")
+    if scheme == "identity":
+        return "pops::ApplyFn{}"
+    if scheme == "geometric_mg":
+        name = "precond_mg%d" % v.id
+        # The lambda captures ctx by value (like the operator apply): the GeometricMG is built once and
+        # cached in that captured ctx's mutable member, reused across every Krylov iteration / step.
+        prelude.append(
+            "pops::ApplyFn %s = [ctx](pops::MultiFab& out, const pops::MultiFab& in) {" % name)
+        prelude.append("  ctx.geometric_mg_precond_apply(out, in);")
+        prelude.append("};")
+        return name
+    raise NotImplementedError(
+        "emit_cpp_program: preconditioner scheme '%s' is not lowerable (supported: identity, "
+        "geometric_mg)" % scheme)
+
+
 def _emit_solve_linear(program, v, base, var, prelude, lines):
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
     ``sf_sol{id}`` is a PERSISTENT shared_ptr (prelude, captured by the step closure); the step body
@@ -236,18 +267,23 @@ def _emit_solve_linear(program, v, base, var, prelude, lines):
     rhs_tok = var[rhs_in.id]
     method = v.attrs["method"]
     kr = "kr%d" % v.id
+    # The preconditioner ApplyFn passed to bicgstab / gmres: an EMPTY pops::ApplyFn{} for the identity
+    # (unpreconditioned), or a real M^{-1} callback for a non-identity scheme. _precond_applyfn emits the
+    # real callback into the prelude (alloc-once, like the operator apply) and returns the C++ expression
+    # that names it; identity returns the empty-ApplyFn token. (CG / Richardson have no precond parameter;
+    # the Python layer rejects a non-identity precond for them, so they never reach this branch.)
+    precond_arg = _precond_applyfn(v, prelude)
     if method == "cg":
         lines.append("pops::KrylovResult %s = pops::cg_solve(%s, *%s, %s, %s, %d);"
                      % (kr, lam, sol_sp, rhs_tok, tol, max_iter))
     elif method == "bicgstab":
-        # Identity preconditioner = empty ApplyFn (unpreconditioned BiCGStab).
-        lines.append("pops::KrylovResult %s = pops::bicgstab_solve(%s, pops::ApplyFn{}, *%s, %s, %s, "
-                     "%d);" % (kr, lam, sol_sp, rhs_tok, tol, max_iter))
+        lines.append("pops::KrylovResult %s = pops::bicgstab_solve(%s, %s, *%s, %s, %s, "
+                     "%d);" % (kr, lam, precond_arg, sol_sp, rhs_tok, tol, max_iter))
     elif method == "gmres":
-        # Restarted GMRES(m): identity preconditioner = empty ApplyFn; restart = the basis size.
+        # Restarted GMRES(m): restart = the basis size; precond_arg = identity (empty) or the real M^{-1}.
         restart = int(v.attrs["restart"])
-        lines.append("pops::KrylovResult %s = pops::gmres_solve(%s, pops::ApplyFn{}, *%s, %s, %s, "
-                     "%d, %d);" % (kr, lam, sol_sp, rhs_tok, tol, max_iter, restart))
+        lines.append("pops::KrylovResult %s = pops::gmres_solve(%s, %s, *%s, %s, %s, "
+                     "%d, %d);" % (kr, lam, precond_arg, sol_sp, rhs_tok, tol, max_iter, restart))
     else:  # richardson: omega = 1 (the operator is expected to be pre-scaled / well-conditioned)
         lines.append("pops::KrylovResult %s = pops::richardson_solve(%s, *%s, %s, "
                      "static_cast<pops::Real>(1), %s, %d);"
