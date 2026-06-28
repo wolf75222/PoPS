@@ -132,11 +132,18 @@ dt = 1e-2
 
 
 def make_sim(model):
+    # The block is registered with its production-compiled model (the native brick path:
+    # add_equation, not add_block which takes a _pops.ModelSpec); install_program then OVERLAYS the
+    # whole-system Program, whose source reads k via ctx.program_params -> set_program_params changes
+    # it. No set_poisson: _decay_program has no solve_fields, so install_program needs no solver.
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_block("gas", model,
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+    try:
+        cm = model.compile(backend="production")
+    except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
+        _skip("block model compile could not build the .so: %s" % str(exc)[:160])
+    sim.add_equation("gas", cm,
+                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                     time=pops.Explicit(method="euler"))
     sim.set_state("gas", rho0.tolist())
     return sim
 
