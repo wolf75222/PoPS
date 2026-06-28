@@ -1,11 +1,10 @@
-"""System unified-install mixin (Spec-4 PR-F): the INTERNAL ``_install_compiled`` seam.
+"""System unified-install mixin (Spec-4 PR-F): public ``install`` over one lowering seam.
 
-``_install_compiled`` (the low-level seam that lowers to add_equation / set_poisson /
-set_magnetic_field / set_aux_field / set_block_params / install_program) plus its private
-lowering helpers. It is NOT the public entry point (Spec 5 sec.11): authors call
-``pops.bind(compiled, state=, params=, aux=, solvers=)``, which dispatches System / AmrSystem and
-calls this seam. Mixed into ``System`` via inheritance; methods operate on ``self`` (calling the
-other mixins' methods) and ``self._s``.
+``install`` is the explicit-runtime entry point used by examples that manually construct
+``System``. ``pops.bind(compiled, ...)`` remains the high-level entry point and dispatches to the
+same lowering seam. Both routes lower through ``_install_compiled`` to add_equation / set_poisson /
+set_magnetic_field / set_aux_field / set_block_params / install_program, so validation and wiring
+stay in one place.
 """
 
 from pops._bootstrap import ModelSpec
@@ -80,15 +79,39 @@ def validate_install_arguments(sim, compiled, instances, params, aux, solvers):
 
 
 class _SystemUnifiedInstall:
-    """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
+    """Unified install lowering for System.
+
+    ``install(...)`` is the documented runtime entry point for scripts that explicitly build a
+    ``System``. ``pops.bind(...)`` uses the same lowering underneath after it has selected the runtime
+    from a compiled Case/layout. Both routes intentionally share one implementation.
+    """
+
+    def install(self, compiled=None, *, instances=None, params=None, aux=None,
+                solvers=None, cadence=None, outputs=None):
+        """Public Spec-4 install entry point.
+
+        Wires a compiled Program handle plus its block instances, runtime params, aux fields and
+        field solvers in one validated call, then installs the Program. Pass ``compiled=None`` for
+        the native per-block route. This is a thin public wrapper over the single lowering seam; it
+        exists so examples and user code do not call private ``_install_*`` helpers.
+        """
+        return self._install_compiled(
+            compiled,
+            instances=instances,
+            params=params,
+            aux=aux,
+            solvers=solvers,
+            cadence=cadence,
+            outputs=outputs,
+        )
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
                           solvers=None, cadence=None, outputs=None):
-        """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
+        """Shared low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
-        Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
-        params=, aux=, solvers=)``, which dispatches System / AmrSystem and calls this seam. This
-        method is undocumented on the public surface (it carries no ``install`` alias) and may change.
+        Program. Public callers should use ``pops.bind(...)`` for the assembled-route path or
+        ``sim.install(...)`` when they explicitly construct a runtime object; both delegate here so
+        the ordering and validation are not duplicated.
 
         It LOWERS to the existing lower-layer calls
         (add_equation / set_poisson / set_magnetic_field / set_aux_field / set_block_params /
@@ -369,6 +392,9 @@ class _SystemUnifiedInstall:
                 % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
         token = self._solver_token(solver_brick)
         opts = getattr(solver_brick, "options", {}) or {}
+        if callable(opts):
+            opts = opts()
+        opts = opts or {}
         self.set_poisson(rhs=opts.get("rhs", "charge_density"), solver=token,
                          bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
                          wall_radius=float(opts.get("wall_radius", 0.0)),

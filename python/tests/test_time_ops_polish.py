@@ -4,8 +4,9 @@ validation errors #18/#19.
 
   - solve_local_nonlinear (op 10): a per-cell Newton solve (ADC-422); the builder validates its inputs
     and lowers a residual sub-block to a device FD-Jacobian Newton kernel;
-  - reductions (op 16): P.sum / P.max / P.min / P.sum_component build a 'reduce' IR op and lower to the
-    matching pops:: collective reduction (pops::reduce_sum / reduce_max / reduce_min);
+  - reductions (op 16): P.sum / P.max / P.min / P.sum_component / P.max_component /
+    P.min_component build a 'reduce' IR op and lower to the matching pops:: collective reduction
+    (pops::reduce_sum / reduce_max / reduce_min);
   - fill_boundary (op 22): P.fill_boundary lowers to ctx.fill_boundary (the shared ghost exchange);
   - project (op 21): P.project lowers to ctx.apply_projection (the block's own positivity projection);
   - record_scalar (op 23): P.record_scalar lowers to ctx.record_scalar; the value is retrievable after
@@ -15,8 +16,9 @@ validation errors #18/#19.
 
 (A) Pure Python (IR + codegen), always runs: the builders produce typed IR and emit_cpp_program lowers
     each to the right ProgramContext / pops:: call. No compile, no engine.
-(B) End-to-end (reductions + record_scalar): a 1-variable model whose sum / max / min / sum_component of
-    a known field match the analytic values; record_scalar stores a norm retrievable after the step.
+(B) End-to-end (reductions + record_scalar): a 1-variable model whose sum / max / min and
+    component-specific reductions of a known field match the analytic values; record_scalar stores a
+    norm retrievable after the step.
     Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 (C) Validation #18 (pure Python, mocked System) + #19 (skips without the engine).
 """
@@ -121,7 +123,8 @@ def test_reductions_build_scalar_values(t):
     P = t.Program("p")
     U = P.state("blk")
     R = P._rhs_legacy(state=U, sources=["default"])
-    for node in (P.sum(U), P.max(U), P.min(U), P.sum_component(U, 0)):
+    for node in (P.sum(U), P.max(U), P.min(U), P.sum_component(U, 0),
+                 P.max_component(U, 0), P.min_component(U, 0)):
         assert node.vtype == "scalar" and node.op == "reduce", \
             "a reduction is a scalar 'reduce' op (got %r/%r)" % (node.vtype, node.op)
     assert P.sum(U).attrs["kind"] == "sum"
@@ -129,6 +132,10 @@ def test_reductions_build_scalar_values(t):
     assert P.min(U).attrs["kind"] == "min"
     sc = P.sum_component(U, 0)
     assert sc.attrs["kind"] == "sum" and sc.attrs["comp"] == 0
+    mx = P.max_component(U, 0)
+    mn = P.min_component(U, 0)
+    assert mx.attrs["kind"] == "max" and mx.attrs["comp"] == 0
+    assert mn.attrs["kind"] == "min" and mn.attrs["comp"] == 0
 
 
 def test_reductions_reject_non_field_and_bad_component(t):
@@ -141,13 +148,20 @@ def test_reductions_reject_non_field_and_bad_component(t):
             assert "State/RHS" in str(exc), str(exc)
         else:
             raise AssertionError("%s must reject a non-field operand" % fn.__name__)
-    for bad in (-1, 1.0, True, "x"):
+    for fn in (P.sum_component, P.max_component, P.min_component):
         try:
-            P.sum_component(U, bad)
+            fn("not a field", 0)
         except ValueError as exc:
-            assert "comp" in str(exc), str(exc)
+            assert "State/RHS" in str(exc), str(exc)
         else:
-            raise AssertionError("sum_component comp=%r must raise" % (bad,))
+            raise AssertionError("%s must reject a non-field operand" % fn.__name__)
+        for bad in (-1, 1.0, True, "x"):
+            try:
+                fn(U, bad)
+            except ValueError as exc:
+                assert "comp" in str(exc), str(exc)
+            else:
+                raise AssertionError("%s comp=%r must raise" % (fn.__name__, bad))
 
 
 def test_reductions_lower_to_adc_reductions(t):
@@ -159,16 +173,22 @@ def test_reductions_lower_to_adc_reductions(t):
     s_max = P.max(R)
     s_min = P.min(R)
     s_c = P.sum_component(U, 0)
+    s_cmax = P.max_component(U, 0)
+    s_cmin = P.min_component(U, 0)
     # record_scalar keeps the reductions live (otherwise dead-code at the top level still emits them).
     P.record_scalar("s_sum", s_sum)
     P.record_scalar("s_max", s_max)
     P.record_scalar("s_min", s_min)
     P.record_scalar("s_c", s_c)
+    P.record_scalar("s_cmax", s_cmax)
+    P.record_scalar("s_cmin", s_cmin)
     P.commit("blk", P.linear_combine(U + P.dt * R))
     src = P.emit_cpp_program()
     for frag in ("pops::reduce_sum(", "pops::reduce_max(", "pops::reduce_min("):
         assert frag in src, "the reduction codegen must contain %r\n%s" % (frag, src)
-    assert "pops::reduce_sum(r" in src and ", 0)" in src, "sum/sum_component reduce over a component"
+    assert "pops::reduce_sum(r" in src and ", 0)" in src, "sum_component reduces over a component"
+    assert "pops::reduce_max(r" in src and ", 0)" in src, "max_component reduces over a component"
+    assert "pops::reduce_min(r" in src and ", 0)" in src, "min_component reduces over a component"
 
 
 # ---- (A.3) fill_boundary (op 22) + project (op 21): IR + codegen ----
@@ -287,8 +307,8 @@ def _const_source_model(name, c):
 
 
 def _reductions_program(t):
-    """Forward Euler that also records sum / max / min / sum_component of the CURRENT state (component 0)
-    each step, so the diagnostics can be checked against the analytic state."""
+    """Forward Euler that records whole-state and component-specific reductions of the CURRENT state
+    (component 0) each step, so the diagnostics can be checked against the analytic state."""
     P = t.Program("reductions_step")
     U = P.state("blk")
     R = P._rhs_legacy(state=U, sources=["default"])
@@ -296,6 +316,8 @@ def _reductions_program(t):
     P.record_scalar("state_max", P.max(U))
     P.record_scalar("state_min", P.min(U))
     P.record_scalar("state_sum_c0", P.sum_component(U, 0))
+    P.record_scalar("state_max_c0", P.max_component(U, 0))
+    P.record_scalar("state_min_c0", P.min_component(U, 0))
     P.commit("blk", P.linear_combine(U + P.dt * R))
     return P
 
@@ -345,7 +367,8 @@ def _run_section_b(t):
     sim.step(dt)  # the diagnostics are recorded from U^n (the state at the START of the step)
 
     diags = sim.program_diagnostics()
-    for key in ("state_sum", "state_max", "state_min", "state_sum_c0"):
+    for key in ("state_sum", "state_max", "state_min", "state_sum_c0",
+                "state_max_c0", "state_min_c0"):
         assert key in diags, "program_diagnostics must contain %r (got %r)" % (key, sorted(diags))
     # The reductions are over U^n = rho0 (record_scalar reads U before the commit).
     exp_sum = float(rho0.sum())
@@ -355,14 +378,20 @@ def _run_section_b(t):
     err_max = abs(diags["state_max"] - exp_max)
     err_min = abs(diags["state_min"] - exp_min)
     err_c0 = abs(diags["state_sum_c0"] - exp_sum)
+    err_max_c0 = abs(diags["state_max_c0"] - exp_max)
+    err_min_c0 = abs(diags["state_min_c0"] - exp_min)
     # program_diagnostic(name) reads one value (same as the dict).
     assert abs(sim.program_diagnostic("state_sum") - diags["state_sum"]) == 0.0
-    print("  reductions: |sum-%.4f|=%.2e |max-%.4f|=%.2e |min-%.4f|=%.2e |sum_c0|err=%.2e" %
-          (exp_sum, err_sum, exp_max, err_max, exp_min, err_min, err_c0))
+    print("  reductions: |sum-%.4f|=%.2e |max-%.4f|=%.2e |min-%.4f|=%.2e "
+          "|sum_c0|err=%.2e |max_c0|err=%.2e |min_c0|err=%.2e" %
+          (exp_sum, err_sum, exp_max, err_max, exp_min, err_min,
+           err_c0, err_max_c0, err_min_c0))
     assert err_sum <= 1e-9 * max(1.0, abs(exp_sum)), "P.sum must match the analytic sum"
     assert err_max <= 1e-12, "P.max must match the analytic max"
     assert err_min <= 1e-12, "P.min must match the analytic min"
     assert err_c0 <= 1e-9 * max(1.0, abs(exp_sum)), "P.sum_component(.,0) must match the analytic sum"
+    assert err_max_c0 <= 1e-12, "P.max_component(.,0) must match the analytic max"
+    assert err_min_c0 <= 1e-12, "P.min_component(.,0) must match the analytic min"
     # An unrecorded diagnostic name must fail loud (not return 0).
     try:
         sim.program_diagnostic("never_recorded")

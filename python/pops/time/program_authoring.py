@@ -29,7 +29,11 @@ class _ProgramAuthoring(_ProgramConstants):
         for v in self._values:
             lines.append("  " + self._render_node(v))
         for block, st in self._commits.items():
-            lines.append("  P.commit(%r, %s)" % (block, st.name))
+            fields = getattr(self, "_commit_fields", {}).get(block)
+            if fields is None:
+                lines.append("  P.commit(%r, %s)" % (block, st.name))
+            else:
+                lines.append("  P.commit(%r, %s, fields=%s)" % (block, st.name, fields.name))
         return "\n".join(lines)
 
     def dump_board(self):
@@ -56,7 +60,12 @@ class _ProgramAuthoring(_ProgramConstants):
             else:
                 lines.append("  ctx.%s(%s);  // -> %s" % (v.op, ins, v.name))
         for block, st in self._commits.items():
-            lines.append("  ctx.commit(%r, %s);" % (block, st.name))
+            fields = getattr(self, "_commit_fields", {}).get(block)
+            if fields is None:
+                lines.append("  ctx.commit(%r, %s);" % (block, st.name))
+            else:
+                lines.append("  ctx.commit(%r, %s);  // fields=%s already solved" %
+                             (block, st.name, fields.name))
         return "\n".join(lines)
 
     # --- decorator mode (ADC-423): record the step body from a function ---
@@ -253,6 +262,24 @@ class _ProgramAuthoring(_ProgramConstants):
         if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
             raise ValueError("sum_component: comp must be a Python int >= 0 (got %r)" % (comp,))
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": int(comp)}, None,
+                         state.block)
+
+    def max_component(self, state, comp):
+        """The signed maximum ``max_cells u(.,comp)`` of a State component."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("max_component: a State/RHS value is required")
+        if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
+            raise ValueError("max_component: comp must be a Python int >= 0 (got %r)" % (comp,))
+        return self._new("scalar", "reduce", (state,), {"kind": "max", "comp": int(comp)}, None,
+                         state.block)
+
+    def min_component(self, state, comp):
+        """The signed minimum ``min_cells u(.,comp)`` of a State component."""
+        if not (isinstance(state, Value) and state.is_field()):
+            raise ValueError("min_component: a State/RHS value is required")
+        if isinstance(comp, bool) or not isinstance(comp, int) or comp < 0:
+            raise ValueError("min_component: comp must be a Python int >= 0 (got %r)" % (comp,))
+        return self._new("scalar", "reduce", (state,), {"kind": "min", "comp": int(comp)}, None,
                          state.block)
 
     def record_scalar(self, name, value):
@@ -482,5 +509,3 @@ class _ProgramAuthoring(_ProgramConstants):
     def has_dt_bound(self):
         """True iff an optional dt bound was set (spec s18)."""
         return self._dt_bound is not None
-
-

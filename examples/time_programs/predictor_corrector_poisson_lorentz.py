@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Predictor-corrector Poisson/Lorentz step as a compiled time Program (epic ADC-399 / ADC-403).
 
-This is the spec's Example 5: a 2D isothermal fluid U = (rho, mx, my) driven by a NAMED electric
-source ``m.source_term("electric", [0, -rho*grad_x, -rho*grad_y])`` and a NAMED Lorentz local linear
-source ``m.linear_source("lorentz", [[0,0,0],[0,0,Bz],[0,-Bz,0]])``. The predictor-corrector Program
-chains: solve_fields; rhs(sources=["electric"]); an implicit Lorentz local solve (I - dt*L); a second
-solve_fields + rhs; a Lorentz apply; the corrector combine; a half-step implicit Lorentz solve
-(I - 0.5*dt*L); commit. The whole step runs C++-side -- no numerical stage re-enters Python.
+This is the spec's Example 5: a 2D isothermal fluid U = (rho, mx, my) driven by a named electric
+source and a named Lorentz local linear operator. The predictor-corrector Program is operator-first:
+it calls only ``fields_from_state``, ``explicit_rate`` and ``implicit_operator`` handles. It does not
+know that ``explicit_rate`` contains transport plus an electric source, or that the fields come from a
+Poisson solve. The whole step runs C++-side -- no numerical stage re-enters Python.
 
 It is checked against an OFFLINE replay of the EXACT same stages built from the runtime primitives
 (set_state + solve_fields + eval_rhs for ``-div F + electric``, from a second model that folds the
@@ -30,7 +29,9 @@ try:
     import numpy as np
 
     import pops
+    from pops.fields import catalog as field_catalog
     from pops.ir.ops import sqrt
+    from pops.model import OperatorHandle
     from pops.physics.facade import Model
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
@@ -40,6 +41,10 @@ except Exception as exc:  # noqa: BLE001
 N = 16
 BZ = 3.0
 DT = 0.02
+
+
+def magnetic_field():
+    return BZ * np.ones((N, N))
 
 
 def _base_block(m):
@@ -66,11 +71,13 @@ def named_source_model(name="pc_named"):
     operator a NAMED linear_source (both opt-in). This is the model the Program drives."""
     m = Model(name)
     rho, mx, my, gx, gy, bz = _base_block(m)
-    m.source_term("electric", [0.0, -rho * gx, -rho * gy])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
-    return m
+    electric = m.source_term("electric", [0.0, -rho * gx, -rho * gy])
+    implicit_operator = m.linear_source("implicit_operator", [[0.0, 0.0, 0.0],
+                                                              [0.0, 0.0, bz],
+                                                              [0.0, -bz, 0.0]])
+    explicit_rate = m.rate_operator("explicit_rate", flux=True, sources=[electric.name])
+    fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
+    return m, fields_from_state, explicit_rate, implicit_operator
 
 
 def default_source_model(name="pc_default"):
@@ -79,30 +86,39 @@ def default_source_model(name="pc_default"):
     m = Model(name)
     rho, mx, my, gx, gy, bz = _base_block(m)
     m.source([0.0, -rho * gx, -rho * gy])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
+    m.linear_source("implicit_operator", [[0.0, 0.0, 0.0],
+                                          [0.0, 0.0, bz],
+                                          [0.0, -bz, 0.0]])
     return m
 
 
-def predictor_corrector_program(name="predictor_corrector_poisson_lorentz"):
-    """The spec Example 5 program: two electric-source RHS evaluations, two implicit Lorentz local
-    solves I -/+ a*dt*L, one Lorentz apply, the corrector combine."""
+def predictor_corrector_program(model, fields_from_state, explicit_rate, implicit_operator,
+                                name="predictor_corrector_poisson_lorentz"):
+    """The spec Example 5 program as operator composition, not PDE-term spelling."""
     P = adctime.Program(name)
+    P.bind_operators(model.module)
     dt = P.dt
-    U_n = P.state("plasma")
-    f_n = P.solve_fields("fields_n", U_n)
-    R_n = P.rhs(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
-    U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
-    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source("lorentz"),
+    U = P.state("U", block="plasma")
+    f_n = P.call(fields_from_state, U.n, name="fields_n")
+    R_n = P.call(explicit_rate, U.n, f_n, name="R_n")
+    L_n = P.call(implicit_operator, f_n, name="L_n")
+    U_star_rhs = P.define("U_star_rhs", U.n + dt * R_n)
+    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * L_n,
                                   rhs=U_star_rhs, fields=f_n)
-    f_star = P.solve_fields("fields_star", U_star)
-    R_star = P.rhs(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
-    C_star = P.apply(operator=P.linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
-    Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
-    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source("lorentz"),
+    P.define(U.stage("star"), U_star)
+    f_star = P.call(fields_from_state, U_star, name="fields_star")
+    R_star = P.call(explicit_rate, U_star, f_star, name="R_star")
+    L_star = P.call(implicit_operator, f_star, name="L_star")
+    C_star = P.apply(operator=L_star, state=U_star, fields=f_star, name="C_star")
+    Q = P.define("Q", U.n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
+    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * L_star,
                                  rhs=Q, fields=f_star)
-    P.commit("plasma", U_np1)
+    P.define(U.next, U_np1)
+    fields_np1 = P.call(fields_from_state, U_np1, name="fields_np1")
+    P.commit(U.next, fields=fields_np1)
+    P.record_scalar("rho_sum", P.sum_component(U.next.value, 0))
+    P.record_scalar("rho_min", P.min_component(U.next.value, 0))
+    P.record_scalar("rho_max", P.max_component(U.next.value, 0))
     return P
 
 
@@ -114,18 +130,19 @@ def initial_state():
 
 
 def make_sim(model):
-    """The native reference System carrying ONE block (the given DSL model, production backend) +
-    shared Poisson + B_z, via the lower-level add_equation path. Returns (sim, U0) with U0 the initial
+    """The native reference System carrying ONE block (the given DSL model) + shared Poisson + B_z,
+    wired through the same public install entry point. Returns (sim, U0) with U0 the initial
     conservative state (n_vars, N, N)."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    compiled = model.compile(backend="production")
-    sim.add_equation("plasma", compiled,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
-    sim.set_magnetic_field(BZ * np.ones(N * N))  # constant B_z over the grid
     U0 = initial_state()
-    sim.set_state("plasma", U0)
+    sim.install(None,
+                instances={"plasma": {"model": model,
+                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
+                                                                   riemann=Rusanov()),
+                                      "time": pops.Explicit(),
+                                      "initial": U0}},
+                aux={"B_z": magnetic_field()},
+                solvers={"phi": field_catalog.GeometricMG()})
     return sim, U0
 
 
@@ -157,8 +174,9 @@ def main():
         print("skip predictor_corrector_poisson_lorentz (_pops lacks install_program; rebuild _pops)")
         return 0
     try:
-        compiled = pops.compile_problem(model=named_source_model("pc_prog"),
-                                       time=predictor_corrector_program())
+        model, fields, rate, implicit = named_source_model("pc_prog")
+        compiled = pops.compile_problem(model=model,
+                                       time=predictor_corrector_program(model, fields, rate, implicit))
         ref = make_sim(default_source_model("pc_ref_block"))[0]
     except RuntimeError as exc:
         print("skip predictor_corrector_poisson_lorentz (compile_problem could not build the .so: %s)"
@@ -169,14 +187,15 @@ def main():
     # Compiled path via the unified headline entry: install() pre-resolves the board Model, wires its
     # initial state, the B_z aux field and the Poisson solver, then installs the compiled time Program.
     sim = pops.System(n=N, L=1.0, periodic=True)
+    block_model = named_source_model("pc_block")[0]
     sim.install(compiled,
-                instances={"plasma": {"model": named_source_model("pc_block"),
+                instances={"plasma": {"model": block_model,
                                       "spatial": pops.FiniteVolume(limiter=FirstOrder(),
                                                                    riemann=Rusanov()),
-                                      "time": pops.Explicit(method="euler"),
+                                      "time": pops.Explicit(),
                                       "initial": U0}},
-                aux={"B_z": BZ * np.ones(N * N)},
-                solvers={"phi": pops.lib.fields.GeometricMG()})
+                aux={"B_z": magnetic_field()},
+                solvers={"phi": field_catalog.GeometricMG()})
     sim.step(DT)
     U_pc = np.array(sim.get_state("plasma"))
 

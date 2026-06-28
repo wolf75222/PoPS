@@ -216,13 +216,17 @@ class _ProgramSolve(_ProgramConstants):
             raise ValueError("keep_history: the TimeState belongs to a different Program")
         return timestate._keep_history(depth, cold_start)
 
-    def commit(self, block, state=None):
+    def commit(self, block, state=None, fields=None):
         """Replace the current state of ``block`` with ``state`` at the end of the step. Each block
         is committed AT MOST once; read-only blocks need no commit.
 
         Two forms (additive; the positional ``(block, state)`` form is unchanged):
 
           - ``P.commit("plasma", U_next)`` (LEGACY) commits a State value to a named block;
+          - ``P.commit("plasma", U_next, fields=fields_np1)`` commits the State and records that
+            ``fields_np1`` is the coherent field context solved from that final State. The generated
+            step still stores only the conservative state; the field solve remains live and fills the
+            runtime aux channel before the step exits.
           - ``P.commit(U.next)`` (Spec 5 sec.5.3.1) commits a single typed version handle to its own
             block (``commit(handle.block, handle.value)``). The version must have been defined
             (``T.define(U.next, ...)``) first; an undefined handle raises.
@@ -233,15 +237,22 @@ class _ProgramSolve(_ProgramConstants):
         from pops.time.handles import _Version
         if isinstance(block, _Version) and state is None:
             version = block
-            return self.commit(version.block, version.value)  # version.value raises if undefined
+            return self.commit(version.block, version.value, fields=fields)  # value raises if undefined
         state = _resolve_handle(state)  # P.commit("blk", U.next) also resolves a defined handle
+        fields = _resolve_handle(fields)
         if not (isinstance(state, Value) and state.vtype in ("state", "scalar_field")):
             raise ValueError("commit: a State (or scalar_field) value is required")
+        if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
+            raise ValueError("commit: fields must be a FieldContext from solve_fields")
         if state.prog is not self:
             raise ValueError("commit: the State value belongs to a different Program")
+        if fields is not None and fields.prog is not self:
+            raise ValueError("commit: the FieldContext belongs to a different Program")
         if block in self._commits:
             raise ValueError("block '%s' committed more than once" % block)
         self._commits[block] = state
+        if fields is not None:
+            self._commit_fields[block] = fields
 
     def commits(self):
         """Map of committed block -> committed State value (copy)."""
@@ -349,13 +360,17 @@ class _ProgramSolve(_ProgramConstants):
     def commit_many(self, mapping, fields=None):
         """Atomically commit several coupled blocks (Spec 3). ALL entries are validated before any
         commit, so a partial or double commit of a coupled group is rejected as a unit and no block
-        is left half-committed. ``fields`` (optional) is validated as a coherent FieldContext but is
-        RESERVED: the IR commit has no fields slot yet (the runtime association lands with ADC-457)."""
+        is left half-committed. ``fields`` (optional) records the coherent FieldContext associated
+        with the group commit, keeping the final field solve live for codegen/introspection."""
+        fields = _resolve_handle(fields)
         if not isinstance(mapping, dict) or not mapping:
             raise ValueError("commit_many: a non-empty {block: State} mapping is required")
         if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
             raise ValueError("commit_many: fields must be a FieldContext from solve_fields")
+        if fields is not None and fields.prog is not self:
+            raise ValueError("commit_many: fields belongs to a different Program")
         for block, state in mapping.items():
+            state = _resolve_handle(state)
             if not (isinstance(state, Value) and state.vtype in ("state", "scalar_field")):
                 raise ValueError("commit_many: block %r needs a State value" % (block,))
             if state.prog is not self:
@@ -364,7 +379,10 @@ class _ProgramSolve(_ProgramConstants):
             if block in self._commits:
                 raise ValueError("block '%s' committed more than once" % (block,))
         for block, state in mapping.items():
+            state = _resolve_handle(state)
             self._commits[block] = state
+            if fields is not None:
+                self._commit_fields[block] = fields
 
     def state_set(self, name, mapping):
         """Build a :class:`StageStateSet` -- a coherent set of stage states for a field solve."""

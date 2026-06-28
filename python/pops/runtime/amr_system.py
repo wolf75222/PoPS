@@ -325,6 +325,24 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             if initial is not None:
                 self.set_density(name, initial)
 
+    def install(self, compiled=None, *, instances=None, params=None, aux=None,
+                solvers=None, cadence=None, outputs=None):
+        """Public Spec-4 install entry point for the AMR runtime.
+
+        Shares the exact lowering/validation path with ``pops.bind``. AMR combinations that the
+        runtime does not implement yet still raise the existing explicit errors, but user code no
+        longer has to call the private ``_install_compiled`` seam.
+        """
+        return self._install_compiled(
+            compiled,
+            instances=instances,
+            params=params,
+            aux=aux,
+            solvers=solvers,
+            cadence=cadence,
+            outputs=outputs,
+        )
+
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
 

@@ -29,6 +29,7 @@ try:
     import numpy as np
 
     import pops
+    from pops.fields import catalog as field_catalog
     from pops.ir.expr import Const, Expr, Var
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
@@ -111,16 +112,17 @@ def initial_state():
 
 
 def make_sim(block_model):
-    """The native reference System (lower-level add_equation path) + shared Poisson + B_z."""
+    """The native reference System + shared Poisson + B_z, wired through public install()."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    compiled = block_model.compile(backend="production")
-    sim.add_equation("plasma", compiled,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
-    sim.set_magnetic_field(BZ * np.ones(N * N))
     u0 = initial_state()
-    sim.set_state("plasma", u0)
+    sim.install(None,
+                instances={"plasma": {"model": block_model,
+                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
+                                                                   riemann=Rusanov()),
+                                      "time": pops.Explicit(),
+                                      "initial": u0}},
+                aux={"B_z": BZ * np.ones((N, N))},
+                solvers={"phi": field_catalog.GeometricMG()})
     return sim, u0
 
 
@@ -164,10 +166,10 @@ def main():
                 instances={"plasma": {"model": mod.to_dsl(),
                                       "spatial": pops.FiniteVolume(limiter=FirstOrder(),
                                                                    riemann=Rusanov()),
-                                      "time": pops.Explicit(method="euler"),
+                                      "time": pops.Explicit(),
                                       "initial": u0}},
-                aux={"B_z": BZ * np.ones(N * N)},
-                solvers={"phi": pops.lib.fields.GeometricMG()})
+                aux={"B_z": BZ * np.ones((N, N))},
+                solvers={"phi": field_catalog.GeometricMG()})
     sim.step(DT)
     u_pc = np.array(sim.get_state("plasma"))
 
