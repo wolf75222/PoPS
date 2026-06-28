@@ -35,8 +35,11 @@ def _poisson_equation():
 def test_package_exports():
     assert "fields" in pops.__all__
     assert pops.fields is not None
-    # The top-level authoring package is DISTINCT from the lib.fields preset catalog.
-    assert pops.fields is not pops.lib.fields
+    # Spec 5 criterion 7: pops.lib is presets-only -- the elliptic-field brick catalog moved out
+    # of pops.lib.fields. The typed authoring package (pops.fields) is DISTINCT from its own brick
+    # catalog (pops.fields.catalog), and pops.lib no longer exposes a fields catalog at all.
+    assert pops.fields is not pops.fields.catalog
+    assert not hasattr(pops.lib, "fields")
 
 
 def test_poisson_problem_stores_equation():

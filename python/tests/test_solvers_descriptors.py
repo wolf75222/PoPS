@@ -202,21 +202,28 @@ def test_lib_solvers_shim_back_compat():
     assert ns.CG().native_id == "pops::cg_solve"
     assert ns.Schur().native_id == "pops::SchurCondensationOperator"
     assert ns.Newton().available is False
-    # The custom-solver registry hooks are wired (the authoring DSL lives in the shim).
+    # The preconditioner namespace re-exports through the shim (presets only).
+    assert lib_solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
+    # Spec 5 criterion 7: the shim is presets-only -- the custom-solver authoring / generation DSL
+    # no longer lives in pops.lib.solvers; it moved to pops.codegen.solvers (criterion 19).
+    for absent in ("solver", "build_solver_ir", "generate_solver_cpp", "SolverContext", "SolverIR"):
+        assert not hasattr(lib_solvers, absent), \
+            "pops.lib.solvers must not host the solver DSL symbol %r anymore" % absent
+    # The custom-solver registry hooks are wired onto the shared solvers namespace by the DSL package.
+    cs = pytest.importorskip("pops.codegen.solvers")
+    assert getattr(cs, "__experimental__", None) is True
+    assert callable(cs.solver)
+    assert callable(cs.generate_solver_cpp)
     assert callable(ns.custom)
     assert callable(ns.registered)
-    # The authoring DSL + the preconditioner namespace re-export through the shim.
-    assert callable(lib_solvers.solver)
-    assert callable(lib_solvers.generate_solver_cpp)
-    assert lib_solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
 
 
 def test_install_path_token_resolution_for_rich_descriptor():
     # The unified-install solver-token resolver reads .scheme; the new rich GeometricMG
-    # resolves to the same 'geometric_mg' token as the untouched pops.lib.fields descriptor.
+    # resolves to the same 'geometric_mg' token as the brick-catalog pops.fields.catalog descriptor.
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
     assert _SystemUnifiedInstall._solver_token(elliptic.GeometricMG()) == "geometric_mg"
-    assert _SystemUnifiedInstall._solver_token(pops.lib.fields.GeometricMG()) == "geometric_mg"
+    assert _SystemUnifiedInstall._solver_token(pops.fields.catalog.GeometricMG()) == "geometric_mg"
 
 
 if __name__ == "__main__":

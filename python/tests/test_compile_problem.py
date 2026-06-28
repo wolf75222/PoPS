@@ -65,8 +65,8 @@ def _fe_program(name="forward_euler_parity"):
 print("== (A) compile_problem / CompiledTime validation ==")
 chk(raises(ValueError, lambda: pops.compile_problem(time=_fe_program(), backend="aot")),
     "compile_problem backend != 'production' rejected")
-chk(raises(ValueError, lambda: pops.compile_problem(time=_fe_program(), target="amr_system")),
-    "compile_problem target != 'system' rejected")
+chk(raises(ValueError, lambda: pops.compile_problem(time=_fe_program(), target="polar_system")),
+    "compile_problem unknown target rejected (target='system' | 'amr_system' only)")
 chk(raises(ValueError, lambda: pops.compile_problem(time=None)),
     "compile_problem without a Program rejected")
 # substeps>1 / stride>1 are WIRED now (ADC-411): they STORE the cadence (System.set_program_cadence

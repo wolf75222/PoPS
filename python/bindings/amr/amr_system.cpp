@@ -3,6 +3,7 @@
 #include <pops/runtime/dynamic/abi_key.hpp>  // detail::abi_key_string: ABI key (header-only), compared to the loader's
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::dispatch_amr_compiled + build_amr_compiled (shared path)
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime + AmrRuntimeBlock (multi-block runtime engine)
+#include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/builders/block/amr_block_seam.hpp>  // ADC-335: per-transport AMR build seam (build_amr_block/_compiled_<transport>)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model + compiled bricks
 #include <pops/runtime/dynamic/model_registry.hpp>  // unknown_transport_msg: single-source transport rejection (ADC-331)
@@ -187,6 +188,13 @@ struct AmrSystem::Impl {
   int macro_step_ = 0;
   bool clock_restore_pending_ =
       false;  // a set_clock is waiting to be pushed to the engine (at the next step)
+
+  // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): the facade OWNS the Profiler (parity with
+  // System::Impl::profiler_); it is wired into the multi-block AmrRuntime engine at build
+  // (runtime->set_profiler(&profiler_)), which times its non-numeric AMR phases (regrid /
+  // fill_boundary / average_down) + MPI counters into it. Disabled by default -> zero hot-path cost.
+  // It lives on the Impl, NOT on SystemStepper -- the C++ MockImpl never reads it.
+  pops::runtime::program::Profiler profiler_;
 
   explicit Impl(const AmrSystemConfig& c) : cfg(c) {}
 
@@ -414,6 +422,11 @@ struct AmrSystem::Impl {
     runtime =
         std::make_shared<pops::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc, std::move(rblocks),
                                           S.base_per, S.replicated_coarse, S.wall);
+    // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): wire the facade-owned Profiler into the
+    // engine so it times its AMR phases (regrid / fill_boundary / average_down) into the SAME table
+    // profile_report() renders. Non-owning: profiler_ outlives runtime (both on the Impl). When
+    // profiling is disabled the engine never touches it (every scope/count is enabled()-guarded).
+    runtime->set_profiler(&profiler_);
     // Model-NAMED aux fields (ADC-291): push the pending coarse fields into the runtime engine, which
     // re-applies them onto the shared aux each solve_fields (so they persist across the union regrid)
     // and injects them to the fine levels. Empty -> no-op (bit-identical).
@@ -1329,6 +1342,28 @@ void AmrSystem::set_clock(double t, int macro_step) {
   else
     p_->clock_restore_pending_ = true;
 }
+// --- AMR / MPI profiling (Spec 5 sec.12.5, ADC-479 criterion 43) ---------------------------------
+// enable_profiling / profile_report drive the facade-owned Profiler (parity with System). The
+// multi-block AmrRuntime engine (wired at build via set_profiler) times its non-numeric AMR phases
+// -- regrid / fill_boundary / average_down -- and bumps the per-run + MPI counters into it. The
+// Profiler lives on the Impl (NOT on SystemStepper), so the C++ MockImpl never reads it. enable
+// BEFORE the run; the engine is enabled()-guarded so toggling between runs is safe.
+void AmrSystem::enable_profiling() {
+  p_->profiler_.enable();
+}
+void AmrSystem::disable_profiling() {
+  p_->profiler_.disable();
+}
+bool AmrSystem::is_profiling() const {
+  return p_->profiler_.enabled();
+}
+void AmrSystem::reset_profiling() {
+  p_->profiler_.reset();
+}
+std::string AmrSystem::profile_report() const {
+  return p_->profiler_.report();
+}
+
 int AmrSystem::n_blocks() const {
   return static_cast<int>(p_->blocks.size());
 }

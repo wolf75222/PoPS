@@ -17,18 +17,27 @@ The matrix-free Krylov solvers are native C++ free functions in
 | BiCGStab | `pops::bicgstab_solve` |
 | GMRES | `pops::gmres_solve` |
 
-They are named by descriptors ({doc}`typed-bricks`): `pops.lib.solvers.CG()`,
-`pops.lib.solvers.BiCGStab()`, `pops.lib.solvers.GMRES()`, `pops.lib.solvers.Richardson()`. A
-compiled time Program drives them through `P.solve_linear(...)` ({doc}`time-program`); the
-elliptic field solve uses the geometric multigrid (`pops::GeometricMG`).
+They are named by descriptors ({doc}`typed-bricks`): `pops.solvers.CG()`,
+`pops.solvers.BiCGStab()`, `pops.solvers.GMRES()`, `pops.solvers.Richardson()` (the
+`pops.lib.solvers.*` names are a back-compat preset shim onto the same factories). A compiled
+time Program drives them through `P.solve_linear(...)` ({doc}`time-program`); the elliptic field
+solve uses the geometric multigrid (`pops::GeometricMG`).
 
-## Generated solvers (design)
+## Generated solvers (internal / experimental)
+
+```{admonition} Internal / experimental API
+:class: warning
+The solver-generation DSL below lives in `pops.codegen.solvers` (Spec 5 criterion 19: a
+solver-gen DSL, if any, lives in the codegen layer). It is INTERNAL / EXPERIMENTAL, not a stable
+public API, and its surface may change without notice. For stable solver selection use the
+`pops.solvers` presets above.
+```
 
 A solver can be written in the Python DSL and generated to C++ -- it builds an IR, it does not
 compute in Python:
 
 ```python
-@pops.lib.solver(name="richardson", signature="(A, b)")
+@pops.codegen.solvers.solver(name="richardson", signature="(A, b)")
 def richardson(ctx, A, b, *, omega=0.5, tol=1e-8, max_iter=200):
     x = ctx.zeros_like(b)
     it = ctx.scalar_int(0)
@@ -44,7 +53,7 @@ def richardson(ctx, A, b, *, omega=0.5, tol=1e-8, max_iter=200):
     return x
 ```
 
-`pops.lib.generate_solver_cpp(solver)` lowers the IR to a self-contained C++ kernel:
+`pops.codegen.solvers.generate_solver_cpp(solver)` lowers the IR to a self-contained C++ kernel:
 
 ```cpp
 template <class Op>
@@ -69,9 +78,9 @@ maps onto a native scheme keeps the `pops::*_solve` free functions as its backen
 
 ```{admonition} Status
 :class: note
-The native Krylov solvers, the `pops.lib.solvers` descriptors, the solver DSL (`@pops.lib.solver`
-authoring + `generate_solver_cpp` C++ lowering), and `pops.compile_library` (compiling a brick
-library to a real `.so`, see typed-bricks) exist. The specialization modes and external C++
-solver registration are follow-ups; the Program `solve_linear` over the native Krylov solvers is
-the supported runtime path today.
+The native Krylov solvers, the `pops.solvers` descriptors, the internal / experimental solver
+DSL (`@pops.codegen.solvers.solver` authoring + `generate_solver_cpp` C++ lowering), and
+`pops.compile_library` (compiling a brick library to a real `.so`, see typed-bricks) exist. The
+specialization modes and external C++ solver registration are follow-ups; the Program
+`solve_linear` over the native Krylov solvers is the supported runtime path today.
 ```

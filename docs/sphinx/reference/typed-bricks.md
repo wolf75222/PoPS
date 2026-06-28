@@ -20,22 +20,24 @@ catalogued brick with no native symbol yet is emitted with `available=False` and
 
 ## Namespaces
 
-`riemann` (Rusanov/HLL/HLLC/Roe/User), `reconstruction` (FirstOrder/MUSCL/WENO5/WENO5Z/User),
-`limiters` (Minmod/VanLeer; MC/Superbee are catalogued but not yet wired), `spatial`
-(FiniteVolumeResidual/FluxDivergence/SourceAssembly), `fields` (GeometricMG native; Poisson/
-Helmholtz/EllipticSolve catalogued), `solvers` (CG/BiCGStab/GMRES/Richardson native free
-functions; Newton/FixedPoint catalogued; Schur), `preconditioners` (GeometricMG native;
-identity/jacobi/block_jacobi catalogued), `diagnostics`, `projections` (positivity native),
-`invariants`, and `time` (macros forwarding to `pops.time` `std`).
+The brick catalogs live in the Spec 5 central packages (criterion 7: `pops.lib` is presets only).
+`pops.numerics` carries `riemann` (Rusanov/HLL/HLLC/Roe/User), `reconstruction`
+(FirstOrder/MUSCL/WENO5/WENO5Z/User), `limiters` (Minmod/VanLeer; MC/Superbee are catalogued but
+not yet wired), `spatial` (FiniteVolumeResidual/FluxDivergence/SourceAssembly/FiniteVolume), and
+`projections` (positivity native). `pops.fields.catalog` carries the elliptic-field bricks
+(GeometricMG native; Poisson/Helmholtz/EllipticSolve catalogued). `pops.solvers` carries `solvers`
+(CG/BiCGStab/GMRES/Richardson native free functions; Newton/FixedPoint catalogued; Schur) and
+`preconditioners` (GeometricMG native; identity/jacobi/block_jacobi catalogued). `pops.lib.time`
+keeps the time-scheme macros (forwarding to `pops.time` `std`).
 
 ```python
-import pops.lib as lib
-d = lib.riemann.HLLC()
+import pops
+d = pops.numerics.riemann.HLLC()
 d.brick_type   # 'native'
 d.native_id    # 'pops::HLLCFlux'
 d.scheme       # 'hllc'
-lib.solvers.GMRES().native_id   # 'pops::gmres_solve' (a native free function)
-lib.fields.Poisson().available  # False (no standalone native type yet; solved via GeometricMG)
+pops.solvers.GMRES().native_id            # 'pops::gmres_solve' (a native free function)
+pops.fields.catalog.Poisson().available   # False (no standalone native type yet; solved via GeometricMG)
 ```
 
 The native ids resolve to real symbols in `include/pops` (verified by the test suite); see

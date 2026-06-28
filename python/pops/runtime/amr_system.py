@@ -12,6 +12,39 @@ from pops.runtime.bricks import Spatial, Explicit, Split
 from pops.runtime._amr_system_equation import _AmrSystemEquation
 from pops.runtime._amr_system_io import _AmrSystemIO
 from pops.runtime._system_unified_install import validate_install_arguments
+from pops.runtime.profile import PerformanceSummary, Profile
+
+
+class _AmrProfileSession:
+    """The typed profiling context manager AmrSystem.profile() returns (Spec 5 sec.12.5).
+
+    Mirror of :class:`pops.runtime.system._ProfileSession` for the AMR runtime: ``__enter__``
+    resets + enables the native profiler ; ``__exit__`` snapshots the report into a
+    :class:`PerformanceSummary` and disables the profiler. ``summary().by_amr_mpi()`` surfaces the
+    AMR / MPI phase timings (regrid / fill_boundary / average_down) + counters (criterion 43). Lives
+    here rather than importing from system.py to avoid a circular import (system imports amr_system).
+    """
+
+    def __init__(self, system, profile):
+        self._system = system
+        self._profile = profile
+        self._summary = None
+
+    def __enter__(self):
+        self._system.reset_profiling()
+        self._system.enable_profiling()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._summary = PerformanceSummary(self._system.profile_report(), self._profile)
+        self._system.disable_profiling()
+        return False
+
+    def summary(self):
+        """Return a :class:`PerformanceSummary` (live report inside the block, snapshot after)."""
+        if self._summary is not None:
+            return self._summary
+        return PerformanceSummary(self._system.profile_report(), self._profile)
 
 
 class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
@@ -57,6 +90,30 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
         # set_aux_field(block, name, array). Empty for blocks without a named aux field. Mirror of
         # System._aux_field_index.
         self._aux_field_index = {}
+
+    def profile(self, profile=None):
+        """Typed AMR / MPI profiling context manager (Spec 5 sec.12.5, criterion 43).
+
+        Usage::
+
+            sim.set_refinement(threshold)  # regrid_every > 0 in the config
+            with sim.profile(pops.Profile.Basic()) as prof:
+                for _ in range(n_steps):
+                    sim.step_cfl(0.4)
+            print(prof.summary().by_amr_mpi())  # regrid / fill_boundary / average_down timings
+
+        @p profile is a :class:`pops.Profile` level ; with no argument it comes from ``POPS_PROFILE``
+        (unset / ``off`` -> Basic()). The manager enables the native AMR profiler on entry and
+        disables it on exit (off-by-default contract). ``prof.summary().by_amr_mpi()`` surfaces the
+        AMR phase timings + counters as soon as a regrid / solve fired under the multi-block engine.
+        """
+        if profile is None:
+            profile = Profile.from_env(default=Profile.Basic())
+        elif not isinstance(profile, Profile):
+            raise TypeError(
+                "AmrSystem.profile: expected a pops.Profile (Profile.Basic()/Advanced()), got %r"
+                % type(profile).__name__)
+        return _AmrProfileSession(self, profile)
 
     def patch_rectangles(self):
         """Physical rectangles (x0, y0, width, height) of the current fine patches, in [0, L]^2.
@@ -266,7 +323,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None))
         if token is None:
             raise TypeError("AmrSystem.install: solver must be a token string or an "
-                            "pops.lib.fields.<Solver>(...) descriptor; got %r"
+                            "pops.solvers.<Solver>(...) descriptor; got %r"
                             % type(solver_brick).__name__)
         self.set_poisson(solver=token)
 

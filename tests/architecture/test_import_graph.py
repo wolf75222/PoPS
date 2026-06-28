@@ -14,7 +14,7 @@ The sub-packages form a directed acyclic dependency stack:
     diagnostics -> linalg                        (Spec 5: Norm takes a typed norm kind)
     params / output / external -> (nothing)      (Spec 5: inert descriptors)
     lib       -> ir, model, time, physics, moments, solvers
-    codegen   -> ir, model, physics, time, lib   (lowering, no _pops at module scope)
+    codegen   -> ir, model, physics, time, lib, solvers   (lowering + solver-gen DSL; no _pops)
     runtime   -> everything, and is the ONLY layer allowed to import _pops
 
 This test builds the cross-layer edges from module-scope imports (``ast``,
@@ -47,8 +47,9 @@ ALLOWED = {
     "linalg": set(),
     # Spec 5 sec.5.7: pops.solvers is the linear / nonlinear / Schur / elliptic solver +
     # preconditioner catalog. Every module imports only the flat pops.descriptors module (not a
-    # tracked layer) and its own sub-packages (same layer, not an edge) -> no edges. The
-    # custom-solver authoring DSL stays in pops.lib.solvers, so pops.solvers never imports lib.
+    # tracked layer) and its own sub-packages (same layer, not an edge) -> no edges. pops.solvers
+    # imports nothing else in pops, so it is a SINK: the custom-solver registry hooks are attached
+    # onto its namespace by pops.codegen.solvers (a downward codegen -> solvers edge, acyclic).
     "solvers": set(),
     # Spec 5 Phase E: pops.fields authoring imports only pops.descriptors + pops.math at
     # module scope. fields.aux re-exports pops.mesh.aux.AuxHalo via a LAZY module __getattr__
@@ -61,9 +62,12 @@ ALLOWED = {
     "params": set(),
     "output": set(),
     "external": set(),
-    # lib.models wraps pops.moments; the lib.solvers shim re-exports pops.solvers (downward edge).
+    # lib.models wraps pops.moments; the lib.solvers preset shim re-exports pops.solvers (downward
+    # edge). Criterion 7: lib is presets-only -- the solver-gen DSL is NOT here, it is in codegen.
     "lib": {"ir", "model", "time", "physics", "moments", "solvers"},
-    "codegen": {"ir", "model", "physics", "time", "lib"},
+    # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
+    # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).
+    "codegen": {"ir", "model", "physics", "time", "lib", "solvers"},
     "runtime": {"ir", "model", "physics", "time", "lib", "mesh", "codegen"},
 }
 LAYERS = set(ALLOWED)

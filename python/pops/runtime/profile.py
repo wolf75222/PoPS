@@ -11,9 +11,10 @@ dance. Two pieces:
   plus integer counters) into a structured dict and exposes typed views:
   :meth:`~PerformanceSummary.by_program_node` / :meth:`~PerformanceSummary.by_native_brick` /
   :meth:`~PerformanceSummary.by_solver` / :meth:`~PerformanceSummary.by_elliptic` /
-  :meth:`~PerformanceSummary.by_memory`. When a measure is not available on the current build (the
-  heavy per-brick / scheduler counters are Kokkos-gated and only move under a compiled ``.so`` step),
-  the view DECLARES it unavailable honestly rather than fabricating a zero.
+  :meth:`~PerformanceSummary.by_amr_mpi` / :meth:`~PerformanceSummary.by_memory`. When a measure is not
+  available on the current build (the heavy per-brick / scheduler counters are Kokkos-gated and only
+  move under a compiled ``.so`` step; the AMR / MPI phase scopes only exist under a distributed AMR
+  run), the view DECLARES it unavailable honestly rather than fabricating a zero.
 
 The off-by-default contract (criterion 44): profiling adds no heavy timers unless explicitly
 enabled. The native ``enable_profiling`` already gates this -- a plain run leaves the profiler
@@ -50,6 +51,20 @@ _ADVANCED_COUNTERS = ("cache_hits", "cache_misses", "nodes_due", "nodes_skipped"
 # self-time). A direct FFT solver reports honest zeros (no cycles / levels / iters / bottom solve).
 _ELLIPTIC_COUNTERS = ("mg_cycles", "krylov_iters", "mg_levels")
 _ELLIPTIC_TIME_SCOPE = "elliptic_bottom"
+
+# AMR / MPI phase timings + counters (Spec 5 sec.12.5, ADC-479 criterion 43). The distributed AMR
+# runtime spends its non-numeric time in a handful of named phases: regrid (rebuild the patch
+# hierarchy), halo exchange (fill_boundary / fill_ghosts across ranks), reflux (correct coarse-fine
+# flux mismatch), and average_down (restrict fine onto coarse). MPI collectives add reduction calls.
+# These are TIMING SCOPES (chrono self-time, like elliptic_bottom) plus integer COUNTERS (how many
+# regrids / halo exchanges / reductions ran). The names are matched flexibly: a scope/counter whose
+# name contains any of these tokens is attributed to the AMR/MPI dimension, so the C++ profiler may
+# emit "fill_boundary" or "halo_exchange" and both land in the halo bucket. On a host / non-AMR build
+# none of these scopes or counters exist, so the view declares itself unavailable (never a faked 0).
+_AMR_MPI_TIME_TOKENS = ("regrid", "fill_boundary", "halo_exchange", "reflux", "average_down")
+_AMR_MPI_COUNTER_TOKENS = (
+    "regrid", "fill_boundary", "halo_exchange", "halo_exchanges", "reflux", "average_down",
+    "mpi_reductions", "mpi_messages")
 
 # POPS_PROFILE: map sim.profile() called with NO argument to a default level.
 _ENV_VAR = "POPS_PROFILE"
@@ -218,8 +233,9 @@ class PerformanceSummary:
     Built from the string :meth:`System.profile_report` returns (and the :class:`Profile` level the
     run requested). It exposes the report as a structured dict (:meth:`to_dict` / :meth:`to_json`)
     and typed views: :meth:`by_program_node`, :meth:`by_native_brick`, :meth:`by_solver`,
-    :meth:`by_memory`. Views read the parsed native tables; a view the build does not surface
-    returns an :class:`_Unavailable` sentinel (``bool(view) is False``) rather than a faked zero.
+    :meth:`by_elliptic`, :meth:`by_amr_mpi`, :meth:`by_memory`. Views read the parsed native tables; a
+    view the build does not surface returns an :class:`_Unavailable` sentinel (``bool(view) is False``)
+    rather than a faked zero.
     """
 
     def __init__(self, report, profile=None):
@@ -317,6 +333,52 @@ class PerformanceSummary:
                 "that emits them (mg_cycles / krylov_iters / mg_levels / elliptic_bottom)")
         return out
 
+    def by_amr_mpi(self):
+        """AMR / MPI phase timings + counters: the distributed-runtime dimension (criterion 43).
+
+        Spec 5 sec.12.5 requires time attributable to AMR / MPI alongside the program-node, native-brick,
+        solver, and memory views. The distributed AMR runtime spends its non-numeric time in named
+        phases the C++ profiler can scope and count:
+
+        * ``regrid`` -- rebuilding the patch hierarchy (timing scope + a per-run count);
+        * ``fill_boundary`` / ``halo_exchange`` -- the cross-rank ghost-cell halo exchange;
+        * ``reflux`` -- the coarse-fine flux correction at refinement boundaries;
+        * ``average_down`` -- restricting fine-level data onto the coarse level;
+        * ``mpi_reductions`` / ``mpi_messages`` -- MPI collective / point-to-point counts.
+
+        A scope whose name contains one of the timing tokens is surfaced as a timing entry
+        (``{count, total_s, mean_s, min_s, max_s}``); a counter whose name contains one of the counter
+        tokens is surfaced as an int. Returns ``{name: int | timing-dict}`` with only the phases the run
+        actually produced.
+
+        On the common host / serial / non-AMR build NONE of these scopes or counters exist -- no C++
+        path emits them yet (the native regrid / halo / reduction timers are a documented follow-up in
+        ``include/pops/runtime/program`` and the AMR runtime). When the report carries none of them this
+        view declares itself :class:`_Unavailable` honestly rather than fabricating a zero, exactly like
+        :meth:`by_native_brick` / :meth:`by_memory` on a host build. It surfaces real numbers as soon as
+        a distributed AMR run under profiling emits the scopes.
+        """
+        out = {}
+        for name, fields in self._parsed["scopes"].items():
+            if any(token in name for token in _AMR_MPI_TIME_TOKENS):
+                out[name] = dict(fields)
+        for name, value in self._parsed["counters"].items():
+            # A phase emitted as a TIMING scope (regrid / fill_boundary / average_down) already
+            # carries its call count in the timing dict; its bare same-named counter is redundant, so
+            # never clobber the richer timing entry with the int. Genuine counter-only names
+            # (mpi_reductions / mpi_messages) are still surfaced as ints.
+            if name in out:
+                continue
+            if any(token in name for token in _AMR_MPI_COUNTER_TOKENS):
+                out[name] = value
+        if not out:
+            return _Unavailable(
+                "by_amr_mpi",
+                "AMR / MPI phase timings and counters (regrid / fill_boundary / halo_exchange / "
+                "reflux / average_down / mpi_reductions) populate only under a distributed AMR run; "
+                "no scope is emitted on a host / non-AMR build")
+        return out
+
     def by_memory(self):
         """Scratch-memory counters: allocation count + the largest single scratch buffer (bytes).
 
@@ -336,8 +398,8 @@ class PerformanceSummary:
     def to_dict(self):
         """The full structured report: level + scopes + counters + total, plus the typed views.
 
-        ``by_native_brick`` / ``by_memory`` serialise their availability honestly (an unavailable
-        view records ``{"available": False, "reason": ...}``).
+        ``by_native_brick`` / ``by_amr_mpi`` / ``by_memory`` serialise their availability honestly (an
+        unavailable view records ``{"available": False, "reason": ...}``).
         """
         return {
             "profile": self._profile.level,
@@ -349,6 +411,7 @@ class PerformanceSummary:
                 "by_native_brick": _view_to_dict(self.by_native_brick()),
                 "by_solver": self.by_solver(),
                 "by_elliptic": _view_to_dict(self.by_elliptic()),
+                "by_amr_mpi": _view_to_dict(self.by_amr_mpi()),
                 "by_memory": _view_to_dict(self.by_memory()),
             },
         }

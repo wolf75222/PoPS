@@ -1,12 +1,17 @@
-"""pops.lib.spatial -- the finite-volume spatial-discretisation brick catalog (Spec 3).
+"""pops.numerics.spatial -- the finite-volume spatial-discretisation brick catalog (Spec 5 sec.5.4).
 
-The finite-volume residual is assembled by the pops::SpatialDiscretisation<Limiter,
-NumericalFlux> tag-type bundle (spatial_discretisation.hpp); there are no separate
-residual/divergence/source-assembly types, so these name that bundle.
+Spec 5 (criterion 7) homes the generic spatial-discretisation brick catalog in the top-level
+:mod:`pops.numerics` package (alongside ``riemann`` / ``reconstruction`` / ``projections``),
+moving it out of the transitional ``pops.lib.spatial``. ``pops.lib`` keeps only presets.
+
+The finite-volume residual is assembled by the ``pops::SpatialDiscretisation<Limiter,
+NumericalFlux>`` tag-type bundle (spatial_discretisation.hpp); there are no separate
+residual/divergence/source-assembly types, so these name that bundle. Every entry is an inert
+:class:`pops.descriptors.BrickDescriptor`; the codegen / runtime consume it.
 """
 from types import SimpleNamespace
 
-from ..descriptors import _native
+from pops.descriptors import _native
 
 spatial = SimpleNamespace(
     FiniteVolumeResidual=lambda **o: _native(

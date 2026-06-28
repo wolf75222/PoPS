@@ -147,13 +147,23 @@ def test_apply_native_manifest_overlays_authoritative_fields():
                                         supports_partial_imex_mask=None, supports_named_fields=None)
     native = {"abi_version": 1, "n_vars": 4, "n_aux": 3, "n_params": 0, "ghost_depth": 3,
               "supports_stride": False, "supports_partial_imex_mask": False,
-              "supports_named_fields": True, "roles": ["density", "momentum_x"],
+              "supports_named_fields": True,
+              # Layouts / platforms now emitted authoritatively by the .so (Spec 5 #36): the AOT
+              # route is uniform single-rank, gpu reflects the build's device token.
+              "supports_uniform": True, "supports_amr": False, "supports_mpi": False,
+              "supports_gpu": False, "roles": ["density", "momentum_x"],
               "native_entrypoints": ["pops_model_nvars", "pops_compiled_manifest"]}
     apply_native_manifest(manifest, native)
     assert manifest.abi_version == 1
     assert manifest.ghost_depth == 3
     assert manifest.supports_partial_imex_mask is False  # the .so adjudicates, not a fabricated None
     assert manifest.supports_named_fields is True
+    # The artifact's own manifest is authoritative for layouts/platforms (#36), superseding the
+    # Python model-caps overlay: the AOT .so is uniform single-rank.
+    assert manifest.supports_uniform is True
+    assert manifest.supports_amr is False
+    assert manifest.supports_mpi is False
+    assert manifest.supports_gpu is False
     assert manifest.roles == ["density", "momentum_x"]
     assert "pops_compiled_manifest" in manifest.native_entrypoints
     # supports_partial_imex_mask is now KNOWN-False, so it leaves the needs-followup list.

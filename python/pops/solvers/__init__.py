@@ -19,11 +19,13 @@ Sub-packages:
 
 The ``solvers`` :class:`types.SimpleNamespace` gathers the Krylov + nonlinear + Schur factories
 under one attribute surface (``solvers.CG()`` / ``solvers.GMRES()`` / ``solvers.Newton()`` /
-``solvers.Schur()``); the custom-solver AUTHORING DSL (``@pops.lib.solver`` / ``SolverContext`` /
-``build_solver_ir`` / ``generate_solver_cpp``) lives in :mod:`pops.lib.solvers.dsl` (it imports
-the heavy ``pops.time`` lazily and is codegen-free). The ``pops.lib.solvers`` module is now a thin
-re-export shim onto this package, so the in-flight install path (``pops.lib.solvers.GMRES()``,
-``solvers.custom`` / ``solvers.registered``) keeps working.
+``solvers.Schur()``); the custom-solver GENERATION DSL (``@solver`` / ``SolverContext`` /
+``build_solver_ir`` / ``generate_solver_cpp``) is internal / experimental and lives in
+:mod:`pops.codegen.solvers` (Spec 5 criterion 19; it imports the heavy ``pops.time`` lazily). The
+``pops.lib.solvers`` module is a thin preset re-export shim onto this package, so the in-flight
+install path (``pops.lib.solvers.GMRES()``) keeps working. The custom-solver registry hooks
+(``solvers.custom`` / ``solvers.registered``) are attached onto the ``solvers`` namespace below
+when :mod:`pops.codegen.solvers` is imported (so this package stays a pure descriptor catalog).
 """
 from types import SimpleNamespace
 
@@ -36,8 +38,9 @@ from .schur import CondensedSchur, Schur
 
 # The flat solver factory surface (``solvers.CG()`` ... ``solvers.Schur()``), mirroring the
 # legacy ``pops.lib.solvers.solvers`` namespace. The custom-solver registry hooks
-# (``solvers.custom`` / ``solvers.registered``) are attached by the ``pops.lib.solvers`` shim,
-# which owns the authoring DSL -- keeping ``pops.solvers`` free of any ``pops.lib`` import.
+# (``solvers.custom`` / ``solvers.registered``) are attached onto this namespace by
+# :mod:`pops.codegen.solvers`, which owns the generation DSL -- keeping ``pops.solvers`` free of
+# any DSL / codegen import (no cycle: pops.solvers imports nothing).
 solvers = SimpleNamespace(
     CG=CG, BiCGStab=BiCGStab, GMRES=GMRES, Richardson=Richardson,
     Newton=Newton, FixedPoint=FixedPoint, Schur=Schur,

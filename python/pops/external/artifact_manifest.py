@@ -244,6 +244,13 @@ def build_compiled_manifest(compiled):
 # but the booleans + ghost_depth + roles + entrypoints below are the ones the .so adjudicates.
 _NATIVE_BOOL_FIELDS = ("supports_stride", "supports_partial_imex_mask", "supports_named_fields")
 
+# Layout / platform flags the .so now emits from its OWN compile (Spec 5 sec.13.12, #36): the AOT
+# route is a single uniform grid on one rank (supports_uniform true, supports_amr / supports_mpi
+# false) and supports_gpu is the build's device-backend token. These are ARTIFACT-authoritative, so
+# a real .so's manifest SUPERSEDES the model-caps overlay (_caps_flags) -- what the artifact can bind
+# under, not what the model could in principle support.
+_NATIVE_LAYOUT_PLATFORM_FIELDS = ("supports_uniform", "supports_amr", "supports_mpi", "supports_gpu")
+
 
 def apply_native_manifest(manifest, native):
     """Overlay a .so's authoritative ``pops_compiled_manifest()`` dict onto @p manifest (sec.13.12).
@@ -262,6 +269,9 @@ def apply_native_manifest(manifest, native):
     if "ghost_depth" in native and manifest.ghost_depth is None:
         manifest.ghost_depth = native["ghost_depth"]
     for field in _NATIVE_BOOL_FIELDS:
+        if field in native:
+            setattr(manifest, field, bool(native[field]))
+    for field in _NATIVE_LAYOUT_PLATFORM_FIELDS:
         if field in native:
             setattr(manifest, field, bool(native[field]))
     roles = native.get("roles")

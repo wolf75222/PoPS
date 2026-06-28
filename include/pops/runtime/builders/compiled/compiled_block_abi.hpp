@@ -461,6 +461,15 @@ std::string compiled_manifest_json() {
   out += ",\"n_aux\":" + std::to_string(aux_comps<Model>());
   out += ",\"n_params\":" + std::to_string(model_nparams<Model>());
   out += ",\"ghost_depth\":" + std::to_string(block_n_ghost("weno5"));
+  // Layouts / platforms emitted AUTHORITATIVELY by the artifact (Spec 5 sec.13.12, #36), not a
+  // Python overlay. Artifact-honest for the AOT compiled-block route: it runs a single uniform grid
+  // (supports_uniform) on ONE rank (the make_grid DistributionMapping is single-rank -> supports_mpi
+  // false; an AMR hierarchy uses a different loader -> supports_amr false). supports_gpu is the .so's
+  // OWN device-backend token (kHasGpuBackend: Kokkos AND CUDA/HIP), so a CUDA-built .so reports true.
+  out += ",\"supports_uniform\":true";
+  out += ",\"supports_amr\":false";
+  out += ",\"supports_mpi\":false";
+  out += std::string(",\"supports_gpu\":") + (pops::detail::kHasGpuBackend ? "true" : "false");
   out += ",\"supports_stride\":false";
   out += ",\"supports_partial_imex_mask\":false";
   out += ",\"supports_named_fields\":true";

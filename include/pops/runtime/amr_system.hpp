@@ -544,6 +544,23 @@ class AmrSystem {
   /// macro-step counter (propagated to the regrid/stride cadence of the engine, mono-block as well as multi-block). Useful
   /// alone (stride cadence + clock resumption). @throws if macro_step < 0.
   void set_clock(double t, int macro_step);
+
+  /// @name AMR / MPI profiling (Spec 5 sec.12.5, ADC-479 criterion 43)
+  /// Per-phase wall-clock timing of the AMR runtime: the engine times its non-numeric phases --
+  /// "regrid" (rebuild the patch hierarchy), "fill_boundary" (the cross-rank ghost halo exchange),
+  /// "average_down" (restrict fine onto coarse) -- plus integer counters ("regrid" / "fill_boundary"
+  /// per-run counts, and under MPI np>1 "mpi_reductions" / "mpi_messages"). Disabled by default (no
+  /// hot-path cost when off, parity with System). enable_profiling() then step()/step_cfl() over a
+  /// run where a regrid fires (regrid_every set) then profile_report() returns the table; the typed
+  /// PerformanceSummary.by_amr_mpi() view surfaces it. Per-rank (no cross-rank reduction of the
+  /// report). Multi-block engine only (the runtime owns the union regrid + shared-aux halo).
+  /// @{
+  void enable_profiling();
+  void disable_profiling();
+  bool is_profiling() const;
+  void reset_profiling();
+  std::string profile_report() const;
+  /// @}
   int n_blocks() const;  ///< number of blocks (1 = mono-block AmrCouplerMP; >= 2 = AmrRuntime)
   /// Names of the blocks in add order (parity with System::block_names): the IO facade iterates over them
   /// to write EACH block by its name (an empty name -> block 0, historical mono-block compat).

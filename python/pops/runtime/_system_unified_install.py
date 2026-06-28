@@ -102,13 +102,13 @@ class _SystemUnifiedInstall:
             "initial" state (if given) and lowers the "spatial" brick to the add_equation spatial args.
             The block model is the per-instance ``"model"`` if given, else ``compiled`` (single-
             instance case). ``spatial`` is an pops.FiniteVolume(...) / pops.Spatial(...) OR an
-            pops.lib.spatial.FiniteVolume(...) descriptor.
+            pops.numerics.spatial.FiniteVolume(...) descriptor.
         @param params dict {param_name: value} of RUNTIME parameters, routed to the instance whose
             compiled model declares the name (set_block_params). Unknown names raise.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" -> rejected (it is
             DERIVED, use set_electron_temperature_from), any other -> set_aux_field on the instance
             declaring it. Set BEFORE install_program so the section-24 aux requirement check sees it.
-        @param solvers dict {field: <pops.lib.fields.GeometricMG(...)/pops.GeometricMG(...)>}: lowered to
+        @param solvers dict {field: <pops.solvers.GeometricMG(...)/pops.GeometricMG(...)>}: lowered to
             set_poisson(solver=...). Only the default Poisson field ("phi"/"charge_density"/"poisson")
             is wired today; a second named elliptic field raises NotImplementedError (deferred).
         @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's macro-step
@@ -247,7 +247,7 @@ class _SystemUnifiedInstall:
 
     def _lower_spatial(self, spatial):
         """Lower a spatial selection to an pops.Spatial consumed by add_equation. Accepts an
-        pops.Spatial / pops.FiniteVolume (returned as-is), an pops.lib.spatial.FiniteVolume(...)
+        pops.Spatial / pops.FiniteVolume (returned as-is), an pops.numerics.spatial.FiniteVolume(...)
         BrickDescriptor (read its riemann/reconstruction/positivity_floor options), or None (default
         Spatial)."""
         if spatial is None:
@@ -267,7 +267,7 @@ class _SystemUnifiedInstall:
                 positivity_floor=opts.get("positivity_floor"),
                 wave_speed_cache=bool(opts.get("wave_speed_cache", False)))
         raise TypeError("install: spatial must be an pops.FiniteVolume / pops.Spatial or an "
-                        "pops.lib.spatial.FiniteVolume(...) descriptor; got %r"
+                        "pops.numerics.spatial.FiniteVolume(...) descriptor; got %r"
                         % type(spatial).__name__)
 
     def _resolve_instance_model(self, model):
@@ -333,12 +333,12 @@ class _SystemUnifiedInstall:
     @staticmethod
     def _solver_token(solver_brick):
         """Resolve a field-solver selection to its set_poisson token. Accepts a string, or a
-        descriptor carrying ``scheme`` (pops.lib.fields.GeometricMG -> 'geometric_mg')."""
+        descriptor carrying ``scheme`` (pops.solvers.GeometricMG -> 'geometric_mg')."""
         if isinstance(solver_brick, str):
             return solver_brick
         token = getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None)
         if token is None:
-            raise TypeError("install: solver must be a token string or an pops.lib.fields.<Solver>(...) "
+            raise TypeError("install: solver must be a token string or an pops.solvers.<Solver>(...) "
                             "descriptor; got %r" % type(solver_brick).__name__)
         return token
 
