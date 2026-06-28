@@ -48,6 +48,7 @@ from pops.codegen.compile_emit import (
     emit_cpp_native_loader,
 )
 from pops.codegen.backends import lower_backend
+from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +362,11 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     handle, but in this MVP it is added as a normal block
     (``sim.add_equation``) while the Program drives the step via
     ``ProgramContext`` (``ctx.rhs_into`` uses the block RHS); a single combined
-    model+program ``.so`` is a later phase. MVP constraints (spec): ``backend``
-    must be "production", ``target`` "system". Without an explicit ``so_path``
+    model+program ``.so`` is a later phase. Constraints (spec): ``backend``
+    must be "production"; ``target`` is "system" (the .so exports
+    ``pops_install_program``) or "amr_system" (it ALSO exports
+    ``pops_install_program_amr``, the AMR install entry, epic ADC-511 / ADC-508).
+    Without an explicit ``so_path``
     the ``.so`` is cached out-of-source keyed by [program source + header
     signature + compiler + std]; ``force=True`` recompiles. ``debug=True`` also
     writes the generated ``.cpp`` next to the ``.so`` for inspection.
@@ -410,7 +414,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     if model is not None and hasattr(model, "check"):
         model.check()
 
-    src = time.emit_cpp_program(model=model)
+    src = time.emit_cpp_program(model=model, target=target)
 
     include = include or pops_include()
     sig = pops_header_signature(include)
@@ -475,26 +479,3 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
                                codegen_env=cenv)
     cenv.run_dumps(compiled)
     return compiled
-
-
-def _redact_compile_command(cmd, *, tmp_cpp, gen_src):
-    """Return a redacted compile-command STRING for introspection (Spec 5 sec.12.4, #49).
-
-    The raw argv is safe to surface (it is a compiler invocation, not a credential), but two things
-    are normalised so the string is stable and leaks nothing machine-specific: the ephemeral
-    TemporaryDirectory .cpp path is replaced by the persistent generated-source path (or
-    ``<generated>``), and any token that looks like a secret/credential (``*token*`` / ``*secret*``
-    / ``*password*`` / ``*key*=value``) is masked. Header / include / library paths are KEPT (they
-    are part of the reproducible toolchain), only obvious secrets are masked."""
-    masked = []
-    for tok in cmd:
-        if tok == tmp_cpp:
-            masked.append(gen_src)
-            continue
-        low = tok.lower()
-        if (("token" in low or "secret" in low or "password" in low or "passwd" in low)
-                and "=" in tok):
-            masked.append(tok.split("=", 1)[0] + "=<redacted>")
-        else:
-            masked.append(tok)
-    return " ".join(masked)

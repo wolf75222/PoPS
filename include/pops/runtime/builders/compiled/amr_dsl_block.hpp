@@ -8,6 +8,7 @@
 #include <pops/mesh/execution/for_each.hpp>  // device_fence
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
+#include <pops/mesh/storage/mf_arith.hpp>   // pops::saxpy (level_source = full - flux-only residual, ADC-508)
 #include <pops/mesh/layout/refinement.hpp>  // coarsen_index
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
@@ -437,7 +438,7 @@ struct SharedAmrLayout {
 /// fine patch (the seed of build_amr_compiled, BEFORE its regrid). Identical to the geometry of the
 /// mono-block path, but WITHOUT the initial regrid (multi-block PR1 = frozen hierarchy). All blocks
 /// then settle onto it via build_amr_block.
-inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp) {
+inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool single_level = false) {
   SharedAmrLayout S;
   S.geom = Geometry{Box2D::from_extents(bp.n, bp.n), 0.0, bp.L, 0.0, bp.L};
   S.n = bp.n;
@@ -449,6 +450,18 @@ inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp) {
       detail::coupler_make_coarse_layout(bp.n, bp.distribute_coarse, bp.coarse_max_grid);
   S.ba_coarse = bac;
   S.dm_coarse = dmc;
+  // SINGLE-LEVEL layout (epic ADC-508, compiled-Program AMR driver opt-in): a coarse-only hierarchy,
+  // no fine seed. Used when a compiled time Program is installed on a SINGLE block with no refinement
+  // (the AmrProgramContext driver then runs one level), which makes a single-level AMR Program
+  // BIT-IDENTICAL to the same Program on System (the must-pass parity gate, 4.1a). It does NOT touch
+  // the native multi-block path (single_level defaults false there -> the historical 2-level seed).
+  if (single_level) {
+    S.ba = {bac};
+    S.dm = {dmc};
+    S.dx = {dxc};
+    S.dy = {dxc};
+    return S;
+  }
   // Central FIXED fine patch: same signatures as build_amr_compiled (coarse cells
   // [n/4 .. 3n/4-1]^2, refined x2). DISTRIBUTED round-robin DistributionMapping(nfine, n_ranks()),
   // EXACTLY like the regrid of the mono-block path (amr_regrid_finest): the fine patches are
@@ -625,6 +638,59 @@ AmrRuntimeBlock build_amr_block(
   // host loop). SAME functor as the flat System (make_poisson_rhs -> detail::PoissonRhs) -> each
   // block accumulates (+=) into the SAME cells of the shared coarse grid (per-cell co-location).
   b.add_elliptic_rhs = make_poisson_rhs(model);
+  // PER-LEVEL SEMI-DISCRETE RESIDUAL (epic ADC-508, compiled-Program AMR driver): R <- -div F + S over a
+  // level's grid, reusing BlockRhsEval<Limiter, Flux, Model> -- the SAME device-clean evaluator System
+  // wires for block_rhs_into. The closure builds a per-call GridContext from the passed-in level
+  // geometry + shared aux (the AmrProgramContext hands it the current level's metric and aux_[k]) so the
+  // ONE closure serves every level. The transport BC is derived from the base periodicity (periodic ->
+  // periodic ghosts; non-periodic -> Foextrap), matching System::make_bc. The recon_prim flag matches
+  // the block's transport. Device contract: BlockRhsEval is a named functor (no cross-TU extended
+  // lambda), instantiated HERE on the concrete Model/Limiter/Flux, so the kernel stays compiled and runs
+  // Serial / OpenMP / CUDA identically. These closures are read ONLY by an installed compiled Program;
+  // the native AMR step never calls them.
+  {
+    BCRec tbc;  // transport BC of the level, derived from the base periodicity (parity System::make_bc)
+    if (!S.base_per.x)
+      tbc.xlo = tbc.xhi = BCType::Foextrap;
+    if (!S.base_per.y)
+      tbc.ylo = tbc.yhi = BCType::Foextrap;
+    b.level_rhs = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+                                      MultiFab& R) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      detail::BlockRhsEval<Limiter, Flux, Model>{model, &gc, rprim, Real(0), nullptr}(U, R);
+    };
+    b.level_neg_div_flux = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+                                               MultiFab& R) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      detail::BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>>{SourceFreeModel<Model>{model}, &gc,
+                                                                  rprim, Real(0), nullptr}(U, R);
+    };
+    // SOURCE-ONLY: R <- S(U, aux) only. Computed as the full residual minus the flux-only residual
+    // (R_full - R_flux), reusing the two BlockRhsEval instances above -- no new source kernel (parity
+    // with the System split, which evaluates m.source per cell; here R = (-div F + S) - (-div F) = S
+    // is bit-identical and device-clean: it is two named-functor residuals + a saxpy).
+    b.level_source = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+                                         MultiFab& R) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      detail::BlockRhsEval<Limiter, Flux, Model>{model, &gc, rprim, Real(0), nullptr}(U, R);
+      MultiFab Rf(R.box_array(), R.dmap(), R.ncomp(), 0);
+      detail::BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>>{SourceFreeModel<Model>{model}, &gc,
+                                                                  rprim, Real(0), nullptr}(U, Rf);
+      pops::saxpy(R, Real(-1), Rf);  // R <- (-div F + S) - (-div F) = S
+    };
+  }
   // CFL SPEED of the block: SAME policy as System (make_max_speed) -- stability lambda*
   // (HasStabilitySpeed trait) if the model declares it, otherwise max_wave_speed (historical fallback,
   // bit-identical). The Riemann solvers always read max_wave_speed.

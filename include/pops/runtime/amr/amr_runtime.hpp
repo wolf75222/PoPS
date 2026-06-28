@@ -198,6 +198,23 @@ struct AmrRuntimeBlock {
   /// block that declares no named field -> the named-field solve loop never reads it (bit-identical).
   std::map<std::string, std::function<void(const MultiFab&, MultiFab&)>> named_elliptic_rhs;
 
+  /// SEMI-DISCRETE residual of the block on ONE level (epic ADC-508, compiled-Program AMR driver):
+  /// R <- -div F(U) + S(U, aux) over the level's grid, the per-level counterpart of System's
+  /// Species::rhs_into. Signature (U, aux, geom, R): @c U the level state, @c aux the SHARED per-level
+  /// aux (phi / grad / B_z, filled by solve_fields + coarse->fine injection), @c geom the level metric
+  /// (dx/dy >> k, domain << k), @c R the output residual. Captures BlockRhsEval<Limiter, Flux, Model>
+  /// (the SAME evaluator System uses, device-clean named functor) on the concrete scheme; the level
+  /// geometry / domain are passed in so the SAME closure serves every level. EMPTY for a block built
+  /// before the seam (the host .so prototype loader): AmrRuntime::level_rhs_into fails loud then. Used
+  /// ONLY by an installed compiled time Program (AmrProgramContext); the native AMR step never calls it.
+  std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&)> level_rhs;
+  /// FLUX-ONLY per-level residual R <- -div F(U) (NO default source), the SourceFreeModel<Model> path
+  /// (Lie/Strang split, ADC-425). Same signature / device contract as @ref level_rhs.
+  std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&)> level_neg_div_flux;
+  /// SOURCE-ONLY per-level residual R <- S(U, aux) (NO flux divergence), the exact MIRROR of @ref
+  /// level_neg_div_flux (ADC-430). Same signature / device contract as @ref level_rhs.
+  std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&)> level_source;
+
   /// Speed driving the block CFL on the coarse. By default max_wave_speed (historical); when the
   /// model declares the HasStabilitySpeed trait, it is lambda* (stability_speed) that the closure
   /// reduces -- SAME policy as System (make_max_speed), cf. build_amr_block.
@@ -321,6 +338,91 @@ class AmrRuntime {
   std::vector<double> density(std::size_t b) const { return blocks_[b].density(); }
   int solve_count() const { return solve_count_; }
   int regrid_count() const { return regrid_count_; }
+
+  /// @name Compiled time-Program AMR driver seam (epic ADC-508): per-level primitives exposing the
+  /// engine internals an AmrProgramContext composes into a per-level macro-step. APPEND-ONLY: these
+  /// surface existing storage / closures; none reimplement numerics. All are NO-OP-safe under MPI
+  /// (loops over local_size()). The native AMR step does not call any of them.
+  /// @{
+  /// The live state MultiFab of block @p b at level @p k (zero-copy; same address an AmrProgramContext
+  /// reads each macro-step). @c b is the AMR block index (sys_block-resolved by the caller).
+  MultiFab& level_state(std::size_t b, int k) { return (*blocks_[b].levels)[k].U; }
+  const MultiFab& level_state(std::size_t b, int k) const { return (*blocks_[b].levels)[k].U; }
+  /// Geometry of level @p k: the coarse metric refined k times (dx/dy >> k, domain << k). The metric
+  /// the per-level Laplacian / gradient / RHS read (parity with System's grid_context().geom).
+  Geometry level_geom(int k) const { return geom_.refine(1 << k); }
+  /// Transport BCRec derived from the base periodicity (periodic where periodic, else Foextrap) -- the
+  /// SAME convention System::make_bc uses, so a Program's per-level ghost fill matches the System path.
+  BCRec transport_bc() const {
+    BCRec b;  // periodic by default
+    if (!base_per_.x)
+      b.xlo = b.xhi = BCType::Foextrap;
+    if (!base_per_.y)
+      b.ylo = b.yhi = BCType::Foextrap;
+    return b;
+  }
+  /// BC of the coarse Poisson (for a matrix-free Krylov preconditioner's GeometricMG).
+  const BCRec& poisson_bc() const { return bcPhi_; }
+  /// A fresh scalar field co-distributed with level @p k's grid (its ba/dm), @p n_comp components,
+  /// @p n_ghost ghosts, zero-initialized -- the Krylov scratch (r/p/Ap) of a per-level field solve.
+  /// Counterpart of System::alloc_scalar_field, but at the level's layout (read from block 0).
+  MultiFab level_scalar_field(int k, int n_comp, int n_ghost) const {
+    const MultiFab& U = (*blocks_[0].levels)[k].U;
+    MultiFab f(U.box_array(), U.dmap(), n_comp, n_ghost);
+    f.set_val(Real(0));
+    return f;
+  }
+  /// R <- -div F(U) + S(U, aux_[k]) for block @p b on level @p k (the per-level analogue of
+  /// System::block_rhs_into). Forwards to the block's level_rhs closure with the level metric + shared
+  /// aux; fails loud if the block built no such closure (a host .so prototype).
+  void level_rhs_into(std::size_t b, int k, MultiFab& U, MultiFab& R) {
+    if (!blocks_[b].level_rhs)
+      throw std::runtime_error(
+          "AmrRuntime::level_rhs_into: block '" + blocks_[b].name +
+          "' has no per-level residual closure (rebuild the AMR block via the production DSL "
+          "target='amr_system')");
+    blocks_[b].level_rhs(U, aux_[k], level_geom(k), R);
+  }
+  /// R <- -div F(U) only (NO default source) for block @p b on level @p k (SourceFreeModel path).
+  void level_neg_div_flux_into(std::size_t b, int k, MultiFab& U, MultiFab& R) {
+    if (!blocks_[b].level_neg_div_flux)
+      throw std::runtime_error("AmrRuntime::level_neg_div_flux_into: block '" + blocks_[b].name +
+                               "' has no flux-only per-level residual closure");
+    blocks_[b].level_neg_div_flux(U, aux_[k], level_geom(k), R);
+  }
+  /// R <- S(U, aux_[k]) only (NO flux) for block @p b on level @p k (the source half of level_rhs).
+  void level_source_into(std::size_t b, int k, MultiFab& U, MultiFab& R) {
+    if (!blocks_[b].level_source)
+      throw std::runtime_error("AmrRuntime::level_source_into: block '" + blocks_[b].name +
+                               "' has no source-only per-level residual closure");
+    blocks_[b].level_source(U, aux_[k], level_geom(k), R);
+  }
+  /// Max |wave speed| of block @p b on @p U (the SAME closure step_cfl reads). Evaluated on the aux of
+  /// level @p k. A Program dt bound reads it as cfl*hmin/max_wave_speed.
+  Real level_max_speed(std::size_t b, int k, const MultiFab& U) const {
+    return blocks_[b].max_speed(U, aux_[k]);
+  }
+  /// MIN physical cell size of level @p k (min(dx, dy) >> k): the per-level hmin a Program dt bound reads.
+  Real level_hmin(int k) const {
+    const Real r = static_cast<Real>(1 << k);
+    return std::min(geom_.dx(), geom_.dy()) / r;
+  }
+  /// fine -> coarse restriction of block @p b between levels @p k and @p k-1 (covered coarse cell <-
+  /// 2x2 fine average): the SAME mf_average_down_mb solve_fields / the native step run. Exposed for the
+  /// synchronous Program driver's inter-level coupling. No-op when k < 1.
+  void average_down_level(std::size_t b, int k) {
+    if (k < 1)
+      return;
+    auto& L = *blocks_[b].levels;
+    mf_average_down_mb(L[k].U, L[k - 1].U);
+  }
+  /// Head-of-step union-tags regrid at the Program driver's cadence (the SAME regrid() the native step
+  /// runs at its head). @p macro_step gates it like AmrRuntime::step (skip step 0; honor regrid_every_).
+  void regrid_if_due(int macro_step) {
+    if (regrid_every_ > 0 && macro_step > 0 && macro_step % regrid_every_ == 0)
+      regrid();
+  }
+  /// @}
 
   /// Tag predicate of the union regrid: (ConstArray4 of the read field, i, j) -> should we refine ?
   /// HOST type (evaluated in the host loop of tag_cells, never on device): a std::function capturing a
@@ -927,6 +1029,18 @@ class AmrRuntime {
   /// (dx_coarse). Returns the dt used. Single-block (a single block, stride=1): if w_b is the only
   /// constraining one, dt = cfl*h*substeps/w (identical to System::step_cfl single-block).
   Real step_cfl(Real cfl, Real h) {
+    const Real dt = cfl_dt(cfl, h);
+    step(dt);
+    return dt;
+  }
+
+  /// The CFL dt computation of @ref step_cfl WITHOUT the trailing advance (no step(dt)): solves the
+  /// fields (max_speed needs the aux), scans the per-block transport / source / stability bounds + the
+  /// coupled-frequency + global bounds, and returns the macro-step dt (records last_dt_reason_). Split
+  /// out so an installed compiled Program can take the SAME CFL dt and drive the macro-step itself
+  /// (AmrSystem::step_cfl's Program route, parity SystemStepper::step_cfl) instead of the native step.
+  /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
+  Real cfl_dt(Real cfl, Real h) {
     // NOTE (ADC-318): this pre-solve plus step(dt)'s own head solve below is a DOUBLE Poisson solve on
     // the SAME unchanged state (regrid_every=0 freezes the grid in between). It looks redundant but is
     // NOT, and is INTENTIONALLY kept. GeometricMG::solve() is warm-started and iterates to a RELATIVE
@@ -1056,7 +1170,6 @@ class AmrRuntime {
       dt = cfl * h / kCflSpeedFloor;  // guard (no block: impossible here)
       last_dt_reason_ = "degenerate";
     }
-    step(dt);
     return dt;
   }
 

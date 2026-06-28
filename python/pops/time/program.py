@@ -61,16 +61,20 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
 
     # --- C++ codegen (lowering to a problem.so source) lives in pops.codegen; the authoring
     # Program delegates via a LAZY import so pops.time stays free of any codegen/_pops edge. ---
-    def emit_cpp_program(self, model=None):
+    def emit_cpp_program(self, model=None, target="system"):
         """Generate the C++ source of a problem.so implementing this Program (codegen).
 
         Thin authoring entry point: delegates to the free function
         :func:`pops.codegen.program_codegen.emit_cpp_program`, imported lazily so the
         ``pops.time`` package never imports ``pops.codegen`` / ``_pops`` at module scope. See
         the codegen function for the full lowering contract.
+
+        @param target ``"system"`` (default) emits ``pops_install_program`` (installable on
+            ``System``); ``"amr_system"`` ALSO emits ``pops_install_program_amr`` (the AMR
+            install entry ``AmrSystem::install_program`` resolves), epic ADC-511 / ADC-508.
         """
         from pops.codegen import program_codegen as _pcg
-        return _pcg.emit_cpp_program(self, model=model)
+        return _pcg.emit_cpp_program(self, model=model, target=target)
 
     def _check_lowerable(self, model=None):
         """Raise if the IR uses a construct the codegen cannot lower (delegates to

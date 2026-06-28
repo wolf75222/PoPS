@@ -294,6 +294,17 @@ add_test(NAME test_unified_install
 set_tests_properties(test_unified_install PROPERTIES
   ENVIRONMENT "${_pops_py_test_env}")
 
+# Spec 6 sec.11 (ADC-508) : le seam d'installation d'un Program temporel COMPILE sur AmrSystem.
+# AmrSystem::install_program (dlopen + cle ABI + validation sec.24 + binding par nom + seed des
+# RuntimeParams) + set_program_cadence / set_program_params, l'export codegen pops_install_program_amr
+# (target='amr_system'), et le routage pops.bind (compiled / params= / cadence=). Le DRIVER par niveau
+# (AmrProgramContext) est Kokkos/ROMEO ; la forme d'API + l'emission codegen + le seam sont testables
+# host (le .so fail-loud a l'install tant que le driver n'est pas la). S'auto-saute sans _pops / Kokkos.
+add_test(NAME test_amr_install_program
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_install_program.py)
+set_tests_properties(test_amr_install_program PROPERTIES
+  ENVIRONMENT "${_pops_py_test_env}")
+
 # Spec 5 C1-System (ADC-479) : un champ elliptique NOMME (m.elliptic_field) lowere sur le System
 # uniforme -- la selection de solveur d'un champ DECLARE route via le solveur elliptique partage
 # (set_poisson) et un nom de champ non declare est rejete fort (typo). La carte codegen->install
