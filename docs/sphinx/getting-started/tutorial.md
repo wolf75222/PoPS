@@ -124,7 +124,7 @@ case = (
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": ne0})
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 The generated code and runtime use the same C++ core as native runs:
@@ -171,7 +171,7 @@ mem = compiled.estimate_memory(grid=mesh)
 print(mem)
 
 with sim.profile(pops.Profile.Basic()) as prof:
-    sim.run(t_final=0.1, cfl=0.4)
+    sim.run(t_end=0.1, cfl=0.4)
 
 prof.summary().print()
 ```

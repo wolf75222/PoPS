@@ -65,7 +65,7 @@ case.amr.refine(Refine.on("density").above(0.05))   # refine where the density e
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": ne0})
-sim.run(0.25, cfl=0.4)                # CFL on the coarse-level step
+sim.run(t_end=0.25, cfl=0.4)                # CFL on the coarse-level step
 
 print("fine patches:", sim.n_patches(), "| mass:", sim.mass("ne"))
 rho = sim.density("ne")               # coarse density (n, n)

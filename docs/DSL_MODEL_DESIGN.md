@@ -44,7 +44,7 @@ case = (
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"plasma": U0}, params=params)
-sim.run(t_final=1.0, cfl=0.5)
+sim.run(t_end=1.0, cfl=0.5)
 ```
 
 The older pattern where a model compiles itself or where a user constructs a

@@ -117,7 +117,7 @@ case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)))
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": np.ascontiguousarray(np.ones((96, 96)))})
-sim.run(0.05, cfl=0.4)
+sim.run(t_end=0.05, cfl=0.4)
 
 # Collective: every rank calls it; rank 0 writes the single .vti file.
 sim.write("out/state", format="vtk")

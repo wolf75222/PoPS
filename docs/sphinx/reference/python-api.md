@@ -14,7 +14,7 @@ from pops.codegen import Production
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state=initial_state, params=params)
-sim.run(t_final=1.0, cfl=0.4)
+sim.run(t_end=1.0, cfl=0.4)
 ```
 
 `pops.compile` validates and lowers the `Case`. `pops.bind` attaches data and

@@ -51,7 +51,7 @@ compiled.inspect()
 compiled.dump_cpp()
 
 sim = pops.bind(compiled, state=state)
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 The test should cover uniform layout and, when the brick declares AMR support,

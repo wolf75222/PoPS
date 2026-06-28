@@ -53,7 +53,7 @@ Python script that imports `pops`, composes a model, plugs it into a system, and
 
    compiled = pops.compile(case, backend=Production())
    sim = pops.bind(compiled, state={"ne": ne0})   # ne0: 2D initial density
-   sim.run(0.1, cfl=0.4)
+   sim.run(t_end=0.1, cfl=0.4)
    ```
 
    Replace `ne0` with a 2D array holding the initial density. For an adaptive run, swap the layout

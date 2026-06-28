@@ -8,7 +8,7 @@ The public flow is identical to a uniform run:
 case = pops.Case(layout=layout, name="run")
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state=state)
-sim.run(t_final=1.0, cfl=0.4)
+sim.run(t_end=1.0, cfl=0.4)
 ```
 
 Switching from uniform to AMR changes only the layout descriptor and the AMR

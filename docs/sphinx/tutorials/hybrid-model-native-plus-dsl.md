@@ -54,7 +54,7 @@ case = (
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"plasma": U0})
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 This pattern keeps the boundary clean: Python authors descriptors and IR; C++

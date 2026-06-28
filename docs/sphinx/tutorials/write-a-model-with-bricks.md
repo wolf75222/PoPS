@@ -70,7 +70,7 @@ case = (
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"electrons": ne0})
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 ## Switch to AMR

@@ -144,7 +144,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         Usage::
 
             with sim.profile(pops.Profile.Basic()) as prof:
-                sim.run(0.1)
+                sim.run(t_end=0.1)
             print(prof.summary())
 
         @p profile is a :class:`pops.Profile` level (``Profile.Basic()`` / ``Profile.Advanced()``);

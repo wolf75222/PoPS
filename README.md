@@ -2,9 +2,9 @@
 
 # PoPS - Plasma-Oriented PDE Solver
 
-**A model-free C++23 core for coupled hyperbolic-elliptic systems on adaptive (AMR) meshes.**
+**A Python-authored C++20/Kokkos PDE engine for coupled hyperbolic-elliptic plasma systems on uniform and AMR meshes.**
 
-![C++23](https://img.shields.io/badge/C%2B%2B-23-blue?logo=cplusplus)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
 ![CMake](https://img.shields.io/badge/CMake-3.21%2B-064F8C?logo=cmake)
 ![Backends](https://img.shields.io/badge/backends-MPI%20%7C%20Kokkos-orange)
 ![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python)
@@ -18,21 +18,27 @@
 
 ---
 
-PoPS is a model-free engine with a library of generic physics bricks
-(`include/pops/physics/`) and Python bindings (`pops`). It names no scenario; it provides generic
-bricks composed into a `CompositeModel`. Named scenarios (diocotron, Euler-Poisson, two-fluid)
-live in [`adc_cases`](https://github.com/wolf75222/adc_cases).
+PoPS is a compiled solver engine, not a Python numerical library and not a scenario repository.
+Python authors an inert, typed `pops.Case`: mesh layout, physics model, finite-volume descriptors,
+field problems, time program, outputs, and runtime parameters. `pops.compile(...)` lowers that
+assembly to generated or native C++; `pops.bind(...)` creates the runtime; `sim.run(...)` advances
+with C++/Kokkos/MPI kernels. Python never runs a per-cell loop.
 
-On a Cartesian adaptive mesh, the core advances a hyperbolic part `U` coupled to an elliptic
-part `phi`:
+Named applications such as diocotron, Euler-Poisson, two-fluid, and benchmark setups live in
+[`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable solver core,
+the Python DSL that builds compiled artifacts, and the C++ runtime that executes them.
+
+At the mathematical level, a case usually couples conservative states `U` to one or more elliptic
+fields:
 
 ```
-d U / d t  +  div F(U, aux)  =  S(U, aux)
-D phi      =  f(U)
+dU/dt + div F(U, fields, aux) = S(U, fields, aux)
+D phi                         = f(U)
 ```
 
-The coupling flows through the `aux` channel at each step. The base contract is
-`(phi, grad_x, grad_y)`; a model may declare `n_aux` to read extra fields (`B_z`, `T_e`).
+Field outputs are exposed through named auxiliary channels. The standard Poisson contract provides
+`phi`, `grad_x`, and `grad_y`; a model may also declare named aux fields such as `B_z` or `T_e`.
+All these names are metadata for the generated C++ path, not Python callbacks.
 
 ## Table of contents
 
@@ -69,7 +75,7 @@ git clone https://github.com/wolf75222/adc_cpp.git && cd adc_cpp
 cmake --preset serial && cmake --build --preset serial && ctest --preset serial
 ```
 
-The Ninja build already uses every core; pin it to fewer jobs on a constrained machine with
+The Ninja build already uses all available cores; pin it to fewer jobs on a constrained machine with
 `cmake --build --preset serial -j<N>`. The serial test preset runs tests one at a time;
 parallelize with `ctest --preset serial -j<N>` (`-j$(nproc)` on Linux, `-j$(sysctl -n
 hw.ncpu)` on macOS), and add `--output-on-failure` for logs. Two other presets build a
@@ -86,11 +92,12 @@ runtime thread control (`pops.set_threads()`) are covered in the
 [installation guide](docs/sphinx/getting-started/installation.md).
 
 Python module (`pops`): `scripts/setup_env.sh` creates the conda env and pins the platform
-toolchain, then `scripts/build_python.sh` builds and installs the module in one command (it sizes
-the heavy-TU pool, exports the discovery vars, and ends on `pops.doctor()`); `pip install .`
-(scikit-build-core) drives the build directly if you prefer. Backends are selected by environment
-variables (`POPS_USE_MPI`, `Kokkos_ROOT`, ...). `scripts/uninstall_pops.sh` reverses the two setup
-scripts when you want a clean teardown.
+toolchain, then `scripts/build_python.sh` builds and installs the module in one command. It sizes
+the heavy translation-unit pool, exports the discovery variables, and ends on `pops.doctor()`.
+`pip install .` (scikit-build-core) drives the build directly if you prefer. Build-time backends are
+selected by environment variables (`POPS_USE_MPI`, `Kokkos_ROOT`, ...); user-facing compile choices
+inside Python should be typed objects such as `Production()`, not backend strings.
+`scripts/uninstall_pops.sh` reverses the setup scripts when you want a clean teardown.
 
 ```bash
 bash scripts/setup_env.sh      # conda env + toolchain
@@ -111,14 +118,14 @@ Released versions and binaries: the
 <div align="center">
 <sub>
 Validation scenario: diocotron instability (E x B drift) on a 3-level nested AMR hierarchy, ROMEO (96 cores).
-Reproducible local version (Python facade):
+The scenario itself lives outside this core repository:
 <a href="https://github.com/wolf75222/adc_cases/tree/master/diocotron_amr"><code>adc_cases/diocotron_amr</code></a>.
 </sub>
 </div>
 
 ### From a C++ project
 
-The core is header-only and consumed via `find_package(pops)` or FetchContent:
+The C++ core is header-only for consumers and is consumed via `find_package(pops)` or FetchContent:
 
 ```cmake
 include(FetchContent)
@@ -127,14 +134,15 @@ FetchContent_MakeAvailable(adc_cpp)   # adc_cpp's own tests are not built for th
 target_link_libraries(my_app PRIVATE pops::pops)
 ```
 
-Define a type that satisfies the `PhysicalModel` concept, wrap it in a
-`Coupler<Model, Elliptic>` (or `AmrCouplerMP` for AMR), and advance in time.
+Define a type that satisfies the `PhysicalModel` concept and compose it with the C++ coupling and
+time machinery. This is the low-level engine path. Most users should author a typed Python `Case`
+and let PoPS generate and bind the corresponding C++ artifact.
 
 ### From Python
 
-The public path is typed and compiled. Python builds an inert `pops.Case`; C++/Kokkos/MPI
-executes the run. User choices are descriptors, not string selectors. The reduced
-diocotron example below couples a scalar density to a Poisson field:
+The public Python path is typed and compiled. Strings name user objects such as blocks, fields, and
+program nodes; typed objects choose algorithms and routes. The reduced example below couples a
+scalar density to a Poisson field and advances it through a generated C++ program:
 
 ```python
 import numpy as np
@@ -174,13 +182,14 @@ time = Program("advance")
 ssprk3(time, "ne")
 
 case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)), name="diocotron")
-        .block("ne", physics=m, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()))
+        .block("ne", physics=m,
+               spatial=pops.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()))
         .field(poisson)
         .time(time))
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": ne0})        # ne0: initial density (2D array)
-sim.run(0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 sim.write("ne.npz", format="npz")                   # save the block states (npz; "vtk" also available)
 ```
 
@@ -207,21 +216,20 @@ Reference: [native-bricks](docs/sphinx/reference/native-bricks.md),
 
 | Layer | Role | Entry point |
 |---|---|---|
-| `core/` | types, state, `PhysicalModel`, `EquationBlock`, `CoupledSystem` | [physical_model.hpp](include/pops/core/model/physical_model.hpp) |
-| `physics/` | generic bricks composed into a `CompositeModel` | [composite.hpp](include/pops/physics/composition/composite.hpp) |
-| `numerics/` | reconstruction (Minmod / VanLeer / WENO5), flux (Rusanov / HLL / HLLC / Roe) | [reconstruction.hpp](include/pops/numerics/fv/reconstruction.hpp) |
-| `numerics/elliptic/` | `EllipticSolver` concept, geometric multigrid, FFT, composite FAC | [elliptic_solver.hpp](include/pops/numerics/elliptic/interface/elliptic_solver.hpp) |
-| `numerics/time/` | SSP-RK, multirate scheduler, IMEX, splitting, AMR engine | [numerics/time/](include/pops/numerics/time) |
-| `coupling/` | `Coupler`, `SystemCoupler`, `AmrSystemCoupler`, `AmrCouplerMP` | [coupler.hpp](include/pops/coupling/single/coupler.hpp) |
-| `amr/`, `mesh/`, `parallel/` | Berger-Rigoutsos clustering, regrid, MultiFab, MPI comm seam | [amr/](include/pops/amr) |
-| `runtime/` | `System` / `AmrSystem` facades, `model_factory`, DSL, aux channel | [system.hpp](include/pops/runtime/system.hpp) |
+| `python/pops/physics`, `python/pops/model`, `python/pops/time` | typed Python authoring: physics facade, operator-first model IR, and compiled time programs | [python/pops/physics](python/pops/physics) |
+| `python/pops/mesh`, `python/pops/fields`, `python/pops/solvers`, `python/pops/numerics` | descriptors for layouts, AMR policies, field problems, solvers, Riemann fluxes, reconstruction, and finite-volume spatial choices | [python/pops/mesh](python/pops/mesh) |
+| `python/pops/codegen` | validation, inspection, generated C++ emission, cache keys, and `.so` loading | [python/pops/codegen](python/pops/codegen) |
+| `include/pops/core` | C++ concepts, state layout, model contracts, and equation blocks | [physical_model.hpp](include/pops/core/model/physical_model.hpp) |
+| `include/pops/numerics` | C++ finite-volume, elliptic, time, Krylov, reconstruction, and Riemann kernels | [include/pops/numerics](include/pops/numerics) |
+| `include/pops/amr`, `include/pops/mesh`, `include/pops/parallel` | C++ mesh hierarchy, AMR clustering/regrid, MultiFab storage, halos, MPI seams, and reflux support | [include/pops/amr](include/pops/amr) |
+| `include/pops/runtime`, `python/pops/runtime` | low-level runtime that `pops.bind(...)` uses internally to materialise uniform or AMR runs | [system.hpp](include/pops/runtime/system.hpp) |
 
 ### Ecosystem
 
 | Repo | Role |
 |---|---|
-| `adc_cpp` (this repo) | hyperbolic-elliptic core on AMR, with GPU / MPI / Kokkos |
-| [`adc_cases`](https://github.com/wolf75222/adc_cases) | applications: named models, facades, examples, Python |
+| `adc_cpp` (this repo) | reusable PoPS core, Python DSL, codegen, C++/Kokkos/MPI runtime, AMR infrastructure |
+| [`adc_cases`](https://github.com/wolf75222/adc_cases) | named applications, validation cases, run scripts, scenario-specific facades |
 | [`poisson_cpp`](https://github.com/wolf75222/poisson_cpp) | Poisson solvers (Thomas, SOR, CG, DST, multigrid) |
 | [`advection_cpp`](https://github.com/wolf75222/advection_cpp) | advection, Burgers, Chorin Navier-Stokes |
 | [`euler_cpp`](https://github.com/wolf75222/euler_cpp) | 2D Euler, viscous Navier-Stokes, plasma sources |

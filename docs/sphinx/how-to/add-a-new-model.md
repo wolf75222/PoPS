@@ -76,7 +76,7 @@ print(compiled)
 print(compiled.arguments())
 
 sim = pops.bind(compiled, state={"plasma": U0})
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 The bind step owns runtime data. The generated or selected C++ route owns the

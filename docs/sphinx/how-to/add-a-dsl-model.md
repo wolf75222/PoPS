@@ -110,7 +110,7 @@ generated `.so` between runs (default `~/.cache/pops/dsl`).
 
    compiled = pops.compile(case, backend=Production())
    sim = pops.bind(compiled, state={"gas": U0})   # U0: initial conservative state
-   sim.run(0.1, cfl=0.4)
+   sim.run(t_end=0.1, cfl=0.4)
    ```
 
    The low-level `System.add_equation` / `set_poisson` runtime methods `pops.bind` calls internally
