@@ -35,8 +35,8 @@ package named in the last column.
 | `layout="amr", levels=2, ratio=2` | `AMR(mesh, max_levels=2, ratio=2)` | `pops.mesh.layouts` |
 | `layout="uniform"` | `Uniform(mesh)` | `pops.mesh.layouts` |
 | `regrid_every=8` | `RegridEvery(8)` | `pops.mesh.amr` |
-| `output(format="hdf5")` | `OutputPolicy(format=HDF5())` | `pops.output` |
-| `output(format="plotfile", levels="coarse")` | `OutputPolicy(format=Plotfile(), levels=CoarseOnly())` | `pops.output` |
+| `output(format="hdf5")` | `AMROutput(fields=[...])` (general policy removed; ADC-509) | `pops.mesh.amr` |
+| `output(levels="coarse")` | `AMROutput(levels=CoarseOnly())` | `pops.mesh.amr` |
 | `param("nu", 0.1, domain="positive")` | `RuntimeParam("nu", default=0.1, domain=Positive())` | `pops.params` |
 | `param("cfl", 0.4, domain="0..1")` | `RuntimeParam("cfl", default=0.4, domain=Range(0.0, 1.0))` | `pops.params` |
 | `compile(..., math="strict")` | `Optimization(math=StrictMath())` | `pops.codegen` |

@@ -161,6 +161,40 @@ def test_install_params_routing():
     # test_install_params_routes_declared_runtime_param below.
 
 
+def test_compiled_program_unconsumed_params_loud_reject():
+    """C5a (ADC-510): a runtime param NOT consumed by any native instance has nowhere to go on a
+    COMPILED time Program (a frozen whole-system closure, no per-block param carrier). The old
+    behaviour silently dropped it; now it is a LOUD NotImplementedError naming the deferred feature.
+    A NATIVE install keeps the existing ValueError, and a param a native instance DOES declare still
+    routes (no false reject). Host-testable via _install_params (no compile / engine call)."""
+    sim = pops.System(n=N, L=1.0, periodic=True)
+    # COMPILED program + an unconsumed param (no resolved instance declares it) -> deferred reject.
+    try:
+        sim._install_params({"plasma": _fake_compiled(params={})}, {"nu": 1.0},
+                            compiled_program=True)
+        raise AssertionError("MISMATCH: an unconsumed param on a compiled Program must reject")
+    except NotImplementedError as exc:
+        assert "ADC-510" in str(exc) and "compiled time Program" in str(exc) and "deferred" in str(exc), \
+            "C5a deferred message (got %r)" % str(exc)
+        assert "native instances" in str(exc) and "const param" in str(exc), \
+            "C5a redirect to native/const (got %r)" % str(exc)
+        print("OK  compiled-Program unconsumed param -> loud NotImplementedError (ADC-510)")
+    # NATIVE install (compiled_program=False, the default) keeps the genuine-misuse ValueError.
+    try:
+        sim._install_params({"plasma": _fake_compiled(params={})}, {"nu": 1.0})
+        raise AssertionError("MISMATCH: a native unknown param must raise ValueError")
+    except ValueError as exc:
+        assert "declared by no instance" in str(exc), exc
+        print("OK  native install keeps the ValueError for an unknown param (no silent drop)")
+    # A param a native instance DOES declare still routes -- the compiled_program flag does NOT
+    # reject a CONSUMED param (only the leftover).
+    resolved = _fake_compiled(params={"cs2": Param("cs2", 1.0, kind="runtime")})
+    per_block, unknown = pops.System._route_block_params({"plasma": resolved}, {"cs2": 2.0})
+    assert unknown == [] and per_block == {"plasma": [2.0]}, \
+        "a consumed runtime param still routes (got per_block=%r unknown=%r)" % (per_block, unknown)
+    print("OK  a runtime param a native instance declares still routes (C5a does not over-reject)")
+
+
 def test_install_params_routes_declared_runtime_param():
     """install ROUTES a DECLARED runtime param to set_block_params in sorted-name order -- the
     positive branch test_install_params_routing leaves to here. The fix reads the RESOLVED
@@ -374,13 +408,30 @@ def test_install_cadence_routing():
         raise AssertionError("install(cadence=) accepted a non-CompiledTime")
     except TypeError as exc:
         assert "CompiledTime" in str(exc), exc
-    # A non-default cfl is deferred (fails loud, not silently ignored).
+    # A NUMERIC cfl is WIRED (ADC-399 C7): the cadence carries it but it is applied at RUNTIME by
+    # System.run(cfl=) / step_cfl -- _install_cadence only routes substeps / stride and does NOT raise.
+    sim._install_cadence(adctime.CompiledTime(substeps=1, stride=1, cfl=0.5))
+    print("OK  install(cadence=) routes CompiledTime -> set_program_cadence; numeric cfl no longer "
+          "raises (applied at runtime)")
+
+
+def test_compiled_time_numeric_cfl_no_longer_rejected():
+    """C7 (ADC-399): CFL on a compiled time Program is wired (System::step_cfl routes through the
+    installed program; sim.run(cfl=) works). A NUMERIC CompiledTime(cfl=...) constructs without
+    raising and carries the value; only a self-computed cfl='program' sub-program stays deferred."""
+    ct = adctime.CompiledTime(cfl=0.5)
+    assert ct.cfl == 0.5 and ct.kind == "compiled", "numeric cfl stored (got %r)" % ct.cfl
+    # The install seam (the former stale guard) no longer rejects it either.
+    sim = pops.System(n=N, L=1.0, periodic=True)
+    if hasattr(sim._s, "set_program_cadence"):
+        sim._install_cadence(adctime.CompiledTime(substeps=2, stride=1, cfl=0.5))
+    # A self-computed cfl SUB-PROGRAM (cfl='program') remains deferred (fails loud, not silent).
     try:
-        sim._install_cadence(adctime.CompiledTime(substeps=1, stride=1, cfl=0.4))
-        raise AssertionError("install(cadence=) accepted a non-default cfl")
+        adctime.CompiledTime(cfl="program")
+        raise AssertionError("CompiledTime(cfl='program') must stay deferred")
     except NotImplementedError as exc:
-        assert "cfl" in str(exc), exc
-    print("OK  install(cadence=) routes CompiledTime -> set_program_cadence; rejects bad type / cfl")
+        assert "program" in str(exc), exc
+    print("OK  numeric CompiledTime(cfl=) wired; cfl='program' sub-program still deferred")
 
 
 def test_install_native_cadence_rejected():
@@ -455,8 +506,10 @@ def main():
     test_riemann_capability_verbatim()
     test_install_aux_derived_rejected()
     test_install_params_routing()
+    test_compiled_program_unconsumed_params_loud_reject()
     test_install_params_routes_declared_runtime_param()
     test_install_cadence_routing()
+    test_compiled_time_numeric_cfl_no_longer_rejected()
     test_install_native_cadence_rejected()
     test_install_end_to_end_kokkos()
     test_install_native_end_to_end_kokkos()

@@ -267,10 +267,11 @@ class SelectedLevels(MeshDescriptor):
 class CheckpointPolicy(MeshDescriptor):
     """AMR checkpoint / restart policy (Spec 5 sec.8.11).
 
-    Spec 5 keeps a single checkpoint semantics: :class:`pops.output.CheckpointPolicy` is
-    the general policy and this one is the AMR-compatible specialisation. ``restartable``
-    requests a bit-identical restart; the route validates whether the current native AMR
-    supports it (single block / single rank / frozen regrid) before runtime.
+    This is the WIRED checkpoint surface. The general ``pops.output.CheckpointPolicy`` was
+    removed as a decorative API (no runtime wiring; ADC-509 tracks the general
+    output/checkpoint runtime). ``restartable`` requests a bit-identical restart; the route
+    validates whether the current native AMR supports it (single block / single rank /
+    frozen regrid) before runtime.
     """
 
     category = "checkpoint_policy"

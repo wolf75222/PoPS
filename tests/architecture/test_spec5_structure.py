@@ -20,7 +20,7 @@ CENTRAL_PACKAGES = (
     "diagnostics",   # reduction catalog
     "mesh",          # mesh/layout/AMR descriptors
     "params",        # typed scalar params
-    "output",        # output/checkpoint policies
+    "output",        # output package (general policy surface removed; wired AMR output in mesh.amr)
     "external",      # compiled-brick references
     "fields",        # typed elliptic field-problem authoring + brick catalog (Spec 5 Phase E)
     "linalg",        # abstract algebra: names A x = b (Spec 5 sec.5.6)
@@ -76,6 +76,27 @@ def test_lib_has_no_solvers_shim():
     # be a second public path to the solver catalog (and must not host the solver-generation DSL).
     assert not (POPS / "lib" / "solvers").exists(), (
         "Spec 5 criterion 4: the pops.lib.solvers shim must be gone (one public home: pops.solvers)")
+
+
+def test_output_policy_surface_removed():
+    # C4 (ADC-509): the DECORATIVE general output/checkpoint policy surface is removed (zero codegen,
+    # zero runtime wiring -> it could only reject at validate). Source-only assertion: the policy /
+    # format modules are deleted and pops.output exports none of the removed symbols. The WIRED
+    # narrower AMR-output home (pops.mesh.amr) is untouched.
+    out = POPS / "output"
+    assert not (out / "policies.py").exists(), (
+        "C4 (ADC-509): python/pops/output/policies.py must be removed (decorative API)")
+    assert not (out / "formats.py").exists(), (
+        "C4 (ADC-509): python/pops/output/formats.py must be removed (no remaining consumer)")
+    init_src = (out / "__init__.py").read_text()
+    removed = ("OutputPolicy", "CheckpointPolicy", "HDF5", "Plotfile",
+               "AllLevels", "CoarseOnly", "SelectedLevels")
+    for sym in removed:
+        assert '"%s"' % sym not in init_src and "'%s'" % sym not in init_src, (
+            "C4 (ADC-509): pops.output must not export %s (decorative API removed)" % sym)
+    # The wired AMR-output home stays.
+    assert (POPS / "mesh" / "amr" / "__init__.py").is_file(), (
+        "the wired AMR-output home (pops.mesh.amr) must be untouched")
 
 
 def test_solver_gen_dsl_lives_in_codegen_solvers_and_is_internal():

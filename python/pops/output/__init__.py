@@ -1,17 +1,14 @@
-"""pops.output -- output / checkpoint policy descriptors (Spec 5 sec.5.14).
+"""pops.output -- output/checkpoint surface (the general policy API is removed).
 
-Typed replacements for ``output(format="hdf5", every=20)`` / ``checkpoint(mode=...)``:
-:class:`OutputPolicy` / :class:`CheckpointPolicy` declare a typed format
-(:mod:`pops.output.formats`), a cadence, the fields / diagnostics, and the level selection
-(``AllLevels`` / ``CoarseOnly`` / ``SelectedLevels``). Inert descriptors; the runtime does
-the I/O. The level policies are the canonical home shared with :mod:`pops.mesh.amr`.
+The general ``OutputPolicy`` / ``CheckpointPolicy`` (with ``HDF5`` / ``Plotfile`` formats and
+``AllLevels`` / ``CoarseOnly`` / ``SelectedLevels`` level selection) was a DECORATIVE surface:
+it stored a policy but had zero codegen and zero C++ runtime wiring (a multi-week build), so
+``Case.output(...)`` only ever rejected at validate. Per the no-decorative-API rule it has been
+REMOVED (ADC-509 tracks the general output/checkpoint runtime) rather than left as an inert reject.
+
+The WIRED, narrower AMR-output surface lives in :mod:`pops.mesh.amr` (Spec 5 sec.8.11):
+``pops.mesh.amr.AMROutput`` / ``pops.mesh.amr.CheckpointPolicy`` (and the AMR-local ``AllLevels`` /
+``CoarseOnly`` / ``SelectedLevels``). Use those; this package exports no general policy.
 """
-from .policies import (OutputPolicy, CheckpointPolicy,
-                       AllLevels, CoarseOnly, SelectedLevels)
-from .formats import HDF5, Plotfile
-from . import policies, formats
 
-__all__ = [
-    "OutputPolicy", "CheckpointPolicy", "AllLevels", "CoarseOnly", "SelectedLevels",
-    "HDF5", "Plotfile", "policies", "formats",
-]
+__all__ = []

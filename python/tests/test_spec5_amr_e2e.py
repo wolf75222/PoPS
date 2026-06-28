@@ -1,27 +1,24 @@
-"""Spec 5 gap #32 (criterion 32): the layout=AMR end-to-end compile + bind route.
+"""Spec 5 gap #32 (criterion 32): the layout=AMR end-to-end config-flow + bind route.
 
-``pops.compile(problem_with_AMR_layout, ...)`` no longer DEFERS layout=AMR: it routes to
-``compile_problem(target="amr_system")`` (the native AMR ``.so`` path that emits
-``pops_install_native_amr``) and carries the AMR layout on the handle; ``pops.bind`` then builds
-an ``AmrSystem`` from an ``AmrSystemConfig`` DERIVED from that layout and flows the typed
-refinement + Poisson field onto it before install.
+A WHOLE-SYSTEM compiled time Program on an AMR layout is rejected EARLY at ``pops.compile``
+(C2 / ADC-508): the AMR runtime has no ``install_program`` seam, so ``pops.compile(case_with_AMR,
+time=Program)`` would otherwise compile a ``.so`` and then die at ``pops.bind`` -- a transitional
+compile-succeeds-then-bind-fails reject. ``pops.compile`` now fails loud BEFORE any compile,
+redirecting to the WIRED per-block AMR path (``pops.physics.Model.compile(backend="production",
+target="amr_system")`` + ``pops.AmrSystem.add_equation``).
 
-What is proven LOCALLY here:
+What is still proven LOCALLY here:
 
-  (a) The compile ROUTE resolves layout=AMR -> target="amr_system" (monkeypatched
-      ``compile_problem`` so no real ``.so`` is built), and the ``AmrSystemConfig`` ``pops.bind``
-      builds from the layout has the right n / L / periodic / regrid_every / patch settings; the
-      layout's max_levels / ratio are validated against the native envelope (the config has no
-      such field -- the native AMR is fixed at 2 levels / ratio 2).
-  (b) A REAL native ``AmrSystem`` built from the same derived config + ``set_refinement`` +
+  (a) The whole-system AMR compile route is rejected at ``pops.compile`` (no ``.so`` built; not a
+      bind-time reject), AND the config-flow helpers ``pops.bind`` uses on the per-block AMR path
+      are correct: the ``AmrSystemConfig`` derived from the layout has the right n / L / periodic /
+      regrid_every / patch settings; the layout's max_levels / ratio are validated against the
+      native envelope (the config has no such field -- the native AMR is fixed at 2 levels / ratio
+      2).
+  (b) A REAL native ``AmrSystem`` built from the derived config + ``set_refinement`` +
       ``set_poisson`` + ``set_density`` (NATIVE bricks, no DSL compile) advances a few steps and
       stays physical -- proving the config-flow + refinement + Poisson wiring is correct end to
-      end on the native engine path.
-
-ROMEO-gated (NOT proven here): the actual ``.so`` compile of ``compile_problem(target=
-"amr_system")`` needs the Kokkos toolchain (``POPS_KOKKOS_ROOT`` unset locally), so the FULL
-``pops.compile`` -> ``pops.bind`` -> run on a compiled artifact is validated on ROMEO. The
-production ``.so`` route is asserted only to REACH ``compile_problem(target="amr_system")``.
+      end on the native engine path (the wired AMR route).
 
 Runs under pytest and as a plain script (the ``__main__`` guard); the CI runner executes it as a
 script.
@@ -77,34 +74,33 @@ def _unpatch(monkeypatch):
         setattr(module, attr, original)
 
 
-# --- (a) the compile ROUTE + the AmrSystemConfig-from-layout mapping ---------------
-def test_amr_layout_drives_compile_target(monkeypatch=None):
-    """compile(problem_with_AMR_layout) reaches compile_problem(target='amr_system')."""
-    captured = {}
+# --- (a) the compile ROUTE rejects + the AmrSystemConfig-from-layout mapping --------
+def test_amr_whole_system_program_rejected_at_compile(monkeypatch=None):
+    """C2 (ADC-508): compile(case_with_AMR, time=Program) rejects EARLY -- BEFORE any .so build --
+    redirecting to the wired per-block AMR path; it is NOT a bind-time reject (compile_problem is a
+    tripwire so a leak past the reject is caught)."""
+    called = {"compile_problem": False}
 
-    class _StubCompiled:
-        def __init__(self, target):
-            self.so_path = "/tmp/stub_amr.so"
-            self.model = None
-            self._target = target
+    def _tripwire(*a, **kw):
+        called["compile_problem"] = True
+        raise AssertionError("compile_problem must not be reached for an AMR whole-system Program")
 
-    def _fake_compile_problem(*, time, model, backend, target, **kw):
-        captured.update(time=time, model=model, backend=backend, target=target)
-        return _StubCompiled(target)
-
-    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _tripwire)
     try:
         layout = AMR(CartesianMesh(n=48, L=2.0, periodic=False), max_levels=2, ratio=2)
         prob = pops.Case(layout=layout).block("ne", physics=_StubModel())
-        compiled = orchestration.compile(prob, time=object())
-        _check(captured["target"] == "amr_system",
-               "layout=AMR routes to compile_problem(target='amr_system')")
-        _check(captured["backend"] == "production", "AMR uses the production backend")
-        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
-        _check(compiled._layout is layout, "the AMR layout is carried for bind()")
+        try:
+            orchestration.compile(prob, time=object())
+            raise AssertionError("an AMR whole-system time Program must be rejected at compile()")
+        except NotImplementedError as exc:
+            _check("ADC-508" in str(exc), "the reject names the deferred issue ADC-508")
+            _check("amr_system" in str(exc) and "add_equation" in str(exc),
+                   "the reject redirects to the wired per-block AMR path")
+        _check(called["compile_problem"] is False,
+               "the reject fires BEFORE compile_problem (no .so built; not a bind-time reject)")
     finally:
         _unpatch(monkeypatch)
-    print("ok test_amr_layout_drives_compile_target")
+    print("ok test_amr_whole_system_program_rejected_at_compile")
 
 
 def test_amr_config_from_layout_mapping():
@@ -225,45 +221,19 @@ def test_native_amr_from_layout_runs():
           % (sim.n_patches(), sim.mass()))
 
 
-def test_production_so_compile_is_romeo_gated():
-    """The production .so compile path REACHES compile_problem(target='amr_system').
-
-    The actual emit + .so compile needs Kokkos (POPS_KOKKOS_ROOT unset locally) -> ROMEO. We prove
-    the route reaches compile_problem with target='amr_system' (and that compile_problem accepts
-    that target) WITHOUT building a .so, by monkeypatching the C++-invoking tail.
+def test_per_block_amr_route_still_accepts_amr_system_target():
+    """The WIRED AMR route still reaches compile_problem(target='amr_system') -- it is the per-block
+    emit (pops.physics.Model.compile(backend='production', target='amr_system') +
+    pops.AmrSystem.add_equation), NOT the rejected whole-system Case Program path (C2 / ADC-508).
+    Asserts compile_problem accepts that target token; the real .so emit is Kokkos-gated (ROMEO),
+    end-to-end coverage lives in test_amr_compiled_positivity_floor.py.
     """
-    reached = {}
-
-    def _fake_compile_problem(*, time, model, backend, target, **kw):
-        reached["target"] = target
-        # A real call here would emit the program C++ and invoke the Kokkos compiler (ROMEO).
-        raise RuntimeError("ROMEO boundary: .so compile needs the Kokkos toolchain")
-
-    saved = orchestration_compile_problem_ref()
-    set_orchestration_compile_problem(_fake_compile_problem)
-    try:
-        layout = AMR(CartesianMesh(n=32), max_levels=2, ratio=2)
-        prob = pops.Case(layout=layout).block("ne", physics=_StubModel())
-        try:
-            orchestration.compile(prob, time=object())
-            raise AssertionError("the ROMEO-boundary stub should have raised")
-        except RuntimeError as exc:
-            _check("ROMEO boundary" in str(exc), "reached the .so compile (Kokkos) boundary")
-        _check(reached.get("target") == "amr_system",
-               "the production .so path is reached with target='amr_system'")
-    finally:
-        set_orchestration_compile_problem(saved)
-    print("ok test_production_so_compile_is_romeo_gated")
-
-
-def orchestration_compile_problem_ref():
-    import pops.codegen.compile_drivers as cd
-    return cd.compile_problem
-
-
-def set_orchestration_compile_problem(fn):
-    import pops.codegen.compile_drivers as cd
-    cd.compile_problem = fn
+    import inspect as _inspect
+    from pops.codegen.compile_drivers import compile_problem
+    sig = _inspect.signature(compile_problem)
+    _check("target" in sig.parameters,
+           "compile_problem keeps the target= kwarg the per-block AMR emit uses")
+    print("ok test_per_block_amr_route_still_accepts_amr_system_target")
 
 
 def _run_all():

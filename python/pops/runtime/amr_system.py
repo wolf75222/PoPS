@@ -243,11 +243,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             bricks / a CompiledModel target='amr_system'), sets the field solvers (``set_poisson``),
             the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
             density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
-          - COMPILED install (a ``compiled`` handle carrying a time Program): the early validation
-            runs, then a clear ``NotImplementedError`` -- the AMR runtime has no ``install_program``
-            seam (a compiled whole-system time Program is a single-level System concept today). Use
-            the NATIVE AMR path (``compiled=None`` with a ``target='amr_system'`` CompiledModel per
-            instance), or ``System`` for a compiled time Program.
+          - COMPILED install (a ``compiled`` handle carrying a time Program): a DEFENSIVE guard --
+            the public ``pops.compile`` route now rejects an AMR whole-system time Program EARLY at
+            compile (C2 / ADC-508), so this bind-time ``NotImplementedError`` is unreachable for the
+            public path; it remains as a backstop for a hand-built compiled handle. The AMR runtime
+            has no ``install_program`` seam (a compiled whole-system time Program is a single-level
+            System concept today). Use the NATIVE AMR path (``compiled=None`` with a
+            ``target='amr_system'`` CompiledModel per instance), or ``System`` for a compiled
+            time Program.
 
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
@@ -269,12 +272,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
         validate_install_arguments(self, compiled, instances, params, aux, solvers)
 
         if compiled is not None:
+            # DEFENSIVE backstop: the public pops.compile route rejects this EARLY at compile (C2 /
+            # ADC-508), so a public bind never reaches here; this guards a hand-built compiled handle.
             raise NotImplementedError(
                 "pops.bind: a COMPILED time Program is not installable on the AMR runtime "
                 "(no install_program seam: a compiled whole-system time Program is a single-level "
-                "System concept today). Use the NATIVE AMR path (compiled=None with a "
-                "target='amr_system' CompiledModel per instance), or System for a compiled Program. "
-                "The early bind-input validation above still ran.")
+                "System concept today; deferred ADC-508). Use the NATIVE AMR path (compiled=None "
+                "with a target='amr_system' CompiledModel per instance), or System for a compiled "
+                "Program. The early bind-input validation above still ran.")
         if params:
             raise NotImplementedError(
                 "pops.bind: runtime params (params=%s) are not wired on AMR (no "

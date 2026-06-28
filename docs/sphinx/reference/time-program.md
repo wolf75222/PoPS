@@ -125,8 +125,10 @@ pass it through `pops.bind(compiled, ..., cadence=pops.CompiledTime(substeps=, s
 applies it on the internal seam (`set_program_cadence` after `install_program`; `substeps` and
 `stride` orchestrate the program System-side, mirroring the native per-block loop -- `substeps>1` is
 bit-exact vs native only for an uncoupled program, and `stride` is global, i.e. single-block exact).
-The old time schemes (`pops.Explicit`, `pops.IMEX`, `pops.Strang`, `pops.CondensedSchur`) keep
-working unchanged.
+A numeric `cfl` (e.g. `cfl=0.5`) is applied at runtime by `sim.run(cfl=...)` / `sim.step_cfl(cfl)`
+(`System::step_cfl` routes through the installed program); only a self-computed `cfl="program"`
+sub-program is still deferred. The old time schemes (`pops.Explicit`, `pops.IMEX`, `pops.Strang`,
+`pops.CondensedSchur`) keep working unchanged.
 
 ## Operator-first programs
 

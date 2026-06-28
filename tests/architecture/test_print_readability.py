@@ -28,8 +28,8 @@ import pops.diagnostics as diagnostics  # noqa: E402
 import pops.fields as fields  # noqa: E402
 import pops.linalg.norms as norms  # noqa: E402
 import pops.math as pmath  # noqa: E402
+import pops.mesh.amr as amr  # noqa: E402
 import pops.mesh.layouts as layouts  # noqa: E402
-import pops.output as output  # noqa: E402
 import pops.params as params  # noqa: E402
 import pops.solvers.elliptic as elliptic  # noqa: E402
 import pops.solvers.krylov as krylov  # noqa: E402
@@ -74,8 +74,8 @@ def _objects():
         "codegen.Optimization": codegen.Optimization(),
         # runtime params.
         "params.RuntimeParam": params.RuntimeParam("nu", default=0.1),
-        # output policy.
-        "output.OutputPolicy": output.OutputPolicy(),
+        # AMR output policy (the wired surface; the general pops.output policy was removed, ADC-509).
+        "mesh.amr.AMROutput": amr.AMROutput(fields=["phi"]),
         # diagnostics measures.
         "diagnostics.Norm": diagnostics.Norm(norms.L2()),
         "diagnostics.Integral": diagnostics.Integral(),

@@ -164,16 +164,18 @@ def test_validate_non_poisson_field_deferred():
     print("ok test_validate_non_poisson_field_deferred")
 
 
-def test_validate_outputs_deferred():
-    class _Policy:
-        name = "checkpoint"
-    prob = pops.Case().block("ne", physics=_StubModel()).output(_Policy())
-    try:
-        prob.validate()
-        raise AssertionError("a non-empty output policy must raise NotImplementedError")
-    except NotImplementedError as exc:
-        _check("output" in str(exc), "output message is explicit")
-    print("ok test_validate_outputs_deferred")
+def test_case_has_no_output_surface():
+    """C4 (ADC-509): the decorative Case.output(...) surface is removed (no codegen / runtime).
+    A Case exposes no output() / checkpoint() setter and no _outputs plumbing."""
+    case = pops.Case().block("ne", physics=_StubModel())
+    _check(not hasattr(case, "output"), "Case.output() removed (decorative API)")
+    _check(not hasattr(case, "checkpoint"), "Case.checkpoint() removed (decorative API)")
+    _check(not hasattr(case, "_outputs"), "Case._outputs plumbing removed")
+    _check("n_outputs" not in case.options(), "options() drops n_outputs")
+    _check("outputs" not in case.inspect(), "inspect() drops outputs")
+    # validate() no longer carries an output reject; a plain single-block case validates.
+    _check(case.validate() is True, "a case with no output surface still validates")
+    print("ok test_case_has_no_output_surface")
 
 
 def test_validate_name_collision():
@@ -220,24 +222,33 @@ def test_compile_layout_drives_target(monkeypatch=None):
     print("ok test_compile_layout_drives_target")
 
 
-def test_compile_amr_routes_to_amr_system(monkeypatch=None):
-    captured = {}
+def test_compile_amr_time_program_rejected(monkeypatch=None):
+    """C2 (ADC-508): a whole-system time Program on an AMR layout is rejected EARLY at compile()
+    -- BEFORE any .so is built -- never at bind() (no transitional compile-succeeds-then-bind-fails).
+    The reject names the wired per-block AMR path. compile_problem is monkeypatched to a tripwire so
+    a leak past the early reject (an actual compile attempt) is caught."""
+    called = {"compile_problem": False}
 
-    def _fake_compile_problem(*, time, model, backend, target, **kw):
-        captured.update(time=time, model=model, backend=backend, target=target)
-        return _StubCompiled(target=target)
+    def _tripwire(*a, **kw):
+        called["compile_problem"] = True
+        return _StubCompiled(target="amr_system")
 
-    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _tripwire)
     try:
         layout = AMR(CartesianMesh())
         prob = pops.Case(layout=layout).block("ne", physics=_StubModel())
-        compiled = orchestration.compile(prob, time=object())
-        _check(captured["target"] == "amr_system", "AMR layout routes to target='amr_system'")
-        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
-        _check(compiled._layout is layout, "AMR layout carried on the handle for bind()")
+        try:
+            orchestration.compile(prob, time=object())
+            raise AssertionError("an AMR whole-system time Program must be rejected at compile()")
+        except NotImplementedError as exc:
+            _check("ADC-508" in str(exc), "C2 reject names the deferred issue ADC-508")
+            _check("amr_system" in str(exc) and "add_equation" in str(exc),
+                   "C2 reject redirects to the wired per-block AMR path")
+        _check(called["compile_problem"] is False,
+               "the reject fires BEFORE compile_problem (no .so built; not a bind-time reject)")
     finally:
         _unpatch(monkeypatch)
-    print("ok test_compile_amr_routes_to_amr_system")
+    print("ok test_compile_amr_time_program_rejected")
 
 
 def test_compile_amr_max_levels_beyond_native_raises():

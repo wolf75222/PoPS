@@ -48,6 +48,23 @@ def compile(problem, backend="production", time=None, **kwargs):
     # AMR.available message before any compile, never silently clamped.
     problem.validate()
     is_amr = isinstance(problem.layout, AMR)
+
+    # C2 (ADC-508): a WHOLE-SYSTEM compiled time Program on an AMR layout has no runtime install seam
+    # (AmrSystem has no install_program: a compiled whole-system Program is a single-level System
+    # concept today). Reject it EARLY, here at compile() BEFORE any .so is built -- never let compile
+    # succeed and then die at bind() (a transitional bind-time reject). The WIRED AMR path is per-BLOCK:
+    # pops.physics.Model.compile(backend="production", target="amr_system") emitting an
+    # add_native_amr block, installed with pops.AmrSystem.add_equation (the deferred whole-system seam
+    # is ADC-508).
+    if is_amr:
+        raise NotImplementedError(
+            "pops.compile: a whole-system time Program on an AMR layout is deferred (ADC-508); the "
+            "AMR runtime has no install_program seam for a compiled whole-system Program. Use the "
+            "wired per-block AMR path: compile each block with "
+            "pops.physics.Model.compile(backend='production', target='amr_system') and install it "
+            "with pops.AmrSystem.add_equation. (A compiled whole-system Program is a single-level "
+            "System concept today.)")
+
     target = "amr_system" if is_amr else "system"
 
     # AMR single-block lowers to target="amr_system" (the native AMR .so path emits

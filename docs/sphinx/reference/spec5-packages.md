@@ -113,20 +113,20 @@ gamma = ConstParam("gamma", 1.4)
 
 ## `pops.output`: output and checkpoint policies
 
-`OutputPolicy` selects a typed `format` (`HDF5(parallel=...)` / `Plotfile()`), a `levels`
-selector (`AllLevels()` / `CoarseOnly()` / `SelectedLevels(*levels)`), the `fields` and
-`diagnostics` to write. `CheckpointPolicy` describes restart behavior.
+The general `OutputPolicy` / `CheckpointPolicy` surface (with `HDF5` / `Plotfile` formats and
+`AllLevels` / `CoarseOnly` / `SelectedLevels` level selection) was removed: it was a decorative
+API with no codegen and no C++ runtime wiring, so it could only reject at validate. The general
+output/checkpoint runtime is tracked by ADC-509.
+
+Use the wired, narrower AMR-output surface in `pops.mesh.amr` (sec.8.11): `AMROutput` for which
+fields on which levels, and `pops.mesh.amr.CheckpointPolicy` for restart behavior. The runtime
+`System.write(...)` / `AmrSystem.write(...)` path remains the way to dump state today.
 
 ```python
-from pops.output import OutputPolicy, CheckpointPolicy, HDF5, SelectedLevels
-from pops.diagnostics import mass, energy
+from pops.mesh.amr import AMROutput, CheckpointPolicy, SelectedLevels
 
-out = OutputPolicy(
-    format=HDF5(parallel=True),                  # typed format, not format="hdf5"
-    levels=SelectedLevels(0, 1),
-    fields=("density", "phi"),
-    diagnostics=(mass(), energy()),
-)
+out = AMROutput(fields=["density", "phi"], levels=SelectedLevels(0, 1),
+                include_patch_boxes=True)
 ckpt = CheckpointPolicy(restartable=True)
 ```
 

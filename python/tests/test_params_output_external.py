@@ -1,8 +1,12 @@
-"""Spec 5 (sec.5.12 / 5.14 / 5.17): the pops.params / pops.output / pops.external surface.
+"""Spec 5 (sec.5.12 / 5.17): the pops.params / pops.external surface.
 
-Typed scalar params (compile-time vs runtime, typed dtype, typed domain), typed output /
-checkpoint / format / level policies, and typed compiled-brick references with manifest +
-native id. All inert; the runtime consumes them. Needs only `import pops`.
+Typed scalar params (compile-time vs runtime, typed dtype, typed domain) and typed
+compiled-brick references with manifest + native id. All inert; the runtime consumes them.
+Needs only `import pops`.
+
+The general pops.output OutputPolicy / CheckpointPolicy surface was REMOVED (decorative API with
+no codegen / runtime wiring; ADC-509). The WIRED AMR-output surface (pops.mesh.amr.AMROutput /
+CheckpointPolicy) is covered by test_mesh_descriptors.py / test_inspect_amr.py.
 """
 import sys
 
@@ -13,8 +17,6 @@ pops = pytest.importorskip("pops")
 from pops.math import Real, Integer, Bool  # noqa: E402
 from pops.params import (RuntimeParam, ConstParam, DerivedParam,  # noqa: E402
                          Positive, NonNegative, Range, In, Constant)
-from pops.output import (OutputPolicy, CheckpointPolicy, HDF5, Plotfile,  # noqa: E402
-                         AllLevels, CoarseOnly, SelectedLevels)
 from pops.external import CompiledBrickRef, ExternalBrick  # noqa: E402
 import pops.descriptors as _desc  # noqa: E402
 
@@ -59,17 +61,21 @@ def test_constant_with_unit():
     assert c.options()["unit"] == "m/s" and c.value == 2.998e8
 
 
-def test_output_and_checkpoint_policies():
-    out = OutputPolicy(format=HDF5(parallel=True), cadence=20, fields=["phi", "E"],
-                       levels=AllLevels(), require_parallel=True)
-    assert out.options()["format"] == "HDF5" and out.options()["levels"] == "all"
-    assert out.requirements()["parallel_io"] is True
-    assert HDF5(parallel=True).requirements()["parallel_io"] is True
-    assert Plotfile().capabilities()["per_level"] is True
-    assert SelectedLevels(0, 1).options()["levels"] == (0, 1)
-    assert CoarseOnly().options()["levels"] == "coarse"
-    chk = CheckpointPolicy(restartable=True, require_bit_identical=True)
-    assert chk.options()["restartable"] is True
+def test_output_policy_surface_removed():
+    """C4 (ADC-509): the decorative general output/checkpoint policy surface is GONE. The removed
+    symbols are absent from pops.output and from the pops top level; the WIRED AMR-output home
+    (pops.mesh.amr) is untouched (asserted positively here)."""
+    import pops.output as out_pkg
+    removed = ("OutputPolicy", "CheckpointPolicy", "HDF5", "Plotfile",
+               "AllLevels", "CoarseOnly", "SelectedLevels")
+    for sym in removed:
+        assert not hasattr(out_pkg, sym), "pops.output.%s must be removed (decorative API)" % sym
+        assert sym not in getattr(out_pkg, "__all__", []), "pops.output.__all__ must drop %s" % sym
+        assert not hasattr(pops, sym), "pops.%s must not be a top-level export" % sym
+    # The wired narrower AMR home stays (sec.8.11): AMROutput + AMR-local level/checkpoint policies.
+    from pops.mesh.amr import AMROutput, CheckpointPolicy as AmrCheckpoint, AllLevels as AmrAllLevels
+    assert AMROutput(fields=["phi"], levels=AmrAllLevels()).options()["levels"] == "all"
+    assert AmrCheckpoint(restartable=True).options()["restartable"] is True
 
 
 def test_external_brick_ref_resolves_from_json_manifest(tmp_path):

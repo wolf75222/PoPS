@@ -121,7 +121,8 @@ class _SystemUnifiedInstall:
         @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's macro-step
             cadence, applied with set_program_cadence AFTER install_program. A compiled Program is ONE
             whole-system closure, so its cadence is GLOBAL (one program-level value, not per-block) --
-            hence a single kwarg rather than a per-instance "time". A non-default cfl is deferred.
+            hence a single kwarg rather than a per-instance "time". A numeric cadence.cfl is applied
+            at runtime by System.run(cfl=) / step_cfl (not by the cadence itself).
 
         @throws the verbatim Spec section-24 errors at install for a missing aux / solver / block
             instance / Riemann capability. (A disallowed schedule is rejected earlier, at Program
@@ -195,8 +196,13 @@ class _SystemUnifiedInstall:
 
         # (4) PARAMS: route each runtime param to the instance whose RESOLVED (compiled) model declares
         # it -- the raw dsl.Model has no runtime_param_names, so we read the resolved CompiledModel.
+        # A param NOT consumed by any native instance has nowhere to go on a COMPILED time Program: the
+        # whole-system Program is a frozen closure with no per-block param carrier (ProgramContext is
+        # deferred, ADC-510). Rather than silently dropping it (the old behaviour was a silent no-op for
+        # the compiled path), reject it LOUD, naming the deferred feature -- BUT only the leftover; a
+        # param a native instance DOES declare still routes through set_block_params unchanged.
         if params:
-            self._install_params(resolved_models, params)
+            self._install_params(resolved_models, params, compiled_program=so_path is not None)
 
         # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
@@ -244,14 +250,13 @@ class _SystemUnifiedInstall:
 
         set_program_cadence is a SYSTEM-level orchestration around the opaque program closure
         (program.py): substeps=n re-runs the whole program over eff_dt/n; stride=M runs it once per M
-        macro-steps. A non-default cfl is deferred (pass an explicit dt to sim.step)."""
+        macro-steps. A numeric cadence.cfl is NOT consumed here: the CFL is applied at RUNTIME by
+        System.run(cfl=) / step_cfl(cfl) (System::step_cfl routes through the installed program), so
+        the cadence only carries substeps / stride to set_program_cadence."""
         from pops.time.program import CompiledTime
         if not isinstance(cadence, CompiledTime):
             raise TypeError("install(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
                             "got %r" % type(cadence).__name__)
-        if cadence.cfl != "default":
-            raise NotImplementedError(
-                "install(cadence=): a non-default cfl is deferred; pass an explicit dt to sim.step(dt)")
         self.set_program_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial):
@@ -404,14 +409,27 @@ class _SystemUnifiedInstall:
         unknown = sorted(set(params) - consumed)
         return per_block, unknown
 
-    def _install_params(self, resolved_models, params):
+    def _install_params(self, resolved_models, params, compiled_program=False):
         """Route flat {param_name: value} to set_block_params per instance: build each instance's
         sorted runtime-param vector (declaration defaults for unspecified names) and push it. A param
-        name declared by no instance raises (no silent drop). @p resolved_models maps each instance
-        name to its RESOLVED CompiledModel (the raw dsl.Model has no runtime_param_names accessor)."""
+        name consumed by no instance raises (no silent drop). @p resolved_models maps each instance
+        name to its RESOLVED CompiledModel (the raw dsl.Model has no runtime_param_names accessor).
+
+        @p compiled_program selects the leftover-param error. On a COMPILED time Program a leftover
+        param would route to the whole-system Program, which has no runtime param carrier today
+        (ProgramContext is deferred, ADC-510): rather than silently dropping it, raise a clear
+        NotImplementedError naming the deferred feature. On a NATIVE install a leftover param is a
+        genuine misuse (a name no instance declares), so it raises the existing ValueError."""
         per_block, unknown = self._route_block_params(resolved_models, params)
         for name, values in per_block.items():
             self._s.set_block_params(name, values)
         if unknown:
+            if compiled_program:
+                raise NotImplementedError(
+                    "install: runtime params %s on a compiled time Program are deferred (ADC-510); a "
+                    "compiled whole-system Program is a frozen closure with no per-block param carrier. "
+                    "Use native instances (compiled=None, each instance carries its own model that "
+                    "declares the runtime param), or fold the value in as a const param at compile "
+                    "time." % (unknown,))
             raise ValueError("install: params %s declared by no instance's runtime parameters"
                              % (unknown,))

@@ -44,11 +44,14 @@ def test_case_replaces_problem_on_the_public_surface():
 
 def test_case_keeps_the_assembly_chaining_surface():
     # The rename preserves the authoring surface (chaining setters + inspect/route/lower path).
+    # ``output`` is intentionally absent: the decorative output/checkpoint policy surface was removed
+    # (C4 / ADC-509; no codegen or runtime wiring), so Case no longer carries an output() setter.
     case = pops.Case(name="arch")
-    for member in ("block", "field", "param", "aux", "output", "time", "layout",
+    for member in ("block", "field", "param", "aux", "time", "layout",
                    "validate", "inspect", "explain_routes", "available", "requirements",
                    "capabilities", "lower"):
         assert hasattr(case, member), "pops.Case lost the %r surface member" % member
+    assert not hasattr(case, "output"), "pops.Case.output must be removed (decorative API, ADC-509)"
     # ``amr`` is a property that raises for a non-AMR layout, so probe the class, not the instance.
     assert hasattr(type(case), "amr"), "pops.Case lost the .amr handle"
     assert case.category == "case"

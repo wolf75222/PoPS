@@ -2,8 +2,8 @@
 
 :class:`Case` is the inert, typed top-level assembly a user authors before lowering:
 a mesh ``layout``, one or more physics ``block`` declarations, the elliptic ``field``
-problems, the runtime ``param`` declarations, the static ``aux`` inputs, the ``output``
-policies and the ``time`` scheme. A :class:`Case` is an ASSEMBLY that CONTAINS
+problems, the runtime ``param`` declarations, the static ``aux`` inputs and the ``time``
+scheme. A :class:`Case` is an ASSEMBLY that CONTAINS
 descriptors; it is NOT itself a :class:`pops.descriptors.Descriptor` (Spec 5 sec.6 table /
 sec.15: "Case non -- assemblage contenant des descriptors"). It still answers the same
 inspectable surface -- it declares its requirements / capabilities / options and answers
@@ -87,7 +87,7 @@ class _AMRPolicyHandle:
 
 
 class Case:
-    """A typed, inert top-level assembly: layout + blocks + fields + params + aux + outputs.
+    """A typed, inert top-level assembly: layout + blocks + fields + params + aux.
 
     ``Case(layout=Uniform(CartesianMesh()), name="plasma")`` then chained::
 
@@ -100,7 +100,7 @@ class Case:
     single-level :class:`~pops.mesh.layouts.Uniform` over a default
     :class:`~pops.mesh.cartesian.CartesianMesh`. :meth:`validate` runs structural checks and
     raises a LOUD ``NotImplementedError`` for the deferred routes (more than one block, a
-    non-Poisson field, a non-empty output policy); ``compile`` / ``bind`` lower the rest.
+    non-Poisson field); ``compile`` / ``bind`` lower the rest.
 
     A Case CONTAINS descriptors (the layout, the blocks' physics, the field problems) but is
     NOT itself a :class:`pops.descriptors.Descriptor` (Spec 5 sec.6 table / sec.15). It exposes
@@ -120,7 +120,6 @@ class Case:
         self._fields = {}    # field.name -> FieldProblem
         self._params = {}    # param_name -> {"default": value, "kind": str}
         self._aux = {}       # aux_name -> value/descriptor
-        self._outputs = []   # output / checkpoint policies (stored; lowering deferred)
         self._time = None    # optional pops.time.Program (attaches at compile time)
 
     @property
@@ -180,11 +179,6 @@ class Case:
         self._aux[str(name)] = value
         return self
 
-    def output(self, policy):
-        """Attach an output / checkpoint policy (stored; lowering is deferred). Chains."""
-        self._outputs.append(policy)
-        return self
-
     def time(self, program):
         """Attach the time scheme (a ``pops.time.Program``) used at compile. Chains."""
         self._time = program
@@ -209,7 +203,7 @@ class Case:
         return {"name": self._name, "layout": self._layout.name,
                 "n_blocks": len(self._blocks), "n_fields": len(self._fields),
                 "n_params": len(self._params), "n_aux": len(self._aux),
-                "n_outputs": len(self._outputs), "has_time": self._time is not None}
+                "has_time": self._time is not None}
 
     def requirements(self):
         req = dict(self._layout.requirements())
@@ -253,8 +247,8 @@ class Case:
         Checks the layout, that there is at least one block each with a physics model, that
         every field problem is itself valid, and that no block and field share a name. Then
         rejects -- with a clear ``NotImplementedError`` -- the routes not wired in this PR:
-        more than one block, a field whose name the default Poisson route does not serve, and
-        a non-empty output policy. These are HONEST deferrals, not silent no-ops.
+        more than one block, and a field whose name the default Poisson route does not serve.
+        These are HONEST deferrals, not silent no-ops.
         """
         self._layout.validate(context)
         if not self._blocks:
@@ -281,11 +275,6 @@ class Case:
                     "Case.validate: a non-Poisson field (%r) is deferred; only the default "
                     "Poisson field (one of %s) is wired today"
                     % (field_name, ", ".join(_POISSON_FIELD_NAMES)))
-        if self._outputs:
-            raise NotImplementedError(
-                "Case.validate: lowering an output/checkpoint policy is deferred; the "
-                "assembly stores %d policy(ies) but compile/bind do not consume them yet"
-                % len(self._outputs))
         return True
 
     def explain_routes(self):
@@ -326,7 +315,6 @@ class Case:
         info["fields"] = {name: fp.inspect() for name, fp in self._fields.items()}
         info["params"] = dict(self._params)
         info["aux"] = sorted(self._aux)
-        info["outputs"] = [getattr(p, "name", repr(p)) for p in self._outputs]
         info["time"] = getattr(self._time, "name", None) if self._time is not None else None
         return info
 
