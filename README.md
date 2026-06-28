@@ -2,7 +2,7 @@
 
 # PoPS - Plasma-Oriented PDE Solver
 
-**A Python-authored C++20/Kokkos PDE engine for coupled hyperbolic-elliptic plasma systems on uniform and AMR meshes.**
+**A C++20/Kokkos core for coupled hyperbolic-elliptic PDE systems on uniform and adaptive (AMR) meshes.**
 
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
 ![CMake](https://img.shields.io/badge/CMake-3.21%2B-064F8C?logo=cmake)
