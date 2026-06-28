@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -17,6 +18,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>   // saxpy (linear combine over a MultiFab)
 #include <pops/mesh/storage/multifab.hpp>   // MultiFab
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
+#include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // GeometricMG (the wired V-cycle, reused as a precond, ADC-516)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/numerics/linalg/lorentz_eliminator.hpp>  // LorentzEliminator (closed B^{-1}, ADC-421 reconstruct)
 #include <pops/runtime/context/grid_context.hpp>   // GridContext (System aux seam)
@@ -349,6 +351,43 @@ class ProgramContext {
     if (&fy != &fx)
       fill_ghosts(fy, gc.geom.domain, gc.bc);  // skip the redundant halo fill when fy aliases fx
     apply_divergence(fx, fy, gc.geom, out, /*cx=*/0, /*cy=*/1);
+  }
+
+  /// out <- M^{-1}(in): ONE geometric-multigrid V-cycle of the bare 5-point Laplacian, used as a
+  /// matrix-free Krylov PRECONDITIONER (the ``preconditioner=preconditioners.GeometricMG()`` route of
+  /// P.solve_linear for GMRES / BiCGStab, ADC-516). It REUSES the already-wired pops::GeometricMG (the
+  /// same V-cycle the field solve runs) -- no new numerical kernel: set the level-0 rhs to @p in, start
+  /// from phi = 0, run a SINGLE @c vcycle(), copy the result into @p out.
+  ///
+  /// EXACTLY ONE V-cycle from a ZERO guess is mandatory: a preconditioner must be a FIXED linear map
+  /// M^{-1} (the same operator on every Krylov apply) for GMRES / BiCGStab to converge. Iterating to a
+  /// tolerance (``solve()``) would make the trip count -- hence the map -- depend on the input vector, a
+  /// VARIABLE (nonlinear) preconditioner that breaks the Krylov recurrences. The V-cycle of the bare
+  /// Laplacian is symmetric-positive and history-free, so one cycle from phi=0 is a valid stationary
+  /// M^{-1} approximating L^{-1}.
+  ///
+  /// The GeometricMG instance is built ONCE (lazily, on the first call) on the System mesh (geometry +
+  /// block-0 BoxArray/DistributionMapping + transport BC) and CACHED in a mutable member, co-distributed
+  /// with the Krylov scratch so its level-0 phi/rhs pair @p in / @p out by local fab index. @p in is the
+  /// Krylov vector (logically read-only); @p out is fully overwritten. The matvec budget is decided
+  /// C++-side inside the Krylov loop, so this apply is invisible to the IR.
+  void geometric_mg_precond_apply(MultiFab& out, const MultiFab& in) const {
+    count_kernel();
+    if (!mg_precond_) {
+      // Build once, on the System mesh: a scratch scalar field exposes block 0's BoxArray /
+      // DistributionMapping (the same the Krylov solve allocates its r/p/Ap from), and grid_context()
+      // gives the geometry + transport BC. The default V-cycle parameters (nu1=nu2=2, nbottom=50) match
+      // the field-solve GeometricMG.
+      const GridContext gc = sys_->grid_context();
+      const MultiFab tmpl = sys_->alloc_scalar_field(1, 1);
+      mg_precond_.emplace(gc.geom, tmpl.box_array(), gc.bc);
+    }
+    GeometricMG& mg = *mg_precond_;
+    // rhs <- in (the vector to precondition); phi <- 0 (a fixed-linear cycle starts cold).
+    lincomb(mg.rhs(), Real(1), in, Real(0), in);
+    mg.phi().set_val(Real(0));
+    mg.vcycle();                                    // ONE V-cycle: out ~= L^{-1} in (fixed linear M^{-1})
+    lincomb(out, Real(1), mg.phi(), Real(0), out);  // out <- phi
   }
 
   /// @name Anisotropic Schur condensation (epic ADC-399 / ADC-421)
@@ -781,6 +820,12 @@ class ProgramContext {
   }
 
   System* sys_;
+
+  /// Cached geometric-multigrid V-cycle reused as a Krylov preconditioner (ADC-516). Built lazily on
+  /// the first geometric_mg_precond_apply call and kept alive across every Krylov iteration / step;
+  /// MUTABLE so the const apply (like the other const seam ops that mutate the System through @c sys_)
+  /// can lazily construct and run it without making the whole facade non-const.
+  mutable std::optional<GeometricMG> mg_precond_;
 };
 
 }  // namespace program

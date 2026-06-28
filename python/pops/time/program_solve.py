@@ -30,25 +30,43 @@ def _lower_krylov_method(method):
     return scheme
 
 
+# Preconditioner schemes that lower to REAL C++ in the matrix-free Krylov path (Spec 5 sec.7, ADC-516):
+#   - "identity":     the empty pops::ApplyFn{} (unpreconditioned; the historical default);
+#   - "geometric_mg": one V-cycle of the wired pops::GeometricMG, emitted as a real ApplyFn callback.
+# The planned-but-unwired schemes (jacobi / block_jacobi) carry available=False and have no native
+# kernel yet; they are rejected with an HONEST "planned, not wired" message (a separate issue), never a
+# transitional catch-all.
+_WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
+
+
 def _lower_preconditioner(preconditioner):
     """Lower a typed preconditioner descriptor to its scheme token (Spec 5 sec.7).
 
     ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
-    (``preconditioners.Identity()`` ...); its ``scheme`` is the C++ token. A bare string is
-    REJECTED; ``None`` defaults to ``Identity()`` (the only supported preconditioner yet).
+    (``preconditioners.Identity()`` / ``preconditioners.GeometricMG()`` ...); its ``scheme`` is the
+    C++ token. A bare string is REJECTED; ``None`` defaults to ``Identity()`` (the unpreconditioned
+    default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn; the planned
+    jacobi / block_jacobi descriptors have no native kernel yet and are rejected with an honest
+    "planned, not wired" message (out of scope -- a separate issue).
     """
     if preconditioner is None:
         preconditioner = _preconditioners().Identity()
     if isinstance(preconditioner, str):
         raise TypeError(
             "solve_linear: preconditioner must be a typed pops.solvers.preconditioners "
-            "descriptor (e.g. pops.solvers.preconditioners.Identity()), not the string %r"
-            % (preconditioner,))
+            "descriptor (e.g. pops.solvers.preconditioners.Identity() / GeometricMG()), not the "
+            "string %r" % (preconditioner,))
     scheme = getattr(preconditioner, "scheme", None)
     if getattr(preconditioner, "category", None) != "preconditioner" or not isinstance(scheme, str):
         raise TypeError(
             "solve_linear: preconditioner must be a pops.solvers.preconditioners descriptor "
-            "(e.g. Identity()); got %r" % (preconditioner,))
+            "(e.g. Identity() / GeometricMG()); got %r" % (preconditioner,))
+    if scheme not in _WIRED_PRECOND_SCHEMES:
+        # A catalogued-but-unwired preconditioner (jacobi / block_jacobi): no native C++ kernel yet.
+        # An HONEST capability limit, not a transitional reject -- wiring it is tracked separately.
+        raise NotImplementedError(
+            "solve_linear: the %r preconditioner is planned, not wired yet (it needs a native C++ "
+            "kernel); use preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
     return scheme
 
 
@@ -81,9 +99,12 @@ class _ProgramSolve(_ProgramConstants):
             ``BiCGStab()`` (general), ``Richardson()``, or ``GMRES()`` -- restarted GMRES(m), the
             robust choice for a NON-symmetric operator). A bare string is REJECTED (Spec 5
             sec.7); ``None`` defaults to ``CG()``;
-          - @p preconditioner: a typed ``pops.solvers.preconditioners`` descriptor
-            (``Identity()`` only for now); a bare string is REJECTED; ``None`` defaults to
-            ``Identity()``;
+          - @p preconditioner: a typed ``pops.solvers.preconditioners`` descriptor.
+            ``Identity()`` (the unpreconditioned default) and ``GeometricMG()`` (one V-cycle of the
+            wired geometric multigrid, for ``GMRES()`` / ``BiCGStab()`` only) lower to real C++; the
+            planned ``Jacobi()`` / ``BlockJacobi()`` are rejected (no native kernel yet). A non-identity
+            preconditioner with ``CG()`` / ``Richardson()`` is rejected (those loops have no
+            preconditioner slot). A bare string is REJECTED; ``None`` defaults to ``Identity()``;
           - @p tol: relative L2 residual stop (> 0);
           - @p max_iter: iteration budget (REQUIRED, > 0: a dynamic solver loop with no budget is a
             configuration error -- ``pops::*_solve`` itself throws on a non-positive budget);
@@ -119,10 +140,14 @@ class _ProgramSolve(_ProgramConstants):
         if method not in self._KRYLOV_METHODS:
             raise ValueError("solve_linear: method must be one of %s; got %r"
                              % (sorted(self._KRYLOV_METHODS), method))
-        if preconditioner != "identity":
-            raise NotImplementedError(
-                "solve_linear: only preconditioner='identity' is supported yet (got %r)"
-                % preconditioner)
+        # A non-identity preconditioner needs the runtime ApplyFn slot, which only the Krylov methods
+        # that take one (BiCGStab / GMRES, generic_krylov.hpp) expose; pops::cg_solve / richardson_solve
+        # have NO preconditioner parameter. This is an honest capability limit of the matrix-free path,
+        # not a transitional reject.
+        if preconditioner != "identity" and method not in ("gmres", "bicgstab"):
+            raise ValueError(
+                "solve_linear: preconditioning is not available for CG/Richardson in the matrix-free "
+                "Krylov path; use GMRES() or BiCGStab()")
         if not isinstance(tol, (int, float)) or tol <= 0:
             raise ValueError("solve_linear: tol must be a positive number (got %r)" % (tol,))
         if max_iter is None or not isinstance(max_iter, int) or max_iter <= 0:
