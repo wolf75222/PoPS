@@ -24,11 +24,12 @@ def compile(problem, backend="production", time=None, **kwargs):
     """Lower a :class:`pops.case.Case` to a compiled handle (thin over ``compile_problem``).
 
     Validates @p problem, derives the compile target from its LAYOUT (``Uniform`` -> system,
-    ``AMR`` -> amr_system), resolves the single block's physics to the model ``compile_problem``
-    accepts, and returns the ``CompiledProblem`` with ``_problem`` / ``_target`` attached. The
-    time scheme is explicit: @p time (a ``pops.time.Program``), else ``problem.time(...)``; a
-    missing scheme raises -- there is NO silent default. The deferred routes (``layout=AMR``,
-    multi-block) raise a clear ``NotImplementedError``.
+    ``AMR`` -> amr_system), resolves EACH block's physics to the model ``compile_problem`` accepts
+    (multi-block Uniform Cases lower; C3), and returns the ``CompiledProblem`` with ``_problem`` /
+    ``_target`` / ``_block_models`` attached. The time scheme is explicit: @p time (a
+    ``pops.time.Program``), else ``problem.time(...)``; a missing scheme raises -- there is NO silent
+    default. Multi-block on an AMR layout is the one remaining deferred route here (a clear
+    ``NotImplementedError``).
 
     Args:
         problem: The :class:`pops.case.Case` assembly to lower.
@@ -51,12 +52,15 @@ def compile(problem, backend="production", time=None, **kwargs):
     target = "amr_system" if is_amr else "system"
 
     # AMR single-block lowers to target="amr_system" (the native AMR .so path emits
-    # pops_install_native_amr); multi-block AMR is still a separate concern. The single-block /
-    # time-required guards below stay in force for both layouts.
-    if len(problem._blocks) != 1:
+    # pops_install_native_amr). Multi-block lowers on a Uniform layout (C3): each block's physics is
+    # resolved and carried, and the per-block models flow to the install seam through bind()'s
+    # _assemble_instances (one instance per block). Multi-block AMR stays a separate concern (the
+    # whole-system AMR multi-block seam is not wired), so it is still deferred -- a HONEST reject, not
+    # a silent truncation.
+    if is_amr and len(problem._blocks) != 1:
         raise NotImplementedError(
-            "pops.compile: multi-block lowering is deferred; declare exactly one block "
-            "(got %d)" % len(problem._blocks))
+            "pops.compile: multi-block lowering on an AMR layout is deferred; declare exactly one "
+            "block (got %d), or use a Uniform layout for a multi-block assembly" % len(problem._blocks))
 
     time = time if time is not None else problem._time
     if time is None:
@@ -64,13 +68,19 @@ def compile(problem, backend="production", time=None, **kwargs):
             "pops.compile: a time scheme is required; pass time=pops.time.Program(...) or set "
             "it on the problem with problem.time(...). There is no default time scheme.")
 
-    _, spec = next(iter(problem._blocks.items()))
-    model = _resolve_problem_model(spec["physics"])
+    # Resolve every block's physics model (C3): the whole-system time Program is compiled once with the
+    # first block as the codegen representative (compiled.model -- the per-instance default at bind),
+    # while _block_models carries the full {block_name: resolved model} table so bind()'s
+    # _assemble_instances installs each block with its OWN model.
+    block_models = {name: _resolve_problem_model(spec["physics"])
+                    for name, spec in problem._blocks.items()}
+    _, model = next(iter(block_models.items()))
 
     from pops.codegen.compile_drivers import compile_problem
     compiled = compile_problem(time=time, model=model, backend=backend, target=target, **kwargs)
     compiled._problem = problem
     compiled._target = target
+    compiled._block_models = block_models
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem. None for a
     # Uniform layout (System bind reads no layout); set only on the AMR route.

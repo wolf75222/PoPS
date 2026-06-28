@@ -381,7 +381,8 @@ class CompiledModel:
 
     def __init__(self, so_path, backend, adder, cons_names, cons_roles, prim_names, n_vars,
                  gamma, n_aux, params, caps, abi_key, model_hash, cxx, std, target="system",
-                 hllc=False, roe=False, aux_extra_names=None, wave_speeds=False):
+                 hllc=False, roe=False, aux_extra_names=None, wave_speeds=False,
+                 elliptic_field_names=None):
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
@@ -399,6 +400,12 @@ class CompiledModel:
         # AUX_NAMED_BASE + k. The System.add_equation facade builds the name -> component table per
         # block from it, consumed by System.set_aux_field / aux_field. Empty for a model without a named field.
         self.aux_extra_names = list(aux_extra_names) if aux_extra_names else []
+        # Names of the model's NAMED elliptic fields (m.elliptic_field, ADC-419 / ADC-428): each is a
+        # second-or-further elliptic solve the native loader wires via register_elliptic_field +
+        # set_block_elliptic_field after the block is installed. The install seam consults this set to
+        # decide whether a bind(solvers={field: ...}) selection names a DECLARED field (route it) or a
+        # typo (reject, naming the declared set). Empty for a model with only the default Poisson field.
+        self.elliptic_field_names = list(elliptic_field_names) if elliptic_field_names else []
         self.params = dict(params)   # {name: Param}
         self.caps = dict(caps)       # {cpu/mpi/amr/gpu: bool}
         self.abi_key = abi_key       # ABI key mirroring pops_header_signature + compiler/std

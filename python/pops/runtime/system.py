@@ -96,12 +96,22 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # indices (set_aux_field_component / aux_field_component). Empty for a block without a
         # named aux field. cf. set_aux_field / aux_field.
         self._aux_field_index = {}
+        # CFL carried by an installed compiled-time cadence (CompiledTime(cfl=X)), or None when the
+        # cadence pins no numeric cfl. run() with no explicit cfl= defaults to it, so a bare
+        # sim.run(t_end) after bind(..., cadence=CompiledTime(cfl=X)) advances at X (not silently
+        # ignored). Set by _install_cadence; None until a numeric-cfl cadence is installed.
+        self._program_cadence_cfl = None
 
-    def run(self, t_end, cfl=0.4, max_steps=1_000_000):
+    def run(self, t_end, cfl=None, max_steps=1_000_000):
         """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
 
-        @p cfl: Courant number passed to step_cfl. @p max_steps: guard (avoids an infinite
-        loop if dt -> 0). Returns the number of steps taken. cf. DSL_MODEL_DESIGN.md section 6."""
+        @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
+        by an installed ``CompiledTime(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
+        takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored. @p max_steps:
+        guard (avoids an infinite loop if dt -> 0). Returns the number of steps taken.
+        cf. DSL_MODEL_DESIGN.md section 6."""
+        if cfl is None:
+            cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
         steps = 0
         while self.time() < t_end and steps < max_steps:
             self.step_cfl(cfl)

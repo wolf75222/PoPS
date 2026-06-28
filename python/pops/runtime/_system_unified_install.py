@@ -116,12 +116,15 @@ class _SystemUnifiedInstall:
             DERIVED, use set_electron_temperature_from), any other -> set_aux_field on the instance
             declaring it. Set BEFORE install_program so the section-24 aux requirement check sees it.
         @param solvers dict {field: <pops.solvers.GeometricMG(...)/pops.GeometricMG(...)>}: lowered to
-            set_poisson(solver=...). Only the default Poisson field ("phi"/"charge_density"/"poisson")
-            is wired today; a second named elliptic field raises NotImplementedError (deferred).
+            set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
+            any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
+            through the shared system elliptic solver; a field name no model declares raises (typo).
         @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's macro-step
             cadence, applied with set_program_cadence AFTER install_program. A compiled Program is ONE
             whole-system closure, so its cadence is GLOBAL (one program-level value, not per-block) --
-            hence a single kwarg rather than a per-instance "time". A non-default cfl is deferred.
+            hence a single kwarg rather than a per-instance "time". A numeric cadence.cfl is applied
+            at runtime by sim.run(cfl=) -- the cadence pins it on the System so a bare sim.run(t_end)
+            uses it -- not by the cadence install itself.
 
         @throws the verbatim Spec section-24 errors at install for a missing aux / solver / block
             instance / Riemann capability. (A disallowed schedule is rejected earlier, at Program
@@ -142,9 +145,13 @@ class _SystemUnifiedInstall:
         self._validate_install_arguments(compiled, instances, params, aux, solvers)
 
         # (1) FIELD SOLVERS first: set_poisson must run before install_program (the C++ section-24
-        # solver requirement reads poisson_solver()).
+        # solver requirement reads poisson_solver()). The DECLARED named elliptic fields (collected
+        # from the compiled handle + the per-instance models) widen the accepted solver-field set
+        # beyond the default Poisson names, so a solver selection for a model-declared named field
+        # routes (C1-System) while a typo is rejected against the declared set.
+        declared_fields = self._declared_elliptic_fields(compiled, instances)
         for field, solver_brick in solvers.items():
-            self._install_solver(field, solver_brick)
+            self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
         # lower its spatial brick and set its initial state. The block model is the per-instance
@@ -244,14 +251,18 @@ class _SystemUnifiedInstall:
 
         set_program_cadence is a SYSTEM-level orchestration around the opaque program closure
         (program.py): substeps=n re-runs the whole program over eff_dt/n; stride=M runs it once per M
-        macro-steps. A non-default cfl is deferred (pass an explicit dt to sim.step)."""
+        macro-steps. A NUMERIC cadence.cfl is NOT consumed here (set_program_cadence carries only
+        substeps / stride); instead it is stored on the System so a bare sim.run(t_end) defaults
+        sim.run(cfl=) to it (System::step_cfl routes the resulting per-block CFL dt through the
+        installed program). A self-computed cfl sub-program (cfl='program') is rejected upstream by
+        CompiledTime, so it never reaches here."""
         from pops.time.program import CompiledTime
         if not isinstance(cadence, CompiledTime):
             raise TypeError("install(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
                             "got %r" % type(cadence).__name__)
-        if cadence.cfl != "default":
-            raise NotImplementedError(
-                "install(cadence=): a non-default cfl is deferred; pass an explicit dt to sim.step(dt)")
+        if isinstance(cadence.cfl, (int, float)):
+            # Pin the numeric cfl so run() with no explicit cfl= uses it (not a silent no-op).
+            self._program_cadence_cfl = float(cadence.cfl)
         self.set_program_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial):
@@ -323,14 +334,25 @@ class _SystemUnifiedInstall:
         if flux == "hll" and not getattr(model, "has_wave_speeds", True):
             raise RuntimeError("riemann HLL requires capability 'wave_speeds'")
 
-    def _install_solver(self, field, solver_brick):
-        """Lower a field-solver selection to set_poisson. Only the default Poisson field is wired
-        today; a second named elliptic field is deferred (NotImplementedError)."""
-        if field not in ("phi", "poisson", "charge_density", "default"):
-            raise NotImplementedError(
-                "install: a second named elliptic field (%r) is not wired yet; only the default "
-                "Poisson field ('phi') is supported. Configure extra fields via the lower-layer "
-                "register_elliptic_field path." % (field,))
+    # Field names the default native Poisson route already serves (the shared system elliptic solve).
+    _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
+
+    def _install_solver(self, field, solver_brick, declared_fields=frozenset()):
+        """Lower a field-solver selection to set_poisson (C1-System).
+
+        The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
+        m.elliptic_field, collected into @p declared_fields) are accepted: the named field's RHS is
+        wired by the native loader (register_elliptic_field + set_block_elliptic_field), and its solve
+        reuses the shared system elliptic solver, so the solver selection routes through set_poisson
+        for both. A field name that is NEITHER the default Poisson field NOR a declared named field is a
+        TYPO -- rejected LOUD, naming the declared set (never a silent drop)."""
+        if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
+            declared = ", ".join(sorted(declared_fields)) or "(none declared)"
+            raise ValueError(
+                "install: solver selection names field %r, which is neither the default Poisson "
+                "field (%s) nor a named elliptic field any installed model declares (declared: %s). "
+                "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
+                % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
         token = self._solver_token(solver_brick)
         opts = getattr(solver_brick, "options", {}) or {}
         self.set_poisson(rhs=opts.get("rhs", "charge_density"), solver=token,
@@ -338,6 +360,29 @@ class _SystemUnifiedInstall:
                          wall_radius=float(opts.get("wall_radius", 0.0)),
                          epsilon=float(opts.get("epsilon", 1.0)),
                          abs_tol=float(opts.get("abs_tol", 0.0)))
+
+    @staticmethod
+    def _declared_elliptic_fields(compiled, instances):
+        """Collect the NAMED elliptic fields declared by the compiled handle's model and the
+        per-instance models (C1-System). Reads each model's declared names WITHOUT compiling: a
+        CompiledModel exposes ``elliptic_field_names``; a raw physics/dsl Model exposes the
+        ``_elliptic_fields`` mapping. Returns a set (empty when no model declares a named field)."""
+        names = set()
+
+        def _names_of(model):
+            if model is None:
+                return ()
+            explicit = getattr(model, "elliptic_field_names", None)
+            if explicit is not None:
+                return list(explicit)
+            raw = getattr(model, "_elliptic_fields", None)
+            return list(raw) if raw else ()
+
+        names.update(_names_of(getattr(compiled, "model", None)))
+        for spec in (instances or {}).values():
+            if isinstance(spec, dict):
+                names.update(_names_of(spec.get("model")))
+        return names
 
     @staticmethod
     def _solver_token(solver_brick):

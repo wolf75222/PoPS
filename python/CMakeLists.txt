@@ -294,6 +294,31 @@ add_test(NAME test_unified_install
 set_tests_properties(test_unified_install PROPERTIES
   ENVIRONMENT "${_pops_py_test_env}")
 
+# Spec 5 C1-System (ADC-479) : un champ elliptique NOMME (m.elliptic_field) lowere sur le System
+# uniforme -- la selection de solveur d'un champ DECLARE route via le solveur elliptique partage
+# (set_poisson) et un nom de champ non declare est rejete fort (typo). La carte codegen->install
+# (CompiledModel.elliptic_field_names) est testee host ; le RUN .so reste Kokkos/ROMEO.
+add_test(NAME test_unified_install_named_field_system
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_unified_install_named_field_system.py)
+set_tests_properties(test_unified_install_named_field_system PROPERTIES
+  ENVIRONMENT "${_pops_py_test_env}")
+
+# Spec 5 C3 (ADC-479) : un Case multi-bloc sur layout Uniform lowere -- compile resout CHAQUE bloc et
+# porte la table {bloc: modele} (_block_models) sur le handle ; bind installe chaque bloc avec son
+# propre modele. compile_problem est monkeypatche (RUN .so Kokkos/ROMEO).
+add_test(NAME test_case_multiblock_uniform
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_case_multiblock_uniform.py)
+set_tests_properties(test_case_multiblock_uniform PROPERTIES
+  ENVIRONMENT "${_pops_py_test_env}")
+
+# Spec 5 C3 frontiere (ADC-479) : le multi-bloc sur layout AMR reste differe (rejet fort au compile,
+# avant tout .so) tandis qu'un Case AMR mono-bloc lowere inchange vers target='amr_system' (aucun rejet
+# compile-time de Programme whole-system n'est introduit). compile_problem est monkeypatche.
+add_test(NAME test_case_multiblock_amr
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_case_multiblock_amr.py)
+set_tests_properties(test_case_multiblock_amr PROPERTIES
+  ENVIRONMENT "${_pops_py_test_env}")
+
 # pops.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
 # linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit

@@ -23,11 +23,6 @@ from pops.fields import FieldProblem
 from pops.mesh.cartesian import CartesianMesh
 from pops.mesh.layouts import AMR, Uniform
 
-# Field names the default native Poisson route already serves (Spec 3 / the install seam:
-# pops.runtime._system_unified_install._install_solver). A field problem named anything else
-# needs the deferred multi-elliptic runtime, so the assembly refuses it at validate().
-_POISSON_FIELD_NAMES = ("phi", "poisson", "charge_density", "default")
-
 # Sentinel distinguishing "no kind= passed" from "kind=None": Case.param de-strings by rejecting
 # any kind= keyword (Spec 5 sec.7) with a clear error naming the typed alternative.
 _CASE_NO_KIND = object()
@@ -98,9 +93,10 @@ class Case:
 
     Each assembly setter RETURNS the case so calls chain. The default ``layout`` is a
     single-level :class:`~pops.mesh.layouts.Uniform` over a default
-    :class:`~pops.mesh.cartesian.CartesianMesh`. :meth:`validate` runs structural checks and
-    raises a LOUD ``NotImplementedError`` for the deferred routes (more than one block, a
-    non-Poisson field, a non-empty output policy); ``compile`` / ``bind`` lower the rest.
+    :class:`~pops.mesh.cartesian.CartesianMesh`. :meth:`validate` runs structural checks; multi-block
+    assemblies and named non-Poisson elliptic fields lower (C3 / C1-System), and the only remaining
+    LOUD ``NotImplementedError`` deferral is a non-empty output policy; ``compile`` / ``bind`` lower
+    the rest.
 
     A Case CONTAINS descriptors (the layout, the blocks' physics, the field problems) but is
     NOT itself a :class:`pops.descriptors.Descriptor` (Spec 5 sec.6 table / sec.15). It exposes
@@ -251,10 +247,10 @@ class Case:
         """Structural validation; raise LOUD for the deferred routes (never fake success).
 
         Checks the layout, that there is at least one block each with a physics model, that
-        every field problem is itself valid, and that no block and field share a name. Then
-        rejects -- with a clear ``NotImplementedError`` -- the routes not wired in this PR:
-        more than one block, a field whose name the default Poisson route does not serve, and
-        a non-empty output policy. These are HONEST deferrals, not silent no-ops.
+        every field problem is itself valid, and that no block and field share a name. Multi-block
+        assemblies and named non-Poisson elliptic fields now LOWER (C3 / C1-System); the only
+        remaining HONEST deferral here is a non-empty output policy, which still raises a clear
+        ``NotImplementedError`` (never a silent no-op).
         """
         self._layout.validate(context)
         if not self._blocks:
@@ -270,17 +266,10 @@ class Case:
             raise ValueError("Case.validate: block and field share name(s): %s"
                              % ", ".join(sorted(collisions)))
 
-        # Deferred routes (PR-2+) -- fail loud, never silently truncate or ignore.
-        if len(self._blocks) > 1:
-            raise NotImplementedError(
-                "Case.validate: multi-block assembly is deferred; declare exactly one block "
-                "(got %d: %s)" % (len(self._blocks), ", ".join(sorted(self._blocks))))
-        for field_name in self._fields:
-            if field_name not in _POISSON_FIELD_NAMES:
-                raise NotImplementedError(
-                    "Case.validate: a non-Poisson field (%r) is deferred; only the default "
-                    "Poisson field (one of %s) is wired today"
-                    % (field_name, ", ".join(_POISSON_FIELD_NAMES)))
+        # Multi-block (C3) and named non-Poisson elliptic fields (C1-System) now LOWER -- the
+        # block-count and field-name rejects are removed. A named field that no block's model
+        # declares is still caught downstream at install (_install_solver checks the declared
+        # elliptic_field_names set). The output-policy reject below stays a HONEST deferral.
         if self._outputs:
             raise NotImplementedError(
                 "Case.validate: lowering an output/checkpoint policy is deferred; the "
