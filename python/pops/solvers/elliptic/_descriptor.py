@@ -121,6 +121,15 @@ class FFT(Descriptor):
         return {"spectral": self.spectral}
 
     def available(self, context=None):
+        # Spec 6 sec.8: FFT is mathematically incompatible with an AMR hierarchy (it needs a
+        # single uniform periodic mesh, not a refined one). When the route's layout is AMR,
+        # refuse PRECISELY -- naming the incompatibility and the general elliptic alternative --
+        # never a vague "AMR unsupported".
+        if _context_is_amr_layout(context):
+            return Availability.no(
+                "FFT requires Uniform(periodic=True), got AMR. Use GeometricMG().",
+                missing=["uniform layout", "periodic boundary"],
+                alternatives=["pops.solvers.elliptic.GeometricMG()"])
         return Availability.partial(
             "the FFT Poisson solver requires a periodic boundary, a constant-coefficient "
             "operator (no wall / embedded boundary) and a power-of-two grid; under MPI it uses "
@@ -133,6 +142,37 @@ class FFT(Descriptor):
         view["scheme"] = self.scheme
         view["available"] = "partial"
         return view
+
+
+def _context_is_amr_layout(context):
+    """True when the route @p context names an AMR mesh layout (duck-typed, no mesh import).
+
+    A compile / validate context may carry the chosen layout under a ``"layout"`` key (a dict)
+    or a ``.layout`` attribute, or simply BE the layout descriptor. A mesh layout advertises its
+    kind through ``capabilities()["layout"]`` (``"amr"`` / ``"uniform"``), so AMR is recognised
+    here WITHOUT importing :mod:`pops.mesh` into the solvers layer (which would add a forbidden
+    cross-layer edge). A context with no layout (the common ``available()`` call) returns False,
+    so the FFT route keeps its plain ``partial`` status.
+    """
+    if context is None:
+        return False
+    if isinstance(context, dict):
+        layout = context.get("layout")
+    else:
+        layout = getattr(context, "layout", None)
+    if layout is None:
+        layout = context  # the context may itself be the layout descriptor
+    caps = getattr(layout, "capabilities", None)
+    if callable(caps):
+        try:
+            declared = caps()
+        except Exception:
+            # available() must always return an Availability, never raise: a context whose
+            # capabilities() needs an argument or itself raises is simply "not an AMR layout".
+            return False
+        if isinstance(declared, dict) and declared.get("layout") == "amr":
+            return True
+    return False
 
 
 def _check(value, allowed, param, suggestion, default):

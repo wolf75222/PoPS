@@ -12,11 +12,20 @@ consume the descriptor. This is the ONE public home of the catalog formerly park
 * :func:`Richardson` -- preconditioned Richardson iteration.
 """
 from pops.descriptors import _native
+from pops.solvers.requirements import capability_map
+
+# The Krylov solvers are matrix-free free functions over ``pops::MultiFab`` primitives (dot /
+# saxpy / the operator apply): the algebra is layout-agnostic, so it runs on a uniform mesh or
+# an AMR level, under MPI (the inner-product reductions are collective) and on the GPU (the
+# kernels are Kokkos). They therefore declare every route capability (Spec 6 sec.4 / sec.9), so
+# a route check can see they are AMR-capable rather than guessing from an empty capability set.
+_KRYLOV_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True)
 
 
 def _solver(name, native_id, **options):
     """A native Krylov-solver descriptor in the ``solver`` category (scheme == @p name)."""
-    return _native(name, native_id, name, category="solver", **options)
+    return _native(name, native_id, name, category="solver",
+                   capabilities=_KRYLOV_CAPABILITIES, **options)
 
 
 def CG(**options):

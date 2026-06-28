@@ -28,6 +28,14 @@ def capability_map(**supported):
     Each keyword must name a tag in :data:`CAPABILITY_TAGS`; an unknown tag raises so a typo in
     a descriptor's capability declaration is caught at import, not silently dropped. Tags not
     passed default to ``False`` -- a descriptor opts in to what it supports.
+
+    Two descriptor families carry this map: a :class:`pops.descriptors.Descriptor` (the rich
+    elliptic solvers) exposes it through a ``capabilities()`` METHOD, while a
+    :class:`~pops.descriptors.BrickDescriptor` (the native Krylov / Schur / brick catalog)
+    stores it as a ``capabilities`` dict ATTRIBUTE. A consumer that reads a descriptor's
+    capabilities must therefore handle both shapes -- the field-problem solver checks
+    (:meth:`pops.fields.FieldProblem._require_solver_capability`) guard with ``callable(...)``
+    before calling, so a dict-attribute solver is treated as "capability absent", never crashed.
     """
     unknown = sorted(set(supported) - set(CAPABILITY_TAGS))
     if unknown:

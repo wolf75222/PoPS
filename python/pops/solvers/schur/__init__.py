@@ -12,6 +12,13 @@ NOTE: this :func:`CondensedSchur` SOLVER descriptor is DISTINCT from
 for an implicit source. They share no namespace and are not the same object.
 """
 from pops.descriptors import _native
+from pops.solvers.requirements import capability_map
+
+# The Schur-condensation operator condenses a coupled (source) block and solves the reduced
+# system; it runs on a uniform mesh and on an AMR hierarchy (the amr-schur source stage solves
+# it on the coarse grid), under MPI and on the GPU (Kokkos). It declares every route capability
+# (Spec 6 sec.4 / sec.9), so a route check sees it is AMR-capable.
+_SCHUR_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True)
 
 
 def Schur(**options):
@@ -20,7 +27,7 @@ def Schur(**options):
     Scheme token ``"schur"``; inert (the C++ runtime applies the condensation operator).
     """
     return _native("schur", "pops::SchurCondensationOperator", "schur",
-                   category="solver", **options)
+                   category="solver", capabilities=_SCHUR_CAPABILITIES, **options)
 
 
 def CondensedSchur(**options):

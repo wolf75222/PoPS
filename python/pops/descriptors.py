@@ -94,11 +94,20 @@ class BrickDescriptor:
 # not under a numerics/fv namespace. Some catalogued bricks have no native type yet --
 # they are emitted with ``available=False`` and an EMPTY native_id rather than a
 # fabricated symbol.
-def _native(name, native_id, scheme, *, category, caps=None, **options):
-    """A native-brick descriptor; ``caps`` lists required model capabilities."""
+def _native(name, native_id, scheme, *, category, caps=None, capabilities=None, **options):
+    """A native-brick descriptor.
+
+    ``caps`` lists the model capabilities the brick REQUIRES (folded into ``requirements``);
+    ``capabilities`` is the brick's own PROVIDED-capability dict -- the ``supports_<route>``
+    view a typed solver advertises (built with
+    :func:`pops.solvers.requirements.capability_map`) so an introspection / route check can see
+    whether the brick supports uniform / amr / mpi / gpu (Spec 6 sec.4 / sec.9). Both default to
+    none, so an unannotated brick is unchanged.
+    """
     req = {"capabilities": list(caps)} if caps is not None else {}
     return BrickDescriptor(name, "native", category=category, native_id=native_id,
-                           scheme=scheme, requirements=req, options=options or None)
+                           scheme=scheme, requirements=req, capabilities=capabilities,
+                           options=options or None)
 
 
 def _planned(name, scheme, *, category, **options):
