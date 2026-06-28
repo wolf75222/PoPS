@@ -288,9 +288,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
                 "pops.bind: a program cadence is not wired on AMR (no set_program_cadence); "
                 "set substeps / stride on the native time policy instead.")
 
-        # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks).
+        # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks). The DECLARED
+        # named elliptic fields (ADC-428), collected from the per-instance models, widen the accepted
+        # solver-field set beyond the default Poisson names: a solver selection for a model-declared named
+        # field routes (the native loader wired register_elliptic_field), a typo is rejected against the
+        # declared set. Mirror of System._install with _declared_elliptic_fields.
+        declared_fields = self._declared_elliptic_fields(instances)
         for field, solver_brick in solvers.items():
-            self._install_solver(field, solver_brick)
+            self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: add each named block (add_equation), then set its initial density.
         for name, spec in instances.items():
@@ -320,14 +325,26 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             if initial is not None:
                 self.set_density(name, initial)
 
-    def _install_solver(self, field, solver_brick):
-        """Lower a field-solver selection to set_poisson (AMR). Only the default Poisson field is
-        wired; a second named elliptic field is deferred (NotImplementedError). Mirror of
+    # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
+    _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
+
+    def _install_solver(self, field, solver_brick, declared_fields=frozenset()):
+        """Lower a field-solver selection to set_poisson (AMR, ADC-428).
+
+        The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
+        m.elliptic_field, collected into @p declared_fields) are accepted: the named field's RHS is wired
+        by the native AMR loader (register_elliptic_field + set_block_elliptic_field) and solved by the
+        AmrRuntime engine each solve_fields, while the solver selection routes through set_poisson for
+        both (the AMR solver is always geometric_mg). A field name that is NEITHER the default Poisson
+        field NOR a declared named field is a TYPO -- rejected LOUD, naming the declared set. Mirror of
         System._install_solver, minus the System-only solver options the AMR set_poisson lacks."""
-        if field not in ("phi", "poisson", "charge_density", "default"):
-            raise NotImplementedError(
-                "pops.bind: a second named elliptic field (%r) is not wired; only the "
-                "default Poisson field ('phi') is supported." % (field,))
+        if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
+            declared = ", ".join(sorted(declared_fields)) or "(none declared)"
+            raise ValueError(
+                "pops.bind: solver selection names field %r, which is neither the default Poisson "
+                "field (%s) nor a named elliptic field any installed model declares (declared: %s). "
+                "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
+                % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
         token = solver_brick if isinstance(solver_brick, str) else (
             getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None))
         if token is None:
@@ -335,6 +352,39 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
                             "pops.solvers.<Solver>(...) descriptor; got %r"
                             % type(solver_brick).__name__)
         self.set_poisson(solver=token)
+
+    @staticmethod
+    def _declared_elliptic_fields(instances):
+        """Collect the NAMED elliptic fields declared by the per-instance models (ADC-428). Reads each
+        model's declared names WITHOUT compiling: a target='amr_system' CompiledModel exposes
+        ``elliptic_field_names``; a raw physics/dsl Model exposes the ``_elliptic_fields`` mapping.
+        Returns a set (empty when no model declares a named field). Mirror of
+        System._declared_elliptic_fields (no compiled whole-system handle on the AMR path)."""
+        names = set()
+        for spec in (instances or {}).values():
+            if not isinstance(spec, dict):
+                continue
+            model = spec.get("model")
+            if model is None:
+                continue
+            explicit = getattr(model, "elliptic_field_names", None)
+            if explicit is not None:
+                names.update(explicit)
+                continue
+            raw = getattr(model, "_elliptic_fields", None)
+            if raw:
+                names.update(raw)
+        return names
+
+    def field(self, name):
+        """Return the solved potential of a NAMED elliptic field (ADC-428) as an (n, n) array.
+
+        Read-back of a second elliptic field declared via m.elliptic_field and lowered on the AMR layout:
+        solves the hierarchy fields if needed (so it is current even before any step) then reads the
+        field's coarse potential. AMR counterpart of reading System.aux_field(block, name) for an elliptic
+        field. @throws if the field is unregistered (or the system runs the single-block coupler, which
+        carries no named field)."""
+        return self._s.named_field_values(name)
 
     def _install_aux(self, field_name, field):
         """Lower an aux entry on AMR: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any

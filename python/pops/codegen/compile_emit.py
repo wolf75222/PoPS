@@ -304,11 +304,15 @@ def emit_cpp_native_loader(model, name=None, target="system", hoist_reciprocals=
                    + ell_field_lines +
                    '}\n')
     else:
-        if ell_field_regs:
-            raise NotImplementedError(
-                "elliptic_field (named multi-elliptic, ADC-428) on target='amr_system' is not "
-                "supported yet; it is available on target='system' (cartesian). Declared: %s"
-                % sorted(f for (f, *_rest) in ell_field_regs))
+        # NAMED elliptic fields on the AMR layout (ADC-428): mirror the uniform System branch, but on the
+        # AmrSystem facade. register_elliptic_field records the field's aux output components and FORCES
+        # the AmrRuntime engine (the named-field solve lives there); set_block_elliptic_field attaches the
+        # per-field RHS brick to the block (name == this block). The default Poisson path is untouched.
+        ell_field_lines = "".join(
+            '  s->register_elliptic_field("%s", %d, %d, %d);\n'
+            '  s->set_block_elliptic_field(name, "%s", pops::make_poisson_rhs(%s{}));\n'
+            % (fld, phi_c, gx_c, gy_c, fld, brick)
+            for (fld, brick, phi_c, gx_c, gy_c) in ell_field_regs)
         install = ('POPS_LOADER_API void pops_install_native_amr(void* sys, const char* name,\n'
                    '                                        const char* limiter, const char* riemann,\n'
                    '                                        const char* recon, const char* time,\n'
@@ -319,6 +323,7 @@ def emit_cpp_native_loader(model, name=None, target="system", hoist_reciprocals=
                    '                                                    substeps, /*stride=*/1,\n'
                    '                                                    /*implicit_vars=*/{},\n'
                    '                                                    /*implicit_roles=*/{}, pos_floor);\n'
+                   + ell_field_lines +
                    '}\n')
     return (head
             + bricks
