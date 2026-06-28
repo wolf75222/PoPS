@@ -28,6 +28,10 @@ from pops.mesh.layouts import AMR, Uniform
 # needs the deferred multi-elliptic runtime, so the assembly refuses it at validate().
 _POISSON_FIELD_NAMES = ("phi", "poisson", "charge_density", "default")
 
+# Sentinel distinguishing "no kind= passed" from "kind=None": Case.param de-strings by rejecting
+# any kind= keyword (Spec 5 sec.7) with a clear error naming the typed alternative.
+_CASE_NO_KIND = object()
+
 
 class _AMRPolicyHandle:
     """The ``case.amr`` refinement-policy handle (only valid for an ``AMR`` layout).
@@ -145,9 +149,30 @@ class Case:
         self._fields[key] = field_problem
         return self
 
-    def param(self, name, default=None, kind="const"):
-        """Declare a runtime/const parameter and its default value. Chains."""
-        self._params[str(name)] = {"default": default, "kind": str(kind)}
+    def param(self, name, default=None, *, kind=_CASE_NO_KIND):
+        """Declare a runtime/const parameter and its default value. Chains.
+
+        The KIND is a TYPED param object (Spec 5 sec.7), not a ``kind=`` string:
+        ``case.param(pops.physics.RuntimeParam("alpha", 1.0))`` /
+        ``case.param(pops.physics.ConstParam("gamma", 1.4))`` / ``case.param("alpha", 1.0)``
+        (const shorthand). A bare ``kind="const"/"runtime"`` keyword is REJECTED -- the string
+        route is removed; the typed sugars lower to the SAME ``{default, kind}`` record.
+        """
+        if kind is not _CASE_NO_KIND:
+            raise TypeError(
+                "Case.param: the kind= string is removed (Spec 5 sec.7); pass a typed param "
+                "object (pops.physics.RuntimeParam(name, value) or "
+                "pops.physics.ConstParam(name, value)) instead of kind=%r" % (kind,))
+        if hasattr(name, "kind") and hasattr(name, "name") and hasattr(name, "value"):
+            # A typed pops.physics param object (ConstParam / RuntimeParam): read its identity.
+            if default is not None:
+                raise TypeError(
+                    "Case.param: a typed param was given; do not also pass a default (%r)"
+                    % (default,))
+            self._params[str(name.name)] = {"default": name.value, "kind": str(name.kind)}
+        else:
+            # The (name, default) shorthand declares a CONST param (the default mode).
+            self._params[str(name)] = {"default": default, "kind": "const"}
         return self
 
     def aux(self, name, value=None):

@@ -1,8 +1,10 @@
-"""System unified-install mixin (Spec-4 PR-F): the Spec-3 section-22 ``install`` surface.
+"""System unified-install mixin (Spec-4 PR-F): the INTERNAL ``_install_compiled`` seam.
 
-``install`` (the single entry point that lowers to add_equation / set_poisson /
+``_install_compiled`` (the low-level seam that lowers to add_equation / set_poisson /
 set_magnetic_field / set_aux_field / set_block_params / install_program) plus its private
-lowering helpers. Mixed into ``System`` via inheritance; methods operate on ``self`` (calling the
+lowering helpers. It is NOT the public entry point (Spec 5 sec.11): authors call
+``pops.bind(compiled, state=, params=, aux=, solvers=)``, which dispatches System / AmrSystem and
+calls this seam. Mixed into ``System`` via inheritance; methods operate on ``self`` (calling the
 other mixins' methods) and ``self._s``.
 """
 
@@ -16,28 +18,29 @@ def collect_missing_arguments(args, provided_blocks, provided_params, provided_a
 
     Compare an :class:`pops.codegen.inspect_compiled.Arguments` against what an install supplies and
     return one actionable line per MISSING required argument (empty list when everything required is
-    met). Shared by ``System.install`` and ``AmrSystem.install`` so both enforce the SAME contract.
+    met). Shared by ``System._install_compiled`` and ``AmrSystem._install_compiled`` so both enforce
+    the SAME contract.
 
     Only entries whose ``required`` flag is true are enforced: an input the artifact marks optional
     (a const param, an unrequired solver -- the default Poisson field has a working default and is
     NOT flagged required by ``arguments()``) is never demanded, so a previously valid install passes
     through unchanged. ``provided_*`` are the supplied sets (block names, param names, aux names,
     solver fields); a block already added on the sim counts as provided. Each line names EXACTLY what
-    is missing and the matching ``install`` keyword to supply it."""
+    is missing and the matching ``pops.bind`` keyword to supply it."""
     missing = []
     for name, spec in sorted(getattr(args, "instances", {}).items()):
         if spec.get("required") and name not in provided_blocks:
-            missing.append("instance %r (a state block the program advances); add it via "
-                           "install(instances={%r: {'initial': <array>, ...}})" % (name, name))
+            missing.append("instance %r (a state block the program advances); supply its initial "
+                           "state via pops.bind(state={%r: <array>})" % (name, name))
     for name, spec in sorted(getattr(args, "params", {}).items()):
         if spec.get("required") and name not in provided_params:
-            missing.append("runtime param %r; pass install(params={%r: <value>})" % (name, name))
+            missing.append("runtime param %r; pass pops.bind(params={%r: <value>})" % (name, name))
     for name, spec in sorted(getattr(args, "aux", {}).items()):
         if spec.get("required") and name not in provided_aux:
-            missing.append("aux field %r; pass install(aux={%r: <array>})" % (name, name))
+            missing.append("aux field %r; pass pops.bind(aux={%r: <array>})" % (name, name))
     for name, spec in sorted(getattr(args, "solvers", {}).items()):
         if spec.get("required") and name not in provided_solvers:
-            missing.append("solver for field %r; pass install(solvers={%r: <Solver>})"
+            missing.append("solver for field %r; pass pops.bind(solvers={%r: <Solver>})"
                            % (name, name))
     return missing
 
@@ -71,21 +74,25 @@ def validate_install_arguments(sim, compiled, instances, params, aux, solvers):
     missing = collect_missing_arguments(
         args, provided_blocks, set(params), set(aux) | provided_named_aux, set(solvers))
     if missing:
-        raise ValueError("install: the compiled artifact is missing required argument(s):\n  "
+        raise ValueError("pops.bind: the compiled artifact is missing required argument(s):\n  "
                          + "\n  ".join(missing))
 
 
 class _SystemUnifiedInstall:
-    """The unified ``install`` lowering surface of System."""
+    """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
-    def install(self, compiled=None, *, instances=None, params=None, aux=None, solvers=None, cadence=None):
-        """Unified install (Spec 3 section 22): wire a compiled handle + per-instance state/spatial +
-        params + aux + field solvers in ONE call, then install the compiled time Program.
+    def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
+                          solvers=None, cadence=None):
+        """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
+        state/spatial + params + aux + field solvers in ONE call, then install the compiled time
+        Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
+        params=, aux=, solvers=)``, which dispatches System / AmrSystem and calls this seam. This
+        method is undocumented on the public surface (it carries no ``install`` alias) and may change.
 
-        This is the clean single entry point of Spec 3. It LOWERS to the existing lower-layer calls
+        It LOWERS to the existing lower-layer calls
         (add_equation / set_poisson / set_magnetic_field / set_aux_field / set_block_params /
         install_program) -- there is NO parallel runtime (Spec section 3). The lower-layer calls stay
-        available and unchanged; sim.install just sequences them in the right order so the
+        available and unchanged; this seam just sequences them in the right order so the
         install-time validation (section 24) sees a fully-configured simulation.
 
         install() is the ONE entry for BOTH runtime modes (Spec 4 amendment): a COMPILED-program sim
@@ -216,14 +223,16 @@ class _SystemUnifiedInstall:
         (``compiled.arguments()``) and the blocks / named aux ALREADY wired on this System, then
         reuses the ADC-463 :func:`collect_missing_arguments` to compute, per group
         (instances / params / aux / solvers), which inputs are PROVIDED vs still REQUIRED. It binds
-        nothing and mutates nothing -- the read-only counterpart of ``install``'s early validation."""
+        nothing and mutates nothing -- the read-only counterpart of the install seam's early
+        validation."""
         from pops.codegen.inspect_report import build_bind_report
         return build_bind_report(self, compiled)
 
     def _validate_install_arguments(self, compiled, instances, params, aux, solvers):
         """Early bind-input validation (Spec 5 sec.10): reject a COMPILED install missing a REQUIRED
         argument the artifact declares, BEFORE any native mutation. Thin wrapper around the shared
-        module-level :func:`validate_install_arguments` (reused by ``AmrSystem.install`` for parity)."""
+        module-level :func:`validate_install_arguments` (reused by ``AmrSystem._install_compiled``
+        for parity)."""
         validate_install_arguments(self, compiled, instances, params, aux, solvers)
 
     # Host-testable alias of the pure core (mirrors _route_block_params: callable as

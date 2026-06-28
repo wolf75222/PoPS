@@ -27,6 +27,7 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.solvers import krylov
 import sys
 
 
@@ -44,7 +45,7 @@ def _pops_time():
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*div(grad) = I - alpha*Lap (SPD, well-conditioned)
 
 
-def _divgrad_program(t, *, name="divgrad", method="bicgstab", tol=1e-10, max_iter=200, alpha=_ALPHA):
+def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200, alpha=_ALPHA):
     """Solve (I - alpha*div(grad)) phi = U, committed back into the 1-component block.
 
     The apply ``out = in - alpha*div(grad(in))`` chains P.gradient (into a 2-component buffer) then
@@ -60,6 +61,9 @@ def _divgrad_program(t, *, name="divgrad", method="bicgstab", tol=1e-10, max_ite
         P.divergence(d, g, g)  # div(grad x) == Lap x; fy reads component 1 of the same buffer
         return x - alpha * d  # out = in - alpha*div(grad(in)) = in - alpha*Lap(in)
 
+    if method is None:
+        from pops.solvers.krylov import BiCGStab  # typed default (Spec 5 sec.7); lowers to "bicgstab"
+        method = BiCGStab()
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
     P.commit("blk", phi)
@@ -79,9 +83,10 @@ def test_divergence_records_and_validates(t):
         assert div.vtype == "scalar_field", "divergence yields a scalar_field value"
         return x - div
 
+    from pops.solvers.krylov import BiCGStab
     P.set_apply(A, apply)
     U = P.state("blk")
-    phi = P.solve_linear(operator=A, rhs=U, method="bicgstab", tol=1e-8, max_iter=50)
+    phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(), tol=1e-8, max_iter=50)
     P.commit("blk", phi)
     assert P.validate() is True, "the div(grad) Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
@@ -126,7 +131,7 @@ def test_scalar_field_ncomp_validates(t):
 
 
 def test_divgrad_codegen(t):
-    src = _divgrad_program(t, method="bicgstab").emit_cpp_program()
+    src = _divgrad_program(t, method=krylov.BiCGStab()).emit_cpp_program()
     for frag in ("ctx.gradient", "ctx.divergence", "pops::bicgstab_solve",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
@@ -257,7 +262,8 @@ def _run_section_b(t):
     try:
         compiled = pops.compile_problem(
             model=passive_model("divgrad_prog"),
-            time=_divgrad_program(t, name="divgrad_step", method="bicgstab", tol=tol, max_iter=200))
+            time=_divgrad_program(t, name="divgrad_step", method=krylov.BiCGStab(),
+                                  tol=tol, max_iter=200))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None

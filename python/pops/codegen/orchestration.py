@@ -7,8 +7,9 @@ These are the Spec 5 sec.11 lowering entry points for a :class:`pops.case.Case`:
   resolves the block's physics to the model the existing ``compile_problem`` wants, and calls
   ``compile_problem`` unchanged. It carries the originating problem + target on the handle.
 * :func:`bind` dispatches ``System`` vs ``AmrSystem`` from the carried target, assembles the
-  per-instance state mapping, and calls the unified ``sim.install(compiled, instances=, ...)``
-  -- the ONE install seam (``pops.runtime._system_unified_install``). No parallel runtime.
+  per-instance state mapping, and calls the INTERNAL ``sim._install_compiled(compiled, instances=,
+  ...)`` seam (``pops.runtime._system_unified_install``). ``bind`` is the public entry point; the
+  ``_install_compiled`` seam is undocumented / low-level. No parallel runtime.
 
 There is NO new codegen and NO new install machinery here: this module ORCHESTRATES the
 proven pieces. Every not-yet-wired route raises a clear ``NotImplementedError``.
@@ -79,14 +80,16 @@ def compile(problem, backend="production", time=None, **kwargs):
 
 def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
          solvers=None, cadence=None):
-    """Wire a compiled handle onto the runtime (thin over the unified ``sim.install``).
+    """Wire a compiled handle onto the runtime: the PUBLIC bind entry point.
 
-    Dispatches ``System`` vs ``AmrSystem`` from the target carried on @p compiled (set by
-    :func:`compile`), builds the per-instance state mapping from the problem's blocks and the
-    supplied initial state, derives the field solvers from the problem's field problems (an
-    explicit @p solvers overrides), and calls ``sim.install(compiled, instances=, params=,
-    aux=, solvers=, cadence=)`` -- the single Spec-3 install seam. Returns the bound
-    simulation (the ``System`` / ``AmrSystem`` is the Simulation facade for now).
+    ``pops.bind`` is THE documented way to instantiate a runnable simulation from a compiled handle
+    (``compiled = pops.compile(...)``); it dispatches ``System`` vs ``AmrSystem`` from the target
+    carried on @p compiled (set by :func:`compile`), builds the per-instance state mapping from the
+    problem's blocks and the supplied initial state, derives the field solvers from the problem's
+    field problems (an explicit @p solvers overrides), and calls the INTERNAL
+    ``sim._install_compiled(compiled, instances=, params=, aux=, solvers=, cadence=)`` seam -- the
+    low-level install lowering, not a public entry. Returns the bound simulation (the ``System`` /
+    ``AmrSystem`` is the Simulation facade for now): call ``sim.run(...)`` to advance it.
 
     Args:
         compiled: A ``CompiledProblem`` from :func:`compile` (carries ``_problem`` / ``_target``).
@@ -133,8 +136,8 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     field_solvers = _problem_field_solvers(problem)
     field_solvers.update(solvers or {})
 
-    sim.install(compiled, instances=instances, params=params or {}, aux=aux or {},
-                solvers=field_solvers, cadence=cadence)
+    sim._install_compiled(compiled, instances=instances, params=params or {}, aux=aux or {},
+                          solvers=field_solvers, cadence=cadence)
     return sim
 
 

@@ -225,10 +225,11 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
                           getattr(time, "newton_diagnostics", False),
                           getattr(spatial, "positivity_floor", 0.0))
 
-    def install(self, compiled=None, *, instances=None, params=None, aux=None, solvers=None,
-                cadence=None):
-        """Unified install on the AMR hierarchy (Spec 5 sec.10) -- signature parity with
-        ``System.install``.
+    def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
+                          solvers=None, cadence=None):
+        """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
+        with ``System._install_compiled``. NOT the public entry point: author the run with
+        ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
 
         Runs the SAME early bind-input validation (``validate_install_arguments``: reject -- BEFORE
         any native mutation -- an install missing a REQUIRED argument the artifact declares, with one
@@ -259,24 +260,24 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
         aux = aux or {}
         solvers = solvers or {}
 
-        # (0) EARLY VALIDATION (shared with System.install): reject a compiled install missing a
+        # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(self, compiled, instances, params, aux, solvers)
 
         if compiled is not None:
             raise NotImplementedError(
-                "AmrSystem.install: a COMPILED time Program is not installable on the AMR runtime "
+                "pops.bind: a COMPILED time Program is not installable on the AMR runtime "
                 "(no install_program seam: a compiled whole-system time Program is a single-level "
                 "System concept today). Use the NATIVE AMR path (compiled=None with a "
                 "target='amr_system' CompiledModel per instance), or System for a compiled Program. "
                 "The early bind-input validation above still ran.")
         if params:
             raise NotImplementedError(
-                "AmrSystem.install: runtime params (params=%s) are not wired on AMR (no "
+                "pops.bind: runtime params (params=%s) are not wired on AMR (no "
                 "set_block_params); set them on the native model, or use System." % sorted(params))
         if cadence is not None:
             raise NotImplementedError(
-                "AmrSystem.install: a program cadence is not wired on AMR (no set_program_cadence); "
+                "pops.bind: a program cadence is not wired on AMR (no set_program_cadence); "
                 "set substeps / stride on the native time policy instead.")
 
         # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks).
@@ -286,13 +287,13 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
         # (2) INSTANCES: add each named block (add_equation), then set its initial density.
         for name, spec in instances.items():
             if not isinstance(spec, dict):
-                raise TypeError("AmrSystem.install: instances[%r] must be a dict "
+                raise TypeError("pops.bind: instances[%r] must be a dict "
                                 "(initial/spatial/time/model); got %r"
                                 % (name, type(spec).__name__))
             model = spec.get("model")
             if model is None:
                 raise ValueError(
-                    "AmrSystem.install: instance %r has no block model -- supply "
+                    "pops.bind: instance %r has no block model -- supply "
                     "instances[%r]['model'] (an pops.Model(...) / a target='amr_system' "
                     "CompiledModel). A native AMR install carries no compiled handle to fall back "
                     "on." % (name, name))
@@ -317,12 +318,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
         System._install_solver, minus the System-only solver options the AMR set_poisson lacks."""
         if field not in ("phi", "poisson", "charge_density", "default"):
             raise NotImplementedError(
-                "AmrSystem.install: a second named elliptic field (%r) is not wired; only the "
+                "pops.bind: a second named elliptic field (%r) is not wired; only the "
                 "default Poisson field ('phi') is supported." % (field,))
         token = solver_brick if isinstance(solver_brick, str) else (
             getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None))
         if token is None:
-            raise TypeError("AmrSystem.install: solver must be a token string or an "
+            raise TypeError("pops.bind: solver must be a token string or an "
                             "pops.solvers.<Solver>(...) descriptor; got %r"
                             % type(solver_brick).__name__)
         self.set_poisson(solver=token)
@@ -335,7 +336,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             return
         if field_name == "T_e":
             raise ValueError(
-                "AmrSystem.install: aux 'T_e' is DERIVED from a fluid block, not a static aux "
+                "pops.bind: aux 'T_e' is DERIVED from a fluid block, not a static aux "
                 "field; use set_electron_temperature_from(block).")
         block = None
         for blk, table in self._aux_field_index.items():
@@ -344,7 +345,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
                 break
         if block is None:
             raise ValueError(
-                "AmrSystem.install: aux field %r is not declared by any installed instance; add the "
+                "pops.bind: aux field %r is not declared by any installed instance; add the "
                 "instance with a model declaring m.aux_field(%r)." % (field_name, field_name))
         self.set_aux_field(block, field_name, field)
 

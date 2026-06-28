@@ -172,9 +172,10 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
             return P.rhs_jacvec(out, v, iterate=Uk, r0=Rk, c_dt=(c * P.dt), eps=eps, flux=flux,
                                 sources=sources)
 
+        from pops.solvers import krylov
         P.set_apply(A, apply)
-        dU = P.solve_linear(name="%s_dU" % tag, operator=A, rhs=negF, method="gmres", tol=krylov_tol,
-                            max_iter=krylov_max, restart=krylov_restart)
+        dU = P.solve_linear(name="%s_dU" % tag, operator=A, rhs=negF, method=krylov.GMRES(),
+                            tol=krylov_tol, max_iter=krylov_max, restart=krylov_restart)
         return P.linear_combine("%s_next" % tag, 1.0 * Uk + 1.0 * dU)
 
     # Outer Newton loop: a fixed unroll of newton_max iterations (each independent top-level IR).

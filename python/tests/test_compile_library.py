@@ -150,8 +150,26 @@ def test_non_descriptor_object_is_rejected():
 
 
 def test_non_production_backend_is_rejected():
+    from pops.codegen import JIT
     with pytest.raises(ValueError):
-        pops.compile_library("lib.so", objects=_objects(), backend="jit")
+        pops.compile_library("lib.so", objects=_objects(), backend=JIT())
+
+
+def test_string_backend_is_rejected():
+    # Spec 5 sec.7: the public backend= takes a TYPED descriptor; a bare string is rejected and
+    # the error names the typed alternative (mirrors pops.compile).
+    with pytest.raises(TypeError) as exc:
+        pops.compile_library("lib.so", objects=_objects(), backend="production")
+    assert "Production" in str(exc.value)
+
+
+def test_typed_production_backend_is_byte_identical():
+    from pops.codegen import Production
+    a = pops.compile_library("lib.so", objects=_objects())  # default None -> Production()
+    b = pops.compile_library("lib.so", objects=_objects(), backend=Production())
+    assert a.backend == "production" == b.backend
+    assert a.content_hash == b.content_hash
+    assert a == b
 
 
 # --- compile_problem libraries= seam (validation, no compile) --------------

@@ -63,8 +63,17 @@ m.operator("implicit_operator", C)
 m.check()
 ```
 
-`m.module` is the typed `pops.model.Module` this lowers to (state space, field space,
-and the typed operators `explicit_rate`, `electric`, `lorentz`, `fields_from_state`).
+`pops.physics.Model` is a WRITING facade: it authors the physics and lowers to the typed
+`pops.model.Module`, but it does NOT compile. Call `m.lower()` (alias `m.to_module()`, identical to
+`m.module`) to get the `pops.model.Module` (state space, field space, and the typed operators
+`explicit_rate`, `electric`, `lorentz`, `fields_from_state`); `pops.compile` then compiles it::
+
+```python
+model = physics_model.lower()                 # pops.model.Module (no compilation here)
+compiled = pops.compile(case, backend=pops.codegen.Production())   # pops.compile compiles
+sim = pops.bind(compiled, state=...)          # pops.bind -> a runnable simulation
+```
+
 The spec-1 PDE methods (`m.flux` / `m.source_term` / `m.linear_source` /
 `m.elliptic_field` on `pops.physics.facade.Model`) remain valid; the board API is sugar over them.
 

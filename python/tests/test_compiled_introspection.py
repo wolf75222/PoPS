@@ -58,8 +58,9 @@ def _program(name="intro_demo", *, krylov=False):
             p.laplacian(lap, x)
             return -1.0 * lap
 
+        from pops.solvers.krylov import CG
         P.set_apply(A, _apply)
-        P.solve_linear(operator=A, rhs=buf, method="cg", max_iter=10)
+        P.solve_linear(operator=A, rhs=buf, method=CG(), max_iter=10)
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 

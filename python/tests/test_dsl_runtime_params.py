@@ -32,9 +32,11 @@ INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "i
 def _build_iso(cs2_kind, cs2_value=1.0):
     """Modele isotherme 2D (rho, rho_u, rho_v) avec p = cs2 * rho. @p cs2_kind = 'runtime' | 'const'.
     Le SEUL parametre est cs2 : un meme modele a deux variantes (cs2 runtime vs cs2 const)."""
+    from pops.physics import ConstParam, RuntimeParam
     m = Model("iso")
     rho, mx, my = m.conservative_vars("rho", "rho_u", "rho_v")
-    cs2 = m.param("cs2", cs2_value, kind=cs2_kind)
+    _typed = {"const": ConstParam, "runtime": RuntimeParam}[cs2_kind]
+    cs2 = m.param(_typed("cs2", cs2_value))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
     p = m.primitive("p", cs2 * rho)

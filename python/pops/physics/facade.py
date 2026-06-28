@@ -14,7 +14,7 @@ from pops.ir.ops import left, right  # noqa: F401  -- Model.left / Model.right s
 
 from ._modelpkg import model as _model
 from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
-from .model import HyperbolicModel, Param
+from .model import HyperbolicModel, Param, _NO_KIND, _coerce_param
 from ._facade_compile import _FacadeCompileMixin
 
 
@@ -297,20 +297,26 @@ class Model(_FacadeCompileMixin):
         """Adiabatic index (EOS), carried by POPS_EXPORT_BLOCK_GAMMA (delegates to set_gamma)."""
         self._m.set_gamma(value)
 
-    def param(self, name, value, kind="const"):
-        """NAMED parameter usable in the formulas. Mode (a) (`kind="const"`, default): constant
-        frozen at compile time, inlined at codegen; stored in m.params (introspection /
-        reproducibility). Mode (b) (`kind="runtime"`, P7-b): SUPPORTED on the "aot" backend -- the param
-        emits `params.get(<index>)` (member of pops::RuntimeParams) and its value can be CHANGED at runtime
-        via System.set_block_params(name, values) WITHOUT recompiling (the declaration value serves as the
-        default); cf. CompiledModel.runtime_param_names. The "prototype"/"production" backends freeze a
-        runtime param at its declaration value.
+    def param(self, name, value=None, *, kind=_NO_KIND):
+        """NAMED parameter usable in the formulas. The KIND is chosen by a TYPED param object
+        (Spec 5 sec.7), NOT a ``kind=`` string:
 
-        gamma CASE: if name == "gamma", ALSO calls set_gamma(value) so that the ABI metadata
+          - ``m.param(pops.physics.ConstParam("gamma", 1.4))`` -- a const (mode (a)): frozen /
+            inlined at codegen, stored in ``m.params`` (introspection / reproducibility);
+          - ``m.param(pops.physics.RuntimeParam("cs2", 1.0))`` -- a runtime (mode (b), P7-b):
+            SUPPORTED on the "aot" backend, emits ``params.get(<index>)`` and is CHANGEABLE at
+            runtime via ``System.set_block_params`` without recompiling;
+          - ``m.param("gamma", 1.4)`` -- the (name, value) shorthand, a const param.
+
+        A bare ``kind="const"/"runtime"`` keyword is REJECTED (the string route is removed; use
+        ``ConstParam`` / ``RuntimeParam``). The lowering is byte-identical: a typed sugar IS a
+        ``Param`` with the same ``kind``.
+
+        gamma CASE: if the name is "gamma", ALSO calls set_gamma(value) so that the ABI metadata
         stays consistent (otherwise the System falls back to 1.4)."""
-        p = Param(name, value, kind=kind)  # 'runtime' -> RuntimeParamRef (P7-b), 'const' -> inline
-        self.params[name] = p
-        if name == "gamma":
+        p = _coerce_param(name, value, kind=kind, who="Model.param")
+        self.params[p.name] = p
+        if p.name == "gamma":
             self._m.set_gamma(p.value)
         return p
 

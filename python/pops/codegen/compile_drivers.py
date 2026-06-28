@@ -290,7 +290,7 @@ def _module_to_model(module):
     m.primitive_vars(*cvars)
     m.conservative_from(list(cvars))
     for p in module.params().values():
-        m.param(p.name, p.default, kind="const")
+        m.param(p.name, p.default)  # (name, value) shorthand -> a const param (no kind= string)
     declared = set()
 
     def _declare_aux(nm):

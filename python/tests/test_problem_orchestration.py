@@ -66,7 +66,7 @@ def test_assembly_chaining_and_inspect():
     model = _StubModel("ne")
     prob = (pops.Case(name="plasma")
             .block("ne", physics=model, spatial=None)
-            .param("alpha", default=1.0, kind="const")
+            .param(pops.physics.ConstParam("alpha", 1.0))
             .aux("B_z", value=None))
     _check(prob is prob.block.__self__, "setters operate on the same problem")
     _check(prob.layout.name == "Uniform", "default layout is Uniform")
@@ -295,12 +295,12 @@ def test_compile_multi_block_raises(monkeypatch=None):
 
 # --- bind(): System vs AmrSystem dispatch via a monkeypatched runtime -------
 class _RecordingSim:
-    """A System / AmrSystem stand-in that records the install(...) call."""
+    """A System / AmrSystem stand-in that records the _install_compiled(...) seam call."""
 
     last = {}
 
-    def install(self, compiled=None, *, instances=None, params=None, aux=None,
-                solvers=None, cadence=None):
+    def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
+                          solvers=None, cadence=None):
         _RecordingSim.last = {"compiled": compiled, "instances": instances, "params": params,
                               "aux": aux, "solvers": solvers, "cadence": cadence}
 

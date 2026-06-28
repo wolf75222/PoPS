@@ -26,7 +26,7 @@ from .aux import (
     aux_n_aux, aux_total_n_aux, role_of, roles_for)
 
 # PDE-model symbolic mini-DSL (the engine pops.dsl.Model wraps).
-from .model import HyperbolicModel, Param, RuntimeParam
+from .model import HyperbolicModel, Param, RuntimeParam, ConstParam
 from .facade import Model as PdeModel
 
 # Hybrid composition: native + DSL bricks into one CompositeModel .so.
@@ -57,7 +57,7 @@ __all__ = [
     "AUX_CANONICAL", "AUX_BASE_COMPS", "AUX_NAMED_BASE", "AUX_NAMED_MAX", "CANONICAL_ROLES",
     "aux_n_aux", "aux_total_n_aux", "role_of", "roles_for",
     # PDE-model engine
-    "PdeModel", "HyperbolicModel", "Param", "RuntimeParam",
+    "PdeModel", "HyperbolicModel", "Param", "RuntimeParam", "ConstParam",
     # hybrid + bricks
     "NativeBrick", "CompiledBrick", "CompiledHyperbolicBrick", "CompiledSourceBrick",
     "CompiledEllipticBrick", "HyperbolicBrick", "SourceBrick", "EllipticBrick", "HybridModel",

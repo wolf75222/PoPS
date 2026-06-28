@@ -79,6 +79,40 @@ def test_python_flux_is_reachable_only_under_experimental():
     assert getattr(pops.experimental, "__experimental__", False) is True
 
 
+def test_install_is_not_the_public_path():
+    # Spec 5 sec.11 (epic ADC-479, item #3): `install` is no longer a public method on
+    # System / AmrSystem; the internal seam is `_install_compiled`, and pops.bind is the
+    # documented entry. The public surface advertises pops.compile / pops.bind, not install.
+    sim = pops.System()
+    assert not hasattr(sim, "install"), "System.install must be gone (renamed to _install_compiled)"
+    assert hasattr(sim, "_install_compiled"), "the internal install seam is _install_compiled"
+    amr = pops.AmrSystem(n=8, L=1.0)
+    assert not hasattr(amr, "install"), "AmrSystem.install must be gone (renamed to _install_compiled)"
+    assert hasattr(amr, "_install_compiled"), "AmrSystem keeps the internal _install_compiled seam"
+    # The documented public entry points are pops.compile / pops.bind (not install / install_program).
+    assert "compile" in pops.__all__ and "bind" in pops.__all__
+    assert "install" not in pops.__all__ and "install_program" not in pops.__all__
+
+
+def test_physics_model_is_a_writing_facade_not_a_compiler():
+    # Spec 5 sec.11 (item #7): pops.physics.Model authors physics and LOWERS to a
+    # pops.model.Module; it has NO public compile_* method. pops.compile does the compile.
+    from pops import model as model_pkg
+
+    m = pops.physics.Model("arch")
+    for forbidden in ("compile", "compile_so", "compile_aot", "compile_native", "compile_or_jit"):
+        assert not hasattr(m, forbidden), (
+            "pops.physics.Model must not expose %r (it is a writing facade, not a compiler)"
+            % forbidden)
+    # lower() / to_module() return the pops.model.Module pops.compile / compile_problem accept.
+    assert hasattr(m, "lower") and hasattr(m, "to_module"), "physics.Model needs lower()/to_module()"
+    module = m.lower()
+    assert isinstance(module, model_pkg.Module), "physics.Model.lower() returns a pops.model.Module"
+    assert isinstance(m.to_module(), model_pkg.Module), "to_module() returns a pops.model.Module too"
+    # to_module IS the lower method (Spec 5 sec.11 alias), not a re-implementation.
+    assert type(m).to_module is type(m).lower, "to_module() must be the lower() alias"
+
+
 def test_no_public_custom_solver_decorator():
     # The custom-solver authoring DSL (@solver) is not a user API on pops / pops.lib / pops.solvers.
     import pops.lib  # noqa: PLC0415

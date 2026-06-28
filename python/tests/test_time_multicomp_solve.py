@@ -26,6 +26,7 @@ component 0 alone and leave the rest unsolved.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.solvers import krylov
 import sys
 
 
@@ -41,7 +42,7 @@ def _pops_time():
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD per component, well-conditioned for CG)
 
 
-def _mc_program(t, ncomp, *, name="mc_solve", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA):
+def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=200, alpha=_ALPHA):
     """(I - alpha*Lap) x = U on an ncomp-component block, committed back into the block state.
 
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian (which now runs per component) +
@@ -57,6 +58,9 @@ def _mc_program(t, ncomp, *, name="mc_solve", method="cg", tol=1e-10, max_iter=2
         P.laplacian(lap, x)
         return x - alpha * lap  # out = in - alpha*Lap(in), applied to every component
 
+    if method is None:
+        from pops.solvers.krylov import CG  # typed default (Spec 5 sec.7); CG lowers to "cg"
+        method = CG()
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
     P.commit("blk", phi)
@@ -76,9 +80,10 @@ def test_state_operator_builds(t):
         P.laplacian(lap, x)
         return x - _ALPHA * lap
 
+    from pops.solvers.krylov import CG
     P.set_apply(A, apply)
     U = P.state("blk")
-    phi = P.solve_linear(operator=A, rhs=U, method="cg", tol=1e-10, max_iter=50)
+    phi = P.solve_linear(operator=A, rhs=U, method=CG(), tol=1e-10, max_iter=50)
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
     P.commit("blk", phi)
     assert P.validate() is True, "the multi-component Program must validate"
@@ -233,7 +238,8 @@ def _run_one(t, pops, np, ncomp, init):
     try:
         compiled = pops.compile_problem(
             model=_passive_model("mc_prog%d" % ncomp, cons),
-            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method="cg", tol=tol, max_iter=200))
+            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(),
+                             tol=tol, max_iter=200))
         compiled_model = _passive_model("mc_block%d" % ncomp, cons).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])
