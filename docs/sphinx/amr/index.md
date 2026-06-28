@@ -1,24 +1,37 @@
-# AMR (adaptive refinement)
+# AMR
 
-`pops.AmrSystem` is the refined counterpart of `pops.System`: one or more blocks (species)
-carried on a block-structured AMR hierarchy (with rectangular boxes, AMReX /
-FLASH / SAMRAI style). The mesh is refined where the solution requires it, and only there. This
-page summarizes how to drive the AMR from Python; for design details see
-[ARCHITECTURE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ARCHITECTURE.md) (section 8), [ALGORITHMS.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ALGORITHMS.md)
-(sections 13-15) and the design notes
-[AMR_MULTIBLOCK_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/AMR_MULTIBLOCK_DESIGN.md) /
-[AMR_REGRID_UNION_TAGS_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/AMR_REGRID_UNION_TAGS_DESIGN.md).
+AMR is a mesh layout. It is not a separate user API and not a compile target.
 
-The public path is the same `pops.Case` -> `pops.compile` -> `pops.bind` -> `sim.run` flow as a
-uniform run: you refine by changing the layout from `pops.mesh.layouts.Uniform(mesh)` to
-`pops.mesh.layouts.AMR(mesh, max_levels=2, ratio=2)` and authoring a refinement criterion with
-`case.amr.refine(pops.mesh.amr.Refine.on("density").above(...))`. `pops.bind` then builds an
-`AmrSystem` from the layout. The same low-level `AmrSystem` runtime methods that back `pops.bind`
-(`add_block` / `add_equation` / `set_poisson` / `set_refinement` / `step_cfl`) stay for the
-native/AMR runtime and the tests. The A->Z tutorial compares the uniform and AMR paths on the same
-physics (cf.
-[tutorials/diocotron_tutorial.py](https://github.com/wolf75222/adc_cpp/blob/master/docs/sphinx/tutorials/diocotron_tutorial.py), function
-`uniform_vs_amr`).
+The public flow is identical to a uniform run:
+
+```python
+case = pops.Case(layout=layout, name="run")
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state=state)
+sim.run(t_final=1.0, cfl=0.4)
+```
+
+Switching from uniform to AMR changes only the layout descriptor and the AMR
+policies attached to it.
+
+```python
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import AMR
+from pops.mesh.amr import PatchLayout, Refine, RegridEvery
+
+mesh = CartesianMesh(n=128, L=1.0, periodic=True)
+layout = AMR(
+    mesh,
+    max_levels=2,
+    ratio=2,
+    regrid=RegridEvery(8),
+    patches=PatchLayout(coarse_max_grid=32),
+    refine=Refine.on("density").above(0.05),
+)
+```
+
+`pops.compile` derives the AMR runtime route from `layout=AMR(...)`. User
+documentation must not ask users to instantiate the AMR runtime directly.
 
 ```{toctree}
 :maxdepth: 1
@@ -30,3 +43,26 @@ reflux
 multi-block-amr
 current-limits
 ```
+
+## Compatibility rule
+
+If a feature is public on `Case`, it must have a complete AMR route unless its
+descriptor declares a precise mathematical incompatibility. Missing Python
+plumbing, missing codegen, or missing runtime binding is an implementation bug,
+not a documented limitation.
+
+AMR features must be validated before runtime:
+
+- layout level count and ratio;
+- refinement subjects;
+- field solver compatibility;
+- output/checkpoint policy compatibility;
+- solver/backend/platform capabilities;
+- halo and reconstruction requirements;
+- MPI/GPU support.
+
+## What AMR owns
+
+AMR owns hierarchy construction, patch layout, tagging, regrid cadence, proper
+nesting, prolongation/restriction, reflux, level-aware field/output policies,
+and the C++ runtime route. It does not own physics formulas.

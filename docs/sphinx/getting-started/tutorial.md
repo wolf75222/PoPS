@@ -1,357 +1,179 @@
-# A->Z Tutorial
+# A-to-Z tutorial
 
-This tutorial runs a complete diocotron simulation, from `git clone` to the figures, the GIF
-and the uniform/AMR comparison. All the code shown below comes from a single, reproducible
-script, [`diocotron_tutorial.py`](https://github.com/wolf75222/adc_cpp/blob/master/docs/sphinx/tutorials/diocotron_tutorial.py): the doc includes it
-via `literalinclude` (the code is never copied by hand). The script is self-contained; it depends
-only on `pops`, `numpy` and `matplotlib`, not on `adc_cases`, and runs as follows:
+This tutorial is the longer version of the first run. It keeps one rule: every
+user-visible operation goes through the typed assembly path.
+
+```text
+pops.physics.Model
+    -> pops.Case
+    -> pops.compile
+    -> pops.bind
+    -> sim.run
+```
+
+The older runtime methods are implementation seams and tests. They are not the
+documented tutorial path.
+
+## Build and import
+
+Use the repository scripts for the Python module:
 
 ```bash
-python docs/sphinx/tutorials/diocotron_tutorial.py            # --n 96 --steps 60
-python docs/sphinx/tutorials/diocotron_tutorial.py --quick    # fast smoke pass
+bash scripts/setup_env.sh
+bash scripts/build_python.sh
+python -c "import pops; pops.doctor()"
 ```
 
-:::{admonition} Physics: reduced model
-:class: note
-A single density `n`, advected by the E x B drift `v = (-d_y phi / B0, d_x phi / B0)` (with
-zero divergence), where `phi` solves the system Poisson `-lap phi = alpha (n - n_i0)`. This is the
-diocotron normalization benchmark, not a reproduction of the full Euler-Poisson
-system. See the [honest limitations](#honest-limitations) at the end of the page.
-:::
+For backend details, see [installation](installation.md) and
+[backend](backend.md).
 
-## Step 1: Clone the repository
+## Write the physics
 
-```bash
-git clone https://github.com/wolf75222/adc_cpp.git
-cd adc_cpp
+The physics facade describes formulas. It lowers to model/operator IR and then
+to C++. It does not run arrays in Python.
+
+```python
+from pops.physics import Model
+from pops.math import ddt, div, grad, laplacian
+from pops.solvers.elliptic import GeometricMG
+
+m = Model("diocotron")
+U = m.state("U", components=["ne"], roles={"ne": "density"})
+(ne,) = U
+
+phi = m.field("phi")
+m.solve_field(
+    "fields_from_state",
+    equation=(-laplacian(phi) == ne),
+    outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+    solver=GeometricMG(),
+)
+
+E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
+flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
+m.rate("explicit_rate", ddt(U) == -div(flux))
+m.check()
 ```
 
-## Step 2: Dependencies
+## Declare the mesh and field problem
 
-- C++20 compiler (AppleClang 16+, GCC 13+, Clang 17+); the core compiles as C++20.
-- CMake >= 3.21, Ninja, Python >= 3.10 with `numpy` (and `matplotlib` for the figures);
-  the simplest way is the repository conda env: `conda env create -f environment.yml && conda
-  activate pops`. pybind11 is taken from the env, otherwise fetched by CMake.
+```python
+import pops
+from pops.fields import PoissonProblem
+from pops.fields.bcs import Periodic
+from pops.fields.rhs import ChargeDensity
+from pops.math import laplacian
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.solvers.elliptic import GeometricMG
 
-Detail and options: [Installation](installation.md).
+mesh = CartesianMesh(n=96, L=1.0, periodic=True)
+layout = Uniform(mesh)
 
-## Step 3: Build the Python module
-
-The core is header-only; only the Python module `pops` is compiled (a few minutes). Two
-equivalent paths:
-
-```bash
-# User path: installs into site-packages, nothing to export afterwards.
-pip install .
-
-# Developer path: in-tree build (fast incremental re-build after a C++ edit).
-cmake --preset python && cmake --build --preset python
+poisson = PoissonProblem(
+    name="phi",
+    unknown="phi",
+    equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+    bcs=(Periodic(),),
+    solver=GeometricMG(),
+)
 ```
 
-The full build (core + tests, for contributing) is in [Installation](installation.md).
+## Build the time program
 
-## Step 4: Environment variables
+`pops.time` is the language. Ready schemes live in `pops.lib.time`.
 
-```bash
-export PYTHONPATH=$PWD/build-py/python   # developer path only (not needed after pip install)
-export POPS_INCLUDE=$PWD/include
-export POPS_KOKKOS_ROOT=$CONDA_PREFIX     # Kokkos install for the DSL aot/production backend (Serial is enough on CPU)
-export POPS_CACHE_DIR=$PWD/.pops_cache
+```python
+from pops.time import Program
+from pops.lib.time import ssprk3
+
+time = Program("advance")
+ssprk3(time, "ne")
 ```
 
-- `POPS_INCLUDE`: the DSL (backends `production` / `aot`) compiles its `.so` against the repository headers.
-- `POPS_KOKKOS_ROOT`: adc_cpp is **Kokkos-only**, so the headers the DSL `.so` includes require Kokkos;
-  point this at a Kokkos install (the conda env root `$CONDA_PREFIX`, or a custom prefix -- Serial
-  suffices on CPU). **Without it the model compile fails** with a clear error (`compile_aot/compile_native:
-  adc_cpp is Kokkos-only`) and the backend fallback chain (`production` then `aot`) cannot wire any
-  block. It is the same variable used for the multi-thread build in Step 16.
-- `POPS_CACHE_DIR`: caches the generated `.so` for reruns (optional; default
-  `~/.cache/pops/dsl`, already out of source).
-- `PYTHONPATH`: only for the developer path; the build drops the full package into
-  `build-py/python`, this single path is enough.
+For a manual scheme, use version handles:
 
-The extension is pinned to the interpreter that built it (`cpython-312`): import with the
-same python. On an import error, the message gives the cause and the rebuild
-command; `python -c "import pops; pops.doctor()"` checks the whole environment.
+```python
+from pops.numerics.terms import Flux
 
-## Step 5: Import and detect the backend
+T = Program("manual_step")
+U = T.state("U", block="ne")
 
-The script imports `pops` and the DSL, then prints the running backend (serial for a
-Python module; see [Check your backend](backend.md)).
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:lines: 50-53
+fields = T.solve_fields(U.n)
+R = T.rhs(state=U.n, fields=fields, terms=[Flux()])
+T.define(U.next, U.n + T.dt * R)
+T.commit("ne", U.next)
 ```
 
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: detect_backend_runtime
+`U.n`, `U.next`, `U.stage(k)`, and `U.prev` are IR handles. They are not runtime
+storage.
+
+## Assemble, compile, bind, run
+
+```python
+from pops.codegen import Production
+from pops.numerics.riemann import Rusanov
+from pops.numerics.reconstruction.limiters import Minmod
+
+case = (
+    pops.Case(layout=layout, name="diocotron")
+    .block("ne", physics=m, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()))
+    .field(poisson)
+    .time(time)
+)
+
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state={"ne": ne0})
+sim.run(t_final=0.1, cfl=0.4)
 ```
 
-## Step 6: The physical parameters of the model
+The generated code and runtime use the same C++ core as native runs:
+finite-volume kernels, field solves, reductions, Kokkos execution, MPI
+communication, and AMR infrastructure.
 
-Two constants drive the reduced model; they must stay consistent between the flux formulas
-and the right-hand side of the Poisson.
+## Switch to AMR
 
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:lines: 55-60
+AMR is a layout descriptor:
+
+```python
+from pops.mesh.amr import PatchLayout, Refine, RegridEvery
+from pops.mesh.layouts import AMR
+
+layout = AMR(
+    mesh,
+    max_levels=2,
+    ratio=2,
+    regrid=RegridEvery(8),
+    patches=PatchLayout(coarse_max_grid=32),
+    refine=Refine.on("density").above(0.05),
+)
 ```
 
-:::{admonition} Public path vs this script
-:class: note
-The documented PUBLIC front door is the typed compiled flow: author the physics with
-`pops.physics.Model`, declare the elliptic field with `pops.fields.PoissonProblem`, assemble a
-`pops.Case`, then `pops.compile(case, backend=Production())` -> `pops.bind(...)` -> `sim.run(...)`
-(see [first run](first-run.md)). This walkthrough script also uses the lower-level `System` runtime
-methods (`add_equation` / `set_poisson` / `step_cfl`, and the native `add_block` for the
-bricks-vs-DSL bit-identity comparison) so it can replay the exact same physics across both writing
-fronts. Those runtime methods stay for the native/AMR runtime and the tests.
-:::
+Use this `layout` in the same `Case`. The public flow does not change.
 
-## Step 7: Write the model as formulas (DSL) and compile it
+## Inspect
 
-We write the model symbolically with `pops.physics.facade.Model`: the conservative variable `n`, the
-auxiliary fields `phi` / `grad_x` / `grad_y` provided by the solver, the E x B advection flux, the
-eigenvalues, and the elliptic right-hand side `alpha (n - n_i0)`. `m.check()` verifies that every
-referenced variable is declared.
+Before running, inspect what will be compiled:
 
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: diocotron_model
+```python
+print(case)
+case.inspect()
+
+print(compiled)
+compiled.inspect()
+compiled.arguments()
 ```
 
-Then we compile the model into a `.so` and wire it in: the script first tries the
-`production` backend (native zero-copy path, preferred under MPI/AMR), then falls back to `aot`
-(numerically identical, marshaled host-side), as in the application cases. The default of
-`m.compile(...)` is the `auto` policy (ADC-63): it selects `production` as soon as `_pops`, the
-headers and the compiler match (toolchain parity), and falls back to `aot` otherwise -- `production`
-requires that `_pops` and the `.so` were compiled with the same pops headers (ABI guard). This is also
-where we choose the spatial scheme (finite volume,
-minmod limiter, Rusanov flux), the time (explicit) and the system Poisson.
+For memory and profiling:
 
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: compile_and_build
+```python
+mem = compiled.estimate_memory(grid=mesh)
+print(mem)
+
+with sim.profile(pops.Profile.Basic()) as prof:
+    sim.run(t_final=0.1, cfl=0.4)
+
+prof.summary().print()
 ```
 
-## Step 8: Build the System
-
-`pops.System(n=, L=, periodic=True)` creates the coupler; `add_equation` dispatches on the model
-type (a `CompiledModel` goes to the backend adder). All of this is wired in
-`compile_and_build` above.
-
-## Step 9: The initial condition
-
-A horizontal band of charge, perturbed sinusoidally along `x` (azimuthal mode 2):
-this is what carries the instability. Convention `ne[j, i]` (numpy `'xy'` indexing), contiguous array.
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: band_density
-```
-
-The density is set via `sim.set_density("ne", ne0)` (in `compile_and_build`), after fixing
-the neutralizing ionic background `n_i0 = ne0.mean()` (solvability of the periodic Poisson).
-
-## Step 10: Finite volume, time, Poisson
-
-These three choices are passed to `add_equation` / `set_poisson` (step 7):
-
-- spatial: `pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov())` (from
-  `pops.numerics.reconstruction.limiters` / `pops.numerics.riemann`), MUSCL minmod
-  reconstruction + Rusanov Riemann flux;
-- time: `pops.Explicit()`;
-- Poisson: `sim.set_poisson(rhs="charge_density", solver="geometric_mg")`, right-hand side =
-  charge density, geometric multigrid solver.
-
-## Step 11: Integrate in time
-
-We advance `steps` steps at fixed CFL (`sim.step_cfl(cfl)`), capturing frames, the time and
-the L2 amplitude of the perturbation over time.
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: run
-```
-
-## Step 12: Diagnostics
-
-The amplitude of the perturbation is the deviation from the mean along `x` (the unperturbed band
-is uniform in `x`; what deviates from it carries the instability). At the end of the run the script
-checks that the instability has grown and that mass is conserved (periodic advective transport).
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: perturbation_amplitude
-```
-
-## Step 13: The growth curve
-
-`make_figures` plots the amplitude (log scale) as a function of time, next to the final density.
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: make_figures
-```
-
-![Growth of the diocotron instability: L2 amplitude (log scale) vs time, and final density.](../tutorials/_assets/diocotron_growth.png)
-
-## Step 14: The GIF
-
-The same `make_figures` function assembles the density evolution into a GIF (and a PNG cover
-image for static exports).
-
-![Time evolution of the diocotron density (animation).](../tutorials/_assets/diocotron.gif)
-
-*Static cover image (the final density), shown where the GIF does not animate,
-PDF/print exports:*
-
-![Final density of the diocotron (PNG cover image).](../tutorials/_assets/diocotron_cover.png)
-
-## Step 14bis: The same physics, two fronts (bricks == DSL)
-
-The model was written here as formulas (`pops.physics.facade.Model`, Step 7). But the core can also
-compose a model from native bricks: `pops.Model(state, transport, source, elliptic)`.
-The two writing fronts are interchangeable: they are two ways of describing the same
-physics, and they produce an identical numerical kernel. We write it in bricks:
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: native_diocotron_model
-```
-
-then we replay the same grid / the same scheme / the same number of steps, and compare the final
-state of the two fronts:
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: native_vs_dsl
-```
-
-The difference is zero to binary precision (`max|bricks - DSL| = 0`, `np.array_equal`): the
-DSL formulas reproduce exactly the conventions of the `ExBVelocity` and `BackgroundDensity` bricks.
-A divergence (even $10^{-15}$) would betray a wrong formula (sign of the drift, wave bound,
-right-hand side). The full brick catalog is in the
-[brick reference](../reference/native-bricks.md), and the DSL one in the
-[DSL reference](../reference/symbolic-dsl.md); the `tutorial/` application case in `adc_cases`
-pushes the demonstration to three fronts (specialized helper included).
-
-![Final density: the same physics in native bricks (left) and in DSL formulas (right); maximum difference zero.](../tutorials/_assets/diocotron_native_vs_dsl.png)
-
-## Step 15: Uniform vs AMR
-
-We replay the same physics on a uniform grid (`pops.System`) and on a refined hierarchy
-(`pops.AmrSystem`), with exactly the same model composed in native bricks. `AmrSystem` refines
-where the density exceeds a threshold (`set_refinement(0.05)`); the regrid cadence is carried by
-`AmrSystemConfig.regrid_every`. The two final densities are plotted side by side, with the maximum
-difference in the title.
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: uniform_vs_amr
-```
-
-![Final density: uniform grid (left) vs refined AMR hierarchy (right).](../tutorials/_assets/diocotron_uniform_vs_amr.png)
-
-## Step 16: Kokkos OpenMP (CPU parallelism)
-
-There is no Python parameter of the form `threads=8`. `import pops` drives the simulation, but the
-per-cell computation inherits the backend with which `_pops` was compiled (see
-[Check your backend](backend.md)). The number of cores therefore depends on the build of `_pops` and the
-OpenMP variables at launch, not on a script flag; the distributed module runs in Kokkos Serial
-because the CI builds it that way (adc_cpp is Kokkos-only).
-
-For multi-threading, we rebuild the module with the Kokkos OpenMP backend, against a Kokkos installed
-with OpenMP (`Kokkos_ENABLE_OPENMP=ON` at the Kokkos build).
-
-**Conda path (recommended)** -- the env root is `$CONDA_PREFIX` (conda NEVER sets a
-`$KOKKOS_ROOT` variable) and the `python-parallel` preset is already wired to it; if the env's kokkos
-is Serial-only, `scripts/kokkos_openmp_conda.sh` first installs a Kokkos OpenMP (~2 min):
-
-```bash
-conda activate pops
-bash scripts/kokkos_openmp_conda.sh        # if needed: Kokkos OpenMP into $CONDA_PREFIX
-cmake --preset python-parallel && cmake --build --preset python-parallel
-```
-
-**Custom / cluster Kokkos path** (install outside conda, e.g. ROMEO/Spack): set
-`KOKKOS_ROOT=<prefix of the Kokkos install>` yourself, then:
-
-```bash
-cmake -S . -B build-py-kokkos -G Ninja \
-  -DPOPS_BUILD_PYTHON=ON \
-  -DPOPS_BUILD_TESTS=OFF \
-  -DPOPS_USE_KOKKOS=ON \
-  -DKokkos_ROOT="$KOKKOS_ROOT" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DPython_EXECUTABLE=$(which python3.12)
-cmake --build build-py-kokkos --target _pops -j$(sysctl -n hw.logicalcpu)
-```
-
-At launch, point `PYTHONPATH` at this build and set the number of threads
-(`pops.set_threads(8)` on the Python side is equivalent to exporting `OMP_NUM_THREADS`):
-
-```bash
-export PYTHONPATH=$PWD/build-py-kokkos/python
-export POPS_INCLUDE=$PWD/include
-export POPS_CACHE_DIR=$PWD/.pops_cache_kokkos
-export POPS_KOKKOS_ROOT="$CONDA_PREFIX"  # conda path; ($KOKKOS_ROOT for the custom/cluster path)
-
-OMP_NUM_THREADS=8 python docs/sphinx/tutorials/diocotron_tutorial.py
-```
-
-`POPS_KOKKOS_ROOT` is the key point for the DSL `backend="production"`: since the `_pops` module is
-compiled WITH Kokkos, a loader compiled without (ABI key `kokkos=0` vs `kokkos=1`) is REJECTED with an
-explicit message -- no more silent serial fallback. With it, the loader is compiled with the same Kokkos
-as `_pops`, so the `OMP_NUM_THREADS` cores are used (see
-[`dsl.py`](https://github.com/wolf75222/adc_cpp/blob/master/python/pops/dsl.py)).
-
-Common pitfall: running `OMP_NUM_THREADS=8 python ...` against an `_pops` compiled in serial changes
-almost nothing; you must first do the Kokkos build above. The C++ facade (outside Python) is validated
-separately against a Kokkos OpenMP (`-DKokkos_ROOT=<install OpenMP>`) then `ctest` (CI job ci-full).
-There is no longer a standalone OpenMP backend: Serial, OpenMP and Cuda are Kokkos execution
-spaces chosen at the Kokkos install.
-
-## Step 17: MPI (distributed parallelism)
-
-Likewise, the distributed mode is obtained at compile time, and launched via `mpirun`:
-
-```bash
-cmake --preset mpi && cmake --build --preset mpi     # OpenMPI from the conda env
-ctest --preset mpi                                   # replays np=1/2/4 via mpirun
-```
-
-`comm.hpp` then goes through `MPI_Comm_rank/size` + collectives. MPI and Kokkos combine (one GPU
-per rank) for the GPU. The GPU itself requires ROMEO: `-DPOPS_USE_KOKKOS=ON` +
-`Kokkos_ARCH_HOPPER90` + `nvcc_wrapper`, validated manually on GH200 (never in CI). See
-[Check your backend](backend.md) and [`GPU_ROMEO.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/GPU_ROMEO.md).
-
-(honest-limitations)=
-
-## Step 18: Honest limitations
-
-- **Reduced model.** This tutorial transports a density by the E x B drift coupled to a scalar
-  Poisson (`alpha (n - n_i0)`). This is not the full Euler-Poisson system (no
-  momentum equation, no energy), and it is not a reproduction of the Hoffart
-  configuration. It is the diocotron normalization benchmark. The fidelity to the
-  full system is discussed in [`HOFFART_FIDELITY.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/HOFFART_FIDELITY.md); the
-  full scenarios live in `adc_cases` (see [Repository organization](repository-layout.md)).
-- **Serial backend.** The Python run is serial (see steps 16-17 and [backend](backend.md)); the
-  figures are produced at low resolution to stay fast and reproducible.
-- **Indicative AMR comparison.** `uniform_vs_amr` illustrates the use of `AmrSystem`; the
-  uniform/AMR difference reported in the title measures consistency, not a convergence study.
-
-Each asset comes with a provenance record
-([`_assets/provenance.json`](../tutorials/_assets/provenance.json): `adc_cpp` SHA, backend,
-resolution, command) for reproducibility.
-
-## The full script
-
-For reference, the complete script, in its orchestration:
-
-```{literalinclude} ../tutorials/diocotron_tutorial.py
-:language: python
-:pyobject: main
-```
+Profiling is off unless requested.

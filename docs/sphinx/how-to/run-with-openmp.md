@@ -59,8 +59,6 @@ import pops
 
 pops.set_threads(8)          # or pops.set_threads() for all cores (os.cpu_count())
 print(pops.parallel_info())  # {'has_kokkos': True, 'omp_num_threads': '8', 'first_system_built': False}
-
-sim = pops.System(n=256)     # Kokkos initializes here and reads the thread count once
 ```
 
 Three rules:
@@ -68,8 +66,8 @@ Three rules:
 1. Use a module built against a Kokkos OpenMP execution space (`python-parallel` preset). The
    conda-forge Kokkos is often Serial-only; see [Kokkos OpenMP](../backends/kokkos-openmp.md) and
    the Installation [Threads](#threads) section.
-2. Call `set_threads` right after `import pops` and before the first `System` or `AmrSystem`. Kokkos
-   reads the thread count once at that first object, so a later call cannot change it.
+2. Call `set_threads` right after `import pops` and before the first bind/runtime object. Kokkos
+   reads the thread count once at that first runtime allocation, so a later call cannot change it.
 3. A Serial-only module or a late call only emits a `RuntimeWarning` and is ignored; it never
    raises. Confirm the state with `pops.has_kokkos()`, `pops.parallel_info()`, or `pops.doctor()`.
 

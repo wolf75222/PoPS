@@ -1,54 +1,64 @@
 # Multi-block AMR
 
-The documented public path (`pops.Case` -> `pops.compile` -> `pops.bind`) lowers a multi-block
-assembly on both a Uniform and an **AMR** layout: on AMR each block compiles to a
-`target='amr_system'` native loader and installs on the shared hierarchy through `pops.bind`
-(ADC-503); there is no whole-system time Program on AMR, so each block carries its own time policy.
-Several species on one shared AMR hierarchy can also be driven directly through the low-level native
-`AmrSystem` runtime shown below, which stays available for that case and the tests.
-
-`AmrSystem` is a multi-block runtime: you call the low-level `add_block` (native bricks) or
-`add_equation` (compiled DSL model) once per species, the refined counterpart of the same `System`
-methods. All the blocks share the hierarchy, the aux and the coarse Poisson (co-located summed
-right-hand side), but each keeps its own spatial scheme (limiter x flux x reconstruction), its
-temporal treatment (`explicit` or `imex`), and its multirate (`substeps` / `stride`). The runtime
-engine is `AmrRuntime` (type-erased registry by block name), refined counterpart of the multi-block
-single-level engine of `System`.
+A multi-block AMR case has several physics blocks on one shared hierarchy.
 
 ```python
-from pops.numerics.riemann import HLLC
-
-sim = pops.AmrSystem(n=96, L=1.0, periodic=True)
-
-electrons = pops.Model(state=pops.FluidState("compressible", gamma=1.4),
-                      transport=pops.CompressibleFlux(),
-                      source=pops.PotentialForce(charge=-1.0),
-                      elliptic=pops.ChargeDensity(charge=-1.0))
-ions = pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                 transport=pops.IsothermalFlux(),
-                 source=pops.PotentialForce(charge=+1.0),
-                 elliptic=pops.ChargeDensity(charge=+1.0))
-
-sim.add_block("electrons", model=electrons,
-              spatial=pops.Spatial(vanleer=True, flux=HLLC()), time=pops.IMEX(substeps=10))
-sim.add_block("ions", model=ions,
-              spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-sim.set_refinement(0.05)
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-sim.set_density("electrons", ne0)
-sim.set_density("ions", np.ones((96, 96)))
-
-sim.advance(0.001, 8)
-print("blocs :", sim.n_blocks(), "| masse e- :", sim.mass("electrons"))
+case = (
+    pops.Case(layout=layout, name="two_species")
+    .block("ions", physics=ions, spatial=ion_spatial)
+    .block("electrons", physics=electrons, spatial=electron_spatial)
+    .field(poisson)
+    .time(time)
+)
 ```
 
-Inter-species coupled sources (ionization, collisions) can be wired in via
-`add_coupled_source`: they are read cell by cell (same `(i, j)`, no interpolation
-between species, thanks to the shared hierarchy) and, built with exactly opposite
-contributions, conserve the pair mass to machine precision. The multi-block is validated by a
-battery of tests called "capstone": two blocks with different schemes (`test_amr_system_twoblock`),
-production multi-block DSL (`test_amr_multiblock_compiled`), IMEX (`test_amr_multiblock_imex`),
-coupled sources (`test_amr_multiblock_coupled_source`), substeps (`test_amr_multiblock_substeps`),
-union regrid (`test_amr_multiblock_regrid_union`) and MPI parity np=1/2/4
-(`test_mpi_amr_twoblock_parity`). Detail: [ARCHITECTURE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ARCHITECTURE.md) section 8 and
-the banner "STATUT : implemente" at the top of [AMR_MULTIBLOCK_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/AMR_MULTIBLOCK_DESIGN.md).
+The blocks share:
+
+- mesh hierarchy;
+- patch layout;
+- field solves;
+- halo/regrid orchestration;
+- output/checkpoint cadence.
+
+Each block keeps its own:
+
+- physics model;
+- spatial descriptor;
+- state array;
+- source and projection contracts;
+- field contribution.
+
+## Field coupling
+
+A field RHS such as charge density is assembled from the named contributing
+blocks:
+
+```python
+from pops.fields.rhs import ChargeDensity
+
+rhs = ChargeDensity.from_blocks("ions", "electrons")
+```
+
+The field problem is attached once to the case. The runtime assembles the
+coupled RHS from the block states.
+
+## Time programs
+
+A time program may reference multiple blocks through their handles:
+
+```python
+from pops.time import Program
+
+T = Program("coupled_step")
+ions = T.state("U_i", block="ions")
+electrons = T.state("U_e", block="electrons")
+```
+
+When the time program needs one coupled field solve from simultaneous stage
+states, use the multi-block field solve operator or handle supplied by the model
+layer. The field solve still lowers to C++.
+
+## AMR tags
+
+Tags from all blocks are combined into one hierarchy. The hierarchy is then used
+for every block, so reflux and averaging remain conservative per block.

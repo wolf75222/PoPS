@@ -1,72 +1,58 @@
-# Add a native brick
+# Add or use a native brick
 
-A native model is a composition of four role bricks, each already compiled in C++:
-`pops.Model(state=, transport=, source=, elliptic=)`. The `state` brick declares the
-conservative variables, the `transport` brick writes the physical flux and the eigenvalues,
-the `source` brick adds a pointwise source term, and the `elliptic` brick contributes to the
-right-hand side of the system Poisson. This recipe shows how to pick one brick per role and
-plug the resulting model into a simulation. If your equation has no native brick for a role,
-write that slot as a symbolic formula instead (see
-[Write a model with the DSL](../tutorials/write-a-model-with-dsl.md)).
+A native brick is a C++ implementation selected by a Python descriptor. It is
+not a Python solver loop. Use native bricks when the required state, flux,
+source, field RHS, reconstruction, or solver already exists in the compiled
+core.
 
-For the full registry of bricks, signatures, parameters and constraints, see the
-[native bricks reference](../reference/native-bricks.md).
+## Use existing bricks
 
-## Before you begin
+```python
+from pops.numerics.riemann import HLL
+from pops.numerics.reconstruction import MUSCL
+from pops.numerics.reconstruction.limiters import Minmod
 
-Build and import `pops`. For a first local run, use the Kokkos Serial backend (see
-[Installation](../getting-started/installation.md)). The bricks in this recipe run on the low-level
-native `add_block` runtime path (which preserves MPI, AMR and GPU); the documented public front
-door is the typed compiled flow (`pops.Case` -> `pops.compile` -> `pops.bind` -> `sim.run`, see
-[first run](../getting-started/first-run.md)).
+spatial = pops.FiniteVolume(
+    riemann=HLL(),
+    reconstruction=MUSCL(limiter=Minmod()),
+)
+```
 
-## Steps
+If a library model exists, import it from `pops.lib.models`. `pops.lib` is for
+ready-made models and presets; core authoring primitives live in `pops.physics`,
+`pops.numerics`, `pops.fields`, `pops.mesh`, `pops.time`, and `pops.solvers`.
 
-1. Choose the `state` brick. It fixes the number of variables and the compatible
-   transport. Use `pops.Scalar()` for one transported density, or
-   `pops.FluidState(kind="compressible", gamma=1.4)` for a four-variable Euler fluid.
+## Add a new C++ brick
 
-2. Choose the matching `transport` brick. `pops.Model(...)` enforces the pairing:
-   `pops.Scalar()` requires `pops.ExB(B0=1.0)`; `pops.FluidState(kind="compressible")`
-   requires `pops.CompressibleFlux()`. An inconsistent pairing raises a `ValueError`. Replace
-   `B0` with your background magnetic field.
+1. Implement the C++ brick under `include/pops/...`.
+2. Bind the native ID in the pybind layer.
+3. Add a Python descriptor in the owning package.
+4. Declare requirements, capabilities, options, and validation.
+5. Add tests that compile or bind the descriptor through a `pops.Case`.
 
-3. Choose the `source` brick. Use `pops.NoSource()` for no pointwise source, or
-   `pops.PotentialForce(charge=1.0)` to add the force `(q/m) rho E` on the momentum. Replace
-   `charge` with the charge-to-mass ratio `q/m`.
+The descriptor is the public API:
 
-4. Choose the `elliptic` brick. Use `pops.BackgroundDensity(alpha=1.0, n0=0.0)` for the
-   neutralizing background `f = alpha (n - n0)`, or `pops.ChargeDensity(charge=1.0)` for the
-   charge density `f = q n`.
+```python
+spatial = pops.FiniteVolume(
+    riemann=MyNativeRiemann(option=value),
+    reconstruction=MUSCL(limiter=Minmod()),
+)
+```
 
-5. Compose the model. `pops.Model(...)` returns a `ModelSpec`.
+Do not expose a public Python hook that computes fluxes per cell. If a debug
+prototype is useful, place it under `pops.experimental` and keep it out of the
+production docs.
 
-   ```python
-   model = pops.Model(
-       state=pops.Scalar(),
-       transport=pops.ExB(B0=1.0),
-       source=pops.NoSource(),
-       elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0),
-   )
-   ```
+## Verify the route
 
-6. Plug the model into a block, with a spatial scheme and a time integrator.
+```python
+compiled = pops.compile(case, backend=Production())
+compiled.inspect()
+compiled.dump_cpp()
 
-   ```python
-   from pops.numerics.riemann import Rusanov
-   from pops.numerics.reconstruction.limiters import Minmod
+sim = pops.bind(compiled, state=state)
+sim.run(t_final=0.1, cfl=0.4)
+```
 
-   sim.add_block("ne", model=model, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()), time=pops.Explicit())
-   ```
-
-The same `ModelSpec` plugs into `pops.AmrSystem` for adaptive refinement without changing the
-model.
-
-## What to do next
-
-- To declare a new flux that no native transport brick covers, write the brick as formulas in
-  [Write a model with the DSL](../tutorials/write-a-model-with-dsl.md).
-- To keep some native bricks and write only one slot as formulas, see
-  [Write a model with bricks](../tutorials/write-a-model-with-bricks.md).
-- For every brick parameter and constraint, see the
-  [native bricks reference](../reference/native-bricks.md).
+The test should cover uniform layout and, when the brick declares AMR support,
+`layout=AMR(...)`.

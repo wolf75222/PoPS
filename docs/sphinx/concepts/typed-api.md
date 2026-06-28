@@ -30,8 +30,8 @@ The dividing line is simple:
   reconstruction, the limiter, the mesh layout, the output format, the math mode. These are
   fixed choices the library offers; a typed object is the right type.
 
-So `RuntimeParam("nu", ...)` takes a string (the user named the parameter `nu`), but the
-Riemann solver is `HLL()`, not `riemann="hll"`.
+So `RuntimeParam("nu", ...)` takes a string because the user named the parameter `nu`, but the
+Riemann solver is `HLL()` rather than a text selector.
 
 ## No YAML disguised as Python
 

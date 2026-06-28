@@ -24,12 +24,13 @@ section 8, [AMR_MULTIBLOCK_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/
 ```python
 import numpy as np
 import pops
-import pops.time as T
 from pops.physics import Model
 from pops.math import laplacian, grad, div, ddt
 from pops.mesh.cartesian import CartesianMesh
 from pops.mesh.layouts import AMR
 from pops.mesh.amr import Refine, RegridEvery
+from pops.time import Program
+from pops.lib.time import ssprk2
 from pops.fields import PoissonProblem
 from pops.fields.bcs import Periodic
 from pops.fields.rhs import ChargeDensity
@@ -45,7 +46,7 @@ U = m.state("U", components=["ne"], roles={"ne": "density"})
 phi = m.field("phi")
 m.solve_field("fields_from_state", equation=(-laplacian(phi) == ne),
               outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-              solver="geometric_mg")
+              solver=GeometricMG())
 E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
 flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
 m.rate("explicit_rate", ddt(U) == -div(flux))
@@ -56,7 +57,10 @@ poisson = PoissonProblem(name="phi", unknown="phi",
                          bcs=(Periodic(),), solver=GeometricMG())
 
 layout = AMR(CartesianMesh(n=n, L=L, periodic=True), max_levels=2, ratio=2, regrid=RegridEvery(8))
-case = (pops.Case(layout=layout).block("ne", physics=m).field(poisson).time(T.Program("euler")))
+program = Program("ssprk2")
+ssprk2(program, "ne")
+
+case = (pops.Case(layout=layout).block("ne", physics=m.lower()).field(poisson).time(program))
 case.amr.refine(Refine.on("density").above(0.05))   # refine where the density exceeds the threshold
 
 compiled = pops.compile(case, backend=Production())

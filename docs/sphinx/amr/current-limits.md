@@ -1,34 +1,61 @@
-# Current limits
+# AMR compatibility contract
 
+This page replaces the old "current limits" framing. Public AMR behavior is a
+contract, not a backlog list.
 
-What the AMR does not do yet.
+## Public contract
 
-- **Two levels only.** The hierarchy is coarse + one fine level (ratio 2). The regrid only
-  rebuilds the finest level; beyond 2 levels, multi-level regrid does not exist
-  yet, even in single-block.
-- **Poisson "coarse + inject".** The Poisson is solved on the coarse then injected toward the
-  fine, it is not a multi-level composite elliptic solve. This is sufficient for
-  the diocotron observable (which lives on a median circle resolved by the coarse) but worth knowing.
-- **Global Schur source stage on AMR: single block only.** The Schur-condensed source splitting
-  (`pops.Split` / `pops.Strang` with `CondensedSchur`) is available on AMR via `AmrSystem.add_equation`,
-  assembled on the coarse level, when the hierarchy has a single block; it raises on a refined
-  multi-block one. `AmrSystem.add_block` rejects it (use `add_equation`).
-- **Multirate via the compiled path: restricted.** On the "production" DSL path (`.so`),
-  `add_equation` explicitly rejects `stride > 1` and the partial IMEX mask
-  (`implicit_vars` / `implicit_roles`): the flat ABI of the loader does not carry them, and they
-  would silently be taken at their default values. For a multirate or partial-IMEX-mask `.so`,
-  go through native `add_block` (`pops.Model(...)`), which exposes them.
-- **Elliptic solver.** On AMR, the solver is always the geometric multigrid
-  (`geometric_mg`); no FFT. The right-hand side is the sum of the elliptic bricks of the blocks.
-- **Validation: what is tested vs ROMEO only.** The multi-block AMR is covered by the
-  CPU tests (Serial / OpenMP) and the MPI parity np=1/2/4 in this repository. The GPU validation
-  (GH200) of the AMR paths is done manually on ROMEO (the path is device-clean by
-  construction, named functors); see [BACKEND_COVERAGE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/BACKEND_COVERAGE.md) for the
-  test / backend cross-reference line by line.
-- **Cut-cell / polar out of AMR scope.** The cut-cell walls and the polar geometry are
-  worksites of the `System` (single-level); they are not carried on the AMR hierarchy.
+The public assembly surface is `Case`. A case that is valid on a uniform layout
+should be valid on an AMR layout unless a descriptor declares a precise
+mathematical incompatibility.
 
-Design frontier (Phase 2 / Phase 3): per-block refinement criteria, multi-level composite
-elliptic solve, and (much further out) distinct hierarchies per species
-with conservative projections. Detail:
-[AMR_MULTIBLOCK_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/AMR_MULTIBLOCK_DESIGN.md) section 7.
+Examples of legitimate incompatibilities:
+
+- a spectral FFT field solver that requires one periodic uniform box;
+- a geometry descriptor that declares no AMR lowering;
+- an output format that explicitly supports only single-level fields.
+
+Examples that are not legitimate public limitations:
+
+- a missing Python binding;
+- a missing codegen branch;
+- an unimplemented install path;
+- an AMR runtime route that exists in C++ but is not reached from `pops.compile`
+  or `pops.bind`.
+
+Those must be implemented or the public API must not expose the feature.
+
+## Validation
+
+AMR descriptors must declare:
+
+- requirements;
+- capabilities;
+- options;
+- availability;
+- lowering metadata.
+
+The route should fail before runtime when a combination is invalid.
+
+```python
+layout = AMR(mesh, max_levels=2, ratio=2)
+layout.validate()
+
+case = pops.Case(layout=layout).block("plasma", physics=model)
+case.validate()
+```
+
+## Execution
+
+AMR execution is C++/Kokkos/MPI:
+
+- tag cells;
+- cluster patches;
+- exchange halos;
+- prolong and restrict;
+- reflux flux corrections;
+- solve fields;
+- run sources and time stages;
+- write output and checkpoints.
+
+Python must not run per-cell AMR logic.

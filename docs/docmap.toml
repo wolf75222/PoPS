@@ -50,15 +50,15 @@ mode = "strict"
 depends_on = ["python/pops/__init__.py", "include/pops/physics/bricks/bricks.hpp", "include/pops/runtime/system.hpp"]
 tested_by = []
 testable = false
-reviewed = "d284af1d8cf7217fd842f2bec93a8bea2552ef0b"
+reviewed = "56e5a169a79a4893ffd59823a8afdf53287dd876"
 
 [docs."docs/sphinx/getting-started/tutorial.md"]
 owner = "Romain"
 mode = "strict"
-depends_on = ["docs/sphinx/tutorials/diocotron_tutorial.py", "python/pops/ir", "include/pops/physics/bricks/hyperbolic.hpp", "include/pops/physics/bricks/elliptic.hpp", "include/pops/runtime/builders/compiled/dsl_block.hpp"]
-tested_by = ["docs/sphinx/tutorials/diocotron_tutorial.py"]
-testable = true
-reviewed = "8dab4cfeee1fb554f51fdf0052d79147e376a433"
+depends_on = ["python/pops/case.py", "python/pops/time", "python/pops/fields", "python/pops/mesh", "python/pops/codegen/orchestration.py"]
+tested_by = []
+testable = false
+reviewed = "56e5a169a79a4893ffd59823a8afdf53287dd876"
 
 [docs."docs/sphinx/getting-started/backend.md"]
 owner = "Romain"
@@ -181,6 +181,16 @@ depends_on = ["python/pops", "python/bindings/core/bindings.cpp", "python/bindin
 tested_by = []
 testable = false
 reviewed = "af6add18a94899437251a1769d4fd3a2aa122349"
+
+[docs."docs/sphinx/reference/public-api-contract.md"]
+owner = "Romain"
+mode = "warning"
+depends_on = ["python/pops/case.py", "python/pops/codegen/orchestration.py", "python/pops/time",
+              "python/pops/mesh", "python/pops/fields", "python/pops/solvers",
+              "python/pops/descriptors.py"]
+tested_by = []
+testable = false
+reviewed = "56e5a169a79a4893ffd59823a8afdf53287dd876"
 
 [docs."docs/sphinx/reference/backend-matrix.md"]
 owner = "Romain"

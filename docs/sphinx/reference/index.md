@@ -19,6 +19,7 @@ are on the application side (repository `adc_cases`).
 :maxdepth: 1
 
 python-api
+public-api-contract
 native-bricks
 symbolic-dsl
 time-program
