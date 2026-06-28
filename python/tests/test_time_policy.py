@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Test du nommage des politiques temporelles : SourceImplicit, IMEX, deprecation de Implicit.
+"""Test du nommage des politiques temporelles : SourceImplicit, IMEX, suppression de Implicit.
 
 Verifie :
-  1. pops.SourceImplicit produit les memes numeriques (bit-identiques) que pops.IMEX et
-     que l'ancien pops.Implicit -- les trois empruntes le meme chemin C++ (kind="imex",
-     ImplicitSourceStepper / backward_euler_source).
-  2. pops.Implicit leve bien un DeprecationWarning (avec le message attendu) et reste
-     fonctionnel (pas de regression comportementale).
+  1. pops.SourceImplicit produit les memes numeriques (bit-identiques) que pops.IMEX -- les
+     deux empruntent le meme chemin C++ (kind="imex", ImplicitSourceStepper /
+     backward_euler_source).
+  2. pops.Implicit (l'ancien shim deprecie) est SUPPRIME : pops.Implicit leve AttributeError
+     et le nom n'est plus dans pops.__all__ (une seule API Spec-5/6, sans retrocompat).
   3. pops.Explicit / pops.IMEX sont INCHANGES (bit-identiques par rapport aux tests existants).
   4. pops.SourceImplicit est exportee dans pops.__all__.
 """
@@ -71,26 +71,20 @@ try:
 except ValueError:
     chk(True, "SourceImplicit(stride=0) leve ValueError")
 
-# ---- 3. Numeriques bit-identiques : SourceImplicit == IMEX == Implicit ----------
-# On avance le meme etat initial avec les trois politiques sur un seul bloc
-# (diocotron ExB, domaine non periodique, Poisson Dirichlet) et on verifie que le
-# resultat final est bit-identique -- ce qui confirme que les trois empruntent le
-# meme chemin C++ (ImplicitSourceStepper, backward_euler_source).
-print("== 3. Numeriques bit-identiques : SourceImplicit == IMEX == Implicit ==")
+# ---- 3. Numeriques bit-identiques : SourceImplicit == IMEX ----------------------
+# On avance le meme etat initial avec les deux politiques sur un seul bloc
+# (Euler compressible IMEX, domaine non periodique, Poisson Dirichlet) et on verifie
+# que le resultat final est bit-identique -- ce qui confirme que les deux empruntent
+# le meme chemin C++ (ImplicitSourceStepper, backward_euler_source).
+print("== 3. Numeriques bit-identiques : SourceImplicit == IMEX ==")
 n = 32
 dt = 0.001
 xs = meshx(n)
-rho0 = 1.0 + 0.04 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, 1))
 
 policies = {
     "SourceImplicit": pops.SourceImplicit(substeps=2),
     "IMEX": pops.IMEX(substeps=2),
 }
-
-# Implicit : on le capturera en supprimant le warning (retrocompatibilite)
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-    policies["Implicit(dt_ratio=2)"] = pops.Implicit(dt_ratio=2)
 
 # Electron model (Euler compressible IMEX) pour exercer le chemin backward_euler_source
 # (la source PotentialForce est raide ; le chemin imex est plus significatif qu'ExB/NoSource).
@@ -111,35 +105,16 @@ for label, arr in results.items():
     chk(diff == 0.0,
         "%s vs IMEX : bit-identiques (diff=%g)" % (label, diff))
 
-# ---- 4. pops.Implicit leve un DeprecationWarning --------------------------------
-print("== 4. pops.Implicit emet un DeprecationWarning ==")
-
-with warnings.catch_warnings(record=True) as w:
-    warnings.simplefilter("always")
-    result = pops.Implicit()
-    dep_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
-    chk(len(dep_warnings) >= 1,
-        "pops.Implicit() leve au moins un DeprecationWarning")
-    if dep_warnings:
-        msg = str(dep_warnings[0].message)
-        chk("SourceImplicit" in msg or "IMEX" in msg,
-            "DeprecationWarning mentionne SourceImplicit ou IMEX")
-        chk("Implicit" in msg,
-            "DeprecationWarning mentionne Implicit (nom obsolete)")
-
-# Retrocompatibilite : Implicit() retourne un objet fonctionnel (kind="imex")
-chk(result.kind == "imex",
-    "pops.Implicit() retourne un objet fonctionnel (kind='imex') apres le warning")
-
-# Arguments historiques : dt_ratio, substeps, stride
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-    chk(pops.Implicit(dt_ratio=4).substeps == 4,
-        "pops.Implicit(dt_ratio=4) -> substeps=4 (retrocompatibilite)")
-    chk(pops.Implicit(substeps=3).substeps == 3,
-        "pops.Implicit(substeps=3) -> substeps=3 (retrocompatibilite)")
-    chk(pops.Implicit(stride=2).stride == 2,
-        "pops.Implicit(stride=2) -> stride=2 (retrocompatibilite)")
+# ---- 4. pops.Implicit (ancien shim deprecie) est SUPPRIME ------------------------
+# Une seule API Spec-5/6 : le shim retrocompatible est retire. pops.Implicit ne resout
+# plus du tout (AttributeError) et le nom a disparu de pops.__all__.
+print("== 4. pops.Implicit (ancien shim) est supprime ==")
+chk("Implicit" not in pops.__all__, "Implicit absent de pops.__all__")
+try:
+    pops.Implicit  # noqa: B018  -- on attend une AttributeError
+    chk(False, "pops.Implicit doit lever AttributeError (shim supprime)")
+except AttributeError:
+    chk(True, "pops.Implicit leve AttributeError (shim supprime)")
 
 # ---- 5. pops.Explicit et pops.IMEX : comportement INCHANGE -----------------------
 # On verifie juste que les attributs et le kind sont les bons (les tests numeriques
@@ -155,8 +130,7 @@ imex = pops.IMEX()
 chk(imex.kind == "imex", "IMEX().kind == 'imex' (inchange)")
 chk(imex.substeps == 1, "IMEX().substeps == 1 (defaut inchange)")
 
-# pops.Implicit PAS dans un bloc pops.IMEX / pops.Explicit : on s'assure que les deux
-# n'emettent PAS de DeprecationWarning.
+# pops.Explicit / pops.IMEX n'emettent PAS de DeprecationWarning.
 with warnings.catch_warnings(record=True) as w2:
     warnings.simplefilter("always")
     pops.Explicit(substeps=2)

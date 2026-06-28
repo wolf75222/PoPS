@@ -5,16 +5,23 @@ side) ; a MODEL is a composition of bricks, named on the application side. Pytho
 composes the bricks (objects), the cell-by-cell computation stays in compiled C++ (no
 numpy, GPU/MPI preserved).
 
+The front door is the typed assembly + compile/bind/run flow: author an inert
+``pops.Case`` (a mesh layout, physics blocks, elliptic fields, a time scheme), compile
+it to a handle, then bind a runnable simulation::
+
     import pops
-    sim = pops.System(n=192, periodic=False)
-    sim.add_block(
-        "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
-    sim.set_density("ne", ne_numpy)
-    sim.step_cfl(0.4)
+    from pops.codegen import Production
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+    from pops.fields import PoissonProblem
+
+    case = (pops.Case(layout=Uniform(CartesianMesh(n=96, periodic=False)), name="plasma")
+            .block("ne", physics=model)
+            .field(PoissonProblem(unknown="phi", equation=eq, solver=mg))
+            .time(time_program))
+    compiled = pops.compile(case, backend=Production())
+    sim = pops.bind(compiled, state={"ne": ne0}, params=None, aux=None, solvers=None)
+    sim.run(0.1, cfl=0.4)
 
 The scenario names (diocotron, electron_euler...) are compositions on the
 application side (see adc_cases). No scenario name here.
@@ -41,7 +48,7 @@ from pops.runtime.bricks import (  # noqa: F401
     EllipticSolver,
     Ionization, Collision, ThermalExchange,
     Spatial, FiniteVolume, Explicit, _role_to_stable, _norm_implicit,
-    IMEX, SourceImplicit, SourceImplicitBE, IMEXRK, Implicit, Role,
+    IMEX, SourceImplicit, SourceImplicitBE, IMEXRK, Role,
     CondensedSchur, ElectrostaticLorentzSchur, Split, Strang,
     Dirichlet, Neumann, Periodic,
 )
@@ -53,7 +60,7 @@ __all__ = [
     "NoSource", "PotentialForce", "GravityForce", "MagneticLorentzForce", "PotentialMagneticForce",
     "ChargeDensity", "BackgroundDensity", "GravityCoupling",
     "Spatial", "FiniteVolume", "Explicit", "IMEX", "IMEXRK", "SourceImplicit", "SourceImplicitBE",
-    "Implicit", "Split", "Strang", "CondensedSchur", "ElectrostaticLorentzSchur", "Role", "integrate",
+    "Split", "Strang", "CondensedSchur", "ElectrostaticLorentzSchur", "Role", "integrate",
     "Dirichlet", "Neumann", "Periodic",
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
