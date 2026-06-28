@@ -10,21 +10,30 @@ from pops.codegen.program_emit_kernels import (
     _aux_comp,  # noqa: F401
     _cell_locals,
     _coeff_cpp,
+    _has_runtime_param,
     _kernel_close,
     _kernel_open,
     _model_impl,
 )
 
 
-def _emit_source_kernel(model, name, state_var, out_var):
-    """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux) per cell."""
+def _emit_source_kernel(model, name, state_var, out_var, block_idx=0):
+    """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux, params) per cell.
+
+    @p block_idx (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads when a source
+    expression references a runtime parameter (dsl.Param(..., kind="runtime")). The model's runtime
+    indices are assigned here (idempotent, sorted-name order matching the .so metadata + the per-block
+    ``ctx.program_params`` store), so a RuntimeParamRef lowers to ``params.get(<index>)`` and _kernel_open
+    binds the ``params`` struct; a source reading no runtime param is byte-identical (params_block None)."""
     impl = _model_impl(model)
     if name not in impl._source_terms:
         raise NotImplementedError(
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
     exprs = impl._source_terms[name]
-    body = _kernel_open(out_var, state_var)
+    impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    params_block = block_idx if _has_runtime_param(exprs) else None
+    body = _kernel_open(out_var, state_var, params_block)
     body += ["    " + ln for ln in _cell_locals(impl, exprs, state_var, with_cons=True,
                                                  with_prim=True)]
     body += ["    outA(i, j, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
@@ -98,11 +107,12 @@ def _emit_coupled_rate_kernel(components, by_block, var, scratch):
     return lines
 
 
-def _emit_flux_kernel(model, names, state_var, fx_var, fy_var):
-    """Lower NAMED fluxes (ADC-419): fxA(i,j,c) = sum_k F^k_x[c](U, prims, aux),
-    fyA(i,j,c) = sum_k F^k_y[c](U, prims, aux) over the selected named fluxes @p names. ONE kernel
-    evaluates the SUM per direction into the two n_cons flux fields (the subsequent neg_div_flux_into
-    takes -div). Reuses the same per-cell local machinery as the source kernel (cons/prim/aux locals)."""
+def _emit_flux_kernel(model, names, state_var, fx_var, fy_var, block_idx=0):
+    """Lower NAMED fluxes (ADC-419): fxA(i,j,c) = sum_k F^k_x[c](U, prims, aux, params),
+    fyA(i,j,c) = sum_k F^k_y[c](U, prims, aux, params) over the selected named fluxes @p names. ONE
+    kernel evaluates the SUM per direction into the two n_cons flux fields (the subsequent
+    neg_div_flux_into takes -div). Reuses the same per-cell local machinery as the source kernel
+    (cons/prim/aux locals, + the runtime-param read of ADC-510 when a flux references one)."""
     impl = _model_impl(model)
     flux_terms = impl._flux_terms
     for name in names:
@@ -116,7 +126,9 @@ def _emit_flux_kernel(model, names, state_var, fx_var, fy_var):
     for name in names[1:]:  # accumulate the additional named fluxes (their SUM is one -div)
         x_exprs = [x_exprs[c] + flux_terms[name]["x"][c] for c in range(n)]
         y_exprs = [y_exprs[c] + flux_terms[name]["y"][c] for c in range(n)]
-    body = _kernel_open(fx_var, state_var)
+    impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    params_block = block_idx if _has_runtime_param(x_exprs + y_exprs) else None
+    body = _kernel_open(fx_var, state_var, params_block)
     # fx and fy share the (ba, dm) of the scratch state, so the SAME loop / handles write both: bind a
     # second write handle to fy's local fab right after _kernel_open's outA (= fxA), still INSIDE the
     # per-fab loop and BEFORE for_each_cell so the device lambda captures it.
@@ -129,14 +141,18 @@ def _emit_flux_kernel(model, names, state_var, fx_var, fy_var):
     return body
 
 
-def _emit_apply_kernel(model, name, state_var, out_var):
-    """Lower ``apply`` (a named ``m.linear_source`` L): outA(i,j,r) = sum_c L[r][c](aux) * U(i,j,c)."""
+def _emit_apply_kernel(model, name, state_var, out_var, block_idx=0):
+    """Lower ``apply`` (a named ``m.linear_source`` L): outA(i,j,r) = sum_c L[r][c](aux, params) *
+    U(i,j,c). @p block_idx (ADC-510): the PROGRAM block whose RuntimeParams the L coefficients read
+    when one references a runtime parameter (L may depend on aux / const / params, never on U)."""
     impl = _model_impl(model)
     rows = _linear_source_rows(impl, name)
     n = len(rows)
     flat = [e for row in rows for e in row]
-    body = _kernel_open(out_var, state_var)
-    # L coefficients depend on aux / const only (linear_source invariant): cons/prim locals not needed.
+    impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    params_block = block_idx if _has_runtime_param(flat) else None
+    body = _kernel_open(out_var, state_var, params_block)
+    # L coefficients depend on aux / const / params only (linear_source invariant): cons/prim locals not needed.
     body += ["    " + ln for ln in _cell_locals(impl, flat, state_var, with_cons=False,
                                                  with_prim=False)]
     for r in range(n):
@@ -146,16 +162,19 @@ def _emit_apply_kernel(model, name, state_var, out_var):
     return body
 
 
-def _emit_solve_local_linear_kernel(model, name, a_coeff, rhs_var, out_var):
+def _emit_solve_local_linear_kernel(model, name, a_coeff, rhs_var, out_var, block_idx=0):
     """Lower ``solve_local_linear``: per cell M = I - a*L (a = a_coeff(dt)), invert M (dense N x N
     via pops::detail::mat_inverse) and set outA(i,j,r) = sum_c Minv[r][c] * q(i,j,c), q = the rhs state.
-    L's coefficients depend on aux / const only, so M is assembled from the aux locals + the literal a."""
+    L's coefficients depend on aux / const / params only, so M is assembled from the aux / param locals +
+    the literal a. @p block_idx (ADC-510): the PROGRAM block whose RuntimeParams an L coefficient reads."""
     impl = _model_impl(model)
     rows = _linear_source_rows(impl, name)
     n = len(rows)
     flat = [e for row in rows for e in row]
     a_cpp = _coeff_cpp(a_coeff)
-    body = _kernel_open(out_var, rhs_var)
+    impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    params_block = block_idx if _has_runtime_param(flat) else None
+    body = _kernel_open(out_var, rhs_var, params_block)
     body += ["    " + ln for ln in _cell_locals(impl, flat, rhs_var, with_cons=False,
                                                  with_prim=False)]
     body.append("    const pops::Real a_ = %s;" % a_cpp)
@@ -252,7 +271,7 @@ def _emit_residual_eval(impl, v, n):
     return lines
 
 
-def _emit_solve_local_nonlinear_kernel(model, v, guess_var, out_var):
+def _emit_solve_local_nonlinear_kernel(model, v, guess_var, out_var, block_idx=0):
     """Lower ``solve_local_nonlinear`` (spec op 10) to a per-cell Newton kernel: from the initial guess
     U0 (the @p guess_var state), iterate ``J dU = -r``, ``U -= dU`` until ``max_c |r_c| < tol`` or the
     fixed budget, then write the converged U into @p out_var. Reuses ``pops::for_each_cell`` + the SAME
@@ -273,7 +292,9 @@ def _emit_solve_local_nonlinear_kernel(model, v, guess_var, out_var):
     for w in v.attrs["residual_block"]:
         if w.op in ("source", "apply"):
             term_exprs += _residual_term_exprs(impl, w)
-    body = _kernel_open(out_var, guess_var)
+    impl.assign_runtime_indices()  # stable params.get(idx) indices BEFORE any to_cpp() (no-op if none)
+    params_block = block_idx if _has_runtime_param(term_exprs) else None
+    body = _kernel_open(out_var, guess_var, params_block)
     # Per-cell aux + the live primitives are NOT pre-bound here: the prims depend on the ITERATE (they
     # are recomputed inside the residual lambda from Ueval). Only the aux locals are cell constants.
     body += ["    " + ln for ln in _cell_locals(impl, term_exprs, guess_var, with_cons=False,

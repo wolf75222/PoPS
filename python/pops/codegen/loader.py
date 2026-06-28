@@ -121,6 +121,14 @@ class CompiledProblem:
         ``None`` for a handle built outside ``compile_problem``."""
         return self._codegen_env
 
+    def runtime_param_routes(self):
+        """``(per_block, defaults)`` routing the Program's RUNTIME parameters to the per-PROGRAM-block
+        ``set_program_params`` vectors (ADC-510): per_block maps a program block index to its param names
+        in within-block index order (matching the ``.so`` metadata + the lowered read), defaults a name to
+        its declaration value. Built via the SAME ``program_param_entries`` the codegen emits. No bind."""
+        from pops.codegen.program_emit_params import program_param_routes
+        return program_param_routes(self.program, self.model)
+
     # --- operator introspection (Spec 2, S2-5): metadata read from the carried model,
     # no need to load or run the .so.
     def _intro_model(self):

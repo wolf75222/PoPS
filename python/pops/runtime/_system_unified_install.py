@@ -9,6 +9,7 @@ other mixins' methods) and ``self._s``.
 """
 
 from pops._bootstrap import ModelSpec
+from pops.runtime._install_param_routing import route_program_params
 from pops.runtime.bricks import Spatial
 
 
@@ -200,17 +201,30 @@ class _SystemUnifiedInstall:
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) PARAMS: route each runtime param to the instance whose RESOLVED (compiled) model declares
-        # it -- the raw dsl.Model has no runtime_param_names, so we read the resolved CompiledModel.
+        # (4) PARAMS (AOT-block path, P7-b): route each runtime param to the instance whose RESOLVED
+        # CompiledModel declares it (set_block_params), so a block's compiled residual (ctx.rhs_into) sees
+        # the runtime value. Native mode rejects an unknown name; the compiled-program path defers (an
+        # unconsumed name may be a Program-lowered param routed in 5b) and subtracts the consumed ones.
+        program_params_left = dict(params)
         if params:
-            self._install_params(resolved_models, params)
+            consumed = self._install_params(resolved_models, params,
+                                            reject_unknown=(compiled is None))
+            for name in consumed:
+                program_params_left.pop(name, None)
 
         # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
-        # NATIVE mode (compiled=None) there is no Program -- the blocks added in step 2 are driven by
-        # the native per-block advance loop, so this step is skipped.
+        # NATIVE mode (compiled=None) there is no Program -- the step-2 blocks drive the native loop.
         if so_path is not None:
             self.install_program(so_path)
+            # (5b) COMPILED-PROGRAM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params (the
+            # ones no AOT instance consumed in 4) to the per-PROGRAM-block set_program_params, AFTER
+            # install_program seeded each block's declaration defaults. A runtime param read by the
+            # Program's own source / linear-source kernels reaches them via the System-owned per-block
+            # RuntimeParams (no recompile). A name declared by neither an AOT instance nor a Program
+            # kernel raises here (no silent drop).
+            if program_params_left:
+                self._install_program_params(compiled, program_params_left)
 
         # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
         # its macro-step cadence is GLOBAL (not per-block). Apply it AFTER install_program (the cadence
@@ -449,14 +463,38 @@ class _SystemUnifiedInstall:
         unknown = sorted(set(params) - consumed)
         return per_block, unknown
 
-    def _install_params(self, resolved_models, params):
+    def _install_params(self, resolved_models, params, reject_unknown=True):
         """Route flat {param_name: value} to set_block_params per instance: build each instance's
-        sorted runtime-param vector (declaration defaults for unspecified names) and push it. A param
-        name declared by no instance raises (no silent drop). @p resolved_models maps each instance
-        name to its RESOLVED CompiledModel (the raw dsl.Model has no runtime_param_names accessor)."""
+        sorted runtime-param vector (declaration defaults for unspecified names) and push it. @p
+        resolved_models maps each instance name to its RESOLVED CompiledModel. @p reject_unknown (native
+        mode): raise on a name declared by no instance (no silent drop); the COMPILED-PROGRAM path passes
+        False (an unconsumed name may be a Program-lowered param routed in 5b). Returns the CONSUMED names
+        so the caller can subtract them from the program-param remainder."""
         per_block, unknown = self._route_block_params(resolved_models, params)
         for name, values in per_block.items():
             self._s.set_block_params(name, values)
-        if unknown:
+        if unknown and reject_unknown:
             raise ValueError("install: params %s declared by no instance's runtime parameters"
                              % (unknown,))
+        return set(params) - set(unknown)  # the names an AOT instance consumed
+
+    # Host-testable pure core (ADC-510 program-param routing, mirror of _route_block_params): callable
+    # as System._route_program_params without building a System.
+    _route_program_params = staticmethod(route_program_params)
+
+    def _install_program_params(self, compiled, params):
+        """Route flat {param_name: value} to set_program_params per PROGRAM block (ADC-510): read the
+        compiled handle's declared routing (runtime_param_routes), build each block's COMPLETE value
+        vector (declaration defaults for unspecified names) and push it to the System-owned per-block
+        RuntimeParams the Program kernels read. A name declared by no Program kernel (incl. a const-only /
+        param-free Program carrying no routing) raises (no silent drop)."""
+        routes_fn = getattr(compiled, "runtime_param_routes", None)
+        routes, defaults = routes_fn() if callable(routes_fn) else ({}, {})
+        per_block, unknown = self._route_program_params(routes, defaults, params)
+        for blk, values in per_block.items():
+            self._s.set_program_params(blk, values)
+        if unknown:
+            raise ValueError(
+                "install: params %s declared by no runtime parameter of the compiled Program "
+                "(a runtime param must be read by the Program's source / linear-source kernels and "
+                "declared dsl.Param(..., kind='runtime'))" % (unknown,))
