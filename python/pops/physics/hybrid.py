@@ -238,6 +238,11 @@ class HybridModel:
         from pops.codegen.cache import (_cache_so_path, _record_so_backend,
                                         _backend_distinct_so_path, _dsl_optflags)
         from pops.codegen.abi import _abi_key_python
+        from pops.codegen.backends import lower_backend
+        # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
+        # well as the legacy string; lower it before the backend guard so both selectors behave the
+        # same. A plain string / None passes through unchanged (transparent coercion).
+        backend = lower_backend(backend)
         if backend not in ("prototype", "aot", "production"):
             raise ValueError("HybridModel.compile: backend 'prototype' | 'aot' | 'production' (got %r)"
                              % (backend,))

@@ -131,6 +131,7 @@ formulas; it reproduces exactly the native bricks `ExBVelocity` (transport) and
 
 ```python
 import pops
+from pops.codegen import Production
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction.limiters import Minmod
 
@@ -157,7 +158,7 @@ def diocotron_model(n_i0):
     m.check()                            # toute variable referencee doit etre declaree
     return m
 
-compiled = diocotron_model(n_i0).compile(backend="production")   # -> CompiledModel
+compiled = diocotron_model(n_i0).compile(backend=Production())   # -> CompiledModel
 
 sim = pops.System(n=96, L=1.0, periodic=True)
 sim.add_equation("ne", model=compiled,
@@ -193,6 +194,7 @@ Example, isothermal DSL transport + native source + native elliptic (excerpt fro
 
 ```python
 import pops
+from pops.codegen import AOT
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction.limiters import Minmod
 
@@ -217,7 +219,7 @@ m = pops.CompositeModel(
     source=pops.PotentialForce(charge=QOM),         # source native
     elliptic=pops.ChargeDensity(charge=Q),          # elliptique native
 )
-compiled = m.compile(backend="aot")                # -> CompiledModel (adder add_compiled_block)
+compiled = m.compile(backend=AOT())                # -> CompiledModel (adder add_compiled_block)
 
 sim = pops.System(n=48, L=1.0, periodic=True)
 sim.add_equation("gas", compiled,
@@ -282,8 +284,11 @@ factual `ValueError` otherwise. For the physical meaning and the discretization 
 `CompiledModel` (which carries `so_path`, `backend`, the `adder` to use, the names/roles/gamma/n_aux,
 the `abi_key` and the `model_hash`). The `.so` is cached by `model_hash`: an unchanged model
 is not recompiled. The default is `backend="auto"`, which auto-selects `production` under
-toolchain parity with the installed `_pops`, otherwise falls back to `aot`. The explicit values
-`prototype | aot | production` are still available and short-circuit this policy.
+toolchain parity with the installed `_pops`, otherwise falls back to `aot`. Pass an explicit
+backend as a typed descriptor -- `pops.codegen.Production()`, `pops.codegen.AOT()`,
+`pops.codegen.JIT()` -- which is the recommended form; each lowers to its canonical token
+(`production` / `aot` / `prototype`) and short-circuits the `auto` policy. The legacy strings
+`"production" | "aot" | "prototype"` are still accepted unchanged (the coercion is additive).
 
 Three backends, materialized on the code side in `_BACKEND_CAPS` (`python/pops/dsl.py`):
 
@@ -295,7 +300,7 @@ Three backends, materialized on the code side in `_BACKEND_CAPS` (`python/pops/d
 
 `_BACKEND_CAPS["production"]` declares `{cpu, mpi, amr} = True`. The native `production` path shares
 the engine of `add_block` (`fill_boundary` halos, hence MPI-capable by construction) and has an AMR
-counterpart (`m.compile(backend="production", target="amr_system")` -> `AmrSystem.add_native_block`). `gpu`
+counterpart (`m.compile(backend=Production(), target="amr_system")` -> `AmrSystem.add_native_block`). `gpu`
 is reported `False` out of caution: the native path is device-clean in C++ (validated on GH200), but the
 end-to-end validation from Python on a module built with Kokkos/CUDA remains a dedicated step; the
 host module tested in CI is not built for GPU.
@@ -306,7 +311,7 @@ the host module being device-capable). The safeguards raise a `ValueError` as ea
 
 - unknown backend (other than `prototype`/`aot`/`production`);
 - `target="amr_system"` with a backend other than `production` (no AMR `.so` path outside native);
-- `compile(backend="prototype", require_metadata=True)` (the JIT does not carry the useful
+- `compile(backend=JIT(), require_metadata=True)` (the JIT does not carry the useful
   metadata);
 - on the plugging side: `riemann` HLLC/Roe without a declared pressure `p`, `names=` on the native
   `production` path (the names come from the `.so` metadata).

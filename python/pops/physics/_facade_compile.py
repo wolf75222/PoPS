@@ -54,6 +54,11 @@ class _FacadeCompileMixin:
         from pops.codegen.abi import _abi_key_python
         from pops.codegen.compile import _BACKEND_CAPS
         from pops.codegen.loader import CompiledModel
+        from pops.codegen.backends import lower_backend
+        # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
+        # well as the legacy string; lower it BEFORE the 'auto'/_BACKENDS checks so both selectors
+        # behave identically. A plain string / None passes through unchanged (transparent coercion).
+        backend = lower_backend(backend)
         # 'auto' DEFAULT (ADC-63): production if toolchain parity is established, aot otherwise. The reason
         # is recorded on the CompiledModel (backend_auto_reason) -- never a silent choice.
         auto_reason = None
