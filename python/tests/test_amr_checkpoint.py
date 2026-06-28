@@ -1,30 +1,34 @@
 #!/usr/bin/env python3
-"""Checkpoint / restart AMR BIT-IDENTIQUE, MONO-BLOC MONO-RANG (ADC-65).
+"""Checkpoint / restart AMR BIT-IDENTIQUE (ADC-65 mono-bloc mono-rang ; ADC-509 multi-blocs + np>1).
 
 Comble les manques d'ABI signales par l'ancienne docstring de AmrSystem.checkpoint (etats fins par
 patch + etat conservatif COMPLET illisibles/inecrivables, hierarchie non imposable). On expose
-desormais, en MONO-BLOC MONO-RANG :
+desormais :
 
   - level_state(k) / set_level_state(k, .) : etat conservatif COMPLET du niveau k (toutes
     composantes ; grossier ET patchs fins), plat composante-majeur c*nf*nf + j*nf + i (nf = n << k) ;
-  - level_potential(k) / set_level_potential(k, .) : phi du niveau k (niveau 0 = warm-start du
-    multigrille, load-bearing pour la reprise bit-identique) ;
+    MONO-BLOC. level_state_global(k) = gather np>1 (collectif) ;
+  - block_level_state(name, k) / set_block_level_state(name, k, .) : idem PAR BLOC, MULTI-BLOCS
+    (moteur AmrRuntime, layout + aux PARTAGES) ; block_level_state_global = gather np>1 ;
+  - level_potential(k) / set_level_potential(k, .) : phi du niveau k PARTAGE (niveau 0 = warm-start du
+    multigrille, load-bearing pour la reprise bit-identique) ; level_potential_global = gather np>1 ;
   - set_hierarchy(boxes) : IMPOSE la hierarchie fine sauvee (au lieu du clustering Berger-Rigoutsos),
-    pour reconstruire EXACTEMENT le decoupage au restart.
+    MONO-BLOC. MULTI-BLOCS : la hierarchie partagee est le patch central FIGE deterministe, reproduit
+    par le rejeu de la composition (regrid_every=0) -> pas d'imposition.
 
-VERROUILLE :
+VERROUILLE (mono-rang, executables sur Mac sans Kokkos) :
   T1 (BIT-IDENTIQUE) : run A de 10 pas AVEC patchs fins actifs (refinement bas, regrid_every=0) ;
        checkpoint a 5 pas ; restart dans un systeme NEUF ; 5 pas ; etat FINAL identique a run A,
        grossier (niveau 0) ET patchs (niveau 1) -- dmax == 0.0 EXACT.
   T2 (HIERARCHIE) : patch_boxes() identiques au checkpoint et apres restart.
   T3 (HORLOGE) : time() / macro_step() restaures (la cadence reprend exactement).
-  T4 (REJETS) : composition differente (bloc), n different, regrid_every > 0 au restart, multi-blocs
-       au checkpoint -- chacun leve. np>1 = garde de code (non declenchable en serie ; verifiee par
-       lecture, cf. checkpoint/restart qui levent si _pops.n_ranks() != 1).
+  T4 (REJETS) : composition differente (bloc), n different, regrid_every > 0 au restart -- chacun leve.
+  T5 (MULTI-BLOCS BIT-IDENTIQUE) : 2 blocs (ions/elec) sur la hierarchie partagee ; checkpoint a
+       mi-course ; restart NEUF ; etat FINAL identique BIT A BIT par bloc et par niveau.
 
-LIMITES HONNETES (rejets explicites, jamais un checkpoint silencieusement faux) : multi-blocs (moteur
-AmrRuntime, layout + aux PARTAGES) et MPI np>1 (gather par niveau) sont une SUITE. regrid_every > 0
-est refuse (la cadence regrid post-restart re-divergerait la hierarchie).
+np>1 (gather par niveau / par bloc) : code en place (accesseurs *_global collectifs + ecriture
+rang 0), NON declenchable en serie sur Mac -> valide par CI-MPI / ROMEO. regrid_every > 0 est refuse
+(la cadence regrid post-restart re-divergerait la hierarchie).
 
 Lancement : PYTHONPATH=<build>/python python3 python/tests/test_amr_checkpoint.py
 """
@@ -155,24 +159,64 @@ def test_amr_checkpoint_rejects():
                 "restart aurait du lever sur regrid_every > 0")
 
 
-def test_amr_checkpoint_rejects_multiblock():
-    """T4 (multi-blocs) : checkpoint AMR multi-blocs leve (layout + aux PARTAGES = suite)."""
-    n = 32
-    rho0 = _bump(n)
-    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+def _build_multiblock(n=32, regrid_every=0):
+    """AMR MULTI-BLOCS (2 especes ions/elec sur la hierarchie partagee, moteur AmrRuntime). Densites
+    decalees (les deux blocs n'evoluent pas identiquement -> le checkpoint par bloc est verifiable).
+    refinement bas (patchs fins actifs des le seed), hierarchie FIGEE (regrid_every=0)."""
+    rho_i = _bump(n, amp=1.0, w=0.10)
+    rho_e = _bump(n, amp=0.6, w=0.14)  # profil DIFFERENT -> trajectoires par bloc distinctes
+    sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     for nm, q in (("ions", +1.0), ("elec", -1.0)):
         sim.add_block(nm,
                       pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
                                 pops.ChargeDensity(charge=q)),
-                      spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))
-    sim.set_poisson(bc="periodic")
-    sim.set_density("ions", rho0)
-    sim.set_density("elec", rho0)
-    sim.step(1e-3)  # force le build (moteur AmrRuntime)
+                      spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
+                      time=pops.Explicit())
+    sim.set_refinement(threshold=1.5)
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_density("ions", rho_i)
+    sim.set_density("elec", rho_e)
+    return sim
+
+
+def test_amr_checkpoint_multiblock_bit_identical():
+    """T5 : reprise MULTI-BLOCS BIT-IDENTIQUE (etat final par BLOC et par niveau, hierarchie partagee).
+
+    Le checkpoint serialise l'etat conservatif PAR BLOC et le phi PARTAGE ; le restart rejoue la meme
+    composition (la hierarchie centrale figee est reproduite deterministiquement) puis restaure chaque
+    bloc. Mono-rang -> executable sur Mac sans compilation Kokkos."""
+    dt = 1e-3
     with tempfile.TemporaryDirectory() as tmp:
-        _expect((NotImplementedError, RuntimeError),
-                lambda: sim.checkpoint(os.path.join(tmp, "ckpt")),
-                "checkpoint multi-blocs aurait du lever")
+        path = os.path.join(tmp, "ckpt_mb")
+
+        simA = _build_multiblock()
+        for _ in range(5):
+            simA.step(dt)
+        simA.checkpoint(path)
+        boxes_chk = simA.patch_boxes()
+        assert any(b[0] == 1 for b in boxes_chk), "patchs fins inactifs : test sans interet"
+        for _ in range(5):
+            simA.step(dt)
+        names = list(simA.block_names())
+        finalA = {b: [np.asarray(simA.block_level_state(b, k), dtype=np.float64)
+                      for k in range(simA.n_levels())] for b in names}
+
+        simB = _build_multiblock()
+        simB.restart(path)
+        assert simB.patch_boxes() == boxes_chk, "patch_boxes() multi-blocs apres restart != checkpoint"
+        assert list(simB.block_names()) == names, "blocs divergents apres restart"
+        for _ in range(5):
+            simB.step(dt)
+        finalB = {b: [np.asarray(simB.block_level_state(b, k), dtype=np.float64)
+                      for k in range(simB.n_levels())] for b in names}
+
+        for b in names:
+            for k in range(simA.n_levels()):
+                a, c = finalA[b][k], finalB[b][k]
+                assert a.shape == c.shape, "bloc %s niveau %d : forme divergente" % (b, k)
+                dmax = float(np.max(np.abs(a - c))) if a.size else 0.0
+                assert dmax == 0.0, ("bloc %s niveau %d : dmax = %r != 0 (reprise multi-blocs NON "
+                                     "bit-identique)" % (b, k, dmax))
 
 
 if __name__ == "__main__":
@@ -182,6 +226,6 @@ if __name__ == "__main__":
     print("OK T3 : horloge (t, macro_step) restauree")
     test_amr_checkpoint_rejects()
     print("OK T4 : rejets composition / grille / regrid_every")
-    test_amr_checkpoint_rejects_multiblock()
-    print("OK T4 : rejet multi-blocs")
+    test_amr_checkpoint_multiblock_bit_identical()
+    print("OK T5 : reprise multi-blocs bit-identique (par bloc + par niveau)")
     print("test_amr_checkpoint : OK")

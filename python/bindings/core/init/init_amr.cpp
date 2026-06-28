@@ -340,5 +340,38 @@ void init_amr(py::module_& m) {
                                          std::get<3>(b), std::get<4>(b)});
             s.set_hierarchy(bx);
           },
-          py::arg("boxes"));
+          py::arg("boxes"))
+      // GLOBAL (np>1 gather) variants of the per-level accessors (ADC-509): the checkpoint facade
+      // routes to them under MPI np>1 so the distributed fabs are gathered onto rank 0 (COLLECTIVE:
+      // all ranks call). Mono-rank they return the same array as the non-global accessors.
+      .def(
+          "level_state_global", [](AmrSystem& s, int k) { return s.level_state_global(k); },
+          py::arg("k"))
+      .def(
+          "level_potential_global", [](AmrSystem& s, int k) { return s.level_potential_global(k); },
+          py::arg("k"))
+      // MULTI-BLOCK per-BLOCK per-level state (ADC-509): the AmrRuntime engine shares the layout +
+      // aux, so the per-level STATE is read/restored PER BLOCK (by name) while phi stays shared
+      // (level_potential). block_level_state returns a FLAT field (c*nf*nf + j*nf + i); the _global
+      // variant gathers under np>1; set_block_level_state flattens any C-contiguous array.
+      .def(
+          "block_n_vars", [](AmrSystem& s, const std::string& name) { return s.block_n_vars(name); },
+          py::arg("name"))
+      .def(
+          "block_level_state",
+          [](AmrSystem& s, const std::string& name, int k) { return s.block_level_state(name, k); },
+          py::arg("name"), py::arg("k"))
+      .def(
+          "block_level_state_global",
+          [](AmrSystem& s, const std::string& name, int k) {
+            return s.block_level_state_global(name, k);
+          },
+          py::arg("name"), py::arg("k"))
+      .def(
+          "set_block_level_state",
+          [](AmrSystem& s, const std::string& name, int k,
+             py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            s.set_block_level_state(name, k, flat(arr));
+          },
+          py::arg("name"), py::arg("k"), py::arg("state"));
 }

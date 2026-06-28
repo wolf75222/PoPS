@@ -199,6 +199,14 @@ struct AmrCompiledHooks {
   // files (purely additive tail addition); the builder always populates them (never empty).
   std::function<int()> coarse_local_boxes;  ///< per-rank owned coarse (level-0) fab count
   std::function<int()> coarse_total_boxes;  ///< global coarse box count (identical on all ranks)
+  // ADDED AT THE TAIL (np>1 mono-block AMR checkpoint, ADC-509; additive like the fields above): the
+  // GLOBAL (all_reduce_sum gather) counterparts of level_state / level_potential. Under MPI np>1 the
+  // per-level fabs are distributed (round-robin fine patches, optionally distributed coarse), so a
+  // bit-identical checkpoint must GATHER them onto every rank before rank 0 writes -- exactly like
+  // System::state_global / potential_global. The pops_native_abi_key guard forces regeneration of
+  // older .so files (purely additive tail addition); the builder always populates them (never empty).
+  std::function<std::vector<double>(int)> level_state_global;      ///< level k state, gathered
+  std::function<std::vector<double>(int)> level_potential_global;  ///< level k phi, gathered
 };
 
 /// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created
@@ -617,25 +625,45 @@ class AmrSystem {
   int coarse_local_boxes();
   int coarse_total_boxes();
 
-  /// MONO-RANK AMR CHECKPOINT / RESTART (ADC-65), MONO-BLOCK: per-level STATE accessors +
-  /// hierarchy imposition for a BIT-IDENTICAL resumption (cf. AmrSystem.checkpoint/restart on the
-  /// Python side). All REJECT multi-block (AmrRuntime engine: SHARED layout + aux, documented
-  /// follow-up); the facade additionally rejects MPI np>1 (per-level gather: follow-up). Force the lazy build
-  /// (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
-  int n_levels();  ///< number of levels of the hierarchy (>= 1)
-  int n_vars();    ///< number of conserved components (mono-block)
+  /// AMR CHECKPOINT / RESTART (ADC-65 single-block single-rank; ADC-509 multi-block + np>1):
+  /// per-level STATE accessors + hierarchy imposition for a BIT-IDENTICAL resumption (cf.
+  /// AmrSystem.checkpoint/restart on the Python side). MONO-BLOCK uses these (level_state /
+  /// level_potential / set_hierarchy on the AmrCouplerMP coupler); MULTI-BLOCK (AmrRuntime engine,
+  /// SHARED layout + aux) uses the per-BLOCK variants below (block_level_state ...), plus the SHARED
+  /// level_potential / n_levels (no set_hierarchy: the shared hierarchy is the deterministic frozen
+  /// central patch, reproduced by replaying the same composition). The _global variants all_reduce_sum
+  /// the per-rank fabs so a np>1 checkpoint gathers onto rank 0 (mono-rank: identity, bit-identical).
+  /// Force the lazy build (ensure_built) like patch_boxes()/mass(). @p k: level (0 = coarse, >= 1 = fine).
+  int n_levels();  ///< number of levels of the hierarchy (>= 1; mono OR multi-block)
+  int n_vars();    ///< number of conserved components (MONO-BLOCK; multi-block: block_n_vars)
   /// FULL conservative state of level @p k, flat component-major c*nf*nf + j*nf + i (nf = n << k;
-  /// zeros outside the patches at the fine level -- only the patch interior is defined).
+  /// zeros outside the patches at the fine level -- only the patch interior is defined). MONO-BLOCK.
   std::vector<double> level_state(int k);
+  std::vector<double> level_state_global(int k);  ///< MONO-BLOCK, np>1 gather (all ranks call)
   void set_level_state(int k,
                        const std::vector<double>& s);  ///< restores the state of level @p k (as is)
   /// Potential phi of level @p k, flat nf*nf row-major. Level 0 = warm-start of the multigrid
-  /// (bit-identical resumption); level >= 1 = aux comp 0 (recomputed at update).
+  /// (bit-identical resumption); level >= 1 = aux comp 0 (recomputed at update). SHARED -> works in
+  /// MONO-BLOCK as well as MULTI-BLOCK (single aux). The _global variant gathers under np>1.
   std::vector<double> level_potential(int k);
+  std::vector<double> level_potential_global(int k);             ///< np>1 gather (all ranks call)
   void set_level_potential(int k, const std::vector<double>& p);  ///< restores phi of level @p k
   /// Imposes the SAVED fine hierarchy (at restart) instead of Berger-Rigoutsos clustering: @p boxes
-  /// are the patch_boxes() signatures of the checkpoint (filtered to level 1 in mono-block).
+  /// are the patch_boxes() signatures of the checkpoint (filtered to level 1 in mono-block). MONO-BLOCK.
   void set_hierarchy(const std::vector<PatchBox>& boxes);
+
+  /// MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509). The AmrRuntime engine shares the
+  /// layout AND the aux across blocks, so the per-level STATE is read/restored PER BLOCK (by NAME)
+  /// while phi stays shared (level_potential above). @p name indexes the block (block_names()); @p k:
+  /// level. The _global variant all_reduce_sum the per-rank fabs (np>1 gather, all ranks call); the
+  /// shared hierarchy is the deterministic frozen central patch (regrid_every==0), reproduced at
+  /// restart by replaying the same composition -> no set_hierarchy needed. @throws in MONO-BLOCK (use
+  /// the level_state path) or if @p name / @p k is out of bounds.
+  int block_n_vars(const std::string& name);  ///< conserved components of the named block
+  std::vector<double> block_level_state(const std::string& name, int k);
+  std::vector<double> block_level_state_global(const std::string& name,
+                                               int k);  ///< np>1 gather (all ranks call)
+  void set_block_level_state(const std::string& name, int k, const std::vector<double>& s);
 
   double mass();  ///< mass of the 1st block on the coarse (conserved at reflux)
   double mass(

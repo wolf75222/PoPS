@@ -1231,7 +1231,148 @@ class AmrRuntime {
   int coarse_local_boxes() const { return (*blocks_[0].levels)[0].U.local_size(); }
   int coarse_total_boxes() const { return (*blocks_[0].levels)[0].U.box_array().size(); }
 
+  // ----------------------------------------------------------------------------------------------
+  // MULTI-BLOCK AMR CHECKPOINT / RESTART (ADC-509). PER-BLOCK PER-LEVEL state accessors + the
+  // level-0 phi (multigrid warm-start), counterpart of AmrCouplerMP::level_state on the SHARED
+  // hierarchy. The shared layout is FROZEN at build (make_shared_amr_layout: a deterministic central
+  // fine patch, regrid_every==0): replaying the SAME composition reproduces the SAME hierarchy, so a
+  // restart only needs to restore each block's valid cells + phi (no set_hierarchy on the runtime).
+  // The _global variants all_reduce_sum the per-rank LOCAL fabs into the complete field (np>1
+  // gather), MIRROR of System::state_global / gather_global; mono-rank they are the identity. @p b:
+  // block index, @p k: level (0 = coarse, >= 1 = fine).
+  // ----------------------------------------------------------------------------------------------
+
+  // Conserved components of block @p b (Model::n_vars, carried by the AmrRuntimeBlock).
+  int block_n_vars(std::size_t b) const {
+    if (b >= blocks_.size())
+      throw std::runtime_error("AmrRuntime::block_n_vars : block index out of bounds");
+    return blocks_[b].ncomp;
+  }
+
+  // FULL conservative state (all components) of block @p b at level @p k, flat component-major
+  // c*nf*nf + j*nf + i (nf = nx << k); zeros outside the patches at the fine level. LOCAL fabs only
+  // (no gather): the facade calls this mono-rank. Mirror of AmrCouplerMP::level_state.
+  std::vector<double> block_level_state(std::size_t b, int k) const {
+    if (b >= blocks_.size())
+      throw std::runtime_error("AmrRuntime::block_level_state : block index out of bounds");
+    const std::vector<AmrLevelMP>& L = *blocks_[b].levels;
+    if (k < 0 || k >= static_cast<int>(L.size()))
+      throw std::runtime_error("AmrRuntime::block_level_state : level out of bounds");
+    const MultiFab& U = L[k].U;
+    const int nc = U.ncomp();
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    std::vector<double> out(static_cast<std::size_t>(nc) * nf * nf, 0.0);
+    device_fence();
+    fill_level_state(U, nc, nf, out);
+    return out;
+  }
+
+  // Same as block_level_state but all_reduce_sum the per-rank contributions -> every rank holds the
+  // complete field (np>1 gather, AMR reflux pattern). COLLECTIVE: all ranks MUST call it.
+  std::vector<double> block_level_state_global(std::size_t b, int k) const {
+    std::vector<double> out = block_level_state(b, k);
+    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
+  }
+
+  // Restores block @p b at level @p k from @p s (same layout as block_level_state). Writes ONLY the
+  // VALID cells of the local fabs (the ghosts are redone at the next solve_fields/step, like after a
+  // regrid). NO re-prolongation: restored AS-IS. Mirror of AmrCouplerMP::set_level_state.
+  void set_block_level_state(std::size_t b, int k, const std::vector<double>& s) {
+    if (b >= blocks_.size())
+      throw std::runtime_error("AmrRuntime::set_block_level_state : block index out of bounds");
+    std::vector<AmrLevelMP>& L = *blocks_[b].levels;
+    if (k < 0 || k >= static_cast<int>(L.size()))
+      throw std::runtime_error("AmrRuntime::set_block_level_state : level out of bounds");
+    MultiFab& U = L[k].U;
+    const int nc = U.ncomp();
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    if (s.size() != static_cast<std::size_t>(nc) * nf * nf)
+      throw std::runtime_error("AmrRuntime::set_block_level_state : state size != ncomp*nf*nf");
+    device_fence();
+    for (int li = 0; li < U.local_size(); ++li) {
+      Array4 u = U.fab(li).array();
+      const Box2D v = U.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          for (int c = 0; c < nc; ++c)
+            u(i, j, c) = s[static_cast<std::size_t>(c) * nf * nf +
+                           static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)];
+    }
+  }
+
+  // Potential phi of level @p k, flat nf*nf row-major, zeros outside patches. Level 0: the multigrid
+  // WARM-START mg_.phi() (the state reused by the next solve -> bit-identical restart). Level >= 1:
+  // shared aux comp 0 (recomputed at solve_fields). Mirror of AmrCouplerMP::level_potential; the phi
+  // is SHARED by all blocks (single aux), so it carries no block index. NON-const like
+  // AmrRuntime::potential() (GeometricMG::phi() returns a mutable warm-start reference).
+  std::vector<double> level_potential(int k) {
+    if (k < 0 || k >= nlev_)
+      throw std::runtime_error("AmrRuntime::level_potential : level out of bounds");
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    std::vector<double> out(nf * nf, 0.0);
+    device_fence();
+    const MultiFab& P = (k == 0) ? mg_.phi() : aux_[k];
+    fill_level_phi(P, nf, out);
+    return out;
+  }
+
+  // Same as level_potential but all_reduce_sum (np>1 gather). COLLECTIVE: all ranks MUST call it.
+  std::vector<double> level_potential_global(int k) {
+    std::vector<double> out = level_potential(k);
+    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
+  }
+
+  // Restores phi of level @p k. Level 0: warm-start mg_.phi() -> bit-identical restart (1st
+  // post-restart solve starts from the same guess). Level >= 1: shared aux comp 0 (idempotent,
+  // recomputed at solve_fields). Mirror of AmrCouplerMP::set_level_potential.
+  void set_level_potential(int k, const std::vector<double>& p) {
+    if (k < 0 || k >= nlev_)
+      throw std::runtime_error("AmrRuntime::set_level_potential : level out of bounds");
+    const std::size_t nf = static_cast<std::size_t>(dom_.nx()) << k;
+    if (p.size() != nf * nf)
+      throw std::runtime_error("AmrRuntime::set_level_potential : phi size != nf*nf");
+    device_fence();
+    MultiFab& P = (k == 0) ? mg_.phi() : aux_[k];
+    for (int li = 0; li < P.local_size(); ++li) {
+      Array4 q = P.fab(li).array();
+      const Box2D v = P.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          q(i, j, 0) = p[static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)];
+    }
+  }
+
  private:
+  // Fills @p out (zero-initialized, size nc*nf*nf) from the LOCAL valid cells of @p U at GLOBAL
+  // component-major indices c*nf*nf + j*nf + i. Shared by block_level_state and its _global gather
+  // variant (the loop is verbatim with AmrCouplerMP::level_state -> bit-identical layout).
+  static void fill_level_state(const MultiFab& U, int nc, std::size_t nf,
+                               std::vector<double>& out) {
+    for (int li = 0; li < U.local_size(); ++li) {
+      const ConstArray4 u = U.fab(li).const_array();
+      const Box2D v = U.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          for (int c = 0; c < nc; ++c)
+            out[static_cast<std::size_t>(c) * nf * nf + static_cast<std::size_t>(j) * nf +
+                static_cast<std::size_t>(i)] = u(i, j, c);
+    }
+  }
+
+  // Fills @p out (zero-initialized, size nf*nf) from the LOCAL valid cells of @p P (comp 0) at GLOBAL
+  // row-major indices j*nf + i. Shared by level_potential and its _global gather variant.
+  static void fill_level_phi(const MultiFab& P, std::size_t nf, std::vector<double>& out) {
+    for (int li = 0; li < P.local_size(); ++li) {
+      const ConstArray4 p = P.fab(li).const_array();
+      const Box2D v = P.box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          out[static_cast<std::size_t>(j) * nf + static_cast<std::size_t>(i)] = p(i, j, 0);
+    }
+  }
+
   // Re-applies the model-NAMED aux fields (ADC-291) onto the COARSE shared aux valid cells. Mirror of
   // SystemFieldSolver::apply_named_aux_one (cartesian System): per LOCAL fab (MPI-safe), valid cells
   // only, global flat index j*nx+i. The coarse layout is frozen across regrid (only fine levels are
