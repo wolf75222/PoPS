@@ -24,25 +24,49 @@ section 8, [AMR_MULTIBLOCK_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/
 ```python
 import numpy as np
 import pops
+import pops.time as T
+from pops.physics import Model
+from pops.math import laplacian, grad, div, ddt
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import AMR
+from pops.mesh.amr import Refine, RegridEvery
+from pops.fields import PoissonProblem
+from pops.fields.bcs import Periodic
+from pops.fields.rhs import ChargeDensity
+from pops.solvers.elliptic import GeometricMG
+from pops.codegen import Production
 
 n, L = 96, 1.0
-ne0 = np.ones((n, n))                 # densite initiale (n, n), row-major
+ne0 = np.ones((n, n))                 # initial density (n, n), row-major
 
-sim = pops.AmrSystem(n=n, L=L, periodic=True)
-model = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                  source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
-sim.add_block("ne", model=model, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-sim.set_refinement(0.05)              # raffine la ou la densite depasse le seuil
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-sim.set_density("ne", ne0)
+m = Model("diocotron")
+U = m.state("U", components=["ne"], roles={"ne": "density"})
+(ne,) = U
+phi = m.field("phi")
+m.solve_field("fields_from_state", equation=(-laplacian(phi) == ne),
+              outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+              solver="geometric_mg")
+E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
+flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
+m.rate("explicit_rate", ddt(U) == -div(flux))
+m.check()
 
-for _ in range(60):
-    sim.step_cfl(0.4)                 # CFL sur le pas du niveau grossier
+poisson = PoissonProblem(name="phi", unknown="phi",
+                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+                         bcs=(Periodic(),), solver=GeometricMG())
 
-print("patchs fins :", sim.n_patches(), "| masse :", sim.mass("ne"))
-rho = sim.density("ne")               # densite grossiere (n, n)
+layout = AMR(CartesianMesh(n=n, L=L, periodic=True), max_levels=2, ratio=2, regrid=RegridEvery(8))
+case = (pops.Case(layout=layout).block("ne", physics=m).field(poisson).time(T.Program("euler")))
+case.amr.refine(Refine.on("density").above(0.05))   # refine where the density exceeds the threshold
+
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state={"ne": ne0})
+sim.run(0.25, cfl=0.4)                # CFL on the coarse-level step
+
+print("fine patches:", sim.n_patches(), "| mass:", sim.mass("ne"))
+rho = sim.density("ne")               # coarse density (n, n)
 ```
 
-`pops.AmrSystem(n=, L=, periodic=)` is a shortcut: you can also pass an
-`pops.AmrSystemConfig` (fields `n`, `L`, `periodic`, `regrid_every`, `distribute_coarse`,
-`coarse_max_grid`) if you want to tune the regrid cadence or the distribution of the coarse.
+`pops.bind` builds the `AmrSystem` from a config derived from the `AMR` layout (regrid cadence from
+`RegridEvery(...)`, patch settings from a `PatchLayout`) and flows the typed refinement
+(`case.amr.refine(...)`) and the Poisson field onto it before installing the block.

@@ -180,10 +180,12 @@ class LocalLinearOperatorExpr:
 class CallableOperator:
     """A registered, typed operator usable in a time Program: ``op(U, fields, ...)``.
 
-    Returned by ``m.rate`` / ``m.operator``. Calling it with Program values lowers to
-    ``P.call(name, ...)`` on the values' Program (binding the model's operator registry on
-    first use), so a board-style program can write ``explicit_rate(U_n, fields_n)`` and get
-    the same IR as the explicit operator-first ``P.call("explicit_rate", U_n, fields_n)``.
+    Returned by ``m.rate`` / ``m.operator``. Calling it with Program values lowers through the
+    INTERNAL ``P._call(name, ...)`` on the values' Program (binding the model's operator registry on
+    first use), so a board-style program can write ``explicit_rate(U_n, fields_n)`` and get the same
+    IR as the public typed ``P.call(rate_handle, U_n, fields_n)``. The CallableOperator IS the typed
+    handle the user holds; its internal lowering uses the operator name as a selector (not the public
+    string-rejecting ``P.call``).
     """
 
     def __init__(self, name, model):
@@ -203,7 +205,7 @@ class CallableOperator:
         # resolve, not just those present when the program was first bound.
         if self._model is not None and (reg is None or self.name not in reg):
             prog.bind_operators(self._model.module)
-        return prog.call(self.name, *args, name=name)
+        return prog._call(self.name, *args, name=name)
 
     def __repr__(self):
         return "CallableOperator(%r)" % (self.name,)

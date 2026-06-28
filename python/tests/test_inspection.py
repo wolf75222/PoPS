@@ -42,7 +42,7 @@ def test_program_dump_operator_ir_shows_the_lowering():
     dt = P.dt
     u = P.state("plasma")
     f = P.solve_fields("f", u)
-    r = P.rhs(name="R", state=u, fields=f, flux=True, sources=["electric"])
+    r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
     u1 = P.linear_combine("U1", u + dt * r)
     P.commit("plasma", u1)
     txt = P.dump_operator_ir()

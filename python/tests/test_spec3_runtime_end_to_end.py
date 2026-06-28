@@ -99,7 +99,7 @@ def held_program(name="spec3_runtime_held"):
     U = P.state("ions")
     f = P.fields("phi", from_state=U)
     f.attrs["schedule"] = adctime.every(EVERY).hold()  # hold the field solve between refreshes
-    R = P.rhs(name="R", state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.define("U1", U + dt * R))
     return P
 

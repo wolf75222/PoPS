@@ -4,8 +4,8 @@ The Schur-condensation solver eliminates a coupled (e.g. source) block and solve
 system; the native symbol is ``pops::SchurCondensationOperator``. :func:`Schur` returns the
 inert :class:`pops.descriptors.BrickDescriptor` naming it; :func:`CondensedSchur` is an alias
 naming the SAME native operator under the condensed-Schur name. Both are inert -- the C++
-runtime applies the operator. This is the Spec 5 home of the ``solvers.Schur`` entry formerly
-under ``pops.lib.solvers``.
+runtime applies the operator. This is the ONE public home of the ``solvers.Schur`` entry
+formerly parked under ``pops.lib.solvers`` (that shim is removed; no second public path).
 
 NOTE: this :func:`CondensedSchur` SOLVER descriptor is DISTINCT from
 :class:`pops.CondensedSchur` (``pops.time``), which is the time-integration SPLITTING POLICY

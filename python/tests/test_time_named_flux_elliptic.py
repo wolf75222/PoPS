@@ -193,7 +193,7 @@ def _fe_program(name, fluxes):
     P = adctime.Program(name)
     U = P.state("plasma")
     f = P.solve_fields(U)
-    R = P.rhs(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
+    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -242,7 +242,7 @@ def _named_field_program(name="nf_ell"):
     P = adctime.Program(name)
     U = P.state("plasma")
     f = P.solve_fields("fields_phi2", U, field="phi2")
-    R = P.rhs(name="R", state=U, fields=f, flux=True)
+    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -313,7 +313,7 @@ def make_sim(model):
 def _flux_fe_program(name, fluxes):
     P = adctime.Program(name)
     U = P.state("plasma")
-    R = P.rhs(name="R", state=U, flux=True, fluxes=fluxes)
+    R = P._rhs_legacy(name="R", state=U, flux=True, fluxes=fluxes)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 

@@ -54,7 +54,8 @@ reduction over all cells, followed by an MPI `all_reduce_max` so every rank agre
 step. Without that collective, each rank would pick its own $\Delta t$ and the ranks would diverge.
 
 A model with no transport (a pure source, $\max|\lambda| = 0$) places no constraint on the step. You
-choose the CFL number with `step_cfl(cfl)`, which returns the step it selected.
+choose the CFL number with `sim.run(t_end, cfl=...)` on the bound simulation; the underlying
+per-step `step_cfl(cfl)` runtime method returns the step it selected.
 
 ## Advancing a coupled system
 

@@ -52,11 +52,12 @@ array.
 
 ## Advance and check the result
 
-Set the density, then step the run. `step_cfl(CFL)` takes one step at the given CFL number and
-returns the effective `dt`; `advance(DT, STEPS)` takes `STEPS` steps of fixed `DT`.
+Set the density, then advance the run. `sim.run(t_end, cfl=CFL)` advances the bound simulation by
+CFL steps up to `t_end`. (The per-step `step_cfl(CFL)` / `advance(DT, STEPS)` runtime methods are
+the low-level seam `run` is built on, kept for the native/AMR runtime and the tests.)
 
 ```python
-sim.step_cfl(0.4)
+sim.run(0.1, cfl=0.4)
 ```
 
 Read `sim.density(NAME)` for the field, `sim.potential()` for `phi`, and `sim.mass(NAME)` for

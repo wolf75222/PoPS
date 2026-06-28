@@ -36,7 +36,7 @@ def _fe_body():
     """A Forward-Euler body x -> x + dt*(-div F): rhs(sources=['default']) lowers with NO model, so it
     serves the codegen asserts (one ``ctx.rhs_into`` per emitted copy of the body)."""
     def body(_P, x):
-        return _P.linear_combine(x + _P.dt * _P.rhs(state=x, sources=["default"]))
+        return _P.linear_combine(x + _P.dt * _P._rhs_legacy(state=x, sources=["default"]))
     return body
 
 

@@ -3,8 +3,9 @@
 There is no standalone ``pops::Newton`` / ``pops::FixedPoint`` solver TYPE: Newton is the
 implicit-stepper kernel (pops.time), and a fixed-point iteration is authored over the Krylov
 primitives. So both are catalogued here as PLANNED descriptors (``available=False``, empty
-native id) -- they name the slot without overclaiming a symbol. This is the Spec 5 home of the
-``solvers.Newton`` / ``solvers.FixedPoint`` entries formerly under ``pops.lib.solvers``.
+native id) -- they name the slot without overclaiming a symbol. This is the ONE public home of
+the ``solvers.Newton`` / ``solvers.FixedPoint`` entries formerly parked under
+``pops.lib.solvers`` (that shim is removed; no second public path).
 
 NOTE: the ``newton`` keyword of :mod:`pops.time` (the implicit time-stepper role) is a
 DIFFERENT object from :func:`Newton` here (a solver descriptor); they share no namespace.

@@ -15,8 +15,10 @@ For the full registry of bricks, signatures, parameters and constraints, see the
 ## Before you begin
 
 Build and import `pops`. For a first local run, use the Kokkos Serial backend (see
-[Installation](../getting-started/installation.md)). The bricks in this recipe run on the
-native `add_block` path, which preserves MPI, AMR and GPU.
+[Installation](../getting-started/installation.md)). The bricks in this recipe run on the low-level
+native `add_block` runtime path (which preserves MPI, AMR and GPU); the documented public front
+door is the typed compiled flow (`pops.Case` -> `pops.compile` -> `pops.bind` -> `sim.run`, see
+[first run](../getting-started/first-run.md)).
 
 ## Steps
 

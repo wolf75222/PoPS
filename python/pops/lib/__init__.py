@@ -17,12 +17,11 @@ The relocated central catalogs now live in:
 * linear / nonlinear / Schur / elliptic solvers + preconditioners -> :mod:`pops.solvers`
 * the custom-solver generation DSL (internal / experimental) -> :mod:`pops.codegen.solvers`
 
-The ``solvers`` / ``preconditioners`` names are re-exported here from :mod:`pops.solvers` via
-the :mod:`pops.lib.solvers` back-compat shim (presets only: the authoring DSL no longer lives
-in ``pops.lib``; it moved to :mod:`pops.codegen.solvers`, criterion 19).
+There is exactly ONE public home for the solver descriptors: :mod:`pops.solvers`
+(``pops.solvers.CG`` / ``GMRES`` / ``GeometricMG`` / ``Newton`` / ``Schur`` ...). ``pops.lib``
+is NOT a second path -- the old ``pops.lib.solvers`` shim was removed (no back-compat alias).
 """
-from .solvers import solvers, preconditioners
 from . import time
 from . import models
 
-__all__ = ["solvers", "preconditioners", "time", "models"]
+__all__ = ["time", "models"]

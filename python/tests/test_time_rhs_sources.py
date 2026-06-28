@@ -3,7 +3,7 @@
 
 Spec criterion 17: a source is included in an RHS only when EXPLICITLY listed in ``sources``, never
 summed implicitly. Before ADC-425 the codegen always lowered the default-flux RHS to ``ctx.rhs_into``
-(= -div F + the model's default/composite source), so ``P.rhs(flux=True, sources=[])`` on a model with
+(= -div F + the model's default/composite source), so ``P._rhs_legacy(flux=True, sources=[])`` on a model with
 a default ``m.source`` STILL added that source -- breaking the hyperbolic stage of a Lie/Strang/IMEX
 split (which needs "flux but no source"). ADC-425 adds the flux-only runtime primitive
 ``ctx.neg_div_flux_default_into`` (= -div F WITHOUT the default source) and routes the codegen on
@@ -93,7 +93,7 @@ def one_step_program(name, sources, flux=True):
     P = adctime.Program(name)
     U = P.state("plasma")
     fields = P.solve_fields(U) if flux else None
-    R = P.rhs(state=U, fields=fields, flux=flux, sources=list(sources))
+    R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
     P.commit("plasma", P.linear_combine("%s_step" % name, U + P.dt * R))
     return P
 
@@ -201,9 +201,9 @@ chk(float(np.abs(out_default - rho0d).max()) > 1e-6, "sources=['default'] actual
 def lie_split_program(name):
     P = adctime.Program(name)
     U = P.state("plasma")
-    H = P.rhs(state=U, fields=P.solve_fields(U), flux=True, sources=[])  # flux only (== identity here)
+    H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])  # flux only (== identity here)
     U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
-    S = P.rhs(state=U1, fields=None, flux=False, sources=["default"])    # default source on U1
+    S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])    # default source on U1
     P.commit("plasma", P.linear_combine("%s_S" % name, U1 + P.dt * S))
     return P
 

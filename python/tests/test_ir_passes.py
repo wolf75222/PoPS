@@ -48,8 +48,8 @@ def _euler_with_dead_rhs():
     dt = P.dt
     U = P.state("plasma")
     fields = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=fields, flux=True, sources=["default"])
-    P.rhs("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
+    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
+    P._rhs_legacy("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -60,7 +60,7 @@ def _euler_no_dead():
     dt = P.dt
     U = P.state("plasma")
     fields = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=fields, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -120,7 +120,7 @@ def test_side_effecting_nodes_never_removed():
     dt = P.dt
     U = P.state("plasma")
     fields = P.solve_fields(U)            # side-effecting (fills ghosts/aux), result unused downstream
-    R = P.rhs("R", state=U, fields=fields, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
@@ -149,8 +149,8 @@ def test_chained_dead_nodes_removed():
     dt = P.dt
     U = P.state("plasma")
     fields = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=fields, flux=True, sources=["default"])
-    dead0 = P.rhs("dead0", state=U, fields=fields, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
+    dead0 = P._rhs_legacy("dead0", state=U, fields=fields, flux=True, sources=["default"])
     P.linear_combine("dead1", U + dt * dead0)  # consumes dead0 but is itself unused
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
 

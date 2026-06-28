@@ -39,7 +39,7 @@ def _euler_clean():
     dt = P.dt
     U = P.state("plasma")
     fields = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=fields, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -117,8 +117,8 @@ def test_cse_never_collapses_side_effecting_solve_fields():
     f1 = P.solve_fields(U)
     f2 = P.solve_fields(U)
     # Use both field contexts so neither is dead (keeps the test about CSE, not dead-node elim).
-    R1 = P.rhs("R1", state=U, fields=f1, flux=True, sources=["default"])
-    R2 = P.rhs("R2", state=U, fields=f2, flux=True, sources=["default"])
+    R1 = P._rhs_legacy("R1", state=U, fields=f1, flux=True, sources=["default"])
+    R2 = P._rhs_legacy("R2", state=U, fields=f2, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + 0.5 * dt * R1 + 0.5 * dt * R2))
     Q = adctime.eliminate_common_subexpressions(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 2, "CSE collapsed a solve_fields"
@@ -133,7 +133,7 @@ def test_cse_never_collapses_reduce_or_buffer_writer():
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=f, flux=True, sources=["default"])
     P.record_scalar("n1", P.norm2(R))
     P.record_scalar("n2", P.norm2(R))   # identical reduce, but a reduce is never CSE'd
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
@@ -166,9 +166,9 @@ def test_cse_does_not_collapse_aux_reading_rhs_across_a_solve():
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields(U)
-    R1 = P.rhs("R1", state=U, fields=f, flux=True, sources=["default"])
+    R1 = P._rhs_legacy("R1", state=U, fields=f, flux=True, sources=["default"])
     P.solve_fields(U)  # re-fills the shared aux IN PLACE between the two rhs reads
-    R2 = P.rhs("R2", state=U, fields=f, flux=True, sources=["default"])
+    R2 = P._rhs_legacy("R2", state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R1 + dt * R2))
     n_before = sum(1 for v in P._values if v.op == "rhs")
     assert n_before == 2, "fixture lost an rhs"
@@ -187,7 +187,7 @@ def test_redundant_solve_removed_when_no_mutation():
     U = P.state("plasma")
     P.solve_fields(U)          # first solve (kept)
     f2 = P.solve_fields(U)     # redundant (no mutation since the first)
-    R = P.rhs("R", state=U, fields=f2, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     Q = adctime.eliminate_redundant_field_solves(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 1, "redundant solve not removed"
@@ -204,7 +204,7 @@ def test_redundant_solve_kept_when_state_mutated():
     P.solve_fields(U)
     P.project(U)               # in-place state mutation: a state/aux barrier
     f2 = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=f2, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     Q = adctime.eliminate_redundant_field_solves(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 2, "solve wrongly removed past a project"
@@ -220,7 +220,7 @@ def test_redundant_solve_kept_when_fill_boundary_intervenes():
     P.solve_fields(U)
     P.fill_boundary(U)
     f2 = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=f2, flux=True, sources=["default"])
+    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     Q = adctime.eliminate_redundant_field_solves(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 2, "solve removed past a fill_boundary"
@@ -350,8 +350,8 @@ def test_optimize_runs_all_proven_safe_passes():
     U = P.state("plasma")
     P.solve_fields(U)                 # first solve
     f2 = P.solve_fields(U)            # redundant solve (no mutation) -> removed
-    R = P.rhs("R", state=U, fields=f2, flux=True, sources=["default"])
-    P.rhs("dead", state=U, fields=f2, flux=True, sources=["default"])  # dead -> removed
+    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
+    P._rhs_legacy("dead", state=U, fields=f2, flux=True, sources=["default"])  # dead -> removed
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     Q = P.optimize()
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 1
@@ -383,7 +383,7 @@ def test_method_and_free_function_forms_agree():
     U = S.state("plasma")
     S.solve_fields(U)
     f2 = S.solve_fields(U)
-    Rr = S.rhs("R", state=U, fields=f2, flux=True, sources=["default"])
+    Rr = S._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
     S.commit("plasma", S.linear_combine("U1", U + dt * Rr))
     assert (adctime.eliminate_redundant_field_solves(S)._ir_hash()
             == S.eliminate_redundant_field_solves()._ir_hash())

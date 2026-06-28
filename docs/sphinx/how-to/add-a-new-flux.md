@@ -38,13 +38,15 @@ Replace `riemann` with one of these typed `pops.numerics.riemann` descriptors, m
 
 ## Wire the flux to a block
 
-Pass the spatial scheme as the `spatial=` argument of `add_block` or `add_equation`:
+Pass the spatial scheme as the `spatial=` argument of `case.block(...)` (the public path), which
+flows through to the runtime install:
 
 ```python
 from pops.numerics.riemann import HLL
 from pops.numerics.reconstruction.limiters import Minmod
 
-sim.add_block("gas", model=model, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()))
+case.block("gas", physics=m, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()))
+# (the same spatial= is the argument of the low-level add_block / add_equation runtime seam)
 ```
 
 For the full list of limiters, fluxes and reconstruction variables, see the

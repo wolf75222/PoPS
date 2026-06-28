@@ -8,11 +8,6 @@ from pops.time.values import (
     Value, _Coeff, _CoupledResult, _Operator, _resolve_handle, _state_base_name, _to_affine,
 )
 
-# Sentinel marking "the caller did not pass this legacy rhs kwarg". It lets P.rhs distinguish
-# terms=[...] (the typed front door) from the legacy flux=/sources=/fluxes= surface and reject
-# mixing the two, while keeping the historical default semantics when neither path is used.
-_UNSET = object()
-
 
 class _ProgramCore(_ProgramConstants):
     """State / field / RHS / source / apply construction (the operator-first builder core)."""
@@ -132,26 +127,46 @@ class _ProgramCore(_ProgramConstants):
         self._registry = reg
         return self
 
-    def call(self, operator_name, *args, name=None, schedule=None):
-        """Call a typed operator by name or handle (the operator-first level).
+    def call(self, operator, *args, name=None, schedule=None):
+        """Call a typed operator by HANDLE (the operator-first level, Spec 5 sec.14.2.3).
 
-        ``operator_name`` is EITHER the string name of a declared operator OR the
-        :class:`pops.model.OperatorHandle` a declarer (``m.rate_operator`` / ``m.source_term`` /
-        ``m.linear_source``) returned (Spec 5 sec.14.2.3). A handle is a transparent alias for its
-        ``.name``: it is coerced to that name and follows the EXACT same resolution + lowering, so
-        ``P.call(handle, ...)`` builds the byte-identical IR as ``P.call(handle.name, ...)``. A plain
-        string passes through unchanged; any other type is a clear ``TypeError``.
+        ``operator`` MUST be the :class:`pops.model.OperatorHandle` a declarer (``m.rate`` /
+        ``m.field_operator`` / ``m.source_term`` / ``m.rate_operator`` / ``m.linear_source``)
+        returned -- the one public path. A bare string operator NAME is REFUSED with a clear
+        ``TypeError`` naming the handle path: a Program references an operator only by the typed
+        handle, never by a free string (Spec 5 "one clean API", ADC-479 criterion 23).
 
-        Resolves the name against the bound operator registry (see :meth:`bind_operators`),
-        type-checks the arguments against the operator's ``Signature``, then lowers to the equivalent
-        primitive op so the result is IDENTICAL to the matching PDE shortcut: a ``field_operator`` to
-        ``solve_fields``, a ``local_source`` to ``source``, a ``grid_operator`` / ``local_rate`` to
-        ``rhs``, a ``local_linear_operator`` to ``linear_source``, a ``projection`` to ``project``.
-        A Program composes operators by signature, never by a hardcoded PDE category.
+        The handle is a transparent alias for its ``.name``: it follows the EXACT same registry
+        resolution + lowering, so ``P.call(handle, ...)`` builds the byte-identical IR as the
+        INTERNAL ``P._call(handle.name, ...)`` path (used by the ``pops.lib.time`` macros and the
+        operator-first lowering). Resolves the name against the bound operator registry (see
+        :meth:`bind_operators`), type-checks the arguments against the operator's ``Signature``, then
+        lowers to the equivalent primitive op so the result is IDENTICAL to the matching PDE shortcut:
+        a ``field_operator`` to ``solve_fields``, a ``local_source`` to ``source``, a
+        ``grid_operator`` / ``local_rate`` to ``rhs``, a ``local_linear_operator`` to
+        ``linear_source``, a ``projection`` to ``project``. A Program composes operators by signature,
+        never by a hardcoded PDE category.
         """
-        # Coerce an OperatorHandle to its name; a plain string is transparent; anything else is a
-        # clear typed surface error (cf. lower_backend(None): do not add a stricter string check).
-        operator_name = self._operator_call_name(operator_name)
+        from pops.model import OperatorHandle
+        if not isinstance(operator, OperatorHandle):
+            if isinstance(operator, str):
+                raise TypeError(
+                    "P.call requires a typed operator handle, not the string %r; build it with "
+                    "m.rate(...) / m.field_operator(...) / m.source_term(...) (any m.*_operator "
+                    "declarer returns an pops.model.OperatorHandle)" % (operator,))
+            raise TypeError(
+                "P.call: operator must be an pops.model.OperatorHandle (from m.rate / "
+                "m.field_operator / m.source_term / m.rate_operator / m.linear_source), got %r"
+                % (operator,))
+        return self._call(operator, *args, name=name, schedule=schedule)
+
+    def _call(self, operator, *args, name=None, schedule=None):
+        """Internal operator-first call: resolve, type-check and lower an operator (str name OR
+        handle). NOT a public surface -- it is the byte-identical lowering the public typed
+        :meth:`call` delegates to, and the path the ``pops.lib.time`` macros, the board/operator
+        handles and the re-entrant typed lowering use directly (a string token survives here only as
+        an internal selector, undocumented in the public API)."""
+        operator_name = self._operator_call_name(operator)
         if self._registry is None:
             raise ValueError("P.call(%r): no operators bound; call P.bind_operators(model) first"
                              % (operator_name,))
@@ -178,29 +193,21 @@ class _ProgramCore(_ProgramConstants):
         return result
 
     def _operator_call_name(self, operator):
-        """Normalize a ``P.call`` operator selector to its registry name (Spec 5 sec.14.2.3).
+        """Normalize an internal :meth:`_call` operator selector to its registry name.
 
-        Accepts EITHER a plain ``str`` (returned unchanged -- the legacy, transparent path) OR an
+        Accepts EITHER a plain ``str`` (an internal selector token, returned unchanged) OR an
         :class:`pops.model.OperatorHandle` (its ``.name`` is returned). A handle resolves through the
         identical registry lookup + lowering as its name, so the IR is byte-identical. Any other type
-        is a clear ``TypeError`` (a typed surface, not a silent coercion).
-
-        Under ``strict_typed`` (Spec 5 sec.15, ADC-479 criterion 23) the STRING form is REFUSED: a
-        Program must reference an operator only by the typed handle a declarer returns. An
-        OperatorHandle still resolves identically (same name, byte-identical IR)."""
+        is a clear ``TypeError``. The public string REJECT lives in :meth:`call`; this internal
+        normalizer accepts the string the lowering and the lib.time macros pass."""
         from pops.model import OperatorHandle
         if isinstance(operator, OperatorHandle):
             return operator.name
         if isinstance(operator, str):
-            if self._strict_typed:
-                raise TypeError(
-                    "strict_typed: P.call requires a typed operator handle, not the string %r; "
-                    "build it with m.rate(...) / m.field_operator(...) / m.source_term(...) "
-                    "(any m.*_operator declarer returns an pops.model.OperatorHandle)" % (operator,))
             return operator
         raise TypeError(
-            "P.call: operator must be a str name or an pops.model.OperatorHandle "
-            "(from m.rate_operator / m.source_term / m.linear_source), got %r" % (operator,))
+            "_call: operator must be a str name or an pops.model.OperatorHandle, got %r"
+            % (operator,))
 
     def _validate_schedule(self, op, schedule):
         """A schedule= on P.call must be a Schedule; a caching policy (hold / accumulate_dt)
@@ -216,16 +223,10 @@ class _ProgramCore(_ProgramConstants):
                 % (op.name, schedule.policy, op.name))
 
     def _lower_call(self, op, operator_name, args, name):
-        # A typed P.call lowers THROUGH the legacy builders (self.rhs(flux=...) / self.source / ...);
-        # flag the re-entrancy so the strict guard in rhs() does not mistake this internal legacy-form
-        # call for a user's legacy spelling (the user already used the typed P.call front door).
-        self._lowering_typed = True
-        try:
-            return self._lower_call_impl(op, operator_name, args, name)
-        finally:
-            self._lowering_typed = False
-
-    def _lower_call_impl(self, op, operator_name, args, name):
+        # A typed call lowers THROUGH the PRIVATE RHS builder (self._rhs_legacy(flux=...) /
+        # self.source / ...): the public P.rhs reject never sees this internal lowering (the user
+        # already used the typed P.call front door), so there is one public path and no re-entrancy
+        # flag to keep.
         kind = op.kind
         if kind == "field_operator":
             # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
@@ -242,22 +243,22 @@ class _ProgramCore(_ProgramConstants):
             fields = args[1] if len(args) > 1 else None
             if operator_name == "source_default":
                 # The default source lives in m._source, not as a named source_term; reach it
-                # through the source-only RHS path (byte-identical to P.rhs(flux=False,
-                # sources=["default"])), since ctx.source(name) only resolves named source_terms.
-                return self.rhs(name=name, state=args[0], fields=fields, flux=False,
-                                sources=["default"])
+                # through the source-only RHS path (byte-identical to flux=False,
+                # sources=["default"]), since ctx.source(name) only resolves named source_terms.
+                return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=False,
+                                        sources=["default"])
             return self.source(operator_name, state=args[0], fields=fields)
         if kind in ("grid_operator", "local_rate"):
             fields = args[1] if len(args) > 1 else None
             if kind == "grid_operator":
                 # Flux divergence only (no source): the default flux or a named flux_term.
                 fluxes = None if operator_name == "flux_default" else [operator_name]
-                return self.rhs(name=name, state=args[0], fields=fields, flux=True,
-                                sources=[], fluxes=fluxes)
+                return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=True,
+                                        sources=[], fluxes=fluxes)
             low = op.lowering
-            return self.rhs(name=name, state=args[0], fields=fields,
-                            flux=low.get("flux", True), sources=low.get("sources"),
-                            fluxes=low.get("fluxes"))
+            return self._rhs_legacy(name=name, state=args[0], fields=fields,
+                                    flux=low.get("flux", True), sources=low.get("sources"),
+                                    fluxes=low.get("fluxes"))
         if kind == "local_linear_operator":
             return self.linear_source(operator_name)
         if kind == "projection":
@@ -320,78 +321,57 @@ class _ProgramCore(_ProgramConstants):
                     "operator %r expects %s %r but got a value over %r"
                     % (op.name, t.kind, t.name, arg_name))
 
-    def rhs(self, name=None, state=None, fields=None, flux=_UNSET, sources=_UNSET, fluxes=_UNSET,
-            terms=None):
-        """Build R = -div F(U) + sum of the requested named ``sources``. ``fields`` is the explicit
-        FieldContext any field-dependent source reads (no implicit global aux). Named sources are
-        never summed implicitly: ``sources`` lists exactly the ones to include.
+    def rhs(self, name=None, state=None, fields=None, *, terms=None, **legacy):
+        """Build the typed right-hand side R from a list of TYPED ``terms`` (Spec 5 sec.14.2.4, the one
+        public path, ADC-479 criterion 27).
 
-        ``terms`` (Spec 5 sec.14.2.4, ADC-479 criterion 27) is the TYPED right-hand-side composition:
-        instead of the legacy ``flux=``/``sources=``/``fluxes=`` booleans/name-lists, pass a single
-        list of typed terms -- a :class:`pops.numerics.terms.Flux` plus the source terms to fold in::
+        ``terms`` is the right-hand-side composition: a :class:`pops.numerics.terms.Flux` plus the
+        source terms to fold in::
 
             R = P.rhs(U, fields=f, terms=[Flux(), electric])
 
-        It is PURE front-door sugar: each term lowers onto the EXISTING ``flux=``/``sources=`` path,
-        so the IR is byte-identical to the equivalent legacy call. A ``Flux()`` in the list sets
-        ``flux=True`` (its absence -> ``flux=False``); every source term (a
-        :class:`pops.numerics.terms.SourceTerm` / :class:`~pops.numerics.terms.LocalTerm`, an
-        :class:`pops.model.OperatorHandle` from ``m.source_term``, or a plain source NAME string)
-        appends its name to ``sources``. ``terms=`` is MUTUALLY EXCLUSIVE with ``flux=``/``sources=``/
-        ``fluxes=`` (passing both raises a clear ``ValueError``); a non-term object in the list (e.g. a
-        bare ``bool`` -- ``Flux()`` is a term, not a bool) raises a clear ``TypeError``.
+        ``fields`` is the explicit FieldContext any field-dependent source reads (no implicit global
+        aux). A ``Flux()`` in the list adds the ``-div F`` base (its absence -> source only); every
+        source term -- a :class:`pops.numerics.terms.SourceTerm` / :class:`~pops.numerics.terms.\
+LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a plain source NAME
+        string -- appends its name to the folded sources. So ``terms=[Flux(), electric]`` is
+        ``-div F + electric``, ``terms=[Flux()]`` is flux only, ``terms=[electric]`` is the named
+        source only, and ``terms=[]`` is the zero RHS.
 
-        ``sources`` selects which sources are folded in (ADC-425, spec criterion 17): ``None`` (the
-        argument default) keeps the legacy behavior (``-div F`` + the model's default/composite source,
-        byte-identical to before); ``["default"]`` is the same explicitly; ``[]`` (an EMPTY list) is
-        FLUX ONLY (``-div F`` with NO default source) -- the hyperbolic stage of a Lie/Strang/IMEX
-        split; a list of named ``m.source_term`` names adds exactly those (plus the default iff
-        ``"default"`` is in the list). So ``None``/``["default"]`` -> flux + default source, ``[]`` ->
-        flux only, ``["a","b"]`` -> flux + a + b. ``None`` and ``[]`` are recorded DISTINCTLY in the IR.
-
-        ``flux`` (ADC-430) toggles the ``-div F`` base. ``flux=True`` (the default) is the above.
-        ``flux=False`` is SOURCE-ONLY: no flux divergence at all -- the RHS is just the requested
-        ``sources`` (the source stage of a Lie/Strang/IMEX split). So ``flux=False, sources=["default"]``
-        (or the bare ``flux=False``) is the model's default source only, ``flux=False, sources=["s"]`` is
-        just the named ``s``, and ``flux=False, sources=[]`` is the zero RHS. Named ``fluxes`` with
-        ``flux=False`` are rejected (a source-only stage has no flux to divide). Before ADC-430 the
-        codegen ignored ``flux=False`` and still emitted ``-div F``, double-adding the flux on a
-        non-zero-flux model in a split (it was masked only because split source stages were tested on
-        zero-flux models).
-
-        ``fluxes`` (ADC-419) selects the PHYSICAL flux: ``None`` or ``["default"]`` uses the model's
-        historical -div F (the compiled Riemann/FV path, byte-identical to before). A list of NAMED
-        fluxes (``m.flux_term``) assembles -div of their SUM via centered FV differencing of the
-        evaluated flux fields: so splitting the physical flux into named pieces that sum to it
-        reproduces the same -div F to round-off. Mixing ``"default"`` with named fluxes is rejected
-        (the two divergence stencils differ); request either the default or a set of named fluxes."""
-        # Strict de-stringing (Spec 5 sec.15, ADC-479 criterion 27): when strict_typed is ON, only the
-        # typed terms= front door is accepted from a USER -- the legacy flux=/sources=/fluxes= spelling
-        # is REFUSED. The internal lowering (a typed P.call -> self.rhs(flux=...)) sets _lowering_typed
-        # so it is exempt: strict mode rejects the legacy SPELLING, never the typed path's lowering.
-        if self._strict_typed and not self._lowering_typed and terms is None:
+        The legacy ``flux=``/``sources=``/``fluxes=`` boolean/name form is NOT a public path: it is
+        REFUSED with a clear ``TypeError`` naming the ``terms=`` alternative (a Program composes the
+        RHS only by typed terms). The byte-identical builder it used to expose survives ONLY as the
+        internal :meth:`_rhs_legacy` (used by the ``pops.lib.time`` macros and the operator-first
+        lowering); a non-term object in the list (e.g. a bare ``bool`` -- ``Flux()`` is a term, not a
+        bool) raises a clear ``TypeError``."""
+        # The legacy flux=/sources=/fluxes= boolean/name form is NOT public: name it explicitly in a
+        # clear TypeError pointing at terms=, rather than letting CPython raise an opaque "unexpected
+        # keyword argument". A bare P.rhs (no terms=) is the legacy default and is refused too.
+        if legacy or terms is None:
+            extra = "".join(", %s=" % k for k in sorted(legacy))
             raise TypeError(
-                "strict_typed: P.rhs requires the typed terms= list, not the flux=/sources=/fluxes= "
-                "form; pass P.rhs(state=U, fields=f, terms=[Flux(), source]) (a "
-                "pops.numerics.terms.Flux plus the source terms to fold in)")
-        # terms= is the typed front door (Spec 5 sec.14.2.4): it is MUTUALLY EXCLUSIVE with the legacy
-        # flux=/sources=/fluxes= kwargs and lowers onto them, so the rest of the body (and the IR) is
-        # unchanged. Resolve the three legacy kwargs to either their caller value or the historical
-        # default; when terms= is given, parse it into flux/sources here instead.
-        if terms is not None:
-            conflict = [n for n, v in (("flux", flux), ("sources", sources), ("fluxes", fluxes))
-                        if v is not _UNSET]
-            if conflict:
-                raise ValueError(
-                    "rhs: terms= is mutually exclusive with %s; pass the typed terms list OR the "
-                    "legacy flux=/sources=/fluxes= kwargs, not both" % "/".join(conflict))
-            from pops.time._rhs_terms import terms_to_flux_sources
-            flux, sources = terms_to_flux_sources(terms)
-            fluxes = None
-        else:
-            flux = True if flux is _UNSET else flux
-            sources = None if sources is _UNSET else sources
-            fluxes = None if fluxes is _UNSET else fluxes
+                "P.rhs requires the typed terms= list, not the legacy flux=/sources=/fluxes= form%s; "
+                "pass P.rhs(state=U, fields=f, terms=[Flux(), source]) (a pops.numerics.terms.Flux "
+                "plus the source terms to fold in)" % extra)
+        from pops.time._rhs_terms import terms_to_flux_sources
+        flux, sources = terms_to_flux_sources(terms)
+        return self._rhs_legacy(name=name, state=state, fields=fields, flux=flux, sources=sources)
+
+    def _rhs_legacy(self, name=None, state=None, fields=None, flux=True, sources=None, fluxes=None):
+        """Internal RHS builder: ``R = -div F(U) + sum of the requested named sources`` from the
+        legacy ``(flux, sources, fluxes)`` triple. NOT a public surface -- the public typed
+        :meth:`rhs` lowers ``terms=`` onto this byte-identically, and the ``pops.lib.time`` macros /
+        the operator-first lowering call it directly (a flux/sources string token survives here only
+        as an internal selector, undocumented in the public API).
+
+        ``sources`` (ADC-425): ``None`` keeps ``-div F`` + the model's default/composite source;
+        ``["default"]`` is the same explicitly; ``[]`` is FLUX ONLY (no default source); a list of
+        named ``m.source_term`` names adds exactly those (plus the default iff ``"default"`` is in the
+        list). ``None`` and ``[]`` are recorded DISTINCTLY in the IR. ``flux`` (ADC-430) toggles the
+        ``-div F`` base: ``flux=False`` is SOURCE-ONLY (named ``fluxes`` are then rejected -- no flux
+        to divide). ``fluxes`` (ADC-419): ``None``/``["default"]`` is the model's historical -div F; a
+        list of NAMED ``m.flux_term`` assembles -div of their SUM (mixing ``"default"`` with named
+        fluxes is rejected)."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         if isinstance(name, Value):
             raise ValueError("rhs: pass state=/fields= by keyword (first arg is the debug name)")

@@ -15,9 +15,13 @@ module-scope edge beyond the layering allowance).
 
 def _stage_rhs(P, U, sources, flux):
     """Solve the elliptic fields from U and assemble its RHS for one stage. The FieldContext is
-    distinct per stage (no stale global aux). flux=False builds a source-only sub-flow (e.g. Strang S)."""
+    distinct per stage (no stale global aux). flux=False builds a source-only sub-flow (e.g. Strang S).
+
+    Uses the PRIVATE ``P._rhs_legacy`` builder: the macros author the RHS from the (flux, sources)
+    pair, which is the internal lowering of the public typed ``P.rhs(terms=[...])`` -- not a second
+    public path."""
     fields = P.solve_fields(U) if flux else None
-    return P.rhs(state=U, fields=fields, flux=flux, sources=list(sources))
+    return P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
 
 
 def _op_space_arity(P, name):
@@ -33,4 +37,6 @@ def _opcall(P, name, *candidate_args, value_name=None):
     (so an operator that ignores the fields is called with the state alone, and a fields-free linear
     operator with no args)."""
     arity = _op_space_arity(P, name)
-    return P.call(name, *candidate_args[:arity], name=value_name)
+    # The PRIVATE _call: the macro resolves the operator by its internal registry name (the user
+    # already named it at module-build time), not the public handle-only P.call.
+    return P._call(name, *candidate_args[:arity], name=value_name)

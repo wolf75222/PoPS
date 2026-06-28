@@ -409,7 +409,7 @@ class StageStateSet:
 class _CoupledResult:
     """The typed multi-output of a coupled_rate ``P.call``: a mapping ``block -> per-block rate``.
 
-    ``C = P.call("collision", e_n, i_n)`` returns this; ``C["electrons"]`` is the per-block rate
+    ``C = P.call(collision, e_n, i_n)`` returns this; ``C["electrons"]`` is the per-block rate
     (an RHS Value) that composes like any other (``e_n + dt * C["electrons"]``). It is not itself
     a Value: a coupled operator has no single output, so it cannot be combined as one.
     """

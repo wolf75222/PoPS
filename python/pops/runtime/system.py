@@ -58,6 +58,12 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
              _SystemDiagnostics, _SystemIO):
     """The system/coupler: composes blocks, shares a Poisson, advances the whole.
 
+    Low-level runtime. The documented PUBLIC path is the typed ``pops.Case`` assembly lowered by
+    ``pops.compile`` and wired by ``pops.bind`` -> ``sim.run(...)``; the per-step ``step_cfl`` /
+    ``step`` / ``step_adaptive`` methods (and ``add_block`` / ``add_equation`` / ``set_poisson``)
+    are the low-level seam ``pops.bind`` builds on and the tests use, not the recommended front
+    door.
+
     add_block takes a composed model (pops.Model(...)) + Spatial / Explicit / IMEX objects.
     Everything else (set_poisson, set_density, step, step_cfl, step_adaptive, diagnostics,
     primitives eval_rhs/get_state/set_state) is forwarded to the compiled facade.

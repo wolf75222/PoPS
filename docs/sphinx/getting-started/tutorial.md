@@ -99,6 +99,17 @@ and the right-hand side of the Poisson.
 :lines: 55-60
 ```
 
+:::{admonition} Public path vs this script
+:class: note
+The documented PUBLIC front door is the typed compiled flow: author the physics with
+`pops.physics.Model`, declare the elliptic field with `pops.fields.PoissonProblem`, assemble a
+`pops.Case`, then `pops.compile(case, backend=Production())` -> `pops.bind(...)` -> `sim.run(...)`
+(see [first run](first-run.md)). This walkthrough script also uses the lower-level `System` runtime
+methods (`add_equation` / `set_poisson` / `step_cfl`, and the native `add_block` for the
+bricks-vs-DSL bit-identity comparison) so it can replay the exact same physics across both writing
+fronts. Those runtime methods stay for the native/AMR runtime and the tests.
+:::
+
 ## Step 7: Write the model as formulas (DSL) and compile it
 
 We write the model symbolically with `pops.physics.facade.Model`: the conservative variable `n`, the

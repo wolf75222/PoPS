@@ -106,7 +106,7 @@ def fe_program(name="fe_cadence"):
     P = adctime.Program(name)
     U = P.state("ions")
     f = P.solve_fields(U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     return P
 

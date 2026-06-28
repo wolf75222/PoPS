@@ -1,11 +1,12 @@
 """Spec 5 (sec.4 / 5 / 5.15 / 16): the central packages are top-level, not under pops.lib.
 
 Spec 5 homes the generic building blocks in top-level packages and reserves ``pops.lib``
-for ready-to-use presets (``lib.time`` / ``lib.models`` + the ``lib.solvers`` preset shim).
-These checks assert that end state structurally (source-only; they do not import ``pops`` /
-``_pops``). Criterion 7: ``pops.lib`` holds ONLY presets (no spatial / fields / solver-DSL
-building-block catalogs). Criterion 19: a solver-gen DSL, if any, lives in
-``pops.codegen.solvers`` and is marked internal / experimental.
+for ready-to-use presets (``lib.time`` / ``lib.models``). These checks assert that end state
+structurally (source-only; they do not import ``pops`` / ``_pops``). Criterion 7: ``pops.lib``
+holds ONLY presets (no spatial / fields / solver building-block catalogs). The solver
+descriptors have ONE public home, ``pops.solvers`` (the ``pops.lib.solvers`` shim was removed).
+Criterion 19: a solver-gen DSL, if any, lives in ``pops.codegen.solvers`` and is marked
+internal / experimental.
 """
 import pathlib
 
@@ -55,28 +56,26 @@ def test_moved_catalogs_are_gone_from_lib():
 
 
 def test_lib_keeps_only_presets():
-    # Criterion 7: pops.lib holds ONLY presets -- time / models + the lib.solvers preset shim.
-    # The spatial / fields building-block catalogs and the solver-gen DSL are NOT presets and must
-    # not live under lib anymore.
-    allowed = {"time", "models", "solvers", "__init__.py", "__pycache__"}
+    # Criterion 7: pops.lib holds ONLY presets -- time / models. The solver descriptors are NOT a
+    # preset: they live in the ONE public home pops.solvers (the pops.lib.solvers shim was removed,
+    # no back-compat path). The spatial / fields catalogs and the solver-gen DSL are not presets
+    # either and must not live under lib.
+    allowed = {"time", "models", "__init__.py", "__pycache__"}
     unexpected = []
     for child in (POPS / "lib").iterdir():
         if child.name not in allowed and not child.name.endswith(".pyc"):
             unexpected.append(child.name)
     assert not unexpected, (
-        "Spec 5 criterion 7: pops.lib should hold only presets (time / models + the lib.solvers "
-        "preset shim); unexpected: %s" % unexpected)
+        "Spec 5 criterion 7: pops.lib should hold only presets (time / models); unexpected: %s"
+        % unexpected)
 
 
-def test_lib_solvers_holds_no_generation_dsl():
-    # Criterion 7 / 19: the lib.solvers shim is presets-only. The solver-generation DSL (dsl.py /
-    # solver_cpp.py) moved to pops.codegen.solvers; it must NOT be parked back under lib.solvers.
-    lib_solvers = POPS / "lib" / "solvers"
-    assert lib_solvers.is_dir(), "the pops.lib.solvers preset shim must exist"
-    for dsl_file in ("dsl.py", "solver_cpp.py"):
-        assert not (lib_solvers / dsl_file).exists(), (
-            "Spec 5 criterion 19: the solver-gen DSL must live in pops.codegen.solvers, not "
-            "pops/lib/solvers/%s" % dsl_file)
+def test_lib_has_no_solvers_shim():
+    # Criterion 4 / 7 / no-soft-compat: the solver descriptors have exactly ONE public home,
+    # pops.solvers. The transitional pops.lib.solvers re-export shim is REMOVED -- pops.lib must not
+    # be a second public path to the solver catalog (and must not host the solver-generation DSL).
+    assert not (POPS / "lib" / "solvers").exists(), (
+        "Spec 5 criterion 4: the pops.lib.solvers shim must be gone (one public home: pops.solvers)")
 
 
 def test_solver_gen_dsl_lives_in_codegen_solvers_and_is_internal():

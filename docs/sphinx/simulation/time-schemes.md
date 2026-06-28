@@ -30,13 +30,15 @@ SSPRK) followed by a separate source stage `pops.CondensedSchur`. `pops.Split` c
 (Lie / Godunov, first order); `pops.Strang` plays `H(dt/2) ; S(dt) ; H(dt/2)` (symmetric, second
 order). The `pops.CondensedSchur` stage handles the stiff coupled source potential / velocity / Lorentz
 by assembling and solving a condensed tensorial elliptic operator (BiCGStab preconditioned
-MG); it is a global implicit (it couples the whole domain). `pops.Split` / `pops.Strang` are
-wired only by `add_equation` (which plugs in the source stage), not by `add_block`.
+MG); it is a global implicit (it couples the whole domain). On the runtime side `pops.Split` /
+`pops.Strang` are wired only by the low-level `add_equation` (which plugs in the source stage), not
+by `add_block`; `pops.bind` reaches that seam for you:
 
 ```python
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction.limiters import Minmod
 
+# Low-level runtime seam (pops.bind builds on it).
 sim.add_equation("ions", model=compiled,
                  spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                  time=pops.Strang(hyperbolic=pops.Explicit(),

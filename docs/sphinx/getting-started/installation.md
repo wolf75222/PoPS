@@ -395,6 +395,9 @@ the build compiler is baked into the module and preferred over the PATH (`cxx=` 
 
 ## Verification
 
+This smoke test uses the low-level native runtime (native bricks, no `.so` compile) so it checks the
+install without needing the DSL toolchain:
+
 ```python
 import numpy as np
 import pops
@@ -409,5 +412,8 @@ sim.step_cfl(0.4)
 print(sim.density("ne").shape)   # (64, 64)
 ```
 
-If these lines run, the install is good. Next: [first run](first-run.md) then
+If these lines run, the install is good. The documented public path (typed `pops.Case` ->
+`pops.compile` -> `pops.bind` -> `sim.run`) is in [first run](first-run.md); the native runtime
+methods used above stay for this check, the native/AMR runtime and the tests. Next:
+[first run](first-run.md) then
 [A->Z tutorial](tutorial.md).

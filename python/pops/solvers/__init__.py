@@ -1,9 +1,11 @@
 """pops.solvers -- the linear / nonlinear / elliptic solver descriptor catalog (Spec 5 sec.5.7).
 
 Spec 5 (sec.4 / 5.7 / 13.11.1) homes the solver catalog in this top-level central package
-(alongside :mod:`pops.numerics` / :mod:`pops.linalg` / :mod:`pops.fields`), moving it out of the
-transitional ``pops.lib.solvers``. Every entry is an inert descriptor: codegen / the runtime
-consume it, nothing here computes in Python (the C++ solvers execute).
+(alongside :mod:`pops.numerics` / :mod:`pops.linalg` / :mod:`pops.fields`). This is the ONE
+public home for the solver descriptors: the transitional ``pops.lib.solvers`` re-export shim is
+removed (no second public path; ``pops.lib`` is presets-only). Every entry is an inert
+descriptor: codegen / the runtime consume it, nothing here computes in Python (the C++ solvers
+execute).
 
 Sub-packages:
 
@@ -21,11 +23,10 @@ The ``solvers`` :class:`types.SimpleNamespace` gathers the Krylov + nonlinear + 
 under one attribute surface (``solvers.CG()`` / ``solvers.GMRES()`` / ``solvers.Newton()`` /
 ``solvers.Schur()``); the custom-solver GENERATION DSL (``@solver`` / ``SolverContext`` /
 ``build_solver_ir`` / ``generate_solver_cpp``) is internal / experimental and lives in
-:mod:`pops.codegen.solvers` (Spec 5 criterion 19; it imports the heavy ``pops.time`` lazily). The
-``pops.lib.solvers`` module is a thin preset re-export shim onto this package, so the in-flight
-install path (``pops.lib.solvers.GMRES()``) keeps working. The custom-solver registry hooks
-(``solvers.custom`` / ``solvers.registered``) are attached onto the ``solvers`` namespace below
-when :mod:`pops.codegen.solvers` is imported (so this package stays a pure descriptor catalog).
+:mod:`pops.codegen.solvers` (Spec 5 criterion 19; it imports the heavy ``pops.time`` lazily); it
+is NOT a public attribute of this package. The custom-solver registry hooks (``solvers.custom`` /
+``solvers.registered``) are attached onto the ``solvers`` namespace below when
+:mod:`pops.codegen.solvers` is imported (so this package stays a pure descriptor catalog).
 """
 from types import SimpleNamespace
 
@@ -36,8 +37,9 @@ from .nonlinear import FixedPoint, Newton
 from .preconditioners import preconditioners
 from .schur import CondensedSchur, Schur
 
-# The flat solver factory surface (``solvers.CG()`` ... ``solvers.Schur()``), mirroring the
-# legacy ``pops.lib.solvers.solvers`` namespace. The custom-solver registry hooks
+# The flat solver factory surface (``solvers.CG()`` ... ``solvers.Schur()``), the one public
+# factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). The custom-solver
+# registry hooks
 # (``solvers.custom`` / ``solvers.registered``) are attached onto this namespace by
 # :mod:`pops.codegen.solvers`, which owns the generation DSL -- keeping ``pops.solvers`` free of
 # any DSL / codegen import (no cycle: pops.solvers imports nothing).

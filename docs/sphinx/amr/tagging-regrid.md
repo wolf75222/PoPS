@@ -35,12 +35,17 @@ Detailed algorithm: [ALGORITHMS.md](https://github.com/wolf75222/adc_cpp/blob/ma
 [AMR_REGRID_UNION_TAGS_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/AMR_REGRID_UNION_TAGS_DESIGN.md) (steps R0-R8 of
 the union of tags).
 
+On the public single-block path, the tags are authored on the case:
+`case.amr.refine(pops.mesh.amr.Refine.on("density").above(0.05))` (a `TagUnion` combines a density
+threshold with a `grad phi` predicate). The multi-block tagging below uses the low-level `AmrSystem`
+runtime directly (multi-block lowering through `pops.compile` is deferred):
+
 ```python
 sim = pops.AmrSystem(n=128, L=1.0, periodic=True)
 sim.add_block("electrons", model=elec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
 sim.add_block("ions",      model=ions, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-sim.set_refinement(0.05)         # union des tags de densite (electrons OU ions)
-sim.set_phi_refinement(0.5)      # + |grad phi| (multi-blocs ; bord d'anneau)
+sim.set_refinement(0.05)         # union of the density tags (electrons OR ions)
+sim.set_phi_refinement(0.5)      # + |grad phi| (multi-block; ring edge)
 ```
 
 > The regrid cadence (`regrid_every`) is tuned via the `AmrSystemConfig`:

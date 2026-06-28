@@ -30,7 +30,7 @@ def imex_local(P, block, *, linear_source, sources=("default",), flux=True, thet
             "forward_euler instead" % (theta,))
     U = P.state(block)
     fields = P.solve_fields(U) if flux else None
-    R = P.rhs(state=U, fields=fields, flux=flux, sources=list(sources))
+    R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
     rhs = P.linear_combine(block + "_imex_rhs", U + P.dt * R)
     operator = P.I - (float(theta) * P.dt) * P.linear_source(linear_source)
     out = P.solve_local_linear(name=block + "_imex_step", operator=operator, rhs=rhs, fields=fields)

@@ -62,9 +62,10 @@ ALLOWED = {
     "params": set(),
     "output": set(),
     "external": set(),
-    # lib.models wraps pops.moments; the lib.solvers preset shim re-exports pops.solvers (downward
-    # edge). Criterion 7: lib is presets-only -- the solver-gen DSL is NOT here, it is in codegen.
-    "lib": {"ir", "model", "time", "physics", "moments", "solvers"},
+    # lib.models wraps pops.moments. Criterion 7: lib is presets-only -- the solver catalog lives in
+    # pops.solvers (the lib.solvers shim was removed, so lib no longer imports solvers) and the
+    # solver-gen DSL is in codegen, not here.
+    "lib": {"ir", "model", "time", "physics", "moments"},
     # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
     # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).
     "codegen": {"ir", "model", "physics", "time", "lib", "solvers"},

@@ -130,50 +130,57 @@ Define a type that satisfies the `PhysicalModel` concept, wrap it in a
 
 ### From Python
 
-A model is written in either of two equivalent ways, plugged the same way into `pops.System` /
-`pops.AmrSystem`: composed **bricks** (`pops.Model`, no just-in-time compilation), or symbolic
-**formulas** (`pops.dsl.Model`, translated to C++ and compiled to a `.so`). Both produce
-bit-identical results. Minimal example, the reduced diocotron as bricks (scalar density advected
-by the E x B drift, neutralizing background):
+The public path is typed and compiled: author the physics with `pops.physics.Model`, declare the
+elliptic field with `pops.fields.PoissonProblem`, assemble a `pops.Case`, then
+`pops.compile(case, backend=Production())` -> `pops.bind(...)` -> `sim.run(...)`. Minimal example,
+the reduced diocotron (scalar density advected by the E x B drift, coupled to Poisson):
 
 ```python
+import numpy as np
 import pops
-model = pops.Model(state=pops.Scalar(),
-                  transport=pops.ExB(B0=1.0),
-                  source=pops.NoSource(),
-                  elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
-sim = pops.System(n=96, L=1.0, periodic=True)
-sim.add_block("ne", model=model, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-sim.set_density("ne", ne0)          # ne0: initial density (2D array)
-sim.step_cfl(0.4)
-sim.write("ne.npz", format="npz")   # save the block states (npz; "vtk" also available)
+import pops.time as T
+from pops.physics import Model
+from pops.math import laplacian, grad, div, ddt
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.fields import PoissonProblem
+from pops.fields.bcs import Periodic
+from pops.fields.rhs import ChargeDensity
+from pops.solvers.elliptic import GeometricMG
+from pops.codegen import Production
+
+m = Model("diocotron")
+U = m.state("U", components=["ne"], roles={"ne": "density"})
+(ne,) = U
+phi = m.field("phi")
+m.solve_field("fields_from_state",
+              equation=(-laplacian(phi) == ne),
+              outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+              solver="geometric_mg")
+E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
+flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
+m.rate("explicit_rate", ddt(U) == -div(flux))
+m.check()
+
+poisson = PoissonProblem(name="phi", unknown="phi",
+                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+                         bcs=(Periodic(),), solver=GeometricMG())
+
+case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)), name="diocotron")
+        .block("ne", physics=m).field(poisson).time(T.Program("euler")))
+
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state={"ne": ne0})        # ne0: initial density (2D array)
+sim.run(0.1, cfl=0.4)
+sim.write("ne.npz", format="npz")                   # save the block states (npz; "vtk" also available)
 ```
 
-A model written as **formulas** (`pops.dsl.Model`, translated to C++ and compiled to a `.so`,
-plugged in the same way with `add_equation`). Here an isothermal fluid:
-
-```python
-from pops import dsl
-m = dsl.Model("flow")
-rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                  roles=["Density", "MomentumX", "MomentumY"])
-u, v = m.primitive("u", mx / rho), m.primitive("v", my / rho)
-c = dsl.sqrt(0.5)                                   # isothermal sound speed
-m.flux(x=[mx, mx * u + 0.5 * rho, mx * v],
-       y=[my, my * u, my * v + 0.5 * rho])
-m.eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-m.primitive_vars(rho, u, v)
-m.conservative_from([rho, rho * u, rho * v])
-m.elliptic_rhs(0.0 * rho)                          # no elliptic coupling here
-compiled = m.compile("flow.so")                    # codegen + C++ compile (headers auto-located)
-sim.add_equation("flow", model=compiled,
-                 spatial=pops.FiniteVolume(limiter="minmod"), time=pops.Explicit())
-```
-
-`pops.AmrSystem` composes one or more blocks on a refined hierarchy (`set_refinement`, regrid,
-conservative reflux, composite FAC elliptic and a Schur-condensed source stage). Step-by-step
-tutorial (bricks and formulas): [getting-started/tutorial](docs/sphinx/getting-started/tutorial.md).
+For an adaptive run, swap the layout to `pops.mesh.layouts.AMR(mesh, max_levels=2, ratio=2)` and
+author the refinement with `case.amr.refine(...)`; `pops.bind` builds an `AmrSystem` (regrid,
+conservative reflux, composite FAC elliptic, Schur-condensed source stage). The native `System`
+runtime methods (`add_block` / `add_equation` / `set_poisson` / `step_cfl`) are the low-level seam
+`pops.bind` builds on; they stay for the native/AMR runtime and the tests, not as the front door.
+Step-by-step tutorial: [getting-started/tutorial](docs/sphinx/getting-started/tutorial.md).
 Reference: [native-bricks](docs/sphinx/reference/native-bricks.md),
 [symbolic-dsl](docs/sphinx/reference/symbolic-dsl.md).
 

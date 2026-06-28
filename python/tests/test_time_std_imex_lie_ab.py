@@ -131,11 +131,11 @@ def test_lie_chains_two_stages(t):
     P = t.Program("lie")
 
     def half_flow(prog, U, frac):
-        R = prog.rhs(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
+        R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
         return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
     def source(prog, U, frac):
-        S = prog.rhs(state=U, fields=None, flux=False, sources=["default"])
+        S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["default"])
         return prog.linear_combine(None, U + (frac * prog.dt) * S)
 
     out = lt.lie(P, "plasma", half_flow, source)
@@ -318,11 +318,11 @@ def _run_lie(t):
     # source S = _C*rho over the full dt. Both sub-flows are forward-Euler affine updates, so the
     # composition is exactly rho * (1 + dt*_C) per step (H is inert), which an offline ref mirrors.
     def half_flow(prog, U, frac):
-        R = prog.rhs(state=U, fields=prog.solve_fields(U), flux=True, sources=[])
+        R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=[])
         return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
     def source(prog, U, frac):
-        S = prog.rhs(state=U, fields=None, flux=False, sources=["reaction"])
+        S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["reaction"])
         return prog.linear_combine(None, U + (frac * prog.dt) * S)
 
     P = t.Program("lie_step")

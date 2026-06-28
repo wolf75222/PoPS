@@ -56,7 +56,7 @@ def test_use_before_define_raises():
 def test_double_define_rejected():
     P = adctime.Program("dd")
     U = P.state("U", block="plasma")
-    k0 = P.rhs(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
+    k0 = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     P.define(U.stage(1), U.n + P.dt * k0)
     _expect_value_error(lambda: P.define(U.stage(1), U.n + P.dt * k0),
                         "SSA version already defined")
@@ -89,13 +89,13 @@ def _ssprk3_legacy(P, block):
     """SSPRK3 built with the legacy positional P.state / linear_combine / commit style."""
     U0 = P.state(block)
     f0 = P.solve_fields(U0)
-    k0 = P.rhs(state=U0, fields=f0, flux=True, sources=["default"])
+    k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("ssprk3_U1", U0 + P.dt * k0)
     f1 = P.solve_fields(U1)
-    k1 = P.rhs(state=U1, fields=f1, flux=True, sources=["default"])
+    k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("ssprk3_U2", 0.75 * U0 + 0.25 * (U1 + P.dt * k1))
     f2 = P.solve_fields(U2)
-    k2 = P.rhs(state=U2, fields=f2, flux=True, sources=["default"])
+    k2 = P._rhs_legacy(state=U2, fields=f2, flux=True, sources=["default"])
     P.commit(block, P.linear_combine(
         "ssprk3_step", (1.0 / 3.0) * U0 + (2.0 / 3.0) * (U2 + P.dt * k2)))
 
@@ -104,13 +104,13 @@ def _ssprk3_handles(P, block):
     """The SAME SSPRK3, written with the typed temporal-version handles."""
     U = P.state("U", block=block)
     f0 = P.solve_fields(U.n)
-    k0 = P.rhs(state=U.n, fields=f0, flux=True, sources=["default"])
+    k0 = P._rhs_legacy(state=U.n, fields=f0, flux=True, sources=["default"])
     P.define(U.stage(1), U.n + P.dt * k0)
     f1 = P.solve_fields(U.stage(1))
-    k1 = P.rhs(state=U.stage(1), fields=f1, flux=True, sources=["default"])
+    k1 = P._rhs_legacy(state=U.stage(1), fields=f1, flux=True, sources=["default"])
     P.define(U.stage(2), 0.75 * U.n + 0.25 * (U.stage(1) + P.dt * k1))
     f2 = P.solve_fields(U.stage(2))
-    k2 = P.rhs(state=U.stage(2), fields=f2, flux=True, sources=["default"])
+    k2 = P._rhs_legacy(state=U.stage(2), fields=f2, flux=True, sources=["default"])
     P.define(U.next, (1.0 / 3.0) * U.n + (2.0 / 3.0) * (U.stage(2) + P.dt * k2))
     P.commit(U.next)
 

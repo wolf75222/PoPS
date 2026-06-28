@@ -39,12 +39,13 @@ footgun (the `.so` is linked to a specific cpython), detailed in [limitations](k
 
 ## System: compose, configure, advance
 
-`pops.System` is the coupler: you add blocks (one model per block), you configure a
-shared system Poisson, you set the initial conditions in numpy, you advance. `add_block`
-takes a composed model `pops.Model(...)`; `add_equation` dispatches on the model type
-(native `ModelSpec` or `CompiledModel` from the DSL). `set_poisson(rhs=..., solver=..., bc=...)`
-configures the system elliptic; `set_density` / `step_cfl` / `advance` / `run` drive
-the advance; `density` / `mass` / `time` read the state.
+`pops.System` is the single-level runtime coupler. The documented PUBLIC way to build and run a
+simulation is the typed `pops.Case` assembly lowered by `pops.compile` and wired by `pops.bind` ->
+`sim.run(...)`; the per-step `System` methods below are the low-level seam `pops.bind` builds on and
+the tests use, not the front door. `add_block` takes a composed model `pops.Model(...)`;
+`add_equation` dispatches on the model type (native `ModelSpec` or `CompiledModel` from the DSL);
+`set_poisson(rhs=..., solver=..., bc=...)` configures the system elliptic; `set_density` /
+`step_cfl` / `advance` / `run` drive the advance; `density` / `mass` / `time` read the state.
 
 ```{eval-rst}
 .. autoclass:: pops.System
@@ -105,9 +106,11 @@ with CompressibleFlux; isothermal with IsothermalFlux).
 The system elliptic is not a hard-coded Poisson special case: `pops.elliptic(...)` composes an
 `EllipticModel` from an operator (`div_eps_grad`), a right-hand side (`composite_rhs`, the generic
 sum of the per-block elliptic bricks, or its usual case `charge_density`) and an output
-(`electric_field_from_potential`). `System.set_poisson(...)` is the shortcut for the Poisson
-instance; `EllipticSolver` selects the linear solver. The `elliptic` field of `pops.Model(...)`
-(see above) decides which brick each block contributes to the right-hand side.
+(`electric_field_from_potential`). On the public path you declare the field solve with the typed
+`pops.fields.PoissonProblem(unknown=, equation=, solver=, bcs=)` and attach it with
+`case.field(...)`; the low-level `System.set_poisson(...)` that `pops.bind` calls is the runtime
+seam for the Poisson instance, and `EllipticSolver` selects the linear solver. The `elliptic` field
+of `pops.Model(...)` (see above) decides which brick each block contributes to the right-hand side.
 
 ```{eval-rst}
 .. autofunction:: pops.elliptic

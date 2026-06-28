@@ -77,28 +77,44 @@ generated `.so` between runs (default `~/.cache/pops/dsl`).
    m.check()
    ```
 
-6. Compile the model. `production` is the native zero-copy path; it requires that `_pops` and the
-   `.so` share the same headers, compiler and C++ standard.
-
-   ```python
-   compiled = m.compile(backend="production")
-   ```
-
-7. Attach the compiled model to a `System` and choose the scheme. HLLC and Roe require a
-   primitive named `p`.
+6. Assemble a `pops.Case` with the model as its block, declare the typed elliptic field, then
+   compile and bind. `pops.compile` with `Production()` is the native zero-copy path; it requires
+   that `_pops` and the `.so` share the same headers, compiler and C++ standard. HLLC and Roe
+   require a primitive named `p`.
 
    ```python
    import pops
+   import pops.time as T
    from pops.numerics.riemann import HLLC
    from pops.numerics.reconstruction.limiters import Minmod
    from pops.numerics.variables import Primitive
+   from pops.mesh.cartesian import CartesianMesh
+   from pops.mesh.layouts import Uniform
+   from pops.fields import PoissonProblem
+   from pops.fields.bcs import Periodic
+   from pops.fields.rhs import ChargeDensity
+   from pops.solvers.elliptic import GeometricMG
+   from pops.codegen import Production
+   from pops.math import laplacian
 
-   s = pops.System(n=32, L=1.0, periodic=True)
-   s.add_equation("gas", compiled,
+   poisson = PoissonProblem(name="phi", unknown="phi",
+                            equation=(-laplacian("phi") == ChargeDensity.from_blocks("gas")),
+                            bcs=(Periodic(),), solver=GeometricMG())
+
+   case = (pops.Case(layout=Uniform(CartesianMesh(n=32, L=1.0, periodic=True)))
+           .block("gas", physics=m,
                   spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                           variables=Primitive()))
-   s.set_poisson(rhs="charge_density", solver="geometric_mg")
+                                            variables=Primitive()))
+           .field(poisson)
+           .time(T.Program("euler")))
+
+   compiled = pops.compile(case, backend=Production())
+   sim = pops.bind(compiled, state={"gas": U0})   # U0: initial conservative state
+   sim.run(0.1, cfl=0.4)
    ```
+
+   The low-level `System.add_equation` / `set_poisson` runtime methods `pops.bind` calls internally
+   stay for the native/AMR runtime and the tests; they are not the documented front door.
 
 ## Next steps
 

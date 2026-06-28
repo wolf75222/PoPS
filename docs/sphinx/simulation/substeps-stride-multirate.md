@@ -12,6 +12,11 @@ species require the same `dt`).
   `stride=20`). It thus stays temporally consistent with the fast blocks (never advanced
   "into the future"). Default 1.
 
+The cadence rides on the block's time policy (`pops.Explicit(stride=...)`). The multirate
+multi-block run goes through the low-level `AmrSystem` / `System` runtime (the multi-block assembly
+through `pops.compile` is deferred); the runtime seam `pops.bind` calls wires the per-block stride
+the same way:
+
 ```python
 sim.add_block("a", model=m, time=pops.Explicit(stride=1))   # every macro-step
 sim.add_block("b", model=m, time=pops.Explicit(stride=3))   # advances once every 3 (end of window)

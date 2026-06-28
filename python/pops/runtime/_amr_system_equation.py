@@ -38,7 +38,13 @@ class _AmrSystemEquation:
     """add_equation + named-aux methods of AmrSystem."""
 
     def add_equation(self, name, model, spatial=None, time=None, substeps=None):
-        """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D):
+        """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
+
+        Low-level runtime seam. The documented PUBLIC path is the typed
+        ``pops.Case(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.bind``; ``add_equation`` stays for that seam and the tests.
+
+        Dispatch:
 
         - a ModelSpec (pops.Model(...)) -> add_block (native bricks composed on the hierarchy);
         - a CompiledModel(backend='production', target='amr_system') (m.compile(...)) -> NATIVE path

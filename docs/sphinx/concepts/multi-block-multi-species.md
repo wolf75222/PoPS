@@ -7,10 +7,11 @@ the coupling between species reduces to a summed right-hand side.
 
 ## One block per model or species
 
-A block is a named carrier for one model on the mesh. You add it with `add_block`
-(native bricks) or `add_equation` (a compiled DSL, domain-specific language, model),
-once per species. The same call exists on `pops.System` (single level) and on
-`pops.AmrSystem` (refined); the multi-block facade is identical on both.
+A block is a named carrier for one model on the mesh. On the public path you declare it with
+`case.block(name, physics=...)`, once per species, and `pops.bind` installs it through the
+low-level runtime (`add_block` for native bricks, `add_equation` for a compiled DSL,
+domain-specific language, model). The same install seam exists on `pops.System` (single level) and
+on `pops.AmrSystem` (refined); the multi-block runtime is identical on both.
 
 Each block keeps its own numerics. A block fixes its spatial scheme (limiter, flux,
 reconstruction), its time treatment (`explicit` or `imex`), and its multirate

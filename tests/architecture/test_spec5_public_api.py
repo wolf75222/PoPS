@@ -7,9 +7,12 @@ This guards the FOUNDATION cleanup of the public bindings surface:
 * ``pops.PythonFlux`` is removed from the public surface (it computes a numpy residual in Python,
   which the PoPS "no public Python numeric" rule excludes); it is reachable only as
   ``pops.experimental.PythonFlux`` for residual prototyping in tests ;
-* there is no public custom-solver authoring DSL (no ``pops.solver`` / ``pops.lib.solver`` /
-  ``pops.lib.solvers.solver`` decorator); the ``@solver`` generation DSL lives only under the
-  internal / experimental ``pops.codegen.solvers``.
+* there is no public custom-solver authoring DSL (no ``pops.solver`` / ``pops.lib.solver``
+  decorator); the ``@solver`` generation DSL lives only under the internal / experimental
+  ``pops.codegen.solvers`` ;
+* the solver descriptors have exactly ONE public home, ``pops.solvers`` -- the transitional
+  ``pops.lib.solvers`` re-export shim is removed (no second public path) ;
+* the public lowering surface takes a ``layout`` (Uniform / AMR), never a ``target=`` kwarg.
 
 The module imports ``pops``, so it needs the compiled ``_pops`` extension. If ``_pops`` cannot be
 loaded the whole module is skipped (not failed), so the source-only architecture checks still run
@@ -117,12 +120,50 @@ def test_no_public_custom_solver_decorator():
     # The custom-solver authoring DSL (@solver) is not a user API on pops / pops.lib / pops.solvers.
     import pops.lib  # noqa: PLC0415
     import pops.solvers  # noqa: PLC0415
-    import pops.lib.solvers  # noqa: PLC0415
 
     assert not hasattr(pops, "solver"), "there must be no top-level pops.solver decorator"
     assert not hasattr(pops.lib, "solver"), "there must be no pops.lib.solver decorator"
     assert not hasattr(pops.solvers, "solver"), "pops.solvers is a catalog, not the authoring DSL"
-    assert not hasattr(pops.lib.solvers, "solver"), "pops.lib.solvers is presets-only (no @solver)"
+
+
+def test_solvers_have_one_public_home_no_lib_shim():
+    # No-soft-compat: the solver descriptors live in exactly ONE public home, pops.solvers. The
+    # transitional pops.lib.solvers re-export shim is REMOVED -- importing it fails, and the
+    # descriptors are NOT reachable through pops.lib (no second public path).
+    import importlib  # noqa: PLC0415
+
+    import pops.lib  # noqa: PLC0415
+    import pops.solvers  # noqa: PLC0415
+
+    # The one public home resolves every solver descriptor.
+    from pops.solvers import CG, GMRES, GeometricMG, Newton, Schur  # noqa: F401,PLC0415
+
+    # The shim module is gone: importing it raises, and pops.lib exposes no solvers / preconditioners.
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.lib.solvers")
+    assert not hasattr(pops.lib, "solvers"), "pops.lib must not re-export the solver catalog"
+    assert not hasattr(pops.lib, "preconditioners"), "pops.lib must not re-export preconditioners"
+    # The descriptor attributes are NOT a second public path under pops.lib.solvers.
+    for name in ("CG", "GMRES", "GeometricMG", "Newton", "Schur", "BiCGStab", "FixedPoint"):
+        assert hasattr(pops.solvers, name), "pops.solvers is the one public home (missing %r)" % name
+
+
+def test_no_public_target_kwarg_on_compile_or_bind():
+    # Spec 5 sec.11 (#5): the LAYOUT (Uniform / AMR) chooses the runtime; a user never passes
+    # target=. The public lowering entry points pops.compile / pops.bind take no target kwarg.
+    import inspect  # noqa: PLC0415
+
+    for fn in (pops.compile, pops.bind):
+        sig = inspect.signature(fn)
+        assert "target" not in sig.parameters, (
+            "%s must not accept a public target= kwarg (the layout picks the runtime)" % fn.__name__)
+    # The public assembly pops.Case has no compile / install / target surface either.
+    case = pops.Case(name="arch")
+    for forbidden in ("compile", "install", "target"):
+        assert not hasattr(case, forbidden), "pops.Case must not expose %r" % forbidden
+    # pops.physics.Model (the writing facade) lowers; it has no target= path.
+    pm = pops.physics.Model("arch")
+    assert not hasattr(pm, "target"), "pops.physics.Model must not expose a target surface"
 
 
 def test_solver_generation_dsl_is_internal_experimental():
