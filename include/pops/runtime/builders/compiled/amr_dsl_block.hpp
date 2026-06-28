@@ -383,6 +383,11 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   h.set_level_potential = [cpl](int k, const std::vector<double>& p) {
     cpl->set_level_potential(k, p);
   };
+  // GLOBAL (np>1 gather) counterparts (ADC-509): the facade routes to these under MPI np>1 so a
+  // bit-identical checkpoint gathers the distributed per-level fabs onto rank 0 (COLLECTIVE, all ranks
+  // call). Mono-rank they return the same array as the non-global hooks above (reduce = identity).
+  h.level_state_global = [cpl](int k) { return cpl->level_state_global(k); };
+  h.level_potential_global = [cpl](int k) { return cpl->level_potential_global(k); };
   h.set_hierarchy = [cpl](const std::vector<pops::PatchBox>& boxes) {
     // Mono-block: all patches live at level 1 -> we filter level == 1 and convert to Box2D
     // (INCLUSIVE corners, fine-level index space), then impose this BoxArray on the coupler.

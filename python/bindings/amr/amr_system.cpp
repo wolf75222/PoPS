@@ -193,6 +193,10 @@ struct AmrSystem::Impl {
   std::function<std::vector<double>(int)> level_potential_fn;
   std::function<void(int, const std::vector<double>&)> set_level_potential_fn;
   std::function<void(const std::vector<PatchBox>&)> set_hierarchy_fn;
+  // GLOBAL (np>1 gather) counterparts of the per-level accessors (ADC-509): the facade routes to
+  // these under MPI np>1 so a mono-block checkpoint gathers the distributed fabs onto rank 0.
+  std::function<std::vector<double>(int)> level_state_global_fn;
+  std::function<std::vector<double>(int)> level_potential_global_fn;
   // --- multi-block path (AmrRuntime, shared hierarchy + summed Poisson) ---
   std::shared_ptr<pops::AmrRuntime> runtime;
   double t = 0;
@@ -232,6 +236,15 @@ struct AmrSystem::Impl {
       if (blocks[i].name == name)
         return static_cast<int>(i);
     return -1;
+  }
+
+  // Resolve @p name to its block index, raising if absent (ADC-509 multi-block checkpoint accessors;
+  // mirror of the density(name) / mass(name) resolution). Returns a size_t for the runtime accessors.
+  std::size_t block_index_or_throw(const std::string& name) const {
+    const int idx = block_index(name);
+    if (idx < 0)
+      throw std::runtime_error("AmrSystem : no block named '" + name + "'");
+    return static_cast<std::size_t>(idx);
   }
 
   BCRec poisson_bc() {
@@ -328,6 +341,8 @@ struct AmrSystem::Impl {
     level_potential_fn = std::move(h.level_potential);
     set_level_potential_fn = std::move(h.set_level_potential);
     set_hierarchy_fn = std::move(h.set_hierarchy);
+    level_state_global_fn = std::move(h.level_state_global);          // ADC-509 np>1 gather
+    level_potential_global_fn = std::move(h.level_potential_global);  // ADC-509 np>1 gather
     built = true;
   }
 
@@ -1502,21 +1517,22 @@ std::vector<double> AmrSystem::potential() {
 }
 
 namespace {
-// Common message of the AMR checkpoint accessors (ADC-65): BIT-IDENTICAL restart is only wired
-// in SINGLE-BLOCK (AmrCouplerMP coupler). The multi-block (AmrRuntime engine) shares the layout AND
-// the aux between blocks and does not yet expose the per-level/per-block state nor hierarchy imposition on
-// the shared grid -> EXPLICIT rejection rather than a silent partial/false state (documented follow-up).
+// Common message of the MONO-BLOCK-only checkpoint accessors (ADC-65): the per-level STATE (all
+// components) is carried PER BLOCK in multi-block, so level_state / set_level_state / n_vars and the
+// hierarchy imposition are MONO-BLOCK only. In multi-block the facade routes to the per-BLOCK variants
+// (block_level_state ...) -> EXPLICIT redirection rather than a silent partial/false state. The SHARED
+// observables (n_levels, level_potential) work in BOTH paths (single aux), so they do NOT raise this.
 const char* const kAmrCkptMonoOnly =
-    "AMR checkpoint/restart (per-level state, hierarchy imposition) wired in SINGLE-BLOCK only "
-    "(AmrCouplerMP coupler) ; this system is multi-block (AmrRuntime engine : shared layout + aux "
-    "= follow-up). Use a single add_block, or a single-level System (bit-identical "
-    "checkpoint/restart).";
+    "AmrSystem : level_state / set_level_state / set_hierarchy are SINGLE-BLOCK only (AmrCouplerMP "
+    "coupler) ; this system is multi-block (AmrRuntime engine : shared layout + aux). Use the "
+    "per-block accessors block_level_state / set_block_level_state (the Python checkpoint/restart "
+    "facade routes to them automatically), or a single add_block.";
 }  // namespace
 
 int AmrSystem::n_levels() {
   p_->ensure_built();
   if (p_->runtime)
-    throw std::runtime_error(kAmrCkptMonoOnly);
+    return p_->runtime->nlev();  // SHARED hierarchy (common to all blocks)
   return p_->n_levels_fn();
 }
 int AmrSystem::n_vars() {
@@ -1531,6 +1547,12 @@ std::vector<double> AmrSystem::level_state(int k) {
     throw std::runtime_error(kAmrCkptMonoOnly);
   return p_->level_state_fn(k);
 }
+std::vector<double> AmrSystem::level_state_global(int k) {
+  p_->ensure_built();
+  if (p_->runtime)
+    throw std::runtime_error(kAmrCkptMonoOnly);
+  return p_->level_state_global_fn(k);  // ADC-509 np>1 gather (mono-block)
+}
 void AmrSystem::set_level_state(int k, const std::vector<double>& s) {
   p_->ensure_built();
   if (p_->runtime)
@@ -1540,13 +1562,21 @@ void AmrSystem::set_level_state(int k, const std::vector<double>& s) {
 std::vector<double> AmrSystem::level_potential(int k) {
   p_->ensure_built();
   if (p_->runtime)
-    throw std::runtime_error(kAmrCkptMonoOnly);
+    return p_->runtime->level_potential(k);  // SHARED aux / mg warm-start (common to all blocks)
   return p_->level_potential_fn(k);
+}
+std::vector<double> AmrSystem::level_potential_global(int k) {
+  p_->ensure_built();
+  if (p_->runtime)
+    return p_->runtime->level_potential_global(k);  // ADC-509 np>1 gather (shared phi)
+  return p_->level_potential_global_fn(k);
 }
 void AmrSystem::set_level_potential(int k, const std::vector<double>& p) {
   p_->ensure_built();
-  if (p_->runtime)
-    throw std::runtime_error(kAmrCkptMonoOnly);
+  if (p_->runtime) {
+    p_->runtime->set_level_potential(k, p);  // SHARED warm-start (common to all blocks)
+    return;
+  }
   p_->set_level_potential_fn(k, p);
 }
 void AmrSystem::set_hierarchy(const std::vector<PatchBox>& boxes) {
@@ -1554,6 +1584,42 @@ void AmrSystem::set_hierarchy(const std::vector<PatchBox>& boxes) {
   if (p_->runtime)
     throw std::runtime_error(kAmrCkptMonoOnly);
   p_->set_hierarchy_fn(boxes);
+}
+
+// --- MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509) --------------------------------
+// All require the multi-block runtime (the AmrRuntime engine carries the per-block level stacks on the
+// SHARED layout): mono-block uses the level_state path above (explicit redirection). The named block is
+// resolved to its index; the runtime accessors mirror AmrCouplerMP's (verbatim loops -> same layout).
+namespace {
+const char* const kAmrCkptMultiOnly =
+    "AmrSystem : block_level_state / set_block_level_state are MULTI-BLOCK only (>= 2 add_block) ; "
+    "this system is mono-block. Use level_state / set_level_state.";
+}  // namespace
+
+int AmrSystem::block_n_vars(const std::string& name) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrCkptMultiOnly);
+  return p_->runtime->block_n_vars(p_->block_index_or_throw(name));
+}
+std::vector<double> AmrSystem::block_level_state(const std::string& name, int k) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrCkptMultiOnly);
+  return p_->runtime->block_level_state(p_->block_index_or_throw(name), k);
+}
+std::vector<double> AmrSystem::block_level_state_global(const std::string& name, int k) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrCkptMultiOnly);
+  return p_->runtime->block_level_state_global(p_->block_index_or_throw(name), k);
+}
+void AmrSystem::set_block_level_state(const std::string& name, int k,
+                                      const std::vector<double>& s) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(kAmrCkptMultiOnly);
+  p_->runtime->set_block_level_state(p_->block_index_or_throw(name), k, s);
 }
 
 }  // namespace pops

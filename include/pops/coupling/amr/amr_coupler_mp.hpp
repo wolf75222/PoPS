@@ -428,6 +428,23 @@ class AmrCouplerMP {
     }
   }
 
+  // GLOBAL (np>1 GATHER) variants of level_state / level_potential (ADC-509). The base accessors
+  // above fill the GLOBAL buffer from the LOCAL fabs only (zeros where this rank owns no box); these
+  // add an all_reduce_sum_inplace so EACH rank holds the complete field (AMR reflux pattern, comm.hpp;
+  // MIRROR of System::state_global / gather_global). COLLECTIVE: all ranks MUST call them. Mono-rank
+  // the reduce is the identity -> bit-identical to level_state / level_potential. The base distributed
+  // coarse + round-robin fine patches are disjoint, so the sum double-counts nothing.
+  std::vector<double> level_state_global(int k) {
+    std::vector<double> out = level_state(k);
+    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
+  }
+  std::vector<double> level_potential_global(int k) {
+    std::vector<double> out = level_potential(k);
+    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
+  }
+
   // Imposes the fine-level hierarchy (restart): rebuilds level 1 on the SAVED @p
   // fine_boxes BoxArray (instead of Berger-Rigoutsos clustering on tags), via the SAME mechanism as
   // regrid (regrid_field_on_layout: parent interp + fine carry-over), then reattaches the level-1 aux.
