@@ -144,8 +144,9 @@ Important points :
                    spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()))
   sim.set_block_params("gas", [4.0])                   # change cs2 au RUNTIME, sans recompiler
   ```
-- `pops.PythonFlux` : numpy host TEST tool, outside the GPU/MPI hot path. Never use in
-  production.
+- `pops.experimental.PythonFlux` : numpy host TEST tool (NON-PRODUCTION / TESTS-ONLY), outside the
+  GPU/MPI hot path. It computes a numpy residual in Python, so it lives under `pops.experimental`,
+  not the public `pops` surface. Never use in production.
 - Physical roles (`Density`, `MomentumX`, `MomentumY`, ...) : required for inter-species
   couplings and for the `System` to recover quantities by role. To be supplied to
   `conservative_vars(roles=...)` or to `m.compile(require_metadata=True)`.

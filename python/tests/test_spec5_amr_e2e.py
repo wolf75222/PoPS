@@ -95,7 +95,7 @@ def test_amr_layout_drives_compile_target(monkeypatch=None):
     _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
         layout = AMR(CartesianMesh(n=48, L=2.0, periodic=False), max_levels=2, ratio=2)
-        prob = pops.Problem(layout=layout).block("ne", physics=_StubModel())
+        prob = pops.Case(layout=layout).block("ne", physics=_StubModel())
         compiled = orchestration.compile(prob, time=object())
         _check(captured["target"] == "amr_system",
                "layout=AMR routes to compile_problem(target='amr_system')")
@@ -243,7 +243,7 @@ def test_production_so_compile_is_romeo_gated():
     set_orchestration_compile_problem(_fake_compile_problem)
     try:
         layout = AMR(CartesianMesh(n=32), max_levels=2, ratio=2)
-        prob = pops.Problem(layout=layout).block("ne", physics=_StubModel())
+        prob = pops.Case(layout=layout).block("ne", physics=_StubModel())
         try:
             orchestration.compile(prob, time=object())
             raise AssertionError("the ROMEO-boundary stub should have raised")

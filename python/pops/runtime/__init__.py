@@ -7,8 +7,10 @@ This is the TOP layer and the ONLY layer permitted to import the ``_pops`` exten
 - the composable BRICKS (state / transport / source / elliptic) and the spatial + time policies ;
 - the geometry MESH objects (CartesianMesh / PolarMesh / AuxHalo) ;
 - the parallelism knobs (set_threads / has_kokkos / parallel_info) ;
-- the environment doctor / capability matrix ;
-- the host PythonFlux prototyping backend.
+- the environment doctor / capability matrix.
+
+The host PythonFlux prototyping backend has moved to :mod:`pops.experimental` (NON-PRODUCTION /
+TESTS-ONLY: it computes a numpy residual in Python).
 
 The lower layers (ir / model / physics / time / lib / codegen) are numpy-free until first use
 and never import this package. The runtime methods that need the codegen / physics / dsl layers

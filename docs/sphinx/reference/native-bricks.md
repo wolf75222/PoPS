@@ -224,18 +224,20 @@ sim.add_equation("gas", compiled,
 The transport slot fixes the layout (`n_vars`, conservative names, primitives, gamma) ; a source / elliptic
 DSL brick must declare the same `n_vars`. Detail : [models page](../models/index.md).
 
-### PythonFlux : flux written in Python (host prototyping)
+### PythonFlux : flux written in Python (host prototyping, tests-only)
 
-`pops.PythonFlux(flux, max_wave_speed)` is a prototyping backend : the user provides the physical flux
-`flux(U, dir)` and the wave speed `max_wave_speed(U)` in numpy, and `PythonFlux` assembles the
-residual `-div(F*)` by Rusanov flux (order 1, periodic domain) over the whole array. It is a
-pure host path (never a Kokkos kernel), outside the GPU / MPI hot path ; it serves to iterate on a novel flux
-without recompiling (pattern of the `custom_scheme` case, with `pops.System` as Poisson oracle). For
-production, compose a compiled flux (`pops.CompressibleFlux`, `pops.ExB`, or a DSL model).
+`pops.experimental.PythonFlux(flux, max_wave_speed)` is a NON-PRODUCTION / TESTS-ONLY prototyping
+backend : the user provides the physical flux `flux(U, dir)` and the wave speed `max_wave_speed(U)`
+in numpy, and `PythonFlux` assembles the residual `-div(F*)` by Rusanov flux (order 1, periodic
+domain) over the whole array. Because it computes a numpy residual in Python, it lives under
+`pops.experimental` (not the public `pops` surface). It is a pure host path (never a Kokkos kernel),
+outside the GPU / MPI hot path ; it serves to iterate on a novel flux without recompiling (pattern of
+the `custom_scheme` case, with `pops.System` as Poisson oracle). For production, compose a compiled
+flux (`pops.CompressibleFlux`, `pops.ExB`, or a DSL model).
 
 ```python
-import pops
-pf = pops.PythonFlux(flux=mon_flux, max_wave_speed=ma_vitesse)
+from pops.experimental import PythonFlux
+pf = PythonFlux(flux=mon_flux, max_wave_speed=ma_vitesse)
 dUdt = pf.residual(U, dx)              # -div(F*) par Rusanov ordre 1, periodique
 dt = pf.cfl_dt(U, h, cfl=0.4)          # dt = cfl * h / max_wave_speed(U)
 ```

@@ -1,4 +1,9 @@
-"""PythonFlux : host (numpy) prototyping backend for the Flux interface (Spec-4 PR-F)."""
+"""PythonFlux : host (numpy) prototyping backend for the Flux interface.
+
+NON-PRODUCTION / TESTS-ONLY: this module lives under :mod:`pops.experimental` and is not part
+of the stable public API. It computes a numpy residual in Python (the PoPS "no public Python
+numeric" rule keeps it off the public surface); use it only for residual prototyping in tests.
+"""
 
 
 class PythonFlux:
@@ -10,6 +15,9 @@ class PythonFlux:
     kernel. For production (GPU/MPI), compose a COMPILED flux (pops.CompressibleFlux brick,
     pops.ExB...). PythonFlux formalizes the pattern of the custom_scheme case: iterate quickly on a
     novel flux without recompiling (pops.System serving as Poisson oracle if needed).
+
+    NON-PRODUCTION / TESTS-ONLY: reachable as ``pops.experimental.PythonFlux`` for residual
+    prototyping in tests; it is intentionally absent from the public ``pops`` surface.
 
     flux(U, dir) -> F: U and F are numpy (ncomp, n, n); dir = 0 (x) or 1 (y).
     max_wave_speed(U) -> float: bound for the Rusanov flux and the CFL.

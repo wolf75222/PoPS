@@ -325,8 +325,10 @@ chk(list(vn.variable_roles("e", "primitive")) == ["density", "velocity_x", "velo
     "roles primitifs (Euler)")
 chk(list(vn.variable_roles("d")) == ["density"], "role scalaire (diocotron)")
 
-# --- 4i. PythonFlux : backend de prototypage (hote, numpy) ----------------------
-print("== PythonFlux : flux defini en Python (prototypage hote, hors Kokkos) ==")
+# --- 4i. PythonFlux : backend de prototypage (hote, numpy, TESTS-ONLY) ----------
+# NON-PRODUCTION / TESTS-ONLY : PythonFlux calcule un residu numpy en Python, il vit sous
+# pops.experimental (hors de la surface publique pops).
+print("== pops.experimental.PythonFlux : flux defini en Python (prototypage hote, hors Kokkos) ==")
 vx, vy = 0.7, -0.3
 
 
@@ -338,7 +340,7 @@ def adv_speed(U):
     return abs(vx) + abs(vy)
 
 
-pf = pops.PythonFlux(adv_flux, adv_speed)
+pf = pops.experimental.PythonFlux(adv_flux, adv_speed)
 nn = 32
 Upf = np.zeros((1, nn, nn))
 Upf[0] = 1.0 + 0.2 * np.sin(2 * np.pi * meshx(nn))[None, :] * np.ones((nn, nn))

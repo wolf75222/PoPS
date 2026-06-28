@@ -2,7 +2,7 @@
 
 Verifie : (1) le flux d'Euler ECRIT en formules == flux d'Euler de reference (numpy), composante
 par composante ; (2) max_wave_speed coherent ; (3) check() detecte une variable non definie
-(verification de dependances) ; (4) le modele declare en formules TOURNE via pops.PythonFlux
+(verification de dependances) ; (4) le modele declare en formules TOURNE via pops.experimental.PythonFlux
 (masse conservee sur un domaine periodique). Pur Python (aucun binding) : lance avec python3.
 """
 import numpy as np

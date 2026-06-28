@@ -4,7 +4,7 @@ brique generee charge un .so qui lui rend un pops::IModel<4>*, et l'utilise poly
 C'est l'item (a) du reste (cf. docs/ARCHITECTURE_CIBLE.md) : la brique GENEREE (EulerGen) est enrobee
 dans pops::ModelAdapter, exposee via une fabrique extern "C", chargee a l'execution (dlopen), et
 dispatchee par l'interface virtuelle. Le main ne voit QUE pops::IModel<4> + pops::Euler (l'oracle), pas
-EulerGen. Chemin HOTE (les appels virtuels ne vont pas sur GPU) : pendant compile de pops.PythonFlux.
+EulerGen. Chemin HOTE (les appels virtuels ne vont pas sur GPU) : pendant compile de pops.experimental.PythonFlux.
 """
 import os
 import platform

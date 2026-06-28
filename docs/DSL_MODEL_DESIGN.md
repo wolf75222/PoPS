@@ -19,8 +19,9 @@ RECOMMENDED public API (main user entry point):
   compile it. RECOMMENDED default: `backend="production"` (zero-copy native path, GPU/MPI validated).
 - ADVANCED / LEGACY / TEST paths (NOT the main user route): `backend="prototype"`
   (JIT proto), `backend="aot"` (`.so` single-rank with marshaling), `add_dynamic_block`,
-  `add_compiled_block`, and `pops.PythonFlux` (numpy HOST path to TEST a flux, outside the GPU/MPI
-  hot path, never production). To use only for prototyping or numerical debugging.
+  `add_compiled_block`, and `pops.experimental.PythonFlux` (numpy HOST path to TEST a flux,
+  NON-PRODUCTION / TESTS-ONLY, outside the GPU/MPI hot path, never production). To use only for
+  prototyping or numerical debugging.
 
 ## 0bis. Implementation status (up to date with `origin/master`)
 
@@ -447,8 +448,8 @@ Anchors:
   `np=1/2/4` (#93), `solve_fields` MPI `np=1/2/4` CPU/CI (#99). The device/MPI validation is therefore
   no longer a GAP.
 - No backend executes a Python callback per cell: even `prototype` is a
-  C++ model (from the codegen), not an `pops.PythonFlux`. `pops.PythonFlux`
-  (`__init__.py:420`) is a SEPARATE HOST numpy path, outside the compiled DSL, OUTSIDE the GPU/MPI hot path:
+  C++ model (from the codegen), not a `pops.experimental.PythonFlux`. `pops.experimental.PythonFlux`
+  (`experimental/python_flux.py`) is a SEPARATE HOST numpy path, outside the compiled DSL, OUTSIDE the GPU/MPI hot path:
   it is a TEST tool (verify a flux), never production.
 
 

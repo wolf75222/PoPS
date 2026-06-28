@@ -146,9 +146,12 @@ that remaps onto the `pops.Spatial(...)` object.
 
 .. autofunction:: pops.FiniteVolume
 
-.. autoclass:: pops.PythonFlux
+.. autoclass:: pops.experimental.PythonFlux
    :members:
 ```
+
+`PythonFlux` is NON-PRODUCTION / TESTS-ONLY: it computes a numpy residual in Python, so it lives
+under `pops.experimental` (not the public `pops` surface). Use a compiled flux brick in production.
 
 ## Per-block time treatment
 

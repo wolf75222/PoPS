@@ -1,6 +1,6 @@
 """Bloc DYNAMIQUE de bout en bout : formules Python -> .so JIT -> sim.add_dynamic_block -> le modele
 charge a l'execution est pilote DANS le System (eval_rhs / step / get_state). On verifie que le residu
-calcule par le bloc dynamique (host Rusanov via IModel) == celui d'pops.PythonFlux (meme schema), et que
+calcule par le bloc dynamique (host Rusanov via IModel) == celui d'pops.experimental.PythonFlux (meme schema), et que
 le bloc tourne dans le System en conservant la masse. C'est l'aboutissement de l'item (a) : le DSL est
 bout-en-bout depuis Python, a travers le runtime pops.
 """
@@ -44,14 +44,14 @@ def main():
         U[3] = p0 / (GAMMA - 1.0)
         sim.set_state("euler", U.reshape(-1).tolist())
 
-        # (1) le residu du bloc dynamique == celui d'pops.PythonFlux (meme schema Rusanov global)
+        # (1) le residu du bloc dynamique == celui d'pops.experimental.PythonFlux (meme schema Rusanov global)
         R_sys = np.array(sim.eval_rhs("euler")).reshape(4, n, n)
-        pf = pops.PythonFlux(lambda u, d: e.flux(u, {}, d),
+        pf = pops.experimental.PythonFlux(lambda u, d: e.flux(u, {}, d),
                             lambda u: max(e.max_wave_speed(u, {}, 0), e.max_wave_speed(u, {}, 1)))
         R_py = pf.residual(U, h)
         dres = float(np.max(np.abs(R_sys - R_py)))
         assert dres < 1e-9, "residu bloc dynamique != PythonFlux (ecart %.2e)" % dres
-        print("OK  eval_rhs(bloc dynamique) == pops.PythonFlux (ecart max %.1e)" % dres)
+        print("OK  eval_rhs(bloc dynamique) == pops.experimental.PythonFlux (ecart max %.1e)" % dres)
 
         # (2) le bloc tourne DANS le System : masse conservee, etat physique, dynamique non triviale
         mass0 = float(np.array(sim.get_state("euler")).reshape(4, n, n)[0].sum())

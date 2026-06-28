@@ -1,6 +1,6 @@
 """pops.codegen.orchestration -- thin pops.compile / pops.bind over the existing runtime.
 
-These are the Spec 5 sec.11 lowering entry points for a :class:`pops.problem.Problem`:
+These are the Spec 5 sec.11 lowering entry points for a :class:`pops.case.Case`:
 
 * :func:`compile` validates the assembly, picks the compile target from the LAYOUT
   (``Uniform`` -> ``"system"``, ``AMR`` -> ``"amr_system"``; no user ``target=`` string),
@@ -14,13 +14,13 @@ There is NO new codegen and NO new install machinery here: this module ORCHESTRA
 proven pieces. Every not-yet-wired route raises a clear ``NotImplementedError``.
 
 Import-graph rule (Spec 4 / sec.4): ``codegen`` may import only ir / model / physics / time /
-lib at module scope. The runtime (System / AmrSystem), mesh (AMR) and problem types are pulled
+lib at module scope. The runtime (System / AmrSystem), mesh (AMR) and case types are pulled
 LAZILY inside the function bodies, so this module adds no forbidden cross-layer edge.
 """
 
 
 def compile(problem, backend="production", time=None, **kwargs):
-    """Lower a :class:`pops.problem.Problem` to a compiled handle (thin over ``compile_problem``).
+    """Lower a :class:`pops.case.Case` to a compiled handle (thin over ``compile_problem``).
 
     Validates @p problem, derives the compile target from its LAYOUT (``Uniform`` -> system,
     ``AMR`` -> amr_system), resolves the single block's physics to the model ``compile_problem``
@@ -30,7 +30,7 @@ def compile(problem, backend="production", time=None, **kwargs):
     multi-block) raise a clear ``NotImplementedError``.
 
     Args:
-        problem: The :class:`pops.problem.Problem` assembly to lower.
+        problem: The :class:`pops.case.Case` assembly to lower.
         backend: The codegen backend forwarded to ``compile_problem`` (default "production").
         time: The ``pops.time.Program`` time scheme; falls back to ``problem._time``.
         **kwargs: Extra keyword args forwarded verbatim to ``compile_problem`` (so_path /
