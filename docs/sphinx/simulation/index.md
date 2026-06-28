@@ -5,7 +5,7 @@ A simulation is created by binding a compiled case.
 ```python
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state=state, params=params)
-sim.run(t_final=1.0, cfl=0.4)
+sim.run(t_end=1.0, cfl=0.4)
 ```
 
 The case owns the description. The bound simulation owns runtime data and

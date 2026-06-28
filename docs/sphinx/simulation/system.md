@@ -15,7 +15,7 @@ sim = pops.bind(compiled, state={"plasma": U0})
 The returned object exposes high-level runtime actions:
 
 ```python
-sim.run(t_final=1.0, cfl=0.4)
+sim.run(t_end=1.0, cfl=0.4)
 sim.write("out", format="npz")
 sim.time()
 sim.mass("plasma")

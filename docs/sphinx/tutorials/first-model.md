@@ -69,7 +69,7 @@ print(compiled)
 
 rho0 = np.ones((64, 64), dtype=float)
 sim = pops.bind(compiled, state={"plasma": rho0})
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 Use `compiled.inspect()`, `compiled.arguments()`, and

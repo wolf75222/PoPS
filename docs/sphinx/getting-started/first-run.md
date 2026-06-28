@@ -78,7 +78,7 @@ case = (
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": ne0})
-sim.run(0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 
 print("t       =", sim.time())
 print("mass    =", sim.mass("ne"))

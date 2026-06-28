@@ -21,7 +21,7 @@ it to a handle, then bind a runnable simulation::
             .time(time_program))
     compiled = pops.compile(case, backend=Production())
     sim = pops.bind(compiled, state={"ne": ne0}, params=None, aux=None, solvers=None)
-    sim.run(0.1, cfl=0.4)
+    sim.run(t_end=0.1, cfl=0.4)
 
 The scenario names (diocotron, electron_euler...) are compositions on the
 application side (see adc_cases). No scenario name here.

@@ -66,7 +66,7 @@ compiled = pops.compile(case, backend=Production())
 print(compiled.arguments())
 
 sim = pops.bind(compiled, state={"moments": M0}, params={"q_over_m": -1.0})
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 ## AMR

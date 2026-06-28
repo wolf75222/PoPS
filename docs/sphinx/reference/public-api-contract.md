@@ -15,7 +15,7 @@ The public flow is:
 case = pops.Case(layout=layout, name="run_name")
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state=initial_state, params=params)
-sim.run(t_final=1.0, cfl=0.4)
+sim.run(t_end=1.0, cfl=0.4)
 ```
 
 No Python callback is allowed in a cell loop, stage loop, Krylov loop, field
@@ -212,7 +212,7 @@ Profiling is off by default:
 
 ```python
 with sim.profile(pops.Profile.Advanced()) as prof:
-    sim.run(t_final=1.0, cfl=0.4)
+    sim.run(t_end=1.0, cfl=0.4)
 
 prof.summary().print()
 ```

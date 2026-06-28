@@ -20,7 +20,7 @@ The public flow is:
 case = pops.Case(layout=layout)
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state=initial_state, params=params)
-sim.run(t_final=1.0, cfl=0.5)
+sim.run(t_end=1.0, cfl=0.5)
 ```
 
 There must not be Python callbacks inside cell loops, face loops, Riemann
@@ -138,7 +138,7 @@ print(memory)
 
 sim = pops.bind(compiled, state=state)
 with sim.profile(Profile.Advanced()) as prof:
-    sim.run(t_final=1.0, cfl=0.5)
+    sim.run(t_end=1.0, cfl=0.5)
 prof.summary().print()
 ```
 

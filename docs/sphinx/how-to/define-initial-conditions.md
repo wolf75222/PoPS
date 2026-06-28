@@ -49,10 +49,10 @@ The conservative state uses the block's component order and an `(ncomp, n, n)` l
 
 ## Advance and check the result
 
-After binding, `sim.run(t_end, cfl=CFL)` advances the simulation by CFL-limited steps up to `t_end`.
+After binding, `sim.run(t_end=final_time, cfl=CFL)` advances the simulation by CFL-limited steps up to the requested final time.
 
 ```python
-sim.run(0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 Read `sim.density(NAME)` for the field, `sim.potential()` for `phi`, and `sim.mass(NAME)` for

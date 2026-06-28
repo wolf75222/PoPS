@@ -68,7 +68,7 @@ case = (
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": ne0})
-sim.run(t_final=0.1, cfl=0.4)
+sim.run(t_end=0.1, cfl=0.4)
 ```
 
 Use `layout=AMR(...)` for adaptive runs. The model and time program stay the

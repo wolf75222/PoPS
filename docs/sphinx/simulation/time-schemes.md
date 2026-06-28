@@ -45,7 +45,7 @@ These functions build IR nodes. They are not alternate runtime steppers.
 The CFL value is a runtime policy passed to `sim.run`.
 
 ```python
-sim.run(t_final=1.0, cfl=0.4)
+sim.run(t_end=1.0, cfl=0.4)
 ```
 
 The time program should not reject a run only because the CFL is not a compile
