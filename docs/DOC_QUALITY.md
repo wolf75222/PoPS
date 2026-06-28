@@ -78,12 +78,16 @@ time.
 
 - delivered design notes: `docs/AMR_MULTIBLOCK_DESIGN.md`, `docs/SCHUR_CONDENSATION_DESIGN.md`,
   the older `*_DESIGN.md`.
-- closed audits and roadmaps: `docs/DOC_REFONTE_AUDIT.md`, `docs/CODEBASE_AUDIT.md`,
-  `docs/PERF_SCALING_TODO.md`, `docs/PERFORMANCE.md` (explicitly historical).
+- closed audits and roadmaps: `docs/archive/DOC_REFONTE_AUDIT.md`,
+  `docs/archive/CODEBASE_AUDIT.md`, `docs/archive/PERF_SCALING_TODO.md` (and the other
+  `*_AUDIT.md` / `*ROADMAP*.md` collected under `docs/archive/`); `docs/PERFORMANCE.md`
+  (explicitly historical, kept at root because live code comments point at it).
 
 Control: the page carries a banner at the top (for example `STATUS: ... read it as design
-history`) and stays out of the active Sphinx toctree. When a design note's feature ships, move
-it here rather than leaving a future-tense body that contradicts the code.
+history`) and stays out of the active Sphinx toctree. Closed audits and roadmaps are collected
+under `docs/archive/` (see `docs/archive/README.md`); a banner-carrying design note may stay at
+the `docs/` root when live code comments still point at it. When a design note's feature ships,
+move it here rather than leaving a future-tense body that contradicts the code.
 
 ## Architecture decisions (ADR)
 

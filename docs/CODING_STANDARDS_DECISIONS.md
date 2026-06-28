@@ -12,7 +12,7 @@ hereafter CG, LLVM Coding Standards). For each axis where the three guides diver
 of the repository diverges from the three, a single rule is set. Every non-cosmetic finding is verified on
 the spot (`file:line` cited). Read-only, no source file modified.
 
-Related docs: [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md) (maintainability audit, June 6, 2026),
+Related docs: [`CODEBASE_AUDIT.md`](archive/CODEBASE_AUDIT.md) (maintainability audit, June 6, 2026),
 [`QUALITY_TOOLING.md`](QUALITY_TOOLING.md) (static analysis, milestone *Code quality & hardened
 CI*, epic ADC-105). The `CODEBASE_AUDIT.md` refers to
 `CODE_DOCUMENTATION_CONVENTION.md`, **present in the working tree but not committed**
