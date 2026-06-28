@@ -230,7 +230,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
                           getattr(spatial, "positivity_floor", 0.0))
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None):
+                          solvers=None, cadence=None, outputs=None):
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -279,6 +279,10 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             raise NotImplementedError(
                 "pops.bind: runtime params (params=%s) are not wired on AMR (no "
                 "set_block_params); set them on the native model, or use System." % sorted(params))
+        if outputs:
+            raise NotImplementedError(
+                "pops.bind: output/checkpoint policies are deferred on AMR (per-level writes are "
+                "Spec 6 / ADC-511); use a Uniform layout for output, or omit it on the AMR route.")
         if cadence is not None:
             raise NotImplementedError(
                 "pops.bind: a program cadence is not wired on AMR (no set_program_cadence); "
