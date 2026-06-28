@@ -134,6 +134,14 @@ instead.
 
 ## Step 5: simulate -- one model, several methods
 
+```{note}
+The documented PUBLIC front door is the typed compiled flow (`pops.physics.Model` -> `pops.Case` ->
+`pops.compile` -> `pops.bind` -> `sim.run`); see the [first run](../getting-started/first-run.md).
+The snippets in this advanced tutorial use the lower-level `System.add_equation` / `set_state` /
+`set_poisson` / `step_cfl` runtime seam to exercise specific backends and fluxes on a generated
+moment model; those methods stay for that purpose and the tests.
+```
+
 The same compiled model now runs under different numerical methods. You choose them when you attach
 the model to an `pops.System`, not when you build it.
 

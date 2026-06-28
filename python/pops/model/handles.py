@@ -4,17 +4,18 @@ An :class:`OperatorHandle` is a lightweight, INERT reference to a declared opera
 carries the operator ``name`` (and, when the declarer knows it cheaply, the operator
 ``kind``) and nothing else -- no numerics, no IR, no Program. A user-facing operator
 declarer (``m.rate_operator`` / ``m.source_term`` / ``m.linear_source``) returns one so a
-named operator can be passed around as a typed object instead of a bare string::
+named operator is referenced as a typed object, NOT a bare string::
 
     R = m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
     ...
-    rate = P.call(R, U, fields)        # same as P.call("explicit_rhs", U, fields)
+    rate = P.call(R, U, fields)        # the handle is the one public P.call selector
 
-The handle is a transparent alias for its name: :meth:`pops.time.Program.call` accepts
-EITHER the string operator name OR an ``OperatorHandle`` and resolves both through the
-exact same registry lookup + lowering, so ``P.call(handle, ...)`` builds the byte-identical
-IR (same ``_ir_hash``) as ``P.call(name, ...)``. The handle holds no Program reference, so
-the same handle works in any Program bound to a registry that declares its name.
+The handle is the public :meth:`pops.time.Program.call` selector: the public ``P.call``
+REQUIRES an ``OperatorHandle`` (a bare string operator name is refused). The handle resolves
+through the registry lookup + lowering identical to the internal name path, so
+``P.call(handle, ...)`` builds the byte-identical IR (same ``_ir_hash``) as the internal
+``P._call(name, ...)`` the lib.time macros / lowering use. The handle holds no Program
+reference, so the same handle works in any Program bound to a registry that declares its name.
 
 This module imports only the standard library, so it stays codegen-free and ``_pops``-free
 and keeps the ``pops.time`` import graph acyclic (``pops.time`` already imports
@@ -29,8 +30,8 @@ class OperatorHandle:
     ``"local_rate"`` / ``"local_source"`` / ``"local_linear_operator"``, when the declarer
     supplies it). It is value-like: two handles compare equal iff their ``(name, kind)``
     match, so a handle can be used as a dict key or compared in tests. It carries no
-    Program, no registry and no IR; ``P.call`` resolves ``handle.name`` against the
-    Program's bound registry exactly like a string.
+    Program, no registry and no IR; the public ``P.call`` resolves ``handle.name`` against
+    the Program's bound registry (the internal name path is the undocumented ``P._call``).
     """
 
     __slots__ = ("name", "kind")

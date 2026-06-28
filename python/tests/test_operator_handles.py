@@ -2,10 +2,10 @@
 
 A user-facing operator declarer (``m.rate_operator`` / ``m.source_term`` /
 ``m.linear_source``) returns an inert :class:`pops.model.OperatorHandle` carrying the
-operator ``name`` (and ``kind``). ``P.call`` accepts EITHER the string operator name OR
-the handle and resolves both through the IDENTICAL registry lookup + lowering, so
-``P.call(handle, ...)`` builds the BYTE-IDENTICAL IR (same ``_ir_hash``) as
-``P.call(name, ...)``, and the legacy string path is byte-identical to a pristine build.
+operator ``name`` (and ``kind``). The PUBLIC ``P.call`` requires the handle (a bare string is
+refused); the INTERNAL ``P._call`` resolves a name token. Both follow the IDENTICAL registry
+lookup + lowering, so ``P.call(handle, ...)`` builds the BYTE-IDENTICAL IR (same ``_ir_hash``) as
+``P._call(name, ...)``.
 
 Pure Python (``_ir_hash`` is the IR fingerprint; no compilation); skips cleanly if pops is
 not importable. Never fakes the engine.
@@ -62,47 +62,55 @@ def test_declarers_return_operator_handles():
     print("OK  declarers return typed OperatorHandle(name, kind)")
 
 
+# A handle for the built-in default-Poisson field operator; the public P.call needs it (a bare
+# string field name is refused). Internally _call resolves the name token identically.
+_FIELDS = OperatorHandle("fields_from_state", kind="field_operator")
+
+
+def _select(P, selector, *args, name=None):
+    """Dispatch a selector: a handle goes through the PUBLIC P.call, a bare name through the
+    INTERNAL P._call (the private name-token path the macros / lowering use)."""
+    if isinstance(selector, OperatorHandle):
+        return P.call(selector, *args, name=name)
+    return P._call(selector, *args, name=name)
+
+
 def _rate_program(m, selector):
     """Build a one-step predictor Program calling the rate operator via ``selector`` (a name or
     a handle). Returns the Program (its ``_ir_hash`` is the IR fingerprint)."""
     P = adctime.Program("prog").bind_operators(m)
     U = P.state("plasma")
-    f = P.call("fields_from_state", U)
-    R = P.call(selector, U, f)
+    f = P.call(_FIELDS, U)
+    R = _select(P, selector, U, f)
     P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
     return P
 
 
-def test_call_handle_byte_identical_to_string():
-    """P.call(handle) lowers to the byte-identical IR as P.call(name) -- same _ir_hash."""
+def test_call_handle_byte_identical_to_name():
+    """P.call(handle) lowers to the byte-identical IR as the internal P._call(name) -- same _ir_hash."""
     m, h = build_model()
-    prog_str = _rate_program(m, "explicit_rhs")
-    prog_handle = _rate_program(m, h["explicit_rhs"])
-    assert prog_str._ir_hash() == prog_handle._ir_hash(), (
-        "P.call(handle) must lower to the byte-identical IR as P.call(name)")
-    print("OK  P.call(handle) IR hash == P.call(name) IR hash: %s" % prog_str._ir_hash())
+    prog_name = _rate_program(m, "explicit_rhs")          # internal _call(name)
+    prog_handle = _rate_program(m, h["explicit_rhs"])     # public call(handle)
+    assert prog_name._ir_hash() == prog_handle._ir_hash(), (
+        "P.call(handle) must lower to the byte-identical IR as the internal P._call(name)")
+    print("OK  P.call(handle) IR hash == P._call(name) IR hash: %s" % prog_name._ir_hash())
 
 
-def test_string_path_byte_identical_to_pristine():
-    """The legacy string P.call('name') IR is unchanged by the declarer now returning a handle.
-
-    A pristine model (declarers' return ignored) and a model whose handles were captured produce
-    the same string-path IR hash."""
+def test_name_path_byte_identical_across_models():
+    """The internal name path P._call('name') is deterministic and equals the handle path for each
+    declarer kind (rate / source / linear)."""
     m_a, _ = build_model()
     m_b, _ = build_model()
-    # Build the SAME string-path program twice against two independently-built models.
     h_a = _rate_program(m_a, "explicit_rhs")._ir_hash()
     h_b = _rate_program(m_b, "explicit_rhs")._ir_hash()
-    assert h_a == h_b, "the string P.call path must be deterministic / unperturbed"
-    # And it equals the source/linear handle paths' string equivalents (full coverage of the
-    # three declarer kinds via _ir_hash on a source-only and a linear-operator program).
+    assert h_a == h_b, "the internal P._call name path must be deterministic / unperturbed"
     m, h = build_model()
 
     def src_prog(selector):
         P = adctime.Program("p").bind_operators(m)
         U = P.state("plasma")
-        f = P.call("fields_from_state", U)
-        s = P.call(selector, U, f)
+        f = P.call(_FIELDS, U)
+        s = _select(P, selector, U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
         return P
 
@@ -111,37 +119,37 @@ def test_string_path_byte_identical_to_pristine():
     def lin_prog(selector):
         P = adctime.Program("p").bind_operators(m)
         U = P.state("plasma")
-        f = P.call("fields_from_state", U)
-        L = P.call(selector, f)
+        f = P.call(_FIELDS, U)
+        L = _select(P, selector, f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
         P.commit("plasma", U1)
         return P
 
     assert lin_prog("lorentz")._ir_hash() == lin_prog(h["lorentz"])._ir_hash()
-    print("OK  string path byte-identical (rate / source / linear all match handle path)")
+    print("OK  internal name path byte-identical (rate / source / linear all match handle path)")
 
 
-def test_plain_string_still_works():
-    """A plain string selector keeps working unchanged (transparent coercion, no stricter check)."""
+def test_public_call_rejects_a_string():
+    """The PUBLIC P.call refuses a bare string operator NAME with a clear TypeError naming the
+    handle path (the one public path is the typed handle)."""
     m, _ = build_model()
     P = adctime.Program("p").bind_operators(m)
     U = P.state("plasma")
-    f = P.call("fields_from_state", U)
-    R = P.call("explicit_rhs", U, f)  # string path, must not raise
-    assert R is not None
-    print("OK  plain string P.call('explicit_rhs') still works")
+    with pytest.raises(TypeError, match="typed operator handle"):
+        P.call("explicit_rhs", U)
+    print("OK  public P.call('explicit_rhs') -> TypeError naming the handle path")
 
 
 def test_bad_type_rejected():
-    """A non-str / non-handle selector is a clear TypeError (typed surface, no legacy path)."""
+    """A non-handle selector is a clear TypeError on the public surface (typed handle required)."""
     m, _ = build_model()
     P = adctime.Program("p").bind_operators(m)
     U = P.state("plasma")
-    with pytest.raises(TypeError, match="str name or an pops.model.OperatorHandle"):
+    with pytest.raises(TypeError, match="OperatorHandle"):
         P.call(123, U)
-    with pytest.raises(TypeError, match="str name or an pops.model.OperatorHandle"):
+    with pytest.raises(TypeError, match="OperatorHandle"):
         P.call(None, U)
-    print("OK  P.call(non-str/non-handle) -> clear TypeError")
+    print("OK  P.call(non-handle) -> clear TypeError")
 
 
 def test_foreign_handle_rejected():
@@ -169,9 +177,9 @@ def test_handle_equality_and_repr():
 
 def main():
     test_declarers_return_operator_handles()
-    test_call_handle_byte_identical_to_string()
-    test_string_path_byte_identical_to_pristine()
-    test_plain_string_still_works()
+    test_call_handle_byte_identical_to_name()
+    test_name_path_byte_identical_across_models()
+    test_public_call_rejects_a_string()
     test_bad_type_rejected()
     test_foreign_handle_rejected()
     test_handle_equality_and_repr()

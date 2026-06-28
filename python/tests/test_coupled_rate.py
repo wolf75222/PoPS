@@ -51,7 +51,7 @@ def test_p_call_coupled_rate_returns_indexable_bundle():
     P = adctime.Program("step").bind_operators(mod)
     e_n = P.state("electrons", space=e)
     i_n = P.state("ions", space=i)
-    C = P.call("collision", e_n, i_n)
+    C = P._call("collision", e_n, i_n)
     re_, ri_ = C["electrons"], C["ions"]
     assert re_.vtype == "rhs" and ri_.vtype == "rhs"
     # each per-block rate is usable in an affine combination of its block's state
@@ -71,14 +71,14 @@ def test_coupled_rate_arbitrary_arity_three_blocks():
                  kind="coupled_rate", expr={"e": [z], "i": [z], "n": [z]})
     P = adctime.Program("s").bind_operators(mod)
     en, inn, nn = P.state("e", space=e), P.state("i", space=i), P.state("n", space=n)
-    C = P.call("coll3", en, inn, nn)
+    C = P._call("coll3", en, inn, nn)
     assert set(C.keys()) == {"e", "i", "n"}
 
 
 def test_coupled_rate_bundle_unknown_block_errors():
     mod, e, i, _ = _two_fluid_module()
     P = adctime.Program("step").bind_operators(mod)
-    C = P.call("collision", P.state("electrons", space=e), P.state("ions", space=i))
+    C = P._call("collision", P.state("electrons", space=e), P.state("ions", space=i))
     with pytest.raises(KeyError):
         _ = C["neutrals"]
 
@@ -89,7 +89,7 @@ def test_coupled_rate_rejects_schedule_clearly():
     mod, e, i, _ = _two_fluid_module()
     P = adctime.Program("step").bind_operators(mod)
     with pytest.raises(ValueError, match="coupled_rate"):
-        P.call("collision", P.state("electrons", space=e), P.state("ions", space=i),
+        P._call("collision", P.state("electrons", space=e), P.state("ions", space=i),
                schedule=adctime.every(2))
 
 
@@ -99,7 +99,7 @@ def test_dump_cpp_plan_shows_coupled_rate_kernel():
     mod, e, i, _ = _two_fluid_module()
     P = adctime.Program("step").bind_operators(mod)
     e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
-    C = P.call("collision", e_n, i_n)
+    C = P._call("collision", e_n, i_n)
     P.linear_combine("e1", e_n + P.dt * C["electrons"])
     plan = P.dump_cpp_plan()
     assert "ADC-457" in plan and "ctx.coupled_rate(" not in plan
@@ -114,7 +114,7 @@ def test_coupled_rate_now_lowers_to_cpp():
     mod, e, i, _ = _two_fluid_module()
     P = adctime.Program("step").bind_operators(mod)
     e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
-    C = P.call("collision", e_n, i_n)
+    C = P._call("collision", e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
     P._check_lowerable(None)  # no longer raises for a cons-only coupled_rate

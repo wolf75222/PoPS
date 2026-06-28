@@ -1,12 +1,16 @@
 # Multi-block AMR
 
+The documented public path (`pops.Case` -> `pops.compile` -> `pops.bind`) lowers a single block
+today; the multi-block assembly through `pops.compile` is deferred. Several species on one shared
+AMR hierarchy run through the low-level native `AmrSystem` runtime shown below, which stays
+available for that case and the tests.
 
-`AmrSystem` is a multi-block facade: you call `add_block` (native bricks) or
-`add_equation` (compiled DSL model) once per species, exactly as on `System`. All the
-blocks share the hierarchy, the aux and the coarse Poisson (co-located summed right-hand side),
-but each keeps its own spatial scheme (limiter x flux x reconstruction), its temporal
-treatment (`explicit` or `imex`), and its multirate (`substeps` / `stride`). The runtime engine is
-`AmrRuntime` (type-erased registry by block name), refined counterpart of the multi-block
+`AmrSystem` is a multi-block runtime: you call the low-level `add_block` (native bricks) or
+`add_equation` (compiled DSL model) once per species, the refined counterpart of the same `System`
+methods. All the blocks share the hierarchy, the aux and the coarse Poisson (co-located summed
+right-hand side), but each keeps its own spatial scheme (limiter x flux x reconstruction), its
+temporal treatment (`explicit` or `imex`), and its multirate (`substeps` / `stride`). The runtime
+engine is `AmrRuntime` (type-erased registry by block name), refined counterpart of the multi-block
 single-level engine of `System`.
 
 ```python

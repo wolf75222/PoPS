@@ -105,68 +105,64 @@ model = pops.Model(
     source=pops.NoSource(),
     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0),
 )
-
-sim = pops.System(n=96, L=1.0, periodic=True)
-sim.add_block("ne", model=model, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-sim.set_density("ne", ne0)          # ne0 : tableau 2D (densite initiale)
-sim.step_cfl(0.4)
 ```
 
-The same `ModelSpec` also plugs into `pops.AmrSystem` (adaptive refinement) without changing the
-model: `sa.add_block("ne", model=model, ...)`.
+A `pops.Model(...)` brick composition (`ModelSpec`) is plugged through the low-level native
+runtime: `sim.add_block("ne", model=model, spatial=pops.Spatial(minmod=True), time=pops.Explicit())`,
+`sim.set_poisson(rhs="charge_density", solver="geometric_mg")`, `sim.set_density("ne", ne0)`,
+`sim.step_cfl(0.4)`; the same `ModelSpec` also plugs into `pops.AmrSystem`. Those runtime methods
+are the low-level seam and the bit-identity comparison path. The documented PUBLIC front door is
+the compiled flow below (`pops.physics.Model` -> `pops.Case` -> `pops.compile` -> `pops.bind` ->
+`sim.run`).
 
 ## DSL model (written as formulas)
 
-`pops.physics.facade.Model` lets you write a model as symbolic formulas: Python composes an expression
-tree (the operators `+`, `-`, `*`, `/`, `**`, `pops.ir.ops.sqrt` build the tree, not a
-function called per cell), which the DSL translates into compilable C++. You declare the conservative
-variables, the primitives (via formulas), the flux, the eigenvalues, the source and the
-elliptic contribution, then you compile.
+`pops.physics.Model` lets you write a model as symbolic formulas: Python composes an expression
+tree (the operators `+`, `-`, `*`, `/`, `**`, `pops.math.sqrt` build the tree, not a
+function called per cell), which lowers to the typed operator IR `pops.compile` compiles to C++.
+You declare the state, the flux and waves, the elliptic `solve_field`, and the rate, then assemble
+a `pops.Case` and compile + bind it. This is the documented PUBLIC front door.
 
-Here is the reduced diocotron model of the canonical tutorial
-([docs/sphinx/tutorials/diocotron_tutorial.py](https://github.com/wolf75222/adc_cpp/blob/master/docs/sphinx/tutorials/diocotron_tutorial.py)), written as
-formulas; it reproduces exactly the native bricks `ExBVelocity` (transport) and
-`BackgroundDensity` (elliptic):
+Here is the reduced diocotron model, written as formulas; it reproduces the native bricks
+`ExBVelocity` (transport) and the charge-density Poisson coupling:
 
 ```python
+import numpy as np
 import pops
+import pops.time as T
+from pops.physics import Model
+from pops.math import laplacian, grad, div, ddt
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.fields import PoissonProblem
+from pops.fields.bcs import Periodic
+from pops.fields.rhs import ChargeDensity
+from pops.solvers.elliptic import GeometricMG
 from pops.codegen import Production
-from pops.numerics.riemann import Rusanov
-from pops.numerics.reconstruction.limiters import Minmod
 
-B0 = 1.0      # champ magnetique de fond (porte la derive E x B)
-ALPHA = 1.0   # facteur du second membre elliptique alpha (n - n_i0)
+m = Model("diocotron")
+U = m.state("U", components=["ne"], roles={"ne": "density"})
+(ne,) = U
+phi = m.field("phi")
+m.solve_field("fields_from_state",
+              equation=(-laplacian(phi) == ne),       # rhs = charge density
+              outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+              solver="geometric_mg")
+E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
+flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
+m.rate("explicit_rate", ddt(U) == -div(flux))
+m.check()
 
-def diocotron_model(n_i0):
-    m = pops.physics.facade.Model("diocotron_tutorial")
+poisson = PoissonProblem(name="phi", unknown="phi",
+                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+                         bcs=(Periodic(),), solver=GeometricMG())
 
-    (n,) = m.conservative_vars("n")     # unique variable conservative : la densite (role Density)
-    m.aux("phi")                        # champs auxiliaires fournis par le solveur (canal pops::Aux)
-    grad_x = m.aux("grad_x")
-    grad_y = m.aux("grad_y")
+case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)), name="diocotron")
+        .block("ne", physics=m).field(poisson).time(T.Program("euler")))
 
-    vx = (-grad_y) / B0                  # derive E x B : v = (-d_y phi / B0, d_x phi / B0)
-    vy = grad_x / B0
-    m.flux(x=[n * vx], y=[n * vy])       # flux d'advection f = n v(dir)
-    m.eigenvalues(x=[vx], y=[vy])        # spectre : une onde, la vitesse de derive
-
-    m.primitive_vars(n=n)                # scalaire transporte : primitif = conservatif
-    m.conservative_from([n])
-    m.elliptic_rhs(ALPHA * (n - n_i0))   # couple le bloc au Poisson : rhs = alpha (n - n_i0)
-
-    m.check()                            # toute variable referencee doit etre declaree
-    return m
-
-compiled = diocotron_model(n_i0).compile(backend=Production())   # -> CompiledModel
-
-sim = pops.System(n=96, L=1.0, periodic=True)
-sim.add_equation("ne", model=compiled,
-                 spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
-                 time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-sim.set_density("ne", ne0)
-sim.step_cfl(0.4)
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state={"ne": ne0})
+sim.run(0.1, cfl=0.4)
 ```
 
 DSL details and points to watch (parameters named `m.param`, physical roles,
@@ -316,9 +312,9 @@ the host module being device-capable). The safeguards raise a `ValueError` as ea
 - on the plugging side: `riemann` HLLC/Roe without a declared pressure `p`, `names=` on the native
   `production` path (the names come from the `.so` metadata).
 
-To plug the `CompiledModel`, `System.add_equation` routes by type: a `ModelSpec`
-(`pops.Model(...)`) -> `add_block` (native); a `CompiledModel` -> the backend's adder
-(`add_dynamic_block` for `prototype`, `add_compiled_block` for `aot`, `add_native_block` for
-`production`). Full detail: [DSL_API.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_API.md) and
+`pops.bind` plugs the compiled model through the low-level `System.add_equation` seam, which routes
+by type: a `ModelSpec` (`pops.Model(...)`) -> `add_block` (native); a `CompiledModel` -> the
+backend's adder (`add_dynamic_block` for `prototype`, `add_compiled_block` for `aot`,
+`add_native_block` for `production`). Full detail: [DSL_API.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_API.md) and
 [DSL_MODEL_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/DSL_MODEL_DESIGN.md). Coverage of the backends on GPU/MPI/AMR:
 [BACKEND_COVERAGE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/BACKEND_COVERAGE.md).

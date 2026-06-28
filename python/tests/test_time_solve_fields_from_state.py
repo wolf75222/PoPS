@@ -102,10 +102,10 @@ def heun_program(name="sffs_heun"):
     dt = P.dt
     U0 = P.state("plasma")
     f0 = P.solve_fields("fields_0", U0)
-    R0 = P.rhs(name="R0", state=U0, fields=f0, flux=True, sources=["electric"])
+    R0 = P._rhs_legacy(name="R0", state=U0, fields=f0, flux=True, sources=["electric"])
     U1 = P.linear_combine("U1", U0 + dt * R0)
     f1 = P.solve_fields("fields_1", U1)            # <-- solved from U1, not U0 (ADC-409)
-    R1 = P.rhs(name="R1", state=U1, fields=f1, flux=True, sources=["electric"])
+    R1 = P._rhs_legacy(name="R1", state=U1, fields=f1, flux=True, sources=["electric"])
     P.commit("plasma", P.linear_combine("U_np1", U0 + 0.5 * dt * R0 + 0.5 * dt * R1))
     return P
 
@@ -138,7 +138,7 @@ chk(base_decl is not None and solve_args and solve_args[0] == base_decl.group(1)
 P_fe = adctime.Program("sffs_fe")
 U = P_fe.state("plasma")
 f = P_fe.solve_fields(U)
-R = P_fe.rhs(name="R", state=U, fields=f, flux=True, sources=["electric"])
+R = P_fe._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
 P_fe.commit("plasma", P_fe.linear_combine("U1", U + P_fe.dt * R))
 src_fe = P_fe.emit_cpp_program(model=named_source_model("sffs_fe_named"))
 chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,

@@ -8,14 +8,15 @@ lightweight metadata that lower to native ids -- not numerical code.
 import pytest
 
 import types as _t
-_lib = pytest.importorskip("pops.lib")
 _num = pytest.importorskip("pops.numerics")
 _desc = pytest.importorskip("pops.descriptors")
 # Spec 5: the catalogs moved out of pops.lib. This alias maps the old pops.lib attribute surface
 # onto the new homes so the Spec-3 descriptor tests keep exercising the real (relocated) descriptors:
-# the solver-generation DSL is internal/experimental under pops.codegen.solvers (criterion 19); the
-# spatial brick catalog under pops.numerics.spatial and the field brick catalog under
-# pops.fields.catalog (criterion 7).
+# the solver descriptors are the ONE public home pops.solvers (the pops.lib.solvers shim was
+# removed, no back-compat alias); the solver-generation DSL is internal/experimental under
+# pops.codegen.solvers (criterion 19); the spatial brick catalog under pops.numerics.spatial and
+# the field brick catalog under pops.fields.catalog (criterion 7).
+_solv = pytest.importorskip("pops.solvers")
 _cs = pytest.importorskip("pops.codegen.solvers")
 _flds = pytest.importorskip("pops.fields")
 lib = _t.SimpleNamespace(
@@ -25,7 +26,7 @@ lib = _t.SimpleNamespace(
     load_cpp_library=_desc.load_cpp_library,
     _register_manifest=_desc._register_manifest,
     _clear_external_catalog=_desc._clear_external_catalog,
-    solvers=_lib.solvers, preconditioners=_lib.preconditioners, solver=_cs.solver,
+    solvers=_solv.solvers, preconditioners=_solv.preconditioners, solver=_cs.solver,
     build_solver_ir=_cs.build_solver_ir, generate_solver_cpp=_cs.generate_solver_cpp,
     SolverContext=_cs.SolverContext, SolverIR=_cs.SolverIR,
     spatial=_num.spatial, fields=_flds.catalog,

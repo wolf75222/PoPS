@@ -28,7 +28,7 @@ def _held_program(schedule):
     mod, u = _module()
     P = adctime.Program("held").bind_operators(mod)
     U = P.state("plasma", space=u)
-    P.call("fields_from_state", U, schedule=schedule)
+    P._call("fields_from_state", U, schedule=schedule)
     P.commit("plasma", U)
     return P
 
@@ -48,7 +48,7 @@ def test_unscheduled_solve_fields_has_no_cache_branch():
     mod, u = _module()
     P = adctime.Program("plain").bind_operators(mod)
     U = P.state("plasma", space=u)
-    P.call("fields_from_state", U)               # no schedule
+    P._call("fields_from_state", U)               # no schedule
     P.commit("plasma", U)
     cpp = P.emit_cpp_program()
     assert "cache_should_update" not in cpp       # plain unconditional solve, no cache

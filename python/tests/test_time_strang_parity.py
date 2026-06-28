@@ -59,7 +59,7 @@ def half_flow(prog, U, frac):
     """One Forward-Euler hyperbolic half-flow: U + frac*dt*R, R = -div F (+ default source). On the
     uncoupled NoSource model the default source is empty, so R is flux-only; the per-stage solve_fields
     is inert (no field feedback) -- kept so the program mirrors a real, field-coupled-ready Strang."""
-    R = prog.rhs(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
+    R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
     return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
 

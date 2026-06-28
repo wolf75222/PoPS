@@ -29,7 +29,7 @@ def test_forward_euler_ir():
     dt = P.dt
     U = P.state("plasma")
     fields = P.solve_fields(U)
-    R = P.rhs(state=U, fields=fields, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U + dt * R)
     P.commit("plasma", U1)
     P.validate()
@@ -47,10 +47,10 @@ def test_ssprk2_ir():
     dt = P.dt
     U0 = P.state("plasma")
     f0 = P.solve_fields("f0", U0)
-    k0 = P.rhs("k0", state=U0, fields=f0, flux=True, sources=["default"])
+    k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
     f1 = P.solve_fields("f1", U1)
-    k1 = P.rhs("k1", state=U1, fields=f1, flux=True, sources=["default"])
+    k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
     P.commit("plasma", U2)
     P.validate()
@@ -64,13 +64,13 @@ def test_rk4_ir():
     P = adctime.Program("rk4")
     dt = P.dt
     U0 = P.state("plasma")
-    k1 = P.rhs("k1", state=U0, fields=P.solve_fields(U0), flux=True, sources=["default"])
+    k1 = P._rhs_legacy("k1", state=U0, fields=P.solve_fields(U0), flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + 0.5 * dt * k1)
-    k2 = P.rhs("k2", state=U1, fields=P.solve_fields(U1), flux=True, sources=["default"])
+    k2 = P._rhs_legacy("k2", state=U1, fields=P.solve_fields(U1), flux=True, sources=["default"])
     U2 = P.linear_combine("U2", U0 + 0.5 * dt * k2)
-    k3 = P.rhs("k3", state=U2, fields=P.solve_fields(U2), flux=True, sources=["default"])
+    k3 = P._rhs_legacy("k3", state=U2, fields=P.solve_fields(U2), flux=True, sources=["default"])
     U3 = P.linear_combine("U3", U0 + dt * k3)
-    k4 = P.rhs("k4", state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
+    k4 = P._rhs_legacy("k4", state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
     Unp1 = P.linear_combine("Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4)
     P.commit("plasma", Unp1)
     P.validate()
@@ -84,7 +84,7 @@ def test_rk4_ir():
 def test_commit_once():
     P = adctime.Program("p")
     U = P.state("plasma")
-    U1 = P.linear_combine("U1", U + P.dt * P.rhs(state=U, fields=P.solve_fields(U)))
+    U1 = P.linear_combine("U1", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U)))
     P.commit("plasma", U1)
     try:
         P.commit("plasma", U1)
@@ -98,7 +98,7 @@ def test_commit_once():
 def test_no_commit_rejected():
     P = adctime.Program("p")
     U = P.state("plasma")
-    P.rhs(state=U, fields=P.solve_fields(U))
+    P._rhs_legacy(state=U, fields=P.solve_fields(U))
     try:
         P.validate()
     except ValueError as e:
@@ -124,7 +124,7 @@ def _build_euler(scale=1.0):
     P = adctime.Program("forward_euler")
     dt = P.dt
     U = P.state("plasma")
-    R = P.rhs(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + (scale * dt) * R))
     return P
 
@@ -147,7 +147,7 @@ def test_solve_fields_distinct():
 def test_rhs_records_sources_and_flux():
     P = adctime.Program("p")
     U = P.state("plasma")
-    R = P.rhs(state=U, fields=P.solve_fields(U), flux=True, sources=["electric", "chemistry"])
+    R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["electric", "chemistry"])
     assert R.attrs["flux"] is True
     assert R.attrs["sources"] == ["electric", "chemistry"]
     print("OK  9. rhs records its flux flag and named sources")

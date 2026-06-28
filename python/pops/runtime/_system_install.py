@@ -68,8 +68,13 @@ class _SystemInstall:
     def add_block(self, name, model, spatial=None, time=None, evolve=True):
         """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
 
-        Primary entry point for a model composed in Python from native bricks
-        (pops.Model(...)). For a compiled DSL model (.so) or an automatic dispatch on the model type,
+        Low-level runtime seam. The documented PUBLIC path is the typed
+        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.bind`` (which calls this method internally); ``add_block`` stays for that seam,
+        the native/AMR runtime, and the tests.
+
+        Installs a model composed in Python from native bricks (pops.Model(...)). For a
+        compiled DSL model (.so) or an automatic dispatch on the model type,
         use add_equation. The arguments are marshaled to the C++ facade
         (System::add_block), which validates the block (names / roles / implicit mask) against the model.
 
@@ -116,7 +121,13 @@ class _SystemInstall:
 
     def add_equation(self, name, model, spatial=None, time=None, substeps=None, names=None,
                      evolve=True, stride=None):
-        """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A):
+        """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
+
+        Low-level runtime seam. The documented PUBLIC path is the typed
+        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.bind``; ``add_equation`` stays for that seam, the native/AMR runtime, and the tests.
+
+        Dispatch:
 
         - a ModelSpec (pops.Model(...)) -> add_block (composed native bricks);
         - a CompiledModel (m.compile(...)) -> the backend adder (add_dynamic_block for prototype,
@@ -386,6 +397,12 @@ class _SystemInstall:
     def set_poisson(self, rhs="charge_density", solver="geometric_mg", bc="auto",
                     wall="none", wall_radius=0.0, epsilon=1.0, abs_tol=0.0):
         """Configure the shared system Poisson solve (thin wrapper over the native binding).
+
+        Low-level runtime seam. The documented PUBLIC elliptic surface is the typed
+        ``pops.fields.PoissonProblem(unknown="phi", equation=(-laplacian(phi) == rhs),
+        solver=GeometricMG(), bcs=[Dirichlet()])`` attached with ``case.field(...)`` and lowered
+        by ``pops.compile`` / ``pops.bind`` (which call this method internally); ``set_poisson``
+        stays for that seam, the native/AMR runtime, and the tests.
 
         Spec 5 sec.8.16 / sec.14.2.6 let ``bc`` and ``wall`` be TYPED objects in addition to the
         legacy strings::

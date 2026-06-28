@@ -1,14 +1,14 @@
 """P.rhs(terms=[...]) typed RHS composition (Spec 5 sec.14.2.4, ADC-479 criterion 27).
 
-The typed ``terms=`` front door is PURE sugar over the legacy ``flux=``/``sources=`` path: each
-:class:`pops.numerics.terms.Flux`/source term lowers onto the existing booleans/name-list, so the
-built IR is BYTE-IDENTICAL. These tests pin that equivalence on the ``Program._ir_hash``:
+The typed ``terms=`` front door -- the ONE public RHS path -- lowers onto the INTERNAL
+``P._rhs_legacy`` ``flux=``/``sources=`` builder: each :class:`pops.numerics.terms.Flux`/source term
+maps onto the existing booleans/name-list, so the built IR is BYTE-IDENTICAL to the private path.
+These tests pin that equivalence on the ``Program._ir_hash``:
 
-  - ``terms=[Flux(), <source>]`` builds the byte-identical hash to ``flux=True, sources=[<name>]``;
-  - the legacy ``flux=``/``sources=`` path is unchanged (the new branch does not perturb it);
+  - ``terms=[Flux(), <source>]`` builds the byte-identical hash to the private
+    ``_rhs_legacy(flux=True, sources=[<name>])``;
   - ``Flux()`` is a typed term, not a bool (a bare bool in terms= is a TypeError);
   - every accepted source form (name str / SourceTerm / OperatorHandle) maps onto the same name;
-  - ``terms=`` plus any legacy kwarg is a clear ValueError;
   - a non-term object in terms= is a clear TypeError.
 
 Pure Python; no compilation, no ``_pops``. Run with python3 (PYTHONPATH = built pops package).
@@ -33,52 +33,36 @@ def _terms_program(terms):
 
 
 def _legacy_program(flux, sources):
-    """The same Program built through the legacy flux=/sources= surface."""
+    """The same Program built through the INTERNAL ``_rhs_legacy`` flux=/sources= builder (the typed
+    terms= path lowers onto this private builder; it is the byte-identity target, not a public path)."""
     P = adctime.Program("rhs_terms")
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=f, flux=flux, sources=sources)
+    R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
 
 
 def test_terms_flux_plus_source_is_byte_identical():
-    """terms=[Flux(), "electric"] == flux=True, sources=["electric"] (same _ir_hash)."""
+    """terms=[Flux(), "electric"] == _rhs_legacy(flux=True, sources=["electric"]) (same _ir_hash)."""
     h_terms = _terms_program([Flux(), "electric"])._ir_hash()
     h_legacy = _legacy_program(True, ["electric"])._ir_hash()
     assert h_terms == h_legacy, (h_terms, h_legacy)
-    print("OK  1. terms=[Flux(), 'electric'] _ir_hash == flux=True, sources=['electric']")
+    print("OK  1. terms=[Flux(), 'electric'] _ir_hash == _rhs_legacy(flux=True, sources=['electric'])")
 
 
 def test_terms_flux_only_is_byte_identical():
-    """terms=[Flux()] (no source) == flux=True, sources=[] (flux only)."""
+    """terms=[Flux()] (no source) == _rhs_legacy(flux=True, sources=[]) (flux only)."""
     assert _terms_program([Flux()])._ir_hash() == _legacy_program(True, [])._ir_hash()
-    print("OK  2. terms=[Flux()] _ir_hash == flux=True, sources=[]")
+    print("OK  2. terms=[Flux()] _ir_hash == _rhs_legacy(flux=True, sources=[])")
 
 
 def test_terms_source_only_is_byte_identical():
-    """terms=["electric"] (no Flux) == flux=False, sources=["electric"] (source only)."""
+    """terms=["electric"] (no Flux) == _rhs_legacy(flux=False, sources=["electric"]) (source only)."""
     assert _terms_program(["electric"])._ir_hash() == _legacy_program(False, ["electric"])._ir_hash()
-    print("OK  3. terms=['electric'] _ir_hash == flux=False, sources=['electric']")
-
-
-def test_legacy_path_unchanged_by_terms_branch():
-    """The legacy flux=/sources= path is byte-identical to a pristine build: adding the terms=
-    branch must not perturb the default/legacy lowering (the _UNSET sentinel resolves to the
-    historical defaults)."""
-    # Default rhs() (no flux/sources/fluxes) keeps the historical flux=True, sources=None.
-    P = adctime.Program("rhs_terms")
-    dt = P.dt
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=f)
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
-    P.validate()
-    # flux=True, sources=["default"] is the explicit spelling of the same default lowering.
-    assert P._ir_hash() == _legacy_program(True, None)._ir_hash()
-    print("OK  4. legacy default rhs() _ir_hash unchanged by the terms= branch")
+    print("OK  3. terms=['electric'] _ir_hash == _rhs_legacy(flux=False, sources=['electric'])")
 
 
 def test_source_forms_map_to_same_name():
@@ -105,16 +89,16 @@ def test_flux_is_a_term_not_a_bool():
     print("OK  6. Flux() is a term not a bool; a bare bool in terms= is a TypeError")
 
 
-def test_terms_with_legacy_kwarg_raises():
-    """terms= is mutually exclusive with flux=/sources=/fluxes=: passing both is a clear ValueError
-    naming the conflicting kwarg."""
+def test_legacy_flux_sources_rejected_in_public_surface():
+    """The legacy flux=/sources=/fluxes= form (and a bare P.rhs) is NOT a public path: it is refused
+    with a clear TypeError naming terms= (Spec 5: terms= is the one public RHS path)."""
     P = adctime.Program("rhs_terms")
     U = P.state("plasma")
     f = P.solve_fields(U)
-    for kw in ({"flux": True}, {"sources": ["electric"]}, {"fluxes": ["default"]}):
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            P.rhs("R", state=U, fields=f, terms=[Flux()], **kw)
-    print("OK  7. terms= plus a legacy kwarg -> ValueError naming the conflict")
+    for kw in ({"flux": True}, {"sources": ["electric"]}, {"fluxes": ["default"]}, {}):
+        with pytest.raises(TypeError, match="requires the typed terms="):
+            P.rhs("R", state=U, fields=f, **kw)
+    print("OK  7. legacy P.rhs(flux=/sources=/fluxes=/bare) -> TypeError naming terms=")
 
 
 def test_bad_term_raises_typeerror():

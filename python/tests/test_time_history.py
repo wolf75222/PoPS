@@ -54,7 +54,7 @@ _C = 0.75  # source coefficient: S(rho) = _C * rho (a linear ODE rho' = c rho; R
 def test_history_builds_state_value(t):
     P = t.Program("p")
     U = P.state("blk")
-    R = P.rhs(state=U, sources=["default"])
+    R = P._rhs_legacy(state=U, sources=["default"])
     P.store_history("blk.R", R)
     Rp = P.history("blk.R", lag=1)
     assert Rp.vtype == "state", "P.history returns a State-typed value (got %r)" % Rp.vtype
@@ -124,7 +124,7 @@ def test_non_history_schemes_emit_no_rotate(t):
 def _hist_program(t, name, lag):
     P = t.Program("h")
     U = P.state("blk")
-    R = P.rhs(state=U, sources=["default"])
+    R = P._rhs_legacy(state=U, sources=["default"])
     P.store_history(name, R)
     Rp = P.history(name, lag=lag)
     P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
@@ -145,7 +145,7 @@ def test_absent_history_program_lowers(t):
     P = t.Program("miss")
     U = P.state("blk")
     Rp = P.history("missing.R", lag=1)
-    R = P.rhs(state=U, sources=["default"])
+    R = P._rhs_legacy(state=U, sources=["default"])
     P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
     assert P.validate() is True
     src = P.emit_cpp_program()
@@ -269,7 +269,7 @@ def _run_section_c(t):
     P = t.Program("miss_step")
     U = P.state("blk")
     Rp = P.history("missing.R", lag=1)
-    R = P.rhs(state=U, sources=["default"])
+    R = P._rhs_legacy(state=U, sources=["default"])
     P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
 
     try:

@@ -40,9 +40,9 @@ def test_well_typed_program_passes():
     u = m.state_space("U")
     P = adctime.Program("ok").bind_operators(m)
     u_n = P.state("plasma", space=u)
-    fields = P.call("fields_from_state", u_n)
-    rate = P.call("explicit_rhs", u_n, fields)
-    lin = P.call("lorentz", fields)
+    fields = P._call("fields_from_state", u_n)
+    rate = P._call("explicit_rhs", u_n, fields)
+    lin = P._call("lorentz", fields)
     rhs = P.linear_combine("rhs", u_n + P.dt * rate)
     P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
     print("OK  a well-typed operator-first program passes")
@@ -52,10 +52,10 @@ def test_call_input_space_mismatch():
     m = _model()
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
-    fields = P.call("fields_from_state", P.state("plasma", space=u))
+    fields = P._call("fields_from_state", P.state("plasma", space=u))
     wrong = P.state("other", space=_OTHER)
     try:
-        P.call("explicit_rhs", wrong, fields)  # explicit_rhs expects state 'U', got 'V'
+        P._call("explicit_rhs", wrong, fields)  # explicit_rhs expects state 'U', got 'V'
         raise AssertionError("expected a state-space mismatch error")
     except ValueError as exc:
         assert "expects state 'U'" in str(exc) and "over 'V'" in str(exc), str(exc)
@@ -67,7 +67,7 @@ def test_combine_space_mismatch():
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
     u_n = P.state("plasma", space=u)
-    rate = P.call("explicit_rhs", u_n, P.call("fields_from_state", u_n))  # Rate(U)
+    rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
     wrong = P.state("other", space=_OTHER)
     try:
         P.linear_combine("bad", u_n + P.dt * rate + wrong)  # mixes U and V
@@ -81,8 +81,8 @@ def test_solve_local_linear_domain_mismatch():
     m = _model()
     u = m.state_space("U")
     P = adctime.Program("p").bind_operators(m)
-    fields = P.call("fields_from_state", P.state("plasma", space=u))
-    lin = P.call("lorentz", fields)  # LocalLinearOperator(U, U)
+    fields = P._call("fields_from_state", P.state("plasma", space=u))
+    lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
     rhs_v = P.state("other", space=_OTHER)
     try:
         P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v, fields=fields)
@@ -98,7 +98,7 @@ def test_legacy_untagged_unaffected():
     P = adctime.Program("legacy").bind_operators(m)
     u = P.state("plasma")
     fields = P.solve_fields(u)
-    r = P.rhs(state=u, fields=fields, sources=["electric"])
+    r = P._rhs_legacy(state=u, fields=fields, sources=["electric"])
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     P.validate()
     print("OK  untagged (legacy) programs skip the space checks")

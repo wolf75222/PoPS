@@ -49,7 +49,7 @@ def _two_fluid_program():
     P = adctime.Program("two_fluid_collision").bind_operators(mod)
     e_n = P.state("electrons", space=e)
     i_n = P.state("ions", space=i)
-    C = P.call("collision", e_n, i_n)
+    C = P._call("collision", e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
     return mod, P
@@ -121,7 +121,7 @@ def test_coupled_rate_with_prim_var_is_deferred():
     P = adctime.Program("two_fluid_collision_prim").bind_operators(mod)
     e_n = P.state("electrons", space=e)
     i_n = P.state("ions", space=i)
-    C = P.call("collision", e_n, i_n)
+    C = P._call("collision", e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
     with pytest.raises(NotImplementedError, match="ADC-457"):
@@ -160,7 +160,7 @@ def test_read_only_catalyst_input_is_bound():
                  expr={"e": [ni + nn], "i": [ne + nn]})  # both rates read the catalyst nn
     P = adctime.Program("ioniz_step").bind_operators(mod)
     e_n, i_n, n_n = P.state("e", space=e), P.state("i", space=i), P.state("n", space=n)
-    C = P.call("ioniz", e_n, i_n, n_n)
+    C = P._call("ioniz", e_n, i_n, n_n)
     P.commit_many({"e": P.linear_combine("e1", e_n + P.dt * C["e"]),
                    "i": P.linear_combine("i1", i_n + P.dt * C["i"])})
     src = P.emit_cpp_program(model=None)
@@ -178,7 +178,7 @@ def test_undefined_cons_var_is_rejected():
     mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + zzz, ne, ne])  # ZZZ is in no state
     P = adctime.Program("two_fluid_typo").bind_operators(mod)
     e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
-    C = P.call("collision", e_n, i_n)
+    C = P._call("collision", e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
     with pytest.raises(NotImplementedError, match="ADC-457"):

@@ -51,9 +51,9 @@ def _field_program(schedule):
     P = adctime.Program("sched").bind_operators(mod)
     U = P.state("plasma", space=u)
     if schedule is None:
-        P.call("fields_from_state", U)
+        P._call("fields_from_state", U)
     else:
-        P.call("fields_from_state", U, schedule=schedule)
+        P._call("fields_from_state", U, schedule=schedule)
     P.commit("plasma", U)
     return P
 
@@ -74,7 +74,7 @@ def _scratch_program(schedule):
     dt = P.dt
     U = P.state("ions")
     f = P.solve_fields(U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     R.attrs["schedule"] = schedule
     P.commit("ions", P.linear_combine("U1", U + dt * R))
     return P
@@ -122,9 +122,9 @@ def test_when_reuses_program_predicate_token():
     dt = P.dt
     U = P.state("ions")
     f = P.solve_fields(U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
-    R2 = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R2 = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     R2.attrs["schedule"] = adctime.when(cond).hold()
     P.commit("ions", P.linear_combine("U1", U + dt * R2))
     P._check_schedules_lowerable()  # a Program Bool when() lowers

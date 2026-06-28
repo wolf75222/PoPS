@@ -27,30 +27,38 @@ Python script that imports `pops`, composes a model, plugs it into a system, and
    mkdir adc_cases/CASE_NAME
    ```
 
-3. Write the case script in that folder. Compose a model the same way the tutorial does:
-   `pops.Model(...)` for a native composition, `pops.physics.facade.Model(...)` for a formula model, or
-   `pops.CompositeModel(...)` for a hybrid. See the [models overview](../models/index.md) for
-   the three paths.
+3. Write the case script in that folder. Author the physics with `pops.physics.Model`, declare the
+   typed elliptic field with `pops.fields.PoissonProblem`, assemble a `pops.Case`, then compile and
+   bind it. See the [models overview](../models/index.md) for the model fronts.
 
    ```python
    import pops
+   import pops.time as T
+   from pops.mesh.cartesian import CartesianMesh
+   from pops.mesh.layouts import Uniform
+   from pops.fields import PoissonProblem
+   from pops.fields.bcs import Periodic
+   from pops.fields.rhs import ChargeDensity
+   from pops.solvers.elliptic import GeometricMG
+   from pops.codegen import Production
+   from pops.math import laplacian
 
-   model = pops.Model(
-       state=pops.Scalar(),
-       transport=pops.ExB(B0=1.0),
-       source=pops.NoSource(),
-       elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0),
-   )
+   # m = pops.physics.Model(...): author the physics (see the models overview).
+   poisson = PoissonProblem(name="phi", unknown="phi",
+                            equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+                            bcs=(Periodic(),), solver=GeometricMG())
 
-   sim = pops.System(n=96, L=1.0, periodic=True)
-   sim.add_block("ne", model=model, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-   sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-   sim.set_density("ne", ne0)
-   sim.step_cfl(0.4)
+   case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)))
+           .block("ne", physics=m).field(poisson).time(T.Program("euler")))
+
+   compiled = pops.compile(case, backend=Production())
+   sim = pops.bind(compiled, state={"ne": ne0})   # ne0: 2D initial density
+   sim.run(0.1, cfl=0.4)
    ```
 
-   Replace `ne0` with a 2D array holding the initial density. The same `model` plugs into
-   `pops.AmrSystem` for adaptive refinement without any change.
+   Replace `ne0` with a 2D array holding the initial density. For an adaptive run, swap the layout
+   to `pops.mesh.layouts.AMR(mesh, max_levels=2, ratio=2)` and author the refinement with
+   `case.amr.refine(...)`.
 
 4. Run the case from its folder.
 

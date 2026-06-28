@@ -51,31 +51,40 @@ with the installed `_pops`, otherwise falls back to `aot`; the explicit values
 
 ## Run the model
 
-Build a system, add the model as a block, set the Poisson coupling, set the initial density and
-advance in time. The same `model` object plugs into `pops.System` (uniform grid) or `pops.AmrSystem`
-(adaptive refinement) without change:
+The documented public path assembles a typed `pops.Case`, lowers it with `pops.compile`, and binds
+a runnable simulation with `pops.bind`. Declare the elliptic field, assemble the case, compile and
+bind, then advance with `sim.run`:
 
 ```python
-sim = pops.System(n=96, L=1.0, periodic=True)
+import pops.time as T
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.fields import PoissonProblem
+from pops.fields.bcs import Periodic
+from pops.fields.rhs import ChargeDensity
+from pops.solvers.elliptic import GeometricMG
+from pops.codegen import Production
+from pops.math import laplacian
+
+poisson = PoissonProblem(name="phi", unknown="phi",
+                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+                         bcs=(Periodic(),), solver=GeometricMG())
+
+case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)))
+        .block("ne", physics=m)              # m: the pops.physics.Model authored above
+        .field(poisson)
+        .time(T.Program("euler")))
+
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state={"ne": ne0})  # ne0: contiguous 2D array, indexed ne[j, i]
+sim.run(0.1, cfl=0.4)
 ```
 
-```python
-sim.add_block("ne", model=model, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-```
-
-```python
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-```
-
-```python
-sim.set_density("ne", ne0)
-```
-
-```python
-sim.step_cfl(0.4)
-```
-
-Replace `ne0` with your initial density: a contiguous 2D array indexed `ne[j, i]`.
+A native `pops.Model(...)` brick composition (the `ModelSpec` above) is not compiled through
+`pops.compile`; it plugs into the low-level native runtime directly with
+`sim.add_block("ne", model=model, ...)` / `sim.set_poisson(...)` / `sim.set_density(...)` /
+`sim.step_cfl(...)`. Those runtime methods stay for the native/AMR runtime and the tests; they are
+not the documented front door.
 
 ## Next steps
 

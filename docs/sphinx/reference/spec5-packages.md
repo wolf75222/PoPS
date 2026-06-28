@@ -9,10 +9,11 @@ string algorithm selectors) see {doc}`../concepts/typed-api`.
 ```{note}
 `pops.linalg` (the abstract algebra) and `pops.solvers` (the concrete C++ solver descriptors:
 `elliptic.GeometricMG` / `FFT`, `krylov.CG` / `GMRES` / ..., `nonlinear.Newton`, `schur`, and
-`preconditioners`) both exist. The linear solvers and preconditioners now live under
-`pops.solvers`; `pops.lib.solvers` is a thin back-compat shim that re-exports them (presets only).
-The custom-solver generation DSL (see {doc}`custom-solvers`) is internal / experimental and lives
-under `pops.codegen.solvers` (Spec 5 criterion 19), not under `pops.lib`.
+`preconditioners`) both exist. The linear solvers and preconditioners live under `pops.solvers`,
+which is their ONE public home; the transitional `pops.lib.solvers` re-export shim was removed
+(`pops.lib` is presets-only, no second public path). The custom-solver generation DSL (see
+{doc}`custom-solvers`) is internal / experimental and lives under `pops.codegen.solvers` (Spec 5
+criterion 19), not under `pops.lib`.
 ```
 
 ## `pops.numerics`: fluxes, reconstruction, limiters

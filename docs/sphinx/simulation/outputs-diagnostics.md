@@ -16,8 +16,7 @@ as on input.
 
 ```python
 m0 = sim.mass("ne")
-for _ in range(500):
-    sim.step_cfl(0.4)
+sim.run(0.2, cfl=0.4)               # sim = pops.bind(pops.compile(case, backend=Production()), ...)
 rho = sim.density("ne")             # ndarray (n, n)
 phi = sim.potential()
 print("mass drift:", abs(sim.mass("ne") - m0))   # ~ machine roundoff

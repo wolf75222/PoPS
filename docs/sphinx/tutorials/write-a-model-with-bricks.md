@@ -145,6 +145,15 @@ model = native_diocotron_model(n_i0)
 
 ## Step 6: Add the block
 
+```{note}
+A native `pops.Model(...)` brick composition (a `ModelSpec`) plugs into the low-level native
+runtime shown in the next steps; it is not compiled through `pops.compile`. The documented PUBLIC
+front door is the typed compiled flow (`pops.physics.Model` -> `pops.Case` -> `pops.compile` ->
+`pops.bind` -> `sim.run`); see the [first run](../getting-started/first-run.md) and
+[models overview](../models/index.md). The `add_block` / `set_poisson` / `step_cfl` methods below
+stay for the native/AMR runtime and the tests.
+```
+
 Plug the model into the system with `add_block`. You pass the spatial scheme and the time
 integrator here, not on the model: the same model is reused with different schemes.
 

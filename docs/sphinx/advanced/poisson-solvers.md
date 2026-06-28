@@ -3,19 +3,37 @@
 
 The elliptic stage solves `lap(phi) = f` (or a generalization) at each step, and it is
 the core of the coupling: `f` depends on the density, and `phi` (via `grad phi`) drives the
-drift. The solver is chosen by keyword in `set_poisson`:
+drift. You declare it with a typed `pops.fields.PoissonProblem` and attach it to the case with
+`case.field(...)`:
 
 ```python
 import pops
+from pops.fields import PoissonProblem
+from pops.fields.bcs import Periodic, Dirichlet
+from pops.fields.rhs import ChargeDensity
+from pops.solvers.elliptic import GeometricMG, FFT
+from pops.math import laplacian
 
-sim = pops.System(n=128, L=1.0, periodic=True)
-# ... add_block / add_equation ...
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="auto")
+poisson = PoissonProblem(
+    name="phi", unknown="phi",
+    equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+    bcs=(Periodic(),),                # or (Dirichlet(),) for a fixed boundary value
+    solver=GeometricMG(),             # or FFT() / FFT(spectral=True) for a periodic box
+)
+# case.field(poisson) -> pops.compile(case, backend=Production()) -> pops.bind(...)
 ```
 
-The `solver=` accepts `"geometric_mg"` (default) or `"fft"`. The `rhs=` is
-`"charge_density"` (right-hand side `q n`) or `"composite"` (sum of block
-contributions). `bc=` is `"auto"`, `"periodic"`, `"dirichlet"`.
+The solver is a typed object: `pops.solvers.elliptic.GeometricMG()` (multigrid, any boundary) or
+`FFT()` (periodic box). The right-hand side is a typed `ChargeDensity.from_blocks(...)` (`q n`,
+summed over the contributing blocks). The boundary conditions are typed `Periodic()` / `Dirichlet()`
+/ `Neumann()` (a face Dirichlet on a circular conducting wall is
+`Dirichlet(value=0.0, on=pops.mesh.geometry.Disc(radius=R).boundary())`).
+
+```{note}
+The low-level `sim.set_poisson(rhs=..., solver=..., bc=...)` runtime method that `pops.bind` calls
+internally is the seam this typed surface lowers onto; it stays for the native/AMR runtime and the
+tests, not as the documented front door.
+```
 
 ## Going further
 

@@ -54,7 +54,7 @@ def _fe(name="fe_dtbound"):
     P = adctime.Program(name)
     U = P.state("ions")
     f = P.solve_fields(U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -169,7 +169,7 @@ def fe_program(name, *, factor=None):
     P = adctime.Program(name)
     U = P.state("ions")
     f = P.solve_fields(U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     if factor is not None:
         @P.dt_bound

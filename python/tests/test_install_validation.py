@@ -56,7 +56,7 @@ def _program(name="installval_demo"):
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields("phi", U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 

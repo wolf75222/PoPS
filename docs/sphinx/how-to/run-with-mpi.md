@@ -80,23 +80,40 @@ mono-box); the other ranks return the path without I/O.
 ```python
 import numpy as np
 import pops
+import pops.time as T
+from pops.physics import Model
+from pops.math import laplacian, grad, div, ddt
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.fields import PoissonProblem
+from pops.fields.bcs import Periodic
+from pops.fields.rhs import ChargeDensity
+from pops.solvers.elliptic import GeometricMG
+from pops.codegen import Production
 
-# Built and stepped identically on every rank.
-sim = pops.System(n=96, L=1.0, periodic=True)
-sim.add_block(
-    "ne",
-    model=pops.Model(
-        state=pops.Scalar(),
-        transport=pops.ExB(B0=1.0),
-        source=pops.NoSource(),
-        elliptic=pops.BackgroundDensity(alpha=1.0, n0=1.0),
-    ),
-)
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-sim.set_density("ne", np.ascontiguousarray(np.ones((96, 96))))
+# Built and stepped identically on every rank. The Production backend is the MPI-capable path.
+m = Model("diocotron")
+U = m.state("U", components=["ne"], roles={"ne": "density"})
+(ne,) = U
+phi = m.field("phi")
+m.solve_field("fields_from_state", equation=(-laplacian(phi) == ne),
+              outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+              solver="geometric_mg")
+E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
+flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
+m.rate("explicit_rate", ddt(U) == -div(flux))
+m.check()
 
-for _ in range(20):
-    sim.step_cfl(0.4)
+poisson = PoissonProblem(name="phi", unknown="phi",
+                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
+                         bcs=(Periodic(),), solver=GeometricMG())
+
+case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)))
+        .block("ne", physics=m).field(poisson).time(T.Program("euler")))
+
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state={"ne": np.ascontiguousarray(np.ones((96, 96)))})
+sim.run(0.05, cfl=0.4)
 
 # Collective: every rank calls it; rank 0 writes the single .vti file.
 sim.write("out/state", format="vtk")

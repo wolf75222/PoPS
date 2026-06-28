@@ -95,9 +95,9 @@ def _build_predictor(P, mdl):
     """A GENERIC predictor step: no physics names, only typed operator calls."""
     P.bind_operators(mdl)
     u = P.state("plasma")
-    fields = P.call("fields_from_state", u)
-    rate = P.call("explicit_rhs", u, fields)
-    lin = P.call("lorentz", fields)
+    fields = P._call("fields_from_state", u)
+    rate = P._call("explicit_rhs", u, fields)
+    lin = P._call("lorentz", fields)
     rhs = P.linear_combine("rhs", u + P.dt * rate)
     ustar = P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
     P.commit("plasma", ustar)

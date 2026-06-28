@@ -227,15 +227,19 @@ class _ProgramSolve(_ProgramConstants):
     # solve_local_linear / commit style; they are blackboard notation, not a new IR.
     def op(self, name):
         """Return a callable board handle for a bound operator: ``expl = P.op("explicit_rate")``
-        then ``expl(U, fields)`` builds ``P.call("explicit_rate", U, fields)``."""
+        then ``expl(U, fields)`` builds the same IR as ``P.call(rate_handle, U, fields)``. The
+        board handle names the operator at creation (``P.op(name)``), so its call lowers through the
+        INTERNAL ``P._call`` -- the name is an internal selector, not the public handle-only path."""
         def _handle(*args, value_name=None):
-            return self.call(name, *args, name=value_name)
+            return self._call(name, *args, name=value_name)
         _handle.__name__ = str(name)
         return _handle
 
     def fields(self, name, from_state=None, from_states=None, from_state_set=None, operator=None):
-        """Board sugar for a field solve. Lowers to ``P.call(operator, ...)`` when a named operator
-        is bound, else to ``P.solve_fields`` (single state) or ``P.solve_fields_from_blocks``."""
+        """Board sugar for a field solve. Lowers through the internal ``P._call(operator, ...)`` when
+        a named operator is bound, else to ``P.solve_fields`` (single state) or
+        ``P.solve_fields_from_blocks`` (the board names the operator here; ``_call`` is the internal
+        selector path, not the public handle-only ``P.call``)."""
         if from_state_set is not None:
             states = from_state_set.states()
         elif from_states is not None:
@@ -247,10 +251,10 @@ class _ProgramSolve(_ProgramConstants):
         named = operator is not None and operator != "fields_from_state"
         if len(states) == 1:
             if named and self._registry is not None:
-                return self.call(operator, states[0], name=name)
+                return self._call(operator, states[0], name=name)
             return self.solve_fields(name, states[0])
         if named and self._registry is not None:
-            return self.call(operator, *states, name=name)
+            return self._call(operator, *states, name=name)
         return self.solve_fields_from_blocks(states, name=name)
 
     def define(self, name, value=None):

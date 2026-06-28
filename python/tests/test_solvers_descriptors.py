@@ -5,8 +5,9 @@ as inert typed descriptors. These tests construct each entry, exercise the RICH 
 parameter surface (typed smoother / coarse / tolerance + capabilities) and its protocol
 (inspect / options / capabilities / lower), check that a bare string is rejected where a typed
 sub-descriptor is expected (Spec 5 sec.7), and assert lower() carries the right native id /
-scheme. They also confirm the pops.lib.solvers shim still resolves the legacy install-path
-names (back-compat). The descriptors compute nothing; only their metadata is asserted.
+scheme. They also confirm pops.solvers is the ONE public home for the solver descriptors (the
+transitional pops.lib.solvers shim is removed). The descriptors compute nothing; only their
+metadata is asserted.
 """
 import pytest
 
@@ -192,24 +193,33 @@ def test_capability_vocabulary_rejects_unknown_tag():
         capability_map(quantum=True)
 
 
-# --- back-compat: the pops.lib.solvers shim still resolves the legacy names ---------------
+# --- one public home: the pops.lib.solvers shim is removed (no second public path) -------
 
-def test_lib_solvers_shim_back_compat():
-    lib_solvers = pytest.importorskip("pops.lib.solvers")
-    # The legacy flat namespace (pops.lib.solvers.solvers) still resolves to the moved factories.
-    ns = lib_solvers.solvers
+def test_lib_solvers_shim_is_removed():
+    # No-soft-compat: the solver descriptors live in exactly ONE public home, pops.solvers. The
+    # transitional pops.lib.solvers re-export shim is gone -- importing it must fail, and pops.lib
+    # exposes no solvers / preconditioners attribute.
+    import importlib
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.lib.solvers")
+    import pops.lib
+    assert not hasattr(pops.lib, "solvers"), "pops.lib must not re-export the solver catalog"
+    assert not hasattr(pops.lib, "preconditioners"), "pops.lib must not re-export preconditioners"
+
+    # The one public home resolves the flat factory namespace and the preconditioners.
+    ns = solvers.solvers
     assert ns.GMRES().scheme == "gmres"
     assert ns.CG().native_id == "pops::cg_solve"
     assert ns.Schur().native_id == "pops::SchurCondensationOperator"
     assert ns.Newton().available is False
-    # The preconditioner namespace re-exports through the shim (presets only).
-    assert lib_solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
-    # Spec 5 criterion 7: the shim is presets-only -- the custom-solver authoring / generation DSL
-    # no longer lives in pops.lib.solvers; it moved to pops.codegen.solvers (criterion 19).
+    assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
+
+    # The custom-solver authoring / generation DSL is internal / experimental under
+    # pops.codegen.solvers (criterion 19); it is NOT a public attribute of pops.solvers.
     for absent in ("solver", "build_solver_ir", "generate_solver_cpp", "SolverContext", "SolverIR"):
-        assert not hasattr(lib_solvers, absent), \
-            "pops.lib.solvers must not host the solver DSL symbol %r anymore" % absent
-    # The custom-solver registry hooks are wired onto the shared solvers namespace by the DSL package.
+        assert not hasattr(solvers, absent), \
+            "pops.solvers is a catalog, not the authoring DSL (saw %r)" % absent
+    # The registry hooks are wired onto the shared solvers namespace by the DSL package.
     cs = pytest.importorskip("pops.codegen.solvers")
     assert getattr(cs, "__experimental__", None) is True
     assert callable(cs.solver)

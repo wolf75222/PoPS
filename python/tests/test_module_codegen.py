@@ -76,7 +76,7 @@ def test_metadata_not_in_step_body():
 def test_no_model_empty_module():
     P = adctime.Program("fe")
     u = P.state("plasma")
-    P.commit("plasma", P.linear_combine("u1", u + P.dt * P.rhs(state=u, fields=P.solve_fields(u))))
+    P.commit("plasma", P.linear_combine("u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u))))
     src = P.emit_cpp_program(model=None)
     assert "pops_module_operator_count() { return 0; }" in src
     print("OK  model=None emits an empty GeneratedModule (count 0)")

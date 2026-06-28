@@ -161,8 +161,8 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     P = Program("board_calls")
     U_n = P.state("plasma")
     f_n = P.solve_fields("f_n", U_n)
-    R = explicit_rate(U_n, f_n)         # -> P.call("explicit_rate", U_n, f_n)
-    L = implicit_operator(f_n)          # -> P.call("implicit_operator", f_n)
+    R = explicit_rate(U_n, f_n)         # -> P._call("explicit_rate", U_n, f_n)
+    L = implicit_operator(f_n)          # -> P._call("implicit_operator", f_n)
     assert R.vtype == "rhs"
     assert L.vtype == "operator"
 
@@ -180,8 +180,8 @@ def test_board_module_is_consumable_by_operator_first_program():
     P = Program("operator_first")
     P.bind_operators(m.module)
     U = P.state("plasma")
-    fields = P.call("fields_from_state", U)            # field_operator -> solve_fields
-    R = P.call("explicit_rate", U, fields)             # local_rate (U, fields) -> Rate(U)
+    fields = P._call("fields_from_state", U)            # field_operator -> solve_fields
+    R = P._call("explicit_rate", U, fields)             # local_rate (U, fields) -> Rate(U)
     assert fields.vtype == "fields"
     assert R.vtype == "rhs"
     assert "explicit_rate" in m.module.list_operators()

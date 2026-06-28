@@ -85,9 +85,10 @@ force, and `Q` with the charge of the elliptic coupling.
    compiled = m.compile(backend="aot")
    ```
 
-5. Build the system and attach the model. `add_equation` routes the `CompiledModel` to its backend
-   adder. The `names=` list gives the three conservative variables, in the same order as
-   `conservative_vars` in step 2.
+5. Attach the model through the low-level `System.add_equation` seam, which routes the
+   `CompiledModel` to its backend adder (the public `pops.compile` / `pops.bind` flow lowers a
+   single typed model; the hybrid AOT path is exercised directly here). The `names=` list gives the
+   three conservative variables, in the same order as `conservative_vars` in step 2.
 
    ```python
    from pops.numerics.riemann import Rusanov

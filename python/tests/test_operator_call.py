@@ -48,14 +48,14 @@ def test_call_matches_shortcut_predictor():
     def shortcut(P, _m):
         U = P.state("plasma")
         f = P.solve_fields(U)
-        R = P.rhs(state=U, fields=f, flux=True, sources=["electric"])
+        R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
         P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
         U = P.state("plasma")
-        f = P.call("fields_from_state", U)
-        R = P.call("explicit_rhs", U, f)
+        f = P._call("fields_from_state", U)
+        R = P._call("explicit_rhs", U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
@@ -69,15 +69,15 @@ def test_call_matches_source_and_flux():
         U = P.state("plasma")
         f = P.solve_fields(U)
         s = P.source("electric", state=U, fields=f)
-        flux = P.rhs(state=U, flux=True, sources=[])
+        flux = P._rhs_legacy(state=U, flux=True, sources=[])
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
         U = P.state("plasma")
-        f = P.call("fields_from_state", U)
-        s = P.call("electric", U, f)
-        flux = P.call("flux_default", U)
+        f = P._call("fields_from_state", U)
+        s = P._call("electric", U, f)
+        flux = P._call("flux_default", U)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
@@ -85,8 +85,8 @@ def test_call_matches_source_and_flux():
 
 
 def test_call_default_source():
-    """P.call('source_default', ...) reaches the default source (m._source), which is NOT a named
-    source_term: it must lower to the source-only rhs, identical to P.rhs(flux=False,
+    """P._call('source_default', ...) reaches the default source (m._source), which is NOT a named
+    source_term: it must lower to the source-only rhs, identical to P._rhs_legacy(flux=False,
     sources=['default'])."""
     m = Model("ds")
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
@@ -99,14 +99,14 @@ def test_call_default_source():
     def shortcut(P, _m):
         U = P.state("plasma")
         f = P.solve_fields(U)
-        s = P.rhs(state=U, fields=f, flux=False, sources=["default"])
+        s = P._rhs_legacy(state=U, fields=f, flux=False, sources=["default"])
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
         U = P.state("plasma")
-        f = P.call("fields_from_state", U)
-        s = P.call("source_default", U, f)
+        f = P._call("fields_from_state", U)
+        s = P._call("source_default", U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
@@ -126,8 +126,8 @@ def test_call_linear_operator_matches_solve_local_linear():
     def opfirst(P, _m):
         P.bind_operators(_m)
         U = P.state("plasma")
-        f = P.call("fields_from_state", U)
-        L = P.call("lorentz", f)
+        f = P._call("fields_from_state", U)
+        L = P._call("lorentz", f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
         P.commit("plasma", U1)
 
@@ -139,33 +139,33 @@ def test_call_typing_errors():
     m = build_model()
     P = adctime.Program("p").bind_operators(m)
     U = P.state("plasma")
-    f = P.call("fields_from_state", U)
+    f = P._call("fields_from_state", U)
 
     # No bind -> clear error.
     P2 = adctime.Program("p2")
     try:
-        P2.call("electric", P2.state("plasma"))
+        P2._call("electric", P2.state("plasma"))
         raise AssertionError("expected an error calling without bound operators")
     except ValueError as exc:
         assert "no operators bound" in str(exc)
 
     # Unknown operator -> clear KeyError.
     try:
-        P.call("does_not_exist", U)
+        P._call("does_not_exist", U)
         raise AssertionError("expected KeyError for an unknown operator")
     except KeyError as exc:
         assert "unknown operator" in str(exc)
 
     # Arity mismatch -> electric needs (state, fields).
     try:
-        P.call("electric", U)
+        P._call("electric", U)
         raise AssertionError("expected arity error")
     except ValueError as exc:
         assert "expects 2 argument" in str(exc)
 
     # vtype mismatch -> a fields value where a state is expected.
     try:
-        P.call("electric", f, f)
+        P._call("electric", f, f)
         raise AssertionError("expected a vtype error")
     except ValueError as exc:
         assert "expects a state value" in str(exc)

@@ -391,8 +391,12 @@ cartesian <-> polar coupling (global ring). Cf. `pops.capabilities()['riemann'][
 
 ## System / AmrSystem : methods
 
-The Python wrapper defines a few methods (composition, primitives, EPM, disc) ; all the
-rest is delegated to the compiled C++ facade via `__getattr__`. Compact reference.
+These are the LOW-LEVEL runtime methods. The documented public way to build and run a simulation is
+the typed `pops.Case` assembly lowered by `pops.compile` and wired by `pops.bind` -> `sim.run(...)`
+(see [first run](../getting-started/first-run.md)); `add_block` / `add_equation` / `set_poisson` /
+`step_cfl` below are the seam `pops.bind` builds on and the tests use, not the front door. The
+Python wrapper defines a few methods (composition, primitives, EPM, disc) ; all the rest is
+delegated to the compiled C++ facade via `__getattr__`. Compact reference.
 
 ### System
 
@@ -458,7 +462,9 @@ may not exist yet ; they are listed here for the complete reference of the API.
 
 A reduced diocotron = a scalar electron density advected by E x B, with a neutralizing
 background, and a Poisson with a circular conducting wall. Built entirely from
-native bricks (no `models.diocotron` helper) :
+native bricks (no `models.diocotron` helper), through the LOW-LEVEL native runtime
+(`add_block` / `set_poisson` / `step_cfl`); for the public compiled flow see
+[first run](../getting-started/first-run.md) :
 
 ```python
 import numpy as np

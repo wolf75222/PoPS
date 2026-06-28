@@ -1,14 +1,23 @@
 """pops.codegen.solvers -- the custom-solver generation DSL (Spec 5 criterion 19).
 
-INTERNAL / EXPERIMENTAL: this is a solver-GENERATION DSL, not a stable public API. Its surface
+INTERNAL / EXPERIMENTAL -- NOT a stable user API.
+
+This is a solver-GENERATION DSL: it authors a solver IR and lowers it to C++ text. Its surface
 (``@solver`` / ``SolverContext`` / ``SolverIR`` / ``build_solver_ir`` / ``generate_solver_cpp``)
-may change without notice. For stable solver SELECTION use the ready-to-use :mod:`pops.solvers`
-presets (``CG`` / ``GMRES`` / ``GeometricMG`` / ``Newton`` / ``Schur`` ...).
+is unstable and may change or disappear without notice; it is provided for the project's own
+experimentation, not for users to author solvers.
+
+USERS DO NOT AUTHOR SOLVERS. The supported, stable workflow is to CONFIGURE the provided C++
+solver descriptors in :mod:`pops.solvers` -- ``pops.solvers.CG()`` / ``GMRES()`` /
+``GeometricMG()`` / ``Newton()`` / ``Schur()`` and their typed options -- and let codegen / the
+runtime drive the compiled C++ solvers. There is no public ``@solver`` decorator on ``pops`` /
+``pops.lib`` / ``pops.solvers``; the only entry to this experimental DSL is this codegen package.
 
 Spec 5 criterion 19 homes a solver-gen DSL, if any, in ``pops.codegen.solvers``: authoring an IR
 and lowering it to C++ text is a codegen concern. The DSL was formerly parked under
-``pops.lib.solvers``; this package is its canonical home. ``pops.lib.solvers`` now keeps only the
-preset re-exports (criterion 4 / sec.5.7).
+``pops.lib.solvers``; this package is its canonical home, and the ``pops.lib.solvers`` re-export
+shim is removed (``pops.lib`` is presets-only; the solver descriptors live only in
+:mod:`pops.solvers`).
 
 The authoring IR (:mod:`.dsl`) imports the heavy :mod:`pops.time` LAZILY (in ``build_solver_ir``),
 so this package adds no module-scope ``time`` edge; the C++ lowering (:mod:`.solver_cpp`) is pure

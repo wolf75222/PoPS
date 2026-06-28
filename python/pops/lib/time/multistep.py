@@ -79,7 +79,8 @@ def _bdf_local_linear(P, block, order, linear_source, sources, flux):
     U = P.state(block)
     fields = P.solve_fields(U) if flux else None
     # Optional EXPLICIT flux/source RHS folded into the BDF right-hand side (lagged at U^n).
-    R = P.rhs(state=U, fields=fields, flux=flux, sources=list(sources)) if (flux or sources) else None
+    R = (P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
+         if (flux or sources) else None)
 
     def _with_explicit(expr):
         return (expr + P.dt * R) if R is not None else expr
@@ -156,7 +157,7 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
 
     def _residual(P, Uk, tag):
         # F^k = U^k - U^n_terms - c*dt*rhs(U^k); returns (F^k, R^k) so the matvec can reuse R^k.
-        Rk = P.rhs(name="%s_R" % tag, state=Uk, fields=fields, flux=flux, sources=src)
+        Rk = P._rhs_legacy(name="%s_R" % tag, state=Uk, fields=fields, flux=flux, sources=src)
         Fk = P.linear_combine("%s_F" % tag, _un_terms() * (-1.0) + 1.0 * Uk - (c * P.dt) * Rk)
         return Fk, Rk
 

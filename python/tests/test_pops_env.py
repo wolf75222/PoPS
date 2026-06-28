@@ -45,7 +45,7 @@ def _program(name="env_demo"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    R = P.rhs(state=U, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 

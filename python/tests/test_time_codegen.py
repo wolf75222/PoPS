@@ -28,7 +28,7 @@ def _forward_euler(t):
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields(U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -38,10 +38,10 @@ def _ssprk2(t):
     dt = P.dt
     U0 = P.state("plasma")
     f0 = P.solve_fields(U0)
-    k0 = P.rhs(state=U0, fields=f0, flux=True, sources=["default"])
+    k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
     f1 = P.solve_fields(U1)
-    k1 = P.rhs(state=U1, fields=f1, flux=True, sources=["default"])
+    k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
     return P
 
@@ -99,7 +99,7 @@ def test_named_source_refused(t):
     dt = P.dt
     U = P.state("plasma")
     f = P.solve_fields(U)
-    R = P.rhs(state=U, fields=f, flux=True, sources=["electric"])
+    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     try:
         P.emit_cpp_program()
@@ -119,7 +119,7 @@ def test_multiblock_lowers(t):
     for blk in ("a", "b"):
         U = P.state(blk)
         f = P.solve_fields(U)
-        R = P.rhs(state=U, fields=f, flux=True, sources=["default"])
+        R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
@@ -133,7 +133,7 @@ def test_unknown_block_commit_refused(t):
     # A commit of a block no P.state declares cannot route to an index (ADC-426): reject fail-loud.
     P = t.Program("bad_commit")
     U = P.state("a")
-    Ua = P.linear_combine("a_next", U + P.dt * P.rhs(state=U, fields=P.solve_fields(U),
+    Ua = P.linear_combine("a_next", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U),
                                                      sources=["default"]))
     P.commit("ghost", Ua)  # 'ghost' was never declared by P.state
     try:
@@ -152,8 +152,8 @@ def test_solve_fields_from_blocks_lowers(t):
     Ua = P.state("a")
     Ub = P.state("b")
     P.solve_fields_from_blocks([Ua, Ub])
-    P.commit("a", P.linear_combine("a1", Ua + P.dt * P.rhs(state=Ua, sources=["default"])))
-    P.commit("b", P.linear_combine("b1", Ub + P.dt * P.rhs(state=Ub, sources=["default"])))
+    P.commit("a", P.linear_combine("a1", Ua + P.dt * P._rhs_legacy(state=Ua, sources=["default"])))
+    P.commit("b", P.linear_combine("b1", Ub + P.dt * P._rhs_legacy(state=Ub, sources=["default"])))
     src = P.emit_cpp_program()
     assert "ctx.solve_fields_from_blocks(" in src
     assert "std::vector<const pops::MultiFab*>" in src

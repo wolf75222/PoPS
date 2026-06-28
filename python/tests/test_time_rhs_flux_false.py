@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pops.time RHS flux toggle -- P.rhs(flux=False) is source-only (epic ADC-399 / ADC-430).
+"""pops.time RHS flux toggle -- P._rhs_legacy(flux=False) is source-only (epic ADC-399 / ADC-430).
 
 Sibling of ADC-425 (which fixed sources=[] on flux=True). The rhs codegen routed on ``sources`` but
 IGNORED ``flux``: a source-only stage (flux=False) still emitted the ``-div F`` base. Masked because
@@ -94,7 +94,7 @@ def one_step_program(name, sources, flux=True):
     P = adctime.Program(name)
     U = P.state("plasma")
     fields = P.solve_fields(U) if flux else None
-    R = P.rhs(state=U, fields=fields, flux=flux, sources=list(sources))
+    R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
     P.commit("plasma", P.linear_combine("%s_step" % name, U + P.dt * R))
     return P
 
@@ -120,8 +120,8 @@ def two_block_noflux(name):
     P = adctime.Program(name)
     Ua = P.state("a")
     Ub = P.state("b")
-    Ra = P.rhs(state=Ua, fields=None, flux=False, sources=["default"])
-    Rb = P.rhs(state=Ub, fields=None, flux=False, sources=["default"])
+    Ra = P._rhs_legacy(state=Ua, fields=None, flux=False, sources=["default"])
+    Rb = P._rhs_legacy(state=Ub, fields=None, flux=False, sources=["default"])
     P.commit("a", P.linear_combine("%s_a" % name, Ua + P.dt * Ra))
     P.commit("b", P.linear_combine("%s_b" % name, Ub + P.dt * Rb))
     return P
@@ -165,7 +165,7 @@ chk(h_nf != h_f, "flux=False vs flux=True produce distinct IR hashes")
 def _noflux_named_fluxes():
     P = adctime.Program("p_bad")
     U = P.state("plasma")
-    P.rhs(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
+    P._rhs_legacy(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
     P.commit("plasma", P.linear_combine("p_bad_step", U))
     return P
 
@@ -247,9 +247,9 @@ chk(d_full_vs_src > 1e-6,
 def lie_split_program(name):
     P = adctime.Program(name)
     U = P.state("plasma")
-    H = P.rhs(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
+    H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
     U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
-    S = P.rhs(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
+    S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
     P.commit("plasma", P.linear_combine("%s_S" % name, U1 + P.dt * S))
     return P
 

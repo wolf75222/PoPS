@@ -18,10 +18,10 @@ The matrix-free Krylov solvers are native C++ free functions in
 | GMRES | `pops::gmres_solve` |
 
 They are named by descriptors ({doc}`typed-bricks`): `pops.solvers.CG()`,
-`pops.solvers.BiCGStab()`, `pops.solvers.GMRES()`, `pops.solvers.Richardson()` (the
-`pops.lib.solvers.*` names are a back-compat preset shim onto the same factories). A compiled
-time Program drives them through `P.solve_linear(...)` ({doc}`time-program`); the elliptic field
-solve uses the geometric multigrid (`pops::GeometricMG`).
+`pops.solvers.BiCGStab()`, `pops.solvers.GMRES()`, `pops.solvers.Richardson()`. `pops.solvers`
+is the one public home for these descriptors. A compiled time Program drives them through
+`P.solve_linear(...)` ({doc}`time-program`); the elliptic field solve uses the geometric
+multigrid (`pops::GeometricMG`).
 
 ## Generated solvers (internal / experimental)
 
@@ -29,8 +29,10 @@ solve uses the geometric multigrid (`pops::GeometricMG`).
 :class: warning
 The solver-generation DSL below lives in `pops.codegen.solvers` (Spec 5 criterion 19: a
 solver-gen DSL, if any, lives in the codegen layer). It is INTERNAL / EXPERIMENTAL, not a stable
-public API, and its surface may change without notice. For stable solver selection use the
-`pops.solvers` presets above.
+public API, and its surface may change or disappear without notice. There is no public `@solver`
+decorator on `pops` / `pops.lib` / `pops.solvers`. Users do NOT author solvers: they CONFIGURE the
+provided C++ solver descriptors in `pops.solvers` (the presets above) and let codegen / the
+runtime drive them.
 ```
 
 A solver can be written in the Python DSL and generated to C++ -- it builds an IR, it does not

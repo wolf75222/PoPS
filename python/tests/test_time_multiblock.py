@@ -82,7 +82,7 @@ def single_block_program(t, name, block):
     P = t.Program(name)
     dt = P.dt
     U = P.state(block)
-    R = P.rhs(name="R_" + block, state=U, flux=True, sources=["decay"])
+    R = P._rhs_legacy(name="R_" + block, state=U, flux=True, sources=["decay"])
     P.commit(block, P.linear_combine(block + "_next", U + dt * R))
     return P
 
@@ -95,7 +95,7 @@ def two_block_program(t, name="two_block_passive"):
     dt = P.dt
     for blk in ("a", "b"):
         U = P.state(blk)
-        R = P.rhs(name="R_" + blk, state=U, flux=True, sources=["decay"])
+        R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
     return P
 
@@ -110,7 +110,7 @@ def section_a(t):
     dt = P.dt
     for blk in ("a", "b"):
         U = P.state(blk)
-        R = P.rhs(state=U, flux=True, sources=["default"])
+        R = P._rhs_legacy(state=U, flux=True, sources=["default"])
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
@@ -121,7 +121,7 @@ def section_a(t):
     Ua = Pro.state("a")
     Ub = Pro.state("b")  # noqa: F841 -- declared, read by the coupled charge but never committed
     fa = Pro.solve_fields(Ua)
-    Ra = Pro.rhs(state=Ua, fields=fa, sources=["default"])
+    Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
     Pro.commit("a", Pro.linear_combine("a1", Ua + Pro.dt * Ra))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
     src_ro = Pro.emit_cpp_program()
@@ -147,8 +147,8 @@ def section_a(t):
     Uac = Pc.state("a")
     Ubc = Pc.state("b")
     Pc.solve_fields_from_blocks([Uac, Ubc])
-    Pc.commit("a", Pc.linear_combine("a1", Uac + Pc.dt * Pc.rhs(state=Uac, sources=["default"])))
-    Pc.commit("b", Pc.linear_combine("b1", Ubc + Pc.dt * Pc.rhs(state=Ubc, sources=["default"])))
+    Pc.commit("a", Pc.linear_combine("a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"])))
+    Pc.commit("b", Pc.linear_combine("b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"])))
     src_c = Pc.emit_cpp_program()
     chk("ctx.solve_fields_from_blocks(" in src_c,
         "solve_fields_from_blocks lowers to the coupled multi-block solve")
@@ -171,10 +171,10 @@ def section_a(t):
     Uacf = Pcf.state("a")
     Ubcf = Pcf.state("b")
     Pcf.commit("a", Pcf.linear_combine(
-        "a_n", Uacf + Pcf.dt * Pcf.rhs(state=Uacf, flux=True, sources=["default"])))
+        "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(state=Uacf, flux=True, sources=["default"])))
 
     def _cf_body(prog, x):
-        return prog.linear_combine(None, x + prog.dt * prog.rhs(state=x, flux=True, sources=["default"]))
+        return prog.linear_combine(None, x + prog.dt * prog._rhs_legacy(state=x, flux=True, sources=["default"]))
 
     Pcf.commit("b", Pcf.range(Ubcf, 2, _cf_body))
     src_cf = Pcf.emit_cpp_program()

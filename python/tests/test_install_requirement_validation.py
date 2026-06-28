@@ -48,7 +48,7 @@ def lie_program(name="adc446_prog"):
     P = adctime.Program(name)
     u = P.state("plasma")
     fields = P.solve_fields(u)
-    r = P.rhs(state=u, fields=fields)
+    r = P._rhs_legacy(state=u, fields=fields)
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     return P
 

@@ -131,7 +131,7 @@ def test_argument_guards(t):
     in_sf = P.scalar_field("in")
     out_sf = P.scalar_field("out")
     U = P.state("b")
-    R = P.rhs(state=U, flux=True, sources=["default"])
+    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
     try:
         P.rhs_jacvec(out_sf, in_sf, iterate=U, r0=R, c_dt=P.dt)  # not inside set_apply
     except ValueError as exc:
