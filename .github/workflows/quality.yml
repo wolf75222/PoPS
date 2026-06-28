@@ -185,7 +185,7 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
       - name: Cache ccache (quality/warnings)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-quality-warnings-${{ github.sha }}
@@ -291,7 +291,7 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
       - name: Cache ccache (quality/asan)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-quality-asan-${{ github.sha }}
@@ -360,7 +360,7 @@ jobs:
           exec-space: openmp
           extra-apt: clang
       - name: Cache ccache (quality/tsan)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-quality-tsan-${{ github.sha }}
@@ -419,7 +419,7 @@ jobs:
           compiler: clang
           extra-apt: clang
       - name: Cache ccache (quality/fuzz)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-quality-fuzz-${{ github.sha }}
@@ -490,7 +490,7 @@ jobs:
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
       - name: Cache ccache (quality/coverage)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-quality-coverage-${{ github.sha }}

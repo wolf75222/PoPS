@@ -192,7 +192,7 @@ jobs:
       # du plus precis au plus large (meme job sur la branche -> sur master -> n'importe).
       # Cle INCHANGEE depuis l'ancien job build-and-test (kokkos-serial).
       - name: Cache ccache (Kokkos Serial)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-kokkos-serial-${{ github.ref }}-${{ github.sha }}
@@ -314,7 +314,7 @@ jobs:
       # still fall back to this shard on the branch, then master, then ANY python ccache, so a fresh shard
       # warms from an existing cache (cross-shard / cross-ref hits via CCACHE_BASEDIR+NOHASHDIR).
       - name: Cache ccache (Python module)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-python-shard${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}
@@ -461,7 +461,7 @@ jobs:
       # Meme install Kokkos Serial (PIC) que le gate ; cle de cache partagee.
       - name: Cache Kokkos install (Serial ${{ env.KOKKOS_VERSION }})
         id: kokkos-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.KOKKOS_PREFIX }}
           key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-serial-cxx20-gcc-pic
@@ -477,7 +477,7 @@ jobs:
           cmake --build /tmp/kbuild --parallel 4 --target install
 
       - name: Cache ccache (MPI)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-mpi-${{ github.ref }}-${{ github.sha }}
@@ -548,13 +548,13 @@ jobs:
       # La cle inclut "openmp" pour ne pas entrer en collision avec le cache serial.
       - name: Cache Kokkos install (OpenMP ${{ env.KOKKOS_VERSION }})
         id: kokkos-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.KOKKOS_PREFIX }}
           key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-openmp-cxx20-gcc-pic
 
       - name: Cache ccache (Kokkos OpenMP)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-kokkos-openmp-${{ github.ref }}-${{ github.sha }}
@@ -671,7 +671,7 @@ jobs:
           sudo apt-get install -y libeigen3-dev ninja-build ccache
 
       - name: Cache ccache (bench)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-bench-${{ github.ref }}-${{ github.sha }}

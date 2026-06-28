@@ -58,7 +58,7 @@ jobs:
       # fine into a fresh _pops on a newer one).
       - name: Cache Kokkos install (macOS arm64, Serial static PIC)
         id: kokkos-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/kokkos-install
           key: kokkos-wheel-macos-arm64-4.4.01-15dc143e-serial-static-pic-cxx20-dt11-${{ hashFiles('.github/workflows/wheels.yml') }}
@@ -67,7 +67,7 @@ jobs:
       # cibuildwheel builds in a temp dir, so CCACHE_BASEDIR + CCACHE_NOHASHDIR (set in CIBW_ENVIRONMENT)
       # are what give cross-run hits; the actual warm hit-rate is reported by the `ccache -s` step below.
       - name: Cache ccache (wheel)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pops-wheel-ccache
           key: ccache-wheel-macos-arm64-${{ github.sha }}

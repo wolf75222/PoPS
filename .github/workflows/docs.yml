@@ -70,7 +70,7 @@ jobs:
       # Cache ccache persistant : le preset auto-detecte ccache (POPS_USE_CCACHE=ON). Persister
       # ~/.ccache evite de tout recompiler (module + Kokkos FetchContent) a chaque run hebdo.
       - name: Cache ccache (docs)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-docs-${{ runner.os }}-${{ github.sha }}
