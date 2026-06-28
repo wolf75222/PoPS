@@ -96,7 +96,7 @@ rate = model.rate("explicit_rate", equation=...)
 
 T = Program("step")
 U = T.state("U", block="plasma")
-fields = T.solve_fields(U.n)
+fields = T.call(fields_from_state, U.n)
 R = T.call(rate, U.n, fields)
 T.define(U.next, U.n + T.dt * R)
 T.commit("plasma", U.next)
@@ -124,21 +124,25 @@ For manual programs, use temporal handles:
 
 ```python
 from pops.time import Program
-from pops.numerics.terms import Flux
+from pops.model import OperatorHandle
 
 T = Program("ssprk3_manual")
 U = T.state("U", block="plasma")
+T.bind_operators(model)
 
-f0 = T.solve_fields(U.n)
-k0 = T.rhs(state=U.n, fields=f0, terms=[Flux()])
+fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
+rate = model.rate_operator("explicit_rate", flux=True, sources=["default"])
+
+f0 = T.call(fields_from_state, U.n)
+k0 = T.call(rate, U.n, f0)
 T.define(U.stage(1), U.n + T.dt * k0)
 
-f1 = T.solve_fields(U.stage(1))
-k1 = T.rhs(state=U.stage(1), fields=f1, terms=[Flux()])
+f1 = T.call(fields_from_state, U.stage(1))
+k1 = T.call(rate, U.stage(1), f1)
 T.define(U.stage(2), 0.75 * U.n + 0.25 * (U.stage(1) + T.dt * k1))
 
-f2 = T.solve_fields(U.stage(2))
-k2 = T.rhs(state=U.stage(2), fields=f2, terms=[Flux()])
+f2 = T.call(fields_from_state, U.stage(2))
+k2 = T.call(rate, U.stage(2), f2)
 T.define(U.next, (1.0 / 3.0) * U.n + (2.0 / 3.0) * (U.stage(2) + T.dt * k2))
 
 T.commit("plasma", U.next)

@@ -4,7 +4,7 @@
 Pendant POLAIRE de test_schur_via_system.py (cartesien). L'etage PolarCondensedSchurSourceStepper est
 teste en STANDALONE par le test C++ test_polar_condensed_schur_source_stepper (relation implicite,
 stabilite vs Euler, ordre 1) ; ce test comble le chemin FACADE, sur l'anneau (r, theta) :
-  pops.System(mesh=pops.PolarMesh(...)).add_equation(time=pops.Split(source=pops.CondensedSchur(...)))
+  pops.System(mesh=pops.PolarMesh(...))._add_equation(time=pops.Split(source=pops.CondensedSchur(...)))
     -> _s.add_block (IsothermalFluxPolar : roles Density / MomentumX (radial) / MomentumY (azimutal))
     -> _s.set_source_stage (geometrie polaire -> PolarCondensedSchurSourceStepper, dispatch C++)
   sim.step(dt)
@@ -122,7 +122,7 @@ def build_system(nr, nth, B0, alpha, theta, with_schur, cs2=1.0):
         )
     else:
         time_policy = pops.Explicit()
-    sim.add_equation(
+    sim._add_equation(
         "ions",
         model=iso_fluid_model(cs2=cs2, alpha=alpha),
         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative()),

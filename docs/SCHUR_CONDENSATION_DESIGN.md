@@ -277,36 +277,36 @@ The entry point is an EXPLICIT/IMPLICIT explicit splitting, which composes a hyp
 integrator and a condensed source stage:
 
 ```python
-sim.add_equation(
-    "ions",
-    model=model,                       # briques natives OU CompiledModel DSL, roles requis
-    time=pops.Split(
-        hyperbolic=pops.Explicit(ssprk3=True),
-        source=pops.CondensedSchur(
-            kind="electrostatic_lorentz",
-            theta=0.5,
-            density="rho",             # role Density
-            momentum=("mx", "my"),     # roles MomentumX / MomentumY
-            energy="E",                # role Energy (optionnel)
-            magnetic_field="B_z",      # champ aux Omega / B_z
-            potential="phi",
-        ),
-    ),
+from pops.lib.time import condensed_schur, ssprk3
+
+time = pops.time.Program("ions_schur").bind_operators(model)
+U = time.state("U", block="ions")
+
+ssprk3(time, "ions")
+condensed_schur(
+    time,
+    state=U,
+    theta=0.5,
+    density=model.role("Density"),
+    momentum=(model.role("MomentumX"), model.role("MomentumY")),
+    energy=model.role("Energy", optional=True),
+    magnetic_field=model.field("B_z"),
+    potential=model.field("phi"),
+)
+
+case = (
+    pops.Case(layout=layout, name="ions_schur")
+    .block("ions", physics=model, spatial=spatial)
+    .field(poisson)
+    .time(time)
 )
 ```
 
 Principles of this API:
-- `pops.Split(hyperbolic=, source=)` is a new integrator of the time layer: it plays the
-  explicit hyperbolic stage then the `CondensedSchur` source stage (IMEX in the layer-5 sense).
-- `pops.CondensedSchur(kind=, theta=, ...)` NAMES the algorithm and MAPS the fields onto the roles.
-  `kind="electrostatic_lorentz"` selects `ElectrostaticLorentzCondensation` (level 4-3);
-  other `kind` will be able to be added without touching the facade.
-- **The default path is UNCHANGED.** Nothing breaks: `pops.Explicit`, `pops.IMEX`,
-  `pops.SourceImplicit` (the clear name; the old `pops.Implicit` alias was removed in Spec 6,
-  ADC-518 -- use `pops.SourceImplicit` / `pops.IMEX`), `add_block`, `add_equation` continue to work
-  identically. A model
-  that does not use `pops.Split(... source=pops.CondensedSchur ...)` never sees the new stage.
-  The selection is OPT-IN, like the polar grid (#116, Cartesian default bit-identical).
+- `pops.lib.time.condensed_schur` adds the source-stage IR to the compiled `Program`.
+- The Schur stage maps fields and state components through typed roles, not stringly runtime setters.
+- The runtime receives the compiled case through `pops.compile(...)` / `pops.bind(...)`; no block or
+  equation is installed by ad-hoc public setters.
 
 BOX -- `pops.SourceImplicit` (LOCAL) vs `pops.CondensedSchur` (GLOBAL). Two distinct mechanisms
 treat a stiff source implicitly; do not confuse them.

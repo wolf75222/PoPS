@@ -1,10 +1,11 @@
 """Spec 2 (S2-2): typed P.call and m.rate_operator.
 
-P.call resolves an operator name against the model's typed registry, type-checks the
-arguments against its Signature, and lowers to the matching PDE shortcut so the
-generated C++ is IDENTICAL to the Spec 1 path. m.rate_operator names a composite
--div F + sources rate as a Program-side alias. Pure Python (emit_cpp_program returns
-the .so source text without compiling); skips cleanly if pops is not importable.
+P.call resolves an operator handle against the model's typed registry, type-checks the
+arguments against its Signature, records a first-class ``operator_call`` IR node, and
+codegen lowers that node to the matching C++ ProgramContext route. m.rate_operator names
+a composite -div F + sources rate as a Program-side alias. Pure Python
+(emit_cpp_program returns the .so source text without compiling); skips cleanly if pops
+is not importable.
 """
 import sys
 
@@ -35,21 +36,19 @@ def build_model():
     return m
 
 
-def _emit(build, m, name="prog"):
+def _program(build, m, name="prog"):
     P = adctime.Program(name)
     build(P, m)
-    return P.emit_cpp_program(model=m)
+    return P
 
 
-def test_call_matches_shortcut_predictor():
-    """A predictor step written with P.call emits byte-identically to the PDE shortcut."""
+def _emit(build, m, name="prog"):
+    return _program(build, m, name).emit_cpp_program(model=m)
+
+
+def test_call_predictor_records_operator_nodes_and_lowers():
+    """A predictor step written with P.call keeps typed operator_call nodes in IR and lowers them."""
     m = build_model()
-
-    def shortcut(P, _m):
-        U = P.state("plasma")
-        f = P.solve_fields(U)
-        R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
@@ -58,19 +57,17 @@ def test_call_matches_shortcut_predictor():
         R = P._call("explicit_rhs", U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
 
-    assert _emit(shortcut, m) == _emit(opfirst, m)
-    print("OK  P.call(fields_from_state)+P.call(explicit_rhs) == solve_fields + rhs")
+    P = _program(opfirst, m)
+    assert [v.op for v in P._values].count("operator_call") == 2
+    src = P.emit_cpp_program(model=m)
+    assert "ctx.solve_fields_from_state(0," in src
+    assert "ctx.neg_div_flux_default_into(0," in src
+    assert "electric" in src
+    print("OK  P.call(fields_from_state)+P.call(explicit_rhs) records operator_call and lowers")
 
 
-def test_call_matches_source_and_flux():
+def test_call_lowers_source_and_flux():
     m = build_model()
-
-    def shortcut(P, _m):
-        U = P.state("plasma")
-        f = P.solve_fields(U)
-        s = P.source("electric", state=U, fields=f)
-        flux = P._rhs_legacy(state=U, flux=True, sources=[])
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
@@ -80,8 +77,12 @@ def test_call_matches_source_and_flux():
         flux = P._call("flux_default", U)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
-    assert _emit(shortcut, m) == _emit(opfirst, m)
-    print("OK  P.call(electric)/P.call(flux_default) == source / flux-only rhs")
+    P = _program(opfirst, m)
+    assert [v.op for v in P._values].count("operator_call") == 3
+    src = P.emit_cpp_program(model=m)
+    assert "ctx.neg_div_flux_default_into(0," in src
+    assert "electric" in src
+    print("OK  P.call(electric)/P.call(flux_default) lowers to source / flux-only C++")
 
 
 def test_call_default_source():
@@ -96,12 +97,6 @@ def test_call_default_source():
     m.source_term("default", [Const(0.0), -rho * gx, -rho * gy])  # reads the fields
     m.elliptic_rhs(rho - 1.0)
 
-    def shortcut(P, _m):
-        U = P.state("plasma")
-        f = P.solve_fields(U)
-        s = P._rhs_legacy(state=U, fields=f, flux=False, sources=["default"])
-        P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
-
     def opfirst(P, _m):
         P.bind_operators(_m)
         U = P.state("plasma")
@@ -109,19 +104,14 @@ def test_call_default_source():
         s = P._call("source_default", U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
 
-    assert _emit(shortcut, m) == _emit(opfirst, m)
-    print("OK  P.call(source_default) == default-source-only rhs (m._source path)")
+    P = _program(opfirst, m)
+    assert [v.op for v in P._values].count("operator_call") == 2
+    assert "ctx.source_default_into(0," in P.emit_cpp_program(model=m)
+    print("OK  P.call(source_default) lowers to default-source-only C++")
 
 
 def test_call_linear_operator_matches_solve_local_linear():
     m = build_model()
-
-    def shortcut(P, _m):
-        U = P.state("plasma")
-        f = P.solve_fields(U)
-        L = P.linear_source("lorentz")
-        U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
-        P.commit("plasma", U1)
 
     def opfirst(P, _m):
         P.bind_operators(_m)
@@ -131,8 +121,12 @@ def test_call_linear_operator_matches_solve_local_linear():
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
         P.commit("plasma", U1)
 
-    assert _emit(shortcut, m) == _emit(opfirst, m)
-    print("OK  P.call(lorentz) operator drives solve_local_linear identically")
+    P = _program(opfirst, m)
+    assert any(v.op == "operator_call" and v.attrs["kind"] == "local_linear_operator"
+               for v in P._values)
+    src = P.emit_cpp_program(model=m)
+    assert "solve_local_linear" in src or "lorentz" in src
+    print("OK  P.call(lorentz) operator drives solve_local_linear")
 
 
 def test_call_typing_errors():

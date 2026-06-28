@@ -76,7 +76,7 @@ def _lie_program(name="adc508_amr_prog"):
     """A single-block Lie step on 'plasma' (solve_fields then a Forward-Euler commit)."""
     P = adctime.Program(name)
     u = P.state("plasma")
-    fields = P.solve_fields(u)
+    fields = P._solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     return P
@@ -88,7 +88,7 @@ def _two_block_program(name="adc508_amr_2block"):
     P = adctime.Program(name)
     for blk in ("plasma", "plasma2"):
         u = P.state(blk)
-        fields = P.solve_fields(u)
+        fields = P._solve_fields(u)
         r = P._rhs_legacy(state=u, fields=fields)
         P.commit(blk, P.linear_combine("u1_%s" % blk, u + P.dt * r))
     return P
@@ -151,7 +151,7 @@ def test_amr_install_program_end_to_end_kokkos():
     compiler / Kokkos. The CUDA run is the ROMEO step; bit-identical parity is test_amr_program_parity."""
     print("== AMR install_program installs + runs the per-level driver ==")
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "install_program"):
+    if not hasattr(amr, "_install_program_so"):
         print("skip (_pops lacks AmrSystem.install_program; rebuild _pops)")
         return
     m = _euler_model()
@@ -166,10 +166,10 @@ def test_amr_install_program_end_to_end_kokkos():
     xx, yy = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
     try:
-        amr.add_equation("plasma", block_cm, spatial=pops.FiniteVolume(),
+        amr._add_equation("plasma", block_cm, spatial=pops.FiniteVolume(),
                          time=pops.Explicit(method="ssprk2"))
         amr.set_density("plasma", rho)
-        amr.install_program(compiled.so_path)
+        amr._install_program_so(compiled.so_path)
         amr.step(1e-3)  # the per-level macro-step runs over the hierarchy (AmrProgramContext)
         chk("plasma" in amr.block_names(), "the instance was bound and the AMR program installed")
         chk(amr.installed_program_hash() != "", "the installed program hash is recorded")
@@ -194,7 +194,7 @@ def test_multi_block_amr_program_install_fails_loud():
     install_program guard checks."""
     print("== a multi-block AMR Program install fails loud (fix 2: v1 single-block-AMR limit) ==")
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "install_program"):
+    if not hasattr(amr, "_install_program_so"):
         print("skip (_pops lacks AmrSystem.install_program; rebuild _pops)")
         return
     m = _euler_model("adc508_2block_model")
@@ -211,14 +211,14 @@ def test_multi_block_amr_program_install_fails_loud():
     try:
         # Add BOTH blocks so the name-binding loop passes and the guard (not the name bind) is what fires.
         for blk in ("plasma", "plasma2"):
-            amr.add_equation(blk, block_cm, spatial=pops.FiniteVolume(),
+            amr._add_equation(blk, block_cm, spatial=pops.FiniteVolume(),
                              time=pops.Explicit(method="ssprk2"))
             amr.set_density(blk, rho)
     except RuntimeError as exc:
         print("skip (could not add the two AMR blocks: %s)" % str(exc)[:120])
         return
     try:
-        amr.install_program(compiled.so_path)
+        amr._install_program_so(compiled.so_path)
         chk(False, "a 2-block AMR Program install must raise (v1 single-block limit)")
     except RuntimeError as exc:
         msg = str(exc)

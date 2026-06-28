@@ -47,7 +47,7 @@ def lorentz_model(name="adc446_model"):
 def lie_program(name="adc446_prog"):
     P = adctime.Program(name)
     u = P.state("plasma")
-    fields = P.solve_fields(u)
+    fields = P._solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     return P
@@ -55,7 +55,7 @@ def lie_program(name="adc446_prog"):
 
 def make_sim(block_model, with_bz):
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_equation("plasma", block_model.compile(backend="production"),
+    sim._add_equation("plasma", block_model.compile(backend="production"),
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -84,7 +84,7 @@ def main():
     # spec-style message naming the operator and the missing aux field.
     sim_missing = make_sim(m, with_bz=False)
     try:
-        sim_missing.install_program(compiled.so_path)
+        sim_missing._install_program_so(compiled.so_path)
         print("MISMATCH: install accepted a simulation missing B_z")
         return 1
     except RuntimeError as exc:
@@ -97,7 +97,7 @@ def main():
 
     # (2) Positive: providing B_z (set_magnetic_field) lets the same program install cleanly.
     sim_ok = make_sim(m, with_bz=True)
-    sim_ok.install_program(compiled.so_path)
+    sim_ok._install_program_so(compiled.so_path)
     print("OK  install accepts the simulation once B_z is provided")
     return 0
 

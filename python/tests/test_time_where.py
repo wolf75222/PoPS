@@ -181,7 +181,7 @@ def _run_section_b(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
@@ -215,7 +215,7 @@ def _run_section_b(t):
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
         return None
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     # An IC that STRADDLES the floor: a sine swinging through 0.5 so some cells are >= floor and some
@@ -225,7 +225,7 @@ def _run_section_b(t):
     rho0 = 0.5 + 0.4 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_state("blk", np.stack([rho0]))
 
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the select is dt-free
     out = np.array(sim.get_state("blk"))[0]
 

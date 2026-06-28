@@ -141,7 +141,7 @@ def make_sim(model):
         cm = model.compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         _skip("block model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("gas", cm,
+    sim._add_equation("gas", cm,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     sim.set_state("gas", rho0.tolist())
@@ -159,7 +159,7 @@ chk(callable(routes_fn) and routes_fn()[0] == {0: ["k"]},
 
 # Step with k = 2.0 (the declaration default the .so seeds at install).
 sim2 = make_sim(_decay_model("runtime", 2.0))
-sim2.install_program(compiled.so_path)
+sim2._install_program_so(compiled.so_path)
 U0 = np.array(sim2.get_state("gas"))
 sim2.step(dt)
 U2 = np.array(sim2.get_state("gas"))
@@ -167,7 +167,7 @@ d2 = U2 - U0  # the per-step increment dt * (k=2) * rho
 
 # Re-bind a FRESH sim on the SAME .so (no recompile), set k = 6.0, step from the same state.
 sim6 = make_sim(_decay_model("runtime", 2.0))
-sim6.install_program(compiled.so_path)        # same cached .so -> no recompile
+sim6._install_program_so(compiled.so_path)        # same cached .so -> no recompile
 sim6.set_program_params(0, [6.0])             # change the runtime param: effect at the next step
 U0b = np.array(sim6.get_state("gas"))
 sim6.step(dt)
@@ -186,7 +186,7 @@ chk(c2.so_path == compiled.so_path, "cache HIT: same Program -> same .so (the k 
 
 # An unknown params= name routed at bind raises a clear ValueError (no silent drop).
 sim_bad = make_sim(_decay_model("runtime", 2.0))
-sim_bad.install_program(compiled.so_path)
+sim_bad._install_program_so(compiled.so_path)
 chk(raises(ValueError, lambda: sim_bad._install_program_params(compiled, {"nope": 1.0})),
     "install rejects a params= name no Program kernel reads")
 

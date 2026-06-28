@@ -35,7 +35,7 @@ The typed descriptors:
 - limiter / reconstruction (`pops.numerics.reconstruction`): `FirstOrder()` (first-order Godunov),
   `.limiters.Minmod()`, `.limiters.VanLeer()` (second-order MUSCL, 2 ghosts),
   `WENO5()` / `WENO5Z()` (WENO5-Z, order 5 in a smooth zone, 5-point stencil / 3 ghosts,
-  oscillation-free capture near a front). WENO5 is exposed only by the native `add_block` path and
+  oscillation-free capture near a front). WENO5 is exposed by the native block route and
   the compiled `aot`/`production` backends (the `prototype` JIT path rejects it);
 - Riemann flux (`pops.numerics.riemann`): `Rusanov()` (the most stable, default for scalar
   transport), `HLL()` (generic signed-wave, requires `model.wave_speeds`), `HLLC()`, `Roe()`. HLLC

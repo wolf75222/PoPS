@@ -56,7 +56,7 @@ def main():
 
         sim = pops.System(n=n, L=L, periodic=True)
         sim.add_dynamic_block("te", so, names=["n"])  # IModel.n_aux()=5 -> ensure_aux_width(5)
-        sim.add_block("gas", model=euler_gas(gamma))  # bloc fluide source de T_e
+        sim._add_block("gas", model=euler_gas(gamma))  # bloc fluide source de T_e
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_density("te", np.ones((n, n)))
 

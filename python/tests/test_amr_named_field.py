@@ -204,7 +204,7 @@ def _run_section_b():
     layout = AMR(CartesianMesh(n=N, L=1.0, periodic=True))
     sim = pops.AmrSystem(_amr_config_from_layout(layout))
     sim.set_poisson("charge_density", "geometric_mg")
-    sim.add_equation("plasma", compiled,
+    sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit())
     sim.set_density("plasma", _ic()[0])  # the coarse density (n x n); momentum starts at rest

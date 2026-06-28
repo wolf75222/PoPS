@@ -21,7 +21,7 @@ def board():
     dt = T.dt
     u = T.state("plasma")
     f = T.fields("f", from_state=u)
-    r = T.rhs(name="R", state=u, fields=f, flux=True, sources=["electric"])
+    r = T._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
     u1 = T.define("U1", u + dt * r)
     T.commit("plasma", u1)
     return T
@@ -31,8 +31,8 @@ def operator_first():
     P = Program("fe_operator_first")
     dt = P.dt
     u = P.state("plasma")
-    f = P.solve_fields("f", u)
-    r = P.rhs(name="R", state=u, fields=f, flux=True, sources=["electric"])
+    f = P._solve_fields("f", u)
+    r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
     u1 = P.linear_combine("U1", u + dt * r)
     P.commit("plasma", u1)
     return P

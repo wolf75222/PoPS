@@ -112,28 +112,28 @@ def test_facade_rejects():
     field = np.ones((8, 8))
     # B_z -> set_magnetic_field (message redirigeant)
     try:
-        sim.set_aux_field("blk", "B_z", field)
+        sim._set_aux_field("blk", "B_z", field)
     except ValueError as ex:
         assert "set_magnetic_field" in str(ex), "le message B_z devrait rediriger : %r" % str(ex)
     else:
         raise AssertionError("set_aux_field('B_z') aurait du lever")
     # T_e -> set_electron_temperature_from
     try:
-        sim.set_aux_field("blk", "T_e", field)
+        sim._set_aux_field("blk", "T_e", field)
     except ValueError as ex:
         assert "set_electron_temperature_from" in str(ex), "le message T_e devrait rediriger : %r" % str(ex)
     else:
         raise AssertionError("set_aux_field('T_e') aurait du lever")
     # autre nom canonique (phi) non fixable
     try:
-        sim.set_aux_field("blk", "phi", field)
+        sim._set_aux_field("blk", "phi", field)
     except ValueError:
         pass
     else:
         raise AssertionError("set_aux_field('phi') aurait du lever")
     # bloc inconnu (aucun champ nomme enregistre)
     try:
-        sim.set_aux_field("inexistant", "kappa", field)
+        sim._set_aux_field("inexistant", "kappa", field)
     except ValueError as ex:
         assert "inexistant" in str(ex)
     else:
@@ -159,7 +159,7 @@ def test_end_to_end():
 
         sim = pops.System(n=n, L=L, periodic=True)
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sim.add_equation("decay", model=compiled,
+        sim._add_equation("decay", model=compiled,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit())
         sim.set_density("decay", np.ones((n, n)))
@@ -172,7 +172,7 @@ def test_end_to_end():
 
         # (a1) kappa CONSTANT : eval_rhs = S = -kappa*n = -2 (n=1 partout).
         kc = 2.0
-        sim.set_aux_field("decay", "kappa", kc * np.ones((n, n)))
+        sim._set_aux_field("decay", "kappa", kc * np.ones((n, n)))
         sim.solve_fields()
         R = np.array(sim.eval_rhs("decay"))
         err = float(np.max(np.abs(R + kc)))  # R = -kappa*n = -2
@@ -186,7 +186,7 @@ def test_end_to_end():
         x = (np.arange(n) + 0.5) / float(n)
         X, Y = np.meshgrid(x, x, indexing="xy")
         ks = 1.0 + 3.0 * np.exp(-30.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
-        sim.set_aux_field("decay", "kappa", ks)
+        sim._set_aux_field("decay", "kappa", ks)
         sim.solve_fields()
         R2 = np.array(sim.eval_rhs("decay"))
         err2 = float(np.max(np.abs(R2 + ks)))  # n=1 -> R = -kappa(x)
@@ -203,7 +203,7 @@ def test_end_to_end():
 
         # (d) champ inconnu d'un bloc ENREGISTRE -> rejet listant les champs connus.
         try:
-            sim.set_aux_field("decay", "sigma", np.ones((n, n)))
+            sim._set_aux_field("decay", "sigma", np.ones((n, n)))
         except ValueError as ex:
             assert "sigma" in str(ex) and "kappa" in str(ex), "le rejet devrait lister les champs : %r" % str(ex)
         else:
@@ -234,7 +234,7 @@ def test_polar_named_aux():
         compiled = m.compile(os.path.join(tmp, "kpolar.so"), include=INCLUDE, backend="aot")
         nr, nth = 16, 16
         sim = pops.System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
-        sim.add_equation("decay", model=compiled,
+        sim._add_equation("decay", model=compiled,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit())
         sim.set_density("decay", np.ones((nth, nr)))
@@ -246,7 +246,7 @@ def test_polar_named_aux():
 
         # kappa constant : eval_rhs = S = -kappa*n = -3 (flux nul, n=1).
         kc = 3.0
-        sim.set_aux_field("decay", "kappa", kc * np.ones((nth, nr)))
+        sim._set_aux_field("decay", "kappa", kc * np.ones((nth, nr)))
         R = np.array(sim.eval_rhs("decay"))
         err = float(np.max(np.abs(R + kc)))
         assert err < 1e-12, "polar : kappa non lu (max|R+kappa| = %.2e)" % err
@@ -290,7 +290,7 @@ def test_amr_named_aux_single_block_regrid():
 
         # (a) reference : SANS set_aux_field -> kappa=0 -> masse inchangee (meme avec raffinement).
         ref = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        ref.add_equation("decay", model=_compile_amr_decay(tmp, "amr0.so"), spatial=sp, time=pops.Explicit())
+        ref._add_equation("decay", model=_compile_amr_decay(tmp, "amr0.so"), spatial=sp, time=pops.Explicit())
         ref.set_poisson(rhs="charge_density", solver="geometric_mg")
         ref.set_refinement(2.0)  # refine where density (comp 0) > 2 -> tags the bump
         ref.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
@@ -301,12 +301,12 @@ def test_amr_named_aux_single_block_regrid():
 
         # (b) AVEC kappa uniforme + raffinement + regrid : decroissance persistante ET uniforme.
         sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        sim.add_equation("decay", model=_compile_amr_decay(tmp, "amr1.so"), spatial=sp, time=pops.Explicit())
+        sim._add_equation("decay", model=_compile_amr_decay(tmp, "amr1.so"), spatial=sp, time=pops.Explicit())
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_refinement(2.0)
         rho0 = _bump_density(n, lo, hi, 1.0, 5.0)
         sim.set_density("decay", rho0)
-        sim.set_aux_field("decay", "kappa", 2.0 * np.ones((n, n)))
+        sim._set_aux_field("decay", "kappa", 2.0 * np.ones((n, n)))
         masses = [sim.mass("decay")]
         for _ in range(5):  # regrid_every=1 -> the fine aux is rebuilt (zeroed) + re-injected each step
             sim.step(1e-2)
@@ -358,14 +358,14 @@ def test_amr_named_aux_multiblock_regrid():
         plain_so = build_const_decay_model("plaindecay", c0).compile(
             os.path.join(tmp, "amrplain.so"), include=INCLUDE, backend="production", target="amr_system")
         sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        sim.add_equation("decay", model=decay_so, spatial=sp, time=pops.Explicit())
-        sim.add_equation("plain", model=plain_so, spatial=sp, time=pops.Explicit())
+        sim._add_equation("decay", model=decay_so, spatial=sp, time=pops.Explicit())
+        sim._add_equation("plain", model=plain_so, spatial=sp, time=pops.Explicit())
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_refinement(2.0)  # refine on the 'decay' bump -> a real fine level + regrid
         sim.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
         sim.set_density("plain", np.ones((n, n)))
         kappa = 50.0  # LARGE: a leak into 'plain' would crash its mass; c0=1 keeps 'plain' mild
-        sim.set_aux_field("decay", "kappa", kappa * np.ones((n, n)))
+        sim._set_aux_field("decay", "kappa", kappa * np.ones((n, n)))
         md0, mp0 = sim.mass("decay"), sim.mass("plain")
         for _ in range(5):
             sim.step(1e-2)
@@ -392,14 +392,14 @@ def test_amr_named_aux_rejections():
     field = np.ones((8, 8))
     for nm, redirect in (("B_z", "set_magnetic_field"), ("phi", "CANONICAL")):
         try:
-            sim.set_aux_field("blk", nm, field)
+            sim._set_aux_field("blk", nm, field)
         except ValueError as ex:
             assert redirect in str(ex), "le message %s devrait mentionner %s : %r" % (nm, redirect, str(ex))
         else:
-            raise AssertionError("AmrSystem.set_aux_field(%r) aurait du lever" % nm)
+            raise AssertionError("AmrSystem._set_aux_field(%r) aurait du lever" % nm)
     # bloc inconnu (aucun champ nomme enregistre).
     try:
-        sim.set_aux_field("inexistant", "kappa", field)
+        sim._set_aux_field("inexistant", "kappa", field)
     except ValueError as ex:
         assert "inexistant" in str(ex)
     else:

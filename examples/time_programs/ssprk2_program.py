@@ -21,6 +21,7 @@ try:
     import numpy as np
 
     import pops
+    from pops.fields import catalog as field_catalog
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
     print("skip ssprk2_program (pops/numpy unavailable: %s)" % exc)
@@ -45,32 +46,26 @@ def initial_state():
 
 
 def build_system(method="ssprk2"):
-    """The native reference System (lower-level add_block path), stepped natively for comparison."""
+    """The native reference System, stepped natively for comparison."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("plasma", gas_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method=method))
-    sim.set_poisson("charge_density", "geometric_mg")
-    sim.set_state("plasma", initial_state())
+    sim.install(None,
+                instances={"plasma": {"model": gas_model(),
+                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
+                                                                   riemann=Rusanov()),
+                                      "time": pops.Explicit(method=method),
+                                      "initial": initial_state()}},
+                solvers={"phi": field_catalog.GeometricMG()})
     return sim
 
 
 def ssprk2_program():
     """U^{n+1} = 1/2 U^n + 1/2 (U1 + dt R(U1)), U1 = U^n + dt R(U^n) -- built as typed IR."""
     P = adctime.Program("ssprk2_example")
-    dt = P.dt
-    U0 = P.state("plasma")
-    k0 = P.rhs(state=U0, fields=P.solve_fields(U0), flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + dt * k0)
-    k1 = P.rhs(state=U1, fields=P.solve_fields(U1), flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
+    pops.lib.time.ssprk2(P, "plasma")
     return P
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip ssprk2_program (_pops lacks install_program; rebuild _pops)")
-        return 0
     dt = 2e-3
     try:
         compiled = pops.compile_problem(model=gas_model(), time=ssprk2_program())
@@ -86,7 +81,7 @@ def main():
                                       "spatial": pops.FiniteVolume(limiter=FirstOrder(),
                                                                    riemann=Rusanov()),
                                       "initial": initial_state()}},
-                solvers={"phi": pops.lib.fields.GeometricMG()})
+                solvers={"phi": field_catalog.GeometricMG()})
     sim.step(dt)
     U_prog = np.array(sim.get_state("plasma"))
 

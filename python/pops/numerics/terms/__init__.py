@@ -4,7 +4,8 @@ A residual right-hand side is a SUM of typed terms: a conservative finite-volume
 :class:`Flux` divergence, a cell-local :class:`SourceTerm`, and a purely algebraic
 :class:`LocalTerm`. These objects only DESCRIBE the composition (which kind of term,
 with an optional name); they carry no numerics and compute nothing. The Program
-``P.rhs(terms=[...])`` lowering that consumes them is a separate change.
+Ready-made library macros may lower these terms internally; public user Programs should prefer
+declared rate operator handles and ``P.call``.
 
 Every term is an inert :class:`pops.descriptors.Descriptor`; codegen / runtime turn the
 declared composition into the discrete residual after validation.

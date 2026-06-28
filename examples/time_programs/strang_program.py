@@ -29,6 +29,7 @@ try:
     import numpy as np
 
     import pops
+    from pops.fields import catalog as field_catalog
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # noqa: BLE001
@@ -48,8 +49,7 @@ def transport_model():
 def half_flow(prog, U, frac):
     """One Forward-Euler hyperbolic half-flow U + frac*dt*R, R = -div F (the default source is empty
     on the uncoupled NoSource model). The per-stage solve_fields is inert (no field feedback)."""
-    R = prog.rhs(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
-    return prog.linear_combine(None, U + (frac * prog.dt) * R)
+    return libtime.explicit_flow(prog, U, frac, sources=("default",), flux=True)
 
 
 def no_op_source(prog, U, frac):  # noqa: ARG001  -- frac unused: S is the identity on a NoSource model
@@ -76,20 +76,19 @@ def initial_state():
 
 
 def make_sim():
-    """The native reference System (lower-level add_block path); driven by set_time_scheme('strang')."""
+    """The native reference System; driven by set_time_scheme('strang')."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")  # inert: BackgroundDensity n0=0, flux reads no phi
-    sim.set_state("ions", initial_state())
+    sim.install(None,
+                instances={"ions": {"model": transport_model(),
+                                    "spatial": pops.FiniteVolume(limiter=FirstOrder(),
+                                                                 riemann=Rusanov()),
+                                    "time": pops.Explicit(method="euler"),
+                                    "initial": initial_state()}},
+                solvers={"phi": field_catalog.GeometricMG()})
     return sim
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip strang_program (_pops lacks install_program; rebuild _pops)")
-        return 0
     try:
         compiled = pops.compile_problem(model=transport_model(), time=strang_program())
     except RuntimeError as exc:
@@ -112,7 +111,7 @@ def main():
                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
                                                                   riemann=Rusanov()),
                                      "initial": initial_state()}},
-                 solvers={"phi": pops.lib.fields.GeometricMG()})
+                 solvers={"phi": field_catalog.GeometricMG()})
 
     for _ in range(nstep):
         native.step(dt)

@@ -50,7 +50,7 @@ def _iso_system(theta_boxes):
     configure ni resolu : on n'exerce que le TRANSPORT (eval_rhs) -- le flux isotherme est self-contenu
     (cs2 du modele), il ne lit pas grad phi."""
     sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
-    sim.add_block(
+    sim._add_block(
         "iso",
         model=pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),
                         transport=pops.IsothermalFlux(), source=pops.NoSource(),
@@ -62,7 +62,7 @@ def _iso_system(theta_boxes):
 def _exb_system(theta_boxes):
     """System polaire ExB scalaire (1 variable) a theta_boxes bandes. Poisson NON resolu ici (cf. (c))."""
     sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
-    sim.add_block(
+    sim._add_block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0), source=pops.NoSource(),
                         elliptic=pops.ChargeDensity(charge=1.0)),

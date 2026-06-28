@@ -94,13 +94,17 @@ ssprk3(time, "ne")
 For a manual scheme, use version handles:
 
 ```python
-from pops.numerics.terms import Flux
+from pops.model import OperatorHandle
 
 T = Program("manual_step")
 U = T.state("U", block="ne")
+T.bind_operators(m)
 
-fields = T.solve_fields(U.n)
-R = T.rhs(state=U.n, fields=fields, terms=[Flux()])
+fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
+rate = m.rate_operator("explicit_rate", flux=True, sources=["default"])
+
+fields = T.call(fields_from_state, U.n)
+R = T.call(rate, U.n, fields)
 T.define(U.next, U.n + T.dt * R)
 T.commit("ne", U.next)
 ```

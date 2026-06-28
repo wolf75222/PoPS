@@ -131,7 +131,7 @@ def test_lie_chains_two_stages(t):
     P = t.Program("lie")
 
     def half_flow(prog, U, frac):
-        R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
+        R = prog._rhs_legacy(state=U, fields=prog._solve_fields(U), flux=True, sources=["default"])
         return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
     def source(prog, U, frac):
@@ -217,7 +217,7 @@ def _run_ab3(t):
         print("-- (B AB3) skipped: pops/numpy unavailable: %s --" % exc)
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B AB3) skipped: _pops lacks install_program (rebuild _pops) --")
         return
     P = t.Program("ab3_step")
@@ -229,13 +229,13 @@ def _run_ab3(t):
         print("-- (B AB3) skipped: compile could not build the .so: %s --" % str(exc)[:160])
         return
     n = 16
-    sim.add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+    sim._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_state("blk", np.stack([rho0]))
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     dt, nsteps = 0.01, 6
     for _ in range(nsteps):
         sim.step(dt)
@@ -259,7 +259,7 @@ def _run_imex(t):
         print("-- (B imex) skipped: pops/numpy unavailable: %s --" % exc)
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B imex) skipped: _pops lacks install_program (rebuild _pops) --")
         return
     P = t.Program("imex_step")
@@ -271,7 +271,7 @@ def _run_imex(t):
         print("-- (B imex) skipped: compile could not build the .so: %s --" % str(exc)[:160])
         return
     n = 16
-    sim.add_equation("plasma", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+    sim._add_equation("plasma", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     bz = 3.0
     sim.set_magnetic_field(bz * np.ones(n * n))
@@ -281,7 +281,7 @@ def _run_imex(t):
     mx = 0.5 * rho
     my = -0.2 * rho
     sim.set_state("plasma", np.stack([rho, mx, my]))
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     dt = 0.05
     sim.step(dt)
     U = np.array(sim.get_state("plasma"))
@@ -310,7 +310,7 @@ def _run_lie(t):
         print("-- (B lie) skipped: pops/numpy unavailable: %s --" % exc)
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B lie) skipped: _pops lacks install_program (rebuild _pops) --")
         return
 
@@ -318,7 +318,7 @@ def _run_lie(t):
     # source S = _C*rho over the full dt. Both sub-flows are forward-Euler affine updates, so the
     # composition is exactly rho * (1 + dt*_C) per step (H is inert), which an offline ref mirrors.
     def half_flow(prog, U, frac):
-        R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=[])
+        R = prog._rhs_legacy(state=U, fields=prog._solve_fields(U), flux=True, sources=[])
         return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
     def source(prog, U, frac):
@@ -334,13 +334,13 @@ def _run_lie(t):
         print("-- (B lie) skipped: compile could not build the .so: %s --" % str(exc)[:160])
         return
     n = 16
-    sim.add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+    sim._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_state("blk", np.stack([rho0]))
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     dt, nsteps = 0.01, 5
     for _ in range(nsteps):
         sim.step(dt)

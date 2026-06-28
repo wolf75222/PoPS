@@ -198,7 +198,7 @@ def _make_stepped_system():
 
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_block(
+    sim._add_block(
         "gas",
         pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                    transport=pops.IsothermalFlux(), source=pops.NoSource(),

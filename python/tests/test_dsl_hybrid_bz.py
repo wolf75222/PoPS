@@ -56,7 +56,7 @@ def main():
         dens = 1.0 + 0.2 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.03)  # non uniforme -> derive
 
         sim = pops.System(n=n, L=L, periodic=True)
-        sim.add_equation("bz", co, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+        sim._add_equation("bz", co, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          names=["n"])
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_density("bz", dens)

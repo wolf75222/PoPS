@@ -73,7 +73,7 @@ def _scratch_program(schedule):
     P = adctime.Program("sched_rhs")
     dt = P.dt
     U = P.state("ions")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     R.attrs["schedule"] = schedule
     P.commit("ions", P.linear_combine("U1", U + dt * R))
@@ -121,7 +121,7 @@ def test_when_reuses_program_predicate_token():
     P = adctime.Program("when_sched")
     dt = P.dt
     U = P.state("ions")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
     R2 = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])

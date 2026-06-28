@@ -65,7 +65,7 @@ def _lower_bc(bc):
 class _SystemInstall:
     """Block/equation/coupling installation methods of System."""
 
-    def add_block(self, name, model, spatial=None, time=None, evolve=True):
+    def _add_block(self, name, model, spatial=None, time=None, evolve=True):
         """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
@@ -119,7 +119,7 @@ class _SystemInstall:
                           getattr(spatial, "positivity_floor", 0.0),
                           getattr(spatial, "wave_speed_cache", False))
 
-    def add_equation(self, name, model, spatial=None, time=None, substeps=None, names=None,
+    def _add_equation(self, name, model, spatial=None, time=None, substeps=None, names=None,
                      evolve=True, stride=None):
         """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
 
@@ -160,7 +160,7 @@ class _SystemInstall:
         # The splitting POLICY (Lie / Strang) is WIRED to the system stepper via set_time_scheme:
         # pops.Split -> "lie" (default, bit-identical), pops.Strang -> "strang" (H(dt/2) S(dt) H(dt/2)).
         if isinstance(time, Split):
-            self.add_equation(name, model, spatial=spatial, time=time.hyperbolic,
+            self._add_equation(name, model, spatial=spatial, time=time.hyperbolic,
                               substeps=substeps, names=names, evolve=evolve, stride=stride)
             src = time.source
             self._s.set_source_stage(name, src.kind, src.theta, src.alpha,
@@ -391,7 +391,7 @@ class _SystemInstall:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
         in the future, to coupled sources). density: n*n array. Equivalent to add_block(evolve=False)
         followed by set_density."""
-        self.add_block(name, model, spatial=spatial, evolve=False)
+        self._add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
     def set_poisson(self, rhs="charge_density", solver="geometric_mg", bc="auto",

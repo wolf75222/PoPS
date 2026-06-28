@@ -71,7 +71,7 @@ def _build(n, L):
     sim = pops.System(n=n, L=L, periodic=True)
     sim.set_poisson(bc="periodic")
     rho0 = ring(n, L)
-    sim.add_equation("s", model=iso_model(n0=float(rho0.mean())),
+    sim._add_equation("s", model=iso_model(n0=float(rho0.mean())),
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
                                               variables=Conservative()),
                      time=pops.Explicit())

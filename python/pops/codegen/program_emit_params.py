@@ -28,7 +28,19 @@ def _op_model_exprs(impl, v):
     src = getattr(impl, "_source_terms", {}) or {}
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
-    if v.op == "source":
+    if v.op == "operator_call":
+        if v.attrs.get("source"):
+            out += list(src.get(v.attrs.get("source"), []))
+        for s in (v.attrs.get("sources") or []):
+            if s != "default":
+                out += list(src.get(s, []))
+        for f in (v.attrs.get("fluxes") or []):
+            if f != "default" and f in flux:
+                out += list(flux[f].get("x", [])) + list(flux[f].get("y", []))
+        if v.attrs.get("linear_source"):
+            for row in lin.get(v.attrs.get("linear_source"), []):
+                out += list(row)
+    elif v.op == "source":
         out += list(src.get(v.attrs.get("source"), []))
     elif v.op == "apply" or v.op == "solve_local_linear":
         for row in lin.get(v.attrs.get("linear_source"), []):

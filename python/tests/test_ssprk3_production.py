@@ -109,7 +109,7 @@ try:
 
     def build_ref_ssprk3():
         s = pops.System(n=n, L=L, periodic=True)
-        s.add_block("gas", spec, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+        s._add_block("gas", spec, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
                     time=pops.Explicit(method="ssprk3"))
         s.set_poisson(rhs="charge_density", solver="geometric_mg")
         s.set_state("gas", Uflat)

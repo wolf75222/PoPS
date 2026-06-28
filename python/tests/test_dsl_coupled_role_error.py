@@ -82,7 +82,7 @@ def test_coupled_source_accepts_valid_role():
 def _make_cartesian_system():
     """System cartesien minimal avec un bloc scalaire pour les tests C++ directs."""
     sim = pops.System(n=4, L=1.0, periodic=True)
-    sim.add_block(
+    sim._add_block(
         "ne",
         model=pops.Model(
             state=pops.Scalar(),

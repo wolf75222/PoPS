@@ -74,7 +74,7 @@ EVERY = 2  # the field solve recomputes every 2 macro-steps and holds the cached
 
 def make_sim():
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", plasma_model(),
+    sim._add_block("ions", plasma_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -106,7 +106,7 @@ def held_program(name="spec3_runtime_held"):
 
 # --- toolchain probe: skip cleanly if the runtime chain is not buildable here ---------------------
 probe = pops.System(n=8, L=1.0, periodic=True)
-if not hasattr(probe, "install_program") or not hasattr(probe, "step_cfl"):
+if not hasattr(probe, "_install_program_so") or not hasattr(probe, "step_cfl"):
     _skip("_pops lacks install_program / step_cfl (rebuild _pops)")
 
 print("== compile the held-schedule Program to a problem.so ==")
@@ -119,7 +119,7 @@ chk(bool(compiled.program_hash), "compiled handle carries the IR hash (%s...)" %
 
 def install(sim):
     """Install the compiled held-schedule program on a freshly composed sim."""
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     return sim
 
 
@@ -180,7 +180,7 @@ chk(len(py_calls) == 0,
 # afresh into a sim built from a model whose Python object is then deleted + gc-collected.
 orphan = pops.System(n=N, L=1.0, periodic=True)
 _m = plasma_model()
-orphan.add_block("ions", _m,
+orphan._add_block("ions", _m,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                  time=pops.Explicit(method="euler"))
 orphan.set_poisson("charge_density", "geometric_mg")
@@ -188,7 +188,7 @@ _x = (np.arange(N) + 0.5) / N
 _X, _Y = np.meshgrid(_x, _x, indexing="ij")
 _rho = 1.0 + 0.3 * np.sin(2 * np.pi * _X) * np.cos(2 * np.pi * _Y)
 orphan.set_state("ions", np.stack([_rho, 0.4 * _rho, -0.2 * _rho]))
-orphan.install_program(compiled.so_path)  # the C++ closure now owns everything it needs
+orphan._install_program_so(compiled.so_path)  # the C++ closure now owns everything it needs
 del _m  # drop the Python model object the step would need IF it called back into Python
 gc.collect()
 ou0 = np.array(orphan.get_state("ions"))

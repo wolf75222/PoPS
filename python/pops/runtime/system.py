@@ -201,6 +201,19 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         return _System.abi_key()
 
     def __getattr__(self, attr):
+        forbidden = {
+            "add_block",
+            "add_equation",
+            "install_program",
+            "initialize_compiled_program",
+            "set_param",
+            "set_aux_field",
+            "set_field_solver",
+        }
+        if attr in forbidden:
+            raise AttributeError(
+                "System.%s is not part of the public PoPS API; use sim.install(...) "
+                "or pops.bind(compiled, ...) with typed descriptors instead." % attr)
         # 'amr' is an AmrSystem-only inspection handle; the System @property raises AttributeError,
         # which routes here -- intercept it so the clear message surfaces instead of the raw _pops
         # "object has no attribute 'amr'" delegation (Spec 5 sec.8.12).

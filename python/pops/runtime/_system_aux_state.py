@@ -40,7 +40,7 @@ class _SystemAuxState:
                 % (name, block, known))
         return table[name]
 
-    def set_aux_field(self, block, name, field, halo=None):
+    def _set_aux_field(self, block, name, field, halo=None):
         """Set a NAMED aux field (ADC-70 phase 1) of a block: @p name must have been declared by the
         model via m.aux_field(name) (and the block added via add_equation). @p field: 2D array (ny, nx)
         or flat (n*n), row-major. The field is STATIC (user-supplied, like B_z) and PERSISTS

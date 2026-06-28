@@ -33,7 +33,8 @@ from pops.time import Program
 T = Program("step").bind_operators(module)
 U = T.state("U", block="plasma")
 
-fields = T.solve_fields(state=U.n)
+fields_op = OperatorHandle("fields_from_state", kind="field_operator")
+fields = T.call(fields_op, U.n)
 rate = T.call(explicit_rate, U.n, fields)
 T.define(U.next, U.n + T.dt * rate)
 T.commit("plasma", U.next)
@@ -42,21 +43,16 @@ T.commit("plasma", U.next)
 Do not call operators by free string names in public examples. The internal IR
 may lower handles to native IDs, but the public API passes handles.
 
-## RHS terms
+## Rate operators
 
-Use `P.rhs(..., terms=[...])` when the program builds a residual directly:
+Prefer a declared rate operator handle when a program builds a residual:
 
 ```python
-from pops.numerics.terms import Flux, SourceTerm
-
-R = T.rhs(
-    state=U.n,
-    fields=fields,
-    terms=[Flux(), SourceTerm("electric")],
-)
+rate = model.rate_operator("electric_rate", flux=True, sources=["electric"])
+R = T.call(rate, U.n, fields)
 ```
 
-The old boolean style is not public documentation.
+Primitive RHS builders are internal to `pops.lib.time` and tests.
 
 ## Inspection
 

@@ -163,7 +163,7 @@ def _poisson_system(wall_kw):
     model = pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),
                        transport=pops.IsothermalFlux(), source=pops.NoSource(),
                        elliptic=pops.ChargeDensity())
-    s.add_equation("e", model=model,
+    s._add_equation("e", model=model,
                    spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
                                             variables=Conservative()),
                    time=pops.Explicit())

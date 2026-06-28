@@ -56,7 +56,7 @@ def _fe_program(name="forward_euler_parity"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("ions")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + dt * R))
     return P
@@ -72,11 +72,11 @@ chk(raises(ValueError, lambda: pops.compile_problem(time=None)),
     "compile_problem without a Program rejected")
 # substeps>1 / stride>1 are WIRED now (ADC-411): they STORE the cadence (System.set_program_cadence
 # applies it around the program closure) instead of being rejected. cf. test_time_substeps_stride.py.
-chk(pops.CompiledTime(substeps=2).substeps == 2, "CompiledTime substeps>1 accepted (wired, ADC-411)")
-chk(pops.CompiledTime(stride=2).stride == 2, "CompiledTime stride>1 accepted (wired, ADC-411)")
-chk(raises(NotImplementedError, lambda: pops.CompiledTime(cfl="program")),
+chk(pops.time.CompiledTime(substeps=2).substeps == 2, "CompiledTime substeps>1 accepted (wired, ADC-411)")
+chk(pops.time.CompiledTime(stride=2).stride == 2, "CompiledTime stride>1 accepted (wired, ADC-411)")
+chk(raises(NotImplementedError, lambda: pops.time.CompiledTime(cfl="program")),
     "CompiledTime cfl='program' self-computed sub-program deferred (numeric cfl wired)")
-chk(pops.CompiledTime().kind == "compiled", "CompiledTime() default ok (kind 'compiled')")
+chk(pops.time.CompiledTime().kind == "compiled", "CompiledTime() default ok (kind 'compiled')")
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----
 # install_program is forwarded by the System facade (__getattr__ -> self._s), so probe an instance.
@@ -100,7 +100,7 @@ def transport_model():
 def make_sim():
     n = 24
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim._add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -130,7 +130,7 @@ chk(compiled.program_name == "forward_euler_parity", "handle carries the program
 chk(bool(compiled.program_hash), "handle carries the IR hash")
 
 prog = make_sim()
-prog.install_program(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
+prog._install_program_so(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
 step0 = prog.macro_step()
 prog.step(dt)  # SystemStepper dispatches to the installed Program
 U_prog = np.array(prog.get_state("ions"))
@@ -151,7 +151,7 @@ def _fe_scaled(name, a):
     """A Forward-Euler Program U <- U + a*dt*R (the dt coefficient varies with a)."""
     P = adctime.Program(name)
     U = P.state("ions")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + a * P.dt * R))
     return P

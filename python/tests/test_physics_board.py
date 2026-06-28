@@ -160,7 +160,7 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
 
     P = Program("board_calls")
     U_n = P.state("plasma")
-    f_n = P.solve_fields("f_n", U_n)
+    f_n = P._solve_fields("f_n", U_n)
     R = explicit_rate(U_n, f_n)         # -> P._call("explicit_rate", U_n, f_n)
     L = implicit_operator(f_n)          # -> P._call("implicit_operator", f_n)
     assert R.vtype == "rhs"

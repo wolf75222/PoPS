@@ -27,7 +27,7 @@ def test_fields_define_commit_match_primitive_ir():
         P = Program("fe")
         dt = P.dt
         u = P.state("plasma")
-        f = P.fields("f", from_state=u) if board else P.solve_fields("f", u)
+        f = P.fields("f", from_state=u) if board else P._solve_fields("f", u)
         r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
         if board:
             u1 = P.define("U1", u + dt * r)

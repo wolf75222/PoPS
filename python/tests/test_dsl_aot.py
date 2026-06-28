@@ -64,7 +64,7 @@ def main():
             lim_obj = {"none": FirstOrder(), "minmod": Minmod(), "vanleer": VanLeer()}[limiter]
             flux_obj = {"rusanov": Rusanov(), "hll": HLL(), "hllc": HLLC(), "roe": Roe()}[riemann]
             recon_obj = {"conservative": Conservative(), "primitive": Primitive()}[recon]
-            nat.add_block("gas", spec,
+            nat._add_block("gas", spec,
                           spatial=pops.Spatial(limiter=lim_obj, flux=flux_obj, recon=recon_obj),
                           time=pops.Explicit())
             nat.set_poisson(rhs="charge_density", solver="geometric_mg")

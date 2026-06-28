@@ -97,7 +97,7 @@ def test_legacy_untagged_unaffected():
     m = _model()
     P = adctime.Program("legacy").bind_operators(m)
     u = P.state("plasma")
-    fields = P.solve_fields(u)
+    fields = P._solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields, sources=["electric"])
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     P.validate()

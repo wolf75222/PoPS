@@ -77,7 +77,7 @@ def _bdf_local_linear(P, block, order, linear_source, sources, flux):
       - **BDF2**: ``(I - (2/3) dt L) U^{n+1} = (2/3)(2 U^n - 1/2 U^{n-1}) [+ dt R]`` over the System
         history ring, with a BDF1 cold start (the first store fills every slot -> U^{n-1} = U^n)."""
     U = P.state(block)
-    fields = P.solve_fields(U) if flux else None
+    fields = P._solve_fields(U) if flux else None
     # Optional EXPLICIT flux/source RHS folded into the BDF right-hand side (lagged at U^n).
     R = (P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
          if (flux or sources) else None)
@@ -134,7 +134,7 @@ def _bdf_implicit_flux(P, block, order, sources, flux, ncomp, newton_tol, newton
     like inviscid Burgers / linear advection; pass the model's n_cons for a multi-component block)."""
     c = 1.0 if order == 1 else (2.0 / 3.0)
     U0 = P.state(block)
-    fields = P.solve_fields(U0) if flux else None  # frozen-Poisson coupling, solved once from U^n
+    fields = P._solve_fields(U0) if flux else None  # frozen-Poisson coupling, solved once from U^n
     # Snapshot U^n into a scratch: the commit writes ctx.state(0) IN PLACE at the very end, so the lagged
     # term must read this frozen copy (not the live state) -- otherwise the post-commit residual
     # diagnostic would read U^{n+1} as U^n. The Newton-loop residuals (before the commit) would be correct

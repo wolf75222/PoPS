@@ -13,6 +13,8 @@ is unavailable.
 """
 import sys
 
+import pytest
+
 
 def _pops_time():
     try:
@@ -23,11 +25,16 @@ def _pops_time():
     return t
 
 
+@pytest.fixture
+def t():
+    return _pops_time()
+
+
 def _forward_euler(t):
     P = t.Program("forward_euler_program")
     dt = P.dt
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
@@ -37,10 +44,10 @@ def _ssprk2(t):
     P = t.Program("ssprk2_program")
     dt = P.dt
     U0 = P.state("plasma")
-    f0 = P.solve_fields(U0)
+    f0 = P._solve_fields(U0)
     k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
-    f1 = P.solve_fields(U1)
+    f1 = P._solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
     return P
@@ -98,7 +105,7 @@ def test_named_source_refused(t):
     P = t.Program("electric_program")
     dt = P.dt
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     try:
@@ -118,7 +125,7 @@ def test_multiblock_lowers(t):
     dt = P.dt
     for blk in ("a", "b"):
         U = P.state(blk)
-        f = P.solve_fields(U)
+        f = P._solve_fields(U)
         R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
@@ -133,7 +140,7 @@ def test_unknown_block_commit_refused(t):
     # A commit of a block no P.state declares cannot route to an index (ADC-426): reject fail-loud.
     P = t.Program("bad_commit")
     U = P.state("a")
-    Ua = P.linear_combine("a_next", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U),
+    Ua = P.linear_combine("a_next", U + P.dt * P._rhs_legacy(state=U, fields=P._solve_fields(U),
                                                      sources=["default"]))
     P.commit("ghost", Ua)  # 'ghost' was never declared by P.state
     try:

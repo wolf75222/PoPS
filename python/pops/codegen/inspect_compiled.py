@@ -151,7 +151,10 @@ def _solver_arguments(program):
     solvers = {}
     for value in getattr(program, "_values", []):
         op = value.op
-        if op in ("solve_fields", "solve_fields_from_blocks"):
+        if op == "operator_call" and value.attrs.get("kind") == "field_operator":
+            field = value.attrs.get("field") or "phi"
+            solvers[field] = {"problem": "elliptic", "solver": None}
+        elif op in ("solve_fields", "solve_fields_from_blocks"):
             field = value.name or "phi"
             solvers[field] = {"problem": "elliptic", "solver": None}
         elif op == "solve_linear":

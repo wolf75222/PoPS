@@ -21,6 +21,7 @@ try:
     import numpy as np
 
     import pops
+    from pops.fields import catalog as field_catalog
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- pops/numpy unavailable in this interpreter
     print("skip forward_euler_program (pops/numpy unavailable: %s)" % exc)
@@ -39,11 +40,7 @@ def euler_model():
 def forward_euler_program():
     """U^{n+1} = U^n + dt * R(U^n), built as a typed IR (no arrays computed here)."""
     P = adctime.Program("forward_euler_example")
-    dt = P.dt
-    U = P.state("plasma")
-    fields = P.solve_fields(U)
-    R = P.rhs(state=U, fields=fields, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    pops.lib.time.forward_euler(P, "plasma")
     return P
 
 
@@ -58,22 +55,20 @@ def initial_state():
 
 
 def build_system():
-    """The native reference System (lower-level add_block path): a fully-configured block evaluated
+    """The native reference System: a fully-configured block evaluated
     one RHS step at a time via solve_fields + eval_rhs, no compiled Program installed."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("plasma", euler_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
-    sim.set_state("plasma", initial_state())
+    sim.install(None,
+                instances={"plasma": {"model": euler_model(),
+                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
+                                                                   riemann=Rusanov()),
+                                      "time": pops.Explicit(method="euler"),
+                                      "initial": initial_state()}},
+                solvers={"phi": field_catalog.GeometricMG()})
     return sim
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip forward_euler_program (_pops lacks the install_program binding; rebuild _pops)")
-        return 0
-
     dt = 2e-3
 
     # Reference: the native one-step Forward Euler via the same primitives the program drives.
@@ -98,7 +93,7 @@ def main():
                                       "spatial": pops.FiniteVolume(limiter=FirstOrder(),
                                                                    riemann=Rusanov()),
                                       "initial": initial_state()}},
-                solvers={"phi": pops.lib.fields.GeometricMG()})
+                solvers={"phi": field_catalog.GeometricMG()})
     sim.step(dt)
     U_prog = np.array(sim.get_state("plasma"))
 

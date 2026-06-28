@@ -43,9 +43,9 @@ def multi_species_step():
     n_n = P.state("neutrals")
 
     fields = P.solve_fields_from_blocks([e_n, i_n, n_n], name="fields")  # coupled, arity 3
-    e1 = P.linear_combine("e1", e_n + dt * P.rhs(name="Re", state=e_n, fields=fields, flux=True))
-    i1 = P.linear_combine("i1", i_n + dt * P.rhs(name="Ri", state=i_n, fields=fields, flux=True))
-    n1 = P.linear_combine("n1", n_n + dt * P.rhs(name="Rn", state=n_n, fields=fields, flux=True))
+    e1 = P.linear_combine("e1", e_n + dt * P._rhs_legacy(name="Re", state=e_n, fields=fields, flux=True))
+    i1 = P.linear_combine("i1", i_n + dt * P._rhs_legacy(name="Ri", state=i_n, fields=fields, flux=True))
+    n1 = P.linear_combine("n1", n_n + dt * P._rhs_legacy(name="Rn", state=n_n, fields=fields, flux=True))
 
     P.commit_many({"electrons": e1, "ions": i1, "neutrals": n1})  # atomic multi-block commit
     return P

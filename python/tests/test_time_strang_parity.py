@@ -59,7 +59,7 @@ def half_flow(prog, U, frac):
     """One Forward-Euler hyperbolic half-flow: U + frac*dt*R, R = -div F (+ default source). On the
     uncoupled NoSource model the default source is empty, so R is flux-only; the per-stage solve_fields
     is inert (no field feedback) -- kept so the program mirrors a real, field-coupled-ready Strang."""
-    R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
+    R = prog._rhs_legacy(state=U, fields=prog._solve_fields(U), flux=True, sources=["default"])
     return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
 
@@ -169,7 +169,7 @@ def chk_b(cond, label):
 def make_sim():
     """A System with ONE uncoupled isothermal block (Forward Euler hyperbolic stage) + inert Poisson."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim._add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")  # inert: BackgroundDensity n0=0, flux reads no phi
@@ -197,7 +197,7 @@ sim_native._s.set_time_scheme("strang")
 
 # Compiled Strang program: installed, driven by sim.step(dt).
 sim_compiled = make_sim()
-sim_compiled.install_program(compiled.so_path)
+sim_compiled._install_program_so(compiled.so_path)
 
 for _ in range(NSTEP):
     sim_native.step(DT)

@@ -99,7 +99,7 @@ try:
     U0 = base[:, None, None] * gaussian(n)[None, :, :]
 
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_equation("mom", model=compiled,
+    sim._add_equation("mom", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Roe()),
                      time=pops.Explicit())
     sim.set_state("mom", U0)
@@ -114,7 +114,7 @@ try:
     cm_no = build_moment_model("g2noroe", 2, gaussian_closure(2), roe=False).compile(
         os.path.join(tmp, "g2noroe.so"), INCLUDE, backend="aot")
     s2 = pops.System(n=16, L=1.0, periodic=True)
-    msg = err_msg(lambda: s2.add_equation(
+    msg = err_msg(lambda: s2._add_equation(
         "mom", model=cm_no, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Roe()),
         time=pops.Explicit()))
     chk(msg is not None, f"roe=False: riemann='roe' rejete ({(msg or '')[:48]}...)")

@@ -36,13 +36,13 @@ def build(n=16):
     le restart doit reprendre la fenetre stride exactement (macro_step restaure)."""
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    sim.add_block("ions",
+    sim._add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),
                             elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-    sim.add_block("slow",
+    sim._add_block("slow",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=-1.0),
@@ -89,7 +89,7 @@ chk(abs(sim2.time() - ref_t) < 1e-15, "temps final identique")
 print("== (2) rejets explicites ==")
 bad = pops.System(n=16, L=1.0, periodic=True)
 bad.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-bad.add_block("autre",
+bad._add_block("autre",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                         transport=pops.IsothermalFlux(), source=pops.NoSource(),
                         elliptic=pops.ChargeDensity(charge=0.0)),

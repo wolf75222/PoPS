@@ -13,10 +13,11 @@ program:
 from pops.model import OperatorHandle
 
 rate_op = OperatorHandle("explicit_rate")
+fields_op = OperatorHandle("fields_from_state", kind="field_operator")
 
 T = Program("step").bind_operators(module)
 U = T.state("U", block="plasma")
-fields = T.solve_fields(state=U.n)
+fields = T.call(fields_op, U.n)
 R = T.call(rate_op, U.n, fields)
 ```
 
@@ -33,16 +34,11 @@ T.commit("plasma", U.next)
 `T.define` lowers to the existing SSA program values. It does not allocate Python
 runtime data.
 
-## Direct RHS composition
+## Rate composition
 
 ```python
-from pops.numerics.terms import Flux, SourceTerm
-
-R = T.rhs(
-    state=U.n,
-    fields=fields,
-    terms=[Flux(), SourceTerm("electric")],
-)
+rate = model.rate_operator("electric_rate", flux=True, sources=["electric"])
+R = T.call(rate, U.n, fields)
 ```
 
-Use this only when no predeclared operator handle is more appropriate.
+Use primitive RHS nodes only inside library macros or internal tests.

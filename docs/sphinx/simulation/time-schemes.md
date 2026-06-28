@@ -16,12 +16,17 @@ case = case.time(time)
 Manual schemes use temporal handles:
 
 ```python
-from pops.numerics.terms import Flux
+from pops.model import OperatorHandle
 
 T = Program("forward_euler")
 U = T.state("U", block="plasma")
-fields = T.solve_fields(U.n)
-R = T.rhs(state=U.n, fields=fields, terms=[Flux()])
+T.bind_operators(model)
+
+fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
+rate = model.rate_operator("explicit_rate", flux=True, sources=["default"])
+
+fields = T.call(fields_from_state, U.n)
+R = T.call(rate, U.n, fields)
 T.define(U.next, U.n + T.dt * R)
 T.commit("plasma", U.next)
 ```

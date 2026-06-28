@@ -73,7 +73,7 @@ def build_block(n, L, B0, alpha, cs2):
     sim = pops.System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
-    sim.add_equation(
+    sim._add_equation(
         "ions",
         model=iso_fluid_model(cs2=cs2, alpha=alpha),
         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),

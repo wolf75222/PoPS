@@ -31,7 +31,7 @@ The schemes are exposed by their explicit names (Spec 4 s7: the name ``std`` is 
 catch-all bundle). Call e.g. ``pops.lib.time.ssprk3`` / ``pops.lib.time.strang`` directly.
 """
 
-from .euler import forward_euler
+from .euler import explicit_flow, forward_euler
 from .ssprk import ssprk2, ssprk3
 from .rk import rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
 from .strang import strang, lie, condensed_schur
@@ -41,6 +41,7 @@ from .predictor_corrector import predictor_corrector_local_linear
 
 __all__ = [
     # Euler
+    "explicit_flow",
     "forward_euler",
     # SSPRK
     "ssprk2",

@@ -9,13 +9,17 @@ Ready-made schemes live in `pops.lib.time`.
 
 ```python
 from pops.time import Program
-from pops.numerics.terms import Flux
+from pops.model import OperatorHandle
 
 T = Program("forward_euler")
 U = T.state("U", block="plasma")
 
-fields = T.solve_fields(U.n)
-R = T.rhs(state=U.n, fields=fields, terms=[Flux()])
+fields_op = OperatorHandle("fields_from_state", kind="field_operator")
+rate_op = model.rate_operator("explicit_rate", flux=True, sources=["default"])
+
+T.bind_operators(model)
+fields = T.call(fields_op, U.n)
+R = T.call(rate_op, U.n, fields)
 
 T.define(U.next, U.n + T.dt * R)
 T.commit("plasma", U.next)
@@ -65,19 +69,17 @@ Available families:
 
 The functions add IR nodes to a `Program`. They do not compute arrays.
 
-## RHS terms
+## RHS composition
 
-The public RHS builder takes typed terms:
+Public programs should call a declared rate operator handle:
 
 ```python
-from pops.numerics.terms import Flux, SourceTerm
-
-electric = SourceTerm("electric")
-R = T.rhs(state=U.n, fields=fields, terms=[Flux(), electric])
+electric_rate = model.rate_operator("electric_rate", flux=True, sources=["electric"])
+R = T.call(electric_rate, U.n, fields)
 ```
 
-The string in `SourceTerm("electric")` names a source declared by the model. The
-behavior is the typed `SourceTerm` object.
+Lower-level package macros may still build primitive RHS nodes internally, but
+that is not a documented user entry point.
 
 ## Operator handles
 

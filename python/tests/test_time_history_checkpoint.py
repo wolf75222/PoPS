@@ -120,7 +120,7 @@ def _passive_source_model(name):
 def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
+    if not hasattr(sim, "_install_program_so") or not hasattr(sim, "history_names"):
         return None, None
     from pops.physics.facade import Model
     try:
@@ -128,7 +128,7 @@ def _build_system(pops, np, n):
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- skipped: model compile could not build the .so: %s --" % str(exc)[:160])
         return None, None
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     return sim, True
@@ -177,7 +177,7 @@ def _run_section_b(t):
 
     # (1) CONTINUOUS run: N steps in one go -> final state A.
     sim_cont.set_state("blk", np.stack([rho0]))
-    sim_cont.install_program(compiled.so_path)
+    sim_cont._install_program_so(compiled.so_path)
     for _ in range(_NSTEPS):
         sim_cont.step(_DT)
     state_a = np.array(sim_cont.get_state("blk"))[0]
@@ -185,7 +185,7 @@ def _run_section_b(t):
     # (2) RUN N/2, CHECKPOINT.
     sim1, _ = _build_system(pops, np, n)
     sim1.set_state("blk", np.stack([rho0]))
-    sim1.install_program(compiled.so_path)
+    sim1._install_program_so(compiled.so_path)
     for _ in range(half):
         sim1.step(_DT)
     with tempfile.TemporaryDirectory() as tmp:
@@ -193,7 +193,7 @@ def _run_section_b(t):
 
         # (3) FRESH system, re-add block, re-install the SAME program, RESTART, run N/2 more -> B.
         sim2, _ = _build_system(pops, np, n)
-        sim2.install_program(compiled.so_path)  # the hash guard needs the program installed first
+        sim2._install_program_so(compiled.so_path)  # the hash guard needs the program installed first
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, \
             "restart restores macro_step (%d != %d)" % (sim2.macro_step(), half)
@@ -262,7 +262,7 @@ def _run_section_c(t):
         "AB2 and Forward Euler must have different IR hashes (else the test is vacuous)"
 
     sim.set_state("blk", np.stack([np.ones((n, n))]))
-    sim.install_program(ab2.so_path)
+    sim._install_program_so(ab2.so_path)
     sim.step(_DT)
     sim.step(_DT)
     with tempfile.TemporaryDirectory() as tmp:
@@ -270,7 +270,7 @@ def _run_section_c(t):
 
         # A fresh system that installs the WRONG (Forward Euler) program, then restarts the AB2 ckpt.
         sim2, _ = _build_system(pops, np, n)
-        sim2.install_program(fe.so_path)
+        sim2._install_program_so(fe.so_path)
         try:
             sim2.restart(ckpt)
         except RuntimeError as exc:

@@ -150,7 +150,7 @@ def pure_python_checks():
     # WENO5 est desormais ACCEPTE sur aot/production (la grille .so / le bloc natif allouent
     # block_n_ghost(limiter) = 3 ghosts) : un fake aot+weno5 passe le garde Python et echoue plus loin
     # au dlopen (.so inexistant) -> RuntimeError, PAS ValueError (la garde weno5-aot n'existe plus).
-    expect_raises(RuntimeError, lambda: sys.add_equation("g", fake,
+    expect_raises(RuntimeError, lambda: sys._add_equation("g", fake,
                   spatial=pops.FiniteVolume(limiter=WENO5())), "weno5 aot : accepte (echec au dlopen)")
     # WENO5 reste rejete (ValueError) sur le backend 'prototype' (JIT, residu hote Rusanov ordre 1,
     # sans assemble_rhs) : ce chemin n'a pas de stencil large a alimenter.
@@ -160,17 +160,17 @@ def pure_python_checks():
                                    prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=GAMMA, n_aux=3,
                                    params={}, caps={}, abi_key="k", model_hash="h", cxx="c++",
                                    std="c++20")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake_proto,
+    expect_raises(ValueError, lambda: sys._add_equation("g", fake_proto,
                   spatial=pops.FiniteVolume(limiter=WENO5())), "weno5 sur prototype (JIT)")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake,
+    expect_raises(ValueError, lambda: sys._add_equation("g", fake,
                   spatial=pops.FiniteVolume(riemann=HLLC())), "hllc sans pression")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake, names=["a", "b"]),
+    expect_raises(ValueError, lambda: sys._add_equation("g", fake, names=["a", "b"]),
                   "names= mauvaise longueur")
     fake_prod = CompiledModel(so_path="/inexistant.so", backend="production",
                                   adder="add_native_block", cons_names=["rho"], cons_roles=["Density"],
                                   prim_names=["rho"], n_vars=1, gamma=None, n_aux=3, params={},
                                   caps={}, abi_key="k", model_hash="h", cxx="c++", std="c++20")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake_prod, names=["x"]),
+    expect_raises(ValueError, lambda: sys._add_equation("g", fake_prod, names=["x"]),
                   "names= sur production natif")
     print("OK  add_equation : erreurs explicites (weno5/prototype, hllc sans p, names=, names= natif)")
 
@@ -193,7 +193,7 @@ def end_to_end_checks(cxx):
                   % (backend, cm.adder, cm.n_vars, cm.abi_key))
 
             s = pops.System(n=n, periodic=True)
-            s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
+            s._add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                variables=Primitive()))
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
             s.set_state("gas", initial_state(n))
@@ -216,7 +216,7 @@ def end_to_end_checks(cxx):
         mp = build_euler_predef("euler_predef")
         cmp_ = mp.compile(os.path.join(tmp, "m_predef.so"), INCLUDE, backend="aot")
         sp = pops.System(n=n, periodic=True)
-        sp.add_equation("gas", cmp_, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
+        sp._add_equation("gas", cmp_, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                               variables=Primitive()))
         sp.set_poisson(rhs="charge_density", solver="geometric_mg")
         sp.set_state("gas", initial_state(n))
@@ -245,11 +245,11 @@ def modelspec_substeps_check():
 
     s._s = _Spy()
     # _s.add_block positional : (name, model, limiter, flux, recon, time_kind, substeps, evolve)
-    s.add_equation("ions", spec, time=pops.Explicit(), substeps=10)
+    s._add_equation("ions", spec, time=pops.Explicit(), substeps=10)
     assert calls, "add_equation(ModelSpec) doit appeler _s.add_block"
     assert calls[0][6] == 10, "substeps= ignore pour ModelSpec : recu %r" % (calls[0][6],)
     calls.clear()
-    s.add_equation("ions2", spec, time=pops.Explicit(substeps=3))   # defaut = time.substeps
+    s._add_equation("ions2", spec, time=pops.Explicit(substeps=3))   # defaut = time.substeps
     assert calls[0][6] == 3, "defaut substeps != time.substeps : recu %r" % (calls[0][6],)
     print("OK  substeps= override forwarde pour ModelSpec (10) ; defaut = time.substeps (3)")
 

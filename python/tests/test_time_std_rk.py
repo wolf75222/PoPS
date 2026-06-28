@@ -155,10 +155,10 @@ def _run_section_b(t):
         except RuntimeError as exc:
             print("-- (B) skipped: model compile failed: %s --" % str(exc)[:160])
             return None
-        sim.add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+        sim._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit(method="euler"))
         sim.set_state("blk", np.stack([rho0]))
-        sim.install_program(handle.so_path)
+        sim._install_program_so(handle.so_path)
         for _ in range(5):
             sim.step(0.01)
         return np.array(sim.get_state("blk"))[0]

@@ -58,8 +58,8 @@ N = 16
 def make_system():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    sim.add_block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-    sim.add_block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+    sim._add_block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+    sim._add_block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
     return sim
 
 
@@ -140,8 +140,8 @@ KA = 300.0
 amr = pops.AmrSystem(n=N, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
-amr.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-amr.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+amr._add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+amr._add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 rho = gaussian(N)
 amr.set_density("e1", rho.ravel())
 amr.set_density("e2", rho.ravel())

@@ -67,7 +67,7 @@ try:
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim.set_poisson()
-    sim.add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
+    sim._add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
                      time=pops.Explicit())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="xy")

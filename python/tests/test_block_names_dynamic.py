@@ -1,6 +1,6 @@
 """block_names() voit TOUS les chemins d'ajout, pas seulement add_block.
 
-Un integrateur ecrit en Python (pops.integrate.euler_step / ssprk2_step) itere sur
+Un integrateur ecrit en Python (pops.runtime.integrate.euler_step / ssprk2_step) itere sur
 sim.block_names() ; un bloc charge a l'execution depuis un .so (add_dynamic_block, JIT ;
 add_compiled_block, AOT) doit donc y figurer, sinon l'integrateur le SAUTE silencieusement.
 
@@ -31,7 +31,7 @@ def euler_native():
 def main():
     # (0) sans .so : un add_block est deja vu par block_names (garde de base, sans compilateur).
     s0 = pops.System(n=16, L=1.0, periodic=True)
-    s0.add_block("gas", model=euler_native(), spatial=pops.Spatial(minmod=True))
+    s0._add_block("gas", model=euler_native(), spatial=pops.Spatial(minmod=True))
     assert list(s0.block_names()) == ["gas"], "add_block invisible dans block_names()"
     assert s0.n_species() == 1, "n_species != 1 pour un bloc"
     print("OK  block_names() voit un add_block natif")
@@ -49,7 +49,7 @@ def main():
         so = e.compile_so(os.path.join(tmp, "euler_model.so"), INCLUDE)
 
         sim = pops.System(n=n, L=L, periodic=True)
-        sim.add_block("native", model=euler_native(), spatial=pops.Spatial(minmod=True))
+        sim._add_block("native", model=euler_native(), spatial=pops.Spatial(minmod=True))
         sim.add_dynamic_block("dyn", so, names=["rho", "rho_u", "rho_v", "E"])
 
         # (1) le bloc dynamique (.so) figure dans block_names, dans l'ordre d'ajout
@@ -70,7 +70,7 @@ def main():
             sim.set_state(nm, U.reshape(-1).tolist())
         before = np.array(sim.get_state("dyn")).reshape(4, n, n).copy()
         for _ in range(5):
-            pops.integrate.euler_step(sim, 0.0005)  # names=None -> itere sur sim.block_names()
+            pops.runtime.integrate.euler_step(sim, 0.0005)  # names=None -> itere sur sim.block_names()
         after = np.array(sim.get_state("dyn")).reshape(4, n, n)
         assert np.isfinite(after).all(), "bloc dynamique : etat non fini apres integration Python"
         assert float(np.abs(after - before).max()) > 1e-9, \

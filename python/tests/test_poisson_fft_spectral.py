@@ -56,7 +56,7 @@ def solve_phi(n, solver, eps=1e-3):
     """System periodique, rho = eps cos(2 pi x) (moyenne nulle) -> phi par le solveur
     demande. Une densite negative est sans objet ici : seul solve_fields est appele."""
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions",
+    sim._add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),
@@ -94,7 +94,7 @@ chk(e16 < 1e-12, f"n=16 : err rel {e16:.2e} < 1e-12 (pas de terme O(h^2))")
 
 print("== (4) rejets ==")
 sim = pops.System(n=32, L=1.0, periodic=False)
-sim.add_block("ions",
+sim._add_block("ions",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                         transport=pops.IsothermalFlux(),
                         source=pops.PotentialForce(charge=1.0),
@@ -106,7 +106,7 @@ sim.set_poisson(rhs="charge_density", solver="fft_spectral", bc="dirichlet",
 msg = err_msg(sim.solve_fields)
 chk("fft_spectral" in msg and "wall" in msg, f"paroi refusee au kind effectif ({msg[:60]}...)")
 sim2 = pops.System(n=32, L=1.0, periodic=True)
-sim2.add_block("ions",
+sim2._add_block("ions",
                pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                          transport=pops.IsothermalFlux(),
                          source=pops.PotentialForce(charge=1.0),
@@ -123,7 +123,7 @@ print("== (5) ghosts de phi : le chemin source complet fft == MG ==")
 def rhs_with(solver):
     n = 32
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions",
+    sim._add_block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),

@@ -192,8 +192,8 @@ class Model(_FacadeCompileMixin):
 
     def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None):
         """NAMED composite rate operator R_name = -div F + sum(sources) (Spec 2, operator-first):
-        a Program-side alias for ctx.rhs(flux=, sources=, fluxes=) so a model-free Program can call
-        P.call(name, U[, fields]) instead of P.rhs(...). Delegates to HyperbolicModel.rate_operator.
+        a Program-side rate handle lowered by ``P.call(handle, U[, fields])``. Delegates to
+        HyperbolicModel.rate_operator.
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3),
         which a Program can pass to ``P.call`` in place of the string name."""
@@ -402,4 +402,3 @@ class Model(_FacadeCompileMixin):
     def operator_capabilities(self, name):
         """The capabilities dict of operator ``name``."""
         return dict(self._m.operator_registry().get(name).capabilities)
-

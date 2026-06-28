@@ -89,7 +89,7 @@ def main():
                          source=pops.GravityForce(),
                          elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
         cmp = pops.System(n=n, L=L, periodic=True)
-        cmp.add_block("gas", spec, spatial=pops.Spatial(none=True, flux=Rusanov()),
+        cmp._add_block("gas", spec, spatial=pops.Spatial(none=True, flux=Rusanov()),
                       time=pops.Explicit())
         cmp.set_poisson(rhs="charge_density", solver="geometric_mg")
         cmp.set_state("gas", Uflat)

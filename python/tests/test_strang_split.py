@@ -88,7 +88,7 @@ def build_sim(compiled, time, n=32, L=1.0, B0=4.0):
     sim = pops.System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
-    sim.add_equation("ions", model=compiled,
+    sim._add_equation("ions", model=compiled,
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
                                               variables=Conservative()),
                      time=time)
@@ -127,17 +127,17 @@ def check_api():
     # Garde heritee : Strang (etant un Split) est rejete sur add_block, sur System ET sur AmrSystem --
     # l'etage source condense par Schur n'est cable que par add_equation (qui branche set_source_stage),
     # jamais par add_block (qui jouerait le seul transport et PERDRAIT la source en silence). Depuis le
-    # chemin amr-schur (#265), AmrSystem.add_equation(time=pops.Strang(...)) est au contraire SUPPORTE
+    # chemin amr-schur (#265), AmrSystem._add_equation(time=pops.Strang(...)) est au contraire SUPPORTE
     # (cf. test_amr_schur_via_system.py pour la couverture positive sur AMR) : seul add_block rejette.
     sys_ = pops.System(n=8, L=1.0, periodic=False)
     e_blk = raises(TypeError, sys_.add_block, "x", scalar_native_model(), time=strang())
     chk("Split" in str(e_blk) or "Schur" in str(e_blk),
-        "(a) System.add_block(time=pops.Strang(...)) -> rejet (heritage Split)")
+        "(a) System._add_block(time=pops.Strang(...)) -> rejet (heritage Split)")
     amr = pops.AmrSystem(n=8, L=1.0, periodic=True)
     e_amr = raises((TypeError, ValueError), amr.add_block, "x", scalar_native_model(),
                    time=strang())
     chk("Split" in str(e_amr) or "Schur" in str(e_amr),
-        "(a) AmrSystem.add_block(time=pops.Strang(...)) -> rejet (heritage Split)")
+        "(a) AmrSystem._add_block(time=pops.Strang(...)) -> rejet (heritage Split)")
 
 
 def vel_mom(sim):

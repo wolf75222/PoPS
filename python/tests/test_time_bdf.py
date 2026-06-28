@@ -279,7 +279,7 @@ def _run_section_b(t):
         return None
 
     probe = pops.System(n=8, L=1.0, periodic=True)
-    if not hasattr(probe, "install_program") or not hasattr(probe, "eval_rhs"):
+    if not hasattr(probe, "_install_program_so") or not hasattr(probe, "eval_rhs"):
         print("-- (B) skipped: _pops lacks install_program / eval_rhs (rebuild _pops) --")
         return None
 
@@ -305,7 +305,7 @@ def _run_section_b(t):
 
     def _make_sim():
         sim = pops.System(n=n, L=1.0, periodic=True)
-        sim.add_equation("blk", _nonlinear_flux_model(),
+        sim._add_equation("blk", _nonlinear_flux_model(),
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit(method="euler"))
         sim.set_poisson("charge_density", "geometric_mg")
@@ -314,7 +314,7 @@ def _run_section_b(t):
 
     def _step_one(order, compiled):
         sim = _make_sim()
-        sim.install_program(compiled.so_path)
+        sim._install_program_so(compiled.so_path)
         sim.step(dt)
         out = np.array(sim.get_state("blk"))
         try:  # the recorded ||F|| diagnostic (best-effort: optional if the binding is older)

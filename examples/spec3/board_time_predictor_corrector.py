@@ -22,7 +22,7 @@ def board():
     dt = T.dt
     u_n = T.state("plasma")
     f_n = T.fields("fields_n", from_state=u_n)
-    r_n = T.rhs(name="R_n", state=u_n, fields=f_n, flux=True, sources=["electric"])
+    r_n = T._rhs_legacy(name="R_n", state=u_n, fields=f_n, flux=True, sources=["electric"])
     u_star = T.solve(
         "U_star",
         (T.I - dt * T.linear_source("lorentz")) @ unknown("U_star") == u_n + dt * r_n,
@@ -35,8 +35,8 @@ def primitive():
     P = Program("pc_primitive")
     dt = P.dt
     u_n = P.state("plasma")
-    f_n = P.solve_fields("fields_n", u_n)
-    r_n = P.rhs(name="R_n", state=u_n, fields=f_n, flux=True, sources=["electric"])
+    f_n = P._solve_fields("fields_n", u_n)
+    r_n = P._rhs_legacy(name="R_n", state=u_n, fields=f_n, flux=True, sources=["electric"])
     op = P.I - dt * P.linear_source("lorentz")
     rhs = P.linear_combine("U_star_rhs", u_n + dt * r_n)
     u_star = P.solve_local_linear(name="U_star", operator=op, rhs=rhs)

@@ -55,7 +55,7 @@ N = 24
 
 def make_sim(method="euler"):
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim._add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method=method))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -84,7 +84,7 @@ def run_compiled(P, dt):
     except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim()
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.step(dt)
     return np.array(sim.get_state("ions"))
 
@@ -93,10 +93,10 @@ def ssprk2_program():
     P = adctime.Program("ssprk2_parity")
     dt = P.dt
     U0 = P.state("ions")
-    f0 = P.solve_fields(U0)
+    f0 = P._solve_fields(U0)
     k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
-    f1 = P.solve_fields(U1)
+    f1 = P._solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
     return P
@@ -106,13 +106,13 @@ def rk4_program():
     P = adctime.Program("rk4_parity")
     dt = P.dt
     U0 = P.state("ions")
-    k1 = P._rhs_legacy(state=U0, fields=P.solve_fields(U0), flux=True, sources=["default"])
+    k1 = P._rhs_legacy(state=U0, fields=P._solve_fields(U0), flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + 0.5 * dt * k1)
-    k2 = P._rhs_legacy(state=U1, fields=P.solve_fields(U1), flux=True, sources=["default"])
+    k2 = P._rhs_legacy(state=U1, fields=P._solve_fields(U1), flux=True, sources=["default"])
     U2 = P.linear_combine("U2", U0 + 0.5 * dt * k2)
-    k3 = P._rhs_legacy(state=U2, fields=P.solve_fields(U2), flux=True, sources=["default"])
+    k3 = P._rhs_legacy(state=U2, fields=P._solve_fields(U2), flux=True, sources=["default"])
     U3 = P.linear_combine("U3", U0 + dt * k3)
-    k4 = P._rhs_legacy(state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
+    k4 = P._rhs_legacy(state=U3, fields=P._solve_fields(U3), flux=True, sources=["default"])
     P.commit("ions", P.linear_combine(
         "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4))
     return P

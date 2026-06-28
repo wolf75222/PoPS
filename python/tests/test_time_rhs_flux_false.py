@@ -93,7 +93,7 @@ def one_step_program(name, sources, flux=True):
     """U^{n+1} = U + dt * rhs(flux=flux, sources=sources), committed on block 'plasma'."""
     P = adctime.Program(name)
     U = P.state("plasma")
-    fields = P.solve_fields(U) if flux else None
+    fields = P._solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
     P.commit("plasma", P.linear_combine("%s_step" % name, U + P.dt * R))
     return P
@@ -198,7 +198,7 @@ def make_sim(name):
         compiled_model = advect_model("adv_block_%s" % name, A, C).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("plasma", compiled_model,
+    sim._add_equation("plasma", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     x = (np.arange(N) + 0.5) / N
@@ -217,7 +217,7 @@ def run_one_step(sources, flux):
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim, rho0 = make_sim(tag)
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.step(DT)
     return np.array(sim.get_state("plasma"))[0], rho0
 
@@ -247,7 +247,7 @@ chk(d_full_vs_src > 1e-6,
 def lie_split_program(name):
     P = adctime.Program(name)
     U = P.state("plasma")
-    H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
+    H = P._rhs_legacy(state=U, fields=P._solve_fields(U), flux=True, sources=[])   # flux only (-div F)
     U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
     S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
     P.commit("plasma", P.linear_combine("%s_S" % name, U1 + P.dt * S))
@@ -259,7 +259,7 @@ try:
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
 sim_lie, rho0l = make_sim("lie")
-sim_lie.install_program(compiled_lie.so_path)
+sim_lie._install_program_so(compiled_lie.so_path)
 sim_lie.step(DT)
 out_lie = np.array(sim_lie.get_state("plasma"))[0]
 # Offline split: H half = the flux-only one-step (validated ADC-425 primitive); S half = + dt*C*U1.

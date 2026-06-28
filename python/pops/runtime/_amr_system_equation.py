@@ -37,7 +37,7 @@ def _reject_newton_amr_compiled(label, time):
 class _AmrSystemEquation:
     """add_equation + named-aux methods of AmrSystem."""
 
-    def add_equation(self, name, model, spatial=None, time=None, substeps=None):
+    def _add_equation(self, name, model, spatial=None, time=None, substeps=None):
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
         Low-level runtime seam. The documented PUBLIC path is the typed
@@ -96,7 +96,7 @@ class _AmrSystemEquation:
         # PREREQUISITE: call sim.set_magnetic_field(B_z) BEFORE the 1st step (the Lorentz term reads
         # Omega = B_z); otherwise a clear error at build. MONO-BLOCK only (set_source_stage raises otherwise).
         if isinstance(time, Split):
-            self.add_equation(name, model, spatial=spatial, time=time.hyperbolic, substeps=substeps)
+            self._add_equation(name, model, spatial=spatial, time=time.hyperbolic, substeps=substeps)
             src = time.source
             # Settings TRANSPORTED by the amr-schur path since wave 3 (System parity):
             # coarse-solve Krylov tolerances + field descriptors (stable role or variable name,
@@ -254,7 +254,7 @@ class _AmrSystemEquation:
                 % (name, block, sorted(table)))
         return table[name]
 
-    def set_aux_field(self, block, name, field, halo=None):
+    def _set_aux_field(self, block, name, field, halo=None):
         """Set a model-NAMED aux field of @p block (declared via m.aux_field(name)) on the AMR
         hierarchy. AMR counterpart of System.set_aux_field. @p field: 2D array (n, n) on the COARSE
         base level; it is STATIC (re-applied each step, injected to the fine levels, survives a regrid).

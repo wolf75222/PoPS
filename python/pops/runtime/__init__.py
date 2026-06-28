@@ -16,18 +16,9 @@ The lower layers (ir / model / physics / time / lib / codegen) are numpy-free un
 and never import this package. The runtime methods that need the codegen / physics / dsl layers
 import them LAZILY in-method, both to avoid a cycle and to keep ``import pops`` numpy-free.
 
-Example::
-
-    import pops
-    sim = pops.System(n=192, periodic=False)
-    sim.add_block(
-        "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
-    sim.set_density("ne", ne_numpy)
-    sim.step_cfl(0.4)
+Public user code should enter this layer through ``pops.bind(compiled, ...)`` or
+``System.install(compiled, ...)``. Low-level block/equation setters remain private
+implementation seams used by the binder.
 """
 from pops.runtime.profile import PerformanceSummary, Profile  # noqa: F401
 

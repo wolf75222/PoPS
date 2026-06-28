@@ -227,7 +227,7 @@ def _run_one(t, pops, np, ncomp, init):
     (out, phi_ref, iters) or None if the toolchain is unavailable."""
     n = init.shape[1]
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
@@ -245,11 +245,11 @@ def _run_one(t, pops, np, ncomp, init):
         print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])
         return None
 
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     sim.set_state("blk", init)
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free
     out = np.array(sim.get_state("blk"))
 

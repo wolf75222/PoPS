@@ -6,9 +6,9 @@ All blocks live on a single AMR hierarchy: same boxes, same MPI distribution
 carrying several fields", never one hierarchy per species. The current version
 carries two levels (refinement ratio 2: the fine level has a step `dx/2`).
 
-- **Single-block** (a single `add_block`): historical path `AmrCouplerMP`, with dynamic regrid
+- **Single-block** (one native block in the compiled/bound assembly): historical path `AmrCouplerMP`, with dynamic regrid
   and conservative reflux. Bit-identical to what it has always produced.
-- **Multi-block** (two or more `add_block`): N blocks co-located on the shared
+- **Multi-block** (two or more native blocks in the compiled/bound assembly): N blocks co-located on the shared
   hierarchy (engine `AmrRuntime`). A single auxiliary channel per level (`phi`, `grad phi`)
   and a single coarse Poisson whose right-hand side is the co-located sum of the elliptic
   bricks of the blocks (`f = somme_b q_b n_b`, read at the same cells). Conservation is

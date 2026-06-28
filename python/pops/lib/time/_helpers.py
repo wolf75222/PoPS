@@ -17,10 +17,9 @@ def _stage_rhs(P, U, sources, flux):
     """Solve the elliptic fields from U and assemble its RHS for one stage. The FieldContext is
     distinct per stage (no stale global aux). flux=False builds a source-only sub-flow (e.g. Strang S).
 
-    Uses the PRIVATE ``P._rhs_legacy`` builder: the macros author the RHS from the (flux, sources)
-    pair, which is the internal lowering of the public typed ``P.rhs(terms=[...])`` -- not a second
-    public path."""
-    fields = P.solve_fields(U) if flux else None
+    Uses the PRIVATE ``P._rhs_legacy`` builder: ready-made library macros may author primitive
+    transport/source flows, while user Programs should call declared rate operator handles."""
+    fields = P._solve_fields(U) if flux else None
     return P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
 
 

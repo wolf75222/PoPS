@@ -34,7 +34,7 @@ def _model():
 def _built_amr(regrid_every=2, n=32):
     """A small built AmrSystem with one refined patch (density bump + a few steps)."""
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
-    sim.add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim._add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
     ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
@@ -153,7 +153,7 @@ def test_explain_reflux_reports_route_requirement():
 # --- explain_checkpoint --------------------------------------------------------
 def test_explain_checkpoint_restartable_for_frozen_single_block():
     sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    sim.add_block("ne", model=_model())
+    sim._add_block("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
@@ -162,7 +162,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
 
 def test_explain_checkpoint_flags_dynamic_regrid_violation():
     sim = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=3)
-    sim.add_block("ne", model=_model())
+    sim._add_block("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert rep.restartable is False
     assert any("regrid_every=3" in v for v in rep.violations)

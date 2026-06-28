@@ -69,7 +69,7 @@ def _build(nr, nth, riemann, cs2=1.0):
     """System polaire isotherme avec le flux Riemann demande, etat initial pose, pret a stepper."""
     sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=nr, ntheta=nth))
     sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
-    sim.add_equation(
+    sim._add_equation(
         "ions",
         model=iso_polar_model(cs2=cs2),
         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=riemann, variables=Conservative()),

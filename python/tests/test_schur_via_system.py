@@ -102,7 +102,7 @@ def build_system(n=24, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_schur=True,
         )
     else:
         time_policy = pops.Explicit()
-    sim.add_equation(
+    sim._add_equation(
         "ions",
         model=iso_fluid_model(cs2=cs2, alpha=alpha),
         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),

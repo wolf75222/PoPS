@@ -171,7 +171,7 @@ def check_numeric_parity():
                 os.path.join(tmp, "m_prod.so"), INCLUDE, backend="production")
             for backend, cm in (("aot", cm_aot), ("production", cm_prod)):
                 s = pops.System(n=n, periodic=True)
-                s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
+                s._add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                    variables=Primitive()))
                 s.set_poisson(rhs="charge_density", solver="geometric_mg")
                 s.set_state("gas", initial_state(n))

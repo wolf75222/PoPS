@@ -96,7 +96,7 @@ def build_sim(compiled, n=32, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_bz=True,
                                                    magnetic_field="B_z", potential="phi"))
     else:
         time = pops.Explicit()
-    sim.add_equation("ions", model=compiled,
+    sim._add_equation("ions", model=compiled,
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
                                               variables=Conservative()),
                      time=time)
@@ -175,7 +175,7 @@ def check_amr_split_rejected():
     (qui branche set_source_stage APRES l'ajout du bloc). AmrSystem.add_block doit donc le REJETER
     explicitement (sinon Split, exposant .kind/.substeps, passerait comme un transport seul et la source
     condensee serait perdue en silence) -- MEME rejet que System.add_block. Depuis le chemin amr-schur
-    (#265), AmrSystem.add_equation(time=pops.Split(...)) est au contraire SUPPORTE (set_source_stage +
+    (#265), AmrSystem._add_equation(time=pops.Split(...)) est au contraire SUPPORTE (set_source_stage +
     set_time_scheme ; couverture positive dans test_amr_schur_via_system.py) : seul add_block rejette."""
     n, L = 16, 1.0
     split = pops.Split(hyperbolic=pops.Explicit(),
@@ -185,12 +185,12 @@ def check_amr_split_rejected():
     amr1 = pops.AmrSystem(n=n, L=L, periodic=True)
     e1 = raises((TypeError, ValueError), amr1.add_block, "ne", model=model, time=split)
     chk("Split" in str(e1) or "Schur" in str(e1),
-        "(f) AmrSystem.add_block(time=pops.Split(...)) -> rejet explicite (Split/Schur)")
+        "(f) AmrSystem._add_block(time=pops.Split(...)) -> rejet explicite (Split/Schur)")
 
     # DEFAUT INCHANGE : un bloc AMR en pops.Explicit pur s'ajoute toujours sans lever.
     amr_ok = pops.AmrSystem(n=n, L=L, periodic=True)
-    amr_ok.add_block("ne", model=scalar_native_model(), time=pops.Explicit())
-    chk(True, "(f) AmrSystem.add_block(time=pops.Explicit()) defaut inchange (pas de rejet)")
+    amr_ok._add_block("ne", model=scalar_native_model(), time=pops.Explicit())
+    chk(True, "(f) AmrSystem._add_block(time=pops.Explicit()) defaut inchange (pas de rejet)")
 
 
 def main():
@@ -278,7 +278,7 @@ def main():
     sim_c1.set_magnetic_field(np.ones((n, n)))
     raised = False
     try:
-        sim_c1.add_equation("q", model=scal_c,
+        sim_c1._add_equation("q", model=scal_c,
                             time=pops.Split(hyperbolic=pops.Explicit(),
                                            source=pops.CondensedSchur(theta=0.5)))
     except Exception as e:
@@ -290,7 +290,7 @@ def main():
     sim_c2.set_poisson(bc="dirichlet")
     raised = False
     try:
-        sim_c2.add_equation("ions", model=compiled,
+        sim_c2._add_equation("ions", model=compiled,
                             time=pops.Split(hyperbolic=pops.Explicit(),
                                            source=pops.CondensedSchur(theta=0.5)))
     except Exception as e:
@@ -334,10 +334,10 @@ def main():
     sim_two = pops.System(n=n, L=L, periodic=False)
     sim_two.set_poisson(bc="dirichlet")
     sim_two.set_magnetic_field(4.0 * np.ones((n, n)))
-    sim_two.add_equation("ions", model=compiled,
+    sim_two._add_equation("ions", model=compiled,
                          time=pops.Split(hyperbolic=pops.Explicit(),
                                         source=pops.CondensedSchur(theta=1.0, alpha=3.0)))
-    sim_two.add_equation("bg", model=compiled, time=pops.Explicit())  # voisin Explicit pur
+    sim_two._add_equation("bg", model=compiled, time=pops.Explicit())  # voisin Explicit pur
     rho0, u0, v0 = smooth_init(n, L)
     sim_two.set_primitive_state("ions", rho=rho0, u=u0, v=v0)
     sim_two.set_primitive_state("bg", rho=rho0, u=u0, v=v0)
@@ -361,7 +361,7 @@ def main():
     chk("aot" in str(e_aot) and "evolve" in str(e_aot),
         "(g) backend 'aot' : evolve=False -> ValueError (nomme le backend)")
     # evolve=True (defaut) : meme backend, meme bloc -> aucun rejet (chemin nominal inchange).
-    sim_aot.add_equation("ok", model=compiled, time=pops.Explicit())  # evolve True par defaut
+    sim_aot._add_equation("ok", model=compiled, time=pops.Explicit())  # evolve True par defaut
     chk(True, "(g) backend 'aot' : evolve=True (defaut) passe toujours (pas de rejet)")
 
     proto = isothermal_magnetized().compile(backend="prototype", include=INCLUDE)
@@ -372,7 +372,7 @@ def main():
                      time=pops.Explicit(), evolve=False)
     chk("prototype" in str(e_proto) and "evolve" in str(e_proto),
         "(g) backend 'prototype' : evolve=False -> ValueError (nomme le backend)")
-    sim_proto.add_equation("ok", model=proto, time=pops.Explicit())  # evolve True par defaut
+    sim_proto._add_equation("ok", model=proto, time=pops.Explicit())  # evolve True par defaut
     chk(True, "(g) backend 'prototype' : evolve=True (defaut) passe toujours (pas de rejet)")
 
     if fails == 0:

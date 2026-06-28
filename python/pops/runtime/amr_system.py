@@ -158,7 +158,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         """
         return self._s.coarse_total_boxes()
 
-    def add_block(self, name, model, spatial=None, time=None):
+    def _add_block(self, name, model, spatial=None, time=None):
         """Installs an evolved block composed of NATIVE BRICKS on the shared AMR hierarchy.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
@@ -263,7 +263,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
         @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
-        @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
+        @param cadence optional pops.time.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
             macro-step cadence, applied with ``set_program_cadence`` AFTER install_program. A native
             AMR install has no Program, so a non-None cadence there raises (set substeps / stride on
             the native time policy instead).
@@ -324,7 +324,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                     "(compile_problem(model=...))." % (name, name))
             spatial = spec.get("spatial")
             time = spec.get("time")
-            self.add_equation(name, model, spatial=spatial, time=time)
+            self._add_equation(name, model, spatial=spatial, time=time)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
         # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
@@ -440,7 +440,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             raise ValueError(
                 "pops.bind: aux field %r is not declared by any installed instance; add the "
                 "instance with a model declaring m.aux_field(%r)." % (field_name, field_name))
-        self.set_aux_field(block, field_name, field)
+        self._set_aux_field(block, field_name, field)
 
     def add_coupling(self, coupling):
         """Add a generic inter-species COUPLED SOURCE (pops.dsl.CoupledSource(...).compile(...))
@@ -505,4 +505,17 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         return build_bind_report(self, compiled)
 
     def __getattr__(self, attr):
+        forbidden = {
+            "add_block",
+            "add_equation",
+            "install_program",
+            "initialize_compiled_program",
+            "set_param",
+            "set_aux_field",
+            "set_field_solver",
+        }
+        if attr in forbidden:
+            raise AttributeError(
+                "AmrSystem.%s is not part of the public PoPS API; use sim.install(...) "
+                "or pops.bind(compiled, ...) with typed descriptors instead." % attr)
         return getattr(self._s, attr)

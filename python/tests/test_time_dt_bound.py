@@ -53,7 +53,7 @@ print("== (A) IR + codegen ==")
 def _fe(name="fe_dtbound"):
     P = adctime.Program(name)
     U = P.state("ions")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     return P
@@ -133,7 +133,7 @@ print("PASS test_time_dt_bound Section A")
 print("== (B) step_cfl applies min(native CFL, program dt bound) ==")
 
 probe = pops.System(n=8, L=1.0, periodic=True)
-if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cadence"):
+if not hasattr(probe, "_install_program_so") or not hasattr(probe, "set_program_cadence"):
     _skip("_pops lacks install_program (rebuild _pops) (A passed)")
 
 
@@ -152,7 +152,7 @@ CFL = 0.4
 
 def make_sim():
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim._add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -168,7 +168,7 @@ def fe_program(name, *, factor=None):
     multiple of the native single-block CFL dt = cfl * h / w): factor < 1 tightens, factor > 1 loosens."""
     P = adctime.Program(name)
     U = P.state("ions")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     if factor is not None:
@@ -192,7 +192,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
 
 def install(prog):
     sim = make_sim()
-    sim.install_program(prog.so_path)
+    sim._install_program_so(prog.so_path)
     return sim
 
 

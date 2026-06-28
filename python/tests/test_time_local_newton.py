@@ -237,7 +237,7 @@ def section_b(t):
         compiled_model = reaction_model("react_block", k).compile(backend="production")
     except RuntimeError as exc:
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
 
@@ -247,7 +247,7 @@ def section_b(t):
     rho0 = 1.0 + 0.5 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)  # in [0.5, 1.5]
     sim.set_state("blk", np.stack([rho0]))
 
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.step(dt)
     rho = np.array(sim.get_state("blk"))[0]
 

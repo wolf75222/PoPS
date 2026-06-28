@@ -164,6 +164,12 @@ def _scratch_family(op, vtype):
     any residual op."""
     if op in _OPERATOR_DECL_OPS:
         return "operator"
+    if op == "operator_call":
+        if vtype == "rhs":
+            return "rhs"
+        if vtype == "operator":
+            return "operator"
+        return "state"
     if op in _RHS_OPS:
         return "rhs"
     if op in _STATE_SCRATCH_OPS:
@@ -307,7 +313,7 @@ def _reject_reason(name, r, op_of, field_barriers, blockers, by_name, assignment
     (it reads the freshly-solved aux, so it is not even value-equal to an earlier same-input rate --
     a documented CSE / reuse barrier in Program._PURE_OPS)."""
     aux_note = ""
-    if op_of[name] in _RHS_OPS:
+    if op_of[name] in _RHS_OPS or op_of[name] == "operator_call":
         for fidx in field_barriers:
             if r["def_index"] <= fidx <= r["last_use_index"]:
                 aux_note = (" (an rhs/source/apply reads the shared aux a field solve writes, so its "
@@ -324,7 +330,7 @@ def _field_solve_indices(program):
     """Flat indices of the field-solve nodes (the aux/field barriers) in the step body."""
     out = []
     for i, v in enumerate(getattr(program, "_values", [])):
-        if v.op in _ELLIPTIC_OPS:
+        if v.op in _ELLIPTIC_OPS or (v.op == "operator_call" and v.vtype == "fields"):
             out.append(i)
     return out
 
@@ -344,7 +350,7 @@ def _persistent_solver_buffers(program):
             persistent.append({"kind": "krylov", "name": v.name, "buffers": _KRYLOV_WORK_VECTORS,
                                "note": "%s work vectors (conservative; ~%d per solve)"
                                % (method, _KRYLOV_WORK_VECTORS)})
-        elif v.op in _ELLIPTIC_OPS:
+        elif v.op in _ELLIPTIC_OPS or (v.op == "operator_call" and v.vtype == "fields"):
             persistent.append({"kind": "multigrid", "name": v.name, "buffers": 1,
                                "note": _MULTIGRID_BUFFER_NOTE})
     return persistent

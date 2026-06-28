@@ -106,7 +106,7 @@ def compiled_single(cm, pf, state):
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
     s = pops.AmrSystem(n=N, L=1.0, periodic=True)
     s.set_refinement(1e30)
-    s.add_equation("gas", cm,
+    s._add_equation("gas", cm,
                    spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
                    time=pops.Explicit())
     s.set_conservative_state("gas", state)
@@ -161,9 +161,9 @@ def main():
         band[:, N // 3:2 * N // 3] = 1.0
         sm = pops.AmrSystem(n=N, L=1.0, periodic=True)
         sm.set_refinement(1e30)
-        sm.add_equation("a", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
+        sm._add_equation("a", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
-        sm.add_equation("b", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
+        sm._add_equation("b", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
         sm.set_density("a", band.ravel().copy())
         sm.set_density("b", band.ravel().copy())

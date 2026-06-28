@@ -94,7 +94,7 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
     if c_E is not None and (isinstance(c_E, bool) or not isinstance(c_E, int) or c_E < 0):
         raise ValueError("condensed_schur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
     U = P.state(block)
-    P.solve_fields(U)  # fill the shared aux (B_z at c_bz) from the current state, like the native stage
+    P._solve_fields(U)  # fill the shared aux (B_z at c_bz) from the current state, like the native stage
     # phi^n = 0 (a fresh zero scalar field): the RHS Laplacian term -Lap(phi^n) vanishes and the solve
     # warm starts from zero. Cross-step phi^n carry is deferred (see the docstring).
     phi_n = P.scalar_field(block + ".schur_phi_n")

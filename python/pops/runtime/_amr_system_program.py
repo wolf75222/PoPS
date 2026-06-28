@@ -12,6 +12,14 @@ System routes in :mod:`pops.runtime._system_unified_install`.
 class _AmrSystemProgram:
     """COMPILED time-Program install / params / cadence methods of AmrSystem (ADC-508)."""
 
+    def _install_program_so(self, so_path):
+        """Install a compiled Program shared object through the native AMR runtime.
+
+        The public ``install_program`` name is intentionally not exposed on ``AmrSystem``; this
+        private indirection keeps the install seam testable without reopening the old API.
+        """
+        return self._s.install_program(so_path)
+
     def _finish_program_install(self, compiled, so_path, params, cadence):
         """Steps 5/5b/6 of ``_install_compiled`` for a COMPILED time Program (ADC-508).
 
@@ -31,7 +39,7 @@ class _AmrSystemProgram:
             Program -- set substeps / stride on the native time policy instead.
         """
         if so_path is not None:
-            self.install_program(so_path)
+            self._install_program_so(so_path)
             if params:
                 self._install_program_params(compiled, params)
         elif params:
@@ -75,7 +83,7 @@ class _AmrSystemProgram:
         explicit cfl= uses it (step_cfl routes the per-block CFL dt through the installed program)."""
         from pops.time.program import CompiledTime
         if not isinstance(cadence, CompiledTime):
-            raise TypeError("pops.bind(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
+            raise TypeError("pops.bind(cadence=): expected a pops.time.CompiledTime(substeps=, stride=), "
                             "got %r" % type(cadence).__name__)
         if isinstance(cadence.cfl, (int, float)):
             self._program_cadence_cfl = float(cadence.cfl)

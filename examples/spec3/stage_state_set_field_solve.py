@@ -21,8 +21,8 @@ def main():
     n_n = P.state("neutrals")
 
     # electrons and ions advanced to a predictor stage; neutrals held at n.
-    e_star = P.linear_combine("e_star", e_n + dt * P.rhs(name="Re", state=e_n, flux=True))
-    i_star = P.linear_combine("i_star", i_n + dt * P.rhs(name="Ri", state=i_n, flux=True))
+    e_star = P.linear_combine("e_star", e_n + dt * P._rhs_legacy(name="Re", state=e_n, flux=True))
+    i_star = P.linear_combine("i_star", i_n + dt * P._rhs_legacy(name="Ri", state=i_n, flux=True))
 
     star = P.state_set("star", {"electrons": e_star, "ions": i_star, "neutrals": n_n})
     assert len(star) == 3

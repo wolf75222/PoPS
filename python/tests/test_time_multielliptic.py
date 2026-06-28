@@ -2,14 +2,14 @@
 """Named multi-elliptic-field runtime (m.elliptic_field), ADC-428 (epic ADC-399, completes ADC-419).
 
 ADC-419 landed the IR + validation + hash for m.elliptic_field("phi2", rhs=, operator=, aux=[...]) but
-P.solve_fields(field=name) raised NotImplementedError (the SECOND elliptic solve + its own aux channel
+P._solve_fields(field=name) raised NotImplementedError (the SECOND elliptic solve + its own aux channel
 were unwired). ADC-428 wires the runtime on the production/system backend: a named field gets
 
   - its OWN RHS brick (a function of the conservative state, like m.elliptic_rhs),
   - a DEDICATED native elliptic solver instance (GeometricMG/FFT, reused -- not reimplemented),
   - its OWN aux output channel (the model's named aux_field slots, distinct from the shared phi/grad),
 
-and P.solve_fields(field=name, state=U) lowers to ctx.solve_fields_from_state(field, block, U).
+and P._solve_fields(field=name, state=U) lowers to ctx.solve_fields_from_state(field, block, U).
 
 Section A (pure Python, always runs): the named solve_fields op lowers to the named ctx call (NOT the
 default 2-arg one); the default solve_fields lowers byte-identically to before; unknown field / missing
@@ -121,9 +121,9 @@ def _prog(name, field=None):
     P = adctime.Program(name)
     U = P.state("plasma")
     if field is None:
-        f = P.solve_fields(U)
+        f = P._solve_fields(U)
     else:
-        f = P.solve_fields("f_" + field, U, field=field)
+        f = P._solve_fields("f_" + field, U, field=field)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
@@ -251,7 +251,7 @@ def make_sim(model):
         compiled = model.compile(backend="production")
     except RuntimeError as exc:
         _skipB("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("plasma", compiled,
+    sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     sim.set_poisson("composite", "geometric_mg")  # f = sum of the per-block elliptic bricks
@@ -265,7 +265,7 @@ def step_program(model, prog):
     except RuntimeError as exc:
         _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim(model)
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.step(DT)
     return np.array(sim.get_state("plasma"))
 

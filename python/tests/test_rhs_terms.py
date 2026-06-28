@@ -1,4 +1,4 @@
-"""P.rhs(terms=[...]) typed RHS composition (Spec 5 sec.14.2.4, ADC-479 criterion 27).
+"""P._rhs_legacy(terms=[...]) typed RHS composition (Spec 5 sec.14.2.4, ADC-479 criterion 27).
 
 The typed ``terms=`` front door -- the ONE public RHS path -- lowers onto the INTERNAL
 ``P._rhs_legacy`` ``flux=``/``sources=`` builder: each :class:`pops.numerics.terms.Flux`/source term
@@ -25,8 +25,8 @@ def _terms_program(terms):
     P = adctime.Program("rhs_terms")
     dt = P.dt
     U = P.state("plasma")
-    f = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=f, terms=terms)
+    f = P._solve_fields(U)
+    R = P._rhs_terms("R", state=U, fields=f, terms=terms)
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
@@ -38,7 +38,7 @@ def _legacy_program(flux, sources):
     P = adctime.Program("rhs_terms")
     dt = P.dt
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     P.validate()
@@ -83,9 +83,9 @@ def test_flux_is_a_term_not_a_bool():
     assert _terms_program([Flux()])._ir_hash() != _terms_program([])._ir_hash()
     P = adctime.Program("rhs_terms")
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     with pytest.raises(TypeError):
-        P.rhs("R", state=U, fields=f, terms=[True])
+        P._rhs_terms("R", state=U, fields=f, terms=[True])
     print("OK  6. Flux() is a term not a bool; a bare bool in terms= is a TypeError")
 
 
@@ -94,25 +94,25 @@ def test_legacy_flux_sources_rejected_in_public_surface():
     with a clear TypeError naming terms= (Spec 5: terms= is the one public RHS path)."""
     P = adctime.Program("rhs_terms")
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     for kw in ({"flux": True}, {"sources": ["electric"]}, {"fluxes": ["default"]}, {}):
-        with pytest.raises(TypeError, match="requires the typed terms="):
-            P.rhs("R", state=U, fields=f, **kw)
-    print("OK  7. legacy P.rhs(flux=/sources=/fluxes=/bare) -> TypeError naming terms=")
+        with pytest.raises(TypeError, match="_rhs_terms requires terms="):
+            P._rhs_terms("R", state=U, fields=f, **kw)
+    print("OK  7. legacy P._rhs_legacy(flux=/sources=/fluxes=/bare) -> TypeError naming terms=")
 
 
 def test_bad_term_raises_typeerror():
     """A non-term object in terms= is a clear TypeError (transparent typed surface)."""
     P = adctime.Program("rhs_terms")
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     for bad in (123, 4.5, object(), ["nested"]):
         with pytest.raises(TypeError):
-            P.rhs("R", state=U, fields=f, terms=[Flux(), bad])
+            P._rhs_terms("R", state=U, fields=f, terms=[Flux(), bad])
     # An unnamed SourceTerm/LocalTerm has no declared source name to fold in.
     for unnamed in (SourceTerm(), LocalTerm()):
         with pytest.raises(ValueError, match="must be named"):
-            P.rhs("R", state=U, fields=f, terms=[Flux(), unnamed])
+            P._rhs_terms("R", state=U, fields=f, terms=[Flux(), unnamed])
     print("OK  8. a non-term in terms= -> TypeError; an unnamed source term -> ValueError")
 
 

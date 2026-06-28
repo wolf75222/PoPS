@@ -13,10 +13,8 @@ Neither class imports ``pops.dsl`` or ``pops.physics`` at module level.
 class CompiledProblem:
     """Result of ``pops.compile_problem(...)``; a generated ``problem.so``
     (a compiled time Program) plus the metadata to install + reproduce it.
-    Install it with ``sim.install_program(compiled.so_path)`` AFTER the
-    physical block has been added (``sim.add_equation`` / ``sim.add_block``);
-    the Program then drives ``sim.step(dt)`` entirely in C++ via
-    ``ProgramContext``.
+    Install it with ``sim.install(compiled, ...)`` / ``pops.bind(compiled, ...)``; the Program then
+    drives ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos
     toolchain as the loaded _pops module (cf. ``pops_loader_build_flags``),
@@ -457,9 +455,9 @@ class CompiledModel:
         from pops.numerics.riemann import Rusanov
         sim = System(n=int(n), L=1.0, periodic=True)
         sim.set_poisson()
-        sim.add_equation("check", model=self,
-                         spatial=FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
-                         time=Explicit())
+        sim._add_equation("check", model=self,
+                          spatial=FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
+                          time=Explicit())
         x = (np.arange(n) + 0.5) / float(n)
         X, Y = np.meshgrid(x, x, indexing="xy")
         bump = 1.0 + 0.3 * np.exp(-40.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))

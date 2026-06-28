@@ -113,8 +113,8 @@ generated `.so` between runs (default `~/.cache/pops/dsl`).
    sim.run(t_end=0.1, cfl=0.4)
    ```
 
-   The low-level `System.add_equation` / `set_poisson` runtime methods `pops.bind` calls internally
-   stay for the native/AMR runtime and the tests; they are not the documented front door.
+   `pops.bind` owns the runtime wiring. Internal native/AMR seams stay available to the binder and
+   tests, but they are not documented front doors.
 
 ## Next steps
 

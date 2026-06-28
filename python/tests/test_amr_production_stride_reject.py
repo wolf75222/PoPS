@@ -52,7 +52,7 @@ def fake_production_amr():
 print("== production AMR : stride>1 (IMEX) rejete explicitement ==")
 sim = pops.AmrSystem(n=16, periodic=True)
 try:
-    sim.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
+    sim._add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                      time=pops.IMEX(stride=5))
     chk(False, "add_equation(time=IMEX(stride=5), production AMR) doit lever ValueError")
 except ValueError as ex:
@@ -63,7 +63,7 @@ except ValueError as ex:
 print("== production AMR : stride>1 (Explicit) rejete explicitement ==")
 sim_e = pops.AmrSystem(n=16, periodic=True)
 try:
-    sim_e.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
+    sim_e._add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                        time=pops.Explicit(stride=5))
     chk(False, "add_equation(time=Explicit(stride=5), production AMR) doit lever ValueError")
 except ValueError as ex:
@@ -74,7 +74,7 @@ except ValueError as ex:
 print("== production AMR : implicit_vars (masque IMEX partiel) rejete explicitement ==")
 sim2 = pops.AmrSystem(n=16, periodic=True)
 try:
-    sim2.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
+    sim2._add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                       time=pops.IMEX(implicit_vars=["rho_u"]))
     chk(False, "add_equation(IMEX(implicit_vars=['rho_u']), production AMR) doit lever ValueError")
 except ValueError as ex:
@@ -84,7 +84,7 @@ except ValueError as ex:
 print("== production AMR : implicit_roles (masque IMEX partiel) rejete explicitement ==")
 sim3 = pops.AmrSystem(n=16, periodic=True)
 try:
-    sim3.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
+    sim3._add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                       time=pops.IMEX(implicit_roles=["momentum_x"]))
     chk(False, "add_equation(IMEX(implicit_roles=['momentum_x']), production AMR) doit lever ValueError")
 except ValueError as ex:
@@ -97,7 +97,7 @@ except ValueError as ex:
 print("== production AMR : stride=1 / masque vide NE levent PAS (pas de faux positif) ==")
 sim_ok = pops.AmrSystem(n=16, periodic=True)
 try:
-    sim_ok.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
+    sim_ok._add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                         time=pops.Explicit())  # stride=1, masque vide : DEFAUT
     chk(False, "add_equation(Explicit(), production AMR) : attendu un echec au dlopen (.so inexistant)")
 except ValueError as ex:
@@ -107,7 +107,7 @@ except Exception:  # noqa: BLE001  RuntimeError du dlopen attendu : la garde a l
 
 sim_ok_imex = pops.AmrSystem(n=16, periodic=True)
 try:
-    sim_ok_imex.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
+    sim_ok_imex._add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
                              time=pops.IMEX())  # stride=1, masque vide : IMEX plein backward-Euler
     chk(False, "add_equation(IMEX(), production AMR) : attendu un echec au dlopen (.so inexistant)")
 except ValueError as ex:

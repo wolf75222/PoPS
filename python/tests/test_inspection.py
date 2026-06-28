@@ -41,7 +41,7 @@ def test_program_dump_operator_ir_shows_the_lowering():
     P = Program("fe")
     dt = P.dt
     u = P.state("plasma")
-    f = P.solve_fields("f", u)
+    f = P._solve_fields("f", u)
     r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
     u1 = P.linear_combine("U1", u + dt * r)
     P.commit("plasma", u1)
@@ -55,7 +55,7 @@ def test_program_dump_operator_ir_shows_the_lowering():
 def test_program_dump_board_and_cpp_plan():
     P = Program("fe")
     u = P.state("plasma")
-    P.solve_fields("f", u)
+    P._solve_fields("f", u)
     board = P.dump_board()
     plan = P.dump_cpp_plan()
     assert "board == operator-first" in board
@@ -94,7 +94,7 @@ def test_callable_operator_rebinds_for_out_of_order_registration():
 
     P = Program("late")
     u_n = P.state("plasma")
-    f_n = P.solve_fields("f", u_n)
+    f_n = P._solve_fields("f", u_n)
     explicit_rate(u_n, f_n)                      # binds the module (no implicit_operator yet)
     bz = m.aux("B_z")
     c_b = m.local_linear_operator("C(B)", on=U,

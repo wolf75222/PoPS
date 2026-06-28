@@ -86,7 +86,7 @@ def test_strang_combinator():
     P = adctime.Program("strang")
 
     def half_flow(prog, U, frac):
-        R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
+        R = prog._rhs_legacy(state=U, fields=prog._solve_fields(U), flux=True, sources=["default"])
         return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
     def source(prog, U, frac):

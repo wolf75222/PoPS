@@ -113,7 +113,7 @@ def _run():
                 cm = passive_model("nb_blk_" + blk).compile(backend="production")
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
-            sim.add_equation(blk, cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+            sim._add_equation(blk, cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                              time=pops.Explicit(method="euler"))
         for blk in add_order:
             sim.set_state(blk, ic[blk][None, :, :])
@@ -121,13 +121,13 @@ def _run():
 
     # (1) Baseline: blocks added in P.state order (a, b).
     sim_inorder = make_sim(["a", "b"])
-    sim_inorder.install_program(comp.so_path)
+    sim_inorder._install_program_so(comp.so_path)
     sim_inorder.step(dt)
     ref = {blk: np.array(sim_inorder.get_state(blk)) for blk in ("a", "b")}
 
     # (2) Reversed: blocks added (b, a). The .so binds by NAME, so each block must match the baseline.
     sim_rev = make_sim(["b", "a"])
-    sim_rev.install_program(comp.so_path)
+    sim_rev._install_program_so(comp.so_path)
     sim_rev.step(dt)
     got = {blk: np.array(sim_rev.get_state(blk)) for blk in ("a", "b")}
 
@@ -142,7 +142,7 @@ def _run():
 
     print("== a missing block instance fails loud with the spec message ==")
     sim_missing = make_sim(["a"])  # block "b" the Program requires is NOT instantiated
-    chk(raises_with(lambda: sim_missing.install_program(comp.so_path),
+    chk(raises_with(lambda: sim_missing._install_program_so(comp.so_path),
                     "Program requires block instance 'b', but simulation did not instantiate it"),
         "installing a Program needing 'b' on a System without 'b' raises the verbatim spec error")
 

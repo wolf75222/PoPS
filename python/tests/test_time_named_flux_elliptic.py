@@ -192,7 +192,7 @@ chk(eh1._m._model_hash() != eh2._m._model_hash(),
 def _fe_program(name, fluxes):
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
@@ -241,7 +241,7 @@ chk(src_split.count("ctx.neg_div_flux_into(") == 1,
 def _named_field_program(name="nf_ell"):
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P.solve_fields("fields_phi2", U, field="phi2")
+    f = P._solve_fields("fields_phi2", U, field="phi2")
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
@@ -297,7 +297,7 @@ def make_sim(model):
         compiled = model.compile(backend="production")
     except RuntimeError as exc:
         _skipB("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("plasma", compiled,
+    sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     x = (np.arange(N) + 0.5) / N
@@ -330,12 +330,12 @@ except RuntimeError as exc:
     _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
 
 sim_w, U0 = make_sim(whole_flux_model("nf_whole_block"))
-sim_w.install_program(compiled_whole.so_path)
+sim_w._install_program_so(compiled_whole.so_path)
 sim_w.step(DT)
 U_w = np.array(sim_w.get_state("plasma"))
 
 sim_s, _ = make_sim(split_flux_model("nf_split_block"))
-sim_s.install_program(compiled_split.so_path)
+sim_s._install_program_so(compiled_split.so_path)
 sim_s.step(DT)
 U_s = np.array(sim_s.get_state("plasma"))
 

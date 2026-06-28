@@ -89,7 +89,7 @@ class _ProgramConstants:
     # history store, or a second field solve into the shared aux counts as a state/aux barrier.
     _STATE_BARRIER_OPS = frozenset({
         "project", "fill_boundary", "store_history",
-        "solve_fields", "solve_fields_from_blocks",
+        "solve_fields", "solve_fields_from_blocks", "operator_call",
     })
 
     _OPTIMIZE_PASSES = (
@@ -99,12 +99,12 @@ class _ProgramConstants:
     )
 
     _SCRATCH_OPS = frozenset({
-        "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
+        "operator_call", "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
         "solve_local_nonlinear", "cell_compare", "where", "coupled_rate",
     })
 
     _PERCELL_KERNEL_OPS = frozenset({
-        "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
+        "operator_call", "rhs", "source", "apply", "linear_combine", "linear_source", "solve_local_linear",
         "solve_local_nonlinear", "cell_compare", "where", "coupled_rate", "project", "fill_boundary",
     })
     _HEAVY_KERNEL_OPS = frozenset({

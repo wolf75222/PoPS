@@ -100,7 +100,7 @@ def main():
         return R, phi
 
     R_nat, phi_nat = fields(
-        lambda s: s.add_block("gas", spec, spatial=spatial, time=pops.Explicit()))
+        lambda s: s._add_block("gas", spec, spatial=spatial, time=pops.Explicit()))
     assert float(np.max(np.abs(R_nat))) > 1e-3, "residu natif trivial (setup du test)"
 
     tmp = tempfile.mkdtemp()
@@ -113,7 +113,7 @@ def main():
         co1 = m1.compile(backend="aot", so_path=os.path.join(tmp, "h1.so"), include=INCLUDE)
         assert co1.adder == "add_compiled_block"
         R1, phi1 = fields(
-            lambda s: s.add_equation("gas", co1, spatial=spatial, names=names))
+            lambda s: s._add_equation("gas", co1, spatial=spatial, names=names))
         dphi1 = float(np.max(np.abs(phi1 - phi_nat)))
         dres1 = float(np.max(np.abs(R1 - R_nat)))
         assert dphi1 < 1e-9, "sens 1 : potentiel hybride != natif (%.2e)" % dphi1
@@ -128,7 +128,7 @@ def main():
         assert m2.n_vars == 3
         co2 = m2.compile(backend="aot", so_path=os.path.join(tmp, "h2.so"), include=INCLUDE)
         R2, phi2 = fields(
-            lambda s: s.add_equation("gas", co2, spatial=spatial, names=names))
+            lambda s: s._add_equation("gas", co2, spatial=spatial, names=names))
         dphi2 = float(np.max(np.abs(phi2 - phi_nat)))
         dres2 = float(np.max(np.abs(R2 - R_nat)))
         assert dphi2 < 1e-9, "sens 2 : potentiel hybride != natif (%.2e)" % dphi2
@@ -138,7 +138,7 @@ def main():
 
         # --- (C) le bloc hybride AVANCE dans le System (masse conservee en periodique) ---
         adv = pops.System(n=n, L=L, periodic=True)
-        adv.add_equation("gas", co1, spatial=spatial, names=names)
+        adv._add_equation("gas", co1, spatial=spatial, names=names)
         adv.set_poisson(rhs="charge_density", solver="geometric_mg")
         adv.set_state("gas", Uflat)
         mass0 = float(np.array(adv.get_state("gas")).reshape(3, n, n)[0].sum())
@@ -154,7 +154,7 @@ def main():
         # (les noms/roles viennent des metadonnees du .so). Chemin de prod (MPI par construction).
         co1p = m1.compile(backend="production", so_path=os.path.join(tmp, "h1p.so"), include=INCLUDE)
         assert co1p.adder == "add_native_block" and co1p.caps["mpi"] is True
-        R1p, phi1p = fields(lambda s: s.add_equation("gas", co1p, spatial=spatial))
+        R1p, phi1p = fields(lambda s: s._add_equation("gas", co1p, spatial=spatial))
         dphi1p = float(np.max(np.abs(phi1p - phi_nat)))
         dres1p = float(np.max(np.abs(R1p - R_nat)))
         assert dphi1p < 1e-9, "production : potentiel hybride != natif (%.2e)" % dphi1p
@@ -167,7 +167,7 @@ def main():
         co1j = m1.compile(backend="prototype", so_path=os.path.join(tmp, "h1j.so"), include=INCLUDE)
         assert co1j.adder == "add_dynamic_block"
         jit = pops.System(n=n, L=L, periodic=True)
-        jit.add_equation("gas", co1j, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
+        jit._add_equation("gas", co1j, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                          names=names)
         jit.set_poisson(rhs="charge_density", solver="geometric_mg")
         jit.set_state("gas", Uflat)

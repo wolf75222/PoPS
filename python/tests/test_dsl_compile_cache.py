@@ -161,7 +161,7 @@ def end_to_end_checks():
 
             # (b) branchable via add_equation et tourne
             s = pops.System(n=n, periodic=True)
-            s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
+            s._add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                variables=Primitive()))
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
             s.set_state("gas", initial_state(n))
@@ -193,7 +193,7 @@ def end_to_end_checks():
         cm_ex = m.compile(ex_path, INCLUDE, backend="aot")
         assert cm_ex.so_path == ex_path and os.path.exists(ex_path), "so_path explicite casse"
         s = pops.System(n=n, periodic=True)
-        s.add_equation("gas", cm_ex, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
+        s._add_equation("gas", cm_ex, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                               variables=Primitive()))
         s.set_poisson(rhs="charge_density", solver="geometric_mg")
         s.set_state("gas", initial_state(n))

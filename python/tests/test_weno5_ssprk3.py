@@ -59,7 +59,7 @@ def smooth_rho(n):
 
 def run(n, limiter, flux, method, nsteps=10, cfl=0.2):
     s = pops.System(n=n, L=1.0, periodic=True)
-    s.add_block("gas", model=gas(),
+    s._add_block("gas", model=gas(),
                 spatial=pops.Spatial(limiter=limiter, flux=flux),
                 time=pops.Explicit(method=method))
     s.set_poisson()
@@ -79,7 +79,7 @@ m0 = float(smooth_rho(n).sum())
 chk(abs(sw.mass("gas") - m0) < 1e-7 * abs(m0), "weno5 : masse conservee")
 # raccourci weno5=True + flux hllc
 sw2 = pops.System(n=32, L=1.0, periodic=True)
-sw2.add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=HLLC()),
+sw2._add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=HLLC()),
               time=pops.Explicit(ssprk3=True))
 sw2.set_poisson(); sw2.set_density("gas", smooth_rho(32))
 for _ in range(8):
@@ -101,7 +101,7 @@ s_def = run(64, Minmod(), Rusanov(), "ssprk2")  # method explicite mais == defau
 d_def = np.array(s_def.density("gas"))
 # Reference : memes etapes, en laissant TOUS les defauts implicites (Spatial(), Explicit()).
 s_ref = pops.System(n=64, L=1.0, periodic=True)
-s_ref.add_block("gas", model=gas())  # spatial/time None -> Spatial() (minmod) + Explicit() (ssprk2)
+s_ref._add_block("gas", model=gas())  # spatial/time None -> Spatial() (minmod) + Explicit() (ssprk2)
 s_ref.set_poisson(); s_ref.set_density("gas", smooth_rho(64))
 for _ in range(10):
     s_ref.step_cfl(0.2)
@@ -116,7 +116,7 @@ chk(np.array_equal(d_def, d_ref),
 # lisse de longue duree, et un bloc weno5 et un bloc minmod (defaut) coexistent dans le meme System.
 print("== WENO5+SSPRK3 sain (long run lisse) + coexistence avec le defaut ==")
 s_w5 = pops.System(n=64, L=1.0, periodic=True)
-s_w5.add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
+s_w5._add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
 s_w5.set_poisson(); s_w5.set_density("gas", smooth_rho(64))
 m_w5_0 = s_w5.mass("gas")
 for _ in range(40):
@@ -126,8 +126,8 @@ chk(np.isfinite(d_w5).all() and d_w5.min() > 0, "WENO5+SSPRK3 long run : fini, d
 chk(abs(s_w5.mass("gas") - m_w5_0) < 1e-9 * abs(m_w5_0),
     "WENO5+SSPRK3 long run : masse conservee (flux conservatif)")
 mix = pops.System(n=32, L=1.0, periodic=True)
-mix.add_block("hi", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
-mix.add_block("lo", model=gas(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+mix._add_block("hi", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
+mix._add_block("lo", model=gas(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
 mix.set_poisson(); mix.set_density("hi", smooth_rho(32)); mix.set_density("lo", smooth_rho(32))
 for _ in range(6):
     mix.step_cfl(0.2)

@@ -12,10 +12,9 @@ named operator is referenced as a typed object, NOT a bare string::
 
 The handle is the public :meth:`pops.time.Program.call` selector: the public ``P.call``
 REQUIRES an ``OperatorHandle`` (a bare string operator name is refused). The handle resolves
-through the registry lookup + lowering identical to the internal name path, so
-``P.call(handle, ...)`` builds the byte-identical IR (same ``_ir_hash``) as the internal
-``P._call(name, ...)`` the lib.time macros / lowering use. The handle holds no Program
-reference, so the same handle works in any Program bound to a registry that declares its name.
+through the registry lookup and records a typed operator-call IR node. The handle holds no
+Program reference, so the same handle works in any Program bound to a registry that declares
+its name.
 
 This module imports only the standard library, so it stays codegen-free and ``_pops``-free
 and keeps the ``pops.time`` import graph acyclic (``pops.time`` already imports

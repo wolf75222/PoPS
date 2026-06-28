@@ -46,7 +46,7 @@ def _program(name="intro_demo", *, krylov=False):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f = P.solve_fields("phi", U)
+    f = P._solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     if krylov:
         # A matrix-free Krylov solve (op x = rhs): lowers to a solve_linear IR node.

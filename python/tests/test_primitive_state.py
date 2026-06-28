@@ -54,7 +54,7 @@ def test_compressible():
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s.add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     assert s.variable_names("e", "primitive") == ["rho", "u", "v", "p"]
 
     err = _roundtrip_err(s, "e", rho=rho, u=u, v=v, p=p)
@@ -82,7 +82,7 @@ def test_isothermal():
                      transport=pops.IsothermalFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s.add_block("g", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("g", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     assert s.variable_names("g", "primitive") == ["rho", "u", "v"]
 
     err = _roundtrip_err(s, "g", rho=rho, u=u, v=v)
@@ -106,7 +106,7 @@ def test_scalar():
     spec = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s.add_block("q", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("q", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     name = s.variable_names("q", "primitive")[0]
     err = _roundtrip_err(s, "q", **{name: rho})
     assert err < 1e-15, "scalaire : round-trip (identite) non exact (%.2e)" % err
@@ -120,7 +120,7 @@ def test_set_density_unchanged():
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s.add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     s.set_density("e", rho)
     U = np.array(s.get_state("e")).reshape(4, N, N)
     assert float(np.max(np.abs(U[0] - rho))) < 1e-15, "set_density : densite incorrecte"
@@ -136,7 +136,7 @@ def test_errors():
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s.add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
 
     try:
         s.set_primitive_state("e", rho=rho, u=u, v=v, p=p, bogus=p)

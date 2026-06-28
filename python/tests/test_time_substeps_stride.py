@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compiled time-program macro-step cadence: substeps + stride (epic ADC-399 / ADC-411).
 
-`pops.CompiledTime(substeps=, stride=)` records a SYSTEM-level cadence applied AROUND the opaque
+`pops.time.CompiledTime(substeps=, stride=)` records a SYSTEM-level cadence applied AROUND the opaque
 compiled-program closure (`System.set_program_cadence`, mirroring the native per-block advance loop):
   - substeps=n  -> program_step_(eff_dt/n) called n times (subdivides the effective step);
   - stride=M    -> the whole program runs ONCE per M macro-steps with eff_dt = M*dt (GLOBAL
@@ -59,18 +59,18 @@ def raises(exc_type, fn):
 
 # ---- (A) validation: pure Python, always runs ----
 print("== (A) CompiledTime substeps/stride validation (ADC-411) ==")
-ct2 = pops.CompiledTime(substeps=2)
+ct2 = pops.time.CompiledTime(substeps=2)
 chk(ct2.substeps == 2 and ct2.stride == 1, "CompiledTime(substeps=2) stores substeps (no raise)")
-cts = pops.CompiledTime(stride=2)
+cts = pops.time.CompiledTime(stride=2)
 chk(cts.stride == 2 and cts.substeps == 1, "CompiledTime(stride=2) stores stride (no raise)")
-chk(pops.CompiledTime(substeps=3, stride=4).substeps == 3
-    and pops.CompiledTime(substeps=3, stride=4).stride == 4,
+chk(pops.time.CompiledTime(substeps=3, stride=4).substeps == 3
+    and pops.time.CompiledTime(substeps=3, stride=4).stride == 4,
     "CompiledTime(substeps=3, stride=4) stores both")
-chk(raises(ValueError, lambda: pops.CompiledTime(substeps=0)), "substeps=0 rejected (ValueError)")
-chk(raises(ValueError, lambda: pops.CompiledTime(substeps=-1)), "substeps<0 rejected (ValueError)")
-chk(raises(ValueError, lambda: pops.CompiledTime(stride=0)), "stride=0 rejected (ValueError)")
-chk(raises(ValueError, lambda: pops.CompiledTime(stride=-2)), "stride<0 rejected (ValueError)")
-chk(raises(NotImplementedError, lambda: pops.CompiledTime(cfl="program")),
+chk(raises(ValueError, lambda: pops.time.CompiledTime(substeps=0)), "substeps=0 rejected (ValueError)")
+chk(raises(ValueError, lambda: pops.time.CompiledTime(substeps=-1)), "substeps<0 rejected (ValueError)")
+chk(raises(ValueError, lambda: pops.time.CompiledTime(stride=0)), "stride=0 rejected (ValueError)")
+chk(raises(ValueError, lambda: pops.time.CompiledTime(stride=-2)), "stride<0 rejected (ValueError)")
+chk(raises(NotImplementedError, lambda: pops.time.CompiledTime(cfl="program")),
     "cfl='program' self-computed sub-program still deferred (numeric cfl is now wired)")
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----
@@ -92,7 +92,7 @@ N = 24
 
 def make_sim(time):
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim._add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=time)
     sim.set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
@@ -105,7 +105,7 @@ def make_sim(time):
 def fe_program(name="fe_cadence"):
     P = adctime.Program(name)
     U = P.state("ions")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     return P
@@ -113,7 +113,7 @@ def fe_program(name="fe_cadence"):
 
 # Skip cleanly without the install_program / set_program_cadence binding (rebuild _pops).
 probe = pops.System(n=8, L=1.0, periodic=True)
-if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cadence"):
+if not hasattr(probe, "_install_program_so") or not hasattr(probe, "set_program_cadence"):
     _skip("_pops lacks install_program / set_program_cadence (rebuild _pops) (A passed)")
 
 try:
@@ -127,7 +127,7 @@ dt = 2e-3
 def run_compiled(cadence, n_steps, dt_step=dt):
     """Install the FE program, set the cadence, step n_steps macro-steps; returns (state, t)."""
     sim = make_sim(pops.Explicit(method="euler"))
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.set_program_cadence(cadence.substeps, cadence.stride)  # CompiledTime -> set_program_cadence
     for _ in range(n_steps):
         sim.step(dt_step)
@@ -136,7 +136,7 @@ def run_compiled(cadence, n_steps, dt_step=dt):
 
 # ----- SUBSTEPS: compiled CompiledTime(substeps=2) vs native pops.Explicit(euler, substeps=2) -----
 print("-- substeps --")
-sub2, _ = run_compiled(pops.CompiledTime(substeps=2), 1)
+sub2, _ = run_compiled(pops.time.CompiledTime(substeps=2), 1)
 
 nat = make_sim(pops.Explicit(method="euler", substeps=2))
 nat.step(dt)
@@ -147,20 +147,20 @@ chk(e_sub < 1e-12, "compiled substeps=2 == native pops.Explicit(euler, substeps=
 
 # Consistency: substeps=2 over dt == two compiled substeps=1 steps of dt/2 (the same FE sub-iteration
 # sequence; both re-run the inert solve_fields each call).
-half_twice, _ = run_compiled(pops.CompiledTime(substeps=1), 2, dt_step=dt / 2.0)
+half_twice, _ = run_compiled(pops.time.CompiledTime(substeps=1), 2, dt_step=dt / 2.0)
 e_half = float(np.abs(sub2 - half_twice).max())
 chk(e_half < 1e-12, "compiled substeps=2 (dt) == two compiled substeps=1 (dt/2) (max|d|=%.2e)"
     % e_half)
 
 # Non-degenerate: substeps=2 must DIFFER from substeps=1 (otherwise the orchestration is a no-op).
-sub1, _ = run_compiled(pops.CompiledTime(substeps=1), 1)
+sub1, _ = run_compiled(pops.time.CompiledTime(substeps=1), 1)
 d_sub = float(np.abs(sub2 - sub1).max())
 chk(d_sub > 1e-9, "substeps=2 differs from substeps=1 (non-degenerate, max|d|=%.2e)" % d_sub)
 
 # ----- STRIDE: single-block system, compiled stride=2 vs native pops.Explicit(stride=2) -----
 print("-- stride --")
 K = 4  # macro-steps (even -> ends on a catch-up window boundary)
-str2, t_str = run_compiled(pops.CompiledTime(stride=2), K)
+str2, t_str = run_compiled(pops.time.CompiledTime(stride=2), K)
 
 nat_s = make_sim(pops.Explicit(method="euler", stride=2))
 for _ in range(K):
@@ -175,7 +175,7 @@ chk(abs(t_str - K * dt) < 1e-14, "clock advanced every macro-step: t=%.6g == %d*
     % (t_str, K, K * dt))
 
 # Non-degenerate: stride=2 must DIFFER from stride=1 over the same K steps.
-str1, _ = run_compiled(pops.CompiledTime(stride=1), K)
+str1, _ = run_compiled(pops.time.CompiledTime(stride=1), K)
 d_str = float(np.abs(str2 - str1).max())
 chk(d_str > 1e-9, "stride=2 differs from stride=1 (non-degenerate, max|d|=%.2e)" % d_str)
 

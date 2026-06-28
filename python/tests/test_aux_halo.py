@@ -73,12 +73,12 @@ def test_capabilities_halo():
 
 def _cart_rhs(compiled, n, vx2d, halo):
     sim = pops.System(n=n, L=1.0, periodic=False)
-    sim.add_equation("a", model=compiled,
+    sim._add_equation("a", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit())
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
     sim.set_density("a", np.ones((n, n)))
-    sim.set_aux_field("a", "vx", vx2d, halo=halo)
+    sim._set_aux_field("a", "vx", vx2d, halo=halo)
     sim.solve_fields()
     # eval_rhs returns (n_vars, n*n) row-major; reshape the single scalar to (ny, nx) = (j, i).
     return np.array(sim.eval_rhs("a")).reshape(n, n)
@@ -132,10 +132,10 @@ def test_polar_halo():
 
         def rhs(halo):
             s = pops.System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
-            s.add_equation("a", model=compiled,
+            s._add_equation("a", model=compiled,
                            spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=pops.Explicit())
             s.set_density("a", np.ones((nth, nr)))
-            s.set_aux_field("a", "vx", vx, halo=halo)
+            s._set_aux_field("a", "vx", vx, halo=halo)
             s.solve_fields()
             return np.array(s.eval_rhs("a")).reshape(nth, nr)  # (theta=j, r=i)
 
@@ -172,10 +172,10 @@ def test_amr_halo():
 
         def stepped_density(halo):
             s = pops.AmrSystem(n=n, L=1.0, periodic=False)
-            s.add_equation("a", model=compiled, spatial=sp, time=pops.Explicit())
+            s._add_equation("a", model=compiled, spatial=sp, time=pops.Explicit())
             s.set_poisson(bc="dirichlet")
             s.set_density("a", np.ones((n, n)))
-            s.set_aux_field("a", "vx", vx, halo=halo)
+            s._set_aux_field("a", "vx", vx, halo=halo)
             s.step(1e-3)
             return np.array(s.density("a")).reshape(n, n)
 

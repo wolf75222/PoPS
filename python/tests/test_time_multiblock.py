@@ -120,7 +120,7 @@ def section_a(t):
     Pro = t.Program("readonly_b")
     Ua = Pro.state("a")
     Ub = Pro.state("b")  # noqa: F841 -- declared, read by the coupled charge but never committed
-    fa = Pro.solve_fields(Ua)
+    fa = Pro._solve_fields(Ua)
     Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
     Pro.commit("a", Pro.linear_combine("a1", Ua + Pro.dt * Ra))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
@@ -229,7 +229,7 @@ def section_b(t):
                 cm = passive_model("blk_" + blk).compile(backend="production")
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
-            sim.add_equation(blk, cm,
+            sim._add_equation(blk, cm,
                              spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                              time=pops.Explicit(method="euler"))
         return sim
@@ -237,13 +237,13 @@ def section_b(t):
     # Reference: two INDEPENDENT single-block systems.
     sim_a = make_sim(["a"])
     sim_a.set_state("a", ic_a[None, :, :])
-    sim_a.install_program(comp_a.so_path)
+    sim_a._install_program_so(comp_a.so_path)
     sim_a.step(dt)
     ref_a = np.array(sim_a.get_state("a"))
 
     sim_b = make_sim(["b"])
     sim_b.set_state("b", ic_b[None, :, :])
-    sim_b.install_program(comp_b.so_path)
+    sim_b._install_program_so(comp_b.so_path)
     sim_b.step(dt)
     ref_b = np.array(sim_b.get_state("b"))
 
@@ -251,7 +251,7 @@ def section_b(t):
     sim_ab = make_sim(["a", "b"])
     sim_ab.set_state("a", ic_a[None, :, :])
     sim_ab.set_state("b", ic_b[None, :, :])
-    sim_ab.install_program(comp_ab.so_path)
+    sim_ab._install_program_so(comp_ab.so_path)
     sim_ab.step(dt)
     got_a = np.array(sim_ab.get_state("a"))
     got_b = np.array(sim_ab.get_state("b"))

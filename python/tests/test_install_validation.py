@@ -60,7 +60,7 @@ def _program(name="installval_demo"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f = P.solve_fields("phi", U)
+    f = P._solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
@@ -149,7 +149,7 @@ def test_install_raises_before_native_when_required_missing():
     cp = _compiled(aux_names=("B_z",), params=params)
     sim = pops.System(n=N, L=1.0, periodic=True)
     called = {"native": False}
-    sim.install_program = lambda *a, **k: called.__setitem__("native", True)
+    sim._install_program_so = lambda *a, **k: called.__setitem__("native", True)
     try:
         sim._install_compiled(cp, instances={"plasma": {"model": _model(params=params),
                                               "initial": np.ones((3, N, N))}})
@@ -166,7 +166,7 @@ def test_install_missing_instance_is_flagged():
     print("== System._install_compiled flags a missing required instance ==")
     cp = _compiled(aux_names=())  # no aux, no params -> only the 'plasma' instance is required
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.install_program = lambda *a, **k: None
+    sim._install_program_so = lambda *a, **k: None
     try:
         sim._install_compiled(cp, instances={})  # 'plasma' neither passed nor added
         chk(False, "install should have raised for the missing 'plasma' instance")
@@ -182,10 +182,10 @@ def _stub_lower_layer(sim, record):
     methods need stubbing."""
     record.setdefault("blocks", [])
     record.setdefault("native", False)
-    sim.add_equation = lambda name, model, **k: record["blocks"].append(name)
+    sim._add_equation = lambda name, model, **k: record["blocks"].append(name)
     sim.set_state = lambda *a, **k: None
     sim._install_solver = lambda *a, **k: None
-    sim.install_program = lambda *a, **k: record.__setitem__("native", True)
+    sim._install_program_so = lambda *a, **k: record.__setitem__("native", True)
     sim.block_names = lambda: list(record["blocks"])
 
 
@@ -326,11 +326,11 @@ def _stub_amr_lower_layer(amr, record):
     record.setdefault("installed", False)
     record.setdefault("params", [])
     record.setdefault("cadence", None)
-    amr.add_equation = lambda name, model, **k: record["blocks"].append(name)
+    amr._add_equation = lambda name, model, **k: record["blocks"].append(name)
     amr.set_density = lambda *a, **k: None
     amr._install_solver = lambda *a, **k: None
     amr._install_aux = lambda *a, **k: None
-    amr.install_program = lambda *a, **k: record.__setitem__("installed", True)
+    amr._install_program_so = lambda *a, **k: record.__setitem__("installed", True)
     amr.set_program_params = lambda blk, values: record["params"].append((blk, list(values)))
     amr.set_program_cadence = lambda substeps, stride: record.__setitem__("cadence", (substeps, stride))
     amr.block_names = lambda: list(record["blocks"])

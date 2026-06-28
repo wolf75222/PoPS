@@ -40,7 +40,7 @@ def _program(name="manifest_demo"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f = P.solve_fields("phi", U)
+    f = P._solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P

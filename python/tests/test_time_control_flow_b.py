@@ -178,7 +178,7 @@ def _run_section_b(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B) skipped: _pops lacks install_program (rebuild _pops) --")
         return None
 
@@ -205,13 +205,13 @@ def _run_section_b(t):
         except RuntimeError as exc:
             print("-- (B) skipped: model compile failed: %s --" % str(exc)[:140])
             return None
-        s.add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+        s._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                        time=pops.Explicit(method="euler"))
         x = (np.arange(n) + 0.5) / n
         X, Y = np.meshgrid(x, x, indexing="ij")
         rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
         s.set_state("blk", np.stack([rho0]))
-        s.install_program(handle.so_path)
+        s._install_program_so(handle.so_path)
         s.step(0.05)  # dt irrelevant: the body is dt-free
         return rho0, np.array(s.get_state("blk"))[0]
 

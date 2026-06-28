@@ -85,7 +85,7 @@ class _SourceMixin:
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3): an
         inert typed reference (``.name`` / ``.kind == "local_source"``) a Program can pass to
-        ``P.call`` in place of the string name, lowering to the byte-identical IR."""
+        ``P.call`` in place of the string name."""
         n = self.n_vars
         if n == 0:
             raise ValueError("source_term(%r): declare conservative_vars(...) first" % (name,))
@@ -119,7 +119,7 @@ class _SourceMixin:
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3): an
         inert typed reference (``.name`` / ``.kind == "local_linear_operator"``) a Program can pass to
-        ``P.call`` in place of the string name, lowering to the byte-identical IR."""
+        ``P.call`` in place of the string name."""
         n = self.n_vars
         if n == 0:
             raise ValueError("linear_source(%r): declare conservative_vars(...) first" % (name,))
@@ -147,17 +147,15 @@ class _SourceMixin:
 
     def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None):
         """Declare a NAMED composite rate operator ``R_name = -div F + sum(sources)`` (Spec 2,
-        operator-first). It is a Program-side ALIAS for ``ctx.rhs(flux=, sources=, fluxes=)``: a typed
-        ``P.call(name, U[, fields])`` lowers to the SAME rhs IR as the explicit ``P.rhs(...)`` shortcut,
-        so a model-free Program can address the RHS by one operator name instead of spelling out
-        flux/sources. The alias carries no new numerics (its flux/sources are already in the model and
-        the hash) -- it never enters the model hash nor the codegen. ``flux`` / ``sources`` / ``fluxes``
-        have the same meaning as :meth:`Program.rhs`. ``name`` must be a valid identifier, unique among
-        rate operators, and must not collide with a source_term / linear_source.
+        operator-first). It carries the transport/source selection that codegen lowers from a typed
+        ``P.call(handle, U[, fields])`` to C++ ``ProgramContext`` routes. The alias carries no new
+        numerics (its flux/sources are already in the model and the hash) -- it never enters the model
+        hash. ``name`` must be a valid identifier, unique among rate operators, and must not collide
+        with a source_term / linear_source.
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3): an
-        inert typed reference (``.name`` / ``.kind == "local_rate"``) a Program can pass to ``P.call``
-        in place of the string name, lowering to the byte-identical IR."""
+        inert typed reference (``.name`` / ``.kind == "local_rate"``) a Program can pass to
+        ``P.call`` in place of the string name."""
         if self.n_vars == 0:
             raise ValueError("rate_operator(%r): declare conservative_vars(...) first" % (name,))
         if not (isinstance(name, str) and name.isidentifier()):

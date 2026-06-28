@@ -228,7 +228,7 @@ def _lorentz_model(name="adc466_model"):
 def _lie_program(name="adc466_prog"):
     P = adctime.Program(name)
     u = P.state("plasma")
-    fields = P.solve_fields(u)
+    fields = P._solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     return P
@@ -444,7 +444,7 @@ def test_install_native_end_to_end_kokkos():
     sim_manual = pops.System(n=N, L=1.0, periodic=True)
     sim_manual.set_poisson(solver="geometric_mg")
     resolved = sim_manual._resolve_instance_model(m)
-    sim_manual.add_equation("plasma", resolved, spatial=_fv(), time=pops.Explicit(method="euler"))
+    sim_manual._add_equation("plasma", resolved, spatial=_fv(), time=pops.Explicit(method="euler"))
     sim_manual.set_magnetic_field(bz)
     sim_manual.set_state("plasma", u0)
 

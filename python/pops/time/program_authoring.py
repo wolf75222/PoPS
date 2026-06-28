@@ -486,7 +486,7 @@ class _ProgramAuthoring(_ProgramConstants):
         if not (isinstance(result, Value) and result.vtype == "scalar"):
             raise ValueError("set_dt_bound: the body must return a Scalar value (e.g. "
                              "cfl * P.hmin() / P.max_wave_speed(U)); got %r" % (result,))
-        # The dt_bound is a READ-ONLY scalar program: it may READ state / fields (P.state, P.solve_fields)
+        # The dt_bound is a READ-ONLY scalar program: it may READ state / fields (P.state, field handles)
         # and produce scalars (reductions, hmin, max_wave_speed, cfl, scalar arithmetic, comparisons),
         # but it must NOT write a field or commit -- a flux / linear_combine / source / projection in it
         # is rejected fail-loud (it would mutate the state during the CFL dt evaluation).

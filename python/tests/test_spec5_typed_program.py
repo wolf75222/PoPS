@@ -9,10 +9,11 @@ De-stringing the time Program is the ONE public path -- not an opt-in. By DEFAUL
     ``flux=``/``sources=``/``fluxes=`` boolean/name form (and a bare ``P.rhs``) is REFUSED with a
     clear ``TypeError`` naming ``terms=``.
 
-The legacy string operator name + ``flux=``/``sources=`` builders survive ONLY as the INTERNAL
-``P._call`` / ``P._rhs_legacy`` (prefixed ``_``, undocumented): the typed front doors and the
-``pops.lib.time`` macros lower through them, and the typed path builds the BYTE-IDENTICAL IR (same
-``Program._ir_hash``) as the private path. There is no second public path and no enable flag.
+The legacy string operator name + ``flux=``/``sources=`` builders survive ONLY as INTERNAL
+``P._call`` / ``P._rhs_legacy`` (prefixed ``_``, undocumented). The public typed ``P.call`` and
+the internal ``P._call`` both record first-class ``operator_call`` nodes; only the package macros
+that intentionally build primitive schemes still use ``_rhs_legacy``. There is no second public
+path and no enable flag.
 
 Pure Python (``_ir_hash`` is the IR fingerprint; no compilation, no ``_pops``); skips cleanly if
 pops is not importable. Never fakes the engine.
@@ -104,25 +105,26 @@ def test_call_handle_byte_identical_to_private_name():
     print("OK  P.call(handle) IR == P._call(name) IR: %s" % public)
 
 
-# --- criterion 27: P.rhs requires terms= ---------------------------------------------------------
+# --- criterion 27: no public P.rhs; internal _rhs_terms requires terms= --------------------------
 
 def test_rhs_rejects_legacy_flux_sources():
-    """P.rhs(flux=True) / P.rhs(sources=[...]) / P.rhs(fluxes=[...]) / a bare P.rhs(state=U) are all
-    refused with a clear TypeError naming P.rhs(terms=[...]) (criterion 27)."""
+    """There is no public P.rhs. The internal typed-term helper refuses legacy flux/sources kwargs,
+    while _rhs_legacy remains the primitive internal lowering target."""
     m, _ = build_model()
     P = adctime.Program("p")
     U = P.state("plasma")
-    f = P.solve_fields(U)
-    msg = "P.rhs requires the typed terms="
+    f = P._solve_fields(U)
+    msg = "_rhs_terms requires terms="
+    assert not hasattr(P, "rhs")
     with pytest.raises(TypeError, match=msg):
-        P.rhs("R", state=U, fields=f, flux=True)
+        P._rhs_terms("R", state=U, fields=f, flux=True)
     with pytest.raises(TypeError, match=msg):
-        P.rhs("R", state=U, fields=f, sources=["electric"])
+        P._rhs_terms("R", state=U, fields=f, sources=["electric"])
     with pytest.raises(TypeError, match=msg):
-        P.rhs("R", state=U, fields=f, fluxes=["default"])
+        P._rhs_terms("R", state=U, fields=f, fluxes=["default"])
     with pytest.raises(TypeError, match=msg):
-        P.rhs("R", state=U, fields=f)  # the bare legacy default is the bool/name form too
-    print("OK  P.rhs(flux=/sources=/fluxes=/bare) -> TypeError naming terms=")
+        P._rhs_terms("R", state=U, fields=f)
+    print("OK  no P.rhs; _rhs_terms(flux=/sources=/fluxes=/bare) -> TypeError naming terms=")
 
 
 def _rhs_program(*, terms=None, legacy=None):
@@ -130,9 +132,9 @@ def _rhs_program(*, terms=None, legacy=None):
     the INTERNAL _rhs_legacy (a (flux, sources) pair)."""
     P = adctime.Program("rhs")
     U = P.state("plasma")
-    f = P.solve_fields(U)
+    f = P._solve_fields(U)
     if terms is not None:
-        R = P.rhs("R", state=U, fields=f, terms=terms)
+        R = P._rhs_terms("R", state=U, fields=f, terms=terms)
     else:
         flux, sources = legacy
         R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
@@ -141,10 +143,10 @@ def _rhs_program(*, terms=None, legacy=None):
 
 
 def test_rhs_accepts_terms():
-    """P.rhs(terms=[Flux(), source]) is the allowed typed spelling."""
+    """P._rhs_terms(terms=[Flux(), source]) is the internal typed-term spelling."""
     P = _rhs_program(terms=[Flux(), "electric"])
     P.validate()
-    print("OK  P.rhs(terms=[Flux(), 'electric']) accepted + validates")
+    print("OK  P._rhs_terms(terms=[Flux(), 'electric']) accepted + validates")
 
 
 def test_rhs_terms_byte_identical_to_private_legacy():
@@ -153,21 +155,21 @@ def test_rhs_terms_byte_identical_to_private_legacy():
     public = _rhs_program(terms=[Flux(), "electric"])._ir_hash()
     private = _rhs_program(legacy=(True, ["electric"]))._ir_hash()
     assert public == private, (public, private)
-    print("OK  P.rhs(terms=) IR == P._rhs_legacy(flux=,sources=) IR: %s" % public)
+    print("OK  P._rhs_terms(terms=) IR == P._rhs_legacy(flux=,sources=) IR: %s" % public)
 
 
 # --- the typed-call internal lowering is one public path (no leak through P.rhs) -----------------
 
-def test_typed_call_lowers_through_private_rhs():
-    """A typed P.call rate operator lowers INTERNALLY through P._rhs_legacy (not the public P.rhs),
-    so the public reject never sees the internal lowering: the rate program (whose rhs is built by
-    P.call) compiles cleanly and is byte-identical to the private name path."""
+def test_typed_call_records_operator_call_not_rhs():
+    """A typed P.call rate operator records operator_call IR, not a private rhs node."""
     m, h = build_model()
     typed = _rate_program(m, selector=h["explicit_rhs"], fields_selector=_FIELDS)
     typed.validate()
     private = _rate_program(m, selector="explicit_rhs", fields_selector="fields_from_state")
     assert typed._ir_hash() == private._ir_hash()
-    print("OK  P.call lowering through P._rhs_legacy is byte-identical + validates")
+    assert any(v.op == "operator_call" for v in typed._values)
+    assert not any(v.op == "rhs" for v in typed._values)
+    print("OK  P.call records operator_call IR and validates")
 
 
 # --- a lib.time macro authors through the private path and stays green ---------------------------

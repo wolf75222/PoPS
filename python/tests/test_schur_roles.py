@@ -49,7 +49,7 @@ def build(n=20, B0=4.0, schur=None, steps=4):
     sim = pops.System(n=n, L=1.0, periodic=False)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
-    sim.add_equation("e", model=iso_model(),
+    sim._add_equation("e", model=iso_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                      time=pops.Split(hyperbolic=pops.Explicit(),
                                     source=schur or pops.CondensedSchur(theta=1.0, alpha=3.0)))
@@ -82,7 +82,7 @@ print("== (3) polaire : overrides cables (ctor a composantes explicites) ==")
 psim = pops.System(mesh=pops.PolarMesh(r_min=0.5, r_max=1.0, nr=16, ntheta=16))
 psim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
 psim.set_magnetic_field(4.0 * np.ones(16 * 16))
-psim.add_equation("e", model=iso_model(),
+psim._add_equation("e", model=iso_model(),
                   spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                   time=pops.Split(hyperbolic=pops.Explicit(),
                                  source=pops.CondensedSchur(theta=1.0, alpha=3.0,
@@ -100,7 +100,7 @@ amr = pops.AmrSystem(n=16, L=1.0, periodic=False, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
 amr.set_refinement(1e30)
 amr.set_magnetic_field(4.0 * np.ones((16, 16)))
-amr.add_equation("e", model=iso_model(),
+amr._add_equation("e", model=iso_model(),
                  spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                  time=pops.Split(hyperbolic=pops.Explicit(),
                                 source=pops.CondensedSchur(theta=1.0, alpha=3.0,
@@ -119,7 +119,7 @@ amr2.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
 amr2.set_refinement(1e30)
 amr2.set_magnetic_field(4.0 * np.ones((16, 16)))
 try:
-    amr2.add_equation("e", model=iso_model(),
+    amr2._add_equation("e", model=iso_model(),
                       spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                       time=pops.Split(hyperbolic=pops.Explicit(),
                                      source=pops.CondensedSchur(theta=1.0, alpha=3.0,

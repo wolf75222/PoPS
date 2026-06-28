@@ -194,7 +194,7 @@ def _run_section_b(t):
 
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
@@ -215,7 +215,7 @@ def _run_section_b(t):
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
 
@@ -224,7 +224,7 @@ def _run_section_b(t):
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_state("blk", np.stack([rho0]))
 
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     dt = 0.01
     nsteps = 5
     for _ in range(nsteps):
@@ -259,7 +259,7 @@ def _run_section_c(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (C) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
@@ -282,11 +282,11 @@ def _run_section_c(t):
     except RuntimeError as exc:
         print("-- (C) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     sim.set_state("blk", np.stack([np.ones((n, n))]))
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     try:
         sim.step(0.01)
     except RuntimeError as exc:

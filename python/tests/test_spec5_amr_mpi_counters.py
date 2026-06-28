@@ -56,8 +56,8 @@ def _built_multiblock(n=64, regrid_every=1):
     corner and the refinement tags on energy (role) so the union regrid forms a real fine patch.
     """
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
-    sim.add_block("gas0", _comp(), time=pops.Explicit())
-    sim.add_block("gas1", _comp(), time=pops.Explicit())
+    sim._add_block("gas0", _comp(), time=pops.Explicit())
+    sim._add_block("gas1", _comp(), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
     sim.set_refinement(6.0, role="energy")  # tag where E > 6 -> the bottom-left bump refines
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))

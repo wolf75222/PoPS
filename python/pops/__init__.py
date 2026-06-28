@@ -60,7 +60,7 @@ __all__ = [
     "NoSource", "PotentialForce", "GravityForce", "MagneticLorentzForce", "PotentialMagneticForce",
     "ChargeDensity", "BackgroundDensity", "GravityCoupling",
     "Spatial", "FiniteVolume", "Explicit", "IMEX", "IMEXRK", "SourceImplicit", "SourceImplicitBE",
-    "Split", "Strang", "CondensedSchur", "ElectrostaticLorentzSchur", "Role", "integrate",
+    "Split", "Strang", "CondensedSchur", "ElectrostaticLorentzSchur", "Role",
     "Dirichlet", "Neumann", "Periodic",
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
@@ -70,14 +70,14 @@ __all__ = [
     "params", "output", "external", "fields", "linalg", "solvers", "experimental",
     "abi_key", "capabilities", "inspect_capabilities", "inspect_amr",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
-    "compile_problem", "CompiledProblem", "CompiledTime",
+    "compile_problem", "CompiledProblem",
     "compile_library", "read_library_manifest", "LibraryManifest",
     "Case", "PhysicsModel", "compile", "bind",
 ]
 
 
-# Lower / authoring layers + the moved integrate (re-exported, surface unchanged).
-from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
+# Lower / authoring layers. Runtime helpers such as pops.runtime.integrate are not re-exported:
+# Python may orchestrate, but it must not advertise a public numerical integration loop.
 from . import time  # noqa: E402  (pops.time.Program IR; pure stdlib, no numpy/_pops dependency)
 from . import model  # noqa: E402  (pops.model operator-first type system; pure stdlib, Spec 2)
 from . import math  # noqa: E402  (pops.math board operators; pure stdlib, Spec 3, dsl lazy)
@@ -95,7 +95,6 @@ from .case import Case  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilabl
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
     LibraryManifest, compile_library, read_library_manifest)
-from .time import CompiledTime  # noqa: E402,F401  (re-export: compiled-Program time policy)
 from ._capabilities import inspect_capabilities, inspect_amr  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + AMR report)
 
 

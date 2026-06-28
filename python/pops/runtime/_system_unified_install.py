@@ -86,6 +86,14 @@ class _SystemUnifiedInstall:
     from a compiled Case/layout. Both routes intentionally share one implementation.
     """
 
+    def _install_program_so(self, so_path):
+        """Install a compiled Program shared object through the native runtime.
+
+        The public ``install_program`` name is intentionally not exposed on ``System``; this private
+        indirection keeps the install seam testable without reopening the old API.
+        """
+        return self._s.install_program(so_path)
+
     def install(self, compiled=None, *, instances=None, params=None, aux=None,
                 solvers=None, cadence=None, outputs=None):
         """Public Spec-4 install entry point.
@@ -143,7 +151,7 @@ class _SystemUnifiedInstall:
             set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
             any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
             through the shared system elliptic solver; a field name no model declares raises (typo).
-        @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's macro-step
+        @param cadence optional pops.time.CompiledTime(substeps=, stride=): the compiled Program's macro-step
             cadence, applied with set_program_cadence AFTER install_program. A compiled Program is ONE
             whole-system closure, so its cadence is GLOBAL (one program-level value). A numeric
             cadence.cfl is applied at runtime by sim.run(cfl=) (the cadence pins it on the System so a
@@ -212,7 +220,7 @@ class _SystemUnifiedInstall:
             time = spec.get("time")
             # Capability check (section 24): the selected Riemann flux must be backed by the model.
             self._validate_riemann_capability(model, spatial)
-            self.add_equation(name, model, spatial=spatial, time=time)
+            self._add_equation(name, model, spatial=spatial, time=time)
             initial = spec.get("initial")
             if initial is not None:
                 self.set_state(name, initial)
@@ -236,7 +244,7 @@ class _SystemUnifiedInstall:
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
         # NATIVE mode (compiled=None) there is no Program -- the step-2 blocks drive the native loop.
         if so_path is not None:
-            self.install_program(so_path)
+            self._install_program_so(so_path)
             # (5b) COMPILED-PROGRAM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params (the
             # ones no AOT instance consumed in 4) to the per-PROGRAM-block set_program_params, AFTER
             # install_program seeded each block's declaration defaults. A runtime param read by the
@@ -295,7 +303,7 @@ class _SystemUnifiedInstall:
         CompiledTime, so it never reaches here."""
         from pops.time.program import CompiledTime
         if not isinstance(cadence, CompiledTime):
-            raise TypeError("install(cadence=): expected a pops.CompiledTime(substeps=, stride=), "
+            raise TypeError("install(cadence=): expected a pops.time.CompiledTime(substeps=, stride=), "
                             "got %r" % type(cadence).__name__)
         if isinstance(cadence.cfl, (int, float)):
             # Pin the numeric cfl so run() with no explicit cfl= uses it (not a silent no-op).
@@ -451,7 +459,7 @@ class _SystemUnifiedInstall:
             raise ValueError(
                 "install: aux field %r is not declared by any installed instance; add the instance "
                 "with a model declaring m.aux_field(%r)." % (field_name, field_name))
-        self.set_aux_field(block, field_name, field)
+        self._set_aux_field(block, field_name, field)
 
     def _block_declaring_aux(self, field_name):
         """The block whose named-aux table declares @p field_name, or None."""

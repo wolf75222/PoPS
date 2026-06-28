@@ -140,7 +140,7 @@ def make_sim():
         compiled_model = lorentz_model("lorentz_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("plasma", compiled_model,
+    sim._add_equation("plasma", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     bz = 3.0
@@ -164,7 +164,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
 chk(compiled.program_name == "lorentz_step", "handle carries the program name")
 
 prog, bz, U0 = make_sim()
-prog.install_program(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
+prog._install_program_so(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
 prog.step(dt)
 U = np.array(prog.get_state("plasma"))
 

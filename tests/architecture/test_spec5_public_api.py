@@ -82,19 +82,57 @@ def test_python_flux_is_reachable_only_under_experimental():
     assert getattr(pops.experimental, "__experimental__", False) is True
 
 
-def test_install_is_not_the_public_path():
-    # Spec 5 sec.11 (epic ADC-479, item #3): `install` is no longer a public method on
-    # System / AmrSystem; the internal seam is `_install_compiled`, and pops.bind is the
-    # documented entry. The public surface advertises pops.compile / pops.bind, not install.
+def test_install_is_the_explicit_runtime_path():
+    # Corrective spec: the high-level path remains pops.compile / pops.bind, but the explicit
+    # runtime API is sim.install(...). The old install_program binding is lower-level plumbing.
     sim = pops.System()
-    assert not hasattr(sim, "install"), "System.install must be gone (renamed to _install_compiled)"
+    assert hasattr(sim, "install"), "System.install must be the explicit runtime install API"
     assert hasattr(sim, "_install_compiled"), "the internal install seam is _install_compiled"
     amr = pops.AmrSystem(n=8, L=1.0)
-    assert not hasattr(amr, "install"), "AmrSystem.install must be gone (renamed to _install_compiled)"
+    assert hasattr(amr, "install"), "AmrSystem.install must mirror System.install"
     assert hasattr(amr, "_install_compiled"), "AmrSystem keeps the internal _install_compiled seam"
-    # The documented public entry points are pops.compile / pops.bind (not install / install_program).
+    # The documented top-level entry points are pops.compile / pops.bind; install is a System method,
+    # never a top-level function.
     assert "compile" in pops.__all__ and "bind" in pops.__all__
     assert "install" not in pops.__all__ and "install_program" not in pops.__all__
+
+
+def test_legacy_runtime_setters_are_not_public():
+    # These names exist only as private lowering seams or native internals. They must not be public
+    # Python methods because the public route is compile/bind or explicit sim.install(...).
+    for sim in (pops.System(), pops.AmrSystem(n=8, L=1.0)):
+        for forbidden in (
+            "add_block",
+            "add_equation",
+            "install_program",
+            "initialize_compiled_program",
+            "set_param",
+            "set_aux_field",
+            "set_field_solver",
+        ):
+            assert not hasattr(sim, forbidden), "%s.%s must not be public" % (
+                type(sim).__name__, forbidden)
+
+
+def test_no_top_level_python_integrator_or_compiled_time_shim():
+    # Clean break: top-level pops must not advertise Python numerical integration or the old
+    # CompiledTime convenience shim. Ready-made time schemes live under pops.lib.time; the Program
+    # time language lives under pops.time.
+    assert "integrate" not in pops.__all__
+    assert "CompiledTime" not in pops.__all__
+    assert not hasattr(pops, "integrate"), "pops.integrate must not be public"
+    assert not hasattr(pops, "CompiledTime"), "use pops.time.CompiledTime only where explicitly internal"
+
+
+def test_program_public_surface_is_operator_first():
+    P = pops.time.Program("arch")
+    assert hasattr(P, "call"), "Program must expose typed operator calls"
+    assert hasattr(P, "define"), "Program must expose T.define(...) temporal SSA sugar"
+    assert hasattr(P, "fields"), "Program may expose board field sugar over typed operators"
+    assert hasattr(P, "_solve_fields"), "field solve lowering exists only as an internal builder"
+    assert hasattr(P, "_rhs_legacy"), "RHS lowering exists only as an internal builder"
+    assert not hasattr(P, "solve_fields"), "Program.solve_fields must not be a public API"
+    assert not hasattr(P, "rhs"), "Program.rhs must not be a public API"
 
 
 def test_physics_model_is_a_writing_facade_not_a_compiler():

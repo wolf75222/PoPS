@@ -56,7 +56,7 @@ def _build(n=32, regrid_every=0, block="ne"):
     (patchs fins actifs des le seed), hierarchie FIGEE (regrid_every=0 -> reprise bit-identique)."""
     rho0 = _bump(n)
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
-    sim.add_block(block,
+    sim._add_block(block,
                   pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
                             pops.BackgroundDensity(alpha=1.0, n0=float(rho0.mean()))),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
@@ -167,7 +167,7 @@ def _build_multiblock(n=32, regrid_every=0):
     rho_e = _bump(n, amp=0.6, w=0.14)  # profil DIFFERENT -> trajectoires par bloc distinctes
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     for nm, q in (("ions", +1.0), ("elec", -1.0)):
-        sim.add_block(nm,
+        sim._add_block(nm,
                       pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
                                 pops.ChargeDensity(charge=q)),
                       spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),

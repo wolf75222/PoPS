@@ -60,8 +60,8 @@ from pops.time import Program
 
 T = Program("forward_euler").bind_operators(module)
 U = T.state("U", block="plasma")
-fields = T.solve_fields(state=U.n)
-rate = explicit_rate(U.n, fields)
+fields = T.call(fields_from_state, U.n)
+rate = T.call(explicit_rate, U.n, fields)
 
 T.define(U.next, U.n + T.dt * rate)
 T.commit("plasma", U.next)

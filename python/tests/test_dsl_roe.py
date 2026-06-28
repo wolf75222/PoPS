@@ -106,13 +106,13 @@ try:
 
     sd = pops.System(n=n, L=1.0, periodic=True)
     sd.set_poisson()
-    sd.add_equation("gas", model=cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
+    sd._add_equation("gas", model=cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                     time=pops.Explicit())
     sd.set_primitive_state("gas", rho=rho0, u=z + 0.1, v=z, p=p0)
 
     sn = pops.System(n=n, L=1.0, periodic=True)
     sn.set_poisson()
-    sn.add_block("gas",
+    sn._add_block("gas",
                  pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
                            transport=pops.CompressibleFlux(), source=pops.NoSource(),
                            elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0)),
@@ -132,7 +132,7 @@ try:
                                                  backend="production")
     s3 = pops.System(n=n, L=1.0, periodic=True)
     s3.set_poisson()
-    s3.add_equation("f", model=cm3, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
+    s3._add_equation("f", model=cm3, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                     time=pops.Explicit())
     x = (np.arange(n) + 0.5) / n
     vshear = np.tile(0.3 * np.sin(2 * np.pi * x), (n, 1))
@@ -149,7 +149,7 @@ try:
                                            backend="production")
     try:
         s = pops.System(n=16, L=1.0, periodic=True)
-        s.add_equation("f", model=cm_no, spatial=pops.FiniteVolume(limiter=Minmod(),
+        s._add_equation("f", model=cm_no, spatial=pops.FiniteVolume(limiter=Minmod(),
                                                                   riemann=Roe()))
         chk(False, "roe sans capability sur 3-var aurait du lever")
     except (ValueError, RuntimeError) as e:

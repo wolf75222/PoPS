@@ -186,7 +186,7 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
         params: dict {param_name: value} of runtime parameter overrides.
         aux: dict {aux_name: array} of static aux inputs.
         solvers: dict {field: solver} overriding the per-field solvers from the problem.
-        cadence: optional ``pops.CompiledTime`` macro-step cadence.
+        cadence: optional ``pops.time.CompiledTime`` macro-step cadence.
 
     Returns:
         The bound ``System`` / ``AmrSystem`` simulation handle.

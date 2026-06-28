@@ -56,7 +56,7 @@ def _zero_mean_bump(n, amp):
 
 def _build(n=32):
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_block("ne", model=_charge_model(q=1.0), spatial=pops.Spatial(minmod=True))
+    sim._add_block("ne", model=_charge_model(q=1.0), spatial=pops.Spatial(minmod=True))
     sim.set_poisson(bc="periodic")  # default solver = geometric_mg -> multigrid V-cycles
     sim.set_density("ne", _zero_mean_bump(n, 0.40))
     return sim

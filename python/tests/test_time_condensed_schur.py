@@ -330,7 +330,7 @@ def _run_section_b(t):
         return None
 
     sim_probe = pops.System(n=8, L=_L, periodic=True)
-    if not hasattr(sim_probe, "install_program"):
+    if not hasattr(sim_probe, "_install_program_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
     if not hasattr(sim_probe, "set_magnetic_field"):
@@ -364,7 +364,7 @@ def _run_section_b(t):
         except RuntimeError as exc:  # no compiler / no Kokkos visible
             print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
             return None, None
-        sim.add_equation("blk", compiled_model,
+        sim._add_equation("blk", compiled_model,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit(method="euler"))
         sim.set_poisson("charge_density", "geometric_mg")
@@ -393,7 +393,7 @@ def _run_section_b(t):
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
             return None
-        sim.install_program(compiled.so_path)
+        sim._install_program_so(compiled.so_path)
         sim.step(_DT)
         out = np.array(sim.get_state("blk"))
         ref, iters = _offline_step(U0, _ALPHA, theta, _BZ, h, _DT, _TOL)
@@ -437,7 +437,7 @@ def _run_section_b(t):
                 # field first, then the block.
                 sim_n.set_poisson("charge_density", "geometric_mg")
                 sim_n.set_magnetic_field(_BZ * np.ones(_N * _N))
-                sim_n.add_equation(
+                sim_n._add_equation(
                     "blk", native_model,
                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                     time=pops.Split(hyperbolic=pops.Explicit(method="euler"),

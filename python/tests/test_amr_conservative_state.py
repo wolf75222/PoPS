@@ -82,23 +82,23 @@ chk(raises(lambda: pops.AmrSystem(n=0, L=1.0, periodic=True)),
     "(G) AmrSystem(n=0) rejete a la construction (n >= 1 requis)")
 
 # ndim != 3 (densite 2D passee par erreur) -> rejet au binding.
-s = _amr(n); s.add_block("gas", _euler_spec(), time=pops.Explicit())
+s = _amr(n); s._add_block("gas", _euler_spec(), time=pops.Explicit())
 chk(raises(lambda: s.set_conservative_state("gas", rho)),
     "(G) ndim==2 (densite) rejete (attendu (ncomp, n, n))")
 
 # etat vide -> rejet.
-s = _amr(n); s.add_block("gas", _euler_spec(), time=pops.Explicit())
+s = _amr(n); s._add_block("gas", _euler_spec(), time=pops.Explicit())
 chk(raises(lambda: s.set_conservative_state("gas", np.zeros((0, n, n)))),
     "(G) etat vide rejete")
 
 # taille non multiple de n*n -> rejet (ncomp*n*(n-1) p.ex.).
-s = _amr(n); s.add_block("gas", _euler_spec(), time=pops.Explicit())
+s = _amr(n); s._add_block("gas", _euler_spec(), time=pops.Explicit())
 bad = np.zeros((3, n, n - 1))
 chk(raises(lambda: s.set_conservative_state("gas", bad)),
     "(G) taille non multiple de n*n rejetee")
 
 # systeme deja construit -> rejet (poser l'etat avant le build).
-s = _amr(n); s.add_block("gas", _euler_spec(), time=pops.Explicit())
+s = _amr(n); s._add_block("gas", _euler_spec(), time=pops.Explicit())
 s.set_density("gas", rho); s.step(1e-4)  # force le build
 chk(raises(lambda: s.set_conservative_state("gas", np.stack([rho, 0 * rho, 0 * rho, rho]))),
     "(G) set_conservative_state apres build rejete")
@@ -107,8 +107,8 @@ chk(raises(lambda: s.set_conservative_state("gas", np.stack([rho, 0 * rho, 0 * r
 # coupler_write_coarse_state) -- le build N'EST PLUS un rejet ; le pas tourne fini.
 # (test_v3_features (C) prouve en plus que la qty de mouvement seedee advecte.)
 s = _amr(n)
-s.add_block("a", _euler_spec(), time=pops.Explicit())
-s.add_block("b", _euler_spec(), time=pops.Explicit())
+s._add_block("a", _euler_spec(), time=pops.Explicit())
+s._add_block("b", _euler_spec(), time=pops.Explicit())
 s.set_conservative_state("a", np.stack([rho, 0 * rho, 0 * rho, rho / (GAMMA - 1.0)]))
 s.set_density("b", rho)
 s.step(1e-4)
@@ -149,7 +149,7 @@ try:
 
     def build(setter):
         s = _amr(n)
-        s.add_equation("gas", cm, spatial=pops.Spatial(minmod=True, flux=Rusanov(),
+        s._add_equation("gas", cm, spatial=pops.Spatial(minmod=True, flux=Rusanov(),
                                                       recon=Conservative()))
         setter(s)
         return s

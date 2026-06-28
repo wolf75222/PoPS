@@ -58,23 +58,23 @@ class _ProgramCore(_ProgramConstants):
         v.space = space
         return v
 
-    def solve_fields(self, name=None, state=None, field=None):
-        """Solve the elliptic fields from ``state`` and return a FieldContext. Accepts
-        ``solve_fields(state)`` or ``solve_fields(name, state)``. Each call is a DISTINCT
-        FieldContext (a stage's RHS must read the fields solved from its own state, never a stale
-        global). @p field (ADC-419) names a NAMED elliptic field (m.elliptic_field) to solve instead of
-        the default Poisson coupling; its derived aux populate that field's named aux channel. The
-        multi-field RUNTIME is DEFERRED: a non-None @p field lowers to a clear NotImplementedError
-        (the IR records it so a program reads cleanly when the runtime lands)."""
+    def _solve_fields(self, name=None, state=None, field=None):
+        """Internal field-solve builder used by typed operator lowering.
+
+        This still emits the historical ``solve_fields`` IR op because the C++ Program codegen
+        consumes that op. It is intentionally private: user Programs should call a typed
+        ``field_operator`` handle through :meth:`call`, or use the board ``fields(...)`` sugar that
+        lowers through the same internal route.
+        """
         # A defined temporal-version handle (U.stage(k) / U.next / U.prev) resolves to its Value
         # here so it composes wherever a State does; a plain Value / None / str is unchanged.
         name, state = _resolve_handle(name), _resolve_handle(state)
         if isinstance(name, Value) and state is None:
             name, state = None, name
         if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("solve_fields: a State value is required")
+            raise ValueError("_solve_fields: a State value is required")
         if field is not None and not (isinstance(field, str) and field):
-            raise ValueError("solve_fields: field must be a non-empty named elliptic field")
+            raise ValueError("_solve_fields: field must be a non-empty named elliptic field")
         # The attr is added ONLY for a named field so a default solve_fields keeps its historical IR
         # (empty attrs) -> the .so cache key of an existing time program is byte-identical (no spurious
         # invalidation from this feature).
@@ -95,7 +95,7 @@ class _ProgramCore(_ProgramConstants):
         its live state. The listed states slot at their block index (the P.state declaration order), so
         the runtime sees each coupled block at its stage state into the one shared phi/aux.
 
-        A per-block ``P.solve_fields(state=Ub)`` remains the right choice when the blocks advance in
+        A per-block internal ``_solve_fields(state=Ub)`` remains the right lowering when blocks advance in
         sequence (block b at its stage state, every other block at its live state); this op is for the
         SIMULTANEOUS case where multiple coupled blocks must each contribute their stage state at once."""
         if not (isinstance(states, (list, tuple)) and states):
@@ -136,16 +136,11 @@ class _ProgramCore(_ProgramConstants):
         ``TypeError`` naming the handle path: a Program references an operator only by the typed
         handle, never by a free string (Spec 5 "one clean API", ADC-479 criterion 23).
 
-        The handle is a transparent alias for its ``.name``: it follows the EXACT same registry
-        resolution + lowering, so ``P.call(handle, ...)`` builds the byte-identical IR as the
-        INTERNAL ``P._call(handle.name, ...)`` path (used by the ``pops.lib.time`` macros and the
-        operator-first lowering). Resolves the name against the bound operator registry (see
-        :meth:`bind_operators`), type-checks the arguments against the operator's ``Signature``, then
-        lowers to the equivalent primitive op so the result is IDENTICAL to the matching PDE shortcut:
-        a ``field_operator`` to ``solve_fields``, a ``local_source`` to ``source``, a
-        ``grid_operator`` / ``local_rate`` to ``rhs``, a ``local_linear_operator`` to
-        ``linear_source``, a ``projection`` to ``project``. A Program composes operators by signature,
-        never by a hardcoded PDE category.
+        Resolves the handle against the bound operator registry (see :meth:`bind_operators`),
+        type-checks the arguments against the operator's ``Signature``, then records an
+        ``operator_call`` node in the Program IR. Codegen lowers that typed call to the appropriate
+        C++ ``ProgramContext`` operation. The public path no longer rewrites a call back into the
+        private ``_rhs_legacy`` / ``_solve_fields`` builders.
         """
         from pops.model import OperatorHandle
         if not isinstance(operator, OperatorHandle):
@@ -162,10 +157,8 @@ class _ProgramCore(_ProgramConstants):
 
     def _call(self, operator, *args, name=None, schedule=None):
         """Internal operator-first call: resolve, type-check and lower an operator (str name OR
-        handle). NOT a public surface -- it is the byte-identical lowering the public typed
-        :meth:`call` delegates to, and the path the ``pops.lib.time`` macros, the board/operator
-        handles and the re-entrant typed lowering use directly (a string token survives here only as
-        an internal selector, undocumented in the public API)."""
+        handle). NOT a public surface -- the string token survives here only as an internal selector
+        for package macros and tests."""
         operator_name = self._operator_call_name(operator)
         if self._registry is None:
             raise ValueError("P.call(%r): no operators bound; call P.bind_operators(model) first"
@@ -223,46 +216,51 @@ class _ProgramCore(_ProgramConstants):
                 % (op.name, schedule.policy, op.name))
 
     def _lower_call(self, op, operator_name, args, name):
-        # A typed call lowers THROUGH the PRIVATE RHS builder (self._rhs_legacy(flux=...) /
-        # self.source / ...): the public P.rhs reject never sees this internal lowering (the user
-        # already used the typed P.call front door), so there is one public path and no re-entrancy
-        # flag to keep.
+        # A typed call is a first-class IR node. The codegen owns the final route to the C++ runtime
+        # operation, so the Program does not re-enter the old public-style field/RHS builders.
         kind = op.kind
         if kind == "field_operator":
-            # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
-            # multi-block field solve: every input species contributes to the one shared elliptic RHS
-            # (Sum_s elliptic_rhs_s, the default phi). Route it to solve_fields_from_blocks so no
-            # species is dropped -- a single-input field operator stays the historical single-block
-            # solve_fields (named-field routing via the operator name as before).
-            state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
-            if len(state_args) > 1:
-                return self.solve_fields_from_blocks(state_args, name=name)
             field = None if operator_name == "fields_from_state" else operator_name
-            return self.solve_fields(name=name, state=args[0], field=field)
+            return self._new("fields", "operator_call", args,
+                             {"operator": operator_name, "kind": kind, "field": field},
+                             name, args[0].block)
         if kind == "local_source":
             fields = args[1] if len(args) > 1 else None
             if operator_name == "source_default":
-                # The default source lives in m._source, not as a named source_term; reach it
-                # through the source-only RHS path (byte-identical to flux=False,
-                # sources=["default"]), since ctx.source(name) only resolves named source_terms.
-                return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=False,
-                                        sources=["default"])
-            return self.source(operator_name, state=args[0], fields=fields)
+                return self._new("rhs", "operator_call",
+                                 (args[0], fields) if fields is not None else (args[0],),
+                                 {"operator": operator_name, "kind": kind,
+                                  "flux": False, "sources": ["default"], "fluxes": None},
+                                 name, args[0].block)
+            return self._new("rhs", "operator_call",
+                             (args[0], fields) if fields is not None else (args[0],),
+                             {"operator": operator_name, "kind": kind, "source": operator_name},
+                             name, args[0].block)
         if kind in ("grid_operator", "local_rate"):
             fields = args[1] if len(args) > 1 else None
             if kind == "grid_operator":
-                # Flux divergence only (no source): the default flux or a named flux_term.
                 fluxes = None if operator_name == "flux_default" else [operator_name]
-                return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=True,
-                                        sources=[], fluxes=fluxes)
+                return self._new("rhs", "operator_call",
+                                 (args[0], fields) if fields is not None else (args[0],),
+                                 {"operator": operator_name, "kind": kind, "flux": True,
+                                  "sources": [], "fluxes": fluxes},
+                                 name, args[0].block)
             low = op.lowering
-            return self._rhs_legacy(name=name, state=args[0], fields=fields,
-                                    flux=low.get("flux", True), sources=low.get("sources"),
-                                    fluxes=low.get("fluxes"))
+            return self._new("rhs", "operator_call",
+                             (args[0], fields) if fields is not None else (args[0],),
+                             {"operator": operator_name, "kind": kind,
+                              "flux": low.get("flux", True), "sources": low.get("sources"),
+                              "fluxes": low.get("fluxes")},
+                             name, args[0].block)
         if kind == "local_linear_operator":
-            return self.linear_source(operator_name)
+            return self._new("operator", "operator_call", args,
+                             {"operator": operator_name, "kind": kind,
+                              "linear_source": operator_name},
+                             name or operator_name, args[0].block if args else None)
         if kind == "projection":
-            return self.project(name=name, state=args[0])
+            return self._new("state", "operator_call", (args[0],),
+                             {"operator": operator_name, "kind": kind},
+                             name, args[0].block)
         if kind == "coupled_rate":
             return self._lower_coupled_rate(op, operator_name, args, name)
         raise NotImplementedError(
@@ -321,48 +319,27 @@ class _ProgramCore(_ProgramConstants):
                     "operator %r expects %s %r but got a value over %r"
                     % (op.name, t.kind, t.name, arg_name))
 
-    def rhs(self, name=None, state=None, fields=None, *, terms=None, **legacy):
-        """Build the typed right-hand side R from a list of TYPED ``terms`` (Spec 5 sec.14.2.4, the one
-        public path, ADC-479 criterion 27).
+    def _rhs_terms(self, name=None, state=None, fields=None, *, terms=None, **legacy):
+        """Internal typed-term lowering kept for package macros.
 
-        ``terms`` is the right-hand-side composition: a :class:`pops.numerics.terms.Flux` plus the
-        source terms to fold in::
-
-            R = P.rhs(U, fields=f, terms=[Flux(), electric])
-
-        ``fields`` is the explicit FieldContext any field-dependent source reads (no implicit global
-        aux). A ``Flux()`` in the list adds the ``-div F`` base (its absence -> source only); every
-        source term -- a :class:`pops.numerics.terms.SourceTerm` / :class:`~pops.numerics.terms.\
-LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a plain source NAME
-        string -- appends its name to the folded sources. So ``terms=[Flux(), electric]`` is
-        ``-div F + electric``, ``terms=[Flux()]`` is flux only, ``terms=[electric]`` is the named
-        source only, and ``terms=[]`` is the zero RHS.
-
-        The legacy ``flux=``/``sources=``/``fluxes=`` boolean/name form is NOT a public path: it is
-        REFUSED with a clear ``TypeError`` naming the ``terms=`` alternative (a Program composes the
-        RHS only by typed terms). The byte-identical builder it used to expose survives ONLY as the
-        internal :meth:`_rhs_legacy` (used by the ``pops.lib.time`` macros and the operator-first
-        lowering); a non-term object in the list (e.g. a bare ``bool`` -- ``Flux()`` is a term, not a
-        bool) raises a clear ``TypeError``."""
-        # The legacy flux=/sources=/fluxes= boolean/name form is NOT public: name it explicitly in a
-        # clear TypeError pointing at terms=, rather than letting CPython raise an opaque "unexpected
-        # keyword argument". A bare P.rhs (no terms=) is the legacy default and is refused too.
+        The public Program API is operator-first: users call ``P.call(rate_handle, U, fields)``.
+        This helper exists so internal scheme builders can still convert a typed term list onto the
+        same byte-identical RHS IR without exposing a second user path.
+        """
         if legacy or terms is None:
             extra = "".join(", %s=" % k for k in sorted(legacy))
             raise TypeError(
-                "P.rhs requires the typed terms= list, not the legacy flux=/sources=/fluxes= form%s; "
-                "pass P.rhs(state=U, fields=f, terms=[Flux(), source]) (a pops.numerics.terms.Flux "
-                "plus the source terms to fold in)" % extra)
+                "_rhs_terms requires terms=, not the legacy flux=/sources=/fluxes= form%s"
+                % extra)
         from pops.time._rhs_terms import terms_to_flux_sources
         flux, sources = terms_to_flux_sources(terms)
         return self._rhs_legacy(name=name, state=state, fields=fields, flux=flux, sources=sources)
 
     def _rhs_legacy(self, name=None, state=None, fields=None, flux=True, sources=None, fluxes=None):
         """Internal RHS builder: ``R = -div F(U) + sum of the requested named sources`` from the
-        legacy ``(flux, sources, fluxes)`` triple. NOT a public surface -- the public typed
-        :meth:`rhs` lowers ``terms=`` onto this byte-identically, and the ``pops.lib.time`` macros /
-        the operator-first lowering call it directly (a flux/sources string token survives here only
-        as an internal selector, undocumented in the public API).
+        legacy ``(flux, sources, fluxes)`` triple. NOT a public surface -- ``pops.lib.time`` macros
+        and the operator-first lowering call it directly (a flux/sources string token survives here
+        only as an internal selector, undocumented in the public API).
 
         ``sources`` (ADC-425): ``None`` keeps ``-div F`` + the model's default/composite source;
         ``["default"]`` is the same explicitly; ``[]`` is FLUX ONLY (no default source); a list of
@@ -471,4 +448,3 @@ LocalTerm`, an :class:`pops.model.OperatorHandle` from ``m.source_term``, or a p
         inputs = (state, fields) if fields is not None else (state,)
         return self._new("rhs", "apply", inputs, {"linear_source": lname},
                          name or ("apply_" + lname), state.block)
-

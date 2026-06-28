@@ -156,7 +156,7 @@ def test_masse():
     sim = pops.System(n=n, L=L, periodic=True)
     sim.set_poisson(bc="periodic")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
-    sim.add_equation("ions", model=iso_model(alpha=alpha, n0=n0),
+    sim._add_equation("ions", model=iso_model(alpha=alpha, n0=n0),
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
                                               variables=Conservative()),
                      time=split_time(theta=1.0, alpha=alpha))
@@ -202,7 +202,7 @@ def _run_momentum(periodic, sym, n=64, L=1.0, B0=4.0, alpha=3.0, N=20, dt_fac=0.
         rho0 = 1.0 + 0.8 * bump
         u0 = v0 = 0.0 * X
         n0 = float(rho0.mean()) if periodic else 0.0
-    sim.add_equation("ions", model=iso_model(alpha=alpha, n0=n0),
+    sim._add_equation("ions", model=iso_model(alpha=alpha, n0=n0),
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
                                               variables=Conservative()),
                      time=split_time(theta=1.0, alpha=alpha))
@@ -282,7 +282,7 @@ def _run_energy(with_schur, n=48, L=1.0, B0=4.0, alpha=3.0, gamma=1.4, N=30):
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     time = split_time(theta=1.0, alpha=alpha) if with_schur else pops.Explicit()
-    sim.add_equation("ions", model=euler_model(gamma=gamma, alpha=alpha),
+    sim._add_equation("ions", model=euler_model(gamma=gamma, alpha=alpha),
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
                                               variables=Conservative()),
                      time=time)
@@ -361,7 +361,7 @@ def test_positivite_densite():
         sim = pops.System(n=n, L=L, periodic=False)
         sim.set_poisson(bc="dirichlet")
         sim.set_magnetic_field(B0 * np.ones((n, n)))
-        sim.add_equation("ions", model=iso_model(cs2=cs2, alpha=alpha),
+        sim._add_equation("ions", model=iso_model(cs2=cs2, alpha=alpha),
                          spatial=pops.FiniteVolume(limiter=limiter, riemann=Rusanov(),
                                                   variables=Primitive()),  # recon_prim
                          time=split_time(theta=1.0, alpha=alpha))

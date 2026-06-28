@@ -43,7 +43,7 @@ def _scalar_charge(q, B0=1.0):
 # --- (a) mono-bloc + multi-blocs ssprk3 : fini + masse conservee, patchs fins actifs ---
 def _check_mono(n=32):
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
-    sim.add_block("ne", _scalar_charge(+1.0),
+    sim._add_block("ne", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=pops.Explicit(ssprk3=True))  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
     sim.set_poisson(bc="periodic")
@@ -63,10 +63,10 @@ def _check_mono(n=32):
 
 def _check_multi(n=32):
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
-    sim.add_block("ions", _scalar_charge(+1.0),
+    sim._add_block("ions", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=pops.Explicit(ssprk3=True))     # SSPRK3 multi-blocs (moteur AmrRuntime)
-    sim.add_block("electrons", _scalar_charge(-1.0),
+    sim._add_block("electrons", _scalar_charge(-1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=pops.Explicit(ssprk3=True))     # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
     sim.set_poisson(bc="periodic")
@@ -92,7 +92,7 @@ def _check_multi(n=32):
 def _check_default_bit_identical(n=32):
     def run_euler():
         s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-        s.add_block("ne", _scalar_charge(+1.0),
+        s._add_block("ne", _scalar_charge(+1.0),
                     spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))  # time defaut = Explicit() euler
         s.set_poisson(bc="periodic")
         s.set_density("ne", _bump(n, 0.40))
@@ -111,7 +111,7 @@ def _build_advect(n, kind):
     """AMR mono-bloc, hierarchie FIGEE (regrid_every=0, patch seed central) : SEULE la methode
     temporelle (time) change entre les runs -> l'erreur mesuree est purement TEMPORELLE."""
     s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    s.add_block("ne", _scalar_charge(+1.0),
+    s._add_block("ne", _scalar_charge(+1.0),
                 spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
                 time=pops.Explicit(ssprk3=True) if kind == "ssprk3" else pops.Explicit())
     s.set_poisson(bc="periodic")

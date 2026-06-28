@@ -92,11 +92,11 @@ For which `format` / `parallel` combinations a backend supports, read
 
 Write a restartable checkpoint with `sim.checkpoint(path, parallel=False)`. It saves the full
 conservative state of every block plus the clock; reload it with `sim.restart(path)` after you
-have replayed the same composition (`add_block` / `set_poisson` / couplings).
+have replayed the same compiled/bound composition.
 
 ```python
 sim.checkpoint("out/run.ckpt")
-# later, after replaying the composition:
+# later, after recreating/binding the same case:
 sim.restart("out/run.ckpt.npz")
 ```
 

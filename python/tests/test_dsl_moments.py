@@ -314,7 +314,7 @@ except RuntimeError as ex:
     raise
 n = 16
 sim = pops.System(n=n, L=1.0, periodic=True)
-sim.add_equation("mom", model=compiled,
+sim._add_equation("mom", model=compiled,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
                  time=pops.Explicit())
 x = (np.arange(n) + 0.5) / n

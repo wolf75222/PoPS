@@ -85,10 +85,10 @@ def _ssprk2_program(name="adc508_ssprk2"):
     P = adctime.Program(name)
     dt = P.dt
     U0 = P.state("plasma")
-    f0 = P.solve_fields("f0", U0)
+    f0 = P._solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
-    f1 = P.solve_fields("f1", U1)
+    f1 = P._solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
     P.commit("plasma", U2)
@@ -101,10 +101,10 @@ def _midpoint_program(name="adc508_midpoint"):
     P = adctime.Program(name)
     dt = P.dt
     U0 = P.state("plasma")
-    f0 = P.solve_fields("f0", U0)
+    f0 = P._solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + 0.5 * dt * k0)
-    f1 = P.solve_fields("f1", U1)
+    f1 = P._solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", U0 + dt * k1)
     P.commit("plasma", U2)
@@ -148,11 +148,11 @@ def _system_run(program, model, u0, nsteps=NSTEPS, dt=DT):
         compiled = pops.compile_problem(model=model, time=program)
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:140]
-    sim.add_equation("plasma", block_cm,
+    sim._add_equation("plasma", block_cm,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="ssprk2"))
     sim.set_density("plasma", u0)  # u0 = the 2D density; momentum=0, E from gamma (coupler_write_coarse)
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     for _ in range(nsteps):
         sim.step(dt)
     return (np.array(sim.get_state("plasma")), np.array(sim.potential())), None
@@ -164,7 +164,7 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
     ``_install_compiled`` seam (the AMR counterpart of System's compiled install): a native instance
     carries the block model, the compiled handle carries the time Program installed on the hierarchy."""
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "install_program"):
+    if not hasattr(amr, "_install_program_so"):
         return None, "the built _pops lacks AmrSystem.install_program (rebuild _pops)"
     try:
         compiled = pops.compile_problem(model=model, time=program, target="amr_system")
@@ -175,11 +175,11 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
         # Wire the block + field solver, seed the FULL conservative state BEFORE the build (install_program
         # forces ensure_built, which freezes the layout -- set_conservative_state must precede it), then
         # install the compiled time Program on the hierarchy.
-        amr.add_equation("plasma", block_cm,
+        amr._add_equation("plasma", block_cm,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit(method="ssprk2"))
         amr.set_density("plasma", u0)  # u0 = the 2D density (same seed as System: momentum=0, E from gamma)
-        amr.install_program(compiled.so_path)
+        amr._install_program_so(compiled.so_path)
     except RuntimeError as exc:
         return None, "install (AMR): %s" % str(exc)[:240]
     for _ in range(nsteps):
@@ -274,7 +274,7 @@ def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
     """Install `program` on a single-level AmrSystem and drive it with step_cfl (NOT step). Returns
     (coarse density, program hash, last dt) -- the step_cfl Program route (ADC-508 review fix 1)."""
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "install_program") or not hasattr(amr, "step_cfl"):
+    if not hasattr(amr, "_install_program_so") or not hasattr(amr, "step_cfl"):
         return None, "the built _pops lacks AmrSystem.install_program/step_cfl (rebuild _pops)"
     try:
         compiled = pops.compile_problem(model=model, time=program, target="amr_system")
@@ -282,11 +282,11 @@ def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:
-        amr.add_equation("plasma", block_cm,
+        amr._add_equation("plasma", block_cm,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit(method="ssprk2"))
         amr.set_density("plasma", u0)
-        amr.install_program(compiled.so_path)
+        amr._install_program_so(compiled.so_path)
         last_dt = 0.0
         for _ in range(nsteps):
             last_dt = float(amr.step_cfl(cfl))
@@ -303,7 +303,7 @@ def _amr_run_cfl_native(model, u0, nsteps=NSTEPS, cfl=0.4):
         block_cm = model.compile(backend="production", target="amr_system")
     except RuntimeError as exc:
         return None, "compile (AMR native): %s" % str(exc)[:140]
-    amr.add_equation("plasma", block_cm,
+    amr._add_equation("plasma", block_cm,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="ssprk2"))
     amr.set_density("plasma", u0)

@@ -131,7 +131,7 @@ def main():
         A = _amr(n, L, lambda s: s._s.add_native_block(
             "gas", so_t, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1))
-        B = _amr(n, L, lambda s: s.add_block(
+        B = _amr(n, L, lambda s: s._add_block(
             "gas", spec_t, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
             time=pops.Explicit()))
         assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
@@ -164,7 +164,7 @@ def main():
         C = _amr(n, L, lambda s: (s._s.add_native_block(
             "gas", so_p, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1), poisson(s)))
-        D = _amr(n, L, lambda s: (s.add_block(
+        D = _amr(n, L, lambda s: (s._add_block(
             "gas", spec_p, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
             time=pops.Explicit()), poisson(s)))
         assert C.n_patches() == D.n_patches()
@@ -188,10 +188,10 @@ def main():
 
         def parity_riemann(riem, recon, label):
             """add_equation(riemann, recon) BIT-IDENTIQUE a add_block (dmax==0)."""
-            R = _amr(n, L, lambda s: s.add_equation(
+            R = _amr(n, L, lambda s: s._add_equation(
                 "gas", cm_t,
                 spatial=pops.FiniteVolume(limiter=Minmod(), riemann=riem, variables=recon)))
-            S = _amr(n, L, lambda s: s.add_block(
+            S = _amr(n, L, lambda s: s._add_block(
                 "gas", spec_t,
                 spatial=pops.Spatial(minmod=True, flux=riem, recon=recon),
                 time=pops.Explicit()))
@@ -232,7 +232,7 @@ def main():
         raised = False
         try:
             s_nop = pops.AmrSystem(n=n, L=L, periodic=True)
-            s_nop.add_equation("gas", cm_iso,
+            s_nop._add_equation("gas", cm_iso,
                                spatial=pops.Spatial(minmod=True, flux=HLLC()))
         except ValueError as ex:
             raised = True
@@ -246,7 +246,7 @@ def main():
         Aw = _amr(n, L, lambda s: s._s.add_native_block(
             "gas", so_t, limiter="weno5", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1))
-        Bw = _amr(n, L, lambda s: s.add_block(
+        Bw = _amr(n, L, lambda s: s._add_block(
             "gas", spec_t, spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
             time=pops.Explicit()))
         assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches initial production != add_block"
@@ -265,7 +265,7 @@ def main():
         # WENO5 via la facade add_equation (pas seulement le binding bas niveau) : meme chemin nominal.
         # Reutilise cm_t (transport pur) : pas de Poisson, tourne sans set_poisson.
         Gw = pops.AmrSystem(n=n, L=L, periodic=True)
-        Gw.add_equation("gas", cm_t,
+        Gw._add_equation("gas", cm_t,
                         spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
         Gw.set_refinement(1.2)
         Gw.set_density("gas", _bubble(n))
@@ -278,14 +278,14 @@ def main():
         # add_equation chemin nominal (rusanov + conservatif) accepte et tourne :
         E = pops.AmrSystem(n=n, L=L, periodic=True)
         E.set_poisson("charge_density", "geometric_mg")
-        E.add_equation("gas", cm_t,
+        E._add_equation("gas", cm_t,
                        spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         E.set_refinement(1.2)
         E.set_density("gas", _bubble(n))
         for _ in range(4):
             E.step(dt)
         assert np.isfinite(np.array(E.density())).all() and E.mass() > 1e-6
-        print("OK  (3b) AmrSystem.add_equation(production, rusanov) tourne et reste physique")
+        print("OK  (3b) AmrSystem._add_equation(production, rusanov) tourne et reste physique")
 
         # --- (4) GARDE-FOUS de compilation / dispatch ---
         raised = False
@@ -301,7 +301,7 @@ def main():
         s = pops.AmrSystem(n=n, L=L, periodic=True)
         raised = False
         try:
-            s.add_equation("gas", sys_cm,
+            s._add_equation("gas", sys_cm,
                            spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         except ValueError as ex:
             raised = True

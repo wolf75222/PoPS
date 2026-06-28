@@ -5,7 +5,7 @@ Pendant AMR de test_schur_via_system.py. L'etage AmrCondensedSchurSourceStepper 
 STANDALONE (parite mono-niveau) dans test_amr_condensed_schur_source_stepper (C++) ; ici on exerce
 le chemin FACADE de bout en bout :
 
-  pops.AmrSystem.add_equation(time=pops.Strang(source=pops.CondensedSchur(...)))
+  pops.AmrSystem._add_equation(time=pops.Strang(source=pops.CondensedSchur(...)))
     -> add_equation(time=time.hyperbolic = pops.Explicit())   # transport SOURCE-FREE (NoSource)
       -> _s.add_block (ModelSpec -> dispatch_amr_compiled -> AmrCouplerMP)
     -> _s.set_source_stage(name, kind, theta, alpha)          # etage condense GLOBAL
@@ -81,7 +81,7 @@ def build_amr(n=24, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_schur=True, strang
         )
     else:
         time_policy = pops.Explicit()
-    sim.add_equation(
+    sim._add_equation(
         "electrons",
         model=iso_model(cs2=cs2, alpha=alpha),
         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative()),
@@ -174,7 +174,7 @@ def main():
     # E2 : add_block(time=Strang) -> rejet (le splitting passe par add_equation).
     def add_block_strang():
         s = pops.AmrSystem(n=n, L=L, periodic=False)
-        s.add_block("e", iso_model(),
+        s._add_block("e", iso_model(),
                     time=pops.Strang(hyperbolic=pops.Explicit(),
                                     source=pops.CondensedSchur(theta=0.5, alpha=alpha)))
     raises(add_block_strang, "(E2) add_block(pops.Strang) rejete (passer par add_equation)")

@@ -50,7 +50,7 @@ _CHILD = textwrap.dedent(
         return rho
 
     sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.add_block(
+    sim._add_block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(),

@@ -123,6 +123,9 @@ class _ProgramLocal(_ProgramConstants):
             return operator
         if isinstance(operator, Value) and operator.op == "linear_source":
             return operator.attrs["linear_source"]
+        if (isinstance(operator, Value) and operator.op == "operator_call"
+                and operator.attrs.get("kind") == "local_linear_operator"):
+            return operator.attrs["linear_source"]
         if (isinstance(operator, _Operator) and not operator.identity.as_dict()
                 and len(operator.terms) == 1 and operator.terms[0][1].as_dict() == {0: 1.0}):
             return operator.terms[0][0].attrs["linear_source"]
@@ -413,4 +416,3 @@ class _ProgramLocal(_ProgramConstants):
         return self._new("state", "schur_energy", (state, state_old),
                          {"c_rho": int(c_rho), "c_mx": int(c_mx), "c_my": int(c_my), "c_E": int(c_E)},
                          name, state.block)
-

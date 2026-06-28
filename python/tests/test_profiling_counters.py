@@ -43,7 +43,7 @@ def chk(cond, label):
 print("== §29 counters on a stepped native block ==")
 N = 16
 sim = pops.System(n=N, L=1.0, periodic=True)
-sim.add_block("gas",
+sim._add_block("gas",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                         transport=pops.IsothermalFlux(),
                         source=pops.NoSource(),
@@ -86,7 +86,7 @@ chk("kernels=" not in sim.profile_report(), "reset clears the counters")
 # profiling OFF stays zero-overhead: a stepped, never-enabled System records nothing.
 print("== profiling off records no counters ==")
 sim_off = pops.System(n=N, L=1.0, periodic=True)
-sim_off.add_block("gas",
+sim_off._add_block("gas",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.NoSource(),

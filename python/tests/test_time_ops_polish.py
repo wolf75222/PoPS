@@ -26,6 +26,8 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
 
+import pytest
+
 
 def _pops_time():
     try:
@@ -34,6 +36,11 @@ def _pops_time():
         print("skip test_time_ops_polish (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
+
+
+@pytest.fixture
+def t():
+    return _pops_time()
 
 
 # ---- (A.1) solve_local_nonlinear (op 10): the per-cell Newton builder (ADC-422) ----
@@ -333,7 +340,7 @@ def _run_section_b(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program") or not hasattr(sim, "program_diagnostics"):
+    if not hasattr(sim, "_install_program_so") or not hasattr(sim, "program_diagnostics"):
         print("-- (B) skipped: _pops lacks the install_program/program_diagnostics bindings "
               "(rebuild _pops) --")
         return None
@@ -352,7 +359,7 @@ def _run_section_b(t):
     except RuntimeError as exc:
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
 
@@ -362,7 +369,7 @@ def _run_section_b(t):
     rho0 = 1.0 + 0.25 * X + 0.25 * Y  # in [1, 1.5), all distinct
     sim.set_state("blk", np.stack([rho0]))
 
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     dt = 0.01
     sim.step(dt)  # the diagnostics are recorded from U^n (the state at the START of the step)
 
@@ -427,7 +434,7 @@ def _run_section_b2(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (B.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
     from pops.physics.facade import Model
@@ -443,7 +450,7 @@ def _run_section_b2(t):
         print("-- (B.2) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
     # A positivity floor makes the block carry a real projection closure (else project is a no-op).
-    sim.add_equation("blk", compiled_model,
+    sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov(),
                                               positivity_floor=1e-12),
                      time=pops.Explicit(method="euler"))
@@ -451,7 +458,7 @@ def _run_section_b2(t):
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim.set_state("blk", np.stack([rho0]))
-    sim.install_program(compiled.so_path)
+    sim._install_program_so(compiled.so_path)
     sim.step(0.01)
     out = np.array(sim.get_state("blk"))[0]
     # Zero source + flux-only on a periodic smooth field -> the state is unchanged to machine precision
@@ -557,7 +564,7 @@ def _run_section_c2(t):
 
     n = 4
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
+    if not hasattr(sim, "_install_program_so"):
         print("-- (C.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
     import os
@@ -583,7 +590,7 @@ def _run_section_c2(t):
             print("-- (C.2) skipped: could not compile the bad-ABI .so (no toolchain) --")
             return None
         try:
-            sim.install_program(so)
+            sim._install_program_so(so)
         except (RuntimeError, Exception) as exc:  # noqa: BLE001
             msg = str(exc)
             assert "compiled program ABI mismatch" in msg, \

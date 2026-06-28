@@ -160,7 +160,7 @@ _RIEMANN = {"hll": HLL(), "rusanov": Rusanov()}
 for label, riemann in (("(3) riemann='hll'", "hll"), ("(4) riemann='rusanov'", "rusanov")):
     print(f"== {label} : eval_rhs == reference numpy ==")
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.add_equation("toy", model=compiled,
+    sim._add_equation("toy", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=_RIEMANN[riemann]),
                      time=pops.Explicit())
     U = toy_state(n)
@@ -181,7 +181,7 @@ m_eig.conservative_from([e1, e2])
 c_eig = m_eig.compile(os.path.join(tmp, "eigonly.so"), INCLUDE, backend="aot")
 chk(not getattr(c_eig, "has_wave_speeds", True), "has_wave_speeds faux (eigenvalues sans 'p')")
 sim = pops.System(n=16, L=1.0, periodic=True)
-msg = err_msg(lambda: sim.add_equation(
+msg = err_msg(lambda: sim._add_equation(
     "eig", model=c_eig, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
     time=pops.Explicit()))
 chk("wave_speeds" in msg,
@@ -202,7 +202,7 @@ m_p.conservative_from([rho, rho * u, rho * v])
 c_p = m_p.compile(os.path.join(tmp, "withp.so"), INCLUDE, backend="aot")
 chk(getattr(c_p, "has_wave_speeds", False), "has_wave_speeds vrai (chemin historique 'p' + eigenvalues)")
 sim = pops.System(n=16, L=1.0, periodic=True)
-msg = err_msg(lambda: sim.add_equation(
+msg = err_msg(lambda: sim._add_equation(
     "gasp", model=c_p, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
     time=pops.Explicit()))
 chk(msg == "", f"hll accepte sur le modele avec 'p' (historique, message='{msg[:40]}')")

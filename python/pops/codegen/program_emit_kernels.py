@@ -19,7 +19,7 @@ from pops.time.values import Value, _to_affine  # noqa: F401
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = ("source", "apply", "solve_local_linear", "solve_local_nonlinear")
 
-_ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "rhs",
+_ALLOWED_OPS = frozenset({"state", "operator_call", "solve_fields", "solve_fields_from_blocks", "rhs",
                           "linear_combine", "linear_source",
                           "reduce", "compare", "while", "range", "if", "matrix_free_operator",
                           "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",

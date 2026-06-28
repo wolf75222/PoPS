@@ -54,7 +54,7 @@ def electron_model():
 def run(policy, n=24, dt=0.002, nsteps=4):
     """Avance le bloc electron avec la politique temporelle @p policy ; renvoie l'etat final (4, n, n)."""
     s = pops.System(n=n, periodic=False)
-    s.add_block("ne", electron_model(), spatial=pops.Spatial(minmod=True), time=policy)
+    s._add_block("ne", electron_model(), spatial=pops.Spatial(minmod=True), time=policy)
     s.set_poisson(bc="dirichlet")
     xs = meshx(n)
     rho_e = 1.0 + 0.2 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, n))

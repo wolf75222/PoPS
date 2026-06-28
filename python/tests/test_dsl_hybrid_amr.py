@@ -83,8 +83,8 @@ def main():
             s.set_poisson("charge_density", "geometric_mg")
 
         spatial = pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative())
-        H = _amr(n, L, lambda s: (s.add_equation("gas", co, spatial=spatial), poisson(s)))
-        N = _amr(n, L, lambda s: (s.add_block("gas", spec, spatial=spatial, time=pops.Explicit()),
+        H = _amr(n, L, lambda s: (s._add_equation("gas", co, spatial=spatial), poisson(s)))
+        N = _amr(n, L, lambda s: (s._add_block("gas", spec, spatial=spatial, time=pops.Explicit()),
                                   poisson(s)))
         assert H.n_patches() == N.n_patches(), "n_patches initial hybride != add_block"
         m0h, m0n = H.mass(), N.mass()
@@ -112,7 +112,7 @@ def main():
         co_sys = m.compile(backend="production", target="system",
                            so_path=os.path.join(tmp, "hybrid_sys.so"), include=INCLUDE)
         try:
-            pops.AmrSystem(n=n, L=L, periodic=True).add_equation("gas", co_sys, spatial=spatial)
+            pops.AmrSystem(n=n, L=L, periodic=True)._add_equation("gas", co_sys, spatial=spatial)
             raise AssertionError("AmrSystem.add_equation a accepte un CompiledModel target='system'")
         except ValueError as ex:
             assert "target='system'" in str(ex) or "amr_system" in str(ex)

@@ -22,6 +22,7 @@ try:
     import numpy as np
 
     import pops
+    from pops.fields import catalog as field_catalog
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # noqa: BLE001
@@ -47,13 +48,15 @@ def initial_state():
 
 
 def build_system(method="ssprk3"):
-    """The native reference System (lower-level add_block path), stepped natively for comparison."""
+    """The native reference System, stepped natively for comparison."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.add_block("plasma", gas_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method=method))
-    sim.set_poisson("charge_density", "geometric_mg")
-    sim.set_state("plasma", initial_state())
+    sim.install(None,
+                instances={"plasma": {"model": gas_model(),
+                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
+                                                                   riemann=Rusanov()),
+                                      "time": pops.Explicit(method=method),
+                                      "initial": initial_state()}},
+                solvers={"phi": field_catalog.GeometricMG()})
     return sim
 
 
@@ -66,9 +69,6 @@ def ssprk3_program():
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip ssprk3_program (_pops lacks install_program; rebuild _pops)")
-        return 0
     dt = 2e-3
     try:
         compiled = pops.compile_problem(model=gas_model(), time=ssprk3_program())
@@ -84,7 +84,7 @@ def main():
                                       "spatial": pops.FiniteVolume(limiter=FirstOrder(),
                                                                    riemann=Rusanov()),
                                       "initial": initial_state()}},
-                solvers={"phi": pops.lib.fields.GeometricMG()})
+                solvers={"phi": field_catalog.GeometricMG()})
     sim.step(dt)
     U_prog = np.array(sim.get_state("plasma"))
 

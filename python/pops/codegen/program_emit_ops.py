@@ -64,6 +64,80 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
     if v.op == "state":
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab& %s = ctx.state(%d);" % (var[v.id], bidx))
+    elif v.op == "operator_call":
+        kind = v.attrs["kind"]
+        if kind == "field_operator":
+            if len(v.inputs) > 1:
+                bmap = block_idx or {}
+                vec = "u_stages_%d" % v.id
+                lines.append("std::vector<const pops::MultiFab*> %s(ctx.n_blocks(), nullptr);" % vec)
+                for st in v.inputs:
+                    if st.block not in bmap:
+                        raise ValueError(
+                            "operator_call %r: input node %r has block %r, which is not a "
+                            "declared program block %r -- cannot route it to a coupled field solve"
+                            % (v.attrs["operator"], st.id, st.block, sorted(bmap)))
+                    lines.append("%s[%d] = &%s;" % (vec, bmap[st.block], var[st.id]))
+                lines.append("ctx.solve_fields_from_blocks(%s);" % vec)
+                var[v.id] = var[v.inputs[0].id]
+            else:
+                (state_in,) = v.inputs
+                field = v.attrs.get("field")
+                if field is not None:
+                    lines.append('ctx.solve_fields_from_state(%s, %d, %s);'
+                                 % (json.dumps(field), bidx, var[state_in.id]))
+                else:
+                    lines.append("ctx.solve_fields_from_state(%d, %s);" % (bidx, var[state_in.id]))
+        elif kind in ("grid_operator", "local_rate") or (
+                kind == "local_source" and "source" not in v.attrs):
+            state_in = v.inputs[0]
+            var[v.id] = "r%d" % v.id
+            lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                         % (var[v.id], var[state_in.id]))
+            named_fluxes = _named_fluxes(v)
+            requested = v.attrs.get("sources")
+            want_flux = v.attrs.get("flux", True)
+            want_default_source = requested is None or "default" in requested
+            if not want_flux:
+                if want_default_source:
+                    lines.append("ctx.source_default_into(%d, %s, %s);"
+                                 % (bidx, var[state_in.id], var[v.id]))
+            elif named_fluxes is None:
+                if want_default_source:
+                    lines.append("ctx.rhs_into(%d, %s, %s);" % (bidx, var[state_in.id], var[v.id]))
+                else:
+                    lines.append("ctx.neg_div_flux_default_into(%d, %s, %s);"
+                                 % (bidx, var[state_in.id], var[v.id]))
+            else:
+                fx = "%s_fx" % var[v.id]
+                fy = "%s_fy" % var[v.id]
+                lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fx, var[state_in.id]))
+                lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fy, var[state_in.id]))
+                lines += _emit_flux_kernel(model, named_fluxes, var[state_in.id], fx, fy, bidx)
+                lines.append("ctx.neg_div_flux_into(%s, %s, %s);" % (var[v.id], fx, fy))
+            named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
+            for s in named:
+                ssrc = "%s_%s" % (var[v.id], s)
+                lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                             % (ssrc, var[state_in.id]))
+                lines += _emit_source_kernel(model, s, var[state_in.id], ssrc, bidx)
+                lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
+        elif kind == "local_source":
+            state_in = v.inputs[0]
+            var[v.id] = "r%d" % v.id
+            lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                         % (var[v.id], var[state_in.id]))
+            lines += _emit_source_kernel(model, v.attrs["source"], var[state_in.id], var[v.id], bidx)
+        elif kind == "local_linear_operator":
+            var[v.id] = "/* local_linear_operator:%s */" % v.attrs["linear_source"]
+        elif kind == "projection":
+            (state_in,) = v.inputs
+            lines.append("ctx.apply_projection(%d, %s);" % (bidx, var[state_in.id]))
+            var[v.id] = var[state_in.id]
+        else:
+            raise NotImplementedError(
+                "emit_cpp_program: operator_call kind %r is not lowerable (operator %r)"
+                % (kind, v.attrs.get("operator")))
     elif v.op == "solve_fields":
         # Per-stage field solve (ADC-409): solve from the EXPLICIT stage state recorded by
         # P.solve_fields(state=...) so a field-coupled multi-stage scheme re-solves phi from each

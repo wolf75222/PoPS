@@ -36,7 +36,7 @@ def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
     sim = pops.System(n=n, L=L, periodic=False)
     sim.set_poisson(bc="dirichlet")
     sim.set_magnetic_field(np.ones((n, n)))
-    sim.add_equation(
+    sim._add_equation(
         "ions",
         model=pops.Model(
             state=pops.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=vacuum_floor),

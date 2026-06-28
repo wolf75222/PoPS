@@ -273,7 +273,7 @@ class _ProgramSolve(_ProgramConstants):
 
     def fields(self, name, from_state=None, from_states=None, from_state_set=None, operator=None):
         """Board sugar for a field solve. Lowers through the internal ``P._call(operator, ...)`` when
-        a named operator is bound, else to ``P.solve_fields`` (single state) or
+        a named operator is bound, else to the private ``P._solve_fields`` (single state) or
         ``P.solve_fields_from_blocks`` (the board names the operator here; ``_call`` is the internal
         selector path, not the public handle-only ``P.call``)."""
         if from_state_set is not None:
@@ -288,7 +288,7 @@ class _ProgramSolve(_ProgramConstants):
         if len(states) == 1:
             if named and self._registry is not None:
                 return self._call(operator, states[0], name=name)
-            return self.solve_fields(name, states[0])
+            return self._solve_fields(name, states[0])
         if named and self._registry is not None:
             return self._call(operator, *states, name=name)
         return self.solve_fields_from_blocks(states, name=name)
