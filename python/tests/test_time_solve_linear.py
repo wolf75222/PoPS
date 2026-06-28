@@ -41,6 +41,14 @@ def _pops_time():
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD, well-conditioned for CG)
 
 
+def _krylov(method):
+    """Map a method name to its TYPED pops.solvers.krylov descriptor (Spec 5 sec.7: solve_linear
+    takes a typed solver, not a string -- the test still parametrizes by the name for clarity)."""
+    from pops.solvers import krylov
+    return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
+            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method]()
+
+
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
@@ -56,7 +64,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
         return x - alpha * lap  # out = in - alpha*Lap(in)
 
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
+    phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter)
     P.commit("blk", phi)
     return P
 
@@ -114,17 +122,20 @@ def test_tol_positive(t):
             raise AssertionError("tol=%r must raise (a non-positive tolerance is a config error)" % bad)
 
 
-def test_unknown_method(t):
+def test_string_method_rejected(t):
+    # Spec 5 sec.7: solve_linear takes a TYPED pops.solvers.krylov descriptor; a bare string
+    # (known or unknown) is rejected and the error names the typed alternative.
     P = t.Program("p")
     U = P.state("blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
-    try:
-        P.solve_linear(operator=A, rhs=U, max_iter=10, method="minres")
-    except ValueError as exc:
-        assert "method" in str(exc), str(exc)
-    else:
-        raise AssertionError("an unknown method must raise")
+    for bad in ("cg", "minres"):
+        try:
+            P.solve_linear(operator=A, rhs=U, max_iter=10, method=bad)
+        except TypeError as exc:
+            assert "method" in str(exc) and "pops.solvers.krylov" in str(exc), str(exc)
+        else:
+            raise AssertionError("a string method=%r must raise TypeError" % (bad,))
 
 
 def test_operator_must_be_matrix_free(t):

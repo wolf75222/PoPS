@@ -1,6 +1,6 @@
-"""Spec 3 section 22 + 24 (ADC-466): unified ``sim.install(...)`` + install-time validation.
+"""Spec 3 section 22 + 24 (ADC-466): unified ``sim._install_compiled(...)`` + install-time validation.
 
-``sim.install(compiled, instances=, params=, aux=, solvers=)`` is the single Spec-3 entry that
+``sim._install_compiled(compiled, instances=, params=, aux=, solvers=)`` is the single Spec-3 entry that
 installs the compiled handle, binds each named instance's block by name, sets its initial state and
 spatial brick, sets the field solvers / aux fields / runtime params, and finally installs the
 compiled time Program -- LOWERING to the existing lower-layer calls (add_equation / set_poisson /
@@ -27,7 +27,7 @@ try:
     from pops.codegen.loader import CompiledModel
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
-    from pops.physics.model import Param
+    from pops.physics.model import Param, RuntimeParam
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
     print("skip test_unified_install (pops/numpy unavailable: %s)" % exc)
@@ -188,8 +188,8 @@ def test_install_params_routes_declared_runtime_param():
     # dropped into 'unknown' -- which install would surface as 'declared by no instance'. This is why
     # install RESOLVES each model before routing (install step 2 -> _route_block_params).
     raw = Model("adc466_raw_rt")
-    raw.param("cs2", 1.0, kind="runtime")
-    raw.param("nu", 0.0, kind="runtime")
+    raw.param(RuntimeParam("cs2", 1.0))
+    raw.param(RuntimeParam("nu", 0.0))
     _, unknown_raw = pops.System._route_block_params({"plasma": raw}, {"nu": 2.5})
     assert unknown_raw == ["nu"], \
         "a RAW Model exposes no runtime_param_names -> the param is dropped (the bug)"
@@ -226,7 +226,7 @@ def _lie_program(name="adc466_prog"):
 
 def test_install_end_to_end_kokkos():
     """End-to-end unified install (needs a compiler + Kokkos -> ROMEO / CI-Kokkos). A single
-    sim.install(compiled, instances=, aux=, solvers=) wires + installs; the NEGATIVE case (no B_z)
+    sim._install_compiled(compiled, instances=, aux=, solvers=) wires + installs; the NEGATIVE case (no B_z)
     raises the section-24 aux requirement at install."""
     if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
         print("skip test_install_end_to_end_kokkos (_pops lacks install_program; rebuild _pops)")
@@ -247,7 +247,7 @@ def test_install_end_to_end_kokkos():
     # Negative: install WITHOUT aux B_z -> section-24 aux requirement raised at install_program.
     sim_missing = pops.System(n=N, L=1.0, periodic=True)
     try:
-        sim_missing.install(
+        sim_missing._install_compiled(
             compiled,
             instances={"plasma": {"state": "U", "initial": u0,
                                   "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
@@ -261,7 +261,7 @@ def test_install_end_to_end_kokkos():
 
     # Positive: the SAME install with aux={'B_z': ...} wires + installs cleanly.
     sim_ok = pops.System(n=N, L=1.0, periodic=True)
-    sim_ok.install(
+    sim_ok._install_compiled(
         compiled,
         instances={"plasma": {"state": "U", "initial": u0,
                               "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
@@ -278,7 +278,7 @@ def _iso_runtime_model(name="adc466_rt_model"):
     System._resolve_instance_model), so set_block_params can change cs2 at runtime."""
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5, kind="runtime")
+    cs2 = m.param(RuntimeParam("cs2", 0.5))
     cs = sqrt(cs2)
     m.flux(x=[mx, mx * mx / rho + cs2 * rho, mx * my / rho],
            y=[my, mx * my / rho, my * my / rho + cs2 * rho])
@@ -316,7 +316,7 @@ def test_install_routes_runtime_param_kokkos():
     u0 = np.stack([rho, np.zeros_like(rho), np.zeros_like(rho)])  # u=0 -> momentum residual ~ cs2*rho
 
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.install(
+    sim._install_compiled(
         compiled,
         # No "model" key -> install uses compiled.model (the raw Model) and AUTO-resolves it via
         # AOT (it declares a runtime param); the default pops.Explicit() == SSPRK2 is AOT-compatible.
@@ -344,7 +344,7 @@ def test_install_routes_runtime_param_kokkos():
     # the step regardless; use the default Explicit()).
     sim_euler = pops.System(n=N, L=1.0, periodic=True)
     try:
-        sim_euler.install(
+        sim_euler._install_compiled(
             compiled,
             instances={"plasma": {"state": "U", "initial": u0,
                                   "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
@@ -388,7 +388,7 @@ def test_install_native_cadence_rejected():
     cadence is a compiled-program concept. Host-testable (the guard fires before any engine run)."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
-        sim.install(None, cadence=adctime.CompiledTime(substeps=2, stride=1))
+        sim._install_compiled(None, cadence=adctime.CompiledTime(substeps=2, stride=1))
         raise AssertionError("install(compiled=None, cadence=) was accepted")
     except ValueError as exc:
         assert "cadence" in str(exc) and "native" in str(exc), exc
@@ -416,7 +416,7 @@ def test_install_native_end_to_end_kokkos():
     # NATIVE via the unified entry: compiled=None, the instance carries the native model + time.
     sim_install = pops.System(n=N, L=1.0, periodic=True)
     try:
-        sim_install.install(
+        sim_install._install_compiled(
             None,
             instances={"plasma": {"model": m, "initial": u0, "spatial": _fv(),
                                   "time": pops.Explicit(method="euler")}},

@@ -172,7 +172,7 @@ def test_explain_checkpoint_flags_dynamic_regrid_violation():
 
 # --- compiled static delegation ------------------------------------------------
 def test_compiled_inspect_amr_delegates_to_top_level():
-    # A CompiledModel/Problem carries no AMR layout; its inspect_amr delegates to pops.inspect_amr.
+    # A CompiledModel/Case carries no AMR layout; its inspect_amr delegates to pops.inspect_amr.
     # Build a tiny stub CompiledModel (no .so dlopen needed for the inert delegation path).
     from pops.codegen.loader import CompiledModel
     cm = CompiledModel(

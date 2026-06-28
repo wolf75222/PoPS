@@ -26,7 +26,7 @@ import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
-from pops.physics.model import Param
+from pops.physics.model import Param, RuntimeParam
 
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
 GAMMA = 1.6667
@@ -107,7 +107,7 @@ def pure_python_checks():
     # P7-b : les parametres runtime sont desormais implementes (cf. test_dsl_runtime_params). L'ancienne
     # assertion "runtime rejete -> NotImplementedError" etait perimee depuis l'arrivee de la feature et
     # echouait en silence (CI auto-decouverte avalant l'echec, cf. ADC-104).
-    kp = m.param("kappa", 1.0, kind="runtime")
+    kp = m.param(RuntimeParam("kappa", 1.0))
     assert isinstance(kp, Param) and kp.name == "kappa" and kp.kind == "runtime" \
         and abs(kp.value - 1.0) < 1e-12, "param runtime supporte (Param kind='runtime')"
     print("OK  Param nomme (name/value/kind) + runtime supporte (P7-b)")

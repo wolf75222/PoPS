@@ -1,6 +1,6 @@
 """pops.compile_library -- the Spec 3 brick-library manifest / ABI layer.
 
-``pops.compile_library("my_numerics.so", objects=[...], backend="production")``
+``pops.compile_library("my_numerics.so", objects=[...], backend=pops.codegen.Production())``
 collects generated / macro / native brick descriptors (from :mod:`pops.numerics` /
 :mod:`pops.solvers`, the ``@pops.codegen.solvers.solver`` registry, IR macros) into a
 reusable-library MANIFEST: the
@@ -32,6 +32,31 @@ _MANIFEST_VERSION = 1
 
 _REQUIRED_KEYS = ("manifest_version", "name", "backend", "abi_key", "bricks",
                   "generated_symbols", "content_hash")
+
+
+def _lower_library_backend(backend):
+    """Lower a typed backend descriptor to its token, rejecting a bare string (Spec 5 sec.7).
+
+    Mirrors ``pops.compile``'s typed-backend handling: ``backend`` is a typed
+    :class:`pops.codegen.backends._Backend` (``Production()`` / ``AOT()`` / ``JIT()``) and lowers
+    to its canonical token (``"production"`` ...), exactly the string the manifest always
+    recorded -- so the manifest / content hash stay byte-identical. ``None`` defaults to
+    ``Production()``. A bare backend string is REJECTED (the public string form is removed; the
+    error names the typed alternative).
+    """
+    from pops.codegen.backends import Production, _Backend
+    if backend is None:
+        backend = Production()
+    if isinstance(backend, str):
+        raise TypeError(
+            "compile_library: backend must be a typed pops.codegen backend descriptor "
+            "(pops.codegen.Production() -- the only one supported yet), not the string %r"
+            % (backend,))
+    if not isinstance(backend, _Backend):
+        raise TypeError(
+            "compile_library: backend must be a typed pops.codegen backend descriptor "
+            "(e.g. Production()); got %r" % (backend,))
+    return backend.lower()
 
 
 def _brick_entry(obj):
@@ -147,15 +172,18 @@ class LibraryManifest:
             self.name, len(self.bricks), self.content_hash[:12])
 
 
-def compile_library(name, objects, *, backend="production", emit=False, so_path=None,
+def compile_library(name, objects, *, backend=None, emit=False, so_path=None,
                     cxx=None, force=False):
     """Build a reusable brick library from a set of brick descriptors.
 
     @p name is the library ``.so`` name; @p objects is a non-empty list of
     :class:`pops.descriptors.BrickDescriptor` (native / generated / macro / external bricks,
     e.g. ``pops.solvers.GMRES()``, ``pops.numerics.riemann.HLLC()``, an
-    ``@pops.codegen.solvers.solver`` generated brick). Returns a :class:`LibraryManifest`
-    carrying the brick metadata, the loaded-module ABI key and a stable content hash.
+    ``@pops.codegen.solvers.solver`` generated brick). @p backend is a TYPED backend descriptor
+    (``pops.codegen.Production()`` -- the only one supported yet; ``None`` defaults to it); a bare
+    backend string is REJECTED (Spec 5 sec.7, mirroring ``pops.compile``). Returns a
+    :class:`LibraryManifest` carrying the brick metadata, the loaded-module ABI key and a stable
+    content hash.
 
     With ``emit=False`` (default) it returns the MANIFEST only (numerics-free, no
     compiler needed). With ``emit=True`` it ALSO emits the library C++
@@ -167,9 +195,10 @@ def compile_library(name, objects, *, backend="production", emit=False, so_path=
     brick list / requirements / capabilities and the generated symbols; an ABI / Kokkos
     mismatch when it is later read back is a HARD error -- never a silent fallback.
     """
+    backend = _lower_library_backend(backend)
     if backend != "production":
         raise ValueError(
-            "compile_library currently supports backend='production' only; got %r"
+            "compile_library currently supports the production backend only; got %r"
             % (backend,))
     if not objects:
         raise ValueError("compile_library requires a non-empty objects= list of "

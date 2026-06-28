@@ -88,22 +88,29 @@ def _(P):
 ## Compiling and running
 
 ```python
-m = pops.physics.facade.Model(...)                       # the physical model
-compiled = pops.compile_problem(model=m, time=P, backend="production", target="system")
+from pops.math import laplacian
 
-sim = pops.System(n=128, L=1.0, periodic=True)
-sim.install(compiled,                          # the unified headline entry (Spec 4 s23)
-            instances={"plasma": {"model": m,
-                                  "spatial": pops.FiniteVolume(...),
-                                  "initial": U0}},
-            solvers={"phi": pops.solvers.GeometricMG()})
-sim.step(dt)                                   # the compiled program drives the step, C++-side
+physics_model = pops.physics.Model(...)                  # the physical model (writing facade)
+poisson = pops.fields.PoissonProblem(
+    name="phi", unknown="phi",
+    equation=(-laplacian("phi") == "charge_density"),
+    solver=pops.solvers.GeometricMG())
+case = (pops.Case(name="plasma", layout=pops.mesh.Uniform(mesh))
+        .block("plasma", physics=physics_model, spatial=pops.FiniteVolume(...))
+        .field(poisson)
+        .time(P))
+
+compiled = pops.compile(case, backend=pops.codegen.Production())   # lower + compile the assembly
+sim = pops.bind(compiled, state={"plasma": U0})           # the public bind entry -> a runnable sim
+sim.run(t_end)                                            # the compiled program drives the step
 ```
 
-`sim.install` is the single entry that wires each named instance's initial state + spatial brick, the
-aux fields and the field solvers and installs the compiled program in one call, lowering to the
-lower-layer calls (`add_block`/`add_equation`, `set_poisson`, `set_magnetic_field`, `set_state`,
-`install_program`), which all stay available as the documented building blocks.
+`pops.bind` is THE documented entry that turns a compiled handle into a runnable simulation: it
+dispatches `System` vs `AmrSystem`, wires each named instance's initial state + spatial brick, the
+aux fields and the field solvers, and installs the compiled program in one call. It does this by
+calling the internal `sim._install_compiled(...)` seam, which lowers to the lower-layer calls
+(`add_block`/`add_equation`, `set_poisson`, `set_magnetic_field`, `set_state`, `install_program`).
+The `_install_compiled` seam is undocumented and low-level; author runs through `pops.bind`.
 
 `compile_problem` lowers the IR (`Program.emit_cpp_program`), compiles it against the pops headers
 with the **same Kokkos toolchain** as the loaded `_pops` module (so the `.so` is ABI-compatible and
@@ -114,11 +121,12 @@ generated `.cpp` next to the `.so` for inspection. `backend` must be `"productio
 `"system"` (other values raise a clear error).
 
 `pops.CompiledTime(substeps=, stride=, cfl=)` records the compiled Program's macro-step cadence;
-apply it with `sim.set_program_cadence(substeps, stride)` after `sim.install_program` (`substeps` and
+pass it through `pops.bind(compiled, ..., cadence=pops.CompiledTime(substeps=, stride=))`, which
+applies it on the internal seam (`set_program_cadence` after `install_program`; `substeps` and
 `stride` orchestrate the program System-side, mirroring the native per-block loop -- `substeps>1` is
 bit-exact vs native only for an uncoupled program, and `stride` is global, i.e. single-block exact).
-The old time schemes (`pops.Explicit`, `pops.IMEX`, `pops.Strang`, `pops.CondensedSchur`) and the old
-compile path (`m.compile`, `m.source`) keep working unchanged.
+The old time schemes (`pops.Explicit`, `pops.IMEX`, `pops.Strang`, `pops.CondensedSchur`) keep
+working unchanged.
 
 ## Operator-first programs
 

@@ -209,12 +209,19 @@ def test_coupled_rate_output_component_count_must_match_state():
                        outputs={e: [e["ne"]], i: [i["ni"]]})  # electron rate is rank 1, not 2
 
 
-def test_multispecies_compile_routes_through_a_program():
-    # a multi-species model is compiled as a multi-block Program, not the single-state shortcut.
+def test_multispecies_lowers_to_a_multiblock_module():
+    # physics.Model is a WRITING facade (Spec 5 sec.11): it has NO public compile_* method; a
+    # multi-species model lowers to the multi-block pops.model.Module, which pops.compile consumes.
+    from pops import model as _model_pkg
+
     m, _e, _i, _n = _three_fluid_board()
     assert m.check() is None                              # model-level check is a single-species notion
-    with pytest.raises(NotImplementedError, match="multi-block"):
-        m.compile("ignored.so")
+    # No direct compilation from the physics facade (the documented path is m.lower() -> pops.compile).
+    assert not hasattr(m, "compile"), "physics.Model must not expose a direct compile()"
+    module = m.lower()
+    assert isinstance(module, _model_pkg.Module), "physics.Model.lower() returns a pops.model.Module"
+    assert isinstance(m.to_module(), _model_pkg.Module), "to_module() returns a Module too"
+    assert type(m).to_module is type(m).lower, "to_module() is the lower() alias"
 
 
 def test_single_species_is_byte_identical_to_state():

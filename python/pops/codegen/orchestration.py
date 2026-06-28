@@ -1,26 +1,27 @@
 """pops.codegen.orchestration -- thin pops.compile / pops.bind over the existing runtime.
 
-These are the Spec 5 sec.11 lowering entry points for a :class:`pops.problem.Problem`:
+These are the Spec 5 sec.11 lowering entry points for a :class:`pops.case.Case`:
 
 * :func:`compile` validates the assembly, picks the compile target from the LAYOUT
   (``Uniform`` -> ``"system"``, ``AMR`` -> ``"amr_system"``; no user ``target=`` string),
   resolves the block's physics to the model the existing ``compile_problem`` wants, and calls
   ``compile_problem`` unchanged. It carries the originating problem + target on the handle.
 * :func:`bind` dispatches ``System`` vs ``AmrSystem`` from the carried target, assembles the
-  per-instance state mapping, and calls the unified ``sim.install(compiled, instances=, ...)``
-  -- the ONE install seam (``pops.runtime._system_unified_install``). No parallel runtime.
+  per-instance state mapping, and calls the INTERNAL ``sim._install_compiled(compiled, instances=,
+  ...)`` seam (``pops.runtime._system_unified_install``). ``bind`` is the public entry point; the
+  ``_install_compiled`` seam is undocumented / low-level. No parallel runtime.
 
 There is NO new codegen and NO new install machinery here: this module ORCHESTRATES the
 proven pieces. Every not-yet-wired route raises a clear ``NotImplementedError``.
 
 Import-graph rule (Spec 4 / sec.4): ``codegen`` may import only ir / model / physics / time /
-lib at module scope. The runtime (System / AmrSystem), mesh (AMR) and problem types are pulled
+lib at module scope. The runtime (System / AmrSystem), mesh (AMR) and case types are pulled
 LAZILY inside the function bodies, so this module adds no forbidden cross-layer edge.
 """
 
 
 def compile(problem, backend="production", time=None, **kwargs):
-    """Lower a :class:`pops.problem.Problem` to a compiled handle (thin over ``compile_problem``).
+    """Lower a :class:`pops.case.Case` to a compiled handle (thin over ``compile_problem``).
 
     Validates @p problem, derives the compile target from its LAYOUT (``Uniform`` -> system,
     ``AMR`` -> amr_system), resolves the single block's physics to the model ``compile_problem``
@@ -30,7 +31,7 @@ def compile(problem, backend="production", time=None, **kwargs):
     multi-block) raise a clear ``NotImplementedError``.
 
     Args:
-        problem: The :class:`pops.problem.Problem` assembly to lower.
+        problem: The :class:`pops.case.Case` assembly to lower.
         backend: The codegen backend forwarded to ``compile_problem`` (default "production").
         time: The ``pops.time.Program`` time scheme; falls back to ``problem._time``.
         **kwargs: Extra keyword args forwarded verbatim to ``compile_problem`` (so_path /
@@ -79,14 +80,16 @@ def compile(problem, backend="production", time=None, **kwargs):
 
 def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
          solvers=None, cadence=None):
-    """Wire a compiled handle onto the runtime (thin over the unified ``sim.install``).
+    """Wire a compiled handle onto the runtime: the PUBLIC bind entry point.
 
-    Dispatches ``System`` vs ``AmrSystem`` from the target carried on @p compiled (set by
-    :func:`compile`), builds the per-instance state mapping from the problem's blocks and the
-    supplied initial state, derives the field solvers from the problem's field problems (an
-    explicit @p solvers overrides), and calls ``sim.install(compiled, instances=, params=,
-    aux=, solvers=, cadence=)`` -- the single Spec-3 install seam. Returns the bound
-    simulation (the ``System`` / ``AmrSystem`` is the Simulation facade for now).
+    ``pops.bind`` is THE documented way to instantiate a runnable simulation from a compiled handle
+    (``compiled = pops.compile(...)``); it dispatches ``System`` vs ``AmrSystem`` from the target
+    carried on @p compiled (set by :func:`compile`), builds the per-instance state mapping from the
+    problem's blocks and the supplied initial state, derives the field solvers from the problem's
+    field problems (an explicit @p solvers overrides), and calls the INTERNAL
+    ``sim._install_compiled(compiled, instances=, params=, aux=, solvers=, cadence=)`` seam -- the
+    low-level install lowering, not a public entry. Returns the bound simulation (the ``System`` /
+    ``AmrSystem`` is the Simulation facade for now): call ``sim.run(...)`` to advance it.
 
     Args:
         compiled: A ``CompiledProblem`` from :func:`compile` (carries ``_problem`` / ``_target``).
@@ -133,8 +136,8 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     field_solvers = _problem_field_solvers(problem)
     field_solvers.update(solvers or {})
 
-    sim.install(compiled, instances=instances, params=params or {}, aux=aux or {},
-                solvers=field_solvers, cadence=cadence)
+    sim._install_compiled(compiled, instances=instances, params=params or {}, aux=aux or {},
+                          solvers=field_solvers, cadence=cadence)
     return sim
 
 

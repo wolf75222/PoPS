@@ -2,7 +2,7 @@
 charge a l'execution d'un schema ordre 1 (recon='none') a une reconstruction MUSCL ordre 2 limitee
 (recon='minmod' | 'vanleer') sur les variables conservatives. On verifie que le residu hote (host_residual
 via IModel) reproduit EXACTEMENT une reference MUSCL + Rusanov a a_max global ecrite en numpy depuis les
-memes formules DSL, pour les trois reconstructions ; que recon='none' reste l'ordre 1 (== pops.PythonFlux,
+memes formules DSL, pour les trois reconstructions ; que recon='none' reste l'ordre 1 (== pops.experimental.PythonFlux,
 non-regression de test_dsl_block) ; et qu'une reconstruction inconnue est refusee.
 """
 import os

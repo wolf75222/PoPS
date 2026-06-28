@@ -24,6 +24,7 @@ from .board_handles import (CallableOperator, FieldHandle, FieldsHandle, FluxHan
                             Invariant, LocalLinearOperatorExpr, SourceHandle, StateHandle,
                             VectorHandle, _canon_role, _roles_for, _safe_name)
 from ._board_multispecies import _MultiSpeciesMixin
+from .model import _NO_KIND
 
 
 
@@ -124,8 +125,13 @@ class Model(_MultiSpeciesMixin):
         """Define a named derived scalar (e.g. pressure, sound speed)."""
         return self._dsl.primitive(name, expr)
 
-    def param(self, name, value=0.0, kind="const"):
-        """Declare a named scalar parameter; returns a usable expression."""
+    def param(self, name, value=None, *, kind=_NO_KIND):
+        """Declare a named scalar parameter; returns a usable expression.
+
+        The kind is a TYPED param object (Spec 5 sec.7), not a ``kind=`` string:
+        ``param(pops.physics.RuntimeParam("cs2", 1.0))`` / ``param(ConstParam("g", 9.8))`` /
+        ``param("g", 9.8)`` (const shorthand). A bare ``kind=`` keyword is REJECTED.
+        """
         return self._dsl.param(name, value, kind=kind)
 
     def aux(self, name):
@@ -417,20 +423,25 @@ class Model(_MultiSpeciesMixin):
             return None
         return self._dsl.check()
 
-    def compile(self, *args, **kwargs):
-        """Compile the single-species model to a ``.so`` (delegates to
-        :meth:`pops.dsl.Model.compile`).
+    def lower(self):
+        """Lower this writing facade to its :class:`pops.model.Module` (Spec 5 sec.11).
 
-        A multi-species model is compiled as a multi-block time Program (the operator-first
-        path: ``m.module`` bound to a :class:`pops.time.Program`, then ``P.compile_problem`` /
-        ``emit_cpp_program``), not through this single-state shortcut, so this raises a clear
-        error rather than compiling an empty single-state model."""
-        if self._multi_module is not None:
-            raise NotImplementedError(
-                "a multi-species physics.Model compiles as a multi-block time Program: bind "
-                "m.module to an pops.time.Program and emit/compile that (the operator-first "
-                "multi-block path), not via m.compile() (ADC-457)")
-        return self._dsl.compile(*args, **kwargs)
+        ``pops.physics.Model`` is an AUTHORING facade: it writes the physics (state, primitives,
+        flux, sources, field solves) and lowers to the operator-first IR. It does NOT compile.
+        The documented flow is::
+
+            physics_model = pops.physics.Model(...)
+            model = physics_model.lower()              # -> pops.model.Module
+            compiled = pops.compile(case_with(model), backend=pops.codegen.Production())
+
+        Single-species: the dsl-derived Module (one StateSpace). Multi-species: the multi-block
+        Module this model assembled directly (N StateSpaces + ``coupled_rate`` + a multi-block
+        field operator). Identical to :pyattr:`module`; ``lower`` is the Spec 5 sec.11 name."""
+        return self.module
+
+    # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). Both return the
+    # pops.model.Module that pops.compile / pops.compile_problem(model=...) accepts.
+    to_module = lower
 
     # --- introspection ---
 

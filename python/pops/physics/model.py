@@ -180,3 +180,41 @@ def RuntimeParam(name, value):
     """Sugar: a RUNTIME parameter (modifiable without recompiling). Equivalent to Param(name, value,
     kind='runtime'). cf. Param mode (b) and include/pops/runtime/runtime_params.hpp (P7-b)."""
     return Param(name, value, kind="runtime")
+
+
+def ConstParam(name, value):
+    """Sugar: a CONST parameter (frozen / inlined at compile time). Equivalent to Param(name, value,
+    kind='const') -- the default param mode (a). The TYPED counterpart of the removed
+    ``kind="const"`` string on the public param surface (Spec 5 sec.7)."""
+    return Param(name, value, kind="const")
+
+
+# Sentinel distinguishing "the caller did not pass kind=" from "the caller passed kind=None":
+# the public param surfaces de-string by REJECTING any kind= keyword (Spec 5 sec.7), so they keep
+# a kind= sentinel only to emit a clear error naming the typed alternative.
+_NO_KIND = object()
+
+
+def _coerce_param(name, value=None, *, kind=_NO_KIND, who="param"):
+    """Coerce a public param argument into a typed :class:`Param`, rejecting the ``kind=`` string.
+
+    Accepts a typed :class:`Param` (e.g. :func:`ConstParam` / :func:`RuntimeParam`) as ``name``
+    (returned as-is; ``value`` must not also be given), or a ``(name, value)`` pair that builds a
+    CONST param (the default mode). A bare ``kind="const"/"runtime"`` keyword is REJECTED -- the
+    string route is removed; the error names :func:`ConstParam` / :func:`RuntimeParam`. The typed
+    sugars produce the SAME ``Param`` the old ``kind=`` string did, so the lowering is byte-identical.
+    """
+    if kind is not _NO_KIND:
+        raise TypeError(
+            "%s: the kind= string is removed (Spec 5 sec.7); pass a typed param object "
+            "(pops.physics.RuntimeParam(name, value) or pops.physics.ConstParam(name, value)) "
+            "instead of kind=%r" % (who, kind))
+    if isinstance(name, Param):
+        if value is not None:
+            raise TypeError(
+                "%s: a typed Param was given; do not also pass a value (%r)" % (who, value))
+        return name
+    if value is None:
+        raise TypeError(
+            "%s: provide a typed param (ConstParam/RuntimeParam) or a (name, value) pair" % (who,))
+    return ConstParam(name, value)

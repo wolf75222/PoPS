@@ -6,11 +6,69 @@ from pops.time.program_base import _ProgramConstants
 from pops.time.values import StageStateSet, Value, _Affine, _is_field_value, _resolve_handle
 
 
+def _lower_krylov_method(method):
+    """Lower a typed Krylov descriptor to its internal scheme token (Spec 5 sec.7).
+
+    ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG()`` / ``GMRES()`` /
+    ``BiCGStab()`` / ``Richardson()``); its ``scheme`` is the C++ token (``"cg"`` ...) the
+    runtime keys on, so the typed object lowers byte-identically to the historical string. A
+    bare algorithm-selector string is REJECTED (Spec 5 forbids keeping the string form on the
+    public surface); ``None`` defaults to ``CG()``.
+    """
+    if method is None:
+        method = _krylov().CG()
+    if isinstance(method, str):
+        raise TypeError(
+            "solve_linear: method must be a typed pops.solvers.krylov descriptor "
+            "(e.g. pops.solvers.krylov.GMRES() / CG() / BiCGStab() / Richardson()), not the "
+            "string %r" % (method,))
+    scheme = getattr(method, "scheme", None)
+    if getattr(method, "category", None) != "solver" or not isinstance(scheme, str):
+        raise TypeError(
+            "solve_linear: method must be a pops.solvers.krylov descriptor "
+            "(CG() / GMRES() / BiCGStab() / Richardson()); got %r" % (method,))
+    return scheme
+
+
+def _lower_preconditioner(preconditioner):
+    """Lower a typed preconditioner descriptor to its scheme token (Spec 5 sec.7).
+
+    ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
+    (``preconditioners.Identity()`` ...); its ``scheme`` is the C++ token. A bare string is
+    REJECTED; ``None`` defaults to ``Identity()`` (the only supported preconditioner yet).
+    """
+    if preconditioner is None:
+        preconditioner = _preconditioners().Identity()
+    if isinstance(preconditioner, str):
+        raise TypeError(
+            "solve_linear: preconditioner must be a typed pops.solvers.preconditioners "
+            "descriptor (e.g. pops.solvers.preconditioners.Identity()), not the string %r"
+            % (preconditioner,))
+    scheme = getattr(preconditioner, "scheme", None)
+    if getattr(preconditioner, "category", None) != "preconditioner" or not isinstance(scheme, str):
+        raise TypeError(
+            "solve_linear: preconditioner must be a pops.solvers.preconditioners descriptor "
+            "(e.g. Identity()); got %r" % (preconditioner,))
+    return scheme
+
+
+def _krylov():
+    """The pops.solvers.krylov catalog (imported lazily to keep pops.time import-light)."""
+    from pops.solvers import krylov
+    return krylov
+
+
+def _preconditioners():
+    """The pops.solvers.preconditioners catalog (imported lazily)."""
+    from pops.solvers import preconditioners
+    return preconditioners
+
+
 class _ProgramSolve(_ProgramConstants):
     """Krylov solve_linear, histories, commits, board sugar (fields/define/solve) and records."""
 
-    def solve_linear(self, name=None, operator=None, rhs=None, initial_guess=None, method="cg",
-                     preconditioner="identity", tol=1e-8, max_iter=None, restart=None):
+    def solve_linear(self, name=None, operator=None, rhs=None, initial_guess=None, method=None,
+                     preconditioner=None, tol=1e-8, max_iter=None, restart=None):
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
         return the solution as a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
         the IR only carries the operator (its apply lambda), the rhs, the initial guess, and the
@@ -19,14 +77,24 @@ class _ProgramSolve(_ProgramConstants):
           - @p operator: a ``matrix_free_operator`` value (with a ``set_apply`` body);
           - @p rhs: the right-hand side -- a scalar_field, or (MVP) a 1-component State value;
           - @p initial_guess: warm start (defaults to zero);
-          - @p method: ``"cg"`` (SPD), ``"bicgstab"`` (general), ``"richardson"``, or ``"gmres"``
-            (restarted GMRES(m), the robust choice for a NON-symmetric operator);
-          - @p preconditioner: ``"identity"`` only for now;
+          - @p method: a TYPED Krylov descriptor (``pops.solvers.krylov.CG()`` (SPD),
+            ``BiCGStab()`` (general), ``Richardson()``, or ``GMRES()`` -- restarted GMRES(m), the
+            robust choice for a NON-symmetric operator). A bare string is REJECTED (Spec 5
+            sec.7); ``None`` defaults to ``CG()``;
+          - @p preconditioner: a typed ``pops.solvers.preconditioners`` descriptor
+            (``Identity()`` only for now); a bare string is REJECTED; ``None`` defaults to
+            ``Identity()``;
           - @p tol: relative L2 residual stop (> 0);
           - @p max_iter: iteration budget (REQUIRED, > 0: a dynamic solver loop with no budget is a
             configuration error -- ``pops::*_solve`` itself throws on a non-positive budget);
           - @p restart: GMRES restart length m (a positive int; defaults to 30). Ignored by the other
             methods; passing it to a non-gmres solve is rejected."""
+        # Spec 5 sec.7: method / preconditioner are TYPED descriptors (pops.solvers.krylov /
+        # pops.solvers.preconditioners). They lower to the SAME internal scheme tokens the runtime
+        # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
+        # a bare algorithm-selector string is rejected (the public string form is removed).
+        method = _lower_krylov_method(method)
+        preconditioner = _lower_preconditioner(preconditioner)
         if not (isinstance(operator, Value) and operator.vtype == "matrix_free_op"):
             raise ValueError("solve_linear: operator must be a matrix_free_operator value")
         if operator.attrs["apply_block"] is None:

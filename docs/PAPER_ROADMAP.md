@@ -105,7 +105,7 @@ ADVANCED / LEGACY / TEST paths, NOT the main user path:
 - `backend="prototype"` (JIT, IModel, virtual dispatch, host order-1 Rusanov) and
   `backend="aot"` (host-marshaled AOT): iteration / verification, not production.
 - `add_dynamic_block` (JIT prototype) and `add_compiled_block` (AOT): corresponding low-level adders.
-- `pops.PythonFlux`: HOST numpy path (OUTSIDE the GPU/MPI hot path), to TEST a flux written in
+- `pops.experimental.PythonFlux`: HOST numpy path (OUTSIDE the GPU/MPI hot path, NON-PRODUCTION / TESTS-ONLY), to TEST a flux written in
   formulas, not for production.
 
 ## Gap classification (4 baskets)

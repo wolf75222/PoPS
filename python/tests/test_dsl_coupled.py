@@ -6,7 +6,7 @@ simple transport :
 (A) couplage elliptique : le elliptic_rhs genere est cable dans le Poisson de systeme et donne le MEME
     potentiel que le euler_poisson COMPILE (add_block + briques manuelles GravityCoupling). Le solve de
     Poisson ne depend pas du schema de flux, donc l'egalite isole le second membre par bloc.
-(B) terme source : eval_rhs(bloc dynamique) == residu de flux (pops.PythonFlux, a_max GLOBAL, comme le
+(B) terme source : eval_rhs(bloc dynamique) == residu de flux (pops.experimental.PythonFlux, a_max GLOBAL, comme le
     chemin hote) + source_value(U, grad phi) evaluee depuis les MEMES formules. Isole la source (le flux
     a deja ete valide contre PythonFlux dans test_dsl_block). On ne compare PAS le flux au bloc compile :
     le bloc dynamique dissipe avec un a_max global, le compile avec des vitesses d'onde locales.

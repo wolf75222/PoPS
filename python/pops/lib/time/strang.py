@@ -34,7 +34,7 @@ def lie(P, block, half_flow, source, *, commit=True):
 
 
 def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz=3, c_E=None,
-                    method="bicgstab", tol=1e-10, max_iter=400, commit=True):
+                    method=None, tol=1e-10, max_iter=400, commit=True):
     """Condensed-Schur implicit electrostatic-Lorentz SOURCE stage as a compiled Program (epic ADC-399,
     acceptance 32), mirroring the native ``pops.CondensedSchur`` (CondensedSchurSourceStepper) sequence:
 
@@ -70,8 +70,8 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
     @p alpha is the electrostatic coupling constant; @p theta the theta-scheme implicitness in ``(0, 1]``;
     @p c_rho / @p c_mx / @p c_my the conserved-variable components, @p c_bz the aux component of B_z
     (canonical 3, filled by ``solve_fields``) and @p c_E the OPTIONAL energy component (None = no energy
-    update, like a rho/mx/my isothermal block). @p method / @p tol / @p max_iter configure the Krylov phi
-    solve.
+    update, like a rho/mx/my isothermal block). @p method (a TYPED pops.solvers.krylov descriptor;
+    None defaults to BiCGStab()) / @p tol / @p max_iter configure the Krylov phi solve.
 
     DEFERRED (documented partial, spec's "if too large" clause):
       - **cross-step phi^n carry**. The native stepper freezes phi^n (the previous stage's potential)
@@ -111,6 +111,13 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
         P.apply_laplacian_coeff(lap, x, coeffs)
         return -1.0 * lap  # the condensed operator -div(A grad phi); the affine is the lowered result
 
+    # Spec 5 sec.7: method is a TYPED pops.solvers.krylov descriptor (default BiCGStab(), the
+    # native CondensedSchur solver). A bare string is rejected by P.solve_linear with a clear
+    # message naming the typed alternative; None defaults here byte-identically to the old
+    # "bicgstab" string.
+    if method is None:
+        from pops.solvers.krylov import BiCGStab
+        method = BiCGStab()
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=rhs, method=method, tol=tol, max_iter=max_iter)
     # The reconstruction overwrites the MOMENTUM in place. theta == 1 with no energy keeps the historical

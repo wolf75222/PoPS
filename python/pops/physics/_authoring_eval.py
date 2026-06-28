@@ -145,11 +145,14 @@ class _EvalMixin:
         return np.stack([np.broadcast_to(s.eval(env), U[0].shape) for s in self._source], axis=0)
 
     def to_python_flux(self, aux=None):
-        """Produces an pops.PythonFlux (host backend) from the formulas: the model RUNS
-        (interpreted on CPU). aux: dict name -> array (auxiliary fields), frozen for this flux."""
-        import pops
+        """Produces a pops.experimental.PythonFlux (host backend) from the formulas: the model RUNS
+        (interpreted on CPU). aux: dict name -> array (auxiliary fields), frozen for this flux.
+
+        NON-PRODUCTION / TESTS-ONLY: PythonFlux computes a numpy residual in Python, so it lives
+        under pops.experimental, off the public pops surface."""
+        from pops.experimental import PythonFlux
         a = aux or {}
-        return pops.PythonFlux(
+        return PythonFlux(
             lambda U, d: self.flux(U, a, d),
             lambda U: max(self.max_wave_speed(U, a, 0), self.max_wave_speed(U, a, 1)))
 

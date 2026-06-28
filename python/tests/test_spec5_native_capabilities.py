@@ -12,7 +12,7 @@ sec.13.12 "Python-derived, not authoritative" gap. They assert:
   - ``pops.inspect_capabilities()`` cross-checks its descriptor walk against the native source: it
     appends ``source="native"`` rows and never reports a layout descriptor available that the C++
     source reports unavailable (a disagreement raises ``CapabilityMismatchError``);
-  - ``Problem.explain_routes()`` prints a route matrix sourced from the native facts (criterion #37).
+  - ``Case.explain_routes()`` prints a route matrix sourced from the native facts (criterion #37).
 
 The STATIC tier is LOCALLY validatable once ``_pops`` is rebuilt with this header change; the tests
 SKIP cleanly on an ``_pops`` that predates ``module_capabilities`` (pre-rebuild). The PER-ARTIFACT
@@ -115,10 +115,10 @@ def test_capability_mismatch_error_is_exported():
     assert issubclass(CapabilityMismatchError, RuntimeError)
 
 
-# --- STATIC tier: Problem.explain_routes (criterion #37) ---------------------------------
+# --- STATIC tier: Case.explain_routes (criterion #37) ---------------------------------
 def test_explain_routes_sourced_from_native_facts():
     _module_caps()
-    prob = pops.Problem(name="cap-demo").block("ne", physics=object())
+    prob = pops.Case(name="cap-demo").block("ne", physics=object())
     matrix = prob.explain_routes()
     rows = {row.feature: row for row in matrix}
     for flag in _EXPECTED_FLAGS:
@@ -131,7 +131,7 @@ def test_explain_routes_sourced_from_native_facts():
 
 def test_explain_routes_prints():
     _module_caps()
-    prob = pops.Problem(name="cap-demo").block("ne", physics=object())
+    prob = pops.Case(name="cap-demo").block("ne", physics=object())
     text = str(prob.explain_routes())
     assert "route matrix" in text
     assert "supports_uniform" in text
