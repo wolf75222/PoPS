@@ -1,10 +1,12 @@
-"""ADC-479 Spec 5 C3 boundary: multi-block on an AMR layout is still deferred.
+"""ADC-503 Spec 6 sec.11: multi-block on an AMR layout lowers via the native per-block path.
 
-C3 lowers multi-block Cases on a Uniform layout; the whole-system AMR multi-block seam is NOT wired,
-so a multi-block AMR Case is still rejected LOUD at compile (a HONEST deferral, not a silent
-truncation). A SINGLE-block AMR Case keeps lowering to target='amr_system' unchanged (no early
-whole-system-Program reject is introduced -- that compile-time AMR concern stays at master). The real
-.so compile is Kokkos-gated, so compile_problem is MONKEYPATCHED.
+ADC-503 lifts the C3 boundary: a multi-block (and single-block) AMR Case now lowers. Each block's
+resolved physics is compiled to a target='amr_system' production CompiledModel (the native AMR .so
+loader, add_native_block), the {block: CompiledModel} table is carried on the handle, and bind
+installs through the native path (_install_compiled(compiled=None, instances=...)). There is NO
+whole-system time Program on AMR, so compile_problem is NOT called and time= is not required. The
+real .so compile is Kokkos-gated (ROMEO), so the block model's .compile is MONKEYPATCHED here to
+assert the ROUTING only.
 
 Runs both under pytest and as a plain script; the CI runner executes it via the __main__ guard.
 """
@@ -26,10 +28,32 @@ def _check(cond, msg):
         raise AssertionError(msg)
 
 
+class _StubCompiledModel:
+    """A target='amr_system' CompiledModel stand-in (the AMR route compiles each block to one)."""
+
+    def __init__(self, name="stub"):
+        self.name = name
+        self.so_path = "/tmp/%s_amr.so" % name
+        self.target = "amr_system"
+        self.adder = "add_native_block"
+
+
+class _StubDsl:
+    """The .dsl engine model the compile route resolves to; its .compile records the call."""
+
+    def __init__(self, name="stub"):
+        self.name = name
+        self.compiled = []
+
+    def compile(self, *, backend, target, **kw):
+        self.compiled.append((backend, target))
+        return _StubCompiledModel(self.name)
+
+
 class _StubModel:
     def __init__(self, name="stub"):
         self.name = name
-        self.dsl = object()
+        self.dsl = _StubDsl(name)
 
 
 class _StubCompiled:
@@ -52,8 +76,9 @@ def _unpatch():
         compile_drivers.compile_problem = _SAVED.pop()
 
 
-def test_multi_block_amr_deferred():
-    """C3 boundary: a multi-block AMR Case is rejected at compile, BEFORE any .so is built."""
+def test_multi_block_amr_lowers_natively():
+    """ADC-503: a multi-block AMR Case lowers -- each block compiled for target='amr_system', the
+    {block: CompiledModel} table carried, and compile_problem NEVER called (a tripwire proves it)."""
     called = {"hit": False}
 
     def _tripwire(*a, **kw):
@@ -62,35 +87,45 @@ def test_multi_block_amr_deferred():
 
     _patch_compile_problem(_tripwire)
     try:
-        case = (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
-                .block("ni", physics=_StubModel()))
-        try:
-            orchestration.compile(case, time=object())
-            raise AssertionError("a multi-block AMR Case must be rejected")
-        except NotImplementedError as exc:
-            _check("AMR" in str(exc), "the reject names the AMR layout")
-            _check("multi-block" in str(exc), "the reject is the multi-block deferral")
-        _check(called["hit"] is False, "the reject fires BEFORE compile_problem (no .so built)")
+        m_ne, m_ni = _StubModel("ne"), _StubModel("ni")
+        case = (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=m_ne)
+                .block("ni", physics=m_ni))
+        compiled = orchestration.compile(case)  # no time= : the AMR route does not need one
+        _check(called["hit"] is False, "multi-block AMR does NOT call compile_problem (no .so built)")
+        _check(m_ne.dsl.compiled == [("production", "amr_system")],
+               "block 'ne' compiled once for backend='production', target='amr_system'")
+        _check(m_ni.dsl.compiled == [("production", "amr_system")],
+               "block 'ni' compiled once for backend='production', target='amr_system'")
+        _check(set(compiled._block_compiled_models) == {"ne", "ni"},
+               "the {block: CompiledModel} table carries both blocks")
+        _check(all(cm.target == "amr_system" for cm in compiled._block_compiled_models.values()),
+               "every carried CompiledModel targets the AMR system")
+        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
     finally:
         _unpatch()
-    print("ok test_multi_block_amr_deferred")
+    print("ok test_multi_block_amr_lowers_natively")
 
 
 def test_single_block_amr_still_lowers():
-    """C3 boundary regression: a single-block AMR Case still lowers to target='amr_system' (no
-    whole-system-Program compile-time reject is introduced)."""
-    captured = {}
+    """ADC-503 regression: a single-block AMR Case still lowers (now via the native per-block path,
+    not compile_problem)."""
+    called = {"hit": False}
 
-    def _fake(*, time, model, backend, target, **kw):
-        captured.update(target=target)
-        return _StubCompiled(target=target, model=model)
+    def _tripwire(*a, **kw):
+        called["hit"] = True
+        return _StubCompiled(target="amr_system")
 
-    _patch_compile_problem(_fake)
+    _patch_compile_problem(_tripwire)
     try:
         layout = AMR(CartesianMesh())
-        case = pops.Case(layout=layout).block("ne", physics=_StubModel())
-        compiled = orchestration.compile(case, time=object())
-        _check(captured["target"] == "amr_system", "single-block AMR routes to target='amr_system'")
+        model = _StubModel("ne")
+        case = pops.Case(layout=layout).block("ne", physics=model)
+        compiled = orchestration.compile(case)
+        _check(called["hit"] is False, "single-block AMR does NOT call compile_problem")
+        _check(model.dsl.compiled == [("production", "amr_system")],
+               "the single block compiled for target='amr_system'")
+        _check(set(compiled._block_compiled_models) == {"ne"},
+               "the handle carries the single block's CompiledModel")
         _check(compiled._layout is layout, "AMR layout carried on the handle for bind()")
     finally:
         _unpatch()

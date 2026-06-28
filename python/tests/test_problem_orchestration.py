@@ -24,12 +24,38 @@ except Exception as exc:  # noqa: BLE001
 
 
 # --- tiny stand-ins (no compiler / no runtime) -----------------------------
-class _StubModel:
-    """A physics stand-in exposing the ``.dsl`` engine model pops.compile resolves."""
+class _StubCompiledModel:
+    """A target='amr_system' CompiledModel stand-in: ``.so_path`` + the adder/target metadata
+    AmrSystem.add_equation dispatches on (no real .so)."""
+
+    def __init__(self, name="stub", so_path="/tmp/stub_amr.so"):
+        self.name = name
+        self.so_path = so_path
+        self.target = "amr_system"
+        self.adder = "add_native_block"
+
+
+class _StubDsl:
+    """The ``.dsl`` engine model a physics block resolves to: its ``.compile(backend, target)``
+    returns a stub CompiledModel and records the call (no compiler)."""
 
     def __init__(self, name="stub"):
         self.name = name
-        self.dsl = object()  # what _resolve_problem_model returns
+        self.compiled = []  # (backend, target) per compile call
+
+    def compile(self, *, backend, target, **kw):
+        self.compiled.append((backend, target))
+        return _StubCompiledModel(name=self.name, so_path="/tmp/%s_amr.so" % self.name)
+
+
+class _StubModel:
+    """A physics stand-in exposing the ``.dsl`` engine model pops.compile resolves. The Uniform
+    route reads ``.dsl`` as an opaque token for compile_problem; the AMR route calls
+    ``.dsl.compile(backend, target='amr_system')``."""
+
+    def __init__(self, name="stub"):
+        self.name = name
+        self.dsl = _StubDsl(name)  # what _resolve_problem_model returns
 
 
 class _StubSolver:
@@ -39,14 +65,19 @@ class _StubSolver:
 
 
 class _StubCompiled:
-    """A compiled-handle stand-in: only ``.so_path`` + the carried problem/target/layout."""
+    """A compiled-handle stand-in: only ``.so_path`` + the carried problem/target/layout.
 
-    def __init__(self, target="system", problem=None, layout=None):
+    The AMR route also carries ``_block_compiled_models`` (the {block: CompiledModel} table); a
+    System handle leaves it unset (the install reads it only for target='amr_system')."""
+
+    def __init__(self, target="system", problem=None, layout=None, block_compiled=None):
         self.so_path = "/tmp/stub.so"
         self.model = None
         self._target = target
         self._problem = problem
         self._layout = layout
+        if block_compiled is not None:
+            self._block_compiled_models = block_compiled
 
 
 def _poisson_problem():
@@ -226,24 +257,82 @@ def test_compile_layout_drives_target(monkeypatch=None):
     print("ok test_compile_layout_drives_target")
 
 
-def test_compile_amr_routes_to_amr_system(monkeypatch=None):
-    captured = {}
+def test_compile_amr_routes_to_amr_system():
+    # ADC-503: single-block AMR lowers via the NATIVE per-block CompiledModel path -- compile() calls
+    # the block's .compile(backend='production', target='amr_system') and does NOT touch
+    # compile_problem (the whole-system time Program). No time= is required on the AMR route.
+    tripwire = {"hit": False}
 
-    def _fake_compile_problem(*, time, model, backend, target, **kw):
-        captured.update(time=time, model=model, backend=backend, target=target)
-        return _StubCompiled(target=target)
+    def _tripwire(*a, **kw):
+        tripwire["hit"] = True
+        return _StubCompiled(target="amr_system")
 
-    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
+    saved = []
+
+    def _patch_tripwire():
+        import pops.codegen.compile_drivers as cd
+        saved.append((cd, "compile_problem", cd.compile_problem))
+        cd.compile_problem = _tripwire
+
+    def _restore_tripwire():
+        while saved:
+            mod, attr, orig = saved.pop()
+            setattr(mod, attr, orig)
+
+    _patch_tripwire()
     try:
         layout = AMR(CartesianMesh())
-        prob = pops.Case(layout=layout).block("ne", physics=_StubModel())
-        compiled = orchestration.compile(prob, time=object())
-        _check(captured["target"] == "amr_system", "AMR layout routes to target='amr_system'")
+        model = _StubModel("ne")
+        prob = pops.Case(layout=layout).block("ne", physics=model)
+        compiled = orchestration.compile(prob)  # no time= : the AMR route does not need one
+        _check(tripwire["hit"] is False,
+               "the AMR route does NOT call compile_problem (no whole-system time Program)")
+        _check(model.dsl.compiled == [("production", "amr_system")],
+               "the block was compiled once for target='amr_system'")
         _check(compiled._target == "amr_system", "amr_system target carried on the handle")
         _check(compiled._layout is layout, "AMR layout carried on the handle for bind()")
+        _check(set(compiled._block_compiled_models) == {"ne"},
+               "compile carries one CompiledModel per block (_block_compiled_models)")
+        _check(getattr(compiled, "so_path", None) is not None,
+               "the handle carries a .so_path so bind's so_path guard passes")
     finally:
-        _unpatch(monkeypatch)
+        _restore_tripwire()
     print("ok test_compile_amr_routes_to_amr_system")
+
+
+def test_compile_multi_block_amr_routes_natively():
+    # ADC-503: a 2-block AMR Case lowers -- compile() compiles EACH block to target='amr_system'
+    # (twice), carries the {block: CompiledModel} table, and NEVER calls compile_problem.
+    tripwire = {"hit": False}
+    saved = []
+
+    def _tripwire(*a, **kw):
+        tripwire["hit"] = True
+        return _StubCompiled(target="amr_system")
+
+    import pops.codegen.compile_drivers as cd
+    saved.append((cd, "compile_problem", cd.compile_problem))
+    cd.compile_problem = _tripwire
+    try:
+        m_ne, m_ni = _StubModel("ne"), _StubModel("ni")
+        prob = (pops.Case(layout=AMR(CartesianMesh()))
+                .block("ne", physics=m_ne)
+                .block("ni", physics=m_ni))
+        compiled = orchestration.compile(prob)
+        _check(tripwire["hit"] is False, "multi-block AMR does NOT call compile_problem")
+        _check(m_ne.dsl.compiled == [("production", "amr_system")],
+               "block 'ne' compiled once for target='amr_system'")
+        _check(m_ni.dsl.compiled == [("production", "amr_system")],
+               "block 'ni' compiled once for target='amr_system'")
+        _check(set(compiled._block_compiled_models) == {"ne", "ni"},
+               "compile carries a CompiledModel per block")
+        _check(all(cm.target == "amr_system" for cm in compiled._block_compiled_models.values()),
+               "every carried CompiledModel targets the AMR system")
+    finally:
+        while saved:
+            mod, attr, orig = saved.pop()
+            setattr(mod, attr, orig)
+    print("ok test_compile_multi_block_amr_routes_natively")
 
 
 def test_compile_amr_max_levels_beyond_native_raises():
@@ -373,29 +462,20 @@ def test_compile_multi_block_uniform_lowers(monkeypatch=None):
     print("ok test_compile_multi_block_uniform_lowers")
 
 
-def test_compile_multi_block_amr_raises(monkeypatch=None):
-    # C3 boundary: multi-block on an AMR layout is still deferred (the whole-system AMR multi-block
-    # seam is not wired). compile_problem is monkeypatched to a tripwire so a leak past the reject is
-    # caught.
-    called = {"hit": False}
+def test_compile_amr_module_without_compile_raises():
+    # ADC-503 honest boundary: an AMR block whose resolved model has no .compile(...) producing a
+    # target='amr_system' CompiledModel (e.g. a raw pops.model.Module) raises a clear error, not a
+    # cryptic AttributeError. _resolve_problem_model returns the physics as-is when it has no .dsl.
+    class _NoCompilePhysics:
+        name = "raw"  # no .dsl, no .compile
 
-    def _tripwire(*a, **kw):
-        called["hit"] = True
-        return _StubCompiled(target="amr_system")
-
-    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _tripwire)
+    prob = pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_NoCompilePhysics())
     try:
-        prob = (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
-                .block("ni", physics=_StubModel()))
-        try:
-            orchestration.compile(prob, time=object())
-            raise AssertionError("multi-block AMR compile must raise")
-        except NotImplementedError as exc:
-            _check("AMR" in str(exc), "multi-block AMR reject names the AMR layout")
-        _check(called["hit"] is False, "the reject fires BEFORE compile_problem (no .so built)")
-    finally:
-        _unpatch(monkeypatch)
-    print("ok test_compile_multi_block_amr_raises")
+        orchestration.compile(prob)
+        raise AssertionError("an AMR block without .compile must raise")
+    except NotImplementedError as exc:
+        _check("CompiledModel" in str(exc), "the message names the missing AMR loader")
+    print("ok test_compile_amr_module_without_compile_raises")
 
 
 # --- bind(): System vs AmrSystem dispatch via a monkeypatched runtime -------
@@ -411,12 +491,13 @@ class _RecordingSim:
                               "outputs": outputs}
 
 
-def _bind_with_stub_runtime(target, layout=None):
+def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
     """Run bind() with System/AmrSystem replaced by recording stubs; return the chosen class.
 
     The AmrSystem stub mirrors the real constructor (it accepts the derived ``AmrSystemConfig``)
     and records the refinement flow (set_refinement / set_phi_refinement) bind() applies before
-    install."""
+    install. For target='amr_system' the compiled handle carries a per-block CompiledModel table
+    (``_block_compiled_models``) so the install routes the native path (compiled=None)."""
     import pops.runtime.system as rtsys
 
     class _StubSystem(_RecordingSim):
@@ -438,9 +519,17 @@ def _bind_with_stub_runtime(target, layout=None):
     rtsys.System, rtsys.AmrSystem = _StubSystem, _StubAmrSystem
     try:
         prob = pops.Case(layout=layout) if layout is not None else pops.Case()
-        prob = prob.block("ne", physics=_StubModel()).field(_poisson_problem())
-        compiled = _StubCompiled(target=target, problem=prob, layout=layout)
-        sim = orchestration.bind(compiled, initial_state={"ne": [1.0]})
+        for name in blocks:
+            prob = prob.block(name, physics=_StubModel(name))
+        prob = prob.field(_poisson_problem())
+        block_compiled = None
+        if target == "amr_system":
+            block_compiled = {name: _StubCompiledModel(name) for name in blocks}
+        compiled = _StubCompiled(target=target, problem=prob, layout=layout,
+                                 block_compiled=block_compiled)
+        if initial is None:
+            initial = {name: [1.0] for name in blocks}
+        sim = orchestration.bind(compiled, initial_state=initial)
         return type(sim), _RecordingSim.last, _StubSystem, _StubAmrSystem, sim
     finally:
         rtsys.System, rtsys.AmrSystem = orig_sys, orig_amr
@@ -498,8 +587,38 @@ def test_bind_amr_dispatch():
            "patch settings derived from PatchLayout")
     _check(sim.refinement == (1.5, "", ""),
            "the density Refine criterion flowed to set_refinement (component 0) before install")
-    _check(last["compiled"].so_path == "/tmp/stub.so", "compiled handle passed to AMR install")
+    # ADC-503: AMR installs via the NATIVE path (compiled=None) with the per-block CompiledModel.
+    _check(last["compiled"] is None,
+           "AMR install passes compiled=None (the native add_native_block path, NOT install_program)")
+    _check(set(last["instances"]) == {"ne"}, "the AMR block becomes one install instance")
+    inst_model = last["instances"]["ne"]["model"]
+    _check(getattr(inst_model, "target", None) == "amr_system"
+           and getattr(inst_model, "adder", None) == "add_native_block",
+           "the instance carries its target='amr_system' CompiledModel (add_native_block)")
+    _check(last["instances"]["ne"]["initial"] == [1.0], "initial state routed by block name")
+    _check("phi" in last["solvers"], "the Poisson field solver derived from the problem")
     print("ok test_bind_amr_dispatch")
+
+
+def test_bind_multi_block_amr_native_install():
+    # ADC-503: a 2-block AMR Case binds via the native path -- compiled=None and TWO instances, each
+    # carrying its OWN target='amr_system' CompiledModel (so each routes add_native_block).
+    from pops.mesh.amr import RegridEvery
+    layout = AMR(CartesianMesh(n=32), regrid=RegridEvery(2))
+    _, last, _, stub_amr, sim = _bind_with_stub_runtime(
+        "amr_system", layout=layout, blocks=("ne", "ni"),
+        initial={"ne": [1.0], "ni": [2.0]})
+    _check(type(sim) is stub_amr, "a multi-block AMR Case binds an AmrSystem")
+    _check(last["compiled"] is None, "multi-block AMR install passes compiled=None (native path)")
+    _check(set(last["instances"]) == {"ne", "ni"}, "both blocks become install instances")
+    for name in ("ne", "ni"):
+        cm = last["instances"][name]["model"]
+        _check(getattr(cm, "target", None) == "amr_system"
+               and getattr(cm, "adder", None) == "add_native_block",
+               "instance %r carries its own target='amr_system' CompiledModel" % name)
+        _check(cm.name == name, "instance %r carries ITS block's CompiledModel" % name)
+    _check(last["instances"]["ni"]["initial"] == [2.0], "per-block initial state routed by name")
+    print("ok test_bind_multi_block_amr_native_install")
 
 
 def test_bind_amr_frozen_and_phi_refinement():
@@ -514,6 +633,33 @@ def test_bind_amr_frozen_and_phi_refinement():
     _check(sim.phi_refinement == 0.5,
            "the grad-phi tag flows to set_phi_refinement")
     print("ok test_bind_amr_frozen_and_phi_refinement")
+
+
+def test_bind_multi_block_amr_variable_refinement():
+    # ADC-503: in MULTI-BLOCK a non-density refine subject forwards to set_refinement(variable=...)
+    # (the union-of-tags engine resolves it per block); in single-block the same subject is refused.
+    from pops.mesh.amr import RegridEvery, Refine
+    layout = AMR(CartesianMesh(n=32), regrid=RegridEvery(2))
+    layout.refine = Refine.on("ni").above(3.0)
+    _, _, _, _, sim = _bind_with_stub_runtime("amr_system", layout=layout, blocks=("ne", "ni"),
+                                              initial={"ne": [1.0], "ni": [2.0]})
+    _check(sim.refinement == (3.0, "ni", ""),
+           "a non-density subject forwards to set_refinement(threshold, variable='ni') in multi-block")
+    print("ok test_bind_multi_block_amr_variable_refinement")
+
+
+def test_bind_single_block_amr_variable_refinement_rejected():
+    # ADC-503 boundary: a non-density subject in SINGLE-block AMR is still refused (the AmrCouplerMP
+    # path refines on component 0 only); the multi-block selector needs >= 2 blocks.
+    from pops.mesh.amr import RegridEvery, Refine
+    layout = AMR(CartesianMesh(n=32), regrid=RegridEvery(2))
+    layout.refine = Refine.on("ne_velocity").above(3.0)
+    try:
+        _bind_with_stub_runtime("amr_system", layout=layout, blocks=("ne",))
+        raise AssertionError("a non-density single-block AMR refine subject must raise")
+    except NotImplementedError as exc:
+        _check("multi-block" in str(exc), "the reject names the multi-block requirement")
+    print("ok test_bind_single_block_amr_variable_refinement_rejected")
 
 
 def test_bind_rejects_non_compiled():

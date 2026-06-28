@@ -4,15 +4,23 @@ These are the Spec 5 sec.11 lowering entry points for a :class:`pops.case.Case`:
 
 * :func:`compile` validates the assembly, picks the compile target from the LAYOUT
   (``Uniform`` -> ``"system"``, ``AMR`` -> ``"amr_system"``; no user ``target=`` string),
-  resolves the block's physics to the model the existing ``compile_problem`` wants, and calls
-  ``compile_problem`` unchanged. It carries the originating problem + target on the handle.
+  resolves each block's physics to the model the runtime wants, and compiles it. The TWO routes
+  differ in WHAT is compiled: a ``Uniform`` layout compiles the whole-system time ``Program`` once
+  (``compile_problem``, BYTE-IDENTICAL to before); an ``AMR`` layout (single OR multi block)
+  compiles EACH block to a ``target='amr_system'`` production ``CompiledModel`` (the native AMR
+  ``.so`` loader, ``add_native_block``) and carries the ``{block: CompiledModel}`` table on the
+  handle -- there is NO whole-system time Program on AMR (``AmrSystem`` has no ``install_program``
+  seam; the native blocks carry their own time policy).
 * :func:`bind` dispatches ``System`` vs ``AmrSystem`` from the carried target, assembles the
   per-instance state mapping, and calls the INTERNAL ``sim._install_compiled(compiled, instances=,
-  ...)`` seam (``pops.runtime._system_unified_install``). ``bind`` is the public entry point; the
-  ``_install_compiled`` seam is undocumented / low-level. No parallel runtime.
+  ...)`` seam (``pops.runtime._system_unified_install``). For ``amr_system`` it installs through the
+  NATIVE path (``compiled=None`` with each instance carrying its ``target='amr_system'``
+  ``CompiledModel``), sidestepping the blocked whole-system time-Program install. ``bind`` is the
+  public entry point; the ``_install_compiled`` seam is undocumented / low-level. No parallel runtime.
 
 There is NO new codegen and NO new install machinery here: this module ORCHESTRATES the
-proven pieces. Every not-yet-wired route raises a clear ``NotImplementedError``.
+proven pieces (``Model.compile`` for the per-block AMR loader, ``add_equation`` for the native
+install). Every not-yet-wired route raises a clear ``NotImplementedError``.
 
 Import-graph rule (Spec 4 / sec.4): ``codegen`` may import only ir / model / physics / time /
 lib at module scope. The runtime (System / AmrSystem), mesh (AMR) and case types are pulled
@@ -21,25 +29,37 @@ LAZILY inside the function bodies, so this module adds no forbidden cross-layer 
 
 
 def compile(problem, backend="production", time=None, **kwargs):
-    """Lower a :class:`pops.case.Case` to a compiled handle (thin over ``compile_problem``).
+    """Lower a :class:`pops.case.Case` to a compiled handle.
 
     Validates @p problem, derives the compile target from its LAYOUT (``Uniform`` -> system,
-    ``AMR`` -> amr_system), resolves EACH block's physics to the model ``compile_problem`` accepts
-    (multi-block Uniform Cases lower; C3), and returns the ``CompiledProblem`` with ``_problem`` /
-    ``_target`` / ``_block_models`` attached. The time scheme is explicit: @p time (a
-    ``pops.time.Program``), else ``problem.time(...)``; a missing scheme raises -- there is NO silent
-    default. Multi-block on an AMR layout is the one remaining deferred route here (a clear
-    ``NotImplementedError``).
+    ``AMR`` -> amr_system) and lowers via the route the target selects:
+
+    - ``Uniform``: compiles the whole-system time ``Program`` once with ``compile_problem``
+      (BYTE-IDENTICAL to before), resolving each block's physics and carrying the full
+      ``{block: model}`` table on ``_block_models`` so bind installs each block with its OWN model
+      (multi-block Uniform Cases lower; C3). The time scheme is explicit here: @p time (a
+      ``pops.time.Program``), else ``problem.time(...)``; a missing scheme raises (no silent default).
+    - ``AMR`` (single OR multi block): compiles EACH block's resolved model to a
+      ``target='amr_system'`` production ``CompiledModel`` (the native AMR ``.so`` loader,
+      ``add_native_block``) and carries the ``{block: CompiledModel}`` table on
+      ``_block_compiled_models``. There is NO whole-system time Program on AMR (``AmrSystem`` has no
+      ``install_program`` seam), so the AMR route does NOT require @p time -- the native blocks carry
+      their own per-block time policy (set at bind from the block spec). The handle returned is the
+      FIRST block's ``CompiledModel`` (it satisfies bind's ``.so_path`` guard); ``_target`` /
+      ``_layout`` / ``_problem`` are attached for bind's AMR dispatch.
 
     Args:
         problem: The :class:`pops.case.Case` assembly to lower.
-        backend: The codegen backend forwarded to ``compile_problem`` (default "production").
-        time: The ``pops.time.Program`` time scheme; falls back to ``problem._time``.
-        **kwargs: Extra keyword args forwarded verbatim to ``compile_problem`` (so_path /
-            force / cxx / include / std / debug / libraries).
+        backend: The codegen backend (default "production"). The AMR route requires "production"
+            (the only native AMR loader, ``Model.compile`` enforces it).
+        time: The ``pops.time.Program`` time scheme (Uniform route only); falls back to
+            ``problem._time``. Ignored on the AMR route (the native blocks carry their own time policy).
+        **kwargs: Extra keyword args forwarded verbatim to the compile driver (so_path / force / cxx /
+            include / std / debug / libraries on the Uniform route; include / cxx / std on the AMR route).
 
     Returns:
-        The ``CompiledProblem`` handle, with ``._problem`` and ``._target`` set.
+        The compiled handle (a ``CompiledProblem`` on the Uniform route, the first block's
+        ``CompiledModel`` on the AMR route), with ``._problem`` / ``._target`` / ``._layout`` set.
     """
     # Lazy imports keep the codegen layer's module-scope import graph clean (no mesh / runtime).
     from pops.mesh.layouts import AMR
@@ -51,16 +71,14 @@ def compile(problem, backend="production", time=None, **kwargs):
     is_amr = isinstance(problem.layout, AMR)
     target = "amr_system" if is_amr else "system"
 
-    # AMR single-block lowers to target="amr_system" (the native AMR .so path emits
-    # pops_install_native_amr). Multi-block lowers on a Uniform layout (C3): each block's physics is
-    # resolved and carried, and the per-block models flow to the install seam through bind()'s
-    # _assemble_instances (one instance per block). Multi-block AMR stays a separate concern (the
-    # whole-system AMR multi-block seam is not wired), so it is still deferred -- a HONEST reject, not
-    # a silent truncation.
-    if is_amr and len(problem._blocks) != 1:
-        raise NotImplementedError(
-            "pops.compile: multi-block lowering on an AMR layout is deferred; declare exactly one "
-            "block (got %d), or use a Uniform layout for a multi-block assembly" % len(problem._blocks))
+    if is_amr:
+        # AMR route (single AND multi block): no whole-system time Program. Each block lowers to a
+        # target='amr_system' production CompiledModel and installs through the NATIVE add_native_block
+        # path at bind (compiled=None, instances carry the per-block CompiledModel). The AMR runtime has
+        # no install_program seam, so time= is NOT required here -- the per-block time policy is set at
+        # bind from the block spec. compile_problem is NOT called (the byte-identical Uniform path is
+        # untouched).
+        return _compile_amr(problem, backend, target, **kwargs)
 
     time = time if time is not None else problem._time
     if time is None:
@@ -84,8 +102,63 @@ def compile(problem, backend="production", time=None, **kwargs):
     # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
     # patch settings) and flow the typed refinement + field problem onto the AmrSystem. None for a
     # Uniform layout (System bind reads no layout); set only on the AMR route.
-    compiled._layout = problem.layout if is_amr else None
+    compiled._layout = None
     return compiled
+
+
+def _compile_amr(problem, backend, target, **kwargs):
+    """Compile each AMR block to a ``target='amr_system'`` ``CompiledModel`` (single AND multi block).
+
+    There is no whole-system time Program on AMR: each block's resolved physics model is compiled to a
+    production native loader (``Model.compile(backend='production', target='amr_system')`` -> a
+    ``CompiledModel`` whose adder is ``add_native_block``), and the ``{block: CompiledModel}`` table is
+    carried on ``_block_compiled_models`` for bind's ``_assemble_instances`` to install each block via
+    ``add_equation``. The returned handle is the FIRST block's ``CompiledModel`` -- it carries a real
+    ``.so_path`` so bind's so_path guard passes, and ``_target`` / ``_layout`` / ``_problem`` /
+    ``_block_compiled_models`` are attached for the AMR dispatch.
+
+    Only the compile-driver kwargs ``Model.compile`` accepts are forwarded (include / cxx / std /
+    name / require_metadata / hoist_reciprocals); a whole-system kwarg like ``force`` / ``debug`` /
+    ``libraries`` has no per-block-loader equivalent and is dropped (the AMR route does not build a
+    Program .so). An explicit ``so_path`` is forwarded ONLY for a single block: pinning the SAME path
+    for several blocks would make their loaders collide (one .so per block), so a multi-block Case lets
+    each block fall back to its model-hash-keyed cache path.
+    """
+    compile_kwargs = {k: v for k, v in kwargs.items()
+                      if k in ("include", "cxx", "std", "name", "require_metadata",
+                               "hoist_reciprocals")}
+    if "so_path" in kwargs and len(problem._blocks) == 1:
+        compile_kwargs["so_path"] = kwargs["so_path"]
+    block_compiled = {name: _compile_block_amr(name, spec["physics"], backend, compile_kwargs)
+                      for name, spec in problem._blocks.items()}
+    _, compiled = next(iter(block_compiled.items()))
+    compiled._problem = problem
+    compiled._target = target
+    compiled._block_compiled_models = block_compiled
+    # Carry the AMR layout so bind() can rebuild the AmrSystemConfig (n / L / periodic / regrid /
+    # patch settings) and flow the typed refinement + field problem onto the AmrSystem.
+    compiled._layout = problem.layout
+    return compiled
+
+
+def _compile_block_amr(name, physics, backend, compile_kwargs):
+    """Compile one AMR block's physics to a ``target='amr_system'`` ``CompiledModel``.
+
+    Resolves the block's physics to the underlying engine model (``_resolve_problem_model``: a
+    blackboard ``pops.physics.Model`` -> its ``.dsl`` engine, a ``pops.dsl.Model`` as-is) and calls its
+    ``.compile(backend=..., target='amr_system', **compile_kwargs)``. A model that exposes no such
+    ``.compile`` (e.g. a raw ``pops.model.Module``, which has no per-block native loader) raises a clear
+    error rather than a cryptic ``AttributeError``.
+    """
+    model = _resolve_problem_model(physics)
+    block_compile = getattr(model, "compile", None)
+    if not callable(block_compile):
+        raise NotImplementedError(
+            "pops.compile: block %r resolves to a %r, which has no .compile(...) producing a "
+            "target='amr_system' CompiledModel; an AMR block needs a pops.dsl.Model / "
+            "pops.physics.Model physics (a raw pops.model.Module has no per-block AMR loader)."
+            % (name, type(model).__name__))
+    return block_compile(backend=backend, target="amr_system", **compile_kwargs)
 
 
 def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
@@ -99,9 +172,12 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     field problems (an explicit @p solvers overrides), flows the Case's output / checkpoint policies
     (C4 / ADC-509) so the bound sim's ``run(output_dir=...)`` fires them at each policy cadence, and
     calls the INTERNAL ``sim._install_compiled(compiled, instances=, params=, aux=, solvers=,
-    cadence=, outputs=)`` seam -- the low-level install lowering, not a public entry. Returns the
-    bound simulation (the ``System`` / ``AmrSystem`` is the Simulation facade for now): call
-    ``sim.run(...)`` to advance it.
+    cadence=, outputs=)`` seam -- the low-level install lowering, not a public entry. For
+    ``target='amr_system'`` (ADC-503) the install goes through the NATIVE path
+    (``_install_compiled(compiled=None, ...)`` with each instance carrying its own
+    ``target='amr_system'`` ``CompiledModel`` from the handle's ``_block_compiled_models``), since the
+    AMR runtime has no whole-system ``install_program`` seam. Returns the bound simulation (the
+    ``System`` / ``AmrSystem`` is the Simulation facade for now): call ``sim.run(...)`` to advance it.
 
     Args:
         compiled: A ``CompiledProblem`` from :func:`compile` (carries ``_problem`` / ``_target``).
@@ -128,23 +204,6 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     target = getattr(compiled, "_target", "system")
     layout = getattr(compiled, "_layout", None)
 
-    from pops.runtime.system import AmrSystem, System
-    if target == "amr_system":
-        # Build the AmrSystem from an AmrSystemConfig DERIVED from the AMR layout (n / L / periodic
-        # from the base CartesianMesh, regrid cadence from AMR.regrid, patch settings from
-        # AMR.patches), then flow the typed refinement (problem.amr / AMR.refine -> set_refinement /
-        # set_phi_refinement) and the field problem (-> set_poisson) BEFORE install, mirroring the
-        # old string path. A missing layout (an AMR target with no carried descriptor) is a bug.
-        if layout is None:
-            raise TypeError(
-                "pops.bind: an AMR target carries no layout descriptor; the compiled handle must "
-                "come from pops.compile(problem_with_AMR_layout, ...)")
-        sim = AmrSystem(_amr_config_from_layout(layout))
-        _flow_amr_layout(sim, layout)
-    else:
-        sim = System()
-
-    instances = _assemble_instances(problem, initial or {})
     field_solvers = _problem_field_solvers(problem)
     field_solvers.update(solvers or {})
 
@@ -153,6 +212,33 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     # write()/checkpoint writers). Empty for a Case with no .output(...) -- the install is unchanged.
     outputs = list(getattr(problem, "_outputs", []) or [])
 
+    from pops.runtime.system import AmrSystem, System
+    if target == "amr_system":
+        # Build the AmrSystem from an AmrSystemConfig DERIVED from the AMR layout (n / L / periodic
+        # from the base CartesianMesh, regrid cadence from AMR.regrid, patch settings from
+        # AMR.patches), then flow the typed refinement (problem.amr / AMR.refine -> set_refinement /
+        # set_phi_refinement) BEFORE install, mirroring the old string path. A missing layout (an AMR
+        # target with no carried descriptor) is a bug.
+        if layout is None:
+            raise TypeError(
+                "pops.bind: an AMR target carries no layout descriptor; the compiled handle must "
+                "come from pops.compile(problem_with_AMR_layout, ...)")
+        n_blocks = len(problem._blocks) if problem is not None else 1
+        sim = AmrSystem(_amr_config_from_layout(layout))
+        _flow_amr_layout(sim, layout, n_blocks=n_blocks)
+        # AMR install goes through the NATIVE path (compiled=None): each instance carries its OWN
+        # target='amr_system' CompiledModel (from compile()'s _block_compiled_models), which
+        # _install_compiled wires with add_equation -> add_native_block. There is NO whole-system time
+        # Program install on AMR (AmrSystem rejects compiled != None), so the handle's per-block table
+        # is the install payload, not the handle itself.
+        instances = _assemble_instances(problem, initial or {},
+                                        models=getattr(compiled, "_block_compiled_models", None))
+        sim._install_compiled(compiled=None, instances=instances, params=params or {},
+                              aux=aux or {}, solvers=field_solvers, cadence=cadence, outputs=outputs)
+        return sim
+
+    sim = System()
+    instances = _assemble_instances(problem, initial or {})
     sim._install_compiled(compiled, instances=instances, params=params or {}, aux=aux or {},
                           solvers=field_solvers, cadence=cadence, outputs=outputs)
     return sim
@@ -204,37 +290,40 @@ def _amr_config_from_layout(layout):
     return cfg
 
 
-def _flow_amr_layout(sim, layout):
-    """Flow the AMR layout's typed refinement criterion onto @p sim BEFORE the block is installed.
+def _flow_amr_layout(sim, layout, n_blocks=1):
+    """Flow the AMR layout's typed refinement criterion onto @p sim BEFORE the blocks are installed.
 
     Mirrors the old string path: a ``Refine.on(subject).above(threshold)`` (or a ``TagUnion`` of
     them) becomes ``set_refinement(threshold, ...)`` and a ``gradient``-predicate on the potential
     becomes ``set_phi_refinement(threshold)``. The field problem (Poisson) is flowed through the
     unified ``install(solvers=...)`` seam (``AmrSystem._install_solver`` -> ``set_poisson``), which
-    runs its field solvers BEFORE adding the block, so it is not duplicated here.
+    runs its field solvers BEFORE adding the blocks, so it is not duplicated here.
 
-    Only the single-criterion native envelope is wired (the native mono-block AMR refines on one
-    selected variable plus the optional ``grad phi`` tag); a richer ``TagUnion`` than that raises a
-    clear error rather than silently dropping criteria.
+    @p n_blocks is the declared block count: the per-block variable / role selector is only wired in
+    MULTI-BLOCK (>= 2 blocks, the union-of-tags runtime engine), so a single-block Case keeps the
+    component-0-only behaviour and a multi-block Case forwards a non-density subject to
+    ``set_refinement(threshold, variable=)`` (the C++ AmrSystem resolves it per block; a compiled
+    block refuses a non-default selector, the honest native boundary).
     """
     criterion = getattr(layout, "refine", None)
     if criterion is not None:
-        _apply_refine_criterion(sim, criterion)
+        _apply_refine_criterion(sim, criterion, is_multiblock=n_blocks > 1)
 
 
-def _apply_refine_criterion(sim, criterion):
+def _apply_refine_criterion(sim, criterion, is_multiblock=False):
     """Lower one typed refinement criterion to set_refinement / set_phi_refinement on @p sim.
 
     A ``Refine`` whose predicate is a gradient on the potential (``phi`` / ``grad phi``) lowers to
-    ``set_phi_refinement(threshold)``; any other ``Refine`` lowers to ``set_refinement(threshold,
-    variable=, role=)`` resolving the subject to a variable name or physical role. A ``TagUnion``
-    of those criteria lowers to each call in turn. A criterion that is neither raises a clear
-    error rather than silently dropping it."""
+    ``set_phi_refinement(threshold)``; a density subject lowers to ``set_refinement(threshold)`` on
+    component 0. A non-density subject lowers to ``set_refinement(threshold, variable=subject)`` when
+    @p is_multiblock (the union-of-tags engine resolves the selector per block); in single-block it is
+    refused (the AmrCouplerMP path refines on component 0 only). A ``TagUnion`` lowers to each call in
+    turn. A criterion that is neither raises a clear error rather than silently dropping it."""
     from pops.mesh.amr import Refine, TagUnion
 
     if isinstance(criterion, TagUnion):
         for c in criterion.criteria:
-            _apply_refine_criterion(sim, c)
+            _apply_refine_criterion(sim, c, is_multiblock=is_multiblock)
         return
     if not isinstance(criterion, Refine):
         raise TypeError(
@@ -249,17 +338,23 @@ def _apply_refine_criterion(sim, criterion):
     if criterion.predicate == "gradient_above" and subject in ("phi", "grad phi", "potential"):
         sim.set_phi_refinement(float(threshold))
         return
-    # A plain density threshold lowers to set_refinement(threshold) on component 0. The
-    # single-block AMR route (the only route pops.compile supports today) refines on component 0
-    # ONLY: a non-default variable / role selector is a multi-block feature, so it is refused with
-    # a clear message rather than handed to the native engine to reject.
-    if not _is_default_density_subject(subject):
+    # A density subject lowers to set_refinement(threshold) on component 0 (no selector).
+    if _is_default_density_subject(subject):
+        sim.set_refinement(float(threshold))
+        return
+    # A non-density subject is a per-block variable / role selector. It is only wired in MULTI-BLOCK
+    # (the union-of-tags runtime engine); the single-block AmrCouplerMP path refines on component 0
+    # only, so a selector there is refused with a clear message rather than silently dropped.
+    if not is_multiblock:
         raise NotImplementedError(
             "pops.bind: refining on %r is a multi-block AMR feature; the single-block AMR route "
             "refines on the density (component 0) only. Refine on the density "
             "(Refine.on(Density).above(...)), or use the |grad phi| tag "
             "(Refine.on(phi).gradient_above(...))." % (subject,))
-    sim.set_refinement(float(threshold))
+    # Forward the subject as the per-block variable name. The C++ AmrSystem::set_refinement resolves
+    # it against each block's conserved variables (a native block) or refuses it (a compiled .so
+    # block: component 0 only) -- the honest native boundary, not a silent drop here.
+    sim.set_refinement(float(threshold), variable=subject)
 
 
 def _refine_subject_name(subject):
@@ -298,12 +393,18 @@ def _resolve_problem_model(physics):
     return physics
 
 
-def _assemble_instances(problem, initial):
+def _assemble_instances(problem, initial, models=None):
     """Build the ``sim.install`` instances mapping from the problem's blocks + initial state.
 
-    Each block becomes ``{name: {"model": physics_dsl, "spatial": spatial, "initial": state}}``
-    -- the shape the unified install consumes. The per-block initial state comes from @p initial
-    (keyed by block name); an unknown key raises so a typo is not silently dropped.
+    Each block becomes ``{name: {"model": <model>, "spatial": spatial, "initial": state}}`` -- the
+    shape the unified install consumes. The per-block initial state comes from @p initial (keyed by
+    block name); an unknown key raises so a typo is not silently dropped.
+
+    @p models, when given (the AMR route), is the ``{block: CompiledModel}`` table from
+    ``compile()``'s ``_block_compiled_models``: each block's model becomes its OWN
+    ``target='amr_system'`` ``CompiledModel`` (installed via ``add_equation`` -> ``add_native_block``)
+    instead of the resolved engine model the System route hands to a compiled time Program. A block
+    missing from the table is a compile/bind mismatch and raises.
     """
     if problem is None:
         raise TypeError("pops.bind: the compiled handle carries no problem assembly "
@@ -314,7 +415,15 @@ def _assemble_instances(problem, initial):
                          % (unknown, sorted(problem._blocks)))
     instances = {}
     for name, spec in problem._blocks.items():
-        entry = {"model": _resolve_problem_model(spec["physics"]), "spatial": spec["spatial"]}
+        if models is not None:
+            if name not in models:
+                raise ValueError(
+                    "pops.bind: block %r has no compiled model on the handle; the AMR handle must "
+                    "carry one CompiledModel per block (was it produced by pops.compile?)" % (name,))
+            model = models[name]
+        else:
+            model = _resolve_problem_model(spec["physics"])
+        entry = {"model": model, "spatial": spec["spatial"]}
         if name in initial:
             entry["initial"] = initial[name]
         instances[name] = entry

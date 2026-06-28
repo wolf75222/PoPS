@@ -37,8 +37,9 @@ the union of tags).
 
 On the public single-block path, the tags are authored on the case:
 `case.amr.refine(pops.mesh.amr.Refine.on("density").above(0.05))` (a `TagUnion` combines a density
-threshold with a `grad phi` predicate). The multi-block tagging below uses the low-level `AmrSystem`
-runtime directly (multi-block lowering through `pops.compile` is deferred):
+threshold with a `grad phi` predicate). The public `pops.compile` path also lowers a multi-block AMR
+assembly (ADC-503); the multi-block tagging below uses the low-level `AmrSystem` runtime directly for
+fine-grained control:
 
 ```python
 sim = pops.AmrSystem(n=128, L=1.0, periodic=True)
