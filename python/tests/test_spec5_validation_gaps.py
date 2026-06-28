@@ -38,6 +38,7 @@ from pops.runtime._bricks_scheme import FiniteVolume  # noqa: E402
 from pops.mesh.amr import Refine, TagUnion, _declared_subjects  # noqa: E402
 from pops.mesh.layouts import AMR  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
+from pops.fields.bcs import Periodic, Dirichlet  # noqa: E402
 
 
 # ----------------------------------------------------------------------------------------
@@ -103,6 +104,40 @@ def test_plain_poisson_with_fft_is_not_rejected():
     phi = unknown("phi")
     rho = Var("rho", "cons")
     prob = PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rho), solver=FFT())
+    assert prob.validate() is True
+
+
+def test_fft_with_non_periodic_bc_is_rejected():
+    # Spec 5 #11: the FFT solver is periodic-only (supports_wall_bc False); pairing it with a
+    # Dirichlet (wall) boundary is refused before runtime, naming the periodic / GeometricMG fix.
+    phi = unknown("phi")
+    rho = Var("rho", "cons")
+    prob = PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rho),
+                          bcs=(Dirichlet(),), solver=FFT())
+    with pytest.raises(ValueError) as exc:
+        prob.validate()
+    msg = str(exc.value)
+    assert "requires a periodic boundary" in msg
+    assert "supports_wall_bc is False" in msg
+    assert "GeometricMG()" in msg
+
+
+def test_fft_with_periodic_bc_is_fine():
+    # NO FALSE POSITIVE: FFT + an explicitly periodic boundary is exactly its supported route.
+    phi = unknown("phi")
+    rho = Var("rho", "cons")
+    prob = PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rho),
+                          bcs=(Periodic(),), solver=FFT())
+    assert prob.validate() is True
+
+
+def test_geometric_mg_with_dirichlet_is_fine():
+    # NO FALSE POSITIVE: GeometricMG declares supports_wall_bc True -> it serves a Dirichlet wall.
+    assert GeometricMG().capabilities()["supports_wall_bc"] is True
+    phi = unknown("phi")
+    rho = Var("rho", "cons")
+    prob = PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rho),
+                          bcs=(Dirichlet(),), solver=GeometricMG())
     assert prob.validate() is True
 
 

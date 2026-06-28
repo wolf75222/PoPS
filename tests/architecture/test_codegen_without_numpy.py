@@ -1,13 +1,13 @@
 """Spec 4: the build-time codegen path imports without numpy.
 
 The C++ build runs ``scripts/gen_solver_kernel.py`` under a bare interpreter (the job's
-system python, no numpy) to emit the custom-solver kernel header. That tool imports
-``pops.lib`` -> ``pops.ir``, so the symbolic IR and lib layers must import without numpy
-installed: numpy backs only the host ``.eval()`` interpreter, never IR construction or
-C++ emission.
+system python, no numpy) to emit the custom-solver kernel header. That tool imports the
+solver-gen DSL (``pops.codegen.solvers.dsl`` -> ``pops.descriptors``, lazy ``pops.time``), so
+the IR-authoring + C++-emission layers must import without numpy installed: numpy backs only
+the host ``.eval()`` interpreter, never IR construction or C++ emission.
 
 This guards a regression that reddened the C++ jobs. The python PRs route to gate-python
-and SKIP the C++ build, so a numpy import at module scope in ``pops.ir`` only surfaced on
+and SKIP the C++ build, so a numpy import at module scope in the DSL chain only surfaced on
 the master push (the gen-solver build step). We re-run the real codegen tool in a
 subprocess with numpy forced absent (``sys.modules['numpy'] = None``) and assert it still
 emits the kernel -- so the regression is caught in gate-python, before the master push.

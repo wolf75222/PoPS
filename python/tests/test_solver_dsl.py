@@ -1,6 +1,6 @@
 """Spec 3 section 20 / criterion 23: a custom solver DSL that BUILDS IR.
 
-``@pops.lib.solver`` registers a GENERATED-brick solver whose body is a Python
+``@pops.codegen.solvers.solver`` registers a GENERATED-brick solver whose body is a Python
 builder. Running the builder authors a SOLVER IR (matrix-free Krylov primitives:
 norm2 / dot / apply / linear_combine / while) and computes NOTHING in Python --
 no float arithmetic on real data, no numpy callback is captured. The generated
@@ -17,9 +17,13 @@ import types as _t
 _lib = pytest.importorskip("pops.lib")
 _num = pytest.importorskip("pops.numerics")
 _desc = pytest.importorskip("pops.descriptors")
-# Spec 5 (sec.4): the catalogs moved out of pops.lib into pops.numerics / pops.descriptors;
-# this transitional alias maps the old pops.lib attribute surface onto the new homes so the
-# Spec-3 descriptor tests keep exercising the real (relocated) descriptors.
+# Spec 5: the catalogs moved out of pops.lib. This alias maps the old pops.lib attribute surface
+# onto the new homes so the Spec-3 descriptor tests keep exercising the real (relocated) descriptors:
+# the solver-generation DSL is internal/experimental under pops.codegen.solvers (criterion 19); the
+# spatial brick catalog under pops.numerics.spatial and the field brick catalog under
+# pops.fields.catalog (criterion 7).
+_cs = pytest.importorskip("pops.codegen.solvers")
+_flds = pytest.importorskip("pops.fields")
 lib = _t.SimpleNamespace(
     riemann=_num.riemann.riemann, reconstruction=_num.reconstruction.reconstruction,
     limiters=_num.limiters, projections=_num.projections.projections,
@@ -27,10 +31,10 @@ lib = _t.SimpleNamespace(
     load_cpp_library=_desc.load_cpp_library,
     _register_manifest=_desc._register_manifest,
     _clear_external_catalog=_desc._clear_external_catalog,
-    solvers=_lib.solvers, preconditioners=_lib.preconditioners, solver=_lib.solver,
-    build_solver_ir=_lib.build_solver_ir, generate_solver_cpp=_lib.generate_solver_cpp,
-    SolverContext=_lib.SolverContext, SolverIR=_lib.SolverIR,
-    spatial=_lib.spatial, fields=_lib.fields,
+    solvers=_lib.solvers, preconditioners=_lib.preconditioners, solver=_cs.solver,
+    build_solver_ir=_cs.build_solver_ir, generate_solver_cpp=_cs.generate_solver_cpp,
+    SolverContext=_cs.SolverContext, SolverIR=_cs.SolverIR,
+    spatial=_num.spatial, fields=_flds.catalog,
 )
 
 

@@ -126,6 +126,38 @@ def test_summary_by_memory_reads_counters_when_present():
     assert mem == {"scratch_allocs": 4, "scratch_peak_bytes": 2048}
 
 
+def test_summary_by_amr_mpi_declares_unavailable_on_host_report():
+    # The host sample has no regrid / halo / reflux scopes and no MPI counters: the AMR/MPI dimension
+    # is declared unavailable (criterion 43), NOT a faked zero -- exactly like by_native_brick/by_memory.
+    view = PerformanceSummary(_SAMPLE_REPORT, Profile.Advanced()).by_amr_mpi()
+    assert isinstance(view, _Unavailable) and bool(view) is False
+    assert view.available is False
+    assert "regrid" in view.reason and "halo" in view.reason  # the reason is honest + specific
+
+
+def test_summary_by_amr_mpi_surfaces_amr_scopes_and_mpi_counters():
+    # A synthetic distributed-AMR report: a regrid + halo_exchange timing scope and an mpi_reductions
+    # counter, built the same way the by_elliptic / by_memory tests synthesise their reports.
+    report = (
+        "Profiler report (total 0.020000 s, 5 scopes)\n"
+        "  step  count=2  total=0.007229s  mean=0.003614s  min=0.003575s  max=0.003654s\n"
+        "  field_solve  count=1  total=0.003621s  mean=0.003621s  min=0.003621s  max=0.003621s\n"
+        "  regrid  count=3  total=0.001500s  mean=0.000500s  min=0.000400s  max=0.000700s\n"
+        "  halo_exchange  count=8  total=0.002000s  mean=0.000250s  min=0.000200s  max=0.000300s\n"
+        "  average_down  count=4  total=0.000800s  mean=0.000200s  min=0.000150s  max=0.000250s\n"
+        "counters:  steps=2  kernels=3  mpi_reductions=12  reflux=4\n")
+    view = PerformanceSummary(report, Profile.Advanced()).by_amr_mpi()
+    assert not isinstance(view, _Unavailable) and bool(view) is True
+    # Timing scopes surface as full timing dicts.
+    assert "regrid" in view and view["regrid"]["count"] == 3
+    assert "halo_exchange" in view and abs(view["halo_exchange"]["total_s"] - 0.002000) < 1e-9
+    assert "average_down" in view
+    # MPI / reflux counters surface as ints.
+    assert view["mpi_reductions"] == 12 and view["reflux"] == 4
+    # Unrelated scopes / counters are NOT pulled into the AMR/MPI bucket.
+    assert "step" not in view and "field_solve" not in view and "kernels" not in view
+
+
 def test_summary_is_printable_and_serialisable():
     summ = PerformanceSummary(_SAMPLE_REPORT, Profile.Basic())
     text = str(summ)
@@ -135,6 +167,7 @@ def test_summary_is_printable_and_serialisable():
     assert d["profile"] == "basic"
     assert d["counters"]["kernels"] == 3
     assert d["views"]["by_native_brick"]["available"] is False
+    assert d["views"]["by_amr_mpi"]["available"] is False  # no AMR scopes in the host sample
     assert "solve_fields1" in d["views"]["by_program_node"]
     # to_json round-trips and can write to a path.
     parsed = json.loads(summ.to_json())

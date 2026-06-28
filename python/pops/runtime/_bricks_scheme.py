@@ -196,8 +196,8 @@ class Spatial:
     def _from_tokens(cls, limiter, flux, recon, *, positivity_floor=None, wave_speed_cache=False):
         """Build a Spatial from ALREADY-canonical string tokens (internal lowering only).
 
-        The lib-spatial descriptor (``pops.lib.spatial.FiniteVolume``) carries its scheme choice as
-        string options; ``System._lower_spatial`` resolves those to the canonical tokens and calls
+        The spatial brick-catalog descriptor (``pops.numerics.spatial.FiniteVolume``) carries its scheme
+        choice as string options; ``System._lower_spatial`` resolves those to the canonical tokens and calls
         this to bypass the typed-descriptor guard. Not part of the public API -- public callers pass
         typed descriptors to ``Spatial`` / ``FiniteVolume``.
         """

@@ -1,8 +1,9 @@
 """pops.compile_library -- the Spec 3 brick-library manifest / ABI layer.
 
 ``pops.compile_library("my_numerics.so", objects=[...], backend="production")``
-collects generated / macro / native brick descriptors (from :mod:`pops.lib`, the
-``@pops.lib.solver`` registry, IR macros) into a reusable-library MANIFEST: the
+collects generated / macro / native brick descriptors (from :mod:`pops.numerics` /
+:mod:`pops.solvers`, the ``@pops.codegen.solvers.solver`` registry, IR macros) into a
+reusable-library MANIFEST: the
 library name, the loaded-module ABI key, the brick list (id, type, category,
 scheme, native id, requirements, capabilities), the generated symbols a future
 ``.so`` would export, and a stable content hash. The manifest is consumed by the
@@ -38,14 +39,14 @@ def _brick_entry(obj):
 
     Folds the descriptor's identity metadata (id, type, category, scheme, native
     id) and its requirements / capabilities. It carries NO numerics and no Python
-    callable (the ``@pops.lib.solver`` builder is kept off the manifest, mirroring
-    how it is kept off the descriptor identity key).
+    callable (the ``@pops.codegen.solvers.solver`` builder is kept off the manifest,
+    mirroring how it is kept off the descriptor identity key).
     """
     if not isinstance(obj, BrickDescriptor):
         raise TypeError(
-            "compile_library objects must be pops.lib brick descriptors "
-            "(e.g. pops.lib.solvers.GMRES(), pops.numerics.riemann.HLLC(), an "
-            "@pops.lib.solver generated brick); got %r" % (obj,))
+            "compile_library objects must be brick descriptors "
+            "(e.g. pops.solvers.GMRES(), pops.numerics.riemann.HLLC(), an "
+            "@pops.codegen.solvers.solver generated brick); got %r" % (obj,))
     return {
         "id": obj.name,
         "brick_type": obj.brick_type,
@@ -63,7 +64,7 @@ def _generated_symbols(bricks):
     """The sorted ids of the GENERATED bricks -- the symbols the compiled ``.so``
     would export. Native bricks reference EXISTING ``pops::`` symbols (already in the
     loaded module) and external bricks reference a user ``.so``, so neither adds a
-    generated symbol; only a generated brick (e.g. an ``@pops.lib.solver`` solver)
+    generated symbol; only a generated brick (e.g. an ``@pops.codegen.solvers.solver`` solver)
     contributes one."""
     return sorted({b["id"] for b in bricks if b["brick_type"] == "generated"})
 
@@ -152,8 +153,8 @@ def compile_library(name, objects, *, backend="production", emit=False, so_path=
 
     @p name is the library ``.so`` name; @p objects is a non-empty list of
     :class:`pops.descriptors.BrickDescriptor` (native / generated / macro / external bricks,
-    e.g. ``pops.lib.solvers.GMRES()``, ``pops.numerics.riemann.HLLC()``, an
-    ``@pops.lib.solver`` generated brick). Returns a :class:`LibraryManifest`
+    e.g. ``pops.solvers.GMRES()``, ``pops.numerics.riemann.HLLC()``, an
+    ``@pops.codegen.solvers.solver`` generated brick). Returns a :class:`LibraryManifest`
     carrying the brick metadata, the loaded-module ABI key and a stable content hash.
 
     With ``emit=False`` (default) it returns the MANIFEST only (numerics-free, no

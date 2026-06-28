@@ -21,8 +21,11 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
+#include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
+#include <chrono>  // AmrPhaseScope wall-clock timing (Spec 5 criterion 43)
 #include <cmath>      // std::isfinite (reject a degenerate dt)
 #include <cstddef>
 #include <functional>
@@ -556,11 +559,19 @@ class AmrRuntime {
   /// RhsAssembler.
   void solve_fields() {
     ++solve_count_;
-    // 1. average_down per block (fine -> coarse) over the whole hierarchy.
-    for (auto& b : blocks_) {
-      auto& L = *b.levels;
-      for (int k = nlev_ - 1; k >= 1; --k)
-        mf_average_down_mb(L[k].U, L[k - 1].U);
+    // 1. average_down per block (fine -> coarse) over the whole hierarchy. AMR PROFILING (Spec 5
+    // criterion 43): time the restriction cascade into the "average_down" scope + bump its per-solve
+    // count. The scope is per-solve_fields (NOT per-cell), so a profiled run pays one clock pair here;
+    // an unprofiled run constructs nothing (profiler_ null or disabled). See profile_amr_scope below.
+    {
+      auto _ad = profile_amr_scope("average_down");
+      if (profiler_ != nullptr)
+        profiler_->count("average_down");
+      for (auto& b : blocks_) {
+        auto& L = *b.levels;
+        for (int k = nlev_ - 1; k >= 1; --k)
+          mf_average_down_mb(L[k].U, L[k - 1].U);
+      }
     }
 
     // 2. SUMMED and CO-LOCATED system RHS: f = Sum_b elliptic_rhs_b(U_b) on the coarse. We reset to
@@ -574,7 +585,7 @@ class AmrRuntime {
     // 3. coarse aux = (phi, grad phi) via the SAME clean path as AmrSystemCoupler: fill the ghosts of
     // phi according to bcPhi_, field_postprocess (phi + grad), fill the ghosts of aux according to
     // aux_bc_ (derived from bcPhi_). Handles the non-periodic case (Foextrap).
-    fill_ghosts(mg_.phi(), dom_, bcPhi_);
+    fill_ghosts_profiled(mg_.phi(), dom_, bcPhi_);
     const Real cx = Real(1) / (2 * geom_.dx()), cy = Real(1) / (2 * geom_.dy());
     field_postprocess(mg_.phi(), aux_[0], cx, cy,
                       FieldPostProcess{FieldPostProcess::GradSign::Plus, true});
@@ -583,7 +594,7 @@ class AmrRuntime {
     // No-op when no named field was set; field_postprocess wrote only comps 0..2, so this never clobbers
     // phi/grad. This is what makes named aux survive a regrid (regrid re-solves -> re-applies).
     apply_named_aux();
-    fill_ghosts(aux_[0], dom_, aux_bc_);
+    fill_ghosts_profiled(aux_[0], dom_, aux_bc_);
     apply_named_aux_bc();  // ADC-369: per-field halo override on the coarse physical ghosts (after the
                            // shared fill, before injection); no-op when no policy declared.
     // 4. coarse->fine injection of the aux (parent replicated only at level 1 if coarse replicated).
@@ -603,6 +614,13 @@ class AmrRuntime {
     if (nlev_ < 2)
       return;  // 2 levels required (D5): nothing to re-grid in single-level
     const int fk = nlev_ - 1, pk = fk - 1;  // fine + its parent (pk == 0 in v1 with 2 levels)
+
+    // AMR PROFILING (Spec 5 criterion 43): time the WHOLE regrid attempt (tag + cluster + prolong +
+    // re-solve) into the "regrid" scope. RAII -> the scope covers EVERY early-return path below (empty
+    // tags / nothing to refine), so the timing reflects the real regrid cost. The per-run "regrid"
+    // COUNT is bumped at the tail (++regrid_count_) only when a regrid actually completed -- a no-op
+    // attempt times itself but does not inflate the count. Null/disabled profiler -> no scope object.
+    auto _rg = profile_amr_scope("regrid");
 
     // (R0) PRECONDITION: fields up to date (aux per level, for the |grad phi| criterion). The per-block
     // mass snapshot is NOT needed by the engine (conservation is checked test-side V1).
@@ -633,6 +651,14 @@ class AmrRuntime {
     // desync).
     auto [fb, dmap] =
         regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_);
+#ifdef POPS_HAS_MPI
+    // MPI COLLECTIVE COUNT (Spec 5 criterion 43): regrid_compute_fine_layout issues ONE
+    // all_reduce_or_inplace over the tag grid when the coarse is distributed (multi-rank) -- every rank
+    // must cluster from the SAME gathered tags. Count it as one reduction (np>1 only; serial / single
+    // rank issues no collective). np==1 is bit-identical with no count.
+    if (profiler_ != nullptr && n_ranks() > 1)
+      profiler_->count("mpi_reductions");
+#endif
     if (fb.size() == 0)
       return;  // nothing to refine: we keep the current grid (no-op)
 
@@ -671,6 +697,11 @@ class AmrRuntime {
     // count a phantom coarse value under the new patch, X5).
     solve_fields();
     ++regrid_count_;
+    // AMR PROFILING (Spec 5 criterion 43): a regrid COMPLETED -> bump the per-run "regrid" counter
+    // (parity with regrid_count_). The "regrid" TIMING scope (_rg above) already covered the whole
+    // attempt; this counts only the regrids that actually rebuilt the hierarchy.
+    if (profiler_ != nullptr)
+      profiler_->count("regrid");
   }
 
   /// Advances the system by one macro-step dt. We first solve the fields (co-located summed Poisson,
@@ -854,6 +885,12 @@ class AmrRuntime {
           m = mu0;
       }
       const double mu = all_reduce_max(static_cast<double>(m));  // ALL ranks (collective symmetry)
+#ifdef POPS_HAS_MPI
+      // MPI COLLECTIVE COUNT (Spec 5 criterion 43): one all_reduce_max per per-cell coupled-frequency
+      // bound, multi-rank only (serial all_reduce_max is an identity, no collective).
+      if (profiler_ != nullptr && n_ranks() > 1)
+        profiler_->count("mpi_reductions");
+#endif
       if (mu > 0.0) {
         const Real dt_cs = cfl / static_cast<Real>(mu);
         if (dt_cs < dt) {
@@ -871,6 +908,12 @@ class AmrRuntime {
       if (!(v > 0.0) || !std::isfinite(v))
         v = std::numeric_limits<double>::infinity();
       v = all_reduce_min(v);
+#ifdef POPS_HAS_MPI
+      // MPI COLLECTIVE COUNT (Spec 5 criterion 43): one all_reduce_min per registered global dt bound,
+      // multi-rank only (the global min keeps dt identical on all ranks). Serial -> identity, no count.
+      if (profiler_ != nullptr && n_ranks() > 1)
+        profiler_->count("mpi_reductions");
+#endif
       if (static_cast<Real>(v) < dt) {
         dt = static_cast<Real>(v);
         last_dt_reason_ = "global:" + g.label;
@@ -891,6 +934,16 @@ class AmrRuntime {
   /// it the regrid/stride cadence would restart from phase 0 after a resume. No effect on the level
   /// state; only sets the cadence phase.
   void set_macro_step(int s) { macro_step_ = s; }
+
+  /// AMR / MPI PROFILING SEAM (Spec 5 sec.12.5, ADC-479 criterion 43). The AmrSystem owns the
+  /// runtime::program::Profiler (parity with System::profiler_) and wires it in here AFTER build, so
+  /// the engine times its non-numeric AMR phases -- regrid, fill_boundary (the cross-rank ghost
+  /// exchange), average_down (fine -> coarse restriction) -- into the SAME table profile_report()
+  /// renders, alongside the coarse step / field_solve phases. The pointer is null by default (the
+  /// engine never touches it), and every scope/count is guarded by profiler_->enabled(), so a run
+  /// WITHOUT profiling pays ZERO cost (no scope object, no clock read) -- the granularity is
+  /// per-regrid / per-solve, NOT per-cell. Passing nullptr detaches the profiler (no-op timing).
+  void set_profiler(runtime::program::Profiler* prof) { profiler_ = prof; }
 
   /// GLOBAL step bound (AMR counterpart of System::add_dt_bound): fn() evaluated once per step_cfl,
   /// all_reduce_min, <= 0/non-finite = inert. For user coupling/scheduler/policies.
@@ -1167,6 +1220,63 @@ class AmrRuntime {
   int macro_step_ = 0;
   mutable int solve_count_ = 0;
   int regrid_count_ = 0;
+  // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): non-owning pointer to the AmrSystem-owned
+  // Profiler (lifetime guaranteed by the facade). Null by default -> the engine never profiles
+  // (zero overhead). Set via set_profiler after build (parity with System::profiler_).
+  runtime::program::Profiler* profiler_ = nullptr;
+
+  // RAII phase-timing scope for an AMR phase (regrid / average_down / fill_boundary). Mirrors
+  // runtime::program::ProfileScope but over a NULLABLE profiler pointer: it reads the clock and
+  // records only when profiler_ is non-null AND enabled. A null/disabled run constructs a cheap inert
+  // scope (one pointer copy + one clock read) -- the granularity is per-phase, not per-cell, so this
+  // is off the hot path. Returned BY VALUE from profile_amr_scope (movable: only POD members).
+  class AmrPhaseScope {
+   public:
+    AmrPhaseScope(runtime::program::Profiler* prof, const char* name)
+        : prof_(prof != nullptr && prof->enabled() ? prof : nullptr),
+          name_(name),
+          t0_(std::chrono::steady_clock::now()) {}
+    AmrPhaseScope(AmrPhaseScope&& o) noexcept : prof_(o.prof_), name_(o.name_), t0_(o.t0_) {
+      o.prof_ = nullptr;  // the moved-from scope must not record
+    }
+    AmrPhaseScope(const AmrPhaseScope&) = delete;
+    AmrPhaseScope& operator=(const AmrPhaseScope&) = delete;
+    AmrPhaseScope& operator=(AmrPhaseScope&&) = delete;
+    ~AmrPhaseScope() {
+      if (prof_ == nullptr)
+        return;
+      const auto t1 = std::chrono::steady_clock::now();
+      try {
+        prof_->record(name_, std::chrono::duration<double>(t1 - t0_).count());
+      } catch (...) {  // NOLINT(bugprone-empty-catch) -- a profiler never throws out of a scope
+      }
+    }
+
+   private:
+    runtime::program::Profiler* prof_;
+    const char* name_;
+    std::chrono::steady_clock::time_point t0_;
+  };
+
+  // Build an AMR phase scope (no-op when profiling is off). Used at the head of regrid /
+  // average_down / fill_boundary.
+  AmrPhaseScope profile_amr_scope(const char* name) { return AmrPhaseScope(profiler_, name); }
+
+  // fill_ghosts wrapped in the "fill_boundary" timing scope + per-call count (Spec 5 criterion 43).
+  // Under MPI np>1 the ghost fill is a cross-rank halo exchange -> also count one "mpi_messages" (a
+  // point-to-point round, distinct from the all_reduce collectives counted as "mpi_reductions").
+  // Serial / single rank: no message count (the fill is a local copy). Off-profiling: inert.
+  void fill_ghosts_profiled(MultiFab& mf, const Box2D& dom, const BCRec& bc) {
+    auto _fb = profile_amr_scope("fill_boundary");
+    if (profiler_ != nullptr) {
+      profiler_->count("fill_boundary");
+#ifdef POPS_HAS_MPI
+      if (n_ranks() > 1)
+        profiler_->count("mpi_messages");
+#endif
+    }
+    fill_ghosts(mf, dom, bc);
+  }
 };
 
 }  // namespace pops

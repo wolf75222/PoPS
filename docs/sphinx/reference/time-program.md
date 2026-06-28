@@ -96,7 +96,7 @@ sim.install(compiled,                          # the unified headline entry (Spe
             instances={"plasma": {"model": m,
                                   "spatial": pops.FiniteVolume(...),
                                   "initial": U0}},
-            solvers={"phi": pops.lib.fields.GeometricMG()})
+            solvers={"phi": pops.solvers.GeometricMG()})
 sim.step(dt)                                   # the compiled program drives the step, C++-side
 ```
 

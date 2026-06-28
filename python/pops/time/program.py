@@ -8,6 +8,8 @@ module scope). The class is composed from focused authoring mixins.
 
 cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
 """
+import os
+
 from pops.time.program_authoring import _ProgramAuthoring
 from pops.time.program_core import _ProgramCore
 from pops.time.program_inspect import _ProgramInspect
@@ -15,6 +17,19 @@ from pops.time.program_local import _ProgramLocal
 from pops.time.program_passes import _ProgramPasses
 from pops.time.program_solve import _ProgramSolve
 from pops.time.values import _Coeff, Value  # noqa: F401  (Value used by mixins via prog ref)
+
+# Strict-typed opt-in env override (Spec 5 sec.15, ADC-479 criteria 23 + 27). When the explicit
+# Program(strict_typed=) argument is left at its default None, this env supplies the default; it is
+# read ONCE per Program construction, mirroring the lenient POPS_* parsing in pops.codegen.env /
+# pops.runtime.threading (an unset / blank / falsey value -> permissive default, never raises).
+_STRICT_TYPED_ENV_VAR = "POPS_STRICT_TYPED"
+_STRICT_TRUTHY = ("1", "on", "true", "yes", "y")
+
+
+def _strict_typed_from_env(env=None):
+    """True iff ``POPS_STRICT_TYPED`` is set truthy; False otherwise (lenient, never raises)."""
+    env = os.environ if env is None else env
+    return str(env.get(_STRICT_TYPED_ENV_VAR) or "").strip().lower() in _STRICT_TRUTHY
 
 
 class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
@@ -25,8 +40,21 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
     ``pops.codegen.program_codegen`` via :meth:`emit_cpp_program`.
     """
 
-    def __init__(self, name):
+    def __init__(self, name, *, strict_typed=None):
         self.name = name
+        # OPT-IN strict de-stringing (Spec 5 sec.15, ADC-479 criteria 23 + 27). When True the legacy
+        # spellings are REJECTED at the authoring front door so a Program references operators ONLY by
+        # typed handle (P.call) and composes the RHS ONLY by typed terms (P.rhs(terms=[...])): the
+        # ENFORCEMENT path the criteria ask for. Default OFF leaves every legacy form working and the
+        # lowering / IR byte-identical (strict mode only refuses a spelling, it changes no codegen).
+        # An explicit argument wins; None falls back to POPS_STRICT_TYPED (read once, here).
+        self._strict_typed = (_strict_typed_from_env() if strict_typed is None
+                              else bool(strict_typed))
+        # Re-entrancy guard: the typed front doors lower THROUGH the legacy builders (P.call ->
+        # self.rhs(flux=...), the operator-first lib.time macros -> P.rhs/P.call), so the strict guard
+        # must fire ONLY on a direct user call, never on this internal lowering. Set while a typed op
+        # lowers so a nested legacy-form call is not mistaken for a user's legacy spelling.
+        self._lowering_typed = False
         self._values = []
         self._next_id = 0
         self._commits = {}      # block -> State value
@@ -49,10 +77,13 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         """Short, deterministic, array-free summary -- never the full SSA IR.
 
         Prints the program name, the op count and the committed block names (Spec 5 sec.12.1):
-        a one-line header, not a node-by-node dump.
+        a one-line header, not a node-by-node dump. ``strict_typed`` is surfaced only when ON so the
+        permissive default keeps its historical one-line form (and an inspecting user sees enforcement
+        is active when it is).
         """
-        return "Program(name=%r, ops=%d, blocks=%s)" % (
-            self.name, len(self._values), sorted(self._commits))
+        strict = ", strict_typed=True" if self._strict_typed else ""
+        return "Program(name=%r, ops=%d, blocks=%s%s)" % (
+            self.name, len(self._values), sorted(self._commits), strict)
 
     # --- C++ codegen (lowering to a problem.so source) lives in pops.codegen; the authoring
     # Program delegates via a LAZY import so pops.time stays free of any codegen/_pops edge. ---

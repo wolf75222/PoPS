@@ -49,20 +49,20 @@ def _fake_compiled(*, hllc=False, roe=False, prim_names=("rho", "u", "v"), wave_
         hllc=hllc, roe=roe, wave_speeds=wave_speeds)
 
 
-def test_lower_spatial_accepts_runtime_and_lib():
-    """install lowers BOTH an pops.FiniteVolume (runtime) and an pops.lib.spatial.FiniteVolume
-    (Spec-3 catalog descriptor) to the same add_equation spatial args."""
+def test_lower_spatial_accepts_runtime_and_catalog():
+    """install lowers BOTH an pops.FiniteVolume (runtime) and an pops.numerics.spatial.FiniteVolume
+    (catalog descriptor) to the same add_equation spatial args."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     # Runtime descriptor passes through unchanged.
     rt = pops.FiniteVolume(limiter=WENO5(), riemann=HLL(), variables=Primitive())
     low = sim._lower_spatial(rt)
     assert low is rt, "runtime Spatial must pass through unchanged"
-    # lib descriptor: riemann/reconstruction/positivity_floor -> limiter/flux/recon.
-    # NB pops.lib.spatial.FiniteVolume is the Spec-3 CATALOG descriptor: it stores its scheme
+    # catalog descriptor: riemann/reconstruction/positivity_floor -> limiter/flux/recon.
+    # NB pops.numerics.spatial.FiniteVolume is the brick-CATALOG descriptor: it stores its scheme
     # choice as STRING options (lowered to typed tokens by _lower_spatial), distinct from the
     # runtime pops.FiniteVolume which now requires typed pops.numerics descriptors (Spec 5 sec.7).
-    libdesc = pops.lib.spatial.FiniteVolume(riemann="hllc", reconstruction="weno5",
-                                           positivity_floor=1e-12)
+    libdesc = pops.numerics.spatial.FiniteVolume(riemann="hllc", reconstruction="weno5",
+                                                 positivity_floor=1e-12)
     low = sim._lower_spatial(libdesc)
     assert low.flux == "hllc", "riemann -> Spatial.flux (got %r)" % low.flux
     assert low.limiter == "weno5", "reconstruction -> Spatial.limiter (got %r)" % low.limiter
@@ -74,10 +74,10 @@ def test_lower_spatial_accepts_runtime_and_lib():
 
 def test_solver_token_lowering():
     """A field-solver selection lowers to its set_poisson token: string as-is, or the lib
-    descriptor's scheme (pops.lib.fields.GeometricMG -> 'geometric_mg')."""
+    descriptor's scheme (pops.fields.catalog.GeometricMG -> 'geometric_mg')."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     assert sim._solver_token("geometric_mg") == "geometric_mg"
-    assert sim._solver_token(pops.lib.fields.GeometricMG()) == "geometric_mg"
+    assert sim._solver_token(pops.fields.catalog.GeometricMG()) == "geometric_mg"
     print("OK  _solver_token lowers string + lib descriptor")
 
 
@@ -85,7 +85,7 @@ def test_install_solver_sets_poisson():
     """install lowers solvers={'phi': GeometricMG(...)} to set_poisson, reflected by poisson_solver()
     (the section-24 accessor) when the binding is present."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim._install_solver("phi", pops.lib.fields.GeometricMG())
+    sim._install_solver("phi", pops.fields.catalog.GeometricMG())
     if hasattr(sim._s, "poisson_solver"):
         assert sim.poisson_solver() == "geometric_mg", \
             "set_poisson lowered (got %r)" % sim.poisson_solver()
@@ -94,7 +94,7 @@ def test_install_solver_sets_poisson():
         print("OK  _install_solver lowers to set_poisson (poisson_solver accessor absent; rebuild _pops)")
     # A second named elliptic field is deferred -> NotImplementedError (explicit, not silent).
     try:
-        sim._install_solver("temperature", pops.lib.fields.GeometricMG())
+        sim._install_solver("temperature", pops.fields.catalog.GeometricMG())
         raise AssertionError("MISMATCH: a second named elliptic field should be NotImplementedError")
     except NotImplementedError:
         print("OK  _install_solver defers a second named elliptic field (NotImplementedError)")
@@ -252,7 +252,7 @@ def test_install_end_to_end_kokkos():
             instances={"plasma": {"state": "U", "initial": u0,
                                   "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                                   "time": pops.Explicit(method="euler")}},
-            solvers={"phi": pops.lib.fields.GeometricMG()})
+            solvers={"phi": pops.fields.catalog.GeometricMG()})
         raise AssertionError("MISMATCH: unified install accepted a simulation missing B_z")
     except RuntimeError as exc:
         assert "lorentz" in str(exc) and "B_z" in str(exc) and "did not provide" in str(exc), \
@@ -267,7 +267,7 @@ def test_install_end_to_end_kokkos():
                               "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                               "time": pops.Explicit(method="euler")}},
         aux={"B_z": 3.0 * np.ones(N * N)},
-        solvers={"phi": pops.lib.fields.GeometricMG()})
+        solvers={"phi": pops.fields.catalog.GeometricMG()})
     assert "plasma" in sim_ok.block_names(), "instance bound by name"
     print("OK  unified install wires instance + aux + solver and installs the program")
 
@@ -324,7 +324,7 @@ def test_install_routes_runtime_param_kokkos():
                               "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                               "time": pops.Explicit()}},
         params={"cs2": 1.0},
-        solvers={"phi": pops.lib.fields.GeometricMG()})
+        solvers={"phi": pops.fields.catalog.GeometricMG()})
     assert "plasma" in sim.block_names(), "instance bound by name (no 'declared by no instance' raise)"
     print("OK  headline install(params=) routes a runtime param (raw Model auto-resolved via AOT)")
 
@@ -350,7 +350,7 @@ def test_install_routes_runtime_param_kokkos():
                                   "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                                   "time": pops.Explicit(method="euler")}},
             params={"cs2": 1.0},
-            solvers={"phi": pops.lib.fields.GeometricMG()})
+            solvers={"phi": pops.fields.catalog.GeometricMG()})
         raise AssertionError("MISMATCH: a runtime-param (AOT) block should reject euler")
     except RuntimeError as exc:
         assert "ssprk" in str(exc).lower() or "backward" in str(exc).lower() or "aot" in str(exc).lower(), \
@@ -421,7 +421,7 @@ def test_install_native_end_to_end_kokkos():
             instances={"plasma": {"model": m, "initial": u0, "spatial": _fv(),
                                   "time": pops.Explicit(method="euler")}},
             aux={"B_z": bz},
-            solvers={"phi": pops.lib.fields.GeometricMG()})
+            solvers={"phi": pops.fields.catalog.GeometricMG()})
     except RuntimeError as exc:
         print("skip test_install_native_end_to_end_kokkos (no Kokkos to build the native block: %s)"
               % str(exc)[:120])
@@ -449,7 +449,7 @@ def test_install_native_end_to_end_kokkos():
 
 
 def main():
-    test_lower_spatial_accepts_runtime_and_lib()
+    test_lower_spatial_accepts_runtime_and_catalog()
     test_solver_token_lowering()
     test_install_solver_sets_poisson()
     test_riemann_capability_verbatim()

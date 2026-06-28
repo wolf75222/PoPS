@@ -385,8 +385,9 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     backend = lower_backend(backend)
     if backend != "production":
         raise ValueError("compiled time programs require backend='production'")
-    if target != "system":
-        raise ValueError("compiled time programs currently support target='system' only")
+    if target not in ("system", "amr_system"):
+        raise ValueError("compiled time programs support target='system' | 'amr_system' "
+                         "(received %r)" % (target,))
 
     library_manifests = []
     if libraries:

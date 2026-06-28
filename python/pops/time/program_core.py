@@ -183,12 +183,21 @@ class _ProgramCore(_ProgramConstants):
         Accepts EITHER a plain ``str`` (returned unchanged -- the legacy, transparent path) OR an
         :class:`pops.model.OperatorHandle` (its ``.name`` is returned). A handle resolves through the
         identical registry lookup + lowering as its name, so the IR is byte-identical. Any other type
-        is a clear ``TypeError`` (a typed surface, not a silent coercion)."""
+        is a clear ``TypeError`` (a typed surface, not a silent coercion).
+
+        Under ``strict_typed`` (Spec 5 sec.15, ADC-479 criterion 23) the STRING form is REFUSED: a
+        Program must reference an operator only by the typed handle a declarer returns. An
+        OperatorHandle still resolves identically (same name, byte-identical IR)."""
         from pops.model import OperatorHandle
-        if isinstance(operator, str):
-            return operator
         if isinstance(operator, OperatorHandle):
             return operator.name
+        if isinstance(operator, str):
+            if self._strict_typed:
+                raise TypeError(
+                    "strict_typed: P.call requires a typed operator handle, not the string %r; "
+                    "build it with m.rate(...) / m.field_operator(...) / m.source_term(...) "
+                    "(any m.*_operator declarer returns an pops.model.OperatorHandle)" % (operator,))
+            return operator
         raise TypeError(
             "P.call: operator must be a str name or an pops.model.OperatorHandle "
             "(from m.rate_operator / m.source_term / m.linear_source), got %r" % (operator,))
@@ -207,6 +216,16 @@ class _ProgramCore(_ProgramConstants):
                 % (op.name, schedule.policy, op.name))
 
     def _lower_call(self, op, operator_name, args, name):
+        # A typed P.call lowers THROUGH the legacy builders (self.rhs(flux=...) / self.source / ...);
+        # flag the re-entrancy so the strict guard in rhs() does not mistake this internal legacy-form
+        # call for a user's legacy spelling (the user already used the typed P.call front door).
+        self._lowering_typed = True
+        try:
+            return self._lower_call_impl(op, operator_name, args, name)
+        finally:
+            self._lowering_typed = False
+
+    def _lower_call_impl(self, op, operator_name, args, name):
         kind = op.kind
         if kind == "field_operator":
             # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
@@ -346,6 +365,15 @@ class _ProgramCore(_ProgramConstants):
         evaluated flux fields: so splitting the physical flux into named pieces that sum to it
         reproduces the same -div F to round-off. Mixing ``"default"`` with named fluxes is rejected
         (the two divergence stencils differ); request either the default or a set of named fluxes."""
+        # Strict de-stringing (Spec 5 sec.15, ADC-479 criterion 27): when strict_typed is ON, only the
+        # typed terms= front door is accepted from a USER -- the legacy flux=/sources=/fluxes= spelling
+        # is REFUSED. The internal lowering (a typed P.call -> self.rhs(flux=...)) sets _lowering_typed
+        # so it is exempt: strict mode rejects the legacy SPELLING, never the typed path's lowering.
+        if self._strict_typed and not self._lowering_typed and terms is None:
+            raise TypeError(
+                "strict_typed: P.rhs requires the typed terms= list, not the flux=/sources=/fluxes= "
+                "form; pass P.rhs(state=U, fields=f, terms=[Flux(), source]) (a "
+                "pops.numerics.terms.Flux plus the source terms to fold in)")
         # terms= is the typed front door (Spec 5 sec.14.2.4): it is MUTUALLY EXCLUSIVE with the legacy
         # flux=/sources=/fluxes= kwargs and lowers onto them, so the rest of the body (and the IR) is
         # unchanged. Resolve the three legacy kwargs to either their caller value or the historical
@@ -357,7 +385,8 @@ class _ProgramCore(_ProgramConstants):
                 raise ValueError(
                     "rhs: terms= is mutually exclusive with %s; pass the typed terms list OR the "
                     "legacy flux=/sources=/fluxes= kwargs, not both" % "/".join(conflict))
-            flux, sources = self._terms_to_flux_sources(terms)
+            from pops.time._rhs_terms import terms_to_flux_sources
+            flux, sources = terms_to_flux_sources(terms)
             fluxes = None
         else:
             flux = True if flux is _UNSET else flux
@@ -376,41 +405,6 @@ class _ProgramCore(_ProgramConstants):
         attrs = {"flux": bool(flux), "sources": src, "fluxes": list(fluxes) if fluxes else None}
         inputs = (state, fields) if fields is not None else (state,)
         return self._new("rhs", "rhs", inputs, attrs, name, state.block)
-
-    def _terms_to_flux_sources(self, terms):
-        """Lower a typed ``terms=[...]`` list (Spec 5 sec.14.2.4) onto the legacy ``(flux, sources)``.
-
-        A :class:`pops.numerics.terms.Flux` sets ``flux=True`` (its absence -> ``flux=False``); every
-        source term contributes its NAME to ``sources`` in list order. Accepted source forms (each maps
-        cleanly onto an existing ``sources=`` name): a :class:`~pops.numerics.terms.SourceTerm` /
-        :class:`~pops.numerics.terms.LocalTerm` descriptor (its ``.name`` must be set), an
-        :class:`pops.model.OperatorHandle` from ``m.source_term`` (its ``.name``), or a plain source
-        name ``str``. A non-term object (e.g. a bare ``bool``) is a clear ``TypeError``."""
-        from pops.numerics.terms import Flux, LocalTerm, SourceTerm
-        from pops.model import OperatorHandle
-        flux = False
-        sources = []
-        for t in terms:
-            if isinstance(t, Flux):
-                flux = True
-            elif isinstance(t, (SourceTerm, LocalTerm)):
-                # An unnamed SourceTerm/LocalTerm has no source name to fold in (its .name would be the
-                # class name, which is not a declared m.source_term); reject it transparently.
-                if t._name is None:
-                    raise ValueError(
-                        "rhs: a %s in terms= must be named (the name of a declared m.source_term); "
-                        "got an unnamed %s" % (type(t).__name__, type(t).__name__))
-                sources.append(t.name)
-            elif isinstance(t, OperatorHandle):
-                sources.append(t.name)
-            elif isinstance(t, str) and t:
-                sources.append(t)
-            else:
-                raise TypeError(
-                    "rhs: terms= entries must be a pops.numerics.terms.Flux/SourceTerm/LocalTerm, a "
-                    "source OperatorHandle (from m.source_term), or a source name str; got %r "
-                    "(note: Flux() is a term, not a bool)" % (t,))
-        return flux, sources
 
     def linear_combine(self, name=None, expr=None):
         """Materialize an affine combination of State/RHS values into a new State. Accepts

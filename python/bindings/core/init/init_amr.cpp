@@ -235,6 +235,20 @@ void init_amr(py::module_& m) {
            "the "
            "substeps/stride cadence in multi-block and the optional bounds). Returns the dt used.",
            py::arg("cfl"))
+      // AMR / MPI profiling (Spec 5 criterion 43, ADC-479): the multi-block engine times its
+      // non-numeric phases (regrid / fill_boundary / average_down) + MPI counters into the
+      // facade-owned Profiler. PerformanceSummary.by_amr_mpi() surfaces them. Off by default.
+      .def("enable_profiling", &AmrSystem::enable_profiling,
+           "Spec 5 profiling (ADC-479): time the AMR phases (regrid, fill_boundary, average_down) "
+           "and MPI counters. Disabled by default; off the hot path when off.")
+      .def("disable_profiling", &AmrSystem::disable_profiling,
+           "Stop profiling (keeps accumulated data).")
+      .def("is_profiling", &AmrSystem::is_profiling)
+      .def("reset_profiling", &AmrSystem::reset_profiling, "Clear accumulated profiling data.")
+      .def("profile_report", &AmrSystem::profile_report,
+           "Per-phase wall-clock report of the AMR runtime (count / total / mean / min / max per "
+           "scope, plus counters regrid / fill_boundary / mpi_reductions / mpi_messages). "
+           "Per-rank.")
       .def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
       // AMR clock (IO v1, System parity): macro-step counter + restoration (t, macro_step) ->

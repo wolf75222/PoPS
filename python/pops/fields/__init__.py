@@ -12,18 +12,23 @@ shortcuts :class:`PoissonProblem` / :class:`ScreenedPoissonProblem` /
 * :mod:`pops.fields.nullspace` -- ``ConstantNullspace`` for singular operators;
 * :mod:`pops.fields.aux` -- static / derived aux fields + the re-exported ``AuxHalo``.
 
-Everything is inert; the runtime materialises and solves after validation. This is the
-top-level authoring package and is DISTINCT from the ``pops.lib.fields`` preset catalog.
+Everything is inert; the runtime materialises and solves after validation. This typed authoring
+surface is DISTINCT from the flat elliptic-field brick catalog re-exported as
+:data:`pops.fields.catalog` (Spec 5 criterion 7: moved out of ``pops.lib.fields``).
 """
 from .problem import FieldProblem, SolveCadence
 from .poisson import (PoissonProblem, ScreenedPoissonProblem,
                       AnisotropicPoissonProblem)
 from .policies import FieldSolvePolicy, HoldPrevious, Recompute
 from . import bcs, rhs, coefficients, nullspace, aux, policies
+# The elliptic-field brick catalog (criterion 7: moved out of pops.lib.fields). Bind the SimpleNamespace
+# as ``pops.fields.catalog`` (shadowing the submodule) so ``catalog.GeometricMG()`` resolves. It is a
+# flat BrickDescriptor catalog, DISTINCT from the typed FieldProblem authoring surface above.
+from .catalog import fields as catalog
 
 __all__ = [
     "FieldProblem", "SolveCadence", "PoissonProblem", "ScreenedPoissonProblem",
     "AnisotropicPoissonProblem",
     "FieldSolvePolicy", "HoldPrevious", "Recompute",
-    "bcs", "rhs", "coefficients", "nullspace", "aux", "policies",
+    "bcs", "rhs", "coefficients", "nullspace", "aux", "policies", "catalog",
 ]

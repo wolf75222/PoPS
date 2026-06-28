@@ -131,7 +131,58 @@ class FieldProblem(Descriptor):
                 % (self.name, type(self.equation).__name__))
         if self.solver is None:
             raise ValueError("%s: a solver must be provided" % self.name)
+        self._require_periodic_compatible_solver()
         return True
+
+    @staticmethod
+    def _bc_kind(bc):
+        """The declared boundary kind ("periodic"/"dirichlet"/...) of a field BC, or None.
+
+        Reads the BC's own ``options()["bc"]``; a :class:`~pops.fields.bcs.FaceBC` is unwrapped
+        to the condition it binds. Returns ``None`` for an object that does not declare a kind,
+        so an unrecognized BC never triggers a (false) rejection.
+        """
+        inner = getattr(bc, "condition", bc)  # FaceBC(face, condition) -> the condition
+        opts = getattr(inner, "options", None)
+        if callable(opts):
+            declared = opts()
+            if isinstance(declared, dict):
+                return declared.get("bc")
+        return None
+
+    def _require_periodic_compatible_solver(self):
+        """Reject a periodic-only solver paired with a non-periodic boundary (Spec 5 sec.7, #11).
+
+        The FFT Poisson solver only serves a periodic boundary (``supports_wall_bc`` False,
+        ``supports_periodic_bc`` True); pairing it with a Dirichlet / Neumann / extrapolation BC
+        is a known incompatibility the spec wants caught BEFORE execution. Same NO-FALSE-POSITIVE
+        discipline as :meth:`_require_solver_capability`:
+
+        * no ``bcs`` declared -> the boundary is unspecified (may default periodic): never reject;
+        * a solver with no ``capabilities()`` dict -> capability absent, not declared: never reject;
+        * a solver that is not periodic-only (``supports_wall_bc`` is not literally False, e.g.
+          ``GeometricMG`` which serves walls) -> never reject;
+        * only a periodic-only solver AND a KNOWN non-periodic BC is refused, naming GeometricMG.
+        """
+        if not self.bcs:
+            return
+        caps = getattr(self.solver, "capabilities", None)
+        if not callable(caps):
+            return
+        declared = caps()
+        if not isinstance(declared, dict):
+            return
+        periodic_only = (declared.get("supports_wall_bc") is False
+                         and declared.get("supports_periodic_bc") is True)
+        if not periodic_only:
+            return
+        if any(self._bc_kind(bc) not in (None, "periodic") for bc in self.bcs):
+            solver_name = getattr(self.solver, "name", type(self.solver).__name__)
+            raise ValueError(
+                "%s: solver %s requires a periodic boundary (supports_wall_bc is False) but the "
+                "problem declares a non-periodic boundary; use a periodic BC "
+                "(pops.fields.bcs.Periodic()) or pops.solvers.elliptic.GeometricMG()."
+                % (self.name, solver_name))
 
     def _require_solver_capability(self, tag, operator, alternative):
         """Reject the solver only when it declares ``supports_<tag>`` KNOWN-False (Spec 5 sec.7).

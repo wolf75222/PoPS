@@ -230,14 +230,15 @@ def inspect_capabilities():
         entries.extend(_walk_brick_catalog(namespace))
     entries.extend(_walk_class_catalog("layout", (Uniform, AMR)))
 
-    # The solver / field catalogs live under pops.lib when present (optional layer).
+    # The solver / field brick catalogs (Spec 5 criterion 7: solvers under pops.solvers, the
+    # field brick catalog under pops.fields.catalog) -- optional layers walked when present.
     try:
-        from pops.lib.solvers import solvers
+        from pops.solvers import solvers
         entries.extend(_walk_brick_catalog(solvers))
     except ImportError:
         pass
     try:
-        from pops.lib.fields import fields
+        from pops.fields import catalog as fields
         entries.extend(_walk_brick_catalog(fields))
     except ImportError:
         pass

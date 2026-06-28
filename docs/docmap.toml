@@ -271,7 +271,8 @@ reviewed = "af6add18a94899437251a1769d4fd3a2aa122349"
 [docs."docs/sphinx/reference/typed-bricks.md"]
 owner = "Romain"
 mode = "warning"
-depends_on = ["python/pops/lib", "python/pops/time", "python/pops/codegen/library.py",
+depends_on = ["python/pops/lib", "python/pops/numerics", "python/pops/fields",
+              "python/pops/solvers", "python/pops/time", "python/pops/codegen/library.py",
               "python/pops/codegen/library_codegen.py", "include/pops/runtime/program/external_brick.hpp",
               "include/pops/runtime/program/external_riemann_brick.hpp"]
 tested_by = ["python/tests/test_lib_descriptors.py", "python/tests/test_external_bricks.py",
@@ -322,8 +323,10 @@ reviewed = "af6add18a94899437251a1769d4fd3a2aa122349"
 [docs."docs/sphinx/reference/custom-solvers.md"]
 owner = "Romain"
 mode = "warning"
-depends_on = ["python/pops/lib", "include/pops/numerics/elliptic/linear/generic_krylov.hpp"]
-tested_by = ["python/tests/test_lib_descriptors.py"]
+depends_on = ["python/pops/solvers", "python/pops/codegen/solvers",
+              "include/pops/numerics/elliptic/linear/generic_krylov.hpp"]
+tested_by = ["python/tests/test_lib_descriptors.py", "python/tests/test_solver_dsl.py",
+             "python/tests/test_solvers_descriptors.py"]
 testable = false
 reviewed = "af6add18a94899437251a1769d4fd3a2aa122349"
 

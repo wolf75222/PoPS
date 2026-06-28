@@ -39,13 +39,14 @@ class _StubSolver:
 
 
 class _StubCompiled:
-    """A compiled-handle stand-in: only ``.so_path`` + the carried problem/target."""
+    """A compiled-handle stand-in: only ``.so_path`` + the carried problem/target/layout."""
 
-    def __init__(self, target="system", problem=None):
+    def __init__(self, target="system", problem=None, layout=None):
         self.so_path = "/tmp/stub.so"
         self.model = None
         self._target = target
         self._problem = problem
+        self._layout = layout
 
 
 def _poisson_problem():
@@ -219,14 +220,38 @@ def test_compile_layout_drives_target(monkeypatch=None):
     print("ok test_compile_layout_drives_target")
 
 
-def test_compile_amr_deferred():
-    prob = pops.Problem(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+def test_compile_amr_routes_to_amr_system(monkeypatch=None):
+    captured = {}
+
+    def _fake_compile_problem(*, time, model, backend, target, **kw):
+        captured.update(time=time, model=model, backend=backend, target=target)
+        return _StubCompiled(target=target)
+
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
+    try:
+        layout = AMR(CartesianMesh())
+        prob = pops.Problem(layout=layout).block("ne", physics=_StubModel())
+        compiled = orchestration.compile(prob, time=object())
+        _check(captured["target"] == "amr_system", "AMR layout routes to target='amr_system'")
+        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
+        _check(compiled._layout is layout, "AMR layout carried on the handle for bind()")
+    finally:
+        _unpatch(monkeypatch)
+    print("ok test_compile_amr_routes_to_amr_system")
+
+
+def test_compile_amr_max_levels_beyond_native_raises():
+    # max_levels above the native envelope is refused at compile (problem.validate() runs the
+    # layout's AMR.available check), with the existing clear message, never silently clamped.
+    from pops.mesh.amr import NATIVE_MAX_LEVELS
+    prob = (pops.Problem(layout=AMR(CartesianMesh(), max_levels=NATIVE_MAX_LEVELS + 1))
+            .block("ne", physics=_StubModel()))
     try:
         orchestration.compile(prob, time=object())
-        raise AssertionError("AMR layout compile must raise NotImplementedError")
-    except NotImplementedError as exc:
-        _check("AMR" in str(exc), "AMR-deferred message is explicit")
-    print("ok test_compile_amr_deferred")
+        raise AssertionError("AMR(max_levels beyond native) must be refused")
+    except ValueError as exc:
+        _check("max_levels" in str(exc), "max-levels message is explicit")
+    print("ok test_compile_amr_max_levels_beyond_native_raises")
 
 
 def test_compile_missing_time_raises():
@@ -280,29 +305,43 @@ class _RecordingSim:
                               "aux": aux, "solvers": solvers, "cadence": cadence}
 
 
-def _bind_with_stub_runtime(target):
-    """Run bind() with System/AmrSystem replaced by recording stubs; return the chosen class."""
+def _bind_with_stub_runtime(target, layout=None):
+    """Run bind() with System/AmrSystem replaced by recording stubs; return the chosen class.
+
+    The AmrSystem stub mirrors the real constructor (it accepts the derived ``AmrSystemConfig``)
+    and records the refinement flow (set_refinement / set_phi_refinement) bind() applies before
+    install."""
     import pops.runtime.system as rtsys
 
     class _StubSystem(_RecordingSim):
         pass
 
     class _StubAmrSystem(_RecordingSim):
-        pass
+        def __init__(self, config=None):
+            self.config = config
+            self.refinement = None
+            self.phi_refinement = None
+
+        def set_refinement(self, threshold, variable="", role=""):
+            self.refinement = (threshold, variable, role)
+
+        def set_phi_refinement(self, threshold):
+            self.phi_refinement = threshold
 
     orig_sys, orig_amr = rtsys.System, rtsys.AmrSystem
     rtsys.System, rtsys.AmrSystem = _StubSystem, _StubAmrSystem
     try:
-        prob = pops.Problem().block("ne", physics=_StubModel()).field(_poisson_problem())
-        compiled = _StubCompiled(target=target, problem=prob)
+        prob = pops.Problem(layout=layout) if layout is not None else pops.Problem()
+        prob = prob.block("ne", physics=_StubModel()).field(_poisson_problem())
+        compiled = _StubCompiled(target=target, problem=prob, layout=layout)
         sim = orchestration.bind(compiled, initial_state={"ne": [1.0]})
-        return type(sim), _RecordingSim.last, _StubSystem, _StubAmrSystem
+        return type(sim), _RecordingSim.last, _StubSystem, _StubAmrSystem, sim
     finally:
         rtsys.System, rtsys.AmrSystem = orig_sys, orig_amr
 
 
 def test_bind_system_dispatch():
-    sim_class, last, stub_system, _ = _bind_with_stub_runtime("system")
+    sim_class, last, stub_system, _, _ = _bind_with_stub_runtime("system")
     _check(sim_class is stub_system, "target='system' binds a System")
     _check(last["compiled"].so_path == "/tmp/stub.so", "compiled handle passed to install")
     _check(set(last["instances"]) == {"ne"}, "the block becomes one install instance")
@@ -312,9 +351,37 @@ def test_bind_system_dispatch():
 
 
 def test_bind_amr_dispatch():
-    sim_class, _, _, stub_amr = _bind_with_stub_runtime("amr_system")
+    from pops.mesh.amr import RegridEvery, PatchLayout, Refine
+    layout = AMR(CartesianMesh(n=48, L=2.0, periodic=False), max_levels=2, ratio=2,
+                 regrid=RegridEvery(4), patches=PatchLayout(distribute_coarse=True,
+                                                            coarse_max_grid=16))
+    layout.refine = Refine.on("density").above(1.5)
+    sim_class, last, _, stub_amr, sim = _bind_with_stub_runtime("amr_system", layout=layout)
     _check(sim_class is stub_amr, "target='amr_system' binds an AmrSystem")
+    cfg = sim.config
+    _check(cfg.n == 48 and cfg.L == 2.0 and cfg.periodic is False,
+           "AmrSystemConfig n/L/periodic derived from the base CartesianMesh")
+    _check(cfg.regrid_every == 4, "regrid_every derived from RegridEvery(4)")
+    _check(cfg.distribute_coarse is True and cfg.coarse_max_grid == 16,
+           "patch settings derived from PatchLayout")
+    _check(sim.refinement == (1.5, "", ""),
+           "the density Refine criterion flowed to set_refinement (component 0) before install")
+    _check(last["compiled"].so_path == "/tmp/stub.so", "compiled handle passed to AMR install")
     print("ok test_bind_amr_dispatch")
+
+
+def test_bind_amr_frozen_and_phi_refinement():
+    from pops.mesh.amr import FrozenRegrid, TagUnion, Refine
+    layout = AMR(CartesianMesh(n=32), regrid=FrozenRegrid())
+    layout.refine = TagUnion(Refine.on("Density").above(2.0),
+                             Refine.on("phi").gradient_above(0.5))
+    _, _, _, _, sim = _bind_with_stub_runtime("amr_system", layout=layout)
+    _check(sim.config.regrid_every == 0, "FrozenRegrid -> regrid_every == 0")
+    _check(sim.refinement == (2.0, "", ""),
+           "a Density-role subject flows to set_refinement on component 0")
+    _check(sim.phi_refinement == 0.5,
+           "the grad-phi tag flows to set_phi_refinement")
+    print("ok test_bind_amr_frozen_and_phi_refinement")
 
 
 def test_bind_rejects_non_compiled():

@@ -1,4 +1,9 @@
-"""pops.lib.solvers.dsl -- custom-solver AUTHORING DSL (Spec 3 section 20 / criterion 23).
+"""pops.codegen.solvers.dsl -- custom-solver AUTHORING DSL (Spec 3 section 20 / criterion 23).
+
+INTERNAL / EXPERIMENTAL (Spec 5 criterion 19): this solver-generation DSL is NOT a stable
+public API. It lives under :mod:`pops.codegen.solvers` (the codegen layer that owns it) and
+its surface may change without notice. Use the ready-to-use :mod:`pops.solvers` presets
+(``CG`` / ``GMRES`` / ``GeometricMG`` / ``Newton`` ...) for stable solver selection.
 
 This module contains the ``@solver`` decorator, the ``SolverIR`` / ``SolverContext`` /
 ``_SolverWhile`` IR-authoring classes, ``build_solver_ir``, and the registration helpers
@@ -6,12 +11,16 @@ This module contains the ``@solver`` decorator, the ``SolverIR`` / ``SolverConte
 ``_require_field`` / ``_operator_name`` / ``_SOLVER_MAX_ITERS``).
 
 The builder AUTHORS a solver IR over the matrix-free Krylov primitives; it computes
-NOTHING in Python. ``BrickDescriptor`` is imported at module scope from the sibling
-:mod:`pops.descriptors` (no cycle, no codegen). :class:`pops.time.Program` is the
-IR backing store and is imported lazily (``time`` is a heavy package). The C++ lowering
-lives in :mod:`pops.lib.solvers.solver_cpp`.
+NOTHING in Python. ``BrickDescriptor`` is imported at module scope from the top-level
+:mod:`pops.descriptors` (a flat module, not a tracked layer: no cycle). :class:`pops.time.Program`
+is the IR backing store and is imported lazily (``time`` is a heavy package, and the lazy
+import keeps the codegen layer free of a module-scope ``time`` edge). The C++ lowering lives
+in :mod:`pops.codegen.solvers.solver_cpp`.
 """
-from ..descriptors import BrickDescriptor
+from pops.descriptors import BrickDescriptor
+
+# This DSL is internal / experimental, not a stable public API (Spec 5 criterion 19).
+__experimental__ = True
 
 
 # ---------------------------------------------------------------------------
@@ -34,20 +43,20 @@ def solver(name=None, signature=None):
     The builder builds IR ONLY -- it never performs Python numerics. Returns a
     ``generated`` :class:`BrickDescriptor` in the ``solver`` category, carrying the
     builder off its identity key, selectable wherever a native solver is (its
-    ``scheme`` mirrors ``pops.lib.solvers.GMRES()``).
+    ``scheme`` mirrors ``pops.solvers.GMRES()``).
 
     The generated C++ lowering + run is the deferred C++ follow-up: see
-    :func:`pops.lib.solvers.solver_cpp.generate_solver_cpp` (it raises a clear ADC-462
+    :func:`pops.codegen.solvers.solver_cpp.generate_solver_cpp` (it raises a clear ADC-462
     ``NotImplementedError``; it is never faked as a Python solve).
     """
     if not isinstance(name, str) or not name:
-        raise ValueError("@pops.lib.solver requires a non-empty name=")
+        raise ValueError("@pops.codegen.solvers.solver requires a non-empty name=")
     if signature is not None and not isinstance(signature, str):
-        raise TypeError("@pops.lib.solver signature= must be a string (e.g. '(A, b)')")
+        raise TypeError("@pops.codegen.solvers.solver signature= must be a string (e.g. '(A, b)')")
 
     def decorate(builder):
         if not callable(builder):
-            raise TypeError("@pops.lib.solver must decorate a callable builder; got %r"
+            raise TypeError("@pops.codegen.solvers.solver must decorate a callable builder; got %r"
                             % (builder,))
         opts = {"signature": signature} if signature is not None else None
         desc = BrickDescriptor(name, "generated", category="solver", scheme=name,
@@ -69,8 +78,8 @@ def _registered_solvers():
 
 
 def _as_descriptor(solver_brick):
-    """Coerce a ``@pops.lib.solver`` argument to its descriptor: accept the descriptor
-    itself or a registered name. A non-generated/non-solver brick is rejected loud."""
+    """Coerce a ``@pops.codegen.solvers.solver`` argument to its descriptor: accept the
+    descriptor itself or a registered name. A non-generated/non-solver brick is rejected loud."""
     if isinstance(solver_brick, BrickDescriptor):
         desc = solver_brick
     elif isinstance(solver_brick, str):
@@ -81,7 +90,7 @@ def _as_descriptor(solver_brick):
         raise TypeError("expected a custom solver descriptor or its name; got %r"
                         % (solver_brick,))
     if desc.brick_type != "generated" or desc.category != "solver" or desc.builder is None:
-        raise ValueError("%r is not a custom (@pops.lib.solver) solver descriptor"
+        raise ValueError("%r is not a custom (@pops.codegen.solvers.solver) solver descriptor"
                          % (desc.name,))
     return desc
 
@@ -96,7 +105,7 @@ class SolverIR:
     It is a thin view over the building :class:`pops.time.Program` -- it records the
     flat op list and the returned solution value. It holds NO numeric data: every
     node is a typed SSA record (see :class:`pops.time.Value`). The C++ lowering of
-    this IR is deferred (ADC-462); :func:`pops.lib.solvers.solver_cpp.generate_solver_cpp`
+    this IR is deferred (ADC-462); :func:`pops.codegen.solvers.solver_cpp.generate_solver_cpp`
     raises rather than fake a Python solve.
     """
 
@@ -273,7 +282,7 @@ class _SolverWhile:
 def build_solver_ir(solver_brick):
     """Run a custom-solver builder to AUTHOR its IR (no Python numerics).
 
-    @p solver_brick is a ``@pops.lib.solver`` descriptor (or its registered name). The
+    @p solver_brick is a ``@pops.codegen.solvers.solver`` descriptor (or its registered name). The
     builder receives a :class:`SolverContext` and two unknowns (the operator ``A`` and
     the rhs ``b``) and returns the solution IR value. Returns a :class:`SolverIR`.
     """

@@ -199,7 +199,7 @@ def test_valid_install_passes_validation_unchanged():
                 instances={"plasma": {"model": _model(aux_names=()),
                                       "initial": np.ones((3, N, N)),
                                       "spatial": pops.FiniteVolume()}},
-                solvers={"phi": pops.lib.fields.GeometricMG()})
+                solvers={"phi": pops.fields.catalog.GeometricMG()})
     chk(record["native"] is True, "validation passed and the native install_program was reached")
     chk(record["blocks"] == ["plasma"], "the instance was wired (validation did not block it)")
 
