@@ -195,6 +195,15 @@ struct System::Impl {
   // (System::program_diagnostic / program_diagnostics). Lives HERE (not in the .so) so it outlives the
   // step closure and Python can read it; not referenced by SystemStepper -> no MockImpl impact.
   std::map<std::string, Real> program_diagnostics_;
+  // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510): the LIVE values the installed Program's per-cell
+  // kernels read via ProgramContext::param (the codegen emits ctx.param(<index>) for a
+  // dsl.Param(..., kind="runtime")). Indexed in the model's sorted-name order, the SAME the kernels emit
+  // and the .so's pops_program_param_name table exports. Sized + seeded to the declaration defaults by
+  // install_program; a set_param overwrites a value in place so the change takes effect at the next step
+  // WITHOUT recompiling. Lives HERE (not in the .so) so it outlives the step closure and survives the
+  // dlopen boundary; not referenced by SystemStepper -> no MockImpl impact (like program_diagnostics_).
+  std::vector<double> program_params_;
+  std::vector<std::string> program_param_names_;  // index -> name (sorted), for the named setter
   // PER-NODE / PER-BRICK PROFILER (ADC-459, Spec 3 section 29-30): System-owned, like the diagnostics
   // above -- NOT referenced by SystemStepper, so no MockImpl impact. Disabled by default (no hot-path
   // cost when off). System::step / solve_fields wrap themselves in a ProfileScope into it.
@@ -2431,6 +2440,37 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       set_program_block_map({});  // pre-Spec-3 .so: no name table -> identity (positional convention)
     }
   }
+  // RUNTIME PARAMETERS (ADC-510). A Program reading dsl.Param(..., kind="runtime") in a kernel exports
+  // its declared param names (sorted-name order, the SAME index the kernels emit as ctx.param(<index>))
+  // and their declaration defaults. Read the table, store the names for the named setter, and seed the
+  // live value store to the defaults -- so a Program WITHOUT a runtime set behaves as with const params
+  // of those values, and a later sim.set_param(name, value) overwrites a value WITHOUT recompiling. A
+  // Program with no runtime param (the table symbols absent, count 0) clears the store. Built BEFORE
+  // install() so the step closure sees a fully sized store on its first run.
+  {
+    using count_t = int (*)();
+    using name_t = const char* (*)(int);
+    using default_t = double (*)(int);
+    auto param_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_param_count"));
+    auto param_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_program_param_name"));
+    auto param_default =
+        reinterpret_cast<default_t>(pops::dynlib::sym(h, "pops_program_param_default"));
+    if (param_count && param_name) {
+      const int np = param_count();
+      std::vector<std::string> names(static_cast<std::size_t>(np));
+      std::vector<double> defaults(static_cast<std::size_t>(np), 0.0);
+      for (int k = 0; k < np; ++k) {
+        names[static_cast<std::size_t>(k)] = param_name(k);
+        if (param_default)
+          defaults[static_cast<std::size_t>(k)] = param_default(k);
+      }
+      p_->program_param_names_ = std::move(names);
+      set_program_params(np, defaults.data());
+    } else {
+      p_->program_param_names_.clear();  // no runtime params -> empty store
+      set_program_params(0, nullptr);
+    }
+  }
   install(static_cast<void*>(this));
   // Record the program's IR hash (ADC-406b): the optional pops_program_hash export (a stable IR key,
   // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT
@@ -2520,6 +2560,43 @@ void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
 }
 const std::vector<int>& System::program_block_map() const {
   return p_->program_block_map_;
+}
+// Compiled-Program RUNTIME parameters (ADC-510): install_program sizes + seeds the store from the
+// .so's param table; ProgramContext::param reads program_param live each step; set_program_param
+// overwrites a value by name so the change takes effect at the next step without recompiling.
+void System::set_program_params(int count, const double* defaults) {
+  p_->program_params_.assign(defaults, defaults + (count > 0 ? count : 0));
+}
+Real System::program_param(int k) const {
+  if (k < 0 || k >= static_cast<int>(p_->program_params_.size()))
+    throw std::out_of_range(
+        "System::program_param: index " + std::to_string(k) + " out of range [0, " +
+        std::to_string(p_->program_params_.size()) +
+        ") (no Program installed, or a stale .so reads past the declared count)");
+  return static_cast<Real>(p_->program_params_[static_cast<std::size_t>(k)]);
+}
+void System::set_program_param(const std::string& name, double value) {
+  const std::vector<std::string>& names = p_->program_param_names_;
+  auto it = std::find(names.begin(), names.end(), name);
+  if (it == names.end()) {
+    std::string declared;
+    for (const auto& nm : names)
+      declared += (declared.empty() ? "" : ", ") + nm;
+    throw std::runtime_error(
+        "System::set_program_param: '" + name +
+        "' is not a runtime parameter of the installed Program (declared: " +
+        (declared.empty() ? "<none>" : declared) +
+        "); declare it as dsl.Param(..., kind=\"runtime\") and reference it in a Program kernel. A "
+        "per-INSTANCE / block runtime param is set instead via bind(params={...}) at install or "
+        "set_block_params(block, values) (the AOT block path), not set_param");
+  }
+  const std::size_t k = static_cast<std::size_t>(it - names.begin());
+  if (k < p_->program_params_.size())
+    p_->program_params_[k] =
+        value;  // overwrite in place: effect at the next step (kernels read live)
+}
+std::vector<std::string> System::program_param_names() const {
+  return p_->program_param_names_;
 }
 // Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
 // spec op 21). REUSES the block's own projection closure; a block without one is a no-op.

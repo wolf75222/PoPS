@@ -13,7 +13,21 @@ from pops.codegen.program_emit_kernels import (
     _kernel_close,
     _kernel_open,
     _model_impl,
+    _runtime_param_hoist,
 )
+
+
+def _hoist_runtime_params(open_lines, exprs):
+    """Splice the uniform runtime-param snapshot (`_runtime_param_hoist`) into a `_kernel_open` body
+    @p open_lines, INSIDE the per-fab loop but BEFORE the trailing ``for_each_cell`` line, so the device
+    lambda captures ``params`` by value (ADC-510). @p open_lines is the list `_kernel_open` returned (its
+    LAST line opens for_each_cell); @p exprs the kernel expressions that may read a runtime parameter.
+    Returns a NEW list (the hoist lines are indented two spaces, the per-fab loop scope). A kernel with
+    no runtime param read returns @p open_lines unchanged (byte-identical to the historical emission)."""
+    hoist = _runtime_param_hoist(exprs)
+    if not hoist:
+        return list(open_lines)
+    return open_lines[:-1] + ["  " + ln for ln in hoist] + [open_lines[-1]]
 
 
 def _emit_source_kernel(model, name, state_var, out_var):
@@ -24,7 +38,7 @@ def _emit_source_kernel(model, name, state_var, out_var):
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
     exprs = impl._source_terms[name]
-    body = _kernel_open(out_var, state_var)
+    body = _hoist_runtime_params(_kernel_open(out_var, state_var), exprs)
     body += ["    " + ln for ln in _cell_locals(impl, exprs, state_var, with_cons=True,
                                                  with_prim=True)]
     body += ["    outA(i, j, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
@@ -116,7 +130,7 @@ def _emit_flux_kernel(model, names, state_var, fx_var, fy_var):
     for name in names[1:]:  # accumulate the additional named fluxes (their SUM is one -div)
         x_exprs = [x_exprs[c] + flux_terms[name]["x"][c] for c in range(n)]
         y_exprs = [y_exprs[c] + flux_terms[name]["y"][c] for c in range(n)]
-    body = _kernel_open(fx_var, state_var)
+    body = _hoist_runtime_params(_kernel_open(fx_var, state_var), x_exprs + y_exprs)
     # fx and fy share the (ba, dm) of the scratch state, so the SAME loop / handles write both: bind a
     # second write handle to fy's local fab right after _kernel_open's outA (= fxA), still INSIDE the
     # per-fab loop and BEFORE for_each_cell so the device lambda captures it.
@@ -135,8 +149,9 @@ def _emit_apply_kernel(model, name, state_var, out_var):
     rows = _linear_source_rows(impl, name)
     n = len(rows)
     flat = [e for row in rows for e in row]
-    body = _kernel_open(out_var, state_var)
-    # L coefficients depend on aux / const only (linear_source invariant): cons/prim locals not needed.
+    body = _hoist_runtime_params(_kernel_open(out_var, state_var), flat)
+    # L coefficients depend on aux / const / runtime params only (linear_source invariant): cons/prim
+    # locals not needed; a runtime param is hoisted above (uniform over cells).
     body += ["    " + ln for ln in _cell_locals(impl, flat, state_var, with_cons=False,
                                                  with_prim=False)]
     for r in range(n):
@@ -155,7 +170,7 @@ def _emit_solve_local_linear_kernel(model, name, a_coeff, rhs_var, out_var):
     n = len(rows)
     flat = [e for row in rows for e in row]
     a_cpp = _coeff_cpp(a_coeff)
-    body = _kernel_open(out_var, rhs_var)
+    body = _hoist_runtime_params(_kernel_open(out_var, rhs_var), flat)
     body += ["    " + ln for ln in _cell_locals(impl, flat, rhs_var, with_cons=False,
                                                  with_prim=False)]
     body.append("    const pops::Real a_ = %s;" % a_cpp)
@@ -273,7 +288,9 @@ def _emit_solve_local_nonlinear_kernel(model, v, guess_var, out_var):
     for w in v.attrs["residual_block"]:
         if w.op in ("source", "apply"):
             term_exprs += _residual_term_exprs(impl, w)
-    body = _kernel_open(out_var, guess_var)
+    # A runtime parameter the residual reads is hoisted uniform (params) before for_each_cell; the
+    # residual lambda captures it by reference (ADC-510), like the cell-constant aux locals.
+    body = _hoist_runtime_params(_kernel_open(out_var, guess_var), term_exprs)
     # Per-cell aux + the live primitives are NOT pre-bound here: the prims depend on the ITERATE (they
     # are recomputed inside the residual lambda from Ueval). Only the aux locals are cell constants.
     body += ["    " + ln for ln in _cell_locals(impl, term_exprs, guess_var, with_cons=False,

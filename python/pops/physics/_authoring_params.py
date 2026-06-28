@@ -30,6 +30,15 @@ class _RuntimeParamsMixin:
                 out += [e for row in self._ws_jacobian["rows"][d] for e in row]
         if self._source is not None:
             out += [_wrap(e) for e in self._source]
+        # NAMED sources / linear sources (m.source_term / m.linear_source): a runtime param read ONLY in
+        # a named source -- e.g. a compiled time Program's P.source('growth', ...) kernel (ADC-510) --
+        # must still be discovered and assigned an index (else its codegen to_cpp() raises). The default
+        # m.source above is the unnamed path; these are the named ones (an empty dict for a model with
+        # only a default / no named source -> byte-identical to before).
+        for exprs in getattr(self, "_source_terms", {}).values():
+            out += [_wrap(e) for e in exprs]
+        for rows in getattr(self, "_linear_sources", {}).values():
+            out += [_wrap(e) for row in rows for e in row]
         if self.cons_from is not None:
             out += list(self.cons_from)
         if self._elliptic is not None:

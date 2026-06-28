@@ -103,6 +103,12 @@ void init_system(py::module_& m) {
       // ABI is untouched; CompiledTime(substeps=, stride=) threads through here. Both must be >= 1.
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
            py::arg("stride"))
+      // ADC-510: RUNTIME parameters of the installed compiled Program. set_program_param(name, value)
+      // overwrites a value by name (validated against the .so's declared names) so a kernel ctx.param
+      // read changes the result at the next step WITHOUT recompiling; program_param_names() returns the
+      // declared names (sorted-name order) for host-side validation (pops.bind / sim.set_param).
+      .def("set_program_param", &System::set_program_param, py::arg("name"), py::arg("value"))
+      .def("program_param_names", &System::program_param_names)
       // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)

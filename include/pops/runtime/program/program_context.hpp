@@ -245,6 +245,15 @@ class ProgramContext {
   }
   int n_blocks() const { return sys_->n_blocks(); }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
+
+  /// The LIVE value of the compiled Program's runtime parameter at index @p k (ADC-510). The codegen
+  /// emits ``ctx.param(<index>)`` (hoisted into a uniform local before each per-cell kernel) for a
+  /// dsl.Param(..., kind="runtime") read in a source / flux / linear-source kernel; @p k is the model's
+  /// sorted-name order, the SAME index the .so's pops_program_param_name table exports and
+  /// install_program seeds. Reads the System param store EVERY call (no frozen copy), so a
+  /// sim.set_param(name, value) AFTER bind changes the result at the next step WITHOUT recompiling the
+  /// .so. Forwards to System::program_param (which fails loud on an out-of-range index).
+  Real param(int k) const { return sys_->program_param(k); }
   void rhs_into(int b, MultiFab& u, MultiFab& r) const {
     count_kernel();
     sys_->block_rhs_into(sys_block(b), u, r);

@@ -6,6 +6,7 @@
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (AOT-compiled block seam)
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams: live runtime params of a compiled Program (ADC-510)
 
 #include <array>
 #include <functional>
@@ -686,6 +687,34 @@ class System {
   POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
   /// The installed program-index -> system-index map (empty = identity). Read by ProgramContext.
   POPS_EXPORT const std::vector<int>& program_block_map() const;
+  /// @}
+  /// @name Compiled-Program RUNTIME parameters (epic ADC-399 / ADC-510)
+  /// A compiled time Program may read RUNTIME parameters (dsl.Param(..., kind="runtime")) in its
+  /// per-cell source / flux / linear-source kernels; the codegen emits `ctx.param(<index>)` (forwarded
+  /// here) instead of a hard literal. The values live in Impl (private to the _pops TU) so they survive
+  /// the dlopen boundary and a `set_param` AFTER install takes effect at the next step WITHOUT
+  /// recompiling the `.so`. install_program reads the `.so`'s pops_program_param_name table, sizes the
+  /// store, and seeds it to the declaration defaults; ProgramContext::param reads it LIVE (every step),
+  /// so it is never a frozen copy. The index is the model's sorted-name order, the SAME the kernels
+  /// emit and the param-name table exports. The seam is POPS_EXPORT so the generated `.so` / ProgramContext
+  /// resolve it via RTLD_GLOBAL.
+  /// @{
+  /// Resize the runtime-param store to @p count entries and seed each to @p defaults[k] (the
+  /// declaration value). Called by install_program from the `.so`'s param table; a Program with no
+  /// runtime param clears the store (count 0). Idempotent for the same Program.
+  POPS_EXPORT void set_program_params(int count, const double* defaults);
+  /// The live value of the runtime parameter at index @p k (the codegen-emitted, sorted-name order).
+  /// @throws std::out_of_range if @p k is not in [0, count) (a stale `.so` / a kernel index past the
+  /// declared count fails loud, never reads garbage). Read by ProgramContext::param each step.
+  POPS_EXPORT Real program_param(int k) const;
+  /// Set the runtime parameter NAMED @p name to @p value, validated against the names install_program
+  /// read from the `.so` (a typo / a param the Program does not declare fails loud, naming the declared
+  /// set). Effect at the next step (the kernels read the store live). @throws std::runtime_error if no
+  /// Program is installed or @p name is not a declared runtime parameter.
+  void set_program_param(const std::string& name, double value);
+  /// The declared runtime-parameter names (sorted-name order = the param index). Empty when the
+  /// installed Program has no runtime parameter or none is installed. Exposed for Python validation.
+  std::vector<std::string> program_param_names() const;
   /// @}
   /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
   POPS_EXPORT void block_rhs_into(int b, MultiFab& U, MultiFab& R);

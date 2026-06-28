@@ -142,21 +142,42 @@ def _aux_comp(impl, name):
         "(%s); cannot map it to an aux component" % (name, sorted(AUX_CANONICAL), extra))
 
 
-def _check_no_runtime_param(exprs):
-    """Phase-4b kernels read coefficients from the state / aux only (const params are inlined as
-    literals by the dsl Expr tree). A RUNTIME parameter would emit ``params.get(idx)``, unavailable in
-    a ProgramContext kernel -> raise NotImplementedError (deferred), never a .so that fails to link."""
+def _runtime_param_nodes(exprs):
+    """The RuntimeParamRef nodes (a dsl.Param(..., kind="runtime")) referenced by @p exprs, deduplicated
+    by index and sorted by index (the model's sorted-name order, assigned by
+    HyperbolicModel.assign_runtime_indices before any to_cpp()). A Phase-4b kernel reads them as a
+    uniform-over-cells value via ctx.param(<index>) (ADC-510); their index must already be assigned
+    (the program emitter calls assign_runtime_indices on the model first), else to_cpp() would raise."""
     from pops.ir.values import RuntimeParamRef
     from pops.ir.visitors import _children
+    seen = {}
     stack = list(exprs)
     while stack:
         e = stack.pop()
         if isinstance(e, RuntimeParamRef):
-            raise NotImplementedError(
-                "emit_cpp_program: a Phase-4b source / linear source references a RUNTIME parameter "
-                "(%s); only constants and aux fields are supported in the per-cell kernel yet "
-                "(runtime params in compiled programs are a later phase)" % e.name)
+            seen.setdefault(e.index, e)
+            continue
         stack.extend(_children(e))
+    return [seen[k] for k in sorted(seen)]
+
+
+def _runtime_param_hoist(exprs):
+    """C++ lines hoisting a uniform ``pops::RuntimeParams params`` snapshot of the runtime parameters
+    @p exprs read, to be emitted INSIDE the per-fab loop but BEFORE for_each_cell so the device lambda
+    captures it BY VALUE (ADC-510). Each referenced parameter is read ONCE from the System param store
+    via ``ctx.param(<index>)`` (uniform over cells, never per cell) into ``params.values[<index>]``; the
+    per-cell expression then reads it through the EXISTING RuntimeParamRef.to_cpp() == ``params.get(idx)``
+    (the same device-clean carrier the AOT compiled-block path uses). Empty when no kernel expr reads a
+    runtime parameter -- a kernel without runtime params emits byte-identically (no ``params`` local)."""
+    nodes = _runtime_param_nodes(exprs)
+    if not nodes:
+        return []
+    lines = ["pops::RuntimeParams params;",
+             "params.count = %d;" % (max(n.index for n in nodes) + 1)]
+    for n in nodes:
+        # Read the LIVE store value (uniform over cells); the named comment aids the generated source.
+        lines.append("params.values[%d] = ctx.param(%d);  // %s" % (n.index, n.index, n.name))
+    return lines
 
 
 def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
@@ -165,8 +186,9 @@ def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
       - conservative vars -> ``const pops::Real <name> = <state>A(i, j, <idx>);`` (when @p with_cons);
       - primitives -> their dsl formula, in declaration order, only the LIVE ones (when @p with_prim).
     @p impl is the HyperbolicModel; @p state_var the C++ MultiFab variable (its const Array4 is
-    ``<state_var>A``, the aux Array4 is ``auxA``). Raises on a runtime-param dependency (deferred)."""
-    _check_no_runtime_param(exprs)
+    ``<state_var>A``, the aux Array4 is ``auxA``). A runtime parameter the @p exprs read is NOT bound
+    here: it is hoisted as a uniform ``params`` snapshot before the for_each_cell loop (ADC-510, see
+    `_runtime_param_hoist`), so its per-cell read goes through RuntimeParamRef.to_cpp() unchanged."""
     deps = set()
     for e in exprs:
         deps |= e.deps()
@@ -292,6 +314,7 @@ extern "C" const char* pops_program_name() {{ return {name}; }}
 extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 
 {block_names}
+{param_names}
 {module_metadata}
 extern "C" void pops_install_program(void* sys) {{
   pops::runtime::program::ProgramContext ctx(sys);

@@ -38,7 +38,6 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _apply_in_arg,
     _aux_comp,
     _cell_locals,
-    _check_no_runtime_param,
     _coeff_cpp,
     _deref,
     _emit_cell_compare_kernel,
@@ -153,6 +152,11 @@ def emit_cpp_program(program, model=None):
     live state) -- the coupled multi-species field solve."""
     program.validate()
     _check_lowerable(program, model)
+    # RUNTIME PARAMETERS (ADC-510): assign each dsl.Param(..., kind="runtime") its STABLE index
+    # (sorted-name order) BEFORE any kernel emission, so a RuntimeParamRef.to_cpp() reads a valid index.
+    # Mirrors the brick path (module_codegen calls model._runtime_params_member() first). model=None or a
+    # model without runtime params is a no-op (assign returns []).
+    _assign_runtime_indices(model)
     prelude, body = _emit_body(program, model)
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
@@ -163,7 +167,42 @@ def emit_cpp_program(program, model=None):
         name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, model),
-        block_names=_emit_block_names(program))
+        block_names=_emit_block_names(program),
+        param_names=_emit_param_names(model))
+
+
+def _assign_runtime_indices(model):
+    """Assign stable indices to the model's runtime parameters (ADC-510), returning the ordered nodes
+    (sorted-name order). @p model may be a public pops.dsl.Model wrapping a HyperbolicModel (``_m``) or
+    a HyperbolicModel; ``None`` or a model without runtime params returns []. Idempotent."""
+    if model is None:
+        return []
+    impl = _model_impl(model)
+    if not hasattr(impl, "assign_runtime_indices"):
+        return []
+    return impl.assign_runtime_indices()
+
+
+def _emit_param_names(model):
+    """C++ source of the RUNTIME-PARAMETER ABI the .so exports (ADC-510): ``pops_program_param_count()``,
+    ``pops_program_param_name(int)`` and ``pops_program_param_default(int)`` -- the model's runtime
+    parameter names in sorted-name order (the SAME index the kernels emit as ctx.param(<index>)) and
+    their declaration defaults. System::install_program reads them to validate a sim.set_param(name) and
+    to seed the live value store; the names match what _route_program_params builds from the model. A
+    model with no runtime parameter emits count 0 (no param table consumed)."""
+    nodes = _assign_runtime_indices(model)
+    name_cases = "".join('    case %d: return %s;\n' % (n.index, json.dumps(n.name)) for n in nodes)
+    def_cases = "".join('    case %d: return %s;\n' % (n.index, repr(float(n.value))) for n in nodes)
+    return (
+        "// RUNTIME PARAMETERS (ADC-510): the Program's runtime-param names in sorted-name order (the\n"
+        "// index the kernels read as ctx.param(<index>)) + their declaration defaults. install_program\n"
+        "// reads them to validate sim.set_param(name) and seed the live value store; a set_param then\n"
+        "// changes the result at the next step WITHOUT recompiling this .so.\n"
+        'extern "C" int pops_program_param_count() { return %d; }\n' % len(nodes) +
+        'extern "C" const char* pops_program_param_name(int i) {\n'
+        '  switch (i) {\n%s    default: return "";\n  }\n}\n' % name_cases +
+        'extern "C" double pops_program_param_default(int i) {\n'
+        '  switch (i) {\n%s    default: return 0.0;\n  }\n}\n' % def_cases)
 
 def _emit_block_names(program):
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
@@ -275,6 +314,7 @@ def _check_lowerable(program, model=None):
                 "commit of unknown block '%s': no P.state('%s') declares it (declared blocks: %s)"
                 % (b, b, sorted(blocks)))
     _check_schedules_lowerable(program)
+    _check_dt_bound_no_runtime_param(program)
     for v in program._values:
         _check_op_lowerable(program, v, model)
     # Per-cell dense fallback bound for the local dense solves (mat_inverse<N> uses fixed stack
@@ -286,6 +326,37 @@ def _check_lowerable(program, model=None):
         if n_cons > 8:
             raise ValueError(
                 "local dense fallback currently supports n_cons <= 8 (got %d)" % n_cons)
+
+def _check_dt_bound_no_runtime_param(program):
+    """Defensive guard (ADC-510): a dt bound is a READ-ONLY SCALAR sub-program, lowered by _emit_dt_bound
+    to a body that has NO ``pops::RuntimeParams params`` in scope (unlike the per-cell kernels, which
+    hoist one). A RuntimeParamRef can NOT reach a dt bound by construction -- Program._scalar_binop only
+    accepts a Scalar Value or a Python number, so a model Param / RuntimeParamRef (an Expr, not a Program
+    Value) is rejected at authoring with a TypeError. This guard is belt-and-suspenders: if a future op
+    ever embedded a model Expr in the dt bound, fail loud HERE (a clear ADC-510 message) rather than emit
+    a body that references an undeclared ``params``. Cheap (the dt bound is a tiny scalar sub-program)."""
+    if program._dt_bound is None:
+        return
+    from pops.ir.values import RuntimeParamRef
+    from pops.ir.visitors import _children
+    sub, _ = program._dt_bound
+    for v in sub:
+        # The dt bound values carry scalars / state refs, not model Exprs; scan any Expr-valued attr
+        # defensively (a future op could attach one). Only Expr nodes have _children.
+        for attr in v.attrs.values():
+            stack = [attr]
+            while stack:
+                e = stack.pop()
+                if isinstance(e, RuntimeParamRef):
+                    raise NotImplementedError(
+                        "emit_cpp_program: the dt bound (value '%s') references a RUNTIME parameter "
+                        "(%s); a dt bound is a read-only scalar sub-program with no ctx.param scope "
+                        "(ADC-510 hoists runtime params in per-cell kernels only). Express the bound "
+                        "from cfl / P.hmin() / P.max_wave_speed(...) / reductions, not a model param."
+                        % (v.name, e.name))
+                if hasattr(e, "deps") and hasattr(e, "to_cpp"):  # an Expr node: descend
+                    stack.extend(_children(e))
+
 
 def _check_schedules_lowerable(program):
     """Gate the unified Program scheduler lowering (ADC-458, Spec 3 sections 17-18). EVERY kind/policy

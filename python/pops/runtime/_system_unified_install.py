@@ -200,10 +200,14 @@ class _SystemUnifiedInstall:
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) PARAMS: route each runtime param to the instance whose RESOLVED (compiled) model declares
-        # it -- the raw dsl.Model has no runtime_param_names, so we read the resolved CompiledModel.
+        # (4) PARAMS (block side): route each runtime param to the instance whose RESOLVED (compiled)
+        # model declares it -- the raw dsl.Model has no runtime_param_names, so we read the resolved
+        # CompiledModel. A param consumed by NO instance is not rejected HERE (ADC-510): the compiled
+        # Program may declare a runtime param read ONLY in its own kernels (ctx.param), so the final
+        # unknown-check runs AFTER the program-param routing in step (5b).
+        block_consumed = set()
         if params:
-            self._install_params(resolved_models, params)
+            block_consumed, _ = self._apply_block_params(resolved_models, params)
 
         # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
         # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
@@ -211,6 +215,23 @@ class _SystemUnifiedInstall:
         # the native per-block advance loop, so this step is skipped.
         if so_path is not None:
             self.install_program(so_path)
+            # (5b) PARAMS (program side, ADC-510): route the SAME params to the installed Program's live
+            # value store (System.set_program_param), so a runtime param read in a Program kernel
+            # (ctx.param) takes the supplied value and a later sim.set_param changes the result without
+            # recompiling. Aggregate the names consumed by the block AND the program; a param declared
+            # by NEITHER is the typo/unknown rejected here (the single fail-loud point).
+            program_consumed = self._install_program_params(params)
+            unknown = sorted(set(params) - block_consumed - program_consumed)
+            if unknown:
+                raise ValueError(
+                    "pops.bind: params %s declared by no instance's runtime parameters nor the "
+                    "compiled Program's runtime parameters" % (unknown,))
+        elif params:
+            # NATIVE sim (no Program): only the block side can consume a param; reject the rest now.
+            unknown = sorted(set(params) - block_consumed)
+            if unknown:
+                raise ValueError("install: params %s declared by no instance's runtime parameters"
+                                 % (unknown,))
 
         # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
         # its macro-step cadence is GLOBAL (not per-block). Apply it AFTER install_program (the cadence
@@ -453,10 +474,39 @@ class _SystemUnifiedInstall:
         """Route flat {param_name: value} to set_block_params per instance: build each instance's
         sorted runtime-param vector (declaration defaults for unspecified names) and push it. A param
         name declared by no instance raises (no silent drop). @p resolved_models maps each instance
-        name to its RESOLVED CompiledModel (the raw dsl.Model has no runtime_param_names accessor)."""
+        name to its RESOLVED CompiledModel (the raw dsl.Model has no runtime_param_names accessor).
+        Standalone seam (host-tested directly); the bind path uses _apply_block_params + the deferred
+        unknown-check so a param consumed by the Program (ADC-510) is not falsely rejected here."""
+        consumed, unknown = self._apply_block_params(resolved_models, params)
+        if unknown:
+            raise ValueError("install: params %s declared by no instance's runtime parameters"
+                             % (sorted(unknown),))
+        return consumed
+
+    def _apply_block_params(self, resolved_models, params):
+        """Push the per-instance runtime-param vectors to set_block_params and return
+        ``(consumed, unknown)``: the SET of param names a block consumed and the SET declared by no
+        instance. Does NOT raise (the unknown-param rejection is the caller's, so the bind path can
+        also credit a param the compiled Program consumes via ctx.param, ADC-510)."""
         per_block, unknown = self._route_block_params(resolved_models, params)
         for name, values in per_block.items():
             self._s.set_block_params(name, values)
-        if unknown:
-            raise ValueError("install: params %s declared by no instance's runtime parameters"
-                             % (unknown,))
+        return set(params) - set(unknown), set(unknown)
+
+    def _install_program_params(self, params):
+        """Route flat {param_name: value} to the installed Program's live runtime-param store
+        (System.set_program_param), so a runtime param read in a Program kernel (ctx.param) takes the
+        supplied value (ADC-510). Reads the Program's DECLARED param names from the .so (via
+        System.program_param_names, populated by install_program) and sets only the supplied names that
+        the Program declares; the unknown-param rejection is the caller's (it aggregates block + program
+        consumption). Returns the SET of param names the Program consumed. A Program with no runtime
+        param (empty names) consumes nothing -- byte-identical to the historical install."""
+        if not params:
+            return set()
+        declared = set(self._s.program_param_names()) if hasattr(self._s, "program_param_names") \
+            else set()
+        consumed = set()
+        for name in declared & set(params):
+            self._s.set_program_param(name, float(params[name]))
+            consumed.add(name)
+        return consumed

@@ -160,6 +160,17 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             blocks = []
         return "System(blocks=%s)" % (blocks,)
 
+    def set_param(self, name, value):
+        """Change a RUNTIME parameter of the installed compiled time Program AT RUN TIME (ADC-510).
+
+        A Program kernel reading a ``dsl.Param(..., kind="runtime")`` (e.g. ``alpha``) reads its value
+        LIVE every step via ``ctx.param``; ``sim.set_param("alpha", 0.2)`` after ``pops.bind`` changes
+        the numeric result at the NEXT step WITHOUT recompiling the ``.so`` and without re-installing.
+        @p name is validated against the Program's declared runtime parameters (a typo fails loud, naming
+        the declared set). Forwards to ``System.set_program_param``; raises if no Program is installed or
+        @p name is not a declared runtime parameter."""
+        self._s.set_program_param(name, float(value))
+
     @property
     def amr(self):
         """The AMR runtime inspection surface does not apply to a uniform ``System``.
