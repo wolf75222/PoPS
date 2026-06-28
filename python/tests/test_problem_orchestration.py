@@ -161,16 +161,25 @@ def test_validate_named_field_lowers():
     print("ok test_validate_named_field_lowers")
 
 
-def test_validate_outputs_deferred():
-    class _Policy:
-        name = "checkpoint"
-    prob = pops.Case().block("ne", physics=_StubModel()).output(_Policy())
+def test_validate_outputs_lower():
+    # C4 / ADC-509: a valid OutputPolicy / CheckpointPolicy now VALIDATES (the NotImplementedError
+    # deferral is removed); a non-policy object is rejected loud (it is a typo, not a deferral).
+    from pops.output import OutputPolicy, CheckpointPolicy, HDF5
+    from pops.time.schedule import every
+    prob = (pops.Case().block("ne", physics=_StubModel())
+            .output(OutputPolicy(format=HDF5(), cadence=every(20)))
+            .output(CheckpointPolicy(cadence=every(100), restartable=True)))
+    _check(prob.validate() is True, "a Case with valid output/checkpoint policies validates (C4)")
+
+    class _NotAPolicy:
+        name = "nope"
+    bad = pops.Case().block("ne", physics=_StubModel()).output(_NotAPolicy())
     try:
-        prob.validate()
-        raise AssertionError("a non-empty output policy must raise NotImplementedError")
-    except NotImplementedError as exc:
-        _check("output" in str(exc), "output message is explicit")
-    print("ok test_validate_outputs_deferred")
+        bad.validate()
+        raise AssertionError("a non-policy output object must raise")
+    except TypeError as exc:
+        _check("OutputPolicy" in str(exc), "non-policy reject names the expected type")
+    print("ok test_validate_outputs_lower")
 
 
 def test_validate_name_collision():
@@ -396,9 +405,10 @@ class _RecordingSim:
     last = {}
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None):
+                          solvers=None, cadence=None, outputs=None):
         _RecordingSim.last = {"compiled": compiled, "instances": instances, "params": params,
-                              "aux": aux, "solvers": solvers, "cadence": cadence}
+                              "aux": aux, "solvers": solvers, "cadence": cadence,
+                              "outputs": outputs}
 
 
 def _bind_with_stub_runtime(target, layout=None):
@@ -444,6 +454,32 @@ def test_bind_system_dispatch():
     _check(last["instances"]["ne"]["initial"] == [1.0], "initial state routed by block name")
     _check("phi" in last["solvers"], "the Poisson field solver derived from the problem")
     print("ok test_bind_system_dispatch")
+
+
+def test_bind_flows_output_policies():
+    # C4 / ADC-509: bind() must flow the Case's stored output / checkpoint policies onto the install
+    # seam (outputs=) so the bound sim's run() can fire them. Uses the recording stub System.
+    from pops.output import OutputPolicy, CheckpointPolicy
+    from pops.time.schedule import every
+    import pops.runtime.system as rtsys
+
+    class _StubSystem(_RecordingSim):
+        pass
+
+    orig = rtsys.System
+    rtsys.System = _StubSystem
+    try:
+        out = OutputPolicy(cadence=every(5))
+        ckpt = CheckpointPolicy(cadence=every(10))
+        prob = (pops.Case().block("ne", physics=_StubModel())
+                .field(_poisson_problem()).output(out).output(ckpt))
+        compiled = _StubCompiled(target="system", problem=prob)
+        orchestration.bind(compiled, initial_state={"ne": [1.0]})
+        flowed = _RecordingSim.last["outputs"]
+        _check(flowed == [out, ckpt], "both policies flowed to the install seam in order")
+    finally:
+        rtsys.System = orig
+    print("ok test_bind_flows_output_policies")
 
 
 def test_bind_amr_dispatch():

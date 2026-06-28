@@ -101,22 +101,42 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # sim.run(t_end) after bind(..., cadence=CompiledTime(cfl=X)) advances at X (not silently
         # ignored). Set by _install_cadence; None until a numeric-cfl cadence is installed.
         self._program_cadence_cfl = None
+        # OUTPUT / CHECKPOINT policies (C4 / ADC-509) flowed by pops.bind through _install_compiled.
+        # Empty until install; run(output_dir=...) fires each at its cadence via write()/checkpoint.
+        self._output_policies = []
 
-    def run(self, t_end, cfl=None, max_steps=1_000_000):
+    def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None):
         """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
 
         @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
         by an installed ``CompiledTime(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
         takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored. @p max_steps:
-        guard (avoids an infinite loop if dt -> 0). Returns the number of steps taken.
+        guard (avoids an infinite loop if dt -> 0). @p output_dir: when output / checkpoint policies
+        were flowed onto this System (``pops.bind`` from a Case with ``.output(policy)``), the
+        directory the run writes them to; each policy fires at its own cadence through the existing
+        write()/checkpoint writers (C4 / ADC-509). Defaults to the current directory when policies
+        are present and output_dir is omitted. Returns the number of steps taken.
         cf. DSL_MODEL_DESIGN.md section 6."""
         if cfl is None:
             cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
+        policies = getattr(self, "_output_policies", [])
+        out_dir = output_dir if output_dir is not None else "."
         steps = 0
         while self.time() < t_end and steps < max_steps:
             self.step_cfl(cfl)
             steps += 1
+            if policies:
+                self._fire_outputs(policies, steps, out_dir)
         return steps
+
+    def _fire_outputs(self, policies, step, output_dir):
+        """Fire the DUE output / checkpoint policies at macro-step @p step (C4 run-loop hook).
+
+        Delegates to :func:`pops.runtime._output_driver.fire_output_policies`, which maps each
+        policy's typed cadence/format/fields onto the existing ``write`` / ``checkpoint`` writers.
+        Kept tiny so the cadence logic lives in one host-testable place, not inline in run()."""
+        from pops.runtime._output_driver import fire_output_policies
+        return fire_output_policies(self, policies, step, output_dir)
 
     def profile(self, profile=None):
         """Typed profiling context manager (Spec 5 sec.12.5, criteria 41-44).

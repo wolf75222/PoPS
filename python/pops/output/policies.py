@@ -40,20 +40,22 @@ class OutputPolicy(Descriptor):
     category = "output_policy"
 
     def __init__(self, format=None, cadence=None, fields=(), diagnostics=(),
-                 levels=None, require_parallel=False):
+                 levels=None, require_parallel=False, prefix=None):
         self.format = format
         self.cadence = cadence
         self.fields = list(fields)
         self.diagnostics = list(diagnostics)
         self.levels = levels if levels is not None else AllLevels()
         self.require_parallel = bool(require_parallel)
+        #: Optional file-name prefix the run-loop driver writes under output_dir (default "output").
+        self.prefix = prefix
 
     def options(self):
         return {"format": getattr(self.format, "name", self.format),
                 "cadence": getattr(self.cadence, "name", self.cadence),
                 "n_fields": len(self.fields), "n_diagnostics": len(self.diagnostics),
                 "levels": self.levels.options().get("levels"),
-                "require_parallel": self.require_parallel}
+                "require_parallel": self.require_parallel, "prefix": self.prefix}
 
     def requirements(self):
         req = {}
@@ -75,15 +77,19 @@ class CheckpointPolicy(Descriptor):
 
     category = "checkpoint_policy"
 
-    def __init__(self, cadence=None, restartable=False, require_bit_identical=False):
+    def __init__(self, cadence=None, restartable=False, require_bit_identical=False,
+                 prefix=None):
         self.cadence = cadence
         self.restartable = bool(restartable)
         self.require_bit_identical = bool(require_bit_identical)
+        #: Optional file-name prefix the run-loop driver writes under output_dir (default "checkpoint").
+        self.prefix = prefix
 
     def options(self):
         return {"cadence": getattr(self.cadence, "name", self.cadence),
                 "restartable": self.restartable,
-                "require_bit_identical": self.require_bit_identical}
+                "require_bit_identical": self.require_bit_identical,
+                "prefix": self.prefix}
 
 
 __all__ = ["OutputPolicy", "CheckpointPolicy", "AllLevels", "CoarseOnly", "SelectedLevels"]

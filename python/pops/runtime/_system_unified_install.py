@@ -83,7 +83,7 @@ class _SystemUnifiedInstall:
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, cadence=None):
+                          solvers=None, cadence=None, outputs=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
         Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
@@ -122,14 +122,13 @@ class _SystemUnifiedInstall:
             through the shared system elliptic solver; a field name no model declares raises (typo).
         @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's macro-step
             cadence, applied with set_program_cadence AFTER install_program. A compiled Program is ONE
-            whole-system closure, so its cadence is GLOBAL (one program-level value, not per-block) --
-            hence a single kwarg rather than a per-instance "time". A numeric cadence.cfl is applied
-            at runtime by sim.run(cfl=) -- the cadence pins it on the System so a bare sim.run(t_end)
-            uses it -- not by the cadence install itself.
-
-        @throws the verbatim Spec section-24 errors at install for a missing aux / solver / block
-            instance / Riemann capability. (A disallowed schedule is rejected earlier, at Program
-            authoring/compile -- see pops.time._validate_schedule -- not here.)
+            whole-system closure, so its cadence is GLOBAL (one program-level value). A numeric
+            cadence.cfl is applied at runtime by sim.run(cfl=) (the cadence pins it on the System so a
+            bare sim.run(t_end) uses it), not by the install.
+        @param outputs optional list of pops.output.OutputPolicy / CheckpointPolicy (C4 / ADC-509)
+            stored so sim.run(output_dir=) fires each at its cadence via the existing write/checkpoint.
+        @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
+            Riemann capability). A disallowed schedule is rejected earlier, at Program compile.
         """
         instances = instances or {}
         params = params or {}
@@ -137,9 +136,8 @@ class _SystemUnifiedInstall:
         solvers = solvers or {}
 
         # (0) EARLY VALIDATION (Spec 5 sec.10): in the COMPILED path, read the artifact's DECLARED
-        # bind inputs (compiled.arguments()) and reject -- BEFORE any native call, so a misuse cannot
-        # leave a half-configured System -- an install that does not supply a REQUIRED argument
-        # (instance / runtime param / aux / solver). It enforces only arguments() 'required' flags;
+        # bind inputs (compiled.arguments()) and reject BEFORE any native call an install missing a
+        # REQUIRED argument (instance / runtime param / aux / solver). It enforces only 'required';
         # an input the artifact marks optional (a const param, an unrequired solver) is never demanded.
         # Inert: it reads metadata and compares dicts (no compile / bind / allocation). It never
         # rejects an install that supplies everything required, so a valid install is unchanged.
@@ -161,10 +159,9 @@ class _SystemUnifiedInstall:
         # step 5). For a single-instance plasma case the carried model is the block.
         # COMPILED vs NATIVE mode. COMPILED: `compiled` is a compile_problem(...) handle carrying a
         # .so_path time Program (installed in step 5, with the section-24 validation). NATIVE:
-        # `compiled is None` -- there is no compiled Program; each instance carries its OWN native model
-        # + native time policy (pops.Explicit / pops.Strang), step 5 is skipped, and the native
-        # per-block advance loop drives stepping. Validate the handle up front, BEFORE any System
-        # mutation, so a misuse cannot leave a half-configured System.
+        # `compiled is None` -- no compiled Program; each instance carries its OWN native model + time
+        # policy (pops.Explicit / pops.Strang), step 5 is skipped, the native per-block loop drives
+        # stepping. Validate the handle up front, BEFORE any System mutation (no half-configured System).
         so_path = None
         compiled_model = None
         if compiled is not None:
@@ -237,6 +234,9 @@ class _SystemUnifiedInstall:
                     "(compiled=None) has no Program -- set substeps / stride on the native time policy "
                     "(pops.Explicit(substeps=, stride=)) instead.")
             self._install_cadence(cadence)
+
+        if outputs:  # (7) OUTPUT / CHECKPOINT policies (C4): run() fires each at its cadence
+            self._output_policies = list(outputs)
 
     def explain_bind(self, compiled):
         """A printable :class:`pops.codegen.inspect_report.BindReport` of @p compiled vs this sim

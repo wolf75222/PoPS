@@ -94,9 +94,9 @@ class Case:
     Each assembly setter RETURNS the case so calls chain. The default ``layout`` is a
     single-level :class:`~pops.mesh.layouts.Uniform` over a default
     :class:`~pops.mesh.cartesian.CartesianMesh`. :meth:`validate` runs structural checks; multi-block
-    assemblies and named non-Poisson elliptic fields lower (C3 / C1-System), and the only remaining
-    LOUD ``NotImplementedError`` deferral is a non-empty output policy; ``compile`` / ``bind`` lower
-    the rest.
+    assemblies, named non-Poisson elliptic fields and output / checkpoint policies all lower
+    (C3 / C1-System / C4); ``compile`` / ``bind`` flow them onto the runtime. AMR per-level output
+    (``Plotfile`` / level filtering) is the one remaining deferral (ADC-511).
 
     A Case CONTAINS descriptors (the layout, the blocks' physics, the field problems) but is
     NOT itself a :class:`pops.descriptors.Descriptor` (Spec 5 sec.6 table / sec.15). It exposes
@@ -248,9 +248,9 @@ class Case:
 
         Checks the layout, that there is at least one block each with a physics model, that
         every field problem is itself valid, and that no block and field share a name. Multi-block
-        assemblies and named non-Poisson elliptic fields now LOWER (C3 / C1-System); the only
-        remaining HONEST deferral here is a non-empty output policy, which still raises a clear
-        ``NotImplementedError`` (never a silent no-op).
+        assemblies, named non-Poisson elliptic fields and output / checkpoint policies now LOWER
+        (C3 / C1-System / C4); each output entry is only confirmed to be a real policy descriptor
+        here (a non-policy object is rejected loud). AMR per-level output is deferred (ADC-511).
         """
         self._layout.validate(context)
         if not self._blocks:
@@ -273,12 +273,20 @@ class Case:
         # Multi-block (C3) and named non-Poisson elliptic fields (C1-System) now LOWER -- the
         # block-count and field-name rejects are removed. A named field that no block's model
         # declares is still caught downstream at install (_install_solver checks the declared
-        # elliptic_field_names set). The output-policy reject below stays a HONEST deferral.
-        if self._outputs:
-            raise NotImplementedError(
-                "Case.validate: lowering an output/checkpoint policy is deferred; the "
-                "assembly stores %d policy(ies) but compile/bind do not consume them yet"
-                % len(self._outputs))
+        # elliptic_field_names set).
+        #
+        # OUTPUT / CHECKPOINT policies (C4 / ADC-509) now LOWER on the Uniform / System path: the
+        # NotImplementedError deferral is removed. bind() flows the policies onto the bound System
+        # (its run() fires them at each policy cadence through the existing write()/checkpoint
+        # writers). validate() only confirms each entry is a real policy descriptor (its category is
+        # one of the two policy categories) -- a non-policy object is a typo, rejected loud here
+        # rather than at run time. AMR per-level writes (Plotfile / level filtering) remain ADC-511.
+        for policy in self._outputs:
+            cat = getattr(policy, "category", None)
+            if cat not in ("output_policy", "checkpoint_policy"):
+                raise TypeError(
+                    "Case.validate: output() expects a pops.output.OutputPolicy / CheckpointPolicy; "
+                    "got %r (category %r)" % (type(policy).__name__, cat))
         return True
 
     def _field_validation_context(self, context):

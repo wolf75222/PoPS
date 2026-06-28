@@ -96,10 +96,12 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     (``compiled = pops.compile(...)``); it dispatches ``System`` vs ``AmrSystem`` from the target
     carried on @p compiled (set by :func:`compile`), builds the per-instance state mapping from the
     problem's blocks and the supplied initial state, derives the field solvers from the problem's
-    field problems (an explicit @p solvers overrides), and calls the INTERNAL
-    ``sim._install_compiled(compiled, instances=, params=, aux=, solvers=, cadence=)`` seam -- the
-    low-level install lowering, not a public entry. Returns the bound simulation (the ``System`` /
-    ``AmrSystem`` is the Simulation facade for now): call ``sim.run(...)`` to advance it.
+    field problems (an explicit @p solvers overrides), flows the Case's output / checkpoint policies
+    (C4 / ADC-509) so the bound sim's ``run(output_dir=...)`` fires them at each policy cadence, and
+    calls the INTERNAL ``sim._install_compiled(compiled, instances=, params=, aux=, solvers=,
+    cadence=, outputs=)`` seam -- the low-level install lowering, not a public entry. Returns the
+    bound simulation (the ``System`` / ``AmrSystem`` is the Simulation facade for now): call
+    ``sim.run(...)`` to advance it.
 
     Args:
         compiled: A ``CompiledProblem`` from :func:`compile` (carries ``_problem`` / ``_target``).
@@ -146,8 +148,13 @@ def bind(compiled, *, initial_state=None, state=None, params=None, aux=None,
     field_solvers = _problem_field_solvers(problem)
     field_solvers.update(solvers or {})
 
+    # OUTPUT / CHECKPOINT policies (C4 / ADC-509): flow the Case's stored output policies onto the
+    # install seam so the bound sim's run() fires them at each policy cadence (the existing
+    # write()/checkpoint writers). Empty for a Case with no .output(...) -- the install is unchanged.
+    outputs = list(getattr(problem, "_outputs", []) or [])
+
     sim._install_compiled(compiled, instances=instances, params=params or {}, aux=aux or {},
-                          solvers=field_solvers, cadence=cadence)
+                          solvers=field_solvers, cadence=cadence, outputs=outputs)
     return sim
 
 
