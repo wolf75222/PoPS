@@ -18,7 +18,7 @@ direct counts on the read-only worktree.
 
 Related docs:
 - [`CODEBASE_AUDIT.md`](CODEBASE_AUDIT.md): maintainability audit, same header and same tone.
-- [`CODE_DOCUMENTATION_CONVENTION.md`](CODE_DOCUMENTATION_CONVENTION.md): THE comment
+- [`CODE_DOCUMENTATION_CONVENTION.md`](../CODE_DOCUMENTATION_CONVENTION.md): THE comment
   convention of the project (`///` blocks, `@file`/`@brief`, contracts, threading/MPI/device invariants).
   CODEBASE_AUDIT.md cites it as a normative reference (lines 15, 542, 643), `.clang-format` aligns
   with its spirit. PROBLEM: this file is present in the main working tree but IS NOT

@@ -302,7 +302,9 @@ Principles of this API:
   `kind="electrostatic_lorentz"` selects `ElectrostaticLorentzCondensation` (level 4-3);
   other `kind` will be able to be added without touching the facade.
 - **The default path is UNCHANGED.** Nothing breaks: `pops.Explicit`, `pops.IMEX`,
-  `pops.Implicit`, `add_block`, `add_equation` continue to work identically. A model
+  `pops.SourceImplicit` (the clear name; the old `pops.Implicit` alias was removed in Spec 6,
+  ADC-518 -- use `pops.SourceImplicit` / `pops.IMEX`), `add_block`, `add_equation` continue to work
+  identically. A model
   that does not use `pops.Split(... source=pops.CondensedSchur ...)` never sees the new stage.
   The selection is OPT-IN, like the polar grid (#116, Cartesian default bit-identical).
 

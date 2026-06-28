@@ -119,7 +119,7 @@ identified lock is the geometry (the cartesian square + circular Poisson wall di
 ring edge); the chosen lead is a conservative disk domain (cut-cell), not a square.
 Detailed state and per-aspect statuses in
 [HOFFART_FIDELITY.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/HOFFART_FIDELITY.md) (the roadmap
-[FULL_MODEL_VALIDATION_ROADMAP.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/FULL_MODEL_VALIDATION_ROADMAP.md) is kept for
+[FULL_MODEL_VALIDATION_ROADMAP.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/archive/FULL_MODEL_VALIDATION_ROADMAP.md) is kept for
 history but explicitly superseded by this audit).
 
 ## Import footgun: the module is tied to a specific cpython
