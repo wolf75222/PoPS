@@ -26,7 +26,15 @@ class _FacadeCompileMixin:
         HyperbolicModel.compile (engines unchanged: compile_so / compile_aot / compile_native), then
         packages the .so with the already-known metadata (no re-reading of the .so).
 
-        - ``backend``: "prototype" | "aot" | "production" (cf. HyperbolicModel.compile).
+        INTERNAL codegen engine (Spec 5 sec.11). The documented PUBLIC compile front door is
+        ``pops.compile(case, backend=pops.codegen.Production())`` (with the authoring facade
+        ``pops.physics.Model.lower()`` producing the ``pops.model.Module`` it lowers); ``pops.compile``
+        and ``pops.compile_library`` take a TYPED backend descriptor. This engine ``backend`` argument
+        is the internal lowering vocabulary: it accepts a typed descriptor (lowered via lower_backend)
+        AND the legacy token, kept for the codegen path / internal callers / tests.
+
+        - ``backend``: a typed ``pops.codegen.Production()`` / ``AOT()`` / ``JIT()`` descriptor, or the
+          internal token "prototype" | "aot" | "production" (cf. HyperbolicModel.compile).
         - ``target``: "system" (default) | "amr_system" (DSL Phase D). "amr_system" requires
           backend="production" (the native loader inlines add_compiled_model(AmrSystem&), the only
           .so AMR path; cf. compile_or_jit) -> to be wired via AmrSystem.add_equation. Another backend
