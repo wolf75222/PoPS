@@ -9,6 +9,81 @@ the codegen / physics layers, so they live in the runtime layer.
 from pops.runtime import threading as _threading
 from pops.runtime.threading import has_kokkos
 
+# Canonical token orders for the matrix the doctor prints. The token SET is derived from the
+# descriptor catalogs (see _descriptor_tokens); this only pins the display order so the audit
+# table reads the same every run (and the test_capabilities contract keeps its ordered lists).
+_RIEMANN_ORDER = ("rusanov", "hll", "hllc", "roe")
+_LIMITER_ORDER = ("none", "minmod", "vanleer", "weno5")
+# Riemann fluxes wired on the polar geometry: rusanov (any model) + hll (isothermal fluid declares
+# wave_speeds). hllc/roe have no polar energy-flux brick (make_block_polar rejects them), so the
+# polar row is the catalog intersected with this allow-list -- a removed flux cannot leave a phantom
+# polar token, and an added flux is not silently advertised as polar-capable.
+_POLAR_RIEMANN = ("rusanov", "hll")
+
+
+def _ordered(tokens, order):
+    """Tokens kept in canonical ``order`` first, then any extras sorted (deterministic display)."""
+    present = set(tokens)
+    ranked = [t for t in order if t in present]
+    extra = sorted(t for t in present if t not in order)
+    return ranked + extra
+
+
+def _descriptor_tokens():
+    """Available brick tokens per category, sourced from the descriptor catalogs (Spec 5 sec.12).
+
+    Single source of truth: this reads the SAME inert catalogs that
+    :func:`pops._capabilities.inspect_capabilities` walks (riemann / limiter / reconstruction /
+    elliptic solvers), so adding or retiring a descriptor cannot silently desync the doctor matrix
+    from the introspectable capability matrix. Only descriptors that declare themselves available
+    are reported (a planned-but-not-native brick like ``mc`` / ``superbee`` is left out). Pure: no
+    ``_pops`` import, no numeric loop.
+    """
+    from pops.numerics.reconstruction import reconstruction
+    from pops.numerics.reconstruction.limiters import limiters
+    from pops.numerics.riemann import riemann
+    from pops.solvers.elliptic import FFT, GeometricMG
+
+    def _available(namespace):
+        names = []
+        for attr in sorted(vars(namespace)):
+            factory = getattr(namespace, attr)
+            if not callable(factory):
+                continue
+            try:
+                descriptor = factory()
+            except TypeError:
+                continue  # a selector that needs an argument (User(...)); not a standing entry.
+            if getattr(descriptor, "available", False):
+                names.append(descriptor.name)
+        return names
+
+    riemann_tokens = _ordered(_available(riemann), _RIEMANN_ORDER)
+    limiter_tokens = _available(limiters)
+    recon_tokens = _available(reconstruction)
+    # The DSL "limiter" options are the slope limiters plus the high-order WENO5 reconstruction a
+    # backend exposes by token; "none" is the no-limiter sentinel (not a catalog brick). Only the
+    # canonical "weno5" token is surfaced (its "weno5z" alias selects the same pops::Weno5), so the
+    # printed list stays the historical set while still being sourced from the catalog.
+    high_order = ["weno5"] if "weno5" in recon_tokens else []
+    dsl_limiters = _ordered(["none", *limiter_tokens, *high_order], _LIMITER_ORDER)
+    dsl_limiters_low = [t for t in dsl_limiters if t != "weno5"]
+    # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors:
+    # GeometricMG plus the FFT discrete / spectral schemes.
+    poisson = {
+        "geometric_mg": GeometricMG().name,
+        "fft": FFT().scheme,
+        "fft_spectral": FFT(spectral=True).scheme,
+    }
+
+    return {
+        "riemann": riemann_tokens,
+        "riemann_polar": [t for t in riemann_tokens if t in _POLAR_RIEMANN],
+        "dsl_limiters": dsl_limiters,
+        "dsl_limiters_low": dsl_limiters_low,
+        "poisson": poisson,
+    }
+
 
 def doctor(verbose=True):
     """Diagnose the pops environment in ONE command : python -c "import pops; pops.doctor()".
@@ -153,10 +228,26 @@ def capabilities():
     AMR, polar and the DSL backends diverged silently). The entries reflect the GATES
     actually coded (make_block / dispatch_amr_* / block_builder_polar / dsl._BACKENDS) ; the
     combinations outside the matrix raise an explicit error on the C++ side (never a silent ignore).
+
+    Sec 12: the riemann / limiter / reconstruction / Poisson token lists are DERIVED from the
+    descriptor catalogs via :func:`_descriptor_tokens` (the same single source
+    :func:`pops._capabilities.inspect_capabilities` reads), not hardcoded, so adding or retiring a
+    brick cannot silently desync this matrix from the introspectable one.
     """
     from pops import _pops as _pops_mod  # ADC-291: read the aux limit from the SINGLE C++ source
     from pops.physics.aux import AUX_NAMED_MAX  # fallback mirror (no second hardcoded literal)
     aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", AUX_NAMED_MAX))
+    # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
+    # catalogs (the SAME single source inspect_capabilities() reads) instead of hardcoding them, so a
+    # new descriptor cannot silently desync the doctor matrix from the introspectable one.
+    tok = _descriptor_tokens()
+    riemann_all = list(tok["riemann"])
+    riemann_polar = list(tok["riemann_polar"])
+    poisson_mg = tok["poisson"]["geometric_mg"]
+    poisson_fft = tok["poisson"]["fft"]
+    poisson_fft_spectral = tok["poisson"]["fft_spectral"]
+    dsl_limiters = list(tok["dsl_limiters"])
+    dsl_limiters_low = list(tok["dsl_limiters_low"])
     return {
         # Spatial dimension of the core (ADC-294 / ADR-0001 Decision 1). The solver is structurally
         # 2D: a load-bearing invariant baked into the data layout (Fab2D operator()(i, j, c)), the
@@ -169,9 +260,9 @@ def capabilities():
         # docs/sphinx/reference/known-limitations.md and include/pops/mesh/box2d.hpp.
         "dimension": 2,
         "riemann": {
-            "system_cartesian": ["rusanov", "hll", "hllc", "roe"],
-            "system_polar": ["rusanov", "hll"],
-            "amr": ["rusanov", "hll", "hllc", "roe"],
+            "system_cartesian": riemann_all,
+            "system_polar": riemann_polar,
+            "amr": list(riemann_all),
             "notes": {
                 "rusanov": "minimal generic (max_wave_speed only)",
                 "hll": "generic with signed waves (model.wave_speeds ; DSL : m.wave_speeds(x=, y=) "
@@ -217,11 +308,11 @@ def capabilities():
                              "last_dt_bound"],
         },
         "poisson": {
-            "system_cartesian": ["geometric_mg (wall, eps(x), aniso, screened)",
-                                 "fft (periodic, n = 2^k, constant eps, mono-box)",
-                                 "fft_spectral (same as fft, continuous spectral symbol)"],
+            "system_cartesian": ["%s (wall, eps(x), aniso, screened)" % poisson_mg,
+                                 "%s (periodic, n = 2^k, constant eps, mono-box)" % poisson_fft,
+                                 "%s (same as fft, continuous spectral symbol)" % poisson_fft_spectral],
             "system_polar": ["polar direct (mono-rank, one box) -- clear UPSTREAM REJECT if theta_boxes>1"],
-            "amr": ["geometric_mg only ; rhs charge_density|composite"],
+            "amr": ["%s only ; rhs charge_density|composite" % poisson_mg],
         },
         "geometry": {
             "system_cartesian": "square n x n ; mono-box (multi-box = AmrSystem or MPI mono-box)",
@@ -251,16 +342,17 @@ def capabilities():
             "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "
                        "baked compiler + matching headers), aot otherwise ; reason set on "
                        "CompiledModel.backend_auto_reason ; explicit backend = short-circuit",
-            "prototype": {"adder": "add_dynamic_block", "riemann": ["rusanov"],
-                          "limiter": ["none", "minmod", "vanleer"], "stride": False,
+            "prototype": {"adder": "add_dynamic_block",
+                          "riemann": [t for t in riemann_all if t == "rusanov"],
+                          "limiter": dsl_limiters_low, "stride": False,
                           "evolve_false": False, "mpi": False, "amr": False},
-            "aot": {"adder": "add_compiled_block", "riemann": ["rusanov", "hll", "hllc", "roe"],
-                    "limiter": ["none", "minmod", "vanleer", "weno5"], "stride": False,
+            "aot": {"adder": "add_compiled_block", "riemann": list(riemann_all),
+                    "limiter": dsl_limiters, "stride": False,
                     "evolve_false": False, "mpi": False, "amr": False,
                     "runtime_params": True},
             "production": {"adder": "add_native_block",
-                           "riemann": ["rusanov", "hll", "hllc", "roe"],
-                           "limiter": ["none", "minmod", "vanleer", "weno5"], "stride": True,
+                           "riemann": list(riemann_all),
+                           "limiter": dsl_limiters, "stride": True,
                            "evolve_false": True, "mpi": True, "amr": "target='amr_system'",
                            "stability_hooks": True},
         },
