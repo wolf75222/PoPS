@@ -28,7 +28,7 @@ from pops.runtime._bricks_scheme import (
 )
 from pops.runtime._bricks_time import (
     _role_to_stable, _norm_implicit,
-    IMEX, SourceImplicit, SourceImplicitBE, IMEXRK, Implicit, Role,
+    IMEX, SourceImplicit, SourceImplicitBE, IMEXRK, Role,
     CondensedSchur, Split, Strang,
 )
 from pops.runtime._bricks_typed import (
@@ -46,7 +46,7 @@ __all__ = [
     "electric_field_from_potential", "elliptic", "EllipticSolver",
     "Ionization", "Collision", "ThermalExchange",
     "Spatial", "FiniteVolume", "Explicit", "_role_to_stable", "_norm_implicit",
-    "IMEX", "SourceImplicit", "SourceImplicitBE", "IMEXRK", "Implicit", "Role",
+    "IMEX", "SourceImplicit", "SourceImplicitBE", "IMEXRK", "Role",
     "CondensedSchur", "ElectrostaticLorentzSchur", "Split", "Strang",
     "Dirichlet", "Neumann", "Periodic",
 ]

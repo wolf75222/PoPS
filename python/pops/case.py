@@ -116,7 +116,7 @@ class Case:
         self._fields = {}    # field.name -> FieldProblem
         self._params = {}    # param_name -> {"default": value, "kind": str}
         self._aux = {}       # aux_name -> value/descriptor
-        self._outputs = []   # output / checkpoint policies (stored; lowering deferred)
+        self._outputs = []   # output / checkpoint policies (bind() flows them onto the System; run() fires them)
         self._time = None    # optional pops.time.Program (attaches at compile time)
 
     @property
@@ -177,7 +177,12 @@ class Case:
         return self
 
     def output(self, policy):
-        """Attach an output / checkpoint policy (stored; lowering is deferred). Chains."""
+        """Attach an output / checkpoint policy. Chains.
+
+        The policy is stored on the Case; ``bind()`` flows it onto the bound ``System`` and
+        ``run()`` fires it at each policy cadence through the existing write / checkpoint writers
+        (ADC-509). AMR per-level output (``Plotfile`` / level filtering) remains deferred (ADC-511).
+        """
         self._outputs.append(policy)
         return self
 
@@ -244,7 +249,7 @@ class Case:
         return Availability.yes()
 
     def validate(self, context=None):
-        """Structural validation; raise LOUD for the deferred routes (never fake success).
+        """Structural validation; raise LOUD on a structural error (never fake success).
 
         Checks the layout, that there is at least one block each with a physics model, that
         every field problem is itself valid, and that no block and field share a name. Multi-block

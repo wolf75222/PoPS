@@ -193,12 +193,6 @@ coupling). `pops.Role` addresses a component by its physical meaning.
    :members:
 ```
 
-```{note}
-`pops.Implicit(...)` still exists as an alias of `pops.IMEX` but is obsolete (the name wrongly
-suggests a global implicit solver) and emits a `DeprecationWarning`: use
-`pops.SourceImplicit(...)` or `pops.IMEX(...)`.
-```
-
 ## Inter-species couplings
 
 Operator-split couplings applied after the transport, passed to `sim.add_coupling(...)`:

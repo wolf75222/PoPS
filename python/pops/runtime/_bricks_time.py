@@ -1,9 +1,9 @@
 """Time policies bricks : implicit / split temporal treatments (Spec-4 PR-F).
 
 The per-block time treatments beyond plain ``Explicit``: ``IMEX`` / ``SourceImplicit`` /
-``SourceImplicitBE`` / ``IMEXRK`` / the deprecated ``Implicit`` shim, the physical ``Role`` enum,
-and the Schur-condensed source stage + splitting policies (``CondensedSchur`` / ``Split`` /
-``Strang``), plus the mask normalization helpers. Split out of ``_bricks_scheme`` to keep each
+``SourceImplicitBE`` / ``IMEXRK``, the physical ``Role`` enum, and the Schur-condensed source
+stage + splitting policies (``CondensedSchur`` / ``Split`` / ``Strang``), plus the mask
+normalization helpers. Split out of ``_bricks_scheme`` to keep each
 module under the 500-line cap ; ``pops.runtime.bricks`` re-exports all of them. ``Explicit`` (the
 ``Split`` transport stage) is imported from ``_bricks_scheme``.
 """
@@ -245,29 +245,6 @@ class IMEXRK:
         self.newton_diagnostics = bool(newton_diagnostics)
         self.newton_damping = float(newton_damping)
         self.newton_fail_policy = str(newton_fail_policy)
-
-
-def Implicit(dt_ratio=1, substeps=None, stride=1):
-    """DEPRECATED -- use pops.SourceImplicit(...) or pops.IMEX(...) instead.
-
-    pops.Implicit was an alias of IMEX (implicit stiff source via backward-Euler, explicit
-    transport). The name "Implicit" is MISLEADING: it suggests a global implicit PDE solver
-    (flux + source + Poisson all implicit / Newton-Krylov), which is NOT the case.
-    pops.SourceImplicit is the clear name of the same scheme (bit-identical numerics).
-
-    Kept for backward compatibility; emits a DeprecationWarning. Use:
-      pops.SourceImplicit(substeps=k, stride=s)  -- new clear name
-      pops.IMEX(substeps=k, stride=s)            -- official acronym
-    """
-    import warnings
-    warnings.warn(
-        "pops.Implicit is deprecated: the name is misleading (it is NOT a global implicit "
-        "PDE solver). Use pops.SourceImplicit(...) (implicit backward-Euler source, "
-        "explicit transport) or pops.IMEX(...) instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return IMEX(substeps=substeps if substeps is not None else dt_ratio, stride=stride)
 
 
 class Role:

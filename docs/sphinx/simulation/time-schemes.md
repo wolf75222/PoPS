@@ -50,9 +50,6 @@ sim.add_equation("ions", model=compiled,
 > is global: for the stiff non-local Lorentz / electrostatic coupling. A purely local stiff
 > source does not need Schur.
 
-`pops.Implicit` is deprecated (alias of IMEX, emits a `DeprecationWarning`): its name wrongly suggests
-a global implicit solver. Use `pops.SourceImplicit(...)` or `pops.IMEX(...)`.
-
 Detail: [ALGORITHMS.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ALGORITHMS.md) sections 4 to 6,
 [SCHUR_CONDENSATION_DESIGN.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/SCHUR_CONDENSATION_DESIGN.md), Hoffart step sequence
 [HOFFART_STEP_SEQUENCE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/HOFFART_STEP_SEQUENCE.md). On the C++ side: `numerics/time/*.hpp`.
