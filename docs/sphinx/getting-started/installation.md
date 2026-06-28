@@ -158,6 +158,12 @@ python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 clears ccache for a truly cold build); the explicit `rm -rf` above also removes the preset
 build trees (`build-py*`) and the DSL cache (`.pops_cache`).
 
+To remove pops entirely rather than rebuild, `scripts/uninstall_pops.sh` is the inverse of the two
+setup scripts: a bare run wipes the in-tree caches (`build/cp3*/`, `.pops_cache`, `*.egg-info`) and
+deletes the `pops` env (toolchain and pinned `POPS_*` vars included), prompting once first. Pass
+`--keep-env` to drop only the module (`pip uninstall pops`), `--ccache` to also clear the shared
+ccache, or `--yes` to skip the prompt; `--help` lists them.
+
 ## Python module
 
 ### User: `pip install .`
