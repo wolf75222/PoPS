@@ -1362,6 +1362,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 ### Removed
 
+- **Spec 6 hygiene (ADC-518): two dead deprecated headers deleted** -- `include/pops/coupling/deprecated/spectral_coupler.hpp` and `include/pops/numerics/time/deprecated/amr_multilevel.hpp` had zero `#include` in the core, tests, Python bindings, or CMake; both now-empty `deprecated/` directories are removed, and the `pops/coupling` README drops its deprecated family row (epic ADC-511).
 - **Spec 5 (#1/#5): the `pops.lib.solvers` public shim is removed; one public solver home, no public `target=`** -- the solver / preconditioner descriptors now live ONLY in `pops.solvers` (`pops.lib.solvers.*` raises `ModuleNotFoundError`; `pops.lib` is presets-only), the `pops.codegen.solvers` solver-generation DSL is documented INTERNAL / EXPERIMENTAL (no public `@solver` decorator on `pops` / `pops.lib` / `pops.solvers`; users configure the provided descriptors), and the public lowering surface (`pops.compile` / `pops.bind` / `pops.Case`) takes a `layout`, never a `target=` kwarg (the remaining `target=` token is internal codegen). New guards in `tests/architecture/test_spec5_public_api.py` (epic ADC-479).
 - **`include/pops` forwarding shims deleted; one canonical family path per header** (ADC-392): the 54
   transition stubs left at the old flat include paths by the M2 generalisation reorgs (ADC-326

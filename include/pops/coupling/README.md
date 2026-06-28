@@ -17,7 +17,6 @@ stub (ADC-326), so the move is source-compatible.
 | static_system | `static_system/` | Compile-time `SystemCoupler` / `AmrSystemCoupler`. | Stable reference / static-typed C++ entry; used by tests and the numerical reference. |
 | amr | `amr/` | Multipatch AMR coupler (`AmrCouplerMp`) and its storage, regrid, and diagnostics. | AMR production path. |
 | schur | `schur/` | Schur condensation, the shared geometry-independent source kernels, and the condensed-source steppers (cartesian, polar, AMR). | Schur path. |
-| deprecated | `deprecated/` | `spectral_coupler.hpp` -- superseded; kept for reference only. | Deprecated, do not use in new code. |
 
 ## Layout
 
@@ -30,7 +29,6 @@ pops/coupling/
   amr/             amr_coupler_mp.hpp  amr_level_storage.hpp  amr_regrid_coupler.hpp  amr_diagnostics.hpp
   schur/           schur_condensation.hpp  schur_source_kernels.hpp  condensed_schur_source_stepper.hpp
                    polar_condensed_schur_source_stepper.hpp  amr_condensed_schur_source_stepper.hpp
-  deprecated/      spectral_coupler.hpp
 ```
 
 New code should include the canonical family path (for example
