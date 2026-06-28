@@ -140,7 +140,7 @@ cd ~/adc_cpp
 git pull
 
 conda activate pops
-python -m pip uninstall -y adc-cpp || true   # drop any pip-installed copy
+python -m pip uninstall -y pops adc-cpp || true   # drop any pip-installed copy (new and pre-rename name)
 unset PYTHONPATH                             # so an old build tree cannot mask the install
 
 rm -rf build/cp3* build-py build-py-kokkos build-py-conda .pops_cache   # wheel + DSL caches
