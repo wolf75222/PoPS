@@ -132,7 +132,65 @@ class FieldProblem(Descriptor):
         if self.solver is None:
             raise ValueError("%s: a solver must be provided" % self.name)
         self._require_periodic_compatible_solver()
+        self._require_layout_compatible_solver(context)
         return True
+
+    @staticmethod
+    def _context_is_amr_layout(context):
+        """True when @p context names an AMR mesh layout (duck-typed; no mesh import).
+
+        ``Case.validate`` passes the layout under the ``"layout"`` key; a layout advertises its
+        kind through ``capabilities()["layout"]`` (``"amr"`` / ``"uniform"``), so AMR is detected
+        without importing :mod:`pops.mesh` into the fields layer. Defensive: a context with no
+        layout, or a layout whose ``capabilities`` is absent / non-callable / raises, is "not AMR".
+        """
+        if context is None:
+            return False
+        layout = context.get("layout") if isinstance(context, dict) else getattr(context, "layout",
+                                                                                 None)
+        if layout is None:
+            layout = context  # the context may itself be the layout descriptor
+        caps = getattr(layout, "capabilities", None)
+        if not callable(caps):
+            return False
+        try:
+            declared = caps()
+        except Exception:
+            return False
+        return isinstance(declared, dict) and declared.get("layout") == "amr"
+
+    def _require_layout_compatible_solver(self, context):
+        """Refuse a solver that cannot serve an AMR mesh layout (Spec 6 sec.8/9, #11).
+
+        SCOPED to an AMR layout -- the only mesh structure a field solver currently refuses (the
+        spectral FFT needs a uniform periodic mesh, not a refined hierarchy). On an AMR route the
+        solver answers through its own ``available(context)`` so the message stays the solver's
+        PRECISE one (FFT names ``Uniform(periodic=True)`` / ``GeometricMG()``). Same
+        NO-FALSE-POSITIVE discipline as :meth:`_require_periodic_compatible_solver`:
+
+        * a non-AMR (Uniform / unspecified) route -> NOT checked, so a solver that returns a hard
+          ``no`` for a NON-layout reason (e.g. an unresolved external brick) is not refused here;
+        * a solver with no callable ``available`` (a bare ``BrickDescriptor``, bool ``available``)
+          -> not checked;
+        * a solver whose ``available`` RAISES on the layout-only context -> not a KNOWN
+          incompatibility, so validate never propagates an unexpected exception;
+        * only a hard ``no`` on the AMR route is refused, surfacing the solver's own reason.
+        """
+        if not self._context_is_amr_layout(context):
+            return
+        available = getattr(self.solver, "available", None)
+        if not callable(available):
+            return
+        try:
+            status = available(context)
+        except Exception:
+            return
+        if getattr(status, "status", None) != "no":
+            return
+        solver_name = getattr(self.solver, "name", type(self.solver).__name__)
+        reason = getattr(status, "reason", "") or ("solver %s cannot serve an AMR layout"
+                                                    % solver_name)
+        raise ValueError("%s: %s" % (self.name, reason))
 
     @staticmethod
     def _bc_kind(bc):

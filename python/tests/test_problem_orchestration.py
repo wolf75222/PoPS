@@ -251,6 +251,71 @@ def test_compile_amr_max_levels_beyond_native_raises():
     print("ok test_compile_amr_max_levels_beyond_native_raises")
 
 
+def test_fft_field_solver_on_amr_layout_rejected_at_validate():
+    # Spec 6 sec.8/9 (ADC-516): a field whose solver cannot serve the chosen mesh LAYOUT is
+    # refused at Case.validate (so pops.compile refuses it before any .so build), with the
+    # solver's PRECISE message -- here the spectral FFT on an AMR hierarchy.
+    from pops.solvers.elliptic import FFT, GeometricMG
+
+    def _field(solver):
+        return FieldProblem(name="phi", unknown="phi",
+                            equation=(-laplacian("phi") == "charge_density"), solver=solver)
+
+    # FFT on an AMR layout -> rejected with the precise sec.8 message.
+    amr_fft = (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+               .field(_field(FFT())))
+    try:
+        amr_fft.validate()
+        raise AssertionError("FFT on layout=AMR must be refused at validate")
+    except ValueError as exc:
+        _check("FFT requires Uniform(periodic=True), got AMR. Use GeometricMG()." in str(exc),
+               "FFT-on-AMR rejection must carry the precise sec.8 message; got: %s" % exc)
+
+    # GeometricMG on the SAME AMR layout validates (it is AMR-capable).
+    (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+     .field(_field(GeometricMG()))).validate()
+
+    # FFT on a Uniform layout still validates (its route 'partial' is not a hard 'no').
+    (pops.Case(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
+     .field(_field(FFT()))).validate()
+    print("ok test_fft_field_solver_on_amr_layout_rejected_at_validate")
+
+
+def test_layout_solver_check_scoped_to_amr_no_false_positive():
+    # The layout-solver check is SCOPED to an AMR route (Spec 6 no-false-positive): a solver whose
+    # available() returns a hard "no" for a NON-layout reason (an unresolved external brick) on a
+    # Uniform layout is NOT refused, and a solver whose available() reads a context key Case does
+    # not supply never crashes Case.validate (the call is guarded).
+    from pops.descriptors import Availability
+
+    class _UnresolvableSolver:
+        name = "external_elliptic"
+
+        def available(self, context=None):
+            return Availability.no("compiled brick could not be resolved")
+
+    class _ContextHungrySolver:
+        name = "picky"
+
+        def available(self, context=None):
+            return Availability.yes() if context["backend"] == "x" else Availability.no("nope")
+
+    def _field(solver):
+        return FieldProblem(name="phi", unknown="phi",
+                            equation=(-laplacian("phi") == "charge_density"), solver=solver)
+
+    # A non-layout "no" on a Uniform route is not refused by the layout check (it is never run).
+    (pops.Case(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
+     .field(_field(_UnresolvableSolver()))).validate()
+    # A solver whose available() reads a missing key does not crash validate -- Uniform (not run)
+    # nor AMR (the call is guarded; a raise is "not a known incompatibility").
+    (pops.Case(layout=Uniform(CartesianMesh())).block("ne", physics=_StubModel())
+     .field(_field(_ContextHungrySolver()))).validate()
+    (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+     .field(_field(_ContextHungrySolver()))).validate()
+    print("ok test_layout_solver_check_scoped_to_amr_no_false_positive")
+
+
 def test_compile_missing_time_raises():
     prob = pops.Case().block("ne", physics=_StubModel())
     try:

@@ -259,8 +259,12 @@ class Case:
         for name, spec in self._blocks.items():
             if spec.get("physics") is None:
                 raise ValueError("Case.validate: block %r has no physics model" % name)
+        # Carry the mesh layout into each field problem's validation so its solver can refuse a
+        # layout it cannot serve, precisely, before any compile (Spec 6 sec.8/9: the spectral FFT
+        # solver requires a uniform periodic mesh, not an AMR hierarchy).
+        field_context = self._field_validation_context(context)
         for field in self._fields.values():
-            field.validate(context)
+            field.validate(field_context)
         collisions = set(self._blocks) & set(self._fields)
         if collisions:
             raise ValueError("Case.validate: block and field share name(s): %s"
@@ -276,6 +280,18 @@ class Case:
                 "assembly stores %d policy(ies) but compile/bind do not consume them yet"
                 % len(self._outputs))
         return True
+
+    def _field_validation_context(self, context):
+        """The validation context handed to each field problem, carrying the mesh layout.
+
+        A field problem's solver may refuse a layout it cannot serve (Spec 6 sec.8/9). The Case
+        owns the authoritative layout, so it is merged under the ``"layout"`` key (overriding any
+        caller-supplied layout); a dict @p context's other keys are preserved, and a non-dict /
+        absent context yields a fresh single-key dict.
+        """
+        merged = dict(context) if isinstance(context, dict) else {}
+        merged["layout"] = self._layout
+        return merged
 
     def explain_routes(self):
         """Return a printable route matrix sourced from the C++ authoritative facts (sec.13.12.1).
