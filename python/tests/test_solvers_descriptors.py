@@ -59,6 +59,20 @@ def test_krylov_lower_carries_native_id_and_scheme():
     assert rec["scheme"] == "cg"
 
 
+def test_krylov_declare_amr_route_capabilities():
+    # Spec 6 sec.4 / sec.9: the matrix-free Krylov solvers are layout-agnostic (they run over
+    # pops::MultiFab dot / saxpy / apply), so each declares every route -- uniform / amr / mpi /
+    # gpu -- and a route check can see they are AMR-capable instead of guessing from an empty set.
+    for d in (krylov.CG(), krylov.GMRES(), krylov.BiCGStab(), krylov.Richardson()):
+        caps = d.capabilities
+        assert caps["supports_uniform"] is True
+        assert caps["supports_amr"] is True
+        assert caps["supports_mpi"] is True
+        assert caps["supports_gpu"] is True
+        # the capabilities are surfaced by inspect() too.
+        assert d.inspect()["capabilities"]["supports_amr"] is True
+
+
 # --- nonlinear solvers (planned: no native type yet) -------------------------------------
 
 def test_nonlinear_are_planned():
@@ -79,6 +93,17 @@ def test_schur_native_id_and_alias():
     # pops.time CondensedSchur splitting POLICY).
     assert schur.CondensedSchur().native_id == "pops::SchurCondensationOperator"
     assert schur.CondensedSchur() == schur.Schur()
+
+
+def test_schur_declares_amr_route_capabilities():
+    # Spec 6 sec.4 / sec.9: the Schur-condensation solver runs on AMR (the amr-schur source
+    # stage) and System, under MPI and on the GPU, so it declares every route capability.
+    for d in (schur.Schur(), schur.CondensedSchur()):
+        caps = d.capabilities
+        assert caps["supports_uniform"] is True
+        assert caps["supports_amr"] is True
+        assert caps["supports_mpi"] is True
+        assert caps["supports_gpu"] is True
 
 
 # --- the RICH GeometricMG elliptic solver ------------------------------------------------
@@ -171,6 +196,49 @@ def test_fft_is_a_real_solver_with_route_constraints():
     spectral = elliptic.FFT(spectral=True)
     assert spectral.scheme == "fft_spectral"
     assert spectral.options() == {"spectral": True}
+
+
+def test_fft_rejects_amr_layout_with_precise_message():
+    # Spec 6 sec.8: pairing FFT with an AMR layout is a MATHEMATICAL incompatibility -- it must
+    # be refused with the PRECISE message (not a vague "AMR unsupported"), naming GeometricMG.
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import AMR, Uniform
+    amr = AMR(base=CartesianMesh(n=64))
+    status = elliptic.FFT().available({"layout": amr})
+    assert status.status == "no"
+    assert status.reason == "FFT requires Uniform(periodic=True), got AMR. Use GeometricMG()."
+    assert "pops.solvers.elliptic.GeometricMG()" in status.alternatives
+    # the context may BE the layout descriptor, not only wrap it under a "layout" key.
+    assert elliptic.FFT().available(amr).status == "no"
+    # a Uniform layout context (or no context at all) keeps the plain route-constraint 'partial'.
+    assert elliptic.FFT().available({"layout": Uniform(CartesianMesh(n=64))}).status == "partial"
+    assert elliptic.FFT().available().status == "partial"
+
+
+def test_fft_available_never_raises_on_odd_context():
+    # available() must ALWAYS return an Availability, never raise (Spec 5 sec.6: an explainable
+    # status) -- even when the context's capabilities() needs an argument or itself raises. Such a
+    # context is simply "not an AMR layout", so the route keeps its plain partial status.
+    class _ArgCaps:
+        def capabilities(self, required):  # callable but needs an argument
+            return {"layout": "amr"}
+
+    class _RaiseCaps:
+        def capabilities(self):
+            raise RuntimeError("boom")
+
+    for ctx in ({"layout": _ArgCaps()}, _ArgCaps(), {"layout": _RaiseCaps()}, _RaiseCaps()):
+        assert elliptic.FFT().available(ctx).status == "partial"
+
+
+def test_geometric_mg_accepts_amr_layout():
+    # GeometricMG is the AMR-capable elliptic solver: it advertises amr and stays available with
+    # an AMR layout context (no rejection), so it is the alternative FFT points at.
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import AMR
+    g = elliptic.GeometricMG()
+    assert g.capabilities()["supports_amr"] is True
+    assert g.available(AMR(base=CartesianMesh(n=64))).status == "yes"
 
 
 # --- preconditioners ---------------------------------------------------------------------
