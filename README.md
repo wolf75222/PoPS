@@ -89,11 +89,13 @@ Python module (`pops`): `scripts/setup_env.sh` creates the conda env and pins th
 toolchain, then `scripts/build_python.sh` builds and installs the module in one command (it sizes
 the heavy-TU pool, exports the discovery vars, and ends on `pops.doctor()`); `pip install .`
 (scikit-build-core) drives the build directly if you prefer. Backends are selected by environment
-variables (`POPS_USE_MPI`, `Kokkos_ROOT`, ...).
+variables (`POPS_USE_MPI`, `Kokkos_ROOT`, ...). `scripts/uninstall_pops.sh` reverses the two setup
+scripts when you want a clean teardown.
 
 ```bash
 bash scripts/setup_env.sh      # conda env + toolchain
 bash scripts/build_python.sh   # build + install, then pops.doctor()
+bash scripts/uninstall_pops.sh # full teardown (env + caches); --keep-env drops only the module
 # or, by hand:  pip install .  # see the installation guide for backends
 ```
 
