@@ -17,7 +17,8 @@ below so the public surface of ``pops.codegen.program_codegen`` is unchanged:
   - ``program_emit_solve``         -- the matrix-free Krylov + condensed-Schur emitters;
   - ``program_emit_schedule``      -- the unified scheduler wrap (ADC-458);
   - ``program_emit_control``       -- the body walk + control-flow (while/range/if) emitters;
-  - ``program_emit_ops``           -- the per-op ``_emit_op`` dispatcher.
+  - ``program_emit_ops``           -- the per-op ``_emit_op`` dispatcher;
+  - ``program_emit_amr``           -- the AMR install-entry emitter (target='amr_system', ADC-508).
 
 The orchestration (``emit_cpp_program`` + the block-name / module-metadata / dt-bound
 emitters + the lowerability checks) stays here.
@@ -84,11 +85,12 @@ from pops.codegen.program_emit_params import (  # noqa: F401
     emit_program_params as _emit_program_params,
     program_param_entries as _program_param_entries,
 )
+from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
 
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
 # --- C++ codegen (Phase 2c-ii / Phase 4b): lower the IR to a problem.so source ---
-def emit_cpp_program(program, model=None):
+def emit_cpp_program(program, model=None, target="system"):
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
     Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
@@ -96,6 +98,14 @@ def emit_cpp_program(program, model=None):
     ``pops_install_program`` -- and installs the macro step as a closure built from `ProgramContext`
     primitives only (no MultiFab / flux / solver reimplementation). It is the source the C++ loader
     (`System::install_program`) compiles, dlopens, and runs.
+
+    @p target selects the install entry the .so exports. ``"system"`` (default) emits only
+    ``pops_install_program`` (the single-level ``System`` macro-step closure). ``"amr_system"``
+    (epic ADC-511 / ADC-508, Spec 6) ALSO emits ``pops_install_program_amr``, the entry
+    ``AmrSystem::install_program`` resolves: it wraps the ``AmrSystem`` in an ``AmrProgramContext``
+    and installs the per-level Lie/Strang macro-step. The driver (``AmrProgramContext``) lands with
+    the Kokkos-gated AMR runtime seam; until then the AMR install entry FAILS LOUD at install (it is
+    ABI-complete so the whole loader path is wired, but it never produces a silently-wrong run).
 
     Lowers the Program by a topological walk of the SSA IR: each block's current state is its base
     (``ctx.state(idx)``); ``solve_fields()`` runs the elliptic solve; each RHS becomes a
@@ -155,6 +165,8 @@ def emit_cpp_program(program, model=None):
     ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once
     (``assemble_poisson_rhs_from_blocks``), each slotted at its block index (nullptr = the block's
     live state) -- the coupled multi-species field solve."""
+    if target not in ("system", "amr_system"):
+        raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
     _check_lowerable(program, model)
     prelude, body = _emit_body(program, model)
@@ -168,7 +180,8 @@ def emit_cpp_program(program, model=None):
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, model),
         program_params=_emit_program_params(program, model),
-        block_names=_emit_block_names(program))
+        block_names=_emit_block_names(program),
+        amr_install=_emit_amr_install(program, target, prelude, body))
 
 def _emit_block_names(program):
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):

@@ -297,6 +297,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)
+#include <stdexcept>                           // std::runtime_error (AMR install fail-loud, ADC-508)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)
 
 extern "C" const char* pops_program_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
@@ -314,6 +315,7 @@ extern "C" void pops_install_program(void* sys) {{
 {body}
   }});
 }}
+{amr_install}
 
 // OPTIONAL dt bound (spec s18 / ADC-417). pops_program_has_dt_bound() is true iff the Program set one;
 // pops_program_dt_bound(ctx, cfl) returns the lowered scalar bound (min'd into the native CFL by

@@ -6,6 +6,7 @@
 #include <pops/runtime/export.hpp>  // POPS_EXPORT: set_compiled_block resolved by the native AMR loader
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
 
 #include <functional>
 #include <map>
@@ -53,9 +54,15 @@ struct AmrRuntimeBlock;
 // only INSTANTIATED with a concrete callable in the TUs that include the full definition (the native AMR
 // loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
 class MultiFab;
+class AmrRuntime;  // the multi-block engine (engine() exposes it to the AmrProgramContext driver, ADC-508)
 namespace detail {
 struct SharedAmrLayout;
 }
+namespace runtime {
+namespace program {
+class Profiler;  // forward-declared so engine()/profiler_handle() do not pull profiler.hpp into this header
+}  // namespace program
+}  // namespace runtime
 
 /// AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
 struct AmrSystemConfig {
@@ -575,12 +582,88 @@ class AmrSystem {
   /// Advances at dt = cfl * coarse_dx / max wave speed. @return the dt used.
   double step_cfl(double cfl);
 
+  /// @name Compiled time-program install seam on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6)
+  /// AMR counterpart of System::install_program: load a generated problem.so and install its compiled
+  /// time Program over the AMR hierarchy. Mirrors the System seam (install_program_step registers the
+  /// macro-step body; the cadence + per-block RuntimeParams stores live HERE on the Impl, NOT in the
+  /// .so closure, so a value change reaches the captured context and a later checkpoint can reach
+  /// them). A generated AMR Program .so resolves these across the dlopen boundary (RTLD_GLOBAL,
+  /// POPS_EXPORT), exactly like set_compiled_block on the native AMR loader.
+  /// @{
+  /// Install the macro-step body. When set, AmrSystem::step calls it instead of the historical
+  /// AmrRuntime::step path (keeping t / macro_step coherent). Pass an empty std::function to clear it.
+  /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary, like
+  /// set_compiled_block. The closure drives the per-level Lie/Strang macro-step through an
+  /// AmrProgramContext (the AMR counterpart of ProgramContext).
+  POPS_EXPORT void install_program_step(std::function<void(double)> step);
+  /// Set the compiled-Program macro-step cadence (parity with System::set_program_cadence, ADC-411):
+  /// GLOBAL @p substeps and @p stride around the installed program closure. @p substeps subdivides each
+  /// effective step into @p substeps program closure calls; @p stride runs the program once per @p
+  /// stride macro-steps (hold-then-catch-up). Both must be >= 1 (throws std::invalid_argument).
+  /// Default 1/1 -> a single program closure call per macro-step. Kept SEPARATE from install_program so
+  /// the generated .so ABI is untouched (the cadence is runtime metadata).
+  POPS_EXPORT void set_program_cadence(int substeps, int stride);
+  /// Install the program-index -> AMR-block-index map (entry p = the AMR block index of Program block
+  /// p), built by install_program after matching the .so's block names to the instantiated AMR blocks
+  /// BY NAME (Spec 3 criterion 23, ADC-457). Empty clears it (identity: a single-block or order-matching
+  /// Program). Read by the AmrProgramContext to resolve a Program block index to the name-matched block.
+  POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
+  /// The installed program-index -> AMR-block-index map (empty = identity). Read by the AmrProgramContext.
+  POPS_EXPORT const std::vector<int>& program_block_map() const;
+  /// Load a generated problem.so and install its compiled time Program on the AMR hierarchy. dlopens
+  /// @p so_path, checks its ABI key against this module (fail-loud on mismatch), runs the section-24
+  /// install-time requirement validation (aux / solver / block instance, verbatim spec messages), binds
+  /// the Program's blocks to the AMR blocks BY NAME, seeds each block's RuntimeParams from the .so
+  /// pops_program_param_* metadata, then calls the .so's pops_install_program_amr(this), which wraps the
+  /// AmrSystem in an AmrProgramContext and installs the macro-step closure. Mirrors add_native_block and
+  /// System::install_program; the .so stays loaded for the process lifetime.
+  POPS_EXPORT void install_program(const std::string& so_path);
+  /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
+  /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
+  POPS_EXPORT std::string installed_program_hash() const;
+  /// @name Compiled-Program RUNTIME parameters on AMR (epic ADC-511 / ADC-508, parity with ADC-510)
+  /// Per-PROGRAM-block RuntimeParams of a compiled time Program whose physics reads a
+  /// dsl.Param(..., kind="runtime"), owned HERE so set_program_params changes it at run time WITHOUT
+  /// recompiling (the same no-recompile contract as System). install_program seeds each block's defaults
+  /// from the .so pops_program_param_* metadata. The lowered kernels read the CURRENT value via the
+  /// AmrProgramContext.
+  /// @{
+  /// Overwrite block @p prog_block's RuntimeParams with @p values (the COMPLETE block, sorted-name order
+  /// matching the .so pops_program_param_* metadata). @p prog_block is the PROGRAM block index. @throws
+  /// std::out_of_range if the block was not seeded by a runtime-param Program, std::runtime_error on a
+  /// size mismatch. Effect on the next step.
+  POPS_EXPORT void set_program_params(int prog_block, const std::vector<double>& values);
+  /// Block @p prog_block's CURRENT RuntimeParams (a device-clean by-value copy). An UNSEEDED block
+  /// returns a default-constructed RuntimeParams (count 0). Read by the AmrProgramContext.
+  POPS_EXPORT RuntimeParams program_params(int prog_block) const;
+  /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
+  /// pops_program_param_default metadata). Called by install_program once per runtime-param Program
+  /// block; a later set_program_params overwrites only the supplied values. Idempotent.
+  POPS_EXPORT void seed_program_params(int prog_block, const std::vector<double>& defaults);
+  /// The built multi-block AMR engine (the AmrRuntime the AmrProgramContext driver wraps), or nullptr
+  /// before the lazy build. install_program forces the build so the .so's pops_install_program_amr gets
+  /// a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary.
+  POPS_EXPORT AmrRuntime* engine() const;
+  /// The facade-owned Profiler (the AmrProgramContext forwards count_kernel / profile_record to it).
+  /// POPS_EXPORT for the dlopen boundary. Disabled by default -> zero hot-path cost.
+  POPS_EXPORT runtime::program::Profiler& profiler_handle();
+  /// Record a runtime Scalar diagnostic under @p name (the AmrProgramContext's record_scalar seam),
+  /// retrievable via program_diagnostic / program_diagnostics. A pure side effect (inspection / logging).
+  POPS_EXPORT void record_program_diagnostic(const std::string& name, double value);
+  /// The recorded diagnostic @p name (0 if absent) / the whole map. Exposed to Python for inspection.
+  POPS_EXPORT double program_diagnostic(const std::string& name) const;
+  POPS_EXPORT std::map<std::string, double> program_diagnostics() const;
+  /// @}
+  /// @}
+
   int nx() const;
   double time() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with
   /// System::macro_step. Required for checkpoint/restart (the stride / regrid cadence depends on
   /// macro_step % stride|regrid_every, not only on t). Prerequisite IO PR-IO-3 (audit 2026-06).
-  int macro_step() const;
+  /// POPS_EXPORT: the AmrProgramContext (a generated AMR Program .so) reads it across the dlopen
+  /// boundary for the head-of-step regrid cadence, like the other program seam accessors (ADC-508).
+  POPS_EXPORT int macro_step() const;
   /// RESTORES the AMR clock (t, macro_step) -- parity with System::set_clock. Sets the time AND the
   /// macro-step counter (propagated to the regrid/stride cadence of the engine, mono-block as well as multi-block). Useful
   /// alone (stride cadence + clock resumption). @throws if macro_step < 0.

@@ -18,8 +18,10 @@ The tests build a SYNTHETIC ``CompiledProblem`` -- a real in-memory ``pops.time.
   - a VALID install (everything required supplied, or a model with NO required inputs) PASSES
     validation unchanged -- the no-break discipline;
   - a NATIVE install (``compiled=None``) carries no declared arguments and is skipped;
-  - ``AmrSystem._install_compiled`` has signature parity with ``System._install_compiled`` and runs the SAME validation,
-    then a clear NotImplementedError for the genuinely un-wired AMR compiled-program path.
+  - ``AmrSystem._install_compiled`` has signature parity with ``System._install_compiled`` and runs the
+    SAME validation, then REACHES ``install_program`` on the AMR hierarchy (epic ADC-511 / ADC-508) and
+    routes the compiled ``params=`` / ``cadence=`` to ``set_program_params`` / ``set_program_cadence``;
+    a NATIVE AMR install still rejects un-wired ``params=`` / ``cadence=``.
 
 The Kokkos-gated end-to-end (a real ``compile_problem`` .so whose native install actually runs) is
 covered by ``test_unified_install.py`` / ``test_install_requirement_validation.py``; here we test the
@@ -270,37 +272,79 @@ def test_amr_install_runs_the_same_validation():
         chk("B_z" in str(exc), "the AMR validation names the missing required aux 'B_z'")
 
 
-def test_amr_compiled_path_is_honest_notimplemented():
-    """Once validation passes, a COMPILED time Program is not installable on AMR today -> a clear
-    NotImplementedError (no install_program seam), not a silent or faked install."""
-    print("== AmrSystem._install_compiled: compiled path is an honest NotImplementedError ==")
+def _stub_amr_lower_layer(amr, record):
+    """Stub the AMR engine-call methods so _install_compiled's wiring (add_equation / install_program /
+    set_program_params / set_program_cadence) is exercised WITHOUT a Kokkos engine or a dlopen-able .so.
+    Mirror of _stub_lower_layer for AmrSystem: records the program install + the routed params/cadence
+    so the test asserts the compiled AMR path REACHES install_program (epic ADC-511 / ADC-508), not a
+    NotImplementedError."""
+    record.setdefault("blocks", [])
+    record.setdefault("installed", False)
+    record.setdefault("params", [])
+    record.setdefault("cadence", None)
+    amr.add_equation = lambda name, model, **k: record["blocks"].append(name)
+    amr.set_density = lambda *a, **k: None
+    amr._install_solver = lambda *a, **k: None
+    amr._install_aux = lambda *a, **k: None
+    amr.install_program = lambda *a, **k: record.__setitem__("installed", True)
+    amr.set_program_params = lambda blk, values: record["params"].append((blk, list(values)))
+    amr.set_program_cadence = lambda substeps, stride: record.__setitem__("cadence", (substeps, stride))
+    amr.block_names = lambda: list(record["blocks"])
+
+
+def test_amr_compiled_path_reaches_install_program():
+    """Once validation passes, a COMPILED time Program now INSTALLS on the AMR hierarchy (epic
+    ADC-511 / ADC-508): _install_compiled wires the instances/aux, then reaches install_program. The
+    real dlopen + per-level driver are Kokkos/ROMEO-gated; here the engine call is stubbed to assert
+    the WIRING (no NotImplementedError), not the run."""
+    print("== AmrSystem._install_compiled: compiled path reaches install_program (no reject) ==")
     cp = _compiled(aux_names=("B_z",))
     amr = pops.AmrSystem(n=N, L=1.0)
-    try:
-        amr._install_compiled(cp, instances={"plasma": {"model": _model(), "initial": np.ones((3, N, N))}},
-                    aux={"B_z": np.ones(N * N)})
-        chk(False, "the compiled AMR path should raise NotImplementedError")
-    except NotImplementedError as exc:
-        chk("install_program" in str(exc) or "single-level" in str(exc),
-            "the message explains why a compiled Program is not installable on AMR")
+    record = {}
+    _stub_amr_lower_layer(amr, record)
+    amr._install_compiled(cp, instances={"plasma": {"model": _model(), "initial": np.ones((3, N, N))}},
+                          aux={"B_z": np.ones(N * N)})
+    chk(record["installed"] is True, "the compiled AMR path REACHED install_program (now wired)")
+    chk(record["blocks"] == ["plasma"], "the instance was wired before install_program")
+
+
+def test_amr_compiled_params_and_cadence_route():
+    """A COMPILED AMR install routes params= to set_program_params and cadence= to set_program_cadence
+    (the AMR counterparts of the System routes), AFTER install_program. The compiled handle's
+    runtime_param_routes is stubbed to the {block: [name]} the codegen emits (the SAME pure core
+    route_program_params the System path uses), so this exercises the WIRING deterministically without a
+    Program that symbolically reads the param."""
+    print("== AmrSystem._install_compiled routes compiled params + cadence ==")
+    cp = _compiled(aux_names=())
+    cp.runtime_param_routes = lambda: ({0: ["cs2"]}, {"cs2": 1.0})  # the codegen routing for one block
+    amr = pops.AmrSystem(n=N, L=1.0)
+    record = {}
+    _stub_amr_lower_layer(amr, record)
+    amr._install_compiled(cp,
+                          instances={"plasma": {"model": _model(aux_names=()),
+                                                "initial": np.ones((3, N, N))}},
+                          params={"cs2": 2.0},
+                          cadence=adctime.CompiledTime(substeps=2, stride=3))
+    chk(record["installed"] is True, "install_program was reached")
+    chk(record["params"] == [(0, [2.0])], "params= routed to set_program_params (block 0, [2.0])")
+    chk(record["cadence"] == (2, 3), "cadence= routed to set_program_cadence (substeps=2, stride=3)")
 
 
 def test_amr_native_params_and_cadence_rejected():
-    """A native AMR install honestly rejects params= (no set_block_params) and cadence= (no
-    set_program_cadence) rather than dropping them silently."""
+    """A NATIVE AMR install (compiled=None) still honestly rejects params= (the native AMR .so loader
+    transports no runtime params) and cadence= (no Program to wrap) rather than dropping them."""
     print("== AmrSystem._install_compiled rejects un-wired native params / cadence ==")
     amr = pops.AmrSystem(n=N, L=1.0)
     try:
         amr._install_compiled(None, params={"nu": 1.0})
-        chk(False, "params= should raise on AMR")
+        chk(False, "params= should raise on a native AMR install")
     except NotImplementedError as exc:
         chk("set_block_params" in str(exc) or "params" in str(exc), "params rejection is explicit")
     try:
         amr._install_compiled(None, cadence=adctime.CompiledTime(substeps=2))
-        chk(False, "cadence= should raise on AMR")
-    except NotImplementedError as exc:
-        chk("cadence" in str(exc) or "set_program_cadence" in str(exc),
-            "cadence rejection is explicit")
+        chk(False, "cadence= should raise on a native AMR install")
+    except ValueError as exc:
+        chk("cadence" in str(exc) or "Program" in str(exc), "cadence rejection is explicit")
 
 
 def _run_all():

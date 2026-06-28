@@ -1,9 +1,10 @@
 """AmrSystem : the refined runtime coupler (Spec-4 PR-F composed class).
 
-``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its ~590 lines are split into
-the ``_amr_system_equation`` (add_equation + named-aux) and ``_amr_system_io`` (write /
-checkpoint / restart) mixins to satisfy the <=500-line cap ; this module composes them and keeps
-the constructor + the native-add_block / coupling / diagnostics glue.
+``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its lines are split into the
+``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (write / checkpoint /
+restart) and ``_amr_system_program`` (compiled time-Program install / params / cadence, ADC-508)
+mixins to satisfy the <=500-line cap ; this module composes them and keeps the constructor + the
+native-add_block / coupling / diagnostics glue.
 """
 
 from pops._bootstrap import AmrSystemConfig, _AmrSystem
@@ -11,6 +12,7 @@ from pops.runtime import threading as _threading
 from pops.runtime.bricks import Spatial, Explicit, Split
 from pops.runtime._amr_system_equation import _AmrSystemEquation
 from pops.runtime._amr_system_io import _AmrSystemIO
+from pops.runtime._amr_system_program import _AmrSystemProgram
 from pops.runtime._system_unified_install import validate_install_arguments
 from pops.runtime.profile import PerformanceSummary, Profile
 
@@ -47,7 +49,7 @@ class _AmrProfileSession:
         return PerformanceSummary(self._system.profile_report(), self._profile)
 
 
-class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
+class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
     """Refined counterpart of System : one or SEVERAL blocks carried on an AMR hierarchy.
 
     SINGLE-BLOCK (1 add_block) : historical AmrCouplerMP path (dynamic regrid, reflux). MULTI-BLOCK
@@ -243,21 +245,28 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             bricks / a CompiledModel target='amr_system'), sets the field solvers (``set_poisson``),
             the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
             density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
-          - COMPILED install (a ``compiled`` handle carrying a time Program): the early validation
-            runs, then a clear ``NotImplementedError`` -- the AMR runtime has no ``install_program``
-            seam (a compiled whole-system time Program is a single-level System concept today). Use
-            the NATIVE AMR path (``compiled=None`` with a ``target='amr_system'`` CompiledModel per
-            instance), or ``System`` for a compiled time Program.
+          - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508):
+            the same wiring, then ``install_program(so_path)`` installs the compiled Program on the AMR
+            hierarchy (the .so must export ``pops_install_program_amr``: compile it with
+            ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
+            and the cadence (``cadence=``) to ``set_program_cadence`` -- the AMR counterparts of the
+            System routes. The per-level Lie/Strang macro-step DRIVER is Kokkos-gated (the .so fails
+            loud at install until the AmrProgramContext seam lands), so a full run is a ROMEO step.
 
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
             "time": <policy>}}; the block is bound by the dict KEY.
-        @param params runtime parameters -- NOT wired on AMR (no ``set_block_params``); a non-empty
-            ``params=`` raises ``NotImplementedError`` rather than dropping them silently.
+        @param params runtime parameters of a COMPILED time Program (dsl.Param kind='runtime'),
+            routed to ``set_program_params`` per PROGRAM block. A native AMR install (``compiled=None``)
+            has no ``set_block_params`` (the native AMR .so loader does not transport runtime params),
+            so a non-empty ``params=`` there raises rather than dropping them silently.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
         @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
-        @param cadence NOT wired on AMR (no ``set_program_cadence``); a non-None value raises.
+        @param cadence optional pops.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
+            macro-step cadence, applied with ``set_program_cadence`` AFTER install_program. A native
+            AMR install has no Program, so a non-None cadence there raises (set substeps / stride on
+            the native time policy instead).
         """
         instances = instances or {}
         params = params or {}
@@ -268,27 +277,27 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(self, compiled, instances, params, aux, solvers)
 
+        # COMPILED vs NATIVE. COMPILED: `compiled` carries a .so_path time Program (installed in step 5,
+        # with the section-24 .so validation) + a PHYSICAL model (the per-block model an instance falls
+        # back on). NATIVE: `compiled is None` -- each instance carries its OWN native model. Validate the
+        # handle up front, BEFORE any native mutation (no half-configured AMR hierarchy).
+        so_path = None
+        compiled_model = None
         if compiled is not None:
-            raise NotImplementedError(
-                "pops.bind: a COMPILED time Program is not installable on the AMR runtime "
-                "(no install_program seam: a compiled whole-system time Program is a single-level "
-                "System concept today). Use the NATIVE AMR path (compiled=None with a "
-                "target='amr_system' CompiledModel per instance), or System for a compiled Program. "
-                "The early bind-input validation above still ran.")
-        if params:
-            raise NotImplementedError(
-                "pops.bind: runtime params (params=%s) are not wired on AMR (no "
-                "set_block_params); set them on the native model, or use System." % sorted(params))
+            so_path = getattr(compiled, "so_path", None)
+            if so_path is None:
+                raise TypeError(
+                    "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
+                    "result (target='amr_system'), or compiled=None for a native AMR install (each "
+                    "instance carries its own native model)." % type(compiled).__name__)
+            compiled_model = getattr(compiled, "model", None)
         if outputs:
             raise NotImplementedError(
                 "pops.bind: output/checkpoint policies are deferred on AMR (per-level writes are "
                 "Spec 6 / ADC-511); use a Uniform layout for output, or omit it on the AMR route.")
-        if cadence is not None:
-            raise NotImplementedError(
-                "pops.bind: a program cadence is not wired on AMR (no set_program_cadence); "
-                "set substeps / stride on the native time policy instead.")
 
-        # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks). The DECLARED
+        # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
+        # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED
         # named elliptic fields (ADC-428), collected from the per-instance models, widen the accepted
         # solver-field set beyond the default Poisson names: a solver selection for a model-declared named
         # field routes (the native loader wired register_elliptic_field), a typo is rejected against the
@@ -297,25 +306,28 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
         for field, solver_brick in solvers.items():
             self._install_solver(field, solver_brick, declared_fields)
 
-        # (2) INSTANCES: add each named block (add_equation), then set its initial density.
+        # (2) INSTANCES: add each named block (add_equation, binds the Program block of that name), then
+        # set its initial density. The block model is the per-instance "model" if given, else the
+        # PHYSICAL model carried by the compiled handle (compiled.model) -- NOT the handle itself (the
+        # time Program .so installed in step 5).
         for name, spec in instances.items():
             if not isinstance(spec, dict):
                 raise TypeError("pops.bind: instances[%r] must be a dict "
                                 "(initial/spatial/time/model); got %r"
                                 % (name, type(spec).__name__))
-            model = spec.get("model")
+            model = spec.get("model", compiled_model)
             if model is None:
                 raise ValueError(
                     "pops.bind: instance %r has no block model -- supply "
                     "instances[%r]['model'] (an pops.Model(...) / a target='amr_system' "
-                    "CompiledModel). A native AMR install carries no compiled handle to fall back "
-                    "on." % (name, name))
+                    "CompiledModel), or pass a compiled handle that carries one "
+                    "(compile_problem(model=...))." % (name, name))
             spatial = spec.get("spatial")
             time = spec.get("time")
             self.add_equation(name, model, spatial=spatial, time=time)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
-        # (a named aux resolves against the block's declared aux table).
+        # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
@@ -324,6 +336,11 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO):
             initial = spec.get("initial")
             if initial is not None:
                 self.set_density(name, initial)
+
+        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route runtime params and
+        # apply the global cadence (or reject params= / cadence= on a NATIVE install). Extracted into the
+        # _AmrSystemProgram mixin (_finish_program_install) to keep this module under the line budget.
+        self._finish_program_install(compiled, so_path, params, cadence)
 
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
