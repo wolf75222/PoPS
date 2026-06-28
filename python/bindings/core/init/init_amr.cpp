@@ -295,6 +295,15 @@ void init_amr(py::module_& m) {
       // covers the whole domain -> enough to sample a median circle (azimuthal FFT). In
       // multi-block, phi results from the SYSTEM Poisson (Sum_b q_b n_b co-located), shared by all.
       .def("potential", [](AmrSystem& s) { return to_2d(s.potential(), s.nx(), s.nx()); })
+      // ADC-428: solved potential of a NAMED elliptic field (m.elliptic_field) on the coarse level,
+      // (n, n). Read-back counterpart of potential() for a second elliptic field; the Python
+      // AmrSystem.field(name) resolves the field name to this. Solves the hierarchy if needed.
+      .def(
+          "named_field_values",
+          [](AmrSystem& s, const std::string& field) {
+            return to_2d(s.named_field_values(field), s.nx(), s.nx());
+          },
+          py::arg("field"))
       // AMR CHECKPOINT / RESTART single-rank (ADC-65): full conservative state per level + phi
       // (warm-start) + imposition of the saved fine hierarchy. SERIAL MONO-BLOCK (multi-block: C++
       // rejection; np>1: facade rejection -- per-level gather = future). level_state / level_potential return

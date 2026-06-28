@@ -319,6 +319,15 @@ add_test(NAME test_case_multiblock_amr
 set_tests_properties(test_case_multiblock_amr PROPERTIES
   ENVIRONMENT "${_pops_py_test_env}")
 
+# ADC-428 named elliptic fields on the AMR layout: Section A (always runs) asserts the AMR native loader
+# EMITS the register_elliptic_field + set_block_elliptic_field calls (no longer NotImplementedError) and
+# the AmrSystem install seam routes a declared named field while rejecting a typo; Section B (gated) is the
+# typed Case end-to-end on an AMR layout, sim.field(name) returning a solved second field (Kokkos-gated).
+add_test(NAME test_amr_named_field
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_named_field.py)
+set_tests_properties(test_amr_named_field PROPERTIES
+  ENVIRONMENT "${_pops_py_test_env}")
+
 # pops.time.Program -- IR du programme temporel compile, mode builder (ADC-401, phase 2a) : etats /
 # solve_fields / rhs / linear_combine / commit construisent une IR typee ; algebre affine de
 # linear_combine (U + dt*R, coefficients RK comme polynomes en dt), validation structurelle (commit

@@ -174,12 +174,16 @@ chk(raises(ValueError, _bad_aux_out),
     "an elliptic_field whose aux output is not a declared aux_field is rejected")
 
 
-def _amr_named():
-    named_model("me_amr")._m.emit_cpp_native_loader(target="amr_system")
-
-
-chk(raises(NotImplementedError, _amr_named),
-    "a named elliptic field on target='amr_system' raises NotImplementedError (deferred)")
+# A named elliptic field on target='amr_system' now LOWERS (ADC-428): the AMR native loader emits the
+# same register_elliptic_field + set_block_elliptic_field calls as the uniform loader, on the AmrSystem
+# facade. (Previously this raised NotImplementedError -- the AMR path was the one deferral.)
+amr_loader = named_model("me_amr")._m.emit_cpp_native_loader(target="amr_system")
+chk('register_elliptic_field("phi2"' in amr_loader,
+    "a named elliptic field on target='amr_system' registers its aux components (ADC-428)")
+chk("set_block_elliptic_field" in amr_loader and "make_poisson_rhs" in amr_loader,
+    "the AMR named field attaches its RHS closure (make_poisson_rhs of the brick)")
+chk("pops::AmrSystem*" in amr_loader,
+    "the AMR named-field registration targets the AmrSystem facade")
 
 
 # The flat-ABI backends (aot: POPS_DEFINE_COMPILED_BLOCK; jit: extern "C" factory) emit the named RHS

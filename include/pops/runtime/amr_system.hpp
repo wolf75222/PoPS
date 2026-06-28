@@ -48,6 +48,11 @@ namespace pops {
 // complete definitions; a std::function with incomplete-type signature is legal as long as it is
 // not instantiated with a concrete callable outside those TUs (PIMPL std::function recipe).
 struct AmrRuntimeBlock;
+// Forward-declared for the named-elliptic-field RHS closure signature (ADC-428,
+// set_block_elliptic_field): a std::function with an incomplete-type parameter is legal as long as it is
+// only INSTANTIATED with a concrete callable in the TUs that include the full definition (the native AMR
+// loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
+class MultiFab;
 namespace detail {
 struct SharedAmrLayout;
 }
@@ -472,6 +477,34 @@ class AmrSystem {
   /// component's physical-face ghosts; periodic faces keep their wrap). AMR counterpart of
   /// System::set_aux_field_halo_component. @throws on a reserved component or an unsupported type.
   void set_aux_field_halo_component(int comp, int bc_type, double value);
+
+  /// @name Named multi-elliptic fields (ADC-428)
+  /// A SECOND elliptic solve (beyond the default coarse Poisson) for a user-named field
+  /// (m.elliptic_field("psi", rhs=..., aux=[...])) on the AMR hierarchy. AMR counterpart of
+  /// System::register_elliptic_field / set_block_elliptic_field. The named field owns its RHS (a per-block
+  /// brick), a DEDICATED coarse GeometricMG, and its OWN aux output components; AmrRuntime solves it each
+  /// solve_fields and injects it to the fine levels, so a bare run() leaves it SOLVED. The default Poisson
+  /// path is untouched / bit-identical. Registering a named field forces the MULTI-BLOCK runtime engine
+  /// (AmrRuntime) even for a single block (the named-field solve lives there, not on the single-block
+  /// AmrCouplerMP coupler). POPS_EXPORT: resolved by the generated AMR .so / native loader across the
+  /// dlopen boundary, like set_compiled_block.
+  /// @{
+  /// Registers named @p field's aux output components (where its solved phi / centered grad land). Called
+  /// by the native AMR loader for each m.elliptic_field. @p gx_comp / @p gy_comp < 0 => only phi is
+  /// written (the field declared fewer than 3 aux slots). @throws if the system is already built.
+  POPS_EXPORT void register_elliptic_field(const std::string& field, int phi_comp, int gx_comp,
+                                           int gy_comp);
+  /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
+  /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws if the system is already
+  /// built or the block is unknown.
+  POPS_EXPORT void set_block_elliptic_field(const std::string& block_name, const std::string& field,
+                                            std::function<void(const MultiFab&, MultiFab&)> rhs);
+  /// Solved potential of named @p field on the COARSE level, n*n row-major (read-back). Solves the
+  /// hierarchy fields if needed (so it is current even before any step), then reads the field's phi
+  /// component. AMR counterpart of System::aux_field_component for a named elliptic field. @throws if the
+  /// field is unregistered (or in the single-block AmrCouplerMP path, which carries no named field).
+  std::vector<double> named_field_values(const std::string& field);
+  /// @}
 
   /// Enables the Schur-CONDENSED SOURCE STAGE (amr-schur path) on block @p name. AMR counterpart of
   /// System::set_source_stage: assembles and solves the GLOBAL electrostatic/Lorentz condensed operator

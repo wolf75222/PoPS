@@ -190,6 +190,14 @@ struct AmrRuntimeBlock {
   /// BoxArray). The SUM of the contributions of all blocks forms the system Poisson RHS.
   std::function<void(const MultiFab&, MultiFab&)> add_elliptic_rhs;
 
+  /// Per-NAMED-field elliptic right-hand-side contributions of the block (ADC-428): field name ->
+  /// closure rhs += elliptic_field_rhs_b(U_b) on the coarse, exactly like @c add_elliptic_rhs but for a
+  /// SECOND (user-named) elliptic field declared by the block's model (m.elliptic_field). The native
+  /// loader attaches one closure here per declared field (set_block_elliptic_field). AmrRuntime sums
+  /// them over the blocks into the named field's dedicated solver RHS (solve_named_fields). Empty for a
+  /// block that declares no named field -> the named-field solve loop never reads it (bit-identical).
+  std::map<std::string, std::function<void(const MultiFab&, MultiFab&)>> named_elliptic_rhs;
+
   /// Speed driving the block CFL on the coarse. By default max_wave_speed (historical); when the
   /// model declares the HasStabilitySpeed trait, it is lambda* (stability_speed) that the closure
   /// reduces -- SAME policy as System (make_max_speed), cf. build_amr_block.
@@ -236,7 +244,9 @@ class AmrRuntime {
         bcPhi_(bcPhi),
         aux_bc_(detail::derive_aux_bc(bcPhi)),
         replicated_coarse_(replicated_coarse),
-        mg_(geom, ba_coarse, bcPhi, std::move(active), replicated_coarse),
+        mg_(geom, ba_coarse, bcPhi, active, replicated_coarse),
+        ba_coarse_(ba_coarse),
+        wall_active_(std::move(active)),  // copy already consumed by mg_ (earlier in decl order)
         blocks_(std::move(blocks)) {
     if (blocks_.empty())
       throw std::runtime_error("AmrRuntime : at least one block required");
@@ -372,6 +382,58 @@ class AmrRuntime {
   /// domain boundary inherit the shared BC). No-op default. AMR counterpart of
   /// System::set_aux_field_halo_component.
   void set_named_aux_bc(int comp, AuxHaloPolicy policy) { named_aux_bc_[comp] = policy; }
+
+  /// @name Named multi-elliptic fields (ADC-428)
+  /// A SECOND elliptic solve (beyond the default coarse Poisson) for a user-named field
+  /// (m.elliptic_field("psi", rhs=..., aux=[...])) on the AMR hierarchy. AMR counterpart of
+  /// SystemFieldSolver::register_named_field / solve_named_field_from_state. Each named field owns a
+  /// DEDICATED coarse GeometricMG solver (built lazily, REUSING the native solver -- the operator is
+  /// never reimplemented), its RHS = sum over blocks of @c named_elliptic_rhs[field], and its own aux
+  /// output components (the model's named aux slots, >= kAuxNamedBase). solve_fields() solves every
+  /// registered named field right after the default Poisson and injects its aux to the fine levels, so a
+  /// bare run() leaves the field SOLVED (readable via named_field_values). The default Poisson path
+  /// (mg_) is untouched / bit-identical. Empty default -> the named-field loop is a no-op.
+  /// @{
+  /// Registers named @c field's aux output components: @p phi_comp where the solved potential lands, @p
+  /// gx_comp / @p gy_comp where its centered gradient lands. @p gx_comp / @p gy_comp < 0 => only phi is
+  /// written (the field declared fewer than 3 aux slots). Idempotent (re-register overwrites the
+  /// components and drops the lazily-built solver so the next solve rebuilds it). The dedicated solver is
+  /// built on the first solve, never here.
+  void register_named_field(const std::string& field, int phi_comp, int gx_comp, int gy_comp) {
+    NamedField nf;
+    nf.phi_comp = phi_comp;
+    nf.gx_comp = gx_comp;
+    nf.gy_comp = gy_comp;
+    named_fields_[field] = std::move(nf);  // solver built lazily by ensure_named_elliptic
+  }
+  /// Attaches named @p field's RHS contribution closure (rhs += elliptic_field_rhs(U_b)) to block @p b.
+  /// Called per declared field once the runtime owns the blocks. @throws if @p b is out of bounds.
+  void set_block_named_elliptic_rhs(std::size_t b, const std::string& field,
+                                    std::function<void(const MultiFab&, MultiFab&)> rhs) {
+    if (b >= blocks_.size())
+      throw std::runtime_error(
+          "AmrRuntime::set_block_named_elliptic_rhs : block index out of bounds");
+    blocks_[b].named_elliptic_rhs[field] = std::move(rhs);
+  }
+  /// Number of registered named elliptic fields (diagnostic / test).
+  std::size_t n_named_fields() const { return named_fields_.size(); }
+  /// True if @p field is a registered named elliptic field.
+  bool has_named_field(const std::string& field) const {
+    return named_fields_.find(field) != named_fields_.end();
+  }
+  /// Solved potential of named @p field as a COARSE n*n row-major field (diagnostic / read-back). Solves
+  /// the fields if needed (counterpart of potential() for the default phi), then reads the field's
+  /// phi_comp on the coarse aux. @throws if @p field is unregistered. AMR counterpart of
+  /// System::aux_field_component for a named elliptic field.
+  std::vector<double> named_field_values(const std::string& field) {
+    auto it = named_fields_.find(field);
+    if (it == named_fields_.end())
+      throw std::runtime_error("AmrRuntime::named_field_values : unknown named elliptic field '" +
+                               field + "' (register it via m.elliptic_field + the compiled block)");
+    solve_fields();  // up-to-date phi (counterpart of potential()); named solve runs inside
+    return coarse_aux_component(it->second.phi_comp);
+  }
+  /// @}
 
   /// Registers an inter-species COUPLED SOURCE (DSL CoupledSource, P5 bytecode) on the runtime facade,
   /// counterpart of System::add_coupled_source. The ABI is FLAT (postfix bytecode): we resolve each
@@ -598,6 +660,77 @@ class AmrRuntime {
     apply_named_aux_bc();  // ADC-369: per-field halo override on the coarse physical ghosts (after the
                            // shared fill, before injection); no-op when no policy declared.
     // 4. coarse->fine injection of the aux (parent replicated only at level 1 if coarse replicated).
+    for (int k = 1; k < nlev_; ++k)
+      detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
+                                    /*replicated_parent=*/(k == 1) && replicated_coarse_);
+
+    // 5. NAMED multi-elliptic fields (ADC-428): a SECOND elliptic solve per user-named field, written to
+    // the field's OWN aux components and injected to the fine levels. No-op when none is registered ->
+    // the default-Poisson trajectory above is strictly bit-identical.
+    solve_named_fields();
+  }
+
+  /// Solves every registered NAMED elliptic field (ADC-428) on the coarse, writes phi (+ centered grad)
+  /// into the field's own aux components, ghost-fills them and injects coarse->fine. Mirror of the
+  /// default Poisson block above (steps 2-4) but per named field, reusing a DEDICATED GeometricMG. The
+  /// default phi/grad (comps 0..2) are never touched. No-op (early return) without a named field, so the
+  /// default-only path stays bit-identical.
+  void solve_named_fields() {
+    if (named_fields_.empty())
+      return;
+    const Real dx = geom_.dx(), dy = geom_.dy();
+    for (auto& [field, nf] : named_fields_) {
+      if (nf.phi_comp < 0 || nf.phi_comp >= aux_ncomp_)
+        throw std::runtime_error("AmrRuntime : named elliptic field '" + field +
+                                 "' aux component out of the channel width (add the block that "
+                                 "declares its aux fields)");
+      ensure_named_elliptic(nf);
+      // SUMMED + CO-LOCATED RHS on the coarse: f = Sum_b named_elliptic_rhs_b[field](U_b), exactly like
+      // the default Poisson (mg_.rhs()), but reading the per-field block closures. A field with no
+      // contributing block solves a zero RHS -> reject loud (mirror of the System named path).
+      MultiFab& rhs = nf.mg->rhs();
+      rhs.set_val(Real(0));
+      bool any = false;
+      for (auto& b : blocks_) {
+        auto it = b.named_elliptic_rhs.find(field);
+        if (it == b.named_elliptic_rhs.end() || !it->second)
+          continue;
+        it->second((*b.levels)[0].U, rhs);
+        any = true;
+      }
+      if (!any)
+        throw std::runtime_error(
+            "AmrRuntime : named elliptic field '" + field +
+            "' has no contributing block (declare m.elliptic_field on the block model)");
+      nf.mg->solve();
+      device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as mg_)
+      // Write phi (+ centered grad) into the field's OWN aux components on the coarse valid cells. The
+      // default field_postprocess hardcodes comps 0..2, so we write the named comps with a dedicated
+      // loop (mirror of SystemFieldSolver::solve_named_field_from_state). Per-local-fab (MPI-safe).
+      MultiFab& phi_mf = nf.mg->phi();
+      const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
+      const bool grad = (cgx >= 0 && cgx < aux_ncomp_ && cgy >= 0 && cgy < aux_ncomp_);
+      for (int li = 0; li < aux_[0].local_size(); ++li) {
+        const ConstArray4 p = phi_mf.fab(li).const_array();
+        Array4 a = aux_[0].fab(li).array();
+        const Box2D v = aux_[0].box(li);
+        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+          for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
+            a(i, j, cphi) = p(i, j);
+            if (grad) {
+              a(i, j, cgx) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
+              a(i, j, cgy) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
+            }
+          }
+      }
+    }
+    // Ghost-fill the named components (shared aux fill: same routing as the default) + per-field halo
+    // override (ADC-369), then inject coarse->fine so the named field reaches every level. We re-fill the
+    // WHOLE aux: the default comps 0..2 were just written by the Poisson block, so their valid cells are
+    // unchanged -- only ghosts are refreshed (idempotent). Cheap (one extra fill per solve_fields when a
+    // named field exists; none otherwise).
+    fill_ghosts_profiled(aux_[0], dom_, aux_bc_);
+    apply_named_aux_bc();
     for (int k = 1; k < nlev_; ++k)
       detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
                                     /*replicated_parent=*/(k == 1) && replicated_coarse_);
@@ -1121,6 +1254,51 @@ class AmrRuntime {
     }
   }
 
+  // NAMED multi-elliptic field (ADC-428): a field name's aux output components + a DEDICATED coarse
+  // GeometricMG (built lazily, REUSING the native solver; the operator is never reimplemented).
+  // shared_ptr<GeometricMG>: GeometricMG owns Fabs (non-copyable/non-movable), and named_fields_ is a
+  // std::map (stable nodes), so a heap GeometricMG gives a stable address without making NamedField
+  // movable. Defined here (before ensure_named_elliptic, whose parameter type must be visible).
+  struct NamedField {
+    int phi_comp = -1;
+    int gx_comp = -1;
+    int gy_comp = -1;
+    std::shared_ptr<GeometricMG>
+        mg;  // dedicated coarse solver, built lazily by ensure_named_elliptic
+  };
+
+  // Builds a NAMED elliptic field's dedicated coarse GeometricMG (ADC-428), lazily, IDENTICAL to the
+  // default mg_ (same coarse geometry / BoxArray / Poisson BC / wall predicate / replication). REUSES the
+  // native solver -- no operator is reimplemented. The variable / anisotropic permittivity of the default
+  // Poisson is NOT carried onto a named field (a named field is a plain Laplacian, like the System named
+  // path). No-op if already built.
+  void ensure_named_elliptic(NamedField& nf) {
+    if (nf.mg)
+      return;
+    nf.mg =
+        std::make_shared<GeometricMG>(geom_, ba_coarse_, bcPhi_, wall_active_, replicated_coarse_);
+  }
+
+  // Reads aux component @p comp of the COARSE level as a GLOBAL n*n row-major field (diagnostic /
+  // read-back). Same marshaling as detail::coupler_read_coarse_phi (the default potential read-back) but
+  // for an arbitrary component: local n*n buffer, all_reduce_sum_inplace when the coarse is DISTRIBUTED
+  // (disjoint boxes -> exact recompose; serial / replicated is identity). Used by named_field_values.
+  std::vector<double> coarse_aux_component(int comp) const {
+    device_fence();
+    const int nx = dom_.nx(), ny = dom_.ny();
+    std::vector<double> out(static_cast<std::size_t>(nx) * ny, 0.0);
+    for (int li = 0; li < aux_[0].local_size(); ++li) {
+      const ConstArray4 a = aux_[0].fab(li).const_array();
+      const Box2D v = aux_[0].box(li);
+      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+          out[static_cast<std::size_t>(j) * nx + i] = static_cast<double>(a(i, j, comp));
+    }
+    if (!replicated_coarse_)
+      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    return out;
+  }
+
   // Per-field aux HALO override (ADC-369) on the COARSE aux, AFTER the shared fill_ghosts. Overrides
   // only each declared component's physical-face ghosts (aux_halo_override keeps periodic faces
   // periodic). No-op without a policy. Mirror of SystemFieldSolver::apply_named_aux_bc.
@@ -1170,6 +1348,11 @@ class AmrRuntime {
   BCRec bcPhi_, aux_bc_;
   bool replicated_coarse_;
   GeometricMG mg_;
+  // Coarse BoxArray + conductive-wall predicate stashed at the ctor so a NAMED elliptic field (ADC-428)
+  // can build its own coarse GeometricMG identical to mg_ (ensure_named_elliptic). mg_ consumes them at
+  // its construction but does not expose them, so we keep a copy here (cheap; the coarse layout is small).
+  BoxArray ba_coarse_;
+  std::function<bool(Real, Real)> wall_active_;
   std::vector<AmrRuntimeBlock> blocks_;
   // GLOBAL step bounds (add_dt_bound, parity with System) + ACTIVE bound of the last step_cfl.
   struct GlobalDtBound {
@@ -1204,6 +1387,11 @@ class AmrRuntime {
   // Per-field aux HALO policy (ADC-369): component -> uniform boundary policy, applied to the coarse aux
   // after the shared fill (apply_named_aux_bc). Empty by default -> bit-identical.
   std::map<int, AuxHaloPolicy> named_aux_bc_;
+  // NAMED multi-elliptic fields (ADC-428): field name -> its aux output components + a DEDICATED coarse
+  // GeometricMG. The NamedField struct itself is defined higher up (before ensure_named_elliptic, which
+  // takes it by reference: a parameter type must be visible at the function declaration, unlike a member
+  // body). Empty default -> bit-identical (the solve_named_fields loop early-returns).
+  std::map<std::string, NamedField> named_fields_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
   // UNION-TAGS REGRID (capstone Phase 2, C.6). regrid_every_ == 0 -> FROZEN hierarchy (default,

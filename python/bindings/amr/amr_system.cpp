@@ -11,11 +11,13 @@
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions + validate_newton_options (shared range check)
 
 #include <algorithm>  // std::find, std::sort (partial IMEX mask resolution: sorted unique indices)
+#include <array>      // std::array<int, 3>: named-elliptic-field aux components (ADC-428)
 #include <cmath>
 #include <cstddef>
 #include <limits>  // std::numeric_limits (global step bounds: neutralization to +inf before the min)
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW layer (ADC-99); <dlfcn.h> on POSIX
 #include <functional>
+#include <map>  // ell_field_rhs_: per-field per-block named-elliptic RHS closures (ADC-428)
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -136,6 +138,18 @@ struct AmrSystem::Impl {
   // Per-field aux HALO policies (ADC-369): component -> uniform policy. Pending until build, then seeded
   // into the engine (bp.named_aux_bc for the coupler; runtime->set_named_aux_bc for the runtime).
   std::map<int, AuxHaloPolicy> named_aux_bc_;
+  // NAMED multi-elliptic fields (ADC-428): the native AMR loader declares them (register_elliptic_field)
+  // and attaches each field's per-block RHS closure (set_block_elliptic_field) BEFORE the lazy build,
+  // when the AmrRuntime engine does not yet exist. We stash both here and replay them on the runtime at
+  // build_multi. ell_field_comps_: field -> {phi_comp, gx_comp, gy_comp}. ell_field_rhs_: field -> {block
+  // name -> RHS closure}. Empty default -> bit-identical (no named field registered).
+  std::map<std::string, std::array<int, 3>> ell_field_comps_;
+  std::map<std::string, std::map<std::string, std::function<void(const MultiFab&, MultiFab&)>>>
+      ell_field_rhs_;
+  // A named elliptic field is solved only by the AmrRuntime engine (not the single-block AmrCouplerMP
+  // coupler), so registering one FORCES the runtime engine even for a single block (AmrRuntime accepts >=
+  // 1 block). false by default -> the engine choice stays blocks.size() >= 2, bit-identical.
+  bool force_runtime_ = false;
 
   std::string p_rhs = "charge_density", p_solver = "geometric_mg", p_bc = "auto", p_wall = "none";
   double p_wall_radius = 0.0;
@@ -317,7 +331,11 @@ struct AmrSystem::Impl {
     built = true;
   }
 
-  bool multi_block() const { return blocks.size() >= 2; }
+  // The AmrRuntime runtime engine is used for >= 2 blocks, OR when a feature only it carries is requested
+  // on a single block: ADC-428 named elliptic fields (force_runtime_). AmrRuntime accepts >= 1 block, so a
+  // single-block Case declaring a named field runs there instead of the single-block AmrCouplerMP coupler
+  // (which has no named-field solve). force_runtime_ false by default -> blocks.size() >= 2, bit-identical.
+  bool multi_block() const { return blocks.size() >= 2 || force_runtime_; }
 
   // Builds the MULTI-BLOCK runtime engine (AmrRuntime): one common SharedAmrLayout (shared
   // hierarchy, frozen), then EACH block materializes its type-erased AmrRuntimeBlock on it (via its
@@ -434,6 +452,21 @@ struct AmrSystem::Impl {
       runtime->set_named_aux(kv.first, std::vector<Real>(kv.second.begin(), kv.second.end()));
     for (const auto& kv : named_aux_bc_)
       runtime->set_named_aux_bc(kv.first, kv.second);  // ADC-369
+    // NAMED multi-elliptic fields (ADC-428): replay the loader's declarations + per-block RHS closures on
+    // the just-built runtime engine. register_named_field records the field's aux output components; each
+    // RHS closure is attached to its block's AmrRuntimeBlock (resolved by name) so solve_named_fields can
+    // sum them. A closure naming an unknown block is a loader/codegen bug -> reject loud. Empty maps ->
+    // no-op (no named field), bit-identical.
+    for (const auto& kv : ell_field_comps_)
+      runtime->register_named_field(kv.first, kv.second[0], kv.second[1], kv.second[2]);
+    for (const auto& [field, by_block] : ell_field_rhs_)
+      for (const auto& [block_name, rhs] : by_block) {
+        const int bi = block_index(block_name);
+        if (bi < 0)
+          throw std::runtime_error("AmrSystem::set_block_elliptic_field : unknown block '" +
+                                   block_name + "' for named elliptic field '" + field + "'");
+        runtime->set_block_named_elliptic_rhs(static_cast<std::size_t>(bi), field, rhs);
+      }
     // GLOBAL bounds registered BEFORE the lazy build (add_dt_bound): passed to the engine
     // (which aggregates them in its step_cfl, all_reduce_min). Those added AFTER go in directly.
     for (const auto& g : dt_bounds)
@@ -776,6 +809,45 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
   b.compiled_hooks_builder = std::move(mono_builder);   // single-block path (AmrCouplerMP)
   b.compiled_block_builder = std::move(multi_builder);  // multi-block path (AmrRuntime)
   p_->blocks.push_back(std::move(b));
+}
+
+// NAMED multi-elliptic field declaration (ADC-428): the native AMR loader calls this once per
+// m.elliptic_field after the block is installed. We stash the field's aux output components and FORCE
+// the runtime engine (the named-field solve lives only in AmrRuntime); build_multi replays it. POPS_EXPORT:
+// resolved by the generated AMR .so loader across the dlopen boundary (same as set_compiled_block).
+POPS_EXPORT void AmrSystem::register_elliptic_field(const std::string& field, int phi_comp,
+                                                    int gx_comp, int gy_comp) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::register_elliptic_field : the system is already built");
+  p_->ell_field_comps_[field] = {phi_comp, gx_comp, gy_comp};
+  p_->force_runtime_ =
+      true;  // the named-field solve needs the AmrRuntime engine (even single-block)
+}
+
+// Attaches a named field's per-block RHS closure (ADC-428): the native AMR loader builds it
+// (make_poisson_rhs of the per-field brick) and calls this for the block that declares the field. We
+// stash it per (field, block name); build_multi resolves the block index against the runtime and attaches
+// it. POPS_EXPORT: resolved by the generated AMR .so loader across the dlopen boundary.
+POPS_EXPORT void AmrSystem::set_block_elliptic_field(
+    const std::string& block_name, const std::string& field,
+    std::function<void(const MultiFab&, MultiFab&)> rhs) {
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_block_elliptic_field : the system is already built");
+  p_->ell_field_rhs_[field][block_name] = std::move(rhs);
+}
+
+// Solved potential of a named elliptic field on the coarse level, n*n row-major (ADC-428 read-back).
+// Builds the hierarchy on first call (ensure_built) then reads from the AmrRuntime engine, which solves
+// the fields (counterpart of potential()). Only the runtime path carries named fields, so the single-block
+// AmrCouplerMP coupler (no named field registered) rejects with a clear message.
+std::vector<double> AmrSystem::named_field_values(const std::string& field) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::named_field_values : named elliptic field '" + field +
+        "' is only solved by the multi-block runtime engine (AmrRuntime). Declare it via "
+        "m.elliptic_field on the block model so the loader registers it.");
+  return p_->runtime->named_field_values(field);
 }
 
 namespace {

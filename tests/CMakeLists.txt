@@ -664,6 +664,15 @@ add_executable(test_amr_system_twoblock test_amr_system_twoblock.cpp)
 target_link_libraries(test_amr_system_twoblock PRIVATE pops::pops ${CMAKE_DL_LIBS} pops_runtime_amr)
 add_test(NAME test_amr_system_twoblock COMMAND test_amr_system_twoblock)
 
+# --- ADC-428 named elliptic fields on the AMR layout ------------------------------------------------
+# A SECOND elliptic solve per user-named field on the AmrRuntime hierarchy: dedicated coarse GeometricMG,
+# per-block summed RHS, own aux output components, injected to the fine levels. Validated against the
+# engine's OWN default Poisson solve (parity for RHS=q*rho, linearity for RHS=2*q*rho), default path
+# bit-identical, finite/non-trivial after transport, unknown field rejected. Engine-level (no .so).
+add_executable(test_amr_named_field test_amr_named_field.cpp)
+target_link_libraries(test_amr_named_field PRIVATE pops::pops ${CMAKE_DL_LIBS} pops_runtime_amr)
+add_test(NAME test_amr_named_field COMMAND test_amr_named_field)
+
 # --- AMR MULTI-BLOCS COMPILES (capstone "v", DSL production multi-bloc) -----------------------------
 # PLUSIEURS blocs COMPILES (add_compiled_model, types connus a la compilation) co-localises sur UNE
 # hierarchie AMR PARTAGEE via le moteur runtime AmrRuntime (file de specs construite paresseusement a
