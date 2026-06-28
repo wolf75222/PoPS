@@ -133,7 +133,11 @@ class _FacadeCompileMixin:
                  or getattr(m, '_roe_jacobian', None) is not None),
             aux_extra_names=m.aux_extra_names,
             wave_speeds=(m._wave_speeds is not None or m._ws_jacobian is not None
-                         or "p" in m.prim_defs))
+                         or "p" in m.prim_defs),
+            # NAMED elliptic fields the model declares (m.elliptic_field, ADC-419 / ADC-428): the
+            # install seam routes a bind(solvers={field: ...}) selection for a DECLARED field and
+            # rejects a typo against this set. Empty for the default-Poisson-only model.
+            elliptic_field_names=list(m._elliptic_fields))
         # Trace of the 'auto' policy (ADC-63): None if the backend was explicit. Diagnostic,
         # never a silent choice -- cm.backend says what was built, this says WHY.
         cm.backend_auto_reason = auto_reason

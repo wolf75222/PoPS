@@ -141,27 +141,24 @@ def test_validate_requires_a_block():
     print("ok test_validate_requires_a_block")
 
 
-def test_validate_multi_block_deferred():
+def test_validate_multi_block_uniform_lowers():
+    # C3: a multi-block assembly on a Uniform layout now VALIDATES (the >1-block reject is removed);
+    # each block lowers as its own instance at bind.
     prob = (pops.Case().block("ne", physics=_StubModel())
             .block("ni", physics=_StubModel()))
-    try:
-        prob.validate()
-        raise AssertionError("multi-block must raise NotImplementedError")
-    except NotImplementedError as exc:
-        _check("multi-block" in str(exc), "multi-block message is explicit")
-    print("ok test_validate_multi_block_deferred")
+    _check(prob.validate() is True, "a multi-block Uniform Case validates (C3)")
+    _check(prob.options()["n_blocks"] == 2, "options report two blocks")
+    print("ok test_validate_multi_block_uniform_lowers")
 
 
-def test_validate_non_poisson_field_deferred():
+def test_validate_named_field_lowers():
+    # C1-System: a named non-Poisson field now VALIDATES (the _POISSON_FIELD_NAMES whitelist reject
+    # is removed); an undeclared field name is caught downstream at install (_install_solver).
     field = FieldProblem(name="temperature", unknown="T",
                          equation=(-laplacian("T") == "src"), solver=_StubSolver())
     prob = pops.Case().block("ne", physics=_StubModel()).field(field)
-    try:
-        prob.validate()
-        raise AssertionError("a non-Poisson field must raise NotImplementedError")
-    except NotImplementedError as exc:
-        _check("non-Poisson" in str(exc), "non-Poisson message is explicit")
-    print("ok test_validate_non_poisson_field_deferred")
+    _check(prob.validate() is True, "a Case with a named non-Poisson field validates (C1-System)")
+    print("ok test_validate_named_field_lowers")
 
 
 def test_validate_outputs_deferred():
@@ -282,15 +279,49 @@ def test_compile_problem_time_setter_honored(monkeypatch=None):
     print("ok test_compile_problem_time_setter_honored")
 
 
-def test_compile_multi_block_raises(monkeypatch=None):
-    prob = (pops.Case().block("ne", physics=_StubModel())
-            .block("ni", physics=_StubModel()))
+def test_compile_multi_block_uniform_lowers(monkeypatch=None):
+    # C3: a multi-block Uniform Case lowers -- compile resolves EACH block's physics and carries the
+    # {block: model} table on the handle (_block_models); the per-block models flow to install via
+    # bind()'s _assemble_instances. compile_problem is monkeypatched so no real .so is built.
+    def _fake_compile_problem(*, time, model, backend, target, **kw):
+        return _StubCompiled(target=target)
+
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _fake_compile_problem)
     try:
-        orchestration.compile(prob, time=object())
-        raise AssertionError("multi-block compile must raise")
-    except NotImplementedError:
-        pass
-    print("ok test_compile_multi_block_raises")
+        prob = (pops.Case().block("ne", physics=_StubModel())
+                .block("ni", physics=_StubModel()))
+        compiled = orchestration.compile(prob, time=object())
+        _check(compiled._target == "system", "multi-block Uniform routes to target='system'")
+        _check(set(compiled._block_models) == {"ne", "ni"},
+               "compile carries a model per block (_block_models)")
+    finally:
+        _unpatch(monkeypatch)
+    print("ok test_compile_multi_block_uniform_lowers")
+
+
+def test_compile_multi_block_amr_raises(monkeypatch=None):
+    # C3 boundary: multi-block on an AMR layout is still deferred (the whole-system AMR multi-block
+    # seam is not wired). compile_problem is monkeypatched to a tripwire so a leak past the reject is
+    # caught.
+    called = {"hit": False}
+
+    def _tripwire(*a, **kw):
+        called["hit"] = True
+        return _StubCompiled(target="amr_system")
+
+    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _tripwire)
+    try:
+        prob = (pops.Case(layout=AMR(CartesianMesh())).block("ne", physics=_StubModel())
+                .block("ni", physics=_StubModel()))
+        try:
+            orchestration.compile(prob, time=object())
+            raise AssertionError("multi-block AMR compile must raise")
+        except NotImplementedError as exc:
+            _check("AMR" in str(exc), "multi-block AMR reject names the AMR layout")
+        _check(called["hit"] is False, "the reject fires BEFORE compile_problem (no .so built)")
+    finally:
+        _unpatch(monkeypatch)
+    print("ok test_compile_multi_block_amr_raises")
 
 
 # --- bind(): System vs AmrSystem dispatch via a monkeypatched runtime -------

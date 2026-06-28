@@ -3,7 +3,8 @@
 
 (A) Validation (pure Python, always runs): compile_problem rejects backend != 'production' and
     target != 'system' and a missing Program; a multi-stage Program is refused by the codegen;
-    CompiledTime rejects substeps/stride > 1 and a non-default cfl (all deferred, fail-loud).
+    CompiledTime wires substeps/stride > 1 and a numeric cfl, and still defers only a self-computed
+    cfl='program' sub-program (fail-loud).
 
 (B) End-to-end parity (skips cleanly unless the full toolchain is present): build a transport gas
     block + a Forward-Euler Program, compile_problem -> problem.so (compiled WITH Kokkos, so its ABI
@@ -74,7 +75,7 @@ chk(raises(ValueError, lambda: pops.compile_problem(time=None)),
 chk(pops.CompiledTime(substeps=2).substeps == 2, "CompiledTime substeps>1 accepted (wired, ADC-411)")
 chk(pops.CompiledTime(stride=2).stride == 2, "CompiledTime stride>1 accepted (wired, ADC-411)")
 chk(raises(NotImplementedError, lambda: pops.CompiledTime(cfl="program")),
-    "CompiledTime cfl!='default' rejected (deferred)")
+    "CompiledTime cfl='program' self-computed sub-program deferred (numeric cfl wired)")
 chk(pops.CompiledTime().kind == "compiled", "CompiledTime() default ok (kind 'compiled')")
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----

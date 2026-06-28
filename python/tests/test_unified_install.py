@@ -92,12 +92,22 @@ def test_install_solver_sets_poisson():
         print("OK  _install_solver lowers to set_poisson (poisson_solver() == geometric_mg)")
     else:
         print("OK  _install_solver lowers to set_poisson (poisson_solver accessor absent; rebuild _pops)")
-    # A second named elliptic field is deferred -> NotImplementedError (explicit, not silent).
+    # C1-System: a DECLARED named elliptic field routes through the shared elliptic solver (set_poisson);
+    # an UNDECLARED field name is a typo, rejected LOUD against the declared set (not silently dropped).
+    sim2 = pops.System(n=N, L=1.0, periodic=True)
+    sim2._install_solver("temperature", pops.fields.catalog.GeometricMG(),
+                         declared_fields=frozenset({"temperature"}))
+    if hasattr(sim2._s, "poisson_solver"):
+        assert sim2.poisson_solver() == "geometric_mg", \
+            "a declared named field routes to set_poisson (got %r)" % sim2.poisson_solver()
+    print("OK  _install_solver routes a DECLARED named elliptic field (C1-System)")
     try:
-        sim._install_solver("temperature", pops.fields.catalog.GeometricMG())
-        raise AssertionError("MISMATCH: a second named elliptic field should be NotImplementedError")
-    except NotImplementedError:
-        print("OK  _install_solver defers a second named elliptic field (NotImplementedError)")
+        sim2._install_solver("temprature", pops.fields.catalog.GeometricMG(),
+                             declared_fields=frozenset({"temperature"}))
+        raise AssertionError("MISMATCH: an undeclared field name should raise ValueError")
+    except ValueError as exc:
+        assert "temprature" in str(exc) and "temperature" in str(exc)
+        print("OK  _install_solver rejects an UNDECLARED field name, naming the declared set")
 
 
 def test_riemann_capability_verbatim():
@@ -360,7 +370,8 @@ def test_install_routes_runtime_param_kokkos():
 
 def test_install_cadence_routing():
     """install(cadence=CompiledTime(...)) absorbs the compiled-program macro-step cadence: it routes
-    to set_program_cadence(substeps, stride). A bad type or a non-default cfl is rejected up front.
+    to set_program_cadence(substeps, stride). A bad type is rejected up front; a NUMERIC cfl is pinned
+    on the System (C7) so a bare sim.run(t_end) defaults to it (not silently ignored).
     Host-testable -- set_program_cadence is a pure System-level setter (no installed .so needed)."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     if not hasattr(sim._s, "set_program_cadence"):
@@ -374,13 +385,12 @@ def test_install_cadence_routing():
         raise AssertionError("install(cadence=) accepted a non-CompiledTime")
     except TypeError as exc:
         assert "CompiledTime" in str(exc), exc
-    # A non-default cfl is deferred (fails loud, not silently ignored).
-    try:
-        sim._install_cadence(adctime.CompiledTime(substeps=1, stride=1, cfl=0.4))
-        raise AssertionError("install(cadence=) accepted a non-default cfl")
-    except NotImplementedError as exc:
-        assert "cfl" in str(exc), exc
-    print("OK  install(cadence=) routes CompiledTime -> set_program_cadence; rejects bad type / cfl")
+    # C7: a NUMERIC cfl is accepted and PINNED on the System, so run() with no explicit cfl uses it.
+    assert sim._program_cadence_cfl is None, "no cadence cfl pinned yet"
+    sim._install_cadence(adctime.CompiledTime(substeps=1, stride=1, cfl=0.5))
+    assert sim._program_cadence_cfl == 0.5, \
+        "a numeric cadence cfl is pinned on the System (got %r)" % sim._program_cadence_cfl
+    print("OK  install(cadence=) routes CompiledTime -> set_program_cadence; pins a numeric cfl (C7)")
 
 
 def test_install_native_cadence_rejected():

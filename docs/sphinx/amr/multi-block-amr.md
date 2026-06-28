@@ -1,9 +1,10 @@
 # Multi-block AMR
 
-The documented public path (`pops.Case` -> `pops.compile` -> `pops.bind`) lowers a single block
-today; the multi-block assembly through `pops.compile` is deferred. Several species on one shared
-AMR hierarchy run through the low-level native `AmrSystem` runtime shown below, which stays
-available for that case and the tests.
+The documented public path (`pops.Case` -> `pops.compile` -> `pops.bind`) lowers a multi-block
+assembly on a Uniform layout, but on an **AMR** layout it lowers a single block today; multi-block
+through `pops.compile` on AMR is deferred. Several species on one shared AMR hierarchy run through
+the low-level native `AmrSystem` runtime shown below, which stays available for that case and the
+tests.
 
 `AmrSystem` is a multi-block runtime: you call the low-level `add_block` (native bricks) or
 `add_equation` (compiled DSL model) once per species, the refined counterpart of the same `System`

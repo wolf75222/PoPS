@@ -116,18 +116,25 @@ class CompiledTime:
       - `stride` here is GLOBAL (a compiled program is one whole-system closure), so it equals native
         per-block stride only for a single-block system (or all blocks sharing the stride).
 
-    A non-default `cfl` is still deferred (the Program receives a bare `dt`; pass an explicit `dt` to
-    `sim.step(dt)`) -- it fails loud rather than being silently ignored."""
+    A NUMERIC `cfl` (e.g. `cfl=0.5`) is wired: it is applied at RUNTIME by `sim.run(cfl=...)`, whose
+    `cfl` defaults to the installed cadence's `cfl` when the caller passes none, so a bare
+    `sim.run(t_end)` after `bind(..., cadence=CompiledTime(cfl=0.5))` advances at `cfl=0.5` (the
+    per-block CFL `dt` is computed in adc_cpp and drives the installed Program). A self-computed `cfl`
+    SUB-PROGRAM (`cfl="program"`) is still deferred (the Program would export its own dt bound); it
+    fails loud rather than being silently ignored."""
 
     def __init__(self, substeps=1, stride=1, cfl="default"):
         if not isinstance(substeps, int) or substeps < 1:
             raise ValueError("CompiledTime: substeps must be a positive int (got %r)" % (substeps,))
         if not isinstance(stride, int) or stride < 1:
             raise ValueError("CompiledTime: stride must be a positive int (got %r)" % (stride,))
-        if cfl != "default":
+        # A numeric cfl is wired (applied at runtime via sim.run(cfl=)); only a non-numeric,
+        # non-"default" cfl (e.g. cfl="program", a self-computed dt sub-program) is still deferred.
+        if cfl != "default" and not isinstance(cfl, (int, float)):
             raise NotImplementedError(
-                "CompiledTime: cfl != 'default' is deferred (ADC-401 Phase 2c); pass an explicit dt "
-                "to sim.step(dt)")
+                "CompiledTime: a self-computed cfl sub-program (cfl=%r) is deferred (ADC-401 Phase "
+                "2c); pass a numeric cfl=<value> (applied at runtime by sim.run(cfl=)) or an explicit "
+                "dt to sim.step(dt)" % (cfl,))
         self.substeps = substeps
         self.stride = stride
         self.cfl = cfl

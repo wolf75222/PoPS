@@ -71,7 +71,7 @@ chk(raises(ValueError, lambda: pops.CompiledTime(substeps=-1)), "substeps<0 reje
 chk(raises(ValueError, lambda: pops.CompiledTime(stride=0)), "stride=0 rejected (ValueError)")
 chk(raises(ValueError, lambda: pops.CompiledTime(stride=-2)), "stride<0 rejected (ValueError)")
 chk(raises(NotImplementedError, lambda: pops.CompiledTime(cfl="program")),
-    "cfl != 'default' still deferred (NotImplementedError)")
+    "cfl='program' self-computed sub-program still deferred (numeric cfl is now wired)")
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----
 print("== (B) compiled cadence vs native (parity) ==")
