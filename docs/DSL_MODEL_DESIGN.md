@@ -68,12 +68,16 @@ GAP (still target / deferred):
 - **`AmrSystem.potential()`**: binding SHIPPED (python/bindings/core/bindings.cpp:272, `#135`). Acquired.
 - **Wall-transport Phase 1**: EXPERIMENTAL, closed WITHOUT merge (#109). It masks the external
   CONDUCTOR (wrong boundary); the scientific lock remains the RING BOUNDARY. DO NOT read as shipped.
-- **Runtime params**: `m.param(kind="runtime")` is SHIPPED on the "aot" backend (P7-b): the param
-  emits `params.get(<index>)` (member `pops::RuntimeParams` of the brick, include/pops/runtime/
-  runtime_params.hpp), the AOT ABI carries a block of values (symbols `_p`), and
-  `System.set_block_params(name, values)` changes the value at RUNTIME without recompiling. The
-  "prototype"/"production" backends compile a runtime param as its DECLARATION value (frozen: the model
-  is default-constructed there, no injection). `const` params stay INLINED (bit-identical).
+- **Runtime params**: `m.param(kind="runtime")` is SHIPPED on TWO paths. (1) The "aot" block path
+  (P7-b): the param emits `params.get(<index>)` (member `pops::RuntimeParams` of the brick,
+  include/pops/runtime/runtime_params.hpp), the AOT ABI carries a block of values (symbols `_p`),
+  and `System.set_block_params(name, values)` changes the value at RUNTIME without recompiling. (2) A
+  compiled time Program (ADC-510): the lowered source / linear-source kernels read
+  `ctx.program_params(block).get(<index>)` from a per-block `pops::RuntimeParams` owned by the
+  `System` (`set_program_params` / `program_params`, seeded from the `.so` `pops_program_param_*`
+  metadata), and `pops.bind(params=...)` sets the value WITHOUT recompiling. A runtime param on the
+  native-"production" block path (no Program) still compiles to its DECLARATION value (frozen: the
+  model is default-constructed there, no injection). `const` params stay INLINED (bit-identical).
 - **`AmrSystem` single- AND multi-block**: multi-block is SHIPPED (N co-located blocks on ONE
   shared AMR hierarchy via the `AmrRuntime` engine, system Poisson with SUMMED right-hand side, regrid
   of the union of tags, multi-block production DSL; cf. `AmrSystem` `__init__.py` and `amr_system.cpp`
@@ -203,7 +207,7 @@ Mapping of target method -> backing `HyperbolicModel`:
 | `m.eigenvalues(x=, y=)` | `set_eigenvalues(x, y)` `:312` | |
 | `m.elliptic_rhs(e)` | `set_elliptic_rhs(e)` `:314` | optional (Poisson coupling) |
 | `m.gamma(value)` or `m.set_gamma(value)` | `set_gamma(gamma)` `:316` | EOS, carried by `POPS_EXPORT_BLOCK_GAMMA` |
-| `m.param(name, value)` | `Param` + `Model.param` (#89) | SHIPPED in `const` mode (NAMED constant inlined at codegen, stored in `m.params`); `kind="runtime"` raises `NotImplementedError` (section 2b, GAP). Case `name=="gamma"` also calls `set_gamma` |
+| `m.param(name, value)` | `Param` + `Model.param` (#89) | SHIPPED in `const` mode (NAMED constant inlined at codegen, stored in `m.params`); `kind="runtime"` SHIPPED -- on the `aot` block path (P7-b, `set_block_params`) AND in a compiled time Program (ADC-510, lowered to `ctx.program_params(block).get(index)`, set via `pops.bind(params=...)`) (section 2b). Case `name=="gamma"` also calls `set_gamma` |
 | `m.check()` | `check()` `:382` | checks dependencies |
 | `m.compile(backend, target)` | `Model.compile(...)` (#89, delegates to `HyperbolicModel.compile`) | SHIPPED: returns a `CompiledModel` (section 3). `target="system"` AND `target="amr_system"` wired (#92). Ergonomics #103: `so_path`/`include` have defaults, the `.so` is cached by `model_hash`. NO `device` argument: capabilities (GPU/MPI/AMR) are verified AT ATTACH/EXECUTION (`add_equation`/`run`), not frozen as a compilation flag (this would avoid a false guarantee if the module is not built with Kokkos/CUDA). See sections 5 and 7 |
 
@@ -217,7 +221,10 @@ single name per intent.)
 
 State of these target points (initially GAPs; see 0bis):
 - `m.param(name, value)`: SHIPPED in `const` mode (#89, `Param` class + `Model.param`,
-  `dsl.py`). `runtime` mode remains GAP (section 2b, `NotImplementedError`).
+  `dsl.py`). `runtime` mode SHIPPED (section 2b): the `aot` block path injects values via
+  `set_block_params` (P7-b), and a compiled time Program lowers the param to
+  `ctx.program_params(block).get(index)` (ADC-510), the value supplied by `pops.bind(params=...)`
+  (routed to `System.set_program_params`) WITHOUT recompiling the `.so`.
 - `m.compile(target=)`: SHIPPED (#89). `Model.compile` takes `backend`, `target`, `name`, `cxx`,
   `std`, `require_metadata`. `target="system"` AND `target="amr_system"` wired (#92). Ergonomics
   #103: `so_path`/`include` have defaults, cache by `model_hash`. NO `device=` (point 7):
@@ -229,9 +236,11 @@ State of these target points (initially GAPs; see 0bis):
 
 ## 2. `m.param(name, value)`: two modes
 
-> STATUS. Mode (a) SHIPPED (#89, `Param` class, `dsl.py`). Mode (b) GAP (raises
-> `NotImplementedError`; ABI/codegen change, Phase E). The reasoning below
-> documents why (b) is not deliverable without an engine change.
+> STATUS. Mode (a) SHIPPED (#89, `Param` class, `dsl.py`). Mode (b) SHIPPED: the engine change
+> landed -- the `aot` block path carries a `pops::RuntimeParams` block read via `params.get(index)`
+> (P7-b, `set_block_params`), and a compiled time Program lowers the param to
+> `ctx.program_params(block).get(index)` (ADC-510), the value set via `pops.bind(params=...)`
+> WITHOUT recompiling. The reasoning below documents the ABI/codegen change that delivered (b).
 
 ### Mode (a): constant frozen at compilation (FEASIBLE today)
 
@@ -258,9 +267,15 @@ SPECIAL CASE already wired: `gamma` has a dedicated channel outside the formula 
 therefore, besides inlining it in the formulas, call `set_gamma` so that the
 ABI metadata is coherent (otherwise the `System` falls back to 1.4, `system.cpp:629`/`:844`).
 
-### Mode (b): runtime parameter (modifiable WITHOUT recompiling) -> LATER PHASE
+### Mode (b): runtime parameter (modifiable WITHOUT recompiling) -> SHIPPED
 
-UNFEASIBLE with the current codegen without an engine change. Anchored justification:
+> SHIPPED (route 2 below, the ABI/codegen extension). Two paths carry a runtime param today: the
+> `aot` block ABI (P7-b) reads it via `params.get(index)` and `set_block_params` changes it, and a
+> compiled time Program (ADC-510) lowers the param to `ctx.program_params(block).get(index)` backed
+> by a per-block `pops::RuntimeParams` owned by the `System` (`set_program_params` / `program_params`,
+> seeded from the `.so` `pops_program_param_*` metadata), set via `pops.bind(params=...)`. The
+> anchored justification below records why this was UNFEASIBLE with the ORIGINAL codegen (the engine
+> change that delivered it is route 2).
 - The codegen has NO concept of uniform/member. The generated bricks read
   only the conservative variables (`U[i]`, `cons_locals` `:468`), the
   derived primitives (`prim_locals` `:471`), and the `Aux` fields (`a.<name>`,
@@ -284,11 +299,13 @@ Two possible routes for a REAL runtime parameter, both PHASE 2:
    `compiled_block_abi.hpp` + reading `system.cpp:add_compiled_block`) AND a codegen change
    (struct with members + constructor). To mark explicitly PHASE 2.
 
-VERDICT. `m.param(name, value)` is deliverable in mode (a) (frozen constant) immediately
-and without risk. Mode (b) (runtime, without recompilation) requires an engine change
-(ABI + codegen) and remains a later phase; `m.param` must therefore either support
-only (a) at the start, or accept a `kind="const"|"runtime"` where `kind="runtime"` RAISES
-explicitly `NotImplementedError` (see taxonomy section 4).
+VERDICT. `m.param(name, value)` ships in BOTH modes. Mode (a) (frozen constant) was deliverable
+immediately and without risk. Mode (b) (runtime, without recompilation) took the engine change
+(ABI + codegen) of route 2 and is now SHIPPED: `m.param(kind="runtime")` injects via
+`set_block_params` on the `aot` block path and, in a compiled time Program, lowers to
+`ctx.program_params(block).get(index)` set by `pops.bind(params=...)` (ADC-510), the values seeded
+from the `.so` `pops_program_param_*` metadata. `kind="runtime"` no longer raises (see taxonomy
+section 4).
 
 
 ## 3. Python `CompiledModel` object
@@ -381,7 +398,7 @@ messages of `dsl.py` (e.g. `:296`, `:822`, `:845`).
 | required role missing | `compile(require_metadata=True)` without role or canonical name | "model '<name>' does not provide physical roles (...); the .so would fall back to the fallback (roles 'custom')" | ALREADY implemented `dsl.py:837-847` |
 | required gamma missing | idem, `gamma is None` | "(...) does not provide gamma (set_gamma(...)) (...)" | ALREADY implemented `dsl.py:842` |
 | undefined param | a formula references a `param` never set | "param '<name>' referenced but not defined (m.param('<name>', value))" | extends `check()` `:382` (which already raises on undeclared variable, `:397`) |
-| param runtime mode | `m.param(name, value, kind="runtime")` | "runtime param not supported (ABI/codegen change required, later phase); use a constant param or an aux field" | NEW, `NotImplementedError` (section 2 mode b) |
+| param runtime mode | `m.param(name, value, kind="runtime")` | SHIPPED -- no longer rejected: the `aot` block path injects via `set_block_params` and a compiled time Program lowers to `ctx.program_params(block).get(index)` set by `pops.bind(params=...)` (ADC-510, section 2 mode b) | wired `set_block_params` / `set_program_params` |
 | unknown backend | `compile(backend=x)` outside `_BACKENDS` | "compile: backend <x> unknown (expected ['aot','production','prototype'])" | ALREADY `dsl.py:821-823` |
 | flux incompatible variables | `spatial.riemann in {hllc,roe}` without declared primitive `p` | "riemann 'hllc'/'roe' requires a pressure: declare m.primitive('p', ...)" | physical ANCHOR: the brick only emits `pressure`/`wave_speeds` if `'p' in prim_defs` (`dsl.py:558`); `make_block` requires `m.pressure`/`m.wave_speeds` for HLLC/Roe (cf. `amr_dsl_block.hpp:135`) |
 | GPU/MPI/AMR incompatible backend | `add_equation` with `device="gpu"`/MPI/AMR on a non-capable backend | "backend '<b>' is not device-clean / multi-rank: use backend='production' (native path)" | section 5; `compiled_block_abi.hpp:24-26` ("without AMR/MPI"), `dynamic_model.hpp:18-21` (outside the GPU hot path) |
@@ -478,8 +495,9 @@ the rest is renaming/remapping of arguments. Remaining sugar GAP: `pops.Dirichle
 > Global STATUS. Phase A SHIPPED (#89/#90). Phase B SHIPPED (#85 `System`, #92 `AmrSystem`).
 > Phase C (Python device/MPI validation) SHIPPED (#97/#99/#93). Phase D (`AmrSystem` in production)
 > SHIPPED (#92/#105), single- AND multi-block, but BOUNDED (explicit/facade limits, see 0bis). Phase E
-> (runtime params) is SHIPPED on the `aot` backend (P7-b; `kind="runtime"` + `set_block_params`). The
-> sequencing below is kept for traceability; the per-phase tags indicate the real state.
+> (runtime params) is SHIPPED -- on the `aot` block path (P7-b; `kind="runtime"` + `set_block_params`)
+> and in a compiled time Program (ADC-510; `ctx.program_params(block).get(index)` + `pops.bind(params=...)`).
+> The sequencing below is kept for traceability; the per-phase tags indicate the real state.
 
 Grouped by dependency. Each step notes its file WRITE-SET.
 
@@ -543,13 +561,18 @@ Delivered. It is dispatch wiring (no new numerics).
     primitive `p`, or enable_hllc/enable_roe). `AmrSystem.potential()`: binding SHIPPED (bindings.cpp:272,
     `#135`). WRITE-SET: `python/pops/__init__.py` (`AmrSystem` facade).
 
-### Phase E: `m.param` runtime -- GAP (phase 2, engine change)
+### Phase E: `m.param` runtime -- SHIPPED (engine change landed)
 
-11. Mode (b) (section 2b): ABI with parameters + codegen with members, OR dedicated aux channel.
-    HEAVY WRITE-SET: `include/pops/runtime/builders/compiled/compiled_block_abi.hpp`,
-    `python/bindings/system/base/system.cpp` (`add_compiled_block`), `python/pops/dsl.py` (codegen). Outside the
-    critical path of the Hoffart reproduction (`PAPER_ROADMAP.md:147-150`, basket 2
-    transverse, optional).
+11. Mode (b) (section 2b) SHIPPED via the ABI-with-parameters route (codegen carrying a
+    `pops::RuntimeParams` block, not the dedicated aux channel). Two paths: the `aot` block ABI
+    (`compiled_block_abi.hpp`, `add_compiled_block`, `set_block_params`, P7-b), and a compiled time
+    Program (ADC-510) whose lowered source / linear-source kernels read
+    `ctx.program_params(block).get(index)` from a per-block `pops::RuntimeParams` owned by the
+    `System` (`set_program_params` / `program_params`, seeded from the `.so`
+    `pops_program_param_*` metadata), the values set via `pops.bind(params=...)` WITHOUT recompiling.
+    WRITE-SET delivered: `python/pops/codegen/program_emit_kernels.py` /
+    `program_emit_params.py`, `include/pops/runtime/system.hpp`, `python/pops/dsl.py` (the `aot`
+    codegen).
 
 ### Phase F: HYBRID composition native + DSL within ONE model -- prototype
 
@@ -598,9 +621,13 @@ Delivered. It is dispatch wiring (no new numerics).
   production DSL, regrid of the union of tags), but BOUNDED: explicit, IMEX local source OK (#132) but
   global Schur on AMR remains to be done, HLLC/Roe/primitive rejected on the facade (C++ engine OK).
   `AmrSystem.potential()`: SHIPPED (#135).
-- E (11): SHIPPED (P7-b) on the `aot` backend: `m.param(kind="runtime")` emits `params.get(<index>)`
-  (member `pops::RuntimeParams`) and `System.set_block_params` changes the value at runtime WITHOUT
-  recompiling. The `prototype`/`production` backends freeze a runtime param to its declaration value.
+- E (11): SHIPPED. On the `aot` block path (P7-b) `m.param(kind="runtime")` emits
+  `params.get(<index>)` (member `pops::RuntimeParams`) and `System.set_block_params` changes the
+  value at runtime WITHOUT recompiling; in a compiled time Program (ADC-510) the param lowers to
+  `ctx.program_params(block).get(<index>)` (per-block `pops::RuntimeParams` owned by the `System`,
+  seeded from the `.so` `pops_program_param_*` metadata) and `pops.bind(params=...)` sets it WITHOUT
+  recompiling. A runtime param on the native-`production` block path (no Program) still freezes to
+  its declaration value.
 - F (12): PROTOTYPE (branch, not merged). HYBRID composition native + DSL within a model
   (`pops.CompositeModel`); backends aot/production/jit, target system/amr_system, aux B_z/T_e, inter-species
   coupling by role, MPI parity np=1/2/4. Remaining: GPU validation. NO C++ change (option B).
