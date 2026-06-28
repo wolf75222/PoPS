@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Spec 5 sec.10: strict EARLY install validation + AmrSystem._install_compiled parity (ADC-479 / ADC-463).
+"""Spec 5 sec.10: strict EARLY install validation + public install parity (ADC-479 / ADC-463).
 
-``System._install_compiled`` (and now ``AmrSystem._install_compiled``) reads the compiled artifact's DECLARED bind
+``System.install`` / ``AmrSystem.install`` are the explicit-runtime public wrappers over the same
+``_install_compiled`` seam used by ``pops.bind``. The seam reads the compiled artifact's DECLARED bind
 inputs -- ``compiled.arguments()`` (ADC-509) -- and rejects, BEFORE any native call, an install that
 does not supply a REQUIRED argument (instance / runtime param / aux / solver), with one clear
 actionable error naming exactly what is missing and how to supply it. The check is INERT: it reads
@@ -22,6 +23,8 @@ The tests build a SYNTHETIC ``CompiledProblem`` -- a real in-memory ``pops.time.
     SAME validation, then REACHES ``install_program`` on the AMR hierarchy (epic ADC-511 / ADC-508) and
     routes the compiled ``params=`` / ``cadence=`` to ``set_program_params`` / ``set_program_cadence``;
     a NATIVE AMR install still rejects un-wired ``params=`` / ``cadence=``.
+  - ``System.install`` and ``AmrSystem.install`` mirror the shared seam, so explicit-runtime code uses
+    the same validated path as ``pops.bind``.
 
 The Kokkos-gated end-to-end (a real ``compile_problem`` .so whose native install actually runs) is
 covered by ``test_unified_install.py`` / ``test_install_requirement_validation.py``; here we test the
@@ -220,6 +223,17 @@ def test_native_install_skips_validation():
     chk(record["native"] is False, "compiled=None skips install_program (no compiled Program)")
 
 
+def test_install_solver_accepts_rich_elliptic_descriptor():
+    """The unified installer accepts the rich typed pops.solvers.GeometricMG descriptor, not only the
+    older flat fields catalog descriptor."""
+    print("== install solver: rich typed GeometricMG descriptor lowers to the native token ==")
+    sim = pops.System(n=N, L=1.0, periodic=True)
+    seen = {}
+    sim.set_poisson = lambda **kwargs: seen.update(kwargs)
+    sim._install_solver("phi", pops.solvers.GeometricMG(), frozenset())
+    chk(seen["solver"] == "geometric_mg", "rich GeometricMG lowers to set_poisson solver token")
+
+
 def test_validate_helper_is_inert_on_bad_handle():
     """validate_install_arguments never breaks a valid install: a handle without arguments(), or one
     whose arguments() raises, is skipped (conservative -- a missing check is better than a false
@@ -245,18 +259,48 @@ def test_validate_helper_is_inert_on_bad_handle():
 
 
 # ---------------------------------------------------------------------------
-# AmrSystem._install_compiled: signature parity + the SAME validation.
+# public install wrappers: signature parity + the SAME validation.
 # ---------------------------------------------------------------------------
 
 def test_amr_install_signature_parity():
-    """AmrSystem._install_compiled mirrors System._install_compiled's signature exactly. The seam
-    is internal (Spec 5 sec.11): authors call pops.bind, not the install method directly."""
-    print("== AmrSystem._install_compiled signature parity with System._install_compiled ==")
-    chk(not hasattr(pops.System, "install"), "System.install must be gone (now _install_compiled)")
-    chk(not hasattr(pops.AmrSystem, "install"), "AmrSystem.install must be gone (now _install_compiled)")
+    """The explicit-runtime public install wrappers mirror the shared low-level seam exactly."""
+    print("== install() signature parity with _install_compiled ==")
+    chk(hasattr(pops.System, "install"), "System.install is the public explicit-runtime entry point")
+    chk(hasattr(pops.AmrSystem, "install"), "AmrSystem.install is the public explicit-runtime entry point")
     sys_params = list(inspect.signature(pops.System._install_compiled).parameters)
     amr_params = list(inspect.signature(pops.AmrSystem._install_compiled).parameters)
+    sys_public = list(inspect.signature(pops.System.install).parameters)
+    amr_public = list(inspect.signature(pops.AmrSystem.install).parameters)
     chk(sys_params == amr_params, "same parameter list (got %r vs %r)" % (amr_params, sys_params))
+    chk(sys_public == sys_params, "System.install mirrors _install_compiled")
+    chk(amr_public == amr_params, "AmrSystem.install mirrors _install_compiled")
+
+
+def test_public_system_install_delegates_to_unified_seam():
+    """System.install is a thin public wrapper: it forwards every argument to _install_compiled."""
+    print("== System.install delegates to the unified seam ==")
+    sim = pops.System(n=N, L=1.0, periodic=True)
+    seen = {}
+
+    def fake(compiled=None, *, instances=None, params=None, aux=None,
+             solvers=None, cadence=None, outputs=None):
+        seen.update(compiled=compiled, instances=instances, params=params, aux=aux,
+                    solvers=solvers, cadence=cadence, outputs=outputs)
+        return "installed"
+
+    sim._install_compiled = fake
+    handle = object()
+    result = sim.install(handle, instances={"plasma": {}}, params={"cs2": 0.5},
+                         aux={"B_z": 1.0}, solvers={"phi": object()},
+                         cadence="cadence", outputs=["out"])
+    chk(result == "installed", "install returns the seam result")
+    chk(seen["compiled"] is handle, "compiled handle forwarded")
+    chk(seen["instances"] == {"plasma": {}}, "instances forwarded")
+    chk(seen["params"] == {"cs2": 0.5}, "params forwarded")
+    chk(seen["aux"] == {"B_z": 1.0}, "aux forwarded")
+    chk("phi" in seen["solvers"], "solvers forwarded")
+    chk(seen["cadence"] == "cadence" and seen["outputs"] == ["out"],
+        "cadence and outputs forwarded")
 
 
 def test_amr_install_runs_the_same_validation():

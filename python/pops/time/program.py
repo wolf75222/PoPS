@@ -35,6 +35,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         self._values = []
         self._next_id = 0
         self._commits = {}      # block -> State value
+        self._commit_fields = {}  # block -> optional FieldContext value associated with the commit
         self._recording = []    # stack of sub-block lists (a control-flow body); see _new / while_
         self._histories = {}    # name -> max declared lag (multistep histories; ADC-406a)
         # OPTIONAL dt bound (spec s18 / ADC-417): a recorded scalar sub-program (cfl -> Scalar) the

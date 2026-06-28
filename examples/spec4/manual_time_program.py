@@ -7,9 +7,9 @@ Authoring path, end to end with the public Spec 4 surface:
        (state, primitives, flux with wave speeds, a Poisson field solve, a source,
        and a local-linear Lorentz operator), and lowers to the operator-first
        ``pops.model.Module``.
-    2. ``pops.time.Program`` writes a one-step scheme BY HAND against the kernel
-       primitives (no library macro): solve the fields, evaluate the explicit rate,
-       and take a backward-Euler-style local-linear solve for the implicit part.
+    2. ``pops.time.Program`` writes a one-step scheme BY HAND against typed operator
+       handles (no library macro): ``fields_from_state``, ``explicit_rate`` and
+       ``implicit_operator``. The Program does not spell flux/source/Poisson terms.
     3. ``pops.compile_problem`` lowers the Program to a ``problem.so``.
 
 Steps 1-2 are pure Python and always run. Step 3 needs a C++ compiler and a visible
@@ -23,7 +23,9 @@ Run::
 import sys
 
 from pops.math import ddt, div, grad, laplacian, sqrt
+from pops.model import OperatorHandle
 from pops.physics import Model
+from pops.solvers.elliptic import GeometricMG
 from pops.time import Program
 
 
@@ -56,7 +58,7 @@ def build_model():
         "fields_from_state",
         equation=(-laplacian(phi) == rho),
         outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-        solver="geometric_mg",
+        solver=GeometricMG(),
     )
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     electric = m.source("electric", on=state, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
@@ -77,20 +79,28 @@ def build_model():
 def manual_program(module):
     """U^{n+1} solves (I - dt C(B)) U^{n+1} = U^n + dt R(U^n), written by hand.
 
-    Only kernel primitives are used (solve_fields / rhs / linear_source / linear_combine /
-    solve_local_linear / commit), so this is the same scheme a library macro would emit,
-    spelled out explicitly.
+    Only typed operator calls are visible at the Program level. ``fields_from_state``
+    owns the field solve, ``explicit_rate`` owns transport + explicit sources, and
+    ``implicit_operator`` owns the local linear Lorentz operator.
     """
     program = Program("manual_backward_euler_lorentz")
     program.bind_operators(module)
     dt = program.dt
-    u_n = program.state("plasma")
-    fields = program.solve_fields("fields_from_state", u_n)
-    rate = program.rhs(state=u_n, fields=fields, flux=True, sources=["electric"])
-    operator = program.I - dt * program.linear_source("implicit_operator")
-    rhs = program.linear_combine("U_rhs", u_n + dt * rate)
-    u_np1 = program.solve_local_linear(name="U_np1", operator=operator, rhs=rhs)
-    program.commit("plasma", u_np1)
+    U = program.state("U", block="plasma")
+
+    fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
+    explicit_rate = OperatorHandle("explicit_rate", kind="local_rate")
+    implicit_operator = OperatorHandle("implicit_operator", kind="local_linear_operator")
+
+    fields_n = program.call(fields_from_state, U.n, name="fields_n")
+    rate_n = program.call(explicit_rate, U.n, fields_n, name="R_n")
+    linear_n = program.call(implicit_operator, fields_n, name="L_n")
+    rhs = program.define("U_rhs", U.n + dt * rate_n)
+    u_np1 = program.solve_local_linear(name="U_np1", operator=program.I - dt * linear_n,
+                                       rhs=rhs, fields=fields_n)
+    program.define(U.next, u_np1)
+    fields_np1 = program.call(fields_from_state, u_np1, name="fields_np1")
+    program.commit(U.next, fields=fields_np1)
     return program
 
 

@@ -49,6 +49,9 @@ class _ProgramInspect(_ProgramConstants):
         for state in self._commits.values():
             if state.id in order:
                 last_use[state.id] = max(last_use.get(state.id, order[state.id]), end + 1)
+        for fields in getattr(self, "_commit_fields", {}).values():
+            if fields.id in order:
+                last_use[fields.id] = max(last_use.get(fields.id, order[fields.id]), end + 1)
         out = []
         for v in self._values:
             if v.op not in self._SCRATCH_OPS:
@@ -203,4 +206,3 @@ class _ProgramInspect(_ProgramConstants):
         else:
             lines.append("  GPU detectors  : none tripped (host-side heuristic)")
         return "\n".join(lines)
-

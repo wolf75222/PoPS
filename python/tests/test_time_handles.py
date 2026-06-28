@@ -14,9 +14,12 @@ Run with python3 (PYTHONPATH = built pops package); falls back to pytest from th
 """
 import sys
 
-import pytest
-
 from pops import time as adctime
+
+try:
+    import pytest
+except Exception:  # noqa: BLE001 -- standalone smoke run in the build env
+    pytest = None
 
 
 def _expect_value_error(fn, needle):
@@ -127,6 +130,31 @@ def test_ssprk3_handles_ir_byte_identical_to_legacy():
         "  legacy : %s\n  handles: %s" % (legacy._ir_hash(), handles._ir_hash()))
 
 
+def test_commit_next_can_keep_final_fields_live():
+    P = adctime.Program("commit_fields")
+    U = P.state("U", block="plasma")
+    R = P._rhs_legacy(state=U.n, fields=P.solve_fields("fields_n", U.n), sources=["default"])
+    P.define(U.next, U.n + P.dt * R)
+    fields_np1 = P.solve_fields("fields_np1", U.next)
+    P.commit(U.next, fields=fields_np1)
+
+    assert P._commit_fields["plasma"] is fields_np1
+    assert ("plasma", fields_np1.id) in P._serialize()["commit_fields"]
+    assert fields_np1.id in P._live_value_ids(), "final field solve must stay live through commit"
+    assert P.validate() is True
+
+    optimized = P.eliminate_dead_nodes()
+    assert optimized._commit_fields["plasma"].name == "fields_np1"
+    assert optimized.validate() is True
+
+
+def test_commit_fields_rejects_non_field_context():
+    P = adctime.Program("bad_commit_fields")
+    U = P.state("U", block="plasma")
+    P.define(U.next, U.n)
+    _expect_value_error(lambda: P.commit(U.next, fields=U.n), "fields must be a FieldContext")
+
+
 def test_handles_carry_no_ndarray():
     P = adctime.Program("nodata")
     U = P.state("U", block="plasma")
@@ -152,9 +180,14 @@ def main():
     test_prev_without_keep_history_raises()
     test_keep_history_then_prev_reads_history()
     test_ssprk3_handles_ir_byte_identical_to_legacy()
+    test_commit_next_can_keep_final_fields_live()
+    test_commit_fields_rejects_non_field_context()
     test_handles_carry_no_ndarray()
     print("test_time_handles : tout est vert")
 
 
 if __name__ == "__main__":
+    if pytest is None:
+        main()
+        sys.exit(0)
     sys.exit(pytest.main([__file__, "-q"]))

@@ -108,6 +108,7 @@ class _ProgramPasses(_ProgramConstants):
             for w in self._subblock_value_refs(v):
                 by_id.setdefault(w.id, w)
         roots = [s.id for s in self._commits.values()]
+        roots.extend(f.id for f in getattr(self, "_commit_fields", {}).values())
         for v in self._values:
             if v.op not in self._REMOVABLE_OPS:
                 roots.append(v.id)
@@ -255,6 +256,9 @@ class _ProgramPasses(_ProgramConstants):
             clone(v)
         out._values = [idmap[v] for v in kept]
         out._commits = {b: idmap[rep(s)] for b, s in self._commits.items()}
+        out._commit_fields = {
+            b: idmap[rep(f)] for b, f in getattr(self, "_commit_fields", {}).items()
+        }
         if self._dt_bound is not None:
             sub, result = self._dt_bound
             cloned_sub = [clone(w) for w in sub]
@@ -434,6 +438,14 @@ class _ProgramPasses(_ProgramConstants):
                 # enclosing value (which the per-cell kernel cannot evaluate) fails loud here, not as a
                 # codegen KeyError.
                 self._validate_block(v.attrs["residual_block"], set())
+        for block, state in self._commits.items():
+            if state.id not in seen:
+                raise ValueError("commit for block '%s' uses undefined state '%s'"
+                                 % (block, state.name))
+        for block, fields in getattr(self, "_commit_fields", {}).items():
+            if fields.id not in seen:
+                raise ValueError("commit for block '%s' uses undefined fields '%s'"
+                                 % (block, fields.name))
         return True
 
     def _validate_block(self, block, outer_seen):
@@ -452,6 +464,9 @@ class _ProgramPasses(_ProgramConstants):
     def _serialize(self):
         nodes = [self._serialize_node(v) for v in self._values]
         commits = sorted((b, s.id) for b, s in self._commits.items())
+        commit_fields = sorted(
+            (b, f.id) for b, f in getattr(self, "_commit_fields", {}).items()
+        )
         # NAME-based block binding (Spec 3 criterion 23, ADC-457): the block names in P.state
         # declaration order are part of the IR identity -- the .so exports them (pops_program_block_name)
         # and install_program binds System blocks to them BY NAME. Reordering P.state changes this list,
@@ -460,6 +475,8 @@ class _ProgramPasses(_ProgramConstants):
         block_order = sorted(_order, key=_order.get)
         out = {"name": self.name, "version": 1, "nodes": nodes, "commits": commits,
                "block_order": block_order}
+        if commit_fields:
+            out["commit_fields"] = commit_fields
         # The optional dt bound (spec s18 / ADC-417) is part of the IR identity: its presence and its
         # scalar sub-program feed the hash (the compiled-problem cache key) so two Programs differing
         # only by a dt bound get distinct .so caches.
