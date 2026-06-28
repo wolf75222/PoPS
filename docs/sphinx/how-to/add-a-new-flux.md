@@ -6,7 +6,7 @@ carried by the block (the spatial scheme), not by the model, so the same model r
 different fluxes. For the math behind these solvers, see
 [fluxes, sources and eigenvalues](../concepts/fluxes-sources-eigenvalues.md).
 
-This page assumes you already have a model and a `System`. If not, start with the
+This page assumes you already have a model and a `Case`. If not, start with the
 [tutorial](../getting-started/tutorial.md).
 
 ## Choose a flux
@@ -46,7 +46,6 @@ from pops.numerics.riemann import HLL
 from pops.numerics.reconstruction.limiters import Minmod
 
 case.block("gas", physics=m, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()))
-# (the same spatial= is the argument of the low-level add_block / add_equation runtime seam)
 ```
 
 For the full list of limiters, fluxes and reconstruction variables, see the
@@ -54,8 +53,8 @@ For the full list of limiters, fluxes and reconstruction variables, see the
 
 ## Declare a pressure for hllc or roe
 
-`hllc` and `roe` read a pressure. A native `FluidState(kind="compressible")` carries it. A DSL
-model declares the primitive `p` and provides eigenvalues, which makes the generated brick expose
+`HLLC()` and `Roe()` read a pressure. A compressible ready-made model carries it. A DSL
+model declares the primitive `p` and provides eigenvalues, which makes the generated route expose
 `pressure` and `wave_speeds`. A DSL model can also become a generic `hllc`/`roe` model by emitting
 the capability hooks: `m.enable_hllc()` / `m.enable_roe()` generate them from the declared roles
 (including some 3-variable, non-Euler systems), or provide `m.roe_dissipation()` for a user-supplied
@@ -64,16 +63,15 @@ eigenstructure. See `pops.capabilities()["riemann"]` for the exact gates and
 
 ## Check backend support
 
-The native `add_block` path supports every flux. On a compiled DSL model, the `prototype`
-backend accepts `rusanov` only and rejects the other fluxes with a `ValueError`; the `aot` and
-`production` backends accept all four. A wrong choice fails fast at plug time, never silently.
+The descriptor validates the route before execution. A wrong choice fails at compile/bind time,
+never silently.
 For the per-backend matrix, see the [backend matrix](../reference/backend-matrix.md).
 
 ## Where to go next
 
 To add a flux that no native brick provides, write it as a hyperbolic brick in the DSL and
-compile it: see [write a model with the DSL](../tutorials/write-a-model-with-dsl.md). To make `hllc`
-or `roe` work on a non-Euler model, supply the Riemann capability hooks (`HasHLLCStructure` or
+compile it: see [write a model with the DSL](../tutorials/write-a-model-with-dsl.md). To make `HLLC()`
+or `Roe()` work on a non-Euler model, supply the Riemann capability hooks (`HasHLLCStructure` or
 `HasRoeDissipation`) from the DSL with `m.enable_hllc()` / `m.enable_roe()` rather than treating the
-flux as Euler-only. To prototype a flux in host Python without recompiling, see the `PythonFlux`
-entry in the [native bricks reference](../reference/native-bricks.md).
+flux as Euler-only. Python host flux prototypes belong under experimental/debug routes, not the
+production public API.

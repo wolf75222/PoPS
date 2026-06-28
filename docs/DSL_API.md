@@ -1,175 +1,146 @@
-# DSL_API -- Short reference of the Python DSL (pops.dsl)
+# PoPS public DSL API
 
-USER reference document. For design, reasoning and history,
-see [docs/DSL_MODEL_DESIGN.md](DSL_MODEL_DESIGN.md).
+This page is the root-level summary of the public Python DSL. The detailed
+reference lives in the Sphinx docs:
 
----
+- `docs/sphinx/reference/public-api-contract.md`
+- `docs/sphinx/reference/python-api.md`
+- `docs/sphinx/reference/time-program.md`
+- `docs/sphinx/reference/spec5-packages.md`
 
-## 1. Writing a symbolic model
+## Contract
+
+PoPS is not a Python numerical solver. Python authors typed objects, validates
+their contracts, generates or selects compiled C++ routes, and binds them to the
+C++/Kokkos/MPI runtime.
+
+The public flow is:
 
 ```python
-import pops
-
-m = pops.physics.facade.Model("mon_modele")
-
-# Variables conservatives : conservative_vars(...) RENVOIE un tuple de Var a depacker
-# (roles physiques optionnels).
-rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                  roles=["Density", "MomentumX", "MomentumY"])
-
-# Variables primitives (kwargs : nom=expression symbolique)
-m.primitive_vars(rho=rho, ux=mx/rho, uy=my/rho)
-
-# Flux physique (declarateur symbolique ; m.eval_flux(...) = evaluateur numpy)
-m.flux(x=[mx, mx*mx/rho, mx*my/rho],
-       y=[my, mx*my/rho, my*my/rho])
-
-# Source (optionnel -- force du potentiel)
-# m.aux('grad_x') declare et renvoie le champ auxiliaire grad_x (Var).
-phi_x, phi_y = m.aux("grad_x"), m.aux("grad_y")
-m.source([-rho*phi_x, -rho*phi_y])  # exemple ExB / force
-
-# Second membre elliptique (optionnel -- couplage Poisson)
-m.elliptic_rhs(rho)
-
-# Parametre nomme (constante inlinee a la compilation)
-g = m.param("gamma", 1.4)
+case = pops.Case(layout=layout)
+compiled = pops.compile(case, backend=Production())
+sim = pops.bind(compiled, state=initial_state, params=params)
+sim.run(t_final=1.0, cfl=0.5)
 ```
 
----
+There must not be Python callbacks inside cell loops, face loops, Riemann
+solves, Krylov iterations, AMR reflux, halo exchange, or field solves.
 
-## 2. Compile
+## Names versus behavior
+
+Strings are stable user names:
+
+```python
+case.block("electrons", physics=model)
+T = Program("ssprk3")
+```
+
+Behavior is selected by typed objects:
 
 ```python
 from pops.codegen import Production
-# The DEFAULT of m.compile(...) is backend="auto": it picks "production" under toolchain parity
-# (module loadable + baked compiler + matching header signature) and falls back to "aot" otherwise.
-# Pass the backend as a typed descriptor -- Production() / AOT() / JIT() from pops.codegen -- to
-# force a path (Production() = native zero-copy, recommended in MPI/AMR). The legacy strings
-# "production" / "aot" / "prototype" are still accepted unchanged (the coercion is additive).
-compiled = m.compile(backend=Production(), target="system")
-# Pour AMR :
-compiled_amr = m.compile(backend=Production(), target="amr_system")
+from pops.mesh import CartesianMesh
+from pops.mesh.layouts import Uniform, AMR
+from pops.numerics.riemann import HLL
+from pops.numerics.reconstruction import MUSCL
+from pops.numerics.reconstruction.limiters import Minmod
+from pops.solvers.elliptic import GeometricMG
+
+layout = Uniform(CartesianMesh(n=256, L=1.0, periodic=True))
+spatial = pops.FiniteVolume(
+    riemann=HLL(),
+    reconstruction=MUSCL(limiter=Minmod()),
+)
+field_solver = GeometricMG(tolerance=1.0e-10)
+backend = Production()
 ```
 
-Available backends (`backend=` accepts a typed descriptor `Production()` / `AOT()` / `JIT()` or the
-equivalent legacy string ; the default `auto` picks `production` under toolchain parity, else `aot`) :
+Do not document public APIs that choose behavior with string tokens such as the
+old geometric-MG solver token, AMR target token, or production backend token.
+Those strings may still exist internally as native IDs, but descriptors own the
+public choice.
 
-| backend | CPU | MPI | AMR | GPU | Note |
-|---|---|---|---|---|---|
-| `production` | yes | yes (np=1/2/4) | via `AmrSystem` | GH200 (C++ side) | **recommended** in MPI/AMR ; native zero-copy ; selected by the `auto` default under toolchain parity. `_BACKEND_CAPS["production"]["gpu"]` is reported `False` on the Python side (the tested host module is not built with Kokkos/CUDA) |
-| `aot` | yes | no | no | no | marshaling `.so` ; CPU debug/bench ; the `auto` fallback when toolchain parity is absent. Also carries runtime params (`set_block_params`) |
-| `prototype` | yes (Rusanov o1) | no | no | no | JIT proto ; do not use in production |
+## Case assembly
 
-The `.so` is cached by `model_hash` : an unchanged model is not recompiled.
-
----
-
-## 3. Wiring onto System / AmrSystem
+`pops.Case` is the top-level authoring object:
 
 ```python
-from pops.numerics.riemann import Rusanov
-from pops.numerics.reconstruction.limiters import VanLeer
-
-sim = pops.System(n=256, periodic=True)
-sim.add_equation("fluide",
-                 model=compiled,
-                 spatial=pops.FiniteVolume(limiter=VanLeer(), riemann=Rusanov()),
-                 time=pops.Explicit(substeps=1))
-# 1er argument positionnel = rhs (valide dans {charge_density, composite}) : passer le solveur
-# par MOT-CLE, pas en positionnel.
-sim.set_poisson(solver="geometric_mg")
-sim.run(t_end=10.0, cfl=0.4)
+case = (
+    pops.Case(layout=layout, name="diocotron")
+    .block("electrons", physics=model, spatial=spatial)
+    .field(poisson)
+    .time(program)
+    .output(output_policy)
+)
 ```
+
+The case is inert. It describes layout, blocks, fields, parameters, outputs, and
+time. `pops.compile` lowers it. `pops.bind` attaches runtime data and returns the
+runnable simulation facade.
+
+## Mesh layout
+
+Mesh structure is not a compile target.
 
 ```python
-# AMR : AmrSystemConfig n'a PAS de champ max_level. Champs reels : n, L, regrid_every, periodic,
-# distribute_coarse, coarse_max_grid (regrid_every=0 -> hierarchie figee).
-from pops.numerics.riemann import Rusanov
-from pops.numerics.reconstruction.limiters import VanLeer
+from pops.mesh import CartesianMesh
+from pops.mesh.layouts import Uniform, AMR
+from pops.mesh.amr import Refine, RegridEvery
 
-amr = pops.AmrSystem(n=128, L=1.0, regrid_every=4, periodic=True)
-amr.add_equation("fluide",
-                 model=compiled_amr,
-                 spatial=pops.FiniteVolume(limiter=VanLeer(), riemann=Rusanov()),
-                 time=pops.Explicit(substeps=1))
+mesh = CartesianMesh(n=128, L=1.0, periodic=True)
+
+uniform = Uniform(mesh)
+amr = AMR(
+    base=mesh,
+    max_levels=2,
+    ratio=2,
+    regrid=RegridEvery(4),
+    refine=Refine.on("density").above(0.05),
+)
 ```
 
-Important points :
-- `riemann=` names the NUMERICAL flux (`Rusanov()`/`HLLC()`/`Roe()` from `pops.numerics.riemann`) ; `m.flux(...)` is the PHYSICAL flux.
-- `fft` / `fft_spectral` now run under `System` in MPI `np>1` (distributed via a box-slab remap, `RemappedFFTSolver`, ADC-287) ; periodic constant-coefficient only -- use `geometric_mg` for walls, variable/anisotropic eps, or kappa.
-- `backend=Production()` with `target="amr_system"` : `AmrSystem` is single- AND multi-block,
-  explicit ; HLLC/Roe/`primitive` are wired on the Python AMR facade with a pressure guard: HLLC/Roe require a
-  declared primitive `p` (or the `enable_hllc()` / `enable_roe()` capability), otherwise `add_equation` raises.
+The public API passes `layout=uniform` or `layout=amr`. Internal C++ routes such
+as `System` and `AmrSystem` are selected by lowering.
 
----
+## Time programs
 
-## 4. Cache and reproducibility
+`pops.time` is the language for building time programs. Ready-made schemes live
+in `pops.lib.time`.
 
-`m.compile()` returns a `CompiledModel` object that carries :
-- `so_path` : path of the compiled `.so`.
-- `model_hash` : stable hash (formulas + roles + params) -- cache key.
-- `abi_key` : compiler/std/headers key -- explicit refusal if incompatible at load time.
-- `params` : dict of named parameters declared via `m.param(...)`.
+```python
+from pops.time import Program
 
----
+T = Program("ssprk3")
+U = T.state("U", block="electrons")
 
-## 5. Points of attention
+T.define(U.stage(1), U.n + T.dt * R(U.n))
+T.define(U.stage(2), 0.75 * U.n + 0.25 * (U.stage(1) + T.dt * R(U.stage(1))))
+T.define(U.next, (1.0 / 3.0) * U.n + (2.0 / 3.0) * (U.stage(2) + T.dt * R(U.stage(2))))
+T.commit("electrons", U.next)
+```
 
-- `m.param(name, value)` : by default (`kind="const"`) constant INLINED at compile time ; changing
-  the value requires a new call to `m.compile()`. The `runtime` mode (`kind="runtime"`) is SUPPORTED
-  on the `aot` backend : the value is modifiable WITHOUT recompiling via `System.set_block_params`.
+Use `pops.lib.time.ssprk3(...)`, `pops.lib.time.strang(...)`, or the other
+library macros when the scheme is already provided.
 
-  ```python
-  from pops.codegen import AOT
-  from pops.numerics.riemann import Rusanov
-  from pops.numerics.reconstruction.limiters import Minmod
+## Inspection
 
-  m = pops.physics.facade.Model("iso")
-  rho, mx, my = m.conservative_vars("rho", "rho_u", "rho_v")
-  cs2 = m.param("cs2", 1.0, kind="runtime")          # param RUNTIME (defaut = 1.0)
-  u, v = m.primitive("u", mx/rho), m.primitive("v", my/rho)
-  p = m.primitive("p", cs2 * rho)
-  m.primitive_vars(rho=rho, u=u, v=v, p=p)
-  m.conservative_from([rho, rho*u, rho*v])
-  m.flux(x=[mx, mx*u+p, my*u], y=[my, mx*v, my*v+p])
-  cs = pops.ir.ops.sqrt(cs2)
-  m.eigenvalues(x=[u-cs, u, u+cs], y=[v-cs, v, v+cs])
+Compiled problems and runtime simulations must be inspectable:
 
-  compiled = m.compile(backend=AOT())                 # cache key inclut les params (runtime -> AOT)
-  compiled.runtime_param_names                         # -> ['cs2'] (ordre des indices C++)
+```python
+print(compiled)
+compiled.inspect()
+compiled.arguments()
+compiled.dump_ir()
+compiled.dump_cpp()
 
-  sim = pops.System(n=64, periodic=True)
-  sim.add_equation("gas", model=compiled,
-                   spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()))
-  sim.set_block_params("gas", [4.0])                   # change cs2 au RUNTIME, sans recompiler
-  ```
-- `pops.experimental.PythonFlux` : numpy host TEST tool (NON-PRODUCTION / TESTS-ONLY), outside the
-  GPU/MPI hot path. It computes a numpy residual in Python, so it lives under `pops.experimental`,
-  not the public `pops` surface. Never use in production.
-- Physical roles (`Density`, `MomentumX`, `MomentumY`, ...) : required for inter-species
-  couplings and for the `System` to recover quantities by role. To be supplied to
-  `conservative_vars(roles=...)` or to `m.compile(require_metadata=True)`.
-- `m.projection([...])` (ADC-177): pointwise post-step PROJECTION `U <- P(U, aux)`, one expression
-  per conservative component, emitted as the C++ trait `HasPointwiseProjection` and compiled like
-  the flux/source (CSE included) -- replaces the per-cell Python callback. SEMANTICS: applied by
-  the System ONCE at the END of each WHOLE macro-step (after transport + source stage + couplings;
-  never per RK stage, including under Strang), on the VALID cells only (the ghosts are rebuilt by
-  the head `fill_ghosts` of the next step -- no `fill_boundary` in the hook). CONTRACT: P idempotent
-  (a true projection) and pointwise (no neighbor); the clamps are written BRANCH-FREE, in max/min
-  via `pops.ir.ops.abs_` / `pops.ir.ops.sign` (differentiable through `pops.ir.lowering.diff`), e.g. positivity `(q + abs_(q))/2`.
-  Backends: `aot` and `production`, on BOTH the flat `System` and `AmrSystem` (ADC-312: on AMR the
-  projection is applied PER LEVEL at the end of each macro-step, AFTER the reflux and cascade --
-  cell-local and idempotent, so the conservative flux correction is preserved). Only `prototype`
-  (JIT) still REJECTS it (host virtual dispatch, no projection ABI). A model WITHOUT a projection is
-  bit-identical to the historical trajectory on both systems (opt-in via `HasPointwiseProjection`).
+memory = compiled.estimate_memory(grid=mesh, layout=layout)
+print(memory)
 
----
+sim = pops.bind(compiled, state=state)
+with sim.profile(Profile.Advanced()) as prof:
+    sim.run(t_final=1.0, cfl=0.5)
+prof.summary().print()
+```
 
-## 6. Reference demonstrators (adc_cases, ci=true)
-
-| Case | File |
-|---|---|
-| Single-species ExB DSL | `diocotron_dsl/run.py` |
-| Two species DSL | `two_species_dsl/run.py` |
-| Magnetic isothermal DSL | `magnetic_isothermal_dsl/run.py` |
+Inspection is part of the user API because generated C++ and GPU memory use
+must be debug-visible.

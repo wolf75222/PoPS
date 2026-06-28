@@ -80,11 +80,12 @@ mono-box); the other ranks return the path without I/O.
 ```python
 import numpy as np
 import pops
-import pops.time as T
 from pops.physics import Model
 from pops.math import laplacian, grad, div, ddt
 from pops.mesh.cartesian import CartesianMesh
 from pops.mesh.layouts import Uniform
+from pops.time import Program
+from pops.lib.time import ssprk2
 from pops.fields import PoissonProblem
 from pops.fields.bcs import Periodic
 from pops.fields.rhs import ChargeDensity
@@ -98,7 +99,7 @@ U = m.state("U", components=["ne"], roles={"ne": "density"})
 phi = m.field("phi")
 m.solve_field("fields_from_state", equation=(-laplacian(phi) == ne),
               outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-              solver="geometric_mg")
+              solver=GeometricMG())
 E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
 flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
 m.rate("explicit_rate", ddt(U) == -div(flux))
@@ -108,8 +109,11 @@ poisson = PoissonProblem(name="phi", unknown="phi",
                          equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
                          bcs=(Periodic(),), solver=GeometricMG())
 
+program = Program("ssprk2")
+ssprk2(program, "ne")
+
 case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)))
-        .block("ne", physics=m).field(poisson).time(T.Program("euler")))
+        .block("ne", physics=m.lower()).field(poisson).time(program))
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": np.ascontiguousarray(np.ones((96, 96)))})

@@ -58,7 +58,7 @@ cd ~/adc_cpp
 bash scripts/setup_env.sh             # CPU Kokkos; pins AppleClang in the env
 conda activate pops
 bash scripts/build_python.sh          # one-command build + install, ends on pops.doctor()
-python docs/sphinx/tutorials/diocotron_tutorial.py --quick
+python -c "import pops; pops.doctor()"
 ```
 
 For CPU multithreading, the conda-forge `kokkos` is Serial-only; build a Serial+OpenMP Kokkos
@@ -121,11 +121,11 @@ conda deactivate && conda activate pops
 
 ```bash
 python -c "import pops; pops.doctor()"     # expect: => healthy environment
-python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 ```
 
 If a step fails, `pops.doctor()` names the broken link and prints the copy-paste fix; the
-[troubleshooting table](#troubleshooting) below maps each observed error to its remedy.
+[troubleshooting table](#troubleshooting) below maps each observed error to its remedy. Then run the
+[first run](first-run.md) guide.
 
 (update-clean-rebuild)=
 
@@ -151,7 +151,6 @@ bash scripts/build_python.sh                  # rebuild + reinstall, ends on pop
 
 python -c "import pops; print(pops.__file__)"
 python -c "import pops; pops.doctor()"          # expect: => healthy environment
-python docs/sphinx/tutorials/diocotron_tutorial.py --quick
 ```
 
 `build_python.sh --fresh` does the cache wipe for you (drops the scikit-build wheel cache and
@@ -201,8 +200,8 @@ Then, in Python:
 import pops
 print(pops.__version__)
 pops.doctor()           # environment diagnosis (OK/FAIL + a remedy per line)
-pops.set_threads()      # all cores -- or set_threads(8); BEFORE the 1st System
-sim = pops.System(n=256)
+pops.set_threads()      # all cores -- or set_threads(8); before the first bind/runtime object
+print(pops.parallel_info())
 ```
 
 `pip install -e .` (editable) suits dev; the build cache persists under `build/`, and
@@ -255,12 +254,12 @@ Kokkos initializes at that moment and reads the environment only once:
 ```python
 import pops
 pops.set_threads(8)       # = OMP_NUM_THREADS + KOKKOS_NUM_THREADS, without touching the shell
-sim = pops.System(n=256)
+print(pops.parallel_info())
 ```
 
 Kokkos Serial module or a call made too late: a warning signals it and the setting is ignored.
-`pops.parallel_info()` gives the current state. For the DSL `backend="production"` to scale too,
-export `POPS_KOKKOS_ROOT` (same Kokkos root as the module build).
+`pops.parallel_info()` gives the current state. For generated production code to scale too, export
+`POPS_KOKKOS_ROOT` (same Kokkos root as the module build).
 
 ## C++ core and tests
 
@@ -353,9 +352,9 @@ cmake -S . -B build-kokkos -G Ninja -DPOPS_USE_KOKKOS=ON \
 ```
 
 Grace-Hopper GPU: [GPU_ROMEO.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/GPU_ROMEO.md).
-For the DSL `backend="production"`, export `POPS_KOKKOS_ROOT=<prefix Kokkos>` (the ROMEO profile
-does it); the build compiler is baked into `_pops`, the DSL finds it on its own as long as it
-exists on the nodes.
+For generated production code, export `POPS_KOKKOS_ROOT=<prefix Kokkos>` (the ROMEO profile does
+it); the build compiler is baked into `_pops`, the DSL finds it on its own as long as it exists on
+the nodes.
 
 (troubleshooting)=
 
@@ -401,25 +400,16 @@ the build compiler is baked into the module and preferred over the PATH (`cxx=` 
 
 ## Verification
 
-This smoke test uses the low-level native runtime (native bricks, no `.so` compile) so it checks the
-install without needing the DSL toolchain:
+This smoke test checks the installed Python package and the compiled `_pops` extension without using
+the old low-level runtime front door:
 
 ```python
-import numpy as np
 import pops
 
-sim = pops.System(n=64, periodic=True)
-sim.add_block("ne", model=pops.Model(
-    state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-    source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=1.0)))
-sim.set_poisson()
-sim.set_density("ne", np.ones((64, 64)))
-sim.step_cfl(0.4)
-print(sim.density("ne").shape)   # (64, 64)
+pops.doctor()
+print(pops.parallel_info())
+print(pops.__version__)
 ```
 
-If these lines run, the install is good. The documented public path (typed `pops.Case` ->
-`pops.compile` -> `pops.bind` -> `sim.run`) is in [first run](first-run.md); the native runtime
-methods used above stay for this check, the native/AMR runtime and the tests. Next:
-[first run](first-run.md) then
-[A->Z tutorial](tutorial.md).
+If these lines run, the install can import the extension. The documented public run path is in
+[first run](first-run.md), then [A->Z tutorial](tutorial.md).

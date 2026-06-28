@@ -1,40 +1,37 @@
-# Substeps, stride and multirate
+# Substeps, stride, and multirate programs
 
+Substeps and multirate behavior belong in the time program or in typed cadence
+policies. They should not be hidden in runtime-only setters.
 
-Two orthogonal parameters, carried by every time policy, handle the multirate (not all
-species require the same `dt`).
+## Program-level structure
 
-- `substeps=N`: the block advances `N` times per macro-step, each substep of length `dt/N`
-  (fast species, e.g. electrons `substeps=10`). Default 1;
-- `stride=M`: cadence of the block, hold-then-catch-up semantics (catch-up at the end of the window).
-  The block is held (state unchanged) as long as `(macro_step + 1) % M != 0`, then advances by an
-  effective step `M*dt` at the macro-step where `(macro_step + 1) % M == 0` (slow species, e.g. neutrals
-  `stride=20`). It thus stays temporally consistent with the fast blocks (never advanced
-  "into the future"). Default 1.
-
-The cadence rides on the block's time policy (`pops.Explicit(stride=...)`). The multirate
-multi-block run goes through the low-level `AmrSystem` / `System` runtime (the multi-block assembly
-through `pops.compile` is deferred); the runtime seam `pops.bind` calls wires the per-block stride
-the same way:
+Use the `Program` language to express repeated stages, histories, schedules, or
+operator calls. Ready macros in `pops.lib.time` can build common patterns.
 
 ```python
-sim.add_block("a", model=m, time=pops.Explicit(stride=1))   # every macro-step
-sim.add_block("b", model=m, time=pops.Explicit(stride=3))   # advances once every 3 (end of window)
+from pops.time import Program, every
+
+T = Program("scheduled")
+U = T.state("U", block="plasma")
+
+# Schedules are metadata on IR operations. They are lowered to C++ orchestration.
+schedule = every(4)
 ```
 
-Between two catch-ups, the held block contributes to the right-hand side of the system Poisson with its
-stale state (its last advanced density, frozen until the next catch-up). `step_cfl` honors
-the cadence: the stable step includes the stride and substeps factor,
-`dt <= cfl * h * substeps / (stride * w)`.
+## Cadence at bind time
 
-> Bit-parity warning. With `substeps=1` (whatever the stride), `step_cfl` is
-> bit-identical to the history. With `substeps > 1` it advances a larger `dt` (each substep
-> stays at the stability limit). To reproduce a calibrated run with the old formula, use
-> `step(dt)` with the explicit historical `dt`.
->
-> Backend note. The `aot` backend (`add_equation` on a `CompiledModel` `backend='aot'`) does not
-> carry the cadence and rejects `stride > 1` (explicit route, no silent ignore);
-> `add_block` (native) and `backend='production'` support the stride.
+When a compiled program exposes a cadence descriptor, pass it to `pops.bind`.
 
-The multirate is obtained by setting `stride` (and `substeps`) per block. Detail:
-[ALGORITHMS.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/ALGORITHMS.md) section 7.
+```python
+from pops.time import CompiledTime
+
+sim = pops.bind(compiled, state=state, cadence=CompiledTime(substeps=2, stride=1))
+```
+
+The bound runtime executes the cadence in C++.
+
+## AMR
+
+AMR compatibility follows the same rule as other public features: if a cadence
+policy is public on `Case`, it must either lower to AMR or declare a precise
+descriptor incompatibility before runtime.

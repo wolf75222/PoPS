@@ -53,13 +53,15 @@ cmake --build build-pywin --config Release --target _pops
 `_pops.cp3XX-win_amd64.pyd`, `_pops.lib` and `kokkos*.dll` next to `python/pops/`.
 
 ```python
-import pops; pops.doctor(); s = pops.System(n=64); a = pops.AmrSystem(n=64)   # OK natif
+import pops
+pops.doctor()
+print(pops.parallel_info())
 ```
 
 ## DSL production (`.dll`) and `adc_cases`
 
-`model.compile(..., backend="production")` compiles a `.dll` (cl/clang-cl, `/LD`, linked to
-`kokkoscore.lib` + `_pops.lib`) that `System.add_native_block` loads (`LoadLibraryW`) -- no Unix
+`pops.compile(case, backend=Production())` compiles a `.dll` (cl/clang-cl, `/LD`, linked to
+`kokkoscore.lib` + `_pops.lib`) that the bound runtime loads (`LoadLibraryW`) -- no Unix
 `RTLD_GLOBAL`, the `_pops` symbols are resolved at link time via `_pops.lib`. Validated bit-identical to the
 brick path. `adc_cases.common.native.build_shared` produces standalone `.dll` files (ctypes) in the
 same way.

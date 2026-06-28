@@ -1,61 +1,42 @@
-# Migration: strings to typed objects
+# Strings to typed objects
 
-Spec 5 replaces string algorithm selectors with typed objects. A string still names a user
-object (a field, a parameter, a block); a typed object now chooses the algorithm, layout,
-backend, or policy. For the rule see {doc}`../concepts/typed-api`; for the per-package surface
-see {doc}`spec5-packages`.
-
-A string selector is no longer silently accepted: it raises with the typed replacement spelled
-out (`pops.descriptors.reject_string_selector`):
-
-```python
-from pops.descriptors import reject_string_selector
-
-reject_string_selector("hll", "riemann", "pops.numerics.riemann.HLL()")
-# TypeError: String algorithm selector rejected: riemann='hll'.
-#            Use pops.numerics.riemann.HLL().
-```
+The public API no longer documents string selectors for behavior. Strings name
+objects chosen by the user. Typed descriptors choose algorithms, layouts,
+solvers, policies, and backends.
 
 ## Conversion table
 
-Old string form on the left, the typed object on the right. Import the typed forms from the
-package named in the last column.
-
-| Old (string) | New (typed) | Package |
+| Old selector style | Public typed style | Package |
 | --- | --- | --- |
-| `riemann="rusanov"` | `Rusanov()` | `pops.numerics.riemann` |
-| `riemann="hll"` | `HLL()` | `pops.numerics.riemann` |
-| `riemann="hllc"` | `HLLC()` | `pops.numerics.riemann` |
-| `riemann="roe"` | `Roe()` | `pops.numerics.riemann` |
-| `reconstruction="first_order"` | `FirstOrder()` | `pops.numerics.reconstruction` |
-| `reconstruction="muscl", limiter="minmod"` | `MUSCL(limiter=Minmod())` | `pops.numerics.reconstruction` |
-| `reconstruction="muscl", limiter="vanleer"` | `MUSCL(limiter=VanLeer())` | `pops.numerics.reconstruction` |
-| `reconstruction="weno5z"` | `WENO5Z()` | `pops.numerics.reconstruction` |
-| `set_refinement(variable="density", above=0.5)` | `Refine.on("density").above(0.5)` | `pops.mesh.amr` |
-| `layout="amr", levels=2, ratio=2` | `AMR(mesh, max_levels=2, ratio=2)` | `pops.mesh.layouts` |
-| `layout="uniform"` | `Uniform(mesh)` | `pops.mesh.layouts` |
-| `regrid_every=8` | `RegridEvery(8)` | `pops.mesh.amr` |
-| `output(format="hdf5")` | `OutputPolicy(format=HDF5())` | `pops.output` |
-| `output(format="plotfile", levels="coarse")` | `OutputPolicy(format=Plotfile(), levels=CoarseOnly())` | `pops.output` |
-| `param("nu", 0.1, domain="positive")` | `RuntimeParam("nu", default=0.1, domain=Positive())` | `pops.params` |
-| `param("cfl", 0.4, domain="0..1")` | `RuntimeParam("cfl", default=0.4, domain=Range(0.0, 1.0))` | `pops.params` |
-| `compile(..., math="strict")` | `Optimization(math=StrictMath())` | `pops.codegen` |
-| `compile(..., math="fast")` | `Optimization(math=FastMath())` | `pops.codegen` |
-| `riemann="my_hllc"` (external) | `CompiledBrickRef(manifest, "my_hllc", expect_category="riemann")` | `pops.external` |
+| Riemann flux token | `Rusanov()`, `HLL()`, `HLLC()`, `Roe()` | `pops.numerics.riemann` |
+| Reconstruction token | `FirstOrder()`, `MUSCL(...)`, `WENO5Z()` | `pops.numerics.reconstruction` |
+| Limiter token | `Minmod()`, `VanLeer()`, `Superbee()` | `pops.numerics.reconstruction.limiters` |
+| Time scheme token | `ssprk2(P, block)`, `ssprk3(P, block)`, `rk4(P, block)` | `pops.lib.time` |
+| Backend token | `Production()`, `AOT()`, `JIT()` | `pops.codegen` |
+| Uniform target | `Uniform(mesh)` | `pops.mesh.layouts` |
+| AMR target | `AMR(mesh, ...)` | `pops.mesh.layouts` |
+| Regrid cadence | `RegridEvery(n)`, `FrozenRegrid()` | `pops.mesh.amr` |
+| Elliptic solver token | `GeometricMG()`, `FFT()` | `pops.solvers.elliptic` |
+| Runtime param kind | `RuntimeParam(...)`, `ConstParam(...)` | `pops.params` |
+| Output format token | `OutputPolicy(format=HDF5(...))` | `pops.output` |
+| External brick id alone | `CompiledBrickRef(manifest, native_id, expect_category=...)` | `pops.external` |
 
 ## What stays a string
 
-Strings still name objects the user invents -- they are labels, not algorithm choices:
+Strings remain valid when they are names:
 
 ```python
-from pops.params import RuntimeParam, Positive
-from pops.fields import PoissonProblem
-from pops.mesh.amr import Refine
-
-RuntimeParam("nu", default=0.1, domain=Positive())   # "nu" is the user's parameter name
-PoissonProblem(name="phi", unknown="phi")            # "phi" is the user's field name
-Refine.on("density").above(0.5)                       # "density" names the tagged field
+Model("euler")
+case.block("ions", physics=ions)
+PoissonProblem(name="phi", unknown="phi")
+RuntimeParam("nu", default=0.1)
+T.state("U", block="ions")
 ```
 
-The rule of thumb: if the string is something you named, keep it; if the string selected a
-library algorithm, backend, or layout, replace it with the typed object above.
+Later references should use handles returned by the API when handles exist.
+
+## Documentation rule
+
+Do not write examples that present a string as a behavior choice. If a page
+must mention a native token, call it an internal lowered id and show the typed
+descriptor users should write.

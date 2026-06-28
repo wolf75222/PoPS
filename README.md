@@ -132,15 +132,15 @@ Define a type that satisfies the `PhysicalModel` concept, wrap it in a
 
 ### From Python
 
-The public path is typed and compiled: author the physics with `pops.physics.Model`, declare the
-elliptic field with `pops.fields.PoissonProblem`, assemble a `pops.Case`, then
-`pops.compile(case, backend=Production())` -> `pops.bind(...)` -> `sim.run(...)`. Minimal example,
-the reduced diocotron (scalar density advected by the E x B drift, coupled to Poisson):
+The public path is typed and compiled. Python builds an inert `pops.Case`; C++/Kokkos/MPI
+executes the run. User choices are descriptors, not string selectors. The reduced
+diocotron example below couples a scalar density to a Poisson field:
 
 ```python
 import numpy as np
 import pops
-import pops.time as T
+from pops.time import Program
+from pops.lib.time import ssprk3
 from pops.physics import Model
 from pops.math import laplacian, grad, div, ddt
 from pops.mesh.cartesian import CartesianMesh
@@ -149,6 +149,8 @@ from pops.fields import PoissonProblem
 from pops.fields.bcs import Periodic
 from pops.fields.rhs import ChargeDensity
 from pops.solvers.elliptic import GeometricMG
+from pops.numerics.riemann import Rusanov
+from pops.numerics.reconstruction.limiters import Minmod
 from pops.codegen import Production
 
 m = Model("diocotron")
@@ -158,7 +160,7 @@ phi = m.field("phi")
 m.solve_field("fields_from_state",
               equation=(-laplacian(phi) == ne),
               outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-              solver="geometric_mg")
+              solver=GeometricMG())
 E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
 flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
 m.rate("explicit_rate", ddt(U) == -div(flux))
@@ -168,8 +170,13 @@ poisson = PoissonProblem(name="phi", unknown="phi",
                          equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
                          bcs=(Periodic(),), solver=GeometricMG())
 
+time = Program("advance")
+ssprk3(time, "ne")
+
 case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)), name="diocotron")
-        .block("ne", physics=m).field(poisson).time(T.Program("euler")))
+        .block("ne", physics=m, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()))
+        .field(poisson)
+        .time(time))
 
 compiled = pops.compile(case, backend=Production())
 sim = pops.bind(compiled, state={"ne": ne0})        # ne0: initial density (2D array)
@@ -178,13 +185,13 @@ sim.write("ne.npz", format="npz")                   # save the block states (npz
 ```
 
 For an adaptive run, swap the layout to `pops.mesh.layouts.AMR(mesh, max_levels=2, ratio=2)` and
-author the refinement with `case.amr.refine(...)`; `pops.bind` builds an `AmrSystem` (regrid,
-conservative reflux, composite FAC elliptic, Schur-condensed source stage). The native `System`
-runtime methods (`add_block` / `add_equation` / `set_poisson` / `step_cfl`) are the low-level seam
-`pops.bind` builds on; they stay for the native/AMR runtime and the tests, not as the front door.
+author the refinement with typed `pops.mesh.amr` policies. `pops.bind` builds the AMR runtime from
+that layout. Users do not pass a public target string and do not instantiate the AMR runtime as the
+front door.
 Step-by-step tutorial: [getting-started/tutorial](docs/sphinx/getting-started/tutorial.md).
 Reference: [native-bricks](docs/sphinx/reference/native-bricks.md),
-[symbolic-dsl](docs/sphinx/reference/symbolic-dsl.md).
+[symbolic-dsl](docs/sphinx/reference/symbolic-dsl.md),
+[public API contract](docs/sphinx/reference/public-api-contract.md).
 
 ## Documentation
 

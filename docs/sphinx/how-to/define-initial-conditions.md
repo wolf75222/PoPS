@@ -1,16 +1,14 @@
 # Define initial conditions
 
-Set the initial density and fields of a block from numpy arrays, then advance the run. This
-page assumes you already have a `System` with at least one block and a configured Poisson; see
+Bind the initial state of a block from numpy arrays, then advance the run. This
+page assumes you already have a compiled `Case`; see
 [Configure a simulation](../simulation/index.md) for that. The layout convention is row-major
 `(ny, nx)`: index a field as `arr[j, i]`, where `j` is the row (`y` axis) and `i` is the column
 (`x` axis).
 
 ## Set a scalar density
 
-`set_density(NAME, ARR)` sets the density (component 0) of block `NAME` and leaves the rest at
-rest. `ARR` is an `(n, n)` array; `n` is the per-side cell count passed to `pops.System`. Use it
-for a scalar transport block.
+Pass a block state through `pops.bind`. For a scalar block, `ARR` is an `(n, n)` array.
 
 1. Build the cell-center coordinates and the field.
 
@@ -24,14 +22,14 @@ for a scalar transport block.
    xx, yy = np.meshgrid(coord, coord, indexing="xy")
    ```
 
-3. Fill the density array and apply it.
+3. Fill the density array and bind it.
 
    ```python
    ne = np.full((n, n), 1e-3)
    ```
 
    ```python
-   sim.set_density("ne", ne)
+   sim = pops.bind(compiled, state={"ne": ne})
    ```
 
 For a periodic Poisson, fix a neutralizing background equal to the mean (`n_i0 = ne.mean()`)
@@ -39,22 +37,19 @@ so the right-hand side is solvable.
 
 ## Set a fluid state from primitives
 
-`set_primitive_state(NAME, **PRIMS)` initializes a fluid block from its named primitive
-variables (`rho`, `u`, `v`, `p`). Each primitive is an `(n, n)` array, and the model converts
-them to conservative variables. An unknown or missing name raises an error.
+For fluid models, bind the conservative state expected by the compiled block. Helper functions may
+prepare that array from primitive variables (`rho`, `u`, `v`, `p`) before binding.
 
 ```python
-sim.set_primitive_state("electrons", rho=rho0, u=u0, v=v0, p=p0)
+U0 = conservative_from_primitives(rho=rho0, u=u0, v=v0, p=p0)
+sim = pops.bind(compiled, state={"electrons": U0})
 ```
 
-For an explicit conservative state, `set_state(NAME, U)` takes the flattened `(ncomp, n, n)`
-array.
+The conservative state uses the block's component order and an `(ncomp, n, n)` layout.
 
 ## Advance and check the result
 
-Set the density, then advance the run. `sim.run(t_end, cfl=CFL)` advances the bound simulation by
-CFL steps up to `t_end`. (The per-step `step_cfl(CFL)` / `advance(DT, STEPS)` runtime methods are
-the low-level seam `run` is built on, kept for the native/AMR runtime and the tests.)
+After binding, `sim.run(t_end, cfl=CFL)` advances the simulation by CFL-limited steps up to `t_end`.
 
 ```python
 sim.run(0.1, cfl=0.4)

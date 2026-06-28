@@ -1,46 +1,24 @@
 # Coupled inter-species sources
 
-
-Beyond transport and a block's local source, one can describe an inter-species
-coupling (ionization, collisions, thermal exchange) in formulas, without writing any
-C++ and without a per-cell Python callback. The DSL `pops.physics.multispecies.CoupledSource` carries the
-formula as stack-machine bytecode, interpreted on the C++ side in a device `for_each_cell`
-(so MPI-safe and GPU-clean). The stage is applied by explicit splitting, after the
-transport.
-
-The canonical example is a three-species ionization
-(`d_t n_e = +k n_e n_g`, `d_t n_i = +k n_e n_g`, `d_t n_g = -k n_e n_g`):
+Coupled sources operate on several block states at the same time. Declare them as
+typed operators on the model layer, then consume the returned handle in a
+`pops.time.Program`.
 
 ```python
-import pops
+T = Program("coupled_step")
+e = T.state("Ue", block="electrons")
+i = T.state("Ui", block="ions")
 
-src = pops.physics.multispecies.CoupledSource("ionization")
-ne = src.block("electrons").role("density")
-ni = src.block("ions").role("density")
-ng = src.block("neutrals").role("density")
-kp = src.param("Kiz", 0.7)
-src.add("electrons", role="density", expr=+kp * ne * ng)
-src.add("ions",      role="density", expr=+kp * ne * ng)
-src.add("neutrals",  role="density", expr=-kp * ne * ng)
-compiled = src.compile(backend="production")
+fields = T.solve_fields_from_blocks([e.n, i.n])
+rates = collision_operator(e.n, i.n, fields)
 
-sim.add_coupling(compiled)   # branche l'etage sur System.add_coupled_source
+T.define(e.next, e.n + T.dt * rates["electrons"])
+T.define(i.next, i.n + T.dt * rates["ions"])
+T.commit_many({"electrons": e.next, "ions": i.next})
 ```
 
-`sim.add_coupling(...)` also accepts the named couplings `pops.Ionization` /
-`pops.Collision` / `pops.ThermalExchange` (fixed formula). Without a call to `add_coupling`, the
-`System` stays bit-identical (the stage is inert by default).
+The operator handle is a typed object returned by model authoring. Do not
+reference coupled operators with string names in public program code.
 
-The compilation produces a flat ABI (`in_blocks`, `in_roles`, `consts`, `out_blocks`,
-`out_roles`, `prog_ops`, `prog_args`, `prog_lens`): bytecode, never a Python
-callback. The test checks that the trajectory follows bit-for-bit a NumPy forward-Euler
-reference of the same ODE, and that the expected invariants hold (`n_i + n_g`
-conserved, `n_e - n_i` constant: each ionization creates an e/i pair).
-
-## Going further
-
-- Public / internal / deprecated classification of the coupling classes (including the concept
-  `CoupledSourceFor` and the bytecode evaluator `CoupledSourceProgram`):
-  [COUPLING_SURFACE.md](https://github.com/wolf75222/adc_cpp/blob/master/docs/COUPLING_SURFACE.md).
-- Reference test: `python/tests/test_dsl_coupled_source.py` (and the conservation
-  variant `test_dsl_coupled_source_conservation.py`).
+Use the same program with `Uniform(...)` or `AMR(...)` layouts when the source
+descriptor declares both routes.
