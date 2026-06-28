@@ -21,6 +21,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // GeometricMG (the wired V-cycle, reused as a precond, ADC-516)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/numerics/linalg/lorentz_eliminator.hpp>  // LorentzEliminator (closed B^{-1}, ADC-421 reconstruct)
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/context/grid_context.hpp>   // GridContext (System aux seam)
 #include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node value cache, ADC-458)
 #include <pops/runtime/system.hpp>                 // System (the runtime this facade forwards to)
@@ -672,6 +673,18 @@ class ProgramContext {
   void record_scalar(const std::string& name, Real value) const {
     sys_->record_program_diagnostic(name, value);
   }
+
+  /// The CURRENT RuntimeParams of PROGRAM block @p b (epic ADC-479 / ADC-510, Spec 5 C5): the
+  /// per-block runtime-parameter values a compiled Program's lowered source / linear-source kernel
+  /// reads via ``params.get(<index>)``. The codegen binds ``const pops::RuntimeParams params =
+  /// ctx.program_params(<b>);`` ONCE per fab (outside the per-cell loop), then the device lambda
+  /// captures it by value -- trivially copyable, device-clean, ``get()`` is POPS_HD. @p b is the
+  /// PROGRAM block index (P.state declaration order, the index install_program seeded), NOT routed
+  /// through sys_block: the System keys the store by program index, the same index Python's params
+  /// route writes via set_program_params. A block with no runtime param returns a default
+  /// RuntimeParams (count 0). Forwards to System::program_params; the value reflects the LATEST
+  /// set_program_params (no recompile), since the store lives on the System the captured ctx points at.
+  RuntimeParams program_params(int b) const { return sys_->program_params(b); }
 
   /// @name Per-node profiling (Spec 3 section 29, ADC-459)
   /// Time a single Program node into the System Profiler, so sim.profile_report() shows per-node

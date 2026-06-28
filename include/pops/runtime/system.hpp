@@ -6,6 +6,7 @@
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (AOT-compiled block seam)
 #include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 
 #include <array>
 #include <functional>
@@ -873,6 +874,34 @@ class System {
   /// All recorded diagnostics (name -> last recorded value). Empty when the program records none.
   /// Exposed to Python as sim.program_diagnostics() (a dict); program_diagnostic(name) reads one.
   POPS_EXPORT std::map<std::string, Real> program_diagnostics() const;
+  /// @}
+  /// @name Compiled-Program RUNTIME parameters (epic ADC-479 / ADC-510, Spec 5 C5)
+  /// A compiled time Program whose physics reads a dsl.Param(..., kind="runtime") carries the value
+  /// in a per-PROGRAM-block RuntimeParams owned HERE (not in the .so closure), so set_program_params
+  /// changes it at run time WITHOUT recompiling -- the SAME no-recompile contract as the AOT-native
+  /// set_block_params (the closure reads the System-owned current value each step, not a baked
+  /// literal). Mirrors the program diagnostics / history rings: System-owned state the step closure
+  /// reaches through ProgramContext. install_program seeds each block's defaults from the .so
+  /// pops_program_param_* metadata. The lowered source / linear-source kernels read the CURRENT value
+  /// via ProgramContext::program_params(block).get(index).
+  /// @{
+  /// Overwrite block @p prog_block's RuntimeParams with @p values (the COMPLETE block, sorted-name
+  /// order matching the .so pops_program_param_* metadata). @p prog_block is the PROGRAM block index
+  /// (P.state declaration order). @throws std::out_of_range if the block was not seeded by a runtime-
+  /// param Program, std::runtime_error on a size mismatch. POPS_EXPORT: a generated problem.so could
+  /// reach it across the dlopen boundary (the runtime set comes from Python today). Effect on the next
+  /// step.
+  POPS_EXPORT void set_program_params(int prog_block, const std::vector<double>& values);
+  /// Block @p prog_block's CURRENT RuntimeParams (a device-clean by-value copy: trivially copyable,
+  /// readable in a kernel). An UNSEEDED block (no runtime param declared) returns a default-constructed
+  /// RuntimeParams (count 0), so a kernel that reads no param is unaffected. Read by ProgramContext for
+  /// the lowered per-cell source / linear-source kernels.
+  POPS_EXPORT RuntimeParams program_params(int prog_block) const;
+  /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
+  /// pops_program_param_default metadata), establishing the no-set baseline. Called by install_program
+  /// once per runtime-param Program block; a later set_program_params overwrites only the supplied
+  /// values. Idempotent (re-seeding resets to defaults).
+  POPS_EXPORT void seed_program_params(int prog_block, const std::vector<double>& defaults);
   /// @}
   /// @}
 

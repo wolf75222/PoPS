@@ -30,6 +30,17 @@ class _RuntimeParamsMixin:
                 out += [e for row in self._ws_jacobian["rows"][d] for e in row]
         if self._source is not None:
             out += [_wrap(e) for e in self._source]
+        # NAMED sources / linear sources / fluxes (ADC-510): a runtime param read ONLY by a named
+        # m.source_term / m.linear_source / m.flux_term (which a compiled time Program lowers directly,
+        # Spec 5 C5) must also get a stable index, so params.get(idx) is emitted (not an index -1 raise).
+        for exprs in (getattr(self, "_source_terms", {}) or {}).values():
+            out += [_wrap(e) for e in exprs]
+        for rows in (getattr(self, "_linear_sources", {}) or {}).values():
+            for row in rows:
+                out += [_wrap(e) for e in row]
+        for term in (getattr(self, "_flux_terms", {}) or {}).values():
+            for d in ("x", "y"):
+                out += [_wrap(e) for e in term.get(d, [])]
         if self.cons_from is not None:
             out += list(self.cons_from)
         if self._elliptic is not None:

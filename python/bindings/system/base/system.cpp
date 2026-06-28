@@ -195,6 +195,14 @@ struct System::Impl {
   // (System::program_diagnostic / program_diagnostics). Lives HERE (not in the .so) so it outlives the
   // step closure and Python can read it; not referenced by SystemStepper -> no MockImpl impact.
   std::map<std::string, Real> program_diagnostics_;
+  // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5): program-block index -> current
+  // RuntimeParams of a compiled time Program that reads a dsl.Param(..., kind="runtime"). Seeded to
+  // the declaration defaults by install_program (the .so pops_program_param_* metadata) and overwritten
+  // at run time by set_program_params -- the installed step closure reads the CURRENT value through
+  // ProgramContext::program_params each step (no recompile, the AOT-native set_block_params contract,
+  // mirrored for the Program). Lives HERE (not in the .so) so the value change reaches the captured
+  // ctx; not referenced by SystemStepper -> no MockImpl impact (like program_diagnostics_).
+  std::map<int, RuntimeParams> program_block_params_;
   // PER-NODE / PER-BRICK PROFILER (ADC-459, Spec 3 section 29-30): System-owned, like the diagnostics
   // above -- NOT referenced by SystemStepper, so no MockImpl impact. Disabled by default (no hot-path
   // cost when off). System::step / solve_fields wrap themselves in a ProfileScope into it.
@@ -2431,6 +2439,38 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       set_program_block_map({});  // pre-Spec-3 .so: no name table -> identity (positional convention)
     }
   }
+  // RUNTIME PARAMETERS (ADC-510, Spec 5 C5). A Program whose physics reads dsl.Param(..., kind="runtime")
+  // exports a pops_program_param_* table: per flat parameter, its PROGRAM block index, its stable index
+  // WITHIN that block (sorted-name order, matching the lowered params.get(index)) and its declaration
+  // default. Group the defaults per block (in index order) and seed each block's RuntimeParams to those
+  // defaults, so an install WITHOUT a runtime set behaves as with a const param. A later Python params=
+  // route overwrites the supplied values via set_program_params. A Program with no runtime param (the
+  // count symbol absent or 0) seeds nothing -> the param store stays empty (program_params returns
+  // count 0, the lowered kernels read no param). Built BEFORE install() so the step closure (which
+  // captures a ProgramContext) reads the seeded value on its first run.
+  {
+    using count_t = int (*)();
+    using ival_t = int (*)(int);
+    using dval_t = double (*)(int);
+    auto pcount = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_param_count"));
+    auto pblock = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_block"));
+    auto pindex = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_index"));
+    auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
+    if (pcount && pblock && pindex && pdef) {
+      const int np = pcount();
+      std::map<int, std::vector<double>> defaults_by_block;  // program block -> defaults in index order
+      for (int i = 0; i < np; ++i) {
+        const int blk = pblock(i);
+        const int idx = pindex(i);
+        std::vector<double>& d = defaults_by_block[blk];
+        if (static_cast<int>(d.size()) <= idx)
+          d.resize(static_cast<std::size_t>(idx) + 1, 0.0);
+        d[static_cast<std::size_t>(idx)] = pdef(i);
+      }
+      for (const auto& kv : defaults_by_block)
+        seed_program_params(kv.first, kv.second);
+    }
+  }
   install(static_cast<void*>(this));
   // Record the program's IR hash (ADC-406b): the optional pops_program_hash export (a stable IR key,
   // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT
@@ -2542,6 +2582,40 @@ Real System::program_diagnostic(const std::string& name) const {
 }
 std::map<std::string, Real> System::program_diagnostics() const {
   return p_->program_diagnostics_;
+}
+// COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5). Seed/overwrite/read the per-PROGRAM-block
+// RuntimeParams the installed step closure reads through ProgramContext::program_params. The store
+// lives in Impl so a value change reaches the captured ctx -- the no-recompile contract mirrored from
+// the AOT-native set_block_params (shared vector). install_program seeds the defaults; Python's
+// _install_params overwrites the supplied values (validated against the .so param-name metadata).
+void System::seed_program_params(int prog_block, const std::vector<double>& defaults) {
+  RuntimeParams rp;
+  const int count = static_cast<int>(defaults.size());
+  rp.count = count > kMaxRuntimeParams ? kMaxRuntimeParams : count;
+  for (int k = 0; k < rp.count; ++k)
+    rp.values[k] = static_cast<Real>(defaults[static_cast<std::size_t>(k)]);
+  p_->program_block_params_[prog_block] = rp;  // idempotent: re-seeding resets to the declaration baseline
+}
+void System::set_program_params(int prog_block, const std::vector<double>& values) {
+  auto it = p_->program_block_params_.find(prog_block);
+  if (it == p_->program_block_params_.end())
+    throw std::out_of_range(
+        "System::set_program_params: program block " + std::to_string(prog_block) +
+        " has no runtime parameter (the installed compiled Program declares none for it; declare "
+        "dsl.Param(..., kind='runtime') in the model the Program lowers, or omit params=)");
+  RuntimeParams& rp = it->second;
+  if (static_cast<int>(values.size()) != rp.count)
+    throw std::runtime_error("System::set_program_params: program block " +
+                             std::to_string(prog_block) + " expects " + std::to_string(rp.count) +
+                             " runtime parameters, received " + std::to_string(values.size()));
+  for (int k = 0; k < rp.count; ++k)
+    rp.values[k] = static_cast<Real>(values[static_cast<std::size_t>(k)]);  // current value, next step reads it
+}
+RuntimeParams System::program_params(int prog_block) const {
+  auto it = p_->program_block_params_.find(prog_block);
+  // Unseeded block (no runtime param): a default RuntimeParams (count 0) -- a kernel that reads no
+  // param is unaffected (it never calls get()). By value: device-clean, trivially copyable.
+  return it == p_->program_block_params_.end() ? RuntimeParams{} : it->second;
 }
 std::vector<double> System::get_state(const std::string& name) {
   Impl::Species& s = p_->find(name);

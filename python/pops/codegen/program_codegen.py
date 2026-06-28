@@ -38,8 +38,8 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _apply_in_arg,
     _aux_comp,
     _cell_locals,
-    _check_no_runtime_param,
     _coeff_cpp,
+    _has_runtime_param,
     _deref,
     _emit_cell_compare_kernel,
     _emit_field_combine,
@@ -80,6 +80,10 @@ from pops.codegen.program_emit_control import (  # noqa: F401
     _walk_expr,
 )
 from pops.codegen.program_emit_ops import _emit_op  # noqa: F401
+from pops.codegen.program_emit_params import (  # noqa: F401
+    emit_program_params as _emit_program_params,
+    program_param_entries as _program_param_entries,
+)
 
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
@@ -163,6 +167,7 @@ def emit_cpp_program(program, model=None):
         name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, model),
+        program_params=_emit_program_params(program, model),
         block_names=_emit_block_names(program))
 
 def _emit_block_names(program):

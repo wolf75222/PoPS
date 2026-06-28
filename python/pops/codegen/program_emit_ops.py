@@ -241,7 +241,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             fy = "%s_fy" % var[v.id]
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fx, var[state_in.id]))
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fy, var[state_in.id]))
-            lines += _emit_flux_kernel(model, named_fluxes, var[state_in.id], fx, fy)
+            lines += _emit_flux_kernel(model, named_fluxes, var[state_in.id], fx, fy, bidx)
             lines.append("ctx.neg_div_flux_into(%s, %s, %s);" % (var[v.id], fx, fy))
         named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
         for s in named:
@@ -250,27 +250,28 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             ssrc = "%s_%s" % (var[v.id], s)
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                          % (ssrc, var[state_in.id]))
-            lines += _emit_source_kernel(model, s, var[state_in.id], ssrc)
+            lines += _emit_source_kernel(model, s, var[state_in.id], ssrc, bidx)
             lines.append("ctx.axpy(%s, static_cast<pops::Real>(1), %s);" % (var[v.id], ssrc))
     elif v.op == "source":
         state_in = v.inputs[0]  # source inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                      % (var[v.id], var[state_in.id]))
-        lines += _emit_source_kernel(model, v.attrs["source"], var[state_in.id], var[v.id])
+        lines += _emit_source_kernel(model, v.attrs["source"], var[state_in.id], var[v.id], bidx)
     elif v.op == "apply":
         state_in = v.inputs[0]  # apply inputs = (state[, fields]); the state is first
         var[v.id] = "r%d" % v.id
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                      % (var[v.id], var[state_in.id]))
-        lines += _emit_apply_kernel(model, v.attrs["linear_source"], var[state_in.id], var[v.id])
+        lines += _emit_apply_kernel(model, v.attrs["linear_source"], var[state_in.id], var[v.id],
+                                    bidx)
     elif v.op == "solve_local_linear":
         rhs_in = v.inputs[0]  # solve inputs = (rhs_state, op_value[, fields]); rhs first
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
         lines += _emit_solve_local_linear_kernel(
-            model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id])
+            model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
     elif v.op == "solve_local_nonlinear":
         # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
         # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
@@ -279,7 +280,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
-        lines += _emit_solve_local_nonlinear_kernel(model, v, var[guess_in.id], var[v.id])
+        lines += _emit_solve_local_nonlinear_kernel(model, v, var[guess_in.id], var[v.id], bidx)
     elif v.op == "schur_coeffs":
         # Anisotropic condensed-Schur coefficient bundle (ADC-421): allocate the four 1-component
         # coefficient fields ONCE (persistent shared_ptr in the prelude, captured by the apply

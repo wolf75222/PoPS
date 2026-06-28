@@ -142,21 +142,20 @@ def _aux_comp(impl, name):
         "(%s); cannot map it to an aux component" % (name, sorted(AUX_CANONICAL), extra))
 
 
-def _check_no_runtime_param(exprs):
-    """Phase-4b kernels read coefficients from the state / aux only (const params are inlined as
-    literals by the dsl Expr tree). A RUNTIME parameter would emit ``params.get(idx)``, unavailable in
-    a ProgramContext kernel -> raise NotImplementedError (deferred), never a .so that fails to link."""
+def _has_runtime_param(exprs):
+    """True if any of @p exprs reads a RUNTIME parameter (a RuntimeParamRef anywhere in the tree).
+    A runtime-param read lowers to ``params.get(<index>)``; the kernel binds a ``params`` local from
+    ``ctx.program_params(<block>)`` (ADC-510) so a compiled time Program reads the CURRENT value
+    without recompiling (mirror of the AOT-native RuntimeParams member, P7-b)."""
     from pops.ir.values import RuntimeParamRef
     from pops.ir.visitors import _children
     stack = list(exprs)
     while stack:
         e = stack.pop()
         if isinstance(e, RuntimeParamRef):
-            raise NotImplementedError(
-                "emit_cpp_program: a Phase-4b source / linear source references a RUNTIME parameter "
-                "(%s); only constants and aux fields are supported in the per-cell kernel yet "
-                "(runtime params in compiled programs are a later phase)" % e.name)
+            return True
         stack.extend(_children(e))
+    return False
 
 
 def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
@@ -165,8 +164,9 @@ def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
       - conservative vars -> ``const pops::Real <name> = <state>A(i, j, <idx>);`` (when @p with_cons);
       - primitives -> their dsl formula, in declaration order, only the LIVE ones (when @p with_prim).
     @p impl is the HyperbolicModel; @p state_var the C++ MultiFab variable (its const Array4 is
-    ``<state_var>A``, the aux Array4 is ``auxA``). Raises on a runtime-param dependency (deferred)."""
-    _check_no_runtime_param(exprs)
+    ``<state_var>A``, the aux Array4 is ``auxA``). A runtime-param read lowers to ``params.get(idx)``;
+    the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
+    binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""
     deps = set()
     for e in exprs:
         deps |= e.deps()
@@ -193,7 +193,7 @@ def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
     return lines
 
 
-def _kernel_open(out_var, state_var):
+def _kernel_open(out_var, state_var, params_block=None):
     """Open the per-fab loop + per-cell for_each_cell over the VALID cells of @p out_var, binding the
     write handle ``outA``, the read state handle ``<state_var>A`` and the aux read handle ``auxA``.
 
@@ -201,15 +201,27 @@ def _kernel_open(out_var, state_var):
     distribution map as the blocks (``aux(ba, dm, ...)`` in System::Impl), and a scratch state comes
     from ``scratch_state_like(state(0))`` which copies that ``(ba, dm)`` -- so ``out``, the input
     state and ``aux`` share one ``(ba, dm)`` and ``fab(li)`` is the same box on every rank. This is the
-    same co-distribution the existing aux-reading kernels (compiled_block_abi / source bricks) rely on."""
-    return [
+    same co-distribution the existing aux-reading kernels (compiled_block_abi / source bricks) rely on.
+
+    @p params_block (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads, or None
+    when no formula reads a runtime parameter. When set, bind ``const pops::RuntimeParams params =
+    ctx.program_params(<block>);`` at the FAB-LOOP level (a host map lookup, NOT inside the device
+    for_each_cell) so the per-cell lambda captures the trivially-copyable struct by value; the lowered
+    ``params.get(idx)`` then reads the CURRENT value (no recompile, mirror of the AOT-native member)."""
+    lines = [
         "pops::MultiFab& %s_aux = ctx.aux();" % out_var,
         "for (int li = 0; li < %s.local_size(); ++li) {" % out_var,
         "  const pops::Array4 outA = %s.fab(li).array();" % out_var,
         "  const pops::ConstArray4 %sA = %s.fab(li).const_array();" % (state_var, state_var),
         "  const pops::ConstArray4 auxA = %s_aux.fab(li).const_array();" % out_var,
-        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % out_var,
     ]
+    if params_block is not None:
+        # Read the per-block RuntimeParams ONCE per fab (host scope), captured by value into the device
+        # lambda below (trivially copyable, get() is POPS_HD): the no-recompile runtime-param read.
+        lines.append("  const pops::RuntimeParams params = ctx.program_params(%d);" % params_block)
+    lines.append(
+        "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % out_var)
+    return lines
 
 
 def _kernel_close():
@@ -293,6 +305,7 @@ extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 
 {block_names}
 {module_metadata}
+{program_params}
 extern "C" void pops_install_program(void* sys) {{
   pops::runtime::program::ProgramContext ctx(sys);
 {prelude}
