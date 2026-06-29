@@ -399,6 +399,11 @@ class System {
   /// channel is initialized to zero and solve_fields never touches components >= kAuxNamedBase).
   std::vector<double> aux_field_component(int comp) const;
 
+  /// Reads any current aux component, including the reserved canonical fields phi / grad_x / grad_y.
+  /// Collective global readback, shaped like potential_global(). Public Python readbacks use this for
+  /// sim.get_current_fields(...); writes remain restricted through the typed/dedicated setters above.
+  std::vector<double> aux_component(int comp) const;
+
   /// Sets the density of a species (component 0), n*n row-major array. The other
   /// components (momentum, energy) are set to the at-rest equilibrium.
   void set_density(const std::string& name, const std::vector<double>& rho);

@@ -137,7 +137,6 @@ def test_runtime_install_is_the_only_public_runtime_wiring_path():
             "set_disc_domain",
             "set_geometry_mode",
             "eval_rhs",
-            "get_state",
             "set_state",
         ):
             assert not hasattr(sim, forbidden), "%s.%s must not be public" % (

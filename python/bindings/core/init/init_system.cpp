@@ -346,6 +346,12 @@ void init_system(py::module_& m) {
             return to_2d(s.aux_field_component(comp), s.ny(), s.nx());
           },
           py::arg("comp"))
+      .def(
+          "aux_component",
+          [](const System& s, int comp) {
+            return to_2d(s.aux_component(comp), s.ny(), s.nx());
+          },
+          py::arg("comp"))
       .def("set_electron_temperature_from", &System::set_electron_temperature_from, py::arg("name"))
       .def(
           "set_density",

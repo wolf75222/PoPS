@@ -118,6 +118,20 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                 % type(profile).__name__)
         return _AmrProfileSession(self, profile)
 
+    def profile_summary(self, profile=None):
+        """Return a typed snapshot of the AMR native profiling report."""
+        if profile is None:
+            profile = Profile.from_env(default=Profile.Basic())
+        elif not isinstance(profile, Profile):
+            raise TypeError(
+                "AmrSystem.profile_summary: expected a pops.Profile (Profile.Basic()/Advanced()), got %r"
+                % type(profile).__name__)
+        return PerformanceSummary(self._s.profile_report(), profile)
+
+    def get_recorded_scalars(self):
+        """Return scalar diagnostics recorded by the installed compiled AMR problem."""
+        return dict(self._s.program_diagnostics())
+
     def patch_rectangles(self):
         """Physical rectangles (x0, y0, width, height) of the current fine patches, in [0, L]^2.
 

@@ -167,6 +167,56 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 % type(profile).__name__)
         return _ProfileSession(self, profile)
 
+    def profile_summary(self, profile=None):
+        """Return a typed snapshot of the native profiling report.
+
+        Profiling remains off by default. Use ``with sim.profile(...):`` to collect timed scopes;
+        this method only reads and structures the current native report.
+        """
+        if profile is None:
+            profile = Profile.from_env(default=Profile.Basic())
+        elif not isinstance(profile, Profile):
+            raise TypeError(
+                "System.profile_summary: expected a pops.Profile (Profile.Basic()/Advanced()), got %r"
+                % type(profile).__name__)
+        return PerformanceSummary(self._s.profile_report(), profile)
+
+    def get_state(self, name, *, global_=False):
+        """Public conservative-state readback for diagnostics and examples.
+
+        The returned array is produced by the C++ runtime. ``global_=True`` selects the collective
+        MPI-safe readback used by output/checkpoint paths; the default mirrors the historical local
+        single-box accessor.
+        """
+        if not isinstance(name, str):
+            raise TypeError("System.get_state: name must be a block name string")
+        if global_:
+            return self._s.state_global(name)
+        return self._s.get_state(name)
+
+    def get_current_fields(self, name=None, *, refresh=False):
+        """Return the current canonical field bundle ``phi``, ``grad_x`` and ``grad_y``.
+
+        ``name`` is accepted as a block handle/name for API symmetry and validation; the canonical
+        elliptic fields are shared by the System. ``refresh=True`` asks the C++ runtime to solve/update
+        the fields before reading them.
+        """
+        if name is not None:
+            if not isinstance(name, str):
+                raise TypeError("System.get_current_fields: name must be a block name string or None")
+            self._s.n_vars(name)  # validate the block through the native registry.
+        if refresh:
+            self._s.solve_fields()
+        return {
+            "phi": self._s.aux_component(0),
+            "grad_x": self._s.aux_component(1),
+            "grad_y": self._s.aux_component(2),
+        }
+
+    def get_recorded_scalars(self):
+        """Return scalar diagnostics recorded by the installed compiled problem."""
+        return dict(self._s.program_diagnostics())
+
     def block_names(self):
         """Names of the added blocks, in order (useful for a Python integrator).
 
@@ -237,7 +287,6 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             "set_disc_domain",
             "set_geometry_mode",
             "eval_rhs",
-            "get_state",
             "set_state",
         }
         if attr in forbidden:

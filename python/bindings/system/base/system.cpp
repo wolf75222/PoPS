@@ -89,6 +89,19 @@ std::vector<double> gather_global(const MultiFab& mf, int ncomp, int gnx, int gn
   all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
   return out;
 }
+
+std::vector<double> gather_global_component(const MultiFab& mf, int comp, int gnx, int gny) {
+  std::vector<double> out(static_cast<std::size_t>(gnx) * gny, 0.0);
+  for (int li = 0; li < mf.local_size(); ++li) {
+    const ConstArray4 u = mf.fab(li).const_array();
+    const Box2D v = mf.box(li);
+    for (int j = v.lo[1]; j <= v.hi[1]; ++j)
+      for (int i = v.lo[0]; i <= v.hi[0]; ++i)
+        out[static_cast<std::size_t>(j) * gnx + i] = static_cast<double>(u(i, j, comp));
+  }
+  all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+  return out;
+}
 }  // namespace
 
 struct System::Impl {
@@ -1262,6 +1275,18 @@ std::vector<double> System::aux_field_component(int comp) const {
     for (int i = v.lo[0]; i <= v.hi[0]; ++i)
       out.push_back(static_cast<double>(a(i, j, comp)));
   return out;
+}
+
+std::vector<double> System::aux_component(int comp) const {
+  Impl* P = p_.get();
+  if (comp < 0)
+    throw std::runtime_error("System::aux_component : component must be >= 0");
+  if (comp >= P->aux_ncomp_)
+    throw std::runtime_error(
+        "System::aux_component : the aux channel has only " + std::to_string(P->aux_ncomp_) +
+        " components ; component " + std::to_string(comp) + " is not available");
+  device_fence();
+  return gather_global_component(P->aux, comp, nx(), ny());
 }
 
 void System::add_ionization(const std::string& electron, const std::string& ion,

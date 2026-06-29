@@ -60,7 +60,6 @@ def test_active_docs_do_not_advertise_removed_public_front_doors():
         "_get_state",
         "_set_state",
         "_eval_rhs(",
-        "get_state(",
         "set_state(",
         "eval_rhs(",
         "set_density(",
@@ -101,6 +100,21 @@ def test_public_examples_do_not_hide_missing_compiled_routes():
     assert not offenders, (
         "public examples must fail loudly when the compiled route is missing; no skip/fallback "
         "examples:\n%s" % "\n".join(offenders)
+    )
+
+
+def test_public_examples_do_not_use_private_readbacks():
+    """TASK-023/041/057: examples read through public diagnostics, never private seams."""
+    forbidden = ("_get_state", "_set_state", "_eval_rhs")
+    offenders = []
+    for path in _example_files():
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in text:
+                offenders.append("%s contains %s" % (path.relative_to(REPO_ROOT), token))
+    assert not offenders, (
+        "public examples must use sim.get_state/get_current_fields/get_recorded_scalars/"
+        "profile_summary readbacks, not private runtime seams:\n%s" % "\n".join(offenders)
     )
 
 
