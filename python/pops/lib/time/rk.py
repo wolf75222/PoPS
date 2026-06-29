@@ -1,24 +1,16 @@
-"""pops.lib.time.rk -- Classic explicit Runge-Kutta schemes (RK4, generic rk) and Butcher tableaux.
+"""pops.lib.time.rk -- operator-first explicit Runge-Kutta schemes and Butcher tableaux.
 
 Exports: rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU.
 """
 
-from ._helpers import _opcall, _stage_rhs
+from ._helpers import _opcall, _stage_rate
 
 
-def rk4(P, block, *, sources=("default",), flux=True):
+def rk4(P, block, *, rhs_operator, fields_operator=None):
     """Classic RK4, expressed with NO special RK4 class (spec acceptance 29):
     U^{n+1} = U0 + dt/6 (k1 + 2 k2 + 2 k3 + k4)."""
-    U0 = P._state_value(block)
-    k1 = _stage_rhs(P, U0, sources, flux)
-    U1 = P.linear_combine("rk4_U1", U0 + 0.5 * P.dt * k1)
-    k2 = _stage_rhs(P, U1, sources, flux)
-    U2 = P.linear_combine("rk4_U2", U0 + 0.5 * P.dt * k2)
-    k3 = _stage_rhs(P, U2, sources, flux)
-    U3 = P.linear_combine("rk4_U3", U0 + P.dt * k3)
-    k4 = _stage_rhs(P, U3, sources, flux)
-    P.commit(block, P.linear_combine(
-        "rk4_step", U0 + P.dt / 6.0 * k1 + P.dt / 3.0 * k2 + P.dt / 3.0 * k3 + P.dt / 6.0 * k4))
+    return explicit_rk(P, block, rhs_operator=rhs_operator, fields_operator=fields_operator,
+                       tableau=RK4_TABLEAU)
 
 
 # Classic explicit Butcher tableaux (A lower-triangular, b weights, c nodes) for `rk` (ADC-423).
@@ -67,9 +59,9 @@ SSPRK2_TABLEAU = ButcherTableau(
     name="ssprk2")
 
 
-def rk(P, block, tableau, *, sources=("default",), flux=True):
+def rk(P, block, tableau, *, rhs_operator, fields_operator=None):
     """Generic explicit Runge-Kutta from a Butcher @p tableau (ADC-423), lowered to the SAME stage chain
-    the hard-coded `rk4` macro emits -- ``solve_fields`` + ``rhs`` + ``linear_combine``, no RK class:
+    the hard-coded `rk4` macro emits -- typed operator calls + ``linear_combine``, no RK class:
 
         k_i      = R( U + dt * sum_{j<i} A[i][j] * k_j )       (the i-th stage RHS)
         U^{n+1}  = U + dt * sum_i b[i] * k_i
@@ -79,29 +71,8 @@ def rk(P, block, tableau, *, sources=("default",), flux=True):
     constants: ``rk(P, blk, RK4_TABLEAU)`` builds the identical final affine combination as
     ``rk4(P, blk)`` (a permutation of the same ``U0 + dt(1/6 k1 + 1/3 k2 + 1/3 k3 + 1/6 k4)`` inputs),
     and ``rk(P, blk, SSPRK2_TABLEAU)`` matches Heun's ``U + dt(1/2 k1 + 1/2 k2)``."""
-    if not isinstance(tableau, ButcherTableau):
-        A, b, c = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
-        tableau = ButcherTableau(A, b, c)
-    tag = (tableau.name + "_") if tableau.name else "rk_"
-    U0 = P._state_value(block)
-    ks = []
-    for i in range(tableau.stages):
-        if i == 0:
-            Ui = U0  # the first stage reads U^n directly (no scratch combine, like rk4)
-        else:
-            expr = U0
-            for j in range(i):
-                aij = tableau.A[i][j]
-                if aij != 0.0:
-                    expr = expr + (P.dt * aij) * ks[j]
-            Ui = P.linear_combine("%sU%d" % (tag, i), expr)
-        ks.append(_stage_rhs(P, Ui, sources, flux))
-    final = U0
-    for i in range(tableau.stages):
-        bi = tableau.b[i]
-        if bi != 0.0:
-            final = final + (P.dt * bi) * ks[i]
-    P.commit(block, P.linear_combine("%sstep" % tag, final))
+    return explicit_rk(P, block, rhs_operator=rhs_operator, fields_operator=fields_operator,
+                       tableau=tableau)
 
 
 def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A=None, b=None,
@@ -138,7 +109,7 @@ def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A
             f_i = _opcall(P, fields_operator, u_i)
             ks.append(_opcall(P, rhs_operator, u_i, f_i, value_name="%sk%d" % (tag, i)))
         else:
-            ks.append(_opcall(P, rhs_operator, u_i, value_name="%sk%d" % (tag, i)))
+            ks.append(_stage_rate(P, u_i, rhs_operator=rhs_operator, tag="%s%d_" % (tag, i)))
     final = u0
     for i in range(tableau.stages):
         bi = tableau.b[i]

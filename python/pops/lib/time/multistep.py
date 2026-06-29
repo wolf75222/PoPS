@@ -4,13 +4,13 @@ Exports: adams_bashforth, adams_bashforth2, bdf.
 Private helpers: _AB_WEIGHTS, _bdf_local_linear, _bdf_implicit_flux.
 """
 
-from ._helpers import _stage_rhs
+from ._helpers import _stage_rate
 from .euler import forward_euler as _forward_euler_macro
 
 
-def _forward_euler(P, block, sources, flux):
-    # AB1 degenerates to Forward Euler; reuse the local euler macro for byte-identical IR.
-    _forward_euler_macro(P, block, sources=sources, flux=flux)
+def _forward_euler(P, block, rhs_operator, fields_operator):
+    # AB1 degenerates to Forward Euler; keep the implementation single-sourced.
+    _forward_euler_macro(P, block, rhs_operator=rhs_operator, fields_operator=fields_operator)
 
 
 # Adams-Bashforth weights b_j on R_{n-j} (j = 0..order-1), per order (ADC-423). AB1 is Forward Euler.
@@ -21,7 +21,7 @@ _AB_WEIGHTS = {
 }
 
 
-def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
+def adams_bashforth(P, block, order, *, rhs_operator, fields_operator=None):
     """Adams-Bashforth, explicit ``order``-step, over the System-owned history ring (ADC-406a / ADC-423):
 
         R_n     = R(U)
@@ -40,19 +40,19 @@ def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
     is deterministic and exact; an offline reference mirrors it (FE-fill cold start then AB). The history
     name is ``"<block>.R"`` (the block's previous RHS).
 
-    AB1 keeps Forward Euler's exact IR (no history op); AB2 keeps the historical ``"ab2_step"`` combine
-    so a pre-ADC-423 AB2 program's ``.so`` cache key is byte-identical."""
+    AB1 uses Forward Euler directly and therefore records no history op. AB2 uses ``"ab2_step"`` as
+    its stable step node name."""
     if isinstance(order, bool) or not isinstance(order, int) or order not in _AB_WEIGHTS:
         raise ValueError("adams_bashforth: order must be an int in %s (got %r)"
                          % (sorted(_AB_WEIGHTS), order))
     b = _AB_WEIGHTS[order]
     if order == 1:  # AB1 == Forward Euler: no history, identical IR to forward_euler.
-        _forward_euler(P, block, sources, flux)
+        _forward_euler(P, block, rhs_operator, fields_operator)
         return
     name = block + ".R"
     step_name = "ab2_step" if order == 2 else ("ab%d_step" % order)
     U = P._state_value(block)
-    R_n = _stage_rhs(P, U, sources, flux)
+    R_n = _stage_rate(P, U, rhs_operator=rhs_operator, fields_operator=fields_operator, tag="ab_0_")
     # Store R_n FIRST (so the first store cold-start-fills the ring), then read R_{n-j} = lag j.
     P.store_history(name, R_n)
     expr = U + (P.dt * b[0]) * R_n
@@ -61,12 +61,12 @@ def adams_bashforth(P, block, order, *, sources=("default",), flux=True):
     P.commit(block, P.linear_combine(step_name, expr))
 
 
-def adams_bashforth2(P, block, *, sources=("default",), flux=True):
-    """Adams-Bashforth 2, a thin back-compat alias for ``adams_bashforth(P, block, 2)`` (ADC-423).
+def adams_bashforth2(P, block, *, rhs_operator, fields_operator=None):
+    """Adams-Bashforth 2, a named convenience macro for ``adams_bashforth(P, block, 2)``.
 
-    Kept so existing callers and the historical ``"ab2_step"`` IR are unchanged: this lowers to the
-    SAME IR as before (R_n stored first, R_{n-1} read at lag 1, weights 3/2 / -1/2)."""
-    adams_bashforth(P, block, 2, sources=sources, flux=flux)
+    It stores ``R_n`` first, reads ``R_{n-1}`` at lag 1, and applies the classic weights
+    ``3/2`` and ``-1/2``."""
+    adams_bashforth(P, block, 2, rhs_operator=rhs_operator, fields_operator=fields_operator)
 
 
 def _bdf_local_linear(P, block, order, linear_source, sources, flux):

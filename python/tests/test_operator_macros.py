@@ -78,6 +78,31 @@ def test_explicit_rk_macro():
     print("OK  explicit_rk over a typed rate operator (SSPRK2 tableau)")
 
 
+def test_ready_explicit_macros_are_operator_first():
+    m, h = _model("ready_explicit")
+    for macro in (libtime.forward_euler, libtime.ssprk2, libtime.ssprk3, libtime.rk4):
+        P = adctime.Program(macro.__name__).bind_operators(m)
+        macro(P, "plasma", rhs_operator=h["explicit_rhs"], fields_operator=h["fields"])
+        P.validate()
+        src = P.emit_cpp_program(model=m)
+        assert "GeneratedModule::Operators::" in src
+        assert all(v.op != "rhs" for v in P._values)
+        assert all(v.op != "source" for v in P._values)
+        assert all(v.op != "linear_source" for v in P._values)
+    P = adctime.Program("rk_generic").bind_operators(m)
+    libtime.rk(P, "plasma", libtime.SSPRK2_TABLEAU,
+               rhs_operator=h["explicit_rhs"], fields_operator=h["fields"])
+    P.validate()
+    assert "GeneratedModule::Operators::" in P.emit_cpp_program(model=m)
+
+    Pab = adctime.Program("ab2").bind_operators(m)
+    libtime.adams_bashforth(Pab, "plasma", 2,
+                            rhs_operator=h["explicit_rhs"], fields_operator=h["fields"])
+    Pab.validate()
+    assert any(v.op == "history" for v in Pab._values)
+    print("OK  ready explicit macros compose typed operator handles")
+
+
 def test_imex_local_linear_macro():
     m, h = _model("imex")
     P = adctime.Program("imex").bind_operators(m)
@@ -100,6 +125,13 @@ def test_public_macros_reject_string_operator_selectors():
         assert "typed operator handles" in str(exc)
     else:
         raise AssertionError("pops.lib.time accepted a string operator selector")
+    try:
+        libtime.forward_euler(P, "plasma", rhs_operator="explicit_rhs",
+                              fields_operator=h["fields"])
+    except TypeError as exc:
+        assert "typed operator handles" in str(exc)
+    else:
+        raise AssertionError("forward_euler accepted a string rate selector")
     print("OK  pops.lib.time macros reject string operator selectors")
 
 
@@ -122,6 +154,7 @@ def main():
     test_macros_are_model_free()
     test_predictor_corrector_macro()
     test_explicit_rk_macro()
+    test_ready_explicit_macros_are_operator_first()
     test_imex_local_linear_macro()
     test_public_macros_reject_string_operator_selectors()
     test_macro_reused_across_modules()

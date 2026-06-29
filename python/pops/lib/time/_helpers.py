@@ -1,26 +1,14 @@
-"""pops.lib.time._helpers -- shared scheme-builder helpers.
+"""pops.lib.time._helpers -- shared operator-first scheme-builder helpers.
 
-The single-stage RHS assembler ``_stage_rhs`` is the canonical home for the
-explicit / split schemes (Spec 4 s6 / s14: the ready schemes live in
-``pops.lib.time``). The operator-registry helpers ``_op_space_arity`` / ``_opcall``
-introspect the Program-bound registry for the operator-first macros
-(predictor_corrector_local_linear, explicit_rk, imex_local_linear) and dispatch
-calls with the correct arity.
+The operator-registry helpers ``_op_space_arity`` / ``_opcall`` introspect the
+Program-bound registry for ready-made time macros and dispatch calls with the
+correct arity. Public macros must compose typed operator handles, not flux/source
+selectors and not private Program RHS builders.
 
 All three take the live ``pops.time.Program`` instance as their first argument, so
 this module needs no ``pops.time`` import (it stays free of any lib -> time
 module-scope edge beyond the layering allowance).
 """
-
-
-def _stage_rhs(P, U, sources, flux):
-    """Solve the elliptic fields from U and assemble its RHS for one stage. The FieldContext is
-    distinct per stage (no stale global aux). flux=False builds a source-only sub-flow (e.g. Strang S).
-
-    Uses the PRIVATE ``P._rate_from_transport`` builder: ready-made library macros may author primitive
-    transport/source flows, while user Programs should call declared rate operator handles."""
-    fields = P._fields_from_state(U) if flux else None
-    return P._rate_from_transport(state=U, fields=fields, flux=flux, sources=list(sources))
 
 
 def _operator_name(selector):
@@ -61,6 +49,16 @@ def _opcall(P, selector, *candidate_args, value_name=None):
     operator with no args)."""
     name = _operator_name(selector)
     arity = _op_space_arity(P, selector)
-    # The PRIVATE _call is only a lowering seam here: the macro has already validated a typed public
-    # selector, then reuses the registry name to preserve the byte-identical generated IR.
+    # The PRIVATE _call is only the Program lowering seam here: the macro has already validated a
+    # typed public selector, then reuses the registry name stored in the bound operator registry.
     return P._call(name, *candidate_args[:arity], name=value_name)
+
+
+def _stage_rate(P, U, *, rhs_operator, fields_operator=None, tag=""):
+    """Build one explicit stage rate via typed operator calls."""
+    fields = None
+    if fields_operator is not None:
+        fields = _opcall(P, fields_operator, U, value_name="%sfields" % tag if tag else None)
+    if fields is not None:
+        return _opcall(P, rhs_operator, U, fields, value_name="%sk" % tag if tag else None)
+    return _opcall(P, rhs_operator, U, value_name="%sk" % tag if tag else None)
