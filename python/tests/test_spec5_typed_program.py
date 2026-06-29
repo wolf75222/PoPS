@@ -184,16 +184,19 @@ def test_typed_call_records_call_not_rhs():
     print("OK  P.call records call IR and validates")
 
 
-# --- a lib.time macro authors through the private path and stays green ---------------------------
+# --- a lib.time macro authors through typed operator handles -------------------------------------
 
-def test_lib_time_macro_uses_the_private_path():
-    """A pops.lib.time scheme macro (ssprk2) builds and validates: it authors the RHS through the
-    private P._rate_from_transport, so the public terms=-only reject does not break the ready schemes."""
+def test_lib_time_macro_uses_operator_handles():
+    """A pops.lib.time scheme macro (ssprk2) builds through typed operator handles and records
+    first-class call nodes, not private rhs/solve_fields nodes."""
     from pops.lib.time import ssprk2
-    P = adctime.Program("m")
-    ssprk2(P, "plasma")
+    m, h = build_model()
+    P = adctime.Program("m").bind_operators(m)
+    ssprk2(P, "plasma", rhs_operator=h["explicit_rhs"], fields_operator=_FIELDS)
     P.validate()
-    print("OK  lib.time.ssprk2 builds + validates via the private path")
+    assert any(v.op == "call" for v in P._values)
+    assert not any(v.op in ("rhs", "solve_fields", "linear_source") for v in P._values)
+    print("OK  lib.time.ssprk2 builds + validates via typed operator handles")
 
 
 if __name__ == "__main__":
