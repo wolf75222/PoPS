@@ -84,7 +84,7 @@ def test_module_flux_name_is_default_flux():
     F = P._call(mod.operator_registry().get("flux"), U)
     P.commit("plasma", P.linear_combine("u1", U + P.dt * F))
     src = P.emit_cpp_program(model=mod)
-    assert "GeneratedModule::Operators::op_" in src
+    assert "GeneratedModule::Operators::flux" in src
     assert "ctx.neg_div_flux_default_into(b, state, out);" in src
     assert "_emit_flux_kernel" not in src
     print("OK  Module grid operator named 'flux' lowers as the default flux")

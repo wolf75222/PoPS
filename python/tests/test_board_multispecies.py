@@ -272,7 +272,7 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
     P.commit_many({"electrons": e_n, "ions": i_n, "neutrals": n_n})
     src = P.emit_cpp_program(model=None)
-    assert "GeneratedModule::Operators::op_" in src
+    assert "GeneratedModule::Operators::fields" in src
     assert "ctx.solve_fields_from_blocks(" in src, "codegen routes the field op to the coupled solve"
 
 

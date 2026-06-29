@@ -79,10 +79,10 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             if v.inputs:
                 arg = v.inputs[0]
                 bidx = (block_idx or {}).get(arg.block, 0)
-                lines.append("const char* %s = %s(ctx, %d, %s);" %
+                lines.append("auto %s = %s(ctx, %d, %s);" %
                              (var[v.id], fn, bidx, var[arg.id]))
             else:
-                lines.append("const char* %s = %s(ctx, 0, ctx.state(0));" %
+                lines.append("auto %s = %s(ctx, 0, ctx.state(0));" %
                              (var[v.id], fn))
         elif output_vtype == "state":
             state_in = v.inputs[0]

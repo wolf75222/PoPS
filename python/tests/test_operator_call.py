@@ -89,7 +89,8 @@ def test_call_predictor_records_operator_nodes_and_lowers():
                 "operator", "operator_id", "operator_handle", "output_type", "output_vtype"}
     src = P.emit_cpp_program(model=m)
     assert "namespace GeneratedModule" in src
-    assert "GeneratedModule::Operators::op_" in src
+    assert "GeneratedModule::Operators::fields_from_state" in src
+    assert "GeneratedModule::Operators::explicit_rhs" in src
     assert _generated_call(m, "fields_from_state") + "(ctx, 0," in src
     assert _generated_call(m, "explicit_rhs") + "(ctx, 0," in src
     assert "electric" in src
@@ -184,6 +185,10 @@ def test_call_linear_operator_matches_solve_local_linear():
                and "kind" not in v.attrs for v in P._values)
     src = P.emit_cpp_program(model=m)
     assert "/* local_linear_operator" not in src
+    assert "LocalLinearOperatorView" in src
+    assert "static LocalLinearOperatorView lorentz" in src
+    assert "static const char* lorentz" not in src
+    assert "return LocalLinearOperatorView{LocalLinearOperatorView::Id::lorentz_" in src
     assert _generated_call(m, "lorentz") + "(ctx, 0," in src
     print("OK  P.call(lorentz) operator drives solve_local_linear")
 

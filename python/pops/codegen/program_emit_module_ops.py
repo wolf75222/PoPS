@@ -22,7 +22,12 @@ def operator_function_name(operator_id, operator_name):
     safe = re.sub(r"[^0-9A-Za-z_]", "_", str(operator_name))
     if not safe or safe[0].isdigit():
         safe = "_" + safe
-    return "op_%d_%s" % (int(operator_id), safe)
+    return safe
+
+
+def _operator_enum_name(operator_id, operator_name):
+    safe = operator_function_name(operator_id, operator_name)
+    return "%s_%d" % (safe, int(operator_id))
 
 
 def _is_default(op, family):
@@ -138,12 +143,14 @@ def _emit_one_operator(model, op, operator_id):
         body.append("ctx.apply_projection(b, state);")
     elif op.kind == "local_linear_operator":
         header.append(
-            "static const char* %s(const pops::runtime::program::ProgramContext& ctx, int b, "
+            "static LocalLinearOperatorView %s(const pops::runtime::program::ProgramContext& ctx, int b, "
             "pops::MultiFab& fields) {" % fn)
         body.append("(void)ctx;")
         body.append("(void)b;")
         body.append("(void)fields;")
-        body.append('return "%s";' % op.name)
+        body.append(
+            "return LocalLinearOperatorView{LocalLinearOperatorView::Id::%s};"
+            % _operator_enum_name(operator_id, op.name))
     else:
         return [
             "// Operator %s (%s) is metadata-only for this Program codegen path."
@@ -181,6 +188,21 @@ def emit_generated_module_operators(program, model=None):
         "namespace GeneratedModule {",
         "namespace Operators {",
     ]
+    linear_ops = [registry.get(name) for name in registry.names()
+                  if registry.get(name).kind == "local_linear_operator"]
+    if linear_ops:
+        lines += [
+            "struct LocalLinearOperatorView {",
+            "  enum class Id {",
+        ]
+        for op in linear_ops:
+            lines.append(
+                "    %s," % _operator_enum_name(registry.id_of(op.name), op.name))
+        lines += [
+            "  };",
+            "  Id id;",
+            "};",
+        ]
     for name in registry.names():
         op = registry.get(name)
         operator_id = registry.id_of(name)
