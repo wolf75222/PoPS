@@ -4,8 +4,8 @@ Symbols are re-exported via the central :mod:`pops.moments` package.
 
 The symbolic IR primitives (``Const`` / ``sqrt`` / ``abs_``) come from
 :mod:`pops.ir` at module scope.
-The lower-level formula carrier is imported lazily inside :func:`build_moment_model`
-because :mod:`pops.physics` pulls compile machinery transitively.
+The formula carrier is imported lazily inside :func:`build_moment_model`: it is the public
+``pops.physics.Model`` board authoring facade, which lowers directly to ``pops.model.Module``.
 """
 from math import comb
 
@@ -54,29 +54,49 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
        for 2 <= p+q <= order, with S20 = S02 = 1.0 exact (standardization identities).
     @p blocks: block structure of the Jacobian for the eigenvalue solve (pass-through to
        m.wave_speeds_from_jacobian; default full matrix). Ignored if exact_speeds=False.
-    @p exact_speeds: True = exact wave speeds by autodiff of the flux + per-cell numeric
-       eigenvalues (faithful riemann='hll'). False = the caller sets m.eigenvalues /
-       m.wave_speeds itself (e.g. a bring-up bound).
+    @p exact_speeds: True = declare the closed order-2 Gaussian characteristic-speed bound
+       carried by the Module. Higher-order exact-speed generation is deliberately not exposed
+       through this generic builder until a typed exact-speed descriptor can declare the full
+       realizability/closure contract.
     @p robust: True = smooth floors max(x, eps) = ((x+eps)+|x-eps|)/2 on M00 (division) and
        C20/C02 (sqrt) -- differentiable (diff(Abs)), so compatible with exact_speeds. False =
        the bare path, faithful to the guard-free references (may produce NaN on a degenerate
        state).
     @p sources: callable (m, M) -> list of Expr (aligned with moment_indices), wired through
        m.source; M = dict (p, q) -> conservative variable. See lorentz_sources.
-    @p roe: True = also emit the generic Roe dissipation (m.roe_from_jacobian): the FULL flux
-       Jacobian at the arithmetic-mean interface state is eigendecomposed (|A| via the matrix-sign
-       kernel pops::roe_abs_apply, spectral-radius Rusanov fallback), making riemann='roe' available
-       for the moment system (no fluid roles / pressure needed). Additive to exact_speeds (which
-       still provides max_wave_speed for the CFL dt). Needs the 'aot' or 'production' backend.
-    @return physics model ready for module/codegen lowering (the caller may still add
-       elliptic_rhs, params, aux... before lowering/compilation)."""
-    from pops.physics.facade import Model as _PdeModel
+    @p roe: currently reserved for a typed moment Roe descriptor. Passing True raises before
+       codegen instead of exposing a half-routed path.
+    @return public ``pops.physics.Model`` ready for ``to_module()`` / ``compile_problem``."""
+    from pops import math as _math
+    from pops.physics import Model as _PhysicsModel
     if order < 2:
         raise ValueError("build_moment_model: order >= 2 required (standardization relies "
                          "on C20/C02; order %r)" % (order,))
+    if blocks is not None:
+        raise ValueError(
+            "build_moment_model(blocks=...): block-Jacobian exact speeds are not part of the "
+            "Module-native moments builder; provide a typed wave-speed descriptor instead")
+    if exact_speeds and order != 2:
+        raise ValueError(
+            "CartesianVelocityMoments(order=%d, exact_speeds=True) is not supported by the "
+            "Module-native generic builder. Use exact_speeds=False or a provided model with a "
+            "typed wave-speed descriptor." % order)
+    if roe:
+        raise ValueError(
+            "CartesianVelocityMoments(roe=True) requires a typed moment Roe descriptor; the "
+            "generic builder does not expose a partial Roe route")
     idx = moment_indices(order)
-    m = _PdeModel(name)
-    cons = m.conservative_vars(*moment_names(order))
+    m = _PhysicsModel(name)
+    roles = {}
+    names = moment_names(order)
+    if "M00" in names:
+        roles["M00"] = "density"
+    if "M10" in names:
+        roles["M10"] = "momentum_x"
+    if "M01" in names:
+        roles["M01"] = "momentum_y"
+    state = m.state("U", components=names, roles=roles)
+    cons = tuple(state)
     M = dict(zip(idx, cons))
 
     def floor(nm, x, eps):
@@ -150,15 +170,36 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
     def raw(pq):
         return M[pq] if pq in M else Mtop[pq]
 
-    m.flux(x=[raw((p + 1, q)) for (p, q) in idx],
-           y=[raw((p, q + 1)) for (p, q) in idx])
-
+    waves = None
     if exact_speeds:
-        m.wave_speeds_from_jacobian(blocks=blocks)
-    if roe:
-        m.roe_from_jacobian()
+        # Closed order-2 Gaussian bound. It is emitted as typed wave metadata on the Module; the
+        # runtime still executes the CFL / Riemann logic in C++.
+        ax = _sqrt(3.0 * C20)
+        ay = _sqrt(3.0 * C02)
+        waves = {
+            "x": [u - ax, u, u + ax],
+            "y": [v - ay, v, v + ay],
+        }
+
+    flux = m.flux(
+        "F",
+        on=state,
+        x=[raw((p + 1, q)) for (p, q) in idx],
+        y=[raw((p, q + 1)) for (p, q) in idx],
+        waves=waves,
+    )
+
+    source_handle = None
     if sources is not None:
-        m.source(sources(m, M))
-    m.primitive_vars(*cons)
-    m.conservative_from(list(cons))
+        source_handle = m.source("source_default", on=state, value=sources(m, M))
+    rhs = -_math.div(flux)
+    if source_handle is not None:
+        rhs = rhs + source_handle
+    m.rate("explicit_rate", _math.ddt(state) == rhs)
+    m.module.capabilities(
+        moment_model=True,
+        moment_order=order,
+        exact_speeds=bool(exact_speeds),
+        roe=False,
+    )
     return m

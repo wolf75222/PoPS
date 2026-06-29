@@ -20,7 +20,7 @@ from .projection import RealizabilityProjection
 
 
 def CartesianVelocityMoments(order, *, closure=None, robust=True, sources=None,
-                             exact_speeds=True, roe=False):
+                             exact_speeds=False, roe=False):
     """Construct a 2D Cartesian-velocity moment model facade (records options; no build).
 
     @p order: max order of the transported moments (order=2 -> 6 vars, order=4 -> 15).
@@ -32,6 +32,15 @@ def CartesianVelocityMoments(order, *, closure=None, robust=True, sources=None,
 
     Returns a fresh :class:`MomentModel` recording these options. NOTHING is built yet.
     """
+    if exact_speeds and int(order) != 2:
+        raise ValueError(
+            "CartesianVelocityMoments(order=%d, exact_speeds=True) has no generic "
+            "Module-native exact-speed descriptor; use exact_speeds=False or a provided "
+            "model-specific wave-speed route" % int(order))
+    if roe:
+        raise ValueError(
+            "CartesianVelocityMoments(roe=True) requires a typed moment Roe descriptor; "
+            "the generic facade does not expose a partial Roe route")
     model = MomentModel(order)
     model._closure = closure
     model._robust = bool(robust)
@@ -56,7 +65,7 @@ class MomentModel:
         self._order = int(order)
         self._closure = None
         self._robust = True
-        self._exact_speeds = True
+        self._exact_speeds = False
         self._roe = False
         self._proj = RealizabilityProjection()
         # Recorded source contributions, assembled into ONE callable at build.
@@ -97,8 +106,17 @@ class MomentModel:
         if robust is not None:
             self._robust = bool(robust)
         if exact_speeds is not None:
+            if bool(exact_speeds) and self._order != 2:
+                raise ValueError(
+                    "MomentModel.add_numerics(exact_speeds=True) is only available for "
+                    "order-2 Module-native moments; use exact_speeds=False for order %d"
+                    % self._order)
             self._exact_speeds = bool(exact_speeds)
         if roe is not None:
+            if bool(roe):
+                raise ValueError(
+                    "MomentModel.add_numerics(roe=True) requires a typed moment Roe "
+                    "descriptor; the generic facade does not expose a partial Roe route")
             self._roe = bool(roe)
         return self
 
@@ -151,11 +169,11 @@ class MomentModel:
         return sources
 
     def build(self, name="moments"):
-        """Build the recorded specification into a physics model (the single engine call).
+        """Build the recorded specification into a public ``pops.physics.Model``.
 
         Maps the recorded options literally onto :func:`build_moment_model`, then applies the
         recorded Poisson coupling (``elliptic_rhs`` + ``grad_x`` / ``grad_y`` aux) to the
-        returned model. Returns the model, ready to compile.
+        returned model. Returns the board authoring model, ready for ``to_module()``.
         """
         m = build_moment_model(
             name, self._order, self._resolved_closure(),
@@ -166,23 +184,27 @@ class MomentModel:
             self._apply_poisson(m)
         return m
 
+    def to_module(self, name="moments"):
+        """Build and lower this moment specification to ``pops.model.Module``."""
+        return self.build(name).to_module()
+
     def check(self, name="moments"):
         """Alias of :meth:`build` (build + the engine's own validation on construction)."""
         return self.build(name)
 
     # --- internals ----------------------------------------------------------
     def _apply_poisson(self, m):
-        """Apply the recorded Poisson coupling to a built model: elliptic RHS = ``eps * M00``
-        (the density), and declare the field-gradient aux ``grad_x`` / ``grad_y`` (deduping
-        against aux the electric source already declared)."""
+        """Apply the recorded Poisson coupling to a built public physics model."""
+        from pops import math as _math
         from pops.ir.expr import Var
         _phi, eps = self._poisson
+        phi = m.field(_phi)
         density = Var(moment_names(self._order)[0], "cons")  # M00 is the first moment
-        m.elliptic_rhs(eps * density)
-        declared = set(getattr(m._m, "aux_names", ()))
-        for grad in ("grad_x", "grad_y"):
-            if grad not in declared:
-                m.aux(grad)
+        m.solve_field(
+            "fields_from_state",
+            equation=(-_math.laplacian(phi) == eps * density),
+            outputs={"phi": phi, "grad_x": _math.grad(phi).x, "grad_y": _math.grad(phi).y},
+        )
 
 
 class MomentHierarchy:

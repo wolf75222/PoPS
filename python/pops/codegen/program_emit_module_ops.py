@@ -87,7 +87,8 @@ def _rate_lines(model, op, state_var="state", out_var="out", block_expr="b"):
     named_fluxes = _named_fluxes_from_lowering(lowering)
     requested = lowering.get("sources")
     want_flux = lowering.get("flux", True)
-    want_default_source = requested is None or "default" in requested
+    default_sources = ("default", "source_default", "source")
+    want_default_source = requested is None or any(s in default_sources for s in requested)
     if not want_flux:
         if want_default_source:
             lines.append("ctx.source_default_into(%s, %s, %s);" %
@@ -105,7 +106,7 @@ def _rate_lines(model, op, state_var="state", out_var="out", block_expr="b"):
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fy, state_var))
         lines += _emit_flux_kernel(model, named_fluxes, state_var, fx, fy, block_expr)
         lines.append("ctx.neg_div_flux_into(%s, %s, %s);" % (out_var, fx, fy))
-    for source in [s for s in (requested or []) if s != "default"]:
+    for source in [s for s in (requested or []) if s not in default_sources]:
         scratch = "%s_%s" % (out_var, source)
         lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (scratch, state_var))
         lines += _emit_source_kernel(model, source, state_var, scratch, block_expr)

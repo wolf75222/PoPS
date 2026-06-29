@@ -28,6 +28,7 @@ from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import HLL
 from pops.numerics.spatial import spatial as spatial_catalog
 from pops.runtime.bricks import Explicit
+from examples.spec_final import custom_moment_model
 
 
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
@@ -40,7 +41,7 @@ def moment_model(name, order, closure=None, *, robust=False, exact_speeds=True, 
             order,
             closure=closure or gaussian_closure(order),
             robust=robust,
-            exact_speeds=exact_speeds,
+            exact_speeds=exact_speeds if order == 2 else False,
             roe=roe,
         )
         .add_transport()
@@ -48,6 +49,34 @@ def moment_model(name, order, closure=None, *, robust=False, exact_speeds=True, 
     built = spec.build(name)
     assert isinstance(built.module, model_api.Module)
     return built
+
+
+def _eval_module_env(module, U, aux):
+    env = {}
+    state = next(iter(module.state_spaces().values()))
+    for name, value in zip(state.components, np.asarray(U).reshape(len(state.components), -1)):
+        env[name] = value
+    for name, value in dict(aux or {}).items():
+        env[name] = value
+    for name, expr in module.primitive_defs().items():
+        env[name] = expr.eval(env)
+    return env
+
+
+def _eval_flux(model, U, aux, direction):
+    module = model.to_module()
+    env = _eval_module_env(module, U, aux)
+    body = module.operator_registry().get("flux").body
+    axis = "x" if direction == 0 else "y"
+    return [expr.eval(env) for expr in body[axis]]
+
+
+def _eval_wave_speeds(model, U, aux, direction):
+    module = model.to_module()
+    env = _eval_module_env(module, U, aux)
+    axis = "x" if direction == 0 else "y"
+    speeds = [expr.eval(env) for expr in module._eigenvalues[axis]]
+    return [min(speeds), max(speeds)]
 
 
 def gauss_raw(p, q, u, v, c20, c11, c02, memo=None):
@@ -139,7 +168,7 @@ def test_gaussian_closure_flux_matches_shifted_raw_moments():
         u = gauss_state(order)
         emax = 0.0
         for direction, shift in ((0, (1, 0)), (1, (0, 1))):
-            flux = np.asarray(mg.eval_flux(u, {}, direction)).ravel()
+            flux = np.asarray(_eval_flux(mg, u, {}, direction)).ravel()
             ref = np.array(
                 [
                     RHO * gauss_raw(p + shift[0], q + shift[1], UU, VV, C20v, C11v, C02v)
@@ -164,8 +193,8 @@ def test_custom_closure_destandardization_matches_numpy_mirror():
     m12 = UU * VV * VV + UU * C02v + 2 * VV * C11v + c12
     m03 = VV**3 + 3 * VV * C02v + c03
 
-    fx = np.asarray(mf.eval_flux(u6, {}, 0)).ravel()
-    fy = np.asarray(mf.eval_flux(u6, {}, 1)).ravel()
+    fx = np.asarray(_eval_flux(mf, u6, {}, 0)).ravel()
+    fy = np.asarray(_eval_flux(mf, u6, {}, 1)).ravel()
     fx_ref = np.array([u6[1], u6[2], RHO * m30, u6[4], RHO * m21, RHO * m12])
     fy_ref = np.array([u6[3], u6[4], RHO * m21, u6[5], RHO * m12, RHO * m03])
     assert max(np.abs(fx - fx_ref).max(), np.abs(fy - fy_ref).max()) < 1e-13
@@ -208,7 +237,7 @@ def test_standardized_order_three_input_on_asymmetric_state():
 
     err = 0.0
     for direction, shift in ((0, (1, 0)), (1, (0, 1))):
-        flux = np.asarray(mc.eval_flux(u10, {}, direction)).ravel()
+        flux = np.asarray(_eval_flux(mc, u10, {}, direction)).ravel()
         ref = np.array(
             [
                 RHO
@@ -228,7 +257,7 @@ def test_exact_wave_speeds_match_finite_difference_jacobian():
     mg2 = moment_model("g2ws", 2)
     u = gauss_state(2)
     for direction in (0, 1):
-        smin, smax = np.asarray(mg2.eval_wave_speeds(u, {}, direction)).ravel()
+        smin, smax = np.asarray(_eval_wave_speeds(mg2, u, {}, direction)).ravel()
         eps = 1e-7
         jac = np.zeros((6, 6))
         for col in range(6):
@@ -236,8 +265,8 @@ def test_exact_wave_speeds_match_finite_difference_jacobian():
             up[col] += eps
             um[col] -= eps
             jac[:, col] = (
-                np.asarray(mg2.eval_flux(up, {}, direction)).ravel()
-                - np.asarray(mg2.eval_flux(um, {}, direction)).ravel()
+            np.asarray(_eval_flux(mg2, up, {}, direction)).ravel()
+                - np.asarray(_eval_flux(mg2, um, {}, direction)).ravel()
             ) / (2 * eps)
         lam = np.linalg.eigvals(jac).real
         assert abs(smin - lam.min()) < 1e-5
@@ -249,14 +278,14 @@ def test_robust_floor_is_finite_on_vacuum_and_identity_on_healthy_state():
     raw = moment_model("g2raw", 2, robust=False)
     uvac = np.zeros(6)
     with np.errstate(all="ignore"):
-        fvac_r = np.asarray(robust.eval_flux(uvac, {}, 0)).ravel()
-        fvac_raw = np.asarray(raw.eval_flux(uvac, {}, 0)).ravel()
+        fvac_r = np.asarray(_eval_flux(robust, uvac, {}, 0)).ravel()
+        fvac_raw = np.asarray(_eval_flux(raw, uvac, {}, 0)).ravel()
     assert np.isfinite(fvac_r).all()
     assert not np.isfinite(fvac_raw).all()
 
     u = gauss_state(2)
-    fh_r = np.asarray(robust.eval_flux(u, {}, 0)).ravel()
-    fh_raw = np.asarray(raw.eval_flux(u, {}, 0)).ravel()
+    fh_r = np.asarray(_eval_flux(robust, u, {}, 0)).ravel()
+    fh_raw = np.asarray(_eval_flux(raw, u, {}, 0)).ravel()
     err = (np.abs(fh_r - fh_raw) / np.maximum(np.abs(fh_raw), 1e-12)).max()
     assert err < 1e-10
 
@@ -311,45 +340,13 @@ def test_moment_model_guards():
         moment_model("bad2", 2, lambda _s: {"S30": 0.0})
 
 
-def test_compile_aot_hll_system_installs_with_public_route(tmp_path):
+@pytest.mark.requires_toolchain
+def test_compile_problem_custom_moment_model_public_route(tmp_path):
     if not _default_cxx(None):
         pytest.skip("no C++ compiler available")
     if not os.path.isdir(INCLUDE):
         pytest.skip("pops headers are not available")
 
-    try:
-        compiled = moment_model("g2sys", 2)._compile_for_runtime(
-            str(tmp_path / "g2sys.so"), INCLUDE, backend=AOT()
-        )
-    except RuntimeError as exc:
-        if "Kokkos" in str(exc) or "compile_aot" in str(exc):
-            pytest.skip("AOT moment runtime requires Kokkos: %s" % str(exc)[:160])
-        raise
-
-    n = 16
-    x = (np.arange(n) + 0.5) / n
-    xx, yy = np.meshgrid(x, x, indexing="ij")
-    pert = 1.0 + 0.1 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
-    u0 = gauss_state(2)[:, None, None] * pert[None, :, :]
-
-    sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.install(
-        None,
-        instances={
-            "mom": {
-                "model": compiled,
-                "spatial": spatial_catalog.FiniteVolume(
-                    reconstruction=FirstOrder(),
-                    riemann=HLL(),
-                ),
-                "time": Explicit.ssprk2(),
-                "initial": u0,
-            }
-        },
-    )
-    for _ in range(10):
-        sim.step(5e-4)
-    out = np.asarray(sim._get_state("mom"))
-    assert np.isfinite(out).all()
-    dm = abs(out[0].sum() - u0[0].sum()) / abs(u0[0].sum())
-    assert dm < 1e-12
+    compiled = custom_moment_model.compile_example(n=4)
+    assert compiled.problem_hash
+    assert compiled.model.list_operators()

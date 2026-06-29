@@ -145,12 +145,12 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     # The MomentHierarchy snapshot carries the speeds / projection descriptors; they remain
     # inspectable route choosers even when reached through the snapshot.
     model = (moments.CartesianVelocityMoments(order=2)
-             .add_numerics(roe=True)
+             .add_numerics(exact_speeds=True)
              .add_source(moments.VlasovElectricSource())
              .set_realizability(moments.RealizabilityProjection.none()))
     snapshot = model.hierarchy()
     assert isinstance(snapshot.speeds, Descriptor)
-    assert snapshot.speeds.options()["kind"] == moments.ExactSpeeds.ROE_DISSIPATION
+    assert snapshot.speeds.options()["kind"] == moments.ExactSpeeds.EXACT_EIGENVALUES
     assert isinstance(snapshot.projection, Descriptor)
     assert snapshot.projection.capabilities()["guard_level"] == "bare"
     assert snapshot.sources[0][0] == "vlasov_electric"

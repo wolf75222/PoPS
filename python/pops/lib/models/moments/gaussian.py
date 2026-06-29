@@ -15,8 +15,8 @@ class Gaussian:
     def transport(order=2, *, robust=True, exact_speeds=True, roe=False):
         """A transport-only Gaussian-closure moment model (no coupling, no source).
 
-        @p order: the moment order (order=2 -> 6 vars, order=4 -> 15). Returns a
-        ``physics.PdeModel`` ready to compile.
+        @p order: the moment order (order=2 -> 6 vars, order=4 -> 15). Returns a public
+        ``pops.physics.Model`` ready for ``to_module()`` / ``compile_problem``.
         """
         return (CartesianVelocityMoments(order, closure=gaussian_closure(order),
                                          robust=robust, exact_speeds=exact_speeds, roe=roe)
@@ -29,7 +29,8 @@ class Gaussian:
         """A Vlasov-Poisson Gaussian-closure moment model (electric source, no magnetic term).
 
         @p order: the moment order. @p q_over_m: the charge/mass param name. @p eps: the
-        Poisson coupling scale. Returns a ``physics.PdeModel`` ready to compile.
+        Poisson coupling scale. Returns a public ``pops.physics.Model`` ready for
+        ``to_module()`` / ``compile_problem``.
         """
         return (CartesianVelocityMoments(order, closure=gaussian_closure(order),
                                          robust=robust, exact_speeds=exact_speeds, roe=roe)

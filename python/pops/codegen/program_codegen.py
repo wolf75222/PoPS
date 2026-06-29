@@ -331,7 +331,10 @@ def _check_op_lowerable(program, v, model):
                 extra = [] if op.capabilities.get("default") or op.name in (
                     "source", "source_default", "default") else [op.name]
             else:
-                extra = [s for s in (lowering.get("sources") or []) if s != "default"]
+                extra = [
+                    s for s in (lowering.get("sources") or [])
+                    if s not in ("default", "source_default", "source")
+                ]
             if extra:
                 impl = _model_impl(model)
                 for s in extra:

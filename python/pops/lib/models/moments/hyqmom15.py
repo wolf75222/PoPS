@@ -16,7 +16,7 @@ class HyQMOM15:
 
     @staticmethod
     def vlasov_poisson_magnetic(order=_HYQMOM15_ORDER, *, closure=None, robust=True,
-                                exact_speeds=True, roe=False,
+                                exact_speeds=False, roe=False,
                                 q_over_m="q_over_m", omega_c="omega_c",
                                 eps=1.0):
         """The Vlasov-Poisson moment model with a magnetic (Lorentz) source.
@@ -31,7 +31,7 @@ class HyQMOM15:
            hierarchy of the same family.
         @p q_over_m / @p omega_c: the param names for the charge/mass ratio and the cyclotron
            frequency. @p eps: the Poisson coupling scale on the charge density.
-        Returns a ``physics.PdeModel`` ready to compile.
+        Returns a public ``pops.physics.Model`` ready for ``to_module()`` / ``compile_problem``.
         """
         cl = closure if closure is not None else HyQMOM15Closure()
         return (CartesianVelocityMoments(order, closure=cl, robust=robust,
