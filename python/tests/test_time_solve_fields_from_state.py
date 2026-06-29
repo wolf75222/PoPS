@@ -146,7 +146,7 @@ chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,
 
 
 # ============================ (B) field-coupled parity: skip without the toolchain ===========
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_solve_fields_from_state (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -201,7 +201,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
 sim, U0 = make_sim(named_source_model("sffs_block"))
-sim._install_program_so(compiled.so_path)
+sim._install_problem_so(compiled.so_path)
 sim.step(DT)
 U_prog = np.array(sim._get_state("plasma"))
 

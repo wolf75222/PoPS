@@ -106,8 +106,8 @@ def held_program(name="spec3_runtime_held"):
 
 # --- toolchain probe: skip cleanly if the runtime chain is not buildable here ---------------------
 probe = pops.System(n=8, L=1.0, periodic=True)
-if not hasattr(probe, "_install_program_so") or not hasattr(probe, "step_cfl"):
-    _skip("_pops lacks _install_program_so / step_cfl (rebuild _pops)")
+if not hasattr(probe, "_install_problem_so") or not hasattr(probe, "step_cfl"):
+    _skip("_pops lacks _install_problem_so / step_cfl (rebuild _pops)")
 
 print("== compile the held-schedule Program to a problem.so ==")
 try:
@@ -119,7 +119,7 @@ chk(bool(compiled.program_hash), "compiled handle carries the IR hash (%s...)" %
 
 def install(sim):
     """Install the compiled held-schedule program on a freshly composed sim."""
-    sim._install_program_so(compiled.so_path)
+    sim._install_problem_so(compiled.so_path)
     return sim
 
 
@@ -188,7 +188,7 @@ _x = (np.arange(N) + 0.5) / N
 _X, _Y = np.meshgrid(_x, _x, indexing="ij")
 _rho = 1.0 + 0.3 * np.sin(2 * np.pi * _X) * np.cos(2 * np.pi * _Y)
 orphan._set_state("ions", np.stack([_rho, 0.4 * _rho, -0.2 * _rho]))
-orphan._install_program_so(compiled.so_path)  # the C++ closure now owns everything it needs
+orphan._install_problem_so(compiled.so_path)  # the C++ closure now owns everything it needs
 del _m  # drop the Python model object the step would need IF it called back into Python
 gc.collect()
 ou0 = np.array(orphan._get_state("ions"))

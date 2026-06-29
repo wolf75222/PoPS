@@ -282,7 +282,7 @@ class CompiledProblem:
         """The descriptor capability rows relevant to THIS compiled artifact (sec.12.1).
 
         Delegates to the top-level :func:`pops.inspect_capabilities` machinery (the descriptor-sourced
-        capability matrix) and SCOPES it to the descriptor categories a compiled time Program can
+        capability matrix) and scopes it to the descriptor categories this compiled problem can
         select at bind -- the Riemann / reconstruction / limiter / projection bricks and the mesh
         layouts (the solver / field catalogs are bind inputs, kept too). Returns the same printable
         :class:`pops.CapabilityMatrix`. PURE: it imports only the inert authoring catalogs, never
@@ -292,8 +292,8 @@ class CompiledProblem:
         scoped = [e for e in matrix if e.category in self._CAPABILITY_CATEGORIES]
         return CapabilityMatrix(scoped)
 
-    # Descriptor categories a compiled time Program selects from at bind (a spatial brick + a layout
-    # + a field solver); the capability scope of inspect_capabilities().
+    # Descriptor categories a compiled problem selects from at bind (spatial brick + layout + field
+    # solver); the capability scope of inspect_capabilities().
     _CAPABILITY_CATEGORIES = ("riemann", "reconstruction", "limiter", "projection", "layout",
                               "solver", "field")
 

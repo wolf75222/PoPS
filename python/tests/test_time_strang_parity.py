@@ -149,7 +149,7 @@ print("  (A) PASS")
 # ============================ (B) native bit-parity: skip without the toolchain ================
 if pops is None:
     _skip("pops/numpy unavailable (A passed)")
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
     _skip("_pops lacks the install_program binding (rebuild _pops) (A passed)")
 
 N = 24
@@ -197,7 +197,7 @@ sim_native._s.set_time_scheme("strang")
 
 # Compiled Strang program: installed, driven by sim.step(dt).
 sim_compiled = make_sim()
-sim_compiled._install_program_so(compiled.so_path)
+sim_compiled._install_problem_so(compiled.so_path)
 
 for _ in range(NSTEP):
     sim_native.step(DT)

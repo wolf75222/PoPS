@@ -2,9 +2,8 @@
 
 ``sim._install_compiled(compiled, instances=, params=, aux=, solvers=)`` is the single Spec-3 entry that
 installs the compiled handle, binds each named instance's block by name, sets its initial state and
-spatial brick, sets the field solvers / aux fields / runtime params, and finally installs the
-compiled time Program -- LOWERING to the existing lower-layer calls (add_equation / set_poisson /
-set_magnetic_field / set_aux_field / set_block_params / install_program), no parallel runtime.
+spatial brick, sets the field solvers / aux fields / runtime params, and finally attaches the
+compiled problem artifact through the runtime seam.
 
 The full compiled-.so install RUN needs a compiler + a visible Kokkos (POPS_KOKKOS_ROOT) and is
 validated on ROMEO / CI-Kokkos (mirrors test_install_requirement_validation.py). The API SHAPE, the
@@ -44,7 +43,7 @@ def _fake_compiled(*, hllc=False, roe=False, prim_names=("rho", "u", "v"), wave_
                    params=None):
     """A real pops.dsl.CompiledModel object (the engine class) carrying only metadata -- NOT a built
     .so. Used to exercise the host-testable section-24 capability check and the params routing
-    WITHOUT compiling (which needs Kokkos). It is never install_program'd."""
+    WITHOUT compiling (which needs Kokkos). It is never attached to the native runtime."""
     return CompiledModel(
         so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["density", "momentum_x", "momentum_y"],
@@ -252,7 +251,7 @@ def _lie_program(model, name="adc466_prog"):
     P.bind_operators(module)
     states = module.state_spaces()
     operators = module.operator_registry()
-    u = P.state("plasma", space=states["U"])
+    u = P.state("U", block="plasma", space=states["U"]).n
     fields = P.call(operators.get("fields_from_state"), u, name="fields")
     r = P.call(operators.get("explicit_rhs"), u, fields, name="R")
     candidate = P.linear_combine("rhs", u + P.dt * r)
@@ -268,8 +267,8 @@ def test_install_end_to_end_kokkos():
     """End-to-end unified install (needs a compiler + Kokkos -> ROMEO / CI-Kokkos). A single
     sim._install_compiled(compiled, instances=, aux=, solvers=) wires + installs; the NEGATIVE case (no B_z)
     raises the section-24 aux requirement at install."""
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
-        print("skip test_install_end_to_end_kokkos (System lacks _install_program_so)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
+        print("skip test_install_end_to_end_kokkos (System lacks _install_problem_so)")
         return
     m = _lorentz_model()
     module = m.to_module()
@@ -347,8 +346,8 @@ def test_install_routes_runtime_param_kokkos():
     so the param is settable; the pre-fix router (reading the raw Model's absent
     runtime_param_names) raised 'declared by no instance' here. Self-skips without a compiler / Kokkos
     (mirrors test_install_end_to_end_kokkos)."""
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
-        print("skip test_install_routes_runtime_param_kokkos (System lacks _install_program_so)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
+        print("skip test_install_routes_runtime_param_kokkos (System lacks _install_problem_so)")
         return
     m = _iso_runtime_model()
     module = m.to_module()
@@ -433,24 +432,26 @@ def test_install_cadence_routing():
 
 
 def test_install_native_cadence_rejected():
-    """A native sim (compiled=None) has no compiled Program, so install(cadence=) is rejected -- the
-    cadence is a compiled-program concept. Host-testable (the guard fires before any engine run)."""
+    """A native sim (compiled=None) has no compiled artifact, so install(cadence=) is rejected.
+
+    The cadence is a compiled-artifact concept. Host-testable: the guard fires before any engine run.
+    """
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
         sim._install_compiled(None, cadence=CompiledProgramCadence(substeps=2, stride=1))
         raise AssertionError("install(compiled=None, cadence=) was accepted")
     except ValueError as exc:
         assert "cadence" in str(exc) and "native" in str(exc), exc
-    print("OK  native install rejects cadence= (no compiled Program)")
+    print("OK  native install rejects cadence= (no compiled artifact)")
 
 
 def test_install_native_end_to_end_kokkos():
-    """install(compiled=None, ...) builds a NATIVE sim (no compiled Program): each instance carries
-    its own native model + native time, install_program is skipped, the native advance loop steps it.
+    """install(compiled=None, ...) builds a NATIVE sim (no compiled artifact): each instance carries
+    its own native model + native time, artifact attach is skipped, the native advance loop steps it.
     Bit-parity vs the manual add_equation/set_*/set_state sequence (the pre-amendment native path).
     Needs a compiler + Kokkos -> ROMEO / CI-Kokkos."""
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
-        print("skip test_install_native_end_to_end_kokkos (System lacks _install_program_so)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
+        print("skip test_install_native_end_to_end_kokkos (System lacks _install_problem_so)")
         return
     m = _lorentz_model("adc489_native")
     x = (np.arange(N) + 0.5) / N
@@ -477,7 +478,7 @@ def test_install_native_end_to_end_kokkos():
         return
     assert "plasma" in sim_install.block_names(), "native install bound the instance by name"
 
-    # MANUAL native path (the pre-amendment sequence): same lower-layer calls, no install_program.
+    # MANUAL native path (the pre-amendment sequence): same lower-layer calls, no artifact attach.
     # add_equation needs a resolved model (ModelSpec/CompiledModel), the same resolution install does
     # internally via _resolve_instance_model -- so both paths add the SAME native block.
     sim_manual = pops.System(n=N, L=1.0, periodic=True)

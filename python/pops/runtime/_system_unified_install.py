@@ -1,10 +1,9 @@
-"""System unified-install mixin (Spec-4 PR-F): public ``install`` over one lowering seam.
+"""System unified-install mixin: public ``install`` over one compiled-problem seam.
 
 ``install`` is the explicit-runtime entry point used by examples that manually construct
 ``System``. All public runtime wiring should enter through ``sim.install(compiled, ...)``.
-The lowering seam routes to add_equation / set_poisson /
-set_magnetic_field / set_aux_field / set_block_params / install_program, so validation and wiring
-stay in one place.
+The lowering seam routes the combined ``CompiledProblem`` into the native runtime while keeping
+block instantiation, field solvers, aux inputs, params and outputs validated in one place.
 """
 
 from pops._bootstrap import ModelSpec
@@ -66,11 +65,12 @@ class _SystemUnifiedInstall:
     ``System``.
     """
 
-    def _install_program_so(self, so_path):
-        """Install a compiled Program shared object through the native runtime.
+    def _install_problem_so(self, so_path):
+        """Install a combined compiled-problem shared object through the native runtime.
 
-        The public ``install_program`` name is intentionally not exposed on ``System``; this private
-        indirection keeps the install seam testable without reopening the old API.
+        The C++ binding still exposes the low-level symbol as ``install_program`` because the native
+        closure executes the generated ProgramContext. Python does not expose that route publicly:
+        this wrapper is the private compiled-problem loader used by ``sim.install``.
         """
         return self._s.install_program(so_path)
 
@@ -78,10 +78,11 @@ class _SystemUnifiedInstall:
                 solvers=None, cadence=None, outputs=None):
         """Public Spec-4 install entry point.
 
-        Wires a compiled Program handle plus its block instances, runtime params, aux fields and
-        field solvers in one validated call, then installs the Program. Pass ``compiled=None`` for
-        the native per-block route. This is a thin public wrapper over the single lowering seam; it
-        exists so examples and user code do not call private ``_install_*`` helpers.
+        Wires a ``CompiledProblem`` plus its block instances, runtime params, aux fields and field
+        solvers in one validated call, then installs the compiled problem artifact. Pass
+        ``compiled=None`` for the native per-block route. This is a thin public wrapper over the
+        single lowering seam; it exists so examples and user code do not call private
+        ``_install_*`` helpers.
         """
         return self._install_compiled(
             compiled,
@@ -98,8 +99,8 @@ class _SystemUnifiedInstall:
         """Shared install seam for compiled and native System routes.
 
         Wires instances, runtime params, aux fields, field solvers, output policies and the optional
-        compiled Program in one validated order. Public callers enter through ``sim.install``; this
-        method keeps the low-level sequencing in one place.
+        compiled problem artifact in one validated order. Public callers enter through
+        ``sim.install``; this method keeps the low-level sequencing in one place.
         """
         instances = instances or {}
         params = params or {}
@@ -114,25 +115,22 @@ class _SystemUnifiedInstall:
         # rejects an install that supplies everything required, so a valid install is unchanged.
         self._validate_install_arguments(compiled, instances, params, aux, solvers)
 
-        # (1) FIELD SOLVERS first: set_poisson must run before install_program (the C++ section-24
-        # solver requirement reads poisson_solver()). The DECLARED named elliptic fields (collected
-        # from the compiled handle + the per-instance models) widen the accepted solver-field set
-        # beyond the default Poisson names, so a solver selection for a model-declared named field
-        # routes (C1-System) while a typo is rejected against the declared set.
+        # (1) FIELD SOLVERS first: the native loader validates field-solver requirements when the
+        # compiled problem is attached, so configure solvers before that attach. Declared named
+        # elliptic fields (from the compiled handle + per-instance models) widen the accepted
+        # solver-field set beyond the default Poisson names; typos are rejected against that set.
         declared_fields = self._declared_elliptic_fields(compiled, instances)
         for field, solver_brick in solvers.items():
             self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
         # lower its spatial brick and set its initial state. The block model is the per-instance
-        # "model" if given, else the PHYSICAL model carried by the compiled handle
-        # (CompiledProblem.model) -- NOT the handle itself (which is the time Program .so installed in
-        # step 5). For a single-instance plasma case the carried model is the block.
-        # COMPILED vs NATIVE mode. COMPILED: `compiled` is a compile_problem(...) handle carrying a
-        # .so_path time Program (installed in step 5, with the section-24 validation). NATIVE:
-        # `compiled is None` -- no compiled Program; each instance carries its OWN native model + time
-        # policy (runtime Explicit / Strang), step 5 is skipped, the native per-block loop drives
-        # stepping. Validate the handle up front, BEFORE any System mutation (no half-configured System).
+        # "model" if given, else the physical Module carried by the CompiledProblem. COMPILED mode:
+        # `compiled` is a compile_problem(...) handle carrying a combined artifact attached in step 5.
+        # NATIVE mode: `compiled is None`; each instance carries its own native model + time policy
+        # (runtime Explicit / Strang), step 5 is skipped, and the native per-block loop drives
+        # stepping. Validate the handle up front, BEFORE any System mutation (no half-configured
+        # System).
         so_path = None
         compiled_model = None
         if compiled is not None:
@@ -165,7 +163,7 @@ class _SystemUnifiedInstall:
             if initial is not None:
                 self._set_state(name, initial)
 
-        # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. Before install_program.
+        # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. Before artifact attach.
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
@@ -180,28 +178,26 @@ class _SystemUnifiedInstall:
             for name in consumed:
                 program_params_left.pop(name, None)
 
-        # (5) COMPILED mode only: install the compiled time Program (binds blocks by name + runs the
-        # section-24 .so requirement validation: aux / solver / block instance, verbatim messages). In
-        # NATIVE mode (compiled=None) there is no Program -- the step-2 blocks drive the native loop.
+        # (5) COMPILED mode only: attach the combined compiled problem (binds blocks by name + runs
+        # native requirement validation: aux / solver / block instance, verbatim messages). In NATIVE
+        # mode (compiled=None) there is no compiled artifact; the step-2 blocks drive the native loop.
         if so_path is not None:
-            self._install_program_so(so_path)
-            # (5b) COMPILED-PROGRAM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params (the
-            # ones no AOT instance consumed in 4) to the per-PROGRAM-block set_program_params, AFTER
-            # install_program seeded each block's declaration defaults. A runtime param read by the
-            # Program's own source / linear-source kernels reaches them via the System-owned per-block
-            # RuntimeParams (no recompile). A name declared by neither an AOT instance nor a Program
-            # kernel raises here (no silent drop).
+            self._install_problem_so(so_path)
+            # (5b) COMPILED-PROBLEM RUNTIME PARAMS (ADC-510, Spec 5 C5): route the REMAINING params
+            # (the ones no AOT instance consumed in 4) to the per-block runtime parameter table seeded
+            # by the native attach. A runtime param read by generated kernels reaches them via the
+            # System-owned per-block RuntimeParams (no recompile). A name declared by neither an AOT
+            # instance nor a generated kernel raises here (no silent drop).
             if program_params_left:
-                self._install_program_params(compiled, program_params_left)
+                self._install_problem_params(compiled, program_params_left)
 
-        # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
-        # its macro-step cadence is GLOBAL (not per-block). Apply it AFTER install_program (the cadence
-        # wraps the installed closure). It is a compiled-program concept; a native sim sets substeps /
-        # stride on its native time policy instead.
+        # (6) COMPILED-PROBLEM CADENCE (substeps / stride): the artifact is one whole-system closure,
+        # so its macro-step cadence is GLOBAL (not per-block). Apply it AFTER artifact attach. A
+        # native sim sets substeps / stride on its native time policy instead.
         if cadence is not None:
             if so_path is None:
                 raise ValueError(
-                    "install(cadence=): a cadence applies to a compiled time Program; a native sim "
+                    "install(cadence=): a cadence applies to a compiled problem artifact; a native sim "
                     "(compiled=None) has no Program -- set substeps / stride on the native time policy "
                     "instead.")
             self._install_cadence(cadence)
@@ -231,16 +227,20 @@ class _SystemUnifiedInstall:
     # System._collect_missing_arguments without building a System).
     _collect_missing_arguments = staticmethod(collect_missing_arguments)
 
-    def _install_cadence(self, cadence):
-        """Apply a compiled-Program macro-step cadence to the installed program (set_program_cadence).
+    def _set_problem_cadence(self, substeps, stride):
+        """Private native cadence attach used by the compiled-problem install seam."""
+        return self._s.set_program_cadence(substeps, stride)
 
-        set_program_cadence is a SYSTEM-level orchestration around the opaque program closure
-        (program.py): substeps=n re-runs the whole program over eff_dt/n; stride=M runs it once per M
+    def _install_cadence(self, cadence):
+        """Apply a compiled-problem macro-step cadence to the installed artifact.
+
+        The native cadence is a SYSTEM-level orchestration around the installed generated closure:
+        substeps=n re-runs the whole artifact over eff_dt/n; stride=M runs it once per M
         macro-steps. A NUMERIC cadence.cfl is NOT consumed here (set_program_cadence carries only
         substeps / stride); instead it is stored on the System so a bare sim.run(t_end) defaults
         sim.run(cfl=) to it (System::step_cfl routes the resulting per-block CFL dt through the
-        installed program). ``cfl='program'`` pins the run wrapper to call ``step_cfl(1.0)``; the
-        installed C++ Program dt_bound hook then tightens the step inside ``System::step_cfl``."""
+        installed artifact). ``cfl='program'`` pins the run wrapper to call ``step_cfl(1.0)``; the
+        installed C++ dt_bound hook then tightens the step inside ``System::step_cfl``."""
         from pops.runtime._compiled_cadence import CompiledProgramCadence
         if not isinstance(cadence, CompiledProgramCadence):
             raise TypeError("install(cadence=): expected an internal CompiledProgramCadence "
@@ -250,7 +250,7 @@ class _SystemUnifiedInstall:
             self._program_cadence_cfl = float(cadence.cfl)
         elif cadence.cfl == "program":
             self._program_cadence_cfl = "program"
-        self._s.set_program_cadence(cadence.substeps, cadence.stride)
+        self._set_problem_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial):
         """Lower a spatial selection to an pops.Spatial consumed by add_equation. Accepts an
@@ -430,9 +430,9 @@ class _SystemUnifiedInstall:
         """Route flat {param_name: value} to set_block_params per instance: build each instance's
         sorted runtime-param vector (declaration defaults for unspecified names) and push it. @p
         resolved_models maps each instance name to its RESOLVED CompiledModel. @p reject_unknown (native
-        mode): raise on a name declared by no instance (no silent drop); the COMPILED-PROGRAM path passes
-        False (an unconsumed name may be a Program-lowered param routed in 5b). Returns the CONSUMED names
-        so the caller can subtract them from the program-param remainder."""
+        mode): raise on a name declared by no instance (no silent drop); the compiled-problem path
+        passes False (an unconsumed name may be a generated-kernel param routed in 5b). Returns the
+        CONSUMED names so the caller can subtract them from the artifact-param remainder."""
         per_block, unknown = self._route_block_params(resolved_models, params)
         for name, values in per_block.items():
             self._s.set_block_params(name, values)
@@ -441,16 +441,18 @@ class _SystemUnifiedInstall:
                              % (unknown,))
         return set(params) - set(unknown)  # the names an AOT instance consumed
 
-    # Host-testable pure core (ADC-510 program-param routing, mirror of _route_block_params): callable
+    # Host-testable pure core (ADC-510 artifact-param routing, mirror of _route_block_params): callable
     # as System._route_program_params without building a System.
     _route_program_params = staticmethod(route_program_params)
 
-    def _install_program_params(self, compiled, params):
-        """Route flat {param_name: value} to set_program_params per PROGRAM block (ADC-510): read the
-        compiled handle's declared routing (runtime_param_routes), build each block's COMPLETE value
-        vector (declaration defaults for unspecified names) and push it to the System-owned per-block
-        RuntimeParams the Program kernels read. A name declared by no Program kernel (incl. a const-only /
-        param-free Program carrying no routing) raises (no silent drop)."""
+    def _install_problem_params(self, compiled, params):
+        """Route flat {param_name: value} to native runtime params for a compiled problem (ADC-510).
+
+        Reads the compiled handle's declared routing (runtime_param_routes), builds each block's
+        complete value vector (declaration defaults for unspecified names), and pushes it to the
+        System-owned per-block RuntimeParams the generated kernels read. A name declared by no
+        generated kernel raises (no silent drop).
+        """
         routes_fn = getattr(compiled, "runtime_param_routes", None)
         routes, defaults = routes_fn() if callable(routes_fn) else ({}, {})
         per_block, unknown = self._route_program_params(routes, defaults, params)
@@ -458,6 +460,6 @@ class _SystemUnifiedInstall:
             self._s.set_program_params(blk, values)
         if unknown:
             raise ValueError(
-                "install: params %s declared by no runtime parameter of the compiled Program "
-                "(a runtime param must be read by the Program's source / linear-source kernels and "
-                "declared dsl.Param(..., kind='runtime'))" % (unknown,))
+                "install: params %s declared by no runtime parameter of the compiled problem "
+                "(a runtime param must be read by generated kernels and declared as a runtime param)"
+                % (unknown,))

@@ -69,8 +69,8 @@ def make_sim(block_model, with_bz):
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
-        print("skip test_install_requirement_validation (_pops lacks _install_program_so; rebuild _pops)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
+        print("skip test_install_requirement_validation (_pops lacks _install_problem_so; rebuild _pops)")
         return 0
     m = lorentz_model()
     try:
@@ -84,7 +84,7 @@ def main():
     # spec-style message naming the operator and the missing aux field.
     sim_missing = make_sim(m, with_bz=False)
     try:
-        sim_missing._install_program_so(compiled.so_path)
+        sim_missing._install_problem_so(compiled.so_path)
         print("MISMATCH: install accepted a simulation missing B_z")
         return 1
     except RuntimeError as exc:
@@ -97,7 +97,7 @@ def main():
 
     # (2) Positive: providing B_z (set_magnetic_field) lets the same program install cleanly.
     sim_ok = make_sim(m, with_bz=True)
-    sim_ok._install_program_so(compiled.so_path)
+    sim_ok._install_problem_so(compiled.so_path)
     print("OK  install accepts the simulation once B_z is provided")
     return 0
 

@@ -158,10 +158,10 @@ class _RecordingSystem(pops.System):
         self.calls.append(("params", tuple(sorted(resolved_models)), dict(params), reject_unknown))
         return set()
 
-    def _install_program_so(self, so_path):
+    def _install_problem_so(self, so_path):
         self.calls.append(("install_program", so_path))
 
-    def _install_program_params(self, compiled, params):
+    def _install_problem_params(self, compiled, params):
         self.calls.append(("program_params", dict(params)))
 
     def _install_cadence(self, cadence):

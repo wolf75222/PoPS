@@ -111,8 +111,8 @@ _, unk3 = route_program_params({0: ["k"]}, {"k": 2.0}, {"nope": 1.0})
 chk(unk3 == ["nope"], "an unknown param name is flagged (no silent drop)")
 
 # ---- (B) end-to-end: skips unless the full Kokkos toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
-    print("-- (B) skipped: System wrapper lacks the private _install_program_so seam --")
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
+    print("-- (B) skipped: System wrapper lacks the private _install_problem_so seam --")
     print("%s test_program_runtime_params (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
 if not hasattr(pops.System(n=8, L=1.0, periodic=True), "set_program_params"):
@@ -159,7 +159,7 @@ chk(callable(routes_fn) and routes_fn()[0] == {0: ["k"]},
 
 # Step with k = 2.0 (the declaration default the .so seeds at install).
 sim2 = make_sim(_decay_model("runtime", 2.0))
-sim2._install_program_so(compiled.so_path)
+sim2._install_problem_so(compiled.so_path)
 U0 = np.array(sim2._get_state("gas"))
 sim2.step(dt)
 U2 = np.array(sim2._get_state("gas"))
@@ -167,7 +167,7 @@ d2 = U2 - U0  # the per-step increment dt * (k=2) * rho
 
 # Re-bind a FRESH sim on the SAME .so (no recompile), set k = 6.0, step from the same state.
 sim6 = make_sim(_decay_model("runtime", 2.0))
-sim6._install_program_so(compiled.so_path)        # same cached .so -> no recompile
+sim6._install_problem_so(compiled.so_path)        # same cached .so -> no recompile
 sim6.set_program_params(0, [6.0])             # change the runtime param: effect at the next step
 U0b = np.array(sim6._get_state("gas"))
 sim6.step(dt)
@@ -186,8 +186,8 @@ chk(c2.so_path == compiled.so_path, "cache HIT: same Program -> same .so (the k 
 
 # An unknown params= name routed at bind raises a clear ValueError (no silent drop).
 sim_bad = make_sim(_decay_model("runtime", 2.0))
-sim_bad._install_program_so(compiled.so_path)
-chk(raises(ValueError, lambda: sim_bad._install_program_params(compiled, {"nope": 1.0})),
+sim_bad._install_problem_so(compiled.so_path)
+chk(raises(ValueError, lambda: sim_bad._install_problem_params(compiled, {"nope": 1.0})),
     "install rejects a params= name no Program kernel reads")
 
 print("%s test_program_runtime_params" % ("FAIL" if fails else "PASS"))

@@ -195,7 +195,7 @@ def section_b(t):
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return
 
@@ -247,7 +247,7 @@ def section_b(t):
     rho0 = 1.0 + 0.5 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)  # in [0.5, 1.5]
     sim._set_state("blk", np.stack([rho0]))
 
-    sim._install_program_so(compiled.so_path)
+    sim._install_problem_so(compiled.so_path)
     sim.step(dt)
     rho = np.array(sim._get_state("blk"))[0]
 

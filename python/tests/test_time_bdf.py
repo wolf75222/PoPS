@@ -279,8 +279,8 @@ def _run_section_b(t):
         return None
 
     probe = pops.System(n=8, L=1.0, periodic=True)
-    if not hasattr(probe, "_install_program_so") or not hasattr(probe, "eval_rhs"):
-        print("-- (B) skipped: _pops lacks _install_program_so / eval_rhs (rebuild _pops) --")
+    if not hasattr(probe, "_install_problem_so") or not hasattr(probe, "eval_rhs"):
+        print("-- (B) skipped: _pops lacks _install_problem_so / eval_rhs (rebuild _pops) --")
         return None
 
     n = 16
@@ -314,7 +314,7 @@ def _run_section_b(t):
 
     def _step_one(order, compiled):
         sim = _make_sim()
-        sim._install_program_so(compiled.so_path)
+        sim._install_problem_so(compiled.so_path)
         sim.step(dt)
         out = np.array(sim._get_state("blk"))
         try:  # the recorded ||F|| diagnostic (best-effort: optional if the binding is older)

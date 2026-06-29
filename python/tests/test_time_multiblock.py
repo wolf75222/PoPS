@@ -18,7 +18,7 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
     single-block compiled Program (the offline per-block reference -- the blocks are uncoupled, no
     elliptic, so the multi-block step must equal independent single-block steps). The two states must
     match to round-off, and each block must have actually advanced. Runs in CI (gate-python rebuilds
-    _pops) and locally once _pops is rebuilt; skips if _pops lacks _install_program_so, numpy/_pops is absent,
+    _pops) and locally once _pops is rebuilt; skips if _pops lacks _install_problem_so, numpy/_pops is absent,
     no compiler/Kokkos is visible, or the .so compile fails -- never faking the engine.
 """
 from pops.numerics.reconstruction import FirstOrder
@@ -193,7 +193,7 @@ def section_b(t):
         print("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return
 
@@ -237,13 +237,13 @@ def section_b(t):
     # Reference: two INDEPENDENT single-block systems.
     sim_a = make_sim(["a"])
     sim_a._set_state("a", ic_a[None, :, :])
-    sim_a._install_program_so(comp_a.so_path)
+    sim_a._install_problem_so(comp_a.so_path)
     sim_a.step(dt)
     ref_a = np.array(sim_a._get_state("a"))
 
     sim_b = make_sim(["b"])
     sim_b._set_state("b", ic_b[None, :, :])
-    sim_b._install_program_so(comp_b.so_path)
+    sim_b._install_problem_so(comp_b.so_path)
     sim_b.step(dt)
     ref_b = np.array(sim_b._get_state("b"))
 
@@ -251,7 +251,7 @@ def section_b(t):
     sim_ab = make_sim(["a", "b"])
     sim_ab._set_state("a", ic_a[None, :, :])
     sim_ab._set_state("b", ic_b[None, :, :])
-    sim_ab._install_program_so(comp_ab.so_path)
+    sim_ab._install_problem_so(comp_ab.so_path)
     sim_ab.step(dt)
     got_a = np.array(sim_ab._get_state("a"))
     got_b = np.array(sim_ab._get_state("b"))

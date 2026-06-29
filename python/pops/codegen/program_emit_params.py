@@ -1,13 +1,13 @@
-"""pops.codegen.program_emit_params : compiled-Program RUNTIME-parameter routing + metadata (ADC-510).
+"""pops.codegen.program_emit_params : compiled-problem runtime-parameter routing + metadata (ADC-510).
 
 Extracted from ``pops.codegen.program_codegen`` so each emitter module fits the Spec-4 line budget.
-A compiled time Program whose physics reads a ``dsl.Param(..., kind="runtime")`` carries the value in
-a per-PROGRAM-block ``pops::RuntimeParams`` owned by the System (not the .so closure), so the value can
+A compiled problem whose generated kernels read a runtime parameter carries the value in a per-block
+``pops::RuntimeParams`` owned by the runtime (not captured inside the .so closure), so the value can
 be changed at run time WITHOUT recompiling (Spec 5 C5). This module computes the param ROUTING (which
 program block reads which runtime parameter, at which stable index, with which default) and emits the
 ``pops_program_param_*`` metadata table the .so exports. The SAME ``_program_param_entries`` drives the
-C++ install-time seed (System::install_program), the Python bind-time route
-(System._install_program_params via CompiledProblem.runtime_param_routes) and this metadata, so all
+C++ native attach seed, the Python bind-time route
+(System._install_problem_params via CompiledProblem.runtime_param_routes) and this metadata, so all
 three agree byte-for-byte. The per-cell read of the parameter (``params.get(index)`` bound from
 ``ctx.program_params(block)``) lives in ``program_emit_kernels`` / ``program_emit_model_kernels``.
 """
@@ -146,13 +146,14 @@ def program_param_routes(program, model):
 
 
 def emit_program_params(program, model=None):
-    """C++ source of the RUNTIME-parameter metadata the .so exports (ADC-510, Spec 5 C5): per flat
-    parameter i, its PROGRAM block index, its stable WITHIN-block index (sorted-name order, the index
-    the lowered runtime read uses), its NAME and its declaration DEFAULT. install_program reads it to
-    SEED each block's RuntimeParams to the defaults; Python's _install_program_params reads the same
-    routing (via the carried Program + model) to map the bound values to set_program_params, rejecting an
-    unknown name. A Program reading no runtime parameter emits count 0 (no seed, the kernels read no
-    param). NOT called from any hot kernel."""
+    """C++ source of the runtime-parameter metadata the .so exports (ADC-510, Spec 5 C5).
+
+    For each flat parameter, emit the block index, stable within-block index, name and declaration
+    default. The native attach uses it to seed each block's RuntimeParams; Python's
+    _install_problem_params reads the same routing (via the carried Program + model) to map bound
+    values to set_program_params, rejecting an unknown name. An artifact reading no runtime
+    parameter emits count 0 (no seed, kernels read no param). NOT called from any hot kernel.
+    """
     entries = program_param_entries(program, model)
     blocks = ", ".join(str(b) for b, _, _, _ in entries)
     indices = ", ".join(str(i) for _, _, i, _ in entries)

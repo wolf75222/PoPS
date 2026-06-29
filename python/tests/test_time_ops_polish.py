@@ -340,7 +340,7 @@ def _run_section_b(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so") or not hasattr(sim, "program_diagnostics"):
+    if not hasattr(sim, "_install_problem_so") or not hasattr(sim, "program_diagnostics"):
         print("-- (B) skipped: _pops lacks the install_program/program_diagnostics bindings "
               "(rebuild _pops) --")
         return None
@@ -370,7 +370,7 @@ def _run_section_b(t):
     rho0 = 1.0 + 0.25 * X + 0.25 * Y  # in [1, 1.5), all distinct
     sim._set_state("blk", np.stack([rho0]))
 
-    sim._install_program_so(compiled.so_path)
+    sim._install_problem_so(compiled.so_path)
     dt = 0.01
     sim.step(dt)  # the diagnostics are recorded from U^n (the state at the START of the step)
 
@@ -435,7 +435,7 @@ def _run_section_b2(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so"):
+    if not hasattr(sim, "_install_problem_so"):
         print("-- (B.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
     from pops.physics.facade import Model
@@ -460,7 +460,7 @@ def _run_section_b2(t):
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim._set_state("blk", np.stack([rho0]))
-    sim._install_program_so(compiled.so_path)
+    sim._install_problem_so(compiled.so_path)
     sim.step(0.01)
     out = np.array(sim._get_state("blk"))[0]
     # Zero source + flux-only on a periodic smooth field -> the state is unchanged to machine precision
@@ -566,7 +566,7 @@ def _run_section_c2(t):
 
     n = 4
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so"):
+    if not hasattr(sim, "_install_problem_so"):
         print("-- (C.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
     import os
@@ -592,7 +592,7 @@ def _run_section_c2(t):
             print("-- (C.2) skipped: could not compile the bad-ABI .so (no toolchain) --")
             return None
         try:
-            sim._install_program_so(so)
+            sim._install_problem_so(so)
         except (RuntimeError, Exception) as exc:  # noqa: BLE001
             msg = str(exc)
             assert "compiled program ABI mismatch" in msg, \

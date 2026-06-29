@@ -254,7 +254,7 @@ def main():
         "CompiledProgramCadence() default ok (kind 'compiled')")
 
     # ---- (B) end-to-end parity: skips unless the full toolchain is present ----
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
         print("-- (B) skipped: _pops lacks the compiled Program install seam (rebuild _pops) --")
         print("%s test_compile_problem (A only)" % ("FAIL" if fails else "PASS"))
         return 1 if fails else 0

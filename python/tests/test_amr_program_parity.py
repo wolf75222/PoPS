@@ -159,7 +159,7 @@ def _system_run(program, model, u0, nsteps=NSTEPS, dt=DT):
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit.ssprk2())
     sim.set_density("plasma", u0)  # u0 = the 2D density; momentum=0, E from gamma (coupler_write_coarse)
-    sim._install_program_so(compiled.so_path)
+    sim._install_problem_so(compiled.so_path)
     for _ in range(nsteps):
         sim.step(dt)
     return (np.array(sim._get_state("plasma")), np.array(sim.potential())), None
@@ -171,8 +171,8 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
     ``_install_compiled`` seam (the AMR counterpart of System's compiled install): a native instance
     carries the block model, the compiled handle carries the time Program installed on the hierarchy."""
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "_install_program_so"):
-        return None, "the built _pops lacks AmrSystem._install_program_so (rebuild _pops)"
+    if not hasattr(amr, "_install_problem_so"):
+        return None, "the built _pops lacks AmrSystem._install_problem_so (rebuild _pops)"
     try:
         compiled = pops.compile_problem(model=model, time=program, layout=_amr_layout())
         block_cm = model._compile_for_runtime(backend=Production(), target="amr_system")
@@ -186,7 +186,7 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit.ssprk2())
         amr.set_density("plasma", u0)  # u0 = the 2D density (same seed as System: momentum=0, E from gamma)
-        amr._install_program_so(compiled.so_path)
+        amr._install_problem_so(compiled.so_path)
     except RuntimeError as exc:
         return None, "install (AMR): %s" % str(exc)[:240]
     for _ in range(nsteps):
@@ -281,8 +281,8 @@ def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
     """Install `program` on a single-level AmrSystem and drive it with step_cfl (NOT step). Returns
     (coarse density, program hash, last dt) -- the step_cfl Program route (ADC-508 review fix 1)."""
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "_install_program_so") or not hasattr(amr, "step_cfl"):
-        return None, "the built _pops lacks AmrSystem._install_program_so/step_cfl (rebuild _pops)"
+    if not hasattr(amr, "_install_problem_so") or not hasattr(amr, "step_cfl"):
+        return None, "the built _pops lacks AmrSystem._install_problem_so/step_cfl (rebuild _pops)"
     try:
         compiled = pops.compile_problem(model=model, time=program, layout=_amr_layout())
         block_cm = model._compile_for_runtime(backend=Production(), target="amr_system")
@@ -293,7 +293,7 @@ def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit.ssprk2())
         amr.set_density("plasma", u0)
-        amr._install_program_so(compiled.so_path)
+        amr._install_problem_so(compiled.so_path)
         last_dt = 0.0
         for _ in range(nsteps):
             last_dt = float(amr.step_cfl(cfl))

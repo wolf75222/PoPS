@@ -21,6 +21,7 @@ Runs as a plain script (``python3 test_name_binding_runtime.py``, the CI invocat
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.runtime._bricks_scheme import Explicit, FiniteVolume
 import sys
 
 
@@ -61,16 +62,46 @@ def passive_model(name):
     m.conservative_from([rho])
     m.flux(x=[a * rho], y=[a * rho])
     m.eigenvalues(x=[a + 0.0 * rho], y=[a + 0.0 * rho])
-    m.source_term("decay", [-0.3 * rho])
+    decay = m.source_term("decay", [-0.3 * rho])
+    m.rate_operator("explicit_rhs", flux=True, sources=[decay])
     return m
 
 
-def two_block_program(t, name="nb_two_block"):
+def passive_module(name):
+    """Operator-first Module equivalent of passive_model(), used by compile_problem."""
+    from pops import model
+    from pops.ir.expr import Var
+    mod = model.Module(name)
+    U = mod.state_space("U", ("rho",))
+    rho = Var("rho", "cons")
+    mod.primitive("rho", rho)
+    mod.primitive("u", 0.0 * rho)
+    mod.operator(
+        name="flux",
+        signature=(U,) >> model.Rate(U),
+        kind="grid_operator",
+        expr={"x": [0.7 * rho], "y": [0.7 * rho]},
+    )
+    decay = mod.operator(
+        name="decay",
+        signature=(U,) >> model.Rate(U),
+        kind="local_source",
+        expr=[-0.3 * rho],
+    )
+    mod.eigenvalues(x=[0.7 + 0.0 * rho], y=[0.7 + 0.0 * rho])
+    mod.rate_operator("explicit_rhs", flux=True, sources=[decay])
+    return mod
+
+
+def two_block_program(t, module, name="nb_two_block"):
     """Forward-Euler passive transport of blocks "a" then "b" (P.state order a=0, b=1)."""
     P = t.Program(name)
+    P.bind_operators(module)
+    states = module.state_spaces()
+    rate = module.operator_registry().get("explicit_rhs")
     for blk in ("a", "b"):
-        U = P.state(blk)
-        R = P._legacy_rhs(name="R_" + blk, state=U, flux=True, sources=["decay"])
+        U = P.state("U", block=blk, space=states["U"]).n
+        R = P.call(rate, U, name="R_" + blk)
         P.commit(blk, P.linear_combine(blk + "_next", U + P.dt * R))
     return P
 
@@ -81,11 +112,10 @@ def _run():
 
         import pops
         import pops.time as t
-        from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops / pops.time unavailable
         _skip("pops / pops.time / numpy unavailable: %s" % exc)
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
         _skip("_pops lacks the install_program binding (rebuild _pops)")
 
     print("== NAME-based block binding: reversed System add-order matches in-order ==")
@@ -101,7 +131,8 @@ def _run():
 
     # Compile the 2-block .so ONCE (production model + compiled Program). Needs compiler + Kokkos.
     try:
-        comp = pops.compile_problem(model=passive_model("nb_model"), time=two_block_program(t))
+        module = passive_module("nb_model")
+        comp = pops.compile_problem(model=module, time=two_block_program(t, module))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -113,21 +144,21 @@ def _run():
                 cm = passive_model("nb_blk_" + blk)._compile_for_runtime(backend=pops.codegen.Production())
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
-            sim._add_equation(blk, cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                             time=pops.Explicit.euler())
+            sim._add_equation(blk, cm, spatial=FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                             time=Explicit.euler())
         for blk in add_order:
             sim._set_state(blk, ic[blk][None, :, :])
         return sim
 
     # (1) Baseline: blocks added in P.state order (a, b).
     sim_inorder = make_sim(["a", "b"])
-    sim_inorder._install_program_so(comp.so_path)
+    sim_inorder._install_problem_so(comp.so_path)
     sim_inorder.step(dt)
     ref = {blk: np.array(sim_inorder._get_state(blk)) for blk in ("a", "b")}
 
     # (2) Reversed: blocks added (b, a). The .so binds by NAME, so each block must match the baseline.
     sim_rev = make_sim(["b", "a"])
-    sim_rev._install_program_so(comp.so_path)
+    sim_rev._install_problem_so(comp.so_path)
     sim_rev.step(dt)
     got = {blk: np.array(sim_rev._get_state(blk)) for blk in ("a", "b")}
 
@@ -142,7 +173,7 @@ def _run():
 
     print("== a missing block instance fails loud with the spec message ==")
     sim_missing = make_sim(["a"])  # block "b" the Program requires is NOT instantiated
-    chk(raises_with(lambda: sim_missing._install_program_so(comp.so_path),
+    chk(raises_with(lambda: sim_missing._install_problem_so(comp.so_path),
                     "Program requires block instance 'b', but simulation did not instantiate it"),
         "installing a Program needing 'b' on a System without 'b' raises the verbatim spec error")
 

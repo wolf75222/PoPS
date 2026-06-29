@@ -281,13 +281,14 @@ class _SystemIO:
         # phi : multigrid warm start (BIT-IDENTICAL restart) ; physical STATE if
         # gauss_policy="evolve" (phi is no longer re-derived from rho there).
         out["phi"] = np.asarray(self._s.potential_global(), dtype=np.float64)
-        # COMPILED-PROGRAM HISTORIES (ADC-406b): a compiled time Program with multistep histories (e.g.
+        # COMPILED-PROBLEM HISTORIES (ADC-406b): a compiled artifact with multistep histories (e.g.
         # Adams-Bashforth 2) carries the System-owned ring buffers across macro-steps. To make a
         # (run, checkpoint, restart, continue) run bit-identical to a continuous run, the rings (the
         # previous RHS R_{n-1}, ...) MUST survive the checkpoint -- else AB2 cold-starts again and
-        # diverges. The program HASH is recorded too: a restart against a DIFFERENT compiled Program is
-        # rejected (the buffers / cadence would be meaningless). Both groups of keys are OPTIONAL: a
-        # checkpoint with no installed program / no history restarts exactly as before (back-compatible).
+        # diverges. The installed artifact hash is recorded too: a restart against a different
+        # compiled problem is rejected (the buffers / cadence would be meaningless). Both groups of
+        # keys are OPTIONAL: a checkpoint with no installed artifact / no history restarts exactly as
+        # before.
         prog_hash = ""
         if hasattr(self._s, "installed_program_hash"):
             prog_hash = self._s.installed_program_hash()
@@ -305,7 +306,7 @@ class _SystemIO:
                 for k in range(depth):
                     out["history_%s_%d" % (hname, k)] = np.asarray(
                         self._s.history_global(hname, k), dtype=np.float64)
-        # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): a compiled Program with a held schedule
+        # SCHEDULER VALUE CACHE (ADC-458, Spec 3 section 30): a compiled artifact with a held schedule
         # (every(N).hold / accumulate_dt) caches the System aux / a scratch per node so the field solve
         # runs only when DUE. The cache lives in the System (program_cache, NOT the .so step closure),
         # so checkpointing it makes a (run, checkpoint, restart, continue) run bit-for-bit identical to
@@ -372,17 +373,17 @@ class _SystemIO:
         # state in gauss_policy="evolve").
         if "phi" in d:
             self._s.set_potential(np.asarray(d["phi"], dtype=np.float64).ravel())
-        # COMPILED-PROGRAM HASH GUARD (ADC-406b): if the checkpoint recorded an installed program hash,
-        # the user must have RE-INSTALLED the SAME compiled Program before restart (the v1 replay
-        # contract). A different Program (different IR hash) makes the restored histories / cadence
-        # meaningless -> fail loud rather than silently continue with the wrong scheme.
+        # COMPILED-PROBLEM HASH GUARD (ADC-406b): if the checkpoint recorded an installed artifact
+        # hash, the user must have re-installed the same compiled problem before restart (the v1
+        # replay contract). A different artifact makes the restored histories / cadence meaningless
+        # -> fail loud rather than silently continue with the wrong scheme.
         if "program_hash" in d:
             chk_hash = str(d["program_hash"])
             cur_hash = (self._s.installed_program_hash()
                         if hasattr(self._s, "installed_program_hash") else "")
             if cur_hash != chk_hash:
-                raise RuntimeError("checkpoint was created with a different compiled Program hash")
-        # COMPILED-PROGRAM HISTORIES (ADC-406b): restore each ring (the previous RHS, ...) so a
+                raise RuntimeError("checkpoint was created with a different compiled problem hash")
+        # COMPILED-PROBLEM HISTORIES (ADC-406b): restore each ring (the previous RHS, ...) so a
         # multistep scheme (AB2) resumes EXACTLY where it stopped -- continuous == (run, ckpt, restart,
         # continue) bit-for-bit. The program re-registers the rings on its first post-restart step;
         # restoring them here (before that step) seeds the slots and the initialized flag so the first

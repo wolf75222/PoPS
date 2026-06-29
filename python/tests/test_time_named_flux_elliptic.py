@@ -284,7 +284,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     _skipB("numpy/_pops unavailable: %s" % exc)
 
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
     _skipB("_pops lacks the install_program binding (rebuild _pops)")
 
 N = 16
@@ -330,12 +330,12 @@ except RuntimeError as exc:
     _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
 
 sim_w, U0 = make_sim(whole_flux_model("nf_whole_block"))
-sim_w._install_program_so(compiled_whole.so_path)
+sim_w._install_problem_so(compiled_whole.so_path)
 sim_w.step(DT)
 U_w = np.array(sim_w._get_state("plasma"))
 
 sim_s, _ = make_sim(split_flux_model("nf_split_block"))
-sim_s._install_program_so(compiled_split.so_path)
+sim_s._install_problem_so(compiled_split.so_path)
 sim_s.step(DT)
 U_s = np.array(sim_s._get_state("plasma"))
 

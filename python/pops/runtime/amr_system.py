@@ -71,8 +71,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
 
         Mirrors :meth:`pops.runtime.system.System.run`: Python only orchestrates macro-steps by
         calling the C++ ``step_cfl`` method; all cell work remains in the native runtime. When a
-        compiled Program cadence pins ``cfl="program"``, the wrapper calls ``step_cfl(1.0)`` and the
-        installed Program dt-bound hook tightens the step inside C++.
+        compiled artifact cadence pins ``cfl="program"``, the wrapper calls ``step_cfl(1.0)`` and the
+        installed artifact's dt-bound hook tightens the step inside C++.
         """
         if cfl is None:
             cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
@@ -236,7 +236,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
                           solvers=None, cadence=None, outputs=None):
-        """Shared AMR install seam for native blocks and compiled Program handles."""
+        """Shared AMR install seam for native blocks and compiled problem handles."""
         instances = instances or {}
         params = params or {}
         aux = aux or {}
@@ -246,10 +246,10 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(self, compiled, instances, params, aux, solvers)
 
-        # COMPILED vs NATIVE. COMPILED: `compiled` carries a .so_path time Program (installed in step 5,
-        # with the section-24 .so validation) + a PHYSICAL model (the per-block model an instance falls
-        # back on). NATIVE: `compiled is None` -- each instance carries its OWN native model. Validate the
-        # handle up front, BEFORE any native mutation (no half-configured AMR hierarchy).
+        # COMPILED vs NATIVE. COMPILED: `compiled` carries a combined .so artifact attached in step 5
+        # plus a physical Module (the per-block model an instance falls back on). NATIVE:
+        # `compiled is None` -- each instance carries its own native model. Validate the handle up
+        # front, BEFORE any native mutation (no half-configured AMR hierarchy).
         so_path = None
         compiled_model = None
         if compiled is not None:
@@ -260,20 +260,19 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                     "result, or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
             compiled_model = getattr(compiled, "model", None)
-        # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
-        # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED
-        # named elliptic fields (ADC-428), collected from the per-instance models, widen the accepted
-        # solver-field set beyond the default Poisson names: a solver selection for a model-declared named
-        # field routes (the native loader wired register_elliptic_field), a typo is rejected against the
-        # declared set. Mirror of System._install with _declared_elliptic_fields.
+        # (1) FIELD SOLVERS first (parity with System): configure solvers before adding blocks and
+        # before attaching the compiled artifact because native requirement validation reads the
+        # configured solver. Declared named elliptic fields (ADC-428), collected from the per-instance
+        # models, widen the accepted solver-field set beyond the default Poisson names: a solver
+        # selection for a model-declared named field routes (the native loader wired
+        # register_elliptic_field), a typo is rejected against the declared set.
         declared_fields = self._declared_elliptic_fields(instances)
         for field, solver_brick in solvers.items():
             self._install_solver(field, solver_brick, declared_fields)
 
-        # (2) INSTANCES: add each named block (add_equation, binds the Program block of that name), then
-        # set its initial density. The block model is the per-instance "model" if given, else the
-        # PHYSICAL model carried by the compiled handle (compiled.model) -- NOT the handle itself (the
-        # time Program .so installed in step 5).
+        # (2) INSTANCES: add each named block, then set its initial density. The block model is the
+        # per-instance "model" if given, else the physical Module carried by the compiled handle
+        # (compiled.model), never the handle itself.
         for name, spec in instances.items():
             if not isinstance(spec, dict):
                 raise TypeError("sim.install: instances[%r] must be a dict "
@@ -290,7 +289,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             self._add_equation(name, model, spatial=spatial, time=time)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
-        # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
+        # (a named aux resolves against the block's declared aux table) and before artifact attach.
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
@@ -300,9 +299,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             if initial is not None:
                 self.set_density(name, initial)
 
-        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route runtime params and
-        # apply the global cadence (or reject params= / cadence= on a NATIVE install). Extracted into the
-        # _AmrSystemProgram mixin (_finish_program_install) to keep this module under the line budget.
+        # (5/5b/6) COMPILED problem: attach the artifact on the AMR hierarchy, route runtime params
+        # and apply the global cadence (or reject params= / cadence= on a NATIVE install). Extracted
+        # into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
         self._finish_program_install(compiled, so_path, params, cadence)
         if outputs:
             self._output_policies = list(outputs)

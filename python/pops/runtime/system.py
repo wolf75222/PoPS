@@ -95,9 +95,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # indices (set_aux_field_component / aux_field_component). Empty for a block without a
         # named aux field. cf. set_aux_field / aux_field.
         self._aux_field_index = {}
-        # CFL carried by an installed compiled-time cadence (CompiledProgramCadence(cfl=X)), or None when the
-        # cadence pins no cfl. A numeric value is passed to step_cfl as-is; "program" asks the
-        # compiled Program dt_bound hook to tighten a step_cfl(1.0) step. Set by _install_cadence.
+        # CFL carried by an installed compiled-artifact cadence (CompiledProgramCadence(cfl=X)), or
+        # None when the cadence pins no cfl. A numeric value is passed to step_cfl as-is; "program"
+        # asks the installed artifact's dt_bound hook to tighten a step_cfl(1.0) step. Set by
+        # _install_cadence.
         self._program_cadence_cfl = None
         # OUTPUT / CHECKPOINT policies flowed by sim.install(...) through _install_compiled.
         # Empty until install; run(output_dir=...) fires each at its cadence via write()/checkpoint.
@@ -107,8 +108,9 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
 
         @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
-        by an installed ``CompiledProgramCadence(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
-        takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored. @p max_steps:
+        by an installed ``CompiledProgramCadence(cfl=X)`` cadence, else 0.4 -- so a numeric cadence
+        cfl actually takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored.
+        @p max_steps:
         guard (avoids an infinite loop if dt -> 0). @p output_dir: when output / checkpoint policies
         were flowed onto this System by ``sim.install(..., outputs=...)``, the
         directory the run writes them to; each policy fires at its own cadence through the existing

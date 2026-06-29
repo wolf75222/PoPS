@@ -1,52 +1,53 @@
-"""AmrSystem compiled-Program install mixin (Spec 6 sec.11, epic ADC-511 / ADC-508).
+"""AmrSystem compiled-problem install mixin (Spec 6 sec.11, epic ADC-511 / ADC-508).
 
 Extracted from :mod:`pops.runtime.amr_system` to keep that module under the Spec-4 36.3
-500-line budget. Holds the COMPILED time-Program tail of ``_install_compiled``: the
-``install_program`` step on the AMR hierarchy plus its runtime params (``set_program_params``)
-and global cadence (``set_program_cadence``). Mixed in via inheritance; operates on ``self._s``
-through the native binding and on the ``_install_*`` helpers of the host class. Mirror of the
-System routes in :mod:`pops.runtime._system_unified_install`.
+500-line budget. Holds the compiled-artifact tail of ``_install_compiled``: native artifact attach,
+runtime params and global cadence. Mixed in via inheritance; operates on ``self._s`` through the
+native binding and on the ``_install_*`` helpers of the host class. Mirror of the System routes in
+:mod:`pops.runtime._system_unified_install`.
 """
 
 
 class _AmrSystemProgram:
-    """COMPILED time-Program install / params / cadence methods of AmrSystem (ADC-508)."""
+    """Compiled-problem attach / params / cadence methods of AmrSystem (ADC-508)."""
 
-    def _install_program_so(self, so_path):
-        """Install a compiled Program shared object through the native AMR runtime.
+    def _install_problem_so(self, so_path):
+        """Install a combined compiled-problem shared object through the native AMR runtime.
 
-        The public ``install_program`` name is intentionally not exposed on ``AmrSystem``; this
-        private indirection keeps the install seam testable without reopening the old API.
+        The C++ binding still exposes the low-level symbol as ``install_program`` because the native
+        closure executes the generated ProgramContext. Python does not expose that route publicly:
+        this wrapper is the private compiled-problem loader used by ``sim.install``.
         """
         return self._s.install_program(so_path)
 
     def _finish_program_install(self, compiled, so_path, params, cadence):
-        """Steps 5/5b/6 of ``_install_compiled`` for a COMPILED time Program (ADC-508).
+        """Steps 5/5b/6 of ``_install_compiled`` for a compiled problem artifact (ADC-508).
 
         Runs AFTER the field solvers, blocks, aux inputs and initial state are wired:
 
-          - (5) install the compiled time Program on the AMR hierarchy (binds blocks by name +
-            runs the section-24 .so requirement validation: block instance / solver). The .so must
+          - (5) attach the compiled problem on the AMR hierarchy (binds blocks by name + runs native
+            requirement validation: block instance / solver). The .so must
             export pops_install_program_amr (target='amr_system'); a target='system' .so is rejected
-            at the C++ loader with an actionable message. NATIVE mode (so_path is None) has no Program
-            -- the step-2 blocks drive the native AMR loop, so a non-empty params= raises (the native
-            AMR .so loader does not transport runtime params, and AmrSystem has no set_block_params).
-          - (5b) COMPILED-PROGRAM RUNTIME PARAMS (parity ADC-510): route params to the per-PROGRAM-block
-            set_program_params, AFTER install_program seeded each block's declaration defaults. A name
-            declared by no Program kernel raises (no silent drop).
-          - (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
-            its macro-step cadence is GLOBAL. Apply it AFTER install_program. A native AMR install has no
-            Program -- set substeps / stride on the native time policy instead.
+            at the C++ loader with an actionable message. NATIVE mode (so_path is None) has no
+            compiled artifact; the step-2 blocks drive the native AMR loop, so a non-empty params=
+            raises (the native AMR block loader does not transport runtime params, and AmrSystem has
+            no set_block_params).
+          - (5b) COMPILED-PROBLEM RUNTIME PARAMS (parity ADC-510): route params to the per-block
+            runtime parameter table seeded by the native attach. A name declared by no generated
+            kernel raises (no silent drop).
+          - (6) COMPILED-PROBLEM CADENCE (substeps / stride): the artifact is one whole-system
+            closure, so its macro-step cadence is GLOBAL. Apply it AFTER attach. A native AMR install
+            has no compiled artifact -- set substeps / stride on the native time policy instead.
         """
         if so_path is not None:
-            self._install_program_so(so_path)
+            self._install_problem_so(so_path)
             if params:
-                self._install_program_params(compiled, params)
+                self._install_problem_params(compiled, params)
         elif params:
             raise ValueError(
                 "sim.install: runtime params (params=%s) are not wired on a NATIVE AMR install (the AMR "
                 "native .so loader does not transport runtime params, and AmrSystem has no "
-                "set_block_params); pass a compiled time Program "
+                "set_block_params); pass a compiled problem artifact "
                 "(pops.compile_problem(..., layout=AMR(...), backend=Production())) "
                 "to use params=, set them as const on the native model, or use System."
                 % sorted(params))
@@ -54,17 +55,19 @@ class _AmrSystemProgram:
         if cadence is not None:
             if so_path is None:
                 raise ValueError(
-                    "sim.install(cadence=): a cadence applies to a compiled time Program; a native AMR "
-                    "install (compiled=None) has no Program -- set substeps / stride on the native time "
-                    "policy instead.")
+                    "sim.install(cadence=): a cadence applies to a compiled problem artifact; a native "
+                    "AMR install (compiled=None) has no compiled artifact -- set substeps / stride on "
+                    "the native time policy instead.")
             self._install_cadence(cadence)
 
-    def _install_program_params(self, compiled, params):
-        """Route flat {param_name: value} to set_program_params per PROGRAM block (ADC-508, AMR mirror
-        of System._install_program_params): read the compiled handle's declared routing
-        (runtime_param_routes), build each block's COMPLETE value vector (declaration defaults for
-        unspecified names) and push it to the AMR-owned per-block RuntimeParams the Program kernels read.
-        A name declared by no Program kernel raises (no silent drop)."""
+    def _install_problem_params(self, compiled, params):
+        """Route flat {param_name: value} to native runtime params for a compiled AMR problem.
+
+        Reads the compiled handle's declared routing (runtime_param_routes), builds each block's
+        complete value vector (declaration defaults for unspecified names), and pushes it to the
+        AMR-owned per-block RuntimeParams the generated kernels read. A name declared by no generated
+        kernel raises (no silent drop).
+        """
         from pops.runtime._install_param_routing import route_program_params
         routes_fn = getattr(compiled, "runtime_param_routes", None)
         routes, defaults = routes_fn() if callable(routes_fn) else ({}, {})
@@ -73,15 +76,21 @@ class _AmrSystemProgram:
             self.set_program_params(blk, values)
         if unknown:
             raise ValueError(
-                "sim.install: params %s declared by no runtime parameter of the compiled Program "
-                "(a runtime param must be read by the Program's source / linear-source kernels and "
-                "declared dsl.Param(..., kind='runtime'))" % (unknown,))
+                "sim.install: params %s declared by no runtime parameter of the compiled problem "
+                "(a runtime param must be read by generated kernels and declared as a runtime param)"
+                % (unknown,))
+
+    def _set_problem_cadence(self, substeps, stride):
+        """Private native cadence attach used by the compiled-problem install seam."""
+        return self._s.set_program_cadence(substeps, stride)
 
     def _install_cadence(self, cadence):
-        """Apply a compiled-Program macro-step cadence to the installed AMR program (set_program_cadence,
-        AMR mirror of System._install_cadence). substeps=n re-runs the whole program over eff_dt/n;
-        stride=M runs it once per M macro-steps. A NUMERIC cadence.cfl is pinned so a bare run() with no
-        explicit cfl= uses it (step_cfl routes the per-block CFL dt through the installed program)."""
+        """Apply a compiled-problem macro-step cadence to the installed AMR artifact.
+
+        ``substeps=n`` re-runs the whole artifact over ``eff_dt/n``; ``stride=M`` runs it once per
+        M macro-steps. A numeric ``cadence.cfl`` is pinned so a bare run() with no explicit cfl= uses
+        it (step_cfl routes the per-block CFL dt through the installed artifact).
+        """
         from pops.runtime._compiled_cadence import CompiledProgramCadence
         if not isinstance(cadence, CompiledProgramCadence):
             raise TypeError("sim.install(cadence=): expected an internal CompiledProgramCadence "
@@ -90,4 +99,4 @@ class _AmrSystemProgram:
             self._program_cadence_cfl = float(cadence.cfl)
         elif cadence.cfl == "program":
             self._program_cadence_cfl = "program"
-        self._s.set_program_cadence(cadence.substeps, cadence.stride)
+        self._set_problem_cadence(cadence.substeps, cadence.stride)

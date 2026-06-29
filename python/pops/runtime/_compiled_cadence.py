@@ -1,14 +1,14 @@
-"""Private compiled-Program cadence record.
+"""Private compiled-artifact cadence record.
 
 This is a runtime install detail, not part of the public ``pops.time`` language.
 Ready-made time schemes belong in ``pops.lib.time``; a user-authored
 ``pops.time.Program`` lowers to C++ and the runtime may carry this small record
-while binding the compiled shared object.
+while binding the compiled problem artifact.
 """
 
 
 class CompiledProgramCadence:
-    """Record the macro-step cadence applied around an installed compiled Program."""
+    """Record the macro-step cadence applied around an installed compiled problem artifact."""
 
     def __init__(self, substeps=1, stride=1, cfl="default"):
         if not isinstance(substeps, int) or substeps < 1:

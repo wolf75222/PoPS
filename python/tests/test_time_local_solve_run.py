@@ -17,7 +17,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
     problem.so, install_program, step(dt). The implicit Lorentz rotation has a closed form: with
     k = dt*B_z, den = 1 + k*k, mx' = (mx + k*my)/den, my' = (-k*mx + my)/den, rho unchanged. The
     stepped (mx, my) must match it to round-off. Runs in CI (gate-python rebuilds _pops) and locally
-    once _pops is rebuilt; skips if _pops lacks _install_program_so, numpy/_pops is absent, no compiler/Kokkos
+    once _pops is rebuilt; skips if _pops lacks _install_problem_so, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
 from pops.numerics.reconstruction import FirstOrder
@@ -124,7 +124,7 @@ chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
     "n_cons > 8 dense-fallback guard fires")
 
 # ---- (B) end-to-end Lorentz parity: skips unless the full toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_local_solve_run (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -164,7 +164,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
 chk(compiled.program_name == "lorentz_step", "handle carries the program name")
 
 prog, bz, U0 = make_sim()
-prog._install_program_so(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
+prog._install_problem_so(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
 prog.step(dt)
 U = np.array(prog._get_state("plasma"))
 

@@ -158,8 +158,8 @@ def test_amr_install_program_end_to_end_kokkos():
     compiler / Kokkos. The CUDA run is the ROMEO step; bit-identical parity is test_amr_program_parity."""
     print("== AMR install_program installs + runs the per-level driver ==")
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "_install_program_so"):
-        print("skip (_pops lacks AmrSystem._install_program_so; rebuild _pops)")
+    if not hasattr(amr, "_install_problem_so"):
+        print("skip (_pops lacks AmrSystem._install_problem_so; rebuild _pops)")
         return
     m = _euler_model()
     try:
@@ -176,7 +176,7 @@ def test_amr_install_program_end_to_end_kokkos():
         amr._add_equation("plasma", block_cm, spatial=pops.FiniteVolume(),
                          time=pops.Explicit.ssprk2())
         amr.set_density("plasma", rho)
-        amr._install_program_so(compiled.so_path)
+        amr._install_problem_so(compiled.so_path)
         amr.step(1e-3)  # the per-level macro-step runs over the hierarchy (AmrProgramContext)
         chk("plasma" in amr.block_names(), "the instance was bound and the AMR program installed")
         chk(amr.installed_program_hash() != "", "the installed program hash is recorded")
@@ -199,8 +199,8 @@ def test_multi_block_amr_program_install_runs():
     plumbing is missing; the C++/codegen/runtime path must be real."""
     print("== a multi-block AMR Program installs and runs ==")
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
-    if not hasattr(amr, "_install_program_so"):
-        print("skip (_pops lacks AmrSystem._install_program_so; rebuild _pops)")
+    if not hasattr(amr, "_install_problem_so"):
+        print("skip (_pops lacks AmrSystem._install_problem_so; rebuild _pops)")
         return
     m = _euler_model("adc508_2block_model")
     try:
@@ -223,7 +223,7 @@ def test_multi_block_amr_program_install_runs():
         print("skip (could not add the two AMR blocks: %s)" % str(exc)[:120])
         return
     try:
-        amr._install_program_so(compiled.so_path)
+        amr._install_problem_so(compiled.so_path)
         amr.step(1.0e-3)
     except RuntimeError as exc:
         msg = str(exc)

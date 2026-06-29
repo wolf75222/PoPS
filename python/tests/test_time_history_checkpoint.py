@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Checkpoint/restart of compiled-Program histories + the program-hash guard (epic ADC-399 / ADC-406b).
+"""Checkpoint/restart of compiled-problem histories + the artifact-hash guard (epic ADC-399 / ADC-406b).
 
-A compiled `Program` with multistep histories (e.g. Adams-Bashforth 2) carries System-owned ring
+A compiled problem with multistep histories (e.g. Adams-Bashforth 2) carries System-owned ring
 buffers across macro-steps (the previous RHS R_{n-1}, ...). For a checkpoint/restart to be correct the
 rings MUST survive the checkpoint, so a CONTINUOUS run is bit-for-bit identical to a (run, checkpoint,
 restart, continue) run -- without the rings the post-restart AB2 would cold-start again and diverge.
-The program HASH is recorded in the checkpoint too: restarting a DIFFERENT compiled Program is rejected
+The artifact hash is recorded in the checkpoint too: restarting a different compiled problem is rejected
 fail-loud (the restored buffers / cadence would be meaningless). The existing v1 checkpoint format
 (state, t, macro_step, phi) stays back-compatible: a checkpoint with no program/history keys restarts
 as before.
@@ -20,18 +20,20 @@ as before.
     (re-added block, re-installed program) restarts and runs N/2 more -> final state B. Assert A == B to
     machine precision (this exercises the history surviving the checkpoint) and that the clock matches.
 
-(C) Spec 46 (hash mismatch): checkpoint an AB2 program, then restart a DIFFERENT compiled Program
+(C) Spec 46 (hash mismatch): checkpoint an AB2 artifact, then restart a different compiled problem
     (Forward Euler, different IR hash) from that checkpoint -> RuntimeError containing
-    "checkpoint was created with a different compiled Program hash".
+    "checkpoint was created with a different compiled problem hash".
 
 Sections (B)/(C) self-skip (never fake the engine) without numpy / _pops / install_program / a compiler /
 a visible Kokkos, exactly like test_time_history.py.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.runtime._bricks_scheme import Explicit, FiniteVolume
 import os
 import sys
 import tempfile
+import inspect
 
 
 def _pops_time():
@@ -51,7 +53,7 @@ _NSTEPS = 6  # even, so N/2 is a whole number of macro-steps
 
 
 # ---- (A) NPZ facade keys: pure numpy, always runs when numpy is present ----
-def test_npz_key_scheme_roundtrips(_t):
+def test_npz_key_scheme_roundtrips():
     try:
         import numpy as np
     except Exception as exc:  # noqa: BLE001 -- numpy unavailable in this interpreter
@@ -120,7 +122,7 @@ def _passive_source_model(name):
 def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so") or not hasattr(sim, "history_names"):
+    if not hasattr(sim, "_install_problem_so") or not hasattr(sim, "history_names"):
         return None, None
     from pops.physics.facade import Model
     try:
@@ -130,8 +132,8 @@ def _build_system(pops, np, n):
         print("-- skipped: model compile could not build the .so: %s --" % str(exc)[:160])
         return None, None
     sim._add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit.euler())
+                     spatial=FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                     time=Explicit.euler())
     return sim, True
 
 
@@ -178,7 +180,7 @@ def _run_section_b(t):
 
     # (1) CONTINUOUS run: N steps in one go -> final state A.
     sim_cont._set_state("blk", np.stack([rho0]))
-    sim_cont._install_program_so(compiled.so_path)
+    sim_cont._install_problem_so(compiled.so_path)
     for _ in range(_NSTEPS):
         sim_cont.step(_DT)
     state_a = np.array(sim_cont._get_state("blk"))[0]
@@ -186,7 +188,7 @@ def _run_section_b(t):
     # (2) RUN N/2, CHECKPOINT.
     sim1, _ = _build_system(pops, np, n)
     sim1._set_state("blk", np.stack([rho0]))
-    sim1._install_program_so(compiled.so_path)
+    sim1._install_problem_so(compiled.so_path)
     for _ in range(half):
         sim1.step(_DT)
     with tempfile.TemporaryDirectory() as tmp:
@@ -194,7 +196,7 @@ def _run_section_b(t):
 
         # (3) FRESH system, re-add block, re-install the SAME program, RESTART, run N/2 more -> B.
         sim2, _ = _build_system(pops, np, n)
-        sim2._install_program_so(compiled.so_path)  # the hash guard needs the program installed first
+        sim2._install_problem_so(compiled.so_path)  # the hash guard needs the artifact installed first
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, \
             "restart restores macro_step (%d != %d)" % (sim2.macro_step(), half)
@@ -239,7 +241,7 @@ def _offline_ab2_cold_restart(rho0, dt, nsteps, resume):
     return rho
 
 
-# ---- (C) spec 46: restart a DIFFERENT compiled Program -> hash-mismatch RuntimeError ----
+# ---- (C) spec 46: restart a DIFFERENT compiled problem -> hash-mismatch RuntimeError ----
 def _run_section_c(t):
     try:
         import numpy as np
@@ -263,7 +265,7 @@ def _run_section_c(t):
         "AB2 and Forward Euler must have different IR hashes (else the test is vacuous)"
 
     sim._set_state("blk", np.stack([np.ones((n, n))]))
-    sim._install_program_so(ab2.so_path)
+    sim._install_problem_so(ab2.so_path)
     sim.step(_DT)
     sim.step(_DT)
     with tempfile.TemporaryDirectory() as tmp:
@@ -271,23 +273,26 @@ def _run_section_c(t):
 
         # A fresh system that installs the WRONG (Forward Euler) program, then restarts the AB2 ckpt.
         sim2, _ = _build_system(pops, np, n)
-        sim2._install_program_so(fe.so_path)
+        sim2._install_problem_so(fe.so_path)
         try:
             sim2.restart(ckpt)
         except RuntimeError as exc:
             msg = str(exc)
-            assert "checkpoint was created with a different compiled Program hash" in msg, \
+            assert "checkpoint was created with a different compiled problem hash" in msg, \
                 "the hash mismatch must fail loud with the spec-46 message; got: %s" % msg
             print("  hash mismatch raised as expected: %s" % msg.splitlines()[0][:120])
             return True
-    raise AssertionError("restarting a different compiled Program must raise (spec test 46)")
+    raise AssertionError("restarting a different compiled problem must raise (spec test 46)")
 
 
 def _run():
     t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
-        fn(t)
+        if len(inspect.signature(fn).parameters) == 0:
+            fn()
+        else:
+            fn(t)
         print("ok", fn.__name__)
     print("PASS test_time_history_checkpoint (A: %d checks)" % len(fns))
     _run_section_b(t)

@@ -219,7 +219,7 @@ chk(bool(predictor_corrector_program().emit_cpp_program(model=named_source_model
     "the full predictor-corrector Program emits C++ (named sources + Lorentz local solves)")
 
 # ---- (B)/(C) end-to-end: skip unless the install_program binding is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
     print("-- (B)/(C) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_predictor_corrector (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -285,7 +285,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
 sim_fe, U0 = make_sim(named_source_model("electric_fe_block"))
-sim_fe._install_program_so(compiled_fe.so_path)
+sim_fe._install_problem_so(compiled_fe.so_path)
 sim_fe.step(DT)
 U_fe = np.array(sim_fe._get_state("plasma"))
 
@@ -310,7 +310,7 @@ chk(compiled_pc.program_name == "predictor_corrector_poisson_lorentz",
     "handle carries the predictor-corrector program name")
 
 sim_pc, U0 = make_sim(named_source_model("pc_block"))
-sim_pc._install_program_so(compiled_pc.so_path)
+sim_pc._install_problem_so(compiled_pc.so_path)
 sim_pc.step(DT)
 U_pc = np.array(sim_pc._get_state("plasma"))
 

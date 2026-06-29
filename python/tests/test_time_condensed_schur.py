@@ -330,7 +330,7 @@ def _run_section_b(t):
         return None
 
     sim_probe = pops.System(n=8, L=_L, periodic=True)
-    if not hasattr(sim_probe, "_install_program_so"):
+    if not hasattr(sim_probe, "_install_problem_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
     if not hasattr(sim_probe, "set_magnetic_field"):
@@ -393,7 +393,7 @@ def _run_section_b(t):
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
             return None
-        sim._install_program_so(compiled.so_path)
+        sim._install_problem_so(compiled.so_path)
         sim.step(_DT)
         out = np.array(sim._get_state("blk"))
         ref, iters = _offline_step(U0, _ALPHA, theta, _BZ, h, _DT, _TOL)

@@ -229,7 +229,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     _skipB("numpy/_pops unavailable: %s" % exc)
 
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
     _skipB("_pops lacks the install_program binding (rebuild _pops)")
 
 N = 16
@@ -265,7 +265,7 @@ def step_program(model, prog):
     except RuntimeError as exc:
         _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim(model)
-    sim._install_program_so(compiled.so_path)
+    sim._install_problem_so(compiled.so_path)
     sim.step(DT)
     return np.array(sim._get_state("plasma"))
 

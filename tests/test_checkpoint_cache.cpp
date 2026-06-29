@@ -150,7 +150,7 @@ int main() {
     src.store(5, make_mf(1.0), 0, "fields_from_state");
 
     // the hash-mismatch message (raised on a different installed_program_hash)
-    const std::string hash_msg = "checkpoint was created with a different compiled Program hash";
+    const std::string hash_msg = "checkpoint was created with a different compiled problem hash";
     bool threw_hash = false;
     try {
       throw std::runtime_error(hash_msg);

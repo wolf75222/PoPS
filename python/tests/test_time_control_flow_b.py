@@ -178,8 +178,8 @@ def _run_section_b(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so"):
-        print("-- (B) skipped: _pops lacks _install_program_so (rebuild _pops) --")
+    if not hasattr(sim, "_install_problem_so"):
+        print("-- (B) skipped: _pops lacks _install_problem_so (rebuild _pops) --")
         return None
 
     from pops.physics.facade import Model
@@ -211,7 +211,7 @@ def _run_section_b(t):
         X, Y = np.meshgrid(x, x, indexing="ij")
         rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
         s._set_state("blk", np.stack([rho0]))
-        s._install_program_so(handle.so_path)
+        s._install_problem_so(handle.so_path)
         s.step(0.05)  # dt irrelevant: the body is dt-free
         return rho0, np.array(s._get_state("blk"))[0]
 

@@ -2,7 +2,7 @@
 """Spec 5 sec.10: strict EARLY install validation + public install parity (ADC-479 / ADC-463).
 
 ``System.install`` / ``AmrSystem.install`` are the explicit-runtime public wrappers over the same
-``_install_compiled`` seam used by ``pops.bind``. The seam reads the compiled artifact's DECLARED bind
+``_install_compiled`` seam. The seam reads the compiled artifact's DECLARED bind
 inputs -- ``compiled.arguments()`` (ADC-509) -- and rejects, BEFORE any native call, an install that
 does not supply a REQUIRED argument (instance / runtime param / aux / solver), with one clear
 actionable error naming exactly what is missing and how to supply it. The check is INERT: it reads
@@ -15,16 +15,16 @@ The tests build a SYNTHETIC ``CompiledProblem`` -- a real in-memory ``pops.time.
   - the pure router ``collect_missing_arguments`` flags only REQUIRED-and-missing inputs (a const
     param / the default-Poisson solver are NOT demanded);
   - ``System._install_compiled`` raises the clear early error when a required param / aux / instance is
-    missing, BEFORE the native ``install_program`` runs (mocked to detect ordering);
+    missing, BEFORE native artifact attach runs (mocked to detect ordering);
   - a VALID install (everything required supplied, or a model with NO required inputs) PASSES
     validation unchanged -- the no-break discipline;
   - a NATIVE install (``compiled=None``) carries no declared arguments and is skipped;
   - ``AmrSystem._install_compiled`` has signature parity with ``System._install_compiled`` and runs the
-    SAME validation, then REACHES ``install_program`` on the AMR hierarchy (epic ADC-511 / ADC-508) and
+    SAME validation, then reaches native artifact attach on the AMR hierarchy (epic ADC-511 / ADC-508) and
     routes the compiled ``params=`` / ``cadence=`` to ``set_program_params`` / ``set_program_cadence``;
     a NATIVE AMR install still rejects un-wired ``params=`` / ``cadence=``.
   - ``System.install`` and ``AmrSystem.install`` mirror the shared seam, so explicit-runtime code uses
-    the same validated path as ``pops.bind``.
+    one validated path.
 
 The Kokkos-gated end-to-end (a real ``compile_problem`` .so whose native install actually runs) is
 covered by ``test_unified_install.py`` / ``test_install_requirement_validation.py``; here we test the
@@ -40,10 +40,12 @@ try:
     import pops
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.physics.model import ConstParam, RuntimeParam
+    from pops.runtime._bricks_scheme import FiniteVolume
     from pops.runtime._system_unified_install import (collect_missing_arguments,
                                                       validate_install_arguments)
     from pops import time as adctime
     from pops.runtime._compiled_cadence import CompiledProgramCadence
+    from pops.solvers import GeometricMG
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_install_validation (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -56,14 +58,10 @@ N = 8
 # ---------------------------------------------------------------------------
 
 def _program(name="installval_demo"):
-    """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit on
-    'plasma' (so arguments().instances commits the 'plasma' block)."""
+    """A real in-memory Program: a typed state handle and a commit on 'plasma'."""
     P = adctime.Program(name)
-    dt = P.dt
-    U = P.state("plasma")
-    f = P._legacy_solve_fields("phi", U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    U = P.state("U", block="plasma").n
+    P.commit("plasma", P.linear_combine("U1", U))
     return P
 
 
@@ -110,8 +108,8 @@ def test_pure_router_flags_only_required_and_missing():
     chk(not any("solver" in m for m in missing),
         "the default Poisson solver is NOT required (it has a working default)")
     # Each line is actionable: it names the public pops.bind keyword to supply the input.
-    chk(any("pops.bind(params=" in m for m in missing), "the param line names pops.bind(params=)")
-    chk(any("pops.bind(aux=" in m for m in missing), "the aux line names pops.bind(aux=)")
+    chk(any("sim.install(params=" in m for m in missing), "the param line names sim.install(params=)")
+    chk(any("sim.install(aux=" in m for m in missing), "the aux line names sim.install(aux=)")
 
 
 def test_pure_router_passes_when_everything_supplied():
@@ -137,20 +135,20 @@ def test_pure_router_aggregates_multiple_missing():
 
 
 # ---------------------------------------------------------------------------
-# System._install_compiled: the early error, raised BEFORE the native install_program.
+# System._install_compiled: the early error, raised BEFORE native artifact attach.
 # ---------------------------------------------------------------------------
 
 def test_install_raises_before_native_when_required_missing():
-    """System._install_compiled raises the clear early error (naming cs2 + B_z) BEFORE install_program runs.
+    """System._install_compiled raises the clear early error before native artifact attach.
 
-    install_program is mocked to flip a flag; the validation must raise before it is ever called, so
-    a misuse cannot leave a half-configured System."""
-    print("== System._install_compiled raises BEFORE the native install_program ==")
+    The private artifact attach wrapper is mocked to flip a flag; validation must raise before it is
+    ever called, so a misuse cannot leave a half-configured System."""
+    print("== System._install_compiled raises BEFORE native artifact attach ==")
     params = {"cs2": RuntimeParam("cs2", 1.0)}
     cp = _compiled(aux_names=("B_z",), params=params)
     sim = pops.System(n=N, L=1.0, periodic=True)
     called = {"native": False}
-    sim._install_program_so = lambda *a, **k: called.__setitem__("native", True)
+    sim._install_problem_so = lambda *a, **k: called.__setitem__("native", True)
     try:
         sim._install_compiled(cp, instances={"plasma": {"model": _model(params=params),
                                               "initial": np.ones((3, N, N))}})
@@ -158,8 +156,8 @@ def test_install_raises_before_native_when_required_missing():
     except ValueError as exc:
         msg = str(exc)
         chk("cs2" in msg and "B_z" in msg, "the error names both missing required inputs")
-        chk("pops.bind(params=" in msg and "pops.bind(aux=" in msg, "the error is actionable")
-        chk(called["native"] is False, "install_program did NOT run (validation fired first)")
+        chk("sim.install(params=" in msg and "sim.install(aux=" in msg, "the error is actionable")
+        chk(called["native"] is False, "compiled artifact attach did NOT run (validation fired first)")
 
 
 def test_install_missing_instance_is_flagged():
@@ -167,7 +165,7 @@ def test_install_missing_instance_is_flagged():
     print("== System._install_compiled flags a missing required instance ==")
     cp = _compiled(aux_names=())  # no aux, no params -> only the 'plasma' instance is required
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim._install_program_so = lambda *a, **k: None
+    sim._install_problem_so = lambda *a, **k: None
     try:
         sim._install_compiled(cp, instances={})  # 'plasma' neither passed nor added
         chk(False, "install should have raised for the missing 'plasma' instance")
@@ -186,7 +184,7 @@ def _stub_lower_layer(sim, record):
     sim._add_equation = lambda name, model, **k: record["blocks"].append(name)
     sim._set_state = lambda *a, **k: None
     sim._install_solver = lambda *a, **k: None
-    sim._install_program_so = lambda *a, **k: record.__setitem__("native", True)
+    sim._install_problem_so = lambda *a, **k: record.__setitem__("native", True)
     sim.block_names = lambda: list(record["blocks"])
 
 
@@ -195,7 +193,7 @@ def test_valid_install_passes_validation_unchanged():
 
     The no-break discipline: a previously valid install (the ssprk2-style shape: instances + a
     solver, no aux) must not be rejected. The lower-layer add path is stubbed (the synthetic model
-    has no dlopen-able .so); we assert validation passed and install_program was reached."""
+    has no dlopen-able .so); we assert validation passed and artifact attach was reached."""
     print("== a valid install (no required aux/params) passes through unchanged ==")
     cp = _compiled(aux_names=())  # Euler-style: no aux, no runtime params
     sim = pops.System(n=N, L=1.0, periodic=True)
@@ -204,9 +202,9 @@ def test_valid_install_passes_validation_unchanged():
     sim._install_compiled(cp,
                 instances={"plasma": {"model": _model(aux_names=()),
                                       "initial": np.ones((3, N, N)),
-                                      "spatial": pops.FiniteVolume()}},
-                solvers={"phi": pops.fields.catalog.GeometricMG()})
-    chk(record["native"] is True, "validation passed and the native install_program was reached")
+                                      "spatial": FiniteVolume()}},
+                solvers={"phi": GeometricMG()})
+    chk(record["native"] is True, "validation passed and the native artifact attach was reached")
     chk(record["blocks"] == ["plasma"], "the instance was wired (validation did not block it)")
 
 
@@ -219,9 +217,9 @@ def test_native_install_skips_validation():
     _stub_lower_layer(sim, record)
     sim._install_compiled(None, instances={"plasma": {"model": _model(aux_names=()),
                                             "initial": np.ones((3, N, N)),
-                                            "spatial": pops.FiniteVolume()}})
+                                            "spatial": FiniteVolume()}})
     chk(record["blocks"] == ["plasma"], "native install wired the block without a compiled check")
-    chk(record["native"] is False, "compiled=None skips install_program (no compiled Program)")
+    chk(record["native"] is False, "compiled=None skips compiled artifact attach")
 
 
 def test_install_solver_accepts_rich_elliptic_descriptor():
@@ -318,10 +316,10 @@ def test_amr_install_runs_the_same_validation():
 
 
 def _stub_amr_lower_layer(amr, record):
-    """Stub the AMR engine-call methods so _install_compiled's wiring (add_equation / install_program /
+    """Stub the AMR engine-call methods so _install_compiled's wiring (add_equation / artifact attach /
     set_program_params / set_program_cadence) is exercised WITHOUT a Kokkos engine or a dlopen-able .so.
-    Mirror of _stub_lower_layer for AmrSystem: records the program install + the routed params/cadence
-    so the test asserts the compiled AMR path REACHES install_program (epic ADC-511 / ADC-508), not a
+    Mirror of _stub_lower_layer for AmrSystem: records artifact attach + the routed params/cadence
+    so the test asserts the compiled AMR path reaches native attach (epic ADC-511 / ADC-508), not a
     NotImplementedError."""
     record.setdefault("blocks", [])
     record.setdefault("installed", False)
@@ -331,31 +329,31 @@ def _stub_amr_lower_layer(amr, record):
     amr.set_density = lambda *a, **k: None
     amr._install_solver = lambda *a, **k: None
     amr._install_aux = lambda *a, **k: None
-    amr._install_program_so = lambda *a, **k: record.__setitem__("installed", True)
+    amr._install_problem_so = lambda *a, **k: record.__setitem__("installed", True)
     amr.set_program_params = lambda blk, values: record["params"].append((blk, list(values)))
-    amr.set_program_cadence = lambda substeps, stride: record.__setitem__("cadence", (substeps, stride))
+    amr._set_problem_cadence = lambda substeps, stride: record.__setitem__("cadence", (substeps, stride))
     amr.block_names = lambda: list(record["blocks"])
 
 
-def test_amr_compiled_path_reaches_install_program():
-    """Once validation passes, a COMPILED time Program now INSTALLS on the AMR hierarchy (epic
-    ADC-511 / ADC-508): _install_compiled wires the instances/aux, then reaches install_program. The
+def test_amr_compiled_path_reaches_artifact_attach():
+    """Once validation passes, a compiled problem artifact attaches on the AMR hierarchy (epic
+    ADC-511 / ADC-508): _install_compiled wires the instances/aux, then reaches native attach. The
     real dlopen + per-level driver are Kokkos/ROMEO-gated; here the engine call is stubbed to assert
     the WIRING (no NotImplementedError), not the run."""
-    print("== AmrSystem._install_compiled: compiled path reaches install_program (no reject) ==")
+    print("== AmrSystem._install_compiled: compiled path reaches artifact attach (no reject) ==")
     cp = _compiled(aux_names=("B_z",))
     amr = pops.AmrSystem(n=N, L=1.0)
     record = {}
     _stub_amr_lower_layer(amr, record)
     amr._install_compiled(cp, instances={"plasma": {"model": _model(), "initial": np.ones((3, N, N))}},
                           aux={"B_z": np.ones(N * N)})
-    chk(record["installed"] is True, "the compiled AMR path REACHED install_program (now wired)")
-    chk(record["blocks"] == ["plasma"], "the instance was wired before install_program")
+    chk(record["installed"] is True, "the compiled AMR path reached artifact attach (now wired)")
+    chk(record["blocks"] == ["plasma"], "the instance was wired before artifact attach")
 
 
 def test_amr_compiled_params_and_cadence_route():
     """A COMPILED AMR install routes params= to set_program_params and cadence= to set_program_cadence
-    (the AMR counterparts of the System routes), AFTER install_program. The compiled handle's
+    (the AMR counterparts of the System routes), AFTER artifact attach. The compiled handle's
     runtime_param_routes is stubbed to the {block: [name]} the codegen emits (the SAME pure core
     route_program_params the System path uses), so this exercises the WIRING deterministically without a
     Program that symbolically reads the param."""
@@ -370,7 +368,7 @@ def test_amr_compiled_params_and_cadence_route():
                                                 "initial": np.ones((3, N, N))}},
                           params={"cs2": 2.0},
                           cadence=CompiledProgramCadence(substeps=2, stride=3))
-    chk(record["installed"] is True, "install_program was reached")
+    chk(record["installed"] is True, "artifact attach was reached")
     chk(record["params"] == [(0, [2.0])], "params= routed to set_program_params (block 0, [2.0])")
     chk(record["cadence"] == (2, 3), "cadence= routed to set_program_cadence (substeps=2, stride=3)")
 

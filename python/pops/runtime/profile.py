@@ -271,7 +271,7 @@ class PerformanceSummary:
         """Per-program-node timings (the ``node:<name>`` scopes the compiled step emits).
 
         Keys are the bare node names (``rhs2``, ``solve_fields1``, ...). Empty on a native step
-        (no compiled Program); populated under a compiled ``.so`` step.
+        (no compiled artifact); populated under a compiled ``.so`` step.
         """
         nodes = {name[len(_NODE_PREFIX):]: dict(fields)
                  for name, fields in self._parsed["scopes"].items()
@@ -281,9 +281,9 @@ class PerformanceSummary:
     def by_native_brick(self):
         """Per-native-brick timings.
 
-        The native runtime times Program nodes and coarse phases, not individual bricks: there is no
+        The native runtime times generated program nodes and coarse phases, not individual bricks: there is no
         per-brick scope to read. Declared unavailable rather than faked (the per-brick granularity is
-        a documented follow-up wired through the compiled ProgramContext).
+        a documented follow-up wired through the generated ProgramContext).
         """
         return _Unavailable(
             "by_native_brick",

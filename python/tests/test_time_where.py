@@ -181,7 +181,7 @@ def _run_section_b(t):
 
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so"):
+    if not hasattr(sim, "_install_problem_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return None
 
@@ -225,7 +225,7 @@ def _run_section_b(t):
     rho0 = 0.5 + 0.4 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     sim._set_state("blk", np.stack([rho0]))
 
-    sim._install_program_so(compiled.so_path)
+    sim._install_problem_so(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the select is dt-free
     out = np.array(sim._get_state("blk"))[0]
 
