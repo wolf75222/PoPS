@@ -9,6 +9,7 @@ import pytest
 
 physics = pytest.importorskip("pops.physics")
 amath = pytest.importorskip("pops.math")
+from pops.solvers import GeometricMG  # noqa: E402
 from pops.time import Program  # noqa: E402
 
 
@@ -26,7 +27,7 @@ def _board_model():
     phi = m.field("phi")
     m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho),
                   outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-                  solver="geometric_mg")
+                  solver=GeometricMG())
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
     bz = m.aux("B_z")
@@ -40,9 +41,9 @@ def _board_model():
 def test_program_dump_operator_ir_shows_the_lowering():
     P = Program("fe")
     dt = P.dt
-    u = P.state("plasma")
-    f = P._legacy_solve_fields("f", u)
-    r = P._legacy_rhs(name="R", state=u, fields=f, flux=True, sources=["electric"])
+    u = P.state("U", block="plasma").n
+    f = P._fields_from_state("f", u)
+    r = P._rate_from_transport(name="R", state=u, fields=f, flux=True, sources=["electric"])
     u1 = P.linear_combine("U1", u + dt * r)
     P.commit("plasma", u1)
     txt = P.dump_operator_ir()
@@ -54,8 +55,8 @@ def test_program_dump_operator_ir_shows_the_lowering():
 
 def test_program_dump_board_and_cpp_plan():
     P = Program("fe")
-    u = P.state("plasma")
-    P._legacy_solve_fields("f", u)
+    u = P.state("U", block="plasma").n
+    P._fields_from_state("f", u)
     board = P.dump_board()
     plan = P.dump_cpp_plan()
     assert "board == operator-first" in board
@@ -87,14 +88,14 @@ def test_callable_operator_rebinds_for_out_of_order_registration():
     phi = m.field("phi")
     m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho),
                   outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-                  solver="geometric_mg")
+                  solver=GeometricMG())
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
     explicit_rate = m.rate("explicit_rate", ddt(U) == -div(flux) + a_src)
 
     P = Program("late")
-    u_n = P.state("plasma")
-    f_n = P._legacy_solve_fields("f", u_n)
+    u_n = P.state("U", block="plasma").n
+    f_n = P._fields_from_state("f", u_n)
     explicit_rate(u_n, f_n)                      # binds the module (no implicit_operator yet)
     bz = m.aux("B_z")
     c_b = m.local_linear_operator("C(B)", on=U,

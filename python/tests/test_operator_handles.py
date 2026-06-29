@@ -70,7 +70,7 @@ def test_handles_name_declared_operators():
 
 def test_rate_operator_rejects_string_source_selectors():
     m, _ = build_model()
-    with pytest.raises(TypeError, match="typed source handles"):
+    with pytest.raises(TypeError, match="typed source operators/handles"):
         m.rate_operator("bad_rhs", flux=True, sources=["electric"])
     # The implicit built-in source sentinel remains allowed.
     m.rate_operator("default_rhs", flux=True, sources=["default"])
@@ -80,6 +80,10 @@ def test_rate_operator_rejects_string_source_selectors():
 # A handle for the built-in default-Poisson field operator; the public P.call needs it (a bare
 # string field name is refused). Internally _call resolves the name token identically.
 _FIELDS = OperatorHandle("fields_from_state", kind="field_operator")
+
+
+def _state(P, m):
+    return P.state("U", block="plasma", space=m.state_spaces()["U"]).n
 
 
 def _select(P, selector, *args, name=None):
@@ -94,7 +98,7 @@ def _rate_program(m, selector):
     """Build a one-step predictor Program calling the rate operator via ``selector`` (a name or
     a handle). Returns the Program (its ``_ir_hash`` is the IR fingerprint)."""
     P = adctime.Program("prog").bind_operators(m)
-    U = P.state("plasma")
+    U = _state(P, m)
     f = P.call(_FIELDS, U)
     R = _select(P, selector, U, f)
     P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
@@ -123,7 +127,7 @@ def test_name_path_byte_identical_across_models():
 
     def src_prog(selector):
         P = adctime.Program("p").bind_operators(m)
-        U = P.state("plasma")
+        U = _state(P, m)
         f = P.call(_FIELDS, U)
         s = _select(P, selector, U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
@@ -133,7 +137,7 @@ def test_name_path_byte_identical_across_models():
 
     def lin_prog(selector):
         P = adctime.Program("p").bind_operators(m)
-        U = P.state("plasma")
+        U = _state(P, m)
         f = P.call(_FIELDS, U)
         L = _select(P, selector, f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
@@ -149,7 +153,7 @@ def test_public_call_rejects_a_string():
     handle path (the one public path is the typed handle)."""
     m, _ = build_model()
     P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    U = _state(P, m)
     with pytest.raises(TypeError, match="typed operator handle"):
         P.call("explicit_rhs", U)
     print("OK  public P.call('explicit_rhs') -> TypeError naming the handle path")
@@ -159,7 +163,7 @@ def test_bad_type_rejected():
     """A non-handle selector is a clear TypeError on the public surface (typed handle required)."""
     m, _ = build_model()
     P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    U = _state(P, m)
     with pytest.raises(TypeError, match="OperatorHandle"):
         P.call(123, U)
     with pytest.raises(TypeError, match="OperatorHandle"):
@@ -171,7 +175,7 @@ def test_foreign_handle_rejected():
     """A handle whose name is not in the bound registry is rejected like an unknown string name."""
     m, _ = build_model()
     P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
+    U = _state(P, m)
     foreign = OperatorHandle("not_declared_here", kind="local_rate")
     with pytest.raises(KeyError, match="unknown operator"):
         P.call(foreign, U)

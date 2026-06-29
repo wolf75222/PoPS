@@ -49,11 +49,10 @@ def _field_program(schedule):
     mod.operator(name="fields_from_state", signature=(u,) >> fields, kind="field_operator", expr=rho)
     mod.operator_capabilities("fields_from_state", cacheable=True)
     P = adctime.Program("sched").bind_operators(mod)
-    U = P.state("plasma", space=u)
-    if schedule is None:
-        P._call("fields_from_state", U)
-    else:
-        P._call("fields_from_state", U, schedule=schedule)
+    U = P.state("U", space=u, block="plasma").n
+    fields_node = P._fields_from_state(U)
+    if schedule is not None:
+        fields_node.attrs["schedule"] = schedule
     P.commit("plasma", U)
     return P
 
@@ -91,9 +90,9 @@ def _scratch_program(schedule):
     test_schedule_authoring); here the focus is the emitted guard shape."""
     P = adctime.Program("sched_rhs")
     dt = P.dt
-    U = P.state("ions")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="ions").n
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     R.attrs["schedule"] = schedule
     P.commit("ions", P.linear_combine("U1", U + dt * R))
     return P
@@ -139,11 +138,11 @@ def test_on_start_lowers_to_macro_step_zero():
 def test_when_reuses_program_predicate_token():
     P = adctime.Program("when_sched")
     dt = P.dt
-    U = P.state("ions")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="ions").n
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
-    R2 = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    R2 = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     R2.attrs["schedule"] = adctime.when(cond).hold()
     P.commit("ions", P.linear_combine("U1", U + dt * R2))
     P._check_schedules_lowerable()  # a Program Bool when() lowers

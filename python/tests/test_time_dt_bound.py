@@ -16,13 +16,16 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 
 def _skip(msg):
     print("skip test_time_dt_bound (%s)" % msg)
+    try:
+        import pytest
+        pytest.skip(msg, allow_module_level=True)
+    except ImportError:
+        pass
     sys.exit(0)
 
 
@@ -31,6 +34,13 @@ try:
 
     import pops
     from pops import time as adctime
+    from pops.runtime.bricks import Explicit
+    from pops.solvers import GeometricMG
+    from _module_models import (
+        explicit_euler,
+        first_order_rusanov,
+        isothermal_transport_module,
+    )
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -52,9 +62,9 @@ print("== (A) IR + codegen ==")
 
 def _fe(name="fe_dtbound"):
     P = adctime.Program(name)
-    U = P.state("ions")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="ions").n
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -75,7 +85,7 @@ P_dec = _fe("fe_decorator")
 
 @P_dec.dt_bound
 def _dt_bound(P, cfl):
-    U = P.state("ions")
+    U = P.state("U", block="ions").n
     w = P.max_wave_speed(U)
     return cfl * P.hmin() / w
 
@@ -90,7 +100,7 @@ chk("cfl" in src_dec.split("pops_program_dt_bound", 1)[1], "the cfl argument is 
 # (A3) P.set_dt_bound(expr) (the non-decorator form) records the same way; a different bound -> a
 # different IR hash (the bound is part of the IR identity / cache key).
 P_set = _fe("fe_setter")
-Ub = P_set.state("ions")
+Ub = P_set.state("U", block="ions").n
 P_set.set_dt_bound(0.5 * P_set.hmin() / P_set.max_wave_speed(Ub))
 chk(P_set.has_dt_bound(), "P.set_dt_bound(expr) records the bound")
 chk(P_no._ir_hash() != P_set._ir_hash(), "a dt bound changes the IR hash (distinct cache key)")
@@ -98,7 +108,7 @@ chk(P_no._ir_hash() != P_set._ir_hash(), "a dt bound changes the IR hash (distin
 # (A4) fail-loud: the body must return a Scalar, set at most once, and read only (no commit).
 P_bad = _fe("fe_bad")
 try:
-    P_bad.set_dt_bound(lambda P, cfl: P.state("ions"))  # returns a State, not a Scalar
+    P_bad.set_dt_bound(lambda P, cfl: P.state("U", block="ions").n)  # returns a State, not a Scalar
 except ValueError as exc:
     chk("Scalar" in str(exc), "non-Scalar dt bound body rejected")
 else:
@@ -123,7 +133,7 @@ else:
 
 if fails:
     print("FAIL test_time_dt_bound (Section A): %d failure(s)" % fails)
-    sys.exit(1)
+    raise AssertionError("Section A failed with %d failure(s)" % fails)
 print("PASS test_time_dt_bound Section A")
 
 
@@ -132,34 +142,33 @@ print("PASS test_time_dt_bound Section A")
 # ====================================================================================================
 print("== (B) step_cfl applies min(native CFL, program dt bound) ==")
 
-probe = pops.System(n=8, L=1.0, periodic=True)
-if not hasattr(probe, "_install_program_so") or not hasattr(probe, "set_program_cadence"):
-    _skip("_pops lacks _install_program_so (rebuild _pops) (A passed)")
-
-
 def transport_model():
     # Pure transport (isothermal, NoSource); BackgroundDensity(n0=0) keeps solve_fields well-defined
     # but INERT (no Poisson feedback into the flux), so the compiled cadence is bit-exact vs native.
-    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return isothermal_transport_module("time_dt_bound_model")
 
 
 N = 24
 CFL = 0.4
 
 
-def make_sim():
+def make_sim(time=None):
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim._add_block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit.euler())
-    sim._set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim._set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
+    sim.install(
+        None,
+        instances={
+            "ions": {
+                "model": transport_model(),
+                "spatial": first_order_rusanov(),
+                "time": time or explicit_euler(),
+                "initial": np.stack([rho, 0.4 * rho, -0.2 * rho]),
+            }
+        },
+        solvers={"phi": GeometricMG()},
+    )
     return sim
 
 
@@ -167,14 +176,14 @@ def fe_program(name, *, factor=None):
     """Forward Euler; with factor set, attach a dt bound factor * cfl * hmin / max_wave_speed (a
     multiple of the native single-block CFL dt = cfl * h / w): factor < 1 tightens, factor > 1 loosens."""
     P = adctime.Program(name)
-    U = P.state("ions")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="ions").n
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     if factor is not None:
         @P.dt_bound
         def _b(Pr, cfl, _f=factor):
-            Us = Pr.state("ions")
+            Us = Pr.state("U", block="ions").n
             w = Pr.max_wave_speed(Us)
             return _f * cfl * Pr.hmin() / w
     return P
@@ -191,8 +200,8 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
 
 
 def install(prog):
-    sim = make_sim()
-    sim._install_program_so(prog.so_path)
+    sim = make_sim(explicit_euler())
+    sim.install(prog)
     return sim
 
 
@@ -235,5 +244,5 @@ chk(float(np.abs(u1 - u_ref).max()) == 0.0,
 
 if fails:
     print("FAIL test_time_dt_bound: %d failure(s)" % fails)
-    sys.exit(1)
+    raise AssertionError("test_time_dt_bound failed with %d failure(s)" % fails)
 print("PASS test_time_dt_bound (Sections A + B)")

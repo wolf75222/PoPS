@@ -65,8 +65,8 @@ def _build_iso(cs2_kind, cs2_value=1.0):
 
 def _program():
     P = pops.time.Program("iso_runtime")
-    U = P.state("gas")
-    R = P._legacy_rhs(name="R", state=U, flux=True, sources=[])
+    U = P.state("U", block="gas").n
+    R = P._rate_from_transport(name="R", state=U, flux=True, sources=[])
     P.commit("gas", P.linear_combine("U1", U + P.dt * R))
     return P
 

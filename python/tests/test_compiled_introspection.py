@@ -45,9 +45,9 @@ def _program(name="intro_demo", *, krylov=False):
     carries the Krylov memory category."""
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
-    f = P._legacy_solve_fields("phi", U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state("phi", U)
+    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     if krylov:
         # A matrix-free Krylov solve (op x = rhs): lowers to a solve_linear IR node.
         buf = P.scalar_field("buf")

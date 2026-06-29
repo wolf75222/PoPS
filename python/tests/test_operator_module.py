@@ -86,7 +86,7 @@ def test_module_exposes_registry_and_spaces():
 def _build_predictor(P, mdl):
     """A GENERIC predictor step: no physics names, only typed operator calls."""
     P.bind_operators(mdl)
-    u = P.state("plasma")
+    u = P.state("U", block="plasma", space=mdl.state_spaces()["U"]).n
     fields = P._call("fields_from_state", u)
     rate = P._call("explicit_rhs", u, fields)
     lin = P._call("lorentz", fields)

@@ -12,7 +12,7 @@ Surfaces covered:
   2. ``pops.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
      a bare string is rejected (mirrors pops.compile).
   3. ``Model.param`` / board ``param`` / ``Module.param`` -- typed parameter metadata is preserved
-     without any legacy ``Case`` or ``to_dsl`` lowering escape hatch.
+     without any removed ``Case`` or ``to_dsl`` lowering escape hatch.
 
 Pure Python, no _pops / compiler needed: every check exercises the authoring + lowering layer.
 Runs under pytest AND standalone (``python test_spec5_destring_public.py``).
@@ -26,7 +26,7 @@ import pytest
 def _solve_program(method, *, restart=None, preconditioner=None):
     import pops.time as t
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):

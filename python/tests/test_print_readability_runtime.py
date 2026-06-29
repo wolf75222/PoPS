@@ -62,9 +62,9 @@ def _synthetic_compiled():
     ``.so`` or touches the runtime; only ``CompiledProblem``'s pure-Python metadata wrapper runs."""
     P = adctime.Program("demo")
     dt = P.dt
-    U = P.state("plasma")
-    f = P._legacy_solve_fields("phi", U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state("phi", U)
+    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     m = CompiledModel(
         so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",

@@ -28,6 +28,8 @@ import warnings
 
 import pytest
 
+INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
+
 try:
     import pops  # noqa: F401
     from pops.codegen.env import (
@@ -44,8 +46,8 @@ def _program(name="env_demo"):
     """A real in-memory Program (a state, a Forward-Euler commit) -- no compile."""
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
-    R = P._legacy_rhs(state=U, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    R = P._rate_from_transport(state=U, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -244,6 +246,7 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         monkeypatch.setenv("POPS_DUMP_IR", "1")
         monkeypatch.setenv("POPS_DUMP_CPP", "1")
         monkeypatch.setenv("POPS_AUTOTUNE", "basic")
+        monkeypatch.setenv("POPS_INCLUDE", INCLUDE)
         monkeypatch.delenv("POPS_JIT_BACKDOOR", raising=False)
 
         compiled = cd.compile_problem(model=_model(), time=_program("wired"), force=True)
@@ -279,6 +282,7 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
 
     with tempfile.TemporaryDirectory() as tmp:
         monkeypatch.setenv("POPS_CODEGEN_DIR", tmp)
+        monkeypatch.setenv("POPS_INCLUDE", INCLUDE)
         monkeypatch.delenv("POPS_KEEP_GENERATED", raising=False)
         compiled = cd.compile_problem(model=_model(), time=_program("dbg"), force=True, debug=True)
         assert compiled.codegen_env.keep_generated is True

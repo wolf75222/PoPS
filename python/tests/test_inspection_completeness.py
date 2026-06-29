@@ -43,9 +43,9 @@ def _program(name="intro_demo"):
     """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit."""
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
-    f = P._legacy_solve_fields("phi", U)
-    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state("phi", U)
+    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 

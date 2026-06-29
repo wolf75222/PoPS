@@ -26,9 +26,9 @@ def test_fields_define_commit_match_primitive_ir():
     def build(board):
         P = Program("fe")
         dt = P.dt
-        u = P.state("plasma")
-        f = P.fields("f", from_state=u) if board else P._legacy_solve_fields("f", u)
-        r = P._legacy_rhs(name="R", state=u, fields=f, flux=True, sources=["electric"])
+        u = P.state("U", block="plasma").n
+        f = P.fields("f", from_state=u) if board else P._fields_from_state("f", u)
+        r = P._rate_from_transport(name="R", state=u, fields=f, flux=True, sources=["electric"])
         if board:
             u1 = P.define("U1", u + dt * r)
         else:
@@ -43,8 +43,8 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
     def build(board):
         P = Program("imp")
         dt = P.dt
-        u = P.state("plasma")
-        r = P._legacy_rhs(name="R", state=u, flux=True, sources=["electric"])
+        u = P.state("U", block="plasma").n
+        r = P._rate_from_transport(name="R", state=u, flux=True, sources=["electric"])
         if board:
             u1 = P.solve(
                 "U1",
@@ -62,7 +62,7 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
 
 def test_apply_operator_to_state_via_matmul():
     P = Program("apply")
-    u = P.state("plasma")
+    u = P.state("U", block="plasma").n
     lu_board = P.linear_source("lorentz") @ u
     lu_manual = P.apply(operator=P.linear_source("lorentz"), state=u)
     assert lu_board.op == "apply" and lu_board.attrs["linear_source"] == "lorentz"
@@ -71,8 +71,8 @@ def test_apply_operator_to_state_via_matmul():
 
 def test_define_equation_keeps_and_renames_rhs():
     P = Program("def")
-    u = P.state("plasma")
-    raw = P._legacy_rhs(name="tmp", state=u, flux=True, sources=["electric"])
+    u = P.state("U", block="plasma").n
+    raw = P._rate_from_transport(name="tmp", state=u, flux=True, sources=["electric"])
     r = P.define("R^n", rate(u) == raw)
     assert r is raw            # same IR node
     assert r.name == "R^n"     # renamed to the board label
@@ -80,8 +80,8 @@ def test_define_equation_keeps_and_renames_rhs():
 
 def test_commit_many_is_atomic():
     P = Program("ms")
-    e = P.state("electrons")
-    i = P.state("ions")
+    e = P.state("U", block="electrons").n
+    i = P.state("U", block="ions").n
     e1 = P.linear_combine("e1", 2.0 * e)
     i1 = P.linear_combine("i1", 2.0 * i)
     P.commit_many({"electrons": e1, "ions": i1})
@@ -90,8 +90,8 @@ def test_commit_many_is_atomic():
 
 def test_commit_many_rejects_double_commit_without_partial():
     P = Program("ms")
-    e = P.state("electrons")
-    i = P.state("ions")
+    e = P.state("U", block="electrons").n
+    i = P.state("U", block="ions").n
     e1 = P.linear_combine("e1", 2.0 * e)
     i1 = P.linear_combine("i1", 2.0 * i)
     P.commit("electrons", e1)
@@ -103,7 +103,7 @@ def test_commit_many_rejects_double_commit_without_partial():
 
 def test_commit_many_rejects_non_state():
     P = Program("ms")
-    e = P.state("electrons")
+    e = P.state("U", block="electrons").n
     scalar = P.norm2(e)
     with pytest.raises(ValueError, match="needs a State value"):
         P.commit_many({"electrons": scalar})
@@ -111,9 +111,9 @@ def test_commit_many_rejects_non_state():
 
 def test_state_set_drives_a_multi_block_field_solve():
     P = Program("ss")
-    e = P.state("electrons")
-    i = P.state("ions")
-    n = P.state("neutrals")
+    e = P.state("U", block="electrons").n
+    i = P.state("U", block="ions").n
+    n = P.state("U", block="neutrals").n
     star = P.state_set("star", {"electrons": e, "ions": i, "neutrals": n})
     assert len(star) == 3
     f = P.fields("fstar", from_state_set=star)
@@ -133,7 +133,7 @@ def test_rate_bundle_typed_multi_output():
 
 def test_record_and_check_invariant_lower_to_record_scalar():
     P = Program("inv")
-    e = P.state("electrons")
+    e = P.state("U", block="electrons").n
     before = P.sum(e)                      # a Program scalar (reduction)
     P.record("mass", before)               # board diagnostic
     e1 = P.linear_combine("e1", 2.0 * e)
@@ -146,7 +146,7 @@ def test_record_and_check_invariant_lower_to_record_scalar():
 
 def test_record_rejects_non_scalar():
     P = Program("inv")
-    e = P.state("electrons")
+    e = P.state("U", block="electrons").n
     with pytest.raises(ValueError, match="must be a Program scalar"):
         P.record("bad", e)  # a State, not a scalar
 

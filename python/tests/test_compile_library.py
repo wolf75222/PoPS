@@ -16,10 +16,10 @@ import types as _t
 _num = pytest.importorskip("pops.numerics")
 _desc = pytest.importorskip("pops.descriptors")
 _physics = pytest.importorskip("pops.physics")
-# Spec 5: the catalogs moved out of pops.lib. This alias maps the old pops.lib attribute surface
-# onto the new homes so the Spec-3 descriptor tests keep exercising the real (relocated) descriptors:
+# Spec 5: the catalogs moved out of pops.lib. This local test fixture groups the new public homes so
+# the Spec-3 descriptor tests keep exercising the real descriptors:
 # the solver descriptors are the ONE public home pops.solvers (the pops.lib.solvers shim was
-# removed, no back-compat alias); the solver-generation DSL is internal/experimental under
+# removed); the solver-generation DSL is internal/experimental under
 # pops.codegen.solvers (criterion 19); the spatial brick catalog under pops.numerics.spatial and
 # the field brick catalog under pops.fields.catalog (criterion 7).
 _solv = pytest.importorskip("pops.solvers")
@@ -74,7 +74,7 @@ def _forward_euler_program(module, name="consume"):
     states = module.state_spaces()
     operators = module.operator_registry()
     dt = P.dt
-    U = P.state("ions", space=states["U"])
+    U = P.state("U", block="ions", space=states["U"]).n
     R = P.call(operators.get("explicit_rate"), U, name="R")
     P.commit("ions", P.linear_combine("U1", U + dt * R))
     return P
