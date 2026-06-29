@@ -78,7 +78,7 @@ def _brick_entry(obj):
         "category": obj.category,
         "scheme": obj.scheme,
         "native_id": obj.native_id,
-        "available": obj.available,
+        "available": obj.available().ok,
         "requirements": dict(obj.requirements),
         "capabilities": dict(obj.capabilities),
         "options": dict(obj.options),

@@ -63,10 +63,9 @@ only after a tag has already chosen its brick.
 
 Decision (Option A): replace the three physics-selecting defaults with an `unset` sentinel and add an
 explicit completeness check in `dispatch_model` that fails loudly (mirroring the existing
-`throw_registry_dispatch_mismatch` in `dispatch_tags.hpp`). Keep the numeric defaults. Keep the
-historical shortcut only at the Python edge: `pops.Model(...)` already requires all four bricks and is
-explicit-or-fail. In-tree blast radius is near zero (every C++ test sets the three tags;
-`pops.Model` always overwrites them).
+`throw_registry_dispatch_mismatch` in `dispatch_tags.hpp`). Keep the numeric defaults. The current
+Python clean-break route lowers typed assemblies to `pops.model.Module` and is explicit-or-fail.
+In-tree blast radius is near zero (every C++ test sets the three tags).
 
 Boundary vs ADC-331: ADC-290 makes "no model chosen" an error; ADC-331 later makes "which models can
 be chosen" an open registry. Doing ADC-290 first gives the registry a clean explicit-or-fail
@@ -156,7 +155,7 @@ declaration through that surface.
 
 - ADC-290: raw `ModelSpec()` default-construct behavior changes. In-tree safe; the only exposure is an
   out-of-tree consumer (adc_cases) that builds a bare `ModelSpec` and relies on compressible+charge.
-  Mitigation: keep shortcuts at `pops.Model(...)`; CHANGELOG `Changed`; pre-1.0.
+  Mitigation: require typed module-producing assemblies; CHANGELOG `Changed`; pre-1.0.
 - ADC-291: Option A non-breaking (POD layout + concept unchanged). Option B breaks the concept, the
   compiled-block ABI, and `abi_key` (deferred).
 - ADC-292: tightening fallbacks breaks only roleless-but-canonical third-party dynamic blocks (shipped

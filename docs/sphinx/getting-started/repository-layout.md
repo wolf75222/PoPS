@@ -19,8 +19,8 @@ This is that repository. It contains:
 Structuring rule: the core is model-agnostic. It names no scenario. It only
 knows generic bricks (`Scalar` / `FluidState`, `ExB` / `CompressibleFlux`,
 `NoSource` / `PotentialForce`, `BackgroundDensity` / `ChargeDensity`...) that are composed into a
-model via `pops.Model(state, transport, source, elliptic)`, or written as formulas via
-`pops.physics.facade.Model`. There is neither `diocotron` nor `euler_poisson` in `adc_cpp`. See
+`pops.model.Module` through package-scoped presets, or written as formulas via
+`pops.physics.Model`. There is neither `diocotron` nor `euler_poisson` in `adc_cpp`. See
 [`ARCHITECTURE.md`](https://github.com/wolf75222/adc_cpp/blob/master/docs/ARCHITECTURE.md) ("The core is model-agnostic").
 
 This rule also holds for custom integrators: the asymptotic-preserving two-fluid scheme,

@@ -27,10 +27,10 @@ Strings remain valid when they are names:
 
 ```python
 Model("euler")
-case.block("ions", physics=ions)
 PoissonProblem(name="phi", unknown="phi")
 RuntimeParam("nu", default=0.1)
 T.state("U", block="ions")
+sim.install(compiled, instances={"ions": {"model": ions, "initial": U0, "spatial": spatial}})
 ```
 
 Later references should use handles returned by the API when handles exist.

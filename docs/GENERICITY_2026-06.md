@@ -52,7 +52,8 @@ silent changes).
 - `hll` (generic with signed waves, requires wave_speeds) is now also routed by the AMR
   (dispatch_amr_block + dispatch_amr_compiled, same requires-gate as System) and documented everywhere
   (Spatial / FiniteVolume / system.hpp / Sphinx). Visible test:
-  `pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive())` on the isothermal 3-var
+  `pops.numerics.spatial.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive())`
+  on the isothermal 3-var
   (test_fv_hll_minmod, System + AmrSystem + explicit rejections).
 
 ## 4. Named couplings: multi-box/MPI-safe
@@ -64,8 +65,8 @@ silent changes).
 
 ## 5. Magnetic bricks exposed + latent bug fixed
 
-- `pops.MagneticLorentzForce(charge)` and `pops.PotentialMagneticForce(charge)` exposed in
-  pops.Model(...) (C++ factory "magnetic"/"potential_magnetic" already ready) and in the hybrid path
+- Magnetic Lorentz and potential-magnetic source bricks are exposed through the typed model
+  assembly path (C++ factory "magnetic"/"potential_magnetic" already ready) and in the hybrid path
   (_native_to_brick, including CompositeSource via nested fields a.qom/b.qom).
 - **Latent bug fixed**: System::add_block (native path) NEVER called
   `ensure_aux_width(aux_comps<M>())` -- a native model with n_aux=4 (magnetic brick) read B_z
@@ -85,7 +86,8 @@ silent changes).
 - `kCflSpeedFloor` (1e-30, types.hpp), `kRoeEntropyFixFraction` (0.1, numerical_flux.hpp),
   `NewtonOptions.fd_eps` (1e-7), IMEX iters -> `NewtonOptions.max_iters`,
   Schur tolerances: `set_krylov(tol, max_iters)` on the cartesian (1e-10/400)
-  and polar (1e-10/600) condensed steppers, exposed via `pops.CondensedSchur(krylov_tol=, krylov_max_iters=)`.
+  and polar (1e-10/600) condensed steppers, exposed through
+  `pops.lib.time.condensed_schur(..., krylov_tol=, krylov_max_iters=)`.
 
 ## 8. Outputs / checkpoint
 
@@ -121,7 +123,7 @@ WIRES them (the rejection stays only where the architecture is not ready, and it
 5. **Schur roles in the ABI**: set_source_stage carries density/momentum_x/momentum_y/energy
    (stable role name OR variable name) + bz_aux_component; the cartesian stepper gains an
    explicit-component constructor (the canonical ctor DELEGATES to it, bit-identical);
-   pops.CondensedSchur(density=..., momentum=(...), magnetic_field=...) forwards instead of
+   `pops.lib.time.condensed_schur(density=..., momentum=(...), magnetic_field=...)` forwards instead of
    rejecting. Defaults = canonical roles, bit-identical.
 6. **IO v1**: sim.write(path, format='vtk'|'npz', step=), sim.checkpoint / sim.restart (npz,
    atomic write); bindings macro_step() / set_clock() / set_potential() -- the restart is
@@ -211,7 +213,7 @@ is wired really is; what is not is documented with file:line, never masked).
    (`IsothermalFluxPolar : IsothermalFlux`) inherits `wave_speeds` -> eligible; the scalar ExB
    (`ExBVelocityPolar`, no `wave_speeds`) -> CLEAR rejection. **Default `rusanov` strictly
    bit-identical** (separate branch, untouched). HLLC/Roe stay rejected (Euler 4-var, no polar energy
-   flux brick). Facade: `pops.PolarMesh` + `pops.FiniteVolume(riemann=HLL())`;
+   flux brick). Facade: `pops.mesh.PolarMesh` + `pops.numerics.spatial.FiniteVolume(riemann=HLL())`;
    `pops.capabilities()['riemann']['system_polar'] = ['rusanov', 'hll']`. Test:
    `python/tests/test_polar_hll.py` (rusanov reproducible, hll finite AND distinct from rusanov) +
    `test_polar_rejections.test_polar_rejects_hll_on_scalar_exb`.

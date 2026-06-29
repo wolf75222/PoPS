@@ -75,9 +75,9 @@ deliberately identical between the single-level and AMR pipelines.
 
 ## Writing the contract two ways
 
-You declare the same contract whichever way you author a model. With native
-bricks you pick an elliptic brick in `pops.Model(..., elliptic=...)`, for example
-`pops.ChargeDensity` or `pops.BackgroundDensity`. With the DSL you write
+You declare the same contract whichever way you author a model. With package-scoped native
+bricks you pick an elliptic brick in the assembly that lowers to `pops.model.Module`, for example
+charge-density or background-density presets. With the DSL you write
 `m.elliptic_rhs(expr)` and reference the aux fields you need with `m.aux("phi")`,
 `m.aux("grad_x")`, `m.aux("grad_y")`. Both produce the same C++ object and plug
 into a `System` or `AmrSystem` the same way.

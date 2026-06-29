@@ -4,7 +4,8 @@ A model describes the local physics of a block: state variables, physical flux,
 source terms, field coupling, wave speeds, projections, and capabilities. It
 does not describe mesh layout, AMR, MPI, Kokkos, output, or time stepping.
 
-The documented route is to attach models to a `Case`.
+The documented route is to lower each model authoring surface to a `pops.model.Module`, compile it
+with a `pops.time.Program`, and install the resulting compiled problem artifact.
 
 ## Ways to author a model
 
@@ -19,16 +20,8 @@ All routes must produce compiled C++ execution. Python is an authoring surface.
 
 ## Native bricks
 
-```python
-import pops
-
-model = pops.Model(
-    state=pops.Scalar(),
-    transport=pops.ExB(B0=1.0),
-    source=pops.NoSource(),
-    elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0),
-)
-```
+Ready native-brick assemblies live under `pops.lib.models`. They are presets that lower to
+`pops.model.Module`; they are not a separate top-level model-constructor API.
 
 ## Physics DSL
 

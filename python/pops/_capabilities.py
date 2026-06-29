@@ -93,7 +93,7 @@ def _availability_status(descriptor):
 
 def _entry_from_brick(descriptor):
     """A :class:`CapabilityEntry` from a :class:`pops.descriptors.BrickDescriptor`."""
-    status = "yes" if descriptor.available else "no"
+    status = descriptor.available().status
     return CapabilityEntry(descriptor.name, descriptor.category,
                            descriptor.native_id or None, status, descriptor.requirements)
 

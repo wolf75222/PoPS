@@ -1,4 +1,7 @@
-> **STATUS: IMPLEMENTED.** This document is the original design spec. The condensed Schur source stage is delivered (`CondensedSchur`, `schur_condensation.hpp`, exposed in Python as `pops.CondensedSchur`; tests test_schur_via_system / test_schur_conservation). Read this file as design history, not as current state.
+> **STATUS: HISTORICAL DESIGN NOTE.** This document predates the Spec-5 clean-break API. The
+> current public route is `pops.lib.time.condensed_schur(...)` inside a typed
+> `pops.time.Program`, compiled with `pops.compile_problem(...)`, then installed with
+> `sim.install(compiled, ...)`. Read this file as design history, not as the current API.
 
 # Design: implicit source condensed by Schur (reproduction of arXiv:2510.11808)
 
@@ -18,8 +21,8 @@ The document relies on the architecture already in place (sources read):
 - `docs/DSL_MODEL_DESIGN.md` (`pops.physics.facade.Model` facade, physical roles, `add_native_block`);
 - `docs/GPU_RUNTIME_PORT.md` (device-clean harness: named functors, no extended lambda);
 - the MERGED polar Phase 1 (#116, commit `004efca`): the MESH abstraction
-  (`pops.CartesianMesh` / `pops.PolarMesh` -> `System(mesh=)`), with `pops.FiniteVolume` = recon +
-  Riemann + variables ONLY (no geometry argument);
+  (`pops.mesh.CartesianMesh` / `pops.mesh.PolarMesh` -> `System(mesh=)`), with
+  `pops.numerics.spatial.FiniteVolume` = recon + Riemann + variables ONLY (no geometry argument);
 - `include/pops/core/state/variables.hpp` (`VariableRole`: `Density`, `MomentumX`, `MomentumY`,
   `MomentumZ`, `Energy`, ...);
 - `docs/BIBLIOGRAPHY.md` section 3 (Hoffart entry).
@@ -309,13 +312,13 @@ Principles of this API:
 - The runtime receives one compiled problem artifact through `sim.install(compiled, ...)`; no block
   or equation is installed by ad-hoc public setters.
 
-BOX -- `pops.SourceImplicit` (LOCAL) vs `pops.CondensedSchur` (GLOBAL). Two distinct mechanisms
+BOX -- local implicit source vs `pops.lib.time.condensed_schur` (GLOBAL). Two distinct mechanisms
 treat a stiff source implicitly; do not confuse them.
-- `pops.SourceImplicit` (= IMEX source-only) is LOCAL: the implicit couples only the components
+- local IMEX source-only stages are LOCAL: the implicit couples only the components
   of the SAME cell (backward-Euler solved by Newton at the cell), NO spatial coupling.
   It is the right choice for purely local stiff terms (relaxation, reactions, friction):
   no elliptic solve, so much cheaper.
-- `pops.CondensedSchur` (via `pops.Split`, cf. sections 2 to 5) is GLOBAL: it assembles the condensed
+- `pops.lib.time.condensed_schur` is GLOBAL: it assembles the condensed
   tensorial elliptic operator and solves it by Krylov (BiCGStab), coupling the WHOLE domain.
   It is the right choice ONLY for a nonlocal stiff coupling (Lorentz / electrostatic, e.g.
   the magnetized Euler-Poisson of Hoffart). A local stiff source does not need Schur.
@@ -325,9 +328,9 @@ treat a stiff source implicitly; do not confuse them.
 
 STRUCTURAL CONSTRAINT, already laid by the MERGED polar Phase 1 (#116, commit `004efca`). The
 CHOICE of geometry lives in a MESH object, never in the scheme:
-- `pops.CartesianMesh(...)` / `pops.PolarMesh(...)` -> `pops.System(mesh=...)` carry the geometry
+- `pops.mesh.CartesianMesh(...)` / `pops.mesh.PolarMesh(...)` -> `pops.System(mesh=...)` carry the geometry
   (`SystemConfig` carries `geometry`, `nr`, `ntheta`, `r_min`, `r_max`).
-- `pops.FiniteVolume(limiter=, riemann=, variables=)` stays reconstruction + numerical flux +
+- `pops.numerics.spatial.FiniteVolume(limiter=, riemann=, variables=)` stays reconstruction + numerical flux +
   variables ONLY. It HAS NO geometry argument, and never will.
 
 For the Schur condensation, this requires that the `TensorEllipticOperator` (level 1) and its
@@ -384,8 +387,8 @@ orthogonal and remains open).
   GMRES/BiCGStab + MG preconditioner on the symmetric part, or block Jacobi). Research
   PR: we measure the iterations and the robustness in `theta dt |Omega|` before freezing the
   choice. Highest risk of the sequence.
-- **PR4**: `CondensedSchurSourceStepper` (level 4) + `pops.Split` / `pops.CondensedSchur` (Python
-  API, section 6), native `add_native_block` path. Default unchanged. Validation: a manufactured
+- **PR4**: `CondensedSchurSourceStepper` (level 4) + `pops.lib.time.condensed_schur` (Python
+  API, section 6), compiled-problem path. Default unchanged. Validation: a manufactured
   case (MMS on the source subsystem alone, transport frozen); NOT yet the diocotron.
 - **PR5**: GPU port (named functors already in place; validate Serial vs Cuda parity on GH200,
   like #97).

@@ -19,6 +19,13 @@ import typing
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
 
+class _DescriptorMap(dict):
+    """Dict-like descriptor metadata that also satisfies the method protocol."""
+
+    def __call__(self):
+        return dict(self)
+
+
 class BrickDescriptor:
     """A typed, numerics-free descriptor of a numerical brick.
 
@@ -38,10 +45,10 @@ class BrickDescriptor:
         self.category = str(category)
         self.native_id = str(native_id)
         self.scheme = scheme
-        self.requirements = dict(requirements or {})
-        self.capabilities = dict(capabilities or {})
-        self.options = dict(options or {})
-        self.available = bool(available)
+        self.requirements = _DescriptorMap(requirements or {})
+        self.capabilities = _DescriptorMap(capabilities or {})
+        self.options = _DescriptorMap(options or {})
+        self._available = bool(available)
         # Optional board value carried by a generated/macro brick; kept OFF the
         # identity key (it may be an unhashable board node).
         self.expression = expression
@@ -78,13 +85,22 @@ class BrickDescriptor:
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "scheme": self.scheme, "options": dict(self.options),
                 "requirements": dict(self.requirements),
-                "capabilities": dict(self.capabilities), "available": self.available}
+                "capabilities": dict(self.capabilities),
+                "available": self.available().status}
+
+    def available(self, context=None):
+        """Explain whether this brick has a native route available."""
+        if self._available:
+            return Availability.yes()
+        return Availability.no(
+            "%s [%s] is not available: it has no native C++ symbol yet"
+            % (self.name, self.category))
 
     def validate(self, context=None):
         """Raise a clear error when this brick has no native symbol yet (``available`` False)."""
-        if not self.available:
-            raise ValueError("%s [%s] is not available: it has no native C++ symbol yet"
-                             % (self.name, self.category))
+        status = self.available(context)
+        if not status.ok:
+            raise ValueError(str(status))
         return True
 
 

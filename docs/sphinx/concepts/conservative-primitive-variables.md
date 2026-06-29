@@ -48,8 +48,9 @@ on either side of the face. Reconstructing in primitives limits `rho`, `u`, and 
 keeps positivity of density and pressure and is more stable for Euler with shocks.
 
 This is why a fluid block typically selects primitive reconstruction. The choice is exposed through
-the `variables="primitive"` option of `pops.FiniteVolume`; the operator then calls `to_primitive`
-before reconstructing and `to_conservative` after, and the conserved update at the end stays exact.
+the typed `variables=Primitive()` option of `pops.numerics.spatial.FiniteVolume`; the operator then
+calls `to_primitive` before reconstructing and `to_conservative` after, and the conserved update at
+the end stays exact.
 
 ## Roles, not indices
 

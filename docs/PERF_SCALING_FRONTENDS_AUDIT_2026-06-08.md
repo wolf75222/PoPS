@@ -260,7 +260,7 @@ and adds a lot of MPI/MG latency.
 Run exactly the same smooth periodic Euler case in three variants:
 
 1. `cpp-native`: native C++, without Python.
-2. `python-bricks`: `pops.Model(FluidState, CompressibleFlux, NoSource, ...)`.
+2. `python-bricks`: package-scoped native model presets lowered to `pops.model.Module`.
 3. `python-compiled-problem`: `compiled = pops.compile_problem(...)`,
    `sim = pops.System(...)`, `sim.install(compiled, ...)`, `sim.step_cfl(...)`.
 

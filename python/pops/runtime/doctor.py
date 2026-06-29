@@ -54,7 +54,8 @@ def _descriptor_tokens():
                 descriptor = factory()
             except TypeError:
                 continue  # a selector that needs an argument (User(...)); not a standing entry.
-            if getattr(descriptor, "available", False):
+            available = getattr(descriptor, "available", None)
+            if callable(available) and available().ok:
                 names.append(descriptor.name)
         return names
 

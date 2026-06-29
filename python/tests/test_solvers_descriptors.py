@@ -41,7 +41,7 @@ def test_krylov_native_ids_and_schemes():
     assert krylov.Richardson().scheme == "richardson"
     for d in (krylov.CG(), krylov.GMRES(), krylov.BiCGStab(), krylov.Richardson()):
         assert d.brick_type == "native"
-        assert d.available
+        assert d.available().ok
         assert d.category == "solver"
 
 
@@ -242,7 +242,7 @@ def test_geometric_mg_accepts_amr_layout():
 def test_preconditioners_catalog():
     pre = solvers.preconditioners
     ident = pre.Identity()
-    assert ident.available is True
+    assert ident.available().ok
     assert ident.scheme == "identity"
     assert ident.native_id == ""
     assert pre.GeometricMG().native_id == "pops::GeometricMG"

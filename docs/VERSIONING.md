@@ -20,8 +20,9 @@ What a version bump is allowed to break is exactly this surface:
   composition, `set_poisson`, `set_refinement`, stepping).
 - The concepts a model composes against: `PhysicalModel`, `NumericalFlux`, `EllipticSolver`,
   and the named generic bricks in `include/pops/physics/`.
-- Python bindings: the documented `pops.*` surface (`pops.Model`, `pops.System`,
-  `pops.AmrSystem`, `pops.physics.facade.Model`, the brick classes, `pops.doctor`, `pops.set_threads`,
+- Python bindings: the documented `pops.*` surface (`pops.System`,
+  `pops.AmrSystem`, `pops.physics.Model`, the package-scoped descriptor classes,
+  `pops.doctor`, `pops.set_threads`,
   `pops.parallel_info`, `pops.has_kokkos`, `pops.__version__`).
 - DSL surface: the fixed aux names (`phi`, `grad_x`, `grad_y`, `B_z`, `T_e`) and the
   documented builders.

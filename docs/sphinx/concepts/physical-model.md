@@ -78,10 +78,9 @@ right-hand side (`BackgroundDensity`). Swap the transport brick for `Compressibl
 elliptic brick for `GravityCoupling`, and the same machinery describes a self-gravitating gas. The
 scenario lives in the choice of bricks, never in the core.
 
-From Python you assemble the same object three ways, all producing the same compiled C++ model: native
-bricks (`pops.Model`), symbolic formulas compiled to a `.so` (`pops.physics.facade.Model`), or a mix of the two
-within one model (`pops.CompositeModel`). The cell-by-cell computation stays compiled either way, so
-MPI, AMR, and GPU are preserved.
+From Python you assemble the same object through typed module-producing routes: package-scoped native
+model presets, symbolic formulas lowered through `pops.physics.Model`, or mixed module composition.
+The cell-by-cell computation stays compiled either way, so MPI, AMR, and GPU are preserved.
 
 ## Where to go next
 

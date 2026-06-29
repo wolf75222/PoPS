@@ -6,29 +6,31 @@ variables. Two equivalent facades describe it.
 
 Every scheme is chosen with a TYPED `pops.numerics` descriptor; a bare string or boolean shortcut
 raises a `TypeError` that names the typed alternative (Spec 5 sec.7).
-`pops.Spatial(limiter=, flux=, recon=)` is the direct facade:
+`pops.numerics.spatial.Spatial(limiter=, flux=, recon=)` is the direct facade:
 
 ```python
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction import WENO5
 from pops.numerics.reconstruction.limiters import Minmod, VanLeer
+from pops.numerics.spatial import Spatial
 from pops.numerics.variables import Primitive
 
-pops.Spatial(limiter=Minmod())                      # MUSCL minmod, Rusanov, conservative variables
-pops.Spatial(limiter=VanLeer(), flux=HLLC())        # MUSCL Van Leer, HLLC
-pops.Spatial(limiter=WENO5(), recon=Primitive())    # WENO5-Z, primitive reconstruction
+Spatial(limiter=Minmod())                      # MUSCL minmod, Rusanov, conservative variables
+Spatial(limiter=VanLeer(), flux=HLLC())        # MUSCL Van Leer, HLLC
+Spatial(limiter=WENO5(), recon=Primitive())    # WENO5-Z, primitive reconstruction
 ```
 
-`pops.FiniteVolume(limiter=, riemann=, variables=)` is the same thing, but the numerical
+`pops.numerics.spatial.FiniteVolume(limiter=, riemann=, variables=)` is the same thing, but the numerical
 Riemann flux is called `riemann` (and not `flux`, reserved for the physical flux of a DSL model).
 The reconstruction slot also accepts the Spec 5 sec.14.1 alias `reconstruction=`:
 
 ```python
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.spatial import FiniteVolume
 from pops.numerics.variables import Conservative
 
-pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative())
+FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative())
 ```
 
 The typed descriptors:

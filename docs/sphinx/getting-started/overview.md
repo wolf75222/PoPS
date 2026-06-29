@@ -11,8 +11,7 @@ no scenario: it provides generic bricks that one composes.
 
 - A header-only core, model-agnostic. The physics reduces to local laws
   (flux, sources, closures), device-callable, that see neither MPI, nor AMR, nor halos. A
-  model is a brick composition (`pops.Model(state, transport, source, elliptic)`), not
-  a hard-coded scenario.
+  model lowers to a typed `pops.model.Module`, not a hard-coded scenario.
 - A `from scratch` mesh stack: `Box` / `BoxArray` / `MultiFab` /
   `Geometry` containers, and a block-structured multi-level, multi-patch AMR hierarchy
   (Berger-Rigoutsos clustering, coverage-aware reflux).

@@ -2,8 +2,8 @@
 
 These checks pin the Spec 5 sec.6 / sec.7 descriptor contract:
 
-  - the two descriptor families (the Descriptor base / its mesh subclass, and the older
-    attribute-based BrickDescriptor) both satisfy the documented DescriptorProtocol;
+  - the two descriptor families (the Descriptor base / its mesh subclass, and BrickDescriptor)
+    both satisfy the documented DescriptorProtocol;
   - available() on the Descriptor family returns an explainable Availability, never a bare bool;
   - lower() returns an INERT metadata dict and never raises for a valid descriptor (it must not
     run a numeric loop or touch the runtime);
@@ -76,12 +76,18 @@ def test_descriptor_family_satisfies_protocol():
 
 
 def test_brick_descriptor_satisfies_protocol():
-    # The older attribute-based BrickDescriptor also satisfies the protocol (additive Phase D).
+    # BrickDescriptor also satisfies the protocol; its dict-like metadata members are callable
+    # so requirements()/capabilities()/options() work while catalog consumers can still read them.
     brick = HLL()
     assert isinstance(brick, BrickDescriptor)
     for member in PROTOCOL_MEMBERS:
         assert hasattr(brick, member), "BrickDescriptor missing protocol member %r" % member
     assert isinstance(brick, DescriptorProtocol)
+    assert isinstance(brick.requirements(), dict)
+    assert isinstance(brick.capabilities(), dict)
+    assert isinstance(brick.options(), dict)
+    assert isinstance(brick.available(), Availability)
+    assert not isinstance(brick.available(), bool)
 
 
 def test_moments_route_choosers_satisfy_protocol():

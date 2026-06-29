@@ -6,19 +6,20 @@ carried by the block (the spatial scheme), not by the model, so the same model r
 different fluxes. For the math behind these solvers, see
 [fluxes, sources and eigenvalues](../concepts/fluxes-sources-eigenvalues.md).
 
-This page assumes you already have a model and a `Case`. If not, start with the
+This page assumes you already have a typed model module and time program. If not, start with the
 [tutorial](../getting-started/tutorial.md).
 
 ## Choose a flux
 
-Pass the flux through `pops.FiniteVolume`, where the numerical flux is named `riemann`. Every
+Pass the flux through `pops.numerics.spatial.FiniteVolume`, where the numerical flux is named `riemann`. Every
 selector is a TYPED `pops.numerics` descriptor (Spec 5 sec.7 rejects a bare string):
 
 ```python
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.spatial import FiniteVolume
 
-spatial = pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov())
+spatial = FiniteVolume(limiter=Minmod(), riemann=Rusanov())
 ```
 
 Replace `riemann` with one of these typed `pops.numerics.riemann` descriptors, matched to your model:
@@ -36,16 +37,19 @@ Replace `riemann` with one of these typed `pops.numerics.riemann` descriptors, m
   `m.enable_hllc()` / `m.enable_roe()`. Both read a pressure, so declare the primitive `p`; without
   it (and without the capability) the wiring raises a `ValueError`.
 
-## Wire the flux to a block
+## Use the scheme in the compiled route
 
-Pass the spatial scheme as the `spatial=` argument of `case.block(...)` (the public path), which
-flows through to the runtime install:
+Pass the spatial scheme through the instance metadata installed with the compiled problem:
 
 ```python
 from pops.numerics.riemann import HLL
 from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.spatial import FiniteVolume
 
-case.block("gas", physics=m, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()))
+spatial = FiniteVolume(limiter=Minmod(), riemann=HLL())
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim = pops.System(...)
+sim.install(compiled, instances={"gas": {"model": module, "initial": U0, "spatial": spatial}})
 ```
 
 For the full list of limiters, fluxes and reconstruction variables, see the

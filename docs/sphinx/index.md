@@ -3,7 +3,7 @@
 PoPS is a model-free C++23 core for coupled hyperbolic-elliptic systems on adaptive
 (AMR) meshes. It names no scenario: it advances a hyperbolic part `U` (finite-volume
 transport) coupled to an elliptic part `phi` (a system Poisson solved each step), and a
-model is a composition of generic bricks (`pops.Model(state, transport, source, elliptic)`).
+model lowers to a typed `pops.model.Module` assembled from generic bricks or authored formulas.
 
 The mesh and execution stack is written *from scratch*: a single dispatch seam
 (Serial / OpenMP / Kokkos GPU GH200 / MPI), a `MultiFab` + `BoxArray` + `Geometry` stack,
@@ -151,8 +151,8 @@ C++ API (Doxygen) <https://wolf75222.github.io/adc_cpp/cpp/>
 Three orthogonal axes (concept `PhysicalModel`, policy `NumericalFlux`, concept
 `EllipticSolver`) and a single parallelism seam:
 
-- generic `System` composition: one block per model, where a model is a composition of
-  generic bricks (`pops.Model(state, transport, source, elliptic)`); the core names no
+- generic `System` composition: one block per model, where a model lowers to a typed
+  `pops.model.Module`; the core names no
   scenario (the names diocotron, euler_poisson... live on the `adc_cases` side). Shared
   system Poisson; on the Python side via `pops.System`. Three ways to write a model: native
   brick composition, symbolic `pops.physics.facade.Model` model, or hybrid composition (see

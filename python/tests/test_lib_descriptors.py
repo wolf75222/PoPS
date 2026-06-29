@@ -36,7 +36,7 @@ lib = _t.SimpleNamespace(
 def test_riemann_hllc_is_a_native_descriptor():
     d = lib.riemann.HLLC()
     assert d.brick_type == "native"
-    assert d.available
+    assert d.available().ok
     assert d.native_id == "pops::HLLCFlux"   # the EXACT C++ symbol (namespace pops)
     assert d.scheme == "hllc"               # the runtime scheme string
 
@@ -58,7 +58,7 @@ def test_reconstruction_weno5z_is_native():
 def test_catalogued_but_unwired_bricks_are_marked_unavailable():
     # No native symbol is fabricated: planned bricks carry available=False, empty id.
     for d in (lib.fields.Poisson(), lib.limiters.MC()):
-        assert d.available is False
+        assert d.available().status == "no"
         assert d.native_id == ""
 
     # Clean break: no public solver/preconditioner descriptors are kept as unavailable placeholders
@@ -70,7 +70,7 @@ def test_catalogued_but_unwired_bricks_are_marked_unavailable():
 def test_available_native_ids_exist_and_are_namespaced():
     for d in (lib.fields.GeometricMG(), lib.solvers.CG(), lib.solvers.GMRES(),
               lib.solvers.Schur(), lib.projections.positivity()):
-        assert d.available
+        assert d.available().ok
         assert d.native_id.startswith("pops::")
 
 

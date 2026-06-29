@@ -77,9 +77,8 @@ you choose without rewriting the coupler.
 ## D-6. Runtime composition facade + bindings
 
 **Decision.** The bindings (`python/bindings/core/bindings.cpp`) expose runtime COMPOSITION facades
-(`System`, `AmrSystem`), not named solvers. A model is a composition of
-generic bricks (`pops.Model(state, transport, source, elliptic)`) assembled by the
-`model_factory`; no scenario is named in the lib.
+(`System`, `AmrSystem`), not named solvers. A model is a typed composition of
+generic bricks lowered to `pops.model.Module`; no scenario is named in the lib.
 
 **Why.** A stable and bindable surface, never `Coupler<Model, Elliptic>` on the outside. The
 generic core stays header-only; the runtime facade (`runtime/system.hpp`) gives a clean Python
