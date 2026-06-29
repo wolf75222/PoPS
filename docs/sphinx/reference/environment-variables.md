@@ -34,7 +34,7 @@ the DSL loader `.so`; they change neither the ABI key nor the numerics.
 | `POPS_KOKKOS_CXX` | Explicit compiler for the Kokkos DSL loader (for example an `nvcc_wrapper` for a CUDA build). Used instead of the default host compiler. | Unset (falls back to `POPS_CXX`, then the `_pops` build compiler). | `_native_kokkos_compiler()` in `python/pops/codegen/toolchain.py` |
 | `POPS_KOKKOS_USE_NVCC_WRAPPER` | Opt-in switch to select the `nvcc_wrapper` found under `<kokkos>/bin`. Truthy values: `1`, `on`, `true`, `yes`, `y`. CUDA selection is never implicit: without this flag (or `POPS_KOKKOS_CXX`) the host compiler is used, so a CPU job on a Kokkos install that ships an `nvcc_wrapper` is not silently broken. | Unset / false (host compiler). | `_native_kokkos_compiler()` in `python/pops/codegen/toolchain.py` |
 | `POPS_DSL_OPTFLAGS` | Overrides the optimization flags of the `production`/`aot` DSL `.so` (whitespace-split). Enters the cache key, so changing it produces a distinct cached `.so`. Affects neither the ABI nor portability. | `-O3 -DNDEBUG`. | `_dsl_optflags()` in `python/pops/codegen/cache.py` |
-| `POPS_CACHE_DIR` | Directory for the out-of-source `.so` cache written by `m.compile()` when no explicit `so_path` is given. Also recorded in `compiled.inspect()`. | `$XDG_CACHE_HOME/pops/dsl`, else `~/.cache/pops/dsl`. | `pops_cache_dir()` in `python/pops/codegen/cache.py` |
+| `POPS_CACHE_DIR` | Directory for the out-of-source `.so` cache written by `pops.compile_problem(...)` when no explicit `so_path` is given. Also recorded in `compiled.inspect()`. | `$XDG_CACHE_HOME/pops/dsl`, else `~/.cache/pops/dsl`. | `pops_cache_dir()` in `python/pops/codegen/cache.py` |
 
 ## Codegen logging, dumps, and autotune
 

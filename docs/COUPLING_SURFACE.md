@@ -8,10 +8,10 @@ public, internal or deprecated?"
 
 ## User entry point (PUBLIC Python)
 
-The user entry point is NOT a C++ coupling class: it is the Python pair
-`pops.System` / `pops.AmrSystem` plus the DSL (`pops.physics.model.HyperbolicModel`,
-`m.compile(...)`). The classes below are internal C++ facades; they
-are not part of the documented public API.
+The user entry point is NOT a C++ coupling class: it is the Python route
+`pops.compile_problem(...)`, `pops.System` / `pops.AmrSystem`,
+`sim.install(compiled, ...)`, then `sim.step_cfl(...)`. The classes below are
+internal C++ facades; they are not part of the documented public API.
 
 ---
 

@@ -405,8 +405,9 @@ WRITE-SET:
   `add_compiled_model(System&)` (`include/pops/runtime/builders/compiled/dsl_block.hpp` + `block_builder.hpp`).
 - `include/pops/runtime/amr_system.hpp` + `python/bindings/amr/amr_system.cpp`: `set_compiled_block` /
   `add_native_block` stop throwing at the 2nd call (cf. 3) and stack a spec.
-- `python/bindings/core/bindings.cpp`: expose the 2nd `add_block` (already wired, `bindings.cpp:239`), validate
-  `pops.physics.facade.Model(...).compile(target="amr_system", backend="production")` for TWO blocks.
+- `python/bindings/core/bindings.cpp`: validate the compiled-problem route for TWO blocks:
+  `compiled = pops.compile_problem(...)`, `sim = pops.AmrSystem(...)`,
+  `sim.install(compiled, ...)`, then `sim.step_cfl(...)`.
 ACCEPTANCE: `test_dsl_production_amr.py` extended to two native compiled blocks on the same
 hierarchy; ABI key verified (`pops_native_abi_key`, `amr_system.cpp:218-235`).
 BLOCKER: NAMED device-clean functors (cf. `BlockRhsEval`/`AdvanceExplicit` of
@@ -615,10 +616,10 @@ absence of a block on a patch.
       Test `tests/test_amr_multiblock_compiled.cpp`. A .so loader recompiled against the provided header supplies the
       runtime builder (flat ABI of the loader unchanged; an EARLIER loader throws clearly at build_multi).
       The flat ABI of the loader carries NEITHER the multirate (stride) NOR the partial IMEX mask
-      (implicit_vars / implicit_roles): it is NOT an acceptable silent loss -> the facade
-      Python `AmrSystem.add_equation` REJECTS them explicitly (ValueError) on the production path
-      (.so). For these parameters: native `AmrSystem.add_block` (ModelSpec) or `add_compiled_model(
-      AmrSystem&)` DIRECT (C++ header), which expose stride and the mask (the DIRECT IMEX
+      (implicit_vars / implicit_roles): it is NOT an acceptable silent loss -> the compiled-problem
+      install path must validate/reject those unsupported options explicitly before runtime. For
+      these parameters: typed native descriptors or `add_compiled_model(AmrSystem&)` DIRECT
+      (C++ header), which expose stride and the mask (the DIRECT IMEX
       multi-block path is exercised by `tests/test_amr_multiblock_compiled.cpp`).
 - [ ] coupled source `+k n_e n_g` / `-k n_e n_g`: `n_i + n_g` constant to machine precision,
       per level, on all the patches. (later PR)

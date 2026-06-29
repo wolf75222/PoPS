@@ -41,13 +41,11 @@ The graph has a single direction: lower packages never import upper ones.
 
 ## Codegen as free functions: the key design decision
 
-The `emit_cpp_*` helpers and `module_codegen` live in `pops.codegen` as ordinary
-free functions that accept a model object. They do NOT live on `pops.physics.Model`
-as methods (no `m.compile()`, no `m.emit_cpp_source()`).
+The compile and emission helpers live in `pops.codegen` as ordinary free
+functions that accept typed model/program objects. They do NOT live on
+`pops.physics.Model` as methods.
 
-Why: keeping C++ emission out of the authoring packages prevents a cycle. If
-`pops.physics.Model.compile()` existed, `pops.physics` would have to import
-`pops.codegen`, which imports `pops.lib`, which imports `pops.physics` -- a cycle.
+Why: keeping C++ emission out of the authoring packages prevents a cycle.
 As free functions, `pops.codegen` may import everything above it while authoring
 packages import nothing from `pops.codegen`. Callers that need to compile call
 `pops.compile_problem(model=m)` (the top-level convenience that delegates to
@@ -78,7 +76,7 @@ modules are deleted; no shims exist.
 |------------|-------------|
 | `pops.dsl.Model` | `pops.physics.Model` |
 | `pops.dsl.HyperbolicModel` | `pops.physics.Model` (or internal `pops.physics._HyperbolicModel`) |
-| `m.compile(...)` | `pops.compile_problem(model=m, ...)` |
+| model-level compile methods | `pops.compile_problem(model=m, ...)` |
 | `m.emit_cpp_source(...)` | `pops.codegen.emit_cpp_source(m, ...)` |
 | `m.emit_cpp_header(...)` | `pops.codegen.emit_cpp_header(m, ...)` |
 | `pops.dsl.CompiledModel` | `pops.codegen.CompiledModel` |

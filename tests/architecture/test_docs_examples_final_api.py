@@ -12,7 +12,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def _active_doc_and_example_files():
-    roots = [REPO_ROOT / "README.md", REPO_ROOT / "docs" / "sphinx", REPO_ROOT / "examples"]
+    roots = [REPO_ROOT / "README.md", REPO_ROOT / "docs", REPO_ROOT / "examples"]
     for root in roots:
         if root.is_file():
             yield root
@@ -21,6 +21,10 @@ def _active_doc_and_example_files():
             if path.suffix not in {".md", ".rst", ".py"}:
                 continue
             if "archive" in path.parts:
+                continue
+            if path.name in {"SPEC_CORRECTIVE_TASKS.md"}:
+                continue
+            if path.parent == REPO_ROOT / "docs" and path.suffix != ".md":
                 continue
             yield path
 
@@ -37,11 +41,19 @@ def test_active_docs_do_not_advertise_removed_public_front_doors():
         "pops.bind(",
         "pops.compile,",
         "pops.bind,",
+        "pops.Case",
+        "pops.Problem",
+        "add_equation",
+        "install_program",
+        "CompiledTime",
+        "m.compile(",
+        ".compile(backend",
+        "compile(backend",
         "sim.run(t_end",
         "run(t_end",
         "_get_state",
         "_set_state",
-        "_eval_rhs",
+        "_eval_rhs(",
         "get_state(",
         "set_state(",
         "eval_rhs(",

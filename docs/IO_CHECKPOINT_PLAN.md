@@ -2,7 +2,7 @@
 
 Status : **PLAN** (target API + HPC constraints + breakdown into PRs). Nothing is wired in this
 document ; it fixes the contract BEFORE the implementation to avoid an ad hoc output API per case
-(today each adc_cases case writes its .npy / .png by hand via `density()` / `get_state()`).
+(cases should use the documented output/checkpoint APIs instead of raw state readback helpers).
 
 ## Target user API
 

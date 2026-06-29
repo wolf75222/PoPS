@@ -261,7 +261,8 @@ Run exactly the same smooth periodic Euler case in three variants:
 
 1. `cpp-native`: native C++, without Python.
 2. `python-bricks`: `pops.Model(FluidState, CompressibleFlux, NoSource, ...)`.
-3. `python-dsl-production`: `pops.physics.facade.Model(...).compile(backend="production")`.
+3. `python-compiled-problem`: `compiled = pops.compile_problem(...)`,
+   `sim = pops.System(...)`, `sim.install(compiled, ...)`, `sim.step_cfl(...)`.
 
 Required controls:
 
@@ -832,8 +833,9 @@ in the Python cache key and avoids linking `libkokkos*` in the production `.so`;
 it does not modify the public C++ ABI key
 `include/pops/runtime/abi_key.hpp`. The local ABI modification must therefore be
 read as a safety experiment, not as a patch to merge without review.
-The `HybridModel.compile()` part was also extended locally and requires a
-dedicated test before integration.
+The old model-level compile facade is not part of the public route; any similar
+local experiment must be expressed through `pops.compile_problem(...)` before
+integration.
 
 Targeted ROMEO validation:
 

@@ -340,9 +340,9 @@ sequenceDiagram
     participant TimeIntegrator as TimeIntegrator (SSPRK)
 
     Note over Utilisateur,System: Construction (une fois)
-    Utilisateur->>System: set_poisson(rhs, solver, bc)
-    Utilisateur->>System: add_block(model, limiter, riemann, recon, time, substeps)
-    Utilisateur->>System: set_density(name, rho)
+    Utilisateur->>System: compiled = pops.compile_problem(model, program, ...)
+    Utilisateur->>System: sim = pops.System(...)
+    Utilisateur->>System: sim.install(compiled, instances={...}, solvers={...})
 
     Note over Utilisateur,TimeIntegrator: Un macro-pas (System.step_cfl)
     Utilisateur->>System: step_cfl(cfl)
@@ -403,10 +403,9 @@ sequenceDiagram
     participant TimeIntegrator as TimeIntegrator (SSPRK / IMEX)
 
     Note over Utilisateur,AmrSystem: Construction (une fois)
-    Utilisateur->>AmrSystem: set_poisson(rhs, geometric_mg, bc)
-    Utilisateur->>AmrSystem: add_block(name, model, limiter, ...)
-    Utilisateur->>AmrSystem: set_refinement(threshold) et set_phi_refinement
-    Utilisateur->>AmrSystem: set_density(name, rho)
+    Utilisateur->>AmrSystem: compiled = pops.compile_problem(model, program, layout=AMR(...))
+    Utilisateur->>AmrSystem: sim = pops.AmrSystem(...)
+    Utilisateur->>AmrSystem: sim.install(compiled, instances={...}, solvers={...})
 
     Note over Utilisateur,TimeIntegrator: Un macro-pas (AmrSystem.step)
     Utilisateur->>AmrSystem: step(dt)
