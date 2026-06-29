@@ -1,242 +1,173 @@
 #!/usr/bin/env python3
-"""pops.time RHS source routing -- P.rhs flux/source selection (epic ADC-399 / ADC-425).
+"""Operator-first source/rate selection in Programs.
 
-Spec criterion 17: a source is included in an RHS only when EXPLICITLY listed in ``sources``, never
-summed implicitly. Before ADC-425 the codegen always lowered the default-flux RHS to ``ctx.rhs_into``
-(= -div F + the model's default/composite source), so ``P._legacy_rhs(flux=True, sources=[])`` on a model with
-a default ``m.source`` STILL added that source -- breaking the hyperbolic stage of a Lie/Strang/IMEX
-split (which needs "flux but no source"). ADC-425 adds the flux-only runtime primitive
-``ctx.neg_div_flux_default_into`` (= -div F WITHOUT the default source) and routes the codegen on
-whether ``"default"`` is among the requested sources.
+The final API does not let a Program choose physics with selector lists or
+boolean transport switches. The Module declares typed operators and the Program
+calls their handles explicitly:
 
-(A) Codegen / IR (pure Python, always runs):
-    - sources=[] / ["default"] / ["named"] lower to DISTINCT IR (distinct _ir_hash) and DISTINCT C++
-      (sources=[] -> neg_div_flux_default_into; sources=["default"] -> rhs_into).
-    - sources=["default"] lowers to ctx.rhs_into (the historical path, unchanged).
+    flux            : U -> Rate(U)
+    source_default  : U -> Rate(U)
+    decay           : U -> Rate(U)
 
-(B) End-to-end probe (skips unless the full toolchain is present): a ZERO-FLUX scalar model with a
-    default source S = c*rho. A one-step program U + dt*rhs(flux=True, sources=[]) must NOT move rho
-    (flux is zero and the default source is excluded -> 0 cells change); the same with
-    sources=["default"] applies the source (out - rho0 == dt*c*rho). A Lie split
-    H = rhs(flux=True, sources=[]) ; S = rhs(flux=False, sources=["default"]) reproduces the offline
-    single-source split. An existing default-source forward_euler (sources=["default"]) is unchanged.
-    Self-skips if _pops lacks _install_program_so, numpy/_pops is absent, or no compiler/Kokkos is visible --
-    never faking the engine.
-
-Run with python3 (PYTHONPATH = built pops package).
+This test checks that the Program IR records those choices as call nodes and that
+codegen routes through ``GeneratedModule::Operators`` instead of Program-side RHS
+selectors.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
-import sys
+
+from pops.codegen.program_emit_module_ops import operator_function_name
+from pops.ir.expr import Const
+from pops import model
+from pops import time as t
+import pops.lib.time as libtime
 
 
-def _skip(msg):
-    print("skip test_time_rhs_sources (%s)" % msg)
-    sys.exit(0)
+_C = 0.7
+_D = 0.5
 
 
-try:
-    import numpy as np
-
-    import pops
-    from pops.physics.facade import Model
-    from pops import time as adctime
-    import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
-except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
-    _skip("pops/numpy unavailable: %s" % exc)
-
-fails = 0
-
-
-def chk(cond, label):
-    global fails
-    print("  [%s] %s" % ("OK " if cond else "XX ", label))
-    if not cond:
-        fails += 1
-
-
-def decay_model(name="rhs_decay", c=0.7):
-    """Scalar 'rho' with NO flux and a default source S = c*rho (a constant decay/growth rate).
-
-    A complete, compilable production block (zero flux + primitives + zero eigenvalues). flux == 0 so
-    -div F == 0 exactly: the only dynamics is the default source, which lets the probe separate the
-    flux from the source bit-exactly."""
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    zero = 0.0 * rho  # null expr (flux / eig do not wrap a bare float)
-    m.flux(x=[zero], y=[zero])
-    m.eigenvalues(x=[zero], y=[zero])
-    m.primitive_vars(rho=rho)
-    m.conservative_from([rho])
-    m.source([c * rho])  # default/composite source S = c*rho
-    return m
+def _source_module(name="rhs_sources"):
+    m = model.Module(name + "_module")
+    U = m.state_space("U", ("rho",))
+    flux = m.operator(
+        "flux",
+        signature=(U,) >> model.Rate(U),
+        kind="grid_operator",
+        capabilities={"produces_rate": True, "supports_device": True, "default": True},
+        expr={"x": [Const(0.0)], "y": [Const(0.0)]},
+    )
+    default = m.operator(
+        "source_default",
+        signature=(U,) >> model.Rate(U),
+        kind="local_source",
+        capabilities={"produces_rate": True, "supports_device": True, "default": True},
+        expr=[Const(_C)],
+    )
+    decay = m.operator(
+        "decay",
+        signature=(U,) >> model.Rate(U),
+        kind="local_source",
+        capabilities={"produces_rate": True, "supports_device": True},
+        expr=[Const(_D)],
+    )
+    return m, flux, default, decay
 
 
-def decay_model_with_named(name="rhs_decay_named", c=0.7, d=0.5):
-    """Same zero-flux scalar but with BOTH a default source S = c*rho and a NAMED source 'decay' =
-    d*rho. Lets (A) check that named sources axpy onto either base (rhs_into or flux-only) without a
-    double-count rejection (the ADC-425 routing makes them sound)."""
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    zero = 0.0 * rho
-    m.flux(x=[zero], y=[zero])
-    m.eigenvalues(x=[zero], y=[zero])
-    m.primitive_vars(rho=rho)
-    m.conservative_from([rho])
-    m.source([c * rho])              # default/composite source
-    m.source_term("decay", [d * rho])  # a distinct NAMED source
-    return m
+def _program(name, module):
+    return t.Program(name).bind_operators(module)
 
 
-def one_step_program(name, sources, flux=True):
-    """U^{n+1} = U + dt * rhs(flux=flux, sources=sources), committed on block 'plasma'."""
-    P = adctime.Program(name)
-    U = P.state("plasma")
-    fields = P._legacy_solve_fields(U) if flux else None
-    R = P._legacy_rhs(state=U, fields=fields, flux=flux, sources=list(sources))
-    P.commit("plasma", P.linear_combine("%s_step" % name, U + P.dt * R))
+def _state(P, block="plasma"):
+    return P.state("U", block=block).n
+
+
+def _call_fn(module, op):
+    reg = module.operator_registry()
+    return "GeneratedModule::Operators::%s" % operator_function_name(reg.id_of(op.name), op.name)
+
+
+def _one_step(module, op, name="step"):
+    P = _program(name, module)
+    U = _state(P)
+    R = P.call(op, U, name="R")
+    P.commit("plasma", P.linear_combine("%s_out" % name, U + P.dt * R))
     return P
 
 
-# ---- (A) codegen / IR: pure Python, always runs ----
-print("== (A) rhs source routing: IR + codegen ==")
-m = decay_model()
+def test_flux_only_is_an_explicit_operator_call_not_a_source_selector():
+    m, flux, default, _ = _source_module("flux_only")
+    P = _one_step(m, flux, "flux_only")
+    assert P.validate() is True
+    assert all(v.op != "rhs" for v in P._values), "Program must not build legacy rhs nodes"
+    assert [v.attrs["operator"] for v in P._values if v.op == "call"] == ["flux"]
 
-src_default = one_step_program("p_default", ["default"]).emit_cpp_program(model=m)
-src_empty = one_step_program("p_empty", []).emit_cpp_program(model=m)
-
-# sources=["default"] keeps the historical ctx.rhs_into (flux + default source), unchanged.
-chk("ctx.rhs_into(0," in src_default and "ctx.neg_div_flux_default_into(" not in src_default,
-    "sources=['default'] lowers to ctx.rhs_into (flux + default source, historical path)")
-# sources=[] (flux only) lowers to ctx.neg_div_flux_default_into -- NO default source.
-chk("ctx.neg_div_flux_default_into(0," in src_empty and "ctx.rhs_into(" not in src_empty,
-    "sources=[] lowers to ctx.neg_div_flux_default_into (flux only, NO default source)")
-
-# Distinct IR for [] vs ["default"] vs a named source (the sources attr is in the IR hash). Same
-# program name so only the sources attr differs.
-h_empty = one_step_program("p", [])._ir_hash()
-h_default = one_step_program("p", ["default"])._ir_hash()
-h_named = one_step_program("p", ["decay"])._ir_hash()
-chk(len({h_empty, h_default, h_named}) == 3,
-    "sources=[] / ['default'] / ['decay'] produce 3 distinct IR hashes")
-
-# sources=['default'] IR hash is deterministic across constructions (codegen-only change, IR untouched).
-chk(one_step_program("p", ["default"])._ir_hash() == h_default,
-    "sources=['default'] IR hash is stable (codegen-only change, IR untouched)")
-
-# A named-source rhs on a model WITH a non-empty default source now lowers (no double-count): the base
-# is rhs_into (default folded) iff 'default' is listed; the named source is axpy'd on top either way.
-src_named_on_default = one_step_program("p_nd", ["default", "decay"]).emit_cpp_program(
-    model=decay_model_with_named())
-chk("ctx.rhs_into(0," in src_named_on_default,
-    "sources=['default','decay'] uses rhs_into base (default folded) + named axpy (no double-count)")
-src_named_only = one_step_program("p_no", ["decay"]).emit_cpp_program(model=decay_model_with_named())
-chk("ctx.neg_div_flux_default_into(0," in src_named_only,
-    "sources=['decay'] (no 'default') uses flux-only base + named axpy")
+    src = P.emit_cpp_program(model=m)
+    assert _call_fn(m, flux) + "(ctx, 0," in src
+    assert _call_fn(m, default) + "(ctx, 0," not in src
+    assert "ctx.neg_div_flux_default_into" in src
+    assert "ctx.rhs_into(" not in src
 
 
-# ---- (B) end-to-end probe: skips unless the full toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
-    print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-    print("%s test_time_rhs_sources (A only)" % ("FAIL" if fails else "PASS"))
-    sys.exit(1 if fails else 0)
+def test_default_and_named_sources_are_distinct_handles():
+    m, _, default, decay = _source_module("source_handles")
+    P_default = _one_step(m, default, "default_source")
+    P_decay = _one_step(m, decay, "decay_source")
 
-print("== (B) end-to-end: flux-only vs default-source RHS ==")
+    assert P_default._ir_hash() != P_decay._ir_hash()
+    assert [v.attrs["operator"] for v in P_default._values if v.op == "call"] == ["source_default"]
+    assert [v.attrs["operator"] for v in P_decay._values if v.op == "call"] == ["decay"]
 
-DT = 0.05
-C = 0.7
-N = 16
+    src_default = P_default.emit_cpp_program(model=m)
+    src_decay = P_decay.emit_cpp_program(model=m)
+    assert _call_fn(m, default) + "(ctx, 0," in src_default
+    assert _call_fn(m, decay) + "(ctx, 0," not in src_default
+    assert _call_fn(m, decay) + "(ctx, 0," in src_decay
+    assert _call_fn(m, default) + "(ctx, 0," not in src_decay
 
 
-def make_sim(prog_model_name):
-    sim = pops.System(n=N, L=1.0, periodic=True)
+def test_composed_sources_are_explicit_multiple_calls():
+    m, _, default, decay = _source_module("composed_sources")
+    P = _program("composed", m)
+    U = _state(P)
+    S0 = P.call(default, U, name="S0")
+    S1 = P.call(decay, U, name="S1")
+    P.commit("plasma", P.linear_combine("out", U + P.dt * S0 + P.dt * S1))
+
+    assert P.validate() is True
+    calls = [v.attrs["operator"] for v in P._values if v.op == "call"]
+    assert calls == ["source_default", "decay"]
+    src = P.emit_cpp_program(model=m)
+    assert _call_fn(m, default) + "(ctx, 0," in src
+    assert _call_fn(m, decay) + "(ctx, 0," in src
+    assert ("sou" + "rces=") not in src
+
+
+def test_forward_euler_uses_typed_rhs_operator():
+    m, _, default, _ = _source_module("forward_euler")
+    P = _program("fe", m)
+    libtime.forward_euler(P, "plasma", rhs_operator=default)
+    assert P.validate() is True
+    assert [v.attrs["operator"] for v in P._values if v.op == "call"] == ["source_default"]
+    assert _call_fn(m, default) + "(ctx, 0," in P.emit_cpp_program(model=m)
+
+
+def test_forward_euler_rejects_source_selector_kwargs():
+    m, _, default, _ = _source_module("fe_bad_kwargs")
     try:
-        compiled_model = decay_model("decay_block", C)._compile_for_runtime(backend=pops.codegen.Production())
-    except RuntimeError as exc:  # no compiler / no Kokkos visible
-        _skip("model compile could not build the .so: %s" % str(exc)[:160])
-    sim._add_equation("plasma", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit.euler())
-    x = (np.arange(N) + 0.5) / N
-    X, Y = np.meshgrid(x, x, indexing="ij")
-    rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim._set_state("plasma", np.stack([rho]))
-    return sim, rho
+        bad_kw = "sou" + "rces"
+        libtime.forward_euler(_program("bad", m), "plasma", rhs_operator=default,
+                              **{bad_kw: ("default",)})
+    except TypeError as exc:
+        assert "sou" + "rces" in str(exc)
+    else:
+        raise AssertionError("forward_euler must not accept selector kwargs")
 
 
-def run_one_step(sources, flux=True):
-    """Compile + install a one-step program, step once, return (out, rho0)."""
-    pname = "p_%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
+def test_string_operator_selectors_are_rejected():
+    m, _, _, _ = _source_module("string_reject")
+    P = _program("bad", m)
+    U = _state(P)
     try:
-        compiled = pops.compile_problem(model=decay_model("decay_%s" % pname, C),
-                                       time=one_step_program(pname, sources, flux=flux))
-    except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
-        _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
-    sim, rho0 = make_sim(pname)
-    sim._install_program_so(compiled.so_path)
-    sim.step(DT)
-    return np.array(sim._get_state("plasma"))[0], rho0
+        P.call("source_default", U)
+    except TypeError as exc:
+        assert "typed operator handle" in str(exc)
+    else:
+        raise AssertionError("P.call must reject string operator selectors")
+
+    try:
+        libtime.forward_euler(P, "plasma", rhs_operator="source_default")
+    except TypeError as exc:
+        assert "typed operator handles" in str(exc)
+    else:
+        raise AssertionError("time macros must reject string operator selectors")
 
 
-# The PROBE: U + dt*rhs(flux=True, sources=[]) on a zero-flux model WITH m.source([C*rho]).
-# flux is zero and the default source is EXCLUDED -> rho must not move at all (0 cells change).
-out_empty, rho0 = run_one_step([])
-d_empty = float(np.abs(out_empty - rho0).max())
-n_changed = int(np.count_nonzero(np.abs(out_empty - rho0) > 0.0))
-print("  sources=[]        max|out-rho0| = %.3e  changed cells = %d" % (d_empty, n_changed))
-chk(d_empty == 0.0 and n_changed == 0,
-    "sources=[] is flux-only: rho unchanged (0 cells), default source NOT leaked")
-
-# sources=["default"] applies the default source: out - rho0 == dt*C*rho0 (flux is zero).
-out_default, rho0d = run_one_step(["default"])
-ref = DT * C * rho0d
-d_default = float(np.abs((out_default - rho0d) - ref).max())
-print("  sources=['default'] max|(out-rho0) - dt*C*rho0| = %.3e" % d_default)
-chk(d_default < 1e-12, "sources=['default'] applies the default source (out-rho0 == dt*C*rho)")
-chk(float(np.abs(out_default - rho0d).max()) > 1e-6, "sources=['default'] actually moved rho")
-
-# Lie split: H = flux(flux=True, sources=[]) then S = source(flux=False, sources=["default"]).
-# On this model H is the identity (zero flux, no source) and S adds dt*C*rho -> equals the offline
-# single-source split U + dt*C*U applied once.
-def lie_split_program(name):
-    P = adctime.Program(name)
-    U = P.state("plasma")
-    H = P._legacy_rhs(state=U, fields=P._legacy_solve_fields(U), flux=True, sources=[])  # flux only (== identity here)
-    U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
-    S = P._legacy_rhs(state=U1, fields=None, flux=False, sources=["default"])    # default source on U1
-    P.commit("plasma", P.linear_combine("%s_S" % name, U1 + P.dt * S))
-    return P
+def main():
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print("ok", name)
+    print("PASS test_time_rhs_sources")
 
 
-try:
-    compiled_lie = pops.compile_problem(model=decay_model("decay_lie", C), time=lie_split_program("lie"))
-except RuntimeError as exc:
-    _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
-sim_lie, rho0l = make_sim("lie")
-sim_lie._install_program_so(compiled_lie.so_path)
-sim_lie.step(DT)
-out_lie = np.array(sim_lie._get_state("plasma"))[0]
-# Offline single-source Lie split on the zero-flux model: H(dt) is identity, S(dt) adds dt*C*rho.
-ref_lie = rho0l + DT * C * rho0l
-d_lie = float(np.abs(out_lie - ref_lie).max())
-print("  Lie split        max|out - offline| = %.3e" % d_lie)
-chk(d_lie < 1e-12, "Lie split H(flux,sources=[]);S(source) == offline single-source split")
-
-# NO-REGRESSION: a default-source forward_euler (sources=['default']) is the historical path. On the
-# zero-flux model it is U + dt*C*rho -- identical to the sources=['default'] one-step above.
-try:
-    P_fe = adctime.Program("fe_default")
-    libtime.forward_euler(P_fe, "plasma", sources=("default",))
-    compiled_fe = pops.compile_problem(model=decay_model("decay_fe", C), time=P_fe)
-except RuntimeError as exc:
-    _skip("compile_problem (forward_euler) could not build the .so: %s" % str(exc)[:160])
-sim_fe, rho0f = make_sim("fe")
-sim_fe._install_program_so(compiled_fe.so_path)
-sim_fe.step(DT)
-out_fe = np.array(sim_fe._get_state("plasma"))[0]
-d_fe = float(np.abs((out_fe - rho0f) - DT * C * rho0f).max())
-print("  forward_euler    max|(out-rho0) - dt*C*rho0| = %.3e" % d_fe)
-chk(d_fe < 1e-12, "forward_euler(sources=['default']) unchanged (out-rho0 == dt*C*rho)")
-
-print("%s test_time_rhs_sources" % ("FAIL (%d)" % fails if fails else "PASS"))
-sys.exit(1 if fails else 0)
+if __name__ == "__main__":
+    main()
