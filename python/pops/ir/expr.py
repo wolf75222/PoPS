@@ -182,6 +182,9 @@ class Equation:
         self.lhs = lhs
         self.rhs = rhs
 
+    def __bool__(self):
+        raise TypeError("PoPS Equation cannot be used as a Python bool.")
+
     def __repr__(self):
         return "Equation(%r == %r)" % (self.lhs, self.rhs)
 

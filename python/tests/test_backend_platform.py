@@ -91,7 +91,7 @@ def _guard_error(backend):
     """Run compile_problem far enough to hit the backend guard; return (type, message)."""
     from pops.codegen.compile_drivers import compile_problem
     try:
-        compile_problem(model=None, time=None, backend=backend)
+        compile_problem(model=None, program=None, backend=backend)
     except Exception as err:  # noqa: BLE001 -- the exception type is part of the assertion
         return type(err), str(err)
     raise AssertionError("compile_problem(backend=%r) did not raise" % (backend,))
@@ -115,23 +115,23 @@ def test_compile_problem_accepts_typed_backend_with_platform():
     # Recording a platform must not change the lowered backend string.
     typ, msg = _guard_error(Production(platform=KokkosOpenMP()))
     assert typ is ValueError
-    assert "time must be" in msg
+    assert "program must be" in msg
 
 
 def test_compile_model_lowers_typed_backend_past_unknown_guard():
     # compile_model's unknown-backend guard sees the LOWERED string, so a typed JIT() is not
     # rejected as unknown; it proceeds and trips later on the fake model (no .name attribute).
-    from pops.codegen.compile_drivers import compile_model
+    from pops.codegen.compile_drivers import _compile_model
 
     class _FakeModel:
         def _check_require_metadata(self, *a, **k):
             pass
 
     with pytest.raises(AttributeError):
-        compile_model(_FakeModel(), backend=JIT(), include=INCLUDE)
+        _compile_model(_FakeModel(), backend=JIT(), include=INCLUDE)
     # A string selector is rejected before the backend table.
     with pytest.raises(TypeError, match="typed"):
-        compile_model(_FakeModel(), backend="nope", include=INCLUDE)
+        _compile_model(_FakeModel(), backend="nope", include=INCLUDE)
 
 
 # --- the remaining lower-level compilers accept a typed backend too (Spec 5 sec.8.15) -----------

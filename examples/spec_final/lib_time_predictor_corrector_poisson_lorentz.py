@@ -82,7 +82,7 @@ def run_once(n=16, cfl=0.2):
 
     compiled = compile_problem(
         model=module,
-        time=program,
+        program=program,
         layout=layout,
         backend=Production(platform=KokkosOpenMP()),
         include=include,

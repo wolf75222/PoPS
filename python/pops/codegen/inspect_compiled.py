@@ -119,7 +119,7 @@ def _model_metadata(compiled):
     """Read the carried model's (name -> ...) metadata WITHOUT loading the .so.
 
     Returns ``(cons_names, n_cons, params, aux_names, n_aux, state_space)`` from the physical model
-    a :class:`CompiledProblem` carries (a ``pops.physics.facade.Model`` or a ``CompiledModel``).
+    a :class:`CompiledProblem` carries (normally a ``pops.model.Module`` or a ``CompiledModel``).
     Either exposes ``cons_names`` / ``n_vars`` / ``params``; the named-aux table is
     ``aux_extra_names`` (CompiledModel) and the count is ``n_aux``. A handle that carries no model
     yields empty metadata (the Program structure is still introspectable)."""

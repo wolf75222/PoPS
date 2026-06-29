@@ -289,8 +289,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         for name, spec in instances.items():
             if not isinstance(spec, dict):
                 raise TypeError("sim.install: instances[%r] must be a dict "
-                                "(initial/spatial/time/model); got %r"
+                                "(initial/spatial/model); got %r"
                                 % (name, type(spec).__name__))
+            if compiled is not None and "time" in spec:
+                raise TypeError(
+                    "sim.install: instances[%r]['time'] is not accepted for a CompiledProblem; "
+                    "the time integration belongs to the Program passed as "
+                    "pops.compile_problem(program=...). Remove the per-instance time policy."
+                    % (name,))
             model = spec.get("model", compiled_model)
             if model is None:
                 raise ValueError(

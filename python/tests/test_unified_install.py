@@ -273,7 +273,7 @@ def test_install_end_to_end_kokkos():
     m = _lorentz_model()
     module = m.to_module()
     try:
-        compiled = pops.compile_problem(model=module, time=_lie_program(module))
+        compiled = pops.compile_problem(model=module, program=_lie_program(module))
     except RuntimeError as exc:
         print("skip test_install_end_to_end_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
@@ -290,8 +290,7 @@ def test_install_end_to_end_kokkos():
         sim_missing._install_compiled(
             compiled,
             instances={"plasma": {"state": "U", "initial": u0,
-                                  "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                  "time": Explicit.euler()}},
+                                  "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())}},
             solvers={"phi": GeometricMG()})
         raise AssertionError("MISMATCH: unified install accepted a simulation missing B_z")
     except ValueError as exc:
@@ -304,8 +303,7 @@ def test_install_end_to_end_kokkos():
     sim_ok._install_compiled(
         compiled,
         instances={"plasma": {"state": "U", "initial": u0,
-                              "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                              "time": Explicit.euler()}},
+                              "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())}},
         aux={"B_z": 3.0 * np.ones(N * N)},
         solvers={"phi": GeometricMG()})
     assert "plasma" in sim_ok.block_names(), "instance bound by name"
@@ -352,7 +350,7 @@ def test_install_routes_runtime_param_kokkos():
     m = _iso_runtime_model()
     module = m.to_module()
     try:
-        compiled = pops.compile_problem(model=module, time=_lie_program(module))
+        compiled = pops.compile_problem(model=module, program=_lie_program(module))
     except RuntimeError as exc:
         print("skip test_install_routes_runtime_param_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
@@ -366,11 +364,10 @@ def test_install_routes_runtime_param_kokkos():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim._install_compiled(
         compiled,
-        # No "model" key -> install uses compiled.model (the raw Model) and AUTO-resolves it via
-        # AOT (it declares a runtime param); the default Explicit() == SSPRK2 is AOT-compatible.
+        # No "model" key -> install uses compiled.model; the time integration is already in the
+        # Program passed to compile_problem(program=...).
         instances={"plasma": {"state": "U", "initial": u0,
-                              "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                              "time": Explicit()}},
+                              "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())}},
         params={"cs2": 1.0},
         solvers={"phi": GeometricMG()})
     assert "plasma" in sim.block_names(), "instance bound by name (no 'declared by no instance' raise)"
@@ -387,9 +384,8 @@ def test_install_routes_runtime_param_kokkos():
         "momentum residual -div(cs2*rho) must scale x4 when cs2 1 -> 4 (param routed to the block)"
     print("OK  the routed runtime param is live on the block (eval_rhs scales with cs2)")
 
-    # A runtime-param instance must use an AOT-compatible time: the AOT block path gates the integrator
-    # to SSPRK2 + backward-Euler, so euler raises clearly at add_equation (the installed Program drives
-    # the step regardless; use the default Explicit()).
+    # A compiled-problem instance must not carry a per-instance time policy. The Program passed to
+    # compile_problem(program=...) owns time integration.
     sim_euler = pops.System(n=N, L=1.0, periodic=True)
     try:
         sim_euler._install_compiled(
@@ -399,11 +395,10 @@ def test_install_routes_runtime_param_kokkos():
                                   "time": Explicit.euler()}},
             params={"cs2": 1.0},
             solvers={"phi": GeometricMG()})
-        raise AssertionError("MISMATCH: a runtime-param (AOT) block should reject euler")
-    except RuntimeError as exc:
-        assert "ssprk" in str(exc).lower() or "backward" in str(exc).lower() or "aot" in str(exc).lower(), \
-            "AOT time-gating message (got %r)" % str(exc)
-        print("OK  a runtime-param instance rejects an AOT-incompatible time (euler) at install")
+        raise AssertionError("MISMATCH: a compiled-problem instance accepted per-instance time")
+    except TypeError as exc:
+        assert "['time']" in str(exc) and "compile_problem(program=" in str(exc), exc
+        print("OK  compiled-problem install rejects per-instance time policy")
 
 
 def test_install_cadence_routing():

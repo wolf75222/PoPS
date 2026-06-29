@@ -98,8 +98,8 @@ class CompiledEllipticBrick(CompiledBrick):
 
 
 class HyperbolicBrick:
-    """PARTIAL hyperbolic DSL brick (variables/flux/eigenvalues/conversions), composable with
-    native or DSL bricks for the source and the elliptic. Same surface as dsl.Model but limited
+    """PARTIAL hyperbolic formula brick (variables/flux/eigenvalues/conversions), composable with
+    native or generated bricks for the source and the elliptic. Same surface as the formula facade but limited
     to the hyperbolic slot. compile() -> CompiledHyperbolicBrick."""
 
     def __init__(self, name):
@@ -196,4 +196,3 @@ class EllipticBrick:
         return CompiledEllipticBrick(
             struct_src=struct_src, type_name="pops_generated::" + struct_name,
             n_vars=self._m.n_vars, n_aux=AUX_BASE_COMPS, hash_part=self._m._model_hash())
-

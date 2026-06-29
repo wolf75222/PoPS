@@ -239,11 +239,9 @@ class Model(_BoardInternalsMixin, _MultiSpeciesMixin):
         records it on the model's authoring state so :meth:`inspect` surfaces it.
 
         Unlike :meth:`solve_field`, this method is INERT: it lowers ONLY to an inspectable
-        field-problem descriptor; it does NOT touch any legacy model, the elliptic right-hand
-        side, the operator graph, codegen or the runtime. Wiring the problem into the operator
-        graph (a second elliptic operator + aux channel) is the deeper lowering and stays
-        DEFERRED (see :meth:`solve_field` / the multi-elliptic runtime); this entry point only
-        produces the typed descriptor a user can ``validate()`` / ``inspect()`` before any run.
+        field-problem descriptor; it does NOT touch the elliptic right-hand side, the operator
+        graph, codegen or the runtime. Use :meth:`solve_field` when the field problem should become
+        a compiled operator in the model.
 
         Args:
             name: the field-problem name (also the unknown's display name when not derivable).

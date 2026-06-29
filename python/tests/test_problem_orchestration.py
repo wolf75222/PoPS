@@ -262,7 +262,7 @@ def test_compile_problem_requires_time_program():
         pops.compile_problem(model=module, layout=Uniform(CartesianMesh(n=8)), include=INCLUDE)
         raise AssertionError("compile_problem without a Program must raise")
     except ValueError as exc:
-        _check("time must be" in str(exc), "missing Program is rejected clearly")
+        _check("program must be" in str(exc), "missing Program is rejected clearly")
     print("ok test_compile_problem_requires_time_program")
 
 

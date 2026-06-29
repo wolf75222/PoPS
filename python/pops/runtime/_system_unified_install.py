@@ -145,8 +145,14 @@ class _SystemUnifiedInstall:
         resolved_models = {}  # instance name -> RESOLVED (CompiledModel), reused by the params step
         for name, spec in instances.items():
             if not isinstance(spec, dict):
-                raise TypeError("install: instances[%r] must be a dict (initial/spatial/time/model); "
+                raise TypeError("install: instances[%r] must be a dict (initial/spatial/model); "
                                 "got %r" % (name, type(spec).__name__))
+            if compiled is not None and "time" in spec:
+                raise TypeError(
+                    "install: instances[%r]['time'] is not accepted for a CompiledProblem; "
+                    "the time integration belongs to the Program passed as "
+                    "pops.compile_problem(program=...). Remove the per-instance time policy."
+                    % (name,))
             model = spec.get("model", compiled_model)
             if model is None:
                 raise ValueError(
@@ -404,7 +410,7 @@ class _SystemUnifiedInstall:
         {param_name: value} to {block: sorted runtime-param value vector} using each RESOLVED model's
         runtime_param_names (declaration defaults for unspecified names), and return the param names
         declared by no instance. @p resolved_models maps each instance name to its RESOLVED
-        CompiledModel: the raw dsl.Model has no runtime_param_names accessor, so a model passed
+        CompiledModel: a raw formula carrier has no runtime_param_names accessor, so a model passed
         UNRESOLVED here contributes no params (the bug install's resolve step prevents -- see
         install step (2)). @return (per_block, unknown), per_block only listing blocks with params."""
         consumed = set()

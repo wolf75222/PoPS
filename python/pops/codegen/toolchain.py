@@ -176,11 +176,11 @@ def _check_headers_match_module(include):
         mod = _pops_module()
         so = getattr(mod, "__file__", "(unknown)")
         raise RuntimeError(
-            "pops.dsl : the pops headers of %r DO NOT MATCH those with which the _pops module "
+            "pops.codegen: the pops headers of %r DO NOT MATCH those with which the _pops module "
             "was built (%s).\n"
             "  current header signature : %s\n"
             "  signature baked in _pops  : %s\n"
-            "Typical cause : `git pull` / headers edited AFTER the module build -> the DSL loader "
+            "Typical cause : `git pull` / headers edited AFTER the module build -> the generated loader "
             "would reference C++ signatures absent from the module (dlopen : 'symbol not found').\n"
             "Remedy : REBUILD the module with these headers :\n"
             "  cmake --preset python && cmake --build --preset python   (or the usual build-py)\n"
@@ -245,7 +245,7 @@ def _run_compile(cmd, what):
         out = (r.stdout or b"").decode(errors="replace").strip()  # MSVC cl writes errors on STDOUT
         err = (err + "\n" + out).strip() if out else err
         raise RuntimeError(
-            "pops.dsl: compiling the .so (%s) failed (exit %d).\n"
+            "pops.codegen: compiling the .so (%s) failed (exit %d).\n"
             "Command: %s\n"
             "Compiler output:\n%s\n"
             "Hints: `python -c \"import pops; pops.doctor()\"` diagnoses the environment "
@@ -293,7 +293,7 @@ def _probe_cxx_std(cc, std):
             return alias
     baked = loader_cxx_compiler()
     raise RuntimeError(
-        "pops.dsl: the compiler %r does not support -std=%s (standard required to share the ABI of "
+        "pops.codegen: the compiler %r does not support -std=%s (standard required to share the ABI of "
         "the _pops module).\nCompiler output:\n%s\n"
         "Compiler of the _pops build: %s\n"
         "Solutions:\n"
@@ -381,13 +381,13 @@ def _warn_kokkos_parity():
     root = _native_kokkos_root()
     if has is True and root is None:
         warnings.warn(
-            "pops.dsl: the _pops module is compiled WITH Kokkos but POPS_KOKKOS_ROOT is not defined "
-            "-> the 'production' DSL block will be compiled SERIAL (it will run, but will not scale "
+            "pops.codegen: the _pops module is compiled WITH Kokkos but POPS_KOKKOS_ROOT is not defined "
+            "-> the generated production block will be compiled SERIAL (it will run, but will not scale "
             "with threads/GPU). Set POPS_KOKKOS_ROOT=<build Kokkos install> for parity.",
             RuntimeWarning, stacklevel=3)
     elif has is False and root is not None:
         warnings.warn(
-            "pops.dsl: POPS_KOKKOS_ROOT is defined but the _pops module is SERIAL (compiled without "
+            "pops.codegen: POPS_KOKKOS_ROOT is defined but the _pops module is SERIAL (compiled without "
             "-DPOPS_USE_KOKKOS=ON) -> the loader would be compiled with Kokkos against a module that is "
             "not (divergent memory layouts, not covered by the ABI key). Remove "
             "POPS_KOKKOS_ROOT or rebuild _pops with Kokkos (preset python-parallel).",

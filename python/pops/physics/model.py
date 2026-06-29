@@ -1,4 +1,4 @@
-"""HyperbolicModel and Param: the symbolic mini-DSL core.
+"""HyperbolicModel and Param: internal symbolic model core.
 
 Python WRITES the formulas (named variables, expressions); the operations build
 an expression TREE. :class:`HyperbolicModel` declares the conservative variables,
@@ -8,8 +8,9 @@ the elliptic contribution.
 The 1500-line ``HyperbolicModel`` is assembled here from topical authoring mixins
 so no file exceeds the Spec-4 500-line bound (see ``physics/_authoring_*``):
 variables, flux, sources, Riemann, the operator-first view, the numpy evaluators,
-the runtime parameters, and the codegen wrappers. The stable user facade
-:class:`pops.physics.facade.Model` COMPOSES a private ``HyperbolicModel``.
+the runtime parameters, and the codegen wrappers. The public board-style facade
+``pops.physics.Model`` lowers user authoring into ``pops.model.Module`` while this
+class remains an internal formula carrier for code generation.
 
 Import-graph rule (Spec 4): this module imports only :mod:`pops.ir`; any
 :mod:`pops.codegen` / ``_pops`` use is LAZY, inside method bodies (the codegen
@@ -84,10 +85,7 @@ class HyperbolicModel(_VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
         self._elliptic_fields = {}  # NAMED elliptic fields (elliptic_field, ADC-419): name -> dict
                                     # {"rhs": Expr, "operator": str, "aux": [str]}. The unnamed default
                                     # stays in self._elliptic (m.elliptic_rhs); the named keys enter
-                                    # _model_hash ONLY when non-empty (cache key preserved). The runtime
-                                    # (a second elliptic operator / aux channel) is DEFERRED: the IR +
-                                    # validation + hash + codegen-IR land, but ctx.solve_fields(field=)
-                                    # raises NotImplementedError on lowering (cf. time.py).
+                                    # _model_hash ONLY when non-empty (cache key preserved).
         self._stab_speed = None  # Expr: STABILITY speed lambda* (None = fallback eigenvalues)
         self._stab_dt = None     # Expr: direct ADMISSIBLE step dt(U, aux) (None = no bound)
         self._src_freq = None    # Expr: frequency mu(U, aux) of the SOURCE (None = no bound)

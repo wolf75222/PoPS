@@ -4,15 +4,13 @@
 blackboard -- a state, primitives, a flux, an elliptic field solve, sources and
 local linear operators, tied together by equations such as
 ``ddt(U) == -div(F) + S`` and ``-laplacian(phi) == rho`` -- and lowers it to the
-Spec 2 operator-first IR (:class:`pops.model.Module`) and the :mod:`pops.dsl`
-codegen engine. It is a thin TRANSLATION layer: it owns no numerics and no
-codegen of its own. ``pops.dsl.Model`` (the PDE facade) remains valid; the board
-API is sugar that produces the same typed operators.
+Spec 2 operator-first IR (:class:`pops.model.Module`). It is a thin TRANSLATION
+layer: it owns no numerics and no codegen of its own. The board API produces
+typed operators consumed by ``pops.time.Program`` through ``T.call``.
 
 The board notation lives in :mod:`pops.math` (``ddt`` / ``div`` / ``grad`` /
 ``laplacian`` / ``sqrt`` / ``rate`` / ``unknown`` / ``integral``). The typed view
-is reachable through :pyattr:`Model.module`; the codegen model through
-:pyattr:`Model.dsl`.
+is reachable through :pyattr:`Model.module`.
 
 Multi-species board authoring (``m.species`` for N >= 2, ``m.coupled_rate``,
 ``m.solve_fields_from_species``) LOWERS to the existing operator-first multi-block
@@ -66,15 +64,14 @@ def _roles_for(hyp):
 
 
 class StateHandle:
-    """A declared state: a name plus the ordered :mod:`pops.dsl` component vars.
+    """A declared state: a name plus ordered symbolic component variables.
 
     Unpacks into its components (``rho, mx, my = U``), indexes them by position
     (``U[0]``) or by component name (``e["ne"]`` -- the board access of Spec 3
     section 12.3/16), and remembers its name and roles for the typed
-    :class:`pops.model.StateSpace`. The string index returns the conservative
-    :class:`pops.dsl.Var` of that component, so a board coupled-rate formula
-    written as ``e["ni"] - e["ne"]`` is the same IR as the hand-written
-    operator-first ``dsl.Var("ni", "cons") - dsl.Var("ne", "cons")``.
+    :class:`pops.model.StateSpace`. The string index returns the symbolic variable
+    of that component, so a board coupled-rate formula written as
+    ``e["ni"] - e["ne"]`` is the same IR as the hand-written operator-first form.
     """
 
     def __init__(self, name, components, vars_, roles, space=None):

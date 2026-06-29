@@ -190,7 +190,7 @@ def _fe_program(module, name="forward_euler_parity", coeff=1.0):
 
 def _compile_problem(**overrides):
     module = _transport_problem_module()
-    kwargs = {"model": module, "time": _fe_program(module)}
+    kwargs = {"model": module, "program": _fe_program(module)}
     kwargs.update(overrides)
     return pops.compile_problem(**_compile_kwargs(**kwargs))
 
@@ -208,18 +208,30 @@ def _initial_state(n):
 
 def make_sim(initial, *, compiled=None, model_name="transport_block"):
     sim = pops.System(n=initial.shape[-1], L=1.0, periodic=True)
-    sim.install(
-        compiled,
-        instances={
-            "ions": {
-                "model": _runtime_block_model(model_name),
-                "initial": initial,
-                "spatial": _fv(),
-                "time": Explicit.euler(),
-            }
-        },
-        solvers={"phi": GeometricMG()},
-    )
+    if compiled is None:
+        sim._install_compiled(
+            None,
+            instances={
+                "ions": {
+                    "model": _runtime_block_model(model_name),
+                    "initial": initial,
+                    "spatial": _fv(),
+                    "time": Explicit.euler(),
+                }
+            },
+            solvers={"phi": GeometricMG()},
+        )
+    else:
+        sim.install(
+            compiled,
+            instances={
+                "ions": {
+                    "initial": initial,
+                    "spatial": _fv(),
+                }
+            },
+            solvers={"phi": GeometricMG()},
+        )
     return sim
 
 
@@ -236,9 +248,9 @@ def main():
 
     # ---- (A) validation: pure Python, always runs ----
     print("== (A) compile_problem / CompiledProgramCadence validation ==")
-    chk(raises(ValueError, lambda: _compile_problem(time=None)),
+    chk(raises(ValueError, lambda: _compile_problem(program=None)),
         "compile_problem without a Program rejected")
-    chk(raises(ValueError, lambda: pops.compile_problem(time=_fe_program(_transport_problem_module()))),
+    chk(raises(ValueError, lambda: pops.compile_problem(program=_fe_program(_transport_problem_module()))),
         "compile_problem without a physical model rejected")
     chk(raises(ValueError, lambda: _compile_problem(backend=AOT())),
         "compile_problem accepts only Production() for compiled problems")
@@ -268,7 +280,7 @@ def main():
     problem_module = _transport_problem_module()
     try:
         compiled = pops.compile_problem(
-            **_compile_kwargs(model=problem_module, time=_fe_program(problem_module)))
+            **_compile_kwargs(model=problem_module, program=_fe_program(problem_module)))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -305,10 +317,10 @@ def main():
     # Cache HIT: compiling the same Program twice (no explicit so_path) returns the SAME cached .so.
     cache_module = _transport_problem_module("transport_cache")
     c1 = pops.compile_problem(
-        **_compile_kwargs(model=cache_module, time=_fe_program(cache_module, "cache_probe")))
+        **_compile_kwargs(model=cache_module, program=_fe_program(cache_module, "cache_probe")))
     cache_module_2 = _transport_problem_module("transport_cache")
     c2 = pops.compile_problem(
-        **_compile_kwargs(model=cache_module_2, time=_fe_program(cache_module_2, "cache_probe")))
+        **_compile_kwargs(model=cache_module_2, program=_fe_program(cache_module_2, "cache_probe")))
     chk(c1.so_path == c2.so_path and os.path.isfile(c1.so_path),
         "cache HIT: identical Program -> same cached .so")
 
@@ -316,15 +328,15 @@ def main():
     # different cache key -> different .so.
     module_a, prog_a = _fe_scaled("cache_coeff", 1.0)
     module_b, prog_b = _fe_scaled("cache_coeff", 2.0)
-    c_a = pops.compile_problem(**_compile_kwargs(model=module_a, time=prog_a))
-    c_b = pops.compile_problem(**_compile_kwargs(model=module_b, time=prog_b))
+    c_a = pops.compile_problem(**_compile_kwargs(model=module_a, program=prog_a))
+    c_b = pops.compile_problem(**_compile_kwargs(model=module_b, program=prog_b))
     chk(c_a.so_path != c_b.so_path, "cache MISS: a changed dt coefficient invalidates the cache")
 
     # debug=True writes the generated .cpp next to the .so for inspection.
     dbg_so = os.path.join(tempfile.mkdtemp(), "dbg_problem.so")
     debug_module = _transport_problem_module("transport_debug")
     pops.compile_problem(dbg_so, **_compile_kwargs(
-        model=debug_module, time=_fe_program(debug_module, "debug_probe"), debug=True))
+        model=debug_module, program=_fe_program(debug_module, "debug_probe"), debug=True))
     dbg_cpp = os.path.splitext(dbg_so)[0] + ".cpp"
     chk(os.path.isfile(dbg_cpp), "debug=True writes the generated .cpp next to the .so")
     if os.path.isfile(dbg_cpp):

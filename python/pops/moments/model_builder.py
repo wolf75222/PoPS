@@ -4,9 +4,8 @@ Symbols are re-exported via the central :mod:`pops.moments` package.
 
 The symbolic IR primitives (``Const`` / ``sqrt`` / ``abs_``) come from
 :mod:`pops.ir` at module scope.
-The lower-level PDE-model facade (``pops.physics.facade.Model``) is imported
-LAZILY inside :func:`build_moment_model` because :mod:`pops.physics` pulls the
-compile machinery transitively.
+The lower-level formula carrier is imported lazily inside :func:`build_moment_model`
+because :mod:`pops.physics` pulls compile machinery transitively.
 """
 from math import comb
 
@@ -69,8 +68,8 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
        kernel pops::roe_abs_apply, spectral-radius Rusanov fallback), making riemann='roe' available
        for the moment system (no fluid roles / pressure needed). Additive to exact_speeds (which
        still provides max_wave_speed for the CFL dt). Needs the 'aot' or 'production' backend.
-    @return pops.physics.facade.Model ready for the internal runtime compile seam (the
-       caller may still add elliptic_rhs, params, aux... before lowering/compilation)."""
+    @return physics model ready for module/codegen lowering (the caller may still add
+       elliptic_rhs, params, aux... before lowering/compilation)."""
     from pops.physics.facade import Model as _PdeModel
     if order < 2:
         raise ValueError("build_moment_model: order >= 2 required (standardization relies "

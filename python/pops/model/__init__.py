@@ -10,12 +10,10 @@ This package defines the abstract spaces and typed operators that a model-free
 * ``Signature`` -- a typed ``(inputs) -> output`` contract;
 * ``Operator`` and ``OperatorRegistry`` -- a named, typed, integer-id'd registry.
 
-These types are a TYPED VIEW: they carry no numerics and no array data. In phase
-S2-1 the registry is DERIVED from an existing :class:`pops.dsl` model -- the PDE
-shortcuts ``source_term`` / ``linear_source`` / ``elliptic_field`` / ``flux`` lower
-into typed operators without changing the public PDE API. The public
-``pops.model.Module`` front-end (S2-3), the typed ``P.call`` (S2-2) and the C++
-codegen consumption (S2-6) build on these primitives in later phases.
+These types are a TYPED VIEW: they carry no numerics and no array data.
+``pops.physics.Model`` and direct ``pops.model.Module`` authoring populate the
+same typed operator registry; ``pops.time.Program`` calls those operators by
+handle and the compiled problem lowers the graph to C++.
 
 The package imports only the standard library so it can be exercised without the
 compiled ``_pops`` extension.

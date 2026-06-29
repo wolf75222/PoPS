@@ -9,6 +9,24 @@ numerics and no array data; they are a TYPED VIEW only.
 Imports only the standard library so it can be exercised without the compiled
 ``_pops`` extension.
 """
+from types import MappingProxyType
+
+
+def _components_tuple(components, *, who):
+    """Return a stable tuple of component names and reject duplicates early."""
+    out = tuple(str(c) for c in (components or ()))
+    seen = set()
+    duplicates = []
+    for comp in out:
+        if not comp:
+            raise ValueError("%s: component names must be non-empty strings" % who)
+        if comp in seen:
+            duplicates.append(comp)
+        seen.add(comp)
+    if duplicates:
+        raise ValueError(
+            "%s: duplicate component name(s): %s" % (who, ", ".join(sorted(set(duplicates)))))
+    return out
 
 
 class Space:
@@ -23,9 +41,20 @@ class Space:
     kind = "space"
 
     def __init__(self, name, components=(), layout="cell"):
-        self.name = str(name)
-        self.components = tuple(components)
-        self.layout = str(layout)
+        object.__setattr__(self, "_frozen", False)
+        object.__setattr__(self, "name", str(name))
+        object.__setattr__(self, "components", _components_tuple(
+            components, who="%s(%r)" % (type(self).__name__, name)))
+        object.__setattr__(self, "layout", str(layout))
+        self._freeze()
+
+    def _freeze(self):
+        object.__setattr__(self, "_frozen", True)
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_frozen", False):
+            raise AttributeError("%s is immutable after declaration" % type(self).__name__)
+        object.__setattr__(self, name, value)
 
     def _key(self):
         return (self.kind, self.name, self.components, self.layout)
@@ -69,8 +98,9 @@ class StateSpace(Space):
     def __init__(self, name="U", components=(), roles=None, layout="cell",
                  storage="multifab"):
         super().__init__(name, components, layout)
-        self.roles = dict(roles) if roles else {}
-        self.storage = str(storage)
+        normalized_roles = {str(k): str(v) for k, v in dict(roles or {}).items()}
+        object.__setattr__(self, "roles", MappingProxyType(normalized_roles))
+        object.__setattr__(self, "storage", str(storage))
 
 
 class FieldSpace(Space):
@@ -96,7 +126,7 @@ class RateSpace(Space):
         # base name (encoded in the space name "Rate(<base>)"), so Rate("U") built
         # from a string compares equal to Rate(U) built from the state space.
         super().__init__("Rate(%s)" % base_name, components=(), layout="cell")
-        self.base_name = base_name
+        object.__setattr__(self, "base_name", base_name)
 
 
 def Rate(base):  # noqa: N802 (type-constructor sugar, intentionally capitalized)

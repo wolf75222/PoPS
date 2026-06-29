@@ -30,10 +30,9 @@ class _SourceMixin:
         self._elliptic (m.elliptic_rhs). name must be a valid identifier, unique, and not collide with
         the default.
 
-        SCOPE: the IR + validation + hash + codegen-IR for the named field land here, but the RUNTIME
-        (a SECOND elliptic operator with its own aux-channel allocation) is DEFERRED -- the System hosts
-        a single elliptic solve + the shared aux channel, so ctx.solve_fields(field=name) raises a clear
-        NotImplementedError on lowering rather than mis-solving (cf. time.py / report)."""
+        SCOPE: the IR + validation + hash + codegen-IR for the named field land here. Runtime
+        lowering must route through the compiled field-operator path rather than silently reusing the
+        default field solve."""
         n = self.n_vars
         if n == 0:
             raise ValueError("elliptic_field(%r): declare conservative_vars(...) first" % (name,))

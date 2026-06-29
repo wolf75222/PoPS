@@ -359,7 +359,7 @@ def _compiled_problem_identity(*, source, model, program, layout, backend, targe
     return record, problem_hash, module_hash, program_hash, source_hash
 
 
-def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout=None,
+def compile_problem(so_path=None, *, model=None, program=None, time=None, backend=None, layout=None,
                     force=False, cxx=None, include=None, std=None, debug=False, libraries=None):
     """Compile a physical model + ``pops.time.Program`` into one ``problem.so``.
 
@@ -369,7 +369,8 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
     ``layout=None`` compile emits the uniform ``System`` ABI for compact scripts.
 
     The produced ``.so`` carries the GeneratedProgram plus GeneratedModule metadata and is later
-    installed by ``sim.install(compiled, ...)``.
+    installed by ``sim.install(compiled, ...)``. ``program=`` is the public Program argument;
+    ``time=`` is accepted only as an internal transition alias while older tests are migrated.
     """
     import tempfile
     from pops.codegen.loader import CompiledProblem
@@ -400,8 +401,13 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
         for lib_obj in libraries:
             library_manifests.append(read_library_manifest(lib_obj))
 
-    if time is None or not hasattr(time, "emit_cpp_program"):
-        raise ValueError("compile_problem: time must be an pops.time.Program (got %r)" % (time,))
+    if program is not None and time is not None:
+        raise TypeError("compile_problem: pass program=, not both program= and legacy time=")
+    if program is None:
+        program = time
+    if program is None or not hasattr(program, "emit_cpp_program"):
+        raise ValueError(
+            "compile_problem: program must be an pops.time.Program (got %r)" % (program,))
     if model is None:
         raise ValueError(
             "compile_problem: model is required; compiling a time Program without a physical "
@@ -433,12 +439,12 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
     # Compute the semantic problem hash first, then embed that hash into the generated problem ABI.
     # A second identity pass records the final generated-source guard/cache key. The semantic digest
     # is independent of the generated source bytes, so the second pass must return the same hash.
-    src_probe = time._emit_cpp_program_for_target(model=model, target=target)
+    src_probe = program._emit_cpp_program_for_target(model=model, target=target)
     problem_identity, problem_hash, module_hash, program_hash, source_hash = (
         _compiled_problem_identity(
             source=src_probe,
             model=model,
-            program=time,
+            program=program,
             layout=layout,
             backend=backend_descriptor,
             target=target,
@@ -450,12 +456,12 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
             library_manifests=library_manifests,
         )
     )
-    src = time._emit_cpp_program_for_target(model=model, target=target, problem_hash=problem_hash)
+    src = program._emit_cpp_program_for_target(model=model, target=target, problem_hash=problem_hash)
     problem_identity, final_problem_hash, module_hash, program_hash, source_hash = (
         _compiled_problem_identity(
             source=src,
             model=model,
-            program=time,
+            program=program,
             layout=layout,
             backend=backend_descriptor,
             target=target,
@@ -475,7 +481,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
 
     if so_path is None:
         so_path = _cache_so_path(cache_key, abi_key, "problem-production", target,
-                                 getattr(time, "name", "problem"))
+                                 getattr(program, "name", "problem"))
         # POPS_CODEGEN_DIR (sec.12.4, #47): redirect the out-of-source .so (and any kept source /
         # dump) into the requested directory, keeping the collision-free cache file name. An explicit
         # so_path bypasses this -- the caller pinned the path. Created on demand, never inside the repo.
@@ -484,7 +490,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
             so_path = os.path.join(cenv.codegen_dir, os.path.basename(so_path))
         if not force and os.path.isfile(so_path):
             cenv.log("compile_problem: cache HIT -> %s" % so_path)
-            compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
+            compiled = CompiledProblem(so_path, program, model, abi_key, cc, eff_std,
                                        libraries=library_manifests, problem_hash=problem_hash,
                                        module_hash=module_hash, source_hash=source_hash,
                                        problem_identity=problem_identity, cache_key=cache_key,
@@ -517,7 +523,7 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
         cenv.log("compile_problem: invoking %s" % compile_command, level="debug")
         _run_compile(cmd, "compile_problem (backend production)")
     cenv.log("compile_problem: compiled -> %s" % so_path)
-    compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
+    compiled = CompiledProblem(so_path, program, model, abi_key, cc, eff_std,
                                libraries=library_manifests, problem_hash=problem_hash,
                                module_hash=module_hash, source_hash=source_hash,
                                problem_identity=problem_identity, cache_key=cache_key,

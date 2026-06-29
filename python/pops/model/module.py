@@ -9,6 +9,7 @@ Imports only the standard library (plus the sibling operator-first types) so it
 can be exercised without the compiled ``_pops`` extension.
 """
 import hashlib
+import json
 
 from .handles import OperatorHandle
 from .operators import Operator
@@ -28,9 +29,8 @@ class Module:
 
     A Module owns the RULES -- state/field spaces, parameters, aux declarations and the
     typed operators a Program composes by signature. The Simulation owns the DATA
-    (grid, arrays, solvers, clock). :class:`pops.physics.facade.Model` is the PDE convenience facade
-    that populates a Module's registry (``source_term`` / ``linear_source`` /
-    ``elliptic_field`` / ``flux`` register typed operators); a Module can also be built
+    (grid, arrays, solvers, clock). :class:`pops.physics.Model` is the board-like
+    authoring facade that populates a Module's registry; a Module can also be built
     directly with ``state_space`` / ``field_space`` / ``parameters`` / ``aux_fields`` /
     ``operator``. A generic Program bound to ``module.operator_registry()`` runs against
     any Module that provides operators with the expected signatures.
@@ -55,8 +55,8 @@ class Module:
             "wave_speeds": None,
         }
         # Wave speeds for the Riemann solver of a compilable Module: {"x": [Expr], "y": [Expr]}
-        # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
-        # lowered to dsl.Model.eigenvalues by compile_problem.
+        # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is
+        # self-contained for compiled problem codegen.
         self._eigenvalues = None
 
     # --- spaces ---
@@ -192,14 +192,13 @@ class Module:
 
     def eigenvalues(self, x, y):
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
-        IR expressions over the state. Carried so a pure Module is a self-contained, compilable model
-        (lowered to ``dsl.Model.eigenvalues``)."""
+        IR expressions over the state. Carried so a pure Module is a self-contained,
+        compilable model."""
         self._eigenvalues = {"x": list(x), "y": list(y)}
         return self._eigenvalues
 
     def adopt_registry(self, registry):
-        """Use ``registry`` as this Module's operator registry (the dsl.Model facade adopts
-        the derived registry of its HyperbolicModel). Returns ``self``."""
+        """Use ``registry`` as this Module's operator registry. Returns ``self``."""
         if not isinstance(registry, OperatorRegistry):
             raise TypeError("adopt_registry expects an OperatorRegistry")
         self._registry = registry
@@ -320,9 +319,9 @@ class Module:
         """Stable hash of the ModuleSpec for the compiled-artifact cache (Spec 2, S2-7).
 
         Folds the spaces, parameters, aux declarations and -- for every operator -- the name,
-        kind, signature, capabilities, requirements and a body identity (the source of a callable
-        body, else its repr). Sensitive to an operator body, signature, capability or space change;
-        deterministic for an identical module. A spec2 tag namespaces it away from any spec1 key.
+        kind, signature, capabilities, requirements and a canonical body identity. Sensitive to an
+        operator body, signature, capability or space change; deterministic for an identical module.
+        A spec2 tag namespaces it away from any spec1 key.
         """
         parts = ["spec2-module", self.name]
         for nm in sorted(self._state_spaces):
@@ -345,7 +344,7 @@ class Module:
         if self._eigenvalues is not None:
             for direction in ("x", "y"):
                 parts.append("eig_%s:%s" % (
-                    direction, ";".join(repr(e) for e in self._eigenvalues[direction])))
+                    direction, ";".join(_body_identity(e) for e in self._eigenvalues[direction])))
         for op in self._registry:  # registration (id) order
             parts.append("op:%s:%s:%s:caps=%s:reqs=%s:body=%s" % (
                 op.name, op.kind, repr(op.signature),
@@ -358,12 +357,64 @@ class Module:
 
 
 def _body_identity(body):
-    """A stable string identifying an already-captured operator IR body."""
+    """A stable JSON identity identifying an already-captured operator IR body."""
+    return json.dumps(_canonical_body_identity(body), sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_body_identity(body):
+    """Canonical, side-effect-free body identity.
+
+    ``repr`` is intentionally not used: it can include addresses or implementation-dependent
+    formatting. Operator bodies must be built from JSON primitives, containers, or inert IR objects
+    exposing structural fields.
+    """
     if body is None:
-        return "none"
+        return None
+    if isinstance(body, (bool, int, float, str)):
+        return body
+    if isinstance(body, (list, tuple)):
+        return [_canonical_body_identity(v) for v in body]
+    if isinstance(body, dict):
+        return {
+            str(k): _canonical_body_identity(v)
+            for k, v in sorted(body.items(), key=lambda kv: str(kv[0]))
+        }
     if callable(body):
         raise TypeError("Module operator bodies must be captured IR, not Python callables")
-    return repr(body)
+    if hasattr(body, "_key") and callable(body._key):
+        return {
+            "type": type(body).__name__,
+            "key": _canonical_body_identity(body._key()),
+        }
+    if hasattr(body, "to_dict") and callable(body.to_dict):
+        return {
+            "type": type(body).__name__,
+            "dict": _canonical_body_identity(body.to_dict()),
+        }
+    if hasattr(body, "as_dict") and callable(body.as_dict):
+        return {
+            "type": type(body).__name__,
+            "dict": _canonical_body_identity(body.as_dict()),
+        }
+    attrs = {}
+    if hasattr(body, "__dict__"):
+        attrs.update(vars(body))
+    slots = getattr(body, "__slots__", ())
+    if isinstance(slots, str):
+        slots = (slots,)
+    for slot in slots:
+        if slot.startswith("_") or not hasattr(body, slot):
+            continue
+        attrs[slot] = getattr(body, slot)
+    if attrs:
+        return {
+            "type": type(body).__name__,
+            "attrs": _canonical_body_identity(attrs),
+        }
+    raise TypeError(
+        "Module operator body %s is not structurally serializable for module_hash; "
+        "use inert IR primitives/containers instead of relying on repr()."
+        % type(body).__name__)
 
 
 def _symbolic_args(inputs):

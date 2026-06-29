@@ -300,7 +300,7 @@ def test_amr_compile_requires_time_program():
         pops.compile_problem(model=module, layout=layout, backend=Production())
         raise AssertionError("AMR compile without a Program must raise")
     except ValueError as exc:
-        _check("time must be" in str(exc), "missing Program is rejected clearly")
+        _check("program must be" in str(exc), "missing Program is rejected clearly")
     print("ok test_amr_compile_requires_time_program")
 
 

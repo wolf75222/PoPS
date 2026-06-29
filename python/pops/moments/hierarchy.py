@@ -43,7 +43,7 @@ def CartesianVelocityMoments(order, *, closure=None, robust=True, sources=None,
 
 
 class MomentModel:
-    """A recorded 2D moment-model specification; builds a ``pops.physics.facade.Model`` on demand.
+    """A recorded 2D moment-model specification; builds a physics model on demand.
 
     Every chainable method mutates a small option dict and returns ``self``. The recorded
     options map literally onto :func:`build_moment_model`'s signature; :meth:`build` is the
@@ -151,7 +151,7 @@ class MomentModel:
         return sources
 
     def build(self, name="moments"):
-        """Build the recorded specification into a ``pops.physics.facade.Model`` (the single engine call).
+        """Build the recorded specification into a physics model (the single engine call).
 
         Maps the recorded options literally onto :func:`build_moment_model`, then applies the
         recorded Poisson coupling (``elliptic_rhs`` + ``grad_x`` / ``grad_y`` aux) to the

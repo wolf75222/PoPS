@@ -51,7 +51,7 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
          (``P.schur_energy``, the native kinetic-energy increment).
 
     phi^n is a fresh zero scalar field each step (NO persistent history -- see the cross-step carry note
-    under DEFERRED below). The phi solve runs to tolerance and the velocity reconstruction reads only the
+    below). The phi solve runs to tolerance and the velocity reconstruction reads only the
     solved phi^{n+theta}, so a single step matches the native single step taken from ``phi^n = 0`` (the
     System also initializes phi to zero). Every numerical kernel REUSES a native primitive (no stencil /
     B^{-1} / elimination reimplementation); the native ``pops.CondensedSchur`` stepper is untouched.
@@ -73,7 +73,7 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
     update, like a rho/mx/my isothermal block). @p method (a TYPED pops.solvers.krylov descriptor;
     None defaults to BiCGStab()) / @p tol / @p max_iter configure the Krylov phi solve.
 
-    DEFERRED (documented partial, spec's "if too large" clause):
+    Current limitation:
       - **cross-step phi^n carry**. The native stepper freezes phi^n (the previous stage's potential)
         and keeps it in the RHS (``-Lap(phi^n)``) and as the solve warm start. The System history ring
         is sized to the block's ncomp (a full state) and stores via ``pops::lincomb`` (matching ncomp), so

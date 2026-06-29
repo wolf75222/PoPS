@@ -1,10 +1,9 @@
-"""Stable PDE-model facade: ``pops.physics.facade.Model``.
+"""Internal PDE-model facade used by legacy formula lowering.
 
-``Model`` COMPOSES a private :class:`~pops.physics.model.HyperbolicModel`
-(composition, not inheritance) and delegates each call: no new numerics. It is
-the PDE convenience facade that ``pops.dsl.Model`` re-exports; the blackboard
-board facade (also named ``Model``, re-exported as ``pops.physics.Model``) lives
-in :mod:`pops.physics.board`. cf. ``docs/DSL_MODEL_DESIGN.md`` sections 1-3.
+``Model`` composes a private :class:`~pops.physics.model.HyperbolicModel`
+(composition, not inheritance) and delegates each call: no new numerics. The
+public authoring surface is ``pops.physics.Model``; this module remains as an
+internal compatibility layer for formula-to-kernel lowering.
 
 Import-graph rule (Spec 4): module-scope imports are confined to :mod:`pops.ir`
 and :mod:`pops.model`; codegen is imported LAZILY inside the internal
@@ -20,10 +19,10 @@ from ._facade_compile import _FacadeCompileMixin
 
 
 class Model(_FacadeCompileMixin):
-    """STABLE facade of a DSL model (Phase A). COMPOSES a private HyperbolicModel (_m, composition and
+    """Internal formula facade. COMPOSES a private HyperbolicModel (_m, composition and
     NOT inheritance) and delegates each call to an existing method: no new numerics.
 
-        m = pops.dsl.Model("euler")
+        m = Model("euler")
         rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
         g = m.param("gamma", 1.4)                 # NAMED constant, inlined at codegen
         u = m.primitive("u", rhou / rho)
@@ -31,7 +30,8 @@ class Model(_FacadeCompileMixin):
         m.flux(x=[...], y=[...])                   # symbolic DECLARATOR of the physical flux
         m.eval_flux(U, aux, dir)                   # numpy EVALUATOR (debug), DISTINCT name
         m.primitive_vars(rho=rho, u=u, v=v, p=p)   # ordered Prim layout (kwargs order)
-        compiled = pops.compile_problem(model=m, time=program, backend=pops.codegen.Production())
+        compiled = pops.compile_problem(model=m.module, program=program,
+                                        backend=pops.codegen.Production())
 
     cf. docs/DSL_MODEL_DESIGN.md sections 1-3."""
 
@@ -292,8 +292,7 @@ class Model(_FacadeCompileMixin):
     def elliptic_field(self, name, rhs, operator="poisson", aux=None):
         """NAMED elliptic field: an elliptic solve operator(field) = rhs(U) populating the named @p aux
         fields (default ['phi', 'grad_x', 'grad_y']); delegates to HyperbolicModel.elliptic_field. The
-        IR + validation + hash land; the multi-field RUNTIME (a second elliptic operator + aux channel)
-        is DEFERRED -- ctx.solve_fields(field=name) raises NotImplementedError on lowering."""
+        IR + validation + hash land; runtime support is provided by the compiled field operator path."""
         self._m.elliptic_field(name, rhs, operator=operator, aux=aux)
 
     def gamma(self, value):
@@ -369,9 +368,8 @@ class Model(_FacadeCompileMixin):
     def module(self):
         """The pops.model.Module view of this PDE model (Spec 2, operator-first): its typed
         StateSpace / FieldSpace and the OperatorRegistry that source_term / linear_source /
-        elliptic_field / flux / rate_operator populate. dsl.Model is the PDE convenience
-        facade; the Module is the model-free view a generic Program binds to (P.bind_operators).
-        The Module carries no numerics; codegen still reads this Model via compile_problem."""
+        elliptic_field / flux / rate_operator populate. The Module is the model-free view a
+        generic Program binds to (P.bind_operators). The Module carries no numerics."""
         mod = _model.Module(self.name)
         st = self._m.state_space()
         mod.state_space(st.name, st.components, roles=st.roles, layout=st.layout,
