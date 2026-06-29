@@ -2,8 +2,8 @@
 
 P.call resolves an operator handle against the model's typed registry, type-checks the
 arguments against its Signature, records a first-class ``call`` IR node, and
-codegen lowers that node to the matching C++ ProgramContext route. m.rate_operator names
-a composite -div F + sources rate as a Program-side alias. Pure Python
+codegen lowers that node through GeneratedModule::Operators. m.rate_operator names
+a composite -div F + sources rate as a module operator. Pure Python
 (emit_cpp_program returns the .so source text without compiling); skips cleanly if pops
 is not importable.
 """
@@ -116,9 +116,8 @@ def test_call_lowers_source_and_flux():
 
 
 def test_call_default_source():
-    """P._call('source_default', ...) reaches the default source (m._source), which is NOT a named
-    source_term: it must lower to the source-only rhs, identical to P._legacy_rhs(flux=False,
-    sources=['default'])."""
+    """P.call(source_default, ...) reaches the default source and lowers through a generated
+    module operator, not a Program-side RHS selector."""
     m = physics.Model("ds")
     U = m.state("U", components=["rho", "mx", "my"])
     rho, mx, my = U
@@ -165,6 +164,32 @@ def test_call_linear_operator_matches_solve_local_linear():
     assert "/* local_linear_operator" not in src
     assert _generated_call(m, "lorentz") + "(ctx, 0," in src
     print("OK  P.call(lorentz) operator drives solve_local_linear")
+
+
+def test_call_projection_records_call_node_and_lowers_through_module_operator():
+    m = build_model()
+    state = next(iter(m.state_spaces().values()))
+    m.operator(
+        "projection", signature=(state,) >> state, kind="projection",
+        expr=[Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")])
+
+    def opfirst(P, _m):
+        P.bind_operators(_m)
+        U = _state(P, _m)
+        projected = P.call(_handle(_m, "projection"), U)
+        P.commit("plasma", projected)
+
+    P = _program(opfirst, m)
+    call_nodes = [v for v in P._values if v.op == "call"]
+    assert len(call_nodes) == 1
+    assert call_nodes[0].vtype == "state"
+    assert call_nodes[0].attrs["operator"] == "projection"
+    assert "kind" not in call_nodes[0].attrs
+    src = P.emit_cpp_program(model=m)
+    assert _generated_call(m, "projection") + "(ctx, 0," in src
+    assert "v.op == \"call\"" not in src
+    assert "/* local_linear_operator" not in src
+    print("OK  P.call(projection) records one state call and lowers through GeneratedModule")
 
 
 def test_call_typing_errors():
@@ -235,6 +260,7 @@ def main():
     test_call_lowers_source_and_flux()
     test_call_default_source()
     test_call_linear_operator_matches_solve_local_linear()
+    test_call_projection_records_call_node_and_lowers_through_module_operator()
     test_call_typing_errors()
     test_default_resolution_and_ambiguity()
     test_rate_operator_alias_not_in_hash()

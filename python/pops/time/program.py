@@ -27,11 +27,9 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
 
     def __init__(self, name):
         self.name = name
-        # De-stringing is the ONE public path (Spec 5 sec.15, ADC-479 criteria 23 + 27): the public
-        # P.call requires a typed operator handle and the public P.rhs requires the typed terms= list
-        # (the legacy string operator name / flux=/sources= form is REFUSED). The byte-identical
-        # builders survive ONLY as the internal _call / _rate_from_transport, which the typed front doors and
-        # the pops.lib.time macros lower through -- no opt-in flag, no second public path.
+        # De-stringing is the ONE public path: public Programs call typed operator handles. Internal
+        # builders survive only as private lowering seams used after typed validation; there is no
+        # opt-in flag and no second public route.
         self._values = []
         self._next_id = 0
         self._commits = {}      # block -> State value
@@ -43,7 +41,8 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         self._dt_bound = None        # (block, scalar_value) once set; the block is the scalar sub-block
         self.dt = _Coeff({1: 1.0})   # symbolic time step; participates in coefficient arithmetic
         # OPTIONAL bound operator registry (Spec 2, operator-first): set by bind_operators so P.call
-        # can resolve and type-check operators at build time. None = legacy PDE-shortcut-only Program.
+        # can resolve and type-check operators at build time. None means no operator calls may be
+        # authored until a module registry is bound.
         self._registry = None
         # Per-emit scratch names of coupled_rate blocks, keyed by (coupled node id, block): the
         # coupled_rate kernel fills them and each coupled_rate_out projection aliases its block's

@@ -74,9 +74,7 @@ class _ProgramCore(_ProgramConstants):
             raise ValueError("_fields_from_state: a State value is required")
         if field is not None and not (isinstance(field, str) and field):
             raise ValueError("_fields_from_state: field must be a non-empty named elliptic field")
-        # The attr is added ONLY for a named field so a default solve_fields keeps its historical IR
-        # (empty attrs) -> the .so cache key of an existing time program is byte-identical (no spurious
-        # invalidation from this feature).
+        # The attr is added only for a named field; the default field solve has no extra selector.
         attrs = {"field": field} if field is not None else {}
         return self._new("fields", "solve_fields", (state,), attrs, name, state.block)
 
@@ -189,8 +187,8 @@ class _ProgramCore(_ProgramConstants):
         Accepts EITHER a plain ``str`` (an internal selector token, returned unchanged), an
         :class:`pops.model.OperatorHandle`, or a :class:`pops.model.Operator` (their ``.name`` is
         returned). A typed selector resolves through the identical registry lookup + lowering as its
-        name, so the IR is byte-identical. Any other type is a clear ``TypeError``. The public string
-        REJECT lives in :meth:`call`; this internal normalizer accepts the string the lowering passes."""
+        name. Any other type is a clear ``TypeError``. The public string reject lives in
+        :meth:`call`; this internal normalizer accepts package-internal registry keys."""
         from pops.model import Operator, OperatorHandle
         if isinstance(operator, (OperatorHandle, Operator)):
             return operator.name
@@ -296,7 +294,7 @@ class _ProgramCore(_ProgramConstants):
 
         The public Program API is operator-first: users call ``P.call(rate_handle, U, fields)``.
         This helper exists so internal scheme builders can still convert a typed term list onto the
-        same byte-identical RHS IR without exposing a second user path.
+        internal transport-rate IR without exposing a second user path.
         """
         if legacy or terms is None:
             extra = "".join(", %s=" % k for k in sorted(legacy))
@@ -368,7 +366,7 @@ class _ProgramCore(_ProgramConstants):
         out.space = state_space  # the combine result is a State over the same space
         return out
 
-    # --- internal named-source / local-linear compatibility nodes -----------------
+    # --- internal named-source / local-linear nodes -----------------
     @property
     def I(self):  # noqa: E743  -- the mathematical identity operator (matches the spec's P.I)
         """The identity operator, for building a local linear operator ``self.I - a * L`` (L a
@@ -376,7 +374,7 @@ class _ProgramCore(_ProgramConstants):
         return _Operator(_Coeff({0: 1.0}), [])
 
     def _linear_source_value(self, name):
-        """Internal compatibility value for legacy local-linear lowering.
+        """Internal value for local-linear lowering.
 
         This is intentionally underscored: user Programs must call typed operator handles. Existing
         package macros still use this while they are migrated to operator-first handles.
@@ -386,7 +384,7 @@ class _ProgramCore(_ProgramConstants):
         return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
 
     def _source_value(self, name, state=None, fields=None):
-        """Internal compatibility value for the historical named-source node."""
+        """Internal value for a named-source node."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         if not isinstance(name, str) or not name:
             raise ValueError("_source_value: a non-empty source name is required")
@@ -399,7 +397,7 @@ class _ProgramCore(_ProgramConstants):
 
     def _check_operator_state(self, l_value, state_value, where):
         """Operator-first type check (Spec 2): a LocalLinearOperator L: U -> U may only act on a State
-        over U. Fires only when both carry space tags (P.call / P.state(space=)); legacy skips."""
+        over U. Fires only when both carry space tags."""
         lop = getattr(l_value, "space", None) if isinstance(l_value, Value) else None
         dom = getattr(lop, "domain_name", None)
         st = _state_base_name(getattr(state_value, "space", None))
