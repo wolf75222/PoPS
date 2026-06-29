@@ -22,17 +22,21 @@ class CapabilityEntry:
     from the C++ ``_pops.module_capabilities()`` authoritative facts (Spec 5 sec.13.12).
     """
 
-    def __init__(self, name, category, native_id, available, requirements, source="descriptor"):
+    def __init__(self, name, category, native_id, available, requirements,
+                 capabilities=None, options=None, source="descriptor"):
         self.name = name
         self.category = category
         self.native_id = native_id
         self.available = available
-        self.requirements = dict(requirements or {})
+        self.requirements = _jsonable(requirements or {})
+        self.capabilities = _jsonable(capabilities or {})
+        self.options = _jsonable(options or {})
         self.source = source
 
     def to_dict(self):
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "available": self.available, "requirements": self.requirements,
+                "capabilities": self.capabilities, "options": self.options,
                 "source": self.source}
 
     def __repr__(self):
@@ -91,11 +95,39 @@ def _availability_status(descriptor):
         return "unknown"
 
 
+def _jsonable(value):
+    """Return a deterministic JSON-roundtrippable representation for descriptor metadata."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(value, (tuple, list)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, set):
+        return [_jsonable(v) for v in sorted(value, key=repr)]
+    return repr(value)
+
+
 def _entry_from_brick(descriptor):
     """A :class:`CapabilityEntry` from a :class:`pops.descriptors.BrickDescriptor`."""
     status = descriptor.available().status
     return CapabilityEntry(descriptor.name, descriptor.category,
-                           descriptor.native_id or None, status, descriptor.requirements)
+                           descriptor.native_id or None, status, descriptor.requirements,
+                           capabilities=descriptor.capabilities, options=descriptor.options)
+
+
+def _entry_from_descriptor(descriptor, name=None):
+    """A :class:`CapabilityEntry` from a generic ``Descriptor`` instance."""
+    status = _availability_status(descriptor)
+    return CapabilityEntry(
+        name or descriptor.name,
+        getattr(descriptor, "category", "descriptor"),
+        getattr(descriptor, "native_id", None),
+        status,
+        descriptor.requirements() if hasattr(descriptor, "requirements") else {},
+        capabilities=descriptor.capabilities() if hasattr(descriptor, "capabilities") else {},
+        options=descriptor.options() if hasattr(descriptor, "options") else {},
+    )
 
 
 def _walk_brick_catalog(namespace):
@@ -110,7 +142,7 @@ def _walk_brick_catalog(namespace):
             continue
         try:
             descriptor = factory()
-        except TypeError:
+        except (TypeError, ValueError):
             continue  # needs an argument (User selectors); not a standing entry.
         if hasattr(descriptor, "brick_type"):  # a BrickDescriptor
             yield _entry_from_brick(descriptor)
@@ -125,6 +157,16 @@ def _walk_class_catalog(category, classes):
     for cls in classes:
         native = getattr(cls, "native_id", None)
         yield CapabilityEntry(cls.__name__, category, native, "context", {})
+
+
+def _walk_descriptor_instances(items):
+    """Yield rows for pre-instantiated generic descriptors."""
+    for item in items:
+        if isinstance(item, tuple):
+            name, descriptor = item
+        else:
+            name, descriptor = None, item
+        yield _entry_from_descriptor(descriptor, name=name)
 
 
 # Spec 5 sec.13.12: the descriptor layout entries whose availability the C++ source ADJUDICATES.
@@ -230,11 +272,73 @@ def inspect_capabilities():
         entries.extend(_walk_brick_catalog(namespace))
     entries.extend(_walk_class_catalog("layout", (Uniform, AMR)))
 
+    # Compile / codegen route descriptors.
+    from pops.codegen import AOT, JIT, Production
+    from pops.codegen.optimization import ConservativeFusion, Disabled, Optimization
+    from pops.codegen.math_options import StrictMath, FastMath, DebugMath, GpuRegisterAware
+    entries.extend(_walk_descriptor_instances((
+        Production(), AOT(), JIT(),
+        Optimization(),
+        StrictMath(), FastMath(), DebugMath(), GpuRegisterAware(),
+        ConservativeFusion(), Disabled(),
+    )))
+
+    # Output / checkpoint policies and output formats.
+    from pops.output import (OutputPolicy, CheckpointPolicy, NPZ, VTK, HDF5,
+                             AllLevels as OutputAllLevels,
+                             CoarseOnly as OutputCoarseOnly,
+                             SelectedLevels as OutputSelectedLevels)
+    entries.extend(_walk_descriptor_instances((
+        OutputPolicy(), CheckpointPolicy(), NPZ(), VTK(), HDF5(),
+        ("OutputAllLevels", OutputAllLevels()),
+        ("OutputCoarseOnly", OutputCoarseOnly()),
+        ("OutputSelectedLevels", OutputSelectedLevels(0)),
+    )))
+
+    # AMR policies.
+    from pops.mesh.amr import (Refine, TagUnion, RegridEvery, FrozenRegrid, PatchLayout,
+                               ProperNesting, BufferCells, AllLevels as AmrAllLevels,
+                               CoarseOnly as AmrCoarseOnly, SelectedLevels as AmrSelectedLevels,
+                               CheckpointPolicy as AmrCheckpointPolicy, AMROutput)
+    entries.extend(_walk_descriptor_instances((
+        ("RefineAbove", Refine.on("rho").above(0.1)),
+        ("TagUnion", TagUnion(Refine.on("rho").above(0.1))),
+        RegridEvery(4), FrozenRegrid(), PatchLayout(), ProperNesting(), BufferCells(),
+        ("AmrAllLevels", AmrAllLevels()),
+        ("AmrCoarseOnly", AmrCoarseOnly()),
+        ("AmrSelectedLevels", AmrSelectedLevels(0)),
+        ("AmrCheckpointPolicy", AmrCheckpointPolicy()),
+        AMROutput(fields=("phi",)),
+    )))
+
+    # Moment descriptors.
+    from pops.moments import (RealizabilityProjection, VlasovElectricSource,
+                              MagneticRotationSource, MagneticMomentSource, MomentSource)
+    from pops.moments.speeds import ExactSpeeds
+    from pops.moments.closures import HyQMOM15Closure
+    entries.extend(_walk_descriptor_instances((
+        HyQMOM15Closure(),
+        RealizabilityProjection(),
+        ("RealizabilityProjection.none", RealizabilityProjection.none()),
+        ("ExactSpeeds.exact", ExactSpeeds(ExactSpeeds.EXACT_EIGENVALUES)),
+        ("ExactSpeeds.roe", ExactSpeeds(ExactSpeeds.ROE_DISSIPATION)),
+        ("ExactSpeeds.bounded", ExactSpeeds(ExactSpeeds.BOUNDED)),
+        VlasovElectricSource(), MagneticRotationSource(), MagneticMomentSource(),
+        ("MomentSource.custom_rule", MomentSource.from_rule("custom_rule", lambda m, M: [])),
+    )))
+
     # The solver / field brick catalogs (Spec 5 criterion 7: solvers under pops.solvers, the
     # field brick catalog under pops.fields.catalog) -- optional layers walked when present.
     try:
         from pops.solvers import solvers
         entries.extend(_walk_brick_catalog(solvers))
+        for descriptor in (
+            solvers.CG(max_iter=1),
+            solvers.BiCGStab(max_iter=1),
+            solvers.GMRES(max_iter=1),
+            solvers.Richardson(max_iter=1),
+        ):
+            entries.append(_entry_from_brick(descriptor))
     except ImportError:
         pass
     try:

@@ -40,6 +40,44 @@ def test_capability_matrix_is_json_serialisable_metadata_only():
     assert json.loads(json.dumps(payload)) == payload
 
 
+def test_capability_matrix_covers_spec73_descriptor_families():
+    matrix = pops.inspect_capabilities()
+    categories = set(matrix.categories())
+    assert {
+        "backend",
+        "optimization",
+        "math_mode",
+        "fusion_policy",
+        "output_policy",
+        "checkpoint_policy",
+        "output_format",
+        "level_policy",
+        "refinement_criterion",
+        "regrid_policy",
+        "patch_layout",
+        "nesting_policy",
+        "tag_policy",
+        "amr_output",
+        "closure",
+        "realizability",
+        "wave_speed",
+        "moment_source",
+        "solver",
+    } <= categories
+
+    backends = {entry.name: entry.to_dict() for entry in matrix.by_category("backend")}
+    assert backends["Production"]["capabilities"]["amr"] is True
+    assert backends["JIT"]["capabilities"]["amr"] is False
+
+    solvers = {entry.name: entry.to_dict() for entry in matrix.by_category("solver")}
+    assert solvers["gmres"]["options"]["max_iter"] == 1
+    assert solvers["gmres"]["capabilities"]["supports_amr"] is True
+
+    waves = {entry.name: entry.to_dict() for entry in matrix.by_category("wave_speed")}
+    assert waves["ExactSpeeds.bounded"]["capabilities"]["exact_speeds"] is False
+    assert waves["ExactSpeeds.roe"]["capabilities"]["roe"] is True
+
+
 def test_no_case_route_matrix_assembly_survives_publicly():
     assert not hasattr(pops, "Case")
     with pytest.raises(ModuleNotFoundError):

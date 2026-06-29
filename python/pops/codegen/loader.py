@@ -240,8 +240,15 @@ class CompiledProblem:
 
     # Descriptor categories a compiled problem selects from at bind (spatial brick + layout + field
     # solver); the capability scope of inspect_capabilities().
-    _CAPABILITY_CATEGORIES = ("riemann", "reconstruction", "limiter", "projection", "layout",
-                              "solver", "field")
+    _CAPABILITY_CATEGORIES = (
+        "riemann", "reconstruction", "limiter", "projection",
+        "layout", "solver", "field",
+        "backend", "optimization", "math_mode", "fusion_policy",
+        "output_policy", "checkpoint_policy", "output_format", "level_policy",
+        "refinement_criterion", "regrid_policy", "patch_layout", "nesting_policy",
+        "tag_policy", "amr_output",
+        "closure", "realizability", "wave_speed", "moment_source",
+    )
 
     def dump_ir(self, path=None):
         """Write the serialized Program IR (JSON) -- the SAME serialization ``_ir_hash`` digests.

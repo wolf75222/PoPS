@@ -204,6 +204,8 @@ def test_inspect_capabilities_scoped():
     chk("rusanov" in names and "hll" in names, "the Riemann fluxes are catalogued")
     cats = set(matrix.categories())
     chk("riemann" in cats and "reconstruction" in cats, "the route-choosing categories are present")
+    chk({"backend", "output_policy", "checkpoint_policy", "closure", "moment_source"} <= cats,
+        "compiled capability scope includes backend/output/moments families")
     chk("capability matrix" in str(matrix), "the matrix is printable")
     # It matches the top-level machinery scoped to the compiled's categories.
     chk(cats <= set(cp._CAPABILITY_CATEGORIES), "the scope is the compiled's bind categories")
