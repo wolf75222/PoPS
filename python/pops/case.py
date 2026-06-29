@@ -95,8 +95,8 @@ class Case:
     single-level :class:`~pops.mesh.layouts.Uniform` over a default
     :class:`~pops.mesh.cartesian.CartesianMesh`. :meth:`validate` runs structural checks; multi-block
     assemblies, named non-Poisson elliptic fields and output / checkpoint policies all lower
-    (C3 / C1-System / C4); ``compile`` / ``bind`` flow them onto the runtime. AMR per-level output
-    (``Plotfile`` / level filtering) is the one remaining deferral (ADC-511).
+    (C3 / C1-System / C4); ``compile`` / ``bind`` flow them onto the runtime. The public output
+    formats are only those backed by the runtime writers.
 
     A Case CONTAINS descriptors (the layout, the blocks' physics, the field problems) but is
     NOT itself a :class:`pops.descriptors.Descriptor` (Spec 5 sec.6 table / sec.15). It exposes
@@ -181,7 +181,7 @@ class Case:
 
         The policy is stored on the Case; ``bind()`` flows it onto the bound ``System`` and
         ``run()`` fires it at each policy cadence through the existing write / checkpoint writers
-        (ADC-509). AMR per-level output (``Plotfile`` / level filtering) remains deferred (ADC-511).
+        (ADC-509). Formats without a native writer are not exported as public descriptors.
         """
         self._outputs.append(policy)
         return self
@@ -285,7 +285,7 @@ class Case:
         # (its run() fires them at each policy cadence through the existing write()/checkpoint
         # writers). validate() only confirms each entry is a real policy descriptor (its category is
         # one of the two policy categories) -- a non-policy object is a typo, rejected loud here
-        # rather than at run time. AMR per-level writes (Plotfile / level filtering) remain ADC-511.
+        # rather than at run time.
         for policy in self._outputs:
             cat = getattr(policy, "category", None)
             if cat not in ("output_policy", "checkpoint_policy"):

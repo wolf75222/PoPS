@@ -16,7 +16,10 @@ class Scalar:
 
 
 class FluidState:
-    """Fluid state. kind = "compressible" (gamma) or "isothermal" (cs2).
+    """Fluid state built by typed constructors.
+
+    Use ``FluidState.compressible(gamma=...)`` or ``FluidState.isothermal(cs2=...)``. The stored
+    ``kind`` token is an internal C++ routing id, not a public string selector.
 
     vacuum_floor (isothermal only, ADC-77): quasi-vacuum density floor. When > 0 the model computes
     the velocity as u = m/max(rho, vacuum_floor), bounding the wave speed and the advective flux where
@@ -28,8 +31,18 @@ class FluidState:
     native path.
     """
 
-    def __init__(self, kind="compressible", gamma=1.4, cs2=0.5, vacuum_floor=0.0):
-        self.kind = kind
+    def __init__(self, *, gamma=1.4, cs2=0.5, vacuum_floor=0.0, **kw):
+        if "kind" in kw:
+            raise TypeError(
+                "FluidState(kind=...) is not public PoPS API; use "
+                "FluidState.compressible(...) or FluidState.isothermal(...).")
+        _kind = kw.pop("_kind", "compressible")
+        if kw:
+            raise TypeError("FluidState: unexpected keyword argument(s): %s"
+                            % ", ".join(sorted(kw)))
+        if _kind not in ("compressible", "isothermal"):
+            raise ValueError("FluidState internal _kind must be 'compressible' or 'isothermal'")
+        self.kind = _kind
         self.gamma = float(gamma)
         self.cs2 = float(cs2)
         if not (float(vacuum_floor) >= 0.0):
@@ -38,26 +51,13 @@ class FluidState:
 
     @classmethod
     def compressible(cls, gamma=1.4):
-        """Typed constructor for the COMPRESSIBLE fluid state (Spec 5 sec.14.2.5).
-
-        ``pops.FluidState.compressible(gamma=1.4)`` is the typed equivalent of
-        ``pops.FluidState(kind="compressible", gamma=1.4)``: it builds the SAME inert state object
-        (kind="compressible", carrying gamma -> spec.gamma via Model) instead of selecting the kind
-        with a magic string. Pairs with CompressibleFlux (4 variables [rho, rho_u, rho_v, E]).
-        """
-        return cls(kind="compressible", gamma=gamma)
+        """COMPRESSIBLE fluid state. Pairs with CompressibleFlux."""
+        return cls(_kind="compressible", gamma=gamma)
 
     @classmethod
     def isothermal(cls, cs2=0.5, vacuum_floor=0.0):
-        """Typed constructor for the ISOTHERMAL fluid state (Spec 5 sec.14.2.5).
-
-        ``pops.FluidState.isothermal(cs2=0.5, vacuum_floor=0.0)`` is the typed equivalent of
-        ``pops.FluidState(kind="isothermal", cs2=0.5, vacuum_floor=0.0)``: it builds the SAME inert
-        state object (kind="isothermal", carrying cs2 -> spec.cs2 and vacuum_floor ->
-        spec.vacuum_floor via Model). Pairs with IsothermalFlux (3 variables [rho, rho_u, rho_v]).
-        See the class docstring for the vacuum_floor (ADC-77) semantics.
-        """
-        return cls(kind="isothermal", cs2=cs2, vacuum_floor=vacuum_floor)
+        """ISOTHERMAL fluid state. Pairs with IsothermalFlux."""
+        return cls(_kind="isothermal", cs2=cs2, vacuum_floor=vacuum_floor)
 
 
 # --- Transport bricks ---------------------------------------------------
@@ -100,7 +100,7 @@ class MagneticLorentzForce:
     unchanged). Reads B_z from the aux channel (canonical component 3): call
     ``sim.set_magnetic_field(Bz)`` to populate it. Requires a fluid transport >= 3 variables (momentum
     on 2 axes); rejected on a scalar. The STIFF regime (large omega_c) goes through the condensed stage
-    pops.CondensedSchur (Schur), NOT through this explicit brick.
+    pops.ElectrostaticLorentzSchur (Schur), NOT through this explicit brick.
 
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 
@@ -286,10 +286,10 @@ def CompositeModel(transport, source, elliptic, name="hybrid"):
         m  = pops.CompositeModel(transport=tr.compile(),
                                 source=pops.PotentialForce(charge=-1.0),   # native source
                                 elliptic=pops.ChargeDensity(charge=-1.0))  # native elliptic
-        co = m.compile(backend="aot")                  # -> CompiledModel
+        co = m.compile(backend=pops.codegen.AOT())                  # -> CompiledModel
         sim.add_equation("ions", co, spatial=pops.FiniteVolume(), names=[...])
 
-    Returns an pops.dsl.HybridModel; call .compile(backend="aot") for a CompiledModel pluggable
+    Returns an pops.dsl.HybridModel; call .compile(backend=pops.codegen.AOT()) for a CompiledModel pluggable
     via System.add_equation. (Prototype: only the 'aot' backend is wired.)"""
     from pops.physics.bricks import CompiledBrick
     from pops.physics.hybrid import HybridModel

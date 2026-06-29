@@ -47,7 +47,7 @@ class _AmrSystemEquation:
         Dispatch:
 
         - a ModelSpec (pops.Model(...)) -> add_block (native bricks composed on the hierarchy);
-        - a CompiledModel(backend='production', target='amr_system') (m.compile(...)) -> NATIVE path
+        - a CompiledModel(backend=pops.codegen.Production(), target='amr_system') (m.compile(...)) -> NATIVE path
           add_native_block: the .so loader inlines add_compiled_model(AmrSystem&), so the block runs
           the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
 
@@ -149,16 +149,16 @@ class _AmrSystemEquation:
         compiled = model
         # Only the NATIVE "production" path targets AmrSystem: it inlines add_compiled_model(AmrSystem&).
         # The prototype (JIT) / aot .so have no AMR counterpart (add_dynamic_block/add_compiled_block
-        # are mono-level). We therefore require backend='production' + target='amr_system'.
+        # are mono-level). We therefore require backend=pops.codegen.Production() + target='amr_system'.
         if compiled.adder != "add_native_block":
             raise ValueError(
-                "AmrSystem.add_equation: only a CompiledModel backend='production' (native path) "
+                "AmrSystem.add_equation: only a CompiledModel backend=pops.codegen.Production() (native path) "
                 "is attachable on AMR; received backend=%r (the prototype/aot .so are mono-level, "
                 "without AMR counterpart)" % compiled.backend)
         if getattr(compiled, "target", "system") != "amr_system":
             raise ValueError(
                 "AmrSystem.add_equation: the CompiledModel was compiled for target='system'; "
-                "recompile with m.compile(..., backend='production', target='amr_system') so that "
+                "recompile with m.compile(..., backend=pops.codegen.Production(), target='amr_system') so that "
                 "the loader inlines add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)")
 
         # recon "primitive" and flux "roe"/"hllc" are WIRED on AMR via dispatch_amr_compiled: the

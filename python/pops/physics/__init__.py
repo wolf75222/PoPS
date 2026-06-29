@@ -1,42 +1,22 @@
 """pops.physics : math/physics model AUTHORING layer.
 
-Two authoring surfaces share this package:
-
-* the BLACKBOARD facade ``pops.physics.Model`` (Spec 3) -- a state, primitives, a
-  flux, an elliptic field-solve, sources and local linear operators tied together
-  by board equations -- lives in :mod:`pops.physics.board`. This is the public
-  ``pops.physics.Model`` (unchanged surface).
-* the PDE facade (the symbolic mini-DSL ``Model`` / ``HyperbolicModel`` / ``Param``)
-  lives in :mod:`pops.physics.facade` / :mod:`pops.physics.model`; it is what
-  ``pops.dsl.Model`` re-exports. Exposed here as ``PdeModel`` (and ``HyperbolicModel``)
-  so consumers that need the PDE engine can reach it without the ``dsl`` shim.
-
-Hybrid composition (``NativeBrick`` / ``HybridModel`` / partial DSL bricks) and the
-generic inter-species ``CoupledSource`` round out the surface.
-
-Import-graph rule (Spec 4): this package imports only :mod:`pops.ir` and
-:mod:`pops.model` (plus stdlib / numpy) at module scope. Any :mod:`pops.codegen`
-or ``_pops`` use is LAZY, inside method bodies (the codegen wrappers on
-``HyperbolicModel`` / ``Model.compile`` / ``HybridModel.compile``). The
-architecture test (ADC-474) enforces this.
+The public surface is the blackboard facade ``pops.physics.Model`` plus typed
+parameter and aux/role helpers. Lower-level symbolic/codegen engines remain in their explicit
+modules (``pops.physics.model``, ``pops.physics.facade``, ``pops.physics.hybrid``) and are not
+re-exported here; ``physics`` is an authoring layer, not a compilation facade.
 """
 # Aux-channel layout + physical roles (single Python-side source; mirror of the C++ headers).
 from .aux import (
     AUX_CANONICAL, AUX_BASE_COMPS, AUX_NAMED_BASE, AUX_NAMED_MAX, CANONICAL_ROLES,
     aux_n_aux, aux_total_n_aux, role_of, roles_for)
 
-# PDE-model symbolic mini-DSL (the engine pops.dsl.Model wraps).
-from .model import HyperbolicModel, Param, RuntimeParam, ConstParam
-from .facade import Model as PdeModel
+# Typed model parameters used by physics / case authoring. The internal carrier exists in
+# pops.physics.model, but ``Param(kind=...)`` is rejected there too; mode selection is only through
+# typed constructors.
+from .model import RuntimeParam, ConstParam
 
-# Hybrid composition: native + DSL bricks into one CompositeModel .so.
-from .bricks import (
-    NativeBrick, CompiledBrick, CompiledHyperbolicBrick, CompiledSourceBrick,
-    CompiledEllipticBrick, HyperbolicBrick, SourceBrick, EllipticBrick)
-from .hybrid import HybridModel
-
-# Generic coupled inter-species source (explicit splitting; pure bytecode codegen).
-from .multispecies import CoupledSource, CompiledCoupledSource
+# Generic coupled inter-species source authoring (compiled handles stay in the module).
+from .multispecies import CoupledSource
 
 # Blackboard board facade: the public pops.physics.Model surface (Spec 3).
 from .board import Model
@@ -56,11 +36,8 @@ __all__ = [
     # aux + roles
     "AUX_CANONICAL", "AUX_BASE_COMPS", "AUX_NAMED_BASE", "AUX_NAMED_MAX", "CANONICAL_ROLES",
     "aux_n_aux", "aux_total_n_aux", "role_of", "roles_for",
-    # PDE-model engine
-    "PdeModel", "HyperbolicModel", "Param", "RuntimeParam", "ConstParam",
-    # hybrid + bricks
-    "NativeBrick", "CompiledBrick", "CompiledHyperbolicBrick", "CompiledSourceBrick",
-    "CompiledEllipticBrick", "HyperbolicBrick", "SourceBrick", "EllipticBrick", "HybridModel",
+    # typed parameters
+    "RuntimeParam", "ConstParam",
     # coupled source
-    "CoupledSource", "CompiledCoupledSource",
+    "CoupledSource",
 ]

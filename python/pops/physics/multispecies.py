@@ -12,7 +12,7 @@ pure-Python bytecode emitter, so no codegen / ``_pops`` import is needed at all.
 from pops.ir import Var, _wrap, Expr, Const, Add, Sub, Mul, Div, Pow, Neg, Sqrt, sqrt  # noqa: F401
 from pops.ir.visitors import _key  # noqa: F401
 
-from .model import Param  # CoupledSource.param wraps a const Param (acyclic: model never imports this)
+from .model import ConstParam  # CoupledSource.param wraps a typed const Param.
 
 
 # --- Generic COUPLED inter-species source (P5 phase 1, EXPLICIT splitting) -----------------------
@@ -153,7 +153,7 @@ class CoupledSource:
         k  = src.param("Kiz", 1.0)
         src.add("electrons", role="density", expr=+k * ne * ng)
         src.add("neutrals",  role="density", expr=-k * ne * ng)
-        sim.add_coupling(src.compile(backend="production"))
+        sim.add_coupling(src.compile(backend=pops.codegen.Production()))
 
     compile(backend) -> CompiledCoupledSource: flat ABI (bytecode) consumed by
     System.add_coupled_source (C++ side: stack machine evaluated in a for_each_cell device, MPI-safe,
@@ -217,7 +217,7 @@ class CoupledSource:
 
     def param(self, name, value):
         """NAMED constant parameter, usable like an Expr (inlines as a real in the bytecode)."""
-        p = Param(name, value, kind="const")
+        p = ConstParam(name, value)
         self._params[name] = p
         return p
 
@@ -388,7 +388,7 @@ class CoupledSource:
                 "on another block (use add_pair to guarantee it). Uncompensated terms: "
                 + details)
 
-    def compile(self, backend="production", verify_conservation=False):
+    def compile(self, backend=None, verify_conservation=False):
         """Compile the source into a CompiledCoupledSource (flat bytecode ABI). @p backend documents
         the intent (API parity with the model DSL); the numerics are identical (C++ interpreter).
 
@@ -399,10 +399,6 @@ class CoupledSource:
         ValueError if a term is not compensated (divergent formula, forgotten sign, orphan term).
         Off by default: a deliberately NON-conservative coupling (net creation/destruction, e.g.
         ionization creating an e/i pair) stays legal without passing the flag."""
-        # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
-        # well as the legacy string; lower it to the canonical token so the compiled handle's .backend
-        # stays string-typed (introspection / API parity). Imported LAZILY to keep this module
-        # codegen-free at import (Spec-4 import-graph rule). A plain string / None passes through.
         from pops.codegen.backends import lower_backend
         backend = lower_backend(backend)
         if not self._terms:

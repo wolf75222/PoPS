@@ -83,7 +83,8 @@ class Norm(_Measure):
 
     The norm kind is a typed :mod:`pops.linalg.norms` object (``L1`` / ``L2`` / ``LInf``), NOT
     the string ``kind="l2"`` (Spec 5 sec.7 rejects a free-string selector). The measure lowers
-    to the native ``norm`` reduction the legacy ``diagnostics.norm`` factory already names.
+    to the native ``norm`` reduction. There is no ``diagnostics.norm(kind=...)`` factory on the
+    public surface.
     """
 
     category = "diagnostic_norm"

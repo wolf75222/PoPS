@@ -97,6 +97,8 @@ struct AmrBuildParams {
   bool recon_prim = false;               ///< recon == "primitive" (frozen by add_compiled_model)
   bool imex = false;                     ///< time == "imex": stiff implicit source (backward_euler)
   double refine_threshold = 1e30;        ///< 1e30 => no refinement
+  std::string refine_var_name;           ///< optional conserved variable name used for AMR tags
+  std::string refine_var_role;           ///< optional conserved variable role used for AMR tags
   BCRec poisson_bc;                      ///< coarse Poisson BC (resolved by set_poisson)
   std::function<bool(Real, Real)> wall;  ///< conductive wall predicate (empty = none)
   bool has_density = false;
@@ -153,6 +155,10 @@ struct AmrBuildParams {
   // regenerated loader marshals pos_floor (pops_install_native_amr) into add_compiled_model ->
   // set_compiled_block, which stores it here (mono) and passes it to the AmrCompiledBlockBuilder (multi).
   double pos_floor = 0.0;
+  /// Default/named coarse GeometricMG options for the AMR elliptic solves. Defaults keep the historical
+  /// Poisson operator and tolerance. Appended for flat ABI compatibility.
+  double poisson_epsilon = 1.0;
+  double poisson_abs_tol = 0.0;
 };
 
 /// Type-erased closures of a compiled AMR block, produced by amr_dsl_block::build_amr_compiled and
@@ -448,10 +454,13 @@ class AmrSystem {
   /// @param solver "geometric_mg" only (the only one wired on the hierarchy; no FFT)
   /// @param bc     "auto" | "periodic" | "dirichlet" | "neumann"
   /// @param wall   "none" | "circle" (circular conductive wall, requires wall_radius > 0)
+  /// @param epsilon CONSTANT permittivity of div(eps grad phi) = f.
+  /// @param abs_tol ABSOLUTE floor of the GeometricMG stopping criterion.
   /// @throws std::runtime_error if rhs, solver, bc or wall is outside the supported domain.
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
-                   const std::string& wall = "none", double wall_radius = 0.0);
+                   const std::string& wall = "none", double wall_radius = 0.0,
+                   double epsilon = 1.0, double abs_tol = 0.0);
 
   /// Sets the initial density on the coarse level (component 0), n*n row-major.
   /// @param name cosmetic label (mono-block AMR: the density targets the single block).

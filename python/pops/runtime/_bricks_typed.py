@@ -1,19 +1,16 @@
 """Typed native-brick constructors (Spec 5 sec.14.2.5).
 
-The native bricks are NAMED by typed constructors instead of magic ``kind=`` / ``bc=`` strings,
-ADDITIVELY (the string path keeps working). This module homes the sec.14.2.5 typed ctors that do
+The native bricks are NAMED by typed constructors instead of magic ``kind=`` / ``bc=`` strings.
+This module homes the sec.14.2.5 typed ctors that do
 not belong to a state/source/time module :
 
 * the typed native ELLIPTIC boundary bricks ``Dirichlet`` / ``Neumann`` / ``Periodic`` ;
 * ``ElectrostaticLorentzSchur`` -- the typed constructor for the (currently unique)
   ``CondensedSchur`` kind, kept here (not in ``_bricks_time``) to stay under the 500-line cap.
 
-The native elliptic (Poisson) boundary is selected today by a magic ``bc=`` string token on
-``System.set_poisson`` / ``System.add_elliptic_model`` : ``"auto" | "periodic" | "dirichlet" |
-"neumann"`` (cf. the C++ binding ``System::set_poisson``). The typed constructors NAME that choice
-with a type instead of a string : ``pops.Dirichlet()`` lowers to the SAME ``bc="dirichlet"`` token,
-``pops.Neumann()`` to ``bc="neumann"``, ``pops.Periodic()`` to ``bc="periodic"``. The ``.bc``
-attribute carries the token so a consumer can pass it straight through (``set_poisson(bc=b.bc)``).
+The native elliptic (Poisson) boundary still lowers to the C++ tokens
+``"periodic" | "dirichlet" | "neumann"`` inside private runtime seams. The public surface names
+that choice with a type: ``pops.Dirichlet()`` / ``pops.Neumann()`` / ``pops.Periodic()``.
 
 The boundary bricks are the NATIVE elliptic-solver boundary (the homogeneous BC of the system
 Poisson solve), and are DISTINCT from two other typed boundary surfaces already in the package :
@@ -40,9 +37,8 @@ _BC_NEUMANN = "neumann"
 class _Boundary:
     """Base of the native elliptic (Poisson) boundary bricks : carries a ``bc=`` token.
 
-    ``bc`` is the string consumed by ``System.set_poisson(bc=...)`` / ``add_elliptic_model(bc=...)``.
-    ``lower()`` returns it so the install / runtime path can route the typed object to the existing
-    string argument without a new C++ entry point (additive, inert).
+    ``bc`` is the native token consumed only by private runtime lowering. ``lower()`` returns it so
+    typed Python descriptors can route to the existing C++ entry point without exposing strings.
     """
 
     bc = ""
@@ -95,10 +91,9 @@ class Neumann(_Boundary):
 
 class ElectrostaticLorentzSchur(CondensedSchur):
     """Typed constructor for the electrostatic-Lorentz condensed-Schur source stage (Spec 5
-    sec.14.2.5). ``pops.ElectrostaticLorentzSchur(theta=0.5, alpha=1.0, ...)`` is the typed
-    equivalent of ``pops.CondensedSchur(kind="electrostatic_lorentz", theta=0.5, alpha=1.0, ...)``:
-    it pins the (currently unique) ``kind`` so the algorithm is named by a type instead of a magic
-    string. It is a ``CondensedSchur`` subclass, so every consumer that accepts a CondensedSchur
+    sec.14.2.5). ``pops.ElectrostaticLorentzSchur(theta=0.5, alpha=1.0, ...)`` pins the
+    electrostatic-Lorentz route so the algorithm is named by a type instead of a magic string.
+    It is a ``CondensedSchur`` subclass, so every consumer that accepts a CondensedSchur
     (``pops.Split`` / ``pops.Strang`` source stage, ``System.add_equation``) accepts it unchanged.
 
     All other arguments (theta / alpha / density / momentum / energy / magnetic_field / potential /
@@ -111,7 +106,8 @@ class ElectrostaticLorentzSchur(CondensedSchur):
                  momentum=(Role.MomentumX, Role.MomentumY), energy=None,
                  magnetic_field="B_z", potential="phi",
                  krylov_tol=None, krylov_max_iters=None):
-        super().__init__(kind="electrostatic_lorentz", theta=theta, alpha=alpha,
+        super().__init__(_kind="electrostatic_lorentz", _allow_base=True,
+                         theta=theta, alpha=alpha,
                          density=density, momentum=momentum, energy=energy,
                          magnetic_field=magnetic_field, potential=potential,
                          krylov_tol=krylov_tol, krylov_max_iters=krylov_max_iters)

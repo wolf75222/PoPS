@@ -9,8 +9,8 @@ select it. MUSCL is reconstruction-by-limiter; its native limiter type is pops::
 """
 from types import SimpleNamespace
 
-from pops.descriptors import _native, _external_descriptor
-from .limiters import limiters
+from pops.descriptors import _native, _external_descriptor, reject_string_selector
+from .limiters import Minmod, limiters
 
 # Spec 5 sec.7 / criterion 11: the GHOST (halo) depth a reconstruction stencil NEEDS, by its
 # lowered scheme token. A first-order scheme reads the cell mean (1 ghost); a second-order
@@ -37,12 +37,33 @@ REQUIRED_GHOST_DEPTH = {
 #: FALSE POSITIVE that breaks a working problem.
 INSPECT_GHOST_DEPTH_ASSUMPTION = 2
 
+def _muscl(limiter=None):
+    """Second-order MUSCL reconstruction from a typed slope-limiter descriptor."""
+    if limiter is None:
+        limiter = Minmod()
+    if isinstance(limiter, str):
+        reject_string_selector(
+            limiter, "limiter",
+            "pops.numerics.reconstruction.limiters.Minmod() / VanLeer()")
+    if getattr(limiter, "category", None) != "limiter":
+        raise TypeError(
+            "MUSCL: limiter must be a typed slope-limiter descriptor "
+            "(Minmod() / VanLeer()), got %r" % type(limiter).__name__)
+    scheme = getattr(limiter, "scheme", None)
+    if scheme not in ("minmod", "vanleer"):
+        raise ValueError(
+            "MUSCL: limiter descriptor %r is not backed by a native MUSCL limiter yet "
+            "(use Minmod() or VanLeer())." % getattr(limiter, "name", type(limiter).__name__))
+    native_id = getattr(limiter, "native_id", None) or (
+        "pops::Minmod" if scheme == "minmod" else "pops::VanLeer")
+    return _native("muscl", native_id, scheme, category="reconstruction",
+                   limiter=scheme, ghost_depth=2)
+
+
 reconstruction = SimpleNamespace(
     FirstOrder=lambda: _native("firstorder", "pops::NoSlope", "firstorder",
                                category="reconstruction", ghost_depth=1),
-    MUSCL=lambda limiter="minmod": _native(
-        "muscl", "pops::Minmod", limiter, category="reconstruction", limiter=limiter,
-        ghost_depth=2),
+    MUSCL=_muscl,
     WENO5=lambda: _native("weno5", "pops::Weno5", "weno5", category="reconstruction",
                           ghost_depth=3),
     WENO5Z=lambda: _native("weno5z", "pops::Weno5", "weno5", category="reconstruction",

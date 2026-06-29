@@ -62,20 +62,39 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
 
     # --- C++ codegen (lowering to a problem.so source) lives in pops.codegen; the authoring
     # Program delegates via a LAZY import so pops.time stays free of any codegen/_pops edge. ---
-    def emit_cpp_program(self, model=None, target="system"):
-        """Generate the C++ source of a problem.so implementing this Program (codegen).
+    def emit_cpp_program(self, model=None, *, layout=None):
+        """Generate the C++ source of a problem.so implementing this Program (inspection).
 
         Thin authoring entry point: delegates to the free function
         :func:`pops.codegen.program_codegen.emit_cpp_program`, imported lazily so the
-        ``pops.time`` package never imports ``pops.codegen`` / ``_pops`` at module scope. See
-        the codegen function for the full lowering contract.
+        ``pops.time`` package never imports ``pops.codegen`` / ``_pops`` at module scope.
 
-        @param target ``"system"`` (default) emits ``pops_install_program`` (installable on
-            ``System``); ``"amr_system"`` ALSO emits ``pops_install_program_amr`` (the AMR
-            install entry ``AmrSystem::install_program`` resolves), epic ADC-511 / ADC-508.
+        ``target=`` is intentionally not a public argument. Pass ``layout=AMR(...)`` to inspect
+        the AMR install ABI; omit ``layout`` for the uniform System ABI. The internal codegen driver
+        calls :meth:`_emit_cpp_program_for_target` after deriving that target from the Case layout.
         """
+        target = self._target_from_layout(layout)
+        return self._emit_cpp_program_for_target(model=model, target=target)
+
+    def _emit_cpp_program_for_target(self, model=None, target="system"):
+        """Internal codegen seam using the native ABI token derived from a typed layout."""
+        if target not in ("system", "amr_system"):
+            raise ValueError("_emit_cpp_program_for_target: target must be 'system' or 'amr_system'")
         from pops.codegen import program_codegen as _pcg
         return _pcg.emit_cpp_program(self, model=model, target=target)
+
+    @staticmethod
+    def _target_from_layout(layout):
+        if layout is None:
+            return "system"
+        from pops.mesh.layouts import AMR, Uniform
+        if isinstance(layout, AMR):
+            return "amr_system"
+        if isinstance(layout, Uniform):
+            return "system"
+        raise TypeError(
+            "Program.emit_cpp_program: layout must be a typed pops.mesh.layouts.Uniform(...) "
+            "or AMR(...) descriptor, not %r" % type(layout).__name__)
 
     def _check_lowerable(self, model=None):
         """Raise if the IR uses a construct the codegen cannot lower (delegates to
@@ -98,53 +117,3 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         """
         from pops.codegen import program_codegen as _pcg
         return _pcg._emit_body(self, model)
-
-
-class CompiledTime:
-    """Record of a compiled `Program`'s macro-step cadence (`substeps` / `stride`).
-
-    A compiled Program OWNS the whole step body: it is installed via `System.install` / `pops.bind`
-    and driven by `sim.step(dt)`. Its cadence is applied to the System with
-    `sim.set_program_cadence(substeps, stride)` after the private program install seam; a
-    `CompiledTime` just records those values. The
-    compiled program is NOT attached via public runtime equation setters -- that path is
-    rejected with an explicit error (the transport policy passed to the native block seam is a
-    `pops.Explicit`/etc.; the compiled program is installed separately). `substeps` and
-    `stride` are wired (ADC-411) as a SYSTEM-level orchestration AROUND the opaque program closure
-    (`System.set_program_cadence`, mirroring the native per-block advance loop): `substeps=n` runs the
-    program n times over `eff_dt/n`; `stride=M` runs the whole program once per M macro-steps with
-    `eff_dt = M*dt` (GLOBAL hold-then-catch-up, the clock still ticks every macro-step).
-
-    Two semantic limits to keep in mind (cf. system_stepper.hpp):
-      - `substeps > 1` is bit-exact vs native `pops.Explicit(substeps=n)` ONLY for an UNCOUPLED /
-        transport-only program: `program_step_(h)` re-runs the WHOLE program (its `solve_fields`
-        included), whereas native substeps subdivides ONLY the transport (solve_fields runs once).
-      - `stride` here is GLOBAL (a compiled program is one whole-system closure), so it equals native
-        per-block stride only for a single-block system (or all blocks sharing the stride).
-
-    A NUMERIC `cfl` (e.g. `cfl=0.5`) is wired: it is applied at RUNTIME by `sim.run(cfl=...)`, whose
-    `cfl` defaults to the installed cadence's `cfl` when the caller passes none, so a bare
-    `sim.run(t_end)` after `bind(..., cadence=CompiledTime(cfl=0.5))` advances at `cfl=0.5` (the
-    per-block CFL `dt` is computed in adc_cpp and drives the installed Program). A self-computed `cfl`
-    SUB-PROGRAM (`cfl="program"`) is still deferred (the Program would export its own dt bound); it
-    fails loud rather than being silently ignored."""
-
-    def __init__(self, substeps=1, stride=1, cfl="default"):
-        if not isinstance(substeps, int) or substeps < 1:
-            raise ValueError("CompiledTime: substeps must be a positive int (got %r)" % (substeps,))
-        if not isinstance(stride, int) or stride < 1:
-            raise ValueError("CompiledTime: stride must be a positive int (got %r)" % (stride,))
-        # A numeric cfl is wired (applied at runtime via sim.run(cfl=)); only a non-numeric,
-        # non-"default" cfl (e.g. cfl="program", a self-computed dt sub-program) is still deferred.
-        if cfl != "default" and not isinstance(cfl, (int, float)):
-            raise NotImplementedError(
-                "CompiledTime: a self-computed cfl sub-program (cfl=%r) is deferred (ADC-401 Phase "
-                "2c); pass a numeric cfl=<value> (applied at runtime by sim.run(cfl=)) or an explicit "
-                "dt to sim.step(dt)" % (cfl,))
-        self.substeps = substeps
-        self.stride = stride
-        self.cfl = cfl
-        self.kind = "compiled"
-
-    def __repr__(self):
-        return "CompiledTime(substeps=%d, stride=%d, cfl=%r)" % (self.substeps, self.stride, self.cfl)

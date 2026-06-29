@@ -38,7 +38,8 @@ class ThermalExchange:
 
 
 # --- Spatial scheme + time treatment (per block) ------------------------
-# Spec 5 sec.7: the spatial scheme is chosen with TYPED descriptors, never bare strings. The
+# Spec 5 sec.7: the spatial scheme is chosen with TYPED descriptors, never bare strings or boolean
+# shortcut selectors. The
 # tables below map each accepted descriptor scheme to the canonical token the C++ ABI consumes,
 # and name the typed alternative a rejected string should point at (reject_string_selector).
 # The descriptor category gates which slot a descriptor may fill (a riemann flux in the limiter
@@ -58,6 +59,27 @@ _LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer()
                     "pops.numerics.reconstruction.FirstOrder() / WENO5() / MUSCL(...)")
 _FLUX_SUGGEST = "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe()"
 _RECON_SUGGEST = "pops.numerics.variables.Conservative() / Primitive()"
+_SPATIAL_FLAG_SUGGESTIONS = {
+    "none": "limiter=pops.numerics.reconstruction.FirstOrder()",
+    "minmod": "limiter=pops.numerics.reconstruction.limiters.Minmod()",
+    "vanleer": "limiter=pops.numerics.reconstruction.limiters.VanLeer()",
+    "weno5": "limiter=pops.numerics.reconstruction.WENO5()",
+    "primitive": "recon=pops.numerics.variables.Primitive()",
+}
+
+
+def _reject_spatial_shortcuts(where, kw):
+    used = [name for name in _SPATIAL_FLAG_SUGGESTIONS if name in kw]
+    for name in used:
+        kw.pop(name)
+    if used:
+        suggestions = ", ".join(_SPATIAL_FLAG_SUGGESTIONS[name] for name in used)
+        raise TypeError(
+            "%s boolean scheme shortcuts are not public PoPS API (%s); use typed descriptors: %s."
+            % (where, ", ".join("%s=True" % name for name in used), suggestions))
+    if kw:
+        raise TypeError("%s: unexpected keyword argument(s): %s"
+                        % (where, ", ".join(sorted(kw))))
 
 
 def _lower_selector(value, *, param, schemes, suggestion, categories):
@@ -95,17 +117,15 @@ def _lower_selector(value, *, param, schemes, suggestion, categories):
 class Spatial:
     """Spatial discretization: reconstruction (limiter) + numerical Riemann flux.
 
-    Spec 5 sec.7: every scheme is chosen with a TYPED ``pops.numerics`` descriptor; a bare string is
-    rejected with a message naming the typed object. The boolean shortcuts (none=/minmod=/vanleer=/
-    weno5=/primitive=) stay as typed-flag sugar.
+    Spec 5 sec.7: every scheme is chosen with a TYPED ``pops.numerics`` descriptor; a bare string
+    or boolean shortcut is rejected with a message naming the typed object.
 
     - ``limiter`` (Spec 5 sec.14.1 alias: ``reconstruction``): a reconstruction / limiter descriptor
       lowering to "none" | "minmod" | "vanleer" | "weno5".
       ``pops.numerics.reconstruction.FirstOrder()`` -> none, ``.limiters.Minmod()`` /
       ``.VanLeer()``, ``.WENO5()`` / ``.WENO5Z()`` -> weno5, ``.MUSCL(limiter=...)`` -> its limiter.
       weno5 = WENO5-Z, order 5 in smooth regions, 5-point stencil (3 ghosts), oscillation-free
-      capture near a front; only the native ``add_block`` path exposes it (the compiled .so paths
-      allocate 2 ghosts -> explicit rejection).
+      capture near a front.
     - ``flux``: a ``pops.numerics.riemann`` descriptor lowering to "rusanov" | "hll" | "hllc" | "roe".
       Rusanov() = minimal generic (requires only max_wave_speed, any model).
       HLL() = generic with signed waves (requires model.wave_speeds: native isothermal/compressible
@@ -117,8 +137,7 @@ class Spatial:
       model supplies the hooks HasHLLCStructure / HasRoeDissipation (DSL m.enable_hllc()/
       m.enable_roe()), with EulerHLLCFlux2D / EulerRoeFlux2D naming the Euler fallback on C++.
     - ``recon``: a ``pops.numerics.variables`` descriptor lowering to "conservative" | "primitive"
-      (reconstructed variables; primitive more robust for Euler: positivity of rho and p; shortcut
-      primitive=).
+      (reconstructed variables; primitive more robust for Euler: positivity of rho and p).
     - ``positivity_floor``: DENSITY floor of the reconstructed face states (positivity limiter
       Zhang-Shu, ADC-76): conservative scaling of the face state toward the cell mean
       so that rho_face >= floor. 0/None (default) = inactive, bit-identical path.
@@ -133,10 +152,10 @@ class Spatial:
       geometry, or a staircase/cutcell disc transport mode is active (set_disc_domain / set_geometry_mode).
     """
 
-    def __init__(self, limiter=None, flux=None, recon=None, *, none=False,
-                 minmod=False, vanleer=False, weno5=False, primitive=False,
-                 positivity_floor=None, wave_speed_cache=False, reconstruction=None,
-                 _tokens=None):
+    def __init__(self, limiter=None, flux=None, recon=None, *,
+                 positivity_floor=None, wave_speed_cache=False, reconstruction=None, **kw):
+        _tokens = kw.pop("_tokens", None)
+        _reject_spatial_shortcuts("Spatial", kw)
         # Spec 5 sec.14.1 names the reconstruction/limiter slot ``reconstruction=``; keep ``limiter=``
         # working and accept ``reconstruction=`` as an alias (only one of the two at a time).
         if reconstruction is not None:
@@ -157,18 +176,6 @@ class Spatial:
             recon_tok = _lower_selector(
                 recon, param="recon", schemes=_RECON_SCHEMES,
                 suggestion=_RECON_SUGGEST, categories=("variables",))
-        # Boolean shortcuts (typed flags, not strings): override the limiter / recon slot. They
-        # stay as convenience sugar -- only the bare-string selectors are forbidden (Spec 5 sec.7).
-        if none:
-            lim_tok = "none"
-        elif minmod:
-            lim_tok = "minmod"
-        elif vanleer:
-            lim_tok = "vanleer"
-        elif weno5:
-            lim_tok = "weno5"
-        if primitive:
-            recon_tok = "primitive"
         # Canonical defaults (mirror the historical minmod + rusanov + conservative).
         self.limiter = lim_tok if lim_tok is not None else "minmod"
         self.flux = flux_tok if flux_tok is not None else "rusanov"
@@ -236,8 +243,7 @@ class Spatial:
 
 
 def FiniteVolume(limiter=None, riemann=None, variables=None,
-                 positivity_floor=None, wave_speed_cache=False, *, reconstruction=None,
-                 none=False, minmod=False, vanleer=False, weno5=False, primitive=False):
+                 positivity_floor=None, wave_speed_cache=False, *, reconstruction=None, **kw):
     """Finite-volume scheme (stable surface Phase A): remaps onto the existing Spatial object.
 
     The NUMERICAL Riemann flux is named ``riemann`` (NOT ``flux``, reserved for the PHYSICAL flux of the
@@ -252,10 +258,6 @@ def FiniteVolume(limiter=None, riemann=None, variables=None,
       canonical Euler 2D layout or generically via the model hooks HasHLLCStructure / HasRoeDissipation
     - ``variables`` (``pops.numerics.variables`` descriptor) -> Spatial.recon (Conservative()/Primitive())
 
-    The boolean-flag shortcuts of ``Spatial`` are forwarded identically:
-    ``none=/minmod=/vanleer=/weno5=`` select the limiter and ``primitive=`` selects the variable set, so
-    ``FiniteVolume(minmod=True)`` and ``FiniteVolume(primitive=True)`` mean the same as on ``Spatial``.
-
     cf. docs/DSL_MODEL_DESIGN.md section 6. Returns a Spatial (consumed as-is by add_block /
     add_equation). pops.Spatial stays available identically. ``positivity_floor`` (ADC-76):
     density floor of the face states (Zhang-Shu limiter), None/0 = inactive.
@@ -263,12 +265,12 @@ def FiniteVolume(limiter=None, riemann=None, variables=None,
     # Reject a bare string at THIS boundary so the message names the FiniteVolume parameter
     # (``riemann`` / ``variables``), not the internal Spatial slot (``flux`` / ``recon``).
     from pops.descriptors import reject_string_selector
+    _reject_spatial_shortcuts("FiniteVolume", kw)
     if isinstance(riemann, str):
         reject_string_selector(riemann, "riemann", _FLUX_SUGGEST)
     if isinstance(variables, str):
         reject_string_selector(variables, "variables", _RECON_SUGGEST)
     return Spatial(limiter=limiter, flux=riemann, recon=variables, reconstruction=reconstruction,
-                   none=none, minmod=minmod, vanleer=vanleer, weno5=weno5, primitive=primitive,
                    positivity_floor=positivity_floor, wave_speed_cache=wave_speed_cache)
 
 
@@ -288,26 +290,46 @@ class Explicit:
                  system Poisson (and to the coupled sources) with its STALE state -- its last advanced
                  density/charge, frozen until the next catch-up. step_cfl honors the cadence: the stable
                  step includes the stride factor (dt <= cfl*h*substeps / (stride*w)).
-                 NB: the 'aot' backend (System.add_equation on a CompiledModel backend='aot') does NOT
+                 NB: the 'aot' backend (System.add_equation on a CompiledModel backend=pops.codegen.AOT()) does NOT
                  carry the cadence and REJECTS stride > 1 (explicit path, no silent ignore);
-                 add_block (native) and backend='production' support the stride.
-    method     : "ssprk2" (default, Shu-Osher 2-stage order 2) | "ssprk3" (3-stage order 3,
-                 less dissipative, to pair with weno5) | "euler" (ForwardEuler, order 1: fidelity
-                 to first-order references, validation only). Shortcut ssprk3=True.
+                 add_block (native) and backend=pops.codegen.Production() support the stride.
+    The scheme is selected by typed factories:
+        ``Explicit.ssprk2()`` (default), ``Explicit.ssprk3()``, ``Explicit.euler()``.
     """
 
-    def __init__(self, substeps=1, method="ssprk2", stride=1, *, ssprk3=False):
-        if ssprk3:
-            method = "ssprk3"
-        if method not in ("ssprk2", "ssprk3", "euler"):
-            raise ValueError("Explicit: method 'ssprk2' | 'ssprk3' | 'euler' (received %r)" % (method,))
+    def __init__(self, substeps=1, stride=1, **kw):
+        _method = kw.pop("_method", "ssprk2")
+        if "method" in kw:
+            raise TypeError(
+                "Explicit(method=...) is not public PoPS API; use Explicit.ssprk2(), "
+                "Explicit.ssprk3(), or Explicit.euler().")
+        if "ssprk3" in kw:
+            raise TypeError(
+                "Explicit(ssprk3=True) is not public PoPS API; use Explicit.ssprk3().")
+        if kw:
+            raise TypeError("Explicit: unexpected keyword argument(s): %s"
+                            % ", ".join(sorted(kw)))
+        if _method not in ("ssprk2", "ssprk3", "euler"):
+            raise ValueError("Explicit internal _method must be 'ssprk2' | 'ssprk3' | 'euler'")
         if int(substeps) < 1:
             raise ValueError("Explicit: substeps >= 1 (received %r)" % (substeps,))
         if int(stride) < 1:
             raise ValueError("Explicit: stride >= 1 (received %r)" % (stride,))
         self.substeps = int(substeps)
         self.stride = int(stride)
-        self.method = method
+        self.method = _method
         # kind passed to the compiled facade: "explicit" (SSPRK2, bit-identical default), "ssprk3"
         # or "euler" (order 1, fidelity to first-order references -- validation, never default).
-        self.kind = method if method in ("ssprk3", "euler") else "explicit"
+        self.kind = _method if _method in ("ssprk3", "euler") else "explicit"
+
+    @classmethod
+    def ssprk2(cls, substeps=1, stride=1):
+        return cls(substeps=substeps, stride=stride, _method="ssprk2")
+
+    @classmethod
+    def ssprk3(cls, substeps=1, stride=1):
+        return cls(substeps=substeps, stride=stride, _method="ssprk3")
+
+    @classmethod
+    def euler(cls, substeps=1, stride=1):
+        return cls(substeps=substeps, stride=stride, _method="euler")

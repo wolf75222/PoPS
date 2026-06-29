@@ -43,10 +43,11 @@ class _AmrSystemProgram:
             if params:
                 self._install_program_params(compiled, params)
         elif params:
-            raise NotImplementedError(
+            raise ValueError(
                 "pops.bind: runtime params (params=%s) are not wired on a NATIVE AMR install (the AMR "
                 "native .so loader does not transport runtime params, and AmrSystem has no "
-                "set_block_params); pass a compiled time Program (compile_problem(target='amr_system')) "
+                "set_block_params); pass a compiled time Program "
+                "(pops.compile(case_with_layout_AMR, backend=Production())) "
                 "to use params=, set them as const on the native model, or use System."
                 % sorted(params))
 
@@ -77,14 +78,16 @@ class _AmrSystemProgram:
                 "declared dsl.Param(..., kind='runtime'))" % (unknown,))
 
     def _install_cadence(self, cadence):
-        """Apply a CompiledTime macro-step cadence to the installed AMR program (set_program_cadence,
+        """Apply a compiled-Program macro-step cadence to the installed AMR program (set_program_cadence,
         AMR mirror of System._install_cadence). substeps=n re-runs the whole program over eff_dt/n;
         stride=M runs it once per M macro-steps. A NUMERIC cadence.cfl is pinned so a bare run() with no
         explicit cfl= uses it (step_cfl routes the per-block CFL dt through the installed program)."""
-        from pops.time.program import CompiledTime
-        if not isinstance(cadence, CompiledTime):
-            raise TypeError("pops.bind(cadence=): expected a pops.time.CompiledTime(substeps=, stride=), "
-                            "got %r" % type(cadence).__name__)
+        from pops.runtime._compiled_cadence import CompiledProgramCadence
+        if not isinstance(cadence, CompiledProgramCadence):
+            raise TypeError("pops.bind(cadence=): expected an internal CompiledProgramCadence "
+                            "(substeps=, stride=), got %r" % type(cadence).__name__)
         if isinstance(cadence.cfl, (int, float)):
             self._program_cadence_cfl = float(cadence.cfl)
+        elif cadence.cfl == "program":
+            self._program_cadence_cfl = "program"
         self.set_program_cadence(cadence.substeps, cadence.stride)

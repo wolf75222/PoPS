@@ -116,15 +116,23 @@ class HyperbolicModel(_VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
                                    # the model hash nor the codegen (its flux/sources are already hashed).
 
 
+# Sentinel distinguishing "the caller did not pass kind=" from "the caller passed kind=None":
+# the public param surfaces de-string by REJECTING any kind= keyword (Spec 5 sec.7), so they keep
+# a kind= sentinel only to emit a clear error naming the typed alternative.
+_NO_KIND = object()
+
+
 class Param:
     """NAMED parameter of a DSL model, usable like an Expr in formulas.
 
-    Mode (a), constant fixed at compilation: `kind="const"` (default). The codegen INLINES every
+    Mode (a), constant fixed at compilation: ``ConstParam(name, value)`` or the bare
+    ``Param(name, value)`` internal default. The codegen INLINES every
     constant (Const.to_cpp -> repr(value)), so the param inlines as Const(value) at codegen (value
     written HARD-CODED in the .so) while keeping its IDENTITY (name/value/kind) for introspection
     (m.params), diagnostics and reproducibility. UNCHANGED by P7-b: bit-identical to the history.
 
-    Mode (b), RUNTIME parameter (modifiable WITHOUT recompiling): `kind="runtime"` (P7-b). At codegen, the
+    Mode (b), RUNTIME parameter (modifiable WITHOUT recompiling): ``RuntimeParam(name, value)`` (P7-b).
+    At codegen, the
     param emits `params.get(<index>)` (read of an pops::RuntimeParams member of the brick) instead
     of a constant; its value is carried at runtime by the AOT .so ABI and can be CHANGED
     (block.set_param / System.set_block_params) without recompiling. The value passed at declaration serves
@@ -140,7 +148,12 @@ class Param:
 
     # NB: Param DOES NOT INHERIT from Expr to avoid embedding its state (name/kind) in the CSE
     # structural key; it EXPOSES the tree hooks instead by delegating to an internal node.
-    def __init__(self, name, value, kind="const"):
+    def __init__(self, name, value, *, _kind="const", kind=_NO_KIND):
+        if kind is not _NO_KIND:
+            raise TypeError(
+                "Param(kind=...) is removed; use RuntimeParam(name, value) or "
+                "ConstParam(name, value)")
+        kind = _kind
         if kind not in ("const", "runtime"):
             raise ValueError("Param: kind 'const' | 'runtime' (got %r)" % (kind,))
         self.name = name
@@ -179,20 +192,14 @@ class Param:
 def RuntimeParam(name, value):
     """Sugar: a RUNTIME parameter (modifiable without recompiling). Equivalent to Param(name, value,
     kind='runtime'). cf. Param mode (b) and include/pops/runtime/runtime_params.hpp (P7-b)."""
-    return Param(name, value, kind="runtime")
+    return Param(name, value, _kind="runtime")
 
 
 def ConstParam(name, value):
     """Sugar: a CONST parameter (frozen / inlined at compile time). Equivalent to Param(name, value,
     kind='const') -- the default param mode (a). The TYPED counterpart of the removed
     ``kind="const"`` string on the public param surface (Spec 5 sec.7)."""
-    return Param(name, value, kind="const")
-
-
-# Sentinel distinguishing "the caller did not pass kind=" from "the caller passed kind=None":
-# the public param surfaces de-string by REJECTING any kind= keyword (Spec 5 sec.7), so they keep
-# a kind= sentinel only to emit a clear error naming the typed alternative.
-_NO_KIND = object()
+    return Param(name, value, _kind="const")
 
 
 def _coerce_param(name, value=None, *, kind=_NO_KIND, who="param"):

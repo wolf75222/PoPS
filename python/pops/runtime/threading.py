@@ -88,7 +88,7 @@ def set_threads(n=None):
             "pops.set_threads : _pops is SERIAL (compiled without -DPOPS_USE_KOKKOS=ON) -> the thread "
             "setting is ignored at compute time. Rebuild with -DPOPS_USE_KOKKOS=ON "
             "-DKokkos_ROOT=$CONDA_PREFIX for multi-threading.", RuntimeWarning, stacklevel=2)
-    # We write the env even in case of doubt (harmless) : a DSL .so with backend='production' compiled with
+    # We write the env even in case of doubt (harmless) : a DSL .so with backend=pops.codegen.Production() compiled with
     # Kokkos will also read OMP_NUM_THREADS at its initialization.
     # We set TWO variables to be agnostic to the backend that Kokkos was compiled with :
     #   - OMP_NUM_THREADS  : read by the OpenMP device (usual case) ;

@@ -156,6 +156,8 @@ struct AmrSystem::Impl {
 
   std::string p_rhs = "charge_density", p_solver = "geometric_mg", p_bc = "auto", p_wall = "none";
   double p_wall_radius = 0.0;
+  double p_epsilon = 1.0;
+  double p_abs_tol = 0.0;
 
   bool built = false;
   // --- single-block path (AmrCouplerMP, untouched: bit-identical to history) ---
@@ -331,8 +333,12 @@ struct AmrSystem::Impl {
     bp.time_method =
         b.time_method;  // SSPRK3 (1) / forward Euler (0) -> build_amr_compiled -> cpl->step
     bp.refine_threshold = refine_threshold;
+    bp.refine_var_name = refine_var_name;
+    bp.refine_var_role = refine_var_role;
     bp.poisson_bc = poisson_bc();
     bp.wall = wall_active();
+    bp.poisson_epsilon = p_epsilon;
+    bp.poisson_abs_tol = p_abs_tol;
     bp.has_density = b.has_density;
     bp.density = b.density;
     bp.has_state =
@@ -410,11 +416,13 @@ struct AmrSystem::Impl {
             "'" +
             b.name + "') in multi-block ; use a native block pops.Model(...), or set_density.");
     AmrBuildParams bp = make_build_params();  // geometry + poisson_bc + wall + common ownership
-    // SINGLE-LEVEL Program layout (epic ADC-508): a compiled time Program forced onto the runtime engine
-    // for a SINGLE block builds a coarse-only hierarchy, so a single-level AMR Program is BIT-IDENTICAL
-    // to the same Program on System (the must-pass parity gate). force_runtime_ is set only by
-    // install_program; a genuine multi-block (>= 2) AMR keeps the historical 2-level seed.
-    const bool program_single_level = force_runtime_ && blocks.size() == 1;
+    // Program layout (Spec 6): a compiled time Program forced onto the runtime engine builds the
+    // coarse-only Program hierarchy for every Program install, including multi-block. The generated
+    // Program body is a macro-step over the active level states; until full AMR subcycling/reflux
+    // lowering exists for Program nodes, letting a Program install inherit the historical two-level
+    // multi-block seed leaves fine state uninitialised/uncoupled and can poison the coarse readback.
+    // Native non-Program multi-block runs keep the historical refined seed.
+    const bool program_single_level = force_runtime_;
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp, program_single_level);
     std::vector<pops::AmrRuntimeBlock> rblocks;
     rblocks.reserve(blocks.size());
@@ -501,7 +509,9 @@ struct AmrSystem::Impl {
     }
     runtime =
         std::make_shared<pops::AmrRuntime>(S.geom, S.ba_coarse, S.poisson_bc, std::move(rblocks),
-                                          S.base_per, S.replicated_coarse, S.wall);
+                                          S.base_per, S.replicated_coarse, S.wall,
+                                          static_cast<Real>(p_epsilon),
+                                          static_cast<Real>(p_abs_tol));
     // AMR / MPI PROFILING (Spec 5 criterion 43, ADC-479): wire the facade-owned Profiler into the
     // engine so it times its AMR phases (regrid / fill_boundary / average_down) into the SAME table
     // profile_report() renders. Non-owning: profiler_ outlives runtime (both on the Impl). When
@@ -559,14 +569,8 @@ struct AmrSystem::Impl {
       for (std::size_t b = 0; b < blocks.size(); ++b) {
         int comp = 0;  // default: component 0 (bit-identical density criterion)
         if (selected) {
-          // The compiled .so flat-ABI block carries no role table on its runtime side: a non-default
-          // selector there is REFUSED (comp-0 only), not silently ignored (mirror of the other .so rejects).
-          if (blocks[b].is_compiled)
-            throw std::runtime_error(
-                "AmrSystem::set_refinement : variable/role selector not supported on the compiled "
-                ".so "
-                "block '" +
-                blocks[b].name + "' (component 0 only) ; use a native block pops.Model(...)");
+          // The runtime block carries the concrete Model::conservative_vars() descriptor for both
+          // native and regenerated compiled .so blocks, so the selector is resolved uniformly.
           comp = detail::resolve_selected_component("AmrSystem::set_refinement", blocks[b].name,
                                                     runtime->block_cons_vars(b), refine_var_name,
                                                     refine_var_role);
@@ -614,16 +618,10 @@ struct AmrSystem::Impl {
 
     // --- SINGLE-BLOCK path (AmrCouplerMP, untouched: bit-identical to history) ---
     const BlockSpec& b = blocks[0];
-    // ADC-296: the name/role refinement selector is resolved per block by the MULTI-BLOCK runtime engine
-    // (build_multi -> resolve_selected_component). The single-block AmrCouplerMP path tags on component 0
-    // only; a selector requested but staying single-block would be SILENTLY ignored (the comp-0 fallback
-    // this milestone forbids), so we REFUSE it explicitly -- same pattern as the implicit-mask reject
-    // below. The default (empty selector) stays component 0, bit-identical.
-    if (!refine_var_name.empty() || !refine_var_role.empty())
-      throw std::runtime_error(
-          "AmrSystem::set_refinement : the variable/role selector is only wired in MULTI-BLOCK "
-          "(>= 2 add_block, union-of-tags runtime engine). In single-block the AmrCouplerMP path "
-          "refines on component 0 only : drop variable=/role= or add a 2nd block.");
+    // ADC-296 / Spec 6: the single-block AmrCouplerMP path now receives the same variable/role
+    // selector as the multi-block runtime through AmrBuildParams and resolves it against the concrete
+    // Model::conservative_vars() inside build_amr_compiled. Empty selector remains component 0,
+    // bit-identical to the historical density criterion.
     // The single-block IMEX goes through AmrCouplerMP (advance_amr imex flag), which carries NO partial
     // IMEX mask (FULL backward-Euler). A mask requested but staying SINGLE-BLOCK would thus be SILENTLY
     // ignored -> we REFUSE it explicitly (the partial mask requires the multi-block runtime engine).
@@ -953,7 +951,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
         "AmrSystem::add_native_block : time='ssprk3' not transported by the compiled .so loader "
         "(flat "
         "ABI : only {explicit, imex} is marshaled) ; use a native block pops.Model(...) with "
-        "pops.Explicit(ssprk3=True) via AmrSystem.add_block.");
+        "pops.Explicit.ssprk3() via AmrSystem.add_block.");
   if (time != "explicit" && time != "imex")
     throw std::runtime_error(
         "AmrSystem::add_native_block : time 'explicit' | 'imex' on AMR (got '" + time + "')");
@@ -1097,7 +1095,8 @@ void AmrSystem::set_phi_refinement(double grad_threshold) {
 }
 
 void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
-                            const std::string& bc, const std::string& wall, double wall_radius) {
+                            const std::string& bc, const std::string& wall, double wall_radius,
+                            double epsilon, double abs_tol) {
   // single-block/explicit CONTRACT (cf. set_compiled_block): AMR wires a SINGLE elliptic
   // solver (GeometricMG, the AmrCouplerMP template default) and a SINGLE right-hand side
   // (f = model.elliptic_rhs(U), assembled by coupler_eval_rhs). We thus explicitly REFUSE
@@ -1112,11 +1111,17 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
     throw std::runtime_error("AmrSystem::set_poisson : solver '" + solver +
                              "' unsupported on AMR (only 'geometric_mg' is wired on the "
                              "hierarchy ; 'fft' only exists on a single-level grid, cf. System)");
+  if (!(epsilon > 0.0) || !std::isfinite(epsilon))
+    throw std::runtime_error("AmrSystem::set_poisson : epsilon must be > 0 and finite");
+  if (abs_tol < 0.0 || !std::isfinite(abs_tol))
+    throw std::runtime_error("AmrSystem::set_poisson : abs_tol must be >= 0 and finite");
   p_->p_rhs = rhs;
   p_->p_solver = solver;
   p_->p_bc = bc;
   p_->p_wall = wall;
   p_->p_wall_radius = wall_radius;
+  p_->p_epsilon = epsilon;
+  p_->p_abs_tol = abs_tol;
 }
 
 void AmrSystem::set_density(const std::string& name, const std::vector<double>& rho) {
@@ -1696,24 +1701,6 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     if (block_count && block_name) {
       const std::vector<std::string> amr_names = block_names();
       const int n = block_count();
-      // FAIL LOUD (ADC-508 v1): the per-level AmrProgramContext driver supports a SINGLE-block AMR
-      // Program only. A Program binding >= 2 blocks would lower to the per-level solve_fields_from_state
-      // clobber path with no coupled coarse-fine re-solve -- a silently-wrong multilevel coupling. Reject
-      // it here with an actionable remedy rather than installing a half-wired multi-block driver. (The
-      // single-block AMR Program is the bit-identical parity gate; a genuine multi-block AMR runs the
-      // per-block NATIVE route -- pops.compile(Case(layout=AMR(...)), multi-block), ADC-503 -- or a
-      // multi-block Program on System.)
-      if (n > 1) {
-        pops::dynlib::close(h);
-        throw std::runtime_error(
-            "AmrSystem::install_program : the installed compiled time Program binds " +
-            std::to_string(n) +
-            " blocks, but a multi-block AMR Program is not supported in v1 (the per-level "
-            "AmrProgramContext driver wires a SINGLE block only). Use the per-block NATIVE AMR "
-            "route (pops.compile(Case(layout=AMR(...))) with a multi-block layout, ADC-503), or "
-            "install the multi-block Program on System (System.install_program). A single-block "
-            "AMR Program is supported.");
-      }
       std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
       for (int p = 0; p < n; ++p) {
         const std::string want = block_name(p);

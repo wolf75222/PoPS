@@ -12,13 +12,16 @@ from pops.runtime.bricks import abi_key
 class _AmrSystemIO:
     """Output / checkpoint / restart methods of AmrSystem."""
 
-    def write(self, path, format="npz", step=None):
+    def write(self, path, format=None, step=None):
         """AMR VISUALIZATION OUTPUT (wave 3) : COARSE fields per block + phi + footprints of the
         fine patches. format='npz' (per-block densities, phi, patch_rectangles, t) or 'vtk' (.vti of
         the COARSE : per-block density + phi -- the fine patches are provided in npz via their
         rectangles, the multi-resolution VTK = PR-IO-3). @p step : numbered suffix. @return path."""
         import os
         import numpy as np
+        from pops.output.formats import NPZ
+        from pops.runtime._output_driver import _format_token
+        format = _format_token(NPZ() if format is None else format)
         n = self._s.nx()
         suffix = ("_%06d" % int(step)) if step is not None else ""
         # EACH block, by its name (binding AmrSystem::block_names, parity with System) : in multi-block,

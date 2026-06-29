@@ -96,10 +96,9 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # indices (set_aux_field_component / aux_field_component). Empty for a block without a
         # named aux field. cf. set_aux_field / aux_field.
         self._aux_field_index = {}
-        # CFL carried by an installed compiled-time cadence (CompiledTime(cfl=X)), or None when the
-        # cadence pins no numeric cfl. run() with no explicit cfl= defaults to it, so a bare
-        # sim.run(t_end) after bind(..., cadence=CompiledTime(cfl=X)) advances at X (not silently
-        # ignored). Set by _install_cadence; None until a numeric-cfl cadence is installed.
+        # CFL carried by an installed compiled-time cadence (CompiledProgramCadence(cfl=X)), or None when the
+        # cadence pins no cfl. A numeric value is passed to step_cfl as-is; "program" asks the
+        # compiled Program dt_bound hook to tighten a step_cfl(1.0) step. Set by _install_cadence.
         self._program_cadence_cfl = None
         # OUTPUT / CHECKPOINT policies (C4 / ADC-509) flowed by pops.bind through _install_compiled.
         # Empty until install; run(output_dir=...) fires each at its cadence via write()/checkpoint.
@@ -109,7 +108,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         """Advance up to t_end by CFL steps (sugar: `while time() < t_end: step_cfl(cfl)`).
 
         @p cfl: Courant number passed to step_cfl. When omitted (None) it defaults to the CFL pinned
-        by an installed ``CompiledTime(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
+        by an installed ``CompiledProgramCadence(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
         takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored. @p max_steps:
         guard (avoids an infinite loop if dt -> 0). @p output_dir: when output / checkpoint policies
         were flowed onto this System (``pops.bind`` from a Case with ``.output(policy)``), the
@@ -119,24 +118,30 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         cf. DSL_MODEL_DESIGN.md section 6."""
         if cfl is None:
             cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
+        if cfl == "program":
+            cfl = 1.0
         policies = getattr(self, "_output_policies", [])
         out_dir = output_dir if output_dir is not None else "."
         steps = 0
+        if policies:
+            self._fire_outputs(policies, steps, out_dir, phase="start")
         while self.time() < t_end and steps < max_steps:
             self.step_cfl(cfl)
             steps += 1
             if policies:
-                self._fire_outputs(policies, steps, out_dir)
+                self._fire_outputs(policies, steps, out_dir, phase="step")
+        if policies:
+            self._fire_outputs(policies, steps, out_dir, phase="end")
         return steps
 
-    def _fire_outputs(self, policies, step, output_dir):
+    def _fire_outputs(self, policies, step, output_dir, phase="step"):
         """Fire the DUE output / checkpoint policies at macro-step @p step (C4 run-loop hook).
 
         Delegates to :func:`pops.runtime._output_driver.fire_output_policies`, which maps each
         policy's typed cadence/format/fields onto the existing ``write`` / ``checkpoint`` writers.
         Kept tiny so the cadence logic lives in one host-testable place, not inline in run()."""
         from pops.runtime._output_driver import fire_output_policies
-        return fire_output_policies(self, policies, step, output_dir)
+        return fire_output_policies(self, policies, step, output_dir, phase=phase)
 
     def profile(self, profile=None):
         """Typed profiling context manager (Spec 5 sec.12.5, criteria 41-44).
@@ -200,6 +205,22 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         __getattr__ delegate only covers instances), so pops.System.abi_key() works."""
         return _System.abi_key()
 
+    def _eval_rhs(self, name):
+        """Private test/diagnostic seam for the native residual.
+
+        Public time integration must be authored as a compiled ``pops.time.Program``; this helper
+        exists only for internal parity tests and implementation diagnostics.
+        """
+        return self._s.eval_rhs(name)
+
+    def _get_state(self, name):
+        """Private test/diagnostic seam for reading a full conservative state."""
+        return self._s.get_state(name)
+
+    def _set_state(self, name, state):
+        """Private test/diagnostic seam for writing a full conservative state."""
+        return self._s.set_state(name, state)
+
     def __getattr__(self, attr):
         forbidden = {
             "add_block",
@@ -209,6 +230,12 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             "set_param",
             "set_aux_field",
             "set_field_solver",
+            "set_poisson",
+            "set_disc_domain",
+            "set_geometry_mode",
+            "eval_rhs",
+            "get_state",
+            "set_state",
         }
         if attr in forbidden:
             raise AttributeError(

@@ -454,7 +454,7 @@ class CompiledModel:
         from pops.numerics.reconstruction.limiters import Minmod
         from pops.numerics.riemann import Rusanov
         sim = System(n=int(n), L=1.0, periodic=True)
-        sim.set_poisson()
+        sim._set_poisson()
         sim._add_equation("check", model=self,
                           spatial=FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                           time=Explicit())

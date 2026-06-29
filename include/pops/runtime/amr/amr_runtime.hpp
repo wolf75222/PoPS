@@ -252,9 +252,12 @@ class AmrRuntime {
   /// @param base_per    periodicity of the base domain (transport).
   /// @param replicated_coarse  ownership of level 0 (replicated single-box, or distributed multi-box).
   /// @param active      conductive-wall predicate (passed to MG; empty = none).
+  /// @param poisson_epsilon constant permittivity of div(eps grad phi)=f.
+  /// @param poisson_abs_tol absolute floor of the GeometricMG stopping criterion.
   AmrRuntime(const Geometry& geom, const BoxArray& ba_coarse, const BCRec& bcPhi,
              std::vector<AmrRuntimeBlock> blocks, Periodicity base_per = Periodicity{true, true},
-             bool replicated_coarse = true, std::function<bool(Real, Real)> active = {})
+             bool replicated_coarse = true, std::function<bool(Real, Real)> active = {},
+             Real poisson_epsilon = Real(1), Real poisson_abs_tol = Real(0))
       : geom_(geom),
         dom_(geom.domain),
         base_per_(base_per),
@@ -264,7 +267,10 @@ class AmrRuntime {
         mg_(geom, ba_coarse, bcPhi, active, replicated_coarse),
         ba_coarse_(ba_coarse),
         wall_active_(std::move(active)),  // copy already consumed by mg_ (earlier in decl order)
+        poisson_epsilon_(poisson_epsilon),
+        poisson_abs_tol_(poisson_abs_tol),
         blocks_(std::move(blocks)) {
+    configure_geometric_mg(mg_);
     if (blocks_.empty())
       throw std::runtime_error("AmrRuntime : at least one block required");
     for (const auto& b : blocks_)
@@ -396,6 +402,72 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime::level_source_into: block '" + blocks_[b].name +
                                "' has no source-only per-level residual closure");
     blocks_[b].level_source(U, aux_[k], level_geom(k), R);
+  }
+  /// Re-solve the hierarchy fields from one block's STAGE state on the coarse level.
+  ///
+  /// This is the AMR counterpart of System::solve_fields_from_state: the live coarse state is
+  /// temporarily replaced by @p U_stage, the normal summed system Poisson + named-field pipeline is run,
+  /// and the live state is restored. Fine levels receive the coarse aux through the existing injection
+  /// inside solve_fields(). No physics is reimplemented here.
+  void solve_fields_from_state(std::size_t b, MultiFab& U_stage) {
+    if (b >= blocks_.size())
+      throw std::out_of_range("AmrRuntime::solve_fields_from_state : block index out of bounds");
+    MultiFab& live = (*blocks_[b].levels)[0].U;
+    MultiFab saved = live;
+    live = U_stage;
+    solve_fields();
+    live = std::move(saved);
+  }
+  /// Re-solve the hierarchy fields from simultaneous STAGE states of several blocks.
+  ///
+  /// @p U_stages is indexed by AMR block index; nullptr means "use the live state". Every non-null
+  /// entry is swapped onto the coarse state before the standard solve_fields() path assembles the
+  /// summed RHS, then all live states are restored. This is the coupled multi-block field solve the
+  /// compiled Program path needs; it intentionally reuses the existing default + named field solvers.
+  void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
+    std::vector<MultiFab> saved;
+    saved.reserve(blocks_.size());
+    for (std::size_t b = 0; b < blocks_.size(); ++b) {
+      MultiFab& live = (*blocks_[b].levels)[0].U;
+      saved.push_back(live);
+      if (b < U_stages.size() && U_stages[b] != nullptr)
+        live = *U_stages[b];
+    }
+    solve_fields();
+    for (std::size_t b = 0; b < blocks_.size(); ++b)
+      (*blocks_[b].levels)[0].U = std::move(saved[b]);
+  }
+  /// Named-field stage solve. The named field solver lives inside solve_fields(); this seam validates
+  /// the field exists then uses the same stage-state override as the default field path.
+  void solve_named_fields_from_state(const std::string& field, std::size_t b, MultiFab& U_stage) {
+    if (!has_named_field(field))
+      throw std::runtime_error("AmrRuntime::solve_named_fields_from_state : unknown named elliptic "
+                               "field '" + field + "'");
+    solve_fields_from_state(b, U_stage);
+  }
+  /// Apply a block's pointwise projection to an arbitrary stage state on one AMR level.
+  ///
+  /// Native AMR stores projections as project_per_level(levels). To reuse it without mutating the live
+  /// hierarchy, save every live level, swap @p U_stage into level @p k, call the native projection, copy
+  /// the projected level back to @p U_stage, then restore the hierarchy. Projection is opt-in and
+  /// idempotent, so this path is not on the common hot path.
+  void project_level_state(std::size_t b, int k, MultiFab& U_stage) {
+    if (b >= blocks_.size())
+      throw std::out_of_range("AmrRuntime::project_level_state : block index out of bounds");
+    if (!blocks_[b].project_per_level)
+      return;
+    auto& L = *blocks_[b].levels;
+    if (k < 0 || k >= static_cast<int>(L.size()))
+      throw std::out_of_range("AmrRuntime::project_level_state : level index out of bounds");
+    std::vector<MultiFab> saved;
+    saved.reserve(L.size());
+    for (auto& lv : L)
+      saved.push_back(lv.U);
+    L[static_cast<std::size_t>(k)].U = U_stage;
+    blocks_[b].project_per_level(L);
+    U_stage = L[static_cast<std::size_t>(k)].U;
+    for (std::size_t lev = 0; lev < L.size(); ++lev)
+      L[lev].U = std::move(saved[lev]);
   }
   /// Max |wave speed| of block @p b on @p U (the SAME closure step_cfl reads). Evaluated on the aux of
   /// level @p k. A Program dt bound reads it as cfl*hmin/max_wave_speed.
@@ -1531,6 +1603,19 @@ class AmrRuntime {
       return;
     nf.mg =
         std::make_shared<GeometricMG>(geom_, ba_coarse_, bcPhi_, wall_active_, replicated_coarse_);
+    configure_geometric_mg(*nf.mg);
+  }
+
+  void configure_geometric_mg(GeometricMG& mg) const {
+    if (!(poisson_epsilon_ > Real(0)) || !std::isfinite(poisson_epsilon_))
+      throw std::runtime_error("AmrRuntime : poisson epsilon must be > 0 and finite");
+    if (poisson_abs_tol_ < Real(0) || !std::isfinite(poisson_abs_tol_))
+      throw std::runtime_error("AmrRuntime : poisson abs_tol must be >= 0 and finite");
+    mg.set_abs_tol(poisson_abs_tol_);
+    if (poisson_epsilon_ != Real(1)) {
+      const Real eps = poisson_epsilon_;
+      mg.set_epsilon([eps](Real, Real) { return eps; });
+    }
   }
 
   // Reads aux component @p comp of the COARSE level as a GLOBAL n*n row-major field (diagnostic /
@@ -1607,6 +1692,8 @@ class AmrRuntime {
   // its construction but does not expose them, so we keep a copy here (cheap; the coarse layout is small).
   BoxArray ba_coarse_;
   std::function<bool(Real, Real)> wall_active_;
+  Real poisson_epsilon_ = Real(1);
+  Real poisson_abs_tol_ = Real(0);
   std::vector<AmrRuntimeBlock> blocks_;
   // GLOBAL step bounds (add_dt_bound, parity with System) + ACTIVE bound of the last step_cfl.
   struct GlobalDtBound {

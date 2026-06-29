@@ -181,7 +181,7 @@ class _CodegenMixin:
         if backend == "prototype":
             raise ValueError(
                 "compile: backend 'prototype' (JIT, host virtual dispatch) incompatible with "
-                "require_metadata=True; use backend='aot' or 'production' for the "
+                "require_metadata=True; use backend=pops.codegen.AOT() or 'production' for the "
                 "device-clean path with guaranteed metadata")
         missing = []
         roles = roles_for(self.cons_names, self.cons_roles)
@@ -195,7 +195,7 @@ class _CodegenMixin:
                 "would fall back to the System fallback (roles 'custom' / gamma 1.4)"
                 % (self.name, " nor ".join(missing)))
 
-    def compile(self, so_path=None, include=None, backend="auto", name=None, cxx=None, std=None,
+    def compile(self, so_path=None, include=None, backend=None, name=None, cxx=None, std=None,
                 require_metadata=False, target="system", hoist_reciprocals=False):
         """Thin wrapper: delegates to pops.codegen.compile.compile_model."""
         return _cg_compile().compile_model(self, so_path=so_path, include=include, backend=backend,
@@ -208,7 +208,8 @@ class _CodegenMixin:
         """Name of the System method to use to wire the .so produced by compile(backend=...):
         'add_dynamic_block' (prototype/JIT), 'add_compiled_block' (aot) or 'add_native_block'
         (production/native). Delegates to pops.codegen.compile.adder_for."""
-        return _cg_compile().adder_for(backend)
+        from pops.codegen.backends import lower_backend
+        return _cg_compile().adder_for(lower_backend(backend))
 
     def emit_cpp_elliptic(self, name=None, namespace="pops_generated", cse=True,
                           hoist_reciprocals=False):

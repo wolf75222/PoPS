@@ -477,7 +477,7 @@ set_tests_properties(test_compile_problem PROPERTIES
 
 # Multi-stage compiled Programs (ADC-399/ADC-407) : SSPRK2 + RK4 lowered by emit_cpp_program (scratch
 # states + lincomb commit), compiled + installed + run, parity vs an offline stage-by-stage reference
-# (set_state + solve_fields + eval_rhs) and vs native pops.Explicit('ssprk2'). Auto-skips without the
+# (set_state + solve_fields + eval_rhs) and vs native pops.Explicit.ssprk2(). Auto-skips without the
 # install_program binding / a compiler / a visible Kokkos.
 add_test(NAME test_time_multistage
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_time_multistage.py)
@@ -895,7 +895,7 @@ add_test(NAME test_poisson_eps
 set_tests_properties(test_poisson_eps PROPERTIES
   ENVIRONMENT "${_pops_py_test_env}")
 
-# WENO5-Z + SSPRK3 exposes depuis l'API : pops.Spatial(limiter="weno5") + pops.Explicit(method="ssprk3")
+# WENO5-Z + SSPRK3 exposes depuis l'API : pops.Spatial(limiter=WENO5()) + pops.Explicit.ssprk3()
 # end-to-end, defaut SSPRK2 inchange (bit-identique), garde-fous sur les chemins compiles (.so).
 add_test(NAME test_weno5_ssprk3
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_weno5_ssprk3.py)
@@ -911,7 +911,7 @@ add_test(NAME test_ssprk3_production
 set_tests_properties(test_ssprk3_production PROPERTIES
   ENVIRONMENT "${_pops_py_test_env}")
 
-# SSPRK3 (ordre 3) sur AMR avec REFLUX PAR ETAGE (ADC-64) : pops.Explicit(ssprk3=True) cable mono-bloc
+# SSPRK3 (ordre 3) sur AMR avec REFLUX PAR ETAGE (ADC-64) : pops.Explicit.ssprk3() cable mono-bloc
 # (AmrCouplerMP) ET multi-blocs (AmrRuntime), reflux du FLUX EFFECTIF Feff = 1/6 F0 + 1/6 F1 + 2/3 F2.
 # (a) mono + multi tournent finis + masse conservee avec patchs fins ; (b) defaut euler bit-identique ;
 # (c) erreur L1 temporelle ssprk3 << euler au meme dt (reference Richardson) ; (d) imex+ssprk3 rejete ;

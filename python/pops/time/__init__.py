@@ -6,7 +6,7 @@ only BUILDS a typed IR; it never executes a numerical stage. The C++ lowering li
 delegator), so this package imports only ``pops.ir`` / ``pops.model`` -- never ``pops.codegen``,
 ``_pops``, or ``pops.lib`` at module scope (Spec 4 acyclic graph: time -> {ir, model}).
 
-This package is the time LANGUAGE only: ``Program``, ``CompiledTime``, the ``Value`` /
+This package is the time LANGUAGE only: ``Program``, the ``Value`` /
 ``StageStateSet`` values, the ``Schedule`` scheduler (``always`` / ``every`` / ``when`` /
 ``on_start`` / ``on_end`` / ``subcycle``) and the IR-optimizer wrappers (``eliminate_*`` /
 ``optimize``). The READY time-stepping schemes live in ``pops.lib.time`` (Spec 4 s6 / s14),
@@ -22,13 +22,13 @@ from pops.time.passes_facade import (  # noqa: F401
     eliminate_redundant_field_solves,
     optimize,
 )
-from pops.time.program import CompiledTime, Program
+from pops.time.program import Program
 from pops.time.schedule import (  # noqa: F401
     Schedule, always, every, on_end, on_start, subcycle, when,
 )
 from pops.time.values import StageStateSet, Value  # noqa: F401
 
-__all__ = ["Program", "CompiledTime", "StageStateSet", "Schedule",
+__all__ = ["Program", "StageStateSet", "Schedule",
            "TimeState", "CopyCurrent",
            "always", "every", "when", "on_start", "on_end", "subcycle",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",

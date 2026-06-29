@@ -65,8 +65,14 @@ class _SystemAuxState:
         comp = self._resolve_aux_field(block, name)
         return np.asarray(self._s.aux_field_component(comp), dtype=float)
 
-    def set_disc_domain(self, cx, cy=None, R=None, mode="none"):
-        """Set the TRANSPORT DOMAIN as a DISC of center (cx, cy) and radius R, and WIRE the
+    def _set_disc_domain(self, cx, cy=None, R=None, mode="none"):
+        """Private lowering seam for a disc transport domain.
+
+        Public code describes embedded geometry through typed ``pops.mesh`` descriptors on the
+        layout. This method lowers that typed description to the native runtime tokens used by the
+        C++ engine and remains available only as an internal/test seam.
+
+        Set the TRANSPORT DOMAIN as a DISC of center (cx, cy) and radius R, and WIRE the
         transport according to mode= (T2 / T5-PR3 work). Materializes a 0/1 cell-centered mask (cell
         active when its center is inside the disc, level set hypot(x-cx, y-cy) - R < 0, SAME convention
         as the conducting wall of Poisson). This is the finite-volume counterpart of the elliptic wall: the paper
@@ -74,18 +80,15 @@ class _SystemAuxState:
         full Cartesian square, the circle acting only in the Poisson wall (lock from the Cartesian ring
         edges, cf. docs/HOFFART_FIDELITY.md).
 
-        Spec 5 sec.8.16 adds a TYPED form: pass a single ``pops.mesh.geometry.DiscDomain``
-        carrying the center, the radius and a typed transport mode::
+        Private typed form: pass a single ``pops.mesh.geometry.DiscDomain`` carrying the center,
+        the radius and a typed transport mode::
 
             from pops.mesh.geometry import DiscDomain
             from pops.mesh.masks import CutCell
-            sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.4, mode=CutCell()))
+            sim._set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.4, mode=CutCell()))
 
-        The legacy four-argument string form ``set_disc_domain(cx, cy, R, mode="cutcell")`` keeps
-        working unchanged; both lower to the SAME native ``set_disc_domain(cx, cy, R, mode_token)``
-        call (byte-identical mask and trajectory). ``mode`` accepts a typed
-        :mod:`pops.mesh.masks` descriptor (``NoMask`` / ``Staircase`` / ``CutCell``) OR the legacy
-        string.
+        The public route is the typed layout / geometry descriptor. This private seam may receive
+        already-lowered native tokens because it is the last Python hop before the C++ binding.
 
         The ``mode`` parameter wires the transport:
 
@@ -98,7 +101,7 @@ class _SystemAuxState:
         The mode is honored under Lie AND Strang (cf. Split / Strang). R > 0; Cartesian only (the
         polar one already bounds the ring by its radial walls -> explicit error)."""
         from pops.mesh.geometry import DiscDomain
-        from pops.mesh.masks import lower_disc_mode
+        from pops.mesh.masks import _lower_disc_mode
         if isinstance(cx, DiscDomain):
             # Typed DiscDomain positional (Spec 5 sec.8.16): it carries center + radius + mode.
             # cy / R / mode keywords must NOT be doubled up with the typed object.
@@ -112,19 +115,19 @@ class _SystemAuxState:
                 raise TypeError(
                     "set_disc_domain: the legacy form needs (cx, cy, R[, mode]); pass a typed "
                     "pops.mesh.geometry.DiscDomain(center=..., radius=..., mode=...) otherwise")
-            # mode= may be the legacy string OR a typed pops.mesh.masks descriptor.
-            mode = lower_disc_mode(mode)
+            # Private seam: mode= may already be a native token or a typed descriptor.
+            mode = _lower_disc_mode(mode)
         self._s.set_disc_domain(cx, cy, R, mode)
 
-    def set_geometry_mode(self, mode):
+    def _set_geometry_mode(self, mode):
         """Switch ONLY the disc transport mode ('none'|'staircase'|'cutcell') without (re)defining the
         disc. A mode != 'none' requires a disc already set (set_disc_domain) -> error otherwise. Setting
         back to 'none' restores the full Cartesian transport (bit-identical).
 
         ``mode`` accepts the legacy string OR a typed :mod:`pops.mesh.masks` descriptor
         (``NoMask`` / ``Staircase`` / ``CutCell``); both lower to the same native token."""
-        from pops.mesh.masks import lower_disc_mode
-        self._s.set_geometry_mode(lower_disc_mode(mode))
+        from pops.mesh.masks import _lower_disc_mode
+        self._s.set_geometry_mode(_lower_disc_mode(mode))
 
     def disc_mask(self):
         """0/1 cell-centered domain mask, array (ny, nx) (diagnostic / contract

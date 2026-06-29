@@ -1,17 +1,17 @@
-"""Compile mixin for the PDE-model facade (:class:`pops.physics.facade.Model`).
+"""Internal compile mixin for the PDE-model facade (:class:`pops.physics.facade.Model`).
 
-Splits ``Model._model_hash`` + ``Model.compile`` out of ``facade.py`` so neither
-file exceeds the Spec-4 500-line bound. The mixin operates on ``self._m`` (the
-private :class:`HyperbolicModel`) and ``self.params``; the build engine is pulled
-in LAZILY inside ``compile`` (toolchain/cache/abi/loader names), so importing
-``pops.physics`` never loads it (Spec-4 import-graph rule).
+Splits ``Model._model_hash`` + the internal ``Model._compile_for_runtime`` seam out of
+``facade.py`` so neither file exceeds the Spec-4 500-line bound. The mixin operates on
+``self._m`` (the private :class:`HyperbolicModel`) and ``self.params``; the build engine is
+pulled in LAZILY inside ``_compile_for_runtime`` (toolchain/cache/abi/loader names), so
+importing ``pops.physics`` never loads it (Spec-4 import-graph rule).
 """
 from .aux import aux_total_n_aux, roles_for
 from .model import HyperbolicModel
 
 
 class _FacadeCompileMixin:
-    """Model-hash + compile half of the PDE facade (lazy codegen)."""
+    """Model-hash + internal runtime-compile half of the PDE facade (lazy codegen)."""
 
     def _model_hash(self):
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
@@ -20,11 +20,14 @@ class _FacadeCompileMixin:
         the Param of the facade (otherwise two models differing only by a param would have the same hash)."""
         return self._m._model_hash(params=self.params)
 
-    def compile(self, so_path=None, include=None, backend="auto", target="system", name=None,
-                cxx=None, std=None, require_metadata=False, hoist_reciprocals=False):
-        """Compiles the model into a CompiledModel (Phase A). Delegates the GENERATION + compilation to
-        HyperbolicModel.compile (engines unchanged: compile_so / compile_aot / compile_native), then
-        packages the .so with the already-known metadata (no re-reading of the .so).
+    def _compile_for_runtime(self, so_path=None, include=None, backend=None, target="system",
+                             name=None, cxx=None, std=None, require_metadata=False,
+                             hoist_reciprocals=False):
+        """Internal native-block compilation seam.
+
+        Delegates the GENERATION + compilation to HyperbolicModel.compile (engines unchanged:
+        compile_so / compile_aot / compile_native), then packages the .so with the already-known
+        metadata (no re-reading of the .so).
 
         INTERNAL codegen engine (Spec 5 sec.11). The documented PUBLIC compile front door is
         ``pops.compile(case, backend=pops.codegen.Production())`` (with the authoring facade
@@ -36,7 +39,7 @@ class _FacadeCompileMixin:
         - ``backend``: a typed ``pops.codegen.Production()`` / ``AOT()`` / ``JIT()`` descriptor, or the
           internal token "prototype" | "aot" | "production" (cf. HyperbolicModel.compile).
         - ``target``: "system" (default) | "amr_system" (DSL Phase D). "amr_system" requires
-          backend="production" (the native loader inlines add_compiled_model(AmrSystem&), the only
+          backend=pops.codegen.Production() (the native loader inlines add_compiled_model(AmrSystem&), the only
           .so AMR path; cf. compile_or_jit) -> to be wired via AmrSystem.add_equation. Another backend
           with target="amr_system" raises ValueError (no AMR path outside native).
 
@@ -55,23 +58,24 @@ class _FacadeCompileMixin:
         caps, abi_key, model_hash, cxx, std."""
         import os
         # Lazy codegen import (keeps pops.physics codegen-free at module load; Spec-4 rule):
-        from pops.codegen.toolchain import (resolve_auto_backend, loader_cxx_std,
+        from pops.codegen.toolchain import (loader_cxx_std,
                                             _native_kokkos_compiler, _default_cxx,
                                             _native_feature_key, pops_include)
         from pops.codegen.cache import _cache_so_path, _record_so_backend
         from pops.codegen.abi import _abi_key_python
         from pops.codegen.compile import _BACKEND_CAPS
         from pops.codegen.loader import CompiledModel
-        from pops.codegen.backends import lower_backend
-        # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
-        # well as the legacy string; lower it BEFORE the 'auto'/_BACKENDS checks so both selectors
-        # behave identically. A plain string / None passes through unchanged (transparent coercion).
-        backend = lower_backend(backend)
-        # 'auto' DEFAULT (ADC-63): production if toolchain parity is established, aot otherwise. The reason
-        # is recorded on the CompiledModel (backend_auto_reason) -- never a silent choice.
+        from pops.codegen.backends import BACKEND_DESCRIPTORS, Production, lower_internal_backend
+        # Internal runtime seam: public callers should go through pops.compile(..., backend=Production()).
+        # This lower-level path may already receive a native backend token derived from descriptors.
+        if backend is None:
+            backend = Production()
+        backend = lower_internal_backend(backend)
         auto_reason = None
         if backend == "auto":
-            backend, auto_reason = resolve_auto_backend(include)
+            raise TypeError(
+                "_compile_for_runtime: backend='auto' was removed; pass a typed backend "
+                "descriptor such as Production()")
         if backend not in HyperbolicModel._BACKENDS:
             raise ValueError("compile: unknown backend %r (expected %s + 'auto')"
                              % (backend, sorted(HyperbolicModel._BACKENDS)))
@@ -83,7 +87,7 @@ class _FacadeCompileMixin:
         # loader's standard (c++20 under Kokkos, c++23 otherwise, cf. loader_cxx_std); the others stay c++20.
         mode = HyperbolicModel._BACKENDS[backend][0]
         if target == "amr_system" and mode != "native":
-            raise ValueError("compile: target='amr_system' only exists for backend='production' "
+            raise ValueError("compile: target='amr_system' only exists for backend=pops.codegen.Production() "
                              "(native AMR path); got backend=%r" % (backend,))
         eff_std = std if std is not None else (loader_cxx_std() if mode == "native" else "c++20")
         # native AND aot (mode "compile") compile the pops headers -> real Kokkos (compiler +
@@ -119,16 +123,18 @@ class _FacadeCompileMixin:
         if cache_hit:
             out_path = so_path  # .so already compiled for this key: no recompilation
         else:
-            # Compilation (engines unchanged, require_metadata/backend/target guards of
-            # HyperbolicModel.compile: the loader emits pops_install_native_amr for target="amr_system").
-            out_path = m.compile(so_path, include, backend=backend, name=name, cxx=cxx, std=std,
-                                 require_metadata=require_metadata, target=target,
-                                 hoist_reciprocals=hoist_reciprocals)
+            # Compilation (engines unchanged): call the strict driver with a typed descriptor, while
+            # keeping target as this internal native-loader token.
+            from pops.codegen.compile import compile_model
+            out_path = compile_model(
+                m, so_path=so_path, include=include, backend=BACKEND_DESCRIPTORS[backend](),
+                name=name, cxx=cxx, std=std, require_metadata=require_metadata, target=target,
+                hoist_reciprocals=hoist_reciprocals)
         # The keyed path (cache HIT) or the path retained by the engine carries the written backend: we
         # record it so a cross-backend reuse of the SAME path in this process is detected.
         _record_so_backend(out_path, backend)
 
-        adder = HyperbolicModel.adder_for(backend)
+        adder = HyperbolicModel._BACKENDS[backend][1]
         cons_roles = roles_for(m.cons_names, m.cons_roles)
         cm = CompiledModel(
             so_path=out_path, backend=backend, adder=adder, target=target,

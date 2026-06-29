@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <functional>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -8,17 +10,22 @@
 #include <vector>
 
 #include <pops/core/foundation/types.hpp>     // Real, POPS_HD
+#include <pops/coupling/schur/core/schur_condensation.hpp>  // Schur kernels + NegateKernel
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts
 #include <pops/mesh/execution/for_each.hpp>    // for_each_cell, device_fence
+#include <pops/mesh/storage/fab2d.hpp>         // Array4 / ConstArray4
 #include <pops/mesh/geometry/geometry.hpp>     // Geometry
 #include <pops/mesh/storage/mf_arith.hpp>      // saxpy / lincomb
 #include <pops/mesh/storage/multifab.hpp>      // MultiFab
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>             // GeometricMG (Krylov precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>    // apply_laplacian
+#include <pops/numerics/linalg/lorentz_eliminator.hpp>  // LorentzEliminator
 #include <pops/runtime/amr/amr_runtime.hpp>     // AmrRuntime (the engine the driver wraps)
 #include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
+#include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node value cache)
+#include <pops/runtime/program/program_context.hpp>  // detail::Schur*KernelC shared with System ProgramContext
 
 /// @file
 /// @brief AmrProgramContext -- the AMR counterpart of ProgramContext (epic ADC-508, Spec 6).
@@ -115,14 +122,8 @@ class AmrProgramContext {
     eng_->level_source_into(static_cast<std::size_t>(sys_block(b)), level_, u, r);
   }
   void apply_projection(int b, MultiFab& u) const {
-    // v1: per-level positivity projection is wired through the native block path (project_per_level),
-    // not the per-stage Program seam. A Program that requests it on AMR is a documented deferral.
-    (void)b;
-    (void)u;
-    throw std::runtime_error(
-        "AmrProgramContext::apply_projection: a per-stage positivity projection under a compiled "
-        "Program on AMR is deferred (v1); the native AMR block applies it per level at end-of-step. "
-        "Drop P.project from the AMR Program or use System.");
+    count_kernel();
+    eng_->project_level_state(static_cast<std::size_t>(sys_block(b)), level_, u);
   }
 
   // --- dt bound primitives (evaluated at the COARSE level, where the AMR CFL lives) -----------------
@@ -157,20 +158,27 @@ class AmrProgramContext {
     }
     // fine level: reuse the injected aux (documented v1 fallback).
   }
-  /// Named multi-elliptic field re-solve: deferred on AMR (ADC-513 companion). Fail loud.
-  void solve_fields_from_state(const std::string& field, int /*b*/, MultiFab& /*u_stage*/) const {
-    throw std::runtime_error(
-        "AmrProgramContext::solve_fields_from_state(field='" + field +
-        "'): named multi-elliptic fields under a compiled Program on AMR are deferred (ADC-513). Use "
-        "System, or a single (default) field.");
+  /// Named multi-elliptic field re-solve: routed through the AMR runtime's named-field solver.
+  void solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+    if (level_ == 0) {
+      eng_->solve_named_fields_from_state(field, static_cast<std::size_t>(sys_block(b)), u_stage);
+      solved_this_step_ = true;
+    }
   }
-  /// Coupled multi-block field solve: deferred on AMR (the per-block summed-RHS at fine levels needs the
-  /// coupled re-solve path). Fail loud rather than a silent half-implementation.
-  void solve_fields_from_blocks(const std::vector<const MultiFab*>& /*u_stages*/) const {
-    throw std::runtime_error(
-        "AmrProgramContext::solve_fields_from_blocks: a coupled multi-block field solve under a "
-        "compiled Program on AMR is deferred (v1, Spec 3 criterion 24). Use System, or a single-block "
-        "AMR Program.");
+  /// Coupled multi-block field solve over simultaneous stage states.
+  void solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
+    if (level_ != 0)
+      return;
+    const std::vector<int>& m = facade_->program_block_map();
+    if (m.empty()) {
+      eng_->solve_fields_from_blocks(u_stages);
+    } else {
+      std::vector<const MultiFab*> remapped(static_cast<std::size_t>(eng_->n_blocks()), nullptr);
+      for (std::size_t p = 0; p < m.size() && p < u_stages.size(); ++p)
+        remapped[static_cast<std::size_t>(m[p])] = u_stages[p];
+      eng_->solve_fields_from_blocks(remapped);
+    }
+    solved_this_step_ = true;
   }
 
   /// The SHARED aux of the current level (phi / grad / B_z), the channel solve_fields fills.
@@ -249,15 +257,52 @@ class AmrProgramContext {
     fill_ghosts(x, g.domain, eng_->transport_bc());
   }
 
-  // --- history (DEFERRED on AMR: fail loud rather than an unvalidated coarse-only ring) -------------
-  void register_history(const std::string& name, int /*lag*/) const { history_deferred(name); }
-  MultiFab& history(const std::string& name, int /*lag*/ = 1) const {
-    history_deferred(name);
+  // --- history (closure-owned ring, same semantics as System HistoryManager) ------------------------
+  void register_history(const std::string& name, int lag) const {
+    if (lag < 1)
+      throw std::runtime_error("AmrProgramContext::register_history: lag must be >= 1 for history '" +
+                               name + "'");
+    HistorySlot& h = histories_[name];
+    h.depth = std::max(h.depth, lag + 1);
   }
-  void store_history(const std::string& name, const MultiFab& /*value*/) const {
-    history_deferred(name);
+  MultiFab& history(const std::string& name, int lag = 1) const {
+    auto it = histories_.find(name);
+    if (it == histories_.end())
+      throw std::runtime_error("AmrProgramContext::history: unknown history '" + name +
+                               "' (register it first)");
+    HistorySlot& h = it->second;
+    if (!h.initialized)
+      throw std::runtime_error("AmrProgramContext::history: history '" + name +
+                               "' was requested before its first store");
+    if (lag < 0 || lag >= h.depth)
+      throw std::runtime_error("AmrProgramContext::history: lag out of range for history '" + name +
+                               "'");
+    return h.ring[static_cast<std::size_t>(lag)];
   }
-  void rotate_histories() const {}  // no-op: no history ring on AMR (v1)
+  void store_history(const std::string& name, const MultiFab& value) const {
+    HistorySlot& h = histories_[name];
+    if (h.depth < 2)
+      h.depth = 2;
+    ensure_history_allocated(h, value);
+    lincomb(h.ring[0], Real(1), value, Real(0), value);
+    if (!h.initialized) {
+      for (std::size_t k = 1; k < h.ring.size(); ++k)
+        lincomb(h.ring[k], Real(1), value, Real(0), value);
+      h.initialized = true;
+    }
+  }
+  void rotate_histories() const {
+    for (auto& [name, h] : histories_) {
+      (void)name;
+      if (!h.initialized || h.ring.size() < 2)
+        continue;
+      for (std::size_t k = h.ring.size() - 1; k >= 1; --k) {
+        std::swap(h.ring[k], h.ring[k - 1]);
+        if (k == 1)
+          break;
+      }
+    }
+  }
 
   // --- diagnostics / runtime params (forward to the facade store) -----------------------------------
   void record_scalar(const std::string& name, Real value) const {
@@ -291,120 +336,183 @@ class AmrProgramContext {
 
   int macro_step() const { return facade_->macro_step(); }
 
-  // --- condensed-Schur / named-flux primitives: DEFERRED on AMR (v1), fail loud ---------------------
-  // The codegen can lower a condensed-Schur (ADC-421/422) or named-flux (ADC-419) Program against these
-  // seams. ProgramContext implements them on the single-level System (coefficiented matrix-free elliptic
-  // + the fused Schur RHS / reconstruct / energy + the named-flux divergence); AMR v1 does NOT wire them
-  // (they would need the per-level coefficient assembly + the coarse-fine elliptic coupling). A SILENT
-  // lower would produce an AMR .so that either does not compile (a missing member) or runs the WRONG
-  // arithmetic. The signatures match ProgramContext EXACTLY (const-ness, return type, args) so the SAME
-  // lowered body still type-checks against AmrProgramContext (the duck-typing contract); each one throws.
-  void assemble_schur_coeffs(MultiFab& /*eps_x*/, MultiFab& /*eps_y*/, MultiFab& /*a_xy*/,
-                             MultiFab& /*a_yx*/, const MultiFab& /*state*/, Real /*c*/,
-                             Real /*th_dt*/, int /*c_rho*/, int /*c_bz*/) const {
-    deferred_op("assemble_schur_coeffs",
-                "a condensed-Schur Program on AMR is deferred; use System, or a native AMR block "
-                "(pops.compile with a per-block time policy).");
+  // --- condensed-Schur / named-flux primitives over the CURRENT AMR level ---------------------------
+  void assemble_schur_coeffs(MultiFab& eps_x, MultiFab& eps_y, MultiFab& a_xy, MultiFab& a_yx,
+                             const MultiFab& state, Real c, Real th_dt, int c_rho,
+                             int c_bz) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    const MultiFab& a = aux();
+    for (int li = 0; li < eps_x.local_size(); ++li) {
+      const ConstArray4 s = state.fab(li).const_array();
+      const ConstArray4 b = a.fab(li).const_array();
+      for_each_cell(eps_x.box(li),
+                    detail::SchurOperatorCoeffKernelC{s, b, eps_x.fab(li).array(),
+                                                      eps_y.fab(li).array(), a_xy.fab(li).array(),
+                                                      a_yx.fab(li).array(), c, th_dt, c_rho, c_bz});
+    }
+    const BCRec ebc = coeff_bc(eng_->transport_bc());
+    fill_ghosts(eps_x, g.domain, ebc);
+    fill_ghosts(eps_y, g.domain, ebc);
+    fill_ghosts(a_xy, g.domain, ebc);
+    fill_ghosts(a_yx, g.domain, ebc);
   }
-  void apply_laplacian_coeff(MultiFab& /*out*/, MultiFab& /*in*/, const MultiFab& /*eps_x*/,
-                             const MultiFab& /*eps_y*/, const MultiFab& /*a_xy*/,
-                             const MultiFab& /*a_yx*/) const {
-    deferred_op(
-        "apply_laplacian_coeff",
-        "the coefficiented matrix-free elliptic operator of a condensed-Schur Program on AMR "
-        "is deferred; use System, or a native AMR block.");
+  void apply_laplacian_coeff(MultiFab& out, MultiFab& in, const MultiFab& eps_x,
+                             const MultiFab& eps_y, const MultiFab& a_xy,
+                             const MultiFab& a_yx) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(in, g.domain, eng_->transport_bc());
+    apply_laplacian(in, g, out, /*coef=*/nullptr, /*eps=*/&eps_x, /*kappa=*/nullptr,
+                    /*eps_y=*/&eps_y, /*a_xy=*/&a_xy, /*a_yx=*/&a_yx);
   }
-  void schur_explicit_flux(MultiFab& /*out*/, const MultiFab& /*state*/, Real /*th_dt*/,
-                           int /*c_mx*/, int /*c_my*/, int /*c_bz*/) const {
-    deferred_op("schur_explicit_flux",
-                "a condensed-Schur Program on AMR is deferred; use System, or a native AMR block.");
+  void schur_explicit_flux(MultiFab& out, const MultiFab& state, Real th_dt, int c_mx, int c_my,
+                           int c_bz) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    const MultiFab& a = aux();
+    for (int li = 0; li < out.local_size(); ++li) {
+      const ConstArray4 s = state.fab(li).const_array();
+      const ConstArray4 b = a.fab(li).const_array();
+      for_each_cell(out.box(li),
+                    detail::SchurExplicitFluxKernelC{s, b, out.fab(li).array(), th_dt, c_mx,
+                                                     c_my, c_bz});
+    }
+    fill_ghosts(out, g.domain, coeff_bc(eng_->transport_bc()));
   }
-  void assemble_schur_rhs(MultiFab& /*rhs*/, MultiFab& /*phi_n*/, const MultiFab& /*state*/,
-                          Real /*th_dt*/, Real /*g*/, int /*c_mx*/, int /*c_my*/,
-                          int /*c_bz*/) const {
-    deferred_op("assemble_schur_rhs",
-                "a condensed-Schur Program on AMR is deferred; use System, or a native AMR block.");
+  void assemble_schur_rhs(MultiFab& rhs, MultiFab& phi_n, const MultiFab& state, Real th_dt,
+                          Real gcoef, int c_mx, int c_my, int c_bz) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    const MultiFab& a = aux();
+    const BoxArray& ba = rhs.box_array();
+    const DistributionMapping& dm = rhs.dmap();
+    fill_ghosts(phi_n, g.domain, eng_->transport_bc());
+    MultiFab lap(ba, dm, 1, 0);
+    apply_laplacian(phi_n, g, lap);
+    MultiFab neg_lap(ba, dm, 1, 0);
+    for (int li = 0; li < neg_lap.local_size(); ++li)
+      for_each_cell(neg_lap.box(li),
+                    pops::detail::NegateKernel{lap.fab(li).const_array(), neg_lap.fab(li).array()});
+    MultiFab fx(ba, dm, 2, 1);
+    for (int li = 0; li < state.local_size(); ++li) {
+      const ConstArray4 s = state.fab(li).const_array();
+      const ConstArray4 b = a.fab(li).const_array();
+      for_each_cell(fx.box(li), detail::SchurExplicitFluxKernelC{s, b, fx.fab(li).array(), th_dt,
+                                                                 c_mx, c_my, c_bz});
+    }
+    fill_ghosts(fx, g.domain, coeff_bc(eng_->transport_bc()));
+    const Real half_idx = Real(1) / (Real(2) * g.dx());
+    const Real half_idy = Real(1) / (Real(2) * g.dy());
+    for (int li = 0; li < rhs.local_size(); ++li)
+      for_each_cell(rhs.box(li), detail::SchurRhsAssembleKernelC{
+                                     neg_lap.fab(li).const_array(), fx.fab(li).const_array(),
+                                     rhs.fab(li).array(), gcoef, half_idx, half_idy});
   }
-  void schur_reconstruct(MultiFab& /*state*/, MultiFab& /*phi*/, Real /*th_dt*/, int /*c_rho*/,
-                         int /*c_mx*/, int /*c_my*/, int /*c_bz*/) const {
-    deferred_op("schur_reconstruct",
-                "a condensed-Schur Program on AMR is deferred; use System, or a native AMR block.");
+  void schur_reconstruct(MultiFab& state, MultiFab& phi, Real th_dt, int c_rho, int c_mx,
+                         int c_my, int c_bz) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    const MultiFab& a = aux();
+    fill_ghosts(phi, g.domain, eng_->transport_bc());
+    const Real half_idx = Real(1) / (Real(2) * g.dx());
+    const Real half_idy = Real(1) / (Real(2) * g.dy());
+    for (int li = 0; li < state.local_size(); ++li) {
+      const ConstArray4 ph = phi.fab(li).const_array();
+      const ConstArray4 b = a.fab(li).const_array();
+      Array4 st = state.fab(li).array();
+      for_each_cell(state.box(li),
+                    detail::SchurReconstructKernelC{ph, b, st, th_dt, half_idx, half_idy, c_rho,
+                                                    c_mx, c_my, c_bz});
+    }
   }
-  void schur_energy(MultiFab& /*state*/, const MultiFab& /*state_old*/, int /*c_rho*/, int /*c_mx*/,
-                    int /*c_my*/, int /*c_E*/) const {
-    deferred_op("schur_energy",
-                "a condensed-Schur Program on AMR is deferred; use System, or a native AMR block.");
+  void schur_energy(MultiFab& state, const MultiFab& state_old, int c_rho, int c_mx, int c_my,
+                    int c_E) const {
+    count_kernel();
+    for (int li = 0; li < state.local_size(); ++li) {
+      Array4 st = state.fab(li).array();
+      const ConstArray4 so = state_old.fab(li).const_array();
+      for_each_cell(state.box(li), detail::SchurEnergyKernelC{st, so, c_rho, c_mx, c_my, c_E});
+    }
   }
-  void neg_div_flux_into(MultiFab& /*r*/, MultiFab& /*fx*/, MultiFab& /*fy*/) const {
-    deferred_op(
-        "neg_div_flux_into",
-        "a named-flux (-div F) Program on AMR is deferred; use System, or a native AMR block "
-        "whose flux IR runs through the level RHS.");
+  void neg_div_flux_into(MultiFab& r, MultiFab& fx, MultiFab& fy) const {
+    count_kernel();
+    const Geometry g = eng_->level_geom(level_);
+    fill_ghosts(fx, g.domain, eng_->transport_bc());
+    fill_ghosts(fy, g.domain, eng_->transport_bc());
+    MultiFab divc(r.box_array(), r.dmap(), 1, 0);
+    for (int c = 0; c < r.ncomp(); ++c) {
+      apply_divergence(fx, fy, g, divc, /*cx=*/c, /*cy=*/c);
+      for (int li = 0; li < r.local_size(); ++li) {
+        const ConstArray4 d = divc.fab(li).const_array();
+        Array4 rv = r.fab(li).array();
+        const int comp = c;
+        for_each_cell(r.box(li), [=] POPS_HD(int i, int j) { rv(i, j, comp) = -d(i, j, 0); });
+      }
+    }
   }
 
-  // --- scheduler value cache: DEFERRED on AMR (v1), fail loud ----------------------------------------
-  // The codegen lowers a held / scheduled field-solve node (ADC-458) against these cache seams. The
-  // CacheManager that backs them is owned by System (per-installed-Program, keyed by node id); AMR v1
-  // has no AmrSystem cache store, so a held schedule on AMR is not wired. Same EXACT signatures as
-  // ProgramContext; each throws rather than silently caching nothing (which would read a stale value).
-  bool cache_should_update(int /*node_id*/, int /*every_n*/) const {
-    deferred_op("cache_should_update",
-                "a held / scheduled field solve under a compiled Program on AMR is deferred; use "
-                "System (the scheduler cache lives on System), or drop the schedule.");
+  // --- scheduler value cache ------------------------------------------------------------------------
+  bool cache_should_update(int node_id, int every_n) const {
+    const bool due = cache_.is_due(node_id, macro_step(), every_n);
+    if (due) {
+      facade_->profiler_handle().count("cache_misses");
+      facade_->profiler_handle().count("nodes_due");
+    } else {
+      facade_->profiler_handle().count("cache_hits");
+      facade_->profiler_handle().count("nodes_skipped");
+    }
+    return due;
   }
-  void cache_store_aux(int /*node_id*/) const {
-    deferred_op("cache_store_aux",
-                "the scheduler aux cache under a compiled Program on AMR is deferred; use System.");
+  void cache_store_aux(int node_id) const {
+    cache_.store(node_id, aux(), macro_step());
   }
-  void cache_restore_aux(int /*node_id*/) const {
-    deferred_op("cache_restore_aux",
-                "the scheduler aux cache under a compiled Program on AMR is deferred; use System.");
+  void cache_restore_aux(int node_id) const {
+    aux() = cache_.retrieve(node_id);
   }
-  void cache_store_scratch(int /*node_id*/, const MultiFab& /*scratch*/) const {
-    deferred_op(
-        "cache_store_scratch",
-        "the scheduler scratch cache under a compiled Program on AMR is deferred; use System.");
+  void cache_store_scratch(int node_id, const MultiFab& scratch) const {
+    cache_.store(node_id, scratch, macro_step());
   }
-  void cache_restore_scratch(int /*node_id*/, MultiFab& /*scratch*/) const {
-    deferred_op(
-        "cache_restore_scratch",
-        "the scheduler scratch cache under a compiled Program on AMR is deferred; use System.");
+  void cache_restore_scratch(int node_id, MultiFab& scratch) const {
+    scratch = cache_.retrieve(node_id);
   }
-  void cache_accumulate_dt(int /*node_id*/, Real /*dt*/) const {
-    deferred_op(
-        "cache_accumulate_dt",
-        "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
-        "System.");
+  void cache_accumulate_dt(int node_id, Real dt) const {
+    cache_.accumulate_dt(node_id, dt);
   }
-  Real cache_effective_dt(int /*node_id*/, Real /*dt_now*/) const {
-    deferred_op(
-        "cache_effective_dt",
-        "the scheduler accumulate_dt policy under a compiled Program on AMR is deferred; use "
-        "System.");
+  Real cache_effective_dt(int node_id, Real dt_now) const {
+    return cache_.effective_dt(node_id, dt_now);
   }
   /// Fail loud: an `error`-policy scheduled node reached off cadence. ProgramContext throws here; the
   /// AMR path never installs a schedule (the cache seams above fail loud first), so this only fires if
   /// the body reaches the off-cadence branch directly. Keep the exact [[noreturn]] signature.
   [[noreturn]] void scheduler_error(const std::string& what) const {
-    throw std::runtime_error("pops Program scheduler (AMR): " + what +
-                             " (scheduled Programs on AMR are deferred in v1; use System)");
+    throw std::runtime_error("pops Program scheduler (AMR): " + what);
   }
 
  private:
-  [[noreturn]] static void history_deferred(const std::string& name) {
-    throw std::runtime_error(
-        "AmrProgramContext history '" + name +
-        "': multistep history rings under a compiled Program on AMR are deferred (v1, to avoid an "
-        "unvalidated coarse-only ring). Use System for an Adams-Bashforth-style Program.");
+  struct HistorySlot {
+    int depth = 0;
+    bool initialized = false;
+    std::vector<MultiFab> ring;
+  };
+  static void ensure_history_allocated(HistorySlot& h, const MultiFab& tmpl) {
+    if (!h.ring.empty())
+      return;
+    h.ring.reserve(static_cast<std::size_t>(h.depth));
+    for (int k = 0; k < h.depth; ++k) {
+      MultiFab slot(tmpl.box_array(), tmpl.dmap(), tmpl.ncomp(), tmpl.n_grow());
+      slot.set_val(Real(0));
+      h.ring.push_back(std::move(slot));
+    }
   }
-  /// Fail loud for an op the codegen can emit but the v1 AMR Program path does not yet wire (Schur /
-  /// named-flux / scheduled Programs). [[noreturn]] so a non-void stub needs no dummy return -- the
-  /// caller's signature stays byte-faithful to ProgramContext (the duck-typing requirement) without
-  /// fabricating a value. @p op names the seam; @p detail names the alternative (System or the native
-  /// AMR route) so the message is actionable, mirroring the inline fail-loud stubs above.
-  [[noreturn]] static void deferred_op(const char* op, const char* detail) {
-    throw std::runtime_error(std::string("AmrProgramContext: ") + op +
-                             " is not wired on the AMR Program path (v1); " + detail);
+  static BCRec coeff_bc(const BCRec& bc) {
+    auto fo = [](BCType t) { return t == BCType::Periodic ? t : BCType::Foextrap; };
+    BCRec b;
+    b.xlo = fo(bc.xlo);
+    b.xhi = fo(bc.xhi);
+    b.ylo = fo(bc.ylo);
+    b.yhi = fo(bc.yhi);
+    return b;
   }
 
   AmrSystem* facade_;
@@ -412,6 +520,8 @@ class AmrProgramContext {
   mutable int level_ = 0;
   mutable bool solved_this_step_ = false;
   mutable std::optional<GeometricMG> mg_precond_;
+  mutable CacheManager cache_;
+  mutable std::map<std::string, HistorySlot> histories_;
 };
 
 }  // namespace program

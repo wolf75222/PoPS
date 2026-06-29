@@ -57,6 +57,36 @@ struct AmrDiscLF {
 
 namespace detail {
 
+inline int resolve_refinement_component_single_block(const std::string& origin,
+                                                     const VariableSet& cons,
+                                                     const std::string& name,
+                                                     const std::string& role) {
+  if (name.empty() && role.empty())
+    return 0;
+  if (!name.empty() && !role.empty())
+    throw std::runtime_error(origin +
+                             " : select the refinement variable by NAME or by ROLE, not both");
+  if (!name.empty()) {
+    for (int i = 0; i < static_cast<int>(cons.names.size()); ++i)
+      if (cons.names[i] == name)
+        return i;
+    std::string have;
+    for (std::size_t i = 0; i < cons.names.size(); ++i) {
+      if (i)
+        have += ", ";
+      have += cons.names[i];
+    }
+    throw std::runtime_error(origin + " : variable '" + name +
+                             "' absent from single-block AMR model (conserved variables : " + have +
+                             ")");
+  }
+  const int idx = cons.index_of(role);
+  if (idx < 0)
+    throw std::runtime_error(origin + " : role '" + role +
+                             "' absent from single-block AMR model");
+  return idx;
+}
+
 // Projection ponctuelle post-pas appliquee PAR NIVEAU (ADC-177) : miroir de PointwiseProject
 // (block_builder.hpp) mais sur la pile de niveaux AMR ; aux = lev.aux (cable par AmrRuntime).
 // Defini en tete du namespace : utilise par build_amr_compiled (mono-bloc) ET build_amr_block
@@ -161,6 +191,8 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
 
   auto cpl = std::make_shared<Coupler>(model, g, bac, bp.poisson_bc, std::move(levels), bp.wall,
                                        !bp.distribute_coarse);
+  cpl->set_poisson_options(static_cast<Real>(bp.poisson_epsilon),
+                           static_cast<Real>(bp.poisson_abs_tol));
   // Coarse seed: COMPLETE conservative state (preferred, set_conservative_state) otherwise density
   // only (historical). coupler_inject_coarse_to_fine_mb prolongs ALL components (loop k<nc), so the
   // momentum of the seed propagates freely to the fine levels -- no change of prolongation.
@@ -174,7 +206,12 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     coupler_inject_coarse_to_fine_mb(cpl->coarse(), Lv[k].U, !bp.distribute_coarse);
 
   const double thr = bp.refine_threshold;
-  auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
+  const int refine_comp = resolve_refinement_component_single_block(
+      "AmrSystem::set_refinement", Model::conservative_vars(), bp.refine_var_name,
+      bp.refine_var_role);
+  auto crit = [thr, refine_comp](const ConstArray4& a, int i, int j) {
+    return a(i, j, refine_comp) > thr;
+  };
   if (cpl->levels().size() > 1)
     cpl->regrid(crit);  // no regrid on a mono-level hierarchy (amr-schur)
   // model-NAMED aux (ADC-291): seed the static named fields onto the coupler's shared aux BEFORE the

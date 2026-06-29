@@ -122,9 +122,11 @@ void init_amr(py::module_& m) {
           "solver is ALWAYS GeometricMG and the right-hand side ALWAYS the sum of the elliptic "
           "bricks. rhs: 'charge_density' | 'composite'. solver: 'geometric_mg' only (no "
           "FFT on the hierarchy). bc: 'auto' | 'periodic' | 'dirichlet' | 'neumann'. wall: "
-          "'none' | 'circle' (circular conducting wall, requires wall_radius > 0).",
+          "'none' | 'circle' (circular conducting wall, requires wall_radius > 0). epsilon is the "
+          "constant permittivity and abs_tol is the GeometricMG absolute tolerance floor.",
           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
-          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0)
+          py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
+          py::arg("epsilon") = 1.0, py::arg("abs_tol") = 0.0)
       // GLOBAL step bound + ACTIVE bound (AMR StabilityPolicy, System.add_dt_bound parity).
       .def("add_dt_bound", &AmrSystem::add_dt_bound, py::arg("label"), py::arg("fn"))
       .def("last_dt_bound", &AmrSystem::last_dt_bound)

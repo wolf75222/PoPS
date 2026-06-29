@@ -279,12 +279,12 @@ class _SystemInstall:
             if spatial.limiter == "weno5":
                 raise ValueError(
                     "add_equation: limiter 'weno5' not supported on backend 'prototype' (JIT, host "
-                    "Rusanov order-1 residual, without assemble_rhs); use backend='aot'/'production' "
+                    "Rusanov order-1 residual, without assemble_rhs); use backend=pops.codegen.AOT()/'production' "
                     "(WENO5 wired end to end) or add_block (composed model pops.Model(...)).")
             if spatial.flux != "rusanov":
                 raise ValueError(
                     "add_equation: backend 'prototype' (JIT, host Rusanov order-1 residual) only exposes "
-                    "riemann='rusanov' (got '%s'); use backend='aot'/'production' for "
+                    "riemann='rusanov' (got '%s'); use backend=pops.codegen.AOT()/'production' for "
                     "HLLC/Roe" % spatial.flux)
             # evolve=False (FROZEN block / fixed background) is NOT wired: the add_dynamic_block ABI does
             # not carry evolve (push_dynamic forces it to true on the C++ side) -> the block would be
@@ -301,7 +301,7 @@ class _SystemInstall:
             if getattr(spatial, "positivity_floor", 0.0) > 0.0:
                 raise ValueError(
                     "add_equation: positivity_floor not supported on backend 'prototype' (dedicated "
-                    "host residual, without high-order reconstruction); use backend='aot'/'production' "
+                    "host residual, without high-order reconstruction); use backend=pops.codegen.AOT()/'production' "
                     "or a composed model pops.Model(...) -> add_block.")
             # NB wave_speed_cache (ADC-199): no dedicated guard here -- the cache requires riemann='hll',
             # already rejected above on 'prototype' (rusanov order 1 only) -> never silently ignored on
@@ -313,23 +313,23 @@ class _SystemInstall:
             # ABI of the AOT .so (add_compiled_block) does NOT carry a cadence: the block would run at stride=1
             # SILENTLY. We therefore REJECT stride > 1 on this backend (explicit route) rather than
             # ignore it. The per-block stride is wired on add_block (composed native) and add_native_block
-            # (backend='production'). We read time.stride AND the stride= override (nstride covers both).
+            # (backend=pops.codegen.Production()). We read time.stride AND the stride= override (nstride covers both).
             if nstride != 1:
                 raise ValueError(
                     "add_equation: stride=%d not supported on backend 'aot' (the AOT .so ABI does not "
                     "carry the cadence; the block would run at stride=1 silently). Use "
-                    "backend='production' (native path, cadence wired) or a composed native model "
+                    "backend=pops.codegen.Production() (native path, cadence wired) or a composed native model "
                     "pops.Model(...) -> add_block." % nstride)
             # evolve=False (FROZEN block / fixed background) is NOT wired: the add_compiled_block ABI does
             # not carry evolve (add_compiled_block forces it to true on the C++ side) -> the block would be
             # advanced SILENTLY. We REJECT it (rejection rather than silent ignore). For a frozen field,
-            # use backend='production' (add_native_block carries evolve) or a composed native model
+            # use backend=pops.codegen.Production() (add_native_block carries evolve) or a composed native model
             # pops.Model(...) -> add_block(..., evolve=False) (or add_background).
             if not evolve:
                 raise ValueError(
                     "add_equation: evolve=False not supported on backend 'aot' (the AOT .so ABI does not "
                     "carry evolve; the block would be advanced silently). Use "
-                    "backend='production' (native path, evolve wired) or a composed native model "
+                    "backend=pops.codegen.Production() (native path, evolve wired) or a composed native model "
                     "pops.Model(...) -> add_block(..., evolve=False) (or add_background) for a frozen field.")
             # wave_speed_cache (ADC-199): the AOT .so ABI does not carry the wave speed cache -> it would
             # be silently ignored. Explicit rejection (the cache is only wired on the composed native
@@ -377,7 +377,7 @@ class _SystemInstall:
         """Attach a Schur-condensed source stage to an already-added block (ADC-308).
 
         Thin public pass-through to the C++ binding (_pops.System.set_source_stage): same flat
-        signature and defaults. add_equation(time=pops.Split(source=pops.CondensedSchur(...))) wires
+        signature and defaults. add_equation(time=pops.Split(source=pops.ElectrostaticLorentzSchur(...))) wires
         this internally; this method exposes the same control for a block added with a plain
         transport time scheme, so cases configure the stage without reaching into the private _s.
         @p name: block; @p kind: 'electrostatic_lorentz'; @p theta in (0, 1]; @p alpha: stage
@@ -394,31 +394,13 @@ class _SystemInstall:
         self._add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
 
-    def set_poisson(self, rhs="charge_density", solver="geometric_mg", bc="auto",
-                    wall="none", wall_radius=0.0, epsilon=1.0, abs_tol=0.0):
-        """Configure the shared system Poisson solve (thin wrapper over the native binding).
+    def _set_poisson(self, rhs="charge_density", solver="geometric_mg", bc="auto",
+                     wall="none", wall_radius=0.0, epsilon=1.0, abs_tol=0.0):
+        """Private lowering seam for the shared native Poisson solve.
 
-        Low-level runtime seam. The documented PUBLIC elliptic surface is the typed
-        ``pops.fields.PoissonProblem(unknown="phi", equation=(-laplacian(phi) == rhs),
-        solver=GeometricMG(), bcs=[Dirichlet()])`` attached with ``case.field(...)`` and lowered
-        by ``pops.compile`` / ``pops.bind`` (which call this method internally); ``set_poisson``
-        stays for that seam, the native/AMR runtime, and the tests.
-
-        Spec 5 sec.8.16 / sec.14.2.6 let ``bc`` and ``wall`` be TYPED objects in addition to the
-        legacy strings::
-
-            from pops import Dirichlet, Neumann, Periodic
-            from pops.mesh.geometry import Disc, NoWall
-            sim.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))   # == bc="dirichlet", wall="circle"
-            sim.set_poisson(bc="dirichlet", wall=NoWall())           # == bc="dirichlet", wall="none"
-
-        A typed boundary brick (:class:`pops.Dirichlet` / :class:`pops.Neumann` /
-        :class:`pops.Periodic`) lowers to its ``bc`` token. A typed
-        :class:`pops.mesh.geometry.Disc` lowers to ``wall="circle"`` + its radius (the
-        ``wall_radius=`` argument is then ignored in favour of the disc's radius); a
-        :class:`pops.mesh.geometry.NoWall` lowers to ``wall="none"``. The legacy string forms are
-        passed through unchanged (byte-identical native call). All the other arguments mirror the
-        native ``set_poisson`` defaults verbatim.
+        Public code configures fields through typed ``pops.fields`` / ``pops.solvers`` descriptors
+        on a ``pops.Case`` and then calls ``pops.compile`` / ``pops.bind``. This method exists only
+        for that lowering path and focused native-runtime tests.
         """
         bc = _lower_bc(bc)
         lowered = _lower_wall(wall)
@@ -431,7 +413,8 @@ class _SystemInstall:
                            wall_radius=0.0):
         """EPM: configures the system elliptic model (Poisson is its current instance).
         model = pops.elliptic(operator=pops.div_eps_grad(eps), rhs=pops.composite_rhs(),
-        output=pops.electric_field_from_potential()). set_poisson(...) remains the equivalent shortcut.
+        output=pops.electric_field_from_potential()). Low-level runtime seam; public field
+        configuration goes through typed ``pops.fields`` descriptors and ``pops.bind``.
 
         Operator: div(eps grad) with CONSTANT eps (eps != 1 supported: eps lap phi = f); variable
         eps(x) is plugged in via set_epsilon_field. Right-hand side: composite_rhs() = GENERIC sum
@@ -444,13 +427,24 @@ class _SystemInstall:
         if not isinstance(model.rhs, CompositeRhs):
             raise NotImplementedError("add_elliptic_model: rhs must be composite_rhs() (sum of the "
                                       "per-block bricks) or charge_density() (its usual case)")
-        kind = solver.kind if solver is not None else "geometric_mg"
+        if solver is None:
+            kind = "geometric_mg"
+        elif hasattr(solver, "scheme"):
+            kind = solver.scheme
+        elif hasattr(solver, "kind"):
+            # Private/internal legacy carrier. Public callers should use pops.solvers.GeometricMG()
+            # or pops.solvers.FFT(); the top-level EllipticSolver export is removed.
+            kind = solver.kind
+        else:
+            raise TypeError(
+                "add_elliptic_model: solver must be a typed pops.solvers elliptic descriptor "
+                "(GeometricMG() / FFT()), got %r" % (type(solver).__name__,))
         # Honest token: "composite" for a generic right-hand side, "charge_density" (alias,
         # bit-identical) when all blocks carry a charge density. Both take the
         # SAME numerical path on the C++ side (sum of each block's elliptic bricks).
         rhs_tok = "charge_density" if type(model.rhs) is ChargeDensitySource else "composite"
-        self.set_poisson(rhs=rhs_tok, solver=kind, bc=bc, wall=wall, wall_radius=wall_radius,
-                         epsilon=model.operator.epsilon)
+        self._set_poisson(rhs=rhs_tok, solver=kind, bc=bc, wall=wall, wall_radius=wall_radius,
+                          epsilon=model.operator.epsilon)
 
     def add_coupling(self, coupling):
         """Add an inter-species coupling (operator-split, applied after transport):

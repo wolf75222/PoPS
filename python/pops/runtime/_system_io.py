@@ -19,7 +19,7 @@ class _SystemIO:
     # PR-IO-3. ATOMIC write (.tmp file then os.replace: a crash mid-write never
     # corrupts a previous checkpoint).
     # ------------------------------------------------------------------
-    def write(self, path, format="vtk", step=None, fields=None, parallel=False):
+    def write(self, path, format=None, step=None, fields=None, parallel=False):
         """VISUALIZATION OUTPUT: writes the current state to an opened file (ParaView/numpy).
 
         - ``format="vtk"``: ImageData .vti ASCII (Cartesian; opened by ParaView / VisIt) -- one
@@ -43,6 +43,9 @@ class _SystemIO:
         import os
         import numpy as np
         from pops import _pops
+        from pops.output.formats import VTK
+        from pops.runtime._output_driver import _format_token
+        format = _format_token(VTK() if format is None else format)
         if parallel and format != "hdf5":
             raise ValueError(
                 "write: parallel=True is only supported for format='hdf5' (write by "

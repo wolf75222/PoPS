@@ -1,13 +1,10 @@
 """pops.mesh.masks -- transport-mask descriptors for embedded boundaries (Spec 5 sec.8.16.1).
 
-The typed replacement for the ``set_disc_domain(..., mode="none"|"staircase"|"cutcell")``
-string. A mask says HOW transport is masked at an embedded boundary; the runtime applies
-it. Inert descriptors.
+The typed replacement for disc transport modes. A mask says HOW transport is masked at an
+embedded boundary; the runtime applies it. Inert descriptors.
 
 Each mask carries the native disc-transport token (``none`` / ``staircase`` / ``cutcell``) that
-the C++ ``set_disc_domain`` / ``set_geometry_mode`` consume, exposed via :meth:`lower` (and the
-shared :func:`lower_disc_mode`, which also passes a legacy string through unchanged). The lowered
-token is byte-identical to what a user passes today in the string form.
+the C++ ``set_disc_domain`` / ``set_geometry_mode`` consume, exposed via :meth:`lower`.
 """
 from .._descriptor import MeshDescriptor
 
@@ -60,14 +57,12 @@ class CutCell(_TransportMask):
         return {"masked_transport": True, "conservative": True}
 
 
-def lower_disc_mode(mode):
+def _lower_disc_mode(mode):
     """Lower a disc-transport ``mode`` to its native token (Spec 5 sec.8.16).
 
     Accepts a typed :class:`_TransportMask` (``NoMask`` / ``Staircase`` / ``CutCell``) -> its
-    ``mode_token``, OR the legacy string (``"none"`` / ``"staircase"`` / ``"cutcell"``), which is
-    validated and passed through unchanged. Any other type is a clear :class:`TypeError`; an
-    unknown string is a :class:`ValueError` naming the accepted tokens. Mirrors the
-    string-or-typed coercion used elsewhere (the string path stays byte-identical).
+    ``mode_token``. The private runtime seam may also pass the already-lowered native string token;
+    public constructors reject string selectors before reaching this helper.
 
     Args:
         mode: A ``pops.mesh.masks`` descriptor or a legacy disc-mode string.
@@ -91,4 +86,4 @@ def lower_disc_mode(mode):
     return token
 
 
-__all__ = ["NoMask", "Staircase", "CutCell", "DISC_MODE_TOKENS", "lower_disc_mode"]
+__all__ = ["NoMask", "Staircase", "CutCell", "DISC_MODE_TOKENS"]

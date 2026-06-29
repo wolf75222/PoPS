@@ -207,21 +207,22 @@ class HybridModel:
                 + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
                 + key + install + self._emit_metadata("pops_generated::ProdModel"))
 
-    def compile(self, backend="aot", so_path=None, include=None, name=None, cxx=None, std=None,
+    def compile(self, backend=None, so_path=None, include=None, name=None, cxx=None, std=None,
                 target="system"):
         """Compile the hybrid composite into a CompiledModel.
 
-        ``backend`` :
+        ``backend`` is a typed descriptor (``pops.codegen.AOT()`` by default for the hybrid flat
+        ABI path):
 
-        - 'prototype' -> add_dynamic_block: JIT, host VIRTUAL dispatch (order-1 Rusanov), fast
+        - ``JIT()`` -> add_dynamic_block: JIT, host VIRTUAL dispatch (order-1 Rusanov), fast
           iteration ; no MPI/AMR, no HLLC/Roe flux nor primitive recon ;
-        - 'aot' -> add_compiled_block: self-sufficient .so (flat ABI, host-marshaled), mono-rank
+        - ``AOT()`` -> add_compiled_block: self-sufficient .so (flat ABI, host-marshaled), mono-rank
           production path ; without MPI/AMR ;
-        - 'production' -> add_native_block: zero-copy native loader that inlines add_compiled_model<>, SAME
+        - ``Production()`` -> add_native_block: zero-copy native loader that inlines add_compiled_model<>, SAME
           path as add_block (closures on the facade's real context), MPI by construction.
           The names/roles/gamma come from the .so metadata (no names=).
 
-        ``target`` : 'system' (default) | 'amr_system'. 'amr_system' REQUIRES backend='production': the loader
+        ``target`` : 'system' (default) | 'amr_system'. 'amr_system' REQUIRES backend=pops.codegen.Production(): the loader
         inlines add_compiled_model(AmrSystem&) (symbol pops_install_native_amr), the only AMR .so path ; to be
         plugged via AmrSystem.add_equation. The other backends have no AMR counterpart.
 
@@ -238,10 +239,9 @@ class HybridModel:
         from pops.codegen.cache import (_cache_so_path, _record_so_backend,
                                         _backend_distinct_so_path, _dsl_optflags)
         from pops.codegen.abi import _abi_key_python
-        from pops.codegen.backends import lower_backend
-        # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
-        # well as the legacy string; lower it before the backend guard so both selectors behave the
-        # same. A plain string / None passes through unchanged (transparent coercion).
+        from pops.codegen.backends import AOT, lower_backend
+        if backend is None:
+            backend = AOT()
         backend = lower_backend(backend)
         if backend not in ("prototype", "aot", "production"):
             raise ValueError("HybridModel.compile: backend 'prototype' | 'aot' | 'production' (got %r)"
@@ -250,7 +250,7 @@ class HybridModel:
             raise ValueError("HybridModel.compile: target 'system' | 'amr_system' (got %r)" % (target,))
         if target == "amr_system" and backend != "production":
             raise ValueError("HybridModel.compile: target='amr_system' only exists for "
-                             "backend='production' (native AMR path) ; got backend=%r" % (backend,))
+                             "backend=pops.codegen.Production() (native AMR path) ; got backend=%r" % (backend,))
         mode = {"prototype": "jit", "aot": "aot", "production": "native"}[backend]
         if include is None:
             include = pops_include()

@@ -20,7 +20,6 @@ from pops.runtime._bricks_model import (
     Model, CompositeModel, _native_to_brick,
     DivEpsGrad, CompositeRhs, ChargeDensitySource, ElectricFieldFromPotential, EllipticModel,
     div_eps_grad, charge_density, composite_rhs, electric_field_from_potential, elliptic,
-    EllipticSolver,
 )
 from pops.runtime._bricks_scheme import (
     Ionization, Collision, ThermalExchange,
@@ -29,7 +28,7 @@ from pops.runtime._bricks_scheme import (
 from pops.runtime._bricks_time import (
     _role_to_stable, _norm_implicit,
     IMEX, SourceImplicit, SourceImplicitBE, IMEXRK, Role,
-    CondensedSchur, Split, Strang,
+    Split, Strang,
 )
 from pops.runtime._bricks_typed import (
     Dirichlet, Neumann, Periodic, ElectrostaticLorentzSchur,
@@ -43,10 +42,10 @@ __all__ = [
     "Model", "CompositeModel", "_native_to_brick",
     "DivEpsGrad", "CompositeRhs", "ChargeDensitySource", "ElectricFieldFromPotential",
     "EllipticModel", "div_eps_grad", "charge_density", "composite_rhs",
-    "electric_field_from_potential", "elliptic", "EllipticSolver",
+    "electric_field_from_potential", "elliptic",
     "Ionization", "Collision", "ThermalExchange",
     "Spatial", "FiniteVolume", "Explicit", "_role_to_stable", "_norm_implicit",
     "IMEX", "SourceImplicit", "SourceImplicitBE", "IMEXRK", "Role",
-    "CondensedSchur", "ElectrostaticLorentzSchur", "Split", "Strang",
+    "ElectrostaticLorentzSchur", "Split", "Strang",
     "Dirichlet", "Neumann", "Periodic",
 ]

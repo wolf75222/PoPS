@@ -306,6 +306,21 @@ class AmrCouplerMP {
   std::vector<AmrLevelMP>& levels() { return stack_.levels(); }
   MultiFab& coarse() { return stack_.coarse(); }
   const MultiFab& coarse() const { return stack_.coarse(); }
+
+  /// Configures the coarse GeometricMG used by the mono-block AMR coupler. Defaults
+  /// (epsilon=1, abs_tol=0) preserve the historical path.
+  void set_poisson_options(Real epsilon = Real(1), Real abs_tol = Real(0)) {
+    if (!(epsilon > Real(0)) || !std::isfinite(epsilon))
+      throw std::runtime_error("AmrCouplerMP::set_poisson_options : epsilon must be > 0 and finite");
+    if (abs_tol < Real(0) || !std::isfinite(abs_tol))
+      throw std::runtime_error("AmrCouplerMP::set_poisson_options : abs_tol must be >= 0 and finite");
+    mg_.set_abs_tol(abs_tol);
+    if (epsilon != Real(1)) {
+      const Real eps = epsilon;
+      mg_.set_epsilon([eps](Real, Real) { return eps; });
+    }
+  }
+
   // coarse-level aux: (phi, dphi/dx, dphi/dy), component 0 = phi (cf. compute_aux). Same
   // layout as coarse(). Read by the AmrSystem potential hook (coupler_read_coarse_phi).
   MultiFab& aux0() { return stack_.aux(0); }

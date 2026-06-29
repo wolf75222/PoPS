@@ -81,6 +81,7 @@ fi
 
 # --- discovery vars + stable cross-worktree ccache --------------------------------------------------
 export CMAKE_PREFIX_PATH="${CONDA_PREFIX}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export POPS_INCLUDE="$HERE/include"
 export Kokkos_ROOT="${Kokkos_ROOT:-$CONDA_PREFIX}"
 export POPS_KOKKOS_ROOT="${POPS_KOKKOS_ROOT:-$CONDA_PREFIX}"
 # A ccache shared by every checkout, with absolute paths rewritten relative to the repo root that owns

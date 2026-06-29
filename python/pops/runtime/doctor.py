@@ -170,7 +170,7 @@ def doctor(verbose=True):
         kroot = _tc._native_kokkos_root()
         if kroot is None:
             checks["kokkos_root"] = (False,
-                "POPS_KOKKOS_ROOT / Kokkos_ROOT not set -> DSL backend='production'/'aot' cannot compile "
+                "POPS_KOKKOS_ROOT / Kokkos_ROOT not set -> DSL backend=pops.codegen.Production()/'aot' cannot compile "
                 "(the tutorial dead-ends on 'no DSL backend'). Fix (conda) :\n"
                 "      conda env config vars set POPS_KOKKOS_ROOT=\"$CONDA_PREFIX\"\n"
                 "      conda env config vars set Kokkos_ROOT=\"$CONDA_PREFIX\"\n"
@@ -217,7 +217,7 @@ def doctor(verbose=True):
         if all(ok for ok, _ in checks.values()):
             print("=> healthy environment : module importable, DSL compilable, ABI coherent.")
         else:
-            print("=> fix the FAILs above before using the DSL backend='production'.")
+            print("=> fix the FAILs above before using the DSL backend=pops.codegen.Production().")
     return checks
 
 
@@ -339,9 +339,8 @@ def capabilities():
                    "(adjacent patches/>2 levels/MPI/multi-block) to be done",
         },
         "backends_dsl": {
-            "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "
-                       "baked compiler + matching headers), aot otherwise ; reason set on "
-                       "CompiledModel.backend_auto_reason ; explicit backend = short-circuit",
+            "default": "Production() descriptor ; backend='auto' removed from public APIs. "
+                       "resolve_auto_backend() remains only as a diagnostic helper.",
             "prototype": {"adder": "add_dynamic_block",
                           "riemann": [t for t in riemann_all if t == "rusanov"],
                           "limiter": dsl_limiters_low, "stride": False,
@@ -415,7 +414,7 @@ def capabilities():
                 },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-                         "AMR path needs backend='production' target='amr_system', on polar a "
+                         "AMR path needs backend=pops.codegen.Production() target='amr_system', on polar a "
                          "System+AOT compiled block (the in-AMR compiled .so is mono-level) ; the "
                          "opt-in single-block composite-FAC Poisson path (set_composite_poisson, not "
                          "facade-reachable) does not yet carry named aux to the fine level",

@@ -131,13 +131,13 @@ class SourceImplicit:
     future effort. SourceImplicit = source-only IMEX (strictly equivalent to IMEX/pops.Implicit,
     bit-identical numerics).
 
-    WHEN TO USE IT (SourceImplicit LOCAL vs pops.CondensedSchur GLOBAL) -- both mechanisms
+    WHEN TO USE IT (SourceImplicit LOCAL vs pops.ElectrostaticLorentzSchur GLOBAL) -- both mechanisms
     treat a stiff source implicitly, but at different scales:
 
     - SourceImplicit is LOCAL: the implicit part couples only the components of A SINGLE CELL
       (backward-Euler solved by per-cell Newton), there is NO spatial coupling between
       cells. Suited to purely local stiff terms (relaxation, reactions, friction).
-    - pops.CondensedSchur (via pops.Split) is GLOBAL: it assembles and solves a tensor
+    - pops.ElectrostaticLorentzSchur (via pops.Split) is GLOBAL: it assembles and solves a tensor
       elliptic operator by Schur (Krylov BiCGStab) that COUPLES the whole domain. Suited to
       non-local stiff Lorentz / electrostatic coupling (e.g. magnetized Euler-Poisson from the
       Hoffart paper, arXiv:2510.11808). A local stiff source does NOT need Schur.
@@ -203,7 +203,7 @@ class IMEXRK:
     polar grid, compiled models (.so: prototype/aot/production) and the Strang/Schur splittings
     REJECT it explicitly (use pops.IMEX / pops.Explicit on those paths).
 
-    - ``scheme``: "ars222" (only wired scheme; another name raises an explicit error).
+    The only wired scheme is ARS(2,2,2); the constructor therefore takes no public ``scheme=`` string.
     - ``substeps=N``: substeps per macro-step (cf. pops.Explicit). Default 1.
     - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. pops.Explicit). Default 1.
     - ``newton_*``: SAME options as pops.IMEX (max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy/
@@ -217,13 +217,12 @@ class IMEXRK:
 
     kind = "imexrk_ars222"
 
-    def __init__(self, scheme="ars222", substeps=1, stride=1,
+    def __init__(self, scheme=None, substeps=1, stride=1,
                  newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
                  newton_fd_eps=1e-7, newton_diagnostics=False, newton_damping=1.0,
                  newton_fail_policy="none"):
-        if scheme != "ars222":
-            raise ValueError("IMEXRK: scheme 'ars222' (only wired IMEX-RK scheme; got %r)"
-                             % (scheme,))
+        if scheme is not None:
+            raise TypeError("IMEXRK(scheme=...) is not public PoPS API; use IMEXRK().")
         if int(substeps) < 1:
             raise ValueError("IMEXRK: substeps >= 1 (got %r)" % (substeps,))
         if int(stride) < 1:
@@ -235,7 +234,7 @@ class IMEXRK:
         if newton_fail_policy not in ("none", "warn", "throw"):
             raise ValueError("IMEXRK: newton_fail_policy 'none'|'warn'|'throw' (got %r)"
                              % (newton_fail_policy,))
-        self.scheme = str(scheme)
+        self.scheme = "ars222"
         self.substeps = int(substeps)
         self.stride = int(stride)
         self.newton_max_iters = int(newton_max_iters)
@@ -250,7 +249,8 @@ class IMEXRK:
 class Role:
     """PHYSICAL roles of a model's components (cf. VariableRole on the C++ side / variable_roles).
 
-    Lets you address a component by its MEANING in pops.CondensedSchur(density=pops.Role.Density,
+    Lets you address a component by its MEANING in
+    pops.ElectrostaticLorentzSchur(density=pops.Role.Density,
     momentum=(pops.Role.MomentumX, pops.Role.MomentumY), energy=pops.Role.Energy) rather than by a literal
     name. The values are the STABLE keys expected by the C++ (role_from_name: snake_case). The
     role -> component RESOLUTION is done on the C++ side (the block reads its own VariableRole): these
@@ -276,7 +276,10 @@ class CondensedSchur:
     velocity / Lorentz and MAPS the fields onto the block's physical roles. This is the `source=` of an
     pops.Split temporal policy (EXPLICIT / IMPLICIT splitting).
 
-    kind="electrostatic_lorentz" (only one for now) selects ElectrostaticLorentzCondensation:
+    The public constructor is ``pops.ElectrostaticLorentzSchur(...)``. ``CondensedSchur`` stores an
+    internal C++ routing token, but it does not accept a public ``kind=`` selector.
+
+    The electrostatic-Lorentz route selects ElectrostaticLorentzCondensation:
     the stage assembles the condensed elliptic operator A = I + theta^2 dt^2 alpha rho B^{-1}, solves it
     (MG-preconditioned BiCGStab), reconstructs the velocity v = B^{-1}(v^n - theta dt grad phi) and extrapolates
     to the full step. Everything is in C++ (CondensedSchurSourceStepper, #126): NO per-cell Python callback.
@@ -288,7 +291,7 @@ class CondensedSchur:
     GEOMETRY: wired in CARTESIAN (System(mesh=pops.CartesianMesh(...))) AND in POLAR
     (System(mesh=pops.PolarMesh(...)), ring (r, theta), Track A step 2c). The choice of the condensed stepper
     (cartesian CondensedSchurSourceStepper / polar PolarCondensedSchurSourceStepper) is made on the C++ side
-    according to the System geometry: the SAME pops.CondensedSchur(...) is used in both cases. The
+    according to the System geometry: the SAME pops.ElectrostaticLorentzSchur(...) is used in both cases. The
     polar counterpart is MULTI-RANK-SAFE (correct collectives under MPI) but the facade still builds
     ONE global box (on the owner rank): correct and bit-identical to single-rank, without
     effective parallelism at this level -- the facade theta decomposition is a dedicated follow-up (update
@@ -313,19 +316,31 @@ class CondensedSchur:
       made configurable by the 2026-06 audit (explicit numerical constants).
     """
 
-    def __init__(self, kind="electrostatic_lorentz", theta=0.5, alpha=1.0,
+    def __init__(self, theta=0.5, alpha=1.0,
                  density=Role.Density, momentum=(Role.MomentumX, Role.MomentumY),
                  energy=None, magnetic_field="B_z", potential="phi",
-                 krylov_tol=None, krylov_max_iters=None):
+                 krylov_tol=None, krylov_max_iters=None, _kind="electrostatic_lorentz",
+                 _allow_base=False, **kw):
+        if "kind" in kw:
+            raise TypeError(
+                "CondensedSchur(kind=...) is not public PoPS API; use "
+                "ElectrostaticLorentzSchur(...).")
+        if kw:
+            raise TypeError("CondensedSchur: unexpected keyword argument(s): %s"
+                            % ", ".join(sorted(kw)))
+        if not _allow_base:
+            raise TypeError(
+                "CondensedSchur is an internal base class; use "
+                "ElectrostaticLorentzSchur(...).")
         self.krylov_tol = float(krylov_tol) if krylov_tol is not None else 0.0
         self.krylov_max_iters = int(krylov_max_iters) if krylov_max_iters is not None else 0
         if krylov_tol is not None and not (0.0 < self.krylov_tol < 1.0):
             raise ValueError("CondensedSchur: krylov_tol must be in (0, 1) (got %r)" % (krylov_tol,))
         if krylov_max_iters is not None and self.krylov_max_iters < 1:
             raise ValueError("CondensedSchur: krylov_max_iters >= 1 (got %r)" % (krylov_max_iters,))
-        if kind != "electrostatic_lorentz":
+        if _kind != "electrostatic_lorentz":
             raise ValueError(
-                "CondensedSchur: kind 'electrostatic_lorentz' (only one supported); got %r" % (kind,))
+                "CondensedSchur internal _kind must be 'electrostatic_lorentz'; got %r" % (_kind,))
         if not (0.0 < float(theta) <= 1.0):
             raise ValueError("CondensedSchur: theta must be in (0, 1] (got %r)" % (theta,))
         # momentum must be a pair (role_x, role_y); a bare string (iterable of characters)
@@ -377,7 +392,7 @@ class CondensedSchur:
                 "CondensedSchur: potential=%r not configurable (the source stage solves the "
                 "system Poisson potential phi; another field would have no solver "
                 "behind it); leave potential='phi' (default)." % (potential,))
-        self.kind = kind
+        self.kind = _kind
         self.theta = float(theta)
         self.alpha = float(alpha)
         self.density = density
@@ -406,12 +421,12 @@ class Split:
     ::
 
         time=pops.Split(
-            hyperbolic=pops.Explicit(ssprk3=True),
-            source=pops.CondensedSchur(kind="electrostatic_lorentz", theta=0.5, ...),
+            hyperbolic=pops.Explicit.ssprk3(),
+            source=pops.ElectrostaticLorentzSchur(theta=0.5, ...),
         )
 
     - ``hyperbolic`` : pops.Explicit (the transport; SSPRK2/3, substeps, stride inherit from it).
-    - ``source`` : pops.CondensedSchur (the condensed source stage, runs AFTER the transport). Only
+    - ``source`` : pops.ElectrostaticLorentzSchur (the condensed source stage, runs AFTER the transport). Only
       source backend wired for now.
     """
 
@@ -427,10 +442,12 @@ class Split:
         if source is None:
             raise ValueError(
                 "Split: source= is required (the separate source stage); e.g. "
-                "pops.Split(hyperbolic=pops.Explicit(), source=pops.CondensedSchur(...))")
+                "pops.Split(hyperbolic=pops.Explicit(), "
+                "source=pops.ElectrostaticLorentzSchur(...))")
         if not isinstance(source, CondensedSchur):
             raise TypeError(
-                "Split: source must be an pops.CondensedSchur(...) (only wired source stage); got %r"
+                "Split: source must be pops.ElectrostaticLorentzSchur(...) "
+                "(only wired source stage); got %r"
                 % type(source).__name__)
         self.hyperbolic = hyperbolic
         self.source = source
@@ -449,15 +466,15 @@ class Split:
 class Strang(Split):
     """Temporal policy STRANG SPLITTING (symmetric, 2nd order): one macro-step runs
     H(dt/2); S(dt); H(dt/2), where H is the EXPLICIT hyperbolic transport (pops.Explicit, SSPRK)
-    and S the separate SOURCE stage (pops.CondensedSchur). This is the 2nd-order extension of pops.Split
+    and S the separate SOURCE stage (pops.ElectrostaticLorentzSchur). This is the 2nd-order extension of pops.Split
     (Lie / Godunov, 1st order): same bricks (SSPRK transport + condensed source stage), only the ORDER
     and the cadence of field solves change.
 
     ::
 
         time=pops.Strang(
-            hyperbolic=pops.Explicit(ssprk3=True),
-            source=pops.CondensedSchur(theta=0.5, alpha=alpha),
+            hyperbolic=pops.Explicit.ssprk3(),
+            source=pops.ElectrostaticLorentzSchur(theta=0.5, alpha=alpha),
         )
 
     The system stepper RE-SOLVES solve_fields BETWEEN stages (before each half-advance and before

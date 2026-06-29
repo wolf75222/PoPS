@@ -73,6 +73,11 @@ class FieldProblem(Descriptor):
     def __init__(self, name=None, unknown=None, equation=None, inputs=(),
                  coefficients=None, bcs=(), nullspace=None, outputs=None,
                  postprocess=None, solver=None):
+        if isinstance(solver, str):
+            raise TypeError(
+                "%s(solver=%r): solver must be a typed pops.solvers.elliptic descriptor "
+                "(e.g. GeometricMG() or FFT()), not a string"
+                % (type(self).__name__, solver))
         self._name = None if name is None else str(name)
         self.unknown = unknown
         self.equation = equation

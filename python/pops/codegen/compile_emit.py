@@ -25,7 +25,7 @@ _BACKEND_CAPS = {
     "aot": {"cpu": True, "mpi": False, "amr": False, "gpu": False},
     # production = NATIVE path (add_native_block, #85): same engine as add_block, hence MPI-capable
     # by construction (halos fill_boundary). amr=True: the native loader now has an AMR counterpart
-    # (m.compile(backend='production', target='amr_system') -> AmrSystem.add_native_block, DSL Phase D)
+    # (m.compile(backend=pops.codegen.Production(), target='amr_system') -> AmrSystem.add_native_block, DSL Phase D)
     # which inlines add_compiled_model(AmrSystem&) -> SAME AMR hierarchy as AmrSystem.add_block (reflux,
     # regrid). gpu=False out of CAUTION: the native path is device-clean in C++ (GH200) but the
     # end-to-end validation from Python (add_native_block on device) is a dedicated PR (DSL sect. 5).
@@ -204,12 +204,12 @@ def emit_cpp_so_source(model, name=None, hoist_reciprocals=False):
     if m._proj is not None:
         raise ValueError("backend 'prototype' (JIT, IModel) : projection ponctuelle "
                          "(m.projection) non transportee par ce chemin ; utiliser "
-                         "backend='aot' ou 'production'")
+                         "backend=pops.codegen.AOT() ou 'production'")
     if m._elliptic_fields:
         raise NotImplementedError(
             "elliptic_field (named multi-elliptic, ADC-428) on backend='jit' is not supported "
             "yet; the JIT extern-C factory has no hook to register named elliptic fields on the "
-            "System. Use backend='production'. Declared: %s" % sorted(m._elliptic_fields))
+            "System. Use backend=pops.codegen.Production(). Declared: %s" % sorted(m._elliptic_fields))
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
     return ('#include <pops/runtime/dynamic/dynamic_model.hpp>\n'
             '#include <pops/physics/bricks/bricks.hpp>\n'
@@ -234,9 +234,9 @@ def emit_cpp_aot_source(model, name=None, hoist_reciprocals=False):
     m = model
     if m._elliptic_fields:
         raise NotImplementedError(
-            "elliptic_field (named multi-elliptic, ADC-428) on backend='aot' is not supported yet; "
+            "elliptic_field (named multi-elliptic, ADC-428) on backend=pops.codegen.AOT() is not supported yet; "
             "the flat-ABI compiled block cannot register named elliptic fields on the System. Use "
-            "backend='production'. Declared: %s" % sorted(m._elliptic_fields))
+            "backend=pops.codegen.Production(). Declared: %s" % sorted(m._elliptic_fields))
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
     return ('#include <pops/runtime/builders/compiled/compiled_block_abi.hpp>\n'
             '#include <pops/physics/bricks/bricks.hpp>\n'

@@ -96,7 +96,7 @@ def pops_include():
 # native model from it INSTEAD OF freezing c++23 (which broke the native path under Kokkos/GH200, where the module is
 # in c++20). Direct MIRROR of the build, so never a silent gap between loader and model.
 def loader_cxx_std():
-    """Flag '-std=c++NN' that the native model (backend="production") MUST use to share the ABI
+    """Flag '-std=c++NN' that the native model (backend=pops.codegen.Production()) MUST use to share the ABI
     of the loaded _pops module. Source of truth : _pops.__cxx_std__ (integer 20/23 baked by the build, =
     POPS_CXX_STD : 20 under Kokkos, 23 otherwise). Graceful fallbacks if the attribute is missing (old module) :
     we parse __cplusplus from _pops.abi_key() (>202002L -> c++23, otherwise c++20) ; failing all that,
@@ -190,14 +190,13 @@ def _check_headers_match_module(include):
 
 
 def resolve_auto_backend(include=None):
-    """DEFAULT backend policy (backend='auto', decision recorded -- ADC-63).
+    """Diagnostic helper for the removed ``backend="auto"`` policy.
 
-    'production' (zero-copy native loader, strict add_block parity) AS SOON AS the
-    toolchain parity with the _pops module is established : module loadable + known baked compiler +
-    header signature of @p include == the one baked into the module. OTHERWISE 'aot' (historical
-    default : host-marshaled, works without module or parity). Never silent : returns
-    (backend, reason) and the facades set the reason on CompiledModel.backend_auto_reason.
-    An EXPLICIT backend passed by the caller short-circuits this policy (unchanged)."""
+    Returns the backend token that the old auto policy would have selected, plus the reason:
+    ``"production"`` when toolchain/header parity with ``_pops`` is established, otherwise
+    ``"aot"``. Public compile APIs no longer call this helper; callers select typed descriptors
+    explicitly.
+    """
     from .abi import module_header_signature  # intra-package; avoids circular at module level
     mod = _pops_module()
     if mod is None:

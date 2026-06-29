@@ -1,23 +1,19 @@
 """pops.mesh.geometry -- embedded-geometry descriptors (Spec 5 sec.5.9 / sec.8.16.1).
 
-Typed replacements for the string ``set_disc_domain(..., mode=...)`` form: a geometry
-object (Disc / HalfPlane / LevelSet) provides a boundary predicate / level set, and
-:class:`EmbeddedBoundary` pairs it with a transport mask. Inert descriptors; the runtime
-builds the actual cut-cell / staircase geometry after validation.
+Typed geometry descriptors: a geometry object (Disc / HalfPlane / LevelSet) provides a boundary
+predicate / level set, and :class:`EmbeddedBoundary` pairs it with a transport mask. Inert
+descriptors; the runtime builds the actual cut-cell / staircase geometry after validation.
 
-Spec 5 sec.8.16 makes the disc DOMAIN itself a typed object: :class:`DiscDomain` carries the
-circle ``center`` + ``radius`` AND the transport ``mode`` (a :mod:`pops.mesh.masks` descriptor),
-replacing ``sim.set_disc_domain(cx, cy, R, mode="cutcell")`` with
-``sim.set_disc_domain(DiscDomain(center=(cx, cy), radius=R, mode=CutCell()))``. The disc / Poisson
-walls also lower to the legacy native tokens (``wall="circle"`` + ``wall_radius`` for a
-:class:`Disc`, ``wall="none"`` for :class:`NoWall`) so a typed ``set_poisson(wall=...)`` is
-byte-identical to the historical string form.
+:class:`DiscDomain` carries the circle ``center`` + ``radius`` and the transport ``mode`` as a
+:mod:`pops.mesh.masks` descriptor, e.g. ``DiscDomain(..., mode=CutCell())``. The disc / Poisson
+walls lower to native runtime tokens only inside private lowering seams.
 
 The ``geometry -> masks`` import below is an INTRA-mesh edge (same layer), so it does not add a
 cross-layer dependency; the package stays inert and runtime-free at module scope.
 """
-from .._descriptor import Availability, MeshDescriptor
-from ..masks import lower_disc_mode
+from pops.descriptors import reject_string_selector
+from .._descriptor import MeshDescriptor
+from ..masks import _lower_disc_mode
 
 
 class _Boundary(MeshDescriptor):
@@ -135,31 +131,30 @@ class DiscDomain(MeshDescriptor):
         if mode is None:
             from ..masks import NoMask  # local: avoid importing the class set into this namespace
             mode = NoMask()
+        if isinstance(mode, str):
+            reject_string_selector(
+                mode, "mode", "pops.mesh.masks.NoMask() / Staircase() / CutCell()")
         self.mode = mode
 
     def options(self):
         return {"center": self.center, "radius": self.radius,
-                "mode": self.mode if isinstance(self.mode, str) else self.mode.name}
+                "mode": self.mode.name}
 
     def capabilities(self):
         return {"transport_domain": "disc"}
 
     def requirements(self):
         # A cut-cell disc needs embedded-boundary support; surface the mode's own requirements.
-        if isinstance(self.mode, str):
-            return {}
         return dict(self.mode.requirements())
 
     def available(self, context=None):
         """Defer to the chosen transport mode's availability (a typed mask explains itself)."""
-        if isinstance(self.mode, str):
-            return Availability.yes()
         return self.mode.available(context)
 
     def lower(self, context=None):
         """Lower to the native ``(cx, cy, R, mode_token)`` set_disc_domain arguments."""
         cx, cy = self.center
-        return (cx, cy, self.radius, lower_disc_mode(self.mode))
+        return (cx, cy, self.radius, _lower_disc_mode(self.mode))
 
 
 class EmbeddedBoundary(MeshDescriptor):

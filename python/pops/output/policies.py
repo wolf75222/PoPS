@@ -1,10 +1,40 @@
 """pops.output.policies -- output / checkpoint / level descriptors (Spec 5 sec.5.14 / 8.11).
 
-Typed replacements for ``output(format="hdf5", every=20)`` / ``checkpoint(mode=...)``. An
-output or checkpoint policy declares its format, cadence, fields, diagnostics and level
+Typed output/checkpoint policies declare their format, cadence, fields, diagnostics and level
 selection; the runtime performs the I/O. Inert descriptors.
 """
+from pops.descriptors import reject_string_selector
 from pops.descriptors import Descriptor
+from pops.output.formats import NPZ
+
+
+_OUTPUT_CADENCE_KINDS = ("always", "every", "on_start", "on_end")
+
+
+def _validate_output_format(fmt):
+    if fmt is None:
+        return NPZ()
+    if isinstance(fmt, str):
+        reject_string_selector(fmt, "format", "pops.output.NPZ() / VTK() / HDF5()")
+    if getattr(fmt, "category", None) != "output_format":
+        raise TypeError(
+            "OutputPolicy: format must be a pops.output format descriptor "
+            "(NPZ() / VTK() / HDF5()), got %r" % type(fmt).__name__)
+    return fmt
+
+
+def _validate_output_cadence(cadence):
+    if cadence is None or (isinstance(cadence, int) and not isinstance(cadence, bool)):
+        return cadence
+    if isinstance(cadence, bool):
+        raise TypeError("OutputPolicy: cadence must be an int interval or typed schedule, got bool")
+    kind = getattr(cadence, "kind", None)
+    if kind not in _OUTPUT_CADENCE_KINDS:
+        raise NotImplementedError(
+            "OutputPolicy: cadence %r is not implemented by the output run loop; use "
+            "always(), every(N), on_start(), on_end(), an int interval, or implement the "
+            "runtime hook before exposing this policy." % (kind,))
+    return cadence
 
 
 class _LevelPolicy(Descriptor):
@@ -33,16 +63,16 @@ class OutputPolicy(Descriptor):
     """An output policy: a format, a cadence, the fields/diagnostics, and the level selection.
 
     ``OutputPolicy(format=HDF5(), cadence=every(20), fields=[phi, E], levels=AllLevels())``.
-    ``cadence`` is any inert schedule object (e.g. ``pops.time.schedule.every(20)``) or an int
-    step interval; it is stored, not interpreted, here.
+    ``cadence`` is a schedule the run-loop actually honors (``always`` / ``every`` /
+    ``on_start`` / ``on_end``) or an int step interval.
     """
 
     category = "output_policy"
 
     def __init__(self, format=None, cadence=None, fields=(), diagnostics=(),
                  levels=None, require_parallel=False, prefix=None):
-        self.format = format
-        self.cadence = cadence
+        self.format = _validate_output_format(format)
+        self.cadence = _validate_output_cadence(cadence)
         self.fields = list(fields)
         self.diagnostics = list(diagnostics)
         self.levels = levels if levels is not None else AllLevels()

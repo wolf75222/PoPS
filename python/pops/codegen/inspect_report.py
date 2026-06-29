@@ -189,8 +189,9 @@ def build_compiled_report(compiled):
     codegen_env = getattr(compiled, "codegen_env", None)
     env = codegen_env.to_dict() if codegen_env is not None else {}
 
+    backend = getattr(compiled, "backend", None) or "production"
     return CompiledReport(
-        name=prog_summary["name"], backend="production", platform=platform, layout=layout,
+        name=prog_summary["name"], backend=backend, platform=platform, layout=layout,
         blocks=blocks, fields=fields, program=prog_summary,
         inputs={"states": states, "params": req_params, "aux": req_aux},
         artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env)

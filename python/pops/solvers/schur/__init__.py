@@ -2,14 +2,12 @@
 
 The Schur-condensation solver eliminates a coupled (e.g. source) block and solves the reduced
 system; the native symbol is ``pops::SchurCondensationOperator``. :func:`Schur` returns the
-inert :class:`pops.descriptors.BrickDescriptor` naming it; :func:`CondensedSchur` is an alias
-naming the SAME native operator under the condensed-Schur name. Both are inert -- the C++
-runtime applies the operator. This is the ONE public home of the ``solvers.Schur`` entry
-formerly parked under ``pops.lib.solvers`` (that shim is removed; no second public path).
+inert :class:`pops.descriptors.BrickDescriptor` naming it. This is the ONE public home of the
+``solvers.Schur`` entry formerly parked under ``pops.lib.solvers`` (that shim is removed; no
+second public path).
 
-NOTE: this :func:`CondensedSchur` SOLVER descriptor is DISTINCT from
-:class:`pops.CondensedSchur` (``pops.time``), which is the time-integration SPLITTING POLICY
-for an implicit source. They share no namespace and are not the same object.
+The time-integration source stage is exposed as ``pops.ElectrostaticLorentzSchur(...)``. Do not
+add a ``CondensedSchur`` alias here: one public name per behavior keeps the Spec-5 API clean.
 """
 from pops.descriptors import _native
 from pops.solvers.requirements import capability_map
@@ -30,13 +28,4 @@ def Schur(**options):
                    category="solver", capabilities=_SCHUR_CAPABILITIES, **options)
 
 
-def CondensedSchur(**options):
-    """Alias of :func:`Schur` naming the same ``pops::SchurCondensationOperator`` (inert).
-
-    Distinct from the ``pops.time`` ``CondensedSchur`` time-splitting policy -- this is the
-    LINEAR-SOLVER descriptor, not the time-integration role.
-    """
-    return Schur(**options)
-
-
-__all__ = ["Schur", "CondensedSchur"]
+__all__ = ["Schur"]
