@@ -10,7 +10,8 @@ execute).
 Sub-packages:
 
 * :mod:`pops.solvers.krylov` -- matrix-free Krylov solvers (CG / BiCGStab / GMRES / Richardson);
-* :mod:`pops.solvers.schur` -- the Schur-condensation solver (``pops::SchurCondensationOperator``);
+* :mod:`pops.solvers.schur` -- Schur and condensed-Schur solver descriptors;
+* :mod:`pops.solvers.nonlinear` -- generated nonlinear solver descriptors;
 * :mod:`pops.solvers.elliptic` -- the RICH GeometricMG (typed smoother / coarse / tolerance /
   max_cycles + capabilities) and the planned FFT spectral Poisson solver;
 * :mod:`pops.solvers.preconditioners` -- Identity / GeometricMG / User;
@@ -29,7 +30,7 @@ is NOT a public attribute of this package. The custom-solver registry hooks (``s
 """
 from types import SimpleNamespace
 
-from . import elliptic, krylov, options, requirements, schur, tolerances
+from . import elliptic, krylov, nonlinear, options, requirements, schur, tolerances
 from .elliptic import FFT, GeometricMG
 from .krylov import CG, BiCGStab, GMRES, Richardson
 from .preconditioners import preconditioners
@@ -47,7 +48,7 @@ solvers = SimpleNamespace(
 )
 
 __all__ = [
-    "elliptic", "krylov", "schur", "options", "tolerances",
+    "elliptic", "krylov", "schur", "nonlinear", "options", "tolerances",
     "preconditioners", "requirements",
     "GeometricMG", "FFT",
     "CG", "BiCGStab", "GMRES", "Richardson",

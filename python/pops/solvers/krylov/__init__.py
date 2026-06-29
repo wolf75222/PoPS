@@ -22,8 +22,28 @@ from pops.solvers.requirements import capability_map
 _KRYLOV_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True)
 
 
+def _check_common_options(name, options):
+    opts = dict(options)
+    if "tol" in opts and "tolerance" in opts:
+        raise TypeError("%s: use either tolerance= or tol=, not both" % name)
+    if "tol" in opts:
+        opts["tolerance"] = opts.pop("tol")
+    if "tolerance" in opts:
+        tol = opts["tolerance"]
+        if not isinstance(tol, (int, float)) or tol <= 0:
+            raise ValueError("%s: tolerance must be a positive number" % name)
+        opts["tolerance"] = float(tol)
+    if "max_iter" in opts:
+        max_iter = opts["max_iter"]
+        if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
+            raise ValueError("%s: max_iter must be a positive integer" % name)
+        opts["max_iter"] = int(max_iter)
+    return opts
+
+
 def _solver(name, native_id, **options):
     """A native Krylov-solver descriptor in the ``solver`` category (scheme == @p name)."""
+    options = _check_common_options(name, options)
     return _native(name, native_id, name, category="solver",
                    capabilities=_KRYLOV_CAPABILITIES, **options)
 
@@ -40,6 +60,10 @@ def BiCGStab(**options):
 
 def GMRES(**options):
     """The GMRES Krylov solver (``pops::gmres_solve``; scheme ``"gmres"``). Inert."""
+    if "restart" in options:
+        restart = options["restart"]
+        if isinstance(restart, bool) or not isinstance(restart, int) or restart <= 0:
+            raise ValueError("gmres: restart must be a positive integer")
     return _solver("gmres", "pops::gmres_solve", **options)
 
 

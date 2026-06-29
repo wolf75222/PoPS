@@ -82,6 +82,27 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     return P
 
 
+def _solve_linear_problem_program(t, *, method=None, alpha=_ALPHA):
+    """Same Helmholtz solve, authored through pops.linalg.LinearProblem."""
+    from pops.linalg import LinearProblem, MatrixFreeOperator
+    from pops.solvers.krylov import BiCGStab
+
+    P = t.Program("solve_linear_problem")
+    U = P.state("U", block="blk").n
+    A = MatrixFreeOperator("A")
+
+    @A.apply
+    def apply(P, out, x):
+        lap = P.scalar_field("lap")
+        P.laplacian(lap, x)
+        return x - alpha * lap
+
+    problem = LinearProblem(operator=A, unknown="phi", rhs=U, name="helmholtz")
+    phi = P.solve_linear(problem, method=method or BiCGStab(tolerance=1e-10, max_iter=80))
+    P.commit("blk", phi)
+    return P
+
+
 # ---- (A) codegen: pure Python, always runs ----
 def test_apply_lambda_and_cg_codegen(t):
     src = _solve_program(t, method="cg").emit_cpp_program()
@@ -94,6 +115,25 @@ def test_bicgstab_codegen(t):
     src = _solve_program(t, method="bicgstab").emit_cpp_program()
     assert "pops::bicgstab_solve" in src, src
     assert "pops::ApplyFn{}" in src, "bicgstab uses the identity (empty) preconditioner\n%s" % src
+
+
+def test_linear_problem_matrix_free_bicgstab_codegen(t):
+    src = _solve_linear_problem_program(t).emit_cpp_program()
+    assert "pops::ApplyFn apply_A" in src, src
+    assert "ctx.laplacian" in src, src
+    assert "pops::bicgstab_solve" in src, src
+    assert "80);" in [ln for ln in src.splitlines() if "pops::bicgstab_solve(" in ln][0]
+
+
+def test_linear_problem_requires_apply_builder(t):
+    from pops.linalg import LinearProblem, MatrixFreeOperator
+    from pops.solvers.krylov import BiCGStab
+
+    P = t.Program("missing_apply")
+    U = P.state("U", block="blk").n
+    problem = LinearProblem(operator=MatrixFreeOperator("A"), unknown="phi", rhs=U)
+    with pytest.raises(ValueError, match="apply builder"):
+        P.solve_linear(problem, method=BiCGStab(tolerance=1e-10, max_iter=10))
 
 
 def test_richardson_codegen(t):

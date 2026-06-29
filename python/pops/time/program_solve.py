@@ -6,6 +6,15 @@ from pops.time.program_base import _ProgramConstants
 from pops.time.values import StageStateSet, Value, _Affine, _is_field_value, _resolve_handle
 
 
+def _method_options(method):
+    opts = getattr(method, "options", None)
+    if callable(opts):
+        return dict(opts())
+    if isinstance(opts, dict):
+        return dict(opts)
+    return {}
+
+
 def _lower_krylov_method(method):
     """Lower a typed Krylov descriptor to its internal scheme token (Spec 5 sec.7).
 
@@ -75,6 +84,15 @@ def _preconditioners():
     return preconditioners
 
 
+def _as_linear_problem(value):
+    """Return value if it is a pops.linalg.LinearProblem, without importing linalg at module scope."""
+    try:
+        from pops.linalg import LinearProblem
+    except Exception:  # pragma: no cover - defensive import-light guard
+        return None
+    return value if isinstance(value, LinearProblem) else None
+
+
 class _ProgramSolve(_ProgramConstants):
     """Krylov solve_linear, histories, commits, board sugar (fields/define/solve) and records."""
 
@@ -102,10 +120,33 @@ class _ProgramSolve(_ProgramConstants):
             configuration error -- ``pops::*_solve`` itself throws on a non-positive budget);
           - @p restart: GMRES restart length m (a positive int; defaults to 30). Ignored by the other
             methods; passing it to a non-gmres solve is rejected."""
+        linear_problem = _as_linear_problem(name)
+        if linear_problem is not None:
+            if operator is not None or rhs is not None:
+                raise TypeError(
+                    "solve_linear(LinearProblem, ...): do not also pass operator= or rhs=; "
+                    "they come from the LinearProblem")
+            return self._solve_linear_problem(
+                linear_problem,
+                initial_guess=initial_guess,
+                method=method,
+                preconditioner=preconditioner,
+                tol=tol,
+                max_iter=max_iter,
+                restart=restart,
+            )
+
         # Spec 5 sec.7: method / preconditioner are TYPED descriptors (pops.solvers.krylov /
         # pops.solvers.preconditioners). They lower to the SAME internal scheme tokens the runtime
         # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
         # a bare algorithm-selector string is rejected (the public string form is removed).
+        opts = _method_options(method)
+        if "tolerance" in opts and tol == 1e-8:
+            tol = opts["tolerance"]
+        if "max_iter" in opts and max_iter is None:
+            max_iter = opts["max_iter"]
+        if "restart" in opts and restart is None:
+            restart = opts["restart"]
         method = _lower_krylov_method(method)
         preconditioner = _lower_preconditioner(preconditioner)
         if not (isinstance(operator, Value) and operator.vtype == "matrix_free_op"):
@@ -161,6 +202,39 @@ class _ProgramSolve(_ProgramConstants):
                           "max_iter": int(max_iter), "has_guess": initial_guess is not None,
                           "ncomp": op_ncomp,
                           "restart": int(restart) if method == "gmres" else None}, name, rhs.block)
+
+    def _solve_linear_problem(self, problem, *, initial_guess=None, method=None,
+                              preconditioner=None, tol=1e-8, max_iter=None, restart=None):
+        """Lower a :class:`pops.linalg.LinearProblem` to the existing matrix-free C++ Krylov path."""
+        from pops.linalg import MatrixFreeOperator
+
+        problem.validate()
+        op_desc = problem.operator
+        if not isinstance(op_desc, MatrixFreeOperator):
+            raise ValueError(
+                "solve_linear(LinearProblem): only MatrixFreeOperator problems are currently "
+                "accepted by the compiled Krylov route; got %s" % type(op_desc).__name__)
+        op_desc.validate()
+        if problem.rhs is None:
+            raise ValueError("solve_linear(LinearProblem): rhs must be set")
+        operator_value = self.matrix_free_operator(
+            op_desc.name,
+            domain=op_desc.domain,
+            range_=op_desc.range,
+            ncomp=op_desc.ncomp,
+        )
+        self.set_apply(operator_value, op_desc.apply_builder)
+        return self.solve_linear(
+            name=problem.name,
+            operator=operator_value,
+            rhs=_resolve_handle(problem.rhs),
+            initial_guess=_resolve_handle(initial_guess),
+            method=method,
+            preconditioner=preconditioner,
+            tol=tol,
+            max_iter=max_iter,
+            restart=restart,
+        )
 
     # --- multistep histories (ADC-406a) ---
     def history(self, name, lag=1):

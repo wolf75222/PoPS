@@ -14,7 +14,7 @@ import pytest
 pops = pytest.importorskip("pops")
 solvers = pytest.importorskip("pops.solvers")
 
-from pops.solvers import elliptic, krylov, schur
+from pops.solvers import elliptic, krylov, nonlinear, schur
 from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
 from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
 
@@ -23,7 +23,7 @@ from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
 
 def test_solvers_is_top_level_and_exposed():
     assert pops.solvers is solvers
-    for sub in ("elliptic", "krylov", "schur",
+    for sub in ("elliptic", "krylov", "schur", "nonlinear",
                 "options", "tolerances", "preconditioners", "requirements"):
         assert hasattr(solvers, sub), "pops.solvers missing sub-module %r" % sub
 
@@ -59,6 +59,19 @@ def test_krylov_lower_carries_native_id_and_scheme():
     assert rec["scheme"] == "cg"
 
 
+def test_krylov_descriptor_options_validate_and_feed_solve_defaults():
+    d = krylov.BiCGStab(tolerance=1e-10, max_iter=400)
+    assert d.options["tolerance"] == 1e-10
+    assert d.options["max_iter"] == 400
+    assert krylov.GMRES(restart=12).options["restart"] == 12
+    with pytest.raises(ValueError, match="max_iter"):
+        krylov.CG(max_iter=0)
+    with pytest.raises(ValueError, match="tolerance"):
+        krylov.Richardson(tolerance=0)
+    with pytest.raises(ValueError, match="restart"):
+        krylov.GMRES(restart=0)
+
+
 def test_krylov_declare_amr_route_capabilities():
     # Spec 6 sec.4 / sec.9: the matrix-free Krylov solvers are layout-agnostic (they run over
     # pops::MultiFab dot / saxpy / apply), so each declares every route -- uniform / amr / mpi /
@@ -73,11 +86,18 @@ def test_krylov_declare_amr_route_capabilities():
         assert d.inspect()["capabilities"]["supports_amr"] is True
 
 
-# --- nonlinear solver descriptors are not public placeholders -----------------------------
+# --- nonlinear solver descriptors --------------------------------------------------------
 
-def test_nonlinear_placeholders_are_not_public():
-    # Per-cell Newton exists as Program.solve_local_nonlinear. A standalone global Newton/FixedPoint
-    # descriptor does not, so the public solver catalog must not expose available=False placeholders.
+def test_nonlinear_newton_descriptor_names_generated_cpp_route():
+    d = nonlinear.Newton(tolerance=1e-9, max_iter=12, fd_eps=1e-6, damping=0.8)
+    assert d.brick_type == "generated"
+    assert d.category == "nonlinear_solver"
+    assert d.scheme == "newton"
+    assert d.available().ok
+    assert d.options["max_iter"] == 12
+    assert d.options["tolerance"] == 1e-9
+    # Newton lives in the nonlinear subpackage, not as a top-level legacy constructor.
+    assert hasattr(solvers.nonlinear, "Newton")
     assert not hasattr(solvers, "Newton")
     assert not hasattr(solvers, "FixedPoint")
     assert not hasattr(solvers.solvers, "Newton")
@@ -89,7 +109,13 @@ def test_nonlinear_placeholders_are_not_public():
 def test_schur_native_id():
     assert schur.Schur().native_id == "pops::SchurCondensationOperator"
     assert schur.Schur().scheme == "schur"
-    assert not hasattr(schur, "CondensedSchur")
+    condensed = schur.CondensedSchur(theta=0.5, alpha=2.0, tolerance=1e-9, max_iter=150)
+    assert condensed.native_id == "pops::CondensedSchurSourceStepper"
+    assert condensed.scheme == "condensed_schur"
+    assert condensed.category == "schur_solver"
+    assert condensed.options["theta"] == 0.5
+    assert condensed.options["max_iter"] == 150
+    assert not hasattr(solvers, "CondensedSchur")
 
 
 def test_schur_declares_amr_route_capabilities():

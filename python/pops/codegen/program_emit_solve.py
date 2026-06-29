@@ -104,7 +104,7 @@ def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
     # lambda fills per matvec. All carry the operator's component count (= the block n_cons).
     jac_ops = [w for w in block if w.op == "rhs_jacvec"]
     if jac_ops and lines is None:
-        raise NotImplementedError(
+        raise ValueError(
             "rhs_jacvec is only lowerable in a top-level / step-body matrix-free solve, not inside a "
             "control-flow (if/while/range) body (the Newton outer loop must be a static_range unroll)")
     jac_scratch = {}  # jacvec op id -> (uk, r0, up, rp, cdt) names
@@ -194,7 +194,7 @@ def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
             body.append("  ctx.axpy(%s, jc, *%s);" % (out_tok, r0))
             body.append("}")
         else:
-            raise NotImplementedError(
+            raise ValueError(
                 "emit_cpp_program: op '%s' is not lowerable inside a matrix_free_operator apply "
                 "(supported: scalar_field, laplacian, gradient, divergence, apply_laplacian_coeff, "
                 "rhs_jacvec)" % w.op)
@@ -231,7 +231,7 @@ def _precond_applyfn(v, prelude):
         prelude.append("  ctx.geometric_mg_precond_apply(out, in);")
         prelude.append("};")
         return name
-    raise NotImplementedError(
+    raise ValueError(
         "emit_cpp_program: preconditioner scheme '%s' is not lowerable (supported: identity, "
         "geometric_mg)" % scheme)
 

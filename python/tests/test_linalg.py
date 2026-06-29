@@ -68,9 +68,35 @@ def test_matrix_free_operator_is_matrix_free():
     assert M.category == "linear_operator"
     assert M.name == "stencil_apply"
     assert M.native_id is None
-    assert M.capabilities() == {"matrix_free": True}
-    assert M.options() == {"name": "stencil_apply"}
+    assert M.capabilities() == {"matrix_free": True, "domain": "scalar", "range": "scalar",
+                                "ncomp": 1}
+    assert M.options() == {"name": "stencil_apply", "domain": "scalar", "range": "scalar",
+                           "ncomp": 1, "has_apply": False}
     assert "stencil_apply" in repr(M)
+
+
+def test_matrix_free_operator_apply_builder_is_authoring_only():
+    M = MatrixFreeOperator("helmholtz")
+
+    @M.apply
+    def apply(program, out, x):
+        return x
+
+    assert M.apply_builder is apply
+    assert M.options()["has_apply"] is True
+    assert M.validate() is True
+    with pytest.raises(ValueError, match="already has an apply"):
+        M.apply(lambda program, out, x: out)
+
+
+def test_matrix_free_operator_vector_metadata():
+    M = MatrixFreeOperator("block_apply", domain="state", range_="state", ncomp=3)
+    assert M.capabilities()["ncomp"] == 3
+    assert M.options()["domain"] == "state"
+    with pytest.raises(ValueError, match="domain and range"):
+        MatrixFreeOperator("bad", domain="state", range_="scalar", ncomp=3)
+    with pytest.raises(ValueError, match="require ncomp"):
+        MatrixFreeOperator("bad", domain="state", range_="state")
 
 
 # --- problem ----------------------------------------------------------------------------

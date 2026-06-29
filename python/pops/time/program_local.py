@@ -196,9 +196,9 @@ class _ProgramLocal(_ProgramConstants):
         if operator.attrs["apply_block"] is not None:
             raise ValueError("set_apply: operator '%s' already has an apply" % operator.name)
         if self._recording:
-            raise NotImplementedError(
+            raise ValueError(
                 "set_apply: recording an apply inside another sub-block (apply / while body) is a "
-                "later phase")
+                "non-lowerable Program shape; declare the matrix-free operator at the top level")
         # The apply ops (the in/out placeholders + the body) live in the operator's OWN sub-block, NOT
         # the flat SSA list: they are re-emitted as the C++ apply lambda, never walked at the top level.
         sub = []

@@ -6,8 +6,8 @@ inert :class:`pops.descriptors.BrickDescriptor` naming it. This is the ONE publi
 ``solvers.Schur`` entry formerly parked under ``pops.lib.solvers`` (that shim is removed; no
 second public path).
 
-The time-integration source stage is exposed as ``pops.ElectrostaticLorentzSchur(...)``. Do not
-add a ``CondensedSchur`` alias here: one public name per behavior keeps the Spec-5 API clean.
+``CondensedSchur`` names the compiled source-stage route in this solver package only. It is not
+re-exported as a top-level ``pops.CondensedSchur`` constructor.
 """
 from pops.descriptors import _native
 from pops.solvers.requirements import capability_map
@@ -28,4 +28,31 @@ def Schur(**options):
                    category="solver", capabilities=_SCHUR_CAPABILITIES, **options)
 
 
-__all__ = ["Schur"]
+def CondensedSchur(*, theta=1.0, alpha=1.0, tolerance=1e-10, max_iter=200):
+    """Descriptor for the compiled condensed-Schur source-stage solve.
+
+    The C++ route is ``pops::CondensedSchurSourceStepper`` for uniform Cartesian layouts and
+    its AMR counterpart where the runtime selects it. This object is inert: it configures the
+    route; it does not perform a source step in Python.
+    """
+    for label, value in (("theta", theta), ("alpha", alpha), ("tolerance", tolerance)):
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError("CondensedSchur: %s must be a positive number" % label)
+    if theta > 1.0:
+        raise ValueError("CondensedSchur: theta must be in (0, 1]")
+    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
+        raise ValueError("CondensedSchur: max_iter must be a positive integer")
+    return _native(
+        "condensed_schur",
+        "pops::CondensedSchurSourceStepper",
+        "condensed_schur",
+        category="schur_solver",
+        capabilities=_SCHUR_CAPABILITIES,
+        theta=float(theta),
+        alpha=float(alpha),
+        tolerance=float(tolerance),
+        max_iter=int(max_iter),
+    )
+
+
+__all__ = ["Schur", "CondensedSchur"]
