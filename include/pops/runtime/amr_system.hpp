@@ -596,12 +596,12 @@ class AmrSystem {
   /// time Program over the AMR hierarchy. Mirrors the System seam (install_program_step registers the
   /// macro-step body; the cadence + per-block RuntimeParams stores live HERE on the Impl, NOT in the
   /// .so closure, so a value change reaches the captured context and a later checkpoint can reach
-  /// them). A generated AMR Program .so resolves these across the dlopen boundary (RTLD_GLOBAL,
+  /// them). A generated AMR problem.so resolves these across the dlopen boundary (RTLD_GLOBAL,
   /// POPS_EXPORT), exactly like set_compiled_block on the native AMR loader.
   /// @{
   /// Install the macro-step body. When set, AmrSystem::step calls it instead of the historical
   /// AmrRuntime::step path (keeping t / macro_step coherent). Pass an empty std::function to clear it.
-  /// POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary, like
+  /// POPS_EXPORT: the generated AMR problem.so resolves it across the dlopen boundary, like
   /// set_compiled_block. The closure drives the per-level Lie/Strang macro-step through an
   /// AmrProgramContext (the AMR counterpart of ProgramContext).
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
@@ -627,7 +627,7 @@ class AmrSystem {
   /// AmrProgramContext and installs the macro-step closure. Mirrors add_native_block and
   /// System::install_problem; the .so stays loaded for the process lifetime.
   POPS_EXPORT void install_problem(const std::string& so_path);
-  /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash), or
+  /// Hash of the installed compiled problem (the string returned by the .so's pops_problem_hash), or
   /// "" if no program is installed. Parity with System::installed_program_hash (checkpoint guard).
   POPS_EXPORT std::string installed_program_hash() const;
   /// @name Compiled-Program RUNTIME parameters on AMR (epic ADC-511 / ADC-508, parity with ADC-510)
@@ -650,8 +650,8 @@ class AmrSystem {
   /// block; a later set_program_params overwrites only the supplied values. Idempotent.
   POPS_EXPORT void seed_program_params(int prog_block, const std::vector<double>& defaults);
   /// The built multi-block AMR engine (the AmrRuntime the AmrProgramContext driver wraps), or nullptr
-  /// before the lazy build. install_problem forces the build so the .so's pops_install_program_amr gets
-  /// a live engine. POPS_EXPORT: the generated AMR Program .so resolves it across the dlopen boundary.
+  /// before the lazy build. install_problem forces the build so the .so's pops_problem_install_amr gets
+  /// a live engine. POPS_EXPORT: the generated AMR problem.so resolves it across the dlopen boundary.
   POPS_EXPORT AmrRuntime* engine() const;
   /// The facade-owned Profiler (the AmrProgramContext forwards count_kernel / profile_record to it).
   /// POPS_EXPORT for the dlopen boundary. Disabled by default -> zero hot-path cost.
@@ -670,7 +670,7 @@ class AmrSystem {
   /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with
   /// System::macro_step. Required for checkpoint/restart (the stride / regrid cadence depends on
   /// macro_step % stride|regrid_every, not only on t). Prerequisite IO PR-IO-3 (audit 2026-06).
-  /// POPS_EXPORT: the AmrProgramContext (a generated AMR Program .so) reads it across the dlopen
+  /// POPS_EXPORT: the AmrProgramContext (a generated AMR problem.so) reads it across the dlopen
   /// boundary for the head-of-step regrid cadence, like the other program seam accessors (ADC-508).
   POPS_EXPORT int macro_step() const;
   /// RESTORES the AMR clock (t, macro_step) -- parity with System::set_clock. Sets the time AND the

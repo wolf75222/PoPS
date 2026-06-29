@@ -90,3 +90,46 @@ def test_generated_cpp_calls_generated_module():
         assert forbidden not in src, (
             "v.op == 'call' must not dispatch directly through %s; GeneratedModule owns it"
             % forbidden)
+
+
+def test_problem_so_is_primary_native_abi():
+    """TASK-024/TASK-027: generated artifacts expose the problem.so ABI."""
+    template = _source(POPS / "codegen" / "program_emit_kernels.py")
+    amr = _source(POPS / "codegen" / "program_emit_amr.py")
+    system_loader = _source(REPO_ROOT / "python" / "bindings" / "system" / "base" / "system.cpp")
+    amr_loader = _source(REPO_ROOT / "python" / "bindings" / "amr" / "amr_system.cpp")
+
+    for token in (
+        "pops_problem_abi_key",
+        "pops_problem_name",
+        "pops_problem_hash",
+        "pops_problem_install",
+        "pops_problem_has_dt_bound",
+        "pops_problem_dt_bound",
+    ):
+        assert token in template, "problem.so ABI missing %s" % token
+    assert "pops_problem_install_amr" in amr
+
+    for token in (
+        '"pops_problem_abi_key"',
+        '"pops_problem_install"',
+        '"pops_problem_hash"',
+        '"pops_problem_block_count"',
+        '"pops_problem_param_count"',
+        '"pops_problem_has_dt_bound"',
+    ):
+        assert token in system_loader, "System loader must resolve %s" % token
+    for token in (
+        '"pops_problem_abi_key"',
+        '"pops_problem_install_amr"',
+        '"pops_problem_hash"',
+        '"pops_problem_block_count"',
+        '"pops_problem_param_count"',
+    ):
+        assert token in amr_loader, "AMR loader must resolve %s" % token
+
+    joined_codegen = "\n".join(
+        _source(path) for path in (POPS / "codegen").rglob("*.py")
+    )
+    assert "Program .so" not in joined_codegen
+    assert "program.so" not in joined_codegen

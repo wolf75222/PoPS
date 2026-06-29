@@ -5,7 +5,7 @@ A compiled problem whose generated kernels read a runtime parameter carries the 
 ``pops::RuntimeParams`` owned by the runtime (not captured inside the .so closure), so the value can
 be changed at run time WITHOUT recompiling (Spec 5 C5). This module computes the param ROUTING (which
 program block reads which runtime parameter, at which stable index, with which default) and emits the
-``pops_program_param_*`` metadata table the .so exports. The SAME ``_program_param_entries`` drives the
+``pops_problem_param_*`` metadata table the .so exports. The SAME ``_program_param_entries`` drives the
 C++ native attach seed, the Python bind-time route
 (System._install_problem_params via CompiledProblem.runtime_param_routes) and this metadata, so all
 three agree byte-for-byte. The per-cell read of the parameter (``params.get(index)`` bound from
@@ -162,7 +162,7 @@ def emit_program_params(program, model=None):
                          for k, (_, nm, _, _) in enumerate(entries))
 
     def ival(accessor, csv):
-        return ('extern "C" int pops_program_param_%s(int i) {\n'
+        return ('extern "C" int pops_problem_param_%s(int i) {\n'
                 '  static const int v[] = {%s};\n'
                 '  return (i >= 0 && i < %d) ? v[i] : -1;\n}\n'
                 % (accessor, csv if entries else "0", len(entries)))
@@ -172,12 +172,17 @@ def emit_program_params(program, model=None):
         "// index, its stable within-block index (sorted-name order, the index the lowered runtime read\n"
         "// uses), its name and declaration default. install_problem seeds the per-block RuntimeParams;\n"
         "// Python routes the bound values to set_program_params. NOT called from any hot kernel.\n"
-        'extern "C" int pops_program_param_count() { return %d; }\n' % len(entries) +
+        'extern "C" int pops_problem_param_count() { return %d; }\n' % len(entries) +
         ival("block", blocks) +
         ival("index", indices) +
-        'extern "C" const char* pops_program_param_name(int i) {\n'
+        'extern "C" const char* pops_problem_param_name(int i) {\n'
         '  switch (i) {\n%s    default: return "";\n  }\n}\n' % name_cases +
-        'extern "C" double pops_program_param_default(int i) {\n'
+        'extern "C" double pops_problem_param_default(int i) {\n'
         '  static const double v[] = {%s};\n'
         '  return (i >= 0 && i < %d) ? v[i] : 0.0;\n}\n'
-        % (defaults if entries else "0.0", len(entries)))
+        % (defaults if entries else "0.0", len(entries)) +
+        'extern "C" int pops_program_param_count() { return pops_problem_param_count(); }\n'
+        'extern "C" int pops_program_param_block(int i) { return pops_problem_param_block(i); }\n'
+        'extern "C" int pops_program_param_index(int i) { return pops_problem_param_index(i); }\n'
+        'extern "C" const char* pops_program_param_name(int i) { return pops_problem_param_name(i); }\n'
+        'extern "C" double pops_program_param_default(int i) { return pops_problem_param_default(i); }\n')

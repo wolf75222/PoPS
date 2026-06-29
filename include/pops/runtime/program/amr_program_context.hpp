@@ -51,7 +51,7 @@ namespace program {
 
 class AmrProgramContext {
  public:
-  /// Wrap an AmrSystem passed as a flat void* (what pops_install_program_amr(void* sys) receives). The
+  /// Wrap an AmrSystem passed as a flat void* (what pops_problem_install_amr(void* sys) receives). The
   /// ctor pulls the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR
   /// blocks must be materialized -- install_problem forces the build before install()).
   explicit AmrProgramContext(void* sys)

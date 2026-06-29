@@ -33,6 +33,11 @@ class CompiledProblem:
 
     # --- compiled-artifact metadata (Spec 5 sec.12.4, #48-49) ----------------
     @property
+    def path(self):
+        """Path to the combined ``problem.so`` artifact."""
+        return self.so_path
+
+    @property
     def codegen_dir(self):
         """Directory containing the compiled ``.so`` and any persisted generated source."""
         import os
@@ -264,7 +269,13 @@ class CompiledProblem:
         if this handle carries no Program."""
         import os
         program = self._require_program("dump_cpp")
-        src = program.emit_cpp_program(model=self.model)
+        target_abi = (
+            self._problem_identity.get("semantic", {})
+            .get("runtime_route", {})
+            .get("target", "system")
+        )
+        src = program._emit_cpp_program_for_target(model=self.model, target=target_abi,
+                                                   problem_hash=self.problem_hash)
         name = self.program_name or "problem"
         if str(target).endswith(".cpp"):
             out_path = str(target)
@@ -317,9 +328,9 @@ class CompiledProblem:
     def inspect_amr(self, layout=None):
         """STATIC AMR report on this compiled artifact (Spec 5 sec.8.12 / sec.8.4).
 
-        A compiled time ``Program`` carries NO AMR layout descriptor (it lowers a whole-system time
-        program, a single-level ``System`` concept today -- ``AmrSystem`` has no ``install_problem``
-        seam). So this delegates to the top-level :func:`pops.inspect_amr` on an EXPLICIT ``layout``
+        A compiled problem handle carries no AMR layout descriptor unless it was recorded in the
+        problem identity. This delegates to the top-level :func:`pops.inspect_amr` on an EXPLICIT
+        ``layout``
         argument (an ``pops.mesh.layouts.AMR`` / ``Uniform`` descriptor), and with ``layout=None``
         returns the native AMR envelope report -- never a fabricated hierarchy the artifact does not
         carry. @p layout an optional AMR / Uniform layout descriptor (default: the native envelope).

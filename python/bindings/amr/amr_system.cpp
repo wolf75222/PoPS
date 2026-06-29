@@ -222,7 +222,7 @@ struct AmrSystem::Impl {
   // --- compiled time-program install seam (epic ADC-511 / ADC-508, Spec 6) ---------------------------
   // Macro-step body of an installed compiled time Program (parity System::Impl::program_step_); empty =
   // the historical AmrRuntime::step / single-block path. Set by install_program_step (the .so's
-  // pops_install_program_amr installs it through the AmrProgramContext). Read by AmrSystem::step.
+  // pops_problem_install_amr installs it through the AmrProgramContext). Read by AmrSystem::step.
   std::function<void(double)> program_step_;
   // GLOBAL macro-step cadence around program_step_ (parity System::Impl, ADC-411). Defaults 1/1 -> one
   // program closure call per macro-step. substeps n: program_step_ runs n times over eff_dt/n. stride M:
@@ -230,15 +230,15 @@ struct AmrSystem::Impl {
   // set_program_cadence; consumed by AmrSystem::step (run_program_cadence_).
   int program_substeps_ = 1;
   int program_stride_ = 1;
-  // IR hash of the installed compiled Program (the .so's pops_program_hash); empty until install_problem
+  // IR hash of the installed compiled Program (the .so's pops_problem_hash); empty until install_problem
   // records it. Parity System::Impl::installed_program_hash_ (checkpoint guard).
   std::string installed_program_hash_;
   // NAME-based block binding (Spec 3 criterion 23, ADC-457): program-index -> AMR-block-index map. Built
-  // by install_problem from the .so's pops_program_block_name table; read by the AmrProgramContext to
+  // by install_problem from the .so's pops_problem_block_name table; read by the AmrProgramContext to
   // resolve a Program block index to the name-matched AMR block. EMPTY = identity.
   std::vector<int> program_block_map_;
   // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-508, parity ADC-510): program-block index -> current
-  // RuntimeParams. Seeded to the declaration defaults by install_problem (the .so pops_program_param_*
+  // RuntimeParams. Seeded to the declaration defaults by install_problem (the .so pops_problem_param_*
   // metadata) and overwritten at run time by set_program_params -- the installed step closure reads the
   // CURRENT value through the AmrProgramContext each step (no recompile). Lives HERE (not in the .so).
   std::map<int, RuntimeParams> program_block_params_;
@@ -1595,9 +1595,9 @@ std::map<std::string, double> AmrSystem::program_diagnostics() const {
 // Load a generated problem.so and install its compiled time Program on the AMR hierarchy. Mirrors
 // System::install_problem (the loader logic is VERBATIM, only the AMR ABI conventions differ: the
 // global-scope promotion is anchored on amr_native_anchor like add_native_block, not pops::abi_key, and
-// the install entry is pops_install_program_amr). The blocks must be ALREADY added (the AMR registry is
+// the install entry is pops_problem_install_amr). The blocks must be ALREADY added (the AMR registry is
 // frozen at the first lazy build); install_problem runs BEFORE the first step so the .so's
-// pops_install_program_amr captures an AmrProgramContext over THIS AmrSystem. The .so stays loaded.
+// pops_problem_install_amr captures an AmrProgramContext over THIS AmrSystem. The .so stays loaded.
 POPS_EXPORT void AmrSystem::install_problem(const std::string& so_path) {
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
@@ -1623,10 +1623,10 @@ POPS_EXPORT void AmrSystem::install_problem(const std::string& so_path) {
         "globally ; cf. POPS_EXPORT)");
   }
 #endif
-  auto key_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_abi_key"));
+  auto key_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_problem_abi_key"));
   if (!key_fn) {
     pops::dynlib::close(h);
-    throw std::runtime_error("AmrSystem::install_problem : pops_program_abi_key missing from '" +
+    throw std::runtime_error("AmrSystem::install_problem : pops_problem_abi_key missing from '" +
                              so_path +
                              "' (regenerate the problem module with the current pops headers)");
   }
@@ -1641,13 +1641,13 @@ POPS_EXPORT void AmrSystem::install_problem(const std::string& so_path) {
         "pops headers as the _pops module.");
   }
   auto install =
-      reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program_amr"));
+      reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_problem_install_amr"));
   if (!install) {
     pops::dynlib::close(h);
     throw std::runtime_error(
         "AmrSystem::install_problem : generated AMR install entry missing from '" + so_path +
         "' (regenerate the time Program with target='amr_system' : a target='system' .so exports "
-        "pops_install_program, installable only on System -- use System for that, or AmrSystem with "
+        "pops_problem_install, installable only on System -- use System for that, or AmrSystem with "
         "an AMR-target Program)");
   }
 #if !defined(_WIN32)
@@ -1689,15 +1689,15 @@ POPS_EXPORT void AmrSystem::install_problem(const std::string& so_path) {
   }
 #endif
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). The Program numbers its blocks in P.state
-  // declaration order (the .so's pops_program_block_name table); the AMR facade numbers its blocks in
+  // declaration order (the .so's pops_problem_block_name table); the AMR facade numbers its blocks in
   // add order (block_names). Bind by NAME, store the program-index -> AMR-block-index map (read by the
   // AmrProgramContext). A Program block whose name has no AMR block fails loud. A pre-Spec-3 .so (the
   // count symbol absent) -> identity. VERBATIM mirror of System::install_problem.
   {
     using count_t = int (*)();
     using name_t = const char* (*)(int);
-    auto block_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_block_count"));
-    auto block_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_program_block_name"));
+    auto block_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_problem_block_count"));
+    auto block_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_problem_block_name"));
     if (block_count && block_name) {
       const std::vector<std::string> amr_names = block_names();
       const int n = block_count();
@@ -1723,17 +1723,17 @@ POPS_EXPORT void AmrSystem::install_problem(const std::string& so_path) {
     }
   }
   // RUNTIME PARAMETERS (ADC-508, parity ADC-510). Seed each PROGRAM block's RuntimeParams to the .so
-  // pops_program_param_* declaration defaults so an install WITHOUT a runtime set behaves as with a const
+  // pops_problem_param_* declaration defaults so an install WITHOUT a runtime set behaves as with a const
   // param; a later Python params= route overwrites the supplied values via set_program_params. A Program
   // with no runtime param (the count symbol absent or 0) seeds nothing. VERBATIM mirror of System.
   {
     using count_t = int (*)();
     using ival_t = int (*)(int);
     using dval_t = double (*)(int);
-    auto pcount = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_param_count"));
-    auto pblock = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_block"));
-    auto pindex = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_index"));
-    auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
+    auto pcount = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_problem_param_count"));
+    auto pblock = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_problem_param_block"));
+    auto pindex = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_problem_param_index"));
+    auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_problem_param_default"));
     if (pcount && pblock && pindex && pdef) {
       const int np = pcount();
       std::map<int, std::vector<double>> defaults_by_block;  // program block -> defaults in index order
@@ -1758,7 +1758,7 @@ POPS_EXPORT void AmrSystem::install_problem(const std::string& so_path) {
   p_->ensure_built();
   install(static_cast<void*>(this));
   // Record the program's IR hash (parity System, checkpoint guard). Missing symbol -> empty hash.
-  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
+  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_problem_hash"));
   p_->installed_program_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
   // .so left loaded for the duration of the process (the installed closure points to code in it).
 }

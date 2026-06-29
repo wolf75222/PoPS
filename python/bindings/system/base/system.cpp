@@ -167,7 +167,7 @@ struct System::Impl {
   std::function<void(double)>
       program_step_;  // compiled time Program macro-step body (ADC-399); empty = historical path
   // OPTIONAL compiled-Program dt bound (epic ADC-399 / ADC-417, spec s18). When a generated .so exports
-  // pops_program_has_dt_bound() == true, install_problem stores a closure here that runs the .so's
+  // pops_problem_has_dt_bound() == true, install_problem stores a closure here that runs the .so's
   // lowered dt_bound expression (a scalar reading state + reductions / hmin / max_wave_speed) for a
   // given cfl. step_cfl then tightens dt to min(native CFL dt, program dt bound). Empty = no program dt
   // bound -> the native CFL is used UNCHANGED. Referenced by SystemStepper::step_cfl (so the MockImpl in
@@ -179,13 +179,13 @@ struct System::Impl {
   // macro-steps with eff_dt = M*dt (GLOBAL hold-then-catch-up). Set by System::set_program_cadence.
   int program_substeps_ = 1;
   int program_stride_ = 1;
-  // IR hash of the installed compiled Program (the .so's pops_program_hash, ADC-406b). Empty until
+  // IR hash of the installed compiled Program (the .so's pops_problem_hash, ADC-406b). Empty until
   // install_problem records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
   // Program is rejected fail-loud (mismatched buffers / cadence would be meaningless).
   std::string installed_program_hash_;
   // NAME-BASED block binding (Spec 3 criterion 23, ADC-457): program-index -> system-index map. entry
   // p holds the System block index that the Program's block p (in P.state declaration order) names.
-  // Built by install_problem from the .so's pops_program_block_name table; read by ProgramContext to
+  // Built by install_problem from the .so's pops_problem_block_name table; read by ProgramContext to
   // resolve a Program block index to the name-matched System block. EMPTY = identity (single-block /
   // order-matching Program, or a ProgramContext built directly in a C++ test). Not referenced by
   // SystemStepper -> no MockImpl impact (like program_diagnostics_ / installed_program_hash_).
@@ -197,7 +197,7 @@ struct System::Impl {
   std::map<std::string, Real> program_diagnostics_;
   // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5): program-block index -> current
   // RuntimeParams of a compiled time Program that reads a dsl.Param(..., kind="runtime"). Seeded to
-  // the declaration defaults by install_problem (the .so pops_program_param_* metadata) and overwritten
+  // the declaration defaults by install_problem (the .so pops_problem_param_* metadata) and overwritten
   // at run time by set_program_params -- the installed step closure reads the CURRENT value through
   // ProgramContext::program_params each step (no recompile, the AOT-native set_block_params contract,
   // mirrored for the Program). Lives HERE (not in the .so) so the value change reaches the captured
@@ -2324,10 +2324,10 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
         "globally; cf. POPS_EXPORT)");
   }
 #endif
-  auto key_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_abi_key"));
+  auto key_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_problem_abi_key"));
   if (!key_fn) {
     pops::dynlib::close(h);
-    throw std::runtime_error("System::install_problem: pops_program_abi_key missing from '" +
+    throw std::runtime_error("System::install_problem: pops_problem_abi_key missing from '" +
                              so_path +
                              "' (regenerate the problem module with the current pops headers)");
   }
@@ -2341,7 +2341,7 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "pops headers as the _pops module.");
   }
-  auto install = reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program"));
+  auto install = reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_problem_install"));
   if (!install) {
     pops::dynlib::close(h);
     throw std::runtime_error("System::install_problem: generated install entry missing from '" +
@@ -2402,7 +2402,7 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
   }
 #endif
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program numbers its blocks in
-  // P.state declaration order (the .so's pops_program_block_name table); the System numbers its blocks
+  // P.state declaration order (the .so's pops_problem_block_name table); the System numbers its blocks
   // in add order (block_names). They need NOT agree -- bind by NAME, not add-order. Read the .so's
   // block names, map each Program block index to the System block of that name, and store the
   // program-index -> system-index map (read by ProgramContext to resolve every ctx.state / rhs_into /
@@ -2413,8 +2413,8 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
   {
     using count_t = int (*)();
     using name_t = const char* (*)(int);
-    auto block_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_block_count"));
-    auto block_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_program_block_name"));
+    auto block_count = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_problem_block_count"));
+    auto block_name = reinterpret_cast<name_t>(pops::dynlib::sym(h, "pops_problem_block_name"));
     if (block_count && block_name) {
       const std::vector<std::string> sys_names = block_names();
       const int n = block_count();
@@ -2440,7 +2440,7 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
     }
   }
   // RUNTIME PARAMETERS (ADC-510, Spec 5 C5). A Program whose physics reads dsl.Param(..., kind="runtime")
-  // exports a pops_program_param_* table: per flat parameter, its PROGRAM block index, its stable index
+  // exports a pops_problem_param_* table: per flat parameter, its PROGRAM block index, its stable index
   // WITHIN that block (sorted-name order, matching the lowered params.get(index)) and its declaration
   // default. Group the defaults per block (in index order) and seed each block's RuntimeParams to those
   // defaults, so an install WITHOUT a runtime set behaves as with a const param. A later Python params=
@@ -2452,10 +2452,10 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
     using count_t = int (*)();
     using ival_t = int (*)(int);
     using dval_t = double (*)(int);
-    auto pcount = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_program_param_count"));
-    auto pblock = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_block"));
-    auto pindex = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_program_param_index"));
-    auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_program_param_default"));
+    auto pcount = reinterpret_cast<count_t>(pops::dynlib::sym(h, "pops_problem_param_count"));
+    auto pblock = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_problem_param_block"));
+    auto pindex = reinterpret_cast<ival_t>(pops::dynlib::sym(h, "pops_problem_param_index"));
+    auto pdef = reinterpret_cast<dval_t>(pops::dynlib::sym(h, "pops_problem_param_default"));
     if (pcount && pblock && pindex && pdef) {
       const int np = pcount();
       std::map<int, std::vector<double>> defaults_by_block;  // program block -> defaults in index order
@@ -2472,21 +2472,20 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
     }
   }
   install(static_cast<void*>(this));
-  // Record the program's IR hash (ADC-406b): the optional pops_program_hash export (a stable IR key,
-  // cf. _PROGRAM_CPP_TEMPLATE) is serialized in the checkpoint so a restart against a DIFFERENT
-  // compiled Program is rejected fail-loud. Missing symbol (older module) -> empty hash, no guard.
-  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
+  // Record the compiled problem hash (ADC-406b): the pops_problem_hash export is serialized in the
+  // checkpoint so a restart against a DIFFERENT compiled artifact is rejected fail-loud.
+  auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_problem_hash"));
   p_->installed_program_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
-  // OPTIONAL dt bound (epic ADC-399 / ADC-417, spec s18). A Program may export a SECOND ABI pair --
-  // pops_program_has_dt_bound() and pops_program_dt_bound(ProgramContext*, Real cfl) -- alongside
-  // pops_install_program. When present AND has_dt_bound() is true, store a closure that builds a
+  // OPTIONAL dt bound (epic ADC-399 / ADC-417, spec s18). A problem artifact may export a SECOND ABI
+  // pair -- pops_problem_has_dt_bound() and pops_problem_dt_bound(ProgramContext*, Real cfl). When
+  // present AND has_dt_bound() is true, store a closure that builds a
   // ProgramContext over THIS System and runs the .so's lowered dt_bound expression for a given cfl;
   // step_cfl tightens dt to min(native CFL, program dt bound). A Program WITHOUT a dt bound (older
   // module / has_dt_bound() == false) clears the closure -> the native CFL is used UNCHANGED.
   using has_dt_t = bool (*)();
   using dt_bound_t = pops::Real (*)(pops::runtime::program::ProgramContext*, pops::Real);
-  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
-  auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound"));
+  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_problem_has_dt_bound"));
+  auto dt_bound = reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_problem_dt_bound"));
   if (has_dt && dt_bound && has_dt()) {
     System* self = this;
     p_->program_dt_bound_ = [self, dt_bound](Real cfl) -> Real {

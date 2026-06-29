@@ -274,7 +274,7 @@ void init_amr(py::module_& m) {
       // here. cf. AmrSystem::set_program_params.
       .def("set_program_params", &AmrSystem::set_program_params, py::arg("prog_block"),
            py::arg("values"))
-      // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
+      // Hash of the installed compiled problem (the .so's pops_problem_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
       .def("n_blocks", &AmrSystem::n_blocks)

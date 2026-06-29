@@ -70,8 +70,8 @@ from pops.codegen.program_emit_module_ops import (  # noqa: F401
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
 # --- C++ codegen (Phase 2c-ii / Phase 4b): lower the IR to a problem.so source ---
-def emit_cpp_program(program, model=None, target="system"):
-    """Generate the C++ source of a Program ``.so``.
+def emit_cpp_program(program, model=None, target="system", problem_hash=None):
+    """Generate the C++ source of a combined ``problem.so``.
 
     The emitted ABI installs a macro-step closure built only from ProgramContext primitives. Target
     ``"amr_system"`` additionally exports the AMR install entry; multi-block programs export block
@@ -82,13 +82,14 @@ def emit_cpp_program(program, model=None, target="system"):
     program.validate()
     _check_lowerable(program, model)
     prelude, body = _emit_body(program, model)
-    # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
-    # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
+    # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_problem_has_dt_bound()
+    # (true iff a bound was set) and pops_problem_dt_bound(ProgramContext*, cfl) (the lowered scalar
     # expression). Without a bound, has_dt_bound() returns false and the dt_bound function returns a
     # +inf sentinel (never reached: the loader stores the closure only when has_dt_bound() is true).
     has_dt_bound, dt_bound_body = _emit_dt_bound(program, model)
     return _PROGRAM_CPP_TEMPLATE.format(
-        name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
+        name=json.dumps(program.name), hash=program._ir_hash(),
+        problem_hash=problem_hash or program._ir_hash(), prelude=prelude, body=body,
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, model),
         module_operators=_emit_generated_module_operators(program, model),
@@ -98,7 +99,7 @@ def emit_cpp_program(program, model=None, target="system"):
 
 def _emit_block_names(program):
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
-    ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
+    ``pops_problem_block_count()`` and ``pops_problem_block_name(int)`` -- the Program's block names in
     ``_block_indices`` order (P.state declaration order, the order the step body's ``ctx.state(idx)``
     addresses). System::install_problem reads them, matches each to the instantiated System block of
     that name, and stores the program-index -> system-index map (read by ProgramContext), so the
@@ -112,9 +113,12 @@ def _emit_block_names(program):
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
         "// P.state declaration order. install_problem matches each to a System block BY NAME (not\n"
         "// add-order) and builds the program-index -> system-index map ProgramContext resolves.\n"
-        'extern "C" int pops_program_block_count() { return %d; }\n' % len(names) +
-        'extern "C" const char* pops_program_block_name(int i) {\n'
-        '  switch (i) {\n%s    default: return "";\n  }\n}\n' % cases)
+        'extern "C" int pops_problem_block_count() { return %d; }\n' % len(names) +
+        'extern "C" const char* pops_problem_block_name(int i) {\n'
+        '  switch (i) {\n%s    default: return "";\n  }\n}\n'
+        'extern "C" int pops_program_block_count() { return pops_problem_block_count(); }\n'
+        'extern "C" const char* pops_program_block_name(int i) { return pops_problem_block_name(i); }\n'
+        % cases)
 
 def _emit_module_metadata(program, model=None):
     """C++ source of the GeneratedModule metadata the .so exports (Spec 2 / ADC-442).
@@ -169,7 +173,7 @@ def _emit_module_metadata(program, model=None):
 
 def _emit_dt_bound(program, model=None):
     """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
-    pops_program_has_dt_bound returns and the C++ body of pops_program_dt_bound. No bound -> ("false",
+    pops_problem_has_dt_bound returns and the C++ body of pops_problem_dt_bound. No bound -> ("false",
     a +inf return that is never reached). The bound is a READ-ONLY scalar sub-program: it reuses the
     same per-op lowering (state -> ctx.state(idx), reductions, cfl/hmin/max_wave_speed, scalar_op) and
     returns the final scalar. ADC-426: a multi-block dt bound may read several blocks' states (e.g.

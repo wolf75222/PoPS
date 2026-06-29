@@ -169,7 +169,7 @@ struct SchurEnergyKernelC {
 class ProgramContext {
  public:
   explicit ProgramContext(System* sys) : sys_(sys) {}
-  /// Wraps a System passed as a flat void* (what pops_install_program(void* sys) receives).
+  /// Wraps a System passed as a flat void* (what pops_problem_install(void* sys) receives).
   explicit ProgramContext(void* sys) : sys_(static_cast<System*>(sys)) {}
 
   /// Register the macro-step body. @p step advances ONE macro-step over dt (it owns solve_fields,

@@ -330,6 +330,13 @@ def _compiled_problem_identity(*, source, model, program, layout, backend, targe
                 "backend": _stable_identity_value(backend),
                 "libraries": _library_identity(library_manifests),
             },
+            "toolchain": {
+                "compiler": compiler,
+                "std": std,
+                "abi_key": abi_key,
+                "native_features": _native_feature_key(),
+                "optflags": list(optflags),
+            },
             "runtime_route": {
                 "target": target,
             },
@@ -416,15 +423,35 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
     if model is not None and hasattr(model, "check"):
         model.check()
 
-    src = time._emit_cpp_program_for_target(model=model, target=target)
-
     include = include or pops_include()
     sig = pops_header_signature(include)
     cc, cflags, lflags = pops_loader_build_flags(cxx)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
     abi_key = "%s|%s|%s" % (sig, cc, eff_std)
     optflags = _dsl_optflags()
+
+    # Compute the semantic problem hash first, then embed that hash into the generated problem ABI.
+    # A second identity pass records the final generated-source guard/cache key. The semantic digest
+    # is independent of the generated source bytes, so the second pass must return the same hash.
+    src_probe = time._emit_cpp_program_for_target(model=model, target=target)
     problem_identity, problem_hash, module_hash, program_hash, source_hash = (
+        _compiled_problem_identity(
+            source=src_probe,
+            model=model,
+            program=time,
+            layout=layout,
+            backend=backend_descriptor,
+            target=target,
+            include=include,
+            compiler=cc,
+            std=eff_std,
+            abi_key=abi_key,
+            optflags=optflags,
+            library_manifests=library_manifests,
+        )
+    )
+    src = time._emit_cpp_program_for_target(model=model, target=target, problem_hash=problem_hash)
+    problem_identity, final_problem_hash, module_hash, program_hash, source_hash = (
         _compiled_problem_identity(
             source=src,
             model=model,
@@ -440,6 +467,10 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
             library_manifests=library_manifests,
         )
     )
+    if final_problem_hash != problem_hash:
+        raise RuntimeError(
+            "compile_problem: internal problem hash instability while embedding pops_problem_hash")
+    problem_hash = final_problem_hash
     cache_key = _compiled_problem_cache_key(problem_identity)
 
     if so_path is None:

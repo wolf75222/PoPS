@@ -109,7 +109,7 @@ void init_system(py::module_& m) {
       // ABI is untouched; CompiledTime(substeps=, stride=) threads through here. Both must be >= 1.
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
            py::arg("stride"))
-      // ADC-406b: IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if
+      // ADC-406b: hash of the installed compiled problem (the .so's pops_problem_hash), or "" if
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson

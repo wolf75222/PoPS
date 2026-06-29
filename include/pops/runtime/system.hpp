@@ -805,7 +805,7 @@ class System {
   /// the global scope (same self-promotion as the native loader). Mirrors add_native_block; the .so
   /// stays loaded for the process lifetime.
   POPS_EXPORT void install_problem(const std::string& so_path);
-  /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),
+  /// Hash of the installed compiled problem (the string returned by the .so's pops_problem_hash),
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
   /// a DIFFERENT compiled Program is rejected fail-loud (the buffers / cadence would be meaningless).
   POPS_EXPORT std::string installed_program_hash() const;

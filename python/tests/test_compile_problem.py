@@ -330,7 +330,7 @@ def main():
     if os.path.isfile(dbg_cpp):
         with open(dbg_cpp) as _f:
             dumped = _f.read()
-        chk("pops_install_program" in dumped and "ProgramContext" in dumped,
+        chk("pops_problem_install" in dumped and "ProgramContext" in dumped,
             "the dumped .cpp contains the ProgramContext closure")
 
     print("%s test_compile_problem" % ("FAIL (%d)" % fails if fails else "PASS"))

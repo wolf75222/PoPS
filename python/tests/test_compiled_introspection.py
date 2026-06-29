@@ -304,6 +304,7 @@ def test_metadata_attributes_present():
     print("== metadata attributes (sec.12.4) ==")
     cp = _compiled()
     chk(cp.codegen_dir == os.path.dirname(cp.so_path), "codegen_dir is the .so directory")
+    chk(cp.path == cp.so_path, "path aliases the combined problem.so path")
     chk(cp.problem_hash == "deadbeefcafe", "problem_hash is present")
     chk(cp.abi_key == "SIG|c++|c++23", "abi_key is present")
     chk(cp.cache_key == "0badc0de", "cache_key is present")
@@ -348,6 +349,9 @@ def test_compiled_problem_identity_is_structured():
         "layout identity includes nested mesh options")
     chk(semantic["descriptors"]["backend"]["name"] == "Production",
         "backend descriptor enters semantic identity")
+    chk(semantic["toolchain"]["compiler"] == "c++", "compiler enters semantic identity")
+    chk(semantic["toolchain"]["std"] == "c++23", "C++ standard enters semantic identity")
+    chk(semantic["toolchain"]["abi_key"] == "SIG|c++|c++23", "ABI key enters semantic identity")
     chk(identity["provenance"]["abi_key"] == "SIG|c++|c++23", "ABI/toolchain enters provenance")
     chk(identity["generated_source"]["hash"] == source_hash, "source hash is retained as a guard")
     chk(problem_hash != source_hash, "problem_hash is not just sha256(source)")
@@ -437,6 +441,9 @@ def test_compiled_problem_hash_mutations():
 
     _, backend_changed, _, _, _ = _identity_probe(backend=Production(platform=KokkosSerial()))
     chk(backend_changed != base_hash, "changing backend/platform descriptor changes problem_hash")
+
+    _, toolchain_changed, _, _, _ = _identity_probe(abi_key="SIG|clang++|c++23")
+    chk(toolchain_changed != base_hash, "changing ABI/toolchain fingerprint changes problem_hash")
 
     _, lib_changed, _, _, _ = _identity_probe(libraries=[{"name": "libA", "abi": "1"}])
     chk(lib_changed != base_hash, "changing library manifest changes problem_hash")

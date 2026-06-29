@@ -37,7 +37,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         self._recording = []    # stack of sub-block lists (a control-flow body); see _new / while_
         self._histories = {}    # name -> max declared lag (multistep histories; ADC-406a)
         # OPTIONAL dt bound (spec s18 / ADC-417): a recorded scalar sub-program (cfl -> Scalar) the
-        # generated .so exports as pops_program_dt_bound; None = no bound (the native CFL is used).
+        # generated problem.so exports as pops_problem_dt_bound; None = no bound (the native CFL is used).
         self._dt_bound = None        # (block, scalar_value) once set; the block is the scalar sub-block
         self.dt = _Coeff({1: 1.0})   # symbolic time step; participates in coefficient arithmetic
         # OPTIONAL bound operator registry (Spec 2, operator-first): set by bind_operators so P.call
@@ -75,12 +75,12 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         target = self._target_from_layout(layout)
         return self._emit_cpp_program_for_target(model=model, target=target)
 
-    def _emit_cpp_program_for_target(self, model=None, target="system"):
+    def _emit_cpp_program_for_target(self, model=None, target="system", problem_hash=None):
         """Internal codegen seam using the native ABI token derived from a typed layout."""
         if target not in ("system", "amr_system"):
             raise ValueError("_emit_cpp_program_for_target: target must be 'system' or 'amr_system'")
         from pops.codegen import program_codegen as _pcg
-        return _pcg.emit_cpp_program(self, model=model, target=target)
+        return _pcg.emit_cpp_program(self, model=model, target=target, problem_hash=problem_hash)
 
     @staticmethod
     def _target_from_layout(layout):

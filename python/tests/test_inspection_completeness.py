@@ -234,13 +234,14 @@ def test_dump_cpp_reuses_emit():
     """dump_cpp writes the generated C++ by REUSING emit_cpp_program (host-side, no Kokkos)."""
     print("== dump_cpp reuses the existing emit_cpp_program codegen ==")
     cp = _compiled(model=_dump_module())
-    expected = cp.program.emit_cpp_program(model=cp.model)
+    expected = cp.program._emit_cpp_program_for_target(model=cp.model, target="system",
+                                                       problem_hash=cp.problem_hash)
     with tempfile.TemporaryDirectory() as tmp:
         # A directory target writes <program_name>.cpp inside it.
         out = cp.dump_cpp(tmp)
         chk(out == os.path.join(tmp, "intro_demo.cpp"), "dump_cpp(dir) writes <name>.cpp in the dir")
         chk(open(out, encoding="utf-8").read() == expected, "the written C++ IS the emitted source")
-        chk("pops_install_program" in open(out, encoding="utf-8").read(),
+        chk("pops_problem_install" in open(out, encoding="utf-8").read(),
             "the generated source carries the .so install entry point")
         # An explicit .cpp path is written verbatim.
         explicit = os.path.join(tmp, "custom.cpp")
