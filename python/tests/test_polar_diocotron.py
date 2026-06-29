@@ -50,8 +50,8 @@ def test_polar_diocotron_mode_grows_and_conserves():
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0)),
-        spatial=pops.Spatial(weno5=True), time=pops.Explicit(method="ssprk3"))
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.WENO5()), time=pops.Explicit.ssprk3())
+    sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     sim.set_density("ne", _hollow_ring_density())
 
     m0 = sim.mass("ne")

@@ -61,10 +61,13 @@ def test_typed_descriptor_constructors_reject_a_kind_string():
     # The TYPE is the kind: a typed descriptor constructor must not accept a kind="..."
     # selector string. CPython raises TypeError("unexpected keyword argument 'kind'").
     from pops.numerics.riemann import HLL
+    from pops.physics.model import Param
     from pops.params import RuntimeParam
 
     with pytest.raises(TypeError):
         HLL(kind="x")
+    with pytest.raises(TypeError):
+        Param("a", 1.0, kind="runtime")
     with pytest.raises(TypeError):
         RuntimeParam("a", kind="runtime")
 
@@ -101,25 +104,15 @@ def test_catalog_descriptors_are_inspectable_and_validate():
                           "catalogs")
 
 
-def test_problem_is_not_a_descriptor():
-    # Spec 5 sec.6 table / sec.15: a Case is an ASSEMBLY that CONTAINS descriptors (its layout,
-    # the blocks' physics, the field problems). It is NOT itself a Descriptor. The architecture
-    # promise: isinstance(Case(...), Descriptor) is False, yet every Case method still works
-    # (it duck-types the inspectable surface), and the parts it holds ARE descriptors.
+def test_public_top_level_assembly_is_not_a_descriptor_because_it_is_not_public():
+    # Corrective clean break: the old top-level assembly façade is not public. Descriptors remain
+    # descriptors, but there is no public pops.Case/pops.Problem object pretending to be one.
     import pops
-    from pops.descriptors import Descriptor, DescriptorProtocol
+    from pops.descriptors import Descriptor
 
-    prob = pops.Case(name="arch").block("ne", physics=type("M", (), {"name": "m"})())
-    assert not isinstance(prob, Descriptor), (
-        "Spec 5 sec.6: a Case must NOT be a pops.descriptors.Descriptor (it is an assembly "
-        "that contains descriptors, not one itself)")
-    # The inspectable surface survives the de-Descriptor change (structural duck typing).
-    assert isinstance(prob, DescriptorProtocol)
-    assert prob.validate.__self__ is prob  # validate() is implemented directly on Case.
-    assert prob.inspect()["category"] == "case"
-    assert prob.lower()["name"] == "arch"
-    # The layout it CONTAINS is still a descriptor (the assembly holds descriptors).
-    assert isinstance(prob.layout, Descriptor)
+    assert not hasattr(pops, "Case")
+    assert not hasattr(pops, "Problem")
+    assert isinstance(Descriptor(), Descriptor)
 
 
 def test_optimization_math_rejects_a_bare_string():
@@ -138,6 +131,37 @@ def test_optimization_math_rejects_a_bare_string():
     # Typed usage is intact and the default stays StrictMath.
     assert isinstance(Optimization().math, StrictMath)
     assert Optimization(math=FastMath()).options()["math"] == "FastMath"
+
+
+def test_output_policy_rejects_string_format_and_unimplemented_cadence():
+    from pops.output import OutputPolicy
+    from pops.time.schedule import subcycle, when
+
+    with pytest.raises(TypeError) as excinfo:
+        OutputPolicy(format="hdf5")
+    assert "format" in str(excinfo.value) and "HDF5()" in str(excinfo.value)
+
+    with pytest.raises(NotImplementedError):
+        OutputPolicy(cadence=when(lambda: True))
+    with pytest.raises(NotImplementedError):
+        OutputPolicy(cadence=subcycle(2))
+
+
+def test_disc_domain_rejects_string_transport_mode():
+    from pops.mesh.geometry import DiscDomain
+
+    with pytest.raises(TypeError) as excinfo:
+        DiscDomain(center=(0.0, 0.0), radius=0.2, mode="cutcell")
+    assert "mode" in str(excinfo.value) and "CutCell()" in str(excinfo.value)
+
+
+def test_physics_riemann_rejects_string_selector():
+    import pops
+
+    model = pops.physics.Model("riemann_string_guard")
+    with pytest.raises(TypeError) as excinfo:
+        model.riemann("hllc")
+    assert "riemann" in str(excinfo.value) and "HLLC()" in str(excinfo.value)
 
 
 def test_compiled_brick_without_a_manifest_is_a_clear_error():

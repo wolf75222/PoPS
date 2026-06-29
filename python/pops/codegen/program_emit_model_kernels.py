@@ -357,7 +357,7 @@ def _emit_solve_local_nonlinear_kernel(model, v, guess_var, out_var, block_idx=0
 
 def _linear_source_rows(impl, name):
     """The n_cons x n_cons matrix of Expr of a model linear source @p name (m.linear_source).
-    @p impl is the HyperbolicModel."""
+    @p impl is the model-codegen protocol object."""
     if name not in impl._linear_sources:
         raise NotImplementedError(
             "emit_cpp_program: linear source '%s' is not declared on the model (m.linear_source); "

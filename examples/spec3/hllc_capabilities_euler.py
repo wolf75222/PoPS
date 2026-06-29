@@ -2,14 +2,14 @@
 
 The Riemann solvers are native C++ (`pops::HLLCFlux` etc.). HLLC is generic but needs the
 model to provide capabilities: a pressure and the fluid roles Density/MomentumX/MomentumY.
-`m.riemann("hllc")` validates this and drives the dsl `enable_hllc()` that GENERATES the
-`POPS_HD` `contact_speed` / `hllc_star_state` hooks from those roles. A model that lacks a
+`m.riemann(HLLC())` validates this and declares the HLLC capability that the compiler lowers
+to `contact_speed` / `hllc_star_state` hooks from those roles. A model that lacks a
 capability is rejected with a clear message; Rusanov needs only a max wave speed.
 
 Run: python3 examples/spec3/hllc_capabilities_euler.py
 """
-import pops.physics as physics
 from pops.physics import Model
+from pops.numerics.riemann import HLLC, Rusanov
 
 
 def euler(with_pressure=True):
@@ -28,19 +28,19 @@ def euler(with_pressure=True):
 def main():
     # 1) a role-tagged Euler model with pressure: HLLC is accepted, hooks get generated.
     m = euler(with_pressure=True)
-    m.riemann("hllc")
-    print("HLLC accepted; enable_hllc driven:", m._dsl._m._hllc)
-    print("roles:", physics._roles_for(m._dsl._m))
+    m.riemann(HLLC())
+    print("HLLC accepted:", m._riemann)
+    print("roles:", m.module.state_spaces()["U"].roles)
 
     # 2) Rusanov needs only a max wave speed -- no pressure / no roles required.
     bare = Model("bare")
     bare.state("U", components=["q0", "q1"])  # no fluid roles
-    bare.riemann("rusanov")
+    bare.riemann(Rusanov())
     print("Rusanov accepted on a role-free model:", bare._riemann)
 
     # 3) a model WITHOUT pressure is rejected for HLLC, with a clear message.
     try:
-        euler(with_pressure=False).riemann("hllc")
+        euler(with_pressure=False).riemann(HLLC())
     except ValueError as exc:
         print("rejected (no pressure):", exc)
 

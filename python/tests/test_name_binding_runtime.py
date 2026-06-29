@@ -70,7 +70,7 @@ def two_block_program(t, name="nb_two_block"):
     P = t.Program(name)
     for blk in ("a", "b"):
         U = P.state(blk)
-        R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
+        R = P._legacy_rhs(name="R_" + blk, state=U, flux=True, sources=["decay"])
         P.commit(blk, P.linear_combine(blk + "_next", U + P.dt * R))
     return P
 
@@ -85,7 +85,7 @@ def _run():
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops / pops.time unavailable
         _skip("pops / pops.time / numpy unavailable: %s" % exc)
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
         _skip("_pops lacks the install_program binding (rebuild _pops)")
 
     print("== NAME-based block binding: reversed System add-order matches in-order ==")
@@ -110,26 +110,26 @@ def _run():
         sim = pops.System(n=n, L=1.0, periodic=True)
         for blk in add_order:
             try:
-                cm = passive_model("nb_blk_" + blk).compile(backend="production")
+                cm = passive_model("nb_blk_" + blk)._compile_for_runtime(backend=pops.codegen.Production())
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
             sim._add_equation(blk, cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                             time=pops.Explicit(method="euler"))
+                             time=pops.Explicit.euler())
         for blk in add_order:
-            sim.set_state(blk, ic[blk][None, :, :])
+            sim._set_state(blk, ic[blk][None, :, :])
         return sim
 
     # (1) Baseline: blocks added in P.state order (a, b).
     sim_inorder = make_sim(["a", "b"])
     sim_inorder._install_program_so(comp.so_path)
     sim_inorder.step(dt)
-    ref = {blk: np.array(sim_inorder.get_state(blk)) for blk in ("a", "b")}
+    ref = {blk: np.array(sim_inorder._get_state(blk)) for blk in ("a", "b")}
 
     # (2) Reversed: blocks added (b, a). The .so binds by NAME, so each block must match the baseline.
     sim_rev = make_sim(["b", "a"])
     sim_rev._install_program_so(comp.so_path)
     sim_rev.step(dt)
-    got = {blk: np.array(sim_rev.get_state(blk)) for blk in ("a", "b")}
+    got = {blk: np.array(sim_rev._get_state(blk)) for blk in ("a", "b")}
 
     for blk in ("a", "b"):
         e = float(np.abs(got[blk] - ref[blk]).max())

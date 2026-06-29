@@ -240,18 +240,18 @@ def _run_one(t, pops, np, ncomp, init):
             model=_passive_model("mc_prog%d" % ncomp, cons),
             time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(),
                              tol=tol, max_iter=200))
-        compiled_model = _passive_model("mc_block%d" % ncomp, cons).compile(backend="production")
+        compiled_model = _passive_model("mc_block%d" % ncomp, cons).compile(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])
         return None
 
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_state("blk", init)
+                     time=pops.Explicit.euler())
+    sim._set_state("blk", init)
     sim._install_program_so(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free
-    out = np.array(sim.get_state("blk"))
+    out = np.array(sim._get_state("blk"))
 
     apply = _discrete_helmholtz_mc(n, _ALPHA)
     phi_ref, iters = _np_cg_mc(apply, init, tol=tol)

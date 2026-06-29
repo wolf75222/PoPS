@@ -23,18 +23,18 @@ def _predictor_corrector(t):
     P = t.Program("predictor_corrector_poisson_lorentz")
     dt = P.dt
     U_n = P.state("plasma")
-    f_n = P._solve_fields("fields_n", U_n)
-    R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
+    f_n = P._legacy_solve_fields("fields_n", U_n)
+    R_n = P._legacy_rhs(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
     U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
     U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source("lorentz"),
                                   rhs=U_star_rhs, fields=f_n)
-    f_star = P._solve_fields("fields_star", U_star)
-    R_star = P._rhs_legacy(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
+    f_star = P._legacy_solve_fields("fields_star", U_star)
+    R_star = P._legacy_rhs(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
     C_star = P.apply(operator=P.linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
     Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
     U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source("lorentz"),
                                  rhs=Q, fields=f_star)
-    P._solve_fields("fields_np1", U_np1)
+    P._legacy_solve_fields("fields_np1", U_np1)
     P.commit("plasma", U_np1)
     return P
 
@@ -84,7 +84,7 @@ def test_solve_local_linear_requires_identity(t):
 def test_source_and_apply_are_rhs_like(t):
     P = t.Program("sa")
     U = P.state("plasma")
-    f = P._solve_fields(U)
+    f = P._legacy_solve_fields(U)
     S = P.source("electric", state=U, fields=f)
     LU = P.apply("lorentz", state=U, fields=f)
     assert S.vtype == "rhs" and LU.vtype == "rhs", "source/apply are dU/dt-like (RHS) values"

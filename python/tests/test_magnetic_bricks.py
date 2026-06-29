@@ -37,19 +37,19 @@ n, B0, q = 16, 3.0, -2.0
 print("== MagneticLorentzForce : residu = force magnetique exacte (etat uniforme) ==")
 sim = pops.System(n=n, L=1.0, periodic=True)
 sim._add_block("e",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+              pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                         transport=pops.IsothermalFlux(),
                         source=pops.MagneticLorentzForce(charge=q),
                         elliptic=pops.ChargeDensity(charge=0.0)),  # pas de couplage Poisson
               spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 sim.set_magnetic_field(B0 * np.ones(n * n))
 rho0, v0 = 1.0, 0.7
 ones = np.ones((n, n))
 # etat uniforme : rho=1, m=(0, rho*v0) -> flux a divergence nulle -> R == source magnetique.
 sim.set_primitive_state("e", rho=rho0 * ones, u=0.0 * ones, v=v0 * ones)
 sim.solve_fields()
-R = np.asarray(sim.eval_rhs("e")).reshape(3, n, n)
+R = np.asarray(sim._eval_rhs("e")).reshape(3, n, n)
 s1_expected = q * B0 * (rho0 * v0)   # s[m_x] = qom * B_z * m_y
 s2_expected = 0.0                    # s[m_y] = -qom * B_z * m_x, m_x = 0
 chk(np.allclose(R[0], 0.0, atol=1e-12), "R[rho] = 0 (aucune source de masse)")
@@ -65,12 +65,12 @@ chk(np.all(np.isfinite(rho)), "5 pas magnetises : densite finie")
 print("== PotentialMagneticForce (electrostatique + Lorentz sommees) ==")
 sim2 = pops.System(n=n, L=1.0, periodic=True)
 sim2._add_block("e",
-               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+               pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                          transport=pops.IsothermalFlux(),
                          source=pops.PotentialMagneticForce(charge=q),
                          elliptic=pops.BackgroundDensity(alpha=1.0, n0=1.0)),
                spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sim2.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim2._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 sim2.set_magnetic_field(B0 * np.ones(n * n))
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="xy")

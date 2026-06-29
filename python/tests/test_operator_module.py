@@ -10,8 +10,7 @@ import sys
 
 try:
     from pops import model
-    from pops.ir.expr import Const
-    from pops.physics.facade import Model
+    from pops.ir.expr import Const, Var
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_module (pops unavailable: %s)" % exc)
@@ -75,20 +74,13 @@ def test_module_builder_and_decorator():
     print("OK  Module builder + decorator operators, parameters, aux fields")
 
 
-def test_dsl_model_is_a_module_facade():
-    m = Model("ep")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    m.flux(x=[mx, mx, mx], y=[my, my, my])
-    m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
-    m.elliptic_rhs(rho - 1.0)
-    mod = m.module
+def test_module_exposes_registry_and_spaces():
+    mod = _physics_model("ep", 1.0)
     assert isinstance(mod, model.Module)
     names = mod.operator_registry().names()
-    assert "electric" in names and "fields_from_state" in names and "flux_default" in names
+    assert "electric" in names and "fields_from_state" in names and "flux" in names
     assert "U" in mod.state_spaces() and "fields" in mod.field_spaces()
-    print("OK  Model.module exposes the derived registry + spaces")
+    print("OK  Module exposes the derived registry + spaces")
 
 
 def _build_predictor(P, mdl):
@@ -105,20 +97,27 @@ def _build_predictor(P, mdl):
 
 def _physics_model(name, gain):
     """Two of these differ in physics but share the operator signatures."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho])
-    electric = m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
-    return m
+    mod = model.Module(name)
+    u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y", "B_z"))
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy, bz = Var("grad_x", "aux"), Var("grad_y", "aux"), Var("B_z", "aux")
+    mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator",
+        capabilities={"default": True}, expr=rho - 1.0)
+    mod.operator(
+        name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+        expr={"x": [mx, mx * mx / rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho]})
+    electric = mod.operator(
+        name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source",
+        expr=[Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
+    mod.operator(
+        name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
+        kind="local_linear_operator",
+        expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    mod.rate_operator("explicit_rhs", flux=True, sources=[electric])
+    return mod
 
 
 def test_same_program_two_modules():
@@ -140,7 +139,7 @@ def test_same_program_two_modules():
 def main():
     test_signature_sugar()
     test_module_builder_and_decorator()
-    test_dsl_model_is_a_module_facade()
+    test_module_exposes_registry_and_spaces()
     test_same_program_two_modules()
     print("OK  test_operator_module")
 

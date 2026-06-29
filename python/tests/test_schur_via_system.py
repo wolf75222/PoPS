@@ -12,7 +12,7 @@ la volee, aucune dependance au compilateur C++, CI-safe.
 MODELE NATIF : pops.FluidState(isothermal) + pops.IsothermalFlux() expose les roles
 Density / MomentumX / MomentumY -- exactement ceux requis par set_source_stage.
 Le chemin est :
-  pops.System.add_equation (time=pops.Split(source=pops.CondensedSchur(...)))
+  pops.System.add_equation (time=pops.Split(source=pops.ElectrostaticLorentzSchur(...)))
     -> pops.System.add_equation (time=time.hyperbolic = pops.Explicit())   # transport
       -> _s.add_block (ModelSpec -> dispatch_model -> IsothermalFlux)
     -> _s.set_source_stage (name, kind, theta, alpha)                    # etage Schur
@@ -62,7 +62,7 @@ def iso_fluid_model(cs2=1.0, alpha=1.0):
     Background density alpha*(n - 0) comme second membre du Poisson de systeme.
     """
     return pops.Model(
-        state=pops.FluidState(kind="isothermal", cs2=cs2),
+        state=pops.FluidState.isothermal(cs2=cs2),
         transport=pops.IsothermalFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=alpha, n0=0.0),
@@ -89,13 +89,12 @@ def build_system(n=24, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_schur=True,
       add_equation (Explicit) -> add_block (IsothermalFlux), sans set_source_stage
     """
     sim = pops.System(n=n, L=L, periodic=False)
-    sim.set_poisson(bc="dirichlet")
+    sim._set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     if with_schur:
         time_policy = pops.Split(
             hyperbolic=pops.Explicit(),
-            source=pops.CondensedSchur(
-                kind="electrostatic_lorentz",
+            source=pops.ElectrostaticLorentzSchur(
                 theta=theta,
                 alpha=alpha,
             ),
@@ -133,7 +132,7 @@ def assert_finite(arr, name):
 
 def mom_l2(sim):
     """Norme L2 de la quantite de mouvement a partir des variables conservatives."""
-    u = np.array(sim.get_state("ions")).reshape(3, sim.nx(), sim.nx())
+    u = np.array(sim._get_state("ions")).reshape(3, sim.nx(), sim.nx())
     return float(np.sqrt(np.sum(u[1] ** 2 + u[2] ** 2)))
 
 
@@ -158,7 +157,7 @@ def main():
     for _ in range(n_steps):
         sim_schur.step(dt)
 
-    state_after = np.array(sim_schur.get_state("ions")).reshape(3, n, n)
+    state_after = np.array(sim_schur._get_state("ions")).reshape(3, n, n)
     rho_after = state_after[0]
     mx_after = state_after[1]
     my_after = state_after[2]
@@ -178,7 +177,7 @@ def main():
                              cs2=cs2)
     for _ in range(n_steps):
         sim_nosrc.step(dt)
-    state_nosrc = np.array(sim_nosrc.get_state("ions")).reshape(3, n, n)
+    state_nosrc = np.array(sim_nosrc._get_state("ions")).reshape(3, n, n)
 
     diff_mom = float(np.max(np.abs(
         np.sqrt(state_after[1] ** 2 + state_after[2] ** 2) -
@@ -212,7 +211,7 @@ def main():
     dt_stiff = 0.4 * (L / n) / np.sqrt(cs2)  # CFL transport, stable pour l'hyperbolique
     for _ in range(30):
         sim_stiff.step(dt_stiff)
-    state_stiff = np.array(sim_stiff.get_state("ions")).reshape(3, n, n)
+    state_stiff = np.array(sim_stiff._get_state("ions")).reshape(3, n, n)
     assert_finite(state_stiff, "etat raide")
     v_stiff = mom_l2(sim_stiff)
     chk(True, "(D) etat fini sous source raide (theta=1, implicite)")
@@ -227,8 +226,8 @@ def main():
     for _ in range(n_steps):
         ref1.step(dt)
         ref2.step(dt)
-    s1 = np.array(ref1.get_state("ions"))
-    s2 = np.array(ref2.get_state("ions"))
+    s1 = np.array(ref1._get_state("ions"))
+    s2 = np.array(ref2._get_state("ions"))
     chk(float(np.max(np.abs(s1 - s2))) == 0.0,
         "(E) chemin Explicit pur bit-identique sur deux runs (defaut inchange)")
 

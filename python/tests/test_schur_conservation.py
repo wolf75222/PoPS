@@ -102,7 +102,7 @@ def iso_model(cs2=1.0, alpha=3.0, n0=0.0):
     f = alpha (n - n0) : n0 = moyenne(rho) rend le Poisson periodique compatible
     (RHS a moyenne nulle)."""
     return pops.Model(
-        state=pops.FluidState(kind="isothermal", cs2=cs2),
+        state=pops.FluidState.isothermal(cs2=cs2),
         transport=pops.IsothermalFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=alpha, n0=n0),
@@ -113,7 +113,7 @@ def euler_model(gamma=1.4, alpha=3.0):
     """Fluide compressible natif : roles Density / MomentumX / MomentumY / Energy
     (4 var). Le role Energy active le SchurEnergyKernel de l'etage source."""
     return pops.Model(
-        state=pops.FluidState(kind="compressible", gamma=gamma),
+        state=pops.FluidState.compressible(gamma=gamma),
         transport=pops.CompressibleFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=alpha, n0=0.0),
@@ -132,8 +132,7 @@ def ring_axisym(n, L, rho0=1.0, drho=0.6, r0=0.25, w=0.06):
 
 def split_time(theta=1.0, alpha=3.0):
     return pops.Split(hyperbolic=pops.Explicit(),
-                     source=pops.CondensedSchur(kind="electrostatic_lorentz",
-                                               theta=theta, alpha=alpha))
+                     source=pops.ElectrostaticLorentzSchur(theta=theta, alpha=alpha))
 
 
 def integ(arr, dx2):
@@ -154,7 +153,7 @@ def test_masse():
     n0 = float(rho0.mean())  # fond neutralisant -> RHS Poisson a moyenne nulle (periodique bien pose)
 
     sim = pops.System(n=n, L=L, periodic=True)
-    sim.set_poisson(bc="periodic")
+    sim._set_poisson(bc="periodic")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     sim._add_equation("ions", model=iso_model(alpha=alpha, n0=n0),
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
@@ -190,7 +189,7 @@ def _run_momentum(periodic, sym, n=64, L=1.0, B0=4.0, alpha=3.0, N=20, dt_fac=0.
     """Renvoie (m0, dmx, dmy) apres N pas. sym=True : anneau axisymetrique centre ;
     sym=False : bosse de densite DECENTREE (force nette non nulle)."""
     sim = pops.System(n=n, L=L, periodic=periodic)
-    sim.set_poisson(bc="periodic" if periodic else "dirichlet")
+    sim._set_poisson(bc="periodic" if periodic else "dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     if sym:
         rho0, u0, v0 = ring_axisym(n, L)
@@ -209,12 +208,12 @@ def _run_momentum(periodic, sym, n=64, L=1.0, B0=4.0, alpha=3.0, N=20, dt_fac=0.
     sim.set_primitive_state("ions", rho=rho0, u=u0, v=v0)
     dx2 = (L / n) ** 2
     m0 = integ(np.array(rho0), dx2)
-    S0 = sim.get_state("ions")
+    S0 = sim._get_state("ions")
     mx0, my0 = integ(np.array(S0[1]), dx2), integ(np.array(S0[2]), dx2)
     dt = dt_fac * (L / n) / 1.0
     for _ in range(N):
         sim.step(dt)
-    S1 = sim.get_state("ions")
+    S1 = sim._get_state("ions")
     assert_finite(np.array(S1), "etat momentum")
     mx1, my1 = integ(np.array(S1[1]), dx2), integ(np.array(S1[2]), dx2)
     return m0, mx1 - mx0, my1 - my0
@@ -279,7 +278,7 @@ def test_momentum():
 
 def _run_energy(with_schur, n=48, L=1.0, B0=4.0, alpha=3.0, gamma=1.4, N=30):
     sim = pops.System(n=n, L=L, periodic=False)
-    sim.set_poisson(bc="dirichlet")
+    sim._set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     time = split_time(theta=1.0, alpha=alpha) if with_schur else pops.Explicit()
     sim._add_equation("ions", model=euler_model(gamma=gamma, alpha=alpha),
@@ -290,14 +289,14 @@ def _run_energy(with_schur, n=48, L=1.0, B0=4.0, alpha=3.0, gamma=1.4, N=30):
     p0 = 0.5 + 0.0 * rho0  # pression initiale > 0 partout
     sim.set_primitive_state("ions", rho=rho0, u=u0, v=v0, p=p0)
     dx2 = (L / n) ** 2
-    E0 = integ(np.array(sim.get_state("ions")[3]), dx2)
+    E0 = integ(np.array(sim._get_state("ions")[3]), dx2)
     dt = 0.25 * (L / n) / np.sqrt(gamma * 0.5 / 1.6)  # CFL transport (c = sqrt(gamma p/rho))
     Emin, pmin, max_step_growth = 1e30, 1e30, -1e30
     Eprev = E0
     Etot = E0
     for _ in range(N):
         sim.step(dt)
-        S = sim.get_state("ions")
+        S = sim._get_state("ions")
         E = np.array(S[3])
         assert_finite(E, "E")
         Emin = min(Emin, float(E.min()))
@@ -306,7 +305,7 @@ def _run_energy(with_schur, n=48, L=1.0, B0=4.0, alpha=3.0, gamma=1.4, N=30):
         Eprev = Etot
         P = sim.get_primitive_state("ions")
         pmin = min(pmin, float(np.array(P["p"]).min()))
-    return E0, Emin, pmin, Etot, max_step_growth, np.array(sim.get_state("ions")[3])
+    return E0, Emin, pmin, Etot, max_step_growth, np.array(sim._get_state("ions")[3])
 
 
 def test_energie_positivite():
@@ -359,7 +358,7 @@ def test_positivite_densite():
     B0, alpha, cs2 = 4.0, 3.0, 1.0
     for limiter in (Minmod(), VanLeer(), WENO5()):
         sim = pops.System(n=n, L=L, periodic=False)
-        sim.set_poisson(bc="dirichlet")
+        sim._set_poisson(bc="dirichlet")
         sim.set_magnetic_field(B0 * np.ones((n, n)))
         sim._add_equation("ions", model=iso_model(cs2=cs2, alpha=alpha),
                          spatial=pops.FiniteVolume(limiter=limiter, riemann=Rusanov(),

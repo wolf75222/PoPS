@@ -34,7 +34,7 @@ def iso_polar_model(cs2=1.0):
     IsothermalFluxPolar (roles Density / MomentumX (radial) / MomentumY (azimutal)). Second membre
     elliptique neutre (alpha=0) : on isole le TRANSPORT (le flux Riemann), pas le couplage Poisson."""
     return pops.Model(
-        state=pops.FluidState(kind="isothermal", cs2=cs2),
+        state=pops.FluidState.isothermal(cs2=cs2),
         transport=pops.IsothermalFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0),
@@ -68,7 +68,7 @@ def _annular_state(nr, nth):
 def _build(nr, nth, riemann, cs2=1.0):
     """System polaire isotherme avec le flux Riemann demande, etat initial pose, pret a stepper."""
     sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=nr, ntheta=nth))
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     sim._add_equation(
         "ions",
         model=iso_polar_model(cs2=cs2),
@@ -77,12 +77,12 @@ def _build(nr, nth, riemann, cs2=1.0):
     )
     u0 = _annular_state(nr, nth)
     sim.set_density("ions", u0[0].ravel())     # pose rho (vitesse au repos)
-    sim.set_state("ions", u0.ravel())          # injecte la vitesse initiale (mom_r, mom_theta)
+    sim._set_state("ions", u0.ravel())          # injecte la vitesse initiale (mom_r, mom_theta)
     return sim
 
 
 def _state3(sim, nr, nth):
-    return np.array(sim.get_state("ions")).reshape(3, nth, nr)
+    return np.array(sim._get_state("ions")).reshape(3, nth, nr)
 
 
 def _run(sim, nr, nth, n_steps, dt):

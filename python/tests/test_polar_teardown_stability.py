@@ -55,8 +55,8 @@ _CHILD = textwrap.dedent(
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(),
                         elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
+    sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     sim.set_density("ne", steep_gaussian())
 
     # Quelques pas a GROS dt fixe -> le profil raide devient instable (NaN/Inf), comme le run signale.

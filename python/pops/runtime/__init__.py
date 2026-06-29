@@ -16,9 +16,9 @@ The lower layers (ir / model / physics / time / lib / codegen) are numpy-free un
 and never import this package. The runtime methods that need the codegen / physics / dsl layers
 import them LAZILY in-method, both to avoid a cycle and to keep ``import pops`` numpy-free.
 
-Public user code should enter this layer through ``pops.bind(compiled, ...)`` or
-``System.install(compiled, ...)``. Low-level block/equation setters remain private
-implementation seams used by the binder.
+Public user code should enter this layer through ``System.install(compiled, ...)`` /
+``AmrSystem.install(compiled, ...)``. Low-level block/equation setters remain private
+implementation seams used by the install lowering.
 """
 from pops.runtime.profile import PerformanceSummary, Profile  # noqa: F401
 

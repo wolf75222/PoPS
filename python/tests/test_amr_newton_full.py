@@ -19,7 +19,7 @@ Couvre les deux chantiers du solde (docs/GENERICITY_2026-06.md, points NON gener
       non-regression : le chemin a options par defaut == chemin historique a iters figes).
 
   (d) LOADER .so + OPTIONS/DIAGNOSTICS : le chemin production AMR (CompiledModel
-      backend='production', target='amr_system' -> add_native_block, ABI plate) REJETTE explicitement
+      backend=pops.codegen.Production(), target='amr_system' -> add_native_block, ABI plate) REJETTE explicitement
       les options ET newton_diagnostics (ils seraient pris a leurs defauts en silence). Test PUR
       PYTHON : la garde de facade leve AVANT tout dlopen, un CompiledModel FACTICE suffit (pas de
       compilateur requis).
@@ -47,7 +47,7 @@ def chk(cond, label):
 def iso_model(charge=1.0):
     """Isotherme 3-var (rho, rho_u, rho_v) avec source electrostatique (PotentialForce) : la source
     raide non triviale qu'attaque le Newton de l'IMEX (le pas implicite a quelque chose a resoudre)."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=charge),
                      elliptic=pops.ChargeDensity(charge=charge))
@@ -63,7 +63,7 @@ def mono_imex(time):
     """Construit un AmrSystem MONO-BLOC IMEX (iso_model) avec le traitement temporel @p time, seede
     d'une gaussienne, et avance d'un pas. Renvoie la densite grossiere apres le pas."""
     s = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    s._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     s.set_refinement(1e30)
     s._add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()), time=time)
     s.set_density("e", gaussian(16).ravel())
@@ -76,7 +76,7 @@ def fake_production_amr():
     leve AVANT le dlopen du .so, donc le .so inexistant n'est jamais charge (deterministe, no compiler).
     Meme recette que test_amr_production_stride_reject.py."""
     return CompiledModel(
-        so_path="/inexistant_amr.so", backend="production", adder="add_native_block",
+        so_path="/inexistant_amr.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=["rho", "rho_u", "rho_v"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "u", "v"], n_vars=3, gamma=1.4, n_aux=3, params={}, caps={},
         abi_key="k", model_hash="h", cxx="c++", std="c++20", target="amr_system")
@@ -91,7 +91,7 @@ chk(np.all(np.isfinite(d_a)),
 # ---- (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_report dict coherent ---------------------------
 print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') coherent ==")
 amr = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
 amr._add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))

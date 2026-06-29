@@ -20,5 +20,5 @@ def explicit_flow(P, state, frac=1.0, *, sources=("default",), flux=True, name=N
 
 def forward_euler(P, block, *, sources=("default",), flux=True):
     """Forward Euler: U^{n+1} = U + dt * R(U)."""
-    U = P.state(block)
+    U = P._state_value(block)
     P.commit(block, explicit_flow(P, U, 1.0, sources=sources, flux=flux, name="fe_step"))

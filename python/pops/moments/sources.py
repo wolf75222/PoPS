@@ -1,9 +1,7 @@
-"""Moment-hierarchy source terms: Lorentz forcing, Maxwellian matching, BGK collision.
+"""Moment-hierarchy source terms and typed source descriptors.
 
-Symbols are re-exported via python/pops/lib/moments/__init__.py.
-
-These functions are pure Python / DSL-expression arithmetic and do NOT require
-the DSL compiler; no lazy import is needed here.
+The free functions build symbolic expressions. The descriptor classes choose source routes for
+``MomentModel.add_source(...)``; they never run per-cell Python work.
 """
 from math import comb
 
@@ -111,69 +109,132 @@ def bgk_source(M, nu):
     return out
 
 
-# --- thin facades over the free functions (Spec 4 moments NEW API) ---------
-# These carry no math: they forward to the closure-free free functions above so the
-# arithmetic stays in one place and lowers to the same generated flux.
-class VlasovSources:
-    """Namespace of moment-hierarchy source builders (pure forwarders).
-
-    Every method forwards to the corresponding closure-free free function in this module;
-    no arithmetic lives here. ``M`` is the dict ``(p, q) -> conservative-moment Expr``.
-    """
-
-    @staticmethod
-    def lorentz(M, ex, ey, q_over_m, omega_c):
-        """The Vlasov-Lorentz hierarchy source (forwards to :func:`lorentz_sources`)."""
-        return lorentz_sources(M, ex, ey, q_over_m, omega_c)
-
-    @staticmethod
-    def maxwellian_eq(M):
-        """The local-Maxwellian raw moments (forwards to :func:`maxwellian_moments`)."""
-        return maxwellian_moments(M)
-
-    @staticmethod
-    def bgk(M, nu):
-        """The BGK relaxation source (forwards to :func:`bgk_source`)."""
-        return bgk_source(M, nu)
-
-
-class MagneticMomentSource(Descriptor):
-    """Descriptor of a pure-magnetic moment source: ``omega_c(B) = q_over_m * B``.
-
-    It CHOOSES the magnetic-source route, binding which ``q_over_m`` param name and
-    ``b_field`` aux name the Lorentz magnetic branch reads, so it is a typed
-    :class:`pops.descriptors.Descriptor` (Spec 5 sec.6): it declares its options /
-    capabilities and is inspectable. :meth:`as_sources` returns a sources callable
-    forwarding to the magnetic branch of :func:`lorentz_sources` (zero electric field).
-    It carries no arithmetic.
-    """
+class MomentSource(Descriptor):
+    """Typed source contribution for :class:`pops.moments.MomentModel`."""
 
     category = "moment_source"
+
+    def __init__(self, name, rule, *, options=None, capabilities=None):
+        if not name:
+            raise ValueError("MomentSource requires a non-empty name")
+        if not callable(rule):
+            raise TypeError("MomentSource(%r): rule must be callable" % (name,))
+        self.source_name = str(name)
+        self._rule = rule
+        self._options = dict(options or {})
+        self._capabilities = dict(capabilities or {})
+
+    @classmethod
+    def from_rule(cls, name, rule):
+        """Build a custom symbolic source rule.
+
+        ``rule(m, M)`` is invoked while creating the model IR, never during runtime stepping.
+        """
+        return cls(name, rule, capabilities={"provides": "custom_moment_source"})
+
+    def options(self):
+        return dict(self._options)
+
+    def capabilities(self):
+        return dict(self._capabilities)
+
+    def apply(self, m, M):
+        return self._rule(m, M)
+
+    def as_sources(self):
+        return self.apply
+
+    def __repr__(self):
+        return "%s(name=%r)" % (type(self).__name__, self.source_name)
+
+
+class VlasovElectricSource(MomentSource):
+    """Vlasov electric source descriptor."""
+
+    def __init__(self, electric_field=("grad_x", "grad_y"), charge_over_mass="q_over_m"):
+        ex, ey = electric_field
+        self.electric_field = (str(ex), str(ey))
+        self.charge_over_mass = str(charge_over_mass)
+        super().__init__(
+            "vlasov_electric",
+            self._apply,
+            options={
+                "electric_field": self.electric_field,
+                "charge_over_mass": self.charge_over_mass,
+            },
+            capabilities={"provides": "vlasov_electric"},
+        )
+
+    def _apply(self, m, M):
+        ex_name, ey_name = self.electric_field
+        qom = m.param(self.charge_over_mass, 1.0)
+        return lorentz_sources(M, m.aux(ex_name), m.aux(ey_name), qom, 0.0)
+
+
+class MagneticRotationSource(MomentSource):
+    """Magnetic rotation source descriptor."""
+
+    def __init__(self, omega_c="omega_c", axis="z"):
+        if axis != "z":
+            raise ValueError("MagneticRotationSource currently supports axis='z' only")
+        self.omega_c = str(omega_c)
+        self.axis = axis
+        super().__init__(
+            "magnetic_rotation",
+            self._apply,
+            options={"omega_c": self.omega_c, "axis": self.axis},
+            capabilities={"provides": "magnetic_rotation"},
+        )
+
+    def _apply(self, m, M):
+        return lorentz_sources(M, 0.0, 0.0, 1.0, m.param(self.omega_c, 1.0))
+
+
+class MagneticMomentSource(MomentSource):
+    """Magnetic Lorentz source bound to a runtime ``q_over_m`` parameter and ``B_z`` aux field."""
 
     def __init__(self, q_over_m="q_over_m", b_field="B_z"):
         self.q_over_m = str(q_over_m)
         self.b_field = str(b_field)
+        super().__init__(
+            "magnetic_moment",
+            self._apply,
+            options={"q_over_m": self.q_over_m, "b_field": self.b_field},
+            capabilities={"provides": "magnetic_lorentz"},
+        )
 
-    def options(self):
-        return {"q_over_m": self.q_over_m, "b_field": self.b_field}
-
-    def capabilities(self):
-        return {"provides": "magnetic_lorentz"}
-
-    def as_sources(self, q_over_m_value=1.0):
-        """A ``(m, M) -> list`` sources callable: ``omega_c = q_over_m * B`` (electric field 0).
-
-        @p q_over_m_value: the default value of the declared ``q_over_m`` param.
-        """
-        qom_name, b_name = self.q_over_m, self.b_field
-
-        def sources(m, M):
-            qom = m.param(qom_name, q_over_m_value)
-            b_z = m.aux(b_name)
-            omega_c = qom * b_z
-            return lorentz_sources(M, 0.0, 0.0, qom, omega_c)
-
-        return sources
+    def _apply(self, m, M):
+        qom = m.param(self.q_over_m, 1.0)
+        b_z = m.aux(self.b_field)
+        return lorentz_sources(M, 0.0, 0.0, qom, qom * b_z)
 
     def __repr__(self):
         return "MagneticMomentSource(q_over_m=%r, b_field=%r)" % (self.q_over_m, self.b_field)
+
+
+class VlasovSources:
+    """Namespace of low-level symbolic source builders."""
+
+    @staticmethod
+    def lorentz(M, ex, ey, q_over_m, omega_c):
+        return lorentz_sources(M, ex, ey, q_over_m, omega_c)
+
+    @staticmethod
+    def maxwellian_eq(M):
+        return maxwellian_moments(M)
+
+    @staticmethod
+    def bgk(M, nu):
+        return bgk_source(M, nu)
+
+
+__all__ = [
+    "MomentSource",
+    "VlasovElectricSource",
+    "MagneticRotationSource",
+    "MagneticMomentSource",
+    "VlasovSources",
+    "lorentz_sources",
+    "maxwellian_moments",
+    "bgk_source",
+]

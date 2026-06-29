@@ -4,7 +4,7 @@
 Writes the three-stage SSPRK3 (Shu-Osher) scheme with ``pops.time.Program`` (two intermediate stage
 states + a linear-combination commit) via the ``pops.lib.time.ssprk3`` macro, compiles it to a
 ``problem.so`` with ``pops.compile_problem``, installs it, advances one step C++-side, and checks it
-reproduces the native ``pops.Explicit(method="ssprk3")`` step bit-for-bit. There is NO special SSPRK3
+reproduces the native ``Explicit.ssprk3()`` step bit-for-bit. There is NO special SSPRK3
 C++ class -- the scheme is just IR lowered by the codegen (like the merged ssprk2 example/test).
 
 Run::
@@ -14,27 +14,27 @@ Run::
 Requires a compiler + a visible Kokkos (``POPS_KOKKOS_ROOT``); prints a skip notice and exits 0
 otherwise. cf. docs/sphinx/reference/time-program.md.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 try:
     import numpy as np
 
     import pops
-    from pops.fields import catalog as field_catalog
+    from pops.solvers import GeometricMG
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+    from _module_models import (
+        explicit_ssprk3,
+        first_order_rusanov,
+        isothermal_transport_module,
+    )
 except Exception as exc:  # noqa: BLE001
     print("skip ssprk3_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 
 def gas_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return isothermal_transport_module("ssprk3_model")
 
 
 N = 48
@@ -47,16 +47,15 @@ def initial_state():
     return np.stack([rho, 0.4 * rho, -0.2 * rho])
 
 
-def build_system(method="ssprk3"):
+def build_system():
     """The native reference System, stepped natively for comparison."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.install(None,
                 instances={"plasma": {"model": gas_model(),
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
-                                      "time": pops.Explicit(method=method),
+                                      "spatial": first_order_rusanov(),
+                                      "time": explicit_ssprk3(),
                                       "initial": initial_state()}},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     return sim
 
 
@@ -81,17 +80,16 @@ def main():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.install(compiled,
                 instances={"plasma": {"model": gas_model(),
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
+                                      "spatial": first_order_rusanov(),
                                       "initial": initial_state()}},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     sim.step(dt)
-    U_prog = np.array(sim.get_state("plasma"))
+    U_prog = np.array(sim._get_state("plasma"))
 
-    native = build_system("ssprk3")
+    native = build_system()
     native.step(dt)
-    err = float(np.abs(U_prog - np.array(native.get_state("plasma"))).max())
-    print("compiled SSPRK3 Program vs native pops.Explicit('ssprk3'): max|d| = %.2e" % err)
+    err = float(np.abs(U_prog - np.array(native._get_state("plasma"))).max())
+    print("compiled SSPRK3 Program vs native Explicit.ssprk3(): max|d| = %.2e" % err)
     ok = err < 1e-12
     print("OK" if ok else "MISMATCH")
     return 0 if ok else 1

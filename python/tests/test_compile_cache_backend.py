@@ -138,7 +138,7 @@ def _compile_probe():
         return False, "aucun compilateur C++"
     try:
         d = tempfile.mkdtemp()
-        build_euler("euler_probe").compile(os.path.join(d, "probe.so"), INCLUDE, backend="aot")
+        build_euler("euler_probe").compile(os.path.join(d, "probe.so"), INCLUDE, backend=pops.codegen.AOT())
         shutil.rmtree(d, ignore_errors=True)
         return True, ""
     except Exception as exc:  # noqa: BLE001
@@ -155,8 +155,8 @@ def decision_checks():
     # (a) so_path EXPLICITE : aot puis production au MEME chemin -> chemins RETENUS distincts
     d = tempfile.mkdtemp()
     so = os.path.join(d, "model.so")
-    cm_aot = build_euler().compile(so, INCLUDE, backend="aot")
-    cm_prod = build_euler().compile(so, INCLUDE, backend="production")
+    cm_aot = build_euler().compile(so, INCLUDE, backend=pops.codegen.AOT())
+    cm_prod = build_euler().compile(so, INCLUDE, backend=pops.codegen.Production())
     chk(cm_prod.so_path != cm_aot.so_path,
         "(a) production NE reutilise PAS le chemin de l'artefact aot (aot=%s prod=%s)"
         % (os.path.basename(cm_aot.so_path), os.path.basename(cm_prod.so_path)))
@@ -170,8 +170,8 @@ def decision_checks():
     # (b) l'inverse : production PUIS aot au meme chemin -> chemins distincts, symboles coherents
     d2 = tempfile.mkdtemp()
     so2 = os.path.join(d2, "model2.so")
-    cm_prod2 = build_euler().compile(so2, INCLUDE, backend="production")
-    cm_aot2 = build_euler().compile(so2, INCLUDE, backend="aot")
+    cm_prod2 = build_euler().compile(so2, INCLUDE, backend=pops.codegen.Production())
+    cm_aot2 = build_euler().compile(so2, INCLUDE, backend=pops.codegen.AOT())
     chk(cm_aot2.so_path != cm_prod2.so_path,
         "(b) aot NE reutilise PAS le chemin de l'artefact production")
     chk(is_production_so(cm_prod2.so_path) and not is_production_so(cm_aot2.so_path),
@@ -183,8 +183,8 @@ def decision_checks():
     os.environ["POPS_CACHE_DIR"] = cache
     try:
         mc = build_euler("euler_cacheb_c")
-        cm_c_aot = mc.compile(backend="aot", include=INCLUDE)
-        cm_c_prod = build_euler("euler_cacheb_c").compile(backend="production", include=INCLUDE)
+        cm_c_aot = mc.compile(backend=pops.codegen.AOT(), include=INCLUDE)
+        cm_c_prod = build_euler("euler_cacheb_c").compile(backend=pops.codegen.Production(), include=INCLUDE)
         chk(cm_c_prod.so_path != cm_c_aot.so_path,
             "(c) cache hors-source : aot et production sur des chemins distincts")
         chk(is_production_so(cm_c_prod.so_path) and not is_production_so(cm_c_aot.so_path),
@@ -205,7 +205,7 @@ def _native_load_probe():
     try:
         d = tempfile.mkdtemp()
         cm = build_euler("euler_loadprobe").compile(os.path.join(d, "lp.so"), INCLUDE,
-                                                    backend="production")
+                                                    backend=pops.codegen.Production())
         s = pops.System(n=8, periodic=True)
         s._add_equation("g", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                          variables=Primitive()))
@@ -228,21 +228,21 @@ def native_load_checks():
     so = os.path.join(d, "model.so")
 
     # charger l'artefact AOT au chemin so (peuple le cache de handles dlopen pour ce chemin)
-    cm_aot = build_euler().compile(so, INCLUDE, backend="aot")
+    cm_aot = build_euler().compile(so, INCLUDE, backend=pops.codegen.AOT())
     s_aot = pops.System(n=n, periodic=True)
     s_aot._add_equation("gas", cm_aot, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                               variables=Primitive()))
 
     # recompiler PRODUCTION au MEME chemin, puis brancher via add_native_block : doit reussir
-    cm_prod = build_euler().compile(so, INCLUDE, backend="production")
+    cm_prod = build_euler().compile(so, INCLUDE, backend=pops.codegen.Production())
     try:
         s_prod = pops.System(n=n, periodic=True)
         s_prod._add_equation("gas", cm_prod, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                     variables=Primitive()))
-        s_prod.set_poisson(rhs="charge_density", solver="geometric_mg")
-        s_prod.set_state("gas", initial_state(n))
+        s_prod._set_poisson(rhs="charge_density", solver="geometric_mg")
+        s_prod._set_state("gas", initial_state(n))
         steps = s_prod.run(t_end=0.01, cfl=0.4)
-        ok = steps > 0 and np.all(np.isfinite(np.array(s_prod.get_state("gas"))))
+        ok = steps > 0 and np.all(np.isfinite(np.array(s_prod._get_state("gas"))))
         chk(ok, "(3a) add_native_block reussit apres un aot charge au meme chemin (run %d pas)" % steps)
     except Exception as exc:  # noqa: BLE001
         chk(False, "(3a) add_native_block a echoue : %s" % str(exc).splitlines()[0])

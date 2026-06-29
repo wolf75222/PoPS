@@ -43,7 +43,7 @@ def chk(cond, label):
 
 
 def iso_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=1.0),
                      elliptic=pops.ChargeDensity(charge=1.0))
@@ -59,7 +59,7 @@ def build(n=24):
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.set_density("ions", gaussian(n).ravel())
     return sim
 
@@ -102,7 +102,7 @@ print("== (C1) AMR mono-bloc : transport + borne globale + last_dt_bound ==")
 
 def build_amr(n=24):
     amr = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    amr._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     amr.set_refinement(1e30)  # mono-niveau : le sujet est la POLITIQUE DE PAS, pas le raffinement
     amr._add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.Explicit())
@@ -169,7 +169,7 @@ def build_dsl(cm, n=16):
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_equation("s", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
                      time=pops.Explicit())
-    sim.set_poisson()
+    sim._set_poisson()
     sim.set_density("s", gaussian(n).ravel())
     return sim
 
@@ -179,11 +179,11 @@ try:
     n, cfl = 16, 0.4
     h = 1.0 / n
     cm_base = scalar_model("scal_base").compile(
-        os.path.join(tmp, "scal_base.so"), INCLUDE, backend="production")
+        os.path.join(tmp, "scal_base.so"), INCLUDE, backend=pops.codegen.Production())
     cm_speed = scalar_model("scal_speed", stab_speed=4.0).compile(
-        os.path.join(tmp, "scal_speed.so"), INCLUDE, backend="production")
+        os.path.join(tmp, "scal_speed.so"), INCLUDE, backend=pops.codegen.Production())
     cm_dt = scalar_model("scal_dt", stab_dt=1e-4).compile(
-        os.path.join(tmp, "scal_dt.so"), INCLUDE, backend="production")
+        os.path.join(tmp, "scal_dt.so"), INCLUDE, backend=pops.codegen.Production())
 
     print("== (B1) fallback : dt = cfl*h/lambda_max (lambda=1) ==")
     s = build_dsl(cm_base, n)
@@ -205,7 +205,7 @@ try:
 
     print("== (B5) m.source_frequency(50) : la 'deuxieme CFL' (source), sans h ==")
     cm_freq = scalar_model("scal_freq", src_freq=50.0).compile(
-        os.path.join(tmp, "scal_freq.so"), INCLUDE, backend="production")
+        os.path.join(tmp, "scal_freq.so"), INCLUDE, backend=pops.codegen.Production())
     s = build_dsl(cm_freq, n)
     dtf = s.step_cfl(cfl)
     chk(abs(dtf - cfl / 50.0) < 1e-12, f"dt = cfl/mu = {cfl / 50.0:.3e} ({dtf:.3e})")
@@ -224,9 +224,9 @@ try:
 
     print("== (B4) AMR mono-bloc DSL : m.stability_dt cablee (vague 2) ==")
     cm_dt_amr = scalar_model("scal_dt_amr", stab_dt=1e-4).compile(
-        os.path.join(tmp, "scal_dt_amr.so"), INCLUDE, backend="production", target="amr_system")
+        os.path.join(tmp, "scal_dt_amr.so"), INCLUDE, backend=pops.codegen.Production(), target="amr_system")
     amr_dsl = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    amr_dsl._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     amr_dsl.set_refinement(1e30)
     amr_dsl._add_equation("s", model=cm_dt_amr, spatial=pops.FiniteVolume(limiter=Minmod()),
                          time=pops.Explicit())

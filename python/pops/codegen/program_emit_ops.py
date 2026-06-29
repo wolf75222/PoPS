@@ -39,7 +39,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
     if v.op == "state":
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab& %s = ctx.state(%d);" % (var[v.id], bidx))
-    elif v.op == "operator_call":
+    elif v.op == "call":
         kind = v.attrs["kind"]
         if kind == "field_operator":
             if len(v.inputs) > 1:
@@ -49,7 +49,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
                 for st in v.inputs:
                     if st.block not in bmap:
                         raise ValueError(
-                            "operator_call %r: input node %r has block %r, which is not a "
+                            "call %r: input node %r has block %r, which is not a "
                             "declared program block %r -- cannot route it to a coupled field solve"
                             % (v.attrs["operator"], st.id, st.block, sorted(bmap)))
                     lines.append("%s[%d] = &%s;" % (vec, bmap[st.block], var[st.id]))
@@ -111,7 +111,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             var[v.id] = var[state_in.id]
         else:
             raise NotImplementedError(
-                "emit_cpp_program: operator_call kind %r is not lowerable (operator %r)"
+                "emit_cpp_program: call kind %r is not lowerable (operator %r)"
                 % (kind, v.attrs.get("operator")))
     elif v.op == "solve_fields":
         # Per-stage field solve (ADC-409): solve from the EXPLICIT stage state recorded by

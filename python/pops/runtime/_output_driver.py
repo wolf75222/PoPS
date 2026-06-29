@@ -127,10 +127,9 @@ def fire_output_policies(sim, policies, step, output_dir, phase="step"):
         if cat == "output_policy":
             if not policy_due(policy.cadence, step, phase=phase):
                 continue
-            fmt = _format_token(policy.format)
             prefix = os.path.join(output_dir, getattr(policy, "prefix", None) or "output")
             written.append(_write_output(
-                sim, prefix, fmt, step, _field_names(policy.fields),
+                sim, prefix, policy.format, step, _field_names(policy.fields),
                 _hdf5_parallel(policy.format)))
         elif cat == "checkpoint_policy":
             if not policy_due(policy.cadence, step, phase=phase):

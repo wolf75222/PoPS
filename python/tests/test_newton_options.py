@@ -31,7 +31,7 @@ def chk(cond, label):
 
 
 def fluid(charge=-1.0):
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.PotentialForce(charge=charge),
                      elliptic=pops.ChargeDensity(charge=charge))
@@ -47,11 +47,11 @@ def run(n=24, steps=4, **imex_kw):
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_block("e", fluid(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.IMEX(**imex_kw))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.set_density("e", gaussian(n).ravel())
     for _ in range(steps):
         sim.step_cfl(0.3)
-    return sim, np.asarray(sim.get_state("e"))
+    return sim, np.asarray(sim._get_state("e"))
 
 
 # --- 1. NO-DEFAULT-CHANGE : defauts == constantes historiques explicites ---------

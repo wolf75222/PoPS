@@ -7,8 +7,8 @@ Deux niveaux :
     primitive_vars kwargs (layout ordonne, rho conservatif rejoint le layout sans etre redefini),
     FiniteVolume(riemann=), et les erreurs explicites (backend inconnu, target amr_system, weno5 sur
     .so, names= longueur, hllc sans pression, names= sur production natif).
-(2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) : compile(backend="aot") ET
-    compile(backend="production") -> CompiledModel (adder correct : add_compiled_block vs
+(2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) : compile(backend=pops.codegen.AOT()) ET
+    compile(backend=pops.codegen.Production()) -> CompiledModel (adder correct : add_compiled_block vs
     add_native_block), add_equation + run ; aot et production donnent le MEME etat (memes briques de
     production). Prouve que production passe bien par le chemin NATIF add_native_block (#85), pas aot.
 """
@@ -26,7 +26,7 @@ import pops
 from pops.codegen.loader import CompiledModel
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
-from pops.physics.model import Param, RuntimeParam
+from pops.physics.model import ConstParam, RuntimeParam
 
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
 GAMMA = 1.6667
@@ -98,19 +98,19 @@ def expect_raises(exc, fn, label):
 
 
 def pure_python_checks():
-    # Param nomme + identite ; runtime SUPPORTE (P7-b)
+    # Parametre nomme + identite ; runtime SUPPORTE (P7-b)
     m = build_euler()
     g = m.params["gamma"]
-    assert isinstance(g, Param) and g.name == "gamma" and abs(g.value - GAMMA) < 1e-12 \
+    assert g.name == "gamma" and abs(g.value - GAMMA) < 1e-12 \
         and g.kind == "const", "Param identite"
     assert abs(float(g) - GAMMA) < 1e-12, "Param float()"
     # P7-b : les parametres runtime sont desormais implementes (cf. test_dsl_runtime_params). L'ancienne
     # assertion "runtime rejete -> NotImplementedError" etait perimee depuis l'arrivee de la feature et
     # echouait en silence (CI auto-decouverte avalant l'echec, cf. ADC-104).
     kp = m.param(RuntimeParam("kappa", 1.0))
-    assert isinstance(kp, Param) and kp.name == "kappa" and kp.kind == "runtime" \
+    assert kp.name == "kappa" and kp.kind == "runtime" \
         and abs(kp.value - 1.0) < 1e-12, "param runtime supporte (Param kind='runtime')"
-    print("OK  Param nomme (name/value/kind) + runtime supporte (P7-b)")
+    print("OK  parametre nomme (name/value/kind) + runtime supporte (P7-b)")
 
     # flux declarateur vs eval_flux evaluateur : noms distincts, methodes distinctes
     assert m.flux is not m.eval_flux, "flux et eval_flux doivent etre distincts"
@@ -129,19 +129,16 @@ def pure_python_checks():
         "FiniteVolume(riemann=) -> Spatial.flux"
     print("OK  FiniteVolume(limiter=, riemann=, variables=) remappe sur Spatial")
 
-    # compile : backend inconnu rejete AVANT toute compilation ; target='amr_system' n'existe que pour
-    # le backend natif "production" (DSL Phase D : le loader inline add_compiled_model(AmrSystem&)),
-    # donc le demander avec un autre backend (aot) leve ValueError.
-    expect_raises(ValueError, lambda: m.compile("x.so", INCLUDE, backend="bogus"),
-                  "backend inconnu")
-    expect_raises(ValueError,
-                  lambda: m.compile("x.so", INCLUDE, backend="aot", target="amr_system"),
-                  "target amr_system hors backend production")
+    # clean break : la facade physics.Model ne compile pas. Le backend / target ne se choisissent
+    # plus avec des strings sur le modele ; la route publique est pops.compile_problem /
+    # pops.compile(... layout=...), et les drivers prennent des descriptors typés.
+    assert not hasattr(m, "compile"), "physics.Model ne doit pas exposer compile(...)"
+    print("OK  physics.Model reste une facade d'ecriture : pas de m.compile(... backend/target strings)")
 
     # add_equation : erreurs sur un CompiledModel FACTICE (pas de .so reel necessaire, les gardes
     # levent AVANT la frontiere C++).
     sys = pops.System(n=16, periodic=True)
-    fake = CompiledModel(so_path="/inexistant.so", backend="aot", adder="add_compiled_block",
+    fake = CompiledModel(so_path="/inexistant.so", backend=pops.codegen.AOT(), adder="add_compiled_block",
                              cons_names=["rho", "rho_u", "rho_v", "E"],
                              cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
                              prim_names=["rho", "u", "v"],  # PAS de 'p' -> hllc/roe doit lever
@@ -154,7 +151,7 @@ def pure_python_checks():
                   spatial=pops.FiniteVolume(limiter=WENO5())), "weno5 aot : accepte (echec au dlopen)")
     # WENO5 reste rejete (ValueError) sur le backend 'prototype' (JIT, residu hote Rusanov ordre 1,
     # sans assemble_rhs) : ce chemin n'a pas de stencil large a alimenter.
-    fake_proto = CompiledModel(so_path="/inexistant.so", backend="prototype",
+    fake_proto = CompiledModel(so_path="/inexistant.so", backend=pops.codegen.JIT(),
                                    adder="add_dynamic_block", cons_names=["rho", "rho_u", "rho_v", "E"],
                                    cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
                                    prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=GAMMA, n_aux=3,
@@ -166,7 +163,7 @@ def pure_python_checks():
                   spatial=pops.FiniteVolume(riemann=HLLC())), "hllc sans pression")
     expect_raises(ValueError, lambda: sys._add_equation("g", fake, names=["a", "b"]),
                   "names= mauvaise longueur")
-    fake_prod = CompiledModel(so_path="/inexistant.so", backend="production",
+    fake_prod = CompiledModel(so_path="/inexistant.so", backend=pops.codegen.Production(),
                                   adder="add_native_block", cons_names=["rho"], cons_roles=["Density"],
                                   prim_names=["rho"], n_vars=1, gamma=None, n_aux=3, params={},
                                   caps={}, abi_key="k", model_hash="h", cxx="c++", std="c++20")
@@ -182,7 +179,8 @@ def end_to_end_checks(cxx):
     try:
         for backend, exp_adder in (("aot", "add_compiled_block"), ("production", "add_native_block")):
             m = build_euler("euler_%s" % backend)
-            cm = m.compile(os.path.join(tmp, "m_%s.so" % backend), INCLUDE, backend=backend)
+            cm = m._compile_for_runtime(os.path.join(tmp, "m_%s.so" % backend), INCLUDE,
+                                        backend=backend, require_metadata=True)
             assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
             assert cm.backend == backend and cm.adder == exp_adder, \
                 "%s : adder %r (attendu %r)" % (backend, cm.adder, exp_adder)
@@ -195,11 +193,11 @@ def end_to_end_checks(cxx):
             s = pops.System(n=n, periodic=True)
             s._add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                variables=Primitive()))
-            s.set_poisson(rhs="charge_density", solver="geometric_mg")
-            s.set_state("gas", initial_state(n))
+            s._set_poisson(rhs="charge_density", solver="geometric_mg")
+            s._set_state("gas", initial_state(n))
             nsteps = s.run(t_end=0.02, cfl=0.4)
             assert nsteps > 0, "run a avance"
-            finals[backend] = np.array(s.get_state("gas"))
+            finals[backend] = np.array(s._get_state("gas"))
             assert np.all(np.isfinite(finals[backend])), "%s : etat fini" % backend
             print("OK  %s : add_equation + run(%d pas) -> etat fini" % (backend, nsteps))
 
@@ -214,14 +212,15 @@ def end_to_end_checks(cxx):
         # puis passees en primitive_vars(rho=rho, u=u, v=v, p=p). Doit (a) ne PAS produire de NaN
         # (sans le fix, u=u -> `Real u = u;` auto-init) et (b) donner le MEME modele que la forme expr.
         mp = build_euler_predef("euler_predef")
-        cmp_ = mp.compile(os.path.join(tmp, "m_predef.so"), INCLUDE, backend="aot")
+        cmp_ = mp._compile_for_runtime(os.path.join(tmp, "m_predef.so"), INCLUDE,
+                                       backend=pops.codegen.AOT(), require_metadata=True)
         sp = pops.System(n=n, periodic=True)
         sp._add_equation("gas", cmp_, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                               variables=Primitive()))
-        sp.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sp.set_state("gas", initial_state(n))
+        sp._set_poisson(rhs="charge_density", solver="geometric_mg")
+        sp._set_state("gas", initial_state(n))
         sp.run(t_end=0.02, cfl=0.4)
-        pf = np.array(sp.get_state("gas"))
+        pf = np.array(sp._get_state("gas"))
         assert np.all(np.isfinite(pf)), "primitive_vars kwargs (Var pre-definies) : etat fini, pas de NaN"
         dp = float(np.max(np.abs(pf - finals["aot"])))
         assert dp < 1e-10, "primitive_vars(u=u) Var pre-definie == forme expr (meme modele), dmax=%.3e" % dp
@@ -235,7 +234,7 @@ def modelspec_substeps_check():
     branche ModelSpec d'add_equation appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block,
     qui retomberait sur time.substeps et IGNORERAIT l'override). Verifie via un espion sur _s.add_block."""
     s = pops.System(n=16, periodic=True)
-    spec = pops.Model(state=pops.FluidState("isothermal", cs2=1.0), transport=pops.IsothermalFlux(),
+    spec = pops.Model(state=pops.FluidState.isothermal(cs2=1.0), transport=pops.IsothermalFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=-1.0))
     calls = []
 

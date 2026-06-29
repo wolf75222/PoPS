@@ -33,7 +33,7 @@ def imex_local_linear(P, block, *, explicit_operator, implicit_operator, fields_
     """
     if not (0.0 < theta <= 1.0):
         raise ValueError("imex_local_linear: theta must be in (0, 1]")
-    u = P.state(block)
+    u = P._state_value(block)
     fields = _opcall(P, fields_operator, u, value_name="fields") if fields_operator else None
     r = _opcall(P, explicit_operator, u, fields, value_name="R")
     lin = _opcall(P, implicit_operator, fields, value_name="L")

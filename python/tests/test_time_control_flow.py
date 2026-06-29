@@ -179,21 +179,21 @@ def _run_section_b(t):
     assert compiled.program_name == "cflow_step", "handle carries the program name"
 
     try:
-        compiled_model = passive_model("cflow_block").compile(backend="production")
+        compiled_model = passive_model("cflow_block")._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
         return None
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
 
     sim._install_program_so(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the while body is dt-free
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
 
     # OFFLINE geometric reference: target = 2*U0; x_{k+1} = x_k + omega*(target - x_k); iterate while
     # ||target - x_k|| > tol (the same loop the compiled program runs).

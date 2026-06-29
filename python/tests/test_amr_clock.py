@@ -48,7 +48,7 @@ def _build_stride(n=32):
     sim._add_block("slow", _scalar_charge(-1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=pops.Explicit(stride=2))  # bloc lent : cadence stride=2
-    sim.set_poisson(bc="periodic")
+    sim._set_poisson(bc="periodic")
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("slow", _bump(n, 0.20))
     return sim

@@ -9,6 +9,7 @@ ARBITRARY board formulas and the end-to-end compile remain ADC-456 follow-ups.
 import pytest
 
 physics = pytest.importorskip("pops.physics")
+from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
 import types as _t
 _num = pytest.importorskip("pops.numerics")
 _desc = pytest.importorskip("pops.descriptors")
@@ -52,21 +53,23 @@ def _euler(with_pressure=True, with_roles=True):
 
 
 def test_board_roles_canonicalize_to_dsl_roles():
+    from pops.codegen.module_view import ModuleCodegenView
     m, _ = _euler()
-    roles = physics._roles_for(m._dsl._m)
+    roles = ModuleCodegenView(m.lower()).cons_roles
     assert roles == ["Density", "MomentumX", "MomentumY", "Energy"]
 
 
 def test_hllc_accepts_role_tagged_model_with_pressure():
+    from pops.codegen.module_view import ModuleCodegenView
     m, _ = _euler(with_pressure=True, with_roles=True)
-    m.riemann("hllc")                      # must not raise
-    assert m._dsl._m._hllc is True         # enable_hllc was driven -> hooks will be generated
+    m.riemann(HLLC())                      # must not raise
+    assert ModuleCodegenView(m.lower())._hllc is True
 
 
 def test_hllc_rejects_model_without_pressure():
     m, _ = _euler(with_pressure=False, with_roles=True)
     with pytest.raises(ValueError, match="requires model capability 'pressure'"):
-        m.riemann("hllc")
+        m.riemann(HLLC())
 
 
 def test_hllc_rejects_model_without_fluid_roles():
@@ -74,27 +77,28 @@ def test_hllc_rejects_model_without_fluid_roles():
     m = physics.Model("moments")
     U = m.state("U", components=["q0", "q1", "q2"])
     m.primitive("p", U[0])
-    assert physics._roles_for(m._dsl._m) == ["Custom", "Custom", "Custom"]
+    from pops.codegen.module_view import ModuleCodegenView
+    assert ModuleCodegenView(m.lower()).cons_roles == ["Custom", "Custom", "Custom"]
     with pytest.raises(ValueError, match="requires model capability 'hllc_star_state'"):
-        m.riemann("hllc")
+        m.riemann(HLLC())
 
 
 def test_roe_rejects_model_without_pressure():
     m, _ = _euler(with_pressure=False, with_roles=True)
     with pytest.raises(ValueError, match="requires model capability 'pressure'"):
-        m.riemann("roe")
+        m.riemann(Roe())
 
 
 def test_rusanov_needs_no_pressure_or_roles():
     m, _ = _euler(with_pressure=False, with_roles=False)
-    m.riemann("rusanov")                   # only max_wave_speed -> always OK
-    assert m._riemann == "rusanov"
+    m.riemann(Rusanov())                   # only max_wave_speed -> always OK
+    assert m._riemann.scheme == "rusanov"
 
 
 def test_hll_requires_wave_speeds():
     m, _ = _euler(with_pressure=False, with_roles=False)
     with pytest.raises(ValueError, match="requires model capability 'wave_speeds'"):
-        m.riemann("hll")
+        m.riemann(HLL())
     # declaring the flux waves provides them:
     from pops.math import sqrt
     m2, U = _euler(with_pressure=True, with_roles=True)
@@ -103,19 +107,18 @@ def test_hll_requires_wave_speeds():
     c = sqrt(1.4)
     m2.flux("F", on=U, x=[mx, mx * u, mx * v, E], y=[my, my * u, my * v, E],
             waves={"x": [u - c, u, u, u + c], "y": [v - c, v, v, v + c]})
-    m2.riemann("hll")                      # waves declared -> OK
+    m2.riemann(HLL())                      # waves declared -> OK
 
 
 def test_hll_accepts_jacobian_derived_wave_speeds():
-    # wave speeds can come from the flux Jacobian (_ws_jacobian), not only _eig/_wave_speeds;
-    # HLL must accept that source too (mirrors the dsl max_wave_speed gate).
+    # wave speeds can be supplied explicitly through the typed Riemann call.
     m, _ = _euler(with_pressure=True, with_roles=True)
-    m._dsl._m._ws_jacobian = {"x": [], "y": []}   # marker the jacobian path sets
-    m.riemann("hll")                               # must not raise
-    assert m._riemann == "hll"
+    m.riemann(HLL(), wave_speeds={"x": [-1.0, 1.0], "y": [-1.0, 1.0]})
+    assert m._riemann.scheme == "hll"
 
 
 def test_finite_volume_rate_validates_riemann():
+    from pops.codegen.module_view import ModuleCodegenView
     from pops.math import sqrt
     m, U = _euler(with_pressure=True, with_roles=True)
     rho, mx, my, E = U
@@ -127,11 +130,11 @@ def test_finite_volume_rate_validates_riemann():
                          riemann=lib.riemann.HLLC(),
                          reconstruction=lib.reconstruction.WENO5Z())
     assert "explicit_rate" in m.list_operators()
-    assert m._dsl._m._hllc is True
+    assert ModuleCodegenView(m.lower())._hllc is True
 
     m2, U2 = _euler(with_pressure=False, with_roles=True)  # no pressure -> HLLC rejected
     with pytest.raises(ValueError, match="requires model capability 'pressure'"):
-        m2.finite_volume_rate("r", riemann="hllc")
+        m2.finite_volume_rate("r", riemann=lib.riemann.HLLC())
 
 
 def test_lib_riemann_capability_hook_descriptors_compute_nothing():

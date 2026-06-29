@@ -126,6 +126,20 @@ def _model_metadata(compiled):
     model = getattr(compiled, "model", None)
     if model is None:
         return [], 0, {}, [], 0, "U"
+    if hasattr(model, "state_spaces") and hasattr(model, "params") and hasattr(model, "aux"):
+        states = model.state_spaces()
+        state_space = "U"
+        cons = []
+        if states:
+            first = next(iter(states.values()))
+            state_space = first.name
+            cons = list(first.components)
+        params_fn = getattr(model, "params")
+        params = dict(params_fn() if callable(params_fn) else params_fn)
+        aux_fn = getattr(model, "aux")
+        aux_table = aux_fn() if callable(aux_fn) else aux_fn
+        aux_names = list((aux_table or {}).keys())
+        return cons, len(cons), params, aux_names, len(aux_names), state_space
     cons = list(getattr(model, "cons_names", []) or [])
     n_cons = int(getattr(model, "n_vars", len(cons)) or len(cons))
     params = dict(getattr(model, "params", {}) or {})
@@ -151,7 +165,7 @@ def _solver_arguments(program):
     solvers = {}
     for value in getattr(program, "_values", []):
         op = value.op
-        if op == "operator_call" and value.attrs.get("kind") == "field_operator":
+        if op == "call" and value.attrs.get("kind") == "field_operator":
             field = value.attrs.get("field") or "phi"
             solvers[field] = {"problem": "elliptic", "solver": None}
         elif op in ("solve_fields", "solve_fields_from_blocks"):

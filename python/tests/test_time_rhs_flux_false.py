@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pops.time RHS flux toggle -- P._rhs_legacy(flux=False) is source-only (epic ADC-399 / ADC-430).
+"""pops.time RHS flux toggle -- P._legacy_rhs(flux=False) is source-only (epic ADC-399 / ADC-430).
 
 Sibling of ADC-425 (which fixed sources=[] on flux=True). The rhs codegen routed on ``sources`` but
 IGNORED ``flux``: a source-only stage (flux=False) still emitted the ``-div F`` base. Masked because
@@ -23,7 +23,7 @@ flux=False stage WRONGLY re-added -div F. ADC-430 adds the source-only runtime p
     source-only step), with the -div F NOT leaked -- before ADC-430 it also subtracted dt*div(a*rho).
     flux=True still includes -div F (a non-trivial transport, distinct from the source-only step). A Lie
     split H(flux=True,sources=[]) ; S(flux=False,sources=["default"]) on the non-zero-flux model matches
-    the offline split (was double-flux). Self-skips if _pops lacks install_program, numpy/_pops is absent,
+    the offline split (was double-flux). Self-skips if _pops lacks _install_program_so, numpy/_pops is absent,
     or no compiler/Kokkos is visible -- never faking the engine.
 
 Run with python3 (PYTHONPATH = built pops package).
@@ -93,8 +93,8 @@ def one_step_program(name, sources, flux=True):
     """U^{n+1} = U + dt * rhs(flux=flux, sources=sources), committed on block 'plasma'."""
     P = adctime.Program(name)
     U = P.state("plasma")
-    fields = P._solve_fields(U) if flux else None
-    R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
+    fields = P._legacy_solve_fields(U) if flux else None
+    R = P._legacy_rhs(state=U, fields=fields, flux=flux, sources=list(sources))
     P.commit("plasma", P.linear_combine("%s_step" % name, U + P.dt * R))
     return P
 
@@ -120,8 +120,8 @@ def two_block_noflux(name):
     P = adctime.Program(name)
     Ua = P.state("a")
     Ub = P.state("b")
-    Ra = P._rhs_legacy(state=Ua, fields=None, flux=False, sources=["default"])
-    Rb = P._rhs_legacy(state=Ub, fields=None, flux=False, sources=["default"])
+    Ra = P._legacy_rhs(state=Ua, fields=None, flux=False, sources=["default"])
+    Rb = P._legacy_rhs(state=Ub, fields=None, flux=False, sources=["default"])
     P.commit("a", P.linear_combine("%s_a" % name, Ua + P.dt * Ra))
     P.commit("b", P.linear_combine("%s_b" % name, Ub + P.dt * Rb))
     return P
@@ -165,7 +165,7 @@ chk(h_nf != h_f, "flux=False vs flux=True produce distinct IR hashes")
 def _noflux_named_fluxes():
     P = adctime.Program("p_bad")
     U = P.state("plasma")
-    P._rhs_legacy(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
+    P._legacy_rhs(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
     P.commit("plasma", P.linear_combine("p_bad_step", U))
     return P
 
@@ -179,7 +179,7 @@ chk(rejected, "flux=False with named fluxes is rejected (no flux base to divide)
 
 
 # ---- (B) end-to-end probe: skips unless the full toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_rhs_flux_false (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -195,16 +195,16 @@ N = 16
 def make_sim(name):
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
-        compiled_model = advect_model("adv_block_%s" % name, A, C).compile(backend="production")
+        compiled_model = advect_model("adv_block_%s" % name, A, C)._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim._add_equation("plasma", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("plasma", np.stack([rho]))
+    sim._set_state("plasma", np.stack([rho]))
     return sim, rho
 
 
@@ -219,7 +219,7 @@ def run_one_step(sources, flux):
     sim, rho0 = make_sim(tag)
     sim._install_program_so(compiled.so_path)
     sim.step(DT)
-    return np.array(sim.get_state("plasma"))[0], rho0
+    return np.array(sim._get_state("plasma"))[0], rho0
 
 
 # THE PROBE: U + dt*rhs(flux=False, sources=["default"]) on a NON-zero-flux model. The flux must NOT
@@ -247,9 +247,9 @@ chk(d_full_vs_src > 1e-6,
 def lie_split_program(name):
     P = adctime.Program(name)
     U = P.state("plasma")
-    H = P._rhs_legacy(state=U, fields=P._solve_fields(U), flux=True, sources=[])   # flux only (-div F)
+    H = P._legacy_rhs(state=U, fields=P._legacy_solve_fields(U), flux=True, sources=[])   # flux only (-div F)
     U1 = P.linear_combine("%s_H" % name, U + P.dt * H)
-    S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
+    S = P._legacy_rhs(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
     P.commit("plasma", P.linear_combine("%s_S" % name, U1 + P.dt * S))
     return P
 
@@ -261,7 +261,7 @@ except RuntimeError as exc:
 sim_lie, rho0l = make_sim("lie")
 sim_lie._install_program_so(compiled_lie.so_path)
 sim_lie.step(DT)
-out_lie = np.array(sim_lie.get_state("plasma"))[0]
+out_lie = np.array(sim_lie._get_state("plasma"))[0]
 # Offline split: H half = the flux-only one-step (validated ADC-425 primitive); S half = + dt*C*U1.
 u1_flux_only, rho0fo = run_one_step([], flux=True)  # U1 = U + dt*(-div F)(U), same IC
 ref_lie = u1_flux_only + DT * C * u1_flux_only

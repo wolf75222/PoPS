@@ -2,14 +2,14 @@
 """Named multi-elliptic-field runtime (m.elliptic_field), ADC-428 (epic ADC-399, completes ADC-419).
 
 ADC-419 landed the IR + validation + hash for m.elliptic_field("phi2", rhs=, operator=, aux=[...]) but
-P._solve_fields(field=name) raised NotImplementedError (the SECOND elliptic solve + its own aux channel
+P._legacy_solve_fields(field=name) raised NotImplementedError (the SECOND elliptic solve + its own aux channel
 were unwired). ADC-428 wires the runtime on the production/system backend: a named field gets
 
   - its OWN RHS brick (a function of the conservative state, like m.elliptic_rhs),
   - a DEDICATED native elliptic solver instance (GeometricMG/FFT, reused -- not reimplemented),
   - its OWN aux output channel (the model's named aux_field slots, distinct from the shared phi/grad),
 
-and P._solve_fields(field=name, state=U) lowers to ctx.solve_fields_from_state(field, block, U).
+and P._legacy_solve_fields(field=name, state=U) lowers to ctx.solve_fields_from_state(field, block, U).
 
 Section A (pure Python, always runs): the named solve_fields op lowers to the named ctx call (NOT the
 default 2-arg one); the default solve_fields lowers byte-identically to before; unknown field / missing
@@ -121,10 +121,10 @@ def _prog(name, field=None):
     P = adctime.Program(name)
     U = P.state("plasma")
     if field is None:
-        f = P._solve_fields(U)
+        f = P._legacy_solve_fields(U)
     else:
-        f = P._solve_fields("f_" + field, U, field=field)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
+        f = P._legacy_solve_fields("f_" + field, U, field=field)
+    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -195,7 +195,7 @@ def _aot_named():
 
 
 chk(raises(NotImplementedError, _aot_named),
-    "a named elliptic field on backend='aot' raises NotImplementedError at emit (deferred)")
+    "a named elliptic field on backend=pops.codegen.AOT() raises NotImplementedError at emit (deferred)")
 
 
 def _jit_named():
@@ -229,7 +229,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     _skipB("numpy/_pops unavailable: %s" % exc)
 
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
     _skipB("_pops lacks the install_program binding (rebuild _pops)")
 
 N = 16
@@ -248,14 +248,14 @@ def _ic():
 def make_sim(model):
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
-        compiled = model.compile(backend="production")
+        compiled = model._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:
         _skipB("model compile could not build the .so: %s" % str(exc)[:160])
     sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_poisson("composite", "geometric_mg")  # f = sum of the per-block elliptic bricks
-    sim.set_state("plasma", _ic())
+                     time=pops.Explicit.euler())
+    sim._set_poisson("composite", "geometric_mg")  # f = sum of the per-block elliptic bricks
+    sim._set_state("plasma", _ic())
     return sim
 
 
@@ -267,7 +267,7 @@ def step_program(model, prog):
     sim = make_sim(model)
     sim._install_program_so(compiled.so_path)
     sim.step(DT)
-    return np.array(sim.get_state("plasma"))
+    return np.array(sim._get_state("plasma"))
 
 
 # REFERENCE: the default Poisson coupling, source reads the default grad.

@@ -4,7 +4,7 @@
 Pendant POLAIRE de test_schur_via_system.py (cartesien). L'etage PolarCondensedSchurSourceStepper est
 teste en STANDALONE par le test C++ test_polar_condensed_schur_source_stepper (relation implicite,
 stabilite vs Euler, ordre 1) ; ce test comble le chemin FACADE, sur l'anneau (r, theta) :
-  pops.System(mesh=pops.PolarMesh(...))._add_equation(time=pops.Split(source=pops.CondensedSchur(...)))
+  pops.System(mesh=pops.PolarMesh(...))._add_equation(time=pops.Split(source=pops.ElectrostaticLorentzSchur(...)))
     -> _s.add_block (IsothermalFluxPolar : roles Density / MomentumX (radial) / MomentumY (azimutal))
     -> _s.set_source_stage (geometrie polaire -> PolarCondensedSchurSourceStepper, dispatch C++)
   sim.step(dt)
@@ -59,7 +59,7 @@ def iso_fluid_model(cs2=1.0, alpha=1.0):
     modele MINIMAL accepte par set_source_stage.
     """
     return pops.Model(
-        state=pops.FluidState(kind="isothermal", cs2=cs2),
+        state=pops.FluidState.isothermal(cs2=cs2),
         transport=pops.IsothermalFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=alpha, n0=0.0),
@@ -111,14 +111,14 @@ def build_system(nr, nth, B0, alpha, theta, with_schur, cs2=1.0):
     with_schur=False : add_equation(Explicit) -> add_block, sans set_source_stage (chemin de reference).
     """
     sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=nr, ntheta=nth))
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     # B_z constant sur l'anneau. Layout (ntheta, nr) aplati C-order = flat[j*nr+i] (theta lent, r
     # rapide), coherent avec set_density / set_state polaire.
     sim.set_magnetic_field(B0 * np.ones((nth, nr)))
     if with_schur:
         time_policy = pops.Split(
             hyperbolic=pops.Explicit(),
-            source=pops.CondensedSchur(kind="electrostatic_lorentz", theta=theta, alpha=alpha),
+            source=pops.ElectrostaticLorentzSchur(theta=theta, alpha=alpha),
         )
     else:
         time_policy = pops.Explicit()
@@ -130,7 +130,7 @@ def build_system(nr, nth, B0, alpha, theta, with_schur, cs2=1.0):
     )
     rho = _annular_density(nr, nth)
     sim.set_density("ions", rho)             # pose rho, vitesse au repos
-    sim.set_state("ions", _initial_velocity_state(nr, nth, rho).ravel())  # injecte la vitesse initiale
+    sim._set_state("ions", _initial_velocity_state(nr, nth, rho).ravel())  # injecte la vitesse initiale
     return sim
 
 
@@ -145,7 +145,7 @@ def chk(cond, label):
 
 
 def state3(sim, nr, nth):
-    return np.array(sim.get_state("ions")).reshape(3, nth, nr)
+    return np.array(sim._get_state("ions")).reshape(3, nth, nr)
 
 
 def mom_l2(sim, nr, nth):

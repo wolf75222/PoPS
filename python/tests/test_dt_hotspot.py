@@ -48,7 +48,7 @@ CS2 = 0.5
 def make_sim(n=32):
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=CS2),
                             transport=pops.IsothermalFlux(),
                             source=pops.NoSource(),
                             elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
@@ -63,7 +63,7 @@ sim = make_sim(n)
 rho = np.ones((n, n))
 mx = np.zeros((n, n))
 mx[j0, i0] = u_hot * rho[j0, i0]   # axe y = lignes, axe x = colonnes (layout des etats)
-sim.set_state("ions", np.stack([rho, mx, np.zeros((n, n))]))
+sim._set_state("ions", np.stack([rho, mx, np.zeros((n, n))]))
 w, ih, jh = sim.dt_hotspot("ions")
 w_ref = u_hot + np.sqrt(CS2)
 chk(abs(w - w_ref) < 1e-12, f"w == |u| + cs analytique ({w:.6f} vs {w_ref:.6f})")
@@ -80,18 +80,18 @@ x = (np.arange(32) + 0.5) / 32
 X, Y = np.meshgrid(x, x, indexing="ij")
 U0 = np.stack([1.0 + 0.3 * np.sin(2 * np.pi * X), 0.4 * np.cos(2 * np.pi * Y),
                np.zeros((32, 32))])
-sa.set_state("ions", U0)
-sb.set_state("ions", U0)
+sa._set_state("ions", U0)
+sb._set_state("ions", U0)
 _ = sa.dt_hotspot("ions")   # interroge AVANT le pas
 dta = sa.step_cfl(0.4)
 dtb = sb.step_cfl(0.4)
-chk(dta == dtb and np.array_equal(np.array(sa.get_state("ions")),
-                                  np.array(sb.get_state("ions"))),
+chk(dta == dtb and np.array_equal(np.array(sa._get_state("ions")),
+                                  np.array(sb._get_state("ions"))),
     "step_cfl et etat bit-identiques avec/sans interrogation")
 
 print("== (4) determinisme du depart d'egalite (etat uniforme) ==")
 su = make_sim()
-su.set_state("ions", np.stack([np.ones((32, 32)), 0.5 * np.ones((32, 32)),
+su._set_state("ions", np.stack([np.ones((32, 32)), 0.5 * np.ones((32, 32)),
                                np.zeros((32, 32))]))
 w_u, iu, ju = su.dt_hotspot("ions")
 chk((int(iu), int(ju)) == (0, 0), f"uniforme -> premiere cellule (0,0) (recu ({int(iu)}, {int(ju)}))")

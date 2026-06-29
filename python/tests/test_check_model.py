@@ -81,20 +81,20 @@ print("== System.check_model : bloc natif ==")
 n = 16
 sim = pops.System(n=n, L=1.0, periodic=True)
 sim._add_block("ions",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+              pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                         transport=pops.IsothermalFlux(),
                         source=pops.PotentialForce(charge=1.0),
                         elliptic=pops.ChargeDensity(charge=1.0)),
               spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="xy")
 rho0 = 1.0 + 0.5 * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
 sim.set_density("ions", rho0.ravel())
-u_before = np.asarray(sim.get_state("ions"))
+u_before = np.asarray(sim._get_state("ions"))
 rep = sim.check_model("ions")
 chk(rep["ok"], "bloc natif sain : ok")
-chk(np.array_equal(np.asarray(sim.get_state("ions")), u_before),
+chk(np.array_equal(np.asarray(sim._get_state("ions")), u_before),
     "etat du bloc RESTAURE apres le round-trip (aucune mutation nette)")
 
 print("== System.check_model : densite non positive detectee ==")
@@ -123,7 +123,9 @@ if cxx and os.path.isdir(INCLUDE):
         mq.primitive_vars(rho, uq, vq)
         mq.conservative_from([rho, rho * uq, rho * vq])
         mq.elliptic_rhs(0.0 * rho)
-        cmq = mq.compile(os.path.join(tmpd, "ckrt.so"), INCLUDE, backend="production")
+        cmq = mq._compile_for_runtime(
+            so_path=os.path.join(tmpd, "ckrt.so"), include=INCLUDE,
+            backend=pops.codegen.Production())
         repq = cmq.check_runtime(n=16)
         chk(repq["ok"] and not repq["failures"],
             f"CompiledModel seul re-verifie dans un System ephemere (ok={repq['ok']})")

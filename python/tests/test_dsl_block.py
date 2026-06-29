@@ -42,10 +42,10 @@ def main():
         U = np.zeros((4, n, n))
         U[0] = 1.0
         U[3] = p0 / (GAMMA - 1.0)
-        sim.set_state("euler", U.reshape(-1).tolist())
+        sim._set_state("euler", U.reshape(-1).tolist())
 
         # (1) le residu du bloc dynamique == celui d'pops.experimental.PythonFlux (meme schema Rusanov global)
-        R_sys = np.array(sim.eval_rhs("euler")).reshape(4, n, n)
+        R_sys = np.array(sim._eval_rhs("euler")).reshape(4, n, n)
         pf = pops.experimental.PythonFlux(lambda u, d: e.flux(u, {}, d),
                             lambda u: max(e.max_wave_speed(u, {}, 0), e.max_wave_speed(u, {}, 1)))
         R_py = pf.residual(U, h)
@@ -54,10 +54,10 @@ def main():
         print("OK  eval_rhs(bloc dynamique) == pops.experimental.PythonFlux (ecart max %.1e)" % dres)
 
         # (2) le bloc tourne DANS le System : masse conservee, etat physique, dynamique non triviale
-        mass0 = float(np.array(sim.get_state("euler")).reshape(4, n, n)[0].sum())
+        mass0 = float(np.array(sim._get_state("euler")).reshape(4, n, n)[0].sum())
         for _ in range(25):
             sim.step_cfl(0.4)
-        U1 = np.array(sim.get_state("euler")).reshape(4, n, n)
+        U1 = np.array(sim._get_state("euler")).reshape(4, n, n)
         drel = abs(float(U1[0].sum()) - mass0) / mass0
         assert np.isfinite(U1).all() and U1[0].min() > 0, "etat non physique"
         assert drel < 1e-9, "masse non conservee (drel=%.2e)" % drel

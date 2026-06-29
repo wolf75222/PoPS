@@ -1,8 +1,8 @@
 """System unified-install mixin (Spec-4 PR-F): public ``install`` over one lowering seam.
 
 ``install`` is the explicit-runtime entry point used by examples that manually construct
-``System``. ``pops.bind(compiled, ...)`` remains the high-level entry point and dispatches to the
-same lowering seam. Both routes lower through ``_install_compiled`` to add_equation / set_poisson /
+``System``. All public runtime wiring should enter through ``sim.install(compiled, ...)``.
+The lowering seam routes to add_equation / set_poisson /
 set_magnetic_field / set_aux_field / set_block_params / install_program, so validation and wiring
 stay in one place.
 """
@@ -19,16 +19,18 @@ def collect_missing_arguments(args, provided_blocks, provided_params, provided_a
     for name, spec in sorted(getattr(args, "instances", {}).items()):
         if spec.get("required") and name not in provided_blocks:
             missing.append("instance %r (a state block the program advances); supply its initial "
-                           "state via pops.bind(state={%r: <array>})" % (name, name))
+                           "state via sim.install(instances={%r: {'initial': <array>, ...}})"
+                           % (name, name))
     for name, spec in sorted(getattr(args, "params", {}).items()):
         if spec.get("required") and name not in provided_params:
-            missing.append("runtime param %r; pass pops.bind(params={%r: <value>})" % (name, name))
+            missing.append("runtime param %r; pass sim.install(params={%r: <value>})"
+                           % (name, name))
     for name, spec in sorted(getattr(args, "aux", {}).items()):
         if spec.get("required") and name not in provided_aux:
-            missing.append("aux field %r; pass pops.bind(aux={%r: <array>})" % (name, name))
+            missing.append("aux field %r; pass sim.install(aux={%r: <array>})" % (name, name))
     for name, spec in sorted(getattr(args, "solvers", {}).items()):
         if spec.get("required") and name not in provided_solvers:
-            missing.append("solver for field %r; pass pops.bind(solvers={%r: <Solver>})"
+            missing.append("solver for field %r; pass sim.install(solvers={%r: <Solver>})"
                            % (name, name))
     return missing
 
@@ -53,7 +55,7 @@ def validate_install_arguments(sim, compiled, instances, params, aux, solvers):
     missing = collect_missing_arguments(
         args, provided_blocks, set(params), set(aux) | provided_named_aux, set(solvers))
     if missing:
-        raise ValueError("pops.bind: the compiled artifact is missing required argument(s):\n  "
+        raise ValueError("install: the compiled artifact is missing required argument(s):\n  "
                          + "\n  ".join(missing))
 
 
@@ -61,8 +63,7 @@ class _SystemUnifiedInstall:
     """Unified install lowering for System.
 
     ``install(...)`` is the documented runtime entry point for scripts that explicitly build a
-    ``System``. ``pops.bind(...)`` uses the same lowering underneath after it has selected the runtime
-    from a compiled Case/layout. Both routes intentionally share one implementation.
+    ``System``.
     """
 
     def _install_program_so(self, so_path):
@@ -97,8 +98,8 @@ class _SystemUnifiedInstall:
         """Shared install seam for compiled and native System routes.
 
         Wires instances, runtime params, aux fields, field solvers, output policies and the optional
-        compiled Program in one validated order. Public callers enter through ``pops.bind`` or
-        ``sim.install``; this method keeps the low-level sequencing in one place.
+        compiled Program in one validated order. Public callers enter through ``sim.install``; this
+        method keeps the low-level sequencing in one place.
         """
         instances = instances or {}
         params = params or {}
@@ -130,7 +131,7 @@ class _SystemUnifiedInstall:
         # COMPILED vs NATIVE mode. COMPILED: `compiled` is a compile_problem(...) handle carrying a
         # .so_path time Program (installed in step 5, with the section-24 validation). NATIVE:
         # `compiled is None` -- no compiled Program; each instance carries its OWN native model + time
-        # policy (pops.Explicit / pops.Strang), step 5 is skipped, the native per-block loop drives
+        # policy (runtime Explicit / Strang), step 5 is skipped, the native per-block loop drives
         # stepping. Validate the handle up front, BEFORE any System mutation (no half-configured System).
         so_path = None
         compiled_model = None
@@ -151,7 +152,7 @@ class _SystemUnifiedInstall:
             if model is None:
                 raise ValueError(
                     "install: instance %r has no block model -- supply instances[%r]['model'] "
-                    "(an pops.Model(...) / CompiledModel), or pass a compiled handle that carries one "
+                    "(a pops.model.Module / CompiledModel), or pass a compiled handle that carries one "
                     "(compile_problem(model=...))." % (name, name))
             model = self._resolve_instance_model(model)
             resolved_models[name] = model
@@ -196,13 +197,13 @@ class _SystemUnifiedInstall:
         # (6) PROGRAM CADENCE (substeps / stride): a compiled Program is ONE whole-system closure, so
         # its macro-step cadence is GLOBAL (not per-block). Apply it AFTER install_program (the cadence
         # wraps the installed closure). It is a compiled-program concept; a native sim sets substeps /
-        # stride on its native time policy (pops.Explicit(substeps=, stride=)) instead.
+        # stride on its native time policy instead.
         if cadence is not None:
             if so_path is None:
                 raise ValueError(
                     "install(cadence=): a cadence applies to a compiled time Program; a native sim "
                     "(compiled=None) has no Program -- set substeps / stride on the native time policy "
-                    "(pops.Explicit(substeps=, stride=)) instead.")
+                    "instead.")
             self._install_cadence(cadence)
 
         if outputs:  # (7) OUTPUT / CHECKPOINT policies (C4): run() fires each at its cadence
@@ -249,11 +250,11 @@ class _SystemUnifiedInstall:
             self._program_cadence_cfl = float(cadence.cfl)
         elif cadence.cfl == "program":
             self._program_cadence_cfl = "program"
-        self.set_program_cadence(cadence.substeps, cadence.stride)
+        self._s.set_program_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial):
         """Lower a spatial selection to an pops.Spatial consumed by add_equation. Accepts an
-        pops.Spatial / pops.FiniteVolume (returned as-is), an pops.numerics.spatial.FiniteVolume(...)
+        runtime Spatial / FiniteVolume (returned as-is), an pops.numerics.spatial.FiniteVolume(...)
         BrickDescriptor (read its riemann/reconstruction/positivity_floor options), or None (default
         Spatial)."""
         if spatial is None:
@@ -272,7 +273,7 @@ class _SystemUnifiedInstall:
                 limiter, riemann, variables,
                 positivity_floor=opts.get("positivity_floor"),
                 wave_speed_cache=bool(opts.get("wave_speed_cache", False)))
-        raise TypeError("install: spatial must be an pops.FiniteVolume / pops.Spatial or an "
+        raise TypeError("install: spatial must be a runtime FiniteVolume / Spatial or an "
                         "pops.numerics.spatial.FiniteVolume(...) descriptor; got %r"
                         % type(spatial).__name__)
 
@@ -281,20 +282,27 @@ class _SystemUnifiedInstall:
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
         from pops.codegen import AOT, Production
-        from pops.physics.facade import Model
+        from pops.codegen.module_view import ModuleCodegenView, compile_module_for_runtime
+        from pops.model import Module
         if isinstance(model, (ModelSpec, CompiledModel)):
             return model
-        if isinstance(model, Model):
-            has_runtime = any(getattr(p, "kind", "const") == "runtime"
-                              for p in model.params.values())
-            return model._compile_for_runtime(backend=AOT() if has_runtime else Production())
+        if not isinstance(model, Module) and hasattr(model, "_m"):
+            raise TypeError(
+                "install: legacy physics/codegen facades carrying private _m are not accepted. "
+                "Pass a pops.model.Module, a CompiledModel, or a modern pops.physics.Model lowered "
+                "with to_module().")
+        if not isinstance(model, Module) and hasattr(model, "to_module"):
+            model = model.to_module()
+        if isinstance(model, Module):
+            backend = AOT() if ModuleCodegenView(model).has_runtime_params() else Production()
+            return compile_module_for_runtime(model, backend=backend)
         return model  # unknown -> let add_equation raise its own clear error
 
     def _validate_riemann_capability(self, model, spatial):
         """Section 24 capability check: reject the selected Riemann flux when the model does not back
         it, with the verbatim spec message ``riemann <FLUX> requires capability '<cap>'``. Lowered
         from the model's emitted capabilities (CompiledModel.has_hllc / has_roe / has_wave_speeds);
-        a composed native pops.Model(...) carries the capability in its bricks (the C++ requires-gate
+        a native composed model carries the capability in its bricks (the C++ requires-gate
         is the backstop), so we only gate the compiled (.so) path here."""
         from pops.codegen.loader import CompiledModel  # late import (codegen <-> __init__ cycle)
         flux = getattr(spatial, "flux", "rusanov")

@@ -27,8 +27,8 @@ def test_fields_define_commit_match_primitive_ir():
         P = Program("fe")
         dt = P.dt
         u = P.state("plasma")
-        f = P.fields("f", from_state=u) if board else P._solve_fields("f", u)
-        r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
+        f = P.fields("f", from_state=u) if board else P._legacy_solve_fields("f", u)
+        r = P._legacy_rhs(name="R", state=u, fields=f, flux=True, sources=["electric"])
         if board:
             u1 = P.define("U1", u + dt * r)
         else:
@@ -44,7 +44,7 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
         P = Program("imp")
         dt = P.dt
         u = P.state("plasma")
-        r = P._rhs_legacy(name="R", state=u, flux=True, sources=["electric"])
+        r = P._legacy_rhs(name="R", state=u, flux=True, sources=["electric"])
         if board:
             u1 = P.solve(
                 "U1",
@@ -72,7 +72,7 @@ def test_apply_operator_to_state_via_matmul():
 def test_define_equation_keeps_and_renames_rhs():
     P = Program("def")
     u = P.state("plasma")
-    raw = P._rhs_legacy(name="tmp", state=u, flux=True, sources=["electric"])
+    raw = P._legacy_rhs(name="tmp", state=u, flux=True, sources=["electric"])
     r = P.define("R^n", rate(u) == raw)
     assert r is raw            # same IR node
     assert r.name == "R^n"     # renamed to the board label

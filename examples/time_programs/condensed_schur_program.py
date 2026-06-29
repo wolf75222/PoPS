@@ -26,18 +26,16 @@ well-posed SPD Helmholtz operator on it. Run::
 Requires a compiler + a visible Kokkos (``POPS_KOKKOS_ROOT``); prints a skip notice and exits 0
 otherwise. cf. docs/sphinx/reference/time-program.md.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 try:
     import numpy as np
 
     import pops
-    from pops.physics.facade import Model
     from pops.solvers import krylov
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+    from _module_models import explicit_euler, first_order_rusanov, passive_scalar_module
 except Exception as exc:  # noqa: BLE001
     print("skip condensed_schur_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -47,14 +45,7 @@ ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*div(grad) is SPD (no null sp
 def passive_model(name):
     """A 1-variable block with no flux and no Poisson coupling: the Program runs neither a flux RHS nor
     solve_fields, so the single conservative variable is just the scalar field the solve writes."""
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    return m
+    return passive_scalar_module(name)
 
 
 def schur_like_program(method=None, tol=1e-10, max_iter=200):
@@ -155,10 +146,6 @@ def show_macro():
 
 def main():
     n = 16
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip condensed_schur_program (_pops lacks the install_program binding; rebuild _pops)")
-        return 0
-
     # (b) the macro lowering is pure Python -- it always runs (no toolchain needed).
     gap_ok = show_macro()
 
@@ -180,11 +167,11 @@ def main():
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim.install(compiled,
                 instances={"blk": {"model": passive_model("cs_blk"),
-                                   "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                   "time": pops.Explicit.euler(),
+                                   "spatial": first_order_rusanov(),
+                                   "time": explicit_euler(),
                                    "initial": np.stack([b])}})
     sim.step(0.01)  # dt is irrelevant -- the program is a pure solve
-    phi_prog = np.array(sim.get_state("blk"))[0]
+    phi_prog = np.array(sim._get_state("blk"))[0]
 
     phi_ref, iters = offline_cg(discrete_divgrad_helmholtz(n, ALPHA), b)
     err = float(np.abs(phi_prog - phi_ref).max())

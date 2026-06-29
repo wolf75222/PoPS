@@ -5,7 +5,7 @@ Avant ce chantier, le schema RK explicite n'etait selectionnable que sur le chem
 add_block (modele compose pops.Model) : le chemin compile/production (add_native_block ->
 pops_install_native -> add_compiled_model<ProdModel>) ne marshalait que "explicit"|"imex" et
 RETOMBAIT SILENCIEUSEMENT sur SSPRK2 -- add_native_block rejetait meme "ssprk3". Le cas hoffart
-(arXiv:2510.11808), qui compile en backend="production", restait donc bloque en SSPRK2.
+(arXiv:2510.11808), qui compile en backend=pops.codegen.Production(), restait donc bloque en SSPRK2.
 
 Ce chantier threade le schema RK jusqu'au make_block du .so :
   - native_loader.hpp add_native_block : accepte time == "ssprk3" (au lieu de le rejeter) ;
@@ -54,7 +54,7 @@ def err_msg(fn):
 
 def _native_spec():
     """Le MEME modele euler_poisson, version NATIVE composee par briques (reference de parite)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+    return pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                      transport=pops.CompressibleFlux(),
                      source=pops.GravityForce(),
                      elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
@@ -97,30 +97,31 @@ spec = _native_spec()
 e = build_euler_poisson()
 tmp = tempfile.mkdtemp()
 try:
-    so = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE, backend="production")
+    so = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE,
+                   backend=pops.codegen.Production())
 
     def build_prod(method):
         s = pops.System(n=n, L=L, periodic=True)
         s._s.add_native_block("gas", so, limiter="minmod", riemann="rusanov", recon="conservative",
                               time=method, gamma=GAMMA, substeps=1, evolve=True)
-        s.set_poisson(rhs="charge_density", solver="geometric_mg")
-        s.set_state("gas", Uflat)
+        s._set_poisson(rhs="charge_density", solver="geometric_mg")
+        s._set_state("gas", Uflat)
         return s
 
     def build_ref_ssprk3():
         s = pops.System(n=n, L=L, periodic=True)
-        s._add_block("gas", spec, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-                    time=pops.Explicit(method="ssprk3"))
-        s.set_poisson(rhs="charge_density", solver="geometric_mg")
-        s.set_state("gas", Uflat)
+        s._add_block("gas", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod(), flux=Rusanov(), recon=Conservative()),
+                    time=pops.Explicit.ssprk3())
+        s._set_poisson(rhs="charge_density", solver="geometric_mg")
+        s._set_state("gas", Uflat)
         return s
 
     # (2a) eval_rhs : production+SSPRK3 == natif add_block+SSPRK3 (le RESIDU spatial ne depend pas du
     # RK -- mais on verifie que les DEUX chemins instancient le meme bloc avant toute avance).
     prod = build_prod("ssprk3"); prod.solve_fields()
     ref = build_ref_ssprk3(); ref.solve_fields()
-    R_prod = np.array(prod.eval_rhs("gas")).reshape(4, n, n)
-    R_ref = np.array(ref.eval_rhs("gas")).reshape(4, n, n)
+    R_prod = np.array(prod._eval_rhs("gas")).reshape(4, n, n)
+    R_ref = np.array(ref._eval_rhs("gas")).reshape(4, n, n)
     chk(float(np.max(np.abs(R_prod))) > 1e-3, "(2a) residu non trivial")
     chk(float(np.max(np.abs(R_prod - R_ref))) == 0.0,
         "(2a) eval_rhs production+SSPRK3 BIT-IDENTIQUE au natif add_block+SSPRK3")
@@ -130,8 +131,8 @@ try:
     dt = 1e-3
     for _ in range(12):
         prod.step(dt); ref.step(dt)
-    Up = np.array(prod.get_state("gas")).reshape(4, n, n)
-    Ur = np.array(ref.get_state("gas")).reshape(4, n, n)
+    Up = np.array(prod._get_state("gas")).reshape(4, n, n)
+    Ur = np.array(ref._get_state("gas")).reshape(4, n, n)
     chk(np.isfinite(Up).all() and Up[0].min() > 0, "(2b) etat production+SSPRK3 physique (fini, rho>0)")
     chk(float(np.max(np.abs(Up - Ur))) == 0.0,
         "(2b) 12 pas production+SSPRK3 BIT-IDENTIQUE au natif add_block+SSPRK3")
@@ -141,8 +142,8 @@ try:
     p3 = build_prod("ssprk3")
     for _ in range(12):
         p2.step(dt); p3.step(dt)
-    U2 = np.array(p2.get_state("gas")).reshape(4, n, n)
-    U3 = np.array(p3.get_state("gas")).reshape(4, n, n)
+    U2 = np.array(p2._get_state("gas")).reshape(4, n, n)
+    U3 = np.array(p3._get_state("gas")).reshape(4, n, n)
     diff = float(np.max(np.abs(U2 - U3)))
     chk(diff > 0.0,
         "(3) production+SSPRK3 != production+SSPRK2 (ecart %.2e -> ssprk3 effectivement actif)" % diff)

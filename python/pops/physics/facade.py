@@ -31,7 +31,7 @@ class Model(_FacadeCompileMixin):
         m.flux(x=[...], y=[...])                   # symbolic DECLARATOR of the physical flux
         m.eval_flux(U, aux, dir)                   # numpy EVALUATOR (debug), DISTINCT name
         m.primitive_vars(rho=rho, u=u, v=v, p=p)   # ordered Prim layout (kwargs order)
-        compiled = pops.compile(case, backend=pops.codegen.Production())  # -> CompiledProblem
+        compiled = pops.compile_problem(model=m, time=program, backend=pops.codegen.Production())
 
     cf. docs/DSL_MODEL_DESIGN.md sections 1-3."""
 

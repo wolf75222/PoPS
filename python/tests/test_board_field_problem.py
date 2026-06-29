@@ -139,15 +139,15 @@ def test_model_inspect_surfaces_the_field_problem():
 
 
 def test_field_problem_does_not_perturb_the_dsl_elliptic_rhs():
-    # The shortcut is INERT: unlike solve_field it must not register an elliptic rhs on the
-    # underlying dsl model (no lowering / operator-graph mutation).
+    # The shortcut is INERT: unlike solve_field it must not register an elliptic operator on the
+    # Module (no operator-graph mutation).
     from pops.math import laplacian
 
     m, U, phi = _model_with_state()
     rho, mx, my = U
     m.field_problem("poisson", equation=(-laplacian(phi) == rho),
                     solver=elliptic_solvers.GeometricMG())
-    assert m._dsl._m._elliptic is None
+    assert m.lower().list_operators() == []
 
 
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this

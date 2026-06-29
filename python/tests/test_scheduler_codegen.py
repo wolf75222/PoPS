@@ -59,11 +59,30 @@ def _field_program(schedule):
 
 
 def _transport_model():
-    import pops
-
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(), source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    from pops.ir.expr import Const
+    from pops.ir.ops import sqrt
+    mod = model.Module("sched_transport")
+    u = mod.state_space(
+        "U", ("rho", "mx", "my"),
+        roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    cs2 = 0.5
+    cs = sqrt(cs2)
+    zero = Const(0.0)
+    mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator",
+        capabilities={"default": True}, expr=rho)
+    mod.operator(
+        name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+        expr={"x": [mx, mx * mx / rho + cs2 * rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho + cs2 * rho]})
+    mod.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
+                    y=[my / rho - cs, my / rho, my / rho + cs])
+    mod.operator(
+        name="source", signature=(u, fields) >> model.Rate(u), kind="local_source",
+        capabilities={"default": True}, expr=[zero, zero, zero])
+    return mod
 
 
 def _scratch_program(schedule):
@@ -73,8 +92,8 @@ def _scratch_program(schedule):
     P = adctime.Program("sched_rhs")
     dt = P.dt
     U = P.state("ions")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     R.attrs["schedule"] = schedule
     P.commit("ions", P.linear_combine("U1", U + dt * R))
     return P
@@ -121,10 +140,10 @@ def test_when_reuses_program_predicate_token():
     P = adctime.Program("when_sched")
     dt = P.dt
     U = P.state("ions")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     cond = P.norm2(R) < 1e-6  # a Program Bool predicate emitted before the scheduled node
-    R2 = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    R2 = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     R2.attrs["schedule"] = adctime.when(cond).hold()
     P.commit("ions", P.linear_combine("U1", U + dt * R2))
     P._check_schedules_lowerable()  # a Program Bool when() lowers

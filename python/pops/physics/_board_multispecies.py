@@ -4,7 +4,7 @@ Splits the multi-species authoring (``species`` promotion, ``coupled_rate``,
 ``solve_fields_from_species``) and the inspection/dump helpers out of the board
 :class:`pops.physics.board.Model` so neither file exceeds the Spec-4 500-line
 bound. Methods only; they operate on the board ``Model`` instance attributes
-(``_multi_module`` / ``_species`` / ``_states`` / ``_dsl`` / ...). Lowers to the
+(``_module`` / ``_multi_module`` / ``_species`` / ``_states`` / ...). Lowers to the
 operator-first multi-block IR (:mod:`pops.model`); codegen-free, ``_pops``-free.
 """
 from .board_handles import (CallableOperator, FieldsHandle, StateHandle,
@@ -161,7 +161,7 @@ class _MultiSpeciesMixin:
     def list_operators(self):
         if self._multi_module is not None:
             return self._multi_module.list_operators()
-        return self._dsl.list_operators()
+        return self._module.list_operators()
 
     def operator_alias(self, name):
         """The registered operator name for a board role name (``operator(...)``)."""
@@ -173,7 +173,7 @@ class _MultiSpeciesMixin:
         sources, operators) -- the layer-1 surface."""
         lines = ["# physics.Model %s" % self.name]
         lines.append("states: %s" % {n: list(h.components) for n, h in self._states.items()})
-        lines.append("params: %s" % list(self._dsl.params))
+        lines.append("params: %s" % list(self.params))
         lines.append("fields: %s" % list(self._fields))
         lines.append("fluxes: %s" % list(self._fluxes))
         lines.append("sources: %s" % list(self._sources))

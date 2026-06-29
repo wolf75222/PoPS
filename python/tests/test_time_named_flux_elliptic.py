@@ -192,8 +192,8 @@ chk(eh1._m._model_hash() != eh2._m._model_hash(),
 def _fe_program(name, fluxes):
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -241,8 +241,8 @@ chk(src_split.count("ctx.neg_div_flux_into(") == 1,
 def _named_field_program(name="nf_ell"):
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P._solve_fields("fields_phi2", U, field="phi2")
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
+    f = P._legacy_solve_fields("fields_phi2", U, field="phi2")
+    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -262,8 +262,8 @@ chk(raises(ValueError,
 chk(raises(NotImplementedError, lambda: _named_field_program("nf_nomodel_ell").emit_cpp_program()),
     "a named-elliptic solve_fields without a model raises NotImplementedError")
 # An empty field name is rejected at construction (clear error).
-chk(raises(ValueError, lambda: adctime.Program("x").solve_fields("f", adctime.Program("x").state("b"),
-                                                                 field="")),
+chk(raises(ValueError, lambda: adctime.Program("x")._legacy_solve_fields(
+    "f", adctime.Program("x").state("b"), field="")),
     "solve_fields with an empty field name raises ValueError")
 
 
@@ -284,7 +284,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     _skipB("numpy/_pops unavailable: %s" % exc)
 
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
     _skipB("_pops lacks the install_program binding (rebuild _pops)")
 
 N = 16
@@ -294,26 +294,26 @@ DT = 0.01
 def make_sim(model):
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
-        compiled = model.compile(backend="production")
+        compiled = model._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:
         _skipB("model compile could not build the .so: %s" % str(exc)[:160])
     sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     mx = 0.4 * rho
     my = -0.2 * rho
     U0 = np.stack([rho, mx, my])
-    sim.set_state("plasma", U0)
+    sim._set_state("plasma", U0)
     return sim, U0
 
 
 def _flux_fe_program(name, fluxes):
     P = adctime.Program(name)
     U = P.state("plasma")
-    R = P._rhs_legacy(name="R", state=U, flux=True, fluxes=fluxes)
+    R = P._legacy_rhs(name="R", state=U, flux=True, fluxes=fluxes)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -332,12 +332,12 @@ except RuntimeError as exc:
 sim_w, U0 = make_sim(whole_flux_model("nf_whole_block"))
 sim_w._install_program_so(compiled_whole.so_path)
 sim_w.step(DT)
-U_w = np.array(sim_w.get_state("plasma"))
+U_w = np.array(sim_w._get_state("plasma"))
 
 sim_s, _ = make_sim(split_flux_model("nf_split_block"))
 sim_s._install_program_so(compiled_split.so_path)
 sim_s.step(DT)
-U_s = np.array(sim_s.get_state("plasma"))
+U_s = np.array(sim_s._get_state("plasma"))
 
 e_split = float(np.abs(U_w - U_s).max())
 print("  split-vs-whole named-flux parity: max|d| = %.2e" % e_split)

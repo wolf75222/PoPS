@@ -1,7 +1,7 @@
 """Spec 2 (S2-2): typed P.call and m.rate_operator.
 
 P.call resolves an operator handle against the model's typed registry, type-checks the
-arguments against its Signature, records a first-class ``operator_call`` IR node, and
+arguments against its Signature, records a first-class ``call`` IR node, and
 codegen lowers that node to the matching C++ ProgramContext route. m.rate_operator names
 a composite -div F + sources rate as a Program-side alias. Pure Python
 (emit_cpp_program returns the .so source text without compiling); skips cleanly if pops
@@ -11,29 +11,37 @@ import sys
 
 try:
     from pops.ir.expr import Const, Var
-    from pops.physics.facade import Model
+    from pops import physics
+    from pops.math import laplacian
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_call (pops unavailable: %s)" % exc)
+    print("skip test_call (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 
 def build_model():
-    m = Model("euler_poisson_lorentz")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    m = physics.Model("euler_poisson_lorentz")
+    U = m.state("U", components=["rho", "mx", "my"])
+    rho, mx, my = U
+    phi = m.field("phi")
     m.aux("phi")
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
     bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho])
-    electric = m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
-    return m
+    m.flux("flux", on=U,
+           x=[mx, mx * mx / rho, mx * my / rho],
+           y=[my, mx * my / rho, my * my / rho],
+           waves={"x": [1.0, 1.0, 1.0], "y": [1.0, 1.0, 1.0]})
+    electric = m.source("electric", on=U, value=[Const(0.0), rho * (-gx), rho * (-gy)])
+    lorentz = m.local_linear_operator("lorentz", on=U,
+                                      matrix=[[0.0, 0.0, 0.0],
+                                              [0.0, 0.0, bz],
+                                              [0.0, -bz, 0.0]])
+    m.operator("lorentz", inputs=["fields"], returns=lorentz)
+    m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho))
+    module = m.lower()
+    module.rate_operator("explicit_rhs", state_space="U", flux=True, sources=[electric.operator])
+    return module
 
 
 def _program(build, m, name="prog"):
@@ -47,7 +55,7 @@ def _emit(build, m, name="prog"):
 
 
 def test_call_predictor_records_operator_nodes_and_lowers():
-    """A predictor step written with P.call keeps typed operator_call nodes in IR and lowers them."""
+    """A predictor step written with P.call keeps typed call nodes in IR and lowers them."""
     m = build_model()
 
     def opfirst(P, _m):
@@ -58,12 +66,12 @@ def test_call_predictor_records_operator_nodes_and_lowers():
         P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
 
     P = _program(opfirst, m)
-    assert [v.op for v in P._values].count("operator_call") == 2
+    assert [v.op for v in P._values].count("call") == 2
     src = P.emit_cpp_program(model=m)
     assert "ctx.solve_fields_from_state(0," in src
     assert "ctx.neg_div_flux_default_into(0," in src
     assert "electric" in src
-    print("OK  P.call(fields_from_state)+P.call(explicit_rhs) records operator_call and lowers")
+    print("OK  P.call(fields_from_state)+P.call(explicit_rhs) records call and lowers")
 
 
 def test_call_lowers_source_and_flux():
@@ -74,11 +82,11 @@ def test_call_lowers_source_and_flux():
         U = P.state("plasma")
         f = P._call("fields_from_state", U)
         s = P._call("electric", U, f)
-        flux = P._call("flux_default", U)
+        flux = P._call("flux", U)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
     P = _program(opfirst, m)
-    assert [v.op for v in P._values].count("operator_call") == 3
+    assert [v.op for v in P._values].count("call") == 3
     src = P.emit_cpp_program(model=m)
     assert "ctx.neg_div_flux_default_into(0," in src
     assert "electric" in src
@@ -87,15 +95,20 @@ def test_call_lowers_source_and_flux():
 
 def test_call_default_source():
     """P._call('source_default', ...) reaches the default source (m._source), which is NOT a named
-    source_term: it must lower to the source-only rhs, identical to P._rhs_legacy(flux=False,
+    source_term: it must lower to the source-only rhs, identical to P._legacy_rhs(flux=False,
     sources=['default'])."""
-    m = Model("ds")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    m = physics.Model("ds")
+    U = m.state("U", components=["rho", "mx", "my"])
+    rho, mx, my = U
+    phi = m.field("phi")
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    m.source_term("default", [Const(0.0), -rho * gx, -rho * gy])  # reads the fields
-    m.elliptic_rhs(rho - 1.0)
+    m.flux("flux", on=U, x=[mx, mx * mx / rho, mx * my / rho],
+           y=[my, mx * my / rho, my * my / rho],
+           waves={"x": [1.0, 1.0, 1.0], "y": [1.0, 1.0, 1.0]})
+    m.source("source_default", on=U, value=[Const(0.0), -rho * gx, -rho * gy])
+    m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho - 1.0))
+    m = m.lower()
 
     def opfirst(P, _m):
         P.bind_operators(_m)
@@ -105,7 +118,7 @@ def test_call_default_source():
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
 
     P = _program(opfirst, m)
-    assert [v.op for v in P._values].count("operator_call") == 2
+    assert [v.op for v in P._values].count("call") == 2
     assert "ctx.source_default_into(0," in P.emit_cpp_program(model=m)
     print("OK  P.call(source_default) lowers to default-source-only C++")
 
@@ -122,7 +135,7 @@ def test_call_linear_operator_matches_solve_local_linear():
         P.commit("plasma", U1)
 
     P = _program(opfirst, m)
-    assert any(v.op == "operator_call" and v.attrs["kind"] == "local_linear_operator"
+    assert any(v.op == "call" and v.attrs["kind"] == "local_linear_operator"
                for v in P._values)
     src = P.emit_cpp_program(model=m)
     assert "solve_local_linear" in src or "lorentz" in src
@@ -171,9 +184,11 @@ def test_default_resolution_and_ambiguity():
     reg = m.operator_registry()
     # The privileged defaults resolve uniquely.
     assert reg.default_of_kind("field_operator").name == "fields_from_state"
-    assert reg.default_of_kind("grid_operator").name == "flux_default"
+    assert reg.default_of_kind("grid_operator").name == "flux"
     # Add a SECOND, non-privileged field operator; the privileged default still wins.
-    m.elliptic_field("psi", rhs=Var("rho", "cons"), aux=["psi_x"])
+    fields = next(iter(m.field_spaces().values()))
+    state = next(iter(m.state_spaces().values()))
+    m.operator("psi", signature=(state,) >> fields, kind="field_operator", expr=Var("rho", "cons"))
     reg2 = m.operator_registry()
     assert len(reg2.operators_of_kind("field_operator")) == 2
     assert reg2.default_of_kind("field_operator").name == "fields_from_state"
@@ -181,26 +196,24 @@ def test_default_resolution_and_ambiguity():
 
 
 def test_rate_operator_alias_not_in_hash():
-    m = Model("m")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    m.flux(x=[mx, mx, mx], y=[my, my, my])
-    relax = m.source_term("relax", [Const(0.0), -mx, -my])
-    h0 = m._model_hash()
-    m.rate_operator("explicit_rhs", flux=True, sources=[relax])
-    assert m._model_hash() == h0, "a rate_operator alias must not change the model hash"
+    m = build_model()
+    electric = m.operator_registry().get("electric")
+    before = set(m.list_operators())
+    m.rate_operator("explicit_rhs_2", state_space="U", flux=True, sources=[electric])
+    assert set(m.list_operators()) == before | {"explicit_rhs_2"}
     assert "explicit_rhs" in m.operator_registry()
-    print("OK  m.rate_operator is a pure alias (no model-hash impact)")
+    print("OK  Module.rate_operator registers an explicit operator-first alias")
 
 
 def main():
-    test_call_matches_shortcut_predictor()
-    test_call_matches_source_and_flux()
+    test_call_predictor_records_operator_nodes_and_lowers()
+    test_call_lowers_source_and_flux()
     test_call_default_source()
     test_call_linear_operator_matches_solve_local_linear()
     test_call_typing_errors()
     test_default_resolution_and_ambiguity()
     test_rate_operator_alias_not_in_hash()
-    print("OK  test_operator_call")
+    print("OK  test_call")
 
 
 if __name__ == "__main__":

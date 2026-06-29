@@ -35,15 +35,15 @@ def build(n=16):
     """Deux blocs couples par le Poisson, le second a STRIDE=2 (cadence hold-then-catch-up) :
     le restart doit reprendre la fenetre stride exactement (macro_step restaure)."""
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),
                             elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
     sim._add_block("slow",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=-1.0),
                             elliptic=pops.ChargeDensity(charge=-1.0)),
@@ -69,8 +69,8 @@ chk(os.path.exists(ck), f"checkpoint ecrit ({os.path.basename(ck)})")
 chk(sim.macro_step() == 3, f"macro_step = 3 ({sim.macro_step()})")
 for _ in range(4):
     sim.step(dt)
-ref_ions = np.asarray(sim.get_state("ions"))
-ref_slow = np.asarray(sim.get_state("slow"))
+ref_ions = np.asarray(sim._get_state("ions"))
+ref_slow = np.asarray(sim._get_state("slow"))
 ref_t = sim.time()
 
 sim2 = build()  # composition REJOUEE (contrat v1)
@@ -79,18 +79,18 @@ chk(sim2.macro_step() == 3 and abs(sim2.time() - 3 * dt) < 1e-15,
     "horloge restauree (t, macro_step)")
 for _ in range(4):
     sim2.step(dt)
-chk(np.array_equal(np.asarray(sim2.get_state("ions")), ref_ions),
+chk(np.array_equal(np.asarray(sim2._get_state("ions")), ref_ions),
     "bloc rapide : reprise BIT-IDENTIQUE")
-chk(np.array_equal(np.asarray(sim2.get_state("slow")), ref_slow),
+chk(np.array_equal(np.asarray(sim2._get_state("slow")), ref_slow),
     "bloc stride=2 : reprise BIT-IDENTIQUE (fenetre stride reprise via macro_step)")
 chk(abs(sim2.time() - ref_t) < 1e-15, "temps final identique")
 
 # --- (2) rejets explicites -----------------------------------------------------------
 print("== (2) rejets explicites ==")
 bad = pops.System(n=16, L=1.0, periodic=True)
-bad.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+bad._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 bad._add_block("autre",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+              pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                         transport=pops.IsothermalFlux(), source=pops.NoSource(),
                         elliptic=pops.ChargeDensity(charge=0.0)),
               spatial=pops.FiniteVolume(limiter=Minmod()))
@@ -108,20 +108,20 @@ except ValueError as e:
 
 # --- (3) write npz / vtk ---------------------------------------------------------------
 print("== (3) write npz / vtk ==")
-p_npz = sim.write(os.path.join(tmp, "out"), format="npz", step=7)
+p_npz = sim.write(os.path.join(tmp, "out"), format=pops.output.NPZ(), step=7)
 d = np.load(p_npz)
 chk(p_npz.endswith("_000007.npz") and "state_ions" in d and "phi" in d and "macro_step" in d,
     f"npz ecrit avec etats/phi/horloge ({os.path.basename(p_npz)})")
 chk(d["state_ions"].shape == (3, 16, 16), "npz : etat (ncomp, ny, nx)")
-p_vti = sim.write(os.path.join(tmp, "out"), format="vtk", step=7)
+p_vti = sim.write(os.path.join(tmp, "out"), format=pops.output.VTK(), step=7)
 head = open(p_vti).read(200)
 chk("ImageData" in head and "VTKFile" in head, f"vti ecrit (en-tete ImageData) ({os.path.basename(p_vti)})")
 chk("ions_rho" in open(p_vti).read(), "vti : DataArray par variable (ions_rho)")
 try:
     sim.write(os.path.join(tmp, "out"), format="silo")
     chk(False, "format inconnu aurait du lever")
-except ValueError as e:
-    chk("format" in str(e), f"format inconnu : {str(e)[:60]}")
+except TypeError as e:
+    chk("format" in str(e), f"format string rejete : {str(e)[:60]}")
 
 if fails:
     print(f"FAIL test_io_checkpoint : {fails} echec(s)")

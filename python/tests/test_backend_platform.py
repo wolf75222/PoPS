@@ -5,12 +5,8 @@ These checks pin the typed backend/platform surface added under epic ADC-479:
   - the backend descriptors (Production / AOT / JIT) lower to the legacy backend string
     ("production" / "aot" / "prototype") the compile drivers already key on, and expose the same
     token via ``.scheme``;
-  - ``lower_backend`` is ADDITIVE and TRANSPARENT: a typed descriptor lowers to its string, while a
-    plain string / None / any other value passes through unchanged so the compile driver's existing
-    ``backend not in _BACKENDS`` guard stays the single source of the unknown-backend ValueError;
-  - the consumer (``compile_problem`` / ``compile_model``) accepts BOTH a string and a typed
-    backend -- a typed AOT() hits the SAME production-only guard as the string "aot", proving the
-    lowering runs before the guard;
+  - ``lower_backend`` is strict: public route choices must be typed descriptors, not strings;
+  - ``compile_problem`` and ``compile_model`` both reject string route selectors;
   - the higher-level AUTHORING FACADES the docs teach (the PDE ``Model`` facade, the ``HybridModel``
     composer, the ``CoupledSource`` compiler) accept a typed backend too -- each validated/stored
     ``backend`` itself before reaching a driver, so each wires the same additive lowering;
@@ -23,14 +19,18 @@ Pure Python: it imports the inert authoring/codegen packages (the compiled _pops
 effect of ``import pops`` -- platform availability reads its build flags -- but no model is built
 or run, and no compiler is invoked).
 """
+import os
 import sys
 
 import pytest
 
 pops = pytest.importorskip("pops")
 
+INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
+
 from pops.codegen import AOT, JIT, Production, lower_backend  # noqa: E402
 from pops.codegen.backends import BACKEND_DESCRIPTORS, _Backend  # noqa: E402
+from pops.codegen.backends import lower_problem_backend  # noqa: E402
 from pops.descriptors import Availability, Descriptor  # noqa: E402
 from pops.runtime.platforms import (  # noqa: E402
     KokkosCuda, KokkosHIP, KokkosOpenMP, KokkosSerial, MPI)
@@ -71,60 +71,50 @@ def test_backend_registry_maps_token_to_class():
     assert BACKEND_DESCRIPTORS["prototype"] is JIT
 
 
-# --- lower_backend is additive (string AND typed) ---------------------------------------------
-def test_lower_backend_passes_string_through():
-    for token in ("production", "aot", "prototype", "auto"):
-        assert lower_backend(token) == token
-
-
 def test_lower_backend_lowers_typed():
     assert lower_backend(Production()) == "production"
     assert lower_backend(AOT()) == "aot"
     assert lower_backend(JIT()) == "prototype"
+    assert lower_backend(None) == "production"
 
 
-def test_lower_backend_passes_non_descriptor_through():
-    # lower_backend is a TRANSPARENT coercion: it lowers a typed descriptor and returns anything
-    # else (None, a wrong type, an unknown string) UNCHANGED, so the compile entry point's existing
-    # `backend not in _BACKENDS` guard stays the single source of the unknown-backend ValueError.
-    # A guardrail such as test_dsl_compile_facade passes backend=None expecting that ValueError, so
-    # lower_backend must NOT pre-empt it with a TypeError of its own.
-    assert lower_backend(None) is None
-    assert lower_backend(123) == 123
-    assert lower_backend("nope") == "nope"
+def test_lower_backend_rejects_public_strings_and_wrong_types():
+    for token in ("production", "aot", "prototype", "auto", "nope"):
+        with pytest.raises(TypeError, match="typed"):
+            lower_backend(token)
+    with pytest.raises(TypeError, match="Production"):
+        lower_backend(123)
 
 
-# --- the consumer accepts BOTH a string and a typed backend -----------------------------------
+# --- compile_problem is strict: public route choices are typed -------------------------------
 def _guard_error(backend):
-    """Run compile_problem far enough to hit the backend guard; return the ValueError text."""
+    """Run compile_problem far enough to hit the backend guard; return (type, message)."""
     from pops.codegen.compile_drivers import compile_problem
     try:
         compile_problem(model=None, time=None, backend=backend)
-    except ValueError as err:
-        return str(err)
+    except Exception as err:  # noqa: BLE001 -- the exception type is part of the assertion
+        return type(err), str(err)
     raise AssertionError("compile_problem(backend=%r) did not raise" % (backend,))
 
 
-def test_compile_problem_accepts_string_and_typed_production():
-    # Both reach PAST the production-only guard and fail identically at the time= check.
-    string_msg = _guard_error("production")
-    typed_msg = _guard_error(Production())
-    assert "time must be" in string_msg
-    assert string_msg == typed_msg
+def test_compile_problem_rejects_string_backend():
+    typ, msg = _guard_error("production")
+    assert typ is TypeError
+    assert "typed" in msg and "Production()" in msg
+    with pytest.raises(TypeError):
+        lower_problem_backend("production")
 
 
-def test_compile_problem_typed_non_production_hits_same_guard_as_string():
-    # A typed AOT() lowers to "aot" BEFORE the production-only guard -> the SAME message the
-    # string "aot" produces (proving the additive lowering runs first).
-    string_msg = _guard_error("aot")
-    typed_msg = _guard_error(AOT())
-    assert string_msg == "compiled time programs require backend='production'"
-    assert typed_msg == string_msg
+def test_compile_problem_typed_non_production_hits_guard():
+    typ, msg = _guard_error(AOT())
+    assert typ is ValueError
+    assert msg == "compile_problem: compiled problems require backend=Production()"
 
 
 def test_compile_problem_accepts_typed_backend_with_platform():
     # Recording a platform must not change the lowered backend string.
-    msg = _guard_error(Production(platform=KokkosOpenMP()))
+    typ, msg = _guard_error(Production(platform=KokkosOpenMP()))
+    assert typ is ValueError
     assert "time must be" in msg
 
 
@@ -138,37 +128,34 @@ def test_compile_model_lowers_typed_backend_past_unknown_guard():
             pass
 
     with pytest.raises(AttributeError):
-        compile_model(_FakeModel(), backend=JIT())
-    # A genuinely unknown string still raises the unknown-backend ValueError (additive, not lossy).
-    with pytest.raises(ValueError, match="backend 'nope' unknown"):
-        compile_model(_FakeModel(), backend="nope")
+        compile_model(_FakeModel(), backend=JIT(), include=INCLUDE)
+    # A string selector is rejected before the backend table.
+    with pytest.raises(TypeError, match="typed"):
+        compile_model(_FakeModel(), backend="nope", include=INCLUDE)
 
 
-# --- the authoring FACADES accept a typed backend too (Spec 5 sec.8.15) ------------------------
+# --- the remaining lower-level compilers accept a typed backend too (Spec 5 sec.8.15) -----------
 # The tests above pin the DRIVERS (compile_problem / compile_model). The higher-level authoring
-# facades the docs teach -- the PDE Model facade, the hybrid composer, the coupled-source compiler
-# -- each validated/stored `backend` ITSELF before (or instead of) reaching a driver, so each needs
-# the same additive `lower_backend` coercion. Compile-free: every assertion trips a validation guard
-# (or stores the lowered token) BEFORE any toolchain/compiler is invoked.
+# helpers that still compile lower-level artifacts -- the hybrid composer and the coupled-source
+# compiler -- each validated/stored `backend` ITSELF before (or instead of) reaching a driver, so each
+# needs the same additive `lower_backend` coercion. The physics authoring surface is different: public
+# `.compile(...)` is removed; complete problems lower to Module and compile through compile_problem.
 
-def test_facade_model_compile_lowers_typed_backend():
-    # pops.physics.facade.Model.compile validated `backend not in _BACKENDS` itself; a typed
-    # Production() must lower so it is NOT rejected as unknown. A deliberately bogus target pushes
-    # PAST the (now-passing) backend guard and trips the target guard -- proving the coercion ran
-    # without reaching any heavy Kokkos compile.
-    from pops.physics.facade import Model
-    with pytest.raises(ValueError) as excinfo:
-        Model("t").compile(backend=Production(), target="__bogus__")
-    msg = str(excinfo.value)
-    assert "__bogus__" in msg and "target" in msg
-    assert "unknown backend" not in msg
+def test_physics_model_compile_removed_from_public_api():
+    # Clean break: the physics authoring model no longer exposes `.compile(...)`; complete problems are
+    # compiled through compile_problem after lowering to a pops.model.Module.
+    import pops.physics as physics
+    from pops import model
+    m = physics.Model("t")
+    assert not hasattr(m, "compile")
+    assert isinstance(m.to_module(), model.Module)
 
 
 def test_hybrid_compile_lowers_typed_backend():
     # HybridModel.compile validated `backend not in (...)` itself; same proof via a bogus target.
     # The composite is stitched from inert native-brick descriptors (no _pops, no compile invoked).
-    from pops.physics import HybridModel
     from pops.physics.bricks import NativeBrick
+    from pops.physics.hybrid import HybridModel
     hyp = NativeBrick("pops::Dummy", "hyperbolic", var_names=["rho", "mx", "E"], n_vars=3, gamma=1.4)
     src = NativeBrick("pops::NoSource", "source")
     ell = NativeBrick("pops::ZeroRhs", "elliptic")

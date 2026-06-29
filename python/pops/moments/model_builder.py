@@ -1,12 +1,12 @@
 """Generic moment-model builder: index helpers and build_moment_model.
 
-Symbols are re-exported via python/pops/lib/moments/__init__.py.
+Symbols are re-exported via the central :mod:`pops.moments` package.
 
 The symbolic IR primitives (``Const`` / ``sqrt`` / ``abs_``) come from
-:mod:`pops.ir` at module scope (the IR is lightweight and lib may import it).
-The PDE-model facade (``physics.PdeModel``) is imported
+:mod:`pops.ir` at module scope.
+The lower-level PDE-model facade (``pops.physics.facade.Model``) is imported
 LAZILY inside :func:`build_moment_model` because :mod:`pops.physics` pulls the
-compile machinery transitively, and ``lib`` must stay importable without it.
+compile machinery transitively.
 """
 from math import comb
 
@@ -69,14 +69,14 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
        kernel pops::roe_abs_apply, spectral-radius Rusanov fallback), making riemann='roe' available
        for the moment system (no fluid roles / pressure needed). Additive to exact_speeds (which
        still provides max_wave_speed for the CFL dt). Needs the 'aot' or 'production' backend.
-    @return pops.physics.PdeModel ready to compile (the caller may still add elliptic_rhs,
-       params, aux... before m.compile)."""
-    from pops import physics as _physics
+    @return pops.physics.facade.Model ready for the internal runtime compile seam (the
+       caller may still add elliptic_rhs, params, aux... before lowering/compilation)."""
+    from pops.physics.facade import Model as _PdeModel
     if order < 2:
         raise ValueError("build_moment_model: order >= 2 required (standardization relies "
                          "on C20/C02; order %r)" % (order,))
     idx = moment_indices(order)
-    m = _physics.PdeModel(name)
+    m = _PdeModel(name)
     cons = m.conservative_vars(*moment_names(order))
     M = dict(zip(idx, cons))
 

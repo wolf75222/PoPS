@@ -1,77 +1,28 @@
-"""pops : Python bindings for the adc_cpp library.
+"""PoPS Python authoring surface.
 
-The core exposes generic compiled BRICKS (transport, source, elliptic right-hand
-side) ; a MODEL is a composition of bricks, named on the application side. Python
-composes the bricks (objects), the cell-by-cell computation stays in compiled C++ (no
-numpy, GPU/MPI preserved).
-
-The front door is the typed assembly + compile/bind/run flow: author an inert
-``pops.Case`` (a mesh layout, physics blocks, elliptic fields, a time scheme), compile
-it to a handle, then bind a runnable simulation::
-
-    import pops
-    from pops.codegen import Production
-    from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import Uniform
-    from pops.fields import PoissonProblem
-
-    case = (pops.Case(layout=Uniform(CartesianMesh(n=96, periodic=False)), name="plasma")
-            .block("ne", physics=model)
-            .field(PoissonProblem(unknown="phi", equation=eq, solver=mg))
-            .time(time_program))
-    compiled = pops.compile(case, backend=Production())
-    sim = pops.bind(compiled, state={"ne": ne0}, params=None, aux=None, solvers=None)
-    sim.run(t_end=0.1, cfl=0.4)
-
-The scenario names (diocotron, electron_euler...) are compositions on the
-application side (see adc_cases). No scenario name here.
+Python describes typed models/programs and drives code generation. Numerical work runs in
+compiled C++/Kokkos/MPI code through :class:`pops.runtime.system.System` and
+:class:`pops.runtime.system.AmrSystem`.
 """
 # Load the _pops extension (RTLD_GLOBAL so the DSL production .so resolves C++ symbols).
 from pops import _bootstrap  # noqa: F401  (import side effect: loads _pops with the right flags)
-from pops._bootstrap import (SystemConfig, ModelSpec, _System,  # noqa: F401
-                             AmrSystemConfig, _AmrSystem, abi_key)
+from pops._bootstrap import abi_key  # noqa: F401
 from pops._version import __version__  # noqa: F401
 
-# Runtime layer (the ONLY importer of _pops): systems, parallelism, doctor, mesh, bricks, host flux.
+# Runtime layer (the ONLY importer of _pops): systems, parallelism, doctor.
 from pops.runtime.system import System, AmrSystem  # noqa: F401
 from pops.runtime.threading import set_threads, has_kokkos, parallel_info  # noqa: F401
-from pops.runtime.doctor import doctor, capabilities  # noqa: F401
-from pops.runtime.mesh import CartesianMesh, PolarMesh, AuxHalo  # noqa: F401
-from pops.runtime.profile import Profile, PerformanceSummary  # noqa: F401
-from pops.runtime.bricks import (  # noqa: F401
-    Scalar, FluidState, ExB, CompressibleFlux, IsothermalFlux,
-    NoSource, PotentialForce, GravityForce, MagneticLorentzForce, PotentialMagneticForce,
-    ChargeDensity, BackgroundDensity, GravityCoupling,
-    Model, CompositeModel, _native_to_brick,
-    DivEpsGrad, CompositeRhs, ChargeDensitySource, ElectricFieldFromPotential, EllipticModel,
-    div_eps_grad, charge_density, composite_rhs, electric_field_from_potential, elliptic,
-    Ionization, Collision, ThermalExchange,
-    Spatial, FiniteVolume, Explicit, _role_to_stable, _norm_implicit,
-    IMEX, SourceImplicit, SourceImplicitBE, IMEXRK, Role,
-    ElectrostaticLorentzSchur, Split, Strang,
-    Dirichlet, Neumann, Periodic,
-)
+from pops.runtime.doctor import doctor  # noqa: F401
 
 __all__ = [
-    "System", "SystemConfig", "AmrSystem", "AmrSystemConfig", "Model", "CompositeModel",
-    "CartesianMesh", "PolarMesh", "AuxHalo",
-    "Scalar", "FluidState", "ExB", "CompressibleFlux", "IsothermalFlux",
-    "NoSource", "PotentialForce", "GravityForce", "MagneticLorentzForce", "PotentialMagneticForce",
-    "ChargeDensity", "BackgroundDensity", "GravityCoupling",
-    "Spatial", "FiniteVolume", "Explicit", "IMEX", "IMEXRK", "SourceImplicit", "SourceImplicitBE",
-    "Split", "Strang", "ElectrostaticLorentzSchur", "Role",
-    "Dirichlet", "Neumann", "Periodic",
-    "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
-    "electric_field_from_potential", "EllipticModel",
-    "Ionization", "Collision", "ThermalExchange",
-    "Profile", "PerformanceSummary",
-    "time", "model", "math", "physics", "lib", "numerics", "mesh",
-    "params", "output", "external", "fields", "linalg", "solvers", "experimental",
-    "abi_key", "capabilities", "inspect_capabilities", "inspect_amr",
+    "__version__",
+    "System", "AmrSystem",
+    "time", "model", "math", "physics", "moments", "lib",
+    "abi_key",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "compile_problem", "CompiledProblem",
     "compile_library", "read_library_manifest", "LibraryManifest",
-    "Case", "PhysicsModel", "compile", "bind",
+    "inspect_capabilities", "CapabilityMatrix", "CapabilityEntry",
 ]
 
 
@@ -81,21 +32,10 @@ from . import time  # noqa: E402  (pops.time.Program IR; pure stdlib, no numpy/_
 from . import model  # noqa: E402  (pops.model operator-first type system; pure stdlib, Spec 2)
 from . import math  # noqa: E402  (pops.math board operators; pure stdlib, Spec 3, dsl lazy)
 from . import lib  # noqa: E402  (pops.lib typed-brick descriptor catalog; pure stdlib, Spec 3)
-from . import numerics  # noqa: E402  (pops.numerics discretisation descriptors; pure stdlib, Spec 5)
 from . import physics  # noqa: E402  (pops.physics board model authoring; numpy-free import, Spec 3)
-from . import mesh  # noqa: E402  (pops.mesh typed mesh/layout/AMR descriptors; pure stdlib, Spec 5)
-from . import params  # noqa: E402  (pops.params typed scalar params; pure stdlib, Spec 5)
-from . import output  # noqa: E402  (pops.output typed output/checkpoint policies; pure stdlib, Spec 5)
-from . import external  # noqa: E402  (pops.external compiled-brick references; pure stdlib, Spec 5)
-from . import fields  # noqa: E402  (pops.fields typed elliptic field-problem authoring; pure stdlib, Spec 5)
-from . import linalg  # noqa: E402  (pops.linalg abstract algebra: names A x = b; pure stdlib, Spec 5)
-from . import solvers  # noqa: E402  (pops.solvers linear/nonlinear/elliptic solver catalog; pure stdlib, Spec 5)
-from . import experimental  # noqa: E402  (pops.experimental NON-PRODUCTION / TESTS-ONLY host helpers; not a stable API)
-from .case import Case  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
-from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
+from . import moments  # noqa: E402  (generic moment authoring tools; ready models live in pops.lib)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
     LibraryManifest, compile_library, read_library_manifest)
-from ._capabilities import inspect_capabilities, inspect_amr  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + AMR report)
 
 
 # LAZY pops.compile_problem / pops.CompiledProblem (PEP 562): the codegen engine pulls numpy at
@@ -110,8 +50,13 @@ def __getattr__(name):
     if name == "CompiledProblem":
         from .codegen.loader import CompiledProblem
         return CompiledProblem
-    if name in ("compile", "bind"):
-        # Thin pops.Case orchestration over compile_problem + System/AmrSystem install.
-        from .codegen import orchestration
-        return getattr(orchestration, name)
+    if name == "inspect_capabilities":
+        from ._capabilities import inspect_capabilities
+        return inspect_capabilities
+    if name == "CapabilityMatrix":
+        from ._capabilities import CapabilityMatrix
+        return CapabilityMatrix
+    if name == "CapabilityEntry":
+        from ._capabilities import CapabilityEntry
+        return CapabilityEntry
     raise AttributeError("module %r has no attribute %r" % (__name__, name))

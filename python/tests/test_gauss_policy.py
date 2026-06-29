@@ -58,7 +58,7 @@ if not cxx or not os.path.isdir(INCLUDE):
     print("test_gauss_policy : OK (API verte)" if fails == 0 else f"{fails} ECHEC(S)")
     sys.exit(0 if fails == 0 else 1)
 
-compiled = isothermal_magnetized().compile(backend="aot", include=INCLUDE)
+compiled = isothermal_magnetized()._compile_for_runtime(backend=pops.codegen.AOT(), include=INCLUDE)
 DT, NSTEPS = 2.0e-3, 25
 
 

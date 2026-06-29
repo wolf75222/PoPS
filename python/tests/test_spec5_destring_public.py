@@ -11,8 +11,8 @@ Surfaces covered:
      descriptors (CG / GMRES / BiCGStab / Richardson, Identity); a bare string is rejected.
   2. ``pops.compile_library(backend=)`` -- a typed pops.codegen backend (Production / AOT / JIT);
      a bare string is rejected (mirrors pops.compile).
-  3. ``Model.param`` / board ``param`` / ``Case.param`` -- a typed pops.physics param object
-     (ConstParam / RuntimeParam); a bare ``kind=`` string is rejected.
+  3. ``Model.param`` / board ``param`` / ``Module.param`` -- typed parameter metadata is preserved
+     without any legacy ``Case`` or ``to_dsl`` lowering escape hatch.
 
 Pure Python, no _pops / compiler needed: every check exercises the authoring + lowering layer.
 Runs under pytest AND standalone (``python test_spec5_destring_public.py``).
@@ -126,16 +126,15 @@ def test_compile_library_non_production_typed_backend_rejected():
 
 
 # --- 3. param(kind=) on the public surfaces --------------------------------------------------
-def test_facade_param_typed_byte_identical():
-    """Model.param(RuntimeParam(...)) builds the SAME Param the kind='runtime' string did."""
-    from pops.physics.facade import Model
+def test_physics_param_typed_byte_identical():
+    """Model.param(RuntimeParam(...)) builds a runtime parameter without a kind= string."""
+    import pops.physics as physics
     from pops.physics import ConstParam, RuntimeParam
-    from pops.physics.model import Param
 
-    m = Model("iso")
-    m.conservative_vars("rho", "rho_u", "rho_v")
+    m = physics.Model("iso")
+    m.state("U", components=["rho", "rho_u", "rho_v"])
     cs2 = m.param(RuntimeParam("cs2", 1.0))
-    assert isinstance(cs2, Param) and cs2.kind == "runtime" and cs2.value == 1.0
+    assert cs2.kind == "runtime" and cs2.value == 1.0
     g = m.param(ConstParam("gamma", 1.4))
     assert g.kind == "const" and g.value == 1.4
     # the (name, value) shorthand is a const param (the default mode), byte-identical to kind='const'
@@ -143,10 +142,10 @@ def test_facade_param_typed_byte_identical():
     assert a.kind == "const" and a.value == 2.0
 
 
-def test_facade_param_string_kind_rejected():
-    from pops.physics.facade import Model
-    m = Model("iso")
-    m.conservative_vars("rho", "rho_u", "rho_v")
+def test_physics_param_string_kind_rejected():
+    import pops.physics as physics
+    m = physics.Model("iso")
+    m.state("U", components=["rho", "rho_u", "rho_v"])
     for kind in ("const", "runtime"):
         with pytest.raises(TypeError) as exc:
             m.param("cs2", 1.0, kind=kind)
@@ -170,41 +169,25 @@ def test_board_param_typed_accepted():
     assert cs2.kind == "runtime" and cs2.value == 1.0
 
 
-def test_case_param_typed_byte_identical():
-    """Case.param(typed) stores the SAME {default, kind} record the kind= string did."""
+def test_case_param_surface_removed():
     import pops
-    from pops.physics import ConstParam, RuntimeParam
-    case = pops.Case(name="c")
-    case.param(RuntimeParam("alpha", 1.0))
-    case.param(ConstParam("gamma", 1.4))
-    case.param("beta", 2.0)  # shorthand -> const
-    rec = case.inspect()["params"]
-    assert rec["alpha"] == {"default": 1.0, "kind": "runtime"}, rec
-    assert rec["gamma"] == {"default": 1.4, "kind": "const"}, rec
-    assert rec["beta"] == {"default": 2.0, "kind": "const"}, rec
+    assert not hasattr(pops, "Case")
 
 
-def test_case_param_string_kind_rejected():
-    import pops
-    case = pops.Case(name="c")
-    for kind in ("const", "runtime"):
-        with pytest.raises(TypeError) as exc:
-            case.param("alpha", 1.0, kind=kind)
-        msg = str(exc.value)
-        assert "kind=" in msg and "RuntimeParam" in msg and "ConstParam" in msg, msg
-
-
-def test_param_carrying_module_lowers_after_destring():
-    # Regression: de-stringing facade.Model.param must not break the INTERNAL codegen path
-    # (compile_drivers._module_to_model lowers a Module's params via the (name, value) shorthand,
-    # not the removed kind= string). A Module declaring a param must lower without a TypeError.
+def test_param_carrying_module_is_read_directly_by_codegen_view():
+    # Regression guard for the real fix: Module params no longer lower through Module.to_dsl()
+    # or compile_drivers._module_to_model. The codegen view reads the Module-native metadata.
+    from pops.codegen.module_view import ModuleCodegenView
     from pops.model import Module
+
     m = Module("iso")
     m.state_space("U", ["rho", "mom_x", "mom_y", "E"])
     m.param("cs2", 0.5)
-    dsl = m.to_dsl()  # routes through _module_to_model (the de-string crash site)
-    assert "cs2" in dsl.params
-    assert getattr(dsl.params["cs2"], "kind", None) == "const"  # shorthand -> const, byte-identical
+    assert not hasattr(m, "to_dsl")
+    view = ModuleCodegenView(m)
+    assert "cs2" in view.params
+    assert getattr(view.params["cs2"], "kind", None) == "const"
+    assert getattr(view.params["cs2"], "default", None) == 0.5
 
 
 if __name__ == "__main__":

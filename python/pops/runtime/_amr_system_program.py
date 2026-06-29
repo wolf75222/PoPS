@@ -44,19 +44,19 @@ class _AmrSystemProgram:
                 self._install_program_params(compiled, params)
         elif params:
             raise ValueError(
-                "pops.bind: runtime params (params=%s) are not wired on a NATIVE AMR install (the AMR "
+                "sim.install: runtime params (params=%s) are not wired on a NATIVE AMR install (the AMR "
                 "native .so loader does not transport runtime params, and AmrSystem has no "
                 "set_block_params); pass a compiled time Program "
-                "(pops.compile(case_with_layout_AMR, backend=Production())) "
+                "(pops.compile_problem(..., layout=AMR(...), backend=Production())) "
                 "to use params=, set them as const on the native model, or use System."
                 % sorted(params))
 
         if cadence is not None:
             if so_path is None:
                 raise ValueError(
-                    "pops.bind(cadence=): a cadence applies to a compiled time Program; a native AMR "
+                    "sim.install(cadence=): a cadence applies to a compiled time Program; a native AMR "
                     "install (compiled=None) has no Program -- set substeps / stride on the native time "
-                    "policy (pops.Explicit(substeps=, stride=)) instead.")
+                    "policy instead.")
             self._install_cadence(cadence)
 
     def _install_program_params(self, compiled, params):
@@ -73,7 +73,7 @@ class _AmrSystemProgram:
             self.set_program_params(blk, values)
         if unknown:
             raise ValueError(
-                "pops.bind: params %s declared by no runtime parameter of the compiled Program "
+                "sim.install: params %s declared by no runtime parameter of the compiled Program "
                 "(a runtime param must be read by the Program's source / linear-source kernels and "
                 "declared dsl.Param(..., kind='runtime'))" % (unknown,))
 
@@ -84,10 +84,10 @@ class _AmrSystemProgram:
         explicit cfl= uses it (step_cfl routes the per-block CFL dt through the installed program)."""
         from pops.runtime._compiled_cadence import CompiledProgramCadence
         if not isinstance(cadence, CompiledProgramCadence):
-            raise TypeError("pops.bind(cadence=): expected an internal CompiledProgramCadence "
+            raise TypeError("sim.install(cadence=): expected an internal CompiledProgramCadence "
                             "(substeps=, stride=), got %r" % type(cadence).__name__)
         if isinstance(cadence.cfl, (int, float)):
             self._program_cadence_cfl = float(cadence.cfl)
         elif cadence.cfl == "program":
             self._program_cadence_cfl = "program"
-        self.set_program_cadence(cadence.substeps, cadence.stride)
+        self._s.set_program_cadence(cadence.substeps, cadence.stride)

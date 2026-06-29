@@ -10,8 +10,8 @@ import sys
 
 try:
     from pops.ir.expr import Const
-    from pops.model import OperatorHandle
-    from pops.physics.facade import Model
+    from pops import model
+    from pops.ir.expr import Var
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
@@ -22,21 +22,27 @@ _PHYSICS_TOKENS = ("electric", "lorentz", "poisson", "rho", "grad_x", "grad_y", 
 
 
 def _model(name, gain=1.0):
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho])
-    electric = m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
-    lorentz = m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                          [0.0, 0.0, bz],
-                                          [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    explicit_rhs = m.rate_operator("explicit_rhs", flux=True, sources=[electric])
-    fields = OperatorHandle("fields_from_state", kind="field_operator")
-    return m, {"fields": fields, "explicit_rhs": explicit_rhs, "lorentz": lorentz}
+    mod = model.Module(name)
+    u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y", "B_z"))
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy, bz = Var("grad_x", "aux"), Var("grad_y", "aux"), Var("B_z", "aux")
+    fields_op = mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator",
+        capabilities={"default": True}, expr=rho - 1.0)
+    mod.operator(
+        name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+        expr={"x": [mx, mx * mx / rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho]})
+    electric = mod.operator(
+        name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source",
+        expr=[Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
+    lorentz = mod.operator(
+        name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
+        kind="local_linear_operator",
+        expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    explicit_rhs = mod.rate_operator("explicit_rhs", flux=True, sources=[electric])
+    return mod, {"fields": fields_op, "explicit_rhs": explicit_rhs, "lorentz": lorentz}
 
 
 def test_macros_are_model_free():

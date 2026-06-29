@@ -50,27 +50,27 @@ def _roundtrip_err(sim, name, **prims):
 def test_compressible():
     """Bloc Euler compressible (4 var) : round-trip (rho, u, v, p) exact + pas physique."""
     rho, u, v, p = _fields()
-    spec = pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    spec = pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s._add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("e", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     assert s.variable_names("e", "primitive") == ["rho", "u", "v", "p"]
 
     err = _roundtrip_err(s, "e", rho=rho, u=u, v=v, p=p)
     assert err < 1e-13, "compressible : round-trip cons<->prim non exact (%.2e)" % err
 
     # E conservatif coherent avec la formule du modele (pas seulement rho pose) : v != 0, E != rho/(g-1).
-    U = np.array(s.get_state("e")).reshape(4, N, N)
+    U = np.array(s._get_state("e")).reshape(4, N, N)
     assert float(np.abs(U[1]).max()) > 1e-3 and float(np.abs(U[2]).max()) > 1e-3, "qte de mvt nulle"
     E_expected = p / (1.4 - 1.0) + 0.5 * rho * (u * u + v * v)
     assert float(np.max(np.abs(U[3] - E_expected))) < 1e-13, "E != p/(g-1) + 1/2 rho|v|^2"
 
     # un pas tourne et l'etat reste physique (densite > 0, fini).
-    s.set_poisson()
+    s._set_poisson()
     for _ in range(5):
         s.step_cfl(0.4)
-    U1 = np.array(s.get_state("e")).reshape(4, N, N)
+    U1 = np.array(s._get_state("e")).reshape(4, N, N)
     assert np.isfinite(U1).all() and U1[0].min() > 0, "etat non physique apres set_primitive_state + pas"
     print("OK  compressible (4 var) : round-trip %.1e, E coherent, pas physique" % err)
 
@@ -78,24 +78,24 @@ def test_compressible():
 def test_isothermal():
     """Bloc Euler isotherme (3 var, sans p) : round-trip (rho, u, v) exact."""
     rho, u, v, _ = _fields()
-    spec = pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    spec = pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s._add_block("g", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("g", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     assert s.variable_names("g", "primitive") == ["rho", "u", "v"]
 
     err = _roundtrip_err(s, "g", rho=rho, u=u, v=v)
     assert err < 1e-13, "isotherme : round-trip cons<->prim non exact (%.2e)" % err
 
-    U = np.array(s.get_state("g")).reshape(3, N, N)
+    U = np.array(s._get_state("g")).reshape(3, N, N)
     assert float(np.max(np.abs(U[1] - rho * u))) < 1e-13, "rho_u != rho * u"
     assert float(np.max(np.abs(U[2] - rho * v))) < 1e-13, "rho_v != rho * v"
 
-    s.set_poisson()
+    s._set_poisson()
     for _ in range(5):
         s.step_cfl(0.4)
-    U1 = np.array(s.get_state("g")).reshape(3, N, N)
+    U1 = np.array(s._get_state("g")).reshape(3, N, N)
     assert np.isfinite(U1).all() and U1[0].min() > 0, "isotherme : etat non physique apres init + pas"
     print("OK  isotherme (3 var, sans p) : round-trip %.1e, rho u coherent, pas physique" % err)
 
@@ -106,7 +106,7 @@ def test_scalar():
     spec = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s._add_block("q", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("q", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     name = s.variable_names("q", "primitive")[0]
     err = _roundtrip_err(s, "q", **{name: rho})
     assert err < 1e-15, "scalaire : round-trip (identite) non exact (%.2e)" % err
@@ -116,13 +116,13 @@ def test_scalar():
 def test_set_density_unchanged():
     """Pas de regression : set_density pose la densite (comp 0) + reste au repos."""
     rho, _, _, _ = _fields()
-    spec = pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    spec = pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s._add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("e", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     s.set_density("e", rho)
-    U = np.array(s.get_state("e")).reshape(4, N, N)
+    U = np.array(s._get_state("e")).reshape(4, N, N)
     assert float(np.max(np.abs(U[0] - rho))) < 1e-15, "set_density : densite incorrecte"
     assert float(np.abs(U[1]).max()) == 0.0 and float(np.abs(U[2]).max()) == 0.0, "set_density : pas au repos"
     assert float(np.max(np.abs(U[3] - rho / (1.4 - 1.0)))) < 1e-13, "set_density : E != rho/(g-1)"
@@ -132,11 +132,11 @@ def test_set_density_unchanged():
 def test_errors():
     """Erreur CLAIRE sur un nom de primitive inconnu, et sur une primitive manquante."""
     rho, u, v, p = _fields()
-    spec = pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    spec = pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     s = pops.System(n=N, L=L, periodic=True)
-    s._add_block("e", spec, spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    s._add_block("e", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
 
     try:
         s.set_primitive_state("e", rho=rho, u=u, v=v, p=p, bogus=p)
@@ -177,10 +177,10 @@ def test_dsl_compiled():
         err_a = _roundtrip_err(a, "gas", rho=rho, u=u, v=v, p=p)
         assert err_a < 1e-13, "DSL AOT : round-trip cons<->prim non exact (%.2e)" % err_a
         # le pas tourne (etat conservatif physique) apres init depuis les primitives.
-        a.set_poisson(rhs="charge_density")
+        a._set_poisson(rhs="charge_density")
         for _ in range(5):
             a.step_cfl(0.4)
-        Ua = np.array(a.get_state("gas")).reshape(4, N, N)
+        Ua = np.array(a._get_state("gas")).reshape(4, N, N)
         assert np.isfinite(Ua).all() and Ua[0].min() > 0, "DSL AOT : etat non physique apres init + pas"
 
         # --- JIT prototype : .so IModel virtuel, charge par add_dynamic_block ---

@@ -5,7 +5,7 @@ Pendant AMR de test_schur_via_system.py. L'etage AmrCondensedSchurSourceStepper 
 STANDALONE (parite mono-niveau) dans test_amr_condensed_schur_source_stepper (C++) ; ici on exerce
 le chemin FACADE de bout en bout :
 
-  pops.AmrSystem._add_equation(time=pops.Strang(source=pops.CondensedSchur(...)))
+  pops.AmrSystem._add_equation(time=pops.Strang(source=pops.ElectrostaticLorentzSchur(...)))
     -> add_equation(time=time.hyperbolic = pops.Explicit())   # transport SOURCE-FREE (NoSource)
       -> _s.add_block (ModelSpec -> dispatch_amr_compiled -> AmrCouplerMP)
     -> _s.set_source_stage(name, kind, theta, alpha)          # etage condense GLOBAL
@@ -45,7 +45,7 @@ def iso_model(cs2=1.0, alpha=1.0):
     """Fluide isotherme NATIF : roles Density / MomentumX / MomentumY, source NoSource (transport
     source-free), Poisson de fond alpha*(n - 0)."""
     return pops.Model(
-        state=pops.FluidState(kind="isothermal", cs2=cs2),
+        state=pops.FluidState.isothermal(cs2=cs2),
         transport=pops.IsothermalFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=alpha, n0=0.0),
@@ -69,7 +69,7 @@ def build_amr(n=24, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_schur=True, strang
     with_schur=True : add_equation(pops.Strang/Split(source=CondensedSchur)) -> etage condense GLOBAL.
     with_schur=False : add_equation(pops.Explicit()) -> transport seul (reference sans source)."""
     sim = pops.AmrSystem(n=n, L=L, periodic=False, regrid_every=0)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
     sim.set_refinement(1e30)  # aucun raffinement -> hierarchie MONO-NIVEAU (niveau fin seed vide)
     if set_bz:
         sim.set_magnetic_field(B0 * np.ones((n, n)))
@@ -77,7 +77,7 @@ def build_amr(n=24, L=1.0, B0=4.0, alpha=3.0, theta=1.0, with_schur=True, strang
         cls = pops.Strang if strang else pops.Split
         time_policy = cls(
             hyperbolic=pops.Explicit(),  # SSPRK2 -> kind 'explicit' (l'AMR n'a pas ssprk3)
-            source=pops.CondensedSchur(kind="electrostatic_lorentz", theta=theta, alpha=alpha),
+            source=pops.ElectrostaticLorentzSchur(theta=theta, alpha=alpha),
         )
     else:
         time_policy = pops.Explicit()
@@ -176,12 +176,14 @@ def main():
         s = pops.AmrSystem(n=n, L=L, periodic=False)
         s._add_block("e", iso_model(),
                     time=pops.Strang(hyperbolic=pops.Explicit(),
-                                    source=pops.CondensedSchur(theta=0.5, alpha=alpha)))
+                                    source=pops.ElectrostaticLorentzSchur(theta=0.5, alpha=alpha)))
     raises(add_block_strang, "(E2) add_block(pops.Strang) rejete (passer par add_equation)")
 
-    # E3 : theta hors (0, 1] et kind inconnu -> ValueError des pops.CondensedSchur (validation Python).
-    raises(lambda: pops.CondensedSchur(theta=1.5, alpha=alpha), "(E3a) CondensedSchur(theta=1.5) rejete")
-    raises(lambda: pops.CondensedSchur(kind="bidon", alpha=alpha), "(E3b) CondensedSchur(kind invalide) rejete")
+    # E3 : theta hors (0, 1] et base CondensedSchur non publique -> validation Python.
+    raises(lambda: pops.ElectrostaticLorentzSchur(theta=1.5, alpha=alpha),
+           "(E3a) ElectrostaticLorentzSchur(theta=1.5) rejete")
+    chk(not hasattr(pops, "CondensedSchur"),
+        "(E3b) CondensedSchur top-level non public")
 
     print("test_amr_schur_via_system : tout est vert")
 

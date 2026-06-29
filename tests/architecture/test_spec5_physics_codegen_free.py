@@ -60,13 +60,14 @@ except Exception:  # pragma: no cover - exercised only without a built extension
 
 @pytest.mark.skipif(not _HAVE_POPS, reason="compiled _pops extension not importable")
 def test_typed_descriptor_repr_is_short_and_has_no_array_dump():
-    from pops.diagnostics import energy, mass, norm
+    from pops.diagnostics import Norm, energy, mass
+    from pops.linalg.norms import L2
     from pops.numerics.reconstruction import FirstOrder, MUSCL, WENO5
     from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
 
     descriptors = [HLL(), Rusanov(), HLLC(), Roe(),
                    FirstOrder(), MUSCL(), WENO5(),
-                   norm(), mass(), energy()]
+                   Norm(L2()), mass(), energy()]
     for descriptor in descriptors:
         for text in (repr(descriptor), str(descriptor)):
             assert len(text) < 800, "descriptor print too long (%d chars): %r" % (

@@ -26,8 +26,8 @@ def diocotron():
 
 def make():
     s = pops.System(n=n, L=1.0, periodic=True)
-    s._add_block("ne", model=diocotron(), spatial=pops.Spatial(minmod=True))
-    s.set_poisson()
+    s._add_block("ne", model=diocotron(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
+    s._set_poisson()
     rho = 1.0 + 0.05 * np.cos(2 * np.pi * np.arange(n) / n)[None, :] * np.ones((n, 1))
     s.set_density("ne", rho)
     return s

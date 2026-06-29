@@ -11,8 +11,8 @@ sides of the contract:
   - POSITIVE: the typed ``pops.numerics`` descriptors are accepted and lowered to the canonical C++
     token stored on ``Spatial.limiter`` / ``.flux`` / ``.recon``;
   - the descriptor CATEGORY gates the slot (a Riemann flux in the limiter slot is rejected), an
-    unknown descriptor scheme is rejected, and the boolean shortcuts (none=/minmod=/.../primitive=)
-    stay valid sugar (they are typed flags, not strings).
+    unknown descriptor scheme is rejected, and the former boolean shortcuts
+    (none=/minmod=/.../primitive=) are rejected too so the public API has one route.
 
 Pure Python: it imports the inert authoring packages only (``import pops`` loads ``_pops`` as a side
 effect, but no model is built or run).
@@ -23,24 +23,34 @@ import pytest
 
 pops = pytest.importorskip("pops")
 
+from pops.numerics import spatial as spatial_catalog  # noqa: E402
 from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe  # noqa: E402
 from pops.numerics.reconstruction import FirstOrder, MUSCL, WENO5, WENO5Z  # noqa: E402
 from pops.numerics.reconstruction.limiters import Minmod, VanLeer  # noqa: E402
 from pops.numerics.variables import Conservative, Primitive  # noqa: E402
+from pops.runtime.bricks import Spatial  # noqa: E402
+
+
+def _fv(**kwargs):
+    return spatial_catalog.FiniteVolume(**kwargs)
+
+
+def _opt(desc, key, default):
+    return desc.options.get(key, default)
 
 
 # --- NEGATIVE: bare strings are rejected, pointing at the typed object -----------------------
 def test_finitevolume_rejects_string_limiter():
     with pytest.raises(TypeError) as exc:
-        pops.FiniteVolume(limiter="minmod")
+        _fv(reconstruction="minmod")
     msg = str(exc.value)
-    assert "limiter='minmod'" in msg
+    assert "reconstruction='minmod'" in msg
     assert "pops.numerics.reconstruction" in msg
 
 
 def test_finitevolume_rejects_string_riemann():
     with pytest.raises(TypeError) as exc:
-        pops.FiniteVolume(riemann="rusanov")
+        _fv(riemann="rusanov")
     msg = str(exc.value)
     # The message names the FiniteVolume parameter, not the internal Spatial slot.
     assert "riemann='rusanov'" in msg
@@ -49,7 +59,7 @@ def test_finitevolume_rejects_string_riemann():
 
 def test_finitevolume_rejects_string_variables():
     with pytest.raises(TypeError) as exc:
-        pops.FiniteVolume(variables="conservative")
+        _fv(variables="conservative")
     msg = str(exc.value)
     assert "variables='conservative'" in msg
     assert "pops.numerics.variables" in msg
@@ -57,16 +67,16 @@ def test_finitevolume_rejects_string_variables():
 
 def test_spatial_rejects_string_flux_and_recon():
     with pytest.raises(TypeError) as exc:
-        pops.Spatial(flux="hll")
+        Spatial(flux="hll")
     assert "flux='hll'" in str(exc.value)
     with pytest.raises(TypeError) as exc:
-        pops.Spatial(recon="primitive")
+        Spatial(recon="primitive")
     assert "recon='primitive'" in str(exc.value)
 
 
 def test_spatial_rejects_string_limiter():
     with pytest.raises(TypeError) as exc:
-        pops.Spatial(limiter="weno5")
+        Spatial(limiter="weno5")
     assert "limiter='weno5'" in str(exc.value)
 
 
@@ -74,11 +84,12 @@ def test_spatial_rejects_string_limiter():
 def test_wrong_category_descriptor_rejected():
     # A Riemann flux is not a reconstruction/limiter.
     with pytest.raises(TypeError) as exc:
-        pops.FiniteVolume(limiter=Rusanov())
-    assert "riemann" in str(exc.value)
+        _fv(reconstruction=Rusanov())
+    assert "reconstruction" in str(exc.value)
+    assert "typed descriptor" in str(exc.value)
     # A reconstruction descriptor is not a Riemann flux.
     with pytest.raises(TypeError) as exc:
-        pops.Spatial(flux=Minmod())
+        Spatial(flux=Minmod())
     assert "reconstruction" in str(exc.value) or "limiter" in str(exc.value)
 
 
@@ -86,73 +97,110 @@ def test_wrong_category_descriptor_rejected():
 def test_typed_flux_descriptors_lower():
     for desc, token in ((Rusanov(), "rusanov"), (HLL(), "hll"),
                         (HLLC(), "hllc"), (Roe(), "roe")):
-        s = pops.FiniteVolume(riemann=desc)
-        assert s.flux == token, (desc, s.flux)
+        s = _fv(riemann=desc)
+        assert _opt(s, "riemann", "rusanov") == token, (desc, s.options)
 
 
 def test_typed_limiter_descriptors_lower():
     cases = ((FirstOrder(), "none"), (Minmod(), "minmod"), (VanLeer(), "vanleer"),
              (WENO5(), "weno5"), (WENO5Z(), "weno5"),
-             (MUSCL(limiter="minmod"), "minmod"), (MUSCL(limiter="vanleer"), "vanleer"))
+             (MUSCL(limiter=Minmod()), "minmod"), (MUSCL(limiter=VanLeer()), "vanleer"))
     for desc, token in cases:
-        s = pops.FiniteVolume(limiter=desc)
-        assert s.limiter == token, (desc, s.limiter)
+        s = _fv(reconstruction=desc)
+        assert _opt(s, "reconstruction", "minmod") == token, (desc, s.options)
+
+
+def test_muscl_rejects_string_limiter_selector():
+    with pytest.raises(TypeError) as exc:
+        MUSCL(limiter="minmod")
+    assert "String algorithm selector rejected" in str(exc.value)
 
 
 def test_typed_variable_descriptors_lower():
-    assert pops.FiniteVolume(variables=Conservative()).recon == "conservative"
-    assert pops.FiniteVolume(variables=Primitive()).recon == "primitive"
-    assert pops.Spatial(recon=Conservative()).recon == "conservative"
-    assert pops.Spatial(recon=Primitive()).recon == "primitive"
+    assert _opt(_fv(variables=Conservative()), "variables", "conservative") == "conservative"
+    assert _opt(_fv(variables=Primitive()), "variables", "conservative") == "primitive"
+    assert Spatial(recon=Conservative()).recon == "conservative"
+    assert Spatial(recon=Primitive()).recon == "primitive"
 
 
 def test_combined_typed_spatial():
-    s = pops.Spatial(limiter=VanLeer(), flux=HLLC(), recon=Primitive())
+    s = Spatial(limiter=VanLeer(), flux=HLLC(), recon=Primitive())
     assert (s.limiter, s.flux, s.recon) == ("vanleer", "hllc", "primitive")
 
 
 def test_defaults_are_canonical():
-    s = pops.Spatial()
+    s = Spatial()
     assert (s.limiter, s.flux, s.recon) == ("minmod", "rusanov", "conservative")
-    fv = pops.FiniteVolume()
-    assert (fv.limiter, fv.flux, fv.recon) == ("minmod", "rusanov", "conservative")
+    fv = _fv()
+    assert (_opt(fv, "reconstruction", "minmod"), _opt(fv, "riemann", "rusanov"),
+            _opt(fv, "variables", "conservative")) == ("minmod", "rusanov", "conservative")
 
 
-def test_boolean_shortcuts_stay_valid():
-    # The boolean shortcuts are typed flags, not string selectors -- they keep working.
-    assert pops.Spatial(none=True).limiter == "none"
-    assert pops.Spatial(minmod=True).limiter == "minmod"
-    assert pops.Spatial(vanleer=True).limiter == "vanleer"
-    assert pops.Spatial(weno5=True).limiter == "weno5"
-    assert pops.Spatial(primitive=True).recon == "primitive"
-    # A shortcut and an explicit typed flux compose.
-    s = pops.Spatial(minmod=True, flux=Roe(), primitive=True)
+def test_typed_descriptors_replace_old_boolean_shortcuts():
+    assert Spatial(limiter=pops.numerics.reconstruction.FirstOrder()).limiter == "none"
+    assert Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()).limiter == "minmod"
+    assert Spatial(limiter=pops.numerics.reconstruction.limiters.VanLeer()).limiter == "vanleer"
+    assert Spatial(limiter=pops.numerics.reconstruction.WENO5()).limiter == "weno5"
+    assert Spatial(recon=Primitive()).recon == "primitive"
+    s = Spatial(limiter=Minmod(), flux=Roe(), recon=Primitive())
     assert (s.limiter, s.flux, s.recon) == ("minmod", "roe", "primitive")
 
 
-def test_finitevolume_forwards_boolean_shortcuts():
-    # The boolean shortcuts of Spatial are forwarded THROUGH FiniteVolume identically, so the
-    # docstring claim "primitive= is a FiniteVolume shortcut" is true.
-    assert pops.FiniteVolume(none=True).limiter == "none"
-    assert pops.FiniteVolume(minmod=True).limiter == "minmod"
-    assert pops.FiniteVolume(vanleer=True).limiter == "vanleer"
-    assert pops.FiniteVolume(weno5=True).limiter == "weno5"
-    assert pops.FiniteVolume(primitive=True).recon == "primitive"
-    # A forwarded shortcut and an explicit typed flux compose, like on Spatial.
-    fv = pops.FiniteVolume(minmod=True, riemann=Roe(), primitive=True)
-    assert (fv.limiter, fv.flux, fv.recon) == ("minmod", "roe", "primitive")
+def test_finitevolume_uses_typed_descriptors_for_all_scheme_choices():
+    assert _opt(_fv(reconstruction=pops.numerics.reconstruction.FirstOrder()),
+                "reconstruction", "minmod") == "none"
+    assert _opt(_fv(reconstruction=pops.numerics.reconstruction.limiters.Minmod()),
+                "reconstruction", "minmod") == "minmod"
+    assert _opt(_fv(reconstruction=pops.numerics.reconstruction.limiters.VanLeer()),
+                "reconstruction", "minmod") == "vanleer"
+    assert _opt(_fv(reconstruction=pops.numerics.reconstruction.WENO5()),
+                "reconstruction", "minmod") == "weno5"
+    assert _opt(_fv(variables=Primitive()), "variables", "conservative") == "primitive"
+    fv = _fv(reconstruction=Minmod(), riemann=Roe(), variables=Primitive())
+    assert (_opt(fv, "reconstruction", "minmod"), _opt(fv, "riemann", "rusanov"),
+            _opt(fv, "variables", "conservative")) == ("minmod", "roe", "primitive")
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"none": True}, {"minmod": True}, {"vanleer": True}, {"weno5": True}, {"primitive": True},
+])
+def test_spatial_boolean_shortcuts_rejected(kwargs):
+    with pytest.raises(TypeError) as exc:
+        Spatial(**kwargs)
+    assert "boolean scheme shortcuts are not public PoPS API" in str(exc.value)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"none": True}, {"minmod": True}, {"vanleer": True}, {"weno5": True}, {"primitive": True},
+])
+def test_finitevolume_boolean_shortcuts_rejected(kwargs):
+    with pytest.raises(TypeError) as exc:
+        _fv(**kwargs)
+    assert "unexpected keyword argument" in str(exc.value)
+
+
+def test_catalog_finitevolume_rejects_string_scheme_options():
+    with pytest.raises(TypeError) as exc:
+        pops.numerics.spatial.FiniteVolume(riemann="hllc")
+    assert "riemann='hllc'" in str(exc.value)
+    with pytest.raises(TypeError) as exc:
+        pops.numerics.spatial.FiniteVolume(reconstruction="weno5")
+    assert "reconstruction='weno5'" in str(exc.value)
+    with pytest.raises(TypeError) as exc:
+        pops.numerics.spatial.FiniteVolume(variables="primitive")
+    assert "variables='primitive'" in str(exc.value)
 
 
 def test_finitevolume_reconstruction_alias():
     # Spec 5 sec.14.1 writes FiniteVolume(reconstruction=WENO5()); it is an alias for limiter=.
-    alias = pops.FiniteVolume(reconstruction=WENO5())
-    explicit = pops.FiniteVolume(limiter=WENO5())
-    assert alias.limiter == explicit.limiter == "weno5"
+    alias = _fv(reconstruction=WENO5())
+    explicit = _fv(limiter=WENO5())
+    assert alias.options["reconstruction"] == explicit.options["reconstruction"] == "weno5"
     # The alias also works on Spatial.
-    assert pops.Spatial(reconstruction=WENO5()).limiter == "weno5"
+    assert Spatial(reconstruction=WENO5()).limiter == "weno5"
     # Passing both limiter= and reconstruction= is a clear error, not a silent pick.
     with pytest.raises(TypeError):
-        pops.FiniteVolume(limiter=WENO5(), reconstruction=WENO5())
+        _fv(limiter=WENO5(), reconstruction=WENO5())
 
 
 if __name__ == "__main__":

@@ -29,6 +29,8 @@ import pops.fields as fields  # noqa: E402
 import pops.linalg.norms as norms  # noqa: E402
 import pops.math as pmath  # noqa: E402
 import pops.mesh.layouts as layouts  # noqa: E402
+import pops.mesh as mesh_pkg  # noqa: E402
+import pops.numerics as numerics  # noqa: E402
 import pops.output as output  # noqa: E402
 import pops.params as params  # noqa: E402
 import pops.solvers.elliptic as elliptic  # noqa: E402
@@ -50,14 +52,13 @@ def _objects():
     print contract is asserted by ``python/tests/test_print_readability_runtime.py``, which runs
     after the ``_pops`` extension is built.
     """
-    mesh = pops.CartesianMesh(n=8, L=1.0)
+    mesh = mesh_pkg.CartesianMesh(n=8, L=1.0)
     phi = pmath.Unknown("phi")
     prog = pops.time.Program("demo")
     prog.state("plasma")  # one op so the summary reports a non-zero op count
     return {
         # numerics scheme bricks (runtime layer).
-        "Spatial": pops.Spatial(),
-        "FiniteVolume": pops.FiniteVolume(),
+        "FiniteVolume": numerics.spatial.FiniteVolume(),
         # compiled time-program authoring object (pure-Python SSA builder).
         "time.Program": prog,
         # mesh layouts.

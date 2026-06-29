@@ -8,7 +8,7 @@ through add_compiled_model -> set_compiled_block into the SAME compute_face_flux
 uses (mono via AmrBuildParams::pos_floor, multi via the AmrCompiledBlockBuilder slot).
 
 This test compiles an ISOTHERMAL block (p = cs2 rho, the ticket's regime: flooring the density also
-floors the pressure) with backend='production', target='amr_system' and drives it through the public
+floors the pressure) with backend=pops.codegen.Production(), target='amr_system' and drives it through the public
 facade AmrSystem.add_equation. It checks, on the compiled .so path:
 
   (1) NO LONGER RAISES: add_equation(positivity_floor > 0) no longer raises (it used to) and, on the
@@ -61,8 +61,9 @@ def chk(cond, label):
 
 
 def build_iso_model():
-    """Isothermal block (3 var, Density role at component 0) written in DSL formulas: compile(...) turns
-    it into a production .so loader. elliptic_rhs = 0 isolates the transport (no Poisson noise)."""
+    """Isothermal block (3 var, Density role at component 0) written in DSL formulas:
+    _compile_for_runtime(...) turns it into a production .so loader. elliptic_rhs = 0 isolates the
+    transport (no Poisson noise)."""
     m = Model("iso_floor")
     rho, rhou, rhov = m.conservative_vars("rho", "rho_u", "rho_v")
     u = rhou / rho
@@ -124,8 +125,10 @@ def main():
 
     tmp = tempfile.mkdtemp()
     try:
-        cm = build_iso_model().compile(os.path.join(tmp, "iso_floor_amr.so"), INCLUDE,
-                                       backend="production", target="amr_system")
+        cm = build_iso_model()._compile_for_runtime(
+            os.path.join(tmp, "iso_floor_amr.so"), INCLUDE,
+            backend=pops.codegen.Production(), target="amr_system"
+        )
         assert isinstance(cm, CompiledModel)
         assert cm.adder == "add_native_block" and cm.target == "amr_system"
 

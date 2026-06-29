@@ -4,7 +4,7 @@ A minimal provided moment model: a generic-order Cartesian-velocity hierarchy cl
 the Gaussian / Levermore closure, with optional transport-only or Vlasov-Poisson coupling.
 A PURE composition of the Spec-4 moment facade -- no ``custom.py``.
 """
-from pops.moments.hierarchy import CartesianVelocityMoments
+from pops.moments import CartesianVelocityMoments, VlasovElectricSource
 from pops.moments.closures import gaussian_closure
 
 
@@ -35,7 +35,9 @@ class Gaussian:
                                          robust=robust, exact_speeds=exact_speeds, roe=roe)
                 .add_transport()
                 .add_poisson_coupling(eps=eps)
-                .add_vlasov_electric_source("grad_x", "grad_y", q_over_m)
+                .add_source(VlasovElectricSource(
+                    electric_field=("grad_x", "grad_y"),
+                    charge_over_mass=q_over_m))
                 .build(name="gaussian"))
 
 

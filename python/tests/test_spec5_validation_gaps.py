@@ -34,10 +34,9 @@ from pops.fields.coefficients import ScalarCoefficient  # noqa: E402
 from pops.solvers.elliptic import FFT, GeometricMG  # noqa: E402
 from pops.numerics.reconstruction import (  # noqa: E402
     FirstOrder, MUSCL, WENO5, required_ghost_depth, validate_ghost_depth)
+from pops.numerics.reconstruction.limiters import Minmod  # noqa: E402
 from pops.runtime._bricks_scheme import FiniteVolume  # noqa: E402
 from pops.mesh.amr import Refine, TagUnion, _declared_subjects  # noqa: E402
-from pops.mesh.layouts import AMR  # noqa: E402
-from pops.mesh import CartesianMesh  # noqa: E402
 from pops.fields.bcs import Periodic, Dirichlet  # noqa: E402
 
 
@@ -157,7 +156,7 @@ def test_declared_required_ghost_depths():
 def test_weno5_on_explicit_depth2_block_is_rejected():
     # An EXPLICIT depth-2 block is too thin for WENO5's 3-cell stencil -> clear error.
     with pytest.raises(ValueError) as exc:
-        FiniteVolume(weno5=True).validate(ghost_depth=2, block="plasma")
+        FiniteVolume(limiter=WENO5()).validate(ghost_depth=2, block="plasma")
     msg = str(exc.value)
     assert "WENO5 requires ghost_depth >= 3" in msg
     assert "block 'plasma' has ghost_depth=2" in msg
@@ -168,14 +167,14 @@ def test_weno5_on_explicit_depth2_block_is_rejected():
 
 def test_muscl_on_depth2_block_is_fine():
     # NO FALSE POSITIVE: a second-order MUSCL scheme fits the default 2-cell halo.
-    assert FiniteVolume(minmod=True).validate(ghost_depth=2) is True
+    assert FiniteVolume(limiter=Minmod()).validate(ghost_depth=2) is True
     assert validate_ghost_depth("minmod", available=2) is True
 
 
 def test_weno5_without_explicit_constraint_is_not_rejected():
     # NO FALSE POSITIVE: the native runtime grows the block halo to match the scheme
     # (block_n_ghost("weno5") == 3), so WENO5 on a default block is a VALID problem.
-    assert FiniteVolume(weno5=True).validate() is True
+    assert FiniteVolume(limiter=WENO5()).validate() is True
     assert validate_ghost_depth(WENO5()) is True
     assert validate_ghost_depth("weno5") is True
 
@@ -253,16 +252,13 @@ def test_tag_union_forwards_the_model_context():
                  Refine.on("nope").below(0.1)).validate(model)
 
 
-def test_problem_amr_refine_validates_the_subject_against_the_block_model():
+def test_amr_refine_descriptor_validates_the_subject_against_the_model_context():
     model = _FakeModel()
-    # The role check fires where the model IS available: problem.amr.refine.
-    prob = pops.Case(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
-    # A real role passes and the call chains back to the problem.
-    assert prob.amr.refine(Refine.on("rho").above(0.05)) is prob
-    # A bogus role is refused before runtime.
-    prob2 = pops.Case(layout=AMR(base=CartesianMesh(n=64))).block("plasma", physics=model)
+    # The role check fires when the model context is available to the descriptor/lowering layer.
+    assert Refine.on("rho").above(0.05).validate(model) is True
+    assert Refine.on("Density").above(0.05).validate(model) is True
     with pytest.raises(ValueError, match="is not a declared subject"):
-        prob2.amr.refine(Refine.on("definitely_not_a_role").above(0.05))
+        Refine.on("definitely_not_a_role").above(0.05).validate(model)
 
 
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this module so

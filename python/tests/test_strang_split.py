@@ -29,6 +29,7 @@ import shutil
 import numpy as np
 
 import pops
+from pops.codegen import AOT
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
@@ -86,7 +87,7 @@ def smooth_init(n, L):
 def build_sim(compiled, time, n=32, L=1.0, B0=4.0):
     """System non periodique (Dirichlet), un bloc isotherme magnetise, politique temporelle @p time."""
     sim = pops.System(n=n, L=L, periodic=False)
-    sim.set_poisson(bc="dirichlet")
+    sim._set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     sim._add_equation("ions", model=compiled,
                      spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
@@ -99,12 +100,12 @@ def build_sim(compiled, time, n=32, L=1.0, B0=4.0):
 
 def split_lie(theta=1.0, alpha=3.0):
     return pops.Split(hyperbolic=pops.Explicit(),
-                     source=pops.CondensedSchur(theta=theta, alpha=alpha))
+                     source=pops.ElectrostaticLorentzSchur(theta=theta, alpha=alpha))
 
 
 def strang(theta=1.0, alpha=3.0):
     return pops.Strang(hyperbolic=pops.Explicit(),
-                      source=pops.CondensedSchur(theta=theta, alpha=alpha))
+                      source=pops.ElectrostaticLorentzSchur(theta=theta, alpha=alpha))
 
 
 def scalar_native_model():
@@ -122,19 +123,20 @@ def check_api():
     chk(getattr(s, "scheme", None) == "strang", "(a) pops.Strang.scheme == 'strang'")
     chk(getattr(p, "scheme", None) == "lie", "(a) pops.Split.scheme == 'lie'")
     # pops.Strang herite des memes briques que Split (hyperbolique + source condensee).
-    chk(isinstance(s.source, pops.CondensedSchur) and isinstance(s.hyperbolic, pops.Explicit),
-        "(a) pops.Strang porte hyperbolique Explicit + source CondensedSchur")
+    chk(getattr(s.source, "kind", None) == "electrostatic_lorentz"
+        and isinstance(s.hyperbolic, pops.Explicit),
+        "(a) pops.Strang porte hyperbolique Explicit + source ElectrostaticLorentzSchur")
     # Garde heritee : Strang (etant un Split) est rejete sur add_block, sur System ET sur AmrSystem --
     # l'etage source condense par Schur n'est cable que par add_equation (qui branche set_source_stage),
     # jamais par add_block (qui jouerait le seul transport et PERDRAIT la source en silence). Depuis le
     # chemin amr-schur (#265), AmrSystem._add_equation(time=pops.Strang(...)) est au contraire SUPPORTE
     # (cf. test_amr_schur_via_system.py pour la couverture positive sur AMR) : seul add_block rejette.
     sys_ = pops.System(n=8, L=1.0, periodic=False)
-    e_blk = raises(TypeError, sys_.add_block, "x", scalar_native_model(), time=strang())
+    e_blk = raises(TypeError, sys_._add_block, "x", scalar_native_model(), time=strang())
     chk("Split" in str(e_blk) or "Schur" in str(e_blk),
         "(a) System._add_block(time=pops.Strang(...)) -> rejet (heritage Split)")
     amr = pops.AmrSystem(n=8, L=1.0, periodic=True)
-    e_amr = raises((TypeError, ValueError), amr.add_block, "x", scalar_native_model(),
+    e_amr = raises((TypeError, ValueError), amr._add_block, "x", scalar_native_model(),
                    time=strang())
     chk("Split" in str(e_amr) or "Schur" in str(e_amr),
         "(a) AmrSystem._add_block(time=pops.Strang(...)) -> rejet (heritage Split)")
@@ -162,7 +164,7 @@ def main():
     # compilent QUE sous POPS_HAS_KOKKOS, donc compile_aot exige un Kokkos installe (POPS_KOKKOS_ROOT).
     # Sans lui, on saute proprement (b)/(c) -- meme convention que test_time_euler.py.
     try:
-        compiled = isothermal_magnetized().compile(backend="aot", include=INCLUDE)
+        compiled = isothermal_magnetized()._compile_for_runtime(include=INCLUDE, backend=AOT())
     except RuntimeError as ex:
         if "Kokkos" not in str(ex):
             raise

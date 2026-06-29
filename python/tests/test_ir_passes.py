@@ -47,9 +47,9 @@ def _euler_with_dead_rhs():
     P = adctime.Program("forward_euler")
     dt = P.dt
     U = P.state("plasma")
-    fields = P._solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    P._rhs_legacy("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
+    fields = P._legacy_solve_fields(U)
+    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
+    P._legacy_rhs("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -59,8 +59,8 @@ def _euler_no_dead():
     P = adctime.Program("forward_euler")
     dt = P.dt
     U = P.state("plasma")
-    fields = P._solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
+    fields = P._legacy_solve_fields(U)
+    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -119,8 +119,8 @@ def test_side_effecting_nodes_never_removed():
     P = adctime.Program("side_effects")
     dt = P.dt
     U = P.state("plasma")
-    fields = P._solve_fields(U)            # side-effecting (fills ghosts/aux), result unused downstream
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
+    fields = P._legacy_solve_fields(U)            # side-effecting (fills ghosts/aux), result unused downstream
+    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
@@ -148,9 +148,9 @@ def test_chained_dead_nodes_removed():
     P = adctime.Program("chain")
     dt = P.dt
     U = P.state("plasma")
-    fields = P._solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    dead0 = P._rhs_legacy("dead0", state=U, fields=fields, flux=True, sources=["default"])
+    fields = P._legacy_solve_fields(U)
+    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
+    dead0 = P._legacy_rhs("dead0", state=U, fields=fields, flux=True, sources=["default"])
     P.linear_combine("dead1", U + dt * dead0)  # consumes dead0 but is itself unused
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
 

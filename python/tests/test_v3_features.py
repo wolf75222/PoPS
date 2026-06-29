@@ -42,7 +42,7 @@ def chk(cond, label):
 
 
 def iso_model(charge=1.0):
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=charge),
                      elliptic=pops.ChargeDensity(charge=charge))
@@ -58,7 +58,7 @@ def gaussian(n):
 print("== (A) CoupledSource.frequency : borne dt <= cfl/mu sur le macro-pas ==")
 n = 16
 sim = pops.System(n=n, L=1.0, periodic=True)
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 sim._add_block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 sim._add_block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 sim.set_density("a", gaussian(n).ravel())
@@ -90,7 +90,7 @@ chk(abs(dt2 - 0.4 / 500.0) < 1e-15 and sim.last_dt_bound() == "coupled_source:fr
 # --- (B) options Newton sur AMR ------------------------------------------------------
 print("== (B) AMR : options Newton cablees (mono ET multi), newton_report multi, rejet diag mono ==")
 amr = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
 amr._add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
@@ -103,7 +103,7 @@ chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
     "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
 # MONO-BLOC + options Newton : DESORMAIS cable (coupleur AmrCouplerMP) -> tourne fini (plus de rejet).
 mono = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+mono._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 mono.set_refinement(1e30)
 mono._add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
@@ -113,7 +113,7 @@ chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
     "mono-bloc : IMEX(newton_max_iters=5, rel_tol) tourne fini (options cablees, plus de rejet)")
 # newton_diagnostics en MULTI-BLOCS natif : newton_report('e1') dict coherent.
 amrd = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amrd._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amrd.set_refinement(1e30)
 amrd._add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))
@@ -128,7 +128,7 @@ chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0
     f"converged {rep['converged']})")
 # newton_diagnostics en MONO-BLOC : rejet au build (le coupleur n'agrege pas de rapport).
 monod = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+monod._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 monod.set_refinement(1e30)
 monod._add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                 time=pops.IMEX(newton_diagnostics=True))
@@ -142,7 +142,7 @@ except RuntimeError as e:
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
 amr3 = pops.AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr3._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr3.set_refinement(1e30)
 amr3._add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 amr3._add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
@@ -162,7 +162,7 @@ chk(float(np.max(np.abs(d_after - d_before))) > 1e-5,
 # seulement le bloc 0 sous une cle generique.
 wdir = tempfile.mkdtemp()
 try:
-    fnpz = amr3.write(os.path.join(wdir, "amr_out"), format="npz")
+    fnpz = amr3.write(os.path.join(wdir, "amr_out"), format=pops.output.NPZ())
     with np.load(fnpz) as z:
         chk("density_e1" in z.files and "density_e2" in z.files and "phi" in z.files,
         f"AmrSystem.write npz multi-blocs : density_e1 + density_e2 + phi (cles {z.files})")
@@ -207,11 +207,11 @@ def iso3_dsl(name, hllc=False, jac=False):
 tmp = tempfile.mkdtemp()
 try:
     print("== (D1) enable_hllc : riemann='hllc' sur 3-var NON Euler ==")
-    cm_h = iso3_dsl("iso3_hllc", hllc=True).compile(os.path.join(tmp, "iso3_hllc.so"), INCLUDE,
-                                                    backend="production")
+    cm_h = iso3_dsl("iso3_hllc", hllc=True)._compile_for_runtime(
+        os.path.join(tmp, "iso3_hllc.so"), INCLUDE, backend=pops.codegen.Production())
     chk(getattr(cm_h, "has_hllc", False), "CompiledModel.has_hllc = True (capability emise)")
     sh = pops.System(n=24, L=1.0, periodic=True)
-    sh.set_poisson()
+    sh._set_poisson()
     sh._add_equation("f", model=cm_h, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC()),
                     time=pops.Explicit())
     z = np.zeros((24, 24))
@@ -220,8 +220,8 @@ try:
         sh.step_cfl(0.3)
     chk(np.all(np.isfinite(np.asarray(sh.density("f")))),
         "HLLC capability sur 3-var : 5 pas finis (contact-resolving hors Euler)")
-    cm_nh = iso3_dsl("iso3_nohllc").compile(os.path.join(tmp, "iso3_nohllc.so"), INCLUDE,
-                                            backend="production")
+    cm_nh = iso3_dsl("iso3_nohllc")._compile_for_runtime(
+        os.path.join(tmp, "iso3_nohllc.so"), INCLUDE, backend=pops.codegen.Production())
     try:
         s2 = pops.System(n=16, L=1.0, periodic=True)
         s2._add_equation("f", model=cm_nh, spatial=pops.FiniteVolume(limiter=Minmod(),
@@ -231,22 +231,23 @@ try:
         chk("hllc" in str(e), f"rejet sans capability : {str(e)[:70]}")
 
     print("== (D2) source_jacobian : meme trajectoire que les differences finies ==")
-    cm_j = iso3_dsl("iso3_jac", jac=True).compile(os.path.join(tmp, "iso3_jac.so"), INCLUDE,
-                                                  backend="production")
+    cm_j = iso3_dsl("iso3_jac", jac=True)._compile_for_runtime(
+        os.path.join(tmp, "iso3_jac.so"), INCLUDE, backend=pops.codegen.Production())
     cm_f = iso3_dsl("iso3_fd", jac=True)
     cm_f._m._src_jac = None  # meme modele, SANS jacobien emis -> FD historiques
-    cm_f = cm_f.compile(os.path.join(tmp, "iso3_fd.so"), INCLUDE, backend="production")
+    cm_f = cm_f._compile_for_runtime(
+        os.path.join(tmp, "iso3_fd.so"), INCLUDE, backend=pops.codegen.Production())
 
     def run_imex(cm):
         s = pops.System(n=16, L=1.0, periodic=True)
-        s.set_poisson()
+        s._set_poisson()
         s._add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
                        time=pops.IMEX())
         z16 = np.zeros((16, 16))
         s.set_primitive_state("f", rho=gaussian(16), u=0.2 + z16, v=z16)
         for _ in range(4):
             s.step(1e-3)
-        return np.asarray(s.get_state("f"))
+        return np.asarray(s._get_state("f"))
 
     uj, uf = run_imex(cm_j), run_imex(cm_f)
     chk(np.allclose(uj, uf, rtol=1e-9, atol=1e-11),
@@ -257,7 +258,8 @@ try:
     mg = iso3_dsl("iso3_guard", jac=True)
     mg._m._source = None  # jacobien declare, source retiree : compile() doit lever (pas check())
     try:
-        mg.compile(os.path.join(tmp, "iso3_guard.so"), INCLUDE, backend="production")
+        mg._compile_for_runtime(os.path.join(tmp, "iso3_guard.so"), INCLUDE,
+                                backend=pops.codegen.Production())
         chk(False, "source_jacobian sans source aurait du lever au codegen")
     except ValueError as e:
         chk("source_jacobian" in str(e), f"codegen leve : {str(e)[:70]}")

@@ -70,7 +70,7 @@ def test_coupled_source_accepts_valid_role():
     k = src.param("k", 1.0)
     src.add("electrons", role="density", expr=+k * ne * ng)
     src.add("neutrals", role="density", expr=-k * ne * ng)
-    compiled = src.compile(backend="production")
+    compiled = src.compile(backend=pops.codegen.Production())
     assert compiled.in_roles == ["density", "density"]
     assert compiled.out_roles == ["density", "density"]
 
@@ -90,10 +90,10 @@ def _make_cartesian_system():
             source=pops.NoSource(),
             elliptic=pops.ChargeDensity(charge=1.0),
         ),
-        spatial=pops.Spatial(none=True),
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder()),
         time=pops.Explicit(),
     )
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density("ne", [1.0] * (4 * 4))
     return sim
 

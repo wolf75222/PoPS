@@ -63,11 +63,11 @@ def _synthetic_compiled():
     P = adctime.Program("demo")
     dt = P.dt
     U = P.state("plasma")
-    f = P._solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields("phi", U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     m = CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=0, params={},
         caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23")

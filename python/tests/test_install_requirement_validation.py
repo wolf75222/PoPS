@@ -47,30 +47,30 @@ def lorentz_model(name="adc446_model"):
 def lie_program(name="adc446_prog"):
     P = adctime.Program(name)
     u = P.state("plasma")
-    fields = P._solve_fields(u)
-    r = P._rhs_legacy(state=u, fields=fields)
+    fields = P._legacy_solve_fields(u)
+    r = P._legacy_rhs(state=u, fields=fields)
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     return P
 
 
 def make_sim(block_model, with_bz):
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim._add_equation("plasma", block_model.compile(backend="production"),
+    sim._add_equation("plasma", block_model._compile_for_runtime(backend=pops.codegen.Production()),
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+                     time=pops.Explicit.euler())
+    sim._set_poisson("charge_density", "geometric_mg")
     if with_bz:
         sim.set_magnetic_field(3.0 * np.ones(N * N))
     x = (np.arange(N) + 0.5) / N
     xx, yy = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
-    sim.set_state("plasma", np.stack([rho, 0.4 * rho, -0.2 * rho]))
+    sim._set_state("plasma", np.stack([rho, 0.4 * rho, -0.2 * rho]))
     return sim
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip test_install_requirement_validation (_pops lacks install_program; rebuild _pops)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+        print("skip test_install_requirement_validation (_pops lacks _install_program_so; rebuild _pops)")
         return 0
     m = lorentz_model()
     try:

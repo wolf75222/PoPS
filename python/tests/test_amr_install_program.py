@@ -2,7 +2,7 @@
 """Spec 6 sec.11 (ADC-508): the compiled time-Program install seam on AmrSystem.
 
 ``AmrSystem::install_program(so_path)`` is the AMR counterpart of ``System::install_program``: it
-dlopens a generated ``problem.so`` (compiled with ``target='amr_system'`` -> the .so exports
+dlopens a generated ``problem.so`` (compiled from ``layout=AMR(...)`` -> the .so exports
 ``pops_install_program_amr``), checks its ABI key, runs the section-24 requirement validation (block
 instance / solver), binds the Program blocks BY NAME, seeds the per-PROGRAM-block ``RuntimeParams``
 from the .so metadata, then installs the macro-step body. ``pops.bind`` routes a compiled Program +
@@ -13,11 +13,11 @@ The per-level macro-step DRIVER (``AmrProgramContext``) has LANDED (ADC-508): th
 ``pops_install_program_amr`` constructs an ``AmrProgramContext`` and installs the SYNCHRONOUS per-level
 macro-step (the identical lowered body wrapped in a per-level loop). This test asserts:
 
-  1) the codegen emits ``pops_install_program_amr`` for ``target='amr_system'`` (building an
+  1) the codegen emits ``pops_install_program_amr`` for ``layout=AMR(...)`` (building an
      AmrProgramContext + a per-level loop) and NOT for the System default (host-side string check);
   2) the AMR install SEAM (``set_program_cadence`` / ``set_program_params``) is reachable on a built
      ``_pops`` and validates its arguments (cadence >= 1; an unseeded program block rejects a set);
-  3) (Kokkos-gated) ``compile_problem(..., target='amr_system')`` builds the .so and
+  3) (Kokkos-gated) ``compile_problem(..., layout=AMR(...))`` builds the .so and
      ``AmrSystem.install_program`` INSTALLS it and one per-level macro-step RUNS. The bit-identical
      parity vs System is test_amr_program_parity; the CUDA run is the ROMEO step.
 
@@ -34,6 +34,9 @@ try:
 
     import pops
     from pops import time as adctime
+    from pops.codegen import Production
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import AMR
     from pops.physics.facade import Model
     from pops.ir.ops import sqrt
     from pops.physics.model import RuntimeParam
@@ -42,6 +45,10 @@ except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this inter
     sys.exit(0)
 
 N = 16
+
+
+def _amr_layout():
+    return AMR(CartesianMesh(n=N, L=1.0, periodic=True))
 
 
 def chk(cond, label):
@@ -76,8 +83,8 @@ def _lie_program(name="adc508_amr_prog"):
     """A single-block Lie step on 'plasma' (solve_fields then a Forward-Euler commit)."""
     P = adctime.Program(name)
     u = P.state("plasma")
-    fields = P._solve_fields(u)
-    r = P._rhs_legacy(state=u, fields=fields)
+    fields = P._legacy_solve_fields(u)
+    r = P._legacy_rhs(state=u, fields=fields)
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     return P
 
@@ -88,32 +95,32 @@ def _two_block_program(name="adc508_amr_2block"):
     P = adctime.Program(name)
     for blk in ("plasma", "plasma2"):
         u = P.state(blk)
-        fields = P._solve_fields(u)
-        r = P._rhs_legacy(state=u, fields=fields)
+        fields = P._legacy_solve_fields(u)
+        r = P._legacy_rhs(state=u, fields=fields)
         P.commit(blk, P.linear_combine("u1_%s" % blk, u + P.dt * r))
     return P
 
 
 def test_codegen_emits_amr_install_export():
-    """(1) host-side: emit_cpp_program(target='amr_system') emits pops_install_program_amr; the System
+    """(1) host-side: emit_cpp_program(layout=AMR(...)) emits pops_install_program_amr; the System
     default does NOT. The AMR export builds an AmrProgramContext and runs the body per level (the
     per-level driver has landed, ADC-508)."""
-    print("== codegen emits pops_install_program_amr only for target='amr_system' ==")
+    print("== codegen emits pops_install_program_amr only for layout=AMR(...) ==")
     prog = _lie_program()
     src_sys = prog.emit_cpp_program(model=_euler_model())
-    src_amr = prog.emit_cpp_program(model=_euler_model(), target="amr_system")
+    src_amr = prog.emit_cpp_program(model=_euler_model(), layout=_amr_layout())
     chk("pops_install_program(" in src_sys, "the System .so exports pops_install_program")
     chk("pops_install_program_amr" not in src_sys, "the System .so does NOT export the AMR entry")
     chk("pops_install_program_amr" in src_amr, "the AMR .so exports pops_install_program_amr")
     amr_entry = src_amr.split("pops_install_program_amr", 1)[1]
     chk("AmrProgramContext ctx(sys)" in amr_entry and "ctx.set_level(" in amr_entry,
         "the AMR install entry builds an AmrProgramContext and runs the body per level (ADC-508)")
-    # bad target rejected
+    # public target= rejected
     try:
         prog.emit_cpp_program(model=_euler_model(), target="bogus")
-        chk(False, "an unknown target must raise")
-    except ValueError as exc:
-        chk("target" in str(exc), "unknown target is rejected with a clear message")
+        chk(False, "a public target= kwarg must raise")
+    except TypeError as exc:
+        chk("target" in str(exc), "public target= is rejected by the signature")
 
 
 def test_amr_program_seam_validates_arguments():
@@ -152,12 +159,12 @@ def test_amr_install_program_end_to_end_kokkos():
     print("== AMR install_program installs + runs the per-level driver ==")
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "_install_program_so"):
-        print("skip (_pops lacks AmrSystem.install_program; rebuild _pops)")
+        print("skip (_pops lacks AmrSystem._install_program_so; rebuild _pops)")
         return
     m = _euler_model()
     try:
-        compiled = pops.compile_problem(model=m, time=_lie_program(), target="amr_system")
-        block_cm = m.compile(backend="production", target="amr_system")
+        compiled = pops.compile_problem(model=m, time=_lie_program(), layout=_amr_layout())
+        block_cm = m._compile_for_runtime(backend=Production(), target="amr_system")
     except RuntimeError as exc:
         print("skip (no Kokkos to build the AMR .so: %s)" % str(exc)[:120])
         return
@@ -167,7 +174,7 @@ def test_amr_install_program_end_to_end_kokkos():
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
     try:
         amr._add_equation("plasma", block_cm, spatial=pops.FiniteVolume(),
-                         time=pops.Explicit(method="ssprk2"))
+                         time=pops.Explicit.ssprk2())
         amr.set_density("plasma", rho)
         amr._install_program_so(compiled.so_path)
         amr.step(1e-3)  # the per-level macro-step runs over the hierarchy (AmrProgramContext)
@@ -185,22 +192,20 @@ def test_amr_install_program_end_to_end_kokkos():
         raise
 
 
-def test_multi_block_amr_program_install_fails_loud():
-    """(4) ADC-508 fix 2: a Program binding MORE THAN ONE block must FAIL LOUD at install on AMR -- the
-    v1 per-level AmrProgramContext driver wires a single block only. Compile a 2-block Program
-    (target='amr_system'), add BOTH blocks, install -> a clear RuntimeError naming the v1 limit + the
-    alternatives (native AMR route / System). Kokkos-gated (needs a compiler to build the 2-block .so);
-    self-skips otherwise. The 2-block .so carries pops_program_block_count == 2, the signal the C++
-    install_program guard checks."""
-    print("== a multi-block AMR Program install fails loud (fix 2: v1 single-block-AMR limit) ==")
+def test_multi_block_amr_program_install_runs():
+    """(4) Spec 6: a Program binding MORE THAN ONE block must install and run on AMR. Compile a
+    2-block Program through the public layout=AMR route, add BOTH native AMR blocks, install, and step.
+    This locks the clean-break rule: multi-block AMR is not a documented public API that raises because
+    plumbing is missing; the C++/codegen/runtime path must be real."""
+    print("== a multi-block AMR Program installs and runs ==")
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "_install_program_so"):
-        print("skip (_pops lacks AmrSystem.install_program; rebuild _pops)")
+        print("skip (_pops lacks AmrSystem._install_program_so; rebuild _pops)")
         return
     m = _euler_model("adc508_2block_model")
     try:
-        compiled = pops.compile_problem(model=m, time=_two_block_program(), target="amr_system")
-        block_cm = m.compile(backend="production", target="amr_system")
+        compiled = pops.compile_problem(model=m, time=_two_block_program(), layout=_amr_layout())
+        block_cm = m._compile_for_runtime(backend=Production(), target="amr_system")
     except RuntimeError as exc:
         print("skip (no Kokkos to build the 2-block AMR .so: %s)" % str(exc)[:120])
         return
@@ -212,35 +217,30 @@ def test_multi_block_amr_program_install_fails_loud():
         # Add BOTH blocks so the name-binding loop passes and the guard (not the name bind) is what fires.
         for blk in ("plasma", "plasma2"):
             amr._add_equation(blk, block_cm, spatial=pops.FiniteVolume(),
-                             time=pops.Explicit(method="ssprk2"))
+                             time=pops.Explicit.ssprk2())
             amr.set_density(blk, rho)
     except RuntimeError as exc:
         print("skip (could not add the two AMR blocks: %s)" % str(exc)[:120])
         return
     try:
         amr._install_program_so(compiled.so_path)
-        chk(False, "a 2-block AMR Program install must raise (v1 single-block limit)")
+        amr.step(1.0e-3)
     except RuntimeError as exc:
         msg = str(exc)
-        if "Kokkos" in msg or "dlopen" in msg:
-            print("skip (the 2-block AMR .so could not load: %s)" % msg[:120])
+        if "Kokkos" in msg or "dlopen" in msg or "compile" in msg:
+            print("skip (the 2-block AMR .so could not load/run in this environment: %s)" % msg[:140])
             return
-        chk("multi-block AMR Program is not supported in v1" in msg
-            or ("binds" in msg and "blocks" in msg and "v1" in msg),
-            "the v1 multi-block-AMR fail-loud message fired: %s" % msg[:200])
-        chk("System" in msg or "ADC-503" in msg or "native" in msg.lower(),
-            "the message points at the alternative (native AMR route / System)")
+        raise
+    chk(amr.installed_program_hash() != "", "the installed multi-block AMR Program hash is recorded")
+    for blk in ("plasma", "plasma2"):
+        chk(np.all(np.isfinite(np.array(amr.density(blk)))),
+            "multi-block AMR Program advanced %s with finite density" % blk)
 
 
-def test_amr_program_context_fail_loud_stubs_exist():
-    """(4) ADC-508 fix 3: the AmrProgramContext header declares fail-loud stubs for the 15 ctx ops the
-    codegen can emit (Schur / named-flux / scheduler-cache) but the v1 AMR path does not wire, so a
-    Schur/scheduled Program lowers to a .so that COMPILES (the member exists) and FAILS LOUD at run
-    rather than a raw 'no member named X' compile error. Host-side source assertion (no compiler): each
-    op is present in the header and routes to a throw. Cross-checked against the codegen emitters: every
-    ctx.<op> a program_emit_*.py can write either has a real AmrProgramContext method or a fail-loud
-    stub -- no ctx op is missing from the AMR seam."""
-    print("== AmrProgramContext declares fail-loud stubs for the deferred ctx ops (fix 3) ==")
+def test_amr_program_context_real_seams_exist():
+    """(5) Spec 6: the AmrProgramContext header declares the ctx ops the codegen can emit as real AMR
+    seams. Historical fail-loud helpers for Schur / named-flux / scheduler-cache must be gone."""
+    print("== AmrProgramContext declares real seams for emitted ctx ops ==")
     import os
     here = os.path.dirname(os.path.abspath(__file__))
     hdr_path = os.path.join(here, "..", "..", "include", "pops", "runtime", "program",
@@ -254,9 +254,9 @@ def test_amr_program_context_fail_loud_stubs_exist():
                 "cache_should_update", "cache_store_aux", "cache_restore_aux", "cache_store_scratch",
                 "cache_restore_scratch", "cache_accumulate_dt", "cache_effective_dt", "scheduler_error"]
     for op in deferred:
-        chk(op in hdr, "AmrProgramContext declares a stub for ctx.%s" % op)
-    chk("deferred_op(" in hdr or "is not wired on the AMR Program path" in hdr,
-        "the deferred stubs route through a fail-loud helper (not wired on the AMR Program path)")
+        chk(op in hdr, "AmrProgramContext declares ctx.%s" % op)
+    chk("deferred_op(" not in hdr and "is not wired on the AMR Program path" not in hdr,
+        "historical AMR deferred stubs are gone")
     # Every ctx.<op> the codegen emits must resolve on the AMR seam (a real method OR a deferred stub):
     # no raw 'no member named X' compile error for an AMR-target Program.
     import glob

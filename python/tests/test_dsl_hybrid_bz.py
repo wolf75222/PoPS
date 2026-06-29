@@ -48,7 +48,7 @@ def main():
     n, L, c = 32, 1.0, 0.7
     tmp = tempfile.mkdtemp()
     try:
-        co = m.compile(backend="aot", so_path=os.path.join(tmp, "hybrid_bz.so"), include=INCLUDE)
+        co = m.compile(backend=pops.codegen.AOT(), so_path=os.path.join(tmp, "hybrid_bz.so"), include=INCLUDE)
         assert co.n_aux == 4
 
         xs = (np.arange(n) + 0.5) / n
@@ -58,15 +58,15 @@ def main():
         sim = pops.System(n=n, L=L, periodic=True)
         sim._add_equation("bz", co, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          names=["n"])
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sim._set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_density("bz", dens)
 
         sim.solve_fields()  # resout phi UNE fois (grad phi fige) ; B_z ne change pas la derive
         sim.set_magnetic_field(c * np.ones((n, n)))
-        Rc = np.array(sim.eval_rhs("bz")).reshape(n, n)
+        Rc = np.array(sim._eval_rhs("bz")).reshape(n, n)
 
         sim.set_magnetic_field(np.zeros((n, n)))  # meme grad phi -> seul le terme de source change
-        R0 = np.array(sim.eval_rhs("bz")).reshape(n, n)
+        R0 = np.array(sim._eval_rhs("bz")).reshape(n, n)
 
         # delta = source(B_z=c) - source(B_z=0) = c * n (le flux de derive est identique, grad phi fige).
         err = float(np.max(np.abs((Rc - R0) - c * dens)))

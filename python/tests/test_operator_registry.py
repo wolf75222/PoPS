@@ -13,7 +13,6 @@ try:
     from pops import model
     from pops.ir.expr import Const
     from pops.ir.ops import abs_
-    from pops.physics.facade import Model
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_registry (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -21,42 +20,58 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 def build_model():
     """A small electrostatic-magnetized fluid exercising every operator kind."""
-    m = Model("euler_poisson_lorentz")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    # Auxiliary surface (read order fixes the FieldSpace components).
-    m.aux("phi")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    # Default flux F(U) -> grid_operator.
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho])
-    # Named source reading the solved field gradients -> local_source (needs Fields).
-    m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
-    # Default source independent of the fields -> local_source (state only).
-    m.source_term("default", [Const(0.0), Const(0.0), -rho * Const(0.1)])
-    # Lorentz rotation, coefficients in B_z only -> local_linear_operator (Fields).
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
-    # Default elliptic field U -> phi -> field_operator (fields_from_state).
-    m.elliptic_rhs(rho - 1.0)
-    # A second, NAMED elliptic field -> field_operator.
-    m.elliptic_field("psi", rhs=mx, aux=["psi_x", "psi_y"])
-    # Pointwise positivity projection -> projection.
-    m.projection([abs_(rho), mx, my])
-    return m
+    mod = model.Module("euler_poisson_lorentz")
+    state = mod.state_space(
+        "U", ("rho", "mx", "my"),
+        roles={"rho": "Density", "mx": "MomentumX", "my": "MomentumY"})
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y", "B_z"))
+    psi_fields = mod.field_space("psi_fields", ("psi_x", "psi_y"))
+    from pops.ir.expr import Var
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy, bz = Var("grad_x", "aux"), Var("grad_y", "aux"), Var("B_z", "aux")
+    mod.operator(
+        name="flux_default", signature=(state,) >> model.Rate(state), kind="grid_operator",
+        capabilities={"requires_ghosts": 1, "default": True},
+        expr={"x": [mx, mx * mx / rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho]})
+    mod.operator(
+        name="electric", signature=(state, fields) >> model.Rate(state), kind="local_source",
+        capabilities={"requires_fields": True},
+        requirements={"aux": ["grad_x", "grad_y"]},
+        expr=[Const(0.0), rho * (-gx), rho * (-gy)])
+    mod.operator(
+        name="source_default", signature=(state,) >> model.Rate(state), kind="local_source",
+        capabilities={"requires_fields": False, "default": True},
+        expr=[Const(0.0), Const(0.0), -rho * Const(0.1)])
+    mod.operator(
+        name="lorentz", signature=(fields,) >> model.LocalLinearOperator(state, state),
+        kind="local_linear_operator",
+        capabilities={"linear": True, "solve_i_minus_a": True},
+        requirements={"aux": ["B_z"]},
+        expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    mod.operator(
+        name="fields_from_state", signature=(state,) >> fields, kind="field_operator",
+        requirements={"elliptic_operator": "poisson"},
+        capabilities={"default": True},
+        expr=rho - 1.0)
+    mod.operator(
+        name="psi", signature=(state,) >> psi_fields, kind="field_operator",
+        expr=mx)
+    mod.operator(
+        name="projection", signature=(state,) >> state, kind="projection",
+        expr=[abs_(rho), mx, my])
+    return mod
 
 
 def test_spaces():
     m = build_model()
-    state = m.state_space()
+    state = m.state_spaces()["U"]
     assert isinstance(state, model.StateSpace)
     assert state.name == "U"
     assert state.components == ("rho", "mx", "my")
     assert state.roles["rho"] == "Density"
     assert state.roles["mx"] == "MomentumX"
-    fields = m.field_space()
+    fields = m.field_spaces()["fields"]
     assert isinstance(fields, model.FieldSpace)
     assert fields.components == ("phi", "grad_x", "grad_y", "B_z")
     # Rate identity is by base name: Rate("U") == Rate(state space U).
@@ -71,8 +86,8 @@ def test_spaces():
 def test_registry_signatures():
     m = build_model()
     reg = m.operator_registry()
-    state = m.state_space()
-    fields = m.field_space()
+    state = m.state_spaces()["U"]
+    fields = m.field_spaces()["fields"]
 
     flux = reg.get("flux_default")
     assert flux.kind == "grid_operator"
@@ -135,7 +150,7 @@ def test_registry_ids_and_errors():
     except KeyError as exc:
         assert "unknown operator" in str(exc)
 
-    state = m.state_space()
+    state = m.state_spaces()["U"]
     reg2 = model.OperatorRegistry()
     op = model.Operator("a", "local_source", model.Signature([state], model.Rate(state)))
     reg2.register(op)
@@ -154,15 +169,12 @@ def test_registry_ids_and_errors():
 
 def test_view_is_non_mutating():
     m = build_model()
-    before = m._model_hash()
+    before = m.module_hash()
     m.operator_registry()
-    m.state_space()
-    m.field_space()
-    assert m._model_hash() == before, "the typed view must not perturb the model hash"
-    # The HyperbolicModel underneath exposes the same API as the facade.
-    hm = m._m
-    assert hm.operator_registry().names() == m.operator_registry().names()
-    print("OK  typed view is non-mutating; facade and HyperbolicModel agree")
+    m.state_spaces()
+    m.field_spaces()
+    assert m.module_hash() == before, "the typed view must not perturb the module hash"
+    print("OK  typed view is non-mutating")
 
 
 def main():

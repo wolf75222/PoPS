@@ -1,21 +1,24 @@
-"""ADC-479 Spec 5 C3: multi-block Cases on a Uniform layout lower.
-
-PURE-PYTHON tests of the assembly + orchestration: a Case with more than one block validates, and
-pops.compile resolves EACH block's physics and carries the {block: model} table (_block_models) on
-the handle so bind()'s _assemble_instances installs each block with its own model. The real .so
-compile is Kokkos-gated, so compile_problem is MONKEYPATCHED to assert the wiring WITHOUT a compile.
-
-Runs both under pytest and as a plain script; the CI runner executes it via the __main__ guard.
-"""
+"""Spec 5: multi-block Uniform programs install through compile_problem + sim.install."""
+import os
 import sys
+import tempfile
 
 try:
     import pops
-    from pops.codegen import orchestration
-    import pops.codegen.compile_drivers as compile_drivers
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+    from pops.model import Module
 except Exception as exc:  # noqa: BLE001
-    print("skip test_case_multiblock_uniform (pops unavailable: %s)" % exc)
+    msg = "skip test_case_multiblock_uniform (pops unavailable: %s)" % exc
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(msg, allow_module_level=True)
+    print(msg)
     sys.exit(0)
+
+
+INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
+_SAVED = []
 
 
 def _check(cond, msg):
@@ -23,80 +26,169 @@ def _check(cond, msg):
         raise AssertionError(msg)
 
 
-class _StubModel:
-    """A physics stand-in exposing the .dsl engine model pops.compile resolves."""
-
-    def __init__(self, name="stub"):
-        self.name = name
-        self.dsl = object()
-
-
-class _StubCompiled:
-    def __init__(self, target="system", model=None):
-        self.so_path = "/tmp/stub.so"
-        self.model = model
-        self._target = target
-
-
-_SAVED = []
+def _patch(monkeypatch, dotted, value):
+    module_name, attr = dotted.rsplit(".", 1)
+    import importlib
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        module_name, owner_name = module_name.rsplit(".", 1)
+        module = importlib.import_module(module_name)
+        module = getattr(module, owner_name)
+    if monkeypatch is not None:
+        monkeypatch.setattr(module, attr, value)
+    else:
+        _SAVED.append((module, attr, getattr(module, attr)))
+        setattr(module, attr, value)
 
 
-def _patch_compile_problem(fn):
-    _SAVED.append(compile_drivers.compile_problem)
-    compile_drivers.compile_problem = fn
-
-
-def _unpatch():
+def _unpatch(monkeypatch):
+    if monkeypatch is not None:
+        return
     while _SAVED:
-        compile_drivers.compile_problem = _SAVED.pop()
+        module, attr, original = _SAVED.pop()
+        setattr(module, attr, original)
 
 
-def test_multi_block_uniform_validates():
-    """C3: a two-block Uniform Case validates (the >1-block reject is removed)."""
-    case = (pops.Case().block("ne", physics=_StubModel())
-            .block("ni", physics=_StubModel()))
-    _check(case.validate() is True, "a 2-block Uniform Case validates")
-    _check(case.options()["n_blocks"] == 2, "options() reports two blocks")
-    print("ok test_multi_block_uniform_validates")
+def _module():
+    module = Module("uniform_multiblock")
+    module.state_space("U", ("rho",), roles={"rho": "Density"})
+    return module
 
 
-def test_multi_block_uniform_compiles_one_handle_per_block():
-    """C3: compile lowers a multi-block Uniform Case, carrying a model per block (_block_models)."""
-    captured = {}
+def _program(module, blocks):
+    program = pops.time.Program("uniform_multiblock_step")
+    state = module.state_spaces()["U"]
+    for block in blocks:
+        u = program.state("U", block=block, space=state).n
+        program.commit(block, program.linear_combine("%s_next" % block, u))
+    return program
 
-    def _fake(*, time, model, backend, target, **kw):
-        captured.update(model=model, target=target, backend=backend)
-        return _StubCompiled(target=target, model=model)
 
-    _patch_compile_problem(_fake)
+def _compile_uniform(monkeypatch, blocks=("ne", "ni")):
+    calls = {"targets": []}
+
+    def _fake_emit(self, model=None, target="system"):
+        calls["targets"].append((target, model))
+        return "extern \"C\" int pops_test_uniform_multiblock() { return 0; }\n"
+
+    def _fake_run_compile(cmd, label):
+        out_path = cmd[cmd.index("-o") + 1]
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "wb") as handle:
+            handle.write(b"")
+
+    module = _module()
+    program = _program(module, blocks)
+    so_path = os.path.join(tempfile.mkdtemp(), "uniform_multiblock.so")
+    _patch(monkeypatch, "pops.time.program.Program._emit_cpp_program_for_target", _fake_emit)
+    _patch(monkeypatch, "pops.codegen.compile_drivers._run_compile", _fake_run_compile)
+    _patch(monkeypatch, "pops.codegen.compile_drivers.pops_loader_build_flags",
+           lambda cxx=None: ("c++", [], []))
+    _patch(monkeypatch, "pops.codegen.compile_drivers._probe_cxx_std",
+           lambda cc, std: "c++23")
+    _patch(monkeypatch, "pops.codegen.compile_drivers.pops_header_signature",
+           lambda include: "test-header-sig")
+    _patch(monkeypatch, "pops.codegen.compile_drivers._dsl_optflags", lambda: [])
     try:
-        case = (pops.Case().block("ne", physics=_StubModel())
-                .block("ni", physics=_StubModel()))
-        compiled = orchestration.compile(case, time=object())
-        _check(captured["target"] == "system", "Uniform multi-block routes to target='system'")
-        _check(hasattr(compiled, "_block_models"), "the handle carries _block_models (C3)")
-        _check(set(compiled._block_models) == {"ne", "ni"},
-               "one resolved model per block (got %r)" % sorted(compiled._block_models))
-        _check(compiled._problem is case, "the assembly is carried for bind()")
+        compiled = pops.compile_problem(
+            so_path,
+            model=module,
+            time=program,
+            layout=Uniform(CartesianMesh(n=32)),
+            include=INCLUDE,
+            force=True,
+        )
     finally:
-        _unpatch()
-    print("ok test_multi_block_uniform_compiles_one_handle_per_block")
+        _unpatch(monkeypatch)
+    return compiled, module, program, calls
 
 
-def test_single_block_uniform_still_lowers():
-    """C3 regression: a single-block Uniform Case still lowers unchanged."""
-    def _fake(*, time, model, backend, target, **kw):
-        return _StubCompiled(target=target, model=model)
+class _RecordingSystem(pops.System):
+    """Local fake System: public install entry point, recorded native side effects."""
 
-    _patch_compile_problem(_fake)
+    def __init__(self):
+        self.calls = []
+        self._aux_field_index = {}
+        self._program_cadence_cfl = None
+
+    def block_names(self):
+        return []
+
+    def _install_solver(self, field, solver, declared_fields=frozenset()):
+        self.calls.append(("solver", field))
+
+    def _resolve_instance_model(self, model):
+        self.calls.append(("resolve", getattr(model, "name", None)))
+        return model
+
+    def _lower_spatial(self, spatial):
+        return spatial
+
+    def _validate_riemann_capability(self, model, spatial):
+        return None
+
+    def _add_equation(self, name, model, spatial=None, time=None):
+        self.calls.append(("add", name, getattr(model, "name", None)))
+
+    def _set_state(self, name, state):
+        self.calls.append(("initial", name, state))
+
+    def _install_aux(self, field_name, field):
+        self.calls.append(("aux", field_name))
+
+    def _install_params(self, resolved_models, params, reject_unknown=True):
+        return set()
+
+    def _install_program_so(self, so_path):
+        self.calls.append(("program", so_path))
+
+    def _install_program_params(self, compiled, params):
+        self.calls.append(("program_params", dict(params)))
+
+    def _install_cadence(self, cadence):
+        self.calls.append(("cadence", cadence))
+
+
+def test_multiblock_uniform_compile_problem_targets_system(monkeypatch=None):
+    compiled, module, program, calls = _compile_uniform(monkeypatch)
+    _check(calls["targets"] == [("system", module)],
+           "Uniform layout compiles the system Program ABI")
+    args = compiled.arguments()
+    _check(set(args.instances) == {"ne", "ni"},
+           "CompiledProblem arguments list both committed blocks")
+    _check(compiled.program is program, "compiled handle carries the multi-block Program")
+    print("ok test_multiblock_uniform_compile_problem_targets_system")
+
+
+def test_multiblock_uniform_install_adds_each_instance(monkeypatch=None):
+    compiled, module, _, _ = _compile_uniform(monkeypatch)
+    sim = _RecordingSystem()
+    sim.install(
+        compiled,
+        instances={"ne": {"initial": [1.0]}, "ni": {"initial": [2.0]}},
+    )
+    added = [call for call in sim.calls if call[0] == "add"]
+    initials = [call for call in sim.calls if call[0] == "initial"]
+    added_by_name = {call[1]: call[2] for call in added}
+    initial_by_name = {call[1]: call[2] for call in initials}
+    _check(added_by_name == {"ne": module.name, "ni": module.name},
+           "sim.install adds one runtime instance per Program block")
+    _check(initial_by_name == {"ne": [1.0], "ni": [2.0]},
+           "initial state is routed by block name")
+    _check([call for call in sim.calls if call == ("program", compiled.so_path)],
+           "compiled Program .so is installed")
+    print("ok test_multiblock_uniform_install_adds_each_instance")
+
+
+def test_multiblock_uniform_install_requires_all_committed_blocks(monkeypatch=None):
+    compiled, _, _, _ = _compile_uniform(monkeypatch)
     try:
-        case = pops.Case().block("ne", physics=_StubModel())
-        compiled = orchestration.compile(case, time=object())
-        _check(compiled._target == "system", "single-block Uniform routes to target='system'")
-        _check(set(compiled._block_models) == {"ne"}, "one block carried")
-    finally:
-        _unpatch()
-    print("ok test_single_block_uniform_still_lowers")
+        _RecordingSystem().install(compiled, instances={"ne": {"initial": [1.0]}})
+        raise AssertionError("install must reject a missing committed block")
+    except ValueError as exc:
+        _check("instance 'ni'" in str(exc), "missing block is named in the install error")
+    print("ok test_multiblock_uniform_install_requires_all_committed_blocks")
 
 
 def _run_all():

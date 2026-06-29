@@ -1,12 +1,8 @@
-"""Spec 5 (sec.4 / 5 / 5.15 / 16): the central packages are top-level, not under pops.lib.
+"""Spec 5 corrective package layout.
 
-Spec 5 homes the generic building blocks in top-level packages and reserves ``pops.lib``
-for ready-to-use presets (``lib.time`` / ``lib.models``). These checks assert that end state
-structurally (source-only; they do not import ``pops`` / ``_pops``). Criterion 7: ``pops.lib``
-holds ONLY presets (no spatial / fields / solver building-block catalogs). The solver
-descriptors have ONE public home, ``pops.solvers`` (the ``pops.lib.solvers`` shim was removed).
-Criterion 19: a solver-gen DSL, if any, lives in ``pops.codegen.solvers`` and is marked
-internal / experimental.
+Generic moment authoring tools live in the central ``pops.moments`` package. Ready-to-use
+moment models live under ``pops.lib.models.moments``. These checks are source-only; they do not
+import ``pops`` / ``_pops``.
 """
 import pathlib
 
@@ -16,7 +12,6 @@ POPS = REPO_ROOT / "python" / "pops"
 # Spec 5 top-level central packages (sec.4 / 5).
 CENTRAL_PACKAGES = (
     "numerics",      # discretisation descriptors (riemann/reconstruction/projections/spatial)
-    "moments",       # moment-model toolkit
     "diagnostics",   # reduction catalog
     "mesh",          # mesh/layout/AMR descriptors
     "params",        # typed scalar params
@@ -25,11 +20,12 @@ CENTRAL_PACKAGES = (
     "fields",        # typed elliptic field-problem authoring + brick catalog (Spec 5 Phase E)
     "linalg",        # abstract algebra: names A x = b (Spec 5 sec.5.6)
     "solvers",       # linear / nonlinear / Schur / elliptic solver catalog (Spec 5 sec.5.7)
+    "moments",       # generic moment authoring tools; provided models stay in pops.lib.models
 )
 
 # Catalogs Spec 5 moves OUT of pops.lib (no longer their own modules under lib/). Criterion 7
 # finishes the Phase A2 carve-out: spatial -> pops.numerics.spatial, fields -> pops.fields.catalog.
-MOVED_OUT_OF_LIB = ("riemann", "reconstruction", "moments", "diagnostics", "operators",
+MOVED_OUT_OF_LIB = ("riemann", "reconstruction", "diagnostics", "operators",
                     "spatial", "fields")
 
 
@@ -37,6 +33,13 @@ def test_central_packages_are_top_level():
     for pkg in CENTRAL_PACKAGES:
         init = POPS / pkg / "__init__.py"
         assert init.is_file(), "Spec 5 central package missing: python/pops/%s/__init__.py" % pkg
+
+
+def test_moments_toolkit_is_top_level_only():
+    assert (POPS / "moments" / "__init__.py").is_file(), (
+        "Spec 5: generic moments toolkit must live at python/pops/moments")
+    assert not (POPS / "lib" / "moments").exists(), (
+        "Spec 5: python/pops/lib/moments must not exist; pops.lib keeps provided models/presets only")
 
 
 def test_shared_descriptor_module_is_top_level():

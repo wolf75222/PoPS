@@ -36,7 +36,7 @@ def chk(cond, label):
 
 
 def iso_model(charge=1.0, cs2=0.5):
-    return pops.Model(state=pops.FluidState("isothermal", cs2=cs2),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=cs2),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=charge),
                      elliptic=pops.ChargeDensity(charge=charge))
@@ -55,7 +55,7 @@ sim = pops.System(n=n, L=1.0, periodic=True)
 sim._add_block("ions", iso_model(),
               spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),
               time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 rho0 = gaussian(n)
 sim.set_density("ions", rho0.ravel())
 m0 = sim.mass("ions")
@@ -89,7 +89,7 @@ except RuntimeError as e:
 # --- 4. AmrSystem : hll + minmod accepte (alignement de surface System/AMR) ------
 print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
 amr = pops.AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
 amr._add_block("ions", iso_model(),
               spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),

@@ -31,7 +31,7 @@ from pops.codegen.loader import CompiledModel, CompiledProblem  # noqa: E402
 from pops.external import (  # noqa: E402
     CompiledArtifactManifest, build_compiled_manifest, check_layout_supported)
 from pops.descriptors import Availability  # noqa: E402
-from pops.physics.model import Param  # noqa: E402
+from pops.physics.model import ConstParam, RuntimeParam  # noqa: E402
 from pops import time as adctime  # noqa: E402
 
 
@@ -40,8 +40,8 @@ def _program(name="manifest_demo"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f = P._solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields("phi", U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -50,7 +50,7 @@ def _model(*, params=None, caps=None, with_roles=True):
     """A real CompiledModel metadata carrier (no .so) -- the engine class, carrying only metadata."""
     roles = ["Density", "MomentumX", "MomentumY"] if with_roles else []
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=roles, prim_names=["rho", "mx", "my"],
         n_vars=3, gamma=1.4, n_aux=1, params=params or {},
         caps=caps if caps is not None else {"cpu": True, "mpi": True, "amr": True, "gpu": False},
@@ -67,8 +67,8 @@ def _compiled(*, params=None, caps=None, with_roles=True):
 
 
 def _default_params():
-    return {"cs2": Param("cs2", 1.0, kind="runtime"),
-            "gamma_const": Param("gamma_const", 1.4, kind="const")}
+    return {"cs2": RuntimeParam("cs2", 1.0),
+            "gamma_const": ConstParam("gamma_const", 1.4)}
 
 
 # ---------------------------------------------------------------------------

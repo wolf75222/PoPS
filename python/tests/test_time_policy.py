@@ -38,7 +38,7 @@ def diocotron_model(B0=1.0, alpha=1.0, n0=0.0):
 
 
 def electron_model():
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.PotentialForce(charge=-1.0),
                      elliptic=pops.ChargeDensity(charge=-1.0))
@@ -92,8 +92,8 @@ results = {}
 for label, policy in policies.items():
     s = pops.System(n=n, periodic=False)
     s._add_block("ne", electron_model(),
-                spatial=pops.Spatial(minmod=True), time=policy)
-    s.set_poisson(bc="dirichlet")
+                spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=policy)
+    s._set_poisson(bc="dirichlet")
     rho_e = 1.0 + 0.04 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, n))
     s.set_density("ne", rho_e)
     s.advance(dt, 4)
@@ -123,7 +123,7 @@ print("== 5. pops.Explicit et pops.IMEX inchanges ==")
 ex = pops.Explicit()
 chk(ex.kind == "explicit", "Explicit().kind == 'explicit' (inchange)")
 chk(ex.substeps == 1, "Explicit().substeps == 1 (defaut inchange)")
-ex3 = pops.Explicit(method="ssprk3")
+ex3 = pops.Explicit.ssprk3()
 chk(ex3.kind == "ssprk3", "Explicit(ssprk3).kind == 'ssprk3' (inchange)")
 
 imex = pops.IMEX()

@@ -12,7 +12,8 @@ sec.13.12 "Python-derived, not authoritative" gap. They assert:
   - ``pops.inspect_capabilities()`` cross-checks its descriptor walk against the native source: it
     appends ``source="native"`` rows and never reports a layout descriptor available that the C++
     source reports unavailable (a disagreement raises ``CapabilityMismatchError``);
-  - ``Case.explain_routes()`` prints a route matrix sourced from the native facts (criterion #37).
+  - the legacy ``Case.explain_routes()`` route matrix is gone; the native-backed capability matrix
+    is the public inspection API.
 
 The STATIC tier is LOCALLY validatable once ``_pops`` is rebuilt with this header change; the tests
 SKIP cleanly on an ``_pops`` that predates ``module_capabilities`` (pre-rebuild). The PER-ARTIFACT
@@ -115,26 +116,21 @@ def test_capability_mismatch_error_is_exported():
     assert issubclass(CapabilityMismatchError, RuntimeError)
 
 
-# --- STATIC tier: Case.explain_routes (criterion #37) ---------------------------------
-def test_explain_routes_sourced_from_native_facts():
+# --- STATIC tier: public matrix replaces Case.explain_routes ---------------------------
+def test_public_capability_matrix_sourced_from_native_facts():
     _module_caps()
-    prob = pops.Case(name="cap-demo").block("ne", physics=object())
-    matrix = prob.explain_routes()
-    rows = {row.feature: row for row in matrix}
+    matrix = pops.inspect_capabilities()
+    rows = {entry.name: entry for entry in matrix if entry.source == "native"}
     for flag in _EXPECTED_FLAGS:
-        assert flag in rows, "explain_routes missing feature %r" % flag
-        assert rows[flag].source == "native"
-        assert rows[flag].status in ("available", "unavailable")
+        assert flag in rows, "capability matrix missing native feature %r" % flag
+        assert rows[flag].available in ("yes", "no")
     # partial_imex_mask is unavailable and says so (honest).
-    assert rows["supports_partial_imex_mask"].status == "unavailable"
+    assert rows["supports_partial_imex_mask"].available == "no"
 
 
-def test_explain_routes_prints():
+def test_case_explain_routes_surface_removed():
     _module_caps()
-    prob = pops.Case(name="cap-demo").block("ne", physics=object())
-    text = str(prob.explain_routes())
-    assert "route matrix" in text
-    assert "supports_uniform" in text
+    assert not hasattr(pops, "Case")
 
 
 # --- PER-ARTIFACT tier: pure-Python overlay (no .so; the real .so read is ROMEO-gated) ---

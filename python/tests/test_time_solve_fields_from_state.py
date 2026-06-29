@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Per-stage elliptic field solve in the compiled time Program (ADC-409).
 
-Each ``P._solve_fields(state=U_stage)`` op now lowers to ``ctx.solve_fields_from_state(0, <U_stage>)``:
+Each ``P._legacy_solve_fields(state=U_stage)`` op now lowers to ``ctx.solve_fields_from_state(0, <U_stage>)``:
 the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's state, not the
 block's current state. So a field-COUPLED multi-stage scheme (Poisson feedback into the RHS) is exact:
 stage k's RHS reads phi solved from stage k's own state. The compiled Program runs the stages
 sequentially, so stage k's solve overwrites the shared aux before stage k's RHS reads it -- no distinct
 per-stage FieldContext buffer is needed.
 
-(A) Codegen (pure Python, always runs): ``P._solve_fields(state=U_stage)`` lowers to
+(A) Codegen (pure Python, always runs): ``P._legacy_solve_fields(state=U_stage)`` lowers to
     ``ctx.solve_fields_from_state(0, <U_stage var>)`` in the generated C++ (and the bare
     ``ctx.solve_fields();`` no longer appears); the first stage solves from the base state, a later
     stage solves from the intermediate scratch state -- a DISTINCT C++ variable.
@@ -101,11 +101,11 @@ def heun_program(name="sffs_heun"):
     P = adctime.Program(name)
     dt = P.dt
     U0 = P.state("plasma")
-    f0 = P._solve_fields("fields_0", U0)
-    R0 = P._rhs_legacy(name="R0", state=U0, fields=f0, flux=True, sources=["electric"])
+    f0 = P._legacy_solve_fields("fields_0", U0)
+    R0 = P._legacy_rhs(name="R0", state=U0, fields=f0, flux=True, sources=["electric"])
     U1 = P.linear_combine("U1", U0 + dt * R0)
-    f1 = P._solve_fields("fields_1", U1)            # <-- solved from U1, not U0 (ADC-409)
-    R1 = P._rhs_legacy(name="R1", state=U1, fields=f1, flux=True, sources=["electric"])
+    f1 = P._legacy_solve_fields("fields_1", U1)            # <-- solved from U1, not U0 (ADC-409)
+    R1 = P._legacy_rhs(name="R1", state=U1, fields=f1, flux=True, sources=["electric"])
     P.commit("plasma", P.linear_combine("U_np1", U0 + 0.5 * dt * R0 + 0.5 * dt * R1))
     return P
 
@@ -137,8 +137,8 @@ chk(base_decl is not None and solve_args and solve_args[0] == base_decl.group(1)
 # (Forward Euler: one stage, the base state).
 P_fe = adctime.Program("sffs_fe")
 U = P_fe.state("plasma")
-f = P_fe._solve_fields(U)
-R = P_fe._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
+f = P_fe._legacy_solve_fields(U)
+R = P_fe._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=["electric"])
 P_fe.commit("plasma", P_fe.linear_combine("U1", U + P_fe.dt * R))
 src_fe = P_fe.emit_cpp_program(model=named_source_model("sffs_fe_named"))
 chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,
@@ -146,7 +146,7 @@ chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,
 
 
 # ============================ (B) field-coupled parity: skip without the toolchain ===========
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_solve_fields_from_state (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -160,38 +160,38 @@ def make_sim(model):
     non-uniform rho so a stage change shifts phi. Returns (sim, U0)."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
-        compiled = model.compile(backend="production")
+        compiled = model._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+                     time=pops.Explicit.euler())
+    sim._set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     mx = 0.4 * rho
     my = -0.2 * rho
     U0 = np.stack([rho, mx, my])
-    sim.set_state("plasma", U0)
+    sim._set_state("plasma", U0)
     return sim, U0
 
 
 def offline_rhs(ref, U):
     """-div F + electric at U, the fields RE-SOLVED from U. ``ref`` carries the default-source model,
     so eval_rhs already returns -div F + electric."""
-    ref.set_state("plasma", U)
+    ref._set_state("plasma", U)
     ref.solve_fields()
-    return np.array(ref.eval_rhs("plasma"))
+    return np.array(ref._eval_rhs("plasma"))
 
 
 def offline_rhs_frozen(ref, U, U_fields):
     """-div F + electric at U with the fields (grad phi) FROZEN at U_fields -- the OLD current-state
     behavior, used only for the cross-check (it should NOT match the compiled program)."""
-    ref.set_state("plasma", U_fields)
+    ref._set_state("plasma", U_fields)
     ref.solve_fields()           # aux <- grad(phi(U_fields))
-    ref.set_state("plasma", U)   # state <- U without re-solving (Poisson frozen)
-    return np.array(ref.eval_rhs("plasma"))
+    ref._set_state("plasma", U)   # state <- U without re-solving (Poisson frozen)
+    return np.array(ref._eval_rhs("plasma"))
 
 
 print("== (B) field-coupled 2-stage parity (per-stage field solve) ==")
@@ -203,7 +203,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
 sim, U0 = make_sim(named_source_model("sffs_block"))
 sim._install_program_so(compiled.so_path)
 sim.step(DT)
-U_prog = np.array(sim.get_state("plasma"))
+U_prog = np.array(sim._get_state("plasma"))
 
 # Offline replay: BOTH stages re-solve phi from their own state (the ADC-409 per-stage path).
 ref = make_sim(default_source_model("sffs_ref_block"))[0]

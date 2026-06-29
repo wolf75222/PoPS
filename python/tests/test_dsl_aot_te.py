@@ -36,7 +36,7 @@ def build_te_scalar():
 
 def gas_model(gamma):
     """Bloc fluide compressible source de T_e (T = p/rho) ; pas de contribution au Poisson."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=gamma),
+    return pops.Model(state=pops.FluidState.compressible(gamma=gamma),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.ChargeDensity(charge=0.0))
 
@@ -62,19 +62,19 @@ def main():
         # add_compiled_block : pops_compiled_naux()=5 -> ensure_aux_width(5)
         sim.add_compiled_block("probe", so, limiter="none", riemann="rusanov",
                                recon="conservative", time="explicit", names=["n"])
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sim._set_poisson(rhs="charge_density", solver="geometric_mg")
 
         # etat du gaz : rho=1, qte de mvt nulle, E = p/(gamma-1) -> p=3, donc T = p/rho = 3.
         Ug = np.zeros((4, n, n))
         Ug[0] = rho
         Ug[3] = p / (gamma - 1.0)
-        sim.set_state("gas", Ug.reshape(-1).tolist())
+        sim._set_state("gas", Ug.reshape(-1).tolist())
         sim.set_density("probe", np.ones((n, n)))
         sim.set_electron_temperature_from("gas")  # T_e <- p/rho du gaz, marshale au bloc compile
         sim.solve_fields()
 
         # eval_rhs = -div F + S ; flux nul -> R = source = T_e n = Te.
-        R = np.array(sim.eval_rhs("probe"))
+        R = np.array(sim._eval_rhs("probe"))
         err = float(np.max(np.abs(R - Te)))
         print("  AOT T_e : eval_rhs, max|R - T_e| = %.2e (T_e=%.3g)" % (err, Te))
         assert err < 1e-12, "le bloc compile ne lit pas T_e (ecart %.2e)" % err

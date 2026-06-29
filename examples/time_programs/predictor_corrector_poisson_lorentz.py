@@ -21,19 +21,18 @@ Run::
 Requires a compiler + a visible Kokkos (``POPS_KOKKOS_ROOT``); prints a skip notice and exits 0
 otherwise. cf. docs/sphinx/reference/time-program.md.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 try:
     import numpy as np
 
     import pops
-    from pops.fields import catalog as field_catalog
+    from pops.solvers import GeometricMG
+    from pops.ir.expr import Const, Var
     from pops.ir.ops import sqrt
-    from pops.model import OperatorHandle
-    from pops.physics.facade import Model
+    from pops import model as model_ir
     from pops import time as adctime
+    from _module_models import explicit_ssprk2, first_order_rusanov
 except Exception as exc:  # noqa: BLE001
     print("skip predictor_corrector_poisson_lorentz (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -47,56 +46,60 @@ def magnetic_field():
     return BZ * np.ones((N, N))
 
 
-def _base_block(m):
-    """Shared isothermal 2D fluid block (flux + primitives + eigenvalues + Poisson + B_z aux)."""
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+def _base_module(name):
+    """Shared isothermal 2D fluid Module: flux + waves + Poisson + B_z aux."""
+    mod = model_ir.Module(name)
+    u = mod.state_space("U", ("rho", "mx", "my"),
+                        roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
+    mod.aux_fields(B_z="cell_scalar")
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy, bz = Var("grad_x", "aux"), Var("grad_y", "aux"), Var("B_z", "aux")
+    cs2 = Const(0.5)
+    vx = mx / rho
+    vy = my / rho
     cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-    m.elliptic_rhs(rho)  # Poisson rhs f = rho (so solve_fields populates a non-trivial grad)
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    return rho, mx, my, gx, gy, bz
+    mod.operator(name="fields_from_state", signature=(u,) >> fields,
+                 kind="field_operator", capabilities={"default": True}, expr=rho)
+    mod.operator(name="flux", signature=(u,) >> model_ir.Rate(u), kind="grid_operator",
+                 expr={"x": [mx, mx * vx + cs2 * rho, my * vx],
+                       "y": [my, mx * vy, my * vy + cs2 * rho]})
+    mod.eigenvalues(x=[vx - cs, vx, vx + cs], y=[vy - cs, vy, vy + cs])
+    return mod, u, fields, rho, mx, my, gx, gy, bz
 
 
 def named_source_model(name="pc_named"):
     """Default source EMPTY (NoSource); the electric force is a NAMED source_term and the Lorentz
     operator a NAMED linear_source (both opt-in). This is the model the Program drives."""
-    m = Model(name)
-    rho, mx, my, gx, gy, bz = _base_block(m)
-    electric = m.source_term("electric", [0.0, -rho * gx, -rho * gy])
-    implicit_operator = m.linear_source("implicit_operator", [[0.0, 0.0, 0.0],
-                                                              [0.0, 0.0, bz],
-                                                              [0.0, -bz, 0.0]])
-    explicit_rate = m.rate_operator("explicit_rate", flux=True, sources=[electric])
-    fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
-    return m, fields_from_state, explicit_rate, implicit_operator
+    mod, u, fields, rho, mx, my, gx, gy, bz = _base_module(name)
+    electric = mod.operator(name="electric", signature=(u, fields) >> model_ir.Rate(u),
+                            kind="local_source", expr=[Const(0.0), -rho * gx, -rho * gy])
+    mod.operator(name="implicit_operator", signature=(fields,) >> model_ir.LocalLinearOperator(u, u),
+                 kind="local_linear_operator",
+                 expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    mod.rate_operator("explicit_rate", flux=True, sources=[electric])
+    ops = mod.operator_registry()
+    return mod, ops.get("fields_from_state"), ops.get("explicit_rate"), ops.get("implicit_operator")
 
 
 def default_source_model(name="pc_default"):
     """Same physics, but the electric force is the model's DEFAULT source (m.source): eval_rhs then
     returns -div F + electric directly -- used to build the offline reference."""
-    m = Model(name)
-    rho, mx, my, gx, gy, bz = _base_block(m)
-    m.source([0.0, -rho * gx, -rho * gy])
-    m.linear_source("implicit_operator", [[0.0, 0.0, 0.0],
-                                          [0.0, 0.0, bz],
-                                          [0.0, -bz, 0.0]])
-    return m
+    mod, u, fields, rho, mx, my, gx, gy, bz = _base_module(name)
+    mod.operator(name="source", signature=(u, fields) >> model_ir.Rate(u),
+                 kind="local_source", capabilities={"default": True},
+                 expr=[Const(0.0), -rho * gx, -rho * gy])
+    mod.operator(name="implicit_operator", signature=(fields,) >> model_ir.LocalLinearOperator(u, u),
+                 kind="local_linear_operator",
+                 expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    return mod
 
 
 def predictor_corrector_program(model, fields_from_state, explicit_rate, implicit_operator,
                                 name="predictor_corrector_poisson_lorentz"):
     """The spec Example 5 program as operator composition, not PDE-term spelling."""
     P = adctime.Program(name)
-    P.bind_operators(model.module)
+    P.bind_operators(model)
     dt = P.dt
     U = P.state("U", block="plasma")
     f_n = P.call(fields_from_state, U.n, name="fields_n")
@@ -137,21 +140,20 @@ def make_sim(model):
     U0 = initial_state()
     sim.install(None,
                 instances={"plasma": {"model": model,
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
-                                      "time": pops.Explicit(),
+                                      "spatial": first_order_rusanov(),
+                                      "time": explicit_ssprk2(),
                                       "initial": U0}},
                 aux={"B_z": magnetic_field()},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     return sim, U0
 
 
 def offline_rhs_with_electric(ref, U):
     """The semi-discrete RHS -div F + electric at state U, elliptic fields RE-SOLVED from U. ``ref``
     carries the DEFAULT-source model, so eval_rhs(plasma) already returns -div F + electric."""
-    ref.set_state("plasma", U)
+    ref._set_state("plasma", U)
     ref.solve_fields()
-    return np.array(ref.eval_rhs("plasma"))
+    return np.array(ref._eval_rhs("plasma"))
 
 
 def analytic_lorentz_solve(U, a):
@@ -170,9 +172,6 @@ def analytic_lorentz_apply(U):
 
 
 def main():
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip predictor_corrector_poisson_lorentz (_pops lacks install_program; rebuild _pops)")
-        return 0
     try:
         model, fields, rate, implicit = named_source_model("pc_prog")
         compiled = pops.compile_problem(model=model,
@@ -190,14 +189,13 @@ def main():
     block_model = named_source_model("pc_block")[0]
     sim.install(compiled,
                 instances={"plasma": {"model": block_model,
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
-                                      "time": pops.Explicit(),
+                                      "spatial": first_order_rusanov(),
+                                      "time": explicit_ssprk2(),
                                       "initial": U0}},
                 aux={"B_z": magnetic_field()},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     sim.step(DT)
-    U_pc = np.array(sim.get_state("plasma"))
+    U_pc = np.array(sim._get_state("plasma"))
 
     # Offline replay of the EXACT same stages with the default-source reference model.
     R_n = offline_rhs_with_electric(ref, U0)            # R_n = -div F(U_n) + electric(U_n; grad U_n)

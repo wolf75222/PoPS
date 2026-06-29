@@ -128,9 +128,13 @@ def _emit_module_metadata(program, model=None):
     if model is not None and hasattr(model, "operator_registry"):
         reg = model.operator_registry()
         ops = [reg.get(nm) for nm in reg.names()]
-        if hasattr(model, "state_space"):
+        if hasattr(model, "state_spaces"):
+            states = list(model.state_spaces())
+        elif hasattr(model, "state_space"):
             states = [model.state_space().name]
-        if hasattr(model, "field_space"):
+        if hasattr(model, "field_spaces"):
+            fields = list(model.field_spaces())
+        elif hasattr(model, "field_space"):
             fields = [model.field_space().name]
 
     def table(accessor, values):
@@ -261,75 +265,75 @@ def _all_ops(program):
 def _check_op_lowerable(program, v, model):
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
-    if v.op == "operator_call":
+    if v.op == "call":
         kind = v.attrs.get("kind")
         if kind == "field_operator":
             field = v.attrs.get("field")
             if field is not None:
                 if model is None:
                     raise NotImplementedError(
-                        "emit_cpp_program cannot lower operator_call '%s' with named elliptic field "
+                        "emit_cpp_program cannot lower call '%s' with named elliptic field "
                         "('%s') without the physical model that declares it (m.elliptic_field); "
                         "pass model= (compile_problem threads it through)"
                         % (v.attrs.get("operator"), field))
                 if field not in _model_impl(model)._elliptic_fields:
                     raise ValueError(
-                        "unknown elliptic_field '%s' in operator_call '%s'; declared: %s"
+                        "unknown elliptic_field '%s' in call '%s'; declared: %s"
                         % (field, v.attrs.get("operator"), sorted(_model_impl(model)._elliptic_fields)))
             return
         if kind in ("grid_operator", "local_rate") or (kind == "local_source" and "source" not in v.attrs):
             named_fluxes = _named_fluxes(v)
             if not v.attrs.get("flux", True) and named_fluxes is not None:
                 raise ValueError(
-                    "operator_call '%s' sets flux=False (source-only) but also requests named "
+                    "call '%s' sets flux=False (source-only) but also requests named "
                     "fluxes %r; a source-only stage has no flux divergence"
                     % (v.attrs.get("operator"), named_fluxes))
             if named_fluxes is not None:
                 if model is None:
                     raise NotImplementedError(
-                        "emit_cpp_program cannot lower operator_call '%s' with named fluxes %r "
+                        "emit_cpp_program cannot lower call '%s' with named fluxes %r "
                         "without the physical model that declares them (m.flux_term); pass model="
                         % (v.attrs.get("operator"), named_fluxes))
                 impl_f = _model_impl(model)
                 for f in named_fluxes:
                     if f not in impl_f._flux_terms:
                         raise ValueError(
-                            "unknown flux_term '%s' in operator_call '%s'; declared flux_terms: %s"
+                            "unknown flux_term '%s' in call '%s'; declared flux_terms: %s"
                             % (f, v.attrs.get("operator"), sorted(impl_f._flux_terms)))
                 if getattr(impl_f, "_source", None):
                     raise NotImplementedError(
-                        "operator_call '%s' with named fluxes %r needs a model whose default "
+                        "call '%s' with named fluxes %r needs a model whose default "
                         "source is empty (no m.source); declare it as a source_term instead"
                         % (v.attrs.get("operator"), named_fluxes))
             extra = [s for s in (v.attrs.get("sources") or []) if s != "default"]
             if extra:
                 if model is None:
                     raise NotImplementedError(
-                        "emit_cpp_program cannot lower operator_call '%s' with named sources %r "
+                        "emit_cpp_program cannot lower call '%s' with named sources %r "
                         "without the physical model that declares them (m.source_term); pass model="
                         % (v.attrs.get("operator"), extra))
                 impl = _model_impl(model)
                 for s in extra:
                     if s not in impl._source_terms:
                         raise ValueError(
-                            "unknown source_term '%s' in operator_call '%s'; declared source_terms: %s"
+                            "unknown source_term '%s' in call '%s'; declared source_terms: %s"
                             % (s, v.attrs.get("operator"), sorted(impl._source_terms)))
             return
         if kind == "local_source":
             if model is None:
                 raise NotImplementedError(
-                    "emit_cpp_program cannot lower operator_call '%s' without the physical model "
+                    "emit_cpp_program cannot lower call '%s' without the physical model "
                     "that declares its source_term; pass model=" % v.attrs.get("operator"))
             source = v.attrs.get("source")
             if source not in _model_impl(model)._source_terms:
                 raise ValueError(
-                    "unknown source_term '%s' in operator_call '%s'; declared source_terms: %s"
+                    "unknown source_term '%s' in call '%s'; declared source_terms: %s"
                     % (source, v.attrs.get("operator"), sorted(_model_impl(model)._source_terms)))
             return
         if kind in ("local_linear_operator", "projection"):
             return
         raise NotImplementedError(
-            "emit_cpp_program cannot lower operator_call kind %r (operator %r)"
+            "emit_cpp_program cannot lower call kind %r (operator %r)"
             % (kind, v.attrs.get("operator")))
     if v.op in _MODEL_OPS:
         if model is None:

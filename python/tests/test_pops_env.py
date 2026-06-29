@@ -45,9 +45,37 @@ def _program(name="env_demo"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
+    R = P._legacy_rhs(state=U, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
+
+
+def _model():
+    from pops import model
+    from pops.ir.expr import Const, Var
+    from pops.ir.ops import sqrt
+    mod = model.Module("env_iso")
+    u = mod.state_space(
+        "U", ("rho", "mx", "my"),
+        roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
+    cs2 = 0.5
+    cs = sqrt(cs2)
+    zero = Const(0.0)
+    mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator",
+        capabilities={"default": True}, expr=rho)
+    mod.operator(
+        name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+        expr={"x": [mx, mx * mx / rho + cs2 * rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho + cs2 * rho]})
+    mod.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
+                    y=[my / rho - cs, my / rho, my / rho + cs])
+    mod.operator(
+        name="source", signature=(u, fields) >> model.Rate(u), kind="local_source",
+        capabilities={"default": True}, expr=[zero, zero, zero])
+    return mod
 
 
 def _handle(env, program=None):
@@ -218,7 +246,7 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         monkeypatch.setenv("POPS_AUTOTUNE", "basic")
         monkeypatch.delenv("POPS_JIT_BACKDOOR", raising=False)
 
-        compiled = cd.compile_problem(time=_program("wired"), force=True)
+        compiled = cd.compile_problem(model=_model(), time=_program("wired"), force=True)
 
         # The env snapshot is recorded on the handle and surfaced in inspect().
         assert compiled.codegen_env is not None
@@ -234,7 +262,7 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         assert "wired.cpp" in produced, produced
 
         # A second call hits the cache (the placeholder .so exists) and STILL records the env.
-        again = cd.compile_problem(time=_program("wired"), force=False)
+        again = cd.compile_problem(model=_model(), time=_program("wired"), force=False)
         assert again.codegen_env is not None
         assert again.so_path == compiled.so_path
 
@@ -252,7 +280,7 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         monkeypatch.setenv("POPS_CODEGEN_DIR", tmp)
         monkeypatch.delenv("POPS_KEEP_GENERATED", raising=False)
-        compiled = cd.compile_problem(time=_program("dbg"), force=True, debug=True)
+        compiled = cd.compile_problem(model=_model(), time=_program("dbg"), force=True, debug=True)
         assert compiled.codegen_env.keep_generated is True
         assert compiled.generated_sources and os.path.exists(compiled.generated_sources[0])
 

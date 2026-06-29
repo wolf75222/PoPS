@@ -90,7 +90,7 @@ def euler_with_external_riemann(riemann):
     m.flux("F",
            x=[mx, mx * u + p, my * u, (E + p) * u],
            y=[my, mx * v, my * v + p, (E + p) * v])
-    # The external brick is selected exactly like a native one (m.riemann("hllc")); it lives in
+    # The external brick is selected exactly like a native one (m.riemann(HLLC())); it lives in
     # the SAME type system -- finite_volume_rate reads its descriptor scheme and records it.
     m.finite_volume_rate("advance", riemann=riemann)
     return m
@@ -122,7 +122,7 @@ def main():
     # 5) The compiled run (the real dlopen of the brick kernel + the AOT Kokkos build) needs the
     # brick .so AND a matching toolchain; honestly deferred to ROMEO rather than faked here.
     try:
-        m.compile(backend="production")
+        m.compile(backend=pops.codegen.Production())
         print("\ncompiled run: OK")
     except (RuntimeError, NotImplementedError, OSError) as exc:
         print("\ncompiled run requires the brick .so + a matching Kokkos AOT toolchain (ROMEO):")

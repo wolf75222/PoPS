@@ -271,22 +271,23 @@ def _run_section_b(t):
     assert compiled.program_name == "divgrad_step", "handle carries the program name"
 
     try:
-        compiled_model = passive_model("divgrad_block").compile(backend="production")
+        from pops.codegen import Production
+        compiled_model = passive_model("divgrad_block")._compile_for_runtime(backend=Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
 
     sim._install_program_so(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
 
     # OFFLINE reference: solve (I - alpha*div(grad)) phi = rho0 on the SAME centered div(grad) operator
     # (the wide-stencil Helmholtz the compiled gradient->divergence chain composes) with numpy CG; the

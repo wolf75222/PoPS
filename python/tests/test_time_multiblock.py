@@ -18,7 +18,7 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
     single-block compiled Program (the offline per-block reference -- the blocks are uncoupled, no
     elliptic, so the multi-block step must equal independent single-block steps). The two states must
     match to round-off, and each block must have actually advanced. Runs in CI (gate-python rebuilds
-    _pops) and locally once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent,
+    _pops) and locally once _pops is rebuilt; skips if _pops lacks _install_program_so, numpy/_pops is absent,
     no compiler/Kokkos is visible, or the .so compile fails -- never faking the engine.
 """
 from pops.numerics.reconstruction import FirstOrder
@@ -82,7 +82,7 @@ def single_block_program(t, name, block):
     P = t.Program(name)
     dt = P.dt
     U = P.state(block)
-    R = P._rhs_legacy(name="R_" + block, state=U, flux=True, sources=["decay"])
+    R = P._legacy_rhs(name="R_" + block, state=U, flux=True, sources=["decay"])
     P.commit(block, P.linear_combine(block + "_next", U + dt * R))
     return P
 
@@ -95,7 +95,7 @@ def two_block_program(t, name="two_block_passive"):
     dt = P.dt
     for blk in ("a", "b"):
         U = P.state(blk)
-        R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
+        R = P._legacy_rhs(name="R_" + blk, state=U, flux=True, sources=["decay"])
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
     return P
 
@@ -110,7 +110,7 @@ def section_a(t):
     dt = P.dt
     for blk in ("a", "b"):
         U = P.state(blk)
-        R = P._rhs_legacy(state=U, flux=True, sources=["default"])
+        R = P._legacy_rhs(state=U, flux=True, sources=["default"])
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
@@ -120,8 +120,8 @@ def section_a(t):
     Pro = t.Program("readonly_b")
     Ua = Pro.state("a")
     Ub = Pro.state("b")  # noqa: F841 -- declared, read by the coupled charge but never committed
-    fa = Pro._solve_fields(Ua)
-    Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
+    fa = Pro._legacy_solve_fields(Ua)
+    Ra = Pro._legacy_rhs(state=Ua, fields=fa, sources=["default"])
     Pro.commit("a", Pro.linear_combine("a1", Ua + Pro.dt * Ra))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
     src_ro = Pro.emit_cpp_program()
@@ -147,8 +147,8 @@ def section_a(t):
     Uac = Pc.state("a")
     Ubc = Pc.state("b")
     Pc.solve_fields_from_blocks([Uac, Ubc])
-    Pc.commit("a", Pc.linear_combine("a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"])))
-    Pc.commit("b", Pc.linear_combine("b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"])))
+    Pc.commit("a", Pc.linear_combine("a1", Uac + Pc.dt * Pc._legacy_rhs(state=Uac, sources=["default"])))
+    Pc.commit("b", Pc.linear_combine("b1", Ubc + Pc.dt * Pc._legacy_rhs(state=Ubc, sources=["default"])))
     src_c = Pc.emit_cpp_program()
     chk("ctx.solve_fields_from_blocks(" in src_c,
         "solve_fields_from_blocks lowers to the coupled multi-block solve")
@@ -171,10 +171,10 @@ def section_a(t):
     Uacf = Pcf.state("a")
     Ubcf = Pcf.state("b")
     Pcf.commit("a", Pcf.linear_combine(
-        "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(state=Uacf, flux=True, sources=["default"])))
+        "a_n", Uacf + Pcf.dt * Pcf._legacy_rhs(state=Uacf, flux=True, sources=["default"])))
 
     def _cf_body(prog, x):
-        return prog.linear_combine(None, x + prog.dt * prog._rhs_legacy(state=x, flux=True, sources=["default"]))
+        return prog.linear_combine(None, x + prog.dt * prog._legacy_rhs(state=x, flux=True, sources=["default"]))
 
     Pcf.commit("b", Pcf.range(Ubcf, 2, _cf_body))
     src_cf = Pcf.emit_cpp_program()
@@ -193,7 +193,7 @@ def section_b(t):
         print("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return
 
@@ -226,35 +226,35 @@ def section_b(t):
         sim = pops.System(n=n, L=1.0, periodic=True)
         for blk in blocks:
             try:
-                cm = passive_model("blk_" + blk).compile(backend="production")
+                cm = passive_model("blk_" + blk)._compile_for_runtime(backend=pops.codegen.Production())
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
             sim._add_equation(blk, cm,
                              spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                             time=pops.Explicit(method="euler"))
+                             time=pops.Explicit.euler())
         return sim
 
     # Reference: two INDEPENDENT single-block systems.
     sim_a = make_sim(["a"])
-    sim_a.set_state("a", ic_a[None, :, :])
+    sim_a._set_state("a", ic_a[None, :, :])
     sim_a._install_program_so(comp_a.so_path)
     sim_a.step(dt)
-    ref_a = np.array(sim_a.get_state("a"))
+    ref_a = np.array(sim_a._get_state("a"))
 
     sim_b = make_sim(["b"])
-    sim_b.set_state("b", ic_b[None, :, :])
+    sim_b._set_state("b", ic_b[None, :, :])
     sim_b._install_program_so(comp_b.so_path)
     sim_b.step(dt)
-    ref_b = np.array(sim_b.get_state("b"))
+    ref_b = np.array(sim_b._get_state("b"))
 
     # The multi-block system: blocks added in the SAME order the Program declares them (a then b).
     sim_ab = make_sim(["a", "b"])
-    sim_ab.set_state("a", ic_a[None, :, :])
-    sim_ab.set_state("b", ic_b[None, :, :])
+    sim_ab._set_state("a", ic_a[None, :, :])
+    sim_ab._set_state("b", ic_b[None, :, :])
     sim_ab._install_program_so(comp_ab.so_path)
     sim_ab.step(dt)
-    got_a = np.array(sim_ab.get_state("a"))
-    got_b = np.array(sim_ab.get_state("b"))
+    got_a = np.array(sim_ab._get_state("a"))
+    got_b = np.array(sim_ab._get_state("b"))
 
     e_a = float(np.abs(got_a - ref_a).max())
     e_b = float(np.abs(got_b - ref_b).max())

@@ -72,9 +72,9 @@ pytest = _SkipModule()
 
 def _build(n=16):
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),
                             elliptic=pops.ChargeDensity(charge=1.0)),
@@ -137,8 +137,8 @@ def test_parallel_equals_serial_mono_rank(tmp_path):
     if not hasattr(sim._s, "local_boxes"):
         pytest.skip("module _pops sans local_boxes/local_state (build anterieur a ADC-66) : "
                     "reconstruire adc_cpp pour exercer le chemin parallele")
-    p_ser = sim.write(str(tmp_path / "ser"), format="hdf5", parallel=False)
-    p_par = sim.write(str(tmp_path / "par"), format="hdf5", parallel=True)
+    p_ser = sim.write(str(tmp_path / "ser"), format=pops.output.HDF5(), parallel=False)
+    p_par = sim.write(str(tmp_path / "par"), format=pops.output.HDF5(), parallel=True)
     _assert_dumps_equal(_read_h5(p_ser), _read_h5(p_par))
 
 
@@ -152,7 +152,7 @@ def test_parallel_clear_error_when_h5py_without_mpi(tmp_path):
         pytest.skip("h5py compile AVEC MPI : le cas 'h5py sans MPI' n'est pas reproductible ici")
     sim = _build()
     with pytest.raises(RuntimeError) as exc:
-        sim.write(str(tmp_path / "x"), format="hdf5", parallel=True)
+        sim.write(str(tmp_path / "x"), format=pops.output.HDF5(), parallel=True)
     msg = str(exc.value)
     assert "MPI" in msg, "le message d'erreur doit pointer le defaut de support MPI"
     assert "parallel=False" in msg, "le message d'erreur doit proposer le remede parallel=False"
@@ -167,7 +167,7 @@ def test_serial_hdf5_default_unchanged(tmp_path):
     sim = _build()
     for _ in range(3):
         sim.step(2e-3)
-    p = sim.write(str(tmp_path / "ser"), format="hdf5")  # defaut parallel=False
+    p = sim.write(str(tmp_path / "ser"), format=pops.output.HDF5())  # defaut parallel=False
     nv, ny, nx = sim._s.n_vars("ions"), sim._s.ny(), sim._s.nx()
     expected = np.asarray(sim.state_global("ions"), dtype=np.float64).reshape(nv, ny, nx)
     with h5py.File(p, "r") as f:
@@ -191,7 +191,7 @@ def test_parallel_rejected_for_non_hdf5(tmp_path):
     """(e) write(parallel=True) sur un format != 'hdf5' : rejet explicite."""
     sim = _build()
     with pytest.raises(ValueError) as exc:
-        sim.write(str(tmp_path / "x"), format="npz", parallel=True)
+        sim.write(str(tmp_path / "x"), format=pops.output.NPZ(), parallel=True)
     assert "hdf5" in str(exc.value)
 
 
@@ -209,7 +209,7 @@ def manual_np_check():  # pragma: no cover -- lance a la main sous mpirun -n>1 (
     for _ in range(5):
         sim.step(2e-3)
     out = os.path.join(tempfile.gettempdir(), "pops_hdf5_par_check")
-    path = sim.write(out, format="hdf5", parallel=True)
+    path = sim.write(out, format=pops.output.HDF5(), parallel=True)
     nv, ny, nx = sim._s.n_vars("ions"), sim._s.ny(), sim._s.nx()
     ref_state = np.asarray(sim.state_global("ions"), dtype=np.float64).reshape(nv, ny, nx)
     ref_phi = np.asarray(sim.potential_global(), dtype=np.float64).reshape(ny, nx)

@@ -11,9 +11,9 @@ a closure is a decorated callable, and a model is a recorded specification that 
 ``@closure(order=N)`` validates that the wrapped callable returns EXACTLY the standardized
 moments of order ``N+1`` (the keys ``S{p}{q}`` with ``p + q == N + 1``); a wrong key set
 raises a clear ``TypeError`` at evaluation time. ``CartesianVelocityMoments`` records the
-order, the closure and the numerics; chainable ``add_*`` methods record transport, the
-Poisson coupling and sources; ``.build(name)`` is the only call that touches the engine
-and returns a ``physics`` model.
+order, the closure and the numerics; ``add_source(MomentSource(...))`` records typed
+source descriptors; ``.build(name)`` is the only call that touches the engine and returns
+a ``physics`` model.
 
 Pure Python, no compiler needed -- the example builds the model object and prints it.
 

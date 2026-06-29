@@ -13,26 +13,22 @@ Run::
 Requires a compiler + a visible Kokkos (``POPS_KOKKOS_ROOT``); prints a skip notice and exits 0
 otherwise. cf. docs/sphinx/reference/time-program.md.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 try:
     import numpy as np
 
     import pops
-    from pops.fields import catalog as field_catalog
+    from pops.solvers import GeometricMG
     from pops import time as adctime
+    from _module_models import explicit_euler, first_order_rusanov, isothermal_transport_module
 except Exception as exc:  # noqa: BLE001
     print("skip rk4_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 
 def gas_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return isothermal_transport_module("rk4_model")
 
 
 N = 48
@@ -50,11 +46,10 @@ def build_system():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.install(None,
                 instances={"plasma": {"model": gas_model(),
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
-                                      "time": pops.Explicit(method="euler"),
+                                      "spatial": first_order_rusanov(),
+                                      "time": explicit_euler(),
                                       "initial": initial_state()}},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     return sim
 
 
@@ -65,9 +60,9 @@ def rk4_program():
 
 
 def offline_rhs(ref, U):
-    ref.set_state("plasma", U)
+    ref._set_state("plasma", U)
     ref.solve_fields()
-    return np.array(ref.eval_rhs("plasma"))
+    return np.array(ref._eval_rhs("plasma"))
 
 
 def main():
@@ -83,13 +78,12 @@ def main():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.install(compiled,
                 instances={"plasma": {"model": gas_model(),
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
+                                      "spatial": first_order_rusanov(),
                                       "initial": initial_state()}},
-                solvers={"phi": field_catalog.GeometricMG()})
-    U0 = np.array(sim.get_state("plasma"))
+                solvers={"phi": GeometricMG()})
+    U0 = np.array(sim._get_state("plasma"))
     sim.step(dt)
-    U_prog = np.array(sim.get_state("plasma"))
+    U_prog = np.array(sim._get_state("plasma"))
 
     ref = build_system()
     k1 = offline_rhs(ref, U0)

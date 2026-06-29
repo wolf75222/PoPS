@@ -62,7 +62,7 @@ def chk(cond, label):
 # PotentialForce. The force reads the field solve's phi/grad, so holding the field solve between
 # refreshes is observable in the trajectory (a held phi forces a stale E into the momentum source).
 def plasma_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=1.0),
                      elliptic=pops.ChargeDensity(charge=1.0))
@@ -76,12 +76,12 @@ def make_sim():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim._add_block("ions", plasma_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+                  time=pops.Explicit.euler())
+    sim._set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
+    sim._set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
     return sim
 
 
@@ -99,7 +99,7 @@ def held_program(name="spec3_runtime_held"):
     U = P.state("ions")
     f = P.fields("phi", from_state=U)
     f.attrs["schedule"] = adctime.every(EVERY).hold()  # hold the field solve between refreshes
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
+    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.define("U1", U + dt * R))
     return P
 
@@ -107,7 +107,7 @@ def held_program(name="spec3_runtime_held"):
 # --- toolchain probe: skip cleanly if the runtime chain is not buildable here ---------------------
 probe = pops.System(n=8, L=1.0, periodic=True)
 if not hasattr(probe, "_install_program_so") or not hasattr(probe, "step_cfl"):
-    _skip("_pops lacks install_program / step_cfl (rebuild _pops)")
+    _skip("_pops lacks _install_program_so / step_cfl (rebuild _pops)")
 
 print("== compile the held-schedule Program to a problem.so ==")
 try:
@@ -128,9 +128,9 @@ DT = 1e-3
 # --- (2) the compiled step ADVANCES the state (do this first: it also primes the chain) -----------
 print("== (2) the compiled step advances the state ==")
 sim2 = install(make_sim())
-u0 = np.array(sim2.get_state("ions"))
+u0 = np.array(sim2._get_state("ions"))
 dt_used = sim2.step_cfl(0.4)
-u1 = np.array(sim2.get_state("ions"))
+u1 = np.array(sim2._get_state("ions"))
 change = float(np.abs(u1 - u0).max())
 chk(dt_used > 0.0 and np.isfinite(dt_used), "step_cfl returned a finite positive dt (%.6g)" % dt_used)
 chk(np.all(np.isfinite(u1)), "the stepped state is finite")
@@ -182,18 +182,18 @@ orphan = pops.System(n=N, L=1.0, periodic=True)
 _m = plasma_model()
 orphan._add_block("ions", _m,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                 time=pops.Explicit(method="euler"))
-orphan.set_poisson("charge_density", "geometric_mg")
+                 time=pops.Explicit.euler())
+orphan._set_poisson("charge_density", "geometric_mg")
 _x = (np.arange(N) + 0.5) / N
 _X, _Y = np.meshgrid(_x, _x, indexing="ij")
 _rho = 1.0 + 0.3 * np.sin(2 * np.pi * _X) * np.cos(2 * np.pi * _Y)
-orphan.set_state("ions", np.stack([_rho, 0.4 * _rho, -0.2 * _rho]))
+orphan._set_state("ions", np.stack([_rho, 0.4 * _rho, -0.2 * _rho]))
 orphan._install_program_so(compiled.so_path)  # the C++ closure now owns everything it needs
 del _m  # drop the Python model object the step would need IF it called back into Python
 gc.collect()
-ou0 = np.array(orphan.get_state("ions"))
+ou0 = np.array(orphan._get_state("ions"))
 orphan.step_cfl(0.4)  # must run on the C++ closure alone (no Python model object alive)
-ou1 = np.array(orphan.get_state("ions"))
+ou1 = np.array(orphan._get_state("ions"))
 chk(float(np.abs(ou1 - ou0).max()) > 0.0 and np.all(np.isfinite(ou1)),
     "the compiled step runs after the Python model object is dropped + gc'd (C++-only closure)")
 
@@ -215,7 +215,7 @@ J = EVERY + 1    # checkpoint at a NON-due boundary (J % EVERY != 0): the held n
 ref = install(make_sim())
 for _ in range(K):
     ref.step(DT)
-ref_u = np.array(ref.get_state("ions"))
+ref_u = np.array(ref._get_state("ions"))
 ref_t = float(ref.time())
 ref_ms = ref.macro_step()
 
@@ -237,7 +237,7 @@ chk(res.macro_step() == J and abs(res.time() - J * DT) < 1e-15,
     "clock restored (t=%.6g, macro_step=%d)" % (res.time(), res.macro_step()))
 for _ in range(K - J):
     res.step(DT)
-res_u = np.array(res.get_state("ions"))
+res_u = np.array(res._get_state("ions"))
 
 e_restart = float(np.abs(res_u - ref_u).max())
 chk(e_restart == 0.0, "restart == continuous run bit-identical over %d steps (max|d|=%.2e)"

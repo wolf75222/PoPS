@@ -53,8 +53,8 @@ print("== (A) IR + codegen ==")
 def _fe(name="fe_dtbound"):
     P = adctime.Program(name)
     U = P.state("ions")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -134,13 +134,13 @@ print("== (B) step_cfl applies min(native CFL, program dt bound) ==")
 
 probe = pops.System(n=8, L=1.0, periodic=True)
 if not hasattr(probe, "_install_program_so") or not hasattr(probe, "set_program_cadence"):
-    _skip("_pops lacks install_program (rebuild _pops) (A passed)")
+    _skip("_pops lacks _install_program_so (rebuild _pops) (A passed)")
 
 
 def transport_model():
     # Pure transport (isothermal, NoSource); BackgroundDensity(n0=0) keeps solve_fields well-defined
     # but INERT (no Poisson feedback into the flux), so the compiled cadence is bit-exact vs native.
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.NoSource(),
                      elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
@@ -154,12 +154,12 @@ def make_sim():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim._add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+                  time=pops.Explicit.euler())
+    sim._set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
+    sim._set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
     return sim
 
 
@@ -168,8 +168,8 @@ def fe_program(name, *, factor=None):
     multiple of the native single-block CFL dt = cfl * h / w): factor < 1 tightens, factor > 1 loosens."""
     P = adctime.Program(name)
     U = P.state("ions")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     P.commit("ions", P.linear_combine("U1", U + P.dt * R))
     if factor is not None:
         @P.dt_bound
@@ -221,15 +221,15 @@ chk(abs(dt_loose - dt_native) < 1e-14,
 # (B4) the tighter-bound program actually advanced the state, and step_cfl(cfl) == step(dt_tight)
 # bit-exact (step_cfl just computes dt -- now the program bound -- then runs the same cadence as step).
 sim_t = install(prog_tight)
-u0 = np.array(sim_t.get_state("ions"))
+u0 = np.array(sim_t._get_state("ions"))
 dt_t = sim_t.step_cfl(CFL)
-u1 = np.array(sim_t.get_state("ions"))
+u1 = np.array(sim_t._get_state("ions"))
 chk(float(np.abs(u1 - u0).max()) > 1e-9, "tight-bound program advanced the state")
 chk(abs(dt_t - dt_tight) < 1e-12, "tight-bound dt reproducible (%.10g vs %.10g)" % (dt_t, dt_tight))
 
 sim_ref = install(prog_tight)
 sim_ref.step(dt_t)  # drive the reference at the dt step_cfl chose
-u_ref = np.array(sim_ref.get_state("ions"))
+u_ref = np.array(sim_ref._get_state("ions"))
 chk(float(np.abs(u1 - u_ref).max()) == 0.0,
     "step_cfl(cfl) == step(dt_tight) bit-exact (max|d|=%.2e)" % float(np.abs(u1 - u_ref).max()))
 

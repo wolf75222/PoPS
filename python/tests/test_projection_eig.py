@@ -253,7 +253,7 @@ def test_system_end_to_end():
         else:
             s._s.add_compiled_block("toy", so, limiter="minmod", riemann="rusanov",
                                     recon="conservative", time="explicit", substeps=1)
-        s.set_state("toy", init(N))
+        s._set_state("toy", init(N))
         return s
 
     tmp = tempfile.mkdtemp()
@@ -261,30 +261,33 @@ def test_system_end_to_end():
         m_eig = build_pkg("e")
         m_none = build_pkg("n")  # meme transport ; on neutralise sa projection pour la reference
         m_none._proj = None
-        for backend, adder in (("production", "native"), ("aot", "aot")):
-            so = m_eig.compile(os.path.join(tmp, "eig_%s.so" % backend), INCLUDE, backend=backend)
-            so_n = m_none.compile(os.path.join(tmp, "none_%s.so" % backend), INCLUDE, backend=backend)
+        for label, backend, adder in (
+            ("production", pops.codegen.Production(), "native"),
+            ("aot", pops.codegen.AOT(), "aot"),
+        ):
+            so = m_eig.compile(os.path.join(tmp, "eig_%s.so" % label), INCLUDE, backend=backend)
+            so_n = m_none.compile(os.path.join(tmp, "none_%s.so" % label), INCLUDE, backend=backend)
             # run AVEC hook
             s = make_sys(so, adder)
             run = []
             for _ in range(NSTEPS):
                 s.step(DT)
-                run.append(np.array(s.get_state("toy")).reshape(3, N, N))
+                run.append(np.array(s._get_state("toy")).reshape(3, N, N))
             # reference : transport SANS hook un pas, puis projection numpy (mirroir projection_value)
             sr = make_sys(so_n, adder)
             cur, ref = init(N), []
             for _ in range(NSTEPS):
-                sr.set_state("toy", cur)
+                sr._set_state("toy", cur)
                 sr.step(DT)
-                cur = m_eig.projection_value(np.array(sr.get_state("toy")).reshape(3, N, N))
+                cur = m_eig.projection_value(np.array(sr._get_state("toy")).reshape(3, N, N))
                 ref.append(cur)
             d = max(float(np.max(np.abs(a - b))) for a, b in zip(run, ref))
             chk(all(np.allclose(a, b, rtol=0.0, atol=1e-10) for a, b in zip(run, ref)),
                 "%s : etat post-pas == transport puis projection(temoin VP) numpy (ecart %.2e)"
-                % (backend, d))
+                % (label, d))
             # le temoin VP est ACTIF : q2 est mis a la cible dans au moins une cellule.
             chk(any(np.any(np.isclose(a[2], target)) for a in run),
-                "%s : la branche VP complexe corrige q2 (cible atteinte)" % backend)
+                "%s : la branche VP complexe corrige q2 (cible atteinte)" % label)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

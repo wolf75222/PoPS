@@ -24,7 +24,7 @@ import sys
 import pytest
 
 from pops.mesh.geometry import Disc, NoWall, DiscDomain, HalfPlane
-from pops.mesh.masks import NoMask, Staircase, CutCell, lower_disc_mode, DISC_MODE_TOKENS
+from pops.mesh.masks import NoMask, Staircase, CutCell, _lower_disc_mode, DISC_MODE_TOKENS
 
 
 # --------------------------------------------------------------------------------------------
@@ -42,12 +42,13 @@ def test_disc_mode_lowers_to_legacy_tokens():
     assert NoMask().lower() == "none"
     assert Staircase().lower() == "staircase"
     assert CutCell().lower() == "cutcell"
-    # The shared coercion: typed -> token, legacy string -> unchanged, bad -> clear error.
-    assert lower_disc_mode(NoMask()) == "none"
-    assert lower_disc_mode(Staircase()) == "staircase"
-    assert lower_disc_mode(CutCell()) == "cutcell"
+    # The private lowering seam maps typed masks to native tokens.
+    assert _lower_disc_mode(NoMask()) == "none"
+    assert _lower_disc_mode(Staircase()) == "staircase"
+    assert _lower_disc_mode(CutCell()) == "cutcell"
+    # Private seam only: native tokens can pass through after descriptor validation/lowering.
     for tok in DISC_MODE_TOKENS:
-        assert lower_disc_mode(tok) == tok  # string passes through unchanged
+        assert _lower_disc_mode(tok) == tok
 
 
 def test_disc_domain_lowers_to_set_disc_domain_args():
@@ -55,16 +56,16 @@ def test_disc_domain_lowers_to_set_disc_domain_args():
     assert dd.lower() == (0.5, 0.5, 0.4, "cutcell")
     # Default mode is the inert NoMask -> "none" (mask only, full Cartesian transport).
     assert DiscDomain(center=(0.25, 0.75), radius=0.3).lower() == (0.25, 0.75, 0.3, "none")
-    # mode= may also be a legacy string.
-    assert DiscDomain(center=(0.0, 0.0), radius=0.2, mode="staircase").lower() \
-        == (0.0, 0.0, 0.2, "staircase")
+    # Public DiscDomain rejects legacy string selectors.
+    with pytest.raises(TypeError):
+        DiscDomain(center=(0.0, 0.0), radius=0.2, mode="staircase")
 
 
 def test_lowering_rejects_bad_inputs():
     with pytest.raises(ValueError):
-        lower_disc_mode("bogus")           # unknown mode string
+        _lower_disc_mode("bogus")          # unknown native mode token
     with pytest.raises(TypeError):
-        lower_disc_mode(42)                # not a mask, not a string
+        _lower_disc_mode(42)               # not a mask, not a native token
     with pytest.raises(TypeError):
         HalfPlane().lower_wall()           # a half-plane is not a Poisson wall
     with pytest.raises(ValueError):
@@ -118,9 +119,9 @@ def _build(n=32, L=1.0):
 def test_set_disc_domain_accepts_typed_disc_domain():
     # Legacy 4-arg string form (mode default 'none') vs a typed DiscDomain carrying center+radius.
     s_str = _build()
-    s_str.set_disc_domain(0.5, 0.5, 0.3)
+    s_str._set_disc_domain(0.5, 0.5, 0.3)
     s_typed = _build()
-    s_typed.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=NoMask()))
+    s_typed._set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=NoMask()))
     m_str = np.array(s_str.disc_mask())
     m_typed = np.array(s_typed.disc_mask())
     assert m_str.shape == (32, 32)
@@ -133,9 +134,9 @@ def test_set_disc_domain_accepts_typed_mode():
     # mode= as a legacy string vs a typed mask -> identical mask (mode='none' is host-runnable;
     # the staircase/cutcell TRANSPORT physics is Kokkos-gated, only the lowering is asserted there).
     s_str = _build()
-    s_str.set_disc_domain(0.5, 0.5, 0.3, mode="none")
+    s_str._set_disc_domain(0.5, 0.5, 0.3, mode="none")
     s_typed = _build()
-    s_typed.set_disc_domain(0.5, 0.5, 0.3, mode=NoMask())
+    s_typed._set_disc_domain(0.5, 0.5, 0.3, mode=NoMask())
     assert np.array_equal(np.array(s_str.disc_mask()), np.array(s_typed.disc_mask()))
 
 
@@ -143,14 +144,14 @@ def test_set_disc_domain_accepts_typed_mode():
 def test_set_disc_domain_rejects_double_spec():
     # A typed DiscDomain already carries center+radius+mode: passing extra scalars is an error.
     with pytest.raises(TypeError):
-        _build().set_disc_domain(DiscDomain(center=(0.0, 0.0), radius=0.4), 0.5, 0.3)
+        _build()._set_disc_domain(DiscDomain(center=(0.0, 0.0), radius=0.4), 0.5, 0.3)
 
 
 @requires_engine
 def test_legacy_four_arg_string_form_unchanged():
     # The historical signature still works untouched (no regression).
     s = _build()
-    s.set_disc_domain(0.5, 0.5, 0.3, "none")  # positional string, exactly as before
+    s._set_disc_domain(0.5, 0.5, 0.3, "none")  # positional string, exactly as before
     assert int(np.array(s.disc_mask()).sum()) > 0
 
 
@@ -159,8 +160,8 @@ def _poisson_system(wall_kw):
     from pops.numerics.reconstruction.limiters import Minmod
     from pops.numerics.riemann import Rusanov
     s = _build()
-    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet", **wall_kw)
-    model = pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),
+    s._set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet", **wall_kw)
+    model = pops.Model(state=pops.FluidState.isothermal(cs2=1.0),
                        transport=pops.IsothermalFlux(), source=pops.NoSource(),
                        elliptic=pops.ChargeDensity())
     s._add_equation("e", model=model,
@@ -205,7 +206,7 @@ def test_set_poisson_wall_coercion_is_transparent():
     # A non-wall TYPED object is a genuine user error (the typed wall surface is new, so there is no
     # legacy path to preserve) -> clear TypeError.
     with pytest.raises(TypeError):
-        _build().set_poisson(wall=12345)
+        _build()._set_poisson(wall=12345)
     # A STRING passes straight through to the native set_poisson (the coercion lowers a typed wall
     # and returns None for any string), so an unknown token like "square" stays the native's
     # responsibility exactly as before -- the typed coercion never adds a stricter string rejection

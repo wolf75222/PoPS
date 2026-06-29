@@ -30,7 +30,7 @@ class Program(_ProgramCore, _ProgramLocal, _ProgramSolve, _ProgramAuthoring,
         # De-stringing is the ONE public path (Spec 5 sec.15, ADC-479 criteria 23 + 27): the public
         # P.call requires a typed operator handle and the public P.rhs requires the typed terms= list
         # (the legacy string operator name / flux=/sources= form is REFUSED). The byte-identical
-        # builders survive ONLY as the internal _call / _rhs_legacy, which the typed front doors and
+        # builders survive ONLY as the internal _call / _rate_from_transport, which the typed front doors and
         # the pops.lib.time macros lower through -- no opt-in flag, no second public path.
         self._values = []
         self._next_id = 0

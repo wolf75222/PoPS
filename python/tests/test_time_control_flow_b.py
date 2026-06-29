@@ -36,7 +36,7 @@ def _fe_body():
     """A Forward-Euler body x -> x + dt*(-div F): rhs(sources=['default']) lowers with NO model, so it
     serves the codegen asserts (one ``ctx.rhs_into`` per emitted copy of the body)."""
     def body(_P, x):
-        return _P.linear_combine(x + _P.dt * _P._rhs_legacy(state=x, sources=["default"]))
+        return _P.linear_combine(x + _P.dt * _P._legacy_rhs(state=x, sources=["default"]))
     return body
 
 
@@ -179,7 +179,7 @@ def _run_section_b(t):
     n = 8
     sim = pops.System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "_install_program_so"):
-        print("-- (B) skipped: _pops lacks install_program (rebuild _pops) --")
+        print("-- (B) skipped: _pops lacks _install_program_so (rebuild _pops) --")
         return None
 
     from pops.physics.facade import Model
@@ -201,19 +201,19 @@ def _run_section_b(t):
     def run(handle):
         s = pops.System(n=n, L=1.0, periodic=True)
         try:
-            cm = _passive_model("blk_" + handle.program_name).compile(backend="production")
+            cm = _passive_model("blk_" + handle.program_name)._compile_for_runtime(backend=pops.codegen.Production())
         except RuntimeError as exc:
             print("-- (B) skipped: model compile failed: %s --" % str(exc)[:140])
             return None
         s._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                       time=pops.Explicit(method="euler"))
+                       time=pops.Explicit.euler())
         x = (np.arange(n) + 0.5) / n
         X, Y = np.meshgrid(x, x, indexing="ij")
         rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-        s.set_state("blk", np.stack([rho0]))
+        s._set_state("blk", np.stack([rho0]))
         s._install_program_so(handle.so_path)
         s.step(0.05)  # dt irrelevant: the body is dt-free
-        return rho0, np.array(s.get_state("blk"))[0]
+        return rho0, np.array(s._get_state("blk"))[0]
 
     # OFFLINE reference for the contraction: x_{k+1} = 0.5 x_k + 0.5 target, target = 2 rho0.
     res = run(compiled)

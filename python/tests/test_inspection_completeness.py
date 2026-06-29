@@ -32,7 +32,7 @@ try:
     import pops  # noqa: F401
     from pops.codegen import BindReport, CompiledReport, RequirementsReport
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.physics.model import Param
+    from pops.physics.model import ConstParam, RuntimeParam
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_inspection_completeness (pops unavailable: %s)" % exc)
@@ -44,8 +44,8 @@ def _program(name="intro_demo"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f = P._solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields("phi", U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -59,7 +59,7 @@ def _model(*, n_vars=4, n_aux=1, aux_names=("B_z",), params=None, caps=None,
     cons = ["rho", "mx", "my", "E"][:n_vars]
     roles = ["Density", "MomentumX", "MomentumY", "Energy"][:n_vars]
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=cons, cons_roles=roles, prim_names=cons, n_vars=n_vars, gamma=1.4,
         n_aux=n_aux, params=params or {}, caps=caps or {"cpu": True, "mpi": True},
         abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23",
@@ -67,10 +67,34 @@ def _model(*, n_vars=4, n_aux=1, aux_names=("B_z",), params=None, caps=None,
         hllc=has_hllc, roe=has_roe, wave_speeds=has_wave_speeds)
 
 
-def _compiled(*, program=None, params=None, **model_kw):
+def _dump_module():
+    from pops.ir.expr import Const
+    from pops.math import laplacian
+
+    m = pops.physics.Model("intro_dump")
+    U = m.state("U", components=["rho", "mx", "my", "E"],
+                roles={"rho": "density", "mx": "momentum_x",
+                       "my": "momentum_y", "E": "energy"})
+    rho, mx, my, E = U
+    phi = m.field("phi")
+    m.aux("B_z")
+    m.flux("flux", on=U,
+           x=[mx, mx, mx, mx],
+           y=[my, my, my, my],
+           waves={"x": [1.0, 1.0, 1.0, 1.0], "y": [1.0, 1.0, 1.0, 1.0]})
+    m.source("source_default", on=U, value=[Const(0.0), Const(0.0), Const(0.0), Const(0.0)])
+    m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho - 1.0))
+    return m.lower()
+
+
+def _real_compile_model():
+    return _dump_module()
+
+
+def _compiled(*, program=None, params=None, model=None, **model_kw):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
     P = program if program is not None else _program()
-    m = _model(params=params, **model_kw)
+    m = model if model is not None else _model(params=params, **model_kw)
     return CompiledProblem("/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
                            problem_hash="deadbeefcafe", cache_key="0badc0de")
 
@@ -87,8 +111,8 @@ def chk(cond, label):
 def test_inspect_aggregates_metadata():
     """inspect() returns a CompiledReport aggregating name / backend / blocks / fields / inputs."""
     print("== inspect() aggregates the compiled metadata ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "gamma_const": Param("gamma_const", 1.4, kind="const")}
+    params = {"cs2": RuntimeParam("cs2", 1.0),
+              "gamma_const": ConstParam("gamma_const", 1.4)}
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",), params=params, has_wave_speeds=True)
     rep = cp.inspect()
     chk(isinstance(rep, CompiledReport), "inspect() returns a CompiledReport")
@@ -104,7 +128,7 @@ def test_inspect_aggregates_metadata():
     chk(rep.inputs["aux"] == ["B_z"], "the named aux is a required input")
     chk(rep.program["commits"] == ["plasma"], "program summary lists the committed block")
     chk(rep.artifacts["so_path"] == cp.so_path, "artifacts carry the .so path")
-    chk(rep.status == "compiled, waiting for pops.bind(...)", "status is the bind-pending line")
+    chk(rep.status == "compiled, waiting for sim.install(...)", "status is the install-pending line")
 
 
 def test_inspect_printable_and_serialisable():
@@ -114,7 +138,7 @@ def test_inspect_printable_and_serialisable():
     rep = cp.inspect()
     text = str(rep)
     chk("compiled problem 'intro_demo'" in text, "str() names the program")
-    chk("status   : compiled, waiting for pops.bind(...)" in text, "str() carries the status line")
+    chk("status   : compiled, waiting for sim.install(...)" in text, "str() carries the status line")
     chk("object at 0x" not in text, "str() is not the default <...object at 0x...> repr")
     d = rep.to_dict()
     chk(json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable")
@@ -209,7 +233,7 @@ def test_dump_ir_serialises_the_program():
 def test_dump_cpp_reuses_emit():
     """dump_cpp writes the generated C++ by REUSING emit_cpp_program (host-side, no Kokkos)."""
     print("== dump_cpp reuses the existing emit_cpp_program codegen ==")
-    cp = _compiled()
+    cp = _compiled(model=_dump_module())
     expected = cp.program.emit_cpp_program(model=cp.model)
     with tempfile.TemporaryDirectory() as tmp:
         # A directory target writes <program_name>.cpp inside it.
@@ -264,7 +288,7 @@ def test_dumps_raise_clear_error_without_program():
 def test_explain_bind_on_real_system():
     """System.explain_bind reports provided-vs-required for a REAL System (reuses ADC-463)."""
     print("== System.explain_bind (real System, no fake engine) ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime")}
+    params = {"cs2": RuntimeParam("cs2", 1.0)}
     cp = _compiled(n_vars=4, n_aux=1, aux_names=("B_z",), params=params)
     sim = pops.System(n=16, L=1.0, periodic=True)  # a REAL engine (no fake adc)
     rep = sim.explain_bind(cp)
@@ -303,7 +327,7 @@ def test_real_compile_inspection_or_skips():
     print("== real compile_problem inspection (Kokkos-gated; skips if absent) ==")
     program = _program()
     try:
-        compiled = pops.compile_problem(time=program, force=True)
+        compiled = pops.compile_problem(model=_real_compile_model(), time=program, force=True)
     except Exception as exc:  # noqa: BLE001 -- no compiler / no Kokkos: skip cleanly
         print("  [..] real compile skipped (no toolchain / Kokkos): %s" % str(exc)[:90])
         return

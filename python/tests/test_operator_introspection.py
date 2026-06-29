@@ -10,9 +10,8 @@ import sys
 try:
     from pops import model
     from pops.codegen.loader import CompiledProblem
-    from pops.ir.expr import Const
+    from pops.ir.expr import Const, Var
     from pops.model import OperatorHandle
-    from pops.physics.facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
@@ -21,18 +20,29 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 
 def _model():
-    m = Model("ep")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho])
-    electric = m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
-    return m
+    mod = model.Module("ep")
+    u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y", "B_z"))
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy, bz = Var("grad_x", "aux"), Var("grad_y", "aux"), Var("B_z", "aux")
+    mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator",
+        capabilities={"default": True}, expr=rho - 1.0)
+    mod.operator(
+        name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+        expr={"x": [mx, mx * mx / rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho]})
+    electric = mod.operator(
+        name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source",
+        expr=[Const(0.0), rho * (-gx), rho * (-gy)])
+    mod.operator(
+        name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
+        kind="local_linear_operator",
+        capabilities={"solve_i_minus_a": True},
+        requirements={"aux": ["B_z"]},
+        expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    mod.rate_operator("explicit_rhs", flux=True, sources=[electric])
+    return mod
 
 
 def _check(obj):
@@ -48,13 +58,6 @@ def _check(obj):
 def test_module_introspection():
     _check(_model().module)
     print("OK  Module introspection")
-
-
-def test_dsl_model_introspection():
-    m = _model()
-    _check(m)
-    assert m.list_state_spaces() == ["U"]
-    print("OK  Model introspection")
 
 
 def test_compiled_problem_introspection():
@@ -83,7 +86,6 @@ def test_compiled_problem_introspection():
 
 def main():
     test_module_introspection()
-    test_dsl_model_introspection()
     test_compiled_problem_introspection()
     print("OK  test_operator_introspection")
 

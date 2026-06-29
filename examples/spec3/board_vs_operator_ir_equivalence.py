@@ -8,6 +8,7 @@ This is the anti-duplication guarantee: the facade only generates the Spec 2 IR.
 Run: python3 examples/spec3/board_vs_operator_ir_equivalence.py
 """
 from pops.time import Program
+from pops import model
 
 
 def _ir(P):
@@ -16,23 +17,35 @@ def _ir(P):
              repr(sorted(v.attrs.items())), v.block) for v in P._values]
 
 
+def _module():
+    mod = model.Module("fe_ops")
+    U = mod.state_space("U", ("rho", "mx", "my"))
+    fields = mod.field_space("fields", ("phi",))
+    fields_op = mod.operator(name="fields", signature=(U,) >> fields,
+                             kind="field_operator", expr="rho")
+    rate_op = mod.rate_operator("explicit_rate", state_space="U", flux=True, sources=["default"])
+    return mod, U, fields_op, rate_op
+
+
 def board():
-    T = Program("fe_board")
+    mod, U_space, _fields_op, _rate_op = _module()
+    T = Program("fe_board").bind_operators(mod)
     dt = T.dt
-    u = T.state("plasma")
-    f = T.fields("f", from_state=u)
-    r = T._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
+    u = T.state("plasma", space=U_space)
+    T.fields("f", from_state=u, operator="fields")
+    r = T.op("explicit_rate")(u, value_name="R")
     u1 = T.define("U1", u + dt * r)
     T.commit("plasma", u1)
     return T
 
 
 def operator_first():
-    P = Program("fe_operator_first")
+    mod, U_space, fields_op, rate_op = _module()
+    P = Program("fe_operator_first").bind_operators(mod)
     dt = P.dt
-    u = P.state("plasma")
-    f = P._solve_fields("f", u)
-    r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
+    u = P.state("plasma", space=U_space)
+    P.call(fields_op, u, name="f")
+    r = P.call(rate_op, u, name="R")
     u1 = P.linear_combine("U1", u + dt * r)
     P.commit("plasma", u1)
     return P

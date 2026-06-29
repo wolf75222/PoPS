@@ -62,7 +62,7 @@ def _build(n=32, regrid_every=0, block="ne"):
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=pops.Explicit())
     sim.set_refinement(threshold=1.5)  # rho > 1.5 -> patchs centraux (pic 2.0, plancher 1.0)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density(block, rho0)
     return sim
 
@@ -173,7 +173,7 @@ def _build_multiblock(n=32, regrid_every=0):
                       spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                       time=pops.Explicit())
     sim.set_refinement(threshold=1.5)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.set_density("ions", rho_i)
     sim.set_density("elec", rho_e)
     return sim

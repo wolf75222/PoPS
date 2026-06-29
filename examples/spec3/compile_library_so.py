@@ -1,6 +1,6 @@
 """Spec 3 section 21 / ADC-464: compile a reusable brick library to a real ``.so``.
 
-``pops.compile_library("my_numerics.so", objects=[...], backend="production", emit=True)``
+``pops.compile_library("my_numerics.so", objects=[...], backend=pops.codegen.Production(), emit=True)``
 collects a set of brick descriptors (native / generated / external) into a library and
 compiles a REAL ``.so`` with the same Kokkos toolchain a problem ``.so`` uses. The ``.so``
 exports an ABI-keyed descriptor: the library name, the ABI key, the brick list (id / type /
@@ -45,7 +45,7 @@ lib = _t.SimpleNamespace(
 def build_manifest():
     """A small reusable library: a native GMRES solver and a native HLLC Riemann brick."""
     objects = [lib.solvers.GMRES(), lib.riemann.HLLC()]
-    return pops.compile_library("my_numerics.so", objects=objects, backend="production")
+    return pops.compile_library("my_numerics.so", objects=objects, backend=pops.codegen.Production())
 
 
 def print_manifest(man):
@@ -73,7 +73,7 @@ def main():
         try:
             compiled = pops.compile_library("my_numerics.so", objects=[
                 lib.solvers.GMRES(), lib.riemann.HLLC()],
-                backend="production", emit=True, so_path=so)
+                backend=pops.codegen.Production(), emit=True, so_path=so)
         except (RuntimeError, OSError) as exc:
             print("compile requires Kokkos + a matching toolchain (set POPS_KOKKOS_ROOT):")
             print("  ", str(exc).splitlines()[0])

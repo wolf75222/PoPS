@@ -9,6 +9,7 @@ compiled time-program run, so they pass without a freshly built _pops beyond wha
 import pytest
 
 from pops import model as _model
+from pops.solvers import GeometricMG
 
 physics = pytest.importorskip("pops.physics")
 amath = pytest.importorskip("pops.math")
@@ -44,7 +45,7 @@ def _euler_poisson_lorentz():
         "fields_from_state",
         equation=(-laplacian(phi) == alpha * (rho - rho_ref)),
         outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-        solver="geometric_mg",
+        solver=GeometricMG(),
     )
 
     E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
@@ -148,7 +149,7 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     phi = m.field("phi")
     m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho),
                   outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-                  solver="geometric_mg")
+                  solver=GeometricMG())
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
     bz = m.aux("B_z")
@@ -160,7 +161,7 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
 
     P = Program("board_calls")
     U_n = P.state("plasma")
-    f_n = P._solve_fields("f_n", U_n)
+    f_n = P._legacy_solve_fields("f_n", U_n)
     R = explicit_rate(U_n, f_n)         # -> P._call("explicit_rate", U_n, f_n)
     L = implicit_operator(f_n)          # -> P._call("implicit_operator", f_n)
     assert R.vtype == "rhs"

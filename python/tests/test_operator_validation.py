@@ -10,8 +10,7 @@ import sys
 
 try:
     from pops import model
-    from pops.ir.expr import Const
-    from pops.physics.facade import Model
+    from pops.ir.expr import Const, Var
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_validation (pops unavailable: %s)" % exc)
@@ -19,17 +18,27 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 
 def _model():
-    m = Model("ep")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    electric = m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
-    return m
+    mod = model.Module("ep")
+    u = mod.state_space("U", ("rho", "mx", "my"))
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y", "B_z"))
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy, bz = Var("grad_x", "aux"), Var("grad_y", "aux"), Var("B_z", "aux")
+    mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator",
+        capabilities={"default": True}, expr=rho - 1.0)
+    mod.operator(
+        name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+        expr={"x": [mx, mx * mx / rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho]})
+    electric = mod.operator(
+        name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source",
+        expr=[Const(0.0), -rho * gx, -rho * gy])
+    mod.operator(
+        name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
+        kind="local_linear_operator",
+        expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    mod.rate_operator("explicit_rhs", flux=True, sources=[electric])
+    return mod
 
 
 _OTHER = model.StateSpace("V", ("a", "b", "c"))
@@ -37,7 +46,7 @@ _OTHER = model.StateSpace("V", ("a", "b", "c"))
 
 def test_well_typed_program_passes():
     m = _model()
-    u = m.state_space("U")
+    u = m.state_spaces()["U"]
     P = adctime.Program("ok").bind_operators(m)
     u_n = P.state("plasma", space=u)
     fields = P._call("fields_from_state", u_n)
@@ -50,7 +59,7 @@ def test_well_typed_program_passes():
 
 def test_call_input_space_mismatch():
     m = _model()
-    u = m.state_space("U")
+    u = m.state_spaces()["U"]
     P = adctime.Program("p").bind_operators(m)
     fields = P._call("fields_from_state", P.state("plasma", space=u))
     wrong = P.state("other", space=_OTHER)
@@ -64,7 +73,7 @@ def test_call_input_space_mismatch():
 
 def test_combine_space_mismatch():
     m = _model()
-    u = m.state_space("U")
+    u = m.state_spaces()["U"]
     P = adctime.Program("p").bind_operators(m)
     u_n = P.state("plasma", space=u)
     rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
@@ -79,7 +88,7 @@ def test_combine_space_mismatch():
 
 def test_solve_local_linear_domain_mismatch():
     m = _model()
-    u = m.state_space("U")
+    u = m.state_spaces()["U"]
     P = adctime.Program("p").bind_operators(m)
     fields = P._call("fields_from_state", P.state("plasma", space=u))
     lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
@@ -97,8 +106,8 @@ def test_legacy_untagged_unaffected():
     m = _model()
     P = adctime.Program("legacy").bind_operators(m)
     u = P.state("plasma")
-    fields = P._solve_fields(u)
-    r = P._rhs_legacy(state=u, fields=fields, sources=["electric"])
+    fields = P._legacy_solve_fields(u)
+    r = P._legacy_rhs(state=u, fields=fields, sources=["electric"])
     P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
     P.validate()
     print("OK  untagged (legacy) programs skip the space checks")

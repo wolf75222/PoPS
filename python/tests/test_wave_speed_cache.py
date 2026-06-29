@@ -61,7 +61,7 @@ def make_sim(cache, riemann=None, limiter=None, time=None):
     limiter = limiter if limiter is not None else FirstOrder()
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=CS2),
                             transport=pops.IsothermalFlux(),
                             source=pops.NoSource(),
                             elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
@@ -80,29 +80,29 @@ U0 = np.stack([1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y),
 print("== (1) bit-identite NoSlope+HLL : cache ON == OFF apres N pas ==")
 s_off = make_sim(cache=False)
 s_on = make_sim(cache=True)
-s_off.set_state("ions", U0)
-s_on.set_state("ions", U0)
+s_off._set_state("ions", U0)
+s_on._set_state("ions", U0)
 for _ in range(20):
     s_off.step_cfl(0.4)
     s_on.step_cfl(0.4)
-A_off = np.array(s_off.get_state("ions"))
-A_on = np.array(s_on.get_state("ions"))
+A_off = np.array(s_off._get_state("ions"))
+A_on = np.array(s_on._get_state("ions"))
 chk(not np.array_equal(A_off, U0), "l'etat a reellement evolue (test non creux)")
 chk(np.array_equal(A_off, A_on), "cache ON et OFF bit-identiques (0 ulp) sur l'etat final")
 
 print("== (2) defaut inchange : sans wave_speed_cache == cache OFF ==")
 s_def = pops.System(n=N, L=1.0, periodic=True)
 s_def._add_block("ions",
-                pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
+                pops.Model(state=pops.FluidState.isothermal(cs2=CS2),
                           transport=pops.IsothermalFlux(),
                           source=pops.NoSource(),
                           elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
                 time=pops.Explicit())
-s_def.set_state("ions", U0)
+s_def._set_state("ions", U0)
 for _ in range(20):
     s_def.step_cfl(0.4)
-chk(np.array_equal(np.array(s_def.get_state("ions")), A_off),
+chk(np.array_equal(np.array(s_def._get_state("ions")), A_off),
     "FiniteVolume sans wave_speed_cache == cache OFF (bit-identique)")
 
 print("== (3) garde riemann : cache + rusanov -> erreur ==")
@@ -123,14 +123,14 @@ print("== (5) garde geometrie disque : cache + transport staircase/cutcell -> er
 
 def make_disc_sim_then_mode():
     sim = make_sim(cache=True)  # bloc cache (cartesien plein)
-    sim.set_disc_domain(0.5, 0.5, 0.3, mode="staircase")  # doit lever (cache deja actif)
+    sim._set_disc_domain(0.5, 0.5, 0.3, mode="staircase")  # doit lever (cache deja actif)
 
 
 def make_mode_then_cache():
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.set_disc_domain(0.5, 0.5, 0.3, mode="cutcell")  # mode disque d'abord
+    sim._set_disc_domain(0.5, 0.5, 0.3, mode="cutcell")  # mode disque d'abord
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=CS2),
                             transport=pops.IsothermalFlux(),
                             source=pops.NoSource(),
                             elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),

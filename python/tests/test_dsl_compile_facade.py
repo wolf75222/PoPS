@@ -81,11 +81,11 @@ def test_guardrails():
     e = build_meta_euler()
     bare = build_bare_scalar()
 
-    # backend inconnu -> ValueError explicite
-    for bad in ("jit", "compile", "gpu", "", None):
+    # Public/backend selectors are typed; raw strings are rejected before compilation.
+    for bad in ("jit", "compile", "gpu", ""):
         try:
             e.compile("x.so", INCLUDE, backend=bad)
-        except ValueError:
+        except TypeError:
             pass
         else:
             raise AssertionError("backend %r aurait du lever" % (bad,))
@@ -95,7 +95,7 @@ def test_guardrails():
         pass
     else:
         raise AssertionError("adder_for(backend inconnu) aurait du lever")
-    print("OK  backend inconnu rejete (compile + adder_for)")
+    print("OK  backend strings rejetes (compile) + adder_for interne garde ses tokens")
 
     # mapping backend -> adder System (couplage compilation/execution)
     assert HyperbolicModel.adder_for("prototype") == "add_dynamic_block"
@@ -106,7 +106,7 @@ def test_guardrails():
 
     # require_metadata sur prototype (JIT, dispatch virtuel hote) : incoherent -> erreur claire
     try:
-        e.compile("x.so", INCLUDE, backend="prototype", require_metadata=True)
+        e.compile("x.so", INCLUDE, backend=pops.codegen.JIT(), require_metadata=True)
     except ValueError as ex:
         assert "prototype" in str(ex)
     else:
@@ -115,7 +115,7 @@ def test_guardrails():
 
     # require_metadata sur un modele PAUVRE (pas de roles, pas de gamma) : erreur listant le manque
     try:
-        bare.compile("x.so", INCLUDE, backend="production", require_metadata=True)
+        bare.compile("x.so", INCLUDE, backend=pops.codegen.Production(), require_metadata=True)
     except ValueError as ex:
         msg = str(ex)
         assert "roles" in msg and "gamma" in msg, "le message devrait lister roles ET gamma : %r" % msg
@@ -148,29 +148,29 @@ def test_end_to_end():
         # lus de l'ABI du .so ; natif : portes par ProdModel::conservative_vars()). Le GAMMA differe de
         # SOURCE : l'AOT le lit du symbole pops_compiled_gamma du .so ; le natif le recoit en ARGUMENT
         # d'add_native_block (comme add_block / add_compiled_model). On le passe donc pour le natif. ---
-        for backend in ("aot", "production"):
-            so = e.compile(os.path.join(tmp, "facade_%s.so" % backend), INCLUDE,
+        for label, backend in (("aot", pops.codegen.AOT()), ("production", pops.codegen.Production())):
+            so = e.compile(os.path.join(tmp, "facade_%s.so" % label), INCLUDE,
                            backend=backend, require_metadata=True)
             s = pops.System(n=n, L=L, periodic=True)
-            adder = getattr(s, HyperbolicModel.adder_for(backend))
-            kw = dict(gamma=GAMMA) if backend == "production" else {}
+            adder = getattr(s, HyperbolicModel.adder_for(label))
+            kw = dict(gamma=GAMMA) if label == "production" else {}
             adder("gas", so, limiter="minmod", riemann="hllc", recon="primitive", **kw)
             # noms/roles DU MODELE (pas le fallback u0.. / custom)
             assert s.variable_names("gas") == ["rho", "rho_u", "rho_v", "E"], \
-                "%s : noms != metadonnees : %r" % (backend, s.variable_names("gas"))
+                "%s : noms != metadonnees : %r" % (label, s.variable_names("gas"))
             assert s.variable_roles("gas") == ["density", "momentum_x", "momentum_y", "energy"], \
-                "%s : roles != metadonnees : %r" % (backend, s.variable_roles("gas"))
+                "%s : roles != metadonnees : %r" % (label, s.variable_roles("gas"))
             assert s.variable_roles("gas", "primitive") == \
                 ["density", "velocity_x", "velocity_y", "pressure"], \
-                "%s : roles primitifs != metadonnees : %r" % (backend, s.variable_roles("gas", "primitive"))
+                "%s : roles primitifs != metadonnees : %r" % (label, s.variable_roles("gas", "primitive"))
             assert abs(s.block_gamma("gas") - GAMMA) < 1e-12, \
-                "%s : gamma != metadonnees : %r" % (backend, s.block_gamma("gas"))
+                "%s : gamma != metadonnees : %r" % (label, s.block_gamma("gas"))
             print("OK  backend=%s : noms/roles/gamma propages (gamma=%.4f) via %s"
-                  % (backend, s.block_gamma("gas"), HyperbolicModel.adder_for(backend)))
+                  % (label, s.block_gamma("gas"), HyperbolicModel.adder_for(label)))
 
         # --- la facade ne regresse pas la numerique : compile(aot) octets-identiques a
         #     compile_or_jit(mode="compile") (meme source generee, meme toolchain) ---
-        a = e.compile(os.path.join(tmp, "via_facade.so"), INCLUDE, backend="aot")
+        a = e.compile(os.path.join(tmp, "via_facade.so"), INCLUDE, backend=pops.codegen.AOT())
         b = e.compile_or_jit(os.path.join(tmp, "via_legacy.so"), INCLUDE, mode="compile")
         # la SOURCE generee est identique (le binaire peut differer par des chemins temporaires)
         assert e.emit_cpp_aot_source() == e.emit_cpp_aot_source(), "source non deterministe"
@@ -181,10 +181,10 @@ def test_end_to_end():
         assert s1.variable_names("g") == s2.variable_names("g")
         assert s1.variable_roles("g") == s2.variable_roles("g")
         assert abs(s1.block_gamma("g") - s2.block_gamma("g")) < 1e-15
-        print("OK  compile(backend='aot') == compile_or_jit(mode='compile') (memes metadonnees)")
+        print("OK  compile(backend=pops.codegen.AOT()) == compile_or_jit(mode='compile') (memes metadonnees)")
 
         # --- prototype : JIT (add_dynamic_block), roles/gamma transportes aussi (sans require_metadata) ---
-        sop = e.compile(os.path.join(tmp, "facade_proto.so"), INCLUDE, backend="prototype")
+        sop = e.compile(os.path.join(tmp, "facade_proto.so"), INCLUDE, backend=pops.codegen.JIT())
         sp = pops.System(n=n, L=L, periodic=True)
         getattr(sp, HyperbolicModel.adder_for("prototype"))("gas", sop, recon="minmod")
         assert sp.variable_names("gas") == ["rho", "rho_u", "rho_v", "E"], \
@@ -198,15 +198,15 @@ def test_end_to_end():
         # --- n_aux / B_z preserves a travers la facade (canal aux etendu) ---
         m = build_bz_scalar()
         c = 0.7
-        so_bz = m.compile(os.path.join(tmp, "facade_bz.so"), INCLUDE, backend="aot")
+        so_bz = m.compile(os.path.join(tmp, "facade_bz.so"), INCLUDE, backend=pops.codegen.AOT())
         sb = pops.System(n=n, L=L, periodic=True)
         sb.add_compiled_block("bz", so_bz, limiter="none", riemann="rusanov",
                               recon="conservative", names=["n"])
-        sb.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sb._set_poisson(rhs="charge_density", solver="geometric_mg")
         sb.set_density("bz", np.ones((n, n)))
         sb.set_magnetic_field(c * np.ones((n, n)))  # peuple le canal B_z partage (n_aux=4)
         sb.solve_fields()
-        R = np.array(sb.eval_rhs("bz"))
+        R = np.array(sb._eval_rhs("bz"))
         err = float(np.max(np.abs(R - c)))  # flux nul -> R = S = B_z n = c
         assert err < 1e-12, "B_z non lu a travers la facade (ecart %.2e)" % err
         print("OK  backend=aot : n_aux/B_z preserves (max|R - B_z| = %.2e)" % err)

@@ -37,7 +37,7 @@ def _comp():
     alpha=0 -> Poisson RHS is zero (no periodic solvability constraint); the regrid tags on the
     conservative field. Native bricks only -- no DSL compiler required.
     """
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                       transport=pops.CompressibleFlux(), source=pops.NoSource(),
                       elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
@@ -58,7 +58,7 @@ def _built_multiblock(n=64, regrid_every=1):
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     sim._add_block("gas0", _comp(), time=pops.Explicit())
     sim._add_block("gas1", _comp(), time=pops.Explicit())
-    sim.set_poisson(bc="periodic")
+    sim._set_poisson(bc="periodic")
     sim.set_refinement(6.0, role="energy")  # tag where E > 6 -> the bottom-left bump refines
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniform background

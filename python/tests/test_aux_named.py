@@ -153,12 +153,14 @@ def test_end_to_end():
     tmp = tempfile.mkdtemp()
     try:
         m = build_decay_model()
-        compiled = m.compile(os.path.join(tmp, "kappadecay.so"), include=INCLUDE, backend="aot")
+        compiled = m._compile_for_runtime(
+            os.path.join(tmp, "kappadecay.so"), include=INCLUDE, backend=pops.codegen.AOT()
+        )
         assert compiled.aux_extra_names == ["kappa"], "aux_extra_names attendu ['kappa']"
         assert compiled.n_aux == 6, "n_aux=6 attendu (5 + 1 champ nomme)"
 
         sim = pops.System(n=n, L=L, periodic=True)
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sim._set_poisson(rhs="charge_density", solver="geometric_mg")
         sim._add_equation("decay", model=compiled,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit())
@@ -174,7 +176,7 @@ def test_end_to_end():
         kc = 2.0
         sim._set_aux_field("decay", "kappa", kc * np.ones((n, n)))
         sim.solve_fields()
-        R = np.array(sim.eval_rhs("decay"))
+        R = np.array(sim._eval_rhs("decay"))
         err = float(np.max(np.abs(R + kc)))  # R = -kappa*n = -2
         assert err < 1e-12, "kappa constant non lu (max|R+kappa| = %.2e)" % err
         # relecture : aux_field rend bien le champ pose.
@@ -188,7 +190,7 @@ def test_end_to_end():
         ks = 1.0 + 3.0 * np.exp(-30.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
         sim._set_aux_field("decay", "kappa", ks)
         sim.solve_fields()
-        R2 = np.array(sim.eval_rhs("decay"))
+        R2 = np.array(sim._eval_rhs("decay"))
         err2 = float(np.max(np.abs(R2 + ks)))  # n=1 -> R = -kappa(x)
         assert err2 < 1e-12, "kappa spatial non suivi (max|R+kappa| = %.2e)" % err2
         print("OK  kappa spatial (gaussien) : eval_rhs suit -kappa(x) (max ecart %.2e)" % err2)
@@ -231,7 +233,9 @@ def test_polar_named_aux():
     tmp = tempfile.mkdtemp()
     try:
         m = build_decay_model()
-        compiled = m.compile(os.path.join(tmp, "kpolar.so"), include=INCLUDE, backend="aot")
+        compiled = m._compile_for_runtime(
+            os.path.join(tmp, "kpolar.so"), include=INCLUDE, backend=pops.codegen.AOT()
+        )
         nr, nth = 16, 16
         sim = pops.System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
         sim._add_equation("decay", model=compiled,
@@ -247,7 +251,7 @@ def test_polar_named_aux():
         # kappa constant : eval_rhs = S = -kappa*n = -3 (flux nul, n=1).
         kc = 3.0
         sim._set_aux_field("decay", "kappa", kc * np.ones((nth, nr)))
-        R = np.array(sim.eval_rhs("decay"))
+        R = np.array(sim._eval_rhs("decay"))
         err = float(np.max(np.abs(R + kc)))
         assert err < 1e-12, "polar : kappa non lu (max|R+kappa| = %.2e)" % err
         rk = sim.aux_field("decay", "kappa")
@@ -258,9 +262,11 @@ def test_polar_named_aux():
 
 
 def _compile_amr_decay(tmp, fname):
-    """Decay model compiled for the AMR native path (backend='production', target='amr_system')."""
-    return build_decay_model().compile(os.path.join(tmp, fname), include=INCLUDE,
-                                       backend="production", target="amr_system")
+    """Decay model compiled for the AMR native path (backend=pops.codegen.Production(), target='amr_system')."""
+    return build_decay_model()._compile_for_runtime(
+        os.path.join(tmp, fname), include=INCLUDE,
+        backend=pops.codegen.Production(), target="amr_system"
+    )
 
 
 def _bump_density(n, lo, hi, base, peak):
@@ -291,7 +297,7 @@ def test_amr_named_aux_single_block_regrid():
         # (a) reference : SANS set_aux_field -> kappa=0 -> masse inchangee (meme avec raffinement).
         ref = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
         ref._add_equation("decay", model=_compile_amr_decay(tmp, "amr0.so"), spatial=sp, time=pops.Explicit())
-        ref.set_poisson(rhs="charge_density", solver="geometric_mg")
+        ref._set_poisson(rhs="charge_density", solver="geometric_mg")
         ref.set_refinement(2.0)  # refine where density (comp 0) > 2 -> tags the bump
         ref.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
         m0 = ref.mass("decay")
@@ -302,7 +308,7 @@ def test_amr_named_aux_single_block_regrid():
         # (b) AVEC kappa uniforme + raffinement + regrid : decroissance persistante ET uniforme.
         sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
         sim._add_equation("decay", model=_compile_amr_decay(tmp, "amr1.so"), spatial=sp, time=pops.Explicit())
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sim._set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_refinement(2.0)
         rho0 = _bump_density(n, lo, hi, 1.0, 5.0)
         sim.set_density("decay", rho0)
@@ -355,12 +361,13 @@ def test_amr_named_aux_multiblock_regrid():
         lo, hi = n // 3, 2 * n // 3
         decay_so = _compile_amr_decay(tmp, "amrdecay.so")
         c0 = 1.0
-        plain_so = build_const_decay_model("plaindecay", c0).compile(
-            os.path.join(tmp, "amrplain.so"), include=INCLUDE, backend="production", target="amr_system")
+        plain_so = build_const_decay_model("plaindecay", c0)._compile_for_runtime(
+            os.path.join(tmp, "amrplain.so"), include=INCLUDE,
+            backend=pops.codegen.Production(), target="amr_system")
         sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
         sim._add_equation("decay", model=decay_so, spatial=sp, time=pops.Explicit())
         sim._add_equation("plain", model=plain_so, spatial=sp, time=pops.Explicit())
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sim._set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_refinement(2.0)  # refine on the 'decay' bump -> a real fine level + regrid
         sim.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
         sim.set_density("plain", np.ones((n, n)))

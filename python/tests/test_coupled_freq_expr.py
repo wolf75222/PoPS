@@ -39,7 +39,7 @@ def rel(a, b):
 
 
 def iso_model(charge=1.0):
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=charge),
                      elliptic=pops.ChargeDensity(charge=charge))
@@ -57,7 +57,7 @@ N = 16
 
 def make_system():
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim._add_block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
     sim._add_block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
     return sim
@@ -138,7 +138,7 @@ chk(raised, "compile() leve ValueError sur la frequence-Expr a registre inconnu"
 print("== (e) AMR multi-blocs : frequence-Expr mu(U)=k*rho sur le grossier ==")
 KA = 300.0
 amr = pops.AmrSystem(n=N, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
 amr._add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 amr._add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))

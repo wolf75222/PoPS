@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Famille IMEX-RK, schema ARS(2,2,2) sur System cartesien (Linear ADC-69).
 
-pops.IMEXRK(scheme="ars222") cable le schema d'Ascher-Ruuth-Spiteri (1997) : transport explicite
+pops.IMEXRK() cable le schema d'Ascher-Ruuth-Spiteri (1997) : transport explicite
 (L = -div F) couple a la source raide implicite (backward-Euler local par cellule), ORDRE 2. C'est
 une famille DISTINCTE de pops.IMEX (backward-Euler local, ordre 1, INCHANGE).
 
@@ -46,7 +46,7 @@ def chk(cond, label):
 def cyclotron_model(q):
     """Fluide isotherme + force magnetique q*(v x B). elliptic charge=0 -> Poisson trivial (phi=0),
     aucune force electrique : la dynamique d'un etat uniforme est la pure gyration cyclotron."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.MagneticLorentzForce(charge=q),
                      elliptic=pops.ChargeDensity(charge=0.0))
@@ -56,7 +56,7 @@ def build(time_policy, q, B0, rho0=1.0, u0=1.0, v0=0.0, n=8):
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_block("e", cyclotron_model(q), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=time_policy)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.set_magnetic_field(B0 * np.ones(n * n))
     ones = np.ones((n, n))
     sim.set_primitive_state("e", rho=rho0 * ones, u=u0 * ones, v=v0 * ones)
@@ -68,7 +68,7 @@ def momentum_after(time_policy, q, B0, dt, nsteps, n=8):
     sim = build(time_policy, q, B0, n=n)
     for _ in range(nsteps):
         sim.step(dt)
-    U = np.asarray(sim.get_state("e"), dtype=float).reshape(3, n, n)
+    U = np.asarray(sim._get_state("e"), dtype=float).reshape(3, n, n)
     return np.array([U[1].mean(), U[2].mean()])
 
 
@@ -143,7 +143,7 @@ except (RuntimeError, ValueError, TypeError) as e:
 # (d3) Strang / Schur : l'etage hyperbolique doit etre un pops.Explicit (pas IMEXRK)
 try:
     pops.Strang(hyperbolic=pops.IMEXRK(),
-               source=pops.CondensedSchur(kind="electrostatic_lorentz", theta=0.5, alpha=1.0))
+               source=pops.ElectrostaticLorentzSchur(theta=0.5, alpha=1.0))
     chk(False, "Strang(hyperbolic=IMEXRK) aurait du lever")
 except TypeError as e:
     chk("Explicit" in str(e), f"Strang rejet (hyperbolique doit etre Explicit) : {e}")

@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""Backend par DEFAUT 'auto' (ADC-63) : production quand la parite toolchain avec le module _pops
-est etablie, aot sinon -- et JAMAIS un choix muet (CompiledModel.backend dit ce qui a ete
-construit, backend_auto_reason dit pourquoi).
+"""Backend par defaut clean-break : pas de ``backend="auto"`` public.
 
-  (1) parite OK (module charge + en-tetes du depot == build) : compile() sans backend ->
-      backend == 'production', le bloc se branche par add_equation et tourne ;
-  (2) parite CASSEE (en-tetes copies puis modifies -> signature differente) : auto -> 'aot'
-      avec une raison explicite, et le bloc aot tourne aussi (fallback FONCTIONNEL) ;
-  (3) backend EXPLICITE : inchange ('aot' demande = aot meme si la parite production existe).
-
-Invariants par assert ; imprime "OK test_backend_auto" en cas de succes.
+La route publique est descripteur-first. Omettre le backend revient a demander explicitement
+``Production()`` ; un repli AOT implicite n'est plus une API utilisateur. Si un autre chemin est
+voulu, il doit etre nomme par ``pops.codegen.AOT()`` / ``JIT()``.
 """
 from pops.numerics.reconstruction.limiters import Minmod
 import os
@@ -20,7 +14,6 @@ import tempfile
 import numpy as np
 
 import pops
-from pops.codegen.toolchain import resolve_auto_backend
 from pops.ir.ops import sqrt
 from pops.physics.facade import Model
 
@@ -50,6 +43,14 @@ def iso3(name):
     return m
 
 
+def skip_if_kokkos_missing(exc):
+    text = str(exc)
+    if "Kokkos" in text or "POPS_HAS_KOKKOS" in text:
+        print("skip test_backend_auto : Kokkos introuvable -> portion compilee sautee")
+        sys.exit(0)
+    raise exc
+
+
 cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
 if not cxx or not os.path.isdir(INCLUDE):
     print("skip test_backend_auto : compilateur ou en-tetes pops absents")
@@ -57,16 +58,23 @@ if not cxx or not os.path.isdir(INCLUDE):
 
 tmp = tempfile.mkdtemp()
 try:
-    print("== (1) auto -> production quand la parite toolchain est etablie ==")
-    bk, reason = resolve_auto_backend(INCLUDE)
-    chk(bk == "production", f"resolve_auto_backend = production (raison : {reason[:60]})")
-    cm = iso3("auto_prod").compile(os.path.join(tmp, "auto_prod.so"), INCLUDE)
+    try:
+        iso3("bad")._m.compile(os.path.join(tmp, "bad.so"), INCLUDE, backend="bogus")
+        chk(False, "backend inconnu aurait du lever")
+    except TypeError as e:
+        chk("typed" in str(e), f"backend string rejete : {str(e)[:80]}")
+
+    print("== (1) backend omis -> Production() explicite par defaut ==")
+    try:
+        cm = iso3("default_prod")._compile_for_runtime(
+            so_path=os.path.join(tmp, "default_prod.so"), include=INCLUDE)
+    except RuntimeError as e:
+        skip_if_kokkos_missing(e)
     chk(cm.backend == "production", f"compile() sans backend -> {cm.backend!r}")
-    chk(cm.backend_auto_reason is not None and "toolchain" in cm.backend_auto_reason,
-        f"raison posee : {str(cm.backend_auto_reason)[:60]}")
+    chk(cm.backend_auto_reason is None, "pas de raison auto : aucun repli implicite")
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.set_poisson()
+    sim._set_poisson()
     sim._add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
                      time=pops.Explicit())
     x = (np.arange(n) + 0.5) / n
@@ -75,30 +83,17 @@ try:
     sim.set_primitive_state("f", rho=1.0 + 0.3 * np.exp(-40 * ((X - .5) ** 2 + (Y - .5) ** 2)),
                             u=z, v=z)
     sim.step_cfl(0.3)
-    chk(np.all(np.isfinite(np.asarray(sim.density("f")))), "bloc production (auto) tourne fini")
+    chk(np.all(np.isfinite(np.asarray(sim.density("f")))), "bloc production par defaut tourne fini")
 
-    print("== (2) parite cassee -> repli aot EXPLIQUE et fonctionnel ==")
-    stale = os.path.join(tmp, "include_stale")
-    shutil.copytree(INCLUDE, stale)
-    with open(os.path.join(stale, "pops", "core", "types.hpp"), "a") as f:
-        f.write("\n// drift de signature pour test_backend_auto (copie jetable)\n")
-    bk2, reason2 = resolve_auto_backend(stale)
-    chk(bk2 == "aot" and "module" in reason2 or "en-tetes" in reason2,
-        f"resolve(stale) = {bk2} ({reason2[:60]})")
-    cm2 = iso3("auto_aot").compile(os.path.join(tmp, "auto_aot.so"), stale)
-    chk(cm2.backend == "aot", f"auto avec en-tetes derivants -> {cm2.backend!r}")
-    chk(cm2.backend_auto_reason is not None, "raison du repli posee")
-
-    print("== (3) backend explicite inchange ==")
-    cm3 = iso3("explicit_aot").compile(os.path.join(tmp, "explicit_aot.so"), INCLUDE,
-                                       backend="aot")
-    chk(cm3.backend == "aot" and cm3.backend_auto_reason is None,
-        "backend='aot' explicite : aot, sans raison auto (politique court-circuitee)")
+    print("== (2) backend explicite inchange ==")
     try:
-        iso3("bad").compile(os.path.join(tmp, "bad.so"), INCLUDE, backend="bogus")
-        chk(False, "backend inconnu aurait du lever")
-    except ValueError as e:
-        chk("auto" in str(e), f"backend inconnu rejete, message cite 'auto' : {str(e)[:60]}")
+        cm3 = iso3("explicit_aot")._compile_for_runtime(
+            so_path=os.path.join(tmp, "explicit_aot.so"), include=INCLUDE,
+            backend=pops.codegen.AOT())
+    except RuntimeError as e:
+        skip_if_kokkos_missing(e)
+    chk(cm3.backend == "aot" and cm3.backend_auto_reason is None,
+        "backend=pops.codegen.AOT() explicite : aot, sans raison auto")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

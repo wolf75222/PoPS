@@ -51,7 +51,7 @@ def err_msg(fn):
 
 
 def gas():  # Euler compressible 4-var : a pressure() + wave_speeds()
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.ChargeDensity(charge=0.0))
 
@@ -63,9 +63,9 @@ def smooth_rho(n):
 
 def run_gas(riemann, n=48, nsteps=10, cfl=0.2):
     s = pops.System(n=n, L=1.0, periodic=True)
-    s._add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=riemann),
+    s._add_block("gas", model=gas(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.WENO5(), flux=riemann),
                 time=pops.Explicit())
-    s.set_poisson()
+    s._set_poisson()
     s.set_density("gas", smooth_rho(n))
     for _ in range(nsteps):
         s.step_cfl(cfl)
@@ -111,16 +111,20 @@ def iso3(declare_p):
 
 tmp = tempfile.mkdtemp()
 try:
-    cm_p = iso3(True).compile(os.path.join(tmp, "iso3_withp.so"), INCLUDE, backend="production")
-    cm_np = iso3(False).compile(os.path.join(tmp, "iso3_nop.so"), INCLUDE, backend="production")
+    cm_p = iso3(True)._compile_for_runtime(
+        so_path=os.path.join(tmp, "iso3_withp.so"), include=INCLUDE,
+        backend=pops.codegen.Production())
+    cm_np = iso3(False)._compile_for_runtime(
+        so_path=os.path.join(tmp, "iso3_nop.so"), include=INCLUDE,
+        backend=pops.codegen.Production())
     chk("p" not in cm_p.prim_names, "(3) 'p' hors primitive_vars (hllc/roe le rejetteraient)")
 
     def build(cm, riem):
         s = pops.System(n=40, L=1.0, periodic=True)
         s._add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=WENO5(), riemann=riem,
                                                               variables=Conservative()),
-                       time=pops.Explicit(method="ssprk2"))
-        s.set_poisson()
+                       time=pops.Explicit.ssprk2())
+        s._set_poisson()
         z = np.zeros((40, 40)); r = 1.0 + 0.2 * smooth_rho(40) / smooth_rho(40).max()
         s.set_primitive_state("f", rho=r, u=z, v=z)
         return s

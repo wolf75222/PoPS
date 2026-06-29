@@ -1,19 +1,16 @@
-"""Spec 5 gap #32 (criterion 32): the layout=AMR end-to-end compile + bind route.
+"""Spec 5 gap #32 (criterion 32): the layout=AMR compile + runtime route.
 
-``pops.compile(problem_with_AMR_layout, ...)`` no longer DEFERS layout=AMR (single OR multi block;
-ADC-503): it compiles EACH block's resolved physics to a ``target="amr_system"`` production
-``CompiledModel`` (the native AMR ``.so`` loader that emits ``pops_install_native_amr`` /
-``add_native_block``) and carries the ``{block: CompiledModel}`` table on the handle. There is NO
-whole-system time Program on AMR (``AmrSystem`` has no ``install_program`` seam), so the route does
-NOT call ``compile_problem`` and does NOT need ``time=``. ``pops.bind`` then builds an ``AmrSystem``
-from an ``AmrSystemConfig`` DERIVED from that layout, flows the typed refinement + Poisson field onto
-it, and installs through the native path (``_install_compiled(compiled=None, instances=...)``).
+``pops.compile_problem(model=Module, time=Program(...), layout=AMR(...))`` no longer DEFERS
+layout=AMR and no longer falls back to per-block native loaders. The runtime side builds an
+``AmrSystem`` from an ``AmrSystemConfig`` DERIVED from that layout, flows typed refinement +
+Poisson field descriptors onto it, and installs compiled AMR Program handles through
+``sim.install(...)``.
 
 What is proven LOCALLY here:
 
-  (a) The compile ROUTE resolves layout=AMR -> per-block ``Model.compile(target="amr_system")``
-      (monkeypatched so no real ``.so`` is built) and does NOT touch ``compile_problem``, and the
-      ``AmrSystemConfig`` ``pops.bind`` builds from the layout has the right n / L / periodic /
+  (a) The compile ROUTE resolves ``layout=AMR`` inside ``compile_problem`` to the AMR program ABI
+      (monkeypatched so no real ``.so`` is built), and the
+      ``AmrSystemConfig`` built from the layout has the right n / L / periodic /
       regrid_every / patch settings; the layout's max_levels / ratio are validated against the
       native envelope (the config has no such field -- the native AMR is fixed at 2 levels / ratio 2).
   (b) A REAL native ``AmrSystem`` built from the same derived config + ``set_refinement`` +
@@ -21,25 +18,28 @@ What is proven LOCALLY here:
       stays physical -- proving the config-flow + refinement + Poisson wiring is correct end to
       end on the native engine path.
 
-ROMEO-gated (NOT proven here): the actual per-block ``.so`` compile (``Model.compile(backend=
-"production", target="amr_system")``) needs the Kokkos toolchain (``POPS_KOKKOS_ROOT`` unset
-locally), so the FULL ``pops.compile`` -> ``pops.bind`` -> multi-block AMR run on compiled artifacts
-is validated on ROMEO. The production route is asserted only to REACH the per-block
-``target="amr_system"`` compile.
+ROMEO-gated (NOT proven here): the actual AMR Program ``.so`` compile needs the Kokkos toolchain, so
+the FULL ``compile_problem`` -> ``sim.install`` -> AMR run on compiled artifacts is validated on ROMEO.
 
 Runs under pytest and as a plain script (the ``__main__`` guard); the CI runner executes it as a
 script.
 """
 import sys
+import os
 
 try:
     import numpy as np
     import pops
-    from pops.codegen import orchestration
+    from pops.codegen.backends import Production
+    from pops.model import Module
+    from pops.runtime.bricks import (BackgroundDensity, CompressibleFlux, Explicit,
+                                    FluidState, Model as NativeModel, NoSource, Spatial)
+    from pops.runtime.amr_layout import amr_config_from_layout, flow_amr_layout, is_default_density_subject
     from pops.mesh.amr import (FrozenRegrid, PatchLayout, Refine, RegridEvery, TagUnion,
                                NATIVE_MAX_LEVELS, NATIVE_RATIOS)
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR
+    from pops.numerics.reconstruction.limiters import Minmod
 except Exception as exc:  # noqa: BLE001
     print("skip test_spec5_amr_e2e (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -50,34 +50,43 @@ def _check(cond, msg):
         raise AssertionError(msg)
 
 
+INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
+
+
 class _StubCompiledModel:
-    """A target='amr_system' CompiledModel stand-in (the AMR route compiles each block to one)."""
+    """A compiled AMR Program stand-in returned by compile_problem."""
 
     def __init__(self, name="ne"):
         self.name = name
         self.so_path = "/tmp/%s_amr.so" % name
         self.target = "amr_system"
-        self.adder = "add_native_block"
 
 
-class _StubDsl:
-    """The ``.dsl`` engine model the compile route resolves to; its ``.compile`` records the call."""
+class _StubModule:
+    """The lowered module model the compile route resolves to."""
 
     def __init__(self, name="ne"):
         self.name = name
-        self.compiled = []
-
-    def compile(self, *, backend, target, **kw):
-        self.compiled.append((backend, target))
-        return _StubCompiledModel(self.name)
-
 
 class _StubModel:
-    """A physics stand-in exposing the ``.dsl`` engine model the compile route resolves."""
+    """A physics stand-in exposing the public ``to_module`` lowering hook."""
 
     def __init__(self, name="ne"):
         self.name = name
-        self.dsl = _StubDsl(name)
+        self.module = _StubModule(name)
+
+    def to_module(self):
+        return self.module
+
+
+def _minimal_module_and_program():
+    """Tiny real Module + Program used to exercise compile_problem routing without legacy Case."""
+    module = Module("amr_route")
+    module.state_space("U", ("rho",))
+    program = pops.time.Program("amr_program")
+    u = program.state("plasma")
+    program.commit("plasma", program.linear_combine("identity", u))
+    return module, program
 
 
 # --- monkeypatch helpers (work under pytest fixture OR the bare __main__ runner) ---
@@ -87,7 +96,12 @@ _SAVED = []
 def _patch(monkeypatch, dotted, value):
     module_name, attr = dotted.rsplit(".", 1)
     import importlib
-    module = importlib.import_module(module_name)
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        module_name, owner_name = module_name.rsplit(".", 1)
+        module = importlib.import_module(module_name)
+        module = getattr(module, owner_name)
     if monkeypatch is not None:
         monkeypatch.setattr(module, attr, value)
     else:
@@ -105,29 +119,40 @@ def _unpatch(monkeypatch):
 
 # --- (a) the compile ROUTE + the AmrSystemConfig-from-layout mapping ---------------
 def test_amr_layout_drives_compile_target(monkeypatch=None):
-    """compile(problem_with_AMR_layout) compiles each block for target='amr_system' (ADC-503).
+    """compile_problem(model=Module, time=Program, layout=AMR) emits the AMR program ABI."""
+    captured = {"target": None, "compiled": False}
 
-    The AMR route does NOT call compile_problem (no whole-system time Program). A tripwire on
-    compile_problem proves the route never touches it, and no time= is required.
-    """
-    tripwire = {"hit": False}
+    def _fake_emit(self, model=None, target="system"):
+        captured["target"] = target
+        return "extern \"C\" int pops_test_amr_route() { return 0; }\n"
 
-    def _tripwire(*a, **kw):
-        tripwire["hit"] = True
+    def _fake_run_compile(cmd, label):
+        captured["compiled"] = True
 
-    _patch(monkeypatch, "pops.codegen.compile_drivers.compile_problem", _tripwire)
+    def _fake_loader_build_flags(cxx=None):
+        return "c++", [], []
+
+    _patch(monkeypatch, "pops.time.program.Program._emit_cpp_program_for_target", _fake_emit)
+    _patch(monkeypatch, "pops.codegen.compile_drivers._run_compile", _fake_run_compile)
+    _patch(monkeypatch, "pops.codegen.compile_drivers.pops_loader_build_flags",
+           _fake_loader_build_flags)
     try:
         layout = AMR(CartesianMesh(n=48, L=2.0, periodic=False), max_levels=2, ratio=2)
-        model = _StubModel("ne")
-        prob = pops.Case(layout=layout).block("ne", physics=model)
-        compiled = orchestration.compile(prob)  # no time= : the AMR route does not need one
-        _check(tripwire["hit"] is False, "layout=AMR does NOT call compile_problem")
-        _check(model.dsl.compiled == [("production", "amr_system")],
-               "the block is compiled once with backend='production', target='amr_system'")
-        _check(compiled._target == "amr_system", "amr_system target carried on the handle")
-        _check(compiled._layout is layout, "the AMR layout is carried for bind()")
-        _check(set(compiled._block_compiled_models) == {"ne"},
-               "the {block: CompiledModel} table is carried on the handle")
+        module, program = _minimal_module_and_program()
+        compiled = pops.compile_problem(
+            "/tmp/pops_test_amr_route.so",
+            model=module,
+            time=program,
+            backend=Production(),
+            layout=layout,
+            force=True,
+            include=INCLUDE,
+        )
+        _check(captured["target"] == "amr_system",
+               "layout=AMR selects the AMR program ABI")
+        _check(captured["compiled"] is True, "compile_problem reached the compiler driver")
+        _check(compiled.model is module, "compiled handle carries the Module")
+        _check(compiled.program is program, "compiled handle carries the Program")
     finally:
         _unpatch(monkeypatch)
     print("ok test_amr_layout_drives_compile_target")
@@ -142,7 +167,7 @@ def test_amr_config_from_layout_mapping():
     layout = AMR(CartesianMesh(n=64, L=1.5, periodic=False), max_levels=2, ratio=2,
                  regrid=RegridEvery(8),
                  patches=PatchLayout(distribute_coarse=True, coarse_max_grid=16))
-    cfg = orchestration._amr_config_from_layout(layout)
+    cfg = amr_config_from_layout(layout)
     _check(cfg.n == 64, "n from the base CartesianMesh")
     _check(cfg.L == 1.5, "L from the base CartesianMesh")
     _check(cfg.periodic is False, "periodic from the base CartesianMesh")
@@ -157,10 +182,10 @@ def test_amr_config_from_layout_mapping():
 
 def test_amr_config_regrid_and_patch_defaults():
     """FrozenRegrid / no regrid -> regrid_every == 0; default patches -> native config defaults."""
-    frozen = orchestration._amr_config_from_layout(
+    frozen = amr_config_from_layout(
         AMR(CartesianMesh(n=32), regrid=FrozenRegrid()))
     _check(frozen.regrid_every == 0, "FrozenRegrid -> frozen hierarchy (regrid_every == 0)")
-    no_regrid = orchestration._amr_config_from_layout(AMR(CartesianMesh(n=32)))
+    no_regrid = amr_config_from_layout(AMR(CartesianMesh(n=32)))
     _check(no_regrid.regrid_every == 0, "no regrid policy -> regrid_every == 0")
     _check(no_regrid.n == 32, "n still derived from the base mesh")
     print("ok test_amr_config_regrid_and_patch_defaults")
@@ -168,40 +193,42 @@ def test_amr_config_regrid_and_patch_defaults():
 
 def test_amr_refine_default_density_subject():
     """The density / component-0 subjects map to the single-block default; others are non-default."""
-    _check(orchestration._is_default_density_subject("Density"), "Density role is the default")
-    _check(orchestration._is_default_density_subject("density"), "density name is the default")
-    _check(orchestration._is_default_density_subject("rho"), "rho name is the default")
-    _check(orchestration._is_default_density_subject(None), "no subject is the default")
-    _check(not orchestration._is_default_density_subject("MomentumX"),
+    _check(is_default_density_subject("Density"), "Density role is the default")
+    _check(is_default_density_subject("density"), "density name is the default")
+    _check(is_default_density_subject("rho"), "rho name is the default")
+    _check(is_default_density_subject(None), "no subject is the default")
+    _check(not is_default_density_subject("MomentumX"),
            "a non-density role is a non-default (multi-block) selector")
     print("ok test_amr_refine_default_density_subject")
 
 
-def test_amr_non_default_refine_selector_rejected():
-    """A non-density refine selector is refused on the single-block AMR route (clear message)."""
+def test_amr_non_default_refine_selector_flows_to_cpp():
+    """A non-density refine selector is forwarded to C++ instead of rejected in Python."""
     class _Recorder:
+        def __init__(self):
+            self.calls = []
+
         def set_refinement(self, *a, **k):
-            raise AssertionError("set_refinement must not be called for a rejected selector")
+            self.calls.append((a, k))
 
         def set_phi_refinement(self, *a, **k):
             raise AssertionError("set_phi_refinement must not be called here")
 
     layout = AMR(CartesianMesh(n=32))
     layout.refine = Refine.on("MomentumX").above(0.5)
-    try:
-        orchestration._flow_amr_layout(_Recorder(), layout)
-        raise AssertionError("a non-density selector must raise on the single-block route")
-    except NotImplementedError as exc:
-        _check("multi-block" in str(exc), "the message names the multi-block limitation")
-    print("ok test_amr_non_default_refine_selector_rejected")
+    rec = _Recorder()
+    flow_amr_layout(rec, layout)
+    _check(rec.calls == [((0.5,), {"variable": "MomentumX"})],
+           "non-density subject is passed as variable selector")
+    print("ok test_amr_non_default_refine_selector_flows_to_cpp")
 
 
 # --- (b) a REAL native AmrSystem from the derived config runs a few steps -----------
 def _native_compressible_model():
     """A native compressible-flow ModelSpec (composed bricks, NO DSL compile)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
-                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                      elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
+    return NativeModel(state=FluidState.compressible(gamma=1.4),
+                       transport=CompressibleFlux(), source=NoSource(),
+                       elliptic=BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def _bubble(n):
@@ -214,8 +241,8 @@ def test_native_amr_from_layout_runs():
     """A native AmrSystem built from a layout's derived config + set_refinement + set_poisson runs.
 
     This is the config-flow + refinement + Poisson wiring proven on the REAL engine (native bricks,
-    no DSL compile). It mirrors exactly what pops.bind does on the AMR route: build the AmrSystem
-    from _amr_config_from_layout(layout), flow the typed Refine to set_refinement, set the Poisson
+    no DSL compile). It mirrors the modern AMR route: build the AmrSystem
+    from amr_config_from_layout(layout), flow the typed Refine to set_refinement, set the Poisson
     solver, add the native block and the initial density, then step.
     """
     n = 48
@@ -224,16 +251,16 @@ def test_native_amr_from_layout_runs():
     layout.refine = TagUnion(Refine.on("Density").above(1.2),
                              Refine.on("phi").gradient_above(0.5))
 
-    cfg = orchestration._amr_config_from_layout(layout)
+    cfg = amr_config_from_layout(layout)
     _check(cfg.n == n and cfg.regrid_every == 4, "config derived from the layout")
 
     sim = pops.AmrSystem(cfg)
     # Flow the typed refinement exactly as pops.bind does (set_refinement / set_phi_refinement).
-    orchestration._flow_amr_layout(sim, layout)
-    # The Poisson field (set via the install solvers seam in bind) -- exercise it directly here.
-    sim.set_poisson("charge_density", "geometric_mg")
+    flow_amr_layout(sim, layout)
+    # The Poisson field set through the runtime install seam -- exercise the native wiring here.
+    sim._set_poisson("charge_density", "geometric_mg")
     sim._add_block("gas", _native_compressible_model(),
-                  spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                   spatial=Spatial(limiter=Minmod()), time=Explicit())
     sim.set_density("gas", _bubble(n))
 
     m0 = sim.mass()
@@ -251,38 +278,30 @@ def test_native_amr_from_layout_runs():
           % (sim.n_patches(), sim.mass()))
 
 
-def test_production_so_compile_is_romeo_gated():
-    """The production .so compile path REACHES the per-block target='amr_system' compile (ADC-503).
+def test_native_single_block_amr_variable_refinement_builds():
+    """Single-block AMR resolves a non-density refinement variable in C++."""
+    n = 32
+    sim = pops.AmrSystem(amr_config_from_layout(
+        AMR(CartesianMesh(n=n), max_levels=2, ratio=2, regrid=RegridEvery(1))))
+    sim.set_refinement(-0.5, variable="rho_u")
+    sim._set_poisson("charge_density", "geometric_mg")
+    sim._add_block("gas", _native_compressible_model(),
+                   spatial=Spatial(limiter=Minmod()), time=Explicit())
+    sim.set_density("gas", _bubble(n))
+    _check(sim.n_patches() >= 0, "single-block AMR built with variable='rho_u'")
+    print("ok test_native_single_block_amr_variable_refinement_builds")
 
-    The actual emit + .so compile needs Kokkos (POPS_KOKKOS_ROOT unset locally) -> ROMEO. We prove
-    the route reaches the per-block Model.compile(backend='production', target='amr_system') WITHOUT
-    building a .so, by stubbing the block model's .compile to raise at the C++-invoking boundary.
-    """
-    reached = {}
 
-    class _RomeoDsl:
-        name = "ne"
-
-        def compile(self, *, backend, target, **kw):
-            reached["backend"], reached["target"] = backend, target
-            # A real call here would emit the loader C++ and invoke the Kokkos compiler (ROMEO).
-            raise RuntimeError("ROMEO boundary: .so compile needs the Kokkos toolchain")
-
-    class _RomeoModel:
-        def __init__(self):
-            self.name = "ne"
-            self.dsl = _RomeoDsl()
-
+def test_amr_compile_requires_time_program():
+    """The AMR compile_problem route requires an explicit Program; there is no per-block fallback."""
     layout = AMR(CartesianMesh(n=32), max_levels=2, ratio=2)
-    prob = pops.Case(layout=layout).block("ne", physics=_RomeoModel())
+    module = Module("missing_time")
     try:
-        orchestration.compile(prob)
-        raise AssertionError("the ROMEO-boundary stub should have raised")
-    except RuntimeError as exc:
-        _check("ROMEO boundary" in str(exc), "reached the .so compile (Kokkos) boundary")
-    _check(reached.get("target") == "amr_system" and reached.get("backend") == "production",
-           "the production .so path is reached with backend='production', target='amr_system'")
-    print("ok test_production_so_compile_is_romeo_gated")
+        pops.compile_problem(model=module, layout=layout, backend=Production())
+        raise AssertionError("AMR compile without a Program must raise")
+    except ValueError as exc:
+        _check("time must be" in str(exc), "missing Program is rejected clearly")
+    print("ok test_amr_compile_requires_time_program")
 
 
 def _run_all():

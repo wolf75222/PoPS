@@ -56,7 +56,7 @@ class _ProgramInspect(_ProgramConstants):
         for v in self._values:
             if v.op not in self._SCRATCH_OPS:
                 continue
-            if v.op == "operator_call" and v.vtype != "rhs":
+            if v.op == "call" and v.vtype != "rhs":
                 continue
             d = order[v.id]
             lu = last_use.get(v.id, d)  # an unused scratch is live only at its own def
@@ -121,8 +121,8 @@ class _ProgramInspect(_ProgramConstants):
         kernel_count = small = heavy = 0
         reads = writes = 0
         for v in self._values:
-            is_operator_field = v.op == "operator_call" and v.vtype == "fields"
-            is_operator_rhs = v.op == "operator_call" and v.vtype == "rhs"
+            is_operator_field = v.op == "call" and v.vtype == "fields"
+            is_operator_rhs = v.op == "call" and v.vtype == "rhs"
             if v.op in self._HEAVY_KERNEL_OPS or is_operator_field:
                 heavy += 1
                 kernel_count += 1
@@ -132,7 +132,7 @@ class _ProgramInspect(_ProgramConstants):
                 reads += 1
                 writes += 1
                 continue
-            if v.op in self._PERCELL_KERNEL_OPS and (v.op != "operator_call" or is_operator_rhs):
+            if v.op in self._PERCELL_KERNEL_OPS and (v.op != "call" or is_operator_rhs):
                 kernel_count += 1
                 # One write (its result scratch) + one read per distinct field input it consumes.
                 in_fields = len({i.id for i in v.inputs if i.is_field()})

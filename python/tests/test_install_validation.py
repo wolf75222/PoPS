@@ -39,10 +39,11 @@ try:
 
     import pops
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.physics.model import Param
+    from pops.physics.model import ConstParam, RuntimeParam
     from pops.runtime._system_unified_install import (collect_missing_arguments,
                                                       validate_install_arguments)
     from pops import time as adctime
+    from pops.runtime._compiled_cadence import CompiledProgramCadence
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_install_validation (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -60,8 +61,8 @@ def _program(name="installval_demo"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f = P._solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields("phi", U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -71,7 +72,7 @@ def _model(*, n_vars=3, aux_names=("B_z",), params=None):
     cons = ["rho", "mx", "my", "E"][:n_vars]
     roles = ["Density", "MomentumX", "MomentumY", "Energy"][:n_vars]
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=cons, cons_roles=roles, prim_names=cons, n_vars=n_vars, gamma=1.4,
         n_aux=len(aux_names), params=params or {}, caps={"cpu": True}, abi_key="SIG|c++|c++23",
         model_hash="modelhash", cxx="c++", std="c++23", aux_extra_names=list(aux_names))
@@ -97,8 +98,8 @@ def test_pure_router_flags_only_required_and_missing():
     """collect_missing_arguments flags a missing required instance / param / aux, but NOT a const
     param and NOT the default-Poisson solver (arguments() never marks 'phi' required)."""
     print("== pure router: only required-and-missing inputs are flagged ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "g": Param("g", 1.4, kind="const")}
+    params = {"cs2": RuntimeParam("cs2", 1.0),
+              "g": ConstParam("g", 1.4)}
     args = _compiled(aux_names=("B_z",), params=params).arguments()
 
     missing = collect_missing_arguments(args, set(), set(), set(), set())
@@ -117,7 +118,7 @@ def test_pure_router_passes_when_everything_supplied():
     """collect_missing_arguments returns [] once every required input is supplied (no false
     positive) -- a block already added on the sim counts as provided."""
     print("== pure router: nothing missing once everything required is supplied ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime")}
+    params = {"cs2": RuntimeParam("cs2", 1.0)}
     args = _compiled(aux_names=("B_z",), params=params).arguments()
     chk(collect_missing_arguments(args, {"plasma"}, {"cs2"}, {"B_z"}, {"phi"}) == [],
         "all supplied -> no missing argument")
@@ -128,8 +129,8 @@ def test_pure_router_passes_when_everything_supplied():
 def test_pure_router_aggregates_multiple_missing():
     """Several missing required inputs aggregate into one list (one line each)."""
     print("== pure router: multiple missing inputs aggregate ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "nu": Param("nu", 0.1, kind="runtime")}
+    params = {"cs2": RuntimeParam("cs2", 1.0),
+              "nu": RuntimeParam("nu", 0.1)}
     args = _compiled(aux_names=("B_z",), params=params).arguments()
     missing = collect_missing_arguments(args, {"plasma"}, set(), set(), set())
     chk(len(missing) == 3, "two missing params + one missing aux -> 3 lines (got %d)" % len(missing))
@@ -145,7 +146,7 @@ def test_install_raises_before_native_when_required_missing():
     install_program is mocked to flip a flag; the validation must raise before it is ever called, so
     a misuse cannot leave a half-configured System."""
     print("== System._install_compiled raises BEFORE the native install_program ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime")}
+    params = {"cs2": RuntimeParam("cs2", 1.0)}
     cp = _compiled(aux_names=("B_z",), params=params)
     sim = pops.System(n=N, L=1.0, periodic=True)
     called = {"native": False}
@@ -183,7 +184,7 @@ def _stub_lower_layer(sim, record):
     record.setdefault("blocks", [])
     record.setdefault("native", False)
     sim._add_equation = lambda name, model, **k: record["blocks"].append(name)
-    sim.set_state = lambda *a, **k: None
+    sim._set_state = lambda *a, **k: None
     sim._install_solver = lambda *a, **k: None
     sim._install_program_so = lambda *a, **k: record.__setitem__("native", True)
     sim.block_names = lambda: list(record["blocks"])
@@ -229,7 +230,7 @@ def test_install_solver_accepts_rich_elliptic_descriptor():
     print("== install solver: rich typed GeometricMG descriptor lowers to the native token ==")
     sim = pops.System(n=N, L=1.0, periodic=True)
     seen = {}
-    sim.set_poisson = lambda **kwargs: seen.update(kwargs)
+    sim._set_poisson = lambda **kwargs: seen.update(kwargs)
     sim._install_solver("phi", pops.solvers.GeometricMG(), frozenset())
     chk(seen["solver"] == "geometric_mg", "rich GeometricMG lowers to set_poisson solver token")
 
@@ -368,10 +369,30 @@ def test_amr_compiled_params_and_cadence_route():
                           instances={"plasma": {"model": _model(aux_names=()),
                                                 "initial": np.ones((3, N, N))}},
                           params={"cs2": 2.0},
-                          cadence=adctime.CompiledTime(substeps=2, stride=3))
+                          cadence=CompiledProgramCadence(substeps=2, stride=3))
     chk(record["installed"] is True, "install_program was reached")
     chk(record["params"] == [(0, [2.0])], "params= routed to set_program_params (block 0, [2.0])")
     chk(record["cadence"] == (2, 3), "cadence= routed to set_program_cadence (substeps=2, stride=3)")
+
+
+def test_amr_compiled_outputs_are_stored_for_run_loop():
+    """AMR compiled installs keep OutputPolicy / CheckpointPolicy for AmrSystem.run()."""
+    print("== AmrSystem._install_compiled stores output policies ==")
+    from pops.output import OutputPolicy, CheckpointPolicy
+    from pops.time.schedule import every
+
+    cp = _compiled(aux_names=())
+    amr = pops.AmrSystem(n=N, L=1.0)
+    record = {}
+    _stub_amr_lower_layer(amr, record)
+    out = OutputPolicy(cadence=every(2), prefix="amr_out")
+    ckpt = CheckpointPolicy(cadence=every(5), prefix="amr_ckpt")
+    amr._install_compiled(cp,
+                          instances={"plasma": {"model": _model(aux_names=()),
+                                                "initial": np.ones((3, N, N))}},
+                          outputs=[out, ckpt])
+    chk(amr._output_policies == [out, ckpt],
+        "AMR output/checkpoint policies are stored for the run loop")
 
 
 def test_amr_native_params_and_cadence_rejected():
@@ -382,10 +403,10 @@ def test_amr_native_params_and_cadence_rejected():
     try:
         amr._install_compiled(None, params={"nu": 1.0})
         chk(False, "params= should raise on a native AMR install")
-    except NotImplementedError as exc:
+    except ValueError as exc:
         chk("set_block_params" in str(exc) or "params" in str(exc), "params rejection is explicit")
     try:
-        amr._install_compiled(None, cadence=adctime.CompiledTime(substeps=2))
+        amr._install_compiled(None, cadence=CompiledProgramCadence(substeps=2))
         chk(False, "cadence= should raise on a native AMR install")
     except ValueError as exc:
         chk("cadence" in str(exc) or "Program" in str(exc), "cadence rejection is explicit")

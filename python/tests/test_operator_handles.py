@@ -14,9 +14,9 @@ import sys
 
 try:
     import pytest
-    from pops.ir.expr import Const
+    from pops import model
+    from pops.ir.expr import Const, Var
     from pops.model import OperatorHandle
-    from pops.physics.facade import Model
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_handles (pops unavailable: %s)" % exc)
@@ -28,25 +28,33 @@ def build_model():
 
     Returns the model plus the handles the declarers returned (so the test can pass a
     handle straight into ``P.call``)."""
-    m = Model("euler_poisson_lorentz")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    m.aux("phi")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho])
-    h_src = m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
-    h_lin = m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                        [0.0, 0.0, bz],
-                                        [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    h_rate = m.rate_operator("explicit_rhs", flux=True, sources=[h_src])
-    return m, {"electric": h_src, "lorentz": h_lin, "explicit_rhs": h_rate}
+    mod = model.Module("euler_poisson_lorentz")
+    u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y", "B_z"))
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy, bz = Var("grad_x", "aux"), Var("grad_y", "aux"), Var("B_z", "aux")
+    mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator",
+        capabilities={"default": True}, expr=rho - 1.0)
+    mod.operator(
+        name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+        expr={"x": [mx, mx * mx / rho, mx * my / rho],
+              "y": [my, mx * my / rho, my * my / rho]})
+    h_src = mod.operator(
+        name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source",
+        expr=[Const(0.0), rho * (-gx), rho * (-gy)])
+    h_lin = mod.operator(
+        name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
+        kind="local_linear_operator",
+        expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    h_rate = mod.rate_operator("explicit_rhs", flux=True, sources=[h_src])
+    return mod, {"electric": OperatorHandle(h_src.name, kind=h_src.kind),
+                 "lorentz": OperatorHandle(h_lin.name, kind=h_lin.kind),
+                 "explicit_rhs": OperatorHandle(h_rate.name, kind=h_rate.kind)}
 
 
-def test_declarers_return_operator_handles():
-    """Each user-facing declarer returns a typed OperatorHandle naming the declared operator."""
+def test_handles_name_declared_operators():
+    """Each typed OperatorHandle names an operator declared on the Module."""
     m, h = build_model()
     assert isinstance(h["electric"], OperatorHandle)
     assert isinstance(h["lorentz"], OperatorHandle)
@@ -54,25 +62,17 @@ def test_declarers_return_operator_handles():
     assert h["electric"].name == "electric" and h["electric"].kind == "local_source"
     assert h["lorentz"].name == "lorentz" and h["lorentz"].kind == "local_linear_operator"
     assert h["explicit_rhs"].name == "explicit_rhs" and h["explicit_rhs"].kind == "local_rate"
-    # The default source_term alias also returns a handle (name 'default').
-    m2 = Model("ds")
-    rho2, mx2, my2 = m2.conservative_vars("rho", "mx", "my")
-    h_def = m2.source_term("default", [Const(0.0), -mx2, -my2])
+    # A handle for a default source name remains a typed selector.
+    h_def = OperatorHandle("default", kind="local_source")
     assert isinstance(h_def, OperatorHandle) and h_def.name == "default"
-    print("OK  declarers return typed OperatorHandle(name, kind)")
+    print("OK  typed OperatorHandle(name, kind) names Module operators")
 
 
 def test_rate_operator_rejects_string_source_selectors():
-    m = Model("bad_rate_source")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    m.flux(x=[mx, mx, mx], y=[my, my, my])
-    m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
+    m, _ = build_model()
     with pytest.raises(TypeError, match="typed source handles"):
-        m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+        m.rate_operator("bad_rhs", flux=True, sources=["electric"])
     # The implicit built-in source sentinel remains allowed.
-    m.source([Const(0.0), -mx, -my])
     m.rate_operator("default_rhs", flux=True, sources=["default"])
     print("OK  rate_operator rejects named source strings and accepts the default sentinel")
 
@@ -191,7 +191,7 @@ def test_handle_equality_and_repr():
 
 
 def main():
-    test_declarers_return_operator_handles()
+    test_handles_name_declared_operators()
     test_call_handle_byte_identical_to_name()
     test_name_path_byte_identical_across_models()
     test_public_call_rejects_a_string()

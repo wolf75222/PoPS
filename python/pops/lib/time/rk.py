@@ -9,7 +9,7 @@ from ._helpers import _opcall, _stage_rhs
 def rk4(P, block, *, sources=("default",), flux=True):
     """Classic RK4, expressed with NO special RK4 class (spec acceptance 29):
     U^{n+1} = U0 + dt/6 (k1 + 2 k2 + 2 k3 + k4)."""
-    U0 = P.state(block)
+    U0 = P._state_value(block)
     k1 = _stage_rhs(P, U0, sources, flux)
     U1 = P.linear_combine("rk4_U1", U0 + 0.5 * P.dt * k1)
     k2 = _stage_rhs(P, U1, sources, flux)
@@ -83,7 +83,7 @@ def rk(P, block, tableau, *, sources=("default",), flux=True):
         A, b, c = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
         tableau = ButcherTableau(A, b, c)
     tag = (tableau.name + "_") if tableau.name else "rk_"
-    U0 = P.state(block)
+    U0 = P._state_value(block)
     ks = []
     for i in range(tableau.stages):
         if i == 0:
@@ -122,7 +122,7 @@ def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A
         ta, tb, tc = tableau if len(tableau) == 3 else (tableau[0], tableau[1], None)
         tableau = ButcherTableau(ta, tb, tc)
     tag = (tableau.name + "_") if tableau.name else "rk_"
-    u0 = P.state(block)
+    u0 = P._state_value(block)
     ks = []
     for i in range(tableau.stages):
         if i == 0:

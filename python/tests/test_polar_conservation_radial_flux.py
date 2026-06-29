@@ -136,10 +136,10 @@ def test_polar_conservation_with_nonzero_radial_flux():
             source=pops.NoSource(),
             elliptic=pops.ChargeDensity(charge=1.0),
         ),
-        spatial=pops.Spatial(minmod=True),
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()),
         time=pops.Explicit(),
     )
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
 
     # --- etat initial ---
@@ -213,10 +213,10 @@ if __name__ == "__main__":
             source=_pops_mod.NoSource(),
             elliptic=_pops_mod.ChargeDensity(charge=1.0),
         ),
-        spatial=_pops_mod.Spatial(minmod=True),
+        spatial=_pops_mod.Spatial(limiter=_pops_mod.numerics.reconstruction.limiters.Minmod()),
         time=_pops_mod.Explicit(),
     )
-    _sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    _sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     _sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
     _m0 = _sim.mass("ne")
     _var0 = _radial_variance(_sim, "ne", NR, NTH)

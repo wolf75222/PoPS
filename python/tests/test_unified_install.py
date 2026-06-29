@@ -26,9 +26,13 @@ try:
     import pops
     from pops.codegen.loader import CompiledModel
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
-    from pops.physics.model import Param, RuntimeParam
+    from pops import physics
+    from pops.math import ddt, div, grad, laplacian
+    from pops.physics.model import ConstParam, RuntimeParam
     from pops import time as adctime
+    from pops.runtime._bricks_scheme import Explicit, FiniteVolume, Spatial
+    from pops.runtime._compiled_cadence import CompiledProgramCadence
+    from pops.solvers import GeometricMG
 except Exception as exc:  # noqa: BLE001
     print("skip test_unified_install (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -42,7 +46,7 @@ def _fake_compiled(*, hllc=False, roe=False, prim_names=("rho", "u", "v"), wave_
     .so. Used to exercise the host-testable section-24 capability check and the params routing
     WITHOUT compiling (which needs Kokkos). It is never install_program'd."""
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["density", "momentum_x", "momentum_y"],
         prim_names=list(prim_names), n_vars=3, gamma=None, n_aux=3, params=params or {},
         caps={}, abi_key="", model_hash="", cxx="c++", std="23",
@@ -50,42 +54,45 @@ def _fake_compiled(*, hllc=False, roe=False, prim_names=("rho", "u", "v"), wave_
 
 
 def test_lower_spatial_accepts_runtime_and_catalog():
-    """install lowers BOTH an pops.FiniteVolume (runtime) and an pops.numerics.spatial.FiniteVolume
+    """install lowers BOTH an FiniteVolume (runtime) and an pops.numerics.spatial.FiniteVolume
     (catalog descriptor) to the same add_equation spatial args."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     # Runtime descriptor passes through unchanged.
-    rt = pops.FiniteVolume(limiter=WENO5(), riemann=HLL(), variables=Primitive())
+    rt = FiniteVolume(limiter=WENO5(), riemann=HLL(), variables=Primitive())
     low = sim._lower_spatial(rt)
     assert low is rt, "runtime Spatial must pass through unchanged"
-    # catalog descriptor: riemann/reconstruction/positivity_floor -> limiter/flux/recon.
-    # NB pops.numerics.spatial.FiniteVolume is the brick-CATALOG descriptor: it stores its scheme
-    # choice as STRING options (lowered to typed tokens by _lower_spatial), distinct from the
-    # runtime pops.FiniteVolume which now requires typed pops.numerics descriptors (Spec 5 sec.7).
-    libdesc = pops.numerics.spatial.FiniteVolume(riemann="hllc", reconstruction="weno5",
-                                                 positivity_floor=1e-12)
+    # catalog descriptor: typed riemann/reconstruction/positivity_floor -> limiter/flux/recon.
+    libdesc = pops.numerics.spatial.FiniteVolume(
+        riemann=pops.numerics.riemann.HLLC(),
+        reconstruction=pops.numerics.reconstruction.WENO5(),
+        positivity_floor=1e-12,
+    )
     low = sim._lower_spatial(libdesc)
     assert low.flux == "hllc", "riemann -> Spatial.flux (got %r)" % low.flux
     assert low.limiter == "weno5", "reconstruction -> Spatial.limiter (got %r)" % low.limiter
     assert low.positivity_floor == 1e-12, "positivity_floor lowered (got %r)" % low.positivity_floor
     # None -> default Spatial.
-    assert isinstance(sim._lower_spatial(None), pops.Spatial)
+    assert isinstance(sim._lower_spatial(None), Spatial)
     print("OK  _lower_spatial accepts runtime + lib descriptors")
 
 
 def test_solver_token_lowering():
-    """A field-solver selection lowers to its set_poisson token: string as-is, or the lib
-    descriptor's scheme (pops.fields.catalog.GeometricMG -> 'geometric_mg')."""
+    """A field-solver selection lowers from a typed descriptor; legacy token strings are rejected."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    assert sim._solver_token("geometric_mg") == "geometric_mg"
-    assert sim._solver_token(pops.fields.catalog.GeometricMG()) == "geometric_mg"
-    print("OK  _solver_token lowers string + lib descriptor")
+    try:
+        sim._solver_token("geometric_mg")
+        raise AssertionError("legacy solver token string should be rejected")
+    except TypeError:
+        pass
+    assert sim._solver_token(pops.solvers.GeometricMG()) == "geometric_mg"
+    print("OK  _solver_token rejects string and lowers typed descriptor")
 
 
 def test_install_solver_sets_poisson():
     """install lowers solvers={'phi': GeometricMG(...)} to set_poisson, reflected by poisson_solver()
     (the section-24 accessor) when the binding is present."""
     sim = pops.System(n=N, L=1.0, periodic=True)
-    sim._install_solver("phi", pops.fields.catalog.GeometricMG())
+    sim._install_solver("phi", pops.solvers.GeometricMG())
     if hasattr(sim._s, "poisson_solver"):
         assert sim.poisson_solver() == "geometric_mg", \
             "set_poisson lowered (got %r)" % sim.poisson_solver()
@@ -95,14 +102,14 @@ def test_install_solver_sets_poisson():
     # C1-System: a DECLARED named elliptic field routes through the shared elliptic solver (set_poisson);
     # an UNDECLARED field name is a typo, rejected LOUD against the declared set (not silently dropped).
     sim2 = pops.System(n=N, L=1.0, periodic=True)
-    sim2._install_solver("temperature", pops.fields.catalog.GeometricMG(),
+    sim2._install_solver("temperature", pops.solvers.GeometricMG(),
                          declared_fields=frozenset({"temperature"}))
     if hasattr(sim2._s, "poisson_solver"):
         assert sim2.poisson_solver() == "geometric_mg", \
             "a declared named field routes to set_poisson (got %r)" % sim2.poisson_solver()
     print("OK  _install_solver routes a DECLARED named elliptic field (C1-System)")
     try:
-        sim2._install_solver("temprature", pops.fields.catalog.GeometricMG(),
+        sim2._install_solver("temprature", pops.solvers.GeometricMG(),
                              declared_fields=frozenset({"temperature"}))
         raise AssertionError("MISMATCH: an undeclared field name should raise ValueError")
     except ValueError as exc:
@@ -117,7 +124,7 @@ def test_riemann_capability_verbatim():
     sim = pops.System(n=N, L=1.0, periodic=True)
     model = _fake_compiled(hllc=False, prim_names=("rho", "u", "v"))
     try:
-        sim._validate_riemann_capability(model, pops.FiniteVolume(riemann=HLLC()))
+        sim._validate_riemann_capability(model, FiniteVolume(riemann=HLLC()))
         raise AssertionError("MISMATCH: hllc without capability should raise")
     except RuntimeError as exc:
         assert str(exc) == "riemann HLLC requires capability 'hllc_star_state'", \
@@ -125,7 +132,7 @@ def test_riemann_capability_verbatim():
         print("OK  riemann HLLC requires capability 'hllc_star_state'")
     # Roe without capability / pressure rejects too.
     try:
-        sim._validate_riemann_capability(model, pops.FiniteVolume(riemann=Roe()))
+        sim._validate_riemann_capability(model, FiniteVolume(riemann=Roe()))
         raise AssertionError("MISMATCH: roe without capability should raise")
     except RuntimeError as exc:
         assert "roe_dissipation" in str(exc).lower() or "Roe requires capability" in str(exc), \
@@ -133,7 +140,7 @@ def test_riemann_capability_verbatim():
         print("OK  riemann Roe requires its capability")
     # With the capability emitted, the same flux passes.
     ok_model = _fake_compiled(hllc=True, prim_names=("rho", "u", "v", "p"))
-    sim._validate_riemann_capability(ok_model, pops.FiniteVolume(riemann=HLLC()))
+    sim._validate_riemann_capability(ok_model, FiniteVolume(riemann=HLLC()))
     print("OK  riemann capability accepted once the model emits it")
 
 
@@ -180,9 +187,9 @@ def test_install_params_routes_declared_runtime_param():
     System._route_block_params (no compile, no engine call)."""
     # A RESOLVED model declaring two runtime params + one const (const excluded; names SORTED).
     resolved = _fake_compiled(params={
-        "nu": Param("nu", 0.0, kind="runtime"),
-        "cs2": Param("cs2", 1.0, kind="runtime"),
-        "g": Param("g", 9.8, kind="const")})
+        "nu": RuntimeParam("nu", 0.0),
+        "cs2": RuntimeParam("cs2", 1.0),
+        "g": ConstParam("g", 9.8)})
     assert resolved.runtime_param_names == ["cs2", "nu"], \
         "runtime params SORTED, const excluded (got %r)" % resolved.runtime_param_names
     # Positive: a declared param is routed (NOT 'unknown'); the vector handed to set_block_params is in
@@ -194,43 +201,66 @@ def test_install_params_routes_declared_runtime_param():
         % per_block
     print("OK  install routes a declared runtime param to set_block_params in sorted-name order")
 
-    # Contrast (the bug): the SAME param via a RAW Model (no runtime_param_names accessor) is
-    # dropped into 'unknown' -- which install would surface as 'declared by no instance'. This is why
-    # install RESOLVES each model before routing (install step 2 -> _route_block_params).
-    raw = Model("adc466_raw_rt")
-    raw.param(RuntimeParam("cs2", 1.0))
-    raw.param(RuntimeParam("nu", 0.0))
-    _, unknown_raw = pops.System._route_block_params({"plasma": raw}, {"nu": 2.5})
+    # Contrast: an unresolved carrier without runtime_param_names is treated as declaring none.
+    # Modern install must resolve physics.Model -> Module -> CompiledModel before this router.
+    class UnresolvedModel:
+        pass
+
+    _, unknown_raw = pops.System._route_block_params({"plasma": UnresolvedModel()}, {"nu": 2.5})
     assert unknown_raw == ["nu"], \
-        "a RAW Model exposes no runtime_param_names -> the param is dropped (the bug)"
-    print("OK  routing a RAW Model drops the param (the bug install's resolve step prevents)")
+        "an unresolved model exposes no runtime_param_names -> the param is rejected"
+    print("OK  routing an unresolved model rejects params (install must resolve first)")
 
 
 def _lorentz_model(name="adc466_model"):
     """An isothermal fluid whose Lorentz linear source reads the aux field B_z (a hard requirement),
     same shape as test_install_requirement_validation -- used for the Kokkos-gated end-to-end."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    m = physics.Model(name)
+    U = m.state("U", components=["rho", "mx", "my"],
+                roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+    rho, mx, my = U
     cs = sqrt(0.5)
-    m.flux(x=[mx, mx * mx / rho + 0.5 * rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho + 0.5 * rho])
-    m.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
-                  y=[my / rho - cs, my / rho, my / rho + cs])
-    m.primitive_vars(rho, mx, my)
-    m.conservative_from([rho, mx, my])
+    flux = m.flux("F", on=U,
+                  x=[mx, mx * mx / rho + 0.5 * rho, mx * my / rho],
+                  y=[my, mx * my / rho, my * my / rho + 0.5 * rho],
+                  waves={"x": [mx / rho - cs, mx / rho, mx / rho + cs],
+                         "y": [my / rho - cs, my / rho, my / rho + cs]})
+    phi = m.field("phi")
+    m.solve_field(
+        "fields_from_state",
+        equation=(-laplacian(phi) == rho),
+        outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+        solver=GeometricMG(),
+    )
     bz = m.aux("B_z")
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho)
-    m.rate_operator("explicit_rhs", flux=True)
+    lorentz = m.local_linear_operator(
+        "lorentz", on=U,
+        matrix=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]],
+    )
+    m.operator("lorentz", returns=lorentz)
+    m.rate("explicit_rhs", ddt(U) == -div(flux))
     return m
 
 
-def _lie_program(name="adc466_prog"):
+def _module_of(model):
+    return model.to_module() if hasattr(model, "to_module") else model
+
+
+def _lie_program(model, name="adc466_prog"):
+    module = _module_of(model)
     P = adctime.Program(name)
-    u = P.state("plasma")
-    fields = P._solve_fields(u)
-    r = P._rhs_legacy(state=u, fields=fields)
-    P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
+    P.bind_operators(module)
+    states = module.state_spaces()
+    operators = module.operator_registry()
+    u = P.state("plasma", space=states["U"])
+    fields = P.call(operators.get("fields_from_state"), u, name="fields")
+    r = P.call(operators.get("explicit_rhs"), u, fields, name="R")
+    candidate = P.linear_combine("rhs", u + P.dt * r)
+    if "lorentz" in operators:
+        L = P.call(operators.get("lorentz"), fields, name="L")
+        candidate = P.solve_local_linear(
+            "u1", operator=P.I - P.dt * L, rhs=candidate, fields=fields)
+    P.commit("plasma", candidate)
     return P
 
 
@@ -238,12 +268,13 @@ def test_install_end_to_end_kokkos():
     """End-to-end unified install (needs a compiler + Kokkos -> ROMEO / CI-Kokkos). A single
     sim._install_compiled(compiled, instances=, aux=, solvers=) wires + installs; the NEGATIVE case (no B_z)
     raises the section-24 aux requirement at install."""
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip test_install_end_to_end_kokkos (_pops lacks install_program; rebuild _pops)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+        print("skip test_install_end_to_end_kokkos (System lacks _install_program_so)")
         return
     m = _lorentz_model()
+    module = m.to_module()
     try:
-        compiled = pops.compile_problem(model=m, time=_lie_program())
+        compiled = pops.compile_problem(model=module, time=_lie_program(module))
     except RuntimeError as exc:
         print("skip test_install_end_to_end_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
@@ -254,19 +285,19 @@ def test_install_end_to_end_kokkos():
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
     u0 = np.stack([rho, 0.4 * rho, -0.2 * rho])
 
-    # Negative: install WITHOUT aux B_z -> section-24 aux requirement raised at install_program.
+    # Negative: install WITHOUT aux B_z -> arguments() validation raises before runtime mutation.
     sim_missing = pops.System(n=N, L=1.0, periodic=True)
     try:
         sim_missing._install_compiled(
             compiled,
             instances={"plasma": {"state": "U", "initial": u0,
-                                  "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                  "time": pops.Explicit(method="euler")}},
-            solvers={"phi": pops.fields.catalog.GeometricMG()})
+                                  "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                                  "time": Explicit.euler()}},
+            solvers={"phi": GeometricMG()})
         raise AssertionError("MISMATCH: unified install accepted a simulation missing B_z")
-    except RuntimeError as exc:
-        assert "lorentz" in str(exc) and "B_z" in str(exc) and "did not provide" in str(exc), \
-            "section-24 aux message (got %r)" % str(exc)
+    except ValueError as exc:
+        assert "B_z" in str(exc) and "sim.install(aux=" in str(exc), \
+            "early aux requirement message (got %r)" % str(exc)
         print("OK  unified install rejects a missing required aux: %s" % str(exc))
 
     # Positive: the SAME install with aux={'B_z': ...} wires + installs cleanly.
@@ -274,10 +305,10 @@ def test_install_end_to_end_kokkos():
     sim_ok._install_compiled(
         compiled,
         instances={"plasma": {"state": "U", "initial": u0,
-                              "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                              "time": pops.Explicit(method="euler")}},
+                              "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                              "time": Explicit.euler()}},
         aux={"B_z": 3.0 * np.ones(N * N)},
-        solvers={"phi": pops.fields.catalog.GeometricMG()})
+        solvers={"phi": GeometricMG()})
     assert "plasma" in sim_ok.block_names(), "instance bound by name"
     print("OK  unified install wires instance + aux + solver and installs the program")
 
@@ -286,18 +317,25 @@ def _iso_runtime_model(name="adc466_rt_model"):
     """An isothermal fluid with a DECLARED RUNTIME param cs2 (sound speed^2), no required aux. install
     resolves a runtime-param Model via AOT (production/native FREEZES runtime params; cf.
     System._resolve_instance_model), so set_block_params can change cs2 at runtime."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    m = physics.Model(name)
+    U = m.state("U", components=["rho", "mx", "my"],
+                roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+    rho, mx, my = U
     cs2 = m.param(RuntimeParam("cs2", 0.5))
     cs = sqrt(cs2)
-    m.flux(x=[mx, mx * mx / rho + cs2 * rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho + cs2 * rho])
-    m.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
-                  y=[my / rho - cs, my / rho, my / rho + cs])
-    m.primitive_vars(rho, mx, my)
-    m.conservative_from([rho, mx, my])
-    m.elliptic_rhs(rho)
-    m.rate_operator("explicit_rhs", flux=True)
+    flux = m.flux("F", on=U,
+                  x=[mx, mx * mx / rho + cs2 * rho, mx * my / rho],
+                  y=[my, mx * my / rho, my * my / rho + cs2 * rho],
+                  waves={"x": [mx / rho - cs, mx / rho, mx / rho + cs],
+                         "y": [my / rho - cs, my / rho, my / rho + cs]})
+    phi = m.field("phi")
+    m.solve_field(
+        "fields_from_state",
+        equation=(-laplacian(phi) == rho),
+        outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+        solver=GeometricMG(),
+    )
+    m.rate("explicit_rhs", ddt(U) == -div(flux))
     return m
 
 
@@ -309,12 +347,13 @@ def test_install_routes_runtime_param_kokkos():
     so the param is settable; the pre-fix router (reading the raw Model's absent
     runtime_param_names) raised 'declared by no instance' here. Self-skips without a compiler / Kokkos
     (mirrors test_install_end_to_end_kokkos)."""
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip test_install_routes_runtime_param_kokkos (_pops lacks install_program; rebuild _pops)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+        print("skip test_install_routes_runtime_param_kokkos (System lacks _install_program_so)")
         return
     m = _iso_runtime_model()
+    module = m.to_module()
     try:
-        compiled = pops.compile_problem(model=m, time=_lie_program())  # compiled.model is the raw Model
+        compiled = pops.compile_problem(model=module, time=_lie_program(module))
     except RuntimeError as exc:
         print("skip test_install_routes_runtime_param_kokkos (no Kokkos to build the .so: %s)"
               % str(exc)[:120])
@@ -329,12 +368,12 @@ def test_install_routes_runtime_param_kokkos():
     sim._install_compiled(
         compiled,
         # No "model" key -> install uses compiled.model (the raw Model) and AUTO-resolves it via
-        # AOT (it declares a runtime param); the default pops.Explicit() == SSPRK2 is AOT-compatible.
+        # AOT (it declares a runtime param); the default Explicit() == SSPRK2 is AOT-compatible.
         instances={"plasma": {"state": "U", "initial": u0,
-                              "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                              "time": pops.Explicit()}},
+                              "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                              "time": Explicit()}},
         params={"cs2": 1.0},
-        solvers={"phi": pops.fields.catalog.GeometricMG()})
+        solvers={"phi": GeometricMG()})
     assert "plasma" in sim.block_names(), "instance bound by name (no 'declared by no instance' raise)"
     print("OK  headline install(params=) routes a runtime param (raw Model auto-resolved via AOT)")
 
@@ -357,10 +396,10 @@ def test_install_routes_runtime_param_kokkos():
         sim_euler._install_compiled(
             compiled,
             instances={"plasma": {"state": "U", "initial": u0,
-                                  "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                  "time": pops.Explicit(method="euler")}},
+                                  "spatial": FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+                                  "time": Explicit.euler()}},
             params={"cs2": 1.0},
-            solvers={"phi": pops.fields.catalog.GeometricMG()})
+            solvers={"phi": GeometricMG()})
         raise AssertionError("MISMATCH: a runtime-param (AOT) block should reject euler")
     except RuntimeError as exc:
         assert "ssprk" in str(exc).lower() or "backward" in str(exc).lower() or "aot" in str(exc).lower(), \
@@ -369,7 +408,7 @@ def test_install_routes_runtime_param_kokkos():
 
 
 def test_install_cadence_routing():
-    """install(cadence=CompiledTime(...)) absorbs the compiled-program macro-step cadence: it routes
+    """install(cadence=CompiledProgramCadence(...)) absorbs the compiled-program macro-step cadence: it routes
     to set_program_cadence(substeps, stride). A bad type is rejected up front; a NUMERIC cfl is pinned
     on the System (C7) so a bare sim.run(t_end) defaults to it (not silently ignored).
     Host-testable -- set_program_cadence is a pure System-level setter (no installed .so needed)."""
@@ -377,20 +416,20 @@ def test_install_cadence_routing():
     if not hasattr(sim._s, "set_program_cadence"):
         print("skip test_install_cadence_routing (_pops lacks set_program_cadence; rebuild _pops)")
         return
-    # A CompiledTime is routed to set_program_cadence(substeps, stride) (no error).
-    sim._install_cadence(adctime.CompiledTime(substeps=2, stride=3))
-    # A non-CompiledTime is rejected BEFORE any engine call.
+    # A CompiledProgramCadence is routed to set_program_cadence(substeps, stride) (no error).
+    sim._install_cadence(CompiledProgramCadence(substeps=2, stride=3))
+    # A non-CompiledProgramCadence is rejected BEFORE any engine call.
     try:
         sim._install_cadence("not a cadence")
-        raise AssertionError("install(cadence=) accepted a non-CompiledTime")
+        raise AssertionError("install(cadence=) accepted a non-CompiledProgramCadence")
     except TypeError as exc:
-        assert "CompiledTime" in str(exc), exc
+        assert "CompiledProgramCadence" in str(exc), exc
     # C7: a NUMERIC cfl is accepted and PINNED on the System, so run() with no explicit cfl uses it.
     assert sim._program_cadence_cfl is None, "no cadence cfl pinned yet"
-    sim._install_cadence(adctime.CompiledTime(substeps=1, stride=1, cfl=0.5))
+    sim._install_cadence(CompiledProgramCadence(substeps=1, stride=1, cfl=0.5))
     assert sim._program_cadence_cfl == 0.5, \
         "a numeric cadence cfl is pinned on the System (got %r)" % sim._program_cadence_cfl
-    print("OK  install(cadence=) routes CompiledTime -> set_program_cadence; pins a numeric cfl (C7)")
+    print("OK  install(cadence=) routes CompiledProgramCadence -> set_program_cadence; pins a numeric cfl (C7)")
 
 
 def test_install_native_cadence_rejected():
@@ -398,7 +437,7 @@ def test_install_native_cadence_rejected():
     cadence is a compiled-program concept. Host-testable (the guard fires before any engine run)."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
-        sim._install_compiled(None, cadence=adctime.CompiledTime(substeps=2, stride=1))
+        sim._install_compiled(None, cadence=CompiledProgramCadence(substeps=2, stride=1))
         raise AssertionError("install(compiled=None, cadence=) was accepted")
     except ValueError as exc:
         assert "cadence" in str(exc) and "native" in str(exc), exc
@@ -410,8 +449,8 @@ def test_install_native_end_to_end_kokkos():
     its own native model + native time, install_program is skipped, the native advance loop steps it.
     Bit-parity vs the manual add_equation/set_*/set_state sequence (the pre-amendment native path).
     Needs a compiler + Kokkos -> ROMEO / CI-Kokkos."""
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip test_install_native_end_to_end_kokkos (_pops lacks install_program; rebuild _pops)")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+        print("skip test_install_native_end_to_end_kokkos (System lacks _install_program_so)")
         return
     m = _lorentz_model("adc489_native")
     x = (np.arange(N) + 0.5) / N
@@ -421,7 +460,7 @@ def test_install_native_end_to_end_kokkos():
     bz = 3.0 * np.ones(N * N)
 
     def _fv():
-        return pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
+        return FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
 
     # NATIVE via the unified entry: compiled=None, the instance carries the native model + time.
     sim_install = pops.System(n=N, L=1.0, periodic=True)
@@ -429,9 +468,9 @@ def test_install_native_end_to_end_kokkos():
         sim_install._install_compiled(
             None,
             instances={"plasma": {"model": m, "initial": u0, "spatial": _fv(),
-                                  "time": pops.Explicit(method="euler")}},
+                                  "time": Explicit.euler()}},
             aux={"B_z": bz},
-            solvers={"phi": pops.fields.catalog.GeometricMG()})
+            solvers={"phi": GeometricMG()})
     except RuntimeError as exc:
         print("skip test_install_native_end_to_end_kokkos (no Kokkos to build the native block: %s)"
               % str(exc)[:120])
@@ -442,17 +481,17 @@ def test_install_native_end_to_end_kokkos():
     # add_equation needs a resolved model (ModelSpec/CompiledModel), the same resolution install does
     # internally via _resolve_instance_model -- so both paths add the SAME native block.
     sim_manual = pops.System(n=N, L=1.0, periodic=True)
-    sim_manual.set_poisson(solver="geometric_mg")
+    sim_manual._set_poisson(solver="geometric_mg")
     resolved = sim_manual._resolve_instance_model(m)
-    sim_manual._add_equation("plasma", resolved, spatial=_fv(), time=pops.Explicit(method="euler"))
+    sim_manual._add_equation("plasma", resolved, spatial=_fv(), time=Explicit.euler())
     sim_manual.set_magnetic_field(bz)
-    sim_manual.set_state("plasma", u0)
+    sim_manual._set_state("plasma", u0)
 
     for sim in (sim_install, sim_manual):
         n = sim.run(t_end=0.01, cfl=0.4)
         assert n > 0, "native sim did not advance"
-    a = np.array(sim_install.get_state("plasma"))
-    b = np.array(sim_manual.get_state("plasma"))
+    a = np.array(sim_install._get_state("plasma"))
+    b = np.array(sim_manual._get_state("plasma"))
     assert np.array_equal(a, b), "native install != manual add_equation (max|d|=%.3e)" % \
         float(np.max(np.abs(a - b)))
     print("OK  native install == manual add_equation sequence (bit-identical after run)")

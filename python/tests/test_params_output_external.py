@@ -13,7 +13,7 @@ pops = pytest.importorskip("pops")
 from pops.math import Real, Integer, Bool  # noqa: E402
 from pops.params import (RuntimeParam, ConstParam, DerivedParam,  # noqa: E402
                          Positive, NonNegative, Range, In, Constant)
-from pops.output import (OutputPolicy, CheckpointPolicy, HDF5, Plotfile,  # noqa: E402
+from pops.output import (OutputPolicy, CheckpointPolicy, HDF5,  # noqa: E402
                          AllLevels, CoarseOnly, SelectedLevels)
 from pops.external import CompiledBrickRef, ExternalBrick  # noqa: E402
 import pops.descriptors as _desc  # noqa: E402
@@ -65,7 +65,7 @@ def test_output_and_checkpoint_policies():
     assert out.options()["format"] == "HDF5" and out.options()["levels"] == "all"
     assert out.requirements()["parallel_io"] is True
     assert HDF5(parallel=True).requirements()["parallel_io"] is True
-    assert Plotfile().capabilities()["per_level"] is True
+    assert not hasattr(pops.output, "Plotfile")
     assert SelectedLevels(0, 1).options()["levels"] == (0, 1)
     assert CoarseOnly().options()["levels"] == "coarse"
     chk = CheckpointPolicy(restartable=True, require_bit_identical=True)

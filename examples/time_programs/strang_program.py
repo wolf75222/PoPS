@@ -4,7 +4,7 @@
 Builds the Strang composition ONCE as Program IR via the ``pops.lib.time.strang`` combinator (no
 scheme-specific C++ stepper), compiles it to a ``problem.so``, installs it, advances N steps
 C++-side, and checks it reproduces the native engine Strang macro-step
-(``pops.Strang`` via ``set_time_scheme("strang")``) BIT-for-bit. Mirrors
+(``set_time_scheme("strang")``) BIT-for-bit. Mirrors
 python/tests/test_time_strang_parity.py, which proves max|d| = 0.00e+00.
 
 The simple case where the compiled half-flow EXACTLY mirrors native H: an UNCOUPLED isothermal
@@ -21,17 +21,16 @@ Run::
 Requires a compiler + a visible Kokkos (``POPS_KOKKOS_ROOT``); prints a skip notice and exits 0
 otherwise. cf. docs/sphinx/reference/time-program.md.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 try:
     import numpy as np
 
     import pops
-    from pops.fields import catalog as field_catalog
+    from pops.solvers import GeometricMG
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+    from _module_models import explicit_euler, first_order_rusanov, isothermal_transport_module
 except Exception as exc:  # noqa: BLE001
     print("skip strang_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -40,10 +39,7 @@ except Exception as exc:  # noqa: BLE001
 def transport_model():
     """Uncoupled isothermal fluid (no field coupling into the flux), NO source brick: native H is a
     pure Euler transport step and native S (run_source_stage) is a no-op."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return isothermal_transport_module("strang_model")
 
 
 def half_flow(prog, U, frac):
@@ -80,11 +76,10 @@ def make_sim():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.install(None,
                 instances={"ions": {"model": transport_model(),
-                                    "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                 riemann=Rusanov()),
-                                    "time": pops.Explicit(method="euler"),
+                                    "spatial": first_order_rusanov(),
+                                    "time": explicit_euler(),
                                     "initial": initial_state()}},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     return sim
 
 
@@ -108,19 +103,18 @@ def main():
     prog = pops.System(n=N, L=1.0, periodic=True)
     prog.install(compiled,
                  instances={"ions": {"model": transport_model(),
-                                     "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                  riemann=Rusanov()),
+                                     "spatial": first_order_rusanov(),
                                      "initial": initial_state()}},
-                 solvers={"phi": field_catalog.GeometricMG()})
+                 solvers={"phi": GeometricMG()})
 
     for _ in range(nstep):
         native.step(dt)
         prog.step(dt)
 
-    U_native = np.array(native.get_state("ions"))
-    U_prog = np.array(prog.get_state("ions"))
+    U_native = np.array(native._get_state("ions"))
+    U_prog = np.array(prog._get_state("ions"))
     err = float(np.abs(U_native - U_prog).max())
-    print("compiled std.strang vs native pops.Strang over %d steps: max|d| = %.2e" % (nstep, err))
+    print("compiled std.strang vs native Strang over %d steps: max|d| = %.2e" % (nstep, err))
     ok = np.array_equal(U_native, U_prog)
     print("OK" if ok else "MISMATCH")
     return 0 if ok else 1

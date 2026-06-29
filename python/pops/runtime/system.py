@@ -58,11 +58,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
              _SystemDiagnostics, _SystemIO):
     """The system/coupler: composes blocks, shares a Poisson, advances the whole.
 
-    Low-level runtime. The documented PUBLIC path is the typed ``pops.Case`` assembly lowered by
-    ``pops.compile`` and wired by ``pops.bind`` -> ``sim.run(...)``; the per-step ``step_cfl`` /
-    ``step`` / ``step_adaptive`` methods (and ``add_block`` / ``add_equation`` / ``set_poisson``)
-    are the low-level seam ``pops.bind`` builds on and the tests use, not the recommended front
-    door.
+    Low-level runtime. The documented PUBLIC path is a typed model/program compiled by
+    ``pops.compile_problem(...)`` and wired with ``sim.install(compiled, ...)``. The per-step
+    ``step_cfl`` / ``step`` / ``step_adaptive`` methods execute compiled C++ runtime work; Python
+    never runs per-cell, per-face, AMR patch, solver, or timestep kernels.
 
     add_block takes a composed model (pops.Model(...)) + Spatial / Explicit / IMEX objects.
     Everything else (set_poisson, set_density, step, step_cfl, step_adaptive, diagnostics,
@@ -100,7 +99,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         # cadence pins no cfl. A numeric value is passed to step_cfl as-is; "program" asks the
         # compiled Program dt_bound hook to tighten a step_cfl(1.0) step. Set by _install_cadence.
         self._program_cadence_cfl = None
-        # OUTPUT / CHECKPOINT policies (C4 / ADC-509) flowed by pops.bind through _install_compiled.
+        # OUTPUT / CHECKPOINT policies flowed by sim.install(...) through _install_compiled.
         # Empty until install; run(output_dir=...) fires each at its cadence via write()/checkpoint.
         self._output_policies = []
 
@@ -111,7 +110,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         by an installed ``CompiledProgramCadence(cfl=X)`` cadence, else 0.4 -- so a numeric cadence cfl actually
         takes effect on a bare ``sim.run(t_end)`` rather than being silently ignored. @p max_steps:
         guard (avoids an infinite loop if dt -> 0). @p output_dir: when output / checkpoint policies
-        were flowed onto this System (``pops.bind`` from a Case with ``.output(policy)``), the
+        were flowed onto this System by ``sim.install(..., outputs=...)``, the
         directory the run writes them to; each policy fires at its own cadence through the existing
         write()/checkpoint writers (C4 / ADC-509). Defaults to the current directory when policies
         are present and output_dir is omitted. Returns the number of steps taken.
@@ -227,6 +226,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             "add_equation",
             "install_program",
             "initialize_compiled_program",
+            "set_program_cadence",
             "set_param",
             "set_aux_field",
             "set_field_solver",
@@ -240,7 +240,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         if attr in forbidden:
             raise AttributeError(
                 "System.%s is not part of the public PoPS API; use sim.install(...) "
-                "or pops.bind(compiled, ...) with typed descriptors instead." % attr)
+                "with a compiled artifact and typed descriptors instead." % attr)
         # 'amr' is an AmrSystem-only inspection handle; the System @property raises AttributeError,
         # which routes here -- intercept it so the clear message surfaces instead of the raw _pops
         # "object has no attribute 'amr'" delegation (Spec 5 sec.8.12).

@@ -12,8 +12,9 @@ compile, no Kokkos .so -- the no-fake-engine rule), attaches output policies on 
   (2) a CheckpointPolicy(cadence=every(M)) writes a restartable checkpoint, and restarting it in
       a replayed composition round-trips the state bit-identically;
   (3) the pure cadence interpreter fires every(N) / always / int exactly when due;
-  (4) Plotfile is the one precise reject (no Uniform writer -> ADC-511), level selection is a
-      no-op on a single-level System (AllLevels / CoarseOnly both write the single level).
+  (4) Plotfile is not exported until a real native writer exists; level selection is a no-op on a
+      single-level System (AllLevels / CoarseOnly both write the
+      single level).
 
 Invariants by assert; prints "OK test_output_policy_run" on success. Skips if pops is absent
 (never fakes the engine). Runs under pytest and as a plain script (CI runs the __main__ guard).
@@ -26,9 +27,9 @@ try:
     import numpy as np
     import pops
     from pops.numerics.reconstruction.limiters import Minmod
-    from pops.output import (OutputPolicy, CheckpointPolicy, HDF5, Plotfile,
+    from pops.output import (OutputPolicy, CheckpointPolicy, HDF5,
                              AllLevels, CoarseOnly)
-    from pops.time.schedule import every, always
+    from pops.time.schedule import every, always, on_start, on_end
     from pops.runtime._output_driver import policy_due, _format_token, fire_output_policies
 except Exception as exc:  # noqa: BLE001
     print("skip test_output_policy_run (pops unavailable: %s)" % exc)
@@ -47,9 +48,9 @@ def chk(cond, label):
 def build(n=16):
     """A real native single-block System (no DSL compile): isothermal fluid + shared Poisson."""
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                              transport=pops.IsothermalFlux(),
                              source=pops.PotentialForce(charge=1.0),
                              elliptic=pops.ChargeDensity(charge=1.0)),
@@ -67,14 +68,14 @@ chk(policy_due(every(3), 3) and policy_due(every(3), 6) and not policy_due(every
     "every(3) is due at 3, 6 and not 4")
 chk(policy_due(5, 10) and not policy_due(5, 7), "int cadence 5 due at 10, not 7")
 chk(policy_due(always(), 1) and policy_due(None, 1), "always()/None due every step")
+chk(policy_due(on_start(), 0, phase="start") and not policy_due(on_start(), 1, phase="step"),
+    "on_start() fires only before the first step")
+chk(policy_due(on_end(), 4, phase="end") and not policy_due(on_end(), 4, phase="step"),
+    "on_end() fires only after the run loop")
 chk(not policy_due(every(2), 0), "no policy fires at step 0")
 chk(_format_token(HDF5()) == "hdf5" and _format_token(None) == "npz",
     "HDF5 -> hdf5, default -> npz")
-try:
-    _format_token(Plotfile())
-    chk(False, "Plotfile should reject")
-except NotImplementedError as e:
-    chk("ADC-511" in str(e), f"Plotfile precise reject names ADC-511: {str(e)[:50]}")
+chk(not hasattr(pops.output, "Plotfile"), "Plotfile absent until a real native writer exists")
 
 # --- (1) OutputPolicy(npz) fires at the right cadence with the right contents ----------
 print("== (1) OutputPolicy(npz, every(2)) cadence + contents ==")
@@ -89,6 +90,18 @@ chk(present == ["out_000002.npz", "out_000004.npz"],
 d = np.load(os.path.join(tmp, "out_000004.npz"))
 chk("state_ions" in d and "phi" in d and int(d["macro_step"]) == 4,
     "npz at step 4 carries state_ions / phi / macro_step==4")
+
+print("== (1c) on_start/on_end policies ==")
+tmp_phase = tempfile.mkdtemp()
+sim_phase = build()
+sim_phase._output_policies = [
+    OutputPolicy(format=None, cadence=on_start(), prefix="start"),
+    OutputPolicy(format=None, cadence=on_end(), prefix="end"),
+]
+taken_phase = sim_phase.run(t_end=1.0, cfl=0.4, max_steps=2, output_dir=tmp_phase)
+present_phase = sorted(f for f in os.listdir(tmp_phase) if f.endswith(".npz"))
+chk(taken_phase == 2 and present_phase == ["end_000002.npz", "start_000000.npz"],
+    f"on_start/on_end wrote start_000000 and end_000002: {present_phase}")
 
 # --- (1b) field selection maps to write(fields=) --------------------------------------
 print("== (1b) fields= selection ==")
@@ -118,11 +131,11 @@ simc._output_policies = [CheckpointPolicy(cadence=every(2), restartable=True, pr
 simc.run(t_end=1.0, cfl=0.4, max_steps=2, output_dir=tmp_c)
 ckpts = sorted(f for f in os.listdir(tmp_c) if f.startswith("ck") and f.endswith(".npz"))
 chk(ckpts == ["ck_000002.npz"], f"checkpoint written at step 2 (every(2)): {ckpts}")
-ref = np.asarray(simc.get_state("ions"))
+ref = np.asarray(simc._get_state("ions"))
 restored = build()  # composition REPLAYED (v1 contract)
 restored.restart(os.path.join(tmp_c, "ck_000002"))
 chk(restored.macro_step() == 2, f"restart restored macro_step==2 ({restored.macro_step()})")
-chk(np.array_equal(np.asarray(restored.get_state("ions")), ref),
+chk(np.array_equal(np.asarray(restored._get_state("ions")), ref),
     "restart round-trips the state BIT-IDENTICALLY")
 
 # --- (3) fire_output_policies rejects a non-policy object ------------------------------

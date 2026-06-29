@@ -30,7 +30,7 @@ class _FacadeCompileMixin:
         metadata (no re-reading of the .so).
 
         INTERNAL codegen engine (Spec 5 sec.11). The documented PUBLIC compile front door is
-        ``pops.compile(case, backend=pops.codegen.Production())`` (with the authoring facade
+        ``pops.compile_problem(model=..., time=..., backend=pops.codegen.Production())`` (with the authoring facade
         ``pops.physics.Model.lower()`` producing the ``pops.model.Module`` it lowers); ``pops.compile``
         and ``pops.compile_library`` take a TYPED backend descriptor. This engine ``backend`` argument
         is the internal lowering vocabulary: it accepts a typed descriptor (lowered via lower_backend)
@@ -66,7 +66,8 @@ class _FacadeCompileMixin:
         from pops.codegen.compile import _BACKEND_CAPS
         from pops.codegen.loader import CompiledModel
         from pops.codegen.backends import BACKEND_DESCRIPTORS, Production, lower_internal_backend
-        # Internal runtime seam: public callers should go through pops.compile(..., backend=Production()).
+        # Internal runtime seam: public callers should go through compile_problem(..., backend=Production())
+        # and sim.install(...).
         # This lower-level path may already receive a native backend token derived from descriptors.
         if backend is None:
             backend = Production()

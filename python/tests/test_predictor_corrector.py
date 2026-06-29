@@ -128,8 +128,8 @@ def _electric_fe_program(name="electric_fe"):
     """One Forward-Euler step from a single rhs(sources=['electric'])."""
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=["electric"])
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -138,8 +138,8 @@ def _unknown_source_program(name="unknown_src"):
     """One Forward-Euler step naming a source the model never declared."""
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["does_not_exist"])
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=["does_not_exist"])
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -176,8 +176,8 @@ def _both_source_model(name="pc_both"):
 def _extra_fe_program(srcs, name="extra_fe"):
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=srcs)
+    f = P._legacy_solve_fields(U)
+    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=srcs)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -199,13 +199,13 @@ def predictor_corrector_program(name="predictor_corrector_poisson_lorentz"):
     P = adctime.Program(name)
     dt = P.dt
     U_n = P.state("plasma")
-    f_n = P._solve_fields("fields_n", U_n)
-    R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
+    f_n = P._legacy_solve_fields("fields_n", U_n)
+    R_n = P._legacy_rhs(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
     U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
     U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source("lorentz"),
                                   rhs=U_star_rhs, fields=f_n)
-    f_star = P._solve_fields("fields_star", U_star)
-    R_star = P._rhs_legacy(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
+    f_star = P._legacy_solve_fields("fields_star", U_star)
+    R_star = P._legacy_rhs(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
     C_star = P.apply(operator=P.linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
     Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
     U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source("lorentz"),
@@ -219,7 +219,7 @@ chk(bool(predictor_corrector_program().emit_cpp_program(model=named_source_model
     "the full predictor-corrector Program emits C++ (named sources + Lorentz local solves)")
 
 # ---- (B)/(C) end-to-end: skip unless the install_program binding is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
     print("-- (B)/(C) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_predictor_corrector (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -235,13 +235,13 @@ def make_sim(model):
     step. Returns (sim, U0) with U0 the initial conservative state (n_vars, N, N)."""
     sim = pops.System(n=N, L=1.0, periodic=True)
     try:
-        compiled = model.compile(backend="production")
+        compiled = model._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+                     time=pops.Explicit.euler())
+    sim._set_poisson("charge_density", "geometric_mg")
     sim.set_magnetic_field(BZ * np.ones(N * N))  # constant B_z over the grid
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
@@ -249,16 +249,16 @@ def make_sim(model):
     mx = 0.4 * rho
     my = -0.2 * rho
     U0 = np.stack([rho, mx, my])
-    sim.set_state("plasma", U0)
+    sim._set_state("plasma", U0)
     return sim, U0
 
 
 def offline_rhs_with_electric(ref, U):
     """The semi-discrete RHS -div F + electric at state U, the elliptic fields RE-SOLVED from U. ``ref``
     carries the DEFAULT-source model, so eval_rhs(plasma) already returns -div F + electric."""
-    ref.set_state("plasma", U)
+    ref._set_state("plasma", U)
     ref.solve_fields()
-    return np.array(ref.eval_rhs("plasma"))
+    return np.array(ref._eval_rhs("plasma"))
 
 
 def analytic_lorentz_solve(U, a):
@@ -287,7 +287,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
 sim_fe, U0 = make_sim(named_source_model("electric_fe_block"))
 sim_fe._install_program_so(compiled_fe.so_path)
 sim_fe.step(DT)
-U_fe = np.array(sim_fe.get_state("plasma"))
+U_fe = np.array(sim_fe._get_state("plasma"))
 
 ref = make_sim(default_source_model("electric_ref_block"))[0]
 k0 = offline_rhs_with_electric(ref, U0)
@@ -312,7 +312,7 @@ chk(compiled_pc.program_name == "predictor_corrector_poisson_lorentz",
 sim_pc, U0 = make_sim(named_source_model("pc_block"))
 sim_pc._install_program_so(compiled_pc.so_path)
 sim_pc.step(DT)
-U_pc = np.array(sim_pc.get_state("plasma"))
+U_pc = np.array(sim_pc._get_state("plasma"))
 
 # Offline replay of the EXACT same stages (a fresh reference System with the default-source model).
 # BOTH R_n and R_star re-solve the fields from their OWN stage state: each solve_fields(state) op lowers

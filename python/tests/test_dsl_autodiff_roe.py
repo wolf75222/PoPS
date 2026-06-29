@@ -301,10 +301,12 @@ print("== (c) bout en bout : roe_dissipation a la main == enable_roe (riemann='r
 tmp = tempfile.mkdtemp()
 try:
     n = 24
-    cm_hand = iso_roe_hand("iso_roe_hand").compile(os.path.join(tmp, "hand.so"), INCLUDE,
-                                                   backend="production")
-    cm_ref = iso_roe_roles("iso_roe_ref").compile(os.path.join(tmp, "ref.so"), INCLUDE,
-                                                  backend="production")
+    cm_hand = iso_roe_hand("iso_roe_hand")._compile_for_runtime(
+        os.path.join(tmp, "hand.so"), INCLUDE, backend=pops.codegen.Production()
+    )
+    cm_ref = iso_roe_roles("iso_roe_ref")._compile_for_runtime(
+        os.path.join(tmp, "ref.so"), INCLUDE, backend=pops.codegen.Production()
+    )
     chk(getattr(cm_hand, "has_roe", False), "CompiledModel.has_roe = True (voie roe_dissipation)")
     chk(getattr(cm_ref, "has_roe", False), "CompiledModel.has_roe = True (voie enable_roe)")
 
@@ -312,14 +314,14 @@ try:
     z = np.zeros((n, n))
 
     s_hand = pops.System(n=n, L=1.0, periodic=True)
-    s_hand.set_poisson()
+    s_hand._set_poisson()
     s_hand._add_equation("f", model=cm_hand,
                         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                         time=pops.Explicit())
     s_hand.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
     s_ref = pops.System(n=n, L=1.0, periodic=True)
-    s_ref.set_poisson()
+    s_ref._set_poisson()
     s_ref._add_equation("f", model=cm_ref,
                        spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                        time=pops.Explicit())
@@ -328,8 +330,8 @@ try:
     for _ in range(8):
         s_hand.step(2e-4)
         s_ref.step(2e-4)
-    dh = np.asarray(s_hand.get_state("f"))
-    dr = np.asarray(s_ref.get_state("f"))
+    dh = np.asarray(s_hand._get_state("f"))
+    dr = np.asarray(s_ref._get_state("f"))
     chk(np.all(np.isfinite(dh)), "etat fini (roe_dissipation fournie)")
     err = float(np.max(np.abs(dh - dr))) / float(np.max(np.abs(dr)))
     chk(err < 1e-12, f"8 pas : roe_dissipation a la main == enable_roe (ecart rel {err:.2e})")

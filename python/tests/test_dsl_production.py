@@ -1,5 +1,5 @@
 """Backend "production" (NATIF) du DSL : un modele euler_poisson ecrit en formules est compile en un
-LOADER .so (compile_native / compile(backend="production")) qui inline le gabarit en-tete
+LOADER .so (compile_native / compile(backend=pops.codegen.Production())) qui inline le gabarit en-tete
 pops::add_compiled_model<ProdModel>, puis branche dans le System via add_native_block.
 
 A la difference du backend "aot" (add_compiled_block : .so a ABI plate, le bloc recalcule sur une
@@ -29,7 +29,7 @@ from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
 
 def _native_spec():
     """Le MEME modele euler_poisson, version NATIVE composee par briques (reference de parite)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+    return pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                      transport=pops.CompressibleFlux(),
                      source=pops.GravityForce(),
                      elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
@@ -59,15 +59,15 @@ def main():
     tmp = tempfile.mkdtemp()
     try:
         # Backend "production" via la facade : compile_native sous le capot (loader natif).
-        so = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE, backend="production")
+        so = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE, backend=pops.codegen.Production())
         assert e.adder_for("production") == "add_native_block"
 
         def build_native(limiter, riemann, recon, evolve=True):
             sys = pops.System(n=n, L=L, periodic=True)
             sys._s.add_native_block("gas", so, limiter=limiter, riemann=riemann, recon=recon,
                                     time="explicit", gamma=GAMMA, substeps=1, evolve=evolve)
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
+            sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+            sys._set_state("gas", Uflat)
             return sys
 
         def build_ref(limiter, riemann, recon, evolve=True):
@@ -84,19 +84,19 @@ def main():
             sys._add_block("gas", spec,
                           spatial=pops.Spatial(limiter=lim_obj, flux=flux_obj, recon=recon_obj),
                           time=pops.Explicit(), evolve=evolve)
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
+            sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+            sys._set_state("gas", Uflat)
             return sys
 
         def compare(limiter, riemann, recon):
             prod = build_native(limiter, riemann, recon)
             prod.solve_fields()
-            R_prod = np.array(prod.eval_rhs("gas")).reshape(4, n, n)
+            R_prod = np.array(prod._eval_rhs("gas")).reshape(4, n, n)
             phi_prod = np.array(prod.potential()).reshape(n, n)
 
             ref = build_ref(limiter, riemann, recon)
             ref.solve_fields()
-            R_ref = np.array(ref.eval_rhs("gas")).reshape(4, n, n)
+            R_ref = np.array(ref._eval_rhs("gas")).reshape(4, n, n)
             phi_ref = np.array(ref.potential()).reshape(n, n)
 
             dphi = float(np.max(np.abs(phi_prod - phi_ref)))
@@ -119,8 +119,8 @@ def main():
         for _ in range(12):
             prod.step(dt)
             ref.step(dt)
-        Up = np.array(prod.get_state("gas")).reshape(4, n, n)
-        Ur = np.array(ref.get_state("gas")).reshape(4, n, n)
+        Up = np.array(prod._get_state("gas")).reshape(4, n, n)
+        Ur = np.array(ref._get_state("gas")).reshape(4, n, n)
         dstep = float(np.max(np.abs(Up - Ur)))
         assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
         assert float(np.abs(Up[1]).max()) > 1e-4, "la gravite n'a pas mis le gaz en mouvement"

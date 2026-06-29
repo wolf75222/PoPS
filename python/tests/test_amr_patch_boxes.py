@@ -60,9 +60,9 @@ def main():
                    model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                                    source=pops.NoSource(),
                                    elliptic=pops.BackgroundDensity(alpha=1.0, n0=float(ne0.mean()))),
-                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                   spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     mono.set_refinement(threshold=0.05)
-    mono.set_poisson(rhs="charge_density", solver="geometric_mg")
+    mono._set_poisson(rhs="charge_density", solver="geometric_mg")
     mono.set_density("ne", ne0)
     for _ in range(8):
         mono.step_cfl(0.4)
@@ -83,9 +83,9 @@ def main():
                         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                                         source=pops.NoSource(),
                                         elliptic=pops.BackgroundDensity(alpha=1.0, n0=float(arr.mean()))),
-                        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     multi.set_refinement(threshold=0.05)
-    multi.set_poisson(rhs="charge_density", solver="geometric_mg")
+    multi._set_poisson(rhs="charge_density", solver="geometric_mg")
     multi.set_density("a", ne1)
     multi.set_density("b", ne2)
     for _ in range(4):

@@ -54,7 +54,7 @@ _C = 0.75  # source coefficient: S(rho) = _C * rho (a linear ODE rho' = c rho; R
 def test_history_builds_state_value(t):
     P = t.Program("p")
     U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     P.store_history("blk.R", R)
     Rp = P.history("blk.R", lag=1)
     assert Rp.vtype == "state", "P.history returns a State-typed value (got %r)" % Rp.vtype
@@ -124,7 +124,7 @@ def test_non_history_schemes_emit_no_rotate(t):
 def _hist_program(t, name, lag):
     P = t.Program("h")
     U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     P.store_history(name, R)
     Rp = P.history(name, lag=lag)
     P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
@@ -145,7 +145,7 @@ def test_absent_history_program_lowers(t):
     P = t.Program("miss")
     U = P.state("blk")
     Rp = P.history("missing.R", lag=1)
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
     assert P.validate() is True
     src = P.emit_cpp_program()
@@ -211,25 +211,25 @@ def _run_section_b(t):
     assert compiled.program_name == "ab2_step", "handle carries the program name"
 
     try:
-        compiled_model = _passive_source_model("ab2_block").compile(backend="production")
+        compiled_model = _passive_source_model("ab2_block").compile(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
 
     sim._install_program_so(compiled.so_path)
     dt = 0.01
     nsteps = 5
     for _ in range(nsteps):
         sim.step(dt)
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
 
     ref = _offline_ab2(rho0, dt, nsteps)
     err = float(np.abs(out - ref).max())
@@ -269,7 +269,7 @@ def _run_section_c(t):
     P = t.Program("miss_step")
     U = P.state("blk")
     Rp = P.history("missing.R", lag=1)
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
 
     try:
@@ -278,14 +278,14 @@ def _run_section_c(t):
         print("-- (C) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
     try:
-        compiled_model = _passive_source_model("miss_block").compile(backend="production")
+        compiled_model = _passive_source_model("miss_block").compile(backend=pops.codegen.Production())
     except RuntimeError as exc:
         print("-- (C) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    sim.set_state("blk", np.stack([np.ones((n, n))]))
+                     time=pops.Explicit.euler())
+    sim._set_state("blk", np.stack([np.ones((n, n))]))
     sim._install_program_so(compiled.so_path)
     try:
         sim.step(0.01)

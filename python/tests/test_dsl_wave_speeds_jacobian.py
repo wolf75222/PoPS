@@ -153,7 +153,8 @@ chk("dense_eig.hpp" in src and "pops::real_eig_minmax" in src and "EigBounds" in
 src_fd = burgers_toy(eig="fd")._m.emit_cpp_brick()
 chk("flux(U, a, dir)" in src_fd and "flux(Up_, a, dir)" in src_fd,
     "source generee (fd) : jacobien par colonnes du flux compile")
-c_burg = burgers_toy().compile(os.path.join(tmp, "jacburg.so"), INCLUDE, backend="aot")
+c_burg = burgers_toy()._compile_for_runtime(
+    so_path=os.path.join(tmp, "jacburg.so"), include=INCLUDE, backend=pops.codegen.AOT())
 chk(getattr(c_burg, "has_wave_speeds", False), "compiled.has_wave_speeds (jacobien, sans 'p')")
 
 print("== (8) retro-compat : emission historique inchangee ==")
@@ -219,20 +220,21 @@ sim._add_equation("burg", model=c_burg,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
                  time=pops.Explicit())
 U = toy_state(n)
-sim.set_state("burg", U)
-rhs = np.array(sim.eval_rhs("burg"))
+sim._set_state("burg", U)
+rhs = np.array(sim._eval_rhs("burg"))
 ref = expected_rhs_hll(U, n)
 d = float(np.max(np.abs(rhs - ref)))
 chk(d < 1e-12, f"eval_rhs hll == reference numpy a vitesses exactes (dmax = {d:.2e})")
 
 print("== (6) eig='fd' == eig='numeric' ==")
-c_fd = burgers_toy(eig="fd").compile(os.path.join(tmp, "jacburg_fd.so"), INCLUDE, backend="aot")
+c_fd = burgers_toy(eig="fd")._compile_for_runtime(
+    so_path=os.path.join(tmp, "jacburg_fd.so"), include=INCLUDE, backend=pops.codegen.AOT())
 sim_fd = pops.System(n=n, L=1.0, periodic=True)
 sim_fd._add_equation("burg", model=c_fd,
                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
                     time=pops.Explicit())
-sim_fd.set_state("burg", U)
-rhs_fd = np.array(sim_fd.eval_rhs("burg"))
+sim_fd._set_state("burg", U)
+rhs_fd = np.array(sim_fd._eval_rhs("burg"))
 rel = float(np.max(np.abs(rhs_fd - rhs)) / max(1.0, np.max(np.abs(rhs))))
 chk(rel < 1e-5, f"fd == numeric (ecart relatif {rel:.2e}, troncature O(eps))")
 

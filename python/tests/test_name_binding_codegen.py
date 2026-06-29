@@ -47,7 +47,7 @@ def _flux_program(t, name, blocks):
     P = t.Program(name)
     for blk in blocks:
         U = P.state(blk)
-        R = P._rhs_legacy(state=U, flux=True, sources=["default"])
+        R = P._legacy_rhs(state=U, flux=True, sources=["default"])
         P.commit(blk, P.linear_combine(blk + "_next", U + P.dt * R))
     return P
 

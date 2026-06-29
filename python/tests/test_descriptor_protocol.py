@@ -40,12 +40,15 @@ PROTOCOL_MEMBERS = (
 )
 
 # Spec 5 sec.6 (ADC-498): the route-CHOOSING objects of pops.moments are descriptors -- they
-# pick a math algorithm (wave-speed strategy / realizability floor / magnetic source binding /
+# pick a math algorithm (wave-speed strategy / realizability floor / typed source bindings /
 # closure variant). Each must honour the same DescriptorProtocol. Paired with its category so
 # the loop also pins the declared category string.
 MOMENTS_ROUTE_CHOOSERS = (
     (moments.ExactSpeeds(moments.ExactSpeeds.ROE_DISSIPATION), "wave_speed"),
     (moments.RealizabilityProjection(eps_m00=1e-10, robust=False), "realizability"),
+    (moments.VlasovElectricSource(electric_field=("Ex", "Ey"), charge_over_mass="qom"),
+     "moment_source"),
+    (moments.MagneticRotationSource(omega_c="omega"), "moment_source"),
     (moments.MagneticMomentSource(q_over_m="my_q", b_field="my_b"), "moment_source"),
     (moments.HyQMOM15Closure(variant="levermore"), "closure"),
 )

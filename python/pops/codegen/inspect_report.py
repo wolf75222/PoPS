@@ -147,7 +147,7 @@ def build_compiled_report(compiled):
       - required runtime inputs: the REQUIRED ``arguments()`` entries (states / runtime params /
         aux), the human counterpart of the machine-readable :meth:`CompiledProblem.arguments`;
       - artifacts: ``so_path`` + short ``abi_key`` / ``cache_key``;
-      - status: the always-true ``"compiled, waiting for pops.bind(...)"`` bind-pending line.
+      - status: the always-true ``"compiled, waiting for sim.install(...)"`` install-pending line.
     """
     args = compiled.arguments()
     instances = getattr(args, "instances", {})
@@ -194,7 +194,7 @@ def build_compiled_report(compiled):
         name=prog_summary["name"], backend=backend, platform=platform, layout=layout,
         blocks=blocks, fields=fields, program=prog_summary,
         inputs={"states": states, "params": req_params, "aux": req_aux},
-        artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env)
+        artifacts=artifacts, status="compiled, waiting for sim.install(...)", env=env)
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ def build_requirements(compiled):
         needs it; a model that carries no such flag (a base Rusanov-only or a composed native
         ``pops.Model``) yields no rows;
       - descriptors: the spatial scheme is a BIND input (chosen on the Case block's ``spatial=`` and
-        flowed by ``pops.bind``), so it is reported as bind-time -- the artifact does not freeze a
+        flowed by ``sim.install``), so it is reported as install-time -- the artifact does not freeze a
         reconstruction / Riemann descriptor at compile;
       - constraints: backend (always ``production`` for a compiled Program), the target layout,
         whether MPI is supported, the ABI key the toolchain must match;
@@ -305,7 +305,7 @@ def build_requirements(compiled):
 
     unknown = [
         "the spatial scheme (reconstruction / Riemann / variables) is a BIND input -- it is chosen "
-        "on the Case block (block(..., spatial=...)) and flowed by pops.bind, not frozen at compile, "
+        "on the install instance (instances[...]['spatial']) and flowed by sim.install, not frozen at compile, "
         "so no descriptor is named here.",
         "the reconstruction stencil width (ghost depth) is not recorded in today's metadata; the "
         "memory estimate assumes the conservative 2-cell MUSCL halo (cf. estimate_memory).",

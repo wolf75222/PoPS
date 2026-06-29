@@ -41,14 +41,14 @@ def _ssprk3(name="ssprk3"):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f0 = P._solve_fields(U)
-    r0 = P._rhs_legacy(state=U, fields=f0, flux=True, sources=["default"])
+    f0 = P._legacy_solve_fields(U)
+    r0 = P._legacy_rhs(state=U, fields=f0, flux=True, sources=["default"])
     u1 = P.linear_combine("U1", U + dt * r0)
-    f1 = P._solve_fields(u1)
-    r1 = P._rhs_legacy(state=u1, fields=f1, flux=True, sources=["default"])
+    f1 = P._legacy_solve_fields(u1)
+    r1 = P._legacy_rhs(state=u1, fields=f1, flux=True, sources=["default"])
     u2 = P.linear_combine("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1)
-    f2 = P._solve_fields(u2)
-    r2 = P._rhs_legacy(state=u2, fields=f2, flux=True, sources=["default"])
+    f2 = P._legacy_solve_fields(u2)
+    r2 = P._legacy_rhs(state=u2, fields=f2, flux=True, sources=["default"])
     un = P.linear_combine("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
     P.commit("plasma", un)
     return P
@@ -58,8 +58,8 @@ def _krylov(name="krylov_demo"):
     """A Program with a matrix-free ``solve_linear`` (Krylov) node -- exercises the persistent path."""
     P = adctime.Program(name)
     U = P.state("plasma")
-    f = P._solve_fields("phi", U)
-    r = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields("phi", U)
+    r = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     buf = P.scalar_field("buf")
     A = P.matrix_free_operator("op")
 
@@ -80,7 +80,7 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",)):
     cons = ["rho", "mx", "my", "E"][:n_vars]
     roles = ["Density", "MomentumX", "MomentumY", "Energy"][:n_vars]
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=cons, cons_roles=roles, prim_names=cons, n_vars=n_vars, gamma=1.4,
         n_aux=n_aux, params={}, caps={"cpu": True, "mpi": True},
         abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23",
@@ -229,7 +229,7 @@ def test_no_persistent_without_solve():
     print("== a solve-free step has no persistent buffers (exact plan) ==")
     P = adctime.Program("transport_only")
     U = P.state("plasma")
-    r = P._rhs_legacy(state=U, flux=True, sources=[])
+    r = P._legacy_rhs(state=U, flux=True, sources=[])
     P.commit("plasma", P.linear_combine("U1", U + P.dt * r))
     plan = P.scratch_plan()
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")

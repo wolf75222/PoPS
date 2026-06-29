@@ -1,28 +1,20 @@
-"""Spec 5 final API alignment (epic ADC-479): the public ``pops`` surface is the canonical one.
+"""Final Spec corrective guards for the public PoPS API.
 
-This guards the FOUNDATION cleanup of the public bindings surface:
+The current public route is intentionally narrow:
 
-* the top-level compilable assembly is ``pops.Case`` (the old ``pops.Problem`` name is gone, with
-  NO deprecated alias) ;
-* ``pops.PythonFlux`` is removed from the public surface (it computes a numpy residual in Python,
-  which the PoPS "no public Python numeric" rule excludes); it is reachable only as
-  ``pops.experimental.PythonFlux`` for residual prototyping in tests ;
-* there is no public custom-solver authoring DSL (no ``pops.solver`` / ``pops.lib.solver``
-  decorator); the ``@solver`` generation DSL lives only under the internal / experimental
-  ``pops.codegen.solvers`` ;
-* the solver descriptors have exactly ONE public home, ``pops.solvers`` -- the transitional
-  ``pops.lib.solvers`` re-export shim is removed (no second public path) ;
-* the public lowering surface takes a ``layout`` (Uniform / AMR), never a ``target=`` kwarg.
+* Python authors typed models/programs.
+* :func:`pops.compile_problem` builds the compiled artifact.
+* :meth:`pops.System.install` / :meth:`pops.AmrSystem.install` wire that artifact to runtime data.
+* C++/Kokkos/MPI executes all numerical work.
 
-The module imports ``pops``, so it needs the compiled ``_pops`` extension. If ``_pops`` cannot be
-loaded the whole module is skipped (not failed), so the source-only architecture checks still run
-in a bare interpreter.
+This file deliberately rejects transitional front doors (`Case`, `compile`, `bind`,
+`CompiledTime`, public runtime setters) because keeping two ways to do the same thing is
+exactly the legacy surface the corrective spec removes.
 """
+import importlib
+
 import pytest
 
-# Skip the whole module when the native extension is unavailable: pops/_bootstrap raises a custom
-# ImportError whose .name does not match "pops._pops", so importorskip would re-raise instead of
-# skipping. Catch any import failure and skip at module level.
 try:
     import pops._pops  # noqa: F401
 except Exception as _exc:  # pragma: no cover - only without a built extension
@@ -31,189 +23,216 @@ except Exception as _exc:  # pragma: no cover - only without a built extension
 import pops  # noqa: E402
 
 
-def test_case_replaces_problem_on_the_public_surface():
-    # The assembly is pops.Case now; pops.Problem is gone with no alias (hard break).
-    assert hasattr(pops, "Case"), "pops.Case must be the top-level compilable assembly"
-    assert not hasattr(pops, "Problem"), "pops.Problem must be gone (renamed to pops.Case, no alias)"
-    assert "Case" in pops.__all__, "Case must be exported in pops.__all__"
-    assert "Problem" not in pops.__all__, "Problem must not linger in pops.__all__"
-    # pops.Problem must raise AttributeError (not be a silently-aliased attribute).
-    with pytest.raises(AttributeError):
-        pops.Problem  # noqa: B018
+def test_top_level_public_surface_is_single_route():
+    allowed = {
+        "__version__",
+        "System",
+        "AmrSystem",
+        "time",
+        "model",
+        "math",
+        "physics",
+        "moments",
+        "lib",
+        "abi_key",
+        "set_threads",
+        "has_kokkos",
+        "parallel_info",
+        "doctor",
+        "compile_problem",
+        "CompiledProblem",
+        "compile_library",
+        "read_library_manifest",
+        "LibraryManifest",
+        "inspect_capabilities",
+        "CapabilityMatrix",
+        "CapabilityEntry",
+    }
+    assert set(pops.__all__) == allowed
+
+    for forbidden in (
+        "Case",
+        "Problem",
+        "compile",
+        "bind",
+        "integrate",
+        "PythonFlux",
+        "CompiledTime",
+        "Explicit",
+        "IMEX",
+        "IMEXRK",
+        "SourceImplicit",
+        "SourceImplicitBE",
+        "Split",
+        "Strang",
+        "ElectrostaticLorentzSchur",
+        "CompositeModel",
+        "FluidState",
+        "FiniteVolume",
+        "Spatial",
+        "Role",
+        "Profile",
+        "PerformanceSummary",
+        "EllipticSolver",
+        "solver",
+    ):
+        assert forbidden not in pops.__all__
+        assert not hasattr(pops, forbidden), "pops.%s must not be public" % forbidden
 
 
-def test_case_keeps_the_assembly_chaining_surface():
-    # The rename preserves the authoring surface (chaining setters + inspect/route/lower path).
-    case = pops.Case(name="arch")
-    for member in ("block", "field", "param", "aux", "output", "time", "layout",
-                   "validate", "inspect", "explain_routes", "available", "requirements",
-                   "capabilities", "lower"):
-        assert hasattr(case, member), "pops.Case lost the %r surface member" % member
-    # ``amr`` is a property that raises for a non-AMR layout, so probe the class, not the instance.
-    assert hasattr(type(case), "amr"), "pops.Case lost the .amr handle"
-    assert case.category == "case"
-    assert "arch" in repr(case) and repr(case).startswith("Case(")
-
-
-def test_field_problem_classes_are_untouched():
-    # FieldProblem / PoissonProblem / LinearProblem are a DIFFERENT concept and must NOT be renamed.
-    from pops.fields import FieldProblem  # noqa: PLC0415
-    from pops.linalg import LinearProblem  # noqa: PLC0415
-
-    assert FieldProblem is not None
-    assert LinearProblem is not None
-
-
-def test_python_flux_is_off_the_public_surface():
-    # PythonFlux computes a numpy residual in Python: it is excluded from the public pops surface.
-    assert not hasattr(pops, "PythonFlux"), "pops.PythonFlux must be removed from the public surface"
-    assert "PythonFlux" not in pops.__all__, "PythonFlux must not linger in pops.__all__"
-    with pytest.raises(AttributeError):
-        pops.PythonFlux  # noqa: B018
-
-
-def test_python_flux_is_reachable_only_under_experimental():
-    # The TESTS-ONLY backend is reachable under pops.experimental (for residual prototyping).
-    from pops.experimental import PythonFlux  # noqa: PLC0415
-
-    assert PythonFlux is not None
-    assert pops.experimental.PythonFlux is PythonFlux
-    # The package advertises itself as non-stable.
-    assert getattr(pops.experimental, "__experimental__", False) is True
-
-
-def test_install_is_the_explicit_runtime_path():
-    # Corrective spec: the high-level path remains pops.compile / pops.bind, but the explicit
-    # runtime API is sim.install(...). The old install_program binding is lower-level plumbing.
-    sim = pops.System()
-    assert hasattr(sim, "install"), "System.install must be the explicit runtime install API"
-    assert hasattr(sim, "_install_compiled"), "the internal install seam is _install_compiled"
-    amr = pops.AmrSystem(n=8, L=1.0)
-    assert hasattr(amr, "install"), "AmrSystem.install must mirror System.install"
-    assert hasattr(amr, "_install_compiled"), "AmrSystem keeps the internal _install_compiled seam"
-    # The documented top-level entry points are pops.compile / pops.bind; install is a System method,
-    # never a top-level function.
-    assert "compile" in pops.__all__ and "bind" in pops.__all__
-    assert "install" not in pops.__all__ and "install_program" not in pops.__all__
-
-
-def test_legacy_runtime_setters_are_not_public():
-    # These names exist only as private lowering seams or native internals. They must not be public
-    # Python methods because the public route is compile/bind or explicit sim.install(...).
+def test_runtime_install_is_the_only_public_runtime_wiring_path():
     for sim in (pops.System(), pops.AmrSystem(n=8, L=1.0)):
+        assert hasattr(sim, "install"), "%s.install is the explicit runtime API" % type(sim).__name__
+        assert hasattr(sim, "_install_compiled"), "%s keeps one private compiled-install seam" % (
+            type(sim).__name__,)
         for forbidden in (
             "add_block",
             "add_equation",
             "install_program",
             "initialize_compiled_program",
+            "set_program_cadence",
             "set_param",
             "set_aux_field",
             "set_field_solver",
+            "set_poisson",
+            "set_disc_domain",
+            "set_geometry_mode",
+            "eval_rhs",
+            "get_state",
+            "set_state",
         ):
             assert not hasattr(sim, forbidden), "%s.%s must not be public" % (
                 type(sim).__name__, forbidden)
 
 
-def test_no_top_level_python_integrator_or_compiled_time_shim():
-    # Clean break: top-level pops must not advertise Python numerical integration or the old
-    # CompiledTime convenience shim. Ready-made time schemes live under pops.lib.time; the Program
-    # time language lives under pops.time.
-    assert "integrate" not in pops.__all__
-    assert "CompiledTime" not in pops.__all__
-    assert not hasattr(pops, "integrate"), "pops.integrate must not be public"
-    assert not hasattr(pops, "CompiledTime"), "use pops.time.CompiledTime only where explicitly internal"
+def test_no_public_python_runtime_integrator_or_time_shim():
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.runtime.integrate")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.codegen.orchestration")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.case")
+    assert not hasattr(pops.time, "CompiledTime")
+    with pytest.raises(ImportError):
+        from pops.time.program import CompiledTime  # noqa: F401
 
 
-def test_program_public_surface_is_operator_first():
+def test_program_public_surface_is_operator_first_only():
     P = pops.time.Program("arch")
     assert hasattr(P, "call"), "Program must expose typed operator calls"
     assert hasattr(P, "define"), "Program must expose T.define(...) temporal SSA sugar"
-    assert hasattr(P, "fields"), "Program may expose board field sugar over typed operators"
-    assert hasattr(P, "_solve_fields"), "field solve lowering exists only as an internal builder"
-    assert hasattr(P, "_rhs_legacy"), "RHS lowering exists only as an internal builder"
-    assert not hasattr(P, "solve_fields"), "Program.solve_fields must not be a public API"
-    assert not hasattr(P, "rhs"), "Program.rhs must not be a public API"
+
+    for forbidden in ("solve_fields", "rhs"):
+        assert not hasattr(P, forbidden), "Program.%s must not be public" % forbidden
+
+    # The old private helpers must not stay as stable architecture names.
+    for forbidden in ("_solve_fields", "_rhs_legacy"):
+        assert not hasattr(P, forbidden), "Program.%s must be removed, not documented" % forbidden
+
+
+def test_model_module_has_no_old_dsl_lowering_surface():
+    module = pops.model.Module("arch")
+    assert not hasattr(module, "to_dsl")
+    compile_module = importlib.import_module("pops.codegen.compile_drivers")
+    assert not hasattr(compile_module, "_module_to_model")
+
+
+def test_legacy_m_facade_cannot_enter_modern_compile_or_install_routes():
+    legacy = importlib.import_module("pops.physics.facade").Model("legacy")
+    program = pops.time.Program("arch")
+    u = program.state("U", block="plasma").n
+    program.commit("plasma", program.linear_combine("identity", u))
+
+    with pytest.raises(TypeError, match="private _m"):
+        pops.compile_problem(model=legacy, time=program)
+
+    with pytest.raises(TypeError, match="private _m"):
+        pops.System()._resolve_instance_model(legacy)
 
 
 def test_physics_model_is_a_writing_facade_not_a_compiler():
-    # Spec 5 sec.11 (item #7): pops.physics.Model authors physics and LOWERS to a
-    # pops.model.Module; it has NO public compile_* method. pops.compile does the compile.
     from pops import model as model_pkg
 
     m = pops.physics.Model("arch")
-    for forbidden in ("compile", "compile_so", "compile_aot", "compile_native", "compile_or_jit"):
+    for forbidden in (
+        "compile",
+        "compile_so",
+        "compile_aot",
+        "compile_native",
+        "compile_or_jit",
+        "dsl",
+        "_dsl",
+    ):
         assert not hasattr(m, forbidden), (
-            "pops.physics.Model must not expose %r (it is a writing facade, not a compiler)"
-            % forbidden)
-    # lower() / to_module() return the pops.model.Module pops.compile / compile_problem accept.
-    assert hasattr(m, "lower") and hasattr(m, "to_module"), "physics.Model needs lower()/to_module()"
-    module = m.lower()
-    assert isinstance(module, model_pkg.Module), "physics.Model.lower() returns a pops.model.Module"
-    assert isinstance(m.to_module(), model_pkg.Module), "to_module() returns a pops.model.Module too"
-    # to_module IS the lower method (Spec 5 sec.11 alias), not a re-implementation.
-    assert type(m).to_module is type(m).lower, "to_module() must be the lower() alias"
+            "pops.physics.Model must not expose %r; it authors a Module only" % forbidden)
+    assert hasattr(m, "lower") and hasattr(m, "to_module")
+    assert isinstance(m.lower(), model_pkg.Module)
+    assert isinstance(m.to_module(), model_pkg.Module)
+    assert type(m).to_module is type(m).lower
 
 
-def test_no_public_custom_solver_decorator():
-    # The custom-solver authoring DSL (@solver) is not a user API on pops / pops.lib / pops.solvers.
+def test_physics_package_does_not_reexport_codegen_engines():
+    forbidden = (
+        "PdeModel",
+        "HyperbolicModel",
+        "HybridModel",
+        "NativeBrick",
+        "CompiledBrick",
+        "CompiledHyperbolicBrick",
+        "CompiledSourceBrick",
+        "CompiledEllipticBrick",
+        "HyperbolicBrick",
+        "SourceBrick",
+        "EllipticBrick",
+        "CompiledCoupledSource",
+    )
+    for name in forbidden:
+        assert name not in pops.physics.__all__
+        assert not hasattr(pops.physics, name), "pops.physics.%s must not be public" % name
+
+
+def test_physics_params_are_typed_no_public_kind_param():
+    assert "Param" not in pops.physics.__all__
+    assert not hasattr(pops.physics, "Param")
+    assert hasattr(pops.physics, "ConstParam")
+    assert hasattr(pops.physics, "RuntimeParam")
+
+
+def test_moments_toolkit_has_one_public_home_at_top_level():
+    moments = importlib.import_module("pops.moments")
+    assert moments.CartesianVelocityMoments is not None
+    assert moments.MomentModel is not None
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.lib.moments")
+    assert hasattr(pops, "moments")
+    assert not hasattr(pops.lib, "moments")
+
+
+def test_no_public_custom_solver_decorator_or_lib_solver_shim():
     import pops.lib  # noqa: PLC0415
     import pops.solvers  # noqa: PLC0415
 
-    assert not hasattr(pops, "solver"), "there must be no top-level pops.solver decorator"
-    assert not hasattr(pops.lib, "solver"), "there must be no pops.lib.solver decorator"
-    assert not hasattr(pops.solvers, "solver"), "pops.solvers is a catalog, not the authoring DSL"
-
-
-def test_solvers_have_one_public_home_no_lib_shim():
-    # No-soft-compat: the solver descriptors live in exactly ONE public home, pops.solvers. The
-    # transitional pops.lib.solvers re-export shim is REMOVED -- importing it fails, and the
-    # descriptors are NOT reachable through pops.lib (no second public path).
-    import importlib  # noqa: PLC0415
-
-    import pops.lib  # noqa: PLC0415
-    import pops.solvers  # noqa: PLC0415
-
-    # The one public home resolves every solver descriptor.
-    from pops.solvers import CG, GMRES, GeometricMG, Newton, Schur  # noqa: F401,PLC0415
-
-    # The shim module is gone: importing it raises, and pops.lib exposes no solvers / preconditioners.
+    assert not hasattr(pops, "solver")
+    assert not hasattr(pops.lib, "solver")
+    assert not hasattr(pops.solvers, "solver")
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("pops.lib.solvers")
-    assert not hasattr(pops.lib, "solvers"), "pops.lib must not re-export the solver catalog"
-    assert not hasattr(pops.lib, "preconditioners"), "pops.lib must not re-export preconditioners"
-    # The descriptor attributes are NOT a second public path under pops.lib.solvers.
-    for name in ("CG", "GMRES", "GeometricMG", "Newton", "Schur", "BiCGStab", "FixedPoint"):
-        assert hasattr(pops.solvers, name), "pops.solvers is the one public home (missing %r)" % name
+    assert not hasattr(pops.lib, "solvers")
+    assert not hasattr(pops.lib, "preconditioners")
 
 
-def test_no_public_target_kwarg_on_compile_or_bind():
-    # Spec 5 sec.11 (#5): the LAYOUT (Uniform / AMR) chooses the runtime; a user never passes
-    # target=. The public lowering entry points pops.compile / pops.bind take no target kwarg.
-    import inspect  # noqa: PLC0415
+def test_solvers_have_one_public_home():
+    import pops.solvers  # noqa: PLC0415
+    from pops.solvers import BiCGStab, CG, GMRES, GeometricMG, Schur  # noqa: F401,PLC0415
 
-    for fn in (pops.compile, pops.bind):
-        sig = inspect.signature(fn)
-        assert "target" not in sig.parameters, (
-            "%s must not accept a public target= kwarg (the layout picks the runtime)" % fn.__name__)
-    # The public assembly pops.Case has no compile / install / target surface either.
-    case = pops.Case(name="arch")
-    for forbidden in ("compile", "install", "target"):
-        assert not hasattr(case, forbidden), "pops.Case must not expose %r" % forbidden
-    # pops.physics.Model (the writing facade) lowers; it has no target= path.
-    pm = pops.physics.Model("arch")
-    assert not hasattr(pm, "target"), "pops.physics.Model must not expose a target surface"
+    for name in ("BiCGStab", "CG", "GMRES", "GeometricMG", "Schur"):
+        assert hasattr(pops.solvers, name)
+    for name in ("Newton", "FixedPoint"):
+        assert not hasattr(pops.solvers, name), "%s must not be a public placeholder" % name
 
 
 def test_solver_generation_dsl_is_internal_experimental():
-    # The @solver generation DSL lives ONLY under the internal / experimental pops.codegen.solvers.
     import pops.codegen.solvers as codegen_solvers  # noqa: PLC0415
 
     assert getattr(codegen_solvers, "__experimental__", False) is True
-    assert hasattr(codegen_solvers, "solver"), (
-        "the @solver authoring DSL must still live under the internal pops.codegen.solvers")
-
-
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-q"]))
+    assert hasattr(codegen_solvers, "solver")

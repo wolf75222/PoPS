@@ -76,8 +76,8 @@ def main():
         for recon in ("none", "minmod", "vanleer"):
             sim = pops.System(n=n, L=L, periodic=True)
             sim.add_dynamic_block("gas", so, names=["rho", "rho_u", "rho_v", "E"], recon=recon)
-            sim.set_state("gas", Uflat)
-            R_sys = np.array(sim.eval_rhs("gas")).reshape(4, n, n)
+            sim._set_state("gas", Uflat)
+            R_sys = np.array(sim._eval_rhs("gas")).reshape(4, n, n)
             R_ref = muscl_residual(e, U, h, recon)
             d = float(np.max(np.abs(R_sys - R_ref)))
             assert d < 1e-9, "recon=%s : residu hote != reference MUSCL numpy (ecart %.2e)" % (recon, d)
@@ -88,8 +88,8 @@ def main():
         # le limiteur agit vraiment : minmod differe nettement de l'ordre 1
         sim = pops.System(n=n, L=L, periodic=True)
         sim.add_dynamic_block("gas", so, names=["rho", "rho_u", "rho_v", "E"], recon="minmod")
-        sim.set_state("gas", Uflat)
-        R_minmod = np.array(sim.eval_rhs("gas")).reshape(4, n, n)
+        sim._set_state("gas", Uflat)
+        R_minmod = np.array(sim._eval_rhs("gas")).reshape(4, n, n)
         assert float(np.max(np.abs(R_minmod - R_none))) > 1e-3, "minmod ne change rien (knob inactif)"
         print("OK  minmod modifie le residu vs ordre 1 (reconstruction active)")
 

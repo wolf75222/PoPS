@@ -45,7 +45,7 @@ def meshx(n):
 def electron_model():
     # Euler compressible (4 var) + force du potentiel RAIDE (charge forte) : source non triviale sur
     # qte de mvt (depend de rho) et energie (depend de la qte de mvt).
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(),
                      source=pops.PotentialForce(charge=-50.0),
                      elliptic=pops.ChargeDensity(charge=-1.0))
@@ -54,13 +54,13 @@ def electron_model():
 def run(policy, n=24, dt=0.002, nsteps=4):
     """Avance le bloc electron avec la politique temporelle @p policy ; renvoie l'etat final (4, n, n)."""
     s = pops.System(n=n, periodic=False)
-    s._add_block("ne", electron_model(), spatial=pops.Spatial(minmod=True), time=policy)
-    s.set_poisson(bc="dirichlet")
+    s._add_block("ne", electron_model(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=policy)
+    s._set_poisson(bc="dirichlet")
     xs = meshx(n)
     rho_e = 1.0 + 0.2 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, n))
     s.set_density("ne", rho_e)
     s.advance(dt, nsteps)
-    return np.array(s.get_state("ne")).copy()
+    return np.array(s._get_state("ne")).copy()
 
 
 # ---- 0. attributs portes par la politique (masque cote bloc, pas modele) -------

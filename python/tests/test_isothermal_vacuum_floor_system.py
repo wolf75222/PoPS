@@ -34,12 +34,12 @@ def chk(cond, label):
 def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
     """One short isothermal transport run; returns the conservative state (3, n, n)."""
     sim = pops.System(n=n, L=L, periodic=False)
-    sim.set_poisson(bc="dirichlet")
+    sim._set_poisson(bc="dirichlet")
     sim.set_magnetic_field(np.ones((n, n)))
     sim._add_equation(
         "ions",
         model=pops.Model(
-            state=pops.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=vacuum_floor),
+            state=pops.FluidState.isothermal(cs2=1.0, vacuum_floor=vacuum_floor),
             transport=pops.IsothermalFlux(),
             source=pops.NoSource(),
             elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0),
@@ -57,7 +57,7 @@ def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
     sim.set_primitive_state("ions", rho=rho, u=u, v=v)
     for _ in range(nsteps):
         sim.step(dt)
-    return np.array(sim.get_state("ions")).reshape(3, n, n)
+    return np.array(sim._get_state("ions")).reshape(3, n, n)
 
 
 def main():
@@ -84,7 +84,7 @@ def main():
 
     # (3) validation at the python boundary.
     try:
-        pops.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=-1.0)
+        pops.FluidState.isothermal(cs2=1.0, vacuum_floor=-1.0)
         chk(False, "(3) vacuum_floor < 0 rejected")
     except ValueError:
         chk(True, "(3) vacuum_floor < 0 rejected")

@@ -1,7 +1,6 @@
 """Gaussian (Levermore) closure for the generic moment-model builder.
 
-Re-exported via python/pops/lib/moments/closures/__init__.py and
-python/pops/lib/moments/__init__.py.
+Re-exported through the central :mod:`pops.moments` package.
 
 This closure is pure Python arithmetic on DSL expressions (or plain numbers)
 and has no import-time dependency on the DSL compiler.

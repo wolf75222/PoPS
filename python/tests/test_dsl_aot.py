@@ -37,7 +37,7 @@ def main():
         U[3] = 1.0 / (GAMMA - 1.0)
         Uflat = U.reshape(-1).tolist()
 
-        spec = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+        spec = pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                          transport=pops.CompressibleFlux(),
                          source=pops.GravityForce(),
                          elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
@@ -48,10 +48,10 @@ def main():
             aot = pops.System(n=n, L=L, periodic=True)
             aot.add_compiled_block("gas", so, limiter=limiter, riemann=riemann, recon=recon,
                                    time="explicit", names=["rho", "rho_u", "rho_v", "E"])
-            aot.set_poisson(rhs="charge_density", solver="geometric_mg")
-            aot.set_state("gas", Uflat)
+            aot._set_poisson(rhs="charge_density", solver="geometric_mg")
+            aot._set_state("gas", Uflat)
             aot.solve_fields()
-            R_aot = np.array(aot.eval_rhs("gas")).reshape(4, n, n)
+            R_aot = np.array(aot._eval_rhs("gas")).reshape(4, n, n)
             phi_aot = np.array(aot.potential()).reshape(n, n)
 
             nat = pops.System(n=n, L=L, periodic=True)
@@ -67,10 +67,10 @@ def main():
             nat._add_block("gas", spec,
                           spatial=pops.Spatial(limiter=lim_obj, flux=flux_obj, recon=recon_obj),
                           time=pops.Explicit())
-            nat.set_poisson(rhs="charge_density", solver="geometric_mg")
-            nat.set_state("gas", Uflat)
+            nat._set_poisson(rhs="charge_density", solver="geometric_mg")
+            nat._set_state("gas", Uflat)
             nat.solve_fields()
-            R_nat = np.array(nat.eval_rhs("gas")).reshape(4, n, n)
+            R_nat = np.array(nat._eval_rhs("gas")).reshape(4, n, n)
             phi_nat = np.array(nat.potential()).reshape(n, n)
 
             dphi = float(np.max(np.abs(phi_aot - phi_nat)))
@@ -88,12 +88,12 @@ def main():
         aot = pops.System(n=n, L=L, periodic=True)
         aot.add_compiled_block("gas", so, limiter="minmod", riemann="hllc", recon="primitive",
                                names=["rho", "rho_u", "rho_v", "E"])
-        aot.set_poisson(rhs="charge_density", solver="geometric_mg")
-        aot.set_state("gas", Uflat)
-        mass0 = float(np.array(aot.get_state("gas")).reshape(4, n, n)[0].sum())
+        aot._set_poisson(rhs="charge_density", solver="geometric_mg")
+        aot._set_state("gas", Uflat)
+        mass0 = float(np.array(aot._get_state("gas")).reshape(4, n, n)[0].sum())
         for _ in range(15):
             aot.step_cfl(0.4)
-        U1 = np.array(aot.get_state("gas")).reshape(4, n, n)
+        U1 = np.array(aot._get_state("gas")).reshape(4, n, n)
         drel = abs(float(U1[0].sum()) - mass0) / mass0
         assert np.isfinite(U1).all() and U1[0].min() > 0, "etat non physique"
         assert drel < 1e-9, "masse non conservee (drel=%.2e)" % drel

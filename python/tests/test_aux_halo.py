@@ -76,12 +76,12 @@ def _cart_rhs(compiled, n, vx2d, halo):
     sim._add_equation("a", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
     sim.set_density("a", np.ones((n, n)))
     sim._set_aux_field("a", "vx", vx2d, halo=halo)
     sim.solve_fields()
     # eval_rhs returns (n_vars, n*n) row-major; reshape the single scalar to (ny, nx) = (j, i).
-    return np.array(sim.eval_rhs("a")).reshape(n, n)
+    return np.array(sim._eval_rhs("a")).reshape(n, n)
 
 
 def test_system_cartesian_halo():
@@ -92,7 +92,8 @@ def test_system_cartesian_halo():
         return
     tmp = tempfile.mkdtemp()
     try:
-        compiled = build_advect_vx().compile(os.path.join(tmp, "advx.so"), include=INCLUDE, backend="aot")
+        compiled = build_advect_vx()._compile_for_runtime(
+            so_path=os.path.join(tmp, "advx.so"), include=INCLUDE, backend=pops.codegen.AOT())
         n = 16
         x = (np.arange(n) + 0.5) / n
         vx2d = np.tile(x, (n, 1))  # vx[j, i] = x_i : varie en x -> foextrap != dirichlet au bord x
@@ -126,7 +127,8 @@ def test_polar_halo():
         return
     tmp = tempfile.mkdtemp()
     try:
-        compiled = build_advect_vx().compile(os.path.join(tmp, "avxp.so"), include=INCLUDE, backend="aot")
+        compiled = build_advect_vx()._compile_for_runtime(
+            so_path=os.path.join(tmp, "avxp.so"), include=INCLUDE, backend=pops.codegen.AOT())
         nr, nth = 16, 16
         vx = np.tile((np.arange(nr) + 0.5) / nr, (nth, 1))  # varies in r (fast axis i)
 
@@ -137,7 +139,7 @@ def test_polar_halo():
             s.set_density("a", np.ones((nth, nr)))
             s._set_aux_field("a", "vx", vx, halo=halo)
             s.solve_fields()
-            return np.array(s.eval_rhs("a")).reshape(nth, nr)  # (theta=j, r=i)
+            return np.array(s._eval_rhs("a")).reshape(nth, nr)  # (theta=j, r=i)
 
         R_def = rhs(None)
         R_dir = rhs(pops.AuxHalo("dirichlet", value=0.0))
@@ -166,14 +168,15 @@ def test_amr_halo():
     try:
         n = 16
         sp = pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
-        compiled = build_advect_vx().compile(os.path.join(tmp, "avxa.so"), include=INCLUDE,
-                                             backend="production", target="amr_system")
+        compiled = build_advect_vx()._compile_for_runtime(
+            so_path=os.path.join(tmp, "avxa.so"), include=INCLUDE,
+            backend=pops.codegen.Production(), target="amr_system")
         vx = np.tile((np.arange(n) + 0.5) / n, (n, 1))
 
         def stepped_density(halo):
             s = pops.AmrSystem(n=n, L=1.0, periodic=False)
             s._add_equation("a", model=compiled, spatial=sp, time=pops.Explicit())
-            s.set_poisson(bc="dirichlet")
+            s._set_poisson(bc="dirichlet")
             s.set_density("a", np.ones((n, n)))
             s._set_aux_field("a", "vx", vx, halo=halo)
             s.step(1e-3)

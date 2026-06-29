@@ -2,9 +2,8 @@
 """Spec 5 sec.6 (ADC-498): the route-choosing pops.moments objects are typed descriptors.
 
 The moment toolkit exposes a mix of objects. A handful CHOOSE a math algorithm -- the
-wave-speed strategy (:class:`ExactSpeeds`), the realizability-floor strategy
-(:class:`RealizabilityProjection`), the magnetic-source binding
-(:class:`MagneticMomentSource`) and the closure variant (:class:`HyQMOM15Closure`). Spec 5
+wave-speed strategy (:class:`ExactSpeeds`), the realizability-floor strategy,
+typed source descriptors, and the closure variant (:class:`HyQMOM15Closure`). Spec 5
 sec.6 requires every such route chooser to be an inert, inspectable
 :class:`pops.descriptors.Descriptor` that declares its options / capabilities and answers
 ``available(context)`` with an explainable status.
@@ -70,7 +69,26 @@ def test_magnetic_moment_source_descriptor_contract():
     assert src.capabilities()["provides"] == "magnetic_lorentz"
     assert src.validate() is True
     # The builder side stays: as_sources() returns a (m, M) -> list callable.
-    assert callable(src.as_sources(2.0))
+    assert callable(src.as_sources())
+
+
+def test_vlasov_electric_and_magnetic_rotation_source_descriptors():
+    electric = moments.VlasovElectricSource(electric_field=("Ex", "Ey"), charge_over_mass="qom")
+    assert isinstance(electric, (Descriptor, DescriptorProtocol))
+    assert electric.name == "VlasovElectricSource"
+    assert electric.options()["electric_field"] == ("Ex", "Ey")
+    assert electric.capabilities()["provides"] == "vlasov_electric"
+
+    magnetic = moments.MagneticRotationSource(omega_c="omega", axis="z")
+    assert isinstance(magnetic, (Descriptor, DescriptorProtocol))
+    assert magnetic.name == "MagneticRotationSource"
+    assert magnetic.options() == {"omega_c": "omega", "axis": "z"}
+    assert magnetic.capabilities()["provides"] == "magnetic_rotation"
+
+    custom = moments.MomentSource.from_rule("custom", lambda m, M: [0.0] * len(M))
+    assert isinstance(custom, (Descriptor, DescriptorProtocol))
+    assert custom.name == "MomentSource"
+    assert custom.capabilities()["provides"] == "custom_moment_source"
 
 
 def test_hyqmom15_closure_descriptor_contract():
@@ -89,15 +107,16 @@ def test_hyqmom15_closure_descriptor_contract():
                     "S13": 0.0, "S04": 3.0}
     out = closure(standardized)
     assert set(out) == {"S%d%d" % (p, 5 - p) for p in range(6)}
-    # The unvalidated custom variant is gated (ship-authoring / gate-runtime pattern).
-    with pytest.raises(NotImplementedError):
+    # No unimplemented custom route is exposed in the public API.
+    with pytest.raises(ValueError):
         moments.HyQMOM15Closure(variant="custom")
 
 
 def test_route_choosers_available_is_explainable():
     # Every moments descriptor answers available() with an Availability, never a bare bool.
     for descriptor in (moments.ExactSpeeds(), moments.RealizabilityProjection(),
-                       moments.MagneticMomentSource(), moments.HyQMOM15Closure()):
+                       moments.MagneticMomentSource(), moments.VlasovElectricSource(),
+                       moments.MagneticRotationSource(), moments.HyQMOM15Closure()):
         status = descriptor.available()
         assert isinstance(status, Availability)
         assert not isinstance(status, bool)
@@ -127,12 +146,14 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     # inspectable route choosers even when reached through the snapshot.
     model = (moments.CartesianVelocityMoments(order=2)
              .add_numerics(roe=True)
+             .add_source(moments.VlasovElectricSource())
              .set_realizability(moments.RealizabilityProjection.none()))
     snapshot = model.hierarchy()
     assert isinstance(snapshot.speeds, Descriptor)
     assert snapshot.speeds.options()["kind"] == moments.ExactSpeeds.ROE_DISSIPATION
     assert isinstance(snapshot.projection, Descriptor)
     assert snapshot.projection.capabilities()["guard_level"] == "bare"
+    assert snapshot.sources[0][0] == "vlasov_electric"
 
 
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this module

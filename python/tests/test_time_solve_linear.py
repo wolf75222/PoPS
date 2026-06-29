@@ -19,13 +19,11 @@ captured into the step closure), reused across every step and every Krylov itera
 (B) End-to-end parity (skips unless the full toolchain is present): a 1-variable model (rho, zero
     flux); A = matrix_free_operator with apply out = in - alpha*Lap(in) (alpha = 0.1, SPD); the
     Program solves (I - alpha*Lap) phi = U via cg (tol 1e-10, max_iter 200) and commits U = phi.
-    compile_problem -> install_program -> set a smooth periodic rho0 -> step once -> get_state, vs an
+    compile_problem -> sim.install(...) -> set a smooth periodic rho0 -> step once -> get_state, vs an
     OFFLINE numpy CG on the SAME discrete periodic 5-point system. Asserts max|compiled - offline| <=
     1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
-    without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
+without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import pytest
 import sys
 
@@ -69,7 +67,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     drives the runtime Krylov loop. The Program needs no model (the apply is a pure Laplacian). An
     optional @p preconditioner (a typed descriptor) is threaded into solve_linear."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -155,7 +153,7 @@ def test_cg_gmg_precond_rejected(t):
             raise AssertionError("%s + GeometricMG must raise ValueError" % method)
 
 
-def test_unwired_preconditioners_are_not_public():
+def test_unwired_preconditioners_are_not_public(t=None):
     # Clean break: no public Jacobi()/BlockJacobi() descriptors until their native C++ kernels exist.
     from pops.solvers import preconditioners
     assert not hasattr(preconditioners, "Jacobi")
@@ -165,7 +163,7 @@ def test_unwired_preconditioners_are_not_public():
 def test_string_precond_rejected(t):
     # Spec 5 sec.7: a bare string preconditioner is rejected, naming the typed alternative.
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     try:
@@ -191,7 +189,7 @@ def test_solve_validates(t):
 
 def test_max_iter_required(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (None, 0, -5):
@@ -205,7 +203,7 @@ def test_max_iter_required(t):
 
 def test_tol_positive(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (0.0, -1e-8):
@@ -221,7 +219,7 @@ def test_string_method_rejected(t):
     # Spec 5 sec.7: solve_linear takes a TYPED pops.solvers.krylov descriptor; a bare string
     # (known or unknown) is rejected and the error names the typed alternative.
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in ("cg", "minres"):
@@ -235,7 +233,7 @@ def test_string_method_rejected(t):
 
 def test_operator_must_be_matrix_free(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     try:
         P.solve_linear(operator=U, rhs=U, max_iter=10)  # a State is not an operator
     except ValueError as exc:
@@ -303,26 +301,13 @@ def _run_section_b(t):
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
+    from _module_models import explicit_euler, first_order_rusanov, passive_scalar_module
+
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-        return None
 
-    from pops.physics.facade import Model
-
-    # A minimal 1-variable model with NO flux and NO Poisson coupling: the Program never runs a rhs or
-    # solve_fields; the block's single conservative variable (rho) doubles as the scalar field the
-    # matrix-free solve writes. A complete compilable block (flux + primitive + eigenvalue).
     def passive_model(name):
-        m = Model(name)
-        (rho,) = m.conservative_vars("rho")
-        u = m.primitive("u", 0.0 * rho)
-        m.primitive_vars(rho=rho, u=u)
-        m.conservative_from([rho])
-        m.flux(x=[0.0 * rho], y=[0.0 * rho])
-        m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-        return m
+        return passive_scalar_module(name)
 
     tol = 1e-10
     try:
@@ -335,22 +320,18 @@ def _run_section_b(t):
 
     assert compiled.program_name == "solve_step", "handle carries the program name"
 
-    try:
-        from pops.codegen import Production
-        compiled_model = passive_model("solve_block")._compile_for_runtime(backend=Production())
-    except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
-        return None
-    sim._add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit.euler())
-
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim._set_state("blk", np.stack([rho0]))
-
-    sim._install_program_so(compiled.so_path)
+    try:
+        sim.install(compiled,
+                    instances={"blk": {"model": passive_model("solve_block"),
+                                       "spatial": first_order_rusanov(),
+                                       "time": explicit_euler(),
+                                       "initial": np.stack([rho0])}})
+    except RuntimeError as exc:
+        print("-- (B) skipped: install could not build the block .so: %s --" % str(exc)[:200])
+        return None
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free
     out = np.array(sim._get_state("blk"))[0]
 
@@ -385,44 +366,36 @@ def _run_section_b_gmg_precond(t):
         print("-- (B') skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
+    from pops.solvers import preconditioners
+    from _module_models import explicit_euler, first_order_rusanov, passive_scalar_module
+
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_program_so"):
-        print("-- (B') skipped: _pops lacks the install_program binding (rebuild _pops) --")
-        return None
-
-    from pops.physics.facade import Model
-    from pops.solvers import preconditioners
 
     def passive_model(name):
-        m = Model(name)
-        (rho,) = m.conservative_vars("rho")
-        u = m.primitive("u", 0.0 * rho)
-        m.primitive_vars(rho=rho, u=u)
-        m.conservative_from([rho])
-        m.flux(x=[0.0 * rho], y=[0.0 * rho])
-        m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-        return m
+        return passive_scalar_module(name)
 
     tol = 1e-10
     prog = _solve_program(t, name="solve_gmg", method="gmres", tol=tol, max_iter=200,
                           preconditioner=preconditioners.GeometricMG())
     try:
         compiled = pops.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
-        from pops.codegen import Production
-        compiled_model = passive_model("solve_gmg_block")._compile_for_runtime(backend=Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200])
         return None
 
-    sim._add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit.euler())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim._set_state("blk", np.stack([rho0]))
-    sim._install_program_so(compiled.so_path)
+    try:
+        sim.install(compiled,
+                    instances={"blk": {"model": passive_model("solve_gmg_block"),
+                                       "spatial": first_order_rusanov(),
+                                       "time": explicit_euler(),
+                                       "initial": np.stack([rho0])}})
+    except RuntimeError as exc:
+        print("-- (B') skipped: install could not build the block .so: %s --" % str(exc)[:200])
+        return None
     sim.step(0.05)
     out = np.array(sim._get_state("blk"))[0]
 

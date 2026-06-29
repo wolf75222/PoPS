@@ -56,13 +56,13 @@ print("== (B) profile_report carries the timed step phase ==")
 N = 16
 sim2 = pops.System(n=N, L=1.0, periodic=True)
 sim2._add_block("gas",
-               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+               pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                          transport=pops.IsothermalFlux(),
                          source=pops.NoSource(),
                          elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
                spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=pops.Explicit())
 rho = np.ones((N, N), dtype=float)
-sim2.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
+sim2._set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
 
 # during step() only the "step" phase + "steps" counter are recorded (the stepper calls the Impl's
 # solve_fields, not System::solve_fields -- "field_solve" is captured only on a direct sim.solve_fields()).

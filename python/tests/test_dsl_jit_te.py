@@ -36,7 +36,7 @@ def build_te_scalar():
 
 def euler_gas(gamma=1.4):
     """Bloc fluide compressible (4 var) : source de T_e via T = p/rho."""
-    return pops.Model(state=pops.FluidState(kind="compressible", gamma=gamma),
+    return pops.Model(state=pops.FluidState.compressible(gamma=gamma),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.ChargeDensity(charge=1.0))
 
@@ -57,26 +57,26 @@ def main():
         sim = pops.System(n=n, L=L, periodic=True)
         sim.add_dynamic_block("te", so, names=["n"])  # IModel.n_aux()=5 -> ensure_aux_width(5)
         sim._add_block("gas", model=euler_gas(gamma))  # bloc fluide source de T_e
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sim._set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_density("te", np.ones((n, n)))
 
         # gas uniforme : rho=1, m=0, E=c/(gamma-1) -> p=(gamma-1)E=c, T=p/rho=c.
         E = c / (gamma - 1.0)
         z = np.zeros((n, n))
-        sim.set_state("gas", np.stack([np.ones((n, n)), z, z, E * np.ones((n, n))]))
+        sim._set_state("gas", np.stack([np.ones((n, n)), z, z, E * np.ones((n, n))]))
         sim.set_electron_temperature_from("gas")  # comp aux 4 = T = p/rho du bloc 'gas'
         sim.solve_fields()                          # apply_te -> T_e = c sur la composante 4
 
         # eval_rhs = -div F + S ; flux nul -> R = source = T_e n = c.
-        R = np.array(sim.eval_rhs("te"))
+        R = np.array(sim._eval_rhs("te"))
         err = float(np.max(np.abs(R - c)))
         print("  JIT T_e : eval_rhs, max|R - T_e| = %.2e" % err)
         assert err < 1e-12, "le bloc dynamique ne lit pas T_e via le marshaling JIT (ecart %.2e)" % err
 
         # controle : gas E=0 -> p=0 -> T_e=0 -> residu nul.
-        sim.set_state("gas", np.stack([np.ones((n, n)), z, z, z]))
+        sim._set_state("gas", np.stack([np.ones((n, n)), z, z, z]))
         sim.solve_fields()
-        R0 = np.array(sim.eval_rhs("te"))
+        R0 = np.array(sim._eval_rhs("te"))
         a0 = float(np.max(np.abs(R0)))
         print("  controle T_e=0 : max|R| = %.2e" % a0)
         assert a0 < 1e-12, "residu non nul a T_e=0 (%.2e)" % a0

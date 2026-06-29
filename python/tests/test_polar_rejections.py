@@ -54,7 +54,7 @@ def _compressible_model():
     """Bloc fluide compressible : transport NON supporte en polaire (Phase 2b).
     Le second membre elliptique est neutre (fond nul) ; seul le transport est teste ici."""
     return pops.Model(
-        state=pops.FluidState(kind="compressible", gamma=1.4),
+        state=pops.FluidState.compressible(gamma=1.4),
         transport=pops.CompressibleFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0),
@@ -74,8 +74,8 @@ def _make_polar_sim_ready(solver="polar"):
     """System polaire minimal avec bloc ExB et densite initiale : pret pour step()."""
     sim = pops.System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
     sim._add_block("ne", model=_exb_model(),
-                  spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
+                  spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
+    sim._set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
     sim.set_density("ne", [1.0] * (_NR * _NTH))
     return sim
 
@@ -95,7 +95,7 @@ def test_polar_rejects_non_exb_transport():
     msg = ""
     try:
         sim._add_block("fluid", model=_compressible_model(),
-                      spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                      spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     except RuntimeError as e:
         raised = True
         msg = str(e)
@@ -183,7 +183,7 @@ def test_polar_rejects_imex_time():
     msg = ""
     try:
         sim._add_block("ne", model=_exb_model(),
-                      spatial=pops.Spatial(minmod=True), time=pops.IMEX())
+                      spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.IMEX())
     except RuntimeError as e:
         raised = True
         msg = str(e)

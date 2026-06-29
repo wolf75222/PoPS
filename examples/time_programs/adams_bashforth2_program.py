@@ -20,17 +20,15 @@ The model is a 1-variable block (rho) with ZERO flux and a manufactured LINEAR s
 Requires a compiler + a visible Kokkos (``POPS_KOKKOS_ROOT``); prints a skip notice and exits 0
 otherwise. cf. docs/sphinx/reference/time-program.md.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 try:
     import numpy as np
 
     import pops
-    from pops.physics.facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+    from _module_models import explicit_euler, first_order_rusanov, linear_source_module
 except Exception as exc:  # noqa: BLE001
     print("skip adams_bashforth2_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -39,17 +37,8 @@ C = 0.75  # source coefficient: S(rho) = C * rho (a linear ODE rho' = c rho; R c
 
 
 def source_model(name):
-    """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = C*rho (so R = c*rho changes
-    every step). A complete compilable block (flux + primitive + eigenvalue + source)."""
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    m.source([C * rho])  # default source folded by ctx.rhs_into
-    return m
+    """Pure Module with zero flux and a default linear source S(rho)=C*rho."""
+    return linear_source_module(name, coefficient=C)
 
 
 def ab2_program():
@@ -76,9 +65,6 @@ def offline_ab2(rho0, dt, nsteps):
 
 def main():
     n = 16
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip adams_bashforth2_program (_pops lacks install_program; rebuild _pops)")
-        return 0
     try:
         compiled = pops.compile_problem(model=source_model("ab2_prog"), time=ab2_program())
     except RuntimeError as exc:
@@ -96,14 +82,14 @@ def main():
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim.install(compiled,
                 instances={"blk": {"model": source_model("ab2_block"),
-                                   "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                   "time": pops.Explicit(method="euler"),
+                                   "spatial": first_order_rusanov(),
+                                   "time": explicit_euler(),
                                    "initial": np.stack([rho0])}})
     dt = 0.01
     nsteps = 5
     for _ in range(nsteps):
         sim.step(dt)
-    U_prog = np.array(sim.get_state("blk"))[0]
+    U_prog = np.array(sim._get_state("blk"))[0]
 
     rho_ref = offline_ab2(rho0, dt, nsteps)
     err = float(np.abs(U_prog - rho_ref).max())

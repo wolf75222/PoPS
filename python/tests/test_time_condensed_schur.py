@@ -35,7 +35,7 @@ history runtime path); each step solves from phi^n = 0.
     preconditioner while the Program solve is matrix-free BiCGStab WITHOUT a preconditioner -- the same
     operator and RHS, a different Krylov path. Both converge to the same phi at tolerance, so the firm
     parity is checked against the matrix-free-equivalent offline reference (not bit-against-native); a
-    native pops.CondensedSchur(theta=0.5) step is also REPORTED as a diagnostic (it is confounded by the
+    native pops.ElectrostaticLorentzSchur(theta=0.5) step is also REPORTED as a diagnostic (it is confounded by the
     explicit transport half-flow of pops.Split, so it is not asserted). The cross-step phi^n carry is
     deferred (see the macro docstring).
 
@@ -360,14 +360,14 @@ def _run_section_b(t):
     def make_sim(name):
         sim = pops.System(n=_N, L=_L, periodic=True)
         try:
-            compiled_model = schur_model(name).compile(backend="production")
+            compiled_model = schur_model(name)._compile_for_runtime(backend=pops.codegen.Production())
         except RuntimeError as exc:  # no compiler / no Kokkos visible
             print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
             return None, None
         sim._add_equation("blk", compiled_model,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="euler"))
-        sim.set_poisson("charge_density", "geometric_mg")
+                         time=pops.Explicit.euler())
+        sim._set_poisson("charge_density", "geometric_mg")
         sim.set_magnetic_field(_BZ * np.ones(_N * _N))
         x = (np.arange(_N) + 0.5) / _N
         X, Y = np.meshgrid(x, x, indexing="ij")
@@ -375,7 +375,7 @@ def _run_section_b(t):
         mx0 = 0.4 * rho0
         my0 = -0.2 * rho0
         U0 = np.stack([rho0, mx0, my0])
-        sim.set_state("blk", U0)
+        sim._set_state("blk", U0)
         return sim, U0
 
     h = _L / _N
@@ -395,7 +395,7 @@ def _run_section_b(t):
             return None
         sim._install_program_so(compiled.so_path)
         sim.step(_DT)
-        out = np.array(sim.get_state("blk"))
+        out = np.array(sim._get_state("blk"))
         ref, iters = _offline_step(U0, _ALPHA, theta, _BZ, h, _DT, _TOL)
         err = float(np.abs(out - ref).max())
         moved = float(np.abs(out - U0).max())
@@ -414,7 +414,7 @@ def _run_section_b(t):
     compiled_vs_offline(1.0)
     half = compiled_vs_offline(0.5)
 
-    # NATIVE diagnostic (ADC-427): std.condensed_schur(theta=0.5) compiled vs pops.CondensedSchur(
+    # NATIVE diagnostic (ADC-427): std.condensed_schur(theta=0.5) compiled vs pops.ElectrostaticLorentzSchur(
     # theta=0.5) through pops.Split, taken as a SINGLE step (both start from phi^n = 0 -- the System
     # initializes phi to zero, the macro has no persistent phi carry). This is REPORTED, not asserted:
     # the native pops.Split also runs the EXPLICIT transport half-flow that the source-only Program omits,
@@ -426,7 +426,7 @@ def _run_section_b(t):
         out_c, U0, _ = half
         sim_n = pops.System(n=_N, L=_L, periodic=True)
         try:
-            native_model = schur_model("cs_native").compile(backend="production")
+            native_model = schur_model("cs_native")._compile_for_runtime(backend=pops.codegen.Production())
         except RuntimeError as exc:
             print("-- (B) native diagnostic skipped: model compile failed: %s --" % str(exc)[:160])
             native_model = None
@@ -435,22 +435,22 @@ def _run_section_b(t):
                 # B_z must exist BEFORE add_equation: the CondensedSchur source stage is wired during
                 # add_equation (set_source_stage), which reads the B_z aux. set_poisson + the magnetic
                 # field first, then the block.
-                sim_n.set_poisson("charge_density", "geometric_mg")
+                sim_n._set_poisson("charge_density", "geometric_mg")
                 sim_n.set_magnetic_field(_BZ * np.ones(_N * _N))
                 sim_n._add_equation(
                     "blk", native_model,
                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                    time=pops.Split(hyperbolic=pops.Explicit(method="euler"),
-                                   source=pops.CondensedSchur(theta=0.5, alpha=_ALPHA)))
+                    time=pops.Split(hyperbolic=pops.Explicit.euler(),
+                                   source=pops.ElectrostaticLorentzSchur(theta=0.5, alpha=_ALPHA)))
             except Exception as exc:  # noqa: BLE001 -- Split/CondensedSchur wiring unavailable here
                 print("-- (B) native diagnostic skipped: pops.Split/CondensedSchur unavailable: %s --"
                       % str(exc)[:160])
             else:
-                sim_n.set_state("blk", U0)
+                sim_n._set_state("blk", U0)
                 sim_n.step(_DT)
-                out_n = np.array(sim_n.get_state("blk"))
+                out_n = np.array(sim_n._get_state("blk"))
                 d_native = float(np.abs(out_c - out_n).max())
-                print("  [diagnostic] compiled(theta=0.5) source-only vs native pops.CondensedSchur("
+                print("  [diagnostic] compiled(theta=0.5) source-only vs native pops.ElectrostaticLorentzSchur("
                       "theta=0.5) Split(transport+source): max|d| = %.2e  (native includes the explicit "
                       "transport half-flow + the MG-preconditioned BiCGStab path; firm parity is the "
                       "compiled-vs-offline assertion above)" % d_native)

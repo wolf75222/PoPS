@@ -2,12 +2,11 @@
 
 A Module owns the RULES -- state/field spaces, parameters, aux declarations and a
 registry of typed operators a Program composes by signature. The Simulation owns
-the DATA. ``Module.to_dsl()`` lowers a pure Module to a
-:class:`pops.physics.facade.Model`.
+the DATA. Modules are compiled by ``pops.codegen.compile_problem``; they do not
+expose a public lowering escape hatch to the old DSL.
 
 Imports only the standard library (plus the sibling operator-first types) so it
-can be exercised without the compiled ``_pops`` extension; the codegen engine is
-imported lazily inside :meth:`Module.to_dsl` to avoid an import cycle.
+can be exercised without the compiled ``_pops`` extension.
 """
 import hashlib
 
@@ -44,6 +43,13 @@ class Module:
         self._params = {}
         self._aux = {}
         self._registry = OperatorRegistry()
+        self._primitive_defs = {}
+        self._riemann_metadata = {
+            "hllc": False,
+            "roe": False,
+            "hooks": {},
+            "wave_speeds": None,
+        }
         # Wave speeds for the Riemann solver of a compilable Module: {"x": [Expr], "y": [Expr]}
         # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
         # lowered to dsl.Model.eigenvalues by compile_problem.
@@ -64,9 +70,9 @@ class Module:
         return space
 
     # --- parameters / aux ---
-    def param(self, name, default=0.0, dtype="real"):
+    def param(self, name, default=0.0, dtype="real", *, _kind="const"):
         """Declare and return one :class:`ParameterSpace`."""
-        p = ParameterSpace(name, default, dtype)
+        p = ParameterSpace(name, default, dtype, kind=_kind)
         self._params[p.name] = p
         return p
 
@@ -83,6 +89,30 @@ class Module:
     def aux_fields(self, **kinds):
         """Declare several aux fields by keyword; return ``{name: AuxSpace}``."""
         return {k: self.aux_field(k, v) for k, v in kinds.items()}
+
+    def primitive(self, name, expr):
+        """Declare a primitive expression used by generated model capabilities.
+
+        The board facade writes primitives here so Module-native codegen can emit pressure,
+        wave-speed and Riemann hooks without reconstructing a legacy HyperbolicModel.
+        """
+        self._primitive_defs[str(name)] = expr
+        return expr
+
+    def primitive_defs(self):
+        return dict(self._primitive_defs)
+
+    def riemann_metadata(self, *, hllc=None, roe=None, hooks=None, wave_speeds=None):
+        """Get or update Riemann capability metadata for Module-native codegen."""
+        if hllc is not None:
+            self._riemann_metadata["hllc"] = bool(hllc)
+        if roe is not None:
+            self._riemann_metadata["roe"] = bool(roe)
+        if hooks is not None:
+            self._riemann_metadata["hooks"] = dict(hooks)
+        if wave_speeds is not None:
+            self._riemann_metadata["wave_speeds"] = wave_speeds
+        return dict(self._riemann_metadata)
 
     # --- operators ---
     def operator(self, name=None, signature=None, kind=None, capabilities=None,
@@ -127,13 +157,31 @@ class Module:
         ``lowering`` carries the flux/sources/fluxes so ``P.call`` and the codegen compose it."""
         u = self._state_spaces.get(state_space) or StateSpace(state_space)
         srcs = _normalize_source_selectors(sources, who="Module.rate_operator(%r)" % name)
-        op = Operator(name, "local_rate", Signature((u,), RateSpace(u)),
+        fields = self._rate_operator_field_input(srcs)
+        inputs = (u, fields) if fields is not None else (u,)
+        op = Operator(name, "local_rate", Signature(inputs, RateSpace(u)),
                       capabilities={"local": False, "produces_rate": True, "supports_device": True},
                       lowering={"flux": bool(flux), "sources": srcs,
                                 "fluxes": list(fluxes) if fluxes else None},
                       source="module")
         self._registry.register(op)
         return op
+
+    def _rate_operator_field_input(self, source_names):
+        """Return the field input required by selected local sources, if any."""
+        if not source_names:
+            return None
+        for source_name in source_names:
+            candidates = ["source_default", "default"] if source_name == "default" else [source_name]
+            for candidate in candidates:
+                if candidate not in self._registry:
+                    continue
+                op = self._registry.get(candidate)
+                if op.kind != "local_source":
+                    continue
+                if len(op.signature.inputs) > 1:
+                    return op.signature.inputs[1]
+        return None
 
     def eigenvalues(self, x, y):
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
@@ -153,15 +201,6 @@ class Module:
     def operator_registry(self):
         """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
         return self._registry
-
-    def to_dsl(self):
-        """Lower this Module to a :class:`pops.physics.facade.Model` -- the physical/codegen engine -- by mapping
-        each typed operator (with its IR body) to the dsl method of its kind. Reuses the dsl backend
-        (a translation, not a second codegen). ``pops.compile_problem(model=module, ...)`` does this
-        implicitly; call it directly to build the block model for ``sim.add_equation``."""
-        # Lazy: codegen.compile imports this module, so import only when compiling.
-        from pops.codegen.compile import _module_to_model
-        return _module_to_model(self)
 
     # --- introspection (Spec 2, S2-5) ---
     def state_spaces(self):

@@ -54,7 +54,7 @@ def raises(fn):
 
 def _euler_spec():
     """Bloc natif compressible (4 var) -- pas de compilateur requis (gardes pre-build)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+    return pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
@@ -144,12 +144,13 @@ def _isothermal():
 
 tmp = tempfile.mkdtemp()
 try:
-    cm = _isothermal().compile(os.path.join(tmp, "iso3_amr.so"), INCLUDE,
-                               backend="production", target="amr_system")
+    cm = _isothermal()._compile_for_runtime(
+        so_path=os.path.join(tmp, "iso3_amr.so"), include=INCLUDE,
+        backend=pops.codegen.Production(), target="amr_system")
 
     def build(setter):
         s = _amr(n)
-        s._add_equation("gas", cm, spatial=pops.Spatial(minmod=True, flux=Rusanov(),
+        s._add_equation("gas", cm, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod(), flux=Rusanov(),
                                                       recon=Conservative()))
         setter(s)
         return s

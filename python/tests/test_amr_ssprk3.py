@@ -1,7 +1,7 @@
 """SSPRK3 (Shu-Osher, ordre 3) sur AMR avec REFLUX PAR ETAGE (ADC-64).
 
 L'AMR sous-cycle (Berger-Oliger) avec reflux conservatif aux interfaces grossier-fin. SSPRK3 y est
-cable comme METHODE TEMPORELLE optionnelle (pops.Explicit(ssprk3=True) -> time.kind == "ssprk3"),
+cable comme METHODE TEMPORELLE optionnelle (pops.Explicit.ssprk3() -> time.kind == "ssprk3"),
 mono-bloc (coupleur AmrCouplerMP) ET multi-blocs (moteur AmrRuntime). Le reflux enregistre le FLUX
 EFFECTIF du pas SSP, Feff = 1/6 F(U0) + 1/6 F(U1) + 2/3 F(U2) : la correction grossier-fin reste
 exactement conservative pour le pas d'ordre 3 (cf. subcycle_level_mp / ssprk3_advance_level).
@@ -45,8 +45,8 @@ def _check_mono(n=32):
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
     sim._add_block("ne", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=pops.Explicit(ssprk3=True))  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
-    sim.set_poisson(bc="periodic")
+                  time=pops.Explicit.ssprk3())  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
+    sim._set_poisson(bc="periodic")
     sim.set_refinement(1.05)  # seuil bas -> le bump tague et raffine (patchs fins actifs)
     sim.set_density("ne", _bump(n, 0.40))
     m0 = sim.mass()
@@ -65,11 +65,11 @@ def _check_multi(n=32):
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
     sim._add_block("ions", _scalar_charge(+1.0),
                   spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                  time=pops.Explicit(ssprk3=True))     # SSPRK3 multi-blocs (moteur AmrRuntime)
+                  time=pops.Explicit.ssprk3())     # SSPRK3 multi-blocs (moteur AmrRuntime)
     sim._add_block("electrons", _scalar_charge(-1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=pops.Explicit(ssprk3=True))     # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
-    sim.set_poisson(bc="periodic")
+                  time=pops.Explicit.ssprk3())     # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
+    sim._set_poisson(bc="periodic")
     sim.set_refinement(1.05)  # union des tags -> patchs fins actifs
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
@@ -94,7 +94,7 @@ def _check_default_bit_identical(n=32):
         s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         s._add_block("ne", _scalar_charge(+1.0),
                     spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))  # time defaut = Explicit() euler
-        s.set_poisson(bc="periodic")
+        s._set_poisson(bc="periodic")
         s.set_density("ne", _bump(n, 0.40))
         s.advance(0.002, 10)
         return np.asarray(s.density())
@@ -113,8 +113,8 @@ def _build_advect(n, kind):
     s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     s._add_block("ne", _scalar_charge(+1.0),
                 spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
-                time=pops.Explicit(ssprk3=True) if kind == "ssprk3" else pops.Explicit())
-    s.set_poisson(bc="periodic")
+                time=pops.Explicit.ssprk3() if kind == "ssprk3" else pops.Explicit())
+    s._set_poisson(bc="periodic")
     s.set_density("ne", _bump(n, 0.40))
     return s
 

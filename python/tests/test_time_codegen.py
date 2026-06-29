@@ -30,25 +30,49 @@ def t():
     return _pops_time()
 
 
+def _time_module():
+    from pops import model
+
+    mod = model.Module("time_codegen_model")
+    U = mod.state_space("U", ("rho", "mx", "my"))
+    fields = mod.field_space("fields", ("phi",))
+    fields_from_state = mod.operator(
+        name="fields_from_state", signature=(U,) >> fields,
+        kind="field_operator", expr="rho")
+    explicit_rate = mod.rate_operator(
+        "explicit_rate", state_space="U", flux=True, sources=["default"])
+    electric_source = mod.operator(
+        name="electric", signature=(U,) >> model.Rate(U),
+        kind="local_source", expr="electric")
+    electric_rate = mod.rate_operator(
+        "electric_rate", state_space="U", flux=True, sources=[electric_source])
+    fields_from_blocks = mod.operator(
+        name="fields_from_blocks", signature=(U, U) >> fields,
+        kind="field_operator", expr="rho_a_plus_rho_b")
+    return mod, U, fields_from_state, explicit_rate, electric_rate, fields_from_blocks
+
+
 def _forward_euler(t):
-    P = t.Program("forward_euler_program")
+    mod, U_space, fields_op, rate_op, _electric_op, _fields_blocks_op = _time_module()
+    P = t.Program("forward_euler_program").bind_operators(mod)
     dt = P.dt
-    U = P.state("plasma")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("plasma", space=U_space)
+    P.call(fields_op, U, name="fields")
+    R = P.call(rate_op, U, name="R")
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
 
 def _ssprk2(t):
-    P = t.Program("ssprk2_program")
+    mod, U_space, fields_op, rate_op, _electric_op, _fields_blocks_op = _time_module()
+    P = t.Program("ssprk2_program").bind_operators(mod)
     dt = P.dt
-    U0 = P.state("plasma")
-    f0 = P._solve_fields(U0)
-    k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
+    U0 = P.state("plasma", space=U_space)
+    P.call(fields_op, U0, name="fields0")
+    k0 = P.call(rate_op, U0, name="k0")
     U1 = P.linear_combine("U1", U0 + dt * k0)
-    f1 = P._solve_fields(U1)
-    k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
+    P.call(fields_op, U1, name="fields1")
+    k1 = P.call(rate_op, U1, name="k1")
     P.commit("plasma", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
     return P
 
@@ -102,11 +126,11 @@ def test_includes_present(t):
 
 def test_named_source_refused(t):
     # A non-default named source needs a source mask (Phase 4) -> refuse, never mis-lower.
-    P = t.Program("electric_program")
+    mod, U_space, _fields_op, _rate_op, electric_op, _fields_blocks_op = _time_module()
+    P = t.Program("electric_program").bind_operators(mod)
     dt = P.dt
-    U = P.state("plasma")
-    f = P._solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
+    U = P.state("plasma", space=U_space)
+    R = P.call(electric_op, U, name="R")
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     try:
         P.emit_cpp_program()
@@ -121,12 +145,13 @@ def test_multiblock_lowers(t):
     # declaration order (a=0, b=1). (It previously raised NotImplementedError; that restriction is
     # lifted.) The default-Poisson solve_fields is per-block (a coupled solve, the block at its stage
     # state). State / RHS / projection / field solve each target the right index.
-    P = t.Program("two_block")
+    mod, U_space, fields_op, rate_op, _electric_op, _fields_blocks_op = _time_module()
+    P = t.Program("two_block").bind_operators(mod)
     dt = P.dt
     for blk in ("a", "b"):
-        U = P.state(blk)
-        f = P._solve_fields(U)
-        R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+        U = P.state(blk, space=U_space)
+        P.call(fields_op, U, name=blk + "_fields")
+        R = P.call(rate_op, U, name=blk + "_R")
         P.commit(blk, P.linear_combine(blk + "_next", U + dt * R))
     src = P.emit_cpp_program()
     assert "ctx.state(0)" in src, "block a should bind ctx.state(0)"
@@ -138,10 +163,10 @@ def test_multiblock_lowers(t):
 
 def test_unknown_block_commit_refused(t):
     # A commit of a block no P.state declares cannot route to an index (ADC-426): reject fail-loud.
-    P = t.Program("bad_commit")
-    U = P.state("a")
-    Ua = P.linear_combine("a_next", U + P.dt * P._rhs_legacy(state=U, fields=P._solve_fields(U),
-                                                     sources=["default"]))
+    mod, U_space, _fields_op, rate_op, _electric_op, _fields_blocks_op = _time_module()
+    P = t.Program("bad_commit").bind_operators(mod)
+    U = P.state("a", space=U_space)
+    Ua = P.linear_combine("a_next", U + P.dt * P.call(rate_op, U, name="R"))
     P.commit("ghost", Ua)  # 'ghost' was never declared by P.state
     try:
         P.emit_cpp_program()
@@ -155,12 +180,13 @@ def test_solve_fields_from_blocks_lowers(t):
     # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): the
     # codegen emits ctx.solve_fields_from_blocks(<vec>), a per-block MultiFab pointer vector sized to
     # ctx.n_blocks() with each listed block slotted at its index (nullptr = the block's live state).
-    P = t.Program("coupled")
-    Ua = P.state("a")
-    Ub = P.state("b")
-    P.solve_fields_from_blocks([Ua, Ub])
-    P.commit("a", P.linear_combine("a1", Ua + P.dt * P._rhs_legacy(state=Ua, sources=["default"])))
-    P.commit("b", P.linear_combine("b1", Ub + P.dt * P._rhs_legacy(state=Ub, sources=["default"])))
+    mod, U_space, _fields_op, rate_op, _electric_op, fields_blocks_op = _time_module()
+    P = t.Program("coupled").bind_operators(mod)
+    Ua = P.state("a", space=U_space)
+    Ub = P.state("b", space=U_space)
+    P.call(fields_blocks_op, Ua, Ub, name="fields")
+    P.commit("a", P.linear_combine("a1", Ua + P.dt * P.call(rate_op, Ua, name="Ra")))
+    P.commit("b", P.linear_combine("b1", Ub + P.dt * P.call(rate_op, Ub, name="Rb")))
     src = P.emit_cpp_program()
     assert "ctx.solve_fields_from_blocks(" in src
     assert "std::vector<const pops::MultiFab*>" in src

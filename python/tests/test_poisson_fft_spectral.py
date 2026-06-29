@@ -57,16 +57,16 @@ def solve_phi(n, solver, eps=1e-3):
     demande. Une densite negative est sans objet ici : seul solve_fields est appele."""
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),
                             elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver=solver, bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver=solver, bc="periodic")
     x = (np.arange(n) + 0.5) / n
     rho = eps * np.cos(2.0 * np.pi * x)[None, :] * np.ones((n, n))
-    sim.set_state("ions", np.stack([rho, np.zeros_like(rho), np.zeros_like(rho)]))
+    sim._set_state("ions", np.stack([rho, np.zeros_like(rho), np.zeros_like(rho)]))
     sim.solve_fields()
     phi = np.array(sim.potential())
     phi_ex = -(eps * np.cos(2.0 * np.pi * x) / (2.0 * np.pi) ** 2)[None, :] * np.ones((n, n))
@@ -95,25 +95,25 @@ chk(e16 < 1e-12, f"n=16 : err rel {e16:.2e} < 1e-12 (pas de terme O(h^2))")
 print("== (4) rejets ==")
 sim = pops.System(n=32, L=1.0, periodic=False)
 sim._add_block("ions",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+              pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                         transport=pops.IsothermalFlux(),
                         source=pops.PotentialForce(charge=1.0),
                         elliptic=pops.ChargeDensity(charge=1.0)),
               spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
               time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="fft_spectral", bc="dirichlet",
+sim._set_poisson(rhs="charge_density", solver="fft_spectral", bc="dirichlet",
                 wall="circle", wall_radius=0.4)
 msg = err_msg(sim.solve_fields)
 chk("fft_spectral" in msg and "wall" in msg, f"paroi refusee au kind effectif ({msg[:60]}...)")
 sim2 = pops.System(n=32, L=1.0, periodic=True)
 sim2._add_block("ions",
-               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+               pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                          transport=pops.IsothermalFlux(),
                          source=pops.PotentialForce(charge=1.0),
                          elliptic=pops.ChargeDensity(charge=1.0)),
                spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                time=pops.Explicit())
-sim2.set_poisson(rhs="charge_density", solver="dct", bc="periodic")
+sim2._set_poisson(rhs="charge_density", solver="dct", bc="periodic")
 msg = err_msg(sim2.solve_fields)
 chk("fft_spectral" in msg, f"solver inconnu : la liste inclut fft_spectral ({msg[:60]}...)")
 
@@ -124,19 +124,19 @@ def rhs_with(solver):
     n = 32
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),
                             elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver=solver, bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver=solver, bc="periodic")
     x = (np.arange(n) + 0.5) / n
     rho = 1e-3 * np.cos(2.0 * np.pi * x)[None, :] * np.ones((n, n)) + 1e-3 * np.sin(
         2.0 * np.pi * x)[:, None] * np.ones((n, n))
-    sim.set_state("ions", np.stack([1.0 + rho, np.zeros_like(rho), np.zeros_like(rho)]))
+    sim._set_state("ions", np.stack([1.0 + rho, np.zeros_like(rho), np.zeros_like(rho)]))
     sim.solve_fields()
-    return np.array(sim.eval_rhs("ions"))
+    return np.array(sim._eval_rhs("ions"))
 
 
 for solver in ("fft", "fft_spectral"):

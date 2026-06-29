@@ -3,8 +3,8 @@
 Typed handles for the temporal versions of one block state -- the current state ``U.n``,
 the named stages ``U.stage(k)``, the end-of-step ``U.next``, and the lagged history
 ``U.prev(lag)`` -- expressed as SUGAR over the existing SSA IR. There is NO new IR and NO
-Python runtime data here: every handle lowers to the EXACT primitive ops the positional
-``P.state`` / ``P.linear_combine`` / ``P.commit`` / ``P.history`` / ``P.store_history``
+Python runtime data here: every handle lowers to the EXACT primitive ops the internal
+``P._state_value`` / ``P.linear_combine`` / ``P.commit`` / ``P.history`` / ``P.store_history``
 style already builds, so a scheme written with handles produces a byte-identical
 ``_ir_hash``.
 
@@ -154,12 +154,13 @@ class TimeState:
     versions hold only a key, and ``.prev`` holds only its parent.
     """
 
-    def __init__(self, program, block, name="U"):
+    def __init__(self, program, block, name="U", space=None):
         if not isinstance(block, str) or not block:
             raise ValueError("TimeState: block must be a non-empty string")
         self.program = program
         self.block = block
         self.name = name or "U"
+        self.space = space
         self._n = None
         self._stages = {}
         self._next = None
@@ -170,10 +171,9 @@ class TimeState:
     # --- the current state U^n (read-only) -----------------------------------------------
     @property
     def n(self):
-        """The current conservative state ``U^n`` (cached Value, byte-identical to the
-        positional ``P.state(block)``)."""
+        """The current conservative state ``U^n`` (cached SSA Value)."""
         if self._n is None:
-            self._n = self.program.state(self.block)
+            self._n = self.program._state_value(self.block, space=self.space)
         return self._n
 
     # --- stages / next (SSA versions, defined via T.define) ------------------------------

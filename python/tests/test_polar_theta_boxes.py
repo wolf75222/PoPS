@@ -52,10 +52,10 @@ def _iso_system(theta_boxes):
     sim = pops.System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
     sim._add_block(
         "iso",
-        model=pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),
+        model=pops.Model(state=pops.FluidState.isothermal(cs2=1.0),
                         transport=pops.IsothermalFlux(), source=pops.NoSource(),
                         elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     return sim
 
 
@@ -66,7 +66,7 @@ def _exb_system(theta_boxes):
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0), source=pops.NoSource(),
                         elliptic=pops.ChargeDensity(charge=1.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     return sim
 
 
@@ -115,12 +115,12 @@ def _euler_transport(sim, name, U0, dt, nsteps):
     eval_rhs = fill_ghosts (collectif, halos inter-boites) + assemble_rhs_polar (itere local_size()),
     SANS solve_fields (le Poisson polaire direct est mono-box). On compare l'etat final entre decoupages."""
     U = np.array(U0, dtype=float)
-    sim.set_state(name, U)
+    sim._set_state(name, U)
     for _ in range(nsteps):
-        R = np.asarray(sim.eval_rhs(name), dtype=float)  # residu multi-box sur l'etat courant
+        R = np.asarray(sim._eval_rhs(name), dtype=float)  # residu multi-box sur l'etat courant
         U = U + dt * R
-        sim.set_state(name, U)
-    return np.asarray(sim.get_state(name), dtype=float)
+        sim._set_state(name, U)
+    return np.asarray(sim._get_state(name), dtype=float)
 
 
 def test_transport_isothermal_bit_identical_multibox():
@@ -133,8 +133,8 @@ def test_transport_isothermal_bit_identical_multibox():
 
     # Reference mono-box (theta_boxes=1) : un eval_rhs simple d'abord (sanity), puis N pas.
     sim1 = _iso_system(1)
-    sim1.set_state("iso", U0)
-    R1 = np.asarray(sim1.eval_rhs("iso"), dtype=float)
+    sim1._set_state("iso", U0)
+    R1 = np.asarray(sim1._eval_rhs("iso"), dtype=float)
     assert np.all(np.isfinite(R1)), "residu mono-box non fini"
     assert float(np.max(np.abs(R1))) > 1e-9, "residu mono-box trivialement nul (transport inerte ?)"
 
@@ -144,8 +144,8 @@ def test_transport_isothermal_bit_identical_multibox():
     for tb in (2, 4):
         # residu sur l'etat initial : doit deja etre BIT-IDENTIQUE (l'assemblage par boite est exact).
         simtb = _iso_system(tb)
-        simtb.set_state("iso", U0)
-        Rtb = np.asarray(simtb.eval_rhs("iso"), dtype=float)
+        simtb._set_state("iso", U0)
+        Rtb = np.asarray(simtb._eval_rhs("iso"), dtype=float)
         drhs = float(np.max(np.abs(Rtb - R1)))
         assert drhs == 0.0, "eval_rhs theta_boxes=%d differe du mono-box (dmax=%.3e)" % (tb, drhs)
 
@@ -168,7 +168,7 @@ def test_exb_scalar_multibox_consistent():
     sim1 = _exb_system(1)
     sim1.set_density("ne", rho0)
     d1 = np.asarray(sim1.density("ne"), dtype=float)          # (ntheta, nr) reconstruit
-    R1 = np.asarray(sim1.eval_rhs("ne"), dtype=float)
+    R1 = np.asarray(sim1._eval_rhs("ne"), dtype=float)
     assert d1.shape == (NTH, NR), "densite mono-box de forme %r" % (d1.shape,)
     assert float(np.max(np.abs(d1 - rho0))) == 0.0, "densite mono-box != entree (round-trip)"
 
@@ -180,7 +180,7 @@ def test_exb_scalar_multibox_consistent():
         assert float(np.max(np.abs(d - rho0))) == 0.0, (
             "densite theta_boxes=%d != entree (marshaling multi-box fautif)" % tb)
         # residu scalaire bit-identique au mono-box (independant du decoupage).
-        R = np.asarray(sim.eval_rhs("ne"), dtype=float)
+        R = np.asarray(sim._eval_rhs("ne"), dtype=float)
         assert float(np.max(np.abs(R - R1))) == 0.0, (
             "eval_rhs ExB scalaire theta_boxes=%d != mono-box" % tb)
     print("  [OK ] (b) ExB scalaire : marshaling + assemblage scalaire multi-box consistants")
@@ -222,7 +222,7 @@ def test_rejections_divisibility_and_direct_poisson():
 
     # (c3) Poisson polaire DIRECT + theta_boxes>1 -> message AMONT clair (avant la construction du solveur).
     sim = _exb_system(2)
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     sim.set_density("ne", _scalar_density())
     raised = False
     msg = ""
@@ -248,8 +248,8 @@ def test_state_roundtrip_multibox():
 
     # set_state -> get_state == identite (etat conservatif ; scatter sur 4 bandes puis gather global).
     sim = _iso_system(tb)
-    sim.set_state("iso", U0)
-    U1 = np.asarray(sim.get_state("iso"), dtype=float)
+    sim._set_state("iso", U0)
+    U1 = np.asarray(sim._get_state("iso"), dtype=float)
     assert U1.shape == (3, NTH, NR), "get_state de forme %r (attendu (3, %d, %d))" % (U1.shape, NTH, NR)
     assert float(np.max(np.abs(U1 - U0))) == 0.0, "set_state/get_state non identite (multi-box)"
 

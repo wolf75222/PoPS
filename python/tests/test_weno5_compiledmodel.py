@@ -31,7 +31,7 @@ from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
 
 def _native_spec():
     """euler_poisson NATIF compose par briques (reference de parite, cf. test_dsl_production)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+    return pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                      transport=pops.CompressibleFlux(),
                      source=pops.GravityForce(),
                      elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
@@ -60,9 +60,9 @@ def main():
     spec = _native_spec()
     tmp = tempfile.mkdtemp()
     try:
-        so_aot = e.compile(os.path.join(tmp, "euler_poisson_aot.so"), INCLUDE, backend="aot")
+        so_aot = e.compile(os.path.join(tmp, "euler_poisson_aot.so"), INCLUDE, backend=pops.codegen.AOT())
         so_prod = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE,
-                            backend="production")
+                            backend=pops.codegen.Production())
         assert e.adder_for("aot") == "add_compiled_block"
         assert e.adder_for("production") == "add_native_block"
 
@@ -73,10 +73,10 @@ def main():
                    "weno5": dict(weno5=True)}[limiter]
             sys._add_block("gas", spec, spatial=pops.Spatial(flux=Rusanov(), recon=Conservative(),
                                                            **lim), time=pops.Explicit())
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
+            sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+            sys._set_state("gas", Uflat)
             sys.solve_fields()
-            return (np.array(sys.eval_rhs("gas")).reshape(4, n, n),
+            return (np.array(sys._eval_rhs("gas")).reshape(4, n, n),
                     np.array(sys.potential()).reshape(n, n))
 
         # --- (1) AOT : add_compiled_block accepte weno5, parite serree au natif ---
@@ -85,10 +85,10 @@ def main():
             sys.add_compiled_block("gas", so_aot, limiter=limiter, riemann="rusanov",
                                    recon="conservative", time="explicit",
                                    names=["rho", "rho_u", "rho_v", "E"])
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
+            sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+            sys._set_state("gas", Uflat)
             sys.solve_fields()
-            return (np.array(sys.eval_rhs("gas")).reshape(4, n, n),
+            return (np.array(sys._eval_rhs("gas")).reshape(4, n, n),
                     np.array(sys.potential()).reshape(n, n))
 
         for limiter in ("none", "minmod", "weno5"):
@@ -108,12 +108,12 @@ def main():
         sys = pops.System(n=n, L=L, periodic=True)
         sys.add_compiled_block("gas", so_aot, limiter="weno5", riemann="rusanov",
                                recon="conservative", names=["rho", "rho_u", "rho_v", "E"])
-        sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sys.set_state("gas", Uflat)
-        mass0 = float(np.array(sys.get_state("gas")).reshape(4, n, n)[0].sum())
+        sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+        sys._set_state("gas", Uflat)
+        mass0 = float(np.array(sys._get_state("gas")).reshape(4, n, n)[0].sum())
         for _ in range(15):
             sys.step_cfl(0.4)
-        U1 = np.array(sys.get_state("gas")).reshape(4, n, n)
+        U1 = np.array(sys._get_state("gas")).reshape(4, n, n)
         drel = abs(float(U1[0].sum()) - mass0) / mass0
         assert np.isfinite(U1).all() and U1[0].min() > 0, "AOT weno5 : etat non physique"
         assert drel < 1e-9, "AOT weno5 : masse non conservee (drel=%.2e)" % drel
@@ -125,10 +125,10 @@ def main():
             sys._s.add_native_block("gas", so_prod, limiter=limiter, riemann="rusanov",
                                     recon="conservative", time="explicit", gamma=GAMMA, substeps=1,
                                     evolve=True)
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
+            sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+            sys._set_state("gas", Uflat)
             sys.solve_fields()
-            return (np.array(sys.eval_rhs("gas")).reshape(4, n, n),
+            return (np.array(sys._eval_rhs("gas")).reshape(4, n, n),
                     np.array(sys.potential()).reshape(n, n))
 
         for limiter in ("none", "minmod", "weno5"):
@@ -150,17 +150,17 @@ def main():
             sys._s.add_native_block("gas", so_prod, limiter="weno5", riemann="rusanov",
                                     recon="conservative", time="explicit", gamma=GAMMA, substeps=1,
                                     evolve=True)
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
+            sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+            sys._set_state("gas", Uflat)
             return sys
 
         def build_ref_step():
             sys = pops.System(n=n, L=L, periodic=True)
-            sys._add_block("gas", spec, spatial=pops.Spatial(weno5=True, flux=Rusanov(),
+            sys._add_block("gas", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.WENO5(), flux=Rusanov(),
                                                            recon=Conservative()),
                           time=pops.Explicit())
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
+            sys._set_poisson(rhs="charge_density", solver="geometric_mg")
+            sys._set_state("gas", Uflat)
             return sys
 
         p_sys, r_sys = build_prod_step(), build_ref_step()
@@ -168,8 +168,8 @@ def main():
         for _ in range(12):
             p_sys.step(dt)
             r_sys.step(dt)
-        Up = np.array(p_sys.get_state("gas")).reshape(4, n, n)
-        Ur = np.array(r_sys.get_state("gas")).reshape(4, n, n)
+        Up = np.array(p_sys._get_state("gas")).reshape(4, n, n)
+        Ur = np.array(r_sys._get_state("gas")).reshape(4, n, n)
         dstep = float(np.max(np.abs(Up - Ur)))
         assert np.isfinite(Up).all() and Up[0].min() > 0, "production weno5 : etat non physique"
         assert dstep == 0.0, "production weno5 : etat apres 12 pas != add_block (%.2e)" % dstep

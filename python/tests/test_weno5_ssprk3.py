@@ -2,13 +2,13 @@
 """WENO5-Z + SSPRK3 accessibles depuis l'API Python (pops.Spatial / pops.Explicit).
 
 Verifie :
- (1) pops.Spatial(limiter=WENO5()) (et le raccourci weno5=True) construit et tourne un bloc
+ (1) pops.Spatial(limiter=WENO5()) construit et tourne un bloc
      end-to-end : plus d'erreur "limiter inconnu", masse conservee, etat fini. Idem en flux hllc.
- (2) pops.Explicit(method="ssprk3") (et ssprk3=True) selectionne le schema temporel d'ordre 3 ;
+ (2) pops.Explicit.ssprk3() selectionne le schema temporel d'ordre 3 ;
      le DEFAUT reste SSPRK2 (kind="explicit").
  (3) NO-DEFAULT-CHANGE : un run minmod + SSPRK2 (le defaut) donne un resultat BIT-IDENTIQUE selon
      qu'on cree le bloc avec pops.Spatial() / pops.Explicit() par defaut ou en nommant explicitement
-     limiter="minmod"/method="ssprk2". Le chemin par defaut n'a pas bouge.
+     Minmod()/Explicit.ssprk2(). Le chemin par defaut n'a pas bouge.
  (4) PRECISION : sur un transport lisse (Euler, bulle de densite douce), WENO5+SSPRK3 reste fini et
      conserve la masse ; combine a minmod/rusanov (defaut) il tourne aussi -> les schemas coexistent.
  (5) weno5 ACCEPTE sur les chemins compiles (.so) : add_compiled_block / add_native_block n'opposent
@@ -47,9 +47,17 @@ def meshx(n):
 
 
 def gas():  # Euler compressible (4 var) : accepte rusanov/hllc/roe
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.ChargeDensity(charge=0.0))
+
+
+def explicit(method):
+    return {
+        "euler": pops.Explicit.euler,
+        "ssprk2": pops.Explicit.ssprk2,
+        "ssprk3": pops.Explicit.ssprk3,
+    }[method]()
 
 
 def smooth_rho(n):
@@ -61,8 +69,8 @@ def run(n, limiter, flux, method, nsteps=10, cfl=0.2):
     s = pops.System(n=n, L=1.0, periodic=True)
     s._add_block("gas", model=gas(),
                 spatial=pops.Spatial(limiter=limiter, flux=flux),
-                time=pops.Explicit(method=method))
-    s.set_poisson()
+                time=explicit(method))
+    s._set_poisson()
     s.set_density("gas", smooth_rho(n))
     for _ in range(nsteps):
         s.step_cfl(cfl)
@@ -79,20 +87,20 @@ m0 = float(smooth_rho(n).sum())
 chk(abs(sw.mass("gas") - m0) < 1e-7 * abs(m0), "weno5 : masse conservee")
 # raccourci weno5=True + flux hllc
 sw2 = pops.System(n=32, L=1.0, periodic=True)
-sw2._add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=HLLC()),
-              time=pops.Explicit(ssprk3=True))
-sw2.set_poisson(); sw2.set_density("gas", smooth_rho(32))
+sw2._add_block("gas", model=gas(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.WENO5(), flux=HLLC()),
+              time=pops.Explicit.ssprk3())
+sw2._set_poisson(); sw2.set_density("gas", smooth_rho(32))
 for _ in range(8):
     sw2.step_cfl(0.2)
-chk(np.isfinite(np.array(sw2.density("gas"))).all(), "weno5=True + hllc + ssprk3=True : fini")
+chk(np.isfinite(np.array(sw2.density("gas"))).all(), "WENO5() + hllc + Explicit.ssprk3() : fini")
 
 # --- 2. SSPRK3 selectionnable ; defaut = SSPRK2 ---------------------------------
-print("== pops.Explicit : defaut SSPRK2, method='ssprk3' selectionnable ==")
+print("== pops.Explicit : defaut SSPRK2, Explicit.ssprk3() selectionnable ==")
 chk(pops.Explicit().kind == "explicit", "Explicit() defaut -> kind 'explicit' (SSPRK2)")
 chk(pops.Explicit().method == "ssprk2", "Explicit() defaut -> method 'ssprk2'")
-chk(pops.Explicit(method="ssprk3").kind == "ssprk3", "Explicit(method='ssprk3') -> kind 'ssprk3'")
-chk(pops.Explicit(ssprk3=True).kind == "ssprk3", "Explicit(ssprk3=True) -> kind 'ssprk3'")
-chk(raises(lambda: pops.Explicit(method="rk4")), "Explicit : methode inconnue levee")
+chk(pops.Explicit.ssprk3().kind == "ssprk3", "Explicit.ssprk3() -> kind 'ssprk3'")
+chk(raises(lambda: pops.Explicit(method="rk4")), "Explicit : method= string rejete")
+chk(raises(lambda: pops.Explicit(ssprk3=True)), "Explicit : ssprk3= shortcut rejete")
 
 # --- 3. NO-DEFAULT-CHANGE : minmod + SSPRK2 bit-identique ------------------------
 print("== no-default-change : minmod/SSPRK2 (defaut) bit-identique ==")
@@ -102,7 +110,7 @@ d_def = np.array(s_def.density("gas"))
 # Reference : memes etapes, en laissant TOUS les defauts implicites (Spatial(), Explicit()).
 s_ref = pops.System(n=64, L=1.0, periodic=True)
 s_ref._add_block("gas", model=gas())  # spatial/time None -> Spatial() (minmod) + Explicit() (ssprk2)
-s_ref.set_poisson(); s_ref.set_density("gas", smooth_rho(64))
+s_ref._set_poisson(); s_ref.set_density("gas", smooth_rho(64))
 for _ in range(10):
     s_ref.step_cfl(0.2)
 d_ref = np.array(s_ref.density("gas"))
@@ -116,8 +124,8 @@ chk(np.array_equal(d_def, d_ref),
 # lisse de longue duree, et un bloc weno5 et un bloc minmod (defaut) coexistent dans le meme System.
 print("== WENO5+SSPRK3 sain (long run lisse) + coexistence avec le defaut ==")
 s_w5 = pops.System(n=64, L=1.0, periodic=True)
-s_w5._add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
-s_w5.set_poisson(); s_w5.set_density("gas", smooth_rho(64))
+s_w5._add_block("gas", model=gas(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.WENO5()), time=pops.Explicit.ssprk3())
+s_w5._set_poisson(); s_w5.set_density("gas", smooth_rho(64))
 m_w5_0 = s_w5.mass("gas")
 for _ in range(40):
     s_w5.step_cfl(0.3)
@@ -126,9 +134,9 @@ chk(np.isfinite(d_w5).all() and d_w5.min() > 0, "WENO5+SSPRK3 long run : fini, d
 chk(abs(s_w5.mass("gas") - m_w5_0) < 1e-9 * abs(m_w5_0),
     "WENO5+SSPRK3 long run : masse conservee (flux conservatif)")
 mix = pops.System(n=32, L=1.0, periodic=True)
-mix._add_block("hi", model=gas(), spatial=pops.Spatial(weno5=True), time=pops.Explicit(ssprk3=True))
-mix._add_block("lo", model=gas(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-mix.set_poisson(); mix.set_density("hi", smooth_rho(32)); mix.set_density("lo", smooth_rho(32))
+mix._add_block("hi", model=gas(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.WENO5()), time=pops.Explicit.ssprk3())
+mix._add_block("lo", model=gas(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
+mix._set_poisson(); mix.set_density("hi", smooth_rho(32)); mix.set_density("lo", smooth_rho(32))
 for _ in range(6):
     mix.step_cfl(0.2)
 chk(np.isfinite(np.array(mix.density("hi"))).all() and np.isfinite(np.array(mix.density("lo"))).all(),

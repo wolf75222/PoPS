@@ -35,7 +35,7 @@ def raises(fn):
 # Euler compressible pur (sans source), elliptique de fond trivial (alpha=0) : Poisson a second membre
 # nul -> aucune contrainte de solvabilite periodique (le regrid tague sur le champ conservatif).
 def _comp():
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
@@ -59,7 +59,7 @@ def _run(n, thr, variable, role, s0):
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
     sim._add_block("gas0", _comp(), time=pops.Explicit())
     sim._add_block("gas1", _comp(), time=pops.Explicit())
-    sim.set_poisson(bc="periodic")
+    sim._set_poisson(bc="periodic")
     sim.set_refinement(thr, variable=variable, role=role)
     sim.set_conservative_state("gas0", s0)
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniforme
@@ -93,17 +93,18 @@ chk(raises(lambda: _run(N, 6.0, "", "temperature", s_energy)),
 
 
 def _solo_with_selector():
-    # Bloc UNIQUE + selecteur : le selecteur n'est cable que sur le moteur multi-blocs ; refuse au
-    # build (pas de repli silencieux vers la composante 0).
     sim = pops.AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
     sim._add_block("solo", _comp(), time=pops.Explicit())
-    sim.set_poisson(bc="periodic")
+    sim._set_poisson(bc="periodic")
     sim.set_refinement(6.0, role="energy")
-    sim.set_density("solo", np.full((N, N), 1.0))
-    sim.n_patches()  # declenche le build -> refus
+    sim.set_conservative_state("solo", s_energy)
+    for _ in range(4):
+        sim.step(1e-3)
+    return sim.patch_boxes()
 
 
-chk(raises(_solo_with_selector), "bloc unique + selecteur -> leve au build (multi-blocs only)")
+solo = _solo_with_selector()
+chk(_min_fine_corner(solo) < 32, "bloc unique + role=energy : raffine la bosse d'energie")
 chk(raises(lambda: pops.AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
            .set_refinement(6.0, variable="E", role="energy")),
     "variable ET role -> leve immediatement")

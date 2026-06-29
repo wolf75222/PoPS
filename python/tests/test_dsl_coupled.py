@@ -77,22 +77,22 @@ def main():
         # --- bloc DYNAMIQUE (JIT) euler_poisson ---
         dyn = pops.System(n=n, L=L, periodic=True)
         dyn.add_dynamic_block("gas", so, names=["rho", "rho_u", "rho_v", "E"])
-        dyn.set_poisson(rhs="charge_density", solver="geometric_mg")
-        dyn.set_state("gas", Uflat)
+        dyn._set_poisson(rhs="charge_density", solver="geometric_mg")
+        dyn._set_state("gas", Uflat)
         dyn.solve_fields()
         phi_dyn = np.array(dyn.potential()).reshape(n, n)
-        R_dyn = np.array(dyn.eval_rhs("gas")).reshape(4, n, n)
+        R_dyn = np.array(dyn._eval_rhs("gas")).reshape(4, n, n)
 
         # --- euler_poisson COMPILE de reference (memes briques manuelles) ---
-        spec = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+        spec = pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                          transport=pops.CompressibleFlux(),
                          source=pops.GravityForce(),
                          elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
         cmp = pops.System(n=n, L=L, periodic=True)
-        cmp._add_block("gas", spec, spatial=pops.Spatial(none=True, flux=Rusanov()),
+        cmp._add_block("gas", spec, spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder(), flux=Rusanov()),
                       time=pops.Explicit())
-        cmp.set_poisson(rhs="charge_density", solver="geometric_mg")
-        cmp.set_state("gas", Uflat)
+        cmp._set_poisson(rhs="charge_density", solver="geometric_mg")
+        cmp._set_state("gas", Uflat)
         cmp.solve_fields()
         phi_cmp = np.array(cmp.potential()).reshape(n, n)
 
@@ -114,10 +114,10 @@ def main():
         print("OK  eval_rhs(bloc dynamique) == flux + source de gravite (ecart max %.1e)" % dres)
 
         # (C) le bloc couple tourne dans le System en restant physique et conservatif
-        mass0 = float(np.array(dyn.get_state("gas")).reshape(4, n, n)[0].sum())
+        mass0 = float(np.array(dyn._get_state("gas")).reshape(4, n, n)[0].sum())
         for _ in range(15):
             dyn.step_cfl(0.4)  # transport + Poisson + force, par pas
-        U1 = np.array(dyn.get_state("gas")).reshape(4, n, n)
+        U1 = np.array(dyn._get_state("gas")).reshape(4, n, n)
         drel = abs(float(U1[0].sum()) - mass0) / mass0
         assert np.isfinite(U1).all() and U1[0].min() > 0, "etat non physique"
         assert drel < 1e-9, "masse non conservee (drel=%.2e)" % drel

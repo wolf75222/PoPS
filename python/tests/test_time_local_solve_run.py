@@ -17,7 +17,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
     problem.so, install_program, step(dt). The implicit Lorentz rotation has a closed form: with
     k = dt*B_z, den = 1 + k*k, mx' = (mx + k*my)/den, my' = (-k*mx + my)/den, rho unchanged. The
     stepped (mx, my) must match it to round-off. Runs in CI (gate-python rebuilds _pops) and locally
-    once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent, no compiler/Kokkos
+    once _pops is rebuilt; skips if _pops lacks _install_program_so, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
 from pops.numerics.reconstruction import FirstOrder
@@ -124,7 +124,7 @@ chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
     "n_cons > 8 dense-fallback guard fires")
 
 # ---- (B) end-to-end Lorentz parity: skips unless the full toolchain is present ----
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
     print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
     print("%s test_time_local_solve_run (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
@@ -137,12 +137,12 @@ def make_sim():
     sim = pops.System(n=n, L=1.0, periodic=True)
     # Production-backend DSL model added as a native block; the Program drives the step.
     try:
-        compiled_model = lorentz_model("lorentz_block").compile(backend="production")
+        compiled_model = lorentz_model("lorentz_block")._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim._add_equation("plasma", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     bz = 3.0
     sim.set_magnetic_field(bz * np.ones(n * n))  # constant B_z over the grid
     x = (np.arange(n) + 0.5) / n
@@ -150,7 +150,7 @@ def make_sim():
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     mx = 0.5 * rho
     my = -0.2 * rho
-    sim.set_state("plasma", np.stack([rho, mx, my]))
+    sim._set_state("plasma", np.stack([rho, mx, my]))
     return sim, bz, np.stack([rho, mx, my])
 
 
@@ -166,7 +166,7 @@ chk(compiled.program_name == "lorentz_step", "handle carries the program name")
 prog, bz, U0 = make_sim()
 prog._install_program_so(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
 prog.step(dt)
-U = np.array(prog.get_state("plasma"))
+U = np.array(prog._get_state("plasma"))
 
 # Analytic implicit Lorentz rotation of (mx, my): (I - dt*L) U' = U, L = [[0,0,0],[0,0,b],[0,-b,0]].
 k = dt * bz

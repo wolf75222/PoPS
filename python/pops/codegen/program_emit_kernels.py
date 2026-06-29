@@ -19,7 +19,7 @@ from pops.time.values import Value, _to_affine  # noqa: F401
 # symbolic source_term / linear_source coefficients). Without a model they raise NotImplementedError.
 _MODEL_OPS = ("source", "apply", "solve_local_linear", "solve_local_nonlinear")
 
-_ALLOWED_OPS = frozenset({"state", "operator_call", "solve_fields", "solve_fields_from_blocks", "rhs",
+_ALLOWED_OPS = frozenset({"state", "call", "solve_fields", "solve_fields_from_blocks", "rhs",
                           "linear_combine", "linear_source",
                           "reduce", "compare", "while", "range", "if", "matrix_free_operator",
                           "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
@@ -105,9 +105,9 @@ def _coeff_cpp(powers):
 # allocation-free: only stack scalars + fixed-size arrays, no std::vector / std::function / Eigen.
 
 def _model_impl(model):
-    """The underlying HyperbolicModel carrying the symbolic coefficients: the public pops.dsl.Model
-    wraps it as ``_m``; a HyperbolicModel is already itself."""
-    return getattr(model, "_m", model)
+    """Return the model-codegen protocol object consumed by Program emitters."""
+    from pops.codegen.module_view import codegen_model
+    return codegen_model(model)
 
 
 def _named_fluxes(v):
@@ -130,7 +130,7 @@ def _named_fluxes(v):
 def _aux_comp(impl, name):
     """Component index of an aux field @p name in the System aux channel: canonical (dsl.AUX_CANONICAL)
     or a model NAMED aux field (dsl.AUX_NAMED_BASE + position in aux_extra_names). @p impl is the
-    HyperbolicModel."""
+    model-codegen protocol object."""
     from pops.physics.aux import AUX_CANONICAL, AUX_NAMED_BASE
     if name in AUX_CANONICAL:
         return AUX_CANONICAL[name]
@@ -163,7 +163,7 @@ def _cell_locals(impl, exprs, state_var, *, with_cons, with_prim):
       - aux fields -> ``const pops::Real <name> = auxA(i, j, <comp>);`` (always, by dependency);
       - conservative vars -> ``const pops::Real <name> = <state>A(i, j, <idx>);`` (when @p with_cons);
       - primitives -> their dsl formula, in declaration order, only the LIVE ones (when @p with_prim).
-    @p impl is the HyperbolicModel; @p state_var the C++ MultiFab variable (its const Array4 is
+    @p impl is the model-codegen protocol object; @p state_var the C++ MultiFab variable (its const Array4 is
     ``<state_var>A``, the aux Array4 is ``auxA``). A runtime-param read lowers to ``params.get(idx)``;
     the ``params`` struct is bound by _kernel_open at the fab-loop level (ADC-510), so no per-cell
     binding is emitted here (a runtime param is NOT a per-cell aux/cons local)."""

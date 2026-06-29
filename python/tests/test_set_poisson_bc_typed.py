@@ -45,9 +45,9 @@ def _poisson_system(bc):
     from pops.numerics.riemann import Rusanov
     from pops.numerics.variables import Conservative
     s = pops.System(n=32, L=1.0, periodic=False)
-    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=bc,
+    s._set_poisson(rhs="charge_density", solver="geometric_mg", bc=bc,
                   wall="circle", wall_radius=0.4)
-    model = pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),
+    model = pops.Model(state=pops.FluidState.isothermal(cs2=1.0),
                        transport=pops.IsothermalFlux(), source=pops.NoSource(),
                        elliptic=pops.ChargeDensity())
     s._add_equation("e", model=model,

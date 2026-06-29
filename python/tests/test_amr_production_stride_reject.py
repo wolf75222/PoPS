@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Revue #195 : AmrSystem.add_equation REJETTE explicitement la cadence multirate (stride > 1) et le
 masque IMEX partiel (implicit_vars / implicit_roles) sur le CHEMIN PRODUCTION AMR (CompiledModel
-backend='production', target='amr_system' -> AmrSystem.add_native_block).
+backend=pops.codegen.Production(), target='amr_system' -> AmrSystem.add_native_block).
 
 POURQUOI un rejet et pas un fix : l'ABI PLATE du loader .so (symbole pops_install_native_amr,
 add_native_block) ne transporte NI stride NI le masque IMEX. Passes par ce chemin, ils prendraient
@@ -16,7 +16,7 @@ Route explicite vers les chemins qui SUPPORTENT ces parametres :
     tests/test_amr_multiblock_compiled.cpp, cas (F)).
 
 Ce test est PUR PYTHON et NE DEPEND PAS d'un compilateur : la garde est purement Python et leve AVANT
-tout dlopen du .so, donc un CompiledModel FACTICE (backend='production', target='amr_system', .so
+tout dlopen du .so, donc un CompiledModel FACTICE (backend=pops.codegen.Production(), target='amr_system', .so
 inexistant) suffit (deterministe en CI minimale ; meme recette que test_stride.py).
 """
 
@@ -37,11 +37,11 @@ def chk(cond, label):
 
 
 def fake_production_amr():
-    """CompiledModel FACTICE du chemin production AMR : backend='production', target='amr_system',
+    """CompiledModel FACTICE du chemin production AMR : backend=pops.codegen.Production(), target='amr_system',
     adder='add_native_block', .so inexistant. La garde stride/masque de add_equation leve AVANT le
     dlopen du .so, donc le chemin n'est jamais reellement charge."""
     return CompiledModel(
-        so_path="/inexistant_amr.so", backend="production", adder="add_native_block",
+        so_path="/inexistant_amr.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=["rho", "rho_u", "rho_v", "E"],
         cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
         prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=1.4, n_aux=3, params={}, caps={},

@@ -40,14 +40,14 @@ class _AmrSystemEquation:
     def _add_equation(self, name, model, spatial=None, time=None, substeps=None):
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind``; ``add_equation`` stays for that seam and the tests.
+        Low-level runtime seam. The documented public path is ``sim.install(...)`` with a
+        compiled problem or typed native instance descriptors; ``_add_equation`` stays for that
+        lowering seam and focused tests.
 
         Dispatch:
 
-        - a ModelSpec (pops.Model(...)) -> add_block (native bricks composed on the hierarchy);
-        - a CompiledModel(backend=pops.codegen.Production(), target='amr_system') (m.compile(...)) -> NATIVE path
+        - a ModelSpec from runtime native bricks -> add_block (native bricks composed on the hierarchy);
+        - a CompiledModel(backend=pops.codegen.Production(), target='amr_system') -> NATIVE path
           add_native_block: the .so loader inlines add_compiled_model(AmrSystem&), so the block runs
           the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
 
@@ -158,7 +158,7 @@ class _AmrSystemEquation:
         if getattr(compiled, "target", "system") != "amr_system":
             raise ValueError(
                 "AmrSystem.add_equation: the CompiledModel was compiled for target='system'; "
-                "recompile with m.compile(..., backend=pops.codegen.Production(), target='amr_system') so that "
+                "compile the model for target='amr_system' through the internal Module/runtime lowering so that "
                 "the loader inlines add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)")
 
         # recon "primitive" and flux "roe"/"hllc" are WIRED on AMR via dispatch_amr_compiled: the

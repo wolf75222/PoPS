@@ -13,7 +13,7 @@ The sub-packages form a directed acyclic dependency stack:
     moments   -> ir                              (Spec 5: moment-model toolkit)
     diagnostics -> linalg                        (Spec 5: Norm takes a typed norm kind)
     params / output / external -> (nothing)      (Spec 5: inert descriptors)
-    lib       -> ir, model, time, physics, moments, solvers
+    lib       -> ir, model, time, physics
     codegen   -> ir, model, physics, time, lib, solvers   (lowering + solver-gen DSL; no _pops)
     runtime   -> everything, and is the ONLY layer allowed to import _pops
 
@@ -62,9 +62,8 @@ ALLOWED = {
     "params": set(),
     "output": set(),
     "external": set(),
-    # lib.models wraps pops.moments. Criterion 7: lib is presets-only -- the solver catalog lives in
-    # pops.solvers (the lib.solvers shim was removed, so lib no longer imports solvers) and the
-    # solver-gen DSL is in codegen, not here.
+    # lib is presets-only. Provided moment models may import the central pops.moments package,
+    # but pops.lib itself is not a second public home for moments, solvers, fields or numerics.
     "lib": {"ir", "model", "time", "physics", "moments"},
     # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
     # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).

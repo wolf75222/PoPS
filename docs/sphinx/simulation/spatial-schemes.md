@@ -4,18 +4,19 @@
 The spatial scheme = reconstruction (limiter) + numerical Riemann flux + reconstructed
 variables. Two equivalent facades describe it.
 
-Every scheme is chosen with a TYPED `pops.numerics` descriptor; a bare string raises a
-`TypeError` that names the typed alternative (Spec 5 sec.7). `pops.Spatial(limiter=, flux=,
-recon=)` is the direct facade, with boolean shortcuts (`minmod=True`, `vanleer=True`,
-`weno5=True`, `none=True`, `primitive=True`):
+Every scheme is chosen with a TYPED `pops.numerics` descriptor; a bare string or boolean shortcut
+raises a `TypeError` that names the typed alternative (Spec 5 sec.7).
+`pops.Spatial(limiter=, flux=, recon=)` is the direct facade:
 
 ```python
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction import WENO5
+from pops.numerics.reconstruction.limiters import Minmod, VanLeer
+from pops.numerics.variables import Primitive
 
-pops.Spatial(minmod=True)                       # MUSCL minmod, Rusanov, conservative variables
-pops.Spatial(vanleer=True, flux=HLLC())         # MUSCL Van Leer, HLLC
-pops.Spatial(weno5=True, primitive=True)        # WENO5-Z, primitive reconstruction
+pops.Spatial(limiter=Minmod())                      # MUSCL minmod, Rusanov, conservative variables
+pops.Spatial(limiter=VanLeer(), flux=HLLC())        # MUSCL Van Leer, HLLC
+pops.Spatial(limiter=WENO5(), recon=Primitive())    # WENO5-Z, primitive reconstruction
 ```
 
 `pops.FiniteVolume(limiter=, riemann=, variables=)` is the same thing, but the numerical

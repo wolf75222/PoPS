@@ -109,14 +109,18 @@ class ParameterSpace:
     holds only the declaration; the runtime value belongs to the Simulation (read in a
     generated kernel via ProgramContext / ModuleContext, never frozen at codegen)."""
 
-    def __init__(self, name, default=0.0, dtype="real"):
+    def __init__(self, name, default=0.0, dtype="real", kind="const"):
+        if kind not in ("const", "runtime"):
+            raise ValueError("ParameterSpace.kind must be 'const' or 'runtime' (got %r)" % (kind,))
         self.name = str(name)
         self.default = default
+        self.value = default
         self.dtype = str(dtype)
+        self.kind = str(kind)
 
     def __repr__(self):
-        return "ParameterSpace(%r, default=%r, dtype=%r)" % (
-            self.name, self.default, self.dtype)
+        return "ParameterSpace(%r, default=%r, dtype=%r, kind=%r)" % (
+            self.name, self.default, self.dtype, self.kind)
 
 
 class AuxSpace:

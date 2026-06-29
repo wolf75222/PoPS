@@ -1,6 +1,6 @@
 """Composite HYBRIDE sur AMR (loader natif AMR hybride) : un modele melant transport NATIF (Euler) +
-source DSL (gravite) + elliptique NATIVE (GravityCoupling) est compile en loader natif AMR via
-pops.CompositeModel(...).compile(backend="production", target="amr_system"), puis branche dans une
+source DSL (gravite) + elliptique NATIVE (GravityCoupling) est compile en loader natif AMR via le
+compilateur hybride bas niveau ``CompositeModel.compile(..., target="amr_system")``, puis branche dans une
 AmrSystem (symbole pops_install_native_amr -> add_compiled_model(AmrSystem&), MEME hierarchie que
 AmrSystem.add_block : reflux conservatif, regrid).
 
@@ -54,6 +54,15 @@ def _amr(n, L, branch):
     return s
 
 
+def skip_if_kokkos_missing(exc):
+    text = str(exc)
+    if "Kokkos" in text or "POPS_HAS_KOKKOS" in text:
+        print("skip  Kokkos introuvable -> portion compilee sautee")
+        print("test_dsl_hybrid_amr : OK (garde-fou pur Python uniquement)")
+        return True
+    return False
+
+
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
@@ -69,18 +78,32 @@ def main():
                                source=build_gravity_source().compile(),
                                elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
         assert m.n_vars == 4
-        co = m.compile(backend="production", target="amr_system",
-                       so_path=os.path.join(tmp, "hybrid_amr.so"), include=INCLUDE)
+
+        # Garde-fou pur Python : AOT + amr_system refuse avant toute compilation.
+        try:
+            m.compile(backend=pops.codegen.AOT(), target="amr_system",
+                      so_path=os.path.join(tmp, "bad.so"), include=INCLUDE)
+            raise AssertionError("compile(aot, amr_system) accepte a tort")
+        except ValueError as ex:
+            assert "amr_system" in str(ex)
+
+        try:
+            co = m.compile(backend=pops.codegen.Production(), target="amr_system",
+                           so_path=os.path.join(tmp, "hybrid_amr.so"), include=INCLUDE)
+        except RuntimeError as ex:
+            if skip_if_kokkos_missing(ex):
+                return
+            raise
         assert co.adder == "add_native_block" and co.target == "amr_system"
         assert co.caps.get("amr") is True
 
         # Oracle 100% natif equivalent (Euler + GravityForce + GravityCoupling).
-        spec = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+        spec = pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                          transport=pops.CompressibleFlux(), source=pops.GravityForce(),
                          elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
 
         def poisson(s):
-            s.set_poisson("charge_density", "geometric_mg")
+            s._set_poisson("charge_density", "geometric_mg")
 
         spatial = pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative())
         H = _amr(n, L, lambda s: (s._add_equation("gas", co, spatial=spatial), poisson(s)))
@@ -100,17 +123,14 @@ def main():
         assert H.n_patches() == N.n_patches(), "n_patches final != add_block (regrid different)"
         print("OK  composite hybride sur AMR : masse/densite/patchs == add_block (dmax=%.1e)" % dmax)
 
-        # Garde-fou : aot + amr_system refuse a la compilation.
-        try:
-            m.compile(backend="aot", target="amr_system", so_path=os.path.join(tmp, "bad.so"),
-                      include=INCLUDE)
-            raise AssertionError("compile(aot, amr_system) accepte a tort")
-        except ValueError as ex:
-            assert "amr_system" in str(ex)
-
         # Garde-fou : un CompiledModel target='system' refuse sur AmrSystem.add_equation.
-        co_sys = m.compile(backend="production", target="system",
-                           so_path=os.path.join(tmp, "hybrid_sys.so"), include=INCLUDE)
+        try:
+            co_sys = m.compile(backend=pops.codegen.Production(), target="system",
+                               so_path=os.path.join(tmp, "hybrid_sys.so"), include=INCLUDE)
+        except RuntimeError as ex:
+            if skip_if_kokkos_missing(ex):
+                return
+            raise
         try:
             pops.AmrSystem(n=n, L=L, periodic=True)._add_equation("gas", co_sys, spatial=spatial)
             raise AssertionError("AmrSystem.add_equation a accepte un CompiledModel target='system'")

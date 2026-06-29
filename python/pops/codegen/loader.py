@@ -13,7 +13,7 @@ Neither class imports ``pops.dsl`` or ``pops.physics`` at module level.
 class CompiledProblem:
     """Result of ``pops.compile_problem(...)``; a generated ``problem.so``
     (a compiled time Program) plus the metadata to install + reproduce it.
-    Install it with ``sim.install(compiled, ...)`` / ``pops.bind(compiled, ...)``; the Program then
+    Install it with ``sim.install(compiled, ...)``; the Program then
     drives ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos
@@ -380,7 +380,7 @@ class CompiledModel:
     adder_for(backend)) with a single object.
 
     The metadata is NOT re-read from the ``.so``: Python already holds
-    names/roles/gamma/n_aux/params (the HyperbolicModel carries them);
+        names/roles/gamma/n_aux/params carried by the compiled model metadata;
     CompiledModel just exposes them for dispatch (add_equation) and
     diagnostics. cf. DSL_MODEL_DESIGN.md section 3.
     """

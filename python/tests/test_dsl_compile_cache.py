@@ -1,5 +1,6 @@
-"""Ergonomie de m.compile(...) : auto-detection de `include`, auto-gestion de `so_path` et CACHE de
-build keye sur le modele. PUR-PYTHON / ergonomie : aucune numerique nouvelle, memes briques generees.
+"""Ergonomie de _compile_for_runtime(...) : auto-detection de `include`, auto-gestion de `so_path`
+et CACHE de build keye sur le modele. PUR-PYTHON / ergonomie : aucune numerique nouvelle, memes
+briques generees.
 
 On verifie :
 (1) PUR-PYTHON (aucun compilateur requis) :
@@ -8,12 +9,12 @@ On verifie :
     - la cle de cache (model_hash + abi_key + backend/target/name) DIFFERE quand le modele change
       (param, formule, backend), et est STABLE pour un modele identique.
 (2) BOUT EN BOUT (saute sans compilateur / en-tetes) :
-    - m.compile(backend="aot") ET backend="production" SANS so_path/include -> CompiledModel valide,
-      branchable via add_equation et qui tourne (run) ;
+    - m._compile_for_runtime(backend=pops.codegen.AOT()) ET backend=pops.codegen.Production()
+      SANS so_path/include -> CompiledModel valide, branchable via add_equation et qui tourne (run) ;
     - une 2e compilation du MEME modele est un cache HIT (PAS de recompilation : meme chemin, mtime
       inchange, marqueur present) ;
     - changer le modele (un parametre) BUSTE le cache (chemin different, recompilation) ;
-    - la forme a arguments EXPLICITES (so_path + include) marche toujours (retro-compat).
+    - la forme a arguments EXPLICITES (so_path + include) marche toujours comme seam runtime bas niveau.
 
 Lance avec python3, meme PYTHONPATH que les autres tests DSL.
 """
@@ -131,7 +132,7 @@ def pure_python_checks():
 
 def end_to_end_checks():
     """(2) Bout en bout : compile SANS so_path/include -> CompiledModel valide + run ; cache HIT/MISS ;
-    forme explicite (retro-compat)."""
+    forme explicite runtime."""
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
         print("skip  compilateur ou en-tetes pops absents -> bout-en-bout saute")
@@ -145,60 +146,63 @@ def end_to_end_checks():
     os.environ["POPS_CACHE_DIR"] = cache
     os.environ["POPS_INCLUDE"] = INCLUDE  # rend l'auto-detection robuste meme hors paquet installe
     try:
-        for backend, exp_adder in (("aot", "add_compiled_block"), ("production", "add_native_block")):
-            m = build_euler("euler_%s" % backend)
+        for label, backend, exp_adder in (
+            ("aot", pops.codegen.AOT(), "add_compiled_block"),
+            ("production", pops.codegen.Production(), "add_native_block"),
+        ):
+            m = build_euler("euler_%s" % label)
 
             # (a) compile SANS so_path NI include -> CompiledModel valide
-            cm = m.compile(backend=backend)
+            cm = m._compile_for_runtime(backend=backend)
             assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
-            assert cm.adder == exp_adder, "%s : adder %r (attendu %r)" % (backend, cm.adder, exp_adder)
-            assert cm.so_path and os.path.exists(cm.so_path), "%s : .so absente" % backend
+            assert cm.adder == exp_adder, "%s : adder %r (attendu %r)" % (label, cm.adder, exp_adder)
+            assert cm.so_path and os.path.exists(cm.so_path), "%s : .so absente" % label
             assert os.path.normpath(cm.so_path).startswith(os.path.normpath(cache)), \
-                "%s : .so hors du cache dir" % backend
+                "%s : .so hors du cache dir" % label
             assert cm.n_vars == 4 and cm.abi_key and cm.model_hash, "metadonnees CompiledModel"
-            print("OK  %s : compile() SANS so_path/include -> %s (cache %s)"
-                  % (backend, cm.adder, os.path.basename(cm.so_path)))
+            print("OK  %s : _compile_for_runtime() SANS so_path/include -> %s (cache %s)"
+                  % (label, cm.adder, os.path.basename(cm.so_path)))
 
             # (b) branchable via add_equation et tourne
             s = pops.System(n=n, periodic=True)
             s._add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                variables=Primitive()))
-            s.set_poisson(rhs="charge_density", solver="geometric_mg")
-            s.set_state("gas", initial_state(n))
+            s._set_poisson(rhs="charge_density", solver="geometric_mg")
+            s._set_state("gas", initial_state(n))
             nsteps = s.run(t_end=0.02, cfl=0.4)
-            assert nsteps > 0 and np.all(np.isfinite(np.array(s.get_state("gas")))), \
-                "%s : run instable" % backend
-            print("OK  %s : add_equation + run(%d pas) -> etat fini" % (backend, nsteps))
+            assert nsteps > 0 and np.all(np.isfinite(np.array(s._get_state("gas")))), \
+                "%s : run instable" % label
+            print("OK  %s : add_equation + run(%d pas) -> etat fini" % (label, nsteps))
 
             # (c) 2e compile du MEME modele -> cache HIT : meme chemin, PAS de recompilation
             mtime1 = os.path.getmtime(cm.so_path)
             time.sleep(1.1)  # resolution mtime : un vrai recompile changerait l'horodatage
-            cm_hit = m.compile(backend=backend)
-            assert cm_hit.so_path == cm.so_path, "%s : cache HIT chemin different" % backend
+            cm_hit = m._compile_for_runtime(backend=backend)
+            assert cm_hit.so_path == cm.so_path, "%s : cache HIT chemin different" % label
             assert os.path.getmtime(cm_hit.so_path) == mtime1, \
-                "%s : cache HIT a RECOMPILE (mtime change)" % backend
-            print("OK  %s : 2e compile() = cache HIT (meme chemin, mtime inchange, pas de recompile)"
-                  % backend)
+                "%s : cache HIT a RECOMPILE (mtime change)" % label
+            print("OK  %s : 2e _compile_for_runtime() = cache HIT (meme chemin, mtime inchange, pas de recompile)"
+                  % label)
 
             # (d) changer un PARAMETRE buste le cache : chemin different, recompilation
-            m_diff = build_euler("euler_%s" % backend, gamma=1.4)  # gamma different -> model_hash different
-            cm_miss = m_diff.compile(backend=backend)
-            assert cm_miss.so_path != cm.so_path, "%s : param change n'a pas buste le cache" % backend
-            assert os.path.exists(cm_miss.so_path), "%s : cache MISS n'a pas compile" % backend
-            print("OK  %s : param different = cache MISS (chemin different, recompilation)" % backend)
+            m_diff = build_euler("euler_%s" % label, gamma=1.4)  # gamma different -> model_hash different
+            cm_miss = m_diff._compile_for_runtime(backend=backend)
+            assert cm_miss.so_path != cm.so_path, "%s : param change n'a pas buste le cache" % label
+            assert os.path.exists(cm_miss.so_path), "%s : cache MISS n'a pas compile" % label
+            print("OK  %s : param different = cache MISS (chemin different, recompilation)" % label)
 
-        # (e) retro-compat : forme a arguments EXPLICITES (so_path + include) marche toujours
+        # (e) forme runtime explicite : so_path + include restent disponibles pour les seams bas niveau.
         m = build_euler("euler_explicit")
         ex_path = os.path.join(explicit, "explicit.so")
-        cm_ex = m.compile(ex_path, INCLUDE, backend="aot")
+        cm_ex = m._compile_for_runtime(ex_path, INCLUDE, backend=pops.codegen.AOT())
         assert cm_ex.so_path == ex_path and os.path.exists(ex_path), "so_path explicite casse"
         s = pops.System(n=n, periodic=True)
         s._add_equation("gas", cm_ex, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                               variables=Primitive()))
-        s.set_poisson(rhs="charge_density", solver="geometric_mg")
-        s.set_state("gas", initial_state(n))
+        s._set_poisson(rhs="charge_density", solver="geometric_mg")
+        s._set_state("gas", initial_state(n))
         assert s.run(t_end=0.02, cfl=0.4) > 0, "run via so_path explicite instable"
-        print("OK  retro-compat : compile(so_path, include, ...) explicite marche toujours")
+        print("OK  runtime seam : _compile_for_runtime(so_path, include, ...) explicite marche")
     finally:
         for k, v in (("POPS_CACHE_DIR", old_cache), ("POPS_INCLUDE", old_inc)):
             if v is None:

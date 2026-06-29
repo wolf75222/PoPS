@@ -10,8 +10,9 @@ import sys
 
 try:
     from pops.ir.expr import Const
+    from pops.ir.expr import Var
     from pops.model import OperatorHandle
-    from pops.physics.facade import Model
+    from pops import model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
@@ -20,17 +21,25 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 
 def _model():
-    m = Model("ep")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    electric = m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
-    return m
+    mod = model.Module("ep")
+    U = mod.state_space("U", ("rho", "mx", "my"))
+    fields = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
+    mod.aux_fields(B_z="cell_scalar")
+    rho, mx, my = Var("rho", "cons"), Var("mx", "cons"), Var("my", "cons")
+    gx, gy = Var("grad_x", "aux"), Var("grad_y", "aux")
+    bz = Var("B_z", "aux")
+    mod.operator(name="flux", signature=(U,) >> model.Rate(U), kind="grid_operator",
+                 expr={"x": [mx, mx * mx / rho, mx * my / rho],
+                       "y": [my, mx * my / rho, my * my / rho]})
+    electric = mod.operator(name="electric", signature=(U, fields) >> model.Rate(U),
+                            kind="local_source", expr=[Const(0.0), -rho * gx, -rho * gy])
+    mod.operator(name="lorentz", signature=(fields,) >> model.LocalLinearOperator(U, U),
+                 kind="local_linear_operator",
+                 expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    mod.operator(name="fields_from_state", signature=(U,) >> fields,
+                 kind="field_operator", expr=rho - 1.0)
+    mod.rate_operator("explicit_rhs", flux=True, sources=[electric])
+    return mod
 
 
 def test_metadata_block_emitted():
@@ -49,11 +58,11 @@ def test_metadata_block_emitted():
     assert "pops_module_operator_requirements(int i)" in src
     assert "pops_module_state_space_name(int i)" in src
     assert "pops_module_field_space_name(int i)" in src
-    # The count equals the registry size (flux_default, electric, lorentz, fields_from_state,
+    # The count equals the registry size (flux, electric, lorentz, fields_from_state,
     # explicit_rhs) and every operator name + its kind is emitted.
     reg = m.operator_registry()
     assert "pops_module_operator_count() { return %d; }" % len(reg) in src
-    for op in ("flux_default", "electric", "lorentz", "fields_from_state", "explicit_rhs"):
+    for op in ("flux", "electric", "lorentz", "fields_from_state", "explicit_rhs"):
         assert '"%s"' % op in src, "operator %r missing from the module metadata" % op
     for kind in ("grid_operator", "local_source", "local_linear_operator", "field_operator",
                  "local_rate"):
@@ -79,7 +88,7 @@ def test_metadata_not_in_step_body():
 def test_no_model_empty_module():
     P = adctime.Program("fe")
     u = P.state("plasma")
-    P.commit("plasma", P.linear_combine("u1", u + P.dt * P._rhs_legacy(state=u, fields=P._solve_fields(u))))
+    P.commit("plasma", P.linear_combine("u1", u))
     src = P.emit_cpp_program(model=None)
     assert "pops_module_operator_count() { return 0; }" in src
     print("OK  model=None emits an empty GeneratedModule (count 0)")

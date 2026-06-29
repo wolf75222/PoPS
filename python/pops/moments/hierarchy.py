@@ -1,18 +1,16 @@
-"""pops.moments.hierarchy -- the moment-model facade (CartesianVelocityMoments / MomentModel).
+"""pops.moments.hierarchy -- generic moment model authoring objects.
 
 A thin, numerics-free facade over the generic generator in
 :mod:`pops.moments.model_builder` (``build_moment_model``) and
-:mod:`pops.moments.sources` (``lorentz_sources`` / ``maxwellian_moments`` /
-``bgk_source``).
+:mod:`pops.moments.sources` (``MomentSource`` descriptors and low-level symbolic helpers).
 
 The facade carries NO numeric Python: chainable methods RECORD options on a small dict
 and return ``self``; only :meth:`MomentModel.build` touches the engine, mapping the
-recorded options literally onto ``build_moment_model``'s existing signature. The Poisson
-coupling additions (``elliptic_rhs`` / ``aux``) are applied to the returned model exactly
-as the engine docstring leaves them to the caller.
+recorded options onto ``build_moment_model``. Source physics is added through typed source
+objects, not hardcoded ``add_<physics>_source`` methods.
 """
 from .model_builder import build_moment_model, moment_indices, moment_names
-from .sources import lorentz_sources
+from .sources import MomentSource
 from .closures import gaussian_closure
 from .ordering import MomentOrdering
 from .basis import MomentBasis
@@ -45,7 +43,7 @@ def CartesianVelocityMoments(order, *, closure=None, robust=True, sources=None,
 
 
 class MomentModel:
-    """A recorded 2D moment-model specification; builds a ``physics.PdeModel`` on demand.
+    """A recorded 2D moment-model specification; builds a ``pops.physics.facade.Model`` on demand.
 
     Every chainable method mutates a small option dict and returns ``self``. The recorded
     options map literally onto :func:`build_moment_model`'s signature; :meth:`build` is the
@@ -61,11 +59,10 @@ class MomentModel:
         self._exact_speeds = True
         self._roe = False
         self._proj = RealizabilityProjection()
-        # Recorded source contributions, assembled into ONE callable at build:
+        # Recorded source contributions, assembled into ONE callable at build.
         self._transport = False
-        self._electric = None       # (ex, ey, q_over_m) names
-        self._magnetic = None       # omega_c name
-        self._extra_sources = None  # an advanced pre-built (m, M) -> list
+        self._sources = []
+        self._extra_sources = None  # an advanced pre-built (m, M) -> list, internal only.
         # Recorded Poisson coupling (applied to the built model):
         self._poisson = None        # (phi, eps)
 
@@ -82,16 +79,17 @@ class MomentModel:
         self._poisson = (str(phi), float(eps))
         return self
 
-    def add_vlasov_electric_source(self, ex, ey, q_over_m):
-        """Record the Vlasov electric source: the Lorentz electric branch over the aux fields
-        @p ex / @p ey (e.g. ``grad_x`` / ``grad_y``) scaled by the param @p q_over_m."""
-        self._electric = (str(ex), str(ey), str(q_over_m))
-        return self
+    def add_source(self, source):
+        """Record a typed moment source descriptor.
 
-    def add_magnetic_source(self, omega_c):
-        """Record the magnetic source: the Lorentz magnetic branch with cyclotron frequency
-        @p omega_c (a param name)."""
-        self._magnetic = str(omega_c)
+        Use objects such as ``VlasovElectricSource(...)``, ``MagneticRotationSource(...)`` or
+        ``MomentSource.from_rule(...)``. This keeps the generic moment builder free of physics
+        shortcut methods.
+        """
+        if not isinstance(source, MomentSource):
+            raise TypeError("MomentModel.add_source expects a MomentSource descriptor; got %r"
+                            % (type(source).__name__,))
+        self._sources.append(source)
         return self
 
     def add_numerics(self, *, robust=None, exact_speeds=None, roe=None):
@@ -131,9 +129,9 @@ class MomentModel:
         The electric and magnetic Lorentz branches are summed term-by-term (they are aligned
         lists over ``moment_indices``); an advanced pre-built callable is added on top.
         """
-        if not (self._electric or self._magnetic or self._extra_sources):
+        if not (self._sources or self._extra_sources):
             return None
-        electric, magnetic, extra = self._electric, self._magnetic, self._extra_sources
+        source_descriptors, extra = tuple(self._sources), self._extra_sources
         order = self._order
 
         def sources(m, M):
@@ -144,15 +142,8 @@ class MomentModel:
                 for k, t in enumerate(terms):
                     acc[k] = t if acc[k] == 0.0 else (acc[k] + t)
 
-            if electric is not None:
-                ex_name, ey_name, qom_name = electric
-                ex = m.aux(ex_name)
-                ey = m.aux(ey_name)
-                qom = m.param(qom_name, 1.0)
-                add(lorentz_sources(M, ex, ey, qom, 0.0))
-            if magnetic is not None:
-                omega_c = m.param(magnetic, 1.0)
-                add(lorentz_sources(M, 0.0, 0.0, 1.0, omega_c))
+            for source in source_descriptors:
+                add(source.apply(m, M))
             if extra is not None:
                 add(extra(m, M))
             return acc
@@ -160,7 +151,7 @@ class MomentModel:
         return sources
 
     def build(self, name="moments"):
-        """Build the recorded specification into a ``physics.PdeModel`` (the single engine call).
+        """Build the recorded specification into a ``pops.physics.facade.Model`` (the single engine call).
 
         Maps the recorded options literally onto :func:`build_moment_model`, then applies the
         recorded Poisson coupling (``elliptic_rhs`` + ``grad_x`` / ``grad_y`` aux) to the
@@ -211,10 +202,8 @@ class MomentHierarchy:
         self.projection = model._proj
         self.speeds = ExactSpeeds.from_flags(model._exact_speeds, model._roe)
         srcs = []
-        if model._electric is not None:
-            srcs.append(("electric", model._electric))
-        if model._magnetic is not None:
-            srcs.append(("magnetic", model._magnetic))
+        for source in model._sources:
+            srcs.append((source.source_name, source.options()))
         if model._poisson is not None:
             srcs.append(("poisson", model._poisson))
         self.sources = tuple(srcs)

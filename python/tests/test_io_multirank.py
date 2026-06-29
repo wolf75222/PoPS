@@ -32,9 +32,9 @@ import pops
 
 def _build(n=16):
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim._add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.PotentialForce(charge=1.0),
                             elliptic=pops.ChargeDensity(charge=1.0)),
@@ -51,7 +51,7 @@ def test_io_global_equals_local_mono_rank():
     for _ in range(4):
         sim.step(2e-3)
     assert np.array_equal(np.asarray(sim.state_global("ions")),
-                          np.asarray(sim.get_state("ions"))), "state_global != get_state (mono-rang)"
+                          np.asarray(sim._get_state("ions"))), "state_global != get_state (mono-rang)"
     assert np.array_equal(np.asarray(sim.density_global("ions")),
                           np.asarray(sim.density("ions"))), "density_global != density (mono-rang)"
     assert np.array_equal(np.asarray(sim.potential_global()),
@@ -64,9 +64,9 @@ def test_io_write_npz_roundtrip_global():
     for _ in range(3):
         sim.step(2e-3)
     tmp = tempfile.mkdtemp()
-    p = sim.write(os.path.join(tmp, "out"), format="npz", step=2)
+    p = sim.write(os.path.join(tmp, "out"), format=pops.output.NPZ(), step=2)
     d = np.load(p)
-    ref = np.asarray(sim.get_state("ions")).reshape(3, sim.ny(), sim.nx())
+    ref = np.asarray(sim._get_state("ions")).reshape(3, sim.ny(), sim.nx())
     assert np.array_equal(d["state_ions"], ref), "npz (global) != get_state"
     assert int(d["macro_step"]) == 3, "macro_step absent/incoherent dans le npz"
 
@@ -80,13 +80,13 @@ def test_io_checkpoint_restart_global():
     sim.checkpoint(os.path.join(tmp, "chk"))
     for _ in range(4):
         sim.step(2e-3)
-    ref = np.asarray(sim.get_state("ions"))
+    ref = np.asarray(sim._get_state("ions"))
 
     sim2 = _build()
     sim2.restart(os.path.join(tmp, "chk"))
     for _ in range(4):
         sim2.step(2e-3)
-    assert np.array_equal(np.asarray(sim2.get_state("ions")), ref), "restart (global) non bit-identique"
+    assert np.array_equal(np.asarray(sim2._get_state("ions")), ref), "restart (global) non bit-identique"
 
 
 def test_mpi_helpers_exposed():

@@ -1,6 +1,6 @@
 """Spec 5 C7 (#379 follow-up): System.run(cfl=None) defaults to the pinned program cadence CFL.
 
-PR #379 wired CompiledTime(cfl=X) -> System._program_cadence_cfl (via _install_cadence) so that a
+PR #379 wired CompiledProgramCadence(cfl=X) -> System._program_cadence_cfl (via _install_cadence) so that a
 bare sim.run(t_end) advances at X instead of silently falling back to the 0.4 default. The pin was
 host-tested (test_unified_install.test_install_cadence_routing), but the run() DEFAULTING itself --
 the actual consumer of the pin -- had no host test (the CHANGELOG claimed one). This file closes that
@@ -9,7 +9,7 @@ run(cfl=<value>) overrides it.
 
 run() is pure-Python sugar (`while time() < t_end: step_cfl(cfl)`), so the assertion needs no built
 engine: step_cfl / time are delegated to _pops and are shadowed here by instance attributes (which
-take precedence over the System __getattr__ delegation). Constructing the System and CompiledTime
+take precedence over the System __getattr__ delegation). Constructing the System and CompiledProgramCadence
 still needs pops importable, so the test self-skips cleanly when _pops is absent.
 """
 import sys
@@ -17,6 +17,7 @@ import sys
 try:
     import pops
     from pops import time as adctime
+    from pops.runtime._compiled_cadence import CompiledProgramCadence
 except Exception as exc:  # noqa: BLE001
     print("skip test_run_cfl_default (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -46,15 +47,15 @@ def _instrument(sim):
 def _pin_cadence_cfl(sim, value):
     """Pin the program-cadence CFL on @p sim, mirroring test_install_cadence_routing.
 
-    Uses the _install_cadence path (CompiledTime(cfl=value)) when the _pops set_program_cadence
+    Uses the _install_cadence path (CompiledProgramCadence(cfl=value)) when the _pops set_program_cadence
     binding is present; otherwise sets the documented pin attribute directly. Both land on the SAME
     System._program_cadence_cfl that run() reads -- the binding only gates the substeps/stride
     orchestration, not the cfl pin.
     """
     if hasattr(sim._s, "set_program_cadence"):
-        sim._install_cadence(adctime.CompiledTime(substeps=1, stride=1, cfl=value))
+        sim._install_cadence(CompiledProgramCadence(substeps=1, stride=1, cfl=value))
     else:
-        sim._program_cadence_cfl = float(value)
+        sim._program_cadence_cfl = value if value == "program" else float(value)
     assert sim._program_cadence_cfl == value, \
         "cadence cfl was not pinned (got %r)" % sim._program_cadence_cfl
 
@@ -91,10 +92,22 @@ def test_run_cfl_none_without_cadence_uses_default():
         "run(cfl=None) with no cadence should use the 0.4 default (got %r)" % captured["cfl"]
 
 
+def test_run_cfl_program_uses_dt_bound_factor_one():
+    """cadence cfl='program' routes run(cfl=None) to step_cfl(1.0)."""
+    sim = pops.System(n=8, L=1.0, periodic=True)
+    _pin_cadence_cfl(sim, "program")
+    captured = _instrument(sim)
+    steps = sim.run(t_end=0.01, cfl=None)
+    assert steps == 1, "run should take exactly one instrumented step (got %r)" % steps
+    assert captured["cfl"] == 1.0, \
+        "run(cfl=None) with cfl='program' should call step_cfl(1.0), got %r" % captured["cfl"]
+
+
 def main():
     test_run_cfl_none_uses_pinned_cadence()
     test_run_explicit_cfl_overrides_pinned_cadence()
     test_run_cfl_none_without_cadence_uses_default()
+    test_run_cfl_program_uses_dt_bound_factor_one()
     print("OK  test_run_cfl_default: run(cfl=None) defaults to the pinned cadence cfl, "
           "an explicit cfl overrides, no cadence -> 0.4")
 

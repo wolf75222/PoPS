@@ -97,7 +97,7 @@ def test_solve_local_nonlinear_rejects_non_local_residual(t):
     U = P.state("blk")
 
     def bad_residual(P, Uit, U0):
-        R = P._rhs_legacy(state=Uit, sources=["default"])  # a non-local divergence-bearing rhs
+        R = P._legacy_rhs(state=Uit, sources=["default"])  # a non-local divergence-bearing rhs
         return P.linear_combine(Uit - U0 - P.dt * R)
     try:
         P.solve_local_nonlinear(name="W", residual=bad_residual, initial_guess=U)
@@ -129,7 +129,7 @@ def test_solve_local_nonlinear_refused_without_model(t):
 def test_reductions_build_scalar_values(t):
     P = t.Program("p")
     U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     for node in (P.sum(U), P.max(U), P.min(U), P.sum_component(U, 0),
                  P.max_component(U, 0), P.min_component(U, 0)):
         assert node.vtype == "scalar" and node.op == "reduce", \
@@ -175,7 +175,7 @@ def test_reductions_lower_to_adc_reductions(t):
     # A while_ loop whose condition compares a reduction lets the reduce op lower inside the body.
     P = t.Program("p")
     U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     s_sum = P.sum(R)
     s_max = P.max(R)
     s_min = P.min(R)
@@ -204,7 +204,7 @@ def test_fill_boundary_ir_and_codegen(t):
     U = P.state("blk")
     Uf = P.fill_boundary(U)
     assert Uf.op == "fill_boundary" and Uf.vtype == "state", (Uf.op, Uf.vtype)
-    R = P._rhs_legacy(state=Uf, sources=["default"])
+    R = P._legacy_rhs(state=Uf, sources=["default"])
     P.commit("blk", P.linear_combine(Uf + P.dt * R))
     src = P.emit_cpp_program()
     assert "ctx.fill_boundary(" in src, "fill_boundary lowers to ctx.fill_boundary\n%s" % src
@@ -223,7 +223,7 @@ def test_fill_boundary_rejects_non_field(t):
 def test_project_ir_and_codegen(t):
     P = t.Program("p")
     U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     U1 = P.linear_combine(U + P.dt * R)
     Up = P.project(state=U1)
     assert Up.op == "project" and Up.vtype == "state", (Up.op, Up.vtype)
@@ -253,7 +253,7 @@ def test_project_rejects_non_state_and_custom_projection(t):
 def test_record_scalar_ir_and_codegen(t):
     P = t.Program("p")
     U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     rec = P.record_scalar("rhs_norm", P.norm2(R))
     assert rec.op == "record_scalar" and rec.attrs["diagnostic"] == "rhs_norm"
     P.commit("blk", P.linear_combine(U + P.dt * R))
@@ -283,7 +283,7 @@ def test_ir_hash_distinguishes_new_ops(t):
     def _h(build):
         P = t.Program("h")
         U = P.state("blk")
-        R = P._rhs_legacy(state=U, sources=["default"])
+        R = P._legacy_rhs(state=U, sources=["default"])
         build(P, U, R)
         P.commit("blk", P.linear_combine(U + P.dt * R))
         return P._ir_hash()
@@ -318,7 +318,7 @@ def _reductions_program(t):
     (component 0) each step, so the diagnostics can be checked against the analytic state."""
     P = t.Program("reductions_step")
     U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P._legacy_rhs(state=U, sources=["default"])
     P.record_scalar("state_sum", P.sum(U))
     P.record_scalar("state_max", P.max(U))
     P.record_scalar("state_min", P.min(U))
@@ -355,19 +355,20 @@ def _run_section_b(t):
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
     try:
-        compiled_model = _const_source_model("red_block", c).compile(backend="production")
+        compiled_model = _const_source_model("red_block", c)._compile_for_runtime(
+            backend=pops.codegen.Production())
     except RuntimeError as exc:
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
 
     # A KNOWN field with distinct min / max / sum: rho(i,j) = 1 + (linear ramp in [0, 1]).
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.25 * X + 0.25 * Y  # in [1, 1.5), all distinct
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
 
     sim._install_program_so(compiled.so_path)
     dt = 0.01
@@ -417,7 +418,7 @@ def _fill_project_program(t):
     P = t.Program("fill_project_step")
     U = P.state("blk")
     Uf = P.fill_boundary(U)
-    R = P._rhs_legacy(state=Uf, sources=["default"])
+    R = P._legacy_rhs(state=Uf, sources=["default"])
     U1 = P.linear_combine(Uf + P.dt * R)
     P.commit("blk", P.project(state=U1))
     return P
@@ -445,7 +446,8 @@ def _run_section_b2(t):
         print("-- (B.2) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
     try:
-        compiled_model = _const_source_model("fp_block", 0.0).compile(backend="production")
+        compiled_model = _const_source_model("fp_block", 0.0)._compile_for_runtime(
+            backend=pops.codegen.Production())
     except RuntimeError as exc:
         print("-- (B.2) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
@@ -453,14 +455,14 @@ def _run_section_b2(t):
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov(),
                                               positivity_floor=1e-12),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
     sim._install_program_so(compiled.so_path)
     sim.step(0.01)
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
     # Zero source + flux-only on a periodic smooth field -> the state is unchanged to machine precision
     # (fill_boundary writes only ghosts; project leaves a positive state untouched).
     err = float(np.abs(out - rho0).max())

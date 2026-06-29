@@ -47,7 +47,7 @@ def chk(cond, label):
 def iso_fluid_model(cs2=1.0, alpha=1.0):
     """Fluide isotherme natif : modele MINIMAL accepte par set_source_stage."""
     return pops.Model(
-        state=pops.FluidState(kind="isothermal", cs2=cs2),
+        state=pops.FluidState.isothermal(cs2=cs2),
         transport=pops.IsothermalFlux(),
         source=pops.NoSource(),
         elliptic=pops.BackgroundDensity(alpha=alpha, n0=0.0),
@@ -71,7 +71,7 @@ def build_block(n, L, B0, alpha, cs2):
     chemin _s, ou rien). B_z est pose AVANT (prerequis du terme de Lorentz condense).
     """
     sim = pops.System(n=n, L=L, periodic=False)
-    sim.set_poisson(bc="dirichlet")
+    sim._set_poisson(bc="dirichlet")
     sim.set_magnetic_field(B0 * np.ones((n, n)))
     sim._add_equation(
         "ions",
@@ -86,7 +86,7 @@ def build_block(n, L, B0, alpha, cs2):
 
 
 def state(sim, n):
-    return np.array(sim.get_state("ions")).reshape(3, n, n)
+    return np.array(sim._get_state("ions")).reshape(3, n, n)
 
 
 def main():

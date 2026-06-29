@@ -123,8 +123,8 @@ def _run_section_b(t):
     except Exception as exc:  # noqa: BLE001
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
-        print("-- (B) skipped: _pops lacks install_program (rebuild _pops) --")
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
+        print("-- (B) skipped: _pops lacks _install_program_so (rebuild _pops) --")
         return
 
     def compiled_so(build, name):
@@ -151,17 +151,17 @@ def _run_section_b(t):
     def run(handle):
         sim = pops.System(n=n, L=1.0, periodic=True)
         try:
-            cm = _passive_model("rk_block").compile(backend="production")
+            cm = _passive_model("rk_block")._compile_for_runtime(backend=pops.codegen.Production())
         except RuntimeError as exc:
             print("-- (B) skipped: model compile failed: %s --" % str(exc)[:160])
             return None
         sim._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="euler"))
-        sim.set_state("blk", np.stack([rho0]))
+                         time=pops.Explicit.euler())
+        sim._set_state("blk", np.stack([rho0]))
         sim._install_program_so(handle.so_path)
         for _ in range(5):
             sim.step(0.01)
-        return np.array(sim.get_state("blk"))[0]
+        return np.array(sim._get_state("blk"))[0]
 
     a = run(macro)
     b = run(generic)

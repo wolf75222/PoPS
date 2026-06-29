@@ -143,9 +143,10 @@ class FluxHandle:
 class SourceHandle(_bm.RateTerm):
     """A declared local source term -- a summand of a rate equation."""
 
-    def __init__(self, display_name, reg_name):
+    def __init__(self, display_name, reg_name, operator=None):
         self.name = str(display_name)
         self.reg_name = str(reg_name)
+        self.operator = operator
 
     def _rate_terms(self):
         return [("source", self, 1.0)]
@@ -238,4 +239,3 @@ class Invariant:
 
     def __repr__(self):
         return "Invariant(%r)" % (self.name,)
-

@@ -81,7 +81,7 @@ def _two_fluid_program(mod, e_space, i_space):
     P = adctime.Program("two_fluid_collision").bind_operators(mod)
     e_n = P.state("electron_state", space=e_space)
     i_n = P.state("ion_state", space=i_space)
-    C = P._call("collision", e_n, i_n)
+    C = P.call(mod.operator_registry().get("collision"), e_n, i_n)
     P.commit_many({"electron_state": P.linear_combine("e1", e_n + P.dt * C["electron_state"]),
                    "ion_state": P.linear_combine("i1", i_n + P.dt * C["ion_state"])})
     return P
@@ -204,7 +204,7 @@ def test_wrong_species_rate_in_affine_combine_errors():
     P = adctime.Program("s").bind_operators(m.module)
     e_n = P.state("electrons", space=e.space)
     i_n = P.state("ions", space=i.space)
-    C = P._call("collision", e_n, i_n)
+    C = P.call(m.module.operator_registry().get("collision"), e_n, i_n)
     with pytest.raises(ValueError, match="different state spaces"):
         P.linear_combine("bad", e_n + P.dt * C["ions"])  # electron state + ion rate
 
@@ -264,13 +264,13 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     e_n = P.state("electrons", space=sp["electrons"])
     i_n = P.state("ions", space=sp["ions"])
     n_n = P.state("neutrals", space=sp["neutrals"])
-    f = P._call("fields", e_n, i_n, n_n)
-    assert f.op == "operator_call", "field solve remains an operator-first Program node"
+    f = P.call(mod.operator_registry().get("fields"), e_n, i_n, n_n)
+    assert f.op == "call", "field solve remains an operator-first Program node"
     assert f.attrs["kind"] == "field_operator"
     assert f.attrs["field"] is None, "multi-input field op must not be treated as a named elliptic field"
     assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
     P.commit_many({"electrons": e_n, "ions": i_n, "neutrals": n_n})
-    src = P.emit_cpp_program(model=m._dsl)
+    src = P.emit_cpp_program(model=None)
     assert "ctx.solve_fields_from_blocks(" in src, "codegen routes the field op to the coupled solve"
 
 

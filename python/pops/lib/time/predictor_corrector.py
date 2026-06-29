@@ -21,7 +21,7 @@ def predictor_corrector_local_linear(P, block, *, fields_operator, explicit_rate
 
     It mentions no physics; ``state_space`` is informational. Requires ``P.bind_operators(module)``.
     """
-    u_n = P.state(block)
+    u_n = P._state_value(block)
     fields_n = _opcall(P, fields_operator, u_n, value_name="fields_n")
     r_n = _opcall(P, explicit_rate_operator, u_n, fields_n, value_name="R_n")
     l_n = _opcall(P, implicit_operator, fields_n, value_name="L_n")

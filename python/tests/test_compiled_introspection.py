@@ -31,7 +31,7 @@ try:
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR, Uniform
-    from pops.physics.model import Param
+    from pops.physics.model import ConstParam, RuntimeParam
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_compiled_introspection (pops unavailable: %s)" % exc)
@@ -46,8 +46,8 @@ def _program(name="intro_demo", *, krylov=False):
     P = adctime.Program(name)
     dt = P.dt
     U = P.state("plasma")
-    f = P._solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = P._legacy_solve_fields("phi", U)
+    R = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
     if krylov:
         # A matrix-free Krylov solve (op x = rhs): lowers to a solve_linear IR node.
         buf = P.scalar_field("buf")
@@ -70,11 +70,41 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",), params=None, caps=None):
     cons = ["rho", "mx", "my", "E"][:n_vars]
     roles = ["Density", "MomentumX", "MomentumY", "Energy"][:n_vars]
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend=pops.codegen.Production(), adder="add_native_block",
         cons_names=cons, cons_roles=roles, prim_names=cons, n_vars=n_vars, gamma=1.4,
         n_aux=n_aux, params=params or {}, caps=caps or {"cpu": True, "mpi": True},
         abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23",
         aux_extra_names=list(aux_names))
+
+
+def _real_compile_model():
+    from pops.math import div, ddt, grad, laplacian, sqrt
+
+    m = pops.physics.Model("intro_real")
+    U = m.state("U", components=["rho", "mx", "my"],
+                roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+    rho, mx, my = U
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    cs2 = 0.5
+    c = sqrt(cs2)
+    p = m.scalar("p", cs2 * rho)
+    flux = m.flux(
+        "F",
+        on=U,
+        x=[mx, mx * u + p, my * u],
+        y=[my, mx * v, my * v + p],
+        waves={"x": [u - c, u, u + c], "y": [v - c, v, v + c]},
+    )
+    phi = m.field("phi")
+    m.solve_field(
+        "fields_from_state",
+        equation=(-laplacian(phi) == rho - 1.0),
+        outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+    )
+    m.source("source_default", on=U, value=[0.0 * rho, 0.0 * rho, 0.0 * rho])
+    m.rate("explicit_rate", ddt(U) == -div(flux))
+    return m.to_module()
 
 
 def _compiled(*, krylov=False, params=None, **model_kw):
@@ -97,8 +127,8 @@ def chk(cond, label):
 def test_arguments_lists_bind_inputs():
     """arguments() lists instances / params / aux / solvers from the carried Program + model."""
     print("== arguments() lists the bind inputs ==")
-    params = {"cs2": Param("cs2", 1.0, kind="runtime"),
-              "gamma_const": Param("gamma_const", 1.4, kind="const")}
+    params = {"cs2": RuntimeParam("cs2", 1.0),
+              "gamma_const": ConstParam("gamma_const", 1.4)}
     cp = _compiled(n_vars=3, n_aux=1, aux_names=("B_z",), params=params)
     args = cp.arguments()
     chk(isinstance(args, Arguments), "arguments() returns an Arguments")
@@ -309,7 +339,8 @@ def test_real_compile_populates_metadata_or_skips():
     cp = _compiled()
     program = cp.program
     try:
-        compiled = pops.compile_problem(time=program, debug=True, force=True)
+        compiled = pops.compile_problem(model=_real_compile_model(), time=program,
+                                        debug=True, force=True)
     except Exception as exc:  # noqa: BLE001 -- no compiler / no Kokkos / compile failure: skip cleanly
         print("  [..] real compile skipped (no toolchain / Kokkos): %s" % str(exc)[:90])
         return

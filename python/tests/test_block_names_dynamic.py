@@ -1,14 +1,11 @@
 """block_names() voit TOUS les chemins d'ajout, pas seulement add_block.
 
-Un integrateur ecrit en Python (pops.runtime.integrate.euler_step / ssprk2_step) itere sur
-sim.block_names() ; un bloc charge a l'execution depuis un .so (add_dynamic_block, JIT ;
-add_compiled_block, AOT) doit donc y figurer, sinon l'integrateur le SAUTE silencieusement.
-
 On compose un bloc natif (add_block) puis on charge un bloc dynamique (formules Python ->
 .so JIT -> add_dynamic_block) et on verifie que block_names() retourne les DEUX, dans l'ordre
-d'ajout, et coherent avec n_species(). On verifie aussi que l'integrateur Python avance bien le
-bloc dynamique (etat modifie). Gate sur compilateur + en-tetes pops : SKIP propre (exit 0) sinon,
-mais on teste TOUJOURS la partie sans .so (un add_block seul est deja visible).
+d'ajout, et coherent avec n_species(). On verifie aussi que le pas runtime compile avance bien le
+bloc dynamique (etat modifie), sans integrateur numerique Python public. Gate sur compilateur +
+en-tetes pops : SKIP propre (exit 0) sinon, mais on teste TOUJOURS la partie sans .so (un
+add_block seul est deja visible).
 """
 import os
 import shutil
@@ -23,7 +20,7 @@ INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "i
 
 
 def euler_native():
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+    return pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.ChargeDensity(charge=1.0))
 
@@ -31,7 +28,7 @@ def euler_native():
 def main():
     # (0) sans .so : un add_block est deja vu par block_names (garde de base, sans compilateur).
     s0 = pops.System(n=16, L=1.0, periodic=True)
-    s0._add_block("gas", model=euler_native(), spatial=pops.Spatial(minmod=True))
+    s0._add_block("gas", model=euler_native(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
     assert list(s0.block_names()) == ["gas"], "add_block invisible dans block_names()"
     assert s0.n_species() == 1, "n_species != 1 pour un bloc"
     print("OK  block_names() voit un add_block natif")
@@ -49,7 +46,7 @@ def main():
         so = e.compile_so(os.path.join(tmp, "euler_model.so"), INCLUDE)
 
         sim = pops.System(n=n, L=L, periodic=True)
-        sim._add_block("native", model=euler_native(), spatial=pops.Spatial(minmod=True))
+        sim._add_block("native", model=euler_native(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
         sim.add_dynamic_block("dyn", so, names=["rho", "rho_u", "rho_v", "E"])
 
         # (1) le bloc dynamique (.so) figure dans block_names, dans l'ordre d'ajout
@@ -59,7 +56,7 @@ def main():
         assert sim.n_species() == 2, "n_species != 2 (natif + dynamique)"
         print("OK  block_names() == %s (add_block + add_dynamic_block)" % names)
 
-        # (2) un integrateur Python qui itere sur block_names() avance BIEN le bloc dynamique
+        # (2) le runtime compile avance BIEN le bloc dynamique.
         xs = (np.arange(n) + 0.5) / n
         X, Y = np.meshgrid(xs, xs)
         p0 = 1.0 + 0.4 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
@@ -67,15 +64,15 @@ def main():
             U = np.zeros((4, n, n))
             U[0] = 1.0
             U[3] = p0 / (GAMMA - 1.0)
-            sim.set_state(nm, U.reshape(-1).tolist())
-        before = np.array(sim.get_state("dyn")).reshape(4, n, n).copy()
+            sim._set_state(nm, U.reshape(-1).tolist())
+        before = np.array(sim._get_state("dyn")).reshape(4, n, n).copy()
         for _ in range(5):
-            pops.runtime.integrate.euler_step(sim, 0.0005)  # names=None -> itere sur sim.block_names()
-        after = np.array(sim.get_state("dyn")).reshape(4, n, n)
-        assert np.isfinite(after).all(), "bloc dynamique : etat non fini apres integration Python"
+            sim.step(0.0005)
+        after = np.array(sim._get_state("dyn")).reshape(4, n, n)
+        assert np.isfinite(after).all(), "bloc dynamique : etat non fini apres step runtime"
         assert float(np.abs(after - before).max()) > 1e-9, \
-            "bloc dynamique SAUTE par l'integrateur Python (etat inchange)"
-        print("OK  l'integrateur Python (block_names()) avance bien le bloc dynamique")
+            "bloc dynamique SAUTE par le runtime (etat inchange)"
+        print("OK  le runtime compile avance bien le bloc dynamique")
         print("test_block_names_dynamic : tout est vert")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

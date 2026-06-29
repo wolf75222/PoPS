@@ -2,26 +2,32 @@
 
 ``pops.physics.Model`` writes states, fluxes, sources and field solves, then lowers to the
 operator-first :class:`pops.model.Module`. It owns no numerics and exposes no codegen engine;
-the private legacy engine remains an implementation detail behind ``lower()`` / ``to_module()``.
+``lower()`` / ``to_module()`` return the actual Module populated by this facade.
 """
 from pops.descriptors import reject_string_selector
 
 from .. import math as _bm
+from .. import model as _model
+from ..ir.expr import Var
 from .board_handles import (CallableOperator, FieldHandle, FieldsHandle, FluxHandle,
                             Invariant, LocalLinearOperatorExpr, SourceHandle, StateHandle,
-                            VectorHandle, _canon_role, _roles_for, _safe_name)
+                            VectorHandle, _canon_role, _safe_name)
+from ._board_internals import _BoardInternalsMixin
 from ._board_multispecies import _MultiSpeciesMixin
-from .model import _NO_KIND
+from .model import _NO_KIND, _coerce_param
 
 
 
-class Model(_MultiSpeciesMixin):
+class Model(_BoardInternalsMixin, _MultiSpeciesMixin):
     """A blackboard-style physical model that lowers to the operator-first IR."""
 
     def __init__(self, name):
-        from .facade import Model as _PdeModel  # lazy: the facade pulls numpy
-        self._dsl = _PdeModel(name)
         self.name = str(name)
+        self._module = _model.Module(self.name)
+        self._state_space = None
+        self._default_field_space = None
+        self._primitive_defs = {}
+        self.params = {}
         self._states = {}
         self._fields = {}
         self._fluxes = {}
@@ -35,10 +41,9 @@ class Model(_MultiSpeciesMixin):
         self._reconstruction = None
         self._riemann_hooks = {}    # capability formulas for the native-hook codegen (ADC-456)
         self._field_solvers = {}    # field-operator name -> solver descriptor
-        # Multi-species mode (Spec 3 sections 12, 16): once a SECOND species is declared the
-        # model owns a multi-block pops.model.Module directly (N StateSpaces + a coupled_rate +
-        # a multi-block field operator). The single-species path stays byte-identical: it keeps
-        # the dsl.Model and exposes dsl.Model.module. _multi_module is None until N > 1.
+        # Multi-species mode (Spec 3 sections 12, 16): once a SECOND species is declared the model
+        # swaps to a multi-block pops.model.Module directly (N StateSpaces + a coupled_rate + a
+        # multi-block field operator). The single-species path is already Module-native.
         self._multi_module = None
         self._species = {}          # species name -> StateHandle (multi-species mode)
 
@@ -47,35 +52,38 @@ class Model(_MultiSpeciesMixin):
     def dsl(self):
         """No public escape hatch to the legacy codegen engine."""
         raise AttributeError(
-            "pops.physics.Model.dsl is not public; call lower()/to_module() and compile through "
-            "pops.compile(...).")
+            "pops.physics.Model.dsl is not public; call lower()/to_module(), compile with "
+            "pops.compile_problem(...), then install with sim.install(...).")
 
     @property
     def module(self):
         """The typed :class:`pops.model.Module` view (operator-first IR).
 
-        Single-species: the dsl-derived Module (one StateSpace). Multi-species: the
+        Single-species: the Module authored directly by this facade (one StateSpace). Multi-species: the
         multi-block Module this model assembled directly (N StateSpaces, a
         ``coupled_rate`` operator, a multi-block field operator) -- the SAME
         operator-first IR a hand-written :class:`pops.model.Module` would build.
         """
         if self._multi_module is not None:
             return self._multi_module
-        return self._dsl.module
+        return self._module
 
     # --- state / species ---
     def state(self, name="U", components=(), roles=None):
         """Declare the conservative state. Returns an unpackable :class:`StateHandle`.
 
         Board role strings (``density`` / ``momentum_x`` / ``momentum_y`` / ``energy`` / ...)
-        are canonicalized to the dsl roles (``Density`` / ``MomentumX`` / ...) so the native
+        are canonicalized to the native C++ roles (``Density`` / ``MomentumX`` / ...) so the native
         Riemann capabilities (HLLC/Roe role lookup) recognize them.
         """
         role_list = None
         if roles:
             role_list = [_canon_role(roles.get(c)) for c in components]
-        vars_ = self._dsl.conservative_vars(*components, roles=role_list)
-        handle = StateHandle(name, components, vars_, roles)
+        canon = {c: role_list[i] for i, c in enumerate(components)} if role_list else {}
+        space = self._module.state_space(name, components, roles=canon)
+        self._state_space = space
+        vars_ = tuple(Var(c, "cons") for c in components)
+        handle = StateHandle(name, components, vars_, roles, space=space)
         self._states[handle.name] = handle
         return handle
 
@@ -96,23 +104,26 @@ class Model(_MultiSpeciesMixin):
                 "species %r is already declared; each species needs a distinct name "
                 "(a reused name would silently alias the StateSpace)" % name)
         if not self._species and not self._multi_module:
-            # First species: keep the single-state dsl-backed path byte-identical to state().
+            # First species: use the same Module-native single-state path as state().
             handle = self.state(name, components=state, roles=roles)
             self._species[handle.name] = handle
             return handle
-        # Second (or later) species: promote to multi-species mode. The first species was
-        # authored on the dsl model; re-realize it as a typed StateSpace on the multi-block
-        # Module so all species live in the SAME operator-first IR.
+        # Second (or later) species: promote to multi-species mode. Re-realize the first species
+        # as a typed StateSpace on the multi-block Module so all species live in the SAME
+        # operator-first IR.
         self._promote_to_multispecies()
         return self._add_species(name, components=state, roles=roles)
 
     def primitive(self, name, expr):
         """Define a primitive quantity by its formula; returns a usable expression."""
-        return self._dsl.primitive(name, expr)
+        expr = self._to_expr(expr)
+        self._primitive_defs[str(name)] = expr
+        self._module.primitive(name, expr)
+        return Var(str(name), "prim")
 
     def scalar(self, name, expr):
         """Define a named derived scalar (e.g. pressure, sound speed)."""
-        return self._dsl.primitive(name, expr)
+        return self.primitive(name, expr)
 
     def param(self, name, value=None, *, kind=_NO_KIND):
         """Declare a named scalar parameter; returns a usable expression.
@@ -121,14 +132,15 @@ class Model(_MultiSpeciesMixin):
         ``param(pops.physics.RuntimeParam("cs2", 1.0))`` / ``param(ConstParam("g", 9.8))`` /
         ``param("g", 9.8)`` (const shorthand). A bare ``kind=`` keyword is REJECTED.
         """
-        return self._dsl.param(name, value, kind=kind)
+        p = _coerce_param(name, value, kind=kind, who="physics.Model.param")
+        self.params[p.name] = p
+        self._module.param(p.name, p.value, _kind=p.kind)
+        return p
 
     def aux(self, name):
         """Declare an auxiliary field read by the model (e.g. an imposed ``B_z``)."""
-        canonical = {"phi", "grad_x", "grad_y", "B_z", "T_e"}
-        if name in canonical:
-            return self._dsl.aux(name)
-        return self._dsl.aux_field(name)
+        self._module.aux_field(name)
+        return Var(name, "aux")
 
     def field(self, name):
         """Declare a solved scalar field (e.g. the potential ``phi``)."""
@@ -151,9 +163,16 @@ class Model(_MultiSpeciesMixin):
         """
         if x is None or y is None:
             raise ValueError("flux(%r) requires per-component x= and y= expressions" % (name,))
-        self._dsl.flux(list(x), list(y))
+        state = self._require_state("flux")
+        x_exprs = [self._to_expr(e) for e in x]
+        y_exprs = [self._to_expr(e) for e in y]
+        self._module.operator(
+            name="flux", signature=(state,) >> _model.Rate(state),
+            kind="grid_operator", expr={"x": x_exprs, "y": y_exprs})
         if waves is not None:
-            self._dsl.eigenvalues(list(waves["x"]), list(waves["y"]))
+            self._module.eigenvalues(
+                x=[self._to_expr(e) for e in waves["x"]],
+                y=[self._to_expr(e) for e in waves["y"]])
         h = FluxHandle(name, is_default=True)
         self._fluxes[name] = h
         return h
@@ -163,8 +182,12 @@ class Model(_MultiSpeciesMixin):
         if value is None:
             raise ValueError("source(%r) requires value= (one expression per component)" % (name,))
         reg = _safe_name(name)
-        self._dsl.source_term(reg, [self._to_expr(e) for e in value])
-        h = SourceHandle(name, reg)
+        state = self._require_state("source")
+        fields = self._ensure_default_fields()
+        op = self._module.operator(
+            name=reg, signature=(state, fields) >> _model.Rate(state),
+            kind="local_source", expr=[self._to_expr(e) for e in value])
+        h = SourceHandle(name, reg, operator=op)
         self._sources[reg] = h
         return h
 
@@ -198,7 +221,15 @@ class Model(_MultiSpeciesMixin):
         # laplacian(phi) == rhs  ->  -Delta phi = -rhs.
         if lhs.scale > 0:
             rhs = -rhs
-        self._dsl.elliptic_rhs(rhs)
+        state = self._require_state("solve_field")
+        out_components = tuple((outputs or {"phi": name, "grad_x": None, "grad_y": None}).keys())
+        fields = self._module.field_space("fields", out_components)
+        self._default_field_space = fields
+        self._module.operator(
+            name=_safe_name(name), signature=(state,) >> fields,
+            kind="field_operator",
+            capabilities={"default": _safe_name(name) == "fields_from_state"},
+            expr=rhs)
         h = FieldsHandle(name, outputs, solver)
         self._fields[name] = h
         if solver is not None:
@@ -216,7 +247,7 @@ class Model(_MultiSpeciesMixin):
         records it on the model's authoring state so :meth:`inspect` surfaces it.
 
         Unlike :meth:`solve_field`, this method is INERT: it lowers ONLY to an inspectable
-        field-problem descriptor; it does NOT touch the dsl model, the elliptic right-hand
+        field-problem descriptor; it does NOT touch any legacy model, the elliptic right-hand
         side, the operator graph, codegen or the runtime. Wiring the problem into the operator
         graph (a second elliptic operator + aux channel) is the deeper lowering and stays
         DEFERRED (see :meth:`solve_field` / the multi-elliptic runtime); this entry point only
@@ -272,7 +303,20 @@ class Model(_MultiSpeciesMixin):
         if not isinstance(equation.lhs, _bm.TimeDerivative):
             raise ValueError("rate left-hand side must be ddt(U) / rate(U)")
         flux, sources = self._destructure_rate(equation.rhs)
-        self._dsl.rate_operator(_safe_name(name), flux=flux, sources=sources)
+        state = self._require_state("rate")
+        typed_sources = []
+        for src in sources:
+            handle = self._sources.get(src)
+            typed_sources.append(handle.operator if handle is not None else src)
+        fields = self._default_field_space
+        inputs = (state, fields) if fields is not None else (state,)
+        src_names = [s.name if hasattr(s, "name") else s for s in typed_sources]
+        self._module.operator(
+            name=_safe_name(name),
+            signature=_model.Signature(inputs, _model.Rate(state)),
+            kind="local_rate",
+            lowering={"flux": flux, "sources": src_names, "fluxes": None},
+            expr={})
         return CallableOperator(_safe_name(name), self)
 
     def finite_volume_rate(self, name, flux=None, riemann=None, reconstruction=None,
@@ -293,7 +337,23 @@ class Model(_MultiSpeciesMixin):
                      for s in sources]
         # A finite-volume rate always assembles -div F; the flux selection is recorded
         # for the native bricks (riemann/reconstruction), not toggled off here.
-        self._dsl.rate_operator(_safe_name(name), flux=True, sources=src_names)
+        state = self._require_state("finite_volume_rate")
+        typed_sources = []
+        for src in sources:
+            if isinstance(src, SourceHandle):
+                typed_sources.append(src.operator)
+            else:
+                handle = self._sources.get(_safe_name(src))
+                typed_sources.append(handle.operator if handle is not None else src)
+        fields = self._default_field_space
+        inputs = (state, fields) if fields is not None else (state,)
+        src_names = [s.name if hasattr(s, "name") else s for s in typed_sources]
+        self._module.operator(
+            name=_safe_name(name),
+            signature=_model.Signature(inputs, _model.Rate(state)),
+            kind="local_rate",
+            lowering={"flux": True, "sources": src_names, "fluxes": None},
+            expr={})
         return name
 
     def operator(self, name, handle=None, *, inputs=None, returns=None):
@@ -309,8 +369,12 @@ class Model(_MultiSpeciesMixin):
             raise TypeError("operator(%r) requires returns= (or a positional handle)" % (name,))
         reg = _safe_name(name)
         if isinstance(obj, LocalLinearOperatorExpr):
-            self._dsl.linear_source(
-                reg, [[self._to_expr(e) for e in row] for row in obj.matrix])
+            state = self._require_state("operator")
+            fields = self._ensure_default_fields()
+            self._module.operator(
+                name=reg, signature=(fields,) >> _model.LocalLinearOperator(state, state),
+                kind="local_linear_operator",
+                expr=[[self._to_expr(e) for e in row] for row in obj.matrix])
             self._operators[reg] = obj
             self._operator_inputs[reg] = tuple(inputs) if inputs else ()
             return CallableOperator(reg, self)
@@ -332,6 +396,15 @@ class Model(_MultiSpeciesMixin):
             raise TypeError("riemann(...) expects a typed Riemann descriptor; got %r"
                             % (type(name).__name__,))
         self._riemann = name
+        hooks = {}
+        if pressure is not None:
+            hooks["pressure"] = self._to_expr(pressure)
+        for hook_name, hook_value in (("contact_speed", contact_speed), ("star_state", star_state)):
+            if hook_value is not None and hasattr(hook_value, "deps"):
+                raise NotImplementedError(
+                    "riemann(%s=...): arbitrary formulas for two-state HLLC hooks are not "
+                    "defined in the Module-native API; pass a typed capability descriptor instead"
+                    % hook_name)
         self._riemann_hooks = {
             "flux": flux, "pressure": pressure, "velocity": velocity,
             "sound_speed": sound_speed, "wave_speeds": wave_speeds,
@@ -339,52 +412,13 @@ class Model(_MultiSpeciesMixin):
         }
         kind = str(scheme).lower()
         self._validate_riemann_capabilities(kind, pressure, wave_speeds)
-        if kind == "hllc":
-            self._dsl.enable_hllc()
-        elif kind == "roe":
-            self._dsl.enable_roe()
-        # Wire any ARBITRARY board formula through to the dsl codegen (ADC-456). Resolve board nodes
-        # to dsl Exprs; the dsl method codegen's the Expr ones and ignores descriptors / None (the
-        # role-derived default stands). Off the hot path for the role-derived case (no Expr -> no-op).
-        self._dsl.set_riemann_hooks(
-            pressure=self._to_expr(pressure) if pressure is not None else None,
-            sound_speed=self._to_expr(sound_speed) if sound_speed is not None else None,
-            contact_speed=self._to_expr(contact_speed) if contact_speed is not None else None,
-            star_state=self._to_expr(star_state) if star_state is not None else None,
+        self._module.riemann_metadata(
+            hllc=(kind == "hllc"),
+            roe=(kind == "roe"),
+            hooks=hooks,
+            wave_speeds=wave_speeds,
         )
         return name
-
-    def _validate_riemann_capabilities(self, kind, pressure, wave_speeds):
-        """Reject a model that lacks the capabilities the chosen Riemann solver needs
-        (Spec 3 criterion 10). Rusanov needs only a max wave speed (always available from the
-        flux/eigenvalues); HLL needs wave speeds; HLLC/Roe need a pressure and fluid roles."""
-        hyp = self._dsl._m
-        roles = set(_roles_for(hyp))
-        has_pressure = ("p" in hyp.prim_defs) or (pressure is not None)
-        fluid = {"Density", "MomentumX", "MomentumY"}
-        if kind in ("hllc", "roe"):
-            if not has_pressure:
-                raise ValueError(
-                    "riemann %s requires model capability 'pressure' for state %r: declare a "
-                    "primitive m.primitive('p', ...) or pass m.riemann(..., pressure=...)"
-                    % (kind.upper(), self._state_name()))
-            missing = fluid - roles
-            if missing:
-                raise ValueError(
-                    "riemann %s requires model capability 'hllc_star_state' for state %r: the "
-                    "fluid roles %s are needed (declare m.state(..., roles={...})); missing %s"
-                    % (kind.upper(), self._state_name(),
-                       sorted(fluid), sorted(missing)))
-        elif kind == "hll":
-            if (wave_speeds is None and not hyp._eig and hyp._wave_speeds is None
-                    and hyp._ws_jacobian is None):
-                raise ValueError(
-                    "riemann HLL requires model capability 'wave_speeds': declare m.flux(..., "
-                    "waves=...) or pass m.riemann('hll', wave_speeds=...)")
-        # rusanov: only max_wave_speed, always derivable -> no extra requirement.
-
-    def _state_name(self):
-        return next(iter(self._states), "U")
 
     def invariant(self, name, expression=None, over=None):
         """Declare a generic invariant ``StateSet -> Scalar`` from an ``integral(...)``."""
@@ -405,7 +439,7 @@ class Model(_MultiSpeciesMixin):
         single-species notion; it is a no-op for a multi-species model."""
         if self._multi_module is not None:
             return None
-        return self._dsl.check()
+        return None
 
     def lower(self):
         """Lower this writing facade to its :class:`pops.model.Module` (Spec 5 sec.11).
@@ -416,9 +450,9 @@ class Model(_MultiSpeciesMixin):
 
             physics_model = pops.physics.Model(...)
             model = physics_model.lower()              # -> pops.model.Module
-            compiled = pops.compile(case_with(model), backend=pops.codegen.Production())
+            compiled = pops.compile_problem(model=model, time=program, backend=pops.codegen.Production())
 
-        Single-species: the dsl-derived Module (one StateSpace). Multi-species: the multi-block
+        Single-species: the Module authored directly by this facade (one StateSpace). Multi-species: the multi-block
         Module this model assembled directly (N StateSpaces + ``coupled_rate`` + a multi-block
         field operator). Identical to :pyattr:`module`; ``lower`` is the Spec 5 sec.11 name."""
         return self.module
@@ -426,55 +460,6 @@ class Model(_MultiSpeciesMixin):
     # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). Both return the
     # pops.model.Module that pops.compile / pops.compile_problem(model=...) accepts.
     to_module = lower
-
-    # --- introspection ---
-
-    # --- internals ---
-    def _destructure_rate(self, rhs):
-        """Split a rate right-hand side into ``(flux, [source names])``."""
-        terms = _bm._as_rate(rhs)._rate_terms()
-        flux = False
-        sources = []
-        for kind, payload, sign in terms:
-            if kind == "flux":
-                if sign >= 0:
-                    raise ValueError(
-                        "a rate equation flux term must be -div(F) (negative); "
-                        "write 'ddt(U) == -div(F) + ...'")
-                flux = True
-            elif kind == "source":
-                if sign <= 0:
-                    raise ValueError(
-                        "a rate equation source term %r must be added (positive sign)"
-                        % (payload.name,))
-                sources.append(payload.reg_name)
-            else:  # pragma: no cover - defensive
-                raise ValueError("unknown rate term kind %r" % (kind,))
-        return flux, sources
-
-    def _to_expr(self, node):
-        """Resolve a board node to an :mod:`pops.dsl` expression in this model's context."""
-        if isinstance(node, _bm.Partial):
-            field = node.field
-            fname = field.name if isinstance(field, FieldHandle) else str(field)
-            aux_name = self._gradient_aux(fname, node.axis)
-            expr = self._dsl.aux(aux_name)
-            if node.scale != 1.0:
-                expr = node.scale * expr
-            return expr
-        if isinstance(node, _bm.Gradient):
-            raise TypeError("a gradient is a vector; use grad(field).x / .y")
-        if isinstance(node, _bm.Laplacian):
-            raise TypeError("a laplacian only appears as a field-solve operator")
-        return node  # already a dsl Expr / Var / Param / number
-
-    @staticmethod
-    def _gradient_aux(field_name, axis):
-        """Canonical gradient aux name of ``field_name`` along ``axis`` (0=x, 1=y)."""
-        if field_name == "phi":
-            return "grad_x" if axis == 0 else "grad_y"
-        # generic fields keep a <field>_grad_x / _grad_y convention
-        return "%s_grad_%s" % (field_name, "x" if axis == 0 else "y")
 
     def __repr__(self):
         return "physics.Model(%r)" % (self.name,)

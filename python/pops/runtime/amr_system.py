@@ -164,9 +164,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
     def _add_block(self, name, model, spatial=None, time=None):
         """Installs an evolved block composed of NATIVE BRICKS on the shared AMR hierarchy.
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(layout=AMR(...))`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind`` (which calls this internally); ``add_block`` stays for that seam and the tests.
+        Low-level runtime seam. The documented PUBLIC path is a typed model/program compiled by
+        ``pops.compile_problem(...)`` and wired with ``sim.install(compiled, ...)``. This helper is
+        private plumbing for that install path.
 
         Refined counterpart of System.add_block. The 1st add_block opens the single-block path
         (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent add_block co-locates one more block
@@ -256,8 +256,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             so_path = getattr(compiled, "so_path", None)
             if so_path is None:
                 raise TypeError(
-                    "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
-                    "result (target='amr_system'), or compiled=None for a native AMR install (each "
+                    "sim.install: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
+                    "result, or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
             compiled_model = getattr(compiled, "model", None)
         # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
@@ -276,15 +276,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         # time Program .so installed in step 5).
         for name, spec in instances.items():
             if not isinstance(spec, dict):
-                raise TypeError("pops.bind: instances[%r] must be a dict "
+                raise TypeError("sim.install: instances[%r] must be a dict "
                                 "(initial/spatial/time/model); got %r"
                                 % (name, type(spec).__name__))
             model = spec.get("model", compiled_model)
             if model is None:
                 raise ValueError(
-                    "pops.bind: instance %r has no block model -- supply "
-                    "instances[%r]['model'] (an pops.Model(...) / a target='amr_system' "
-                    "CompiledModel), or pass a compiled handle that carries one "
+                    "sim.install: instance %r has no block model -- supply "
+                    "instances[%r]['model'] (a compiled/native block model), or pass a compiled handle that carries one "
                     "(compile_problem(model=...))." % (name, name))
             spatial = spec.get("spatial")
             time = spec.get("time")
@@ -312,9 +311,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                 solvers=None, cadence=None, outputs=None):
         """Public Spec-4 install entry point for the AMR runtime.
 
-        Shares the exact lowering/validation path with ``pops.bind``. AMR combinations that the
-        runtime does not implement yet still raise the existing explicit errors, but user code no
-        longer has to call the private ``_install_compiled`` seam.
+        Shares the exact lowering/validation path with the private AMR install seams, but user code
+        no longer calls those seams directly.
         """
         return self._install_compiled(
             compiled,
@@ -334,17 +332,17 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
             declared = ", ".join(sorted(declared_fields)) or "(none declared)"
             raise ValueError(
-                "pops.bind: solver selection names field %r, which is neither the default Poisson "
+                "sim.install: solver selection names field %r, which is neither the default Poisson "
                 "field (%s) nor a named elliptic field any installed model declares (declared: %s). "
                 "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
                 % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
         if isinstance(solver_brick, str):
             raise TypeError(
-                "pops.bind: solver selections must be typed descriptors such as "
+                "sim.install: solver selections must be typed descriptors such as "
                 "pops.solvers.GeometricMG(); got legacy token %r" % solver_brick)
         token = getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None)
         if token is None:
-            raise TypeError("pops.bind: solver must be a pops.solvers.<Solver>(...) descriptor; got %r"
+            raise TypeError("sim.install: solver must be a pops.solvers.<Solver>(...) descriptor; got %r"
                             % type(solver_brick).__name__)
         self._set_poisson(solver=token)
 
@@ -390,7 +388,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             return
         if field_name == "T_e":
             raise ValueError(
-                "pops.bind: aux 'T_e' is DERIVED from a fluid block, not a static aux "
+                "sim.install: aux 'T_e' is DERIVED from a fluid block, not a static aux "
                 "field; use set_electron_temperature_from(block).")
         block = None
         for blk, table in self._aux_field_index.items():
@@ -399,7 +397,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                 break
         if block is None:
             raise ValueError(
-                "pops.bind: aux field %r is not declared by any installed instance; add the "
+                "sim.install: aux field %r is not declared by any installed instance; add the "
                 "instance with a model declaring m.aux_field(%r)." % (field_name, field_name))
         self._set_aux_field(block, field_name, field)
 
@@ -465,6 +463,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             "add_equation",
             "install_program",
             "initialize_compiled_program",
+            "set_program_cadence",
             "set_param",
             "set_aux_field",
             "set_field_solver",
@@ -473,5 +472,5 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         if attr in forbidden:
             raise AttributeError(
                 "AmrSystem.%s is not part of the public PoPS API; use sim.install(...) "
-                "or pops.bind(compiled, ...) with typed descriptors instead." % attr)
+                "with a compiled artifact and typed descriptors instead." % attr)
         return getattr(self._s, attr)

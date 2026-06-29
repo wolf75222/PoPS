@@ -3,8 +3,8 @@
 
 Verifie la composition de modeles a partir de briques generiques (aucun scenario nomme
 cote C++), le Poisson de systeme (avec paroi), le choix implicite/explicite par bloc, le
-multirate, l'integrateur temporel ecrit en Python, et l'AMR generique. Invariants par
-assert ; imprime "OK test_bindings" en cas de succes.
+multirate, le garde-fou contre les integrateurs numeriques Python publics, et l'AMR
+generique. Invariants par assert ; imprime "OK test_bindings" en cas de succes.
 """
 from pops.numerics.riemann import HLLC, Roe
 from pops.numerics.reconstruction.limiters import Minmod, VanLeer
@@ -29,14 +29,14 @@ def meshx(n):
 
 
 def electron(charge=-1.0, gamma=1.4):
-    return pops.Model(state=pops.FluidState("compressible", gamma=gamma),
+    return pops.Model(state=pops.FluidState.compressible(gamma=gamma),
                      transport=pops.CompressibleFlux(),
                      source=pops.PotentialForce(charge=charge),
                      elliptic=pops.ChargeDensity(charge=charge))
 
 
 def ion(charge=1.0, cs2=0.5):
-    return pops.Model(state=pops.FluidState("isothermal", cs2=cs2),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=cs2),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=charge),
                      elliptic=pops.ChargeDensity(charge=charge))
@@ -52,9 +52,9 @@ def diocotron(B0=1.0, alpha=1.0, n_i0=0.0):
 print("== composition par briques (electrons Euler/HLLC/IMEX + ions isothermes) ==")
 sim = pops.System(n=48)
 sim._add_block("electrons", model=electron(),
-              spatial=pops.Spatial(vanleer=True, flux=HLLC()), time=pops.IMEX(substeps=10))
-sim._add_block("ions", model=ion(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+              spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.VanLeer(), flux=HLLC()), time=pops.IMEX(substeps=10))
+sim._add_block("ions", model=ion(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
+sim._set_poisson(rhs="charge_density", solver="geometric_mg")
 chk(sim.n_species() == 2, "deux blocs composes")
 xs = meshx(48)
 sim.set_density("electrons", 1.0 + 0.02 * np.cos(2 * np.pi * xs)[None, :] * np.ones((48, 1)))
@@ -76,7 +76,7 @@ for et, it in [("imex", "explicit"), ("explicit", "imex")]:
     s = pops.System(n=32)
     s._add_block("e", electron(), time=(pops.IMEX() if et == "imex" else pops.Explicit()))
     s._add_block("i", ion(), time=(pops.IMEX() if it == "imex" else pops.Explicit()))
-    s.set_poisson()
+    s._set_poisson()
     s.set_density("e", 1.0 + 0.02 * np.cos(2 * np.pi * meshx(32))[None, :] * np.ones((32, 1)))
     s.set_density("i", np.ones((32, 32)))
     m0 = s.mass("e")
@@ -87,8 +87,8 @@ for et, it in [("imex", "explicit"), ("explicit", "imex")]:
 print("== diocotron compose par briques (ExB + BackgroundDensity) + paroi ==")
 n = 96
 dio = pops.System(n=n, L=1.0, periodic=False)
-dio._add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
-dio.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
+dio._add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
+dio._set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
 xx, yy = np.meshgrid(meshx(n), meshx(n), indexing="xy")
 r = np.hypot(xx - 0.5, yy - 0.5)
 th = np.arctan2(yy - 0.5, xx - 0.5)
@@ -103,21 +103,10 @@ for _ in range(20):
     dio.step_cfl(0.4)
 chk(abs(dio.mass("ne") - m0) < 1e-9, "diocotron : masse conservee")
 
-# --- 4. Integrateur temporel ECRIT EN PYTHON ------------------------------------
-print("== integrateur temporel ecrit en Python (primitives eval_rhs/get_state/set_state) ==")
-pd = pops.System(n=64, L=1.0, periodic=False)
-pd._add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
-pd.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
-xx, yy = np.meshgrid(meshx(64), meshx(64), indexing="xy")
-r = np.hypot(xx - 0.5, yy - 0.5)
-ne = np.full((64, 64), 1e-3)
-ne[(r > 0.15) & (r < 0.20)] = 1.0
-pd.set_density("ne", ne)
-m0 = pd.mass("ne")
-for _ in range(10):
-    pops.runtime.integrate.ssprk2_step(pd, 0.002)
-chk(abs(pd.mass("ne") - m0) < 1e-9, "integrateur Python : masse conservee")
-chk(np.isfinite(pd.density("ne")).all(), "integrateur Python : etat fini")
+# --- 4. Pas d'integrateur numerique Python public -------------------------------
+print("== pas d'integrateur numerique Python public ==")
+chk(not hasattr(pops.runtime, "integrate"),
+    "pops.runtime.integrate reste hors API publique (Python ne calcule pas les cellules)")
 
 # --- 4b. AmrSystem : diocotron generique sur AMR --------------------------------
 print("== AmrSystem (diocotron sur briques, AMR) ==")
@@ -128,9 +117,9 @@ y0 = 0.5 + 0.02 * np.cos(2 * np.pi * 4 * xx)
 band = 1.0 + np.exp(-((yy - y0) ** 2) / 0.05 ** 2)
 nbar = float(band.mean())
 amr = pops.AmrSystem(n=nb, regrid_every=10, periodic=True)
-amr._add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=nbar), spatial=pops.Spatial(none=True))
+amr._add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=nbar), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder()))
 amr.set_refinement(threshold=nbar + 0.15)
-amr.set_poisson()
+amr._set_poisson()
 amr.set_density("ne", band)
 am0 = amr.mass()
 for _ in range(20):
@@ -147,7 +136,7 @@ chk(abs(amr.mass() - am0) / abs(am0) < 1e-9, "AmrSystem : masse conservee (reflu
 # d'ou un ecart de l'ordre du pourcent, pas zero).
 print("== AmrSystem : Euler primitif sur AMR (garde du stencil de ghost) ==")
 def euler_gas():
-    return pops.Model(state=pops.FluidState(kind="compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.ChargeDensity(charge=1.0))
 ne = 32
@@ -157,9 +146,9 @@ for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
     tag = f"{elim.scheme}+{eflux.scheme}"
     eamr = pops.AmrSystem(n=ne, regrid_every=0, periodic=True)
     eamr._add_block("gas", model=euler_gas(),
-                   spatial=pops.Spatial(limiter=elim, flux=eflux, primitive=True))
+                   spatial=pops.Spatial(limiter=elim, flux=eflux, recon=pops.numerics.variables.Primitive()))
     eamr.set_refinement(threshold=1e9)  # patch seed coherent, sans tagger de cellule
-    eamr.set_poisson(); eamr.set_density("gas", erho)
+    eamr._set_poisson(); eamr.set_density("gas", erho)
     em0 = eamr.mass()
     for _ in range(10):
         eamr.step_cfl(0.2)
@@ -170,8 +159,8 @@ for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
         f"AMR {tag}+primitif : masse conservee (reflux)")
     esys = pops.System(n=ne, periodic=True)
     esys._add_block("gas", model=euler_gas(),
-                   spatial=pops.Spatial(limiter=elim, flux=eflux, primitive=True))
-    esys.set_poisson(); esys.set_density("gas", erho)
+                   spatial=pops.Spatial(limiter=elim, flux=eflux, recon=pops.numerics.variables.Primitive()))
+    esys._set_poisson(); esys.set_density("gas", erho)
     for _ in range(10):
         esys.step_cfl(0.2)
     eds = np.array(esys.density("gas"))
@@ -181,9 +170,9 @@ for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
 # --- 4c. Espece gelee (background fixe) : non avancee, mais vue par Poisson ------
 print("== espece gelee (evolve=False) : fond fixe vu par Poisson ==")
 fz = pops.System(n=32, L=1.0, periodic=True)
-fz._add_block("electrons", model=electron(), spatial=pops.Spatial(minmod=True))
+fz._add_block("electrons", model=electron(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
 fz.add_background("ions", model=ion(charge=1.0), density=np.ones((32, 32)))
-fz.set_poisson()
+fz._set_poisson()
 fz.set_density("electrons", 1.0 + 0.05 * np.cos(2 * np.pi * meshx(32))[None, :] * np.ones((32, 32)))
 ni0 = np.array(fz.density("ions"))
 me0 = fz.mass("electrons")
@@ -204,10 +193,10 @@ def inert():  # scalaire SANS transport (charge 0 -> phi 0 -> derive nulle) : is
 
 
 iz = pops.System(n=24, L=1.0, periodic=True)
-iz._add_block("ne", model=inert(), spatial=pops.Spatial(none=True))
-iz._add_block("ni", model=inert(), spatial=pops.Spatial(none=True))
-iz._add_block("ng", model=inert(), spatial=pops.Spatial(none=True))
-iz.set_poisson()
+iz._add_block("ne", model=inert(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder()))
+iz._add_block("ni", model=inert(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder()))
+iz._add_block("ng", model=inert(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder()))
+iz._set_poisson()
 iz.set_density("ne", 0.1 * np.ones((24, 24)))
 iz.set_density("ni", np.zeros((24, 24)))
 iz.set_density("ng", np.ones((24, 24)))
@@ -224,24 +213,24 @@ print("== source couplee : collision / friction (qte de mvt transferee) ==")
 
 
 def iso_inert():  # isotherme sans couplage de champ (charge 0) : on isole la friction
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5), transport=pops.IsothermalFlux(),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5), transport=pops.IsothermalFlux(),
                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=0.0))
 
 
 co = pops.System(n=24, L=1.0, periodic=True)
-co._add_block("a", model=iso_inert(), spatial=pops.Spatial(minmod=True))
-co._add_block("b", model=iso_inert(), spatial=pops.Spatial(minmod=True))
-co.set_poisson()
+co._add_block("a", model=iso_inert(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
+co._add_block("b", model=iso_inert(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
+co._set_poisson()
 Ua = np.zeros((3, 24, 24)); Ua[0] = 1.0; Ua[1] = 0.3   # a : rho=1, u_x=0.3
 Ub = np.zeros((3, 24, 24)); Ub[0] = 1.0; Ub[1] = 0.0   # b : rho=1, au repos
-co.set_state("a", Ua.reshape(-1).tolist())
-co.set_state("b", Ub.reshape(-1).tolist())
+co._set_state("a", Ua.reshape(-1).tolist())
+co._set_state("b", Ub.reshape(-1).tolist())
 co.add_coupling(pops.Collision("a", "b", rate=1.0))  # forme OBJET (= add_collision)
-pa0 = float(np.array(co.get_state("a")).reshape(3, 24, 24)[1].sum())
-pb0 = float(np.array(co.get_state("b")).reshape(3, 24, 24)[1].sum())
+pa0 = float(np.array(co._get_state("a")).reshape(3, 24, 24)[1].sum())
+pb0 = float(np.array(co._get_state("b")).reshape(3, 24, 24)[1].sum())
 co.advance(0.01, 20)  # etat uniforme -> transport nul : on teste la friction seule
-pa1 = float(np.array(co.get_state("a")).reshape(3, 24, 24)[1].sum())
-pb1 = float(np.array(co.get_state("b")).reshape(3, 24, 24)[1].sum())
+pa1 = float(np.array(co._get_state("a")).reshape(3, 24, 24)[1].sum())
+pb1 = float(np.array(co._get_state("b")).reshape(3, 24, 24)[1].sum())
 chk(pa1 < pa0 - 1e-6 and pb1 > pb0 + 1e-6, "collision : transfert de qte de mvt a -> b")
 chk(abs((pa1 + pb1) - (pa0 + pb0)) < 1e-9, "collision : qte de mvt totale conservee")
 
@@ -250,26 +239,26 @@ print("== source couplee : echange thermique (chaud -> froid) ==")
 
 
 def euler_inert():  # Euler sans couplage de champ (charge 0) : on isole l'echange thermique
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
+    return pops.Model(state=pops.FluidState.compressible(gamma=1.4),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.ChargeDensity(charge=0.0))
 
 
 te = pops.System(n=16, L=1.0, periodic=True)
-te._add_block("a", model=euler_inert(), spatial=pops.Spatial(minmod=True))
-te._add_block("b", model=euler_inert(), spatial=pops.Spatial(minmod=True))
-te.set_poisson()
+te._add_block("a", model=euler_inert(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
+te._add_block("b", model=euler_inert(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
+te._set_poisson()
 Ua = np.zeros((4, 16, 16)); Ua[0] = 1.0; Ua[3] = 2.0 / 0.4   # rho=1, u=0, p=2 -> T=2
 Ub = np.zeros((4, 16, 16)); Ub[0] = 1.0; Ub[3] = 1.0 / 0.4   # rho=1, u=0, p=1 -> T=1
-te.set_state("a", Ua.reshape(-1).tolist())
-te.set_state("b", Ub.reshape(-1).tolist())
+te._set_state("a", Ua.reshape(-1).tolist())
+te._set_state("b", Ub.reshape(-1).tolist())
 te.add_thermal_exchange("a", "b", rate=1.0)
-A0 = np.array(te.get_state("a")).reshape(4, 16, 16)
-B0 = np.array(te.get_state("b")).reshape(4, 16, 16)
+A0 = np.array(te._get_state("a")).reshape(4, 16, 16)
+B0 = np.array(te._get_state("b")).reshape(4, 16, 16)
 Ea0, Eb0 = float(A0[3].sum()), float(B0[3].sum())
 te.advance(0.01, 20)  # etat uniforme -> transport nul : on teste l'echange seul
-A1 = np.array(te.get_state("a")).reshape(4, 16, 16)
-B1 = np.array(te.get_state("b")).reshape(4, 16, 16)
+A1 = np.array(te._get_state("a")).reshape(4, 16, 16)
+B1 = np.array(te._get_state("b")).reshape(4, 16, 16)
 Ea1, Eb1 = float(A1[3].sum()), float(B1[3].sum())
 Ta1, Tb1 = float((0.4 * A1[3] / A1[0]).mean()), float((0.4 * B1[3] / B1[0]).mean())
 chk(Ea1 < Ea0 - 1e-6 and Eb1 > Eb0 + 1e-6, "echange thermique : energie chaud -> froid")
@@ -279,10 +268,10 @@ chk(abs(Ta1 - Tb1) < 1.0 - 1e-3, "echange thermique : temperatures relaxent")
 # --- 4g. EPM : Poisson comme instance composable d'add_elliptic_model -----------
 print("== EPM : Poisson via add_elliptic_model (set_poisson = raccourci) ==")
 ep = pops.System(n=48, L=1.0, periodic=False)
-ep._add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
+ep._add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()))
 ep.add_elliptic_model("phi", model=pops.elliptic(operator=pops.div_eps_grad(1.0),
                       rhs=pops.charge_density(), output=pops.electric_field_from_potential()),
-                      solver=pops.EllipticSolver("geometric_mg"), bc="dirichlet",
+                      solver=pops.solvers.GeometricMG(), bc="dirichlet",
                       wall="circle", wall_radius=0.40)
 xx, yy = np.meshgrid(meshx(48), meshx(48), indexing="xy")
 r = np.hypot(xx - 0.5, yy - 0.5)

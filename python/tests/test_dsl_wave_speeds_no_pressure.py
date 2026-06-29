@@ -148,7 +148,9 @@ if not cxx:
 tmp = tempfile.mkdtemp(prefix="pops_ws_nop_")
 
 print("== (2) compile aot sans 'p' : wave_speeds emis ==")
-compiled = toy_model().compile(os.path.join(tmp, "acoustic2.so"), INCLUDE, backend="aot")
+compiled = toy_model()._compile_for_runtime(
+    os.path.join(tmp, "acoustic2.so"), INCLUDE, backend=pops.codegen.AOT()
+)
 chk(getattr(compiled, "has_wave_speeds", False), "compiled.has_wave_speeds (paire explicite, sans 'p')")
 
 n = 32
@@ -164,8 +166,8 @@ for label, riemann in (("(3) riemann='hll'", "hll"), ("(4) riemann='rusanov'", "
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=_RIEMANN[riemann]),
                      time=pops.Explicit())
     U = toy_state(n)
-    sim.set_state("toy", U)
-    rhs = np.array(sim.eval_rhs("toy"))
+    sim._set_state("toy", U)
+    rhs = np.array(sim._eval_rhs("toy"))
     ref = expected_rhs(U, n, riemann)
     d = float(np.max(np.abs(rhs - ref)))
     chk(d < 1e-13, f"eval_rhs {riemann} == divergence {riemann} numpy (dmax = {d:.2e})")
@@ -178,7 +180,7 @@ m_eig.flux(x=[ae * e2, ae * e1], y=[ae * e2, ae * e1])
 m_eig.eigenvalues(x=[-1.0 * ae, 1.0 * ae], y=[-1.0 * ae, 1.0 * ae])
 m_eig.primitive_vars(e1, e2)
 m_eig.conservative_from([e1, e2])
-c_eig = m_eig.compile(os.path.join(tmp, "eigonly.so"), INCLUDE, backend="aot")
+c_eig = m_eig._compile_for_runtime(os.path.join(tmp, "eigonly.so"), INCLUDE, backend=pops.codegen.AOT())
 chk(not getattr(c_eig, "has_wave_speeds", True), "has_wave_speeds faux (eigenvalues sans 'p')")
 sim = pops.System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim._add_equation(
@@ -199,7 +201,7 @@ m_p.flux(x=[mx, mx * u + p, mx * v], y=[my, my * u, my * v + p])
 m_p.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
 m_p.primitive_vars(rho, u, v)
 m_p.conservative_from([rho, rho * u, rho * v])
-c_p = m_p.compile(os.path.join(tmp, "withp.so"), INCLUDE, backend="aot")
+c_p = m_p._compile_for_runtime(os.path.join(tmp, "withp.so"), INCLUDE, backend=pops.codegen.AOT())
 chk(getattr(c_p, "has_wave_speeds", False), "has_wave_speeds vrai (chemin historique 'p' + eigenvalues)")
 sim = pops.System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim._add_equation(

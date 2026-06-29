@@ -34,7 +34,7 @@ def _model():
 def _built_amr(regrid_every=2, n=32):
     """A small built AmrSystem with one refined patch (density bump + a few steps)."""
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
-    sim._add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim._add_block("ne", model=_model(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
     ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
@@ -176,7 +176,7 @@ def test_compiled_inspect_amr_delegates_to_top_level():
     # Build a tiny stub CompiledModel (no .so dlopen needed for the inert delegation path).
     from pops.codegen.loader import CompiledModel
     cm = CompiledModel(
-        so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
+        so_path="<stub>", backend=pops.codegen.AOT(), adder="add_native_block", cons_names=["rho"],
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
     rep = cm.inspect_amr()

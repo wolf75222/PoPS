@@ -122,7 +122,7 @@ def section_a(t):
 
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
-        R = P._rhs_legacy(state=Uit, sources=["default"])
+        R = P._legacy_rhs(state=Uit, sources=["default"])
         return P.linear_combine(Uit - U0 - P.dt * R)
     chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=bad_resid, initial_guess=U)),
         "a non-local residual op (P.rhs) is rejected")

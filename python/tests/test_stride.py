@@ -14,7 +14,7 @@ Semantique verifiee = HOLD-THEN-CATCH-UP (rattrapage en FIN de fenetre) :
   - CFL       : step_cfl honore la cadence -- un bloc stride=M limiteur fait retourner un dt ~ dt/M
                 par rapport a stride=1 (le facteur stride entre dans la condition stable par bloc).
                 step_cfl est substeps-aware : dt = cfl*h*substeps/(stride*w) (post-#121).
-  - AOT       : Explicit(stride>1) + backend='aot' (CompiledModel) leve une erreur CLAIRE
+  - AOT       : Explicit(stride>1) + backend=pops.codegen.AOT() (CompiledModel) leve une erreur CLAIRE
                 (la cadence n'est pas cablee dans l'ABI du .so AOT -> pas d'ignore silencieux).
   - evolve=False : bloc GELE (etat inchange), mais toujours visible par le Poisson de systeme.
   - Multi-blocs (stride=1 + stride=3) : les cadences respectives sont respectees.
@@ -68,12 +68,12 @@ rho0 = 1.0 + 0.02 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, 1))
 
 s_ref = pops.System(n=n, periodic=False)
 s_ref._add_block("ne", diocotron_model(), time=pops.Explicit(substeps=1))
-s_ref.set_poisson(bc="dirichlet")
+s_ref._set_poisson(bc="dirichlet")
 s_ref.set_density("ne", rho0)
 
 s_s1 = pops.System(n=n, periodic=False)
 s_s1._add_block("ne", diocotron_model(), time=pops.Explicit(substeps=1, stride=1))
-s_s1.set_poisson(bc="dirichlet")
+s_s1._set_poisson(bc="dirichlet")
 s_s1.set_density("ne", rho0)
 
 for _ in range(5):
@@ -96,7 +96,7 @@ rho0 = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim = pops.System(n=n, periodic=False)
 sim._add_block("ne", diocotron_model(), time=pops.Explicit(stride=M))
-sim.set_poisson(bc="dirichlet")
+sim._set_poisson(bc="dirichlet")
 sim.set_density("ne", rho0)
 
 # macro_step 0 : (0+1)%3 != 0 -> TENU (etat inchange)
@@ -145,14 +145,14 @@ rho_init = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim_slow = pops.System(n=n, periodic=False)
 sim_slow._add_block("ne", diocotron_model(), time=pops.Explicit(stride=M))
-sim_slow.set_poisson(bc="dirichlet")
+sim_slow._set_poisson(bc="dirichlet")
 sim_slow.set_density("ne", rho_init.copy())
 for _ in range(M):
     sim_slow.step(dt)  # 5 pas : le bloc rattrape UNE fois (macro_step 4) avec dt_eff=5*dt
 
 sim_direct = pops.System(n=n, periodic=False)
 sim_direct._add_block("ne", diocotron_model(), time=pops.Explicit(stride=1))
-sim_direct.set_poisson(bc="dirichlet")
+sim_direct._set_poisson(bc="dirichlet")
 sim_direct.set_density("ne", rho_init.copy())
 sim_direct.step(M * dt)  # un seul pas de M*dt
 
@@ -171,13 +171,13 @@ M = 4
 
 sim_cfl1 = pops.System(n=n, periodic=False)
 sim_cfl1._add_block("ne", diocotron_model(), time=pops.Explicit(stride=1))
-sim_cfl1.set_poisson(bc="dirichlet")
+sim_cfl1._set_poisson(bc="dirichlet")
 sim_cfl1.set_density("ne", rho_cfl.copy())
 dt1 = sim_cfl1.step_cfl(cfl)
 
 sim_cflM = pops.System(n=n, periodic=False)
 sim_cflM._add_block("ne", diocotron_model(), time=pops.Explicit(stride=M))
-sim_cflM.set_poisson(bc="dirichlet")
+sim_cflM._set_poisson(bc="dirichlet")
 sim_cflM.set_density("ne", rho_cfl.copy())
 dtM = sim_cflM.step_cfl(cfl)
 
@@ -202,7 +202,7 @@ rho_bg_ev = 0.5 * np.ones((n, n))
 sim_ev = pops.System(n=n, periodic=True)
 sim_ev._add_block("ne", ne_model, time=pops.Explicit(), evolve=True)
 sim_ev._add_block("ni", ni_model, time=pops.Explicit(), evolve=False)
-sim_ev.set_poisson()
+sim_ev._set_poisson()
 sim_ev.set_density("ne", rho_e_ev)
 sim_ev.set_density("ni", rho_bg_ev)
 sim_ev.solve_fields()
@@ -210,7 +210,7 @@ phi_with_ni = sim_ev.potential().copy()
 
 sim_no_ni = pops.System(n=n, periodic=True)
 sim_no_ni._add_block("ne", ne_model, time=pops.Explicit(), evolve=True)
-sim_no_ni.set_poisson()
+sim_no_ni._set_poisson()
 sim_no_ni.set_density("ne", rho_e_ev)
 sim_no_ni.solve_fields()
 phi_no_ni = sim_no_ni.potential()
@@ -234,7 +234,7 @@ rho_b = 1.0 + 0.01 * np.sin(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 sim_mb = pops.System(n=n, periodic=False)
 sim_mb._add_block("a", diocotron_model(), time=pops.Explicit(stride=1))
 sim_mb._add_block("b", diocotron_model(), time=pops.Explicit(stride=3))
-sim_mb.set_poisson(bc="dirichlet")
+sim_mb._set_poisson(bc="dirichlet")
 sim_mb.set_density("a", rho_a)
 sim_mb.set_density("b", rho_b)
 
@@ -274,7 +274,7 @@ rho_e = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim_imex = pops.System(n=n, periodic=False)
 sim_imex._add_block("ne", diocotron_model(), time=pops.IMEX(substeps=2, stride=2))
-sim_imex.set_poisson(bc="dirichlet")
+sim_imex._set_poisson(bc="dirichlet")
 sim_imex.set_density("ne", rho_e)
 
 state_before = sim_imex.density("ne").copy()
@@ -289,14 +289,14 @@ state_after_1 = sim_imex.density("ne").copy()
 chk(changed(state_before_1, state_after_1),
     "IMEX stride=2 substeps=2, pas 1 : le bloc RATTRAPE")
 
-# ---- 8. AOT : Explicit(stride>1) + backend='aot' leve une erreur claire --------
+# ---- 8. AOT : Explicit(stride>1) + backend=pops.codegen.AOT() leve une erreur claire --------
 # Le bloc compile AOT (.so) ne transporte PAS la cadence dans son ABI extern "C" : System.add_equation
 # doit REJETER stride > 1 plutot que de tourner a stride=1 en silence. La garde est purement Python et
-# leve AVANT le dlopen du .so : un CompiledModel FACTICE (backend='aot', .so inexistant) suffit, donc
+# leve AVANT le dlopen du .so : un CompiledModel FACTICE (backend=pops.codegen.AOT(), .so inexistant) suffit, donc
 # le sous-test ne depend PAS d'un compilateur (deterministe en CI minimale).
-print("== AOT : stride>1 + backend='aot' rejete explicitement ==")
+print("== AOT : stride>1 + backend=pops.codegen.AOT() rejete explicitement ==")
 fake_aot = CompiledModel(
-    so_path="/inexistant.so", backend="aot", adder="add_compiled_block",
+    so_path="/inexistant.so", backend=pops.codegen.AOT(), adder="add_compiled_block",
     cons_names=["rho", "rho_u", "rho_v", "E"],
     cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
     prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=1.4, n_aux=3, params={}, caps={},
@@ -305,30 +305,30 @@ fake_aot = CompiledModel(
 sim_aot = pops.System(n=16, periodic=True)
 try:
     sim_aot._add_equation("gas", fake_aot, spatial=pops.FiniteVolume(), time=pops.Explicit(stride=2))
-    chk(False, "add_equation(stride=2, backend='aot') doit lever ValueError")
+    chk(False, "add_equation(stride=2, backend=pops.codegen.AOT()) doit lever ValueError")
 except ValueError as ex:
     chk("stride" in str(ex) and "aot" in str(ex),
-        "add_equation(stride=2, backend='aot') leve une ValueError claire (stride/aot)")
+        "add_equation(stride=2, backend=pops.codegen.AOT()) leve une ValueError claire (stride/aot)")
 
 # stride override via add_equation(stride=) AUSSI rejete (couvre les deux sources de cadence).
 sim_aot2 = pops.System(n=16, periodic=True)
 try:
     sim_aot2._add_equation("gas", fake_aot, spatial=pops.FiniteVolume(), stride=3)
-    chk(False, "add_equation(stride=3 override, backend='aot') doit lever ValueError")
+    chk(False, "add_equation(stride=3 override, backend=pops.codegen.AOT()) doit lever ValueError")
 except ValueError as ex:
     chk("stride" in str(ex) and "aot" in str(ex),
-        "add_equation(stride= override, backend='aot') leve une ValueError claire")
+        "add_equation(stride= override, backend=pops.codegen.AOT()) leve une ValueError claire")
 
 # stride=1 (defaut) : la garde stride NE doit PAS lever (le .so inexistant echoue plus loin au dlopen,
 # RuntimeError) -- on verifie juste que ce n'est PAS la ValueError de stride.
 sim_aot_ok = pops.System(n=16, periodic=True)
 try:
     sim_aot_ok._add_equation("gas", fake_aot, spatial=pops.FiniteVolume(), time=pops.Explicit(stride=1))
-    chk(False, "add_equation(stride=1, backend='aot') : attendu un echec au dlopen (.so inexistant)")
+    chk(False, "add_equation(stride=1, backend=pops.codegen.AOT()) : attendu un echec au dlopen (.so inexistant)")
 except ValueError as ex:
-    chk(False, "add_equation(stride=1, backend='aot') ne doit PAS lever de ValueError stride (%s)" % ex)
+    chk(False, "add_equation(stride=1, backend=pops.codegen.AOT()) ne doit PAS lever de ValueError stride (%s)" % ex)
 except Exception:  # noqa: BLE001  RuntimeError du dlopen attendu : la garde stride a laisse passer
-    chk(True, "add_equation(stride=1, backend='aot') : pas de rejet stride (echec au dlopen attendu)")
+    chk(True, "add_equation(stride=1, backend=pops.codegen.AOT()) : pas de rejet stride (echec au dlopen attendu)")
 
 # ---- 9. Validation des entrees ------------------------------------------------
 print("== validation des entrees ==")
@@ -360,14 +360,14 @@ h_cfl = 1.0 / n_cfl  # domaine [0,1]^2 : h = dx = dy = 1/n
 # substeps=1 (referent) : dt_ref = cfl*h/w
 sim_sub1 = pops.System(n=n_cfl, periodic=False)
 sim_sub1._add_block("ne", diocotron_model(), time=pops.Explicit(substeps=1, stride=1))
-sim_sub1.set_poisson(bc="dirichlet")
+sim_sub1._set_poisson(bc="dirichlet")
 sim_sub1.set_density("ne", rho_sub.copy())
 dt_sub1 = sim_sub1.step_cfl(cfl_sub)  # avance le systeme d'un pas -> macro_step=1 apres
 
 # substeps=S (test) : systeme identique en etat initial, aussi a macro_step=0 au debut
 sim_subS = pops.System(n=n_cfl, periodic=False)
 sim_subS._add_block("ne", diocotron_model(), time=pops.Explicit(substeps=S_cfl, stride=1))
-sim_subS.set_poisson(bc="dirichlet")
+sim_subS._set_poisson(bc="dirichlet")
 sim_subS.set_density("ne", rho_sub.copy())
 dt_subS = sim_subS.step_cfl(cfl_sub)
 

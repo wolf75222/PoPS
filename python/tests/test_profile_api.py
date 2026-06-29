@@ -200,13 +200,13 @@ def _make_stepped_system():
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim._add_block(
         "gas",
-        pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+        pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                    transport=pops.IsothermalFlux(), source=pops.NoSource(),
                    elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
         time=pops.Explicit())
     rho = np.ones((n, n), dtype=float)
-    sim.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
+    sim._set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
     return pops, sim, np
 
 

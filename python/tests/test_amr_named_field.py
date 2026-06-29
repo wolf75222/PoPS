@@ -39,6 +39,7 @@ try:
     from pops.ir.ops import sqrt
     from pops.physics.facade import Model
     from pops.runtime.amr_system import AmrSystem
+    from pops.solvers import GeometricMG
 except Exception as exc:  # noqa: BLE001  -- pops not importable -> skip, never fake
     print("skip test_amr_named_field (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -108,12 +109,12 @@ class _RawModel:
 
 
 class _SolverHarness(AmrSystem):
-    """Captures set_poisson without building a real AMR engine (no Kokkos)."""
+    """Captures private Poisson lowering without building a real AMR engine (no Kokkos)."""
 
     def __init__(self):
         self.calls = []
 
-    def set_poisson(self, **kw):
+    def _set_poisson(self, **kw):
         self.calls.append(kw)
 
 
@@ -132,15 +133,15 @@ def test_amr_declared_elliptic_fields_collected():
 
 
 def test_amr_install_solver_routes_declared_named_field():
-    """A4: a DECLARED named elliptic field routes through the shared AMR elliptic solver (set_poisson)."""
+    """A4: a DECLARED named elliptic field routes through the shared AMR elliptic solver."""
     h = _SolverHarness()
-    h._install_solver("psi", "geometric_mg", frozenset({"psi"}))
+    h._install_solver("psi", GeometricMG(), frozenset({"psi"}))
     _check(h.calls and h.calls[0]["solver"] == "geometric_mg",
-           "a declared named field routes to set_poisson (shared solver)")
+           "a declared named field routes to _set_poisson (shared solver)")
     # the default Poisson field still routes (regression).
     h2 = _SolverHarness()
-    h2._install_solver("phi", "geometric_mg", frozenset())
-    _check(h2.calls and h2.calls[0]["solver"] == "geometric_mg", "default field -> set_poisson")
+    h2._install_solver("phi", GeometricMG(), frozenset())
+    _check(h2.calls and h2.calls[0]["solver"] == "geometric_mg", "default field -> _set_poisson")
     print("ok test_amr_install_solver_routes_declared_named_field")
 
 
@@ -148,7 +149,7 @@ def test_amr_install_solver_rejects_undeclared_field():
     """A5: an UNDECLARED field name is a typo -- rejected LOUD, naming the declared set (not deferred)."""
     h = _SolverHarness()
     try:
-        h._install_solver("psii", "geometric_mg", frozenset({"psi"}))
+        h._install_solver("psii", GeometricMG(), frozenset({"psi"}))
         raise AssertionError("an undeclared field name must raise")
     except ValueError as exc:
         _check("psii" in str(exc), "the reject names the offending field")
@@ -188,10 +189,11 @@ def _run_section_b():
         my = -0.05 * rho
         return np.stack([rho, mx, my])
 
-    # Build the named model and compile it for the AMR target (production .so). Kokkos-gated.
+    # Build the named model and compile it through the internal AMR native-loader seam
+    # (production .so). Kokkos-gated.
     model = _named_model("amr_e2e", scale=2.0)  # rhs = 2 * default -> psi = 2 * default phi
     try:
-        compiled = model.compile(backend="production", target="amr_system")
+        compiled = model._compile_for_runtime(backend=pops.codegen.Production(), target="amr_system")
     except (RuntimeError, NotImplementedError) as exc:
         print("-- (B) skipped: production AMR compile unavailable: %s --" % str(exc)[:160])
         return True
@@ -200,10 +202,10 @@ def _run_section_b():
     # register_elliptic_field + set_block_elliptic_field at add time, so the named field "psi" is
     # registered with its own coarse GeometricMG; sim.run() solves it each step (default Poisson
     # first, then the named field), and sim.field("psi") reads the solved coarse potential.
-    from pops.codegen.orchestration import _amr_config_from_layout
+    from pops.runtime.amr_layout import amr_config_from_layout
     layout = AMR(CartesianMesh(n=N, L=1.0, periodic=True))
-    sim = pops.AmrSystem(_amr_config_from_layout(layout))
-    sim.set_poisson("charge_density", "geometric_mg")
+    sim = pops.AmrSystem(amr_config_from_layout(layout))
+    sim._set_poisson("charge_density", "geometric_mg")
     sim._add_equation("plasma", compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit())

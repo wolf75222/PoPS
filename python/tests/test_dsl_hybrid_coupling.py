@@ -49,9 +49,9 @@ def main():
     Ueflat, Uiflat = Ue.reshape(-1).tolist(), Ui.reshape(-1).tolist()
     spatial = pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative())
 
-    spec_e = pops.Model(state=pops.FluidState("isothermal", cs2=CS2), transport=pops.IsothermalFlux(),
+    spec_e = pops.Model(state=pops.FluidState.isothermal(cs2=CS2), transport=pops.IsothermalFlux(),
                        source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=-1.0))
-    spec_i = pops.Model(state=pops.FluidState("isothermal", cs2=CS2), transport=pops.IsothermalFlux(),
+    spec_i = pops.Model(state=pops.FluidState.isothermal(cs2=CS2), transport=pops.IsothermalFlux(),
                        source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
 
     tmp = tempfile.mkdtemp()
@@ -60,21 +60,21 @@ def main():
         co_i = pops.CompositeModel(transport=build_iso_transport(CS2).compile(),
                                   source=pops.NoSource(),
                                   elliptic=pops.ChargeDensity(charge=1.0)).compile(
-            backend="production", so_path=os.path.join(tmp, "ions_hybrid.so"), include=INCLUDE)
+            backend=pops.codegen.Production(), so_path=os.path.join(tmp, "ions_hybrid.so"), include=INCLUDE)
 
         def run(add_ions, collision=True):
             s = pops.System(n=n, L=L, periodic=True)
             s._add_block("electrons", spec_e, spatial=spatial, time=pops.Explicit())
             add_ions(s)
-            s.set_poisson(rhs="charge_density", solver="geometric_mg")
+            s._set_poisson(rhs="charge_density", solver="geometric_mg")
             if collision:
                 s.add_collision("electrons", "ions", RATE)
-            s.set_state("electrons", Ueflat)
-            s.set_state("ions", Uiflat)
+            s._set_state("electrons", Ueflat)
+            s._set_state("ions", Uiflat)
             for _ in range(8):
                 s.step_cfl(0.3)
-            e = np.array(s.get_state("electrons")).reshape(3, n, n)
-            i = np.array(s.get_state("ions")).reshape(3, n, n)
+            e = np.array(s._get_state("electrons")).reshape(3, n, n)
+            i = np.array(s._get_state("ions")).reshape(3, n, n)
             return e, i
 
         hyb = lambda s: s._add_equation("ions", co_i, spatial=spatial)        # production : sans names=

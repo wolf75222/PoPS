@@ -124,7 +124,7 @@ class _ProgramLocal(_ProgramConstants):
             return operator
         if isinstance(operator, Value) and operator.op == "linear_source":
             return operator.attrs["linear_source"]
-        if (isinstance(operator, Value) and operator.op == "operator_call"
+        if (isinstance(operator, Value) and operator.op == "call"
                 and operator.attrs.get("kind") == "local_linear_operator"):
             return operator.attrs["linear_source"]
         if (isinstance(operator, _Operator) and not operator.identity.as_dict()

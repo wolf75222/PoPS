@@ -30,41 +30,40 @@ class _ProgramCore(_ProgramConstants):
             self._values.append(v)
         return v
 
-    def state(self, arg=None, space=None, *, block=None):
-        """Reference the current conservative state of a block at the start of the step.
+    def state(self, name="U", space=None, *, block=None):
+        """Create typed temporal-version handles for one block state.
 
-        Two forms (additive; the positional form is the historical one, byte-identical):
+        Public Programs use ``P.state("U", block="plasma")`` and then compose ``U.n``,
+        ``U.stage(k)``, ``U.next`` and ``U.prev``.  The old positional block form is not
+        accepted as a public API: raw SSA state values are an internal lowering detail used
+        by typed handles and ready-made library schemes.
+        """
+        if block is None:
+            raise TypeError(
+                "Program.state requires block= and returns typed temporal handles, e.g. "
+                "P.state('U', block='plasma'). Internal scheme builders must use "
+                "Program._state_value(block).")
+        from pops.time.handles import TimeState
+        return TimeState(self, block, name=name or "U", space=space)
 
-          - ``P.state("plasma")`` / ``P.state("plasma", space=...)`` (LEGACY) returns the State
-            :class:`pops.time.values.Value` of block ``"plasma"`` -- the positional argument is the
-            block name;
-          - ``P.state("U", block="plasma")`` (Spec 5 sec.5.3.1) returns a
-            :class:`pops.time.handles.TimeState` -- a family of typed temporal-version handles
-            (``.n`` / ``.stage`` / ``.next`` / ``.prev``) for block ``"plasma"`` named ``"U"``.
+    def _state_value(self, block, *, space=None, name=None):
+        """Internal SSA value for the current state of ``block``.
 
-        The handle form is detected SOLELY by the ``block=`` keyword (no legacy caller passes it),
-        so the positional path is unchanged.
-
-        @p space (Spec 2): the operator-first :class:`pops.model.StateSpace` this block instantiates.
-        It is recorded for type checking (a State tagged with space U cannot be combined with a
-        Rate(V), and an operator expecting state U cannot be called on it) and is NOT serialized into
-        the IR. ``None`` keeps the legacy untyped state (no space checks)."""
-        if block is not None:
-            from pops.time.handles import TimeState
-            return TimeState(self, block, name=arg or "U")
-        if not isinstance(arg, str) or not arg:
-            raise ValueError("state: block must be a non-empty string")
-        v = self._new("state", "state", (), {}, arg, arg)
+        This is the only place that emits the ``state`` IR node consumed by C++ codegen.
+        It is intentionally not public DSL: users work with temporal handles.
+        """
+        if not isinstance(block, str) or not block:
+            raise ValueError("_state_value: block must be a non-empty string")
+        v = self._new("state", "state", (), {}, name or block, block)
         v.space = space
         return v
 
-    def _solve_fields(self, name=None, state=None, field=None):
+    def _fields_from_state(self, name=None, state=None, field=None):
         """Internal field-solve builder used by typed operator lowering.
 
-        This still emits the historical ``solve_fields`` IR op because the C++ Program codegen
-        consumes that op. It is intentionally private: user Programs should call a typed
-        ``field_operator`` handle through :meth:`call`, or use the board ``fields(...)`` sugar that
-        lowers through the same internal route.
+        This emits the ``solve_fields`` IR op consumed by the C++ Program codegen.
+        It is intentionally private: user Programs call typed field operators through
+        :meth:`call`, or use higher-level board sugar that lowers through this route.
         """
         # A defined temporal-version handle (U.stage(k) / U.next / U.prev) resolves to its Value
         # here so it composes wherever a State does; a plain Value / None / str is unchanged.
@@ -72,9 +71,9 @@ class _ProgramCore(_ProgramConstants):
         if isinstance(name, Value) and state is None:
             name, state = None, name
         if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("_solve_fields: a State value is required")
+            raise ValueError("_fields_from_state: a State value is required")
         if field is not None and not (isinstance(field, str) and field):
-            raise ValueError("_solve_fields: field must be a non-empty named elliptic field")
+            raise ValueError("_fields_from_state: field must be a non-empty named elliptic field")
         # The attr is added ONLY for a named field so a default solve_fields keeps its historical IR
         # (empty attrs) -> the .so cache key of an existing time program is byte-identical (no spurious
         # invalidation from this feature).
@@ -95,8 +94,8 @@ class _ProgramCore(_ProgramConstants):
         its live state. The listed states slot at their block index (the P.state declaration order), so
         the runtime sees each coupled block at its stage state into the one shared phi/aux.
 
-        A per-block internal ``_solve_fields(state=Ub)`` remains the right lowering when blocks advance in
-        sequence (block b at its stage state, every other block at its live state); this op is for the
+        A per-block internal ``_fields_from_state(state=Ub)`` remains the right lowering when blocks
+        advance in sequence (block b at its stage state, every other block at its live state); this op is for the
         SIMULTANEOUS case where multiple coupled blocks must each contribute their stage state at once."""
         if not (isinstance(states, (list, tuple)) and states):
             raise ValueError("solve_fields_from_blocks: a non-empty list of State values is required")
@@ -138,9 +137,9 @@ class _ProgramCore(_ProgramConstants):
 
         Resolves the handle against the bound operator registry (see :meth:`bind_operators`),
         type-checks the arguments against the operator's ``Signature``, then records an
-        ``operator_call`` node in the Program IR. Codegen lowers that typed call to the appropriate
+        ``call`` node in the Program IR. Codegen lowers that typed call to the appropriate
         C++ ``ProgramContext`` operation. The public path no longer rewrites a call back into the
-        private ``_rhs_legacy`` / ``_solve_fields`` builders.
+        private ``_rate_from_transport`` / ``_fields_from_state`` builders.
         """
         from pops.model import Operator, OperatorHandle
         if not isinstance(operator, (OperatorHandle, Operator)):
@@ -158,7 +157,7 @@ class _ProgramCore(_ProgramConstants):
         """Internal operator-first call: resolve, type-check and lower an operator (str name OR
         handle). NOT a public surface -- the string token survives here only as an internal selector
         for package macros and tests."""
-        operator_name = self._operator_call_name(operator)
+        operator_name = self._call_name(operator)
         if self._registry is None:
             raise ValueError("P.call(%r): no operators bound; call P.bind_operators(model) first"
                              % (operator_name,))
@@ -184,7 +183,7 @@ class _ProgramCore(_ProgramConstants):
             result.attrs["schedule"] = schedule
         return result
 
-    def _operator_call_name(self, operator):
+    def _call_name(self, operator):
         """Normalize an internal :meth:`_call` operator selector to its registry name.
 
         Accepts EITHER a plain ``str`` (an internal selector token, returned unchanged), an
@@ -223,44 +222,46 @@ class _ProgramCore(_ProgramConstants):
             # labels the abstract field context, not a second named elliptic field. Only a single-state
             # field operator whose name differs from the default maps to the named-elliptic overload.
             field = None if operator_name == "fields_from_state" or len(args) > 1 else operator_name
-            return self._new("fields", "operator_call", args,
+            return self._new("fields", "call", args,
                              {"operator": operator_name, "kind": kind, "field": field},
                              name, args[0].block)
         if kind == "local_source":
             fields = args[1] if len(args) > 1 else None
             if operator_name == "source_default":
-                return self._new("rhs", "operator_call",
+                return self._new("rhs", "call",
                                  (args[0], fields) if fields is not None else (args[0],),
                                  {"operator": operator_name, "kind": kind,
                                   "flux": False, "sources": ["default"], "fluxes": None},
                                  name, args[0].block)
-            return self._new("rhs", "operator_call",
+            return self._new("rhs", "call",
                              (args[0], fields) if fields is not None else (args[0],),
                              {"operator": operator_name, "kind": kind, "source": operator_name},
                              name, args[0].block)
         if kind in ("grid_operator", "local_rate"):
             fields = args[1] if len(args) > 1 else None
             if kind == "grid_operator":
-                fluxes = None if operator_name == "flux_default" else [operator_name]
-                return self._new("rhs", "operator_call",
+                is_default_flux = op.capabilities.get("default") or operator_name in (
+                    "flux_default", "flux")
+                fluxes = None if is_default_flux else [operator_name]
+                return self._new("rhs", "call",
                                  (args[0], fields) if fields is not None else (args[0],),
                                  {"operator": operator_name, "kind": kind, "flux": True,
                                   "sources": [], "fluxes": fluxes},
                                  name, args[0].block)
             low = op.lowering
-            return self._new("rhs", "operator_call",
+            return self._new("rhs", "call",
                              (args[0], fields) if fields is not None else (args[0],),
                              {"operator": operator_name, "kind": kind,
                               "flux": low.get("flux", True), "sources": low.get("sources"),
                               "fluxes": low.get("fluxes")},
                              name, args[0].block)
         if kind == "local_linear_operator":
-            return self._new("operator", "operator_call", args,
+            return self._new("operator", "call", args,
                              {"operator": operator_name, "kind": kind,
                               "linear_source": operator_name},
                              name or operator_name, args[0].block if args else None)
         if kind == "projection":
-            return self._new("state", "operator_call", (args[0],),
+            return self._new("state", "call", (args[0],),
                              {"operator": operator_name, "kind": kind},
                              name, args[0].block)
         if kind == "coupled_rate":
@@ -321,7 +322,7 @@ class _ProgramCore(_ProgramConstants):
                     "operator %r expects %s %r but got a value over %r"
                     % (op.name, t.kind, t.name, arg_name))
 
-    def _rhs_terms(self, name=None, state=None, fields=None, *, terms=None, **legacy):
+    def _rate_from_terms(self, name=None, state=None, fields=None, *, terms=None, **legacy):
         """Internal typed-term lowering kept for package macros.
 
         The public Program API is operator-first: users call ``P.call(rate_handle, U, fields)``.
@@ -331,17 +332,18 @@ class _ProgramCore(_ProgramConstants):
         if legacy or terms is None:
             extra = "".join(", %s=" % k for k in sorted(legacy))
             raise TypeError(
-                "_rhs_terms requires terms=, not the legacy flux=/sources=/fluxes= form%s"
+                "_rate_from_terms requires terms=, not the old flux=/sources=/fluxes= form%s"
                 % extra)
         from pops.time._rhs_terms import terms_to_flux_sources
         flux, sources = terms_to_flux_sources(terms)
-        return self._rhs_legacy(name=name, state=state, fields=fields, flux=flux, sources=sources)
+        return self._rate_from_transport(name=name, state=state, fields=fields,
+                                         flux=flux, sources=sources)
 
-    def _rhs_legacy(self, name=None, state=None, fields=None, flux=True, sources=None, fluxes=None):
+    def _rate_from_transport(self, name=None, state=None, fields=None,
+                             flux=True, sources=None, fluxes=None):
         """Internal RHS builder: ``R = -div F(U) + sum of the requested named sources`` from the
-        legacy ``(flux, sources, fluxes)`` triple. NOT a public surface -- ``pops.lib.time`` macros
-        and the operator-first lowering call it directly (a flux/sources string token survives here
-        only as an internal selector, undocumented in the public API).
+        compiled transport/source selectors. NOT a public surface -- ``pops.lib.time`` macros
+        and operator-first lowering call it directly after typed validation.
 
         ``sources`` (ADC-425): ``None`` keeps ``-div F`` + the model's default/composite source;
         ``["default"]`` is the same explicitly; ``[]`` is FLUX ONLY (no default source); a list of
@@ -358,8 +360,8 @@ class _ProgramCore(_ProgramConstants):
             raise ValueError("rhs: a State value is required (state=...)")
         if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
             raise ValueError("rhs: fields must be a FieldContext from solve_fields")
-        # Preserve None (legacy default = flux + default source) DISTINCT from [] (flux only): the
-        # codegen routes on whether "default" is requested, and None is the legacy "default included".
+        # Preserve None (default source included) DISTINCT from [] (flux only): the codegen routes on
+        # whether "default" is requested.
         src = list(sources) if sources is not None else None
         attrs = {"flux": bool(flux), "sources": src, "fluxes": list(fluxes) if fluxes else None}
         inputs = (state, fields) if fields is not None else (state,)

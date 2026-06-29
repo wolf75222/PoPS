@@ -15,6 +15,9 @@ import types
 import pytest
 
 physics = pytest.importorskip("pops.physics")
+from pops.codegen.module_emit_brick import emit_cpp_brick
+from pops.codegen.module_view import ModuleCodegenView
+from pops.numerics.riemann import HLLC
 # Spec 5 (sec.4): the riemann capability-hook catalog lives in pops.numerics.riemann.
 lib = types.SimpleNamespace(riemann=pytest.importorskip("pops.numerics.riemann").riemann)
 
@@ -30,21 +33,23 @@ def _euler(custom_pressure=None):
     rho, mx, my, E = U
     g = m.param("gamma", 1.4)
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
-    d = m.dsl
     u, v = mx / rho, my / rho
-    d.conservative_from([rho, rho * u, rho * v, p / (g - 1.0) + 0.5 * rho * (u * u + v * v)])
-    d._m.set_primitive_state(rho, u, v, p)
-    d.flux([mx, mx * u + p, mx * v, (E + p) * u],
-           [my, my * u, my * v + p, (E + p) * v])
     c = sqrt(g * p / rho)
-    d.eigenvalues([u - c, u, u, u + c], [v - c, v, v, v + c])
+    m.flux("F", on=U,
+           x=[mx, mx * u + p, mx * v, (E + p) * u],
+           y=[my, my * u, my * v + p, (E + p) * v],
+           waves={"x": [u - c, u, u, u + c], "y": [v - c, v, v, v + c]})
     kw = {}
     if custom_pressure is not None:
         kw["pressure"] = custom_pressure(m, U)
-    m.riemann("hllc",
+    m.riemann(HLLC(),
               contact_speed=lib.riemann.hllc.contact_speed.euler(),
               star_state=lib.riemann.hllc.star_state.euler(), **kw)
     return m
+
+
+def _emit_model_cpp(model):
+    return emit_cpp_brick(ModuleCodegenView(model.lower()), name="EulerGen")
 
 
 def _pressure_body(cpp):
@@ -65,13 +70,13 @@ def _custom_cs2_pressure(m, U):
 
 def test_pressure_formula_overrides_role_derived_hook():
     # role-derived default emits the primitive 'p' formula verbatim.
-    default = _euler().dsl._m.emit_cpp_brick(name="EulerGen")
+    default = _emit_model_cpp(_euler())
     body0 = _pressure_body(default)
     assert "return p;" in body0
     assert "cs2" not in body0
 
     # the arbitrary cs2-based formula is codegen'd into the hook body instead.
-    override = _euler(custom_pressure=_custom_cs2_pressure).dsl._m.emit_cpp_brick(name="EulerGen")
+    override = _emit_model_cpp(_euler(custom_pressure=_custom_cs2_pressure))
     body1 = _pressure_body(override)
     assert "ARBITRARY board formula" in override        # the override marker comment
     assert "const pops::Real cs2 = " in body1            # the custom scalar appears as a local
@@ -84,17 +89,17 @@ def test_pressure_override_changes_the_module_hash():
     # a distinct hook body must key a distinct compiled-brick cache entry...
     m0 = _euler()
     m1 = _euler(custom_pressure=_custom_cs2_pressure)
-    assert m0.dsl._m._model_hash() != m1.dsl._m._model_hash()
+    assert ModuleCodegenView(m0.lower())._model_hash() != ModuleCodegenView(m1.lower())._model_hash()
     # ...while a role-derived-only model records NO override (historical hash bit-identity).
-    assert m0.dsl._m._riemann_hook_forms == {}
+    assert ModuleCodegenView(m0.lower())._riemann_hook_forms == {}
 
 
 def test_descriptor_hooks_keep_the_role_derived_default():
     # contact_speed / star_state given as canonical descriptors (.euler()) are NOT formula
     # overrides: the role-derived HLLC capability is emitted unchanged.
     m = _euler()
-    assert m.dsl._m._riemann_hook_forms == {}            # no Expr recorded from the descriptors
-    cpp = m.dsl._m.emit_cpp_brick(name="EulerGen")
+    assert ModuleCodegenView(m.lower())._riemann_hook_forms == {}
+    cpp = _emit_model_cpp(m)
     assert "pops::Real contact_speed(const State& UL, const State& UR" in cpp
     assert "State hllc_star_state(const State& U" in cpp
 
@@ -110,15 +115,12 @@ def test_pressure_formula_referencing_a_missing_capability_raises():
     rho, mx, my, E = U
     g = m.param("gamma", 1.4)
     p = m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
-    d = m.dsl
     u, v = mx / rho, my / rho
-    d.conservative_from([rho, rho * u, rho * v, E])
-    d._m.set_primitive_state(rho, u, v, p)
-    d.flux([mx, mx, mx, mx], [my, my, my, my])
-    d.eigenvalues([u, u, u, u], [v, v, v, v])
-    m.riemann("hllc", pressure=rho + Var("B_z", "aux"))   # references an undeclared capability
+    m.flux("F", on=U, x=[mx, mx, mx, mx], y=[my, my, my, my],
+           waves={"x": [u, u, u, u], "y": [v, v, v, v]})
+    m.riemann(HLLC(), pressure=rho + Var("B_z", "aux"))   # references an undeclared capability
     with pytest.raises(ValueError, match="undeclared quantity"):
-        d._m.emit_cpp_brick(name="EulerGen")
+        _emit_model_cpp(m)
 
 
 def test_arbitrary_formula_for_a_two_state_hook_is_rejected():
@@ -131,7 +133,7 @@ def test_arbitrary_formula_for_a_two_state_hook_is_rejected():
     rho, _, _, _ = U
     m.primitive("p", rho)
     with pytest.raises(NotImplementedError, match="contact_speed"):
-        m.riemann("hllc", contact_speed=rho * 2.0)
+        m.riemann(HLLC(), contact_speed=rho * 2.0)
 
 
 def test_missing_pressure_capability_still_rejected():
@@ -141,4 +143,4 @@ def test_missing_pressure_capability_still_rejected():
             roles={"rho": "density", "mx": "momentum_x",
                    "my": "momentum_y", "E": "energy"})
     with pytest.raises(ValueError, match="requires model capability 'pressure'"):
-        m.riemann("hllc")
+        m.riemann(HLLC())

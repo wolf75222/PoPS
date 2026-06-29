@@ -1,9 +1,9 @@
-"""Garde-fou de REGRESSION : la norme C++ du modele NATIF (backend="production") doit suivre celle du
+"""Garde-fou de REGRESSION : la norme C++ du modele NATIF (backend=pops.codegen.Production()) doit suivre celle du
 LOADER (module _pops), sinon add_native_block rejette le bloc avec "incompatible ABI".
 
 CONTEXTE (regression observee sur GH200). Le module _pops est compile en C++20 sous Kokkos (CUDA 12.x
 n'offre pas -std=c++23 ; cf. POPS_CXX_STD dans CMakeLists.txt), en C++23 sinon. Avant le fix, le DSL
-backend="production" figeait le std du modele natif a "c++23" en dur. Sous Kokkos cela donnait :
+backend=pops.codegen.Production() figeait le std du modele natif a "c++23" en dur. Sous Kokkos cela donnait :
 loader C++20 (__cplusplus=202002L) vs modele C++23 (__cplusplus!=202002L) -> les cles d'ABI (qui
 encodent __cplusplus) divergeaient -> add_native_block levait "incompatible ABI" -> AUCUN cas ne
 pouvait tourner en natif sur GH200. Le fix derive le std du modele natif de la norme reelle du loader
@@ -12,7 +12,7 @@ pouvait tourner en natif sur GH200. Le fix derive le std du modele natif de la n
 Ce test :
   1) verifie l'INVARIANT de norme : loader_cxx_std() == norme reellement bakee par le module
      (pops._pops.__cxx_std__), avec fallback sur le std encode dans abi_key() ;
-  2) bout-en-bout : un modele trivial compile(backend="production") puis branche par add_native_block
+  2) bout-en-bout : un modele trivial compile(backend=pops.codegen.Production()) puis branche par add_native_block
      se charge SANS erreur d'ABI -- c'est exactement ce qui cassait sous Kokkos. Le test echouerait
      sous Kokkos avec l'ancien defaut c++23 (mismatch __cplusplus), il passe avec le std aligne.
 
@@ -82,7 +82,7 @@ def check_std_invariant():
 
 
 def check_native_loads_without_abi_error(expected_std):
-    """Le coeur du fix : compile(backend="production") avec le std PAR DEFAUT (derive du loader) puis
+    """Le coeur du fix : compile(backend=pops.codegen.Production()) avec le std PAR DEFAUT (derive du loader) puis
     add_native_block doit charger SANS "incompatible ABI". Sous Kokkos avec l'ancien defaut c++23 en
     dur, ce chemin levait ; avec le std aligne, il passe."""
     n = 16
@@ -90,8 +90,8 @@ def check_native_loads_without_abi_error(expected_std):
     try:
         e = build_trivial_euler()
         # std laisse a None -> defaut par backend : production suit loader_cxx_std() (le fix).
-        so = e.compile(os.path.join(tmp, "euler_abistd.so"), INCLUDE, backend="production")
-        assert os.path.exists(so), "compile(backend='production') n'a pas produit de .so"
+        so = e.compile(os.path.join(tmp, "euler_abistd.so"), INCLUDE, backend=pops.codegen.Production())
+        assert os.path.exists(so), "compile(backend=pops.codegen.Production()) n'a pas produit de .so"
 
         sys = pops.System(n=n, L=1.0, periodic=True)
         # Si le std du modele != std du loader, add_native_block leve RuntimeError("incompatible ABI").
@@ -110,8 +110,8 @@ def check_native_loads_without_abi_error(expected_std):
         U = np.zeros((4, n, n))
         U[0] = 1.0
         U[3] = 1.0 / (GAMMA - 1.0)
-        sys.set_state("gas", U.reshape(-1).tolist())
-        R = np.array(sys.eval_rhs("gas"))
+        sys._set_state("gas", U.reshape(-1).tolist())
+        R = np.array(sys._eval_rhs("gas"))
         assert R.size == 4 * n * n and np.all(np.isfinite(R)), "eval_rhs du bloc natif non fini"
         print("OK  production + add_native_block : charge SANS erreur d'ABI (std modele = loader %s)"
               % expected_std)

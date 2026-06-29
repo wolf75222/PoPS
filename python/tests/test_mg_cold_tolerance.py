@@ -26,11 +26,11 @@ def build(n=64, abs_tol=None):
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
     if abs_tol is None:
-        sim.set_poisson(bc="dirichlet")
+        sim._set_poisson(bc="dirichlet")
     else:
-        sim.set_poisson(bc="dirichlet", abs_tol=abs_tol)
+        sim._set_poisson(bc="dirichlet", abs_tol=abs_tol)
     xs = (np.arange(n) + 0.5) / n - 0.5
     X, Y = np.meshgrid(xs, xs, indexing="xy")
     dens = np.exp(-(X * X + Y * Y) / 0.02)

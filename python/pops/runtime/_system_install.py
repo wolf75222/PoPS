@@ -68,10 +68,9 @@ class _SystemInstall:
     def _add_block(self, name, model, spatial=None, time=None, evolve=True):
         """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind`` (which calls this method internally); ``add_block`` stays for that seam,
-        the native/AMR runtime, and the tests.
+        Low-level runtime seam. The documented public path is ``sim.install(...)`` with typed
+        instances, spatial descriptors and solver descriptors; ``_add_block`` stays for the
+        native/AMR runtime lowering and focused tests.
 
         Installs a model composed in Python from native bricks (pops.Model(...)). For a
         compiled DSL model (.so) or an automatic dispatch on the model type,
@@ -123,9 +122,8 @@ class _SystemInstall:
                      evolve=True, stride=None):
         """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
 
-        Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind``; ``add_equation`` stays for that seam, the native/AMR runtime, and the tests.
+        Low-level runtime seam. The documented public path is ``sim.install(...)``; this method
+        remains the private dispatch seam used by the native/AMR runtime and focused tests.
 
         Dispatch:
 
@@ -399,8 +397,8 @@ class _SystemInstall:
         """Private lowering seam for the shared native Poisson solve.
 
         Public code configures fields through typed ``pops.fields`` / ``pops.solvers`` descriptors
-        on a ``pops.Case`` and then calls ``pops.compile`` / ``pops.bind``. This method exists only
-        for that lowering path and focused native-runtime tests.
+        and wires them through ``sim.install(solvers=...)``. This method exists only for that
+        lowering path and focused native-runtime tests.
         """
         bc = _lower_bc(bc)
         lowered = _lower_wall(wall)
@@ -414,7 +412,7 @@ class _SystemInstall:
         """EPM: configures the system elliptic model (Poisson is its current instance).
         model = pops.elliptic(operator=pops.div_eps_grad(eps), rhs=pops.composite_rhs(),
         output=pops.electric_field_from_potential()). Low-level runtime seam; public field
-        configuration goes through typed ``pops.fields`` descriptors and ``pops.bind``.
+        configuration goes through typed ``pops.fields`` descriptors and ``sim.install``.
 
         Operator: div(eps grad) with CONSTANT eps (eps != 1 supported: eps lap phi = f); variable
         eps(x) is plugged in via set_epsilon_field. Right-hand side: composite_rhs() = GENERIC sum

@@ -9,7 +9,7 @@ def strang(P, block, half_flow, source, *, commit=True):
     IR, no special class). @p half_flow and @p source are IR-building callables (prog, state, frac) ->
     state that advance the hyperbolic flow and the source by a fraction @p frac of dt. Returns the final
     state (committed when @p commit)."""
-    U = P.state(block)
+    U = P._state_value(block)
     U1 = half_flow(P, U, 0.5)
     U2 = source(P, U1, 1.0)
     U3 = half_flow(P, U2, 0.5)
@@ -25,7 +25,7 @@ def lie(P, block, half_flow, source, *, commit=True):
     just composes them sequentially over the FULL step (H over dt, then S over dt) with no half-steps.
     Lowers to the SAME IR primitives as `strang` (no scheme-specific class). Returns the final state
     (committed when @p commit)."""
-    U = P.state(block)
+    U = P._state_value(block)
     U1 = half_flow(P, U, 1.0)
     U2 = source(P, U1, 1.0)
     if commit:
@@ -93,8 +93,8 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
         raise ValueError("condensed_schur: theta must be in (0, 1] (got %r)" % (theta,))
     if c_E is not None and (isinstance(c_E, bool) or not isinstance(c_E, int) or c_E < 0):
         raise ValueError("condensed_schur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
-    U = P.state(block)
-    P._solve_fields(U)  # fill the shared aux (B_z at c_bz) from the current state, like the native stage
+    U = P._state_value(block)
+    P._fields_from_state(U)  # fill the shared aux (B_z at c_bz) from the current state, like the native stage
     # phi^n = 0 (a fresh zero scalar field): the RHS Laplacian term -Lap(phi^n) vanishes and the solve
     # warm starts from zero. Cross-step phi^n carry is deferred (see the docstring).
     phi_n = P.scalar_field(block + ".schur_phi_n")

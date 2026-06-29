@@ -59,7 +59,7 @@ def half_flow(prog, U, frac):
     """One Forward-Euler hyperbolic half-flow: U + frac*dt*R, R = -div F (+ default source). On the
     uncoupled NoSource model the default source is empty, so R is flux-only; the per-stage solve_fields
     is inert (no field feedback) -- kept so the program mirrors a real, field-coupled-ready Strang."""
-    R = prog._rhs_legacy(state=U, fields=prog._solve_fields(U), flux=True, sources=["default"])
+    R = prog._legacy_rhs(state=U, fields=prog._legacy_solve_fields(U), flux=True, sources=["default"])
     return prog.linear_combine(None, U + (frac * prog.dt) * R)
 
 
@@ -127,7 +127,7 @@ if pops is not None:
     def transport_model():
         """Uncoupled isothermal fluid (no field coupling into the flux), NO source brick: native H is a
         pure Euler transport step and native S (run_source_stage) is a no-op."""
-        return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+        return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                          transport=pops.IsothermalFlux(),
                          source=pops.NoSource(),
                          elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
@@ -149,7 +149,7 @@ print("  (A) PASS")
 # ============================ (B) native bit-parity: skip without the toolchain ================
 if pops is None:
     _skip("pops/numpy unavailable (A passed)")
-if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
     _skip("_pops lacks the install_program binding (rebuild _pops) (A passed)")
 
 N = 24
@@ -171,12 +171,12 @@ def make_sim():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim._add_block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")  # inert: BackgroundDensity n0=0, flux reads no phi
+                  time=pops.Explicit.euler())
+    sim._set_poisson("charge_density", "geometric_mg")  # inert: BackgroundDensity n0=0, flux reads no phi
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
+    sim._set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
     return sim
 
 
@@ -188,7 +188,7 @@ try:
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s (A passed)" % str(exc)[:160])
 
-U0 = np.array(make_sim().get_state("ions"))
+U0 = np.array(make_sim()._get_state("ions"))
 
 # Native engine Strang: set_time_scheme("strang") drives SystemStepper::step_strang. WITHOUT a Schur /
 # source stage, run_source_stage is a no-op -- exactly the H(dt/2); no-op; H(dt/2) the program mirrors.
@@ -203,8 +203,8 @@ for _ in range(NSTEP):
     sim_native.step(DT)
     sim_compiled.step(DT)
 
-U_native = np.array(sim_native.get_state("ions"))
-U_compiled = np.array(sim_compiled.get_state("ions"))
+U_native = np.array(sim_native._get_state("ions"))
+U_compiled = np.array(sim_compiled._get_state("ions"))
 e_native = float(np.abs(U_native - U_compiled).max())
 print("  native parity: max|native - compiled| = %.2e over %d steps" % (e_native, NSTEP))
 chk_b(np.array_equal(U_native, U_compiled),
@@ -217,9 +217,9 @@ ref = make_sim()
 
 
 def euler_half(U):
-    ref.set_state("ions", U)
+    ref._set_state("ions", U)
     ref.solve_fields()  # inert (no field feedback); mirrors the program's per-stage solve_fields
-    return U + 0.5 * DT * np.array(ref.eval_rhs("ions"))  # one Euler transport step over dt/2
+    return U + 0.5 * DT * np.array(ref._eval_rhs("ions"))  # one Euler transport step over dt/2
 
 
 U_offline = U0.copy()
@@ -235,7 +235,7 @@ chk_b(e_offline < 1e-12,
 sim_lie = make_sim()  # default scheme = Lie -> one full Euler transport step per macro-step
 for _ in range(NSTEP):
     sim_lie.step(DT)
-U_lie = np.array(sim_lie.get_state("ions"))
+U_lie = np.array(sim_lie._get_state("ions"))
 d_compose = float(np.abs(U_native - U_lie).max())
 print("  Strang vs single full-step Euler: max|d| = %.2e" % d_compose)
 chk_b(d_compose > 1e-9,

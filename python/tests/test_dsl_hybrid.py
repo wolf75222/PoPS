@@ -84,7 +84,7 @@ def main():
     spatial = pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative())
 
     # Oracle 100% natif : CompositeModel<IsothermalFlux, PotentialForce, ChargeDensity> via add_block.
-    spec = pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
+    spec = pops.Model(state=pops.FluidState.isothermal(cs2=CS2),
                      transport=pops.IsothermalFlux(),
                      source=pops.PotentialForce(charge=QOM),
                      elliptic=pops.ChargeDensity(charge=Q))
@@ -92,10 +92,10 @@ def main():
     def fields(setup):
         s = pops.System(n=n, L=L, periodic=True)
         setup(s)
-        s.set_poisson(rhs="charge_density", solver="geometric_mg")
-        s.set_state("gas", Uflat)
+        s._set_poisson(rhs="charge_density", solver="geometric_mg")
+        s._set_state("gas", Uflat)
         s.solve_fields()
-        R = np.array(s.eval_rhs("gas")).reshape(3, n, n)
+        R = np.array(s._eval_rhs("gas")).reshape(3, n, n)
         phi = np.array(s.potential()).reshape(n, n)
         return R, phi
 
@@ -110,7 +110,7 @@ def main():
                                 source=pops.PotentialForce(charge=QOM),
                                 elliptic=pops.ChargeDensity(charge=Q))
         assert m1.n_vars == 3 and m1.n_aux == 3
-        co1 = m1.compile(backend="aot", so_path=os.path.join(tmp, "h1.so"), include=INCLUDE)
+        co1 = m1.compile(backend=pops.codegen.AOT(), so_path=os.path.join(tmp, "h1.so"), include=INCLUDE)
         assert co1.adder == "add_compiled_block"
         R1, phi1 = fields(
             lambda s: s._add_equation("gas", co1, spatial=spatial, names=names))
@@ -126,7 +126,7 @@ def main():
                                 source=build_force_source(QOM).compile(),
                                 elliptic=pops.ChargeDensity(charge=Q))
         assert m2.n_vars == 3
-        co2 = m2.compile(backend="aot", so_path=os.path.join(tmp, "h2.so"), include=INCLUDE)
+        co2 = m2.compile(backend=pops.codegen.AOT(), so_path=os.path.join(tmp, "h2.so"), include=INCLUDE)
         R2, phi2 = fields(
             lambda s: s._add_equation("gas", co2, spatial=spatial, names=names))
         dphi2 = float(np.max(np.abs(phi2 - phi_nat)))
@@ -139,12 +139,12 @@ def main():
         # --- (C) le bloc hybride AVANCE dans le System (masse conservee en periodique) ---
         adv = pops.System(n=n, L=L, periodic=True)
         adv._add_equation("gas", co1, spatial=spatial, names=names)
-        adv.set_poisson(rhs="charge_density", solver="geometric_mg")
-        adv.set_state("gas", Uflat)
-        mass0 = float(np.array(adv.get_state("gas")).reshape(3, n, n)[0].sum())
+        adv._set_poisson(rhs="charge_density", solver="geometric_mg")
+        adv._set_state("gas", Uflat)
+        mass0 = float(np.array(adv._get_state("gas")).reshape(3, n, n)[0].sum())
         for _ in range(15):
             adv.step_cfl(0.4)
-        U1 = np.array(adv.get_state("gas")).reshape(3, n, n)
+        U1 = np.array(adv._get_state("gas")).reshape(3, n, n)
         drel = abs(float(U1[0].sum()) - mass0) / mass0
         assert np.isfinite(U1).all() and U1[0].min() > 0, "etat non physique apres avance"
         assert drel < 1e-9, "masse non conservee (drel=%.2e)" % drel
@@ -152,7 +152,7 @@ def main():
 
         # --- (D) backend production (natif zero-copie via add_native_block) : MEME parite, sans names=
         # (les noms/roles viennent des metadonnees du .so). Chemin de prod (MPI par construction).
-        co1p = m1.compile(backend="production", so_path=os.path.join(tmp, "h1p.so"), include=INCLUDE)
+        co1p = m1.compile(backend=pops.codegen.Production(), so_path=os.path.join(tmp, "h1p.so"), include=INCLUDE)
         assert co1p.adder == "add_native_block" and co1p.caps["mpi"] is True
         R1p, phi1p = fields(lambda s: s._add_equation("gas", co1p, spatial=spatial))
         dphi1p = float(np.max(np.abs(phi1p - phi_nat)))
@@ -164,17 +164,17 @@ def main():
 
         # --- (E) backend prototype (JIT, dispatch virtuel hote Rusanov ordre 1) : tourne dans le System
         # (schema host order 1 != production, donc smoke physique : tourne, fini, masse conservee).
-        co1j = m1.compile(backend="prototype", so_path=os.path.join(tmp, "h1j.so"), include=INCLUDE)
+        co1j = m1.compile(backend=pops.codegen.JIT(), so_path=os.path.join(tmp, "h1j.so"), include=INCLUDE)
         assert co1j.adder == "add_dynamic_block"
         jit = pops.System(n=n, L=L, periodic=True)
         jit._add_equation("gas", co1j, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
                          names=names)
-        jit.set_poisson(rhs="charge_density", solver="geometric_mg")
-        jit.set_state("gas", Uflat)
-        mass0j = float(np.array(jit.get_state("gas")).reshape(3, n, n)[0].sum())
+        jit._set_poisson(rhs="charge_density", solver="geometric_mg")
+        jit._set_state("gas", Uflat)
+        mass0j = float(np.array(jit._get_state("gas")).reshape(3, n, n)[0].sum())
         for _ in range(10):
             jit.step_cfl(0.4)
-        Uj = np.array(jit.get_state("gas")).reshape(3, n, n)
+        Uj = np.array(jit._get_state("gas")).reshape(3, n, n)
         assert np.isfinite(Uj).all() and Uj[0].min() > 0, "JIT hybride non physique"
         assert abs(float(Uj[0].sum()) - mass0j) / mass0j < 1e-9, "JIT hybride : masse non conservee"
         print("OK  backend prototype (JIT virtuel) hybride : tourne dans le System (masse conservee)")

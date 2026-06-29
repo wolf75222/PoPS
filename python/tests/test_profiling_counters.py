@@ -44,13 +44,13 @@ print("== §29 counters on a stepped native block ==")
 N = 16
 sim = pops.System(n=N, L=1.0, periodic=True)
 sim._add_block("gas",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+              pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                         transport=pops.IsothermalFlux(),
                         source=pops.NoSource(),
                         elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
               spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=pops.Explicit())
 rho = np.ones((N, N), dtype=float)
-sim.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
+sim._set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
 
 sim.enable_profiling()
 sim.step(1e-3)
@@ -87,13 +87,13 @@ chk("kernels=" not in sim.profile_report(), "reset clears the counters")
 print("== profiling off records no counters ==")
 sim_off = pops.System(n=N, L=1.0, periodic=True)
 sim_off._add_block("gas",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+                  pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                             transport=pops.IsothermalFlux(),
                             source=pops.NoSource(),
                             elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit())
-sim_off.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
+sim_off._set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
 sim_off.step(1e-3)
 chk(sim_off.profile_report().find("kernels=") == -1, "disabled profiler counts no kernels")
 

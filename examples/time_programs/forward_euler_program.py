@@ -3,7 +3,7 @@
 
 Writes a one-step Forward-Euler algorithm with ``pops.time.Program``, compiles it to a ``problem.so``
 with ``pops.compile_problem``, installs it on a System, and advances one step entirely C++-side via
-``sim.step`` -- then checks it reproduces the native ``pops.Explicit("euler")`` one-step
+``sim.step`` -- then checks it reproduces the native ``Explicit.euler()`` one-step
 ``U0 + dt * rhs`` to machine precision.
 
 Run::
@@ -13,28 +13,23 @@ Run::
 Requires a C++ compiler and a visible Kokkos (``POPS_KOKKOS_ROOT``); prints a skip notice and exits 0
 otherwise (so it is safe in a docs/CI smoke run). cf. docs/sphinx/reference/time-program.md.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
 
 try:
     import numpy as np
 
     import pops
-    from pops.fields import catalog as field_catalog
+    from pops.solvers import GeometricMG
     from pops import time as adctime
+    from _module_models import explicit_euler, first_order_rusanov, isothermal_transport_module
 except Exception as exc:  # noqa: BLE001  -- pops/numpy unavailable in this interpreter
     print("skip forward_euler_program (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 
 def euler_model():
-    """A pure-transport isothermal block (no source); the inert elliptic + set_poisson make the
-    program's solve_fields well-defined."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    """Pure Module isothermal block; Python describes, C++ executes."""
+    return isothermal_transport_module("forward_euler_model")
 
 
 def forward_euler_program():
@@ -60,11 +55,10 @@ def build_system():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.install(None,
                 instances={"plasma": {"model": euler_model(),
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
-                                      "time": pops.Explicit(method="euler"),
+                                      "spatial": first_order_rusanov(),
+                                      "time": explicit_euler(),
                                       "initial": initial_state()}},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     return sim
 
 
@@ -73,9 +67,9 @@ def main():
 
     # Reference: the native one-step Forward Euler via the same primitives the program drives.
     ref = build_system()
-    U0 = np.array(ref.get_state("plasma"))
+    U0 = np.array(ref._get_state("plasma"))
     ref.solve_fields()
-    U_ref = U0 + dt * np.array(ref.eval_rhs("plasma"))
+    U_ref = U0 + dt * np.array(ref._eval_rhs("plasma"))
 
     # Compiled time-program path.
     try:
@@ -90,12 +84,11 @@ def main():
     sim = pops.System(n=N, L=1.0, periodic=True)
     sim.install(compiled,
                 instances={"plasma": {"model": euler_model(),
-                                      "spatial": pops.FiniteVolume(limiter=FirstOrder(),
-                                                                   riemann=Rusanov()),
+                                      "spatial": first_order_rusanov(),
                                       "initial": initial_state()}},
-                solvers={"phi": field_catalog.GeometricMG()})
+                solvers={"phi": GeometricMG()})
     sim.step(dt)
-    U_prog = np.array(sim.get_state("plasma"))
+    U_prog = np.array(sim._get_state("plasma"))
 
     err = float(np.abs(U_prog - U_ref).max())
     print("compiled Forward-Euler Program vs native one-step: max|d| = %.2e" % err)

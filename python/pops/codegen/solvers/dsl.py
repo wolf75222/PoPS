@@ -155,12 +155,12 @@ class SolverContext:
     # --- operands -----------------------------------------------------------
     def unknown(self, name=None):
         """A fresh solver unknown (the iterate ``x`` / the rhs ``b``): a State IR value."""
-        return self._p.state(self._block)
+        return self._p._state_value(self._block)
 
     def zeros_like(self, value):
         """A zero-initialized iterate over the same block as @p value (the warm start)."""
         _require_field(value, "zeros_like")
-        return self._p.state(value.block or self._block)
+        return self._p._state_value(value.block or self._block)
 
     def scalar_int(self, n):
         """A COMPILE-TIME integer literal as a Scalar IR value (a loop count / index). It

@@ -23,12 +23,12 @@ def _op_model_exprs(impl, v):
       - ``apply`` / ``solve_local_linear`` -> the linear_source matrix (flat);
       - ``rhs`` named fluxes -> impl._flux_terms[name]['x'/'y'];
       - ``solve_local_nonlinear`` -> the residual sub-block's source / apply terms.
-    Returns a flat Expr list (possibly empty). @p impl is the HyperbolicModel."""
+    Returns a flat Expr list (possibly empty). @p impl is the model-codegen protocol object."""
     out = []
     src = getattr(impl, "_source_terms", {}) or {}
     lin = getattr(impl, "_linear_sources", {}) or {}
     flux = getattr(impl, "_flux_terms", {}) or {}
-    if v.op == "operator_call":
+    if v.op == "call":
         if v.attrs.get("source"):
             out += list(src.get(v.attrs.get("source"), []))
         for s in (v.attrs.get("sources") or []):

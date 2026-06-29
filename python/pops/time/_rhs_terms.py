@@ -1,4 +1,4 @@
-"""pops.time._rhs_terms -- lower an internal typed term list onto the legacy
+"""pops.time._rate_from_terms -- lower an internal typed term list onto the legacy
 ``(flux, sources)`` pair (Spec 5 sec.14.2.4).
 
 Factored out of :mod:`pops.time.program_core` (file-size budget): the transformation is pure

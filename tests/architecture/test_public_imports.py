@@ -49,7 +49,7 @@ def test_lib_models_moments_hyqmom15():
 
 
 def test_moments_kit():
-    # Spec 5 (sec.4): the moment-model construction kit lives in the top-level pops.moments.
+    # Spec 5 (sec.4): the moment-model construction kit lives in top-level pops.moments.
     from pops.moments import CartesianVelocityMoments, MomentModel
 
     assert CartesianVelocityMoments is not None
@@ -61,12 +61,13 @@ def test_numerics_and_diagnostics_packages():
     from pops.numerics.riemann import HLL
     from pops.numerics.reconstruction import MUSCL
     from pops.numerics.reconstruction.limiters import Minmod
-    from pops.diagnostics import norm
+    from pops.diagnostics import Norm
+    from pops.linalg.norms import L2
 
     assert HLL().native_id == "pops::HLLFlux"
     assert MUSCL().scheme == "minmod"
     assert Minmod().native_id == "pops::Minmod"
-    assert norm().category == "diagnostic"
+    assert Norm(L2()).category == "diagnostic_norm"
 
 
 def test_top_level_runtime_entry_points():

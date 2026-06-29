@@ -124,13 +124,14 @@ def _build_system(pops, np, n):
         return None, None
     from pops.physics.facade import Model
     try:
-        compiled_model = _passive_source_model("ckpt_block").compile(backend="production")
+        compiled_model = _passive_source_model("ckpt_block")._compile_for_runtime(
+            backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- skipped: model compile could not build the .so: %s --" % str(exc)[:160])
         return None, None
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     return sim, True
 
 
@@ -176,15 +177,15 @@ def _run_section_b(t):
     half = _NSTEPS // 2
 
     # (1) CONTINUOUS run: N steps in one go -> final state A.
-    sim_cont.set_state("blk", np.stack([rho0]))
+    sim_cont._set_state("blk", np.stack([rho0]))
     sim_cont._install_program_so(compiled.so_path)
     for _ in range(_NSTEPS):
         sim_cont.step(_DT)
-    state_a = np.array(sim_cont.get_state("blk"))[0]
+    state_a = np.array(sim_cont._get_state("blk"))[0]
 
     # (2) RUN N/2, CHECKPOINT.
     sim1, _ = _build_system(pops, np, n)
-    sim1.set_state("blk", np.stack([rho0]))
+    sim1._set_state("blk", np.stack([rho0]))
     sim1._install_program_so(compiled.so_path)
     for _ in range(half):
         sim1.step(_DT)
@@ -199,7 +200,7 @@ def _run_section_b(t):
             "restart restores macro_step (%d != %d)" % (sim2.macro_step(), half)
         for _ in range(_NSTEPS - half):
             sim2.step(_DT)
-    state_b = np.array(sim2.get_state("blk"))[0]
+    state_b = np.array(sim2._get_state("blk"))[0]
 
     err = float(np.abs(state_a - state_b).max())
     assert sim2.macro_step() == sim_cont.macro_step(), \
@@ -261,7 +262,7 @@ def _run_section_c(t):
     assert ab2.program_hash != fe.program_hash, \
         "AB2 and Forward Euler must have different IR hashes (else the test is vacuous)"
 
-    sim.set_state("blk", np.stack([np.ones((n, n))]))
+    sim._set_state("blk", np.stack([np.ones((n, n))]))
     sim._install_program_so(ab2.so_path)
     sim.step(_DT)
     sim.step(_DT)

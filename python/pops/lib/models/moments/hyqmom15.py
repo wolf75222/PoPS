@@ -4,7 +4,8 @@ HyQMOM15 is the 15-variable order-4 2D moment hierarchy. The provided builder co
 the Spec-4 moment facade into the Vlasov-Poisson-magnetic model used by the diocotron /
 column reference cases. It is a PURE composition of the facade -- no ``custom.py``.
 """
-from pops.moments.hierarchy import CartesianVelocityMoments
+from pops.moments import (CartesianVelocityMoments, VlasovElectricSource,
+                          MagneticRotationSource)
 from pops.moments.closures import HyQMOM15Closure
 
 _HYQMOM15_ORDER = 4
@@ -37,8 +38,10 @@ class HyQMOM15:
                                          exact_speeds=exact_speeds, roe=roe)
                 .add_transport()
                 .add_poisson_coupling(eps=eps)
-                .add_vlasov_electric_source("grad_x", "grad_y", q_over_m)
-                .add_magnetic_source(omega_c)
+                .add_source(VlasovElectricSource(
+                    electric_field=("grad_x", "grad_y"),
+                    charge_over_mass=q_over_m))
+                .add_source(MagneticRotationSource(omega_c=omega_c))
                 .build(name="hyqmom15"))
 
 

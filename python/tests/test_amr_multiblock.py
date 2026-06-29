@@ -36,7 +36,7 @@ def _build(n=32, regrid_every=0):
                   spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
     sim._add_block("electrons", _scalar_charge(-1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
-    sim.set_poisson(bc="periodic")
+    sim._set_poisson(bc="periodic")
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
     return sim
@@ -75,7 +75,7 @@ def main():
     def run_mono():
         s = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         s._add_block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-        s.set_poisson(bc="periodic")
+        s._set_poisson(bc="periodic")
         s.set_density("ne", _bump(n, 0.40))
         s.advance(0.001, 10)
         return np.asarray(s.density())

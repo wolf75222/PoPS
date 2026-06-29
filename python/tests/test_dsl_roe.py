@@ -97,23 +97,24 @@ tmp = tempfile.mkdtemp()
 try:
     n = 24
     print("== (1) parite 4-var : DSL enable_roe == bloc natif compressible riemann='roe' ==")
-    cm = euler4_dsl("euler_roe", roe=True).compile(os.path.join(tmp, "euler_roe.so"), INCLUDE,
-                                                   backend="production")
+    cm = euler4_dsl("euler_roe", roe=True)._compile_for_runtime(
+        os.path.join(tmp, "euler_roe.so"), INCLUDE, backend=pops.codegen.Production()
+    )
     chk(getattr(cm, "has_roe", False), "CompiledModel.has_roe = True (capability emise)")
     rho0 = gaussian(n)
     z = np.zeros((n, n))
     p0 = 1.0 + 0.0 * rho0
 
     sd = pops.System(n=n, L=1.0, periodic=True)
-    sd.set_poisson()
+    sd._set_poisson()
     sd._add_equation("gas", model=cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                     time=pops.Explicit())
     sd.set_primitive_state("gas", rho=rho0, u=z + 0.1, v=z, p=p0)
 
     sn = pops.System(n=n, L=1.0, periodic=True)
-    sn.set_poisson()
+    sn._set_poisson()
     sn._add_block("gas",
-                 pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+                 pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                            transport=pops.CompressibleFlux(), source=pops.NoSource(),
                            elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0)),
                  spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()))
@@ -128,25 +129,27 @@ try:
     chk(np.all(np.isfinite(dd)), "etat fini")
 
     print("== (2) 3-var isotherme + enable_roe : accepte, fini, cisaillement EXACT ==")
-    cm3 = iso3_dsl("iso3_roe", roe=True).compile(os.path.join(tmp, "iso3_roe.so"), INCLUDE,
-                                                 backend="production")
+    cm3 = iso3_dsl("iso3_roe", roe=True)._compile_for_runtime(
+        os.path.join(tmp, "iso3_roe.so"), INCLUDE, backend=pops.codegen.Production()
+    )
     s3 = pops.System(n=n, L=1.0, periodic=True)
-    s3.set_poisson()
+    s3._set_poisson()
     s3._add_equation("f", model=cm3, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
                     time=pops.Explicit())
     x = (np.arange(n) + 0.5) / n
     vshear = np.tile(0.3 * np.sin(2 * np.pi * x), (n, 1))
     s3.set_primitive_state("f", rho=1.0 + z, u=z, v=vshear)
-    before = np.asarray(s3.get_state("f")).copy()
+    before = np.asarray(s3._get_state("f")).copy()
     for _ in range(6):
         s3.step_cfl(0.3)
-    after = np.asarray(s3.get_state("f"))
+    after = np.asarray(s3._get_state("f"))
     dmax = float(np.max(np.abs(after - before)))
     chk(dmax == 0.0, f"cisaillement stationnaire preserve EXACTEMENT (dmax={dmax:.1e})")
 
     print("== (3) rejets explicites + garde-fous d'emission ==")
-    cm_no = iso3_dsl("iso3_noroe").compile(os.path.join(tmp, "iso3_noroe.so"), INCLUDE,
-                                           backend="production")
+    cm_no = iso3_dsl("iso3_noroe")._compile_for_runtime(
+        os.path.join(tmp, "iso3_noroe.so"), INCLUDE, backend=pops.codegen.Production()
+    )
     try:
         s = pops.System(n=16, L=1.0, periodic=True)
         s._add_equation("f", model=cm_no, spatial=pops.FiniteVolume(limiter=Minmod(),
@@ -155,8 +158,8 @@ try:
     except (ValueError, RuntimeError) as e:
         chk("roe" in str(e), f"rejet sans capability : {str(e)[:70]}")
     try:
-        iso3_dsl("iso3_nop", roe=True, p_decl=False).compile(
-            os.path.join(tmp, "iso3_nop.so"), INCLUDE, backend="production")
+        iso3_dsl("iso3_nop", roe=True, p_decl=False)._compile_for_runtime(
+            os.path.join(tmp, "iso3_nop.so"), INCLUDE, backend=pops.codegen.Production())
         chk(False, "enable_roe sans primitive 'p' aurait du lever a l'emission")
     except ValueError as e:
         chk("'p'" in str(e) or "pression" in str(e), f"sans 'p' rejete : {str(e)[:70]}")
@@ -169,7 +172,7 @@ try:
         mm.primitive_vars(a, b, c_)
         mm.conservative_from([a, b, c_])
         mm.enable_roe()
-        mm.compile(os.path.join(tmp, "noroles.so"), INCLUDE, backend="production")
+        mm._compile_for_runtime(os.path.join(tmp, "noroles.so"), INCLUDE, backend=pops.codegen.Production())
         chk(False, "enable_roe sans roles fluides aurait du lever a l'emission")
     except ValueError as e:
         chk("roles" in str(e), f"sans roles rejete : {str(e)[:70]}")

@@ -162,22 +162,22 @@ def check_numeric_parity():
     finals = {}
     try:
         # (1) REAL compile_aot at the current flags: a failure here (invalid flags) MUST be loud.
-        cm_aot = build_euler("euler_optflags_aot").compile(
-            os.path.join(tmp, "m_aot.so"), INCLUDE, backend="aot")
+        cm_aot = build_euler("euler_optflags_aot")._compile_for_runtime(
+            os.path.join(tmp, "m_aot.so"), INCLUDE, backend=pops.codegen.AOT())
         print("OK  compile_aot produces a .so at the current flags (accepted by the compiler)")
         # (2) end-to-end parity aot vs production (same bricks, same flags). Depends on the local env.
         try:
-            cm_prod = build_euler("euler_optflags_production").compile(
-                os.path.join(tmp, "m_prod.so"), INCLUDE, backend="production")
+            cm_prod = build_euler("euler_optflags_production")._compile_for_runtime(
+                os.path.join(tmp, "m_prod.so"), INCLUDE, backend=pops.codegen.Production())
             for backend, cm in (("aot", cm_aot), ("production", cm_prod)):
                 s = pops.System(n=n, periodic=True)
                 s._add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
                                                                    variables=Primitive()))
-                s.set_poisson(rhs="charge_density", solver="geometric_mg")
-                s.set_state("gas", initial_state(n))
+                s._set_poisson(rhs="charge_density", solver="geometric_mg")
+                s._set_state("gas", initial_state(n))
                 nsteps = s.run(t_end=0.02, cfl=0.4)
                 assert nsteps > 0, "%s: run did not advance" % backend
-                finals[backend] = np.array(s.get_state("gas"))
+                finals[backend] = np.array(s._get_state("gas"))
                 assert np.all(np.isfinite(finals[backend])), "%s: non-finite state" % backend
         except RuntimeError as e:
             if _is_local_env_limitation(e):

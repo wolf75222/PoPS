@@ -40,14 +40,14 @@ def chk(cond, label):
 
 def euler_spec():
     """Bloc natif compressible (4 var, pression -> capability HLLC/Roe canonique). Pas de compilateur."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
+    return pops.Model(state=pops.FluidState.compressible(gamma=GAMMA),
                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
                      elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def iso_spec():
     """Bloc natif isotherme (3 var, PAS de pression -> hllc/roe rejetes par capability)."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(), source=pops.NoSource(),
                      elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 

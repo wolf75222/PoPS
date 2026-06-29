@@ -131,7 +131,7 @@ def test_argument_guards(t):
     in_sf = P.scalar_field("in")
     out_sf = P.scalar_field("out")
     U = P.state("b")
-    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
+    R = P._legacy_rhs(state=U, flux=True, sources=["default"])
     try:
         P.rhs_jacvec(out_sf, in_sf, iterate=U, r0=R, c_dt=P.dt)  # not inside set_apply
     except ValueError as exc:
@@ -152,7 +152,7 @@ def _nonlinear_flux_model():
     compiled-program tests use. A real composed-brick model, never a fake engine."""
     import pops
 
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=0.5),
                      transport=pops.IsothermalFlux(),
                      source=pops.NoSource(),
                      elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
@@ -262,9 +262,9 @@ def _engine_rhs_oracle(sim, name):
     import numpy as np
 
     def rhs_of(U):
-        sim.set_state(name, np.ascontiguousarray(U))
+        sim._set_state(name, np.ascontiguousarray(U))
         sim.solve_fields()
-        return np.array(sim.eval_rhs(name))
+        return np.array(sim._eval_rhs(name))
 
     return rhs_of
 
@@ -280,7 +280,7 @@ def _run_section_b(t):
 
     probe = pops.System(n=8, L=1.0, periodic=True)
     if not hasattr(probe, "_install_program_so") or not hasattr(probe, "eval_rhs"):
-        print("-- (B) skipped: _pops lacks install_program / eval_rhs (rebuild _pops) --")
+        print("-- (B) skipped: _pops lacks _install_program_so / eval_rhs (rebuild _pops) --")
         return None
 
     n = 16
@@ -307,16 +307,16 @@ def _run_section_b(t):
         sim = pops.System(n=n, L=1.0, periodic=True)
         sim._add_equation("blk", _nonlinear_flux_model(),
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="euler"))
-        sim.set_poisson("charge_density", "geometric_mg")
-        sim.set_state("blk", init)
+                         time=pops.Explicit.euler())
+        sim._set_poisson("charge_density", "geometric_mg")
+        sim._set_state("blk", init)
         return sim
 
     def _step_one(order, compiled):
         sim = _make_sim()
         sim._install_program_so(compiled.so_path)
         sim.step(dt)
-        out = np.array(sim.get_state("blk"))
+        out = np.array(sim._get_state("blk"))
         try:  # the recorded ||F|| diagnostic (best-effort: optional if the binding is older)
             diag = sim.program_diagnostic("blk.bdf_residual")
             print("    recorded blk.bdf_residual = %.2e" % diag)

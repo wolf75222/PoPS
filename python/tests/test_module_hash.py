@@ -3,17 +3,16 @@
 module_hash folds the spaces, parameters, aux and -- per operator -- name, kind, signature,
 capabilities, requirements and a body identity. It is deterministic for an identical module and
 invalidated by an operator body / signature / capability / space change, so a compiled artifact
-keyed on it is rebuilt when the operator spec changes. The dsl codegen sensitivity to a formula
-change stays with the existing Model._model_hash; module_hash adds the operator-spec layer.
+keyed on it is rebuilt when the operator spec changes.
 Pure Python; skips if pops is not importable.
 """
 import sys
 
 try:
-    from pops import model
-    from pops.ir.expr import Const, Var
+    from pops import model, physics
+    from pops.ir.expr import Var
     from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
+    from pops.math import ddt, div
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_hash (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -140,14 +139,16 @@ def test_eigenvalues_change_invalidates():
     print("OK  an eigenvalue (wave-speed) change invalidates module_hash")
 
 
-def test_dsl_backed_module_hashes():
-    m = Model("ep")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    m.flux(x=[mx, mx, mx], y=[my, my, my])
-    m.source_term("electric", [Const(0.0), rho, rho])
+def test_physics_model_module_hashes():
+    m = physics.Model("ep")
+    U = m.state("U", components=["rho", "mx", "my"])
+    rho, mx, my = U
+    flux = m.flux("F", on=U, x=[mx, mx, mx], y=[my, my, my])
+    source = m.source("electric", on=U, value=[0.0 * rho, rho, rho])
+    m.rate("explicit_rate", ddt(U) == -div(flux) + source)
     h = m.module.module_hash()
     assert isinstance(h, str) and len(h) == 64
-    print("OK  a dsl-backed Module produces a module_hash")
+    print("OK  a physics.Model-backed Module produces a module_hash")
 
 
 def main():
@@ -158,7 +159,7 @@ def main():
     test_capability_and_space_change_invalidate()
     test_requirements_change_invalidates()
     test_eigenvalues_change_invalidates()
-    test_dsl_backed_module_hashes()
+    test_physics_model_module_hashes()
     print("OK  test_module_hash")
 
 

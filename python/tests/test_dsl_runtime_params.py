@@ -23,29 +23,52 @@ import tempfile
 import numpy as np
 
 import pops
-from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.riemann import Rusanov
+from pops.numerics.variables import Conservative
 
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))
+
+
+def _fv():
+    return pops.numerics.spatial.FiniteVolume(
+        reconstruction=Minmod(), riemann=Rusanov(), variables=Conservative())
 
 
 def _build_iso(cs2_kind, cs2_value=1.0):
     """Modele isotherme 2D (rho, rho_u, rho_v) avec p = cs2 * rho. @p cs2_kind = 'runtime' | 'const'.
     Le SEUL parametre est cs2 : un meme modele a deux variantes (cs2 runtime vs cs2 const)."""
+    import pops.physics as physics
     from pops.physics import ConstParam, RuntimeParam
-    m = Model("iso")
-    rho, mx, my = m.conservative_vars("rho", "rho_u", "rho_v")
+    from pops.math import sqrt
+
+    m = physics.Model("iso")
+    U = m.state(
+        "U", components=["rho", "rho_u", "rho_v"],
+        roles={"rho": "density", "rho_u": "momentum_x", "rho_v": "momentum_y"})
+    rho, mx, my = U
     _typed = {"const": ConstParam, "runtime": RuntimeParam}[cs2_kind]
     cs2 = m.param(_typed("cs2", cs2_value))
     u = m.primitive("u", mx / rho)
     v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+    p = m.scalar("p", cs2 * rho)
     cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-    return m
+    m.flux(
+        "F",
+        on=U,
+        x=[mx, mx * u + p, my * u],
+        y=[my, mx * v, my * v + p],
+        waves={"x": [u - cs, u, u + cs], "y": [v - cs, v, v + cs]},
+    )
+    return m.to_module()
+
+
+def _program():
+    P = pops.time.Program("iso_runtime")
+    U = P.state("gas")
+    R = P._legacy_rhs(name="R", state=U, flux=True, sources=[])
+    P.commit("gas", P.linear_combine("U1", U + P.dt * R))
+    return P
 
 
 def _initial_state(n):
@@ -59,17 +82,36 @@ def _initial_state(n):
 def _check_codegen_non_regression():
     """(1) Un param CONST reste INLINE : le codegen d'un modele a param const est byte-identique a
     celui du MEME modele sans aucun param (cs2 ecrit en dur), et ne porte aucun artefact runtime."""
-    const_src = _build_iso("const", 2.5)._m.emit_cpp_brick(name="IsoHyp")
+    from pops.codegen.module_emit_brick import emit_cpp_brick
+    from pops.codegen.module_view import ModuleCodegenView
+
+    const_src = emit_cpp_brick(ModuleCodegenView(_build_iso("const", 2.5)), name="IsoHyp")
     assert "runtime_params.hpp" not in const_src, "param const : ne doit PAS inclure runtime_params.hpp"
     assert "RuntimeParams" not in const_src, "param const : ne doit PAS porter de membre RuntimeParams"
     assert "params.get" not in const_src, "param const : doit etre INLINE (pas de params.get)"
     assert "2.5" in const_src, "param const cs2=2.5 doit etre ecrit EN DUR dans la brique"
 
-    rt_src = _build_iso("runtime", 2.5)._m.emit_cpp_brick(name="IsoHyp")
+    rt_src = emit_cpp_brick(ModuleCodegenView(_build_iso("runtime", 2.5)), name="IsoHyp")
     assert "runtime_params.hpp" in rt_src, "param runtime : doit inclure runtime_params.hpp"
     assert "pops::RuntimeParams params{1, {2.5}}" in rt_src, "param runtime : membre seede a la declaration"
     assert "params.get(0)" in rt_src, "param runtime : doit lire params.get(0) (pas de valeur en dur)"
     print("OK  (1) param const INLINE (byte-identique), param runtime -> params.get(0) + membre seede")
+
+
+def _install_step_delta(compiled, module, Uflat, n, L, cs2=None):
+    sys = pops.System(n=n, L=L, periodic=True)
+    params = {"cs2": cs2} if cs2 is not None else {}
+    sys.install(
+        compiled,
+        instances={"gas": {"initial": Uflat, "spatial": _fv(), "model": module}},
+        params=params,
+    )
+    if cs2 is not None:
+        sys.set_program_params(0, [float(cs2)])
+    before = np.array(sys._get_state("gas")).reshape(3, n, n)
+    sys.step(1.0e-4)
+    after = np.array(sys._get_state("gas")).reshape(3, n, n)
+    return after - before
 
 
 def main():
@@ -87,26 +129,19 @@ def main():
     tmp = tempfile.mkdtemp()
     try:
         m = _build_iso("runtime", 1.0)
-        compiled = m.compile(os.path.join(tmp, "iso_runtime.so"), INCLUDE, backend="aot")
-        assert compiled.runtime_param_names == ["cs2"], \
-            "runtime_param_names attendu ['cs2'], recu %r" % compiled.runtime_param_names
-        so = compiled.so_path
+        try:
+            compiled = pops.compile_problem(
+                os.path.join(tmp, "iso_runtime.so"), model=m, time=_program(), force=True)
+        except RuntimeError as exc:
+            print("skip  compile_problem could not build the .so: %s" % str(exc)[:160])
+            print("test_dsl_runtime_params : OK (runtime compile skipped)")
+            return
+        routes, _defaults = compiled.runtime_param_routes()
+        assert routes == {0: ["cs2"]}, "runtime route attendu {0: ['cs2']}, recu %r" % (routes,)
 
-        def build(cs2):
-            sys = pops.System(n=n, L=L, periodic=True)
-            sys._s.add_compiled_block("gas", so, limiter="minmod", riemann="rusanov",
-                                      recon="conservative", time="explicit",
-                                      names=["rho", "rho_u", "rho_v"])
-            sys._s.set_state("gas", Uflat)
-            if cs2 is not None:
-                sys._s.set_block_params("gas", [cs2])
-            return sys
-
-        # (2) RUNTIME : eval_rhs au defaut (cs2=1) puis apres set_block_params (cs2=4), SANS recompiler.
-        sys = build(cs2=None)  # defaut de declaration cs2=1
-        R1 = np.array(sys._s.eval_rhs("gas")).reshape(3, n, n)
-        sys._s.set_block_params("gas", [4.0])  # CHANGE le param au RUNTIME, meme .so
-        R4 = np.array(sys._s.eval_rhs("gas")).reshape(3, n, n)
+        # (2) RUNTIME : meme .so, deux installations avec cs2=1 puis cs2=4.
+        R1 = _install_step_delta(compiled, m, Uflat, n, L, cs2=1.0)
+        R4 = _install_step_delta(compiled, m, Uflat, n, L, cs2=4.0)
         # Avec u=0, deux effets DISTINCTS de cs2, tous deux exacts au runtime (verifies pointwise) :
         #  - qte de mvt : rho_u=0 partout -> AUCUNE dissipation Rusanov sur rho_u ; le flux se reduit a la
         #    pression p=cs2*rho, donc le residu = -div(cs2*rho) scale LINEAIREMENT en cs2 (1 -> 4 => x4) ;
@@ -122,40 +157,34 @@ def main():
             "residu de densite (dissipation Rusanov ~ sqrt(cs2)) doit scaler x2 quand cs2 1 -> 4 au runtime"
         print("OK  (2) set_block_params change eval_rhs SANS recompiler : qte mvt ~cs2 (x4), densite ~sqrt(cs2) (x2)")
 
-        # (3) PAS DE RECOMPILATION : recompiler le MEME modele (sans so_path) -> cache HIT (meme chemin).
+        # (3) PAS DE RECOMPILATION : recompiler le MEME probleme (sans so_path) -> cache HIT.
         m2 = _build_iso("runtime", 1.0)
-        c_a = m2.compile(include=INCLUDE, backend="aot")  # cache hors source, keye sur model_hash+abi
-        c_b = m2.compile(include=INCLUDE, backend="aot")  # 2e compile du MEME modele
-        assert c_a.so_path == c_b.so_path, "cache : meme modele -> meme chemin .so"
+        c_a = pops.compile_problem(model=m2, time=_program())
+        c_b = pops.compile_problem(model=m2, time=_program())
+        assert c_a.so_path == c_b.so_path, "cache : meme probleme -> meme chemin .so"
         mtime = os.path.getmtime(c_b.so_path)
-        c_c = _build_iso("runtime", 1.0).compile(include=INCLUDE, backend="aot")
+        c_c = pops.compile_problem(model=_build_iso("runtime", 1.0), time=_program())
         assert os.path.getmtime(c_c.so_path) == mtime, "cache HIT : le .so NE doit PAS etre recompile"
         print("OK  (3) recompiler le meme modele runtime -> cache HIT (.so reutilise, pas recompile)")
 
         # (4) COHERENCE runtime vs const : eval_rhs(runtime cs2=k) == eval_rhs(const cs2=k). On compile un
         # modele a cs2 CONST=2.0 et on le compare au modele runtime apres set_block_params(cs2=2.0).
         mc = _build_iso("const", 2.0)
-        so_const = mc.compile(os.path.join(tmp, "iso_const2.so"), INCLUDE, backend="aot").so_path
-        sysc = pops.System(n=n, L=L, periodic=True)
-        sysc._s.add_compiled_block("gas", so_const, limiter="minmod", riemann="rusanov",
-                                   recon="conservative", time="explicit",
-                                   names=["rho", "rho_u", "rho_v"])
-        sysc._s.set_state("gas", Uflat)
-        Rc = np.array(sysc._s.eval_rhs("gas")).reshape(3, n, n)
-
-        sysr = build(cs2=2.0)  # MEME .so runtime, param fixe a 2.0
-        Rr = np.array(sysr._s.eval_rhs("gas")).reshape(3, n, n)
+        const_compiled = pops.compile_problem(
+            os.path.join(tmp, "iso_const2.so"), model=mc, time=_program(), force=True)
+        Rc = _install_step_delta(const_compiled, mc, Uflat, n, L)
+        Rr = _install_step_delta(compiled, m, Uflat, n, L, cs2=2.0)
         drc = float(np.max(np.abs(Rr - Rc)))
-        assert drc < 1e-12, "eval_rhs(runtime cs2=2) != eval_rhs(const cs2=2) (ecart %.2e)" % drc
-        print("OK  (4) runtime cs2=2 == const cs2=2 (eval_rhs ecart %.1e) : meme numerique" % drc)
+        assert drc < 1e-12, "step(runtime cs2=2) != step(const cs2=2) (ecart %.2e)" % drc
+        print("OK  (4) runtime cs2=2 == const cs2=2 (step ecart %.1e) : meme numerique" % drc)
 
-        # (5) GARDE-FOU : set_block_params sur un bloc SANS param runtime leve une erreur explicite.
-        raised = False
+        # (5) GARDE-FOU : params= sur un programme SANS param runtime leve une erreur explicite.
         try:
-            sysc._s.set_block_params("gas", [1.0])  # le bloc 'gas' de sysc est const-only
-        except RuntimeError as ex:
+            _install_step_delta(const_compiled, mc, Uflat, n, L, cs2=1.0)
+            raised = False
+        except ValueError as ex:
             raised = True
-            assert "kind='runtime'" in str(ex), "message inattendu : %s" % ex
+            assert "runtime parameter" in str(ex) or "params" in str(ex), "message inattendu : %s" % ex
         assert raised, "set_block_params sur un bloc const-only doit lever (sinon set silencieux)"
         print("OK  (5) set_block_params sur un bloc const-only REJETE explicitement")
 

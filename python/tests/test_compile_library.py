@@ -15,6 +15,7 @@ pops = pytest.importorskip("pops")
 import types as _t
 _num = pytest.importorskip("pops.numerics")
 _desc = pytest.importorskip("pops.descriptors")
+_physics = pytest.importorskip("pops.physics")
 # Spec 5: the catalogs moved out of pops.lib. This alias maps the old pops.lib attribute surface
 # onto the new homes so the Spec-3 descriptor tests keep exercising the real (relocated) descriptors:
 # the solver descriptors are the ONE public home pops.solvers (the pops.lib.solvers shim was
@@ -41,6 +42,42 @@ lib = _t.SimpleNamespace(
 def _objects():
     """A small set of REAL pops.lib brick descriptors (no fakes)."""
     return [lib.solvers.GMRES(), lib.riemann.HLLC()]
+
+
+def _model():
+    from pops.math import div, ddt, sqrt
+
+    m = _physics.Model("library_consumer")
+    U = m.state("U", components=["rho", "mx", "my"],
+                roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+    rho, mx, my = U
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
+    cs2 = 0.5
+    c = sqrt(cs2)
+    p = m.scalar("p", cs2 * rho)
+    flux = m.flux(
+        "F",
+        on=U,
+        x=[mx, mx * u + p, my * u],
+        y=[my, mx * v, my * v + p],
+        waves={"x": [u - c, u, u + c], "y": [v - c, v, v + c]},
+    )
+    m.rate("explicit_rate", ddt(U) == -div(flux))
+    return m.to_module()
+
+
+def _forward_euler_program(module, name="consume"):
+    time = pytest.importorskip("pops.time")
+    P = time.Program(name)
+    P.bind_operators(module)
+    states = module.state_spaces()
+    operators = module.operator_registry()
+    dt = P.dt
+    U = P.state("ions", space=states["U"])
+    R = P.call(operators.get("explicit_rate"), U, name="R")
+    P.commit("ions", P.linear_combine("U1", U + dt * R))
+    return P
 
 
 def _toolchain_or_skip():
@@ -158,7 +195,7 @@ def test_non_production_backend_is_rejected():
 
 def test_string_backend_is_rejected():
     # Spec 5 sec.7: the public backend= takes a TYPED descriptor; a bare string is rejected and
-    # the error names the typed alternative (mirrors pops.compile).
+    # the error names the typed alternative (mirrors compile_problem).
     with pytest.raises(TypeError) as exc:
         pops.compile_library("lib.so", objects=_objects(), backend="production")
     assert "Production" in str(exc.value)
@@ -181,7 +218,7 @@ def test_compile_problem_rejects_a_corrupt_library():
     prog = time.Program("p")
     # A corrupt manifest is rejected at the libraries= read, BEFORE the Program is lowered.
     with pytest.raises((KeyError, ValueError, TypeError)):
-        compile_problem(time=prog, libraries=[{"name": "bad.so"}])
+        compile_problem(model=_model(), time=prog, libraries=[{"name": "bad.so"}])
 
 
 # --- real .so: emit + compile + read back (Kokkos-gated) -------------------
@@ -275,17 +312,14 @@ def test_compile_problem_consumes_a_compiled_library_so(tmp_path):
     cc, cflags, lflags = _toolchain_or_skip()
     pytest.importorskip("pops.codegen")
     from pops.codegen.compile import compile_problem
-    time = pytest.importorskip("pops.time")
     so = str(tmp_path / "consumed.so")
     pops.compile_library("consumed.so", objects=_objects(), emit=True, so_path=so)
-    # A real Forward-Euler Program so the problem lowers; libraries=[.so] is read + ABI-checked.
-    P = time.Program("consume")
-    dt = P.dt
-    U = P.state("ions")
-    R = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit("ions", P.linear_combine("U1", U + dt * R))
+    # A real operator-first Forward-Euler Program so the problem lowers; libraries=[.so] is read +
+    # ABI-checked.
+    module = _model()
+    P = _forward_euler_program(module)
     try:
-        compiled = compile_problem(time=P, libraries=[so])
+        compiled = compile_problem(model=module, time=P, libraries=[so])
     except RuntimeError as exc:  # .so compile of the PROBLEM failed (toolchain), not the library
         pytest.skip("compile_problem could not build the problem .so: %s" % str(exc)[:160])
     # The validated library manifest is carried on the handle, ABI-matched.

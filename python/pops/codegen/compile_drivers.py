@@ -1,11 +1,10 @@
 """pops.codegen.compile_drivers : the compiler-invocation + facade layer of the pipeline.
 
 Extracted verbatim from ``pops.codegen.compile`` so the model compile pipeline fits the
-Spec-4 file-size budget.  These drivers receive a ``HyperbolicModel`` (or a Program /
-Module) and invoke the C++ compiler on the source the ``compile_emit`` emitters produce:
+Spec-4 file-size budget.  These drivers receive a physical model object or a
+``Program``/``Module`` pair and invoke the C++ compiler on the source the emitters produce:
 ``compile_so`` / ``compile_aot`` / ``compile_native`` (one per backend), the
-``compile_or_jit`` mode dispatcher, the ``compile_model`` facade, ``_module_to_model``
-(lower a ``pops.model.Module`` to a dsl ``Model``) and ``compile_problem`` (compile a
+``compile_or_jit`` mode dispatcher, the ``compile_model`` facade and ``compile_problem`` (compile a
 ``pops.time.Program`` into a ``problem.so``).  ``pops.codegen.compile`` re-imports every
 name so its public surface is unchanged.
 
@@ -251,95 +250,6 @@ def compile_model(model, so_path=None, include=None, backend=None, name=None, cx
 
 
 # ---------------------------------------------------------------------------
-# _module_to_model -- lower a pops.model.Module to a dsl.Model
-# ---------------------------------------------------------------------------
-
-def _module_to_model(module):
-    """Lower a :class:`pops.model.Module` to a :class:`pops.dsl.Model`
-    (Spec 2, S2-11), reusing the dsl codegen engine -- a translation, NOT a
-    second backend.  The Module's typed operators carry dsl ``Expr`` bodies;
-    each is mapped to the dsl method of its kind.
-
-    Imported lazily by compile_problem to avoid a top-level physics import.
-    """
-    # Import the model facade + aux constants lazily here (called only at
-    # compile_problem time, not at import time).
-    from pops.physics.facade import Model  # noqa: PLC0415
-    from pops.physics.aux import AUX_CANONICAL  # noqa: PLC0415
-    states = module.state_spaces()
-    if len(states) != 1:
-        raise ValueError("compile_problem: a Module must declare exactly one StateSpace to compile "
-                         "(got %s)" % sorted(states))
-    state = next(iter(states.values()))
-    m = Model(module.name)
-    _spec_role = {"density": "Density", "momentum_x": "MomentumX", "momentum_y": "MomentumY",
-                  "momentum_z": "MomentumZ", "energy": "Energy", "pressure": "Pressure",
-                  "velocity_x": "VelocityX", "velocity_y": "VelocityY", "velocity_z": "VelocityZ",
-                  "temperature": "Temperature"}
-    roles = None
-    if state.roles:
-        roles = [_spec_role.get(state.roles.get(c)) for c in state.components]
-        if all(r is None for r in roles):
-            roles = None
-    cvars = m.conservative_vars(*state.components, roles=roles)
-    m.primitive_vars(*cvars)
-    m.conservative_from(list(cvars))
-    for p in module.params().values():
-        m.param(p.name, p.default)  # (name, value) shorthand -> a const param (no kind= string)
-    declared = set()
-
-    def _declare_aux(nm):
-        if nm in declared:
-            return
-        declared.add(nm)
-        if nm in AUX_CANONICAL:
-            m.aux(nm)
-        else:
-            m.aux_field(nm)
-
-    for fs in module.field_spaces().values():
-        for comp in fs.components:
-            _declare_aux(comp)
-    for a in module.aux().values():
-        _declare_aux(a.name)
-    if module._eigenvalues is not None:
-        m.eigenvalues(x=module._eigenvalues["x"], y=module._eigenvalues["y"])
-    _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
-                      "projection")
-    n_field_ops = 0
-    for op in module.operator_registry():
-        body = op.body
-        if op.kind in _CODEGEN_KINDS and (body is None or callable(body)):
-            raise ValueError(
-                "compile_problem: operator %r (%s) has no IR body; a compilable Module operator "
-                "needs an expression body (Module.operator(..., expr=...))" % (op.name, op.kind))
-        if op.kind == "grid_operator":
-            if op.name in ("flux", "flux_default"):
-                m.flux(x=body["x"], y=body["y"])
-            else:
-                m.flux_term(op.name, x=body["x"], y=body["y"])
-        elif op.kind == "local_source":
-            m.source_term(op.name, body)
-        elif op.kind == "local_linear_operator":
-            m.linear_source(op.name, body)
-        elif op.kind == "field_operator":
-            n_field_ops += 1
-            if n_field_ops > 1:
-                raise ValueError(
-                    "compile_problem: a Module currently supports one field_operator (the default "
-                    "elliptic solve); multiple solved fields are deferred (operator %r)" % op.name)
-            m.elliptic_rhs(body)
-        elif op.kind == "local_rate":
-            low = op.lowering
-            m.rate_operator(op.name, flux=low.get("flux", True),
-                            sources=low.get("sources"), fluxes=low.get("fluxes"),
-                            _allow_string_sources=True)
-        elif op.kind == "projection":
-            m.projection(body)
-    return m
-
-
-# ---------------------------------------------------------------------------
 # compile_problem -- compile a model + pops.time.Program into a problem.so
 # ---------------------------------------------------------------------------
 
@@ -367,12 +277,13 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
     ``layout=None`` compile emits the uniform ``System`` ABI for compact scripts.
 
     The produced ``.so`` carries the GeneratedProgram plus GeneratedModule metadata and is later
-    installed by ``sim.install(compiled, ...)`` / ``pops.bind(compiled, ...)``.
+    installed by ``sim.install(compiled, ...)``.
     """
     import hashlib
     import tempfile
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
+    from pops.model import Module
 
     # ADDITIVE (Spec 5 sec.12.4, #47-48): resolve the codegen POPS_* environment ONCE. An explicit
     # argument wins over the env -- debug=True forces keep-generated regardless of POPS_KEEP_GENERATED,
@@ -401,13 +312,19 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
             "compile_problem: model is required; compiling a time Program without a physical "
             "model is no longer supported")
 
-    # A pure operator-first Module lowers to a dsl.Model via the shared codegen.
-    try:
-        from pops import model as _model_pkg
-        if isinstance(model, _model_pkg.Module):
-            model = _module_to_model(model)
-    except ImportError:
-        pass  # pops.model unavailable; carry model as-is
+    if not isinstance(model, Module) and hasattr(model, "_m"):
+        raise TypeError(
+            "compile_problem: legacy physics/codegen facades carrying private _m are not "
+            "accepted. Author with pops.physics.Model and pass model=m.to_module(), or build a "
+            "pops.model.Module directly.")
+    if not isinstance(model, Module) and hasattr(model, "to_module"):
+        model = model.to_module()
+    if not isinstance(model, Module):
+        raise TypeError(
+            "compile_problem: model must be a pops.model.Module (or a modern "
+            "pops.physics.Model with to_module()). Legacy physics/codegen facades are not "
+            "accepted; build a Module and compile that.")
+
     if model is not None and hasattr(model, "check"):
         model.check()
 

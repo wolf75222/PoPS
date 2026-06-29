@@ -108,7 +108,7 @@ def make_sys(so, adder):
     else:
         s._s.add_compiled_block("toy", so, limiter="minmod", riemann="rusanov",
                                 recon="conservative", time="explicit", substeps=1)
-    s.set_state("toy", initial_state(N))
+    s._set_state("toy", initial_state(N))
     return s
 
 
@@ -118,7 +118,7 @@ def run_states(so, adder, nsteps=NSTEPS):
     out = []
     for _ in range(nsteps):
         s.step(DT)
-        out.append(np.array(s.get_state("toy")).reshape(2, N, N))
+        out.append(np.array(s._get_state("toy")).reshape(2, N, N))
     return out
 
 
@@ -129,9 +129,9 @@ def reference_states(so_nohook, adder, m_clamp, nsteps=NSTEPS):
     cur = initial_state(N)
     out = []
     for _ in range(nsteps):
-        s.set_state("toy", cur)
+        s._set_state("toy", cur)
         s.step(DT)
-        cur = m_clamp.projection_value(np.array(s.get_state("toy")).reshape(2, N, N))
+        cur = m_clamp.projection_value(np.array(s._get_state("toy")).reshape(2, N, N))
         out.append(cur)
     return out
 
@@ -144,7 +144,7 @@ def run_states_aux(so, adder, w, nsteps=NSTEPS):
     out = []
     for _ in range(nsteps):
         s.step(DT)
-        out.append(np.array(s.get_state("toy")).reshape(2, N, N))
+        out.append(np.array(s._get_state("toy")).reshape(2, N, N))
     return out
 
 
@@ -156,9 +156,9 @@ def reference_states_aux(so_nohook, adder, m_aux, w, nsteps=NSTEPS):
     cur = initial_state(N)
     out = []
     for _ in range(nsteps):
-        s.set_state("toy", cur)
+        s._set_state("toy", cur)
         s.step(DT)
-        cur = m_aux.projection_value(np.array(s.get_state("toy")).reshape(2, N, N),
+        cur = m_aux.projection_value(np.array(s._get_state("toy")).reshape(2, N, N),
                                      aux={"wfloor": np.asarray(w, dtype=float)})
         out.append(cur)
     return out
@@ -197,8 +197,10 @@ def main():
         m_clamp = build_model("clamp", "clamp")
 
         print("== (2) no-default-change (production) : sans hook == hook identite ==")
-        so_none = m_none.compile(os.path.join(tmp, "toy_none.so"), INCLUDE, backend="production")
-        so_id = m_id.compile(os.path.join(tmp, "toy_id.so"), INCLUDE, backend="production")
+        so_none = m_none.compile(os.path.join(tmp, "toy_none.so"), INCLUDE,
+                                 backend=pops.codegen.Production())
+        so_id = m_id.compile(os.path.join(tmp, "toy_id.so"), INCLUDE,
+                             backend=pops.codegen.Production())
         st_none = run_states(so_none, "native")
         st_id = run_states(so_id, "native")
         d = max(float(np.max(np.abs(a - b))) for a, b in zip(st_none, st_id))
@@ -206,7 +208,7 @@ def main():
 
         print("== (3) semantique post-pas (production) : clamp == reference numpy ==")
         so_clamp = m_clamp.compile(os.path.join(tmp, "toy_clamp.so"), INCLUDE,
-                                   backend="production")
+                                   backend=pops.codegen.Production())
         st_clamp = run_states(so_clamp, "native")
         st_ref = reference_states(so_none, "native", m_clamp)
         for k, (a, b) in enumerate(zip(st_clamp, st_ref)):
@@ -224,8 +226,10 @@ def main():
         chk(float(st_clamp[-1][0].min()) >= 0.0, "positivite q0 >= 0 apres le dernier pas")
 
         print("== (4) meme semantique sur le backend aot (add_compiled_block) ==")
-        so_none_a = m_none.compile(os.path.join(tmp, "toy_none_aot.so"), INCLUDE, backend="aot")
-        so_clamp_a = m_clamp.compile(os.path.join(tmp, "toy_clamp_aot.so"), INCLUDE, backend="aot")
+        so_none_a = m_none.compile(os.path.join(tmp, "toy_none_aot.so"), INCLUDE,
+                                   backend=pops.codegen.AOT())
+        so_clamp_a = m_clamp.compile(os.path.join(tmp, "toy_clamp_aot.so"), INCLUDE,
+                                     backend=pops.codegen.AOT())
         st_clamp_a = run_states(so_clamp_a, "aot")
         st_ref_a = reference_states(so_none_a, "aot", m_clamp)
         d = max(float(np.max(np.abs(a - b))) for a, b in zip(st_clamp_a, st_ref_a))
@@ -233,14 +237,14 @@ def main():
             "aot : etat post-pas == reference numpy a chaque pas (ecart max %.2e)" % d)
 
         print("== (5) gardes ==")
-        msg = err_msg(lambda: m_clamp.compile(os.path.join(tmp, "toy_proto.so"), INCLUDE,
-                                              backend="prototype"))
+        msg = err_msg(lambda: m_clamp.compile(
+            os.path.join(tmp, "toy_proto.so"), INCLUDE, backend=pops.codegen.JIT()))
         chk("projection" in msg and "prototype" in msg,
             "backend prototype rejete : %s" % msg[:80])
         # ADC-312 : la projection ponctuelle est desormais cablee sur AmrSystem (helper par niveau
         # apres reflux). add_native_block d'un loader avec projection n'est donc PLUS rejete.
         so_amr = m_clamp.compile(os.path.join(tmp, "toy_amr.so"), INCLUDE,
-                                 backend="production", target="amr_system")
+                                 backend=pops.codegen.Production(), target="amr_system")
         s_amr = pops.AmrSystem(n=N, L=L, periodic=True)
         amr_err = err_msg(lambda: s_amr._s.add_native_block(
             "toy", so_amr, limiter="minmod", riemann="rusanov", recon="conservative",
@@ -261,8 +265,10 @@ def main():
         none_so = {"native": so_none, "aot": so_none_a}        # transport sans hook (ne lit pas W)
         none_st = {"native": st_none, "aot": run_states(so_none_a, "aot")}
         for backend, adder in (("production", "native"), ("aot", "aot")):
+            backend_desc = (pops.codegen.Production() if backend == "production"
+                            else pops.codegen.AOT())
             so_aux = m_aux.compile(os.path.join(tmp, "toy_aux_%s.so" % backend), INCLUDE,
-                                   backend=backend)
+                                   backend=backend_desc)
             st_aux = run_states_aux(so_aux, adder, W)
             st_ref = reference_states_aux(none_so[adder], adder, m_aux, W)
             d = max(float(np.max(np.abs(a - b))) for a, b in zip(st_aux, st_ref))

@@ -51,7 +51,7 @@ def chk(cond, label):
 
 def iso_spec():
     """Native isothermal block (3 var, Density role at component 0). No compiler required."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=CS2), transport=pops.IsothermalFlux(),
+    return pops.Model(state=pops.FluidState.isothermal(cs2=CS2), transport=pops.IsothermalFlux(),
                      source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
 
 

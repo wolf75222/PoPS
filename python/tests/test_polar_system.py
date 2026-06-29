@@ -47,8 +47,8 @@ def test_polar_system_step_and_cfl_conserve_mass():
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+        spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
+    sim._set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
     sim.set_density("ne", _annular_density(nr, nth, rmin, rmax))
 
     m0 = sim.mass("ne")

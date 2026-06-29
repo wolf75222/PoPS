@@ -38,7 +38,7 @@ def build_exchange(k):
     nb = src.block("beta").role("density")
     kp = src.param("Kx", k)
     src.add_pair("alpha", "beta", role="density", expr=kp * na * nb)
-    return src.compile(backend="production", verify_conservation=True)
+    return src.compile(backend=pops.codegen.Production(), verify_conservation=True)
 
 
 def density_block(n0=1.0):
@@ -50,9 +50,9 @@ def density_block(n0=1.0):
 
 def make_system(n, na0, nb0):
     sim = pops.System(n=n, L=1.0, periodic=True)
-    sim._add_block("alpha", model=density_block(n0=na0), spatial=pops.Spatial(none=True))
-    sim._add_block("beta", model=density_block(n0=nb0), spatial=pops.Spatial(none=True))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+    sim._add_block("alpha", model=density_block(n0=na0), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder()))
+    sim._add_block("beta", model=density_block(n0=nb0), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.FirstOrder()))
+    sim._set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density("alpha", np.full((n, n), na0))
     sim.set_density("beta", np.full((n, n), nb0))
     return sim
@@ -140,14 +140,14 @@ def main():
     bad.add("beta", role="density", expr=-k2 * na2 * nb2)
     raised = False
     try:
-        bad.compile(backend="production", verify_conservation=True)
+        bad.compile(backend=pops.codegen.Production(), verify_conservation=True)
     except ValueError as e:
         raised = "verify_conservation" in str(e).lower()
     chk(raised, "verify_conservation attrape le couplage manuel non conservatif", fails)
     # le MEME couplage SANS le flag reste licite (retro-compat : opt-in)
     ok_without_flag = True
     try:
-        bad.compile(backend="production")  # defaut verify_conservation=False
+        bad.compile(backend=pops.codegen.Production())  # defaut verify_conservation=False
     except Exception:
         ok_without_flag = False
     chk(ok_without_flag, "sans le flag, le couplage non conservatif compile (opt-in)", fails)

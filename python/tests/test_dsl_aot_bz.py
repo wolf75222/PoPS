@@ -51,13 +51,13 @@ def main():
         # add_compiled_block : pops_compiled_naux()=4 -> ensure_aux_width(4)
         sim.add_compiled_block("bz", so, limiter="none", riemann="rusanov",
                                recon="conservative", time="explicit", names=["n"])
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
+        sim._set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_density("bz", np.ones((n, n)))
         sim.set_magnetic_field(c * np.ones((n, n)))  # peuple le canal B_z partage
         sim.solve_fields()
 
         # eval_rhs = -div F + S ; flux nul -> R = source = B_z n = c
-        R = np.array(sim.eval_rhs("bz"))
+        R = np.array(sim._eval_rhs("bz"))
         err = float(np.max(np.abs(R - c)))
         print("  AOT B_z : eval_rhs, max|R - B_z| = %.2e" % err)
         assert err < 1e-12, "le bloc compile ne lit pas B_z (ecart %.2e)" % err
@@ -65,7 +65,7 @@ def main():
         # controle : B_z = 0 -> residu nul (la source ne contribue plus).
         sim.set_magnetic_field(np.zeros((n, n)))
         sim.solve_fields()
-        R0 = np.array(sim.eval_rhs("bz"))
+        R0 = np.array(sim._eval_rhs("bz"))
         a0 = float(np.max(np.abs(R0)))
         print("  controle B_z=0 : max|R| = %.2e" % a0)
         assert a0 < 1e-12, "residu non nul a B_z=0 (%.2e)" % a0
