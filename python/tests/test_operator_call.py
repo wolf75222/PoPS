@@ -13,6 +13,8 @@ try:
     from pops.ir.expr import Const, Var
     from pops import physics
     from pops.math import laplacian
+    from pops.model import OperatorHandle
+    from pops.codegen.program_emit_module_ops import operator_function_name
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_call (pops unavailable: %s)" % exc)
@@ -54,22 +56,41 @@ def _emit(build, m, name="prog"):
     return _program(build, m, name).emit_cpp_program(model=m)
 
 
+def _state(P, m, block="plasma"):
+    return P.state("U", block=block, space=m.state_spaces()["U"]).n
+
+
+def _handle(m, name):
+    op = m.operator_registry().get(name)
+    return OperatorHandle(op.name, kind=op.kind)
+
+
+def _generated_call(m, name):
+    reg = m.operator_registry()
+    return "GeneratedModule::Operators::%s" % operator_function_name(reg.id_of(name), name)
+
+
 def test_call_predictor_records_operator_nodes_and_lowers():
     """A predictor step written with P.call keeps typed call nodes in IR and lowers them."""
     m = build_model()
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
-        f = P._call("fields_from_state", U)
-        R = P._call("explicit_rhs", U, f)
+        U = _state(P, _m)
+        f = P.call(_handle(_m, "fields_from_state"), U)
+        R = P.call(_handle(_m, "explicit_rhs"), U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * R))
 
     P = _program(opfirst, m)
     assert [v.op for v in P._values].count("call") == 2
+    for v in P._values:
+        if v.op == "call":
+            assert set(v.attrs) == {"operator", "operator_id", "output_type"}
     src = P.emit_cpp_program(model=m)
-    assert "ctx.solve_fields_from_state(0," in src
-    assert "ctx.neg_div_flux_default_into(0," in src
+    assert "namespace GeneratedModule" in src
+    assert "GeneratedModule::Operators::op_" in src
+    assert _generated_call(m, "fields_from_state") + "(ctx, 0," in src
+    assert _generated_call(m, "explicit_rhs") + "(ctx, 0," in src
     assert "electric" in src
     print("OK  P.call(fields_from_state)+P.call(explicit_rhs) records call and lowers")
 
@@ -79,16 +100,17 @@ def test_call_lowers_source_and_flux():
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
-        f = P._call("fields_from_state", U)
-        s = P._call("electric", U, f)
-        flux = P._call("flux", U)
+        U = _state(P, _m)
+        f = P.call(_handle(_m, "fields_from_state"), U)
+        s = P.call(_handle(_m, "electric"), U, f)
+        flux = P.call(_handle(_m, "flux"), U)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s + P.dt * flux))
 
     P = _program(opfirst, m)
     assert [v.op for v in P._values].count("call") == 3
     src = P.emit_cpp_program(model=m)
-    assert "ctx.neg_div_flux_default_into(0," in src
+    assert _generated_call(m, "flux") + "(ctx, 0," in src
+    assert _generated_call(m, "electric") + "(ctx, 0," in src
     assert "electric" in src
     print("OK  P.call(electric)/P.call(flux_default) lowers to source / flux-only C++")
 
@@ -112,14 +134,16 @@ def test_call_default_source():
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
-        f = P._call("fields_from_state", U)
-        s = P._call("source_default", U, f)
+        U = _state(P, _m)
+        f = P.call(_handle(_m, "fields_from_state"), U)
+        s = P.call(_handle(_m, "source_default"), U, f)
         P.commit("plasma", P.linear_combine("u1", U + P.dt * s))
 
     P = _program(opfirst, m)
     assert [v.op for v in P._values].count("call") == 2
-    assert "ctx.source_default_into(0," in P.emit_cpp_program(model=m)
+    src = P.emit_cpp_program(model=m)
+    assert _generated_call(m, "source_default") + "(ctx, 0," in src
+    assert "ctx.source_default_into(b, state, out);" in src
     print("OK  P.call(source_default) lowers to default-source-only C++")
 
 
@@ -128,37 +152,38 @@ def test_call_linear_operator_matches_solve_local_linear():
 
     def opfirst(P, _m):
         P.bind_operators(_m)
-        U = P.state("plasma")
-        f = P._call("fields_from_state", U)
-        L = P._call("lorentz", f)
+        U = _state(P, _m)
+        f = P.call(_handle(_m, "fields_from_state"), U)
+        L = P.call(_handle(_m, "lorentz"), f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=U, fields=f)
         P.commit("plasma", U1)
 
     P = _program(opfirst, m)
-    assert any(v.op == "call" and v.attrs["kind"] == "local_linear_operator"
-               for v in P._values)
+    assert any(v.op == "call" and v.vtype == "operator"
+               and "kind" not in v.attrs for v in P._values)
     src = P.emit_cpp_program(model=m)
-    assert "solve_local_linear" in src or "lorentz" in src
+    assert "/* local_linear_operator" not in src
+    assert _generated_call(m, "lorentz") + "(ctx, 0," in src
     print("OK  P.call(lorentz) operator drives solve_local_linear")
 
 
 def test_call_typing_errors():
     m = build_model()
     P = adctime.Program("p").bind_operators(m)
-    U = P.state("plasma")
-    f = P._call("fields_from_state", U)
+    U = _state(P, m)
+    f = P.call(_handle(m, "fields_from_state"), U)
 
     # No bind -> clear error.
     P2 = adctime.Program("p2")
     try:
-        P2._call("electric", P2.state("plasma"))
+        P2.call(_handle(m, "electric"), P2.state("U", block="plasma").n)
         raise AssertionError("expected an error calling without bound operators")
     except ValueError as exc:
         assert "no operators bound" in str(exc)
 
     # Unknown operator -> clear KeyError.
     try:
-        P._call("does_not_exist", U)
+        P.call(OperatorHandle("does_not_exist", kind="local_source"), U)
         raise AssertionError("expected KeyError for an unknown operator")
     except KeyError as exc:
         assert "unknown operator" in str(exc)

@@ -165,7 +165,7 @@ class _ProgramCore(_ProgramConstants):
         self._check_call_args(op, args)
         if schedule is not None:
             self._validate_schedule(op, schedule)
-        result = self._lower_call(op, operator_name, args, name)
+        result = self._lower_call(op, self._registry.id_of(operator_name), operator_name, args, name)
         # A coupled_rate has no single output Value (it returns a _CoupledResult): its per-block
         # spaces are tagged inside _lower_coupled_rate, and a schedule on the whole bundle is not
         # meaningful yet -- reject it with a clear message rather than leaking an AttributeError.
@@ -213,61 +213,30 @@ class _ProgramCore(_ProgramConstants):
                 "m.operator_capabilities(%r, cacheable=True)"
                 % (op.name, schedule.policy, op.name))
 
-    def _lower_call(self, op, operator_name, args, name):
-        # A typed call is a first-class IR node. The codegen owns the final route to the C++ runtime
-        # operation, so the Program does not re-enter the old public-style field/RHS builders.
-        kind = op.kind
-        if kind == "field_operator":
-            # A multi-input field operator is the coupled multi-block field solve: the operator name
-            # labels the abstract field context, not a second named elliptic field. Only a single-state
-            # field operator whose name differs from the default maps to the named-elliptic overload.
-            field = None if operator_name == "fields_from_state" or len(args) > 1 else operator_name
-            return self._new("fields", "call", args,
-                             {"operator": operator_name, "kind": kind, "field": field},
-                             name, args[0].block)
-        if kind == "local_source":
-            fields = args[1] if len(args) > 1 else None
-            if operator_name == "source_default":
-                return self._new("rhs", "call",
-                                 (args[0], fields) if fields is not None else (args[0],),
-                                 {"operator": operator_name, "kind": kind,
-                                  "flux": False, "sources": ["default"], "fluxes": None},
-                                 name, args[0].block)
-            return self._new("rhs", "call",
-                             (args[0], fields) if fields is not None else (args[0],),
-                             {"operator": operator_name, "kind": kind, "source": operator_name},
-                             name, args[0].block)
-        if kind in ("grid_operator", "local_rate"):
-            fields = args[1] if len(args) > 1 else None
-            if kind == "grid_operator":
-                is_default_flux = op.capabilities.get("default") or operator_name in (
-                    "flux_default", "flux")
-                fluxes = None if is_default_flux else [operator_name]
-                return self._new("rhs", "call",
-                                 (args[0], fields) if fields is not None else (args[0],),
-                                 {"operator": operator_name, "kind": kind, "flux": True,
-                                  "sources": [], "fluxes": fluxes},
-                                 name, args[0].block)
-            low = op.lowering
-            return self._new("rhs", "call",
-                             (args[0], fields) if fields is not None else (args[0],),
-                             {"operator": operator_name, "kind": kind,
-                              "flux": low.get("flux", True), "sources": low.get("sources"),
-                              "fluxes": low.get("fluxes")},
-                             name, args[0].block)
-        if kind == "local_linear_operator":
-            return self._new("operator", "call", args,
-                             {"operator": operator_name, "kind": kind,
-                              "linear_source": operator_name},
-                             name or operator_name, args[0].block if args else None)
-        if kind == "projection":
-            return self._new("state", "call", (args[0],),
-                             {"operator": operator_name, "kind": kind},
-                             name, args[0].block)
-        if kind == "coupled_rate":
+    def _lower_call(self, op, operator_id, operator_name, args, name):
+        # A typed call is a first-class IR node: operator id + arguments + output type.  The Program
+        # does not lower by operator kind here; GeneratedModule::Operators owns the numerical route.
+        from pops.model import FieldSpace, LocalLinearOperator, RateBundle, RateSpace, StateSpace
+        output = op.signature.output
+        attrs = {
+            "operator": operator_name,
+            "operator_id": int(operator_id),
+            "output_type": repr(output),
+        }
+        block = args[0].block if args else None
+        if isinstance(output, FieldSpace):
+            return self._new("fields", "call", args, attrs, name, block)
+        if isinstance(output, RateSpace):
+            return self._new("rhs", "call", args, attrs, name, block)
+        if isinstance(output, LocalLinearOperator):
+            return self._new("operator", "call", args, attrs, name or operator_name, block)
+        if isinstance(output, StateSpace):
+            return self._new("state", "call", args, attrs, name, block)
+        if isinstance(output, RateBundle):
             return self._lower_coupled_rate(op, operator_name, args, name)
         raise NotImplementedError(
-            "P.call: operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
+            "P.call: operator %r output type %r is not yet lowerable"
+            % (operator_name, output))
 
     def _lower_coupled_rate(self, op, operator_name, args, name):
         """Lower a coupled_rate operator to a coupled node plus one per-block rate projection.

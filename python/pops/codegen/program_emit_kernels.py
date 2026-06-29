@@ -218,7 +218,8 @@ def _kernel_open(out_var, state_var, params_block=None):
     if params_block is not None:
         # Read the per-block RuntimeParams ONCE per fab (host scope), captured by value into the device
         # lambda below (trivially copyable, get() is POPS_HD): the no-recompile runtime-param read.
-        lines.append("  const pops::RuntimeParams params = ctx.program_params(%d);" % params_block)
+        lines.append("  const pops::RuntimeParams params = ctx.program_params(%s);"
+                     % str(params_block))
     lines.append(
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % out_var)
     return lines
@@ -306,6 +307,7 @@ extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 
 {block_names}
 {module_metadata}
+{module_operators}
 {program_params}
 extern "C" void pops_install_program(void* sys) {{
   pops::runtime::program::ProgramContext ctx(sys);

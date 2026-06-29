@@ -154,7 +154,7 @@ def _model_metadata(compiled):
     return cons, n_cons, params, aux_names, n_aux, state_space
 
 
-def _solver_arguments(program):
+def _solver_arguments(program, model=None):
     """Elliptic field solves the Program performs (field name -> {problem, solver}).
 
     Read from the lowered IR: every ``solve_fields`` / ``solve_fields_from_blocks`` node names an
@@ -163,10 +163,20 @@ def _solver_arguments(program):
     cf. ``System._install_solver``). We do not know the chosen solver brick at compile time -- it is
     a BIND input -- so ``solver`` is reported as ``None`` ("to be supplied")."""
     solvers = {}
+    registry = model.operator_registry() if model is not None and hasattr(model, "operator_registry") else None
     for value in getattr(program, "_values", []):
         op = value.op
-        if op == "call" and value.attrs.get("kind") == "field_operator":
-            field = value.attrs.get("field") or "phi"
+        if op == "call" and value.vtype == "fields":
+            field = "phi"
+            if registry is not None:
+                try:
+                    operator = registry.get(value.attrs.get("operator"))
+                    if not (operator.capabilities.get("default")
+                            or operator.name in ("fields", "fields_from_state")
+                            or len(operator.signature.inputs) > 1):
+                        field = operator.name
+                except KeyError:
+                    pass
             solvers[field] = {"problem": "elliptic", "solver": None}
         elif op in ("solve_fields", "solve_fields_from_blocks"):
             field = value.name or "phi"
@@ -221,7 +231,8 @@ def build_arguments(compiled):
 
     aux_args = {name: {"layout": "cell", "required": True} for name in aux_names}
 
-    solver_args = _solver_arguments(program) if program is not None else {}
+    compiled_model = getattr(compiled, "program_model", None) or getattr(compiled, "model", None)
+    solver_args = _solver_arguments(program, compiled_model) if program is not None else {}
 
     outputs = {}
     if program is not None:

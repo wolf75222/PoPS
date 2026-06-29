@@ -79,8 +79,8 @@ def _two_fluid_handwritten():
 def _two_fluid_program(mod, e_space, i_space):
     """A forward-Euler collision step over the two-fluid module (board or hand-written)."""
     P = adctime.Program("two_fluid_collision").bind_operators(mod)
-    e_n = P.state("electron_state", space=e_space)
-    i_n = P.state("ion_state", space=i_space)
+    e_n = P.state("U", block="electron_state", space=e_space).n
+    i_n = P.state("U", block="ion_state", space=i_space).n
     C = P.call(mod.operator_registry().get("collision"), e_n, i_n)
     P.commit_many({"electron_state": P.linear_combine("e1", e_n + P.dt * C["electron_state"]),
                    "ion_state": P.linear_combine("i1", i_n + P.dt * C["ion_state"])})
@@ -202,8 +202,8 @@ def test_wrong_species_rate_in_affine_combine_errors():
     m.coupled_rate("collision", inputs=[e, i],
                    outputs={e: [i["ni"] - e["ne"]], i: [e["ne"] - i["ni"]]})
     P = adctime.Program("s").bind_operators(m.module)
-    e_n = P.state("electrons", space=e.space)
-    i_n = P.state("ions", space=i.space)
+    e_n = P.state("U", block="electrons", space=e.space).n
+    i_n = P.state("U", block="ions", space=i.space).n
     C = P.call(m.module.operator_registry().get("collision"), e_n, i_n)
     with pytest.raises(ValueError, match="different state spaces"):
         P.linear_combine("bad", e_n + P.dt * C["ions"])  # electron state + ion rate
@@ -261,16 +261,17 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     mod = m.module
     P = adctime.Program("ms_fields").bind_operators(mod)
     sp = mod.state_spaces()
-    e_n = P.state("electrons", space=sp["electrons"])
-    i_n = P.state("ions", space=sp["ions"])
-    n_n = P.state("neutrals", space=sp["neutrals"])
+    e_n = P.state("electrons", block="electrons", space=sp["electrons"]).n
+    i_n = P.state("ions", block="ions", space=sp["ions"]).n
+    n_n = P.state("neutrals", block="neutrals", space=sp["neutrals"]).n
     f = P.call(mod.operator_registry().get("fields"), e_n, i_n, n_n)
     assert f.op == "call", "field solve remains an operator-first Program node"
-    assert f.attrs["kind"] == "field_operator"
-    assert f.attrs["field"] is None, "multi-input field op must not be treated as a named elliptic field"
+    assert set(f.attrs) == {"operator", "operator_id", "output_type"}
+    assert f.attrs["operator"] == "fields"
     assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
     P.commit_many({"electrons": e_n, "ions": i_n, "neutrals": n_n})
     src = P.emit_cpp_program(model=None)
+    assert "GeneratedModule::Operators::op_" in src
     assert "ctx.solve_fields_from_blocks(" in src, "codegen routes the field op to the coupled solve"
 
 

@@ -26,7 +26,7 @@ class _ProgramLocal(_ProgramConstants):
             raise ValueError("solve_local_linear: fields must be a FieldContext from solve_fields")
         op_value, l_coeff = operator.terms[0]
         self._check_operator_state(op_value, rhs, "solve_local_linear")
-        lname = op_value.attrs["linear_source"]
+        lname = self._linear_source_name(op_value, "solve_local_linear")
         a = (-l_coeff).as_dict()  # operator = I - a*L, so the L term carries the coefficient -a
         inputs = (rhs, op_value, fields) if fields is not None else (rhs, op_value)
         out = self._new("state", "solve_local_linear", inputs,
@@ -124,9 +124,8 @@ class _ProgramLocal(_ProgramConstants):
             return operator
         if isinstance(operator, Value) and operator.op == "linear_source":
             return operator.attrs["linear_source"]
-        if (isinstance(operator, Value) and operator.op == "call"
-                and operator.attrs.get("kind") == "local_linear_operator"):
-            return operator.attrs["linear_source"]
+        if isinstance(operator, Value) and operator.op == "call" and operator.vtype == "operator":
+            return operator.attrs["operator"]
         if (isinstance(operator, _Operator) and not operator.identity.as_dict()
                 and len(operator.terms) == 1 and operator.terms[0][1].as_dict() == {0: 1.0}):
             return operator.terms[0][0].attrs["linear_source"]

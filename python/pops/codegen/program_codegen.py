@@ -63,6 +63,9 @@ from pops.codegen.program_emit_params import (  # noqa: F401
     program_param_entries as _program_param_entries,
 )
 from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
+from pops.codegen.program_emit_module_ops import (  # noqa: F401
+    emit_generated_module_operators as _emit_generated_module_operators,
+)
 
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
@@ -88,6 +91,7 @@ def emit_cpp_program(program, model=None, target="system"):
         name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
         module_metadata=_emit_module_metadata(program, model),
+        module_operators=_emit_generated_module_operators(program, model),
         program_params=_emit_program_params(program, model),
         block_names=_emit_block_names(program),
         amr_install=_emit_amr_install(program, target, prelude, body))
@@ -266,75 +270,81 @@ def _check_op_lowerable(program, v, model):
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
     if v.op == "call":
-        kind = v.attrs.get("kind")
+        operator_name = v.attrs.get("operator")
+        registry = None
+        if model is not None and hasattr(model, "operator_registry"):
+            registry = model.operator_registry()
+        elif getattr(program, "_registry", None) is not None:
+            registry = program._registry
+        if registry is None:
+            raise NotImplementedError(
+                "emit_cpp_program cannot lower call '%s' without the Module that declares it; "
+                "pass model= to emit GeneratedModule::Operators" % operator_name)
+        op = registry.get(operator_name)
+        kind = op.kind
         if kind == "field_operator":
-            field = v.attrs.get("field")
-            if field is not None:
-                if model is None:
-                    raise NotImplementedError(
-                        "emit_cpp_program cannot lower call '%s' with named elliptic field "
-                        "('%s') without the physical model that declares it (m.elliptic_field); "
-                        "pass model= (compile_problem threads it through)"
-                        % (v.attrs.get("operator"), field))
-                if field not in _model_impl(model)._elliptic_fields:
+            if (model is not None
+                    and not (op.capabilities.get("default")
+                             or op.name in ("fields", "fields_from_state")
+                             or len(op.signature.inputs) > 1)):
+                if op.name not in _model_impl(model)._elliptic_fields:
                     raise ValueError(
                         "unknown elliptic_field '%s' in call '%s'; declared: %s"
-                        % (field, v.attrs.get("operator"), sorted(_model_impl(model)._elliptic_fields)))
+                        % (op.name, operator_name, sorted(_model_impl(model)._elliptic_fields)))
             return
-        if kind in ("grid_operator", "local_rate") or (kind == "local_source" and "source" not in v.attrs):
-            named_fluxes = _named_fluxes(v)
-            if not v.attrs.get("flux", True) and named_fluxes is not None:
+        if kind in ("grid_operator", "local_rate", "local_source"):
+            if model is None:
+                raise NotImplementedError(
+                    "emit_cpp_program cannot lower call '%s' (%s) without model=; "
+                    "GeneratedModule::Operators needs the operator body"
+                    % (operator_name, kind))
+            lowering = dict(op.lowering)
+            named_fluxes = lowering.get("fluxes")
+            if named_fluxes == ["default"]:
+                named_fluxes = None
+            if named_fluxes is not None and "default" in named_fluxes:
+                raise ValueError(
+                    "call '%s' mixes 'default' with named fluxes %r"
+                    % (operator_name, named_fluxes))
+            if not lowering.get("flux", True) and named_fluxes is not None:
                 raise ValueError(
                     "call '%s' sets flux=False (source-only) but also requests named "
                     "fluxes %r; a source-only stage has no flux divergence"
-                    % (v.attrs.get("operator"), named_fluxes))
+                    % (operator_name, named_fluxes))
             if named_fluxes is not None:
-                if model is None:
-                    raise NotImplementedError(
-                        "emit_cpp_program cannot lower call '%s' with named fluxes %r "
-                        "without the physical model that declares them (m.flux_term); pass model="
-                        % (v.attrs.get("operator"), named_fluxes))
                 impl_f = _model_impl(model)
                 for f in named_fluxes:
                     if f not in impl_f._flux_terms:
                         raise ValueError(
                             "unknown flux_term '%s' in call '%s'; declared flux_terms: %s"
-                            % (f, v.attrs.get("operator"), sorted(impl_f._flux_terms)))
+                            % (f, operator_name, sorted(impl_f._flux_terms)))
                 if getattr(impl_f, "_source", None):
                     raise NotImplementedError(
                         "call '%s' with named fluxes %r needs a model whose default "
                         "source is empty (no m.source); declare it as a source_term instead"
-                        % (v.attrs.get("operator"), named_fluxes))
-            extra = [s for s in (v.attrs.get("sources") or []) if s != "default"]
+                        % (operator_name, named_fluxes))
+            if kind == "local_source":
+                extra = [] if op.capabilities.get("default") or op.name in (
+                    "source", "source_default", "default") else [op.name]
+            else:
+                extra = [s for s in (lowering.get("sources") or []) if s != "default"]
             if extra:
-                if model is None:
-                    raise NotImplementedError(
-                        "emit_cpp_program cannot lower call '%s' with named sources %r "
-                        "without the physical model that declares them (m.source_term); pass model="
-                        % (v.attrs.get("operator"), extra))
                 impl = _model_impl(model)
                 for s in extra:
                     if s not in impl._source_terms:
                         raise ValueError(
                             "unknown source_term '%s' in call '%s'; declared source_terms: %s"
-                            % (s, v.attrs.get("operator"), sorted(impl._source_terms)))
+                            % (s, operator_name, sorted(impl._source_terms)))
             return
-        if kind == "local_source":
-            if model is None:
-                raise NotImplementedError(
-                    "emit_cpp_program cannot lower call '%s' without the physical model "
-                    "that declares its source_term; pass model=" % v.attrs.get("operator"))
-            source = v.attrs.get("source")
-            if source not in _model_impl(model)._source_terms:
-                raise ValueError(
-                    "unknown source_term '%s' in call '%s'; declared source_terms: %s"
-                    % (source, v.attrs.get("operator"), sorted(_model_impl(model)._source_terms)))
-            return
+        if kind == "local_linear_operator" and model is None:
+            raise NotImplementedError(
+                "emit_cpp_program cannot lower call '%s' (local_linear_operator) without model=; "
+                "GeneratedModule::Operators needs the operator body" % operator_name)
         if kind in ("local_linear_operator", "projection"):
             return
         raise NotImplementedError(
             "emit_cpp_program cannot lower call kind %r (operator %r)"
-            % (kind, v.attrs.get("operator")))
+            % (kind, operator_name))
     if v.op in _MODEL_OPS:
         if model is None:
             raise NotImplementedError(
