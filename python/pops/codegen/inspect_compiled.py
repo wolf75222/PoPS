@@ -187,6 +187,27 @@ def _solver_arguments(program, model=None):
     return solvers
 
 
+def _field_output_names(model):
+    """Names produced by field operators, not runtime aux inputs supplied at install.
+
+    A board-authored model stores solved-field outputs such as ``grad_x`` / ``grad_y`` in the
+    Module aux table because generated source terms read them through the native aux channel.
+    They are nevertheless PRODUCED by ``fields_from_state`` and must not appear in
+    ``compiled.arguments().aux`` as user-supplied arrays. Field spaces are the canonical
+    operator-first declaration of those produced fields.
+    """
+    outputs = set()
+    if model is None or not hasattr(model, "field_spaces"):
+        return outputs
+    try:
+        spaces = model.field_spaces()
+    except Exception:  # noqa: BLE001 -- arguments() must stay inspectable
+        return outputs
+    for space in (spaces or {}).values():
+        outputs.update(getattr(space, "components", ()) or ())
+    return outputs
+
+
 def build_arguments(compiled):
     """Build the :class:`Arguments` of a compiled artifact from its carried metadata (sec.12.2).
 
@@ -229,12 +250,18 @@ def build_arguments(compiled):
         param_args[name] = {"type": str(ptype), "kind": str(kind),
                             "required": kind == "runtime"}
 
-    aux_args = {name: {"layout": "cell", "required": True} for name in aux_names}
-
     compiled_model = getattr(compiled, "program_model", None) or getattr(compiled, "model", None)
     solver_args = _solver_arguments(program, compiled_model) if program is not None else {}
+    produced_fields = _field_output_names(compiled_model)
+    aux_args = {
+        name: {"layout": "cell", "required": True}
+        for name in aux_names
+        if name not in produced_fields
+    }
 
     outputs = {}
+    for name in sorted(produced_fields):
+        outputs[name] = {"kind": "field_output"}
     if program is not None:
         for value in getattr(program, "_values", []):
             if value.op == "store_history":

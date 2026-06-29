@@ -63,9 +63,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     ``step_cfl`` / ``step`` / ``step_adaptive`` methods execute compiled C++ runtime work; Python
     never runs per-cell, per-face, AMR patch, solver, or timestep kernels.
 
-    add_block takes a composed model (pops.Model(...)) + Spatial / Explicit / IMEX objects.
-    Everything else (set_poisson, set_density, step, step_cfl, step_adaptive, diagnostics,
-    primitives eval_rhs/get_state/set_state) is forwarded to the compiled facade.
+    The public composition path is ``sim.install(compiled, ...)`` with typed descriptors. Direct
+    mutation/composition helpers remain private runtime seams and are not part of the user DSL.
 
     GEOMETRY: the choice lives in a MESH object passed as mesh= (pops.CartesianMesh / pops.PolarMesh),
     NOT in the scheme (pops.FiniteVolume stays reconstruction + Riemann + variables). Default (mesh=None
@@ -73,7 +72,25 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     is WIRED in System.step (Phase 2b): polar ExB transport + polar Poisson + aux in local basis
     (e_r, e_theta). Limits: scalar ExB transport, single-rank, no cart<->polar coupling."""
 
-    def __init__(self, config=None, mesh=None, **cfg_kw):
+    def __init__(self, config=None, mesh=None, layout=None, **cfg_kw):
+        if layout is not None:
+            if mesh is not None:
+                raise TypeError("System: pass either layout=Uniform(mesh) or mesh=..., not both")
+            from pops.mesh.layouts import AMR, Uniform
+            if isinstance(layout, Uniform):
+                if layout.embedded_boundary is not None:
+                    raise ValueError(
+                        "System(layout=Uniform(...)): embedded boundaries are not handled by the "
+                        "uniform System route yet; pass a plain Uniform(mesh) layout")
+                mesh = layout.mesh
+            elif isinstance(layout, AMR):
+                raise TypeError(
+                    "System(layout=AMR(...)) is not a uniform System; construct pops.AmrSystem "
+                    "for AMR runtime execution")
+            else:
+                raise TypeError(
+                    "System(layout=): expected pops.mesh.layouts.Uniform(...) or AMR(...), got %r"
+                    % type(layout).__name__)
         if config is None:
             config = SystemConfig()
             for k, v in cfg_kw.items():

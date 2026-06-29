@@ -159,6 +159,7 @@ class _ProgramCore(_ProgramConstants):
         if self._registry is None:
             raise ValueError("P.call(%r): no operators bound; call P.bind_operators(model) first"
                              % (operator_name,))
+        args = tuple(_resolve_handle(arg) for arg in args)
         op = self._registry.get(operator_name)  # clear KeyError on an unknown operator
         self._check_call_args(op, args)
         if schedule is not None:
