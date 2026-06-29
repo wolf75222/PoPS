@@ -6,6 +6,7 @@ import pytest
 
 from pops.codegen.inspect_compiled import build_arguments
 
+from examples.spec_final import lib_time_predictor_corrector_poisson_lorentz as lib_time
 from examples.spec_final import manual_board_predictor_corrector_poisson_lorentz as example
 
 
@@ -27,12 +28,17 @@ FORBIDDEN_EXAMPLE_TOKENS = (
 )
 
 
-def test_manual_board_example_uses_only_final_public_route():
-    """The public example must not document or rely on transitional routes."""
-    path = Path(example.__file__)
+def _assert_example_uses_only_final_public_route(module):
+    path = Path(module.__file__)
     text = path.read_text(encoding="utf-8")
     offenders = [token for token in FORBIDDEN_EXAMPLE_TOKENS if token in text]
-    assert offenders == []
+    assert offenders == [], "%s contains forbidden token(s): %s" % (path, offenders)
+
+
+def test_spec_final_examples_use_only_final_public_route():
+    """The public examples must not document or rely on transitional routes."""
+    _assert_example_uses_only_final_public_route(example)
+    _assert_example_uses_only_final_public_route(lib_time)
 
 
 def test_manual_board_arguments_treat_field_outputs_as_outputs_not_aux_inputs():
@@ -55,6 +61,16 @@ def test_manual_board_arguments_treat_field_outputs_as_outputs_not_aux_inputs():
 def test_manual_board_example_compiles_installs_and_steps_under_toolchain():
     """TASK-065 acceptance: compile the final public example and execute one CFL step."""
     result = example.run_once(n=8, cfl=0.2)
+    assert result["state"].shape == (3, 8, 8)
+    assert {"phi", "grad_x", "grad_y"} <= set(result["fields"])
+    assert {"mass", "rho_min", "rho_max"} <= set(result["diagnostics"])
+    assert result["profile"] is not None
+
+
+@pytest.mark.requires_toolchain
+def test_lib_time_example_compiles_installs_and_steps_under_toolchain():
+    """TASK-066 acceptance: compile the lib-time final example and execute one CFL step."""
+    result = lib_time.run_once(n=8, cfl=0.2)
     assert result["state"].shape == (3, 8, 8)
     assert {"phi", "grad_x", "grad_y"} <= set(result["fields"])
     assert {"mass", "rho_min", "rho_max"} <= set(result["diagnostics"])
