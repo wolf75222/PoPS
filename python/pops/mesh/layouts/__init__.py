@@ -12,6 +12,19 @@ from .._descriptor import Availability, MeshDescriptor
 from ..amr import NATIVE_MAX_LEVELS, NATIVE_RATIOS
 
 
+def _nested_descriptor_identity(value):
+    """Stable nested descriptor identity for layout options."""
+    if value is None:
+        return None
+    if hasattr(value, "inspect") and callable(value.inspect):
+        return value.inspect()
+    if hasattr(value, "options") and callable(value.options):
+        return {"name": getattr(value, "name", type(value).__name__),
+                "category": getattr(value, "category", None),
+                "options": value.options()}
+    return {"name": getattr(value, "name", type(value).__name__)}
+
+
 class Uniform(MeshDescriptor):
     """A single-level (uniform) mesh layout."""
 
@@ -22,9 +35,9 @@ class Uniform(MeshDescriptor):
         self.embedded_boundary = embedded_boundary
 
     def options(self):
-        opt = {"mesh": self.mesh.name}
+        opt = {"mesh": _nested_descriptor_identity(self.mesh)}
         if self.embedded_boundary is not None:
-            opt["embedded_boundary"] = self.embedded_boundary.name
+            opt["embedded_boundary"] = _nested_descriptor_identity(self.embedded_boundary)
         return opt
 
     def capabilities(self):
@@ -59,9 +72,10 @@ class AMR(MeshDescriptor):
         self.output = output
 
     def options(self):
-        return {"base": self.base.name, "max_levels": self.max_levels, "ratio": self.ratio,
-                "regrid": self.regrid.name if self.regrid else None,
-                "refine": self.refine.name if self.refine else None}
+        return {"base": _nested_descriptor_identity(self.base),
+                "max_levels": self.max_levels, "ratio": self.ratio,
+                "regrid": _nested_descriptor_identity(self.regrid),
+                "refine": _nested_descriptor_identity(self.refine)}
 
     def capabilities(self):
         return {"layout": "amr", "max_levels": self.max_levels, "ratio": self.ratio,

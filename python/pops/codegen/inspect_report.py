@@ -45,7 +45,7 @@ class CompiledReport:
     """
 
     def __init__(self, *, name, backend, platform, layout, blocks, fields, program, inputs,
-                 artifacts, status, env=None):
+                 artifacts, status, env=None, problem_identity=None):
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -56,6 +56,7 @@ class CompiledReport:
         self.inputs = dict(inputs)        # {states, params, aux} -> [names]
         self.artifacts = dict(artifacts)  # {so_path, abi_key, cache_key}
         self.status = status
+        self.problem_identity = dict(problem_identity) if problem_identity else {}
         # Active codegen POPS_* environment (Spec 5 sec.12.4, #47-48): the resolved CodegenEnv as a
         # plain dict (log_level / codegen_dir / keep_generated / dump_ir / dump_cpp / cache_dir /
         # profile / autotune / jit_backdoor), or {} when the handle carried no env snapshot. Surfaced
@@ -69,7 +70,8 @@ class CompiledReport:
                 "layout": self.layout, "blocks": [dict(b) for b in self.blocks],
                 "fields": [dict(f) for f in self.fields], "program": dict(self.program),
                 "inputs": {k: list(v) for k, v in self.inputs.items()},
-                "artifacts": dict(self.artifacts), "status": self.status, "env": dict(self.env)}
+                "artifacts": dict(self.artifacts), "status": self.status, "env": dict(self.env),
+                "problem_identity": dict(self.problem_identity)}
 
     def to_json(self, path=None, *, indent=2):
         """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
@@ -108,6 +110,16 @@ class CompiledReport:
         lines.append("    so_path  : %s" % art.get("so_path"))
         lines.append("    abi_key  : %s" % art.get("abi_key"))
         lines.append("    cache_key: %s" % art.get("cache_key"))
+        if self.problem_identity:
+            semantic = self.problem_identity.get("semantic", {})
+            provenance = self.problem_identity.get("provenance", {})
+            generated = self.problem_identity.get("generated_source", {})
+            lines.append("  identity:")
+            lines.append("    schema       : %s" % self.problem_identity.get("schema"))
+            lines.append("    module_hash  : %s" % _short(semantic.get("module", {}).get("hash")))
+            lines.append("    program_hash : %s" % _short(semantic.get("program", {}).get("hash")))
+            lines.append("    source_hash  : %s" % _short(generated.get("hash")))
+            lines.append("    abi_key      : %s" % _short(provenance.get("abi_key")))
         if self.env:
             lines.append("  environment (active POPS_*):")
             lines.append("    log_level     : %s" % self.env.get("log_level"))
@@ -194,7 +206,8 @@ def build_compiled_report(compiled):
         name=prog_summary["name"], backend=backend, platform=platform, layout=layout,
         blocks=blocks, fields=fields, program=prog_summary,
         inputs={"states": states, "params": req_params, "aux": req_aux},
-        artifacts=artifacts, status="compiled, waiting for sim.install(...)", env=env)
+        artifacts=artifacts, status="compiled, waiting for sim.install(...)", env=env,
+        problem_identity=getattr(compiled, "problem_identity", {}))
 
 
 # ---------------------------------------------------------------------------

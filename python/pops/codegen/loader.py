@@ -41,10 +41,11 @@ class CompiledProblem:
         # dlopen'd (and ABI-guarded) by read_library_manifest.
         self.libraries = list(libraries) if libraries else []
         # Compiled-artifact metadata (Spec 5 sec.12.4, #48-49): set by compile_problem. The
-        # problem hash is a STRUCTURED identity over Module IR, Program IR, descriptors, layout,
-        # backend, toolchain, native Kokkos/MPI features, external libraries and generated-source
-        # guard. It is distinct from program_hash, the in-memory Program IR hash. cache_key is the
-        # out-of-source artifact key; compile_command is the redacted compiler invocation;
+        # problem_hash is the STRUCTURED SEMANTIC identity over Module IR, Program IR, descriptors,
+        # layout, backend/platform and external libraries. Toolchain/native-feature provenance and
+        # generated-source guards live in problem_identity and participate in cache_key, not in the
+        # semantic hash. It is distinct from program_hash, the in-memory Program IR hash. cache_key
+        # is the out-of-source artifact key; compile_command is the redacted compiler invocation;
         # generated_sources are the .cpp files written for inspection (debug=).
         # None on a route that does not record a value (e.g. an externally constructed handle) -- a
         # documented absence, not a fabricated value (cf. the property accessors below).
@@ -80,9 +81,10 @@ class CompiledProblem:
     def problem_hash(self):
         """Stable structured hash of the combined ``problem.so`` identity (sec.12.4, #48).
 
-        The digest covers Module IR, Program IR, descriptors, layout, backend, toolchain, native
-        Kokkos/MPI features, external libraries and a generated-source guard. ``None`` only for a
-        handle built outside ``compile_problem``."""
+        The digest covers Module IR, Program IR, route descriptors, layout, backend/platform and
+        external libraries. It intentionally excludes raw include paths, compiler paths and generated
+        C++ source text; those are provenance/cache inputs exposed by :attr:`problem_identity` and
+        :attr:`cache_key`. ``None`` only for a handle built outside ``compile_problem``."""
         return self._problem_hash
 
     @property
@@ -96,12 +98,16 @@ class CompiledProblem:
 
     @property
     def source_hash(self):
-        """SHA-256 of the generated C++ source used as a guard inside the structured identity."""
+        """SHA-256 identity of the generated C++ source used as a binary cache guard.
+
+        This includes both the emitted source text and the codegen source-identity version, so a
+        generator-version bump invalidates the binary cache even if a tiny fixture happens to emit
+        identical text."""
         return self._source_hash
 
     @property
     def problem_identity(self):
-        """Plain dict identity record from which :attr:`problem_hash` was computed."""
+        """Plain dict identity record: semantic hash inputs plus provenance/source cache guards."""
         return dict(self._problem_identity)
 
     @property

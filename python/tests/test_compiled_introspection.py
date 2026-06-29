@@ -111,8 +111,20 @@ def _compiled(*, krylov=False, params=None, **model_kw):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
     P = _program(krylov=krylov)
     m = _model(params=params, **model_kw)
+    identity = {
+        "schema": "pops-compiled-problem-v1",
+        "semantic": {
+            "module": {"hash": "modelhash"},
+            "program": {"hash": P._ir_hash()},
+            "descriptors": {"layout": None, "backend": None, "libraries": []},
+            "runtime_route": {"target": "system"},
+        },
+        "provenance": {"abi_key": "SIG|c++|c++23"},
+        "generated_source": {"version": "test", "hash": "sourcehash", "language": "c++"},
+    }
     return CompiledProblem("/tmp/pops-cache/problem.so", P, m, "SIG|c++|c++23", "c++", "c++23",
-                           problem_hash="deadbeefcafe", cache_key="0badc0de")
+                           problem_hash="deadbeefcafe", source_hash="sourcehash",
+                           problem_identity=identity, cache_key="0badc0de")
 
 
 def chk(cond, label):
@@ -303,9 +315,9 @@ def test_metadata_attributes_present():
 
 
 def test_compiled_problem_identity_is_structured():
-    """The problem hash is not only sha256(source): Module, Program, layout and toolchain enter it."""
+    """Problem identity separates semantic hash from provenance/source cache guards."""
     print("== compiled problem identity is structured ==")
-    from pops.codegen.compile_drivers import _compiled_problem_identity
+    from pops.codegen.compile_drivers import _compiled_problem_identity, _compiled_problem_cache_key
     from pops.codegen.backends import Production
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import Uniform
@@ -328,15 +340,144 @@ def test_compiled_problem_identity_is_structured():
         library_manifests=[],
     )
     chk(identity["schema"] == "pops-compiled-problem-v1", "identity has a schema")
-    chk(identity["module"]["hash"] == module.module_hash(), "Module IR hash enters identity")
-    chk(identity["program"]["hash"] == program._ir_hash(), "Program IR hash enters identity")
-    chk(identity["descriptors"]["layout"]["name"] == "Uniform", "layout descriptor enters identity")
-    chk(identity["descriptors"]["backend"]["name"] == "Production", "backend descriptor enters identity")
-    chk(identity["toolchain"]["abi_key"] == "SIG|c++|c++23", "ABI/toolchain enters identity")
-    chk(identity["source"]["hash"] == source_hash, "source hash is retained as a guard")
+    semantic = identity["semantic"]
+    chk(semantic["module"]["hash"] == module.module_hash(), "Module IR hash enters semantic identity")
+    chk(semantic["program"]["hash"] == program._ir_hash(), "Program IR hash enters semantic identity")
+    chk(semantic["descriptors"]["layout"]["name"] == "Uniform", "layout descriptor enters semantic identity")
+    chk(semantic["descriptors"]["layout"]["options"]["mesh"]["options"]["n"] == 16,
+        "layout identity includes nested mesh options")
+    chk(semantic["descriptors"]["backend"]["name"] == "Production",
+        "backend descriptor enters semantic identity")
+    chk(identity["provenance"]["abi_key"] == "SIG|c++|c++23", "ABI/toolchain enters provenance")
+    chk(identity["generated_source"]["hash"] == source_hash, "source hash is retained as a guard")
     chk(problem_hash != source_hash, "problem_hash is not just sha256(source)")
     chk(module_hash == module.module_hash(), "module_hash returned alongside problem_hash")
     chk(program_hash == program._ir_hash(), "program_hash returned alongside problem_hash")
+    chk(_compiled_problem_cache_key(identity) != problem_hash, "cache_key digest is distinct from semantic hash")
+
+
+def _identity_probe(*, module=None, program=None, layout=None, backend=None, source="// src\n",
+                    include="/tmp/include-a", abi_key="SIG|c++|c++23", libraries=None,
+                    codegen_version="pops-generated-source-v1"):
+    """Build an identity tuple without compiling C++."""
+    from pops.codegen.compile_drivers import _compiled_problem_identity
+    from pops.codegen.backends import Production
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+    module = module or _identity_module()
+    program = program or _identity_program(module)
+    layout = layout or Uniform(CartesianMesh(n=16))
+    backend = backend or Production()
+    return _compiled_problem_identity(
+        source=source,
+        model=module,
+        program=program,
+        layout=layout,
+        backend=backend,
+        target="system",
+        include=include,
+        compiler="c++",
+        std="c++23",
+        abi_key=abi_key,
+        optflags=["-O2"],
+        library_manifests=libraries or [],
+        codegen_version=codegen_version,
+    )
+
+
+def _identity_module(body="body_a"):
+    from pops.model import Module, RateSpace
+    m = Module("identity_mod")
+    U = m.state_space("U", components=("rho",))
+    m.operator("rate", signature=(U,) >> RateSpace(U), kind="local_rate", expr=body)
+    return m
+
+
+def _identity_program(module, coeff=1.0):
+    P = adctime.Program("identity_program")
+    U_space = module.state_spaces()["U"]
+    U = P.state("U", block="blk", space=U_space).n
+    P.commit("blk", P.linear_combine("U1", coeff * U))
+    return P
+
+
+def test_compiled_problem_hash_mutations():
+    """Semantic changes alter problem_hash; provenance/source-only changes alter cache guards."""
+    print("== compiled problem identity mutation tests ==")
+    from pops.codegen.compile_drivers import _compiled_problem_cache_key
+    from pops.codegen.backends import Production
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import AMR, Uniform
+    from pops.runtime.platforms import KokkosSerial
+
+    base_identity, base_hash, _, _, base_source_hash = _identity_probe()
+    base_cache = _compiled_problem_cache_key(base_identity)
+
+    same_module = _identity_module("body_a")
+    same_identity, same_hash, _, _, _ = _identity_probe(
+        module=same_module,
+        program=_identity_program(same_module),
+        layout=Uniform(CartesianMesh(n=16)),
+        backend=Production(),
+    )
+    chk(same_hash == base_hash, "two identical descriptors/modules/programs produce the same problem_hash")
+
+    _, module_changed, _, _, _ = _identity_probe(module=_identity_module("body_b"))
+    chk(module_changed != base_hash, "changing a Module operator body changes problem_hash")
+
+    module = _identity_module("body_a")
+    _, program_changed, _, _, _ = _identity_probe(module=module, program=_identity_program(module, coeff=2.0))
+    chk(program_changed != base_hash, "changing Program IR changes problem_hash")
+
+    _, layout_changed, _, _, _ = _identity_probe(layout=AMR(base=CartesianMesh(n=16), max_levels=2, ratio=2))
+    chk(layout_changed != base_hash, "changing layout Uniform -> AMR changes problem_hash")
+
+    _, mesh_changed, _, _, _ = _identity_probe(layout=Uniform(CartesianMesh(n=32)))
+    chk(mesh_changed != base_hash, "changing nested mesh options changes problem_hash")
+
+    _, backend_changed, _, _, _ = _identity_probe(backend=Production(platform=KokkosSerial()))
+    chk(backend_changed != base_hash, "changing backend/platform descriptor changes problem_hash")
+
+    _, lib_changed, _, _, _ = _identity_probe(libraries=[{"name": "libA", "abi": "1"}])
+    chk(lib_changed != base_hash, "changing library manifest changes problem_hash")
+
+    include_identity, include_hash, _, _, include_source_hash = _identity_probe(include="/other/include")
+    chk(include_hash == base_hash, "changing raw include path only does not change semantic problem_hash")
+    chk(_compiled_problem_cache_key(include_identity) != base_cache,
+        "changing include path provenance still changes cache_key")
+    chk(include_source_hash == base_source_hash, "include path does not change generated-source hash")
+
+    source_identity, source_same_hash, _, _, source_changed_hash = _identity_probe(
+        source="// src\n", codegen_version="pops-generated-source-v2")
+    chk(source_same_hash == base_hash, "codegen-version-only source change does not alter semantic hash")
+    chk(source_changed_hash != base_source_hash, "codegen version changes generated source hash")
+    chk(_compiled_problem_cache_key(source_identity) != base_cache, "codegen version changes cache_key")
+
+
+def test_compiled_problem_identity_rejects_repr_fallback():
+    """A non-inspectable descriptor object must raise instead of falling back to repr()."""
+    print("== compiled problem identity rejects repr fallback ==")
+
+    class BadDescriptor:
+        pass
+
+    try:
+        _identity_probe(layout=BadDescriptor())
+    except TypeError as exc:
+        chk("repr() is intentionally rejected" in str(exc), "repr fallback is refused clearly")
+    else:
+        raise AssertionError("expected TypeError for a descriptor without inspect/options")
+
+
+def test_compiled_inspect_exposes_problem_identity():
+    """compiled.inspect().to_dict() exposes the full problem_identity record."""
+    print("== compiled.inspect exposes problem_identity ==")
+    cp = _compiled()
+    report = cp.inspect()
+    data = report.to_dict()
+    chk(data["problem_identity"] == cp.problem_identity, "inspect().to_dict carries problem_identity")
+    chk("semantic" in data["problem_identity"], "problem_identity exposes semantic inputs")
+    chk("generated_source" in data["problem_identity"], "problem_identity exposes source cache guard")
 
 
 def test_str_is_short_and_deterministic():

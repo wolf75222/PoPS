@@ -285,7 +285,11 @@ def _stable_identity_value(value):
             "category": getattr(value, "category", None),
             "options": _stable_identity_value(value.options()),
         }
-    return {"type": type(value).__name__, "repr": repr(value)}
+    raise TypeError(
+        "compiled problem identity cannot serialize %s: route descriptors must expose "
+        "inspect() or options(), and identity values must be JSON primitives, lists or dicts; "
+        "repr() is intentionally rejected because it is not a stable identity"
+        % type(value).__name__)
 
 
 def _library_identity(manifests):
@@ -300,38 +304,64 @@ def _library_identity(manifests):
     return out
 
 
+_GENERATED_SOURCE_IDENTITY_VERSION = "pops-generated-source-v1"
+
+
+def _semantic_problem_hash(record):
+    """Digest only the semantic part of a compiled problem identity."""
+    blob = json.dumps(record["semantic"], sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _compiled_problem_cache_key(record):
+    """Digest the full binary cache identity: semantic + provenance + generated-source guard."""
+    blob = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
 def _compiled_problem_identity(*, source, model, program, layout, backend, target,
                                include, compiler, std, abi_key, optflags,
-                               library_manifests):
+                               library_manifests,
+                               codegen_version=_GENERATED_SOURCE_IDENTITY_VERSION):
     """Structured identity of the combined problem artifact.
 
-    The emitted source is included as a derived guard, but it is no longer the whole identity:
-    Module IR, Program IR, descriptors, layout, backend, toolchain and native Kokkos/MPI features
-    all participate before the cache key is formed.
+    ``problem_hash`` is the semantic identity: Module IR, Program IR, route descriptors, layout,
+    backend/platform and libraries. Toolchain provenance and generated-source guards live beside it
+    in ``problem_identity`` and participate in ``cache_key`` only. This keeps equivalent headers
+    under a different include path from changing the semantic hash while still preventing a stale
+    binary cache hit.
     """
-    source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    source_identity = {
+        "version": str(codegen_version),
+        "source": source,
+    }
+    source_hash = hashlib.sha256(
+        json.dumps(source_identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     module_hash = model.module_hash() if hasattr(model, "module_hash") else None
     program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
     record = {
         "schema": "pops-compiled-problem-v1",
-        "name": getattr(program, "name", "problem"),
-        "module": {
-            "name": getattr(model, "name", None),
-            "hash": module_hash,
+        "semantic": {
+            "name": getattr(program, "name", "problem"),
+            "module": {
+                "name": getattr(model, "name", None),
+                "hash": module_hash,
+            },
+            "program": {
+                "name": getattr(program, "name", None),
+                "hash": program_hash,
+            },
+            "descriptors": {
+                "layout": _stable_identity_value(layout),
+                "backend": _stable_identity_value(backend),
+                "libraries": _library_identity(library_manifests),
+            },
+            "runtime_route": {
+                "target": target,
+            },
         },
-        "program": {
-            "name": getattr(program, "name", None),
-            "hash": program_hash,
-        },
-        "descriptors": {
-            "layout": _stable_identity_value(layout),
-            "backend": _stable_identity_value(backend),
-            "libraries": _library_identity(library_manifests),
-        },
-        "runtime_route": {
-            "target": target,
-        },
-        "toolchain": {
+        "provenance": {
             "include": include,
             "compiler": compiler,
             "std": std,
@@ -339,13 +369,13 @@ def _compiled_problem_identity(*, source, model, program, layout, backend, targe
             "native_features": _native_feature_key(),
             "optflags": list(optflags),
         },
-        "source": {
+        "generated_source": {
+            "version": source_identity["version"],
             "hash": source_hash,
             "language": "c++",
         },
     }
-    blob = json.dumps(record, sort_keys=True, separators=(",", ":"))
-    problem_hash = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    problem_hash = _semantic_problem_hash(record)
     return record, problem_hash, module_hash, program_hash, source_hash
 
 
@@ -437,22 +467,10 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
             library_manifests=library_manifests,
         )
     )
-    cache_key = hashlib.sha256(
-        json.dumps(
-            {
-                "schema": "pops-compiled-problem-cache-v1",
-                "problem_hash": problem_hash,
-                "abi_key": abi_key,
-                "target": target,
-                "backend": backend,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    cache_key = _compiled_problem_cache_key(problem_identity)
 
     if so_path is None:
-        so_path = _cache_so_path(problem_hash, abi_key, "problem-production", target,
+        so_path = _cache_so_path(cache_key, abi_key, "problem-production", target,
                                  getattr(time, "name", "problem"))
         # POPS_CODEGEN_DIR (sec.12.4, #47): redirect the out-of-source .so (and any kept source /
         # dump) into the requested directory, keeping the collision-free cache file name. An explicit
