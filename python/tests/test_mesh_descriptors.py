@@ -2,9 +2,8 @@
 
 These exercise the inert mesh / layout / AMR descriptors: their options/capabilities,
 the explainable AMR route limits (max_levels / ratio), the typed refinement criteria,
-the back-compat that pops.CartesianMesh is pops.mesh.CartesianMesh, and the short
-printable summaries. Pure Python; needs only `import pops` (the compiled _pops loads but
-nothing here computes on a grid).
+the package export discipline, and the short printable summaries. Pure Python; needs
+only `import pops` (the compiled _pops loads but nothing here computes on a grid).
 """
 import sys
 
@@ -22,9 +21,11 @@ from pops.mesh.masks import CutCell, NoMask, Staircase  # noqa: E402
 from pops.mesh.boundaries import Periodic, Physical, FaceBC, XMin  # noqa: E402
 
 
-def test_back_compat_and_package_export():
-    assert pops.CartesianMesh is CartesianMesh
-    assert pops.PolarMesh is PolarMesh
+def test_package_export_without_top_level_mesh_compat():
+    assert pops.mesh.CartesianMesh is CartesianMesh
+    assert pops.mesh.PolarMesh is PolarMesh
+    assert not hasattr(pops, "CartesianMesh")
+    assert not hasattr(pops, "PolarMesh")
     assert "mesh" in pops.__all__
 
 

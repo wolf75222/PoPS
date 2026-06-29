@@ -82,10 +82,11 @@ class _StubModel:
 def _minimal_module_and_program():
     """Tiny real Module + Program used to exercise compile_problem routing without legacy Case."""
     module = Module("amr_route")
-    module.state_space("U", ("rho",))
+    U_space = module.state_space("U", ("rho",))
     program = pops.time.Program("amr_program")
-    u = program.state("plasma")
-    program.commit("plasma", program.linear_combine("identity", u))
+    U = program.state("U", block="plasma", space=U_space)
+    program.define(U.next, U.n)
+    program.commit(U.next)
     return module, program
 
 
@@ -122,7 +123,7 @@ def test_amr_layout_drives_compile_target(monkeypatch=None):
     """compile_problem(model=Module, time=Program, layout=AMR) emits the AMR program ABI."""
     captured = {"target": None, "compiled": False}
 
-    def _fake_emit(self, model=None, target="system"):
+    def _fake_emit(self, model=None, target="system", problem_hash=None):
         captured["target"] = target
         return "extern \"C\" int pops_test_amr_route() { return 0; }\n"
 

@@ -9,6 +9,8 @@ criteria: ``Refine.on(block.role(Density)).above(0.05)`` and ``TagUnion(...)``.
 
 Everything here is an inert descriptor; nothing tags a cell in Python.
 """
+from collections.abc import Mapping
+
 from .._descriptor import Availability, MeshDescriptor
 
 # Current native AMR capability envelope (Spec 5 sec.8.7): the production AMR route
@@ -65,6 +67,39 @@ def _declared_subjects(model_or_context):
             add_iter(value)
 
     # A typed StateSpace view: its components AND its role values are both legal subjects.
+    state_spaces = getattr(model_or_context, "state_spaces", None)
+    if callable(state_spaces):
+        try:
+            spaces = state_spaces()
+        except Exception:  # pragma: no cover - a view that needs runtime state is skipped.
+            spaces = {}
+        if isinstance(spaces, Mapping):
+            found_surface = True
+            for view in spaces.values():
+                add_iter(getattr(view, "components", None))
+                roles = getattr(view, "roles", None)
+                if isinstance(roles, Mapping):
+                    found_surface = True
+                    names.update(k for k in roles if isinstance(k, str))
+                    names.update(v for v in roles.values() if isinstance(v, str))
+
+    # Named solved fields are legal refinement subjects: e.g. Refine.on("phi").
+    field_spaces = getattr(model_or_context, "field_spaces", None)
+    if callable(field_spaces):
+        try:
+            spaces = field_spaces()
+        except Exception:  # pragma: no cover - a view that needs runtime state is skipped.
+            spaces = {}
+        if isinstance(spaces, Mapping):
+            found_surface = True
+            for key, view in spaces.items():
+                if isinstance(key, str):
+                    names.add(key)
+                text = getattr(view, "name", None)
+                if isinstance(text, str):
+                    names.add(text)
+                add_iter(getattr(view, "components", None))
+
     space = getattr(model_or_context, "state_space", None)
     if callable(space):
         try:
@@ -74,13 +109,13 @@ def _declared_subjects(model_or_context):
         if view is not None:
             add_iter(getattr(view, "components", None))
             roles = getattr(view, "roles", None)
-            if isinstance(roles, dict):
+            if isinstance(roles, Mapping):
                 found_surface = True
                 names.update(k for k in roles if isinstance(k, str))
                 names.update(v for v in roles.values() if isinstance(v, str))
 
     # A bare mapping / collection of declared subject names (a lightweight context).
-    if isinstance(model_or_context, dict):
+    if isinstance(model_or_context, Mapping):
         for key in ("roles", "subjects", "variables", "components"):
             if key in model_or_context:
                 add_iter(model_or_context[key])
@@ -207,6 +242,8 @@ class PatchLayout(MeshDescriptor):
     def __init__(self, distribute_coarse=False, coarse_max_grid=32):
         self.distribute_coarse = bool(distribute_coarse)
         self.coarse_max_grid = int(coarse_max_grid)
+        if self.coarse_max_grid < 1:
+            raise ValueError("PatchLayout: coarse_max_grid must be >= 1")
 
     def options(self):
         return {"distribute_coarse": self.distribute_coarse,
@@ -234,6 +271,8 @@ class BufferCells(MeshDescriptor):
 
     def __init__(self, cells=1):
         self.cells = int(cells)
+        if self.cells < 0:
+            raise ValueError("BufferCells: cells must be >= 0")
 
     def options(self):
         return {"cells": self.cells}
@@ -259,6 +298,8 @@ class SelectedLevels(MeshDescriptor):
 
     def __init__(self, *levels):
         self.levels = tuple(int(l) for l in levels)
+        if any(l < 0 for l in self.levels):
+            raise ValueError("SelectedLevels: levels must be >= 0")
 
     def options(self):
         return {"levels": self.levels}
@@ -283,6 +324,20 @@ class CheckpointPolicy(MeshDescriptor):
         return {"restartable": self.restartable,
                 "require_bit_identical": self.require_bit_identical}
 
+    def validate(self, context=None):
+        if isinstance(context, dict):
+            regrid_every = context.get("regrid_every")
+            if self.require_bit_identical and regrid_every not in (None, 0):
+                raise ValueError(
+                    "CheckpointPolicy(require_bit_identical=True) requires a frozen AMR "
+                    "hierarchy (regrid_every == 0); got regrid_every=%r" % regrid_every)
+            n_blocks = context.get("n_blocks")
+            if self.restartable and n_blocks is not None and int(n_blocks) > 1:
+                raise ValueError(
+                    "CheckpointPolicy(restartable=True) is currently single-block only on AMR; "
+                    "got n_blocks=%d" % int(n_blocks))
+        return True
+
 
 class AMROutput(MeshDescriptor):
     """AMR output policy: which fields on which levels, with patch metadata (sec.8.11)."""
@@ -293,6 +348,10 @@ class AMROutput(MeshDescriptor):
         self.fields = list(fields)
         self.levels = levels if levels is not None else AllLevels()
         self.include_patch_boxes = bool(include_patch_boxes)
+        if any(not isinstance(f, str) or not f for f in self.fields):
+            raise ValueError("AMROutput(fields=): every field name must be a non-empty string")
+        if not hasattr(self.levels, "options"):
+            raise TypeError("AMROutput(levels=): expected an AMR level policy descriptor")
 
     def options(self):
         return {"n_fields": len(self.fields),

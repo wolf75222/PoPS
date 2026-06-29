@@ -11,6 +11,7 @@ def amr_config_from_layout(layout):
     from pops._bootstrap import AmrSystemConfig
     from pops.mesh.amr import FrozenRegrid, PatchLayout, RegridEvery
 
+    layout.validate()
     base = layout.base
     cfg = AmrSystemConfig()
     cfg.n = int(base.n)

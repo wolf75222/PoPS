@@ -428,6 +428,8 @@ def compile_problem(so_path=None, *, model=None, program=None, time=None, backen
 
     if model is not None and hasattr(model, "check"):
         model.check()
+    if layout is not None and hasattr(layout, "validate"):
+        layout.validate(model)
 
     include = include or pops_include()
     sig = pops_header_signature(include)
@@ -494,7 +496,7 @@ def compile_problem(so_path=None, *, model=None, program=None, time=None, backen
                                        libraries=library_manifests, problem_hash=problem_hash,
                                        module_hash=module_hash, source_hash=source_hash,
                                        problem_identity=problem_identity, cache_key=cache_key,
-                                       codegen_env=cenv)
+                                       codegen_env=cenv, layout=layout)
             cenv.run_dumps(compiled)
             return compiled
 
@@ -529,6 +531,6 @@ def compile_problem(so_path=None, *, model=None, program=None, time=None, backen
                                problem_identity=problem_identity, cache_key=cache_key,
                                compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
-                               codegen_env=cenv)
+                               codegen_env=cenv, layout=layout)
     cenv.run_dumps(compiled)
     return compiled

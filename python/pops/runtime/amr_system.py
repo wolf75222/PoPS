@@ -273,6 +273,13 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                     "sim.install: compiled handle has no .so_path (got %r); pass a CompiledProblem "
                     "returned by pops.compile_problem(...)." % type(compiled).__name__)
             compiled_model = getattr(compiled, "model", None)
+        layout = getattr(self, "_layout", None)
+        if layout is not None:
+            if compiled_model is not None:
+                layout.validate(compiled_model)
+            layout.validate({"n_blocks": len(instances)})
+            from pops.runtime.amr_layout import flow_amr_layout
+            flow_amr_layout(self, layout, n_blocks=len(instances))
         # (1) FIELD SOLVERS first (parity with System): configure solvers before adding blocks and
         # before attaching the compiled artifact because native requirement validation reads the
         # configured solver. Declared named elliptic fields (ADC-428), collected from the per-instance

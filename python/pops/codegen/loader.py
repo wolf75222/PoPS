@@ -6,7 +6,8 @@ class CompiledProblem:
 
     def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,
                  problem_hash=None, cache_key=None, compile_command=None, generated_sources=None,
-                 codegen_env=None, module_hash=None, source_hash=None, problem_identity=None):
+                 codegen_env=None, module_hash=None, source_hash=None, problem_identity=None,
+                 layout=None):
         self.so_path = so_path
         self.program = program          # the pops.time.Program that was lowered
         self.model = model              # the canonical pops.model.Module that was lowered
@@ -25,6 +26,7 @@ class CompiledProblem:
         self._cache_key = cache_key
         self._compile_command = compile_command
         self._generated_sources = list(generated_sources) if generated_sources else []
+        self._layout = layout
         # Active codegen POPS_* environment snapshot; None for externally constructed handles.
         self._codegen_env = codegen_env
 
@@ -336,7 +338,7 @@ class CompiledProblem:
         carry. @p layout an optional AMR / Uniform layout descriptor (default: the native envelope).
         """
         from pops import inspect_amr
-        return inspect_amr(layout)
+        return inspect_amr(layout if layout is not None else self._layout)
 
     def __str__(self):
         """A short, deterministic, array-free summary (Spec 5 sec.12.1, #40-41).

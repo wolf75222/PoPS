@@ -72,6 +72,22 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     is WIRED in System.step (Phase 2b): polar ExB transport + polar Poisson + aux in local basis
     (e_r, e_theta). Limits: scalar ExB transport, single-rank, no cart<->polar coupling."""
 
+    def __new__(cls, config=None, mesh=None, layout=None, **cfg_kw):
+        if cls is System and layout is not None:
+            from pops.mesh.layouts import AMR
+            if isinstance(layout, AMR):
+                if config is not None or mesh is not None or cfg_kw:
+                    raise TypeError(
+                        "System(layout=AMR(...)) takes its runtime configuration from the "
+                        "layout descriptor; do not also pass config=, mesh=, n=, L=, or "
+                        "periodic=")
+                layout.validate()
+                from pops.runtime.amr_layout import amr_config_from_layout
+                sim = AmrSystem(amr_config_from_layout(layout))
+                sim._layout = layout
+                return sim
+        return super().__new__(cls)
+
     def __init__(self, config=None, mesh=None, layout=None, **cfg_kw):
         if layout is not None:
             if mesh is not None:
@@ -84,9 +100,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                         "uniform System route yet; pass a plain Uniform(mesh) layout")
                 mesh = layout.mesh
             elif isinstance(layout, AMR):
-                raise TypeError(
-                    "System(layout=AMR(...)) is not a uniform System; construct pops.AmrSystem "
-                    "for AMR runtime execution")
+                raise RuntimeError("System.__new__ should have routed layout=AMR(...) to AmrSystem")
             else:
                 raise TypeError(
                     "System(layout=): expected pops.mesh.layouts.Uniform(...) or AMR(...), got %r"

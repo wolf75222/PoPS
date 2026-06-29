@@ -87,11 +87,31 @@ class AMR(MeshDescriptor):
         self.checkpoint = checkpoint
         self.output = output
 
+    def __repr__(self):
+        base_name = type(self.base).__name__
+        base_options = self.base.options() if hasattr(self.base, "options") else {}
+        n = base_options.get("n")
+        L = base_options.get("L")
+        bits = []
+        if n is not None:
+            bits.append("n=%r" % (n,))
+        if L is not None:
+            bits.append("L=%r" % (L,))
+        base = "%s(%s)" % (base_name, ", ".join(bits)) if bits else base_name
+        return "AMR(base=%s, max_levels=%d, ratio=%d)" % (
+            base, self.max_levels, self.ratio)
+
+    __str__ = __repr__
+
     def options(self):
         return {"base": _nested_descriptor_identity(self.base),
                 "max_levels": self.max_levels, "ratio": self.ratio,
                 "regrid": _nested_descriptor_identity(self.regrid),
-                "refine": _nested_descriptor_identity(self.refine)}
+                "patches": _nested_descriptor_identity(self.patches),
+                "refine": _nested_descriptor_identity(self.refine),
+                "nesting": _nested_descriptor_identity(self.nesting),
+                "checkpoint": _nested_descriptor_identity(self.checkpoint),
+                "output": _nested_descriptor_identity(self.output)}
 
     def capabilities(self):
         return {"layout": "amr", "max_levels": self.max_levels, "ratio": self.ratio,
@@ -118,11 +138,24 @@ class AMR(MeshDescriptor):
     def validate(self, context=None):
         if self.max_levels < 1:
             raise ValueError("AMR: max_levels must be >= 1")
+        from ..amr import CheckpointPolicy, FrozenRegrid, RegridEvery
+        if isinstance(self.regrid, RegridEvery):
+            regrid_every = self.regrid.steps
+        elif self.regrid is None or isinstance(self.regrid, FrozenRegrid):
+            regrid_every = 0
+        else:
+            regrid_every = None
         # Validate the attached policies, then the route availability.
         for policy in (self.regrid, self.patches, self.refine, self.nesting,
                        self.checkpoint, self.output):
             if policy is not None and hasattr(policy, "validate"):
-                policy.validate(context)
+                if isinstance(policy, CheckpointPolicy):
+                    n_blocks = None
+                    if isinstance(context, dict):
+                        n_blocks = context.get("n_blocks")
+                    policy.validate({"regrid_every": regrid_every, "n_blocks": n_blocks})
+                else:
+                    policy.validate(context)
         return super().validate(context)
 
 

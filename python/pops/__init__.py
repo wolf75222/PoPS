@@ -24,7 +24,7 @@ __all__ = [
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "compile_problem", "CompiledProblem",
     "compile_library", "read_library_manifest", "LibraryManifest",
-    "inspect_capabilities", "CapabilityMatrix", "CapabilityEntry",
+    "inspect_capabilities", "inspect_amr", "CapabilityMatrix", "CapabilityEntry",
 ]
 
 
@@ -66,6 +66,9 @@ def __getattr__(name):
     if name == "inspect_capabilities":
         from ._capabilities import inspect_capabilities
         return inspect_capabilities
+    if name == "inspect_amr":
+        from ._capabilities import inspect_amr
+        return inspect_amr
     if name == "CapabilityMatrix":
         from ._capabilities import CapabilityMatrix
         return CapabilityMatrix
