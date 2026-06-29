@@ -9,8 +9,8 @@ component resolution), the model-free per-cell kernels (cell_compare / where) an
 The model-coefficient per-cell kernels (source / flux / apply / local solves) live in
 ``program_emit_model_kernels``; the dispatch core in ``program_emit_ops`` /
 ``program_emit_control``; the schedule wrap in ``program_emit_schedule``; the matrix-free
-Krylov emitters in ``program_emit_solve``.  ``program_codegen`` re-imports every name so
-its public surface is unchanged.
+Krylov emitters in ``program_emit_solve``.  ``program_codegen`` remains the internal
+aggregation point for these emitters; none of this is a public runtime API.
 """
 from pops.time.values import Value, _to_affine  # noqa: F401
 

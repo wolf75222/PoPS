@@ -35,7 +35,8 @@ mod.operator_capabilities("fields_from_state", cacheable=True)
 ```
 
 otherwise the call is rejected: `operator 'flux' is not cacheable; cannot use schedule hold`.
-See `examples/spec3/scheduled_fields_subcycled_transport.py`.
+Ready schedule macros live under `pops.lib.time`; custom schedules are authored
+as `pops.time.Program` IR and lowered through `pops.compile_problem`.
 
 ## Schedules
 

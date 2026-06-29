@@ -1,18 +1,18 @@
 # AMR
 
-AMR is a mesh layout. It is not a separate user API and not a compile target.
+AMR is a mesh layout. It is not a separate user API and not a target string.
 
-The public flow is identical to a uniform run:
+The public flow is the same shape as a uniform run:
 
 ```python
-case = pops.Case(layout=layout, name="run")
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state=state)
-sim.run(t_end=1.0, cfl=0.4)
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim = pops.AmrSystem(n=mesh.n, L=mesh.L)
+sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}})
+sim.step_cfl(0.4)
 ```
 
-Switching from uniform to AMR changes only the layout descriptor and the AMR
-policies attached to it.
+Switching from uniform to AMR changes the layout descriptor and the AMR policies
+attached to it.
 
 ```python
 from pops.mesh.cartesian import CartesianMesh
@@ -30,8 +30,8 @@ layout = AMR(
 )
 ```
 
-`pops.compile` derives the AMR runtime route from `layout=AMR(...)`. User
-documentation must not ask users to instantiate the AMR runtime directly.
+`pops.compile_problem` derives the AMR artifact ABI from `layout=AMR(...)`.
+User documentation must not ask users to pass target strings.
 
 ```{toctree}
 :maxdepth: 1
@@ -46,10 +46,10 @@ current-limits
 
 ## Compatibility rule
 
-If a feature is public on `Case`, it must have a complete AMR route unless its
-descriptor declares a precise mathematical incompatibility. Missing Python
-plumbing, missing codegen, or missing runtime binding is an implementation bug,
-not a documented limitation.
+If a feature is public on the compiled problem route, it must have a complete
+AMR route unless its descriptor declares a precise mathematical incompatibility.
+Missing Python plumbing, missing codegen, or missing runtime binding is an
+implementation bug, not a documented limitation.
 
 AMR features must be validated before runtime:
 

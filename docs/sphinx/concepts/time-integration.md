@@ -53,8 +53,8 @@ where $\lambda$ is the local wave speed and $C \le 1$. The core computes $\max|\
 reduction over all cells, followed by an MPI `all_reduce_max` so every rank agrees on one global
 step. Without that collective, each rank would pick its own $\Delta t$ and the ranks would diverge.
 
-A model with no transport (a pure source, $\max|\lambda| = 0$) places no constraint on the step. You
-choose the CFL number with `sim.run(t_end=final_time, cfl=...)` on the bound simulation.
+A model with no transport (a pure source, $\max|\lambda| = 0$) places no constraint on the step.
+Choose the CFL number with `sim.step_cfl(cfl)` on the installed runtime facade.
 
 ## Advancing a coupled system
 

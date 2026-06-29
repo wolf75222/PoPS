@@ -16,10 +16,9 @@ An operator module declares:
 Operator names are strings at declaration time. Program references use handles.
 
 ```python
-from pops.model import OperatorHandle
-
 module = physics_model.lower()
-explicit_rate = OperatorHandle("explicit_rate")
+ops = module.operator_registry()
+explicit_rate = ops.get("explicit_rate")
 ```
 
 The exact handle-producing helper depends on the authoring facade. The rule is
@@ -33,7 +32,7 @@ from pops.time import Program
 T = Program("step").bind_operators(module)
 U = T.state("U", block="plasma")
 
-fields_op = OperatorHandle("fields_from_state", kind="field_operator")
+fields_op = ops.get("fields_from_state")
 fields = T.call(fields_op, U.n)
 rate = T.call(explicit_rate, U.n, fields)
 T.define(U.next, U.n + T.dt * rate)
@@ -57,7 +56,7 @@ Primitive RHS builders are internal to `pops.lib.time` and tests.
 ## Inspection
 
 ```python
-compiled = pops.compile(case)
+compiled = pops.compile_problem(model=module, time=T, layout=layout)
 compiled.inspect()
 compiled.dump_ir()
 compiled.dump_cpp()

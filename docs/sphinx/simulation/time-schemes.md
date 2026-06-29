@@ -10,20 +10,19 @@ from pops.lib.time import ssprk3
 
 time = Program("advance")
 ssprk3(time, "plasma")
-case = case.time(time)
+compiled = pops.compile_problem(model=module, time=time, backend=Production(), layout=layout)
 ```
 
 Manual schemes use temporal handles:
 
 ```python
-from pops.model import OperatorHandle
-
 T = Program("forward_euler")
 U = T.state("U", block="plasma")
 T.bind_operators(model)
 
-fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
-rate = model.rate_operator("explicit_rate", flux=True, sources=["default"])
+ops = model.operator_registry()
+fields_from_state = ops.get("fields_from_state")
+rate = ops.get("explicit_rate")
 
 fields = T.call(fields_from_state, U.n)
 R = T.call(rate, U.n, fields)
@@ -47,10 +46,10 @@ These functions build IR nodes. They are not alternate runtime steppers.
 
 ## CFL
 
-The CFL value is a runtime policy passed to `sim.run`.
+The CFL value is passed to each runtime step.
 
 ```python
-sim.run(t_end=1.0, cfl=0.4)
+sim.step_cfl(0.4)
 ```
 
 The time program should not reject a run only because the CFL is not a compile

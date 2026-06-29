@@ -28,12 +28,23 @@ def test_top_level_public_surface_is_single_route():
         "__version__",
         "System",
         "AmrSystem",
-        "time",
-        "model",
-        "math",
         "physics",
+        "model",
+        "time",
+        "numerics",
+        "fields",
+        "linalg",
+        "solvers",
+        "mesh",
+        "params",
+        "diagnostics",
+        "output",
+        "external",
         "moments",
         "lib",
+        "codegen",
+        "runtime",
+        "math",
         "abi_key",
         "set_threads",
         "has_kokkos",
@@ -80,6 +91,21 @@ def test_top_level_public_surface_is_single_route():
         assert not hasattr(pops, forbidden), "pops.%s must not be public" % forbidden
 
 
+def test_corrective_tasks_public_route_contract():
+    """TASK-001/029/033/064: one public route, no legacy high-level aliases."""
+    assert hasattr(pops, "compile_problem")
+    assert hasattr(pops, "System")
+
+    for forbidden in ("compile", "bind", "Problem", "Case", "CompiledTime"):
+        assert not hasattr(pops, forbidden), "pops.%s must not exist" % forbidden
+
+    sim = pops.System()
+    assert hasattr(sim, "install")
+    assert hasattr(sim, "step_cfl")
+    for forbidden in ("add_equation", "add_block", "install_program"):
+        assert not hasattr(sim, forbidden), "System.%s must not be public" % forbidden
+
+
 def test_runtime_install_is_the_only_public_runtime_wiring_path():
     for sim in (pops.System(), pops.AmrSystem(n=8, L=1.0)):
         assert hasattr(sim, "install"), "%s.install is the explicit runtime API" % type(sim).__name__
@@ -106,15 +132,67 @@ def test_runtime_install_is_the_only_public_runtime_wiring_path():
 
 
 def test_no_public_python_runtime_integrator_or_time_shim():
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("pops.runtime.integrate")
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("pops.codegen.orchestration")
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("pops.case")
+    for module_name in (
+        "pops.dsl",
+        "pops.integrate",
+        "pops.library",
+        "pops.std",
+        "pops.lib.std",
+        "pops.runtime.integrate",
+        "pops.codegen.orchestration",
+        "pops.case",
+        "pops.problem",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
     assert not hasattr(pops.time, "CompiledTime")
     with pytest.raises(ImportError):
         from pops.time.program import CompiledTime  # noqa: F401
+
+
+def test_compile_problem_is_only_public_compile_route():
+    """TASK-029: no model-compile facade is public beside compile_problem."""
+    assert hasattr(pops, "compile_problem")
+    assert not hasattr(pops, "compile")
+
+    assert "compile_problem" in pops.codegen.__all__
+    for forbidden in (
+        "compile",
+        "compile_so",
+        "compile_aot",
+        "compile_native",
+        "compile_or_jit",
+        "compile_model",
+    ):
+        assert forbidden not in pops.codegen.__all__
+        assert not hasattr(pops.codegen, forbidden), "pops.codegen.%s must not be public" % forbidden
+
+    compile_module = importlib.import_module("pops.codegen.compile")
+    assert compile_module.__all__ == ["compile_problem", "CompiledProblem"]
+    for forbidden in (
+        "compile_so",
+        "compile_aot",
+        "compile_native",
+        "compile_or_jit",
+        "compile_model",
+        "emit_cpp_so_source",
+        "emit_cpp_aot_source",
+        "emit_cpp_native_loader",
+    ):
+        assert not hasattr(compile_module, forbidden), (
+            "pops.codegen.compile.%s must not be a public compile route" % forbidden)
+
+    drivers = importlib.import_module("pops.codegen.compile_drivers")
+    assert drivers.__all__ == ["compile_problem"]
+    for forbidden in (
+        "compile_so",
+        "compile_aot",
+        "compile_native",
+        "compile_or_jit",
+        "compile_model",
+    ):
+        assert not hasattr(drivers, forbidden), (
+            "pops.codegen.compile_drivers.%s must not be a public compile route" % forbidden)
 
 
 def test_program_public_surface_is_operator_first_only():

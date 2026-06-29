@@ -9,7 +9,6 @@ writes against; the board facade produces the identical IR.
 Run: python3 examples/spec3/operator_first_same_problem.py
 """
 from pops.math import sqrt, grad, div, laplacian, ddt
-from pops.model import OperatorHandle
 from pops.physics import Model
 from pops.solvers.elliptic import GeometricMG
 from pops.time import Program
@@ -45,9 +44,10 @@ def operator_first_step(m):
     P.bind_operators(m.module)
     dt = P.dt
     U_n = P.state("U", block="plasma").n
-    fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
-    explicit_rate = OperatorHandle("explicit_rate", kind="local_rate")
-    implicit_operator = OperatorHandle("implicit_operator", kind="local_linear_operator")
+    ops = m.module.operator_registry()
+    fields_from_state = ops.get("fields_from_state")
+    explicit_rate = ops.get("explicit_rate")
+    implicit_operator = ops.get("implicit_operator")
     fields_n = P.call(fields_from_state, U_n, name="fields_n")
     R_n = P.call(explicit_rate, U_n, fields_n, name="R_n")
     L_n = P.call(implicit_operator, fields_n, name="L_n")

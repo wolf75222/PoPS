@@ -12,10 +12,11 @@ Python describes a compiled problem. C++/Kokkos/MPI executes it.
 The public flow is:
 
 ```python
-case = pops.Case(layout=layout, name="run_name")
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state=initial_state, params=params)
-sim.run(t_end=1.0, cfl=0.4)
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(compiled, instances={"plasma": {"model": module, "initial": initial_state}},
+            params=params)
+sim.step_cfl(0.4)
 ```
 
 No Python callback is allowed in a cell loop, stage loop, Krylov loop, field
@@ -53,7 +54,6 @@ Valid string uses:
 
 ```python
 Model("euler")
-case.block("ions", physics=ions)
 RuntimeParam("nu", default=0.1)
 PoissonProblem(name="phi", unknown="phi")
 T.state("U", block="ions")
@@ -93,11 +93,13 @@ the authoring API.
 
 ```python
 rate = model.rate("explicit_rate", equation=...)
+module = model.to_module()
+ops = module.operator_registry()
 
 T = Program("step")
 U = T.state("U", block="plasma")
-fields = T.call(fields_from_state, U.n)
-R = T.call(rate, U.n, fields)
+fields = T.call(ops.get("fields_from_state"), U.n)
+R = T.call(ops.get("explicit_rate"), U.n, fields)
 T.define(U.next, U.n + T.dt * R)
 T.commit("plasma", U.next)
 ```
@@ -124,14 +126,14 @@ For manual programs, use temporal handles:
 
 ```python
 from pops.time import Program
-from pops.model import OperatorHandle
 
 T = Program("ssprk3_manual")
 U = T.state("U", block="plasma")
 T.bind_operators(model)
 
-fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
-rate = model.rate_operator("explicit_rate", flux=True, sources=["default"])
+ops = model.operator_registry()
+fields_from_state = ops.get("fields_from_state")
+rate = ops.get("explicit_rate")
 
 f0 = T.call(fields_from_state, U.n)
 k0 = T.call(rate, U.n, f0)
@@ -173,13 +175,13 @@ amr = AMR(
 )
 ```
 
-`pops.compile` derives the runtime route from the layout. The user does not pass
-a target.
+`pops.compile_problem` derives the native artifact ABI from the layout. The user
+does not pass a target string.
 
 ## AMR compatibility
 
 AMR is part of the public assembly model, not a separate scripting path. A
-feature documented for `Case` must either work on both `Uniform` and `AMR`, or
+feature documented for the compiled problem route must either work on both `Uniform` and `AMR`, or
 declare a precise mathematical incompatibility in its descriptor. A missing
 Python binding, missing codegen branch, or missing runtime plumbing is not a
 valid public limitation.
@@ -201,7 +203,8 @@ Inspectable objects should print concise summaries and expose structured
 reports:
 
 ```python
-print(case)
+print(module)
+print(program)
 print(compiled)
 print(sim)
 
@@ -215,8 +218,10 @@ compiled.dump_cpp()
 Profiling is off by default:
 
 ```python
-with sim.profile(pops.Profile.Advanced()) as prof:
-    sim.run(t_end=1.0, cfl=0.4)
+from pops.runtime import Profile
+
+with sim.profile(Profile.Advanced()) as prof:
+    sim.step_cfl(0.4)
 
 prof.summary().print()
 ```

@@ -11,8 +11,8 @@ same kernel primitives into the Program. This script builds the model, applies t
 prints the emitted IR, and (when a toolchain is present) compiles the Program to a
 ``problem.so``.
 
-The model build and the macro expansion are pure Python and always run; the compile step
-is guarded and skips cleanly without a C++ compiler / visible Kokkos.
+This example is intentionally fail-loud: if the compiler, Kokkos, or lowering path is missing,
+``pops.compile_problem`` raises instead of hiding the failure.
 
 Run::
 
@@ -22,7 +22,6 @@ import sys
 
 from pops.lib.time import predictor_corrector_local_linear
 from pops.math import ddt, div, grad, laplacian, sqrt
-from pops.model import OperatorHandle
 from pops.physics import Model
 from pops.solvers.elliptic import GeometricMG
 from pops.time import Program
@@ -74,19 +73,20 @@ def library_program(module):
     """Apply the library predictor-corrector macro against the bound operators."""
     program = Program("lib_predictor_corrector")
     program.bind_operators(module)
+    ops = module.operator_registry()
     predictor_corrector_local_linear(
         program,
         "plasma",
-        fields_operator=OperatorHandle("fields_from_state", kind="field_operator"),
-        explicit_rate_operator=OperatorHandle("explicit_rate", kind="local_rate"),
-        implicit_operator=OperatorHandle("implicit_operator", kind="local_linear_operator"),
+        fields_operator=ops.get("fields_from_state"),
+        explicit_rate_operator=ops.get("explicit_rate"),
+        implicit_operator=ops.get("implicit_operator"),
     )
     return program
 
 
 def main():
     model = build_model()
-    module = model.module
+    module = model.to_module()
     program = library_program(module)
 
     print("model:", module.name)
@@ -96,17 +96,7 @@ def main():
 
     import pops
 
-    # RuntimeError = no compiler / no Kokkos visible / compile failed. On the PR-D branch a
-    # board pops.physics.Model that drives a named-source rhs also raises AttributeError
-    # ('Model' object has no attribute '_source_terms') in program_codegen -- a board-model
-    # lowering gap on the PR-E/PR-F punch-list; the authoring half above is what Spec 31
-    # demonstrates and always runs.
-    try:
-        compiled = pops.compile_problem(model=model, time=program)
-    except (RuntimeError, AttributeError) as exc:
-        print("skip compile step (compile_problem could not build the .so: %s: %s)"
-              % (type(exc).__name__, str(exc)[:160]))
-        return 0
+    compiled = pops.compile_problem(model=module, time=program)
     print("problem.so:", compiled.so_path)
     print("OK: library Spec 4 time scheme compiled.")
     return 0

@@ -27,7 +27,7 @@ model = spec.build(name="hyqmom15")
 ```
 
 The `MomentModel` facade records options. `build()` is the single point that
-touches the generator and returns a physics model suitable for `pops.Case`.
+touches the generator and returns a model that must lower to `pops.model.Module`.
 
 ## Required contracts
 
@@ -44,30 +44,33 @@ A moment model must declare:
 For high-order moments, positivity of the density is not sufficient. The model
 must preserve the realizability cone required by the closure.
 
-## Use in a case
+## Compile and install
 
 ```python
 from pops.mesh import CartesianMesh
 from pops.mesh.layouts import Uniform
 from pops.numerics.riemann import HLL
+from pops.numerics.spatial import spatial
 from pops.numerics.reconstruction import MUSCL
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.time import Program
 from pops.lib.time import ssprk3
 
-spatial = pops.FiniteVolume(
+fv = spatial.FiniteVolume(
     riemann=HLL(),
     reconstruction=MUSCL(limiter=Minmod()),
 )
 
+module = model.to_module()
 program = Program("ssprk3")
-ssprk3(program, "moments")
+ssprk3(program, "moments", rhs_operator=module.operator_registry().get("explicit_rate"))
 
-case = (
-    pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)))
-    .block("moments", physics=model, spatial=spatial)
-    .time(program)
-)
+mesh = CartesianMesh(n=96, L=1.0, periodic=True)
+layout = Uniform(mesh)
+compiled = pops.compile_problem(model=module, time=program, layout=layout)
+sim = pops.System(n=96, L=1.0, periodic=True)
+sim.install(compiled, instances={"moments": {"model": module, "initial": M0, "spatial": fv}})
 ```
 
-The same case structure applies to AMR; use `layout=AMR(...)`.
+The same compiled-problem structure applies to AMR; use `layout=AMR(...)` and
+install on `pops.AmrSystem`.

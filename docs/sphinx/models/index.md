@@ -43,10 +43,13 @@ flux = m.flux("F", on=U, x=[...], y=[...], waves={"x": [...], "y": [...]})
 m.rate("explicit_rate", ddt(U) == -div(flux))
 ```
 
-The model is attached to a case:
+The model is lowered to a module and compiled with a time program:
 
 ```python
-case = pops.Case(layout=layout, name="run").block("plasma", physics=m)
+module = m.to_module()
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}})
 ```
 
 ## Moment models
@@ -61,5 +64,5 @@ and compatibility with Riemann solvers.
 ## What a model must not do
 
 A model must not compile itself, allocate runtime storage, run a simulation,
-choose MPI/Kokkos backends, or own AMR. Those concerns belong to `Case`,
-`pops.compile`, `pops.bind`, and the C++ runtime.
+choose MPI/Kokkos backends, or own AMR. Those concerns belong to
+`pops.compile_problem`, `sim.install`, and the C++ runtime.

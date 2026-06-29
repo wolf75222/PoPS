@@ -16,8 +16,8 @@ formats, see [configure outputs and diagnostics](configure-outputs-diagnostics.m
 `WholeExtent` is `0..nx 0..ny` with `Spacing` `1/nx`, `1/ny`.
 
 ```python
-# sim = pops.bind(pops.compile(case, backend=Production()), state={...}); see the simulation guide.
-sim.run(t_end=0.2, cfl=0.4)
+while sim.time() < 0.2:
+    sim.step_cfl(0.4)
 sim.write("out/state", format="vtk")   # writes out/state.vti
 ```
 
@@ -41,7 +41,9 @@ into a single time series.
 import os
 os.makedirs("frames", exist_ok=True)
 for k in range(200):
-    sim.run(t_end=sim.time() + 0.01, cfl=0.4)             # advance one capture window
+    target = sim.time() + 0.01
+    while sim.time() < target:
+        sim.step_cfl(0.4)
     sim.write("frames/run", format="vtk", step=k)   # frames/run_000000.vti, ...
 ```
 

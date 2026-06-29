@@ -1,49 +1,65 @@
-# Bound simulation
+# System install
 
-The public way to obtain a runnable simulation is `pops.bind`.
-
-```python
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state={"plasma": U0})
-```
-
-`bind` uses the case layout to select the runtime route:
-
-- `Uniform(mesh)` builds a single-level runtime;
-- `AMR(mesh, ...)` builds an adaptive runtime.
-
-The returned object exposes high-level runtime actions:
+The public runtime flow installs one compiled problem artifact on an explicit
+runtime facade:
 
 ```python
-sim.run(t_end=1.0, cfl=0.4)
-sim.write("out", format="npz")
-sim.time()
-sim.mass("plasma")
-sim.density("plasma")
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(
+    compiled,
+    instances={
+        "plasma": {
+            "model": module,
+            "initial": U0,
+            "spatial": spatial.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()),
+        },
+    },
+    params=params,
+    aux=aux,
+    solvers=solvers,
+)
+sim.step_cfl(0.4)
 ```
 
-The implementation has lower-level runtime methods because pybind and tests need
-them. User documentation should not use them to assemble a case.
+For an adaptive layout, use the same compiled artifact contract and install it
+on `pops.AmrSystem(...)`. Users do not pass target strings; the layout
+descriptor determines the generated artifact ABI.
 
 ## Inputs
 
-`pops.bind` accepts:
+`sim.install` accepts:
 
-- `state`: initial block arrays;
+- `instances`: initial block arrays plus per-instance model and spatial descriptors;
 - `params`: runtime parameter overrides;
-- `aux`: named static aux fields;
-- `solvers`: optional field-solver overrides;
-- `cadence`: optional compiled-time cadence.
+- `aux`: named static auxiliary fields;
+- `solvers`: field solver descriptors;
+- `outputs`: optional output and checkpoint policies.
 
 The compiled handle declares required inputs through `compiled.arguments()`.
-`bind` validates missing inputs before mutating the runtime.
+`sim.install` validates missing inputs before mutating the runtime.
+
+## Execution
+
+`sim.step_cfl(cfl)` advances one CFL-limited macro step in C++/Kokkos/MPI.
+When a script needs a final time, keep the final time explicit:
+
+```python
+while sim.time() < t_final:
+    sim.step_cfl(cfl)
+```
+
+Avoid positional wrappers that hide what a number means. Prefer named variables
+such as `t_final` and `cfl`.
 
 ## Inspection
 
 ```python
+print(compiled)
 print(sim)
 compiled.arguments()
 compiled.inspect()
 ```
 
-These reports should be small and array-free.
+These reports are small and array-free.

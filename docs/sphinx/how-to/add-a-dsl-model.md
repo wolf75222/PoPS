@@ -1,125 +1,33 @@
 # Add a DSL model
 
-Express a model's physics as symbolic formulas with `pops.physics.facade.Model`, compile it into a `.so`,
-and attach it to a `System`. Use this when you want to declare the flux, eigenvalues, source and
-elliptic right-hand side directly, instead of composing native bricks. This page assumes you can
-already build the Python module and run a case. For the syntax of every declarator, see the
-[DSL reference](../reference/symbolic-dsl.md); for the concepts, see
-[fluxes, sources and eigenvalues](../concepts/fluxes-sources-eigenvalues.md).
+Use `pops.physics.Model` to write physical equations, then lower to
+`pops.model.Module`.
 
-## Before you start
-
-Set the environment variables the DSL needs to find the pops headers and cache the generated
-`.so`. Replace `REPO` with the path to your `adc_cpp` checkout.
-
-```bash
-export POPS_INCLUDE=REPO/include
+```python
+m = Model("gas")
+U = m.state("U", components=["rho", "mx", "my"], roles={"rho": "density"})
+# declare fluxes, fields, sources, rates...
+module = m.to_module()
 ```
 
-```bash
-export POPS_CACHE_DIR=REPO/.pops_cache
+A program calls operator handles from the module:
+
+```python
+program = Program("advance").bind_operators(module)
+ops = module.operator_registry()
+U = program.state("U", block="gas")
+R = program.call(ops.get("explicit_rate"), U.n)
+program.define(U.next, U.n + program.dt * R)
+program.commit("gas", U.next)
 ```
 
-`POPS_INCLUDE` points at the headers the `.so` compiles against; `POPS_CACHE_DIR` caches the
-generated `.so` between runs (default `~/.cache/pops/dsl`).
+Compile and install:
 
-## Steps
+```python
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(compiled, instances={"gas": {"model": module, "initial": U0, "spatial": spatial}})
+sim.step_cfl(0.4)
+```
 
-1. Declare the conservative state and any parameters. Pass `roles=` so the `System` can resolve
-   couplings by role.
-
-   ```python
-   import pops
-
-   m = pops.physics.facade.Model("euler_poisson")
-   rho, rhou, rhov, E = m.conservative_vars(
-       "rho", "rho_u", "rho_v", "E",
-       roles=["Density", "MomentumX", "MomentumY", "Energy"])
-   g = m.param("gamma", 1.4)
-   ```
-
-2. Define the primitives in dependency order with `primitive`.
-
-   ```python
-   u = m.primitive("u", rhou / rho)
-   v = m.primitive("v", rhov / rho)
-   p = m.primitive("p", (g - 1.0) * (E - 0.5 * rho * (u*u + v*v)))
-   ```
-
-3. Declare the flux and the eigenvalues, one `Expr` per component and direction. Use
-   `pops.ir.ops.sqrt` for the sound speed. The named math functions in the algebra are `pops.ir.ops.sqrt` and
-   `pops.ir.ops.abs_` (absolute value).
-
-   ```python
-   H = (E + p) / rho
-   c = pops.ir.ops.sqrt(g * p / rho)
-   m.flux(x=[rhou, rhou*u + p, rhou*v, rho*H*u],
-          y=[rhov, rhov*u, rhov*v + p, rho*H*v])
-   m.eigenvalues(x=[u-c, u, u+c], y=[v-c, v, v+c])
-   ```
-
-4. Add the source and the elliptic right-hand side if the model needs them. Read the potential
-   gradient through the fixed `aux` channels `grad_x` and `grad_y`.
-
-   ```python
-   gx, gy = m.aux("grad_x"), m.aux("grad_y")
-   m.source([0.0, -rho*gx, -rho*gy, -(rhou*gx + rhov*gy)])
-   m.elliptic_rhs(-1.0 * (rho - 1.0))
-   ```
-
-5. Set the primitive layout, supply the inverse `Prim -> U` by hand, then validate. The DSL does
-   not invert the primitives for you.
-
-   ```python
-   prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)
-   m.conservative_from([prho, prho*pu, prho*pv,
-                        pp/(g-1.0) + 0.5*prho*(pu*pu + pv*pv)])
-   m.check()
-   ```
-
-6. Assemble a `pops.Case` with the model as its block, declare the typed elliptic field, then
-   compile and bind. `pops.compile` with `Production()` is the native zero-copy path; it requires
-   that `_pops` and the `.so` share the same headers, compiler and C++ standard. HLLC and Roe
-   require a primitive named `p`.
-
-   ```python
-   import pops
-   import pops.time as T
-   from pops.numerics.riemann import HLLC
-   from pops.numerics.reconstruction.limiters import Minmod
-   from pops.numerics.variables import Primitive
-   from pops.mesh.cartesian import CartesianMesh
-   from pops.mesh.layouts import Uniform
-   from pops.fields import PoissonProblem
-   from pops.fields.bcs import Periodic
-   from pops.fields.rhs import ChargeDensity
-   from pops.solvers.elliptic import GeometricMG
-   from pops.codegen import Production
-   from pops.math import laplacian
-
-   poisson = PoissonProblem(name="phi", unknown="phi",
-                            equation=(-laplacian("phi") == ChargeDensity.from_blocks("gas")),
-                            bcs=(Periodic(),), solver=GeometricMG())
-
-   case = (pops.Case(layout=Uniform(CartesianMesh(n=32, L=1.0, periodic=True)))
-           .block("gas", physics=m,
-                  spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                            variables=Primitive()))
-           .field(poisson)
-           .time(T.Program("euler")))
-
-   compiled = pops.compile(case, backend=Production())
-   sim = pops.bind(compiled, state={"gas": U0})   # U0: initial conservative state
-   sim.run(t_end=0.1, cfl=0.4)
-   ```
-
-   `pops.bind` owns the runtime wiring. Internal native/AMR seams stay available to the binder and
-   tests, but they are not documented front doors.
-
-## Next steps
-
-- Pick the backend for your run (`prototype`, `aot`, `production`) in the
-  [DSL reference](../reference/symbolic-dsl.md).
-- Mix native bricks with DSL bricks in one model with the
-  [brick reference](../reference/native-bricks.md).
-- Run the model on a refined hierarchy in the [simulation guide](../simulation/index.md).
+The DSL does not compile directly and does not run kernels. It writes model IR.

@@ -40,15 +40,14 @@ module = m.lower()
 ## Use the model
 
 ```python
-case = (
-    pops.Case(layout=layout)
-    .block("plasma", physics=module, spatial=spatial)
-    .time(program)
-)
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
 
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state={"plasma": U0})
-sim.run(t_end=1.0, cfl=0.5)
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(
+    compiled,
+    instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}},
+)
+sim.step_cfl(0.5)
 ```
 
 ## Time syntax

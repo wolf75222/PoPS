@@ -327,7 +327,7 @@ class HybridModel:
 
     def _compiled_model(self, so_path, backend, target, abi_key, model_hash, cxx, std):
         from pops.codegen.loader import CompiledModel  # lazy: physics stays codegen-free
-        from pops.codegen.compile import _BACKEND_CAPS
+        from pops.codegen.compile_emit import _BACKEND_CAPS
         return CompiledModel(
             so_path=so_path, backend=backend, adder=HyperbolicModel.adder_for(backend),
             target=target, cons_names=self.cons_names, cons_roles=self.cons_roles,

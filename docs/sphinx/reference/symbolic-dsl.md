@@ -9,9 +9,10 @@ The public route is:
 
 ```python
 model = Model("name")
-case = pops.Case(layout=layout).block("block", physics=model)
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state=state)
+module = model.to_module()
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(compiled, instances={"block": {"model": module, "initial": state}})
 ```
 
 ## State
@@ -83,7 +84,8 @@ Use typed parameter descriptors when the parameter is part of public assembly:
 from pops.params import RuntimeParam, Positive
 
 nu = RuntimeParam("nu", default=0.1, domain=Positive())
-case = case.param(nu)
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim.install(compiled, params={"nu": 0.2}, instances={"block": {"model": module, "initial": state}})
 ```
 
 The parameter name is a string because the user names it. The runtime/const
@@ -107,5 +109,5 @@ Descriptor validation should reject an incompatible route before runtime.
 `pops.physics` writes model/operator IR. It does not own code generation,
 runtime allocation, MPI, Kokkos execution, AMR, profiling, or output.
 
-Compilation is owned by `pops.compile` / `pops.codegen`. Execution is owned by
-the bound simulation returned by `pops.bind`.
+Compilation is owned by `pops.compile_problem` / `pops.codegen`. Execution is
+owned by the explicit runtime facade after `sim.install(compiled, ...)`.

@@ -25,6 +25,6 @@ are typed descriptors and lower to compiled C++ routes.
 Use inspection to check the expansion:
 
 ```python
-compiled = pops.compile(case.time(program))
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
 compiled.dump_ir()
 ```

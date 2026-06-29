@@ -86,9 +86,6 @@ from pops.mesh.cartesian import CartesianMesh
 from pops.mesh.layouts import Uniform
 from pops.time import Program
 from pops.lib.time import ssprk2
-from pops.fields import PoissonProblem
-from pops.fields.bcs import Periodic
-from pops.fields.rhs import ChargeDensity
 from pops.solvers.elliptic import GeometricMG
 from pops.codegen import Production
 
@@ -105,19 +102,22 @@ flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": 
 m.rate("explicit_rate", ddt(U) == -div(flux))
 m.check()
 
-poisson = PoissonProblem(name="phi", unknown="phi",
-                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
-                         bcs=(Periodic(),), solver=GeometricMG())
-
 program = Program("ssprk2")
 ssprk2(program, "ne")
 
-case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)))
-        .block("ne", physics=m.lower()).field(poisson).time(program))
+mesh = CartesianMesh(n=96, L=1.0, periodic=True)
+layout = Uniform(mesh)
+module = m.to_module()
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
 
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state={"ne": np.ascontiguousarray(np.ones((96, 96)))})
-sim.run(t_end=0.05, cfl=0.4)
+sim = pops.System(n=96, L=1.0, periodic=True)
+sim.install(
+    compiled,
+    instances={"ne": {"model": module, "initial": np.ascontiguousarray(np.ones((96, 96)))}},
+    solvers={"phi": GeometricMG()},
+)
+while sim.time() < 0.05:
+    sim.step_cfl(0.4)
 
 # Collective: every rank calls it; rank 0 writes the single .vti file.
 sim.write("out/state", format="vtk")

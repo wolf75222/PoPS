@@ -19,10 +19,11 @@
 ---
 
 PoPS is a compiled solver engine, not a Python numerical library and not a scenario repository.
-Python authors an inert, typed `pops.Case`: mesh layout, physics model, finite-volume descriptors,
-field problems, time program, outputs, and runtime parameters. `pops.compile(...)` lowers that
-assembly to generated or native C++; `pops.bind(...)` creates the runtime; `sim.run(...)` advances
-with C++/Kokkos/MPI kernels. Python never runs a per-cell loop.
+Python authors inert typed objects: a physics/model module, a time `Program`, mesh layout
+descriptors, finite-volume descriptors, field problems, outputs, and runtime parameters.
+`pops.compile_problem(...)` lowers that assembly to one compiled problem artifact; a `pops.System`
+or `pops.AmrSystem` installs that artifact with `sim.install(compiled, ...)`; `sim.step_cfl(...)`
+advances with C++/Kokkos/MPI kernels. Python never runs a per-cell loop.
 
 Named applications such as diocotron, Euler-Poisson, two-fluid, and benchmark setups live in
 [`adc_cases`](https://github.com/wolf75222/adc_cases). This repository owns the reusable solver core,
@@ -135,8 +136,8 @@ target_link_libraries(my_app PRIVATE pops::pops)
 ```
 
 Define a type that satisfies the `PhysicalModel` concept and compose it with the C++ coupling and
-time machinery. This is the low-level engine path. Most users should author a typed Python `Case`
-and let PoPS generate and bind the corresponding C++ artifact.
+time machinery. This is the low-level engine path. Most users should author typed Python
+model/program objects and let PoPS generate the corresponding C++ compiled problem artifact.
 
 ### From Python
 
@@ -153,12 +154,10 @@ from pops.physics import Model
 from pops.math import laplacian, grad, div, ddt
 from pops.mesh.cartesian import CartesianMesh
 from pops.mesh.layouts import Uniform
-from pops.fields import PoissonProblem
-from pops.fields.bcs import Periodic
-from pops.fields.rhs import ChargeDensity
 from pops.solvers.elliptic import GeometricMG
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.spatial import spatial
 from pops.codegen import Production
 
 m = Model("diocotron")
@@ -174,29 +173,34 @@ flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": 
 m.rate("explicit_rate", ddt(U) == -div(flux))
 m.check()
 
-poisson = PoissonProblem(name="phi", unknown="phi",
-                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
-                         bcs=(Periodic(),), solver=GeometricMG())
-
 time = Program("advance")
 ssprk3(time, "ne")
 
-case = (pops.Case(layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)), name="diocotron")
-        .block("ne", physics=m,
-               spatial=pops.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()))
-        .field(poisson)
-        .time(time))
+mesh = CartesianMesh(n=96, L=1.0, periodic=True)
+layout = Uniform(mesh)
+module = m.to_module()
 
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state={"ne": ne0})        # ne0: initial density (2D array)
-sim.run(t_end=0.1, cfl=0.4)
+compiled = pops.compile_problem(model=module, time=time, backend=Production(), layout=layout)
+sim = pops.System(n=96, L=1.0, periodic=True)
+sim.install(
+    compiled,
+    instances={
+        "ne": {
+            "model": module,
+            "initial": ne0,  # ne0: initial density (2D array)
+            "spatial": spatial.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()),
+        },
+    },
+    solvers={"phi": GeometricMG()},
+)
+while sim.time() < 0.1:
+    sim.step_cfl(0.4)
 sim.write("ne.npz", format="npz")                   # save the block states (npz; "vtk" also available)
 ```
 
 For an adaptive run, swap the layout to `pops.mesh.layouts.AMR(mesh, max_levels=2, ratio=2)` and
-author the refinement with typed `pops.mesh.amr` policies. `pops.bind` builds the AMR runtime from
-that layout. Users do not pass a public target string and do not instantiate the AMR runtime as the
-front door.
+author the refinement with typed `pops.mesh.amr` policies. The compiled artifact is installed on
+the matching runtime with `sim.install(compiled, ...)`. Users do not pass a public target string.
 Step-by-step tutorial: [getting-started/tutorial](docs/sphinx/getting-started/tutorial.md).
 Reference: [native-bricks](docs/sphinx/reference/native-bricks.md),
 [symbolic-dsl](docs/sphinx/reference/symbolic-dsl.md),
@@ -222,7 +226,7 @@ Reference: [native-bricks](docs/sphinx/reference/native-bricks.md),
 | `include/pops/core` | C++ concepts, state layout, model contracts, and equation blocks | [physical_model.hpp](include/pops/core/model/physical_model.hpp) |
 | `include/pops/numerics` | C++ finite-volume, elliptic, time, Krylov, reconstruction, and Riemann kernels | [include/pops/numerics](include/pops/numerics) |
 | `include/pops/amr`, `include/pops/mesh`, `include/pops/parallel` | C++ mesh hierarchy, AMR clustering/regrid, MultiFab storage, halos, MPI seams, and reflux support | [include/pops/amr](include/pops/amr) |
-| `include/pops/runtime`, `python/pops/runtime` | low-level runtime that `pops.bind(...)` uses internally to materialise uniform or AMR runs | [system.hpp](include/pops/runtime/system.hpp) |
+| `include/pops/runtime`, `python/pops/runtime` | C++ runtime facade used by `pops.System(...).install(compiled, ...)` / `pops.AmrSystem(...).install(compiled, ...)` | [system.hpp](include/pops/runtime/system.hpp) |
 
 ### Ecosystem
 

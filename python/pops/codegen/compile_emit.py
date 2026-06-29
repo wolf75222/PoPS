@@ -5,8 +5,8 @@ Spec-4 file-size budget.  This is the LEAF module: the per-backend capability / 
 tables, ``model_hash`` (the stable cache key over a model's formulas), ``adder_for`` (the
 System adder name for a backend), and the three ``emit_cpp_*`` source emitters
 (JIT / AOT / native-loader).  The brick / metadata emitters in ``module_codegen`` are
-imported LAZILY inside each ``emit_cpp_*`` function.  ``pops.codegen.compile`` re-imports
-every name so its public surface is unchanged.
+imported LAZILY inside each ``emit_cpp_*`` function.  ``pops.codegen.compile`` no longer
+re-exports this implementation layer; the public compile surface is ``compile_problem`` only.
 
 The compiler-invocation drivers + the ``compile_problem`` facade live in
 ``pops.codegen.compile_drivers`` (they consume ``_BACKENDS`` / ``model_hash`` /

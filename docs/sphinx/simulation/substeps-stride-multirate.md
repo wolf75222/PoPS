@@ -18,20 +18,19 @@ U = T.state("U", block="plasma")
 schedule = every(4)
 ```
 
-## Cadence at bind time
+## Cadence at install time
 
-When a compiled program exposes a cadence descriptor, pass it to `pops.bind`.
+When a compiled problem exposes a cadence descriptor, pass it to `sim.install`.
 
 ```python
-from pops.time import CompiledTime
-
-sim = pops.bind(compiled, state=state, cadence=CompiledTime(substeps=2, stride=1))
+sim.install(compiled, instances={"plasma": {"model": module, "initial": state}},
+            cadence=cadence)
 ```
 
-The bound runtime executes the cadence in C++.
+The installed runtime executes the cadence in C++.
 
 ## AMR
 
 AMR compatibility follows the same rule as other public features: if a cadence
-policy is public on `Case`, it must either lower to AMR or declare a precise
+policy is public on the compiled problem route, it must either lower to AMR or declare a precise
 descriptor incompatibility before runtime.

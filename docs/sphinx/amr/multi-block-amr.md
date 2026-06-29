@@ -1,14 +1,19 @@
 # Multi-block AMR
 
-A multi-block AMR case has several physics blocks on one shared hierarchy.
+A multi-block AMR run installs one compiled problem artifact on a shared AMR
+hierarchy:
 
 ```python
-case = (
-    pops.Case(layout=layout, name="two_species")
-    .block("ions", physics=ions, spatial=ion_spatial)
-    .block("electrons", physics=electrons, spatial=electron_spatial)
-    .field(poisson)
-    .time(time)
+compiled = pops.compile_problem(model=shared_module, time=program,
+                                backend=Production(), layout=layout)
+sim = pops.AmrSystem(n=mesh.n, L=mesh.L)
+sim.install(
+    compiled,
+    instances={
+        "ions": {"model": ions_module, "initial": Ui0, "spatial": ion_spatial},
+        "electrons": {"model": electrons_module, "initial": Ue0, "spatial": electron_spatial},
+    },
+    solvers={"phi": poisson_solver},
 )
 ```
 
@@ -30,8 +35,7 @@ Each block keeps its own:
 
 ## Field coupling
 
-A field RHS such as charge density is assembled from the named contributing
-blocks:
+A field RHS such as charge density is assembled from named contributing blocks:
 
 ```python
 from pops.fields.rhs import ChargeDensity
@@ -39,12 +43,9 @@ from pops.fields.rhs import ChargeDensity
 rhs = ChargeDensity.from_blocks("ions", "electrons")
 ```
 
-The field problem is attached once to the case. The runtime assembles the
-coupled RHS from the block states.
+The field solve lowers to C++; Python only describes the coupling.
 
 ## Time programs
-
-A time program may reference multiple blocks through their handles:
 
 ```python
 from pops.time import Program
@@ -55,8 +56,7 @@ electrons = T.state("U_e", block="electrons")
 ```
 
 When the time program needs one coupled field solve from simultaneous stage
-states, use the multi-block field solve operator or handle supplied by the model
-layer. The field solve still lowers to C++.
+states, use a typed operator handle supplied by the model layer.
 
 ## AMR tags
 

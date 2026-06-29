@@ -7,11 +7,10 @@ the coupling between species reduces to a summed right-hand side.
 
 ## One block per model or species
 
-A block is a named carrier for one model on the mesh. On the public path you declare it with
-`case.block(name, physics=...)`, once per species, and `pops.bind` installs it through the
-low-level runtime (`add_block` for native bricks, `add_equation` for a compiled DSL,
-domain-specific language, model). The same install seam exists on `pops.System` (single level) and
-on `pops.AmrSystem` (refined); the multi-block runtime is identical on both.
+A block is a named carrier for one model on the mesh. On the public path, each
+block is an `instances` entry passed to `sim.install(compiled, ...)`. The same
+install contract exists on `pops.System` (single level) and on `pops.AmrSystem`
+(refined); the multi-block runtime is identical on both.
 
 Each block keeps its own numerics. A block fixes its spatial scheme (limiter, flux,
 reconstruction), its time treatment (`explicit` or `imex`), and its multirate
@@ -19,8 +18,9 @@ reconstruction), its time treatment (`explicit` or `imex`), and its multirate
 inside one run. For what a model is and how you write one, see
 [the physical model](./physical-model.md).
 
-The block name is the index for state access: `set_density(name)`, `mass(name)`,
-and `density(name)` all take the name, so blocks never collide.
+The block name is the index for runtime inputs and diagnostics:
+`instances[name]` supplies the initial state, while `mass(name)` and
+`density(name)` read diagnostics without block collisions.
 
 ## A shared mesh and auxiliary channel
 

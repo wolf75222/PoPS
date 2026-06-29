@@ -12,9 +12,8 @@ Authoring path, end to end with the public Spec 4 surface:
        ``implicit_operator``. The Program does not spell flux/source/Poisson terms.
     3. ``pops.compile_problem`` lowers the Program to a ``problem.so``.
 
-Steps 1-2 are pure Python and always run. Step 3 needs a C++ compiler and a visible
-Kokkos (``POPS_KOKKOS_ROOT``); it is wrapped so the script exits 0 with a skip notice
-when the toolchain is absent (safe in a docs/CI smoke run).
+This example is intentionally fail-loud: if the compiler, Kokkos, or lowering path is missing,
+``pops.compile_problem`` raises instead of hiding the failure.
 
 Run::
 
@@ -23,7 +22,6 @@ Run::
 import sys
 
 from pops.math import ddt, div, grad, laplacian, sqrt
-from pops.model import OperatorHandle
 from pops.physics import Model
 from pops.solvers.elliptic import GeometricMG
 from pops.time import Program
@@ -88,9 +86,10 @@ def manual_program(module):
     dt = program.dt
     U = program.state("U", block="plasma")
 
-    fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
-    explicit_rate = OperatorHandle("explicit_rate", kind="local_rate")
-    implicit_operator = OperatorHandle("implicit_operator", kind="local_linear_operator")
+    ops = module.operator_registry()
+    fields_from_state = ops.get("fields_from_state")
+    explicit_rate = ops.get("explicit_rate")
+    implicit_operator = ops.get("implicit_operator")
 
     fields_n = program.call(fields_from_state, U.n, name="fields_n")
     rate_n = program.call(explicit_rate, U.n, fields_n, name="R_n")
@@ -106,7 +105,7 @@ def manual_program(module):
 
 def main():
     model = build_model()
-    module = model.module
+    module = model.to_module()
     program = manual_program(module)
 
     print("model:", module.name)
@@ -116,17 +115,7 @@ def main():
 
     import pops
 
-    # RuntimeError = no compiler / no Kokkos visible / compile failed. On the PR-D branch a
-    # board pops.physics.Model that drives a named-source rhs also raises AttributeError
-    # ('Model' object has no attribute '_source_terms') in program_codegen -- a board-model
-    # lowering gap on the PR-E/PR-F punch-list; the authoring half above is what Spec 30
-    # demonstrates and always runs.
-    try:
-        compiled = pops.compile_problem(model=model, time=program)
-    except (RuntimeError, AttributeError) as exc:
-        print("skip compile step (compile_problem could not build the .so: %s: %s)"
-              % (type(exc).__name__, str(exc)[:160]))
-        return 0
+    compiled = pops.compile_problem(model=module, time=program)
     print("problem.so:", compiled.so_path)
     print("OK: hand-written Spec 4 time program compiled.")
     return 0

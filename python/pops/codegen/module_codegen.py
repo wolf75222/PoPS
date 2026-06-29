@@ -6,11 +6,10 @@ argument (``model``) and return C++ source strings.  Extracted from the
 codegen package (no circular import: this module never imports pops.dsl or
 pops.physics at module level).
 
-This is the THIN public module of the emitter.  ``emit_cpp_brick`` (the large
+This is an internal emitter module.  ``emit_cpp_brick`` (the large
 concept brick) lives in ``module_emit_brick`` and its OPTIONAL Riemann
 capabilities in ``module_emit_riemann``; the shared codegen helpers and the
-aux/role mirror copies live in ``module_emit_helpers``.  Every name that used
-to be defined here is re-imported below so the public surface is unchanged.
+aux/role mirror copies live in ``module_emit_helpers``.
 
 Public emit functions
 ---------------------
@@ -26,8 +25,8 @@ _codegen_exprs, _live_prims, _prim_block, _jac_entries
 _emit_bricks, _elliptic_field_registrations, _emit_metadata
 """
 
-# Re-export the moved helpers + the brick emitter so the public surface of
-# ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
+# Re-export the moved helpers + the brick emitter for internal callers that still
+# use this module as the emitter aggregation point.
 from pops.codegen.module_emit_helpers import (  # noqa: F401
     _AUX_BASE_COMPS,
     _AUX_CANONICAL,

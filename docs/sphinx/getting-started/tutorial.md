@@ -1,183 +1,74 @@
-# A-to-Z tutorial
+# Tutorial
 
-This tutorial is the longer version of the first run. It keeps one rule: every
-user-visible operation goes through the typed assembly path.
+This tutorial follows the public route:
 
 ```text
-pops.physics.Model
-    -> pops.Case
-    -> pops.compile
-    -> pops.bind
-    -> sim.run
+physics/model authoring
+    -> pops.model.Module
+    -> pops.time.Program
+    -> pops.compile_problem(...)
+    -> pops.System(...)
+    -> sim.install(compiled, ...)
+    -> sim.step_cfl(...)
 ```
 
-The older runtime methods are implementation seams and tests. They are not the
-documented tutorial path.
+Python describes typed objects. C++/Kokkos/MPI executes.
 
-## Build and import
-
-Use the repository scripts for the Python module:
-
-```bash
-bash scripts/setup_env.sh
-bash scripts/build_python.sh
-python -c "import pops; pops.doctor()"
-```
-
-For backend details, see [installation](installation.md) and
-[backend](backend.md).
-
-## Write the physics
-
-The physics facade describes formulas. It lowers to model/operator IR and then
-to C++. It does not run arrays in Python.
+## 1. Build a model
 
 ```python
 from pops.physics import Model
-from pops.math import ddt, div, grad, laplacian
-from pops.solvers.elliptic import GeometricMG
+from pops.math import ddt, div
 
-m = Model("diocotron")
-U = m.state("U", components=["ne"], roles={"ne": "density"})
-(ne,) = U
-
-phi = m.field("phi")
-m.solve_field(
-    "fields_from_state",
-    equation=(-laplacian(phi) == ne),
-    outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-    solver=GeometricMG(),
-)
-
-E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
-flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
+m = Model("scalar_transport")
+U = m.state("U", components=["rho"], roles={"rho": "density"})
+(rho,) = U
+flux = m.flux("F", on=U, x=[rho], y=[0.0 * rho], waves={"x": [1.0 + 0.0 * rho]})
 m.rate("explicit_rate", ddt(U) == -div(flux))
-m.check()
+
+module = m.to_module()
 ```
 
-## Declare the mesh and field problem
-
-```python
-import pops
-from pops.fields import PoissonProblem
-from pops.fields.bcs import Periodic
-from pops.fields.rhs import ChargeDensity
-from pops.math import laplacian
-from pops.mesh.cartesian import CartesianMesh
-from pops.mesh.layouts import Uniform
-from pops.solvers.elliptic import GeometricMG
-
-mesh = CartesianMesh(n=96, L=1.0, periodic=True)
-layout = Uniform(mesh)
-
-poisson = PoissonProblem(
-    name="phi",
-    unknown="phi",
-    equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
-    bcs=(Periodic(),),
-    solver=GeometricMG(),
-)
-```
-
-## Build the time program
-
-`pops.time` is the language. Ready schemes live in `pops.lib.time`.
+## 2. Build a time program
 
 ```python
 from pops.time import Program
 from pops.lib.time import ssprk3
 
-time = Program("advance")
-ssprk3(time, "ne")
+program = Program("advance").bind_operators(module)
+ssprk3(program, "plasma", rhs_operator=module.operator_registry().get("explicit_rate"))
 ```
 
-For a manual scheme, use version handles:
+## 3. Compile and install
 
 ```python
-from pops.model import OperatorHandle
-
-T = Program("manual_step")
-U = T.state("U", block="ne")
-T.bind_operators(m)
-
-fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
-rate = m.rate_operator("explicit_rate", flux=True, sources=["default"])
-
-fields = T.call(fields_from_state, U.n)
-R = T.call(rate, U.n, fields)
-T.define(U.next, U.n + T.dt * R)
-T.commit("ne", U.next)
-```
-
-`U.n`, `U.next`, `U.stage(k)`, and `U.prev` are IR handles. They are not runtime
-storage.
-
-## Assemble, compile, bind, run
-
-```python
+import pops
 from pops.codegen import Production
+from pops.mesh.cartesian import CartesianMesh
+from pops.mesh.layouts import Uniform
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.spatial import spatial
 
-case = (
-    pops.Case(layout=layout, name="diocotron")
-    .block("ne", physics=m, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov()))
-    .field(poisson)
-    .time(time)
-)
+mesh = CartesianMesh(n=96, L=1.0, periodic=True)
+layout = Uniform(mesh)
+fv = spatial.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov())
 
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state={"ne": ne0})
-sim.run(t_end=0.1, cfl=0.4)
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+
+sim = pops.System(n=96, L=1.0, periodic=True)
+sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": fv}})
 ```
 
-The generated code and runtime use the same C++ core as native runs:
-finite-volume kernels, field solves, reductions, Kokkos execution, MPI
-communication, and AMR infrastructure.
-
-## Switch to AMR
-
-AMR is a layout descriptor:
+## 4. Advance
 
 ```python
-from pops.mesh.amr import PatchLayout, Refine, RegridEvery
-from pops.mesh.layouts import AMR
+t_final = 0.1
+cfl = 0.4
 
-layout = AMR(
-    mesh,
-    max_levels=2,
-    ratio=2,
-    regrid=RegridEvery(8),
-    patches=PatchLayout(coarse_max_grid=32),
-    refine=Refine.on("density").above(0.05),
-)
+while sim.time() < t_final:
+    sim.step_cfl(cfl)
 ```
 
-Use this `layout` in the same `Case`. The public flow does not change.
-
-## Inspect
-
-Before running, inspect what will be compiled:
-
-```python
-print(case)
-case.inspect()
-
-print(compiled)
-compiled.inspect()
-compiled.arguments()
-```
-
-For memory and profiling:
-
-```python
-mem = compiled.estimate_memory(grid=mesh)
-print(mem)
-
-with sim.profile(pops.Profile.Basic()) as prof:
-    sim.run(t_end=0.1, cfl=0.4)
-
-prof.summary().print()
-```
-
-Profiling is off unless requested.
+Use [public API contract](../reference/public-api-contract.md) as the source of
+truth for what is public.

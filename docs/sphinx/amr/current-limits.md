@@ -5,9 +5,9 @@ contract, not a backlog list.
 
 ## Public contract
 
-The public assembly surface is `Case`. A case that is valid on a uniform layout
-should be valid on an AMR layout unless a descriptor declares a precise
-mathematical incompatibility.
+The public assembly surface is the compiled problem route. A model/program pair
+that is valid on a uniform layout should be valid on an AMR layout unless a
+descriptor declares a precise mathematical incompatibility.
 
 Examples of legitimate incompatibilities:
 
@@ -20,8 +20,8 @@ Examples that are not legitimate public limitations:
 - a missing Python binding;
 - a missing codegen branch;
 - an unimplemented install path;
-- an AMR runtime route that exists in C++ but is not reached from `pops.compile`
-  or `pops.bind`.
+- an AMR runtime route that exists in C++ but is not reached from
+  `pops.compile_problem`.
 
 Those must be implemented or the public API must not expose the feature.
 
@@ -35,14 +35,11 @@ AMR descriptors must declare:
 - availability;
 - lowering metadata.
 
-The route should fail before runtime when a combination is invalid.
+The route should fail before codegen/runtime when a combination is invalid.
 
 ```python
 layout = AMR(mesh, max_levels=2, ratio=2)
 layout.validate()
-
-case = pops.Case(layout=layout).block("plasma", physics=model)
-case.validate()
 ```
 
 ## Execution

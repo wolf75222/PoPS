@@ -60,8 +60,8 @@ print(pops.parallel_info())
 
 ## DSL production (`.dll`) and `adc_cases`
 
-`pops.compile(case, backend=Production())` compiles a `.dll` (cl/clang-cl, `/LD`, linked to
-`kokkoscore.lib` + `_pops.lib`) that the bound runtime loads (`LoadLibraryW`) -- no Unix
+`pops.compile_problem(..., backend=Production())` compiles a `.dll` (cl/clang-cl, `/LD`, linked to
+`kokkoscore.lib` + `_pops.lib`) that `sim.install(compiled, ...)` loads (`LoadLibraryW`) -- no Unix
 `RTLD_GLOBAL`, the `_pops` symbols are resolved at link time via `_pops.lib`. Validated bit-identical to the
 brick path. `adc_cases.common.native.build_shared` produces standalone `.dll` files (ctypes) in the
 same way.

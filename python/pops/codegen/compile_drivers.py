@@ -1,12 +1,9 @@
-"""pops.codegen.compile_drivers : the compiler-invocation + facade layer of the pipeline.
+"""pops.codegen.compile_drivers : internal compiler-invocation layer.
 
-Extracted verbatim from ``pops.codegen.compile`` so the model compile pipeline fits the
-Spec-4 file-size budget.  These drivers receive a physical model object or a
-``Program``/``Module`` pair and invoke the C++ compiler on the source the emitters produce:
-``compile_so`` / ``compile_aot`` / ``compile_native`` (one per backend), the
-``compile_or_jit`` mode dispatcher, the ``compile_model`` facade and ``compile_problem`` (compile a
-``pops.time.Program`` into a ``problem.so``).  ``pops.codegen.compile`` re-imports every
-name so its public surface is unchanged.
+The only public compile route is ``compile_problem``.  The model-level helpers in
+this file still exist for internal transitional codegen paths, but they are not
+re-exported by ``pops.codegen`` or ``pops.codegen.compile`` and must not be used
+as a user-facing orchestration API.
 
 Does NOT import pops.physics at module level to avoid import cycles; the physics facade and
 aux helpers are imported lazily inside the functions that need them.
@@ -51,13 +48,15 @@ from pops.codegen.compile_emit import (
 from pops.codegen.backends import lower_backend, lower_problem_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 
+__all__ = ["compile_problem"]
+
 
 # ---------------------------------------------------------------------------
 # Compiler runners
 # ---------------------------------------------------------------------------
 
-def compile_so(model, so_path, include=None, name=None, cxx=None, std="c++20",
-               hoist_reciprocals=False):
+def _compile_so(model, so_path, include=None, name=None, cxx=None, std="c++20",
+                hoist_reciprocals=False):
     """JIT: generate the FULL MODEL (emit_cpp_so_source) and compile a shared
     library loadable by System.add_dynamic_block (dlopen). Returns so_path.
     """
@@ -78,8 +77,8 @@ def compile_so(model, so_path, include=None, name=None, cxx=None, std="c++20",
     return so_path
 
 
-def compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
-                hoist_reciprocals=False):
+def _compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
+                 hoist_reciprocals=False):
     """Backend "compile" (AOT): generate the FULL MODEL (emit_cpp_aot_source)
     and compile a .so loadable by System.add_compiled_block. Returns so_path.
 
@@ -116,8 +115,8 @@ def compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
     return so_path
 
 
-def compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23", target="system",
-                   hoist_reciprocals=False):
+def _compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23", target="system",
+                    hoist_reciprocals=False):
     """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
     and compile it into a .so loadable by System.add_native_block
     (target="system") or AmrSystem.add_native_block (target="amr_system").
@@ -164,8 +163,8 @@ def compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23
     return so_path
 
 
-def compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=None, std="c++20",
-                   target="system", hoist_reciprocals=False):
+def _compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=None, std="c++20",
+                    target="system", hoist_reciprocals=False):
     """Unified API selecting the backend by mode:
 
     - mode="jit"     -> compile_so (IModel, virtual dispatch: host prototyping);
@@ -178,17 +177,17 @@ def compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=None
         if target != "system":
             raise ValueError("compile_or_jit: target='amr_system' not supported in mode 'jit' "
                              "(the AMR path exists only for mode='native')")
-        return compile_so(model, so_path, include, name=name, cxx=cxx, std=std,
-                          hoist_reciprocals=hoist_reciprocals)
+        return _compile_so(model, so_path, include, name=name, cxx=cxx, std=std,
+                           hoist_reciprocals=hoist_reciprocals)
     if mode == "compile":
         if target != "system":
             raise ValueError("compile_or_jit: target='amr_system' not supported in mode 'compile' "
                              "(the AMR path exists only for mode='native')")
-        return compile_aot(model, so_path, include, name=name, cxx=cxx, std=std,
-                           hoist_reciprocals=hoist_reciprocals)
+        return _compile_aot(model, so_path, include, name=name, cxx=cxx, std=std,
+                            hoist_reciprocals=hoist_reciprocals)
     if mode == "native":
-        return compile_native(model, so_path, include, name=name, cxx=cxx, std=std, target=target,
-                              hoist_reciprocals=hoist_reciprocals)
+        return _compile_native(model, so_path, include, name=name, cxx=cxx, std=std, target=target,
+                               hoist_reciprocals=hoist_reciprocals)
     raise ValueError("compile_or_jit: mode 'jit' | 'compile' | 'native' (received %r)" % mode)
 
 
@@ -196,8 +195,8 @@ def compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=None
 # compile_model -- full facade (mirrors HyperbolicModel.compile logic)
 # ---------------------------------------------------------------------------
 
-def compile_model(model, so_path=None, include=None, backend=None, name=None, cxx=None,
-                  std=None, require_metadata=False, target="system", hoist_reciprocals=False):
+def _compile_model(model, so_path=None, include=None, backend=None, name=None, cxx=None,
+                   std=None, require_metadata=False, target="system", hoist_reciprocals=False):
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a .so via the engine designated by *backend* and returns its path.
 
@@ -245,8 +244,8 @@ def compile_model(model, so_path=None, include=None, backend=None, name=None, cx
     else:
         so_path = _backend_distinct_so_path(so_path, backend)
 
-    out_path = compile_or_jit(m, so_path, include, mode=mode, name=name, cxx=cxx, std=std,
-                              target=target, hoist_reciprocals=hoist_reciprocals)
+    out_path = _compile_or_jit(m, so_path, include, mode=mode, name=name, cxx=cxx, std=std,
+                               target=target, hoist_reciprocals=hoist_reciprocals)
     _record_so_backend(out_path, backend)
     return out_path
 

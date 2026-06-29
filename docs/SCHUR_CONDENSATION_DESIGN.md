@@ -294,19 +294,20 @@ condensed_schur(
     potential=model.field("phi"),
 )
 
-case = (
-    pops.Case(layout=layout, name="ions_schur")
-    .block("ions", physics=model, spatial=spatial)
-    .field(poisson)
-    .time(time)
+compiled = pops.compile_problem(model=model, time=time, backend=Production(), layout=layout)
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(
+    compiled,
+    instances={"ions": {"model": model, "initial": U0, "spatial": spatial}},
+    solvers={"phi": poisson.solver},
 )
 ```
 
 Principles of this API:
 - `pops.lib.time.condensed_schur` adds the source-stage IR to the compiled `Program`.
 - The Schur stage maps fields and state components through typed roles, not stringly runtime setters.
-- The runtime receives the compiled case through `pops.compile(...)` / `pops.bind(...)`; no block or
-  equation is installed by ad-hoc public setters.
+- The runtime receives one compiled problem artifact through `sim.install(compiled, ...)`; no block
+  or equation is installed by ad-hoc public setters.
 
 BOX -- `pops.SourceImplicit` (LOCAL) vs `pops.CondensedSchur` (GLOBAL). Two distinct mechanisms
 treat a stiff source implicitly; do not confuse them.

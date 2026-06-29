@@ -63,7 +63,7 @@ class _FacadeCompileMixin:
                                             _native_feature_key, pops_include)
         from pops.codegen.cache import _cache_so_path, _record_so_backend
         from pops.codegen.abi import _abi_key_python
-        from pops.codegen.compile import _BACKEND_CAPS
+        from pops.codegen.compile_emit import _BACKEND_CAPS
         from pops.codegen.loader import CompiledModel
         from pops.codegen.backends import BACKEND_DESCRIPTORS, Production, lower_internal_backend
         # Internal runtime seam: public callers should go through compile_problem(..., backend=Production())
@@ -126,8 +126,8 @@ class _FacadeCompileMixin:
         else:
             # Compilation (engines unchanged): call the strict driver with a typed descriptor, while
             # keeping target as this internal native-loader token.
-            from pops.codegen.compile import compile_model
-            out_path = compile_model(
+            from pops.codegen.compile_drivers import _compile_model
+            out_path = _compile_model(
                 m, so_path=so_path, include=include, backend=BACKEND_DESCRIPTORS[backend](),
                 name=name, cxx=cxx, std=std, require_metadata=require_metadata, target=target,
                 hoist_reciprocals=hoist_reciprocals)

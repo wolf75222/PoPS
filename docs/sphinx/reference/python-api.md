@@ -1,10 +1,7 @@
 # Python API
 
-This page documents the stable user-facing shape of `pops`. The implementation
-also contains runtime seams used by tests and bindings; those are not the
-authoring path.
-
-For the rules, see [public API contract](public-api-contract.md).
+This page documents the stable user-facing shape of `pops`. The full rule set
+is in [public API contract](public-api-contract.md).
 
 ## Main flow
 
@@ -12,37 +9,44 @@ For the rules, see [public API contract](public-api-contract.md).
 import pops
 from pops.codegen import Production
 
-compiled = pops.compile(case, backend=Production())
-sim = pops.bind(compiled, state=initial_state, params=params)
-sim.run(t_end=1.0, cfl=0.4)
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim.install(
+    compiled,
+    instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}},
+    params=params,
+    aux=aux,
+    solvers=solvers,
+)
+sim.step_cfl(0.4)
 ```
 
-`pops.compile` validates and lowers the `Case`. `pops.bind` attaches data and
-constructs the C++ runtime from the case layout.
+`compile_problem` validates and lowers the model/program pair into one compiled
+problem artifact. `System.install` or `AmrSystem.install` attaches runtime data
+and installs that artifact. Numerical execution is C++/Kokkos/MPI work.
 
-## Top-level assembly
+## Compile artifact
 
 ```{eval-rst}
-.. autoclass:: pops.Case
-   :members:
+.. autofunction:: pops.compile_problem
+
+.. autoclass:: pops.CompiledProblem
+   :members: inspect, arguments, estimate_memory, dump_ir, dump_cpp
 ```
 
-## Runtime facade returned by bind
+## Runtime facade
 
-The object returned by `pops.bind` is the simulation facade. User code should
-obtain it from `bind`, not by hand-building runtime classes.
+User code constructs the runtime facade explicitly, then installs the compiled
+problem. Low-level wiring methods are private implementation seams.
 
 ```{eval-rst}
 .. autoclass:: pops.System
-   :members: run, write, checkpoint, time, mass, density, potential, profile
+   :members: install, step_cfl, step, write, checkpoint, time, mass, density, potential, profile
 
 .. autoclass:: pops.AmrSystem
-   :members: run, write, checkpoint, time, mass, density, potential, profile
+   :members: install, step_cfl, step, write, checkpoint, time, mass, density, potential, profile
 ```
-
-The full runtime classes still expose lower-level methods because the C++/pybind
-layer and tests use them. They are intentionally not examples for user
-authoring.
 
 ## Physics authoring
 
@@ -51,32 +55,8 @@ authoring.
    :members:
 ```
 
-The physics facade builds model/operator IR. It does not compile directly in
-the public flow; the case is compiled by `pops.compile`.
-
-## Native brick composition
-
-Native bricks are already-compiled C++ pieces that can be assembled into a
-model. They are useful presets, but the public run flow is still `Case ->
-compile -> bind -> run`.
-
-```{eval-rst}
-.. autofunction:: pops.Model
-
-.. autoclass:: pops.Scalar
-.. autoclass:: pops.FluidState
-.. autoclass:: pops.ExB
-.. autoclass:: pops.CompressibleFlux
-.. autoclass:: pops.IsothermalFlux
-.. autoclass:: pops.NoSource
-.. autoclass:: pops.PotentialForce
-.. autoclass:: pops.GravityForce
-.. autoclass:: pops.MagneticLorentzForce
-.. autoclass:: pops.PotentialMagneticForce
-.. autoclass:: pops.ChargeDensity
-.. autoclass:: pops.BackgroundDensity
-.. autoclass:: pops.GravityCoupling
-```
+The physics facade builds model/operator IR. It does not compile directly and
+does not own runtime data.
 
 ## Mesh and layouts
 
@@ -109,11 +89,11 @@ Numerical choices are descriptors.
 from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
 from pops.numerics.reconstruction import MUSCL, WENO5Z
 from pops.numerics.reconstruction.limiters import Minmod, VanLeer
+from pops.numerics.spatial import spatial
 from pops.numerics.terms import Flux, SourceTerm
-```
 
-The top-level `pops.FiniteVolume(...)` function remains the current bridge to
-the runtime spatial brick.
+fv = spatial.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov())
+```
 
 ## Time
 
@@ -121,52 +101,18 @@ the runtime spatial brick.
 
 ```{eval-rst}
 .. autoclass:: pops.time.Program
-   :members:
-
-.. autoclass:: pops.time.CompiledTime
-   :members:
+   :members: state, call, define, commit, history, store_history
 ```
 
-Ready schemes are in `pops.lib.time`.
+Ready schemes live in `pops.lib.time`, not in `pops.time`.
 
-## Solvers
+## Runtime profiling
 
 ```python
-from pops.solvers.elliptic import FFT, GeometricMG
-from pops.solvers.krylov import BiCGStab, CG, GMRES, Richardson
-from pops.solvers import preconditioners
+from pops.runtime import Profile
+
+with sim.profile(Profile.Advanced()) as prof:
+    sim.step_cfl(0.4)
+
+prof.summary().print()
 ```
-
-Users configure provided compiled solvers. They do not author solver loops in
-Python.
-
-## Compilation and inspection
-
-```{eval-rst}
-.. autoclass:: pops.codegen.loader.CompiledProblem
-   :members: inspect, arguments, estimate_memory, dump_ir, dump_cpp, inspect_capabilities, inspect_amr
-
-.. autoclass:: pops.codegen.loader.CompiledModel
-   :members: inspect, inspect_amr
-```
-
-Useful environment variables are documented in
-[environment variables](environment-variables.md).
-
-## Profiling
-
-```{eval-rst}
-.. autoclass:: pops.Profile
-   :members:
-
-.. autoclass:: pops.PerformanceSummary
-   :members:
-```
-
-Profiling is off by default and should be enabled explicitly with
-`sim.profile(...)` or `POPS_PROFILE`.
-
-## Experimental namespace
-
-`pops.experimental` is not production API. Pages may mention it for debugging,
-but tutorials must not use it as a solver route.

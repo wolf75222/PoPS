@@ -32,7 +32,7 @@ from ._authoring_codegen import _CodegenMixin
 class _BackendLazyMeta(type):
     """Metaclass exposing ``HyperbolicModel._BACKENDS`` / ``._BACKEND_CAPS`` lazily.
 
-    The single source of truth is :mod:`pops.codegen.compile`; resolving it at class
+    The single source of truth is :mod:`pops.codegen.compile_emit`; resolving it at class
     body time would make ``import pops.physics`` pull in codegen, breaking the Spec-4
     import-graph rule. The metaclass resolves the tables on first CLASS-level access
     instead, so ``HyperbolicModel._BACKENDS[backend]`` keeps working unchanged.
@@ -40,7 +40,7 @@ class _BackendLazyMeta(type):
 
     def __getattr__(cls, name):
         if name in ("_BACKENDS", "_BACKEND_CAPS"):
-            from pops.codegen import compile as _cg
+            from pops.codegen import compile_emit as _cg
             return getattr(_cg, name)
         raise AttributeError(name)
 

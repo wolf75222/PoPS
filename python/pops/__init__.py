@@ -17,7 +17,9 @@ from pops.runtime.doctor import doctor  # noqa: F401
 __all__ = [
     "__version__",
     "System", "AmrSystem",
-    "time", "model", "math", "physics", "moments", "lib",
+    "physics", "model", "time", "numerics", "fields", "linalg", "solvers",
+    "mesh", "params", "diagnostics", "output", "external", "moments", "lib",
+    "codegen", "runtime", "math",
     "abi_key",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "compile_problem", "CompiledProblem",
@@ -34,6 +36,17 @@ from . import math  # noqa: E402  (pops.math board operators; pure stdlib, Spec 
 from . import lib  # noqa: E402  (pops.lib typed-brick descriptor catalog; pure stdlib, Spec 3)
 from . import physics  # noqa: E402  (pops.physics board model authoring; numpy-free import, Spec 3)
 from . import moments  # noqa: E402  (generic moment authoring tools; ready models live in pops.lib)
+from . import numerics  # noqa: E402
+from . import fields  # noqa: E402
+from . import linalg  # noqa: E402
+from . import solvers  # noqa: E402
+from . import mesh  # noqa: E402
+from . import params  # noqa: E402
+from . import diagnostics  # noqa: E402
+from . import output  # noqa: E402
+from . import external  # noqa: E402
+from . import codegen  # noqa: E402
+from . import runtime  # noqa: E402
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
     LibraryManifest, compile_library, read_library_manifest)
 

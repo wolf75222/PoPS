@@ -13,10 +13,12 @@ mesh = CartesianMesh(n=256, L=1.0, periodic=False)
 layout = Uniform(mesh, embedded_boundary=wall)
 ```
 
-Use the layout in a case:
+Use the layout when compiling the problem:
 
 ```python
-case = pops.Case(layout=layout).block("plasma", physics=model, spatial=spatial)
+compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+sim = pops.System(n=mesh.n, L=mesh.L, periodic=False)
+sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}})
 ```
 
 Geometry descriptors must declare their compatibility with AMR, MPI, GPU, and
