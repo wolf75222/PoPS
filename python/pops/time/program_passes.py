@@ -95,9 +95,11 @@ class _ProgramPasses(_ProgramConstants):
             attrs["residual_block"] = [_ProgramPasses._serialize_node(w) for w in attrs["residual_block"]]
             for k in ("residual", "iterate", "guess"):
                 attrs[k] = attrs[k].id
-        return {"id": v.id, "vtype": v.vtype, "op": v.op, "block": v.block,
+        serialized_vtype = "call" if v.op == "call" else v.vtype
+        if v.op == "call" and "output_vtype" not in attrs:
+            raise ValueError("call node %r is missing output_vtype; use Program.call/_call_node" % (v.name,))
+        return {"id": v.id, "vtype": serialized_vtype, "op": v.op, "block": v.block,
                 "inputs": [i.id for i in v.inputs], "attrs": attrs}
-
 
     def _live_value_ids(self):
         """The set of value ids reverse-reachable from the live roots: the commits plus every flat node

@@ -266,7 +266,8 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     n_n = P.state("neutrals", block="neutrals", space=sp["neutrals"]).n
     f = P.call(mod.operator_registry().get("fields"), e_n, i_n, n_n)
     assert f.op == "call", "field solve remains an operator-first Program node"
-    assert set(f.attrs) == {"operator", "operator_id", "output_type"}
+    assert set(f.attrs) == {
+        "operator", "operator_id", "operator_handle", "output_type", "output_vtype"}
     assert f.attrs["operator"] == "fields"
     assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
     P.commit_many({"electrons": e_n, "ions": i_n, "neutrals": n_n})

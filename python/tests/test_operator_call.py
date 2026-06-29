@@ -85,7 +85,8 @@ def test_call_predictor_records_operator_nodes_and_lowers():
     assert [v.op for v in P._values].count("call") == 2
     for v in P._values:
         if v.op == "call":
-            assert set(v.attrs) == {"operator", "operator_id", "output_type"}
+            assert set(v.attrs) == {
+                "operator", "operator_id", "operator_handle", "output_type", "output_vtype"}
     src = P.emit_cpp_program(model=m)
     assert "namespace GeneratedModule" in src
     assert "GeneratedModule::Operators::op_" in src
@@ -93,6 +94,27 @@ def test_call_predictor_records_operator_nodes_and_lowers():
     assert _generated_call(m, "explicit_rhs") + "(ctx, 0," in src
     assert "electric" in src
     print("OK  P.call(fields_from_state)+P.call(explicit_rhs) records call and lowers")
+
+
+def test_operator_first_serialized_ir_has_only_call_nodes_for_operators():
+    """TASK-015: operator-first examples serialize calls, not rhs/solve_fields/source nodes."""
+    m = build_model()
+    P = adctime.Program("operator_first_ir").bind_operators(m)
+    U = _state(P, m)
+    fields = P.call(_handle(m, "fields_from_state"), U, name="fields_n")
+    rate = P.call(_handle(m, "explicit_rhs"), U, fields, name="R_n")
+    P.commit("plasma", P.linear_combine("U_next", U + P.dt * rate))
+
+    nodes = P._serialize()["nodes"]
+    call_nodes = [node for node in nodes if node["op"] == "call"]
+    assert len(call_nodes) == 2
+    assert {node["vtype"] for node in call_nodes} == {"call"}
+    assert [node["attrs"]["operator"] for node in call_nodes] == [
+        "fields_from_state", "explicit_rhs"]
+    assert [node["attrs"]["output_vtype"] for node in call_nodes] == ["fields", "rate"]
+    for node in nodes:
+        assert node["op"] not in {"rhs", "solve_fields", "source", "linear_source"}
+        assert node["vtype"] != "rhs"
 
 
 def test_call_lowers_source_and_flux():

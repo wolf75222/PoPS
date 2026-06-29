@@ -43,7 +43,13 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
     elif v.op == "call":
         fn = "GeneratedModule::Operators::%s" % operator_function_name(
             v.attrs["operator_id"], v.attrs["operator"])
-        if v.vtype == "fields":
+        output_vtype = v.attrs.get("output_vtype")
+        if output_vtype is None:
+            raise ValueError(
+                "call node for operator %r is missing output_vtype; construct calls through "
+                "Program.call/_call_node so the IR remains operator-first"
+                % (v.attrs.get("operator"),))
+        if output_vtype == "fields":
             if len(v.inputs) > 1:
                 bmap = block_idx or {}
                 vec = "u_stages_%d" % v.id
@@ -61,14 +67,14 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
                 (state_in,) = v.inputs
                 lines.append("%s(ctx, %d, %s);" % (fn, bidx, var[state_in.id]))
                 var[v.id] = var[state_in.id]
-        elif v.vtype == "rhs":
+        elif output_vtype == "rate":
             state_in = v.inputs[0]
             var[v.id] = "r%d" % v.id
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                          % (var[v.id], var[state_in.id]))
             lines.append("%s(ctx, %d, %s, %s);" %
                          (fn, bidx, var[state_in.id], var[v.id]))
-        elif v.vtype == "operator":
+        elif output_vtype == "local_linear_operator":
             var[v.id] = "op%d" % v.id
             if v.inputs:
                 arg = v.inputs[0]
@@ -78,14 +84,14 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             else:
                 lines.append("const char* %s = %s(ctx, 0, ctx.state(0));" %
                              (var[v.id], fn))
-        elif v.vtype == "state":
+        elif output_vtype == "state":
             state_in = v.inputs[0]
             lines.append("%s(ctx, %d, %s);" % (fn, bidx, var[state_in.id]))
             var[v.id] = var[state_in.id]
         else:
             raise NotImplementedError(
                 "emit_cpp_program: call output %r is not lowerable (operator %r)"
-                % (v.vtype, v.attrs.get("operator")))
+                % (output_vtype, v.attrs.get("operator")))
     elif v.op == "solve_fields":
         # Per-stage field solve (ADC-409): solve from the EXPLICIT stage state recorded by
         # P.solve_fields(state=...) so a field-coupled multi-stage scheme re-solves phi from each

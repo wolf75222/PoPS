@@ -163,7 +163,8 @@ class _ProgramCore(_ProgramConstants):
         self._check_call_args(op, args)
         if schedule is not None:
             self._validate_schedule(op, schedule)
-        result = self._lower_call(op, self._registry.id_of(operator_name), operator_name, args, name)
+        result = self._lower_call(op, self._registry.id_of(operator_name), operator, operator_name,
+                                  args, name, schedule=schedule)
         # A coupled_rate has no single output Value (it returns a _CoupledResult): its per-block
         # spaces are tagged inside _lower_coupled_rate, and a schedule on the whole bundle is not
         # meaningful yet -- reject it with a clear message rather than leaking an AttributeError.
@@ -211,25 +212,39 @@ class _ProgramCore(_ProgramConstants):
                 "m.operator_capabilities(%r, cacheable=True)"
                 % (op.name, schedule.policy, op.name))
 
-    def _lower_call(self, op, operator_id, operator_name, args, name):
+    def _call_node(self, storage_vtype, output_vtype, operator_id, operator_handle, operator_name,
+                   output, args, name, block, schedule=None):
+        attrs = {
+            "operator": operator_name,
+            "operator_id": int(operator_id),
+            "operator_handle": getattr(operator_handle, "name", operator_name),
+            "output_type": repr(output),
+            "output_vtype": output_vtype,
+        }
+        if schedule is not None:
+            attrs["schedule"] = schedule
+        return self._new(storage_vtype, "call", args, attrs, name, block)
+
+    def _lower_call(self, op, operator_id, operator_handle, operator_name, args, name,
+                    schedule=None):
         # A typed call is a first-class IR node: operator id + arguments + output type.  The Program
         # does not lower by operator kind here; GeneratedModule::Operators owns the numerical route.
         from pops.model import FieldSpace, LocalLinearOperator, RateBundle, RateSpace, StateSpace
         output = op.signature.output
-        attrs = {
-            "operator": operator_name,
-            "operator_id": int(operator_id),
-            "output_type": repr(output),
-        }
         block = args[0].block if args else None
         if isinstance(output, FieldSpace):
-            return self._new("fields", "call", args, attrs, name, block)
+            return self._call_node("fields", "fields", operator_id, operator_handle, operator_name, output,
+                                   args, name, block, schedule=schedule)
         if isinstance(output, RateSpace):
-            return self._new("rhs", "call", args, attrs, name, block)
+            return self._call_node("rhs", "rate", operator_id, operator_handle, operator_name, output,
+                                   args, name, block, schedule=schedule)
         if isinstance(output, LocalLinearOperator):
-            return self._new("operator", "call", args, attrs, name or operator_name, block)
+            return self._call_node("operator", "local_linear_operator", operator_id,
+                                   operator_handle, operator_name, output, args,
+                                   name or operator_name, block, schedule=schedule)
         if isinstance(output, StateSpace):
-            return self._new("state", "call", args, attrs, name, block)
+            return self._call_node("state", "state", operator_id, operator_handle, operator_name, output,
+                                   args, name, block, schedule=schedule)
         if isinstance(output, RateBundle):
             return self._lower_coupled_rate(op, operator_name, args, name)
         raise NotImplementedError(

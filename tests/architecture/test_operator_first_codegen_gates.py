@@ -35,14 +35,23 @@ def _call_branch_source():
 
 def test_pcall_creates_call_node():
     """TASK-070: P.call must record first-class call IR nodes, not legacy rhs/fields nodes."""
+    node_src = _function_source(POPS / "time" / "program_core.py", "_call_node")
+    assert '"operator_id"' in node_src
+    assert '"operator_handle"' in node_src
+    assert '"output_type"' in node_src
+    assert '"output_vtype"' in node_src
+    assert 'self._new(storage_vtype, "call"' in node_src
+    serialize_src = _function_source(POPS / "time" / "program_passes.py", "_serialize_node")
+    assert "missing output_vtype" in serialize_src
+    assert 'setdefault("output_vtype"' not in serialize_src
+
     src = _function_source(POPS / "time" / "program_core.py", "_lower_call")
-    assert '"operator_id"' in src
-    assert '"output_type"' in src
-    assert src.count('self._new("fields", "call"') == 1
-    assert src.count('self._new("rhs", "call"') == 1
-    assert src.count('self._new("operator", "call"') == 1
-    assert src.count('self._new("state", "call"') == 1
+    assert src.count("self._call_node(") == 4
     for forbidden in (
+        'self._new("fields", "call"',
+        'self._new("rhs", "call"',
+        'self._new("operator", "call"',
+        'self._new("state", "call"',
         "_fields_from_state",
         "_rate_from_transport",
         "_legacy_rhs",
@@ -57,7 +66,13 @@ def test_generated_cpp_calls_generated_module():
     src = _call_branch_source()
     assert "GeneratedModule::Operators::%s" in src
     assert "operator_function_name" in src
+    assert "output_vtype" in src
+    assert "missing output_vtype" in src
     for forbidden in (
+        'v.vtype == "fields"',
+        'v.vtype == "rhs"',
+        'v.vtype == "operator"',
+        'v.vtype == "state"',
         "ctx.solve_fields_from_state",
         "ctx.solve_fields_from_blocks",
         "ctx.rhs_into",
