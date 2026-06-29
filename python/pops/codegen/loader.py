@@ -3,8 +3,9 @@
 ``CompiledModel`` packages a model ``.so`` with the metadata needed to wire
 it (adder, names, roles, gamma, n_aux, params, caps, abi_key, model_hash).
 
-``CompiledProblem`` packages a program ``.so`` (a compiled time
-``pops.time.Program``) plus the metadata to install + reproduce it.
+``CompiledProblem`` packages one combined ``problem.so``: GeneratedModule
+metadata/operators plus the GeneratedProgram step and the metadata needed to
+install, inspect and reproduce it.
 
 Neither class imports ``pops.dsl`` or ``pops.physics`` at module level.
 """
@@ -12,23 +13,23 @@ Neither class imports ``pops.dsl`` or ``pops.physics`` at module level.
 
 class CompiledProblem:
     """Result of ``pops.compile_problem(...)``; a generated ``problem.so``
-    (a compiled time Program) plus the metadata to install + reproduce it.
-    Install it with ``sim.install(compiled, ...)``; the Program then
-    drives ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
+    containing the GeneratedModule + GeneratedProgram artifact metadata needed
+    to install + reproduce it. Install it with ``sim.install(compiled, ...)``;
+    the step then runs entirely in C++ via ``ProgramContext``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos
     toolchain as the loaded _pops module (cf. ``pops_loader_build_flags``),
-    so its ABI key matches and ``System::install_program`` accepts it.
+    so its ABI key matches and the runtime problem loader accepts it.
     ``os.fspath(compiled)`` returns ``so_path`` (it can be passed where a
     path is expected).
     """
 
     def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,
                  problem_hash=None, cache_key=None, compile_command=None, generated_sources=None,
-                 codegen_env=None):
+                 codegen_env=None, module_hash=None, source_hash=None, problem_identity=None):
         self.so_path = so_path
         self.program = program          # the pops.time.Program that was lowered
-        self.model = model              # the physical model (optional; added as a block in the MVP)
+        self.model = model              # the canonical pops.model.Module that was lowered
         self.program_name = getattr(program, "name", None)
         self.program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
@@ -40,13 +41,17 @@ class CompiledProblem:
         # dlopen'd (and ABI-guarded) by read_library_manifest.
         self.libraries = list(libraries) if libraries else []
         # Compiled-artifact metadata (Spec 5 sec.12.4, #48-49): set by compile_problem. The
-        # problem hash is the program-SOURCE hash (the WHAT the .so was built from -- distinct from
-        # program_hash, the IR hash of the in-memory Program); cache_key is the (problem_hash|abi)
-        # identity the out-of-source cache file name carries; compile_command is the redacted
-        # compiler invocation; generated_sources are the .cpp files written for inspection (debug=).
+        # problem hash is a STRUCTURED identity over Module IR, Program IR, descriptors, layout,
+        # backend, toolchain, native Kokkos/MPI features, external libraries and generated-source
+        # guard. It is distinct from program_hash, the in-memory Program IR hash. cache_key is the
+        # out-of-source artifact key; compile_command is the redacted compiler invocation;
+        # generated_sources are the .cpp files written for inspection (debug=).
         # None on a route that does not record a value (e.g. an externally constructed handle) -- a
         # documented absence, not a fabricated value (cf. the property accessors below).
         self._problem_hash = problem_hash
+        self._module_hash = module_hash
+        self._source_hash = source_hash
+        self._problem_identity = dict(problem_identity or {})
         self._cache_key = cache_key
         self._compile_command = compile_command
         self._generated_sources = list(generated_sources) if generated_sources else []
@@ -73,19 +78,38 @@ class CompiledProblem:
 
     @property
     def problem_hash(self):
-        """Stable hash of the program SOURCE the ``.so`` was compiled from (sec.12.4, #48).
+        """Stable structured hash of the combined ``problem.so`` identity (sec.12.4, #48).
 
-        The sha256 of the emitted C++ program text -- the cache identity (the WHAT). ``None`` for a
-        handle built outside ``compile_problem`` (it records no source hash); use
-        :attr:`program_hash` for the in-memory Program's IR hash, which is always available."""
+        The digest covers Module IR, Program IR, descriptors, layout, backend, toolchain, native
+        Kokkos/MPI features, external libraries and a generated-source guard. ``None`` only for a
+        handle built outside ``compile_problem``."""
         return self._problem_hash
 
     @property
-    def cache_key(self):
-        """The (problem source | abi_key | backend/target) cache key of the ``.so`` (sec.12.4, #48).
+    def module_hash(self):
+        """Stable hash of the carried Module IR, when available."""
+        if self._module_hash is not None:
+            return self._module_hash
+        if self.model is not None and hasattr(self.model, "module_hash"):
+            return self.model.module_hash()
+        return None
 
-        The sha256 the out-of-source build cache keys the artifact on; reproducing it requires the
-        same program, headers, compiler and C++ standard. ``None`` for an externally built handle."""
+    @property
+    def source_hash(self):
+        """SHA-256 of the generated C++ source used as a guard inside the structured identity."""
+        return self._source_hash
+
+    @property
+    def problem_identity(self):
+        """Plain dict identity record from which :attr:`problem_hash` was computed."""
+        return dict(self._problem_identity)
+
+    @property
+    def cache_key(self):
+        """The structured problem identity + ABI/backend/target cache key of the ``.so``.
+
+        Reproducing it requires the same problem identity, headers, compiler, C++ standard,
+        backend and runtime route. ``None`` for an externally built handle."""
         return self._cache_key
 
     @property
@@ -270,10 +294,10 @@ class CompiledProblem:
     def dump_ir(self, path=None):
         """Write the serialized Program IR (JSON) -- the SAME serialization ``_ir_hash`` digests.
 
-        EXPOSES the existing codegen: the lowered ``pops.time.Program``'s ``_serialize()`` blob (its
-        nodes, commits, block order, optional dt bound) as indented, sort-keyed JSON -- byte-stable
-        run to run, the WHAT the ``.so`` was built from. Writes to @p path if given (returns the
-        path), else returns the JSON string. Raises a clear error if this handle carries no Program."""
+        EXPOSES the lowered ``pops.time.Program``'s ``_serialize()`` blob (its nodes, commits, block
+        order, optional dt bound) as indented, sort-keyed JSON -- byte-stable run to run. Writes to
+        @p path if given (returns the path), else returns the JSON string. Raises a clear error if
+        this handle carries no Program."""
         import json
         program = self._require_program("dump_ir")
         blob = json.dumps(program._serialize(), indent=2, sort_keys=True)

@@ -12,6 +12,8 @@ Does NOT import pops.physics at module level to avoid import cycles; the physics
 aux helpers are imported lazily inside the functions that need them.
 """
 
+import hashlib
+import json
 import os
 import sys
 
@@ -267,6 +269,86 @@ def _problem_target_from_layout(layout):
         "descriptor; got %r" % type(layout).__name__)
 
 
+def _stable_identity_value(value):
+    """JSON-stable, side-effect-free representation for problem identity records."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_stable_identity_value(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _stable_identity_value(value[k]) for k in sorted(value, key=str)}
+    if hasattr(value, "inspect") and callable(value.inspect):
+        return _stable_identity_value(value.inspect())
+    if hasattr(value, "options") and callable(value.options):
+        return {
+            "type": type(value).__name__,
+            "category": getattr(value, "category", None),
+            "options": _stable_identity_value(value.options()),
+        }
+    return {"type": type(value).__name__, "repr": repr(value)}
+
+
+def _library_identity(manifests):
+    out = []
+    for manifest in manifests or []:
+        if hasattr(manifest, "to_dict") and callable(manifest.to_dict):
+            out.append(_stable_identity_value(manifest.to_dict()))
+        elif hasattr(manifest, "as_dict") and callable(manifest.as_dict):
+            out.append(_stable_identity_value(manifest.as_dict()))
+        else:
+            out.append(_stable_identity_value(manifest))
+    return out
+
+
+def _compiled_problem_identity(*, source, model, program, layout, backend, target,
+                               include, compiler, std, abi_key, optflags,
+                               library_manifests):
+    """Structured identity of the combined problem artifact.
+
+    The emitted source is included as a derived guard, but it is no longer the whole identity:
+    Module IR, Program IR, descriptors, layout, backend, toolchain and native Kokkos/MPI features
+    all participate before the cache key is formed.
+    """
+    source_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    module_hash = model.module_hash() if hasattr(model, "module_hash") else None
+    program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
+    record = {
+        "schema": "pops-compiled-problem-v1",
+        "name": getattr(program, "name", "problem"),
+        "module": {
+            "name": getattr(model, "name", None),
+            "hash": module_hash,
+        },
+        "program": {
+            "name": getattr(program, "name", None),
+            "hash": program_hash,
+        },
+        "descriptors": {
+            "layout": _stable_identity_value(layout),
+            "backend": _stable_identity_value(backend),
+            "libraries": _library_identity(library_manifests),
+        },
+        "runtime_route": {
+            "target": target,
+        },
+        "toolchain": {
+            "include": include,
+            "compiler": compiler,
+            "std": std,
+            "abi_key": abi_key,
+            "native_features": _native_feature_key(),
+            "optflags": list(optflags),
+        },
+        "source": {
+            "hash": source_hash,
+            "language": "c++",
+        },
+    }
+    blob = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    problem_hash = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return record, problem_hash, module_hash, program_hash, source_hash
+
+
 def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout=None,
                     force=False, cxx=None, include=None, std=None, debug=False, libraries=None):
     """Compile a physical model + ``pops.time.Program`` into one ``problem.so``.
@@ -279,7 +361,6 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
     The produced ``.so`` carries the GeneratedProgram plus GeneratedModule metadata and is later
     installed by ``sim.install(compiled, ...)``.
     """
-    import hashlib
     import tempfile
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.env import CodegenEnv
@@ -292,6 +373,10 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
     # active env state is inspectable (criterion #47), never hidden.
     cenv = CodegenEnv.from_env(keep_generated=debug)
 
+    backend_descriptor = backend if backend is not None else {
+        "type": "Production",
+        "default": True,
+    }
     backend = lower_problem_backend(backend)
     target = _problem_target_from_layout(layout)
     cenv.log("compile_problem: backend=%s target=%s force=%s" % (backend, target, force))
@@ -335,16 +420,39 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
     cc, cflags, lflags = pops_loader_build_flags(cxx)
     eff_std = _probe_cxx_std(cc, std or loader_cxx_std())
     abi_key = "%s|%s|%s" % (sig, cc, eff_std)
-    # Stable program (problem) hash + cache key (Spec 5 sec.12.4, #48): the program-source hash is
-    # the WHAT, the cache key combines it with the abi_key (the HOW) -- the same identity the
-    # out-of-source .so cache file name carries. Computed unconditionally so the metadata is present
-    # on BOTH the cache-hit and the fresh-compile path (and even when an explicit so_path is given).
-    program_hash = hashlib.sha256(src.encode()).hexdigest()
-    cache_key = hashlib.sha256(("%s|%s|program-production|%s" % (program_hash, abi_key, target))
-                               .encode()).hexdigest()
+    optflags = _dsl_optflags()
+    problem_identity, problem_hash, module_hash, program_hash, source_hash = (
+        _compiled_problem_identity(
+            source=src,
+            model=model,
+            program=time,
+            layout=layout,
+            backend=backend_descriptor,
+            target=target,
+            include=include,
+            compiler=cc,
+            std=eff_std,
+            abi_key=abi_key,
+            optflags=optflags,
+            library_manifests=library_manifests,
+        )
+    )
+    cache_key = hashlib.sha256(
+        json.dumps(
+            {
+                "schema": "pops-compiled-problem-cache-v1",
+                "problem_hash": problem_hash,
+                "abi_key": abi_key,
+                "target": target,
+                "backend": backend,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
     if so_path is None:
-        so_path = _cache_so_path(program_hash, abi_key, "program-production", target,
+        so_path = _cache_so_path(problem_hash, abi_key, "problem-production", target,
                                  getattr(time, "name", "problem"))
         # POPS_CODEGEN_DIR (sec.12.4, #47): redirect the out-of-source .so (and any kept source /
         # dump) into the requested directory, keeping the collision-free cache file name. An explicit
@@ -355,12 +463,13 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
         if not force and os.path.isfile(so_path):
             cenv.log("compile_problem: cache HIT -> %s" % so_path)
             compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
-                                       libraries=library_manifests, problem_hash=program_hash,
-                                       cache_key=cache_key, codegen_env=cenv)
+                                       libraries=library_manifests, problem_hash=problem_hash,
+                                       module_hash=module_hash, source_hash=source_hash,
+                                       problem_identity=problem_identity, cache_key=cache_key,
+                                       codegen_env=cenv)
             cenv.run_dumps(compiled)
             return compiled
 
-    optflags = _dsl_optflags()
     # POPS_KEEP_GENERATED (sec.12.4, #47): keep the emitted .cpp next to the .so -- the same effect
     # debug=True has (debug=True already set keep_generated in cenv, explicit-arg-wins). When neither
     # is set the source lives only in the TemporaryDirectory below and is discarded.
@@ -387,8 +496,10 @@ def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout
         _run_compile(cmd, "compile_problem (backend production)")
     cenv.log("compile_problem: compiled -> %s" % so_path)
     compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
-                               libraries=library_manifests, problem_hash=program_hash,
-                               cache_key=cache_key, compile_command=compile_command,
+                               libraries=library_manifests, problem_hash=problem_hash,
+                               module_hash=module_hash, source_hash=source_hash,
+                               problem_identity=problem_identity, cache_key=cache_key,
+                               compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
                                codegen_env=cenv)
     cenv.run_dumps(compiled)

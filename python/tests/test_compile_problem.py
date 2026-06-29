@@ -181,7 +181,7 @@ def _fe_program(module, name="forward_euler_parity", coeff=1.0):
     states = module.state_spaces()
     operators = module.operator_registry()
     dt = P.dt
-    U = P.state("ions", space=states["U"])
+    U = P.state("U", block="ions", space=states["U"]).n
     fields = P.call(operators.get("fields_from_state"), U, name="fields")
     R = P.call(operators.get("explicit_rate"), U, fields, name="R")
     P.commit("ions", P.linear_combine("U1", U + coeff * dt * R))

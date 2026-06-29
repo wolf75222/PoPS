@@ -292,7 +292,7 @@ def test_metadata_attributes_present():
     print("== metadata attributes (sec.12.4) ==")
     cp = _compiled()
     chk(cp.codegen_dir == os.path.dirname(cp.so_path), "codegen_dir is the .so directory")
-    chk(cp.problem_hash == "deadbeefcafe", "problem_hash is the program-source hash")
+    chk(cp.problem_hash == "deadbeefcafe", "problem_hash is present")
     chk(cp.abi_key == "SIG|c++|c++23", "abi_key is present")
     chk(cp.cache_key == "0badc0de", "cache_key is present")
     # On a synthetic (non-compiled) handle, compile_command is honestly None, not a fake.
@@ -300,6 +300,43 @@ def test_metadata_attributes_present():
     chk(cp.generated_sources == [], "generated_sources is an empty list (no debug source written)")
     # program_hash (the IR hash) is always available even with no source hash recorded.
     chk(cp.program_hash is not None, "program_hash (the IR hash) is always available")
+
+
+def test_compiled_problem_identity_is_structured():
+    """The problem hash is not only sha256(source): Module, Program, layout and toolchain enter it."""
+    print("== compiled problem identity is structured ==")
+    from pops.codegen.compile_drivers import _compiled_problem_identity
+    from pops.codegen.backends import Production
+    from pops.mesh.cartesian import CartesianMesh
+    from pops.mesh.layouts import Uniform
+
+    module = _real_compile_model()
+    program = _program("identity_probe")
+    layout = Uniform(CartesianMesh(n=16))
+    identity, problem_hash, module_hash, program_hash, source_hash = _compiled_problem_identity(
+        source="// generated source\n",
+        model=module,
+        program=program,
+        layout=layout,
+        backend=Production(),
+        target="system",
+        include="/tmp/include",
+        compiler="c++",
+        std="c++23",
+        abi_key="SIG|c++|c++23",
+        optflags=["-O2"],
+        library_manifests=[],
+    )
+    chk(identity["schema"] == "pops-compiled-problem-v1", "identity has a schema")
+    chk(identity["module"]["hash"] == module.module_hash(), "Module IR hash enters identity")
+    chk(identity["program"]["hash"] == program._ir_hash(), "Program IR hash enters identity")
+    chk(identity["descriptors"]["layout"]["name"] == "Uniform", "layout descriptor enters identity")
+    chk(identity["descriptors"]["backend"]["name"] == "Production", "backend descriptor enters identity")
+    chk(identity["toolchain"]["abi_key"] == "SIG|c++|c++23", "ABI/toolchain enters identity")
+    chk(identity["source"]["hash"] == source_hash, "source hash is retained as a guard")
+    chk(problem_hash != source_hash, "problem_hash is not just sha256(source)")
+    chk(module_hash == module.module_hash(), "module_hash returned alongside problem_hash")
+    chk(program_hash == program._ir_hash(), "program_hash returned alongside problem_hash")
 
 
 def test_str_is_short_and_deterministic():
