@@ -368,32 +368,32 @@ class _ProgramCore(_ProgramConstants):
         out.space = state_space  # the combine result is a State over the same space
         return out
 
-    # --- named sources / local linear operators (Phase 4 / ADC-403) ---
+    # --- internal named-source / local-linear compatibility nodes -----------------
     @property
     def I(self):  # noqa: E743  -- the mathematical identity operator (matches the spec's P.I)
         """The identity operator, for building a local linear operator ``self.I - a * L`` (L a
         linear source). Consumed by `solve_local_linear`."""
         return _Operator(_Coeff({0: 1.0}), [])
 
-    def linear_source(self, name):
-        """Reference a model linear-source operator ``L_name`` (declared via ``m.linear_source``).
-        Use it in operator algebra (``self.I - a * P.linear_source('lorentz')``) or `apply`. The
-        coefficients of L are the model's; the Program only names it (resolved at compile time)."""
+    def _linear_source_value(self, name):
+        """Internal compatibility value for legacy local-linear lowering.
+
+        This is intentionally underscored: user Programs must call typed operator handles. Existing
+        package macros still use this while they are migrated to operator-first handles.
+        """
         if not isinstance(name, str) or not name:
-            raise ValueError("linear_source: name must be a non-empty string")
+            raise ValueError("_linear_source_value: name must be a non-empty string")
         return self._new("operator", "linear_source", (), {"linear_source": name}, name, None)
 
-    def source(self, name, state=None, fields=None):
-        """Evaluate a single named model source ``S_name(U, fields)`` (``m.source_term``) on its own.
-        Returns an RHS-like value (a dU/dt contribution) usable in linear combinations. Named sources
-        are never summed implicitly; this requests exactly one."""
+    def _source_value(self, name, state=None, fields=None):
+        """Internal compatibility value for the historical named-source node."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         if not isinstance(name, str) or not name:
-            raise ValueError("source: a non-empty source name is required")
+            raise ValueError("_source_value: a non-empty source name is required")
         if not (isinstance(state, Value) and state.vtype == "state"):
-            raise ValueError("source: a State value is required (state=...)")
+            raise ValueError("_source_value: a State value is required (state=...)")
         if fields is not None and not (isinstance(fields, Value) and fields.vtype == "fields"):
-            raise ValueError("source: fields must be a FieldContext from solve_fields")
+            raise ValueError("_source_value: fields must be a FieldContext from solve_fields")
         inputs = (state, fields) if fields is not None else (state,)
         return self._new("rhs", "source", inputs, {"source": name}, name, state.block)
 

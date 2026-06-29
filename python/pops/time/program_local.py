@@ -47,9 +47,9 @@ class _ProgramLocal(_ProgramConstants):
 
         @p residual is an IR-building callable ``residual_fn(P, U, U0) -> State``: given the Newton
         iterate State @p U and the frozen initial-guess State @p U0 it BUILDS the residual ``r(U)`` (a
-        State value) from LOCAL per-cell ops only -- ``P.source`` (a named ``m.source_term``),
-        ``P.apply`` (a named ``m.linear_source``), the iterate / initial-guess States, and the affine
-        algebra over them (e.g. an implicit reaction ``r(U) = U - U0 - dt*S(U)``). A non-local op
+        State value) from LOCAL per-cell ops only -- the internal named-source helper,
+        ``P.apply`` (a named local-linear operator), the iterate / initial-guess States, and the
+        affine algebra over them (e.g. an implicit reaction ``r(U) = U - U0 - dt*S(U)``). A non-local op
         (``P.rhs`` / ``P.divergence`` / ``P.solve_fields`` / a nested solve) is rejected: the residual
         must be re-evaluable at a PERTURBED cell-local stack state, which a halo / global solve cannot.
         The sub-block (like a ``set_apply`` body) lowers to a device-inlinable per-cell residual the
@@ -109,8 +109,9 @@ class _ProgramLocal(_ProgramConstants):
             if w.op not in self._RESIDUAL_LOCAL_OPS:
                 raise ValueError(
                     "solve_local_nonlinear: residual op '%s' is not LOCAL; a per-cell Newton residual "
-                    "may use only %s (the iterate / guess State, P.source, P.apply, affine combines). "
-                    "Use a non-local op (P.rhs / P.divergence / P.solve_fields) outside the residual."
+                    "may use only %s (the iterate / guess State, the internal named-source helper, "
+                    "P.apply, affine combines). Use a non-local op (P.rhs / P.divergence / "
+                    "P.solve_fields) outside the residual."
                     % (w.op, sorted(self._RESIDUAL_LOCAL_OPS)))
         return self._new(
             "state", "solve_local_nonlinear", (initial_guess,),
@@ -118,10 +119,13 @@ class _ProgramLocal(_ProgramConstants):
              "tol": float(tol), "max_iter": int(max_iter), "method": "newton"}, name, block)
 
     def _linear_source_name(self, operator, where):
-        """Resolve `operator` (a `linear_source` value, its name, or a single unit-coefficient
+        """Resolve `operator` (a local-linear value, its name, or a single unit-coefficient
         ``_Operator`` term) to the linear-source name."""
-        if isinstance(operator, str) and operator:
-            return operator
+        if isinstance(operator, str):
+            raise TypeError(
+                "%s: string operator selectors are not public in Spec 5; pass the local-linear "
+                "operator value produced by P.call(handle, ...) or an internal _linear_source_value"
+                % where)
         if isinstance(operator, Value) and operator.op == "linear_source":
             return operator.attrs["linear_source"]
         if isinstance(operator, Value) and operator.op == "call" and operator.vtype == "operator":
@@ -130,7 +134,8 @@ class _ProgramLocal(_ProgramConstants):
                 and len(operator.terms) == 1 and operator.terms[0][1].as_dict() == {0: 1.0}):
             return operator.terms[0][0].attrs["linear_source"]
         raise ValueError(
-            "%s: operator must be a linear source (P.linear_source(name) or its name)" % where)
+            "%s: operator must be a local-linear operator value from P.call(handle, ...) "
+            "or an internal _linear_source_value(name)" % where)
 
     # --- matrix-free operators / dynamic linear solve (ADC-405 Phase 6b) ----------------------------
     # A ``matrix_free_op`` names a GLOBAL matrix-free operator A : scalar_field -> scalar_field whose

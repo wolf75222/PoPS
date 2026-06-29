@@ -48,10 +48,10 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
         if board:
             u1 = P.solve(
                 "U1",
-                (P.I - dt * P.linear_source("lorentz")) @ unknown("U1") == u + dt * r,
+                (P.I - dt * P._linear_source_value("lorentz")) @ unknown("U1") == u + dt * r,
             )
         else:
-            op = P.I - dt * P.linear_source("lorentz")  # build the operator first (board order)
+            op = P.I - dt * P._linear_source_value("lorentz")  # build the operator first (board order)
             rhs = P.linear_combine("U1_rhs", u + dt * r)
             u1 = P.solve_local_linear(name="U1", operator=op, rhs=rhs)
         P.commit("plasma", u1)
@@ -63,8 +63,8 @@ def test_solve_matches_linear_combine_plus_solve_local_linear():
 def test_apply_operator_to_state_via_matmul():
     P = Program("apply")
     u = P.state("U", block="plasma").n
-    lu_board = P.linear_source("lorentz") @ u
-    lu_manual = P.apply(operator=P.linear_source("lorentz"), state=u)
+    lu_board = P._linear_source_value("lorentz") @ u
+    lu_manual = P.apply(operator=P._linear_source_value("lorentz"), state=u)
     assert lu_board.op == "apply" and lu_board.attrs["linear_source"] == "lorentz"
     assert lu_manual.op == "apply"
 

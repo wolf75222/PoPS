@@ -122,8 +122,12 @@ def test_program_public_surface_is_operator_first_only():
     assert hasattr(P, "call"), "Program must expose typed operator calls"
     assert hasattr(P, "define"), "Program must expose T.define(...) temporal SSA sugar"
 
-    for forbidden in ("solve_fields", "rhs"):
+    for forbidden in ("solve_fields", "rhs", "source", "linear_source"):
         assert not hasattr(P, forbidden), "Program.%s must not be public" % forbidden
+
+    u = P.state("U", block="plasma").n
+    with pytest.raises(TypeError, match="string operator selectors"):
+        P.apply("lorentz", state=u)
 
     # The old private helpers must not stay as stable architecture names.
     for forbidden in ("_solve_fields", "_rhs_legacy"):

@@ -76,7 +76,7 @@ def reaction_program(t, name="implicit_reaction"):
     U = P.state("blk")
 
     def residual(P, Uit, U0):
-        S = P.source("react", state=Uit)  # S(U) = -k U^2 (named non-linear source)
+        S = P._source_value("react", state=Uit)  # S(U) = -k U^2 (named non-linear source)
         return P.linear_combine("r", Uit - U0 - dt * S)  # r = U - U0 - dt*S(U)
 
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U,
@@ -143,7 +143,7 @@ def section_a(t):
         u = Q.state("blk")
 
         def r(Q, Uit, U0):
-            return Q.linear_combine(Uit - U0 - dt * Q.source("react", state=Uit))
+            return Q.linear_combine(Uit - U0 - dt * Q._source_value("react", state=Uit))
         Q.commit("blk", Q.solve_local_nonlinear(name="W", residual=r, initial_guess=u,
                                                  tol=tol, max_iter=mi))
         return Q._ir_hash()
@@ -178,7 +178,7 @@ def section_a(t):
     Ub = Pbig.state("blk")
 
     def big_resid(P, Uit, U0):
-        return P.linear_combine(Uit - U0 - P.dt * P.source("react", state=Uit))
+        return P.linear_combine(Uit - U0 - P.dt * P._source_value("react", state=Uit))
     Pbig.commit("blk", Pbig.solve_local_nonlinear(name="W", residual=big_resid, initial_guess=Ub))
     chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
         "n_cons > 8 dense-fallback guard fires")

@@ -79,7 +79,7 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
     U = P.state("blk")
 
     def residual(P, Uit, U0):
-        S = P.source("react", state=Uit)
+        S = P._source_value("react", state=Uit)
         return P.linear_combine("r", Uit - U0 - dt * S)
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-10, max_iter=25)
     assert W.op == "solve_local_nonlinear" and W.vtype == "state", (W.op, W.vtype)
@@ -114,7 +114,7 @@ def test_solve_local_nonlinear_refused_without_model(t):
     U = P.state("blk")
 
     def residual(P, Uit, U0):
-        S = P.source("react", state=Uit)
+        S = P._source_value("react", state=Uit)
         return P.linear_combine("r", Uit - U0 - dt * S)
     P.commit("blk", P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U))
     try:

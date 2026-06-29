@@ -173,9 +173,9 @@ class Model(_FacadeCompileMixin):
 
     def source_term(self, name, exprs):
         """NAMED local source S_name(U, primitives, aux, params): exactly n_cons expressions
-        (delegates to HyperbolicModel.source_term). Opt-in -- emitted only when a compiled time
-        Program requests it (ctx.rhs(..., sources=[name]) / ctx.source(name)), never summed
-        implicitly. name='default' is the backward-compatible alias of m.source([...]).
+        (delegates to HyperbolicModel.source_term). Opt-in -- emitted only when a compiled Program
+        calls the returned typed operator handle, never summed implicitly. name='default' is the
+        backward-compatible alias of m.source([...]).
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3),
         which a Program can pass to ``P.call`` in place of the string name."""

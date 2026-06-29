@@ -127,9 +127,9 @@ m_named = named_source_model()
 def _electric_fe_program(name="electric_fe"):
     """One Forward-Euler step from a single rhs(sources=['electric'])."""
     P = adctime.Program(name)
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=["electric"])
+    U = P._state_value("plasma")
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(name="R", state=U, fields=f, flux=True, sources=["electric"])
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -137,9 +137,9 @@ def _electric_fe_program(name="electric_fe"):
 def _unknown_source_program(name="unknown_src"):
     """One Forward-Euler step naming a source the model never declared."""
     P = adctime.Program(name)
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=["does_not_exist"])
+    U = P._state_value("plasma")
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(name="R", state=U, fields=f, flux=True, sources=["does_not_exist"])
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -175,9 +175,9 @@ def _both_source_model(name="pc_both"):
 
 def _extra_fe_program(srcs, name="extra_fe"):
     P = adctime.Program(name)
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(name="R", state=U, fields=f, flux=True, sources=srcs)
+    U = P._state_value("plasma")
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(name="R", state=U, fields=f, flux=True, sources=srcs)
     P.commit("plasma", P.linear_combine("U1", U + P.dt * R))
     return P
 
@@ -198,17 +198,17 @@ chk(raises(NotImplementedError, lambda: _electric_fe_program().emit_cpp_program(
 def predictor_corrector_program(name="predictor_corrector_poisson_lorentz"):
     P = adctime.Program(name)
     dt = P.dt
-    U_n = P.state("plasma")
-    f_n = P._legacy_solve_fields("fields_n", U_n)
-    R_n = P._legacy_rhs(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
+    U_n = P._state_value("plasma")
+    f_n = P._fields_from_state("fields_n", U_n)
+    R_n = P._rate_from_transport(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
     U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
-    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P.linear_source("lorentz"),
+    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P._linear_source_value("lorentz"),
                                   rhs=U_star_rhs, fields=f_n)
-    f_star = P._legacy_solve_fields("fields_star", U_star)
-    R_star = P._legacy_rhs(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
-    C_star = P.apply(operator=P.linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
+    f_star = P._fields_from_state("fields_star", U_star)
+    R_star = P._rate_from_transport(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
+    C_star = P.apply(operator=P._linear_source_value("lorentz"), state=U_star, fields=f_star, name="C_star")
     Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
-    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P.linear_source("lorentz"),
+    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P._linear_source_value("lorentz"),
                                  rhs=Q, fields=f_star)
     P.commit("plasma", U_np1)
     return P

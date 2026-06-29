@@ -77,9 +77,9 @@ class _SourceMixin:
     def source_term(self, name, exprs):
         """Declare a NAMED local source S_name(U, primitives, aux, params): exactly n_cons
         expressions, free to depend on cons / primitives / aux / aux_field / params / constants. A
-        named source is OPT-IN -- it is emitted only when a compiled time Program asks for it
-        (ctx.rhs(..., sources=[name]) / ctx.source(name)) and is NEVER summed implicitly into the
-        legacy total source. name == "default" is the backward-compatible alias of m.source([...])
+        named source is OPT-IN -- it is emitted only when a compiled Program calls the returned typed
+        operator handle (or an internal package macro selects it). It is NEVER summed implicitly into
+        the legacy total source. name == "default" is the backward-compatible alias of m.source([...])
         (stored in self._source, hash unchanged). Other names must be valid identifiers, unique, and
         must not collide with a linear_source.
 
@@ -113,9 +113,9 @@ class _SourceMixin:
         coefficients may depend on constants / params / aux / aux_field ONLY -- NOT on conservative or
         primitive variables (otherwise S(U) = L U is not linear in U and could not be treated as a
         local linear source by solve_local_linear). The operator is OPT-IN: never folded into m.source
-        or ctx.rhs; a Program uses it explicitly via ctx.linear_source(name) / ctx.apply /
-        ctx.solve_local_linear. Name must be a valid identifier, unique, and must not collide with a
-        source_term.
+        or a composite rate; a Program uses the returned typed operator handle with ``P.call`` and
+        then passes the resulting operator value to local-linear operations. Name must be a valid
+        identifier, unique, and must not collide with a source_term.
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3): an
         inert typed reference (``.name`` / ``.kind == "local_linear_operator"``) a Program can pass to

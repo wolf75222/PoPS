@@ -290,7 +290,7 @@ def build_solver_ir(solver_brick):
     desc = _as_descriptor(solver_brick)
     program = _time.Program("solver_" + desc.name)
     ctx = SolverContext(program)
-    a_op = program.linear_source("A")    # the matrix-free operator A, an IR operator value
+    a_op = program._linear_source_value("A")    # internal IR operator value for the experimental DSL
     b_rhs = ctx.unknown("b")             # the right-hand side b, an IR State value
     result = desc.builder(ctx, a_op, b_rhs)
     # A builder may return an affine expression (``x + omega*r``); materialize it into a

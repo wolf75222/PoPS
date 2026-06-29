@@ -87,7 +87,7 @@ def _bdf_local_linear(P, block, order, linear_source, sources, flux):
 
     if order == 1:  # (I - dt*L) U^{n+1} = U^n [+ dt R]
         rhs = P.linear_combine(block + "_bdf1_rhs", _with_explicit(1.0 * U))
-        operator = P.I - P.dt * P.linear_source(linear_source)
+        operator = P.I - P.dt * P._linear_source_value(linear_source)
         out = P.solve_local_linear(name=block + "_bdf1_step", operator=operator, rhs=rhs, fields=fields)
         P.commit(block, out)
         return out
@@ -96,7 +96,7 @@ def _bdf_local_linear(P, block, order, linear_source, sources, flux):
     P.store_history(name, U)                       # store U^n first (cold-start fills the ring)
     U_nm1 = P.history(name, lag=1)                 # U^{n-1} (== U^n on step 0 -> BDF1 cold start)
     rhs = P.linear_combine(block + "_bdf2_rhs", _with_explicit(2.0 * U - 0.5 * U_nm1))
-    operator = P.I - (P.dt * (2.0 / 3.0)) * P.linear_source(linear_source)
+    operator = P.I - (P.dt * (2.0 / 3.0)) * P._linear_source_value(linear_source)
     # Divide both sides by 3/2: (I - (2/3) dt L) U^{n+1} = (2/3)(2 U^n - 1/2 U^{n-1} [+ dt R]).
     rhs = P.linear_combine(block + "_bdf2_rhs_scaled", (2.0 / 3.0) * rhs)
     out = P.solve_local_linear(name=block + "_bdf2_step", operator=operator, rhs=rhs, fields=fields)

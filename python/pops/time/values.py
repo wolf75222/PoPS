@@ -169,7 +169,8 @@ class _Affine:
 
 class _Operator:
     """A LOCAL linear operator expression ``c_I * I + sum_k c_k * L_k`` (coefficients are `_Coeff`,
-    polynomials in dt). Built by ``Program.I`` and ``a * Program.linear_source(name)``; consumed by
+    polynomials in dt). Built by ``Program.I`` and ``a * L`` where ``L`` is the local-linear operator
+    value produced by ``Program.call(handle, ...)`` or the internal migration helper; consumed by
     `Program.solve_local_linear` (operator ``I +/- a*L``). It is NOT a runtime field value -- it names
     the model linear source(s) and the scalar(s) that form the operator."""
 
@@ -434,5 +435,4 @@ class _CoupledResult:
 
     def __repr__(self):
         return "_CoupledResult(blocks=%s)" % list(self._outs)
-
 

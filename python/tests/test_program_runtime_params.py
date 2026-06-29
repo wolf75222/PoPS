@@ -74,8 +74,8 @@ def _decay_model(kind="runtime", k_value=2.0):
 def _decay_program(name="decay_runtime"):
     """U <- U + dt * S, S = the named 'decay' source (the directly-lowered source kernel path)."""
     P = adctime.Program(name)
-    U = P.state("gas")
-    S = P.source("decay", state=U)
+    U = P._state_value("gas")
+    S = P._source_value("decay", state=U)
     P.commit("gas", P.linear_combine("U1", U + P.dt * S))
     return P
 

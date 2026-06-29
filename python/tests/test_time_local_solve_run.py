@@ -88,9 +88,9 @@ def lorentz_program(name="lorentz_step"):
     """W = (I - dt*L_lorentz)^{-1} U, committed: one implicit Lorentz rotation of the momentum."""
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
+    U = P._state_value("plasma")
     Q = P.linear_combine("Q", 1.0 * U)  # a State scratch == U (the solve rhs)
-    W = P.solve_local_linear(name="W", operator=P.I - dt * P.linear_source("lorentz"), rhs=Q)
+    W = P.solve_local_linear(name="W", operator=P.I - dt * P._linear_source_value("lorentz"), rhs=Q)
     P.commit("plasma", W)
     return P
 
@@ -118,7 +118,7 @@ big.linear_source("L", zero9)
 Pbig = adctime.Program("big")
 Ub = Pbig.state("blk")
 Qb = Pbig.linear_combine("Qb", 1.0 * Ub)
-Pbig.commit("blk", Pbig.solve_local_linear(name="Wb", operator=Pbig.I - Pbig.dt * Pbig.linear_source("L"),
+Pbig.commit("blk", Pbig.solve_local_linear(name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source_value("L"),
                                            rhs=Qb))
 chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
     "n_cons > 8 dense-fallback guard fires")
