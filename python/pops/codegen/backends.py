@@ -2,7 +2,7 @@
 
 Spec 5 stabilises "every object that chooses a route is a typed descriptor", and the compile
 backend is one such route. Today the compile drivers select the engine by a bare string
-(``backend="production"`` / ``"aot"`` / ``"prototype"``); this module adds the typed counterparts
+(``backend=pops.codegen.Production()`` / ``"aot"`` / ``"prototype"``); this module adds the typed counterparts
 :class:`Production` / :class:`AOT` / :class:`JIT` so a caller can pass an object instead of a
 string. Each descriptor is INERT: it carries the chosen options + an optional :class:`platform`
 and :meth:`lower`\\ s to the existing backend string the drivers already understand. Nothing here
@@ -133,30 +133,49 @@ BACKEND_DESCRIPTORS = {_PRODUCTION: Production, _AOT: AOT, _JIT: JIT}
 
 
 def lower_backend(backend):
-    """Lower a backend selector to its canonical string (accept BOTH a string and a descriptor).
+    """Strictly lower a public backend selector to its canonical string.
 
-    The ADDITIVE coercion the compile entry points wire on their ``backend=`` parameter: a plain
-    string (``"production"`` / ``"aot"`` / ``"prototype"`` / ``"auto"``) passes through unchanged so
-    the existing consumers keep working, while a typed :class:`_Backend` (``Production()`` ...)
-    lowers to its string. Anything else raises a clear ``TypeError``. Inert: it returns a string,
-    it compiles nothing.
+    Public compile surfaces are Spec-5 descriptors, not string selectors. ``None`` means the
+    canonical default ``Production()``. Internal codegen seams that already operate on the native
+    backend tokens must call :func:`lower_internal_backend` instead.
+    """
+    if backend is None:
+        backend = Production()
+    if isinstance(backend, str):
+        raise TypeError(
+            "backend must be a typed pops.codegen backend descriptor "
+            "(Production(), AOT() or JIT()), not %r" % backend)
+    if not isinstance(backend, _Backend):
+        raise TypeError(
+            "backend must be Production()/AOT()/JIT(); got %r"
+            % type(backend).__name__)
+    return backend.lower()
 
-    Args:
-        backend: A backend string OR a typed backend descriptor (``Production`` / ``AOT`` / ``JIT``).
 
-    Returns:
-        The canonical backend string the ``_BACKENDS`` table keys on; a typed descriptor is
-        lowered, and any other value (string, ``None``, ...) is returned UNCHANGED so the compile
-        entry point's existing ``backend not in _BACKENDS`` guard raises the same ``ValueError`` it
-        always has for an unknown/None backend (transparent coercion -- it never introduces a new
-        rejection of its own).
+def lower_internal_backend(backend):
+    """Permissive lowering for private codegen seams that already receive native tokens.
+
+    This is deliberately named as an internal escape hatch. It is used only where the caller is
+    not a public route selector, for example a cached runtime install path that already derived
+    ``"production"`` from a layout/backend descriptor.
     """
     if isinstance(backend, _Backend):
         return backend.lower()
-    # str / None / anything else: pass through untouched. The downstream _BACKENDS validation in
-    # compile_model / compile_problem is the single source of the "unknown backend" ValueError, so
-    # the legacy string + None error paths stay byte-identical to before this coercion was added.
     return backend
 
 
-__all__ = ["Production", "AOT", "JIT", "lower_backend", "BACKEND_DESCRIPTORS"]
+def lower_problem_backend(backend):
+    """Strict lowering for ``compile_problem``.
+
+    ``compile_problem`` is the Spec-5/6 public problem route; it must not accept string selectors.
+    ``None`` means the canonical default ``Production()``. Anything else must be a typed backend
+    descriptor.
+    """
+    try:
+        return lower_backend(backend)
+    except TypeError as exc:
+        raise TypeError("compile_problem: %s" % exc) from None
+
+
+__all__ = ["Production", "AOT", "JIT", "lower_backend", "lower_problem_backend",
+           "lower_internal_backend", "BACKEND_DESCRIPTORS"]

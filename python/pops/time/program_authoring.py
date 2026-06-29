@@ -70,23 +70,7 @@ class _ProgramAuthoring(_ProgramConstants):
 
     # --- decorator mode (ADC-423): record the step body from a function ---
     def step(self, fn):
-        """Record this Program's IR by calling @p fn(self) ONCE, at build time (decorator mode).
-
-        ``@P.step`` is sugar for an inline builder body: the decorated function receives the Program
-        and builds the IR exactly as if its statements had been written at module scope. It is a
-        BUILD-TIME callback -- it runs once, here, to populate the SSA value list; it is NEVER executed
-        numerically during ``sim.step`` (the compiled ``.so`` owns the runtime step). So
-
-            P = pops.time.Program("fe")
-
-            @P.step
-            def _(P):
-                pops.lib.time.forward_euler(P, "plasma")
-
-        produces byte-identical IR (same ``_ir_hash``) to calling
-        ``pops.lib.time.forward_euler(P, "plasma")`` inline. Returns the Program so a one-liner
-        ``P = pops.time.Program("p").step(build)`` also reads
-        cleanly. @p fn must be callable; it is invoked with the Program as its single argument."""
+        """Record this Program's IR by calling ``fn(self)`` once at build time."""
         if not callable(fn):
             raise TypeError("Program.step expects a callable build_fn(P); got %r" % (fn,))
         fn(self)
@@ -398,11 +382,7 @@ class _ProgramAuthoring(_ProgramConstants):
         return x
 
     def range(self, state, count, body_fn):
-        """A C++ ``for`` loop over a FIXED count: from @p state, apply ``body_fn(self, x)`` @p count
-        times, threading the loop-variable State in place, and return the final State. @p count must be
-        a Python int (a runtime/Scalar count is a later phase). The body is RE-EXECUTED each pass, so
-        its ops are captured into a recording sub-block (NOT the flat SSA list) and emitted ONCE inside
-        the loop. Use `static_range` to unroll instead."""
+        """A C++ ``for`` loop over a fixed Python-int count, threading a State value."""
         if isinstance(count, Value):
             if count.vtype == "scalar":
                 raise NotImplementedError("range with a runtime Scalar count is deferred; use a "

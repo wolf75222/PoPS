@@ -19,10 +19,7 @@ class _ProgramPasses(_ProgramConstants):
 
     @staticmethod
     def _subblock_value_refs(v):
-        """Yield every Value an op references THROUGH its attrs (sub-block result pointers + the ops
-        nested in its recorded sub-blocks). Used to keep alive anything a control-flow / matrix-free
-        node closes over from the enclosing scope -- v1 never rewrites a sub-block, so it is all live.
-        The flat ``v.inputs`` already covers the directly-passed values; this adds the attr-borne ones."""
+        """Yield attr-borne Value refs, including nested sub-block values."""
         attrs = v.attrs
         for key in ("cond", "body", "residual", "iterate", "guess",
                     "apply_result", "apply_in", "apply_out"):
@@ -47,12 +44,7 @@ class _ProgramPasses(_ProgramConstants):
 
     @staticmethod
     def _cse_key(v, canon):
-        """A canonical, alias-aware fingerprint of a PURE node: its op, vtype, block, the attrs the IR
-        hash uses, and its inputs MAPPED THROUGH @p canon (each input id replaced by the id of the
-        representative node it was deduplicated to). Two pure nodes with the same key compute the SAME
-        value, so the later one can alias the earlier. Built on the same ``_serialize_node`` the IR hash
-        uses (so attr equality is exactly the hash's notion of equality), with the node id stripped (it
-        is position, not identity) and the input ids canonicalized."""
+        """Canonical, alias-aware fingerprint of a pure node."""
         node = _ProgramPasses._serialize_node(v)
         node.pop("id", None)
         node["inputs"] = tuple(canon.get(i, i) for i in node["inputs"])
@@ -267,26 +259,7 @@ class _ProgramPasses(_ProgramConstants):
 
     # --- common-subexpression elimination (Spec 3 s28, ADC-465) ---
     def eliminate_common_subexpressions(self):
-        """Return a NEW Program with duplicated PURE sub-IR computed once and aliased (Spec 3 s28
-        common-subexpression elimination, ADC-465).
-
-        PROVEN SOUND, not heuristic: a node is a CSE candidate ONLY if its op is on the
-        ``_PURE_OPS`` allow-list -- ops that allocate a fresh result from their inputs alone, read no
-        buffer through a side channel, and have no side effect. For each such node, a canonical key (op,
-        vtype, block, attrs, and inputs mapped to their already-chosen representatives) is computed in
-        creation order; the FIRST node with a given key is the representative, and every later node with
-        the same key is dropped and its uses rewired to the representative. Because the key is exactly
-        the IR hash's notion of equality (same ``_serialize_node`` attrs) over identical
-        (canonicalized) inputs, the representative computes a bit-identical result -- so aliasing the
-        duplicate CANNOT change the emitted numerics. Every NON-pure op (a reduce, a solve, a
-        buffer-writer, a side-effecting op, an unknown op) is NEVER a representative target and is never
-        dropped, so it is always recomputed -- safe-by-default.
-
-        The pass is OPT-IN: it never runs on the default ``emit_cpp_program`` path. Sub-blocks are not
-        descended into (v1), so a value consumed only inside a control-flow body is left untouched. A
-        program with no duplicated pure sub-IR rebuilds BYTE-FOR-BYTE identically (same ``_ir_hash`` and
-        emitted C++); a program with a duplicate emits, after the pass, C++ identical to the same
-        program written with the value computed once."""
+        """Return a new Program with duplicate pure nodes computed once and aliased."""
         canon = {}        # duplicate node id -> representative node id (the survivor it aliases)
         reps = {}         # cse key -> representative node id
         drop = set()      # ids of dropped duplicates

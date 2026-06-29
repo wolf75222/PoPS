@@ -1,13 +1,4 @@
-"""pops.codegen.program_emit_ops : the per-op SSA -> C++ dispatcher.
-
-Extracted verbatim from ``pops.codegen.program_codegen`` so the Program -> C++ lowering
-fits the Spec-4 file-size budget.  ``_emit_op`` lowers a SINGLE SSA op to C++ (appending
-to the line list and recording its token), shared by the top-level body walk
-(``program_emit_control._emit_body``) and the control-flow sub-blocks.  It dispatches to
-the per-cell model kernels (``program_emit_model_kernels``), the matrix-free / Schur
-emitters (``program_emit_solve``), the control-flow emitters (``program_emit_control``)
-and the schedule wrap (``program_emit_schedule``).
-"""
+"""Per-op SSA -> C++ dispatcher for Program codegen."""
 import json
 
 from pops.codegen.program_emit_kernels import (
@@ -41,25 +32,9 @@ from pops.codegen.program_emit_schedule import _emit_schedule_wrap
 
 
 def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, block_idx=None):
-    """Lower a SINGLE op to C++, appending to @p lines and recording its C++ token in @p var. Shared
-    by the top-level walk and the while sub-blocks (a while body re-runs this per op each pass), so
-    reductions / compares / linear_combine all lower identically inside the loop. @p base is the
-    block-state value of THIS op's block (its C++ var is the loop variable inside a while sub-block);
-    @p committed_ids is the set of committed value ids (empty inside a sub-block: a body combine is
-    never a commit). @p prelude collects INSTALL-TIME lines (persistent scratch + apply lambdas) for
-    the matrix-free Krylov ops; None inside a sub-block (those ops only appear at the top level for
-    now). @p block_idx maps a block name to its runtime index (ADC-426); None inside a sub-block,
-    where every op shares the single enclosing block, so a missing map resolves to index 0."""
+    """Lower a single SSA op to C++ and record its token in ``var``."""
     bidx = (block_idx or {}).get(v.block, 0)  # this op's runtime block index (0 single-block)
-    # PER-NODE PROFILING (ADC-459, Spec 3 section 29): bracket the C++ this op emits with a
-    # steady_clock pair recorded under "node:<v.name>", so sim.profile_report() shows each Program
-    # node's wall time next to the coarse step / field_solve phases. A steady_clock now() + a
-    # ctx.profile_record (NOT a RAII ProfileScope block) is used so the node's emitted C++
-    # declarations stay at the step-body scope -- a surrounding { } would hide them from later
-    # nodes (e.g. r2 / acc3 read across ops). The timing is additive and ~free when profiling is
-    # off (ctx.profile_record early-returns inside Profiler::record); it changes no numerics. Ops
-    # that emit no statement (a pure inline token: cfl / compare) are not wrapped (the len guard
-    # below skips them). _start marks where this op's lines begin so the open line can be inserted.
+    # Per-node profiling inserts timing statements at the same scope as generated variables.
     _profile_start = len(lines)
     if v.op == "state":
         var[v.id] = "u%d" % v.id
@@ -251,17 +226,11 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         lines += _emit_cell_compare_kernel(var[field_in.id], var[v.id], v.attrs["cmp"],
                                            v.attrs["value"])
     elif v.op == "where":
-        # A PER-CELL conditional select (spec op 17, ADC-418): out(i,j,c) = mask ? a(i,j,c) :
-        # b(i,j,c), COMPONENT-WISE. A fresh scratch the same shape as `a` (its vtype / ncomp); the
-        # ternary is decided per cell inside the kernel (NOT a scalar runtime branch -- that is if_).
         mask_in, a_in, b_in = v.inputs
         var[v.id] = "w%d" % v.id
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], var[a_in.id]))
         lines += _emit_where_kernel(var[mask_in.id], var[a_in.id], var[b_in.id], var[v.id])
     elif v.op == "record_scalar":
-        # Store the (already-computed) Scalar into the System diagnostics map under its name. A
-        # side-effecting op; its var maps to the recorded scalar (a harmless alias). The scalar input
-        # is a 'reduce' result emitted earlier in the body (a const pops::Real local).
         (scalar_in,) = v.inputs
         lines.append("ctx.record_scalar(%s, %s);"
                      % (json.dumps(v.attrs["diagnostic"]), var[scalar_in.id]))
@@ -274,43 +243,19 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         named_fluxes = _named_fluxes(v)
         requested = v.attrs.get("sources")
         want_flux = v.attrs.get("flux", True)
-        # ADC-425 routing (spec criterion 17): the default/composite source is folded in iff the
-        # caller did NOT exclude it -- i.e. sources is None (the legacy default) OR "default" is in
-        # the explicit list. An EMPTY list [] (or a list of only named sources) excludes it -> flux
-        # only. None and [] are recorded distinctly in the IR, so this is unambiguous.
+        # Default/composite source is included only when requested or implicit.
         want_default_source = requested is None or "default" in requested
         if not want_flux:
-            # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).
-            # The default/composite source is added iff requested (the same want_default_source
-            # routing as flux=True): "default" present (or None) -> ctx.source_default_into (S only,
-            # the exact mirror of neg_div_flux_default_into); excluded -> R stays the zeroed scratch.
-            # The named source_terms below axpy on top either way -- so flux=False,sources=["default"]
-            # is the default source only; flux=False,sources=["s"] is just s; flux=False,sources=[]
-            # is the zero RHS. Named fluxes are rejected upstream (no flux base to divide). This is
-            # the fix: before ADC-430 a flux=False stage still emitted the -div F base (it ignored the
-            # flux attr), double-adding the flux on any non-zero-flux model in a Lie/Strang split.
             if want_default_source:
                 lines.append("ctx.source_default_into(%d, %s, %s);"
                              % (bidx, var[state_in.id], var[v.id]))
         elif named_fluxes is None:
             if want_default_source:
-                # R <- -div F + default/composite source (ctx.rhs_into) for THIS op's block (ADC-426
-                # bidx), the historical path: sources is None (legacy) or "default" is requested.
                 lines.append("ctx.rhs_into(%d, %s, %s);" % (bidx, var[state_in.id], var[v.id]))
             else:
-                # FLUX-ONLY (ADC-425): "default" is NOT among the requested sources (the empty list
-                # [] or a named-only list) -> R <- -div F(U) WITHOUT the model's default source
-                # (ctx.neg_div_flux_default_into), for THIS op's block (bidx). The named source_terms
-                # below are then axpy'd on top -- sources=[] is flux only, ["a","b"] is flux + a + b.
                 lines.append("ctx.neg_div_flux_default_into(%d, %s, %s);"
                              % (bidx, var[state_in.id], var[v.id]))
         else:
-            # NAMED fluxes (ADC-419): R <- -div(sum of selected named fluxes). Evaluate the SUM of
-            # the flux expressions per direction into two n_cons scratch fields (fx / fy) by a
-            # per-cell kernel, then take the negated centered FV divergence into R. Linear in the
-            # named pieces -> splitting the physical flux into named pieces that sum to it gives the
-            # SAME -div (to round-off). Distinct stencil from rhs_into (centered FV vs Riemann), so
-            # this path is NEVER mixed with the default (guarded by _named_fluxes).
             fx = "%s_fx" % var[v.id]
             fy = "%s_fy" % var[v.id]
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);" % (fx, var[state_in.id]))
@@ -319,8 +264,6 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             lines.append("ctx.neg_div_flux_into(%s, %s, %s);" % (var[v.id], fx, fy))
         named = [s for s in (v.attrs.get("sources") or []) if s != "default"]
         for s in named:
-            # R += S_s(U, aux): assemble the named source into a scratch (same per-cell kernel as
-            # the standalone 'source' op) and axpy it onto R.
             ssrc = "%s_%s" % (var[v.id], s)
             lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
                          % (ssrc, var[state_in.id]))
@@ -347,29 +290,18 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         lines += _emit_solve_local_linear_kernel(
             model, v.attrs["linear_source"], v.attrs["a_coeff"], var[rhs_in.id], var[v.id], bidx)
     elif v.op == "solve_local_nonlinear":
-        # Per-cell Newton (spec op 10): solve residual(U) = 0 from the initial guess U0, cell by
-        # cell, with an in-kernel FD Jacobian + the SAME stack dense inverse solve_local_linear
-        # uses. The output is a fresh scratch state; the guess input seeds the iterate.
         guess_in = v.inputs[0]  # solve inputs = (initial_guess,)
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);"
                      % (var[v.id], var[base.id]))
         lines += _emit_solve_local_nonlinear_kernel(model, v, var[guess_in.id], var[v.id], bidx)
     elif v.op == "schur_coeffs":
-        # Anisotropic condensed-Schur coefficient bundle (ADC-421): allocate the four 1-component
-        # coefficient fields ONCE (persistent shared_ptr in the prelude, captured by the apply
-        # lambda) and FILL them per step in the body from the live state + B_z aux. The bundle's var
-        # is the 4 shared_ptr names; apply_laplacian_coeff dereferences them inside the apply.
         if prelude is None:
             raise NotImplementedError(
                 "schur_coeffs is only lowerable at the top level / step body, not inside a "
                 "control-flow (if/while/range) body")
         _emit_schur_coeffs(program, v, var, lines, prelude)
     elif v.op == "scalar_field":
-        # A step-body scratch scalar field (e.g. the explicit-flux buffer the RHS assembly fills):
-        # a persistent shared_ptr (prelude, alloc-once) reused every step. Inside an apply sub-block
-        # the scalar_field is handled by _emit_matrix_free_operator instead (this branch is the
-        # top-level / step-body path -- prelude is not None there).
         if prelude is None:
             raise NotImplementedError(
                 "scalar_field is only lowerable at the top level / step body or inside a "
@@ -380,16 +312,12 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
         prelude.append("auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
                        % (sp, ncomp))
     elif v.op == "schur_explicit_flux":
-        # F = B^{-1} (mx, my) per cell into a 2-component scalar field (Fx comp 0, Fy comp 1): the
-        # explicit condensed-Schur flux, a step-body one-shot (not a per-iteration apply).
         out_in, state_in = v.inputs
         lines.append("ctx.schur_explicit_flux(%s, %s, %s, %d, %d, %d);"
                      % (_deref(var[out_in.id]), var[state_in.id], _coeff_cpp(v.attrs["th_dt"]),
                         v.attrs["c_mx"], v.attrs["c_my"], v.attrs["c_bz"]))
         var[v.id] = var[out_in.id]
     elif v.op == "schur_rhs":
-        # Fused condensed-Schur RHS = -Lap(phi^n) - g*div(F) into a 1-component scalar field: the
-        # native assemble_rhs in one ctx call (no scalar-field affine combine at IR level).
         out_in, phi_in, state_in = v.inputs
         lines.append(
             "ctx.assemble_schur_rhs(%s, %s, %s, %s, %s, %d, %d, %d);"
@@ -398,8 +326,6 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
                v.attrs["c_my"], v.attrs["c_bz"]))
         var[v.id] = var[out_in.id]
     elif v.op == "laplacian":
-        # Step-body bare Laplacian (e.g. Lap phi^n for the condensed RHS). Inside an apply sub-block
-        # this op is handled by _emit_matrix_free_operator; here it is the top-level path.
         o, i = v.inputs
         lines.append("ctx.laplacian(%s, %s);" % (_deref(var[o.id]), _deref(var[i.id])))
         var[v.id] = var[o.id]
@@ -413,33 +339,20 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
                      % (_deref(var[o.id]), _deref(var[fx.id]), _deref(var[fy.id])))
         var[v.id] = var[o.id]
     elif v.op == "schur_reconstruct":
-        # In-place velocity reconstruction v = B^{-1}(v^n - theta dt grad phi); mom = rho v. Result
-        # aliases the input state (mx/my overwritten). phi is a scalar_field / 1-comp State token.
         state_in, phi_in = v.inputs
         lines.append("ctx.schur_reconstruct(%s, %s, %s, %d, %d, %d, %d);"
                      % (var[state_in.id], _deref(var[phi_in.id]), _coeff_cpp(v.attrs["th_dt"]),
                         v.attrs["c_rho"], v.attrs["c_mx"], v.attrs["c_my"], v.attrs["c_bz"]))
         var[v.id] = var[state_in.id]
     elif v.op == "schur_energy":
-        # In-place energy increment E += (1/2) rho (|v^{n+1}|^2 - |v^n|^2) (ADC-427). Reads v^{n+1}
-        # from the updated state and v^n / E^n from state_old (U^n); rho frozen (same in both).
         state_in, old_in = v.inputs
         lines.append("ctx.schur_energy(%s, %s, %d, %d, %d, %d);"
                      % (var[state_in.id], var[old_in.id], v.attrs["c_rho"], v.attrs["c_mx"],
                         v.attrs["c_my"], v.attrs["c_E"]))
         var[v.id] = var[state_in.id]
     elif v.op == "matrix_free_operator":
-        # Install-time: emit the apply lambda `apply_A{id}` into the prelude. Its persistent scratch
-        # (the scalar_field ops of the apply sub-block) are shared_ptr fields, captured by value so
-        # they outlive the install call and are reused across every Krylov iteration (alloc-once).
-        # The lambda is itself captured by the step closure ([=]) and passed to pops::*_solve. An
-        # rhs_jacvec apply (ADC-431) also captures persistent jac_uk / jac_r0 scratch the lambda
-        # dereferences; the step body refreshes them from the live iterate / rhs(U^k) here (@p lines).
         _emit_matrix_free_operator(program, v, var, prelude, lines)
     elif v.op in ("apply_in", "apply_out", "apply_laplacian_coeff"):
-        # The lambda in/out placeholders and the coefficiented apply matvec only appear INSIDE a
-        # matrix_free_operator apply sub-block (lowered by _emit_matrix_free_operator); they never
-        # lower standalone at the top level.
         raise NotImplementedError(
             "emit_cpp_program: op '%s' (value '%s') is only lowerable inside a matrix_free_operator "
             "apply sub-block" % (v.op, v.name))

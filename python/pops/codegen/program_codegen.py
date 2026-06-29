@@ -1,30 +1,7 @@
-"""pops.codegen.program_codegen -- C++ emission for a pops.time.Program.
+"""C++ emission orchestration for ``pops.time.Program``.
 
-FREE FUNCTIONS taking the ``program`` (and an optional physical ``model``), mirroring
-``pops.codegen.module_codegen`` for models. ``emit_cpp_program(program, model=None)`` lowers
-the Program SSA IR to the C++ source of a ``problem.so`` (the stable .so ABI installed by
-``System::install_program``); the ``_emit_*`` / ``_check_*`` helpers and the per-cell kernel
-emitters are the lowering machinery. ``pops.time.Program.emit_cpp_program`` is a thin
-delegator into this module (lazy import), keeping ``pops.time`` free of any codegen edge.
-
-This is the THIN public module of the program emitter.  The lowering machinery is split
-across sibling modules so each file fits the Spec-4 size budget, and every name re-imported
-below so the public surface of ``pops.codegen.program_codegen`` is unchanged:
-
-  - ``program_emit_kernels``       -- op tables, text helpers, model-free per-cell kernels,
-                                      the ``_PROGRAM_CPP_TEMPLATE``;
-  - ``program_emit_model_kernels`` -- the model-coefficient per-cell kernels;
-  - ``program_emit_solve``         -- the matrix-free Krylov + condensed-Schur emitters;
-  - ``program_emit_schedule``      -- the unified scheduler wrap (ADC-458);
-  - ``program_emit_control``       -- the body walk + control-flow (while/range/if) emitters;
-  - ``program_emit_ops``           -- the per-op ``_emit_op`` dispatcher;
-  - ``program_emit_amr``           -- the AMR install-entry emitter (target='amr_system', ADC-508).
-
-The orchestration (``emit_cpp_program`` + the block-name / module-metadata / dt-bound
-emitters + the lowerability checks) stays here.
-
-The emission-only tables (_MODEL_OPS / _ALLOWED_OPS / _PROFILE_SKIP_OPS / _AUX_OUTPUT_OPS)
-are module-level constants in ``program_emit_kernels``, re-exported here.
+The heavy lowering is split across sibling ``program_emit_*`` modules; this file keeps the
+public re-export surface plus ``emit_cpp_program`` and the lowerability checks.
 """
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
 
@@ -91,80 +68,12 @@ from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
 # --- C++ codegen (Phase 2c-ii / Phase 4b): lower the IR to a problem.so source ---
 def emit_cpp_program(program, model=None, target="system"):
-    """Generate the C++ source of a problem.so implementing this Program (codegen).
+    """Generate the C++ source of a Program ``.so``.
 
-    Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
-    preprocessor literal, NOT the interposable inline), ``pops_program_name``, ``pops_program_hash``,
-    ``pops_install_program`` -- and installs the macro step as a closure built from `ProgramContext`
-    primitives only (no MultiFab / flux / solver reimplementation). It is the source the C++ loader
-    (`System::install_program`) compiles, dlopens, and runs.
-
-    @p target selects the install entry the .so exports. ``"system"`` (default) emits only
-    ``pops_install_program`` (the single-level ``System`` macro-step closure). ``"amr_system"``
-    (epic ADC-511 / ADC-508, Spec 6) ALSO emits ``pops_install_program_amr``, the entry
-    ``AmrSystem::install_program`` resolves: it wraps the ``AmrSystem`` in an ``AmrProgramContext``
-    and installs the per-level Lie/Strang macro-step. The driver (``AmrProgramContext``) lands with
-    the Kokkos-gated AMR runtime seam; until then the AMR install entry FAILS LOUD at install (it is
-    ABI-complete so the whole loader path is wired, but it never produces a silently-wrong run).
-
-    Lowers the Program by a topological walk of the SSA IR: each block's current state is its base
-    (``ctx.state(idx)``); ``solve_fields()`` runs the elliptic solve; each RHS becomes a
-    scratch + ``rhs_into``; each intermediate ``linear_combine`` becomes a zero scratch accumulated
-    with ``axpy``; the committed combine writes the block state via ``lincomb``. Forward Euler,
-    SSPRK2/SSPRK3 and RK4 all lower this way -- no per-scheme class.
-
-    Multi-block (ADC-426): N ``P.state(\"a\")`` / ``P.state(\"b\")`` declarations + N ``P.commit``
-    are lowered -- each op routes to its own block's runtime index (``_block_indices``, in the order
-    the blocks are first declared via ``P.state``). The .so also exports its block NAMES in that
-    order (``pops_program_block_count`` / ``pops_program_block_name``); ``System::install_program``
-    binds them to the instantiated System blocks BY NAME (Spec 3 criterion 23, ADC-457), so the
-    System blocks (``sim.add_equation`` / ``sim.add_block``) may be added in ANY order -- a Program
-    block whose name has no instantiated System block fails loud (``Program requires block instance
-    '<name>', but simulation did not instantiate it``). A block declared but never committed is a
-    READ-ONLY block (allowed; e.g. a passive field whose charge couples the others through the shared
-    Poisson). A commit of a block no ``P.state`` declares is rejected. A single-block Program lowers
-    byte-identically (its one block is index 0; an order-matching multi-block Program too -- the
-    name map is the identity).
-
-    Phase-4b also lowers the SPLIT-SOURCE / LOCAL-LINEAR ops -- ``source`` (a named ``m.source_term``
-    evaluated per cell), ``apply`` (LU for a named ``m.linear_source``) and ``solve_local_linear``
-    ((I -/+ a*L) U = rhs solved cell by cell via a dense per-cell inverse) -- but ONLY when the
-    physical ``model`` (the ``pops.dsl`` model whose ``source_term`` / ``linear_source`` they name)
-    is provided: the codegen reads the model's symbolic coefficients to emit the per-cell kernels.
-    Without ``model`` those ops raise NotImplementedError (the Program cannot be lowered in
-    isolation); ``model=None`` still lowers FE / SSPRK / RK4 (no model needed). A ``rhs`` routes its
-    base on its ``flux`` flag and whether ``"default"`` is among the requested ``sources`` (ADC-425 /
-    ADC-430, spec criterion 17 -- flux and sources are explicit, never summed implicitly). With
-    ``flux=True``: ``"default"`` present -> ``ctx.rhs_into`` (= ``-div F`` + the model's
-    default/composite source, the historical path); ``"default"`` absent (incl. the empty list
-    ``[]``) -> ``ctx.neg_div_flux_default_into`` (= ``-div F`` only, NO default source). With
-    ``flux=False`` (SOURCE-ONLY, ADC-430): NO ``-div F`` base -- ``"default"`` present (or ``None``)
-    -> ``ctx.source_default_into`` (= S only, the exact mirror); ``"default"`` absent -> the zeroed
-    scratch (the named sources, if any, are the whole RHS). Each NAMED source (``sources=[...]``
-    beyond ``"default"``) then lowers with a model: the same per-cell ``m.source_term`` kernel as the
-    standalone ``source`` op, accumulated onto ``R`` via ``axpy``. So ``flux=True,sources=[]`` is flux
-    only, ``flux=True,sources=["default"]`` is flux + default source (unchanged),
-    ``flux=False,sources=["default"]`` is the default source only, ``flux=False,sources=["s"]`` is
-    just ``s`` -- the named ones never double-count the default (it is folded in iff "default" was
-    listed). More than one block now lowers (ADC-426): each op routes to its block's runtime index
-    (``_block_indices``, in P.state declaration order) and control flow (while/range/if) inside a
-    block lowers per block; a SIMULTANEOUS multi-target coupled field solve
-    (``solve_fields_from_blocks([Ua, Ub])``) lowers to ``ctx.solve_fields_from_blocks`` (see below).
-
-    Each ``solve_fields(state=...)`` op lowers to ``ctx.solve_fields_from_state(idx, <stage state>)``
-    (ADC-409): the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's
-    state, not the block's current state. So a field-coupled multi-stage scheme (Poisson feedback
-    into the flux) is exact: stage k's RHS reads phi solved from stage k's own state. For the first
-    stage the stage state is U^n, so this is identical to the historical ``solve_fields()``; for an
-    uncoupled model the field solve is inert either way. This is already a COUPLED multi-block solve:
-    the system Poisson RHS is ``Sum_s elliptic_rhs_s(U_s)`` (``assemble_poisson_rhs``), so block
-    ``idx`` reads its stage state while every OTHER block contributes its LIVE state into the one
-    shared phi/aux. A per-block ``P.solve_fields(state=Ub)`` therefore sees all blocks' charge. A
-    SIMULTANEOUS multi-target override (several blocks at their stage states in ONE solve) lowers to
-    ``ctx.solve_fields_from_blocks(<vec>)`` (Spec 3 criterion 24, ADC-457): the RHS is
-    ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once
-    (``assemble_poisson_rhs_from_blocks``), each slotted at its block index (nullptr = the block's
-    live state) -- the coupled multi-species field solve."""
+    The emitted ABI installs a macro-step closure built only from ProgramContext primitives. Target
+    ``"amr_system"`` additionally exports the AMR install entry; multi-block programs export block
+    names so the runtime binds by name.
+    """
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
@@ -277,15 +186,7 @@ def _emit_dt_bound(program, model=None):
 
 
 def _check_lowerable(program, model=None):
-    """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
-    naming the offending construct (never a silent mis-lowering). @p model: the physical model that
-    declares the named sources / linear sources; required for the Phase-4b ops.
-
-    Multi-block (ADC-426): N ``P.state`` blocks + N ``P.commit`` are supported -- each op routes to
-    its block's index (``_block_indices``). Validation: a block is committed AT MOST once (enforced
-    at ``commit`` time); a read-only block (declared via ``P.state`` but never committed) is allowed
-    (e.g. a passive field whose charge couples the others); a commit of a block that was never
-    declared by ``P.state`` is rejected (an unknown-block commit cannot route to an index)."""
+    """Reject Program IR constructs this codegen cannot lower without silent mis-lowering."""
     blocks = program._block_indices()
     for b in program._commits:
         if b not in blocks:
@@ -306,17 +207,7 @@ def _check_lowerable(program, model=None):
                 "local dense fallback currently supports n_cons <= 8 (got %d)" % n_cons)
 
 def _check_schedules_lowerable(program):
-    """Gate the unified Program scheduler lowering (ADC-458, Spec 3 sections 17-18). EVERY kind/policy
-    now lowers (``_emit_schedule_wrap``) EXCEPT the two that need a runtime primitive the compiled
-    .so does not have, which still fail loud (never a silent no-op):
-
-      - ``on_end()``: a compiled ``sim.step(dt)`` loop carries no end-of-run signal, so the .so cannot
-        know which step is the last. (Use an on_end host hook instead.)
-      - ``when(cond)`` whose cond is a bare Python callable, not a Program Bool predicate: a callable
-        is not a Program value and cannot be lowered to C++.
-
-    The cadence RUNTIME (the cache cadence in a stepping .so) is exercised on ROMEO; the cache
-    MANAGER is unit-tested by tests/test_cache_manager.cpp."""
+    """Gate scheduler lowering; reject schedules that need host-only information."""
     for v in _all_ops(program):
         sched = v.attrs.get("schedule")
         if sched is None or sched.is_always():
@@ -359,9 +250,7 @@ def _check_schedules_lowerable(program):
 # linear_combine / source / apply / reductions / loops / Schur kernels / ...).
 
 def _all_ops(program):
-    """Iterate over every op of the Program, descending into control-flow + apply sub-blocks (a flat
-    view used by the lowerability guards: the sub-block ops are not in program._values). Nested control
-    flow is disallowed, so the sub-blocks are flat (one level)."""
+    """Iterate over flat Program ops plus one-level control/apply sub-blocks."""
     for v in program._values:
         yield v
         for key in ("cond_block", "body_block", "apply_block", "residual_block"):

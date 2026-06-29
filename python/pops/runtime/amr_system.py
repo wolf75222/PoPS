@@ -18,14 +18,7 @@ from pops.runtime.profile import PerformanceSummary, Profile
 
 
 class _AmrProfileSession:
-    """The typed profiling context manager AmrSystem.profile() returns (Spec 5 sec.12.5).
-
-    Mirror of :class:`pops.runtime.system._ProfileSession` for the AMR runtime: ``__enter__``
-    resets + enables the native profiler ; ``__exit__`` snapshots the report into a
-    :class:`PerformanceSummary` and disables the profiler. ``summary().by_amr_mpi()`` surfaces the
-    AMR / MPI phase timings (regrid / fill_boundary / average_down) + counters (criterion 43). Lives
-    here rather than importing from system.py to avoid a circular import (system imports amr_system).
-    """
+    """Profiling context manager for the AMR runtime."""
 
     def __init__(self, system, profile):
         self._system = system
@@ -50,29 +43,7 @@ class _AmrProfileSession:
 
 
 class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
-    """Refined counterpart of System : one or SEVERAL blocks carried on an AMR hierarchy.
-
-    SINGLE-BLOCK (1 add_block) : historical AmrCouplerMP path (dynamic regrid, reflux). MULTI-BLOCK
-    (>= 2 add_block) : N blocks co-located on ONE SHARED AMR hierarchy (AmrRuntime engine),
-    SYSTEM Poisson with co-located SUMMED right-hand side (Sum_b q_b n_b), conservation PER BLOCK. The
-    blocks may have DIFFERENT SPATIAL SCHEMES, a per-block TEMPORAL TREATMENT (explicit /
-    imex), MULTIRATE (substeps / stride), COUPLED inter-species SOURCES and the multi-block production
-    DSL. In multi-block the block NAME indexes set_density(name) / mass(name) / density(name).
-
-    UNION-OF-TAGS REGRID (multi-block + regrid_every > 0) : the shared hierarchy is re-gridded from
-    the UNION of the tags of all blocks. Two criteria compose (cell-by-cell OR) :
-
-    - PER-BLOCK VARIABLE (set_refinement(threshold, variable=, role=)) : refine where the SELECTED
-      variable of a block exceeds threshold. Default = component 0 (historical density), bit-identical ;
-      ADC-296 lets you select it per block by name (variable=) or physical role (role=), resolved against
-      the block's conserved variables (a block lacking the name/role raises, no silent component-0
-      fallback). Non-default selector is multi-block only (mono-block / compiled .so : component 0 only) ;
-    - ``grad phi`` (set_phi_refinement(grad_threshold)) : refine where the norm of the gradient of the
-      electrostatic potential exceeds grad_threshold (diocotron ring edge). Disabled by default
-      (grad_threshold <= 0). MULTI-BLOCK only.
-
-    regrid_every == 0 -> FROZEN hierarchy (regrid never called, bit-identical).
-    """
+    """Refined counterpart of System: one or several blocks on a shared AMR hierarchy."""
 
     def __init__(self, config=None, **cfg_kw):
         if config is None:
@@ -92,6 +63,38 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         # set_aux_field(block, name, array). Empty for blocks without a named aux field. Mirror of
         # System._aux_field_index.
         self._aux_field_index = {}
+        self._program_cadence_cfl = None
+        self._output_policies = []
+
+    def run(self, t_end, cfl=None, max_steps=1_000_000, output_dir=None):
+        """Advance up to ``t_end`` by AMR CFL steps and fire output/checkpoint policies.
+
+        Mirrors :meth:`pops.runtime.system.System.run`: Python only orchestrates macro-steps by
+        calling the C++ ``step_cfl`` method; all cell work remains in the native runtime. When a
+        compiled Program cadence pins ``cfl="program"``, the wrapper calls ``step_cfl(1.0)`` and the
+        installed Program dt-bound hook tightens the step inside C++.
+        """
+        if cfl is None:
+            cfl = self._program_cadence_cfl if self._program_cadence_cfl is not None else 0.4
+        if cfl == "program":
+            cfl = 1.0
+        policies = getattr(self, "_output_policies", [])
+        out_dir = output_dir if output_dir is not None else "."
+        steps = 0
+        if policies:
+            self._fire_outputs(policies, steps, out_dir, phase="start")
+        while self.time() < t_end and steps < max_steps:
+            self.step_cfl(cfl)
+            steps += 1
+            if policies:
+                self._fire_outputs(policies, steps, out_dir, phase="step")
+        if policies:
+            self._fire_outputs(policies, steps, out_dir, phase="end")
+        return steps
+
+    def _fire_outputs(self, policies, step, output_dir, phase="step"):
+        from pops.runtime._output_driver import fire_output_policies
+        return fire_output_policies(self, policies, step, output_dir, phase=phase)
 
     def profile(self, profile=None):
         """Typed AMR / MPI profiling context manager (Spec 5 sec.12.5, criterion 43).
@@ -203,7 +206,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                 "AmrSystem.add_block : pops.Split / pops.Strang (Schur-condensed source stage) is "
                 "supported only by add_equation (which connects the source stage) ; use "
                 "add_equation(..., time=pops.Strang(hyperbolic=pops.Explicit(...), "
-                "source=pops.CondensedSchur(...))).")
+                "source=pops.ElectrostaticLorentzSchur(...))).")
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
         # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
         # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.
@@ -233,41 +236,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
                           solvers=None, cadence=None, outputs=None):
-        """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
-        with ``System._install_compiled``. NOT the public entry point: author the run with
-        ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
-
-        Runs the SAME early bind-input validation (``validate_install_arguments``: reject -- BEFORE
-        any native mutation -- an install missing a REQUIRED argument the artifact declares, with one
-        clear actionable error), then lowers to the AMR layer:
-
-          - NATIVE install (``compiled=None``): wires each instance with ``add_equation`` (native
-            bricks / a CompiledModel target='amr_system'), sets the field solvers (``set_poisson``),
-            the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
-            density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
-          - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508):
-            the same wiring, then ``install_program(so_path)`` installs the compiled Program on the AMR
-            hierarchy (the .so must export ``pops_install_program_amr``: compile it with
-            ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
-            and the cadence (``cadence=``) to ``set_program_cadence`` -- the AMR counterparts of the
-            System routes. The per-level Lie/Strang macro-step DRIVER is Kokkos-gated (the .so fails
-            loud at install until the AmrProgramContext seam lands), so a full run is a ROMEO step.
-
-        @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
-        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
-            "time": <policy>}}; the block is bound by the dict KEY.
-        @param params runtime parameters of a COMPILED time Program (dsl.Param kind='runtime'),
-            routed to ``set_program_params`` per PROGRAM block. A native AMR install (``compiled=None``)
-            has no ``set_block_params`` (the native AMR .so loader does not transport runtime params),
-            so a non-empty ``params=`` there raises rather than dropping them silently.
-        @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
-            any other -> set_aux_field on the declaring block.
-        @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
-        @param cadence optional pops.time.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
-            macro-step cadence, applied with ``set_program_cadence`` AFTER install_program. A native
-            AMR install has no Program, so a non-None cadence there raises (set substeps / stride on
-            the native time policy instead).
-        """
+        """Shared AMR install seam for native blocks and compiled Program handles."""
         instances = instances or {}
         params = params or {}
         aux = aux or {}
@@ -291,11 +260,6 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
             compiled_model = getattr(compiled, "model", None)
-        if outputs:
-            raise NotImplementedError(
-                "pops.bind: output/checkpoint policies are deferred on AMR (per-level writes are "
-                "Spec 6 / ADC-511); use a Uniform layout for output, or omit it on the AMR route.")
-
         # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
         # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED
         # named elliptic fields (ADC-428), collected from the per-instance models, widen the accepted
@@ -341,6 +305,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         # apply the global cadence (or reject params= / cadence= on a NATIVE install). Extracted into the
         # _AmrSystemProgram mixin (_finish_program_install) to keep this module under the line budget.
         self._finish_program_install(compiled, so_path, params, cadence)
+        if outputs:
+            self._output_policies = list(outputs)
 
     def install(self, compiled=None, *, instances=None, params=None, aux=None,
                 solvers=None, cadence=None, outputs=None):
@@ -364,15 +330,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
 
     def _install_solver(self, field, solver_brick, declared_fields=frozenset()):
-        """Lower a field-solver selection to set_poisson (AMR, ADC-428).
-
-        The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
-        m.elliptic_field, collected into @p declared_fields) are accepted: the named field's RHS is wired
-        by the native AMR loader (register_elliptic_field + set_block_elliptic_field) and solved by the
-        AmrRuntime engine each solve_fields, while the solver selection routes through set_poisson for
-        both (the AMR solver is always geometric_mg). A field name that is NEITHER the default Poisson
-        field NOR a declared named field is a TYPO -- rejected LOUD, naming the declared set. Mirror of
-        System._install_solver, minus the System-only solver options the AMR set_poisson lacks."""
+        """Lower a declared AMR field solver to set_poisson; reject typos before runtime."""
         if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
             declared = ", ".join(sorted(declared_fields)) or "(none declared)"
             raise ValueError(
@@ -380,21 +338,30 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                 "field (%s) nor a named elliptic field any installed model declares (declared: %s). "
                 "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
                 % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
-        token = solver_brick if isinstance(solver_brick, str) else (
-            getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None))
+        if isinstance(solver_brick, str):
+            raise TypeError(
+                "pops.bind: solver selections must be typed descriptors such as "
+                "pops.solvers.GeometricMG(); got legacy token %r" % solver_brick)
+        token = getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None)
         if token is None:
-            raise TypeError("pops.bind: solver must be a token string or an "
-                            "pops.solvers.<Solver>(...) descriptor; got %r"
+            raise TypeError("pops.bind: solver must be a pops.solvers.<Solver>(...) descriptor; got %r"
                             % type(solver_brick).__name__)
-        self.set_poisson(solver=token)
+        self._set_poisson(solver=token)
+
+    def _set_poisson(self, rhs="charge_density", solver="geometric_mg", bc="auto",
+                     wall="none", wall_radius=0.0, epsilon=1.0, abs_tol=0.0):
+        """Private lowering seam for the native AMR Poisson solve."""
+        from pops.runtime._system_install import _lower_bc, _lower_wall
+        bc = _lower_bc(bc)
+        lowered = _lower_wall(wall)
+        if lowered is not None:
+            wall, wall_radius = lowered
+        self._s.set_poisson(rhs=rhs, solver=solver, bc=bc, wall=wall,
+                            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol)
 
     @staticmethod
     def _declared_elliptic_fields(instances):
-        """Collect the NAMED elliptic fields declared by the per-instance models (ADC-428). Reads each
-        model's declared names WITHOUT compiling: a target='amr_system' CompiledModel exposes
-        ``elliptic_field_names``; a raw physics/dsl Model exposes the ``_elliptic_fields`` mapping.
-        Returns a set (empty when no model declares a named field). Mirror of
-        System._declared_elliptic_fields (no compiled whole-system handle on the AMR path)."""
+        """Collect named elliptic fields declared by per-instance AMR models."""
         names = set()
         for spec in (instances or {}).values():
             if not isinstance(spec, dict):
@@ -412,13 +379,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         return names
 
     def field(self, name):
-        """Return the solved potential of a NAMED elliptic field (ADC-428) as an (n, n) array.
-
-        Read-back of a second elliptic field declared via m.elliptic_field and lowered on the AMR layout:
-        solves the hierarchy fields if needed (so it is current even before any step) then reads the
-        field's coarse potential. AMR counterpart of reading System.aux_field(block, name) for an elliptic
-        field. @throws if the field is unregistered (or the system runs the single-block coupler, which
-        carries no named field)."""
+        """Return the solved coarse potential of a named elliptic field."""
         return self._s.named_field_values(name)
 
     def _install_aux(self, field_name, field):
@@ -443,13 +404,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         self._set_aux_field(block, field_name, field)
 
     def add_coupling(self, coupling):
-        """Add a generic inter-species COUPLED SOURCE (pops.dsl.CoupledSource(...).compile(...))
-        on the SHARED AMR hierarchy (MULTI-BLOCK), refined counterpart of System.add_coupling. The source
-        is transported as bytecode and interpreted on the C++ side (AmrSystem.add_coupled_source; no
-        per-cell Python callback). The coupling frequency (CoupledSource.frequency) is honored:
-        constant -> dt bound dt <= cfl/mu; Expr -> PER-CELL frequency mu(U) evaluated on the COARSE grid at
-        each step_cfl (the freq_prog_* vectors are forwarded). Must be called BEFORE the first
-        step (the source is frozen then injected at the lazy build of the runtime engine)."""
+        """Add a compiled inter-species coupled source on the shared AMR hierarchy."""
         # Late import (the multispecies module imports this package: avoid the cycle).
         from pops.physics.multispecies import CompiledCoupledSource
 
@@ -513,6 +468,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             "set_param",
             "set_aux_field",
             "set_field_solver",
+            "set_poisson",
         }
         if attr in forbidden:
             raise AttributeError(

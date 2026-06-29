@@ -14,19 +14,7 @@ from pops.runtime.bricks import Spatial
 
 def collect_missing_arguments(args, provided_blocks, provided_params, provided_aux,
                               provided_solvers):
-    """Pure core of the early bind-input check (Spec 5 sec.10); no engine call -> host-testable.
-
-    Compare an :class:`pops.codegen.inspect_compiled.Arguments` against what an install supplies and
-    return one actionable line per MISSING required argument (empty list when everything required is
-    met). Shared by ``System._install_compiled`` and ``AmrSystem._install_compiled`` so both enforce
-    the SAME contract.
-
-    Only entries whose ``required`` flag is true are enforced: an input the artifact marks optional
-    (a const param, an unrequired solver -- the default Poisson field has a working default and is
-    NOT flagged required by ``arguments()``) is never demanded, so a previously valid install passes
-    through unchanged. ``provided_*`` are the supplied sets (block names, param names, aux names,
-    solver fields); a block already added on the sim counts as provided. Each line names EXACTLY what
-    is missing and the matching ``pops.bind`` keyword to supply it."""
+    """Return actionable missing required bind inputs; pure metadata check, no engine calls."""
     missing = []
     for name, spec in sorted(getattr(args, "instances", {}).items()):
         if spec.get("required") and name not in provided_blocks:
@@ -46,16 +34,7 @@ def collect_missing_arguments(args, provided_blocks, provided_params, provided_a
 
 
 def validate_install_arguments(sim, compiled, instances, params, aux, solvers):
-    """Early bind-input validation (Spec 5 sec.10) for a COMPILED install on @p sim (System OR
-    AmrSystem): reject -- BEFORE any native mutation -- an install missing a REQUIRED argument the
-    artifact declares, with one clear actionable error aggregating every missing input.
-
-    Reads ``compiled.arguments()`` (the inert metadata the .so DECLARES) and confirms every argument
-    marked ``required`` is supplied by this install call (@p instances / params / aux / solvers) OR
-    already wired on the sim (an added block, a declared named aux). A NATIVE install
-    (``compiled is None``) carries no declared arguments and is skipped; a handle whose
-    ``arguments()`` is unavailable or unreadable is skipped too (conservative -- a missing check
-    never breaks a working install)."""
+    """Reject missing required compiled-bind inputs before mutating System/AmrSystem."""
     if compiled is None or not hasattr(compiled, "arguments"):
         return
     try:
@@ -115,51 +94,11 @@ class _SystemUnifiedInstall:
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
                           solvers=None, cadence=None, outputs=None):
-        """Shared low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
-        state/spatial + params + aux + field solvers in ONE call, then install the compiled time
-        Program. Public callers should use ``pops.bind(...)`` for the assembled-route path or
-        ``sim.install(...)`` when they explicitly construct a runtime object; both delegate here so
-        the ordering and validation are not duplicated.
+        """Shared install seam for compiled and native System routes.
 
-        It LOWERS to the existing lower-layer calls
-        (add_equation / set_poisson / set_magnetic_field / set_aux_field / set_block_params /
-        install_program) -- there is NO parallel runtime (Spec section 3). The lower-layer calls stay
-        available and unchanged; this seam just sequences them in the right order so the
-        install-time validation (section 24) sees a fully-configured simulation.
-
-        install() is the ONE entry for BOTH runtime modes (Spec 4 amendment): a COMPILED-program sim
-        (pass the compile_problem(...) handle as ``compiled``) and a NATIVE sim (``compiled=None``;
-        each instance carries its own native model + native time policy, no compiled .so).
-
-        @param compiled the compiled problem handle (compile_problem(...) result) carrying ``so_path``,
-            installed via install_program after every instance/solver/aux is wired. Pass ``None`` for a
-            NATIVE sim: no Program is installed; each instance must supply its own native ``"model"``
-            and (optionally) ``"time"`` policy, and the native per-block advance loop drives stepping.
-        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <pops.Model>,
-            "time": <pops.Explicit/IMEX>}}. The block is bound by the dict KEY @p name (Spec criterion
-            23), not a "state" field. Each entry adds the named block (add_equation), sets its
-            "initial" state (if given) and lowers the "spatial" brick to the add_equation spatial args.
-            The block model is the per-instance ``"model"`` if given, else ``compiled`` (single-
-            instance case). ``spatial`` is an pops.FiniteVolume(...) / pops.Spatial(...) OR an
-            pops.numerics.spatial.FiniteVolume(...) descriptor.
-        @param params dict {param_name: value} of RUNTIME parameters, routed to the instance whose
-            compiled model declares the name (set_block_params). Unknown names raise.
-        @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" -> rejected (it is
-            DERIVED, use set_electron_temperature_from), any other -> set_aux_field on the instance
-            declaring it. Set BEFORE install_program so the section-24 aux requirement check sees it.
-        @param solvers dict {field: <pops.solvers.GeometricMG(...)/pops.GeometricMG(...)>}: lowered to
-            set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
-            any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
-            through the shared system elliptic solver; a field name no model declares raises (typo).
-        @param cadence optional pops.time.CompiledTime(substeps=, stride=): the compiled Program's macro-step
-            cadence, applied with set_program_cadence AFTER install_program. A compiled Program is ONE
-            whole-system closure, so its cadence is GLOBAL (one program-level value). A numeric
-            cadence.cfl is applied at runtime by sim.run(cfl=) (the cadence pins it on the System so a
-            bare sim.run(t_end) uses it), not by the install.
-        @param outputs optional list of pops.output.OutputPolicy / CheckpointPolicy (C4 / ADC-509)
-            stored so sim.run(output_dir=) fires each at its cadence via the existing write/checkpoint.
-        @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
-            Riemann capability). A disallowed schedule is rejected earlier, at Program compile.
+        Wires instances, runtime params, aux fields, field solvers, output policies and the optional
+        compiled Program in one validated order. Public callers enter through ``pops.bind`` or
+        ``sim.install``; this method keeps the low-level sequencing in one place.
         """
         instances = instances or {}
         params = params or {}
@@ -223,7 +162,7 @@ class _SystemUnifiedInstall:
             self._add_equation(name, model, spatial=spatial, time=time)
             initial = spec.get("initial")
             if initial is not None:
-                self.set_state(name, initial)
+                self._set_state(name, initial)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. Before install_program.
         for field_name, field in aux.items():
@@ -292,22 +231,24 @@ class _SystemUnifiedInstall:
     _collect_missing_arguments = staticmethod(collect_missing_arguments)
 
     def _install_cadence(self, cadence):
-        """Apply a CompiledTime macro-step cadence to the installed program (set_program_cadence).
+        """Apply a compiled-Program macro-step cadence to the installed program (set_program_cadence).
 
         set_program_cadence is a SYSTEM-level orchestration around the opaque program closure
         (program.py): substeps=n re-runs the whole program over eff_dt/n; stride=M runs it once per M
         macro-steps. A NUMERIC cadence.cfl is NOT consumed here (set_program_cadence carries only
         substeps / stride); instead it is stored on the System so a bare sim.run(t_end) defaults
         sim.run(cfl=) to it (System::step_cfl routes the resulting per-block CFL dt through the
-        installed program). A self-computed cfl sub-program (cfl='program') is rejected upstream by
-        CompiledTime, so it never reaches here."""
-        from pops.time.program import CompiledTime
-        if not isinstance(cadence, CompiledTime):
-            raise TypeError("install(cadence=): expected a pops.time.CompiledTime(substeps=, stride=), "
-                            "got %r" % type(cadence).__name__)
+        installed program). ``cfl='program'`` pins the run wrapper to call ``step_cfl(1.0)``; the
+        installed C++ Program dt_bound hook then tightens the step inside ``System::step_cfl``."""
+        from pops.runtime._compiled_cadence import CompiledProgramCadence
+        if not isinstance(cadence, CompiledProgramCadence):
+            raise TypeError("install(cadence=): expected an internal CompiledProgramCadence "
+                            "(substeps=, stride=), got %r" % type(cadence).__name__)
         if isinstance(cadence.cfl, (int, float)):
             # Pin the numeric cfl so run() with no explicit cfl= uses it (not a silent no-op).
             self._program_cadence_cfl = float(cadence.cfl)
+        elif cadence.cfl == "program":
+            self._program_cadence_cfl = "program"
         self.set_program_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial):
@@ -319,9 +260,9 @@ class _SystemUnifiedInstall:
             return Spatial()
         if isinstance(spatial, Spatial):
             return spatial
-        # A lib BrickDescriptor carries the scheme options as STRING tokens in .options. Lower them
-        # to the canonical Spatial tokens directly (Spatial._from_tokens bypasses the public typed-
-        # descriptor guard, which the runtime FiniteVolume now enforces -- Spec 5 sec.7).
+        # A spatial BrickDescriptor carries already-validated canonical C++ routing tokens in
+        # .options. Lower them directly (Spatial._from_tokens bypasses the public typed-descriptor
+        # guard because this path is after descriptor validation -- Spec 5 sec.7).
         opts = getattr(spatial, "options", None)
         if isinstance(opts, dict):
             limiter = opts.get("reconstruction", opts.get("limiter", "minmod"))
@@ -336,28 +277,17 @@ class _SystemUnifiedInstall:
                         % type(spatial).__name__)
 
     def _resolve_instance_model(self, model):
-        """Resolve an instance's block model to something add_equation accepts. A ModelSpec
-        (pops.Model(...)) or a dsl.CompiledModel passes through unchanged. A dsl.Model (the PDE
-        builder, e.g. carried by compile_problem(model=...)) is compiled to a CompiledModel so the
-        block is added on the real System context.
-
-        Backend choice (P7-b): a dsl.Model declaring RUNTIME params is compiled via AOT, because the
-        production/native backend FREEZES runtime params at their declaration value (so
-        install(params=...) -> set_block_params would raise 'block ... has no runtime parameter'); a
-        const-only model keeps the native production path (no .so dlopen). The AOT block gates its OWN
-        time integrator to SSPRK2 + backward-Euler, but that is harmless here: a unified install runs
-        the compiled time Program, which drives the step (the per-instance ``time`` is not the stepper;
-        cf. compile_problem). A runtime-param instance must therefore use an AOT-compatible
-        ``time`` (the default pops.Explicit() == SSPRK2 is fine; euler/ssprk3 raise at add_equation)."""
+        """Resolve a block model to a ModelSpec/CompiledModel accepted by add_equation."""
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
+        from pops.codegen import AOT, Production
         from pops.physics.facade import Model
         if isinstance(model, (ModelSpec, CompiledModel)):
             return model
         if isinstance(model, Model):
             has_runtime = any(getattr(p, "kind", "const") == "runtime"
                               for p in model.params.values())
-            return model.compile(backend="aot" if has_runtime else "production")
+            return model._compile_for_runtime(backend=AOT() if has_runtime else Production())
         return model  # unknown -> let add_equation raise its own clear error
 
     def _validate_riemann_capability(self, model, spatial):
@@ -383,14 +313,7 @@ class _SystemUnifiedInstall:
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
 
     def _install_solver(self, field, solver_brick, declared_fields=frozenset()):
-        """Lower a field-solver selection to set_poisson (C1-System).
-
-        The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
-        m.elliptic_field, collected into @p declared_fields) are accepted: the named field's RHS is
-        wired by the native loader (register_elliptic_field + set_block_elliptic_field), and its solve
-        reuses the shared system elliptic solver, so the solver selection routes through set_poisson
-        for both. A field name that is NEITHER the default Poisson field NOR a declared named field is a
-        TYPO -- rejected LOUD, naming the declared set (never a silent drop)."""
+        """Lower a declared field solver to set_poisson; reject typos before runtime."""
         if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
             declared = ", ".join(sorted(declared_fields)) or "(none declared)"
             raise ValueError(
@@ -403,18 +326,15 @@ class _SystemUnifiedInstall:
         if callable(opts):
             opts = opts()
         opts = opts or {}
-        self.set_poisson(rhs=opts.get("rhs", "charge_density"), solver=token,
-                         bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
-                         wall_radius=float(opts.get("wall_radius", 0.0)),
-                         epsilon=float(opts.get("epsilon", 1.0)),
-                         abs_tol=float(opts.get("abs_tol", 0.0)))
+        self._set_poisson(rhs=opts.get("rhs", "charge_density"), solver=token,
+                          bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
+                          wall_radius=float(opts.get("wall_radius", 0.0)),
+                          epsilon=float(opts.get("epsilon", 1.0)),
+                          abs_tol=float(opts.get("abs_tol", 0.0)))
 
     @staticmethod
     def _declared_elliptic_fields(compiled, instances):
-        """Collect the NAMED elliptic fields declared by the compiled handle's model and the
-        per-instance models (C1-System). Reads each model's declared names WITHOUT compiling: a
-        CompiledModel exposes ``elliptic_field_names``; a raw physics/dsl Model exposes the
-        ``_elliptic_fields`` mapping. Returns a set (empty when no model declares a named field)."""
+        """Collect named elliptic fields declared by compiled and per-instance models."""
         names = set()
 
         def _names_of(model):
@@ -434,14 +354,15 @@ class _SystemUnifiedInstall:
 
     @staticmethod
     def _solver_token(solver_brick):
-        """Resolve a field-solver selection to its set_poisson token. Accepts a string, or a
-        descriptor carrying ``scheme`` (pops.solvers.GeometricMG -> 'geometric_mg')."""
+        """Resolve a typed field-solver descriptor to its native Poisson token."""
         if isinstance(solver_brick, str):
-            return solver_brick
+            raise TypeError(
+                "install: solver selections must be typed descriptors such as "
+                "pops.solvers.GeometricMG(); got legacy token %r" % solver_brick)
         token = getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None)
         if token is None:
-            raise TypeError("install: solver must be a token string or an pops.solvers.<Solver>(...) "
-                            "descriptor; got %r" % type(solver_brick).__name__)
+            raise TypeError("install: solver must be a pops.solvers.<Solver>(...) descriptor; got %r"
+                            % type(solver_brick).__name__)
         return token
 
     def _install_aux(self, field_name, field):
