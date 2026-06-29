@@ -8,7 +8,7 @@ tableau (A, b, c) to typed operator calls plus linear_combine nodes, no RK class
     U^{n+1} = U + dt*sum_i b[i]*k_i
 
 IR construction is always available and is the scope of this test. Runtime integration belongs in the
-clean ``compile_problem -> System.install`` integration tests, not in this historical macro unit test.
+clean ``compile_problem -> System.install`` integration tests, not in this macro unit test.
 """
 import pops.model as pm
 import pops.time as t
