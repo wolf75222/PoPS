@@ -44,7 +44,7 @@ def solve_program(method=None, tol=1e-10, max_iter=200):
     """phi = solve (I - alpha*Lap) phi = U, matrix-free, committed back into the block."""
     method = krylov.CG() if method is None else method
     P = adctime.Program("matrix_free_solve_example")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):  # out <- A(x) = x - alpha*Lap(x); the affine is the lowered result

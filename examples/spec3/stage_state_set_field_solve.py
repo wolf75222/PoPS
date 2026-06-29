@@ -31,9 +31,9 @@ def main():
     P = Program("multi_species_stage").bind_operators(mod)
     dt = P.dt
 
-    e_n = P.state("electrons", space=e_space)
-    i_n = P.state("ions", space=i_space)
-    n_n = P.state("neutrals", space=n_space)
+    e_n = P.state("U", block="electrons", space=e_space).n
+    i_n = P.state("U", block="ions", space=i_space).n
+    n_n = P.state("U", block="neutrals", space=n_space).n
 
     # electrons and ions advanced to a predictor stage; neutrals held at n.
     e_star = P.linear_combine("e_star", e_n + dt * P.call(e_rate, e_n, name="Re"))

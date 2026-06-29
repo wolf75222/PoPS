@@ -52,7 +52,8 @@ def main():
     mod, es, is_, collision = coupled_module()
     P = adctime.Program("collision_step").bind_operators(mod)
     dt = P.dt
-    e_n, i_n = P.state("electrons", space=es), P.state("ions", space=is_)
+    e_n = P.state("U", block="electrons", space=es).n
+    i_n = P.state("U", block="ions", space=is_).n
     C = P.call(collision, e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + dt * C["ions"])})

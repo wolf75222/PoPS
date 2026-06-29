@@ -43,7 +43,7 @@ def operator_first():
     mod, U_space, fields_op, rate_op = _module()
     P = Program("fe_operator_first").bind_operators(mod)
     dt = P.dt
-    u = P.state("plasma", space=U_space)
+    u = P.state("U", block="plasma", space=U_space).n
     P.call(fields_op, u, name="f")
     r = P.call(rate_op, u, name="R")
     u1 = P.linear_combine("U1", u + dt * r)

@@ -20,7 +20,7 @@ import sys
 
 import numpy as np
 
-from pops.physics.facade import Model
+from pops.physics.model import HyperbolicModel as Model
 
 fails = 0
 
@@ -45,10 +45,10 @@ def kswap_model(blocks):
     m = Model("kswap")
     a, b = m.conservative_vars("a", "b")
     K = 2.0
-    m.flux(x=[K * b, K * a], y=[K * b, K * a])
-    m.wave_speeds_from_jacobian(blocks=blocks)
-    m.primitive_vars(a, b)
-    m.conservative_from([a, b])
+    m.set_flux(x=[K * b, K * a], y=[K * b, K * a])
+    m.set_wave_speeds_from_jacobian(blocks=blocks)
+    m.set_primitive_state(a, b)
+    m.set_conservative_from([a, b])
     return m
 
 
@@ -58,11 +58,11 @@ def triangular_model():
     sous-blocs == spectre vrai -> partition legitime, check_model doit passer."""
     m = Model("tri3")
     q0, q1, q2 = m.conservative_vars("q0", "q1", "q2")
-    m.flux(x=[2.0 * q0, 3.0 * q1 + 0.5 * q0, -1.0 * q2 + 0.2 * q1],
-           y=[1.0 * q0, 2.0 * q1 + 0.3 * q0, 0.5 * q2 - 0.1 * q1])
-    m.wave_speeds_from_jacobian(blocks=[[0], [1, 2]])
-    m.primitive_vars(q0, q1, q2)
-    m.conservative_from([q0, q1, q2])
+    m.set_flux(x=[2.0 * q0, 3.0 * q1 + 0.5 * q0, -1.0 * q2 + 0.2 * q1],
+               y=[1.0 * q0, 2.0 * q1 + 0.3 * q0, 0.5 * q2 - 0.1 * q1])
+    m.set_wave_speeds_from_jacobian(blocks=[[0], [1, 2]])
+    m.set_primitive_state(q0, q1, q2)
+    m.set_conservative_from([q0, q1, q2])
     return m
 
 
@@ -89,12 +89,12 @@ def check_c_intra_block_message():
     print("== (c) doublon intra-bloc : message correct ==")
     m = Model("intra")
     a, b, c = m.conservative_vars("a", "b", "c")
-    m.flux(x=[a, b, c], y=[a, b, c])
-    msg = err_msg(lambda: m.wave_speeds_from_jacobian(blocks=[[0, 0, 1], [2]]))
+    m.set_flux(x=[a, b, c], y=[a, b, c])
+    msg = err_msg(lambda: m.set_wave_speeds_from_jacobian(blocks=[[0, 0, 1], [2]]))
     chk("same block" in msg, f"message dit 'same block' (intra) : {msg}")
     chk("two blocks" not in msg, "message NE dit PAS 'two blocks' (ce serait trompeur, doublon intra)")
     # inter-blocs : le message historique 'two blocks' reste, lui, correct.
-    msg2 = err_msg(lambda: m.wave_speeds_from_jacobian(blocks=[[0], [0, 1], [2]]))
+    msg2 = err_msg(lambda: m.set_wave_speeds_from_jacobian(blocks=[[0], [0, 1], [2]]))
     chk("two blocks" in msg2, f"doublon inter-blocs : message dit bien 'two blocks' : {msg2}")
 
 

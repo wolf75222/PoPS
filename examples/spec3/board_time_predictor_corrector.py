@@ -51,7 +51,7 @@ def primitive():
     mod, U_space, fields_op, rate_op, implicit_op = _module()
     P = Program("pc_primitive").bind_operators(mod)
     dt = P.dt
-    u_n = P.state("plasma", space=U_space)
+    u_n = P.state("U", block="plasma", space=U_space).n
     f_n = P.call(fields_op, u_n, name="fields_n")
     r_n = P.call(rate_op, u_n, name="R_n")
     L_n = P.call(implicit_op, f_n, name="L_n")

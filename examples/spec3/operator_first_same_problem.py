@@ -44,7 +44,7 @@ def operator_first_step(m):
     P = Program("operator_first_step")
     P.bind_operators(m.module)
     dt = P.dt
-    U_n = P.state("plasma")
+    U_n = P.state("U", block="plasma").n
     fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
     explicit_rate = OperatorHandle("explicit_rate", kind="local_rate")
     implicit_operator = OperatorHandle("implicit_operator", kind="local_linear_operator")

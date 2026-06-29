@@ -27,9 +27,9 @@ def _coeff(node, value):
 def test_forward_euler_ir():
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(state=U, fields=fields, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    fields = P._fields_from_state(U)
+    R = P._rate_from_transport(state=U, fields=fields, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U + dt * R)
     P.commit("plasma", U1)
     P.validate()
@@ -45,12 +45,12 @@ def test_forward_euler_ir():
 def test_ssprk2_ir():
     P = adctime.Program("ssprk2")
     dt = P.dt
-    U0 = P.state("plasma")
-    f0 = P._legacy_solve_fields("f0", U0)
-    k0 = P._legacy_rhs("k0", state=U0, fields=f0, flux=True, sources=["default"])
+    U0 = P.state("U", block="plasma").n
+    f0 = P._fields_from_state("f0", U0)
+    k0 = P._rate_from_transport("k0", state=U0, fields=f0, flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + dt * k0)
-    f1 = P._legacy_solve_fields("f1", U1)
-    k1 = P._legacy_rhs("k1", state=U1, fields=f1, flux=True, sources=["default"])
+    f1 = P._fields_from_state("f1", U1)
+    k1 = P._rate_from_transport("k1", state=U1, fields=f1, flux=True, sources=["default"])
     U2 = P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
     P.commit("plasma", U2)
     P.validate()
@@ -63,14 +63,14 @@ def test_ssprk2_ir():
 def test_rk4_ir():
     P = adctime.Program("rk4")
     dt = P.dt
-    U0 = P.state("plasma")
-    k1 = P._legacy_rhs("k1", state=U0, fields=P._legacy_solve_fields(U0), flux=True, sources=["default"])
+    U0 = P.state("U", block="plasma").n
+    k1 = P._rate_from_transport("k1", state=U0, fields=P._fields_from_state(U0), flux=True, sources=["default"])
     U1 = P.linear_combine("U1", U0 + 0.5 * dt * k1)
-    k2 = P._legacy_rhs("k2", state=U1, fields=P._legacy_solve_fields(U1), flux=True, sources=["default"])
+    k2 = P._rate_from_transport("k2", state=U1, fields=P._fields_from_state(U1), flux=True, sources=["default"])
     U2 = P.linear_combine("U2", U0 + 0.5 * dt * k2)
-    k3 = P._legacy_rhs("k3", state=U2, fields=P._legacy_solve_fields(U2), flux=True, sources=["default"])
+    k3 = P._rate_from_transport("k3", state=U2, fields=P._fields_from_state(U2), flux=True, sources=["default"])
     U3 = P.linear_combine("U3", U0 + dt * k3)
-    k4 = P._legacy_rhs("k4", state=U3, fields=P._legacy_solve_fields(U3), flux=True, sources=["default"])
+    k4 = P._rate_from_transport("k4", state=U3, fields=P._fields_from_state(U3), flux=True, sources=["default"])
     Unp1 = P.linear_combine("Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4)
     P.commit("plasma", Unp1)
     P.validate()
@@ -83,8 +83,8 @@ def test_rk4_ir():
 
 def test_commit_once():
     P = adctime.Program("p")
-    U = P.state("plasma")
-    U1 = P.linear_combine("U1", U + P.dt * P._legacy_rhs(state=U, fields=P._legacy_solve_fields(U)))
+    U = P.state("U", block="plasma").n
+    U1 = P.linear_combine("U1", U + P.dt * P._rate_from_transport(state=U, fields=P._fields_from_state(U)))
     P.commit("plasma", U1)
     try:
         P.commit("plasma", U1)
@@ -97,8 +97,8 @@ def test_commit_once():
 
 def test_no_commit_rejected():
     P = adctime.Program("p")
-    U = P.state("plasma")
-    P._legacy_rhs(state=U, fields=P._legacy_solve_fields(U))
+    U = P.state("U", block="plasma").n
+    P._rate_from_transport(state=U, fields=P._fields_from_state(U))
     try:
         P.validate()
     except ValueError as e:
@@ -110,7 +110,7 @@ def test_no_commit_rejected():
 
 def test_value_not_python_bool():
     P = adctime.Program("p")
-    U = P.state("plasma")
+    U = P.state("U", block="plasma").n
     try:
         bool(U)
     except TypeError as e:
@@ -123,8 +123,8 @@ def test_value_not_python_bool():
 def _build_euler(scale=1.0):
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
-    R = P._legacy_rhs(state=U, fields=P._legacy_solve_fields(U), flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    R = P._rate_from_transport(state=U, fields=P._fields_from_state(U), flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + (scale * dt) * R))
     return P
 
@@ -137,17 +137,17 @@ def test_ir_hash_deterministic_and_sensitive():
 
 def test_solve_fields_distinct():
     P = adctime.Program("p")
-    U = P.state("plasma")
-    f0 = P._legacy_solve_fields(U)
-    f1 = P._legacy_solve_fields(U)
+    U = P.state("U", block="plasma").n
+    f0 = P._fields_from_state(U)
+    f1 = P._fields_from_state(U)
     assert f0 is not f1 and f0.id != f1.id and f0.vtype == "fields"
     print("OK  8. each solve_fields is a distinct FieldContext value")
 
 
 def test_rhs_records_sources_and_flux():
     P = adctime.Program("p")
-    U = P.state("plasma")
-    R = P._legacy_rhs(state=U, fields=P._legacy_solve_fields(U), flux=True, sources=["electric", "chemistry"])
+    U = P.state("U", block="plasma").n
+    R = P._rate_from_transport(state=U, fields=P._fields_from_state(U), flux=True, sources=["electric", "chemistry"])
     assert R.attrs["flux"] is True
     assert R.attrs["sources"] == ["electric", "chemistry"]
     print("OK  9. rhs records its flux flag and named sources")

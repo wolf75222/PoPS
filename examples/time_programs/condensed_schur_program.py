@@ -53,7 +53,7 @@ def schur_like_program(method=None, tol=1e-10, max_iter=200):
     P.solve_linear -- the AVAILABLE primitives a hand-rolled condensed-Schur stage would use."""
     method = krylov.BiCGStab() if method is None else method
     P = adctime.Program("condensed_schur_primitives_example")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):  # out <- A(x) = x - alpha*div(grad(x)); the affine is the lowered result

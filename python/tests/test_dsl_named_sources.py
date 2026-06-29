@@ -17,7 +17,7 @@ Run with python3 (PYTHONPATH = built pops package).
 import numpy as np
 
 from pops.ir.expr import Var
-from pops.physics.facade import Model
+from pops.physics.model import HyperbolicModel as Model
 
 # Golden hashes computed on master BEFORE this feature (build() / build(with_source=False)
 # below). The feature must NOT perturb the cache key of a model that uses only m.source(...).
@@ -34,10 +34,10 @@ def build(with_source=True):
     rho, mx, my = m.conservative_vars("rho", "rho_u", "rho_v")
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    m.wave_speeds(x=(0.0 * rho, 0.0 * rho), y=(0.0 * rho, 0.0 * rho))
+    m.set_flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
+    m.set_wave_speeds(x=(0.0 * rho, 0.0 * rho), y=(0.0 * rho, 0.0 * rho))
     if with_source:
-        m.source([0.0 * rho, -rho * gx, -rho * gy])
+        m.set_source([0.0 * rho, -rho * gx, -rho * gy])
     return m
 
 
@@ -50,8 +50,8 @@ def base_model():
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
     bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    m.wave_speeds(x=(0.0 * rho, 0.0 * rho), y=(0.0 * rho, 0.0 * rho))
+    m.set_flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
+    m.set_wave_speeds(x=(0.0 * rho, 0.0 * rho), y=(0.0 * rho, 0.0 * rho))
     return m, dict(rho=rho, mx=mx, my=my, u=u, v=v, gx=gx, gy=gy, bz=bz)
 
 
@@ -136,7 +136,7 @@ def test_old_stepper_multiple_named_sources():
     m.source_term("chemistry", [0.0 * rho, 0.0 * rho, 0.0 * rho])
     U = np.ones((3, 4, 4))
     aux = {"grad_x": np.zeros((4, 4)), "grad_y": np.zeros((4, 4)), "B_z": np.zeros((4, 4))}
-    expect_error(lambda: m.eval_source(U, aux),
+    expect_error(lambda: m.source_value(U, aux),
                  "model has multiple named sources")
     print("OK  8. old stepper + multiple named sources rejected")
 

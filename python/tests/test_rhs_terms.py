@@ -1,12 +1,12 @@
-"""P._legacy_rhs(terms=[...]) typed RHS composition (Spec 5 sec.14.2.4, ADC-479 criterion 27).
+"""P._rate_from_terms(terms=[...]) typed RHS composition (Spec 5 sec.14.2.4, ADC-479 criterion 27).
 
-The typed ``terms=`` front door -- the ONE public RHS path -- lowers onto the INTERNAL
-``P._legacy_rhs`` ``flux=``/``sources=`` builder: each :class:`pops.numerics.terms.Flux`/source term
+The internal typed ``terms=`` lowering path lowers onto the INTERNAL
+``P._rate_from_transport`` ``flux=``/``sources=`` builder: each :class:`pops.numerics.terms.Flux`/source term
 maps onto the existing booleans/name-list, so the built IR is BYTE-IDENTICAL to the private path.
 These tests pin that equivalence on the ``Program._ir_hash``:
 
   - ``terms=[Flux(), <source>]`` builds the byte-identical hash to the private
-    ``_legacy_rhs(flux=True, sources=[<name>])``;
+    ``_rate_from_transport(flux=True, sources=[<name>])``;
   - ``Flux()`` is a typed term, not a bool (a bare bool in terms= is a TypeError);
   - every accepted source form (name str / SourceTerm / OperatorHandle) maps onto the same name;
   - a non-term object in terms= is a clear TypeError.
@@ -24,45 +24,45 @@ def _terms_program(terms):
     """A one-block forward-Euler Program whose single rhs is built from ``terms=``."""
     P = adctime.Program("rhs_terms")
     dt = P.dt
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
-    R = P._rhs_terms("R", state=U, fields=f, terms=terms)
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state(U)
+    R = P._rate_from_terms("R", state=U, fields=f, terms=terms)
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
 
 
-def _legacy_program(flux, sources):
-    """The same Program built through the INTERNAL ``_legacy_rhs`` flux=/sources= builder (the typed
+def _transport_program(flux, sources):
+    """The same Program built through the INTERNAL ``_rate_from_transport`` flux=/sources= builder (the typed
     terms= path lowers onto this private builder; it is the byte-identity target, not a public path)."""
     P = adctime.Program("rhs_terms")
     dt = P.dt
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
-    R = P._legacy_rhs(name="R", state=U, fields=f, flux=flux, sources=sources)
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state(U)
+    R = P._rate_from_transport(name="R", state=U, fields=f, flux=flux, sources=sources)
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     P.validate()
     return P
 
 
 def test_terms_flux_plus_source_is_byte_identical():
-    """terms=[Flux(), "electric"] == _legacy_rhs(flux=True, sources=["electric"]) (same _ir_hash)."""
+    """terms=[Flux(), "electric"] == _rate_from_transport(flux=True, sources=["electric"]) (same _ir_hash)."""
     h_terms = _terms_program([Flux(), "electric"])._ir_hash()
-    h_legacy = _legacy_program(True, ["electric"])._ir_hash()
-    assert h_terms == h_legacy, (h_terms, h_legacy)
-    print("OK  1. terms=[Flux(), 'electric'] _ir_hash == _legacy_rhs(flux=True, sources=['electric'])")
+    h_transport = _transport_program(True, ["electric"])._ir_hash()
+    assert h_terms == h_transport, (h_terms, h_transport)
+    print("OK  1. terms=[Flux(), 'electric'] _ir_hash == _rate_from_transport(flux=True, sources=['electric'])")
 
 
 def test_terms_flux_only_is_byte_identical():
-    """terms=[Flux()] (no source) == _legacy_rhs(flux=True, sources=[]) (flux only)."""
-    assert _terms_program([Flux()])._ir_hash() == _legacy_program(True, [])._ir_hash()
-    print("OK  2. terms=[Flux()] _ir_hash == _legacy_rhs(flux=True, sources=[])")
+    """terms=[Flux()] (no source) == _rate_from_transport(flux=True, sources=[]) (flux only)."""
+    assert _terms_program([Flux()])._ir_hash() == _transport_program(True, [])._ir_hash()
+    print("OK  2. terms=[Flux()] _ir_hash == _rate_from_transport(flux=True, sources=[])")
 
 
 def test_terms_source_only_is_byte_identical():
-    """terms=["electric"] (no Flux) == _legacy_rhs(flux=False, sources=["electric"]) (source only)."""
-    assert _terms_program(["electric"])._ir_hash() == _legacy_program(False, ["electric"])._ir_hash()
-    print("OK  3. terms=['electric'] _ir_hash == _legacy_rhs(flux=False, sources=['electric'])")
+    """terms=["electric"] (no Flux) == _rate_from_transport(flux=False, sources=["electric"]) (source only)."""
+    assert _terms_program(["electric"])._ir_hash() == _transport_program(False, ["electric"])._ir_hash()
+    print("OK  3. terms=['electric'] _ir_hash == _rate_from_transport(flux=False, sources=['electric'])")
 
 
 def test_source_forms_map_to_same_name():
@@ -82,37 +82,37 @@ def test_flux_is_a_term_not_a_bool():
     # Flux() lowers to flux=True (proven by the byte-identical hash above); a bare True does not.
     assert _terms_program([Flux()])._ir_hash() != _terms_program([])._ir_hash()
     P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state(U)
     with pytest.raises(TypeError):
-        P._rhs_terms("R", state=U, fields=f, terms=[True])
+        P._rate_from_terms("R", state=U, fields=f, terms=[True])
     print("OK  6. Flux() is a term not a bool; a bare bool in terms= is a TypeError")
 
 
-def test_legacy_flux_sources_rejected_in_public_surface():
-    """The legacy flux=/sources=/fluxes= form (and a bare P.rhs) is NOT a public path: it is refused
-    with a clear TypeError naming terms= (Spec 5: terms= is the one public RHS path)."""
+def test_old_flux_sources_rejected_in_terms_lowering():
+    """The old flux=/sources=/fluxes= form (and a bare call) is refused by _rate_from_terms with a
+    clear TypeError naming terms=."""
     P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state(U)
     for kw in ({"flux": True}, {"sources": ["electric"]}, {"fluxes": ["default"]}, {}):
-        with pytest.raises(TypeError, match="_rhs_terms requires terms="):
-            P._rhs_terms("R", state=U, fields=f, **kw)
-    print("OK  7. legacy P._legacy_rhs(flux=/sources=/fluxes=/bare) -> TypeError naming terms=")
+        with pytest.raises(TypeError, match="_rate_from_terms requires terms="):
+            P._rate_from_terms("R", state=U, fields=f, **kw)
+    print("OK  7. old flux=/sources=/fluxes=/bare form -> TypeError naming terms=")
 
 
 def test_bad_term_raises_typeerror():
     """A non-term object in terms= is a clear TypeError (transparent typed surface)."""
     P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
-    f = P._legacy_solve_fields(U)
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state(U)
     for bad in (123, 4.5, object(), ["nested"]):
         with pytest.raises(TypeError):
-            P._rhs_terms("R", state=U, fields=f, terms=[Flux(), bad])
+            P._rate_from_terms("R", state=U, fields=f, terms=[Flux(), bad])
     # An unnamed SourceTerm/LocalTerm has no declared source name to fold in.
     for unnamed in (SourceTerm(), LocalTerm()):
         with pytest.raises(ValueError, match="must be named"):
-            P._rhs_terms("R", state=U, fields=f, terms=[Flux(), unnamed])
+            P._rate_from_terms("R", state=U, fields=f, terms=[Flux(), unnamed])
     print("OK  8. a non-term in terms= -> TypeError; an unnamed source term -> ValueError")
 
 

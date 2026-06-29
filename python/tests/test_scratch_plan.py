@@ -40,15 +40,15 @@ def _ssprk3(name="ssprk3"):
     consumed by the very next combine), so they collapse to ONE reused buffer -- a provable reuse."""
     P = adctime.Program(name)
     dt = P.dt
-    U = P.state("plasma")
-    f0 = P._legacy_solve_fields(U)
-    r0 = P._legacy_rhs(state=U, fields=f0, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    f0 = P._fields_from_state(U)
+    r0 = P._rate_from_transport(state=U, fields=f0, flux=True, sources=["default"])
     u1 = P.linear_combine("U1", U + dt * r0)
-    f1 = P._legacy_solve_fields(u1)
-    r1 = P._legacy_rhs(state=u1, fields=f1, flux=True, sources=["default"])
+    f1 = P._fields_from_state(u1)
+    r1 = P._rate_from_transport(state=u1, fields=f1, flux=True, sources=["default"])
     u2 = P.linear_combine("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1)
-    f2 = P._legacy_solve_fields(u2)
-    r2 = P._legacy_rhs(state=u2, fields=f2, flux=True, sources=["default"])
+    f2 = P._fields_from_state(u2)
+    r2 = P._rate_from_transport(state=u2, fields=f2, flux=True, sources=["default"])
     un = P.linear_combine("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
     P.commit("plasma", un)
     return P
@@ -57,9 +57,9 @@ def _ssprk3(name="ssprk3"):
 def _krylov(name="krylov_demo"):
     """A Program with a matrix-free ``solve_linear`` (Krylov) node -- exercises the persistent path."""
     P = adctime.Program(name)
-    U = P.state("plasma")
-    f = P._legacy_solve_fields("phi", U)
-    r = P._legacy_rhs(state=U, fields=f, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    f = P._fields_from_state("phi", U)
+    r = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
     buf = P.scalar_field("buf")
     A = P.matrix_free_operator("op")
 
@@ -228,8 +228,8 @@ def test_no_persistent_without_solve():
     """A pure transport step (no field / Krylov solve) has no persistent buffers and is EXACT."""
     print("== a solve-free step has no persistent buffers (exact plan) ==")
     P = adctime.Program("transport_only")
-    U = P.state("plasma")
-    r = P._legacy_rhs(state=U, flux=True, sources=[])
+    U = P.state("U", block="plasma").n
+    r = P._rate_from_transport(state=U, flux=True, sources=[])
     P.commit("plasma", P.linear_combine("U1", U + P.dt * r))
     plan = P.scratch_plan()
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")

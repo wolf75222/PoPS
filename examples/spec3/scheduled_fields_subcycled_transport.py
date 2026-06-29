@@ -32,7 +32,7 @@ def main():
 
     # the cheap transport refreshes the field every 10 steps and holds it in between
     P = adctime.Program("scheduled_step").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     fields = P.call(fields_op, U, schedule=adctime.every(10).hold())
     transport = P.call(flux_op, U, schedule=adctime.subcycle(4))
     print("field solve schedule :", fields.attrs["schedule"])

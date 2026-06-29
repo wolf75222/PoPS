@@ -56,9 +56,9 @@ def multi_species_step():
     e_rate, i_rate, n_rate = rates
     P = adctime.Program("three_fluids_step").bind_operators(mod)
     dt = P.dt
-    e_n = P.state("electrons", space=e_space)
-    i_n = P.state("ions", space=i_space)
-    n_n = P.state("neutrals", space=n_space)
+    e_n = P.state("U", block="electrons", space=e_space).n
+    i_n = P.state("U", block="ions", space=i_space).n
+    n_n = P.state("U", block="neutrals", space=n_space).n
 
     P.call(fields_op, e_n, i_n, n_n, name="fields")  # coupled, arity 3
     e1 = P.linear_combine("e1", e_n + dt * P.call(e_rate, e_n, name="Re"))

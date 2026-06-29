@@ -46,10 +46,10 @@ def _euler_with_dead_rhs():
     """Forward Euler whose committed combine never reads ``dead`` (a genuinely unused rhs)."""
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P._legacy_solve_fields(U)
-    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
-    P._legacy_rhs("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
+    U = P.state("U", block="plasma").n
+    fields = P._fields_from_state(U)
+    R = P._rate_from_transport("R", state=U, fields=fields, flux=True, sources=["default"])
+    P._rate_from_transport("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -58,9 +58,9 @@ def _euler_no_dead():
     """The SAME forward Euler, written without the dead rhs (the byte-identity reference)."""
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P._legacy_solve_fields(U)
-    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    fields = P._fields_from_state(U)
+    R = P._rate_from_transport("R", state=U, fields=fields, flux=True, sources=["default"])
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
     return P
 
@@ -118,9 +118,9 @@ def test_side_effecting_nodes_never_removed():
     result. Here the committed combine reads only U + dt*R, so none of the three feeds the commit."""
     P = adctime.Program("side_effects")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P._legacy_solve_fields(U)            # side-effecting (fills ghosts/aux), result unused downstream
-    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    fields = P._fields_from_state(U)            # side-effecting (fills ghosts/aux), result unused downstream
+    R = P._rate_from_transport("R", state=U, fields=fields, flux=True, sources=["default"])
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
@@ -147,10 +147,10 @@ def test_chained_dead_nodes_removed():
     """A dead node feeding only another dead node: BOTH go (reverse-reachability, not one level)."""
     P = adctime.Program("chain")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P._legacy_solve_fields(U)
-    R = P._legacy_rhs("R", state=U, fields=fields, flux=True, sources=["default"])
-    dead0 = P._legacy_rhs("dead0", state=U, fields=fields, flux=True, sources=["default"])
+    U = P.state("U", block="plasma").n
+    fields = P._fields_from_state(U)
+    R = P._rate_from_transport("R", state=U, fields=fields, flux=True, sources=["default"])
+    dead0 = P._rate_from_transport("dead0", state=U, fields=fields, flux=True, sources=["default"])
     P.linear_combine("dead1", U + dt * dead0)  # consumes dead0 but is itself unused
     P.commit("plasma", P.linear_combine("U1", U + dt * R))
 
@@ -195,7 +195,7 @@ def test_buffer_writing_op_with_discarded_result_kept():
     from the allow-list, so the safe-by-default pass keeps it -- a buffer-writer that aliases an input
     is never wrongly dropped, even with an unconsumed result."""
     P = adctime.Program("buf_writer")
-    U = P.state("plasma")
+    U = P.state("U", block="plasma").n
     buf = P.scalar_field("buf")
     P.laplacian(buf, buf)  # buffer-writer: writes buf in place, RESULT DISCARDED
     A = P.matrix_free_operator("op")
@@ -223,7 +223,7 @@ def test_control_flow_input_kept():
     """A value consumed only inside a while sub-block is LIVE (the while op lists it as an input);
     v1 never descends into sub-blocks, so anything feeding one is conservatively kept."""
     P = adctime.Program("cf")
-    U = P.state("plasma")
+    U = P.state("U", block="plasma").n
 
     def cond(p, x):
         return p.norm2(x) > 1e-10
