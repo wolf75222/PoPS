@@ -55,5 +55,4 @@ def _emit_amr_install(program, target, prelude, body):
         '\n    }\n'
         '    ctx.couple_levels();                     // (B) fine->coarse average_down (v1: no reflux)\n'
         '  });\n'
-        '}\n'
-        'extern "C" void pops_install_program_amr(void* sys) { pops_problem_install_amr(sys); }\n')
+        '}\n')

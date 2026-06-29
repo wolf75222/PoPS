@@ -287,10 +287,10 @@ def CompositeModel(transport, source, elliptic, name="hybrid"):
                                 source=pops.PotentialForce(charge=-1.0),   # native source
                                 elliptic=pops.ChargeDensity(charge=-1.0))  # native elliptic
         co = m.compile(backend=pops.codegen.AOT())                  # -> CompiledModel
-        sim.add_equation("ions", co, spatial=pops.FiniteVolume(), names=[...])
+        sim.install(compiled, instances={"ions": {"model": co, "spatial": spatial, "initial": U0}})
 
     Returns an pops.dsl.HybridModel; call .compile(backend=pops.codegen.AOT()) for a CompiledModel pluggable
-    via System.add_equation. (Prototype: only the 'aot' backend is wired.)"""
+    via the private runtime lowering used by sim.install. (Prototype: only the 'aot' backend is wired.)"""
     from pops.physics.bricks import CompiledBrick
     from pops.physics.hybrid import HybridModel
     tr = _native_to_brick(transport, "hyperbolic")

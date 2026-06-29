@@ -117,6 +117,7 @@ def test_problem_so_is_primary_native_abi():
         '"pops_problem_block_count"',
         '"pops_problem_param_count"',
         '"pops_problem_has_dt_bound"',
+        '"pops_problem_dt_bound"',
     ):
         assert token in system_loader, "System loader must resolve %s" % token
     for token in (
@@ -133,3 +134,5 @@ def test_problem_so_is_primary_native_abi():
     )
     assert "Program .so" not in joined_codegen
     assert "program.so" not in joined_codegen
+    assert "pops_install_program" not in joined_codegen
+    assert "pops_program_abi_key" not in joined_codegen

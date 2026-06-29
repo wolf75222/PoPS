@@ -179,7 +179,7 @@ struct System::Impl {
   // macro-steps with eff_dt = M*dt (GLOBAL hold-then-catch-up). Set by System::set_program_cadence.
   int program_substeps_ = 1;
   int program_stride_ = 1;
-  // IR hash of the installed compiled Program (the .so's pops_problem_hash, ADC-406b). Empty until
+  // IR hash of the installed compiled problem artifact (the .so's pops_problem_hash, ADC-406b). Empty until
   // install_problem records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
   // Program is rejected fail-loud (mismatched buffers / cadence would be meaningless).
   std::string installed_program_hash_;
@@ -2401,7 +2401,7 @@ POPS_EXPORT void System::install_problem(const std::string& so_path) {
     }
   }
 #endif
-  // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program numbers its blocks in
+  // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled problem artifact numbers its blocks in
   // P.state declaration order (the .so's pops_problem_block_name table); the System numbers its blocks
   // in add order (block_names). They need NOT agree -- bind by NAME, not add-order. Read the .so's
   // block names, map each Program block index to the System block of that name, and store the
@@ -2560,7 +2560,7 @@ void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
 const std::vector<int>& System::program_block_map() const {
   return p_->program_block_map_;
 }
-// Block positivity projection (ADC-177) reached by a compiled Program (ProgramContext::apply_projection,
+// Block positivity projection (ADC-177) reached by a compiled problem artifact (ProgramContext::apply_projection,
 // spec op 21). REUSES the block's own projection closure; a block without one is a no-op.
 void System::block_project(int b, MultiFab& u) {
   std::function<void(MultiFab&)>& proj = p_->sp[static_cast<std::size_t>(b)].project;
@@ -2600,7 +2600,7 @@ void System::set_program_params(int prog_block, const std::vector<double>& value
   if (it == p_->program_block_params_.end())
     throw std::out_of_range(
         "System::set_program_params: program block " + std::to_string(prog_block) +
-        " has no runtime parameter (the installed compiled Program declares none for it; declare "
+        " has no runtime parameter (the installed compiled problem artifact declares none for it; declare "
         "dsl.Param(..., kind='runtime') in the model the Program lowers, or omit params=)");
   RuntimeParams& rp = it->second;
   if (static_cast<int>(values.size()) != rp.count)

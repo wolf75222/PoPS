@@ -65,7 +65,7 @@ class HyperbolicModel(_VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
                                 # "y": [Expr]} (n_cons each). The implicit "default" flux lives in
                                 # self._flux (m.flux / set_flux), so a model that only ever calls m.flux
                                 # keeps this dict EMPTY -- the named keys enter _model_hash ONLY when
-                                # non-empty (cache key preserved). A compiled Program selects a SUM of
+                                # non-empty (cache key preserved). A compiled problem artifact selects a SUM of
                                 # named fluxes via ctx.rhs(..., fluxes=[name, ...]); fluxes=["default"]
                                 # (or no list) keeps the historical -div F (rhs_into), byte-identical.
         self._eig = {}          # "x" / "y" -> list of Expr (eigenvalues)

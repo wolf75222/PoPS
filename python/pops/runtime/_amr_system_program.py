@@ -27,7 +27,7 @@ class _AmrSystemProgram:
 
           - (5) attach the compiled problem on the AMR hierarchy (binds blocks by name + runs native
             requirement validation: block instance / solver). The .so must
-            export pops_install_program_amr (target='amr_system'); a target='system' .so is rejected
+            export pops_problem_install_amr (target='amr_system'); a target='system' .so is rejected
             at the C++ loader with an actionable message. NATIVE mode (so_path is None) has no
             compiled artifact; the step-2 blocks drive the native AMR loop, so a non-empty params=
             raises (the native AMR block loader does not transport runtime params, and AmrSystem has

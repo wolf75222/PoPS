@@ -1,6 +1,6 @@
 #pragma once
 
-// A lightweight per-node / per-brick profiler for the compiled Program step (Spec 3 section 29-30,
+// A lightweight per-node / per-brick profiler for the compiled problem artifact step (Spec 3 section 29-30,
 // ADC-459). It accumulates named wall-clock scopes -- one per Program node, native brick, or step
 // phase -- plus a few integer counters (kernels, cache hits/misses, scheduled nodes due/skipped),
 // and renders the report `sim.profile_report()` returns.

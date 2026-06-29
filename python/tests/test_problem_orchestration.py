@@ -76,8 +76,8 @@ def _program(module, name="spec5_step", blocks=("plasma",)):
 def _compile_inert(monkeypatch, *, layout, blocks=("plasma",), name="spec5_step"):
     calls = {"targets": [], "commands": []}
 
-    def _fake_emit(self, model=None, target="system"):
-        calls["targets"].append((target, model))
+    def _fake_emit(self, model=None, target="system", **kwargs):
+        calls["targets"].append((target, model, dict(kwargs)))
         return "extern \"C\" int pops_test_problem_route() { return 0; }\n"
 
     def _fake_run_compile(cmd, label):
@@ -171,8 +171,11 @@ class _RecordingSystem(pops.System):
 def test_compile_problem_uniform_returns_compiled_problem(monkeypatch=None):
     layout = Uniform(CartesianMesh(n=16))
     compiled, module, program, calls = _compile_inert(monkeypatch, layout=layout)
-    _check(calls["targets"] == [("system", module)],
+    _check([(target, mod) for target, mod, _ in calls["targets"]] == [("system", module),
+                                                                      ("system", module)],
            "layout=Uniform selects the system program ABI")
+    _check(calls["targets"][0][2] == {}, "first emit probes semantic identity without problem_hash")
+    _check("problem_hash" in calls["targets"][1][2], "second emit embeds the structured problem_hash")
     _check(len(calls["commands"]) == 1, "compile_problem reaches the compiler runner")
     _check(compiled.model is module, "CompiledProblem carries the Module")
     _check(compiled.program is program, "CompiledProblem carries the Program")
@@ -184,8 +187,11 @@ def test_compile_problem_uniform_returns_compiled_problem(monkeypatch=None):
 def test_compile_problem_amr_returns_amr_target(monkeypatch=None):
     layout = AMR(CartesianMesh(n=16), max_levels=2, ratio=2)
     compiled, module, _, calls = _compile_inert(monkeypatch, layout=layout, name="amr_step")
-    _check(calls["targets"] == [("amr_system", module)],
+    _check([(target, mod) for target, mod, _ in calls["targets"]] == [("amr_system", module),
+                                                                      ("amr_system", module)],
            "layout=AMR selects the AMR program ABI")
+    _check(calls["targets"][0][2] == {}, "first AMR emit probes semantic identity without problem_hash")
+    _check("problem_hash" in calls["targets"][1][2], "second AMR emit embeds the structured problem_hash")
     _check(compiled.model is module, "AMR CompiledProblem still carries the Module")
     print("ok test_compile_problem_amr_returns_amr_target")
 

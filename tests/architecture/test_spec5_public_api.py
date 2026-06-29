@@ -144,6 +144,13 @@ def test_runtime_install_is_the_only_public_runtime_wiring_path():
                 type(sim).__name__, forbidden)
 
 
+def test_install_requires_compiled_problem_publicly():
+    """TASK-032/033: public install has no native/None alternative route."""
+    for sim in (pops.System(), pops.AmrSystem(n=8, L=1.0)):
+        with pytest.raises(TypeError, match="pops.compile_problem"):
+            sim.install(None, instances={})
+
+
 def test_no_public_runtime_fragmented_api():
     """TASK-070: runtime public surface is install + stepping, not fragmented setters."""
     test_runtime_install_is_the_only_public_runtime_wiring_path()

@@ -77,7 +77,7 @@ class _SourceMixin:
     def source_term(self, name, exprs):
         """Declare a NAMED local source S_name(U, primitives, aux, params): exactly n_cons
         expressions, free to depend on cons / primitives / aux / aux_field / params / constants. A
-        named source is OPT-IN -- it is emitted only when a compiled Program calls the returned typed
+        named source is OPT-IN -- it is emitted only when a compiled problem artifact calls the returned typed
         operator handle (or an internal package macro selects it). It is NEVER summed implicitly into
         the legacy total source. name == "default" is the backward-compatible alias of m.source([...])
         (stored in self._source, hash unchanged). Other names must be valid identifiers, unique, and

@@ -74,16 +74,21 @@ class _SystemUnifiedInstall:
         """
         return self._s.install_problem(so_path)
 
-    def install(self, compiled=None, *, instances=None, params=None, aux=None,
+    def install(self, compiled, *, instances=None, params=None, aux=None,
                 solvers=None, cadence=None, outputs=None):
-        """Public Spec-4 install entry point.
+        """Public Spec-5 install entry point.
 
         Wires a ``CompiledProblem`` plus its block instances, runtime params, aux fields and field
-        solvers in one validated call, then installs the compiled problem artifact. Pass
-        ``compiled=None`` for the native per-block route. This is a thin public wrapper over the
-        single lowering seam; it exists so examples and user code do not call private
-        ``_install_*`` helpers.
+        solvers in one validated call, then installs the compiled problem artifact. The public route
+        always starts from ``pops.compile_problem(...)``; native per-block wiring is an internal test
+        seam, not a user-facing alternative.
         """
+        if compiled is None:
+            raise TypeError(
+                "sim.install requires a CompiledProblem from pops.compile_problem(...); "
+                "the public runtime route is compiled = pops.compile_problem(...), "
+                "sim = pops.System(...), sim.install(compiled, ...). Native per-block wiring is "
+                "private/internal and is not exposed through sim.install.")
         return self._install_compiled(
             compiled,
             instances=instances,
@@ -125,21 +130,17 @@ class _SystemUnifiedInstall:
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
         # lower its spatial brick and set its initial state. The block model is the per-instance
-        # "model" if given, else the physical Module carried by the CompiledProblem. COMPILED mode:
-        # `compiled` is a compile_problem(...) handle carrying a combined artifact attached in step 5.
-        # NATIVE mode: `compiled is None`; each instance carries its own native model + time policy
-        # (runtime Explicit / Strang), step 5 is skipped, and the native per-block loop drives
-        # stepping. Validate the handle up front, BEFORE any System mutation (no half-configured
-        # System).
+        # "model" if given, else the physical Module carried by the CompiledProblem. The public route
+        # always passes a compile_problem(...) handle; compiled=None remains only as a private
+        # host-test/native seam and is deliberately unavailable through sim.install.
         so_path = None
         compiled_model = None
         if compiled is not None:
             so_path = getattr(compiled, "so_path", None)
             if so_path is None:
                 raise TypeError(
-                    "install: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
-                    "result, or compiled=None for a native sim (each instance carries its own native "
-                    "model)." % type(compiled).__name__)
+                    "install: compiled handle has no .so_path (got %r); pass a CompiledProblem "
+                    "returned by pops.compile_problem(...)." % type(compiled).__name__)
             compiled_model = getattr(compiled, "model", None)
         resolved_models = {}  # instance name -> RESOLVED (CompiledModel), reused by the params step
         for name, spec in instances.items():
@@ -198,8 +199,8 @@ class _SystemUnifiedInstall:
             if so_path is None:
                 raise ValueError(
                     "install(cadence=): a cadence applies to a compiled problem artifact; a native sim "
-                    "(compiled=None) has no Program -- set substeps / stride on the native time policy "
-                    "instead.")
+                    "(compiled=None) has no compiled problem artifact -- set substeps / stride on the "
+                    "native time policy instead.")
             self._install_cadence(cadence)
 
         if outputs:  # (7) OUTPUT / CHECKPOINT policies (C4): run() fires each at its cadence
@@ -253,7 +254,7 @@ class _SystemUnifiedInstall:
         self._set_problem_cadence(cadence.substeps, cadence.stride)
 
     def _lower_spatial(self, spatial):
-        """Lower a spatial selection to an pops.Spatial consumed by add_equation. Accepts an
+        """Lower a spatial selection to a native Spatial consumed by the private runtime seam. Accepts an
         runtime Spatial / FiniteVolume (returned as-is), an pops.numerics.spatial.FiniteVolume(...)
         BrickDescriptor (read its riemann/reconstruction/positivity_floor options), or None (default
         Spatial)."""
@@ -278,7 +279,7 @@ class _SystemUnifiedInstall:
                         % type(spatial).__name__)
 
     def _resolve_instance_model(self, model):
-        """Resolve a block model to a ModelSpec/CompiledModel accepted by add_equation."""
+        """Resolve a block model to a ModelSpec/CompiledModel accepted by the private runtime seam."""
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
         from pops.codegen.loader import CompiledModel
         from pops.codegen import AOT, Production
@@ -296,7 +297,7 @@ class _SystemUnifiedInstall:
         if isinstance(model, Module):
             backend = AOT() if ModuleCodegenView(model).has_runtime_params() else Production()
             return compile_module_for_runtime(model, backend=backend)
-        return model  # unknown -> let add_equation raise its own clear error
+        return model  # unknown -> let the private runtime seam raise its own clear error
 
     def _validate_riemann_capability(self, model, spatial):
         """Section 24 capability check: reject the selected Riemann flux when the model does not back

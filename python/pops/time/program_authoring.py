@@ -439,7 +439,7 @@ class _ProgramAuthoring(_ProgramConstants):
     # --- optional dt bound (spec s18 / ADC-417) ----------------------------------------------------
     def set_dt_bound(self, expr_or_fn):
         """Set an OPTIONAL dt bound for this Program (spec s18). The generated .so exports it as a
-        SECOND ABI function (``pops_program_dt_bound``) alongside the macro step; ``step_cfl`` then uses
+        SECOND ABI function (``pops_problem_dt_bound``) alongside the macro step; ``step_cfl`` then uses
         ``min(native CFL dt, program dt bound)``. Without a dt bound the native CFL is UNCHANGED.
 
         @p expr_or_fn is either a callable ``f(P, cfl)`` returning a Scalar (the common form -- it reads

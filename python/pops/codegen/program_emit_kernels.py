@@ -277,8 +277,8 @@ def _emit_where_kernel(mask_var, a_var, b_var, out_var):
     ]
 
 
-# Source of a generated problem.so. The primary C ABI is pops_problem_*; pops_program_* aliases are
-# emitted only for native helper metadata that still names the time-program subobject explicitly.
+# Source of a generated problem.so. The exported C ABI is pops_problem_* only; historical
+# program-level aliases are intentionally not emitted by the Spec-5 path.
 # {name} is a JSON-escaped C string literal, {hash} the Program IR hash, {problem_hash} the structured
 # CompiledProblem semantic hash, {prelude} the INSTALL-TIME C++ (persistent scratch + matrix-free
 # apply lambdas, captured into the step closure by [=]), and {body} the step-closure body.
@@ -304,9 +304,6 @@ _PROGRAM_CPP_TEMPLATE = '''\
 extern "C" const char* pops_problem_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
 extern "C" const char* pops_problem_name() {{ return {name}; }}
 extern "C" const char* pops_problem_hash() {{ return "{problem_hash}"; }}
-extern "C" const char* pops_program_abi_key() {{ return pops_problem_abi_key(); }}
-extern "C" const char* pops_program_name() {{ return pops_problem_name(); }}
-extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 
 {block_names}
 {module_metadata}
@@ -330,7 +327,6 @@ extern "C" void pops_problem_install(void* sys) {{
     GeneratedProgram::step(ctx, dt, generated_program_body);
   }});
 }}
-extern "C" void pops_install_program(void* sys) {{ pops_problem_install(sys); }}
 {amr_install}
 
 // OPTIONAL dt bound (spec s18 / ADC-417). pops_problem_has_dt_bound() is true iff the Program set one;
@@ -341,9 +337,5 @@ extern "C" pops::Real pops_problem_dt_bound(pops::runtime::program::ProgramConte
   pops::runtime::program::ProgramContext& ctx = *ctxp;
   (void)ctx; (void)cfl;
 {dt_bound_body}
-}}
-extern "C" bool pops_program_has_dt_bound() {{ return pops_problem_has_dt_bound(); }}
-extern "C" pops::Real pops_program_dt_bound(pops::runtime::program::ProgramContext* ctxp, pops::Real cfl) {{
-  return pops_problem_dt_bound(ctxp, cfl);
 }}
 '''

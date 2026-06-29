@@ -173,7 +173,7 @@ class Model(_FacadeCompileMixin):
 
     def source_term(self, name, exprs):
         """NAMED local source S_name(U, primitives, aux, params): exactly n_cons expressions
-        (delegates to HyperbolicModel.source_term). Opt-in -- emitted only when a compiled Program
+        (delegates to HyperbolicModel.source_term). Opt-in -- emitted only when a compiled problem artifact
         calls the returned typed operator handle, never summed implicitly. name='default' is the
         backward-compatible alias of m.source([...]).
 

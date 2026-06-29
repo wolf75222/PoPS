@@ -548,8 +548,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // criterion 17). NO HLL cache: the explicit/IMEX advances and rhs_into share ws_cache (never
   // concurrent), but a flux-only RHS can interleave with them, so it keeps the per-face path. The
   // residual is identical either way with limiter='none'; the HLL wave-speed cache -- rejected on the
-  // aot/production backends compiled Programs use -- is the only path where cached cell-center speeds
-  // differ from the per-face reconstruction, so for a compiled Program the cache is a perf scratch,
+  // aot/production backends compiled problem artifacts use -- is the only path where cached cell-center speeds
+  // differ from the per-face reconstruction, so for a compiled problem artifact the cache is a perf scratch,
   // not a numerics change.
   bc.rhs_flux_only = detail::RhsInto<Limiter, Flux, SourceFreeModel<Model>>{
       SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr};

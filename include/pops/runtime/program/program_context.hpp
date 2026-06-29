@@ -56,7 +56,7 @@ namespace detail {
 
 /// Aux-component-aware variants of the native Schur kernels (coupling/schur/core/schur_condensation.hpp
 /// + condensed_schur_source_stepper.hpp). The native kernels read B_z from a DEDICATED B_z MultiFab at
-/// component 0; a compiled Program reads B_z straight from the System aux channel at an arbitrary
+/// component 0; a compiled problem artifact reads B_z straight from the System aux channel at an arbitrary
 /// component @c c_bz, so these thin wrappers carry @c c_bz and otherwise REPRODUCE the native formulas
 /// verbatim (same LorentzEliminator B^{-1}, same coefficients, same centered gradient) -- the native
 /// CondensedSchur path is untouched. Named functors (device-clean, nvcc cross-TU rule, like the native
@@ -342,7 +342,7 @@ class ProgramContext {
   /// (transport BC, periodic by default) then forwards to pops::apply_divergence -- the exact inverse
   /// stencil of @ref gradient and the same centered FV divergence the native Schur condensation
   /// assembles (coupling/schur/core/schur_condensation.hpp). @p fx and @p fy are non-const because the
-  /// ghost fill WRITES their halos (the valid cells are unchanged). A compiled Program forms a
+  /// ghost fill WRITES their halos (the valid cells are unchanged). A compiled problem artifact forms a
   /// Schur-like flux operator A(phi) = phi - alpha*div(grad phi) by chaining ctx.gradient then
   /// ctx.divergence inside a matrix-free apply.
   void divergence(MultiFab& out, MultiFab& fx, MultiFab& fy) const {
@@ -394,7 +394,7 @@ class ProgramContext {
   /// @name Anisotropic Schur condensation (epic ADC-399 / ADC-421)
   /// The full condensed-Schur operator is L_schur(phi) = -div((I + c*rho*B^{-1}) grad phi), a tensor
   /// elliptic operator whose per-cell coefficient varies with rho and B_z. These primitives let a
-  /// compiled Program ASSEMBLE that coefficient tensor (from the live state + B_z aux) and APPLY it
+  /// compiled problem artifact ASSEMBLE that coefficient tensor (from the live state + B_z aux) and APPLY it
   /// matrix-free, REUSING the native Schur kernels (coupling/schur/core/schur_condensation.hpp) and
   /// pops::apply_laplacian's coefficient path -- no stencil / elimination reimplementation. The native
   /// pops::CondensedSchur source stepper is untouched.
@@ -550,7 +550,7 @@ class ProgramContext {
   /// @}
   /// r <- -div(fx, fy) per conservative component (ADC-419 named fluxes): r(.,c) = -(d fx(.,c)/dx +
   /// d fy(.,c)/dy), centered FV, for every component c of @p r. @p fx and @p fy hold the n_cons x- and
-  /// y-flux fields a compiled Program's named-flux kernel wrote (component c = the flux of conservative
+  /// y-flux fields a compiled problem artifact's named-flux kernel wrote (component c = the flux of conservative
   /// component c). REUSES pops::apply_divergence component-by-component (the SAME centered stencil as
   /// @ref divergence, the inverse of @ref gradient -- no new differencing): the ghosts are filled once
   /// per field, then each component's divergence lands in a 1-component scratch and is copied with a
@@ -675,7 +675,7 @@ class ProgramContext {
   }
 
   /// The CURRENT RuntimeParams of PROGRAM block @p b (epic ADC-479 / ADC-510, Spec 5 C5): the
-  /// per-block runtime-parameter values a compiled Program's lowered source / linear-source kernel
+  /// per-block runtime-parameter values a compiled problem artifact's lowered source / linear-source kernel
   /// reads via ``params.get(<index>)``. The codegen binds ``const pops::RuntimeParams params =
   /// ctx.program_params(<b>);`` ONCE per fab (outside the per-cell loop), then the device lambda
   /// captures it by value -- trivially copyable, device-clean, ``get()`` is POPS_HD. @p b is the

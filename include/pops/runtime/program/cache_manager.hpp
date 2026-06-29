@@ -14,7 +14,7 @@
 // history rings do (gather_global / write_state, MPI-safe, bit-identical). The System exposes the
 // serialize/restore accessors over THIS class (node_ids / name_of / valid / value_of / restore_slot);
 // the sim.checkpoint / sim.restart facade gathers and scatters the slots alongside the block state.
-// A restart against a DIFFERENT compiled Program is rejected by the program-hash guard, and a held
+// A restart against a DIFFERENT compiled problem artifact is rejected by the program-hash guard, and a held
 // scheduled node whose cached value the checkpoint never recorded fails loud at restart.
 //
 // A slot caches EITHER the System aux (a held field solve restores phi/grad/E) OR a named scratch

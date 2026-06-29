@@ -294,7 +294,7 @@ def build_requirements(compiled):
       - descriptors: the spatial scheme is a BIND input (chosen on the Case block's ``spatial=`` and
         flowed by ``sim.install``), so it is reported as install-time -- the artifact does not freeze a
         reconstruction / Riemann descriptor at compile;
-      - constraints: backend (always ``production`` for a compiled Program), the target layout,
+      - constraints: backend (always ``production`` for a compiled problem artifact), the target layout,
         whether MPI is supported, the ABI key the toolchain must match;
       - unknown: pieces genuinely not in today's metadata (e.g. the exact reconstruction stencil
         width), recorded honestly rather than guessed.

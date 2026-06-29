@@ -550,7 +550,7 @@ class System {
   /// Per-stage field solve (ADC-409): SAME elliptic solve + aux derivation as solve_fields(), but
   /// block @p block_idx assembles its Poisson RHS from @p U_stage instead of its live state (the
   /// other blocks keep theirs). This re-fills the SHARED aux with phi(U_stage) so a field-coupled
-  /// multi-stage compiled Program can re-solve the fields from each STAGE state -- the stages run
+  /// multi-stage compiled problem artifact can re-solve the fields from each STAGE state -- the stages run
   /// sequentially, so stage k's RHS (called right after this) reads phi from stage k's own state
   /// before the next stage overwrites the aux. With block_idx 0 and U_stage = U^n (the first stage)
   /// it is identical to solve_fields(). POPS_EXPORT: resolved by a compiled program .so (ProgramContext)
@@ -672,7 +672,7 @@ class System {
   /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).
   POPS_EXPORT MultiFab& block_state(int b);
   /// @name Compiled-Program NAME-based block binding (Spec 3 criterion 23, ADC-457)
-  /// A compiled Program numbers its blocks in P.state declaration order (the .so's
+  /// A compiled problem artifact numbers its blocks in P.state declaration order (the .so's
   /// pops_program_block_name table); the System numbers its blocks in add_block / add_equation order
   /// (block_names). They need NOT agree. install_problem reads the .so's block names, matches each to
   /// the System block of that name, and stores the resulting program-index -> system-index map here so
@@ -695,7 +695,7 @@ class System {
   /// flux-only closure is the rhs_into path on SourceFreeModel<Model> (the zero-source adapter the
   /// IMEX explicit half-step already uses), so the flux / ghost / geometry handling is bit-identical
   /// -- only the source is dropped (with limiter='none'; the HLL wave-speed cache -- rejected on the
-  /// aot/production backends compiled Programs use -- is the only path where cached cell-center speeds
+  /// aot/production backends compiled problem artifacts use -- is the only path where cached cell-center speeds
   /// differ from the per-face reconstruction). A compiled time Program's hyperbolic stage
   /// (ProgramContext::neg_div_flux_default_into) reads it so a Lie/Strang split assembles "flux but no
   /// source" without the default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). FAILS
@@ -807,7 +807,7 @@ class System {
   POPS_EXPORT void install_problem(const std::string& so_path);
   /// Hash of the installed compiled problem (the string returned by the .so's pops_problem_hash),
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
-  /// a DIFFERENT compiled Program is rejected fail-loud (the buffers / cadence would be meaningless).
+  /// a DIFFERENT compiled problem artifact is rejected fail-loud (the buffers / cadence would be meaningless).
   POPS_EXPORT std::string installed_program_hash() const;
   /// @name Scheduler value cache (epic ADC-399 / ADC-458, Spec 3 section 17-18 + 30)
   /// The held-node value cache (every(N).hold / accumulate_dt) lives in the SYSTEM (one CacheManager
@@ -823,7 +823,7 @@ class System {
   /// SERIALIZE / RESTORE the System-owned cache across a checkpoint, mirroring the history seam: the
   /// facade (sim.checkpoint / sim.restart) gathers each VALID slot (gather_global, MPI-safe) and scatters
   /// it back (write_state) alongside the block state and histories. The program-hash guard
-  /// (installed_program_hash) rejects a restart against a different compiled Program; a held scheduled
+  /// (installed_program_hash) rejects a restart against a different compiled problem artifact; a held scheduled
   /// node the checkpoint never recorded fails loud at restart (the facade compares the restored ids).
   /// @{
   /// Node ids of every VALID cached slot (ascending). Empty when no schedule cached a value.
@@ -861,7 +861,7 @@ class System {
   /// POPS_EXPORT so a generated problem.so resolves it across the dlopen boundary.
   POPS_EXPORT void block_project(int b, MultiFab& u);
   /// @name Compiled-Program scalar diagnostics (epic ADC-399 / ADC-414, spec op 23)
-  /// A name -> Real map a compiled Program writes via P.record_scalar (ProgramContext::record_scalar),
+  /// A name -> Real map a compiled problem artifact writes via P.record_scalar (ProgramContext::record_scalar),
   /// retrievable AFTER sim.step for inspection / logging. Lives in Impl (private to the _pops TU) so it
   /// survives across the dlopen boundary; the .so writes it through the POPS_EXPORT setter below.
   /// @{

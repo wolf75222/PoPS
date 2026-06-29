@@ -683,7 +683,7 @@ class SystemFieldSolver {
   /// @p target_block / @p U_stage: when set (target_block >= 0, U_stage != nullptr), the target
   /// block's Poisson RHS is assembled from @p U_stage INSTEAD of its live s.U -- the seam
   /// solve_fields_from_state uses so a field-coupled multi-stage scheme re-solves phi from each STAGE
-  /// state (the compiled Program runs stages sequentially: stage k's solve overwrites the shared aux
+  /// state (the compiled problem artifact runs stages sequentially: stage k's solve overwrites the shared aux
   /// before stage k's RHS reads it). The default (-1 / nullptr) keeps every block at s.U: the
   /// historical solve_fields(), BIT-IDENTICAL. Inert under the gauss_evolve_ skip (no RHS assembled).
   void solve_fields(int target_block = -1, const MultiFab* U_stage = nullptr) {

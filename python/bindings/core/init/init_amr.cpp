@@ -270,7 +270,7 @@ void init_amr(py::module_& m) {
            py::arg("stride"))
       // Changes the RUNTIME parameters of a compiled time PROGRAM block WITHOUT recompiling the .so
       // (ADC-508, parity ADC-510). prog_block = the PROGRAM block index (P.state order); values = that
-      // block's params in sorted-name order. Python's _install_program_params routes params={name: value}
+      // block's params in sorted-name order. Python's _install_problem_params routes params={name: value}
       // here. cf. AmrSystem::set_program_params.
       .def("set_program_params", &AmrSystem::set_program_params, py::arg("prog_block"),
            py::arg("values"))

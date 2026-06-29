@@ -360,7 +360,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             lines.append("const pops::Real %s = pops::dot(%s, %s);"
                          % (var[v.id], var[a.id], var[b.id]))
     elif v.op == "cfl":
-        # The dt_bound's runtime cfl argument -- the C++ parameter of pops_program_dt_bound. It is
+        # The dt_bound's runtime cfl argument -- the C++ parameter of pops_problem_dt_bound. It is
         # NOT a statement; its token is the bound parameter name (spec s18 / ADC-417).
         var[v.id] = "cfl"
     elif v.op == "hmin":

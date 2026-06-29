@@ -683,7 +683,7 @@ AmrRuntimeBlock build_amr_block(
   // periodic ghosts; non-periodic -> Foextrap), matching System::make_bc. The recon_prim flag matches
   // the block's transport. Device contract: BlockRhsEval is a named functor (no cross-TU extended
   // lambda), instantiated HERE on the concrete Model/Limiter/Flux, so the kernel stays compiled and runs
-  // Serial / OpenMP / CUDA identically. These closures are read ONLY by an installed compiled Program;
+  // Serial / OpenMP / CUDA identically. These closures are read ONLY by an installed compiled problem artifact;
   // the native AMR step never calls them.
   {
     BCRec tbc;  // transport BC of the level, derived from the base periodicity (parity System::make_bc)

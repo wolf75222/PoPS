@@ -1,9 +1,8 @@
-"""AmrSystem equation/aux mixin (Spec-4 PR-F).
+"""AmrSystem private equation/aux mixin.
 
-``add_equation`` (the AMR backend dispatcher) + the named-aux resolution / set of
-:class:`pops.runtime.amr_system.AmrSystem`, plus the module-level guard
-``_reject_newton_amr_compiled`` used only by this path. Mixed in via inheritance; operates on
-``self._s`` and ``self._aux_field_index``.
+Private AMR backend dispatch plus named-aux resolution for
+:class:`pops.runtime.amr_system.AmrSystem`. The public runtime route is
+``sim.install(compiled, ...)``; this mixin is an implementation seam.
 """
 
 from pops._bootstrap import ModelSpec
@@ -18,7 +17,7 @@ def _reject_newton_amr_compiled(label, time):
     the options (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy) NOR the report. Passed
     via the loader, they would be taken at their defaults SILENTLY (iters=2, no report). We
     REJECT them explicitly (same spirit as the stride/mask rejection of the AMR production path). For these
-    parameters : AmrSystem.add_block (native model) or add_compiled_model(AmrSystem&) directly (C++)."""
+    parameters : the private native AMR block seam or add_compiled_model(AmrSystem&) directly (C++)."""
     if (getattr(time, "newton_max_iters", 2) != 2
             or getattr(time, "newton_rel_tol", 0.0) != 0.0
             or getattr(time, "newton_abs_tol", 0.0) != 0.0
@@ -30,12 +29,12 @@ def _reject_newton_amr_compiled(label, time):
             "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
             "fail_policy/diagnostics) are not transported by the AMR production path (loader "
             ".so, flat ABI add_native_block : they would be taken at their defaults silently). "
-            "Use AmrSystem.add_block (native model pops.Model(...)) or add_compiled_model("
+            "Use the private native AMR block seam through sim.install(...), or add_compiled_model("
             "AmrSystem&) directly (C++)." % label)
 
 
 class _AmrSystemEquation:
-    """add_equation + named-aux methods of AmrSystem."""
+    """Private equation + named-aux methods of AmrSystem."""
 
     def _add_equation(self, name, model, spatial=None, time=None, substeps=None):
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
@@ -46,7 +45,7 @@ class _AmrSystemEquation:
 
         Dispatch:
 
-        - a ModelSpec from runtime native bricks -> add_block (native bricks composed on the hierarchy);
+        - a ModelSpec from runtime native bricks -> private native block lowering;
         - a CompiledModel(backend=pops.codegen.Production(), target='amr_system') -> NATIVE path
           add_native_block: the .so loader inlines add_compiled_model(AmrSystem&), so the block runs
           the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
@@ -66,7 +65,7 @@ class _AmrSystemEquation:
         - CompiledModel production path (.so): explicitly REJECTED (ValueError). The flat ABI of the
           loader (add_native_block / pops_install_native_amr) does not transport them; they would be taken
           at their defaults SILENTLY (stride=1, full backward-Euler). For a multirate .so or one with a
-          partial IMEX mask, use AmrSystem.add_block (native) or add_compiled_model(AmrSystem&) directly
+          partial IMEX mask, use the private native AMR block seam or add_compiled_model(AmrSystem&) directly
           (C++), which expose stride and the mask.
 
         @p spatial: pops.FiniteVolume(...) / pops.Spatial(...) (default minmod+rusanov+conservative).
@@ -105,7 +104,7 @@ class _AmrSystemEquation:
             # AMR counterpart -> explicit rejection (no silent ignore).
             if getattr(src, "bz_aux_component", -1) >= 0:
                 raise ValueError(
-                    "AmrSystem.add_equation: magnetic_field != 'B_z' is not transported by the "
+                    "AmrSystem._add_equation: magnetic_field != 'B_z' is not transported by the "
                     "amr-schur path (the AMR stage reads the dedicated coarse B_z buffer). Keep "
                     "magnetic_field='B_z', or use System (mono-level).")
             self._s.set_source_stage(name, src.kind, src.theta, src.alpha,
@@ -143,7 +142,7 @@ class _AmrSystemEquation:
             return
 
         if not isinstance(model, CompiledModel):
-            raise TypeError("AmrSystem.add_equation: model must be an pops.Model(...) (ModelSpec) "
+            raise TypeError("AmrSystem._add_equation: model must be an pops.Model(...) (ModelSpec) "
                             "or a CompiledModel (m.compile(...)); received %r" % type(model).__name__)
 
         compiled = model
@@ -152,12 +151,12 @@ class _AmrSystemEquation:
         # are mono-level). We therefore require backend=pops.codegen.Production() + target='amr_system'.
         if compiled.adder != "add_native_block":
             raise ValueError(
-                "AmrSystem.add_equation: only a CompiledModel backend=pops.codegen.Production() (native path) "
+                "AmrSystem._add_equation: only a CompiledModel backend=pops.codegen.Production() (native path) "
                 "is attachable on AMR; received backend=%r (the prototype/aot .so are mono-level, "
                 "without AMR counterpart)" % compiled.backend)
         if getattr(compiled, "target", "system") != "amr_system":
             raise ValueError(
-                "AmrSystem.add_equation: the CompiledModel was compiled for target='system'; "
+                "AmrSystem._add_equation: the CompiledModel was compiled for target='system'; "
                 "compile the model for target='amr_system' through the internal Module/runtime lowering so that "
                 "the loader inlines add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)")
 
@@ -174,7 +173,7 @@ class _AmrSystemEquation:
                 and not (spatial.flux == "hllc" and getattr(compiled, "has_hllc", False))
                 and not (spatial.flux == "roe" and getattr(compiled, "has_roe", False))):
             raise ValueError(
-                "AmrSystem.add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
+                "AmrSystem._add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
                 "(m.primitive('p', ...)) in the model, or emit the capability "
                 "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov'"
                 % spatial.flux)
@@ -182,7 +181,7 @@ class _AmrSystemEquation:
         # m.wave_speeds(x=, y=) OR primitive 'p'; the C++ gate only triggers at first use).
         if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
-                "AmrSystem.add_equation: riemann 'hll' requires signed wave speeds: declare "
+                "AmrSystem._add_equation: riemann 'hll' requires signed wave speeds: declare "
                 "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
                 "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'")
 
@@ -195,21 +194,21 @@ class _AmrSystemEquation:
         nstride = getattr(time, "stride", 1)
         if nstride != 1:
             raise ValueError(
-                "AmrSystem.add_equation: stride=%d not transported by the production AMR path "
+                "AmrSystem._add_equation: stride=%d not transported by the production AMR path "
                 "(.so loader, flat ABI add_native_block: the block would run at stride=1 silently). "
-                "Use AmrSystem.add_block (native model pops.Model(...), wired cadence) or "
+                "Use the private native AMR block seam with wired cadence or "
                 "add_compiled_model(AmrSystem&) directly (C++) which exposes stride." % nstride)
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
-                "AmrSystem.add_equation: implicit_vars / implicit_roles (partial IMEX mask) not "
+                "AmrSystem._add_equation: implicit_vars / implicit_roles (partial IMEX mask) not "
                 "transported by the production AMR path (.so loader, flat ABI add_native_block: the "
-                "mask would be empty = full backward-Euler silently). Use AmrSystem.add_block "
-                "(native model pops.Model(...), wired mask) or add_compiled_model(AmrSystem&) "
+                "mask would be empty = full backward-Euler silently). Use the private native AMR "
+                "block seam with a wired mask or add_compiled_model(AmrSystem&) "
                 "directly (C++) which exposes the IMEX mask.")
         # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
         # through the .so loader. Explicit rejection (otherwise iters=2 / no report silently), parity with
         # the stride/mask rejection above and with System.add_equation (compiled backend).
-        _reject_newton_amr_compiled("AmrSystem.add_equation", time)
+        _reject_newton_amr_compiled("AmrSystem._add_equation", time)
         # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now
         # (pops_install_native_amr -> add_compiled_model -> set_compiled_block), so it is threaded
         # through instead of rejected. 0 (default) = inactive, bit-identical. The C++
@@ -246,8 +245,9 @@ class _AmrSystemEquation:
         table = self._aux_field_index.get(block)
         if table is None:
             raise ValueError(
-                "set_aux_field: block '%s' unknown (or added without a named aux field); add the block "
-                "via add_equation(model=...) with a model declaring m.aux_field('%s')." % (block, name))
+                "set_aux_field: block '%s' unknown (or installed without a named aux field); install "
+                "the block via sim.install(..., instances={%r: {'model': model}}) with a model "
+                "declaring m.aux_field('%s')." % (block, block, name))
         if name not in table:
             raise ValueError(
                 "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"

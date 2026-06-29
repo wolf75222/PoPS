@@ -13,7 +13,7 @@ class _SystemAuxState:
         """Resolve (block, NAMED aux field name) -> canonical component of the aux channel (ADC-70 phase 1).
         Resolution rule: a CANONICAL name (phi/grad/B_z/T_e) is REJECTED here -- these fields have
         their dedicated paths (B_z -> set_magnetic_field, T_e -> set_electron_temperature_from, phi/grad
-        derived by solve_fields). Otherwise look it up in the block table (filled at add_equation from
+        derived by solve_fields). Otherwise look it up in the block table (filled by sim.install from
         the compiled model). Raises ValueError with an actionable message on unknown block/name."""
         from pops.physics.aux import AUX_CANONICAL  # late import (physics <-> __init__ cycle)
         if name == "B_z":
@@ -32,7 +32,8 @@ class _SystemAuxState:
         if table is None:
             raise ValueError(
                 "set_aux_field: block '%s' unknown (or added without a named aux field); add the block "
-                "via add_equation(model=...) with a model declaring m.aux_field('%s')." % (block, name))
+                "via sim.install(..., instances={%r: {'model': model}}) with a model declaring "
+                "m.aux_field('%s')." % (block, name))
         if name not in table:
             known = sorted(table) if table else "(none)"
             raise ValueError(
@@ -42,7 +43,7 @@ class _SystemAuxState:
 
     def _set_aux_field(self, block, name, field, halo=None):
         """Set a NAMED aux field (ADC-70 phase 1) of a block: @p name must have been declared by the
-        model via m.aux_field(name) (and the block added via add_equation). @p field: 2D array (ny, nx)
+        model via m.aux_field(name) and install the block through sim.install(...). @p field: 2D array (ny, nx)
         or flat (n*n), row-major. The field is STATIC (user-supplied, like B_z) and PERSISTS
         from one step to the next (solve_fields never rewrites named components). For B_z / T_e,
         use their dedicated paths (set_magnetic_field / set_electron_temperature_from).

@@ -423,7 +423,7 @@ class AmrRuntime {
   /// @p U_stages is indexed by AMR block index; nullptr means "use the live state". Every non-null
   /// entry is swapped onto the coarse state before the standard solve_fields() path assembles the
   /// summed RHS, then all live states are restored. This is the coupled multi-block field solve the
-  /// compiled Program path needs; it intentionally reuses the existing default + named field solvers.
+  /// compiled problem artifact path needs; it intentionally reuses the existing default + named field solvers.
   void solve_fields_from_blocks(const std::vector<const MultiFab*>& U_stages) {
     std::vector<MultiFab> saved;
     saved.reserve(blocks_.size());
@@ -1109,7 +1109,7 @@ class AmrRuntime {
   /// The CFL dt computation of @ref step_cfl WITHOUT the trailing advance (no step(dt)): solves the
   /// fields (max_speed needs the aux), scans the per-block transport / source / stability bounds + the
   /// coupled-frequency + global bounds, and returns the macro-step dt (records last_dt_reason_). Split
-  /// out so an installed compiled Program can take the SAME CFL dt and drive the macro-step itself
+  /// out so an installed compiled problem artifact can take the SAME CFL dt and drive the macro-step itself
   /// (AmrSystem::step_cfl's Program route, parity SystemStepper::step_cfl) instead of the native step.
   /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
   Real cfl_dt(Real cfl, Real h) {

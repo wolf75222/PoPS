@@ -230,7 +230,7 @@ struct AmrSystem::Impl {
   // set_program_cadence; consumed by AmrSystem::step (run_program_cadence_).
   int program_substeps_ = 1;
   int program_stride_ = 1;
-  // IR hash of the installed compiled Program (the .so's pops_problem_hash); empty until install_problem
+  // IR hash of the installed compiled problem artifact (the .so's pops_problem_hash); empty until install_problem
   // records it. Parity System::Impl::installed_program_hash_ (checkpoint guard).
   std::string installed_program_hash_;
   // NAME-based block binding (Spec 3 criterion 23, ADC-457): program-index -> AMR-block-index map. Built
@@ -1539,7 +1539,7 @@ std::string AmrSystem::installed_program_hash() const {
 // COMPILED-PROGRAM RUNTIME PARAMETERS on AMR (ADC-508, parity ADC-510). Seed/overwrite/read the
 // per-PROGRAM-block RuntimeParams the installed step closure reads through the AmrProgramContext. The
 // store lives on the Impl so a value change reaches the captured context -- the no-recompile contract
-// mirrored from System. install_problem seeds the defaults; Python's _install_program_params overwrites
+// mirrored from System. install_problem seeds the defaults; Python's _install_problem_params overwrites
 // the supplied values (validated against the .so param-name metadata). VERBATIM mirror of System.
 void AmrSystem::seed_program_params(int prog_block, const std::vector<double>& defaults) {
   RuntimeParams rp;
@@ -1554,7 +1554,7 @@ void AmrSystem::set_program_params(int prog_block, const std::vector<double>& va
   if (it == p_->program_block_params_.end())
     throw std::out_of_range(
         "AmrSystem::set_program_params : program block " + std::to_string(prog_block) +
-        " has no runtime parameter (the installed compiled Program declares none for it; declare "
+        " has no runtime parameter (the installed compiled problem artifact declares none for it; declare "
         "dsl.Param(..., kind='runtime') in the model the Program lowers, or omit params=)");
   RuntimeParams& rp = it->second;
   if (static_cast<int>(values.size()) != rp.count)

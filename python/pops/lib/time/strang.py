@@ -35,7 +35,7 @@ def lie(P, block, half_flow, source, *, commit=True):
 
 def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz=3, c_E=None,
                     method=None, tol=1e-10, max_iter=400, commit=True):
-    """Condensed-Schur implicit electrostatic-Lorentz SOURCE stage as a compiled Program (epic ADC-399,
+    """Condensed-Schur implicit electrostatic-Lorentz SOURCE stage as a compiled problem artifact (epic ADC-399,
     acceptance 32), mirroring the native ``pops.CondensedSchur`` (CondensedSchurSourceStepper) sequence:
 
       1. assemble the anisotropic tensor coefficient ``A = I + c*rho*B^{-1}`` (``P.schur_coeffs``,

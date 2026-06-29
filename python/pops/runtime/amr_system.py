@@ -1,10 +1,8 @@
 """AmrSystem : the refined runtime coupler (Spec-4 PR-F composed class).
 
-``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its lines are split into the
-``_amr_system_equation`` (add_equation + named-aux), ``_amr_system_io`` (write / checkpoint /
-restart) and ``_amr_system_program`` (compiled time-Program install / params / cadence, ADC-508)
-mixins to satisfy the <=500-line cap ; this module composes them and keeps the constructor + the
-native-add_block / coupling / diagnostics glue.
+``AmrSystem`` carries one or several blocks on an AMR hierarchy. Its lines are split into private
+runtime mixins for block lowering, IO and compiled-problem attach / params / cadence. The public
+runtime route is ``sim.install(compiled, ...)``.
 """
 
 from pops._bootstrap import AmrSystemConfig, _AmrSystem
@@ -58,7 +56,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         # Regrid cadence (checkpoint/restart ADC-65) : a BIT-IDENTICAL resume requires regrid_every == 0
         # (otherwise the post-restart regrid would re-diverge the hierarchy). Memorized for the restart guard.
         self._regrid_every = int(config.regrid_every)
-        # ADC-291: block name -> {aux field name -> channel component}, filled by add_equation from a
+        # ADC-291: block name -> {aux field name -> channel component}, filled by sim.install from a
         # CompiledModel.aux_extra_names (component of the k-th name = AUX_NAMED_BASE + k). Drives
         # set_aux_field(block, name, array). Empty for blocks without a named aux field. Mirror of
         # System._aux_field_index.
@@ -168,12 +166,13 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         ``pops.compile_problem(...)`` and wired with ``sim.install(compiled, ...)``. This helper is
         private plumbing for that install path.
 
-        Refined counterpart of System.add_block. The 1st add_block opens the single-block path
-        (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent add_block co-locates one more block
+        Refined private counterpart of System._add_block. The first block opens the single-block path
+        (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent block co-locates one more block
         on THE SAME hierarchy (AmrRuntime engine, system Poisson with summed right-hand side).
         In multi-block the name indexes set_density(name) / mass(name) / density(name). The arguments
         are marshaled to the C++ facade (AmrSystem::add_block), which validates the block against the model.
-        For a compiled DSL model (.so) or a dispatch on the model type, use add_equation.
+        For a compiled model artifact or a dispatch on the model type, use the private
+        ``_add_equation`` seam through ``sim.install``.
 
         @param name unique name of the block.
         @param model an pops.Model(...) (ModelSpec : composed native bricks).
@@ -188,25 +187,26 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             wired in native multi-block and rejected at the C++ build in single-block (the coupler does not
             aggregate a report).
         @throws TypeError if time is an pops.Split / pops.Strang (Schur-condensed source stage) :
-            go through add_equation(..., time=pops.Strang(...)) (amr-schur path).
+            not wired by this private primitive; use a compiled split problem installed through
+            ``sim.install``.
         spatial.positivity_floor > 0 (ADC-259) floors the Density-role face states AND the
         coarse-fine fine ghost means to >= floor on the AMR transport (Zhang-Shu, parity with the
         uniform System). Guarantee = face / ghost-state Density positivity only (order-1 fallback),
         NOT updated-mean nor pressure positivity. A model without a Density role rejects it at the
         first step. The COMPILED .so path carries it too now (ADC-322): a loader regenerated against
-        the current headers marshals the floor (add_equation on a CompiledModel, add_native_block).
+        the current headers marshals the floor through the private compiled-model block seam.
         """
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        # pops.Split / pops.Strang (Schur-condensed source stage) is only wired by add_equation (which
+        # pops.Split / pops.Strang (Schur-condensed source stage) is only wired by the private
+        # equation seam (which
         # connects set_source_stage + set_time_scheme AFTER adding the block) : we reject it HERE rather
         # than playing only the transport and SILENTLY LOSING the source (same guard as System.add_block).
         if isinstance(time, Split):
             raise TypeError(
-                "AmrSystem.add_block : pops.Split / pops.Strang (Schur-condensed source stage) is "
-                "supported only by add_equation (which connects the source stage) ; use "
-                "add_equation(..., time=pops.Strang(hyperbolic=pops.Explicit(...), "
-                "source=pops.ElectrostaticLorentzSchur(...))).")
+                "AmrSystem._add_block: pops.Split / pops.Strang (Schur-condensed source stage) is "
+                "not wired by this private native primitive; use sim.install(compiled, ...) with a "
+                "compiled problem artifact carrying the split program.")
         # positivity_floor (ADC-259) IS now wired on the AMR transport (Density-role face states +
         # C/F fine ghost means). Threaded to AmrSystem::add_block below; the compiled .so path carries
         # it too (ADC-322, regenerated loader). The C++ side rejects it on a model without a Density role.
@@ -256,9 +256,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             so_path = getattr(compiled, "so_path", None)
             if so_path is None:
                 raise TypeError(
-                    "sim.install: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
-                    "result, or compiled=None for a native AMR install (each "
-                    "instance carries its own native model)." % type(compiled).__name__)
+                    "sim.install: compiled handle has no .so_path (got %r); pass a CompiledProblem "
+                    "returned by pops.compile_problem(...)." % type(compiled).__name__)
             compiled_model = getattr(compiled, "model", None)
         # (1) FIELD SOLVERS first (parity with System): configure solvers before adding blocks and
         # before attaching the compiled artifact because native requirement validation reads the
@@ -306,13 +305,20 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         if outputs:
             self._output_policies = list(outputs)
 
-    def install(self, compiled=None, *, instances=None, params=None, aux=None,
+    def install(self, compiled, *, instances=None, params=None, aux=None,
                 solvers=None, cadence=None, outputs=None):
-        """Public Spec-4 install entry point for the AMR runtime.
+        """Public Spec-5 install entry point for the AMR runtime.
 
-        Shares the exact lowering/validation path with the private AMR install seams, but user code
-        no longer calls those seams directly.
+        Installs a combined ``CompiledProblem`` on the AMR runtime. The native per-block route remains
+        private/internal; user code enters through ``pops.compile_problem(..., layout=AMR(...))`` and
+        this method.
         """
+        if compiled is None:
+            raise TypeError(
+                "sim.install requires a CompiledProblem from pops.compile_problem(...); "
+                "the public runtime route is compiled = pops.compile_problem(...), "
+                "sim = pops.AmrSystem(...), sim.install(compiled, ...). Native AMR per-block wiring "
+                "is private/internal and is not exposed through sim.install.")
         return self._install_compiled(
             compiled,
             instances=instances,

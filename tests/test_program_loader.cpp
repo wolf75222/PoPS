@@ -1,8 +1,8 @@
 // Compiled problem loader path (epic ADC-399 / ADC-401 Phase 2c-i): System::install_problem
-// dlopens a generated problem.so and installs its compiled time Program across the ABI boundary.
+// dlopens a generated problem.so and installs its compiled problem artifact across the ABI boundary.
 //
 // We compile AT RUNTIME a stub problem.so -- the role the codegen (Phase 2c-ii) will fill -- that
-// exports pops_program_abi_key() + pops_install_program(void* sys); the installer wraps the System in a
+// exports pops_problem_abi_key() + pops_problem_install(void* sys); the installer wraps the System in a
 // ProgramContext and installs the SAME Forward-Euler closure as the in-process test_program_runtime.
 // We then sim.install_problem(so) + sim.step(dt) and check bit-parity against a reference Forward-Euler
 // step computed from the same primitives (solve_fields + eval_rhs + U + dt*R). This validates the
@@ -76,9 +76,10 @@ std::string loader_source() {
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/types.hpp>
-extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
-extern "C" const char* pops_program_name() { return "forward_euler_stub"; }
-extern "C" void pops_install_program(void* sys) {
+extern "C" const char* pops_problem_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" const char* pops_problem_name() { return "forward_euler_stub"; }
+extern "C" const char* pops_problem_hash() { return "test_forward_euler_stub"; }
+extern "C" void pops_problem_install(void* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
   ctx.install([ctx](double dt) {
     ctx.solve_fields();

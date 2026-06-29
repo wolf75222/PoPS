@@ -1,9 +1,8 @@
-"""System install mixin (Spec-4 PR-F): block/equation/coupling installation.
+"""System private runtime-install mixin.
 
-Holds the densest part of :class:`pops.runtime.system.System`: ``add_block`` /
-``add_equation`` (the backend-adder dispatch + explicit-rejection guards), ``set_source_stage``,
-``add_background``, ``add_elliptic_model`` and ``add_coupling``. Mixed into ``System`` via
-inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._aux_field_index``.
+Holds the native block/equation/coupling primitives used underneath
+``sim.install(compiled, ...)`` and by focused internal tests. These methods are not part of the
+public PoPS DSL.
 """
 
 from pops._bootstrap import ModelSpec
@@ -73,8 +72,8 @@ class _SystemInstall:
         native/AMR runtime lowering and focused tests.
 
         Installs a model composed in Python from native bricks (pops.Model(...)). For a
-        compiled DSL model (.so) or an automatic dispatch on the model type,
-        use add_equation. The arguments are marshaled to the C++ facade
+        compiled model artifact or an automatic dispatch on the model type, the private
+        ``_add_equation`` seam is used. The arguments are marshaled to the C++ facade
         (System::add_block), which validates the block (names / roles / implicit mask) against the model.
 
         @param name unique block name; indexes set_density(name) / mass(name) / density(name).
@@ -91,17 +90,19 @@ class _SystemInstall:
         @param evolve True (default) = block advances; False = frozen field (background) which still
             contributes to the right-hand side of the system Poisson.
         @throws TypeError if time is an pops.Split / pops.Strang (Schur-condensed source stage),
-            not wired here: go through add_equation(..., time=pops.Split(...)).
+            not wired by this low-level primitive; use the public ``sim.install(...)`` route with
+            a compiled problem artifact carrying the split program.
         """
         spatial = spatial if spatial is not None else Spatial()
         time = time if time is not None else Explicit()
-        # pops.Split (condensed source stage) is only wired by add_equation (which plugs
+        # pops.Split (condensed source stage) is only wired by the private equation seam (which plugs
         # set_source_stage after adding the block): reject it HERE rather than running only the transport
         # silently (the condensed source would be lost).
         if isinstance(time, Split):
             raise TypeError(
-                "System.add_block: pops.Split (Schur-condensed source stage) is only supported by "
-                "add_equation (which plugs the source stage); use add_equation(..., time=pops.Split(...)).")
+                "System._add_block: pops.Split (Schur-condensed source stage) is not wired by this "
+                "private native primitive; use sim.install(compiled, ...) with a compiled problem "
+                "artifact carrying the split program.")
         # Implicit mask + Newton options carried by the temporal policy (IMEX/SourceImplicit);
         # neutral defaults on the other policies (Explicit). Resolved/validated on the C++ side
         # (System::add_block) against the block's names/roles.
@@ -120,7 +121,7 @@ class _SystemInstall:
 
     def _add_equation(self, name, model, spatial=None, time=None, substeps=None, names=None,
                      evolve=True, stride=None):
-        """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
+        """Adds an equation/block by dispatching on the TYPE of @p model (private seam).
 
         Low-level runtime seam. The documented public path is ``sim.install(...)``; this method
         remains the private dispatch seam used by the native/AMR runtime and focused tests.
@@ -198,7 +199,7 @@ class _SystemInstall:
         # non-empty mask rather than ignore it silently (cf. the stride rejection on backend 'aot').
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
-                "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are only supported "
+                "System._add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are only supported "
                 "on a composed model pops.Model(...) (-> add_block). The compiled model (.so) does not "
                 "carry the mask; use a native pops.Model(...).")
         # Same rules for the Newton options/diagnostics (IMEX): not carried by the .so ABI.
@@ -211,19 +212,19 @@ class _SystemInstall:
                 or getattr(time, "newton_damping", 1.0) != 1.0
                 or getattr(time, "newton_fail_policy", "none") != "none"):
             raise ValueError(
-                "add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
+                "System._add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
                 "diagnostics/damping/fail_policy) are only supported on a composed model "
                 "pops.Model(...) (-> add_block). The compiled model (.so) ABI does not carry "
                 "them; use a native pops.Model(...).")
 
         if not isinstance(model, CompiledModel):
-            raise TypeError("add_equation: model must be an pops.Model(...) (ModelSpec) or a "
+            raise TypeError("System._add_equation: model must be an pops.Model(...) (ModelSpec) or a "
                             "CompiledModel (m.compile(...)); got %r" % type(model).__name__)
 
         compiled = model
         # Names guard: explicit length checked early (the C++ also raises, but we diagnose here).
         if names is not None and len(names) != compiled.n_vars:
-            raise ValueError("add_equation: names= has %d names but block '%s' has %d variables"
+            raise ValueError("System._add_equation: names= has %d names but block '%s' has %d variables"
                              % (len(names), name, compiled.n_vars))
         names_arg = list(names) if names is not None else []
 
@@ -245,7 +246,7 @@ class _SystemInstall:
                 and not (spatial.flux == "hllc" and getattr(compiled, "has_hllc", False))
                 and not (spatial.flux == "roe" and getattr(compiled, "has_roe", False))):
             raise ValueError(
-                "add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
+                "System._add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
                 "(m.primitive('p', ...)) in the model, or emit the capability "
                 "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov'"
                 % spatial.flux)
@@ -261,7 +262,7 @@ class _SystemInstall:
         # a foreign object without the flag, which then falls back on the C++ gate (history).
         if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
-                "add_equation: riemann 'hll' requires signed wave speeds: declare "
+                "System._add_equation: riemann 'hll' requires signed wave speeds: declare "
                 "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
                 "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'")
 
@@ -276,12 +277,12 @@ class _SystemInstall:
             # block_n_ghost(limiter) = 3 ghosts).
             if spatial.limiter == "weno5":
                 raise ValueError(
-                    "add_equation: limiter 'weno5' not supported on backend 'prototype' (JIT, host "
+                    "System._add_equation: limiter 'weno5' not supported on backend 'prototype' (JIT, host "
                     "Rusanov order-1 residual, without assemble_rhs); use backend=pops.codegen.AOT()/'production' "
-                    "(WENO5 wired end to end) or add_block (composed model pops.Model(...)).")
+                    "(WENO5 wired end to end) or the private native block seam.")
             if spatial.flux != "rusanov":
                 raise ValueError(
-                    "add_equation: backend 'prototype' (JIT, host Rusanov order-1 residual) only exposes "
+                    "System._add_equation: backend 'prototype' (JIT, host Rusanov order-1 residual) only exposes "
                     "riemann='rusanov' (got '%s'); use backend=pops.codegen.AOT()/'production' for "
                     "HLLC/Roe" % spatial.flux)
             # evolve=False (FROZEN block / fixed background) is NOT wired: the add_dynamic_block ABI does
@@ -290,17 +291,17 @@ class _SystemInstall:
             # use a native/production block (add_background -> add_block(..., evolve=False)).
             if not evolve:
                 raise ValueError(
-                    "add_equation: evolve=False not supported on backend 'prototype' (the JIT .so ABI "
+                    "System._add_equation: evolve=False not supported on backend 'prototype' (the JIT .so ABI "
                     "does not carry evolve; the block would be advanced silently). Use a composed "
-                    "native model pops.Model(...) -> add_block(..., evolve=False) (or add_background) "
+                    "a private native block seam "
                     "for a frozen field.")
             # positivity_floor (ADC-76) is NOT wired on the host JIT path (no assemble_rhs,
             # dedicated Rusanov order-1 residual): explicit rejection rather than a silently ignored floor.
             if getattr(spatial, "positivity_floor", 0.0) > 0.0:
                 raise ValueError(
-                    "add_equation: positivity_floor not supported on backend 'prototype' (dedicated "
+                    "System._add_equation: positivity_floor not supported on backend 'prototype' (dedicated "
                     "host residual, without high-order reconstruction); use backend=pops.codegen.AOT()/'production' "
-                    "or a composed model pops.Model(...) -> add_block.")
+                    "or the private native block seam.")
             # NB wave_speed_cache (ADC-199): no dedicated guard here -- the cache requires riemann='hll',
             # already rejected above on 'prototype' (rusanov order 1 only) -> never silently ignored on
             # this backend.
@@ -314,10 +315,10 @@ class _SystemInstall:
             # (backend=pops.codegen.Production()). We read time.stride AND the stride= override (nstride covers both).
             if nstride != 1:
                 raise ValueError(
-                    "add_equation: stride=%d not supported on backend 'aot' (the AOT .so ABI does not "
+                    "System._add_equation: stride=%d not supported on backend 'aot' (the AOT .so ABI does not "
                     "carry the cadence; the block would run at stride=1 silently). Use "
                     "backend=pops.codegen.Production() (native path, cadence wired) or a composed native model "
-                    "pops.Model(...) -> add_block." % nstride)
+                    "the private native block seam." % nstride)
             # evolve=False (FROZEN block / fixed background) is NOT wired: the add_compiled_block ABI does
             # not carry evolve (add_compiled_block forces it to true on the C++ side) -> the block would be
             # advanced SILENTLY. We REJECT it (rejection rather than silent ignore). For a frozen field,
@@ -325,18 +326,18 @@ class _SystemInstall:
             # pops.Model(...) -> add_block(..., evolve=False) (or add_background).
             if not evolve:
                 raise ValueError(
-                    "add_equation: evolve=False not supported on backend 'aot' (the AOT .so ABI does not "
+                    "System._add_equation: evolve=False not supported on backend 'aot' (the AOT .so ABI does not "
                     "carry evolve; the block would be advanced silently). Use "
                     "backend=pops.codegen.Production() (native path, evolve wired) or a composed native model "
-                    "pops.Model(...) -> add_block(..., evolve=False) (or add_background) for a frozen field.")
+                    "the private native block seam for a frozen field.")
             # wave_speed_cache (ADC-199): the AOT .so ABI does not carry the wave speed cache -> it would
             # be silently ignored. Explicit rejection (the cache is only wired on the composed native
             # add_block).
             if getattr(spatial, "wave_speed_cache", False):
                 raise ValueError(
-                    "add_equation: wave_speed_cache not supported on backend 'aot' (the AOT .so ABI does "
+                    "System._add_equation: wave_speed_cache not supported on backend 'aot' (the AOT .so ABI does "
                     "not carry the HLL wave speed cache; it would be silently ignored). Use a composed "
-                    "native model pops.Model(...) -> add_block.")
+                    "the private native block seam.")
             self._s.add_compiled_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                        spatial.recon, time.kind, nsub, names_arg,
                                        getattr(spatial, "positivity_floor", 0.0))
@@ -347,7 +348,7 @@ class _SystemInstall:
             # End-to-end device/MPI validation from Python is a later dedicated PR.
             if names is not None:
                 raise ValueError(
-                    "add_equation: names= not supported on the native path (production); the names and "
+                    "System._add_equation: names= not supported on the native path (production); the names and "
                     "roles are carried by the compiled model metadata (.so)")
             # PRE-DLOPEN guard at plug time: ALSO covers the cache HIT (where compile_native does not
             # run) -- a stale _pops module would otherwise give a cryptic dlopen 'symbol not found'.
@@ -357,16 +358,16 @@ class _SystemInstall:
             # the composed native add_block path (System.add_block).
             if getattr(spatial, "wave_speed_cache", False):
                 raise ValueError(
-                    "add_equation: wave_speed_cache not supported on backend 'production' (the "
+                    "System._add_equation: wave_speed_cache not supported on backend 'production' (the "
                     "add_native_block ABI does not carry the HLL wave speed cache; it would be silently "
-                    "ignored). Use a composed native model pops.Model(...) -> add_block.")
+                    "ignored). Use the private native block seam.")
             check_compiled_matches_module(getattr(compiled, "abi_key", ""))
             gamma = compiled.gamma if compiled.gamma is not None else 1.4
             self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                      spatial.recon, time.kind, gamma, nsub, evolve, nstride,
                                      getattr(spatial, "positivity_floor", 0.0))
             return
-        raise ValueError("add_equation: adder %r unknown (backend %r)" % (adder, backend))
+        raise ValueError("System._add_equation: adder %r unknown (backend %r)" % (adder, backend))
 
     def set_source_stage(self, name, kind, theta, alpha,
                          krylov_tol=0.0, krylov_max_iters=0,
@@ -374,10 +375,9 @@ class _SystemInstall:
                          bz_aux_component=-1):
         """Attach a Schur-condensed source stage to an already-added block (ADC-308).
 
-        Thin public pass-through to the C++ binding (_pops.System.set_source_stage): same flat
-        signature and defaults. add_equation(time=pops.Split(source=pops.ElectrostaticLorentzSchur(...))) wires
-        this internally; this method exposes the same control for a block added with a plain
-        transport time scheme, so cases configure the stage without reaching into the private _s.
+        Thin internal pass-through to the C++ binding (_pops.System.set_source_stage): same flat
+        signature and defaults. A compiled split problem wires this internally; this method keeps
+        the private native route available for focused runtime tests.
         @p name: block; @p kind: 'electrostatic_lorentz'; @p theta in (0, 1]; @p alpha: stage
         coupling. The krylov_* / field descriptors / bz_aux_component defaults reproduce the
         historical bit-identical behavior. Prerequisite: B_z set via set_magnetic_field beforehand.
@@ -387,7 +387,7 @@ class _SystemInstall:
 
     def add_background(self, name, model, density, spatial=None):
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,
-        in the future, to coupled sources). density: n*n array. Equivalent to add_block(evolve=False)
+        in the future, to coupled sources). density: n*n array. Equivalent to a private frozen block
         followed by set_density."""
         self._add_block(name, model, spatial=spatial, evolve=False)
         self.set_density(name, density)
