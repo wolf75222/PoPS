@@ -12,6 +12,17 @@ from .._descriptor import Availability, MeshDescriptor
 from ..amr import NATIVE_MAX_LEVELS, NATIVE_RATIOS
 
 
+def _require_mesh_descriptor(value, who):
+    if isinstance(value, str):
+        from pops.descriptors import reject_string_selector
+        reject_string_selector(value, who, "pops.mesh.CartesianMesh(...)")
+    if not isinstance(value, MeshDescriptor) or getattr(value, "category", None) != "mesh":
+        raise TypeError(
+            "%s must be a typed mesh descriptor (e.g. CartesianMesh(...)), got %r"
+            % (who, type(value).__name__))
+    return value
+
+
 def _nested_descriptor_identity(value):
     """Stable nested descriptor identity for layout options."""
     if value is None:
@@ -31,7 +42,7 @@ class Uniform(MeshDescriptor):
     category = "layout"
 
     def __init__(self, mesh, embedded_boundary=None):
-        self.mesh = mesh
+        self.mesh = _require_mesh_descriptor(mesh, "Uniform(mesh=)")
         self.embedded_boundary = embedded_boundary
 
     def options(self):
@@ -61,7 +72,12 @@ class AMR(MeshDescriptor):
 
     def __init__(self, base, max_levels=2, ratio=2, regrid=None, patches=None,
                  refine=None, nesting=None, checkpoint=None, output=None):
-        self.base = base
+        self.base = _require_mesh_descriptor(base, "AMR(base=)")
+        if isinstance(max_levels, bool) or not isinstance(max_levels, int):
+            raise TypeError("AMR(max_levels=): max_levels must be a Python int >= 1; got %r"
+                            % (max_levels,))
+        if isinstance(ratio, bool) or not isinstance(ratio, int):
+            raise TypeError("AMR(ratio=): ratio must be a Python int >= 1; got %r" % (ratio,))
         self.max_levels = int(max_levels)
         self.ratio = int(ratio)
         self.regrid = regrid

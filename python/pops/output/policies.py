@@ -26,6 +26,8 @@ def _validate_output_format(fmt):
 def _validate_output_cadence(cadence):
     if cadence is None or (isinstance(cadence, int) and not isinstance(cadence, bool)):
         return cadence
+    if isinstance(cadence, str):
+        reject_string_selector(cadence, "cadence", "pops.time.every(N)")
     if isinstance(cadence, bool):
         raise TypeError("OutputPolicy: cadence must be an int interval or typed schedule, got bool")
     kind = getattr(cadence, "kind", None)
@@ -35,6 +37,19 @@ def _validate_output_cadence(cadence):
             "always(), every(N), on_start(), on_end(), an int interval, or implement the "
             "runtime hook before exposing this policy." % (kind,))
     return cadence
+
+
+def _validate_levels(levels):
+    if levels is None:
+        return AllLevels()
+    if isinstance(levels, str):
+        reject_string_selector(levels, "levels", "pops.output.AllLevels() / CoarseOnly()")
+    if getattr(levels, "category", None) != "level_policy":
+        raise TypeError(
+            "OutputPolicy: levels must be a typed level policy "
+            "(AllLevels() / CoarseOnly() / SelectedLevels(...)), got %r"
+            % type(levels).__name__)
+    return levels
 
 
 class _LevelPolicy(Descriptor):
@@ -75,7 +90,7 @@ class OutputPolicy(Descriptor):
         self.cadence = _validate_output_cadence(cadence)
         self.fields = list(fields)
         self.diagnostics = list(diagnostics)
-        self.levels = levels if levels is not None else AllLevels()
+        self.levels = _validate_levels(levels)
         self.require_parallel = bool(require_parallel)
         #: Optional file-name prefix the run-loop driver writes under output_dir (default "output").
         self.prefix = prefix
@@ -109,7 +124,7 @@ class CheckpointPolicy(Descriptor):
 
     def __init__(self, cadence=None, restartable=False, require_bit_identical=False,
                  prefix=None):
-        self.cadence = cadence
+        self.cadence = _validate_output_cadence(cadence)
         self.restartable = bool(restartable)
         self.require_bit_identical = bool(require_bit_identical)
         #: Optional file-name prefix the run-loop driver writes under output_dir (default "checkpoint").

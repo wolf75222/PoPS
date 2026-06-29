@@ -107,4 +107,15 @@ spatial = SimpleNamespace(
     FiniteVolume=_finite_volume,
 )
 
-__all__ = ["spatial"]
+FiniteVolumeResidual = spatial.FiniteVolumeResidual
+FluxDivergence = spatial.FluxDivergence
+SourceAssembly = spatial.SourceAssembly
+FiniteVolume = spatial.FiniteVolume
+
+__all__ = [
+    "spatial",
+    "FiniteVolumeResidual",
+    "FluxDivergence",
+    "SourceAssembly",
+    "FiniteVolume",
+]
