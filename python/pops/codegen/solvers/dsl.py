@@ -183,7 +183,9 @@ class SolverContext:
         """Apply the matrix-free operator ``A(x)`` as an IR node (an RHS-like value)."""
         if not (hasattr(x, "vtype") and x.vtype == "state"):
             raise TypeError("apply: x must be a State IR value")
-        return self._p.apply(operator=_operator_name(operator), state=x)
+        if isinstance(operator, str):
+            operator = self._p._linear_source_value(operator)
+        return self._p.apply(operator=operator, state=x)
 
     def residual(self, operator, x, b):
         """The residual ``r = b - A(x)`` as an affine IR combine (no Python math)."""
@@ -334,14 +336,3 @@ def _walk_nodes(values, out):
 def _require_field(value, where):
     if not (hasattr(value, "is_field") and value.is_field()):
         raise TypeError("%s: a State/RHS IR value is required; got %r" % (where, value))
-
-
-def _operator_name(operator):
-    """The linear-source name of a matrix-free operator IR value (or a bare string)."""
-    if isinstance(operator, str):
-        return operator
-    name = getattr(operator, "attrs", {}).get("linear_source") if hasattr(operator, "attrs") else None
-    if name is None:
-        raise TypeError("apply: operator must be a linear-source IR value or a name; got %r"
-                        % (operator,))
-    return name

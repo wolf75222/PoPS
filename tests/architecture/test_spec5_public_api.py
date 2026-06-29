@@ -91,6 +91,11 @@ def test_top_level_public_surface_is_single_route():
         assert not hasattr(pops, forbidden), "pops.%s must not be public" % forbidden
 
 
+def test_top_level_has_no_legacy_symbols():
+    """TASK-070: exact public-symbol gate name requested by the corrective spec."""
+    test_top_level_public_surface_is_single_route()
+
+
 def test_corrective_tasks_public_route_contract():
     """TASK-001/029/033/064: one public route, no legacy high-level aliases."""
     assert hasattr(pops, "compile_problem")
@@ -104,6 +109,13 @@ def test_corrective_tasks_public_route_contract():
     assert hasattr(sim, "step_cfl")
     for forbidden in ("add_equation", "add_block", "install_program"):
         assert not hasattr(sim, forbidden), "System.%s must not be public" % forbidden
+
+
+def test_no_problem_compile_bind_public():
+    """TASK-001/070: no alternate high-level compile/bind/problem front door."""
+    for forbidden in ("Problem", "compile", "bind", "Case", "CompiledTime"):
+        assert not hasattr(pops, forbidden), "pops.%s must not be public" % forbidden
+    assert hasattr(pops, "compile_problem")
 
 
 def test_runtime_install_is_the_only_public_runtime_wiring_path():
@@ -131,6 +143,11 @@ def test_runtime_install_is_the_only_public_runtime_wiring_path():
                 type(sim).__name__, forbidden)
 
 
+def test_no_public_runtime_fragmented_api():
+    """TASK-070: runtime public surface is install + stepping, not fragmented setters."""
+    test_runtime_install_is_the_only_public_runtime_wiring_path()
+
+
 def test_no_public_python_runtime_integrator_or_time_shim():
     for module_name in (
         "pops.dsl",
@@ -148,6 +165,11 @@ def test_no_public_python_runtime_integrator_or_time_shim():
     assert not hasattr(pops.time, "CompiledTime")
     with pytest.raises(ImportError):
         from pops.time.program import CompiledTime  # noqa: F401
+
+
+def test_legacy_imports_fail():
+    """TASK-070: legacy module imports must fail instead of staying as compatibility shims."""
+    test_no_public_python_runtime_integrator_or_time_shim()
 
 
 def test_compile_problem_is_only_public_compile_route():

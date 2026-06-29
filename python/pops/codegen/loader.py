@@ -1,28 +1,8 @@
-"""pops.codegen.loader : result/wrapper classes for compiled .so artefacts.
-
-``CompiledModel`` packages a model ``.so`` with the metadata needed to wire
-it (adder, names, roles, gamma, n_aux, params, caps, abi_key, model_hash).
-
-``CompiledProblem`` packages one combined ``problem.so``: GeneratedModule
-metadata/operators plus the GeneratedProgram step and the metadata needed to
-install, inspect and reproduce it.
-
-Neither class imports ``pops.dsl`` or ``pops.physics`` at module level.
-"""
+"""Compiled artifact wrappers; no physics/dsl imports at module scope."""
 
 
 class CompiledProblem:
-    """Result of ``pops.compile_problem(...)``; a generated ``problem.so``
-    containing the GeneratedModule + GeneratedProgram artifact metadata needed
-    to install + reproduce it. Install it with ``sim.install(compiled, ...)``;
-    the step then runs entirely in C++ via ``ProgramContext``.
-
-    The ``.so`` is compiled against the pops headers with the SAME Kokkos
-    toolchain as the loaded _pops module (cf. ``pops_loader_build_flags``),
-    so its ABI key matches and the runtime problem loader accepts it.
-    ``os.fspath(compiled)`` returns ``so_path`` (it can be passed where a
-    path is expected).
-    """
+    """Result of ``pops.compile_problem(...)``; install with ``sim.install(compiled, ...)``."""
 
     def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,
                  problem_hash=None, cache_key=None, compile_command=None, generated_sources=None,
@@ -35,20 +15,9 @@ class CompiledProblem:
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
         self.cxx = cxx
         self.std = std
-        # Validated brick libraries (Spec 3 section 21, ADC-464): the LibraryManifests read +
-        # ABI-checked from libraries=[...]. Empty when none were passed. Their bricks (and their
-        # generated symbols) are exposed to the problem; a compiled library .so was already
-        # dlopen'd (and ABI-guarded) by read_library_manifest.
+        # Validated brick libraries from libraries=[...], ABI-checked before reaching this handle.
         self.libraries = list(libraries) if libraries else []
-        # Compiled-artifact metadata (Spec 5 sec.12.4, #48-49): set by compile_problem. The
-        # problem_hash is the STRUCTURED SEMANTIC identity over Module IR, Program IR, descriptors,
-        # layout, backend/platform and external libraries. Toolchain/native-feature provenance and
-        # generated-source guards live in problem_identity and participate in cache_key, not in the
-        # semantic hash. It is distinct from program_hash, the in-memory Program IR hash. cache_key
-        # is the out-of-source artifact key; compile_command is the redacted compiler invocation;
-        # generated_sources are the .cpp files written for inspection (debug=).
-        # None on a route that does not record a value (e.g. an externally constructed handle) -- a
-        # documented absence, not a fabricated value (cf. the property accessors below).
+        # Structured semantic identity plus provenance/cache metadata; None means "not recorded".
         self._problem_hash = problem_hash
         self._module_hash = module_hash
         self._source_hash = source_hash
@@ -56,11 +25,7 @@ class CompiledProblem:
         self._cache_key = cache_key
         self._compile_command = compile_command
         self._generated_sources = list(generated_sources) if generated_sources else []
-        # Active codegen POPS_* environment snapshot (Spec 5 sec.12.4, #47-48): the resolved
-        # CodegenEnv that governed this compile (log level, codegen dir, keep-generated, dump flags,
-        # cache dir, profile, autotune, and the UNSAFE jit-backdoor gate). Recorded so the env state
-        # is inspectable in inspect(); None for a handle built outside compile_problem (no env was
-        # resolved -- a documented absence, not a fabricated default).
+        # Active codegen POPS_* environment snapshot; None for externally constructed handles.
         self._codegen_env = codegen_env
 
     def __fspath__(self):
@@ -69,22 +34,13 @@ class CompiledProblem:
     # --- compiled-artifact metadata (Spec 5 sec.12.4, #48-49) ----------------
     @property
     def codegen_dir(self):
-        """Directory the compiled ``.so`` (and any generated source) lives in (sec.12.4, #48).
-
-        The out-of-source cache directory the .so was written to (``os.path.dirname(so_path)``);
-        the generated ``.cpp`` -- when ``compile_problem(debug=True)`` wrote one -- sits beside it.
-        ``None`` only if the handle carries no ``so_path``."""
+        """Directory containing the compiled ``.so`` and any persisted generated source."""
         import os
         return os.path.dirname(self.so_path) if self.so_path else None
 
     @property
     def problem_hash(self):
-        """Stable structured hash of the combined ``problem.so`` identity (sec.12.4, #48).
-
-        The digest covers Module IR, Program IR, route descriptors, layout, backend/platform and
-        external libraries. It intentionally excludes raw include paths, compiler paths and generated
-        C++ source text; those are provenance/cache inputs exposed by :attr:`problem_identity` and
-        :attr:`cache_key`. ``None`` only for a handle built outside ``compile_problem``."""
+        """Stable semantic hash of Module IR, Program IR, descriptors, layout, backend and libraries."""
         return self._problem_hash
 
     @property
@@ -98,11 +54,7 @@ class CompiledProblem:
 
     @property
     def source_hash(self):
-        """SHA-256 identity of the generated C++ source used as a binary cache guard.
-
-        This includes both the emitted source text and the codegen source-identity version, so a
-        generator-version bump invalidates the binary cache even if a tiny fixture happens to emit
-        identical text."""
+        """SHA-256 identity of generated C++ plus codegen source-identity version."""
         return self._source_hash
 
     @property
@@ -112,30 +64,17 @@ class CompiledProblem:
 
     @property
     def cache_key(self):
-        """The structured problem identity + ABI/backend/target cache key of the ``.so``.
-
-        Reproducing it requires the same problem identity, headers, compiler, C++ standard,
-        backend and runtime route. ``None`` for an externally built handle."""
+        """Structured problem identity plus ABI/backend/target cache key of the ``.so``."""
         return self._cache_key
 
     @property
     def compile_command(self):
-        """The REDACTED compiler invocation that built the ``.so`` (sec.12.4, #49).
-
-        A single command string with the ephemeral temp source replaced by the generated-source
-        path and any secret-looking token masked (cf. ``_redact_compile_command``). ``None`` on a
-        cache HIT (the .so was not rebuilt this call -- a documented absence, never a fabricated
-        command) or for an externally constructed handle. Recompile with ``force=True`` to populate
-        it."""
+        """Redacted compiler invocation, or ``None`` on cache hit / externally built handles."""
         return self._compile_command
 
     @property
     def generated_sources(self):
-        """The generated source files written for inspection (sec.12.4, #49).
-
-        The ``.cpp`` files ``compile_problem(debug=True)`` (or ``POPS_KEEP_GENERATED``) persisted next
-        to the ``.so`` (the default keeps the source only in a TemporaryDirectory, so this is empty
-        unless one of those was set). A list (possibly empty), never ``None``."""
+        """Generated source files persisted by debug=True or POPS_KEEP_GENERATED."""
         return list(self._generated_sources)
 
     @property

@@ -66,3 +66,11 @@ extend-exclude = ["build*", "docs", "Tools", ".kokkos-install"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "UP", "NPY"]
 ignore = ["E741", "E501", "UP031"]
+
+[tool.pytest.ini_options]
+markers = [
+  "requires_toolchain: requires a working C++/Kokkos compiler toolchain and generated shared-object build",
+  "requires_kokkos: requires a Kokkos-enabled build",
+  "requires_mpi: requires MPI runtime support",
+  "requires_gpu: requires a GPU backend such as CUDA or HIP",
+]

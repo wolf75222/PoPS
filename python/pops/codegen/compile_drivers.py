@@ -1,13 +1,4 @@
-"""pops.codegen.compile_drivers : internal compiler-invocation layer.
-
-The only public compile route is ``compile_problem``.  The model-level helpers in
-this file still exist for internal transitional codegen paths, but they are not
-re-exported by ``pops.codegen`` or ``pops.codegen.compile`` and must not be used
-as a user-facing orchestration API.
-
-Does NOT import pops.physics at module level to avoid import cycles; the physics facade and
-aux helpers are imported lazily inside the functions that need them.
-"""
+"""Internal compiler-invocation layer; public users enter through ``compile_problem`` only."""
 
 import hashlib
 import json
@@ -51,9 +42,7 @@ from pops.codegen._compile_command_redact import _redact_compile_command  # noqa
 __all__ = ["compile_problem"]
 
 
-# ---------------------------------------------------------------------------
 # Compiler runners
-# ---------------------------------------------------------------------------
 
 def _compile_so(model, so_path, include=None, name=None, cxx=None, std="c++20",
                 hoist_reciprocals=False):
@@ -79,14 +68,7 @@ def _compile_so(model, so_path, include=None, name=None, cxx=None, std="c++20",
 
 def _compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
                  hoist_reciprocals=False):
-    """Backend "compile" (AOT): generate the FULL MODEL (emit_cpp_aot_source)
-    and compile a .so loadable by System.add_compiled_block. Returns so_path.
-
-    KOKKOS-ONLY: the AOT model includes the pops headers (multifab/for_each),
-    which do NOT compile without POPS_HAS_KOKKOS. So we compile the .so WITH
-    Kokkos (same flags as the native loader), which also aligns its ABI with
-    the _pops module.
-    """
+    """AOT model loader compiled with the same Kokkos ABI as ``_pops``."""
     import tempfile
     if include is None:
         include = pops_include()
@@ -117,11 +99,7 @@ def _compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
 
 def _compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23", target="system",
                     hoist_reciprocals=False):
-    """Backend "production": generate the NATIVE LOADER (emit_cpp_native_loader)
-    and compile it into a .so loadable by System.add_native_block
-    (target="system") or AmrSystem.add_native_block (target="amr_system").
-    Returns so_path.
-    """
+    """Production native loader for System or AmrSystem block install."""
     import tempfile
     if include is None:
         include = pops_include()
@@ -191,9 +169,7 @@ def _compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=Non
     raise ValueError("compile_or_jit: mode 'jit' | 'compile' | 'native' (received %r)" % mode)
 
 
-# ---------------------------------------------------------------------------
 # compile_model -- full facade (mirrors HyperbolicModel.compile logic)
-# ---------------------------------------------------------------------------
 
 def _compile_model(model, so_path=None, include=None, backend=None, name=None, cxx=None,
                    std=None, require_metadata=False, target="system", hoist_reciprocals=False):
@@ -250,9 +226,7 @@ def _compile_model(model, so_path=None, include=None, backend=None, name=None, c
     return out_path
 
 
-# ---------------------------------------------------------------------------
 # compile_problem -- compile a model + pops.time.Program into a problem.so
-# ---------------------------------------------------------------------------
 
 def _problem_target_from_layout(layout):
     """Return the native problem ABI target selected by a typed mesh layout."""

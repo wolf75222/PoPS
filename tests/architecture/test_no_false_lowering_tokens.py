@@ -6,7 +6,9 @@ it is to prevent the modern Python layers from reintroducing public legacy
 front doors or routing through old DSL modules.
 """
 import ast
+import io
 import pathlib
+import tokenize
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -26,6 +28,65 @@ def _defs(path):
     for node in ast.walk(_tree(path)):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             yield node
+
+
+def _code_tokens(path):
+    text = path.read_text(encoding="utf-8")
+    stream = io.StringIO(text)
+    for tok in tokenize.generate_tokens(stream.readline):
+        if tok.type in (tokenize.NAME, tokenize.OP):
+            yield tok.string, tok.start[0]
+
+
+def _next_token(tokens, index, offset=1):
+    j = index + offset
+    return tokens[j][0] if j < len(tokens) else None
+
+
+def _is_private_native_bridge(path, token):
+    rel = str(path.relative_to(REPO_ROOT))
+    if token == "install_program":
+        return rel in {
+            "python/pops/runtime/_system_unified_install.py",
+            "python/pops/runtime/_amr_system_program.py",
+        }
+    if token == "solve_fields":
+        return rel == "python/pops/runtime/_system_diagnostics.py"
+    return False
+
+
+def test_no_false_lowering_tokens():
+    """TASK-003: executable production Python must not route through legacy lowering tokens.
+
+    This scans the modern production layers named in TASK-003. It intentionally scans Python
+    tokens instead of comments so old prose cannot hide a real route, while public docs/examples
+    are guarded by ``test_examples_no_skip`` and the docs surface tests.
+    """
+    offenders = []
+    for package in ("model", "time", "codegen", "runtime"):
+        for path in _py_files(package):
+            tokens = list(_code_tokens(path))
+            for i, (token, line) in enumerate(tokens):
+                rel = path.relative_to(REPO_ROOT)
+                if token in {"to_dsl", "_module_to_model", "_rhs_legacy"}:
+                    offenders.append("%s:%d contains executable token %s" % (rel, line, token))
+                if token == "dsl" and _next_token(tokens, i) == "." and _next_token(tokens, i, 2) == "Model":
+                    offenders.append("%s:%d contains executable token dsl.Model" % (rel, line))
+                if (token == "solve_fields" and _next_token(tokens, i) == "("
+                        and not _is_private_native_bridge(path, token)):
+                    offenders.append("%s:%d contains executable token solve_fields(" % (rel, line))
+                if token == "linear_source" and _next_token(tokens, i) == "(":
+                    offenders.append("%s:%d contains executable token linear_source(" % (rel, line))
+                if token == "P" and _next_token(tokens, i) == "." and _next_token(tokens, i, 2) == "rhs":
+                    offenders.append("%s:%d contains executable token P.rhs" % (rel, line))
+                if token == "install_program" and not _is_private_native_bridge(path, token):
+                    offenders.append("%s:%d contains executable token install_program" % (rel, line))
+                if token == "add_equation" and _next_token(tokens, i) == "(":
+                    offenders.append("%s:%d contains executable token add_equation(" % (rel, line))
+    assert not offenders, (
+        "false-lowering / legacy route tokens are forbidden in production Python:\n%s"
+        % "\n".join(offenders)
+    )
 
 
 def test_program_has_no_public_legacy_methods():

@@ -84,3 +84,8 @@ def test_public_examples_do_not_hide_missing_compiled_routes():
         "public examples must fail loudly when the compiled route is missing; no skip/fallback "
         "examples:\n%s" % "\n".join(offenders)
     )
+
+
+def test_examples_no_skip():
+    """TASK-072: exact gate name for public examples that must not hide compile failures."""
+    test_public_examples_do_not_hide_missing_compiled_routes()

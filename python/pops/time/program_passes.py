@@ -414,16 +414,7 @@ class _ProgramPasses(_ProgramConstants):
         return "\n".join(lines)
 
     # --- analysis passes: liveness / buffer reuse / cost estimate / GPU detectors (Spec 3 s28) ---
-    # Ops that allocate ONE step-body scratch buffer (a MultiFab the size of the block state / a
-    # scalar field). The number of buffers each op writes per "kernel" + how many for_each_cell kernels
-    # it launches drive the memory-traffic and kernel-count estimates and the per-scratch live ranges.
-    # These counts are STRUCTURAL (read off the IR / the lowering above), not a measured profile -- the
-    # measured GPU kernel count is a ROMEO run; this is the host-side static estimate.
-    # Ops that launch at least one per-cell (for_each_cell) kernel when lowered -- the small-kernel
-    # count a GPU launch-overhead detector flags. A linear_combine lowers to axpy/lincomb (vectorized,
-    # counted as one kernel); a rhs to a divergence/flux kernel; a source/apply/where/cell_compare/
-    # coupled_rate to an explicit for_each_cell. solve_fields / solve_linear launch many internal
-    # kernels (an elliptic / Krylov solve) -- counted as a HEAVY kernel, not a small one.
+    # Structural host-side estimates: scratch buffers, kernel counts and live ranges by op kind.
 
 
     def validate(self):
@@ -447,11 +438,7 @@ class _ProgramPasses(_ProgramConstants):
                 # inside it); it reads nothing from the enclosing scope.
                 self._validate_block(v.attrs["apply_block"], seen)
             elif v.op == "solve_local_nonlinear":
-                # The residual sub-block is self-contained: the iterate / guess State placeholders are
-                # defined inside it (first ops) and every op reads only the placeholders or earlier
-                # sub-block ops. Validate against an EMPTY outer scope so a residual that closes over an
-                # enclosing value (which the per-cell kernel cannot evaluate) fails loud here, not as a
-                # codegen KeyError.
+                # Residual sub-blocks are self-contained; fail loud on captured outer values.
                 self._validate_block(v.attrs["residual_block"], set())
         for block, state in self._commits.items():
             if state.id not in seen:
@@ -482,19 +469,14 @@ class _ProgramPasses(_ProgramConstants):
         commit_fields = sorted(
             (b, f.id) for b, f in getattr(self, "_commit_fields", {}).items()
         )
-        # NAME-based block binding (Spec 3 criterion 23, ADC-457): the block names in P.state
-        # declaration order are part of the IR identity -- the .so exports them (pops_program_block_name)
-        # and install_program binds System blocks to them BY NAME. Reordering P.state changes this list,
-        # so two Programs differing only by block order get distinct IR hashes (and distinct .so caches).
+        # Program block declaration order is part of the IR identity and cache key.
         _order = self._block_indices()
         block_order = sorted(_order, key=_order.get)
         out = {"name": self.name, "version": 1, "nodes": nodes, "commits": commits,
                "block_order": block_order}
         if commit_fields:
             out["commit_fields"] = commit_fields
-        # The optional dt bound (spec s18 / ADC-417) is part of the IR identity: its presence and its
-        # scalar sub-program feed the hash (the compiled-problem cache key) so two Programs differing
-        # only by a dt bound get distinct .so caches.
+        # Optional dt-bound sub-program participates in the Program IR hash.
         if self._dt_bound is not None:
             sub, result = self._dt_bound
             out["dt_bound"] = {"nodes": [self._serialize_node(w) for w in sub],
@@ -508,14 +490,7 @@ class _ProgramPasses(_ProgramConstants):
 
 
     def _block_indices(self):
-        """Map each block name to a stable runtime block index, in the order the Program FIRST declares
-        it via ``P.state(...)`` (ADC-426). Index 0 is the first declared block, 1 the second, ...; the
-        single-block program keeps index 0 (byte-for-byte lowering). The generated ``.so`` addresses
-        blocks by this index in its step body AND exports the block NAMES in this order
-        (``pops_program_block_name``); ``System::install_program`` binds them to the instantiated System
-        blocks BY NAME (Spec 3 criterion 23, ADC-457), so the System block add-order need NOT match the
-        Program's ``P.state`` order -- the single-block positional convention is the identity special case
-        (names already in add-order)."""
+        """Map each block name to a stable runtime index in first ``P.state`` declaration order."""
         order = {}
         for v in self._values:
             if v.op == "state" and v.block not in order:
