@@ -241,29 +241,16 @@ jobs:
         if: always()
         run: ccache -s
 
-  # GATE PYTHON (ADC-171). Ex-moitie Python du job sequentiel build-and-test : construit le module
-  # _pops AVEC Kokkos puis exerce la suite python/tests. Tourne EN PARALLELE de gate-cpp.
-  gate-python:
-    # ADC-366: sharded into N legs (matrix.shard) so the ~18-19 min Python suite runs ~1/N per leg in
-    # parallel. The job ID stays `gate-python`, so the required `gate` aggregator (needs: gate-python)
-    # rolls the WHOLE matrix up to ONE result -- branch protection (pinned to `gate`) is unchanged; the
-    # individual shard legs are NOT required checks. fail-fast:false so one red shard does not cancel the
-    # others (full red/green signal, no cancel-cascade that hides which shard failed). Each shard rebuilds
-    # _pops ccache-hot (the 38 DSL tests compile loaders at runtime, so a prebuilt artifact would not
-    # suffice; the shared ccache + Kokkos cache make the per-shard rebuild cheap).
-    name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
+  # GATE PYTHON BUILD : construit UNE SEULE FOIS le module _pops partage par les shards de tests.
+  # Les tests DSL compilent encore leurs loaders/.so a runtime dans chaque shard, mais le gros build
+  # pybind11 n'est plus multiplie par le nombre de shards.
+  gate-python-build:
+    name: ubuntu-latest / Kokkos Serial (Python build)
     runs-on: ubuntu-latest
     needs: changes
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
     # (python) a bouge -- une PR pur-Python ne paie donc QUE ce job, pas gate-cpp.
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Shard ids MUST stay contiguous 0..N-1: the harness pairs SHARD_INDEX=matrix.shard with
-        # SHARD_TOTAL=strategy.job-total and selects files by (index % total) == shard. Non-contiguous
-        # ids (e.g. [1,2,3]) would silently drop coverage -- to rebalance, change the COUNT here only.
-        shard: [0, 1, 2]
 
     env:
       # ccache dedie au module Python (.ccache-py) : meme separation que l'ancien job build-and-test.
@@ -276,9 +263,6 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale,time_macros
-      # Shard selector read by the test harness (no-op fallback INDEX=0/TOTAL=1 = run everything).
-      SHARD_INDEX: ${{ matrix.shard }}
-      SHARD_TOTAL: ${{ strategy.job-total }}
 
     steps:
       - uses: actions/checkout@v7
@@ -302,33 +286,29 @@ jobs:
       # import graph, public surface resolves). These tests live under tests/architecture/ and are
       # NOT discovered by the python/tests auto-runner below, so they need their own step. They are
       # source-only (test_public_imports skips itself when _pops is absent), run fast, and gate the
-      # structure independent of the build -- only on shard 0 to avoid redundant matrix reruns.
+      # structure independent of the runtime shard matrix.
       - name: Spec 4 architecture tests
-        if: matrix.shard == 0
         run: |
           pip install --upgrade pip pytest
           python3 -m pytest tests/architecture -q
 
-      # ccache du module Python. ADC-366: PER-SHARD write key so the N shards finishing together do not
-      # race on one shared key (GitHub would keep only the first; a partial cache could win). restore-keys
-      # still fall back to this shard on the branch, then master, then ANY python ccache, so a fresh shard
-      # warms from an existing cache (cross-shard / cross-ref hits via CCACHE_BASEDIR+NOHASHDIR).
+      # ccache du module Python. Un seul job ecrit le cache de build ; les restore-keys gardent la
+      # compatibilite avec les anciennes cles sharded et les cles master.
       - name: Cache ccache (Python module)
         uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-python-shard${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-python-build-${{ github.ref }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-python-shard${{ matrix.shard }}-${{ github.ref }}-
-            ccache-${{ runner.os }}-python-shard${{ matrix.shard }}-refs/heads/master-
+            ccache-${{ runner.os }}-python-build-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-build-refs/heads/master-
+            ccache-${{ runner.os }}-python-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-refs/heads/master-
             ccache-${{ runner.os }}-python-
 
       # Les bindings de la lib (module `pops` : System + facades) vivent ICI. On construit l'extension
-      # _pops AVEC Kokkos (preset ci-kokkos-python, jobs: 4 ; CMAKE_LINKER_TYPE=MOLD en -D ici uniquement)
-      # puis on exerce TOUTE la suite python/tests/test_*.py par AUTO-DECOUVERTE (find ... | xargs -P 4, runners publics 4 vCPU) :
-      # la liste ne peut plus se perimer et un nouveau test livre par une PR soeur est pris automatiquement.
-      # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
-      - name: Build + test module Python `pops` (Kokkos Serial)
+      # _pops AVEC Kokkos (preset ci-kokkos-python, jobs: 4 ; CMAKE_LINKER_TYPE=MOLD en -D ici uniquement).
+      - name: Build module Python `pops` (Kokkos Serial)
         run: |
           pip install --upgrade pip numpy pytest
           SECONDS=0
@@ -340,6 +320,98 @@ jobs:
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           cmake --build --preset ci-kokkos-python
           build_s=$SECONDS
+          {
+            echo "### gate-python-build (module _pops, Kokkos Serial)"
+            echo ""
+            echo "| Phase | Duree (s) |"
+            echo "| --- | --- |"
+            echo "| configure + build | ${build_s} |"
+            echo ""
+            echo "Hit-rate ccache :"
+            echo '```'
+            ccache -s | grep -i hits || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Python module artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-python-build-kokkos-py
+          path: build-kokkos-py/python/**
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: ccache stats (Python module build)
+        if: always()
+        run: ccache -s
+
+  # GATE PYTHON (ADC-366). La suite python/tests est shardee en N legs, mais consomme l'artefact
+  # _pops construit par gate-python-build au lieu de reconstruire le module dans chaque shard.
+  gate-python:
+    name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    needs: [changes, gate-python-build]
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Shard ids MUST stay contiguous 0..N-1: the harness pairs SHARD_INDEX=matrix.shard with
+        # SHARD_TOTAL=strategy.job-total and selects files by (index % total) == shard. Non-contiguous
+        # ids (e.g. [1,2,3]) would silently drop coverage -- to rebalance, change the COUNT here only.
+        shard: [0, 1, 2]
+
+    env:
+      # ccache reste utile aux tests DSL qui compilent des loaders/.so a runtime dans chaque shard.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-py
+      CCACHE_MAXSIZE: 2G
+      KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale,time_macros
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_TOTAL: ${{ strategy.job-total }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - id: kokkos
+        uses: ./.github/actions/setup-kokkos
+        with:
+          extra-apt: mold
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Download Python module artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: gate-python-build-kokkos-py
+          path: build-kokkos-py/python
+
+      - name: Verify Python module artifact
+        run: |
+          test -d build-kokkos-py/python/pops
+          test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)"
+
+      - name: Cache ccache (Python runtime loaders)
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-python-runtime-shard${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-python-runtime-shard${{ matrix.shard }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-runtime-shard${{ matrix.shard }}-refs/heads/master-
+            ccache-${{ runner.os }}-python-build-${{ github.ref }}-
+            ccache-${{ runner.os }}-python-build-refs/heads/master-
+            ccache-${{ runner.os }}-python-
+
+      - name: Test module Python `pops` shard ${{ matrix.shard }} (Kokkos Serial)
+        run: |
+          pip install --upgrade pip numpy pytest
           export PYTHONPATH="$PWD/build-kokkos-py/python"
           # adc_cpp est Kokkos-only : les tests DSL qui compilent un loader/.so (aot, production, ABI)
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
@@ -380,7 +452,6 @@ jobs:
             echo ""
             echo "| Phase | Duree (s) |"
             echo "| --- | --- |"
-            echo "| configure + build | ${build_s} |"
             echo "| tests (python, this shard) | ${test_s} |"
             echo ""
             echo "Top 10 slowest test files (this shard):"
@@ -417,17 +488,17 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, gate-cpp, gate-python]
+    needs: [changes, gate-cpp, gate-python-build, gate-python]
     if: always()
     steps:
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python=${{ needs.gate-python.result }}"
+          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::routage (job changes) en echec : impossible de garantir quels gates devaient tourner"
             exit 1
           fi
-          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python.result }}"; do
+          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::un gate obligatoire a echoue ou ete annule ($r)" ; exit 1 ;;
