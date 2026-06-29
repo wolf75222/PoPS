@@ -23,7 +23,7 @@ def _coeff(node, value):
 
 
 # ---- (A) IR parity: pure Python, always runs ----
-def _program(t, name):
+def _program(name):
     m = pm.Module(name + "_module")
     U = m.state_space("U", ("rho",))
     rhs = m.operator(
@@ -33,19 +33,19 @@ def _program(t, name):
     return t.Program(name).bind_operators(m), rhs
 
 
-def test_rk_rk4_tableau_matches_rk4_macro(t):
+def test_rk_rk4_tableau_matches_rk4_macro():
     """rk(RK4_TABLEAU) lowers to the same IR as the named rk4 macro."""
-    macro, rhs = _program(t, "rk4")
+    macro, rhs = _program("rk4")
     lt.rk4(macro, "plasma", rhs_operator=rhs)
-    generic, rhs2 = _program(t, "rk4")
+    generic, rhs2 = _program("rk4")
     lt.rk(generic, "plasma", lt.RK4_TABLEAU, rhs_operator=rhs2)
     assert generic._ir_hash() == macro._ir_hash(), \
         "rk(RK4_TABLEAU) must produce the same IR as the rk4 macro"
 
 
-def test_rk_ssprk2_tableau_is_heun(t):
+def test_rk_ssprk2_tableau_is_heun():
     """rk(SSPRK2_TABLEAU) commits Heun's U + dt(1/2 k1 + 1/2 k2): two stages, two equal-weighted RHS."""
-    P, rhs = _program(t, "ssprk2")
+    P, rhs = _program("ssprk2")
     lt.rk(P, "plasma", lt.SSPRK2_TABLEAU, rhs_operator=rhs)
     P.validate()
     node = P.commits()["plasma"]
@@ -59,12 +59,12 @@ def test_rk_ssprk2_tableau_is_heun(t):
         assert c == {1: 0.5}, "each k carries dt*1/2 (got %r)" % c
 
 
-def test_rk_accepts_raw_triple(t):
+def test_rk_accepts_raw_triple():
     """A raw (A, b, c) triple is accepted (wrapped in a ButcherTableau)."""
     A = [[], [1.0]]
     b = [0.5, 0.5]
     c = [0.0, 1.0]
-    P, rhs = _program(t, "raw")
+    P, rhs = _program("raw")
     lt.rk(P, "plasma", (A, b, c), rhs_operator=rhs)
     assert P.validate() is True
     node = P.commits()["plasma"]
@@ -72,7 +72,7 @@ def test_rk_accepts_raw_triple(t):
     assert len(rhss) == 2
 
 
-def test_tableau_rejects_implicit(t):
+def test_tableau_rejects_implicit():
     try:  # an entry on/above the diagonal is implicit -> rejected (rk lowers explicit only)
         lt.ButcherTableau(A=[[0.0], [1.0, 0.5]], b=[0.5, 0.5])
     except ValueError as exc:
@@ -81,7 +81,7 @@ def test_tableau_rejects_implicit(t):
         raise AssertionError("an implicit tableau must be rejected")
 
 
-def test_tableau_rejects_inconsistent_weights(t):
+def test_tableau_rejects_inconsistent_weights():
     try:  # b must sum to 1 for a consistent RK method
         lt.ButcherTableau(A=[[], [1.0]], b=[0.5, 0.6])
     except ValueError as exc:
@@ -93,7 +93,7 @@ def test_tableau_rejects_inconsistent_weights(t):
 def _run():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
-        fn(t)
+        fn()
         print("ok", fn.__name__)
     print("PASS test_time_std_rk (A: %d checks)" % len(fns))
 

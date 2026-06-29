@@ -23,7 +23,7 @@ def _program(name):
     return t.Program(name).bind_operators(m), rhs
 
 
-def test_decorator_matches_inline_ir(t):
+def test_decorator_matches_inline_ir():
     """A decorated forward_euler builds the SAME IR as the builder forward_euler (equal _ir_hash)."""
     inline, rhs = _program("fe")
     lt.forward_euler(inline, "plasma", rhs_operator=rhs)
@@ -38,7 +38,7 @@ def test_decorator_matches_inline_ir(t):
         "the @P.step decorator must build IR identical to the inline builder body"
 
 
-def test_decorator_calls_fn_exactly_once_at_build(t):
+def test_decorator_calls_fn_exactly_once_at_build():
     """fn runs exactly ONCE -- at decoration (build) time -- and never again (no per-step execution)."""
     calls = []
     P, rhs = _program("fe")
@@ -55,7 +55,7 @@ def test_decorator_calls_fn_exactly_once_at_build(t):
     assert calls == [P], "no further calls happen after the IR is recorded"
 
 
-def test_decorator_returns_program(t):
+def test_decorator_returns_program():
     """Program.step returns the Program so a one-liner P = Program(name).step(build) reads cleanly."""
     P, rhs = _program("rk4")
 
@@ -69,7 +69,7 @@ def test_decorator_returns_program(t):
     assert P._ir_hash() == inline._ir_hash()
 
 
-def test_decorator_rejects_non_callable(t):
+def test_decorator_rejects_non_callable():
     P = t.Program("bad")
     try:
         P.step(42)
@@ -79,7 +79,7 @@ def test_decorator_rejects_non_callable(t):
         raise AssertionError("Program.step must reject a non-callable")
 
 
-def test_decorator_works_for_a_multistage_body(t):
+def test_decorator_works_for_a_multistage_body():
     """A non-trivial body (an explicit inline scheme) records identically through the decorator."""
     prog, rhs = _program("custom")
 
@@ -103,7 +103,7 @@ def test_decorator_works_for_a_multistage_body(t):
 def _run():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
-        fn(t)
+        fn()
         print("ok", fn.__name__)
     print("PASS test_time_std_decorator (%d checks)" % len(fns))
 
