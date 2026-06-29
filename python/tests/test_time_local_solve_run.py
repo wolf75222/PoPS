@@ -14,7 +14,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
 (B) End-to-end Lorentz parity (skips unless the full toolchain is present): a 3-variable model
     (rho, mx, my) with a Lorentz ``linear_source`` L = [[0,0,0],[0,0,B_z],[0,-B_z,0]], a constant B_z,
     a non-trivial momentum IC; a Program W = solve_local_linear(I - dt*L, rhs=U); compile_problem ->
-    problem.so, install_program, step(dt). The implicit Lorentz rotation has a closed form: with
+    problem.so, install_problem, step(dt). The implicit Lorentz rotation has a closed form: with
     k = dt*B_z, den = 1 + k*k, mx' = (mx + k*my)/den, my' = (-k*mx + my)/den, rho unchanged. The
     stepped (mx, my) must match it to round-off. Runs in CI (gate-python rebuilds _pops) and locally
     once _pops is rebuilt; skips if _pops lacks _install_problem_so, numpy/_pops is absent, no compiler/Kokkos
@@ -125,7 +125,7 @@ chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
 
 # ---- (B) end-to-end Lorentz parity: skips unless the full toolchain is present ----
 if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_problem_so"):
-    print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+    print("-- (B) skipped: _pops lacks the install_problem binding (rebuild _pops) --")
     print("%s test_time_local_solve_run (A only)" % ("FAIL" if fails else "PASS"))
     sys.exit(1 if fails else 0)
 
@@ -164,7 +164,7 @@ except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile fai
 chk(compiled.program_name == "lorentz_step", "handle carries the program name")
 
 prog, bz, U0 = make_sim()
-prog._install_problem_so(compiled.so_path)  # dlopen + ABI-key check + pops_install_program(this)
+prog._install_problem_so(compiled.so_path)  # dlopen + ABI-key check + generated C ABI attach
 prog.step(dt)
 U = np.array(prog._get_state("plasma"))
 

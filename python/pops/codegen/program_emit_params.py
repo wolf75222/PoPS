@@ -170,7 +170,7 @@ def emit_program_params(program, model=None):
     return (
         "// RUNTIME-parameter metadata (ADC-510, Spec 5 C5): per flat parameter, its PROGRAM block\n"
         "// index, its stable within-block index (sorted-name order, the index the lowered runtime read\n"
-        "// uses), its name and declaration default. install_program seeds the per-block RuntimeParams;\n"
+        "// uses), its name and declaration default. install_problem seeds the per-block RuntimeParams;\n"
         "// Python routes the bound values to set_program_params. NOT called from any hot kernel.\n"
         'extern "C" int pops_program_param_count() { return %d; }\n' % len(entries) +
         ival("block", blocks) +

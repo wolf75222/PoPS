@@ -107,7 +107,7 @@ def test_corrective_tasks_public_route_contract():
     sim = pops.System()
     assert hasattr(sim, "install")
     assert hasattr(sim, "step_cfl")
-    for forbidden in ("add_equation", "add_block", "install_program"):
+    for forbidden in ("add_equation", "add_block", "install_program", "install_problem"):
         assert not hasattr(sim, forbidden), "System.%s must not be public" % forbidden
 
 
@@ -126,6 +126,7 @@ def test_runtime_install_is_the_only_public_runtime_wiring_path():
         for forbidden in (
             "add_block",
             "add_equation",
+            "install_problem",
             "install_program",
             "initialize_compiled_program",
             "set_program_cadence",

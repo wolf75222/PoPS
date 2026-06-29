@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Spec 6 sec.11 (ADC-508): the compiled time-Program install seam on AmrSystem.
+"""Spec 6 sec.11 (ADC-508): the compiled-problem install seam on AmrSystem.
 
-``AmrSystem::install_program(so_path)`` is the AMR counterpart of ``System::install_program``: it
+``AmrSystem::install_problem(so_path)`` is the AMR counterpart of ``System::install_problem``: it
 dlopens a generated ``problem.so`` (compiled from ``layout=AMR(...)`` -> the .so exports
 ``pops_install_program_amr``), checks its ABI key, runs the section-24 requirement validation (block
 instance / solver), binds the Program blocks BY NAME, seeds the per-PROGRAM-block ``RuntimeParams``
-from the .so metadata, then installs the macro-step body. ``pops.bind`` routes a compiled Program +
-``params=`` + ``cadence=`` onto these AMR seams (the three former ``_install_compiled`` rejects are
-now real routes).
+from the .so metadata, then installs the macro-step body. ``sim.install(compiled, ...)`` routes the
+compiled problem plus ``params=`` and ``cadence=`` onto these AMR seams.
 
 The per-level macro-step DRIVER (``AmrProgramContext``) has LANDED (ADC-508): the generated
 ``pops_install_program_amr`` constructs an ``AmrProgramContext`` and installs the SYNCHRONOUS per-level
@@ -18,7 +17,7 @@ macro-step (the identical lowered body wrapped in a per-level loop). This test a
   2) the AMR install SEAM (``set_program_cadence`` / ``set_program_params``) is reachable on a built
      ``_pops`` and validates its arguments (cadence >= 1; an unseeded program block rejects a set);
   3) (Kokkos-gated) ``compile_problem(..., layout=AMR(...))`` builds the .so and
-     ``AmrSystem.install_program`` INSTALLS it and one per-level macro-step RUNS. The bit-identical
+     ``AmrSystem.install_problem`` INSTALLS it and one per-level macro-step RUNS. The bit-identical
      parity vs System is test_amr_program_parity; the CUDA run is the ROMEO step.
 
 WHAT NEEDS WHICH RUNNER. (1) is pure Python (any interpreter with pops importable). (2) needs a built
@@ -152,11 +151,11 @@ def test_amr_program_seam_validates_arguments():
 
 def test_amr_install_program_end_to_end_kokkos():
     """(3) Kokkos-gated: compile_problem(target='amr_system') builds the .so and
-    AmrSystem.install_program installs it. The per-level AmrProgramContext driver (ADC-508) has landed,
+    AmrSystem.install_problem installs it. The per-level AmrProgramContext driver (ADC-508) has landed,
     so the install SUCCEEDS and one step RUNS over the hierarchy (the WHOLE loader path -- dlopen + ABI
     key + name binding + param seed + the per-level macro-step -- is wired). Self-skips without a
     compiler / Kokkos. The CUDA run is the ROMEO step; bit-identical parity is test_amr_program_parity."""
-    print("== AMR install_program installs + runs the per-level driver ==")
+    print("== AMR install_problem installs + runs the per-level driver ==")
     amr = pops.AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "_install_problem_so"):
         print("skip (_pops lacks AmrSystem._install_problem_so; rebuild _pops)")

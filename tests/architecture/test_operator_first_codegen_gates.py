@@ -63,6 +63,11 @@ def test_pcall_creates_call_node():
 
 def test_generated_cpp_calls_generated_module():
     """TASK-070: Program call lowering must route through GeneratedModule::Operators."""
+    template = _source(POPS / "codegen" / "program_emit_kernels.py")
+    assert "namespace GeneratedProgram" in template
+    assert "GeneratedProgram::step(ctx, dt, generated_program_body)" in template
+    assert "auto generated_program_body = [=](auto& ctx, double dt)" in template
+
     src = _call_branch_source()
     assert "GeneratedModule::Operators::%s" in src
     assert "operator_function_name" in src

@@ -558,7 +558,7 @@ class SystemStepper {
     // winning reason (see apply_global_dt_bounds for the MPI deadlock-safety rationale).
     apply_global_dt_bounds(dt, &reason);
     // OPTIONAL compiled-Program dt bound (epic ADC-399 / ADC-417, spec s18). When the installed Program
-    // exported one (System::install_program stored program_dt_bound_), it TIGHTENS dt to the min of the
+    // exported one (System::install_problem stored program_dt_bound_), it TIGHTENS dt to the min of the
     // native CFL dt above and the program's own bound. No program / no bound -> the closure is empty and
     // dt is the native CFL UNCHANGED. The native CFL logic above is left intact: this only reduces dt.
     // MPI-SAFE: program_dt_bound_ runs the SAME collective reduction (block_max_speed / reductions) on

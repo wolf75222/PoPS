@@ -295,7 +295,7 @@ class System {
                    double abs_tol = 0.0);
 
   /// Configured field (Poisson) solver token, e.g. "geometric_mg" | "fft" | "fft_spectral"
-  /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_program for the
+  /// (the @p solver of the last set_poisson; default "geometric_mg"). Read by install_problem for the
   /// Spec criterion-24 solver requirement check (a field operator that requires a named solver is
   /// rejected at install when the configured solver does not match) and exposed for introspection.
   std::string poisson_solver() const;
@@ -662,7 +662,7 @@ class System {
   /// program once per @p stride macro-steps with eff_dt = stride*dt (GLOBAL hold-then-catch-up, the
   /// clock still ticks every macro-step). Both must be >= 1 (throws std::invalid_argument otherwise).
   /// Default 1/1 -> byte-identical to a single program_step_(dt) call. Kept SEPARATE from
-  /// install_program so the generated .so ABI is untouched (the cadence is runtime metadata).
+  /// install_problem so the generated .so ABI is untouched (the cadence is runtime metadata).
   /// NOTE: substeps > 1 is bit-exact vs native substeps ONLY for an UNCOUPLED / transport-only program
   /// (program_step_ re-runs the whole program, solve_fields included); stride is GLOBAL (whole-system),
   /// equal to native per-block stride only for a single-block system. See SystemStepper::step.
@@ -674,7 +674,7 @@ class System {
   /// @name Compiled-Program NAME-based block binding (Spec 3 criterion 23, ADC-457)
   /// A compiled Program numbers its blocks in P.state declaration order (the .so's
   /// pops_program_block_name table); the System numbers its blocks in add_block / add_equation order
-  /// (block_names). They need NOT agree. install_program reads the .so's block names, matches each to
+  /// (block_names). They need NOT agree. install_problem reads the .so's block names, matches each to
   /// the System block of that name, and stores the resulting program-index -> system-index map here so
   /// ProgramContext::state / rhs_into / commit resolve a Program block index to the name-matched System
   /// block -- NOT the positional index. An EMPTY map is the identity (a single-block or order-matching
@@ -683,7 +683,7 @@ class System {
   /// POPS_EXPORT so the generated .so and ProgramContext resolve it via RTLD_GLOBAL.
   /// @{
   /// Install the program-index -> system-index map (entry p = the System block index of Program block
-  /// p). Empty clears it (identity). Set by install_program after matching the .so's block names.
+  /// p). Empty clears it (identity). Set by install_problem after matching the .so's block names.
   POPS_EXPORT void set_program_block_map(const std::vector<int>& prog_to_sys);
   /// The installed program-index -> system-index map (empty = identity). Read by ProgramContext.
   POPS_EXPORT const std::vector<int>& program_block_map() const;
@@ -799,12 +799,12 @@ class System {
   /// @p name is unknown (restore its slots first).
   POPS_EXPORT void set_history_initialized(const std::string& name, bool initialized);
   /// @}
-  /// Load a generated problem.so and install its compiled time Program. dlopens @p so_path, checks
-  /// its ABI key against this module (fail-loud on mismatch), and calls its pops_install_program(this),
-  /// which wraps the System in a ProgramContext and installs the macro-step closure. The .so resolves
-  /// the seam accessors above via the global scope (same self-promotion as the native loader). Mirrors
-  /// add_native_block; the .so stays loaded for the process lifetime.
-  POPS_EXPORT void install_program(const std::string& so_path);
+  /// Load a generated compiled-problem .so. dlopens @p so_path, checks its ABI key against this module
+  /// (fail-loud on mismatch), and calls the generated C ABI entry that wraps the System in a
+  /// ProgramContext and installs the macro-step closure. The .so resolves the seam accessors above via
+  /// the global scope (same self-promotion as the native loader). Mirrors add_native_block; the .so
+  /// stays loaded for the process lifetime.
+  POPS_EXPORT void install_problem(const std::string& so_path);
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
   /// a DIFFERENT compiled Program is rejected fail-loud (the buffers / cadence would be meaningless).
@@ -881,7 +881,7 @@ class System {
   /// changes it at run time WITHOUT recompiling -- the SAME no-recompile contract as the AOT-native
   /// set_block_params (the closure reads the System-owned current value each step, not a baked
   /// literal). Mirrors the program diagnostics / history rings: System-owned state the step closure
-  /// reaches through ProgramContext. install_program seeds each block's defaults from the .so
+  /// reaches through ProgramContext. install_problem seeds each block's defaults from the .so
   /// pops_program_param_* metadata. The lowered source / linear-source kernels read the CURRENT value
   /// via ProgramContext::program_params(block).get(index).
   /// @{
@@ -898,7 +898,7 @@ class System {
   /// the lowered per-cell source / linear-source kernels.
   POPS_EXPORT RuntimeParams program_params(int prog_block) const;
   /// Seed block @p prog_block's RuntimeParams to its DECLARATION defaults (@p count values, the .so
-  /// pops_program_param_default metadata), establishing the no-set baseline. Called by install_program
+  /// pops_program_param_default metadata), establishing the no-set baseline. Called by install_problem
   /// once per runtime-param Program block; a later set_program_params overwrites only the supplied
   /// values. Idempotent (re-seeding resets to defaults).
   POPS_EXPORT void seed_program_params(int prog_block, const std::vector<double>& defaults);

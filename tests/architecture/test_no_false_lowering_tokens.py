@@ -45,11 +45,6 @@ def _next_token(tokens, index, offset=1):
 
 def _is_private_native_bridge(path, token):
     rel = str(path.relative_to(REPO_ROOT))
-    if token == "install_program":
-        return rel in {
-            "python/pops/runtime/_system_unified_install.py",
-            "python/pops/runtime/_amr_system_program.py",
-        }
     if token == "solve_fields":
         return rel == "python/pops/runtime/_system_diagnostics.py"
     return False
@@ -79,7 +74,7 @@ def test_no_false_lowering_tokens():
                     offenders.append("%s:%d contains executable token linear_source(" % (rel, line))
                 if token == "P" and _next_token(tokens, i) == "." and _next_token(tokens, i, 2) == "rhs":
                     offenders.append("%s:%d contains executable token P.rhs" % (rel, line))
-                if token == "install_program" and not _is_private_native_bridge(path, token):
+                if token == "install_program":
                     offenders.append("%s:%d contains executable token install_program" % (rel, line))
                 if token == "add_equation" and _next_token(tokens, i) == "(":
                     offenders.append("%s:%d contains executable token add_equation(" % (rel, line))
@@ -105,7 +100,14 @@ def test_program_has_no_public_legacy_methods():
 
 def test_runtime_has_no_public_legacy_wiring_methods():
     """Runtime wiring is sim.install(compiled, ...), not public add_equation/install_program."""
-    forbidden = {"add_equation", "add_block", "install_program", "set_poisson", "set_param"}
+    forbidden = {
+        "add_equation",
+        "add_block",
+        "install_program",
+        "install_problem",
+        "set_poisson",
+        "set_param",
+    }
     offenders = []
     for path in _py_files("runtime"):
         for node in _defs(path):

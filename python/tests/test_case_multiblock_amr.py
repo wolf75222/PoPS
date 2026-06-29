@@ -153,7 +153,7 @@ class _RecordingAmrSystem(pops.AmrSystem):
     def set_density(self, name, initial):
         self.calls.append(("initial", name, initial))
 
-    def _finish_program_install(self, compiled, so_path, params, cadence):
+    def _finish_problem_install(self, compiled, so_path, params, cadence):
         self.calls.append(("program", so_path, dict(params), cadence, compiled))
 
 

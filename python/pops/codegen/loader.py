@@ -285,7 +285,7 @@ class CompiledProblem:
 
         EXPOSES the lowered schedule WITHOUT running it: the committed blocks in the runtime block
         index order (``_block_indices``: the order the Program first declares each block via
-        ``P.state``, the order ``install_program`` binds them), each with the IR id of its committed
+        ``P.state``, the order ``install_problem`` binds them), each with the IR id of its committed
         State value. A plain, deterministic text listing. Writes to @p path if given (returns the
         path), else returns the string. Raises a clear error if this handle carries no Program."""
         program = self._require_program("dump_schedule")
@@ -318,7 +318,7 @@ class CompiledProblem:
         """STATIC AMR report on this compiled artifact (Spec 5 sec.8.12 / sec.8.4).
 
         A compiled time ``Program`` carries NO AMR layout descriptor (it lowers a whole-system time
-        program, a single-level ``System`` concept today -- ``AmrSystem`` has no ``install_program``
+        program, a single-level ``System`` concept today -- ``AmrSystem`` has no ``install_problem``
         seam). So this delegates to the top-level :func:`pops.inspect_amr` on an EXPLICIT ``layout``
         argument (an ``pops.mesh.layouts.AMR`` / ``Uniform`` descriptor), and with ``layout=None``
         returns the native AMR envelope report -- never a fabricated hierarchy the artifact does not

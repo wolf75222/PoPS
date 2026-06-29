@@ -68,11 +68,11 @@ class _SystemUnifiedInstall:
     def _install_problem_so(self, so_path):
         """Install a combined compiled-problem shared object through the native runtime.
 
-        The C++ binding still exposes the low-level symbol as ``install_program`` because the native
-        closure executes the generated ProgramContext. Python does not expose that route publicly:
-        this wrapper is the private compiled-problem loader used by ``sim.install``.
+        This wrapper is the private compiled-problem loader used by ``sim.install``. The generated
+        shared object may still export the historical C ABI symbol it was built around, but the
+        Python/native binding seam is a compiled-problem attach, not a public Program route.
         """
-        return self._s.install_program(so_path)
+        return self._s.install_problem(so_path)
 
     def install(self, compiled=None, *, instances=None, params=None, aux=None,
                 solvers=None, cadence=None, outputs=None):

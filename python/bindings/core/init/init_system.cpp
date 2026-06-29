@@ -100,12 +100,12 @@ void init_system(py::module_& m) {
            py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
            py::arg("substeps") = 1, py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("positivity_floor") = 0.0)
-      // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
-      // ABI key against this module (fail-loud -> RuntimeError), and install its macro-step body. The
-      // block(s) must already exist (add_equation); the Program drives sim.step(dt) via ProgramContext.
-      .def("install_program", &System::install_program, py::arg("so_path"))
+      // Compiled problem artifact: dlopen a generated problem.so, verify its ABI key against this
+      // module (fail-loud -> RuntimeError), and install its macro-step body. The block(s) are wired by
+      // the Python sim.install seam before this private native attach.
+      .def("install_problem", &System::install_problem, py::arg("so_path"))
       // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the
-      // installed program closure (cf. SystemStepper::step). Separate from install_program so the .so
+      // installed program closure (cf. SystemStepper::step). Separate from install_problem so the .so
       // ABI is untouched; CompiledTime(substeps=, stride=) threads through here. Both must be >= 1.
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
            py::arg("stride"))
@@ -113,7 +113,7 @@ void init_system(py::module_& m) {
       // none. sim.checkpoint records it; sim.restart rejects a restart against a DIFFERENT Program.
       .def("installed_program_hash", &System::installed_program_hash)
       // ADC-466 (Spec criterion 24): configured field (Poisson) solver token (the last set_poisson
-      // solver, default "geometric_mg"). install_program reads it to validate a field operator's
+      // solver, default "geometric_mg"). install_problem reads it to validate a field operator's
       // solver requirement; exposed so the unified sim.install can pre-validate host-side too.
       .def("poisson_solver", &System::poisson_solver)
       // ADC-414 (spec op 23): scalar diagnostics a compiled Program records via P.record_scalar,

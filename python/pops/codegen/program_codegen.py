@@ -100,7 +100,7 @@ def _emit_block_names(program):
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
     ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
     ``_block_indices`` order (P.state declaration order, the order the step body's ``ctx.state(idx)``
-    addresses). System::install_program reads them, matches each to the instantiated System block of
+    addresses). System::install_problem reads them, matches each to the instantiated System block of
     that name, and stores the program-index -> system-index map (read by ProgramContext), so the
     System blocks may be added in ANY order vs the Program's P.state declarations -- a Program block
     whose name has no System block fails loud. The block names are also part of the IR identity (the
@@ -110,7 +110,7 @@ def _emit_block_names(program):
     cases = "".join('    case %d: return %s;\n' % (order[nm], json.dumps(nm)) for nm in names)
     return (
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
-        "// P.state declaration order. install_program matches each to a System block BY NAME (not\n"
+        "// P.state declaration order. install_problem matches each to a System block BY NAME (not\n"
         "// add-order) and builds the program-index -> system-index map ProgramContext resolves.\n"
         'extern "C" int pops_program_block_count() { return %d; }\n' % len(names) +
         'extern "C" const char* pops_program_block_name(int i) {\n'

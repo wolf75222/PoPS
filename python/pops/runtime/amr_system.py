@@ -301,8 +301,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
 
         # (5/5b/6) COMPILED problem: attach the artifact on the AMR hierarchy, route runtime params
         # and apply the global cadence (or reject params= / cadence= on a NATIVE install). Extracted
-        # into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
-        self._finish_program_install(compiled, so_path, params, cadence)
+        # into the _AmrSystemProgram mixin (_finish_problem_install) to keep this module small.
+        self._finish_problem_install(compiled, so_path, params, cadence)
         if outputs:
             self._output_policies = list(outputs)
 
@@ -460,6 +460,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         forbidden = {
             "add_block",
             "add_equation",
+            "install_problem",
             "install_program",
             "initialize_compiled_program",
             "set_program_cadence",

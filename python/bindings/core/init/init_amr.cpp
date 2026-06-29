@@ -257,15 +257,15 @@ void init_amr(py::module_& m) {
       // the regrid/stride cadence resumes exactly after a set_clock. Prerequisite PR-IO-3.
       .def("macro_step", &AmrSystem::macro_step)
       .def("set_clock", &AmrSystem::set_clock, py::arg("t"), py::arg("macro_step"))
-      // Compiled time Program on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6): dlopen a generated
-      // problem.so (target='amr_system'), verify its ABI key, run the section-24 requirement validation
-      // (block instance / solver), bind the Program blocks by name, seed the runtime params, and install
-      // the per-level Lie/Strang macro-step body. The block(s) must already exist (add_equation). cf.
-      // AmrSystem::install_program (the AMR counterpart of System::install_program).
-      .def("install_program", &AmrSystem::install_program, py::arg("so_path"))
+      // Compiled problem artifact on the AMR hierarchy (epic ADC-511 / ADC-508, Spec 6): dlopen a
+      // generated problem.so (target='amr_system'), verify its ABI key, run the section-24 requirement
+      // validation (block instance / solver), bind the Program blocks by name, seed the runtime params,
+      // and install the per-level Lie/Strang macro-step body. The block(s) are wired by the Python
+      // sim.install seam before this private native attach.
+      .def("install_problem", &AmrSystem::install_problem, py::arg("so_path"))
       // Compiled-Program macro-step cadence (parity System::set_program_cadence, ADC-411): GLOBAL
       // substeps + stride around the installed program closure. Both must be >= 1. Separate from
-      // install_program so the .so ABI is untouched; CompiledTime(substeps=, stride=) threads here.
+      // install_problem so the .so ABI is untouched; CompiledTime(substeps=, stride=) threads here.
       .def("set_program_cadence", &AmrSystem::set_program_cadence, py::arg("substeps"),
            py::arg("stride"))
       // Changes the RUNTIME parameters of a compiled time PROGRAM block WITHOUT recompiling the .so

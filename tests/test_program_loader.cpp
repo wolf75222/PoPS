@@ -1,10 +1,10 @@
-// Compiled time-program LOADER path (epic ADC-399 / ADC-401 Phase 2c-i): System::install_program
+// Compiled problem loader path (epic ADC-399 / ADC-401 Phase 2c-i): System::install_problem
 // dlopens a generated problem.so and installs its compiled time Program across the ABI boundary.
 //
 // We compile AT RUNTIME a stub problem.so -- the role the codegen (Phase 2c-ii) will fill -- that
 // exports pops_program_abi_key() + pops_install_program(void* sys); the installer wraps the System in a
 // ProgramContext and installs the SAME Forward-Euler closure as the in-process test_program_runtime.
-// We then sim.install_program(so) + sim.step(dt) and check bit-parity against a reference Forward-Euler
+// We then sim.install_problem(so) + sim.step(dt) and check bit-parity against a reference Forward-Euler
 // step computed from the same primitives (solve_fields + eval_rhs + U + dt*R). This validates the
 // dlopen + ABI-key guard + RTLD_GLOBAL resolution of the seam accessors, end to end.
 //
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
   for (std::size_t k = 0; k < Uref.size(); ++k)
     Uref[k] = U0[k] + dt * R0[k];
 
-  // Compile the stub problem.so and load it via System::install_program.
+  // Compile the stub problem.so and load it via System::install_problem.
   const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/program_loader_" +
                           std::to_string(static_cast<long>(std::clock()));
   const std::string src = tmp + ".cpp";
@@ -165,7 +165,7 @@ int main(int argc, char** argv) {
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
-  sim.install_program(so);  // dlopen + ABI check + pops_install_program(this)
+  sim.install_problem(so);  // dlopen + ABI check + generated C ABI attach
   const int step0 = sim.macro_step();
   sim.step(dt);  // SystemStepper dispatches to the installed Program
   const std::vector<double> Up = sim.get_state("gas");
@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
 
   if (fails == 0)
     std::printf(
-        "OK test_program_loader (problem.so Forward Euler via install_program == reference; "
+        "OK test_program_loader (problem.so Forward Euler via install_problem == reference; "
         "max|d| = %.2e, change = %.2e)\n",
         err, change);
   return fails ? 1 : 0;

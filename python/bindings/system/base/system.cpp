@@ -167,7 +167,7 @@ struct System::Impl {
   std::function<void(double)>
       program_step_;  // compiled time Program macro-step body (ADC-399); empty = historical path
   // OPTIONAL compiled-Program dt bound (epic ADC-399 / ADC-417, spec s18). When a generated .so exports
-  // pops_program_has_dt_bound() == true, install_program stores a closure here that runs the .so's
+  // pops_program_has_dt_bound() == true, install_problem stores a closure here that runs the .so's
   // lowered dt_bound expression (a scalar reading state + reductions / hmin / max_wave_speed) for a
   // given cfl. step_cfl then tightens dt to min(native CFL dt, program dt bound). Empty = no program dt
   // bound -> the native CFL is used UNCHANGED. Referenced by SystemStepper::step_cfl (so the MockImpl in
@@ -180,12 +180,12 @@ struct System::Impl {
   int program_substeps_ = 1;
   int program_stride_ = 1;
   // IR hash of the installed compiled Program (the .so's pops_program_hash, ADC-406b). Empty until
-  // install_program records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
+  // install_problem records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
   // Program is rejected fail-loud (mismatched buffers / cadence would be meaningless).
   std::string installed_program_hash_;
   // NAME-BASED block binding (Spec 3 criterion 23, ADC-457): program-index -> system-index map. entry
   // p holds the System block index that the Program's block p (in P.state declaration order) names.
-  // Built by install_program from the .so's pops_program_block_name table; read by ProgramContext to
+  // Built by install_problem from the .so's pops_program_block_name table; read by ProgramContext to
   // resolve a Program block index to the name-matched System block. EMPTY = identity (single-block /
   // order-matching Program, or a ProgramContext built directly in a C++ test). Not referenced by
   // SystemStepper -> no MockImpl impact (like program_diagnostics_ / installed_program_hash_).
@@ -197,7 +197,7 @@ struct System::Impl {
   std::map<std::string, Real> program_diagnostics_;
   // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5): program-block index -> current
   // RuntimeParams of a compiled time Program that reads a dsl.Param(..., kind="runtime"). Seeded to
-  // the declaration defaults by install_program (the .so pops_program_param_* metadata) and overwritten
+  // the declaration defaults by install_problem (the .so pops_program_param_* metadata) and overwritten
   // at run time by set_program_params -- the installed step closure reads the CURRENT value through
   // ProgramContext::program_params each step (no recompile, the AOT-native set_block_params contract,
   // mirrored for the Program). Lives HERE (not in the .so) so the value change reaches the captured
@@ -2044,7 +2044,7 @@ void System::install_program_step(std::function<void(double)> step) {
   p_->program_step_ = std::move(step);
 }
 // Compiled-Program macro-step cadence (ADC-411): SYSTEM-level substeps + stride around the installed
-// program closure (cf. SystemStepper::step). Kept separate from install_program so the .so ABI is
+// program closure (cf. SystemStepper::step). Kept separate from install_problem so the .so ABI is
 // untouched. Validates substeps >= 1 && stride >= 1 (fail-loud: a non-positive cadence is meaningless).
 void System::set_program_cadence(int substeps, int stride) {
   if (substeps < 1)
@@ -2293,17 +2293,17 @@ void System::set_history_initialized(const std::string& name, bool initialized) 
   it->second = initialized;
 }
 
-// Load a generated problem.so and install its compiled time Program. Mirrors add_native_block
-// (native_loader.hpp): self-promote this module to the global scope so the .so resolves the System
-// seam accessors (POPS_EXPORT) against it, dlopen, fail-loud on ABI-key mismatch, then call
-// pops_install_program(this) which wraps the System in a ProgramContext and installs the macro-step
-// closure. The .so stays loaded for the process lifetime (the closure runs every step).
-POPS_EXPORT void System::install_program(const std::string& so_path) {
+// Load a generated compiled-problem .so. Mirrors add_native_block (native_loader.hpp): self-promote
+// this module to the global scope so the .so resolves the System seam accessors (POPS_EXPORT) against
+// it, dlopen, fail-loud on ABI-key mismatch, then call the generated C ABI entry which wraps the
+// System in a ProgramContext and installs the macro-step closure. The .so stays loaded for the
+// process lifetime (the closure runs every step).
+POPS_EXPORT void System::install_problem(const std::string& so_path) {
 #if defined(_WIN32)
   // Windows: the generated .dll links against _pops.lib at compile time; no global promotion needed.
   pops::dynlib::handle h = pops::dynlib::open(so_path);
   if (!h) {
-    throw std::runtime_error("System::install_program: LoadLibrary('" + so_path +
+    throw std::runtime_error("System::install_problem: LoadLibrary('" + so_path +
                              "'): " + pops::dynlib::last_error());
   }
 #else
@@ -2319,7 +2319,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   if (!h) {
     const char* e = dlerror();
     throw std::runtime_error(
-        "System::install_program: dlopen('" + so_path + "'): " + std::string(e ? e : "?") +
+        "System::install_problem: dlopen('" + so_path + "'): " + std::string(e ? e : "?") +
         " (the pops::System seam accessors must be exported AND the module loaded "
         "globally; cf. POPS_EXPORT)");
   }
@@ -2327,7 +2327,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   auto key_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_abi_key"));
   if (!key_fn) {
     pops::dynlib::close(h);
-    throw std::runtime_error("System::install_program: pops_program_abi_key missing from '" +
+    throw std::runtime_error("System::install_problem: pops_program_abi_key missing from '" +
                              so_path +
                              "' (regenerate the problem module with the current pops headers)");
   }
@@ -2336,7 +2336,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   if (loader_key != module_key) {
     pops::dynlib::close(h);
     throw std::runtime_error(
-        "System::install_program: compiled program ABI mismatch: expected '" + module_key +
+        "System::install_problem: compiled problem ABI mismatch: expected '" + module_key +
         "', got '" + loader_key +
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "pops headers as the _pops module.");
@@ -2344,7 +2344,7 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
   auto install = reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program"));
   if (!install) {
     pops::dynlib::close(h);
-    throw std::runtime_error("System::install_program: pops_install_program missing from '" +
+    throw std::runtime_error("System::install_problem: generated install entry missing from '" +
                              so_path + "'");
   }
 #if !defined(_WIN32)
@@ -2374,9 +2374,9 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
         if (!p_->fields_.provides_aux(aux)) {
           pops::dynlib::close(h);
           throw std::runtime_error(
-              "System::install_program: operator '" + op.name + "' requires aux field '" + aux +
+              "System::install_problem: operator '" + op.name + "' requires aux field '" + aux +
               "', but simulation did not provide it (B_z -> set_magnetic_field, T_e -> "
-              "set_electron_temperature_from, before install_program)");
+              "set_electron_temperature_from, before sim.install)");
         }
       }
       // (b) BLOCK-INSTANCE requirements (ADC-466, Spec criterion 24): an operator that reads another
@@ -2547,12 +2547,12 @@ void System::restore_program_cache(int node_id, int ncomp, int ngrow, int last_u
                                   static_cast<Real>(accumulated_dt), name);
 }
 // Configured field (Poisson) solver token, owned by SystemFieldSolver (p_solver, default
-// "geometric_mg"). Read by install_program (Spec criterion 24, solver requirement) and exposed for
+// "geometric_mg"). Read by install_problem (Spec criterion 24, solver requirement) and exposed for
 // introspection. Returns the last set_poisson solver, never empty (the default stands).
 std::string System::poisson_solver() const {
   return p_->fields_.p_solver;
 }
-// NAME-based block binding seam (Spec 3 criterion 23, ADC-457). install_program builds the map after
+// NAME-based block binding seam (Spec 3 criterion 23, ADC-457). install_problem builds the map after
 // matching the .so's block names; ProgramContext reads it to translate a Program block index to the
 // name-matched System block index. POPS_EXPORT: resolved by the generated .so across the dlopen boundary.
 void System::set_program_block_map(const std::vector<int>& prog_to_sys) {
@@ -2586,7 +2586,7 @@ std::map<std::string, Real> System::program_diagnostics() const {
 // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5). Seed/overwrite/read the per-PROGRAM-block
 // RuntimeParams the installed step closure reads through ProgramContext::program_params. The store
 // lives in Impl so a value change reaches the captured ctx -- the no-recompile contract mirrored from
-// the AOT-native set_block_params (shared vector). install_program seeds the defaults; Python's
+// the AOT-native set_block_params (shared vector). install_problem seeds the defaults; Python's
 // _install_params overwrites the supplied values (validated against the .so param-name metadata).
 void System::seed_program_params(int prog_block, const std::vector<double>& defaults) {
   RuntimeParams rp;

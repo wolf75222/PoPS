@@ -48,6 +48,7 @@ def test_active_docs_do_not_advertise_removed_public_front_doors():
         "pops.FiniteVolume",
         "pops.Spatial",
         "case.block(",
+        "install_problem",
         "add_equation",
         "install_program",
         "CompiledTime",

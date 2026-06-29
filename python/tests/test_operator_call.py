@@ -89,6 +89,9 @@ def test_call_predictor_records_operator_nodes_and_lowers():
                 "operator", "operator_id", "operator_handle", "output_type", "output_vtype"}
     src = P.emit_cpp_program(model=m)
     assert "namespace GeneratedModule" in src
+    assert "namespace GeneratedProgram" in src
+    assert "auto generated_program_body = [=](auto& ctx, double dt)" in src
+    assert "GeneratedProgram::step(ctx, dt, generated_program_body);" in src
     assert "GeneratedModule::Operators::fields_from_state" in src
     assert "GeneratedModule::Operators::explicit_rhs" in src
     assert _generated_call(m, "fields_from_state") + "(ctx, 0," in src

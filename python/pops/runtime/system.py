@@ -226,6 +226,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         forbidden = {
             "add_block",
             "add_equation",
+            "install_problem",
             "install_program",
             "initialize_compiled_program",
             "set_program_cadence",

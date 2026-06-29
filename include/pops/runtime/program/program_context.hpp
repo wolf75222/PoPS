@@ -179,7 +179,7 @@ class ProgramContext {
   }
 
   /// Translate a PROGRAM block index @p b (P.state declaration order, what the codegen emits) to the
-  /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_program stored the map after
+  /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_problem stored the map after
   /// matching the .so's block names to the instantiated System blocks; an EMPTY map is the identity
   /// (single-block / order-matching Program, or a ProgramContext built directly in a C++ test), so the
   /// historical positional convention is byte-identical. Every seam method taking a block index routes
@@ -679,7 +679,7 @@ class ProgramContext {
   /// reads via ``params.get(<index>)``. The codegen binds ``const pops::RuntimeParams params =
   /// ctx.program_params(<b>);`` ONCE per fab (outside the per-cell loop), then the device lambda
   /// captures it by value -- trivially copyable, device-clean, ``get()`` is POPS_HD. @p b is the
-  /// PROGRAM block index (P.state declaration order, the index install_program seeded), NOT routed
+  /// PROGRAM block index (P.state declaration order, the index install_problem seeded), NOT routed
   /// through sys_block: the System keys the store by program index, the same index Python's params
   /// route writes via set_program_params. A block with no runtime param returns a default
   /// RuntimeParams (count 0). Forwards to System::program_params; the value reflects the LATEST

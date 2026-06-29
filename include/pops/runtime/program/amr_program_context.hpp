@@ -53,12 +53,12 @@ class AmrProgramContext {
  public:
   /// Wrap an AmrSystem passed as a flat void* (what pops_install_program_amr(void* sys) receives). The
   /// ctor pulls the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR
-  /// blocks must be materialized -- install_program forces the build before install()).
+  /// blocks must be materialized -- install_problem forces the build before install()).
   explicit AmrProgramContext(void* sys)
       : facade_(static_cast<AmrSystem*>(sys)), eng_(facade_->engine()) {
     if (eng_ == nullptr)
       throw std::runtime_error(
-          "AmrProgramContext: the AMR runtime engine is not built; install_program must force the "
+          "AmrProgramContext: the AMR runtime engine is not built; install_problem must force the "
           "multi-block AmrRuntime build before installing a compiled time Program over the hierarchy");
   }
   /// Direct ctor (C++ tests / the driver): an engine + the facade carrying the param / block-map stores.

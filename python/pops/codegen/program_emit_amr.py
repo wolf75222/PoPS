@@ -10,7 +10,7 @@ def _emit_amr_install(program, target, prelude, body):
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
-    ``target='amr_system'`` emits ``pops_install_program_amr``, the entry ``AmrSystem::install_program``
+    ``target='amr_system'`` emits ``pops_install_program_amr``, the native AMR compiled-problem loader
     resolves (it dlopens the .so, validates the ABI key + section-24 requirements, binds the blocks by
     name, seeds the runtime params, then calls this). It constructs an ``AmrProgramContext`` (the AMR
     counterpart of ``ProgramContext``, a DUCK-TYPED structural mirror) over the ``AmrSystem`` and installs
@@ -32,7 +32,7 @@ def _emit_amr_install(program, target, prelude, body):
     return (
         '\n#include <pops/runtime/program/amr_program_context.hpp>  // AmrProgramContext (the AMR driver, ADC-508)\n'
         '// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target=\'amr_system\' counterpart\n'
-        '// of pops_install_program. AmrSystem::install_program resolves + calls it after binding the\n'
+        '// of pops_install_program. The native AMR compiled-problem loader resolves + calls it after binding the\n'
         '// blocks by name and seeding the runtime params. It constructs an AmrProgramContext (the AMR\n'
         '// mirror of ProgramContext) and installs the SYNCHRONOUS per-level macro-step driver: the SAME\n'
         '// lowered body, wrapped in a per-level loop (the body references only ctx, never the type, so\n'
@@ -41,13 +41,17 @@ def _emit_amr_install(program, target, prelude, body):
         'extern "C" void pops_install_program_amr(void* sys) {\n'
         '  pops::runtime::program::AmrProgramContext ctx(sys);\n'
         + prelude +
-        '\n  ctx.install([=](double dt) {\n'
+        '\n  auto generated_program_body = [=](auto& ctx, double dt) {\n'
+        '    (void)dt;\n'
+        + body +
+        '\n  };\n'
+        '  ctx.install([=](double dt) {\n'
         '    ctx.reset_step();                       // clear the once-per-step solve_fields guard\n'
         '    ctx.regrid_if_due(ctx.macro_step());    // head-of-step union-tags regrid (engine cadence)\n'
         '    const int _nlev = ctx.nlev();\n'
         '    for (int _k = 0; _k < _nlev; ++_k) {\n'
         '      ctx.set_level(_k);                     // the body addresses block b at the CURRENT level\n'
-        + body +
+        '      GeneratedProgram::step(ctx, dt, generated_program_body);\n'
         '\n    }\n'
         '    ctx.couple_levels();                     // (B) fine->coarse average_down (v1: no reflux)\n'
         '  });\n'

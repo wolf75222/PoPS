@@ -279,7 +279,7 @@ def _emit_where_kernel(mask_var, a_var, b_var, out_var):
 
 # Source of a generated problem.so. The includes + pops_install_program closure match the shape
 # tests/test_program_loader compiles+runs in CI; pops_program_hash is added per the spec .so ABI (a
-# cache/restart key) and is not yet consumed by System::install_program. {name} is a JSON-escaped C
+# cache/restart key) and is not yet consumed by System::install_problem. {name} is a JSON-escaped C
 # string literal, {hash} the IR hash, {prelude} the INSTALL-TIME C++ (persistent scratch + matrix-free
 # apply lambdas, captured into the step closure by [=]), {body} the step-closure body (both already
 _PROGRAM_CPP_TEMPLATE = '''\
@@ -309,12 +309,22 @@ extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 {module_metadata}
 {module_operators}
 {program_params}
+namespace GeneratedProgram {{
+template <typename Context, typename StepBody>
+inline void step(Context& ctx, double dt, const StepBody& body) {{
+  body(ctx, dt);
+}}
+}}  // namespace GeneratedProgram
+
 extern "C" void pops_install_program(void* sys) {{
   pops::runtime::program::ProgramContext ctx(sys);
 {prelude}
-  ctx.install([=](double dt) {{
+  auto generated_program_body = [=](auto& ctx, double dt) {{
     (void)dt;
 {body}
+  }};
+  ctx.install([=](double dt) {{
+    GeneratedProgram::step(ctx, dt, generated_program_body);
   }});
 }}
 {amr_install}
