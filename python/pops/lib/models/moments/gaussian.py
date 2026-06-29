@@ -2,7 +2,7 @@
 
 A minimal provided moment model: a generic-order Cartesian-velocity hierarchy closed by
 the Gaussian / Levermore closure, with optional transport-only or Vlasov-Poisson coupling.
-A PURE composition of the Spec-4 moment facade -- no ``custom.py``.
+A pure composition of public moment descriptors.
 """
 from pops.moments import CartesianVelocityMoments, VlasovElectricSource
 from pops.moments.closures import gaussian_closure
@@ -12,7 +12,7 @@ class Gaussian:
     """The provided Gaussian-closure moment models."""
 
     @staticmethod
-    def transport(order=2, *, robust=True, exact_speeds=True, roe=False):
+    def transport(order=2, *, robust=True, exact_speeds=False, roe=False):
         """A transport-only Gaussian-closure moment model (no coupling, no source).
 
         @p order: the moment order (order=2 -> 6 vars, order=4 -> 15). Returns a public
@@ -24,7 +24,7 @@ class Gaussian:
                 .build(name="gaussian"))
 
     @staticmethod
-    def vlasov_poisson(order=2, *, robust=True, exact_speeds=True, roe=False,
+    def vlasov_poisson(order=2, *, robust=True, exact_speeds=False, roe=False,
                        q_over_m="q_over_m", eps=1.0):
         """A Vlasov-Poisson Gaussian-closure moment model (electric source, no magnetic term).
 

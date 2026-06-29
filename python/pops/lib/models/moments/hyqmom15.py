@@ -1,8 +1,8 @@
 """pops.lib.models.moments.hyqmom15 -- the provided HyQMOM15 moment model.
 
 HyQMOM15 is the 15-variable order-4 2D moment hierarchy. The provided builder composes
-the Spec-4 moment facade into the Vlasov-Poisson-magnetic model used by the diocotron /
-column reference cases. It is a PURE composition of the facade -- no ``custom.py``.
+the moment facade into a generic Vlasov-Poisson model with an optional magnetic
+rotation source. It is a pure composition of public moment descriptors.
 """
 from pops.moments import (CartesianVelocityMoments, VlasovElectricSource,
                           MagneticRotationSource)

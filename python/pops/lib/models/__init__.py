@@ -1,13 +1,10 @@
-"""pops.lib.models -- provided physical models (pure facade compositions).
+"""Provided physical model compositions.
 
-Currently the moment models (:class:`pops.lib.models.moments.HyQMOM15` /
-:class:`pops.lib.models.moments.Gaussian`).
-
-DEFER (no generator to wrap): ``lib.models.fluids`` (Euler / IsothermalEuler) and
-``lib.models.mhd`` (IdealMHD) -- there is no ``build_euler`` / ``build_mhd`` generator in
-``physics``, so a model package there would invent surface (see the PR-D blueprint DEFER
-list). They land when a fluids/mhd generator does.
+``pops.lib.models`` contains ready-to-use model builders assembled from the public
+authoring facades. Generic construction tools live outside ``pops.lib``.
 """
+from .fluids import Euler, Isothermal
+from .mhd import IdealMHD
 from .moments import HyQMOM15, Gaussian
 
-__all__ = ["HyQMOM15", "Gaussian"]
+__all__ = ["Euler", "Isothermal", "IdealMHD", "HyQMOM15", "Gaussian"]
