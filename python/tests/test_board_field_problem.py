@@ -15,6 +15,7 @@ import pytest
 physics = pytest.importorskip("pops.physics")
 amath = pytest.importorskip("pops.math")
 fields = pytest.importorskip("pops.fields")
+elliptic_solvers = pytest.importorskip("pops.solvers.elliptic")
 
 
 def _model_with_state():
@@ -35,7 +36,7 @@ def test_field_problem_returns_an_inspectable_poisson_problem():
         "poisson",
         equation=(-laplacian(phi) == rho),
         outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-        solver="geometric_mg")
+        solver=elliptic_solvers.GeometricMG())
     assert isinstance(prob, fields.PoissonProblem)
     # The equation / solver / outputs inspect correctly off the returned descriptor.
     info = prob.inspect()
@@ -50,7 +51,8 @@ def test_field_problem_validates_and_is_available_with_a_solver():
 
     m, U, phi = _model_with_state()
     rho, mx, my = U
-    prob = m.field_problem("poisson", equation=(-laplacian(phi) == rho), solver="geometric_mg")
+    prob = m.field_problem("poisson", equation=(-laplacian(phi) == rho),
+                           solver=elliptic_solvers.GeometricMG())
     assert prob.validate() is True
     assert prob.available().ok
 
@@ -74,7 +76,7 @@ def test_field_problem_carries_bcs():
     rho, mx, my = U
     wall = fields.bcs.Dirichlet(value=0.0)
     prob = m.field_problem("poisson", equation=(-laplacian(phi) == rho),
-                           solver="geometric_mg", bcs=[wall])
+                           solver=elliptic_solvers.GeometricMG(), bcs=[wall])
     assert prob.bcs == (wall,)
     assert prob.options()["n_bcs"] == 1
 
@@ -86,7 +88,8 @@ def test_field_problem_with_coefficients_is_a_field_problem():
     m, U, phi = _model_with_state()
     rho, mx, my = U
     prob = m.field_problem("screened", equation=(-laplacian(phi) == rho),
-                           solver="geometric_mg", coefficients=ScalarCoefficient("eps"))
+                           solver=elliptic_solvers.GeometricMG(),
+                           coefficients=ScalarCoefficient("eps"))
     # With coefficients present the descriptor is the general FieldProblem (not a PoissonProblem).
     assert isinstance(prob, fields.FieldProblem)
     assert not isinstance(prob, fields.PoissonProblem)
@@ -96,7 +99,28 @@ def test_field_problem_with_coefficients_is_a_field_problem():
 def test_field_problem_rejects_a_non_equation():
     m, U, phi = _model_with_state()
     with pytest.raises(TypeError):
-        m.field_problem("poisson", equation="-laplacian(phi) == rho", solver="geometric_mg")
+        m.field_problem("poisson", equation="-laplacian(phi) == rho",
+                        solver=elliptic_solvers.GeometricMG())
+
+
+def test_field_problem_rejects_string_solver():
+    from pops.math import laplacian
+
+    m, U, phi = _model_with_state()
+    rho, mx, my = U
+    with pytest.raises(TypeError, match="GeometricMG"):
+        m.field_problem("poisson", equation=(-laplacian(phi) == rho),
+                        solver="geometric_mg")
+
+
+def test_solve_field_rejects_string_solver():
+    from pops.math import laplacian
+
+    m, U, phi = _model_with_state()
+    rho, mx, my = U
+    with pytest.raises(TypeError, match="GeometricMG"):
+        m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho),
+                      solver="geometric_mg")
 
 
 def test_model_inspect_surfaces_the_field_problem():
@@ -104,7 +128,8 @@ def test_model_inspect_surfaces_the_field_problem():
 
     m, U, phi = _model_with_state()
     rho, mx, my = U
-    m.field_problem("poisson", equation=(-laplacian(phi) == rho), solver="geometric_mg")
+    m.field_problem("poisson", equation=(-laplacian(phi) == rho),
+                    solver=elliptic_solvers.GeometricMG())
     snapshot = m.inspect()
     assert snapshot["name"] == "plasma"
     assert "U" in snapshot["states"]
@@ -120,8 +145,9 @@ def test_field_problem_does_not_perturb_the_dsl_elliptic_rhs():
 
     m, U, phi = _model_with_state()
     rho, mx, my = U
-    m.field_problem("poisson", equation=(-laplacian(phi) == rho), solver="geometric_mg")
-    assert m.dsl._m._elliptic is None
+    m.field_problem("poisson", equation=(-laplacian(phi) == rho),
+                    solver=elliptic_solvers.GeometricMG())
+    assert m._dsl._m._elliptic is None
 
 
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this

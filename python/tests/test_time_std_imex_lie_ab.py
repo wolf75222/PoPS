@@ -3,9 +3,9 @@
 
 All three LOWER to the existing Program IR (no new C++ stepper):
 
-  - ``std.imex_local`` = explicit flux/source (P.rhs) + IMPLICIT cell-local linear source
+  - ``std.imex_local`` = typed explicit rate operator + typed IMPLICIT cell-local linear operator
     ((I - theta*dt*L)^{-1} via P.solve_local_linear), the predictor half of the codebase's
-    predictor-corrector pattern;
+    predictor-corrector pattern, without source/flux/linear-source string selectors;
   - ``std.lie`` = sequential Lie splitting H(dt); S(dt) (the `strang` sibling with no half-steps);
   - ``std.adams_bashforth(order)`` = the explicit AB1/AB2/AB3 recurrence over the System history ring.
 
@@ -19,6 +19,7 @@ All three LOWER to the existing Program IR (no new C++ stepper):
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+import pytest
 import sys
 
 
@@ -33,7 +34,13 @@ def _pops_time():
     return t
 
 
+@pytest.fixture
+def t():
+    return _pops_time()
+
+
 _C = 0.75  # AB linear-source coefficient: S(rho) = _C*rho
+_BZ = 3.0  # IMEX Lorentz coefficient for the typed-macro test.
 
 
 # ---------- shared DSL models (compiled only in section B) ----------
@@ -74,7 +81,8 @@ def _lorentz_model(name):
     """Isothermal 2D fluid (rho, mx, my) with a Lorentz linear source L(B_z) -- for imex_local.
 
     ZERO flux so the explicit RHS is the default source only (here: none), isolating the implicit
-    Lorentz solve; B_z is read off the System aux. A complete compilable production block."""
+    Lorentz solve. The coefficient is constant in this test so the operator signature needs no
+    FieldContext; aux-dependent operator signatures are covered by the operator-first registry tests."""
     from pops.physics.facade import Model
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
@@ -86,45 +94,55 @@ def _lorentz_model(name):
     m.conservative_from([rho, rho * u, rho * v])
     m.flux(x=[0.0 * rho, 0.0 * rho, 0.0 * rho], y=[0.0 * rho, 0.0 * rho, 0.0 * rho])
     m.eigenvalues(x=[0.0 * rho, 0.0 * rho, 0.0 * rho], y=[0.0 * rho, 0.0 * rho, 0.0 * rho])
-    bz = m.aux("B_z")
     m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
+                                [0.0, 0.0, _BZ],
+                                [0.0, -_BZ, 0.0]])
+    # Explicit rate is an operator declared by the model. It is zero for this model (zero flux and
+    # no default source), which isolates the implicit Lorentz solve in the parity test.
+    m.rate_operator("explicit_rate", flux=True, sources=["default"])
     return m
+
+
+def _lorentz_ops(m):
+    reg = m.operator_registry()
+    return reg.get("explicit_rate"), reg.get("lorentz")
 
 
 # ============================ (A) IR + codegen: pure Python =============================
 def test_imex_local_builds_and_lowers(t):
-    P = t.Program("imex")
-    out = lt.imex_local(P, "plasma", linear_source="lorentz")
+    m = _lorentz_model("imex_m")
+    explicit_rate, lorentz = _lorentz_ops(m)
+    P = t.Program("imex").bind_operators(m)
+    out = lt.imex_local(P, "plasma", explicit_operator=explicit_rate, implicit_operator=lorentz)
     assert P.validate() is True and P.commits()["plasma"] is out
-    try:
-        from pops.physics.facade import Model
-    except Exception as exc:  # noqa: BLE001
-        print("  (imex codegen skipped: pops.dsl unavailable: %s)" % exc)
-        return
-    src = P.emit_cpp_program(model=_lorentz_model("imex_m"))
+    src = P.emit_cpp_program(model=m)
     assert "pops::detail::mat_inverse<3>(" in src, "imex implicit term is a per-cell dense solve"
     assert "rhs_into" in src, "imex explicit term assembles an RHS"
 
 
 def test_imex_local_theta_guard(t):
+    m = _lorentz_model("imex_theta")
+    explicit_rate, lorentz = _lorentz_ops(m)
     for bad in (0.0, -0.5, 1.5):
         try:
-            lt.imex_local(t.Program("x"), "plasma", linear_source="lorentz", theta=bad)
+            lt.imex_local(t.Program("x").bind_operators(m), "plasma",
+                          explicit_operator=explicit_rate, implicit_operator=lorentz, theta=bad)
         except ValueError as exc:
             assert "theta" in str(exc)
         else:
             raise AssertionError("imex_local theta=%r must raise (0 < theta <= 1)" % (bad,))
 
 
-def test_imex_local_rejects_empty_linear_source(t):
+def test_imex_local_rejects_string_operator_selectors(t):
+    m = _lorentz_model("imex_string")
+    explicit_rate, lorentz = _lorentz_ops(m)
     try:
-        lt.imex_local(t.Program("x"), "plasma", linear_source="")
-    except ValueError as exc:
-        assert "linear_source" in str(exc)
+        lt.imex_local(t.Program("x").bind_operators(m), "plasma",
+                      explicit_operator="explicit_rate", implicit_operator=lorentz)
+    except TypeError as exc:
+        assert "typed operator handles" in str(exc)
     else:
-        raise AssertionError("imex_local must reject an empty linear_source name")
+        raise AssertionError("imex_local must reject string operator selectors")
 
 
 def test_lie_chains_two_stages(t):
@@ -218,28 +236,28 @@ def _run_ab3(t):
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "_install_program_so"):
-        print("-- (B AB3) skipped: _pops lacks install_program (rebuild _pops) --")
+        print("-- (B AB3) skipped: _pops lacks _install_program_so (rebuild _pops) --")
         return
     P = t.Program("ab3_step")
     lt.adams_bashforth(P, "blk", 3)
     try:
         compiled = pops.compile_problem(model=_passive_source_model("ab3_prog"), time=P)
-        cm = _passive_source_model("ab3_block").compile(backend="production")
+        cm = _passive_source_model("ab3_block")._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:
         print("-- (B AB3) skipped: compile could not build the .so: %s --" % str(exc)[:160])
         return
     n = 16
     sim._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
     sim._install_program_so(compiled.so_path)
     dt, nsteps = 0.01, 6
     for _ in range(nsteps):
         sim.step(dt)
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
     ref = _offline_ab(rho0, dt, nsteps, 3)
     ref2 = _offline_ab(rho0, dt, nsteps, 2)
     err = float(np.abs(out - ref).max())
@@ -260,31 +278,33 @@ def _run_imex(t):
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "_install_program_so"):
-        print("-- (B imex) skipped: _pops lacks install_program (rebuild _pops) --")
+        print("-- (B imex) skipped: _pops lacks _install_program_so (rebuild _pops) --")
         return
     P = t.Program("imex_step")
-    lt.imex_local(P, "plasma", linear_source="lorentz", flux=True, sources=["default"], theta=1.0)
+    model = _lorentz_model("imex_prog")
+    explicit_rate, lorentz = _lorentz_ops(model)
+    P.bind_operators(model)
+    lt.imex_local(P, "plasma", explicit_operator=explicit_rate, implicit_operator=lorentz, theta=1.0)
     try:
-        compiled = pops.compile_problem(model=_lorentz_model("imex_prog"), time=P)
-        cm = _lorentz_model("imex_block").compile(backend="production")
+        compiled = pops.compile_problem(model=model, time=P)
+        cm = _lorentz_model("imex_block")._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:
         print("-- (B imex) skipped: compile could not build the .so: %s --" % str(exc)[:160])
         return
     n = 16
     sim._add_equation("plasma", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
-    bz = 3.0
-    sim.set_magnetic_field(bz * np.ones(n * n))
+                     time=pops.Explicit.euler())
+    bz = _BZ
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     mx = 0.5 * rho
     my = -0.2 * rho
-    sim.set_state("plasma", np.stack([rho, mx, my]))
+    sim._set_state("plasma", np.stack([rho, mx, my]))
     sim._install_program_so(compiled.so_path)
     dt = 0.05
     sim.step(dt)
-    U = np.array(sim.get_state("plasma"))
+    U = np.array(sim._get_state("plasma"))
     # Offline IMEX (theta=1, ZERO flux so the explicit RHS is the default source = none):
     #   U* = U + dt*R = U  (R == 0 here)
     #   U^{n+1} = (I - dt*L)^{-1} U*   -> the implicit Lorentz rotation of (mx, my); rho unchanged.
@@ -311,7 +331,7 @@ def _run_lie(t):
         return
     sim = pops.System(n=16, L=1.0, periodic=True)
     if not hasattr(sim, "_install_program_so"):
-        print("-- (B lie) skipped: _pops lacks install_program (rebuild _pops) --")
+        print("-- (B lie) skipped: _pops lacks _install_program_so (rebuild _pops) --")
         return
 
     # Lie H(dt); S(dt) where H is flux-only transport (here zero flux -> no-op) and S the default
@@ -329,22 +349,22 @@ def _run_lie(t):
     lt.lie(P, "blk", half_flow, source)
     try:
         compiled = pops.compile_problem(model=_reaction_term_model("lie_prog"), time=P)
-        cm = _reaction_term_model("lie_block").compile(backend="production")
+        cm = _reaction_term_model("lie_block")._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:
         print("-- (B lie) skipped: compile could not build the .so: %s --" % str(exc)[:160])
         return
     n = 16
     sim._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
     sim._install_program_so(compiled.so_path)
     dt, nsteps = 0.01, 5
     for _ in range(nsteps):
         sim.step(dt)
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
     # Offline sequential split: H(dt) inert, then S(dt): rho <- rho + dt*_C*rho each step.
     ref = rho0.copy()
     for _ in range(nsteps):

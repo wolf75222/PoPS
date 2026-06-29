@@ -1,20 +1,23 @@
 """pops.solvers.preconditioners -- the preconditioner brick catalog (Spec 5 sec.5.7).
 
-Only the geometric-multigrid preconditioner has a native type (``pops::GeometricMG``);
-identity / jacobi / block-jacobi have none yet (the polar solver has its own PolarPrecond
-enum), so they are catalogued as PLANNED descriptors. :func:`User` surfaces a loaded external
-preconditioner brick. This is the ONE public home of the catalog formerly parked under
-``pops.lib.solvers.preconditioners`` (that re-export shim is removed; no second public path).
+Only descriptors with a real compiled route are public here. ``Identity()`` lowers to the
+runtime's empty ``ApplyFn`` preconditioner, and ``GeometricMG()`` lowers to the wired
+``pops::GeometricMG`` V-cycle. Jacobi / block-Jacobi are intentionally not exposed until their
+native C++ kernels exist: no public descriptor may be decorative or raise a "planned" error.
+``User`` surfaces a loaded external preconditioner brick.
 """
 from types import SimpleNamespace
 
-from pops.descriptors import _external_descriptor, _native, _planned
+from pops.descriptors import BrickDescriptor, _external_descriptor, _native
+
+
+def _identity(**options):
+    """The real unpreconditioned route: available, with no fabricated native symbol."""
+    return BrickDescriptor("identity", "macro", category="preconditioner",
+                           native_id="", scheme="identity", options=options or None)
 
 preconditioners = SimpleNamespace(
-    Identity=lambda: _planned("identity", "identity", category="preconditioner"),
-    Jacobi=lambda: _planned("jacobi", "jacobi", category="preconditioner"),
-    BlockJacobi=lambda: _planned("block_jacobi", "block_jacobi",
-                                 category="preconditioner"),
+    Identity=_identity,
     GeometricMG=lambda **o: _native("geometric_mg", "pops::GeometricMG", "geometric_mg",
                                     category="preconditioner", **o),
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="preconditioner"),

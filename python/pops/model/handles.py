@@ -6,7 +6,8 @@ carries the operator ``name`` (and, when the declarer knows it cheaply, the oper
 declarer (``m.rate_operator`` / ``m.source_term`` / ``m.linear_source``) returns one so a
 named operator is referenced as a typed object, NOT a bare string::
 
-    R = m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    electric = m.source_term("electric", ...)
+    R = m.rate_operator("explicit_rhs", flux=True, sources=[electric])
     ...
     rate = P.call(R, U, fields)        # the handle is the one public P.call selector
 

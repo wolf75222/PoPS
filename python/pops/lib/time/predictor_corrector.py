@@ -10,10 +10,11 @@ def predictor_corrector_local_linear(P, block, *, fields_operator, explicit_rate
                                      implicit_operator, state_space="U", commit=True):
     """Generic predictor-corrector for ``dU/dt = R(U, fields) + L(fields) U`` (Spec 2, operator-first).
 
-    Composes THREE typed operators by name -- a field operator ``fields_operator: U -> Fields``, an
-    explicit rate ``explicit_rate_operator: (U, Fields) -> Rate(U)`` and a local linear operator
-    ``implicit_operator: Fields -> LocalLinearOperator(U, U)`` -- into one trapezoidal step with the
-    L term treated implicitly via local solves::
+    Composes THREE typed operator handles -- a field operator
+    ``fields_operator: U -> Fields``, an explicit rate
+    ``explicit_rate_operator: (U, Fields) -> Rate(U)`` and a local linear operator
+    ``implicit_operator: Fields -> LocalLinearOperator(U, U)`` -- into one trapezoidal step with
+    the L term treated implicitly via local solves::
 
         U*    = (I - dt L_n)^{-1} (U^n + dt R_n)
         U^n+1 = (I - 1/2 dt L*)^{-1} (U^n + 1/2 dt R_n + 1/2 dt R* + 1/2 dt L* U*)

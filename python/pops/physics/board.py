@@ -1,24 +1,11 @@
-"""Blackboard-style physics model authoring (Spec 3, layer 1).
+"""Blackboard physics authoring.
 
-``pops.physics.Model`` lets a user write a model the way it appears on a
-blackboard -- a state, primitives, a flux, an elliptic field solve, sources and
-local linear operators, tied together by equations such as ``ddt(U) == -div(F) + S``
-and ``-laplacian(phi) == rho`` -- and lowers it to the Spec 2 operator-first IR
-(:class:`pops.model.Module`) and the :mod:`pops.dsl` codegen engine. It is a thin
-TRANSLATION layer: it owns no numerics and no codegen of its own. ``pops.dsl.Model``
-(the PDE facade) remains valid; the board API is sugar that produces the same typed
-operators.
-
-The board notation lives in :mod:`pops.math` (``ddt`` / ``div`` / ``grad`` /
-``laplacian`` / ``sqrt`` / ``rate`` / ``unknown`` / ``integral``). The typed view
-is reachable through :pyattr:`Model.module`; the codegen model through
-:pyattr:`Model.dsl`.
-
-The handle classes and the multi-species / inspection half live in
-``board_handles`` and ``_board_multispecies`` so no file exceeds the Spec-4
-500-line bound. Import-graph rule: only :mod:`pops.math` / :mod:`pops.model` /
-:mod:`pops.dsl` (the last two LAZILY inside methods); codegen-free, ``_pops``-free.
+``pops.physics.Model`` writes states, fluxes, sources and field solves, then lowers to the
+operator-first :class:`pops.model.Module`. It owns no numerics and exposes no codegen engine;
+the private legacy engine remains an implementation detail behind ``lower()`` / ``to_module()``.
 """
+from pops.descriptors import reject_string_selector
+
 from .. import math as _bm
 from .board_handles import (CallableOperator, FieldHandle, FieldsHandle, FluxHandle,
                             Invariant, LocalLinearOperatorExpr, SourceHandle, StateHandle,
@@ -58,8 +45,10 @@ class Model(_MultiSpeciesMixin):
     # --- escape hatches ---
     @property
     def dsl(self):
-        """The underlying :class:`pops.dsl.Model` (the codegen engine)."""
-        return self._dsl
+        """No public escape hatch to the legacy codegen engine."""
+        raise AttributeError(
+            "pops.physics.Model.dsl is not public; call lower()/to_module() and compile through "
+            "pops.compile(...).")
 
     @property
     def module(self):
@@ -194,6 +183,10 @@ class Model(_MultiSpeciesMixin):
         Lowers to the model's Poisson coupling; ``outputs`` names the produced
         fields, ``solver`` records the required elliptic solver.
         """
+        if isinstance(solver, str):
+            raise TypeError(
+                "solve_field(solver=%r): solver must be a typed pops.solvers.elliptic descriptor "
+                "such as GeometricMG() or FFT(), not a string" % solver)
         if not isinstance(equation, _bm.Equation):
             raise TypeError("solve_field expects an equation '-laplacian(phi) == rhs'")
         lhs = equation.lhs
@@ -284,18 +277,18 @@ class Model(_MultiSpeciesMixin):
 
     def finite_volume_rate(self, name, flux=None, riemann=None, reconstruction=None,
                            sources=()):
-        """Declare a rate assembled by the native finite-volume machinery.
-
-        Selects the native Riemann solver and reconstruction (by descriptor) and
-        the source terms; lowers to the same rate operator a board equation does.
-        The native-brick hook codegen for a custom Riemann is tracked by ADC-456.
-        """
+        """Declare a finite-volume rate from typed Riemann/reconstruction descriptors."""
         self._reconstruction = reconstruction
         # Selecting a Riemann solver validates the model's capabilities for it and enables
-        # the role-derived hooks (criterion 10); accept a string or an pops.lib descriptor.
+        # the role-derived hooks (criterion 10). Spec 5: behaviour choices must be typed.
         if riemann is not None:
-            scheme = getattr(riemann, "scheme", riemann)
-            self.riemann(scheme)
+            if isinstance(riemann, str):
+                reject_string_selector(riemann, "riemann", suggestion="HLL() / HLLC() / Roe()")
+            scheme = getattr(riemann, "scheme", None) or getattr(riemann, "name", None)
+            if scheme is None:
+                raise TypeError("finite_volume_rate(riemann=) expects a typed Riemann descriptor; "
+                                "got %r" % (type(riemann).__name__,))
+            self.riemann(riemann)
         src_names = [s.reg_name if isinstance(s, SourceHandle) else _safe_name(s)
                      for s in sources]
         # A finite-volume rate always assembles -div F; the flux selection is recorded
@@ -331,29 +324,20 @@ class Model(_MultiSpeciesMixin):
 
     def riemann(self, name, flux=None, pressure=None, velocity=None, sound_speed=None,
                 wave_speeds=None, contact_speed=None, star_state=None):
-        """Select a Riemann solver and validate the model's capabilities for it.
-
-        The native solvers are C++ (``pops::RusanovFlux`` / ``HLLFlux`` / ``HLLCFlux`` /
-        ``RoeFlux``). HLLC/Roe need model capabilities: a pressure primitive and the fluid
-        roles Density/MomentumX/MomentumY (the dsl ``enable_hllc`` / ``enable_roe`` then
-        generate the ``POPS_HD`` ``contact_speed`` / ``hllc_star_state`` / ``roe_dissipation``
-        hooks from those roles). Missing capabilities are rejected here with a clear message
-        (Spec 3 criterion 10).
-
-        ADC-456: passing an explicit board formula for a capability quantity (e.g.
-        ``pressure=<pops.math expr>``) overrides the role-derived hook with that formula's codegen
-        (lowered via :meth:`pops.dsl.Model.set_riemann_hooks`). A capability hook DESCRIPTOR
-        (``pops.numerics.riemann.hllc.contact_speed.euler()``) or ``None`` keeps the role-derived default.
-        A formula referencing a quantity the model cannot provide still raises the clear capability
-        error at codegen.
-        """
+        """Select a typed Riemann solver and validate required model capabilities."""
+        if isinstance(name, str):
+            reject_string_selector(name, "riemann", suggestion="HLL() / HLLC() / Roe()")
+        scheme = getattr(name, "scheme", None) or getattr(name, "name", None)
+        if scheme is None:
+            raise TypeError("riemann(...) expects a typed Riemann descriptor; got %r"
+                            % (type(name).__name__,))
         self._riemann = name
         self._riemann_hooks = {
             "flux": flux, "pressure": pressure, "velocity": velocity,
             "sound_speed": sound_speed, "wave_speeds": wave_speeds,
             "contact_speed": contact_speed, "star_state": star_state,
         }
-        kind = str(name).lower()
+        kind = str(scheme).lower()
         self._validate_riemann_capabilities(kind, pressure, wave_speeds)
         if kind == "hllc":
             self._dsl.enable_hllc()

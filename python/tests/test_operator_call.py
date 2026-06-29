@@ -27,12 +27,12 @@ def build_model():
     bz = m.aux("B_z")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho],
            y=[my, mx * my / rho, my * my / rho])
-    m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
+    electric = m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
     m.linear_source("lorentz", [[0.0, 0.0, 0.0],
                                 [0.0, 0.0, bz],
                                 [0.0, -bz, 0.0]])
     m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
     return m
 
 
@@ -184,9 +184,9 @@ def test_rate_operator_alias_not_in_hash():
     m = Model("m")
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
     m.flux(x=[mx, mx, mx], y=[my, my, my])
-    m.source_term("relax", [Const(0.0), -mx, -my])
+    relax = m.source_term("relax", [Const(0.0), -mx, -my])
     h0 = m._model_hash()
-    m.rate_operator("explicit_rhs", flux=True, sources=["relax"])
+    m.rate_operator("explicit_rhs", flux=True, sources=[relax])
     assert m._model_hash() == h0, "a rate_operator alias must not change the model hash"
     assert "explicit_rhs" in m.operator_registry()
     print("OK  m.rate_operator is a pure alias (no model-hash impact)")

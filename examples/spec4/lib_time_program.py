@@ -6,7 +6,7 @@ step out of kernel primitives. Here the SAME scheme comes from the time-scheme l
 
     from pops.lib.time import predictor_corrector_local_linear
 
-The library scheme is a MACRO: given a bound model and the operator names, it emits the
+The library scheme is a MACRO: given a bound model and typed operator handles, it emits the
 same kernel primitives into the Program. This script builds the model, applies the macro,
 prints the emitted IR, and (when a toolchain is present) compiles the Program to a
 ``problem.so``.
@@ -22,7 +22,9 @@ import sys
 
 from pops.lib.time import predictor_corrector_local_linear
 from pops.math import ddt, div, grad, laplacian, sqrt
+from pops.model import OperatorHandle
 from pops.physics import Model
+from pops.solvers.elliptic import GeometricMG
 from pops.time import Program
 
 
@@ -52,7 +54,7 @@ def build_model():
         "fields_from_state",
         equation=(-laplacian(phi) == rho),
         outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-        solver="geometric_mg",
+        solver=GeometricMG(),
     )
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     electric = m.source("electric", on=state, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
@@ -75,9 +77,9 @@ def library_program(module):
     predictor_corrector_local_linear(
         program,
         "plasma",
-        fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rate",
-        implicit_operator="implicit_operator",
+        fields_operator=OperatorHandle("fields_from_state", kind="field_operator"),
+        explicit_rate_operator=OperatorHandle("explicit_rate", kind="local_rate"),
+        implicit_operator=OperatorHandle("implicit_operator", kind="local_linear_operator"),
     )
     return program
 

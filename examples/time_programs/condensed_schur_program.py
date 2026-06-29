@@ -35,6 +35,7 @@ try:
 
     import pops
     from pops.physics.facade import Model
+    from pops.solvers import krylov
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # noqa: BLE001
@@ -42,7 +43,6 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(0)
 
 ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*div(grad) is SPD (no null space)
-
 
 def passive_model(name):
     """A 1-variable block with no flux and no Poisson coupling: the Program runs neither a flux RHS nor
@@ -57,9 +57,10 @@ def passive_model(name):
     return m
 
 
-def schur_like_program(method="bicgstab", tol=1e-10, max_iter=200):
+def schur_like_program(method=None, tol=1e-10, max_iter=200):
     """phi = solve (I - alpha*div(grad)) phi = U, matrix-free via ctx.gradient -> ctx.divergence, then
     P.solve_linear -- the AVAILABLE primitives a hand-rolled condensed-Schur stage would use."""
+    method = krylov.BiCGStab() if method is None else method
     P = adctime.Program("condensed_schur_primitives_example")
     U = P.state("blk")
     A = P.matrix_free_operator("A")
@@ -180,7 +181,7 @@ def main():
     sim.install(compiled,
                 instances={"blk": {"model": passive_model("cs_blk"),
                                    "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                   "time": pops.Explicit(method="euler"),
+                                   "time": pops.Explicit.euler(),
                                    "initial": np.stack([b])}})
     sim.step(0.01)  # dt is irrelevant -- the program is a pure solve
     phi_prog = np.array(sim.get_state("blk"))[0]

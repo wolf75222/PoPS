@@ -75,7 +75,7 @@ def named_source_model(name="pc_named"):
     implicit_operator = m.linear_source("implicit_operator", [[0.0, 0.0, 0.0],
                                                               [0.0, 0.0, bz],
                                                               [0.0, -bz, 0.0]])
-    explicit_rate = m.rate_operator("explicit_rate", flux=True, sources=[electric.name])
+    explicit_rate = m.rate_operator("explicit_rate", flux=True, sources=[electric])
     fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
     return m, fields_from_state, explicit_rate, implicit_operator
 

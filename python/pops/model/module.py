@@ -11,6 +11,7 @@ imported lazily inside :meth:`Module.to_dsl` to avoid an import cycle.
 """
 import hashlib
 
+from .handles import OperatorHandle
 from .operators import Operator
 from .registry import OperatorRegistry
 from .signatures import Signature
@@ -125,7 +126,7 @@ class Module:
         sub-operators (the flux and the listed source operators). Mirrors ``dsl.rate_operator``; the
         ``lowering`` carries the flux/sources/fluxes so ``P.call`` and the codegen compose it."""
         u = self._state_spaces.get(state_space) or StateSpace(state_space)
-        srcs = list(sources) if sources is not None else None
+        srcs = _normalize_source_selectors(sources, who="Module.rate_operator(%r)" % name)
         op = Operator(name, "local_rate", Signature((u,), RateSpace(u)),
                       capabilities={"local": False, "produces_rate": True, "supports_device": True},
                       lowering={"flux": bool(flux), "sources": srcs,
@@ -255,3 +256,38 @@ def _body_identity(body):
         return inspect.getsource(body)
     except (OSError, TypeError):
         return repr(body)
+
+
+def _normalize_source_selectors(sources, *, who):
+    """Normalize typed source selectors for ``Module.rate_operator``.
+
+    Public Module authoring should pass the ``Operator`` returned by ``Module.operator(...,
+    kind="local_source")`` or an ``OperatorHandle``. A bare string can only be the built-in
+    ``"default"`` source sentinel; named source strings are rejected to avoid YAML-like selectors.
+    """
+    if sources is None:
+        return None
+    out = []
+    for src in sources:
+        if isinstance(src, str):
+            if src == "default":
+                out.append(src)
+                continue
+            raise TypeError(
+                "%s: sources must contain typed source operators/handles, not the string %r; "
+                "keep the object returned by Module.operator(..., kind='local_source')" % (who, src))
+        if isinstance(src, Operator):
+            if src.kind != "local_source":
+                raise TypeError("%s: source operator %r has kind %r, expected 'local_source'"
+                                % (who, src.name, src.kind))
+            out.append(src.name)
+            continue
+        if isinstance(src, OperatorHandle):
+            if src.kind not in (None, "local_source"):
+                raise TypeError("%s: source handle %r has kind %r, expected 'local_source'"
+                                % (who, src.name, src.kind))
+            out.append(src.name)
+            continue
+        raise TypeError("%s: sources must contain typed source operators/handles, got %r"
+                        % (who, type(src).__name__))
+    return out

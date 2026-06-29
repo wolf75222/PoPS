@@ -6,8 +6,8 @@ are declared by signature with IR (``Expr``) bodies -- a field operator (Poisson
 (grid operator), an electric source, a Lorentz local linear operator -- plus a composite rate
 ``explicit_rhs``. No PDE method (``m.flux`` / ``m.source_term``) is called on the model; the Module
 IS the model. The time algorithm is the GENERIC macro
-``pops.lib.time.predictor_corrector_local_linear`` keyed on the three operator names -- it mentions no
-flux / source / poisson / lorentz.
+``pops.lib.time.predictor_corrector_local_linear`` keyed on three typed operator handles -- it
+mentions no flux / source / poisson / lorentz.
 
 ``compile_problem(model=module, time=P)`` lowers the Module to the dsl codegen engine (Module.to_dsl,
 a translation -- not a second backend) and compiles the combined .so; ``sim.step`` runs it C++-side.
@@ -64,23 +64,24 @@ def operator_module(name="euler_poisson_lorentz_operator_first"):
                        "y": [my, mx * my / rho, my * my / rho + CS2 * rho]})
     mod.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
                     y=[my / rho - cs, my / rho, my / rho + cs])
-    mod.operator(name="electric", signature=(u, fields) >> model.Rate(u),
-                 kind="local_source", expr=[Const(0.0), -rho * gx, -rho * gy])
+    electric = mod.operator(name="electric", signature=(u, fields) >> model.Rate(u),
+                            kind="local_source", expr=[Const(0.0), -rho * gx, -rho * gy])
     mod.operator(name="lorentz", signature=(fields,) >> model.LocalLinearOperator(u, u),
                  kind="local_linear_operator",
                  expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    mod.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    mod.rate_operator("explicit_rhs", flux=True, sources=[electric])
     return mod
 
 
 def operator_first_program(module, name="predictor_corrector_operator_first"):
-    """The GENERIC model-free macro keyed on the three operator names. No physics here."""
+    """The GENERIC model-free macro keyed on three typed operator handles. No physics here."""
     P = adctime.Program(name).bind_operators(module)
+    ops = module.operator_registry()
     libtime.predictor_corrector_local_linear(
         P, "plasma",
-        fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs",
-        implicit_operator="lorentz")
+        fields_operator=ops.get("fields_from_state"),
+        explicit_rate_operator=ops.get("explicit_rhs"),
+        implicit_operator=ops.get("lorentz"))
     return P
 
 

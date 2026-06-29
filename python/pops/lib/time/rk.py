@@ -108,9 +108,11 @@ def explicit_rk(P, block, *, rhs_operator, fields_operator=None, tableau=None, A
                 c=None, state_space="U"):
     """Generic explicit Runge-Kutta over a typed rate operator (Spec 2, operator-first).
 
-    Each stage is ``k_i = rhs_operator(U_i[, fields_operator(U_i)])``; the tableau lowers to the same
-    affine stage chain as :func:`rk`. Pass a ``ButcherTableau`` / ``(A, b, c)`` via ``tableau`` or the
-    raw ``A`` / ``b`` / ``c``. ``fields_operator`` is optional (a pure-flux rate needs no fields).
+    Each stage is ``k_i = rhs_operator(U_i[, fields_operator(U_i)])`` where
+    ``rhs_operator`` and ``fields_operator`` are typed operator handles, not string selectors.
+    The tableau lowers to the same affine stage chain as :func:`rk`. Pass a
+    ``ButcherTableau`` / ``(A, b, c)`` via ``tableau`` or the raw ``A`` / ``b`` / ``c``.
+    ``fields_operator`` is optional (a pure-flux rate needs no fields).
     """
     if tableau is None:
         if A is None or b is None:

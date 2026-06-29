@@ -16,7 +16,9 @@ scheme string, requirements, capabilities); the codegen and runtime consume it.
 A descriptor carries `brick_type` (`native` / `generated` / `macro` / `external_cpp`),
 `native_id`, `scheme`, `requirements`, `capabilities`, `options`, and `available`. A
 catalogued brick with no native symbol yet is emitted with `available=False` and an empty
-`native_id` -- never a fabricated id.
+`native_id` -- never a fabricated id. Public solver descriptors are stricter: if a route has no
+compiled implementation, it is absent from the public catalog instead of being exposed as an
+`available=False` placeholder.
 
 ## Namespaces
 
@@ -26,9 +28,8 @@ The brick catalogs live in the Spec 5 central packages (criterion 7: `pops.lib` 
 not yet wired), `spatial` (FiniteVolumeResidual/FluxDivergence/SourceAssembly/FiniteVolume), and
 `projections` (positivity native). `pops.fields.catalog` carries the elliptic-field bricks
 (GeometricMG native; Poisson/Helmholtz/EllipticSolve catalogued). `pops.solvers` carries `solvers`
-(CG/BiCGStab/GMRES/Richardson native free functions; Newton/FixedPoint catalogued; Schur) and
-`preconditioners` (GeometricMG native; identity/jacobi/block_jacobi catalogued). `pops.lib.time`
-keeps the time-scheme macros (forwarding to `pops.time` `std`).
+(CG/BiCGStab/GMRES/Richardson native free functions; Schur) and `preconditioners` (Identity and
+GeometricMG). `pops.lib.time` keeps the time-scheme macros (forwarding to `pops.time` `std`).
 
 ```python
 import pops
@@ -45,15 +46,16 @@ The native ids resolve to real symbols in `include/pops` (verified by the test s
 
 ## Macros (time schemes)
 
-`pops.lib.time.*` are MacroBricks: they build a Program from operator names and add no runtime
-stepper of their own. They forward to the `pops.time` `std` library, so a library scheme and a
+`pops.lib.time.*` are MacroBricks: they build a Program from typed operator handles and add no
+runtime stepper of their own. They forward to the `pops.time` language, so a library scheme and a
 hand-written {doc}`time-program` produce the same IR.
 
 ```python
+ops = module.operator_registry()
 T = pops.lib.time.predictor_corrector(P, "plasma",
-                                     fields_operator="fields_from_state",
-                                     explicit_rate_operator="explicit_rate",
-                                     implicit_operator="implicit_operator")
+                                     fields_operator=ops.get("fields_from_state"),
+                                     explicit_rate_operator=ops.get("explicit_rate"),
+                                     implicit_operator=ops.get("implicit_operator"))
 ```
 
 ## External C++ bricks

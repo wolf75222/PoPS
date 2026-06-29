@@ -33,9 +33,6 @@ def _lower_krylov_method(method):
 # Preconditioner schemes that lower to REAL C++ in the matrix-free Krylov path (Spec 5 sec.7, ADC-516):
 #   - "identity":     the empty pops::ApplyFn{} (unpreconditioned; the historical default);
 #   - "geometric_mg": one V-cycle of the wired pops::GeometricMG, emitted as a real ApplyFn callback.
-# The planned-but-unwired schemes (jacobi / block_jacobi) carry available=False and have no native
-# kernel yet; they are rejected with an HONEST "planned, not wired" message (a separate issue), never a
-# transitional catch-all.
 _WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
 
 
@@ -43,11 +40,9 @@ def _lower_preconditioner(preconditioner):
     """Lower a typed preconditioner descriptor to its scheme token (Spec 5 sec.7).
 
     ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
-    (``preconditioners.Identity()`` / ``preconditioners.GeometricMG()`` ...); its ``scheme`` is the
+    (``preconditioners.Identity()`` / ``preconditioners.GeometricMG()``); its ``scheme`` is the
     C++ token. A bare string is REJECTED; ``None`` defaults to ``Identity()`` (the unpreconditioned
-    default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn; the planned
-    jacobi / block_jacobi descriptors have no native kernel yet and are rejected with an honest
-    "planned, not wired" message (out of scope -- a separate issue).
+    default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn.
     """
     if preconditioner is None:
         preconditioner = _preconditioners().Identity()
@@ -62,11 +57,9 @@ def _lower_preconditioner(preconditioner):
             "solve_linear: preconditioner must be a pops.solvers.preconditioners descriptor "
             "(e.g. Identity() / GeometricMG()); got %r" % (preconditioner,))
     if scheme not in _WIRED_PRECOND_SCHEMES:
-        # A catalogued-but-unwired preconditioner (jacobi / block_jacobi): no native C++ kernel yet.
-        # An HONEST capability limit, not a transitional reject -- wiring it is tracked separately.
-        raise NotImplementedError(
-            "solve_linear: the %r preconditioner is planned, not wired yet (it needs a native C++ "
-            "kernel); use preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
+        raise ValueError(
+            "solve_linear: preconditioner scheme %r is not wired in the matrix-free C++ path; "
+            "use preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
     return scheme
 
 
@@ -101,10 +94,9 @@ class _ProgramSolve(_ProgramConstants):
             sec.7); ``None`` defaults to ``CG()``;
           - @p preconditioner: a typed ``pops.solvers.preconditioners`` descriptor.
             ``Identity()`` (the unpreconditioned default) and ``GeometricMG()`` (one V-cycle of the
-            wired geometric multigrid, for ``GMRES()`` / ``BiCGStab()`` only) lower to real C++; the
-            planned ``Jacobi()`` / ``BlockJacobi()`` are rejected (no native kernel yet). A non-identity
-            preconditioner with ``CG()`` / ``Richardson()`` is rejected (those loops have no
-            preconditioner slot). A bare string is REJECTED; ``None`` defaults to ``Identity()``;
+            wired geometric multigrid, for ``GMRES()`` / ``BiCGStab()`` only) lower to real C++. A
+            non-identity preconditioner with ``CG()`` / ``Richardson()`` is rejected (those loops have
+            no preconditioner slot). A bare string is REJECTED; ``None`` defaults to ``Identity()``;
           - @p tol: relative L2 residual stop (> 0);
           - @p max_iter: iteration budget (REQUIRED, > 0: a dynamic solver loop with no budget is a
             configuration error -- ``pops::*_solve`` itself throws on a non-positive budget);

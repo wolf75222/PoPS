@@ -1,30 +1,9 @@
-"""pops.solvers.nonlinear -- the nonlinear-solver catalog (Spec 5 sec.5.7).
+"""No public nonlinear-solver descriptors are exposed yet.
 
-There is no standalone ``pops::Newton`` / ``pops::FixedPoint`` solver TYPE: Newton is the
-implicit-stepper kernel (pops.time), and a fixed-point iteration is authored over the Krylov
-primitives. So both are catalogued here as PLANNED descriptors (``available=False``, empty
-native id) -- they name the slot without overclaiming a symbol. This is the ONE public home of
-the ``solvers.Newton`` / ``solvers.FixedPoint`` entries formerly parked under
-``pops.lib.solvers`` (that shim is removed; no second public path).
-
-NOTE: the ``newton`` keyword of :mod:`pops.time` (the implicit time-stepper role) is a
-DIFFERENT object from :func:`Newton` here (a solver descriptor); they share no namespace.
+Spec 5 clean-break rule: public solver descriptors must select a real compiled route. PoPS already
+has a real per-cell Newton path through :meth:`pops.time.Program.solve_local_nonlinear`, but there is
+no standalone global ``pops::Newton`` / ``pops::FixedPoint`` solver descriptor. Those factories are
+therefore intentionally absent instead of being published as ``available=False`` placeholders.
 """
-from pops.descriptors import _planned
 
-
-def Newton(**options):
-    """A planned Newton nonlinear solver descriptor (no native solver type yet; inert).
-
-    Newton's iteration is realised by the implicit time-stepper kernel (pops.time), so there is
-    no standalone ``pops::Newton`` -- this is a catalogued ``available=False`` slot.
-    """
-    return _planned("newton", "newton", category="solver", **options)
-
-
-def FixedPoint(**options):
-    """A planned fixed-point (Picard) nonlinear solver descriptor (no native type yet; inert)."""
-    return _planned("fixed_point", "fixed_point", category="solver", **options)
-
-
-__all__ = ["Newton", "FixedPoint"]
+__all__ = []

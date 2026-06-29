@@ -11,8 +11,8 @@ The block has a single conservative variable, so its state doubles as the scalar
 solves ``(I - alpha*Lap) phi = U`` and commits ``phi`` back into the block. The result is checked
 against a plain offline NumPy CG on the identical discrete periodic 5-point system.
 
-``method=`` selects the runtime solver (``cg`` for SPD here; ``bicgstab`` and ``richardson`` are also
-available). Run::
+The runtime solver is selected with a typed ``pops.solvers.krylov`` descriptor (``CG()`` for SPD
+here; ``BiCGStab()`` and ``Richardson()`` are also available). Run::
 
     python examples/time_programs/matrix_free_solve.py
 
@@ -28,13 +28,13 @@ try:
 
     import pops
     from pops.physics.facade import Model
+    from pops.solvers import krylov
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- pops/numpy unavailable in this interpreter
     print("skip matrix_free_solve (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap is SPD positive-definite (no null space)
-
 
 def passive_model(name):
     """A 1-variable block with no flux and no Poisson coupling: the Program runs neither a flux RHS nor
@@ -49,8 +49,9 @@ def passive_model(name):
     return m
 
 
-def solve_program(method="cg", tol=1e-10, max_iter=200):
+def solve_program(method=None, tol=1e-10, max_iter=200):
     """phi = solve (I - alpha*Lap) phi = U, matrix-free, committed back into the block."""
+    method = krylov.CG() if method is None else method
     P = adctime.Program("matrix_free_solve_example")
     U = P.state("blk")
     A = P.matrix_free_operator("A")
@@ -126,7 +127,7 @@ def main():
     sim.install(compiled,
                 instances={"blk": {"model": passive_model("mf_blk"),
                                    "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                   "time": pops.Explicit(method="euler"),
+                                   "time": pops.Explicit.euler(),
                                    "initial": np.stack([b])}})
     sim.step(0.01)  # dt is irrelevant -- the program is a pure solve
     phi_prog = np.array(sim.get_state("blk"))[0]

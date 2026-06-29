@@ -1,15 +1,16 @@
 """Spec 2 (S2-4): operator-first standard macros.
 
 pops.lib.time.predictor_corrector_local_linear / explicit_rk / imex_local_linear take typed
-operator NAMES (not physical terms) and compose them with P.call against the Module bound to
-the Program. The macros are model-free (their source mentions no physics) and reusable across
-any Module with matching signatures. Pure Python (emit only); skips if pops is not importable.
+operator handles (not physical terms or string selectors) and compose them against the Module
+bound to the Program. The macros are model-free (their source mentions no physics) and reusable
+across any Module with matching signatures. Pure Python (emit only); skips if pops is not importable.
 """
 import inspect
 import sys
 
 try:
     from pops.ir.expr import Const
+    from pops.model import OperatorHandle
     from pops.physics.facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
@@ -28,13 +29,14 @@ def _model(name, gain=1.0):
     bz = m.aux("B_z")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho],
            y=[my, mx * my / rho, my * my / rho])
-    m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
+    electric = m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
+    lorentz = m.linear_source("lorentz", [[0.0, 0.0, 0.0],
+                                          [0.0, 0.0, bz],
+                                          [0.0, -bz, 0.0]])
     m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
-    return m
+    explicit_rhs = m.rate_operator("explicit_rhs", flux=True, sources=[electric])
+    fields = OperatorHandle("fields_from_state", kind="field_operator")
+    return m, {"fields": fields, "explicit_rhs": explicit_rhs, "lorentz": lorentz}
 
 
 def test_macros_are_model_free():
@@ -48,11 +50,11 @@ def test_macros_are_model_free():
 
 
 def test_predictor_corrector_macro():
-    m = _model("ep")
+    m, h = _model("ep")
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=h["fields"],
+        explicit_rate_operator=h["explicit_rhs"], implicit_operator=h["lorentz"])
     P.validate()
     src = P.emit_cpp_program(model=m)
     assert "pops_install_program" in src
@@ -60,10 +62,10 @@ def test_predictor_corrector_macro():
 
 
 def test_explicit_rk_macro():
-    m = _model("rk")
+    m, h = _model("rk")
     P = adctime.Program("rk").bind_operators(m)
-    libtime.explicit_rk(P, "plasma", rhs_operator="explicit_rhs",
-                            fields_operator="fields_from_state",
+    libtime.explicit_rk(P, "plasma", rhs_operator=h["explicit_rhs"],
+                            fields_operator=h["fields"],
                             tableau=libtime.SSPRK2_TABLEAU)
     P.validate()
     assert "pops_install_program" in P.emit_cpp_program(model=m)
@@ -71,22 +73,37 @@ def test_explicit_rk_macro():
 
 
 def test_imex_local_linear_macro():
-    m = _model("imex")
+    m, h = _model("imex")
     P = adctime.Program("imex").bind_operators(m)
-    libtime.imex_local_linear(P, "plasma", explicit_operator="explicit_rhs",
-                                  implicit_operator="lorentz",
-                                  fields_operator="fields_from_state", theta=1.0)
+    libtime.imex_local_linear(P, "plasma", explicit_operator=h["explicit_rhs"],
+                                  implicit_operator=h["lorentz"],
+                                  fields_operator=h["fields"], theta=1.0)
     P.validate()
     assert "pops_install_program" in P.emit_cpp_program(model=m)
     print("OK  imex_local_linear (theta-implicit local linear solve)")
 
 
+def test_public_macros_reject_string_operator_selectors():
+    m, h = _model("macro_strings")
+    P = adctime.Program("reject_strings").bind_operators(m)
+    try:
+        libtime.explicit_rk(P, "plasma", rhs_operator="explicit_rhs",
+                            fields_operator=h["fields"],
+                            tableau=libtime.SSPRK2_TABLEAU)
+    except TypeError as exc:
+        assert "typed operator handles" in str(exc)
+    else:
+        raise AssertionError("pops.lib.time accepted a string operator selector")
+    print("OK  pops.lib.time macros reject string operator selectors")
+
+
 def test_macro_reused_across_modules():
     def build(m):
+        m, h = m
         P = adctime.Program("pc").bind_operators(m)
         libtime.predictor_corrector_local_linear(
-            P, "plasma", fields_operator="fields_from_state",
-            explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+            P, "plasma", fields_operator=h["fields"],
+            explicit_rate_operator=h["explicit_rhs"], implicit_operator=h["lorentz"])
         return P.emit_cpp_program(model=m)
 
     src_a = build(_model("A", 1.0))
@@ -100,6 +117,7 @@ def main():
     test_predictor_corrector_macro()
     test_explicit_rk_macro()
     test_imex_local_linear_macro()
+    test_public_macros_reject_string_operator_selectors()
     test_macro_reused_across_modules()
     print("OK  test_operator_macros")
 

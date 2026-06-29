@@ -1,6 +1,6 @@
 """Spec 3: a library time scheme is a MACRO that builds operator-first IR, not a stepper.
 
-The `pops.lib.time` schemes are MacroBricks: they construct a Program from operator names
+The `pops.lib.time` schemes are MacroBricks: they construct a Program from typed operator handles
 using only the kernel primitives (P.call / linear_combine / solve_local_linear / commit).
 This example builds a predictor-corrector two ways and shows (a) the Spec-3 macro-catalog
 entry `pops.lib.time.macros.time.predictor_corrector` forwards to the same
@@ -14,7 +14,9 @@ bundle -- s7), not in the time-language module `pops.time`; the catalog forwards
 Run: python3 examples/spec3/manual_vs_lib_predictor_corrector.py
 """
 from pops.math import sqrt, grad, div, laplacian, ddt
+from pops.model import OperatorHandle
 from pops.physics import Model
+from pops.solvers.elliptic import GeometricMG
 import pops.lib.time as libtime
 import pops.lib.time.macros as libmacros
 import pops.time as adctime
@@ -33,7 +35,7 @@ def build_model():
     phi = m.field("phi")
     m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho),
                   outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-                  solver="geometric_mg")
+                  solver=GeometricMG())
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
     bz = m.aux("B_z")
@@ -41,7 +43,11 @@ def build_model():
                                   matrix=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     m.rate("explicit_rate", ddt(U) == -div(flux) + a_src)
     m.operator("implicit_operator", returns=c_b, inputs=["fields"])
-    return m
+    return m, {
+        "fields": OperatorHandle("fields_from_state", kind="field_operator"),
+        "rate": OperatorHandle("explicit_rate", kind="local_rate"),
+        "implicit": OperatorHandle("implicit_operator", kind="local_linear_operator"),
+    }
 
 
 def _ir(P):
@@ -55,13 +61,13 @@ KERNEL_OPS = {"state", "solve_fields", "rhs", "source", "apply", "linear_source"
 
 
 def build(via_catalog):
-    m = build_model()
+    m, h = build_model()
     P = adctime.Program("pc_catalog" if via_catalog else "pc_std")
     P.bind_operators(m.module)
     macro = (libmacros.time.predictor_corrector if via_catalog
              else libtime.predictor_corrector_local_linear)
-    macro(P, "plasma", fields_operator="fields_from_state",
-          explicit_rate_operator="explicit_rate", implicit_operator="implicit_operator")
+    macro(P, "plasma", fields_operator=h["fields"],
+          explicit_rate_operator=h["rate"], implicit_operator=h["implicit"])
     return P
 
 

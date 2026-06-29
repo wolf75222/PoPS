@@ -9,7 +9,9 @@ writes against; the board facade produces the identical IR.
 Run: python3 examples/spec3/operator_first_same_problem.py
 """
 from pops.math import sqrt, grad, div, laplacian, ddt
+from pops.model import OperatorHandle
 from pops.physics import Model
+from pops.solvers.elliptic import GeometricMG
 from pops.time import Program
 
 
@@ -26,7 +28,7 @@ def build_model():
     phi = m.field("phi")
     m.solve_field("fields_from_state", equation=(-laplacian(phi) == rho),
                   outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-                  solver="geometric_mg")
+                  solver=GeometricMG())
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
     bz = m.aux("B_z")
@@ -43,9 +45,12 @@ def operator_first_step(m):
     P.bind_operators(m.module)
     dt = P.dt
     U_n = P.state("plasma")
-    fields_n = P.call("fields_from_state", U_n, name="fields_n")
-    R_n = P.call("explicit_rate", U_n, fields_n, name="R_n")
-    L_n = P.call("implicit_operator", fields_n, name="L_n")
+    fields_from_state = OperatorHandle("fields_from_state", kind="field_operator")
+    explicit_rate = OperatorHandle("explicit_rate", kind="local_rate")
+    implicit_operator = OperatorHandle("implicit_operator", kind="local_linear_operator")
+    fields_n = P.call(fields_from_state, U_n, name="fields_n")
+    R_n = P.call(explicit_rate, U_n, fields_n, name="R_n")
+    L_n = P.call(implicit_operator, fields_n, name="L_n")
     rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
     U_star = P.solve_local_linear("U_star", operator=P.I - dt * L_n, rhs=rhs)
     P.commit("plasma", U_star)

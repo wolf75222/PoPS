@@ -1,6 +1,6 @@
 """ADC-500 (Spec 5 sec.5.7 / criterion 4 / sec.13.11.1): the pops.solvers central package.
 
-pops.solvers homes the linear / nonlinear / Schur / elliptic solver + preconditioner catalog
+pops.solvers homes the linear / Schur / elliptic solver + preconditioner catalog
 as inert typed descriptors. These tests construct each entry, exercise the RICH GeometricMG
 parameter surface (typed smoother / coarse / tolerance + capabilities) and its protocol
 (inspect / options / capabilities / lower), check that a bare string is rejected where a typed
@@ -14,7 +14,7 @@ import pytest
 pops = pytest.importorskip("pops")
 solvers = pytest.importorskip("pops.solvers")
 
-from pops.solvers import elliptic, krylov, nonlinear, schur
+from pops.solvers import elliptic, krylov, schur
 from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
 from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
 
@@ -23,7 +23,7 @@ from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
 
 def test_solvers_is_top_level_and_exposed():
     assert pops.solvers is solvers
-    for sub in ("elliptic", "krylov", "nonlinear", "schur",
+    for sub in ("elliptic", "krylov", "schur",
                 "options", "tolerances", "preconditioners", "requirements"):
         assert hasattr(solvers, sub), "pops.solvers missing sub-module %r" % sub
 
@@ -73,37 +73,33 @@ def test_krylov_declare_amr_route_capabilities():
         assert d.inspect()["capabilities"]["supports_amr"] is True
 
 
-# --- nonlinear solvers (planned: no native type yet) -------------------------------------
+# --- nonlinear solver descriptors are not public placeholders -----------------------------
 
-def test_nonlinear_are_planned():
-    for d in (nonlinear.Newton(), nonlinear.FixedPoint()):
-        assert d.available is False
-        assert d.native_id == ""
-        assert d.category == "solver"
-    assert nonlinear.Newton().scheme == "newton"
-    assert nonlinear.FixedPoint().scheme == "fixed_point"
+def test_nonlinear_placeholders_are_not_public():
+    # Per-cell Newton exists as Program.solve_local_nonlinear. A standalone global Newton/FixedPoint
+    # descriptor does not, so the public solver catalog must not expose available=False placeholders.
+    assert not hasattr(solvers, "Newton")
+    assert not hasattr(solvers, "FixedPoint")
+    assert not hasattr(solvers.solvers, "Newton")
+    assert not hasattr(solvers.solvers, "FixedPoint")
 
 
 # --- Schur-condensation solver -----------------------------------------------------------
 
-def test_schur_native_id_and_alias():
+def test_schur_native_id():
     assert schur.Schur().native_id == "pops::SchurCondensationOperator"
     assert schur.Schur().scheme == "schur"
-    # CondensedSchur is an alias naming the same native operator (distinct from the
-    # pops.time CondensedSchur splitting POLICY).
-    assert schur.CondensedSchur().native_id == "pops::SchurCondensationOperator"
-    assert schur.CondensedSchur() == schur.Schur()
+    assert not hasattr(schur, "CondensedSchur")
 
 
 def test_schur_declares_amr_route_capabilities():
     # Spec 6 sec.4 / sec.9: the Schur-condensation solver runs on AMR (the amr-schur source
     # stage) and System, under MPI and on the GPU, so it declares every route capability.
-    for d in (schur.Schur(), schur.CondensedSchur()):
-        caps = d.capabilities
-        assert caps["supports_uniform"] is True
-        assert caps["supports_amr"] is True
-        assert caps["supports_mpi"] is True
-        assert caps["supports_gpu"] is True
+    caps = schur.Schur().capabilities
+    assert caps["supports_uniform"] is True
+    assert caps["supports_amr"] is True
+    assert caps["supports_mpi"] is True
+    assert caps["supports_gpu"] is True
 
 
 # --- the RICH GeometricMG elliptic solver ------------------------------------------------
@@ -245,11 +241,14 @@ def test_geometric_mg_accepts_amr_layout():
 
 def test_preconditioners_catalog():
     pre = solvers.preconditioners
+    ident = pre.Identity()
+    assert ident.available is True
+    assert ident.scheme == "identity"
+    assert ident.native_id == ""
     assert pre.GeometricMG().native_id == "pops::GeometricMG"
     assert pre.GeometricMG().category == "preconditioner"
-    for d in (pre.Identity(), pre.Jacobi(), pre.BlockJacobi()):
-        assert d.available is False
-        assert d.native_id == ""
+    assert not hasattr(pre, "Jacobi")
+    assert not hasattr(pre, "BlockJacobi")
 
 
 # --- requirements vocabulary -------------------------------------------------------------
@@ -279,7 +278,7 @@ def test_lib_solvers_shim_is_removed():
     assert ns.GMRES().scheme == "gmres"
     assert ns.CG().native_id == "pops::cg_solve"
     assert ns.Schur().native_id == "pops::SchurCondensationOperator"
-    assert ns.Newton().available is False
+    assert not hasattr(ns, "Newton")
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
 
     # The custom-solver authoring / generation DSL is internal / experimental under

@@ -41,7 +41,7 @@ def build_model():
                                         [0.0, 0.0, bz],
                                         [0.0, -bz, 0.0]])
     m.elliptic_rhs(rho - 1.0)
-    h_rate = m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    h_rate = m.rate_operator("explicit_rhs", flux=True, sources=[h_src])
     return m, {"electric": h_src, "lorentz": h_lin, "explicit_rhs": h_rate}
 
 
@@ -60,6 +60,21 @@ def test_declarers_return_operator_handles():
     h_def = m2.source_term("default", [Const(0.0), -mx2, -my2])
     assert isinstance(h_def, OperatorHandle) and h_def.name == "default"
     print("OK  declarers return typed OperatorHandle(name, kind)")
+
+
+def test_rate_operator_rejects_string_source_selectors():
+    m = Model("bad_rate_source")
+    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    gx = m.aux("grad_x")
+    gy = m.aux("grad_y")
+    m.flux(x=[mx, mx, mx], y=[my, my, my])
+    m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
+    with pytest.raises(TypeError, match="typed source handles"):
+        m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    # The implicit built-in source sentinel remains allowed.
+    m.source([Const(0.0), -mx, -my])
+    m.rate_operator("default_rhs", flux=True, sources=["default"])
+    print("OK  rate_operator rejects named source strings and accepts the default sentinel")
 
 
 # A handle for the built-in default-Poisson field operator; the public P.call needs it (a bare

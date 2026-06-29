@@ -28,6 +28,7 @@ import pytest
 
 adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
+elliptic_solvers = pytest.importorskip("pops.solvers.elliptic")
 from pops import model
 from pops.ir.expr import Var
 
@@ -47,7 +48,7 @@ def _three_fluid_board():
             n: [n["nn"], n["nn"], n["nn"]],
         })
     m.solve_fields_from_species("fields", inputs=[e, i, n],
-                                outputs={"phi": None}, solver="geometric_mg")
+                                outputs={"phi": None}, solver=elliptic_solvers.GeometricMG())
     return m, e, i, n
 
 
@@ -117,6 +118,15 @@ def test_field_solve_lowers_to_a_multi_input_field_operator():
     assert op.kind == "field_operator"
     assert len(op.signature.inputs) == 3  # over all three species (solve_fields_from_blocks surface)
     assert isinstance(op.signature.output, model.FieldSpace)
+
+
+def test_field_solve_rejects_string_solver():
+    m = physics.Model("bad_solver")
+    e = m.species("electrons", state=["ne"])
+    i = m.species("ions", state=["ni"])
+    with pytest.raises(TypeError, match="GeometricMG"):
+        m.solve_fields_from_species("fields", inputs=[e, i],
+                                    outputs={"phi": None}, solver="geometric_mg")
 
 
 def test_state_handle_indexes_by_component_name():
@@ -255,8 +265,13 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     i_n = P.state("ions", space=sp["ions"])
     n_n = P.state("neutrals", space=sp["neutrals"])
     f = P._call("fields", e_n, i_n, n_n)
-    assert f.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"
+    assert f.op == "operator_call", "field solve remains an operator-first Program node"
+    assert f.attrs["kind"] == "field_operator"
+    assert f.attrs["field"] is None, "multi-input field op must not be treated as a named elliptic field"
     assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
+    P.commit_many({"electrons": e_n, "ions": i_n, "neutrals": n_n})
+    src = P.emit_cpp_program(model=m._dsl)
+    assert "ctx.solve_fields_from_blocks(" in src, "codegen routes the field op to the coupled solve"
 
 
 def test_duplicate_species_name_raises():

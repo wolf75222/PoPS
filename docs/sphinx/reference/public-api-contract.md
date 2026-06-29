@@ -35,7 +35,7 @@ route.
 | `pops.fields` | Elliptic field problems: `FieldProblem`, `PoissonProblem`, boundary conditions, RHS descriptors, coefficients. |
 | `pops.numerics` | PDE discretisation descriptors: Riemann fluxes, reconstruction, limiters, RHS terms, projections. |
 | `pops.linalg` | Algebraic problem descriptions: linear problems, matrix-free operators, norms, reductions. |
-| `pops.solvers` | Compiled solver descriptors supplied by the core: elliptic, Krylov, nonlinear, Schur, preconditioners. |
+| `pops.solvers` | Compiled solver descriptors supplied by the core: elliptic, Krylov, Schur, preconditioners. |
 | `pops.codegen` | C++ lowering, compile backends, optimization descriptors, inspection and generated-source access. |
 | `pops.output` | Output/checkpoint policies. |
 | `pops.external` | References to compiled external C++ bricks with manifests. |

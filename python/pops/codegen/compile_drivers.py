@@ -47,7 +47,7 @@ from pops.codegen.compile_emit import (
     emit_cpp_aot_source,
     emit_cpp_native_loader,
 )
-from pops.codegen.backends import lower_backend
+from pops.codegen.backends import lower_backend, lower_problem_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 
 
@@ -195,7 +195,7 @@ def compile_or_jit(model, so_path, include=None, mode="jit", name=None, cxx=None
 # compile_model -- full facade (mirrors HyperbolicModel.compile logic)
 # ---------------------------------------------------------------------------
 
-def compile_model(model, so_path=None, include=None, backend="auto", name=None, cxx=None,
+def compile_model(model, so_path=None, include=None, backend=None, name=None, cxx=None,
                   std=None, require_metadata=False, target="system", hoist_reciprocals=False):
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
     into a .so via the engine designated by *backend* and returns its path.
@@ -203,28 +203,22 @@ def compile_model(model, so_path=None, include=None, backend="auto", name=None, 
     This is the free-function equivalent of ``HyperbolicModel.compile``.
     ``dsl.HyperbolicModel.compile`` is a thin wrapper that calls this.
 
-    @p backend: "prototype" | "aot" | "production" | "auto".
-    @p target:  "system" (default) | "amr_system".
+    @p backend: typed ``Production()`` | ``AOT()`` | ``JIT()`` descriptor; ``None`` means
+       ``Production()``.
+    @p target: internal native-loader token: "system" (default) | "amr_system".
     @p require_metadata: if True, requires physical roles AND explicit gamma.
     Returns so_path.
     """
-    from pops.codegen.toolchain import resolve_auto_backend
-
     m = model
-    # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT())
-    # as well as the legacy string; lower it to the token the _BACKENDS table keys on. A plain
-    # string passes through unchanged so the existing consumers keep working.
     backend = lower_backend(backend)
-    if backend == "auto":
-        backend, _auto_reason = resolve_auto_backend(include)
     if backend not in _BACKENDS:
-        raise ValueError("compile: backend %r unknown (expected %s + 'auto')"
+        raise ValueError("compile: backend %r unknown (expected %s)"
                          % (backend, sorted(_BACKENDS)))
     if target not in ("system", "amr_system"):
         raise ValueError("compile: target 'system' | 'amr_system' (received %r)" % (target,))
     mode, adder = _BACKENDS[backend]
     if target == "amr_system" and mode != "native":
-        raise ValueError("compile: target='amr_system' exists only for backend='production' "
+        raise ValueError("compile: target='amr_system' exists only for backend=pops.codegen.Production() "
                          "(native AMR path); received backend=%r" % (backend,))
     if std is None:
         std = loader_cxx_std() if mode == "native" else "c++20"
@@ -338,38 +332,42 @@ def _module_to_model(module):
         elif op.kind == "local_rate":
             low = op.lowering
             m.rate_operator(op.name, flux=low.get("flux", True),
-                            sources=low.get("sources"), fluxes=low.get("fluxes"))
+                            sources=low.get("sources"), fluxes=low.get("fluxes"),
+                            _allow_string_sources=True)
         elif op.kind == "projection":
             m.projection(body)
     return m
 
 
 # ---------------------------------------------------------------------------
-# compile_problem -- compile a pops.time.Program into a problem.so
+# compile_problem -- compile a model + pops.time.Program into a problem.so
 # ---------------------------------------------------------------------------
 
-def compile_problem(so_path=None, *, model=None, time=None, backend="production", target="system",
+def _problem_target_from_layout(layout):
+    """Return the native problem ABI target selected by a typed mesh layout."""
+    if layout is None:
+        return "system"
+    from pops.mesh.layouts import AMR, Uniform
+    if isinstance(layout, AMR):
+        return "amr_system"
+    if isinstance(layout, Uniform):
+        return "system"
+    raise TypeError(
+        "compile_problem: layout must be a typed pops.mesh.layouts.Uniform(...) or AMR(...) "
+        "descriptor; got %r" % type(layout).__name__)
+
+
+def compile_problem(so_path=None, *, model=None, time=None, backend=None, layout=None,
                     force=False, cxx=None, include=None, std=None, debug=False, libraries=None):
-    """Compile a ``pops.time.Program`` into a ``problem.so`` the runtime loads
-    via ``sim.install_program``.
+    """Compile a physical model + ``pops.time.Program`` into one ``problem.so``.
 
-    Lowers the Program IR to C++ (``Program.emit_cpp_program``) and compiles
-    it against the pops headers with the SAME Kokkos toolchain as the loaded
-    _pops module (``pops_loader_build_flags``), so the ``.so`` is ABI-compatible
-    and runs in-process. Returns a ``CompiledProblem`` (``.so_path`` + metadata).
+    This is the public Spec corrective route. It does not compile a Program in isolation and it
+    does not accept string route selectors: pass ``backend=Production()`` (or omit it for the
+    default) and select the runtime ABI with ``layout=Uniform(...)`` / ``layout=AMR(...)``. A
+    ``layout=None`` compile emits the uniform ``System`` ABI for compact scripts.
 
-    The physical ``model`` is validated here (fail-loud) and carried on the
-    handle, but in this MVP it is added as a normal block
-    (``sim.add_equation``) while the Program drives the step via
-    ``ProgramContext`` (``ctx.rhs_into`` uses the block RHS); a single combined
-    model+program ``.so`` is a later phase. Constraints (spec): ``backend``
-    must be "production"; ``target`` is "system" (the .so exports
-    ``pops_install_program``) or "amr_system" (it ALSO exports
-    ``pops_install_program_amr``, the AMR install entry, epic ADC-511 / ADC-508).
-    Without an explicit ``so_path``
-    the ``.so`` is cached out-of-source keyed by [program source + header
-    signature + compiler + std]; ``force=True`` recompiles. ``debug=True`` also
-    writes the generated ``.cpp`` next to the ``.so`` for inspection.
+    The produced ``.so`` carries the GeneratedProgram plus GeneratedModule metadata and is later
+    installed by ``sim.install(compiled, ...)`` / ``pops.bind(compiled, ...)``.
     """
     import hashlib
     import tempfile
@@ -382,16 +380,12 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     # warning emitted in from_env when it is). The snapshot is recorded on the returned handle so the
     # active env state is inspectable (criterion #47), never hidden.
     cenv = CodegenEnv.from_env(keep_generated=debug)
-    cenv.log("compile_problem: backend=%s target=%s force=%s" % (backend, target, force))
 
-    # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()) as well as the
-    # legacy string; lower it before the production-only guard so both selectors behave the same.
-    backend = lower_backend(backend)
+    backend = lower_problem_backend(backend)
+    target = _problem_target_from_layout(layout)
+    cenv.log("compile_problem: backend=%s target=%s force=%s" % (backend, target, force))
     if backend != "production":
-        raise ValueError("compiled time programs require backend='production'")
-    if target not in ("system", "amr_system"):
-        raise ValueError("compiled time programs support target='system' | 'amr_system' "
-                         "(received %r)" % (target,))
+        raise ValueError("compile_problem: compiled problems require backend=Production()")
 
     library_manifests = []
     if libraries:
@@ -400,21 +394,24 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
         for lib_obj in libraries:
             library_manifests.append(read_library_manifest(lib_obj))
 
-    # A pure operator-first Module lowers to a dsl.Model via the shared codegen.
-    if model is not None:
-        try:
-            from pops import model as _model_pkg
-            if isinstance(model, _model_pkg.Module):
-                model = _module_to_model(model)
-        except ImportError:
-            pass  # pops.model unavailable; carry model as-is
-
     if time is None or not hasattr(time, "emit_cpp_program"):
         raise ValueError("compile_problem: time must be an pops.time.Program (got %r)" % (time,))
+    if model is None:
+        raise ValueError(
+            "compile_problem: model is required; compiling a time Program without a physical "
+            "model is no longer supported")
+
+    # A pure operator-first Module lowers to a dsl.Model via the shared codegen.
+    try:
+        from pops import model as _model_pkg
+        if isinstance(model, _model_pkg.Module):
+            model = _module_to_model(model)
+    except ImportError:
+        pass  # pops.model unavailable; carry model as-is
     if model is not None and hasattr(model, "check"):
         model.check()
 
-    src = time.emit_cpp_program(model=model, target=target)
+    src = time._emit_cpp_program_for_target(model=model, target=target)
 
     include = include or pops_include()
     sig = pops_header_signature(include)

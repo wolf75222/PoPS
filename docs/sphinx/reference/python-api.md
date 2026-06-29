@@ -134,7 +134,7 @@ Ready schemes are in `pops.lib.time`.
 ```python
 from pops.solvers.elliptic import FFT, GeometricMG
 from pops.solvers.krylov import BiCGStab, CG, GMRES, Richardson
-from pops.solvers.nonlinear import Newton
+from pops.solvers import preconditioners
 ```
 
 Users configure provided compiled solvers. They do not author solver loops in

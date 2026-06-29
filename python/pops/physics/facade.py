@@ -7,13 +7,14 @@ board facade (also named ``Model``, re-exported as ``pops.physics.Model``) lives
 in :mod:`pops.physics.board`. cf. ``docs/DSL_MODEL_DESIGN.md`` sections 1-3.
 
 Import-graph rule (Spec 4): module-scope imports are confined to :mod:`pops.ir`
-and :mod:`pops.model`; codegen is imported LAZILY inside ``Model.compile``.
+and :mod:`pops.model`; codegen is imported LAZILY inside the internal
+``_compile_for_runtime`` seam used by runtime binding.
 """
 from pops.ir import Var  # noqa: F401  -- primitive_vars self-reference check
 from pops.ir.ops import left, right  # noqa: F401  -- Model.left / Model.right sugar
 
 from ._modelpkg import model as _model
-from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
+from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used by _compile_for_runtime
 from .model import HyperbolicModel, Param, _NO_KIND, _coerce_param
 from ._facade_compile import _FacadeCompileMixin
 
@@ -30,7 +31,7 @@ class Model(_FacadeCompileMixin):
         m.flux(x=[...], y=[...])                   # symbolic DECLARATOR of the physical flux
         m.eval_flux(U, aux, dir)                   # numpy EVALUATOR (debug), DISTINCT name
         m.primitive_vars(rho=rho, u=u, v=v, p=p)   # ordered Prim layout (kwargs order)
-        compiled = m.compile(so_path, include, backend="aot")  # -> CompiledModel
+        compiled = pops.compile(case, backend=pops.codegen.Production())  # -> CompiledProblem
 
     cf. docs/DSL_MODEL_DESIGN.md sections 1-3."""
 
@@ -190,14 +191,16 @@ class Model(_FacadeCompileMixin):
         which a Program can pass to ``P.call`` in place of the string name."""
         return self._m.linear_source(name, matrix)
 
-    def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None):
+    def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None,
+                      _allow_string_sources=False):
         """NAMED composite rate operator R_name = -div F + sum(sources) (Spec 2, operator-first):
         a Program-side rate handle lowered by ``P.call(handle, U[, fields])``. Delegates to
         HyperbolicModel.rate_operator.
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3),
         which a Program can pass to ``P.call`` in place of the string name."""
-        return self._m.rate_operator(name, flux=flux, sources=sources, fluxes=fluxes)
+        return self._m.rate_operator(name, flux=flux, sources=sources, fluxes=fluxes,
+                                     _allow_string_sources=_allow_string_sources)
 
     def source_frequency(self, expr_mu):
         """Local frequency mu(U, aux) [1/s] of the source -- the 'source' step bound from the meeting

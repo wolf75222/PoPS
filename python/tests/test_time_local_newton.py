@@ -116,9 +116,9 @@ def section_a(t):
         "a non-State initial_guess is rejected")
     chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=resid, initial_guess=U, max_iter=0)),
         "max_iter <= 0 is rejected")
-    chk(raises((ValueError, NotImplementedError),
+    chk(raises(TypeError,
                lambda: P.solve_local_nonlinear(residual=resid, initial_guess=U, method="broyden")),
-        "an unsupported method is rejected")
+        "method= is not a public selector")
 
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
@@ -195,7 +195,7 @@ def section_b(t):
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
 
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "install_program"):
+    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
         print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
         return
 
@@ -234,22 +234,22 @@ def section_b(t):
 
     sim = pops.System(n=n, L=1.0, periodic=True)
     try:
-        compiled_model = reaction_model("react_block", k).compile(backend="production")
+        compiled_model = reaction_model("react_block", k)._compile_for_runtime(backend=pops.codegen.Production())
     except RuntimeError as exc:
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
 
     # A KNOWN positive field with spatial variation (each cell solves its own scalar Newton).
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.5 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)  # in [0.5, 1.5]
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
 
     sim._install_program_so(compiled.so_path)
     sim.step(dt)
-    rho = np.array(sim.get_state("blk"))[0]
+    rho = np.array(sim._get_state("blk"))[0]
 
     # ---- references ----
     # Closed form: dt*k*U^2 + U - U0 = 0 -> U = (-1 + sqrt(1 + 4*dt*k*U0)) / (2*dt*k)  (positive root).

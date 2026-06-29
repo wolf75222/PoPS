@@ -26,6 +26,7 @@ captured into the step closure), reused across every step and every Krylov itera
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+import pytest
 import sys
 
 
@@ -36,6 +37,11 @@ def _pops_time():
         print("skip test_time_solve_linear (pops.time unavailable: %s)" % exc)
         sys.exit(0)
     return t
+
+
+@pytest.fixture
+def t():
+    return _pops_time()
 
 
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD, well-conditioned for CG)
@@ -52,8 +58,7 @@ def _krylov(method):
 def _precond(scheme):
     """Map a preconditioner name to its TYPED pops.solvers.preconditioners descriptor."""
     from pops.solvers import preconditioners
-    return {"identity": preconditioners.Identity, "geometric_mg": preconditioners.GeometricMG,
-            "jacobi": preconditioners.Jacobi, "block_jacobi": preconditioners.BlockJacobi}[scheme]()
+    return {"identity": preconditioners.Identity, "geometric_mg": preconditioners.GeometricMG}[scheme]()
 
 
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA,
@@ -150,16 +155,11 @@ def test_cg_gmg_precond_rejected(t):
             raise AssertionError("%s + GeometricMG must raise ValueError" % method)
 
 
-def test_planned_precond_rejected(t):
-    # jacobi / block_jacobi are catalogued but have no native kernel yet: rejected with an honest
-    # "planned, not wired" message (a separate issue), never a transitional catch-all.
-    for scheme in ("jacobi", "block_jacobi"):
-        try:
-            _solve_program(t, method="gmres", preconditioner=_precond(scheme))
-        except NotImplementedError as exc:
-            assert "planned, not wired" in str(exc), str(exc)
-        else:
-            raise AssertionError("%s preconditioner must raise NotImplementedError (planned)" % scheme)
+def test_unwired_preconditioners_are_not_public():
+    # Clean break: no public Jacobi()/BlockJacobi() descriptors until their native C++ kernels exist.
+    from pops.solvers import preconditioners
+    assert not hasattr(preconditioners, "Jacobi")
+    assert not hasattr(preconditioners, "BlockJacobi")
 
 
 def test_string_precond_rejected(t):
@@ -336,22 +336,23 @@ def _run_section_b(t):
     assert compiled.program_name == "solve_step", "handle carries the program name"
 
     try:
-        compiled_model = passive_model("solve_block").compile(backend="production")
+        from pops.codegen import Production
+        compiled_model = passive_model("solve_block")._compile_for_runtime(backend=Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
 
     sim._install_program_so(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
 
     # OFFLINE reference: solve the SAME discrete system (I - alpha*Lap_periodic) phi = rho0 with a numpy
     # CG to the same tolerance. The compiled matrix-free CG must recover the same phi.
@@ -408,21 +409,22 @@ def _run_section_b_gmg_precond(t):
                           preconditioner=preconditioners.GeometricMG())
     try:
         compiled = pops.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
-        compiled_model = passive_model("solve_gmg_block").compile(backend="production")
+        from pops.codegen import Production
+        compiled_model = passive_model("solve_gmg_block")._compile_for_runtime(backend=Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200])
         return None
 
     sim._add_equation("blk", compiled_model,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     time=pops.Explicit.euler())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
+    sim._set_state("blk", np.stack([rho0]))
     sim._install_program_so(compiled.so_path)
     sim.step(0.05)
-    out = np.array(sim.get_state("blk"))[0]
+    out = np.array(sim._get_state("blk"))[0]
 
     apply = _discrete_helmholtz(n, _ALPHA)
     phi_ref, iters = _np_cg(apply, rho0, tol=tol)

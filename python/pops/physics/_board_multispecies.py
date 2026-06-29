@@ -107,6 +107,11 @@ class _MultiSpeciesMixin:
         ``solver`` record the elliptic problem and the produced fields for introspection.
         """
         from .. import model as _model
+        if isinstance(solver, str):
+            raise TypeError(
+                "solve_fields_from_species(solver=%r): solver must be a typed "
+                "pops.solvers.elliptic descriptor such as GeometricMG() or FFT(), not a string"
+                % solver)
         if self._multi_module is None:
             raise ValueError(
                 "solve_fields_from_species(%r) needs at least two species; declare them with "

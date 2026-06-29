@@ -46,7 +46,7 @@ def build_model():
            y=[my, mx * my / rho, my * my / rho])
     h_src = m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
     m.elliptic_rhs(rho - 1.0)
-    h_rate = m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    h_rate = m.rate_operator("explicit_rhs", flux=True, sources=[h_src])
     return m, {"electric": h_src, "explicit_rhs": h_rate}
 
 

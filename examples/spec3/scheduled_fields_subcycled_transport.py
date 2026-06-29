@@ -18,23 +18,23 @@ def plasma_module():
     u = mod.state_space("U", ("rho", "mx", "my"))
     fields = mod.field_space("fields", ("phi",))
     rho = Var("rho", "cons")
-    mod.operator(name="fields_from_state", signature=(u,) >> fields,
-                 kind="field_operator", expr=rho)
-    mod.operator(name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
-                 expr={"x": [rho, rho, rho], "y": [rho, rho, rho]})
+    fields_op = mod.operator(name="fields_from_state", signature=(u,) >> fields,
+                             kind="field_operator", expr=rho)
+    flux_op = mod.operator(name="flux", signature=(u,) >> model.Rate(u), kind="grid_operator",
+                           expr={"x": [rho, rho, rho], "y": [rho, rho, rho]})
     # the Poisson field solve is cacheable: holding a stale phi between refreshes is allowed
     mod.operator_capabilities("fields_from_state", cacheable=True)
-    return mod, u
+    return mod, u, fields_op, flux_op
 
 
 def main():
-    mod, u = plasma_module()
+    mod, u, fields_op, flux_op = plasma_module()
 
     # the cheap transport refreshes the field every 10 steps and holds it in between
     P = adctime.Program("scheduled_step").bind_operators(mod)
     U = P.state("plasma", space=u)
-    fields = P.call("fields_from_state", U, schedule=adctime.every(10).hold())
-    transport = P.call("flux", U, schedule=adctime.subcycle(4))
+    fields = P.call(fields_op, U, schedule=adctime.every(10).hold())
+    transport = P.call(flux_op, U, schedule=adctime.subcycle(4))
     print("field solve schedule :", fields.attrs["schedule"])
     print("transport schedule   :", transport.attrs["schedule"])
     print("\noperator-first IR (schedules are recorded + inspectable):")
@@ -42,7 +42,7 @@ def main():
 
     # holding a NON-cacheable operator is rejected at authoring time
     try:
-        P.call("flux", U, schedule=adctime.every(10).hold())
+        P.call(flux_op, U, schedule=adctime.every(10).hold())
     except ValueError as exc:
         print("\nrejected hold on a non-cacheable operator:\n  ", exc)
 

@@ -57,10 +57,14 @@ def test_reconstruction_weno5z_is_native():
 
 def test_catalogued_but_unwired_bricks_are_marked_unavailable():
     # No native symbol is fabricated: planned bricks carry available=False, empty id.
-    for d in (lib.fields.Poisson(), lib.solvers.Newton(),
-              lib.preconditioners.Jacobi(), lib.limiters.MC()):
+    for d in (lib.fields.Poisson(), lib.limiters.MC()):
         assert d.available is False
         assert d.native_id == ""
+
+    # Clean break: no public solver/preconditioner descriptors are kept as unavailable placeholders
+    # when no compiled route exists.
+    assert not hasattr(lib.solvers, "Newton")
+    assert not hasattr(lib.preconditioners, "Jacobi")
 
 
 def test_available_native_ids_exist_and_are_namespaced():

@@ -130,11 +130,11 @@ class _ProgramCore(_ProgramConstants):
     def call(self, operator, *args, name=None, schedule=None):
         """Call a typed operator by HANDLE (the operator-first level, Spec 5 sec.14.2.3).
 
-        ``operator`` MUST be the :class:`pops.model.OperatorHandle` a declarer (``m.rate`` /
-        ``m.field_operator`` / ``m.source_term`` / ``m.rate_operator`` / ``m.linear_source``)
-        returned -- the one public path. A bare string operator NAME is REFUSED with a clear
-        ``TypeError`` naming the handle path: a Program references an operator only by the typed
-        handle, never by a free string (Spec 5 "one clean API", ADC-479 criterion 23).
+        ``operator`` MUST be a typed selector: either the :class:`pops.model.OperatorHandle` a
+        physics declarer returned, or the :class:`pops.model.Operator` returned by
+        ``pops.model.Module.operator(...)``. A bare string operator NAME is REFUSED with a clear
+        ``TypeError`` naming the typed-object path: a Program references an operator only by a
+        typed object, never by a free string (Spec 5 "one clean API", ADC-479 criterion 23).
 
         Resolves the handle against the bound operator registry (see :meth:`bind_operators`),
         type-checks the arguments against the operator's ``Signature``, then records an
@@ -142,16 +142,15 @@ class _ProgramCore(_ProgramConstants):
         C++ ``ProgramContext`` operation. The public path no longer rewrites a call back into the
         private ``_rhs_legacy`` / ``_solve_fields`` builders.
         """
-        from pops.model import OperatorHandle
-        if not isinstance(operator, OperatorHandle):
+        from pops.model import Operator, OperatorHandle
+        if not isinstance(operator, (OperatorHandle, Operator)):
             if isinstance(operator, str):
                 raise TypeError(
-                    "P.call requires a typed operator handle, not the string %r; build it with "
-                    "m.rate(...) / m.field_operator(...) / m.source_term(...) (any m.*_operator "
-                    "declarer returns an pops.model.OperatorHandle)" % (operator,))
+                    "P.call requires a typed operator handle/object, not the string %r; build it "
+                    "with m.rate(...) / m.field_operator(...) / m.source_term(...), or keep the "
+                    "pops.model.Operator returned by module.operator(...)" % (operator,))
             raise TypeError(
-                "P.call: operator must be an pops.model.OperatorHandle (from m.rate / "
-                "m.field_operator / m.source_term / m.rate_operator / m.linear_source), got %r"
+                "P.call: operator must be an pops.model.OperatorHandle or pops.model.Operator, got %r"
                 % (operator,))
         return self._call(operator, *args, name=name, schedule=schedule)
 
@@ -188,18 +187,18 @@ class _ProgramCore(_ProgramConstants):
     def _operator_call_name(self, operator):
         """Normalize an internal :meth:`_call` operator selector to its registry name.
 
-        Accepts EITHER a plain ``str`` (an internal selector token, returned unchanged) OR an
-        :class:`pops.model.OperatorHandle` (its ``.name`` is returned). A handle resolves through the
-        identical registry lookup + lowering as its name, so the IR is byte-identical. Any other type
-        is a clear ``TypeError``. The public string REJECT lives in :meth:`call`; this internal
-        normalizer accepts the string the lowering and the lib.time macros pass."""
-        from pops.model import OperatorHandle
-        if isinstance(operator, OperatorHandle):
+        Accepts EITHER a plain ``str`` (an internal selector token, returned unchanged), an
+        :class:`pops.model.OperatorHandle`, or a :class:`pops.model.Operator` (their ``.name`` is
+        returned). A typed selector resolves through the identical registry lookup + lowering as its
+        name, so the IR is byte-identical. Any other type is a clear ``TypeError``. The public string
+        REJECT lives in :meth:`call`; this internal normalizer accepts the string the lowering passes."""
+        from pops.model import Operator, OperatorHandle
+        if isinstance(operator, (OperatorHandle, Operator)):
             return operator.name
         if isinstance(operator, str):
             return operator
         raise TypeError(
-            "_call: operator must be a str name or an pops.model.OperatorHandle, got %r"
+            "_call: operator must be a str name, pops.model.OperatorHandle, or pops.model.Operator, got %r"
             % (operator,))
 
     def _validate_schedule(self, op, schedule):
@@ -220,7 +219,10 @@ class _ProgramCore(_ProgramConstants):
         # operation, so the Program does not re-enter the old public-style field/RHS builders.
         kind = op.kind
         if kind == "field_operator":
-            field = None if operator_name == "fields_from_state" else operator_name
+            # A multi-input field operator is the coupled multi-block field solve: the operator name
+            # labels the abstract field context, not a second named elliptic field. Only a single-state
+            # field operator whose name differs from the default maps to the named-elliptic overload.
+            field = None if operator_name == "fields_from_state" or len(args) > 1 else operator_name
             return self._new("fields", "operator_call", args,
                              {"operator": operator_name, "kind": kind, "field": field},
                              name, args[0].block)

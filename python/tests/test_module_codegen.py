@@ -10,6 +10,7 @@ import sys
 
 try:
     from pops.ir.expr import Const
+    from pops.model import OperatorHandle
     from pops.physics.facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
@@ -25,10 +26,10 @@ def _model():
     gy = m.aux("grad_y")
     bz = m.aux("B_z")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
+    electric = m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
     m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
     return m
 
 
@@ -36,8 +37,9 @@ def test_metadata_block_emitted():
     m = _model()
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=OperatorHandle("fields_from_state", kind="field_operator"),
+        explicit_rate_operator=OperatorHandle("explicit_rhs", kind="local_rate"),
+        implicit_operator=OperatorHandle("lorentz", kind="local_linear_operator"))
     src = P.emit_cpp_program(model=m)
     # GeneratedModule descriptor + GeneratedProgram coexist in the one .so.
     assert "pops_install_program" in src
@@ -64,8 +66,9 @@ def test_metadata_not_in_step_body():
     m = _model()
     P = adctime.Program("pc").bind_operators(m)
     libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator="fields_from_state",
-        explicit_rate_operator="explicit_rhs", implicit_operator="lorentz")
+        P, "plasma", fields_operator=OperatorHandle("fields_from_state", kind="field_operator"),
+        explicit_rate_operator=OperatorHandle("explicit_rhs", kind="local_rate"),
+        implicit_operator=OperatorHandle("lorentz", kind="local_linear_operator"))
     src = P.emit_cpp_program(model=m)
     body = src.split("pops_install_program", 1)[1]
     assert "pops_module_" not in body, \

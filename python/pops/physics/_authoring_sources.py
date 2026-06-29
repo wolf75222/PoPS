@@ -145,7 +145,8 @@ class _SourceMixin:
         self._linear_sources[name] = wrapped
         return OperatorHandle(name, kind="local_linear_operator")
 
-    def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None):
+    def rate_operator(self, name, *, flux=True, sources=("default",), fluxes=None,
+                      _allow_string_sources=False):
         """Declare a NAMED composite rate operator ``R_name = -div F + sum(sources)`` (Spec 2,
         operator-first). It carries the transport/source selection that codegen lowers from a typed
         ``P.call(handle, U[, fields])`` to C++ ``ProgramContext`` routes. The alias carries no new
@@ -170,9 +171,44 @@ class _SourceMixin:
         if not flux and flx:
             raise ValueError("rate_operator('%s'): named fluxes require flux=True "
                              "(a source-only rate has no flux to divide)" % name)
-        srcs = list(sources) if sources is not None else None
+        srcs = self._normalize_rate_sources(
+            sources, allow_strings=_allow_string_sources, who="rate_operator(%r)" % name)
         self._rate_operators[name] = {"flux": bool(flux), "sources": srcs, "fluxes": flx}
         return OperatorHandle(name, kind="local_rate")
+
+    @staticmethod
+    def _normalize_rate_sources(sources, *, allow_strings=False, who="rate_operator"):
+        """Normalize source references to registry names.
+
+        Public callers must pass typed source selectors: the ``OperatorHandle`` returned by
+        ``source_term`` or a board ``SourceHandle`` carrying ``reg_name``. The literal ``"default"``
+        remains accepted because it names the implicit built-in source slot. Internal lowerings may
+        set ``allow_strings=True`` when they are converting an already-typed registry record.
+        """
+        if sources is None:
+            return None
+        out = []
+        for src in sources:
+            if isinstance(src, str):
+                if src == "default" or allow_strings:
+                    out.append(src)
+                    continue
+                raise TypeError(
+                    "%s: sources must contain typed source handles, not the string %r; keep the "
+                    "handle returned by source_term/source, or use 'default' for the implicit source"
+                    % (who, src))
+            name = getattr(src, "reg_name", None)
+            if name is not None:
+                out.append(name)
+                continue
+            handle_name = getattr(src, "name", None)
+            handle_kind = getattr(src, "kind", None)
+            if handle_name is not None and handle_kind in (None, "local_source"):
+                out.append(handle_name)
+                continue
+            raise TypeError(
+                "%s: sources must contain source handles; got %r" % (who, type(src).__name__))
+        return out
 
     def stability_speed(self, expr):
         """STABILITY speed lambda* (expression of cons / prims / aux): drives the block CFL

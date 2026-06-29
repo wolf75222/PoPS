@@ -33,13 +33,13 @@ try:
 
     import pops
     from pops.physics.facade import Model
+    from pops.solvers import krylov
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001  -- pops/numpy unavailable in this interpreter
     print("skip divergence_solve (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
 ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*div(grad) = I - alpha*Lap is SPD (no null space)
-
 
 def passive_model(name):
     """A 1-variable block with no flux and no Poisson coupling: the Program runs neither a flux RHS nor
@@ -54,8 +54,9 @@ def passive_model(name):
     return m
 
 
-def solve_program(method="bicgstab", tol=1e-10, max_iter=200):
+def solve_program(method=None, tol=1e-10, max_iter=200):
     """phi = solve (I - alpha*div(grad)) phi = U, matrix-free, committed back into the block."""
+    method = krylov.BiCGStab() if method is None else method
     P = adctime.Program("divergence_solve_example")
     U = P.state("blk")
     A = P.matrix_free_operator("A")
@@ -136,7 +137,7 @@ def main():
     sim.install(compiled,
                 instances={"blk": {"model": passive_model("div_blk"),
                                    "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                   "time": pops.Explicit(method="euler"),
+                                   "time": pops.Explicit.euler(),
                                    "initial": np.stack([b])}})
     sim.step(0.01)  # dt is irrelevant -- the program is a pure solve
     phi_prog = np.array(sim.get_state("blk"))[0]

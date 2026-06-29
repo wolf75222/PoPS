@@ -32,10 +32,10 @@ def coupled_module():
     i = mod.state_space("ion_state", ("ni", "mix", "miy"))
     bundle = model.RateBundle({"electrons": model.Rate(e), "ions": model.Rate(i)})
     ne, ni = Var("ne", "cons"), Var("ni", "cons")
-    mod.operator(name="collision", signature=model.Signature((e, i), bundle),
-                 kind="coupled_rate",
-                 expr={"electrons": [ni - ne, ne, ne], "ions": [ne - ni, ni, ni]})
-    return mod, e, i
+    collision = mod.operator(name="collision", signature=model.Signature((e, i), bundle),
+                             kind="coupled_rate",
+                             expr={"electrons": [ni - ne, ne, ne], "ions": [ne - ni, ni, ni]})
+    return mod, e, i, collision
 
 
 def main():
@@ -49,11 +49,11 @@ def main():
         print("rejected wrong rate on wrong state:", str(exc)[:60], "...")
 
     # a coupled_rate OPERATOR: P.call returns one rate per species, each composes like any RHS
-    mod, es, is_ = coupled_module()
+    mod, es, is_, collision = coupled_module()
     P = adctime.Program("collision_step").bind_operators(mod)
     dt = P.dt
     e_n, i_n = P.state("electrons", space=es), P.state("ions", space=is_)
-    C = P.call("collision", e_n, i_n)
+    C = P.call(collision, e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + dt * C["ions"])})
     print("\noperator-first IR (one coupled node + a per-block projection each):")

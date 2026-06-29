@@ -27,6 +27,7 @@ import sys
 from pops.lib.time import forward_euler
 from pops.math import ddt, div, grad, laplacian, sqrt
 from pops.physics import Model
+from pops.solvers.elliptic import GeometricMG
 from pops.time import Program
 
 
@@ -56,7 +57,7 @@ def build_model():
         "fields_from_state",
         equation=(-laplacian(phi) == rho),
         outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-        solver="geometric_mg",
+        solver=GeometricMG(),
     )
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     electric = m.source("default", on=state, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])
@@ -127,7 +128,7 @@ def main():
             "plasma": {
                 "initial": initial,
                 "spatial": pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                "time": pops.Explicit(method="euler"),
+                "time": pops.Explicit.euler(),
             }
         },
         solvers={"phi": "geometric_mg"},

@@ -112,12 +112,12 @@ def _physics_model(name, gain):
     bz = m.aux("B_z")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho],
            y=[my, mx * my / rho, my * my / rho])
-    m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
+    electric = m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
     m.linear_source("lorentz", [[0.0, 0.0, 0.0],
                                 [0.0, 0.0, bz],
                                 [0.0, -bz, 0.0]])
     m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    m.rate_operator("explicit_rhs", flux=True, sources=[electric])
     return m
 
 

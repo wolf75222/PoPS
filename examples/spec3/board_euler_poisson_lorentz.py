@@ -8,6 +8,7 @@ Run: python3 examples/spec3/board_euler_poisson_lorentz.py
 """
 from pops.physics import Model
 from pops.math import sqrt, grad, div, laplacian, ddt
+from pops.solvers.elliptic import GeometricMG
 
 
 def build():
@@ -36,7 +37,7 @@ def build():
     m.solve_field("fields_from_state",
                   equation=(-laplacian(phi) == alpha * (rho - rho_ref)),
                   outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-                  solver="geometric_mg")
+                  solver=GeometricMG())
 
     e_field = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
     a_src = m.source("electric", on=U, value=[0.0 * rho, rho * e_field.x, rho * e_field.y])

@@ -40,7 +40,7 @@ class _ProgramLocal(_ProgramConstants):
     # non-local op (rhs / divergence / solve_fields / a nested solve) is allowed (it would need a halo
     # / global solve, which a per-cell Newton kernel cannot evaluate at a perturbed stack state).
 
-    def solve_local_nonlinear(self, name=None, residual=None, initial_guess=None, method="newton",
+    def solve_local_nonlinear(self, name=None, residual=None, initial_guess=None, method=None,
                               tol=1e-12, max_iter=20):
         """Solve a LOCAL non-linear system ``residual(U) = 0`` cell by cell with a per-cell Newton
         iteration (spec op 10). Returns the converged solution State.
@@ -57,10 +57,10 @@ class _ProgramLocal(_ProgramConstants):
         two-argument ``residual_fn(P, U)`` (ignoring the guess) is also accepted.
 
         @p initial_guess is the start State ``U0`` (typically ``U^n``); it seeds the Newton iterate and
-        the residual reads it as a frozen per-cell constant. @p method is ``"newton"`` (the only
-        method). @p tol is the convergence threshold on ``max_c |r_c|`` (per cell) and @p max_iter the
-        iteration budget (the kernel runs a fixed C++ ``for`` bounded by @p max_iter, breaking early
-        once ``|r| < tol``).
+        the residual reads it as a frozen per-cell constant. There is no public ``method=`` selector:
+        this API is the compiled per-cell Newton route. @p tol is the convergence threshold on
+        ``max_c |r_c|`` (per cell) and @p max_iter the iteration budget (the kernel runs a fixed C++
+        ``for`` bounded by @p max_iter, breaking early once ``|r| < tol``).
 
         The Jacobian is formed in-kernel by finite differences (``J_ij = (r_i(U+eps e_j) - r_i(U))/eps``)
         and the Newton step ``J dU = -r`` is solved with the SAME stack-only dense inverse
@@ -74,9 +74,10 @@ class _ProgramLocal(_ProgramConstants):
         if not (isinstance(initial_guess, Value) and initial_guess.vtype == "state"):
             raise ValueError(
                 "solve_local_nonlinear: initial_guess must be a State value (initial_guess=...)")
-        if method != "newton":
-            raise NotImplementedError(
-                "solve_local_nonlinear: only method='newton' is supported (got %r)" % (method,))
+        if method is not None:
+            raise TypeError(
+                "solve_local_nonlinear: method= is not a public selector; this operation always "
+                "lowers to the compiled per-cell Newton kernel")
         if not isinstance(tol, (int, float)) or tol <= 0:
             raise ValueError("solve_local_nonlinear: tol must be a positive number (got %r)" % (tol,))
         if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
@@ -114,7 +115,7 @@ class _ProgramLocal(_ProgramConstants):
         return self._new(
             "state", "solve_local_nonlinear", (initial_guess,),
             {"residual_block": sub, "residual": r, "iterate": iterate, "guess": guess_ph,
-             "tol": float(tol), "max_iter": int(max_iter), "method": method}, name, block)
+             "tol": float(tol), "max_iter": int(max_iter), "method": "newton"}, name, block)
 
     def _linear_source_name(self, operator, where):
         """Resolve `operator` (a `linear_source` value, its name, or a single unit-coefficient
