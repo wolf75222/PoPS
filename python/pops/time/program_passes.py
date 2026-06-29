@@ -18,6 +18,18 @@ class _ProgramPasses(_ProgramConstants):
     """IR optimization passes, serialization and validation for the Program authoring class."""
 
     @staticmethod
+    def _is_removable_node(v):
+        """Whether dead-node elimination may drop an unconsumed flat node.
+
+        Typed ``call`` nodes need output-sensitive handling: rate/operator calls allocate derived
+        scratch or metadata and are removable when dead; field and state calls mutate shared runtime
+        state/aux and are live roots.
+        """
+        if v.op == "call":
+            return v.vtype in ("rhs", "operator")
+        return v.op in _ProgramPasses._REMOVABLE_OPS
+
+    @staticmethod
     def _subblock_value_refs(v):
         """Yield attr-borne Value refs, including nested sub-block values."""
         attrs = v.attrs
@@ -102,7 +114,7 @@ class _ProgramPasses(_ProgramConstants):
         roots = [s.id for s in self._commits.values()]
         roots.extend(f.id for f in getattr(self, "_commit_fields", {}).values())
         for v in self._values:
-            if v.op not in self._REMOVABLE_OPS:
+            if not self._is_removable_node(v):
                 roots.append(v.id)
         live, stack = set(), list(roots)
         while stack:
@@ -122,13 +134,12 @@ class _ProgramPasses(_ProgramConstants):
         elimination, ADC-465). An OPT-IN pass: call it explicitly to optimize a copy -- it NEVER runs
         on the default ``emit_cpp_program`` path, so it cannot change an existing compiled program.
 
-        The pass is SAFE-BY-DEFAULT: a flat node is DEAD only if its op is on the ``_REMOVABLE_OPS``
-        allow-list (ops verified to allocate a FRESH result scratch and have no other side effect: rhs,
-        source, apply, linear_combine, linear_source, solve_local_linear, cell_compare, where, reduce,
-        scalar_op, compare) AND no live op consumes its result. EVERY other op -- the buffer-writers
-        that alias a caller-allocated input buffer (schur_rhs, laplacian, gradient, divergence,
-        schur_*), the side-effecting ops (solve_fields, project, fill_boundary, store_history,
-        record_scalar), solve_linear, and the sub-block-owning ops (while/if/range,
+        The pass is SAFE-BY-DEFAULT: a flat node is DEAD only if it is on the removable allow-list, or
+        if it is a typed rate/operator ``call`` that allocates a FRESH result scratch/metadata and no
+        live op consumes it. EVERY other op -- the buffer-writers that alias a caller-allocated input
+        buffer (schur_rhs, laplacian, gradient, divergence, schur_*), the side-effecting ops
+        (field/state calls, solve_fields, project, fill_boundary, store_history, record_scalar),
+        solve_linear, and the sub-block-owning ops (while/if/range,
         matrix_free_operator, solve_local_nonlinear) -- is treated as LIVE even when its result looks
         unconsumed, so an unknown/new op is NEVER wrongly dropped. The live set is reverse-reachability
         from the commits plus those non-removable nodes. The surviving nodes are renumbered to
@@ -142,7 +153,7 @@ class _ProgramPasses(_ProgramConstants):
         """Clone this Program into a fresh one keeping the flat nodes for which ``keep(v)`` is true,
         renumbering surviving ids to a contiguous 0.. range in original order. Sub-blocks are cloned
         wholesale (never filtered). The clone reproduces the IR identity of an equivalent hand-built
-        Program (same serialization), so it is byte-identical when nothing was dropped.
+        Program (same serialization), so it is byte-for-byte identical when nothing was dropped.
 
         @p alias (optional) maps a DROPPED node id -> the kept representative node id it should be
         replaced by (the CSE / redundant-solve passes use it to rewire every use of a duplicate onto its
@@ -150,7 +161,7 @@ class _ProgramPasses(_ProgramConstants):
         is resolved THROUGH this alias before id lookup, so a dropped node never leaves a dangling
         reference. A dropped node MUST have an alias entry (the passes guarantee a representative whose
         id < the duplicate's, hence already cloned); a kept node maps to itself. Without an alias map
-        the behavior is the historical drop-only rebuild."""
+        the behavior is the plain drop-only rebuild."""
         out = type(self)(self.name)
         out.dt = self.dt
         out._histories = dict(self._histories)
@@ -207,7 +218,7 @@ class _ProgramPasses(_ProgramConstants):
             owning node, BUT a matrix_free_operator is created (its node id assigned) BEFORE
             ``set_apply`` records its apply sub-block -- the node id precedes the sub-block ids. Ordering
             every dependency by its original id (ascending) reproduces the build order verbatim for both
-            shapes, so a no-drop clone is byte-identical (same renumbering) rather than reordering the
+            shapes, so a no-drop clone is byte-for-byte stable (same renumbering) rather than reordering the
             matrix_free_operator node after its own sub-block. Each input is resolved THROUGH the alias
             map, so a dropped duplicate is replaced by its (already-earlier) representative."""
             seen = []
@@ -280,40 +291,71 @@ class _ProgramPasses(_ProgramConstants):
                 reps[key] = v.id
                 canon[v.id] = v.id
         if not drop:
-            return self._rebuild(lambda v: True)  # byte-identical no-op clone
+            return self._rebuild(lambda v: True)  # byte-for-byte no-op clone
         return self._rebuild(lambda v: v.id not in drop, alias=canon)
 
     # --- redundant field-solve elimination (Spec 3 s28, ADC-465) ---
+    @staticmethod
+    def _is_field_solve_node(v):
+        """True for the legacy field-solve op and the canonical typed field-operator call."""
+        return (
+            v.op in ("solve_fields", "solve_fields_from_blocks")
+            or (v.op == "call" and v.vtype == "fields")
+        )
+
+    @staticmethod
+    def _field_solve_signature(v):
+        """Stable redundancy signature for one field-solve node."""
+        if v.op == "call":
+            return (
+                "call",
+                v.attrs.get("operator_id"),
+                v.attrs.get("operator"),
+                tuple(inp.id for inp in v.inputs),
+            )
+        return (
+            v.op,
+            v.attrs.get("field"),
+            tuple(inp.id for inp in v.inputs),
+        )
+
+    @staticmethod
+    def _is_field_solve_barrier(v, commit_ids):
+        """Whether a node invalidates a pending field-solve reuse."""
+        if v.id in commit_ids:
+            return True
+        if v.op in ("project", "fill_boundary", "store_history"):
+            return True
+        if v.op == "call" and v.vtype == "state":
+            return True
+        return False
+
     def eliminate_redundant_field_solves(self):
-        """Return a NEW Program with a provably-redundant second ``solve_fields`` removed and aliased
+        """Return a NEW Program with a provably-redundant second field solve removed and aliased
         (Spec 3 s28 redundant-solve elimination, ADC-465).
 
-        ``solve_fields`` is side-effecting (it fills the shared phi/aux and returns a FieldContext), so
-        it is NEVER touched by CSE or dead-node elimination. But two ``solve_fields`` over the SAME
-        state input with NO intervening STATE OR AUX MUTATION recompute the identical fields: the
-        second is redundant and its FieldContext can alias the first. This is the ONLY field solve this
-        pass removes, and ONLY when redundancy is PROVABLE.
+        Field solves are side-effecting (they fill the shared phi/aux and return a FieldContext), so
+        they are NEVER touched by CSE or dead-node elimination. But two field solves over the SAME
+        typed operator and SAME input states with NO intervening STATE OR AUX MUTATION recompute the
+        identical fields: the second is redundant and its FieldContext can alias the first. This pass
+        handles both the old internal ``solve_fields`` op and the canonical field-operator
+        ``P.call(...)`` node; it does not make all ``call`` nodes barriers.
 
-        CONSERVATIVE soundness rule: walking the flat list in order, a ``solve_fields(state=U,
-        field=f)`` is redundant iff an EARLIER ``solve_fields`` with the SAME state input AND the same
-        ``field`` attr exists AND, between the two, NO op on the ``_STATE_BARRIER_OPS`` set (a commit
-        target write, ``project``, ``fill_boundary``, ``store_history``, or ANY other field solve --
-        which would re-fill the shared aux) appears. The Poisson RHS reads every block's LIVE state, so
-        a write to ANY block's state -- not just U's -- is a barrier; a ``linear_combine`` that is a
-        commit target is therefore a barrier too. If anything between the two solves could have changed
-        what the elliptic solve sees, the second is kept. The single-block, no-mutation case (e.g. a
-        macro accidentally solving twice from U^n before the first stage) is the one provably-redundant
-        shape eliminated; everything else is left as written.
+        CONSERVATIVE soundness rule: walking the flat list in order, a field solve is redundant iff an
+        EARLIER field solve with the SAME signature exists AND, between the two, no commit target write,
+        ``project``, ``fill_boundary``, ``store_history``, state-returning call, or different field
+        solve appears. The Poisson RHS reads every block's LIVE state, so a write to ANY block's state
+        is a barrier. If anything between the two solves could have changed what the elliptic solve
+        sees, the second is kept.
 
-        OPT-IN: never on the default emit path. Byte-identical no-op when no redundant solve exists."""
+        OPT-IN: never on the default emit path. Byte-for-byte no-op when no redundant solve exists."""
         commit_ids = {s.id for s in self._commits.values()}
-        active = {}       # (state input id, field attr) -> the live representative solve_fields id
+        active = {}       # field-solve signature -> live representative id
         canon = {}
         drop = set()
         for v in self._values:
-            if v.op == "solve_fields":
-                (state_in,) = v.inputs
-                sig = (state_in.id, v.attrs.get("field"))
+            if self._is_field_solve_node(v):
+                sig = self._field_solve_signature(v)
                 prior = active.get(sig)
                 if prior is not None:
                     # A redundant re-solve over the same state with no barrier since `prior`.
@@ -321,13 +363,13 @@ class _ProgramPasses(_ProgramConstants):
                     drop.add(v.id)
                     continue
                 active[sig] = v.id
-                # This solve_fields is itself a barrier for OTHER signatures (it re-fills the shared
-                # aux), so any pending solve over a different state is no longer safe to reuse.
+                # This field solve is itself a barrier for OTHER signatures (it re-fills the shared
+                # aux), so any pending solve over a different signature is no longer safe to reuse.
                 active = {sig: v.id}
                 continue
             # A barrier op invalidates every pending reuse: a state write (commit target, project,
             # fill_boundary), a history store, or anything that mutates what the elliptic solve reads.
-            if v.op in self._STATE_BARRIER_OPS or v.id in commit_ids:
+            if self._is_field_solve_barrier(v, commit_ids):
                 active = {}
         if not drop:
             return self._rebuild(lambda v: True)
@@ -335,7 +377,7 @@ class _ProgramPasses(_ProgramConstants):
 
     # --- proven-safe optimization pipeline (Spec 3 s28, ADC-465) ---
     # The TRANSFORM passes, in the order ``optimize`` runs them. Each is PROVEN to preserve the emitted
-    # numerics (see its docstring) and is a byte-identical no-op when it finds nothing to do, so the
+    # numerics (see its docstring) and is a byte-for-byte no-op when it finds nothing to do, so the
     # whole pipeline is a no-op on an already-optimal Program. Analysis passes (liveness / estimate /
     # GPU detector) are reports, NOT in this list -- they never rewrite the IR.
 
@@ -343,7 +385,7 @@ class _ProgramPasses(_ProgramConstants):
         """Return a NEW Program with the proven-safe Spec 3 s28 transform passes applied in sequence
         (ADC-465): dead-node elimination, common-subexpression elimination, redundant field-solve
         elimination. OPT-IN -- the default ``emit_cpp_program`` path never optimizes. Each pass is
-        proven to preserve the emitted numerics and is byte-identical when it changes nothing, so a
+        proven to preserve the emitted numerics and is byte-for-byte stable when it changes nothing, so a
         Program with no optimizable structure round-trips byte-for-byte (same ``_ir_hash`` and C++)
         with the pipeline on or off (the spec's hard requirement: optimization must not change
         results). Use :meth:`dump_passes` to inspect what each pass did."""
@@ -468,11 +510,11 @@ class _ProgramPasses(_ProgramConstants):
     def _block_indices(self):
         """Map each block name to a stable runtime block index, in the order the Program FIRST declares
         it via ``P.state(...)`` (ADC-426). Index 0 is the first declared block, 1 the second, ...; the
-        single-block program keeps index 0 (byte-identical lowering). The generated ``.so`` addresses
+        single-block program keeps index 0 (byte-for-byte lowering). The generated ``.so`` addresses
         blocks by this index in its step body AND exports the block NAMES in this order
         (``pops_program_block_name``); ``System::install_program`` binds them to the instantiated System
         blocks BY NAME (Spec 3 criterion 23, ADC-457), so the System block add-order need NOT match the
-        Program's ``P.state`` order -- the historical positional convention is the identity special case
+        Program's ``P.state`` order -- the single-block positional convention is the identity special case
         (names already in add-order)."""
         order = {}
         for v in self._values:

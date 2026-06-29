@@ -82,14 +82,16 @@ class _ProgramConstants:
         "linear_combine", "linear_source", "cell_compare", "where", "scalar_op", "compare",
     })
 
-    # Ops that WRITE a block state or otherwise change what a subsequent ``solve_fields`` over the same
+    # Ops that WRITE a block state or otherwise change what a subsequent field solve over the same
     # state would see (the Poisson RHS reads every block's live state + the shared aux). A redundant
-    # ``solve_fields`` may be eliminated ONLY when none of these appears between the two solves over the
+    # field solve may be eliminated ONLY when none of these appears between the two solves over the
     # same state input -- conservatively, ANY commit, in-place state mutation (project), boundary fill,
-    # history store, or a second field solve into the shared aux counts as a state/aux barrier.
+    # history store, or another field solve into the shared aux counts as a state/aux barrier. Typed
+    # ``call`` nodes are handled by output type in ProgramPasses: field-operator calls are field solves,
+    # state-returning calls are barriers, rate/operator calls are not barriers by themselves.
     _STATE_BARRIER_OPS = frozenset({
         "project", "fill_boundary", "store_history",
-        "solve_fields", "solve_fields_from_blocks", "call",
+        "solve_fields", "solve_fields_from_blocks",
     })
 
     _OPTIMIZE_PASSES = (
