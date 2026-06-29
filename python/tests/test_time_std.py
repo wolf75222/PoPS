@@ -1,16 +1,14 @@
 """pops.lib.time -- standard library of time-stepping macros that LOWER to the Program IR (ADC-407).
 
-These are Python functions that BUILD pops.time.Program IR (not separate C++ steppers): Forward Euler,
-SSPRK2, SSPRK3, RK4 and a Strang-splitting combinator. They reuse the merged Phase 2a builder ops and
-the affine algebra over dt, so a scheme is expressed once, without any scheme-specific class (spec
-acceptance: "RK4 is expressed without a special RK4 class"). This test exercises only IR CONSTRUCTION
-(no codegen, no compilation): it asserts each macro produces the expected per-input coefficient
-polynomials in dt on the committed state. Parity vs the old C++ steppers needs compile_problem (Phase 2c)
-and is deferred.
+These are Python functions that BUILD canonical pops.time.Program IR, not separate steppers.
+The ready explicit schemes take typed operator handles and produce ``call`` nodes plus affine
+state updates. This test exercises IR construction only: it asserts each macro produces the
+expected per-input coefficient polynomials in dt on the committed state.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
 from pops import time as adctime
+from pops import model
 import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 
 
@@ -34,9 +32,19 @@ def _approx(d, power, val):
     return power in d and abs(d[power] - val) < 1e-15 and len(d) == 1
 
 
+def _program(name):
+    m = model.Module(name + "_module")
+    U = m.state_space("U", ("rho",))
+    rhs = m.operator(
+        "rhs", signature=(U,) >> model.Rate(U), kind="local_rate",
+        capabilities={"produces_rate": True}, lowering={"flux": False, "sources": []},
+        expr=0.0)
+    return adctime.Program(name).bind_operators(m), rhs
+
+
 def test_forward_euler():
-    P = adctime.Program("fe")
-    libtime.forward_euler(P, "plasma")
+    P, rhs = _program("fe")
+    libtime.forward_euler(P, "plasma", rhs_operator=rhs)
     node, states, rhss = _committed(P, "plasma")
     assert len(states) == 1 and len(rhss) == 1
     assert _coeff(node, states[0]) == {0: 1.0}     # U
@@ -45,8 +53,8 @@ def test_forward_euler():
 
 
 def test_ssprk2():
-    P = adctime.Program("ssprk2")
-    libtime.ssprk2(P, "plasma")
+    P, rhs = _program("ssprk2")
+    libtime.ssprk2(P, "plasma", rhs_operator=rhs)
     node, states, rhss = _committed(P, "plasma")
     # U2 = 0.5*U0 + 0.5*U1 + 0.5*dt*k1
     assert len(states) == 2 and len(rhss) == 1
@@ -57,8 +65,8 @@ def test_ssprk2():
 
 
 def test_ssprk3():
-    P = adctime.Program("ssprk3")
-    libtime.ssprk3(P, "plasma")
+    P, rhs = _program("ssprk3")
+    libtime.ssprk3(P, "plasma", rhs_operator=rhs)
     node, states, rhss = _committed(P, "plasma")
     # Shu-Osher final stage: U^{n+1} = 1/3 U0 + 2/3 U2 + 2/3 dt k2
     assert len(states) == 2 and len(rhss) == 1
@@ -69,8 +77,8 @@ def test_ssprk3():
 
 
 def test_rk4_no_special_class():
-    P = adctime.Program("rk4")
-    libtime.rk4(P, "plasma")
+    P, rhs = _program("rk4")
+    libtime.rk4(P, "plasma", rhs_operator=rhs)
     node, states, rhss = _committed(P, "plasma")
     # Unp1 = U0 + dt/6 k1 + dt/3 k2 + dt/3 k3 + dt/6 k4
     assert len(states) == 1 and len(rhss) == 4
@@ -83,17 +91,12 @@ def test_rk4_no_special_class():
 def test_strang_combinator():
     # Strang splitting H(dt/2); S(dt); H(dt/2) as IR-building callables. Here H and S are trivial
     # affine updates so we can check the macro chains three stages and commits the last.
-    P = adctime.Program("strang")
+    P, rhs = _program("strang")
 
-    def half_flow(prog, U, frac):
-        R = prog._legacy_rhs(state=U, fields=prog._legacy_solve_fields(U), flux=True, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * R)
+    def flow(prog, U, frac):
+        return libtime.explicit_flow(prog, U, frac, rhs_operator=rhs)
 
-    def source(prog, U, frac):
-        S = prog._legacy_rhs(state=U, fields=None, flux=False, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * S)
-
-    out = libtime.strang(P, "plasma", half_flow, source)
+    out = libtime.strang(P, "plasma", flow, flow)
     P.validate()
     assert P.commits()["plasma"] is out and out.vtype == "state"
     # three linear_combine stages were built (two half flows + one source)

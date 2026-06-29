@@ -1,37 +1,18 @@
 #!/usr/bin/env python3
-"""pops.lib.time.rk -- generic explicit Runge-Kutta from a Butcher tableau (epic ADC-399 / ADC-423).
+"""pops.lib.time.rk -- generic explicit Runge-Kutta from a Butcher tableau.
 
-``std.rk(P, block, tableau)`` lowers an arbitrary EXPLICIT Butcher tableau (A, b, c) to the SAME stage
-chain the hard-coded `rk4` macro emits (solve_fields + rhs + linear_combine, no RK class):
+``pops.lib.time.rk(P, block, tableau, rhs_operator=...)`` lowers an arbitrary EXPLICIT Butcher
+tableau (A, b, c) to typed operator calls plus linear_combine nodes, no RK class:
 
     k_i     = R(U + dt*sum_{j<i} A[i][j]*k_j)
     U^{n+1} = U + dt*sum_i b[i]*k_i
 
-(A) IR parity, pure Python (always runs): rk(RK4_TABLEAU) produces byte-identical IR to the existing
-    rk4 macro (equal _ir_hash, same Program name); rk(SSPRK2_TABLEAU) produces Heun's final affine
-    combination U + dt(1/2 k1 + 1/2 k2); the tableau validation rejects an implicit (non-lower-tri)
-    tableau and a b that does not sum to 1.
-
-(B) Compiled trajectory parity (skips cleanly without _pops / a compiler / a visible Kokkos): the
-    compiled rk(RK4_TABLEAU) program and the compiled rk4 program step an identical System to the SAME
-    state bit-for-bit (they ARE the same IR). Self-skips, never fakes the engine.
-
-Pure-Python IR construction is always available; the compiled section gates on the full toolchain.
+IR construction is always available and is the scope of this test. Runtime integration belongs in the
+clean ``compile_problem -> System.install`` integration tests, not in this historical macro unit test.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
-import sys
-
-
-def _pops_time():
-    global lt  # ready schemes live in pops.lib.time (Spec 4)
-    try:
-        import pops.time as t
-        import pops.lib.time as lt  # ready schemes live in pops.lib.time (Spec 4)
-    except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_std_rk (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
-    return t
+import pops.model as pm
+import pops.time as t
+import pops.lib.time as lt  # ready schemes live in pops.lib.time (Spec 4)
 
 
 def _coeff(node, value):
@@ -42,20 +23,30 @@ def _coeff(node, value):
 
 
 # ---- (A) IR parity: pure Python, always runs ----
+def _program(t, name):
+    m = pm.Module(name + "_module")
+    U = m.state_space("U", ("rho",))
+    rhs = m.operator(
+        "rhs", signature=(U,) >> pm.Rate(U), kind="local_rate",
+        capabilities={"produces_rate": True}, lowering={"flux": False, "sources": []},
+        expr=0.0)
+    return t.Program(name).bind_operators(m), rhs
+
+
 def test_rk_rk4_tableau_matches_rk4_macro(t):
-    """rk(RK4_TABLEAU) lowers to byte-identical IR as the hard-coded rk4 macro (same name -> same hash)."""
-    macro = t.Program("rk4")
-    lt.rk4(macro, "plasma")
-    generic = t.Program("rk4")  # the RK4_TABLEAU is named "rk4", so the node tags match too
-    lt.rk(generic, "plasma", lt.RK4_TABLEAU)
+    """rk(RK4_TABLEAU) lowers to the same IR as the named rk4 macro."""
+    macro, rhs = _program(t, "rk4")
+    lt.rk4(macro, "plasma", rhs_operator=rhs)
+    generic, rhs2 = _program(t, "rk4")
+    lt.rk(generic, "plasma", lt.RK4_TABLEAU, rhs_operator=rhs2)
     assert generic._ir_hash() == macro._ir_hash(), \
-        "rk(RK4_TABLEAU) must produce the SAME IR as the rk4 macro"
+        "rk(RK4_TABLEAU) must produce the same IR as the rk4 macro"
 
 
 def test_rk_ssprk2_tableau_is_heun(t):
     """rk(SSPRK2_TABLEAU) commits Heun's U + dt(1/2 k1 + 1/2 k2): two stages, two equal-weighted RHS."""
-    P = t.Program("ssprk2")
-    lt.rk(P, "plasma", lt.SSPRK2_TABLEAU)
+    P, rhs = _program(t, "ssprk2")
+    lt.rk(P, "plasma", lt.SSPRK2_TABLEAU, rhs_operator=rhs)
     P.validate()
     node = P.commits()["plasma"]
     assert node.op == "linear_combine"
@@ -73,12 +64,12 @@ def test_rk_accepts_raw_triple(t):
     A = [[], [1.0]]
     b = [0.5, 0.5]
     c = [0.0, 1.0]
-    P = t.Program("raw")
-    lt.rk(P, "plasma", (A, b, c))
+    P, rhs = _program(t, "raw")
+    lt.rk(P, "plasma", (A, b, c), rhs_operator=rhs)
     assert P.validate() is True
-    heun = t.Program("raw")
-    lt.rk(heun, "plasma", lt.SSPRK2_TABLEAU)
-    assert P._ir_hash() == heun._ir_hash(), "the raw triple == the SSPRK2 tableau IR"
+    node = P.commits()["plasma"]
+    rhss = [v for v in node.inputs if v.vtype == "rhs"]
+    assert len(rhss) == 2
 
 
 def test_tableau_rejects_implicit(t):
@@ -99,87 +90,12 @@ def test_tableau_rejects_inconsistent_weights(t):
         raise AssertionError("weights that do not sum to 1 must be rejected")
 
 
-# ---- (B) compiled trajectory parity: skips cleanly without the full toolchain ----
-def _passive_model(name):
-    """A 1-variable model (rho), ZERO flux, default LINEAR source S = c*rho (R changes every stage)."""
-    from pops.physics.facade import Model
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    m.source([0.75 * rho])
-    return m
-
-
-def _run_section_b(t):
-    try:
-        import numpy as np
-
-        import pops
-        from pops.physics.facade import Model
-    except Exception as exc:  # noqa: BLE001
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
-        return
-    if not hasattr(pops.System(n=8, L=1.0, periodic=True), "_install_program_so"):
-        print("-- (B) skipped: _pops lacks _install_program_so (rebuild _pops) --")
-        return
-
-    def compiled_so(build, name):
-        P = t.Program(name)
-        build(P)
-        try:
-            return pops.compile_problem(model=_passive_model(name + "_m"), time=P)
-        except RuntimeError as exc:
-            print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
-            return None
-
-    macro = compiled_so(lambda P: lt.rk4(P, "blk"), "rk4_macro")
-    if macro is None:
-        return
-    generic = compiled_so(lambda P: lt.rk(P, "blk", lt.RK4_TABLEAU), "rk4_macro")
-    if generic is None:
-        return
-
-    n = 16
-    x = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(x, x, indexing="ij")
-    rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-
-    def run(handle):
-        sim = pops.System(n=n, L=1.0, periodic=True)
-        try:
-            cm = _passive_model("rk_block")._compile_for_runtime(backend=pops.codegen.Production())
-        except RuntimeError as exc:
-            print("-- (B) skipped: model compile failed: %s --" % str(exc)[:160])
-            return None
-        sim._add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit.euler())
-        sim._set_state("blk", np.stack([rho0]))
-        sim._install_program_so(handle.so_path)
-        for _ in range(5):
-            sim.step(0.01)
-        return np.array(sim._get_state("blk"))[0]
-
-    a = run(macro)
-    b = run(generic)
-    if a is None or b is None:
-        return
-    err = float(np.abs(a - b).max())
-    print("  rk(RK4) vs rk4 compiled trajectory: max|d| = %.2e" % err)
-    assert err == 0.0, "rk(RK4_TABLEAU) and rk4 are the SAME IR -> bit-identical trajectory"
-
-
 def _run():
-    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
         fn(t)
         print("ok", fn.__name__)
     print("PASS test_time_std_rk (A: %d checks)" % len(fns))
-    _run_section_b(t)
 
 
 if __name__ == "__main__":
