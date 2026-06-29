@@ -10,7 +10,7 @@ the compiled problem route:
 
 ```python
 module = native_model.to_module()
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
 sim.install(compiled, instances={"ne": {"model": module, "initial": ne0, "spatial": spatial}})
 ```

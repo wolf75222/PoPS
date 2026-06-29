@@ -6,14 +6,20 @@ operator-first lowering. They do not scan the historical test suite, which still
 contains explicit legacy regression coverage.
 """
 
+import ast
 import importlib
 from pathlib import Path
 
 import pytest
 
 import pops
+from pops import model
+from pops import physics
 from examples.spec_final import lib_time_predictor_corrector_poisson_lorentz as lib_time
 from examples.spec_final import manual_board_predictor_corrector_poisson_lorentz as manual
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 LEGACY_TOP_LEVEL = (
@@ -58,6 +64,31 @@ FORBIDDEN_EXAMPLE_TOKENS = (
 
 FALSE_LOWERING_OPS = {"rhs", "solve_fields", "linear_source"}
 
+MODULE_NATIVE_SURFACE_FILES = tuple(
+    sorted((REPO_ROOT / "python" / "pops" / "model").glob("*.py"))
+) + (
+    REPO_ROOT / "python" / "pops" / "physics" / "__init__.py",
+    REPO_ROOT / "python" / "pops" / "physics" / "board.py",
+    REPO_ROOT / "python" / "pops" / "physics" / "_board_internals.py",
+    REPO_ROOT / "python" / "pops" / "physics" / "_board_multispecies.py",
+    REPO_ROOT / "python" / "pops" / "physics" / "board_handles.py",
+)
+
+FORBIDDEN_MODULE_NATIVE_DOC_TOKENS = (
+    "pops.dsl",
+    "dsl.Model",
+    "Module.to_dsl",
+    "_module_to_model",
+    "pops.physics.facade.Model",
+    "add_native_block",
+    "Program .so",
+    "DEFERRED",
+    "deferred",
+    "later phase",
+    "source_term",
+    "linear_source",
+)
+
 
 def _example_modules():
     return (manual, lib_time)
@@ -84,6 +115,52 @@ def test_no_public_runtime_fragmented_api():
     for name in ("rhs", "solve_fields", "linear_source", "source"):
         assert not hasattr(program, name), "Program.%s must not be public" % name
     assert hasattr(program, "call")
+
+
+def test_module_and_physics_model_are_module_native_public_surfaces():
+    mod = model.Module("module_gate")
+    board = physics.Model("board_gate")
+
+    for obj in (mod, model.Module, board, physics.Model):
+        for name in ("to_dsl", "dsl", "_dsl", "_m", "_pde_model", "compile", "run"):
+            assert not hasattr(obj, name), "%r exposes forbidden legacy surface %s" % (obj, name)
+
+    lowered = board.to_module()
+    assert isinstance(lowered, model.Module)
+    assert lowered is board.module
+
+
+def test_model_and_board_facade_import_graph_has_no_runtime_or_codegen():
+    forbidden = {"pops.runtime", "pops.codegen", "_pops"}
+    offenders = []
+    for path in MODULE_NATIVE_SURFACE_FILES:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    name = alias.name
+                    if name in forbidden or any(name.startswith(prefix + ".") for prefix in forbidden):
+                        offenders.append("%s imports %s" % (path.relative_to(REPO_ROOT), name))
+            elif isinstance(node, ast.ImportFrom):
+                module_name = node.module or ""
+                if node.level == 0:
+                    imported = [module_name]
+                    if module_name == "pops":
+                        imported.extend("pops.%s" % alias.name for alias in node.names)
+                    for name in imported:
+                        if name in forbidden or any(name.startswith(prefix + ".") for prefix in forbidden):
+                            offenders.append("%s imports %s" % (path.relative_to(REPO_ROOT), name))
+    assert offenders == []
+
+
+def test_module_native_docstrings_do_not_advertise_legacy_routes():
+    offenders = {}
+    for path in MODULE_NATIVE_SURFACE_FILES:
+        text = path.read_text(encoding="utf-8")
+        hits = [tok for tok in FORBIDDEN_MODULE_NATIVE_DOC_TOKENS if tok in text]
+        if hits:
+            offenders[str(path.relative_to(REPO_ROOT))] = hits
+    assert offenders == {}
 
 
 def test_examples_no_skip_or_legacy_route_tokens():

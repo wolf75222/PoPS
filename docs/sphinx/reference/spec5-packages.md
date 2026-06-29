@@ -64,7 +64,7 @@ layout = AMR(mesh, max_levels=2, ratio=2, regrid=RegridEvery(8),
 T = Program("advance")
 ssprk3(T, "plasma")
 
-compiled = pops.compile_problem(model=module, time=T, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=T, backend=Production(), layout=layout)
 ```
 
 The only strings above are names chosen by the user: block names, field names,

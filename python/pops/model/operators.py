@@ -32,7 +32,7 @@ class LocalLinearOperator:
 
     Identity is by ``(domain_name, range_name)`` so ``LocalLinearOperator("U", "U")``
     compares equal to one built from the actual state spaces. Used to type
-    ``linear_source`` operators and to check ``solve_local_linear(I - dt*L, rhs)``.
+    local implicit operators and to check ``solve_local_linear(I - dt*L, rhs)``.
     """
 
     def __init__(self, domain, range_):
@@ -105,8 +105,8 @@ class Operator:
         # Codegen hint consumed by the lowering of a typed P.call (e.g. a composite
         # rate operator carries {"flux", "sources", "fluxes"}); empty for primitives.
         self.lowering = dict(lowering) if lowering else {}
-        # OPTIONAL body: the callable / expression that builds the operator IR when the
-        # operator is declared via Module.operator; None for a derived dsl operator.
+        # OPTIONAL body: the expression/IR captured when the operator is declared via
+        # Module.operator; None for composite operators described by metadata.
         self.body = body
 
     def handle(self):

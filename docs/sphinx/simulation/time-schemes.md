@@ -10,7 +10,7 @@ from pops.lib.time import ssprk3
 
 time = Program("advance")
 ssprk3(time, "plasma")
-compiled = pops.compile_problem(model=module, time=time, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=time, backend=Production(), layout=layout)
 ```
 
 Manual schemes use temporal handles:

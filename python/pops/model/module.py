@@ -160,8 +160,8 @@ class Module:
 
     def rate_operator(self, name, state_space="U", flux=True, sources=("default",), fluxes=None):
         """Register a composite ``local_rate`` operator ``R = -div F + sum(sources)`` from named
-        sub-operators (the flux and the listed source operators). Mirrors ``dsl.rate_operator``; the
-        ``lowering`` carries the flux/sources/fluxes so ``P.call`` and the codegen compose it."""
+        sub-operators (the flux and the listed source operators). The ``lowering`` metadata carries
+        the flux/sources/fluxes so ``P.call`` and the generated module compose it."""
         u = self._state_spaces.get(state_space) or StateSpace(state_space)
         srcs = _normalize_source_selectors(sources, who="Module.rate_operator(%r)" % name)
         fields = self._rate_operator_field_input(srcs)

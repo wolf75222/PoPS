@@ -159,11 +159,12 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     implicit_operator = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
     assert callable(explicit_rate) and callable(implicit_operator)
 
-    P = Program("board_calls")
-    U_n = P.state("plasma")
-    f_n = P._legacy_solve_fields("f_n", U_n)
-    R = explicit_rate(U_n, f_n)         # -> P._call("explicit_rate", U_n, f_n)
-    L = implicit_operator(f_n)          # -> P._call("implicit_operator", f_n)
+    P = Program("board_calls").bind_operators(m.module)
+    U_t = P.state("U", block="plasma", space=m.module.state_spaces()["U"])
+    U_n = U_t.n
+    f_n = P.call(m.module.operator_registry().get("fields_from_state"), U_n)
+    R = explicit_rate(U_n, f_n)
+    L = implicit_operator(f_n)
     assert R.vtype == "rhs"
     assert L.vtype == "operator"
 
@@ -180,9 +181,10 @@ def test_board_module_is_consumable_by_operator_first_program():
     m = _euler_poisson_lorentz()
     P = Program("operator_first")
     P.bind_operators(m.module)
-    U = P.state("plasma")
-    fields = P._call("fields_from_state", U)            # field_operator -> solve_fields
-    R = P._call("explicit_rate", U, fields)             # local_rate (U, fields) -> Rate(U)
+    U = P.state("U", block="plasma", space=m.module.state_spaces()["U"])
+    ops = m.module.operator_registry()
+    fields = P.call(ops.get("fields_from_state"), U.n)
+    R = P.call(ops.get("explicit_rate"), U.n, fields)
     assert fields.vtype == "fields"
     assert R.vtype == "rhs"
     assert "explicit_rate" in m.module.list_operators()

@@ -56,7 +56,7 @@ Primitive RHS builders are internal to `pops.lib.time` and tests.
 ## Inspection
 
 ```python
-compiled = pops.compile_problem(model=module, time=T, layout=layout)
+compiled = pops.compile_problem(model=module, program=T, layout=layout)
 compiled.inspect()
 compiled.dump_ir()
 compiled.dump_cpp()

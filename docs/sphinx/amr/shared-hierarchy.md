@@ -29,7 +29,7 @@ layout = AMR(
     refine=Refine.on("density").above(0.05),
 )
 
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.AmrSystem(n=96, L=1.0)
 sim.install(compiled, instances={"ne": {"model": module, "initial": ne0, "spatial": spatial}},
             solvers={"phi": GeometricMG()})

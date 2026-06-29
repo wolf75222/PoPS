@@ -18,7 +18,8 @@ The document relies on the architecture already in place (sources read):
   `LinearSolver` / `FieldPostProcess`), 8 (distributed AMR);
 - `docs/ALGORITHMS.md` (FV bricks, elliptic operator, cut-cell Shortley-Weller);
 - `docs/PAPER_ROADMAP.md` (Hoffart reproduction status, Cartesian ring-edge blocker);
-- `docs/DSL_MODEL_DESIGN.md` (`pops.physics.facade.Model` facade, physical roles, `add_native_block`);
+- the current operator-first Python authoring stack (`pops.physics.Model` -> `pops.model.Module`
+  -> `pops.compile_problem(...)` -> `System.install(...)`);
 - `docs/GPU_RUNTIME_PORT.md` (device-clean harness: named functors, no extended lambda);
 - the MERGED polar Phase 1 (#116, commit `004efca`): the MESH abstraction
   (`pops.mesh.CartesianMesh` / `pops.mesh.PolarMesh` -> `System(mesh=)`), with
@@ -166,10 +167,11 @@ fluid species that exposes the roles
 - `Density`, `MomentumX`, `MomentumY` (and `Energy` optionally),
 - plus access to `phi`, `grad phi`, the field `B_z` / `Omega`, and the constant `alpha`.
 
-It works for a model written in C++ BRICKS (`CompositeModel`, `add_block`) OR in compiled DSL
-(`pops.physics.facade.Model` -> `add_native_block`), provided the ROLES are present. The drift diocotron
-is only ONE client; a model with two magnetized species would be another, without an extra line of
-Schur code. This is the exact inverse of a scenario-named solver.
+It works for a model supplied by compiled C++ bricks or authored through
+`pops.physics.Model` and lowered to a `pops.model.Module`, provided the ROLES are
+present. The drift diocotron is only ONE client; a model with two magnetized
+species would be another, without an extra line of Schur code. This is the exact
+inverse of a scenario-named solver.
 
 MINIMAL CONTRACT required of the model by `ElectrostaticLorentzCondensation`:
 1. a `Density` role (read of `rho^n`);
@@ -262,16 +264,14 @@ The stepper names no scenario: it reads the roles, calls levels 1-3, and delegat
 solve to the `EllipticSolver` concept. It is the one that materializes the local-global (local assembly of
 the coefficient -> global solve -> local reconstruction).
 
-### Level 5: DSL exposure (facade layer)
+### Level 5: Python exposure (operator-first authoring layer)
 
-At the start, the DSL has NOTHING to add: the condensation is selected by the PRESENCE of the
-required roles (`Density`/`MomentumX`/`MomentumY` + `phi`/`B_z`/`alpha`) and by the choice of the integrator
-on the facade side (section 6). An existing DSL model (`pops.physics.facade.Model`) that declares these roles is
-directly eligible via `add_native_block` (native zero-copy path, GPU/MPI, `docs/
-DSL_MODEL_DESIGN.md`). ONLY LATER, an explicit declarator `m.implicit_coupling(...)`
-(naming `phi`, `v`, `Omega`, `alpha`, `theta`) could make the intention readable in the
-formula and raise errors as early as possible; this is NOT required for the first client (roles
-suffice) and stays deferred.
+The Python layer does not own a Schur solver. The condensation is selected by the
+typed time macro plus the presence of the required roles
+(`Density`/`MomentumX`/`MomentumY` + `phi`/`B_z`/`alpha`). A
+`pops.physics.Model` that declares these roles lowers to `pops.model.Module`; the
+compiled problem artifact carries the operator metadata, requirements and solver
+contracts into `System.install(...)`.
 
 
 ## 6. Target Python API
@@ -297,7 +297,7 @@ condensed_schur(
     potential=model.field("phi"),
 )
 
-compiled = pops.compile_problem(model=model, time=time, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=model, program=time, backend=Production(), layout=layout)
 sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
 sim.install(
     compiled,
@@ -359,7 +359,7 @@ Non-negotiable constraint, aligned on the production state of the core
   a box safe (cf. the `solve_fields` MPI #99 fix: `fab(0)` without a guard segfaults on an empty
   rank). The coefficient assembly and the velocity reconstruction must be guarded.
 - **No Python in the hot path**: the Python facade only CONFIGURES the stage (roles,
-  `theta`, `alpha`); the loop is entirely C++ (`add_native_block` zero-copy path).
+  `theta`, `alpha`); the loop is entirely C++ inside the compiled problem artifact.
 - **AMR only AFTER the uniform path**. The `TensorEllipticOperator` on an AMR hierarchy
   (restriction/prolongation of the tensorial coefficient, reflux coherent with the source stage) is a
   separate work item, NOT to be attempted before the uniform single-level is validated CPU + GPU + MPI.

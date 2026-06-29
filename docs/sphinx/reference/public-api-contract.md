@@ -12,7 +12,7 @@ Python describes a compiled problem. C++/Kokkos/MPI executes it.
 The public flow is:
 
 ```python
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
 sim.install(compiled, instances={"plasma": {"model": module, "initial": initial_state}},
             params=params)

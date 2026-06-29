@@ -54,7 +54,7 @@ mesh = CartesianMesh(n=96, L=1.0, periodic=True)
 layout = Uniform(mesh)
 fv = spatial.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov())
 
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 
 sim = pops.System(n=96, L=1.0, periodic=True)
 sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": fv}})

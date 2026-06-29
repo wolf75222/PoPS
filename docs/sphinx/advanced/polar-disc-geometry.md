@@ -16,7 +16,7 @@ layout = Uniform(mesh, embedded_boundary=wall)
 Use the layout when compiling the problem:
 
 ```python
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.System(n=mesh.n, L=mesh.L, periodic=False)
 sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}})
 ```

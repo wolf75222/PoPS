@@ -1,7 +1,7 @@
 """Spec 2 (S2-11 / ADC-447): a pure pops.model.Module compiles directly.
 
 A Module authored directly -- typed spaces + operators with IR (Expr) bodies + eigenvalues --
-is a self-contained, compilable model. ``compile_problem(model=module, time=P)`` and
+is a self-contained, compilable model. ``compile_problem(model=module, program=P)`` and
 ``Program.emit_cpp_program(model=module)`` consume it through the Module-native codegen view, never
 through ``Module.to_dsl`` or a rebuilt legacy facade. Pure Python; skips if pops is not importable.
 """
@@ -69,7 +69,8 @@ def test_pure_module_program_emits():
         explicit_rate_operator=ops.get("explicit_rhs"), implicit_operator=ops.get("lorentz"))
     # compile_problem(model=Module) consumes the Module directly; emit the .so source (no compile).
     src = P.emit_cpp_program(model=mod)
-    assert "pops_install_program" in src
+    assert "pops_problem_install" in src
+    assert "pops_install_program" not in src
     # the GeneratedModule descriptor reflects the pure Module's operators
     assert "pops_module_operator_count() { return" in src
     for op in ("electric", "lorentz", "fields_from_state", "explicit_rhs"):

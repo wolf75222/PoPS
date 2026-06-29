@@ -96,7 +96,7 @@ def main():
 
     import pops
 
-    compiled = pops.compile_problem(model=module, time=program)
+    compiled = pops.compile_problem(model=module, program=program)
     print("problem.so:", compiled.so_path)
     print("OK: library Spec 4 time scheme compiled.")
     return 0

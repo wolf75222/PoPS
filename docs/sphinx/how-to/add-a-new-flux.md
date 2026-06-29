@@ -47,7 +47,7 @@ from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.spatial import FiniteVolume
 
 spatial = FiniteVolume(limiter=Minmod(), riemann=HLL())
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.System(...)
 sim.install(compiled, instances={"gas": {"model": module, "initial": U0, "spatial": spatial}})
 ```

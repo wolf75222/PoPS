@@ -6,7 +6,7 @@ and spatial descriptor. Shared fields, sources, and diagnostics reference
 blocks by stable names.
 
 ```python
-compiled = pops.compile_problem(model=shared_module, time=program,
+compiled = pops.compile_problem(model=shared_module, program=program,
                                 backend=Production(), layout=layout)
 
 sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)

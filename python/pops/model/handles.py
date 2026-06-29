@@ -2,12 +2,12 @@
 
 An :class:`OperatorHandle` is a lightweight, INERT reference to a declared operator: it
 carries the operator ``name`` (and, when the declarer knows it cheaply, the operator
-``kind``) and nothing else -- no numerics, no IR, no Program. A user-facing operator
-declarer (``m.rate_operator`` / ``m.source_term`` / ``m.linear_source``) returns one so a
-named operator is referenced as a typed object, NOT a bare string::
+``kind``) and nothing else -- no numerics, no IR, no Program. User-facing operator
+declarers return typed operators/handles so a named operator is referenced as an
+object, NOT a bare string::
 
-    electric = m.source_term("electric", ...)
-    R = m.rate_operator("explicit_rhs", flux=True, sources=[electric])
+    electric = module.operator("electric", kind="local_source", ...)
+    R = module.rate_operator("explicit_rhs", flux=True, sources=[electric])
     ...
     rate = P.call(R, U, fields)        # the handle is the one public P.call selector
 

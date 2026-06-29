@@ -3,7 +3,7 @@
 A simulation starts from a compiled problem artifact:
 
 ```python
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
 sim.install(compiled, instances={"plasma": {"model": module, "initial": U0}})
 sim.step_cfl(0.4)

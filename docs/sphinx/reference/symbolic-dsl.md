@@ -10,7 +10,7 @@ The public route is:
 ```python
 model = Model("name")
 module = model.to_module()
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
 sim.install(compiled, instances={"block": {"model": module, "initial": state}})
 ```
@@ -84,7 +84,7 @@ Use typed parameter descriptors when the parameter is part of public assembly:
 from pops.params import RuntimeParam, Positive
 
 nu = RuntimeParam("nu", default=0.1, domain=Positive())
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim.install(compiled, params={"nu": 0.2}, instances={"block": {"model": module, "initial": state}})
 ```
 

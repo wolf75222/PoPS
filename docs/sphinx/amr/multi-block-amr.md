@@ -4,7 +4,7 @@ A multi-block AMR run installs one compiled problem artifact on a shared AMR
 hierarchy:
 
 ```python
-compiled = pops.compile_problem(model=shared_module, time=program,
+compiled = pops.compile_problem(model=shared_module, program=program,
                                 backend=Production(), layout=layout)
 sim = pops.AmrSystem(n=mesh.n, L=mesh.L)
 sim.install(

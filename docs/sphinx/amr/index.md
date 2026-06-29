@@ -5,7 +5,7 @@ AMR is a mesh layout. It is not a separate user API and not a target string.
 The public flow is the same shape as a uniform run:
 
 ```python
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 sim = pops.AmrSystem(n=mesh.n, L=mesh.L)
 sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}})
 sim.step_cfl(0.4)

@@ -115,7 +115,7 @@ def main():
 
     import pops
 
-    compiled = pops.compile_problem(model=module, time=program)
+    compiled = pops.compile_problem(model=module, program=program)
     print("problem.so:", compiled.so_path)
     print("OK: hand-written Spec 4 time program compiled.")
     return 0

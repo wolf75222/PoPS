@@ -209,7 +209,7 @@ class Model(_BoardInternalsMixin, _MultiSpeciesMixin):
             raise ValueError(
                 "solve_field left-hand side must be (-)laplacian(field); got %r" % (lhs,))
         rhs = self._to_expr(equation.rhs)
-        # -laplacian(phi) == rhs  ->  -Delta phi = rhs (the dsl Poisson convention).
+        # -laplacian(phi) == rhs  ->  -Delta phi = rhs (the native Poisson convention).
         # laplacian(phi) == rhs  ->  -Delta phi = -rhs.
         if lhs.scale > 0:
             rhs = -rhs

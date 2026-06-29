@@ -108,7 +108,7 @@ ssprk2(program, "ne")
 mesh = CartesianMesh(n=96, L=1.0, periodic=True)
 layout = Uniform(mesh)
 module = m.to_module()
-compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 
 sim = pops.System(n=96, L=1.0, periodic=True)
 sim.install(

@@ -88,7 +88,7 @@ def main():
     model = build_model()
     module = model.to_module()
     program = build_program(module)
-    compiled = pops.compile_problem(model=module, time=program, backend=Production(), layout=layout)
+    compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 
     sim = pops.System(n=n, L=1.0, periodic=True)
     sim.install(

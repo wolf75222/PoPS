@@ -17,7 +17,7 @@ class _MultiSpeciesMixin:
     def _promote_to_multispecies(self):
         """Build the multi-block :class:`pops.model.Module` and migrate the first species into it.
 
-        The single-state dsl model authored the first species; multi-species mode realizes every
+        The single-state board model authored the first species; multi-species mode realizes every
         species as a typed StateSpace on a shared Module so N >= 2 species lower to the existing
         operator-first multi-block IR (N spaces + coupled_rate + multi-block field solve), not a
         second runtime. The first species' :class:`StateHandle` is updated IN PLACE (its ``.space``

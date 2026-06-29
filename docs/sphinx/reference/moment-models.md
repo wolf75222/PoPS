@@ -67,7 +67,7 @@ ssprk3(program, "moments", rhs_operator=module.operator_registry().get("explicit
 
 mesh = CartesianMesh(n=96, L=1.0, periodic=True)
 layout = Uniform(mesh)
-compiled = pops.compile_problem(model=module, time=program, layout=layout)
+compiled = pops.compile_problem(model=module, program=program, layout=layout)
 sim = pops.System(n=96, L=1.0, periodic=True)
 sim.install(compiled, instances={"moments": {"model": module, "initial": M0, "spatial": fv}})
 ```
