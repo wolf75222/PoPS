@@ -58,7 +58,7 @@ from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library man
 # (doctor too).
 def __getattr__(name):
     if name == "compile_problem":
-        from .codegen.compile import compile_problem
+        from .codegen.compile_drivers import compile_problem
         return compile_problem
     if name == "CompiledProblem":
         from .codegen.loader import CompiledProblem

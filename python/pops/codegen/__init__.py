@@ -13,7 +13,7 @@ from .toolchain import (  # noqa: F401
 )
 from .cache import pops_cache_dir  # noqa: F401
 from .abi import check_compiled_matches_module  # noqa: F401
-from .compile import compile_problem  # noqa: F401
+from .compile_drivers import compile_problem  # noqa: F401
 from .loader import CompiledProblem  # noqa: F401
 from .library_codegen import emit_library_cpp  # noqa: F401
 # Spec 5 (sec.12.2 / 12.3): inert introspection of a compiled artifact (bind arguments + memory).
