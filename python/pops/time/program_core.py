@@ -248,8 +248,8 @@ class _ProgramCore(_ProgramConstants):
                                    args, name, block, schedule=schedule)
         if isinstance(output, RateBundle):
             return self._lower_coupled_rate(op, operator_name, args, name)
-        raise NotImplementedError(
-            "P.call: operator %r output type %r is not yet lowerable"
+        raise ValueError(
+            "P.call: operator %r output type %r is not lowerable by the compiled problem route"
             % (operator_name, output))
 
     def _lower_coupled_rate(self, op, operator_name, args, name):

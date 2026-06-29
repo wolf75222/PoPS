@@ -208,3 +208,28 @@ def test_no_false_lowering_tokens_in_call_dispatch_source():
     for forbidden in ("ctx.rhs_into", "ctx.solve_fields", "ctx.solve_fields_from_state",
                       "ctx.source_default_into", "ctx.neg_div_flux_default_into"):
         assert forbidden not in call_branch
+
+
+def test_pcall_generated_module_path_has_no_notimplemented_errors():
+    """The final operator-first path must validate clearly, not surface NotImplementedError."""
+    source = (REPO_ROOT / "python" / "pops" / "time" / "program_core.py").read_text(
+        encoding="utf-8")
+    lower_start = source.index("    def _lower_call(")
+    lower_end = source.index("    def _lower_coupled_rate(", lower_start)
+    assert "NotImplementedError" not in source[lower_start:lower_end]
+
+    source = (REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_ops.py").read_text(
+        encoding="utf-8")
+    call_start = source.index('elif v.op == "call":')
+    call_end = source.index('elif v.op == "solve_fields":', call_start)
+    assert "NotImplementedError" not in source[call_start:call_end]
+
+    source = (REPO_ROOT / "python" / "pops" / "codegen" / "program_emit_module_ops.py").read_text(
+        encoding="utf-8")
+    assert "NotImplementedError" not in source
+
+    source = (REPO_ROOT / "python" / "pops" / "codegen" / "program_codegen.py").read_text(
+        encoding="utf-8")
+    call_start = source.index('    if v.op == "call":')
+    call_end = source.index("    if v.op in _MODEL_OPS:", call_start)
+    assert "NotImplementedError" not in source[call_start:call_end]

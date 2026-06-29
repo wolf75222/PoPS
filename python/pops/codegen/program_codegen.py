@@ -281,7 +281,7 @@ def _check_op_lowerable(program, v, model):
         elif getattr(program, "_registry", None) is not None:
             registry = program._registry
         if registry is None:
-            raise NotImplementedError(
+            raise ValueError(
                 "emit_cpp_program cannot lower call '%s' without the Module that declares it; "
                 "pass model= to emit GeneratedModule::Operators" % operator_name)
         op = registry.get(operator_name)
@@ -298,7 +298,7 @@ def _check_op_lowerable(program, v, model):
             return
         if kind in ("grid_operator", "local_rate", "local_source"):
             if model is None:
-                raise NotImplementedError(
+                raise ValueError(
                     "emit_cpp_program cannot lower call '%s' (%s) without model=; "
                     "GeneratedModule::Operators needs the operator body"
                     % (operator_name, kind))
@@ -323,9 +323,9 @@ def _check_op_lowerable(program, v, model):
                             "unknown flux_term '%s' in call '%s'; declared flux_terms: %s"
                             % (f, operator_name, sorted(impl_f._flux_terms)))
                 if getattr(impl_f, "_source", None):
-                    raise NotImplementedError(
+                    raise ValueError(
                         "call '%s' with named fluxes %r needs a model whose default "
-                        "source is empty (no m.source); declare it as a source_term instead"
+                        "source is empty (no m.source); declare a named local_source operator instead"
                         % (operator_name, named_fluxes))
             if kind == "local_source":
                 extra = [] if op.capabilities.get("default") or op.name in (
@@ -341,12 +341,12 @@ def _check_op_lowerable(program, v, model):
                             % (s, operator_name, sorted(impl._source_terms)))
             return
         if kind == "local_linear_operator" and model is None:
-            raise NotImplementedError(
+            raise ValueError(
                 "emit_cpp_program cannot lower call '%s' (local_linear_operator) without model=; "
                 "GeneratedModule::Operators needs the operator body" % operator_name)
         if kind in ("local_linear_operator", "projection"):
             return
-        raise NotImplementedError(
+        raise ValueError(
             "emit_cpp_program cannot lower call kind %r (operator %r)"
             % (kind, operator_name))
     if v.op in _MODEL_OPS:

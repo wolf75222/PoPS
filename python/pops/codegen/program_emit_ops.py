@@ -89,7 +89,7 @@ def _emit_op(program, v, base, committed_ids, var, model, lines, prelude=None, b
             lines.append("%s(ctx, %d, %s);" % (fn, bidx, var[state_in.id]))
             var[v.id] = var[state_in.id]
         else:
-            raise NotImplementedError(
+            raise ValueError(
                 "emit_cpp_program: call output %r is not lowerable (operator %r)"
                 % (output_vtype, v.attrs.get("operator")))
     elif v.op == "solve_fields":

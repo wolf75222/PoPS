@@ -79,7 +79,7 @@ def _rate_lines(model, op, state_var="state", out_var="out", block_expr="b"):
         return lines
 
     if op.kind != "local_rate":
-        raise NotImplementedError(
+        raise ValueError(
             "GeneratedModule::Operators cannot emit Rate operator %r of kind %r"
             % (op.name, op.kind))
 
@@ -179,7 +179,7 @@ def emit_generated_module_operators(program, model=None):
     if any(op.kind in ("grid_operator", "local_source", "local_rate", "local_linear_operator")
            for op in registry):
         if model is None:
-            raise NotImplementedError(
+            raise ValueError(
                 "GeneratedModule::Operators: rate/source/linear operators require model= so their "
                 "C++ bodies can be emitted; only field/projection operators can lower from a bound "
                 "registry alone")
