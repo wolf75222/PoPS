@@ -44,7 +44,7 @@ def test_module_builder_and_decorator():
     assert isinstance(op, model.Operator) and op.kind == "field_operator"
     assert op.signature.output == f and op.body == "<ir>"
 
-    # Decorator mode: no expr -> registers the decorated body, returns the function.
+    # Decorator mode: no expr -> captures the returned IR immediately, returns the Operator.
     @mod.operator(name="explicit_rhs", signature=(u, f) >> model.Rate(u),
                   kind="local_rate")
     def explicit_rhs(state, fields):
@@ -55,11 +55,26 @@ def test_module_builder_and_decorator():
     def lorentz(fields):
         return "L"
 
-    assert explicit_rhs.__name__ == "explicit_rhs"  # decorator returns the function
+    assert isinstance(explicit_rhs, model.Operator)
+    assert explicit_rhs.body == ("flux", "electric")
     reg = mod.operator_registry()
     assert reg.names() == ["fields_from_state", "explicit_rhs", "lorentz"]
     assert reg.get("explicit_rhs").signature.output == model.Rate("U")
-    assert reg.get("lorentz").body.__name__ == "lorentz"
+    assert reg.get("lorentz").body == "L"
+    assert not callable(reg.get("lorentz").body)
+    assert mod.operator_handle("explicit_rhs") == explicit_rhs.handle()
+
+    mod.requirements(aux=["B_z"])
+    mod.capabilities(supports_amr=True)
+    mod.invariant("mass", expression=Const(1.0), over="U")
+    mod.diagnostic("rho_min", expression=Const(0.0))
+    info = mod.inspect()
+    assert info["requirements"]["aux"] == ["B_z"]
+    assert info["capabilities"]["supports_amr"] is True
+    assert "mass" in info["invariants"]
+    assert "rho_min" in info["diagnostics"]
+    assert info["operators"]["explicit_rhs"]["handle"] == repr(explicit_rhs.handle())
+    assert mod.validate() is mod
 
     try:
         mod.operator(name="x", signature=(u,) >> f)  # missing kind

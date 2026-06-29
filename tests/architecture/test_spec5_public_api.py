@@ -264,11 +264,15 @@ def test_physics_model_is_a_writing_facade_not_a_compiler():
         "compile_aot",
         "compile_native",
         "compile_or_jit",
+        "run",
         "dsl",
         "_dsl",
+        "to_dsl",
     ):
         assert not hasattr(m, forbidden), (
             "pops.physics.Model must not expose %r; it authors a Module only" % forbidden)
+        assert forbidden not in type(m).__dict__, (
+            "pops.physics.Model class must not define legacy symbol %r" % forbidden)
     assert hasattr(m, "lower") and hasattr(m, "to_module")
     assert isinstance(m.lower(), model_pkg.Module)
     assert isinstance(m.to_module(), model_pkg.Module)

@@ -7,6 +7,7 @@ kind with a :class:`pops.model.signatures.Signature`. Carries no numerics; the b
 lives in the model / codegen.
 """
 from .signatures import Signature
+from .handles import OperatorHandle
 from .spaces import Space, _as_signature_inputs
 
 # The ten operator kinds of Spec 2. A kind is metadata only; the Signature carries
@@ -107,6 +108,10 @@ class Operator:
         # OPTIONAL body: the callable / expression that builds the operator IR when the
         # operator is declared via Module.operator; None for a derived dsl operator.
         self.body = body
+
+    def handle(self):
+        """Return the inert typed handle for this operator."""
+        return OperatorHandle(self.name, kind=self.kind)
 
     def __repr__(self):
         return "Operator(%r, kind=%r, %r)" % (

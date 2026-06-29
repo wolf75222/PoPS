@@ -43,6 +43,10 @@ class Module:
         self._params = {}
         self._aux = {}
         self._registry = OperatorRegistry()
+        self._requirements = {}
+        self._capabilities = {}
+        self._invariants = {}
+        self._diagnostics = {}
         self._primitive_defs = {}
         self._riemann_metadata = {
             "hllc": False,
@@ -120,13 +124,16 @@ class Module:
         """Register a typed operator.
 
         Builder mode (``expr`` given) registers the operator immediately and returns the
-        :class:`Operator`. Decorator mode (no ``expr``) returns a decorator that records
-        the decorated body as the operator and returns it unchanged::
+        :class:`Operator`. Decorator mode (no ``expr``) executes the decorated function
+        once with symbolic typed arguments, records the returned IR body, and returns the
+        :class:`Operator`::
 
             @module.operator(name="explicit_rhs",
                              signature=(U, Fields) >> Rate(U), kind="local_rate")
             def explicit_rhs(U, fields):
                 ...
+
+        The decorated Python function is never stored as a runtime callback.
         """
         if name is None or signature is None or kind is None:
             raise ValueError("module.operator requires name, signature and kind")
@@ -146,8 +153,8 @@ class Module:
             return _register(expr)
 
         def decorator(func):
-            _register(func)
-            return func
+            body = func(*_symbolic_args(signature.inputs))
+            return _register(body)
 
         return decorator
 
@@ -202,6 +209,41 @@ class Module:
         """The Module's :class:`OperatorRegistry` (bind it to a Program with P.bind_operators)."""
         return self._registry
 
+    def operator_handle(self, name):
+        """Return an inert :class:`OperatorHandle` for a registered operator."""
+        return self._registry.get(name).handle()
+
+    # --- module metadata ---
+    def requirements(self, **items):
+        """Get or update module-level compile/runtime requirements."""
+        if items:
+            self._requirements.update(items)
+        return dict(self._requirements)
+
+    def capabilities(self, **items):
+        """Get or update module-level declared capabilities."""
+        if items:
+            self._capabilities.update(items)
+        return dict(self._capabilities)
+
+    def invariant(self, name, expression=None, **metadata):
+        """Declare an inspectable model invariant."""
+        record = {"name": str(name), "expression": expression, **metadata}
+        self._invariants[str(name)] = record
+        return record
+
+    def diagnostic(self, name, expression=None, **metadata):
+        """Declare an inspectable model diagnostic."""
+        record = {"name": str(name), "expression": expression, **metadata}
+        self._diagnostics[str(name)] = record
+        return record
+
+    def invariants(self):
+        return dict(self._invariants)
+
+    def diagnostics(self):
+        return dict(self._diagnostics)
+
     # --- introspection (Spec 2, S2-5) ---
     def state_spaces(self):
         return dict(self._state_spaces)
@@ -248,6 +290,32 @@ class Module:
             op.capabilities.update(caps)
         return dict(op.capabilities)
 
+    def validate(self):
+        """Validate the inert Module authoring graph without runtime or codegen imports."""
+        for op in self._registry:
+            if callable(op.body):
+                raise ValueError(
+                    "operator %r stores a Python callable body; Module operators must capture "
+                    "IR at declaration time" % (op.name,))
+        return self
+
+    check = validate
+
+    def inspect(self):
+        """Plain-dict, runtime-free view of this Module."""
+        return {
+            "name": self.name,
+            "state_spaces": {k: _space_record(v) for k, v in self._state_spaces.items()},
+            "field_spaces": {k: _space_record(v) for k, v in self._field_spaces.items()},
+            "params": {k: _param_record(v) for k, v in self._params.items()},
+            "aux": {k: {"name": v.name, "kind": v.kind} for k, v in self._aux.items()},
+            "requirements": dict(self._requirements),
+            "capabilities": dict(self._capabilities),
+            "invariants": {k: _metadata_record(v) for k, v in self._invariants.items()},
+            "diagnostics": {k: _metadata_record(v) for k, v in self._diagnostics.items()},
+            "operators": {op.name: _operator_record(self._registry, op) for op in self._registry},
+        }
+
     def module_hash(self):
         """Stable hash of the ModuleSpec for the compiled-artifact cache (Spec 2, S2-7).
 
@@ -270,6 +338,10 @@ class Module:
         for nm in sorted(self._aux):
             a = self._aux[nm]
             parts.append("aux:%s:%s" % (a.name, a.kind))
+        parts.append("requirements:%s" % sorted(self._requirements.items()))
+        parts.append("capabilities:%s" % sorted(self._capabilities.items()))
+        parts.append("invariants:%s" % sorted((k, _metadata_record(v)) for k, v in self._invariants.items()))
+        parts.append("diagnostics:%s" % sorted((k, _metadata_record(v)) for k, v in self._diagnostics.items()))
         if self._eigenvalues is not None:
             for direction in ("x", "y"):
                 parts.append("eig_%s:%s" % (
@@ -286,15 +358,98 @@ class Module:
 
 
 def _body_identity(body):
-    """A stable string identifying an operator body for the module hash: the source of a callable
-    (so editing it invalidates the cache), else its repr; never raises."""
+    """A stable string identifying an already-captured operator IR body."""
     if body is None:
         return "none"
-    try:
-        import inspect
-        return inspect.getsource(body)
-    except (OSError, TypeError):
-        return repr(body)
+    if callable(body):
+        raise TypeError("Module operator bodies must be captured IR, not Python callables")
+    return repr(body)
+
+
+def _symbolic_args(inputs):
+    """Symbolic arguments used to execute a module.operator decorator once at declaration."""
+    return tuple(_symbolic_arg(space) for space in inputs)
+
+
+def _symbolic_arg(space):
+    if isinstance(space, StateSpace):
+        return _SpaceArg(space, "cons")
+    if isinstance(space, FieldSpace):
+        return _SpaceArg(space, "aux")
+    return space
+
+
+class _SpaceArg:
+    """Small symbolic view over a Space's components for decorator-time IR capture."""
+
+    def __init__(self, space, var_kind):
+        from pops.ir.expr import Var
+        self.space = space
+        self.name = space.name
+        self.components = tuple(space.components)
+        self._vars = {c: Var(c, var_kind) for c in self.components}
+        self._ordered = tuple(self._vars[c] for c in self.components)
+
+    def __iter__(self):
+        return iter(self._ordered)
+
+    def __len__(self):
+        return len(self._ordered)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._ordered[key]
+        return self._vars[key]
+
+    def __getattr__(self, name):
+        try:
+            return self._vars[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __repr__(self):
+        return "SymbolicSpaceArg(%r, components=%r)" % (self.name, list(self.components))
+
+
+def _space_record(space):
+    record = {
+        "name": space.name,
+        "kind": space.kind,
+        "components": list(space.components),
+        "layout": space.layout,
+    }
+    if hasattr(space, "roles"):
+        record["roles"] = dict(space.roles)
+    if hasattr(space, "storage"):
+        record["storage"] = space.storage
+    return record
+
+
+def _param_record(param):
+    return {
+        "name": param.name,
+        "default": param.default,
+        "dtype": param.dtype,
+        "kind": param.kind,
+    }
+
+
+def _metadata_record(record):
+    return {k: (repr(v) if k == "expression" else v) for k, v in record.items()}
+
+
+def _operator_record(registry, op):
+    return {
+        "id": registry.id_of(op.name),
+        "name": op.name,
+        "kind": op.kind,
+        "signature": repr(op.signature),
+        "requirements": dict(op.requirements),
+        "capabilities": dict(op.capabilities),
+        "lowering": dict(op.lowering),
+        "handle": repr(op.handle()),
+        "body": _body_identity(op.body),
+    }
 
 
 def _normalize_source_selectors(sources, *, who):

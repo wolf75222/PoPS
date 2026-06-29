@@ -47,14 +47,6 @@ class Model(_BoardInternalsMixin, _MultiSpeciesMixin):
         self._multi_module = None
         self._species = {}          # species name -> StateHandle (multi-species mode)
 
-    # --- escape hatches ---
-    @property
-    def dsl(self):
-        """No public escape hatch to the legacy codegen engine."""
-        raise AttributeError(
-            "pops.physics.Model.dsl is not public; call lower()/to_module(), compile with "
-            "pops.compile_problem(...), then install with sim.install(...).")
-
     @property
     def module(self):
         """The typed :class:`pops.model.Module` view (operator-first IR).

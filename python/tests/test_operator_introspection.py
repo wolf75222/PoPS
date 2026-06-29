@@ -56,7 +56,7 @@ def _check(obj):
 
 
 def test_module_introspection():
-    _check(_model().module)
+    _check(_model())
     print("OK  Module introspection")
 
 
