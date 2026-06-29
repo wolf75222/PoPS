@@ -13,7 +13,7 @@ condensed_schur(
     program,
     block="plasma",
     alpha=1.0,
-    method=GMRES(),
+    method=GMRES(max_iter=200),
     tol=1.0e-10,
     max_iter=200,
 )

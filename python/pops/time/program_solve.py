@@ -18,24 +18,28 @@ def _method_options(method):
 def _lower_krylov_method(method):
     """Lower a typed Krylov descriptor to its internal scheme token (Spec 5 sec.7).
 
-    ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG()`` / ``GMRES()`` /
-    ``BiCGStab()`` / ``Richardson()``); its ``scheme`` is the C++ token (``"cg"`` ...) the
+    ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG(max_iter=...)`` /
+    ``GMRES(max_iter=...)`` / ``BiCGStab(max_iter=...)`` / ``Richardson(max_iter=...)``);
+    its ``scheme`` is the C++ token (``"cg"`` ...) the
     runtime keys on, so the typed object lowers byte-identically to the historical string. A
     bare algorithm-selector string is REJECTED (Spec 5 forbids keeping the string form on the
-    public surface); ``None`` defaults to ``CG()``.
+    public surface); ``None`` defaults to the built-in ``cg`` scheme and still requires the
+    ``solve_linear(max_iter=...)`` budget.
     """
     if method is None:
-        method = _krylov().CG()
+        return "cg"
     if isinstance(method, str):
         raise TypeError(
             "solve_linear: method must be a typed pops.solvers.krylov descriptor "
-            "(e.g. pops.solvers.krylov.GMRES() / CG() / BiCGStab() / Richardson()), not the "
+            "(e.g. pops.solvers.krylov.GMRES(max_iter=...) / CG(max_iter=...) / "
+            "BiCGStab(max_iter=...) / Richardson(max_iter=...)), not the "
             "string %r" % (method,))
     scheme = getattr(method, "scheme", None)
     if getattr(method, "category", None) != "solver" or not isinstance(scheme, str):
         raise TypeError(
             "solve_linear: method must be a pops.solvers.krylov descriptor "
-            "(CG() / GMRES() / BiCGStab() / Richardson()); got %r" % (method,))
+            "(CG(max_iter=...) / GMRES(max_iter=...) / BiCGStab(max_iter=...) / "
+            "Richardson(max_iter=...)); got %r" % (method,))
     return scheme
 
 
@@ -106,14 +110,16 @@ class _ProgramSolve(_ProgramConstants):
           - @p operator: a ``matrix_free_operator`` value (with a ``set_apply`` body);
           - @p rhs: the right-hand side -- a scalar_field, or (MVP) a 1-component State value;
           - @p initial_guess: warm start (defaults to zero);
-          - @p method: a TYPED Krylov descriptor (``pops.solvers.krylov.CG()`` (SPD),
-            ``BiCGStab()`` (general), ``Richardson()``, or ``GMRES()`` -- restarted GMRES(m), the
+          - @p method: a TYPED Krylov descriptor (``pops.solvers.krylov.CG(max_iter=...)`` (SPD),
+            ``BiCGStab(max_iter=...)`` (general), ``Richardson(max_iter=...)``, or
+            ``GMRES(max_iter=...)`` -- restarted GMRES(m), the
             robust choice for a NON-symmetric operator). A bare string is REJECTED (Spec 5
-            sec.7); ``None`` defaults to ``CG()``;
+            sec.7); ``None`` defaults to the ``cg`` scheme but ``max_iter`` is still required;
           - @p preconditioner: a typed ``pops.solvers.preconditioners`` descriptor.
             ``Identity()`` (the unpreconditioned default) and ``GeometricMG()`` (one V-cycle of the
-            wired geometric multigrid, for ``GMRES()`` / ``BiCGStab()`` only) lower to real C++. A
-            non-identity preconditioner with ``CG()`` / ``Richardson()`` is rejected (those loops have
+            wired geometric multigrid, for ``GMRES(max_iter=...)`` / ``BiCGStab(max_iter=...)``
+            only) lower to real C++. A non-identity preconditioner with ``CG(max_iter=...)`` /
+            ``Richardson(max_iter=...)`` is rejected (those loops have
             no preconditioner slot). A bare string is REJECTED; ``None`` defaults to ``Identity()``;
           - @p tol: relative L2 residual stop (> 0);
           - @p max_iter: iteration budget (REQUIRED, > 0: a dynamic solver loop with no budget is a
@@ -180,7 +186,7 @@ class _ProgramSolve(_ProgramConstants):
         if preconditioner != "identity" and method not in ("gmres", "bicgstab"):
             raise ValueError(
                 "solve_linear: preconditioning is not available for CG/Richardson in the matrix-free "
-                "Krylov path; use GMRES() or BiCGStab()")
+                "Krylov path; use GMRES(max_iter=...) or BiCGStab(max_iter=...)")
         if not isinstance(tol, (int, float)) or tol <= 0:
             raise ValueError("solve_linear: tol must be a positive number (got %r)" % (tol,))
         if max_iter is None or not isinstance(max_iter, int) or max_iter <= 0:

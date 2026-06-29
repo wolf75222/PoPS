@@ -20,7 +20,8 @@ Sub-packages:
 * :mod:`pops.solvers.requirements` -- the solver capability vocabulary.
 
 The ``solvers`` :class:`types.SimpleNamespace` gathers the Krylov + Schur factories under one
-attribute surface (``solvers.CG()`` / ``solvers.GMRES()`` / ``solvers.Schur()``); the custom-solver
+attribute surface (``solvers.CG(max_iter=...)`` / ``solvers.GMRES(max_iter=...)`` /
+``solvers.Schur()``); the custom-solver
 GENERATION DSL (``@solver`` / ``SolverContext`` /
 ``build_solver_ir`` / ``generate_solver_cpp``) is internal / experimental and lives in
 :mod:`pops.codegen.solvers` (Spec 5 criterion 19; it imports the heavy ``pops.time`` lazily); it
@@ -36,7 +37,7 @@ from .krylov import CG, BiCGStab, GMRES, Richardson
 from .preconditioners import preconditioners
 from .schur import Schur
 
-# The flat solver factory surface (``solvers.CG()`` ... ``solvers.Schur()``), the one public
+# The flat solver factory surface (``solvers.CG(max_iter=...)`` ... ``solvers.Schur()``), the one public
 # factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). The custom-solver
 # registry hooks
 # (``solvers.custom`` / ``solvers.registered``) are attached onto this namespace by

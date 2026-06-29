@@ -71,7 +71,7 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
     @p c_rho / @p c_mx / @p c_my the conserved-variable components, @p c_bz the aux component of B_z
     (canonical 3, filled by ``solve_fields``) and @p c_E the OPTIONAL energy component (None = no energy
     update, like a rho/mx/my isothermal block). @p method (a TYPED pops.solvers.krylov descriptor;
-    None defaults to BiCGStab()) / @p tol / @p max_iter configure the Krylov phi solve.
+    None defaults to BiCGStab(max_iter=max_iter)) / @p tol / @p max_iter configure the Krylov phi solve.
 
     Current limitation:
       - **cross-step phi^n carry**. The native stepper freezes phi^n (the previous stage's potential)
@@ -111,13 +111,14 @@ def condensed_schur(P, block, *, alpha, theta=1.0, c_rho=0, c_mx=1, c_my=2, c_bz
         P.apply_laplacian_coeff(lap, x, coeffs)
         return -1.0 * lap  # the condensed operator -div(A grad phi); the affine is the lowered result
 
-    # Spec 5 sec.7: method is a TYPED pops.solvers.krylov descriptor (default BiCGStab(), the
+    # Spec 5 sec.7: method is a TYPED pops.solvers.krylov descriptor (default
+    # BiCGStab(max_iter=max_iter), the
     # native CondensedSchur solver). A bare string is rejected by P.solve_linear with a clear
     # message naming the typed alternative; None defaults here byte-identically to the old
     # "bicgstab" string.
     if method is None:
         from pops.solvers.krylov import BiCGStab
-        method = BiCGStab()
+        method = BiCGStab(tolerance=tol, max_iter=max_iter)
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=rhs, method=method, tol=tol, max_iter=max_iter)
     # The reconstruction overwrites the MOMENTUM in place. theta == 1 with no energy keeps the historical

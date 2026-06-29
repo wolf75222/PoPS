@@ -35,7 +35,7 @@ Use `pops.solvers` descriptors for algorithms:
 
 - `GeometricMG()` for geometric multigrid;
 - `FFT()` for periodic uniform Poisson routes;
-- `CG()`, `GMRES()`, or `BiCGStab()` for matrix-free linear problems where the
+- `CG(max_iter=...)`, `GMRES(max_iter=...)`, or `BiCGStab(max_iter=...)` for matrix-free linear problems where the
   route supports Krylov solves.
 
 The descriptor declares compatibility. For example, FFT is a uniform periodic

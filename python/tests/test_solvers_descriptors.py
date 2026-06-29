@@ -31,30 +31,31 @@ def test_solvers_is_top_level_and_exposed():
 # --- Krylov solvers (moved from pops.lib.solvers) ----------------------------------------
 
 def test_krylov_native_ids_and_schemes():
-    assert krylov.CG().native_id == "pops::cg_solve"
-    assert krylov.CG().scheme == "cg"
-    assert krylov.BiCGStab().native_id == "pops::bicgstab_solve"
-    assert krylov.BiCGStab().scheme == "bicgstab"
-    assert krylov.GMRES().native_id == "pops::gmres_solve"
-    assert krylov.GMRES().scheme == "gmres"
-    assert krylov.Richardson().native_id == "pops::richardson_solve"
-    assert krylov.Richardson().scheme == "richardson"
-    for d in (krylov.CG(), krylov.GMRES(), krylov.BiCGStab(), krylov.Richardson()):
+    assert krylov.CG(max_iter=100).native_id == "pops::cg_solve"
+    assert krylov.CG(max_iter=100).scheme == "cg"
+    assert krylov.BiCGStab(max_iter=100).native_id == "pops::bicgstab_solve"
+    assert krylov.BiCGStab(max_iter=100).scheme == "bicgstab"
+    assert krylov.GMRES(max_iter=100).native_id == "pops::gmres_solve"
+    assert krylov.GMRES(max_iter=100).scheme == "gmres"
+    assert krylov.Richardson(max_iter=100).native_id == "pops::richardson_solve"
+    assert krylov.Richardson(max_iter=100).scheme == "richardson"
+    for d in (krylov.CG(max_iter=100), krylov.GMRES(max_iter=100),
+              krylov.BiCGStab(max_iter=100), krylov.Richardson(max_iter=100)):
         assert d.brick_type == "native"
         assert d.available().ok
         assert d.category == "solver"
 
 
 def test_krylov_descriptors_compute_nothing():
-    d = krylov.GMRES()
+    d = krylov.GMRES(max_iter=100)
     assert not hasattr(d, "eval")
     assert not hasattr(d, "compile")
     # value identity: the same descriptor twice compares equal.
-    assert krylov.GMRES() == krylov.GMRES()
+    assert krylov.GMRES(max_iter=100) == krylov.GMRES(max_iter=100)
 
 
 def test_krylov_lower_carries_native_id_and_scheme():
-    rec = krylov.CG().lower()
+    rec = krylov.CG(max_iter=100).lower()
     assert rec["native_id"] == "pops::cg_solve"
     assert rec["scheme"] == "cg"
 
@@ -63,7 +64,9 @@ def test_krylov_descriptor_options_validate_and_feed_solve_defaults():
     d = krylov.BiCGStab(tolerance=1e-10, max_iter=400)
     assert d.options["tolerance"] == 1e-10
     assert d.options["max_iter"] == 400
-    assert krylov.GMRES(restart=12).options["restart"] == 12
+    assert krylov.GMRES(max_iter=400, restart=12).options["restart"] == 12
+    with pytest.raises(ValueError, match="max_iter is required"):
+        krylov.CG()
     with pytest.raises(ValueError, match="max_iter"):
         krylov.CG(max_iter=0)
     with pytest.raises(ValueError, match="tolerance"):
@@ -76,7 +79,8 @@ def test_krylov_declare_amr_route_capabilities():
     # Spec 6 sec.4 / sec.9: the matrix-free Krylov solvers are layout-agnostic (they run over
     # pops::MultiFab dot / saxpy / apply), so each declares every route -- uniform / amr / mpi /
     # gpu -- and a route check can see they are AMR-capable instead of guessing from an empty set.
-    for d in (krylov.CG(), krylov.GMRES(), krylov.BiCGStab(), krylov.Richardson()):
+    for d in (krylov.CG(max_iter=100), krylov.GMRES(max_iter=100),
+              krylov.BiCGStab(max_iter=100), krylov.Richardson(max_iter=100)):
         caps = d.capabilities
         assert caps["supports_uniform"] is True
         assert caps["supports_amr"] is True
@@ -301,8 +305,8 @@ def test_lib_solvers_shim_is_removed():
 
     # The one public home resolves the flat factory namespace and the preconditioners.
     ns = solvers.solvers
-    assert ns.GMRES().scheme == "gmres"
-    assert ns.CG().native_id == "pops::cg_solve"
+    assert ns.GMRES(max_iter=100).scheme == "gmres"
+    assert ns.CG(max_iter=100).native_id == "pops::cg_solve"
     assert ns.Schur().native_id == "pops::SchurCondensationOperator"
     assert not hasattr(ns, "Newton")
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"

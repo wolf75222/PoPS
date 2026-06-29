@@ -33,11 +33,14 @@ def _check_common_options(name, options):
         if not isinstance(tol, (int, float)) or tol <= 0:
             raise ValueError("%s: tolerance must be a positive number" % name)
         opts["tolerance"] = float(tol)
-    if "max_iter" in opts:
-        max_iter = opts["max_iter"]
-        if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
-            raise ValueError("%s: max_iter must be a positive integer" % name)
-        opts["max_iter"] = int(max_iter)
+    if "max_iter" not in opts:
+        raise ValueError(
+            "%s: max_iter is required; Krylov loops are compiled C++ runtime loops and must "
+            "declare an iteration budget" % name)
+    max_iter = opts["max_iter"]
+    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
+        raise ValueError("%s: max_iter must be a positive integer" % name)
+    opts["max_iter"] = int(max_iter)
     return opts
 
 
@@ -49,7 +52,10 @@ def _solver(name, native_id, **options):
 
 
 def CG(**options):
-    """The conjugate-gradient Krylov solver (``pops::cg_solve``; scheme ``"cg"``). Inert."""
+    """The conjugate-gradient Krylov solver (``pops::cg_solve``; scheme ``"cg"``). Inert.
+
+    ``max_iter`` is required so the generated C++ loop has an explicit budget.
+    """
     return _solver("cg", "pops::cg_solve", **options)
 
 

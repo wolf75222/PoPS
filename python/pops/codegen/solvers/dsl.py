@@ -43,7 +43,7 @@ def solver(name=None, signature=None):
     The builder builds IR ONLY -- it never performs Python numerics. Returns a
     ``generated`` :class:`BrickDescriptor` in the ``solver`` category, carrying the
     builder off its identity key, selectable wherever a native solver is (its
-    ``scheme`` mirrors ``pops.solvers.GMRES()``).
+    ``scheme`` mirrors ``pops.solvers.GMRES(max_iter=...)``).
 
     The generated C++ lowering + run is the deferred C++ follow-up: see
     :func:`pops.codegen.solvers.solver_cpp.generate_solver_cpp` (it raises a clear ADC-462

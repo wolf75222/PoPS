@@ -207,7 +207,7 @@ def test_buffer_writing_op_with_discarded_result_kept():
 
     from pops.solvers.krylov import CG
     P.set_apply(A, apply)
-    P.solve_linear(operator=A, rhs=buf, method=CG(), max_iter=10)  # reads buf by BUFFER IDENTITY
+    P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)  # reads buf by BUFFER IDENTITY
     P.commit("plasma", P.linear_combine("U1", 1.0 * U))
 
     before = P.emit_cpp_program()

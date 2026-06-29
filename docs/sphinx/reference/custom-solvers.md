@@ -17,8 +17,9 @@ The matrix-free Krylov solvers are native C++ free functions in
 | BiCGStab | `pops::bicgstab_solve` |
 | GMRES | `pops::gmres_solve` |
 
-They are named by descriptors ({doc}`typed-bricks`): `pops.solvers.CG()`,
-`pops.solvers.BiCGStab()`, `pops.solvers.GMRES()`, `pops.solvers.Richardson()`. `pops.solvers`
+They are named by descriptors ({doc}`typed-bricks`): `pops.solvers.CG(max_iter=...)`,
+`pops.solvers.BiCGStab(max_iter=...)`, `pops.solvers.GMRES(max_iter=...)`,
+`pops.solvers.Richardson(max_iter=...)`. `pops.solvers`
 is the one public home for these descriptors. A compiled time Program drives them through
 `P.solve_linear(...)` ({doc}`time-program`); the elliptic field solve uses the geometric
 multigrid (`pops::GeometricMG`).

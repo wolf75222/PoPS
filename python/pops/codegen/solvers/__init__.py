@@ -8,7 +8,7 @@ is unstable and may change or disappear without notice; it is provided for the p
 experimentation, not for users to author solvers.
 
 USERS DO NOT AUTHOR SOLVERS. The supported, stable workflow is to CONFIGURE the provided C++
-solver descriptors in :mod:`pops.solvers` -- ``pops.solvers.CG()`` / ``GMRES()`` /
+solver descriptors in :mod:`pops.solvers` -- ``pops.solvers.CG(max_iter=...)`` / ``GMRES(max_iter=...)`` /
 ``GeometricMG()`` / ``Schur()`` and their typed options -- and let codegen / the
 runtime drive the compiled C++ solvers. There is no public ``@solver`` decorator on ``pops`` /
 ``pops.lib`` / ``pops.solvers``; the only entry to this experimental DSL is this codegen package.

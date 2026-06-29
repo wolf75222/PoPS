@@ -28,6 +28,7 @@ tests/test_generic_krylov.cpp, which is fully validatable on every backend witho
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+import pytest
 import sys
 
 
@@ -40,16 +41,22 @@ def _pops_time():
     return t
 
 
+@pytest.fixture
+def t():
+    return _pops_time()
+
+
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD part)
 _BETA = 2.0   # advection strength of the non-symmetric term beta*d/dx (breaks self-adjointness)
 
 
-def _krylov(method):
+def _krylov(method, *, max_iter=80, tolerance=1e-10):
     """Map a method name to its TYPED pops.solvers.krylov descriptor (Spec 5 sec.7: solve_linear
     takes a typed solver, not a string -- the test still parametrizes by the name for clarity)."""
     from pops.solvers import krylov
     return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
-            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method]()
+            "richardson": krylov.Richardson,
+            "gmres": krylov.GMRES}[method](max_iter=max_iter, tolerance=tolerance)
 
 
 def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300, restart=30,
@@ -58,7 +65,7 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
 
     A pure (SPD) Helmholtz apply; solve_linear drives the runtime GMRES loop. No model needed."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -67,8 +74,9 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
         return x - alpha * lap  # out = in - alpha*Lap(in)
 
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
-                         restart=restart)
+    phi = P.solve_linear(operator=A, rhs=U,
+                         method=_krylov(method, max_iter=max_iter, tolerance=tol),
+                         tol=tol, max_iter=max_iter, restart=restart)
     P.commit("blk", phi)
     return P
 
@@ -81,7 +89,7 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     d fx/dx (the x-flux read from in, the y-flux zero) -- a skew-symmetric term that makes A
     non-self-adjoint, so CG stagnates while GMRES converges."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -97,7 +105,9 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
         return x - alpha * lap + beta * dxdir  # out = in - alpha*Lap(in) + beta*d(in)/dx
 
     P.set_apply(A, apply)
-    kw = dict(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter)
+    kw = dict(operator=A, rhs=U,
+              method=_krylov(method, max_iter=max_iter, tolerance=tol),
+              tol=tol, max_iter=max_iter)
     if method == "gmres":
         kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
     phi = P.solve_linear(**kw)
@@ -139,12 +149,13 @@ def test_gmres_now_valid_method(t):
 
 def test_gmres_max_iter_required(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (None, 0, -5):
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=bad)
+            method = None if bad is None else _krylov("gmres", max_iter=10)
+            P.solve_linear(operator=A, rhs=U, method=method, max_iter=bad)
         except ValueError as exc:
             assert "dynamic solver loops require max_iter" in str(exc), str(exc)
         else:
@@ -153,29 +164,32 @@ def test_gmres_max_iter_required(t):
 
 def test_gmres_restart_validation(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (0, -3, 1.5, True):  # a positive int is required (True is rejected: bool is not allowed)
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=bad)
+            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres", max_iter=10),
+                           max_iter=10, restart=bad)
         except ValueError as exc:
             assert "restart" in str(exc), str(exc)
         else:
             raise AssertionError("restart=%r must raise for gmres" % (bad,))
     # a positive int restart is accepted
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=8)
+    phi = P.solve_linear(operator=A, rhs=U, method=_krylov("gmres", max_iter=10),
+                         max_iter=10, restart=8)
     assert phi.attrs["restart"] == 8, "the restart is stored on the IR node"
 
 
 def test_restart_rejected_for_non_gmres(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for method in ("cg", "bicgstab", "richardson"):
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov(method), max_iter=10, restart=20)
+            P.solve_linear(operator=A, rhs=U, method=_krylov(method, max_iter=10),
+                           max_iter=10, restart=20)
         except ValueError as exc:
             assert "restart only applies" in str(exc), str(exc)
         else:

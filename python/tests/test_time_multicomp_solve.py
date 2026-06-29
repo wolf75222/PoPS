@@ -27,6 +27,7 @@ component 0 alone and leave the rest unsolved.
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
+import pytest
 import sys
 
 
@@ -39,6 +40,11 @@ def _pops_time():
     return t
 
 
+@pytest.fixture
+def t():
+    return _pops_time()
+
+
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD per component, well-conditioned for CG)
 
 
@@ -48,7 +54,7 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian (which now runs per component) +
     the affine algebra; solve_linear drives the runtime multi-component Krylov loop."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     kind = "scalar" if ncomp == 1 else "state"
     A = P.matrix_free_operator("A", domain=kind, range_=kind,
                                ncomp=(None if ncomp == 1 else ncomp))
@@ -60,7 +66,7 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
 
     if method is None:
         from pops.solvers.krylov import CG  # typed default (Spec 5 sec.7); CG lowers to "cg"
-        method = CG()
+        method = CG(tolerance=tol, max_iter=max_iter)
     P.set_apply(A, apply)
     phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
     P.commit("blk", phi)
@@ -82,8 +88,9 @@ def test_state_operator_builds(t):
 
     from pops.solvers.krylov import CG
     P.set_apply(A, apply)
-    U = P.state("blk")
-    phi = P.solve_linear(operator=A, rhs=U, method=CG(), tol=1e-10, max_iter=50)
+    U = P.state("U", block="blk").n
+    phi = P.solve_linear(operator=A, rhs=U, method=CG(tolerance=1e-10, max_iter=50),
+                         tol=1e-10, max_iter=50)
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
     P.commit("blk", phi)
     assert P.validate() is True, "the multi-component Program must validate"
@@ -144,7 +151,7 @@ def test_solve_rhs_component_count(t):
     # a scalar_field with >= ncomp components, and a State (n_cons checked at compile), are accepted
     phi = P.solve_linear(operator=A, rhs=P.scalar_field("rhs3", ncomp=3), max_iter=10)
     assert phi.attrs["ncomp"] == 3
-    P.solve_linear(operator=A, rhs=P.state("blk"), max_iter=10)  # State deferred -> accepted
+    P.solve_linear(operator=A, rhs=P.state("U", block="blk").n, max_iter=10)  # State deferred
 
 
 def test_multicomp_codegen(t):
@@ -238,7 +245,7 @@ def _run_one(t, pops, np, ncomp, init):
     try:
         compiled = pops.compile_problem(
             model=_passive_model("mc_prog%d" % ncomp, cons),
-            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(),
+            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(max_iter=200),
                              tol=tol, max_iter=200))
         compiled_model = _passive_model("mc_block%d" % ncomp, cons).compile(backend=pops.codegen.Production())
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed

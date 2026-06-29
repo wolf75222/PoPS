@@ -37,7 +37,7 @@ d = pops.numerics.riemann.HLLC()
 d.brick_type   # 'native'
 d.native_id    # 'pops::HLLCFlux'
 d.scheme       # 'hllc'
-pops.solvers.GMRES().native_id            # 'pops::gmres_solve' (a native free function)
+pops.solvers.GMRES(max_iter=200).native_id  # 'pops::gmres_solve' (a native free function)
 pops.fields.catalog.Poisson().available   # False (no standalone native type yet; solved via GeometricMG)
 ```
 

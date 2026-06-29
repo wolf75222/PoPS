@@ -45,12 +45,13 @@ def t():
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD, well-conditioned for CG)
 
 
-def _krylov(method):
+def _krylov(method, *, max_iter=200, tolerance=1e-10):
     """Map a method name to its TYPED pops.solvers.krylov descriptor (Spec 5 sec.7: solve_linear
     takes a typed solver, not a string -- the test still parametrizes by the name for clarity)."""
     from pops.solvers import krylov
     return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
-            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method]()
+            "richardson": krylov.Richardson,
+            "gmres": krylov.GMRES}[method](max_iter=max_iter, tolerance=tolerance)
 
 
 def _precond(scheme):
@@ -77,7 +78,9 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 
     P.set_apply(A, apply)
     kw = {} if preconditioner is None else {"preconditioner": preconditioner}
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter, **kw)
+    phi = P.solve_linear(operator=A, rhs=U,
+                         method=_krylov(method, max_iter=max_iter, tolerance=tol),
+                         tol=tol, max_iter=max_iter, **kw)
     P.commit("blk", phi)
     return P
 
@@ -207,7 +210,7 @@ def test_string_precond_rejected(t):
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     try:
-        P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10,
+            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres", max_iter=10), max_iter=10,
                        preconditioner="geometric_mg")
     except TypeError as exc:
         assert "preconditioner" in str(exc) and "pops.solvers.preconditioners" in str(exc), str(exc)

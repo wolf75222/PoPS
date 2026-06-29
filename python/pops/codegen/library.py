@@ -70,7 +70,7 @@ def _brick_entry(obj):
     if not isinstance(obj, BrickDescriptor):
         raise TypeError(
             "compile_library objects must be brick descriptors "
-            "(e.g. pops.solvers.GMRES(), pops.numerics.riemann.HLLC(), an "
+            "(e.g. pops.solvers.GMRES(max_iter=...), pops.numerics.riemann.HLLC(), an "
             "@pops.codegen.solvers.solver generated brick); got %r" % (obj,))
     return {
         "id": obj.name,
@@ -178,7 +178,7 @@ def compile_library(name, objects, *, backend=None, emit=False, so_path=None,
 
     @p name is the library ``.so`` name; @p objects is a non-empty list of
     :class:`pops.descriptors.BrickDescriptor` (native / generated / macro / external bricks,
-    e.g. ``pops.solvers.GMRES()``, ``pops.numerics.riemann.HLLC()``, an
+    e.g. ``pops.solvers.GMRES(max_iter=...)``, ``pops.numerics.riemann.HLLC()``, an
     ``@pops.codegen.solvers.solver`` generated brick). @p backend is a TYPED backend descriptor
     (``pops.codegen.Production()`` -- the only one supported yet; ``None`` defaults to it); a bare
     backend string is REJECTED (Spec 5 sec.7, mirroring ``pops.compile``). Returns a

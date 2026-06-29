@@ -68,7 +68,7 @@ def test_catalogued_but_unwired_bricks_are_marked_unavailable():
 
 
 def test_available_native_ids_exist_and_are_namespaced():
-    for d in (lib.fields.GeometricMG(), lib.solvers.CG(), lib.solvers.GMRES(),
+    for d in (lib.fields.GeometricMG(), lib.solvers.CG(max_iter=100), lib.solvers.GMRES(max_iter=100),
               lib.solvers.Schur(), lib.projections.positivity()):
         assert d.available().ok
         assert d.native_id.startswith("pops::")
@@ -92,9 +92,9 @@ def test_field_solver_descriptor_carries_options():
 
 
 def test_solver_descriptors():
-    assert lib.solvers.BiCGStab().scheme == "bicgstab"
-    assert lib.solvers.GMRES().scheme == "gmres"
-    assert lib.solvers.CG().scheme == "cg"
+    assert lib.solvers.BiCGStab(max_iter=100).scheme == "bicgstab"
+    assert lib.solvers.GMRES(max_iter=100).scheme == "gmres"
+    assert lib.solvers.CG(max_iter=100).scheme == "cg"
 
 
 def test_user_riemann_is_external():
