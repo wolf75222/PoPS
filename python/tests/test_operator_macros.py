@@ -63,7 +63,8 @@ def test_predictor_corrector_macro():
         explicit_rate_operator=h["explicit_rhs"], implicit_operator=h["lorentz"])
     P.validate()
     src = P.emit_cpp_program(model=m)
-    assert "pops_install_program" in src
+    assert "pops_problem_install" in src
+    assert "GeneratedModule::Operators::" in src
     print("OK  predictor_corrector_local_linear composes 3 typed operators -> .so source")
 
 
@@ -74,7 +75,9 @@ def test_explicit_rk_macro():
                             fields_operator=h["fields"],
                             tableau=libtime.SSPRK2_TABLEAU)
     P.validate()
-    assert "pops_install_program" in P.emit_cpp_program(model=m)
+    src = P.emit_cpp_program(model=m)
+    assert "pops_problem_install" in src
+    assert "GeneratedModule::Operators::" in src
     print("OK  explicit_rk over a typed rate operator (SSPRK2 tableau)")
 
 
@@ -110,7 +113,9 @@ def test_imex_local_linear_macro():
                                   implicit_operator=h["lorentz"],
                                   fields_operator=h["fields"], theta=1.0)
     P.validate()
-    assert "pops_install_program" in P.emit_cpp_program(model=m)
+    src = P.emit_cpp_program(model=m)
+    assert "pops_problem_install" in src
+    assert "GeneratedModule::Operators::" in src
     print("OK  imex_local_linear (theta-implicit local linear solve)")
 
 
@@ -146,7 +151,8 @@ def test_macro_reused_across_modules():
 
     src_a = build(_model("A", 1.0))
     src_b = build(_model("B", 2.0))
-    assert "pops_install_program" in src_a and src_a != src_b
+    assert "pops_problem_install" in src_a and src_a != src_b
+    assert "GeneratedModule::Operators::" in src_a
     print("OK  the same predictor-corrector macro is reused across two modules")
 
 

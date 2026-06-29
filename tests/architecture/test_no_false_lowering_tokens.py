@@ -177,3 +177,37 @@ def test_no_legacy_private_program_helper_names():
     assert not offenders, (
         "legacy Program helper names must stay deleted:\n%s" % "\n".join(offenders)
     )
+
+
+def test_lib_time_standard_macros_are_operator_first():
+    """TASK-063: ready time macros compose typed operator handles, not RHS selectors."""
+    files = [
+        POPS / "lib" / "time" / "_helpers.py",
+        POPS / "lib" / "time" / "euler.py",
+        POPS / "lib" / "time" / "rk.py",
+        POPS / "lib" / "time" / "ssprk.py",
+        POPS / "lib" / "time" / "predictor_corrector.py",
+        POPS / "lib" / "time" / "imex.py",
+        POPS / "lib" / "time" / "multistep.py",
+    ]
+    offenders = []
+    for path in files:
+        tokens = list(_code_tokens(path))
+        for i, (token, line) in enumerate(tokens):
+            rel = path.relative_to(REPO_ROOT)
+            if token in {"_stage_rhs", "_rate_from_transport", "_rhs_legacy"}:
+                offenders.append("%s:%d contains executable token %s" % (rel, line, token))
+            if token == "sources":
+                offenders.append("%s:%d contains executable selector sources" % (rel, line))
+            if token == "flux":
+                offenders.append("%s:%d contains executable selector flux" % (rel, line))
+            if token == "P" and _next_token(tokens, i) == ".":
+                attr = _next_token(tokens, i, 2)
+                if attr in {"rhs", "solve_fields", "linear_source"}:
+                    offenders.append("%s:%d contains executable token P.%s" % (rel, line, attr))
+            if token in {"solve_fields", "linear_source"} and _next_token(tokens, i) == "(":
+                offenders.append("%s:%d contains executable token %s(" % (rel, line, token))
+    assert not offenders, (
+        "pops.lib.time ready macros must be operator-first; pass typed operator handles and "
+        "compose Program.call nodes instead of legacy RHS selectors:\n%s" % "\n".join(offenders)
+    )

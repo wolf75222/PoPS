@@ -11,8 +11,8 @@ def imex_local(P, block, *, explicit_operator, implicit_operator, fields_operato
     """IMEX with typed explicit-rate and implicit local-linear operator handles.
 
     This is the public ready-made IMEX macro. It is intentionally operator-first: it does not accept
-    ``linear_source="..."``, ``sources=[...]`` or ``flux=True`` selectors. The model declares a typed
-    explicit rate operator and a typed local-linear operator; this macro only composes them.
+    legacy source/transport selectors. The model declares a typed explicit rate operator and a typed
+    local-linear operator; this macro only composes them.
     """
     return imex_local_linear(P, block, explicit_operator=explicit_operator,
                              implicit_operator=implicit_operator,
