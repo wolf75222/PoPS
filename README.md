@@ -62,21 +62,33 @@ All these names are metadata for the generated C++ path, not Python callbacks.
 
 ## Installation
 
-Three ways. The commands below cover the standard local source build.
-
-C++ core, via CMake presets:
+Recommended path for the Python module:
 
 ```bash
 git clone https://github.com/wolf75222/adc_cpp.git && cd adc_cpp
-cmake --preset serial && cmake --build --preset serial && ctest --preset serial
+bash scripts/setup_env.sh      # conda env + toolchain
+bash scripts/build_python.sh   # build + install, then pops.doctor()
 ```
 
-The Ninja build already uses all available cores; pin it to fewer jobs on a constrained machine with
-`cmake --build --preset serial -j<N>`. The serial test preset runs tests one at a time;
-parallelize with `ctest --preset serial -j<N>` (`-j$(nproc)` on Linux, `-j$(sysctl -n
-hw.ncpu)` on macOS), and add `--output-on-failure` for logs. Two other presets build a
-parallel backend instead of the serial one (both read `$CONDA_PREFIX`, so the conda env must
-be active):
+`scripts/setup_env.sh` creates the conda environment and pins the platform toolchain.
+`scripts/build_python.sh` builds and installs `pops`, exports the discovery variables, and
+finishes with `pops.doctor()`.
+
+### C++ core only
+
+The C++ core is built through CMake presets:
+
+```bash
+cmake --preset serial
+cmake --build --preset serial
+ctest --preset serial --output-on-failure
+```
+
+The Ninja build already uses all available cores. Pin it to fewer jobs on a constrained machine
+with `cmake --build --preset serial -j<N>`. The serial test preset runs tests one at a time;
+parallelize with `ctest --preset serial -j<N>` when needed.
+
+Parallel presets are available when the required backend dependencies are visible:
 
 ```bash
 cmake --preset parallel && cmake --build --preset parallel && ctest --preset parallel  # threaded, Kokkos OpenMP
@@ -86,19 +98,10 @@ cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi
 Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). Runtime thread
 control is exposed through `pops.set_threads()`.
 
-Python module (`pops`): `scripts/setup_env.sh` creates the conda env and pins the platform
-toolchain, then `scripts/build_python.sh` builds and installs the module in one command. It sizes
-the heavy translation-unit pool, exports the discovery variables, and ends on `pops.doctor()`.
-`pip install .` (scikit-build-core) drives the build directly if you prefer. Build-time backends are
-selected by environment variables (`POPS_USE_MPI`, `Kokkos_ROOT`, ...); user-facing compile choices
-inside Python should be typed objects such as `Production()`, not backend strings.
-`scripts/uninstall_pops.sh` reverses the setup scripts when you want a clean teardown.
+### Uninstall
 
 ```bash
-bash scripts/setup_env.sh      # conda env + toolchain
-bash scripts/build_python.sh   # build + install, then pops.doctor()
 bash scripts/uninstall_pops.sh # full teardown (env + caches); --keep-env drops only the module
-# or, by hand:  pip install .
 ```
 
 Released versions and binaries: the
@@ -217,16 +220,6 @@ The documentation corpus is being rebuilt from the retained foundation:
 | `include/pops/numerics` | C++ finite-volume, elliptic, time, Krylov, reconstruction, and Riemann kernels | [include/pops/numerics](include/pops/numerics) |
 | `include/pops/amr`, `include/pops/mesh`, `include/pops/parallel` | C++ mesh hierarchy, AMR clustering/regrid, MultiFab storage, halos, MPI seams, and reflux support | [include/pops/amr](include/pops/amr) |
 | `include/pops/runtime`, `python/pops/runtime` | low-level runtime that `pops.bind(...)` uses internally to materialise uniform or AMR runs | [system.hpp](include/pops/runtime/system.hpp) |
-
-### Ecosystem
-
-| Repo | Role |
-|---|---|
-| `adc_cpp` (this repo) | reusable PoPS core, Python DSL, codegen, C++/Kokkos/MPI runtime, AMR infrastructure |
-| [`adc_cases`](https://github.com/wolf75222/adc_cases) | named applications, validation cases, run scripts, scenario-specific facades |
-| [`poisson_cpp`](https://github.com/wolf75222/poisson_cpp) | Poisson solvers (Thomas, SOR, CG, DST, multigrid) |
-| [`advection_cpp`](https://github.com/wolf75222/advection_cpp) | advection, Burgers, Chorin Navier-Stokes |
-| [`euler_cpp`](https://github.com/wolf75222/euler_cpp) | 2D Euler, viscous Navier-Stokes, plasma sources |
 
 ## Versioning
 
