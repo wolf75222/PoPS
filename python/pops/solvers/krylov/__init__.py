@@ -3,8 +3,7 @@
 The Krylov solvers are FREE FUNCTIONS in the C++ ``namespace pops`` (generic_krylov.hpp);
 each factory here returns an inert :class:`pops.descriptors.BrickDescriptor` naming the real
 C++ symbol and the runtime ``scheme`` token. They compute nothing; codegen / the runtime
-consume the descriptor. This is the ONE public home of the catalog formerly parked under
-``pops.lib.solvers`` (that re-export shim is removed; there is no second public path).
+consume the descriptor. This is the ONE public home of the catalog.
 
 * :func:`CG` -- conjugate gradient (SPD systems);
 * :func:`BiCGStab` -- stabilised bi-conjugate gradient (nonsymmetric);

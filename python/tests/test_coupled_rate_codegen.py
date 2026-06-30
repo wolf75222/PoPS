@@ -47,9 +47,9 @@ def _two_fluid_program():
     """A two-block program: solve the collision rate, then forward-Euler each species by its rate."""
     mod, e, i, _ = _two_fluid_module()
     P = adctime.Program("two_fluid_collision").bind_operators(mod)
-    e_n = P.state("electrons", space=e)
-    i_n = P.state("ions", space=i)
-    C = P._call("collision", e_n, i_n)
+    e_n = P.state("U", block="electrons", space=e).n
+    i_n = P.state("U", block="ions", space=i).n
+    C = P.call(mod.operator_handle("collision"), e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
     return mod, P
@@ -119,9 +119,9 @@ def test_coupled_rate_with_prim_var_is_deferred():
     ue = Var("ue", "prim")  # a PRIM reference -> deferred
     mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + ue, ne, ne])
     P = adctime.Program("two_fluid_collision_prim").bind_operators(mod)
-    e_n = P.state("electrons", space=e)
-    i_n = P.state("ions", space=i)
-    C = P._call("collision", e_n, i_n)
+    e_n = P.state("U", block="electrons", space=e).n
+    i_n = P.state("U", block="ions", space=i).n
+    C = P.call(mod.operator_handle("collision"), e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
     with pytest.raises(NotImplementedError, match="ADC-457"):
@@ -159,8 +159,10 @@ def test_read_only_catalyst_input_is_bound():
     mod.operator(name="ioniz", signature=model.Signature((e, i, n), bundle), kind="coupled_rate",
                  expr={"e": [ni + nn], "i": [ne + nn]})  # both rates read the catalyst nn
     P = adctime.Program("ioniz_step").bind_operators(mod)
-    e_n, i_n, n_n = P.state("e", space=e), P.state("i", space=i), P.state("n", space=n)
-    C = P._call("ioniz", e_n, i_n, n_n)
+    e_n = P.state("U", block="e", space=e).n
+    i_n = P.state("U", block="i", space=i).n
+    n_n = P.state("U", block="n", space=n).n
+    C = P.call(mod.operator_handle("ioniz"), e_n, i_n, n_n)
     P.commit_many({"e": P.linear_combine("e1", e_n + P.dt * C["e"]),
                    "i": P.linear_combine("i1", i_n + P.dt * C["i"])})
     src = P.emit_cpp_program(model=None)
@@ -177,8 +179,9 @@ def test_undefined_cons_var_is_rejected():
     ne, ni, zzz = Var("ne", "cons"), Var("ni", "cons"), Var("ZZZ", "cons")
     mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + zzz, ne, ne])  # ZZZ is in no state
     P = adctime.Program("two_fluid_typo").bind_operators(mod)
-    e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
-    C = P._call("collision", e_n, i_n)
+    e_n = P.state("U", block="electrons", space=e).n
+    i_n = P.state("U", block="ions", space=i).n
+    C = P.call(mod.operator_handle("collision"), e_n, i_n)
     P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
                    "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
     with pytest.raises(NotImplementedError, match="ADC-457"):

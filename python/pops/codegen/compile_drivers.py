@@ -1,7 +1,5 @@
 """Internal compiler-invocation layer; public users enter through ``compile_problem`` only."""
 
-import hashlib
-import json
 import os
 import sys
 
@@ -38,6 +36,12 @@ from pops.codegen.compile_emit import (
 )
 from pops.codegen.backends import lower_backend, lower_problem_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
+from pops.codegen.problem_identity import (
+    compiled_problem_cache_key as _compiled_problem_cache_key,
+    compiled_problem_identity as _compiled_problem_identity,
+    problem_target_from_layout as _problem_target_from_layout,
+    stable_identity_value as _stable_identity_value,
+)
 
 __all__ = ["compile_problem"]
 
@@ -227,136 +231,6 @@ def _compile_model(model, so_path=None, include=None, backend=None, name=None, c
 
 
 # compile_problem -- compile a model + pops.time.Program into a problem.so
-
-def _problem_target_from_layout(layout):
-    """Return the native problem ABI target selected by a typed mesh layout."""
-    if layout is None:
-        return "system"
-    from pops.mesh.layouts import AMR, Uniform
-    if isinstance(layout, AMR):
-        return "amr_system"
-    if isinstance(layout, Uniform):
-        return "system"
-    raise TypeError(
-        "compile_problem: layout must be a typed pops.mesh.layouts.Uniform(...) or AMR(...) "
-        "descriptor; got %r" % type(layout).__name__)
-
-
-def _stable_identity_value(value):
-    """JSON-stable, side-effect-free representation for problem identity records."""
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, (list, tuple)):
-        return [_stable_identity_value(v) for v in value]
-    if isinstance(value, dict):
-        return {str(k): _stable_identity_value(value[k]) for k in sorted(value, key=str)}
-    if hasattr(value, "inspect") and callable(value.inspect):
-        return _stable_identity_value(value.inspect())
-    if hasattr(value, "options") and callable(value.options):
-        return {
-            "type": type(value).__name__,
-            "category": getattr(value, "category", None),
-            "options": _stable_identity_value(value.options()),
-        }
-    raise TypeError(
-        "compiled problem identity cannot serialize %s: route descriptors must expose "
-        "inspect() or options(), and identity values must be JSON primitives, lists or dicts; "
-        "repr() is intentionally rejected because it is not a stable identity"
-        % type(value).__name__)
-
-
-def _library_identity(manifests):
-    out = []
-    for manifest in manifests or []:
-        if hasattr(manifest, "to_dict") and callable(manifest.to_dict):
-            out.append(_stable_identity_value(manifest.to_dict()))
-        elif hasattr(manifest, "as_dict") and callable(manifest.as_dict):
-            out.append(_stable_identity_value(manifest.as_dict()))
-        else:
-            out.append(_stable_identity_value(manifest))
-    return out
-
-
-_GENERATED_SOURCE_IDENTITY_VERSION = "pops-generated-source-v1"
-
-
-def _semantic_problem_hash(record):
-    """Digest only the semantic part of a compiled problem identity."""
-    blob = json.dumps(record["semantic"], sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def _compiled_problem_cache_key(record):
-    """Digest the full binary cache identity: semantic + provenance + generated-source guard."""
-    blob = json.dumps(record, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def _compiled_problem_identity(*, source, model, program, layout, backend, target,
-                               include, compiler, std, abi_key, optflags,
-                               library_manifests,
-                               codegen_version=_GENERATED_SOURCE_IDENTITY_VERSION):
-    """Structured identity of the combined problem artifact.
-
-    ``problem_hash`` is the semantic identity: Module IR, Program IR, route descriptors, layout,
-    backend/platform and libraries. Toolchain provenance and generated-source guards live beside it
-    in ``problem_identity`` and participate in ``cache_key`` only. This keeps equivalent headers
-    under a different include path from changing the semantic hash while still preventing a stale
-    binary cache hit.
-    """
-    source_identity = {
-        "version": str(codegen_version),
-        "source": source,
-    }
-    source_hash = hashlib.sha256(
-        json.dumps(source_identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    module_hash = model.module_hash() if hasattr(model, "module_hash") else None
-    program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
-    record = {
-        "schema": "pops-compiled-problem-v1",
-        "semantic": {
-            "name": getattr(program, "name", "problem"),
-            "module": {
-                "name": getattr(model, "name", None),
-                "hash": module_hash,
-            },
-            "program": {
-                "name": getattr(program, "name", None),
-                "hash": program_hash,
-            },
-            "descriptors": {
-                "layout": _stable_identity_value(layout),
-                "backend": _stable_identity_value(backend),
-                "libraries": _library_identity(library_manifests),
-            },
-            "toolchain": {
-                "compiler": compiler,
-                "std": std,
-                "abi_key": abi_key,
-                "native_features": _native_feature_key(),
-                "optflags": list(optflags),
-            },
-            "runtime_route": {
-                "target": target,
-            },
-        },
-        "provenance": {
-            "include": include,
-            "compiler": compiler,
-            "std": std,
-            "abi_key": abi_key,
-            "native_features": _native_feature_key(),
-            "optflags": list(optflags),
-        },
-        "generated_source": {
-            "version": source_identity["version"],
-            "hash": source_hash,
-            "language": "c++",
-        },
-    }
-    problem_hash = _semantic_problem_hash(record)
-    return record, problem_hash, module_hash, program_hash, source_hash
 
 
 def compile_problem(so_path=None, *, model=None, program=None, time=None, backend=None, layout=None,

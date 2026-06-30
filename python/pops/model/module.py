@@ -9,9 +9,7 @@ Imports only the standard library (plus the sibling operator-first types) so it
 can be exercised without the compiled ``_pops`` extension.
 """
 import hashlib
-import json
 
-from .handles import OperatorHandle
 from .operators import Operator
 from .registry import OperatorRegistry
 from .signatures import Signature
@@ -21,6 +19,15 @@ from .spaces import (
     ParameterSpace,
     RateSpace,
     StateSpace,
+)
+from ._module_helpers import (
+    body_identity as _body_identity,
+    metadata_record as _metadata_record,
+    normalize_source_selectors as _normalize_source_selectors,
+    operator_record as _operator_record,
+    param_record as _param_record,
+    space_record as _space_record,
+    symbolic_args as _symbolic_args,
 )
 
 
@@ -364,185 +371,3 @@ class Module:
 
     def __repr__(self):
         return "Module(%r, operators=[%s])" % (self.name, ", ".join(self._registry.names()))
-
-
-def _body_identity(body):
-    """A stable JSON identity identifying an already-captured operator IR body."""
-    return json.dumps(_canonical_body_identity(body), sort_keys=True, separators=(",", ":"))
-
-
-def _canonical_body_identity(body):
-    """Canonical, side-effect-free body identity.
-
-    ``repr`` is intentionally not used: it can include addresses or implementation-dependent
-    formatting. Operator bodies must be built from JSON primitives, containers, or inert IR objects
-    exposing structural fields.
-    """
-    if body is None:
-        return None
-    if isinstance(body, (bool, int, float, str)):
-        return body
-    if isinstance(body, (list, tuple)):
-        return [_canonical_body_identity(v) for v in body]
-    if isinstance(body, dict):
-        return {
-            str(k): _canonical_body_identity(v)
-            for k, v in sorted(body.items(), key=lambda kv: str(kv[0]))
-        }
-    if callable(body):
-        raise TypeError("Module operator bodies must be captured IR, not Python callables")
-    if hasattr(body, "_key") and callable(body._key):
-        return {
-            "type": type(body).__name__,
-            "key": _canonical_body_identity(body._key()),
-        }
-    if hasattr(body, "to_dict") and callable(body.to_dict):
-        return {
-            "type": type(body).__name__,
-            "dict": _canonical_body_identity(body.to_dict()),
-        }
-    if hasattr(body, "as_dict") and callable(body.as_dict):
-        return {
-            "type": type(body).__name__,
-            "dict": _canonical_body_identity(body.as_dict()),
-        }
-    attrs = {}
-    if hasattr(body, "__dict__"):
-        attrs.update(vars(body))
-    slots = getattr(body, "__slots__", ())
-    if isinstance(slots, str):
-        slots = (slots,)
-    for slot in slots:
-        if slot.startswith("_") or not hasattr(body, slot):
-            continue
-        attrs[slot] = getattr(body, slot)
-    if attrs:
-        return {
-            "type": type(body).__name__,
-            "attrs": _canonical_body_identity(attrs),
-        }
-    raise TypeError(
-        "Module operator body %s is not structurally serializable for module_hash; "
-        "use inert IR primitives/containers instead of relying on repr()."
-        % type(body).__name__)
-
-
-def _symbolic_args(inputs):
-    """Symbolic arguments used to execute a module.operator decorator once at declaration."""
-    return tuple(_symbolic_arg(space) for space in inputs)
-
-
-def _symbolic_arg(space):
-    if isinstance(space, StateSpace):
-        return _SpaceArg(space, "cons")
-    if isinstance(space, FieldSpace):
-        return _SpaceArg(space, "aux")
-    return space
-
-
-class _SpaceArg:
-    """Small symbolic view over a Space's components for decorator-time IR capture."""
-
-    def __init__(self, space, var_kind):
-        from pops.ir.expr import Var
-        self.space = space
-        self.name = space.name
-        self.components = tuple(space.components)
-        self._vars = {c: Var(c, var_kind) for c in self.components}
-        self._ordered = tuple(self._vars[c] for c in self.components)
-
-    def __iter__(self):
-        return iter(self._ordered)
-
-    def __len__(self):
-        return len(self._ordered)
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return self._ordered[key]
-        return self._vars[key]
-
-    def __getattr__(self, name):
-        try:
-            return self._vars[name]
-        except KeyError:
-            raise AttributeError(name) from None
-
-    def __repr__(self):
-        return "SymbolicSpaceArg(%r, components=%r)" % (self.name, list(self.components))
-
-
-def _space_record(space):
-    record = {
-        "name": space.name,
-        "kind": space.kind,
-        "components": list(space.components),
-        "layout": space.layout,
-    }
-    if hasattr(space, "roles"):
-        record["roles"] = dict(space.roles)
-    if hasattr(space, "storage"):
-        record["storage"] = space.storage
-    return record
-
-
-def _param_record(param):
-    return {
-        "name": param.name,
-        "default": param.default,
-        "dtype": param.dtype,
-        "kind": param.kind,
-    }
-
-
-def _metadata_record(record):
-    return {k: (repr(v) if k == "expression" else v) for k, v in record.items()}
-
-
-def _operator_record(registry, op):
-    return {
-        "id": registry.id_of(op.name),
-        "name": op.name,
-        "kind": op.kind,
-        "signature": repr(op.signature),
-        "requirements": dict(op.requirements),
-        "capabilities": dict(op.capabilities),
-        "lowering": dict(op.lowering),
-        "handle": repr(op.handle()),
-        "body": _body_identity(op.body),
-    }
-
-
-def _normalize_source_selectors(sources, *, who):
-    """Normalize typed source selectors for ``Module.rate_operator``.
-
-    Public Module authoring should pass the ``Operator`` returned by ``Module.operator(...,
-    kind="local_source")`` or an ``OperatorHandle``. A bare string can only be the built-in
-    ``"default"`` source sentinel; named source strings are rejected to avoid YAML-like selectors.
-    """
-    if sources is None:
-        return None
-    out = []
-    for src in sources:
-        if isinstance(src, str):
-            if src == "default":
-                out.append(src)
-                continue
-            raise TypeError(
-                "%s: sources must contain typed source operators/handles, not the string %r; "
-                "keep the object returned by Module.operator(..., kind='local_source')" % (who, src))
-        if isinstance(src, Operator):
-            if src.kind != "local_source":
-                raise TypeError("%s: source operator %r has kind %r, expected 'local_source'"
-                                % (who, src.name, src.kind))
-            out.append(src.name)
-            continue
-        if isinstance(src, OperatorHandle):
-            if src.kind not in (None, "local_source"):
-                raise TypeError("%s: source handle %r has kind %r, expected 'local_source'"
-                                % (who, src.name, src.kind))
-            out.append(src.name)
-            continue
-        raise TypeError("%s: sources must contain typed source operators/handles, got %r"
-                        % (who, type(src).__name__))
-    return out

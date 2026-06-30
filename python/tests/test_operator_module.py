@@ -102,9 +102,9 @@ def _build_predictor(P, mdl):
     """A GENERIC predictor step: no physics names, only typed operator calls."""
     P.bind_operators(mdl)
     u = P.state("U", block="plasma", space=mdl.state_spaces()["U"]).n
-    fields = P._call("fields_from_state", u)
-    rate = P._call("explicit_rhs", u, fields)
-    lin = P._call("lorentz", fields)
+    fields = P.call(mdl.operator_handle("fields_from_state"), u)
+    rate = P.call(mdl.operator_handle("explicit_rhs"), u, fields)
+    lin = P.call(mdl.operator_handle("lorentz"), fields)
     rhs = P.linear_combine("rhs", u + P.dt * rate)
     ustar = P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
     P.commit("plasma", ustar)
@@ -144,7 +144,7 @@ def test_same_program_two_modules():
     pb = adctime.Program("pc")
     _build_predictor(pb, mb)
     src_b = pb.emit_cpp_program(model=mb)
-    assert "pops_install_program" in src_a and "pops_install_program" in src_b
+    assert "pops_problem_install" in src_a and "pops_problem_install" in src_b
     # The SAME generic function produced a valid, distinct program for each module
     # (the electric gain differs), proving reuse without mentioning any physics.
     assert src_a != src_b

@@ -21,6 +21,8 @@ module may not import ``pops.mesh`` at module scope; cf. tests/architecture/test
 
 import json
 
+from pops.codegen.inspect_memory import amr_patch_budget
+
 # Bytes per double-precision cell value. The core is 2D (n x n cells), one field component is a
 # full grid traversal; a "field pass" in Program.estimate is one such state-sized buffer.
 _BYTES_PER_CELL = 8
@@ -469,8 +471,8 @@ def build_memory_estimate(compiled, mesh, *, platform=None, layout=None):
 
     layout_kind = "system"
     if layout is not None:
-        layout_kind, amr_bytes, amr_notes = _amr_patch_budget(layout, state_field, cell_field,
-                                                              n_elliptic)
+        layout_kind, amr_bytes, amr_notes = amr_patch_budget(layout, state_field, cell_field,
+                                                             n_elliptic)
         if amr_bytes is not None:
             categories["amr_patch"] = amr_bytes
             assumptions.extend(amr_notes)
@@ -482,42 +484,5 @@ def build_memory_estimate(compiled, mesh, *, platform=None, layout=None):
     return MemoryEstimate(categories=categories, cells=cells, mesh_shape=shape, n_cons=n_cons,
                           n_aux=n_aux, scratch_buffers=scratch_buffers, assumptions=assumptions,
                           conservative=True, layout=layout_kind)
-
-
-def _amr_patch_budget(layout, state_field, cell_field, n_elliptic):
-    """A CONSERVATIVE AMR patch budget from an ``AMR`` layout descriptor (no bind).
-
-    Returns ``(layout_kind, amr_patch_bytes, notes)``. For a ``Uniform`` layout there is no extra
-    patch budget (``amr_patch_bytes`` is ``None``). For an ``AMR(max_levels=L, ratio=r)`` layout the
-    worst case fully refines every level: a level ``k`` covering the whole domain at refinement
-    ``r^k`` has ``r^(2k)`` times the base cells (2D). Summing the geometric series over the refined
-    levels (1..L-1) gives the extra fine-grid footprint on top of the base level. This is an UPPER
-    bound (real regrids refine a fraction of the domain); a tight figure needs a bind. The mesh
-    import is lazy to respect the codegen layering."""
-    from pops.mesh.layouts import AMR, Uniform  # lazy: codegen may not import mesh at module scope
-    if isinstance(layout, Uniform):
-        return "uniform", None, []
-    if not isinstance(layout, AMR):
-        raise TypeError("estimate_memory(layout=): expected a pops.mesh.layouts.AMR / Uniform; "
-                        "got %r" % type(layout).__name__)
-    max_levels = int(getattr(layout, "max_levels", 1) or 1)
-    ratio = int(getattr(layout, "ratio", 2) or 2)
-    if max_levels <= 1:
-        return "amr", 0, ["AMR layout with a single level: no extra patch budget"]
-    # Sum r^(2k) for k = 1 .. max_levels-1 (each refined level fully covering the domain).
-    refine_factor = sum(ratio ** (2 * k) for k in range(1, max_levels))
-    # Each refined cell carries the same per-cell footprint as the base (state + one elliptic field).
-    per_cell_levels = state_field + n_elliptic * cell_field
-    amr_bytes = refine_factor * per_cell_levels
-    notes = [
-        "AMR estimate is CONSERVATIVE: assumes EVERY level (1..%d) fully refines the whole domain "
-        "at ratio %d (worst case); a real regrid tags a fraction of cells, so the true footprint is "
-        "smaller. A tight AMR figure needs a bind (the regrid pattern is data-dependent)."
-        % (max_levels - 1, ratio),
-        "AMR refine factor (sum of r^(2k), k=1..%d) = %d base-grid equivalents"
-        % (max_levels - 1, refine_factor),
-    ]
-    return "amr", amr_bytes, notes
-
 
 __all__ = ["Arguments", "MemoryEstimate", "build_arguments", "build_memory_estimate"]

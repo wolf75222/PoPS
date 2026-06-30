@@ -3,8 +3,7 @@
 The Schur-condensation solver eliminates a coupled (e.g. source) block and solves the reduced
 system; the native symbol is ``pops::SchurCondensationOperator``. :func:`Schur` returns the
 inert :class:`pops.descriptors.BrickDescriptor` naming it. This is the ONE public home of the
-``solvers.Schur`` entry formerly parked under ``pops.lib.solvers`` (that shim is removed; no
-second public path).
+``solvers.Schur`` entry.
 
 ``CondensedSchur`` names the compiled source-stage route in this solver package only. It is not
 re-exported as a top-level ``pops.CondensedSchur`` constructor.

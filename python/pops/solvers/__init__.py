@@ -2,8 +2,7 @@
 
 Spec 5 (sec.4 / 5.7 / 13.11.1) homes the solver catalog in this top-level central package
 (alongside :mod:`pops.numerics` / :mod:`pops.linalg` / :mod:`pops.fields`). This is the ONE
-public home for the solver descriptors: the transitional ``pops.lib.solvers`` re-export shim is
-removed (no second public path; ``pops.lib`` is presets-only). Every entry is an inert
+public home for the solver descriptors. Every entry is an inert
 descriptor: codegen / the runtime consume it, nothing here computes in Python (the C++ solvers
 execute).
 
@@ -33,8 +32,8 @@ from .krylov import CG, BiCGStab, GMRES, Richardson
 from .schur import Schur
 
 # The flat solver factory surface (``solvers.CG(max_iter=...)`` ... ``solvers.Schur()``), the one public
-# factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). It intentionally
-# exposes only compiled solver descriptors, never custom-solver authoring hooks.
+# factory namespace. It intentionally exposes only compiled solver descriptors, never custom-solver
+# authoring hooks.
 solvers = SimpleNamespace(
     CG=CG, BiCGStab=BiCGStab, GMRES=GMRES, Richardson=Richardson,
     Schur=Schur,
