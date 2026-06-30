@@ -2,7 +2,8 @@
 """pops.time GMRES Krylov solver for the compiled time program (epic ADC-399 / ADC-420).
 
 ADC-420 adds restarted GMRES(m) to the matrix-free Krylov core (pops::gmres_solve in
-generic_krylov.hpp) and exposes it as ``P.solve_linear(method="gmres", restart=m)``. GMRES is the
+generic_krylov.hpp) and exposes it as
+``P.solve_linear(method=pops.solvers.krylov.GMRES(max_iter=..., restart=m))``. GMRES is the
 robust choice for a NON-symmetric operator: where CG needs an SPD A and stagnates on a non-self-adjoint
 one, GMRES minimises the residual over the Krylov subspace and converges.
 
@@ -20,7 +21,7 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
           centered first-derivative (advection) term, so A is non-self-adjoint and CG stagnates. gmres
           converges; the compiled solution matches an OFFLINE GMRES reference on the SAME discrete
           operator (~1e-6). Reports iters + residual.
-    Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
+    Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never
     fakes the engine.
 
 The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
@@ -28,6 +29,8 @@ tests/test_generic_krylov.cpp, which is fully validatable on every backend witho
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+import os
+from pathlib import Path
 import pytest
 import sys
 
@@ -48,6 +51,12 @@ def t():
 
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD part)
 _BETA = 2.0   # advection strength of the non-symmetric term beta*d/dx (breaks self-adjointness)
+
+
+def _configure_source_tree_include():
+    include = Path(__file__).resolve().parents[2] / "include"
+    if include.is_dir():
+        os.environ["POPS_INCLUDE"] = str(include)
 
 
 def _krylov(method, *, max_iter=80, tolerance=1e-10):
@@ -260,47 +269,63 @@ def _discrete_nonsym(n, alpha, beta):
 def _passive_model(name):
     """A minimal 1-variable block with NO flux and NO Poisson coupling: the block's single conservative
     variable doubles as the scalar field the matrix-free solve writes."""
-    from pops.physics.facade import Model
+    from pops.math import ddt, div
+    from pops.physics import Model
+
     m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    return m
+    U = m.state("U", components=["rho"], roles={"rho": "density"})
+    rho = U[0]
+    zero = 0.0 * rho
+    flux = m.flux(
+        "F",
+        on=U,
+        x=[zero],
+        y=[zero],
+        waves={"x": [1.0 + zero], "y": [1.0 + zero]},
+    )
+    m.rate("transport_rate", ddt(U) == -div(flux))
+    m.check()
+    return m.to_module()
 
 
 def _run_one(t, pops, np, program, name):
     """Compile + install + step @p program on a 1-variable block, return the stepped state and rho0,
     or None if the toolchain is unavailable."""
+    _configure_source_tree_include()
+    from pops.codegen import KokkosOpenMP, Production
+    from pops.mesh import CartesianMesh
+    from pops.mesh.layouts import Uniform
+    from pops.numerics.spatial import FiniteVolume
+
     n = 16
-    sim = pops.System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "_install_problem_so"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-        return None
-
-    from pops.physics.facade import Model
-
+    mesh = CartesianMesh(n=n, L=1.0, periodic=True)
+    layout = Uniform(mesh)
     try:
-        from pops.codegen import Production
-        compiled = pops.compile_problem(model=_passive_model(name + "_prog"), time=program)
-        compiled_model = _passive_model(name + "_block")._compile_for_runtime(backend=Production())
+        compiled = pops.compile_problem(
+            model=_passive_model(name + "_prog"),
+            program=program,
+            layout=layout,
+            backend=Production(platform=KokkosOpenMP()),
+        )
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])
         return None
 
-    sim._add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit.euler())
-
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim._set_state("blk", np.stack([rho0]))
-    sim._install_problem_so(compiled.so_path)
-    sim.step(0.05)  # dt is irrelevant: the solve is dt-free
-    out = np.array(sim._get_state("blk"))[0]
+    sim = pops.System(layout=layout)
+    sim.install(
+        compiled,
+        instances={
+            "blk": {
+                "initial": np.stack([rho0]),
+                "spatial": FiniteVolume(reconstruction=FirstOrder(), riemann=Rusanov()),
+            }
+        },
+    )
+    sim.step_cfl(0.4)  # dt is irrelevant here: the matrix-free solve is dt-free.
+    out = np.array(sim.get_state("blk"))[0]
     return out, rho0, n
 
 

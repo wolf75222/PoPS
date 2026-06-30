@@ -35,15 +35,17 @@ history runtime path); each step solves from phi^n = 0.
     preconditioner while the Program solve is matrix-free BiCGStab WITHOUT a preconditioner -- the same
     operator and RHS, a different Krylov path. Both converge to the same phi at tolerance, so the firm
     parity is checked against the matrix-free-equivalent offline reference (not bit-against-native); a
-    native pops.ElectrostaticLorentzSchur(theta=0.5) step is also REPORTED as a diagnostic (it is confounded by the
-    explicit transport half-flow of pops.Split, so it is not asserted). The cross-step phi^n carry is
-    deferred (see the macro docstring).
+    The legacy native Split diagnostic is intentionally absent here: this test exercises the final
+    compiled-problem install path. The cross-step phi^n carry is deferred (see the macro docstring).
 
-Self-skips (exit 0) without numpy / _pops / install_program / a compiler / a visible Kokkos -- never
+Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never
 fakes the engine (project policy: no fake pops in tests).
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+import os
+from pathlib import Path
+import pytest
 import sys
 
 
@@ -58,6 +60,11 @@ def _pops_time():
     return t
 
 
+@pytest.fixture
+def t():
+    return _pops_time()
+
+
 _N = 16
 _L = 1.0
 _DT = 0.05
@@ -67,10 +74,16 @@ _THETA = 1.0
 _TOL = 1e-10
 
 
+def _configure_source_tree_include():
+    include = Path(__file__).resolve().parents[2] / "include"
+    if include.is_dir():
+        os.environ["POPS_INCLUDE"] = str(include)
+
+
 # ---- (A) builder ops + macro lowering: pure Python, always runs ----
 def test_schur_coeffs_records_and_validates(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     coeffs = P.schur_coeffs(state=U, c=0.25, th_dt=0.5, c_rho=0, c_bz=3)
     assert coeffs.vtype == "schur_coeffs", "schur_coeffs yields a schur_coeffs bundle value"
     assert coeffs.attrs["c_rho"] == 0 and coeffs.attrs["c_bz"] == 3
@@ -80,7 +93,7 @@ def test_schur_coeffs_records_and_validates(t):
 
 def test_schur_coeffs_operand_types(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     g = P.scalar_field("g")
     bad = []
     for kw in (dict(state=g, c=1.0, th_dt=1.0),           # a scalar_field is not a State
@@ -97,7 +110,7 @@ def test_schur_coeffs_operand_types(t):
 
 def test_apply_laplacian_coeff_operand_types(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     A = P.matrix_free_operator("A")
     seen = []
 
@@ -119,7 +132,7 @@ def test_apply_laplacian_coeff_operand_types(t):
 
 def test_schur_rhs_and_reconstruct_record(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = P.state("U", block="blk").n
     phi_n = P.scalar_field("phi_n")
     rhs = P.scalar_field("rhs")
     r = P.schur_rhs(rhs, phi_n, U, th_dt=0.5, g=0.25, c_mx=1, c_my=2, c_bz=3)
@@ -319,83 +332,100 @@ def _np_bicgstab(apply, b, *, tol=1e-10, max_iter=1000):
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----
 def _run_section_b(t):
+    _configure_source_tree_include()
     try:
         import numpy as np
 
         import pops
-        from pops.ir.ops import sqrt
-        from pops.physics.facade import Model
+        from pops.codegen import KokkosOpenMP, Production
+        from pops.math import ddt, div, grad, laplacian, sqrt
+        from pops.mesh import CartesianMesh
+        from pops.mesh.layouts import Uniform
+        from pops.numerics.spatial import FiniteVolume
+        from pops.physics import Model
+        from pops.solvers.elliptic import GeometricMG
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable here
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
-
-    sim_probe = pops.System(n=8, L=_L, periodic=True)
-    if not hasattr(sim_probe, "_install_problem_so"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-        return None
-    if not hasattr(sim_probe, "set_magnetic_field"):
-        print("-- (B) skipped: _pops lacks set_magnetic_field (rebuild _pops) --")
         return None
 
     def schur_model(name):
         """Isothermal 2D fluid block (rho, mx, my) with a Poisson coupling + a B_z aux: the canonical
         condensed-Schur block (Density / MomentumX / MomentumY roles + B_z)."""
         m = Model(name)
-        rho, mx, my = m.conservative_vars("rho", "mx", "my")
+        U = m.state(
+            "U",
+            components=["rho", "mx", "my"],
+            roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"},
+        )
+        rho, mx, my = U
         cs2 = m.param("cs2", 0.5)
         u = m.primitive("u", mx / rho)
         v = m.primitive("v", my / rho)
-        p = m.primitive("p", cs2 * rho)
-        m.primitive_vars(rho=rho, u=u, v=v, p=p)
-        m.conservative_from([rho, rho * u, rho * v])
-        m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
+        pressure = m.scalar("p", cs2 * rho)
         cs = sqrt(cs2)
-        m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-        m.elliptic_rhs(rho)
+        flux = m.flux(
+            "F",
+            on=U,
+            x=[mx, mx * u + pressure, my * u],
+            y=[my, mx * v, my * v + pressure],
+            waves={"x": [u - cs, u, u + cs], "y": [v - cs, v, v + cs]},
+        )
+        phi = m.field("phi")
+        m.solve_field(
+            "fields_from_state",
+            equation=(-laplacian(phi) == rho),
+            outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
+            solver=GeometricMG(),
+        )
+        m.rate("explicit_rate", ddt(U) == -div(flux))
         m.aux("grad_x")
         m.aux("grad_y")
         m.aux("B_z")
-        return m
+        m.check()
+        return m.to_module()
 
-    def make_sim(name):
-        sim = pops.System(n=_N, L=_L, periodic=True)
-        try:
-            compiled_model = schur_model(name)._compile_for_runtime(backend=pops.codegen.Production())
-        except RuntimeError as exc:  # no compiler / no Kokkos visible
-            print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
-            return None, None
-        sim._add_equation("blk", compiled_model,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit.euler())
-        sim._set_poisson("charge_density", "geometric_mg")
-        sim.set_magnetic_field(_BZ * np.ones(_N * _N))
+    mesh = CartesianMesh(n=_N, L=_L, periodic=True)
+    layout = Uniform(mesh)
+
+    def initial_state():
         x = (np.arange(_N) + 0.5) / _N
         X, Y = np.meshgrid(x, x, indexing="ij")
         rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
         mx0 = 0.4 * rho0
         my0 = -0.2 * rho0
-        U0 = np.stack([rho0, mx0, my0])
-        sim._set_state("blk", U0)
-        return sim, U0
+        return np.stack([rho0, mx0, my0])
 
     h = _L / _N
 
     def compiled_vs_offline(theta):
         """One compiled step of std.condensed_schur(theta) vs the matrix-free offline reference."""
-        sim, U0 = make_sim("cs_block_%d" % int(round(theta * 100)))
-        if sim is None:
-            return None
+        U0 = initial_state()
         P = t.Program("cs_step_%d" % int(round(theta * 100)))
         lt.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, tol=_TOL, max_iter=400)
         try:
-            compiled = pops.compile_problem(model=schur_model("cs_prog_%d" % int(round(theta * 100))),
-                                           time=P)
+            compiled = pops.compile_problem(
+                model=schur_model("cs_prog_%d" % int(round(theta * 100))),
+                program=P,
+                layout=layout,
+                backend=Production(platform=KokkosOpenMP()),
+            )
         except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
             print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
             return None
-        sim._install_problem_so(compiled.so_path)
+        sim = pops.System(layout=layout)
+        sim.install(
+            compiled,
+            instances={
+                "blk": {
+                    "initial": U0,
+                    "spatial": FiniteVolume(reconstruction=FirstOrder(), riemann=Rusanov()),
+                }
+            },
+            aux={"B_z": _BZ * np.ones((_N, _N))},
+            solvers={"phi": GeometricMG()},
+        )
         sim.step(_DT)
-        out = np.array(sim._get_state("blk"))
+        out = np.array(sim.get_state("blk"))
         ref, iters = _offline_step(U0, _ALPHA, theta, _BZ, h, _DT, _TOL)
         err = float(np.abs(out - ref).max())
         moved = float(np.abs(out - U0).max())
@@ -412,49 +442,7 @@ def _run_section_b(t):
 
     # theta == 1 (no-regression: the historical backward-Euler path) + theta == 0.5 (ADC-427).
     compiled_vs_offline(1.0)
-    half = compiled_vs_offline(0.5)
-
-    # NATIVE diagnostic (ADC-427): std.condensed_schur(theta=0.5) compiled vs pops.ElectrostaticLorentzSchur(
-    # theta=0.5) through pops.Split, taken as a SINGLE step (both start from phi^n = 0 -- the System
-    # initializes phi to zero, the macro has no persistent phi carry). This is REPORTED, not asserted:
-    # the native pops.Split also runs the EXPLICIT transport half-flow that the source-only Program omits,
-    # so the two states differ by the transport advection (plus the MG-preconditioned vs unpreconditioned
-    # BiCGStab path -- the documented ADC-421 Krylov gap). The FIRM parity is compiled-vs-offline above,
-    # where the offline reference IS the source stage exactly (same matrix-free BiCGStab). Faking a tight
-    # native bound here would mean asserting against a transport-confounded step -- we do not.
-    if half is not None:
-        out_c, U0, _ = half
-        sim_n = pops.System(n=_N, L=_L, periodic=True)
-        try:
-            native_model = schur_model("cs_native")._compile_for_runtime(backend=pops.codegen.Production())
-        except RuntimeError as exc:
-            print("-- (B) native diagnostic skipped: model compile failed: %s --" % str(exc)[:160])
-            native_model = None
-        if native_model is not None:
-            try:
-                # B_z must exist BEFORE add_equation: the CondensedSchur source stage is wired during
-                # add_equation (set_source_stage), which reads the B_z aux. set_poisson + the magnetic
-                # field first, then the block.
-                sim_n._set_poisson("charge_density", "geometric_mg")
-                sim_n.set_magnetic_field(_BZ * np.ones(_N * _N))
-                sim_n._add_equation(
-                    "blk", native_model,
-                    spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                    time=pops.Split(hyperbolic=pops.Explicit.euler(),
-                                   source=pops.ElectrostaticLorentzSchur(theta=0.5, alpha=_ALPHA)))
-            except Exception as exc:  # noqa: BLE001 -- Split/CondensedSchur wiring unavailable here
-                print("-- (B) native diagnostic skipped: pops.Split/CondensedSchur unavailable: %s --"
-                      % str(exc)[:160])
-            else:
-                sim_n._set_state("blk", U0)
-                sim_n.step(_DT)
-                out_n = np.array(sim_n._get_state("blk"))
-                d_native = float(np.abs(out_c - out_n).max())
-                print("  [diagnostic] compiled(theta=0.5) source-only vs native pops.ElectrostaticLorentzSchur("
-                      "theta=0.5) Split(transport+source): max|d| = %.2e  (native includes the explicit "
-                      "transport half-flow + the MG-preconditioned BiCGStab path; firm parity is the "
-                      "compiled-vs-offline assertion above)" % d_native)
-    return half
+    return compiled_vs_offline(0.5)
 
 
 def _run():

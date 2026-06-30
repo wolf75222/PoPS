@@ -10,6 +10,7 @@ transitional pops.lib.solvers shim is removed). The descriptors compute nothing;
 metadata is asserted.
 """
 import pytest
+from pathlib import Path
 
 pops = pytest.importorskip("pops")
 solvers = pytest.importorskip("pops.solvers")
@@ -106,6 +107,14 @@ def test_nonlinear_newton_descriptor_names_generated_cpp_route():
     assert not hasattr(solvers, "FixedPoint")
     assert not hasattr(solvers.solvers, "Newton")
     assert not hasattr(solvers.solvers, "FixedPoint")
+
+
+def test_public_solver_catalogs_have_no_notimplemented_placeholders():
+    """TASK-040/050/051: exposed solver descriptors must name real compiled routes."""
+    for module in (krylov, schur, nonlinear):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "NotImplementedError" not in source, (
+            "%s must not expose transitional solver placeholders" % module.__name__)
 
 
 # --- Schur-condensation solver -----------------------------------------------------------

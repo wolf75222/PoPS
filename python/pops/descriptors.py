@@ -52,9 +52,10 @@ class BrickDescriptor:
         # Optional board value carried by a generated/macro brick; kept OFF the
         # identity key (it may be an unhashable board node).
         self.expression = expression
-        # Optional Python builder of a GENERATED-brick solver (``@pops.lib.solver``):
-        # the function that AUTHORS the solver IR. Like ``expression`` it is kept OFF
-        # the identity key (a callable is not part of the brick's value identity).
+        # Optional Python builder of a GENERATED-brick solver
+        # (``@pops.codegen.solvers.solver``): the function that AUTHORS the solver IR.
+        # Like ``expression`` it is kept OFF the identity key (a callable is not part
+        # of the brick's value identity).
         self.builder = builder
 
     def _key(self):

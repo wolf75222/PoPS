@@ -21,10 +21,10 @@ The emitted ``.so`` exports a stable, ABI-keyed descriptor of the library:
   registered into ``BrickRegistry`` at static-init via ``POPS_REGISTER_BRICK``.
 
 It compiles against ``external_brick.hpp`` + ``abi_key.hpp`` only -- no numerics, no
-device kernels. A generated brick (e.g. an ``@pops.lib.solver`` solver) contributes its id
-to the generated-symbol table; lowering its kernel body to a callable C++ symbol is the
-deferred ADC-462 codegen follow-up and is recorded here as a metadata-only entry, never a
-fabricated symbol.
+device kernels. A generated brick (e.g. an experimental
+``@pops.codegen.solvers.solver`` solver) contributes its id to the generated-symbol table;
+lowering its kernel body to a callable C++ symbol is the deferred ADC-462 codegen follow-up
+and is recorded here as a metadata-only entry, never a fabricated symbol.
 """
 import json
 

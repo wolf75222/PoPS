@@ -9,7 +9,7 @@ each headline object and asserts three properties of ``str(obj)``:
 * array-free -- no ``array(`` / ``ndarray`` substring (no numpy payload leaks into print).
 
 Like the other importing architecture tests, this one needs the compiled ``_pops`` extension
-(the runtime bricks ``pops.Spatial`` / ``pops.FiniteVolume`` come from the runtime layer). If
+(the numerics bricks such as ``pops.numerics.spatial.FiniteVolume`` come from the descriptor layer). If
 ``_pops`` cannot be loaded the whole module is skipped, not failed.
 """
 import pytest
@@ -69,8 +69,8 @@ def _objects():
         "fields.PoissonProblem": fields.PoissonProblem(unknown=phi),
         # elliptic + krylov solvers.
         "solvers.elliptic.GeometricMG": elliptic.GeometricMG(),
-        "solvers.krylov.GMRES": krylov.GMRES(),
-        "solvers.krylov.CG": krylov.CG(),
+        "solvers.krylov.GMRES": krylov.GMRES(max_iter=16),
+        "solvers.krylov.CG": krylov.CG(max_iter=16),
         # codegen optimization.
         "codegen.Optimization": codegen.Optimization(),
         # runtime params.
