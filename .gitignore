@@ -1,6 +1,6 @@
-build/
-build*/
-cmake-build-*/
+/build/
+/build*/
+/cmake-build-*/
 *.o
 *.a
 *.so
@@ -8,6 +8,12 @@ cmake-build-*/
 .DS_Store
 .cache/
 compile_commands.json
+
+# Captures brutes ROMEO : ne versionner que les CSV/JSONL explicitement
+# promus comme provenance documentaire.
+bench/romeo_results*/**/*.log
+bench/romeo_results*/**/*.out
+bench/romeo_results*/**/*.err
 
 # Caches .so du DSL quand POPS_CACHE_DIR pointe DANS le repo (les demos exportent
 # POPS_CACHE_DIR=$PWD/.pops_cache*) ; le defaut ~/.cache/pops/dsl est deja hors source.
