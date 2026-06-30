@@ -180,6 +180,16 @@ def build_moment_model(name, order, closure, blocks=None, exact_speeds=True,
             "x": [u - ax, u, u + ax],
             "y": [v - ay, v, v + ay],
         }
+    else:
+        # Conservative bound used by high-order provided moment models when no exact moment
+        # eigenstructure is exposed. It keeps the model installable through the compiled Rusanov/HLL
+        # route; the per-cell CFL and flux dissipation still run entirely in C++.
+        ax = _sqrt(float(order + 1) * C20)
+        ay = _sqrt(float(order + 1) * C02)
+        waves = {
+            "x": [u - ax, u + ax],
+            "y": [v - ay, v + ay],
+        }
 
     flux = m.flux(
         "F",

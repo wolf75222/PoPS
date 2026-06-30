@@ -60,6 +60,7 @@ def model_hash(model, params=None):
     # aux_total_n_aux and roles_for live in dsl; we read them from the model
     # package which is stdlib-only (no C extension).
     from pops.ir.values import _EIG_FIELDS  # noqa: F401 -- confirm ir is importable
+    from pops.codegen.module_emit_helpers import _roles_for
 
     # --- lazy helpers: resolve at call time, not at import time ---
     def _aux_total_n_aux(aux_names, aux_extra_names):
@@ -76,27 +77,6 @@ def model_hash(model, params=None):
             w = max(w, _AUX_NAMED_BASE + len(aux_extra_names))
         return w
 
-    def _role_of(name):
-        _CANONICAL_ROLES = {
-            "rho": "Density", "n": "Density", "density": "Density",
-            "rho_u": "MomentumX", "rhou": "MomentumX", "mom_x": "MomentumX", "mx": "MomentumX",
-            "rho_v": "MomentumY", "rhov": "MomentumY", "mom_y": "MomentumY", "my": "MomentumY",
-            "rho_w": "MomentumZ", "rhow": "MomentumZ", "mom_z": "MomentumZ", "mz": "MomentumZ",
-            "E": "Energy", "rho_E": "Energy", "ener": "Energy", "energy": "Energy",
-            "u": "VelocityX", "v": "VelocityY", "w": "VelocityZ",
-            "vx": "VelocityX", "vy": "VelocityY", "vz": "VelocityZ",
-            "p": "Pressure", "pressure": "Pressure",
-            "T": "Temperature", "temperature": "Temperature",
-        }
-        return _CANONICAL_ROLES.get(name, "Custom")
-
-    def _roles_for(names, override=None):
-        if override is None:
-            return [_role_of(nm) for nm in names]
-        if len(override) != len(names):
-            raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
-        return [(r if r is not None else _role_of(nm)) for nm, r in zip(names, override, strict=True)]
-
     m = model
     parts = []
     parts.append("name=%s" % m.name)
@@ -105,9 +85,10 @@ def model_hash(model, params=None):
     parts.append("prim_state=%s" % ",".join(m.prim_state))
     parts.append("proles=%s" % ",".join(_roles_for(m.prim_state, m.prim_roles)))
     parts.append("prim=%s" % ";".join("%s=%r" % (k, m.prim_defs[k]) for k in m.prim_defs))
+    eig = m._eig or {}
     for d in ("x", "y"):
         parts.append("flux_%s=%s" % (d, ";".join(repr(e) for e in m._flux.get(d, []))))
-        parts.append("eig_%s=%s" % (d, ";".join(repr(e) for e in m._eig.get(d, []))))
+        parts.append("eig_%s=%s" % (d, ";".join(repr(e) for e in eig.get(d, []))))
     parts.append("source=%s" % (";".join(repr(e) for e in m._source) if m._source else ""))
     if getattr(m, "_source_terms", None):
         parts.append("source_terms=%s" % ";".join(

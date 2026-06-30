@@ -162,9 +162,12 @@ class Model(_BoardInternalsMixin, _MultiSpeciesMixin):
             name="flux", signature=(state,) >> _model.Rate(state),
             kind="grid_operator", expr={"x": x_exprs, "y": y_exprs})
         if waves is not None:
-            self._module.eigenvalues(
-                x=[self._to_expr(e) for e in waves["x"]],
-                y=[self._to_expr(e) for e in waves["y"]])
+            wave_exprs = {
+                "x": [self._to_expr(e) for e in waves["x"]],
+                "y": [self._to_expr(e) for e in waves["y"]],
+            }
+            self._module.eigenvalues(x=wave_exprs["x"], y=wave_exprs["y"])
+            self._module.riemann_metadata(wave_speeds=wave_exprs)
         h = FluxHandle(name, is_default=True)
         self._fluxes[name] = h
         return h

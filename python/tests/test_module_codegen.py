@@ -1,6 +1,6 @@
 """Spec 2 (S2-6): the GeneratedModule metadata block emitted into the problem.so source.
 
-A combined model+program .so carries GeneratedProgram (pops_install_program, the step) AND a
+A combined problem.so carries GeneratedProgram (pops_problem_install, the step) AND a
 GeneratedModule descriptor: extern "C" pops_module_* accessors exposing the typed operator registry
 by integer OperatorId. The descriptor is read once at install (introspection + requirement
 validation, module_metadata.hpp); it must NOT appear in the step body, so operators stay inlined and
@@ -51,7 +51,8 @@ def test_metadata_block_emitted():
         implicit_operator=OperatorHandle("lorentz", kind="local_linear_operator"))
     src = P.emit_cpp_program(model=m)
     # GeneratedModule descriptor + GeneratedProgram coexist in the one .so.
-    assert "pops_install_program" in src
+    assert "pops_problem_install" in src
+    assert "GeneratedProgram::step" in src
     assert "pops_module_operator_count() { return" in src
     assert "pops_module_operator_kind(int i)" in src
     assert "pops_module_operator_signature(int i)" in src
@@ -79,7 +80,7 @@ def test_metadata_not_in_step_body():
         explicit_rate_operator=OperatorHandle("explicit_rhs", kind="local_rate"),
         implicit_operator=OperatorHandle("lorentz", kind="local_linear_operator"))
     src = P.emit_cpp_program(model=m)
-    body = src.split("pops_install_program", 1)[1]
+    body = src.split("pops_problem_install", 1)[1]
     assert "pops_module_" not in body, \
         "the GeneratedModule metadata must not be referenced in the step body (no hot-path lookup)"
     print("OK  module metadata is install-time only (no hot-path string lookup)")
@@ -87,8 +88,9 @@ def test_metadata_not_in_step_body():
 
 def test_no_model_empty_module():
     P = adctime.Program("fe")
-    u = P.state("plasma")
-    P.commit("plasma", P.linear_combine("u1", u))
+    u = P.state("U", block="plasma")
+    P.define(u.next, u.n)
+    P.commit(u.next)
     src = P.emit_cpp_program(model=None)
     assert "pops_module_operator_count() { return 0; }" in src
     print("OK  model=None emits an empty GeneratedModule (count 0)")

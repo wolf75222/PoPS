@@ -4,6 +4,7 @@ import importlib
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import pops
@@ -41,6 +42,10 @@ def test_custom_moments_builds_module_without_legacy_facade():
         "fields_from_state",
         "explicit_rate",
     }
+    wave_speeds = module.riemann_metadata()["wave_speeds"]
+    assert set(wave_speeds) == {"x", "y"}
+    assert len(wave_speeds["x"]) == 3
+    assert len(wave_speeds["y"]) == 3
     assert not hasattr(module, "_m")
 
 
@@ -55,6 +60,10 @@ def test_provided_hyqmom15_builds_module_without_custom_case_file():
         "fields_from_state",
         "explicit_rate",
     }
+    wave_speeds = module.riemann_metadata()["wave_speeds"]
+    assert set(wave_speeds) == {"x", "y"}
+    assert len(wave_speeds["x"]) == 2
+    assert len(wave_speeds["y"]) == 2
     assert list((REPO_ROOT / "python" / "pops" / "lib" / "models").rglob("custom.py")) == []
 
 
@@ -159,3 +168,14 @@ def test_provided_hyqmom15_example_compiles(tmp_path):
     assert compiled.problem_hash
     cpp = Path(compiled.dump_cpp(tmp_path)).read_text(encoding="utf-8")
     assert "GeneratedModule::Operators::explicit_rate" in cpp
+
+
+@pytest.mark.requires_toolchain
+def test_moment_examples_run_one_cfl_step():
+    custom = custom_moment_model.run_once(n=4, cfl=0.1)
+    provided = provided_hyqmom15_model.run_once(n=4, cfl=0.05)
+
+    assert custom.shape == (6, 4, 4)
+    assert provided.shape == (15, 4, 4)
+    assert np.isfinite(custom).all()
+    assert np.isfinite(provided).all()

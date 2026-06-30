@@ -42,10 +42,43 @@ _CANONICAL_ROLES = {
     "p": "Pressure", "pressure": "Pressure",
     "T": "Temperature", "temperature": "Temperature",
 }
+_CPP_ROLE_NAMES = frozenset(_CANONICAL_ROLES.values()) | {"Scalar", "Custom"}
+_STABLE_ROLE_NAMES = {
+    "density": "Density",
+    "momentum_x": "MomentumX",
+    "momentum_y": "MomentumY",
+    "momentum_z": "MomentumZ",
+    "energy": "Energy",
+    "velocity_x": "VelocityX",
+    "velocity_y": "VelocityY",
+    "velocity_z": "VelocityZ",
+    "pressure": "Pressure",
+    "temperature": "Temperature",
+    "scalar": "Scalar",
+    "custom": "Custom",
+}
 
 
 def _role_of(name):
     return _CANONICAL_ROLES.get(name, "Custom")
+
+
+def _normalize_role(name, role):
+    """Return a valid ``pops::VariableRole`` enumerator name for one component.
+
+    StateSpace roles may come from several authoring layers: canonical C++ names
+    (``Density``), stable public names (``density``), absent entries, or the
+    stringified value ``"None"`` from older metadata. The generated C++ must only
+    ever emit real enum members; a missing or unknown role is ``Custom``.
+    """
+    if role is None:
+        return _role_of(name)
+    text = str(role)
+    if not text or text.lower() == "none":
+        return _role_of(name)
+    if text in _CPP_ROLE_NAMES:
+        return text
+    return _STABLE_ROLE_NAMES.get(text.lower(), "Custom")
 
 
 def _roles_for(names, override=None):
@@ -54,7 +87,7 @@ def _roles_for(names, override=None):
         return [_role_of(nm) for nm in names]
     if len(override) != len(names):
         raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
-    return [(r if r is not None else _role_of(nm)) for nm, r in zip(names, override, strict=True)]
+    return [_normalize_role(nm, r) for nm, r in zip(names, override, strict=True)]
 
 
 # ---------------------------------------------------------------------------
