@@ -88,8 +88,9 @@ OncePerStep.
 
 ## `bench_amr` bench: AP two-fluid + multi-patch AMR coupler
 
-`examples/bench_amr.cpp`, timed without I/O (M1 Pro, 8 cores = 6 perf + 2 efficiency,
-Release -O3 -DNDEBUG, Kokkos OpenMP space). Run: `OMP_NUM_THREADS=k ./build-omp/bin/bench_amr n nsteps`.
+Historical `bench_amr` measurement, timed without I/O (M1 Pro, 8 cores = 6 perf + 2
+efficiency, Release -O3 -DNDEBUG, Kokkos OpenMP space). The original benchmark driver
+is no longer carried in this repository.
 
 **AP two-fluid single-grid** (2 species Rusanov + continuity + Poisson multigrid).
 The OpenMP scaling DEPENDS ON THE SIZE:

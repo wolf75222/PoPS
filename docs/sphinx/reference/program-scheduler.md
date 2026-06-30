@@ -35,7 +35,7 @@ mod.operator_capabilities("fields_from_state", cacheable=True)
 ```
 
 otherwise the call is rejected: `operator 'flux' is not cacheable; cannot use schedule hold`.
-See `examples/spec3/scheduled_fields_subcycled_transport.py`.
+See `python/tests/test_schedule_authoring.py` and `python/tests/test_time_policy.py`.
 
 ## Schedules
 
