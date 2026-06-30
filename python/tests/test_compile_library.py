@@ -46,7 +46,7 @@ def _objects():
 def _toolchain_or_skip():
     """The (compiler, cflags, lflags) of the Kokkos loader toolchain, or skip the test.
 
-    adc_cpp is Kokkos-only: the library ``.so`` MUST be compiled with Kokkos (point
+    PoPS is Kokkos-only: the library ``.so`` MUST be compiled with Kokkos (point
     POPS_KOKKOS_ROOT at an installed Kokkos). A missing toolchain is a clean skip, never a
     fake; we exercise the manifest layer unconditionally above this gate."""
     pytest.importorskip("pops.codegen")

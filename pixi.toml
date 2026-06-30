@@ -1,4 +1,4 @@
-# Environnement pixi d'adc_cpp -- alternative REPRODUCTIBLE a environment.yml.
+# Environnement pixi d'PoPS -- alternative REPRODUCTIBLE a environment.yml.
 #
 # pixi (https://pixi.sh) resout les memes paquets conda-forge mais :
 #   - genere un LOCKFILE multi-plateforme (pixi.lock) a committer : tout le monde a exactement
@@ -20,7 +20,7 @@
 
 [project]
 name = "adc-cpp-env"
-description = "Outillage de build et backends CPU locaux d'adc_cpp"
+description = "Outillage de build et backends CPU locaux d'PoPS"
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 

@@ -577,7 +577,7 @@ class SystemStepper {
       reason = "degenerate";
     }
     last_dt_reason_ = std::move(reason);
-    // Compiled time Program (epic ADC-399, criterion 7): the CFL dt above is computed in adc_cpp ON
+    // Compiled time Program (epic ADC-399, criterion 7): the CFL dt above is computed in PoPS ON
     // THE NATIVE STATE (per-block bounds + global bounds, UNCHANGED -- the CFL logic stays here), then
     // the installed Program drives the macro-step at that dt via the SHARED cadence helper. step_cfl
     // thus conserves the existing CFL logic AND calls the Program. Semantics match step()'s program

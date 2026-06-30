@@ -157,7 +157,7 @@ def _compile_wrong_abi(model, dst_so, cxx):
     import tempfile
     from pops.codegen.toolchain import pops_loader_build_flags
     src = model.emit_cpp_native_loader()
-    # adc_cpp est Kokkos-only : le loader inclut les en-tetes pops (for_each), il faut donc Kokkos +
+    # PoPS est Kokkos-only : le loader inclut les en-tetes pops (for_each), il faut donc Kokkos +
     # (macOS) -undefined dynamic_lookup. pops_loader_build_flags fournit compilateur + flags ; on garde
     # une SIGNATURE D'EN-TETES FAUSSE (-DPOPS_HEADER_SIG bidon) pour que le .so compile mais soit REJETE
     # a l'ABI par add_native_block (le but du test).

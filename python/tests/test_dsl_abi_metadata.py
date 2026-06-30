@@ -63,7 +63,7 @@ def build_legacy_scalar():
 
 
 def compile_src(src, so_path, std="c++20"):
-    # adc_cpp est Kokkos-only : le .so legacy inclut compiled_block_abi.hpp -> for_each (#error sans
+    # PoPS est Kokkos-only : le .so legacy inclut compiled_block_abi.hpp -> for_each (#error sans
     # Kokkos). pops_loader_build_flags fournit compilateur + flags Kokkos (+ macOS -undefined dynamic_lookup),
     # symboles Kokkos resolus contre _pops au chargement.
     from pops.codegen.toolchain import pops_loader_build_flags

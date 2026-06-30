@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transitional documentation lint for the adc_cpp documentation reset.
+"""Transitional documentation lint for the PoPS documentation reset.
 
 The old Sphinx/Doxygen site has been removed. This script only protects the
 small retained corpus while the new documentation is rebuilt:
@@ -225,7 +225,7 @@ def check(freshness_warn_only: bool = False, root: pathlib.Path = ROOT) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Transitional adc_cpp documentation lint.")
+    parser = argparse.ArgumentParser(description="Transitional PoPS documentation lint.")
     parser.add_argument(
         "--freshness-warn-only",
         action="store_true",

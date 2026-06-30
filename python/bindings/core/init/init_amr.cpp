@@ -8,7 +8,7 @@ void init_amr(py::module_& m) {
   // NB: the two-fluid AP integrator (BESPOKE asymptotic-preserving scheme, not composable
   // block by block) has left the core: it is not a generic brick but a SCENARIO. It now lives
   // in adc_cases (cf. adc_cases/two_fluid_ap/), compiled on the fly against the generic
-  // headers of adc_cpp; it is no longer exposed by the _pops module.
+  // headers of PoPS; it is no longer exposed by the _pops module.
 
   // AmrSystem: generic single-species composition on AMR.
   py::class_<AmrSystemConfig>(m, "AmrSystemConfig")

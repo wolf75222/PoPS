@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test des bindings Python de la lib adc_cpp (module `pops`), API par BRIQUES.
+"""Test des bindings Python de la lib PoPS (module `pops`), API par BRIQUES.
 
 Verifie la composition de modeles a partir de briques generiques (aucun scenario nomme
 cote C++), le Poisson de systeme (avec paroi), le choix implicite/explicite par bloc, le

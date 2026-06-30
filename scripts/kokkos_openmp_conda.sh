@@ -12,9 +12,9 @@
 #
 # Variables : KOKKOS_VERSION (defaut 4.7.01), KOKKOS_INSTALL_PREFIX (defaut $CONDA_PREFIX),
 # KOKKOS_SRC_DIR (defaut $TMPDIR/kokkos-src-<ver>). Compilateur : celui du systeme (le MEME que
-# le build d'adc_cpp -- AppleClang sur macOS -- pour rester ABI-coherent avec le module _pops).
+# le build d'PoPS -- AppleClang sur macOS -- pour rester ABI-coherent avec le module _pops).
 # Sur macOS, libomp est pris dans l'env conda (paquet llvm-openmp) via les hints CMake standard,
-# exactement comme le CMakeLists d'adc_cpp le fait pour POPS_USE_OPENMP.
+# exactement comme le CMakeLists d'PoPS le fait pour POPS_USE_OPENMP.
 set -euo pipefail
 
 : "${CONDA_PREFIX:?Activez d'abord l'env conda : conda activate pops}"
@@ -45,7 +45,7 @@ if [ "$(uname)" = "Darwin" ] && [ -f "$CONDA_PREFIX/lib/libomp.dylib" ]; then
   )
 fi
 
-echo "--- configure (Serial + OpenMP, C++20 comme adc_cpp sous Kokkos) ---"
+echo "--- configure (Serial + OpenMP, C++20 comme PoPS sous Kokkos) ---"
 cmake -S "$SRC" -B "$SRC/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -59,6 +59,6 @@ cmake --install "$SRC/build"
 
 echo ""
 echo "OK : Kokkos $VER (Serial + OpenMP) installe dans $PREFIX"
-echo "Builds adc_cpp : cmake --preset python-parallel  (Kokkos_ROOT=\$CONDA_PREFIX deja cable)"
+echo "Builds PoPS : cmake --preset python-parallel  (Kokkos_ROOT=\$CONDA_PREFIX deja cable)"
 [ "$PREFIX" != "$CONDA_PREFIX" ] && echo "  (prefix custom : passer -DKokkos_ROOT=$PREFIX)"
 echo "DSL backend production : export POPS_KOKKOS_ROOT=$PREFIX (parite loader/module)"

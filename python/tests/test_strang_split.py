@@ -158,7 +158,7 @@ def main():
         return
 
     n, L, dt = 32, 1.0, 2.0e-3
-    # adc_cpp est Kokkos-only (#263) : le .so AOT inclut les en-tetes pops (multifab/for_each) qui ne
+    # PoPS est Kokkos-only (#263) : le .so AOT inclut les en-tetes pops (multifab/for_each) qui ne
     # compilent QUE sous POPS_HAS_KOKKOS, donc compile_aot exige un Kokkos installe (POPS_KOKKOS_ROOT).
     # Sans lui, on saute proprement (b)/(c) -- meme convention que test_time_euler.py.
     try:

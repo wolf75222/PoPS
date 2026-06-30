@@ -17,7 +17,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "pops"
 dynamic = ["version"]
-description = "PoPS - Plasma-Oriented PDE Solver (Python bindings of the header-only adc_cpp core)"
+description = "PoPS - Plasma-Oriented PDE Solver (Python bindings of the header-only PoPS core)"
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
 requires-python = ">=3.10"

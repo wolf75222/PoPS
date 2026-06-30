@@ -2,7 +2,7 @@
 """step_cfl routes through an installed compiled time Program (epic ADC-399 criterion 7 / spec 19).
 
 `System.step_cfl(cfl)` must CONSERVE the existing CFL logic (the per-block CFL dt is still computed in
-adc_cpp on the native state) AND, when a compiled program is installed, drive the macro-step at that dt
+PoPS on the native state) AND, when a compiled program is installed, drive the macro-step at that dt
 through the SAME cadence helper as `step()` (run_program_cadence). Before ADC-413, step_cfl drove ONLY
 the native per-block path and silently ignored an installed program (the state stayed frozen / advanced
 natively instead of running the program).
@@ -120,7 +120,7 @@ chk(d_adv > 1e-9, "step_cfl advanced the state via the program (max|du|=%.2e)" %
 # ----- (b) the dt chosen == the native CFL dt AND step_cfl(cfl) == step(dt_cfl) bit-exact -----
 print("-- (b) dt == native CFL dt, and step_cfl == step(dt_cfl) bit-exact --")
 # A NATIVE System (no program) on the SAME state computes the SAME CFL dt: step_cfl keeps the CFL
-# logic in adc_cpp (per-block bounds on the native state), only the advance is routed to the program.
+# logic in PoPS (per-block bounds on the native state), only the advance is routed to the program.
 sim_native = make_sim(pops.Explicit(method="euler"))
 dt_native = sim_native.step_cfl(CFL)
 chk(abs(dt_cfl - dt_native) < 1e-14,

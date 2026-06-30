@@ -279,7 +279,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `bench/operator_first_perf.py` times the SSPRK3 step loop for the same 2D Euler model two ways --
   the native stepper (`pops.Explicit("ssprk3")`) vs a compiled time Program (`pops.time.std.ssprk3`
   -> `compile_problem` -> `install_program`) -- and reports the generated/native ms-per-step ratio.
-  The HPC contract is that the generated Program is a specialized scheduler over the same adc_cpp
+  The HPC contract is that the generated Program is a specialized scheduler over the same PoPS
   primitives (no alternative runtime, no per-step Python, no silent CPU fallback), so the ratio is
   near 1. Run on a Kokkos build (ROMEO); skips cleanly without a compiler/Kokkos.
 - **GeneratedModule metadata in the compiled `.so`** (ADC-442, epic ADC-436, spec 2 "operator-first"):
@@ -520,7 +520,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `pops.CondensedSchur` source stepper.
 - **step_cfl routes through an installed compiled program** (ADC-413, epic ADC-399 criterion 7):
   `System::step_cfl(cfl)` now drives an installed compiled time Program. The CFL `dt` is still computed
-  in adc_cpp on the native state (per-block transport / source-frequency / stability bounds + global
+  in PoPS on the native state (per-block transport / source-frequency / stability bounds + global
   bounds, UNCHANGED -- the CFL logic stays in the runtime), then the Program runs the macro-step at that
   `dt` through the SAME cadence helper as `step()` (the new `SystemStepper::run_program_cadence`, factored
   out of `step()` so both paths route a program identically: substeps + stride + clock tick, no implicit
@@ -857,7 +857,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   self-contained macOS arm64 / CPython 3.12 `_pops` wheel with `cibuildwheel` (Kokkos Serial built
   static + PIC and linked in; `delocate` bundles the rest), uploads it as a build artifact on
   build-relevant PRs, and attaches it to the GitHub Release on a `vX.Y.Z` tag. End users can then
-  `pip install adc_cpp-*.whl` with no local toolchain. Separate from the required CI `gate`; no
+  `pip install pops-*.whl` with no local toolchain. Separate from the required CI `gate`; no
   source or runtime behavior change. Linux/Windows wheels and PyPI publishing are follow-ups.
 - **Configurable AMR regrid variable by name or role** (ADC-296): `AmrSystem.set_refinement` gains
   optional `variable=` / `role=` selectors so the multi-block union-of-tags regrid can refine on any
@@ -1585,7 +1585,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `System.set_poisson`, `pops.EllipticSolver`, listed in `pops.capabilities()`) reuses the periodic
   single-rank FFT plumbing of `"fft"` but with the continuous Laplacian symbol `-(kx^2+ky^2)`, exact
   on sinusoids. The discrete `"fft"` and `"geometric_mg"` solvers are unchanged.
-- **Native Windows (MSVC) support** (ADC-99/100/136/144): `adc_cpp` compiles and imports natively on
+- **Native Windows (MSVC) support** (ADC-99/100/136/144): `PoPS` compiles and imports natively on
   Windows without WSL2. A portable dynamic-loading layer `pops::dynlib` (`LoadLibraryW` /
   `GetProcAddress`), an `POPS_EXPORT` macro (`__declspec`), an MSVC-aware ABI key, and
   `std::numbers::pi` for `M_PI` cover the runtime; the DSL `production` backend compiles a model to a

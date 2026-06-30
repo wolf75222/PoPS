@@ -1,6 +1,6 @@
-# Architecture of adc_cpp
+# Architecture of PoPS
 
-adc_cpp is the header-only C++20 core for coupled hyperbolic-elliptic systems on
+PoPS is the header-only C++20 core for coupled hyperbolic-elliptic systems on
 adaptive mesh (AMR), written for MPI + Kokkos (Kokkos is the ONLY on-node backend: Serial /
 OpenMP / Cuda depending on the install; the standalone OpenMP backend was removed). The generic physics bricks
 ([`include/pops/physics/`](../include/pops/physics)) and the library's Python bindings (module
@@ -123,7 +123,7 @@ flowchart TD
 
 ## The layers
 
-adc_cpp is organized into five orthogonal layers. A high layer expresses the problem, a low layer executes it; a high layer never depends on an execution detail. The structuring separation: the containers (what stores) are distinct from the execution policy (how one loops and communicates).
+PoPS is organized into five orthogonal layers. A high layer expresses the problem, a low layer executes it; a high layer never depends on an execution detail. The structuring separation: the containers (what stores) are distinct from the execution policy (how one loops and communicates).
 
 **Physics (local, device-callable).** The `PhysicalModel` concept ([`include/pops/core/model/physical_model.hpp`](../include/pops/core/model/physical_model.hpp)) only exposes local and pointwise laws, all `POPS_HD`: `flux`, `source`, `max_wave_speed`, `elliptic_rhs`. No access to storage nor to parallelism; no allocation in hot loops, no `std::function`, no dynamic polymorphism. The core is model-agnostic: a model is a composition (`CompositeModel`, [`include/pops/physics/composition/composite.hpp`](../include/pops/physics/composition/composite.hpp)) of generic bricks ([`include/pops/physics/bricks/bricks.hpp`](../include/pops/physics/bricks/bricks.hpp)) on three axes (transport / source / elliptic), the scenario names living on the application side. The `aux` channel carries `(phi, grad_x, grad_y)` and is extensible (`B_z`, `T_e`). The geometry (cartesian / polar / disk) is a config axis of the mesh, not of the model.
 
@@ -493,13 +493,13 @@ The execution model is pure data parallelism, no threads sharing an arbitrary mu
 
 ## Using the library
 
-`adc_cpp` is a header-only core. On the C++ consumer side, one pulls it by `FetchContent` and links the
+`PoPS` is a header-only core. On the C++ consumer side, one pulls it by `FetchContent` and links the
 target `pops::pops`; nothing is compiled in advance, the instantiation takes place at the caller's.
 
 ```cmake
 include(FetchContent)
-FetchContent_Declare(adc_cpp GIT_REPOSITORY https://github.com/wolf75222/adc_cpp.git)
-FetchContent_MakeAvailable(adc_cpp)
+FetchContent_Declare(PoPS GIT_REPOSITORY https://github.com/wolf75222/PoPS.git)
+FetchContent_MakeAvailable(PoPS)
 target_link_libraries(mon_appli PRIVATE pops::pops)
 ```
 

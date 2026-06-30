@@ -3,7 +3,7 @@ System a la FIN de chaque macro-pas ENTIER (jamais par etage RK), par bloc, sur 
 valides. La projection est EMISE PAR LA DSL (m.projection -> trait C++ HasPointwiseProjection,
 compile comme flux/source) : elle remplace le callback Python par cellule (serie) par un chemin
 compile -- prerequis du Ma eleve, de la relaxation sur AMR, MPI et GPU. Les formules de
-realisabilite restent cote cas ; seul le hook est coeur (zero physique hyqmom dans adc_cpp).
+realisabilite restent cote cas ; seul le hook est coeur (zero physique hyqmom dans PoPS).
 
 Modele jouet : transport lineaire 2 variables (q0, q1) a vitesses constantes ; projection de
 reference = clamp de positivite q0 <- (q0 + |q0|)/2 et masque q1 <- q1 * (sign(q0) + 1)/2

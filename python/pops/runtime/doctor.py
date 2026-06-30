@@ -165,7 +165,7 @@ def doctor(verbose=True):
             checks["include"] = (False, "pops headers not found (set POPS_INCLUDE) : %s" % e)
 
         # 5c. Kokkos root for the DSL production/aot backend (the tutorial's "no DSL backend" blocker).
-        # adc_cpp is Kokkos-only : every DSL .so that includes the pops headers MUST compile against an
+        # PoPS is Kokkos-only : every DSL .so that includes the pops headers MUST compile against an
         # installed Kokkos (Serial is enough on CPU), found via POPS_KOKKOS_ROOT / Kokkos_ROOT.
         kroot = _tc._native_kokkos_root()
         if kroot is None:

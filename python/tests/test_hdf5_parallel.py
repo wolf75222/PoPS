@@ -136,7 +136,7 @@ def test_parallel_equals_serial_mono_rank(tmp_path):
         sim.step(2e-3)
     if not hasattr(sim._s, "local_boxes"):
         pytest.skip("module _pops sans local_boxes/local_state (build anterieur a ADC-66) : "
-                    "reconstruire adc_cpp pour exercer le chemin parallele")
+                    "reconstruire PoPS pour exercer le chemin parallele")
     p_ser = sim.write(str(tmp_path / "ser"), format="hdf5", parallel=False)
     p_par = sim.write(str(tmp_path / "par"), format="hdf5", parallel=True)
     _assert_dumps_equal(_read_h5(p_ser), _read_h5(p_par))

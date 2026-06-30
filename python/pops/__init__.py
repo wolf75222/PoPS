@@ -1,4 +1,4 @@
-"""pops : Python bindings for the adc_cpp library.
+"""pops : Python bindings for the PoPS library.
 
 The core exposes generic compiled BRICKS (transport, source, elliptic right-hand
 side) ; a MODEL is a composition of bricks, named on the application side. Python

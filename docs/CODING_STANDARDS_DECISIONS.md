@@ -1,4 +1,4 @@
-# Decision note: coding conventions of `adc_cpp`
+# Decision note: coding conventions of `PoPS`
 
 Date: 2026-06-12.
 Reviewed base: `origin/master` / `ffb9022`.
@@ -22,7 +22,7 @@ device constraint (`nvcc`, `__device__` code, header-only Kokkos) are flagged: l
 zero, not just low.
 
 Status: decisions D1-D15 are now **adopted** (ratified on 2026-06-15 by the maintainer). They
-apply as the coding conventions of `adc_cpp` and remain revisable should practice or tooling warrant
+apply as the coding conventions of `PoPS` and remain revisable should practice or tooling warrant
 it.
 
 ## D1 Naming
