@@ -24,12 +24,31 @@ The CI presets (`ci-serial`, `ci-python`, `ci-mpi`, `ci-kokkos`, `ci-kokkos-pyth
 inventing new ones. The GPU / GH200 paths cannot be validated outside ROMEO: say so
 explicitly in the PR.
 
+## CI modes
+
+Use PR labels and commit tokens for validation modes; reserve Git tags for releases only.
+
+| Situation | What runs |
+| --- | --- |
+| PR docs-only | `Docs PR` reset lint only; no `_pops`, Sphinx, Doxygen or Kokkos build. |
+| Push to `master` touching docs | Transitional `Docs` reset lint only; no Kokkos build. |
+| PR touching C++ / Python | Required `gate (agregation requise)` through `ci.yml`. |
+| PR with label `ci-full` | Adds MPI + Kokkos OpenMP + bench compile. |
+| PR with label `quality` | Runs `quality.yml` static/deep checks. |
+| Weekly cron / manual dispatch | Backstop CI/docs/quality lanes. |
+| Git tag `vX.Y.Z` | Release creation and wheel packaging. |
+
+If a full Sphinx/Doxygen site is reintroduced, keep it opt-in: use a PR label such as
+`docs-full` for pre-merge validation and a master commit token such as `[docs]` for publish.
+Do not make normal docs-only pushes compile Kokkos.
+
 ## Documentation
 
 `bash scripts/build_docs.sh` runs the transitional documentation lint. The Sphinx/Doxygen
 site was removed during the reset; the retained corpus and rebuild rules are described in
 [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md). The docs CI lanes now validate this reduced
-corpus until the new documentation structure is introduced.
+corpus until the new documentation structure is introduced; they do not compile `_pops` or
+Kokkos.
 
 ## Standards
 
