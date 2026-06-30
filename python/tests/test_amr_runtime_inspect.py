@@ -23,18 +23,22 @@ pops = pytest.importorskip("pops")
 from pops.runtime.amr import (  # noqa: E402
     AmrRuntimeView, PatchReport, RegridReport, GhostReport, RefluxReport, CheckpointReport,
     HierarchySnapshot)
+from pops.runtime.bricks import (  # noqa: E402
+    BackgroundDensity, ExB, Explicit, Model, NoSource, Scalar, Spatial)
 
 
 def _model():
     """A minimal single-scalar ExB block model (no DSL compile; native bricks)."""
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                      source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return Model(state=Scalar(), transport=ExB(B0=1.0),
+                 source=NoSource(), elliptic=BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 def _built_amr(regrid_every=2, n=32):
     """A small built AmrSystem with one refined patch (density bump + a few steps)."""
     sim = pops.AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
-    sim._add_block("ne", model=_model(), spatial=pops.Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()), time=pops.Explicit())
+    sim._add_block("ne", model=_model(),
+                   spatial=Spatial(limiter=pops.numerics.reconstruction.limiters.Minmod()),
+                   time=Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
     ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
@@ -171,18 +175,19 @@ def test_explain_checkpoint_flags_dynamic_regrid_violation():
 
 
 # --- compiled static delegation ------------------------------------------------
-def test_compiled_inspect_amr_delegates_to_top_level():
-    # A CompiledModel/Case carries no AMR layout; its inspect_amr delegates to pops.inspect_amr.
+def test_compiled_inspect_amr_delegates_to_capability_helper():
+    # A legacy CompiledModel carries no AMR layout; its inspect_amr delegates to the
+    # internal capability helper used by CompiledProblem.inspect_amr().
     # Build a tiny stub CompiledModel (no .so dlopen needed for the inert delegation path).
     from pops.codegen.loader import CompiledModel
     cm = CompiledModel(
         so_path="<stub>", backend=pops.codegen.AOT(), adder="add_native_block", cons_names=["rho"],
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
-        caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
+        caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="system")
     rep = cm.inspect_amr()
     # Default (no layout) -> the native envelope report (never a fabricated hierarchy).
     assert rep.to_dict()["layout"] == "native-envelope"
-    # An explicit AMR layout is reported through the same top-level inspector.
+    # An explicit AMR layout is reported through the same descriptor inspector.
     from pops.mesh import CartesianMesh
     from pops.mesh.layouts import AMR
     rep2 = cm.inspect_amr(AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2))

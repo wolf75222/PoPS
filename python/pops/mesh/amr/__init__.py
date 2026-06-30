@@ -100,8 +100,13 @@ def _declared_subjects(model_or_context):
                     names.add(text)
                 add_iter(getattr(view, "components", None))
 
+    # Some authoring objects expose ``state_space(...)`` as a builder, not a
+    # getter. Calling it with no arguments can mutate the module by replacing a
+    # declared state space with an empty default. Use this fallback only for
+    # lightweight legacy views that did not already expose the safe
+    # ``state_spaces()`` surface above.
     space = getattr(model_or_context, "state_space", None)
-    if callable(space):
+    if not found_surface and callable(space):
         try:
             view = space()
         except Exception:  # pragma: no cover - a view that needs args is just skipped.

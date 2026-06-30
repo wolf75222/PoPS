@@ -353,7 +353,8 @@ def capabilities():
             "production": {"adder": "add_native_block",
                            "riemann": list(riemann_all),
                            "limiter": dsl_limiters, "stride": True,
-                           "evolve_false": True, "mpi": True, "amr": "target='amr_system'",
+                           "evolve_false": True, "mpi": True,
+                           "amr": "compile_problem(..., layout=AMR(...), backend=Production())",
                            "stability_hooks": True},
         },
         "io": {
@@ -415,8 +416,8 @@ def capabilities():
                 },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-                         "AMR path needs backend=pops.codegen.Production() target='amr_system', on polar a "
-                         "System+AOT compiled block (the in-AMR compiled .so is mono-level) ; the "
+                         "AMR path needs compile_problem(..., layout=AMR(...), backend=Production()), "
+                         "on polar a System+AOT compiled block (the in-AMR compiled .so is mono-level) ; the "
                          "opt-in single-block composite-FAC Poisson path (set_composite_poisson, not "
                          "facade-reachable) does not yet carry named aux to the fine level",
         },

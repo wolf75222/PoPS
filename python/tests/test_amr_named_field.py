@@ -123,12 +123,14 @@ def test_amr_declared_elliptic_fields_collected():
     or a CompiledModel.elliptic_field_names)."""
     instances = {"plasma": {"model": _RawModel(fields=("psi",))},
                  "beam": {"model": _RawModel(fields=("chi",))}}
-    declared = AmrSystem._declared_elliptic_fields(instances)
+    declared = AmrSystem._declared_elliptic_fields(None, instances)
     _check(declared == {"psi", "chi"}, "union of the instance declared fields (got %r)" % declared)
     # a model exposing elliptic_field_names (CompiledModel shape) is read too.
     cm = type("CM", (), {"elliptic_field_names": ["theta"]})()
-    _check(AmrSystem._declared_elliptic_fields({"b": {"model": cm}}) == {"theta"},
+    _check(AmrSystem._declared_elliptic_fields(None, {"b": {"model": cm}}) == {"theta"},
            "elliptic_field_names is collected from a compiled handle shape")
+    _check(AmrSystem._declared_elliptic_fields(cm, {}) == {"theta"},
+           "elliptic_field_names is collected from the compiled default model shape")
     print("ok test_amr_declared_elliptic_fields_collected")
 
 

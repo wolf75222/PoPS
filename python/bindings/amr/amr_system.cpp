@@ -69,8 +69,8 @@ struct AmrSystem::Impl {
     bool has_density = false;
     std::vector<double> density;
     // FULL initial conservative state (all components), ncomp*n*n component-major; set by
-    // set_conservative_state(name, U). Takes priority over density at seed (cf. make_build_params /
-    // build_amr_compiled). SINGLE-BLOCK only (build_multi throws if has_state).
+    // set_conservative_state(name, U). Takes priority over density at seed in single-block and
+    // multi-block routes (cf. make_build_params / build_amr_compiled / build_multi).
     bool has_state = false;
     std::vector<double> state;
     // SOURCE STAGE condensed by Schur (amr-schur path, set by set_source_stage). schur==false ->
@@ -405,16 +405,9 @@ struct AmrSystem::Impl {
   // block_builder, which captures the concrete Model/Limiter/Flux). The coarse Poisson is SUMMED and
   // CO-LOCATED (Sum_b elliptic_rhs_b(U_b) read at the same cells of the shared coarse grid).
   void build_multi() {
-    // MULTI-BLOCK set_conservative_state (wave 3 audit): the full state is now THREADED to the
-    // NATIVE builder (dispatch_amr_block -> build_amr_block, seed coupler_write_coarse_state +
-    // injection to the fine levels, takes priority over density). The COMPILED (.so) path does not
-    // transport it (frozen loader ABI) -> explicit rejection, never a silent density fallback.
-    for (const auto& b : blocks)
-      if (b.has_state && b.is_compiled)
-        throw std::runtime_error(
-            "AmrSystem::set_conservative_state : not transported by the compiled .so loader (block "
-            "'" +
-            b.name + "') in multi-block ; use a native block pops.Model(...), or set_density.");
+    // MULTI-BLOCK set_conservative_state: the full state is threaded to both native and compiled
+    // builders (dispatch_amr_block -> build_amr_block, seed coupler_write_coarse_state + injection to
+    // the fine levels). It takes priority over density; there is no silent density fallback.
     AmrBuildParams bp = make_build_params();  // geometry + poisson_bc + wall + common ownership
     // Program layout (Spec 6): a compiled time Program forced onto the runtime engine builds the
     // coarse-only Program hierarchy for every Program install, including multi-block. The generated
@@ -461,13 +454,14 @@ struct AmrSystem::Impl {
               "AmrSystem : newton_diagnostics (newton_report) is not transported by the "
               "compiled .so loader (block '" +
               b.name + "') ; use a native block pops.Model(...).");
-        // Zhang-Shu positivity floor (ADC-322): the AmrCompiledBlockBuilder now carries a floor slot,
-        // so a loader regenerated against this header floors the Density-role face states like a native
-        // block (forwarded to dispatch_amr_block -> build_amr_block). b.pos_floor == 0 for an OLDER .so
-        // (it never marshals the field) -> inactive, bit-identical. No reject.
+        // Zhang-Shu positivity floor (ADC-322): the AmrCompiledBlockBuilder carries a floor slot, so a
+        // loader regenerated against this header floors the Density-role face states like a native block
+        // (forwarded to dispatch_amr_block -> build_amr_block). The full conservative initial state is
+        // also forwarded when present.
         rblocks.push_back(b.compiled_block_builder(S, b.name, b.density, b.has_density, b.gamma,
                                                    b.substeps, b.recon_prim, b.imex, b.stride,
-                                                   b.implicit_vars, b.implicit_roles, b.pos_floor));
+                                                   b.implicit_vars, b.implicit_roles,
+                                                   b.has_state ? &b.state : nullptr, b.pos_floor));
         continue;
       }
       // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch
@@ -1166,8 +1160,8 @@ void AmrSystem::set_conservative_state(const std::string& name, const std::vecto
     throw std::runtime_error("AmrSystem::set_conservative_state : state size (" +
                              std::to_string(U.size()) + ") not a multiple of n*n (" +
                              std::to_string(nn) + ") ; expected ncomp*n*n component-major");
-  // SINGLE-BLOCK: cosmetic name. MULTI-BLOCK: the name indexes the block (but build_multi will then throw,
-  // the full state only being wired on the single-block path).
+  // SINGLE-BLOCK: cosmetic name. MULTI-BLOCK: the name indexes the block. The stored full state is
+  // threaded into the native or compiled block builder during build_multi.
   std::size_t idx = 0;
   if (p_->blocks.size() >= 2) {
     const int i = p_->block_index(name);

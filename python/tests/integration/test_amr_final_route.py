@@ -2,10 +2,12 @@
 
 import os
 
+import numpy as np
 import pytest
 
 import pops
 from examples.spec_final import amr_poisson_lorentz
+from pops._capabilities import inspect_amr
 from pops.codegen import Production
 from pops.mesh import CartesianMesh
 from pops.mesh.amr import CheckpointPolicy, FrozenRegrid, Refine, RegridEvery
@@ -19,7 +21,7 @@ def test_amr_layout_inspection_carries_all_policies():
     for key in ("base", "max_levels", "ratio", "regrid", "patches",
                 "refine", "nesting", "checkpoint", "output"):
         assert key in opts
-    report = pops.inspect_amr(layout).to_dict()
+    report = inspect_amr(layout).to_dict()
     slots = {row["slot"] for row in report["policies"]}
     assert {"regrid", "patches", "refine", "nesting", "checkpoint", "output"} <= slots
 
@@ -72,6 +74,8 @@ def test_compile_problem_layout_amr_carries_inspection(monkeypatch, tmp_path):
         force=True,
     )
 
+    # The public API is layout=AMR(...); the native target token is only the
+    # internal codegen route selected from that descriptor.
     assert captured == {"target": "amr_system", "compiled": True}
     report = compiled.inspect_amr().to_dict()
     assert report["layout"] == "amr"
@@ -110,3 +114,53 @@ def test_amr_checkpoint_policy_rejects_bit_identical_dynamic_regrid():
     )
     with pytest.raises(ValueError, match="frozen AMR hierarchy"):
         layout.validate()
+
+
+def test_amr_validate_does_not_mutate_module_state_space():
+    layout = amr_poisson_lorentz.build_layout(n=16)
+    module = amr_poisson_lorentz.build_model()
+    before = module.state_spaces()["U"].components
+    layout.validate(module)
+    after = module.state_spaces()["U"].components
+    assert after == before == ("rho", "mx", "my")
+
+
+def test_amr_initial_state_routes_full_conservative_state():
+    class Harness:
+        def __init__(self):
+            self.calls = []
+
+        def set_density(self, name, value):
+            self.calls.append(("density", name, np.asarray(value).shape))
+
+        def set_conservative_state(self, name, value):
+            self.calls.append(("state", name, np.asarray(value).shape))
+
+    h = Harness()
+    pops.AmrSystem._install_initial_state(h, "plasma", np.zeros((3, 8, 8)))
+    pops.AmrSystem._install_initial_state(h, "density", np.zeros((8, 8)))
+    assert h.calls == [
+        ("state", "plasma", (3, 8, 8)),
+        ("density", "density", (8, 8)),
+    ]
+
+
+def test_amr_public_get_state_reads_full_block_state():
+    class Native:
+        def nx(self):
+            return 4
+
+        def block_n_vars(self, name):
+            assert name == "plasma"
+            return 3
+
+        def block_level_state(self, name, level):
+            assert (name, level) == ("plasma", 0)
+            return np.arange(3 * 4 * 4, dtype=np.float64)
+
+    sim = object.__new__(pops.AmrSystem)
+    sim._s = Native()
+
+    state = sim.get_state("plasma")
+    assert state.shape == (3, 4, 4)
+    np.testing.assert_array_equal(state.ravel(), np.arange(3 * 4 * 4, dtype=np.float64))

@@ -231,13 +231,16 @@ struct AmrCompiledHooks {
 /// model) rather than resolved from a ModelSpec at build. The SIGNATURE mentions FORWARD-DECLARED types:
 /// it is instantiated with a concrete callable only in add_compiled_model(AmrSystem&) (header
 /// amr_dsl_block.hpp) where those types are complete, and invoked only in python/amr_system.cpp.
+/// The optional full conservative state mirrors the native multi-block path. When present it is
+/// forwarded to dispatch_amr_block -> build_amr_block and takes priority over density seeding.
 /// The trailing pos_floor (ADC-322) is the Zhang-Shu positivity floor of the block (0 = inactive),
 /// forwarded to dispatch_amr_block -> build_amr_block exactly like a native multi-block.
 using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
     const detail::SharedAmrLayout& layout, const std::string& name,
     const std::vector<double>& density, bool has_density, double gamma, int substeps,
     bool recon_prim, bool imex, int stride, const std::vector<std::string>& implicit_vars,
-    const std::vector<std::string>& implicit_roles, double pos_floor)>;
+    const std::vector<std::string>& implicit_roles, const std::vector<double>* state,
+    double pos_floor)>;
 
 /// Single block carried on an AMR hierarchy, composed at runtime.
 ///

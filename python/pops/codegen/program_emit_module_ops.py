@@ -120,31 +120,36 @@ def _emit_one_operator(model, op, operator_id):
     body = []
     if op.kind == "field_operator":
         if len(op.signature.inputs) > 1:
+            header.append("template <typename Context>")
             header.append(
-                "static void %s(const pops::runtime::program::ProgramContext& ctx, "
+                "static void %s(const Context& ctx, "
                 "const std::vector<const pops::MultiFab*>& u_stages) {" % fn)
             body.append("ctx.solve_fields_from_blocks(u_stages);")
         else:
+            header.append("template <typename Context>")
             header.append(
-                "static void %s(const pops::runtime::program::ProgramContext& ctx, int b, "
+                "static void %s(const Context& ctx, int b, "
                 "pops::MultiFab& state) {" % fn)
             if _is_default(op, "fields"):
                 body.append("ctx.solve_fields_from_state(b, state);")
             else:
                 body.append('ctx.solve_fields_from_state("%s", b, state);' % op.name)
     elif op.kind in ("grid_operator", "local_source", "local_rate"):
+        header.append("template <typename Context>")
         header.append(
-            "static void %s(const pops::runtime::program::ProgramContext& ctx, int b, "
+            "static void %s(const Context& ctx, int b, "
             "pops::MultiFab& state, pops::MultiFab& out) {" % fn)
         body += _rate_lines(model, op)
     elif op.kind == "projection":
+        header.append("template <typename Context>")
         header.append(
-            "static void %s(const pops::runtime::program::ProgramContext& ctx, int b, "
+            "static void %s(const Context& ctx, int b, "
             "pops::MultiFab& state) {" % fn)
         body.append("ctx.apply_projection(b, state);")
     elif op.kind == "local_linear_operator":
+        header.append("template <typename Context>")
         header.append(
-            "static LocalLinearOperatorView %s(const pops::runtime::program::ProgramContext& ctx, int b, "
+            "static LocalLinearOperatorView %s(const Context& ctx, int b, "
             "pops::MultiFab& fields) {" % fn)
         body.append("(void)ctx;")
         body.append("(void)b;")

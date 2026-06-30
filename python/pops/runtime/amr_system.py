@@ -13,6 +13,7 @@ from pops.runtime._amr_system_io import _AmrSystemIO
 from pops.runtime._amr_system_program import _AmrSystemProgram
 from pops.runtime._system_unified_install import validate_install_arguments
 from pops.runtime.profile import PerformanceSummary, Profile
+import numpy as np
 
 
 class _AmrProfileSession:
@@ -131,6 +132,40 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
     def get_recorded_scalars(self):
         """Return scalar diagnostics recorded by the installed compiled AMR problem."""
         return dict(self._s.program_diagnostics())
+
+    def get_state(self, name, *, global_=False):
+        """Public conservative-state readback on the AMR base level.
+
+        The returned array has shape ``(ncomp, n, n)`` and is produced by the C++ AMR runtime.
+        ``global_=True`` selects the collective MPI-safe readback used by checkpoint/output paths.
+        """
+        if not isinstance(name, str):
+            raise TypeError("AmrSystem.get_state: name must be a block name string")
+        n = int(self._s.nx())
+        try:
+            ncomp = int(self._s.block_n_vars(name))
+            raw = (self._s.block_level_state_global(name, 0)
+                   if global_ else self._s.block_level_state(name, 0))
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "block_level_state" not in msg and "MULTI-BLOCK only" not in msg:
+                raise
+            ncomp = int(self._s.n_vars())
+            raw = self._s.level_state_global(0) if global_ else self._s.level_state(0)
+        return np.asarray(raw, dtype=np.float64).reshape(ncomp, n, n)
+
+    def get_current_fields(self, name=None, *, refresh=False):
+        """Return the current canonical AMR coarse field bundle.
+
+        ``refresh=True`` asks the C++ runtime to solve/update the canonical field before reading it.
+        AMR currently exposes the solved coarse potential directly; named elliptic fields can be read
+        through :meth:`field`.
+        """
+        if name is not None and not isinstance(name, str):
+            raise TypeError("AmrSystem.get_current_fields: name must be a block name string or None")
+        if refresh:
+            self._s.potential()
+        return {"phi": np.asarray(self._s.potential(), dtype=np.float64)}
 
     def patch_rectangles(self):
         """Physical rectangles (x0, y0, width, height) of the current fine patches, in [0, L]^2.
@@ -286,7 +321,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         # models, widen the accepted solver-field set beyond the default Poisson names: a solver
         # selection for a model-declared named field routes (the native loader wired
         # register_elliptic_field), a typo is rejected against the declared set.
-        declared_fields = self._declared_elliptic_fields(instances)
+        declared_fields = self._declared_elliptic_fields(compiled_model, instances)
         for field, solver_brick in solvers.items():
             self._install_solver(field, solver_brick, declared_fields)
 
@@ -310,7 +345,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                     "sim.install: instance %r has no block model -- supply "
                     "instances[%r]['model'] (a compiled/native block model), or pass a compiled handle that carries one "
                     "(compile_problem(model=...))." % (name, name))
-            spatial = spec.get("spatial")
+            model = self._resolve_instance_model(model)
+            spatial = self._lower_spatial(spec.get("spatial"))
             time = spec.get("time")
             self._add_equation(name, model, spatial=spatial, time=time)
 
@@ -323,7 +359,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         for name, spec in instances.items():
             initial = spec.get("initial")
             if initial is not None:
-                self.set_density(name, initial)
+                self._install_initial_state(name, initial)
 
         # (5/5b/6) COMPILED problem: attach the artifact on the AMR hierarchy, route runtime params
         # and apply the global cadence (or reject params= / cadence= on a NATIVE install). Extracted
@@ -359,6 +395,69 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
     # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
     _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
 
+    def _resolve_instance_model(self, model):
+        """Resolve a public block model to the private AMR runtime model seam."""
+        from pops._bootstrap import ModelSpec
+        from pops.codegen.loader import CompiledModel
+        from pops.codegen.backends import Production
+        from pops.codegen.module_view import compile_module_for_runtime
+        from pops.model import Module
+
+        if isinstance(model, (ModelSpec, CompiledModel)):
+            return model
+        if not isinstance(model, Module) and hasattr(model, "_m"):
+            raise TypeError(
+                "sim.install: legacy physics/codegen facades carrying private _m are not accepted. "
+                "Pass a pops.model.Module from m.to_module(), a CompiledModel, or a native ModelSpec.")
+        if not isinstance(model, Module) and hasattr(model, "to_module"):
+            model = model.to_module()
+        if isinstance(model, Module):
+            return compile_module_for_runtime(
+                model,
+                backend=Production(),
+                target="amr_system",
+            )
+        return model
+
+    @staticmethod
+    def _lower_spatial(spatial):
+        """Lower public numerics descriptors to the runtime Spatial brick consumed by AMR."""
+        if spatial is None:
+            return Spatial()
+        if isinstance(spatial, Spatial):
+            return spatial
+        opts = getattr(spatial, "options", None)
+        category = getattr(spatial, "category", None)
+        if callable(opts) and category == "spatial":
+            opt = opts()
+            return Spatial._from_tokens(
+                limiter=opt.get("limiter", "minmod"),
+                flux=opt.get("riemann", "rusanov"),
+                recon=opt.get("variables", "conservative"),
+                positivity_floor=opt.get("positivity_floor", 0.0),
+                wave_speed_cache=opt.get("wave_speed_cache", False),
+            )
+        raise TypeError(
+            "sim.install: spatial must be a runtime Spatial or a typed "
+            "pops.numerics.spatial.FiniteVolume(...) descriptor; got %r"
+            % type(spatial).__name__)
+
+    def _install_initial_state(self, name, initial):
+        """Install an AMR initial condition without losing multi-component states."""
+        import numpy as np
+
+        arr = np.asarray(initial, dtype=np.float64)
+        if arr.ndim == 3:
+            self.set_conservative_state(name, arr)
+            return
+        if arr.ndim == 2 or arr.ndim == 1:
+            self.set_density(name, arr)
+            return
+        raise ValueError(
+            "sim.install: AMR initial state for %r must be a density array (n,n) "
+            "or full conservative state (ncomp,n,n); got shape %r"
+            % (name, arr.shape))
+
     def _install_solver(self, field, solver_brick, declared_fields=frozenset()):
         """Lower a declared AMR field solver to set_poisson; reject typos before runtime."""
         if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
@@ -390,15 +489,20 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
                             wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol)
 
     @staticmethod
-    def _declared_elliptic_fields(instances):
-        """Collect named elliptic fields declared by per-instance AMR models."""
+    def _declared_elliptic_fields(compiled_model, instances):
+        """Collect named elliptic fields declared by the compiled/default or per-instance models."""
         names = set()
+        candidates = []
+        if compiled_model is not None:
+            candidates.append(compiled_model)
         for spec in (instances or {}).values():
             if not isinstance(spec, dict):
                 continue
             model = spec.get("model")
             if model is None:
                 continue
+            candidates.append(model)
+        for model in candidates:
             explicit = getattr(model, "elliptic_field_names", None)
             if explicit is not None:
                 names.update(explicit)
@@ -406,6 +510,13 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             raw = getattr(model, "_elliptic_fields", None)
             if raw:
                 names.update(raw)
+            fields = getattr(model, "field_spaces", None)
+            if callable(fields):
+                try:
+                    spaces = fields()
+                except Exception:
+                    spaces = {}
+                names.update(k for k in spaces if isinstance(k, str))
         return names
 
     def field(self, name):
