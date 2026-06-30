@@ -39,6 +39,17 @@ reference. Project-specific code documentation rules live in
 
 ## Checks
 
+The current docs CI is deliberately light:
+
+- PR docs changes run `Docs PR`, which executes the transitional lint only.
+- Pushes to `master` that touch docs paths run `Docs`, also lint only.
+- Neither docs lane builds `_pops`, Sphinx, Doxygen or Kokkos during the reset.
+
+When the full documentation site is reintroduced, keep the heavy build explicit:
+use a PR label such as `docs-full` for pre-merge validation and a master commit
+token such as `[docs]` for publish. A normal docs-only change must not compile
+Kokkos.
+
 Run the transitional documentation check with:
 
 ```bash

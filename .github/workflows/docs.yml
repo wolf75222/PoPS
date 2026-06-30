@@ -1,8 +1,18 @@
 name: Docs
 
+# Documentation reset lane: this workflow runs the transitional docs lint only. It is path-filtered
+# on pushes to avoid noisy skipped runs, and it never builds `_pops`, Sphinx, Doxygen or Kokkos.
+# If the full site returns, keep the heavy publish path explicit (for example `[docs]` on master and
+# `docs-full` on PRs) instead of charging every docs-only push.
 on:
   push:
     branches: [master]
+    paths:
+      - 'docs/**'
+      - 'scripts/build_docs.sh'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - '.github/workflows/docs*.yml'
   schedule:
     - cron: '0 5 * * 0'
   workflow_dispatch:
@@ -27,6 +37,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Docs mode
+        run: |
+          {
+            echo "### Docs mode"
+            echo ""
+            echo "- event : ${{ github.event_name }}"
+            echo "- reset lint : yes"
+            echo "- `_pops` / Sphinx / Doxygen build : no"
+            echo "- Kokkos build : no"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build docs
         run: bash scripts/build_docs.sh

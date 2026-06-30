@@ -24,12 +24,31 @@ mirror `.github/workflows/ci.yml`: match your flags to a CI job rather than
 inventing new ones. The GPU / GH200 paths cannot be validated outside ROMEO: say so
 explicitly in the PR.
 
+## CI modes
+
+Use PR labels and commit tokens for validation modes; reserve Git tags for releases only.
+
+| Situation | What runs |
+| --- | --- |
+| PR docs-only | `Docs PR` reset lint only; no `_pops`, Sphinx, Doxygen or Kokkos build. |
+| Push to `master` touching docs | Transitional `Docs` reset lint only; no Kokkos build. |
+| PR touching C++ / Python | Required `gate (agregation requise)` through `ci.yml`. |
+| PR with label `ci-full` | Adds MPI + Kokkos OpenMP + bench compile. |
+| PR with label `quality` | Runs `quality.yml` static/deep checks. |
+| Weekly cron / manual dispatch | Backstop CI/docs/quality lanes. |
+| Git tag `vX.Y.Z` | Release creation and wheel packaging. |
+
+If a full Sphinx/Doxygen site is reintroduced, keep it opt-in: use a PR label such as
+`docs-full` for pre-merge validation and a master commit token such as `[docs]` for publish.
+Do not make normal docs-only pushes compile Kokkos.
+
 ## Documentation
 
 `bash scripts/build_docs.sh` runs the transitional documentation lint. The Sphinx/Doxygen
 site was removed during the reset; the retained corpus and rebuild rules are described in
 [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md). The docs CI lanes now validate this reduced
-corpus until the new documentation structure is introduced.
+corpus until the new documentation structure is introduced; they do not compile `_pops` or
+Kokkos.
 
 ## Standards
 
@@ -56,7 +75,7 @@ The conventions are written down; follow the project's decision first, then the 
 - **Templates**: open a PR with [the PR template](.github/PULL_REQUEST_TEMPLATE.md) (its five
   questions) and file issues with the forms under `.github/ISSUE_TEMPLATE/`.
 - **Automated checks** run before any review: the `ci.yml` gate (build and tests), `quality.yml`
-  (format, warnings, clang-tidy, sanitizers, fuzz, coverage, CodeQL), `no-ai-authors.yml`, and
+  (format, warnings, clang-tidy, sanitizers, coverage, CodeQL), `no-ai-authors.yml`, and
   `check_docs.py`. See Code review below for how their results are handled.
 
 ## Workflow

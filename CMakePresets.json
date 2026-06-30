@@ -184,26 +184,6 @@
       }
     },
     {
-      "name": "ci-fuzz",
-      "inherits": "base",
-      "displayName": "CI qualite : harnais libFuzzer (clang, fuzzer+ASan+UBSan)",
-      "description": "Job 'fuzz' de quality.yml. Clang LLVM requis (libFuzzer ; en local surcharger -DCMAKE_CXX_COMPILER=/chemin/llvm/clang++ si /usr/bin/clang++ est AppleClang). Kokkos pointe par $KOKKOS_PREFIX (install CLANG dediee, cf. setup-kokkos compiler=clang). Tests OFF : seuls les harnais fuzz/ sont construits.",
-      "binaryDir": "${sourceDir}/build-fuzz",
-      "condition": {
-        "type": "notEquals",
-        "lhs": "$env{KOKKOS_PREFIX}",
-        "rhs": ""
-      },
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "CMAKE_CXX_COMPILER": "clang++",
-        "POPS_BUILD_TESTS": "OFF",
-        "POPS_BUILD_FUZZING": "ON",
-        "POPS_USE_KOKKOS": "ON",
-        "Kokkos_ROOT": "$env{KOKKOS_PREFIX}"
-      }
-    },
-    {
       "name": "ci-coverage",
       "inherits": "ci-kokkos",
       "displayName": "CI qualite : couverture gcov (POPS_ENABLE_COVERAGE)",
@@ -286,11 +266,6 @@
       "name": "ci-tsan",
       "configurePreset": "ci-tsan",
       "jobs": 4
-    },
-    {
-      "name": "ci-fuzz",
-      "configurePreset": "ci-fuzz",
-      "jobs": 2
     },
     {
       "name": "ci-coverage",
