@@ -353,6 +353,7 @@ class SystemStepper {
   ///  - Strang: H(dt/2); S(dt); H(dt/2), with a solve_fields RE-SOLVED between each stage
   ///    (cf. step_strang() and docs/HOFFART_STEP_SEQUENCE.md).
   void step(double dt) {
+    owner_->program_final_step_ = false;
     if (scheme_ == SplitScheme::Strang) {
       step_strang(dt);
       return;
@@ -585,6 +586,11 @@ class SystemStepper {
     // (the Program expresses solve_fields / couplings / projections itself). The native advance path
     // below is taken ONLY when no program is installed. (step_adaptive -- multirate -- still drives
     // only the native path; a Program is whole-system, so multirate subcycling does not apply.)
+    if (P->run_target_active_) {
+      P->program_final_step_ = (P->t + dt >= P->run_target_time_);
+    } else {
+      P->program_final_step_ = false;
+    }
     if (P->program_step_) {
       run_program_cadence(dt);
       return dt;

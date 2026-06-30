@@ -799,6 +799,9 @@ class ProgramContext {
   /// The current macro step (0-based). Mirrors System::macro_step(); the codegen lowers on_start() to
   /// ``ctx.macro_step() == 0`` and reads it for any step-indexed predicate.
   int macro_step() const { return sys_->macro_step(); }
+  /// True only for the final CFL step of a host ``System.run(t_end, ...)`` loop. Manual
+  /// ``step``/``step_cfl`` calls have no run horizon and return false.
+  bool is_final_step() const { return sys_->program_final_step(); }
   /// Add a skipped step's @p dt to node @p node_id's accumulator (accumulate_dt policy): on a NOT-due
   /// step the held node does not recompute but records the dt so the next due step sees the full
   /// skipped interval. Variable step_cfl safe (the actual skipped dt, not N * dt_current).

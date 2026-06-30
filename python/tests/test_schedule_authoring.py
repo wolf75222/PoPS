@@ -1,9 +1,9 @@
 """Spec 3 unified-scheduler AUTHORING (ADC-458, epic ADC-450).
 
 The schedule vocabulary, the policy chaining, recording a schedule on a Program node, the
-cacheable-capability validation, and the honest refusal to lower a non-always schedule (the
-runtime that honors caches / accumulate_dt / checkpoint is the C++ part of ADC-458). These are
-pure-Python: only pops.time / pops.model are needed, no compiled step is run.
+cacheable-capability validation, and the lowering gate for invalid predicates. The runtime that
+honors caches / accumulate_dt / checkpoint is the C++ part of ADC-458. These are pure-Python:
+only pops.time / pops.model are needed, no compiled step is run.
 """
 import pytest
 
@@ -80,7 +80,7 @@ def test_operator_capabilities_setter_then_getter():
 def test_call_records_schedule_on_value():
     mod, u, _ = _module()
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     f = P._call("fields_from_state", U, schedule=adctime.every(10).hold())
     assert f.attrs["schedule"].policy == "hold"
     assert "schedule" in P.dump_operator_ir()       # inspectable: recorded, not dropped
@@ -89,7 +89,7 @@ def test_call_records_schedule_on_value():
 def test_call_without_schedule_is_unchanged():
     mod, u, _ = _module()
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     f = P._call("fields_from_state", U)
     assert "schedule" not in f.attrs
 
@@ -98,7 +98,7 @@ def test_call_without_schedule_is_unchanged():
 def test_hold_on_non_cacheable_operator_raises():
     mod, u, _ = _module(cacheable=False)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     with pytest.raises(ValueError, match="not cacheable"):
         P._call("fields_from_state", U, schedule=adctime.every(10).hold())
 
@@ -106,7 +106,7 @@ def test_hold_on_non_cacheable_operator_raises():
 def test_accumulate_dt_on_non_cacheable_raises():
     mod, u, _ = _module(cacheable=False)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     with pytest.raises(ValueError, match="not cacheable"):
         P._call("fields_from_state", U, schedule=adctime.every(4).accumulate_dt())
 
@@ -114,7 +114,7 @@ def test_accumulate_dt_on_non_cacheable_raises():
 def test_hold_on_cacheable_operator_ok():
     mod, u, _ = _module(cacheable=True)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     P._call("fields_from_state", U, schedule=adctime.every(10).hold())   # no raise
 
 
@@ -122,29 +122,26 @@ def test_skip_does_not_require_cacheable():
     # skip / recompute / zero produce nothing cached, so they do not require cacheable
     mod, u, _ = _module(cacheable=False)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     P._call("fields_from_state", U, schedule=adctime.every(10).skip())   # no raise
 
 
-# --- honesty gate: the two genuinely-unlowerable cases must fail loud, never silently no-op ---
-# (ADC-458 codegen lowers every kind/policy EXCEPT on_end() -- no end-of-run signal in a compiled step
-# loop -- and a when() over a Python callable. The full policy/kind matrix is in test_scheduler_codegen.)
-def test_on_end_schedule_refuses_to_lower():
+# --- lowering gate: invalid Python predicates fail; on_end has a C++ runtime predicate ---
+def test_on_end_schedule_lowers():
     mod, u, _ = _module(cacheable=True)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     P._call("fields_from_state", U, schedule=adctime.on_end().hold())
-    with pytest.raises(NotImplementedError, match="ADC-458"):
-        P._check_schedules_lowerable()
+    P._check_schedules_lowerable()
 
 
 def test_when_python_callable_refuses_to_lower():
     mod, u, _ = _module(cacheable=True)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     # a when() over a bare Python callable is not a Program value -> cannot lower
     P._call("fields_from_state", U, schedule=adctime.when(lambda: True).hold())
-    with pytest.raises(NotImplementedError, match="ADC-458"):
+    with pytest.raises(TypeError, match="Program Bool predicate"):
         P._check_schedules_lowerable()
 
 
@@ -153,7 +150,7 @@ def test_held_solve_fields_now_lowers():
     # cadence is exercised in the compiled .so / ROMEO).
     mod, u, _ = _module(cacheable=True)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     P._call("fields_from_state", U, schedule=adctime.every(10).hold())
     P._check_schedules_lowerable()   # no raise
 
@@ -162,7 +159,7 @@ def test_skip_now_lowers():
     # ADC-458: skip on a field solve lowers (the op runs only when due; the aux is stale off-cadence).
     mod, u, _ = _module(cacheable=True)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     P._call("fields_from_state", U, schedule=adctime.every(10).skip())
     P._check_schedules_lowerable()   # no raise
 
@@ -170,7 +167,7 @@ def test_skip_now_lowers():
 def test_always_schedule_lowers_fine():
     mod, u, _ = _module(cacheable=True)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     P._call("fields_from_state", U, schedule=adctime.always())
     P._check_schedules_lowerable()   # no raise: always() == the default cadence
 
@@ -180,12 +177,12 @@ def test_scheduled_node_serializes_for_codegen():
     # (regression: an always()-scheduled node passed the gate then crashed _ir_hash with a TypeError).
     mod, u, _ = _module(cacheable=True)
     P = adctime.Program("p").bind_operators(mod)
-    U = P.state("plasma", space=u)
+    U = P.state("U", block="plasma", space=u).n
     P._call("fields_from_state", U, schedule=adctime.always())
     h = P._ir_hash()                 # must not raise
     assert isinstance(h, str) and h
     # the schedule is part of the IR identity: a different cadence yields a different hash
     P2 = adctime.Program("p").bind_operators(mod)
-    U2 = P2.state("plasma", space=u)
+    U2 = P2.state("U", block="plasma", space=u).n
     P2._call("fields_from_state", U2, schedule=adctime.every(10).skip())
     assert P2._ir_hash() != h

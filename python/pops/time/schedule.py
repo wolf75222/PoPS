@@ -14,10 +14,9 @@ class Schedule:
     ``accumulate_dt``, or ``error``). Build a kind with the module helpers and set the policy by
     chaining: ``every(10).hold()``.
 
-    Only ``always()`` runs at ``sim.step`` today: the runtime that honors a non-trivial schedule
-    (the typed cache, ``accumulate_dt``, the checkpoint) is the C++ part of ADC-458, so a node
-    carrying a non-always schedule is recorded and inspectable but refuses to lower (it is never
-    silently ignored). See ``docs/sphinx/reference/program-scheduler.md``.
+    Non-trivial schedules lower into the generated C++ problem artifact. ``every`` / ``when`` /
+    ``on_start`` / ``on_end`` become runtime predicates; ``hold`` / ``accumulate_dt`` use the
+    System-owned scheduler cache so checkpoint/restart can restore the cadence.
     """
 
     _KINDS = ("always", "every", "when", "on_start", "on_end", "subcycle")
@@ -37,7 +36,7 @@ class Schedule:
         self.params = dict(params)
 
     def is_always(self):
-        """True for the default cadence (every step, recompute) -- the only schedule that lowers."""
+        """True for the default cadence (every step, recompute)."""
         return self.kind == "always" and self.policy == "recompute"
 
     def needs_cache(self):
@@ -78,7 +77,7 @@ class Schedule:
 
 
 def always():
-    """Due every step, recomputed -- the default cadence (the only schedule that runs today)."""
+    """Due every step, recomputed -- the default cadence."""
     return Schedule("always")
 
 
@@ -109,4 +108,3 @@ def subcycle(count, dt=None):
     if not (isinstance(count, int) and count > 0):
         raise ValueError("subcycle(count): count must be a positive int, got %r" % (count,))
     return Schedule("subcycle", count=count, dt=dt)
-

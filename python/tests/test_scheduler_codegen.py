@@ -18,10 +18,11 @@ named MultiFab):
   - `error`      -> a `ctx.scheduler_error(...)` else-branch
 
 It also pins that the always()/default lowering is byte-identical to the unscheduled body (the only
-file-level difference is the IR hash, which legitimately tracks the schedule attr), and that the two
-genuinely-unlowerable cases (on_end(), a when() over a Python callable) still fail loud naming
-ADC-458. The cache RUNTIME cadence in a stepping .so is exercised on ROMEO; the CacheManager is
-unit-tested by tests/test_cache_manager.cpp. Pure Python: only pops.time / pops.model / pops.dsl.
+file-level difference is the IR hash, which legitimately tracks the schedule attr). A when() over a
+Python callable and an invalid scratch subcycle are rejected by validation; on_end() lowers through
+the C++ runtime final-step predicate. The cache RUNTIME cadence in a stepping .so is exercised on
+ROMEO; the CacheManager is unit-tested by tests/test_cache_manager.cpp. Pure Python: only pops.time /
+pops.model / pops.dsl.
 """
 import sys
 
@@ -155,8 +156,8 @@ def test_when_over_python_callable_refuses():
     P = _scratch_program(adctime.when(lambda: True).hold())
     try:
         P._check_schedules_lowerable()
-    except NotImplementedError as exc:
-        assert "ADC-458" in str(exc)
+    except TypeError as exc:
+        assert "Program Bool predicate" in str(exc)
     else:
         raise AssertionError("when(callable) must refuse to lower")
 
@@ -177,12 +178,12 @@ def test_subcycle_explicit_dt():
 
 def test_subcycle_on_scratch_node_refuses():
     # subcycle is lowerable only for a field solve (aux output): a scratch-output op sub-cycled would
-    # declare its scratch inside the loop, out of scope downstream -> refuse loud (ADC-458).
+    # declare its scratch inside the loop, out of scope downstream -> refuse during validation.
     P = _scratch_program(adctime.subcycle(4))
     try:
         P._check_schedules_lowerable()
-    except NotImplementedError as exc:
-        assert "ADC-458" in str(exc) and "subcycle" in str(exc)
+    except ValueError as exc:
+        assert "subcycle" in str(exc)
     else:
         raise AssertionError("subcycle on a scratch-output node must refuse to lower")
 
@@ -262,15 +263,12 @@ def test_scratch_decl_hoisted_for_skip():
     assert decl_idx < guard_idx
 
 
-# --- genuinely unlowerable: on_end (no end-of-run signal) -------------------
-def test_on_end_refuses_to_lower():
-    P = _field_program(adctime.on_end().hold())
-    try:
-        P._check_schedules_lowerable()
-    except NotImplementedError as exc:
-        assert "ADC-458" in str(exc) and "on_end" in str(exc)
-    else:
-        raise AssertionError("on_end() must refuse to lower (no end-of-run signal)")
+# --- on_end uses the runtime final-step signal -------------------------------
+def test_on_end_lowers_to_final_step_predicate():
+    cpp = _emit_field(adctime.on_end().hold())
+    assert "ctx.is_final_step()" in cpp
+    assert "ctx.cache_store_aux(" in cpp
+    assert "ctx.cache_restore_aux(" in cpp
 
 
 # --- script entry point (CI runs each test file as `python3 file.py`) -------

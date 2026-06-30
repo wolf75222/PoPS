@@ -219,33 +219,27 @@ def _check_lowerable(program, model=None):
                 "local dense fallback currently supports n_cons <= 8 (got %d)" % n_cons)
 
 def _check_schedules_lowerable(program):
-    """Gate scheduler lowering; reject schedules that need host-only information."""
+    """Gate scheduler lowering; reject invalid schedule shapes before emitting C++."""
     for v in _all_ops(program):
         sched = v.attrs.get("schedule")
         if sched is None or sched.is_always():
             continue
-        if sched.kind == "on_end":
-            raise NotImplementedError(
-                "schedule on_end() on node %r (op '%s') is not lowerable: a compiled sim.step(dt) "
-                "loop never sees an end-of-run signal, so the .so cannot know the last step. Use "
-                "on_start()/every()/when()/subcycle(), or an on_end host hook (ADC-458)."
-                % (v.name, v.op))
         if sched.kind == "when":
             cond = sched.params.get("cond")
             if not (isinstance(cond, Value) and cond.vtype == "bool"):
-                raise NotImplementedError(
+                raise TypeError(
                     "schedule when(cond) on node %r lowers only a Program Bool predicate (e.g. "
-                    "P.norm2(r) < tol), not a Python callable (ADC-458)." % v.name)
+                    "P.norm2(r) < tol), not a Python callable." % v.name)
         if sched.kind == "subcycle" and v.op not in _AUX_OUTPUT_OPS:
             # subcycle re-runs the body COUNT times in a for-loop scope. A node whose output is a
             # step-body scratch (rhs / source / linear_combine / ...) would declare that scratch
             # INSIDE the loop, leaving it out of scope for any downstream consumer -- broken C++. Only
             # an aux-output op (a field solve, which writes the persistent System aux) is well-defined
             # under sub-cycling; a scratch sub-step has no single 'result' to consume. Fail loud.
-            raise NotImplementedError(
+            raise ValueError(
                 "schedule subcycle on node %r (op '%s') is lowerable only for a field solve (its "
                 "output is the persistent System aux); a scratch-output op sub-cycled has no single "
-                "result a downstream node can read (ADC-458). Sub-cycle the field solve, or express "
+                "result a downstream node can read. Sub-cycle the field solve, or express "
                 "the inner steps explicitly." % (v.name, v.op))
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work

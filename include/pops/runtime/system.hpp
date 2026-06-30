@@ -672,6 +672,13 @@ class System {
   /// (program_step_ re-runs the whole program, solve_fields included); stride is GLOBAL (whole-system),
   /// equal to native per-block stride only for a single-block system. See SystemStepper::step.
   POPS_EXPORT void set_program_cadence(int substeps, int stride);
+  /// Private run-loop horizon for the Program scheduler's ``on_end()`` predicate. Python
+  /// ``System.run(t_end, ...)`` sets it before its CFL loop and clears it in ``finally``; manual
+  /// ``step`` / ``step_cfl`` calls leave it unset, so ``on_end()`` is false.
+  POPS_EXPORT void set_program_run_target(double t_end);
+  POPS_EXPORT void clear_program_run_target();
+  /// True only while a generated Program is executing the final step of a host ``System.run`` loop.
+  POPS_EXPORT bool program_final_step() const;
   /// Number of blocks (species) installed.
   POPS_EXPORT int n_blocks() const;
   /// The conservative state MultiFab of block @p b (zero-copy, non-owning reference).

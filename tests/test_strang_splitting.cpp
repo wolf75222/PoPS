@@ -61,6 +61,9 @@ struct MockImpl {
       program_step_;          // compiled time Program hook (ADC-401); empty here -> historical path
   int program_substeps_ = 1;  // compiled-Program macro-step cadence (ADC-411); default 1/1
   int program_stride_ = 1;    // matches System::Impl so SystemStepper::step compiles for the mock
+  bool run_target_active_ = false;
+  double run_target_time_ = 0.0;
+  bool program_final_step_ = false;
   std::function<Real(Real)>
       program_dt_bound_;  // compiled-Program dt bound (ADC-417); empty -> step_cfl uses the native CFL
   bool polar_ = false;

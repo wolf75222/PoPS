@@ -223,6 +223,9 @@ void init_system(py::module_& m) {
       // stride cadence depends on macro_step % stride, not only on t.
       .def("macro_step", &System::macro_step)
       .def("set_clock", &System::set_clock, py::arg("t"), py::arg("macro_step"))
+      .def("_set_program_run_target", &System::set_program_run_target, py::arg("t_end"))
+      .def("_clear_program_run_target", &System::clear_program_run_target)
+      .def("_program_final_step", &System::program_final_step)
       .def("set_potential", &System::set_potential, py::arg("phi"))
       // Gauss law policy (R0, Hoffart repro): "restart" (default, re-solves Poisson every
       // step, bit-identical) or "evolve" (after phi^0, no more re-solve; the Schur stage evolves phi

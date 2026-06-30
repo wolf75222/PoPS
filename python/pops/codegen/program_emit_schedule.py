@@ -13,32 +13,30 @@ from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, Value
 
 def _schedule_due_test(program, v, sched):
     """The C++ boolean 'is this node due this step' for a non-subcycle schedule kind. Reused as the
-    guard of the policy branch. Raises (naming ADC-458) for a kind that needs a runtime primitive the
-    compiled .so does not have (on_end: no end-of-run signal reaches a sim.step(dt) loop)."""
+    guard of the policy branch."""
     kind = sched.kind
     if kind == "every":
         # Cadence: due cold-start, then every N macro-steps (CacheManager::is_due via macro_step()).
         return "ctx.cache_should_update(%d, %d)" % (v.id, int(sched.params.get("n", 1)))
     if kind == "on_start":
         return "(ctx.macro_step() == 0)"
+    if kind == "on_end":
+        return "ctx.is_final_step()"
     if kind == "when":
         # A runtime predicate: a Program Bool value already lowered to a parenthesized C++ expr token
         # (a compare over reductions). A bare Python callable cannot lower (it is not a Program value).
         cond = sched.params.get("cond")
         if not (isinstance(cond, Value) and cond.vtype == "bool"):
-            raise NotImplementedError(
+            raise TypeError(
                 "when(cond) lowers only a Program Bool predicate (e.g. P.norm2(r) < tol), not a "
-                "Python callable: node %r (ADC-458). Build the condition with Program compares."
+                "Python callable: node %r. Build the condition with Program compares."
                 % v.name)
         if cond.id not in program._when_tokens:
             raise ValueError(
                 "when(cond) on node %r references a Bool value not emitted before it; build the "
                 "predicate earlier in the Program (ADC-458)" % v.name)
         return program._when_tokens[cond.id]
-    raise NotImplementedError(
-        "schedule kind %r on node %r is not lowerable: on_end() needs an end-of-run signal that a "
-        "compiled sim.step(dt) loop never sees (the .so cannot know the last step); use on_start()/"
-        "every()/when()/subcycle() or an on_end host hook (ADC-458)." % (kind, v.name))
+    raise ValueError("schedule kind %r on node %r is not lowerable" % (kind, v.name))
 
 def _emit_schedule_wrap(program, v, var, lines, start):
     """Wrap the C++ statements node @p v emitted (``lines[start:]``) in its schedule's due-test guard
@@ -198,8 +196,7 @@ def _emit_schedule_wrap(program, v, var, lines, start):
             lines.append("  " + err)
             lines.append("}")
         return
-    raise NotImplementedError(
-        "schedule policy %r on node %r is not lowerable (ADC-458)" % (policy, v.name))
+    raise ValueError("unknown schedule policy %r on node %r" % (policy, v.name))
 
 def _split_output_decl(program, body, out, v):
     """Split a scratch node's emitted @p body into (declaration_line, rest): the OUTPUT scratch
@@ -209,8 +206,8 @@ def _split_output_decl(program, body, out, v):
     freshly-declared scratch cannot use a cache/zero policy through this path)."""
     decl_prefix = "pops::MultiFab %s = " % out
     if not body or not body[0].startswith(decl_prefix):
-        raise NotImplementedError(
+        raise ValueError(
             "schedule policy on node %r (op '%s') needs its output scratch %r declared as its first "
-            "emitted line to hoist it out of the guard; got %r (ADC-458)"
+            "emitted line to hoist it out of the guard; got %r"
             % (v.name, v.op, out, body[0] if body else None))
     return body[0], body[1:]

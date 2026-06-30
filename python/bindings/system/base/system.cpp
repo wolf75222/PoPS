@@ -192,6 +192,13 @@ struct System::Impl {
   // macro-steps with eff_dt = M*dt (GLOBAL hold-then-catch-up). Set by System::set_program_cadence.
   int program_substeps_ = 1;
   int program_stride_ = 1;
+  // Program scheduler end-of-run signal. Python System.run(t_end, ...) sets run_target_time_ for the
+  // duration of its CFL loop; step_cfl computes dt, then marks program_final_step_ when this step
+  // reaches/passes the target before entering the generated problem.so. Manual step/step_cfl calls have
+  // no run horizon, so the flag is false.
+  bool run_target_active_ = false;
+  double run_target_time_ = 0.0;
+  bool program_final_step_ = false;
   // IR hash of the installed compiled problem artifact (the .so's pops_problem_hash, ADC-406b). Empty until
   // install_problem records it. Serialized in the checkpoint so a restart against a DIFFERENT compiled
   // Program is rejected fail-loud (mismatched buffers / cadence would be meaningless).
@@ -2080,6 +2087,20 @@ void System::set_program_cadence(int substeps, int stride) {
                                 std::to_string(stride) + ")");
   p_->program_substeps_ = substeps;
   p_->program_stride_ = stride;
+}
+void System::set_program_run_target(double t_end) {
+  if (!std::isfinite(t_end))
+    throw std::invalid_argument("System::set_program_run_target: t_end must be finite");
+  p_->run_target_active_ = true;
+  p_->run_target_time_ = t_end;
+  p_->program_final_step_ = false;
+}
+void System::clear_program_run_target() {
+  p_->run_target_active_ = false;
+  p_->program_final_step_ = false;
+}
+bool System::program_final_step() const {
+  return p_->program_final_step_;
 }
 int System::n_blocks() const {
   return static_cast<int>(p_->sp.size());

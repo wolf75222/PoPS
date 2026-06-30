@@ -157,11 +157,15 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         steps = 0
         if policies:
             self._fire_outputs(policies, steps, out_dir, phase="start")
-        while self.time() < t_end and steps < max_steps:
-            self.step_cfl(cfl)
-            steps += 1
-            if policies:
-                self._fire_outputs(policies, steps, out_dir, phase="step")
+        self._s._set_program_run_target(float(t_end))
+        try:
+            while self.time() < t_end and steps < max_steps:
+                self.step_cfl(cfl)
+                steps += 1
+                if policies:
+                    self._fire_outputs(policies, steps, out_dir, phase="step")
+        finally:
+            self._s._clear_program_run_target()
         if policies:
             self._fire_outputs(policies, steps, out_dir, phase="end")
         return steps
@@ -323,6 +327,9 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             "set_geometry_mode",
             "eval_rhs",
             "set_state",
+            "_set_program_run_target",
+            "_clear_program_run_target",
+            "_program_final_step",
         }
         if attr in forbidden:
             raise AttributeError(
