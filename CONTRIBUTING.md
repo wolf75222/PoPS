@@ -35,10 +35,19 @@ Use PR labels and commit tokens for validation modes; reserve Git tags for relea
 | Push to `master` touching docs | Transitional `Docs` reset lint only; no Kokkos build. |
 | PR touching C++ / Python | Required `gate (agregation requise)` through `ci.yml`. |
 | PR with label `ci-kokkos` | Forces the Serial Kokkos C++ + Python gates even if only CI files changed. |
-| PR with label `ci-full` | Adds MPI + Kokkos OpenMP + bench compile. |
+| PR with label `ci-full` | Adds MPI + Kokkos OpenMP. |
 | PR with label `quality` | Runs `quality.yml` static/deep checks. |
 | Weekly cron / manual dispatch | Backstop CI/docs/quality lanes. |
 | Git tag `vX.Y.Z` | Release creation and wheel packaging. |
+
+The fast PR gate uses affected-test selection. Clear domain changes select only the matching
+CMake test targets and Python test files, plus a small smoke set. `tests/architecture/**` runs a
+source-only Python architecture gate and does not compile `_pops` or Kokkos by itself. Shared
+build/runtime changes (`CMakeLists.txt`, presets, `cmake/`, `include/pops/core/`,
+`include/pops/parallel/`, `python/bindings/`, packaging) run the full relevant suite. Unknown
+paths also fall back to full coverage rather than skipping tests silently. Use `ci-kokkos` to force
+the full Serial Kokkos gate when validating CI/test infrastructure, and `ci-full` when
+MPI/OpenMP coverage is required.
 
 If a full Sphinx/Doxygen site is reintroduced, keep it opt-in: use a PR label such as
 `docs-full` for pre-merge validation and a master commit token such as `[docs]` for publish.

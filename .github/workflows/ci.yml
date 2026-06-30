@@ -7,11 +7,12 @@ name: CI
 #    partir des fichiers modifies pour ne lancer que le gate utile sur une pull_request. Les
 #    changements docs/CI/meta publient seulement le check requis `gate`, sans compiler Kokkos,
 #    sauf opt-in explicite par label `ci-kokkos` ou `ci-full`.
-#  - gate-cpp + gate-python (sur pull_request, gate OBLIGATOIRE) : Kokkos SERIAL, scindes et
+#  - gate-cpp + gate-python-architecture + gate-python (sur pull_request, gate OBLIGATOIRE) :
+#    gate-python-architecture est source-only ; gate-cpp/gate-python sont Kokkos SERIAL, scindes et
 #    tournant EN PARALLELE. gate-cpp = ctest C++ ; gate-python = module _pops + suite python/tests.
 #    Avant ADC-171 c'etait UN seul job sequentiel (build C++ -> module Python -> tests Python) ;
 #    le split + jobs 4 + mold raccourcissent le chemin critique, et le routage epargne le gate
-#    inutile (une PR pur-Python ne paie que gate-python). Rapides grace aux caches (Kokkos
+#    inutile (une PR pur-Python ne paie que gate-python + architecture). Rapides grace aux caches (Kokkos
 #    installe + ccache + pip).
 #  - ci-full (push master, nightly cron, workflow_dispatch, ou PR portant le label `ci-full`) :
 #    ajoute MPI (+ Kokkos Serial) et Kokkos OpenMP, la suite COMPLETE. INCHANGE par ADC-171.
@@ -59,16 +60,17 @@ permissions:
   pull-requests: read
 
 jobs:
-  # Routage par chemins : calcule deux drapeaux (cpp / python) a partir des fichiers modifies, pour
+  # Routage par chemins : calcule des drapeaux (cpp / python / python_arch) a partir des fichiers modifies, pour
   # ne payer que le gate pertinent sur une pull_request. Sur push (et tout evenement non-PR), les
   # gates tournent de toute facon -- ces drapeaux ne servent qu'a court-circuiter le gate non
-  # concerne sur une PR (une PR pur-Python ne lance que gate-python).
+  # concerne sur une PR (une PR pur-Python lance gate-python + architecture, pas gate-cpp).
   changes:
     name: routage (chemins modifies)
     runs-on: ubuntu-latest
     outputs:
       cpp: ${{ steps.filter.outputs.cpp }}
       python: ${{ steps.filter.outputs.python }}
+      python_arch: ${{ steps.filter.outputs.python_arch }}
       full: ${{ steps.filter.outputs.full }}
     steps:
       - uses: actions/checkout@v7
@@ -80,16 +82,23 @@ jobs:
           filters: |
             cpp:
               - 'include/**'
-              - 'tests/**'
+              - 'tests/*.cpp'
+              - 'tests/*.hpp'
+              - 'tests/**/*.cpp'
+              - 'tests/**/*.hpp'
+              - 'tests/CMakeLists.txt'
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
-              - 'python/system.cpp'
-              - 'python/amr_system.cpp'
-              - 'python/bindings.cpp'
+              - 'python/bindings/**/*.cpp'
+              - 'python/bindings/**/*.hpp'
               - 'python/CMakeLists.txt'
+              - 'scripts/gen_solver_kernel.py'
             python:
               - 'python/**'
+              - 'scripts/gen_solver_kernel.py'
+            python_arch:
+              - 'tests/architecture/**'
             # Les changements de workflows/actions CI sont valides par revue + lint YAML local,
             # et ne compilent pas Kokkos par defaut. Ajouter `ci-kokkos` pour forcer les gates
             # Serial, ou `ci-full` pour MPI + OpenMP.
@@ -175,6 +184,39 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Changed files for test selection
+        id: changed-files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" "$GITHUB_SHA" > "$RUNNER_TEMP/changed-files.txt"
+          else
+            git ls-files > "$RUNNER_TEMP/changed-files.txt"
+          fi
+          echo "path=$RUNNER_TEMP/changed-files.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Select affected C++ tests
+        id: test-plan
+        run: |
+          force_args=()
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && { [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-kokkos') }}" = "true" ] \
+                  || [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}" = "true" ]; }; then
+            force_args+=(--force-all)
+          fi
+          python3 scripts/ci_select_tests.py cpp \
+            --changed-files "${{ steps.changed-files.outputs.path }}" \
+            --github-output "$GITHUB_OUTPUT" \
+            "${force_args[@]}"
+          cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          cpp_areas=$(grep '^cpp_areas=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          {
+            echo "### affected C++ tests"
+            echo ""
+            echo "- ${cpp_summary}"
+            echo "- areas: ${cpp_areas}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Action composite : apt deps (Eigen / Ninja / ccache) + mold, et install Kokkos Serial PIC
       # MISE EN CACHE sous la cle kokkos-<os>-4.4.01-<commit>-serial-cxx20-gcc-pic -- IDENTIQUE aux
       # jobs full et a quality.yml, donc Kokkos n'est jamais reconstruit. mold (editeur de liens rapide) n'est
@@ -214,10 +256,23 @@ jobs:
           # gate-python). CI-only -D; abi_key (compiler+header-content hash) untouched.
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
-          cmake --build --preset ci-kokkos
+          if [ "${{ steps.test-plan.outputs.cpp_mode }}" = "all" ]; then
+            cmake --build --preset ci-kokkos
+          else
+            read -r -a cpp_targets <<< "${{ steps.test-plan.outputs.cpp_targets }}"
+            if [ "${#cpp_targets[@]}" -eq 0 ]; then
+              echo "No affected C++ tests selected."
+              exit 0
+            fi
+            cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
+          fi
           build_s=$SECONDS
           SECONDS=0
-          ctest --preset ci-kokkos
+          if [ "${{ steps.test-plan.outputs.cpp_mode }}" = "all" ]; then
+            ctest --preset ci-kokkos
+          else
+            ctest --preset ci-kokkos -R '${{ steps.test-plan.outputs.cpp_regex }}'
+          fi
           test_s=$SECONDS
           {
             echo "### gate-cpp (Kokkos Serial, C++)"
@@ -226,6 +281,7 @@ jobs:
             echo "| --- | --- |"
             echo "| configure + build | ${build_s} |"
             echo "| tests (ctest) | ${test_s} |"
+            echo "| selection | ${{ steps.test-plan.outputs.cpp_summary }} |"
             echo ""
             echo "Hit-rate ccache :"
             echo '```'
@@ -237,6 +293,30 @@ jobs:
         if: always()
         run: ccache -s
 
+  # GATE PYTHON ARCHITECTURE : tests source-only (pas de _pops, pas de Kokkos). Ils couvrent les
+  # invariants de structure du package Python et doivent rester legers meme quand seule l'architecture
+  # de tests change.
+  gate-python-architecture:
+    name: ubuntu-latest / Python architecture
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.python == 'true' || needs.changes.outputs.python_arch == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Spec 4 architecture tests
+        run: |
+          pip install --upgrade pip pytest
+          python3 -m pytest tests/architecture -q
+
   # GATE PYTHON BUILD : construit UNE SEULE FOIS le module _pops partage par les shards de tests.
   # Les tests DSL compilent encore leurs loaders/.so a runtime dans chaque shard, mais le gros build
   # pybind11 n'est plus multiplie par le nombre de shards.
@@ -245,7 +325,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
-    # (python) a bouge -- une PR pur-Python ne paie donc QUE ce job, pas gate-cpp. Le label
+    # (python) a bouge -- une PR pur-Python paie ce job + architecture, pas gate-cpp. Le label
     # `ci-kokkos` force aussi ce gate pour valider l'infra Kokkos sans passer en full.
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
 
@@ -277,17 +357,6 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-
-      # Spec 4 architecture gate (ADC-474): assert the package restructure invariants
-      # (no flat modules, <=500-line files, symbolic layers never import the runtime, acyclic
-      # import graph, public surface resolves). These tests live under tests/architecture/ and are
-      # NOT discovered by the python/tests auto-runner below, so they need their own step. They are
-      # source-only (test_public_imports skips itself when _pops is absent), run fast, and gate the
-      # structure independent of the runtime shard matrix.
-      - name: Spec 4 architecture tests
-        run: |
-          pip install --upgrade pip pytest
-          python3 -m pytest tests/architecture -q
 
       # ccache du module Python. Un seul job ecrit le cache de build ; les restore-keys gardent la
       # compatibilite avec les anciennes cles sharded et les cles master.
@@ -373,28 +442,70 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Changed files for test selection
+        id: changed-files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" "$GITHUB_SHA" > "$RUNNER_TEMP/changed-files.txt"
+          else
+            git ls-files > "$RUNNER_TEMP/changed-files.txt"
+          fi
+          echo "path=$RUNNER_TEMP/changed-files.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Select affected Python tests
+        id: test-plan
+        run: |
+          force_args=()
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && { [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-kokkos') }}" = "true" ] \
+                  || [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}" = "true" ]; }; then
+            force_args+=(--force-all)
+          fi
+          python3 scripts/ci_select_tests.py python \
+            --changed-files "${{ steps.changed-files.outputs.path }}" \
+            --tests-file "$RUNNER_TEMP/python-tests.txt" \
+            --shard-index "$SHARD_INDEX" \
+            --shard-total "$SHARD_TOTAL" \
+            --github-output "$GITHUB_OUTPUT" \
+            "${force_args[@]}"
+          echo "tests_file=$RUNNER_TEMP/python-tests.txt" >> "$GITHUB_OUTPUT"
+          python_summary=$(grep '^python_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          python_areas=$(grep '^python_areas=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          {
+            echo "### affected Python tests"
+            echo ""
+            echo "- ${python_summary}"
+            echo "- areas: ${python_areas}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - id: kokkos
+        if: steps.test-plan.outputs.python_shard_count != '0'
         uses: ./.github/actions/setup-kokkos
         with:
           extra-apt: mold
 
       - uses: actions/setup-python@v6
+        if: steps.test-plan.outputs.python_shard_count != '0'
         with:
           python-version: '3.12'
           cache: pip
 
       - name: Download Python module artifact
+        if: steps.test-plan.outputs.python_shard_count != '0'
         uses: actions/download-artifact@v7
         with:
           name: gate-python-build-kokkos-py
           path: build-kokkos-py/python
 
       - name: Verify Python module artifact
+        if: steps.test-plan.outputs.python_shard_count != '0'
         run: |
           test -d build-kokkos-py/python/pops
           test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)"
 
       - name: Cache ccache (Python runtime loaders)
+        if: steps.test-plan.outputs.python_shard_count != '0'
         uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -407,6 +518,7 @@ jobs:
             ccache-${{ runner.os }}-python-
 
       - name: Test module Python `pops` shard ${{ matrix.shard }} (Kokkos Serial)
+        if: steps.test-plan.outputs.python_shard_count != '0'
         run: |
           pip install --upgrade pip numpy pytest
           export PYTHONPATH="$PWD/build-kokkos-py/python"
@@ -433,9 +545,12 @@ jobs:
           rc=0
           # NB: line-oriented (awk needs lines) -> assumes no test file name contains a newline (true for
           # the test_*.py convention); we re-NUL the selected lines for xargs -0.
-          find python/tests -maxdepth 1 -name 'test_*.py' | sort \
-            | awk -v t="$SHARD_TOTAL" -v i="$SHARD_INDEX" '(NR-1)%t==i' \
-            | tr '\n' '\0' \
+          selected="${{ steps.test-plan.outputs.tests_file }}"
+          if [ ! -s "$selected" ]; then
+            echo "No affected Python tests selected for shard ${SHARD_INDEX}/${SHARD_TOTAL}."
+            exit 0
+          fi
+          tr '\n' '\0' < "$selected" \
             | xargs -0 -P 4 -I {} bash -c 'run_one "$@"' _ {} || rc=$?
           test_s=$SECONDS
           # Per-file durations, slowest first, to the log + a JSON/TSV artifact (always, even on failure).
@@ -450,6 +565,7 @@ jobs:
             echo "| Phase | Duree (s) |"
             echo "| --- | --- |"
             echo "| tests (python, this shard) | ${test_s} |"
+            echo "| selection | ${{ steps.test-plan.outputs.python_summary }} |"
             echo ""
             echo "Top 10 slowest test files (this shard):"
             echo '```'
@@ -463,7 +579,7 @@ jobs:
           exit $rc
 
       - name: Upload per-file test timings (ADC-366)
-        if: always()
+        if: always() && steps.test-plan.outputs.python_shard_count != '0'
         uses: actions/upload-artifact@v7
         with:
           name: gate-python-timings-shard${{ matrix.shard }}
@@ -471,7 +587,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: ccache stats (Python module)
-        if: always()
+        if: always() && steps.test-plan.outputs.python_shard_count != '0'
         run: ccache -s
 
   # Agregation REQUISE : l'UNIQUE check a referencer dans la branch protection (ADC-166). Resout
@@ -485,17 +601,17 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, gate-cpp, gate-python-build, gate-python]
+    needs: [changes, gate-cpp, gate-python-architecture, gate-python-build, gate-python]
     if: always()
     steps:
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }}"
+          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::routage (job changes) en echec : impossible de garantir quels gates devaient tourner"
             exit 1
           fi
-          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}"; do
+          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-architecture.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}"; do
             case "$r" in
               success|skipped) ;;
               *) echo "::error::un gate obligatoire a echoue ou ete annule ($r)" ; exit 1 ;;
