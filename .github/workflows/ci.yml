@@ -94,10 +94,10 @@ jobs:
             python:
               - 'python/**'
               - '.github/actions/**'
-            # full : un push master ne lance la suite COMPLETE (MPI + Kokkos OpenMP + bench) que si un
+            # full : un push master ne lance la suite COMPLETE (MPI + Kokkos OpenMP) que si un
             # chemin build/backend a bouge. Conservateur a dessein -- couvre tout ce qui peut affecter
             # l'artefact compile OU le chemin DSL/production exerce par le job kokkos-openmp (dsl.py et
-            # python/tests/test_dsl_production*.py inclus via python/**) OU le bench (bench/, scripts/).
+            # python/tests/test_dsl_production*.py inclus via python/**).
             # Hors liste : fichiers meta seuls (autres workflows, configs linters, LICENSE). Filet de
             # securite : le run nocturne (cron) lance la suite complete inconditionnellement.
             full:
@@ -108,17 +108,16 @@ jobs:
               - 'CMakePresets.json'
               - 'pyproject.toml'
               - 'python/**'
-              - 'bench/**'
               - 'scripts/**'
               - '.github/actions/**'
               - '.github/workflows/ci.yml'
 
-  # Calcule si la suite COMPLETE (MPI + Kokkos OpenMP + bench) doit tourner. Plein si :
+  # Calcule si la suite COMPLETE (MPI + Kokkos OpenMP) doit tourner. Plein si :
   #  - run nocturne (schedule) OU declenchement manuel (workflow_dispatch) : INCONDITIONNEL
   #    (le cron est le filet anti-derive ; le dispatch, l'override de l'integrateur), OU
   #  - push sur master ET un chemin build/backend a bouge (needs.changes.outputs.full) : un push ne
-  #    touchant QUE des fichiers meta (autres workflows, configs linters, LICENSE) saute MPI/OpenMP/
-  #    bench -- la prochaine execution nocturne les rejoue de toute facon, OU
+  #    touchant QUE des fichiers meta (autres workflows, configs linters, LICENSE) saute MPI/OpenMP
+  #    -- la prochaine execution nocturne les rejoue de toute facon, OU
   #  - PR portant le label `ci-full` (l'integrateur exige la validation MPI/Kokkos OpenMP avant merge).
   # Sinon (PR ordinaire) : gate rapide seul (Kokkos Serial : C++ + Python).
   set-mode:
@@ -148,7 +147,7 @@ jobs:
             full=true
           fi
           echo "full=$full" >> "$GITHUB_OUTPUT"
-          echo "Mode plein (MPI + Kokkos OpenMP + bench) : $full (event=${{ github.event_name }}, full_paths=$FULL_PATHS)"
+          echo "Mode plein (MPI + Kokkos OpenMP) : $full (event=${{ github.event_name }}, full_paths=$FULL_PATHS)"
 
   # GATE C++ (ADC-171). Ex-moitie C++ du job sequentiel build-and-test, isole pour tourner EN
   # PARALLELE de gate-python. Pas de `needs: set-mode` (le gate Serial tourne dans tous les modes) ;
@@ -718,48 +717,5 @@ jobs:
           done
 
       - name: ccache stats (Kokkos OpenMP)
-        if: always()
-        run: ccache -s
-
-  bench-compile:
-    name: ubuntu-latest / bench (compile seul)
-    runs-on: ubuntu-latest
-    needs: set-mode
-    # COMPILE-TEST du harnais bench/ (jamais execute : sortie chronometree non deterministe).
-    # bench/ n'est configure par aucun autre job : sans cette etape, un changement de signature
-    # dans le coeur ou dans python/amr_system.cpp (que scaling_amr recompile) peut le casser
-    # sans detection jusqu'au prochain POPS_BUILD_BENCH=ON manuel. Suite complete uniquement.
-    if: needs.set-mode.outputs.full == 'true'
-
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 500M
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: Install deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libeigen3-dev ninja-build ccache
-
-      - name: Cache ccache (bench)
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-bench-${{ github.ref }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-bench-${{ github.ref }}-
-            ccache-${{ runner.os }}-bench-refs/heads/master-
-            ccache-${{ runner.os }}-bench-
-
-      - name: Configure + build (bench, compile seulement)
-        run: |
-          cmake --preset ci-bench
-          cmake --build --preset ci-bench
-
-      - name: ccache stats (bench)
         if: always()
         run: ccache -s

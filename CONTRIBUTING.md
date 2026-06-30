@@ -19,8 +19,8 @@ cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi
 cmake --preset parallel && cmake --build --preset parallel && ctest --preset parallel
 ```
 
-The CI presets (`ci-serial`, `ci-python`, `ci-mpi`, `ci-kokkos`, `ci-kokkos-python`,
-`ci-bench`) mirror `.github/workflows/ci.yml`: match your flags to a CI job rather than
+The CI presets (`ci-serial`, `ci-python`, `ci-mpi`, `ci-kokkos`, `ci-kokkos-python`)
+mirror `.github/workflows/ci.yml`: match your flags to a CI job rather than
 inventing new ones. The GPU / GH200 paths cannot be validated outside ROMEO: say so
 explicitly in the PR.
 

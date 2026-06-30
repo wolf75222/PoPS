@@ -30,10 +30,6 @@ option(POPS_BUILD_TESTS    "Build tests"    ${PROJECT_IS_TOP_LEVEL})
 # Le coeur reste header-only ; le module compile la facade runtime System (python/system.cpp)
 # + les bindings. adc_cases ne contient QUE du code Python qui importe ce module.
 option(POPS_BUILD_PYTHON   "Build the pybind11 Python module `pops`" OFF)
-# Harnais de PROFILAGE (mesure seule, ZERO optimisation). HORS du build par defaut : le CI ne
-# passe JAMAIS ce drapeau, donc bench/ n'est ni configure ni compile en CI. Active a la main par
-# -DPOPS_BUILD_BENCH=ON pour mesurer le cout par phase d'un pas (cf. bench/, docs/PROFILE_RESULTS.md).
-option(POPS_BUILD_BENCH    "Build the standalone profiling harness (bench/, OFF by default)" OFF)
 # Backend de dispatch on-node : KOKKOS EST LE SEUL backend on-node, et il est OBLIGATOIRE.
 # Un meme code source Kokkos couvre les trois cibles on-node via l'espace d'execution choisi
 # A L'INSTALLATION DE KOKKOS (pas par un drapeau pops) :
@@ -205,9 +201,9 @@ endif()
 target_link_libraries(pops INTERFACE Kokkos::kokkos)
 target_compile_definitions(pops INTERFACE POPS_HAS_KOKKOS)
 set(POPS_HAS_KOKKOS ON)
-# Pool Ninja taille 1 partage par les cibles a TU geante du module (python/_pops,
-# bench/scaling_amr) : serialisation anti-OOM de leurs compiles sous Kokkos, cf.
-# python/CMakeLists.txt. Declare ICI et UNE SEULE fois : un nom de pool duplique dans la
+# Pool Ninja taille 1 partage par les cibles a TU geante du module (python/_pops) :
+# serialisation anti-OOM de leurs compiles sous Kokkos, cf. python/CMakeLists.txt.
+# Declare ICI et UNE SEULE fois : un nom de pool duplique dans la
 # propriete GLOBALE JOB_POOLS rend build.ninja invalide ("ninja: error: duplicate pool").
 # Les consommateurs ne posent que JOB_POOL_COMPILE. (tests/ garde son pool distinct
 # pops_heavy_tu, declare dans tests/CMakeLists.txt.)
@@ -275,13 +271,6 @@ if(POPS_BUILD_TESTS OR POPS_BUILD_PYTHON)
 endif()
 if(POPS_BUILD_TESTS)
   add_subdirectory(tests)
-endif()
-
-# Harnais de profilage (mesure seule) : sous-repertoire HORS du build par defaut (OFF). N'ajoute
-# AUCUNE cible au build standard ni au CI ; lie pops::pops et herite donc du backend actif (Kokkos /
-# MPI) sans find_package redondant.
-if(POPS_BUILD_BENCH)
-  add_subdirectory(bench)
 endif()
 
 # Module Python `pops` (bindings de la lib). Compile la facade runtime System + pybind11.

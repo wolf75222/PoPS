@@ -7,7 +7,7 @@
 # CONTROLES DE CORRECTION sur des grilles minuscules : leur niveau d'optimisation n'a aucune importance.
 # Avec POPS_TESTS_FAST_O0=ON (pose par la CI), on compile TOUTES les cibles de ce dossier a -O0 -> build
 # bien plus rapide et borne en memoire, codegen identique entre cibles (parite preservee). Le code de
-# PRODUCTION (lib pops::pops dans le module _pops, bench/) reste a -O3 : ce drapeau ne touche QUE tests/.
+# PRODUCTION (lib pops::pops dans le module _pops) reste a -O3 : ce drapeau ne touche QUE tests/.
 # GCC/Clang et configs optimisees uniquement (Debug est deja -O0).
 option(POPS_TESTS_FAST_O0 "Compile les executables de test a -O0 (build CI rapide ; tests = correction)" OFF)
 if(POPS_TESTS_FAST_O0)

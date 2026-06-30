@@ -23,9 +23,8 @@
 # Python bindings, the DSL surface and the Python tests.
 /python/                @wolf75222
 
-# C++ tests and benchmarks.
+# C++ tests.
 /tests/                 @wolf75222
-/bench/                 @wolf75222
 
 # Build, packaging, CI/CD and developer tooling.
 /CMakeLists.txt         @wolf75222

@@ -151,17 +151,6 @@
       }
     },
     {
-      "name": "ci-bench",
-      "inherits": "base",
-      "displayName": "CI : compile-test du harnais bench/ (jamais execute)",
-      "description": "bench/ n'est jamais configure par defaut : sans ce job, une signature qui change dans le coeur peut le casser sans detection (pourriture silencieuse).",
-      "binaryDir": "${sourceDir}/build-bench",
-      "cacheVariables": {
-        "POPS_BUILD_BENCH": "ON",
-        "POPS_BUILD_TESTS": "OFF"
-      }
-    },
-    {
       "name": "ci-warnings",
       "inherits": "ci-kokkos",
       "displayName": "CI qualite : build avec warnings stricts (POPS_ENABLE_WARNINGS)",
@@ -262,11 +251,6 @@
       "targets": [
         "_pops"
       ]
-    },
-    {
-      "name": "ci-bench",
-      "configurePreset": "ci-bench",
-      "jobs": 4
     },
     {
       "name": "ci-warnings",

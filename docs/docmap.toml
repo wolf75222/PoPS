@@ -49,13 +49,6 @@ depends_on = []
 tested_by = []
 testable = false
 
-[docs."docs/BIBLIOGRAPHY.md"]
-owner = "Romain"
-mode = "warning"
-depends_on = []
-tested_by = []
-testable = false
-
 [docs."docs/CODE_DOCUMENTATION_CONVENTION.md"]
 owner = "Romain"
 mode = "warning"
@@ -71,13 +64,6 @@ tested_by = []
 testable = false
 
 [docs."docs/DOC_QUALITY.md"]
-owner = "Romain"
-mode = "warning"
-depends_on = []
-tested_by = []
-testable = false
-
-[docs."docs/TRANSLATION_GLOSSARY.md"]
 owner = "Romain"
 mode = "warning"
 depends_on = []

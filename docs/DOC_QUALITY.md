@@ -15,11 +15,9 @@ The retained documentation is deliberately small:
 - `CHANGELOG.md`
 - `docs/ARCHITECTURE.md`
 - `docs/ALGORITHMS.md`
-- `docs/BIBLIOGRAPHY.md`
 - `docs/CODE_DOCUMENTATION_CONVENTION.md`
 - `docs/CODING_STANDARDS_DECISIONS.md`
 - `docs/DOC_QUALITY.md`
-- `docs/TRANSLATION_GLOSSARY.md`
 - `docs/VERSIONING.md`
 - `docs/docguide/`
 
