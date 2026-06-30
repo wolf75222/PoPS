@@ -6,7 +6,7 @@ description: >
   (kokkos-<os>-<version>-<commit>-serial-cxx20-gcc-pic) : quality.yml reutilise le Kokkos
   deja construit par le gate (et inversement), evitant toute reconstruction. Chaque
   (exec-space, compiler) a sa propre cle.
-  Factorise les etapes repetees par les jobs warnings / tidy / sanitizers / fuzz / tsan / codeql.
+  Factorise les etapes repetees par les jobs warnings / tidy / sanitizers / tsan / codeql.
 
 inputs:
   kokkos-version:
@@ -23,8 +23,8 @@ inputs:
   compiler:
     description: >
       Compilateur de l'install Kokkos : gcc (defaut) ou clang. Le defaut gcc conserve la cle de
-      cache historique du gate ci.yml ; clang produit une install SEPAREE (cle distincte), requise
-      par le job fuzz (les harnais libFuzzer compilent en clang, on aligne le Kokkos lie).
+      cache historique du gate ci.yml ; clang produit une install SEPAREE (cle distincte), utilisee
+      par les jobs qualite bases sur clang.
     default: 'gcc'
   exec-space:
     description: >

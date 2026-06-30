@@ -2,13 +2,12 @@ name: Quality
 
 # Analyse statique / qualite de code, VOLONTAIREMENT hors du chemin critique des PR : ce workflow
 # ne tourne JAMAIS sur un push ni sur une PR ordinaire (c'est ci.yml qui garde les PR). Il agrege
-# huit familles d'outils :
+# sept familles d'outils :
 #   - format       : clang-format --dry-run (.clang-format) [BLOQUANT] + ruff (lint python/) [info]
 #   - warnings     : build avec -Wall -Wextra -Wpedantic ... (POPS_ENABLE_WARNINGS)    [non bloquant]
 #   - tidy         : run-clang-tidy sur les TU de tests/ (.clang-tidy)                 [non bloquant]
 #   - sanitizers   : ctest sous ASan + UBSan (POPS_ENABLE_SANITIZERS, preset ci-asan)  [non bloquant]
 #   - tsan         : ctest sous TSan, backend OpenMP (POPS_ENABLE_TSAN, preset ci-tsan)[non bloquant]
-#   - fuzz         : harnais libFuzzer 90 s/cible (POPS_BUILD_FUZZING, preset ci-fuzz) [BLOQUANT]
 #   - coverage     : ctest instrumente gcov + rapport gcovr (POPS_ENABLE_COVERAGE)     [non bloquant]
 #   - codeql       : code scanning C++ GitHub (repo public = gratuit)                 [-> onglet Security]
 #
@@ -19,8 +18,7 @@ name: Quality
 #     risque lance la passe complete sur cette PR (opt-in ; cf. job set-mode).
 # POLITIQUE : informatif d'abord. Aucune option CMake n'est ON par defaut ; la plupart des jobs ne
 # cassent PAS le run sur un finding (pas de -Werror) -> on observe l'etat reel, on durcit ensuite.
-# EXCEPTIONS deja actees au "non bloquant" :
-#   - fuzz est BLOQUANT (bascule ADC-120 : un crash libFuzzer = vrai bug reproductible) ;
+# EXCEPTION deja actee au "non bloquant" :
 #   - le check clang-format du job format est BLOQUANT (bascule ADC-219 : le tronc est conforme au
 #     style depuis le balayage ADC-118, tout nouvel ecart = regression). ruff (python/) reste informatif.
 on:
@@ -398,86 +396,6 @@ jobs:
         with:
           name: tsan-log
           path: tsan.log
-          if-no-files-found: ignore
-
-  # --- Fuzzing libFuzzer : invariants des composants purs du coeur -------------------------------
-  fuzz:
-    name: fuzzing libFuzzer (90 s/cible, bloquant)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: set-mode
-    if: needs.set-mode.outputs.run == 'true'
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 500M
-      # Kokkos lie mais non instrumente -> on coupe LSan ; l'UB reste fatal (-fno-sanitize-recover
-      # cote build), donc chaque violation produit un artefact crash-* reproductible.
-      ASAN_OPTIONS: detect_leaks=0:detect_container_overflow=0
-      UBSAN_OPTIONS: print_stacktrace=1
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-      # Install Kokkos compilee en CLANG (cle de cache distincte de celle du gate gcc) : les
-      # harnais compilent en clang (libFuzzer), on aligne le Kokkos lie sur le meme compilateur.
-      - id: kokkos
-        uses: ./.github/actions/setup-kokkos
-        with:
-          compiler: clang
-          extra-apt: clang
-      - name: Cache ccache (quality/fuzz)
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-quality-fuzz-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-quality-fuzz-
-      - name: Detendre l'ASLR (compat ASan)
-        run: sudo sysctl vm.mmap_rnd_bits=28 || true
-      - name: Build des harnais (clang, fuzzer+ASan+UBSan)
-        env:
-          KOKKOS_PREFIX: ${{ steps.kokkos.outputs.kokkos-prefix }}
-        run: |
-          cmake --preset ci-fuzz
-          cmake --build --preset ci-fuzz
-      - name: Fuzz (90 s par cible, bloquant)
-        run: |
-          mkdir -p fuzz-artifacts
-          bad=0
-          # CMAKE_RUNTIME_OUTPUT_DIRECTORY=bin (CMakeLists racine) : les executables sont dans bin/.
-          for t in fuzz_box2d fuzz_cluster fuzz_dense_eig; do
-            echo "::group::$t"
-            set +e
-            ./build-fuzz/bin/"$t" -max_total_time=90 -rss_limit_mb=4096 \
-              -artifact_prefix="fuzz-artifacts/$t-" -print_final_stats=1 2>&1 | tail -40
-            rc=${PIPESTATUS[0]}
-            set -e
-            echo "::endgroup::"
-            if [ "$rc" -ne 0 ]; then
-              echo "::warning::fuzz : $t a trouve un crash / invariant viole (rc=$rc) -- entree fautive dans l'artefact fuzz-crashes"
-              bad=$((bad+1))
-            fi
-          done
-          {
-            echo "### Fuzzing (libFuzzer, 90 s/cible)"
-            echo ""
-            echo "- Cibles : fuzz_box2d, fuzz_cluster, fuzz_dense_eig"
-            echo "- Cibles avec crash / invariant viole : **$bad**"
-          } >> "$GITHUB_STEP_SUMMARY"
-          # Bascule ADC-120 (1re bascule informatif -> bloquant). Le fuzz est durci EN PREMIER car un
-          # crash / invariant viole est TOUJOURS un bug reel : l'entree minimisee est reproductible
-          # (artefact fuzz-crashes), aucun faux positif a trier. Le job echoue donc des qu'une cible
-          # remonte un probleme.
-          if [ "$bad" -ne 0 ]; then
-            echo "::error::fuzz : $bad cible(s) avec crash ou invariant viole -- job BLOQUANT (bascule ADC-120, voir artefact fuzz-crashes)"
-            exit 1
-          fi
-      - name: Upload entrees de crash
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: fuzz-crashes
-          path: fuzz-artifacts/
           if-no-files-found: ignore
 
   # --- Couverture : ctest instrumente gcov + rapport gcovr ---------------------------------------

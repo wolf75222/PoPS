@@ -75,7 +75,7 @@ The conventions are written down; follow the project's decision first, then the 
 - **Templates**: open a PR with [the PR template](.github/PULL_REQUEST_TEMPLATE.md) (its five
   questions) and file issues with the forms under `.github/ISSUE_TEMPLATE/`.
 - **Automated checks** run before any review: the `ci.yml` gate (build and tests), `quality.yml`
-  (format, warnings, clang-tidy, sanitizers, fuzz, coverage, CodeQL), `no-ai-authors.yml`, and
+  (format, warnings, clang-tidy, sanitizers, coverage, CodeQL), `no-ai-authors.yml`, and
   `check_docs.py`. See Code review below for how their results are handled.
 
 ## Workflow
