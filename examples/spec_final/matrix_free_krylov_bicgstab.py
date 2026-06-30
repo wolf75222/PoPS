@@ -39,6 +39,8 @@ def _repo_include():
 
 
 def _configure_source_tree_include():
+    root = Path(__file__).resolve().parents[2]
+    os.environ["POPS_CACHE_DIR"] = str(root / ".pops_cache")
     include = _repo_include()
     if include is not None:
         os.environ["POPS_INCLUDE"] = include

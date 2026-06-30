@@ -24,8 +24,25 @@ captured into the step closure), reused across every step and every Krylov itera
     1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
 without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
-import pytest
+import os
+from pathlib import Path
 import sys
+
+import pytest
+
+
+def _repo_include():
+    include = Path(__file__).resolve().parents[2] / "include"
+    return str(include) if include.is_dir() else None
+
+
+def _configure_source_tree_include():
+    root = Path(__file__).resolve().parents[2]
+    os.environ["POPS_CACHE_DIR"] = str(root / ".pops_cache")
+    include = _repo_include()
+    if include is not None:
+        os.environ["POPS_INCLUDE"] = include
+    return include
 
 
 def _pops_time():
@@ -345,7 +362,7 @@ def _run_section_b(t):
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
 
-    from _module_models import explicit_euler, first_order_rusanov, passive_scalar_module
+    from _module_models import first_order_rusanov, passive_scalar_module
 
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
@@ -354,10 +371,12 @@ def _run_section_b(t):
         return passive_scalar_module(name)
 
     tol = 1e-10
+    include = _configure_source_tree_include()
     try:
         compiled = pops.compile_problem(
             model=passive_model("solve_prog"),
-            time=_solve_program(t, name="solve_step", method="cg", tol=tol, max_iter=200))
+            program=_solve_program(t, name="solve_step", method="cg", tol=tol, max_iter=200),
+            include=include)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
@@ -371,13 +390,12 @@ def _run_section_b(t):
         sim.install(compiled,
                     instances={"blk": {"model": passive_model("solve_block"),
                                        "spatial": first_order_rusanov(),
-                                       "time": explicit_euler(),
                                        "initial": np.stack([rho0])}})
     except RuntimeError as exc:
         print("-- (B) skipped: install could not build the block .so: %s --" % str(exc)[:200])
         return None
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free
-    out = np.array(sim._get_state("blk"))[0]
+    out = np.array(sim.get_state("blk"))[0]
 
     # OFFLINE reference: solve the SAME discrete system (I - alpha*Lap_periodic) phi = rho0 with a numpy
     # CG to the same tolerance. The compiled matrix-free CG must recover the same phi.
@@ -411,7 +429,7 @@ def _run_section_b_gmg_precond(t):
         return None
 
     from pops.solvers import preconditioners
-    from _module_models import explicit_euler, first_order_rusanov, passive_scalar_module
+    from _module_models import first_order_rusanov, passive_scalar_module
 
     n = 16
     sim = pops.System(n=n, L=1.0, periodic=True)
@@ -420,10 +438,15 @@ def _run_section_b_gmg_precond(t):
         return passive_scalar_module(name)
 
     tol = 1e-10
+    include = _configure_source_tree_include()
     prog = _solve_program(t, name="solve_gmg", method="gmres", tol=tol, max_iter=200,
                           preconditioner=preconditioners.GeometricMG())
     try:
-        compiled = pops.compile_problem(model=passive_model("solve_gmg_prog"), time=prog)
+        compiled = pops.compile_problem(
+            model=passive_model("solve_gmg_prog"),
+            program=prog,
+            include=include,
+        )
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B') skipped: compile could not build the .so: %s --" % str(exc)[:200])
         return None
@@ -435,13 +458,12 @@ def _run_section_b_gmg_precond(t):
         sim.install(compiled,
                     instances={"blk": {"model": passive_model("solve_gmg_block"),
                                        "spatial": first_order_rusanov(),
-                                       "time": explicit_euler(),
                                        "initial": np.stack([rho0])}})
     except RuntimeError as exc:
         print("-- (B') skipped: install could not build the block .so: %s --" % str(exc)[:200])
         return None
     sim.step(0.05)
-    out = np.array(sim._get_state("blk"))[0]
+    out = np.array(sim.get_state("blk"))[0]
 
     apply = _discrete_helmholtz(n, _ALPHA)
     phi_ref, iters = _np_cg(apply, rho0, tol=tol)
