@@ -55,10 +55,9 @@ reconstruction x Riemann x integrator) inspired the concept-template decompositi
 - **Berger & Rigoutsos**, 1991, *An algorithm for point clustering and grid generation*,
   IEEE Trans. SMC 21. Signature clustering for the regrid.
 - **Hoffart**, 2025, arXiv:2510.11808. Isothermal two-fluid model, validation target
-  of the asymptotic-preserving scheme (application scenario, `adc_cases/two_fluid_ap/` ; method
-  note archived in [`archive/two_fluid_ap.md`](archive/two_fluid_ap.md)).
+  of the asymptotic-preserving scheme (application scenario, `adc_cases/two_fluid_ap/`).
 
 ## 4. Performance methodology
 
 - **Bryant & O'Hallaron**, *Computer Systems: A Programmer's Perspective*, 3rd ed., 2016.
-  Profile first, identify the bottleneck, transform, re-measure (see `PERFORMANCE.md`).
+  Profile first, identify the bottleneck, transform, re-measure.

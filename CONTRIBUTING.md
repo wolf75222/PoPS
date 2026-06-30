@@ -26,10 +26,10 @@ explicitly in the PR.
 
 ## Documentation
 
-`bash scripts/build_docs.sh` builds the whole site (lint + Sphinx + Doxygen + doxysphinx).
-The freshness policy (docmap, CI lanes) is described in
-[docs/DOC_QUALITY.md](docs/DOC_QUALITY.md). The light PR lane (`docs-pr.yml`) compiles
-nothing; the full build runs on the weekly cron and on manual dispatch.
+`bash scripts/build_docs.sh` runs the transitional documentation lint. The Sphinx/Doxygen
+site was removed during the reset; the retained corpus and rebuild rules are described in
+[docs/DOC_QUALITY.md](docs/DOC_QUALITY.md). The docs CI lanes now validate this reduced
+corpus until the new documentation structure is introduced.
 
 ## Standards
 
@@ -50,11 +50,9 @@ The conventions are written down; follow the project's decision first, then the 
   same commit as the code), *Minimum viable documentation*, and *Duplication is evil* (link, do not
   re-document). Its lean companion, [docs/docguide/agile_documentation.md](docs/docguide/agile_documentation.md)
   (adapted from Scott Ambler), covers *whether*, *what*, and *when* to document at all: document late
-  and stable, prefer executable specs and generated reference, and update only when it hurts. The internal guide
-  [docs/sphinx/development/documentation.md](docs/sphinx/development/documentation.md) codifies how
-  we apply it (Google developer documentation style and SWE-at-Google ch.10, doc treated as code).
-  Write in English (en-US), ASCII for `docs/sphinx/**`, no em-dash; `check_docs.py` and `sphinx -W`
-  enforce it. Page classes and freshness are in [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md).
+  and stable, prefer executable specs and generated reference, and update only when it hurts.
+  The local reset policy is in [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md). Write in English
+  (en-US), keep new docs ASCII-clean, and treat documentation as code.
 - **Templates**: open a PR with [the PR template](.github/PULL_REQUEST_TEMPLATE.md) (its five
   questions) and file issues with the forms under `.github/ISSUE_TEMPLATE/`.
 - **Automated checks** run before any review: the `ci.yml` gate (build and tests), `quality.yml`
@@ -151,7 +149,7 @@ Different changes need a different focus (SWE-at-Google ch.10):
 - **No AI author, committer or co-author** (Claude, Copilot, Anthropic, ...) anywhere in
   the history: the `no-ai-authors.yml` workflow rejects such commits at the source (the
   GitHub squash hoists `Co-authored-by` trailers). Use your default git identity.
-- Documentation style: ASCII strict for `docs/sphinx/**.md`, no em-dash anywhere; these
+- Documentation style: ASCII strict for user-facing docs, no em-dash anywhere; these
   rules are checked by `docs/check_docs.py` (run by `build_docs.sh` and the PR lane).
 
 ## License

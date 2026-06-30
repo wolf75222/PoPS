@@ -1,18 +1,5 @@
 name: Docs
 
-# Lane LOURDE de la documentation : build Sphinx + Doxygen + module Python `_pops`, puis
-# deploiement Pages. Elle ne tourne PAS sur les PR ordinaires -- c'est docs-pr.yml (lane legere,
-# sans build) qui garde les PR. DECLENCHEURS :
-#   - push master AVEC "[docs]" dans le message de commit : publie la doc du nouveau master ;
-#   - workflow_dispatch : build + validation a la demande (deploie seulement depuis master) ;
-#   - schedule (dimanche 05:00 UTC, decale de quality.yml a 04:00 et du nightly ci-full a 03:17) :
-#     rebuild hebdo INCONDITIONNEL pour attraper toute derive d'environnement (image runner, deps),
-#     y compris master fige. Un build/semaine est le cout assume de ce filet. (Pas de gate
-#     anti-gaspillage : un gate compare-au-dernier-sha se neutralisait lui-meme -- un run cron saute
-#     re-declarait le meme sha 'success', donc la semaine suivante il re-sautait, indefiniment.)
-# scripts/build_docs.sh est la SOURCE UNIQUE des etapes (identique en local et en CI). Apres le
-# build, deux passes INFORMATIVES non bloquantes : linkcheck (liens, externes flaky toleres) et
-# rejeu des exemples de doc (docs/run_doc_examples.py, scripts du champ tested_by du docmap).
 on:
   push:
     branches: [master]
@@ -21,103 +8,25 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pages
+  group: docs
   cancel-in-progress: false
 
-# Moindre privilege au niveau workflow : le job build ne lit que le contenu. pages:write +
-# id-token:write sont eleves au seul job deploy (le seul qui publie).
 permissions:
   contents: read
 
 jobs:
   build:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      contains(github.event.head_commit.message, '[docs]')
+    name: documentation reset check
     runs-on: ubuntu-latest
-    env:
-      # ccache borne, persiste entre runs (cf. step Cache ccache) : le 1er build reste long,
-      # les suivants reutilisent les .o (module ET Kokkos compile par FetchContent).
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 2G
+    timeout-minutes: 10
     steps:
-      # fetch-depth: 0 = historique complet, requis par la fraicheur de check_docs.py (appele par
-      # build_docs.sh) -- sinon git_state() voit un clone shallow et saute le check.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      - name: System deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libeigen3-dev doxygen graphviz ninja-build lld ccache
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      # numpy est requis a l'IMPORT du module (dsl.py fait `import numpy`) et par autodoc.
-      # matplotlib (+ Pillow, tire en dependance) est requis par le tutoriel diocotron que
-      # docs/run_doc_examples.py rejoue : make_figures() importe matplotlib et ecrit un GIF via
-      # PillowWriter. On installe avant de compiler/importer pops.
-      - name: Python deps
-        run: |
-          pip install --upgrade pip
-          pip install numpy matplotlib
-          pip install -r docs/sphinx/requirements.txt
-
-      # Cache ccache persistant : le preset auto-detecte ccache (POPS_USE_CCACHE=ON). Persister
-      # ~/.ccache evite de tout recompiler (module + Kokkos FetchContent) a chaque run hebdo.
-      - name: Cache ccache (docs)
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-docs-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            ccache-docs-${{ runner.os }}-
-
-      # TOUTES les etapes (lint, module _pops pour autodoc, sphinx -W, doxygen, site combine) vivent
-      # dans scripts/build_docs.sh : SOURCE UNIQUE, identique en local et en CI. Le script construit
-      # le module via le preset ci-python (pin interpreteur de setup-python ; ninja fourni par apt).
-      # LDFLAGS=-fuse-ld=lld : le link du module avec le ld BFD du runner echoue ("failed to set
-      # dynamic section sizes: bad value") sur la grosse .so ; lld (installe ci-dessus) n'a pas ce
-      # bug. CMake seede ses *_LINKER_FLAGS depuis LDFLAGS au configure du preset.
-      - name: Build docs (lint + module + sphinx + doxygen)
-        env:
-          LDFLAGS: -fuse-ld=lld
+      - name: Build docs
         run: bash scripts/build_docs.sh
-
-      # INFORMATIF : verification des liens. Les liens externes flaky ne cassent rien (continue-on-error).
-      - name: Linkcheck (informatif)
-        continue-on-error: true
-        run: python -m sphinx -b linkcheck docs/sphinx docs/_build/linkcheck
-
-      # INFORMATIF : rejeu des scripts d'exemple references par tested_by (docmap), en --quick. Le
-      # module build-py vient d'etre construit par build_docs.sh ; run_doc_examples.py le localise seul.
-      - name: Exemples de doc (informatif)
-        continue-on-error: true
-        run: python docs/run_doc_examples.py --timeout 600
-
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: docs/_site
-
-  deploy:
-    needs: build
-    # Ne PUBLIE que depuis master. Un workflow_dispatch sur une branche construit et valide la doc
-    # (job build) SANS pousser un build non-merge sur le site Pages live. deploy ne tourne que si
-    # build a reussi (needs: build) ; build ayant l'upload de l'artefact en derniere etape
-    # inconditionnelle, un build vert implique toujours un artefact present.
-    if: ${{ github.ref == 'refs/heads/master' }}
-    runs-on: ubuntu-latest
-    # pages:write + id-token:write eleves ici : seul job qui publie sur Pages.
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5

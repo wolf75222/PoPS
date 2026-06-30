@@ -12,11 +12,8 @@ hereafter CG, LLVM Coding Standards). For each axis where the three guides diver
 of the repository diverges from the three, a single rule is set. Every non-cosmetic finding is verified on
 the spot (`file:line` cited). Read-only, no source file modified.
 
-Related docs: [`CODEBASE_AUDIT.md`](archive/CODEBASE_AUDIT.md) (maintainability audit, June 6, 2026),
-[`QUALITY_TOOLING.md`](QUALITY_TOOLING.md) (static analysis, milestone *Code quality & hardened
-CI*, epic ADC-105). The `CODEBASE_AUDIT.md` refers to
-`CODE_DOCUMENTATION_CONVENTION.md`, **present in the working tree but not committed**
-(therefore outside version control, to be committed; see D9).
+Related docs: `CONTRIBUTING.md` (workflow) and `DOC_QUALITY.md` (documentation policy).
+This document records decisions; it is not a linter output.
 
 Guiding principle: consistency with the existing code prevails. The base is healthy; we do not impose a
 massive rename. For each axis we keep the rule closest to the dominant practice, except

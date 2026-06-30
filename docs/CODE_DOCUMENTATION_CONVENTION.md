@@ -134,8 +134,8 @@ When the code implements a formula, write the formula once near the kernel or th
 /// A is cell-centered; the face fluxes use the average defined below.
 ```
 
-If the formula comes from a paper, cite the local document (`docs/SCHUR_CONDENSATION_DESIGN.md`) rather
-than putting a long bibliography in the header.
+If the formula comes from a paper, cite the retained bibliography or the paper directly rather than
+putting a long bibliography in the header.
 
 ## 6. MPI / GPU
 

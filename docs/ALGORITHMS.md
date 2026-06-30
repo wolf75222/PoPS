@@ -12,9 +12,7 @@ stability, the limits, the ctest test that covers it). All the file paths and te
 this repository.
 
 Architecture (layers, dispatch seam, library/application boundary):
-[ARCHITECTURE.md](ARCHITECTURE.md). Design choices: [CHOICES.md](CHOICES.md). Trace of the GH200 device
-validations: [GPU_RUNTIME_PORT.md](GPU_RUNTIME_PORT.md). References:
-[BIBLIOGRAPHY.md](BIBLIOGRAPHY.md).
+[ARCHITECTURE.md](ARCHITECTURE.md). References: [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md).
 
 ## Contents
 
@@ -2127,8 +2125,7 @@ of this page. The goal is not to present a partial capability as complete.
 - Polar Poisson. `PolarPoissonSolver` (FFT in theta, Thomas in r, section 16) is mono-rank and
   mono-box. The polar tensor/Krylov path (polar Schur) lifts this limit on its perimeter.
 - Cut-cell and Hoffart fidelity. The cut-cell (sections 14, 15) is a numerical capability of the core; it
-  is not presented as a proven correction of the growth rates of the Hoffart benchmark (cf.
-  [HOFFART_FIDELITY.md](HOFFART_FIDELITY.md)).
+  is not presented as a proven correction of the growth rates of the Hoffart benchmark.
 - Energy under Schur. The Schur step (section 13) adjusts the kinetic energy if an `Energy` role is
   declared; the isothermal case does not use the energy equation.
 
@@ -2165,6 +2162,4 @@ of this page. The goal is not to present a partial capability as complete.
   53 (1984). Berger & Colella, *Local adaptive mesh refinement for shock hydrodynamics*, JCP 82 (1989).
   Berger & Rigoutsos, *An algorithm for point clustering and grid generation*, IEEE Trans. SMC 21 (1991).
 - Cut-cell: Shortley & Weller, *The numerical solution of Laplace's equation*, J. Appl. Phys. 9 (1938).
-- Condensed Schur (magnetized Euler-Poisson): see [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md) and
-  [HOFFART_FIDELITY.md](HOFFART_FIDELITY.md).
-
+- Condensed Schur (magnetized Euler-Poisson): see [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md).

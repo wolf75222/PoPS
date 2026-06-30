@@ -8,9 +8,8 @@ the public API that the version number tracks, and the rules for bumping it.
 The version lives in one place: `project(VERSION x.y.z)` in `CMakeLists.txt`. Everything
 derives from it: `pops.__version__` (baked as `POPS_VERSION` into `_pops`), the pip wheel
 (scikit-build-core regex on `pyproject.toml`), and `adcConfigVersion.cmake`. Do not
-duplicate the number elsewhere. The docs build derives it too: `scripts/build_docs.sh` injects
-`PROJECT_NUMBER` into Doxygen from `project(VERSION)`, and `docs/sphinx/conf.py` reads the same
-value, so the published docs never drift from `CMakeLists.txt`.
+duplicate the number elsewhere. When the generated documentation site is rebuilt, it must keep
+deriving the published version from this same `project(VERSION)` value.
 
 ## Public API (under SemVer guarantee)
 
@@ -47,8 +46,8 @@ breaking changes until `1.0.0`.
 
 ## Releasing
 
-1. Bump `project(VERSION x.y.z)` in `CMakeLists.txt`. Everything else (the Python `__version__`, the
-   pip wheel, Doxygen and Sphinx) derives from it automatically; nothing else is edited by hand.
+1. Bump `project(VERSION x.y.z)` in `CMakeLists.txt`. The Python `__version__` and the pip
+   wheel derive from it automatically; nothing else is edited by hand.
 2. Move the `## [Unreleased]` entries of [CHANGELOG.md](../CHANGELOG.md) into a
    `## [x.y.z] - YYYY-MM-DD` section.
 3. Merge, then `git tag vx.y.z` on master and `git push --tags`. The `release.yml` workflow
