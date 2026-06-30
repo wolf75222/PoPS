@@ -129,9 +129,10 @@ WIRES them (the rejection stays only where the architecture is not ready, and it
 6. **IO v1**: sim.write(path, format='vtk'|'npz', step=), sim.checkpoint / sim.restart (npz,
    atomic write); bindings macro_step() / set_clock() / set_potential() -- the restart is
    BIT-IDENTICAL (including stride cadence via macro_step, and MG warm start via restored phi).
-7. **pops.capabilities()**: single truth matrix (riemann x facade, time, stability_policy,
-   poisson, schur, DSL backends, io); stale docstrings corrected (PolarMesh, polar Schur
-   stage "does not plug in", Phase 3c perimeter of the AMR Schur, CondensedSchur "mono-rank").
+7. **pops.inspect_capabilities()**: single typed capability matrix (riemann, reconstruction,
+   limiters, layouts, backends, solvers, fields, output/checkpoint policies, AMR policies,
+   moments); compiled artifacts expose the relevant scoped view through
+   `compiled.inspect_capabilities()`.
 
 ## Wave 3 (balance: polar, couplings, DSL HLLC/Jacobian, AMR Newton, polar/AMR Schur, IO, multi-block)
 
@@ -216,7 +217,7 @@ is wired really is; what is not is documented with file:line, never masked).
    (`ExBVelocityPolar`, no `wave_speeds`) -> CLEAR rejection. **Default `rusanov` strictly
    bit-identical** (separate branch, untouched). HLLC/Roe stay rejected (Euler 4-var, no polar energy
    flux brick). Facade: `pops.mesh.PolarMesh` + `pops.numerics.spatial.FiniteVolume(riemann=HLL())`;
-   `pops.capabilities()['riemann']['system_polar'] = ['rusanov', 'hll']`. Test:
+   inspect the Riemann rows with `pops.inspect_capabilities().by_category("riemann")`. Test:
    `python/tests/test_polar_hll.py` (rusanov reproducible, hll finite AND distinct from rusanov) +
    `test_polar_rejections.test_polar_rejects_hll_on_scalar_exb`.
 
@@ -243,7 +244,8 @@ is wired really is; what is not is documented with file:line, never masked).
      now drives the splitting on the facade side.
    Mono-rank (the direct Poisson refuses MPI). Tests: `python/tests/test_polar_theta_boxes.py`
    (isothermal transport bit-identical theta_boxes=1/2/4; scalar ExB; divisibility + direct Poisson
-   multi-box rejections; round-trip get/set state multi-box). `pops.capabilities()['geometry']`.
+   multi-box rejections; round-trip get/set state multi-box). Inspect layout/AMR metadata with
+   `pops.inspect_capabilities()` and `compiled.inspect_amr()`.
 
 3. **MULTI-RANK System IO** (`python/bindings/system/base/system.cpp` + `include/pops/runtime/system.hpp` + bindings +
    `python/pops/__init__.py`). Finding: `copy_state` / `copy_comp0` / `potential` read `fab(0)`

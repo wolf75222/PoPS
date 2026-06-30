@@ -46,6 +46,23 @@ other pieces belongs in the matching top-level package.
 - `pops.physics` lowers to model IR. It does not own compilation or runtime
   execution.
 
+## Capability Inspection
+
+Use `pops.inspect_capabilities()` to inspect the descriptor/native capability
+matrix before choosing routes. It returns a printable `CapabilityMatrix`; use
+`matrix.by_category("riemann")`, `matrix.by_category("solver")`, or
+`matrix.to_dict()` in tests and docs. After compilation, use
+`compiled.inspect_capabilities()` to see the categories relevant to that
+compiled problem artifact.
+
+```python
+matrix = pops.inspect_capabilities()
+print(matrix)
+
+compiled = pops.compile_problem(model=module, program=T, backend=Production(), layout=layout)
+print(compiled.inspect_capabilities())
+```
+
 ## Example
 
 ```python

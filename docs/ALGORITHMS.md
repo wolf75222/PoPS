@@ -2120,7 +2120,8 @@ of this page. The goal is not to present a partial capability as complete.
   reconstruction per level, then the average_down cascade) for 2 levels + 1..N disjoint, NON-adjacent
   fine patches + a replicated mono-block coarse (mono-rank); this is Phase 4a. The remaining gap
   (Phase 4b) is adjacent patches / fine-fine join, > 2 levels, MPI, or multi-block, which `step()`
-  refuses explicitly. Cf. `pops.capabilities()['schur']['amr']`.
+  refuses explicitly. Inspect the current route metadata with `pops.inspect_capabilities()` and
+  the compiled AMR report with `compiled.inspect_amr()`.
 - Distributed FFT under System. `DistributedFFTSolver` (section 10) exists and is tested separately, but
   `System` under MPI np > 1 refuses the FFT cleanly (no automatic routing); use the
   geometric multigrid.
@@ -2167,4 +2168,3 @@ of this page. The goal is not to present a partial capability as complete.
 - Cut-cell: Shortley & Weller, *The numerical solution of Laplace's equation*, J. Appl. Phys. 9 (1938).
 - Condensed Schur (magnetized Euler-Poisson): see [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md) and
   [HOFFART_FIDELITY.md](HOFFART_FIDELITY.md).
-

@@ -32,7 +32,15 @@ and installs that artifact. Numerical execution is C++/Kokkos/MPI work.
 .. autofunction:: pops.compile_problem
 
 .. autoclass:: pops.CompiledProblem
-   :members: inspect, arguments, estimate_memory, dump_ir, dump_cpp
+   :members: inspect, requirements, inspect_capabilities, arguments, estimate_memory, dump_ir, dump_cpp
+
+.. autofunction:: pops.inspect_capabilities
+
+.. autoclass:: pops.CapabilityMatrix
+   :members: categories, by_category, to_dict
+
+.. autoclass:: pops.CapabilityEntry
+   :members: to_dict
 ```
 
 ## Runtime facade

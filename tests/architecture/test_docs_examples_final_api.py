@@ -39,6 +39,7 @@ def test_active_docs_do_not_advertise_removed_public_front_doors():
         "pops.Problem",
         "pops.compile(",
         "pops.bind(",
+        "pops.capabilities",
         "pops.compile,",
         "pops.bind,",
         "pops.Case",

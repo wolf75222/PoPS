@@ -59,11 +59,11 @@ For the full list of limiters, fluxes and reconstruction variables, see the
 
 `HLLC()` and `Roe()` read a pressure. A compressible ready-made model carries it. A DSL
 model declares the primitive `p` and provides eigenvalues, which makes the generated route expose
-`pressure` and `wave_speeds`. A DSL model can also become a generic `hllc`/`roe` model by emitting
+`pressure` and `wave_speeds`. A physics model can also become a generic `hllc`/`roe` model by emitting
 the capability hooks: `m.enable_hllc()` / `m.enable_roe()` generate them from the declared roles
 (including some 3-variable, non-Euler systems), or provide `m.roe_dissipation()` for a user-supplied
-eigenstructure. See `pops.capabilities()["riemann"]` for the exact gates and
-[write a model with the DSL](../tutorials/write-a-model-with-dsl.md).
+eigenstructure. Inspect the available Riemann rows with
+`pops.inspect_capabilities().by_category("riemann")`.
 
 ## Check backend support
 

@@ -19,7 +19,9 @@ component-0-only AMR regrid predicate.
 Each finding was re-checked against the current master, file by file. The audit is substantially
 still valid, but real progress has landed since the baseline and must not be redone:
 
-- `pops.capabilities()` now exists as a single Python matrix (`capabilities` in `python/pops/__init__.py`).
+- The current public inspection surface is `pops.inspect_capabilities()`, returning a
+  descriptor/native `CapabilityMatrix`; compiled artifacts expose their scoped view through
+  `compiled.inspect_capabilities()`.
 - Named aux phase 1 (ADC-70) is complete end to end on cartesian `System` (X-macro `POPS_AUX_FIELDS`,
   `extra[kAuxMaxExtra=4]`, JIT / native marshaling); the code itself declares the remaining
   AMR / polar / halo work via a `named_followups` key.
@@ -44,8 +46,8 @@ path is a second geometry at the same dimension (`(r,theta)` is a 2-index `Box2D
 it does not make the core ND.
 
 Decision: declare "2D core" an explicit, introspectable invariant (Option A). Add a structured
-dimension key to `capabilities()` and a paragraph in the live limitations doc; cross-link the
-existing `box2d.hpp` comment. A real ND trajectory (Option B: `IndexSpace<Dim>` / `BoxND<Dim>` with
+dimension row to `pops.inspect_capabilities()` and a paragraph in the live limitations doc;
+cross-link the existing `box2d.hpp` comment. A real ND trajectory (Option B: `IndexSpace<Dim>` / `BoxND<Dim>` with
 2D adapters and bit-identity gates) is a milestone-sized bet with genuine ABI / bit-identity risk
 and no current scenario demanding it. File it as a future milestone, not this ticket.
 
@@ -126,15 +128,14 @@ non-zero component / named role.
 This is the smallest, most surgical of the five. Option B (full composable-criteria mechanism that
 subsumes density + phi) is disproportionate and would touch the flat ABI; defer.
 
-## Shared mechanism: capabilities() (coordinate with ADC-297)
+## Shared mechanism: inspect_capabilities()
 
-All five declarations land in the one `pops.capabilities()` dict, which ADC-297 owns. Convention:
-supported variants stay lists under the existing facade keys; hard limits become explicit structured
-scalars, not prose (for example `dimension: 2`, `ref_ratio: 2`, an AMR level bound, a uniform
-`mpi` / `single_rank` flag) rather than buried in `note` strings. ADC-297 should add a snapshot test
-(`python/tests/test_capabilities.py`) so any future limit declaration forces a reviewed diff; today
-there is no such test. This ADR does not implement ADC-297; each of the five issues appends its one
-declaration through that surface.
+Declarations land in the typed `pops.inspect_capabilities()` matrix. Convention: supported
+variants appear as descriptor/native rows grouped by category; hard limits become explicit structured
+capabilities, requirements, options, or native rows, not prose hidden in note strings. The current
+snapshot and native cross-check tests live in `python/tests/test_spec5_routes_optim.py` and
+`python/tests/test_spec5_native_capabilities.py`, so any future capability change forces a reviewed
+diff.
 
 ## Recommended implementation order
 
