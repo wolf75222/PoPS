@@ -6,7 +6,7 @@
 #
 #     conda env create -f environment.yml      # creates the "pops" env
 #     conda activate pops
-#     # then the usual build (cf. README.md)
+#     # then the usual build (cf. README / docs/sphinx/getting-started/installation.md)
 #
 # Update after editing this file:
 #     conda env update -f environment.yml --prune
@@ -87,6 +87,6 @@ dependencies:
   #                           # C++23-capable. Recommended on Linux/cluster without a recent gcc. On macOS,
   #                           # possible but ALL-CONDA then: build _pops with it AND export
   #                           # POPS_CXX=$CONDA_PREFIX/bin/clang++ (do not mix with AppleClang).
-  # - sphinx>=7.0             # optional, for a future generated documentation site
+  # - sphinx>=7.0             # documentation (otherwise docs/sphinx/requirements.txt via pip)
   # - furo
   # - myst-parser

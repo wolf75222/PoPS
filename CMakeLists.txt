@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(PoPS
   VERSION 0.3.0  # single source of the version: propagated to the Python module (__version__), the
-                 # pip wheel and release metadata (see docs/VERSIONING.md). Never duplicate elsewhere.
+                 # pip wheel, Doxygen and Sphinx (see docs/VERSIONING.md). Never duplicate elsewhere.
   DESCRIPTION "Solveur advection-diffusion-couplage hyperbolique-elliptique sur AMR, cible cluster"
   LANGUAGES CXX C  # C : pour que find_package(MPI) cree MPI::MPI_C (exige par le
                    # hdf5-config parallele de spack)
@@ -375,15 +375,16 @@ if(POPS_INSTALL)
 endif()
 
 # --- Cible documentation (top-level UNIQUEMENT) ---------------------------------------------
-# `cmake --build <dir> --target docs` lance scripts/build_docs.sh, qui execute le lint
-# transitoire du corpus conserve. HORS de la cible ALL : jamais construite par un build standard
-# ni par le CI de code ; c'est un raccourci de confort, equivalent a `bash scripts/build_docs.sh`
-# depuis la racine. Top-level seulement : un consommateur (FetchContent / add_subdirectory)
-# n'herite pas de cette cible de commodite.
+# `cmake --build <dir> --target docs` lance scripts/build_docs.sh (lint + Sphinx + Doxygen + site
+# combine). HORS de la cible ALL : jamais construite par un build standard ni par le CI de code ;
+# c'est un raccourci de confort, equivalent a `bash scripts/build_docs.sh` depuis la racine. Le
+# script verifie LUI-MEME ses dependances (sphinx, doxygen, graphviz) et sort proprement si l'une
+# manque -> aucune logique CMake en plus ici. Top-level seulement : un consommateur (FetchContent /
+# add_subdirectory) n'herite pas de cette cible de commodite.
 if(PROJECT_IS_TOP_LEVEL)
   add_custom_target(docs
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_docs.sh
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     USES_TERMINAL
-    COMMENT "Verification de la documentation via scripts/build_docs.sh")
+    COMMENT "Build de la documentation (Sphinx + Doxygen) via scripts/build_docs.sh")
 endif()
