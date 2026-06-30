@@ -4,7 +4,9 @@ name: CI
 # l'install Kokkos). Il n'existe plus de build non-Kokkos -- TOUS les jobs configurent avec
 # -DPOPS_USE_KOKKOS=ON. Topologie (ADC-171) :
 #  - changes : routage par chemins (dorny/paths-filter). Calcule deux drapeaux cpp / python a
-#    partir des fichiers modifies pour ne lancer que le gate utile sur une pull_request.
+#    partir des fichiers modifies pour ne lancer que le gate utile sur une pull_request. Les
+#    changements docs/CI/meta publient seulement le check requis `gate`, sans compiler Kokkos,
+#    sauf opt-in explicite par label `ci-kokkos` ou `ci-full`.
 #  - gate-cpp + gate-python (sur pull_request, gate OBLIGATOIRE) : Kokkos SERIAL, scindes et
 #    tournant EN PARALLELE. gate-cpp = ctest C++ ; gate-python = module _pops + suite python/tests.
 #    Avant ADC-171 c'etait UN seul job sequentiel (build C++ -> module Python -> tests Python) ;
@@ -25,14 +27,14 @@ on:
       - '.gitignore'
   pull_request:
     # Types par defaut (opened, synchronize, reopened) PLUS labeled : poser le label
-    # `ci-full` sur une PR re-declenche le workflow, et set-mode bascule alors en plein
-    # (MPI + Kokkos OpenMP). Sans `labeled`, ajouter un label ne relance aucun run.
+    # `ci-kokkos` ou `ci-full` sur une PR re-declenche le workflow. Sans `labeled`, ajouter
+    # un label ne relance aucun run.
     types: [opened, synchronize, reopened, labeled]
     # NO paths-ignore on pull_request: the `gate` job is a REQUIRED status check (branch
     # protection on master). A required check that never runs blocks the PR forever, so the
     # workflow must trigger on EVERY PR to report `gate`. The internal routing (the `changes`
-    # job + per-job `if:`) still skips the expensive Kokkos builds for doc-only PRs, so the
-    # gate just reports fast. The `push` trigger keeps its paths-ignore (no gate needed there).
+    # job + per-job `if:`) still skips the expensive Kokkos builds for doc/CI/meta-only PRs,
+    # so the gate just reports fast. The `push` trigger keeps its paths-ignore (no gate needed there).
   schedule:
     # Suite complete chaque nuit (03:17 UTC) meme sans push, pour attraper toute
     # derive d'environnement (image runner, deps apt) hors du chemin critique des PR.
@@ -86,14 +88,11 @@ jobs:
               - 'python/amr_system.cpp'
               - 'python/bindings.cpp'
               - 'python/CMakeLists.txt'
-              - '.github/workflows/ci.yml'
-              # L'action composite installe le Kokkos des DEUX gates : la modifier (bump de
-              # version, flags) DOIT re-executer les gates, sinon une PR la touchant seule
-              # passerait au vert sans jamais construire (finding revue ADC-171).
-              - '.github/actions/**'
             python:
               - 'python/**'
-              - '.github/actions/**'
+            # Les changements de workflows/actions CI sont valides par revue + lint YAML local,
+            # et ne compilent pas Kokkos par defaut. Ajouter `ci-kokkos` pour forcer les gates
+            # Serial, ou `ci-full` pour MPI + OpenMP.
             # full : un push master ne lance la suite COMPLETE (MPI + Kokkos OpenMP) que si un
             # chemin build/backend a bouge. Conservateur a dessein -- couvre tout ce qui peut affecter
             # l'artefact compile OU le chemin DSL/production exerce par le job kokkos-openmp (dsl.py et
@@ -109,8 +108,6 @@ jobs:
               - 'pyproject.toml'
               - 'python/**'
               - 'scripts/**'
-              - '.github/actions/**'
-              - '.github/workflows/ci.yml'
 
   # Calcule si la suite COMPLETE (MPI + Kokkos OpenMP) doit tourner. Plein si :
   #  - run nocturne (schedule) OU declenchement manuel (workflow_dispatch) : INCONDITIONNEL
@@ -157,8 +154,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     # Tout evenement non-PR (push master / nightly / dispatch) lance le gate ; sur pull_request,
-    # uniquement si un chemin C++ a bouge (changes.outputs.cpp).
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' }}
+    # uniquement si un chemin C++ a bouge, ou si un label force explicitement Kokkos.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
 
     env:
       # ccache borne : evite que le cache enfle sans fin entre les runs.
@@ -248,8 +245,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
-    # (python) a bouge -- une PR pur-Python ne paie donc QUE ce job, pas gate-cpp.
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' }}
+    # (python) a bouge -- une PR pur-Python ne paie donc QUE ce job, pas gate-cpp. Le label
+    # `ci-kokkos` force aussi ce gate pour valider l'infra Kokkos sans passer en full.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
 
     env:
       # ccache dedie au module Python (.ccache-py) : meme separation que l'ancien job build-and-test.
@@ -350,7 +348,7 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     needs: [changes, gate-python-build]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' }}
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
     strategy:
       fail-fast: false
       matrix:
