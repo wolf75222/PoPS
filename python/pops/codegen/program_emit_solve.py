@@ -53,7 +53,7 @@ def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
 
     The lambda captures ``[ctx, <scratch shared_ptrs>]``; the step closure captures it by value. @p
     lines is the step-body line list (for the rhs_jacvec scratch refresh); None when the operator has
-    no jacvec op (the historical matrix-free path, prelude only)."""
+    no jacvec op and only needs install-time prelude emission."""
     apply_id = v.id
     lam = "apply_A%d" % apply_id
     var[apply_id] = lam
@@ -207,7 +207,7 @@ def _emit_matrix_free_operator(program, v, var, prelude, lines=None):
 
 def _precond_applyfn(v, prelude):
     """Return the C++ expression for the preconditioner ApplyFn of a solve_linear node @p v, emitting any
-    real callback into @p prelude (install-time, captured by the step closure -- alloc-once, like the
+    real apply function into @p prelude (install-time, captured by the step closure -- alloc-once, like the
     operator apply lambda).
 
       - ``"identity"`` -> ``pops::ApplyFn{}`` (an EMPTY std::function = unpreconditioned; the historical
@@ -268,8 +268,8 @@ def _emit_solve_linear(program, v, base, var, prelude, lines):
     method = v.attrs["method"]
     kr = "kr%d" % v.id
     # The preconditioner ApplyFn passed to bicgstab / gmres: an EMPTY pops::ApplyFn{} for the identity
-    # (unpreconditioned), or a real M^{-1} callback for a non-identity scheme. _precond_applyfn emits the
-    # real callback into the prelude (alloc-once, like the operator apply) and returns the C++ expression
+    # (unpreconditioned), or a real M^{-1} apply function for a non-identity scheme. _precond_applyfn emits the
+    # real apply function into the prelude (alloc-once, like the operator apply) and returns the C++ expression
     # that names it; identity returns the empty-ApplyFn token. (CG / Richardson have no precond parameter;
     # the Python layer rejects a non-identity precond for them, so they never reach this branch.)
     precond_arg = _precond_applyfn(v, prelude)

@@ -14,7 +14,7 @@ Sub-packages:
 * :mod:`pops.solvers.nonlinear` -- generated nonlinear solver descriptors;
 * :mod:`pops.solvers.elliptic` -- GeometricMG (typed smoother / coarse / tolerance /
   max_cycles + capabilities) and FFT spectral Poisson descriptors;
-* :mod:`pops.solvers.preconditioners` -- Identity / GeometricMG / User;
+* :mod:`pops.solvers.preconditioners` -- Identity / GeometricMG;
 * :mod:`pops.solvers.options` / :mod:`pops.solvers.tolerances` -- the typed smoother / coarse /
   tolerance sub-descriptors the elliptic solver takes;
 * :mod:`pops.solvers.requirements` -- the solver capability vocabulary.

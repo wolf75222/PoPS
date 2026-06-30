@@ -197,10 +197,11 @@ def test_cg_gmg_precond_rejected(t):
 
 
 def test_unwired_preconditioners_are_not_public(t=None):
-    # Clean break: no public Jacobi()/BlockJacobi() descriptors until their native C++ kernels exist.
+    # Clean break: no public preconditioner descriptor until its native C++ lowering exists.
     from pops.solvers import preconditioners
     assert not hasattr(preconditioners, "Jacobi")
     assert not hasattr(preconditioners, "BlockJacobi")
+    assert not hasattr(preconditioners, "User")
 
 
 def test_string_precond_rejected(t):

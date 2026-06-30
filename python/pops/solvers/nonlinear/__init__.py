@@ -9,7 +9,7 @@ _NEWTON_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True
 def Newton(*, tolerance=1e-10, max_iter=25, fd_eps=1e-7, damping=1.0):
     """Per-cell Newton descriptor for the generated C++ local nonlinear solve.
 
-    This is not a Python callback solver and not a global assembled Newton route. It names the
+    This is not a Python-runtime solver and not a global assembled Newton route. It names the
     compiled per-cell Newton kernel used by ``Program.solve_local_nonlinear``. Public code may
     inspect it as a solver descriptor; numerical work remains generated C++.
     """

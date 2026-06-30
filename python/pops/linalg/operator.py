@@ -107,7 +107,7 @@ class MatrixFreeOperator(Descriptor):
         """Attach the matrix-free action builder and return the decorated builder.
 
         The builder has the same shape as :meth:`pops.time.Program.set_apply`:
-        ``builder(program, out, x) -> result``. It is an authoring callback only. It records
+        ``builder(program, out, x) -> result``. It is an authoring builder only. It records
         an apply sub-block that codegen lowers to C++; it is never called from the runtime
         Krylov iteration.
         """

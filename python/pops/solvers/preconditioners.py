@@ -2,11 +2,11 @@
 
 Only descriptors with a real compiled route are public here. ``Identity()`` lowers to the
 runtime's empty ``ApplyFn`` preconditioner, and ``GeometricMG()`` lowers to the wired
-``pops::GeometricMG`` V-cycle. Jacobi / block-Jacobi are not exposed until their
-native C++ kernels exist: no public descriptor may be decorative or route to Python numerics.
-``User`` surfaces a loaded external preconditioner brick.
+``pops::GeometricMG`` V-cycle. Jacobi, block-Jacobi, and external user preconditioners are
+not exposed until their native C++ lowering exists: every public descriptor must route to
+compiled numerics.
 """
-from pops.descriptors import BrickDescriptor, _external_descriptor, _native
+from pops.descriptors import BrickDescriptor, _native
 
 
 def Identity(**options):
@@ -21,9 +21,4 @@ def GeometricMG(**options):
                    category="preconditioner", **options)
 
 
-def User(brick_id):
-    """Reference an external C++ preconditioner brick loaded through the external catalog."""
-    return _external_descriptor(brick_id, expect_category="preconditioner")
-
-
-__all__ = ["Identity", "GeometricMG", "User"]
+__all__ = ["Identity", "GeometricMG"]

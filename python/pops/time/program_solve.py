@@ -43,7 +43,7 @@ def _lower_krylov_method(method):
 
 # Preconditioner schemes that lower to REAL C++ in the matrix-free Krylov path (Spec 5 sec.7, ADC-516):
 #   - "identity":     the empty pops::ApplyFn{} (unpreconditioned; the historical default);
-#   - "geometric_mg": one V-cycle of the wired pops::GeometricMG, emitted as a real ApplyFn callback.
+#   - "geometric_mg": one V-cycle of the wired pops::GeometricMG, emitted as a real ApplyFn.
 _WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
 
 

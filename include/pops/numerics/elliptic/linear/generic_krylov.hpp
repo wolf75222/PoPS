@@ -2,20 +2,20 @@
 
 /// @file
 /// @brief Generic MATRIX-FREE Krylov solver loops -- richardson_solve, cg_solve, bicgstab_solve,
-///        gmres_solve -- operating on pops::MultiFab with the operator supplied as a CALLBACK (ApplyFn).
+///        gmres_solve -- operating on pops::MultiFab with the operator supplied as a compiled
+///        apply function (ApplyFn).
 ///
 /// Layer: `include/pops/numerics/elliptic/linear`.
 /// Role: the reusable Krylov core. Where TensorKrylovSolver (krylov_solver.hpp) hardwires the
 /// operator and preconditioner to a GeometricMG (the 5-point Laplacian matvec + an MG V-cycle
 /// preconditioner on the symmetric part), this header LIFTS the operator/preconditioner to generic
-/// std::function callbacks: the caller supplies ANY matrix-free apply `out <- A(in)`. The BiCGStab
+/// compiled apply functions: the caller supplies ANY matrix-free apply `out <- A(in)`. The BiCGStab
 /// math and its fixed scratch structure are COPIED from TensorKrylovSolver; only the matvec /
 /// preconditioner indirection differs. Richardson and CG are added alongside. These loops are the
-/// dynamic solver primitives that a later slice wires into the compiled time-program
-/// (ProgramContext / codegen); this header is pure C++ numerics and has no Python / program
-/// dependency.
+/// dynamic solver primitives called by the generated problem artifact through ProgramContext /
+/// codegen; this header is pure C++ numerics and has no Python / program dependency.
 ///
-/// Convention: each loop solves `A x = b` (A = the @p A callback). @p phi is the unknown IN/OUT:
+/// Convention: each loop solves `A x = b` (A = the @p A apply function). @p phi is the unknown IN/OUT:
 /// the incoming value is the initial guess (warm start), the outgoing value is the solution. @p rhs
 /// is the right-hand side, never modified. Convergence is the RELATIVE L2 residual
 /// `||r|| <= rel_tol * ||b||` (||.|| = sqrt of the Krylov inner product, a GLOBAL L2 norm), or
@@ -61,7 +61,7 @@ namespace pops {
 // KrylovResult is shared via krylov_result.hpp (included above), so this header and the
 // GeometricMG-coupled krylov_solver.hpp never carry hand-synchronised copies of the struct.
 
-/// Matrix-free operator callback: `out <- A(in)`. The caller supplies any apply (e.g. fill ghosts +
+/// Matrix-free operator apply function: `out <- A(in)`. The caller supplies any apply (e.g. fill ghosts +
 /// a stencil matvec). @p in is logically read-only (a const ref); a matvec that needs to refresh
 /// @p in's ghosts may do so, but must not change its valid cells. @p out is fully overwritten.
 using ApplyFn = std::function<void(MultiFab& out, const MultiFab& in)>;
@@ -205,7 +205,7 @@ inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rh
 
 /// Preconditioned BiCGStab, solving A x = b for a general (possibly non-symmetric) operator A. The
 /// algorithm and the fixed scratch footprint are copied from TensorKrylovSolver::solve; only the
-/// operator/preconditioner are lifted to callbacks. The preconditioner @p precond is OPTIONAL: an
+/// operator/preconditioner are lifted to apply functions. The preconditioner @p precond is OPTIONAL: an
 /// empty std::function means the identity (unpreconditioned BiCGStab), in which case phat = p and
 /// shat = s directly and the two phat/shat scratch fields are not allocated.
 ///
