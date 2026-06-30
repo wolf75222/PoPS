@@ -241,9 +241,9 @@ def _emit_solve_linear(program, v, base, var, prelude, lines):
     ``sf_sol{id}`` is a PERSISTENT shared_ptr (prelude, captured by the step closure); the step body
     seeds the initial guess (zero, or a copy of the supplied guess), then calls
     ``pops::cg_solve`` / ``bicgstab_solve`` / ``richardson_solve`` with the operator's apply lambda.
-    The KrylovResult is kept (diagnostics) but the trip count is decided C++-side, inside the loop --
-    invisible to the IR. The result token is the solution field, dereferenced for the final copy back
-    into the block state at commit."""
+    The KrylovResult is kept and checked: convergence / residual diagnostics stay C++-side, while
+    profiling counters expose the solve count and total Krylov iterations. The result token is the
+    solution field, dereferenced for the final copy back into the block state at commit."""
     op_value = v.inputs[0]
     rhs_in = v.inputs[1]
     guess_in = v.inputs[2] if v.attrs["has_guess"] else None
@@ -288,4 +288,13 @@ def _emit_solve_linear(program, v, base, var, prelude, lines):
         lines.append("pops::KrylovResult %s = pops::richardson_solve(%s, *%s, %s, "
                      "static_cast<pops::Real>(1), %s, %d);"
                      % (kr, lam, sol_sp, rhs_tok, tol, max_iter))
-    lines.append("(void)%s;" % kr)
+    lines.append("ctx.profiler().count(\"krylov_solves\");")
+    lines.append("ctx.profiler().count(\"krylov_iters\", %s.iters);" % kr)
+    lines.append("if (!%s.converged) {" % kr)
+    lines.append("  ctx.profiler().count(\"krylov_failures\");")
+    lines.append(
+        "  throw std::runtime_error(std::string(\"pops.solve_linear: %s did not converge after \") + "
+        "std::to_string(%s.iters) + \" iteration(s), rel_residual=\" + "
+        "std::to_string(static_cast<double>(%s.rel_residual)) + \", max_iter=%d\");"
+        % (method, kr, kr, max_iter))
+    lines.append("}")

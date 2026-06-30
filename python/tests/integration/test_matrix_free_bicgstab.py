@@ -40,6 +40,10 @@ def test_matrix_free_bicgstab_codegen_calls_cpp_krylov():
     assert "pops::ApplyFn apply_A" in cpp
     assert "ctx.laplacian" in cpp
     assert "pops::bicgstab_solve" in cpp
+    assert "krylov_solves" in cpp
+    assert "krylov_iters" in cpp
+    assert "did not converge" in cpp
+    assert "(void)kr" not in cpp
     assert "GeneratedProgram" in cpp
     assert ("install_" + "program") not in cpp
 

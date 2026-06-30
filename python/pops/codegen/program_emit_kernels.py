@@ -299,6 +299,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #include <limits>                              // std::numeric_limits (dt_bound +inf sentinel)
 #include <memory>                              // std::make_shared (persistent matrix-free scratch)
 #include <stdexcept>                           // std::runtime_error (AMR install fail-loud, ADC-508)
+#include <string>                              // std::string / std::to_string (Krylov diagnostics)
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)
 
 extern "C" const char* pops_problem_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
