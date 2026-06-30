@@ -57,6 +57,13 @@ except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this 
 fails = 0
 
 
+def _module(model):
+    if hasattr(model, "to_module"):
+        return model.to_module()
+    module = model.module
+    return module() if callable(module) else module
+
+
 def chk(cond, label):
     global fails
     print("  [%s] %s" % ("OK " if cond else "XX ", label))
@@ -144,7 +151,7 @@ def _unknown_source_program(name="unknown_src"):
     return P
 
 
-src = _electric_fe_program().emit_cpp_program(model=m_named)
+src = _electric_fe_program().emit_cpp_program(model=_module(m_named))
 # sources=["electric"] excludes "default" (ADC-425) -> the flux base is the flux-only primitive, NOT
 # ctx.rhs_into (which would fold the default source); the named electric source is axpy'd on top.
 chk("ctx.neg_div_flux_default_into(0, " in src and "ctx.rhs_into(" not in src,
@@ -157,7 +164,8 @@ chk("auxA(i, j, 1)" in src and "auxA(i, j, 2)" in src,
 chk("ctx.axpy(" in src, "the named source is accumulated onto R via axpy (R += S_electric)")
 
 # Unknown source name -> clear ValueError (spec error 1).
-chk(raises(ValueError, lambda: _unknown_source_program().emit_cpp_program(model=named_source_model())),
+chk(raises(ValueError, lambda: _unknown_source_program().emit_cpp_program(
+    model=_module(named_source_model()))),
     "an unknown source_term name in rhs raises ValueError")
 
 # ADC-425: a named-source rhs on a model WITH a non-empty DEFAULT source now LOWERS (the old
@@ -182,10 +190,11 @@ def _extra_fe_program(srcs, name="extra_fe"):
     return P
 
 
-src_extra_only = _extra_fe_program(["extra"]).emit_cpp_program(model=_both_source_model())
+src_extra_only = _extra_fe_program(["extra"]).emit_cpp_program(model=_module(_both_source_model()))
 chk("ctx.neg_div_flux_default_into(0, " in src_extra_only and "ctx.rhs_into(" not in src_extra_only,
     "rhs(sources=['extra']) on a default-source model uses the flux-only base (no double-count)")
-src_extra_default = _extra_fe_program(["default", "extra"]).emit_cpp_program(model=_both_source_model())
+src_extra_default = _extra_fe_program(["default", "extra"]).emit_cpp_program(
+    model=_module(_both_source_model()))
 chk("ctx.rhs_into(0, " in src_extra_default,
     "rhs(sources=['default','extra']) folds the default via rhs_into + the extra source axpy'd")
 
@@ -215,7 +224,7 @@ def predictor_corrector_program(name="predictor_corrector_poisson_lorentz"):
 
 
 # The predictor-corrector emits (with a model) -- it uses named sources + local solves.
-chk(bool(predictor_corrector_program().emit_cpp_program(model=named_source_model())),
+chk(bool(predictor_corrector_program().emit_cpp_program(model=_module(named_source_model()))),
     "the full predictor-corrector Program emits C++ (named sources + Lorentz local solves)")
 
 # ---- (B)/(C) end-to-end: skip unless the install_program binding is present ----
@@ -279,7 +288,7 @@ def analytic_lorentz_apply(U):
 # ---- (B) focused: one FE step, named-source rhs == default-source eval_rhs ----
 print("== (B) focused: rhs(sources=['electric']) == -div F + electric (one FE step) ==")
 try:
-    compiled_fe = pops.compile_problem(model=named_source_model("electric_fe_prog"),
+    compiled_fe = pops.compile_problem(model=_module(named_source_model("electric_fe_prog")),
                                       time=_electric_fe_program())
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
@@ -301,7 +310,7 @@ chk(float(np.abs(U_fe - U0).max()) > 1e-6, "the electric source actually moved t
 # ---- (C) full predictor-corrector parity ----
 print("== (C) full predictor-corrector parity ==")
 try:
-    compiled_pc = pops.compile_problem(model=named_source_model("pc_prog"),
+    compiled_pc = pops.compile_problem(model=_module(named_source_model("pc_prog")),
                                       time=predictor_corrector_program())
 except RuntimeError as exc:
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
