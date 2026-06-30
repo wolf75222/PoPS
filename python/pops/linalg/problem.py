@@ -4,7 +4,7 @@
 :class:`~pops.linalg.operator.LinearOperator` / :class:`~pops.linalg.operator.MatrixFreeOperator`),
 the unknown handle ``x`` and the right-hand side ``b``. :class:`Residual` names ``b - A x`` for
 a problem. Both are inert descriptors: they declare the algebra, they do NOT solve it (the
-solvers live in :mod:`pops.solvers`, forthcoming) and they compute nothing.
+solvers live in :mod:`pops.solvers`) and they compute nothing.
 """
 from pops.descriptors import Availability, Descriptor
 from .operator import LinearOperator, MatrixFreeOperator
@@ -14,10 +14,17 @@ _OPERATOR_TYPES = (LinearOperator, MatrixFreeOperator)
 
 
 def _handle_name(handle):
-    """A short, stable name for an unknown / rhs handle (its ``name`` attr, else its repr)."""
+    """A short, stable name for an unknown / rhs handle."""
     if handle is None:
         return None
-    return getattr(handle, "name", repr(handle))
+    if isinstance(handle, str):
+        return handle
+    name = getattr(handle, "name", None)
+    if name is not None:
+        return str(name)
+    raise TypeError(
+        "LinearProblem operands must be named handles or strings; got unnamed %s"
+        % type(handle).__name__)
 
 
 class LinearProblem(Descriptor):
@@ -28,7 +35,7 @@ class LinearProblem(Descriptor):
     :class:`~pops.linalg.operator.MatrixFreeOperator`), the unknown handle ``x`` and the
     right-hand-side handle ``b``. The unknown / rhs are stored and surfaced, not interpreted,
     here. :meth:`validate` rejects an ``operator`` that is not a linear operator descriptor.
-    It is inert; it does NOT solve (that is :mod:`pops.solvers`, forthcoming).
+    It is inert; it does NOT solve (that is :mod:`pops.solvers`).
     """
 
     category = "linear_problem"
@@ -63,6 +70,15 @@ class LinearProblem(Descriptor):
             return Availability.no(
                 "%s needs a LinearOperator/MatrixFreeOperator; got %r" % (self.name, got),
                 missing=["operator"])
+        missing = []
+        if self.unknown is None:
+            missing.append("unknown")
+        if self.rhs is None:
+            missing.append("rhs")
+        if missing:
+            return Availability.no(
+                "%s is incomplete; missing %s" % (self.name, ", ".join(missing)),
+                missing=missing)
         return Availability.yes()
 
     def validate(self, context=None):
@@ -70,6 +86,12 @@ class LinearProblem(Descriptor):
             raise TypeError(
                 "%s: operator must be a pops.linalg.LinearOperator or MatrixFreeOperator; "
                 "got %r" % (self.name, type(self.operator).__name__))
+        if self.unknown is None:
+            raise ValueError("%s: unknown must be provided" % self.name)
+        if self.rhs is None:
+            raise ValueError("%s: rhs must be provided" % self.name)
+        _handle_name(self.unknown)
+        _handle_name(self.rhs)
         return True
 
     def inspect(self):

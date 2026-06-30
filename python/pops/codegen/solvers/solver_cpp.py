@@ -139,7 +139,7 @@ class _SolverCppLowering:
         elif op == "while":
             self._emit_while(v, lines, result_id)
         else:
-            raise NotImplementedError(
+            raise ValueError(
                 "generate_solver_cpp: solver-IR op %r (value %r) is not lowerable yet; the custom "
                 "solver DSL supports zeros_like / norm2 / dot / apply / residual / combine / "
                 "scalar_int / logical_and / while_ (Spec 3 section 20)" % (op, v.name))
@@ -160,7 +160,7 @@ class _SolverCppLowering:
             lines.append("const pops::Real %s = pops::dot(%s, %s);"
                          % (tok, self._var[a.id], self._var[b.id]))
         else:
-            raise NotImplementedError(
+            raise ValueError(
                 "generate_solver_cpp: reduction kind %r is not lowerable in a custom solver "
                 "(use norm2 / dot)" % (kind,))
 

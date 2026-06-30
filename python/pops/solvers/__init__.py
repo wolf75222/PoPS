@@ -12,8 +12,8 @@ Sub-packages:
 * :mod:`pops.solvers.krylov` -- matrix-free Krylov solvers (CG / BiCGStab / GMRES / Richardson);
 * :mod:`pops.solvers.schur` -- Schur and condensed-Schur solver descriptors;
 * :mod:`pops.solvers.nonlinear` -- generated nonlinear solver descriptors;
-* :mod:`pops.solvers.elliptic` -- the RICH GeometricMG (typed smoother / coarse / tolerance /
-  max_cycles + capabilities) and the planned FFT spectral Poisson solver;
+* :mod:`pops.solvers.elliptic` -- GeometricMG (typed smoother / coarse / tolerance /
+  max_cycles + capabilities) and FFT spectral Poisson descriptors;
 * :mod:`pops.solvers.preconditioners` -- Identity / GeometricMG / User;
 * :mod:`pops.solvers.options` / :mod:`pops.solvers.tolerances` -- the typed smoother / coarse /
   tolerance sub-descriptors the elliptic solver takes;
@@ -21,28 +21,20 @@ Sub-packages:
 
 The ``solvers`` :class:`types.SimpleNamespace` gathers the Krylov + Schur factories under one
 attribute surface (``solvers.CG(max_iter=...)`` / ``solvers.GMRES(max_iter=...)`` /
-``solvers.Schur()``); the custom-solver
-GENERATION DSL (``@solver`` / ``SolverContext`` /
-``build_solver_ir`` / ``generate_solver_cpp``) is internal / experimental and lives in
-:mod:`pops.codegen.solvers` (Spec 5 criterion 19; it imports the heavy ``pops.time`` lazily); it
-is NOT a public attribute of this package. The custom-solver registry hooks (``solvers.custom`` /
-``solvers.registered``) are attached onto the ``solvers`` namespace below when
-:mod:`pops.codegen.solvers` is imported (so this package stays a pure descriptor catalog).
+``solvers.Schur()``). Solver-generation helpers live only in
+:mod:`pops.codegen.solvers` experimental internals; importing that package must not mutate this
+public catalog.
 """
 from types import SimpleNamespace
 
-from . import elliptic, krylov, nonlinear, options, requirements, schur, tolerances
+from . import elliptic, krylov, nonlinear, options, preconditioners, requirements, schur, tolerances
 from .elliptic import FFT, GeometricMG
 from .krylov import CG, BiCGStab, GMRES, Richardson
-from .preconditioners import preconditioners
 from .schur import Schur
 
 # The flat solver factory surface (``solvers.CG(max_iter=...)`` ... ``solvers.Schur()``), the one public
-# factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). The custom-solver
-# registry hooks
-# (``solvers.custom`` / ``solvers.registered``) are attached onto this namespace by
-# :mod:`pops.codegen.solvers`, which owns the generation DSL -- keeping ``pops.solvers`` free of
-# any DSL / codegen import (no cycle: pops.solvers imports nothing).
+# factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). It intentionally
+# exposes only compiled solver descriptors, never custom-solver authoring hooks.
 solvers = SimpleNamespace(
     CG=CG, BiCGStab=BiCGStab, GMRES=GMRES, Richardson=Richardson,
     Schur=Schur,

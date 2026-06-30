@@ -316,13 +316,16 @@ def test_lib_solvers_shim_is_removed():
     for absent in ("solver", "build_solver_ir", "generate_solver_cpp", "SolverContext", "SolverIR"):
         assert not hasattr(solvers, absent), \
             "pops.solvers is a catalog, not the authoring DSL (saw %r)" % absent
-    # The registry hooks are wired onto the shared solvers namespace by the DSL package.
+    # The experimental registry stays in pops.codegen.solvers; importing it must not mutate the
+    # public pops.solvers catalog.
     cs = pytest.importorskip("pops.codegen.solvers")
     assert getattr(cs, "__experimental__", None) is True
     assert callable(cs.solver)
     assert callable(cs.generate_solver_cpp)
-    assert callable(ns.custom)
-    assert callable(ns.registered)
+    assert callable(cs.custom_solver)
+    assert callable(cs.registered_solvers)
+    assert not hasattr(ns, "custom")
+    assert not hasattr(ns, "registered")
 
 
 def test_install_path_token_resolution_for_rich_descriptor():

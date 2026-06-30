@@ -4,12 +4,11 @@
 builder. Running the builder authors a SOLVER IR (matrix-free Krylov primitives:
 norm2 / dot / apply / linear_combine / while) and computes NOTHING in Python --
 no float arithmetic on real data, no numpy callback is captured. The generated
-C++ lowering + run is the deferred C++ follow-up: it raises a clear ADC-462
-NotImplementedError rather than faking a Python solve.
+C++ lowering is exercised directly and never faked as a Python solve.
 
 These tests are the AUTHORING slice: they assert the registration shape, the IR
-ops, the no-Python-compute invariant, native-solver selectability, and the
-honest deferral. They never run a custom solver numerically.
+ops, the no-Python-compute invariant, native-solver selectability, and the generated C++
+lowering. They never run a custom solver numerically in Python.
 """
 import pytest
 
@@ -33,6 +32,7 @@ lib = _t.SimpleNamespace(
     _register_manifest=_desc._register_manifest,
     _clear_external_catalog=_desc._clear_external_catalog,
     solvers=_solv.solvers, preconditioners=_solv.preconditioners, solver=_cs.solver,
+    custom_solver=_cs.custom_solver, registered_solvers=_cs.registered_solvers,
     build_solver_ir=_cs.build_solver_ir, generate_solver_cpp=_cs.generate_solver_cpp,
     SolverContext=_cs.SolverContext, SolverIR=_cs.SolverIR,
     spatial=_num.spatial, fields=_flds.catalog,
@@ -79,8 +79,10 @@ def test_descriptor_is_registered_in_the_catalog():
     def s(ctx, A, b):
         return _richardson(ctx, A, b)
 
-    assert lib.solvers.custom("cataloged_solver") is s
-    assert "cataloged_solver" in lib.solvers.registered()
+    assert lib.custom_solver("cataloged_solver") is s
+    assert "cataloged_solver" in lib.registered_solvers()
+    assert not hasattr(lib.solvers, "custom")
+    assert not hasattr(lib.solvers, "registered")
 
 
 def test_builder_builds_an_ir_with_the_expected_ops():

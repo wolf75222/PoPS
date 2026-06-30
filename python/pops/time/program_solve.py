@@ -19,11 +19,9 @@ def _lower_krylov_method(method):
     """Lower a typed Krylov descriptor to its internal scheme token (Spec 5 sec.7).
 
     ``method`` is a :mod:`pops.solvers.krylov` descriptor (``CG(max_iter=...)`` /
-    ``GMRES(max_iter=...)`` / ``BiCGStab(max_iter=...)`` / ``Richardson(max_iter=...)``);
-    its ``scheme`` is the C++ token (``"cg"`` ...) the
-    runtime keys on, so the typed object lowers byte-identically to the historical string. A
-    bare algorithm-selector string is REJECTED (Spec 5 forbids keeping the string form on the
-    public surface); ``None`` defaults to the built-in ``cg`` scheme and still requires the
+    ``GMRES(max_iter=...)`` / ``BiCGStab(max_iter=...)`` / ``Richardson(max_iter=...)``).
+    Its ``scheme`` selects the compiled C++ Krylov routine. A bare algorithm-selector string is
+    rejected; ``None`` defaults to the built-in ``cg`` scheme and still requires the
     ``solve_linear(max_iter=...)`` budget.
     """
     if method is None:
@@ -108,7 +106,8 @@ class _ProgramSolve(_ProgramConstants):
         method / tolerance / iteration budget.
 
           - @p operator: a ``matrix_free_operator`` value (with a ``set_apply`` body);
-          - @p rhs: the right-hand side -- a scalar_field, or (MVP) a 1-component State value;
+          - @p rhs: the right-hand side -- a scalar_field, or a State value whose component count is
+            validated when the model is known;
           - @p initial_guess: warm start (defaults to zero);
           - @p method: a TYPED Krylov descriptor (``pops.solvers.krylov.CG(max_iter=...)`` (SPD),
             ``BiCGStab(max_iter=...)`` (general), ``Richardson(max_iter=...)``, or
@@ -142,10 +141,9 @@ class _ProgramSolve(_ProgramConstants):
                 restart=restart,
             )
 
-        # Spec 5 sec.7: method / preconditioner are TYPED descriptors (pops.solvers.krylov /
-        # pops.solvers.preconditioners). They lower to the SAME internal scheme tokens the runtime
-        # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
-        # a bare algorithm-selector string is rejected (the public string form is removed).
+        # Spec 5 sec.7: method / preconditioner are typed descriptors
+        # (pops.solvers.krylov / pops.solvers.preconditioners). They lower to compiled runtime
+        # scheme tokens; a bare algorithm-selector string is rejected.
         opts = _method_options(method)
         if "tolerance" in opts and tol == 1e-8:
             tol = opts["tolerance"]
@@ -294,7 +292,7 @@ class _ProgramSolve(_ProgramConstants):
 
         Two forms (additive; the positional ``(block, state)`` form is unchanged):
 
-          - ``P.commit("plasma", U_next)`` (LEGACY) commits a State value to a named block;
+          - ``P.commit("plasma", U_next)`` commits a State value to a named block;
           - ``P.commit("plasma", U_next, fields=fields_np1)`` commits the State and records that
             ``fields_np1`` is the coherent field context solved from that final State. The generated
             step still stores only the conservative state; the field solve remains live and fills the

@@ -19,12 +19,11 @@ and lowering it to C++ text is a codegen concern. The DSL was formerly parked un
 shim is removed (``pops.lib`` is presets-only; the solver descriptors live only in
 :mod:`pops.solvers`).
 
-The authoring IR (:mod:`.dsl`) imports the heavy :mod:`pops.time` LAZILY (in ``build_solver_ir``),
-so this package adds no module-scope ``time`` edge; the C++ lowering (:mod:`.solver_cpp`) is pure
-string formatting (no ``_pops``). Importing this package wires the custom-solver registry hooks
-(``solvers.custom`` / ``solvers.registered``) onto the shared :data:`pops.solvers.solvers`
-namespace -- a downward ``codegen -> solvers`` edge (``pops.solvers`` imports nothing, so no
-cycle).
+The authoring IR (:mod:`.dsl`) imports the heavy :mod:`pops.time` lazily (in
+``build_solver_ir``), so this package adds no module-scope ``time`` edge; the C++ lowering
+(:mod:`.solver_cpp`) is pure string formatting (no ``_pops``). Importing this package does not
+mutate :mod:`pops.solvers`: the public solver catalog remains limited to compiled descriptors,
+while this experimental codegen package owns its own registry helpers.
 """
 from .dsl import (SolverContext, SolverIR, build_solver_ir, solver,
                   _as_descriptor, _custom_solver, _registered_solvers)
@@ -33,15 +32,10 @@ from .solver_cpp import generate_solver_cpp
 # This DSL is internal / experimental, not a stable public API (Spec 5 criterion 19).
 __experimental__ = True
 
-# Wire the custom-solver registry hooks onto the shared pops.solvers.solvers namespace, where the
-# authoring DSL lives. Attaching them here (not in pops.solvers, which must stay free of any DSL
-# import) keeps pops.solvers a pure descriptor catalog. Idempotent: re-importing just re-binds the
-# same callables. pops.solvers imports nothing, so this codegen -> solvers edge stays acyclic.
-from pops.solvers import solvers as solvers  # noqa: E402  (the shared factory namespace)
-
-solvers.custom = _custom_solver
-solvers.registered = _registered_solvers
+custom_solver = _custom_solver
+registered_solvers = _registered_solvers
 
 __all__ = ["solver", "build_solver_ir", "generate_solver_cpp",
-           "SolverContext", "SolverIR", "solvers",
+           "SolverContext", "SolverIR",
+           "custom_solver", "registered_solvers",
            "_as_descriptor", "_custom_solver", "_registered_solvers"]

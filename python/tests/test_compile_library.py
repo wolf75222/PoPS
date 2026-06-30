@@ -33,6 +33,7 @@ lib = _t.SimpleNamespace(
     _register_manifest=_desc._register_manifest,
     _clear_external_catalog=_desc._clear_external_catalog,
     solvers=_solv.solvers, preconditioners=_solv.preconditioners, solver=_cs.solver,
+    custom_solver=_cs.custom_solver, registered_solvers=_cs.registered_solvers,
     build_solver_ir=_cs.build_solver_ir, generate_solver_cpp=_cs.generate_solver_cpp,
     SolverContext=_cs.SolverContext, SolverIR=_cs.SolverIR,
     spatial=_num.spatial, fields=_flds.catalog,
@@ -129,7 +130,7 @@ def test_generated_symbols_collects_generated_bricks():
         x = ctx.zeros_like(b)
         return ctx.combine(x + b)
 
-    man = pops.compile_library("lib.so", objects=[lib.solvers.custom("my_richardson")])
+    man = pops.compile_library("lib.so", objects=[lib.custom_solver("my_richardson")])
     assert man.bricks[0]["brick_type"] == "generated"
     # A generated brick contributes a symbol the (future) .so would export.
     assert "my_richardson" in man.generated_symbols
@@ -269,7 +270,7 @@ def test_emit_exports_generated_symbols(tmp_path):
         return ctx.combine(x + b)
 
     so = str(tmp_path / "gen.so")
-    pops.compile_library("gen.so", objects=[lib.solvers.custom("my_richardson")],
+    pops.compile_library("gen.so", objects=[lib.custom_solver("my_richardson")],
                         emit=True, so_path=so)
     back = pops.read_library_manifest(so)
     assert "my_richardson" in back.generated_symbols

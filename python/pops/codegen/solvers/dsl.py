@@ -45,9 +45,9 @@ def solver(name=None, signature=None):
     builder off its identity key, selectable wherever a native solver is (its
     ``scheme`` mirrors ``pops.solvers.GMRES(max_iter=...)``).
 
-    The generated C++ lowering + run is the deferred C++ follow-up: see
-    :func:`pops.codegen.solvers.solver_cpp.generate_solver_cpp` (it raises a clear ADC-462
-    ``NotImplementedError``; it is never faked as a Python solve).
+    The generated C++ lowering lives in
+    :func:`pops.codegen.solvers.solver_cpp.generate_solver_cpp`; unsupported authoring ops are
+    rejected during lowering, never faked as a Python solve.
     """
     if not isinstance(name, str) or not name:
         raise ValueError("@pops.codegen.solvers.solver requires a non-empty name=")

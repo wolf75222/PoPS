@@ -20,8 +20,7 @@ class _Handle:
     """A minimal named vector handle (an unknown / rhs / operand reference) for the tests.
 
     A real operand is a typed field/state handle carrying a ``name``; the descriptors surface
-    operands by that name. A bare string has no ``name``, so the descriptors fall back to its
-    repr -- the tests use this stub to model the intended (named-handle) usage.
+    operands by that name. Tests also allow plain strings as stable user-chosen names.
     """
 
     def __init__(self, name):
@@ -121,6 +120,8 @@ def test_linear_problem_named():
     p = LinearProblem(operator=A, unknown="x", rhs="b", name="poisson")
     assert p.name == "poisson"
     assert p.options()["name"] == "poisson"
+    assert p.options()["unknown"] == "x"
+    assert p.options()["rhs"] == "b"
 
 
 def test_linear_problem_matrix_free_capability_propagates():
@@ -155,6 +156,26 @@ def test_linear_problem_rejects_non_operator():
 def test_linear_problem_rejects_none_operator():
     p = LinearProblem(operator=None, unknown="x", rhs="b")
     with pytest.raises(TypeError):
+        p.validate()
+
+
+def test_linear_problem_rejects_missing_unknown_or_rhs():
+    A = LinearOperator("A")
+    p_unknown = LinearProblem(operator=A, rhs="b")
+    with pytest.raises(ValueError, match="unknown"):
+        p_unknown.validate()
+    assert "unknown" in p_unknown.available().missing
+
+    p_rhs = LinearProblem(operator=A, unknown="x")
+    with pytest.raises(ValueError, match="rhs"):
+        p_rhs.validate()
+    assert "rhs" in p_rhs.available().missing
+
+
+def test_linear_problem_rejects_unnamed_operands():
+    A = LinearOperator("A")
+    p = LinearProblem(operator=A, unknown=object(), rhs="b")
+    with pytest.raises(TypeError, match="named handles"):
         p.validate()
 
 
