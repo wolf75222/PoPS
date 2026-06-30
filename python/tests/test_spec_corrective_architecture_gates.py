@@ -282,3 +282,24 @@ def test_pcall_generated_module_path_has_no_notimplemented_errors():
     call_start = source.index('    if v.op == "call":')
     call_end = source.index("    if v.op in _MODEL_OPS:", call_start)
     assert "NotImplementedError" not in source[call_start:call_end]
+
+
+def test_model_kernel_missing_declarations_are_validation_errors():
+    """Missing model declarations are invalid authoring, not deferred implementation routes."""
+    from pops.codegen.program_emit_kernels import _model_impl
+    from pops.codegen.program_emit_model_kernels import (
+        _emit_flux_kernel,
+        _emit_source_kernel,
+        _linear_source_rows,
+    )
+
+    mdl = manual.build_model()
+    impl = _model_impl(mdl)
+
+    for emit in (
+        lambda: _emit_source_kernel(mdl, "missing", "u", "r"),
+        lambda: _emit_flux_kernel(mdl, ["missing"], "u", "fx", "fy"),
+        lambda: _linear_source_rows(impl, "missing"),
+    ):
+        with pytest.raises(ValueError):
+            emit()

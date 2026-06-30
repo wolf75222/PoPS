@@ -27,7 +27,7 @@ def _emit_source_kernel(model, name, state_var, out_var, block_idx=0):
     binds the ``params`` struct; a source reading no runtime param is byte-identical (params_block None)."""
     impl = _model_impl(model)
     if name not in impl._source_terms:
-        raise NotImplementedError(
+        raise ValueError(
             "emit_cpp_program: source '%s' is not declared on the model (m.source_term); declared: %s"
             % (name, sorted(impl._source_terms)))
     exprs = impl._source_terms[name]
@@ -117,7 +117,7 @@ def _emit_flux_kernel(model, names, state_var, fx_var, fy_var, block_idx=0):
     flux_terms = impl._flux_terms
     for name in names:
         if name not in flux_terms:
-            raise NotImplementedError(
+            raise ValueError(
                 "emit_cpp_program: flux '%s' is not declared on the model (m.flux_term); declared: %s"
                 % (name, sorted(flux_terms)))
     n = len(impl.cons_names)
@@ -208,7 +208,7 @@ def _residual_term_exprs(impl, w):
     if w.op == "source":
         name = w.attrs["source"]
         if name not in impl._source_terms:
-            raise NotImplementedError(
+            raise ValueError(
                 "emit_cpp_program: residual source '%s' is not declared on the model (m.source_term); "
                 "declared: %s" % (name, sorted(impl._source_terms)))
         return list(impl._source_terms[name])
@@ -218,7 +218,7 @@ def _residual_term_exprs(impl, w):
         # (L U)_r = sum_c L[r][c] * cons_c -- a per-component Expr in the cons names + aux.
         return [sum((rows[r][c] * Var(impl.cons_names[c], "cons") for c in range(n)),
                     Const(0.0)) for r in range(n)]
-    raise NotImplementedError(
+    raise ValueError(
         "emit_cpp_program: residual op '%s' is not a per-cell Expr term (source / apply only)" % w.op)
 
 
@@ -251,7 +251,7 @@ def _emit_residual_eval(impl, v, n):
             coeffs = w.attrs["coeffs"]  # aligned with w.inputs; each a dt-polynomial power->float dict
             for inp in w.inputs:
                 if inp.id not in comps:  # an input outside the residual sub-block (validate() guards this)
-                    raise NotImplementedError(
+                    raise ValueError(
                         "emit_cpp_program: residual combine reads value '%s' which is not produced "
                         "inside the residual (only the iterate / guess and earlier residual ops are "
                         "available to a per-cell Newton kernel)" % inp.name)
@@ -263,7 +263,7 @@ def _emit_residual_eval(impl, v, n):
                 row.append(" + ".join(parts) if parts else "static_cast<pops::Real>(0)")
             comps[w.id] = row
         else:  # builder guards _RESIDUAL_LOCAL_OPS; this is belt-and-suspenders
-            raise NotImplementedError(
+            raise ValueError(
                 "emit_cpp_program: residual op '%s' is not lowerable in a local Newton kernel" % w.op)
     result = comps[v.attrs["residual"].id]
     for c in range(n):
@@ -359,7 +359,7 @@ def _linear_source_rows(impl, name):
     """The n_cons x n_cons matrix of Expr of a model linear source @p name (m.linear_source).
     @p impl is the model-codegen protocol object."""
     if name not in impl._linear_sources:
-        raise NotImplementedError(
+        raise ValueError(
             "emit_cpp_program: linear source '%s' is not declared on the model (m.linear_source); "
             "declared: %s" % (name, sorted(impl._linear_sources)))
     return impl._linear_sources[name]
