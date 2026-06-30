@@ -9,8 +9,8 @@ English (milestone "Documentation utilisateur en anglais"). Code comments are ou
 - **en-US**, sober technical register. No marketing, no emphasis, no AI filler. Same de-AI
   rules as the rest of the repo (see [DOC_QUALITY.md](DOC_QUALITY.md)).
 - Replace the French text; the docs are monolingual English, not bilingual.
-- `docs/sphinx/**` stays **ASCII strict** (English is natively ASCII). No em-dash (U+2014)
-  anywhere. `docs/check_docs.py` must stay green.
+- User-facing documentation stays **ASCII strict**. No em-dash (U+2014) anywhere.
+  `docs/check_docs.py` must stay green.
 - Unchanged: figures, code blocks, `literalinclude`, identifiers, API names, paths, command
   output. Only prose is translated.
 - Domain terms kept as-is: diocotron, ExB, Helmholtz, Schur, Krylov, Berger-Rigoutsos,

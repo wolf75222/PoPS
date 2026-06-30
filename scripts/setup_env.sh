@@ -20,8 +20,8 @@
 # Overrides remain possible: CC/CXX set by hand before a build win, and the DSL runtime follows the
 # compiler baked into _pops anyway.
 #
-# It also makes the Linux/Ubuntu user path reliable end to end (cf.
-# docs/sphinx/getting-started/installation.md): it bootstraps conda guidance, configures conda-forge to
+# It also makes the Linux/Ubuntu user path reliable end to end: it bootstraps conda guidance,
+# configures conda-forge to
 # survive HTTP 429, forces a CPU Kokkos by default (the bare `kokkos` resolves to the CUDA variant on a
 # host with an NVIDIA driver -> `pip install .` then fails "Could not find nvcc"), persists the DSL
 # runtime variables in the env, and ends on `pops.doctor()`.

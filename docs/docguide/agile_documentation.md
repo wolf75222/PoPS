@@ -38,9 +38,9 @@ Contents:
     stopped moving. Keep rough notes as you go so nothing is lost, but do not polish
     a design the next iteration will rewrite. (This is why a release's CHANGELOG
     section is cut at release time, not sketched up front.)
-*   **Generate system documentation.** Let the tools read the code: Doxygen for the
-    C++ reference, Sphinx autodoc for the Python API, doxysphinx to fuse them. A
-    generated page cannot drift from what it describes.
+*   **Generate system documentation when possible.** Let tools read the code for
+    API references and executable examples. A generated page has fewer places to
+    drift from what it describes.
 
 ## Simplification
 

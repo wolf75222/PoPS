@@ -1,8 +1,7 @@
 // Config markdownlint-cli2 (lane PR : .github/workflows/docs-pr.yml, continue-on-error).
 //
-// Politique : informatif d'abord. La doc adc_cpp est en francais SANS accents et melange des
-// pages Sphinx user-facing (docs/sphinx) avec des notes de conception/audit historiques
-// (docs/*.md) qui PRECEDENT ce linter. On NE reformate PAS ces documents : on desactive les
+// Politique : informatif d'abord. La doc adc_cpp est en reset et garde quelques
+// notes de conception qui precedent ce linter. On NE reformate PAS ces documents : on desactive les
 // regles purement stylistiques qui se battent avec les conventions etablies (prose longue non
 // wrappee, tables denses, HTML inline pour la mise en page du README), et on GARDE les regles qui
 // attrapent de vrais defauts structurels (liens inverses, espace manquant dans un titre, nombre de

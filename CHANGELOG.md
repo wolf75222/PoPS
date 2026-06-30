@@ -7,9 +7,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 
 - **Single source**: `project(VERSION x.y.z)` in `CMakeLists.txt`. Everything derives from it:
   `pops.__version__` (bakes `POPS_VERSION` into `_pops`), the pip wheel (regex in `pyproject.toml`),
-  `adcConfigVersion.cmake` (install/export). NEVER duplicate the number elsewhere; the docs build
-  derives it too (`scripts/build_docs.sh` injects `PROJECT_NUMBER`, `docs/sphinx/conf.py` reads
-  `project(VERSION)`), so nothing is bumped by hand outside `CMakeLists.txt`.
+  `adcConfigVersion.cmake` (install/export). NEVER duplicate the number elsewhere.
 - **Bump**: PATCH = fixes with no API change; MINOR = backward-compatible API/brick additions;
   MAJOR (post-1.0) = API or ABI break of the DSL production path.
 - **Tag**: set `git tag vX.Y.Z` on master when the bumping PR merges, then `git push --tags`.
@@ -17,6 +15,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `[x.y.z] - YYYY-MM-DD`.
 
 ## [Unreleased]
+
+### Removed
+- **Documentation reset** -- removed the former Sphinx site, archived docs, validation fixtures,
+  generated figures, and stale design pages from `docs/`; the retained corpus is now the docguide,
+  contribution/security/versioning/changelog files, architecture/algorithm references, and the
+  minimal docs quality tooling needed for the rebuild.
 
 ### Added
 - **README quickstart documents `scripts/uninstall_pops.sh`** -- the Python-module quickstart lists the teardown script alongside `setup_env.sh` / `build_python.sh`; flag detail stays in the script `--help` and `installation.md` (ADC-521).
