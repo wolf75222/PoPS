@@ -2,7 +2,7 @@
 
 This module contains the useful AMR-specific lowering that used to live in the
 legacy Case orchestration wrapper. It is not a public compile/bind API: callers
-construct an ``AmrSystem`` and then use ``sim.install(...)``.
+construct ``System(layout=AMR(...))`` and then use ``sim.install(...)``.
 """
 
 

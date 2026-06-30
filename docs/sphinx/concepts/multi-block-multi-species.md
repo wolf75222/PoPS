@@ -9,7 +9,7 @@ the coupling between species reduces to a summed right-hand side.
 
 A block is a named carrier for one model on the mesh. On the public path, each
 block is an `instances` entry passed to `sim.install(compiled, ...)`. The same
-install contract exists on `pops.System` (single level) and on `pops.AmrSystem`
+install contract exists on `pops.System(layout=Uniform(...))` and on `pops.System(layout=AMR(...))`
 (refined); the multi-block runtime is identical on both.
 
 Each block keeps its own numerics. A block fixes its spatial scheme (limiter, flux,

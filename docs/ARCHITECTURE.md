@@ -404,7 +404,7 @@ sequenceDiagram
 
     Note over Utilisateur,AmrSystem: Construction (une fois)
     Utilisateur->>AmrSystem: compiled = pops.compile_problem(model, program, layout=AMR(...))
-    Utilisateur->>AmrSystem: sim = pops.AmrSystem(...)
+    Utilisateur->>AmrSystem: sim = pops.System(layout=AMR(...))
     Utilisateur->>AmrSystem: sim.install(compiled, instances={...}, solvers={...})
 
     Note over Utilisateur,TimeIntegrator: Un macro-pas (AmrSystem.step)

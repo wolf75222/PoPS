@@ -80,6 +80,8 @@ def test_active_docs_do_not_advertise_removed_public_front_doors():
         "solver='",
         "layout=\"",
         "layout='",
+        "sim = pops.AmrSystem",
+        "pops.AmrSystem(",
         "platform=\"openmp\"",
         "platform='openmp'",
     )
@@ -90,7 +92,7 @@ def test_active_docs_do_not_advertise_removed_public_front_doors():
             if token in text:
                 offenders.append("%s contains %s" % (path.relative_to(REPO_ROOT), token))
     assert not offenders, (
-        "active docs/examples must use compile_problem -> System/AmrSystem -> install -> "
+        "active docs/examples must use compile_problem -> System(layout=...) -> install -> "
         "step_cfl only:\n%s" % "\n".join(offenders)
     )
 

@@ -21,8 +21,8 @@
 PoPS is a compiled solver engine, not a Python numerical library and not a scenario repository.
 Python authors inert typed objects: a physics/model module, a time `Program`, mesh layout
 descriptors, finite-volume descriptors, field problems, outputs, and runtime parameters.
-`pops.compile_problem(...)` lowers that assembly to one compiled problem artifact; a `pops.System`
-or `pops.AmrSystem` installs that artifact with `sim.install(compiled, ...)`; `sim.step_cfl(...)`
+`pops.compile_problem(...)` lowers that assembly to one compiled problem artifact; `pops.System(layout=layout)`
+installs that artifact with `sim.install(compiled, ...)`; `sim.step_cfl(...)`
 advances with C++/Kokkos/MPI kernels. Python never runs a per-cell loop.
 
 Named applications such as diocotron, Euler-Poisson, two-fluid, and benchmark setups live in
@@ -226,7 +226,7 @@ Reference: [native-bricks](docs/sphinx/reference/native-bricks.md),
 | `include/pops/core` | C++ concepts, state layout, model contracts, and equation blocks | [physical_model.hpp](include/pops/core/model/physical_model.hpp) |
 | `include/pops/numerics` | C++ finite-volume, elliptic, time, Krylov, reconstruction, and Riemann kernels | [include/pops/numerics](include/pops/numerics) |
 | `include/pops/amr`, `include/pops/mesh`, `include/pops/parallel` | C++ mesh hierarchy, AMR clustering/regrid, MultiFab storage, halos, MPI seams, and reflux support | [include/pops/amr](include/pops/amr) |
-| `include/pops/runtime`, `python/pops/runtime` | C++ runtime facade used by `pops.System(...).install(compiled, ...)` / `pops.AmrSystem(...).install(compiled, ...)` | [system.hpp](include/pops/runtime/system.hpp) |
+| `include/pops/runtime`, `python/pops/runtime` | C++ runtime facade used by `pops.System(layout=Uniform(...)).install(compiled, ...)` / `pops.System(layout=AMR(...)).install(compiled, ...)` | [system.hpp](include/pops/runtime/system.hpp) |
 
 ### Ecosystem
 

@@ -380,7 +380,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
             raise TypeError(
                 "sim.install requires a CompiledProblem from pops.compile_problem(...); "
                 "the public runtime route is compiled = pops.compile_problem(...), "
-                "sim = pops.AmrSystem(...), sim.install(compiled, ...). Native AMR per-block wiring "
+                "sim = pops.System(layout=AMR(...)), sim.install(compiled, ...). Native AMR per-block wiring "
                 "is private/internal and is not exposed through sim.install.")
         return self._install_compiled(
             compiled,

@@ -11,7 +11,7 @@ from pops.codegen import Production
 
 compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
 
-sim = pops.System(n=mesh.n, L=mesh.L, periodic=mesh.periodic)
+sim = pops.System(layout=layout)
 sim.install(
     compiled,
     instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}},
@@ -23,7 +23,7 @@ sim.step_cfl(0.4)
 ```
 
 `compile_problem` validates and lowers the model/program pair into one compiled
-problem artifact. `System.install` or `AmrSystem.install` attaches runtime data
+problem artifact. `System(layout=...)` attaches runtime data with `sim.install`
 and installs that artifact. Numerical execution is C++/Kokkos/MPI work.
 
 ## Compile artifact
@@ -53,7 +53,7 @@ problem. Low-level wiring methods are private implementation seams.
    :members: install, step_cfl, step, write, checkpoint, time, mass, density, potential, profile
 
 .. autoclass:: pops.AmrSystem
-   :members: install, step_cfl, step, write, checkpoint, time, mass, density, potential, profile
+   :members: step_cfl, step, write, checkpoint, time, mass, density, potential, profile
 ```
 
 ## Physics authoring

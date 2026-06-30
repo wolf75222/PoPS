@@ -80,7 +80,7 @@ The `.npz` keys are `t`, `macro_step`, `nx`, `ny`, `blocks`, `state_<block>` (sh
 
 ## AMR and polar runs
 
-`pops.AmrSystem.write(format="vtk")` writes the COARSE level only: per-block density plus
+`pops.System(layout=AMR(...)).write(format="vtk")` writes the COARSE level only: per-block density plus
 `phi`. The fine patches are not in the `.vti`; they are reported as
 `patch_rectangles` (their footprints) in the `npz` output. Polar runs still emit a
 cartesian `.vti` (there is no polar `.vts` writer).

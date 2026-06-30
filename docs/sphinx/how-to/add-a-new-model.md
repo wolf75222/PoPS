@@ -4,7 +4,7 @@
    directly.
 2. Build a `pops.time.Program` that calls typed operator handles.
 3. Compile the model/program pair with `pops.compile_problem`.
-4. Install the compiled artifact on `pops.System` or `pops.AmrSystem`.
+4. Install the compiled artifact on `pops.System(layout=...)`.
 
 ```python
 module = physics_model.to_module()

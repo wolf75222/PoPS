@@ -86,7 +86,7 @@ print("density =", sim.density("ne").shape)
 ## What is public
 
 - `pops.compile_problem` lowers the typed model and time program into one compiled problem artifact.
-- `pops.System` / `pops.AmrSystem` are the explicit runtime facades.
+- `pops.System(layout=...)` is the explicit runtime facade for uniform and AMR layouts.
 - `sim.install(compiled, ...)` attaches arrays, parameters, aux fields, field solvers, outputs, and checkpoint policies.
 - `sim.step_cfl` advances the compiled C++ runtime.
 
@@ -112,4 +112,4 @@ layout = AMR(
 ```
 
 Then compile with `layout=layout` and install the artifact on the matching runtime. The public flow
-remains `compile_problem -> System/AmrSystem -> install -> step_cfl`.
+remains `compile_problem -> System(layout=...) -> install -> step_cfl`.

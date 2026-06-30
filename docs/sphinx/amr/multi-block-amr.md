@@ -6,7 +6,7 @@ hierarchy:
 ```python
 compiled = pops.compile_problem(model=shared_module, program=program,
                                 backend=Production(), layout=layout)
-sim = pops.AmrSystem(n=mesh.n, L=mesh.L)
+sim = pops.System(layout=layout)
 sim.install(
     compiled,
     instances={

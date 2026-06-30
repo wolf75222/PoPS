@@ -32,7 +32,7 @@ to link for the core, you include the headers. The three design axes are orthogo
 | `NumericalFlux` | Riemann numerical flux policy at the face (Rusanov / HLL / HLLC / Roe). This is the "flux" axis, chosen independently of the model. |
 | `EllipticSolver` | Elliptic solver concept (`solve()` interface) modeled by `GeometricMG`, `PoissonFFTSolver`, the tensor Krylov solvers... This is the "Poisson" axis. |
 | `System` | Runtime coupler: composes blocks (one model per block), shares a system Poisson, advances the whole. Exposed to the Python binding as `pops.System`. |
-| `AmrSystem` | Refined counterpart of `System`: one or more blocks on a block-structured AMR hierarchy (regrid, conservative reflux). Exposes `pops.AmrSystem`. |
+| `AmrSystem` | Internal refined counterpart selected by `pops.System(layout=AMR(...))`: one or more blocks on a block-structured AMR hierarchy (regrid, conservative reflux). |
 | `GeometricMG` | Multigrid Poisson solver (V-cycle, red-black Gauss-Seidel smoother); handles conducting wall and cut-cell. Any case (including non-periodic). |
 | `PoissonFFTSolver` | Direct spectral Poisson solver (FFT); periodic domain, `n = 2^k`. Single-rank by design (refuses MPI). |
 | `RemappedFFTSolver` | FFT Poisson under MPI (ADC-287): presents the System single box, box-slab scatter/gather around `PoissonFFT`. Periodic, constant coefficient, `Ny` divisible by `n_ranks()`. Selected by the `FFT()` field-solver descriptor when the bound route runs on multiple ranks. |

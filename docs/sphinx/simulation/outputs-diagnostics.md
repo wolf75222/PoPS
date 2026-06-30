@@ -35,7 +35,7 @@ sim.checkpoint("out/run.ckpt")
 NumPy archive. `format="hdf5"` is available when the optional HDF5 stack is
 enabled.
 
-`pops.AmrSystem` exposes the same high-level output contract with AMR-aware
+`pops.System(layout=AMR(...))` exposes the same high-level output contract with AMR-aware
 layout and patch data.
 
 Condensed API reference: [api](../reference/python-api.md). Open a dump in

@@ -38,8 +38,10 @@ def _repo_include():
 
 def _configure_source_tree_include():
     include = _repo_include()
+    repo_root = Path(__file__).resolve().parents[2]
     if include is not None:
         os.environ["POPS_INCLUDE"] = include
+    os.environ["POPS_CACHE_DIR"] = str(repo_root / ".pops_cache")
     root = os.environ.get("CONDA_PREFIX") or sys.prefix
     os.environ.setdefault("POPS_KOKKOS_ROOT", root)
     os.environ.setdefault("Kokkos_ROOT", root)
@@ -155,8 +157,7 @@ def compile_example(n=32):
     return compiled, layout
 
 
-def run_once(n=32, cfl=0.1):
-    compiled, layout = compile_example(n=n)
+def install_example(compiled, layout):
     sim = System(layout=layout)
     sim.install(
         compiled,
@@ -171,14 +172,24 @@ def run_once(n=32, cfl=0.1):
         },
         solvers={"phi": GeometricMG()},
     )
+    return sim
+
+
+def run_once(n=32, cfl=0.1):
+    compiled, layout = compile_example(n=n)
+    sim = install_example(compiled, layout)
     sim.step_cfl(cfl)
     return sim.get_state("plasma")
 
 
 def main():
-    compiled, _layout = compile_example()
+    compiled, layout = compile_example(n=16)
     print("problem:", compiled.so_path)
     print(compiled.inspect_amr())
+    sim = install_example(compiled, layout)
+    sim.step_cfl(0.05)
+    state = sim.get_state("plasma")
+    print("state:", state.shape, "mass:", sim.mass("plasma"))
     return 0
 
 

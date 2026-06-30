@@ -24,7 +24,7 @@ sim.step_cfl(0.4)
 ```
 
 For an adaptive layout, use the same compiled artifact contract and install it
-on `pops.AmrSystem(...)`. Users do not pass target strings; the layout
+through `pops.System(layout=AMR(...))`. Users do not pass target strings; the layout
 descriptor determines the generated artifact ABI.
 
 ## Inputs

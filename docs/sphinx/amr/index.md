@@ -6,7 +6,7 @@ The public flow is the same shape as a uniform run:
 
 ```python
 compiled = pops.compile_problem(model=module, program=program, backend=Production(), layout=layout)
-sim = pops.AmrSystem(n=mesh.n, L=mesh.L)
+sim = pops.System(layout=layout)
 sim.install(compiled, instances={"plasma": {"model": module, "initial": U0, "spatial": spatial}})
 sim.step_cfl(0.4)
 ```

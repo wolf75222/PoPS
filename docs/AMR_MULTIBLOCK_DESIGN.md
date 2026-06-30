@@ -406,7 +406,7 @@ WRITE-SET:
 - `include/pops/runtime/amr_system.hpp` + `python/bindings/amr/amr_system.cpp`: `set_compiled_block` /
   `add_native_block` stop throwing at the 2nd call (cf. 3) and stack a spec.
 - `python/bindings/core/bindings.cpp`: validate the compiled-problem route for TWO blocks:
-  `compiled = pops.compile_problem(...)`, `sim = pops.AmrSystem(...)`,
+  `compiled = pops.compile_problem(...)`, `sim = pops.System(layout=AMR(...))`,
   `sim.install(compiled, ...)`, then `sim.step_cfl(...)`.
 ACCEPTANCE: `test_dsl_production_amr.py` extended to two native compiled blocks on the same
 hierarchy; ABI key verified (`pops_native_abi_key`, `amr_system.cpp:218-235`).
