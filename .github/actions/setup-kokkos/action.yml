@@ -3,14 +3,20 @@ description: >
   Installe les deps de build (Eigen, Ninja, ccache) et une install Kokkos PIC MISE EN CACHE (Serial
   par defaut, OpenMP en option via exec-space), puis expose son prefixe via l'output `kokkos-prefix`.
   Avec les defauts (serial + gcc) la cle de cache est IDENTIQUE a celle du gate ci.yml
-  (kokkos-<os>-<version>-serial-cxx20-gcc-pic) : quality.yml reutilise le Kokkos deja construit par le
-  gate (et inversement), evitant toute reconstruction. Chaque (exec-space, compiler) a sa propre cle.
+  (kokkos-<os>-<version>-<commit>-serial-cxx20-gcc-pic) : quality.yml reutilise le Kokkos
+  deja construit par le gate (et inversement), evitant toute reconstruction. Chaque
+  (exec-space, compiler) a sa propre cle.
   Factorise les etapes repetees par les jobs warnings / tidy / sanitizers / fuzz / tsan / codeql.
 
 inputs:
   kokkos-version:
     description: 'Version de release Kokkos a installer'
     default: '4.4.01'
+  kokkos-commit:
+    description: >
+      Commit exact attendu pour kokkos-version. A modifier avec kokkos-version : la CI refuse un tag
+      Kokkos qui ne pointe pas sur ce commit.
+    default: '15dc143e5f39949eece972a798e175c4b463d4b8'
   extra-apt:
     description: 'Paquets apt supplementaires (separes par des espaces), p.ex. clang-tidy'
     default: ''
@@ -53,10 +59,10 @@ runs:
     # (gros gain : pas de reconstruction Kokkos). Chaque (exec-space, compiler) isole sa propre cle.
     - name: Cache Kokkos install (${{ inputs.exec-space }} ${{ inputs.kokkos-version }}, ${{ inputs.compiler }})
       id: kokkos-cache
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ${{ steps.paths.outputs.prefix }}
-        key: kokkos-${{ runner.os }}-${{ inputs.kokkos-version }}-${{ inputs.exec-space }}-cxx20-${{ inputs.compiler }}-pic
+        key: kokkos-${{ runner.os }}-${{ inputs.kokkos-version }}-${{ inputs.kokkos-commit }}-${{ inputs.exec-space }}-cxx20-${{ inputs.compiler }}-pic
 
     - name: Build + install Kokkos (${{ inputs.exec-space }}, PIC, ${{ inputs.compiler }})
       if: steps.kokkos-cache.outputs.cache-hit != 'true'
@@ -71,6 +77,7 @@ runs:
         OMP_FLAG=""
         if [ "${{ inputs.exec-space }}" = "openmp" ]; then OMP_FLAG="-DKokkos_ENABLE_OPENMP=ON"; fi
         git clone --depth 1 -b ${{ inputs.kokkos-version }} https://github.com/kokkos/kokkos.git /tmp/kokkos
+        test "$(git -C /tmp/kokkos rev-parse HEAD)" = "${{ inputs.kokkos-commit }}"
         cmake -S /tmp/kokkos -B /tmp/kbuild -G Ninja -DKokkos_ENABLE_SERIAL=ON $OMP_FLAG \
           -DCMAKE_INSTALL_PREFIX="${{ steps.paths.outputs.prefix }}" -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_CXX_COMPILER="$CXX_BIN" \

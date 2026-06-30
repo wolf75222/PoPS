@@ -180,8 +180,8 @@ jobs:
           fetch-depth: 1
 
       # Action composite : apt deps (Eigen / Ninja / ccache) + mold, et install Kokkos Serial PIC
-      # MISE EN CACHE sous la cle kokkos-<os>-4.4.01-serial-cxx20-gcc-pic -- IDENTIQUE aux jobs full
-      # et a quality.yml, donc Kokkos n'est jamais reconstruit. mold (editeur de liens rapide) n'est
+      # MISE EN CACHE sous la cle kokkos-<os>-4.4.01-<commit>-serial-cxx20-gcc-pic -- IDENTIQUE aux
+      # jobs full et a quality.yml, donc Kokkos n'est jamais reconstruit. mold (editeur de liens rapide) n'est
       # ajoute qu'ici via extra-apt : il n'entre PAS dans les presets (portables pour le dev local mac).
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
@@ -270,7 +270,7 @@ jobs:
           fetch-depth: 1
 
       # Meme action composite que gate-cpp : apt deps + mold + Kokkos Serial PIC en cache (cle
-      # partagee kokkos-<os>-4.4.01-serial-cxx20-gcc-pic -> aucune reconstruction).
+      # partagee kokkos-<os>-4.4.01-<commit>-serial-cxx20-gcc-pic -> aucune reconstruction).
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
@@ -517,6 +517,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
       KOKKOS_VERSION: 4.4.01
+      KOKKOS_COMMIT: 15dc143e5f39949eece972a798e175c4b463d4b8
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
 
     steps:
@@ -535,12 +536,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.KOKKOS_PREFIX }}
-          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-serial-cxx20-gcc-pic
+          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-serial-cxx20-gcc-pic
 
       - name: Build + install Kokkos (Serial, PIC)
         if: steps.kokkos-cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos
+          test "$(git -C /tmp/kokkos rev-parse HEAD)" = "${KOKKOS_COMMIT}"
           cmake -S /tmp/kokkos -B /tmp/kbuild -G Ninja -DKokkos_ENABLE_SERIAL=ON \
             -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=20 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -603,6 +605,7 @@ jobs:
       # Prefixe SEPARE du Kokkos Serial pour eviter toute collision de cache.
       # Meme version de Kokkos, espace d'execution OpenMP.
       KOKKOS_VERSION: 4.4.01
+      KOKKOS_COMMIT: 15dc143e5f39949eece972a798e175c4b463d4b8
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-openmp-install
 
     steps:
@@ -622,7 +625,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.KOKKOS_PREFIX }}
-          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-openmp-cxx20-gcc-pic
+          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-openmp-cxx20-gcc-pic
 
       - name: Cache ccache (Kokkos OpenMP)
         uses: actions/cache@v6
@@ -640,6 +643,7 @@ jobs:
         if: steps.kokkos-cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos-omp
+          test "$(git -C /tmp/kokkos-omp rev-parse HEAD)" = "${KOKKOS_COMMIT}"
           cmake -S /tmp/kokkos-omp -B /tmp/kbuild-omp -G Ninja -DKokkos_ENABLE_OPENMP=ON \
             -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=20 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \

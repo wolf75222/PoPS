@@ -370,21 +370,28 @@ jobs:
         env:
           KOKKOS_PREFIX: ${{ steps.kokkos.outputs.kokkos-prefix }}
         run: |
-          cmake --preset ci-tsan
-          cmake --build --preset ci-tsan
-          set +e
-          ctest --preset ci-tsan --output-on-failure 2>&1 | tee tsan.log
-          rc=${PIPESTATUS[0]}
+          rc=0
+          phase=configure
+          cmake --preset ci-tsan 2>&1 | tee tsan.log || rc=${PIPESTATUS[0]}
+          if [ "$rc" -eq 0 ]; then
+            phase=build
+            cmake --build --preset ci-tsan 2>&1 | tee -a tsan.log || rc=${PIPESTATUS[0]}
+          fi
+          if [ "$rc" -eq 0 ]; then
+            phase=ctest
+            ctest --preset ci-tsan --output-on-failure 2>&1 | tee -a tsan.log || rc=${PIPESTATUS[0]}
+          fi
           {
             echo "### ThreadSanitizer (races, backend OpenMP)"
             echo ""
             if [ "$rc" -eq 0 ]; then
               echo "- ctest : **vert** sous TSan (aucune race hors suppressions)."
             else
-              echo "- ctest : **$rc** test(s) / rapport(s) TSan (voir l'artefact \`tsan-log\`)."
-              echo "::warning::tsan : au moins un test a signale une race sous TSan (run informatif, non bloquant). Trier signal/bruit avant de conclure (cf. tsan-suppressions.txt)."
+              echo "- phase \`${phase}\` : rc=${rc} (voir l'artefact \`tsan-log\`)."
+              echo "::warning::tsan : echec ou rapport TSan detecte (run informatif, non bloquant). Trier signal/bruit avant de conclure (cf. tsan-suppressions.txt)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
       - name: Upload log TSan
         if: always()
         uses: actions/upload-artifact@v7

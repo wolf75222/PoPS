@@ -1,5 +1,8 @@
 name: Docs PR
 
+# Documentation reset lane: PR docs checks are intentionally light. They do not build `_pops`,
+# Sphinx or Doxygen, and therefore do not build Kokkos. When a full docs site is reintroduced,
+# add the heavy PR job behind an explicit `docs-full` label instead of making docs-only PRs pay it.
 on:
   pull_request:
     paths:
@@ -29,6 +32,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Docs mode
+        run: |
+          {
+            echo "### Docs PR mode"
+            echo ""
+            echo "- reset lint : yes"
+            echo "- `_pops` / Sphinx / Doxygen build : no"
+            echo "- Kokkos build : no"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Documentation lint
         run: python docs/check_docs.py --freshness-warn-only
