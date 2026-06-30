@@ -15,7 +15,6 @@ current code instead of patching stale prose.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
 - [Documentation quality](docs/DOC_QUALITY.md): rules for rebuilding the docs.
-- [Bibliography](docs/BIBLIOGRAPHY.md): external references.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.
 - [Security](SECURITY.md): vulnerability reporting policy.
 - [Changelog](CHANGELOG.md): notable changes.

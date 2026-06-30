@@ -17,6 +17,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 ## [Unreleased]
 
 ### Removed
+- **Retained-docs and profiling harness cleanup** -- removed `docs/TRANSLATION_GLOSSARY.md`,
+  `docs/BIBLIOGRAPHY.md`, the `bench/` profiling harness, and the ROMEO machine profile under
+  `Tools/machines/romeo/`.
 - **Documentation reset** -- removed the former Sphinx site, archived docs, validation fixtures,
   generated figures, and stale design pages from `docs/`; the retained corpus is now the docguide,
   contribution/security/versioning/changelog files, architecture/algorithm references, and the

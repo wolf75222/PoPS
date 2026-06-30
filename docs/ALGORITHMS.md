@@ -12,7 +12,7 @@ stability, the limits, the ctest test that covers it). All the file paths and te
 this repository.
 
 Architecture (layers, dispatch seam, library/application boundary):
-[ARCHITECTURE.md](ARCHITECTURE.md). References: [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md).
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Contents
 
@@ -2162,4 +2162,4 @@ of this page. The goal is not to present a partial capability as complete.
   53 (1984). Berger & Colella, *Local adaptive mesh refinement for shock hydrodynamics*, JCP 82 (1989).
   Berger & Rigoutsos, *An algorithm for point clustering and grid generation*, IEEE Trans. SMC 21 (1991).
 - Cut-cell: Shortley & Weller, *The numerical solution of Laplace's equation*, J. Appl. Phys. 9 (1938).
-- Condensed Schur (magnetized Euler-Poisson): see [BIBLIOGRAPHY.md](BIBLIOGRAPHY.md).
+- Condensed Schur (magnetized Euler-Poisson): implicit source coupling potential / velocity update.
