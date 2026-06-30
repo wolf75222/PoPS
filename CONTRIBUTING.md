@@ -31,8 +31,10 @@ Use PR labels and commit tokens for validation modes; reserve Git tags for relea
 | Situation | What runs |
 | --- | --- |
 | PR docs-only | `Docs PR` reset lint only; no `_pops`, Sphinx, Doxygen or Kokkos build. |
+| PR CI / workflow / metadata only | Required `gate (agregation requise)` routing verdict only; no Kokkos build by default. |
 | Push to `master` touching docs | Transitional `Docs` reset lint only; no Kokkos build. |
 | PR touching C++ / Python | Required `gate (agregation requise)` through `ci.yml`. |
+| PR with label `ci-kokkos` | Forces the Serial Kokkos C++ + Python gates even if only CI files changed. |
 | PR with label `ci-full` | Adds MPI + Kokkos OpenMP + bench compile. |
 | PR with label `quality` | Runs `quality.yml` static/deep checks. |
 | Weekly cron / manual dispatch | Backstop CI/docs/quality lanes. |
