@@ -164,3 +164,10 @@ def test_amr_public_get_state_reads_full_block_state():
     state = sim.get_state("plasma")
     assert state.shape == (3, 4, 4)
     np.testing.assert_array_equal(state.ravel(), np.arange(3 * 4 * 4, dtype=np.float64))
+
+
+@pytest.mark.requires_toolchain
+def test_amr_final_public_route_runs_one_cfl_step():
+    state = amr_poisson_lorentz.run_once(n=16, cfl=0.05)
+    assert state.shape == (3, 16, 16)
+    assert np.isfinite(state).all()

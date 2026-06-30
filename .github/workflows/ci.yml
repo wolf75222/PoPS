@@ -394,6 +394,30 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
+      # Spec corrective TASK-076: the sharded legacy runner above still executes many historical
+      # script-style files directly. The final examples and integration tests are pytest tests with
+      # explicit requires_toolchain markers, so run that critical set through pytest after the module
+      # build. This makes the CI prove the final public route, not just import or source checks.
+      - name: Spec final toolchain smoke (pytest markers)
+        if: matrix.shard == 0
+        env:
+          OMP_NUM_THREADS: "2"
+          OMP_PROC_BIND: "false"
+          POPS_CACHE_DIR: ${{ runner.temp }}/pops-cache
+          POPS_CODEGEN_DIR: ${{ runner.temp }}/pops-codegen
+          POPS_KEEP_GENERATED: "1"
+        run: |
+          export PYTHONPATH="$PWD/build-kokkos-py/python"
+          export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
+          python3 -m pytest -q \
+            python/tests/integration/test_compile_problem_system_install.py \
+            python/tests/integration/test_manual_board_predictor_corrector.py \
+            python/tests/integration/test_lib_time_predictor_corrector.py \
+            python/tests/integration/test_matrix_free_bicgstab.py \
+            python/tests/integration/test_moments_final.py \
+            python/tests/integration/test_amr_final_route.py \
+            -m 'requires_toolchain'
+
       - name: Upload per-file test timings (ADC-366)
         if: always()
         uses: actions/upload-artifact@v7
