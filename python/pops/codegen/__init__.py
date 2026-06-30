@@ -30,16 +30,34 @@ from . import optimization, math_options  # noqa: F401
 # that lower to the legacy backend string the drivers consume.
 from .backends import Production, AOT, JIT, lower_backend  # noqa: F401
 from . import backends  # noqa: F401
-from pops.runtime.platforms import (  # noqa: F401
-    KokkosSerial,
-    KokkosOpenMP,
-    KokkosCuda,
-    KokkosHIP,
-    MPI,
-)
 # Spec 5 (sec.12.4, #47-48): the codegen POPS_* environment resolver (CodegenEnv) + the JIT-backdoor
 # guard predicate. Stdlib-only, so this adds no numpy / _pops weight to the codegen surface.
 from .env import CodegenEnv, jit_backdoor_enabled  # noqa: F401
+
+_PLATFORM_EXPORTS = frozenset({
+    "KokkosSerial",
+    "KokkosOpenMP",
+    "KokkosCuda",
+    "KokkosHIP",
+    "MPI",
+})
+
+
+def __getattr__(name):
+    """Lazily expose platform descriptors without a module-scope codegen -> runtime edge.
+
+    The platform descriptors live in :mod:`pops.runtime.platforms` because their availability
+    query reads runtime build flags. Public examples still use ``from pops.codegen import
+    KokkosOpenMP`` next to ``Production``; resolving those names lazily keeps that ergonomic
+    surface while preserving the import-layer invariant checked by the architecture tests.
+    """
+    if name in _PLATFORM_EXPORTS:
+        from pops.runtime import platforms
+        value = getattr(platforms, name)
+        globals()[name] = value
+        return value
+    raise AttributeError("module 'pops.codegen' has no attribute %r" % (name,))
+
 
 __all__ = [
     "pops_header_signature",
