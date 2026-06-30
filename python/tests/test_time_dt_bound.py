@@ -1,170 +1,88 @@
-#!/usr/bin/env python3
-"""Optional per-Program dt bound (epic ADC-399 / ADC-417, spec section 18).
+"""Optional Program dt bounds lower to the compiled-problem ABI and affect ``step_cfl``."""
 
-A compiled time Program may OPTIONALLY provide a dt bound via ``@P.dt_bound`` (decorator) or
-``P.set_dt_bound(expr_or_fn)``. The bound builds an IR scalar sub-program (reading the live state +
-reductions + the geometry hmin + the per-block max wave speed); it is NOT run in Python during
-``sim.step_cfl``. ``step_cfl`` then uses ``min(native CFL dt, program dt bound)``: a program bound
-SMALLER than the native CFL wins; a LARGER bound loses (native CFL wins); and a Program WITHOUT a dt
-bound leaves the native CFL UNCHANGED.
-
-The generated .so exports a SECOND ABI pair alongside the macro step: ``pops_program_has_dt_bound()``
-(true iff a bound was set) and ``pops_program_dt_bound(ProgramContext*, cfl)`` (the lowered scalar).
-
-Section (A) (pure Python) pins the IR + codegen: the bound is recorded, the two ABI functions are
-emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Section (B) is end-to-end
-(needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
-never fakes the engine.
-"""
+from pathlib import Path
+import os
 import sys
 
+import numpy as np
+import pytest
 
-def _skip(msg):
-    print("skip test_time_dt_bound (%s)" % msg)
-    try:
-        import pytest
-        pytest.skip(msg, allow_module_level=True)
-    except ImportError:
-        pass
-    sys.exit(0)
+import pops
+from pops import time as adctime
+from pops.codegen import KokkosOpenMP, Production
+from pops.mesh import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.solvers.elliptic import GeometricMG
 
-
-try:
-    import numpy as np
-
-    import pops
-    from pops import time as adctime
-    from pops.runtime.bricks import Explicit
-    from pops.solvers import GeometricMG
-    from _module_models import (
-        explicit_euler,
-        first_order_rusanov,
-        isothermal_transport_module,
-    )
-except Exception as exc:  # noqa: BLE001
-    _skip("pops/numpy unavailable: %s" % exc)
-
-fails = 0
+from _module_models import first_order_rusanov, isothermal_transport_module
 
 
-def chk(cond, label):
-    global fails
-    print("  [%s] %s" % ("OK " if cond else "XX ", label))
-    if not cond:
-        fails += 1
-
-
-# ====================================================================================================
-# Section (A): pure Python -- the dt bound is recorded in the IR and lowered to the two ABI functions.
-# ====================================================================================================
-print("== (A) IR + codegen ==")
-
-
-def _fe(name="fe_dtbound"):
-    P = adctime.Program(name)
-    U = P.state("U", block="ions").n
-    f = P._fields_from_state(U)
-    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
-    return P
-
-
-# (A1) a Program WITHOUT a dt bound emits has_dt_bound() -> false; the dt_bound function returns +inf.
-P_no = _fe("fe_no_bound")
-chk(not P_no.has_dt_bound(), "a fresh Program has no dt bound")
-src_no = P_no.emit_cpp_program()
-chk("bool pops_program_has_dt_bound()" in src_no, "has_dt_bound ABI function emitted")
-chk("pops::Real pops_program_dt_bound(" in src_no, "dt_bound ABI function emitted")
-chk("return false;" in src_no, "no-bound Program: has_dt_bound() returns false")
-chk("std::numeric_limits<pops::Real>::infinity()" in src_no, "no-bound dt_bound returns +inf sentinel")
-
-# (A2) @P.dt_bound records a scalar sub-program (cfl * hmin / max_wave_speed); the codegen emits the
-# bound expression reading ctx.hmin() / ctx.max_wave_speed.
-P_dec = _fe("fe_decorator")
-
-
-@P_dec.dt_bound
-def _dt_bound(P, cfl):
-    U = P.state("U", block="ions").n
-    w = P.max_wave_speed(U)
-    return cfl * P.hmin() / w
-
-
-chk(P_dec.has_dt_bound(), "@P.dt_bound records the bound")
-src_dec = P_dec.emit_cpp_program()
-chk("return true;" in src_dec, "Program with a bound: has_dt_bound() returns true")
-chk("ctx.hmin()" in src_dec, "dt_bound lowers P.hmin() -> ctx.hmin()")
-chk("ctx.max_wave_speed(0, " in src_dec, "dt_bound lowers P.max_wave_speed -> ctx.max_wave_speed(0, .)")
-chk("cfl" in src_dec.split("pops_program_dt_bound", 1)[1], "the cfl argument is used in the bound body")
-
-# (A3) P.set_dt_bound(expr) (the non-decorator form) records the same way; a different bound -> a
-# different IR hash (the bound is part of the IR identity / cache key).
-P_set = _fe("fe_setter")
-Ub = P_set.state("U", block="ions").n
-P_set.set_dt_bound(0.5 * P_set.hmin() / P_set.max_wave_speed(Ub))
-chk(P_set.has_dt_bound(), "P.set_dt_bound(expr) records the bound")
-chk(P_no._ir_hash() != P_set._ir_hash(), "a dt bound changes the IR hash (distinct cache key)")
-
-# (A4) fail-loud: the body must return a Scalar, set at most once, and read only (no commit).
-P_bad = _fe("fe_bad")
-try:
-    P_bad.set_dt_bound(lambda P, cfl: P.state("U", block="ions").n)  # returns a State, not a Scalar
-except ValueError as exc:
-    chk("Scalar" in str(exc), "non-Scalar dt bound body rejected")
-else:
-    chk(False, "non-Scalar dt bound body should be rejected")
-
-P_twice = _fe("fe_twice")
-P_twice.set_dt_bound(P_twice.hmin())
-try:
-    P_twice.set_dt_bound(P_twice.hmin())
-except ValueError as exc:
-    chk("already set" in str(exc), "a second set_dt_bound is rejected")
-else:
-    chk(False, "a second set_dt_bound should be rejected")
-
-# A runtime Scalar must never collapse to a Python bool / index (it is unknown until the step runs).
-try:
-    bool(P_dec.hmin())
-except TypeError:
-    chk(True, "a Scalar cannot be used as a Python bool")
-else:
-    chk(False, "a Scalar used as a Python bool should raise")
-
-if fails:
-    print("FAIL test_time_dt_bound (Section A): %d failure(s)" % fails)
-    raise AssertionError("Section A failed with %d failure(s)" % fails)
-print("PASS test_time_dt_bound Section A")
-
-
-# ====================================================================================================
-# Section (B): end-to-end -- step_cfl uses min(native CFL, program dt bound).
-# ====================================================================================================
-print("== (B) step_cfl applies min(native CFL, program dt bound) ==")
-
-def transport_model():
-    # Pure transport (isothermal, NoSource); BackgroundDensity(n0=0) keeps solve_fields well-defined
-    # but INERT (no Poisson feedback into the flux), so the compiled cadence is bit-exact vs native.
-    return isothermal_transport_module("time_dt_bound_model")
-
-
+REPO_ROOT = Path(__file__).resolve().parents[2]
 N = 24
 CFL = 0.4
 
 
-def make_sim(time=None):
-    sim = pops.System(n=N, L=1.0, periodic=True)
-    x = (np.arange(N) + 0.5) / N
+def _initial_state():
+    x = (np.arange(N, dtype=float) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
-    rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
+    rho = 1.0 + 0.3 * np.sin(2.0 * np.pi * X) * np.cos(2.0 * np.pi * Y)
+    return np.stack([rho, 0.4 * rho, -0.2 * rho])
+
+
+def _model():
+    return isothermal_transport_module("time_dt_bound_model")
+
+
+def _program(module, name="fe_dt_bound", factor=None):
+    program = adctime.Program(name).bind_operators(module)
+    state = program.state("U", block="ions", space=module.state_spaces()["U"])
+    operators = module.operator_registry()
+    fields = program.call(operators.get("fields_from_state"), state.n, name="fields_n")
+    rate = program.call(operators.get("explicit_rate"), state.n, fields, name="R_n")
+    program.define(state.next, state.n + program.dt * rate)
+    program.commit(state.next, fields=fields)
+
+    if factor is not None:
+        @program.dt_bound
+        def _bound(P, cfl):
+            bound_state = P.state("U", block="ions", space=module.state_spaces()["U"])
+            w = P.max_wave_speed(bound_state.n)
+            return factor * cfl * P.hmin() / w
+
+    program.validate()
+    return program
+
+
+def _configure_toolchain_env():
+    include = str(REPO_ROOT / "include")
+    os.environ.setdefault("POPS_INCLUDE", include)
+    conda_prefix = os.environ.get("CONDA_PREFIX") or sys.prefix
+    if conda_prefix:
+        os.environ.setdefault("POPS_KOKKOS_ROOT", conda_prefix)
+        os.environ.setdefault("Kokkos_ROOT", conda_prefix)
+    return include
+
+
+def _compile(factor=None, name="fe_dt_bound"):
+    include = _configure_toolchain_env()
+    module = _model()
+    return pops.compile_problem(
+        model=module,
+        program=_program(module, name=name, factor=factor),
+        layout=Uniform(CartesianMesh(n=N, L=1.0, periodic=True)),
+        backend=Production(platform=KokkosOpenMP()),
+        include=include,
+    )
+
+
+def _install(compiled):
+    sim = pops.System(layout=Uniform(CartesianMesh(n=N, L=1.0, periodic=True)))
     sim.install(
-        None,
+        compiled,
         instances={
             "ions": {
-                "model": transport_model(),
+                "initial": _initial_state(),
                 "spatial": first_order_rusanov(),
-                "time": time or explicit_euler(),
-                "initial": np.stack([rho, 0.4 * rho, -0.2 * rho]),
             }
         },
         solvers={"phi": GeometricMG()},
@@ -172,77 +90,77 @@ def make_sim(time=None):
     return sim
 
 
-def fe_program(name, *, factor=None):
-    """Forward Euler; with factor set, attach a dt bound factor * cfl * hmin / max_wave_speed (a
-    multiple of the native single-block CFL dt = cfl * h / w): factor < 1 tightens, factor > 1 loosens."""
-    P = adctime.Program(name)
-    U = P.state("U", block="ions").n
-    f = P._fields_from_state(U)
-    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
-    if factor is not None:
-        @P.dt_bound
-        def _b(Pr, cfl, _f=factor):
-            Us = Pr.state("U", block="ions").n
-            w = Pr.max_wave_speed(Us)
-            return _f * cfl * Pr.hmin() / w
-    return P
+def _state(sim):
+    return np.array(sim.get_state("ions"))
 
 
-try:
-    prog_none = pops.compile_problem(model=transport_model(), time=fe_program("fe_none"))
-    prog_tight = pops.compile_problem(model=transport_model(),
-                                     time=fe_program("fe_tight", factor=0.5))
-    prog_loose = pops.compile_problem(model=transport_model(),
-                                     time=fe_program("fe_loose", factor=2.0))
-except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
-    _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
+def test_dt_bound_codegen_uses_problem_abi_and_operator_first_program():
+    module = _model()
+
+    no_bound = _program(module, "fe_no_bound")
+    assert not no_bound.has_dt_bound()
+    src_no = no_bound.emit_cpp_program(model=module)
+    assert "bool pops_problem_has_dt_bound()" in src_no
+    assert "pops::Real pops_problem_dt_bound(" in src_no
+    assert "return false;" in src_no
+    assert "std::numeric_limits<pops::Real>::infinity()" in src_no
+
+    with_bound = _program(module, "fe_with_bound", factor=0.5)
+    assert with_bound.has_dt_bound()
+    src_bound = with_bound.emit_cpp_program(model=module)
+    assert "return true;" in src_bound
+    assert "ctx.hmin()" in src_bound
+    assert "ctx.max_wave_speed(0, " in src_bound
+    assert "cfl" in src_bound.split("pops_problem_dt_bound", 1)[1]
+
+    ops = [value.op for value in with_bound._values]
+    assert "call" in ops
+    assert "rhs" not in ops
+    assert "solve_fields" not in ops
+    assert "linear_source" not in ops
 
 
-def install(prog):
-    sim = make_sim(explicit_euler())
-    sim.install(prog)
-    return sim
+def test_dt_bound_validation_and_ir_hash():
+    module = _model()
+    no_bound = _program(module, "fe_no_bound")
+    with_bound = _program(module, "fe_hash_bound", factor=0.5)
+    assert no_bound._ir_hash() != with_bound._ir_hash()
+
+    bad = adctime.Program("bad_dt_bound").bind_operators(module)
+    with pytest.raises(ValueError, match="Scalar"):
+        bad.set_dt_bound(lambda P, cfl: P.state("U", block="ions", space=module.state_spaces()["U"]).n)
+
+    twice = adctime.Program("twice_dt_bound")
+    twice.set_dt_bound(twice.hmin())
+    with pytest.raises(ValueError, match="already set"):
+        twice.set_dt_bound(twice.hmin())
+
+    with pytest.raises(TypeError):
+        bool(with_bound.hmin())
 
 
-# Baseline: a NATIVE System (no program) computes the native CFL dt on the same state.
-dt_native = make_sim().step_cfl(CFL)
-chk(dt_native > 0 and np.isfinite(dt_native), "native step_cfl dt finite (%.6g)" % dt_native)
+@pytest.mark.requires_toolchain
+def test_step_cfl_applies_compiled_problem_dt_bound():
+    no_bound = _compile(name="fe_no_bound")
+    tight = _compile(factor=0.5, name="fe_tight_bound")
+    loose = _compile(factor=2.0, name="fe_loose_bound")
 
-# (B1) a Program WITHOUT a dt bound: step_cfl uses the native CFL dt UNCHANGED.
-dt_no = install(prog_none).step_cfl(CFL)
-chk(abs(dt_no - dt_native) < 1e-14,
-    "no dt bound -> step_cfl uses the native CFL dt (%.10g vs %.10g)" % (dt_no, dt_native))
+    dt_base = _install(no_bound).step_cfl(CFL)
+    dt_tight = _install(tight).step_cfl(CFL)
+    dt_loose = _install(loose).step_cfl(CFL)
 
-# (B2) a Program WITH a dt bound SMALLER than native (factor 0.5): step_cfl uses the program bound.
-dt_tight = install(prog_tight).step_cfl(CFL)
-chk(dt_tight < dt_native,
-    "tighter dt bound applied: step_cfl dt < native (%.10g < %.10g)" % (dt_tight, dt_native))
-chk(abs(dt_tight - 0.5 * dt_native) < 1e-9 * dt_native,
-    "the achieved dt == the program bound (0.5 * native) (%.10g vs %.10g)"
-    % (dt_tight, 0.5 * dt_native))
+    assert dt_base > 0.0 and np.isfinite(dt_base)
+    assert abs(dt_tight - 0.5 * dt_base) < 1e-9 * dt_base
+    assert abs(dt_loose - dt_base) < 1e-14
 
-# (B3) a Program WITH a dt bound LARGER than native (factor 2.0): native wins (min semantics).
-dt_loose = install(prog_loose).step_cfl(CFL)
-chk(abs(dt_loose - dt_native) < 1e-14,
-    "looser dt bound ignored: native CFL wins (%.10g vs %.10g)" % (dt_loose, dt_native))
+    sim_tight = _install(tight)
+    before = _state(sim_tight)
+    dt = sim_tight.step_cfl(CFL)
+    after_cfl = _state(sim_tight)
 
-# (B4) the tighter-bound program actually advanced the state, and step_cfl(cfl) == step(dt_tight)
-# bit-exact (step_cfl just computes dt -- now the program bound -- then runs the same cadence as step).
-sim_t = install(prog_tight)
-u0 = np.array(sim_t._get_state("ions"))
-dt_t = sim_t.step_cfl(CFL)
-u1 = np.array(sim_t._get_state("ions"))
-chk(float(np.abs(u1 - u0).max()) > 1e-9, "tight-bound program advanced the state")
-chk(abs(dt_t - dt_tight) < 1e-12, "tight-bound dt reproducible (%.10g vs %.10g)" % (dt_t, dt_tight))
+    assert abs(dt - dt_tight) < 1e-12
+    assert float(np.abs(after_cfl - before).max()) > 1e-9
 
-sim_ref = install(prog_tight)
-sim_ref.step(dt_t)  # drive the reference at the dt step_cfl chose
-u_ref = np.array(sim_ref._get_state("ions"))
-chk(float(np.abs(u1 - u_ref).max()) == 0.0,
-    "step_cfl(cfl) == step(dt_tight) bit-exact (max|d|=%.2e)" % float(np.abs(u1 - u_ref).max()))
-
-if fails:
-    print("FAIL test_time_dt_bound: %d failure(s)" % fails)
-    raise AssertionError("test_time_dt_bound failed with %d failure(s)" % fails)
-print("PASS test_time_dt_bound (Sections A + B)")
+    sim_fixed = _install(tight)
+    sim_fixed.step(dt)
+    assert np.array_equal(after_cfl, _state(sim_fixed))
