@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _configure_source_tree_include():
+    os.environ["POPS_CACHE_DIR"] = str(REPO_ROOT / ".pops_cache")
     include = REPO_ROOT / "include"
     os.environ["POPS_INCLUDE"] = str(include)
     conda_prefix = os.environ.get("CONDA_PREFIX")
