@@ -25,6 +25,8 @@ def test_ci_runs_spec_final_requires_toolchain_tests_with_pytest():
         "python/tests/integration/test_matrix_free_bicgstab.py",
         "python/tests/integration/test_moments_final.py",
         "python/tests/integration/test_amr_final_route.py",
+        "python/tests/test_output_policy_run.py",
+        "python/tests/test_hdf5_parallel.py",
     )
     missing = [token for token in required if token not in text]
     assert not missing, (

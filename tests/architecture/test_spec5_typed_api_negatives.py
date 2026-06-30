@@ -16,6 +16,10 @@ need the compiled ``_pops`` extension; if it cannot be loaded the module is skip
 ``test_public_imports.py``), so the source-only architecture checks still run bare.
 """
 import pytest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Skip the whole module if the native extension cannot be loaded in this interpreter.
 # importorskip is too strict here (pops/_bootstrap raises a custom ImportError whose .name
@@ -133,7 +137,7 @@ def test_optimization_math_rejects_a_bare_string():
     assert Optimization(math=FastMath()).options()["math"] == "FastMath"
 
 
-def test_output_policy_rejects_string_format_and_unimplemented_cadence():
+def test_output_policy_rejects_string_format_and_invalid_cadence():
     from pops.output import OutputPolicy
     from pops.time.schedule import subcycle, when
 
@@ -141,10 +145,28 @@ def test_output_policy_rejects_string_format_and_unimplemented_cadence():
         OutputPolicy(format="hdf5")
     assert "format" in str(excinfo.value) and "HDF5()" in str(excinfo.value)
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="valid output/checkpoint cadence"):
         OutputPolicy(cadence=when(lambda: True))
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="valid output/checkpoint cadence"):
         OutputPolicy(cadence=subcycle(2))
+
+
+def test_output_runtime_public_validation_uses_configuration_errors():
+    """TASK-005/TASK-056: output/checkpoint validation must not expose placeholders."""
+    files = [
+        "python/pops/output/policies.py",
+        "python/pops/runtime/_output_driver.py",
+        "python/pops/runtime/_system_io.py",
+    ]
+    offenders = []
+    for rel in files:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        if "NotImplementedError" in text:
+            offenders.append(rel)
+    assert not offenders, (
+        "output/checkpoint public validation must raise TypeError/ValueError with clear messages, "
+        "not NotImplementedError:\n%s" % "\n".join(offenders)
+    )
 
 
 def test_disc_domain_rejects_string_transport_mode():

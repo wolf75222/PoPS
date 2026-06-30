@@ -254,19 +254,19 @@ class _SystemIO:
         @p parallel : the v1 checkpoint is ALWAYS rank-0 gather (npz format, not HDF5). The hyperslab
         write (parallel=True) only applies to the visualization OUTPUT
         write(format='hdf5') : an npz checkpoint has neither HDF5 datasets nor box partitioning. Passing
-        parallel=True therefore raises an EXPLICIT error (never a silently degraded write) : for a
+        parallel=True therefore raises an EXPLICIT configuration error (never a silently degraded write) : for a
         parallel output, use write(format='hdf5', parallel=True) ; a restartable parallel HDF5
-        checkpoint is later work (PR-IO-3, cf. docs/IO_CHECKPOINT_PLAN.md)."""
+        checkpoint is not part of this v1 checkpoint contract."""
         import os
         import numpy as np
         from pops import _pops
         if parallel:
-            raise NotImplementedError(
+            raise ValueError(
                 "checkpoint(parallel=True) : the v1 checkpoint is a rank-0 gather npz (non "
                 "HDF5 format, no box partitioning). The hyperslab write only concerns "
                 "write(format='hdf5', parallel=True) (visualization output). A restartable parallel "
-                "HDF5 checkpoint remains to be done (PR-IO-3, docs/IO_CHECKPOINT_PLAN.md) ; for "
-                "now : checkpoint(parallel=False).")
+                "HDF5 checkpoint is not part of this checkpoint policy; use "
+                "checkpoint(parallel=False).")
         blocks = list(self._s.block_names())
         out = {"pops_checkpoint_version": 1,
                "t": self._s.time(), "macro_step": self._s.macro_step(),

@@ -20,8 +20,8 @@ def policy_due(cadence, step, phase="step"):
     step, ``"step"`` after each macro-step, or ``"end"`` after the run loop. ``None`` means every
     completed step (the default). An ``every(N)`` fires when ``step % N == 0`` (and ``step > 0``);
     ``always`` fires every completed step; ``on_start`` / ``on_end`` fire at their named phases.
-    A schedule kind with no run-loop meaning here (``when`` / ``subcycle``) raises rather than
-    silently never firing.
+    A schedule kind with no run-loop meaning here (``when`` / ``subcycle``) is a configuration
+    error rather than silently never firing.
     """
     if phase not in ("start", "step", "end"):
         raise ValueError("output phase must be 'start', 'step' or 'end' (got %r)" % (phase,))
@@ -41,10 +41,9 @@ def policy_due(cadence, step, phase="step"):
         return phase == "start"
     if kind == "on_end":
         return phase == "end"
-    raise NotImplementedError(
-        "output cadence schedule kind %r is not honored by the run loop; use every(N), "
-        "always(), on_start(), on_end() or an int interval (when/subcycle output needs a "
-        "runtime condition/sub-runner)." % (kind,))
+    raise ValueError(
+        "output cadence schedule kind %r is not valid for the output run loop; use every(N), "
+        "always(), on_start(), on_end() or an int interval." % (kind,))
 
 
 def _format_token(fmt):

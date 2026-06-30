@@ -416,6 +416,8 @@ jobs:
             python/tests/integration/test_matrix_free_bicgstab.py \
             python/tests/integration/test_moments_final.py \
             python/tests/integration/test_amr_final_route.py \
+            python/tests/test_output_policy_run.py \
+            python/tests/test_hdf5_parallel.py \
             -m 'requires_toolchain'
 
       - name: Upload per-file test timings (ADC-366)

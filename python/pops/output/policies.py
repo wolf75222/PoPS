@@ -32,10 +32,9 @@ def _validate_output_cadence(cadence):
         raise TypeError("OutputPolicy: cadence must be an int interval or typed schedule, got bool")
     kind = getattr(cadence, "kind", None)
     if kind not in _OUTPUT_CADENCE_KINDS:
-        raise NotImplementedError(
-            "OutputPolicy: cadence %r is not implemented by the output run loop; use "
-            "always(), every(N), on_start(), on_end(), an int interval, or implement the "
-            "runtime hook before exposing this policy." % (kind,))
+        raise ValueError(
+            "OutputPolicy: cadence %r is not a valid output/checkpoint cadence. Use "
+            "always(), every(N), on_start(), on_end(), or an int interval." % (kind,))
     return cadence
 
 
