@@ -167,7 +167,11 @@ class Model(_BoardInternalsMixin, _MultiSpeciesMixin):
                 "y": [self._to_expr(e) for e in waves["y"]],
             }
             self._module.eigenvalues(x=wave_exprs["x"], y=wave_exprs["y"])
-            self._module.riemann_metadata(wave_speeds=wave_exprs)
+            # ``waves=`` is documented as per-direction eigenvalues.  The native
+            # explicit ``wave_speeds`` route is stricter: exactly (smin, smax)
+            # per direction.  Do not reinterpret 1/3/4 eigenvalues as that pair.
+            if len(wave_exprs["x"]) == 2 and len(wave_exprs["y"]) == 2:
+                self._module.riemann_metadata(wave_speeds=wave_exprs)
         h = FluxHandle(name, is_default=True)
         self._fluxes[name] = h
         return h

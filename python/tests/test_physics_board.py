@@ -99,6 +99,33 @@ def test_board_model_lowers_to_operator_first_ir():
     assert "implicit_operator" in ops      # local_linear_operator (registered via m.operator)
 
 
+def test_flux_waves_remain_eigenvalues_not_explicit_wave_speed_pairs():
+    m = _euler_poisson_lorentz()
+    module = m.module
+
+    assert len(module._eigenvalues["x"]) == 3
+    assert len(module._eigenvalues["y"]) == 3
+    assert module.riemann_metadata()["wave_speeds"] is None
+
+
+def test_flux_two_wave_pair_can_feed_explicit_wave_speeds():
+    m = physics.Model("linear_advection")
+    U = m.state("U", components=["q"])
+    (q,) = U
+    m.flux(
+        "F",
+        on=U,
+        x=[q],
+        y=[0.0 * q],
+        waves={"x": [-1.0 + 0.0 * q, 1.0 + 0.0 * q], "y": [0.0 * q, 0.0 * q]},
+    )
+
+    metadata = m.module.riemann_metadata()
+    assert metadata["wave_speeds"] is not None
+    assert len(metadata["wave_speeds"]["x"]) == 2
+    assert len(metadata["wave_speeds"]["y"]) == 2
+
+
 def test_explicit_rate_is_a_local_rate_operator():
     m = _euler_poisson_lorentz()
     sig = m.module.operator_signature("explicit_rate")

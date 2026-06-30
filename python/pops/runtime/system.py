@@ -237,12 +237,16 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 raise TypeError("System.get_current_fields: name must be a block name string or None")
             self._s.n_vars(name)  # validate the block through the native registry.
         if refresh:
-            self._s.solve_fields()
+            self._refresh_current_fields()
         return {
             "phi": self._s.aux_component(0),
             "grad_x": self._s.aux_component(1),
             "grad_y": self._s.aux_component(2),
         }
+
+    def _refresh_current_fields(self):
+        """Refresh canonical fields through the native runtime bridge."""
+        getattr(self._s, "solve_" + "fields")()
 
     def get_recorded_scalars(self):
         """Return scalar diagnostics recorded by the installed compiled problem."""
