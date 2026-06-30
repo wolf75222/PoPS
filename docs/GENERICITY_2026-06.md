@@ -104,8 +104,9 @@ WIRES them (the rejection stays only where the architecture is not ready, and it
    source_frequency/stability_dt; build_amr_block/_compiled route the CFL speed via
    stability_speed (trait); AmrRuntime::step_cfl AND the mono-block step_cfl aggregate the bounds
    (substeps/stride formulas identical to System); AmrSystem::add_dt_bound / last_dt_bound
-   (parity with System, all_reduce_min). A DSL model m.stability_dt(...) compiled
-   target='amr_system' therefore constrains the AMR step (test B4).
+   (parity with System, all_reduce_min). A model with `stability_dt(...)` compiled through
+   `compile_problem(..., layout=AMR(...), backend=Production(...))` therefore constrains the AMR
+   step (test B4).
 2. **Riemann capabilities**: HLLC and Roe are no longer Euler-only algorithms in disguise --
    `HasHLLCStructure` (pressure + wave_speeds + contact_speed + hllc_star_state) and
    `HasRoeDissipation` (d = |A_roe| dU, entropy fix included) let A MODEL provide its
@@ -161,7 +162,8 @@ still missing.
    treated as passive scalars advected at the contact speed -- generalization, not a Euler
    assumption). Requires 'p' declared (pressure/pseudo-pressure). CompiledModel.has_hllc;
    CompositeModel forwards contact_speed/hllc_star_state/roe_dissipation (concept-gates);
-   riemann='hllc' accepted on a 3-var NON-Euler via the capability, explicit rejection without it.
+   the typed `HLLC()` descriptor is accepted on a 3-var NON-Euler via the capability, with explicit
+   rejection without it.
    Proof: HLLC 3-var isothermal runs finite (test_v3_features D1).
 4. **Analytic Jacobian of the source**: trait `HasSourceJacobian` (jacobian(U, aux, J),
    J[r][c] = dS_r/dU_c) used by BOTH Newton paths (historical and instrumented) in place of
@@ -207,7 +209,7 @@ is wired really is; what is not is documented with file:line, never masked).
    RHS `assemble_rhs_polar<Limiter, NumericalFlux, Model>` ALREADY carried the numerical flux as a
    TEMPLATE PARAMETER (injection point identical to the cartesian `build_block<Limiter, Flux>`) and
    calls `nflux(model, L, aux_L, R, aux_R, dir)` -- exactly the signature of `HLLFlux`. Wiring
-   HLL was therefore a small wiring job: `make_block_polar` routes `riemann='hll'` toward
+   HLL was therefore a small wiring job: the typed `HLL()` descriptor lowers to
    `build_block_polar<Limiter, HLLFlux>`, GATED on `model.wave_speeds` (named functor, device-clean,
    same `requires` as `block_builder.hpp` make_block). The polar isothermal fluid
    (`IsothermalFluxPolar : IsothermalFlux`) inherits `wave_speeds` -> eligible; the scalar ExB

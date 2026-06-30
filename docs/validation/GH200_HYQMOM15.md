@@ -3,9 +3,9 @@
 ADC-181. Validates on GH200 (ROMEO, NVIDIA GH200 120GB, aarch64) the device path of the exact
 eigenvalue-based wave speeds: `include/pops/numerics/linalg/dense_eig.hpp` (`real_eig_minmax`: Hessenberg
 reduction + Francis double-shift QR iteration, named `POPS_HD` functors, on-stack buffers, zero
-allocation) through the compiled hyqmom15 `.so` (DSL-emitted bricks, `exact_speeds=True`,
-`riemann="hll"`), wired by the `pops::add_compiled_model` compilation seam (full native path: device
-`assemble_rhs`, halos).
+allocation) through the compiled HyQMOM15 problem artifact (typed `ExactSpeeds()` plus
+`HLL()` numerics descriptor), wired by the generated-module compilation seam (full native path:
+device `assemble_rhs`, halos).
 
 `dense_eig.hpp` was designed for nvcc but had never been EXECUTED on device. This note provides the
 device-execution proof and the host/device parity on the same node (the md5s of the tested

@@ -42,7 +42,7 @@ A string algorithm selector is rejected, not silently accepted. The helper
 from pops.descriptors import reject_string_selector
 
 reject_string_selector("hll", "riemann", "pops.numerics.riemann.HLL()")
-# TypeError: String algorithm selector rejected: riemann='hll'.
+# TypeError: String algorithm selector rejected for riemann.
 #            Use pops.numerics.riemann.HLL().
 ```
 

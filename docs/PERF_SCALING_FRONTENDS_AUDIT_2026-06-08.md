@@ -92,16 +92,18 @@ Status observed in PoPS at audit time:
 - `python/pops/integrate.py` is the path to ban from production measurements:
   it calls `eval_rhs`, `get_state`, `set_state` from Python and therefore copies
   full fields at each stage.
-- `python/pops/dsl.py` distinguishes `prototype`, `aot` and `production`. For
-  production measurements, you must require `backend="production"` and check that
-  the adder is `add_native_block`.
+- The current public route is descriptor typed:
+  `compile_problem(..., backend=Production(...), layout=Uniform(...) or AMR(...))`,
+  followed by `System(layout=...).install(compiled, ...)`. For production
+  measurements, require a `Production(...)` backend descriptor and verify the
+  installed artifact reports a compiled problem hash / native ABI key.
 
 Verdict: PoPS does not have, on the native bricks and DSL `production` paths, the
 MUFFIN profile "Python in the cell loop". The expected Python costs are
 mainly setup, DSL compilation, pybind call per `step`, and diagnostic copies.
 The main risk is the accidental use of a wrong path
-(`integrate.py`, `eval_rhs` in a Python loop, DSL `aot/prototype`, or
-diagnostics that are too frequent).
+(`eval_rhs` in an internal/debug Python loop, non-production/debug codegen
+routes, or diagnostics that are too frequent).
 
 ## 3. Theoretical cost model
 

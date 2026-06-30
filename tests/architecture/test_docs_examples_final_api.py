@@ -67,6 +67,20 @@ def test_active_docs_do_not_advertise_removed_public_front_doors():
         "sim.install(None",
         "pops.Explicit",
         "Explicit.euler",
+        "backend=\"production\"",
+        "backend='production'",
+        "target=\"amr_system\"",
+        "target='amr_system'",
+        "riemann=\"",
+        "riemann='",
+        "limiter=\"",
+        "limiter='",
+        "solver=\"",
+        "solver='",
+        "layout=\"",
+        "layout='",
+        "platform=\"openmp\"",
+        "platform='openmp'",
     )
     offenders = []
     for path in _active_doc_and_example_files():
