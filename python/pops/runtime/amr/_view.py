@@ -164,10 +164,10 @@ class AmrRuntimeView:
             restartable=not violations, constraints=constraints, violations=violations, notes=notes)
 
     def hierarchy_snapshot(self):
-        """Return a :class:`HierarchySnapshot`: config envelope (reusing :func:`pops.inspect_amr`)
+        """Return a :class:`HierarchySnapshot`: config envelope from the static AMR inspector
         composed with the live patch table."""
         # Config envelope from the inert authoring report (native max_levels / ratio / limitations).
-        from pops import inspect_amr  # runtime layer may import the flat root facade.
+        from pops._capabilities import inspect_amr
 
         envelope = inspect_amr().to_dict()
         regrid_every = int(self._sim._regrid_every)

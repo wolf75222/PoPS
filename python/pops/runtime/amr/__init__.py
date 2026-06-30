@@ -1,7 +1,8 @@
 """pops.runtime.amr -- the AMR runtime inspection surface (Spec 5 sec.8.12 / sec.8.4).
 
-The runtime-bound counterpart of the inert authoring report :func:`pops.inspect_amr`. Where
-``pops.inspect_amr`` reports a *layout descriptor* (the declared level / ratio / regrid / refine
+The runtime-bound counterpart of the inert authoring report exposed through
+``compiled.inspect_amr``. Where that report describes a *layout descriptor* (the declared
+level / ratio / regrid / refine
 / checkpoint envelope, before any runtime), this package reports a *live*
 :class:`pops.runtime.amr_system.AmrSystem`: the patches that actually exist on the built
 hierarchy, the regrid cadence in force, and the ghost / reflux / checkpoint route limitations.

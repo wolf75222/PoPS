@@ -463,7 +463,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         accessors + the retained config); it builds / allocates / steps NOTHING.
 
         ``System.amr`` does not exist: the inspection surface is AMR-specific (a uniform System
-        carries no hierarchy). Use ``pops.inspect_amr(layout)`` for the STATIC authoring report.
+        carries no hierarchy). Use ``compiled.inspect_amr(layout)`` for the STATIC authoring report.
         """
         from pops.runtime.amr import AmrRuntimeView  # lazy: keeps the constructor import-light.
 

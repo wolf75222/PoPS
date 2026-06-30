@@ -190,12 +190,22 @@ class Module:
                     return op.signature.inputs[1]
         return None
 
-    def eigenvalues(self, x, y):
-        """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
-        IR expressions over the state. Carried so a pure Module is a self-contained,
-        compilable model."""
+    def eigenvalues(self, x=None, y=None):
+        """Get or declare per-direction Riemann eigenvalues.
+
+        Called as ``module.eigenvalues(x=[...], y=[...])`` it declares the per-direction
+        eigenvalue expressions carried by a pure Module. Called with no arguments it returns a
+        shallow copy of the current declaration, or ``None`` when none was declared.
+        """
+        if x is None and y is None:
+            return None if self._eigenvalues is None else {
+                "x": list(self._eigenvalues["x"]),
+                "y": list(self._eigenvalues["y"]),
+            }
+        if x is None or y is None:
+            raise ValueError("Module.eigenvalues requires both x= and y=, or neither for a getter")
         self._eigenvalues = {"x": list(x), "y": list(y)}
-        return self._eigenvalues
+        return self.eigenvalues()
 
     def adopt_registry(self, registry):
         """Use ``registry`` as this Module's operator registry. Returns ``self``."""

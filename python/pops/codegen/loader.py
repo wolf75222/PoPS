@@ -338,13 +338,13 @@ class CompiledProblem:
         """STATIC AMR report on this compiled artifact (Spec 5 sec.8.12 / sec.8.4).
 
         A compiled problem handle carries no AMR layout descriptor unless it was recorded in the
-        problem identity. This delegates to the top-level :func:`pops.inspect_amr` on an EXPLICIT
+        problem identity. This delegates to the static AMR inspector on an EXPLICIT
         ``layout``
         argument (an ``pops.mesh.layouts.AMR`` / ``Uniform`` descriptor), and with ``layout=None``
         returns the native AMR envelope report -- never a fabricated hierarchy the artifact does not
         carry. @p layout an optional AMR / Uniform layout descriptor (default: the native envelope).
         """
-        from pops import inspect_amr
+        from pops._capabilities import inspect_amr
         return inspect_amr(layout if layout is not None else self._layout)
 
     def __str__(self):
@@ -471,13 +471,13 @@ class CompiledModel:
         A ``CompiledModel`` is a per-block physics ``.so``; ``target='amr_system'`` means it is
         loadable on the native AMR hierarchy (``add_equation``), but the model carries NO layout
         descriptor (the levels / ratio / regrid policy belong to the ``AmrSystem`` it is installed
-        in, not to the model). So this delegates to the top-level :func:`pops.inspect_amr` on an
+        in, not to the model). So this delegates to the static AMR inspector on an
         EXPLICIT ``layout`` argument and returns the native AMR envelope report for ``layout=None``;
         for a target='system' model the report still describes the native AMR envelope (a model is
         AMR-installable only with target='amr_system'). It never fabricates a hierarchy. @p layout
         an optional AMR / Uniform layout descriptor (default: the native envelope).
         """
-        from pops import inspect_amr
+        from pops._capabilities import inspect_amr
         return inspect_amr(layout)
 
     def __repr__(self):

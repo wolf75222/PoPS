@@ -42,10 +42,11 @@ def test_custom_moments_builds_module_without_legacy_facade():
         "fields_from_state",
         "explicit_rate",
     }
-    wave_speeds = module.riemann_metadata()["wave_speeds"]
-    assert set(wave_speeds) == {"x", "y"}
-    assert len(wave_speeds["x"]) == 3
-    assert len(wave_speeds["y"]) == 3
+    eigenvalues = module.eigenvalues()
+    assert set(eigenvalues) == {"x", "y"}
+    assert len(eigenvalues["x"]) == 3
+    assert len(eigenvalues["y"]) == 3
+    assert module.riemann_metadata()["wave_speeds"] is None
     assert not hasattr(module, "_m")
 
 
@@ -60,10 +61,10 @@ def test_provided_hyqmom15_builds_module_without_custom_case_file():
         "fields_from_state",
         "explicit_rate",
     }
-    wave_speeds = module.riemann_metadata()["wave_speeds"]
-    assert set(wave_speeds) == {"x", "y"}
-    assert len(wave_speeds["x"]) == 2
-    assert len(wave_speeds["y"]) == 2
+    eigenvalues = module.eigenvalues()
+    assert set(eigenvalues) == {"x", "y"}
+    assert len(eigenvalues["x"]) == 2
+    assert len(eigenvalues["y"]) == 2
     assert list((REPO_ROOT / "python" / "pops" / "lib" / "models").rglob("custom.py")) == []
 
 

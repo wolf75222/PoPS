@@ -278,7 +278,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         ``System`` is single-level: it carries no AMR hierarchy, so ``sim.amr`` (the live
         patch / regrid / ghost / reflux / checkpoint reports of Spec 5 sec.8.12) is an
         ``AmrSystem``-only handle. Build an ``pops.AmrSystem`` for a refined run, or use the
-        STATIC authoring report ``pops.inspect_amr(layout)`` for a layout descriptor. Accessing it
+        STATIC authoring report ``compiled.inspect_amr(layout)`` for a layout descriptor. Accessing it
         raises a clear ``AttributeError`` (sourced in ``__getattr__`` so the message is single).
         """
         # The AttributeError routes through __getattr__('amr'), which raises the clear message.
@@ -335,5 +335,5 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
             raise AttributeError(
                 "System has no 'amr' inspection handle: System is a uniform single-level runtime "
                 "with no AMR hierarchy. Use pops.AmrSystem (its sim.amr returns an AmrRuntimeView), "
-                "or pops.inspect_amr(layout) for the static authoring report.")
+                "or compiled.inspect_amr(layout) for the static authoring report.")
         return getattr(self._s, attr)
