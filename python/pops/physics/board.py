@@ -398,7 +398,7 @@ class Model(_BoardInternalsMixin, _MultiSpeciesMixin):
             hooks["pressure"] = self._to_expr(pressure)
         for hook_name, hook_value in (("contact_speed", contact_speed), ("star_state", star_state)):
             if hook_value is not None and hasattr(hook_value, "deps"):
-                raise NotImplementedError(
+                raise ValueError(
                     "riemann(%s=...): arbitrary formulas for two-state HLLC hooks are not "
                     "defined in the Module-native API; pass a typed capability descriptor instead"
                     % hook_name)

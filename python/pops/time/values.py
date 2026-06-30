@@ -281,7 +281,7 @@ class Value:
     # the value is unknown until the step runs, so the arithmetic builds IR, it is never evaluated here.
     def _scalar_op(self, other, fn, swap=False):
         if self.vtype != "scalar":
-            raise NotImplementedError("scalar arithmetic is only defined for Scalar values")
+            raise TypeError("scalar arithmetic is only defined for Scalar values")
         a, b = (other, self) if swap else (self, other)
         return self.prog._scalar_binop(a, b, fn)
 
@@ -435,4 +435,3 @@ class _CoupledResult:
 
     def __repr__(self):
         return "_CoupledResult(blocks=%s)" % list(self._outs)
-

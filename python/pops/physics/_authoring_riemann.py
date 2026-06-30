@@ -49,7 +49,7 @@ class _RiemannMixin:
             if not isinstance(form, Expr):
                 continue  # descriptor / None: role-derived default stands
             if name not in self._FORMULA_HOOKS:
-                raise NotImplementedError(
+                raise ValueError(
                     "riemann hook %r does not yet accept an arbitrary board formula (its C++ "
                     "signature spans two states); pass a capability-hook descriptor "
                     "(e.g. pops.numerics.riemann.hllc.contact_speed.euler()) for the role-derived "

@@ -104,10 +104,10 @@ def test_range_scalar_count_rejected(t):
     U = P.state("blk")
     try:
         P.range(U, P.norm2(U), _fe_body())
-    except NotImplementedError as exc:
+    except TypeError as exc:
         assert "runtime Scalar count" in str(exc), str(exc)
     else:
-        raise AssertionError("range with a Scalar count must raise NotImplementedError")
+        raise AssertionError("range with a Scalar count must raise TypeError")
 
 
 def test_range_count_changes_hash(t):

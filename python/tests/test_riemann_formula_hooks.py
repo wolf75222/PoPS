@@ -132,7 +132,7 @@ def test_arbitrary_formula_for_a_two_state_hook_is_rejected():
                        "my": "momentum_y", "E": "energy"})
     rho, _, _, _ = U
     m.primitive("p", rho)
-    with pytest.raises(NotImplementedError, match="contact_speed"):
+    with pytest.raises(ValueError, match="contact_speed"):
         m.riemann(HLLC(), contact_speed=rho * 2.0)
 
 

@@ -169,6 +169,27 @@ def test_output_runtime_public_validation_uses_configuration_errors():
     )
 
 
+def test_public_authoring_validation_uses_configuration_errors():
+    """TASK-005/TASK-039/040: public DSL/runtime validation must not expose placeholders."""
+    files = [
+        "python/pops/physics/_authoring_riemann.py",
+        "python/pops/physics/board.py",
+        "python/pops/time/values.py",
+        "python/pops/time/program_authoring.py",
+        "python/pops/time/program_local.py",
+        "python/pops/runtime/_system_install.py",
+    ]
+    offenders = []
+    for rel in files:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        if "NotImplementedError" in text:
+            offenders.append(rel)
+    assert not offenders, (
+        "public authoring/runtime validation must raise TypeError/ValueError with clear messages, "
+        "not NotImplementedError:\n%s" % "\n".join(offenders)
+    )
+
+
 def test_disc_domain_rejects_string_transport_mode():
     from pops.mesh.geometry import DiscDomain
 

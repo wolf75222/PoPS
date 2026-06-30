@@ -17,7 +17,7 @@ class _ProgramLocal(_ProgramConstants):
         if not isinstance(operator, _Operator) or operator.identity.as_dict() != {0: 1.0}:
             raise ValueError("solve_local_linear currently supports local linear operators only")
         if len(operator.terms) != 1:
-            raise NotImplementedError(
+            raise ValueError(
                 "solve_local_linear currently supports a single linear source (I +/- a*L); got %d "
                 "term(s)" % len(operator.terms))
         if not (isinstance(rhs, Value) and rhs.vtype == "state"):
@@ -84,9 +84,9 @@ class _ProgramLocal(_ProgramConstants):
             raise ValueError(
                 "solve_local_nonlinear: max_iter must be a positive int (got %r)" % (max_iter,))
         if self._recording:
-            raise NotImplementedError(
+            raise ValueError(
                 "solve_local_nonlinear: recording a residual inside another sub-block (apply / while "
-                "body) is a later phase")
+                "body) is not a lowerable Program shape")
         block = initial_guess.block
         # Record the residual sub-block (like set_apply / a while body): the iterate U and the frozen
         # initial-guess U0 are State placeholders local to the sub-block; residual_fn builds r(U) from

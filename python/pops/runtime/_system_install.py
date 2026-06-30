@@ -420,11 +420,11 @@ class _SystemInstall:
         coupling sign 4piG (rho-rho0)); charge_density() is its usual case. Diffusion / projection (other
         operator) would require a variable-coefficient solver (refinement not available)."""
         if not isinstance(model.operator, DivEpsGrad):
-            raise NotImplementedError("add_elliptic_model: only the div_eps_grad operator (Poisson) "
-                                      "is supported; diffusion / projection -> refinement (solver)")
+            raise ValueError("add_elliptic_model: only the div_eps_grad operator (Poisson) "
+                             "is supported in this runtime path")
         if not isinstance(model.rhs, CompositeRhs):
-            raise NotImplementedError("add_elliptic_model: rhs must be composite_rhs() (sum of the "
-                                      "per-block bricks) or charge_density() (its usual case)")
+            raise ValueError("add_elliptic_model: rhs must be composite_rhs() (sum of the "
+                             "per-block bricks) or charge_density() (its usual case)")
         if solver is None:
             kind = "geometric_mg"
         elif hasattr(solver, "scheme"):

@@ -100,9 +100,9 @@ class _ProgramAuthoring(_ProgramConstants):
         if not (isinstance(state, Value) and state.vtype == "state"):
             raise ValueError("project: a State value is required (state=...)")
         if projection != "block":
-            raise NotImplementedError(
+            raise ValueError(
                 "project: only projection='block' (the block's own positivity projection) is "
-                "supported; a custom projection is a later phase (got %r)" % (projection,))
+                "supported in the public Program API (got %r)" % (projection,))
         return self._new("state", "project", (state,), {"projection": projection}, name,
                          state.block)
 
@@ -344,9 +344,9 @@ class _ProgramAuthoring(_ProgramConstants):
         if not (isinstance(state, Value) and state.vtype == "state"):
             raise ValueError("while_: the loop variable must be a State value")
         if self._recording:
-            raise NotImplementedError(
-                "while_: nested control flow is a later phase; a while_ body cannot itself open a "
-                "while_ yet")
+            raise ValueError(
+                "while_: nested control flow is not a lowerable Program shape; a while_ body cannot "
+                "itself open another while_")
         cond_block, cond_val = self._record(cond_fn, state)
         if not (isinstance(cond_val, Value) and cond_val.vtype == "bool"):
             raise ValueError("while_: cond_fn must return a Bool value (e.g. P.norm2(d) > tol)")
@@ -385,8 +385,8 @@ class _ProgramAuthoring(_ProgramConstants):
         """A C++ ``for`` loop over a fixed Python-int count, threading a State value."""
         if isinstance(count, Value):
             if count.vtype == "scalar":
-                raise NotImplementedError("range with a runtime Scalar count is deferred; use a "
-                                          "Python int")
+                raise TypeError("range with a runtime Scalar count is not a valid Program shape; use a "
+                                "Python int")
             raise TypeError("range count must be a Python int")
         if isinstance(count, bool) or not isinstance(count, int):
             raise TypeError("range count must be a Python int")
@@ -395,8 +395,8 @@ class _ProgramAuthoring(_ProgramConstants):
         if not (isinstance(state, Value) and state.vtype == "state"):
             raise ValueError("range: the loop variable must be a State value")
         if self._recording:
-            raise NotImplementedError("range: nested control flow is a later phase; a control-flow "
-                                      "body cannot itself open a range yet")
+            raise ValueError("range: nested control flow is not a lowerable Program shape; a "
+                             "control-flow body cannot itself open a range")
         body_block, next_state = self._record(body_fn, state)
         if not (isinstance(next_state, Value) and next_state.vtype == "state"
                 and next_state.block == state.block):
@@ -415,8 +415,8 @@ class _ProgramAuthoring(_ProgramConstants):
         if not (isinstance(cond, Value) and cond.vtype == "bool"):
             raise ValueError("if_: cond must be a Bool value (e.g. P.norm2(d) > tol)")
         if self._recording:
-            raise NotImplementedError("if_: nested control flow is a later phase; a control-flow body "
-                                      "cannot itself open an if_ yet")
+            raise ValueError("if_: nested control flow is not a lowerable Program shape; a "
+                             "control-flow body cannot itself open an if_")
         body_block, next_state = self._record(body_fn, state)
         if not (isinstance(next_state, Value) and next_state.vtype == "state"
                 and next_state.block == state.block):
@@ -451,7 +451,7 @@ class _ProgramAuthoring(_ProgramConstants):
         if self._dt_bound is not None:
             raise ValueError("set_dt_bound: a dt bound is already set (set it at most once)")
         if self._recording:
-            raise NotImplementedError("set_dt_bound: a dt bound cannot be set inside a control-flow body")
+            raise ValueError("set_dt_bound: a dt bound cannot be set inside a control-flow body")
         sub = []
         self._recording.append(sub)
         try:

@@ -243,7 +243,7 @@ def test_project_rejects_non_state_and_custom_projection(t):
         raise AssertionError("project must reject a non-State value")
     try:
         P.project(state=U, projection="custom")
-    except NotImplementedError as exc:
+    except ValueError as exc:
         assert "projection" in str(exc), str(exc)
     else:
         raise AssertionError("project must reject a non-'block' projection")
