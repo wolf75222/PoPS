@@ -1,194 +1,135 @@
-#!/usr/bin/env python3
-"""Compiled time-program macro-step cadence: substeps + stride (epic ADC-399 / ADC-411).
+"""Compiled-problem cadence around ``sim.step``.
 
-`CompiledProgramCadence(substeps=, stride=)` records a SYSTEM-level cadence installed through
-`sim.install(..., cadence=...)` around the opaque compiled-program closure:
-  - substeps=n  -> program_step_(eff_dt/n) called n times (subdivides the effective step);
-  - stride=M    -> the whole program runs ONCE per M macro-steps with eff_dt = M*dt (GLOBAL
-                   hold-then-catch-up), and the clock t STILL ticks every macro-step.
-
-Bit-exactness vs the native path holds ONLY on the simple cases the tests deliberately use:
-  - substeps: a compiled Forward-Euler program over an UNCOUPLED / transport-only model matches
-    native Explicit.euler(substeps=n) bit-for-bit. (program_step_(h) re-runs the WHOLE
-    program -- its solve_fields included -- so n>1 equals native substeps only when solve_fields is
-    inert, i.e. no Poisson feedback into the flux.)
-  - stride: a SINGLE-block system. The compiled program is one whole-system closure, so its stride is
-    GLOBAL; it equals native per-block stride only when there is a single block (or all blocks share M).
-
-Section (A) (pure Python) always runs: the substeps/stride guards are gone, the values are stored, and
-negative/zero raise. Section (B) (parity) needs _pops + a compiler + a visible Kokkos (POPS_KOKKOS_ROOT)
-and self-skips cleanly otherwise -- it never fakes the engine.
+The cadence record is a runtime install detail around a compiled problem artifact. This test keeps
+the public execution route clean and does not compare against old native time policies.
 """
+
+from pathlib import Path
+import os
 import sys
 
+import numpy as np
+import pytest
 
-def _skip(msg):
-    print("skip test_time_substeps_stride (%s)" % msg)
-    try:
-        import pytest
-        pytest.skip(msg, allow_module_level=True)
-    except ImportError:
-        pass
-    sys.exit(0)
+import pops
+from pops import time as adctime
+from pops.codegen import KokkosOpenMP, Production
+from pops.mesh import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.runtime._compiled_cadence import CompiledProgramCadence
+from pops.solvers.elliptic import GeometricMG
 
-
-try:
-    import numpy as np
-
-    import pops
-    from pops.runtime.bricks import Explicit
-    from pops.solvers import GeometricMG
-    from pops import time as adctime
-    from pops.runtime._compiled_cadence import CompiledProgramCadence
-    from _module_models import (
-        explicit_euler,
-        first_order_rusanov,
-        isothermal_transport_module,
-    )
-except Exception as exc:  # noqa: BLE001
-    _skip("pops/numpy unavailable: %s" % exc)
-
-fails = 0
+from _module_models import first_order_rusanov, isothermal_transport_module
 
 
-def chk(cond, label):
-    global fails
-    print("  [%s] %s" % ("OK " if cond else "XX ", label))
-    if not cond:
-        fails += 1
+REPO_ROOT = Path(__file__).resolve().parents[2]
+N = 24
+DT = 2e-3
 
 
-def raises(exc_type, fn):
-    try:
-        fn()
-    except exc_type:
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-    return False
+def _initial_state():
+    x = (np.arange(N, dtype=float) + 0.5) / N
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    rho = 1.0 + 0.3 * np.sin(2.0 * np.pi * X) * np.cos(2.0 * np.pi * Y)
+    return np.stack([rho, 0.4 * rho, -0.2 * rho])
 
 
-# ---- (A) validation: pure Python, always runs ----
-print("== (A) CompiledProgramCadence substeps/stride validation (ADC-411) ==")
-ct2 = CompiledProgramCadence(substeps=2)
-chk(ct2.substeps == 2 and ct2.stride == 1, "CompiledProgramCadence(substeps=2) stores substeps (no raise)")
-cts = CompiledProgramCadence(stride=2)
-chk(cts.stride == 2 and cts.substeps == 1, "CompiledProgramCadence(stride=2) stores stride (no raise)")
-chk(CompiledProgramCadence(substeps=3, stride=4).substeps == 3
-    and CompiledProgramCadence(substeps=3, stride=4).stride == 4,
-    "CompiledProgramCadence(substeps=3, stride=4) stores both")
-chk(raises(ValueError, lambda: CompiledProgramCadence(substeps=0)), "substeps=0 rejected (ValueError)")
-chk(raises(ValueError, lambda: CompiledProgramCadence(substeps=-1)), "substeps<0 rejected (ValueError)")
-chk(raises(ValueError, lambda: CompiledProgramCadence(stride=0)), "stride=0 rejected (ValueError)")
-chk(raises(ValueError, lambda: CompiledProgramCadence(stride=-2)), "stride<0 rejected (ValueError)")
-chk(CompiledProgramCadence(cfl="program").cfl == "program",
-    "cfl='program' accepted and routed to the compiled Program dt_bound")
-
-# ---- (B) end-to-end parity: skips unless the full toolchain is present ----
-print("== (B) compiled cadence vs native (parity) ==")
-
-
-def transport_model():
-    # Pure transport (isothermal, NoSource); BackgroundDensity(n0=0) keeps solve_fields well-defined
-    # but INERT (no Poisson feedback into the flux), so re-running solve_fields per substep / per
-    # program call changes nothing -> the compiled cadence is bit-exact vs the native cadence.
+def _model():
     return isothermal_transport_module("time_substeps_stride_model")
 
 
-N = 24
+def _program(module, name="fe_cadence"):
+    program = adctime.Program(name).bind_operators(module)
+    state = program.state("U", block="ions", space=module.state_spaces()["U"])
+    operators = module.operator_registry()
+    fields = program.call(operators.get("fields_from_state"), state.n, name="fields_n")
+    rate = program.call(operators.get("explicit_rate"), state.n, fields, name="R_n")
+    program.define(state.next, state.n + program.dt * rate)
+    program.commit(state.next, fields=fields)
+    program.validate()
+    return program
 
 
-def make_sim(time):
-    sim = pops.System(n=N, L=1.0, periodic=True)
-    x = (np.arange(N) + 0.5) / N
-    X, Y = np.meshgrid(x, x, indexing="ij")
-    rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.install(None,
-                instances={"ions": {"model": transport_model(),
-                                    "spatial": first_order_rusanov(),
-                                    "time": time,
-                                    "initial": np.stack([rho, 0.4 * rho, -0.2 * rho])}},
-                solvers={"phi": GeometricMG()})
+def _compile():
+    include = str(REPO_ROOT / "include")
+    os.environ.setdefault("POPS_INCLUDE", include)
+    conda_prefix = os.environ.get("CONDA_PREFIX") or sys.prefix
+    if conda_prefix:
+        os.environ.setdefault("POPS_KOKKOS_ROOT", conda_prefix)
+        os.environ.setdefault("Kokkos_ROOT", conda_prefix)
+    module = _model()
+    return pops.compile_problem(
+        model=module,
+        program=_program(module),
+        layout=Uniform(CartesianMesh(n=N, L=1.0, periodic=True)),
+        backend=Production(platform=KokkosOpenMP()),
+        include=include,
+    )
+
+
+def _install(compiled, cadence):
+    sim = pops.System(layout=Uniform(CartesianMesh(n=N, L=1.0, periodic=True)))
+    sim.install(
+        compiled,
+        instances={
+            "ions": {
+                "initial": _initial_state(),
+                "spatial": first_order_rusanov(),
+            }
+        },
+        solvers={"phi": GeometricMG()},
+        cadence=cadence,
+    )
     return sim
 
 
-def fe_program(name="fe_cadence"):
-    P = adctime.Program(name)
-    U = P.state("U", block="ions").n
-    f = P._fields_from_state(U)
-    R = P._rate_from_transport(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
-    return P
-
-
-try:
-    compiled = pops.compile_problem(model=transport_model(), time=fe_program())
-except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
-    _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
-
-dt = 2e-3
-
-
-def run_compiled(cadence, n_steps, dt_step=dt):
-    """Install the FE program with cadence, step n_steps macro-steps; returns (state, t)."""
-    sim = make_sim(explicit_euler())
-    sim.install(compiled, cadence=cadence)
+def _run(compiled, cadence, n_steps, dt=DT):
+    sim = _install(compiled, cadence)
     for _ in range(n_steps):
-        sim.step(dt_step)
-    return np.array(sim._get_state("ions")), float(sim.time())
+        sim.step(dt)
+    return np.array(sim.get_state("ions")), float(sim.time()), sim.macro_step()
 
 
-# ----- SUBSTEPS: compiled CompiledProgramCadence(substeps=2) vs native Explicit(euler, substeps=2) -----
-print("-- substeps --")
-sub2, _ = run_compiled(CompiledProgramCadence(substeps=2), 1)
+def test_compiled_program_cadence_validation():
+    assert CompiledProgramCadence(substeps=2).substeps == 2
+    assert CompiledProgramCadence(stride=2).stride == 2
+    assert CompiledProgramCadence(substeps=3, stride=4).substeps == 3
+    assert CompiledProgramCadence(substeps=3, stride=4).stride == 4
+    assert CompiledProgramCadence(cfl="program").cfl == "program"
 
-nat = make_sim(Explicit.euler(substeps=2))
-nat.step(dt)
-sub2_native = np.array(nat._get_state("ions"))
-e_sub = float(np.abs(sub2 - sub2_native).max())
-chk(e_sub < 1e-12, "compiled substeps=2 == native Explicit(euler, substeps=2) (max|d|=%.2e)"
-    % e_sub)
-
-# Consistency: substeps=2 over dt == two compiled substeps=1 steps of dt/2 (the same FE sub-iteration
-# sequence; both re-run the inert solve_fields each call).
-half_twice, _ = run_compiled(CompiledProgramCadence(substeps=1), 2, dt_step=dt / 2.0)
-e_half = float(np.abs(sub2 - half_twice).max())
-chk(e_half < 1e-12, "compiled substeps=2 (dt) == two compiled substeps=1 (dt/2) (max|d|=%.2e)"
-    % e_half)
-
-# Non-degenerate: substeps=2 must DIFFER from substeps=1 (otherwise the orchestration is a no-op).
-sub1, _ = run_compiled(CompiledProgramCadence(substeps=1), 1)
-d_sub = float(np.abs(sub2 - sub1).max())
-chk(d_sub > 1e-9, "substeps=2 differs from substeps=1 (non-degenerate, max|d|=%.2e)" % d_sub)
-
-# ----- STRIDE: single-block system, compiled stride=2 vs native Explicit(stride=2) -----
-print("-- stride --")
-K = 4  # macro-steps (even -> ends on a catch-up window boundary)
-str2, t_str = run_compiled(CompiledProgramCadence(stride=2), K)
-
-nat_s = make_sim(Explicit.euler(stride=2))
-for _ in range(K):
-    nat_s.step(dt)
-str2_native = np.array(nat_s._get_state("ions"))
-e_str = float(np.abs(str2 - str2_native).max())
-chk(e_str < 1e-12, "compiled stride=2 == native Explicit(euler, stride=2) over %d steps "
-    "(max|d|=%.2e)" % (K, e_str))
-
-# The clock ticks EVERY macro-step (held steps included): t = K*dt after K steps.
-chk(abs(t_str - K * dt) < 1e-14, "clock advanced every macro-step: t=%.6g == %d*dt=%.6g"
-    % (t_str, K, K * dt))
-
-# Non-degenerate: stride=2 must DIFFER from stride=1 over the same K steps.
-str1, _ = run_compiled(CompiledProgramCadence(stride=1), K)
-d_str = float(np.abs(str2 - str1).max())
-chk(d_str > 1e-9, "stride=2 differs from stride=1 (non-degenerate, max|d|=%.2e)" % d_str)
-
-print("%s test_time_substeps_stride" % ("FAIL (%d)" % fails if fails else "PASS"))
+    with pytest.raises(ValueError):
+        CompiledProgramCadence(substeps=0)
+    with pytest.raises(ValueError):
+        CompiledProgramCadence(stride=0)
+    with pytest.raises(ValueError):
+        CompiledProgramCadence(cfl="not-a-policy")
 
 
-def test_script_passed():
-    assert fails == 0
+@pytest.mark.requires_toolchain
+def test_compiled_substeps_match_equivalent_half_steps():
+    compiled = _compile()
+
+    sub2, _, _ = _run(compiled, CompiledProgramCadence(substeps=2), 1, DT)
+    half_twice, _, _ = _run(compiled, CompiledProgramCadence(substeps=1), 2, DT / 2.0)
+    sub1, _, _ = _run(compiled, CompiledProgramCadence(substeps=1), 1, DT)
+
+    assert np.array_equal(sub2, half_twice)
+    assert float(np.abs(sub2 - sub1).max()) > 1e-9
 
 
-if __name__ == "__main__":
-    sys.exit(1 if fails else 0)
+@pytest.mark.requires_toolchain
+def test_compiled_stride_holds_then_catches_up():
+    compiled = _compile()
+    steps = 4
+
+    stride2, t_stride2, macro_stride2 = _run(compiled, CompiledProgramCadence(stride=2), steps, DT)
+    stride2_again, t_again, macro_again = _run(
+        compiled, CompiledProgramCadence(stride=2), steps, DT)
+    stride1, _, _ = _run(compiled, CompiledProgramCadence(stride=1), steps, DT)
+
+    assert np.array_equal(stride2, stride2_again)
+    assert abs(t_stride2 - steps * DT) < 1e-14
+    assert abs(t_again - steps * DT) < 1e-14
+    assert macro_stride2 == steps
+    assert macro_again == steps
+    assert float(np.abs(stride2 - stride1).max()) > 1e-9

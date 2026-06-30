@@ -40,13 +40,21 @@ def isothermal_transport_module(name, *, cs2=0.5):
         x=[mx / rho - cs, mx / rho, mx / rho + cs],
         y=[my / rho - cs, my / rho, my / rho + cs],
     )
-    mod.operator(
+    source = mod.operator(
         name="source",
         signature=(u, fields) >> model.Rate(u),
         kind="local_source",
         capabilities={"default": True},
         expr=[zero, zero, zero],
     )
+    mod.operator(
+        name="source_default",
+        signature=(u, fields) >> model.Rate(u),
+        kind="local_source",
+        capabilities={"default": True},
+        expr=[zero, zero, zero],
+    )
+    mod.rate_operator("explicit_rate", state_space="U", flux=True, sources=[source])
     return mod
 
 
