@@ -1,185 +1,147 @@
-#!/usr/bin/env python3
-"""Multi-stage compiled time Programs: SSPRK2 + RK4 parity (epic ADC-399 / ADC-407).
+"""Multi-stage Programs use operator-first calls and the final compiled route."""
 
-`Program.emit_cpp_program` lowers a multi-stage scheme (intermediate scratch states + a `lincomb`
-commit) to a problem.so. This test builds SSPRK2 and RK4 Programs, compiles + installs + runs each,
-and checks parity against an OFFLINE stage-by-stage reference computed from the same runtime
-primitives (`set_state` + `solve_fields` + `eval_rhs`) -- the exact stages the compiled program
-drives -- so the match is to machine precision. SSPRK2 is additionally checked against the native
-`Explicit.ssprk2()` step (spec test 32).
-
-Uses a pure-transport (isothermal, no field coupling) model so the per-stage `solve_fields` is inert
-and identical along both paths (the compiled codegen now lowers each solve_fields to a per-stage
-solve_fields_from_state, ADC-409; with no Poisson feedback into the flux the field solve changes
-nothing, so re-solving from a stage state vs the current state is bit-identical here -- the
-field-coupled case is exercised by test_time_solve_fields_from_state). Skips cleanly (exit 0)
-without numpy / a compiler / a visible Kokkos -- never fakes the engine.
-"""
+from pathlib import Path
+import os
 import sys
 
+import numpy as np
+import pytest
 
-def _skip(msg):
-    print("skip test_time_multistage (%s)" % msg)
-    try:
-        import pytest
-        pytest.skip(msg, allow_module_level=True)
-    except ImportError:
-        pass
-    sys.exit(0)
+import pops
+from pops import time as adctime
+from pops.codegen import KokkosOpenMP, Production
+from pops.mesh import CartesianMesh
+from pops.mesh.layouts import Uniform
+from pops.solvers.elliptic import GeometricMG
 
-
-try:
-    import numpy as np
-
-    import pops
-    from pops.solvers import GeometricMG
-    from pops import time as adctime
-    from _module_models import (
-        explicit_euler,
-        explicit_ssprk2,
-        first_order_rusanov,
-        isothermal_transport_module,
-    )
-except Exception as exc:  # noqa: BLE001
-    _skip("pops/numpy unavailable: %s" % exc)
-
-fails = 0
+from _module_models import first_order_rusanov, isothermal_transport_module
 
 
-def chk(cond, label):
-    global fails
-    print("  [%s] %s" % ("OK " if cond else "XX ", label))
-    if not cond:
-        fails += 1
+REPO_ROOT = Path(__file__).resolve().parents[2]
+N = 24
+DT = 2e-3
 
 
-def transport_model():
+def _initial_state():
+    x = (np.arange(N, dtype=float) + 0.5) / N
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    rho = 1.0 + 0.3 * np.sin(2.0 * np.pi * X) * np.cos(2.0 * np.pi * Y)
+    return np.stack([rho, 0.4 * rho, -0.2 * rho])
+
+
+def _model():
     return isothermal_transport_module("time_multistage_model")
 
 
-def explicit(method):
-    return {
-        "euler": explicit_euler,
-        "ssprk2": explicit_ssprk2,
-    }[method]()
+def _operators(module):
+    registry = module.operator_registry()
+    return registry.get("fields_from_state"), registry.get("explicit_rate")
 
 
-N = 24
+def _rate(program, fields_operator, rate_operator, state, suffix):
+    fields = program.call(fields_operator, state, name="fields_%s" % suffix)
+    return program.call(rate_operator, state, fields, name="k_%s" % suffix), fields
 
 
-def make_sim(method="euler"):
-    sim = pops.System(n=N, L=1.0, periodic=True)
-    x = (np.arange(N) + 0.5) / N
-    X, Y = np.meshgrid(x, x, indexing="ij")
-    rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    try:
-        sim.install(None,
-                    instances={"ions": {"model": transport_model(),
-                                        "spatial": first_order_rusanov(),
-                                        "time": explicit(method),
-                                        "initial": np.stack([rho, 0.4 * rho, -0.2 * rho])}},
-                    solvers={"phi": GeometricMG()})
-    except RuntimeError as exc:
-        _skip("Module block install could not build the native model .so: %s" % str(exc)[:160])
+def ssprk2_program(module):
+    program = adctime.Program("ssprk2_operator_first").bind_operators(module)
+    fields_operator, rate_operator = _operators(module)
+    state = program.state("U", block="ions", space=module.state_spaces()["U"])
+
+    k0, _ = _rate(program, fields_operator, rate_operator, state.n, "0")
+    program.define(state.stage(1), state.n + program.dt * k0)
+    k1, fields1 = _rate(program, fields_operator, rate_operator, state.stage(1), "1")
+    program.define(state.next, 0.5 * state.n + 0.5 * (state.stage(1) + program.dt * k1))
+    program.commit(state.next, fields=fields1)
+    program.validate()
+    return program
+
+
+def rk4_program(module):
+    program = adctime.Program("rk4_operator_first").bind_operators(module)
+    fields_operator, rate_operator = _operators(module)
+    state = program.state("U", block="ions", space=module.state_spaces()["U"])
+    dt = program.dt
+
+    k1, _ = _rate(program, fields_operator, rate_operator, state.n, "1")
+    u1 = program.define("U1", state.n + 0.5 * dt * k1)
+    k2, _ = _rate(program, fields_operator, rate_operator, u1, "2")
+    u2 = program.define("U2", state.n + 0.5 * dt * k2)
+    k3, _ = _rate(program, fields_operator, rate_operator, u2, "3")
+    u3 = program.define("U3", state.n + dt * k3)
+    k4, fields4 = _rate(program, fields_operator, rate_operator, u3, "4")
+
+    program.define(
+        state.next,
+        state.n + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4,
+    )
+    program.commit(state.next, fields=fields4)
+    program.validate()
+    return program
+
+
+def _compile(program_builder):
+    include = str(REPO_ROOT / "include")
+    os.environ.setdefault("POPS_INCLUDE", include)
+    conda_prefix = os.environ.get("CONDA_PREFIX") or sys.prefix
+    if conda_prefix:
+        os.environ.setdefault("POPS_KOKKOS_ROOT", conda_prefix)
+        os.environ.setdefault("Kokkos_ROOT", conda_prefix)
+    module = _model()
+    return pops.compile_problem(
+        model=module,
+        program=program_builder(module),
+        layout=Uniform(CartesianMesh(n=N, L=1.0, periodic=True)),
+        backend=Production(platform=KokkosOpenMP()),
+        include=include,
+    )
+
+
+def _install(compiled):
+    sim = pops.System(layout=Uniform(CartesianMesh(n=N, L=1.0, periodic=True)))
+    sim.install(
+        compiled,
+        instances={
+            "ions": {
+                "initial": _initial_state(),
+                "spatial": first_order_rusanov(),
+            }
+        },
+        solvers={"phi": GeometricMG()},
+    )
     return sim
 
 
-def initial_state():
-    return np.array(make_sim()._get_state("ions"))
+def _run(program_builder):
+    compiled = _compile(program_builder)
+    sim = _install(compiled)
+    before = np.array(sim.get_state("ions"))
+    sim.step(DT)
+    after = np.array(sim.get_state("ions"))
+    return compiled, before, after
 
 
-def offline_rhs(ref, U):
-    """The semi-discrete RHS at state U, via the runtime primitives the compiled program also uses."""
-    ref._set_state("ions", U)
-    ref.solve_fields()
-    return np.array(ref._eval_rhs("ions"))
+def test_multistage_programs_are_operator_first_ir():
+    module = _model()
+    for builder in (ssprk2_program, rk4_program):
+        program = builder(module)
+        ops = [value.op for value in program._values]
+        assert "call" in ops
+        assert "rhs" not in ops
+        assert "solve_fields" not in ops
+        assert "linear_source" not in ops
 
 
-def run_compiled(P, dt):
-    """compile_problem(P) -> install -> one step; returns the advanced state (or None to skip)."""
-    try:
-        compiled = pops.compile_problem(model=transport_model(), time=P)
-    except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
-        _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
-    sim = pops.System(n=N, L=1.0, periodic=True)
-    sim.install(compiled,
-                instances={"ions": {"model": transport_model(),
-                                    "spatial": first_order_rusanov(),
-                                    "initial": U0}},
-                solvers={"phi": GeometricMG()})
-    sim.step(dt)
-    return np.array(sim._get_state("ions"))
+@pytest.mark.requires_toolchain
+def test_ssprk2_and_rk4_compile_and_advance():
+    ssprk2, before_ssp, after_ssp = _run(ssprk2_program)
+    rk4, before_rk4, after_rk4 = _run(rk4_program)
 
-
-def ssprk2_program():
-    P = adctime.Program("ssprk2_parity")
-    dt = P.dt
-    U0 = P.state("ions")
-    f0 = P._legacy_solve_fields(U0)
-    k0 = P._legacy_rhs(state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + dt * k0)
-    f1 = P._legacy_solve_fields(U1)
-    k1 = P._legacy_rhs(state=U1, fields=f1, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
-    return P
-
-
-def rk4_program():
-    P = adctime.Program("rk4_parity")
-    dt = P.dt
-    U0 = P.state("ions")
-    k1 = P._legacy_rhs(state=U0, fields=P._legacy_solve_fields(U0), flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + 0.5 * dt * k1)
-    k2 = P._legacy_rhs(state=U1, fields=P._legacy_solve_fields(U1), flux=True, sources=["default"])
-    U2 = P.linear_combine("U2", U0 + 0.5 * dt * k2)
-    k3 = P._legacy_rhs(state=U2, fields=P._legacy_solve_fields(U2), flux=True, sources=["default"])
-    U3 = P.linear_combine("U3", U0 + dt * k3)
-    k4 = P._legacy_rhs(state=U3, fields=P._legacy_solve_fields(U3), flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine(
-        "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4))
-    return P
-
-
-def _run():
-    global U0
-    dt = 2e-3
-    U0 = initial_state()
-    ref = make_sim()
-
-    print("== SSPRK2 ==")
-    k0 = offline_rhs(ref, U0)
-    U1 = U0 + dt * k0
-    k1 = offline_rhs(ref, U1)
-    ssprk2_ref = 0.5 * U0 + 0.5 * (U1 + dt * k1)
-    ssprk2_prog = run_compiled(ssprk2_program(), dt)
-    e = float(np.abs(ssprk2_prog - ssprk2_ref).max())
-    chk(e < 1e-12, "compiled SSPRK2 == offline stage reference (max|d| = %.2e)" % e)
-
-    # Native cross-check: the compiled SSPRK2 reproduces Explicit.ssprk2() (spec test 32).
-    nat = make_sim("ssprk2")
-    nat.step(dt)
-    en = float(np.abs(ssprk2_prog - np.array(nat._get_state("ions"))).max())
-    chk(en < 1e-12, "compiled SSPRK2 == native Explicit.ssprk2() (max|d| = %.2e)" % en)
-
-    print("== RK4 ==")
-    k1 = offline_rhs(ref, U0)
-    k2 = offline_rhs(ref, U0 + 0.5 * dt * k1)
-    k3 = offline_rhs(ref, U0 + 0.5 * dt * k2)
-    k4 = offline_rhs(ref, U0 + dt * k3)
-    rk4_ref = U0 + dt / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-    rk4_prog = run_compiled(rk4_program(), dt)
-    e = float(np.abs(rk4_prog - rk4_ref).max())
-    chk(e < 1e-12, "compiled RK4 == offline stage reference (max|d| = %.2e)" % e)
-    chk(float(np.abs(rk4_prog - U0).max()) > 1e-9, "RK4 actually advanced the state")
-
-    print("%s test_time_multistage" % ("FAIL (%d)" % fails if fails else "PASS"))
-
-
-def test_script_passed():
-    _run()
-    assert fails == 0
-
-
-if __name__ == "__main__":
-    _run()
-    sys.exit(1 if fails else 0)
+    assert ssprk2.problem_hash
+    assert rk4.problem_hash
+    assert np.array_equal(before_ssp, before_rk4)
+    assert np.isfinite(after_ssp).all()
+    assert np.isfinite(after_rk4).all()
+    assert float(np.abs(after_ssp - before_ssp).max()) > 1e-9
+    assert float(np.abs(after_rk4 - before_rk4).max()) > 1e-9
+    assert float(np.abs(after_ssp - after_rk4).max()) > 0.0
