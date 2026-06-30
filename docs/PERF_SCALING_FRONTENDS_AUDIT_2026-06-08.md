@@ -422,12 +422,15 @@ ROMEO jobs:
 | `647813` | CPU frontend catch-up | `CANCELLED` | `00:03:23` | cancelled to avoid a useless C++ build |
 | `647815` | CPU Python-only frontend, Kokkos PIC | `COMPLETED` | `00:03:55` | Python bricks + DSL production |
 
-Local results:
+Local results retained in git:
 
 ```text
-bench/romeo_results_final_647780_647781_647815/
+bench/romeo_results_final_647780_647781_647815_647836_647848/
 docs/perf_figures_647780_647781_647815/
 ```
+
+The intermediate CSV package for jobs `647780`/`647781`/`647815` was
+superseded by the final catch-up package above and is no longer versioned.
 
 ROMEO results:
 
@@ -603,11 +606,14 @@ ROMEO run:
 |---:|---|---|---|---:|
 | `647836` | `adde23b` | CPU `x64cpu`, multi-box transport | `COMPLETED` | `00:02:34` |
 
-Local results:
+Local result CSVs retained in git:
 
 ```text
-bench/romeo_results_transport_mbox_adde23b_647836/
+bench/romeo_results_final_647780_647781_647815_647836_647848/perf_phases_transport_mbox_cpu_adde23b_647836.csv
+bench/romeo_results_final_647780_647781_647815_647836_647848/perf_scaling_transport_mbox_cpu_adde23b_647836.csv
 ```
+
+The raw per-run logs and duplicate standalone CSV package are not versioned.
 
 Strong OpenMP, `n=1024`, 1 rank:
 
@@ -668,11 +674,13 @@ in the same ROMEO job, on the same `x64cpu` node, with the same PIC Kokkos OpenM
 |---:|---|---|---|---:|
 | `647848` | `adde23b` | CPU frontends, Kokkos PIC | `COMPLETED` | `00:19:42` |
 
-Local results:
+Local result CSV retained in git:
 
 ```text
-bench/romeo_results_frontends_adde23b_647848/
+bench/romeo_results_final_647780_647781_647815_647836_647848/perf_frontends_cpu_pic_adde23b_647848.csv
 ```
+
+The raw build/run logs from `647848` are not versioned.
 
 The C++ frontend build was the dominant cold cost: `frontend_cpp` spent
 about 15 minutes compiling `python/bindings/system/base/system.cpp` in `-O3` before the measurements.
