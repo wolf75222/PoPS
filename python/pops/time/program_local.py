@@ -13,7 +13,7 @@ class _ProgramLocal(_ProgramConstants):
         """Solve a LOCAL linear system ``operator U = rhs`` cell by cell, where
         ``operator = self.I +/- a*L`` for a single model linear source ``L`` (``a`` may depend on dt
         / constants). Returns the solution State. A non-local or non-linear operator is rejected; the
-        per-cell dense fallback bound (n_cons <= 8) is enforced by the codegen (a later phase)."""
+        per-cell dense fallback bound (n_cons <= 8) is enforced by codegen validation."""
         if not isinstance(operator, _Operator) or operator.identity.as_dict() != {0: 1.0}:
             raise ValueError("solve_local_linear currently supports local linear operators only")
         if len(operator.terms) != 1:
@@ -37,7 +37,7 @@ class _ProgramLocal(_ProgramConstants):
     # The LOCAL per-cell ops a solve_local_nonlinear residual sub-block may use: the iterate / guess
     # State placeholders, named per-cell sources / linear-source applies, and the affine combine of
     # them. All lower to a per-cell scalar expression in the cell-local conservative stack -- NO
-    # non-local op (rhs / divergence / solve_fields / a nested solve) is allowed (it would need a halo
+    # non-local op (RHS assembly / divergence / field solve / a nested solve) is allowed (it would need a halo
     # / global solve, which a per-cell Newton kernel cannot evaluate at a perturbed stack state).
 
     def solve_local_nonlinear(self, name=None, residual=None, initial_guess=None, method=None,
@@ -50,7 +50,7 @@ class _ProgramLocal(_ProgramConstants):
         State value) from LOCAL per-cell ops only -- the internal named-source helper,
         ``P.apply`` (a named local-linear operator), the iterate / initial-guess States, and the
         affine algebra over them (e.g. an implicit reaction ``r(U) = U - U0 - dt*S(U)``). A non-local op
-        (``P.rhs`` / ``P.divergence`` / ``P.solve_fields`` / a nested solve) is rejected: the residual
+        (RHS assembly / ``P.divergence`` / field solve / a nested solve) is rejected: the residual
         must be re-evaluable at a PERTURBED cell-local stack state, which a halo / global solve cannot.
         The sub-block (like a ``set_apply`` body) lowers to a device-inlinable per-cell residual the
         kernel re-evaluates at ``U`` and at the finite-difference perturbations ``U + eps*e_j``. A
@@ -110,8 +110,8 @@ class _ProgramLocal(_ProgramConstants):
                 raise ValueError(
                     "solve_local_nonlinear: residual op '%s' is not LOCAL; a per-cell Newton residual "
                     "may use only %s (the iterate / guess State, the internal named-source helper, "
-                    "P.apply, affine combines). Use a non-local op (P.rhs / P.divergence / "
-                    "P.solve_fields) outside the residual."
+                    "P.apply, affine combines). Use non-local assembly / divergence / field solves "
+                    "outside the residual."
                     % (w.op, sorted(self._RESIDUAL_LOCAL_OPS)))
         return self._new(
             "state", "solve_local_nonlinear", (initial_guess,),

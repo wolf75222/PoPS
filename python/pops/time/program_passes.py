@@ -486,7 +486,7 @@ class _ProgramPasses(_ProgramConstants):
         return out
 
     def _ir_hash(self):
-        """Stable SHA-256 of the IR (feeds the compiled-problem cache key in a later phase)."""
+        """Stable SHA-256 of the IR, used as one input of the compiled-problem cache key."""
         blob = json.dumps(self._serialize(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode()).hexdigest()
 

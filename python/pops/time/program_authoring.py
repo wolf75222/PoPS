@@ -92,8 +92,8 @@ class _ProgramAuthoring(_ProgramConstants):
         ``U <- project(U, aux)`` over the valid cells, the SAME Zhang-Shu / floor projection the native
         per-step path runs (ADC-177). Returns a State value (the projected state). @p projection selects
         the projection primitive; only ``"block"`` (the block's own, set at add_block time) is supported
-        -- a custom projection is a later phase. Lowered to ``ctx.apply_projection(idx, state)`` for the
-        state's own block (ADC-426)."""
+        in this Program operation. Lowered to ``ctx.apply_projection(idx, state)`` for the state's own
+        block (ADC-426)."""
         name, state = _resolve_handle(name), _resolve_handle(state)
         if isinstance(name, Value) and state is None:
             name, state = None, name
@@ -112,7 +112,7 @@ class _ProgramAuthoring(_ProgramConstants):
         """A PER-CELL comparison ``field <cmp> value`` -> a fresh 1-component 0/1 mask scalar_field (1.0
         where the comparison holds, 0.0 otherwise), evaluated cell by cell on component 0 of @p field
         (its sole / first conserved component). @p field is a State/RHS/scalar_field value; @p value is a
-        Python float threshold (a per-cell field threshold is a later phase); @p cmp is one of
+        Python float threshold; @p cmp is one of
         ``'>' '>=' '<' '<='``. The mask is the input the per-cell `where` selects on. Lowered to a
         for_each_cell kernel ``maskA(i,j,0) = fieldA(i,j,0) <cmp> value ? 1 : 0``. Convenience wrappers:
         `cell_gt` / `cell_ge` / `cell_lt` / `cell_le`."""
@@ -120,8 +120,7 @@ class _ProgramAuthoring(_ProgramConstants):
             raise ValueError("cell_compare: a State/RHS/scalar_field value is required (got %r)"
                              % (field,))
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError("cell_compare: value must be a Python float threshold (a per-cell field "
-                            "threshold is a later phase); got %r" % (value,))
+            raise TypeError("cell_compare: value must be a Python float threshold; got %r" % (value,))
         if cmp not in self._CELL_CMPS:
             raise ValueError("cell_compare: cmp must be one of %s; got %r"
                              % (sorted(self._CELL_CMPS), cmp))
@@ -190,8 +189,8 @@ class _ProgramAuthoring(_ProgramConstants):
         """The Euclidean norm ``||u||_2`` of a State (a collective all_reduce). Returns a Scalar value.
         Lowered as ``sqrt(pops::dot(u, u))`` -- the same collective reduction every rank must run. NOTE:
         ``pops::dot`` reduces COMPONENT 0 only, so for a multi-component State this is the L2 norm of the
-        first conserved variable, not the full state norm; a full multi-component reduction is a later
-        phase (the convergence loops this enables are single-residual-component for now)."""
+        first conserved variable, not the full state norm. For component-specific reductions, use the
+        explicit component APIs."""
         if not (isinstance(state, Value) and state.is_field()):
             raise ValueError("norm2: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm2"}, None, state.block)
@@ -206,7 +205,7 @@ class _ProgramAuthoring(_ProgramConstants):
     def norm_inf(self, state):
         """The infinity norm ``max|u|`` of a State (a collective all_reduce). Returns a Scalar value.
         Lowered as ``pops::norm_inf(u)``. Like norm2/dot it reduces COMPONENT 0 only (a multi-component
-        reduction is a later phase) and MUST run on every rank (it goes through the collective seam)."""
+        state should use explicit component reductions) and MUST run on every rank."""
         if not (isinstance(state, Value) and state.is_field()):
             raise ValueError("norm_inf: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "norm_inf"}, None, state.block)
@@ -215,8 +214,7 @@ class _ProgramAuthoring(_ProgramConstants):
         """The sum ``sum_cells u`` of a State over component 0 (a collective all_reduce). Returns a
         Scalar value. Lowered as ``pops::reduce_sum(u, 0)`` -- COLLECTIVE, called on every rank (empty
         ranks included), the same seam pops::dot uses. Like norm2/dot it reduces COMPONENT 0 only (a
-        full multi-component reduction is a later phase). For a specific component use
-        `sum_component`."""
+        specific component can be selected with `sum_component`."""
         if not (isinstance(state, Value) and state.is_field()):
             raise ValueError("sum: a State/RHS value is required")
         return self._new("scalar", "reduce", (state,), {"kind": "sum", "comp": 0}, None, state.block)

@@ -190,6 +190,40 @@ def test_public_authoring_validation_uses_configuration_errors():
     )
 
 
+def test_compiled_model_check_runtime_does_not_recreate_legacy_runtime_assembly():
+    """TASK-001/003: CompiledModel.check_runtime must not route through private add-equation APIs."""
+    from pops.codegen.loader import CompiledModel
+
+    source = (REPO_ROOT / "python/pops/codegen/loader.py").read_text(encoding="utf-8")
+    start = source.index("    def check_runtime(")
+    end = source.index("    def inspect_amr(", start)
+    body = source[start:end]
+    for token in ("_add_equation", "Explicit(", "from pops import System"):
+        assert token not in body
+
+    compiled = CompiledModel(
+        so_path="/tmp/missing.so",
+        backend="production",
+        adder="add_native_block",
+        cons_names=["rho"],
+        cons_roles=["Density"],
+        prim_names=[],
+        n_vars=1,
+        gamma=None,
+        n_aux=3,
+        params={},
+        caps={},
+        abi_key="abi",
+        model_hash="model",
+        cxx="c++",
+        std="20",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        compiled.check_runtime()
+    msg = str(excinfo.value)
+    assert "compile_problem" in msg and "System.install" in msg
+
+
 def test_disc_domain_rejects_string_transport_mode():
     from pops.mesh.geometry import DiscDomain
 

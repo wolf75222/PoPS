@@ -1,7 +1,7 @@
-"""System diagnostics mixin (Spec-4 PR-F): runtime block self-check.
+"""System diagnostics mixin: runtime block self-check.
 
-``check_model``, the runtime counterpart of dsl.Model.check_model (which checks formulas before
-compilation). Mixed into ``System`` via inheritance; operates on ``self._s``.
+``check_model`` verifies an already installed block through the runtime engine. The authoring-side
+formula checks belong to the typed model/module construction path before compilation.
 """
 
 
@@ -19,7 +19,7 @@ class _SystemDiagnostics:
         - round-trip cons -> prim -> cons ~= identity (model conversions consistent;
           the state is SAVED then RESTORED, the block is not modified).
 
-        RUNTIME counterpart of dsl.Model.check_model (which checks the FORMULAS before compilation).
+        Runtime counterpart of the authoring-side model checks performed before compilation.
         @return dict {"ok", "failures", "block"}; raise_on_error=True (default) raises ValueError."""
         import numpy as np
         failures = []

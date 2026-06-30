@@ -421,49 +421,18 @@ class CompiledModel:
         return [self.params[k].value for k in self.runtime_param_names]
 
     def check_runtime(self, n=16, state=None, raise_on_error=True, rtol=1e-8, atol=1e-10):
-        """RUNTIME re-verification of a CompiledModel ALONE (audit balance, GENERICITY pt 9):
-        without the original dsl.Model, the FORMULAS are no longer re-verifiable (symbolic
-        check_model), but the .so itself is -- we install it in an EPHEMERAL System (n x n
-        periodic, neutral Poisson, minmod+rusanov) and delegate to System.check_model (finite
-        state, residual -div F + S finite, positivity by roles, round-trip of THE MODEL
-        conversions).
+        """Refuse the removed standalone per-block runtime smoke route.
 
-        @p state: dict {conservative variable name: ndarray (n, n)} to control the tested state.
-        None -> SMOKE state by ROLES (Density = 1 + gaussian bump, Momentum* = 0,
-        Energy = 2.5, other components = 0.5) -- enough to exercise flux/source/conversions;
-        provide state= for a precise physical regime. @return the dict from System.check_model.
+        Runtime verification is a compiled-problem operation in the Spec 5 route:
+        build a :class:`CompiledProblem` with ``compile_problem(...)``, install it with
+        ``System.install(...)``, then use the public diagnostics/readback APIs. The former
+        standalone ``CompiledModel`` smoke test relied on private runtime assembly and cannot be
+        the public validation path.
         """
-        import numpy as np  # lazy: only needed at check_runtime call time
-        if getattr(self, "target", "system") != "system":
-            raise ValueError(
-                "CompiledModel.check_runtime: only target='system' is re-verifiable in an "
-                "ephemeral System; a target='amr_system' loader is checked installed in its "
-                "AmrSystem (AMR test invariants), not in isolation.")
-        from pops import System, FiniteVolume, Explicit  # lazy: avoids a top-level runtime import
-        from pops.numerics.reconstruction.limiters import Minmod
-        from pops.numerics.riemann import Rusanov
-        sim = System(n=int(n), L=1.0, periodic=True)
-        sim._set_poisson()
-        sim._add_equation("check", model=self,
-                          spatial=FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
-                          time=Explicit())
-        x = (np.arange(n) + 0.5) / float(n)
-        X, Y = np.meshgrid(x, x, indexing="xy")
-        bump = 1.0 + 0.3 * np.exp(-40.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
-        comps = []
-        for name, role in zip(self.cons_names, self.cons_roles, strict=True):
-            if state is not None and name in state:
-                comps.append(np.asarray(state[name], dtype=float).reshape(n, n))
-            elif role == "Density":
-                comps.append(bump)
-            elif role in ("MomentumX", "MomentumY"):
-                comps.append(np.zeros((n, n)))
-            elif role == "Energy":
-                comps.append(2.5 + 0.0 * bump)
-            else:
-                comps.append(0.5 + 0.0 * bump)
-        sim._s.set_state("check", np.stack(comps).ravel())
-        return sim.check_model("check", raise_on_error=raise_on_error, rtol=rtol, atol=atol)
+        raise ValueError(
+            "CompiledModel.check_runtime is not a public Spec 5 route. Build a combined "
+            "CompiledProblem with pops.compile_problem(...), install it with System.install(...), "
+            "then validate through public diagnostics/readback APIs.")
 
     def inspect_amr(self, layout=None):
         """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
