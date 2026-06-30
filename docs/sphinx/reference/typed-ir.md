@@ -26,8 +26,11 @@ The board facade builds exactly these objects (see {doc}`board-like-dsl` for the
 map): `m.state -> StateSpace`, `m.solve_field -> field_operator`,
 `m.rate -> local_rate (output Rate(U))`, `m.local_linear_operator -> a
 LocalLinearOperatorExpr` math object that `m.operator(...)` registers as a
-`local_linear_operator`. A time program's `T.define` / `T.solve` / `T.fields` lower to
-`P.call` / `P.linear_combine` / `P.solve_local_linear` / `P.solve_fields`.
+`local_linear_operator`. A time program composes those operators through
+`T.call`, `T.define`, `T.solve_local_linear`, `T.solve_linear`, reductions and
+`T.commit`. Field solves are ordinary operator calls: a program calls the
+registered `field_operator` handle and never selects a separate field-solving
+route by name.
 
 `Program.dump_operator_ir()` renders the operator-first IR a board program lowers to, and
 `Model.dump_module_ir()` renders the typed Module a board model lowers to -- so the

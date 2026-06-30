@@ -545,7 +545,7 @@ silently), or are assumed scope boundaries.
   np>1 [`include/pops/runtime/system/system_field_solver.hpp`](../include/pops/runtime/system/system_field_solver.hpp)
   now SELECTS a `RemappedFFTSolver` instead of raising: it hides a box-slab scatter/gather around
   `PoissonFFT` (the field-solve path is unchanged, it sees the single round-robin box outward).
-  `set_poisson(solver="fft"|"fft_spectral")` therefore SUCCEEDS under MPI np>1 for the periodic,
+  A typed `PoissonProblem(..., solver=FFT())` therefore succeeds under MPI np>1 for the periodic,
   constant-coefficient case; it raises only when the slab remap cannot tile (`Ny % n_ranks() != 0`).
   A wall, a variable `eps(x)`, the anisotropy and the kappa reaction term are still reserved to
   `geometric_mg` (the MPI default and the only option for those), at any rank count.

@@ -1,8 +1,8 @@
 """Spec 3: the board facade and the operator-first kernel share ONE IR.
 
-Builds the same forward-Euler step two ways -- the board sugar (T.fields / T.define /
-T.commit) and the explicit operator-first builder (P.solve_fields / P.call /
-P.linear_combine / P.commit) -- and asserts the two Program IRs are identical.
+Builds the same forward-Euler step two ways -- the board sugar and the explicit
+operator-first builder using typed operator calls -- and asserts the two Program
+IRs are identical.
 This is the anti-duplication guarantee: the facade only generates the Spec 2 IR.
 
 Run: python3 examples/spec3/board_vs_operator_ir_equivalence.py

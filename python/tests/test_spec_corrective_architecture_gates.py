@@ -62,6 +62,26 @@ FORBIDDEN_EXAMPLE_TOKENS = (
     "P.linear_source",
 )
 
+FORBIDDEN_PUBLIC_DOC_TOKENS = (
+    "pops.compile(",
+    "pops.bind(",
+    "pops.Problem",
+    "pops.Case",
+    "CompiledTime",
+    "add_equation",
+    "install_program",
+    "P.rhs",
+    "P.solve_fields",
+    "P.linear_source",
+    "sim.add_block",
+    "set_poisson(",
+    "pops.dsl",
+    "pops.integrate",
+    "pops.library",
+    "pops.std",
+    "pops.lib.std",
+)
+
 FALSE_LOWERING_OPS = {"rhs", "solve_fields", "linear_source"}
 
 MODULE_NATIVE_SURFACE_FILES = tuple(
@@ -169,6 +189,35 @@ def test_examples_no_skip_or_legacy_route_tokens():
         offenders = [tok for tok in FORBIDDEN_EXAMPLE_TOKENS if tok in text]
         assert offenders == [], "%s contains forbidden public-route token(s): %s" % (
             module.__file__, offenders)
+
+
+def test_active_docs_and_public_examples_do_not_advertise_legacy_routes():
+    roots = (REPO_ROOT / "README.md", REPO_ROOT / "docs", REPO_ROOT / "examples")
+    ignored_parts = {
+        ("docs", "archive"),
+        ("docs", "_build"),
+        ("docs", "validation"),
+    }
+    ignored_files = {
+        ("docs", "SPEC_CORRECTIVE_TASKS.md"),
+    }
+    offenders = {}
+    for root in roots:
+        paths = [root] if root.is_file() else list(root.rglob("*"))
+        for path in paths:
+            if not path.is_file() or path.suffix not in (".md", ".py", ".rst"):
+                continue
+            rel = path.relative_to(REPO_ROOT)
+            parts = rel.parts
+            if any(parts[:len(prefix)] == prefix for prefix in ignored_parts):
+                continue
+            if parts in ignored_files:
+                continue
+            text = path.read_text(encoding="utf-8")
+            hits = [tok for tok in FORBIDDEN_PUBLIC_DOC_TOKENS if tok in text]
+            if hits:
+                offenders[str(rel)] = hits
+    assert offenders == {}
 
 
 def test_pcall_creates_call_nodes_not_false_lowering_nodes():

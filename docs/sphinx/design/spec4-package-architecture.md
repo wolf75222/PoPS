@@ -1,17 +1,17 @@
 # Spec 4: Python package architecture
 
 This page describes the target layout of the `pops` Python package introduced in
-Spec 4. The restructure replaces the previous flat module layout (`pops/dsl.py`,
-`pops/physics.py`, `pops/time.py`, `pops/lib.py`, ...) with seven sub-packages that
-form a strictly acyclic import graph.
+Spec 4 and tightened by the later clean-break specs. Python authors typed
+objects, lowers them to `pops.model.Module` plus `pops.time.Program`, and
+`pops.compile_problem(...)` emits the combined C++ artifact.
 
 ```{note}
-The old flat modules (`pops.dsl`, `pops.physics` at the top level, etc.) are deleted.
-No backward-compatibility shims are shipped. Callers must update their imports to
-the sub-packages listed here.
+No backward-compatibility shims are shipped for removed public routes. The
+documented route is `compile_problem(...)`, then `System.install(...)`, then
+`System.step_cfl(...)`.
 ```
 
-## The seven sub-packages
+## Target sub-packages
 
 | Package | Responsibility |
 |---------|---------------|
@@ -19,8 +19,15 @@ the sub-packages listed here.
 | `pops.model` | Operator-first typed model core: `Module`, typed spaces (`StateSpace`, `FieldSpace`, `RateSpace`, `ParameterSpace`, `AuxSpace`), `Operator`, `OperatorRegistry`, `Signature`. Imports only `pops.ir`. |
 | `pops.physics` | Math and physics authoring facade. `pops.physics.Model` is the high-level PDE description (conservative variables, flux, eigenvalues, sources, elliptic right-hand side). Lowers to a `pops.model.Module`. Imports `pops.ir` and `pops.model`. |
 | `pops.time` | Temporal language: `Program`, schedules, equations, and the operator-first time IR. Imports `pops.ir` and `pops.model`. |
-| `pops.lib` | Descriptors, time schemes, moment closures, and provided standard models. Imports `pops.ir`, `pops.model`, `pops.time`, and `pops.physics`. |
-| `pops.codegen` | The only C++ emitter. Holds `module_codegen` and all `emit_cpp_*` functions as free functions that take a model object. Imports `pops.ir`, `pops.model`, `pops.time`, `pops.physics`, and `pops.lib`. Does not import `pops.runtime`, and never imports `_pops` at module scope (the only `_pops` touch is a lazy in-function `abi_key` hop in `toolchain`). |
+| `pops.numerics` | Finite-volume discretisation descriptors: spatial method, Riemann solver, reconstruction, limiters and numerical terms. |
+| `pops.fields` | Field and elliptic problem descriptors (`PoissonProblem`, boundary conditions, outputs). |
+| `pops.linalg` | Linear algebra objects: `LinearProblem`, `MatrixFreeOperator`, norms and reductions. |
+| `pops.solvers` | Compiled solver descriptors: elliptic, Krylov, Schur and nonlinear routes. |
+| `pops.mesh` | Mesh, layout, AMR, geometry, boundary and mask descriptors. |
+| `pops.params`, `pops.diagnostics`, `pops.output`, `pops.external` | Typed runtime parameters, diagnostics, output/checkpoint policy and external compiled brick descriptors. |
+| `pops.moments` | Generic moment-model authoring tools. Ready-to-use moment models live in `pops.lib.models.moments`. |
+| `pops.lib` | Provided presets and ready models only. Generic construction tools live in their top-level package. |
+| `pops.codegen` | The only C++ emitter. It consumes `Module`, `Program`, descriptors, layout and backend objects. Does not import `pops.runtime`, and never imports `_pops` at module scope. |
 | `pops.runtime` | Thin facade over the `_pops` native extension: `System`, `AmrSystem`, and their configuration objects. Imports only `_pops`. |
 
 ## Acyclic import graph
@@ -35,8 +42,9 @@ The graph has a single direction: lower packages never import upper ones.
 | `pops.model` | `pops.ir` |
 | `pops.physics` | `pops.ir`, `pops.model` |
 | `pops.time` | `pops.ir`, `pops.model` |
-| `pops.lib` | `pops.ir`, `pops.model`, `pops.time`, `pops.physics` |
-| `pops.codegen` | `pops.ir`, `pops.model`, `pops.time`, `pops.physics`, `pops.lib` |
+| `pops.numerics`, `pops.fields`, `pops.linalg`, `pops.solvers`, `pops.mesh`, `pops.params`, `pops.diagnostics`, `pops.output`, `pops.external`, `pops.moments` | `pops.descriptors` plus lower pure authoring layers as needed |
+| `pops.lib` | ready-model/preset packages only |
+| `pops.codegen` | `pops.ir`, `pops.model`, `pops.time`, `pops.physics`, descriptors and presets |
 | `pops.runtime` | `_pops` only |
 
 ## Codegen as free functions: the key design decision
@@ -48,9 +56,9 @@ functions that accept typed model/program objects. They do NOT live on
 Why: keeping C++ emission out of the authoring packages prevents a cycle.
 As free functions, `pops.codegen` may import everything above it while authoring
 packages import nothing from `pops.codegen`. Callers that need to compile call
-`pops.compile_problem(model=m)` (the top-level convenience that delegates to
-`pops.codegen`), while authoring workflows that only need to inspect or lower a
-model never pay the cost of loading the C++ toolchain.
+`pops.compile_problem(model=module, program=program, layout=..., backend=...)`.
+Authoring workflows that only need to inspect or lower a model never pay the
+cost of loading the C++ toolchain.
 
 ## Public API surface
 
@@ -61,34 +69,33 @@ The entries below are the stable public surface as of Spec 4. The top-level
 |--------|---------|
 | `pops.physics.Model` | `pops.physics` |
 | `pops.time.Program` | `pops.time` |
-| `pops.compile_problem(model=...)` | top-level (delegates to `pops.codegen`) |
-| `pops.codegen.module_codegen` | `pops.codegen` |
-| `pops.codegen.emit_cpp_*` | `pops.codegen` |
+| `pops.compile_problem(model=..., program=...)` | top-level (delegates to `pops.codegen`) |
+| `pops.CompiledProblem` | `pops.codegen` |
 | `pops.runtime.System` | `pops.runtime` (also `pops.System`) |
 | `pops.runtime.AmrSystem` | `pops.runtime` (also `pops.AmrSystem`) |
+| descriptor packages (`pops.numerics`, `pops.fields`, `pops.solvers`, `pops.mesh`, ...) | typed route selection |
 
-## Migration from the old flat API
+## Public execution route
 
-The table below maps every old symbol to its new location. The old flat
-modules are deleted; no shims exist.
+The public route is intentionally single:
 
-| Old (flat) | New (Spec 4) |
-|------------|-------------|
-| `pops.dsl.Model` | `pops.physics.Model` |
-| `pops.dsl.HyperbolicModel` | `pops.physics.Model` (or internal `pops.physics._HyperbolicModel`) |
-| model-level compile methods | `pops.compile_problem(model=m, ...)` |
-| `m.emit_cpp_source(...)` | `pops.codegen.emit_cpp_source(m, ...)` |
-| `m.emit_cpp_header(...)` | `pops.codegen.emit_cpp_header(m, ...)` |
-| `pops.dsl.CompiledModel` | `pops.codegen.CompiledModel` |
-| `pops.dsl.HybridModel` | `pops.codegen.HybridModel` |
-| `from pops.dsl import ...` | `from pops.physics import ...` (authoring); `from pops.codegen import ...` (C++ emission) |
-| `pops.math.ddt`, `pops.math.div`, etc. | `pops.physics.math.ddt`, or `from pops.ir import ddt, div, ...` |
-| `pops.physics.Model` (Spec 3 flat) | `pops.physics.Model` (unchanged, now in the `pops.physics` sub-package) |
-| `pops.time.Program` (Spec 3 flat) | `pops.time.Program` (unchanged, now in the `pops.time` sub-package) |
-| `pops.lib.*` (Spec 3 flat) | `pops.lib.*` (unchanged, now in the `pops.lib` sub-package) |
-| `pops.model.*` (Spec 2 flat) | `pops.model.*` (unchanged, now in the `pops.model` sub-package) |
-| `pops.System` | `pops.System` (top-level re-export of `pops.runtime.System`) |
-| `pops.AmrSystem` | `pops.AmrSystem` (top-level re-export of `pops.runtime.AmrSystem`) |
+```python
+module = physics_model.to_module()
+program = build_program(module)
+compiled = pops.compile_problem(
+    model=module,
+    program=program,
+    layout=layout,
+    backend=backend,
+)
+sim = pops.System(layout=layout)
+sim.install(compiled, instances=instances, params=params, solvers=solvers)
+sim.step_cfl(cfl)
+```
+
+Strings may name user objects such as blocks or operators. They do not choose
+algorithms, layouts, backends, solvers, limiters or output policies; those are
+typed descriptors.
 
 ## Module file-size rule
 
