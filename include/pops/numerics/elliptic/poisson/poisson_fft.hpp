@@ -25,8 +25,10 @@
 
 #include <pops/parallel/comm.hpp>
 
+#include <atomic>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <numbers>  // std::numbers::pi (M_PI is not standard, absent under MSVC)
 #include <utility>
 #include <vector>
@@ -41,6 +43,25 @@ using cplx = std::complex<double>;
 
 inline bool is_pow2(int n) {
   return n > 0 && (n & (n - 1)) == 0;
+}
+
+inline std::atomic<std::size_t>& poisson_fft_direct_dft_fallback_counter() {
+  static std::atomic<std::size_t> counter{0};
+  return counter;
+}
+
+/// Reset the process-local diagnostic counter for direct DFT fallback calls.
+inline void reset_poisson_fft_direct_dft_fallback_count() {
+  poisson_fft_direct_dft_fallback_counter().store(0, std::memory_order_relaxed);
+}
+
+/// Number of 1D transforms that fell back from radix-2 FFT to the direct O(n^2) DFT.
+inline std::size_t poisson_fft_direct_dft_fallback_count() {
+  return poisson_fft_direct_dft_fallback_counter().load(std::memory_order_relaxed);
+}
+
+inline void record_poisson_fft_direct_dft_fallback() {
+  poisson_fft_direct_dft_fallback_counter().fetch_add(1, std::memory_order_relaxed);
 }
 
 // Direct O(n^2) DFT, CORRECTNESS fallback for lengths that are NOT powers of two
@@ -69,6 +90,7 @@ inline void dft1d_direct(cplx* a, int n, bool inv) {
 // is not a power of two (otherwise the radix-2 butterfly overflows the buffer).
 inline void fft1d(cplx* a, int n, bool inv) {
   if (!is_pow2(n)) {
+    record_poisson_fft_direct_dft_fallback();
     dft1d_direct(a, n, inv);
     return;
   }
@@ -120,6 +142,7 @@ class PoissonFFT {
   int ny_local() const { return nyl_; }  // rows (y) owned by this rank
   int nx() const { return Nx_; }
   int y_begin() const { return rank_ * nyl_; }  // first global row of the rank
+  bool uses_direct_dft_fallback() const { return !is_pow2(Nx_) || !is_pow2(Ny_); }
 
   // rho_local and phi_local: nyl_ x Nx_ (row-major, global rows
   // [y_begin, y_begin+nyl_)). phi_local is (re)sized.
