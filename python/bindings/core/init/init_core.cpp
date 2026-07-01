@@ -2,6 +2,7 @@
 
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
+#include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
 
 // ADC-365: module attributes/globals + SystemConfig + ModelSpec (registered first so System/
 // AmrSystem signatures resolve them).
@@ -111,6 +112,13 @@ void init_core(py::module_& m) {
         d["supports_stride"] = c.supports_stride;
         d["supports_named_fields"] = c.supports_named_fields;
         d["supports_partial_imex_mask"] = c.supports_partial_imex_mask;
+        const pops::RuntimeEnvironmentReport env = pops::runtime_environment_report();
+        d["dimension"] = env.dimension;
+        d["amr_refinement_ratio"] = env.amr_refinement_ratio;
+        d["precision"] = env.precision;
+        d["real_bytes"] = env.real_bytes;
+        d["communicator"] = env.communicator;
+        d["supports_custom_communicator"] = env.supports_custom_communicator;
         return d;
       },
       py::arg("target") = "module",
@@ -118,6 +126,39 @@ void init_core(py::module_& m) {
       "{abi_version, supports_uniform/amr/mpi/gpu/stride/named_fields/partial_imex_mask}, sourced "
       "from the C++ compile-time tokens. target in {'module','production','aot'} selects the route "
       "(stride differs aot vs production).");
+
+  m.def(
+      "runtime_environment_report",
+      []() {
+        const pops::RuntimeEnvironmentReport r = pops::runtime_environment_report();
+        py::dict d;
+        d["dimension"] = r.dimension;
+        d["amr_refinement_ratio"] = r.amr_refinement_ratio;
+        d["precision"] = r.precision;
+        d["real_bytes"] = r.real_bytes;
+        d["supports_single_precision"] = r.supports_single_precision;
+        d["supports_mixed_precision"] = r.supports_mixed_precision;
+        d["has_kokkos"] = r.has_kokkos;
+        d["kokkos_initialized"] = r.kokkos_initialized;
+        d["kokkos_finalized"] = r.kokkos_finalized;
+        d["kokkos_initialized_by_pops"] = r.kokkos_initialized_by_pops;
+        d["kokkos_atexit_finalize_registered"] = r.kokkos_atexit_finalize_registered;
+        d["kokkos_backend"] = r.kokkos_backend;
+        d["kokkos_ownership"] = r.kokkos_ownership;
+        d["kokkos_lifecycle"] = r.kokkos_lifecycle;
+        d["mpi_compiled"] = r.mpi_compiled;
+        d["mpi_active"] = r.mpi_active;
+        d["mpi_rank"] = r.mpi_rank;
+        d["mpi_ranks"] = r.mpi_ranks;
+        d["communicator"] = r.communicator;
+        d["supports_custom_communicator"] = r.supports_custom_communicator;
+        d["allocator_mode"] = r.allocator_mode;
+        d["comm_allocator_mode"] = r.comm_allocator_mode;
+        d["allocator_lifetime"] = r.allocator_lifetime;
+        return d;
+      },
+      "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
+      "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
 
   // AUX channel limits + canonical name table (ADC-291), exposed from the SINGLE C++ source
   // (pops/core/state.hpp + aux_names.hpp). The DSL/capabilities() read these so the Python mirrors

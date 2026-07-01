@@ -104,6 +104,11 @@ def test_inspect_aggregates_metadata():
     chk(rep.inputs["aux"] == ["B_z"], "the named aux is a required input")
     chk(rep.program["commits"] == ["plasma"], "program summary lists the committed block")
     chk(rep.artifacts["so_path"] == cp.so_path, "artifacts carry the .so path")
+    chk(rep.runtime["dimension"] == 2, "runtime report carries dimension=2")
+    chk(rep.runtime["amr_refinement_ratio"] == 2, "runtime report carries AMR ratio=2")
+    chk(rep.runtime["precision"] == "double", "runtime report carries precision=double")
+    chk(rep.runtime["supports_custom_communicator"] is False,
+        "runtime report rejects custom communicators")
     chk(rep.status == "compiled, waiting for pops.bind(...)", "status is the bind-pending line")
 
 
@@ -115,6 +120,8 @@ def test_inspect_printable_and_serialisable():
     text = str(rep)
     chk("compiled problem 'intro_demo'" in text, "str() names the program")
     chk("status   : compiled, waiting for pops.bind(...)" in text, "str() carries the status line")
+    chk("dimension             : 2" in text, "str() prints runtime dimension")
+    chk("precision             : double" in text, "str() prints runtime precision")
     chk("object at 0x" not in text, "str() is not the default <...object at 0x...> repr")
     d = rep.to_dict()
     chk(json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable")
@@ -149,6 +156,11 @@ def test_requirements_lists_compile_constraints():
     chk(req.constraints["backend"] == "production", "the backend constraint is production")
     chk(req.constraints["layout"] == "system", "the layout constraint is the System runtime")
     chk(req.constraints["abi_key"] == "SIG|c++|c++23", "the ABI key the toolchain must match")
+    chk(req.constraints["dimension"] == 2, "requirements carry dimension=2")
+    chk(req.constraints["amr_refinement_ratio"] == 2, "requirements carry AMR ratio=2")
+    chk(req.constraints["precision"] == "double", "requirements carry precision=double")
+    chk(req.constraints["supports_custom_communicator"] is False,
+        "requirements reject custom communicator")
     # DISTINCT from arguments(): requirements has no 'instances' bind-input list.
     chk(not hasattr(req, "instances"), "requirements() is not the arguments() bind-input list")
 

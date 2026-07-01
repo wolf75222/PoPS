@@ -27,7 +27,8 @@ bottom of the import graph (cf. tests/architecture/test_import_graph.py). It pul
 # (None) and listed by needs_cpp_followup() rather than fabricated.
 _SUPPORTS_FROM_CAPS = ("supports_uniform", "supports_amr", "supports_mpi", "supports_gpu")
 _SUPPORTS_UNKNOWN = ("supports_stride", "supports_partial_imex_mask", "supports_named_fields")
-_SUPPORTS_FLAGS = _SUPPORTS_FROM_CAPS + _SUPPORTS_UNKNOWN
+_SUPPORTS_RUNTIME = ("supports_custom_communicator",)
+_SUPPORTS_FLAGS = _SUPPORTS_FROM_CAPS + _SUPPORTS_UNKNOWN + _SUPPORTS_RUNTIME
 
 
 class CompiledArtifactManifest:
@@ -65,7 +66,9 @@ class CompiledArtifactManifest:
                  aux_required=None, params_const=None, params_runtime=None, ghost_depth=None,
                  field_outputs=None, supports_uniform=None, supports_amr=None, supports_mpi=None,
                  supports_gpu=None, supports_stride=None, supports_partial_imex_mask=None,
-                 supports_named_fields=None, native_entrypoints=None):
+                 supports_named_fields=None, native_entrypoints=None, dimension=2,
+                 amr_refinement_ratio=2, precision="double", real_bytes=8,
+                 communicator="unknown", supports_custom_communicator=False):
         self.model_name = model_name
         self.abi_key = abi_key
         self.abi_version = abi_version
@@ -87,6 +90,12 @@ class CompiledArtifactManifest:
         self.supports_partial_imex_mask = supports_partial_imex_mask
         self.supports_named_fields = supports_named_fields
         self.native_entrypoints = list(native_entrypoints or [])
+        self.dimension = dimension
+        self.amr_refinement_ratio = amr_refinement_ratio
+        self.precision = precision
+        self.real_bytes = real_bytes
+        self.communicator = communicator
+        self.supports_custom_communicator = bool(supports_custom_communicator)
 
     def supports(self):
         """The ``{flag: True/False/None}`` capability map (``None`` = honestly unknown)."""
@@ -122,6 +131,12 @@ class CompiledArtifactManifest:
                "params_const": list(self.params_const),
                "params_runtime": list(self.params_runtime), "ghost_depth": self.ghost_depth,
                "field_outputs": list(self.field_outputs),
+               "dimension": self.dimension,
+               "amr_refinement_ratio": self.amr_refinement_ratio,
+               "precision": self.precision,
+               "real_bytes": self.real_bytes,
+               "communicator": self.communicator,
+               "supports_custom_communicator": self.supports_custom_communicator,
                "native_entrypoints": list(self.native_entrypoints),
                "capability_matrix": [row.to_dict() for row in self.capability_matrix().rows]}
         out.update(self.supports())
@@ -146,6 +161,11 @@ class CompiledArtifactManifest:
                      % (", ".join(self.params_const), ", ".join(self.params_runtime)))
         lines.append("  ghost_depth  : %s" % self.ghost_depth)
         lines.append("  field_outputs: %s" % (", ".join(self.field_outputs) or "(none)"))
+        lines.append("  runtime      : dimension=%s amr_refinement_ratio=%s precision=%s "
+                     "real_bytes=%s communicator=%s custom_communicator=%s"
+                     % (self.dimension, self.amr_refinement_ratio, self.precision,
+                        self.real_bytes, self.communicator,
+                        "yes" if self.supports_custom_communicator else "no"))
         lines.append("  supports     :")
         for name in _SUPPORTS_FLAGS:
             lines.append("    %-26s %s" % (name, _flag(getattr(self, name))))
@@ -241,6 +261,8 @@ def build_compiled_manifest(compiled):
     roles = list(raw_roles) if raw_roles else None
 
     caps_flags = _caps_flags(model)
+    from pops.runtime_environment import compiled_runtime_facts
+    runtime_facts = compiled_runtime_facts(supports_mpi=caps_flags.get("supports_mpi"))
 
     return CompiledArtifactManifest(
         model_name=model_name, abi_key=abi_key, abi_version=None,
@@ -248,7 +270,12 @@ def build_compiled_manifest(compiled):
         roles=roles, aux_required=aux_required, params_const=params_const,
         params_runtime=params_runtime, ghost_depth=ghost_depth, field_outputs=field_outputs,
         supports_stride=None, supports_partial_imex_mask=None, supports_named_fields=None,
-        native_entrypoints=[], **caps_flags)
+        native_entrypoints=[], dimension=runtime_facts["dimension"],
+        amr_refinement_ratio=runtime_facts["amr_refinement_ratio"],
+        precision=runtime_facts["precision"], real_bytes=runtime_facts["real_bytes"],
+        communicator=runtime_facts["communicator"],
+        supports_custom_communicator=runtime_facts["supports_custom_communicator"],
+        **caps_flags)
 
 
 # The NativeManifest fields the .so's ``pops_compiled_manifest()`` emits AUTHORITATIVELY (Spec 5
@@ -256,7 +283,8 @@ def build_compiled_manifest(compiled):
 # the honest-None / caps-derived value when a real artifact is on disk. ``n_aux`` / ``n_params`` /
 # ``n_vars`` are surfaced via the related manifest fields (variables length, params split, aux list)
 # but the booleans + ghost_depth + roles + entrypoints below are the ones the .so adjudicates.
-_NATIVE_BOOL_FIELDS = ("supports_stride", "supports_partial_imex_mask", "supports_named_fields")
+_NATIVE_BOOL_FIELDS = ("supports_stride", "supports_partial_imex_mask", "supports_named_fields",
+                       "supports_custom_communicator")
 
 # Layout / platform flags the .so now emits from its OWN compile (Spec 5 sec.13.12, #36): the AOT
 # route is a single uniform grid on one rank (supports_uniform true, supports_amr / supports_mpi
@@ -288,6 +316,12 @@ def apply_native_manifest(manifest, native):
     for field in _NATIVE_LAYOUT_PLATFORM_FIELDS:
         if field in native:
             setattr(manifest, field, bool(native[field]))
+    for field in ("dimension", "amr_refinement_ratio", "real_bytes"):
+        if field in native:
+            setattr(manifest, field, int(native[field]))
+    for field in ("precision", "communicator"):
+        if field in native:
+            setattr(manifest, field, str(native[field]))
     roles = native.get("roles")
     if roles and manifest.roles is None:
         manifest.roles = list(roles)

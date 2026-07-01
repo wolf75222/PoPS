@@ -10,6 +10,7 @@ These are inert descriptors: they declare requirements / capabilities and answer
 """
 from .._descriptor import Availability, MeshDescriptor
 from ..amr import NATIVE_MAX_LEVELS, NATIVE_RATIOS
+from pops.runtime_environment import validate_amr_refinement_ratio
 
 
 class Uniform(MeshDescriptor):
@@ -88,6 +89,7 @@ class AMR(MeshDescriptor):
     def validate(self, context=None):
         if self.max_levels < 1:
             raise ValueError("AMR: max_levels must be >= 1")
+        validate_amr_refinement_ratio(self.ratio, where="AMR")
         # Validate the attached policies, then the route availability.
         for policy in (self.regrid, self.patches, self.refine, self.nesting,
                        self.checkpoint, self.output):

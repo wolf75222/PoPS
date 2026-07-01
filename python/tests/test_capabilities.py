@@ -36,7 +36,8 @@ from pops.physics.aux import AUX_BASE_COMPS, AUX_CANONICAL, AUX_NAMED_BASE, AUX_
 
 EXPECTED_TOP_KEYS = {
     "dimension", "riemann", "time", "stability_policy", "poisson", "geometry", "schur",
-    "backends_dsl", "io", "amr_layout", "aux", "regrid",
+    "backends_dsl", "io", "amr_layout", "aux", "regrid", "precision",
+    "runtime_environment",
 }
 
 
@@ -95,6 +96,21 @@ def test_dimension_invariant_2d():
         "the dimension invariant must stay a separate top-level key, not nested under geometry"
 
 
+def test_runtime_environment_and_precision_facts():
+    caps = pops.capabilities()
+    precision = caps["precision"]
+    assert precision["real"] == "double"
+    assert precision["real_bytes"] == 8
+    assert precision["supports_single_precision"] is False
+    assert precision["supports_mixed_precision"] is False
+    env = caps["runtime_environment"]
+    assert env["dimension"] == 2
+    assert env["amr_refinement_ratio"] == 2
+    assert env["precision"] == "double"
+    assert env["supports_custom_communicator"] is False
+    assert env["communicator"] in ("serial", "MPI_COMM_WORLD", "unknown")
+
+
 def test_regrid_variable_selector_advertised():
     # ADC-296 / ADR-0001 Decision 5: the multi-block regrid variable is selectable by name/role
     # (default = component 0). The mono-block and compiled .so paths stay component-0 only. The
@@ -143,6 +159,7 @@ if __name__ == "__main__":
     test_polar_stability_bounds_advertised_wired()
     test_amr_schur_advertised_implemented()
     test_dimension_invariant_2d()
+    test_runtime_environment_and_precision_facts()
     test_regrid_variable_selector_advertised()
     test_aux_named_surface_and_limit_parity()
     print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, "

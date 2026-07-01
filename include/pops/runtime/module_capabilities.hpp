@@ -29,7 +29,7 @@ namespace pops {
 /// older .so (pops_compiled_manifest) can be told apart from a newer module at load time. Distinct from
 /// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
 /// this versions the capability *vocabulary*.
-inline constexpr int kAbiVersion = 1;
+inline constexpr int kAbiVersion = 2;
 
 /// The lowering route whose static capabilities are queried. The two generated backends differ in one
 /// honest way: the production / native loader carries a real cell stride, the AOT / prototype flat-array

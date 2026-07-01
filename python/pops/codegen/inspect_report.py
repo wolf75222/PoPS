@@ -45,7 +45,7 @@ class CompiledReport:
     """
 
     def __init__(self, *, name, backend, platform, layout, blocks, fields, program, inputs,
-                 artifacts, status, env=None):
+                 artifacts, status, env=None, runtime=None):
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -62,6 +62,7 @@ class CompiledReport:
         # so the env state that governed the compile -- including the UNSAFE jit_backdoor gate -- is
         # inspectable, never hidden.
         self.env = dict(env) if env else {}
+        self.runtime = dict(runtime) if runtime else {}
 
     def to_dict(self):
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -69,7 +70,8 @@ class CompiledReport:
                 "layout": self.layout, "blocks": [dict(b) for b in self.blocks],
                 "fields": [dict(f) for f in self.fields], "program": dict(self.program),
                 "inputs": {k: list(v) for k, v in self.inputs.items()},
-                "artifacts": dict(self.artifacts), "status": self.status, "env": dict(self.env)}
+                "artifacts": dict(self.artifacts), "status": self.status,
+                "env": dict(self.env), "runtime": dict(self.runtime)}
 
     def to_json(self, path=None, *, indent=2):
         """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
@@ -108,6 +110,17 @@ class CompiledReport:
         lines.append("    so_path  : %s" % art.get("so_path"))
         lines.append("    abi_key  : %s" % art.get("abi_key"))
         lines.append("    cache_key: %s" % art.get("cache_key"))
+        if self.runtime:
+            lines.append("  runtime:")
+            lines.append("    dimension             : %s" % self.runtime.get("dimension"))
+            lines.append("    amr_refinement_ratio  : %s"
+                         % self.runtime.get("amr_refinement_ratio"))
+            lines.append("    precision             : %s (%s bytes)"
+                         % (self.runtime.get("precision"), self.runtime.get("real_bytes")))
+            lines.append("    communicator          : %s"
+                         % self.runtime.get("communicator"))
+            lines.append("    custom_communicator   : %s"
+                         % self.runtime.get("supports_custom_communicator"))
         if self.env:
             lines.append("  environment (active POPS_*):")
             lines.append("    log_level     : %s" % self.env.get("log_level"))
@@ -178,6 +191,8 @@ def build_compiled_report(compiled):
 
     platform = "mpi" if layout_runtime.get("supports_mpi") else "serial"
     layout = layout_runtime.get("layout", "system")
+    from pops.runtime_environment import compiled_runtime_facts
+    runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
 
     artifacts = {"so_path": getattr(compiled, "so_path", None),
                  "abi_key": _short(getattr(compiled, "abi_key", None)),
@@ -193,7 +208,8 @@ def build_compiled_report(compiled):
         name=prog_summary["name"], backend="production", platform=platform, layout=layout,
         blocks=blocks, fields=fields, program=prog_summary,
         inputs={"states": states, "params": req_params, "aux": req_aux},
-        artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env)
+        artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env,
+        runtime=runtime)
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +317,15 @@ def build_requirements(compiled):
         "abi_key": getattr(compiled, "abi_key", None),
         "cxx_standard": getattr(compiled, "std", None),
     }
+    from pops.runtime_environment import compiled_runtime_facts
+    runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
+    constraints.update({
+        "dimension": runtime["dimension"],
+        "amr_refinement_ratio": runtime["amr_refinement_ratio"],
+        "precision": runtime["precision"],
+        "communicator": runtime["communicator"],
+        "supports_custom_communicator": runtime["supports_custom_communicator"],
+    })
 
     unknown = [
         "the spatial scheme (reconstruction / Riemann / variables) is a BIND input -- it is chosen "

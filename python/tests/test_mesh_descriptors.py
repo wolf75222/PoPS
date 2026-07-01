@@ -32,6 +32,14 @@ def test_cartesian_options_and_caps():
     m = CartesianMesh(n=128, L=2.0, periodic=False)
     assert m.options() == {"n": 128, "L": 2.0, "periodic": False}
     assert m.capabilities()["geometry"] == "cartesian"
+    assert m.capabilities()["dim"] == 2
+
+
+def test_dimension_policy_rejects_non_2d_meshes():
+    with pytest.raises(ValueError, match="dimension=3"):
+        CartesianMesh(dim=3)
+    with pytest.raises(ValueError, match="dimension=3"):
+        PolarMesh(0.1, 1.0, 8, 16, dim=3)
 
 
 def test_polar_validation():
@@ -71,7 +79,7 @@ def test_amr_route_limits_are_explainable():
     assert not av.ok and "max_levels" in av.reason and av.alternatives
     with pytest.raises(ValueError):
         bad.validate()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="ratio 3"):
         AMR(base=m, ratio=3).validate()
 
 

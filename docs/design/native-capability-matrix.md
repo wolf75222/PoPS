@@ -63,10 +63,16 @@ future validators:
 - `elliptic:mg_fac_defaults`: MG/FAC defaults and debug diagnostics still need a shared
   `SolverDefaults`/logger route.
 - `mesh:2d_storage_arithmetic`: the native mesh/storage/arithmetic core is `Box2D`/`Fab2D`
-  2D-only.
+  2D-only, and `validate_dimension()` rejects `Dim != 2` requests.
 - `amr:refinement_ratio`: native AMR hierarchy, patch ranges, reflux and subcycling are `ratio=2`
-  only.
+  only, and `validate_amr_refinement_ratio()` rejects other ratios.
 - `parallel:mpi_world_communicator`: MPI collectives currently use `MPI_COMM_WORLD`.
+- `parallel:custom_communicator`: caller-provided MPI communicators are unavailable.
+- `precision:single_or_mixed`: `pops::Real` is `double`; single or mixed precision is unavailable.
+- `runtime:kokkos_lifecycle`: `runtime_environment_report()` exposes whether PoPS will lazily
+  initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.
+- `runtime:allocator_lifetime`: Kokkos builds use a process-lifetime managed arena whose blocks are
+  returned by a Kokkos finalize hook.
 - `schur:condensed_source`: Schur condensation/source kernels are specialised to 2D plus Bz/Lorentz
   coupling.
 - `runtime:native_loader_legacy_metadata`: old native modules without metadata still fall back to

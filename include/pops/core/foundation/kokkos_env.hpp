@@ -22,6 +22,16 @@ namespace pops {
 
 #ifdef POPS_HAS_KOKKOS
 namespace detail {
+inline bool& kokkos_initialized_by_pops_flag() {
+  static bool value = false;
+  return value;
+}
+
+inline bool& kokkos_atexit_finalize_registered_flag() {
+  static bool value = false;
+  return value;
+}
+
 /// Initializes Kokkos on FIRST need (Fab allocation OR first kernel), finalizes via atexit.
 /// No-op if the caller already did its own Kokkos::initialize / ScopeGuard, or if Kokkos is already
 /// finalized. A single atexit is registered (subsequent calls see is_initialized()). Destruction
@@ -29,14 +39,32 @@ namespace detail {
 inline void ensure_kokkos_initialized() {
   if (!Kokkos::is_initialized() && !Kokkos::is_finalized()) {
     Kokkos::initialize();
+    kokkos_initialized_by_pops_flag() = true;
     std::atexit([] {
       if (Kokkos::is_initialized())
         Kokkos::finalize();
     });
+    kokkos_atexit_finalize_registered_flag() = true;
   }
 }
 }  // namespace detail
 #endif
+
+inline bool kokkos_initialized_by_pops() {
+#ifdef POPS_HAS_KOKKOS
+  return detail::kokkos_initialized_by_pops_flag();
+#else
+  return false;
+#endif
+}
+
+inline bool kokkos_atexit_finalize_registered() {
+#ifdef POPS_HAS_KOKKOS
+  return detail::kokkos_atexit_finalize_registered_flag();
+#else
+  return false;
+#endif
+}
 
 /// Device barrier: waits for in-flight kernels to finish before a HOST access to unified memory.
 /// No-op outside Kokkos (and if nothing has been launched).

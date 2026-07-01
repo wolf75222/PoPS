@@ -524,6 +524,7 @@ class CompiledModel:
             "supports_stride": bool(getattr(self, "backend", None) == "production"),
             "supports_named_fields": True,
             "supports_partial_imex_mask": False,
+            "supports_custom_communicator": False,
         }
         return native_capability_matrix(
             owner=getattr(self, "so_path", None) or "compiled-model",

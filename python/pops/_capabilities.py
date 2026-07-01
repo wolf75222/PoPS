@@ -253,7 +253,7 @@ def _feature_backend(feature):
 
 
 def _feature_platform(feature):
-    if feature == "supports_mpi":
+    if feature in ("supports_mpi", "supports_custom_communicator"):
         return "mpi"
     if feature == "supports_gpu":
         return "gpu"
@@ -270,6 +270,9 @@ def _flag_error_message(feature):
                             "compile with backend='production'"),
         "supports_partial_imex_mask": ("partial IMEX mask", "full source implicit / split routes",
                                        "use IMEX/IMEXRK/Split without partial masks"),
+        "supports_custom_communicator": ("communicator != MPI_COMM_WORLD",
+                                         "MPI_COMM_WORLD or serial",
+                                         "run on MPI_COMM_WORLD until ParallelContext lands"),
     }
     requested, available, alternative = requests.get(
         feature, (feature, "no route in this build", None))
@@ -433,6 +436,12 @@ def _support_rows(flags, source):
              limitation="no C++ route backs a partial IMEX mask",
              requested="partial IMEX mask", available_route="full source implicit / split routes",
              alternative="use IMEX/IMEXRK/Split without partial masks", source=source),
+        _row("supports_custom_communicator", layout="uniform|amr", backend="none",
+             platform="mpi", flags=flags, flag="supports_custom_communicator",
+             limitation="no C++ route accepts a caller-provided MPI_Comm",
+             requested="communicator != MPI_COMM_WORLD",
+             available_route="MPI_COMM_WORLD or serial",
+             alternative="run on MPI_COMM_WORLD until ParallelContext lands", source=source),
     ]
 
 
@@ -500,16 +509,41 @@ def _inventory_rows(flags, source):
         _row("mesh:2d_storage_arithmetic", layout="uniform|amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu, status="partial",
              limitation=("native mesh/storage/arithmetic primitives are Box2D/Fab2D/MultiFab 2D; "
-                         "Dim!=2 is not a native route"),
+                         "Dim!=2 is rejected by validate_dimension() before runtime"),
              source=source),
         _row("amr:refinement_ratio", layout="amr", backend="production", platform="host",
              mpi=mpi, gpu=gpu, status="partial",
-             limitation="AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only",
+             limitation=("AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
+                         "validate_amr_refinement_ratio() rejects other ratios"),
              source=source),
         _row("parallel:mpi_world_communicator", layout="uniform|amr", backend="production",
              platform="mpi", mpi=mpi, status="partial",
              limitation=("MPI collectives use MPI_COMM_WORLD; a caller-provided communicator is not "
                          "a supported native route yet"),
+             source=source),
+        _row("parallel:custom_communicator", layout="uniform|amr", backend="none",
+             platform="mpi", mpi=mpi, status="unavailable",
+             limitation="no native route accepts a caller-provided MPI_Comm",
+             requested="communicator != MPI_COMM_WORLD",
+             available_route="MPI_COMM_WORLD or serial",
+             alternative="run on MPI_COMM_WORLD until ParallelContext lands", source=source),
+        _row("precision:single_or_mixed", layout="uniform|amr", backend="none",
+             platform="host", status="unavailable",
+             limitation="pops::Real is hardcoded to double; no PrecisionPolicy route exists",
+             requested="precision=single or precision=mixed",
+             available_route="precision=double",
+             alternative="use double precision or implement a native PrecisionPolicy", source=source),
+        _row("runtime:kokkos_lifecycle", layout="uniform|amr", backend="production",
+             platform="host|gpu", mpi=mpi, gpu=gpu, status="partial",
+             limitation=("Kokkos is lazily initialized by PoPS on first allocation/kernel unless "
+                         "the caller already initialized it; runtime_environment_report() exposes "
+                         "ownership and initialized/finalized state"),
+             source=source),
+        _row("runtime:allocator_lifetime", layout="uniform|amr", backend="production",
+             platform="host|gpu", mpi=mpi, gpu=gpu, status="partial",
+             limitation=("Kokkos builds use a process-lifetime ManagedArena; blocks are released "
+                         "by a Kokkos finalize hook and the arena tables intentionally survive "
+                         "process teardown"),
              source=source),
         _row("krylov:cg_bicgstab_gmres_richardson", layout="uniform|amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu,

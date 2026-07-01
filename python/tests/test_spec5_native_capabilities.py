@@ -29,6 +29,8 @@ _pops = pytest.importorskip("pops._pops")
 
 _EXPECTED_FLAGS = ("supports_uniform", "supports_amr", "supports_mpi", "supports_gpu",
                    "supports_stride", "supports_named_fields", "supports_partial_imex_mask")
+_EXPECTED_ENV_FIELDS = ("dimension", "amr_refinement_ratio", "precision", "real_bytes",
+                        "communicator", "supports_custom_communicator")
 
 
 def _module_caps(target="module"):
@@ -46,7 +48,14 @@ def test_module_capabilities_present_and_shaped():
     for flag in _EXPECTED_FLAGS:
         assert flag in caps, "module_capabilities missing %r" % flag
         assert isinstance(caps[flag], bool), "%s must be bool, got %r" % (flag, caps[flag])
+    for field in _EXPECTED_ENV_FIELDS:
+        assert field in caps, "module_capabilities missing %r" % field
     assert isinstance(caps["abi_version"], int)
+    assert caps["dimension"] == 2
+    assert caps["amr_refinement_ratio"] == 2
+    assert caps["precision"] == "double"
+    assert caps["real_bytes"] == 8
+    assert caps["supports_custom_communicator"] is False
 
 
 def test_abi_version_matches_module_attr():

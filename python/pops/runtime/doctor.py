@@ -248,6 +248,8 @@ def capabilities():
     poisson_fft_spectral = tok["poisson"]["fft_spectral"]
     dsl_limiters = list(tok["dsl_limiters"])
     dsl_limiters_low = list(tok["dsl_limiters_low"])
+    from pops.runtime_environment import runtime_environment_report
+    runtime_env = runtime_environment_report()
     return {
         # Spatial dimension of the core (ADC-294 / ADR-0001 Decision 1). The solver is structurally
         # 2D: a load-bearing invariant baked into the data layout (Fab2D operator()(i, j, c)), the
@@ -259,6 +261,13 @@ def capabilities():
         # (BoxND / GeometryND) is deferred to a future milestone; see
         # docs/sphinx/reference/known-limitations.md and include/pops/mesh/box2d.hpp.
         "dimension": 2,
+        "precision": {
+            "real": runtime_env["precision"],
+            "real_bytes": runtime_env["real_bytes"],
+            "supports_single_precision": runtime_env["supports_single_precision"],
+            "supports_mixed_precision": runtime_env["supports_mixed_precision"],
+        },
+        "runtime_environment": runtime_env,
         "riemann": {
             "system_cartesian": riemann_all,
             "system_polar": riemann_polar,

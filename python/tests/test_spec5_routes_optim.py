@@ -75,7 +75,7 @@ def test_explain_routes_returns_printable_inert_matrix():
         for key in ("feature", "axis", "status", "source", "limitation",
                     "layout", "backend", "platform", "mpi", "gpu", "error_message"):
             assert key in d, "route row missing key %r: %r" % (key, d)
-        assert d["status"] in ("available", "unavailable")
+        assert d["status"] in ("available", "partial", "unavailable")
 
 
 def test_explain_routes_is_json_serialisable_metadata_only():
@@ -148,11 +148,16 @@ def test_explain_routes_exposes_adc601_native_audit_limitations():
         "parallel:mpi_world_communicator": "MPI_COMM_WORLD",
         "schur:condensed_source": "2D plus Bz",
         "runtime:native_loader_legacy_metadata": "u0.. names",
+        "runtime:kokkos_lifecycle": "lazily initialized",
+        "runtime:allocator_lifetime": "process-lifetime ManagedArena",
     }
     for feature, limitation_fragment in expected.items():
         row = rows[feature]
         assert row.status == "partial"
         assert limitation_fragment in row.limitation
+    for feature in ("parallel:custom_communicator", "precision:single_or_mixed"):
+        assert rows[feature].status == "unavailable"
+        assert "unsupported route" in rows[feature].error_message
 
 
 def test_explain_routes_reads_metadata_only_no_runtime_import():

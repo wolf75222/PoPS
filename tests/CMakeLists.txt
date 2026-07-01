@@ -119,6 +119,7 @@ pops_add_test(test_cache_manager)  # Spec 3 scheduler value cache (ADC-458)
 pops_add_test(test_checkpoint_cache)  # Spec 3 scheduler-cache checkpoint/restart round-trip (ADC-458)
 pops_add_test(test_external_brick)  # Spec 3 external C++ brick registry + macro (ADC-463)
 pops_add_test(test_external_brick_json)  # Spec 3 manifest JSON escape/unescape round-trip (ADC-463)
+pops_add_test(test_runtime_environment)  # ADC-609: runtime env / precision / communicator facts
 
 # --- maillage / conteneurs ---
 pops_add_test(test_box2d)
