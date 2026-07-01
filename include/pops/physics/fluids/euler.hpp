@@ -9,6 +9,7 @@
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
 
@@ -37,7 +38,7 @@ struct Euler {
   using Aux = pops::Aux;             ///< auxiliary fields (unused in pure Euler)
   static constexpr int n_vars = 4;  ///< number of conserved variables
 
-  Real gamma = 1.4;  ///< adiabatic index of the ideal gas
+  Real gamma = kPhysicalDefaultGamma;  ///< adiabatic index of the ideal gas
 
   /// Ideal-gas pressure p = (gamma-1)(E - 1/2 rho |v|^2).
   POPS_HD Real pressure(const State& u) const {

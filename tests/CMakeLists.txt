@@ -221,6 +221,7 @@ pops_add_test(test_polar_condensed_schur_source_stepper)
 # SEUL echoue (#120 : stagnation c=0.1-0.4, divergence c=0.7), + consistance A=I vs GeometricMG.
 # (entree serie ; les entrees MPI np=1/2/4 sont ajoutees dans le bloc POPS_HAS_MPI plus bas)
 pops_add_test(test_krylov_solver)
+pops_add_test(test_numerical_defaults)
 # ADC-405a : couche de Krylov GENERIQUE matrice-libre (generic_krylov.hpp) -- Richardson, CG,
 # BiCGStab -- l'operateur passe en CALLBACK (ApplyFn). Valide les trois boucles sur un operateur
 # de Helmholtz SPD A = I - alpha*Lap : solution manufacturee discretisation-exacte (rhs = A(phi_exact)),

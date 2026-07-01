@@ -198,7 +198,7 @@ inline std::vector<std::string> split(const std::string& s, char sep) {
 /// object dependency: only strings and a double pass through dlsym (flat ABI, like the rest of the block).
 struct BlockMeta {
   bool has_gamma = false;
-  double gamma = 1.4;
+  double gamma = static_cast<double>(kPhysicalDefaultGamma);
   VariableSet cons{VariableKind::Conservative, {}, 0, {}};
   VariableSet prim{VariableKind::Primitive, {}, 0, {}};
 };
@@ -375,7 +375,8 @@ void push_dynamic(ImplT* P, const std::string& name, pops::dynlib::handle h, int
   }
   if (prim_vs.names.empty())
     prim_vs = {VariableKind::Primitive, cons_vs.names, cons_vs.size, {}};
-  const double gamma = meta.has_gamma ? meta.gamma : 1.4;
+  const double gamma =
+      meta.has_gamma ? meta.gamma : static_cast<double>(kPhysicalDefaultGamma);
 
   typename ImplT::Species block{name,
                                 MultiFab(P->ba, P->dm, NV, 2),
@@ -662,7 +663,8 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   if (prim_vs.names.empty())
     prim_vs = {VariableKind::Primitive, cons_vs.names, cons_vs.size, {}};
   // gamma: carried by the ABI if the model declares it (pops_compiled_gamma), otherwise historical default 1.4.
-  const double gamma = meta.has_gamma ? meta.gamma : 1.4;
+  const double gamma =
+      meta.has_gamma ? meta.gamma : static_cast<double>(kPhysicalDefaultGamma);
   typename ImplT::Species block{name,
                                 MultiFab(P->ba, P->dm, nv, 2),
                                 nv,

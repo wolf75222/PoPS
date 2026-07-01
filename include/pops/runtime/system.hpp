@@ -7,6 +7,7 @@
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (AOT-compiled block seam)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <array>
 #include <functional>
@@ -238,7 +239,9 @@ class System {
                         const std::string& limiter = "minmod",
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
-                        const std::string& time = "explicit", double gamma = 1.4, int substeps = 1,
+                        const std::string& time = "explicit",
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
+                        int substeps = 1,
                         bool evolve = true, int stride = 1, double positivity_floor = 0.0);
 
   /// ABI key of the module (compiler + C++ standard + signature of the pops headers, frozen at
@@ -932,6 +935,8 @@ class System {
   /// An integrator written in Python iterates over it, so it must also see the blocks loaded from
   /// a .so (JIT / AOT); counting them by n_species() alone would skip them.
   std::vector<std::string> block_names() const;
+  /// Structured report of effective numerical, solver and physical options currently configured.
+  EffectiveOptionsReport effective_options_report() const;
   double mass(const std::string& name) const;
   std::vector<double> density(const std::string& name) const;  ///< ny*nx row-major (j slow, i fast)
   std::vector<double> potential();  ///< phi, ny*nx row-major (j slow, i fast)

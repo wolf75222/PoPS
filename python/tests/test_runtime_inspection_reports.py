@@ -26,6 +26,8 @@ def test_system_inspect_is_structured_and_array_free():
     assert d["history"] == []
     assert d["cache"] == []
     assert d["diagnostics"] == {}
+    assert d["options"]["defaults"]["newton"]["max_iters"] == 2
+    assert d["options"]["poisson"]["solver"] == "geometric_mg"
     assert "array(" not in str(rep)
     assert json.loads(rep.to_json())["runtime"] == "system"
 
@@ -39,6 +41,8 @@ def test_amr_system_inspect_composes_amr_snapshot():
     assert d["amr"]["max_levels"] == 2
     assert d["amr"]["ratio"] == 2
     assert d["runtime_environment"]["amr_refinement_ratio"] == 2
+    assert d["options"]["defaults"]["amr"]["refinement_ratio"] == 2
+    assert d["options"]["amr"]["disabled"] is True
     assert any(row["feature"] == "amr:refinement_ratio" and row["status"] == "partial"
                for row in d["limitations"])
     view_rep = sim.amr.inspect()

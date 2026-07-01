@@ -34,6 +34,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -89,7 +90,7 @@ class TensorKrylovSolver {
     lincomb(r_, Real(1), rhs(), Real(-1), r_);  // r_ = rhs - L_int(phi)
     return l2_norm(r_);
   }
-  void solve() { solve(Real(1e-10), 200); }
+  void solve() { solve(kKrylovDefaultRelTol, kTensorKrylovDefaultMaxIters); }
 
   // Preconditioned BiCGStab. phi() is the unknown (warm start: incoming value = starting point);
   // rhs() the right-hand side. Returns iterations + relative residual + convergence.
@@ -173,7 +174,7 @@ class TensorKrylovSolver {
   }
 
  private:
-  static constexpr Real kTiny = Real(1e-300);  // guard against breakdown / division by 0
+  static constexpr Real kTiny = kKrylovBreakdownTiny;  // guard against breakdown / division by 0
 
   // INHOMOGENEOUS MATRIX-FREE matvec: out = L_int(in) = div(A grad in) - kappa in, ghosts of in filled
   // with op_.bc() (the FULL BC). Reuses the coefficients of op_'s FULL operator (same pointers as

@@ -8,6 +8,7 @@ field arrays, never recompiles, never installs a program.
 import json
 
 from pops._capabilities import native_capability_report
+from pops.runtime.defaults import numerical_defaults_report
 from pops.runtime.profile import PerformanceSummary
 from pops.runtime_environment import runtime_environment_report
 
@@ -19,7 +20,7 @@ class RuntimeInspectionReport:
     report_type = "runtime_inspection"
 
     def __init__(self, *, runtime, blocks, clock, runtime_environment, capabilities, program,
-                 profile, history, cache, diagnostics, amr=None, limitations=None):
+                 profile, history, cache, diagnostics, options=None, amr=None, limitations=None):
         self.runtime = runtime
         self.blocks = list(blocks)
         self.clock = dict(clock)
@@ -30,6 +31,7 @@ class RuntimeInspectionReport:
         self.history = list(history)
         self.cache = list(cache)
         self.diagnostics = dict(diagnostics)
+        self.options = dict(options) if options is not None else {}
         self.amr = dict(amr) if amr is not None else None
         self.limitations = list(limitations or [])
 
@@ -47,6 +49,7 @@ class RuntimeInspectionReport:
             "history": [dict(row) for row in self.history],
             "cache": [dict(row) for row in self.cache],
             "diagnostics": dict(self.diagnostics),
+            "options": dict(self.options),
             "amr": dict(self.amr) if self.amr is not None else None,
             "limitations": [dict(row) for row in self.limitations],
         }
@@ -81,6 +84,9 @@ class RuntimeInspectionReport:
         lines.append("  history     : %d ring(s)" % len(self.history))
         lines.append("  cache       : %d slot(s)" % len(self.cache))
         lines.append("  diagnostics : %d scalar(s)" % len(self.diagnostics))
+        opts = self.options
+        lines.append("  options     : blocks=%d source_stages=%d"
+                     % (len(opts.get("blocks", [])), len(opts.get("source_stages", []))))
         if self.amr is not None:
             lines.append("  amr         : levels=%s patches=%s"
                          % (self.amr.get("max_levels"), _amr_patch_count(self.amr)))
@@ -111,6 +117,7 @@ def build_runtime_inspection(sim, *, runtime):
         history=_history(sim),
         cache=_cache(sim),
         diagnostics=_diagnostics(sim),
+        options=_options(sim, runtime),
         amr=_amr(sim) if runtime == "amr_system" else None,
         limitations=limitations)
 
@@ -176,6 +183,25 @@ def _cache(sim):
 
 def _diagnostics(sim):
     return dict(_call(sim, "program_diagnostics", {}) or {})
+
+
+def _options(sim, runtime):
+    report = _call(sim, "effective_options_report", None)
+    if report:
+        try:
+            return dict(report)
+        except Exception:
+            pass
+    return {
+        "schema_version": 1,
+        "runtime": runtime,
+        "defaults": numerical_defaults_report(),
+        "blocks": [],
+        "poisson": {},
+        "source_stages": [],
+        "time": {"scheme": None, "gauss_policy": None},
+        "amr": None,
+    }
 
 
 def _amr(sim):

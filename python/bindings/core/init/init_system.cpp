@@ -41,9 +41,12 @@ void init_system(py::module_& m) {
           py::arg("implicit_roles") = std::vector<std::string>{},
           // Options of the implicit IMEX source Newton (defaults = historical constants 2 / 1e-7,
           // bit-identical). newton_diagnostics=True enables the report (newton_report(name)).
-          py::arg("newton_max_iters") = 2, py::arg("newton_rel_tol") = 0.0,
-          py::arg("newton_abs_tol") = 0.0, py::arg("newton_fd_eps") = 1e-7,
-          py::arg("newton_diagnostics") = false, py::arg("newton_damping") = 1.0,
+          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
+          py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
+          py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
+          py::arg("newton_diagnostics") = false,
+          py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
           py::arg("newton_fail_policy") = "none",
           // Zhang-Shu POSITIVITY limiter (ADC-76): density floor of the reconstructed face states
           // (conservative scaling toward the cell mean). 0 (default) = inactive,
@@ -97,7 +100,8 @@ void init_system(py::module_& m) {
       // real System context, ABI key verified. cf. System::add_native_block.
       .def("add_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
-           py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
+           py::arg("recon") = "conservative", py::arg("time") = "explicit",
+           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma),
            py::arg("substeps") = 1, py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("positivity_floor") = 0.0)
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
@@ -429,6 +433,9 @@ void init_system(py::module_& m) {
       .def("time", &System::time)
       .def("n_species", &System::n_species)
       .def("block_names", &System::block_names)
+      .def("effective_options_report",
+           [](const System& s) { return effective_options_report_to_dict(s.effective_options_report()); },
+           "Structured effective numerical/solver/physical options for this System.")
       .def("mass", &System::mass, py::arg("name"))
       .def(
           "density",

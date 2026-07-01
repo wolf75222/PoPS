@@ -5,6 +5,7 @@
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial_operator.hpp>  // load_state, load_aux
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>  // std::max (Newton report aggregation, host)
 #include <concepts>
@@ -112,15 +113,15 @@ POPS_HD inline bool is_implicit_component(const ImplicitMask<N>& mask, int c) {
 ///    per advance; kFailThrow = std::runtime_error with the offending cell. != kFailNone
 ///    forces the instrumented path (detection required) -- a pure observer, W unchanged.
 struct NewtonOptions {
-  static constexpr int kFailNone = 0;
-  static constexpr int kFailWarn = 1;
-  static constexpr int kFailThrow = 2;
-  int max_iters = 2;
-  Real rel_tol = Real(0);
-  Real abs_tol = Real(0);
-  Real fd_eps = Real(1e-7);
-  Real damping = Real(1);
-  int fail_policy = kFailNone;
+  static constexpr int kFailNone = kNewtonFailNone;
+  static constexpr int kFailWarn = kNewtonFailWarn;
+  static constexpr int kFailThrow = kNewtonFailThrow;
+  int max_iters = kNewtonDefaultMaxIters;
+  Real rel_tol = kNewtonDefaultRelTol;
+  Real abs_tol = kNewtonDefaultAbsTol;
+  Real fd_eps = kNewtonDefaultFdEps;
+  Real damping = kNewtonDefaultDamping;
+  int fail_policy = kNewtonDefaultFailPolicy;
 };
 
 /// Range-validate a NewtonOptions POD; shared by System::add_block and AmrSystem::add_block, which
@@ -176,7 +177,7 @@ struct NewtonReport {
 /// Finite? (device-safe, without <cmath>: NaN fails x == x; +-inf fails the bounds). Used by the
 /// INSTRUMENTED Newton path only (the default path tests nothing, bit-identical).
 POPS_HD inline bool newton_finite(Real x) {
-  return x == x && x < Real(1e300) && x > Real(-1e300);
+  return x == x && x < kNewtonFiniteAbsLimit && x > -kNewtonFiniteAbsLimit;
 }
 
 namespace detail {

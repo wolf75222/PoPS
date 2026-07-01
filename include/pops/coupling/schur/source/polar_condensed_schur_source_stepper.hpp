@@ -11,6 +11,7 @@
 #include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // PolarTensorKrylovSolver, apply_polar_tensor (#210)
 #include <pops/numerics/linalg/lorentz_eliminator.hpp>  // B^{-1} closed form (#118)
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <stdexcept>
 
@@ -494,8 +495,8 @@ class PolarCondensedSchurSourceStepper {
   MultiFab vr_n_, vt_n_;                ///< v^n (extracted at the start of step)
   MultiFab vr_t_, vt_t_;                ///< v^{n+theta} then v^{n+1}
   PolarKrylovResult last_result_;       ///< diagnostic of the last solve
-  Real krylov_tol_ = Real(1e-10);       ///< solve tolerance (historical default, cf. set_krylov)
-  int krylov_max_iters_ = 600;          ///< iteration budget (historical default, cf. set_krylov)
+  Real krylov_tol_ = kKrylovDefaultRelTol;       ///< solve tolerance (historical default)
+  int krylov_max_iters_ = kSchurKrylovPolarMaxIters;  ///< iteration budget (historical default)
 };
 
 }  // namespace pops

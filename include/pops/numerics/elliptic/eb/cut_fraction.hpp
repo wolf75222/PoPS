@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>  // Real, POPS_HD
+#include <pops/runtime/numerical_defaults.hpp>
 
 /// @file
 /// @brief SHARED cut-fraction primitive (cut-cell / embedded boundary).
@@ -34,8 +35,8 @@ POPS_HD inline Real cut_distance(Real lc, Real ln, Real h) {
   if (ln < Real(0))
     return h;                // interior neighbor: no cut (full face)
   Real th = lc / (lc - ln);  // ls changes sign: linear cut fraction
-  if (th < Real(1e-3))
-    th = Real(1e-3);  // anti division-by-zero guard (theta -> 0)
+  if (th < kEbCutFractionFloor)
+    th = kEbCutFractionFloor;  // anti division-by-zero guard (theta -> 0)
   if (th > Real(1))
     th = Real(1);
   return th * h;

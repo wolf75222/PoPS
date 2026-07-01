@@ -12,6 +12,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>   // operator + preconditioner (#120)
 #include <pops/numerics/elliptic/linear/krylov_solver.hpp>  // TensorKrylovSolver (BiCGStab, #122)
 #include <pops/numerics/linalg/lorentz_eliminator.hpp>      // closed-form B^{-1} (#118)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <stdexcept>
 
@@ -333,8 +334,8 @@ class CondensedSchurSourceStepper {
   MultiFab
       phi_n_;  ///< phi^n frozen (extrapolation); allocated at construction, copied at the start of step
   KrylovResult last_result_;       ///< diagnostic of the last solve
-  Real krylov_tol_ = Real(1e-10);  ///< tolerance of the solve (historical default, cf. set_krylov)
-  int krylov_max_iters_ = 400;     ///< iteration budget (historical default, cf. set_krylov)
+  Real krylov_tol_ = kKrylovDefaultRelTol;  ///< tolerance of the solve (historical default)
+  int krylov_max_iters_ = kSchurKrylovCartesianMaxIters;  ///< iteration budget (historical default)
   // PERSISTENT Krylov solver (BiCGStab + MG precond). Allocates its buffers (r/rhat/p/v/s/t/phat/
   // shat + BC offsets) ONCE; step() reuses kry_ without reallocation. MUST be declared AFTER
   // op_/precond_/n_precond_ (which it references): init order (after them) and destruction order (before them)

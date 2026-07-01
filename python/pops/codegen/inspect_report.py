@@ -53,7 +53,7 @@ class CompiledReport:
     """
 
     def __init__(self, *, name, backend, platform, layout, blocks, fields, program, inputs,
-                 artifacts, status, env=None, runtime=None, capabilities=None):
+                 artifacts, status, env=None, runtime=None, capabilities=None, options=None):
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -72,6 +72,7 @@ class CompiledReport:
         self.env = dict(env) if env else {}
         self.runtime = dict(runtime) if runtime else {}
         self.capabilities = dict(capabilities) if capabilities else {}
+        self.options = dict(options) if options else {}
 
     def to_dict(self):
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -81,7 +82,7 @@ class CompiledReport:
                 "inputs": {k: list(v) for k, v in self.inputs.items()},
                 "artifacts": dict(self.artifacts), "status": self.status,
                 "env": dict(self.env), "runtime": dict(self.runtime),
-                "capabilities": dict(self.capabilities)}
+                "capabilities": dict(self.capabilities), "options": dict(self.options)}
 
     def to_json(self, path=None, *, indent=2):
         """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
@@ -139,6 +140,16 @@ class CompiledReport:
             lines.append("    abi_version    : %s" % self.capabilities.get("abi_version"))
             lines.append("    route_ids      : %d (%d partial/unavailable)"
                          % (len(routes), len(blocked)))
+        if self.options:
+            cache = self.options.get("cache_key", {})
+            lines.append("  options:")
+            lines.append("    defaults_schema : %s"
+                         % self.options.get("defaults", {}).get("schema_version"))
+            lines.append("    cache_key       : %s" % cache.get("cache_key"))
+            lines.append("    const_params    : %s"
+                         % (", ".join(cache.get("const_params", [])) or "(none)"))
+            lines.append("    runtime_params  : %s"
+                         % (", ".join(cache.get("runtime_params", [])) or "(none)"))
         if self.env:
             lines.append("  environment (active POPS_*):")
             lines.append("    log_level     : %s" % self.env.get("log_level"))
@@ -236,7 +247,67 @@ def build_compiled_report(compiled):
         blocks=blocks, fields=fields, program=prog_summary,
         inputs={"states": states, "params": req_params, "aux": req_aux},
         artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env,
-        runtime=runtime, capabilities=capability_report)
+        runtime=runtime, capabilities=capability_report, options=_compiled_options(compiled))
+
+
+def _compiled_options(compiled):
+    """Effective defaults/options visible before bind; inert metadata-only."""
+    from pops.runtime.defaults import PHYSICAL_DEFAULT_GAMMA, numerical_defaults_report
+
+    defaults = numerical_defaults_report()
+    model = getattr(compiled, "model", None)
+    params = dict(getattr(model, "params", {}) or {})
+    const_params = sorted(
+        name for name, param in params.items() if getattr(param, "kind", "const") != "runtime")
+    runtime_params = sorted(
+        name for name, param in params.items() if getattr(param, "kind", "const") == "runtime")
+
+    default_gamma = defaults.get("physical", {}).get("gamma", PHYSICAL_DEFAULT_GAMMA)
+    model_gamma = getattr(model, "gamma", None)
+    gamma_source = "compiled_model_metadata" if model_gamma is not None else "legacy_fallback"
+    gamma_value = model_gamma if model_gamma is not None else default_gamma
+
+    param_rows = []
+    for name in sorted(params):
+        param = params[name]
+        kind = getattr(param, "kind", "const")
+        param_rows.append({
+            "name": name,
+            "kind": kind,
+            "value": getattr(param, "value", None),
+            "affects_cache_key": kind != "runtime",
+        })
+
+    return {
+        "schema_version": 1,
+        "defaults": defaults,
+        "physical": {
+            "gamma": {
+                "value": gamma_value,
+                "source": gamma_source,
+                "affects_cache_key": model_gamma is not None,
+            },
+            "params": param_rows,
+        },
+        "cache_key": {
+            "cache_key": getattr(compiled, "cache_key", None),
+            "problem_hash": getattr(compiled, "problem_hash", None),
+            "program_hash": getattr(compiled, "program_hash", None),
+            "model_hash": getattr(model, "model_hash", None),
+            "abi_key": getattr(compiled, "abi_key", None),
+            "participates": [
+                "program_source",
+                "model_hash",
+                "abi_key",
+                "compiler",
+                "cxx_standard",
+                "const_params",
+            ],
+            "const_params": const_params,
+            "runtime_params": runtime_params,
+            "runtime_params_affect_cache_key": False,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

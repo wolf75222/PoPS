@@ -313,7 +313,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "host", mpi, gpu),
       capability_route("runtime:native_loader_legacy_metadata", "partial",
                        "old native modules without metadata fall back to u0.. names, empty roles, "
-                       "gamma=1.4 and host prototype copies",
+                       "legacy default gamma and host prototype copies",
                        "uniform|amr", "aot|dynamic|prototype", "host", mpi, gpu),
       capability_route("output:npz_vtk_hdf5", "available",
                        "runtime output writers; AMR VTK is coarse + patch metadata", "uniform|amr",

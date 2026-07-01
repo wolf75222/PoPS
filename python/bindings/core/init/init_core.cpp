@@ -220,6 +220,13 @@ void init_core(py::module_& m) {
       "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
       "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
 
+  m.def(
+      "numerical_defaults_report",
+      []() {
+        return numerical_defaults_report_to_dict();
+      },
+      "Structured native numerical/solver/physical defaults. Reading it is metadata-only.");
+
   // AUX channel limits + canonical name table (ADC-291), exposed from the SINGLE C++ source
   // (pops/core/state.hpp + aux_names.hpp). The DSL/capabilities() read these so the Python mirrors
   // (AUX_NAMED_MAX / AUX_NAMED_BASE / AUX_CANONICAL in dsl.py) cannot SILENTLY drift from C++:

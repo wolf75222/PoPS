@@ -10,6 +10,14 @@ native-add_block / coupling / diagnostics glue.
 from pops._bootstrap import AmrSystemConfig, _AmrSystem
 from pops.runtime import threading as _threading
 from pops.runtime.bricks import Spatial, Explicit, Split
+from pops.runtime.defaults import (
+    NEWTON_DEFAULT_ABS_TOL,
+    NEWTON_DEFAULT_DAMPING,
+    NEWTON_DEFAULT_FAIL_POLICY,
+    NEWTON_DEFAULT_FD_EPS,
+    NEWTON_DEFAULT_MAX_ITERS,
+    NEWTON_DEFAULT_REL_TOL,
+)
 from pops.runtime._amr_system_equation import _AmrSystemEquation
 from pops.runtime._amr_system_io import _AmrSystemIO
 from pops.runtime._amr_system_program import _AmrSystemProgram
@@ -230,12 +238,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                           getattr(time, "substeps", 1), getattr(time, "stride", 1),
                           getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
-                          getattr(time, "newton_max_iters", 2),
-                          getattr(time, "newton_rel_tol", 0.0),
-                          getattr(time, "newton_abs_tol", 0.0),
-                          getattr(time, "newton_fd_eps", 1e-7),
-                          getattr(time, "newton_damping", 1.0),
-                          getattr(time, "newton_fail_policy", "none"),
+                          getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
+                          getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
+                          getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
+                          getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
+                          getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                          getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                           getattr(time, "newton_diagnostics", False),
                           getattr(spatial, "positivity_floor", 0.0))
 

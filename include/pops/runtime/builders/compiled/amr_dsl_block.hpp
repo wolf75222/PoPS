@@ -150,7 +150,7 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   //     patch). Gating on refine_threshold keeps the no-refinement hierarchy MONO-LEVEL (n_patches()==0, like
   //     the amr-schur path), so the coarse distributes cleanly. When refinement IS configured the seed is
   //     allocated and the first build regrid chops + distributes it round-robin exactly as before (UNCHANGED).
-  if (!bp.schur && bp.refine_threshold < 1e30) {
+  if (!bp.schur && bp.refine_threshold < kAmrRefinementDisabledThreshold) {
     const int I0 = bp.n / 4, I1 = 3 * bp.n / 4 - 1, J0 = bp.n / 4, J1 = 3 * bp.n / 4 - 1;
     Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
     BoxArray baf(std::vector<Box2D>{fb});
@@ -262,8 +262,10 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
         static_cast<Real>(bp.schur_alpha));
     if (bp.schur_krylov_tol > 0.0 || bp.schur_krylov_max_iters > 0)
       schur->set_krylov(
-          bp.schur_krylov_tol > 0.0 ? static_cast<Real>(bp.schur_krylov_tol) : Real(1e-10),
-          bp.schur_krylov_max_iters > 0 ? bp.schur_krylov_max_iters : 400);
+          bp.schur_krylov_tol > 0.0 ? static_cast<Real>(bp.schur_krylov_tol)
+                                    : kKrylovDefaultRelTol,
+          bp.schur_krylov_max_iters > 0 ? bp.schur_krylov_max_iters
+                                        : kSchurKrylovCartesianMaxIters);
     auto bz_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
     amr_write_coarse_bz(*bz_coarse, bp.bz_field, bp.n);
     auto phi_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
@@ -1095,7 +1097,9 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
                         const std::string& limiter = "minmod",
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
-                        const std::string& time = "explicit", double gamma = 1.4, int substeps = 1,
+                        const std::string& time = "explicit",
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
+                        int substeps = 1,
                         int stride = 1, const std::vector<std::string>& implicit_vars = {},
                         const std::vector<std::string>& implicit_roles = {},
                         double pos_floor = 0.0) {

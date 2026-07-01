@@ -12,6 +12,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // coarse solver (geometric multigrid)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (residual, reads the already-filled ghosts)
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, CoverageMask (coarse footprint of a patch)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -176,7 +177,9 @@ class CompositeFacPoisson {
 
   /// Solves the composite system. @return the final max composite residual.
   /// @p max_iters FAC iterations (two-way); @p fine_sweeps SOR sweeps per fine solve; @p tol tolerance.
-  Real solve(int max_iters = 30, int fine_sweeps = 400, Real tol = 1e-9) {
+  Real solve(int max_iters = kFACDefaultMaxIters,
+             int fine_sweeps = kFACDefaultFineSweeps,
+             Real tol = kFACDefaultTol) {
     // VARIABLE COEFFICIENT (condensed Schur operator B_z=0): sets eps on the coarse solver and
     // fills the eps ghosts PER LEVEL. eps_c ghosts = zero-gradient (coeff_bc Foextrap, like the
     // Schur builder); eps_f C-F ghosts = bilerp of eps_c (consistency of the coefficient flux across
@@ -198,7 +201,7 @@ class CompositeFacPoisson {
     // 0) initial coarse solve (gives a phi_c for the 1st C-F ghost).
     copy0(mg_.rhs(), f_c_);
     mg_.phi().set_val(Real(0));
-    mg_.solve(Real(1e-12), 100);
+    mg_.solve(kFACInitialCoarseRelTol, kFACInitialCoarseMaxCycles);
     copy0(phi_c_, mg_.phi());
 
     // 1) bilinear C-F ghosts + fine solve (base ONE-WAY).

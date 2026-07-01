@@ -31,6 +31,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/numerics/elliptic/eb/cut_fraction.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -108,7 +109,9 @@ class GeometricMG {
   // (solve_robust LOCALLY doubles nu1/nu2 if the embedded boundary makes the cycle diverge, then restores them.)
   GeometricMG(const Geometry& geom, const BoxArray& ba, const BCRec& bc,
               std::function<bool(Real, Real)> active = {}, bool replicated = false,
-              int min_coarse = 2, int nu1 = 2, int nu2 = 2, int nbottom = 50, bool cut_cell = false,
+              int min_coarse = kMGDefaultMinCoarse, int nu1 = kMGDefaultPreSmooth,
+              int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
+              bool cut_cell = false,
               std::function<Real(Real, Real)> levelset = {})
       : bc_(bc),
         active_(std::move(active)),
@@ -436,7 +439,7 @@ class GeometricMG {
   // tolerance) and residual() (alias of current_residual). Lets couplers
   // depend on the concept, not on GeometricMG directly. Propagates abs_tol_ (absolute
   // floor, default 0 -> historical relative criterion unchanged) to the mixed criterion.
-  void solve() { solve(Real(1e-8), 50, abs_tol_); }
+  void solve() { solve(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_); }
   Real residual() { return current_residual(); }
 
   // ABSOLUTE floor on the residual used by the no-argument solve() (the EllipticSolver
@@ -711,7 +714,7 @@ class GeometricMG {
   bool has_kappa_ = false;
   bool has_cross_ = false;  // off-diagonal Axy/Ayx coefficients (FULL tensor) active
   Real abs_tol_ =
-      Real(0);  // absolute floor of the no-argument solve() (0 = relative criterion only)
+      kMGDefaultAbsTol;  // absolute floor of the no-argument solve() (0 = relative criterion only)
   // PER-SOLVE PROFILING STATS (read back at the System field_solve seam, ADC-479 criteria 42/43).
   // last_cycles_/last_residual_ are set by solve(); last_bottom_seconds_ is reset at the top of solve()
   // and accumulated by vcycle_rec's bottom branch. 0 until the first solve (no cycle recorded yet).

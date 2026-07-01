@@ -54,7 +54,9 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
                         const std::string& limiter = "minmod",
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
-                        const std::string& time = "explicit", double gamma = 1.4, int substeps = 1,
+                        const std::string& time = "explicit",
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
+                        int substeps = 1,
                         bool evolve = true, int stride = 1, double positivity_floor = 0) {
   const bool imex = (time == "imex");
   const bool recon_prim = (recon == "primitive");

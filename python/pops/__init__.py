@@ -39,6 +39,7 @@ from pops.runtime.doctor import doctor, capabilities  # noqa: F401
 from pops.runtime.mesh import CartesianMesh, PolarMesh, AuxHalo  # noqa: F401
 from pops.runtime.profile import Profile, PerformanceSummary  # noqa: F401
 from pops.runtime.inspection import RuntimeInspectionReport  # noqa: F401
+from pops.runtime.defaults import numerical_defaults_report  # noqa: F401
 from pops.runtime.bricks import (  # noqa: F401
     Scalar, FluidState, ExB, CompressibleFlux, IsothermalFlux,
     NoSource, PotentialForce, GravityForce, MagneticLorentzForce, PotentialMagneticForce,
@@ -67,6 +68,7 @@ __all__ = [
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
     "Profile", "PerformanceSummary", "RuntimeInspectionReport",
+    "numerical_defaults_report",
     "time", "model", "math", "physics", "lib", "mesh",
     "params", "output", "external", "fields", "linalg", "solvers", "experimental",
     "abi_key", "capabilities", "inspect_capabilities", "inspect_amr",

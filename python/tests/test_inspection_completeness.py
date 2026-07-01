@@ -116,6 +116,16 @@ def test_inspect_aggregates_metadata():
     chk("precision:single_or_mixed" in routes, "capability route ids are visible before bind")
     chk(routes["precision:single_or_mixed"]["status"] == "unavailable",
         "unsupported precision is machine-checkable")
+    chk(rep.options["defaults"]["newton"]["max_iters"] == 2,
+        "inspect carries numerical defaults")
+    chk(rep.options["physical"]["gamma"]["value"] == 1.4,
+        "inspect carries the effective physical gamma")
+    chk(rep.options["cache_key"]["cache_key"] == cp.cache_key,
+        "inspect carries the full cache key in options")
+    chk(rep.options["cache_key"]["const_params"] == ["gamma_const"],
+        "const params are marked as cache-key participants")
+    chk(rep.options["cache_key"]["runtime_params"] == ["cs2"],
+        "runtime params are reported separately from cache-key participants")
     chk(rep.status == "compiled, waiting for pops.bind(...)", "status is the bind-pending line")
 
 
@@ -135,6 +145,8 @@ def test_inspect_printable_and_serialisable():
     chk(d["backend"] == "production", "to_dict carries the backend")
     chk("capabilities" in d and d["capabilities"]["routes"],
         "to_dict carries structured native routes")
+    chk(d["options"]["defaults"]["mg"]["max_cycles"] == 50,
+        "to_dict carries numerical defaults")
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "inspect.json")
         rep.to_json(path)

@@ -719,7 +719,7 @@ def _inventory_rows(flags, source):
         _row("runtime:native_loader_legacy_metadata", layout="uniform|amr",
              backend="aot|dynamic|prototype", platform="host", mpi=mpi, gpu=gpu, status="partial",
              limitation=("old native modules without metadata fall back to u0.. names, empty roles, "
-                         "gamma=1.4 and host prototype copies"),
+                         "legacy default gamma and host prototype copies"),
              source=source),
         _row("output:npz_vtk_hdf5", layout="uniform|amr", backend="runtime", platform="host",
              mpi=mpi, limitation="runtime output writers; AMR VTK is coarse + patch metadata",

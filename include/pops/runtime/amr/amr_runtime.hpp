@@ -22,6 +22,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
+#include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
@@ -98,7 +99,7 @@ namespace pops {
 struct AmrRuntimeBlock {
   std::string name;
   int ncomp = 1;
-  double gamma = 1.4;
+  double gamma = static_cast<double>(kPhysicalDefaultGamma);
   /// EXPLICIT substeps of the block within ITS effective macro-step: the effective step (stride * dt)
   /// is split into substeps equal pieces and each piece is advanced by ONE advance_amr (cf.
   /// AmrRuntime::step). substeps=1 => a single advance_amr over the whole effective step (bit-identical).
