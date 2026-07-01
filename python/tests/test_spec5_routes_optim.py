@@ -72,7 +72,8 @@ def test_explain_routes_returns_printable_inert_matrix():
     assert {"supports_uniform", "supports_amr", "supports_stride"} <= feats
     for row in matrix.rows:
         d = row.to_dict()
-        for key in ("feature", "axis", "status", "source", "limitation"):
+        for key in ("feature", "axis", "status", "source", "limitation",
+                    "layout", "backend", "platform", "mpi", "gpu", "error_message"):
             assert key in d, "route row missing key %r: %r" % (key, d)
         assert d["status"] in ("available", "unavailable")
 
@@ -118,6 +119,22 @@ def test_explain_routes_is_native_capability_matrix_even_without_blocks():
     assert all(r.source == "native" for r in matrix.rows)
     assert "route matrix" in str(matrix)
     assert matrix.to_dict()["rows"]
+
+
+def test_explain_routes_inventory_exposes_unsupported_limitations():
+    matrix = _uniform_problem().explain_routes()
+    rows = {r.feature: r for r in matrix.rows}
+    for feature in ("layout:Uniform", "layout:AMR", "spatial:finite_volume",
+                    "elliptic:geometric_mg", "krylov:cg_bicgstab_gmres_richardson",
+                    "program_context:system", "output:npz_vtk_hdf5",
+                    "checkpoint:system_v1"):
+        assert feature in rows, "native inventory missing %s" % feature
+    for feature in ("supports_partial_imex_mask", "limiter:mc", "elliptic:fft_amr",
+                    "output:plotfile_uniform", "checkpoint:parallel_hdf5"):
+        assert rows[feature].status == "unavailable", "%s should be explicit unsupported" % feature
+        assert "unsupported route" in rows[feature].error_message
+        assert "available route" in rows[feature].error_message
+        assert rows[feature].alternative
 
 
 def test_explain_routes_reads_metadata_only_no_runtime_import():

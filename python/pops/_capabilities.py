@@ -22,18 +22,34 @@ class CapabilityEntry:
     from the C++ ``_pops.module_capabilities()`` authoritative facts (Spec 5 sec.13.12).
     """
 
-    def __init__(self, name, category, native_id, available, requirements, source="descriptor"):
+    def __init__(self, name, category, native_id, available, requirements, source="descriptor",
+                 *, feature=None, layout="context", backend="context", platform="context",
+                 mpi=None, gpu=None, status=None, limitation="", error_message=""):
         self.name = name
         self.category = category
         self.native_id = native_id
         self.available = available
         self.requirements = dict(requirements or {})
         self.source = source
+        # ADC-549 route-matrix columns. Descriptor-sourced rows keep the old identity fields above
+        # and add a route view so tooling can inspect unsupported routes without prose scraping.
+        self.feature = feature or ("%s:%s" % (category, name))
+        self.layout = layout
+        self.backend = backend
+        self.platform = platform
+        self.mpi = mpi
+        self.gpu = gpu
+        self.status = status or _route_status_from_availability(available)
+        self.limitation = limitation
+        self.error_message = error_message
 
     def to_dict(self):
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "available": self.available, "requirements": self.requirements,
-                "source": self.source}
+                "source": self.source, "feature": self.feature, "layout": self.layout,
+                "backend": self.backend, "platform": self.platform, "mpi": self.mpi,
+                "gpu": self.gpu, "status": self.status, "limitation": self.limitation,
+                "error_message": self.error_message}
 
     def __repr__(self):
         return ("CapabilityEntry(name=%r, category=%r, native_id=%r, available=%r, source=%r)"
@@ -91,11 +107,39 @@ def _availability_status(descriptor):
         return "unknown"
 
 
+def _route_status_from_availability(available):
+    """Map the legacy availability token to the route-matrix status vocabulary."""
+    if available == "yes":
+        return "available"
+    if available == "no":
+        return "unavailable"
+    if available == "partial":
+        return "partial"
+    return "unknown"
+
+
+def _unsupported_error(*, requested, available, alternative=None):
+    """Uniform ADC-549 unsupported-route message fragment."""
+    msg = "unsupported route: requested %s; available route: %s" % (requested, available)
+    if alternative:
+        msg += "; alternative: %s" % alternative
+    return msg
+
+
 def _entry_from_brick(descriptor):
     """A :class:`CapabilityEntry` from a :class:`pops.descriptors.BrickDescriptor`."""
     status = "yes" if descriptor.available else "no"
+    feature = "%s:%s" % (descriptor.category, descriptor.name)
+    limitation = "" if descriptor.available else "catalogued descriptor has no native C++ symbol"
+    error = "" if descriptor.available else _unsupported_error(
+        requested=feature,
+        available="native %s descriptors with a non-empty native_id" % descriptor.category,
+        alternative="choose an available descriptor from pops.inspect_capabilities()")
     return CapabilityEntry(descriptor.name, descriptor.category,
-                           descriptor.native_id or None, status, descriptor.requirements)
+                           descriptor.native_id or None, status, descriptor.requirements,
+                           feature=feature, backend="native" if descriptor.native_id else "none",
+                           status=_route_status_from_availability(status),
+                           limitation=limitation, error_message=error)
 
 
 def _walk_brick_catalog(namespace):
@@ -124,7 +168,10 @@ def _walk_class_catalog(category, classes):
     """
     for cls in classes:
         native = getattr(cls, "native_id", None)
-        yield CapabilityEntry(cls.__name__, category, native, "context", {})
+        yield CapabilityEntry(cls.__name__, category, native, "context", {},
+                              feature="%s:%s" % (category, cls.__name__),
+                              layout=cls.__name__.lower(), status="unknown",
+                              limitation="availability depends on the requested route context")
 
 
 # Spec 5 sec.13.12: the descriptor layout entries whose availability the C++ source ADJUDICATES.
@@ -143,7 +190,7 @@ class CapabilityMismatchError(RuntimeError):
     """
 
 
-def _module_capabilities():
+def _module_capabilities(target="module"):
     """The C++ authoritative capability dict (``_pops.module_capabilities()``) or ``None``.
 
     Lazily imports ``_pops`` (top-level then ``pops._pops``, mirroring the codegen toolchain) so the
@@ -163,7 +210,7 @@ def _module_capabilities():
     if fn is None:  # an _pops built before this work: no authoritative source to cross-check against.
         return None
     try:
-        return dict(fn())
+        return dict(fn(target))
     except Exception:
         return None
 
@@ -180,8 +227,314 @@ def _native_rows(native_caps):
         if not key.startswith("supports_"):
             continue
         status = "yes" if native_caps[key] else "no"
-        rows.append(CapabilityEntry(key, "transport", None, status, {}, source="native"))
+        rows.append(CapabilityEntry(
+            key, "transport", None, status, {}, source="native", feature=key,
+            layout=_feature_layout(key), backend=_feature_backend(key),
+            platform=_feature_platform(key), mpi=(key == "supports_mpi" and native_caps[key]),
+            gpu=(key == "supports_gpu" and native_caps[key]),
+            status=_route_status_from_availability(status),
+            limitation="" if native_caps[key] else "%s is not provided by this build" % key,
+            error_message="" if native_caps[key] else _flag_error_message(key)))
     return rows
+
+
+def _feature_layout(feature):
+    if feature == "supports_uniform":
+        return "uniform"
+    if feature == "supports_amr":
+        return "amr"
+    return "uniform|amr"
+
+
+def _feature_backend(feature):
+    if feature in ("supports_stride", "supports_amr"):
+        return "production"
+    return "module"
+
+
+def _feature_platform(feature):
+    if feature == "supports_mpi":
+        return "mpi"
+    if feature == "supports_gpu":
+        return "gpu"
+    return "host"
+
+
+def _flag_error_message(feature):
+    requests = {
+        "supports_amr": ("layout=AMR", "layout=Uniform or backend='production' target='amr_system'",
+                         "use layout=Uniform or compile with backend='production' target='amr_system'"),
+        "supports_mpi": ("platform=MPI", "serial/OpenMP build", "rebuild _pops with POPS_USE_MPI=ON"),
+        "supports_gpu": ("platform=GPU", "host CPU platform", "use KokkosOpenMP/KokkosSerial or a CUDA/HIP build"),
+        "supports_stride": ("strided cell access", "backend='production'",
+                            "compile with backend='production'"),
+        "supports_partial_imex_mask": ("partial IMEX mask", "full source implicit / split routes",
+                                       "use IMEX/IMEXRK/Split without partial masks"),
+    }
+    requested, available, alternative = requests.get(
+        feature, (feature, "no route in this build", None))
+    return _unsupported_error(requested=requested, available=available, alternative=alternative)
+
+
+class CapabilityRouteRow:
+    """One ADC-549 route row.
+
+    The row shape is intentionally flat and JSON-ready:
+    ``feature, layout, backend, platform, mpi, gpu, status, limitation, error_message``.
+    ``axis`` and ``source`` are kept for compatibility with the earlier ``Case.explain_routes``
+    route matrix tests.
+    """
+
+    def __init__(self, feature, *, layout="any", backend="any", platform="host",
+                 mpi=False, gpu=False, status="unknown", limitation="", error_message="",
+                 source="native", axis=None, available_route="", alternative=""):
+        self.feature = feature
+        self.layout = layout
+        self.backend = backend
+        self.platform = platform
+        self.mpi = mpi
+        self.gpu = gpu
+        self.status = status
+        self.limitation = limitation
+        self.error_message = error_message
+        self.source = source
+        self.axis = axis or _axis_for_route(layout, backend, platform)
+        self.available_route = available_route
+        self.alternative = alternative
+
+    def to_dict(self):
+        return {
+            "feature": self.feature,
+            "layout": self.layout,
+            "backend": self.backend,
+            "platform": self.platform,
+            "mpi": self.mpi,
+            "gpu": self.gpu,
+            "status": self.status,
+            "limitation": self.limitation,
+            "error_message": self.error_message,
+            "source": self.source,
+            "axis": self.axis,
+            "available_route": self.available_route,
+            "alternative": self.alternative,
+        }
+
+    def __repr__(self):
+        return ("CapabilityRouteRow(feature=%r, layout=%r, backend=%r, status=%r, source=%r)"
+                % (self.feature, self.layout, self.backend, self.status, self.source))
+
+
+class CapabilityRouteMatrix:
+    """Printable ADC-549 matrix of feature x layout/backend/platform support."""
+
+    def __init__(self, owner, layout, rows):
+        self.owner = owner
+        self.case_name = owner  # compatibility with the old Case route matrix object.
+        self.layout = layout
+        self.layout_name = layout
+        self.rows = list(rows)
+
+    def to_dict(self):
+        return {"case": self.owner, "owner": self.owner, "layout": self.layout,
+                "rows": [r.to_dict() for r in self.rows]}
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __repr__(self):
+        return "CapabilityRouteMatrix(owner=%r, layout=%r, %d rows)" % (
+            self.owner, self.layout, len(self.rows))
+
+    def __str__(self):
+        lines = ["route matrix for %r (layout=%s, ADC-549):" % (self.owner, self.layout)]
+        for row in self.rows:
+            note = ("  -- %s" % row.limitation) if row.limitation else ""
+            lines.append(
+                "  %-30s layout=%-12s backend=%-11s platform=%-5s mpi=%-5s gpu=%-5s %-11s%s"
+                % (row.feature, row.layout, row.backend, row.platform, row.mpi, row.gpu,
+                   row.status, note))
+        return "\n".join(lines)
+
+
+def _axis_for_route(layout, backend, platform):
+    if layout not in ("any", "uniform|amr", "context"):
+        return "layout"
+    if platform in ("mpi", "gpu"):
+        return "backend"
+    if backend not in ("any", "module", "context"):
+        return "backend"
+    return "transport"
+
+
+def _flag_value(flags, name):
+    if flags is None:
+        return None
+    return flags.get(name)
+
+
+def _status_from_flag(flags, name):
+    value = _flag_value(flags, name)
+    if value is None:
+        return "unknown"
+    return "available" if bool(value) else "unavailable"
+
+
+def _row(feature, *, layout="any", backend="any", platform="host", flags=None,
+         flag=None, mpi=False, gpu=False, limitation="", requested=None,
+         available_route=None, alternative=None, source="native", status=None):
+    if status is None:
+        status = _status_from_flag(flags, flag) if flag else "available"
+    err = ""
+    if status == "unavailable":
+        err = _unsupported_error(
+            requested=requested or feature,
+            available=available_route or "no native route",
+            alternative=alternative)
+    return CapabilityRouteRow(
+        feature, layout=layout, backend=backend, platform=platform, mpi=mpi, gpu=gpu,
+        status=status, limitation=limitation, error_message=err, source=source,
+        available_route=available_route or "", alternative=alternative or "")
+
+
+def _support_rows(flags, source):
+    return [
+        _row("supports_uniform", layout="uniform", backend="module", platform="host",
+             flags=flags, flag="supports_uniform", limitation="single-level Uniform layout",
+             requested="layout=Uniform", available_route="layout=Uniform", source=source),
+        _row("supports_amr", layout="amr", backend="production", platform="host",
+             flags=flags, flag="supports_amr",
+             limitation="native AMR envelope: max_levels<=2, ratio=2",
+             requested="layout=AMR", available_route="backend='production' target='amr_system'",
+             alternative="use Uniform or AMR(max_levels<=2, ratio=2)", source=source),
+        _row("supports_mpi", layout="uniform|amr", backend="production", platform="mpi",
+             flags=flags, flag="supports_mpi", mpi=bool(_flag_value(flags, "supports_mpi")),
+             limitation="MPI is available only when _pops is built with POPS_USE_MPI=ON",
+             requested="platform=MPI", available_route="serial/OpenMP build",
+             alternative="rebuild with -DPOPS_USE_MPI=ON", source=source),
+        _row("supports_gpu", layout="uniform|amr", backend="production", platform="gpu",
+             flags=flags, flag="supports_gpu", gpu=bool(_flag_value(flags, "supports_gpu")),
+             limitation="GPU is available only for a Kokkos CUDA/HIP device build",
+             requested="platform=GPU", available_route="host CPU platform",
+             alternative="use KokkosOpenMP/KokkosSerial or a CUDA/HIP build", source=source),
+        _row("supports_stride", layout="uniform|amr", backend="production", platform="host",
+             flags=flags, flag="supports_stride",
+             limitation="real cell stride is carried only by the production/native route",
+             requested="strided cell access", available_route="backend='production'",
+             alternative="compile with backend='production'", source=source),
+        _row("supports_named_fields", layout="uniform|amr", backend="production", platform="host",
+             flags=flags, flag="supports_named_fields",
+             limitation="named aux-field transport", requested="named aux fields",
+             available_route="native named-field transport", source=source),
+        _row("supports_partial_imex_mask", layout="uniform|amr", backend="production",
+             platform="host", flags=flags, flag="supports_partial_imex_mask",
+             limitation="no C++ route backs a partial IMEX mask",
+             requested="partial IMEX mask", available_route="full source implicit / split routes",
+             alternative="use IMEX/IMEXRK/Split without partial masks", source=source),
+    ]
+
+
+def _inventory_rows(flags, source):
+    mpi = bool(_flag_value(flags, "supports_mpi"))
+    gpu = bool(_flag_value(flags, "supports_gpu"))
+    return [
+        _row("layout:Uniform", layout="uniform", backend="module", platform="host",
+             mpi=mpi, gpu=gpu, limitation="2D single-level Cartesian/Polar layout", source=source),
+        _row("layout:AMR", layout="amr", backend="production", platform="host",
+             flags=flags, flag="supports_amr", mpi=mpi, gpu=gpu,
+             limitation="max_levels<=2 and ratio=2; unsupported ratios/levels validate before bind",
+             requested="AMR(max_levels>2 or ratio!=2)", available_route="AMR(max_levels<=2, ratio=2)",
+             alternative="use Uniform or the native AMR envelope", source=source),
+        _row("spatial:finite_volume", layout="uniform|amr", backend="production|aot|prototype",
+             platform="host", mpi=mpi, gpu=gpu,
+             limitation="2D finite-volume route; prototype backend is host-only", source=source),
+        _row("riemann:rusanov", layout="uniform|amr", backend="production|aot|prototype",
+             platform="host", mpi=mpi, gpu=gpu,
+             limitation="requires model max_wave_speed", source=source),
+        _row("riemann:hll", layout="uniform|amr", backend="production|aot", platform="host",
+             mpi=mpi, gpu=gpu, limitation="requires physical_flux and wave_speeds", source=source),
+        _row("riemann:hllc", layout="uniform|amr", backend="production|aot", platform="host",
+             mpi=mpi, gpu=gpu,
+             limitation="requires Euler/HLLC model capabilities; polar route is unavailable",
+             source=source),
+        _row("riemann:roe", layout="uniform|amr", backend="production|aot", platform="host",
+             mpi=mpi, gpu=gpu,
+             limitation="requires Roe dissipation capability; polar route is unavailable",
+             source=source),
+        _row("reconstruction:firstorder", layout="uniform|amr", backend="production|aot|prototype",
+             limitation="ghost_depth=1", source=source),
+        _row("reconstruction:muscl", layout="uniform|amr", backend="production|aot|prototype",
+             limitation="ghost_depth=2; native limiters minmod/vanleer", source=source),
+        _row("reconstruction:weno5", layout="uniform|amr", backend="production|aot",
+             limitation="ghost_depth=3; high-order route is native", source=source),
+        _row("limiter:mc", layout="uniform|amr", backend="none", status="unavailable",
+             limitation="catalogued but no native C++ limiter symbol exists",
+             requested="limiter=MC()", available_route="Minmod() or VanLeer()",
+             alternative="use pops.numerics.reconstruction.limiters.Minmod()", source=source),
+        _row("limiter:superbee", layout="uniform|amr", backend="none", status="unavailable",
+             limitation="catalogued but no native C++ limiter symbol exists",
+             requested="limiter=Superbee()", available_route="Minmod() or VanLeer()",
+             alternative="use pops.numerics.reconstruction.limiters.VanLeer()", source=source),
+        _row("elliptic:geometric_mg", layout="uniform|amr", backend="production", platform="host",
+             mpi=mpi, gpu=gpu, limitation="native multigrid route; supports variable epsilon",
+             source=source),
+        _row("elliptic:fft", layout="uniform", backend="production", platform="host", mpi=mpi,
+             gpu=gpu, limitation="periodic, constant coefficient, power-of-two uniform grid only",
+             source=source),
+        _row("elliptic:fft_amr", layout="amr", backend="none", status="unavailable",
+             limitation="FFT requires a single uniform periodic mesh, not AMR",
+             requested="solver=FFT() with layout=AMR", available_route="GeometricMG() on AMR",
+             alternative="use pops.solvers.elliptic.GeometricMG()", source=source),
+        _row("krylov:cg_bicgstab_gmres_richardson", layout="uniform|amr", backend="production",
+             platform="host", mpi=mpi, gpu=gpu,
+             limitation="matrix-free Krylov over native MultiFab primitives", source=source),
+        _row("program_context:system", layout="uniform", backend="production", platform="host",
+             mpi=mpi, gpu=gpu, limitation="compiled ProgramContext install on System",
+             source=source),
+        _row("program_context:amr", layout="amr", backend="production", platform="host",
+             flags=flags, flag="supports_amr", mpi=mpi, gpu=gpu,
+             limitation="AMR program install requires target='amr_system'", source=source),
+        _row("output:npz_vtk_hdf5", layout="uniform|amr", backend="runtime", platform="host",
+             mpi=mpi, limitation="runtime output writers; AMR VTK is coarse + patch metadata",
+             source=source),
+        _row("output:plotfile_uniform", layout="uniform", backend="none", status="unavailable",
+             limitation="Plotfile is an AMR per-level format; Uniform System has no writer",
+             requested="OutputPolicy(format=Plotfile()) on Uniform",
+             available_route="HDF5() or npz on Uniform",
+             alternative="use HDF5() or bind an AMR output route", source=source),
+        _row("checkpoint:system_v1", layout="uniform", backend="runtime", platform="host",
+             mpi=mpi, limitation="npz rank-0 gather checkpoint/restart v1", source=source),
+        _row("checkpoint:parallel_hdf5", layout="uniform|amr", backend="none",
+             platform="mpi", status="unavailable",
+             limitation="parallel HDF5 checkpoint is not a native checkpoint route",
+             requested="checkpoint(parallel=True)",
+             available_route="checkpoint(parallel=False) or write(format='hdf5', parallel=True)",
+             alternative="use checkpoint(parallel=False)", source=source),
+        _row("checkpoint:amr_dynamic_regrid", layout="amr", backend="none", status="unavailable",
+             limitation="bit-identical AMR checkpoint requires a frozen hierarchy (regrid_every=0)",
+             requested="AMR checkpoint with dynamic regrid",
+             available_route="AMR checkpoint with regrid_every=0",
+             alternative="use AmrSystem.write for visualization or freeze regrid", source=source),
+    ]
+
+
+def native_capability_matrix(*, owner="module", layout="module", target="module",
+                             flags=None, source=None):
+    """Return the ADC-549 native route matrix.
+
+    ``flags`` can be supplied by a compiled artifact manifest. When absent, the built module's
+    C++ ``module_capabilities(target)`` is used. The returned rows always expose:
+    feature, layout, backend, platform, MPI, GPU, status, limitation and error_message.
+    """
+    if flags is None:
+        flags = _module_capabilities(target)
+        source = source or ("native" if flags is not None else "unknown")
+    else:
+        source = source or "manifest"
+    rows = _support_rows(flags, source) + _inventory_rows(flags, source)
+    return CapabilityRouteMatrix(owner, layout, rows)
 
 
 def _cross_check(entries, native_caps):
@@ -389,4 +742,5 @@ def inspect_amr(layout_or_context=None):
 
 
 __all__ = ["inspect_capabilities", "CapabilityMatrix", "CapabilityEntry",
-           "CapabilityMismatchError", "inspect_amr", "AmrReport"]
+           "CapabilityMismatchError", "inspect_amr", "AmrReport",
+           "CapabilityRouteRow", "CapabilityRouteMatrix", "native_capability_matrix"]

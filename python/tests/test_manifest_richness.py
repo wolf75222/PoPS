@@ -170,12 +170,33 @@ def test_to_dict_round_trips_and_print_works():
     assert d["blocks"] == ["plasma"]
     assert d["supports_amr"] is True
     assert d["supports_stride"] is None  # unknown stays None through serialisation
+    assert "capability_matrix" in d
+    assert any(row["feature"] == "checkpoint:parallel_hdf5"
+               and row["status"] == "unavailable"
+               for row in d["capability_matrix"])
     assert json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable"
     text = str(m)
     assert "compiled-artifact manifest" in text
     assert "supports_amr" in text and "yes" in text
     assert "unknown" in text  # the unknown flags render as 'unknown', not 'no'
     assert "needs C++ follow-up" in text
+    assert "explicit limitations" in text
+
+
+def test_compiled_capability_matrix_lists_unsupported_routes():
+    """compiled.capability_matrix() exposes ADC-549 rows without reading a real .so."""
+    cp = _compiled(params=_default_params())
+    matrix = cp.capability_matrix()
+    rows = {row.feature: row for row in matrix.rows}
+    for feature in ("supports_uniform", "layout:Uniform", "spatial:finite_volume",
+                    "elliptic:geometric_mg", "checkpoint:system_v1"):
+        assert feature in rows
+    for feature in ("limiter:mc", "elliptic:fft_amr", "checkpoint:parallel_hdf5",
+                    "output:plotfile_uniform"):
+        assert rows[feature].status == "unavailable"
+        assert "requested" in rows[feature].error_message
+        assert "available route" in rows[feature].error_message
+        assert rows[feature].alternative
 
 
 # ---------------------------------------------------------------------------

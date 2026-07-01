@@ -92,6 +92,13 @@ class CompiledArtifactManifest:
         """The ``{flag: True/False/None}`` capability map (``None`` = honestly unknown)."""
         return {name: getattr(self, name) for name in _SUPPORTS_FLAGS}
 
+    def capability_matrix(self):
+        """The ADC-549 route matrix generated from this manifest's capability flags."""
+        from pops._capabilities import native_capability_matrix
+        return native_capability_matrix(
+            owner=self.model_name or "compiled-artifact", layout="manifest",
+            flags=self.supports(), source="manifest")
+
     def needs_cpp_followup(self):
         """The capability flags that are UNKNOWN today and need a C++ codegen follow-up to be real.
 
@@ -115,7 +122,8 @@ class CompiledArtifactManifest:
                "params_const": list(self.params_const),
                "params_runtime": list(self.params_runtime), "ghost_depth": self.ghost_depth,
                "field_outputs": list(self.field_outputs),
-               "native_entrypoints": list(self.native_entrypoints)}
+               "native_entrypoints": list(self.native_entrypoints),
+               "capability_matrix": [row.to_dict() for row in self.capability_matrix().rows]}
         out.update(self.supports())
         return out
 
@@ -147,6 +155,12 @@ class CompiledArtifactManifest:
         if pending:
             lines.append("  needs C++ follow-up (UNKNOWN, not fabricated): %s"
                          % ", ".join(pending))
+        unsupported = [row for row in self.capability_matrix().rows
+                       if row.status == "unavailable"]
+        if unsupported:
+            lines.append("  explicit limitations:")
+            for row in unsupported[:8]:
+                lines.append("    - %s: %s" % (row.feature, row.error_message or row.limitation))
         return "\n".join(lines)
 
     def __repr__(self):
@@ -337,8 +351,12 @@ def check_layout_supported(manifest, layout_kind):
             "not rejecting on an unknown flag" % (flag_name, layout_kind))
     if value is False:
         raise ValueError(
-            "Compiled artifact cannot be used with layout=%s(...): %s=false"
-            % (layout_kind, flag_name))
+            "Compiled artifact cannot be used with layout=%s(...): %s=false; unsupported route: "
+            "requested layout=%s; available route: %s; alternative: %s"
+            % (layout_kind, flag_name, layout_kind,
+               "layout=Uniform" if flag_name == "supports_amr" else "layout=AMR",
+               "compile a backend/target that emits %s=true or choose a supported layout"
+               % flag_name))
     return Availability.yes("%s=true" % flag_name)
 
 

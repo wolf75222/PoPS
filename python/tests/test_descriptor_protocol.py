@@ -151,6 +151,19 @@ def test_brick_descriptor_native_id_carried_in_lowering():
     assert HLL().lower()["native_id"] == "pops::HLLFlux"
     from pops.numerics.reconstruction.limiters import MC  # planned, no native type yet.
     assert MC().lower()["native_id"] in (None, "")
+    matrix = MC().capability_matrix()
+    row = matrix.rows[0]
+    assert row.status == "unavailable"
+    assert "requested limiter:mc" in row.error_message
+    try:
+        MC().validate()
+        raise AssertionError("MC() must reject before bind/compile")
+    except ValueError as exc:
+        msg = str(exc)
+        assert "unsupported route" in msg
+        assert "requested limiter:mc" in msg
+        assert "available route" in msg
+        assert "alternative" in msg
 
 
 def test_inspect_capabilities_rows_have_required_keys():
@@ -159,7 +172,9 @@ def test_inspect_capabilities_rows_have_required_keys():
     seen_categories = set()
     for entry in matrix:
         row = entry.to_dict()
-        for key in ("name", "category", "native_id", "available", "requirements"):
+        for key in ("name", "category", "native_id", "available", "requirements",
+                    "feature", "layout", "backend", "platform", "mpi", "gpu",
+                    "status", "limitation", "error_message"):
             assert key in row, "capability row missing key %r: %r" % (key, row)
         seen_categories.add(row["category"])
     # The descriptor-sourced matrix covers the discretisation + mesh + lib catalogs.
