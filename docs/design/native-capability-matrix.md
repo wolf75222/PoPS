@@ -5,11 +5,26 @@ or report an unsupported route before compile, bind, or runtime execution.
 
 ## Matrix Schema
 
+ADC-591 adds a versioned native report above the route rows:
+
+- C++: `pops::native_capability_report(target)` returns a `NativeCapabilityReport`.
+- Python native binding: `_pops.capability_report(target)` returns the same report as a stable dict.
+- Public Python: `pops.native_capability_report(target)` wraps it as `NativeCapabilityReport`.
+- Runtime: `sim.inspect()` / `sim.amr.inspect()` include the native report plus profile,
+  diagnostics, history/cache metadata and runtime environment facts.
+- Compiled artifacts: `compiled.inspect().to_dict()["capabilities"]` carries the same route IDs and
+  statuses, projected from the artifact manifest without loading or recompiling the `.so`.
+
+Pretty strings are views of these objects only. Tests should assert on `to_dict()` fields such as
+`schema_version`, `abi_version`, `runtime`, `capabilities`, `routes[*].route_id`, `status`, and
+`reason`; they should not parse the printed table.
+
 Every route row is a plain metadata record with these fields:
 
 | Field | Meaning |
 | --- | --- |
 | `feature` | Stable feature token, for example `layout:AMR`, `elliptic:fft_amr`, or `checkpoint:parallel_hdf5`. |
+| `route_id` | Stable native route identifier. Today it equals `feature`; it is explicit so route IDs can diverge later without breaking tests. |
 | `layout` | Layout envelope the row applies to: `uniform`, `amr`, `uniform|amr`, or `context`. |
 | `backend` | Backend or route required: `production`, `aot`, `prototype`, `runtime`, `module`, or `none`. |
 | `platform` | Platform axis: `host`, `mpi`, `gpu`, or `context`. |
@@ -17,6 +32,7 @@ Every route row is a plain metadata record with these fields:
 | `gpu` | Whether this row is backed by a GPU-capable route for the current build/artifact. |
 | `status` | `available`, `unavailable`, `partial`, or `unknown`. Known unsupported routes use `unavailable`. |
 | `limitation` | Short human-readable limitation or constraint. |
+| `reason` | Same limitation in the native C++ report; `limitation` is the compatibility alias. |
 | `error_message` | For unavailable rows, the message shape used by validators: requested route, available route, alternative. |
 
 The same shape is exposed by:
@@ -26,6 +42,8 @@ The same shape is exposed by:
 - `CompiledProblem.capability_matrix()`
 - `CompiledModel.capability_matrix()`
 - `CompiledArtifactManifest.to_dict()["capability_matrix"]`
+- `_pops.capability_report()["routes"]`
+- `pops.native_capability_report().to_dict()["routes"]`
 
 ## Native Inventory
 

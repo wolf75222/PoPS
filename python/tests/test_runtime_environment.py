@@ -10,6 +10,7 @@ from pops.runtime_environment import (  # noqa: E402
     NATIVE_AMR_REFINEMENT_RATIO,
     NATIVE_DIMENSION,
     NATIVE_PRECISION,
+    RuntimeCapabilityError,
     runtime_environment_report,
     validate_runtime_environment,
 )
@@ -41,8 +42,10 @@ def test_runtime_environment_validators_accept_native_facts():
 
 
 def test_runtime_environment_validators_reject_unsupported_requests():
-    with pytest.raises(ValueError, match="dimension=3"):
+    with pytest.raises(RuntimeCapabilityError, match="dimension=3") as excinfo:
         validate_runtime_environment(dimension=3)
+    assert excinfo.value.field == "dimension"
+    assert excinfo.value.to_dict()["runtime_environment"]["dimension"] == 2
     with pytest.raises(ValueError, match="ratio 3"):
         validate_runtime_environment(amr_refinement_ratio=3)
     with pytest.raises(ValueError, match="precision"):

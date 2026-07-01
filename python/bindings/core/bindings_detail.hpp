@@ -14,6 +14,7 @@
 #include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key: ABI key exposed to the DSL ("production" path)
 #include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/program/profiler.hpp>
 #include <pops/runtime/system.hpp>
 
 #include <cstring>
@@ -69,6 +70,35 @@ inline int newton_fail_policy_from_string(const std::string& policy, const char*
     return NewtonOptions::kFailThrow;
   throw std::runtime_error(std::string(where) +
                            ": newton_fail_policy 'none'|'warn'|'throw' (got '" + policy + "')");
+}
+
+inline py::dict profile_snapshot_to_dict(
+    const pops::runtime::program::Profiler::Snapshot& snapshot) {
+  py::list scopes;
+  for (const auto& scope : snapshot.scopes) {
+    py::dict row;
+    row["name"] = scope.name;
+    row["count"] = scope.count;
+    row["total_s"] = scope.total_s;
+    row["mean_s"] = scope.mean_s;
+    row["min_s"] = scope.min_s;
+    row["max_s"] = scope.max_s;
+    scopes.append(row);
+  }
+  py::list counters;
+  for (const auto& counter : snapshot.counters) {
+    py::dict row;
+    row["name"] = counter.name;
+    row["value"] = counter.value;
+    counters.append(row);
+  }
+  py::dict out;
+  out["schema_version"] = snapshot.schema_version;
+  out["enabled"] = snapshot.enabled;
+  out["total_s"] = snapshot.total_s;
+  out["scopes"] = scopes;
+  out["counters"] = counters;
+  return out;
 }
 
 // Per-area binding registration, each defined in its own TU (init_core.cpp / init_system.cpp /

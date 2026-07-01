@@ -104,11 +104,18 @@ def test_inspect_aggregates_metadata():
     chk(rep.inputs["aux"] == ["B_z"], "the named aux is a required input")
     chk(rep.program["commits"] == ["plasma"], "program summary lists the committed block")
     chk(rep.artifacts["so_path"] == cp.so_path, "artifacts carry the .so path")
+    chk(rep.artifacts["header_signature"] is not None,
+        "artifacts expose the ABI header signature as a field")
     chk(rep.runtime["dimension"] == 2, "runtime report carries dimension=2")
     chk(rep.runtime["amr_refinement_ratio"] == 2, "runtime report carries AMR ratio=2")
     chk(rep.runtime["precision"] == "double", "runtime report carries precision=double")
     chk(rep.runtime["supports_custom_communicator"] is False,
         "runtime report rejects custom communicators")
+    chk(rep.capabilities["schema_version"] >= 0, "inspect carries a structured capability report")
+    routes = {row["route_id"]: row for row in rep.capabilities["routes"]}
+    chk("precision:single_or_mixed" in routes, "capability route ids are visible before bind")
+    chk(routes["precision:single_or_mixed"]["status"] == "unavailable",
+        "unsupported precision is machine-checkable")
     chk(rep.status == "compiled, waiting for pops.bind(...)", "status is the bind-pending line")
 
 
@@ -126,6 +133,8 @@ def test_inspect_printable_and_serialisable():
     d = rep.to_dict()
     chk(json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable")
     chk(d["backend"] == "production", "to_dict carries the backend")
+    chk("capabilities" in d and d["capabilities"]["routes"],
+        "to_dict carries structured native routes")
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "inspect.json")
         rep.to_json(path)

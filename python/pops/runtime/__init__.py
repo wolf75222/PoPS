@@ -30,5 +30,6 @@ Example::
     sim.step_cfl(0.4)
 """
 from pops.runtime.profile import PerformanceSummary, Profile  # noqa: F401
+from pops.runtime.inspection import RuntimeInspectionReport  # noqa: F401
 
-__all__ = ["Profile", "PerformanceSummary"]
+__all__ = ["Profile", "PerformanceSummary", "RuntimeInspectionReport"]

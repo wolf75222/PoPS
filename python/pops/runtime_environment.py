@@ -13,6 +13,24 @@ NATIVE_REAL_BYTES = 8
 NATIVE_COMMUNICATOR = "MPI_COMM_WORLD"
 
 
+class RuntimeCapabilityError(ValueError):
+    """Unsupported runtime capability request with the structured report attached."""
+
+    def __init__(self, message, *, field, requested, report=None):
+        super().__init__(message)
+        self.field = field
+        self.requested = requested
+        self.report = dict(report) if report is not None else runtime_environment_report()
+
+    def to_dict(self):
+        return {
+            "field": self.field,
+            "requested": self.requested,
+            "message": str(self),
+            "runtime_environment": dict(self.report),
+        }
+
+
 def _static_report():
     return {
         "dimension": NATIVE_DIMENSION,
@@ -79,10 +97,10 @@ def validate_dimension(value, *, where="runtime"):
     """Reject any requested dimension other than the native 2D core."""
     dim = int(value)
     if dim != NATIVE_DIMENSION:
-        raise ValueError(
+        raise RuntimeCapabilityError(
             "%s: dimension=%d is unsupported; native PoPS is dimension=%d only "
             "(Box2D/Fab2D/Geometry/Euler/Lorentz/EB/AMR kernels are 2D)."
-            % (where, dim, NATIVE_DIMENSION))
+            % (where, dim, NATIVE_DIMENSION), field="dimension", requested=dim)
     return dim
 
 
@@ -90,10 +108,11 @@ def validate_amr_refinement_ratio(value, *, where="AMR"):
     """Reject any requested AMR refinement ratio other than 2."""
     ratio = int(value)
     if ratio != NATIVE_AMR_REFINEMENT_RATIO:
-        raise ValueError(
+        raise RuntimeCapabilityError(
             "%s: AMR refinement ratio %d is unsupported; native AMR supports ratio %d only "
             "(hierarchy, patch ranges, reflux and subcycling are ratio-2 kernels)."
-            % (where, ratio, NATIVE_AMR_REFINEMENT_RATIO))
+            % (where, ratio, NATIVE_AMR_REFINEMENT_RATIO),
+            field="amr_refinement_ratio", requested=ratio)
     return ratio
 
 
@@ -102,9 +121,10 @@ def validate_precision(value, *, where="runtime"):
     precision = str(value).lower()
     aliases = {"double", "float64", "real64"}
     if precision not in aliases:
-        raise ValueError(
+        raise RuntimeCapabilityError(
             "%s: precision=%r is unsupported; native PoPS is Real=double only "
-            "(single/mixed precision has no C++ policy route)." % (where, value))
+            "(single/mixed precision has no C++ policy route)." % (where, value),
+            field="precision", requested=value)
     return NATIVE_PRECISION
 
 
@@ -117,10 +137,10 @@ def validate_communicator(value, *, where="runtime"):
         report = runtime_environment_report()
         if report.get("communicator") == NATIVE_COMMUNICATOR:
             return NATIVE_COMMUNICATOR
-    raise ValueError(
+    raise RuntimeCapabilityError(
         "%s: communicator=%r is unsupported; native PoPS exposes only %s when MPI is compiled, "
         "or serial otherwise. Custom MPI communicators are not a native route yet."
-        % (where, value, NATIVE_COMMUNICATOR))
+        % (where, value, NATIVE_COMMUNICATOR), field="communicator", requested=value)
 
 
 def validate_runtime_environment(*, dimension=None, amr_refinement_ratio=None,
@@ -144,4 +164,5 @@ __all__ = [
     "NATIVE_REAL_BYTES", "NATIVE_COMMUNICATOR", "runtime_environment_report",
     "compiled_runtime_facts", "validate_dimension", "validate_amr_refinement_ratio",
     "validate_precision", "validate_communicator", "validate_runtime_environment",
+    "RuntimeCapabilityError",
 ]

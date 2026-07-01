@@ -249,6 +249,9 @@ void init_amr(py::module_& m) {
            "Per-phase wall-clock report of the AMR runtime (count / total / mean / min / max per "
            "scope, plus counters regrid / fill_boundary / mpi_reductions / mpi_messages). "
            "Per-rank.")
+      .def("profile_snapshot",
+           [](AmrSystem& s) { return profile_snapshot_to_dict(s.profiler_handle().snapshot()); },
+           "Structured AMR profiling snapshot: schema_version, enabled, scopes and counters.")
       .def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
       // AMR clock (IO v1, System parity): macro-step counter + restoration (t, macro_step) ->

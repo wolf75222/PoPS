@@ -4,6 +4,105 @@
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
 
+namespace {
+
+pops::CapabilityTarget parse_capability_target(const std::string& target, const char* where) {
+  if (target == "production")
+    return pops::CapabilityTarget::kProduction;
+  if (target == "aot")
+    return pops::CapabilityTarget::kAot;
+  if (target == "module" || target.empty())
+    return pops::CapabilityTarget::kModule;
+  throw std::invalid_argument(std::string(where) +
+                              ": target must be 'module', 'production' or 'aot' (got '" + target +
+                              "')");
+}
+
+py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
+  py::dict d;
+  d["dimension"] = r.dimension;
+  d["amr_refinement_ratio"] = r.amr_refinement_ratio;
+  d["precision"] = r.precision;
+  d["real_bytes"] = r.real_bytes;
+  d["supports_single_precision"] = r.supports_single_precision;
+  d["supports_mixed_precision"] = r.supports_mixed_precision;
+  d["has_kokkos"] = r.has_kokkos;
+  d["kokkos_initialized"] = r.kokkos_initialized;
+  d["kokkos_finalized"] = r.kokkos_finalized;
+  d["kokkos_initialized_by_pops"] = r.kokkos_initialized_by_pops;
+  d["kokkos_atexit_finalize_registered"] = r.kokkos_atexit_finalize_registered;
+  d["kokkos_backend"] = r.kokkos_backend;
+  d["kokkos_ownership"] = r.kokkos_ownership;
+  d["kokkos_lifecycle"] = r.kokkos_lifecycle;
+  d["mpi_compiled"] = r.mpi_compiled;
+  d["mpi_active"] = r.mpi_active;
+  d["mpi_rank"] = r.mpi_rank;
+  d["mpi_ranks"] = r.mpi_ranks;
+  d["communicator"] = r.communicator;
+  d["supports_custom_communicator"] = r.supports_custom_communicator;
+  d["allocator_mode"] = r.allocator_mode;
+  d["comm_allocator_mode"] = r.comm_allocator_mode;
+  d["allocator_lifetime"] = r.allocator_lifetime;
+  return d;
+}
+
+py::dict module_capabilities_to_dict(const pops::ModuleCapabilities& c,
+                                     const pops::RuntimeEnvironmentReport& env) {
+  py::dict d;
+  d["abi_version"] = c.abi_version;
+  d["supports_uniform"] = c.supports_uniform;
+  d["supports_amr"] = c.supports_amr;
+  d["supports_mpi"] = c.supports_mpi;
+  d["supports_gpu"] = c.supports_gpu;
+  d["supports_stride"] = c.supports_stride;
+  d["supports_named_fields"] = c.supports_named_fields;
+  d["supports_partial_imex_mask"] = c.supports_partial_imex_mask;
+  d["dimension"] = env.dimension;
+  d["amr_refinement_ratio"] = env.amr_refinement_ratio;
+  d["precision"] = env.precision;
+  d["real_bytes"] = env.real_bytes;
+  d["communicator"] = env.communicator;
+  d["supports_custom_communicator"] = env.supports_custom_communicator;
+  return d;
+}
+
+py::dict capability_route_to_dict(const pops::CapabilityRouteReport& row) {
+  py::dict d;
+  d["route_id"] = row.route_id;
+  d["feature"] = row.feature;
+  d["layout"] = row.layout;
+  d["backend"] = row.backend;
+  d["platform"] = row.platform;
+  d["mpi"] = row.mpi;
+  d["gpu"] = row.gpu;
+  d["status"] = row.status;
+  d["reason"] = row.reason;
+  d["limitation"] = row.reason;
+  d["requested"] = row.requested;
+  d["available_route"] = row.available_route;
+  d["alternative"] = row.alternative;
+  d["source"] = row.source;
+  return d;
+}
+
+py::dict native_capability_report_to_dict(const pops::NativeCapabilityReport& report) {
+  py::list routes;
+  for (const auto& row : report.routes)
+    routes.append(capability_route_to_dict(row));
+  py::dict d;
+  d["schema_version"] = report.schema_version;
+  d["abi_version"] = report.abi_version;
+  d["target"] = report.target;
+  d["abi_key"] = report.abi_key;
+  d["platform"] = report.platform;
+  d["capabilities"] = module_capabilities_to_dict(report.capabilities, report.runtime);
+  d["runtime"] = runtime_environment_to_dict(report.runtime);
+  d["routes"] = routes;
+  return d;
+}
+
+}  // namespace
+
 // ADC-365: module attributes/globals + SystemConfig + ModelSpec (registered first so System/
 // AmrSystem signatures resolve them).
 void init_core(py::module_& m) {
@@ -93,33 +192,9 @@ void init_core(py::module_& m) {
   m.def(
       "module_capabilities",
       [](const std::string& target) {
-        pops::CapabilityTarget tgt = pops::CapabilityTarget::kModule;
-        if (target == "production")
-          tgt = pops::CapabilityTarget::kProduction;
-        else if (target == "aot")
-          tgt = pops::CapabilityTarget::kAot;
-        else if (target != "module" && !target.empty())
-          throw std::invalid_argument(
-              "module_capabilities: target must be 'module', 'production' or 'aot' (got '" + target +
-              "')");
-        const pops::ModuleCapabilities c = pops::module_capabilities(tgt);
-        py::dict d;
-        d["abi_version"] = c.abi_version;
-        d["supports_uniform"] = c.supports_uniform;
-        d["supports_amr"] = c.supports_amr;
-        d["supports_mpi"] = c.supports_mpi;
-        d["supports_gpu"] = c.supports_gpu;
-        d["supports_stride"] = c.supports_stride;
-        d["supports_named_fields"] = c.supports_named_fields;
-        d["supports_partial_imex_mask"] = c.supports_partial_imex_mask;
-        const pops::RuntimeEnvironmentReport env = pops::runtime_environment_report();
-        d["dimension"] = env.dimension;
-        d["amr_refinement_ratio"] = env.amr_refinement_ratio;
-        d["precision"] = env.precision;
-        d["real_bytes"] = env.real_bytes;
-        d["communicator"] = env.communicator;
-        d["supports_custom_communicator"] = env.supports_custom_communicator;
-        return d;
+        const pops::NativeCapabilityReport report =
+            pops::native_capability_report(parse_capability_target(target, "module_capabilities"));
+        return module_capabilities_to_dict(report.capabilities, report.runtime);
       },
       py::arg("target") = "module",
       "Authoritative static capability facts of the built module (Spec 5 sec.13.12, #36): "
@@ -128,34 +203,19 @@ void init_core(py::module_& m) {
       "(stride differs aot vs production).");
 
   m.def(
+      "capability_report",
+      [](const std::string& target) {
+        return native_capability_report_to_dict(
+            pops::native_capability_report(parse_capability_target(target, "capability_report")));
+      },
+      py::arg("target") = "module",
+      "Structured native capability report: schema_version, ABI, runtime facts, capability flags and "
+      "route rows. Pretty strings are views of this object; callers should not parse text reports.");
+
+  m.def(
       "runtime_environment_report",
       []() {
-        const pops::RuntimeEnvironmentReport r = pops::runtime_environment_report();
-        py::dict d;
-        d["dimension"] = r.dimension;
-        d["amr_refinement_ratio"] = r.amr_refinement_ratio;
-        d["precision"] = r.precision;
-        d["real_bytes"] = r.real_bytes;
-        d["supports_single_precision"] = r.supports_single_precision;
-        d["supports_mixed_precision"] = r.supports_mixed_precision;
-        d["has_kokkos"] = r.has_kokkos;
-        d["kokkos_initialized"] = r.kokkos_initialized;
-        d["kokkos_finalized"] = r.kokkos_finalized;
-        d["kokkos_initialized_by_pops"] = r.kokkos_initialized_by_pops;
-        d["kokkos_atexit_finalize_registered"] = r.kokkos_atexit_finalize_registered;
-        d["kokkos_backend"] = r.kokkos_backend;
-        d["kokkos_ownership"] = r.kokkos_ownership;
-        d["kokkos_lifecycle"] = r.kokkos_lifecycle;
-        d["mpi_compiled"] = r.mpi_compiled;
-        d["mpi_active"] = r.mpi_active;
-        d["mpi_rank"] = r.mpi_rank;
-        d["mpi_ranks"] = r.mpi_ranks;
-        d["communicator"] = r.communicator;
-        d["supports_custom_communicator"] = r.supports_custom_communicator;
-        d["allocator_mode"] = r.allocator_mode;
-        d["comm_allocator_mode"] = r.comm_allocator_mode;
-        d["allocator_lifetime"] = r.allocator_lifetime;
-        return d;
+        return runtime_environment_to_dict(pops::runtime_environment_report());
       },
       "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
       "allocator lifetime. Reading it does not initialize Kokkos or MPI.");

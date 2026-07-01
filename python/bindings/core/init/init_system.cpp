@@ -390,6 +390,9 @@ void init_system(py::module_& m) {
       .def("profile_report", &System::profile_report,
            "Per-phase / per-brick wall-clock report (count / total / mean / min / max per scope, "
            "plus counters). Per-rank.")
+      .def("profile_snapshot",
+           [](System& s) { return profile_snapshot_to_dict(s.profiler().snapshot()); },
+           "Structured profiling snapshot: schema_version, enabled, scopes and counters.")
       .def("dt_hotspot", &System::dt_hotspot,
            "Diagnostic (ADC-182): (w, i, j) of the GLOBAL cell that dominates the transport CFL "
            "bound "

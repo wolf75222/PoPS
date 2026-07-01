@@ -17,6 +17,14 @@ from pops.runtime._system_unified_install import validate_install_arguments
 from pops.runtime.profile import PerformanceSummary, Profile
 
 
+def _profile_payload(system):
+    """Structured profiler payload when the native extension exposes it, else legacy text."""
+    snapshot = getattr(system, "profile_snapshot", None)
+    if callable(snapshot):
+        return snapshot()
+    return system.profile_report()
+
+
 class _AmrProfileSession:
     """The typed profiling context manager AmrSystem.profile() returns (Spec 5 sec.12.5).
 
@@ -38,7 +46,7 @@ class _AmrProfileSession:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self._summary = PerformanceSummary(self._system.profile_report(), self._profile)
+        self._summary = PerformanceSummary(_profile_payload(self._system), self._profile)
         self._system.disable_profiling()
         return False
 
@@ -46,7 +54,7 @@ class _AmrProfileSession:
         """Return a :class:`PerformanceSummary` (live report inside the block, snapshot after)."""
         if self._summary is not None:
             return self._summary
-        return PerformanceSummary(self._system.profile_report(), self._profile)
+        return PerformanceSummary(_profile_payload(self._system), self._profile)
 
 
 class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
@@ -485,6 +493,11 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemIO, _AmrSystemProgram):
         still-REQUIRED per group. It binds nothing and mutates nothing -- a read-only bind plan."""
         from pops.codegen.inspect_report import build_bind_report
         return build_bind_report(self, compiled)
+
+    def inspect(self):
+        """Structured, array-free AMR runtime inspection report (ADC-591)."""
+        from pops.runtime.inspection import build_runtime_inspection
+        return build_runtime_inspection(self, runtime="amr_system")
 
     def __getattr__(self, attr):
         return getattr(self._s, attr)

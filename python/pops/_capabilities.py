@@ -1,4 +1,4 @@
-"""pops._capabilities -- the descriptor-sourced capability matrix (Spec 5 sec.6 / sec.13.12.1).
+"""pops._capabilities -- structured native and descriptor capability reports.
 
 :func:`inspect_capabilities` walks the inert descriptor catalogs (the Riemann / reconstruction
 / limiter / projection bricks, the mesh layouts, the solver / field catalogs) and reports, per
@@ -11,6 +11,8 @@ doctor's dispatch table): that one mirrors what the compiled runtime can dispatc
 sourced straight from the typed descriptors, so the two cannot silently disagree about which
 bricks exist.
 """
+
+import json
 
 
 class CapabilityEntry:
@@ -215,6 +217,47 @@ def _module_capabilities(target="module"):
         return None
 
 
+def _native_capability_report_from_extension(target="module"):
+    """Return ``_pops.capability_report(target)`` as :class:`NativeCapabilityReport`, or ``None``."""
+    try:
+        import _pops as mod  # noqa: PLC0415 -- lazy: keeps this module importable without _pops
+    except Exception:
+        try:
+            from pops import _pops as mod  # noqa: PLC0415
+        except Exception:
+            return None
+    fn = getattr(mod, "capability_report", None)
+    if fn is None:
+        return None
+    try:
+        return NativeCapabilityReport.from_dict(dict(fn(target)))
+    except Exception:
+        return None
+
+
+def native_capability_report(target="module", *, flags=None, source=None):
+    """Return the structured native capability report (ADC-591).
+
+    With a current ``_pops`` build, values come from C++ ``capability_report(target)``. ``flags`` is
+    the manifest fallback path for already-compiled artifacts: it builds the same stable envelope from
+    the manifest support flags and the Python inventory rows, without loading or recompiling the
+    artifact.
+    """
+    if flags is None:
+        report = _native_capability_report_from_extension(target)
+        if report is not None:
+            return report
+        flags = _module_capabilities(target)
+        source = source or ("native" if flags is not None else "unknown")
+    else:
+        source = source or "manifest"
+    rows = _support_rows(flags, source) + _inventory_rows(flags, source)
+    caps = dict(flags or {})
+    return NativeCapabilityReport(
+        schema_version=0, abi_version=int(caps.get("abi_version", 0) or 0), target=target,
+        abi_key=None, platform="unknown", capabilities=caps, runtime={}, routes=rows)
+
+
 def _native_rows(native_caps):
     """Native-sourced :class:`CapabilityEntry` rows from the C++ ``module_capabilities()`` dict.
 
@@ -307,6 +350,7 @@ class CapabilityRouteRow:
 
     def to_dict(self):
         return {
+            "route_id": self.feature,
             "feature": self.feature,
             "layout": self.layout,
             "backend": self.backend,
@@ -315,6 +359,7 @@ class CapabilityRouteRow:
             "gpu": self.gpu,
             "status": self.status,
             "limitation": self.limitation,
+            "reason": self.limitation,
             "error_message": self.error_message,
             "source": self.source,
             "axis": self.axis,
@@ -330,15 +375,23 @@ class CapabilityRouteRow:
 class CapabilityRouteMatrix:
     """Printable ADC-549 matrix of feature x layout/backend/platform support."""
 
-    def __init__(self, owner, layout, rows):
+    def __init__(self, owner, layout, rows, *, schema_version=None, abi_version=None,
+                 target=None, abi_key=None, platform=None):
         self.owner = owner
         self.case_name = owner  # compatibility with the old Case route matrix object.
         self.layout = layout
         self.layout_name = layout
         self.rows = list(rows)
+        self.schema_version = schema_version
+        self.abi_version = abi_version
+        self.target = target
+        self.abi_key = abi_key
+        self.platform = platform
 
     def to_dict(self):
         return {"case": self.owner, "owner": self.owner, "layout": self.layout,
+                "schema_version": self.schema_version, "abi_version": self.abi_version,
+                "target": self.target, "abi_key": self.abi_key, "platform": self.platform,
                 "rows": [r.to_dict() for r in self.rows]}
 
     def __iter__(self):
@@ -360,6 +413,110 @@ class CapabilityRouteMatrix:
                 % (row.feature, row.layout, row.backend, row.platform, row.mpi, row.gpu,
                    row.status, note))
         return "\n".join(lines)
+
+
+class NativeCapabilityReport:
+    """Versioned structured native capability report (ADC-591).
+
+    This is the Python value object for ``_pops.capability_report()``. Pretty route matrices and
+    legacy ``module_capabilities()`` dicts are projections of this object. ``routes`` is a list of
+    :class:`CapabilityRouteRow` instances, each carrying a status and reason directly, so tests and
+    validators do not parse formatted strings.
+    """
+
+    def __init__(self, *, schema_version, abi_version, target, abi_key, platform,
+                 capabilities, runtime, routes):
+        self.schema_version = int(schema_version)
+        self.abi_version = int(abi_version)
+        self.target = target
+        self.abi_key = abi_key
+        self.platform = platform
+        self.capabilities = dict(capabilities or {})
+        self.runtime = dict(runtime or {})
+        self.routes = list(routes)
+
+    @classmethod
+    def from_dict(cls, payload):
+        routes = [_route_from_native_dict(row) for row in payload.get("routes", [])]
+        return cls(
+            schema_version=payload.get("schema_version", 0),
+            abi_version=payload.get("abi_version", payload.get("capabilities", {}).get("abi_version", 0)),
+            target=payload.get("target", "module"),
+            abi_key=payload.get("abi_key"),
+            platform=payload.get("platform"),
+            capabilities=payload.get("capabilities", {}),
+            runtime=payload.get("runtime", {}),
+            routes=routes)
+
+    def to_dict(self):
+        return {
+            "schema_version": self.schema_version,
+            "abi_version": self.abi_version,
+            "target": self.target,
+            "abi_key": self.abi_key,
+            "platform": self.platform,
+            "capabilities": dict(self.capabilities),
+            "runtime": dict(self.runtime),
+            "routes": [row.to_dict() for row in self.routes],
+        }
+
+    def to_json(self, path=None, *, indent=2):
+        text = json.dumps(self.to_dict(), indent=indent, sort_keys=True)
+        if path is not None:
+            with open(str(path), "w", encoding="utf-8") as handle:
+                handle.write(text)
+            return path
+        return text
+
+    def route(self, feature):
+        for row in self.routes:
+            if row.feature == feature:
+                return row
+        raise KeyError(feature)
+
+    def __repr__(self):
+        return ("NativeCapabilityReport(schema=%r, abi=%r, target=%r, routes=%d)"
+                % (self.schema_version, self.abi_version, self.target, len(self.routes)))
+
+    def __str__(self):
+        lines = ["native capability report (schema=%s, abi=%s, target=%s)"
+                 % (self.schema_version, self.abi_version, self.target)]
+        lines.append("  platform : %s" % self.platform)
+        lines.append("  abi_key  : %s" % ((self.abi_key or "")[:12] or "none"))
+        lines.append("  runtime  : dimension=%s amr_refinement_ratio=%s precision=%s communicator=%s"
+                     % (self.runtime.get("dimension"), self.runtime.get("amr_refinement_ratio"),
+                        self.runtime.get("precision"), self.runtime.get("communicator")))
+        lines.append("  routes   : %d structured row(s)" % len(self.routes))
+        for row in self.routes:
+            if row.status != "available":
+                lines.append("    %-34s %-11s %s" % (row.feature, row.status, row.limitation))
+        return "\n".join(lines)
+
+
+def _route_from_native_dict(raw):
+    status = raw.get("status", "unknown")
+    requested = raw.get("requested") or raw.get("feature")
+    available_route = raw.get("available_route") or "no native route"
+    alternative = raw.get("alternative") or None
+    limitation = raw.get("reason") or raw.get("limitation") or ""
+    error = raw.get("error_message") or ""
+    if status == "unavailable" and not error:
+        error = _unsupported_error(
+            requested=requested, available=available_route, alternative=alternative)
+    return CapabilityRouteRow(
+        raw.get("feature") or raw.get("route_id"),
+        layout=raw.get("layout", "any"),
+        backend=raw.get("backend", "any"),
+        platform=raw.get("platform", "host"),
+        mpi=raw.get("mpi", False),
+        gpu=raw.get("gpu", False),
+        status=status,
+        limitation=limitation,
+        error_message=error,
+        source=raw.get("source", "native"),
+        axis=raw.get("axis"),
+        available_route=raw.get("available_route", ""),
+        alternative=raw.get("alternative", ""))
 
 
 def _axis_for_route(layout, backend, platform):
@@ -596,13 +753,11 @@ def native_capability_matrix(*, owner="module", layout="module", target="module"
     C++ ``module_capabilities(target)`` is used. The returned rows always expose:
     feature, layout, backend, platform, MPI, GPU, status, limitation and error_message.
     """
-    if flags is None:
-        flags = _module_capabilities(target)
-        source = source or ("native" if flags is not None else "unknown")
-    else:
-        source = source or "manifest"
-    rows = _support_rows(flags, source) + _inventory_rows(flags, source)
-    return CapabilityRouteMatrix(owner, layout, rows)
+    report = native_capability_report(target, flags=flags, source=source)
+    return CapabilityRouteMatrix(
+        owner, layout, report.routes, schema_version=report.schema_version,
+        abi_version=report.abi_version, target=report.target, abi_key=report.abi_key,
+        platform=report.platform)
 
 
 def _cross_check(entries, native_caps):
@@ -811,4 +966,5 @@ def inspect_amr(layout_or_context=None):
 
 __all__ = ["inspect_capabilities", "CapabilityMatrix", "CapabilityEntry",
            "CapabilityMismatchError", "inspect_amr", "AmrReport",
-           "CapabilityRouteRow", "CapabilityRouteMatrix", "native_capability_matrix"]
+           "CapabilityRouteRow", "CapabilityRouteMatrix", "NativeCapabilityReport",
+           "native_capability_report", "native_capability_matrix"]

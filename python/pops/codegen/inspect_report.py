@@ -31,6 +31,14 @@ def _short(value, width=12):
     return (value or "")[:width] or "none"
 
 
+def _abi_token(abi_key, name):
+    prefix = name + "="
+    for part in str(abi_key or "").split(";"):
+        if part.startswith(prefix):
+            return part[len(prefix):]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # sec.12.1 -- CompiledReport: the print(compiled) summary
 # ---------------------------------------------------------------------------
@@ -45,7 +53,7 @@ class CompiledReport:
     """
 
     def __init__(self, *, name, backend, platform, layout, blocks, fields, program, inputs,
-                 artifacts, status, env=None, runtime=None):
+                 artifacts, status, env=None, runtime=None, capabilities=None):
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -63,6 +71,7 @@ class CompiledReport:
         # inspectable, never hidden.
         self.env = dict(env) if env else {}
         self.runtime = dict(runtime) if runtime else {}
+        self.capabilities = dict(capabilities) if capabilities else {}
 
     def to_dict(self):
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -71,7 +80,8 @@ class CompiledReport:
                 "fields": [dict(f) for f in self.fields], "program": dict(self.program),
                 "inputs": {k: list(v) for k, v in self.inputs.items()},
                 "artifacts": dict(self.artifacts), "status": self.status,
-                "env": dict(self.env), "runtime": dict(self.runtime)}
+                "env": dict(self.env), "runtime": dict(self.runtime),
+                "capabilities": dict(self.capabilities)}
 
     def to_json(self, path=None, *, indent=2):
         """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
@@ -121,6 +131,14 @@ class CompiledReport:
                          % self.runtime.get("communicator"))
             lines.append("    custom_communicator   : %s"
                          % self.runtime.get("supports_custom_communicator"))
+        if self.capabilities:
+            routes = self.capabilities.get("routes", [])
+            blocked = [r for r in routes if r.get("status") != "available"]
+            lines.append("  capabilities:")
+            lines.append("    schema_version : %s" % self.capabilities.get("schema_version"))
+            lines.append("    abi_version    : %s" % self.capabilities.get("abi_version"))
+            lines.append("    route_ids      : %d (%d partial/unavailable)"
+                         % (len(routes), len(blocked)))
         if self.env:
             lines.append("  environment (active POPS_*):")
             lines.append("    log_level     : %s" % self.env.get("log_level"))
@@ -194,9 +212,18 @@ def build_compiled_report(compiled):
     from pops.runtime_environment import compiled_runtime_facts
     runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
 
+    abi_key = getattr(compiled, "abi_key", None)
     artifacts = {"so_path": getattr(compiled, "so_path", None),
-                 "abi_key": _short(getattr(compiled, "abi_key", None)),
+                 "abi_key": _short(abi_key),
+                 "abi_key_full": abi_key,
+                 "header_signature": _abi_token(abi_key, "headers") or "unknown",
                  "cache_key": _short(getattr(compiled, "cache_key", None))}
+    from pops._capabilities import native_capability_report
+    try:
+        capability_report = native_capability_report(
+            flags=compiled.manifest().supports(), source="manifest").to_dict()
+    except Exception:
+        capability_report = {}
 
     # The active codegen POPS_* environment snapshot (sec.12.4, #47-48): the resolved CodegenEnv as a
     # plain dict, or {} for a handle that carries none. Surfacing it keeps the env state -- including
@@ -209,7 +236,7 @@ def build_compiled_report(compiled):
         blocks=blocks, fields=fields, program=prog_summary,
         inputs={"states": states, "params": req_params, "aux": req_aux},
         artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env,
-        runtime=runtime)
+        runtime=runtime, capabilities=capability_report)
 
 
 # ---------------------------------------------------------------------------

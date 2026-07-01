@@ -120,6 +120,7 @@ pops_add_test(test_checkpoint_cache)  # Spec 3 scheduler-cache checkpoint/restar
 pops_add_test(test_external_brick)  # Spec 3 external C++ brick registry + macro (ADC-463)
 pops_add_test(test_external_brick_json)  # Spec 3 manifest JSON escape/unescape round-trip (ADC-463)
 pops_add_test(test_runtime_environment)  # ADC-609: runtime env / precision / communicator facts
+pops_add_test(test_capability_report)  # ADC-591: structured native capability report
 
 # --- maillage / conteneurs ---
 pops_add_test(test_box2d)
