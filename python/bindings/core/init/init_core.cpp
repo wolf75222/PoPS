@@ -227,6 +227,15 @@ void init_core(py::module_& m) {
       },
       "Structured native numerical/solver/physical defaults. Reading it is metadata-only.");
 
+  m.def(
+      "fallback_diagnostics_report",
+      []() {
+        return fallback_diagnostics_report_to_dict(pops::fallback_diagnostics_report());
+      },
+      "Structured fallback/degraded-route diagnostics and policies. Reading it is metadata-only.");
+  m.def("reset_fallback_diagnostics", &pops::reset_fallback_diagnostics_counters,
+        "Reset process-local fallback/degraded-route diagnostic counters.");
+
   // AUX channel limits + canonical name table (ADC-291), exposed from the SINGLE C++ source
   // (pops/core/state.hpp + aux_names.hpp). The DSL/capabilities() read these so the Python mirrors
   // (AUX_NAMED_MAX / AUX_NAMED_BASE / AUX_CANONICAL in dsl.py) cannot SILENTLY drift from C++:

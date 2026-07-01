@@ -222,6 +222,7 @@ pops_add_test(test_polar_condensed_schur_source_stepper)
 # (entree serie ; les entrees MPI np=1/2/4 sont ajoutees dans le bloc POPS_HAS_MPI plus bas)
 pops_add_test(test_krylov_solver)
 pops_add_test(test_numerical_defaults)
+pops_add_test(test_fallback_diagnostics)
 # ADC-405a : couche de Krylov GENERIQUE matrice-libre (generic_krylov.hpp) -- Richardson, CG,
 # BiCGStab -- l'operateur passe en CALLBACK (ApplyFn). Valide les trois boucles sur un operateur
 # de Helmholtz SPD A = I - alpha*Lap : solution manufacturee discretisation-exacte (rhs = A(phi_exact)),

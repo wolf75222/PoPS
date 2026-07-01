@@ -259,7 +259,8 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "periodic, constant coefficient, power-of-two uniform grid only", "uniform",
                        "production", "host", mpi, gpu),
       capability_route("elliptic:fft_direct_dft_fallback", "partial",
-                       "non-power-of-two Nx/Ny remain correct by falling back to direct O(n^2) DFT",
+                       "non-power-of-two Nx/Ny remain correct by direct O(n^2) DFT; "
+                       "fallback_diagnostics_report exposes the policy and count",
                        "uniform", "production", "host", mpi, gpu),
       capability_route("elliptic:mg_fac_defaults", "partial",
                        "geometric MG/FAC defaults and debug diagnostics are still header-local; "

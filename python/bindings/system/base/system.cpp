@@ -1,6 +1,7 @@
 #include <pops/runtime/system.hpp>
 
 #include <pops/core/state/variables.hpp>  // VariableSet + VariableRole: role descriptor carried by each block
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key + detail::abi_key_string (ABI boundary of the native loader)
 #include <pops/runtime/builders/block/block_builder.hpp>  // GridContext + make_block/make_max_speed (compiled closures)
 #include <pops/runtime/builders/block/block_seam.hpp>  // ADC-335: per-transport build seam (build_block_exb/.../polar)
@@ -151,6 +152,13 @@ EffectiveBlockOptions make_system_block_options(
   out.four_pi_G = model.four_pi_G;
   out.rho0 = model.rho0;
   return out;
+}
+
+int coupling_role_index_reported(const VariableSet& vs, VariableRole role, int fallback,
+                                 const char* origin, const std::string& block) {
+  if (vs.roles.empty())
+    record_fallback(FallbackCounter::kRolelessComponentIndex);
+  return coupling_role_index(vs, role, fallback, origin, block);
 }
 }  // namespace
 
@@ -1411,12 +1419,12 @@ void System::add_ionization(const std::string& electron, const std::string& ion,
   // (no roles declared: dynamic / compiled block) keeps the canonical fallback comp 0; a ROLES-BEARING
   // block that omits Density fails loud (no silent coupling on the wrong component, ADC-292). A block
   // storing its density off index 0 (but declaring the role) stays correctly coupled.
-  const int de = coupling_role_index(P->sp[ie].cons_vars, VariableRole::Density, 0,
-                                     "System::add_ionization", electron);
-  const int di = coupling_role_index(P->sp[ii].cons_vars, VariableRole::Density, 0,
-                                     "System::add_ionization", ion);
-  const int dg = coupling_role_index(P->sp[ig].cons_vars, VariableRole::Density, 0,
-                                     "System::add_ionization", neutral);
+  const int de = coupling_role_index_reported(P->sp[ie].cons_vars, VariableRole::Density, 0,
+                                              "System::add_ionization", electron);
+  const int di = coupling_role_index_reported(P->sp[ii].cons_vars, VariableRole::Density, 0,
+                                              "System::add_ionization", ion);
+  const int dg = coupling_role_index_reported(P->sp[ig].cons_vars, VariableRole::Density, 0,
+                                              "System::add_ionization", neutral);
   // Ionization (operator-split, on the density): rate r = k n_e n_g. One neutral disappears, one ion and
   // one electron appear: n_g -= dt r, n_i += dt r, n_e += dt r. Mass is transferred from the
   // neutral to the ion (n_i + n_g conserved). First coupling brick; the momentum
@@ -1456,10 +1464,10 @@ void System::add_collision(const std::string& a, const std::string& b, double ra
   const VariableSet& va_set = P->sp[ia].cons_vars;
   const VariableSet& vb_set = P->sp[ib].cons_vars;
   auto ra = [&](VariableRole r, int fb) {
-    return coupling_role_index(va_set, r, fb, "System::add_collision", a);
+    return coupling_role_index_reported(va_set, r, fb, "System::add_collision", a);
   };
   auto rb = [&](VariableRole r, int fb) {
-    return coupling_role_index(vb_set, r, fb, "System::add_collision", b);
+    return coupling_role_index_reported(vb_set, r, fb, "System::add_collision", b);
   };
   const int mxa = ra(VariableRole::MomentumX, 1);
   const int mya = ra(VariableRole::MomentumY, 2);
@@ -1504,10 +1512,10 @@ void System::add_thermal_exchange(const std::string& a, const std::string& b, do
   const VariableSet& va_set = P->sp[ia].cons_vars;
   const VariableSet& vb_set = P->sp[ib].cons_vars;
   auto ra = [&](VariableRole r, int fb) {
-    return coupling_role_index(va_set, r, fb, "System::add_thermal_exchange", a);
+    return coupling_role_index_reported(va_set, r, fb, "System::add_thermal_exchange", a);
   };
   auto rb = [&](VariableRole r, int fb) {
-    return coupling_role_index(vb_set, r, fb, "System::add_thermal_exchange", b);
+    return coupling_role_index_reported(vb_set, r, fb, "System::add_thermal_exchange", b);
   };
   const int ea = ra(VariableRole::Energy, 3);
   const int mxa = ra(VariableRole::MomentumX, 1);

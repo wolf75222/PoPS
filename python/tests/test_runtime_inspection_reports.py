@@ -25,7 +25,9 @@ def test_system_inspect_is_structured_and_array_free():
     assert d["profile"]["source"] in ("snapshot", "text")
     assert d["history"] == []
     assert d["cache"] == []
-    assert d["diagnostics"] == {}
+    assert d["diagnostics"]["fallbacks"]["schema_version"] == 1
+    assert any(row["key"] == "elliptic.fft.direct_dft"
+               for row in d["diagnostics"]["fallbacks"]["entries"])
     assert d["options"]["defaults"]["newton"]["max_iters"] == 2
     assert d["options"]["poisson"]["solver"] == "geometric_mg"
     assert "array(" not in str(rep)

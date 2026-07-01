@@ -3,6 +3,7 @@
 #include <pops/core/state/state.hpp>      // StateVec, Aux, POPS_AUX_FIELDS, kAuxBaseComps
 #include <pops/core/foundation/types.hpp>      // POPS_HD, Real
 #include <pops/core/state/variables.hpp>  // VariableSet + VariableKind + VariableRole + role_from_name
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -359,6 +360,8 @@ void push_dynamic(ImplT* P, const std::string& name, pops::dynlib::handle h, int
   // gamma 1.4). PRIORITY to the explicit name (names=), then meta, then fallback; roles + primitive
   // come ONLY from the ABI (the API does not expose them).
   const BlockMeta meta = read_block_meta(h);
+  if ((names.empty() && meta.cons.names.empty()) || meta.cons.roles.empty() || !meta.has_gamma)
+    record_fallback(FallbackCounter::kNativeLoaderLegacyMetadata);
   VariableSet cons_vs = meta.cons, prim_vs = meta.prim;
   if (!names.empty()) {
     if (static_cast<int>(names.size()) != NV)
@@ -566,6 +569,8 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // OPTIONAL metadata (names / roles / gamma) transported by the extended ABI of the .so. Absent
   // from an old .so -> empty meta, we fall back on the fallback (names u0.. / no roles / gamma 1.4).
   const BlockMeta meta = read_block_meta(h);
+  if ((names.empty() && meta.cons.names.empty()) || meta.cons.roles.empty() || !meta.has_gamma)
+    record_fallback(FallbackCounter::kNativeLoaderLegacyMetadata);
   // Widen the SHARED aux channel so set_magnetic_field/T_e populate it and the marshaling
   // transports the extra components to the .so. Base model (3) -> no-op (bit-identical).
   P->ensure_aux_width(naux);

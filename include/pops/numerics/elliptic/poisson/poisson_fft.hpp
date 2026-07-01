@@ -23,9 +23,9 @@
 /// - mode kx=ky=0: zero eigenvalue -> phi_hat=0 (zero mean enforced);
 /// - alltoall is the identity when np==1 (and without MPI).
 
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/parallel/comm.hpp>
 
-#include <atomic>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -45,23 +45,18 @@ inline bool is_pow2(int n) {
   return n > 0 && (n & (n - 1)) == 0;
 }
 
-inline std::atomic<std::size_t>& poisson_fft_direct_dft_fallback_counter() {
-  static std::atomic<std::size_t> counter{0};
-  return counter;
-}
-
 /// Reset the process-local diagnostic counter for direct DFT fallback calls.
 inline void reset_poisson_fft_direct_dft_fallback_count() {
-  poisson_fft_direct_dft_fallback_counter().store(0, std::memory_order_relaxed);
+  fallback_counter(FallbackCounter::kFftDirectDft).store(0, std::memory_order_relaxed);
 }
 
 /// Number of 1D transforms that fell back from radix-2 FFT to the direct O(n^2) DFT.
 inline std::size_t poisson_fft_direct_dft_fallback_count() {
-  return poisson_fft_direct_dft_fallback_counter().load(std::memory_order_relaxed);
+  return fallback_count(FallbackCounter::kFftDirectDft);
 }
 
 inline void record_poisson_fft_direct_dft_fallback() {
-  poisson_fft_direct_dft_fallback_counter().fetch_add(1, std::memory_order_relaxed);
+  record_fallback(FallbackCounter::kFftDirectDft);
 }
 
 // Direct O(n^2) DFT, CORRECTNESS fallback for lengths that are NOT powers of two

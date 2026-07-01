@@ -32,5 +32,9 @@ Example::
 from pops.runtime.profile import PerformanceSummary, Profile  # noqa: F401
 from pops.runtime.inspection import RuntimeInspectionReport  # noqa: F401
 from pops.runtime.defaults import numerical_defaults_report  # noqa: F401
+from pops.runtime.fallbacks import fallback_diagnostics_report, reset_fallback_diagnostics  # noqa: F401
 
-__all__ = ["Profile", "PerformanceSummary", "RuntimeInspectionReport", "numerical_defaults_report"]
+__all__ = [
+    "Profile", "PerformanceSummary", "RuntimeInspectionReport", "numerical_defaults_report",
+    "fallback_diagnostics_report", "reset_fallback_diagnostics",
+]

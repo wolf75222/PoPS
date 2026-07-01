@@ -9,6 +9,7 @@ import json
 
 from pops._capabilities import native_capability_report
 from pops.runtime.defaults import numerical_defaults_report
+from pops.runtime.fallbacks import fallback_diagnostics_report
 from pops.runtime.profile import PerformanceSummary
 from pops.runtime_environment import runtime_environment_report
 
@@ -83,7 +84,9 @@ class RuntimeInspectionReport:
                         len(prof.get("counters", {}))))
         lines.append("  history     : %d ring(s)" % len(self.history))
         lines.append("  cache       : %d slot(s)" % len(self.cache))
-        lines.append("  diagnostics : %d scalar(s)" % len(self.diagnostics))
+        fallbacks = self.diagnostics.get("fallbacks", {})
+        lines.append("  diagnostics : %d scalar(s), fallbacks=%s"
+                     % (len(self.diagnostics), fallbacks.get("total_count", 0)))
         opts = self.options
         lines.append("  options     : blocks=%d source_stages=%d"
                      % (len(opts.get("blocks", [])), len(opts.get("source_stages", []))))
@@ -101,6 +104,7 @@ class RuntimeInspectionReport:
 def build_runtime_inspection(sim, *, runtime):
     cap_report = native_capability_report()
     cap_dict = cap_report.to_dict()
+    options = _options(sim, runtime)
     limitations = [
         {"feature": row.feature, "status": row.status, "reason": row.limitation}
         for row in cap_report.routes
@@ -116,8 +120,8 @@ def build_runtime_inspection(sim, *, runtime):
         profile=PerformanceSummary(_profile_payload(sim)).to_dict(),
         history=_history(sim),
         cache=_cache(sim),
-        diagnostics=_diagnostics(sim),
-        options=_options(sim, runtime),
+        diagnostics=_diagnostics(sim, options),
+        options=options,
         amr=_amr(sim) if runtime == "amr_system" else None,
         limitations=limitations)
 
@@ -181,8 +185,10 @@ def _cache(sim):
     return rows
 
 
-def _diagnostics(sim):
-    return dict(_call(sim, "program_diagnostics", {}) or {})
+def _diagnostics(sim, options):
+    diagnostics = dict(_call(sim, "program_diagnostics", {}) or {})
+    diagnostics["fallbacks"] = fallback_diagnostics_report(options)
+    return diagnostics
 
 
 def _options(sim, runtime):

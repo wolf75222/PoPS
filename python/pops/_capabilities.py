@@ -652,7 +652,7 @@ def _inventory_rows(flags, source):
         _row("elliptic:fft_direct_dft_fallback", layout="uniform", backend="production",
              platform="host", mpi=mpi, gpu=gpu, status="partial",
              limitation=("non-power-of-two Nx/Ny remain correct by falling back to direct O(n^2) "
-                         "DFT; poisson_fft_direct_dft_fallback_count() exposes fallback calls"),
+                         "DFT; fallback_diagnostics_report exposes the policy and count"),
              source=source),
         _row("elliptic:mg_fac_defaults", layout="uniform|amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu, status="partial",

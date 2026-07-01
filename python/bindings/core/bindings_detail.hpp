@@ -12,6 +12,7 @@
 
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/core/foundation/kokkos_env.hpp>  // Kokkos_Core under POPS_HAS_KOKKOS (kokkos_is_initialized)
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/parallel/comm.hpp>  // pops::my_rank / n_ranks: rank-0 guard of the multi-rank IO facade
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key: ABI key exposed to the DSL ("production" path)
 #include <pops/runtime/amr_system.hpp>
@@ -190,6 +191,33 @@ inline py::dict numerical_defaults_report_to_dict() {
   out["performance"] = performance;
   out["amr"] = amr;
   out["physical"] = physical;
+  return out;
+}
+
+inline py::dict fallback_diagnostics_report_to_dict(const FallbackDiagnosticsReport& report) {
+  py::list entries;
+  std::size_t total_count = 0;
+  for (const FallbackDiagnosticEntry& entry : report.entries) {
+    py::dict row;
+    row["key"] = entry.key;
+    row["route"] = entry.route;
+    row["cause"] = entry.cause;
+    row["policy"] = entry.policy;
+    row["default_action"] = entry.default_action;
+    row["impact"] = entry.impact;
+    row["frequency"] = entry.frequency;
+    row["count"] = entry.count;
+    row["explicit_opt_in"] = entry.explicit_opt_in;
+    row["performance_degraded"] = entry.performance_degraded;
+    row["semantics_changed"] = entry.semantics_changed;
+    total_count += entry.count;
+    entries.append(row);
+  }
+  py::dict out;
+  out["schema_version"] = report.schema_version;
+  out["source"] = report.source;
+  out["entries"] = entries;
+  out["total_count"] = total_count;
   return out;
 }
 

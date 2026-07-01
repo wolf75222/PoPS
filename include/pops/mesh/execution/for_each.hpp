@@ -20,6 +20,7 @@
 
 #include <pops/core/foundation/kokkos_env.hpp>  // detail::ensure_kokkos_initialized + device_fence (life cycle)
 #include <pops/core/foundation/types.hpp>
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/mesh/index/box2d.hpp>
 
 #include <cstdint>      // std::int64_t: cell counts (LLP64 portability, no-op on LP64)
@@ -155,6 +156,7 @@ void for_each_cell(const Box2D& b, F f) {
     const std::int64_t n_cells =
         static_cast<std::int64_t>(b.hi[0] - b.lo[0] + 1) * (b.hi[1] - b.lo[1] + 1);
     if (n_cells < detail::foreach_serial_threshold()) {
+      record_fallback(FallbackCounter::kForeachSerialSmallBox);
       for (int j = b.lo[1]; j <= b.hi[1]; ++j)
         for (int i = b.lo[0]; i <= b.hi[0]; ++i)
           f(i, j);
