@@ -13,11 +13,13 @@
 
 #pragma once
 
+#include <pops/core/foundation/validation.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/fab2d.hpp>  // Array4 (POD device-copyable)
 
 #include <cassert>
 #include <cmath>
+#include <string>
 
 namespace pops {
 
@@ -42,6 +44,45 @@ inline constexpr int kCsMaxStack = 32;  // postfix stack depth
 inline constexpr int kCsMaxProg = 256;  // length of a program (opcodes)
 inline constexpr int kCsMaxTerms = 16;  // source terms (one per .add)
 
+inline int cs_required_stack(CsOp op) {
+  switch (op) {
+    case CsOp::PushReg:
+      return 0;
+    case CsOp::Neg:
+    case CsOp::Sqrt:
+      return 1;
+    case CsOp::Add:
+    case CsOp::Sub:
+    case CsOp::Mul:
+    case CsOp::Div:
+    case CsOp::Pow:
+      return 2;
+  }
+  return 0;
+}
+
+inline const char* cs_opcode_name(CsOp op) {
+  switch (op) {
+    case CsOp::PushReg:
+      return "PushReg";
+    case CsOp::Add:
+      return "Add";
+    case CsOp::Sub:
+      return "Sub";
+    case CsOp::Mul:
+      return "Mul";
+    case CsOp::Div:
+      return "Div";
+    case CsOp::Neg:
+      return "Neg";
+    case CsOp::Pow:
+      return "Pow";
+    case CsOp::Sqrt:
+      return "Sqrt";
+  }
+  return "unknown";
+}
+
 /// Fixed-capacity postfix program (POD device-copyable): len opcodes, arg read only by PushReg
 /// (register index). Capturable by value in a device kernel.
 struct CsProgram {
@@ -50,13 +91,14 @@ struct CsProgram {
   int arg[kCsMaxProg] = {};
 
   /// Evaluate the program on the registers @p reg (loaded for the cell). LOCAL fixed-capacity stack,
-  /// no heap -> POPS_HD device-callable. PRECONDITION: well-formed program (checked on the Python
-  /// side); returns the final top, or Real(0) if the stack is empty.
+  /// no heap -> POPS_HD device-callable. PRECONDITION: well-formed program (checked at the host
+  /// add_coupled_source / AMR runtime boundary); returns the final top, or Real(0) if the stack is empty.
   ///
   /// DEFENSIVE stack bounds (program assumed well-formed on the Python side, but we never read out of
   /// bounds on device): a PushReg pushes only if sp < kCsMaxStack (bounded overflow); a binary (resp.
   /// unary) operator requires sp >= 2 (resp. >= 1) before popping, otherwise it is skipped (bounded
-  /// underflow, no st[sp<0] access). In debug, an assert flags the ill-formed program.
+  /// underflow, no st[sp<0] access). In debug, an assert flags a corrupted program that bypassed the
+  /// release-active host validation.
   POPS_HD Real eval(const Real* reg) const {
     Real st[kCsMaxStack];
     int sp = 0;
@@ -125,6 +167,39 @@ struct CsProgram {
     return sp > 0 ? st[sp - 1] : Real(0);
   }
 };
+
+inline void validate_cs_program_stack(const CsProgram& pg, const std::string& where) {
+  if (pg.len < 0 || pg.len > kCsMaxProg)
+    throw_validation_error(where, "0 <= program length <= " + std::to_string(kCsMaxProg),
+                           "len=" + std::to_string(pg.len));
+  int sp = 0;
+  for (int k = 0; k < pg.len; ++k) {
+    if (pg.op[k] < 0 || pg.op[k] > static_cast<int>(CsOp::Sqrt))
+      throw_validation_error(where, "known CsOp opcode in [0.." +
+                                        std::to_string(static_cast<int>(CsOp::Sqrt)) + "]",
+                             "opcode=" + std::to_string(pg.op[k]) +
+                                 " at instruction " + std::to_string(k));
+    const CsOp op = static_cast<CsOp>(pg.op[k]);
+    const int need = cs_required_stack(op);
+    if (sp < need)
+      throw_validation_error(where, "well-formed postfix stack program",
+                             "stack underflow at instruction " + std::to_string(k) +
+                                 " (" + cs_opcode_name(op) + "), stack_depth=" +
+                                 std::to_string(sp) + ", required=" + std::to_string(need));
+    if (op == CsOp::PushReg) {
+      if (sp >= kCsMaxStack)
+        throw_validation_error(where, "postfix stack depth <= " + std::to_string(kCsMaxStack),
+                               "stack overflow at instruction " + std::to_string(k) +
+                                   ", stack_depth=" + std::to_string(sp));
+      ++sp;
+    } else {
+      sp = sp - need + 1;
+    }
+  }
+  if (sp != 1)
+    throw_validation_error(where, "postfix program leaves exactly one result on the stack",
+                           "final stack_depth=" + std::to_string(sp));
+}
 
 /// Device functor applying ONE coupled source over a box: captures the PODs by VALUE
 /// (input/output Array4, programs, constants) -> device-clean. operator()(i, j) loads the

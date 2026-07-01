@@ -645,6 +645,7 @@ class AmrRuntime {
         pg.op[k] = opc;
         pg.arg[k] = a;
       }
+      validate_cs_program_stack(pg, "AmrRuntime::add_coupled_source term " + std::to_string(t));
       outs[static_cast<std::size_t>(t)] = {b, comp, pg};
       off += len;
     }
@@ -1272,6 +1273,7 @@ class AmrRuntime {
       pg.op[k] = opc;
       pg.arg[k] = a;
     }
+    validate_cs_program_stack(pg, "AmrRuntime::add_coupled_frequency_expr");
     std::vector<Real> kconsts(consts.begin(), consts.end());
     coupled_freq_exprs_.push_back(
         CoupledFreqExprDecl{label, std::move(ins), pg, n_in, n_const, std::move(kconsts)});

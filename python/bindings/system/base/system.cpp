@@ -1648,6 +1648,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
       pg.op[k] = opc;
       pg.arg[k] = a;
     }
+    validate_cs_program_stack(pg, "System::add_coupled_source term " + std::to_string(t));
     outs[static_cast<std::size_t>(t)] = {s, comp, pg};
     off += len;
   }
@@ -1682,6 +1683,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
       freq_pg.op[k] = opc;
       freq_pg.arg[k] = a;
     }
+    validate_cs_program_stack(freq_pg, "System::add_coupled_source frequency");
   }
   // CONSTANT declared frequency of the coupling (audit wave 3): registered for the step bound of
   // step_cfl / step_adaptive (dt <= cfl/mu on the MACRO-step). <= 0 = no bound (historical). Pushed

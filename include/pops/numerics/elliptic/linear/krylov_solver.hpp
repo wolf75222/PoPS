@@ -16,14 +16,15 @@
 /// converges to the SAME solution as GeometricMG (to the tolerance).
 ///
 /// Invariants / constraints:
-/// - @p op and @p precond MUST be DISTINCT GeometricMG objects (assert in the constructor): apply_precond
-///   OVERWRITES precond.rhs()/phi() at every iteration; confusing them would destroy the solve iterate;
+/// - @p op and @p precond MUST be DISTINCT GeometricMG objects (release validation in the constructor):
+///   apply_precond OVERWRITES precond.rhs()/phi() at every iteration; confusing them would destroy the solve iterate;
 /// - precond carries the SYMMETRIC part (same eps/eps_y/kappa, set_cross_terms NOT called);
 /// - DEVICE/MPI: named functors only; the dot products (dot, norm) are COLLECTIVE
 ///   (all_reduce_sum) and called on ALL ranks, including a rank WITHOUT a box (no deadlock);
 /// - ADDITIVE: no existing path (GeometricMG / Poisson) goes through this header (opt-in).
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/foundation/validation.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -43,6 +44,25 @@ namespace pops {
 
 // KrylovResult is defined in krylov_result.hpp (included above), shared with generic_krylov.hpp.
 
+namespace detail {
+inline GeometricMG& validate_tensor_krylov_preconditioner(GeometricMG& op, GeometricMG& precond) {
+  if (&op == &precond)
+    throw_validation_error(
+        "pops/numerics/elliptic/linear/krylov_solver.hpp: TensorKrylovSolver",
+        "op and precond are distinct GeometricMG objects",
+        "op and precond alias the same object; preconditioner application overwrites rhs()/phi()");
+  return precond;
+}
+
+inline int validate_tensor_krylov_vcycles(int n_precond_vcycles) {
+  if (n_precond_vcycles < 1)
+    throw_validation_error(
+        "pops/numerics/elliptic/linear/krylov_solver.hpp: TensorKrylovSolver",
+        "n_precond_vcycles >= 1", "n_precond_vcycles=" + std::to_string(n_precond_vcycles));
+  return n_precond_vcycles;
+}
+}  // namespace detail
+
 // Matrix-free BiCGStab, preconditioned by N V-cycles of GeometricMG on the SYMMETRIC part.
 //
 // @p op: GeometricMG carrying the FULL operator (configured via set_cross_terms / set_epsilon*
@@ -54,15 +74,15 @@ namespace pops {
 //               MUST be an object DISTINCT from @p op: apply_precond OVERWRITES precond_.rhs() (copy_into)
 //               and precond_.phi() (set_val(0) then V-cycle) at every iteration. If precond_ == op_, these
 //               writes would overwrite the iterate phi() and the real rhs() of BiCGStab, destroying the solve.
-//               The constructor enforces this via assert(&op != &precond). A SEPARATE object without cross
-//               terms is in any case the proper symmetric preconditioner.
+//               The constructor enforces this with a release-active validation error. A SEPARATE object
+//               without cross terms is in any case the proper symmetric preconditioner.
 class TensorKrylovSolver {
  public:
   // @p n_precond_vcycles: number N of MG V-cycles per preconditioner application (1 or 2).
   TensorKrylovSolver(GeometricMG& op, GeometricMG& precond, int n_precond_vcycles = 1)
       : op_(op),
-        precond_(precond),
-        n_precond_(n_precond_vcycles),
+        precond_(detail::validate_tensor_krylov_preconditioner(op, precond)),
+        n_precond_(detail::validate_tensor_krylov_vcycles(n_precond_vcycles)),
         ba_(op.box_array()),
         dm_(op.dmap()),
         r_(ba_, dm_, 1, 0),
@@ -75,9 +95,6 @@ class TensorKrylovSolver {
         shat_(ba_, dm_, 1, 1),
         op_offset_(ba_, dm_, 1, 0),
         bc_offset_(ba_, dm_, 1, 0) {
-    // op_ and precond_ MUST be distinct: apply_precond overwrites precond_.rhs()/phi() at every
-    // iteration; confusing them with op_ would overwrite the iterate and the right-hand side of the solve (see header).
-    assert(&op_ != &precond_ && "TensorKrylovSolver: op and precond must be distinct objects");
   }
 
   // --- EllipticSolver concept ---
