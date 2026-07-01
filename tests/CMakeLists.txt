@@ -131,6 +131,7 @@ pops_add_test(test_sync_residence)  # API memoire explicite : sync_host/sync_dev
 pops_add_test(test_reduce)
 pops_add_test(test_dense_eig)  # numerics/dense_eig.hpp : extremes du spectre d'un petit bloc dense (HLL exact)
 pops_add_test(test_route_ids)  # runtime/config/route_ids.hpp : typed route IDs (ADC-584) round-trip + registry mirror
+pops_add_test(test_brick_catalog)  # runtime/builders/factory/brick_catalog.hpp : builtin native brick catalog (ADC-586) lookup + registry/route mirror
 pops_add_test(test_fill_boundary)
 pops_add_test(test_fill_boundary_cache)
 pops_add_test(test_physical_bc)

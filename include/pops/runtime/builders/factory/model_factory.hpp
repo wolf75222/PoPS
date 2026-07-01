@@ -3,6 +3,7 @@
 #include <pops/core/foundation/cold.hpp>  // POPS_COLD_FN: COLD-factory no-optimize attribute (ADC-337)
 #include <pops/core/state/variables.hpp>  // VariableSet/VariableRole/role_from_name/roles_csv (resolve_implicit_components)
 #include <pops/physics/bricks/bricks.hpp>
+#include <pops/runtime/config/route_ids.hpp>  // TransportRouteId/SourceRouteId/EllipticRouteId + parse_*_route (ADC-584)
 #include <pops/runtime/dynamic/model_registry.hpp>  // kTransports/kSources/kElliptics: builtin-brick tag registry (ADC-331)
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -52,18 +53,25 @@ static_assert(CompressibleFlux::n_vars == transport_n_vars_ct("compressible"),
 static_assert(IsothermalFlux::n_vars == transport_n_vars_ct("isothermal"),
               "registry n_vars drift: isothermal");
 
-/// Builds the transport brick and calls v(transport).
+/// Builds the transport brick and calls v(transport). The tag is validated ONCE against the registry
+/// (the historical rejection message stays byte-identical, single-sourced by validate_transport) and
+/// then parsed into the typed TransportRouteId (route_ids.hpp): the switch selects the brick by the
+/// typed enumerator, not a string if-chain, so a new transport is a catalog/route row plus a `case`
+/// (no new public string branch). The parse cannot fail here -- validate_transport threw first on an
+/// unknown tag -- so the default label is the defense-in-depth registry/dispatch consistency guard.
 template <class Visitor>
 POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
   validate_transport(
       m.transport);  // registry rejection (single source of the valid tags + message)
-  if (m.transport == "exb")
-    return v(ExBVelocity{Real(m.B0)});
-  if (m.transport == "compressible")
-    return v(CompressibleFlux{Real(m.gamma)});
-  if (m.transport == "isothermal")
-    return v(IsothermalFlux{Real(m.cs2), Real(m.vacuum_floor)});
-  // Reached only if a registry tag is not routed by the if-chain (a registry/dispatch inconsistency,
+  switch (parse_transport_route(m.transport)) {
+    case TransportRouteId::kExb:
+      return v(ExBVelocity{Real(m.B0)});
+    case TransportRouteId::kCompressible:
+      return v(CompressibleFlux{Real(m.gamma)});
+    case TransportRouteId::kIsothermal:
+      return v(IsothermalFlux{Real(m.cs2), Real(m.vacuum_floor)});
+  }
+  // Reached only if a registry route is not routed by the switch (a registry/dispatch inconsistency,
   // i.e. a programming bug); user typos were already rejected by validate_transport above.
   throw std::runtime_error("transport '" + m.transport +
                            "' valid in registry but not routed (add the dispatch case)");
@@ -81,35 +89,56 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
 ///                                    polar setup, with no centrifugal workaround needed).
 /// qom (q/m, sign included) is shared by the two charged forces (same species). The magnetized bricks
 /// declare n_aux = 4 -> CompositeModel propagates the aux width up to the system (B_z channel).
+/// The source tag is parsed ONCE into the typed SourceRouteId (route_ids.hpp) once it is a KNOWN
+/// source (is_source): parse_source_route resolves the alias spellings (lorentz -> kMagneticLorentz,
+/// potential_lorentz -> kPotentialMagneticLorentz), so the switch carries ONE case per canonical
+/// brick -- the duplicated alias branches disappear. The `if constexpr (NV >= 3)` gate stays EXACTLY:
+/// on a scalar transport only kNone is reachable; every fluid case lives inside the gate. An unknown
+/// source tag OR a fluid source on a scalar transport falls through to the historical "invalid here"
+/// throw, BYTE-IDENTICAL (dispatch_source has no separate validate_source; this throw is the shared
+/// rejection for both, so the parse is gated behind is_source to keep it that way).
 template <int NV, class Visitor>
 POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
-  if (m.source == "none")
-    return v(NoSource{});
-  if constexpr (NV >= 3) {
-    if (m.source == "potential")
-      return v(PotentialForce{Real(m.qom)});
-    if (m.source == "gravity")
-      return v(GravityForce{});
-    if (m.source == "magnetic" || m.source == "lorentz")
-      return v(MagneticLorentzForce{Real(m.qom)});
-    if (m.source == "potential_magnetic" || m.source == "potential_lorentz")
-      return v(CompositeSource<PotentialForce, MagneticLorentzForce>{
-          PotentialForce{Real(m.qom)}, MagneticLorentzForce{Real(m.qom)}});
+  if (is_source(m.source)) {
+    const SourceRouteId route = parse_source_route(m.source);
+    if (route == SourceRouteId::kNone)
+      return v(NoSource{});
+    if constexpr (NV >= 3) {
+      switch (route) {
+        case SourceRouteId::kNone:
+          break;  // handled above (any transport); kept for switch completeness
+        case SourceRouteId::kPotential:
+          return v(PotentialForce{Real(m.qom)});
+        case SourceRouteId::kGravity:
+          return v(GravityForce{});
+        case SourceRouteId::kMagneticLorentz:
+          return v(MagneticLorentzForce{Real(m.qom)});
+        case SourceRouteId::kPotentialMagneticLorentz:
+          return v(CompositeSource<PotentialForce, MagneticLorentzForce>{
+              PotentialForce{Real(m.qom)}, MagneticLorentzForce{Real(m.qom)}});
+      }
+    }
   }
   throw std::runtime_error("source '" + m.source +
                            "' invalid here (requires a fluid transport >= 3 variables, or 'none')");
 }
 
-/// Builds the elliptic right-hand-side brick and calls v(elliptic).
+/// Builds the elliptic right-hand-side brick and calls v(elliptic). Like dispatch_transport: the tag
+/// is validated ONCE (validate_elliptic throws the historical byte-identical message on an unknown
+/// tag) and then parsed into the typed EllipticRouteId, so the switch selects the brick by the typed
+/// enumerator (a new elliptic is a catalog/route row plus a `case`). The parse cannot fail after
+/// validate_elliptic, so the default label is the defense-in-depth registry/dispatch guard.
 template <class Visitor>
 POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
   validate_elliptic(m.elliptic);  // registry rejection (single source of the valid tags + message)
-  if (m.elliptic == "charge")
-    return v(ChargeDensity{Real(m.q)});
-  if (m.elliptic == "background")
-    return v(BackgroundDensity{Real(m.alpha), Real(m.n0)});
-  if (m.elliptic == "gravity")
-    return v(GravityCoupling{Real(m.sign), Real(m.four_pi_G), Real(m.rho0)});
+  switch (parse_elliptic_route(m.elliptic)) {
+    case EllipticRouteId::kCharge:
+      return v(ChargeDensity{Real(m.q)});
+    case EllipticRouteId::kBackground:
+      return v(BackgroundDensity{Real(m.alpha), Real(m.n0)});
+    case EllipticRouteId::kGravity:
+      return v(GravityCoupling{Real(m.sign), Real(m.four_pi_G), Real(m.rho0)});
+  }
   // Reached only on a registry/dispatch inconsistency (see dispatch_transport): unknown user tags
   // were already rejected by validate_elliptic above.
   throw std::runtime_error("elliptic '" + m.elliptic +

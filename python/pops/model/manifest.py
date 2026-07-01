@@ -149,13 +149,15 @@ class ModuleManifest:
     Replaces ModelSpec as the central, inspectable representation of a model: the state / field
     spaces, the parameters, the aux declarations, the per-direction eigenvalue presence, the typed
     :class:`OperatorRegistryManifest`, the Module capabilities, plus the NATIVE route-registry
-    components (version / hash / signature from :mod:`pops.runtime.routes`) and an ABI-requirements
-    slot. ``abi_requirements["abi_key"]`` is left ``None`` here (the ABI key is bound at compile
-    time); the compile seam fills it from the CompiledProblem handle. Every field is JSON-ready.
+    components (version / hash / signature from :mod:`pops.runtime.routes`), the NATIVE brick catalog
+    component (version + canonical ids from :mod:`pops.runtime.brick_catalog`, ADC-586, so a generated
+    artifact can reference the native bricks by id) and an ABI-requirements slot.
+    ``abi_requirements["abi_key"]`` is left ``None`` here (the ABI key is bound at compile time); the
+    compile seam fills it from the CompiledProblem handle. Every field is JSON-ready.
     """
 
     def __init__(self, *, name, state_spaces, field_spaces, params, aux, has_eigenvalues,
-                 operators, capabilities, native_routes, abi_requirements):
+                 operators, capabilities, native_routes, native_catalog, abi_requirements):
         self.schema_version = SCHEMA_VERSION
         self.name = name
         self.state_spaces = dict(state_spaces)
@@ -166,6 +168,7 @@ class ModuleManifest:
         self.operators = operators              # OperatorRegistryManifest
         self.capabilities = dict(capabilities)
         self.native_routes = dict(native_routes)
+        self.native_catalog = dict(native_catalog)
         self.abi_requirements = dict(abi_requirements)
 
     def to_dict(self):
@@ -178,6 +181,7 @@ class ModuleManifest:
                 "operators": self.operators.to_dict(),
                 "capabilities": dict(self.capabilities),
                 "native_routes": dict(self.native_routes),
+                "native_catalog": dict(self.native_catalog),
                 "abi_requirements": dict(self.abi_requirements)}
 
     def to_json(self, path=None, *, indent=2):
@@ -230,6 +234,20 @@ def _native_routes():
             "signature": route_registry_signature()}
 
 
+def _native_catalog():
+    """The builtin native brick catalog component (version + ids) from pops.runtime.brick_catalog.
+
+    The codegen-facing native-catalog manifest (ADC-586): the route-registry version pins the
+    catalog vocabulary, and the ids are the canonical native bricks a generated artifact can
+    reference. Imported in-builder (like the routes import) so the manifest stays buildable without
+    the compiled ``_pops`` extension.
+    """
+    from pops.runtime.brick_catalog import brick_catalog
+    from pops.runtime.routes import ROUTE_REGISTRY_VERSION
+    return {"version": ROUTE_REGISTRY_VERSION,
+            "bricks": [entry["id"] for entry in brick_catalog()]}
+
+
 def build_module_manifest(module):
     """Build the :class:`ModuleManifest` of @p module WITHOUT mutating it (ADC-585).
 
@@ -260,12 +278,14 @@ def build_module_manifest(module):
     capabilities = dict(caps_fn()) if callable(caps_fn) else {}
 
     routes = _native_routes()
+    catalog = _native_catalog()
     abi_requirements = {"route_registry_signature": routes["signature"], "abi_key": None}
 
     return ModuleManifest(
         name=module.name, state_spaces=state_spaces, field_spaces=field_spaces, params=params,
         aux=aux, has_eigenvalues=has_eigenvalues, operators=operators,
-        capabilities=capabilities, native_routes=routes, abi_requirements=abi_requirements)
+        capabilities=capabilities, native_routes=routes, native_catalog=catalog,
+        abi_requirements=abi_requirements)
 
 
 def _is_manifestable_module(obj):
