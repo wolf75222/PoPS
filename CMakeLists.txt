@@ -117,21 +117,51 @@ target_include_directories(pops INTERFACE
 )
 target_compile_features(pops INTERFACE cxx_std_${POPS_CXX_STD})
 
-# Hints libomp pour AppleClang (qui ne trouve pas libomp seul) : env conda ACTIF (paquet
-# llvm-openmp) d'abord, sinon Homebrew. Sous Kokkos-only il reste UN consommateur : une install
-# Kokkos batie avec Kokkos_ENABLE_OPENMP propage find_dependency(OpenMP REQUIRED) via son
-# KokkosConfig.cmake -- sans ces hints, find_package(Kokkos) echouerait sur macOS. Ce N'EST PAS
-# le backend OpenMP autonome (retire) : uniquement la plomberie de DECOUVERTE de libomp.
+# Hints libomp pour AppleClang (qui ne trouve pas libomp seul). Sous Kokkos-only il reste UN
+# consommateur : une install Kokkos batie avec Kokkos_ENABLE_OPENMP propage
+# find_dependency(OpenMP REQUIRED) via son KokkosConfig.cmake -- sans ces hints,
+# find_package(Kokkos) echouerait sur macOS. Ce N'EST PAS le backend OpenMP autonome (retire) :
+# uniquement la plomberie de DECOUVERTE de libomp.
+#
+# Important macOS: ne jamais melanger deux libomp dans le meme binaire. Si un env conda est actif
+# mais qu'aucun Kokkos conda n'est explicitement demande, find_package(Kokkos) peut trouver le Kokkos
+# Homebrew; forcer alors OpenMP sur conda charge a la fois conda/libomp et Homebrew/libomp via
+# libkokkoscore, puis les tests crashent dans libomp (__kmp_suspend_64 / mutex lock failed).
 # Macro idempotente, no-op hors APPLE ; invoquee AVANT la resolution de Kokkos ci-dessous.
 macro(pops_apple_libomp_hints)
   if(APPLE AND NOT OpenMP_CXX_FOUND)
-    set(LIBOMP_PREFIX "")
+    set(_pops_conda_libomp_prefix "")
     if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/lib/libomp.dylib")
-      set(LIBOMP_PREFIX "$ENV{CONDA_PREFIX}")
+      set(_pops_conda_libomp_prefix "$ENV{CONDA_PREFIX}")
+    endif()
+
+    set(_pops_wants_conda_kokkos FALSE)
+    foreach(_pops_kokkos_hint Kokkos_ROOT Kokkos_DIR POPS_KOKKOS_ROOT)
+      if(DEFINED ENV{${_pops_kokkos_hint}} AND _pops_conda_libomp_prefix
+         AND "$ENV{${_pops_kokkos_hint}}" MATCHES "^${_pops_conda_libomp_prefix}(/|$)")
+        set(_pops_wants_conda_kokkos TRUE)
+      endif()
+    endforeach()
+    if(DEFINED Kokkos_ROOT AND _pops_conda_libomp_prefix
+       AND "${Kokkos_ROOT}" MATCHES "^${_pops_conda_libomp_prefix}(/|$)")
+      set(_pops_wants_conda_kokkos TRUE)
+    endif()
+    if(DEFINED Kokkos_DIR AND _pops_conda_libomp_prefix
+       AND "${Kokkos_DIR}" MATCHES "^${_pops_conda_libomp_prefix}(/|$)")
+      set(_pops_wants_conda_kokkos TRUE)
+    endif()
+
+    set(LIBOMP_PREFIX "")
+    if(_pops_wants_conda_kokkos AND _pops_conda_libomp_prefix)
+      set(LIBOMP_PREFIX "${_pops_conda_libomp_prefix}")
     else()
       execute_process(COMMAND brew --prefix libomp
                       OUTPUT_VARIABLE LIBOMP_PREFIX
                       OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      if((NOT LIBOMP_PREFIX OR NOT EXISTS "${LIBOMP_PREFIX}/lib/libomp.dylib")
+         AND _pops_conda_libomp_prefix)
+        set(LIBOMP_PREFIX "${_pops_conda_libomp_prefix}")
+      endif()
     endif()
     if(LIBOMP_PREFIX AND EXISTS "${LIBOMP_PREFIX}/lib/libomp.dylib")
       set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include"
