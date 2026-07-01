@@ -6,6 +6,13 @@ policies (IMEX / SourceImplicit / IMEXRK / Implicit / Role / CondensedSchur / Sp
 live in ``_bricks_time`` (split out for the 500-line cap). ``pops.runtime.bricks`` re-exports
 these together with the model bricks in ``_bricks_model`` and the time policies in ``_bricks_time``.
 """
+from pops.runtime.routes import (
+    LIMITER_MINMOD, LIMITER_NONE, LIMITER_VANLEER, LIMITER_WENO5,
+    RECON_CONSERVATIVE, RECON_PRIMITIVE,
+    RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, RIEMANN_RUSANOV,
+    TIME_EULER, TIME_EXPLICIT, TIME_SSPRK3,
+    resolve as _resolve_route,
+)
 
 
 # --- Inter-species couplings (operator-split): objects passed to sim.add_coupling ---
@@ -39,20 +46,25 @@ class ThermalExchange:
 
 # --- Spatial scheme + time treatment (per block) ------------------------
 # Spec 5 sec.7: the spatial scheme is chosen with TYPED descriptors, never bare strings. The
-# tables below map each accepted descriptor scheme to the canonical token the C++ ABI consumes,
-# and name the typed alternative a rejected string should point at (reject_string_selector).
-# The descriptor category gates which slot a descriptor may fill (a riemann flux in the limiter
-# slot is a clear error, not a silent swap).
-_LIMITER_SCHEMES = {  # reconstruction / limiter descriptor scheme -> Spatial.limiter token
-    "none": "none", "firstorder": "none",
-    "minmod": "minmod", "vanleer": "vanleer",
-    "weno5": "weno5", "weno5z": "weno5",
+# tables below map each accepted descriptor scheme to the TYPED NATIVE ROUTE (ADC-584) the
+# lowering layer carries -- a pops.runtime.routes.Route, whose str value IS the canonical token
+# the C++ ABI consumes, so the wire crossing stays byte-identical while the identity/requirements
+# become typed. reject_string_selector names the typed alternative a rejected string should point
+# at. The descriptor category gates which slot a descriptor may fill (a riemann flux in the
+# limiter slot is a clear error, not a silent swap).
+_LIMITER_SCHEMES = {  # reconstruction / limiter descriptor scheme -> Spatial.limiter route
+    "none": LIMITER_NONE, "firstorder": LIMITER_NONE,
+    "minmod": LIMITER_MINMOD, "vanleer": LIMITER_VANLEER,
+    "weno5": LIMITER_WENO5, "weno5z": LIMITER_WENO5,
 }
-_FLUX_SCHEMES = {  # riemann descriptor scheme -> Spatial.flux token
-    "rusanov": "rusanov", "hll": "hll", "hllc": "hllc", "roe": "roe", "user": "user",
+_FLUX_SCHEMES = {  # riemann descriptor scheme -> Spatial.flux route
+    # "user" stays a plain token: an EXTERNAL C++ flux brick resolves through the external-brick
+    # catalog manifest (pops.descriptors), not the native route registry.
+    "rusanov": RIEMANN_RUSANOV, "hll": RIEMANN_HLL, "hllc": RIEMANN_HLLC, "roe": RIEMANN_ROE,
+    "user": "user",
 }
-_RECON_SCHEMES = {  # variables descriptor scheme -> Spatial.recon token
-    "conservative": "conservative", "primitive": "primitive",
+_RECON_SCHEMES = {  # variables descriptor scheme -> Spatial.recon route
+    "conservative": RECON_CONSERVATIVE, "primitive": RECON_PRIMITIVE,
 }
 _LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer(), "
                     "pops.numerics.reconstruction.FirstOrder() / WENO5() / MUSCL(...)")
@@ -145,8 +157,16 @@ class Spatial:
             limiter = reconstruction
         # Private fast path: _tokens = (limiter, flux, recon) already-lowered canonical strings.
         # Used by Spatial._from_tokens (the lib-descriptor lowering, whose options are strings).
+        # Each token is resolved to its TYPED route (ADC-584): an unknown token is refused here,
+        # before the C++ boundary, instead of drifting through as a free string.
         if _tokens is not None:
             lim_tok, flux_tok, recon_tok = _tokens
+            if lim_tok is not None:
+                lim_tok = _resolve_route("limiter", lim_tok, context="Spatial")
+            if flux_tok is not None and flux_tok != "user":
+                flux_tok = _resolve_route("riemann", flux_tok, context="Spatial")
+            if recon_tok is not None:
+                recon_tok = _resolve_route("recon", recon_tok, context="Spatial")
         else:
             lim_tok = _lower_selector(
                 limiter, param="limiter", schemes=_LIMITER_SCHEMES,
@@ -160,19 +180,20 @@ class Spatial:
         # Boolean shortcuts (typed flags, not strings): override the limiter / recon slot. They
         # stay as convenience sugar -- only the bare-string selectors are forbidden (Spec 5 sec.7).
         if none:
-            lim_tok = "none"
+            lim_tok = LIMITER_NONE
         elif minmod:
-            lim_tok = "minmod"
+            lim_tok = LIMITER_MINMOD
         elif vanleer:
-            lim_tok = "vanleer"
+            lim_tok = LIMITER_VANLEER
         elif weno5:
-            lim_tok = "weno5"
+            lim_tok = LIMITER_WENO5
         if primitive:
-            recon_tok = "primitive"
-        # Canonical defaults (mirror the historical minmod + rusanov + conservative).
-        self.limiter = lim_tok if lim_tok is not None else "minmod"
-        self.flux = flux_tok if flux_tok is not None else "rusanov"
-        self.recon = recon_tok if recon_tok is not None else "conservative"
+            recon_tok = RECON_PRIMITIVE
+        # Canonical defaults (mirror the historical minmod + rusanov + conservative). Every slot
+        # holds a TYPED Route (ADC-584) whose str value is the historical token, byte-identical.
+        self.limiter = lim_tok if lim_tok is not None else LIMITER_MINMOD
+        self.flux = flux_tok if flux_tok is not None else RIEMANN_RUSANOV
+        self.recon = recon_tok if recon_tok is not None else RECON_CONSERVATIVE
         pf = 0.0 if positivity_floor is None else float(positivity_floor)
         if not (pf >= 0.0):
             raise ValueError("Spatial: positivity_floor >= 0 (0/None = inactive; received %r)"
@@ -191,6 +212,22 @@ class Spatial:
         if self.wave_speed_cache:
             body += ", wave_speed_cache=True"
         return "Spatial(%s)" % body
+
+    def routes(self):
+        """The typed native routes chosen by this spatial scheme (ADC-584 inspection).
+
+        A structured dict slot -> route manifest (family, id, token, native entry point,
+        requirements, limitations). The ``user`` external-flux token has no native route (it
+        resolves through the external-brick catalog manifest) and reports a minimal entry.
+        """
+        def _manifest(slot_route):
+            if hasattr(slot_route, "manifest"):
+                return slot_route.manifest()
+            return {"family": "riemann", "id": "riemann.user", "token": str(slot_route),
+                    "native_entry": "external brick (pops.descriptors catalog)",
+                    "requirements": [], "limitations": []}
+        return {"limiter": _manifest(self.limiter), "riemann": _manifest(self.flux),
+                "recon": _manifest(self.recon)}
 
     @classmethod
     def _from_tokens(cls, limiter, flux, recon, *, positivity_floor=None, wave_speed_cache=False):
@@ -308,6 +345,12 @@ class Explicit:
         self.substeps = int(substeps)
         self.stride = int(stride)
         self.method = method
-        # kind passed to the compiled facade: "explicit" (SSPRK2, bit-identical default), "ssprk3"
-        # or "euler" (order 1, fidelity to first-order references -- validation, never default).
-        self.kind = method if method in ("ssprk3", "euler") else "explicit"
+        # kind passed to the compiled facade: the TYPED time route (ADC-584) whose str value is
+        # the historical token -- "explicit" (SSPRK2, bit-identical default), "ssprk3" or "euler"
+        # (order 1, fidelity to first-order references -- validation, never default).
+        self.kind = (TIME_SSPRK3 if method == "ssprk3"
+                     else TIME_EULER if method == "euler" else TIME_EXPLICIT)
+
+    def routes(self):
+        """The typed native routes chosen by this time treatment (ADC-584 inspection)."""
+        return {"time": self.kind.manifest()}

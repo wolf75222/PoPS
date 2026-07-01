@@ -21,7 +21,8 @@ class RuntimeInspectionReport:
     report_type = "runtime_inspection"
 
     def __init__(self, *, runtime, blocks, clock, runtime_environment, capabilities, program,
-                 profile, history, cache, diagnostics, options=None, amr=None, limitations=None):
+                 profile, history, cache, diagnostics, options=None, amr=None, limitations=None,
+                 routes=None):
         self.runtime = runtime
         self.blocks = list(blocks)
         self.clock = dict(clock)
@@ -35,6 +36,7 @@ class RuntimeInspectionReport:
         self.options = dict(options) if options is not None else {}
         self.amr = dict(amr) if amr is not None else None
         self.limitations = list(limitations or [])
+        self.routes = dict(routes) if routes is not None else {}
 
     def to_dict(self):
         return {
@@ -53,6 +55,7 @@ class RuntimeInspectionReport:
             "options": dict(self.options),
             "amr": dict(self.amr) if self.amr is not None else None,
             "limitations": [dict(row) for row in self.limitations],
+            "routes": dict(self.routes),
         }
 
     def to_json(self, path=None, *, indent=2):
@@ -90,6 +93,11 @@ class RuntimeInspectionReport:
         opts = self.options
         lines.append("  options     : blocks=%d source_stages=%d"
                      % (len(opts.get("blocks", [])), len(opts.get("source_stages", []))))
+        if self.routes:
+            lines.append("  routes      : %d block(s), poisson=%s"
+                         % (len(self.routes.get("blocks", [])),
+                            (self.routes.get("poisson") or {}).get("solver", {}).get("id",
+                                                                                     "(none)")))
         if self.amr is not None:
             lines.append("  amr         : levels=%s patches=%s"
                          % (self.amr.get("max_levels"), _amr_patch_count(self.amr)))
@@ -123,7 +131,8 @@ def build_runtime_inspection(sim, *, runtime):
         diagnostics=_diagnostics(sim, options),
         options=options,
         amr=_amr(sim) if runtime == "amr_system" else None,
-        limitations=limitations)
+        limitations=limitations,
+        routes=_routes(options))
 
 
 def _call(obj, name, default=None, *args):
@@ -209,6 +218,52 @@ def _options(sim, runtime):
         "time": {"scheme": None, "gauss_policy": None},
         "amr": None,
     }
+
+
+def _try_route(family, token):
+    """Route manifest of @p token in @p family, or a minimal unregistered row (ADC-584).
+
+    The effective options carry the wire tokens; MOST map to a typed native route. A token
+    outside the registry is NOT an error here: a compiled DSL block reports its generated
+    transport (not a builtin brick), and inspection must describe it rather than refuse it.
+    """
+    if not token:
+        return None
+    from pops.runtime.routes import resolve
+    try:
+        return resolve(family, str(token)).manifest()
+    except ValueError:
+        return {"family": family, "id": None, "token": str(token),
+                "native_entry": "unregistered (compiled/DSL or external route)",
+                "requirements": [], "limitations": []}
+
+
+def _routes(options):
+    """The typed native routes USED by the live runtime (ADC-584 inspection).
+
+    Derived from the effective options report (which already carries the per-block wire
+    tokens): each block's scheme/time/model tokens and the Poisson rhs/solver/bc/wall are
+    mapped to their route manifests (family, id, native entry point, requirements,
+    limitations).
+    """
+    blocks = []
+    for blk in options.get("blocks", []) or []:
+        row = {"name": blk.get("name")}
+        for family, key in (("limiter", "limiter"), ("riemann", "riemann"), ("recon", "recon"),
+                            ("time", "time"), ("transport", "transport"), ("source", "source"),
+                            ("elliptic", "elliptic")):
+            manifest = _try_route(family, blk.get(key))
+            if manifest is not None:
+                row[family] = manifest
+        blocks.append(row)
+    poisson = {}
+    pois = options.get("poisson", {}) or {}
+    for family, key in (("poisson_rhs", "rhs"), ("field_solver", "solver"),
+                        ("poisson_bc", "bc"), ("wall", "wall")):
+        manifest = _try_route(family, pois.get(key))
+        if manifest is not None:
+            poisson[family if family != "field_solver" else "solver"] = manifest
+    return {"blocks": blocks, "poisson": poisson}
 
 
 def _amr(sim):
