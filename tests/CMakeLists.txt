@@ -223,6 +223,7 @@ pops_add_test(test_polar_condensed_schur_source_stepper)
 pops_add_test(test_krylov_solver)
 pops_add_test(test_numerical_defaults)
 pops_add_test(test_fallback_diagnostics)
+pops_add_test(test_structured_solver_diagnostics)
 pops_add_test(test_public_validation_errors)  # ADC-605: release-active validation instead of public asserts
 # ADC-405a : couche de Krylov GENERIQUE matrice-libre (generic_krylov.hpp) -- Richardson, CG,
 # BiCGStab -- l'operateur passe en CALLBACK (ApplyFn). Valide les trois boucles sur un operateur

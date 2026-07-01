@@ -75,6 +75,18 @@ void init_system(py::module_& m) {
             else
               d["failed_cell"] = py::none();
             d["failed_component"] = static_cast<int>(r.failed_comp);
+            py::list diagnostics;
+            for (const RuntimeDiagnosticEvent& event : r.diagnostics) {
+              py::dict row;
+              row["code"] = event.code;
+              row["component"] = event.component;
+              row["severity"] = event.severity;
+              row["message"] = event.message;
+              row["iteration"] = event.iteration;
+              row["value"] = event.value;
+              diagnostics.append(row);
+            }
+            d["diagnostics"] = diagnostics;
             return d;
           },
           py::arg("name"))
@@ -397,6 +409,23 @@ void init_system(py::module_& m) {
       .def("profile_snapshot",
            [](System& s) { return profile_snapshot_to_dict(s.profiler().snapshot()); },
            "Structured profiling snapshot: schema_version, enabled, scopes and counters.")
+      .def(
+          "solver_diagnostics",
+          [](const System& s) {
+            py::list rows;
+            for (const RuntimeDiagnosticEvent& event : s.solver_diagnostics()) {
+              py::dict row;
+              row["code"] = event.code;
+              row["component"] = event.component;
+              row["severity"] = event.severity;
+              row["message"] = event.message;
+              row["iteration"] = event.iteration;
+              row["value"] = event.value;
+              rows.append(row);
+            }
+            return rows;
+          },
+          "Structured solver/runtime diagnostic events; empty unless diagnostics were enabled.")
       .def("dt_hotspot", &System::dt_hotspot,
            "Diagnostic (ADC-182): (w, i, j) of the GLOBAL cell that dominates the transport CFL "
            "bound "

@@ -208,12 +208,39 @@ int main() {
     std::printf("FAIL (3) : pas de throw / pas d'echec rapporte (n_failed=%.0f)\n", repf.n_failed);
     return 1;
   }
+  if (repf.diagnostics.count("newton.fail_policy.throw") != 1) {
+    std::printf("FAIL (3) : fail_policy=throw non reporte comme evenement structure\n");
+    return 1;
+  }
   if (repf.failed_i != 2 || repf.failed_j != 3) {
     std::printf("FAIL (3) : cellule fautive (%g, %g) != (2, 3)\n", repf.failed_i, repf.failed_j);
     return 1;
   }
   std::printf("OK  (3) cellule fautive identifiee (%g, %g), composante %g\n", repf.failed_i,
               repf.failed_j, repf.failed_comp);
+
+  // --- (3b) warn : pas de stderr requis, l'evenement est dans NewtonReport ---------------------
+  pops::MultiFab Unw = make_mf(ba, dm, 3);
+  for (int li = 0; li < Unw.local_size(); ++li) {
+    pops::Array4 u = Unw.fab(li).array();
+    const pops::Box2D b = Unw.box(li);
+    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+      for (int i = b.lo[0]; i <= b.hi[0]; ++i) {
+        u(i, j, 0) = 1.0;
+        u(i, j, 1) = 0.2;
+        u(i, j, 2) = 0.1;
+      }
+  }
+  Unw.fab(0).array()(2, 3, 0) = -4.0;
+  pops::NewtonOptions opw;
+  opw.fail_policy = pops::NewtonOptions::kFailWarn;
+  pops::NewtonReport repw;
+  pops::backward_euler_source(nm, aux, Unw, 0.1, opw, {}, &repw);
+  if (repw.diagnostics.count("newton.fail_policy.warn") != 1 || repw.n_failed < 1) {
+    std::printf("FAIL (3b) : fail_policy=warn non expose dans NewtonReport\n");
+    return 1;
+  }
+  std::printf("OK  (3b) fail_policy=warn : evenement structure sans stderr\n");
 
   // --- (4) observateur pur : defauts + diagnostics == defauts sans diagnostics (bit-identique) --
   pops::MultiFab Ua = make_mf(ba, dm, 3), Ub = make_mf(ba, dm, 3);

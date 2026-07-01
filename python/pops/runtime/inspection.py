@@ -187,6 +187,7 @@ def _cache(sim):
 
 def _diagnostics(sim, options):
     diagnostics = dict(_call(sim, "program_diagnostics", {}) or {})
+    diagnostics["solver_events"] = list(_call(sim, "solver_diagnostics", []) or [])
     diagnostics["fallbacks"] = fallback_diagnostics_report(options)
     return diagnostics
 

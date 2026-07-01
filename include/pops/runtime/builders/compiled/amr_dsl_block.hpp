@@ -588,13 +588,15 @@ AmrRuntimeBlock build_amr_block(
         mask.active = true;
         mask.flag[c] = true;
       }
-    // NEWTON DIAGNOSTICS (OPT-IN, wave 3): we allocate the AGGREGATE report of the block in a shared_ptr
-    // (STABLE address even after moving the AmrRuntimeBlock into the engine registry) and we
-    // capture its raw pointer in the imex_advance closure. newton_diagnostics==false (default) ->
-    // nreport=nullptr -> backward_euler_source FAST path, bit-identical. The RESET of the report is the
-    // responsibility of AmrRuntime::step (head of the block advance), like System::AdvanceImex.
+    // NEWTON DIAGNOSTICS (wave 3): we allocate the AGGREGATE report of the block in a shared_ptr
+    // (STABLE address even after moving the AmrRuntimeBlock into the engine registry) and capture its
+    // raw pointer in the imex_advance closure. Explicit diagnostics and fail_policy warn/throw need
+    // this report: warn/throw events must be structured, not stderr text. No diagnostics and
+    // fail_policy=none -> nreport=nullptr -> backward_euler_source FAST path, bit-identical. The RESET
+    // of the report is the responsibility of AmrRuntime::step (head of the block advance), like
+    // System::AdvanceImex.
     std::shared_ptr<NewtonReport> nrep;
-    if (newton_diagnostics) {
+    if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
       nrep = std::make_shared<NewtonReport>();
       b.newton_diagnostics = true;
       b.newton_report = nrep;

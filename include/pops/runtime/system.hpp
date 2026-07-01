@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/core/state/variables.hpp>  // VariableSet (role-bearing descriptor carried by each block)
+#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (options of the IMEX source Newton)
 #include <pops/runtime/export.hpp>  // POPS_EXPORT (methods resolved by the native loader through dlopen)
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
@@ -173,6 +174,7 @@ class System {
     double failed_i;     ///< i of ONE faulty cell (-1 if none; max index encoded)
     double failed_j;     ///< j of the same cell (-1 if none)
     double failed_comp;  ///< conservative component of the worst residual of that cell (-1 unknown)
+    std::vector<RuntimeDiagnosticEvent> diagnostics;  ///< structured policy/solver events
   };
   SourceNewtonReport newton_report(const std::string& name) const;
 
@@ -619,6 +621,9 @@ class System {
   bool is_profiling() const;
   void reset_profiling();
   std::string profile_report() const;
+  /// Structured solver/runtime diagnostic events (field solve traces, MG markers when enabled).
+  /// Empty unless the relevant diagnostic path was exercised; no stdout/stderr scraping.
+  std::vector<RuntimeDiagnosticEvent> solver_diagnostics() const;
   /// The System-owned Profiler (a non-owning reference; lives as long as the System). A compiled time
   /// Program reaches it through ProgramContext::profile_node to time each Program node into the SAME
   /// table sim.profile_report() renders -- so per-node scopes ("node:rhs2", ...) accumulate alongside

@@ -660,17 +660,22 @@ struct AmrSystem::Impl {
     // (make_build_params -> bp.newton_options -> build_amr_compiled -> cpl->step -> advance_amr ->
     // backward_euler_source). No more rejection of b.newton_non_default here: a single IMEX block with
     // newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy runs correctly. Default = historical
-    // iters=2 (bit-identical). Still NOT wired in single-block: the newton_diagnostics REPORT
-    // (aggregated newton_report = multi-block engine only; threading it through the coupler subcycling
-    // would be invasive) -> EXPLICIT rejection rather than a silently empty report.
+    // iters=2 (bit-identical). Still NOT wired in single-block: the aggregated Newton REPORT
+    // (newton_report = multi-block engine only; threading it through the coupler subcycling would be
+    // invasive). Therefore diagnostics and warn policy are refused rather than becoming silently empty.
     if (b.newton_diagnostics)
       throw std::runtime_error(
           "AmrSystem : newton_diagnostics (newton_report) is only wired in MULTI-BLOCK "
           "(AmrRuntime runtime engine). In single-block the Newton OPTIONS "
           "(newton_max_iters/rel_tol/"
           "abs_tol/fd_eps/damping/fail_policy) are wired, but not the aggregated report : add a "
-          "2nd block for newton_report, use newton_fail_policy='warn'/'throw', or a single-level "
-          "System for the full report.");
+          "2nd block for newton_report, use newton_fail_policy='throw', or a single-level System "
+          "for the full report.");
+    if (b.newton.fail_policy == NewtonOptions::kFailWarn)
+      throw std::runtime_error(
+          "AmrSystem : newton_fail_policy='warn' requires a structured Newton report, which is only "
+          "wired in MULTI-BLOCK (AmrRuntime runtime engine). Add a 2nd block for newton_report, "
+          "use newton_fail_policy='throw', or use a single-level System for warn diagnostics.");
     const AmrBuildParams bp = make_build_params();
     if (b.is_compiled) {  // compiled path: the builder freezes the types (Model, Limiter, Flux)
       // Zhang-Shu positivity floor (ADC-322): bp.pos_floor (= b.pos_floor, set by set_compiled_block
@@ -1509,7 +1514,8 @@ AmrSystem::SourceNewtonReport AmrSystem::newton_report(const std::string& name) 
                             r.n_failed,
                             r.failed_i,
                             r.failed_j,
-                            r.failed_comp};
+                            r.failed_comp,
+                            r.diagnostics.events};
 }
 
 int AmrSystem::nx() const {

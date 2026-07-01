@@ -37,8 +37,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>   // POPS_TRACE_SOLVE_FIELDS: device diagnostic trace (env-gated, inert by default)
-#include <cstdlib>  // getenv
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW layer (ADC-99); <dlfcn.h> on POSIX
 #include <functional>
 #include <limits>  // std::numeric_limits (per-block CFL: dt = min over blocks)
@@ -51,9 +49,8 @@
 
 namespace pops {
 
-// The DIAGNOSTIC trace of the solve_fields path (pops_trace_sf / pops_sf_mark, milestone #93) was extracted
-// with SystemFieldSolver into include/pops/runtime/system_field_solver.hpp (namespace field_solver);
-// it stays env-gated (POPS_TRACE_SOLVE_FIELDS) and inert by default.
+// The structured DIAGNOSTIC trace of the solve_fields path is owned by SystemFieldSolver
+// (namespace field_solver); it stays env-gated (POPS_TRACE_SOLVE_FIELDS) and inert by default.
 // resolve_implicit_components moved to model_factory.hpp (pops::detail) so the per-transport seam TUs
 // (python/system_<transport>.cpp, ADC-335) share one definition; it is otherwise unchanged.
 
@@ -800,11 +797,13 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   } else {
     const GridContext ctx = P->grid_ctx();
     // Newton options of the IMEX implicit source (defaults = historical constants, bit-identical).
-    // The report (OPT-IN diagnostics) lives in Impl::newton_reports_ in a shared_ptr -> STABLE address
-    // captured by the closures even when the map reallocates at a later add_block.
+    // The report lives in Impl::newton_reports_ in a shared_ptr -> STABLE address captured by the
+    // closures even when the map reallocates at a later add_block. It is allocated for explicit
+    // diagnostics and for fail_policy warn/throw, because those policies must surface as structured
+    // report events rather than stderr text.
     const NewtonOptions& nopts = newton;
     NewtonReport* nreport = nullptr;
-    if (newton_diagnostics) {
+    if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
       auto rep = std::make_shared<NewtonReport>();
       P->newton_reports_[name] = rep;
       nreport = rep.get();
@@ -1012,8 +1011,9 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
   if (it == p_->newton_reports_.end())
     throw std::runtime_error(
         "System::newton_report : Newton diagnostics not enabled for block '" + name +
-        "' ; add the block with newton_diagnostics=true (pops.IMEX(newton_diagnostics=True) / "
-        "pops.SourceImplicit(newton_diagnostics=True))");
+        "' ; add the block with newton_diagnostics=true "
+        "(pops.IMEX(newton_diagnostics=True) / pops.SourceImplicit(newton_diagnostics=True)) "
+        "or newton_fail_policy='warn'/'throw'");
   const NewtonReport& r = *it->second;
   return SourceNewtonReport{r.enabled,
                             r.converged,
@@ -1022,7 +1022,8 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
                             r.n_failed,
                             r.failed_i,
                             r.failed_j,
-                            r.failed_comp};
+                            r.failed_comp,
+                            r.diagnostics.events};
 }
 
 // Body EXTRACTED VERBATIM into pops::native_loader::add_dynamic_block (native_loader.hpp); instantiated
@@ -2079,6 +2080,9 @@ void System::reset_profiling() {
 }
 std::string System::profile_report() const {
   return p_->profiler_.report();
+}
+std::vector<RuntimeDiagnosticEvent> System::solver_diagnostics() const {
+  return p_->fields_.combined_diagnostics_report().events;
 }
 // The System-owned Profiler reference (ADC-459): the compiled-program ProgramContext::profile_node
 // times each Program node into it, so per-node scopes accumulate in the SAME table as the coarse

@@ -87,6 +87,18 @@ void init_amr(py::module_& m) {
             else
               d["failed_cell"] = py::none();
             d["failed_component"] = static_cast<int>(r.failed_comp);
+            py::list diagnostics;
+            for (const RuntimeDiagnosticEvent& event : r.diagnostics) {
+              py::dict row;
+              row["code"] = event.code;
+              row["component"] = event.component;
+              row["severity"] = event.severity;
+              row["message"] = event.message;
+              row["iteration"] = event.iteration;
+              row["value"] = event.value;
+              diagnostics.append(row);
+            }
+            d["diagnostics"] = diagnostics;
             return d;
           },
           py::arg("name"))

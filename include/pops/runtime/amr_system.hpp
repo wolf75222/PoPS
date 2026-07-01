@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>                // BCRec
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
@@ -308,7 +309,8 @@ class AmrSystem {
   ///                 fd_eps / damping / fail_policy. Default {} = historical constants, bit-identical.
   ///                 SUPPORT (wave 3, settled): these OPTIONS are wired in MONO-BLOCK (coupler
   ///                 AmrCouplerMP) AND in MULTI-BLOCK (AmrRuntime engine); the .so loaders
-  ///                 reject them (flat ABI). fail_policy warn/throw works everywhere.
+  ///                 reject them (flat ABI). fail_policy='throw' works everywhere. fail_policy='warn'
+  ///                 requires the structured Newton report, therefore native multi-block.
   /// @param newton_diagnostics  aggregated Newton report (newton_report): wired in NATIVE MULTI-BLOCK
   ///                 only (the mono-block rejects it at build, the .so loaders at the facade). Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
@@ -342,6 +344,7 @@ class AmrSystem {
     double failed_i;     ///< i of ONE faulty cell (-1 if none; max index encoded)
     double failed_j;     ///< j of the same cell (-1 if none)
     double failed_comp;  ///< conserved component of the worst residual of that cell (-1 unknown)
+    std::vector<RuntimeDiagnosticEvent> diagnostics;  ///< structured policy/solver events
   };
   /// @throws std::runtime_error if the block is unknown, in mono-block, on a .so loader, or if the block
   ///         did not enable newton_diagnostics. Forces the lazy build (ensure_built).
