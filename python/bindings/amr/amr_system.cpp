@@ -26,6 +26,29 @@
 
 namespace pops {
 
+namespace {
+bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
+  return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
+         newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
+         diagnostics || newton.damping != kNewtonDefaultDamping ||
+         newton.fail_policy != kNewtonDefaultFailPolicy;
+}
+
+EffectiveNewtonOptions amr_effective_newton_options(const NewtonOptions& newton,
+                                                    bool diagnostics) {
+  EffectiveNewtonOptions out;
+  out.max_iters = newton.max_iters;
+  out.rel_tol = static_cast<double>(newton.rel_tol);
+  out.abs_tol = static_cast<double>(newton.abs_tol);
+  out.fd_eps = static_cast<double>(newton.fd_eps);
+  out.damping = static_cast<double>(newton.damping);
+  out.fail_policy = newton_fail_policy_name(newton.fail_policy);
+  out.diagnostics = diagnostics;
+  out.non_default = amr_newton_options_non_default(newton, diagnostics);
+  return out;
+}
+}  // namespace
+
 // resolve_implicit_components (AMR) moved to amr_block_seam.hpp (pops::detail::
 // resolve_implicit_components_amr) so the per-transport seam TUs share one definition; otherwise
 // unchanged (AmrSystem-specific error wording preserved verbatim).
@@ -53,7 +76,7 @@ struct AmrSystem::Impl {
     std::vector<std::string> implicit_vars, implicit_roles;
     int substeps = 1;
     int stride = 1;  // hold-then-catch-up cadence (multi-block; cf. AmrRuntimeBlock)
-    double gamma = 1.4;
+    double gamma = static_cast<double>(kPhysicalDefaultGamma);
     // Compiled SINGLE-BLOCK path: type-erasing builder (AmrCompiledHooks of a concrete AmrCouplerMP),
     // invoked at lazy build when the compiled block is ALONE (AmrCouplerMP path, bit-identical).
     std::function<AmrCompiledHooks(const AmrBuildParams&)> compiled_hooks_builder;
@@ -97,7 +120,7 @@ struct AmrSystem::Impl {
   };
 
   std::vector<BlockSpec> blocks;
-  double gamma = 1.4;  // gamma of the FIRST block (compat: read by the single-block path)
+  double gamma = static_cast<double>(kPhysicalDefaultGamma);  // gamma of the FIRST block (compat)
 
   // Coupled inter-species sources (compiled pops.dsl.CoupledSource, flat P5 bytecode ABI) FROZEN at
   // add_coupled_source and injected into the AmrRuntime runtime engine at lazy build (build_multi).
@@ -116,7 +139,8 @@ struct AmrSystem::Impl {
   };
   std::vector<CoupledSourceSpec> coupled_sources;
 
-  double refine_threshold = 1e30;  // 1e30 => no refinement by default
+  double refine_threshold =
+      static_cast<double>(kAmrRefinementDisabledThreshold);  // no refinement by default
   // ADC-296: refinement variable selected by NAME (refine_var_name) XOR by physical ROLE
   // (refine_var_role). BOTH empty (default) => component 0 (historical density criterion, bit-identical).
   // Resolved PER BLOCK at build_multi against the block's cons_vars (STRICT, no silent comp-0 fallback).
@@ -636,17 +660,22 @@ struct AmrSystem::Impl {
     // (make_build_params -> bp.newton_options -> build_amr_compiled -> cpl->step -> advance_amr ->
     // backward_euler_source). No more rejection of b.newton_non_default here: a single IMEX block with
     // newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy runs correctly. Default = historical
-    // iters=2 (bit-identical). Still NOT wired in single-block: the newton_diagnostics REPORT
-    // (aggregated newton_report = multi-block engine only; threading it through the coupler subcycling
-    // would be invasive) -> EXPLICIT rejection rather than a silently empty report.
+    // iters=2 (bit-identical). Still NOT wired in single-block: the aggregated Newton REPORT
+    // (newton_report = multi-block engine only; threading it through the coupler subcycling would be
+    // invasive). Therefore diagnostics and warn policy are refused rather than becoming silently empty.
     if (b.newton_diagnostics)
       throw std::runtime_error(
           "AmrSystem : newton_diagnostics (newton_report) is only wired in MULTI-BLOCK "
           "(AmrRuntime runtime engine). In single-block the Newton OPTIONS "
           "(newton_max_iters/rel_tol/"
           "abs_tol/fd_eps/damping/fail_policy) are wired, but not the aggregated report : add a "
-          "2nd block for newton_report, use newton_fail_policy='warn'/'throw', or a single-level "
-          "System for the full report.");
+          "2nd block for newton_report, use newton_fail_policy='throw', or a single-level System "
+          "for the full report.");
+    if (b.newton.fail_policy == NewtonOptions::kFailWarn)
+      throw std::runtime_error(
+          "AmrSystem : newton_fail_policy='warn' requires a structured Newton report, which is only "
+          "wired in MULTI-BLOCK (AmrRuntime runtime engine). Add a 2nd block for newton_report, "
+          "use newton_fail_policy='throw', or use a single-level System for warn diagnostics.");
     const AmrBuildParams bp = make_build_params();
     if (b.is_compiled) {  // compiled path: the builder freezes the types (Model, Limiter, Flux)
       // Zhang-Shu positivity floor (ADC-322): bp.pos_floor (= b.pos_floor, set by set_compiled_block
@@ -740,10 +769,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   // keeps iters=2 frozen, non-default options are REJECTED there at build (ensure_built), never ignored.
   // Range check shared with System::add_block (validate_newton_options, in implicit_stepper.hpp).
   validate_newton_options(newton, "AmrSystem::add_block");
-  const bool newton_non_default = newton.max_iters != 2 || newton.rel_tol != 0.0 ||
-                                  newton.abs_tol != 0.0 || newton.fd_eps != 1e-7 ||
-                                  newton.damping != 1.0 ||
-                                  newton.fail_policy != NewtonOptions::kFailNone;
+  const bool newton_non_default = amr_newton_options_non_default(newton);
   if (time != "imex" && newton_non_default)
     throw std::runtime_error("AmrSystem::add_block : Newton options require time='imex'");
   // newton_diagnostics (newton_report) requires time='imex' (the report comes from the IMEX source
@@ -1066,6 +1092,17 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // The .so stays loaded (RTLD_GLOBAL) for the duration of the process: the type-erasing builder
   // installed by set_compiled_block captures code (header template) that lives there. We do NOT close it.
 #endif  // _WIN32 (production AMR POSIX-only; Windows = throw, ADC-100)
+  const int installed_idx = p_->block_index(name);
+  if (installed_idx >= 0) {
+    Impl::BlockSpec& b = p_->blocks[static_cast<std::size_t>(installed_idx)];
+    b.limiter = limiter;
+    b.riemann = riemann;
+    b.recon_prim = (recon == "primitive");
+    b.imex = (time == "imex");
+    b.gamma = gamma;
+    b.substeps = substeps;
+    b.pos_floor = positivity_floor;
+  }
 }
 
 void AmrSystem::set_refinement(double threshold, const std::string& variable,
@@ -1076,6 +1113,8 @@ void AmrSystem::set_refinement(double threshold, const std::string& variable,
     throw std::runtime_error(
         "AmrSystem::set_refinement : select the refinement variable by NAME (variable=) or by ROLE "
         "(role=), not both");
+  if (!std::isfinite(threshold))
+    throw std::runtime_error("AmrSystem::set_refinement : threshold must be finite");
   p_->refine_threshold = threshold;
   p_->refine_var_name = variable;
   p_->refine_var_role = role;
@@ -1093,6 +1132,8 @@ void AmrSystem::set_phi_refinement(double grad_threshold) {
   // 2nd add_block). In SINGLE-BLOCK the threshold stays without effect: the AmrCouplerMP path regrids on
   // density alone (no separate phi predicate) and does not call build_multi -> phi_grad_threshold is ignored,
   // without illusion (the phi predicate only makes sense on the multi-block runtime engine).
+  if (!std::isfinite(grad_threshold))
+    throw std::runtime_error("AmrSystem::set_phi_refinement : grad_threshold must be finite");
   p_->phi_grad_threshold = grad_threshold;
 }
 
@@ -1473,7 +1514,8 @@ AmrSystem::SourceNewtonReport AmrSystem::newton_report(const std::string& name) 
                             r.n_failed,
                             r.failed_i,
                             r.failed_j,
-                            r.failed_comp};
+                            r.failed_comp,
+                            r.diagnostics.events};
 }
 
 int AmrSystem::nx() const {
@@ -1806,6 +1848,92 @@ std::vector<std::string> AmrSystem::block_names() const {
   for (const auto& b : p_->blocks)
     out.push_back(b.name);
   return out;
+}
+
+EffectiveOptionsReport AmrSystem::effective_options_report() const {
+  EffectiveOptionsReport report;
+  report.runtime = "amr_system";
+  report.has_amr = true;
+  report.time_scheme = p_->schur_strang ? "strang" : "lie";
+  report.gauss_policy = "restart";
+  report.poisson.rhs = p_->p_rhs;
+  report.poisson.solver = p_->p_solver;
+  report.poisson.bc = p_->p_bc;
+  report.poisson.wall = p_->p_wall;
+  report.poisson.wall_radius = p_->p_wall_radius;
+  report.poisson.epsilon = 1.0;
+  report.poisson.abs_tol = static_cast<double>(kMGDefaultAbsTol);
+  report.amr_refinement.threshold = p_->refine_threshold;
+  report.amr_refinement.disabled =
+      !(p_->refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold));
+  report.amr_refinement.disabled_policy =
+      report.amr_refinement.disabled ? "legacy_abi_sentinel_threshold" : "explicit_threshold";
+  report.amr_refinement.variable = p_->refine_var_name;
+  report.amr_refinement.role = p_->refine_var_role;
+  report.amr_refinement.phi_grad_threshold = p_->phi_grad_threshold;
+  report.amr_refinement.phi_refinement_enabled =
+      p_->phi_grad_threshold > static_cast<double>(kAmrPhiRefinementDisabledThreshold);
+
+  for (const Impl::BlockSpec& b : p_->blocks) {
+    EffectiveBlockOptions row;
+    row.name = b.name;
+    row.route = b.is_compiled ? "native_loader" : "native_model";
+    row.compiled = b.is_compiled;
+    row.transport = b.is_compiled ? "compiled_artifact" : b.spec.transport;
+    row.source = b.is_compiled ? "compiled_artifact" : b.spec.source;
+    row.elliptic = b.is_compiled ? "compiled_artifact" : b.spec.elliptic;
+    row.limiter = b.limiter;
+    row.riemann = b.riemann;
+    row.recon = b.recon_prim ? "primitive" : "conservative";
+    row.time = b.imex ? "imex" : (b.time_method == 1 ? "ssprk3" : "explicit");
+    row.time_method = b.imex ? "imex" : (b.time_method == 1 ? "ssprk3" : "euler");
+    row.imex = b.imex;
+    row.substeps = b.substeps;
+    row.stride = b.stride;
+    row.evolve = true;
+    row.implicit_vars = b.implicit_vars;
+    row.implicit_roles = b.implicit_roles;
+    row.newton = amr_effective_newton_options(b.newton, b.newton_diagnostics);
+    row.positivity_floor = b.pos_floor;
+    row.gamma = b.gamma;
+    if (!b.is_compiled) {
+      row.B0 = b.spec.B0;
+      row.cs2 = b.spec.cs2;
+      row.vacuum_floor = b.spec.vacuum_floor;
+      row.qom = b.spec.qom;
+      row.q = b.spec.q;
+      row.alpha = b.spec.alpha;
+      row.n0 = b.spec.n0;
+      row.sign = b.spec.sign;
+      row.four_pi_G = b.spec.four_pi_G;
+      row.rho0 = b.spec.rho0;
+    }
+    report.blocks.push_back(std::move(row));
+
+    if (b.schur) {
+      EffectiveSourceStageOptions stage;
+      stage.block = b.name;
+      stage.kind = "electrostatic_lorentz";
+      stage.geometry = "amr";
+      stage.theta = b.schur_theta;
+      stage.alpha = b.schur_alpha;
+      stage.requested_krylov_tol = b.schur_krylov_tol;
+      stage.requested_krylov_max_iters = b.schur_krylov_max_iters;
+      stage.effective_krylov_tol =
+          b.schur_krylov_tol > 0.0 ? b.schur_krylov_tol
+                                   : static_cast<double>(kKrylovDefaultRelTol);
+      stage.effective_krylov_max_iters =
+          b.schur_krylov_max_iters > 0 ? b.schur_krylov_max_iters
+                                       : kSchurKrylovCartesianMaxIters;
+      stage.density = b.schur_density;
+      stage.momentum_x = b.schur_momentum_x;
+      stage.momentum_y = b.schur_momentum_y;
+      stage.energy = b.schur_energy;
+      stage.bz_aux_component = kAuxBaseComps;
+      report.source_stages.push_back(std::move(stage));
+    }
+  }
+  return report;
 }
 int AmrSystem::n_patches() {
   p_->ensure_built();

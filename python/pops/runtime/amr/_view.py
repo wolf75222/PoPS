@@ -182,6 +182,10 @@ class AmrRuntimeView:
             limitations=envelope["limitations"],
             config_available=envelope["available"])
 
+    def inspect(self):
+        """Return the structured AMR hierarchy inspection report (ADC-591)."""
+        return self.hierarchy_snapshot()
+
     def __repr__(self):
         return "AmrRuntimeView(blocks=%r)" % (self._block_names(),)
 

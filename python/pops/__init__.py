@@ -38,6 +38,9 @@ from pops.runtime.threading import set_threads, has_kokkos, parallel_info  # noq
 from pops.runtime.doctor import doctor, capabilities  # noqa: F401
 from pops.runtime.mesh import CartesianMesh, PolarMesh, AuxHalo  # noqa: F401
 from pops.runtime.profile import Profile, PerformanceSummary  # noqa: F401
+from pops.runtime.inspection import RuntimeInspectionReport  # noqa: F401
+from pops.runtime.defaults import numerical_defaults_report  # noqa: F401
+from pops.runtime.fallbacks import fallback_diagnostics_report, reset_fallback_diagnostics  # noqa: F401
 from pops.runtime.bricks import (  # noqa: F401
     Scalar, FluidState, ExB, CompressibleFlux, IsothermalFlux,
     NoSource, PotentialForce, GravityForce, MagneticLorentzForce, PotentialMagneticForce,
@@ -65,10 +68,13 @@ __all__ = [
     "elliptic", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "EllipticSolver", "EllipticModel",
     "Ionization", "Collision", "ThermalExchange",
-    "Profile", "PerformanceSummary",
+    "Profile", "PerformanceSummary", "RuntimeInspectionReport",
+    "numerical_defaults_report", "fallback_diagnostics_report", "reset_fallback_diagnostics",
     "time", "model", "math", "physics", "lib", "mesh",
     "params", "output", "external", "fields", "linalg", "solvers", "experimental",
     "abi_key", "capabilities", "inspect_capabilities", "inspect_amr",
+    "native_capability_report",
+    "runtime_environment_report", "validate_runtime_environment", "RuntimeCapabilityError",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "compile_problem", "CompiledProblem", "CompiledTime",
     "compile_library", "read_library_manifest", "LibraryManifest",
@@ -96,7 +102,10 @@ from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias 
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
     LibraryManifest, compile_library, read_library_manifest)
 from .time import CompiledTime  # noqa: E402,F401  (re-export: compiled-Program time policy)
-from ._capabilities import inspect_capabilities, inspect_amr  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + AMR report)
+from ._capabilities import (  # noqa: E402,F401  (Spec 5: descriptor-sourced matrix + native reports)
+    inspect_capabilities, inspect_amr, native_capability_report)
+from .runtime_environment import (  # noqa: E402,F401
+    RuntimeCapabilityError, runtime_environment_report, validate_runtime_environment)
 
 
 # LAZY pops.compile_problem / pops.CompiledProblem (PEP 562): the codegen engine pulls numpy at

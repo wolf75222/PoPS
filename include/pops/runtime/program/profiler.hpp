@@ -34,6 +34,28 @@ class Profiler {
     double mean_s() const { return count != 0 ? total_s / static_cast<double>(count) : 0.0; }
   };
 
+  struct ScopeSnapshot {
+    std::string name;
+    std::uint64_t count = 0;
+    double total_s = 0.0;
+    double mean_s = 0.0;
+    double min_s = 0.0;
+    double max_s = 0.0;
+  };
+
+  struct CounterSnapshot {
+    std::string name;
+    std::int64_t value = 0;
+  };
+
+  struct Snapshot {
+    int schema_version = 1;
+    bool enabled = false;
+    double total_s = 0.0;
+    std::vector<ScopeSnapshot> scopes;
+    std::vector<CounterSnapshot> counters;
+  };
+
   void enable() { enabled_ = true; }
   void disable() { enabled_ = false; }
   bool enabled() const { return enabled_; }
@@ -115,6 +137,30 @@ class Profiler {
   }
 
   std::size_t scope_count() const { return order_.size(); }
+
+  // Structured source of truth for inspection. profile_report() below is only a pretty view of this
+  // accumulated data; Python does not need to parse the text path when this snapshot is exposed.
+  Snapshot snapshot() const {
+    Snapshot out{};
+    out.enabled = enabled_;
+    out.total_s = total_s();
+    out.scopes.reserve(order_.size());
+    for (const auto& name : order_) {
+      const Entry& e = entries_.at(name);
+      out.scopes.push_back(
+          ScopeSnapshot{.name = name,
+                        .count = e.count,
+                        .total_s = e.total_s,
+                        .mean_s = e.mean_s(),
+                        .min_s = e.min_s,
+                        .max_s = e.max_s});
+    }
+    out.counters.reserve(counter_order_.size());
+    for (const auto& name : counter_order_) {
+      out.counters.push_back(CounterSnapshot{.name = name, .value = counters_.at(name)});
+    }
+    return out;
+  }
 
   // A human-readable report in first-seen order: one line per scope (count / total / mean / min /
   // max), then the counters. The exact text the Python `sim.profile_report()` returns.

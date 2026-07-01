@@ -22,7 +22,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/parallel/comm.hpp>
 
-#include <cassert>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -70,7 +70,10 @@ class AmrHierarchy {
   /// @param data MultiFab already built for this level (transferred by move).
   /// Replacing an existing level INVALIDATES and removes all finer levels.
   void install_level(int lev, const BoxArray& fine_ba, MultiFab data) {
-    assert(lev >= 1 && lev <= num_levels());
+    if (lev < 1 || lev > num_levels()) {
+      throw std::out_of_range(
+          "AmrHierarchy::install_level: lev must satisfy 1 <= lev <= num_levels()");
+    }
     const Box2D dom = domain_[lev - 1].refine(ref_ratio_);
     if (lev == num_levels()) {
       domain_.push_back(dom);

@@ -10,6 +10,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -406,7 +407,7 @@ class PolarTensorKrylovSolver {
     return l2_norm(r_);
   }
 
-  void solve() { solve(Real(1e-10), 400); }
+  void solve() { solve(kKrylovDefaultRelTol, kSchurKrylovCartesianMaxIters); }
 
   /// MATRIX-FREE BiCGStab preconditioned by precond_ (RadialLine by default, Jacobi as fallback);
   /// fixes the gauge (project_mean) when pin_gauge_ (singular pure Neumann/periodic case). phi() =
@@ -502,7 +503,7 @@ class PolarTensorKrylovSolver {
   }
 
  private:
-  static constexpr Real kTiny = Real(1e-300);
+  static constexpr Real kTiny = kKrylovBreakdownTiny;
 
   /// LAYOUT guard of the RadialLine preconditioner: each box must cover the FULL radial range of the
   /// domain (splitting in THETA only), otherwise the Thomas sweep in r would cross a box boundary.

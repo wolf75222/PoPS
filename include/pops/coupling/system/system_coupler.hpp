@@ -219,7 +219,7 @@ class SystemDriver {
     asm_.solve_fields();  // aux up to date for the wave speeds
     const Real h = std::min(asm_.geom().dx(), asm_.geom().dy());
     const Real wmax = system_max_wave_speed();
-    const Real macro_dt = cfl * h / std::max(wmax, Real(1e-30));
+    const Real macro_dt = cfl * h / std::max(wmax, kCflSpeedFloor);
     asm_.system().for_each_block([&](auto& block) {
       using Block = std::decay_t<decltype(block)>;
       if constexpr (block_time_treatment_v<Block> != TimeTreatment::Prescribed) {
@@ -260,7 +260,7 @@ class SystemDriver {
   Real cfl_dt(Real cfl) {
     asm_.solve_fields();
     const Real h = std::min(asm_.geom().dx(), asm_.geom().dy());
-    return cfl * h / std::max(system_max_wave_speed(), Real(1e-30));
+    return cfl * h / std::max(system_max_wave_speed(), kCflSpeedFloor);
   }
   template <class ImplicitAdvance>
   Real step_cfl(Real cfl, ImplicitAdvance&& implicit_advance) {

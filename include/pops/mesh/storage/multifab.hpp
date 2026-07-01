@@ -13,6 +13,7 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/foundation/validation.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -42,6 +43,7 @@ class MultiFab {
         ncomp_(ncomp),
         ngrow_(ngrow),
         local_index_(ba_.size(), -1) {
+    validate_layout();
     const int me = my_rank();
     for (int i = 0; i < ba_.size(); ++i) {
       if (dm_[i] == me) {
@@ -64,15 +66,35 @@ class MultiFab {
   /// Number of fabs OWNED by this rank (bound on local indices).
   int local_size() const { return static_cast<int>(fabs_.size()); }
   /// Local fab at index li (0 <= li < local_size()), for writing.
-  Fab2D& fab(int li) { return fabs_[li]; }
+  Fab2D& fab(int li) {
+    validate_local_index(li, "MultiFab::fab");
+    return fabs_[li];
+  }
   /// Local fab at index li, for reading.
-  const Fab2D& fab(int li) const { return fabs_[li]; }
+  const Fab2D& fab(int li) const {
+    validate_local_index(li, "MultiFab::fab const");
+    return fabs_[li];
+  }
   /// VALID box of local fab li.
-  const Box2D& box(int li) const { return fabs_[li].box(); }
+  const Box2D& box(int li) const {
+    validate_local_index(li, "MultiFab::box");
+    return fabs_[li].box();
+  }
   /// GLOBAL index (in box_array) of local fab li.
-  int global_index(int li) const { return global_of_local_[li]; }
+  int global_index(int li) const {
+    validate_local_index(li, "MultiFab::global_index");
+    return global_of_local_[li];
+  }
   /// LOCAL index of the global box @p global, or -1 if it is not owned by this rank.
-  int local_index_of(int global) const { return local_index_[global]; }
+  int local_index_of(int global) const {
+    if (global < 0 || global >= static_cast<int>(local_index_.size()))
+      throw_validation_error(
+          "pops/mesh/storage/multifab.hpp: MultiFab::local_index_of",
+          "global box index in [0.." + std::to_string(static_cast<int>(local_index_.size()) - 1) +
+              "]",
+          "global=" + std::to_string(global));
+    return local_index_[global];
+  }
 
   /// Makes the HOST residence valid (before a host access: operator(), loop, set_val). Under unified
   /// memory = a targeted device_fence().
@@ -113,6 +135,42 @@ class MultiFab {
   std::vector<int> global_of_local_{};  // local index -> global box
   // Memoized fill_boundary schedule (ADC-260). mutable: caching is logically const; lazily built.
   mutable std::shared_ptr<HaloScheduleCache> halo_cache_{};
+
+  void validate_layout() const {
+    if (ncomp_ < 1)
+      throw_validation_error("pops/mesh/storage/multifab.hpp: MultiFab",
+                             "ncomp >= 1 for every allocated Fab2D",
+                             "ncomp=" + std::to_string(ncomp_));
+    if (ngrow_ < 0)
+      throw_validation_error("pops/mesh/storage/multifab.hpp: MultiFab",
+                             "ghost width ngrow >= 0", "ngrow=" + std::to_string(ngrow_));
+    if (dm_.size() != ba_.size())
+      throw_validation_error(
+          "pops/mesh/storage/multifab.hpp: MultiFab",
+          "DistributionMapping size equals BoxArray size",
+          "box_array.size=" + std::to_string(ba_.size()) +
+              ", dmap.size=" + std::to_string(dm_.size()));
+    const int nr = n_ranks();
+    const std::vector<int>& ranks = dm_.ranks();
+    for (int i = 0; i < static_cast<int>(ranks.size()); ++i) {
+      if (ranks[static_cast<std::size_t>(i)] < 0 || ranks[static_cast<std::size_t>(i)] >= nr)
+        throw_validation_error(
+            "pops/mesh/storage/multifab.hpp: MultiFab",
+            "owner rank in [0.." + std::to_string(nr - 1) + "] for every box",
+            "box=" + std::to_string(i) +
+                ", owner=" + std::to_string(ranks[static_cast<std::size_t>(i)]) +
+                ", n_ranks=" + std::to_string(nr));
+    }
+  }
+
+  void validate_local_index(int li, const char* op) const {
+    if (li < 0 || li >= static_cast<int>(fabs_.size()))
+      throw_validation_error("pops/mesh/storage/multifab.hpp: " + std::string(op),
+                             "local index in [0.." +
+                                 std::to_string(static_cast<int>(fabs_.size()) - 1) + "]",
+                             "li=" + std::to_string(li) +
+                                 ", local_size=" + std::to_string(fabs_.size()));
+  }
 };
 
 /// Sum of the VALID cells of component comp, reduced over ALL ranks (all_reduce). COLLECTIVE under

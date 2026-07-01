@@ -104,6 +104,28 @@ def test_inspect_aggregates_metadata():
     chk(rep.inputs["aux"] == ["B_z"], "the named aux is a required input")
     chk(rep.program["commits"] == ["plasma"], "program summary lists the committed block")
     chk(rep.artifacts["so_path"] == cp.so_path, "artifacts carry the .so path")
+    chk(rep.artifacts["header_signature"] is not None,
+        "artifacts expose the ABI header signature as a field")
+    chk(rep.runtime["dimension"] == 2, "runtime report carries dimension=2")
+    chk(rep.runtime["amr_refinement_ratio"] == 2, "runtime report carries AMR ratio=2")
+    chk(rep.runtime["precision"] == "double", "runtime report carries precision=double")
+    chk(rep.runtime["supports_custom_communicator"] is False,
+        "runtime report rejects custom communicators")
+    chk(rep.capabilities["schema_version"] >= 0, "inspect carries a structured capability report")
+    routes = {row["route_id"]: row for row in rep.capabilities["routes"]}
+    chk("precision:single_or_mixed" in routes, "capability route ids are visible before bind")
+    chk(routes["precision:single_or_mixed"]["status"] == "unavailable",
+        "unsupported precision is machine-checkable")
+    chk(rep.options["defaults"]["newton"]["max_iters"] == 2,
+        "inspect carries numerical defaults")
+    chk(rep.options["physical"]["gamma"]["value"] == 1.4,
+        "inspect carries the effective physical gamma")
+    chk(rep.options["cache_key"]["cache_key"] == cp.cache_key,
+        "inspect carries the full cache key in options")
+    chk(rep.options["cache_key"]["const_params"] == ["gamma_const"],
+        "const params are marked as cache-key participants")
+    chk(rep.options["cache_key"]["runtime_params"] == ["cs2"],
+        "runtime params are reported separately from cache-key participants")
     chk(rep.status == "compiled, waiting for pops.bind(...)", "status is the bind-pending line")
 
 
@@ -115,10 +137,16 @@ def test_inspect_printable_and_serialisable():
     text = str(rep)
     chk("compiled problem 'intro_demo'" in text, "str() names the program")
     chk("status   : compiled, waiting for pops.bind(...)" in text, "str() carries the status line")
+    chk("dimension             : 2" in text, "str() prints runtime dimension")
+    chk("precision             : double" in text, "str() prints runtime precision")
     chk("object at 0x" not in text, "str() is not the default <...object at 0x...> repr")
     d = rep.to_dict()
     chk(json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable")
     chk(d["backend"] == "production", "to_dict carries the backend")
+    chk("capabilities" in d and d["capabilities"]["routes"],
+        "to_dict carries structured native routes")
+    chk(d["options"]["defaults"]["mg"]["max_cycles"] == 50,
+        "to_dict carries numerical defaults")
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "inspect.json")
         rep.to_json(path)
@@ -149,6 +177,11 @@ def test_requirements_lists_compile_constraints():
     chk(req.constraints["backend"] == "production", "the backend constraint is production")
     chk(req.constraints["layout"] == "system", "the layout constraint is the System runtime")
     chk(req.constraints["abi_key"] == "SIG|c++|c++23", "the ABI key the toolchain must match")
+    chk(req.constraints["dimension"] == 2, "requirements carry dimension=2")
+    chk(req.constraints["amr_refinement_ratio"] == 2, "requirements carry AMR ratio=2")
+    chk(req.constraints["precision"] == "double", "requirements carry precision=double")
+    chk(req.constraints["supports_custom_communicator"] is False,
+        "requirements reject custom communicator")
     # DISTINCT from arguments(): requirements has no 'instances' bind-input list.
     chk(not hasattr(req, "instances"), "requirements() is not the arguments() bind-input list")
 

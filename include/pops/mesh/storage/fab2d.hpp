@@ -15,10 +15,11 @@
 
 #include <pops/core/foundation/allocator.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/foundation/validation.hpp>
 #include <pops/mesh/index/box2d.hpp>
 
-#include <cassert>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace pops {
@@ -62,13 +63,21 @@ class Fab2D {
 
   /// Allocates the valid box grown by ng ghosts, ncomp components, initialized to 0.
   Fab2D(const Box2D& valid, int ncomp, int ng)
-      : valid_(valid),
-        ng_(ng),
-        ncomp_(ncomp),
-        gbox_(valid.grow(ng)),
-        nx_tot_(gbox_.nx()),
-        ny_tot_(gbox_.ny()),
-        data_(static_cast<std::int64_t>(nx_tot_) * ny_tot_ * ncomp, Real{0}) {}
+      : valid_(valid) {
+    if (ncomp < 1)
+      throw_validation_error("pops/mesh/storage/fab2d.hpp: Fab2D",
+                             "ncomp >= 1 for a field component layout",
+                             "ncomp=" + std::to_string(ncomp));
+    if (ng < 0)
+      throw_validation_error("pops/mesh/storage/fab2d.hpp: Fab2D",
+                             "ghost width ng >= 0", "ng=" + std::to_string(ng));
+    ng_ = ng;
+    ncomp_ = ncomp;
+    gbox_ = valid.grow(ng);
+    nx_tot_ = gbox_.empty() ? 0 : gbox_.nx();
+    ny_tot_ = gbox_.empty() ? 0 : gbox_.ny();
+    data_.assign(static_cast<std::int64_t>(nx_tot_) * ny_tot_ * ncomp_, Real{0});
+  }
 
   /// VALID box (without ghosts).
   const Box2D& box() const { return valid_; }
@@ -105,9 +114,20 @@ class Fab2D {
   void set_val(Real v) { std::fill(data_.begin(), data_.end(), v); }
 
  private:
-  // linear index (i, j, c) in the component-slow layout; bounds assert in debug.
+  static std::string box_bounds(const Box2D& b) {
+    return "[" + std::to_string(b.lo[0]) + ".." + std::to_string(b.hi[0]) + "]x[" +
+           std::to_string(b.lo[1]) + ".." + std::to_string(b.hi[1]) + "]";
+  }
+
+  // linear index (i, j, c) in the component-slow layout; release-active bounds validation.
   std::int64_t idx(int i, int j, int c) const {
-    assert(gbox_.contains(i, j) && c >= 0 && c < ncomp_);
+    if (!gbox_.contains(i, j) || c < 0 || c >= ncomp_)
+      throw_validation_error(
+          "pops/mesh/storage/fab2d.hpp: Fab2D::operator()",
+          "cell index inside grown box " + box_bounds(gbox_) +
+              " and component in [0.." + std::to_string(ncomp_ - 1) + "]",
+          "i=" + std::to_string(i) + ", j=" + std::to_string(j) +
+              ", component=" + std::to_string(c));
     return c * static_cast<std::int64_t>(nx_tot_) * ny_tot_ +
            static_cast<std::int64_t>(j - gbox_.lo[1]) * nx_tot_ + (i - gbox_.lo[0]);
   }

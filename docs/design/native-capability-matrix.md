@@ -5,11 +5,26 @@ or report an unsupported route before compile, bind, or runtime execution.
 
 ## Matrix Schema
 
+ADC-591 adds a versioned native report above the route rows:
+
+- C++: `pops::native_capability_report(target)` returns a `NativeCapabilityReport`.
+- Python native binding: `_pops.capability_report(target)` returns the same report as a stable dict.
+- Public Python: `pops.native_capability_report(target)` wraps it as `NativeCapabilityReport`.
+- Runtime: `sim.inspect()` / `sim.amr.inspect()` include the native report plus profile,
+  diagnostics, history/cache metadata and runtime environment facts.
+- Compiled artifacts: `compiled.inspect().to_dict()["capabilities"]` carries the same route IDs and
+  statuses, projected from the artifact manifest without loading or recompiling the `.so`.
+
+Pretty strings are views of these objects only. Tests should assert on `to_dict()` fields such as
+`schema_version`, `abi_version`, `runtime`, `capabilities`, `routes[*].route_id`, `status`, and
+`reason`; they should not parse the printed table.
+
 Every route row is a plain metadata record with these fields:
 
 | Field | Meaning |
 | --- | --- |
 | `feature` | Stable feature token, for example `layout:AMR`, `elliptic:fft_amr`, or `checkpoint:parallel_hdf5`. |
+| `route_id` | Stable native route identifier. Today it equals `feature`; it is explicit so route IDs can diverge later without breaking tests. |
 | `layout` | Layout envelope the row applies to: `uniform`, `amr`, `uniform|amr`, or `context`. |
 | `backend` | Backend or route required: `production`, `aot`, `prototype`, `runtime`, `module`, or `none`. |
 | `platform` | Platform axis: `host`, `mpi`, `gpu`, or `context`. |
@@ -17,6 +32,7 @@ Every route row is a plain metadata record with these fields:
 | `gpu` | Whether this row is backed by a GPU-capable route for the current build/artifact. |
 | `status` | `available`, `unavailable`, `partial`, or `unknown`. Known unsupported routes use `unavailable`. |
 | `limitation` | Short human-readable limitation or constraint. |
+| `reason` | Same limitation in the native C++ report; `limitation` is the compatibility alias. |
 | `error_message` | For unavailable rows, the message shape used by validators: requested route, available route, alternative. |
 
 The same shape is exposed by:
@@ -26,6 +42,8 @@ The same shape is exposed by:
 - `CompiledProblem.capability_matrix()`
 - `CompiledModel.capability_matrix()`
 - `CompiledArtifactManifest.to_dict()["capability_matrix"]`
+- `_pops.capability_report()["routes"]`
+- `pops.native_capability_report().to_dict()["routes"]`
 
 ## Native Inventory
 
@@ -53,6 +71,30 @@ Explicit unsupported rows include:
 - `checkpoint:amr_dynamic_regrid`: bit-identical AMR checkpoint requires `regrid_every == 0`.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
+
+ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
+hard failures, but they make compatibility and performance constraints visible to reports and
+future validators:
+
+- `elliptic:fft_direct_dft_fallback`: non-power-of-two FFT grids use the correct direct `O(n^2)`
+  DFT fallback and expose fallback calls through `poisson_fft_direct_dft_fallback_count()`.
+- `elliptic:mg_fac_defaults`: MG/FAC defaults and debug diagnostics still need a shared
+  `SolverDefaults`/logger route.
+- `mesh:2d_storage_arithmetic`: the native mesh/storage/arithmetic core is `Box2D`/`Fab2D`
+  2D-only, and `validate_dimension()` rejects `Dim != 2` requests.
+- `amr:refinement_ratio`: native AMR hierarchy, patch ranges, reflux and subcycling are `ratio=2`
+  only, and `validate_amr_refinement_ratio()` rejects other ratios.
+- `parallel:mpi_world_communicator`: MPI collectives currently use `MPI_COMM_WORLD`.
+- `parallel:custom_communicator`: caller-provided MPI communicators are unavailable.
+- `precision:single_or_mixed`: `pops::Real` is `double`; single or mixed precision is unavailable.
+- `runtime:kokkos_lifecycle`: `runtime_environment_report()` exposes whether PoPS will lazily
+  initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.
+- `runtime:allocator_lifetime`: Kokkos builds use a process-lifetime managed arena whose blocks are
+  returned by a Kokkos finalize hook.
+- `schur:condensed_source`: Schur condensation/source kernels are specialised to 2D plus Bz/Lorentz
+  coupling.
+- `runtime:native_loader_legacy_metadata`: old native modules without metadata still fall back to
+  `u0..` names, empty roles, `gamma=1.4` and host prototype copies.
 
 ## Error Policy
 

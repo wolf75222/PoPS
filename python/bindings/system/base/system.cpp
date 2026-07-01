@@ -1,6 +1,7 @@
 #include <pops/runtime/system.hpp>
 
 #include <pops/core/state/variables.hpp>  // VariableSet + VariableRole: role descriptor carried by each block
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>  // pops::abi_key + detail::abi_key_string (ABI boundary of the native loader)
 #include <pops/runtime/builders/block/block_builder.hpp>  // GridContext + make_block/make_max_speed (compiled closures)
 #include <pops/runtime/builders/block/block_seam.hpp>  // ADC-335: per-transport build seam (build_block_exb/.../polar)
@@ -36,8 +37,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>   // POPS_TRACE_SOLVE_FIELDS: device diagnostic trace (env-gated, inert by default)
-#include <cstdlib>  // getenv
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW layer (ADC-99); <dlfcn.h> on POSIX
 #include <functional>
 #include <limits>  // std::numeric_limits (per-block CFL: dt = min over blocks)
@@ -50,9 +49,8 @@
 
 namespace pops {
 
-// The DIAGNOSTIC trace of the solve_fields path (pops_trace_sf / pops_sf_mark, milestone #93) was extracted
-// with SystemFieldSolver into include/pops/runtime/system_field_solver.hpp (namespace field_solver);
-// it stays env-gated (POPS_TRACE_SOLVE_FIELDS) and inert by default.
+// The structured DIAGNOSTIC trace of the solve_fields path is owned by SystemFieldSolver
+// (namespace field_solver); it stays env-gated (POPS_TRACE_SOLVE_FIELDS) and inert by default.
 // resolve_implicit_components moved to model_factory.hpp (pops::detail) so the per-transport seam TUs
 // (python/system_<transport>.cpp, ADC-335) share one definition; it is otherwise unchanged.
 
@@ -88,6 +86,76 @@ std::vector<double> gather_global(const MultiFab& mf, int ncomp, int gnx, int gn
   }
   all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
   return out;
+}
+
+bool newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
+  return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
+         newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
+         diagnostics || newton.damping != kNewtonDefaultDamping ||
+         newton.fail_policy != kNewtonDefaultFailPolicy;
+}
+
+EffectiveNewtonOptions effective_newton_options(const NewtonOptions& newton, bool diagnostics) {
+  EffectiveNewtonOptions out;
+  out.max_iters = newton.max_iters;
+  out.rel_tol = static_cast<double>(newton.rel_tol);
+  out.abs_tol = static_cast<double>(newton.abs_tol);
+  out.fd_eps = static_cast<double>(newton.fd_eps);
+  out.damping = static_cast<double>(newton.damping);
+  out.fail_policy = newton_fail_policy_name(newton.fail_policy);
+  out.diagnostics = diagnostics;
+  out.non_default = newton_options_non_default(newton, diagnostics);
+  return out;
+}
+
+EffectiveBlockOptions make_system_block_options(
+    const std::string& name, const ModelSpec& model, const std::string& route,
+    const std::string& limiter, const std::string& riemann, const std::string& recon,
+    const std::string& time, const std::string& method, bool imex, int substeps, bool evolve,
+    int stride, const std::vector<std::string>& implicit_vars,
+    const std::vector<std::string>& implicit_roles, const NewtonOptions& newton,
+    bool newton_diagnostics, double positivity_floor, bool wave_speed_cache) {
+  EffectiveBlockOptions out;
+  out.name = name;
+  out.route = route;
+  out.compiled = false;
+  out.transport = model.transport;
+  out.source = model.source;
+  out.elliptic = model.elliptic;
+  out.limiter = limiter;
+  out.riemann = riemann;
+  out.recon = recon;
+  out.time = time;
+  out.time_method = method;
+  out.imex = imex;
+  out.substeps = substeps;
+  out.stride = stride;
+  out.evolve = evolve;
+  out.n_ghost = block_n_ghost(limiter);
+  out.implicit_vars = implicit_vars;
+  out.implicit_roles = implicit_roles;
+  out.newton = effective_newton_options(newton, newton_diagnostics);
+  out.positivity_floor = positivity_floor;
+  out.wave_speed_cache = wave_speed_cache;
+  out.gamma = model.gamma;
+  out.B0 = model.B0;
+  out.cs2 = model.cs2;
+  out.vacuum_floor = model.vacuum_floor;
+  out.qom = model.qom;
+  out.q = model.q;
+  out.alpha = model.alpha;
+  out.n0 = model.n0;
+  out.sign = model.sign;
+  out.four_pi_G = model.four_pi_G;
+  out.rho0 = model.rho0;
+  return out;
+}
+
+int coupling_role_index_reported(const VariableSet& vs, VariableRole role, int fallback,
+                                 const char* origin, const std::string& block) {
+  if (vs.roles.empty())
+    record_fallback(FallbackCounter::kRolelessComponentIndex);
+  return coupling_role_index(vs, role, fallback, origin, block);
 }
 }  // namespace
 
@@ -158,6 +226,12 @@ struct System::Impl {
   // (set_block_params) changes the block behavior at the next step WITHOUT recompiling. Absent for a
   // block without runtime param or for the other paths (native / dynamic). Set by add_compiled_block.
   std::map<std::string, std::shared_ptr<std::vector<double>>> block_params_;
+  // Effective numerical/physical options captured at configuration time. The closures themselves are
+  // opaque, so inspection stores the user-facing route decisions here when the block/stage is added.
+  std::map<std::string, EffectiveBlockOptions> block_options_;
+  std::map<std::string, EffectiveSourceStageOptions> source_stage_options_;
+  std::string time_scheme_ = "lie";
+  std::string gauss_policy_ = "restart";
   // Newton diagnostics (IMEX, OPT-IN): per-block report, owned HERE in shared_ptr (STABLE address
   // even when sp reallocates); the block AdvanceImex* closures write into it via raw pointer.
   // Absent (missing key) for a block without newton_diagnostics -> newton_report raises a clear error.
@@ -685,10 +759,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
         "partial mask, or remove implicit_vars / implicit_roles.");
   // Same rules for the Newton options/diagnostics: they only drive the IMEX source step.
   // Non-default values in explicit would be SILENTLY ignored -> explicit error.
-  const bool newton_non_default = newton.max_iters != 2 || newton.rel_tol != 0.0 ||
-                                  newton.abs_tol != 0.0 || newton.fd_eps != 1e-7 ||
-                                  newton_diagnostics || newton.damping != 1.0 ||
-                                  newton.fail_policy != NewtonOptions::kFailNone;
+  const bool newton_non_default = newton_options_non_default(newton, newton_diagnostics);
   if (!imex && newton_non_default)
     throw std::runtime_error(
         "System::add_block : the Newton options (newton_max_iters/rel_tol/"
@@ -726,11 +797,13 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   } else {
     const GridContext ctx = P->grid_ctx();
     // Newton options of the IMEX implicit source (defaults = historical constants, bit-identical).
-    // The report (OPT-IN diagnostics) lives in Impl::newton_reports_ in a shared_ptr -> STABLE address
-    // captured by the closures even when the map reallocates at a later add_block.
+    // The report lives in Impl::newton_reports_ in a shared_ptr -> STABLE address captured by the
+    // closures even when the map reallocates at a later add_block. It is allocated for explicit
+    // diagnostics and for fail_policy warn/throw, because those policies must surface as structured
+    // report events rather than stderr text.
     const NewtonOptions& nopts = newton;
     NewtonReport* nreport = nullptr;
-    if (newton_diagnostics) {
+    if (newton_diagnostics || nopts.fail_policy != NewtonOptions::kFailNone) {
       auto rep = std::make_shared<NewtonReport>();
       P->newton_reports_[name] = rep;
       nreport = rep.get();
@@ -809,6 +882,14 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // via Kokkos), without copy.
   install_block(name, ncomp, cons_vs, prim_vs, model.gamma, std::move(clo), std::move(max_speed),
                 std::move(add_poisson_rhs), substeps, evolve, stride);
+  EffectiveBlockOptions block_options =
+      make_system_block_options(name, model, "native_model", limiter, riemann, recon, time, method,
+                                imex, substeps, evolve, stride, implicit_vars, implicit_roles,
+                                newton, newton_diagnostics, positivity_floor, wave_speed_cache);
+  block_options.ncomp = ncomp;
+  block_options.conservative_vars = cons_vs.names;
+  block_options.primitive_vars = prim_vs.names;
+  P->block_options_[name] = std::move(block_options);
   set_block_conversion(name, std::move(prim_to_cons), std::move(cons_to_prim));
   set_block_dt_bounds(name, std::move(src_freq), std::move(stab_dt));
   // SCHEME GHOSTS: WENO5 reads a 5-point stencil (3 ghosts) > the 2 allocated by default in
@@ -859,6 +940,18 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   // SourceInto<Model>); empty for paths that do not (the host .so prototype loader) ->
   // block_source_into fails loud rather than silently leaking the flux.
   P->sp.back().source_only = std::move(closures.source_only);
+  EffectiveBlockOptions& opt = P->block_options_[name];
+  opt.name = name;
+  if (opt.route.empty())
+    opt.route = "closure_install";
+  opt.ncomp = ncomp;
+  opt.n_ghost = P->sp.back().U.n_grow();
+  opt.substeps = substeps;
+  opt.stride = stride;
+  opt.evolve = evolve;
+  opt.gamma = gamma;
+  opt.conservative_vars = cons_vars.names;
+  opt.primitive_vars = prim_vars.names;
 }
 
 // Width-aware reallocation of a block state (delegates to Impl::set_block_ghosts). Exposed
@@ -866,6 +959,9 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
 // widen the compiled block to block_n_ghost(limiter) -- 3 for weno5 -- as add_block does.
 POPS_EXPORT void System::set_block_ghosts(const std::string& name, int n_ghost) {
   p_->set_block_ghosts(name, n_ghost);
+  auto it = p_->block_options_.find(name);
+  if (it != p_->block_options_.end())
+    it->second.n_ghost = p_->find(name).U.n_grow();
 }
 
 // OPTIONAL step bounds of a block (model traits): set after install_block, read by
@@ -915,8 +1011,9 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
   if (it == p_->newton_reports_.end())
     throw std::runtime_error(
         "System::newton_report : Newton diagnostics not enabled for block '" + name +
-        "' ; add the block with newton_diagnostics=true (pops.IMEX(newton_diagnostics=True) / "
-        "pops.SourceImplicit(newton_diagnostics=True))");
+        "' ; add the block with newton_diagnostics=true "
+        "(pops.IMEX(newton_diagnostics=True) / pops.SourceImplicit(newton_diagnostics=True)) "
+        "or newton_fail_policy='warn'/'throw'");
   const NewtonReport& r = *it->second;
   return SourceNewtonReport{r.enabled,
                             r.converged,
@@ -925,7 +1022,8 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
                             r.n_failed,
                             r.failed_i,
                             r.failed_j,
-                            r.failed_comp};
+                            r.failed_comp,
+                            r.diagnostics.events};
 }
 
 // Body EXTRACTED VERBATIM into pops::native_loader::add_dynamic_block (native_loader.hpp); instantiated
@@ -933,6 +1031,17 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
 void System::add_dynamic_block(const std::string& name, const std::string& so_path, int substeps,
                                const std::vector<std::string>& names, const std::string& recon) {
   native_loader::add_dynamic_block(this, p_.get(), name, so_path, substeps, names, recon);
+  EffectiveBlockOptions& opt = p_->block_options_[name];
+  opt.route = "dynamic_loader";
+  opt.compiled = false;
+  opt.transport = "dynamic_model";
+  opt.source = "dynamic_model";
+  opt.elliptic = "dynamic_model";
+  opt.limiter = recon;
+  opt.riemann = "rusanov_global";
+  opt.recon = recon;
+  opt.time = "explicit";
+  opt.time_method = "host_euler";
 }
 
 // Body EXTRACTED VERBATIM into pops::native_loader::add_compiled_block (native_loader.hpp); instantiated
@@ -946,6 +1055,20 @@ void System::add_compiled_block(const std::string& name, const std::string& so_p
         "System::add_compiled_block : positivity_floor >= 0 and finite (0 = inactive)");
   native_loader::add_compiled_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
                                     substeps, names, positivity_floor);
+  EffectiveBlockOptions& opt = p_->block_options_[name];
+  opt.route = "aot_loader";
+  opt.compiled = true;
+  opt.transport = "compiled_artifact";
+  opt.source = "compiled_artifact";
+  opt.elliptic = "compiled_artifact";
+  opt.limiter = limiter;
+  opt.riemann = riemann;
+  opt.recon = recon;
+  opt.time = time;
+  opt.time_method = time;
+  opt.imex = (time == "imex");
+  opt.substeps = substeps;
+  opt.positivity_floor = positivity_floor;
 }
 
 // P7-b: overwrites the SHARED vector of runtime parameter values of block @p name. add_compiled_block
@@ -980,6 +1103,30 @@ void System::add_native_block(const std::string& name, const std::string& so_pat
         "System::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
   native_loader::add_native_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
                                   gamma, substeps, evolve, stride, positivity_floor);
+  EffectiveBlockOptions& opt = p_->block_options_[name];
+  opt.route = "native_loader";
+  opt.compiled = true;
+  opt.transport = "compiled_artifact";
+  opt.source = "compiled_artifact";
+  opt.elliptic = "compiled_artifact";
+  opt.limiter = limiter;
+  opt.riemann = riemann;
+  opt.recon = recon;
+  opt.time = time;
+  if (time == "imex")
+    opt.time_method = "imex";
+  else if (time == "ssprk3")
+    opt.time_method = "ssprk3";
+  else if (time == "euler")
+    opt.time_method = "euler";
+  else
+    opt.time_method = "ssprk2";
+  opt.imex = (time == "imex");
+  opt.substeps = substeps;
+  opt.stride = stride;
+  opt.evolve = evolve;
+  opt.gamma = gamma;
+  opt.positivity_floor = positivity_floor;
 }
 
 void System::set_poisson(const std::string& rhs, const std::string& solver, const std::string& bc,
@@ -1273,12 +1420,12 @@ void System::add_ionization(const std::string& electron, const std::string& ion,
   // (no roles declared: dynamic / compiled block) keeps the canonical fallback comp 0; a ROLES-BEARING
   // block that omits Density fails loud (no silent coupling on the wrong component, ADC-292). A block
   // storing its density off index 0 (but declaring the role) stays correctly coupled.
-  const int de = coupling_role_index(P->sp[ie].cons_vars, VariableRole::Density, 0,
-                                     "System::add_ionization", electron);
-  const int di = coupling_role_index(P->sp[ii].cons_vars, VariableRole::Density, 0,
-                                     "System::add_ionization", ion);
-  const int dg = coupling_role_index(P->sp[ig].cons_vars, VariableRole::Density, 0,
-                                     "System::add_ionization", neutral);
+  const int de = coupling_role_index_reported(P->sp[ie].cons_vars, VariableRole::Density, 0,
+                                              "System::add_ionization", electron);
+  const int di = coupling_role_index_reported(P->sp[ii].cons_vars, VariableRole::Density, 0,
+                                              "System::add_ionization", ion);
+  const int dg = coupling_role_index_reported(P->sp[ig].cons_vars, VariableRole::Density, 0,
+                                              "System::add_ionization", neutral);
   // Ionization (operator-split, on the density): rate r = k n_e n_g. One neutral disappears, one ion and
   // one electron appear: n_g -= dt r, n_i += dt r, n_e += dt r. Mass is transferred from the
   // neutral to the ion (n_i + n_g conserved). First coupling brick; the momentum
@@ -1318,10 +1465,10 @@ void System::add_collision(const std::string& a, const std::string& b, double ra
   const VariableSet& va_set = P->sp[ia].cons_vars;
   const VariableSet& vb_set = P->sp[ib].cons_vars;
   auto ra = [&](VariableRole r, int fb) {
-    return coupling_role_index(va_set, r, fb, "System::add_collision", a);
+    return coupling_role_index_reported(va_set, r, fb, "System::add_collision", a);
   };
   auto rb = [&](VariableRole r, int fb) {
-    return coupling_role_index(vb_set, r, fb, "System::add_collision", b);
+    return coupling_role_index_reported(vb_set, r, fb, "System::add_collision", b);
   };
   const int mxa = ra(VariableRole::MomentumX, 1);
   const int mya = ra(VariableRole::MomentumY, 2);
@@ -1366,10 +1513,10 @@ void System::add_thermal_exchange(const std::string& a, const std::string& b, do
   const VariableSet& va_set = P->sp[ia].cons_vars;
   const VariableSet& vb_set = P->sp[ib].cons_vars;
   auto ra = [&](VariableRole r, int fb) {
-    return coupling_role_index(va_set, r, fb, "System::add_thermal_exchange", a);
+    return coupling_role_index_reported(va_set, r, fb, "System::add_thermal_exchange", a);
   };
   auto rb = [&](VariableRole r, int fb) {
-    return coupling_role_index(vb_set, r, fb, "System::add_thermal_exchange", b);
+    return coupling_role_index_reported(vb_set, r, fb, "System::add_thermal_exchange", b);
   };
   const int ea = ra(VariableRole::Energy, 3);
   const int mxa = ra(VariableRole::MomentumX, 1);
@@ -1502,6 +1649,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
       pg.op[k] = opc;
       pg.arg[k] = a;
     }
+    validate_cs_program_stack(pg, "System::add_coupled_source term " + std::to_string(t));
     outs[static_cast<std::size_t>(t)] = {s, comp, pg};
     off += len;
   }
@@ -1536,6 +1684,7 @@ void System::add_coupled_source(const CoupledSourceProgram& prog_desc, double fr
       freq_pg.op[k] = opc;
       freq_pg.arg[k] = a;
     }
+    validate_cs_program_stack(freq_pg, "System::add_coupled_source frequency");
   }
   // CONSTANT declared frequency of the coupling (audit wave 3): registered for the step bound of
   // step_cfl / step_adaptive (dt <= cfl/mu on the MACRO-step). <= 0 = no bound (historical). Pushed
@@ -1690,6 +1839,12 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
   // different component assumes the caller populates it itself (derived/custom aux field).
   const int c_bz = bz_aux_component >= 0 ? bz_aux_component : kAuxBaseComps;
   P->ensure_aux_width(c_bz + 1);  // guarantees the channel in the shared aux + re-applies B_z
+  const double effective_krylov_tol =
+      krylov_tol > 0.0 ? krylov_tol : static_cast<double>(kKrylovDefaultRelTol);
+  const int effective_krylov_max_iters =
+      krylov_max_iters > 0
+          ? krylov_max_iters
+          : (polar ? kSchurKrylovPolarMaxIters : kSchurKrylovCartesianMaxIters);
   // Builds the condensed source stage on the REAL System layout (ba/dm/geom) with the Poisson BC.
   // The stepper allocates its buffers ONCE; step() reuses them (cf. its lifecycle). alpha =
   // electrostatic coupling constant of the source subsystem.
@@ -1704,8 +1859,8 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
         vs, c_rho, c_mx, c_my, c_E, P->pgeom_, P->ba, P->fields_.poisson_bc(),
         static_cast<Real>(alpha));
     if (krylov_tol > 0.0 || krylov_max_iters > 0)
-      s.schur_polar->set_krylov(krylov_tol > 0.0 ? static_cast<Real>(krylov_tol) : Real(1e-10),
-                                krylov_max_iters > 0 ? krylov_max_iters : 600);
+      s.schur_polar->set_krylov(static_cast<Real>(effective_krylov_tol),
+                                effective_krylov_max_iters);
   } else {
     // CARTESIAN (#126): EXPLICIT components resolved above (empty descriptors -> canonical
     // roles -> same indices as the historical, bit-identical).
@@ -1713,11 +1868,26 @@ void System::set_source_stage(const std::string& name, const std::string& kind, 
                                                             P->ba, P->fields_.poisson_bc(),
                                                             static_cast<Real>(alpha));
     if (krylov_tol > 0.0 || krylov_max_iters > 0)
-      s.schur->set_krylov(krylov_tol > 0.0 ? static_cast<Real>(krylov_tol) : Real(1e-10),
-                          krylov_max_iters > 0 ? krylov_max_iters : 400);
+      s.schur->set_krylov(static_cast<Real>(effective_krylov_tol), effective_krylov_max_iters);
   }
   s.schur_bz_comp = c_bz;
   s.schur_theta = theta;
+  EffectiveSourceStageOptions stage;
+  stage.block = name;
+  stage.kind = kind;
+  stage.geometry = polar ? "polar" : "cartesian";
+  stage.theta = theta;
+  stage.alpha = alpha;
+  stage.requested_krylov_tol = krylov_tol;
+  stage.requested_krylov_max_iters = krylov_max_iters;
+  stage.effective_krylov_tol = effective_krylov_tol;
+  stage.effective_krylov_max_iters = effective_krylov_max_iters;
+  stage.density = density;
+  stage.momentum_x = momentum_x;
+  stage.momentum_y = momentum_y;
+  stage.energy = energy;
+  stage.bz_aux_component = c_bz;
+  P->source_stage_options_[name] = std::move(stage);
 }
 
 void System::set_time_scheme(const std::string& scheme) {
@@ -1727,8 +1897,10 @@ void System::set_time_scheme(const std::string& scheme) {
   // and docs/HOFFART_STEP_SEQUENCE.md). An unknown scheme raises an EXPLICIT error (no silent ignore).
   if (scheme == "lie") {
     p_->stepper_.set_scheme(stepper::SplitScheme::Lie);
+    p_->time_scheme_ = "lie";
   } else if (scheme == "strang") {
     p_->stepper_.set_scheme(stepper::SplitScheme::Strang);
+    p_->time_scheme_ = "strang";
   } else {
     throw std::runtime_error("System::set_time_scheme : scheme '" + scheme +
                              "' unknown (expected 'lie' or 'strang')");
@@ -1745,8 +1917,10 @@ void System::set_gauss_policy(const std::string& policy) {
   // that a policy change BEFORE the first solve stays consistent (the 1st solve always solves).
   if (policy == "restart") {
     p_->fields_.gauss_evolve_ = false;
+    p_->gauss_policy_ = "restart";
   } else if (policy == "evolve") {
     p_->fields_.gauss_evolve_ = true;
+    p_->gauss_policy_ = "evolve";
   } else {
     throw std::runtime_error("System::set_gauss_policy : policy '" + policy +
                              "' unknown (expected 'restart' or 'evolve')");
@@ -1906,6 +2080,9 @@ void System::reset_profiling() {
 }
 std::string System::profile_report() const {
   return p_->profiler_.report();
+}
+std::vector<RuntimeDiagnosticEvent> System::solver_diagnostics() const {
+  return p_->fields_.combined_diagnostics_report().events;
 }
 // The System-owned Profiler reference (ADC-459): the compiled-program ProgramContext::profile_node
 // times each Program node into it, so per-node scopes accumulate in the SAME table as the coarse
@@ -2680,6 +2857,44 @@ std::vector<std::string> System::block_names() const {
   // SINGLE block registry (store), populated by all add paths: a block loaded via
   // add_dynamic_block / add_compiled_block (.so) appears there just like an add_block.
   return p_->blocks_.names();
+}
+
+EffectiveOptionsReport System::effective_options_report() const {
+  EffectiveOptionsReport report;
+  report.runtime = "system";
+  report.time_scheme = p_->time_scheme_;
+  report.gauss_policy = p_->gauss_policy_;
+  report.poisson.rhs = p_->fields_.p_rhs;
+  report.poisson.solver = p_->fields_.p_solver;
+  report.poisson.bc = p_->fields_.p_bc;
+  report.poisson.wall = p_->fields_.p_wall;
+  report.poisson.wall_radius = p_->fields_.p_wall_radius;
+  report.poisson.epsilon = static_cast<double>(p_->fields_.p_eps_);
+  report.poisson.abs_tol = static_cast<double>(p_->fields_.p_abs_tol_);
+  report.poisson.has_epsilon_field = p_->fields_.has_eps_field_;
+  report.poisson.has_anisotropic_epsilon = p_->fields_.has_eps_xy_field_;
+  report.poisson.has_reaction_field = p_->fields_.has_kappa_field_;
+
+  for (const Impl::Species& s : p_->sp) {
+    EffectiveBlockOptions row;
+    auto it = p_->block_options_.find(s.name);
+    if (it != p_->block_options_.end())
+      row = it->second;
+    row.name = s.name;
+    row.ncomp = s.ncomp;
+    row.n_ghost = s.U.n_grow();
+    row.substeps = s.substeps;
+    row.stride = s.stride;
+    row.evolve = s.evolve;
+    row.gamma = s.gamma;
+    row.conservative_vars = s.cons_vars.names;
+    row.primitive_vars = s.prim_vars.names;
+    report.blocks.push_back(std::move(row));
+  }
+
+  for (const auto& kv : p_->source_stage_options_)
+    report.source_stages.push_back(kv.second);
+  return report;
 }
 double System::mass(const std::string& name) const {
   const Impl::Species& s = p_->find(name);

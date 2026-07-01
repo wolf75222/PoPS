@@ -8,6 +8,20 @@ scheme/time policies in ``_bricks_scheme``. ``ModelSpec`` comes from the loaded 
 """
 
 from pops._bootstrap import ModelSpec
+from pops.runtime.defaults import (
+    PHYSICAL_DEFAULT_ALPHA,
+    PHYSICAL_DEFAULT_B0,
+    PHYSICAL_DEFAULT_BACKGROUND_N0,
+    PHYSICAL_DEFAULT_CHARGE_Q,
+    PHYSICAL_DEFAULT_FLUID_STATE_CS2,
+    PHYSICAL_DEFAULT_FOUR_PI_G,
+    PHYSICAL_DEFAULT_GAMMA,
+    PHYSICAL_DEFAULT_GRAVITY_RHO0,
+    PHYSICAL_DEFAULT_GRAVITY_SIGN,
+    PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2,
+    PHYSICAL_DEFAULT_QOM,
+    PHYSICAL_DEFAULT_VACUUM_FLOOR,
+)
 
 
 # --- State bricks ---------------------------------------------------------
@@ -28,7 +42,11 @@ class FluidState:
     native path.
     """
 
-    def __init__(self, kind="compressible", gamma=1.4, cs2=0.5, vacuum_floor=0.0):
+    def __init__(self,
+                 kind="compressible",
+                 gamma=PHYSICAL_DEFAULT_GAMMA,
+                 cs2=PHYSICAL_DEFAULT_FLUID_STATE_CS2,
+                 vacuum_floor=PHYSICAL_DEFAULT_VACUUM_FLOOR):
         self.kind = kind
         self.gamma = float(gamma)
         self.cs2 = float(cs2)
@@ -37,7 +55,7 @@ class FluidState:
         self.vacuum_floor = float(vacuum_floor)
 
     @classmethod
-    def compressible(cls, gamma=1.4):
+    def compressible(cls, gamma=PHYSICAL_DEFAULT_GAMMA):
         """Typed constructor for the COMPRESSIBLE fluid state (Spec 5 sec.14.2.5).
 
         ``pops.FluidState.compressible(gamma=1.4)`` is the typed equivalent of
@@ -48,7 +66,9 @@ class FluidState:
         return cls(kind="compressible", gamma=gamma)
 
     @classmethod
-    def isothermal(cls, cs2=0.5, vacuum_floor=0.0):
+    def isothermal(cls,
+                   cs2=PHYSICAL_DEFAULT_FLUID_STATE_CS2,
+                   vacuum_floor=PHYSICAL_DEFAULT_VACUUM_FLOOR):
         """Typed constructor for the ISOTHERMAL fluid state (Spec 5 sec.14.2.5).
 
         ``pops.FluidState.isothermal(cs2=0.5, vacuum_floor=0.0)`` is the typed equivalent of
@@ -64,7 +84,7 @@ class FluidState:
 class ExB:
     """Scalar advection by the E x B drift (magnetic field B0)."""
 
-    def __init__(self, B0=1.0):
+    def __init__(self, B0=PHYSICAL_DEFAULT_B0):
         self.B0 = float(B0)
 
 
@@ -84,7 +104,7 @@ class NoSource:
 class PotentialForce:
     """Potential force (q/m) rho E on the momentum (+ work if 4 vars)."""
 
-    def __init__(self, charge=1.0):
+    def __init__(self, charge=PHYSICAL_DEFAULT_QOM):
         self.charge = float(charge)
 
 
@@ -104,7 +124,7 @@ class MagneticLorentzForce:
 
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 
-    def __init__(self, charge=1.0):
+    def __init__(self, charge=PHYSICAL_DEFAULT_QOM):
         self.charge = float(charge)
 
 
@@ -114,7 +134,7 @@ class PotentialMagneticForce:
     force). Same q/m for both forces (same species). Reads B_z (set_magnetic_field); requires a
     fluid transport >= 3 variables. ``charge`` = q/m, sign included."""
 
-    def __init__(self, charge=1.0):
+    def __init__(self, charge=PHYSICAL_DEFAULT_QOM):
         self.charge = float(charge)
 
 
@@ -122,14 +142,16 @@ class PotentialMagneticForce:
 class ChargeDensity:
     """Charge density f = q n."""
 
-    def __init__(self, charge=1.0):
+    def __init__(self, charge=PHYSICAL_DEFAULT_CHARGE_Q):
         self.charge = float(charge)
 
 
 class BackgroundDensity:
     """Neutralizing background f = alpha (n - n0)."""
 
-    def __init__(self, alpha=1.0, n0=0.0):
+    def __init__(self,
+                 alpha=PHYSICAL_DEFAULT_ALPHA,
+                 n0=PHYSICAL_DEFAULT_BACKGROUND_N0):
         self.alpha = float(alpha)
         self.n0 = float(n0)
 
@@ -137,7 +159,10 @@ class BackgroundDensity:
 class GravityCoupling:
     """Self-consistent coupling f = sign 4piG (rho - rho0). sign = +1 gravity, -1 plasma."""
 
-    def __init__(self, sign=1.0, four_pi_G=1.0, rho0=1.0):
+    def __init__(self,
+                 sign=PHYSICAL_DEFAULT_GRAVITY_SIGN,
+                 four_pi_G=PHYSICAL_DEFAULT_FOUR_PI_G,
+                 rho0=PHYSICAL_DEFAULT_GRAVITY_RHO0):
         self.sign = float(sign)
         self.four_pi_G = float(four_pi_G)
         self.rho0 = float(rho0)
@@ -225,12 +250,12 @@ def _native_to_brick(obj, role):
             return NativeBrick("pops::ExBVelocity", "hyperbolic", fields={"B0": obj.B0},
                                    var_names=["n"], n_vars=1, prim_names=["n"])
         if isinstance(obj, CompressibleFlux):
-            g = float(getattr(obj, "gamma", 1.4))
+            g = float(getattr(obj, "gamma", PHYSICAL_DEFAULT_GAMMA))
             return NativeBrick("pops::CompressibleFlux", "hyperbolic", fields={"gamma": g},
                                    var_names=["rho", "rho_u", "rho_v", "E"], n_vars=4,
                                    prim_names=["rho", "u", "v", "p"], gamma=g)
         if isinstance(obj, IsothermalFlux):
-            cs2 = float(getattr(obj, "cs2", 1.0))
+            cs2 = float(getattr(obj, "cs2", PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2))
             return NativeBrick("pops::IsothermalFlux", "hyperbolic", fields={"cs2": cs2},
                                    var_names=["rho", "rho_u", "rho_v"], n_vars=3,
                                    prim_names=["rho", "u", "v"])

@@ -40,6 +40,11 @@ int main() {
   BoxArray ba = BoxArray::from_domain(dom, n);
   BCRec bc;  // periodique par defaut
 
+  PoissonFFT slow_probe(n, n, 1.0, 1.0);
+  PoissonFFT fast_probe(32, 32, 1.0, 1.0);
+  chk(slow_probe.uses_direct_dft_fallback(), "fft_dft_fallback_declared");
+  chk(!fast_probe.uses_direct_dft_fallback(), "fft_radix2_declared");
+
   auto gauss = [&](double x, double y) {
     return std::exp(-((x - 0.5) * (x - 0.5) + (y - 0.5) * (y - 0.5)) / 0.02);
   };
@@ -51,7 +56,9 @@ int main() {
     for_each_cell(dom, [f, geom, gauss](int i, int j) {
       f(i, j, 0) = 1.0 + 0.3 * gauss(geom.x_cell(i), geom.y_cell(j));
     });
+    reset_poisson_fft_direct_dft_fallback_count();
     fft.solve();
+    chk(poisson_fft_direct_dft_fallback_count() > 0, "fft_dft_fallback_counted");
 
     bool finite = true;
     double maxabs = 0;

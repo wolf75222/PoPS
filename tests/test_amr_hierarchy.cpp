@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <vector>
 
 using namespace pops;
@@ -35,6 +36,25 @@ int main() {
   chk(h.domain(1) == cdom.refine(2), "lev1_domain");  // [0..15]
   chk(h.boxes(1)[0] == (Box2D{{4, 4}, {11, 11}}), "lev1_box");
   chk(h.data(1).n_grow() == 1, "lev1_ghost");
+
+  auto throws_out_of_range = [](auto&& f) {
+    try {
+      f();
+    } catch (const std::out_of_range&) {
+      return true;
+    } catch (...) {
+      return false;
+    }
+    return false;
+  };
+  auto fine_data = [&]() {
+    return MultiFab(fba, DistributionMapping(fba.size(), n_ranks()), /*ncomp=*/1, /*ngrow=*/1);
+  };
+  chk(throws_out_of_range([&] { h.install_level(0, fba, fine_data()); }),
+      "install_level_rejects_level0");
+  chk(throws_out_of_range([&] { h.install_level(h.num_levels() + 1, fba, fine_data()); }),
+      "install_level_rejects_gap");
+  chk(h.num_levels() == 2, "install_level_invalid_keeps_levels");
 
   // remplir le grossier puis interpoler vers le fin imbrique
   Array4 ac = h.data(0).fab(0).array();

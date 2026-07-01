@@ -19,6 +19,14 @@ from pops.runtime._system_unified_install import _SystemUnifiedInstall
 from pops.runtime.profile import PerformanceSummary, Profile
 
 
+def _profile_payload(system):
+    """Structured profiler payload when the native extension exposes it, else legacy text."""
+    snapshot = getattr(system, "profile_snapshot", None)
+    if callable(snapshot):
+        return snapshot()
+    return system.profile_report()
+
+
 class _ProfileSession:
     """The typed profiling context manager System.profile() returns (Spec 5 sec.12.5).
 
@@ -39,7 +47,7 @@ class _ProfileSession:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self._summary = PerformanceSummary(self._system.profile_report(), self._profile)
+        self._summary = PerformanceSummary(_profile_payload(self._system), self._profile)
         self._system.disable_profiling()
         return False
 
@@ -51,7 +59,7 @@ class _ProfileSession:
         """
         if self._summary is not None:
             return self._summary
-        return PerformanceSummary(self._system.profile_report(), self._profile)
+        return PerformanceSummary(_profile_payload(self._system), self._profile)
 
 
 class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
@@ -168,6 +176,11 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         add_dynamic_block (.so JIT) and add_compiled_block (.so AOT), not only add_block.
         """
         return list(self._s.block_names())
+
+    def inspect(self):
+        """Structured, array-free runtime inspection report (ADC-591)."""
+        from pops.runtime.inspection import build_runtime_inspection
+        return build_runtime_inspection(self, runtime="system")
 
     def __str__(self):
         """Short, array-free summary: the installed block names (Spec 5 sec.12.1).

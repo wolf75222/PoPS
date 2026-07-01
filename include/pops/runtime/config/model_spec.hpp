@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pops/runtime/numerical_defaults.hpp>
+
 #include <string>
 
 /// @file
@@ -30,21 +32,24 @@ struct ModelSpec {
       ///< | "magnetic"/"lorentz" | "potential_magnetic"/"potential_lorentz"
   std::string elliptic;  ///< REQUIRED (unset): "charge" | "background" | "gravity"
 
-  double B0 = 1.0;            ///< ExBVelocity: magnetic field
-  double gamma = 1.4;         ///< CompressibleFlux: adiabatic index
-  double cs2 = 0.5;           ///< IsothermalFlux: sound speed squared
-  double vacuum_floor = 0.0;  ///< IsothermalFlux: quasi-vacuum density floor for u=m/max(rho,floor)
-                              ///< (ADC-77). Set from pops.FluidState(vacuum_floor=...) at compose;
+  double B0 = static_cast<double>(kPhysicalDefaultB0);        ///< ExBVelocity: magnetic field
+  double gamma = static_cast<double>(kPhysicalDefaultGamma);  ///< CompressibleFlux: adiabatic index
+  double cs2 =
+      static_cast<double>(kPhysicalDefaultFluidStateCs2);  ///< IsothermalFlux: sound speed squared
+  double vacuum_floor = static_cast<double>(
+      kPhysicalDefaultVacuumFloor);  ///< IsothermalFlux: quasi-vacuum density floor
+                                     ///< (ADC-77). Set from pops.FluidState(vacuum_floor=...)
   ///< INDEPENDENT of the spatial positivity_floor (deliberately decoupled --
   ///< coupling them shifts the CFL dt of existing positivity_floor runs).
   ///< 0 = off (bit-identical)
-  double qom = 1.0;        ///< PotentialForce / MagneticLorentzForce: q/m (sign included)
-  double q = 1.0;          ///< ChargeDensity: charge q
-  double alpha = 1.0;      ///< BackgroundDensity: Poisson coupling
-  double n0 = 0.0;         ///< BackgroundDensity: neutralizing background
-  double sign = 1.0;       ///< GravityCoupling: +1 gravity, -1 electrostatic
-  double four_pi_G = 1.0;  ///< GravityCoupling: coupling intensity
-  double rho0 = 1.0;       ///< GravityCoupling: background
+  double qom =
+      static_cast<double>(kPhysicalDefaultQOverM);  ///< PotentialForce / MagneticLorentzForce: q/m
+  double q = static_cast<double>(kPhysicalDefaultChargeQ);       ///< ChargeDensity: charge q
+  double alpha = static_cast<double>(kPhysicalDefaultAlpha);     ///< BackgroundDensity coupling
+  double n0 = static_cast<double>(kPhysicalDefaultBackgroundN0);  ///< neutralizing background
+  double sign = static_cast<double>(kPhysicalDefaultGravitySign);  ///< +1 gravity, -1 electrostatic
+  double four_pi_G = static_cast<double>(kPhysicalDefaultFourPiG);  ///< coupling intensity
+  double rho0 = static_cast<double>(kPhysicalDefaultGravityRho0);   ///< GravityCoupling background
 };
 
 }  // namespace pops

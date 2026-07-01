@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -12,10 +13,10 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // coarse solver (geometric multigrid)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (residual, reads the already-filled ghosts)
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, CoverageMask (coarse footprint of a patch)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <stdexcept>
 #include <vector>
 
@@ -170,13 +171,17 @@ class CompositeFacPoisson {
   int n_fine_patches() const { return ba_f_.size(); }
 
   void set_verbose(bool v) { verbose_ = v; }
+  const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
+  void reset_diagnostics() { diagnostics_.clear(); }
   /// true: iterate the FAC two-way coupling (C-F flux correction + coarse correction). false:
   /// ONE-WAY path (coarse solve + fine solve with bilinear C-F ghosts) -- the patch refines locally.
   void set_two_way(bool v) { two_way_ = v; }
 
   /// Solves the composite system. @return the final max composite residual.
   /// @p max_iters FAC iterations (two-way); @p fine_sweeps SOR sweeps per fine solve; @p tol tolerance.
-  Real solve(int max_iters = 30, int fine_sweeps = 400, Real tol = 1e-9) {
+  Real solve(int max_iters = kFACDefaultMaxIters,
+             int fine_sweeps = kFACDefaultFineSweeps,
+             Real tol = kFACDefaultTol) {
     // VARIABLE COEFFICIENT (condensed Schur operator B_z=0): sets eps on the coarse solver and
     // fills the eps ghosts PER LEVEL. eps_c ghosts = zero-gradient (coeff_bc Foextrap, like the
     // Schur builder); eps_f C-F ghosts = bilerp of eps_c (consistency of the coefficient flux across
@@ -198,15 +203,15 @@ class CompositeFacPoisson {
     // 0) initial coarse solve (gives a phi_c for the 1st C-F ghost).
     copy0(mg_.rhs(), f_c_);
     mg_.phi().set_val(Real(0));
-    mg_.solve(Real(1e-12), 100);
+    mg_.solve(kFACInitialCoarseRelTol, kFACInitialCoarseMaxCycles);
     copy0(phi_c_, mg_.phi());
 
     // 1) bilinear C-F ghosts + fine solve (base ONE-WAY).
     refresh_fine(fine_sweeps);
 
+    diagnostics_.clear();
     Real rnorm = composite_coarse_residual();
-    if (verbose_ && my_rank() == 0)
-      std::fprintf(stderr, "[FAC] init r_c=%.4e\n", rnorm);
+    record_residual(-1, rnorm);
     if (!two_way_) {
       last_residual_ = rnorm;
       return rnorm;
@@ -224,8 +229,7 @@ class CompositeFacPoisson {
       // re-ghost + re-solve fine on the corrected phi_c.
       refresh_fine(fine_sweeps);
       rnorm = composite_coarse_residual();
-      if (verbose_ && my_rank() == 0)
-        std::fprintf(stderr, "[FAC] it=%d r_c=%.4e\n", it, rnorm);
+      record_residual(it, rnorm);
     }
     last_residual_ = rnorm;
     return rnorm;
@@ -504,6 +508,15 @@ class CompositeFacPoisson {
     return nrm;
   }
 
+  void record_residual(int iteration, Real residual) {
+    if (!verbose_)
+      return;
+    diagnostics_.record("elliptic.fac.residual", "CompositeFacPoisson", "info",
+                        iteration < 0 ? "initial composite coarse residual"
+                                      : "FAC iteration composite coarse residual",
+                        iteration, static_cast<double>(residual));
+  }
+
   Geometry geom_c_, geom_f_;
   BoxArray ba_c_;
   DistributionMapping dm_c_;
@@ -518,6 +531,8 @@ class CompositeFacPoisson {
   std::vector<Box2D> patch_coarse_;  ///< covered coarse footprint PER fine patch (multi-patch)
   CoverageMask cov_;
   Real last_residual_ = 0;
+  RuntimeDiagnosticsReport diagnostics_ =
+      make_runtime_diagnostics_report("pops.numerics.elliptic.composite_fac_poisson");
   bool has_eps_ = false;    ///< true: div(eps grad phi) operator; false: scalar Laplacian (Phase 1)
   bool has_cross_ = false;  ///< true: adds the cross terms a_xy/a_yx (full tensor, Schur B_z!=0)
   bool verbose_ = false;

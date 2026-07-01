@@ -1,0 +1,95 @@
+"""ADC-603 numerical defaults and effective options reports."""
+
+import math
+
+import pytest
+
+pops = pytest.importorskip("pops")
+
+
+def _isothermal_model(cs2=0.7, charge=-2.0):
+    return pops.Model(
+        pops.FluidState.isothermal(cs2=cs2),
+        pops.IsothermalFlux(),
+        pops.NoSource(),
+        pops.ChargeDensity(charge=charge),
+    )
+
+
+def test_numerical_defaults_report_is_structured():
+    d = pops.numerical_defaults_report()
+    assert d["schema_version"] == 1
+    assert d["newton"]["max_iters"] == 2
+    assert d["newton"]["fd_eps"] == pytest.approx(1e-7)
+    assert d["krylov"]["schur_cartesian_max_iters"] == 400
+    assert d["krylov"]["schur_polar_max_iters"] == 600
+    assert d["mg"]["rel_tol"] == pytest.approx(1e-8)
+    assert d["mg"]["max_cycles"] == 50
+    assert d["fac"]["initial_coarse_rel_tol"] == pytest.approx(1e-12)
+    assert d["fac"]["initial_coarse_max_cycles"] == 100
+    assert d["fft"]["zero_mean_gauge"] is True
+    assert d["eb"]["cut_fraction_floor"] == pytest.approx(1e-3)
+    assert d["weno"]["epsilon"] == pytest.approx(1e-40)
+    assert d["physical"]["gamma"] == pytest.approx(1.4)
+    assert d["physical"]["B0"] == pytest.approx(1.0)
+    assert d["physical"]["charge_q"] == pytest.approx(1.0)
+    assert d["physical"]["fluid_state_cs2"] == pytest.approx(0.5)
+    assert d["physical"]["native_brick_isothermal_cs2"] == pytest.approx(1.0)
+
+
+def test_system_inspect_reports_effective_block_and_solver_options():
+    sim = pops.System(n=8, L=1.0, periodic=True)
+    sim.add_block(
+        "ion",
+        _isothermal_model(),
+        time=pops.IMEX(
+            newton_max_iters=4,
+            newton_rel_tol=1e-6,
+            newton_fd_eps=2e-7,
+            newton_damping=0.8,
+            newton_fail_policy="throw",
+            newton_diagnostics=True,
+        ),
+        spatial=pops.Spatial(positivity_floor=1e-12),
+    )
+    sim.set_poisson(abs_tol=1e-11)
+
+    options = sim.inspect().to_dict()["options"]
+    assert options["defaults"]["newton"]["max_iters"] == 2
+    assert options["poisson"]["solver"] == "geometric_mg"
+    assert options["poisson"]["epsilon"] == pytest.approx(1.0)
+    assert options["poisson"]["abs_tol"] == pytest.approx(1e-11)
+
+    block = options["blocks"][0]
+    assert block["name"] == "ion"
+    assert block["transport"] == "isothermal"
+    assert block["time"] == "imex"
+    assert block["newton"]["max_iters"] == 4
+    assert block["newton"]["rel_tol"] == pytest.approx(1e-6)
+    assert block["newton"]["fd_eps"] == pytest.approx(2e-7)
+    assert block["newton"]["fail_policy"] == "throw"
+    assert block["newton"]["diagnostics"] is True
+    assert block["physical"]["cs2"] == pytest.approx(0.7)
+    assert block["physical"]["q"] == pytest.approx(-2.0)
+    assert block["positivity_floor"] == pytest.approx(1e-12)
+
+
+def test_invalid_newton_and_refinement_values_are_rejected():
+    with pytest.raises(ValueError, match="newton_max_iters"):
+        pops.IMEX(newton_max_iters=0)
+
+    amr = pops.AmrSystem(n=8, L=1.0, periodic=True)
+    with pytest.raises(RuntimeError, match="threshold must be finite"):
+        amr.set_refinement(math.inf)
+    with pytest.raises(RuntimeError, match="grad_threshold must be finite"):
+        amr.set_phi_refinement(math.nan)
+
+
+def test_amr_inspect_reports_refinement_sentinel_as_policy():
+    amr = pops.AmrSystem(n=8, L=1.0, periodic=True)
+    amr.set_refinement(1e30)
+    options = amr.inspect().to_dict()["options"]
+    assert options["runtime"] == "amr_system"
+    assert options["amr"]["disabled"] is True
+    assert options["amr"]["disabled_policy"] == "legacy_abi_sentinel_threshold"
+    assert options["defaults"]["amr"]["refinement_disabled_threshold"] == pytest.approx(1e30)

@@ -9,6 +9,15 @@ module under the 500-line cap ; ``pops.runtime.bricks`` re-exports all of them. 
 """
 
 from pops.runtime._bricks_scheme import Explicit
+from pops.runtime.defaults import (
+    NEWTON_DEFAULT_ABS_TOL,
+    NEWTON_DEFAULT_DAMPING,
+    NEWTON_DEFAULT_FAIL_POLICY,
+    NEWTON_DEFAULT_FD_EPS,
+    NEWTON_DEFAULT_MAX_ITERS,
+    NEWTON_DEFAULT_REL_TOL,
+    PHYSICAL_DEFAULT_ALPHA,
+)
 
 
 def _role_to_stable(name):
@@ -93,9 +102,13 @@ class IMEX:
 
     kind = "imex"
     def __init__(self, substeps=1, stride=1, implicit_vars=None, implicit_roles=None,
-                 newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
-                 newton_fd_eps=1e-7, newton_diagnostics=False, newton_damping=1.0,
-                 newton_fail_policy="none"):
+                 newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
+                 newton_rel_tol=NEWTON_DEFAULT_REL_TOL,
+                 newton_abs_tol=NEWTON_DEFAULT_ABS_TOL,
+                 newton_fd_eps=NEWTON_DEFAULT_FD_EPS,
+                 newton_diagnostics=False,
+                 newton_damping=NEWTON_DEFAULT_DAMPING,
+                 newton_fail_policy=NEWTON_DEFAULT_FAIL_POLICY):
         if int(substeps) < 1:
             raise ValueError("IMEX: substeps >= 1 (got %r)" % (substeps,))
         if int(stride) < 1:
@@ -152,9 +165,13 @@ class SourceImplicit:
     kind = "imex"  # same C++ path as IMEX (ImplicitSourceStepper)
 
     def __init__(self, substeps=1, stride=1, implicit_vars=None, implicit_roles=None,
-                 newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
-                 newton_fd_eps=1e-7, newton_diagnostics=False, newton_damping=1.0,
-                 newton_fail_policy="none"):
+                 newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
+                 newton_rel_tol=NEWTON_DEFAULT_REL_TOL,
+                 newton_abs_tol=NEWTON_DEFAULT_ABS_TOL,
+                 newton_fd_eps=NEWTON_DEFAULT_FD_EPS,
+                 newton_diagnostics=False,
+                 newton_damping=NEWTON_DEFAULT_DAMPING,
+                 newton_fail_policy=NEWTON_DEFAULT_FAIL_POLICY):
         if int(substeps) < 1:
             raise ValueError("SourceImplicit: substeps >= 1 (got %r)" % (substeps,))
         if int(stride) < 1:
@@ -218,9 +235,13 @@ class IMEXRK:
     kind = "imexrk_ars222"
 
     def __init__(self, scheme="ars222", substeps=1, stride=1,
-                 newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
-                 newton_fd_eps=1e-7, newton_diagnostics=False, newton_damping=1.0,
-                 newton_fail_policy="none"):
+                 newton_max_iters=NEWTON_DEFAULT_MAX_ITERS,
+                 newton_rel_tol=NEWTON_DEFAULT_REL_TOL,
+                 newton_abs_tol=NEWTON_DEFAULT_ABS_TOL,
+                 newton_fd_eps=NEWTON_DEFAULT_FD_EPS,
+                 newton_diagnostics=False,
+                 newton_damping=NEWTON_DEFAULT_DAMPING,
+                 newton_fail_policy=NEWTON_DEFAULT_FAIL_POLICY):
         if scheme != "ars222":
             raise ValueError("IMEXRK: scheme 'ars222' (only wired IMEX-RK scheme; got %r)"
                              % (scheme,))
@@ -313,7 +334,8 @@ class CondensedSchur:
       made configurable by the 2026-06 audit (explicit numerical constants).
     """
 
-    def __init__(self, kind="electrostatic_lorentz", theta=0.5, alpha=1.0,
+    def __init__(self, kind="electrostatic_lorentz", theta=0.5,
+                 alpha=PHYSICAL_DEFAULT_ALPHA,
                  density=Role.Density, momentum=(Role.MomentumX, Role.MomentumY),
                  energy=None, magnetic_field="B_z", potential="phi",
                  krylov_tol=None, krylov_max_iters=None):

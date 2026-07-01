@@ -119,6 +119,8 @@ pops_add_test(test_cache_manager)  # Spec 3 scheduler value cache (ADC-458)
 pops_add_test(test_checkpoint_cache)  # Spec 3 scheduler-cache checkpoint/restart round-trip (ADC-458)
 pops_add_test(test_external_brick)  # Spec 3 external C++ brick registry + macro (ADC-463)
 pops_add_test(test_external_brick_json)  # Spec 3 manifest JSON escape/unescape round-trip (ADC-463)
+pops_add_test(test_runtime_environment)  # ADC-609: runtime env / precision / communicator facts
+pops_add_test(test_capability_report)  # ADC-591: structured native capability report
 
 # --- maillage / conteneurs ---
 pops_add_test(test_box2d)
@@ -219,6 +221,10 @@ pops_add_test(test_polar_condensed_schur_source_stepper)
 # SEUL echoue (#120 : stagnation c=0.1-0.4, divergence c=0.7), + consistance A=I vs GeometricMG.
 # (entree serie ; les entrees MPI np=1/2/4 sont ajoutees dans le bloc POPS_HAS_MPI plus bas)
 pops_add_test(test_krylov_solver)
+pops_add_test(test_numerical_defaults)
+pops_add_test(test_fallback_diagnostics)
+pops_add_test(test_structured_solver_diagnostics)
+pops_add_test(test_public_validation_errors)  # ADC-605: release-active validation instead of public asserts
 # ADC-405a : couche de Krylov GENERIQUE matrice-libre (generic_krylov.hpp) -- Richardson, CG,
 # BiCGStab -- l'operateur passe en CALLBACK (ApplyFn). Valide les trois boucles sur un operateur
 # de Helmholtz SPD A = I - alpha*Lap : solution manufacturee discretisation-exacte (rhs = A(phi_exact)),

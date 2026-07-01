@@ -6,6 +6,7 @@
 #include <pops/mesh/execution/for_each.hpp>  // reduce_max_cell (max mu over the cells, device-clean functor)
 #include <pops/parallel/comm.hpp>  // all_reduce_min/max (global bounds: identical dt on all ranks)
 #include <pops/runtime/context/grid_context.hpp>  // GeometryMode (disk transport dispatch)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <stdexcept>  // std::runtime_error (disk mode requested without disk advance on a block)
 
@@ -613,7 +614,7 @@ class SystemStepper {
     // subcycled n_b. aux frozen over the macro-step (coupling once-per-step). STRIDE SEMANTICS =
     // hold-then-catch-up: a block of cadence M is HELD as long as (macro_step + 1) % M != 0, then
     // advances by an effective step M*macro_dt at the window end (cf. stride_due).
-    Real wmin = Real(1e30);
+    Real wmin = kAdaptiveNoEvolvingBlockSentinel;
     std::vector<Real> wb;
     wb.reserve(P->sp.size());
     for (auto& s : P->sp) {
@@ -622,7 +623,7 @@ class SystemStepper {
       if (s.evolve)
         wmin = std::min(wmin, w);
     }
-    if (wmin >= Real(1e30))
+    if (wmin >= kAdaptiveNoEvolvingBlockSentinel)
       wmin = kCflSpeedFloor;      // no evolving block (all frozen)
     const Real h = cfl_grid_h();  // Cartesian min(dx,dy) / polar min(dr, r_min*dtheta)
     double macro_dt = cfl * static_cast<double>(h) / static_cast<double>(wmin);

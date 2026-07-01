@@ -56,9 +56,12 @@ void init_amr(py::module_& m) {
           // IMEX Newton options (wave 3, System parity): OPTIONS wired in MONO-BLOCK (coupler)
           // AND MULTI-BLOCK (engine). newton_diagnostics (newton_report report): native MULTI-BLOCK
           // only (mono-block rejected at build; .so loaders rejected at the Python facade).
-          py::arg("newton_max_iters") = 2, py::arg("newton_rel_tol") = 0.0,
-          py::arg("newton_abs_tol") = 0.0, py::arg("newton_fd_eps") = 1e-7,
-          py::arg("newton_damping") = 1.0, py::arg("newton_fail_policy") = "none",
+          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
+          py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
+          py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
+          py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
+          py::arg("newton_fail_policy") = "none",
           py::arg("newton_diagnostics") = false,
           // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
@@ -84,6 +87,18 @@ void init_amr(py::module_& m) {
             else
               d["failed_cell"] = py::none();
             d["failed_component"] = static_cast<int>(r.failed_comp);
+            py::list diagnostics;
+            for (const RuntimeDiagnosticEvent& event : r.diagnostics) {
+              py::dict row;
+              row["code"] = event.code;
+              row["component"] = event.component;
+              row["severity"] = event.severity;
+              row["message"] = event.message;
+              row["iteration"] = event.iteration;
+              row["value"] = event.value;
+              diagnostics.append(row);
+            }
+            d["diagnostics"] = diagnostics;
             return d;
           },
           py::arg("name"))
@@ -94,7 +109,8 @@ void init_amr(py::module_& m) {
       // facade side (AmrSystem.add_equation) before this binding.
       .def("add_native_block", &AmrSystem::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
-           py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
+           py::arg("recon") = "conservative", py::arg("time") = "explicit",
+           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma),
            py::arg("substeps") = 1,
            // Zhang-Shu positivity floor (ADC-322): marshaled down the regenerated .so loader
            // (pops_install_native_amr). 0 (default) = inactive, bit-identical.
@@ -249,6 +265,9 @@ void init_amr(py::module_& m) {
            "Per-phase wall-clock report of the AMR runtime (count / total / mean / min / max per "
            "scope, plus counters regrid / fill_boundary / mpi_reductions / mpi_messages). "
            "Per-rank.")
+      .def("profile_snapshot",
+           [](AmrSystem& s) { return profile_snapshot_to_dict(s.profiler_handle().snapshot()); },
+           "Structured AMR profiling snapshot: schema_version, enabled, scopes and counters.")
       .def("nx", &AmrSystem::nx)
       .def("time", &AmrSystem::time)
       // AMR clock (IO v1, System parity): macro-step counter + restoration (t, macro_step) ->
@@ -277,6 +296,11 @@ void init_amr(py::module_& m) {
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
       .def("n_blocks", &AmrSystem::n_blocks)
       .def("block_names", &AmrSystem::block_names)
+      .def("effective_options_report",
+           [](const AmrSystem& s) {
+             return effective_options_report_to_dict(s.effective_options_report());
+           },
+           "Structured effective numerical/solver/physical options for this AmrSystem.")
       .def("n_patches", &AmrSystem::n_patches)
       // Index-space footprints of the fine patches: list of tuples (level, ilo, jlo, ihi, jhi), INCLUSIVE
       // corners, in the index space of the level (n << level cells/direction, ratio 2). SAME
