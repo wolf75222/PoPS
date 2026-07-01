@@ -53,7 +53,8 @@ class CompiledReport:
     """
 
     def __init__(self, *, name, backend, platform, layout, blocks, fields, program, inputs,
-                 artifacts, status, env=None, runtime=None, capabilities=None, options=None):
+                 artifacts, status, env=None, runtime=None, capabilities=None, options=None,
+                 module_manifest=None):
         self.name = name
         self.backend = backend
         self.platform = platform
@@ -73,6 +74,10 @@ class CompiledReport:
         self.runtime = dict(runtime) if runtime else {}
         self.capabilities = dict(capabilities) if capabilities else {}
         self.options = dict(options) if options else {}
+        # The operator-first Module manifest (ADC-585): the JSON-ready dict of the resolved model's
+        # Module (spaces / params / aux / typed operators / native routes), or None when the artifact
+        # carries a bare dsl.Model with no backing Module -- absent, never fabricated.
+        self.module_manifest = dict(module_manifest) if module_manifest else None
 
     def to_dict(self):
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -82,7 +87,8 @@ class CompiledReport:
                 "inputs": {k: list(v) for k, v in self.inputs.items()},
                 "artifacts": dict(self.artifacts), "status": self.status,
                 "env": dict(self.env), "runtime": dict(self.runtime),
-                "capabilities": dict(self.capabilities), "options": dict(self.options)}
+                "capabilities": dict(self.capabilities), "options": dict(self.options),
+                "module_manifest": dict(self.module_manifest) if self.module_manifest else None}
 
     def to_json(self, path=None, *, indent=2):
         """Serialise :meth:`to_dict` to JSON; write to ``path`` if given, else return the string."""
@@ -166,6 +172,16 @@ class CompiledReport:
             backdoor = self.env.get("jit_backdoor")
             lines.append("    jit_backdoor  : %s%s"
                          % (backdoor, "  *** UNSAFE debug gate ENABLED ***" if backdoor else ""))
+        if self.module_manifest:
+            manifest = self.module_manifest
+            ops = manifest.get("operators", [])
+            lines.append("  module manifest (ADC-585):")
+            lines.append("    schema_version : %s" % manifest.get("schema_version"))
+            lines.append("    name           : %s" % manifest.get("name"))
+            lines.append("    state_spaces   : %s"
+                         % (", ".join(sorted(manifest.get("state_spaces", {}))) or "(none)"))
+            lines.append("    operators      : %s"
+                         % (", ".join(op.get("name") for op in ops) or "(none)"))
         lines.append("  status   : %s" % self.status)
         return "\n".join(lines)
 
@@ -242,12 +258,17 @@ def build_compiled_report(compiled):
     codegen_env = getattr(compiled, "codegen_env", None)
     env = codegen_env.to_dict() if codegen_env is not None else {}
 
+    # The operator-first Module manifest (ADC-585), when the artifact carries a backing Module.
+    manifest = getattr(compiled, "module_manifest", None)
+    module_manifest = manifest.to_dict() if manifest is not None else None
+
     return CompiledReport(
         name=prog_summary["name"], backend="production", platform=platform, layout=layout,
         blocks=blocks, fields=fields, program=prog_summary,
         inputs={"states": states, "params": req_params, "aux": req_aux},
         artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env,
-        runtime=runtime, capabilities=capability_report, options=_compiled_options(compiled))
+        runtime=runtime, capabilities=capability_report, options=_compiled_options(compiled),
+        module_manifest=module_manifest)
 
 
 def _compiled_options(compiled):

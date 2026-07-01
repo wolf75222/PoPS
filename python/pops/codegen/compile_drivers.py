@@ -401,11 +401,14 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
         for lib_obj in libraries:
             library_manifests.append(read_library_manifest(lib_obj))
 
-    # A pure operator-first Module lowers to a dsl.Model via the shared codegen.
+    # A pure operator-first Module lowers to a dsl.Model via the shared codegen. The source Module
+    # is captured BEFORE lowering so its manifest (ADC-585) can be attached to the handle.
+    source_module = None
     if model is not None:
         try:
             from pops import model as _model_pkg
             if isinstance(model, _model_pkg.Module):
+                source_module = model
                 model = _module_to_model(model)
         except ImportError:
             pass  # pops.model unavailable; carry model as-is
@@ -434,6 +437,11 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
                                 % (program_hash, abi_key, target, _registry_cache_key()))
                                .encode()).hexdigest()
 
+    # The Module manifest (ADC-585): attached on BOTH the cache-hit and fresh-compile path; its
+    # abi_key slot is bound in CompiledProblem. None for a bare dsl.Model with no backing Module.
+    from pops.model.manifest import module_manifest_of
+    module_manifest = module_manifest_of(source_module if source_module is not None else model)
+
     if so_path is None:
         so_path = _cache_so_path(program_hash, abi_key, "program-production", target,
                                  getattr(time, "name", "problem"))
@@ -447,7 +455,8 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
             cenv.log("compile_problem: cache HIT -> %s" % so_path)
             compiled = CompiledProblem(so_path, time, model, abi_key, cc, eff_std,
                                        libraries=library_manifests, problem_hash=program_hash,
-                                       cache_key=cache_key, codegen_env=cenv)
+                                       cache_key=cache_key, codegen_env=cenv,
+                                       module_manifest=module_manifest)
             cenv.run_dumps(compiled)
             return compiled
 
@@ -481,6 +490,6 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
                                libraries=library_manifests, problem_hash=program_hash,
                                cache_key=cache_key, compile_command=compile_command,
                                generated_sources=[gen_src_path] if gen_src_path else [],
-                               codegen_env=cenv)
+                               codegen_env=cenv, module_manifest=module_manifest)
     cenv.run_dumps(compiled)
     return compiled

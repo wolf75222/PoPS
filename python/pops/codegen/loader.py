@@ -27,10 +27,19 @@ class CompiledProblem:
 
     def __init__(self, so_path, program, model, abi_key, cxx, std, libraries=None,
                  problem_hash=None, cache_key=None, compile_command=None, generated_sources=None,
-                 codegen_env=None):
+                 codegen_env=None, module_manifest=None):
         self.so_path = so_path
         self.program = program          # the pops.time.Program that was lowered
         self.model = model              # the physical model (optional; added as a block in the MVP)
+        # The self-describing Module manifest (ADC-585): the operator-first central representation of
+        # the resolved model (spaces / params / aux / typed operators / native routes), superseding
+        # the legacy flat ModelSpec. None when the model is a bare dsl.Model with no backing Module,
+        # or when the handle is built outside compile_problem. Its abi_requirements abi_key slot is
+        # bound below from this handle's abi_key (a compile-time fact the manifest builder leaves
+        # open).
+        self.module_manifest = module_manifest
+        if module_manifest is not None and abi_key is not None:
+            module_manifest.abi_requirements["abi_key"] = abi_key
         self.program_name = getattr(program, "name", None)
         self.program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard

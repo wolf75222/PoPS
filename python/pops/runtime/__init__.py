@@ -29,6 +29,7 @@ Example::
     sim.set_density("ne", ne_numpy)
     sim.step_cfl(0.4)
 """
+from pops._bootstrap import ModelSpec  # noqa: F401  (legacy native-bridge POD, quarantined from the pops root by ADC-585)
 from pops.runtime.profile import PerformanceSummary, Profile  # noqa: F401
 from pops.runtime.inspection import RuntimeInspectionReport  # noqa: F401
 from pops.runtime.defaults import numerical_defaults_report  # noqa: F401
@@ -36,6 +37,7 @@ from pops.runtime.fallbacks import fallback_diagnostics_report, reset_fallback_d
 from pops.runtime.routes import Route, route_manifest  # noqa: F401  (typed native routes, ADC-584)
 
 __all__ = [
+    "ModelSpec",
     "Profile", "PerformanceSummary", "RuntimeInspectionReport", "numerical_defaults_report",
     "fallback_diagnostics_report", "reset_fallback_diagnostics",
     "Route", "route_manifest",
