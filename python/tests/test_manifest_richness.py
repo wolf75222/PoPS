@@ -191,6 +191,11 @@ def test_compiled_capability_matrix_lists_unsupported_routes():
     for feature in ("supports_uniform", "layout:Uniform", "spatial:finite_volume",
                     "elliptic:geometric_mg", "checkpoint:system_v1"):
         assert feature in rows
+    for feature in ("elliptic:fft_direct_dft_fallback", "amr:refinement_ratio",
+                    "parallel:mpi_world_communicator",
+                    "runtime:native_loader_legacy_metadata"):
+        assert rows[feature].status == "partial"
+        assert rows[feature].limitation
     for feature in ("limiter:mc", "elliptic:fft_amr", "checkpoint:parallel_hdf5",
                     "output:plotfile_uniform"):
         assert rows[feature].status == "unavailable"

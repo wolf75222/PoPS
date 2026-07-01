@@ -137,6 +137,24 @@ def test_explain_routes_inventory_exposes_unsupported_limitations():
         assert rows[feature].alternative
 
 
+def test_explain_routes_exposes_adc601_native_audit_limitations():
+    matrix = _uniform_problem().explain_routes()
+    rows = {r.feature: r for r in matrix.rows}
+    expected = {
+        "elliptic:fft_direct_dft_fallback": "direct O(n^2) DFT",
+        "elliptic:mg_fac_defaults": "SolverDefaults",
+        "mesh:2d_storage_arithmetic": "Dim!=2",
+        "amr:refinement_ratio": "ratio=2",
+        "parallel:mpi_world_communicator": "MPI_COMM_WORLD",
+        "schur:condensed_source": "2D plus Bz",
+        "runtime:native_loader_legacy_metadata": "u0.. names",
+    }
+    for feature, limitation_fragment in expected.items():
+        row = rows[feature]
+        assert row.status == "partial"
+        assert limitation_fragment in row.limitation
+
+
 def test_explain_routes_reads_metadata_only_no_runtime_import():
     # Building the matrix reads the inert capability dict; it does not require the runtime System.
     import importlib

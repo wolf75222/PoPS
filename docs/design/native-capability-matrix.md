@@ -54,6 +54,24 @@ Explicit unsupported rows include:
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 
+ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
+hard failures, but they make compatibility and performance constraints visible to reports and
+future validators:
+
+- `elliptic:fft_direct_dft_fallback`: non-power-of-two FFT grids use the correct direct `O(n^2)`
+  DFT fallback and expose fallback calls through `poisson_fft_direct_dft_fallback_count()`.
+- `elliptic:mg_fac_defaults`: MG/FAC defaults and debug diagnostics still need a shared
+  `SolverDefaults`/logger route.
+- `mesh:2d_storage_arithmetic`: the native mesh/storage/arithmetic core is `Box2D`/`Fab2D`
+  2D-only.
+- `amr:refinement_ratio`: native AMR hierarchy, patch ranges, reflux and subcycling are `ratio=2`
+  only.
+- `parallel:mpi_world_communicator`: MPI collectives currently use `MPI_COMM_WORLD`.
+- `schur:condensed_source`: Schur condensation/source kernels are specialised to 2D plus Bz/Lorentz
+  coupling.
+- `runtime:native_loader_legacy_metadata`: old native modules without metadata still fall back to
+  `u0..` names, empty roles, `gamma=1.4` and host prototype copies.
+
 ## Error Policy
 
 Unsupported routes must fail before they can compile or bind. Error messages must name:
