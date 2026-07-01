@@ -267,7 +267,7 @@ class HybridModel:
         kokkos_like = native or mode == "aot"
         if mode == "aot" and _native_kokkos_root() is None:
             raise RuntimeError(
-                "HybridModel.compile: adc_cpp is Kokkos-only -- the AOT model includes the pops "
+                "HybridModel.compile: PoPS is Kokkos-only -- the AOT model includes the pops "
                 "headers which require Kokkos. Point to an installed Kokkos via POPS_KOKKOS_ROOT (or "
                 "Kokkos_ROOT), e.g. `export POPS_KOKKOS_ROOT=/path/to/kokkos` (Serial is enough "
                 "on CPU). Run `python -c \"import pops; pops.doctor()\"` for a full diagnosis.")

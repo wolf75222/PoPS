@@ -4,7 +4,7 @@ Goal: document public interfaces, invariants and layer boundaries without
 paraphrasing the code. Good documentation explains when to use a brick, what assumptions
 it makes, and what contracts it exposes to the rest of the library.
 
-This convention is aligned with existing standards, adapted to `adc_cpp`:
+This convention is aligned with existing standards, adapted to `PoPS`:
 
 - [Doxygen, "Documenting the code"](https://www.doxygen.nl/manual/docblocks.html): `///` blocks,
   brief/details separation, `@file`, `@brief`, `@param`, `@return`.

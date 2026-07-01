@@ -2,7 +2,7 @@
 Vendored verbatim from the Google documentation style guide:
 https://github.com/google/styleguide/blob/gh-pages/docguide/philosophy.md (gh-pages branch).
 Licensed CC-BY-3.0 (https://creativecommons.org/licenses/by/3.0/).
-Canonical doc-style reference for adc_cpp: keep the body verbatim, do not edit.
+Canonical doc-style reference for PoPS: keep the body verbatim, do not edit.
 How we apply it locally: docs/DOC_QUALITY.md and CONTRIBUTING.md.
 -->
 

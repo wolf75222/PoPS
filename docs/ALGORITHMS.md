@@ -1,6 +1,6 @@
 # Algorithms
 
-Catalog of the generic numerical methods of the `adc_cpp` core. For each one: the intuition, the
+Catalog of the generic numerical methods of the `PoPS` core. For each one: the intuition, the
 formula and its discretization, a pseudocode, the C++ file that implements it, and the constraints. The
 core is model-agnostic; it names no scenario (diocotron, Euler-Poisson, two-fluid). These scenarios are
 compositions of generic bricks and live on the application side

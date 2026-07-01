@@ -1,6 +1,6 @@
 # Security policy
 
-`adc_cpp` is scientific research code (a numerical solver). It is not meant to process
+`PoPS` is scientific research code (a numerical solver). It is not meant to process
 sensitive data or to be exposed as a service, but reports of vulnerabilities or safety
 issues (out-of-bounds read, undefined behavior, denial of service from malformed input,
 ...) are welcome.

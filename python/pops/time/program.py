@@ -123,7 +123,7 @@ class CompiledTime:
     A NUMERIC `cfl` (e.g. `cfl=0.5`) is wired: it is applied at RUNTIME by `sim.run(cfl=...)`, whose
     `cfl` defaults to the installed cadence's `cfl` when the caller passes none, so a bare
     `sim.run(t_end)` after `bind(..., cadence=CompiledTime(cfl=0.5))` advances at `cfl=0.5` (the
-    per-block CFL `dt` is computed in adc_cpp and drives the installed Program). A self-computed `cfl`
+    per-block CFL `dt` is computed in PoPS and drives the installed Program). A self-computed `cfl`
     SUB-PROGRAM (`cfl="program"`) is still deferred (the Program would export its own dt bound); it
     fails loud rather than being silently ignored."""
 

@@ -192,7 +192,7 @@ class _SystemIO:
             raise RuntimeError(
                 "write(format='hdf5', parallel=True) : the loaded _pops module does not expose "
                 "local_boxes/local_state (build prior to hyperslab writes). Remedy : "
-                "rebuild adc_cpp, or parallel=False.")
+                "rebuild PoPS, or parallel=False.")
         comm = MPI.COMM_WORLD
         rank0 = (_pops.my_rank() == 0)
         # phi : solved + gathered COLLECTIVELY (all ranks ; potential_global does the all_reduce),

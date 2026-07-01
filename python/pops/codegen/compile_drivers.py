@@ -93,7 +93,7 @@ def compile_aot(model, so_path, include=None, name=None, cxx=None, std="c++20",
     src = emit_cpp_aot_source(model, name=name, hoist_reciprocals=hoist_reciprocals)
     if _native_kokkos_root() is None:
         raise RuntimeError(
-            "compile_aot: adc_cpp is Kokkos-only -- the AOT model includes the pops headers which "
+            "compile_aot: PoPS is Kokkos-only -- the AOT model includes the pops headers which "
             "require Kokkos. Point at an installed Kokkos via POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. "
             "`export POPS_KOKKOS_ROOT=/path/to/kokkos` (Serial is enough on CPU). "
             "Run `python -c \"import pops; pops.doctor()\"` for a full diagnosis and copy-paste fixes.")

@@ -54,14 +54,14 @@ def pops_header_signature(include):
 # To make m.compile(...) ergonomic, the pops headers directory is deduced automatically
 # when the caller does not pass it. MIRROR of adc_cases/common/native.py::pops_include : we try
 # $POPS_INCLUDE (explicit override), then we climb from the installed `pops` package (build-py/python/
-# pops/ -> ../../../include), then the neighboring repo ../adc_cpp/include. Validity criterion : the
+# pops/ -> ../../../include), then the neighboring repo ../PoPS/include. Validity criterion : the
 # canonical file pops/mesh/multifab.hpp exists. No hard import of pops here (the dsl module may be loaded
 # outside the package) : we resolve `pops.__file__` lazily.
 def pops_include():
-    """include/ directory of adc_cpp (header-only headers of the core), auto-detected.
+    """include/ directory of PoPS (header-only headers of the core), auto-detected.
 
     Priority : $POPS_INCLUDE (override), otherwise from the installed `pops` package
-    (.../pops -> ../../../include), otherwise the neighboring repo (.../adc_cpp/include from this module).
+    (.../pops -> ../../../include), otherwise the neighboring repo (.../PoPS/include from this module).
     Requires that pops/mesh/storage/multifab.hpp exists. Raises RuntimeError if not found (diagnostic listing the
     candidates), so as to NEVER compile against a silently wrong include."""
     import os
@@ -83,7 +83,7 @@ def pops_include():
             return c
     raise RuntimeError(
         "pops headers not found (looking for pops/mesh/storage/multifab.hpp). "
-        "Pass include=<adc_cpp>/include or set POPS_INCLUDE. Candidates tried : "
+        "Pass include=<PoPS>/include or set POPS_INCLUDE. Candidates tried : "
         + ", ".join(repr(c) for c in candidates))
 
 
@@ -312,7 +312,7 @@ def _probe_cxx_std(cc, std):
 def _native_kokkos_root():
     """Kokkos root to compile the DSL loaders with the SAME backend as the _pops module.
 
-    adc_cpp is KOKKOS-ONLY: every DSL .so that includes the pops headers (aot, native) MUST be compiled
+    PoPS is KOKKOS-ONLY: every DSL .so that includes the pops headers (aot, native) MUST be compiled
     with Kokkos (for_each.hpp #error otherwise). The root is read from POPS_KOKKOS_ROOT / Kokkos_ROOT /
     KOKKOS_ROOT; None if not found (the caller then raises an explicit error)."""
     for key in ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT"):
@@ -474,14 +474,14 @@ def _native_kokkos_flags():
 
 def pops_loader_build_flags(cxx=None):
     """Flags to compile OUTSIDE CMake a .so that INCLUDES the pops headers and will be loaded into the
-    _pops module (DSL loaders, ABI tests). adc_cpp being Kokkos-only, the .so MUST be compiled with
+    _pops module (DSL loaders, ABI tests). PoPS being Kokkos-only, the .so MUST be compiled with
     Kokkos (for_each.hpp #error otherwise). Returns (compiler, compile_flags, link_flags): Kokkos +
     (macOS) -undefined dynamic_lookup. The Kokkos symbols stay UNDEFINED, resolved at load time
     against the Kokkos runtime already loaded by _pops (no 2nd copy). Raises if no installed Kokkos is
     visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU)."""
     if _native_kokkos_root() is None:
         raise RuntimeError(
-            "pops_loader_build_flags: adc_cpp is Kokkos-only -- point to an installed Kokkos via "
+            "pops_loader_build_flags: PoPS is Kokkos-only -- point to an installed Kokkos via "
             "POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. `export POPS_KOKKOS_ROOT=/path/to/kokkos`.")
     cc = _native_kokkos_compiler(cxx)
     cflags, lflags = _native_kokkos_flags()

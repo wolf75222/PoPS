@@ -4,7 +4,7 @@ Lean/Agile Documentation":
 https://agilemodeling.com/essays/agileDocumentationBestPractices.htm
 The source essay is (c) Ambysoft Inc. and carries no open license, so it is NOT
 vendored here the way the Google CC-BY-3.0 files are. This page is our own summary,
-tailored to adc_cpp, and may be edited freely. It is the "how much, what, and when"
+tailored to PoPS, and may be edited freely. It is the "how much, what, and when"
 companion to the Google guides' "how to write".
 -->
 
@@ -30,7 +30,7 @@ Contents:
 ## Writing
 
 *   **Prefer executable specifications over static prose.** A test pins down a
-    requirement and proves it at the same time. In adc_cpp the ctest suite and the
+    requirement and proves it at the same time. In PoPS the ctest suite and the
     golden/replay cases are the real specification of behavior; reach for a static
     document only for what a test cannot say (intent, trade-offs, the shape of the
     whole).

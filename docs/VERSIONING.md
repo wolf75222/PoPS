@@ -1,6 +1,6 @@
 # Versioning
 
-`adc_cpp` follows [Semantic Versioning 2.0.0](https://semver.org). This document declares
+`PoPS` follows [Semantic Versioning 2.0.0](https://semver.org). This document declares
 the public API that the version number tracks, and the rules for bumping it.
 
 ## Single source of the version number

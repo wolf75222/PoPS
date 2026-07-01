@@ -28,11 +28,11 @@
 #include <type_traits>  // std::is_same_v: compile-time guard host vs device exec space (#165)
 
 #ifndef POPS_HAS_KOKKOS
-// adc_cpp is KOKKOS-ONLY: there is no longer a standalone OpenMP backend nor a manual host loop
+// PoPS is KOKKOS-ONLY: there is no longer a standalone OpenMP backend nor a manual host loop
 // as a production path. Configure with -DPOPS_USE_KOKKOS=ON (+ -DKokkos_ROOT=...); serial
 // goes through a Kokkos install with Kokkos_ENABLE_SERIAL=ON.
 #error \
-    "adc_cpp is Kokkos-only: for_each_cell requires POPS_HAS_KOKKOS. Configure with -DPOPS_USE_KOKKOS=ON and a Kokkos Serial/OpenMP/Cuda install."
+    "PoPS is Kokkos-only: for_each_cell requires POPS_HAS_KOKKOS. Configure with -DPOPS_USE_KOKKOS=ON and a Kokkos Serial/OpenMP/Cuda install."
 #endif
 
 #include <Kokkos_Core.hpp>

@@ -220,7 +220,7 @@ def _emit_and_compile(manifest, *, so_path=None, cxx=None, force=False):
     Reuses the production toolchain helpers (:mod:`pops.codegen.toolchain`,
     :mod:`pops.codegen.cache`): the same Kokkos compiler, flags and ABI-keyed cache path a
     problem ``.so`` uses, so the library ``.so`` is ABI-compatible with the loaded ``_pops``
-    module. Kokkos is mandatory (adc_cpp is Kokkos-only); a missing ``POPS_KOKKOS_ROOT`` is a
+    module. Kokkos is mandatory (PoPS is Kokkos-only); a missing ``POPS_KOKKOS_ROOT`` is a
     clear error from :func:`pops.codegen.toolchain.pops_loader_build_flags`.
     """
     import os

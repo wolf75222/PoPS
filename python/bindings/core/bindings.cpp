@@ -1,4 +1,4 @@
-// pybind11 bindings of the adc_cpp LIB: compiles the `_pops` module. Exposes the
+// pybind11 bindings of the PoPS LIB: compiles the `_pops` module. Exposes the
 // runtime composition facade `System` (the tutor's "coupler / system") + its
 // config. Python composes WHAT to assemble (model + spatial scheme + temporal
 // treatment + per-block substeps, system Poisson); all the cell-by-cell compute

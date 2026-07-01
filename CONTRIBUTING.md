@@ -1,6 +1,6 @@
-# Contributing to adc_cpp
+# Contributing to PoPS
 
-`adc_cpp` is the header-only C++23 core of the PoPS solver, with its Python bindings
+`PoPS` is the header-only C++20 core of the PoPS solver, with its Python bindings
 (pybind11), its DSL path and its CMake packaging. This guide summarizes the workflow; the
 technical detail lives in the [README](README.md) and in
 [docs/DOC_QUALITY.md](docs/DOC_QUALITY.md).
@@ -110,7 +110,7 @@ its merged PR without such a reason is dead and gets pruned.
 
 ## Versioning
 
-`adc_cpp` follows Semantic Versioning. The public API under guarantee, the bump rules
+`PoPS` follows Semantic Versioning. The public API under guarantee, the bump rules
 (PATCH / MINOR / MAJOR) and the release steps are in [docs/VERSIONING.md](docs/VERSIONING.md).
 Two things on every notable PR: keep the version single-sourced (`project(VERSION)` in
 `CMakeLists.txt`, never duplicated), and add a line to the `## [Unreleased]` section of

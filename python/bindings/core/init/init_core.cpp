@@ -107,7 +107,7 @@ py::dict native_capability_report_to_dict(const pops::NativeCapabilityReport& re
 // AmrSystem signatures resolve them).
 void init_core(py::module_& m) {
   m.doc() =
-      "adc_cpp (lib): runtime multi-species composition. System composes a "
+      "PoPS (lib): runtime multi-species composition. System composes a "
       "system block by block; the compute stays compiled C++.";
 
   // Module ABI key (compiler + C++ standard + signature of the pops headers). The DSL reads it

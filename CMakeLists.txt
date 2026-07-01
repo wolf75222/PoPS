@@ -22,7 +22,7 @@ foreach(_pops_opt POPS_BUILD_TESTS POPS_BUILD_PYTHON POPS_USE_KOKKOS POPS_USE_MP
   endif()
 endforeach()
 
-# Defaut TOP-LEVEL SEULEMENT : un consommateur qui tire adc_cpp via FetchContent/add_subdirectory
+# Defaut TOP-LEVEL SEULEMENT : un consommateur qui tire PoPS via FetchContent/add_subdirectory
 # (cf. README "Utiliser le coeur") ne doit PAS compiler les ~140 executables de tests/ ni voir
 # enable_testing() pollue. Surchargenable (-DPOPS_BUILD_TESTS=ON) dans les deux sens.
 option(POPS_BUILD_TESTS    "Build tests"    ${PROJECT_IS_TOP_LEVEL})
@@ -59,7 +59,7 @@ set(POPS_KOKKOS_FETCH_SHA256
 # (Pas besoin d'installer Kokkos a la main : il est recupere via FetchContent si introuvable.)
 if(NOT POPS_USE_KOKKOS)
   message(FATAL_ERROR
-    "adc_cpp is Kokkos-only: configure with -DPOPS_USE_KOKKOS=ON. Kokkos est trouve s'il est installe "
+    "PoPS is Kokkos-only: configure with -DPOPS_USE_KOKKOS=ON. Kokkos est trouve s'il est installe "
     "(-DKokkos_ROOT=...) ou recupere + construit automatiquement (FetchContent). Le backend OpenMP "
     "autonome a ete retire.")
 endif()
@@ -192,7 +192,7 @@ endmacro()
 # resolution/recuperation de Kokkos) une configuration Windows native demandant CUDA.
 if(WIN32 AND Kokkos_ENABLE_CUDA)
   message(FATAL_ERROR
-    "Kokkos CUDA native Windows is unsupported in adc_cpp. "
+    "Kokkos CUDA native Windows is unsupported in PoPS. "
     "Use WSL2 for CUDA/Kokkos GPU. "
     "Native Windows supports CPU Serial/OpenMP only. "
     "Refs ADC-168 / ADC-96.")
@@ -289,7 +289,7 @@ endif()
 # Tout est OFF par defaut (cible vide) -> aucun impact sur ci.yml, les builds locaux ni `adc_cases`.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/PopsDevTooling.cmake)
 
-# adc_cpp = COEUR de la bibliotheque (generique, header-only). Les modeles
+# PoPS = COEUR de la bibliotheque (generique, header-only). Les modeles
 # physiques, les facades compilees (libadc), les bindings Python et les exemples
 # vivent dans le depot applicatif separe adc_cases, qui consomme pops::pops via
 # FetchContent. Le coeur ne connait aucun modele : aucune dependance coeur->cas.

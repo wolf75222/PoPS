@@ -1,4 +1,4 @@
-# Module Python pybind11 de la lib adc_cpp. L'extension compilee s'appelle `_pops`
+# Module Python pybind11 de la lib PoPS. L'extension compilee s'appelle `_pops`
 # et est deposee dans un PAQUET `pops/` (avec __init__.py : le sucre lisible
 # Spatial/Explicit/IMEX/System + pops.integrate). Avec PYTHONPATH = <build>/python,
 # `import pops` charge le paquet, qui importe l'extension _pops.
@@ -690,7 +690,7 @@ set_tests_properties(test_time_substeps_stride PROPERTIES
   ENVIRONMENT "${_pops_py_test_env}")
 
 # step_cfl routes through an installed compiled program (ADC-413, epic ADC-399 criterion 7 / spec 19).
-# step_cfl conserves the existing CFL logic (the per-block CFL dt is still computed in adc_cpp on the
+# step_cfl conserves the existing CFL logic (the per-block CFL dt is still computed in PoPS on the
 # native state) AND drives the macro-step at that dt through the SAME cadence helper as step()
 # (run_program_cadence). Section (A) is the pure-Python API presence check. Section (B) checks
 # end-to-end that step_cfl ADVANCES the state via the program, that its dt equals the native CFL dt,

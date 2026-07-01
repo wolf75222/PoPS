@@ -65,7 +65,7 @@ All these names are metadata for the generated C++ path, not Python callbacks.
 Recommended path for the Python module:
 
 ```bash
-git clone https://github.com/wolf75222/adc_cpp.git && cd adc_cpp
+git clone https://github.com/wolf75222/PoPS.git && cd PoPS
 bash scripts/setup_env.sh      # conda env + toolchain
 bash scripts/build_python.sh   # build + install, then pops.doctor()
 ```
@@ -105,7 +105,7 @@ bash scripts/uninstall_pops.sh # full teardown (env + caches); --keep-env drops 
 ```
 
 Released versions and binaries: the
-[Releases page](https://github.com/wolf75222/adc_cpp/releases).
+[Releases page](https://github.com/wolf75222/PoPS/releases).
 
 ## Usage
 
@@ -127,8 +127,8 @@ The C++ core is header-only for consumers and is consumed via `find_package(pops
 
 ```cmake
 include(FetchContent)
-FetchContent_Declare(adc_cpp GIT_REPOSITORY https://github.com/wolf75222/adc_cpp.git)
-FetchContent_MakeAvailable(adc_cpp)   # adc_cpp's own tests are not built for the consumer
+FetchContent_Declare(PoPS GIT_REPOSITORY https://github.com/wolf75222/PoPS.git)
+FetchContent_MakeAvailable(PoPS)   # PoPS tests are not built for the consumer
 target_link_libraries(my_app PRIVATE pops::pops)
 ```
 
@@ -225,7 +225,7 @@ The documentation corpus is being rebuilt from the retained foundation:
 
 PoPS follows [Semantic Versioning](https://semver.org). The public API under guarantee and
 the bump rules are declared in [docs/VERSIONING.md](docs/VERSIONING.md). Available versions and
-their change logs: the [Releases page](https://github.com/wolf75222/adc_cpp/releases) and
+their change logs: the [Releases page](https://github.com/wolf75222/PoPS/releases) and
 [CHANGELOG.md](CHANGELOG.md). The project is in `0.y.z` initial development: the public API may
 still change until `1.0.0`.
 
