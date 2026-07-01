@@ -97,7 +97,8 @@ from . import external  # noqa: E402  (pops.external compiled-brick references; 
 from . import fields  # noqa: E402  (pops.fields typed elliptic field-problem authoring; pure stdlib, Spec 5)
 from . import linalg  # noqa: E402  (pops.linalg abstract algebra: names A x = b; pure stdlib, Spec 5)
 from . import solvers  # noqa: E402  (pops.solvers linear/nonlinear/elliptic solver catalog; pure stdlib, Spec 5)
-from . import experimental  # noqa: E402  (pops.experimental NON-PRODUCTION / TESTS-ONLY host helpers; not a stable API)
+# pops.experimental (numpy-host, TESTS-ONLY) is NOT eagerly imported onto the root (ADC-600): it stays
+# a lazily-reachable submodule so PythonFlux is never bound as pops.PythonFlux (its name is in __all__).
 from .case import Case  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)

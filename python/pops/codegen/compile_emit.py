@@ -19,17 +19,28 @@ The compiler-invocation drivers + the ``compile_problem`` facade live in
 
 # HONEST characteristics per backend (cf. DSL_MODEL_DESIGN.md section 5).
 # Serves diagnostics and the device/MPI/AMR guard rails.
+#
+# ADC-600: each row also carries a "tier" naming which class of route it is, so reports say
+# plainly whether a route is production, prototype or internal (never presenting a host/prototype
+# route as official support). The vocabulary is fixed to {production, prototype, internal}:
+#   - "production": the NATIVE zero-copy loader (add_native_block); the target compile/bind surface.
+#   - "prototype":  the JIT IModel virtual-dispatch HOST path (add_dynamic_block, Rusanov); for
+#                   host prototyping only, never a fallback for the target surface.
+#   - "internal":   the AOT host-marshalled path (add_compiled_block); it RUNS the production
+#                   ALGORITHM but through an internal host harness (flat-array marshaling, no
+#                   MPI/AMR/GPU), so it is neither the target route nor a prototype.
 _BACKEND_CAPS = {
-    # backend: (cpu, mpi, amr, gpu)  -- True/False according to what the path SUPPORTS today
-    "prototype": {"cpu": True, "mpi": False, "amr": False, "gpu": False},
-    "aot": {"cpu": True, "mpi": False, "amr": False, "gpu": False},
+    # backend: (cpu, mpi, amr, gpu, tier)  -- True/False for what the path SUPPORTS today; tier in
+    # {production, prototype, internal} (ADC-600).
+    "prototype": {"cpu": True, "mpi": False, "amr": False, "gpu": False, "tier": "prototype"},
+    "aot": {"cpu": True, "mpi": False, "amr": False, "gpu": False, "tier": "internal"},
     # production = NATIVE path (add_native_block, #85): same engine as add_block, hence MPI-capable
     # by construction (halos fill_boundary). amr=True: the native loader now has an AMR counterpart
     # (m.compile(backend='production', target='amr_system') -> AmrSystem.add_native_block, DSL Phase D)
     # which inlines add_compiled_model(AmrSystem&) -> SAME AMR hierarchy as AmrSystem.add_block (reflux,
     # regrid). gpu=False out of CAUTION: the native path is device-clean in C++ (GH200) but the
     # end-to-end validation from Python (add_native_block on device) is a dedicated PR (DSL sect. 5).
-    "production": {"cpu": True, "mpi": True, "amr": True, "gpu": False},
+    "production": {"cpu": True, "mpi": True, "amr": True, "gpu": False, "tier": "production"},
 }
 
 # Maps backend name -> (compile mode, System adder method name).

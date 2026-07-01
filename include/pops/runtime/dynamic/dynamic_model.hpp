@@ -19,6 +19,9 @@
 /// jump per cell. This is the COMPILED counterpart of `pops.PythonFlux` (one notch faster, without
 /// the GIL). GPU/MPI production stays on the template path. Do not use in the hot loop of
 /// high-performance cases.
+///
+/// INTERNAL/PROTOTYPE route (ADC-600): never a fallback for the compile/bind target surface;
+/// reachable only by the explicit legacy seams.
 
 namespace pops {
 

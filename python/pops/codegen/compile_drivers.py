@@ -132,7 +132,9 @@ def compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23
                                  hoist_reciprocals=hoist_reciprocals)
     cc = _native_kokkos_compiler(cxx)
     if not cc:
-        raise RuntimeError("compile_native: no C++ compiler found")
+        raise RuntimeError(
+            "compile_native: no C++ compiler found. The PRODUCTION native route is REQUIRED for "
+            "the compile/bind target surface; the prototype/host routes are NOT a fallback (ADC-600).")
     std = _probe_cxx_std(cc, std)
     kokkos_compile_flags, kokkos_link_flags = _native_kokkos_flags()
     mpi_compile_flags = _native_mpi_flags()
@@ -146,7 +148,9 @@ def compile_native(model, so_path, include=None, name=None, cxx=None, std="c++23
             if not pops_lib:
                 raise RuntimeError(
                     "compile_native: _pops.lib not found next to the _pops module (required to "
-                    "link the DSL .dll; rebuild _pops with POPS_EXPORT_BUILDING_MODULE).")
+                    "link the DSL .dll; rebuild _pops with POPS_EXPORT_BUILDING_MODULE). The "
+                    "PRODUCTION native route is REQUIRED for the compile/bind target surface; the "
+                    "prototype/host routes are NOT a fallback (ADC-600).")
             cl_flags = (["/nologo", "/LD", "/std:" + std, "/O2", "/DNDEBUG", "/EHsc",
                          "/permissive-", "/Zc:preprocessor", "/DNOMINMAX", "/bigobj"]
                         + kokkos_compile_flags + mpi_compile_flags)

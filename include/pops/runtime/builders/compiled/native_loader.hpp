@@ -437,6 +437,8 @@ void push_dynamic(ImplT* P, const std::string& name, pops::dynlib::handle h, int
 }
 
 /// Body of System::add_dynamic_block. VERBATIM; @p self = the calling System, @p P = self->p_.get().
+/// INTERNAL/PROTOTYPE route (ADC-600): never a fallback for the compile/bind target surface;
+/// reachable only by the explicit legacy seams.
 template <typename ImplT>
 void add_dynamic_block(System* self, ImplT* P, const std::string& name, const std::string& so_path,
                        int substeps, const std::vector<std::string>& names,
@@ -489,6 +491,8 @@ void add_dynamic_block(System* self, ImplT* P, const std::string& name, const st
 }
 
 /// Body of System::add_compiled_block. VERBATIM; @p self = the calling System, @p P = self->p_.get().
+/// INTERNAL/PROTOTYPE route (ADC-600): never a fallback for the compile/bind target surface;
+/// reachable only by the explicit legacy seams.
 template <typename ImplT>
 void add_compiled_block(System* self, ImplT* P, const std::string& name, const std::string& so_path,
                         const std::string& limiter, const std::string& riemann,
