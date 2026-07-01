@@ -86,6 +86,7 @@ from pops.codegen.program_emit_params import (  # noqa: F401
     program_param_entries as _program_param_entries,
 )
 from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
+from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
 
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
@@ -181,6 +182,7 @@ def emit_cpp_program(program, model=None, target="system"):
         module_metadata=_emit_module_metadata(program, model),
         program_params=_emit_program_params(program, model),
         block_names=_emit_block_names(program),
+        route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         amr_install=_emit_amr_install(program, target, prelude, body))
 
 def _emit_block_names(program):

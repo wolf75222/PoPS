@@ -36,6 +36,7 @@ from pops.codegen.cache import (
     _cache_so_path,
     _backend_distinct_so_path,
     _record_so_backend,
+    _registry_cache_key,
     _native_mpi_flags,
     _dsl_optflags,
 )
@@ -425,8 +426,12 @@ def compile_problem(so_path=None, *, model=None, time=None, backend="production"
     # the WHAT, the cache key combines it with the abi_key (the HOW) -- the same identity the
     # out-of-source .so cache file name carries. Computed unconditionally so the metadata is present
     # on BOTH the cache-hit and the fresh-compile path (and even when an explicit so_path is given).
+    # The route registry / report vocabulary component (ADC-599) enters the key too: a native
+    # route change invalidates cached Programs exactly like model .so files. Numerics DESCRIPTOR
+    # changes are already covered by program_hash (they change the emitted source).
     program_hash = hashlib.sha256(src.encode()).hexdigest()
-    cache_key = hashlib.sha256(("%s|%s|program-production|%s" % (program_hash, abi_key, target))
+    cache_key = hashlib.sha256(("%s|%s|program-production|%s|%s"
+                                % (program_hash, abi_key, target, _registry_cache_key()))
                                .encode()).hexdigest()
 
     if so_path is None:

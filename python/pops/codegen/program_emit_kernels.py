@@ -301,7 +301,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #include <vector>                              // pointer list for the coupled multi-block field-solve (ADC-457)
 
 extern "C" const char* pops_program_abi_key() {{ return POPS_ABI_KEY_LITERAL; }}
-extern "C" const char* pops_program_name() {{ return {name}; }}
+{route_manifest}extern "C" const char* pops_program_name() {{ return {name}; }}
 extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 
 {block_names}

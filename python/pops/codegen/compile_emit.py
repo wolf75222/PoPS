@@ -188,6 +188,26 @@ def adder_for(backend):
 
 
 # ---------------------------------------------------------------------------
+# _emit_route_manifest -- embedded native route registry signature (ADC-599)
+# ---------------------------------------------------------------------------
+
+def _emit_route_manifest(symbol_name):
+    """OPTIONAL symbol embedding the native route registry SIGNATURE into the artifact (ADC-599).
+
+    Returns the C++ source of ``extern "C" const char* <symbol_name>()`` returning
+    ``route_registry_signature()`` evaluated at EMIT time (the compact "family:count,..." form,
+    MIRROR of pops::route_registry_signature()). The C++ loader dlsyms this OPTIONAL symbol and
+    calls pops::verify_route_manifest(value, ctx): a stale .so built against a different route set
+    is refused at load time with the mismatching family named, before any run. Missing symbol =
+    old artifact -> accepted (append-only compat). Imported here (routes.py is import-free) so the
+    signature is baked into the string, exactly like pops_native_abi_key bakes POPS_ABI_KEY_LITERAL.
+    """
+    from pops.runtime.routes import route_registry_signature
+    return ('extern "C" const char* %s() { return "%s"; }\n'
+            % (symbol_name, route_registry_signature()))
+
+
+# ---------------------------------------------------------------------------
 # Source emitters (emit_cpp_so_source, emit_cpp_aot_source, emit_cpp_native_loader)
 # ---------------------------------------------------------------------------
 
@@ -219,7 +239,8 @@ def emit_cpp_so_source(model, name=None, hoist_reciprocals=False):
             + 'extern "C" int pops_model_nvars() { return %d; }\n' % nv
             + 'extern "C" void* pops_make_model() { return new pops::ModelAdapter<pops_generated::JitModel>(); }\n'
             + 'extern "C" void pops_destroy_model(void* p) { delete static_cast<pops::IModel<%d>*>(p); }\n' % nv
-            + _emit_metadata(m, "pops_generated::JitModel"))
+            + _emit_metadata(m, "pops_generated::JitModel")
+            + _emit_route_manifest("pops_compiled_route_manifest"))
 
 
 def emit_cpp_aot_source(model, name=None, hoist_reciprocals=False):
@@ -244,7 +265,8 @@ def emit_cpp_aot_source(model, name=None, hoist_reciprocals=False):
             + bricks
             + '\nnamespace pops_generated { using AotModel = %s; }\n' % composite
             + 'POPS_DEFINE_COMPILED_BLOCK(pops_generated::AotModel)\n'
-            + _emit_metadata(m, "pops_generated::AotModel"))
+            + _emit_metadata(m, "pops_generated::AotModel")
+            + _emit_route_manifest("pops_compiled_route_manifest"))
 
 
 def emit_cpp_native_loader(model, name=None, target="system", hoist_reciprocals=False):
@@ -330,4 +352,5 @@ def emit_cpp_native_loader(model, name=None, target="system", hoist_reciprocals=
             + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite
             + key
             + install
-            + _emit_metadata(m, "pops_generated::ProdModel"))
+            + _emit_metadata(m, "pops_generated::ProdModel")
+            + _emit_route_manifest("pops_compiled_route_manifest"))

@@ -2518,6 +2518,20 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "pops headers as the _pops module.");
   }
+  // Route registry guard (ADC-599): refuse a problem.so whose embedded route manifest
+  // (pops_program_route_manifest) disagrees with the current registry, right after the ABI-key
+  // check. Optional symbol: a pre-ADC-599 .so carries nothing -> verify_route_manifest("") no-op.
+  {
+    auto manifest_fn = reinterpret_cast<const char* (*)()>(
+        pops::dynlib::sym(h, "pops_program_route_manifest"));
+    try {
+      pops::verify_route_manifest(
+          manifest_fn ? std::string(manifest_fn()) : std::string(), "install_program");
+    } catch (...) {
+      pops::dynlib::close(h);
+      throw;
+    }
+  }
   auto install = reinterpret_cast<void (*)(void*)>(pops::dynlib::sym(h, "pops_install_program"));
   if (!install) {
     pops::dynlib::close(h);

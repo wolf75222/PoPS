@@ -335,5 +335,45 @@ def test_alias_maps_evolve_together():
             "resolution and the Python _ALIASES map are one set and must evolve together" % needle)
 
 
+def test_embedded_route_manifest_signature_and_version_parity():
+    """ADC-599: the EMBEDDED route manifest (signature + registry version) is one across the mirror.
+
+    ``route_registry_signature()`` ("family:count,..." in registry order) is baked verbatim into
+    every generated artifact (pops_compiled_route_manifest / pops_program_route_manifest) and
+    compared at load time by pops::verify_route_manifest.  The Python producer
+    (routes.py::route_registry_signature) and the C++ consumer (route_ids.hpp::route_registry_signature)
+    must emit the SAME string, and ROUTE_REGISTRY_VERSION must equal kRouteRegistryVersion; otherwise
+    a freshly built .so would be refused (or wrongly accepted) against its own headers.  We recompute
+    the signature from the already-parsed tables on BOTH sides (registry order = table order) and
+    cross-check the Python value against routes.py's own function."""
+    py_families, module = _parse_python_registry()
+    cpp_families, cpp_raw = _parse_cpp_registry()
+
+    def _signature(families):
+        return ",".join("%s:%d" % (family, len(rows)) for family, rows in families.items())
+
+    py_sig = _signature(py_families)
+    cpp_sig = _signature(cpp_families)
+    # The Python-side function itself must agree with the recomputed table signature (guards a
+    # divergence between _TABLES iteration order and route_registry_signature()).
+    assert module.route_registry_signature() == py_sig, (
+        "routes.py::route_registry_signature() %r disagrees with its own _TABLES row counts %r"
+        % (module.route_registry_signature(), py_sig))
+    assert py_sig == cpp_sig, (
+        "embedded route manifest signature drift between the two mirrored registries:\n"
+        "  routes.py::route_registry_signature() = %r\n"
+        "  route_ids.hpp::route_registry_signature() = %r\n"
+        "a generated artifact would be refused against its own pops headers" % (py_sig, cpp_sig))
+
+    version_match = re.search(r"kRouteRegistryVersion\s*=\s*(-?\d+)", cpp_raw)
+    assert version_match is not None, (
+        "route_ids.hpp is missing `kRouteRegistryVersion = <n>`; it mirrors "
+        "routes.py::ROUTE_REGISTRY_VERSION and both must be present")
+    assert module.ROUTE_REGISTRY_VERSION == int(version_match.group(1)), (
+        "route registry version drift: routes.py ROUTE_REGISTRY_VERSION=%d vs "
+        "route_ids.hpp kRouteRegistryVersion=%s; bump BOTH on an incompatible registry change"
+        % (module.ROUTE_REGISTRY_VERSION, version_match.group(1)))
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
