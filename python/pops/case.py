@@ -462,21 +462,16 @@ def build_route_matrix(case):
     from the C++ ``_pops.module_capabilities()`` flag (``source="native"``). A feature the C++ source
     reports ``False`` carries an honest limitation note (e.g. ``partial_imex_mask`` has no C++ path);
     when ``_pops`` is absent the row is ``unknown`` with that reason -- never a fabricated value."""
-    native_caps = _module_capabilities()
-    rows = []
-    for feature, axis, description in _ROUTE_FEATURES:
-        if native_caps is None or feature not in native_caps:
-            rows.append(RouteRow(
-                feature, axis, "unknown", source="unknown",
-                limitation="_pops.module_capabilities() unavailable (module not built or too old)"))
-            continue
-        if native_caps[feature]:
-            rows.append(RouteRow(feature, axis, "available", source="native", limitation=description))
-        else:
-            rows.append(RouteRow(
-                feature, axis, "unavailable", source="native",
-                limitation="%s: not provided by this build" % description))
-    return RouteMatrix(case.name, case.layout.name, rows)
+    from pops._capabilities import native_capability_matrix
+    return native_capability_matrix(owner=case.name, layout=case.layout.name, target="module")
+
+
+# Compatibility aliases: callers that imported these names from pops.case get the richer ADC-549
+# matrix classes with the old .rows / .axis / .source surface preserved.
+from pops._capabilities import (  # noqa: E402
+    CapabilityRouteMatrix as RouteMatrix,
+    CapabilityRouteRow as RouteRow,
+)
 
 
 __all__ = ["Case", "RouteMatrix", "RouteRow", "build_route_matrix"]

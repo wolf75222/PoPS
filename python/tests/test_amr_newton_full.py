@@ -110,6 +110,7 @@ chk(rep["max_iters_used"] <= 4.0,
 chk(rep["n_failed"] == 0, f"newton_report : aucune cellule en echec sur le cas doux ({rep['n_failed']})")
 chk(rep["failed_cell"] is None and rep["failed_component"] == -1,
     "newton_report : pas de cellule fautive (failed_cell None, failed_component -1)")
+chk(isinstance(rep["diagnostics"], list), "newton_report : diagnostics structures exposes")
 # Un bloc EXPLICITE (e2) ou un bloc sans diagnostics n'expose pas de rapport (erreur claire).
 try:
     amr.newton_report("e2")

@@ -5,6 +5,7 @@ cells. theta is PERIODIC, r carries a PHYSICAL boundary. Axis convention: direct
 radial, direction 1 = azimuthal (cf. PolarGeometry / assemble_rhs_polar on the C++ side).
 """
 from ._descriptor import MeshDescriptor
+from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
 
 
 class PolarMesh(MeshDescriptor):
@@ -26,7 +27,8 @@ class PolarMesh(MeshDescriptor):
 
     category = "mesh"
 
-    def __init__(self, r_min, r_max, nr, ntheta, theta_boxes=1):
+    def __init__(self, r_min, r_max, nr, ntheta, theta_boxes=1, *, dim=NATIVE_DIMENSION):
+        self.dim = validate_dimension(dim, where="PolarMesh")
         if not (r_max > r_min >= 0.0):
             raise ValueError("PolarMesh: requires r_max > r_min >= 0 (ring)")
         # nr >= 3: the radial drift uses a 2nd-order ONE-SIDED stencil at both walls.
@@ -54,6 +56,7 @@ class PolarMesh(MeshDescriptor):
     def capabilities(self):
         return {
             "geometry": "polar",
+            "dim": self.dim,
             "scalar_transport": True,
             "isothermal_fluid": True,
             "compressible_euler": False,

@@ -22,6 +22,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
+#include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
@@ -98,7 +99,7 @@ namespace pops {
 struct AmrRuntimeBlock {
   std::string name;
   int ncomp = 1;
-  double gamma = 1.4;
+  double gamma = static_cast<double>(kPhysicalDefaultGamma);
   /// EXPLICIT substeps of the block within ITS effective macro-step: the effective step (stride * dt)
   /// is split into substeps equal pieces and each piece is advanced by ONE advance_amr (cf.
   /// AmrRuntime::step). substeps=1 => a single advance_amr over the whole effective step (bit-identical).
@@ -173,14 +174,14 @@ struct AmrRuntimeBlock {
   /// collectif MPI). Cf. detail::apply_pointwise_project_amr, cable par build_amr_block.
   std::function<void(std::vector<AmrLevelMP>&)> project_per_level;
 
-  /// NEWTON DIAGNOSTICS (OPT-IN, wave 3: AMR counterpart of System::newton_report). false (default) ->
-  /// imex_advance passes report=nullptr to backward_euler_source: FAST bit-identical path, no extra
-  /// allocation or reduction. true -> imex_advance passes @c newton_report.get() (STABLE address since
-  /// shared_ptr) to the backward_euler_source of EACH level; the report is AGGREGATED (max residual,
-  /// max iterations, sum of failed cells, MPI all_reduce) over all levels AND all substeps of a
-  /// macro-step. AmrRuntime::step RESETS the report at the head of the block advance (parity with
-  /// System::AdvanceImex which resets at the head of operator()). MULTI-BLOCK native only (the
-  /// single-block coupler and the .so loaders reject it at build / at the facade). STABLE address
+  /// NEWTON DIAGNOSTICS (AMR counterpart of System::newton_report). false (default) -> imex_advance
+  /// passes report=nullptr to backward_euler_source: FAST bit-identical path, no extra allocation or
+  /// reduction. true -> imex_advance passes @c newton_report.get() (STABLE address since shared_ptr)
+  /// to backward_euler_source of EACH level; the report is AGGREGATED (max residual, max iterations,
+  /// sum of failed cells, MPI all_reduce, structured fail_policy events) over all levels AND all
+  /// substeps of a macro-step. AmrRuntime::step RESETS the report at the head of the block advance
+  /// (parity with System::AdvanceImex which resets at the head of operator()). MULTI-BLOCK native only
+  /// (the single-block coupler and the .so loaders reject it at build / at the facade). STABLE address
   /// (shared_ptr): captured by the imex_advance closure AND read by AmrRuntime::newton_report.
   bool newton_diagnostics = false;
   std::shared_ptr<NewtonReport> newton_report;
@@ -644,6 +645,7 @@ class AmrRuntime {
         pg.op[k] = opc;
         pg.arg[k] = a;
       }
+      validate_cs_program_stack(pg, "AmrRuntime::add_coupled_source term " + std::to_string(t));
       outs[static_cast<std::size_t>(t)] = {b, comp, pg};
       off += len;
     }
@@ -1271,6 +1273,7 @@ class AmrRuntime {
       pg.op[k] = opc;
       pg.arg[k] = a;
     }
+    validate_cs_program_stack(pg, "AmrRuntime::add_coupled_frequency_expr");
     std::vector<Real> kconsts(consts.begin(), consts.end());
     coupled_freq_exprs_.push_back(
         CoupledFreqExprDecl{label, std::move(ins), pg, n_in, n_const, std::move(kconsts)});
@@ -1283,7 +1286,7 @@ class AmrRuntime {
   /// NEWTON REPORT (OPT-IN IMEX diagnostics) of block @p name, AGGREGATED over the levels and substeps
   /// of its LAST advance (cf. AmrRuntimeBlock::newton_report). AMR counterpart of System::newton_report.
   /// @throws std::runtime_error if the block is unknown, or if it was not added with
-  ///         newton_diagnostics=true (no silently empty report).
+  ///         newton_diagnostics=true / newton_fail_policy warn|throw (no silently empty report).
   const NewtonReport& newton_report(const std::string& name) const {
     const int b = block_index(name);
     if (b < 0)
@@ -1292,7 +1295,8 @@ class AmrRuntime {
     if (!blk.newton_diagnostics || !blk.newton_report)
       throw std::runtime_error(
           "AmrRuntime::newton_report : Newton diagnostics not enabled for block '" + name +
-          "' ; add the block with newton_diagnostics=True (pops.IMEX(newton_diagnostics=True))");
+          "' ; add the block with newton_diagnostics=True "
+          "(pops.IMEX(newton_diagnostics=True)) or newton_fail_policy='warn'/'throw'");
     return *blk.newton_report;
   }
 

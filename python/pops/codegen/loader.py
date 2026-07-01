@@ -264,6 +264,25 @@ class CompiledProblem:
         scoped = [e for e in matrix if e.category in self._CAPABILITY_CATEGORIES]
         return CapabilityMatrix(scoped)
 
+    def capability_matrix(self):
+        """The ADC-549 native route matrix for this compiled artifact.
+
+        Unlike :meth:`inspect_capabilities`, which scopes the descriptor catalog, this reports the
+        route support columns ADC-549 requires: feature, layout, backend, platform, MPI, GPU,
+        status, limitation and error_message. It is metadata-only: it builds the rich manifest from
+        the carried Program/model and never dlopens or binds the ``.so``.
+        """
+        from pops._capabilities import native_capability_matrix
+        manifest = self.manifest()
+        layout = "system"
+        try:
+            layout = self.arguments().layout_runtime.get("layout", "system")
+        except Exception:
+            pass
+        return native_capability_matrix(
+            owner=self.program_name or "compiled-problem", layout=layout,
+            flags=manifest.supports(), source="manifest")
+
     # Descriptor categories a compiled time Program selects from at bind (a spatial brick + a layout
     # + a field solver); the capability scope of inspect_capabilities().
     _CAPABILITY_CATEGORIES = ("riemann", "reconstruction", "limiter", "projection", "layout",
@@ -492,6 +511,25 @@ class CompiledModel:
         """
         from pops import inspect_amr
         return inspect_amr(layout)
+
+    def capability_matrix(self):
+        """The ADC-549 native route matrix for this compiled model handle."""
+        from pops._capabilities import native_capability_matrix
+        flags = {
+            "supports_uniform": bool(self.caps.get("cpu", False)),
+            "supports_amr": bool(self.caps.get("amr", False)
+                                 and getattr(self, "target", "system") == "amr_system"),
+            "supports_mpi": bool(self.caps.get("mpi", False)),
+            "supports_gpu": bool(self.caps.get("gpu", False)),
+            "supports_stride": bool(getattr(self, "backend", None) == "production"),
+            "supports_named_fields": True,
+            "supports_partial_imex_mask": False,
+            "supports_custom_communicator": False,
+        }
+        return native_capability_matrix(
+            owner=getattr(self, "so_path", None) or "compiled-model",
+            layout="amr" if getattr(self, "target", "system") == "amr_system" else "system",
+            flags=flags, source="manifest")
 
     def __repr__(self):
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "

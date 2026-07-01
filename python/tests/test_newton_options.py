@@ -5,7 +5,8 @@ Verifie :
   - NO-DEFAULT-CHANGE : pops.IMEX() == pops.IMEX(newton_max_iters=2, newton_fd_eps=1e-7) (etats
     bit-identiques, le chemin par defaut est la boucle historique) ;
   - newton_diagnostics=True -> sim.newton_report(name) rend un rapport coherent (enabled,
-    converged, residu fini, iterations <= budget) ;
+    converged, residu fini, iterations <= budget, diagnostics structures) ;
+  - newton_fail_policy="warn" expose aussi un rapport structure, sans stderr a parser ;
   - tolerance active (rel_tol) -> converge et n'utilise pas plus que le budget ;
   - source LINEAIRE (PotentialForce) : 1 iteration Newton suffit (etats ~identiques a 2 iterations) ;
   - rejets explicites : options Newton avec pops.Explicit(), newton_report sans diagnostics,
@@ -14,6 +15,7 @@ Verifie :
 Invariants par assert ; imprime "OK test_newton_options" en cas de succes.
 """
 from pops.numerics.reconstruction.limiters import Minmod
+import os
 import sys
 
 import numpy as np
@@ -69,8 +71,25 @@ chk(rep["converged"], "convergence (aucune cellule en echec)")
 chk(np.isfinite(rep["max_residual"]), f"residu max fini ({rep['max_residual']:.3e})")
 chk(rep["max_iters_used"] <= 2, f"iterations <= budget ({rep['max_iters_used']})")
 chk(rep["n_failed"] == 0, "aucune cellule en echec")
+chk(isinstance(rep["diagnostics"], list), "diagnostics : liste structuree")
 # Le mode diagnostics ne change PAS l'etat (memes iterations, meme Newton).
 chk(np.array_equal(u_diag, u_def), "diagnostics : etat BIT-IDENTIQUE au chemin par defaut")
+
+print("== fail_policy=warn : rapport structure sans newton_diagnostics explicite ==")
+sim_warn, u_warn = run(newton_fail_policy="warn")
+rep_warn = sim_warn.newton_report("e")
+chk(rep_warn["enabled"], "warn policy : rapport calcule")
+chk(isinstance(rep_warn["diagnostics"], list), "warn policy : diagnostics exposes en liste")
+chk(np.array_equal(u_warn, u_def), "warn policy : etat BIT-IDENTIQUE au chemin par defaut")
+
+print("== solve_fields trace : API structuree et inspect() ==")
+os.environ["POPS_TRACE_SOLVE_FIELDS"] = "1"
+sim_trace, _ = run(steps=1)
+events = sim_trace.solver_diagnostics()
+chk(any(row["code"] == "runtime.solve_fields.trace" for row in events),
+    "solver_diagnostics expose les evenements solve_fields")
+inspect_events = sim_trace.inspect().to_dict()["diagnostics"]["solver_events"]
+chk(len(inspect_events) == len(events), "inspect() reprend les evenements solver structures")
 
 # --- 3. Tolerance active : arret anticipe possible, convergence ------------------
 # abs_tol = plancher ABSOLU necessaire : la jacobienne par differences finies plafonne le residu

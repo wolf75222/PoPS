@@ -13,6 +13,7 @@
 #pragma once
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
 
@@ -68,7 +69,7 @@ struct VanLeer {
 /// Must NOT be called directly by a mesh user: go through the Weno5 policy and the reconstruct
 /// function of spatial_operator.hpp.
 POPS_HD inline Real weno5z(Real vm2, Real vm1, Real v0, Real vp1, Real vp2) {
-  const Real eps = Real(1e-40);
+  const Real eps = kWenoEpsilon;
   // three third-order reconstructions of the +x face of v0
   const Real q0 = (Real(2) * vm2 - Real(7) * vm1 + Real(11) * v0) / Real(6);
   const Real q1 = (-vm1 + Real(5) * v0 + Real(2) * vp1) / Real(6);

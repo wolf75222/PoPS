@@ -28,6 +28,7 @@ lower their token (boundary) or pin a kind (Schur). ``pops.runtime.bricks`` re-e
 """
 
 from pops.runtime._bricks_time import CondensedSchur, Role
+from pops.runtime.defaults import PHYSICAL_DEFAULT_ALPHA
 
 
 # The native elliptic boundary tokens accepted by System::set_poisson (C++ binding). "auto" lets the
@@ -107,7 +108,7 @@ class ElectrostaticLorentzSchur(CondensedSchur):
     ``kind`` is not allowed (it is fixed to "electrostatic_lorentz").
     """
 
-    def __init__(self, theta=0.5, alpha=1.0, density=Role.Density,
+    def __init__(self, theta=0.5, alpha=PHYSICAL_DEFAULT_ALPHA, density=Role.Density,
                  momentum=(Role.MomentumX, Role.MomentumY), energy=None,
                  magnetic_field="B_z", potential="phi",
                  krylov_tol=None, krylov_max_iters=None):

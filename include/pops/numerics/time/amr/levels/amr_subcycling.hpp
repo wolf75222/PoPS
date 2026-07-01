@@ -1,11 +1,10 @@
 #pragma once
+#include <pops/core/foundation/validation.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // saxpy, lincomb (SSPRK3 stages, named device-clean functors)
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen, parallel_copy
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>
-
-#include <cassert>  // assert (replicated-parent invariant: mf_find_box always finds it)
 
 /// @file
 /// @brief AMR multi-patch subcycling engine (several fine boxes per level): 2-level step
@@ -594,9 +593,14 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
       for (int J = g.J0; J <= g.J1; ++J) {
         const int bL = mf_find_box(lv.U, g.I0, J), bR = mf_find_box(lv.U, g.I1, J);
         // replicated-parent invariant: parent fully local (cf. above), mf_find_box always finds
-        // the box; a -1 would index fab(-1) (segfault). The distributed case goes through the else.
-        assert(bL >= 0 && bR >= 0 &&
-               "subcycle_level_mp: replicated-parent invariant violated (coarse box x not found)");
+        // the box. Refuse explicitly in release instead of indexing fab(-1).
+        if (bL < 0 || bR < 0)
+          throw_validation_error(
+              "pops/numerics/time/amr/levels/amr_subcycling.hpp: subcycle_level_mp",
+              "replicated-parent coarse x-face boxes exist for the fine patch range",
+              "level=" + std::to_string(lev) + ", I0=" + std::to_string(g.I0) +
+                  ", I1=" + std::to_string(g.I1) + ", J=" + std::to_string(J) +
+                  ", left_box=" + std::to_string(bL) + ", right_box=" + std::to_string(bR));
         const ConstArray4 FXL = fx.fab(bL).const_array(), FXR = fx.fab(bR).const_array();
         for (int k = 0; k < nc; ++k) {
           g.cL[(J - g.J0) * nc + k] = FXL(g.I0, J, k);
@@ -606,8 +610,13 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
       for (int I = g.I0; I <= g.I1; ++I) {
         const int bB = mf_find_box(lv.U, I, g.J0), bT = mf_find_box(lv.U, I, g.J1);
         // same replicated-parent invariant as above (y faces): coarse box always found.
-        assert(bB >= 0 && bT >= 0 &&
-               "subcycle_level_mp: replicated-parent invariant violated (coarse box y not found)");
+        if (bB < 0 || bT < 0)
+          throw_validation_error(
+              "pops/numerics/time/amr/levels/amr_subcycling.hpp: subcycle_level_mp",
+              "replicated-parent coarse y-face boxes exist for the fine patch range",
+              "level=" + std::to_string(lev) + ", I=" + std::to_string(I) +
+                  ", J0=" + std::to_string(g.J0) + ", J1=" + std::to_string(g.J1) +
+                  ", bottom_box=" + std::to_string(bB) + ", top_box=" + std::to_string(bT));
         const ConstArray4 FYB = fy.fab(bB).const_array(), FYT = fy.fab(bT).const_array();
         for (int k = 0; k < nc; ++k) {
           g.cB[(I - g.I0) * nc + k] = FYB(I, g.J0, k);

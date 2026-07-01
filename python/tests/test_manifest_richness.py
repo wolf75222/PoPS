@@ -103,6 +103,13 @@ def test_rich_fields_populated_from_real_metadata():
     # Ghost depth + field outputs from the bind table / IR.
     assert m.ghost_depth == 2
     assert "phi" in m.field_outputs
+    # Native runtime facts from ADC-602/ADC-609.
+    assert m.dimension == 2
+    assert m.amr_refinement_ratio == 2
+    assert m.precision == "double"
+    assert m.real_bytes == 8
+    assert m.communicator == "MPI_COMM_WORLD"
+    assert m.supports_custom_communicator is False
 
 
 def test_roles_unknown_when_model_records_none():
@@ -170,12 +177,49 @@ def test_to_dict_round_trips_and_print_works():
     assert d["blocks"] == ["plasma"]
     assert d["supports_amr"] is True
     assert d["supports_stride"] is None  # unknown stays None through serialisation
+    assert d["dimension"] == 2
+    assert d["amr_refinement_ratio"] == 2
+    assert d["precision"] == "double"
+    assert d["supports_custom_communicator"] is False
+    assert "capability_matrix" in d
+    assert any(row["feature"] == "checkpoint:parallel_hdf5"
+               and row["status"] == "unavailable"
+               for row in d["capability_matrix"])
     assert json.loads(json.dumps(d)) == d, "to_dict is JSON round-trippable"
     text = str(m)
     assert "compiled-artifact manifest" in text
     assert "supports_amr" in text and "yes" in text
+    assert "dimension=2" in text
+    assert "precision=double" in text
     assert "unknown" in text  # the unknown flags render as 'unknown', not 'no'
     assert "needs C++ follow-up" in text
+    assert "explicit limitations" in text
+
+
+def test_compiled_capability_matrix_lists_unsupported_routes():
+    """compiled.capability_matrix() exposes ADC-549 rows without reading a real .so."""
+    cp = _compiled(params=_default_params())
+    matrix = cp.capability_matrix()
+    rows = {row.feature: row for row in matrix.rows}
+    for feature in ("supports_uniform", "layout:Uniform", "spatial:finite_volume",
+                    "elliptic:geometric_mg", "checkpoint:system_v1"):
+        assert feature in rows
+    for feature in ("elliptic:fft_direct_dft_fallback", "amr:refinement_ratio",
+                    "parallel:mpi_world_communicator",
+                    "runtime:native_loader_legacy_metadata",
+                    "runtime:kokkos_lifecycle",
+                    "runtime:allocator_lifetime"):
+        assert rows[feature].status == "partial"
+        assert rows[feature].limitation
+    for feature in ("parallel:custom_communicator", "precision:single_or_mixed"):
+        assert rows[feature].status == "unavailable"
+        assert "unsupported route" in rows[feature].error_message
+    for feature in ("limiter:mc", "elliptic:fft_amr", "checkpoint:parallel_hdf5",
+                    "output:plotfile_uniform"):
+        assert rows[feature].status == "unavailable"
+        assert "requested" in rows[feature].error_message
+        assert "available route" in rows[feature].error_message
+        assert rows[feature].alternative
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/elliptic/linear/krylov_result.hpp>  // pops::KrylovResult (shared)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
 #include <functional>
@@ -90,7 +91,7 @@ inline void require_max_iter(int max_iters) {
 }
 
 /// Tiny breakdown guard for the BiCGStab scalar recurrences (division by ~0).
-inline constexpr Real kKrylovTiny = Real(1e-300);
+inline constexpr Real kKrylovTiny = kKrylovBreakdownTiny;
 
 }  // namespace detail
 

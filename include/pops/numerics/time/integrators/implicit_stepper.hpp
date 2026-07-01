@@ -2,13 +2,15 @@
 
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
+#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial_operator.hpp>  // load_state, load_aux
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <algorithm>  // std::max (Newton report aggregation, host)
 #include <concepts>
-#include <cstdio>     // std::snprintf / fprintf (fail_policy: host message, never in kernel)
+#include <sstream>    // fail_policy structured host message, never in kernel
 #include <stdexcept>  // std::runtime_error (fail_policy = throw, host after reductions)
 #include <string>     // std::string (validate_newton_options message prefix)
 
@@ -108,19 +110,19 @@ POPS_HD inline bool is_implicit_component(const ImplicitMask<N>& mask, int c) {
 ///    full Newton, bit-identical (multiplication by 1.0 exact in IEEE). < 1 = damped Newton
 ///    (very stiff source / poor conditioning: robustness at the cost of speed).
 ///  - fail_policy: HOST reaction (after reduction) to failed cells --
-///    kFailNone (default) = record only (historical); kFailWarn = one stderr warning
-///    per advance; kFailThrow = std::runtime_error with the offending cell. != kFailNone
-///    forces the instrumented path (detection required) -- a pure observer, W unchanged.
+///    kFailNone (default) = record only (historical); kFailWarn = structured warning event in
+///    NewtonReport; kFailThrow = structured event + std::runtime_error with the offending cell.
+///    != kFailNone forces the instrumented path (detection required) -- a pure observer, W unchanged.
 struct NewtonOptions {
-  static constexpr int kFailNone = 0;
-  static constexpr int kFailWarn = 1;
-  static constexpr int kFailThrow = 2;
-  int max_iters = 2;
-  Real rel_tol = Real(0);
-  Real abs_tol = Real(0);
-  Real fd_eps = Real(1e-7);
-  Real damping = Real(1);
-  int fail_policy = kFailNone;
+  static constexpr int kFailNone = kNewtonFailNone;
+  static constexpr int kFailWarn = kNewtonFailWarn;
+  static constexpr int kFailThrow = kNewtonFailThrow;
+  int max_iters = kNewtonDefaultMaxIters;
+  Real rel_tol = kNewtonDefaultRelTol;
+  Real abs_tol = kNewtonDefaultAbsTol;
+  Real fd_eps = kNewtonDefaultFdEps;
+  Real damping = kNewtonDefaultDamping;
+  int fail_policy = kNewtonDefaultFailPolicy;
 };
 
 /// Range-validate a NewtonOptions POD; shared by System::add_block and AmrSystem::add_block, which
@@ -170,13 +172,15 @@ struct NewtonReport {
   double n_failed =
       0;  ///< number of (cells x substeps) failed (non-finite / pivot / non-convergence)
   double failed_i = -1, failed_j = -1, failed_comp = -1;  ///< one offending cell (-1 if none)
+  RuntimeDiagnosticsReport diagnostics =
+      make_runtime_diagnostics_report("pops.numerics.time.implicit_newton");
   void reset() { *this = NewtonReport{}; }
 };
 
 /// Finite? (device-safe, without <cmath>: NaN fails x == x; +-inf fails the bounds). Used by the
 /// INSTRUMENTED Newton path only (the default path tests nothing, bit-identical).
 POPS_HD inline bool newton_finite(Real x) {
-  return x == x && x < Real(1e300) && x > Real(-1e300);
+  return x == x && x < kNewtonFiniteAbsLimit && x > -kNewtonFiniteAbsLimit;
 }
 
 namespace detail {
@@ -546,18 +550,25 @@ void backward_euler_source(const Model& model, const MultiFab& aux, MultiFab& U,
       report->converged = false;
   }
   // FAIL_POLICY (host, after reductions -- the device kernels never throw): reaction to the
-  // failed cells. kFailWarn: one stderr warning (rank 0). kFailThrow: hard error with
-  // the offending cell (the step is ABANDONED as is; up to the caller to decide what to do with it).
+  // failed cells. kFailWarn: structured warning in NewtonReport. kFailThrow: structured event plus
+  // a hard error with the offending cell (the step is ABANDONED as is; up to the caller to decide
+  // what to do with it).
   if (nfail_g > 0 && opts.fail_policy != NewtonOptions::kFailNone) {
-    char msg[256];
-    std::snprintf(msg, sizeof(msg),
-                  "Implicit source Newton: %.0f cell(s) failed (max residual %.3e; cell "
-                  "(%g, %g), component %g)",
-                  nfail_g, static_cast<double>(rmax), fi, fj, fc);
+    std::ostringstream os;
+    os << "Implicit source Newton: " << nfail_g << " cell(s) failed (max residual "
+       << static_cast<double>(rmax) << "; cell (" << fi << ", " << fj << "), component " << fc
+       << ")";
+    const std::string msg = os.str();
+    if (report) {
+      report->diagnostics.record(
+          opts.fail_policy == NewtonOptions::kFailThrow ? "newton.fail_policy.throw"
+                                                        : "newton.fail_policy.warn",
+          "ImplicitSourceNewton",
+          opts.fail_policy == NewtonOptions::kFailThrow ? "error" : "warning", msg, -1,
+          nfail_g);
+    }
     if (opts.fail_policy == NewtonOptions::kFailThrow)
       throw std::runtime_error(msg);
-    if (my_rank() == 0)
-      std::fprintf(stderr, "[pops] WARNING %s\n", msg);
   }
 }
 

@@ -11,12 +11,12 @@
 /// enumerated deterministically (tag 1).
 
 #pragma once
-#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/core/foundation/validation.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/index/box_hash.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -37,6 +37,10 @@ POPS_HD inline int coarsen_index(int a, int r) {
 
 /// Coarsens each box of the BoxArray by a ratio r (coarsen box by box, order preserved).
 inline BoxArray coarsen(const BoxArray& ba, int r) {
+  if (r < 1)
+    throw_validation_error("pops/mesh/layout/refinement.hpp: coarsen",
+                           "refinement/coarsening ratio r >= 1",
+                           "r=" + std::to_string(r));
   std::vector<Box2D> b;
   b.reserve(ba.size());
   for (int i = 0; i < ba.size(); ++i)
@@ -149,6 +153,32 @@ inline void parallel_copy(MultiFab& dst, const MultiFab& src) {
 
 namespace detail {
 
+inline std::string transfer_scratch_summary(const MultiFab& fine, const MultiFab& scratch,
+                                            int nc, int r) {
+  return "r=" + std::to_string(r) + ", fine.boxes=" +
+         std::to_string(fine.box_array().size()) + ", scratch.boxes=" +
+         std::to_string(scratch.box_array().size()) + ", scratch.ncomp=" +
+         std::to_string(scratch.ncomp()) + ", required.ncomp>=" + std::to_string(nc) +
+         ", scratch.ngrow=" + std::to_string(scratch.n_grow());
+}
+
+inline void validate_transfer_scratch(const char* where, const MultiFab& fine,
+                                      const MultiFab& scratch, int nc, int r) {
+  if (r < 1)
+    throw_validation_error(where, "refinement/coarsening ratio r >= 1",
+                           "r=" + std::to_string(r));
+  const BoxArray expected = coarsen(fine.box_array(), r);
+  if (scratch.box_array().boxes() != expected.boxes() ||
+      scratch.dmap().ranks() != fine.dmap().ranks() || scratch.ncomp() < nc ||
+      scratch.n_grow() != 0) {
+    throw_validation_error(
+        where,
+        "scratch MultiFab layout == coarsen(fine.box_array(), r), scratch.dmap == fine.dmap, "
+        "scratch.ncomp >= min(fine.ncomp, coarse.ncomp), scratch.ngrow == 0",
+        transfer_scratch_summary(fine, scratch, nc, r));
+  }
+}
+
 // NAMED FUNCTORS (rather than POPS_HD lambdas) for the AMR transfer kernels. Same reasons as the
 // rest of the mesh/elliptic path (cf. fill_boundary.hpp): refinement is first instantiated from
 // the MG V-cycle pulled in by an external TU; an extended lambda there trips up device kernel
@@ -180,8 +210,8 @@ struct AverageDownKernel {
 // STRICTLY identical to the allocating variant below.
 inline void average_down(const MultiFab& fine, MultiFab& coarse, int r, MultiFab& cfine) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
-  assert(cfine.box_array().size() == fine.box_array().size() && cfine.ncomp() >= nc &&
-         "average_down(scratch): cfine must be coarsen(fine, r) on the fine dmap");
+  detail::validate_transfer_scratch("pops/mesh/layout/refinement.hpp: average_down(scratch)",
+                                    fine, cfine, nc, r);
   const Real inv = Real(1) / (r * r);
   for (int li = 0; li < fine.local_size(); ++li) {
     const ConstArray4 F = fine.fab(li).const_array();
@@ -219,8 +249,8 @@ struct InterpolateKernel {
 // allocation per prolongation). Computation STRICTLY identical to the allocating variant.
 inline void interpolate(const MultiFab& coarse, MultiFab& fine, int r, MultiFab& cfine) {
   const int nc = std::min(fine.ncomp(), coarse.ncomp());
-  assert(cfine.box_array().size() == fine.box_array().size() && cfine.ncomp() >= nc &&
-         "interpolate(scratch): cfine must be coarsen(fine, r) on the fine dmap");
+  detail::validate_transfer_scratch("pops/mesh/layout/refinement.hpp: interpolate(scratch)",
+                                    fine, cfine, nc, r);
   parallel_copy(cfine, coarse);  // bring the coarse values onto the fine-coarsen grid
   for (int li = 0; li < fine.local_size(); ++li) {
     Array4 F = fine.fab(li).array();

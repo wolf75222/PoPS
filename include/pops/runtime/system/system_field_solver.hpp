@@ -2,6 +2,7 @@
 
 #include <pops/core/state/state.hpp>        // kAuxBaseComps (base component of the aux channel)
 #include <pops/core/foundation/types.hpp>        // Real
+#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/storage/multifab.hpp>     // MultiFab, Array4, ConstArray4
 #include <pops/mesh/index/box2d.hpp>        // Box2D
 #include <pops/mesh/execution/for_each.hpp>     // device_fence
@@ -13,7 +14,6 @@
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
 #include <pops/runtime/context/wall_predicate.hpp>       // detail::wall_predicate
 
-#include <cstdio>   // POPS_TRACE_SOLVE_FIELDS: device diagnostic trace (env-gated, inert by default)
 #include <cstdlib>  // getenv
 #include <functional>
 #include <map>  // named_aux_: NAMED aux fields (comp -> field), re-applied after channel realloc
@@ -59,22 +59,6 @@
 namespace pops {
 namespace field_solver {
 
-/// True if the DIAGNOSTIC trace of the solve_fields path is active (environment variable
-/// POPS_TRACE_SOLVE_FIELDS set). Added for a CUDA device-crash diagnostic: writes to stderr with immediate flush
-/// to locate the last marker before a device crash. INERT by default: no effect on the
-/// outputs or on the numerics. Diagnostic KEPT (env-gated): useful for a future device crash.
-inline bool pops_trace_sf() {
-  static const bool on = std::getenv("POPS_TRACE_SOLVE_FIELDS") != nullptr;
-  return on;
-}
-/// Writes the marker @p w to stderr (with flush) ONLY if pops_trace_sf(); no-op otherwise.
-inline void pops_sf_mark(const char* w) {
-  if (pops_trace_sf()) {
-    std::fprintf(stderr, "[sf] %s\n", w);
-    std::fflush(stderr);
-  }
-}
-
 /// SystemFieldSolver<Impl>: see contract above. All methods are MEMBERS (not free
 /// functions) because they share the elliptic state owned by this class; accesses to the SHARED
 /// state of Impl go through owner_-> verbatim. Templated on Impl to stay free of any dependency on the
@@ -102,6 +86,43 @@ class SystemFieldSolver {
       return te_src_ >= 0;
     }
     return true;
+  }
+
+  const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
+  void reset_diagnostics() {
+    diagnostics_.clear();
+    if (ell_) {
+      std::visit(
+          [](auto& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, GeometricMG>)
+              e.reset_diagnostics();
+          },
+          *ell_);
+    }
+  }
+
+  RuntimeDiagnosticsReport combined_diagnostics_report() const {
+    RuntimeDiagnosticsReport report = diagnostics_;
+    if (ell_) {
+      std::visit(
+          [&](const auto& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, GeometricMG>) {
+              const RuntimeDiagnosticsReport& mg_report = e.diagnostics_report();
+              report.events.insert(report.events.end(), mg_report.events.begin(),
+                                   mg_report.events.end());
+            }
+          },
+          *ell_);
+    }
+    return report;
+  }
+
+  void trace_mark(const char* marker) {
+    if (std::getenv("POPS_TRACE_SOLVE_FIELDS") == nullptr)
+      return;
+    diagnostics_.record("runtime.solve_fields.trace", "SystemFieldSolver", "trace", marker);
   }
 
   // --- OWNED state (elliptic solve + coefficient fields + application buffers) --------
@@ -164,6 +185,8 @@ class SystemFieldSolver {
   // aux ghost fill, overriding only that component's PHYSICAL-face ghosts (periodic faces -- Cartesian
   // periodic, polar theta -- keep their wrap). Empty -> shared aux BC for every field, bit-identical.
   std::map<int, AuxHaloPolicy> named_aux_bc_;
+  RuntimeDiagnosticsReport diagnostics_ =
+      make_runtime_diagnostics_report("pops.runtime.system_field_solver");
 
   // NAMED multi-elliptic fields (ADC-428): a SECOND elliptic solve (beyond the default Poisson) for a
   // user-named field m.elliptic_field("phi2", rhs=..., aux=[...]). Each named field owns:
@@ -485,18 +508,17 @@ class SystemFieldSolver {
   /// Solves the active cartesian Poisson (GeometricMG V-cycle or direct FFT). Sets the trace
   /// markers; the device_fence after ell_solve is carried by the CALLER (solve_fields), not here.
   void ell_solve() {
-    pops_sf_mark("ell_solve: before std::visit");
+    trace_mark("ell_solve: before std::visit");
     std::visit(
-        [](auto& e) {
+        [this](auto& e) {
           using T = std::decay_t<decltype(e)>;
-          if (pops_trace_sf())
-            pops_sf_mark(std::is_same_v<T, GeometricMG> ? "ell_solve: GeometricMG::solve() start"
-                                                       : "ell_solve: FFT solver::solve() start");
+          trace_mark(std::is_same_v<T, GeometricMG> ? "ell_solve: GeometricMG::solve() start"
+                                                     : "ell_solve: FFT solver::solve() start");
           e.solve();
-          pops_sf_mark("ell_solve: solve() return");
+          trace_mark("ell_solve: solve() return");
         },
         *ell_);
-    pops_sf_mark("ell_solve: after std::visit");
+    trace_mark("ell_solve: after std::visit");
   }
 
   // --- ELLIPTIC-SOLVER PROFILING COUNTERS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43) ----------
@@ -690,9 +712,9 @@ class SystemFieldSolver {
     if (owner_->polar_)
       // ring: polar Poisson + aux in local basis (e_r, e_theta)
       return solve_fields_polar(target_block, U_stage);
-    pops_sf_mark("solve_fields: start");
+    trace_mark("solve_fields: start");
     ensure_elliptic();
-    pops_sf_mark("solve_fields: after ensure_elliptic");
+    trace_mark("solve_fields: after ensure_elliptic");
     // GAUSS POLICY: "restart" (default, gauss_evolve_==false) re-solves -Delta phi = f on
     // EVERY call (bit-identical to history). "evolve": after the FIRST solve (phi^0), we SKIP
     // the RHS assembly + the elliptic solve -> ell_phi() keeps the current phi (the one that the
@@ -703,7 +725,7 @@ class SystemFieldSolver {
       // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
       // target_block / U_stage override the target block reads U_stage (per-stage field solve, ADC-409).
       assemble_poisson_rhs(rhs, target_block, U_stage);
-      pops_sf_mark("solve_fields: after add_poisson_rhs");
+      trace_mark("solve_fields: after add_poisson_rhs");
       // CONSTANT permittivity: div(eps grad phi) = f <=> lap phi = f/eps, so we scale the rhs by
       // 1/eps. With a VARIABLE or ANISOTROPIC eps(x) field we DO NOT do it: the GeometricMG
       // operator carries eps directly (apply_epsilon_field / apply_epsilon_anisotropic_field), the
@@ -718,13 +740,13 @@ class SystemFieldSolver {
               r(i, j, 0) *= inv;
         }
       }
-      pops_sf_mark("solve_fields: before ell_solve");
+      trace_mark("solve_fields: before ell_solve");
       ell_solve();
       gauss_solved_once_ = true;
-      pops_sf_mark("solve_fields: after ell_solve, before device_fence");
+      trace_mark("solve_fields: after ell_solve, before device_fence");
     }
     device_fence();
-    pops_sf_mark("solve_fields: after device_fence (aux derivation)");
+    trace_mark("solve_fields: after device_fence (aux derivation)");
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     // Per-cell derivation (phi, grad phi) -> aux channel: LOCAL to the owner rank. System
     // distributes ONE box (round-robin DistributionMapping(1, n_ranks())), so at np>1 a single rank
@@ -744,16 +766,16 @@ class SystemFieldSolver {
           a(i, j, 2) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
         }
     }
-    pops_sf_mark("solve_fields: after aux derivation (phi, grad phi)");
+    trace_mark("solve_fields: after aux derivation (phi, grad phi)");
     apply_te();  // T_e = p/rho of the fluid block source, recomputed on each solve (B_z, comp 3, preserved)
-    pops_sf_mark("solve_fields: after apply_te");
+    trace_mark("solve_fields: after apply_te");
     if (owner_->periodic_)
       fill_boundary(owner_->aux, owner_->dom, owner_->per_);
     else
       fill_ghosts(owner_->aux, owner_->dom,
                   owner_->bc_);  // extrapolation at the boundary (wall / free outflow)
     apply_named_aux_bc();  // ADC-369: per-field halo override (after the shared fill; no-op if none)
-    pops_sf_mark("solve_fields: end (fill ghosts aux)");
+    trace_mark("solve_fields: end (fill ghosts aux)");
   }
 
   /// Per-stage field solve (ADC-409): SAME solve + derive-aux as solve_fields(), but the target

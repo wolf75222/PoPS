@@ -8,6 +8,15 @@
 
 from pops._bootstrap import ModelSpec
 from pops.runtime.bricks import Spatial, Explicit, Split
+from pops.runtime.defaults import (
+    NEWTON_DEFAULT_ABS_TOL,
+    NEWTON_DEFAULT_DAMPING,
+    NEWTON_DEFAULT_FAIL_POLICY,
+    NEWTON_DEFAULT_FD_EPS,
+    NEWTON_DEFAULT_MAX_ITERS,
+    NEWTON_DEFAULT_REL_TOL,
+    PHYSICAL_DEFAULT_GAMMA,
+)
 
 
 def _reject_newton_amr_compiled(label, time):
@@ -19,12 +28,18 @@ def _reject_newton_amr_compiled(label, time):
     via the loader, they would be taken at their defaults SILENTLY (iters=2, no report). We
     REJECT them explicitly (same spirit as the stride/mask rejection of the AMR production path). For these
     parameters : AmrSystem.add_block (native model) or add_compiled_model(AmrSystem&) directly (C++)."""
-    if (getattr(time, "newton_max_iters", 2) != 2
-            or getattr(time, "newton_rel_tol", 0.0) != 0.0
-            or getattr(time, "newton_abs_tol", 0.0) != 0.0
-            or getattr(time, "newton_fd_eps", 1e-7) != 1e-7
-            or getattr(time, "newton_damping", 1.0) != 1.0
-            or getattr(time, "newton_fail_policy", "none") != "none"
+    if (getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)
+            != NEWTON_DEFAULT_MAX_ITERS
+            or getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL)
+            != NEWTON_DEFAULT_REL_TOL
+            or getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL)
+            != NEWTON_DEFAULT_ABS_TOL
+            or getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS)
+            != NEWTON_DEFAULT_FD_EPS
+            or getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING)
+            != NEWTON_DEFAULT_DAMPING
+            or getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY)
+            != NEWTON_DEFAULT_FAIL_POLICY
             or getattr(time, "newton_diagnostics", False)):
         raise ValueError(
             "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
@@ -132,12 +147,12 @@ class _AmrSystemEquation:
             self._s.add_block(name, model, spatial.limiter, spatial.flux, spatial.recon, time.kind,
                               nsub, getattr(time, "stride", 1),
                               getattr(time, "implicit_vars", []), getattr(time, "implicit_roles", []),
-                              getattr(time, "newton_max_iters", 2),
-                              getattr(time, "newton_rel_tol", 0.0),
-                              getattr(time, "newton_abs_tol", 0.0),
-                              getattr(time, "newton_fd_eps", 1e-7),
-                              getattr(time, "newton_damping", 1.0),
-                              getattr(time, "newton_fail_policy", "none"),
+                              getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS),
+                              getattr(time, "newton_rel_tol", NEWTON_DEFAULT_REL_TOL),
+                              getattr(time, "newton_abs_tol", NEWTON_DEFAULT_ABS_TOL),
+                              getattr(time, "newton_fd_eps", NEWTON_DEFAULT_FD_EPS),
+                              getattr(time, "newton_damping", NEWTON_DEFAULT_DAMPING),
+                              getattr(time, "newton_fail_policy", NEWTON_DEFAULT_FAIL_POLICY),
                               getattr(time, "newton_diagnostics", False),
                               getattr(spatial, "positivity_floor", 0.0))  # Zhang-Shu floor (ADC-259)
             return
@@ -220,7 +235,7 @@ class _AmrSystemEquation:
         # 'symbol not found' cryptic message.
         from pops.codegen.abi import check_compiled_matches_module
         check_compiled_matches_module(getattr(compiled, "abi_key", ""))
-        gamma = compiled.gamma if compiled.gamma is not None else 1.4
+        gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
         self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                  spatial.recon, time.kind, gamma, nsub,
                                  getattr(spatial, "positivity_floor", 0.0))

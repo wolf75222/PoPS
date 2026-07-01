@@ -3,6 +3,7 @@
 #include <pops/core/state/state.hpp>      // StateVec, Aux, POPS_AUX_FIELDS, kAuxBaseComps
 #include <pops/core/foundation/types.hpp>      // POPS_HD, Real
 #include <pops/core/state/variables.hpp>  // VariableSet + VariableKind + VariableRole + role_from_name
+#include <pops/diagnostics/fallback_diagnostics.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -198,7 +199,7 @@ inline std::vector<std::string> split(const std::string& s, char sep) {
 /// object dependency: only strings and a double pass through dlsym (flat ABI, like the rest of the block).
 struct BlockMeta {
   bool has_gamma = false;
-  double gamma = 1.4;
+  double gamma = static_cast<double>(kPhysicalDefaultGamma);
   VariableSet cons{VariableKind::Conservative, {}, 0, {}};
   VariableSet prim{VariableKind::Primitive, {}, 0, {}};
 };
@@ -359,6 +360,8 @@ void push_dynamic(ImplT* P, const std::string& name, pops::dynlib::handle h, int
   // gamma 1.4). PRIORITY to the explicit name (names=), then meta, then fallback; roles + primitive
   // come ONLY from the ABI (the API does not expose them).
   const BlockMeta meta = read_block_meta(h);
+  if ((names.empty() && meta.cons.names.empty()) || meta.cons.roles.empty() || !meta.has_gamma)
+    record_fallback(FallbackCounter::kNativeLoaderLegacyMetadata);
   VariableSet cons_vs = meta.cons, prim_vs = meta.prim;
   if (!names.empty()) {
     if (static_cast<int>(names.size()) != NV)
@@ -375,7 +378,8 @@ void push_dynamic(ImplT* P, const std::string& name, pops::dynlib::handle h, int
   }
   if (prim_vs.names.empty())
     prim_vs = {VariableKind::Primitive, cons_vs.names, cons_vs.size, {}};
-  const double gamma = meta.has_gamma ? meta.gamma : 1.4;
+  const double gamma =
+      meta.has_gamma ? meta.gamma : static_cast<double>(kPhysicalDefaultGamma);
 
   typename ImplT::Species block{name,
                                 MultiFab(P->ba, P->dm, NV, 2),
@@ -565,6 +569,8 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   // OPTIONAL metadata (names / roles / gamma) transported by the extended ABI of the .so. Absent
   // from an old .so -> empty meta, we fall back on the fallback (names u0.. / no roles / gamma 1.4).
   const BlockMeta meta = read_block_meta(h);
+  if ((names.empty() && meta.cons.names.empty()) || meta.cons.roles.empty() || !meta.has_gamma)
+    record_fallback(FallbackCounter::kNativeLoaderLegacyMetadata);
   // Widen the SHARED aux channel so set_magnetic_field/T_e populate it and the marshaling
   // transports the extra components to the .so. Base model (3) -> no-op (bit-identical).
   P->ensure_aux_width(naux);
@@ -662,7 +668,8 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
   if (prim_vs.names.empty())
     prim_vs = {VariableKind::Primitive, cons_vs.names, cons_vs.size, {}};
   // gamma: carried by the ABI if the model declares it (pops_compiled_gamma), otherwise historical default 1.4.
-  const double gamma = meta.has_gamma ? meta.gamma : 1.4;
+  const double gamma =
+      meta.has_gamma ? meta.gamma : static_cast<double>(kPhysicalDefaultGamma);
   typename ImplT::Species block{name,
                                 MultiFab(P->ba, P->dm, nv, 2),
                                 nv,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>                // BCRec
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
@@ -7,6 +8,7 @@
 #include <pops/runtime/facade_options.hpp>  // SourceStageOptions / CoupledSourceProgram (facade PODs, ADC-214)
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
+#include <pops/runtime/numerical_defaults.hpp>
 
 #include <functional>
 #include <map>
@@ -92,11 +94,11 @@ struct AmrBuildParams {
   int n = 128;
   double L = 1.0;
   int regrid_every = 20;
-  double gamma = 1.4;
+  double gamma = static_cast<double>(kPhysicalDefaultGamma);
   int substeps = 1;
   bool recon_prim = false;               ///< recon == "primitive" (frozen by add_compiled_model)
   bool imex = false;                     ///< time == "imex": stiff implicit source (backward_euler)
-  double refine_threshold = 1e30;        ///< 1e30 => no refinement
+  double refine_threshold = static_cast<double>(kAmrRefinementDisabledThreshold);  ///< no refinement
   BCRec poisson_bc;                      ///< coarse Poisson BC (resolved by set_poisson)
   std::function<bool(Real, Real)> wall;  ///< conductive wall predicate (empty = none)
   bool has_density = false;
@@ -307,7 +309,8 @@ class AmrSystem {
   ///                 fd_eps / damping / fail_policy. Default {} = historical constants, bit-identical.
   ///                 SUPPORT (wave 3, settled): these OPTIONS are wired in MONO-BLOCK (coupler
   ///                 AmrCouplerMP) AND in MULTI-BLOCK (AmrRuntime engine); the .so loaders
-  ///                 reject them (flat ABI). fail_policy warn/throw works everywhere.
+  ///                 reject them (flat ABI). fail_policy='throw' works everywhere. fail_policy='warn'
+  ///                 requires the structured Newton report, therefore native multi-block.
   /// @param newton_diagnostics  aggregated Newton report (newton_report): wired in NATIVE MULTI-BLOCK
   ///                 only (the mono-block rejects it at build, the .so loaders at the facade). Stays
   ///                 flat (a separate bool, outside the homogeneous family of convergence options).
@@ -341,6 +344,7 @@ class AmrSystem {
     double failed_i;     ///< i of ONE faulty cell (-1 if none; max index encoded)
     double failed_j;     ///< j of the same cell (-1 if none)
     double failed_comp;  ///< conserved component of the worst residual of that cell (-1 unknown)
+    std::vector<RuntimeDiagnosticEvent> diagnostics;  ///< structured policy/solver events
   };
   /// @throws std::runtime_error if the block is unknown, in mono-block, on a .so loader, or if the block
   ///         did not enable newton_diagnostics. Forces the lazy build (ensure_built).
@@ -410,7 +414,9 @@ class AmrSystem {
                         const std::string& limiter = "minmod",
                         const std::string& riemann = "rusanov",
                         const std::string& recon = "conservative",
-                        const std::string& time = "explicit", double gamma = 1.4, int substeps = 1,
+                        const std::string& time = "explicit",
+                        double gamma = static_cast<double>(kPhysicalDefaultGamma),
+                        int substeps = 1,
                         double positivity_floor = 0.0);
 
   /// Refines the cells where the SELECTED conserved variable exceeds @p threshold. By default the
@@ -689,6 +695,8 @@ class AmrSystem {
   /// Names of the blocks in add order (parity with System::block_names): the IO facade iterates over them
   /// to write EACH block by its name (an empty name -> block 0, historical mono-block compat).
   std::vector<std::string> block_names() const;
+  /// Structured report of effective numerical, solver and physical options currently configured.
+  EffectiveOptionsReport effective_options_report() const;
   int n_patches();  ///< number of current fine patches (of the shared hierarchy)
   /// Index-space signatures of the current fine patches: one PatchBox (level, ilo, jlo, ihi, jhi) per
   /// fine box, for ALL fine levels (level >= 1). INCLUSIVE corners in the index space of the

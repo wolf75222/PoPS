@@ -29,8 +29,10 @@
 /// - device kernels are NAMED FUNCTORS (recipe #93/#64): extended lambda forbidden cross-TU under nvcc.
 
 #include <pops/core/foundation/types.hpp>
+#include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/numerics/elliptic/eb/cut_fraction.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
+#include <pops/runtime/numerical_defaults.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -41,7 +43,6 @@
 #include <pops/parallel/comm.hpp>
 
 #include <chrono>   // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
-#include <cstdio>   // POPS_TRACE_SOLVE_FIELDS: device diagnostic trace (#93), inert by default
 #include <cstdlib>  // getenv
 #include <functional>
 #include <utility>
@@ -49,17 +50,7 @@
 
 namespace pops {
 
-// DIAGNOSTIC trace of the MG V-cycle (milestone #93). Active only if POPS_TRACE_SOLVE_FIELDS is set;
-// stderr + immediate flush to locate the last marker before a device crash. INERT by default.
 namespace detail {
-inline void mg_trace_mark(const char* w) {
-  static const bool on = std::getenv("POPS_TRACE_SOLVE_FIELDS") != nullptr;
-  if (on) {
-    std::fprintf(stderr, "[mg] %s\n", w);
-    std::fflush(stderr);
-  }
-}
-
 // Copy component 0 of a fine field (discretized eps/eps_y/kappa) onto the MG fine level.
 // NAMED FUNCTOR (not an POPS_HD lambda): same device-clean recipe as the rest (#93). Identical
 // body -> bit-identical. Inert on the constant-eps path, exercised as soon as a field is wired.
@@ -108,7 +99,9 @@ class GeometricMG {
   // (solve_robust LOCALLY doubles nu1/nu2 if the embedded boundary makes the cycle diverge, then restores them.)
   GeometricMG(const Geometry& geom, const BoxArray& ba, const BCRec& bc,
               std::function<bool(Real, Real)> active = {}, bool replicated = false,
-              int min_coarse = 2, int nu1 = 2, int nu2 = 2, int nbottom = 50, bool cut_cell = false,
+              int min_coarse = kMGDefaultMinCoarse, int nu1 = kMGDefaultPreSmooth,
+              int nu2 = kMGDefaultPostSmooth, int nbottom = kMGDefaultBottomSweeps,
+              bool cut_cell = false,
               std::function<Real(Real, Real)> levelset = {})
       : bc_(bc),
         active_(std::move(active)),
@@ -222,6 +215,9 @@ class GeometricMG {
   MultiFab& rhs() { return lev_[0].rhs; }
   const Geometry& geom() const { return lev_[0].geom; }
   int num_levels() const { return static_cast<int>(lev_.size()); }
+
+  const RuntimeDiagnosticsReport& diagnostics_report() const { return diagnostics_; }
+  void reset_diagnostics() { diagnostics_.clear(); }
 
   // --- PER-SOLVE PROFILING STATS (Spec 5 sec.13.11.1, ADC-479 criteria 42/43) -------------------
   // Cached by the most recent solve(rel_tol, max_cycles, abs_tol) call (the no-argument concept-level
@@ -405,10 +401,10 @@ class GeometricMG {
   // relative criterion unchanged. The floor avoids over-solving an ALREADY converged state (tiny r0,
   // typical of an OFF-STEP solve on an unchanged state): early-exit without cycling if r0 is below abs_tol.
   int solve(Real rel_tol, int max_cycles, Real abs_tol = Real(0)) {
-    detail::mg_trace_mark("solve: before initial current_residual");
+    trace_mark("solve: before initial current_residual");
     last_bottom_seconds_ = 0.0;  // reset the per-solve bottom self-time (accumulated by vcycle_rec)
     const Real r0 = current_residual();
-    detail::mg_trace_mark("solve: after initial current_residual");
+    trace_mark("solve: after initial current_residual");
     if (r0 <= abs_tol) {
       last_cycles_ = 0;  // already under the floor (or zero); abs_tol=0 -> old test r0<=0
       last_residual_ = r0;
@@ -417,9 +413,9 @@ class GeometricMG {
     const Real stop =
         (rel_tol * r0 > abs_tol) ? rel_tol * r0 : abs_tol;  // max(rel_tol*r0, abs_tol)
     for (int c = 1; c <= max_cycles; ++c) {
-      detail::mg_trace_mark("solve: before vcycle");
+      trace_mark("solve: before vcycle");
       vcycle();
-      detail::mg_trace_mark("solve: after vcycle");
+      trace_mark("solve: after vcycle");
       const Real r = current_residual();
       if (r <= stop) {
         last_cycles_ = c;
@@ -436,7 +432,7 @@ class GeometricMG {
   // tolerance) and residual() (alias of current_residual). Lets couplers
   // depend on the concept, not on GeometricMG directly. Propagates abs_tol_ (absolute
   // floor, default 0 -> historical relative criterion unchanged) to the mixed criterion.
-  void solve() { solve(Real(1e-8), 50, abs_tol_); }
+  void solve() { solve(kMGDefaultRelTol, kMGDefaultMaxCycles, abs_tol_); }
   Real residual() { return current_residual(); }
 
   // ABSOLUTE floor on the residual used by the no-argument solve() (the EllipticSolver
@@ -515,12 +511,12 @@ class GeometricMG {
   // MPI fluxes (MPI_ERR_TRUNCATE). Idempotent under replication (local max = global on each rank) and
   // identity in serial -> bit-identical to the historical behavior.
   Real current_residual() {
-    detail::mg_trace_mark("current_residual: before poisson_residual");
+    trace_mark("current_residual: before poisson_residual");
     poisson_residual(lev_[0].phi, lev_[0].rhs, lev_[0].geom, bc_, lev_[0].res, mask_ptr(0),
                      coef_ptr(0), eps_ptr(0), kappa_ptr(0), eps_y_ptr(0), a_xy_ptr(0), a_yx_ptr(0));
-    detail::mg_trace_mark("current_residual: after poisson_residual, before norm_inf");
+    trace_mark("current_residual: after poisson_residual, before norm_inf");
     const Real r = all_reduce_max(norm_inf(lev_[0].res));
-    detail::mg_trace_mark("current_residual: after norm_inf");
+    trace_mark("current_residual: after norm_inf");
     return r;
   }
 
@@ -563,6 +559,12 @@ class GeometricMG {
   // cross terms absent => nullptr => DIAGONAL block (current path unchanged).
   const MultiFab* a_xy_ptr(int l) { return has_cross_ ? &lev_[l].a_xy : nullptr; }
   const MultiFab* a_yx_ptr(int l) { return has_cross_ ? &lev_[l].a_yx : nullptr; }
+
+  void trace_mark(const char* marker) {
+    if (std::getenv("POPS_TRACE_SOLVE_FIELDS") == nullptr)
+      return;
+    diagnostics_.record("elliptic.mg.trace", "GeometricMG", "trace", marker);
+  }
 
   // BC used to fill the eps field ghosts: we keep the periodic but
   // replace every physical boundary (Dirichlet or outflow of phi) by a
@@ -656,10 +658,10 @@ class GeometricMG {
     // convention. For symmetric-positive-definite A the V-cycle stays contractive; for strongly non-symmetric
     // A, it may diverge (cf. set_cross_terms, reported observation).
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): before gs_smooth(nu1) [first GS kernel]");
+      trace_mark("vcycle_rec(0): before gs_smooth(nu1) [first GS kernel]");
     gs_smooth(L.phi, L.rhs, L.geom, bc, nu1_, mk, ck, ep, kp, ey);
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): after gs_smooth(nu1)");
+      trace_mark("vcycle_rec(0): after gs_smooth(nu1)");
 
     if (l + 1 == static_cast<int>(lev_.size())) {
       // BOTTOM solve = long Gauss-Seidel smoothing on the coarsest grid. Self-time it (chrono only,
@@ -678,27 +680,27 @@ class GeometricMG {
 
     poisson_residual(L.phi, L.rhs, L.geom, bc, L.res, mk, ck, ep, kp, ey, axy, ayx);
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): after poisson_residual");
+      trace_mark("vcycle_rec(0): after poisson_residual");
     MGLevel& C = lev_[l + 1];
     average_down(L.res, C.rhs, 2, L.cfine);  // residual restriction (cfine buffer reused)
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): after average_down");
+      trace_mark("vcycle_rec(0): after average_down");
     C.phi.set_val(0.0);
     vcycle_rec(l + 1, homogeneous(bc));
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): after coarse recursion");
+      trace_mark("vcycle_rec(0): after coarse recursion");
 
     interpolate(C.phi, L.corr, 2, L.cfine);  // correction prolongation (corr/cfine buffers reused)
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): after interpolate");
+      trace_mark("vcycle_rec(0): after interpolate");
     saxpy(L.phi, Real(1), L.corr);
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): after saxpy");
+      trace_mark("vcycle_rec(0): after saxpy");
     if (mk)
       zero_conductor(L.phi, L.mask);  // re-pin the conductor
     gs_smooth(L.phi, L.rhs, L.geom, bc, nu2_, mk, ck, ep, kp, ey);
     if (l == 0)
-      detail::mg_trace_mark("vcycle_rec(0): after gs_smooth(nu2)");
+      trace_mark("vcycle_rec(0): after gs_smooth(nu2)");
   }
 
   BCRec bc_;
@@ -711,13 +713,15 @@ class GeometricMG {
   bool has_kappa_ = false;
   bool has_cross_ = false;  // off-diagonal Axy/Ayx coefficients (FULL tensor) active
   Real abs_tol_ =
-      Real(0);  // absolute floor of the no-argument solve() (0 = relative criterion only)
+      kMGDefaultAbsTol;  // absolute floor of the no-argument solve() (0 = relative criterion only)
   // PER-SOLVE PROFILING STATS (read back at the System field_solve seam, ADC-479 criteria 42/43).
   // last_cycles_/last_residual_ are set by solve(); last_bottom_seconds_ is reset at the top of solve()
   // and accumulated by vcycle_rec's bottom branch. 0 until the first solve (no cycle recorded yet).
   int last_cycles_ = 0;
   Real last_residual_ = Real(0);
   double last_bottom_seconds_ = 0.0;
+  RuntimeDiagnosticsReport diagnostics_ =
+      make_runtime_diagnostics_report("pops.numerics.elliptic.geometric_mg");
   std::function<Real(Real, Real)> levelset_;
   std::vector<MGLevel> lev_;
 };

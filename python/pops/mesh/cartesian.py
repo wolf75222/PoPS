@@ -6,6 +6,7 @@ passed to the system via ``pops.System(mesh=...)``. ``CartesianMesh`` is the imp
 default (square domain, numerics STRICTLY unchanged, bit-identical).
 """
 from ._descriptor import MeshDescriptor
+from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
 
 
 class CartesianMesh(MeshDescriptor):
@@ -18,7 +19,8 @@ class CartesianMesh(MeshDescriptor):
 
     category = "mesh"
 
-    def __init__(self, n=64, L=1.0, periodic=True):
+    def __init__(self, n=64, L=1.0, periodic=True, *, dim=NATIVE_DIMENSION):
+        self.dim = validate_dimension(dim, where="CartesianMesh")
         self.n = int(n)
         self.L = float(L)
         self.periodic = bool(periodic)
@@ -27,7 +29,7 @@ class CartesianMesh(MeshDescriptor):
         return {"n": self.n, "L": self.L, "periodic": self.periodic}
 
     def capabilities(self):
-        return {"geometry": "cartesian", "dim": 2,
+        return {"geometry": "cartesian", "dim": self.dim,
                 "periodic": self.periodic, "supports_amr": True}
 
     def _apply(self, config):

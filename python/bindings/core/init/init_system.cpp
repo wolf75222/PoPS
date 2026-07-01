@@ -41,9 +41,12 @@ void init_system(py::module_& m) {
           py::arg("implicit_roles") = std::vector<std::string>{},
           // Options of the implicit IMEX source Newton (defaults = historical constants 2 / 1e-7,
           // bit-identical). newton_diagnostics=True enables the report (newton_report(name)).
-          py::arg("newton_max_iters") = 2, py::arg("newton_rel_tol") = 0.0,
-          py::arg("newton_abs_tol") = 0.0, py::arg("newton_fd_eps") = 1e-7,
-          py::arg("newton_diagnostics") = false, py::arg("newton_damping") = 1.0,
+          py::arg("newton_max_iters") = kNewtonDefaultMaxIters,
+          py::arg("newton_rel_tol") = static_cast<double>(kNewtonDefaultRelTol),
+          py::arg("newton_abs_tol") = static_cast<double>(kNewtonDefaultAbsTol),
+          py::arg("newton_fd_eps") = static_cast<double>(kNewtonDefaultFdEps),
+          py::arg("newton_diagnostics") = false,
+          py::arg("newton_damping") = static_cast<double>(kNewtonDefaultDamping),
           py::arg("newton_fail_policy") = "none",
           // Zhang-Shu POSITIVITY limiter (ADC-76): density floor of the reconstructed face states
           // (conservative scaling toward the cell mean). 0 (default) = inactive,
@@ -72,6 +75,18 @@ void init_system(py::module_& m) {
             else
               d["failed_cell"] = py::none();
             d["failed_component"] = static_cast<int>(r.failed_comp);
+            py::list diagnostics;
+            for (const RuntimeDiagnosticEvent& event : r.diagnostics) {
+              py::dict row;
+              row["code"] = event.code;
+              row["component"] = event.component;
+              row["severity"] = event.severity;
+              row["message"] = event.message;
+              row["iteration"] = event.iteration;
+              row["value"] = event.value;
+              diagnostics.append(row);
+            }
+            d["diagnostics"] = diagnostics;
             return d;
           },
           py::arg("name"))
@@ -97,7 +112,8 @@ void init_system(py::module_& m) {
       // real System context, ABI key verified. cf. System::add_native_block.
       .def("add_native_block", &System::add_native_block, py::arg("name"), py::arg("so_path"),
            py::arg("limiter") = "minmod", py::arg("riemann") = "rusanov",
-           py::arg("recon") = "conservative", py::arg("time") = "explicit", py::arg("gamma") = 1.4,
+           py::arg("recon") = "conservative", py::arg("time") = "explicit",
+           py::arg("gamma") = static_cast<double>(kPhysicalDefaultGamma),
            py::arg("substeps") = 1, py::arg("evolve") = true, py::arg("stride") = 1,
            py::arg("positivity_floor") = 0.0)
       // Compiled time Program (epic ADC-399 / ADC-401): dlopen a generated problem.so, verify its
@@ -390,6 +406,26 @@ void init_system(py::module_& m) {
       .def("profile_report", &System::profile_report,
            "Per-phase / per-brick wall-clock report (count / total / mean / min / max per scope, "
            "plus counters). Per-rank.")
+      .def("profile_snapshot",
+           [](System& s) { return profile_snapshot_to_dict(s.profiler().snapshot()); },
+           "Structured profiling snapshot: schema_version, enabled, scopes and counters.")
+      .def(
+          "solver_diagnostics",
+          [](const System& s) {
+            py::list rows;
+            for (const RuntimeDiagnosticEvent& event : s.solver_diagnostics()) {
+              py::dict row;
+              row["code"] = event.code;
+              row["component"] = event.component;
+              row["severity"] = event.severity;
+              row["message"] = event.message;
+              row["iteration"] = event.iteration;
+              row["value"] = event.value;
+              rows.append(row);
+            }
+            return rows;
+          },
+          "Structured solver/runtime diagnostic events; empty unless diagnostics were enabled.")
       .def("dt_hotspot", &System::dt_hotspot,
            "Diagnostic (ADC-182): (w, i, j) of the GLOBAL cell that dominates the transport CFL "
            "bound "
@@ -426,6 +462,9 @@ void init_system(py::module_& m) {
       .def("time", &System::time)
       .def("n_species", &System::n_species)
       .def("block_names", &System::block_names)
+      .def("effective_options_report",
+           [](const System& s) { return effective_options_report_to_dict(s.effective_options_report()); },
+           "Structured effective numerical/solver/physical options for this System.")
       .def("mass", &System::mass, py::arg("name"))
       .def(
           "density",

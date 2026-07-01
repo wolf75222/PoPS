@@ -182,6 +182,37 @@ def _parse_report(report):
     return {"scopes": scopes, "counters": counters, "total_s": total_s}
 
 
+def _parse_snapshot(snapshot):
+    """Normalize the C++ ``profile_snapshot()`` dict into the PerformanceSummary internal shape."""
+    scopes = {}
+    counters = {}
+    for row in snapshot.get("scopes", []) or []:
+        name = row.get("name")
+        if not name:
+            continue
+        scopes[str(name)] = {
+            "count": _to_int(row.get("count")),
+            "total_s": _to_float(row.get("total_s")),
+            "mean_s": _to_float(row.get("mean_s")),
+            "min_s": _to_float(row.get("min_s")),
+            "max_s": _to_float(row.get("max_s")),
+        }
+    for row in snapshot.get("counters", []) or []:
+        name = row.get("name")
+        if name:
+            counters[str(name)] = _to_int(row.get("value"))
+    total_s = _to_float(snapshot.get("total_s"))
+    if total_s == 0.0 and scopes:
+        total_s = sum(v.get("total_s", 0.0) for v in scopes.values())
+    return {
+        "schema_version": _to_int(snapshot.get("schema_version")),
+        "enabled": bool(snapshot.get("enabled", False)),
+        "scopes": scopes,
+        "counters": counters,
+        "total_s": total_s,
+    }
+
+
 def _extract_float(text, after):
     """Best-effort: the float token that follows @p after in @p text (else 0.0)."""
     idx = text.find(after)
@@ -230,8 +261,9 @@ class _Unavailable:
 class PerformanceSummary:
     """A printable, typed wrapper around the native profile report (Spec 5 criteria 41-43).
 
-    Built from the string :meth:`System.profile_report` returns (and the :class:`Profile` level the
-    run requested). It exposes the report as a structured dict (:meth:`to_dict` / :meth:`to_json`)
+    Built from the structured ``profile_snapshot()`` dict when available, or from the legacy string
+    :meth:`System.profile_report` returns. It exposes the report as a structured dict
+    (:meth:`to_dict` / :meth:`to_json`)
     and typed views: :meth:`by_program_node`, :meth:`by_native_brick`, :meth:`by_solver`,
     :meth:`by_elliptic`, :meth:`by_amr_mpi`, :meth:`by_memory`. Views read the parsed native tables; a
     view the build does not surface returns an :class:`_Unavailable` sentinel (``bool(view) is False``)
@@ -239,9 +271,11 @@ class PerformanceSummary:
     """
 
     def __init__(self, report, profile=None):
-        self._report_text = report or ""
+        self._snapshot = dict(report) if isinstance(report, dict) else None
+        self._report_text = "" if self._snapshot is not None else (report or "")
         self._profile = profile if profile is not None else Profile.Basic()
-        self._parsed = _parse_report(self._report_text)
+        self._parsed = (_parse_snapshot(self._snapshot)
+                        if self._snapshot is not None else _parse_report(self._report_text))
 
     # ---- raw access -------------------------------------------------------------------------
     @property
@@ -251,8 +285,13 @@ class PerformanceSummary:
 
     @property
     def raw_report(self):
-        """The exact string the native profiler returned (the source of truth)."""
+        """The exact legacy string the native profiler returned, or ``""`` for snapshot input."""
         return self._report_text
+
+    @property
+    def source(self):
+        """``"snapshot"`` for structured C++ input, ``"text"`` for the legacy parser path."""
+        return "snapshot" if self._snapshot is not None else "text"
 
     def scopes(self):
         """All timed scopes: ``{name: {count, total_s, mean_s, min_s, max_s}}``."""
@@ -403,6 +442,9 @@ class PerformanceSummary:
         """
         return {
             "profile": self._profile.level,
+            "source": self.source,
+            "schema_version": self._parsed.get("schema_version", 0),
+            "enabled": self._parsed.get("enabled"),
             "total_s": self.total_s(),
             "scopes": self.scopes(),
             "counters": self.counters(),

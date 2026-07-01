@@ -1,4 +1,6 @@
 #pragma once
+#include <pops/diagnostics/fallback_diagnostics.hpp>
+
 /// @file
 /// @brief Spectrum extremes (real parts) of a small dense matrix: signed wave-speed bounds
 /// supplied by a model (exact HLL via flux Jacobian).
@@ -374,6 +376,9 @@ POPS_HD inline EigBounds real_eig_minmax(const Real (&A)[N][N], int max_iter_per
       detail::gershgorin_bounds(A, b.lmin, b.lmax);
       b.max_im = Real(0);
       b.converged = false;
+#if !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__)
+      record_fallback(FallbackCounter::kDenseEigGershgorin);
+#endif
     }
   }
   if (fallback)

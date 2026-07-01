@@ -93,6 +93,29 @@ def test_parse_empty_report_is_safe():
     assert _parse_report(None)["scopes"] == {}
 
 
+def test_summary_accepts_structured_snapshot_without_text_parsing():
+    snapshot = {
+        "schema_version": 1,
+        "enabled": False,
+        "total_s": 0.012,
+        "scopes": [
+            {"name": "step", "count": 2, "total_s": 0.010, "mean_s": 0.005,
+             "min_s": 0.004, "max_s": 0.006},
+        ],
+        "counters": [
+            {"name": "kernels", "value": 3},
+        ],
+    }
+    summ = PerformanceSummary(snapshot, Profile.Basic())
+    assert summ.source == "snapshot"
+    assert summ.raw_report == ""
+    assert summ.scopes()["step"]["count"] == 2
+    assert summ.counters()["kernels"] == 3
+    d = summ.to_dict()
+    assert d["source"] == "snapshot"
+    assert d["schema_version"] == 1
+
+
 # ---- (C) PerformanceSummary typed views -----------------------------------------------------
 def test_summary_views_read_the_native_tables():
     summ = PerformanceSummary(_SAMPLE_REPORT, Profile.Advanced())

@@ -83,9 +83,31 @@ class BrickDescriptor:
     def validate(self, context=None):
         """Raise a clear error when this brick has no native symbol yet (``available`` False)."""
         if not self.available:
-            raise ValueError("%s [%s] is not available: it has no native C++ symbol yet"
-                             % (self.name, self.category))
+            raise ValueError(
+                "%s [%s] is not available: it has no native C++ symbol yet; unsupported route: "
+                "requested %s:%s; available route: native %s descriptors with a non-empty "
+                "native_id; alternative: choose an available descriptor from "
+                "pops.inspect_capabilities()."
+                % (self.name, self.category, self.category, self.name, self.category))
         return True
+
+    def capability_matrix(self, context=None):
+        """One-row ADC-549 capability matrix for this brick descriptor (metadata only)."""
+        from pops._capabilities import CapabilityRouteMatrix, CapabilityRouteRow
+        status = "available" if self.available else "unavailable"
+        limitation = "" if self.available else "catalogued descriptor has no native C++ symbol"
+        error = ""
+        if not self.available:
+            error = ("unsupported route: requested %s:%s; available route: native %s "
+                     "descriptors with a non-empty native_id; alternative: choose an available "
+                     "descriptor from pops.inspect_capabilities()."
+                     % (self.category, self.name, self.category))
+        row = CapabilityRouteRow(
+            "%s:%s" % (self.category, self.name),
+            layout="context", backend="native" if self.native_id else "none",
+            platform="context", mpi=None, gpu=None, status=status,
+            limitation=limitation, error_message=error, source="descriptor")
+        return CapabilityRouteMatrix(self.name, "context", [row])
 
 
 # --- shared descriptor factories (imported by every catalog namespace) ------
@@ -383,6 +405,24 @@ class Descriptor:
         return {"name": self.name, "category": self.category, "native_id": self.native_id,
                 "options": self.options(), "requirements": self.requirements(),
                 "capabilities": self.capabilities()}
+
+    def capability_matrix(self, context=None):
+        """One-row ADC-549 capability matrix for this typed descriptor (metadata only)."""
+        from pops._capabilities import CapabilityRouteMatrix, CapabilityRouteRow
+        status_obj = self.available(context)
+        status = {"yes": "available", "no": "unavailable",
+                  "partial": "partial"}.get(status_obj.status, "unknown")
+        caps = self.capabilities()
+        row = CapabilityRouteRow(
+            "%s:%s" % (self.category, self.name),
+            layout=caps.get("layout", "context") if isinstance(caps, dict) else "context",
+            backend="native" if self.native_id else "context",
+            platform="context",
+            mpi=caps.get("supports_mpi") if isinstance(caps, dict) else None,
+            gpu=caps.get("supports_gpu") if isinstance(caps, dict) else None,
+            status=status, limitation=status_obj.reason,
+            error_message="" if status_obj.ok else str(status_obj), source="descriptor")
+        return CapabilityRouteMatrix(self.name, row.layout, [row])
 
     def _summary(self):
         return ", ".join("%s=%r" % (k, v) for k, v in self.options().items())
