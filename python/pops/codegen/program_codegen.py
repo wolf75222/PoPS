@@ -35,6 +35,7 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _MODEL_OPS,
     _PROFILE_SKIP_OPS,
     _PROGRAM_CPP_TEMPLATE,
+    _schur_include,
     Value,
     _apply_in_arg,
     _aux_comp,
@@ -183,6 +184,7 @@ def emit_cpp_program(program, model=None, target="system"):
         program_params=_emit_program_params(program, model),
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
+        schur_include=_schur_include(program),
         amr_install=_emit_amr_install(program, target, prelude, body))
 
 def _emit_block_names(program):

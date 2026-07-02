@@ -331,9 +331,11 @@ set(POPS_CPP_STANDARD_TESTS
   test_fallback_diagnostics
   test_structured_solver_diagnostics
   test_public_validation_errors
+  test_program_context_schur_free
   test_generic_krylov
   test_solver_codegen_generated
   test_schur_condensation
+  test_condensed_schur_operator
   test_condensed_schur_source_stepper
   test_amr_condensed_schur_source_stepper
   test_amr_condensed_schur_composite

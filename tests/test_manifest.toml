@@ -486,6 +486,11 @@ sources = ["tests/cpp/unit/elliptic/test_composite_fac_tensor.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
+name = "test_condensed_schur_operator"
+sources = ["tests/cpp/unit/elliptic/test_condensed_schur_operator.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
 name = "test_condensed_schur_source_stepper"
 sources = ["tests/cpp/unit/elliptic/test_condensed_schur_source_stepper.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -923,6 +928,11 @@ labels = ["unit", "runtime", "fast"]
 [[cpp.suite]]
 name = "test_embedded_boundary_generic"
 sources = ["tests/cpp/unit/runtime/test_embedded_boundary_generic.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_program_context_schur_free"
+sources = ["tests/cpp/unit/runtime/test_program_context_schur_free.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]

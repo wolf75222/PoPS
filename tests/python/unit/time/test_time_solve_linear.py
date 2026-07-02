@@ -110,9 +110,12 @@ def _bicgstab_call(src):
 
 def test_gmres_gmg_precond_codegen(t):
     # GMRES + GeometricMG lowers to a REAL ApplyFn (one V-cycle of the wired multigrid), NOT the empty
-    # identity ApplyFn. The named precond lambda forwards to ctx.geometric_mg_precond_apply.
+    # identity ApplyFn. ADC-587: the precond V-cycle cache moved off ProgramContext into a persistent
+    # pops::coupling::schur::program::GeometricMgPreconditioner the named lambda forwards apply() to.
     src = _solve_program(t, method="gmres", preconditioner=_precond("geometric_mg")).emit_cpp_program()
-    assert "ctx.geometric_mg_precond_apply" in src, "the MG V-cycle apply must be emitted\n%s" % src
+    assert "pops::coupling::schur::program::GeometricMgPreconditioner" in src, (
+        "the MG V-cycle preconditioner state must be emitted\n%s" % src)
+    assert "->apply(ctx," in src, "the MG V-cycle apply must be emitted\n%s" % src
     assert "pops::ApplyFn precond_mg" in src, "a named real precond ApplyFn must be emitted\n%s" % src
     call = _gmres_call(src)
     assert "precond_mg" in call, "gmres_solve must take the real precond, got: %s" % call
@@ -122,7 +125,8 @@ def test_gmres_gmg_precond_codegen(t):
 def test_bicgstab_gmg_precond_codegen(t):
     src = _solve_program(t, method="bicgstab",
                          preconditioner=_precond("geometric_mg")).emit_cpp_program()
-    assert "ctx.geometric_mg_precond_apply" in src, src
+    assert "pops::coupling::schur::program::GeometricMgPreconditioner" in src, src
+    assert "->apply(ctx," in src, src
     call = _bicgstab_call(src)
     assert "precond_mg" in call and "pops::ApplyFn{}" not in call, call
 

@@ -306,6 +306,58 @@ def build_module_manifest(module):
         abi_requirements=abi_requirements, params_utilization=_params_utilization(params))
 
 
+# Program IR ops that lower to the native condensed-Schur / Lorentz operator module (ADC-587,
+# include/pops/coupling/schur/program/condensed_schur_operator.hpp). Kept in lock-step with
+# pops.codegen.program_emit_kernels._SCHUR_PROGRAM_OPS (the codegen include gate); duplicated here (not
+# imported) so the manifest stays buildable without pulling the codegen package.
+_SCHUR_ROUTE_OPS = ("schur_coeffs", "apply_laplacian_coeff", "schur_explicit_flux", "schur_rhs",
+                    "schur_reconstruct", "schur_energy")
+
+
+def schur_route_manifest(program):
+    """The STRUCTURED condensed-Schur / Lorentz route descriptor of a compiled time @p program, or
+    ``None`` when its IR carries no Schur op (ADC-587, plan decision 5).
+
+    A compiled Program that lowers the ``pops.lib.time.condensed_schur`` macro drives the native
+    condensed-Schur / Lorentz operator module. This descriptor makes that route -- and its documented
+    LIMITATION -- machine-visible in the manifest instead of buried in the macro docstring: a reader can
+    tell from the manifest alone that the .so pulls ``coupling/schur/program`` and that the route is a
+    documented near-match to the native ``pops.CondensedSchur`` stepper (bit-exact only at ``theta == 1``
+    for the FIRST step; the cross-step ``phi^n`` warm-start carry is deferred). Purely-additive, JSON-
+    ready; a Schur-free Program yields ``None`` (the route is honestly absent, never fabricated).
+
+    ``ops`` lists the Schur op names actually present (id-stable IR op tags); ``operator_header`` is the
+    native module the .so includes; ``limitations`` is a structured record of the theta constraint so a
+    tool can gate on it without parsing prose.
+    """
+    values = getattr(program, "_values", None)
+    if values is None:
+        return None
+    present = [v.op for v in values if v.op in _SCHUR_ROUTE_OPS]
+    if not present:
+        return None
+    # De-duplicate while preserving first-seen order (a Program may carry several schur ops).
+    seen = []
+    for op in present:
+        if op not in seen:
+            seen.append(op)
+    return {
+        "route": "condensed_schur",
+        "ops": seen,
+        "operator_module": "pops::coupling::schur::program",
+        "operator_header": "pops/coupling/schur/program/condensed_schur_operator.hpp",
+        "native_reference": "pops.CondensedSchur",
+        "limitations": {
+            "bit_exact_theta": 1.0,
+            "bit_exact_scope": "first_step",
+            "theta_range": "(0, 1]",
+            "note": ("near-match to the native CondensedSchur stepper; matrix-free BiCGStab without "
+                     "the native GeometricMG preconditioner, and the cross-step phi^n warm-start "
+                     "carry is deferred, so bit-exactness holds only for the first step at theta == 1"),
+        },
+    }
+
+
 def _is_manifestable_module(obj):
     """True when @p obj exposes the full Module accessor surface the builder reads.
 
@@ -332,4 +384,4 @@ def module_manifest_of(model_or_module):
 
 
 __all__ = ["OperatorManifestEntry", "OperatorRegistryManifest", "ModuleManifest",
-           "build_module_manifest", "module_manifest_of", "SCHEMA_VERSION"]
+           "build_module_manifest", "module_manifest_of", "schur_route_manifest", "SCHEMA_VERSION"]
