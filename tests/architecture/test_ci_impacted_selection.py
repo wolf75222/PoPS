@@ -221,3 +221,19 @@ def test_plan_python_new_pops_file_fails_safe_to_all(tmp_path):
     )
     assert outputs["python_mode"] == "all"
     assert "off-graph-pops-file" in outputs["python_why"]
+
+
+def test_parse_cpp_targets_excludes_mpi_only_targets():
+    """The serial C++ gate must never select an MPI-only target.
+
+    tests/CMakeLists.txt registers MPI tests inside if(POPS_USE_MPI) blocks, but the
+    target scraper is textual: without a name filter the serial build step would hit
+    ``ninja: unknown target`` (seen live on test_amr_regrid_mpi_parity, whose ``mpi``
+    segment is an INFIX the old ``test_mpi_`` prefix filter missed). Convention: every
+    MPI-only test carries an ``mpi`` name segment; they run in the ci-mpi job instead.
+    """
+    targets = _load("ci_select_tests").parse_cpp_targets()
+    assert targets, "no C++ targets scraped from tests/CMakeLists.txt"
+    offenders = [t for t in targets if "mpi" in t.split("_")]
+    assert not offenders, f"MPI-only targets leaked into the serial selection: {offenders}"
+    assert "test_strang_splitting" in targets
