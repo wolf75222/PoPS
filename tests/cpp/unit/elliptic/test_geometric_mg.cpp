@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -58,52 +57,34 @@ static void solve_case(int n, const BCRec& bc, bool periodic, PhiEx phi_ex, RhsF
       err = std::max(err, std::fabs(p(i, j, 0) - phi_ex(geom.x_cell(i), geom.y_cell(j))));
 }
 
-static int pops_run_test_geometric_mg() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+// --- Dirichlet : phi = sin(pi x) sin(pi y), lap phi = -2 pi^2 phi ---
+TEST(GeometricMgTest, dirichlet_converges_mesh_independent_second_order) {
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  auto pe = [](double x, double y) { return std::sin(kPi * x) * std::sin(kPi * y); };
+  auto fr = [&](double x, double y) { return -2 * kPi * kPi * pe(x, y); };
 
-  // --- Dirichlet : phi = sin(pi x) sin(pi y), lap phi = -2 pi^2 phi ---
-  {
-    BCRec bc;
-    bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
-    auto pe = [](double x, double y) { return std::sin(kPi * x) * std::sin(kPi * y); };
-    auto fr = [&](double x, double y) { return -2 * kPi * kPi * pe(x, y); };
-
-    int c32 = 0, c64 = 0;
-    double e32 = 0, e64 = 0;
-    solve_case(32, bc, false, pe, fr, c32, e32);
-    solve_case(64, bc, false, pe, fr, c64, e64);
-    std::printf("Dirichlet : c32=%d e32=%.2e | c64=%d e64=%.2e\n", c32, e32, c64, e64);
-    chk(c64 <= 25, "dir_converged_fast");
-    chk(std::abs(c64 - c32) <= 5, "dir_mesh_independent");
-    chk(e64 < 5e-3, "dir_accurate");
-    chk(e64 < e32, "dir_second_order");  // erreur baisse en raffinant
-  }
-
-  // --- periodique : phi = sin(2 pi x) sin(2 pi y), lap phi = -8 pi^2 phi ---
-  {
-    BCRec bc;  // periodique par defaut sur les 4 faces
-    auto pe = [](double x, double y) { return std::sin(2 * kPi * x) * std::sin(2 * kPi * y); };
-    auto fr = [&](double x, double y) { return -8 * kPi * kPi * pe(x, y); };
-
-    int c64 = 0;
-    double e64 = 0;
-    solve_case(64, bc, true, pe, fr, c64, e64);
-    std::printf("Periodique : c64=%d e64=%.2e\n", c64, e64);
-    chk(c64 <= 30, "per_converged");
-    chk(e64 < 5e-3, "per_accurate");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_geometric_mg\n");
-  return fails == 0 ? 0 : 1;
+  int c32 = 0, c64 = 0;
+  double e32 = 0, e64 = 0;
+  solve_case(32, bc, false, pe, fr, c32, e32);
+  solve_case(64, bc, false, pe, fr, c64, e64);
+  std::printf("Dirichlet : c32=%d e32=%.2e | c64=%d e64=%.2e\n", c32, e32, c64, e64);
+  EXPECT_TRUE(c64 <= 25) << "dir_converged_fast: c64=" << c64;
+  EXPECT_TRUE(std::abs(c64 - c32) <= 5) << "dir_mesh_independent: c32=" << c32 << " c64=" << c64;
+  EXPECT_TRUE(e64 < 5e-3) << "dir_accurate: e64=" << e64;
+  EXPECT_TRUE(e64 < e32) << "dir_second_order: e32=" << e32 << " e64=" << e64;  // erreur baisse en raffinant
 }
 
-TEST(test_geometric_mg, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_geometric_mg, "test_geometric_mg"), 0);
+// --- periodique : phi = sin(2 pi x) sin(2 pi y), lap phi = -8 pi^2 phi ---
+TEST(GeometricMgTest, periodic_converges_accurate) {
+  BCRec bc;  // periodique par defaut sur les 4 faces
+  auto pe = [](double x, double y) { return std::sin(2 * kPi * x) * std::sin(2 * kPi * y); };
+  auto fr = [&](double x, double y) { return -8 * kPi * kPi * pe(x, y); };
+
+  int c64 = 0;
+  double e64 = 0;
+  solve_case(64, bc, true, pe, fr, c64, e64);
+  std::printf("Periodique : c64=%d e64=%.2e\n", c64, e64);
+  EXPECT_TRUE(c64 <= 30) << "per_converged: c64=" << c64;
+  EXPECT_TRUE(e64 < 5e-3) << "per_accurate: e64=" << e64;
 }

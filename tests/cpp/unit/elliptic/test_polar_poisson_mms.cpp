@@ -32,7 +32,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -203,23 +202,14 @@ static void solve_case(int nr, int nth, int m, const BCRec& bc, PhiExact phi_exa
   res = solver.residual();
 }
 
-static int pops_run_test_polar_poisson_mms() {
-  std::printf("=== MMS du solveur de Poisson POLAIRE direct (PolarPoissonSolver), Phase 2a ===\n");
-  std::printf("Anneau r in [%.2f, %.2f] (r_min > 0, AUCUNE singularite), theta in [0, 2pi)\n",
-              kRmin, kRmax);
-  bool ok = true;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("  ECHEC %s\n", w);
-      ok = false;
-    }
-  };
+// Nombre de raffinements radiaux communs aux sections (A) et (D).
+static constexpr int kNrs[3] = {32, 64, 128};
+static constexpr int kNthFix = 256;  // >> mode -> part azimutale spectrale exacte
 
-  // ---------------------------------------------------------------------------------------------
-  // (A) CONVERGENCE EN r a l'ORDRE 2 (Dirichlet), mode azimutal m=3, nth FIXE = 256 (>> mode -> la
-  //     part azimutale spectrale est exacte, l'erreur est purement radiale -> O(dr^2)).
-  // ---------------------------------------------------------------------------------------------
-  std::printf("\n--- (A) Convergence radiale O(2), Dirichlet, mode m=3 (nth=256 fixe) ---\n");
+// (A) CONVERGENCE EN r a l'ORDRE 2 (Dirichlet), mode azimutal m=3, nth FIXE = 256 (>> mode -> la
+// part azimutale spectrale est exacte, l'erreur est purement radiale -> O(dr^2)). Inclut aussi (C)
+// RESIDU DISCRET ~ARRONDI (solveur direct, meme sequence de raffinement).
+TEST(test_polar_poisson_mms, dirichlet_radial_order2_and_residual) {
   BCRec bcd;
   bcd.xlo = bcd.xhi = BCType::Dirichlet;
   // Valeurs Dirichlet aux faces r_min / r_max : la part m=0 (constante en theta) = S(r_face). La part
@@ -228,28 +218,30 @@ static int pops_run_test_polar_poisson_mms() {
   bcd.xlo_val = S(kRmin);  // S(r_min) = 1
   bcd.xhi_val = S(kRmax);  // S(r_max) = 1 + 0.5 (r_max - r_min)
   const int m = 3;
-  const int nth_fix = 256;
-  const int nrs[3] = {32, 64, 128};
   ErrL2 eA[3];
   double resA[3];
   for (int k = 0; k < 3; ++k) {
-    solve_case(nrs[k], nth_fix, m, bcd, phi_dir, f_dir, /*subtract_mean=*/false, eA[k], resA[k]);
-    std::printf("  nr=%-4d nth=%-4d : L2=%.4e  Linf=%.4e  residu=%.3e\n", nrs[k], nth_fix, eA[k].l2,
+    solve_case(kNrs[k], kNthFix, m, bcd, phi_dir, f_dir, /*subtract_mean=*/false, eA[k], resA[k]);
+    std::printf("  nr=%-4d nth=%-4d : L2=%.4e  Linf=%.4e  residu=%.3e\n", kNrs[k], kNthFix, eA[k].l2,
                 eA[k].linf, resA[k]);
   }
   const double pA1 = std::log2(eA[0].l2 / eA[1].l2);
   const double pA2 = std::log2(eA[1].l2 / eA[2].l2);
   std::printf("  ordre observe (L2) : %.2f (32->64), %.2f (64->128)\n", pA1, pA2);
-  chk(pA1 >= 1.7 && pA1 <= 2.3, "ordreA_32_64_dans_[1.7,2.3]");
-  chk(pA2 >= 1.7 && pA2 <= 2.3, "ordreA_64_128_dans_[1.7,2.3]");
-  chk(resA[2] < 1e-9, "residuA_arrondi");  // (C) residu discret ~arrondi
+  EXPECT_TRUE(pA1 >= 1.7 && pA1 <= 2.3) << "ordreA_32_64_dans_[1.7,2.3] (pA1=" << pA1 << ")";
+  EXPECT_TRUE(pA2 >= 1.7 && pA2 <= 2.3) << "ordreA_64_128_dans_[1.7,2.3] (pA2=" << pA2 << ")";
+  EXPECT_TRUE(resA[2] < 1e-9) << "residuA_arrondi (resA[2]=" << resA[2] << ")";
+}
 
-  // ---------------------------------------------------------------------------------------------
-  // (B) PRECISION SPECTRALE EN theta : mode azimutal pur m=3, nr grand FIXE = 512 (plancher radial).
-  //     A nth=16 (>= 2(m+1)=8) et nth=64 l'erreur est IDENTIQUE (le mode est deja represente
-  //     exactement) -> aucune amelioration en raffinant theta : signature du spectral.
-  // ---------------------------------------------------------------------------------------------
-  std::printf("\n--- (B) Precision spectrale en theta (mode m=3 pur, nr=512 fixe) ---\n");
+// (B) PRECISION SPECTRALE EN theta : mode azimutal pur m=3, nr grand FIXE = 512 (plancher radial).
+// A nth=16 (>= 2(m+1)=8) et nth=64 l'erreur est IDENTIQUE (le mode est deja represente
+// exactement) -> aucune amelioration en raffinant theta : signature du spectral.
+TEST(test_polar_poisson_mms, dirichlet_theta_spectral_accuracy) {
+  BCRec bcd;
+  bcd.xlo = bcd.xhi = BCType::Dirichlet;
+  bcd.xlo_val = S(kRmin);
+  bcd.xhi_val = S(kRmax);
+  const int m = 3;
   ErrL2 eB16, eB64;
   double rB16, rB64;
   solve_case(512, 16, m, bcd, phi_dir, f_dir, false, eB16, rB16);
@@ -257,13 +249,12 @@ static int pops_run_test_polar_poisson_mms() {
   std::printf("  nth=16 : L2=%.6e   nth=64 : L2=%.6e   ecart relatif=%.3e\n", eB16.l2, eB64.l2,
               std::fabs(eB16.l2 - eB64.l2) / eB64.l2);
   // Spectral : l'erreur azimutale est nulle, l'erreur totale = plancher radial commun -> ecart << 1e-3.
-  chk(std::fabs(eB16.l2 - eB64.l2) / eB64.l2 < 1e-3, "spectral_theta_nth16_eq_nth64");
+  EXPECT_TRUE(std::fabs(eB16.l2 - eB64.l2) / eB64.l2 < 1e-3) << "spectral_theta_nth16_eq_nth64";
+}
 
-  // ---------------------------------------------------------------------------------------------
-  // (D) NEUMANN homogene aux deux bords (flux radial nul), jauge mode 0 epinglee. Solution a flux
-  //     radial nul aux bords -> O(2) MODULO une constante additive (on retire la moyenne). Mode m=2.
-  // ---------------------------------------------------------------------------------------------
-  std::printf("\n--- (D) Neumann homogene (2 bords) + jauge mode 0, mode m=2 (nth=256 fixe) ---\n");
+// (D) NEUMANN homogene aux deux bords (flux radial nul), jauge mode 0 epinglee. Solution a flux
+// radial nul aux bords -> O(2) MODULO une constante additive (on retire la moyenne). Mode m=2.
+TEST(test_polar_poisson_mms, neumann_gauge_pinned_order2) {
   BCRec bcn;
   bcn.xlo = bcn.xhi = BCType::Foextrap;  // Neumann homogene (flux radial nul)
   bcn.ylo = bcn.yhi = BCType::Periodic;
@@ -271,23 +262,14 @@ static int pops_run_test_polar_poisson_mms() {
   ErrL2 eD[3];
   double resD[3];
   for (int k = 0; k < 3; ++k) {
-    solve_case(nrs[k], nth_fix, mN, bcn, phi_neu, f_neu, /*subtract_mean=*/true, eD[k], resD[k]);
-    std::printf("  nr=%-4d nth=%-4d : L2(jauge)=%.4e  Linf=%.4e  residu=%.3e\n", nrs[k], nth_fix,
+    solve_case(kNrs[k], kNthFix, mN, bcn, phi_neu, f_neu, /*subtract_mean=*/true, eD[k], resD[k]);
+    std::printf("  nr=%-4d nth=%-4d : L2(jauge)=%.4e  Linf=%.4e  residu=%.3e\n", kNrs[k], kNthFix,
                 eD[k].l2, eD[k].linf, resD[k]);
   }
   const double pD1 = std::log2(eD[0].l2 / eD[1].l2);
   const double pD2 = std::log2(eD[1].l2 / eD[2].l2);
   std::printf("  ordre observe (L2, jauge) : %.2f (32->64), %.2f (64->128)\n", pD1, pD2);
-  chk(pD1 >= 1.6 && pD1 <= 2.4, "ordreD_32_64_dans_[1.6,2.4]");
-  chk(pD2 >= 1.6 && pD2 <= 2.4, "ordreD_64_128_dans_[1.6,2.4]");
-  chk(resD[2] < 1e-9, "residuD_arrondi");
-
-  std::printf("\n=== VERDICT : %s ===\n", ok ? "SUCCESS" : "ECHEC");
-  if (ok)
-    std::printf("OK test_polar_poisson_mms\n");
-  return ok ? 0 : 1;
-}
-
-TEST(test_polar_poisson_mms, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_poisson_mms, "test_polar_poisson_mms"), 0);
+  EXPECT_TRUE(pD1 >= 1.6 && pD1 <= 2.4) << "ordreD_32_64_dans_[1.6,2.4] (pD1=" << pD1 << ")";
+  EXPECT_TRUE(pD2 >= 1.6 && pD2 <= 2.4) << "ordreD_64_128_dans_[1.6,2.4] (pD2=" << pD2 << ")";
+  EXPECT_TRUE(resD[2] < 1e-9) << "residuD_arrondi (resD[2]=" << resD[2] << ")";
 }

@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -21,16 +20,9 @@ void set_env_var(const char* key, const char* value) {
   setenv(key, value, 1);
 #endif
 }
-
-void chk(bool cond, const char* label) {
-  if (!cond) {
-    std::printf("FAIL %s\n", label);
-    std::exit(1);
-  }
-}
 }  // namespace
 
-static int pops_run_test_structured_solver_diagnostics() {
+TEST(test_structured_solver_diagnostics, Runs) {
   using namespace pops;
   static constexpr double kPi = 3.14159265358979323846;
 
@@ -54,9 +46,10 @@ static int pops_run_test_structured_solver_diagnostics() {
     mg.solve(Real(1e-6), 2);
 
     const RuntimeDiagnosticsReport& report = mg.diagnostics_report();
-    chk(report.source == "pops.numerics.elliptic.geometric_mg", "MG report source");
-    chk(report.count("elliptic.mg.trace") > 0, "MG trace events recorded structurally");
-    chk(report.events.front().severity == "trace", "MG trace severity");
+    ASSERT_TRUE(report.source == "pops.numerics.elliptic.geometric_mg") << "MG report source";
+    ASSERT_TRUE(report.count("elliptic.mg.trace") > 0)
+        << "MG trace events recorded structurally";
+    ASSERT_TRUE(report.events.front().severity == "trace") << "MG trace severity";
   }
 
   {
@@ -76,16 +69,14 @@ static int pops_run_test_structured_solver_diagnostics() {
     fac.set_verbose(true);
     const Real residual = fac.solve(/*max_iters=*/1, /*fine_sweeps=*/2, /*tol=*/Real(1e-8));
     const RuntimeDiagnosticsReport& report = fac.diagnostics_report();
-    chk(std::isfinite(static_cast<double>(residual)), "FAC residual finite");
-    chk(report.source == "pops.numerics.elliptic.composite_fac_poisson", "FAC report source");
-    chk(report.count("elliptic.fac.residual") > 0, "FAC residual events recorded structurally");
-    chk(report.events.front().component == "CompositeFacPoisson", "FAC event component");
+    ASSERT_TRUE(std::isfinite(static_cast<double>(residual))) << "FAC residual finite";
+    ASSERT_TRUE(report.source == "pops.numerics.elliptic.composite_fac_poisson")
+        << "FAC report source";
+    ASSERT_TRUE(report.count("elliptic.fac.residual") > 0)
+        << "FAC residual events recorded structurally";
+    ASSERT_TRUE(report.events.front().component == "CompositeFacPoisson")
+        << "FAC event component";
   }
 
   std::printf("OK test_structured_solver_diagnostics\n");
-  return 0;
-}
-
-TEST(test_structured_solver_diagnostics, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_structured_solver_diagnostics, "test_structured_solver_diagnostics"), 0);
 }

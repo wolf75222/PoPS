@@ -10,7 +10,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -52,52 +51,35 @@ static GeometricMG make_mg(int nc) {
   return GeometricMG(geom, ba, bc, active);
 }
 
-static int pops_run_test_solve_robust() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+// 1 + 2 : cas DIVERGENT (eff 640). solve_robust converge ; deux solves a froid font le meme travail.
+TEST(test_solve_robust, converges_on_divergent_case_and_is_not_sticky) {
+  GeometricMG mg = make_mg(640);
+  const double dx = 1.0 / 640;
+  set_ring_rhs(mg, 640, dx);
+  const double r0 = mg.residual();
+  const int n1 = mg.solve_robust(1e-8, 50);
+  const double rfin = mg.residual();
+  EXPECT_TRUE(rfin < 1e-6 * r0) << "convergence_sur_cas_divergent r0=" << r0 << " rfin=" << rfin;
 
-  // 1 + 2 : cas DIVERGENT (eff 640). solve_robust converge ; deux solves a froid font le meme travail.
-  {
-    GeometricMG mg = make_mg(640);
-    const double dx = 1.0 / 640;
-    set_ring_rhs(mg, 640, dx);
-    const double r0 = mg.residual();
-    const int n1 = mg.solve_robust(1e-8, 50);
-    const double rfin = mg.residual();
-    chk(rfin < 1e-6 * r0, "convergence_sur_cas_divergent");
-
-    set_ring_rhs(mg, 640, dx);  // remise a froid (phi=0, meme RHS)
-    const int n2 = mg.solve_robust(1e-8, 50);
-    chk(n1 == n2, "durcissement_local_non_sticky");  // sticky -> n2 < n1
-    std::printf("solve_robust eff640 : r0=%.2e rfin=%.2e ratio=%.2e cyc=%d puis %d (egaux=%d)\n",
-                r0, rfin, rfin / r0, n1, n2, int(n1 == n2));
-  }
-
-  // 3 : cas CONVERGENT (eff 224), solve() vs solve_robust bit-a-bit identiques.
-  {
-    GeometricMG a = make_mg(224), b = make_mg(224);
-    const double dx = 1.0 / 224;
-    set_ring_rhs(a, 224, dx);
-    set_ring_rhs(b, 224, dx);
-    a.solve(1e-8, 50);
-    b.solve_robust(1e-8, 50);
-    MultiFab diff = a.phi();
-    saxpy(diff, Real(-1), b.phi());
-    const double md = norm_inf(diff);
-    chk(md == 0.0, "bit_identique_a_solve_si_convergent");
-    std::printf("solve vs solve_robust (eff224, convergent) : maxdiff(phi)=%.3e\n", md);
-  }
-
-  if (fails == 0)
-    std::printf("OK test_solve_robust\n");
-  return fails == 0 ? 0 : 1;
+  set_ring_rhs(mg, 640, dx);  // remise a froid (phi=0, meme RHS)
+  const int n2 = mg.solve_robust(1e-8, 50);
+  // sticky -> n2 < n1
+  EXPECT_EQ(n1, n2) << "durcissement_local_non_sticky";
+  std::printf("solve_robust eff640 : r0=%.2e rfin=%.2e ratio=%.2e cyc=%d puis %d (egaux=%d)\n", r0,
+              rfin, rfin / r0, n1, n2, int(n1 == n2));
 }
 
-TEST(test_solve_robust, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_solve_robust, "test_solve_robust"), 0);
+// 3 : cas CONVERGENT (eff 224), solve() vs solve_robust bit-a-bit identiques.
+TEST(test_solve_robust, matches_solve_bit_identical_when_convergent) {
+  GeometricMG a = make_mg(224), b = make_mg(224);
+  const double dx = 1.0 / 224;
+  set_ring_rhs(a, 224, dx);
+  set_ring_rhs(b, 224, dx);
+  a.solve(1e-8, 50);
+  b.solve_robust(1e-8, 50);
+  MultiFab diff = a.phi();
+  saxpy(diff, Real(-1), b.phi());
+  const double md = norm_inf(diff);
+  EXPECT_EQ(md, 0.0) << "bit_identique_a_solve_si_convergent";
+  std::printf("solve vs solve_robust (eff224, convergent) : maxdiff(phi)=%.3e\n", md);
 }

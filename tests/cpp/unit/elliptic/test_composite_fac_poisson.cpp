@@ -16,7 +16,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 
 #include <pops/mesh/layout/box_array.hpp>
@@ -41,17 +40,9 @@ static double f_rhs(double x, double y) {  // Lap u = -(9+9) pi^2 u
   return -18.0 * kPi * kPi * u_exact(x, y);
 }
 
-static int pops_run_test_composite_fac_poisson(int argc, char** argv) {
-  comm_init(&argc, &argv);
+TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
+  comm_init();
   const int me = my_rank();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      if (me == 0)
-        std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   const int n = 48;  // grossier
   const int r = 2;
@@ -113,9 +104,9 @@ static int pops_run_test_composite_fac_poisson(int argc, char** argv) {
   const Real rfac = fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*tol=*/1e-10);
   device_fence();
 
-  chk(std::isfinite(rfac), "FAC residu fini");
+  EXPECT_TRUE(std::isfinite(rfac)) << "FAC residu fini: rfac=" << rfac;
   // residu composite reduit (relatif a l'echelle de f ~ 18pi^2 ~ 178).
-  chk(rfac < 1e-2, "FAC converge (residu composite petit)");
+  EXPECT_TRUE(rfac < 1e-2) << "FAC converge (residu composite petit): rfac=" << rfac;
 
   // --- comparaison dans la zone INTERIEURE du patch (retrecie de 'guard' cellules grossieres) ---
   const int guard = 3;  // marge en cellules GROSSIERES pour eviter la contamination du bord C-F
@@ -164,25 +155,25 @@ static int pops_run_test_composite_fac_poisson(int argc, char** argv) {
         e_coarse, e_comp, e_coarse / std::fmax(e_comp, 1e-30), eg_optA, eg_comp,
         eg_optA / std::fmax(eg_comp, 1e-30), rfac);
 
-  chk(std::isfinite(e_comp) && std::isfinite(e_coarse), "erreurs finies");
-  chk(rfac < 1e-6, "(convergence) l'iteration FAC converge (residu composite -> 0)");
+  EXPECT_TRUE(std::isfinite(e_comp) && std::isfinite(e_coarse))
+      << "erreurs finies: e_comp=" << e_comp << " e_coarse=" << e_coarse;
+  EXPECT_TRUE(rfac < 1e-6)
+      << "(convergence) l'iteration FAC converge (residu composite -> 0): rfac=" << rfac;
   // CRITERE PRINCIPAL (fidelite) : le patch fin REDUIT l'erreur elliptique dans la zone raffinee.
-  chk(e_comp < 0.6 * e_coarse,
-      "(fidelite phi) patch fin plus precis que coarse-only (e_comp < 0.6 e_coarse)");
+  EXPECT_TRUE(e_comp < 0.6 * e_coarse)
+      << "(fidelite phi) patch fin plus precis que coarse-only (e_comp < 0.6 e_coarse): e_comp="
+      << e_comp << " e_coarse=" << e_coarse;
   // grad phi (la quantite physique de la derive ExB) : composite NETTEMENT meilleur que l'injection
   // Option A (grad grossier constant par morceaux). C'est ce que le couplage elliptique raffine gagne.
-  chk(eg_comp < 0.5 * eg_optA,
-      "(fidelite grad phi) composite plus precis qu'injection Option A (eg_comp < 0.5 eg_optA)");
+  EXPECT_TRUE(eg_comp < 0.5 * eg_optA)
+      << "(fidelite grad phi) composite plus precis qu'injection Option A (eg_comp < 0.5 eg_optA): "
+         "eg_comp="
+      << eg_comp << " eg_optA=" << eg_optA;
   // le patch CHANGE effectivement la solution (pas un no-op / pas une simple injection coarse).
-  chk(diff_cf > 1e-4, "le patch fin change la solution (composite != coarse interpole)");
+  EXPECT_TRUE(diff_cf > 1e-4)
+      << "le patch fin change la solution (composite != coarse interpole): diff_cf=" << diff_cf;
 
-  fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
-  if (me == 0 && fails == 0)
+  if (me == 0)
     std::printf("OK test_composite_fac_poisson\n");
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_composite_fac_poisson, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_composite_fac_poisson, "test_composite_fac_poisson"), 0);
 }

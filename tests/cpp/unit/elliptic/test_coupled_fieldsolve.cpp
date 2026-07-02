@@ -26,7 +26,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
 #include <pops/mesh/storage/multifab.hpp>
@@ -86,12 +85,12 @@ double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) 
 
 }  // namespace
 
-static int pops_run_test_coupled_fieldsolve(int argc, char** argv) {
+TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stage_overrides) {
 #if defined(POPS_HAS_KOKKOS)
+  int argc = 1;
+  char arg0[] = "test_coupled_fieldsolve";
+  char* argv[] = {arg0, nullptr};
   Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
 #endif
   test::Checker chk(test::Checker::Style::Verbose);
 
@@ -202,20 +201,10 @@ static int pops_run_test_coupled_fieldsolve(int argc, char** argv) {
       "with eps != 1 the coupled solve scales the RHS by 1/eps like solve_fields (to round-off)");
 
   // (c) SIZE guard: a U_stages not sized to n_blocks() throws (fail-loud on a stale binding) ----------
-  bool threw = false;
-  try {
-    std::vector<const MultiFab*> bad{&s.block_state(0)};  // size 1 != 2 blocks
-    s.solve_fields_from_blocks(bad);
-  } catch (const std::invalid_argument&) {
-    threw = true;
-  }
-  chk(threw, "a U_stages not sized to n_blocks() throws std::invalid_argument");
+  std::vector<const MultiFab*> bad{&s.block_state(0)};  // size 1 != 2 blocks
+  EXPECT_THROW(s.solve_fields_from_blocks(bad), std::invalid_argument)
+      << "a U_stages not sized to n_blocks() throws std::invalid_argument";
 
   if (!chk.failed())
     std::printf("OK test_coupled_fieldsolve\n");
-  return chk.failed();
-}
-
-TEST(test_coupled_fieldsolve, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_coupled_fieldsolve, "test_coupled_fieldsolve"), 0);
 }
