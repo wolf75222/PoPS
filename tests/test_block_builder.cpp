@@ -7,8 +7,8 @@
 // main (sans System), puis on verifie que make_block / make_max_speed / make_poisson_rhs produisent
 // exactement le residu / la vitesse d'onde / le second membre de Poisson du chemin direct, et que
 // l'avance SSPRK2 conserve la masse. Si ca compile et passe, un .so genere peut faire de meme.
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, NoSource, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>   // Euler (brique hyperbolique compressible)
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, NoSource, GravityForce, GravityCoupling, IsothermalFlux
+#include <pops/physics/fluids/euler.hpp>  // Euler (brique hyperbolique compressible)
 #include <pops/runtime/builders/block/block_builder.hpp>
 
 #include <pops/mesh/layout/box_array.hpp>
@@ -116,6 +116,71 @@ int main() {
   }
   chk(std::fabs(sum(U) - mass0) < 1e-9, "avance conserve la masse");
   chk(mn > 0.0 && std::isfinite(mn), "etat physique apres avance");
+
+  // (5) ADC-590 -- BIT-IDENTITY du flux : sur le vrai Euler, le chemin GENERIQUE (HLLCFlux / RoeFlux
+  // via HasHLLCStructure / HasRoeDissipation, cabl par les nouvelles capabilites de la brique) donne
+  // EXACTEMENT le meme flux que le chemin EXPLICITE (EulerHLLCFlux2D / EulerRoeFlux2D). C'est la preuve
+  // au niveau flux que la conversion de la brique Euler en modele a-capabilites ne bouge aucun bit.
+  {
+    static_assert(HasHLLCStructure<Model>,
+                  "CompositeModel<Euler,..> doit exposer HasHLLCStructure (ADC-590)");
+    static_assert(HasRoeDissipation<Model>,
+                  "CompositeModel<Euler,..> doit exposer HasRoeDissipation (ADC-590)");
+    HLLCFlux ghllc;
+    EulerHLLCFlux2D ehllc;
+    RoeFlux groe;
+    EulerRoeFlux2D eroe;
+    const Model::State UL{1.0, 0.1, 0.02, 2.5}, UR{1.3, 0.05, -0.01, 2.7};
+    const Aux A{};
+    double dh = 0, dr = 0;
+    for (int d = 0; d < 2; ++d) {
+      const auto fh_g = ghllc(model, UL, A, UR, A, d), fh_e = ehllc(model, UL, A, UR, A, d);
+      const auto fr_g = groe(model, UL, A, UR, A, d), fr_e = eroe(model, UL, A, UR, A, d);
+      for (int c = 0; c < 4; ++c) {
+        dh = std::fmax(dh, std::fabs(fh_g[c] - fh_e[c]));
+        dr = std::fmax(dr, std::fabs(fr_g[c] - fr_e[c]));
+      }
+    }
+    chk(dh == 0.0, "HLLCFlux generique == EulerHLLCFlux2D explicite (bit-identique, ADC-590)");
+    chk(dr == 0.0, "RoeFlux generique == EulerRoeFlux2D explicite (bit-identique, ADC-590)");
+  }
+
+  // (6) route EXPLICITE euler_hllc / euler_roe : make_block construit avec EulerHLLCFlux2D /
+  // EulerRoeFlux2D et, sur le vrai Euler, le residu == celui du chemin generique hllc / roe.
+  {
+    BlockClosures ceh = make_block(model, "minmod", "euler_hllc", ctx, false, true);
+    BlockClosures ch = make_block(model, "minmod", "hllc", ctx, false, true);
+    MultiFab Reh(ba, dm, 4, 0), Rh(ba, dm, 4, 0);
+    ceh.rhs_into(U, Reh);
+    ch.rhs_into(U, Rh);
+    double de = 0;
+    for (int c = 0; c < 4; ++c) {
+      const ConstArray4 a = Reh.fab(0).const_array(), b = Rh.fab(0).const_array();
+      for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
+        for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
+          de = std::fmax(de, std::fabs(a(i, j, c) - b(i, j, c)));
+    }
+    chk(de == 0.0, "make_block euler_hllc == hllc sur le vrai Euler (bit-identique)");
+  }
+
+  // (7) REFUS : un transport isotherme 3-var (sans pression, sans capability HLLC) est REFUSE par
+  // hllc ET par euler_hllc, avec un message qui NOMME les capabilites / la couche Euler canonique.
+  {
+    using IsoModel = CompositeModel<IsothermalFlux, NoSource, BackgroundDensity>;
+    IsoModel iso{IsothermalFlux{0.5}, NoSource{}, BackgroundDensity{0.0, 0.0}};
+    auto refused_with = [&](const char* riem, const char* frag) {
+      try {
+        make_block(iso, "minmod", riem, ctx, false, false);
+        return false;
+      } catch (const std::runtime_error& e) {
+        return std::string(e.what()).find(frag) != std::string::npos;
+      }
+    };
+    chk(refused_with("hllc", "capability"),
+        "isotherme + hllc refuse (nomme la capability, ADC-590)");
+    chk(refused_with("euler_hllc", "Euler 2D"),
+        "isotherme + euler_hllc refuse (nomme la couche Euler canonique)");
+  }
 
   if (fails == 0)
     std::printf("OK test_block_builder (seam AOT instanciable hors System)\n");

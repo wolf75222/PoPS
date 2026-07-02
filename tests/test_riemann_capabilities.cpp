@@ -1,20 +1,21 @@
-// CAPABILITIES Riemann (audit 2026-06, generalisation long terme) : HLLC et Roe ne sont plus des
-// algorithmes Euler-only deguises -- la structure physique (onde de contact, dissipation de Roe)
-// peut etre fournie par le MODELE via les traits HasHLLCStructure / HasRoeDissipation, et le coeur
-// applique alors l'algorithme GENERIQUE sans hypothese de layout.
+// CAPABILITIES Riemann (audit 2026-06 + ADC-590) : HLLC et Roe sont des algorithmes GENERIQUES dont
+// la structure physique (onde de contact, dissipation de Roe) est fournie par le MODELE via les
+// traits HasHLLCStructure / HasRoeDissipation. ADC-590 : la brique pops::Euler PORTE desormais ces
+// capabilites (formules canoniques verbatim), donc HLLCFlux / RoeFlux (generic-only) l'acceptent ; le
+// chemin canonique 2D Euler explicite vit dans EulerHLLCFlux2D / EulerRoeFlux2D.
 //
 // Verifications :
-//  (1) DETECTION : pops::Euler (sans hooks) ne satisfait PAS les capabilities (il prend le chemin
-//      canonique historique) ; HookedEuler (hooks Euler explicites) les satisfait.
-//  (2) EQUIVALENCE : le chemin GENERIQUE (HookedEuler, hooks reproduisant les formules Euler) rend
-//      le MEME flux que le chemin canonique (pops::Euler) -- HLLC et Roe, subsonique et
-//      supersonique, x et y. C'est la preuve que l'algorithme generique est l'algorithme
-//      historique, la structure en moins.
-//  (3) NON-EULER : un modele ISOTHERME 3 VARIABLES (la ou hllc canonique est impossible,
-//      n_vars != 4) fournit ses hooks HLLC -> le solveur contact-resolving marche : consistance
-//      F*(U,U) == flux(U), et un CISAILLEMENT STATIONNAIRE (un = 0, saut tangentiel) est preserve
-//      EXACTEMENT (flux tangentiel nul) la ou HLL le diffuse. C'est exactement ce qu'apporte la
-//      resolution de l'onde intermediaire, prouvee hors Euler.
+//  (1) DETECTION : pops::Euler satisfait maintenant HasHLLCStructure / HasRoeDissipation (ADC-590) ;
+//      HookedEuler (memes hooks ecrits a la main) aussi.
+//  (2) EQUIVALENCE : sur pops::Euler, le chemin GENERIQUE (HLLCFlux / RoeFlux via les traits) rend le
+//      MEME flux, BIT POUR BIT, que le chemin EXPLICITE (EulerHLLCFlux2D / EulerRoeFlux2D, l'ancienne
+//      branche canonique deplacee) -- HLLC et Roe, subsonique et supersonique, x et y. C'est la
+//      preuve au niveau flux que la conversion de la brique ne bouge aucun bit.
+//  (3) NON-EULER : un modele ISOTHERME 3 VARIABLES (n_vars != 4, hors du layout Euler) fournit ses
+//      hooks HLLC -> le solveur contact-resolving marche : consistance F*(U,U) == flux(U), et un
+//      CISAILLEMENT STATIONNAIRE (un = 0, saut tangentiel) est preserve EXACTEMENT (flux tangentiel
+//      nul) la ou HLL le diffuse. C'est exactement ce qu'apporte la resolution de l'onde
+//      intermediaire, prouvee hors Euler.
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/physics/fluids/euler.hpp>
 
@@ -168,27 +169,28 @@ static double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
 }
 
 int main() {
-  // (1) DETECTION compile-time des capabilities.
-  static_assert(!pops::HasHLLCStructure<pops::Euler>,
-                "Euler sans hooks ne doit PAS satisfaire HasHLLCStructure (chemin canonique)");
-  static_assert(!pops::HasRoeDissipation<pops::Euler>,
-                "Euler sans hooks ne doit PAS satisfaire HasRoeDissipation (chemin canonique)");
+  // (1) DETECTION compile-time des capabilities. ADC-590 : pops::Euler PORTE desormais les hooks.
+  static_assert(pops::HasHLLCStructure<pops::Euler>,
+                "Euler doit satisfaire HasHLLCStructure (ADC-590 : brique a-capabilites)");
+  static_assert(pops::HasRoeDissipation<pops::Euler>,
+                "Euler doit satisfaire HasRoeDissipation (ADC-590 : brique a-capabilites)");
   static_assert(pops::HasHLLCStructure<HookedEuler>, "HookedEuler doit satisfaire HasHLLCStructure");
   static_assert(pops::HasRoeDissipation<HookedEuler>,
                 "HookedEuler doit satisfaire HasRoeDissipation");
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
-  std::printf("OK  detection des capabilities (Euler canonique, Hooked/Iso capability)\n");
+  std::printf("OK  detection des capabilities (Euler a-capabilites, Hooked/Iso capability)\n");
 
   pops::Euler e;
   e.gamma = 1.4;
-  HookedEuler he;
-  he.gamma = 1.4;
   pops::HLLCFlux hllc;
   pops::RoeFlux roe;
+  pops::EulerHLLCFlux2D ehllc;  // route EXPLICITE : ancienne branche canonique deplacee (ADC-590)
+  pops::EulerRoeFlux2D eroe;
   pops::HLLFlux hll;
   Aux a{};
 
-  // (2) EQUIVALENCE chemin generique == chemin canonique (memes formules fournies en hooks).
+  // (2) EQUIVALENCE BIT-IDENTIQUE (ADC-590) : sur pops::Euler, le chemin GENERIQUE (HLLCFlux / RoeFlux
+  // via les traits) == le chemin EXPLICITE (EulerHLLCFlux2D / EulerRoeFlux2D). Egalite EXACTE (0 ulp).
   const State4 pairs[][2] = {
       {cons(1.2, 0.3, -0.1, 1.5, 1.4), cons(0.7, -0.2, 0.4, 0.9, 1.4)},   // subsonique
       {cons(1.0, 8.0, 0.5, 1.0, 1.4), cons(1.5, 12.0, -0.3, 1.3, 1.4)},   // supersonique +
@@ -197,18 +199,19 @@ int main() {
   for (const auto& pr : pairs)
     for (int dir = 0; dir < 2; ++dir) {
       const double dh =
-          maxdiff(hllc(he, pr[0], a, pr[1], a, dir), hllc(e, pr[0], a, pr[1], a, dir));
-      if (dh > 1e-13) {
-        std::printf("FAIL HLLC generique != canonique (dir %d) : %.3e\n", dir, dh);
+          maxdiff(hllc(e, pr[0], a, pr[1], a, dir), ehllc(e, pr[0], a, pr[1], a, dir));
+      if (dh != 0.0) {
+        std::printf("FAIL HLLC generique != EulerHLLCFlux2D explicite (dir %d) : %.3e\n", dir, dh);
         return 1;
       }
-      const double dr = maxdiff(roe(he, pr[0], a, pr[1], a, dir), roe(e, pr[0], a, pr[1], a, dir));
-      if (dr > 1e-13) {
-        std::printf("FAIL Roe generique != canonique (dir %d) : %.3e\n", dir, dr);
+      const double dr = maxdiff(roe(e, pr[0], a, pr[1], a, dir), eroe(e, pr[0], a, pr[1], a, dir));
+      if (dr != 0.0) {
+        std::printf("FAIL Roe generique != EulerRoeFlux2D explicite (dir %d) : %.3e\n", dir, dr);
         return 1;
       }
     }
-  std::printf("OK  HLLC/Roe generiques == canoniques (hooks Euler, 3 paires x 2 directions)\n");
+  std::printf(
+      "OK  HLLC/Roe generiques == EulerHLLCFlux2D/EulerRoeFlux2D (bit-identique, ADC-590)\n");
 
   // (3) NON-EULER : HLLC capability sur l'isotherme 3 variables.
   IsoHLLC iso;

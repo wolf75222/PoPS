@@ -915,11 +915,16 @@ AmrRuntimeBlock dispatch_amr_block(
     return dispatch_amr_block_hll(m, lim, S, name, density, has_density, gamma, substeps,
                                   recon_prim, imex, stride, implicit_components, nopts, state,
                                   newton_diagnostics, time_method, pos_floor);
-  if (riem == "hllc")
+  // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux (via
+  // HasHLLCStructure) and the explicit EulerHLLCFlux2D are bit-identical (ADC-590). The native
+  // compressible transport that reaches AMR carries the capability, so both route here; euler_hllc
+  // on a non-Euler transport is refused by the dispatch_amr_block_hllc capability guard (same
+  // message). Same for roe / euler_roe.
+  if (riem == "hllc" || riem == "euler_hllc")
     return dispatch_amr_block_hllc(m, lim, S, name, density, has_density, gamma, substeps,
                                    recon_prim, imex, stride, implicit_components, nopts, state,
                                    newton_diagnostics, time_method, pos_floor);
-  if (riem == "roe")
+  if (riem == "roe" || riem == "euler_roe")
     return dispatch_amr_block_roe(m, lim, S, name, density, has_density, gamma, substeps,
                                   recon_prim, imex, stride, implicit_components, nopts, state,
                                   newton_diagnostics, time_method, pos_floor);
@@ -1032,9 +1037,11 @@ AmrCompiledHooks dispatch_amr_compiled(const Model& m, const std::string& lim,
     return dispatch_amr_compiled_rusanov(m, lim, bp);
   if (riem == "hll")
     return dispatch_amr_compiled_hll(m, lim, bp);
-  if (riem == "hllc")
+  // hllc / euler_hllc (and roe / euler_roe) share the leaf: bit-identical on the true Euler brick
+  // (ADC-590); euler_* on a non-Euler transport is refused by the same capability guard.
+  if (riem == "hllc" || riem == "euler_hllc")
     return dispatch_amr_compiled_hllc(m, lim, bp);
-  if (riem == "roe")
+  if (riem == "roe" || riem == "euler_roe")
     return dispatch_amr_compiled_roe(m, lim, bp);
   throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "flux", riem);
 }

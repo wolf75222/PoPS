@@ -11,6 +11,7 @@ other mixins' methods) and ``self._s``.
 from pops._bootstrap import ModelSpec
 from pops.runtime._install_param_routing import route_program_params
 from pops.runtime.bricks import Spatial
+from pops.runtime.routes import euler_layout_ok as _euler_layout_ok
 
 
 def collect_missing_arguments(args, provided_blocks, provided_params, provided_aux,
@@ -154,14 +155,11 @@ class _SystemUnifiedInstall:
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
         # lower its spatial brick and set its initial state. The block model is the per-instance
-        # "model" if given, else the PHYSICAL model carried by the compiled handle
-        # (CompiledProblem.model) -- NOT the handle itself (which is the time Program .so installed in
-        # step 5). For a single-instance plasma case the carried model is the block.
-        # COMPILED vs NATIVE mode. COMPILED: `compiled` is a compile_problem(...) handle carrying a
-        # .so_path time Program (installed in step 5, with the section-24 validation). NATIVE:
-        # `compiled is None` -- no compiled Program; each instance carries its OWN native model + time
-        # policy (pops.Explicit / pops.Strang), step 5 is skipped, the native per-block loop drives
-        # stepping. Validate the handle up front, BEFORE any System mutation (no half-configured System).
+        # "model" if given, else the PHYSICAL model carried by the compiled handle (not the handle,
+        # which is the time Program .so installed in step 5). COMPILED: `compiled` is a
+        # compile_problem(...) handle with a .so_path time Program (section-24 validated). NATIVE:
+        # `compiled is None` -- each instance carries its OWN native model + time policy, step 5 is
+        # skipped. Validate the handle up front, BEFORE any System mutation.
         so_path = None
         compiled_model = None
         if compiled is not None:
@@ -330,21 +328,23 @@ class _SystemUnifiedInstall:
         return model  # unknown -> let add_equation raise its own clear error
 
     def _validate_riemann_capability(self, model, spatial):
-        """Section 24 capability check: reject the selected Riemann flux when the model does not back
-        it, with the verbatim spec message ``riemann <FLUX> requires capability '<cap>'``. Lowered
-        from the model's emitted capabilities (CompiledModel.has_hllc / has_roe / has_wave_speeds);
-        a composed native pops.Model(...) carries the capability in its bricks (the C++ requires-gate
-        is the backstop), so we only gate the compiled (.so) path here."""
+        """Section 24 capability check: reject the selected Riemann flux when a compiled model does
+        not back it (verbatim spec message ``riemann <FLUX> requires capability '<cap>'``), lowered
+        from CompiledModel.has_hllc / has_roe / has_wave_speeds. A composed native pops.Model(...)
+        carries it in its bricks (the C++ requires-gate is the backstop), so only the .so path here."""
         from pops.codegen.loader import CompiledModel  # late import (codegen <-> __init__ cycle)
         flux = getattr(spatial, "flux", "rusanov")
         if not isinstance(model, CompiledModel):
             return  # native composed model: the C++ requires-gate validates at first use
-        if flux == "hllc" and not (getattr(model, "has_hllc", False)
-                                   or "p" in getattr(model, "prim_names", [])):
+        # ADC-590: generic hllc/roe require the emitted capability; euler_hllc/euler_roe are explicit.
+        if flux == "hllc" and not getattr(model, "has_hllc", False):
             raise RuntimeError("riemann HLLC requires capability 'hllc_star_state'")
-        if flux == "roe" and not (getattr(model, "has_roe", False)
-                                  or "p" in getattr(model, "prim_names", [])):
+        if flux == "roe" and not getattr(model, "has_roe", False):
             raise RuntimeError("riemann Roe requires capability 'roe_dissipation'")
+        if flux in ("euler_hllc", "euler_roe") and not _euler_layout_ok(model, flux):
+            raise RuntimeError("riemann %s requires a canonical 4-variable Euler layout (n_vars == 4,"
+                               " primitive 'p') and no emitted generic capability; use riemann %s"
+                               % (flux, "HLLC" if flux == "euler_hllc" else "Roe"))
         if flux == "hll" and not getattr(model, "has_wave_speeds", True):
             raise RuntimeError("riemann HLL requires capability 'wave_speeds'")
 

@@ -17,9 +17,11 @@ AmrCompiledHooks build_amr_compiled_compressible(const ModelSpec& spec, const st
     return build_amr_compiled_compressible_rusanov(spec, limiter, bp);
   if (riemann == "hll")
     return build_amr_compiled_compressible_hll(spec, limiter, bp);
-  if (riemann == "hllc")
+  // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux and the explicit
+  // EulerHLLCFlux2D are bit-identical (ADC-590). Same for roe / euler_roe.
+  if (riemann == "hllc" || riemann == "euler_hllc")
     return build_amr_compiled_compressible_hllc(spec, limiter, bp);
-  if (riemann == "roe")
+  if (riemann == "roe" || riemann == "euler_roe")
     return build_amr_compiled_compressible_roe(spec, limiter, bp);
   throw_registry_dispatch_mismatch("add_compiled_model(AmrSystem)", "flux", riemann);
 }

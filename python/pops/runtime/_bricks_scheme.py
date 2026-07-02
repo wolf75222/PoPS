@@ -9,6 +9,7 @@ these together with the model bricks in ``_bricks_model`` and the time policies 
 from pops.runtime.routes import (
     LIMITER_MINMOD, LIMITER_NONE, LIMITER_VANLEER, LIMITER_WENO5,
     RECON_CONSERVATIVE, RECON_PRIMITIVE,
+    RIEMANN_EULER_HLLC, RIEMANN_EULER_ROE,
     RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, RIEMANN_RUSANOV,
     TIME_EULER, TIME_EXPLICIT, TIME_SSPRK3,
     resolve as _resolve_route,
@@ -61,6 +62,8 @@ _FLUX_SCHEMES = {  # riemann descriptor scheme -> Spatial.flux route
     # "user" stays a plain token: an EXTERNAL C++ flux brick resolves through the external-brick
     # catalog manifest (pops.descriptors), not the native route registry.
     "rusanov": RIEMANN_RUSANOV, "hll": RIEMANN_HLL, "hllc": RIEMANN_HLLC, "roe": RIEMANN_ROE,
+    # Explicit canonical Euler 2D routes (ADC-590): EulerHLLC2D() / EulerRoe2D() descriptors.
+    "euler_hllc": RIEMANN_EULER_HLLC, "euler_roe": RIEMANN_EULER_ROE,
     "user": "user",
 }
 _RECON_SCHEMES = {  # variables descriptor scheme -> Spatial.recon route
@@ -118,16 +121,19 @@ class Spatial:
       weno5 = WENO5-Z, order 5 in smooth regions, 5-point stencil (3 ghosts), oscillation-free
       capture near a front; only the native ``add_block`` path exposes it (the compiled .so paths
       allocate 2 ghosts -> explicit rejection).
-    - ``flux``: a ``pops.numerics.riemann`` descriptor lowering to "rusanov" | "hll" | "hllc" | "roe".
+    - ``flux``: a ``pops.numerics.riemann`` descriptor lowering to "rusanov" | "hll" | "hllc" |
+      "roe" | "euler_hllc" | "euler_roe".
       Rusanov() = minimal generic (requires only max_wave_speed, any model).
       HLL() = generic with signed waves (requires model.wave_speeds: native isothermal/compressible
       model, or a DSL model declaring a primitive 'p'); less diffusive than rusanov, without
       requiring a pressure or n_vars == 4. This is the recommended path for a NON Euler model with
       signed waves (moment system, isothermal): HLL() + Minmod().
-      HLLC() / Roe() = contact-resolving (HLLC) and Roe-linearized solvers. Canonical path is 2D
-      Euler (4 variables rho/rho_u/rho_v/E + ideal-gas pressure); they are also generic when the
-      model supplies the hooks HasHLLCStructure / HasRoeDissipation (DSL m.enable_hllc()/
-      m.enable_roe()), with EulerHLLCFlux2D / EulerRoeFlux2D naming the Euler fallback on C++.
+      HLLC() / Roe() = GENERIC-ONLY contact-resolving (HLLC) and Roe-linearized solvers (ADC-590):
+      the model MUST supply the hooks HasHLLCStructure / HasRoeDissipation (DSL m.enable_hllc()/
+      m.enable_roe(); the native Euler brick provides them). There is no implicit Euler fallback.
+      EulerHLLC2D() / EulerRoe2D() = the EXPLICIT canonical 2D Euler routes (4 variables
+      rho/rho_u/rho_v/E + ideal-gas pressure), pinning EulerHLLCFlux2D / EulerRoeFlux2D; never a
+      fallback.
     - ``recon``: a ``pops.numerics.variables`` descriptor lowering to "conservative" | "primitive"
       (reconstructed variables; primitive more robust for Euler: positivity of rho and p; shortcut
       primitive=).

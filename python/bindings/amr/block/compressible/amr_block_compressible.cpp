@@ -15,9 +15,11 @@ AmrRuntimeBlock build_amr_block_compressible(const AmrBlockBuildArgs& a, const S
     return build_amr_block_compressible_rusanov(a, S);
   if (a.riemann == "hll")
     return build_amr_block_compressible_hll(a, S);
-  if (a.riemann == "hllc")
+  // hllc / euler_hllc share the leaf: on the true Euler brick the generic HLLCFlux and the explicit
+  // EulerHLLCFlux2D are bit-identical (ADC-590). Same for roe / euler_roe.
+  if (a.riemann == "hllc" || a.riemann == "euler_hllc")
     return build_amr_block_compressible_hllc(a, S);
-  if (a.riemann == "roe")
+  if (a.riemann == "roe" || a.riemann == "euler_roe")
     return build_amr_block_compressible_roe(a, S);
   throw_registry_dispatch_mismatch("add_block(AmrSystem, multi-block)", "flux", a.riemann);
 }

@@ -20,7 +20,10 @@ from pops.runtime.bricks import (
     Spatial, Explicit, Split, DivEpsGrad, CompositeRhs, ChargeDensitySource,
     Ionization, Collision, ThermalExchange,
 )
-from pops.runtime.routes import RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, resolve as _resolve_route
+from pops.runtime.routes import (
+    RIEMANN_HLL, check_riemann_capability as _check_riemann_capability,
+    resolve as _resolve_route,
+)
 
 
 def _lower_wall(wall):
@@ -241,23 +244,10 @@ class _SystemInstall:
         self._aux_field_index[name] = {nm: AUX_NAMED_BASE + k for k, nm in enumerate(extra)}
 
         backend = compiled.backend
-        # Numerical flux guard: HLLC/Roe require a pressure -> the generated brick emits
-        # pressure()/wave_speeds() only if a primitive 'p' is declared. Without 'p', make_block does not
-        # compile the flux: we diagnose it here before the C++ boundary.
-        # hllc / roe: the emitted capability (m.enable_hllc -> has_hllc, m.enable_roe -> has_roe)
-        # OPENS the flux even outside 4-var Euler (the C++ requires-gate accepts it); otherwise the
-        # canonical path requires 'p' in the primitives.
-        if (spatial.flux in (RIEMANN_HLLC, RIEMANN_ROE) and "p" not in compiled.prim_names
-                and not (spatial.flux == RIEMANN_HLLC and getattr(compiled, "has_hllc", False))
-                and not (spatial.flux == RIEMANN_ROE and getattr(compiled, "has_roe", False))):
-            raise ValueError(
-                "add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
-                "(m.primitive('p', ...)) in the model, or emit the capability "
-                "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov' "
-                "[requested route %s -> %s; requires: %s]"
-                % (spatial.flux, getattr(spatial.flux, "id", spatial.flux),
-                   getattr(spatial.flux, "native_entry", "?"),
-                   ", ".join(getattr(spatial.flux, "requirements", ()))))
+        # Numerical flux guard (ADC-590, shared with AmrSystem.add_equation): generic hllc/roe are
+        # GENERIC-ONLY (require has_hllc/has_roe -- the 'p'-only Euler fallback is removed); the
+        # explicit euler_hllc/euler_roe routes serve the canonical 4-var Euler layout.
+        _check_riemann_capability(spatial.flux, compiled, "add_equation")
         # HLL: the generated brick emits wave_speeds either from the EXPLICIT pair
         # m.wave_speeds(x=, y=) (WITHOUT primitive 'p': moments, isothermal..., cf. has_wave_speeds),
         # or as soon as a primitive 'p' is DECLARED (m.primitive('p', ...)), even OUTSIDE the

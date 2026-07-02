@@ -841,9 +841,13 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
         bb = detail::build_block_compressible_rusanov(model, args);
       } else if (riemann == "hll") {
         bb = detail::build_block_compressible_hll(model, args);
-      } else if (riemann == "hllc") {
+      } else if (riemann == "hllc" || riemann == "euler_hllc") {
+        // On the true Euler brick the EXPLICIT euler_hllc route and the generic hllc route are the
+        // SAME arithmetic (the native Euler now provides HasHLLCStructure with the canonical-Euler
+        // formulas, so HLLCFlux == the former EulerHLLCFlux2D fallback bit-for-bit): both share this
+        // seam leaf (ADC-590). euler_hllc's 4-var+pressure gate is satisfied by CompressibleFlux.
         bb = detail::build_block_compressible_hllc(model, args);
-      } else if (riemann == "roe") {
+      } else if (riemann == "roe" || riemann == "euler_roe") {
         bb = detail::build_block_compressible_roe(model, args);
       } else {
         throw_registry_dispatch_mismatch("System", "flux", riemann);

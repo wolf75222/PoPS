@@ -8,6 +8,7 @@
 
 from pops._bootstrap import ModelSpec
 from pops.runtime.bricks import Spatial, Explicit, Split
+from pops.runtime.routes import check_riemann_capability as _check_riemann_capability
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -176,26 +177,11 @@ class _AmrSystemEquation:
                 "recompile with m.compile(..., backend='production', target='amr_system') so that "
                 "the loader inlines add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)")
 
-        # recon "primitive" and flux "roe"/"hllc" are WIRED on AMR via dispatch_amr_compiled: the
-        # .so path passes recon_prim to AmrBuildParams (consumed by advance_amr/compute_face_fluxes)
-        # and hllc/roe are instantiated under the SAME requires guard as System::make_block (compressible
-        # transport with 4 variables + pressure). No more facade rejection (strict parity with
-        # add_block, cf. test_amr_riemann_native).
-        # Numerical flux guard (gate of System.add_equation): HLLC/Roe require a pressure; the
-        # generated brick only emits pressure()/wave_speeds() if a primitive 'p' is declared. Without
-        # 'p', dispatch_amr_compiled falls back on the else branch (requires not satisfied) and raises a
-        # generic C++ error: we diagnose HERE, clearly, before the C++ boundary.
-        if (spatial.flux in ("roe", "hllc") and "p" not in compiled.prim_names
-                and not (spatial.flux == "hllc" and getattr(compiled, "has_hllc", False))
-                and not (spatial.flux == "roe" and getattr(compiled, "has_roe", False))):
-            raise ValueError(
-                "AmrSystem.add_equation: riemann '%s' requires a pressure: declare a primitive 'p' "
-                "(m.primitive('p', ...)) in the model, or emit the capability "
-                "(m.enable_hllc() / m.enable_roe()); otherwise use riemann='rusanov' "
-                "[requested route %s -> %s; requires: %s]"
-                % (spatial.flux, getattr(spatial.flux, "id", spatial.flux),
-                   getattr(spatial.flux, "native_entry", "?"),
-                   ", ".join(getattr(spatial.flux, "requirements", ()))))
+        # recon "primitive" and flux "roe"/"hllc" are WIRED on AMR via dispatch_amr_compiled, with the
+        # SAME ADC-590 guard as System.add_equation (shared helper): generic hllc/roe are GENERIC-ONLY
+        # (require has_hllc/has_roe -- the 'p'-only Euler fallback is removed); the explicit
+        # euler_hllc/euler_roe routes serve the canonical 4-var Euler layout.
+        _check_riemann_capability(spatial.flux, compiled, "AmrSystem.add_equation")
         # HLL: same early guard as System.add_equation (wave_speeds emitted by the explicit pair
         # m.wave_speeds(x=, y=) OR primitive 'p'; the C++ gate only triggers at first use).
         if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):
