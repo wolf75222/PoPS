@@ -225,6 +225,31 @@ def _bound_snapshot(sim):
     return payload
 
 
+def _lifecycle(sim):
+    """The runtime lifecycle state (ADC-592): "assembling" for an engine never bound, else the
+    engine's own ``lifecycle_state()`` ("bound"/"running"). Graceful default keeps a pre-bind or
+    low-level engine describable rather than raising."""
+    state = _call(sim, "lifecycle_state", None)
+    return str(state) if state is not None else "assembling"
+
+
+def _bound_snapshot(sim):
+    """The BoundSnapshot manifest of what pops.bind froze, as a plain dict + its hash (ADC-592).
+
+    Reads the engine's ``bound_snapshot`` (None before bind); serialises it via ``to_dict()`` and
+    folds in the stable ``snapshot_hash`` so inspection carries the frozen identity. Returns None when
+    the engine was never bound (an engine driven by the low-level seam without pops.bind)."""
+    snap = getattr(sim, "bound_snapshot", None)
+    if snap is None:
+        return None
+    to_dict = getattr(snap, "to_dict", None)
+    payload = dict(to_dict()) if callable(to_dict) else {}
+    snapshot_hash = getattr(snap, "snapshot_hash", None)
+    if snapshot_hash is not None:
+        payload["snapshot_hash"] = snapshot_hash
+    return payload
+
+
 def _history(sim):
     rows = []
     for name in _call(sim, "history_names", []) or []:
