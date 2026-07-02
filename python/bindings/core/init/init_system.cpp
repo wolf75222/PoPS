@@ -1,9 +1,19 @@
 #include "../bindings_detail.hpp"
 
 // ADC-365: the System runtime-composition facade bindings.
-void init_system(py::module_& m) {
-  py::class_<System>(m, "System")
-      .def(py::init<const SystemConfig&>())
+//
+// ADC-593: these .def registrations are INTERNAL seams of the bind flow (pops.bind reaches them through
+// compile / bind, not as public vocabulary). To keep this adapter TU readable as it grew, the chain is
+// split into concern-grouped static helpers (assembly / program+lifecycle / checkpoint / physics /
+// stepping / data+io), each taking the class handle and adding its slice. This is a PURE reorganization:
+// the SAME .def names, docstrings, args, and RELATIVE registration order (no overload set is reordered --
+// every System method name here is unique). The class name and the .def names are unchanged, so the
+// legacy-name architecture gate still finds them in this exact file.
+namespace {
+
+// Assembly seams: per-block composition + compiled/native/program install (the "what to assemble" API).
+void bind_system_assembly(py::class_<System>& cls) {
+  cls.def(py::init<const SystemConfig&>())
       // Per-block composition: model (bricks) + spatial scheme (limiter/riemann) + time
       // (explicit/imex) + substeps. Python says WHAT, the compiled C++ does the compute.
       // ADC-214: the Python SURFACE is UNCHANGED (same flat newton_* kwargs, same defaults). The
@@ -124,7 +134,12 @@ void init_system(py::module_& m) {
       // installed program closure (cf. SystemStepper::step). Separate from install_program so the .so
       // ABI is untouched; CompiledTime(substeps=, stride=) threads through here. Both must be >= 1.
       .def("set_program_cadence", &System::set_program_cadence, py::arg("substeps"),
-           py::arg("stride"))
+           py::arg("stride"));
+}
+
+// Program introspection + runtime freeze lifecycle + field-solver token.
+void bind_system_program(py::class_<System>& cls) {
+  cls
       // ADC-594: read the installed GLOBAL cadence (substeps / stride) for the ProgramRuntimeReport.
       // Const getters (default 1/1 with no program); there was no Python-visible getter before.
       .def("program_substeps", &System::program_substeps)
@@ -145,7 +160,12 @@ void init_system(py::module_& m) {
       // retrievable AFTER sim.step. program_diagnostic(name) reads one (raises if never recorded);
       // program_diagnostics() returns the whole name -> value dict.
       .def("program_diagnostic", &System::program_diagnostic, py::arg("name"))
-      .def("program_diagnostics", &System::program_diagnostics)
+      .def("program_diagnostics", &System::program_diagnostics);
+}
+
+// Checkpoint/restart seams: multistep history rings + scheduler value-cache (gathered/restored directly).
+void bind_system_checkpoint(py::class_<System>& cls) {
+  cls
       // Multistep history checkpoint/restart seam (ADC-406b): the facade gathers/restores the
       // System-owned rings DIRECTLY (no .so checkpoint_extra ABI). history_global mirrors state_global
       // (collective gather, component-major); restore_history mirrors set_state (owner-rank scatter).
@@ -196,8 +216,13 @@ void init_system(py::module_& m) {
                                     flat(arr));
           },
           py::arg("node_id"), py::arg("ncomp"), py::arg("ngrow"), py::arg("last_update_step"),
-          py::arg("accumulated_dt"), py::arg("name"), py::arg("values"))
-      .def("add_ionization", &System::add_ionization, py::arg("electron"), py::arg("ion"),
+          py::arg("accumulated_dt"), py::arg("name"), py::arg("values"));
+}
+
+// Physics wiring: inter-species couplings, source stages, time-splitting policy, Poisson/field config,
+// geometry (disc), epsilon/reaction/magnetic/aux fields, and state initialization.
+void bind_system_physics(py::class_<System>& cls) {
+  cls.def("add_ionization", &System::add_ionization, py::arg("electron"), py::arg("ion"),
            py::arg("neutral"), py::arg("rate"))
       .def("add_collision", &System::add_collision, py::arg("a"), py::arg("b"), py::arg("rate"))
       .def("add_thermal_exchange", &System::add_thermal_exchange, py::arg("a"), py::arg("b"),
@@ -395,8 +420,12 @@ void init_system(py::module_& m) {
           [](System& s, const std::string& name) {
             return to_3d(s.get_primitive_state(name), s.n_vars(name), s.ny(), s.nx());
           },
-          py::arg("name"))
-      .def("solve_fields", &System::solve_fields)
+          py::arg("name"));
+}
+
+// Stepping + profiling + custom-integrator primitives (field solve, step/advance/CFL, eval_rhs/state).
+void bind_system_stepping(py::class_<System>& cls) {
+  cls.def("solve_fields", &System::solve_fields)
       .def("step", &System::step, py::arg("dt"))
       .def("advance", &System::advance, py::arg("dt"), py::arg("nsteps"))
       .def("step_cfl", &System::step_cfl,
@@ -464,8 +493,12 @@ void init_system(py::module_& m) {
              py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
             s.set_state(name, flat(arr));
           },
-          py::arg("name"), py::arg("u"))
-      .def("n_vars", &System::n_vars, py::arg("name"))
+          py::arg("name"), py::arg("u"));
+}
+
+// Data + IO accessors: shape/introspection, mass/density/potential, MPI-safe globals, local hyperslabs.
+void bind_system_data(py::class_<System>& cls) {
+  cls.def("n_vars", &System::n_vars, py::arg("name"))
       .def("nx", &System::nx)
       .def("ny", &System::ny)
       .def("time", &System::time)
@@ -520,4 +553,19 @@ void init_system(py::module_& m) {
           py::arg("name"), py::arg("li"))
       .def_static("abi_key", &System::abi_key,
                   "Module ABI key (cf. pops.abi_key); compared to that of a native loader.");
+}
+
+}  // namespace
+
+// Registers the System facade class, then adds each concern's bindings IN ORDER (assembly first, so the
+// class exists before the other groups extend it). The per-concern order matches the historical single
+// chain; no overload set spans two concerns.
+void init_system(py::module_& m) {
+  py::class_<System> cls(m, "System");
+  bind_system_assembly(cls);
+  bind_system_program(cls);
+  bind_system_checkpoint(cls);
+  bind_system_physics(cls);
+  bind_system_stepping(cls);
+  bind_system_data(cls);
 }

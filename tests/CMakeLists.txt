@@ -77,34 +77,39 @@ endfunction()
 # flags de production (POPS_HEADER_SIG/visibilite/...), et AUCUN preset ne co-construit tests+python
 # (POPS_BUILD_TESTS et POPS_BUILD_PYTHON sont mutuellement exclusifs dans CMakePresets.json) -- cette
 # bibliotheque est donc strictement tests-only et ne peut pas etre partagee avec _pops.
+# ADC-593: the per-route block-build seam TUs (system/{isothermal,compressible}, amr/block, amr/compiled)
+# are GENERATED from the same declarative manifest the _pops module uses (python/bindings/
+# seam_combinations.cmake), into ${CMAKE_CURRENT_BINARY_DIR}/generated_seams here. The C++ test targets
+# splice the SAME generated leaves the module compiles, so a manifest row is the ONE place a (transport,
+# flux) leaf is registered for both the module and the tests. amr_system.cpp / system.cpp CALL the seams,
+# so the generated leaves must be compiled/linked wherever those heavy TUs are.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/seam_combinations.cmake)
+set(POPS_GENERATED_SEAMS_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_seams)
+set(POPS_SYSTEM_GENERATED_SEAMS "")
+set(POPS_AMR_GENERATED_SEAMS "")
+foreach(_seam_row ${POPS_SEAM_COMBINATIONS})
+  string(REPLACE "|" ";" _cols "${_seam_row}")
+  list(GET _cols 1 _side)
+  if(_side STREQUAL "system")
+    pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_SYSTEM_GENERATED_SEAMS)
+  else()
+    pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_AMR_GENERATED_SEAMS)
+  endif()
+endforeach()
+
 add_library(pops_runtime_system OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_exb.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/isothermal/system_isothermal_rusanov.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/isothermal/system_isothermal_hll.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/compressible/system_compressible_rusanov.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/compressible/system_compressible_hll.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/compressible/system_compressible_hllc.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/compressible/system_compressible_roe.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_polar.cpp)
+            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_polar.cpp
+            ${POPS_SYSTEM_GENERATED_SEAMS})
 # ADC-335: the AMR transport-seam TUs (multi-block build_amr_block_<t> + single-block
 # build_amr_compiled_<t>). amr_system.cpp CALLS them, so they must be compiled/linked wherever
 # amr_system.cpp is -- the pops_runtime_amr object lib AND the ENABLE_EXPORTS native-loader tests that
-# re-list amr_system.cpp directly (below). One list, reused, so none is forgotten.
+# re-list amr_system.cpp directly (below). One list, reused, so none is forgotten. The two thin riemann
+# DISPATCHERS (amr_block_compressible.cpp / amr_compiled_compressible.cpp) stay hand-written; the per-flux
+# leaves come from POPS_AMR_GENERATED_SEAMS.
 set(POPS_AMR_SEAM
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/base/amr_block_exb.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/base/amr_block_isothermal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/compressible/amr_block_compressible.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/compressible/amr_block_compressible_rusanov.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/compressible/amr_block_compressible_hll.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/compressible/amr_block_compressible_hllc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/compressible/amr_block_compressible_roe.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/base/amr_compiled_exb.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/base/amr_compiled_isothermal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/compressible/amr_compiled_compressible.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/compressible/amr_compiled_compressible_rusanov.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/compressible/amr_compiled_compressible_hll.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/compressible/amr_compiled_compressible_hllc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/compressible/amr_compiled_compressible_roe.cpp)
+    ${POPS_AMR_GENERATED_SEAMS})
 add_library(pops_runtime_amr    OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/amr_system.cpp ${POPS_AMR_SEAM})
 foreach(_rt pops_runtime_system pops_runtime_amr)
   target_link_libraries(${_rt} PUBLIC pops::pops ${CMAKE_DL_LIBS})
