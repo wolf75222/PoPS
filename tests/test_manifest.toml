@@ -41,6 +41,11 @@ sources = ["tests/cpp/integration/amr/test_amr_diffusion.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_distribute_coarse_serial"
+sources = ["tests/cpp/integration/amr/test_amr_distribute_coarse_serial.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
 name = "test_amr_hierarchy"
 sources = ["tests/cpp/integration/amr/test_amr_hierarchy.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -326,6 +331,11 @@ sources = ["tests/cpp/integration/native_loader/test_native_aux_named.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
 
 [[cpp.suite]]
+name = "test_native_loader_param_overflow"
+sources = ["tests/cpp/integration/native_loader/test_native_loader_param_overflow.cpp"]
+labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
+
+[[cpp.suite]]
 name = "test_program_loader"
 sources = ["tests/cpp/integration/native_loader/test_program_loader.cpp"]
 labels = ["integration", "codegen", "native_loader", "compiler", "medium"]
@@ -368,6 +378,11 @@ labels = ["integration", "runtime", "medium"]
 [[cpp.suite]]
 name = "test_config_model_validation"
 sources = ["tests/cpp/integration/runtime/test_config_model_validation.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_exb_seam"
+sources = ["tests/cpp/integration/runtime/test_exb_seam.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
@@ -823,6 +838,11 @@ labels = ["unit", "physics", "fast"]
 [[cpp.suite]]
 name = "test_composite_fac_variable_eps"
 sources = ["tests/cpp/unit/physics/test_composite_fac_variable_eps.cpp"]
+labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_coupled_source_stack_limit"
+sources = ["tests/cpp/unit/physics/test_coupled_source_stack_limit.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
