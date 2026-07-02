@@ -182,8 +182,22 @@ def _profile_payload(sim):
 
 
 def _program(sim):
-    h = _call(sim, "installed_program_hash", "") or ""
-    return {"installed": bool(h), "hash": h}
+    """The compiled-Program section, built FROM the structured ProgramRuntimeReport (ADC-594) so the
+    two reports share a SINGLE source. Kept back-compatible: the historical inspection keys
+    ("installed"/"hash") are preserved, with the richer cadence/block_map/param/history/cache summary
+    folded in from the same report."""
+    from pops.runtime.program_report import build_program_report
+    report = build_program_report(sim)
+    return {
+        "installed": report.installed,
+        "hash": report.program_hash,
+        "cadence": dict(report.cadence),
+        "block_map": list(report.block_map),
+        "params": [dict(row) for row in report.params],
+        "histories": [dict(row) for row in report.histories],
+        "cache": [dict(row) for row in report.cache],
+        "profiler": dict(report.profiler),
+    }
 
 
 def _lifecycle(sim):
