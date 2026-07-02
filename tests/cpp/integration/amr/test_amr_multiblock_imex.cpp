@@ -138,10 +138,10 @@ double dmax_field(const std::vector<double>& a, const std::vector<double>& b) {
 AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
                            const std::vector<double>& rho, int substeps = 1) {
   AmrBuildParams bp;
-  bp.n = N;
-  bp.L = L;
-  bp.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson_bc = BCRec{};  // periodique
+  bp.mesh.n = N;
+  bp.mesh.L = L;
+  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};  // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   // bloc A : raide, traitement imex_stiff (true = IMEX, false = explicite : disable-and-fail).

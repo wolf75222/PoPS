@@ -89,10 +89,10 @@ TEST(test_amr_system_twoblock, Runs) {
   // ============================================================================================
   {
     AmrBuildParams bp;
-    bp.n = N;
-    bp.L = L;
-    bp.regrid_every = 0;      // hierarchie figee (multi-blocs PR1)
-    bp.poisson_bc = BCRec{};  // periodique
+    bp.mesh.n = N;
+    bp.mesh.L = L;
+    bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs PR1)
+    bp.poisson.bc = BCRec{};  // periodique
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
 
     std::vector<AmrRuntimeBlock> blocks;

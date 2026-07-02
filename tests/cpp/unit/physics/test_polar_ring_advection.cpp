@@ -462,4 +462,21 @@ TEST(test_polar_ring_advection, MeasuresRadialDiffusionCartesianVsPolar) {
   RecordProperty("loss_ratio_cart_over_polar", std::to_string(ratio));
   RecordProperty("fwhm_cartesian_final", std::to_string(cart.fwhm));
   RecordProperty("verdict", verdict_success ? "SUCCESS" : "ABORT");
+
+  // Gardes de SANITE (audit campagne GoogleTest) : le VERDICT comparatif reste observationnel par
+  // design (RecordProperty ci-dessus, cf. l'en-tete), mais une simulation cassee doit FAIRE ECHOUER
+  // le test -- avant ces gardes il ne pouvait jamais echouer, meme sur des NaN.
+  EXPECT_TRUE(std::isfinite(cart.peak) && std::isfinite(polar.peak))
+      << "pic non fini: cart=" << cart.peak << " polar=" << polar.peak;
+  EXPECT_TRUE(std::isfinite(cart.fwhm) && std::isfinite(polar.fwhm))
+      << "FWHM non finie: cart=" << cart.fwhm << " polar=" << polar.fwhm;
+  EXPECT_GT(cart.peak, 0.0) << "advection cartesienne effondree (pic <= 0)";
+  EXPECT_GT(polar.peak, 0.0) << "advection polaire effondree (pic <= 0)";
+  // Le profil initial vaut exactement 1.0 au centre de l'anneau : un pic final au-dela de ~1.5 ou un
+  // pic initial mesure loin de 1 signale un schema instable ou une grille mal construite, pas une
+  // simple perte de diffusion.
+  EXPECT_NEAR(peak_init_measured, peak_init_theory, 0.05)
+      << "le pic initial mesure ne correspond pas au profil analytique";
+  EXPECT_LT(cart.peak, 1.5) << "surtir cartesien non physique";
+  EXPECT_LT(polar.peak, 1.5) << "surtir polaire non physique";
 }

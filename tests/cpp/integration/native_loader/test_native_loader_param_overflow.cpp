@@ -9,23 +9,13 @@
 // declaring pops_compiled_nparams() = 33.
 //
 // We build such a stub and load it through System::add_compiled_block (include/pops/runtime/builders/
-// compiled/native_loader.hpp add_compiled_block<ImplT>) to answer, HONESTLY, what happens today:
-//
-//   nparams=33 (kMaxRuntimeParams+1) reaches native_loader.hpp:563-590: nparams_fn() is read, use_params
-//   becomes true (the _p ABI is present), and `pv = std::make_shared<std::vector<double>>(nparams, 0.0)`
-//   allocates a 33-element vector WITHOUT ANY BOUND CHECK against kMaxRuntimeParams -- add_compiled_block
-//   does not throw. The only place kMaxRuntimeParams is consulted at runtime is
-//   compiled_block::make_model_with_params (compiled_block_abi.hpp:150), which SILENTLY CLAMPS
-//   `rp.count = npar > kMaxRuntimeParams ? kMaxRuntimeParams : npar` when a residual/advance/... call
-//   actually runs -- values at index >= 32 are dropped without a diagnostic, they are never read past
-//   RuntimeParams::values[kMaxRuntimeParams] (no memory-safety bug: the fixed array is never indexed
-//   out of bounds), but the overflow is NOT surfaced as an error anywhere in the public C++ path.
-//
-// This test therefore does NOT assert EXPECT_THROW: doing so would fake a guard that does not exist on
-// this path (house rule: no fakes). It documents the CURRENT behavior as a locked expectation (add
-// succeeds, later set_block_params sizes against the oversized 33, a step does not crash) so that a
-// future PR adding the defensive throw at add_compiled_block time turns this test into a visible,
-// deliberate failure -- the honest signal that the guard now needs a rewrite here, not a silent gap.
+// compiled/native_loader.hpp add_compiled_block<ImplT>) and REQUIRE the ADC-610 defence-in-depth guard
+// (#432): add_compiled_block must throw std::runtime_error EARLY, at the host boundary, when the .so
+// declares nparams > kMaxRuntimeParams, with a message naming the count and the limit. Before that
+// guard landed, the overflow was accepted silently (values beyond index 31 dropped by the clamp in
+// compiled_block::make_model_with_params -- never a memory-safety bug, the fixed array is never indexed
+// out of bounds, but a silent data loss). This test locks the fail-loud contract so the gap can never
+// reopen unnoticed.
 //
 // Skips (exit 0) under Kokkos or without a known C++ compiler, same policy as the sibling native_loader
 // tests (a nu CPU loader is ABI-incompatible with the device module).
@@ -150,13 +140,9 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
   cfg.periodic = true;
   System sys(cfg);
 
-  // HONEST result: add_compiled_block does NOT throw today. nparams=kMaxRuntimeParams+1 is accepted;
-  // native_loader.hpp sizes the shared params vector to the OVERSIZED count with no bound check. This is
-  // the gap this test locks visibly (see file header): kMaxRuntimeParams is enforced ONLY by the Python
-  // codegen (_authoring_params.py) and, at runtime, only as a SILENT CLAMP in
-  // compiled_block::make_model_with_params (compiled_block_abi.hpp:150) -- never as a throw reachable
-  // from add_compiled_block. If a future change adds that guard, this assertion must flip to
-  // EXPECT_THROW and the printed diagnostic below should be replaced.
+  // ADC-610 (#432) defence-in-depth contract: the loader must REFUSE the oversized declaration EARLY,
+  // at add_compiled_block time, with a message naming the offending count and the kMaxRuntimeParams
+  // limit -- never a silent clamp, never a partially-registered block.
   bool threw = false;
   std::string what;
   try {
@@ -165,39 +151,20 @@ static int pops_run_test_native_loader_param_overflow(int argc, char** argv) {
     threw = true;
     what = e.what();
   }
-
+  chk(threw,
+      "add_compiled_block throws on nparams=kMaxRuntimeParams+1 (the #432 host-boundary guard)");
   if (threw) {
-    // A throw would mean a guard now exists: name it explicitly rather than silently accept either
-    // outcome (the honesty this test exists for). We do not currently expect this branch.
     chk(what.find(std::to_string(kMaxRuntimeParams)) != std::string::npos,
-        "if add_compiled_block now throws on nparams overflow, the message names kMaxRuntimeParams");
-    std::printf(
-        "NOTE: add_compiled_block THREW for nparams=%d (a guard now exists where none did at the "
-        "time this test was written): %s\n",
-        kMaxRuntimeParams + 1, what.c_str());
+        "the overflow error names the kMaxRuntimeParams limit");
+    chk(what.find(std::to_string(kMaxRuntimeParams + 1)) != std::string::npos,
+        "the overflow error names the offending declared count");
   } else {
-    std::printf(
-        "NOTE (documented gap, not a failure): add_compiled_block accepted nparams=%d "
-        "(kMaxRuntimeParams+1) WITHOUT throwing; native_loader.hpp has no bound check on the .so's "
-        "declared pops_compiled_nparams(). kMaxRuntimeParams is enforced only by the Python codegen "
-        "(_authoring_params.py) and, at runtime, only as a silent clamp in "
-        "compiled_block::make_model_with_params (compiled_block_abi.hpp:150).\n",
-        kMaxRuntimeParams + 1);
+    std::printf("FAIL: add_compiled_block accepted nparams=%d without throwing; the ADC-610 guard "
+                "(native_loader.hpp) is missing or bypassed\n",
+                kMaxRuntimeParams + 1);
   }
-  // Either way, set_block_params must stay CONSISTENT with whatever count add_compiled_block accepted
-  // (no crash / no silent corruption): it sizes against the block's OWN registered vector, not a
-  // hardcoded kMaxRuntimeParams, so a same-size call always succeeds -- this documents that the lack of
-  // an add-time bound check does not translate into a set_block_params inconsistency.
-  if (!threw) {
-    const std::vector<double> full(static_cast<std::size_t>(kMaxRuntimeParams + 1), 0.0);
-    bool set_ok = true;
-    try {
-      sys.set_block_params("gas", full);
-    } catch (const std::exception&) {
-      set_ok = false;
-    }
-    chk(set_ok, "set_block_params accepts a value block matching the (oversized) registered count");
-  }
+  // The refused block must not have been registered: the System stays empty and usable.
+  chk(sys.n_blocks() == 0, "the refused compiled block is not partially registered");
 
   if (chk.fails() == 0)
     std::printf(
