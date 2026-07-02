@@ -17,7 +17,6 @@ sides of the contract:
 Pure Python: it imports the inert authoring packages only (``import pops`` loads ``_pops`` as a side
 effect, but no model is built or run).
 """
-import sys
 
 import pytest
 
@@ -153,7 +152,3 @@ def test_finitevolume_reconstruction_alias():
     # Passing both limiter= and reconstruction= is a clear error, not a silent pick.
     with pytest.raises(TypeError):
         pops.FiniteVolume(limiter=WENO5(), reconstruction=WENO5())
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

@@ -11,7 +11,6 @@ All checks here are PURE: they exercise the resolver and ``set_threads`` argumen
 writes only the standard ``OMP_NUM_THREADS`` / ``KOKKOS_NUM_THREADS`` knobs, which we read back.
 """
 import os
-import sys
 import warnings
 
 import pytest
@@ -107,7 +106,3 @@ def test_documented_runtime_defaults_are_implemented(monkeypatch):
     assert th._threads_from_env() == 5
     monkeypatch.setenv("POPS_PROFILE", "full")
     assert Profile.from_env() == Profile.Advanced()
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

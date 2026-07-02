@@ -4,7 +4,6 @@ Typed scalar params (compile-time vs runtime, typed dtype, typed domain), typed 
 checkpoint / format / level policies, and typed compiled-brick references with manifest +
 native id. All inert; the runtime consumes them. Needs only `import pops`.
 """
-import sys
 
 import pytest
 
@@ -93,7 +92,3 @@ def test_external_brick_ref_missing_is_explainable(tmp_path):
     ref = CompiledBrickRef(manifest=str(tmp_path / "none.json"), native_id="nope")
     av = ref.available()
     assert not av.ok and "could not be resolved" in av.reason
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))

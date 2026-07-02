@@ -1,7 +1,6 @@
 """ADC-591 structured runtime inspection reports."""
 
 import json
-import sys
 
 import pytest
 
@@ -72,7 +71,3 @@ def test_layout_inspect_reports_native_routes_and_limitations():
     assert routes["amr:refinement_ratio"]["status"] == "partial"
     assert routes["amr:refinement_ratio"]["reason"]
     assert any(row["feature"] == "amr:refinement_ratio" for row in amr_info["limitations"])
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))
