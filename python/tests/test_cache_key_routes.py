@@ -32,7 +32,7 @@ import pytest
 pytest.importorskip("pops")
 from pops.codegen.cache import _cache_so_path, _registry_cache_key  # noqa: E402
 from pops.codegen.compile_emit import model_hash  # noqa: E402
-from pops.codegen.inspect_report import _route_registry_components  # noqa: E402
+from pops.codegen._inspect_compiled_report import _route_registry_components  # noqa: E402
 from pops.physics.model import HyperbolicModel, Param  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 
