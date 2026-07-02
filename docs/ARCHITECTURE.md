@@ -335,6 +335,18 @@ a validity token recording which field problem, block and stage produced the aux
 one stage cannot be silently read as another. These are descriptors around already-computed values;
 they add no numerics.
 
+The default shared Poisson and each named elliptic field are described by ONE native
+`FieldProblemRegistry`
+([`include/pops/runtime/system/field_problem_registry.hpp`](../include/pops/runtime/system/field_problem_registry.hpp)):
+both the Uniform `SystemFieldSolver` and the AMR `AmrRuntime` register their field problems into it
+(id, equation kind, output `AuxLayout`, solver kind, route support), so the two routes share one field
+abstraction. Its `validate(id, route)` refuses an illegal combination BEFORE bind (an FFT solver on
+the AMR route, an FFT solve with a Dirichlet potential, an entry declared on a route it does not
+support, or a problem producing no output), and `field_problem_routes` surfaces each entry as a
+`field_problem:<id>` capability report row. The registry owns no solver: the lazy solver build
+(`ensure_named_elliptic`) and RHS assembly (`assemble_poisson_rhs`) remain the numerical truth; the
+`NamedField` component fields become the derived low-level view of an entry's layout.
+
 The transport of a block, in turn, reads this aux:
 `advance_transport` routes toward the closure `s.advance` (full path) or its disk variants, and
 this closure does `fill_ghosts` then `assemble_rhs` (limited reconstruction then numerical flux ->

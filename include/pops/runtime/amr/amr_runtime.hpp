@@ -24,6 +24,7 @@
 #include <pops/parallel/comm.hpp>  // n_ranks() / comm_active(): MPI message+reduction counts (Spec 5 criterion 43)
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
+#include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry (ADC-596 descriptor)
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
 #include <chrono>  // AmrPhaseScope wall-clock timing (Spec 5 criterion 43)
@@ -508,6 +509,22 @@ class AmrRuntime {
     nf.gx_comp = gx_comp;
     nf.gy_comp = gy_comp;
     named_fields_[field] = std::move(nf);  // solver built lazily by ensure_named_elliptic
+    // ADC-596: mirror the field into the unified descriptor registry (a named GeometricMG field on
+    // the AMR route -- AMR always uses GeometricMG, never FFT). Purely descriptive: the lazy solver
+    // build (ensure_named_elliptic) and RHS assembly are untouched.
+    if (field_problems_.find("phi") < 0)
+      field_problems_.register_problem(default_poisson_entry());
+    field_problems_.register_problem(
+        named_field_entry(field, phi_comp, gx_comp, gy_comp, EllipticSolverKind::GeometricMG));
+  }
+
+  /// The unified field-problem registry (ADC-596), seeding the default "phi" entry on first access so
+  /// the single-field case is described like a named one. Both Uniform and AMR expose this SAME type,
+  /// and both validate their entries for their route before bind. Descriptive only (no numerics).
+  const FieldProblemRegistry& field_problem_registry() {
+    if (field_problems_.find("phi") < 0)
+      field_problems_.register_problem(default_poisson_entry());
+    return field_problems_;
   }
   /// Attaches named @p field's RHS contribution closure (rhs += elliptic_field_rhs(U_b)) to block @p b.
   /// Called per declared field once the runtime owns the blocks. @throws if @p b is out of bounds.
@@ -1650,6 +1667,10 @@ class AmrRuntime {
   // takes it by reference: a parameter type must be visible at the function declaration, unlike a member
   // body). Empty default -> bit-identical (the solve_named_fields loop early-returns).
   std::map<std::string, NamedField> named_fields_;
+  /// Unified DESCRIPTOR registry of the field problems this AMR runtime realizes (ADC-596): the
+  /// default shared Poisson ("phi") plus every named field, the SAME abstraction the Uniform
+  /// SystemFieldSolver uses. Owns no solver, changes no numerics; populated by register_named_field.
+  FieldProblemRegistry field_problems_;
   std::vector<CoupledSourceSpec>
       coupled_sources_;  // registered coupled sources (applied after transport)
   // UNION-TAGS REGRID (capstone Phase 2, C.6). regrid_every_ == 0 -> FROZEN hierarchy (default,
