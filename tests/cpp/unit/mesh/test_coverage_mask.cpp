@@ -6,49 +6,32 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // pops::CoverageMask
 #include <pops/mesh/index/box2d.hpp>
 
-#include <cstdio>
-
 using namespace pops;
 
-static int pops_run_test_coverage_mask() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+// Pipeline stateful : une seule CoverageMask marquee et interrogee progressivement.
+TEST(test_coverage_mask, mark_and_query_progression) {
   // region a origine non nulle : [10,5] x [20,8].
   CoverageMask m(Box2D{{10, 5}, {20, 8}});
-  chk(m.NX == 11 && m.NY == 4, "dims");
+  EXPECT_TRUE(m.NX == 11 && m.NY == 4) << "dims";
 
   // rien marque au depart.
-  chk(!m.covered(15, 6), "vide_au_depart");
+  EXPECT_FALSE(m.covered(15, 6)) << "vide_au_depart";
 
   // marque une box interieure ; couvert dedans, pas dehors.
   m.mark(Box2D{{12, 6}, {14, 7}});
-  chk(m.covered(12, 6) && m.covered(14, 7) && m.covered(13, 6), "marque_dedans");
-  chk(!m.covered(11, 6) && !m.covered(15, 6) && !m.covered(13, 5), "non_marque_reste_faux");
+  EXPECT_TRUE(m.covered(12, 6) && m.covered(14, 7) && m.covered(13, 6)) << "marque_dedans";
+  EXPECT_TRUE(!m.covered(11, 6) && !m.covered(15, 6) && !m.covered(13, 5))
+      << "non_marque_reste_faux";
 
   // requete hors region : toujours faux, jamais de crash.
-  chk(!m.covered(5, 5) && !m.covered(25, 8) && !m.covered(15, 4) && !m.covered(15, 9),
-      "hors_region_faux");
+  EXPECT_TRUE(!m.covered(5, 5) && !m.covered(25, 8) && !m.covered(15, 4) && !m.covered(15, 9))
+      << "hors_region_faux";
 
   // marque une box debordant la region : clippee a la region.
   m.mark(Box2D{{18, 7}, {30, 20}});
-  chk(m.covered(18, 7) && m.covered(20, 8), "clip_dedans");
-  chk(!m.covered(21, 8) && !m.covered(20, 9), "clip_pas_de_debordement");
-
-  if (fails == 0)
-    std::printf("OK test_coverage_mask\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_coverage_mask, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_coverage_mask, "test_coverage_mask"), 0);
+  EXPECT_TRUE(m.covered(18, 7) && m.covered(20, 8)) << "clip_dedans";
+  EXPECT_TRUE(!m.covered(21, 8) && !m.covered(20, 9)) << "clip_pas_de_debordement";
 }

@@ -13,26 +13,16 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
-#include <cstdio>
-
 using namespace pops;
 
-static int pops_run_test_sync_residence() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+// Pipeline stateful : le meme MultiFab est synchronise et relu en plusieurs etapes.
+TEST(test_sync_residence, sync_host_device_idempotent_and_bit_exact) {
   // 1) Les seams libres existent et sont des appels surs et repetables. Sous
   // SharedSpace : sync_host == fence cible, sync_device == no-op. Aucun effet
   // observable, on verifie juste qu'ils s'enchainent sans planter.
@@ -40,7 +30,7 @@ static int pops_run_test_sync_residence() {
   sync_host();
   sync_device();
   sync_device();
-  chk(true, "free_seams_callable");
+  SUCCEED() << "free_seams_callable";
 
   Box2D dom = Box2D::from_extents(8, 8);
   BoxArray ba = BoxArray::from_domain(dom, 4);  // 4 boxes
@@ -50,7 +40,7 @@ static int pops_run_test_sync_residence() {
   // 2) set_val passe deja par sync_host() en interne. La somme doit etre exacte.
   mf.set_val(3.0);
   const Real s0 = sum(mf);
-  chk(s0 == 3.0 * 64, "set_val_sum_exact");
+  EXPECT_EQ(s0, 3.0 * 64) << "set_val_sum_exact";
 
   // 3) IDEMPOTENCE : sync_host()/sync_device() repetes ne touchent aucune
   // donnee. La somme apres N sync est BIT-IDENTIQUE (==, pas une tolerance).
@@ -58,7 +48,7 @@ static int pops_run_test_sync_residence() {
   mf.sync_device();
   mf.sync_host();
   const Real s1 = sum(mf);
-  chk(s1 == s0, "sync_idempotent_sum");
+  EXPECT_EQ(s1, s0) << "sync_idempotent_sum";
 
   // ecrire un champ via for_each_cell, encadre par les sync explicites comme le
   // ferait un appelant qui declare son intention de residence.
@@ -74,11 +64,11 @@ static int pops_run_test_sync_residence() {
     for (int i = 0; i < 8; ++i)
       expected += i + 100.0 * j;
   const Real sf = sum(mf);
-  chk(sf == expected, "field_after_sync_exact");
+  EXPECT_EQ(sf, expected) << "field_after_sync_exact";
 
   // 4) re-sync apres lecture : toujours bit-identique (aucune migration).
   mf.sync_host();
-  chk(sum(mf) == sf, "resync_no_drift");
+  EXPECT_EQ(sum(mf), sf) << "resync_no_drift";
 
   // une cellule precise : la valeur lue cote hote apres sync_host() est exacte.
   bool found = false;
@@ -86,16 +76,8 @@ static int pops_run_test_sync_residence() {
     if (mf.box(li).contains(5, 6)) {
       found = true;
       mf.sync_host();
-      chk(mf.fab(li)(5, 6, 0) == 5 + 600.0, "cell_value_after_sync");
+      EXPECT_EQ(mf.fab(li)(5, 6, 0), 5 + 600.0) << "cell_value_after_sync";
     }
   }
-  chk(found, "cell_located");
-
-  if (fails == 0)
-    std::printf("OK test_sync_residence\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_sync_residence, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_sync_residence, "test_sync_residence"), 0);
+  EXPECT_TRUE(found) << "cell_located";
 }
