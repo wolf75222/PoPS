@@ -15,7 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -77,15 +76,7 @@ static double order(double e1, double e2, int n1, int n2) {
   return std::log(e1 / e2) / std::log(double(n2) / n1);
 }
 
-static int pops_run_test_cut_cell() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+TEST(test_cut_cell, cut_cell_second_order_vs_staircase_first_order) {
   double s128, s256, s512, si128, si256, si512, c128, c256, c512, ci128, ci256, ci512;
   solve_err(128, false, s128, si128);
   solve_err(256, false, s256, si256);
@@ -103,16 +94,8 @@ static int pops_run_test_cut_cell() {
               ci512, o_ci);
   std::printf("gain L2 a nc=512 : escalier / cutcell = %.0fx\n", s512 / c512);
 
-  chk(o_c > 1.7, "cut_cell_ordre_2_L2");                 // Shortley-Weller : ~2 en L2
-  chk(o_s < 1.4, "escalier_ordre_1");                    // escalier : ~1
-  chk(c512 < s512 / 50.0, "cut_cell_bien_plus_precis");  // gain de plusieurs ordres
-  chk(std::isfinite(c512) && c512 > 0, "cut_cell_fini");
-
-  if (fails == 0)
-    std::printf("OK test_cut_cell\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_cut_cell, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_cut_cell, "test_cut_cell"), 0);
+  EXPECT_GT(o_c, 1.7) << "cut_cell_ordre_2_L2";                 // Shortley-Weller : ~2 en L2
+  EXPECT_LT(o_s, 1.4) << "escalier_ordre_1";                    // escalier : ~1
+  EXPECT_LT(c512, s512 / 50.0) << "cut_cell_bien_plus_precis";  // gain de plusieurs ordres
+  EXPECT_TRUE(std::isfinite(c512) && c512 > 0) << "cut_cell_fini";
 }

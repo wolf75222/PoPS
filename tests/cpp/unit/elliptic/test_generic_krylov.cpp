@@ -31,7 +31,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/mesh/layout/box_array.hpp>
@@ -42,7 +41,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic ghost exchange)
 
-#include "test_harness.hpp"  // pops::test::Checker + kPi
+#include "test_harness.hpp"  // pops::test::kPi
 
 #include <cmath>
 #include <cstdio>
@@ -117,196 +116,229 @@ Real max_abs_diff(const MultiFab& a, const MultiFab& b) {
   return static_cast<Real>(all_reduce_max(static_cast<double>(d)));
 }
 
+constexpr Real kRelTol = 1e-12;
+constexpr Real kRecoverTol = 1e-8;
+
+// Fixture : construit UNE fois la grille, les deux operateurs matrice-libre (SPD et non-symetrique)
+// et leurs RHS manufactures (couteux : plusieurs MultiFab + solves de reference). Chaque TEST reste
+// independant (aucun ne modifie geom_/A_/rhs_), seuls les vecteurs solution x sont locaux au TEST.
+class GenericKrylov : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    dom_ = new Box2D(Box2D::from_extents(kN, kN));
+    geom_ = new Geometry{*dom_, 0.0, 1.0, 0.0, 1.0};
+    ba_ = new BoxArray(std::vector<Box2D>{*dom_});
+    dm_ = new DistributionMapping(1, 1);
+    bc_ = new BCRec{};  // all faces default to Periodic -> fill_ghosts wraps in x and y
+
+    // SPD Helmholtz operator A(in) = in - alpha*Lap(in), matrix-free: fill periodic ghosts of `in`,
+    // apply the shared discrete 5-point Laplacian into a scratch, then combine. `in` needs >= 1
+    // ghost for the stencil; `tmp` here is captured once and reused across every matvec (no
+    // per-call alloc).
+    lap_tmp_ = new MultiFab(*ba_, *dm_, 1, 0);
+    const Geometry& geom = *geom_;
+    const BCRec& bc = *bc_;
+    MultiFab& lap_tmp = *lap_tmp_;
+    A_ = new ApplyFn([&geom, &bc, &lap_tmp](MultiFab& out, const MultiFab& in) {
+      // in is const at the API level, but fill_ghosts / apply_laplacian take a mutable MultiFab&
+      // (they only WRITE the ghosts of `in`, never the valid cells). Casting away const is the
+      // same contract the solver loops rely on; the valid data of `in` is unchanged.
+      MultiFab& in_mut = const_cast<MultiFab&>(in);
+      fill_ghosts(in_mut, geom.domain, bc);
+      apply_laplacian(in_mut, geom, lap_tmp);  // lap_tmp = Lap(in) (all coeffs null -> bare Laplacian)
+      for (int li = 0; li < out.local_size(); ++li) {
+        Array4 ov = out.fab(li).array();
+        const ConstArray4 iv = in.fab(li).const_array();
+        const ConstArray4 lv = lap_tmp.fab(li).const_array();
+        for_each_cell(out.box(li), HelmholtzCombineKernel{ov, iv, lv, kAlpha});
+      }
+    });
+
+    // Manufactured solution phi_exact and the discretization-exact rhs = A(phi_exact).
+    phi_exact_mf_ = new MultiFab(*ba_, *dm_, 1, 1);  // >= 1 ghost (input of A)
+    for (int li = 0; li < phi_exact_mf_->local_size(); ++li) {
+      Array4 af = phi_exact_mf_->fab(li).array();
+      for_each_cell(phi_exact_mf_->box(li), SampleExactKernel{af, geom});
+    }
+    rhs_ = new MultiFab(*ba_, *dm_, 1, 0);
+    (*A_)(*rhs_, *phi_exact_mf_);  // rhs <- A(phi_exact): discrete RHS (tests the SOLVER, not the scheme)
+
+    // NON-symmetric operator A_ns(in) = in - alpha*Lap(in) + beta * upwind dx(in): the Helmholtz
+    // part is SPD, the one-sided advection term breaks symmetry. beta is large enough that the
+    // operator is strongly non-self-adjoint (CG stagnates), but the spectrum stays in the right
+    // half-plane so GMRES converges. Reuses lap_tmp; `in`'s periodic ghosts feed the upwind in(i-1).
+    constexpr Real kBeta = 2.0;  // advection strength (CFL-irrelevant: this is a linear solve, not a step)
+    const Real inv_h = Real(1) / geom.dx();
+    A_ns_ = new ApplyFn([&geom, &bc, &lap_tmp, inv_h](MultiFab& out, const MultiFab& in) {
+      MultiFab& in_mut = const_cast<MultiFab&>(in);
+      fill_ghosts(in_mut, geom.domain, bc);
+      apply_laplacian(in_mut, geom, lap_tmp);
+      for (int li = 0; li < out.local_size(); ++li) {
+        Array4 ov = out.fab(li).array();
+        const ConstArray4 iv = in.fab(li).const_array();
+        const ConstArray4 lv = lap_tmp.fab(li).const_array();
+        for_each_cell(out.box(li), AdvectionHelmholtzKernel{ov, iv, lv, kAlpha, kBeta, inv_h});
+      }
+    });
+    rhs_ns_ = new MultiFab(*ba_, *dm_, 1, 0);
+    (*A_ns_)(*rhs_ns_, *phi_exact_mf_);  // rhs_ns <- A_ns(phi_exact): discrete RHS for the non-symmetric solve
+  }
+
+  static void TearDownTestSuite() {
+    delete rhs_ns_;
+    rhs_ns_ = nullptr;
+    delete A_ns_;
+    A_ns_ = nullptr;
+    delete rhs_;
+    rhs_ = nullptr;
+    delete phi_exact_mf_;
+    phi_exact_mf_ = nullptr;
+    delete A_;
+    A_ = nullptr;
+    delete lap_tmp_;
+    lap_tmp_ = nullptr;
+    delete bc_;
+    bc_ = nullptr;
+    delete dm_;
+    dm_ = nullptr;
+    delete ba_;
+    ba_ = nullptr;
+    delete geom_;
+    geom_ = nullptr;
+    delete dom_;
+    dom_ = nullptr;
+  }
+
+  static Box2D* dom_;
+  static Geometry* geom_;
+  static BoxArray* ba_;
+  static DistributionMapping* dm_;
+  static BCRec* bc_;
+  static MultiFab* lap_tmp_;
+  static ApplyFn* A_;
+  static ApplyFn* A_ns_;
+  static MultiFab* phi_exact_mf_;
+  static MultiFab* rhs_;
+  static MultiFab* rhs_ns_;
+};
+
+Box2D* GenericKrylov::dom_ = nullptr;
+Geometry* GenericKrylov::geom_ = nullptr;
+BoxArray* GenericKrylov::ba_ = nullptr;
+DistributionMapping* GenericKrylov::dm_ = nullptr;
+BCRec* GenericKrylov::bc_ = nullptr;
+MultiFab* GenericKrylov::lap_tmp_ = nullptr;
+ApplyFn* GenericKrylov::A_ = nullptr;
+ApplyFn* GenericKrylov::A_ns_ = nullptr;
+MultiFab* GenericKrylov::phi_exact_mf_ = nullptr;
+MultiFab* GenericKrylov::rhs_ = nullptr;
+MultiFab* GenericKrylov::rhs_ns_ = nullptr;
+
 }  // namespace
 
-static int pops_run_test_generic_krylov() {
-  pops::test::Checker chk(pops::test::Checker::Style::Terse);
-
-  Box2D dom = Box2D::from_extents(kN, kN);
-  Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba(std::vector<Box2D>{dom});
-  DistributionMapping dm(1, 1);
-  BCRec bc;  // all faces default to Periodic -> fill_ghosts wraps in x and y
-
-  // SPD Helmholtz operator A(in) = in - alpha*Lap(in), matrix-free: fill periodic ghosts of `in`,
-  // apply the shared discrete 5-point Laplacian into a scratch, then combine. `in` needs >= 1 ghost
-  // for the stencil; `tmp` here is captured once and reused across every matvec (no per-call alloc).
-  MultiFab lap_tmp(ba, dm, 1, 0);
-  ApplyFn A = [&](MultiFab& out, const MultiFab& in) {
-    // in is const at the API level, but fill_ghosts / apply_laplacian take a mutable MultiFab&
-    // (they only WRITE the ghosts of `in`, never the valid cells). Casting away const is the same
-    // contract the solver loops rely on; the valid data of `in` is unchanged.
-    MultiFab& in_mut = const_cast<MultiFab&>(in);
-    fill_ghosts(in_mut, geom.domain, bc);
-    apply_laplacian(in_mut, geom,
-                    lap_tmp);  // lap_tmp = Lap(in) (all coeffs null -> bare Laplacian)
-    for (int li = 0; li < out.local_size(); ++li) {
-      Array4 ov = out.fab(li).array();
-      const ConstArray4 iv = in.fab(li).const_array();
-      const ConstArray4 lv = lap_tmp.fab(li).const_array();
-      for_each_cell(out.box(li), HelmholtzCombineKernel{ov, iv, lv, kAlpha});
-    }
-  };
-
-  // Manufactured solution phi_exact and the discretization-exact rhs = A(phi_exact).
-  MultiFab phi_exact_mf(ba, dm, 1, 1);  // >= 1 ghost (input of A)
-  for (int li = 0; li < phi_exact_mf.local_size(); ++li) {
-    Array4 af = phi_exact_mf.fab(li).array();
-    for_each_cell(phi_exact_mf.box(li), SampleExactKernel{af, geom});
-  }
-  MultiFab rhs(ba, dm, 1, 0);
-  A(rhs, phi_exact_mf);  // rhs <- A(phi_exact): discrete RHS (tests the SOLVER, not the scheme)
-
-  // NON-symmetric operator A_ns(in) = in - alpha*Lap(in) + beta * upwind dx(in): the Helmholtz part is
-  // SPD, the one-sided advection term breaks symmetry. beta is large enough that the operator is
-  // strongly non-self-adjoint (CG stagnates), but the spectrum stays in the right half-plane so GMRES
-  // converges. Reuses lap_tmp; `in`'s periodic ghosts feed the upwind in(i-1).
-  constexpr Real kBeta =
-      2.0;  // advection strength (CFL-irrelevant: this is a linear solve, not a step)
-  const Real inv_h = Real(1) / geom.dx();
-  ApplyFn A_ns = [&](MultiFab& out, const MultiFab& in) {
-    MultiFab& in_mut = const_cast<MultiFab&>(in);
-    fill_ghosts(in_mut, geom.domain, bc);
-    apply_laplacian(in_mut, geom, lap_tmp);
-    for (int li = 0; li < out.local_size(); ++li) {
-      Array4 ov = out.fab(li).array();
-      const ConstArray4 iv = in.fab(li).const_array();
-      const ConstArray4 lv = lap_tmp.fab(li).const_array();
-      for_each_cell(out.box(li), AdvectionHelmholtzKernel{ov, iv, lv, kAlpha, kBeta, inv_h});
-    }
-  };
-  MultiFab rhs_ns(ba, dm, 1, 0);
-  A_ns(rhs_ns,
-       phi_exact_mf);  // rhs_ns <- A_ns(phi_exact): discrete RHS for the non-symmetric solve
-
-  const Real rel_tol = 1e-12;
-  const Real recover_tol = 1e-8;
-
-  // --- CG (SPD operator) ---
-  {
-    MultiFab x(ba, dm, 1, 1);
-    x.set_val(0.0);
-    const KrylovResult r = cg_solve(A, x, rhs, rel_tol, 500);
-    const Real err = max_abs_diff(x, phi_exact_mf);
-    std::printf("CG        : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-                r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-    chk(r.converged, "cg_converged");
-    chk(r.iters > 1, "cg_iters_gt_1");
-    chk(r.rel_residual <= rel_tol * 10, "cg_residual_small");
-    chk(err < recover_tol, "cg_recovers_exact");
-  }
-
-  // --- BiCGStab (identity preconditioner = empty ApplyFn) ---
-  {
-    MultiFab x(ba, dm, 1, 1);
-    x.set_val(0.0);
-    const KrylovResult r = bicgstab_solve(A, ApplyFn{}, x, rhs, rel_tol, 500);
-    const Real err = max_abs_diff(x, phi_exact_mf);
-    std::printf("BiCGStab  : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-                r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-    chk(r.converged, "bicgstab_converged");
-    chk(r.iters > 1, "bicgstab_iters_gt_1");
-    chk(r.rel_residual <= rel_tol * 10, "bicgstab_residual_small");
-    chk(err < recover_tol, "bicgstab_recovers_exact");
-  }
-
-  // --- Richardson (omega ~ 1/spectral-max; needs many more iters) ---
-  {
-    MultiFab x(ba, dm, 1, 1);
-    x.set_val(0.0);
-    // Richardson is stable only for omega < 2/lambda_max(A). The DISCRETE -Lap has largest
-    // eigenvalue 8/h^2 (NOT the continuous 8*pi^2: the continuous value would over-relax by the grid
-    // factor and DIVERGE), so lambda_max(A) = 1 + alpha*8/h^2. omega = 1/lambda_max under-relaxes
-    // safely for every mode; convergence is slow (the low modes have rate ~1 - omega) so we grant a
-    // large iteration budget.
-    const Real h = geom.dx();  // = geom.dy() on the unit square (uniform)
-    const Real lambda_max = Real(1) + kAlpha * Real(8) / (h * h);
-    const Real omega = Real(1) / lambda_max;
-    const KrylovResult r = richardson_solve(A, x, rhs, omega, rel_tol, 200000);
-    const Real err = max_abs_diff(x, phi_exact_mf);
-    std::printf("Richardson: %s in %d iters (rel=%.2e, omega=%.4f) | max|x - exact| = %.3e\n",
-                r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, omega, err);
-    chk(r.converged, "richardson_converged");
-    chk(r.iters > 1, "richardson_iters_gt_1");
-    chk(r.rel_residual <= rel_tol * 10, "richardson_residual_small");
-    chk(err < recover_tol, "richardson_recovers_exact");
-  }
-
-  // --- GMRES on the SPD operator (identity preconditioner): must recover phi_exact like CG ---
-  {
-    MultiFab x(ba, dm, 1, 1);
-    x.set_val(0.0);
-    const KrylovResult r = gmres_solve(A, ApplyFn{}, x, rhs, rel_tol, 500, 30);
-    const Real err = max_abs_diff(x, phi_exact_mf);
-    std::printf("GMRES(SPD): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-                r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-    chk(r.converged, "gmres_spd_converged");
-    chk(r.iters > 1, "gmres_spd_iters_gt_1");
-    chk(r.rel_residual <= rel_tol * 10, "gmres_spd_residual_small");
-    chk(err < recover_tol, "gmres_spd_recovers_exact");
-  }
-
-  // --- GMRES on the NON-symmetric operator: the gmres-specific guard. CG STAGNATES on A_ns (it is not
-  //     self-adjoint), so we first confirm CG fails to recover phi_exact, then GMRES does. ---
-  {
-    MultiFab x_cg(ba, dm, 1, 1);
-    x_cg.set_val(0.0);
-    const KrylovResult rc = cg_solve(A_ns, x_cg, rhs_ns, rel_tol, 500);
-    const Real err_cg = max_abs_diff(x_cg, phi_exact_mf);
-    std::printf(
-        "CG(nonsym): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e (expected to NOT "
-        "recover)\n",
-        rc.converged ? "CONVERGED" : "FAILED", rc.iters, rc.rel_residual, err_cg);
-    chk(!(rc.converged && err_cg < recover_tol), "cg_stagnates_on_nonsymmetric");
-
-    MultiFab x(ba, dm, 1, 1);
-    x.set_val(0.0);
-    const KrylovResult r = gmres_solve(A_ns, ApplyFn{}, x, rhs_ns, rel_tol, 500, 30);
-    const Real err = max_abs_diff(x, phi_exact_mf);
-    std::printf("GMRES(nsy): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-                r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-    chk(r.converged, "gmres_nonsym_converged");
-    chk(r.iters > 1, "gmres_nonsym_iters_gt_1");
-    chk(r.rel_residual <= rel_tol * 10, "gmres_nonsym_residual_small");
-    chk(err < recover_tol, "gmres_nonsym_recovers_exact");
-  }
-
-  // --- max_iters <= 0 must throw (spec error 13) ---
-  {
-    MultiFab x(ba, dm, 1, 1);
-    x.set_val(0.0);
-    bool threw_cg = false, threw_rich = false, threw_bicg = false, threw_gmres = false;
-    try {
-      cg_solve(A, x, rhs, rel_tol, 0);
-    } catch (const std::invalid_argument&) {
-      threw_cg = true;
-    }
-    try {
-      richardson_solve(A, x, rhs, Real(0.1), rel_tol, 0);
-    } catch (const std::invalid_argument&) {
-      threw_rich = true;
-    }
-    try {
-      bicgstab_solve(A, ApplyFn{}, x, rhs, rel_tol, 0);
-    } catch (const std::invalid_argument&) {
-      threw_bicg = true;
-    }
-    try {
-      gmres_solve(A, ApplyFn{}, x, rhs, rel_tol, 0);
-    } catch (const std::invalid_argument&) {
-      threw_gmres = true;
-    }
-    chk(threw_cg, "cg_max_iters_0_throws");
-    chk(threw_rich, "richardson_max_iters_0_throws");
-    chk(threw_bicg, "bicgstab_max_iters_0_throws");
-    chk(threw_gmres, "gmres_max_iters_0_throws");
-  }
-
-  if (chk.fails() == 0)
-    std::printf("OK test_generic_krylov\n");
-  return chk.failed();
+// --- CG (SPD operator) ---
+TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  const KrylovResult r = cg_solve(*A_, x, *rhs_, kRelTol, 500);
+  const Real err = max_abs_diff(x, *phi_exact_mf_);
+  std::printf("CG        : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
+              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.converged) << "cg_converged";
+  EXPECT_TRUE(r.iters > 1) << "cg_iters_gt_1 iters=" << r.iters;
+  EXPECT_TRUE(r.rel_residual <= kRelTol * 10) << "cg_residual_small rel_residual=" << r.rel_residual;
+  EXPECT_TRUE(err < kRecoverTol) << "cg_recovers_exact err=" << err;
 }
 
-TEST(test_generic_krylov, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_generic_krylov, "test_generic_krylov"), 0);
+// --- BiCGStab (identity preconditioner = empty ApplyFn) ---
+TEST_F(GenericKrylov, bicgstab_converges_with_identity_preconditioner) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  const KrylovResult r = bicgstab_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500);
+  const Real err = max_abs_diff(x, *phi_exact_mf_);
+  std::printf("BiCGStab  : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
+              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.converged) << "bicgstab_converged";
+  EXPECT_TRUE(r.iters > 1) << "bicgstab_iters_gt_1 iters=" << r.iters;
+  EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
+      << "bicgstab_residual_small rel_residual=" << r.rel_residual;
+  EXPECT_TRUE(err < kRecoverTol) << "bicgstab_recovers_exact err=" << err;
+}
+
+// --- Richardson (omega ~ 1/spectral-max; needs many more iters) ---
+TEST_F(GenericKrylov, richardson_converges_with_spectral_omega) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  // Richardson is stable only for omega < 2/lambda_max(A). The DISCRETE -Lap has largest
+  // eigenvalue 8/h^2 (NOT the continuous 8*pi^2: the continuous value would over-relax by the grid
+  // factor and DIVERGE), so lambda_max(A) = 1 + alpha*8/h^2. omega = 1/lambda_max under-relaxes
+  // safely for every mode; convergence is slow (the low modes have rate ~1 - omega) so we grant a
+  // large iteration budget.
+  const Real h = geom_->dx();  // = geom.dy() on the unit square (uniform)
+  const Real lambda_max = Real(1) + kAlpha * Real(8) / (h * h);
+  const Real omega = Real(1) / lambda_max;
+  const KrylovResult r = richardson_solve(*A_, x, *rhs_, omega, kRelTol, 200000);
+  const Real err = max_abs_diff(x, *phi_exact_mf_);
+  std::printf("Richardson: %s in %d iters (rel=%.2e, omega=%.4f) | max|x - exact| = %.3e\n",
+              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, omega, err);
+  EXPECT_TRUE(r.converged) << "richardson_converged";
+  EXPECT_TRUE(r.iters > 1) << "richardson_iters_gt_1 iters=" << r.iters;
+  EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
+      << "richardson_residual_small rel_residual=" << r.rel_residual;
+  EXPECT_TRUE(err < kRecoverTol) << "richardson_recovers_exact err=" << err;
+}
+
+// --- GMRES on the SPD operator (identity preconditioner): must recover phi_exact like CG ---
+TEST_F(GenericKrylov, gmres_converges_on_spd_operator) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  const KrylovResult r = gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 30);
+  const Real err = max_abs_diff(x, *phi_exact_mf_);
+  std::printf("GMRES(SPD): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
+              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.converged) << "gmres_spd_converged";
+  EXPECT_TRUE(r.iters > 1) << "gmres_spd_iters_gt_1 iters=" << r.iters;
+  EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
+      << "gmres_spd_residual_small rel_residual=" << r.rel_residual;
+  EXPECT_TRUE(err < kRecoverTol) << "gmres_spd_recovers_exact err=" << err;
+}
+
+// --- GMRES on the NON-symmetric operator: the gmres-specific guard. CG STAGNATES on A_ns (it is
+//     not self-adjoint), so we first confirm CG fails to recover phi_exact, then GMRES does. ---
+TEST_F(GenericKrylov, gmres_converges_where_cg_stagnates_on_nonsymmetric_operator) {
+  MultiFab x_cg(*ba_, *dm_, 1, 1);
+  x_cg.set_val(0.0);
+  const KrylovResult rc = cg_solve(*A_ns_, x_cg, *rhs_ns_, kRelTol, 500);
+  const Real err_cg = max_abs_diff(x_cg, *phi_exact_mf_);
+  std::printf(
+      "CG(nonsym): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e (expected to NOT "
+      "recover)\n",
+      rc.converged ? "CONVERGED" : "FAILED", rc.iters, rc.rel_residual, err_cg);
+  EXPECT_TRUE(!(rc.converged && err_cg < kRecoverTol)) << "cg_stagnates_on_nonsymmetric";
+
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  const KrylovResult r = gmres_solve(*A_ns_, ApplyFn{}, x, *rhs_ns_, kRelTol, 500, 30);
+  const Real err = max_abs_diff(x, *phi_exact_mf_);
+  std::printf("GMRES(nsy): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
+              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.converged) << "gmres_nonsym_converged";
+  EXPECT_TRUE(r.iters > 1) << "gmres_nonsym_iters_gt_1 iters=" << r.iters;
+  EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
+      << "gmres_nonsym_residual_small rel_residual=" << r.rel_residual;
+  EXPECT_TRUE(err < kRecoverTol) << "gmres_nonsym_recovers_exact err=" << err;
+}
+
+// --- max_iters <= 0 must throw (spec error 13) ---
+TEST_F(GenericKrylov, zero_max_iters_throws_invalid_argument) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  EXPECT_THROW(cg_solve(*A_, x, *rhs_, kRelTol, 0), std::invalid_argument)
+      << "cg_max_iters_0_throws";
+  EXPECT_THROW(richardson_solve(*A_, x, *rhs_, Real(0.1), kRelTol, 0), std::invalid_argument)
+      << "richardson_max_iters_0_throws";
+  EXPECT_THROW(bicgstab_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 0), std::invalid_argument)
+      << "bicgstab_max_iters_0_throws";
+  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 0), std::invalid_argument)
+      << "gmres_max_iters_0_throws";
 }

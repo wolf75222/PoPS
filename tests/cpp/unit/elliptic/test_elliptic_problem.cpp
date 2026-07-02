@@ -15,7 +15,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
@@ -28,78 +27,99 @@
 #include <pops/mesh/boundary/physical_bc.hpp>
 
 #include <cmath>
-#include <cstdio>
 #include <stdexcept>
 #include <vector>
 
 using namespace pops;
 static constexpr double kPi = 3.14159265358979323846;
+static constexpr int kN = 64;
 
-static int pops_run_test_elliptic_problem() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+namespace {
+double fr(const Geometry& geom, int i, int j) {
+  return std::sin(2 * kPi * geom.x_cell(i)) * std::sin(2 * kPi * geom.y_cell(j));
+}
+}  // namespace
 
-  const int N = 64;
-  Box2D dom = Box2D::from_extents(N, N);
-  Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
-  BoxArray ba(std::vector<Box2D>{dom});
-  DistributionMapping dm(1, 1);
-  BCRec bc;  // periodique
-
-  auto fr = [&](int i, int j) {
-    return std::sin(2 * kPi * geom.x_cell(i)) * std::sin(2 * kPi * geom.y_cell(j));
-  };
-
-  // (C) garde-fou eps : etat implicite actuel du stencil.
-  chk(EllipticProblem{}.eps == Real(1), "eps_implicite_vaut_1");
-
-  // (C bis) eps != 1 n'est pas supporte (stencil a coefficient constant) :
-  // make_elliptic_solver doit LANCER plutot que de l'ignorer en silence.
-  {
-    EllipticProblem prob_eps2{Real(2), bc, false};
-    bool a_lance = false;
-    try {
-      GeometricMG bad = make_elliptic_solver<GeometricMG>(geom, ba, prob_eps2);
-      (void)bad;
-    } catch (const std::invalid_argument&) {
-      a_lance = true;
-    }
-    chk(a_lance, "eps_different_de_1_lance");
+// Fixture : geometrie/layout partages (lecture seule, construits une fois) par les sections
+// independantes ci-dessous.
+class EllipticProblemTest : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    dom_ = new Box2D(Box2D::from_extents(kN, kN));
+    geom_ = new Geometry{*dom_, 0.0, 1.0, 0.0, 1.0};
+    ba_ = new BoxArray(std::vector<Box2D>{*dom_});
+    dm_ = new DistributionMapping(1, 1);
+    bc_ = new BCRec();  // periodique
+  }
+  static void TearDownTestSuite() {
+    delete dom_;
+    delete geom_;
+    delete ba_;
+    delete dm_;
+    delete bc_;
+    dom_ = nullptr;
+    geom_ = nullptr;
+    ba_ = nullptr;
+    dm_ = nullptr;
+    bc_ = nullptr;
   }
 
-  // homogeneous_bc(probleme) == homogeneous(probleme.bc), champ par champ.
-  {
-    BCRec mixed;
-    mixed.xlo = BCType::Dirichlet;
-    mixed.xlo_val = 3.0;
-    mixed.yhi = BCType::Foextrap;
-    EllipticProblem prob{Real(1), mixed, false};
-    BCRec h0 = homogeneous(prob.bc);
-    BCRec h1 = homogeneous_bc(prob);
-    chk(h0.xlo == h1.xlo && h0.xhi == h1.xhi && h0.ylo == h1.ylo && h0.yhi == h1.yhi,
-        "homogeneous_bc_meme_types");
-    chk(h0.xlo_val == h1.xlo_val && h0.xhi_val == h1.xhi_val && h0.ylo_val == h1.ylo_val &&
-            h0.yhi_val == h1.yhi_val,
-        "homogeneous_bc_meme_valeurs");
-  }
+  static Box2D* dom_;
+  static Geometry* geom_;
+  static BoxArray* ba_;
+  static DistributionMapping* dm_;
+  static BCRec* bc_;
+};
+Box2D* EllipticProblemTest::dom_ = nullptr;
+Geometry* EllipticProblemTest::geom_ = nullptr;
+BoxArray* EllipticProblemTest::ba_ = nullptr;
+DistributionMapping* EllipticProblemTest::dm_ = nullptr;
+BCRec* EllipticProblemTest::bc_ = nullptr;
 
-  // (A) EllipticProblem : constructeur BCRec vs fabrique EllipticProblem.
+// (C) garde-fou eps : etat implicite actuel du stencil.
+TEST_F(EllipticProblemTest, default_eps_is_one) {
+  EXPECT_TRUE(EllipticProblem{}.eps == Real(1)) << "eps_implicite_vaut_1";
+}
+
+// (C bis) eps != 1 n'est pas supporte (stencil a coefficient constant) :
+// make_elliptic_solver doit LANCER plutot que de l'ignorer en silence.
+TEST_F(EllipticProblemTest, eps_not_one_throws) {
+  EllipticProblem prob_eps2{Real(2), *bc_, false};
+  EXPECT_THROW(
+      { GeometricMG bad = make_elliptic_solver<GeometricMG>(*geom_, *ba_, prob_eps2); },
+      std::invalid_argument)
+      << "eps_different_de_1_lance";
+}
+
+// homogeneous_bc(probleme) == homogeneous(probleme.bc), champ par champ.
+TEST_F(EllipticProblemTest, homogeneous_bc_matches_homogeneous_of_bc) {
+  BCRec mixed;
+  mixed.xlo = BCType::Dirichlet;
+  mixed.xlo_val = 3.0;
+  mixed.yhi = BCType::Foextrap;
+  EllipticProblem prob{Real(1), mixed, false};
+  BCRec h0 = homogeneous(prob.bc);
+  BCRec h1 = homogeneous_bc(prob);
+  EXPECT_TRUE(h0.xlo == h1.xlo && h0.xhi == h1.xhi && h0.ylo == h1.ylo && h0.yhi == h1.yhi)
+      << "homogeneous_bc_meme_types";
+  EXPECT_TRUE(h0.xlo_val == h1.xlo_val && h0.xhi_val == h1.xhi_val && h0.ylo_val == h1.ylo_val &&
+              h0.yhi_val == h1.yhi_val)
+      << "homogeneous_bc_meme_valeurs";
+}
+
+// (A) EllipticProblem : constructeur BCRec vs fabrique EllipticProblem -> phi bit-identique.
+TEST_F(EllipticProblemTest, factory_matches_bcrec_constructor_bit_identical) {
   auto solve_into = [&](auto& solver) {
     Array4 f = solver.rhs().fab(0).array();
     const Box2D v = solver.rhs().box(0);
-    for_each_cell(v, [=] POPS_HD(int i, int j) { f(i, j) = fr(i, j); });
+    for_each_cell(v, [=, geom = *geom_] POPS_HD(int i, int j) { f(i, j) = fr(geom, i, j); });
     solver.phi().set_val(0.0);
     solver.solve();
   };
 
-  GeometricMG mg_ref(geom, ba, bc);
-  EllipticProblem prob{Real(1), bc, true};  // nullspace_const : etiquette
-  GeometricMG mg_named = make_elliptic_solver<GeometricMG>(geom, ba, prob);
+  GeometricMG mg_ref(*geom_, *ba_, *bc_);
+  EllipticProblem prob{Real(1), *bc_, true};  // nullspace_const : etiquette
+  GeometricMG mg_named = make_elliptic_solver<GeometricMG>(*geom_, *ba_, prob);
   solve_into(mg_ref);
   solve_into(mg_named);
 
@@ -107,26 +127,28 @@ static int pops_run_test_elliptic_problem() {
   bool phi_bit_eq = true;
   const ConstArray4 pr = mg_ref.phi().fab(0).const_array();
   const ConstArray4 pn = mg_named.phi().fab(0).const_array();
-  for (int j = 0; j < N; ++j)
-    for (int i = 0; i < N; ++i)
+  for (int j = 0; j < kN; ++j)
+    for (int i = 0; i < kN; ++i)
       if (pr(i, j) != pn(i, j))
         phi_bit_eq = false;
-  chk(phi_bit_eq, "EllipticProblem_phi_bit_identique");
+  EXPECT_TRUE(phi_bit_eq) << "EllipticProblem_phi_bit_identique";
+}
 
-  // (B) FieldPostProcess : reference recopiee vs field_postprocess.
+// (B) FieldPostProcess : reference recopiee vs field_postprocess (Plus et Minus).
+TEST_F(EllipticProblemTest, field_postprocess_matches_reference_loop_bit_identical) {
   // phi connu (1 ghost) periodique.
-  MultiFab phi(ba, dm, 1, 1);
+  MultiFab phi(*ba_, *dm_, 1, 1);
   {
     Array4 p = phi.fab(0).array();
     const Box2D v = phi.box(0);
-    for_each_cell(v, [=] POPS_HD(int i, int j) { p(i, j) = fr(i, j); });
-    fill_ghosts(phi, dom, bc);
+    for_each_cell(v, [=, geom = *geom_] POPS_HD(int i, int j) { p(i, j) = fr(geom, i, j); });
+    fill_ghosts(phi, *dom_, *bc_);
   }
-  const Real cx = Real(1) / (2 * geom.dx());
-  const Real cy = Real(1) / (2 * geom.dy());
+  const Real cx = Real(1) / (2 * geom_->dx());
+  const Real cy = Real(1) / (2 * geom_->dy());
 
   // reference : recopie exacte de detail::coupler_grad_phi.
-  MultiFab ref(ba, dm, 3, 1);
+  MultiFab ref(*ba_, *dm_, 3, 1);
   {
     const ConstArray4 p = phi.fab(0).const_array();
     Array4 a = ref.fab(0).array();
@@ -139,7 +161,7 @@ static int pops_run_test_elliptic_problem() {
   }
 
   // nomme : GradSign::Plus, store_phi=true.
-  MultiFab plus(ba, dm, 3, 1);
+  MultiFab plus(*ba_, *dm_, 3, 1);
   field_postprocess(phi, plus, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Plus, true});
 
   bool plus_bit_eq = true;
@@ -153,11 +175,11 @@ static int pops_run_test_elliptic_problem() {
           if (ar(i, j, c) != ap(i, j, c))
             plus_bit_eq = false;
   }
-  chk(plus_bit_eq, "FieldPostProcess_Plus_bit_identique");
+  EXPECT_TRUE(plus_bit_eq) << "FieldPostProcess_Plus_bit_identique";
 
   // GradSign::Minus, store_phi=false : 2 composantes E = -grad phi (two_fluid).
   // chaque composante vaut -ref de la composante de gradient correspondante.
-  MultiFab minus(ba, dm, 2, 1);
+  MultiFab minus(*ba_, *dm_, 2, 1);
   field_postprocess(phi, minus, cx, cy, FieldPostProcess{FieldPostProcess::GradSign::Minus, false});
 
   bool minus_bit_eq = true;
@@ -173,13 +195,5 @@ static int pops_run_test_elliptic_problem() {
           minus_bit_eq = false;
       }
   }
-  chk(minus_bit_eq, "FieldPostProcess_Minus_egale_moins_grad");
-
-  if (fails == 0)
-    std::printf("OK test_elliptic_problem\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_elliptic_problem, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_elliptic_problem, "test_elliptic_problem"), 0);
+  EXPECT_TRUE(minus_bit_eq) << "FieldPostProcess_Minus_egale_moins_grad";
 }

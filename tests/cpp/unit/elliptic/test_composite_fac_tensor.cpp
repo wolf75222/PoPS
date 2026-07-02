@@ -13,7 +13,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
 
 #include <pops/mesh/layout/box_array.hpp>
@@ -64,17 +63,11 @@ static void fill(MultiFab& m, const Geometry& g, Setter s) {
   }
 }
 
-static int pops_run_test_composite_fac_tensor(int argc, char** argv) {
-  comm_init(&argc, &argv);
+// Pipeline MPI stateful unique (comm_init/comm_finalize + reductions all_reduce_max) : pas de
+// sections independantes a extraire, cf. rapport de conversion.
+TEST(test_composite_fac_tensor, full_tensor_composite_beats_coarse_only) {
+  comm_init();
   const int me = my_rank();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      if (me == 0)
-        std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
 
   const int n = 48, r = 2;
   Box2D dom = Box2D::from_extents(n, n);
@@ -119,7 +112,8 @@ static int pops_run_test_composite_fac_tensor(int argc, char** argv) {
   const Real rfac = fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*tol=*/1e-10);
   device_fence();
 
-  chk(std::isfinite(rfac) && rfac < 1e-6, "(convergence) FAC tenseur plein converge (residu -> 0)");
+  EXPECT_TRUE(std::isfinite(rfac) && rfac < 1e-6)
+      << "(convergence) FAC tenseur plein converge (residu -> 0), rfac=" << rfac;
 
   const int guard = 3;
   const int iIc0 = Ic0 + guard, iIc1 = Ic1 - guard;
@@ -159,19 +153,15 @@ static int pops_run_test_composite_fac_tensor(int argc, char** argv) {
         e_coarse, e_comp, e_coarse / std::fmax(e_comp, 1e-30), eg_optA, eg_comp,
         eg_optA / std::fmax(eg_comp, 1e-30));
 
-  chk(std::isfinite(e_comp) && std::isfinite(eg_comp), "erreurs finies");
-  chk(e_comp < 0.6 * e_coarse,
-      "(fidelite phi) patch fin plus precis que coarse-only (tenseur plein)");
-  chk(eg_comp < 0.5 * eg_optA,
-      "(fidelite grad phi) composite >> injection Option A (tenseur plein)");
+  EXPECT_TRUE(std::isfinite(e_comp) && std::isfinite(eg_comp)) << "erreurs finies";
+  EXPECT_TRUE(e_comp < 0.6 * e_coarse)
+      << "(fidelite phi) patch fin plus precis que coarse-only (tenseur plein), e_comp=" << e_comp
+      << " e_coarse=" << e_coarse;
+  EXPECT_TRUE(eg_comp < 0.5 * eg_optA)
+      << "(fidelite grad phi) composite >> injection Option A (tenseur plein), eg_comp=" << eg_comp
+      << " eg_optA=" << eg_optA;
 
-  fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
-  if (me == 0 && fails == 0)
+  if (me == 0)
     std::printf("OK test_composite_fac_tensor\n");
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_composite_fac_tensor, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_composite_fac_tensor, "test_composite_fac_tensor"), 0);
 }

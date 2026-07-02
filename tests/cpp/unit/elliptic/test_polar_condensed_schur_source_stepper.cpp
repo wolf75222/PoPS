@@ -29,7 +29,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/coupling/schur/source/polar_condensed_schur_source_stepper.hpp>
 
 #include <pops/mesh/index/box2d.hpp>
@@ -376,220 +375,237 @@ static double vel_rel_state_vs_ref(const MultiFab& st, const RefIntegrator& R, i
   return den > 0 ? std::sqrt(num / den) : std::sqrt(num);
 }
 
-static int pops_run_test_polar_condensed_schur_source_stepper(int argc, char** argv) {
-  comm_init(&argc, &argv);
-  const int me = my_rank();
-  long fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      if (me == 0)
-        std::printf("FAIL %s\n", w);
-      ++fails;
+// Fixture partageant l'anneau (r, theta), le champ Bz constant et le pas explicite stable estime
+// -- construction couteuse (grille 48x64 + PolarTensorKrylovSolver) faite UNE fois par suite via
+// SetUpTestSuite. Chaque TEST reconstruit son propre etat (st, phi) par make_state() : les sections
+// (A)-(D) sont independantes, seules les donnees geometriques/physiques immuables sont partagees.
+class PolarCondensedSchurSourceStepperTest : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    comm_init();
+    me_ = my_rank();
+    if (me_ == 0) {
+      std::printf("=== ETAGE SOURCE Schur POLAIRE (Voie A etape 2b) ===\n");
+      std::printf(
+          "Anneau r in [%.2f, %.2f], theta in [0, 2pi). PolarTensorKrylovSolver (RadialLine).\n",
+          kRmin, kRmax);
     }
-  };
 
-  std::printf("=== ETAGE SOURCE Schur POLAIRE (Voie A etape 2b) ===\n");
-  std::printf(
-      "Anneau r in [%.2f, %.2f], theta in [0, 2pi). PolarTensorKrylovSolver (RadialLine).\n", kRmin,
-      kRmax);
+    nr_ = 48;
+    nth_ = 64;
+    rho0_ = 1.5;
+    B0_ = 100.0;
+    alpha_ = 3.0;  // B0 = 100 : RAIDE (cyclotron eleve)
+    S_ = new struct Setup(nr_, nth_);
+    const double dr = static_cast<double>(S_->geom.dr());
+    const double ds_min = std::min(dr, kRmin * static_cast<double>(S_->geom.dtheta()));
+    const double w_plasma = std::sqrt(static_cast<double>(alpha_) * static_cast<double>(rho0_)) / ds_min;
+    const double w_max = std::max(static_cast<double>(B0_), w_plasma);
+    dt_stable_ = 0.5 / w_max;  // estimation prudente du pas explicite stable
+    if (me_ == 0)
+      std::printf("[setup] nr=%d nth=%d dr=%.4f B0=%.1f alpha=%.1f rho0=%.1f -> dt_stable~%.4e\n",
+                  nr_, nth_, dr, static_cast<double>(B0_), static_cast<double>(alpha_),
+                  static_cast<double>(rho0_), dt_stable_);
 
-  const int nr = 48, nth = 64;
-  const Real rho0 = 1.5, B0 = 100.0, alpha = 3.0;  // B0 = 100 : RAIDE (cyclotron eleve)
-  const Setup S(nr, nth);
-  const double dr = static_cast<double>(S.geom.dr());
-  const double ds_min = std::min(dr, kRmin * static_cast<double>(S.geom.dtheta()));
-  const double w_plasma =
-      std::sqrt(static_cast<double>(alpha) * static_cast<double>(rho0)) / ds_min;
-  const double w_max = std::max(static_cast<double>(B0), w_plasma);
-  const double dt_stable = 0.5 / w_max;  // estimation prudente du pas explicite stable
-  if (me == 0)
-    std::printf("[setup] nr=%d nth=%d dr=%.4f B0=%.1f alpha=%.1f rho0=%.1f -> dt_stable~%.4e\n", nr,
-                nth, dr, static_cast<double>(B0), static_cast<double>(alpha),
-                static_cast<double>(rho0), dt_stable);
+    vars_ = new VariableSet(fluid_vars(/*with_E=*/true));
+    c_rho_ = vars_->index_of(VariableRole::Density);
+    c_mx_ = vars_->index_of(VariableRole::MomentumX);
+    c_my_ = vars_->index_of(VariableRole::MomentumY);
 
-  const VariableSet vars = fluid_vars(/*with_E=*/true);
-  const int c_rho = vars.index_of(VariableRole::Density);
-  const int c_mx = vars.index_of(VariableRole::MomentumX);
-  const int c_my = vars.index_of(VariableRole::MomentumY);
+    bz_ = new MultiFab(S_->ba, S_->dm, 1, 1);
+    for (int li = 0; li < bz_->local_size(); ++li)
+      for_each_cell(bz_->box(li), ConstBzKernel{bz_->fab(li).array(), B0_});
+  }
 
-  auto make_state = [&](MultiFab& st, MultiFab& phi) {
-    for (int li = 0; li < st.local_size(); ++li)
-      for_each_cell(st.box(li), InitKernel{S.geom, st.fab(li).array(), phi.fab(li).array(), rho0,
-                                           c_rho, c_mx, c_my, vars.index_of(VariableRole::Energy)});
-  };
-  MultiFab bz(S.ba, S.dm, 1, 1);
-  for (int li = 0; li < bz.local_size(); ++li)
-    for_each_cell(bz.box(li), ConstBzKernel{bz.fab(li).array(), B0});
+  static void TearDownTestSuite() {
+    delete S_;
+    delete vars_;
+    delete bz_;
+    S_ = nullptr;
+    vars_ = nullptr;
+    bz_ = nullptr;
+    comm_finalize();
+  }
 
-  // ----------------------------------------------------------------------------------------------
-  // (A) RELATION IMPLICITE a GRAND dt : B v^{n+1} = v^n - dt grad_polar phi^{n+1} a la tolerance du solve.
-  // ----------------------------------------------------------------------------------------------
-  {
-    const Real dt = Real(50.0 * dt_stable);
-    MultiFab st(S.ba, S.dm, vars.size, 1), phi(S.ba, S.dm, 1, 1);
+  // Construit un etat initial (st, phi) frais sur la grille partagee (profils analytiques InitKernel).
+  void make_state(MultiFab& st, MultiFab& phi) const {
     st.set_val(0.0);
-    make_state(st, phi);
-    MultiFab vrn(S.ba, S.dm, 1, 0), vtn(S.ba, S.dm, 1, 0);
     for (int li = 0; li < st.local_size(); ++li)
       for_each_cell(st.box(li),
-                    detail::ExtractVelocityKernel{st.fab(li).const_array(), vrn.fab(li).array(),
-                                                  vtn.fab(li).array(), c_rho, c_mx, c_my});
-
-    PolarCondensedSchurSourceStepper stepper(vars, S.geom, S.ba, S.bc, alpha);
-    stepper.step(st, phi, bz, /*c_bz=*/0, /*theta=*/Real(1.0), dt);
-    const PolarKrylovResult kr = stepper.last_solve();
-
-    const double rimp =
-        implicit_residual(st, vrn, vtn, phi, S.geom, S.bc, B0, dt, c_rho, c_mx, c_my);
-    if (me == 0)
-      std::printf(
-          "(A) implicite : BiCGStab %s en %d iters (rel=%.2e) | max|B v - (v^n - dt grad_polar "
-          "phi)| = %.3e\n",
-          kr.converged ? "CONVERGE" : "ECHOUE", kr.iters, static_cast<double>(kr.rel_residual),
-          rimp);
-    chk(kr.converged, "A_solve_converge");
-    chk(rimp < 1e-6, "A_relation_implicite");
+                    InitKernel{S_->geom, st.fab(li).array(), phi.fab(li).array(), rho0_, c_rho_,
+                              c_mx_, c_my_, vars_->index_of(VariableRole::Energy)});
   }
 
-  // ----------------------------------------------------------------------------------------------
-  // (B) STABILITE vs EXPLOSION explicite a GRAND dt, sur K PAS.
-  // ----------------------------------------------------------------------------------------------
-  {
-    const Real dt = Real(8.0 * dt_stable);
-    const int K = 12;
-    MultiFab st(S.ba, S.dm, vars.size, 1), phi(S.ba, S.dm, 1, 1);
-    st.set_val(0.0);
-    make_state(st, phi);
-    const double v0 = vel_l2(st, c_rho, c_mx, c_my);
+  static int me_;
+  static int nr_, nth_;
+  static Real rho0_, B0_, alpha_;
+  static struct Setup* S_;
+  static double dt_stable_;
+  static VariableSet* vars_;
+  static int c_rho_, c_mx_, c_my_;
+  static MultiFab* bz_;
+};
+int PolarCondensedSchurSourceStepperTest::me_ = 0;
+int PolarCondensedSchurSourceStepperTest::nr_ = 0;
+int PolarCondensedSchurSourceStepperTest::nth_ = 0;
+Real PolarCondensedSchurSourceStepperTest::rho0_ = 0;
+Real PolarCondensedSchurSourceStepperTest::B0_ = 0;
+Real PolarCondensedSchurSourceStepperTest::alpha_ = 0;
+struct Setup* PolarCondensedSchurSourceStepperTest::S_ = nullptr;
+double PolarCondensedSchurSourceStepperTest::dt_stable_ = 0;
+VariableSet* PolarCondensedSchurSourceStepperTest::vars_ = nullptr;
+int PolarCondensedSchurSourceStepperTest::c_rho_ = 0;
+int PolarCondensedSchurSourceStepperTest::c_mx_ = 0;
+int PolarCondensedSchurSourceStepperTest::c_my_ = 0;
+MultiFab* PolarCondensedSchurSourceStepperTest::bz_ = nullptr;
 
-    PolarCondensedSchurSourceStepper stepper(vars, S.geom, S.ba, S.bc, alpha);
-    for (int k = 0; k < K; ++k)
-      stepper.step(st, phi, bz, 0, Real(1.0), dt);
-    const double v_schur = vel_l2(st, c_rho, c_mx, c_my);
+// (A) RELATION IMPLICITE reconstruite a GRAND dt : apres step(), v^{n+1} satisfait
+// B v^{n+1} = v^n - dt grad_polar phi^{n+1} a la tolerance du solve.
+TEST_F(PolarCondensedSchurSourceStepperTest, implicit_relation_holds_at_large_dt) {
+  const Real dt = Real(50.0 * dt_stable_);
+  MultiFab st(S_->ba, S_->dm, vars_->size, 1), phi(S_->ba, S_->dm, 1, 1);
+  make_state(st, phi);
+  MultiFab vrn(S_->ba, S_->dm, 1, 0), vtn(S_->ba, S_->dm, 1, 0);
+  for (int li = 0; li < st.local_size(); ++li)
+    for_each_cell(st.box(li),
+                  detail::ExtractVelocityKernel{st.fab(li).const_array(), vrn.fab(li).array(),
+                                                vtn.fab(li).array(), c_rho_, c_mx_, c_my_});
 
-    MultiFab st0(S.ba, S.dm, vars.size, 1), phi0(S.ba, S.dm, 1, 1);
-    st0.set_val(0.0);
-    make_state(st0, phi0);
-    RefIntegrator expl(const_cast<Setup&>(S), B0, alpha, rho0);
-    load_ref_from_state(expl, st0, phi0, c_rho, c_mx, c_my);
-    for (int k = 0; k < K; ++k)
-      expl.euler_step(dt);
-    double v_expl = 0;
-    {
-      sync_host();
-      double s = 0;
-      for (int li = 0; li < expl.vr.local_size(); ++li) {
-        const ConstArray4 vr = expl.vr.fab(li).const_array(), vt = expl.vt.fab(li).const_array();
-        const Box2D b = expl.vr.box(li);
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            s += static_cast<double>(vr(i, j, 0)) * vr(i, j, 0) +
-                 static_cast<double>(vt(i, j, 0)) * vt(i, j, 0);
-      }
-      v_expl = std::sqrt(all_reduce_sum(s));
-    }
-    if (me == 0)
-      std::printf(
-          "(B) dt=%.3e (=8x dt_stable), K=%d pas : ||v0||=%.3e | Schur ||v||=%.3e (x%.2f) | "
-          "Euler ||v||=%.3e (x%.2e)\n",
-          static_cast<double>(dt), K, v0, v_schur, v_schur / v0, v_expl, v_expl / v0);
-    chk(v_schur < 5.0 * v0, "B_schur_stable_borne");
-    chk(std::isfinite(v_schur), "B_schur_fini");
-    chk(v_expl > 100.0 * v0, "B_explicite_explose");
-    chk(v_expl > 50.0 * v_schur, "B_explicite_pire_que_schur");
-  }
+  PolarCondensedSchurSourceStepper stepper(*vars_, S_->geom, S_->ba, S_->bc, alpha_);
+  stepper.step(st, phi, *bz_, /*c_bz=*/0, /*theta=*/Real(1.0), dt);
+  const PolarKrylovResult kr = stepper.last_solve();
 
-  // ----------------------------------------------------------------------------------------------
-  // (C) ACCORD avec une REFERENCE fine-dt (RK4) a dt MODERE + ORDRE 1 en dt.
-  // ----------------------------------------------------------------------------------------------
-  {
-    auto schur_vs_ref = [&](Real dt) -> double {
-      const int Nsub = 256;
-      MultiFab st0(S.ba, S.dm, vars.size, 1), phi0(S.ba, S.dm, 1, 1);
-      st0.set_val(0.0);
-      make_state(st0, phi0);
-      RefIntegrator ref(const_cast<Setup&>(S), B0, alpha, rho0);
-      load_ref_from_state(ref, st0, phi0, c_rho, c_mx, c_my);
-      const Real h = dt / Real(Nsub);
-      for (int s = 0; s < Nsub; ++s)
-        ref.rk4_step(h);
-
-      MultiFab st(S.ba, S.dm, vars.size, 1), phi(S.ba, S.dm, 1, 1);
-      st.set_val(0.0);
-      make_state(st, phi);
-      PolarCondensedSchurSourceStepper stepper(vars, S.geom, S.ba, S.bc, alpha);
-      stepper.step(st, phi, bz, 0, Real(1.0), dt);
-      return vel_rel_state_vs_ref(st, ref, c_rho, c_mx, c_my);
-    };
-
-    const Real dtC = Real(0.5 * dt_stable);
-    const double e1 = schur_vs_ref(dtC);
-    const double e2 = schur_vs_ref(Real(0.5) * dtC);
-    const double ratio = e2 > 0 ? e1 / e2 : 0;
-    if (me == 0)
-      std::printf(
-          "(C) reference RK4 fine : err(dt)=%.3e err(dt/2)=%.3e ratio=%.2f (ordre 1 attendu ~2)\n",
-          e1, e2, ratio);
-    chk(e1 < 5e-2, "C_accord_reference_modere");
-    chk(ratio > 1.5, "C_ordre_un_decroissance");
-  }
-
-  // ----------------------------------------------------------------------------------------------
-  // (D) REGRESSION seam theta (adc_cases ADC-62) : un BCRec "a la System::poisson_bc" (Dirichlet sur
-  //     les QUATRE faces, y compris theta) doit produire un pas BIT-IDENTIQUE au BCRec canonique
-  //     (theta periodique) : l'anneau n'a pas de bord physique azimutal, le stepper et le solveur
-  //     NORMALISENT (phi_bc / force_theta_periodic). Avant le fix, les ghosts azimutaux de phi
-  //     etaient remplis par reflexion impaire (ghost = -phi) au seam theta=0/2pi -> dipole parasite
-  //     O(phi/(r dtheta)) dans mom_r aux deux colonnes du seam (||R_eq||~83 du cas Hoffart polaire,
-  //     divergence a t~0.01). theta=0.5 pour exercer aussi l'extrapolation pas-plein.
-  // ----------------------------------------------------------------------------------------------
-  {
-    const Real dt = Real(8.0 * dt_stable);
-    auto one_step = [&](const BCRec& bc, MultiFab& st, MultiFab& phi) {
-      st.set_val(0.0);
-      make_state(st, phi);
-      PolarCondensedSchurSourceStepper stepper(vars, S.geom, S.ba, bc, alpha);
-      stepper.step(st, phi, bz, 0, Real(0.5), dt);
-    };
-    MultiFab stP(S.ba, S.dm, vars.size, 1), phiP(S.ba, S.dm, 1, 1);
-    one_step(S.bc, stP, phiP);  // canonique : Dirichlet radial, theta periodique
-    BCRec bcSys = S.bc;         // "System::poisson_bc" : Dirichlet sur les 4 faces
-    bcSys.ylo = bcSys.yhi = BCType::Dirichlet;
-    bcSys.ylo_val = bcSys.yhi_val = 0.0;
-    MultiFab stD(S.ba, S.dm, vars.size, 1), phiD(S.ba, S.dm, 1, 1);
-    one_step(bcSys, stD, phiD);
-
-    sync_host();
-    double dmax_st = 0, dmax_phi = 0;
-    for (int li = 0; li < stP.local_size(); ++li) {
-      const ConstArray4 a = stP.fab(li).const_array(), b = stD.fab(li).const_array();
-      const ConstArray4 pa = phiP.fab(li).const_array(), pb = phiD.fab(li).const_array();
-      const Box2D bx = stP.box(li);
-      for (int j = bx.lo[1]; j <= bx.hi[1]; ++j)
-        for (int i = bx.lo[0]; i <= bx.hi[0]; ++i) {
-          for (int c = 0; c < vars.size; ++c)
-            dmax_st = std::max(dmax_st, std::abs(static_cast<double>(a(i, j, c)) - b(i, j, c)));
-          dmax_phi = std::max(dmax_phi, std::abs(static_cast<double>(pa(i, j, 0)) - pb(i, j, 0)));
-        }
-    }
-    dmax_st = all_reduce_max(dmax_st);
-    dmax_phi = all_reduce_max(dmax_phi);
-    if (me == 0)
-      std::printf(
-          "(D) seam theta : max|U_dir4 - U_per| = %.3e | max|phi_dir4 - phi_per| = %.3e "
-          "(0 attendu, BC theta normalisee)\n",
-          dmax_st, dmax_phi);
-    chk(dmax_st == 0.0, "D_seam_etat_bit_identique");
-    chk(dmax_phi == 0.0, "D_seam_phi_bit_identique");
-  }
-
-  fails = static_cast<long>(all_reduce_max(static_cast<double>(fails)));
-  if (me == 0 && fails == 0)
-    std::printf("OK test_polar_condensed_schur_source_stepper\n");
-  comm_finalize();
-  return fails == 0 ? 0 : 1;
+  const double rimp = implicit_residual(st, vrn, vtn, phi, S_->geom, S_->bc, B0_, dt, c_rho_, c_mx_,
+                                        c_my_);
+  if (me_ == 0)
+    std::printf(
+        "(A) implicite : BiCGStab %s en %d iters (rel=%.2e) | max|B v - (v^n - dt grad_polar "
+        "phi)| = %.3e\n",
+        kr.converged ? "CONVERGE" : "ECHOUE", kr.iters, static_cast<double>(kr.rel_residual), rimp);
+  EXPECT_TRUE(kr.converged) << "A_solve_converge";
+  EXPECT_TRUE(rimp < 1e-6) << "A_relation_implicite: rimp=" << rimp;
 }
 
-TEST(test_polar_condensed_schur_source_stepper, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_condensed_schur_source_stepper, "test_polar_condensed_schur_source_stepper"), 0);
+// (B) STABILITE vs EXPLOSION explicite, a GRAND dt (50x le pas explicite stable, K pas) : l'Euler
+// explicite EXPLOSE (||v|| croit de plusieurs ordres) ; le Schur garde ||v|| BORNEE.
+TEST_F(PolarCondensedSchurSourceStepperTest, schur_stays_bounded_while_explicit_euler_explodes) {
+  const Real dt = Real(8.0 * dt_stable_);
+  const int K = 12;
+  MultiFab st(S_->ba, S_->dm, vars_->size, 1), phi(S_->ba, S_->dm, 1, 1);
+  make_state(st, phi);
+  const double v0 = vel_l2(st, c_rho_, c_mx_, c_my_);
+
+  PolarCondensedSchurSourceStepper stepper(*vars_, S_->geom, S_->ba, S_->bc, alpha_);
+  for (int k = 0; k < K; ++k)
+    stepper.step(st, phi, *bz_, 0, Real(1.0), dt);
+  const double v_schur = vel_l2(st, c_rho_, c_mx_, c_my_);
+
+  MultiFab st0(S_->ba, S_->dm, vars_->size, 1), phi0(S_->ba, S_->dm, 1, 1);
+  make_state(st0, phi0);
+  RefIntegrator expl(*S_, B0_, alpha_, rho0_);
+  load_ref_from_state(expl, st0, phi0, c_rho_, c_mx_, c_my_);
+  for (int k = 0; k < K; ++k)
+    expl.euler_step(dt);
+  double v_expl = 0;
+  {
+    sync_host();
+    double s = 0;
+    for (int li = 0; li < expl.vr.local_size(); ++li) {
+      const ConstArray4 vr = expl.vr.fab(li).const_array(), vt = expl.vt.fab(li).const_array();
+      const Box2D b = expl.vr.box(li);
+      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+          s += static_cast<double>(vr(i, j, 0)) * vr(i, j, 0) +
+               static_cast<double>(vt(i, j, 0)) * vt(i, j, 0);
+    }
+    v_expl = std::sqrt(all_reduce_sum(s));
+  }
+  if (me_ == 0)
+    std::printf(
+        "(B) dt=%.3e (=8x dt_stable), K=%d pas : ||v0||=%.3e | Schur ||v||=%.3e (x%.2f) | "
+        "Euler ||v||=%.3e (x%.2e)\n",
+        static_cast<double>(dt), K, v0, v_schur, v_schur / v0, v_expl, v_expl / v0);
+  EXPECT_TRUE(v_schur < 5.0 * v0) << "B_schur_stable_borne: v_schur=" << v_schur << " v0=" << v0;
+  EXPECT_TRUE(std::isfinite(v_schur)) << "B_schur_fini: v_schur=" << v_schur;
+  EXPECT_TRUE(v_expl > 100.0 * v0) << "B_explicite_explose: v_expl=" << v_expl << " v0=" << v0;
+  EXPECT_TRUE(v_expl > 50.0 * v_schur)
+      << "B_explicite_pire_que_schur: v_expl=" << v_expl << " v_schur=" << v_schur;
+}
+
+// (C) ACCORD AVEC UNE REFERENCE fine-dt (RK4) a dt MODERE : le Schur (theta=1, ordre 1) en est
+// proche et l'ecart DECROIT a l'ordre 1 (dt, dt/2 -> ratio > 1.5).
+TEST_F(PolarCondensedSchurSourceStepperTest, matches_fine_dt_rk4_reference_at_first_order) {
+  auto schur_vs_ref = [&](Real dt) -> double {
+    const int Nsub = 256;
+    MultiFab st0(S_->ba, S_->dm, vars_->size, 1), phi0(S_->ba, S_->dm, 1, 1);
+    make_state(st0, phi0);
+    RefIntegrator ref(*S_, B0_, alpha_, rho0_);
+    load_ref_from_state(ref, st0, phi0, c_rho_, c_mx_, c_my_);
+    const Real h = dt / Real(Nsub);
+    for (int s = 0; s < Nsub; ++s)
+      ref.rk4_step(h);
+
+    MultiFab st(S_->ba, S_->dm, vars_->size, 1), phi(S_->ba, S_->dm, 1, 1);
+    make_state(st, phi);
+    PolarCondensedSchurSourceStepper stepper(*vars_, S_->geom, S_->ba, S_->bc, alpha_);
+    stepper.step(st, phi, *bz_, 0, Real(1.0), dt);
+    return vel_rel_state_vs_ref(st, ref, c_rho_, c_mx_, c_my_);
+  };
+
+  const Real dtC = Real(0.5 * dt_stable_);
+  const double e1 = schur_vs_ref(dtC);
+  const double e2 = schur_vs_ref(Real(0.5) * dtC);
+  const double ratio = e2 > 0 ? e1 / e2 : 0;
+  if (me_ == 0)
+    std::printf(
+        "(C) reference RK4 fine : err(dt)=%.3e err(dt/2)=%.3e ratio=%.2f (ordre 1 attendu ~2)\n",
+        e1, e2, ratio);
+  EXPECT_TRUE(e1 < 5e-2) << "C_accord_reference_modere: e1=" << e1;
+  EXPECT_TRUE(ratio > 1.5) << "C_ordre_un_decroissance: ratio=" << ratio;
+}
+
+// (D) REGRESSION seam theta (adc_cases ADC-62) : un BCRec "a la System::poisson_bc" (Dirichlet sur
+// les QUATRE faces, y compris theta) doit produire un pas BIT-IDENTIQUE au BCRec canonique (theta
+// periodique) : l'anneau n'a pas de bord physique azimutal, le stepper et le solveur NORMALISENT
+// (phi_bc / force_theta_periodic). Avant le fix, les ghosts azimutaux de phi etaient remplis par
+// reflexion impaire (ghost = -phi) au seam theta=0/2pi -> dipole parasite O(phi/(r dtheta)) dans
+// mom_r aux deux colonnes du seam (||R_eq||~83 du cas Hoffart polaire, divergence a t~0.01).
+// theta=0.5 pour exercer aussi l'extrapolation pas-plein.
+TEST_F(PolarCondensedSchurSourceStepperTest, dirichlet_theta_bc_matches_periodic_seam_bit_identical) {
+  const Real dt = Real(8.0 * dt_stable_);
+  auto one_step = [&](const BCRec& bc, MultiFab& st, MultiFab& phi) {
+    make_state(st, phi);
+    PolarCondensedSchurSourceStepper stepper(*vars_, S_->geom, S_->ba, bc, alpha_);
+    stepper.step(st, phi, *bz_, 0, Real(0.5), dt);
+  };
+  MultiFab stP(S_->ba, S_->dm, vars_->size, 1), phiP(S_->ba, S_->dm, 1, 1);
+  one_step(S_->bc, stP, phiP);  // canonique : Dirichlet radial, theta periodique
+  BCRec bcSys = S_->bc;         // "System::poisson_bc" : Dirichlet sur les 4 faces
+  bcSys.ylo = bcSys.yhi = BCType::Dirichlet;
+  bcSys.ylo_val = bcSys.yhi_val = 0.0;
+  MultiFab stD(S_->ba, S_->dm, vars_->size, 1), phiD(S_->ba, S_->dm, 1, 1);
+  one_step(bcSys, stD, phiD);
+
+  sync_host();
+  double dmax_st = 0, dmax_phi = 0;
+  for (int li = 0; li < stP.local_size(); ++li) {
+    const ConstArray4 a = stP.fab(li).const_array(), b = stD.fab(li).const_array();
+    const ConstArray4 pa = phiP.fab(li).const_array(), pb = phiD.fab(li).const_array();
+    const Box2D bx = stP.box(li);
+    for (int j = bx.lo[1]; j <= bx.hi[1]; ++j)
+      for (int i = bx.lo[0]; i <= bx.hi[0]; ++i) {
+        for (int c = 0; c < vars_->size; ++c)
+          dmax_st = std::max(dmax_st, std::abs(static_cast<double>(a(i, j, c)) - b(i, j, c)));
+        dmax_phi = std::max(dmax_phi, std::abs(static_cast<double>(pa(i, j, 0)) - pb(i, j, 0)));
+      }
+  }
+  dmax_st = all_reduce_max(dmax_st);
+  dmax_phi = all_reduce_max(dmax_phi);
+  if (me_ == 0)
+    std::printf(
+        "(D) seam theta : max|U_dir4 - U_per| = %.3e | max|phi_dir4 - phi_per| = %.3e "
+        "(0 attendu, BC theta normalisee)\n",
+        dmax_st, dmax_phi);
+  EXPECT_TRUE(dmax_st == 0.0) << "D_seam_etat_bit_identique: dmax_st=" << dmax_st;
+  EXPECT_TRUE(dmax_phi == 0.0) << "D_seam_phi_bit_identique: dmax_phi=" << dmax_phi;
 }

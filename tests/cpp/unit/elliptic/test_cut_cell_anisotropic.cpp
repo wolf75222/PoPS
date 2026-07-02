@@ -11,7 +11,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/geometry/geometry.hpp>
@@ -70,16 +69,8 @@ static double order(double e1, double e2, int n1, int n2) {
   return std::log(e1 / e2) / std::log(double(n2) / n1);
 }
 
-static int pops_run_test_cut_cell_anisotropic() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  // (A) anisotrope eps_x=1.5, eps_y=0.7 : convergence cut-cell ordre ~2 en L2.
+// (A) anisotrope eps_x=1.5, eps_y=0.7 : convergence cut-cell ordre ~2 en L2.
+TEST(test_cut_cell_anisotropic, aniso_order2_l2) {
   const double ex = 1.5, ey = 0.7;
   const double a128 = solve_err_aniso(128, ex, ey);
   const double a256 = solve_err_aniso(256, ex, ey);
@@ -87,10 +78,13 @@ static int pops_run_test_cut_cell_anisotropic() {
   const double o = order(a128, a512, 128, 512);
   std::printf("cut-cell anisotrope (ex=%.1f ey=%.1f) L2 : %.3e %.3e %.3e  ordre=%.2f\n", ex, ey,
               a128, a256, a512, o);
-  chk(o > 1.7, "cutcell_aniso_ordre2_L2");
-  chk(std::isfinite(a512) && a512 > 0, "cutcell_aniso_fini");
+  EXPECT_TRUE(o > 1.7) << "cutcell_aniso_ordre2_L2 (order=" << o << ")";
+  EXPECT_TRUE(std::isfinite(a512) && a512 > 0)
+      << "cutcell_aniso_fini (a512=" << a512 << ")";
+}
 
-  // (B) non-regression : eps_x=eps_y=1 (degenere) == cut-cell sans eps (operateur lap, f=-4).
+// (B) non-regression : eps_x=eps_y=1 (degenere) == cut-cell sans eps (operateur lap, f=-4).
+TEST(test_cut_cell_anisotropic, degenerate_matches_isotropic) {
   const int nc = 256;
   GeometricMG mg_a = make_mg(nc);
   mg_a.set_epsilon_anisotropic([](Real, Real) { return Real(1); },
@@ -111,13 +105,5 @@ static int pops_run_test_cut_cell_anisotropic() {
     for (int i = 0; i < nc; ++i)
       gap = std::max(gap, std::fabs(pa(i, j) - pp(i, j)));
   std::printf("cut-cell : eps_x=eps_y=1 vs sans eps, ecart max = %.3e\n", gap);
-  chk(gap < 1e-12, "cutcell_aniso_degenere_non_regression");
-
-  if (fails == 0)
-    std::printf("OK test_cut_cell_anisotropic\n");
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_cut_cell_anisotropic, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_cut_cell_anisotropic, "test_cut_cell_anisotropic"), 0);
+  EXPECT_TRUE(gap < 1e-12) << "cutcell_aniso_degenere_non_regression (gap=" << gap << ")";
 }

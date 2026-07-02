@@ -40,10 +40,15 @@
 // parite tient cross-rang ; le cross-rang A=I est par ailleurs couvert par test_mpi_polar_schur).
 // Enregistre serie (pops_add_test). Independant du backend (header-only, propriete algebrique ; tous les
 // kernels du chemin sont des foncteurs nommes device-clean).
+//
+// (A)-(D) sont des sections INDEPENDANTES du contrat (chacune construit son propre solveur mono-box et
+// multi-box) -> un TEST_F par section. comm_init/comm_finalize sont pilotes UNE fois par la fixture
+// (SetUpTestSuite/TearDownTestSuite) : Kokkos, lui, s'auto-initialise paresseusement des la premiere
+// allocation (cf. include/pops/core/foundation/kokkos_env.hpp), donc l'ancien bloc explicite
+// Kokkos::initialize/finalize de ce fichier est redondant avec ce garde-fou partage et est retire ici.
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -58,10 +63,6 @@
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
-
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
 
 using namespace pops;
 
@@ -280,171 +281,174 @@ static double err_l2(const MultiFab& phi, const PolarGeometry& g, Problem prob, 
   return std::sqrt(l2 / vol);
 }
 
-static int pops_run_test_polar_schur_multibox(int argc, char** argv) {
-  comm_init(&argc, &argv);
-  // `ok` declare AVANT le bloc Kokkos-garde : sous POPS_HAS_KOKKOS la paire init/finalize ouvre
-  // un bloc { } autour du corps. Le `return ok ? 0 : 1;` final est APRES la fermeture de ce bloc,
-  // donc `ok` doit vivre dans la portee de main() pour rester visible dans LES DEUX builds.
-  bool ok = true;
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::initialize(argc, argv);
-  {
-#endif
-    const int me = my_rank();
-    // CIBLE : MULTI-BOX intra-rang (a np=1 : 8 boites / 2x2 tiles sur UN rang). Les SOLVES et err_l2 sont
-    // COLLECTIFS (appeles sur tous les rangs) -> le test reste correct si lance sous MPI (la parite tient
-    // aussi cross-rang, le cross-term multi-box etant alors reparti). Les affichages et le verdict sont
-    // GATES sur le rang 0 (les checks restent evalues partout : meme valeurs globales -> meme decision).
-    if (me == 0)
+namespace {
+
+// Fixture partageant la geometrie de l'anneau (r, theta) et le rang courant entre les 4 sections (A)-(D).
+// comm_init/comm_finalize sont pilotes UNE fois pour tout le binaire de test (idempotents : no-op si
+// deja actifs ou si MPI n'est pas compile). Chaque TEST construit ses propres solveurs/MultiFab (les
+// sections sont independantes : aucun etat de solve n'est partage).
+class PolarSchurMultibox : public ::testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    comm_init();
+    me_ = my_rank();
+    nr_ = 48;
+    nth_ = 96;
+    m_ = 3;
+    dom_ = new Box2D(Box2D::from_extents(nr_, nth_));
+    g_ = new PolarGeometry{*dom_, kRmin, kRmax};
+    if (me_ == 0)
       std::printf(
           "=== PARITE MULTI-BOX (plusieurs boites par rang) du Schur polaire tensoriel ===\n"
           "Anneau r in [%.2f, %.2f], theta in [0, 2pi). Cible : plusieurs boites LOCALES (np=1).\n",
           kRmin, kRmax);
-    auto chk = [&](bool c, const char* w) {
-      if (!c) {
-        if (me == 0)
-          std::printf("  ECHEC %s\n", w);
-        ok = false;
-      }
-    };
-    // Sortie GATEE sur le rang 0 (les checks restent evalues partout : memes scalaires GLOBAUX -> meme
-    // decision). Macro plutot que lambda variadique pour eviter -Wformat-security (printf indirect).
-#define SAY(...)                \
-  do {                          \
-    if (me == 0)                \
-      std::printf(__VA_ARGS__); \
-  } while (0)
-
-    const int nr = 48, nth = 96, m = 3;
-    Box2D dom = Box2D::from_extents(nr, nth);
-    PolarGeometry g{dom, kRmin, kRmax};
-
-    // Tenseur PLEIN NON SYMETRIQUE (cf. test_polar_tensor_elliptic_mms : defini positif en partie sym).
-    const double arr = 1.4, att = 0.8, art = 0.5, atr = -0.3;
-
-    // ---------------------------------------------------------------------------------------------
-    // (A) PARITE TENSEUR (TERMES CROISES) THETA-SPLIT (8 boites) vs MONO-BOX, precond RadialLine.
-    //     Exerce le COIN du 9-points cross-box (les ghosts diagonaux p(i+-1, j+-1) des termes croises
-    //     traversent une frontiere de box theta -> remplis par fill_boundary, coins inclus).
-    // ---------------------------------------------------------------------------------------------
-    SAY("\n--- (A) Tenseur croise : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
-    {
-      BoxArray ba_mono(std::vector<Box2D>{dom});
-      MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
-      PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m, arr, art, atr, att,
-                                          PolarPrecond::RadialLine, phi_ref);
-      const double err_ref = err_l2(phi_ref, g, Problem::Dirichlet, m);
-      chk(kr_ref.converged, "A_mono_converge");
-
-      BoxArray ba8 = theta_split(nr, nth, 8);
-      MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
-      PolarKrylovResult kr8 = solve_mb(g, ba8, Problem::Dirichlet, m, arr, art, atr, att,
-                                       PolarPrecond::RadialLine, phi8);
-      const double err8 = err_l2(phi8, g, Problem::Dirichlet, m);
-      const double derr = std::fabs(err8 - err_ref);
-      SAY("  mono : iters=%d err=%.6e | 8 boites theta : iters=%d err=%.6e | d=%.3e\n",
-          kr_ref.iters, err_ref, kr8.iters, err8, derr);
-      chk(kr8.converged, "A_multibox_converge");
-      chk(derr <= 1e-8, "A_multibox_err_matches_mono");  // coin 9-points cross-box correct
-    }
-
-    // ---------------------------------------------------------------------------------------------
-    // (B) PARITE 2D TILING (coupe r ET theta) avec precond JACOBI vs mono-box (Jacobi aussi). Vrai pavage
-    //     2D (2 en r x 2 en theta = 4 boites) : exerce les halos en r, en theta, ET en diagonale. C'est le
-    //     chemin "multi-box COMPLET" (Jacobi = par cellule, sans contrainte de layout). Tenseur croise.
-    // ---------------------------------------------------------------------------------------------
-    SAY("\n--- (B) Pavage 2D (coupe r ET theta, 4 boites) vs mono-box [Jacobi] ---\n");
-    {
-      BoxArray ba_mono(std::vector<Box2D>{dom});
-      MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
-      PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m, arr, art, atr, att,
-                                          PolarPrecond::Jacobi, phi_ref);
-      const double err_ref = err_l2(phi_ref, g, Problem::Dirichlet, m);
-      chk(kr_ref.converged, "B_mono_jacobi_converge");
-
-      BoxArray tile = tile_2d(nr, nth, 2, 2);  // 4 boites : coupe r ET theta
-      MultiFab phit(tile, rr_dm(tile), 1, 1);
-      PolarKrylovResult krt =
-          solve_mb(g, tile, Problem::Dirichlet, m, arr, art, atr, att, PolarPrecond::Jacobi, phit);
-      const double errt = err_l2(phit, g, Problem::Dirichlet, m);
-      const double derr = std::fabs(errt - err_ref);
-      SAY("  mono : iters=%d err=%.6e | 2x2 tiles : iters=%d err=%.6e | d=%.3e\n", kr_ref.iters,
-          err_ref, krt.iters, errt, derr);
-      chk(krt.converged, "B_tile2d_converge");
-      chk(derr <= 1e-8, "B_tile2d_err_matches_mono");  // halos r/theta/diagonale corrects
-    }
-
-    // ---------------------------------------------------------------------------------------------
-    // (C) GARDE-FOU DE LAYOUT : un pavage qui COUPE r sous RadialLine DOIT lever (Thomas en r ne franchit
-    //     pas une frontiere de box). Resultat CLAIR (pas de faux silencieux). Le repli est Jacobi (cas B).
-    // ---------------------------------------------------------------------------------------------
-    SAY("\n--- (C) Garde-fou : layout coupant r sous RadialLine -> doit lever ---\n");
-    {
-      BCRec bc;
-      bc.xlo = bc.xhi = BCType::Dirichlet;
-      bc.ylo = bc.yhi = BCType::Periodic;
-      BoxArray tile = tile_2d(nr, nth, 2, 1);  // coupe r seulement (2 boites en r)
-      bool threw = false;
-      try {
-        PolarTensorKrylovSolver bad(g, tile, bc, PolarPrecond::RadialLine);
-        (void)bad;
-      } catch (const std::runtime_error&) {
-        threw = true;
-      }
-      SAY("  RadialLine + coupe-r : %s\n", threw ? "throw (attendu)" : "PAS de throw (BUG)");
-      chk(threw, "C_radialline_rcut_throws");
-
-      // Le MEME layout coupant r sous JACOBI ne doit PAS lever (sans contrainte de layout).
-      bool threw_jac = false;
-      try {
-        PolarTensorKrylovSolver good(g, tile, bc, PolarPrecond::Jacobi);
-        (void)good;
-      } catch (const std::runtime_error&) {
-        threw_jac = true;
-      }
-      SAY("  Jacobi + coupe-r     : %s\n", threw_jac ? "throw (BUG)" : "OK (pas de contrainte)");
-      chk(!threw_jac, "C_jacobi_rcut_ok");
-    }
-
-    // ---------------------------------------------------------------------------------------------
-    // (D) PARITE NEUMANN (jauge, project_mean multi-box) theta-split (8 boites) vs mono-box [RadialLine].
-    //     L'operateur pure-Neumann est singulier : project_mean accumule sum/vol sur TOUTES les boites
-    //     locales puis all_reduit. Multi-box mono-rang : verifie la jauge coherente sur plusieurs boites.
-    // ---------------------------------------------------------------------------------------------
-    SAY("\n--- (D) Neumann (jauge) : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
-    {
-      const int mN = 2;
-      BoxArray ba_mono(std::vector<Box2D>{dom});
-      MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
-      PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
-                                          PolarPrecond::RadialLine, phi_ref);
-      const double err_ref = err_l2(phi_ref, g, Problem::Neumann, mN);
-      chk(kr_ref.converged, "D_mono_neumann_converge");
-
-      BoxArray ba8 = theta_split(nr, nth, 8);
-      MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
-      PolarKrylovResult kr8 = solve_mb(g, ba8, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
-                                       PolarPrecond::RadialLine, phi8);
-      const double err8 = err_l2(phi8, g, Problem::Neumann, mN);
-      const double derr = std::fabs(err8 - err_ref);
-      SAY("  mono : iters=%d err=%.6e | 8 boites theta : iters=%d err=%.6e | d=%.3e\n",
-          kr_ref.iters, err_ref, kr8.iters, err8, derr);
-      chk(kr8.converged, "D_multibox_neumann_converge");
-      chk(derr <= 1e-8, "D_multibox_neumann_err_matches_mono");  // jauge multi-box coherente
-    }
-
-    SAY("\n=== VERDICT : %s ===\n", ok ? "SUCCESS" : "ECHEC");
-    if (ok)
-      SAY("OK test_polar_schur_multibox\n");
-#if defined(POPS_HAS_KOKKOS)
   }
-  Kokkos::finalize();
-#endif
-  comm_finalize();
-  return ok ? 0 : 1;
-}
-#undef SAY
 
-TEST(test_polar_schur_multibox, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_polar_schur_multibox, "test_polar_schur_multibox"), 0);
+  static void TearDownTestSuite() {
+    delete g_;
+    g_ = nullptr;
+    delete dom_;
+    dom_ = nullptr;
+    comm_finalize();
+  }
+
+  static int me_;
+  static int nr_, nth_, m_;
+  static Box2D* dom_;
+  static PolarGeometry* g_;
+};
+
+int PolarSchurMultibox::me_ = 0;
+int PolarSchurMultibox::nr_ = 0;
+int PolarSchurMultibox::nth_ = 0;
+int PolarSchurMultibox::m_ = 0;
+Box2D* PolarSchurMultibox::dom_ = nullptr;
+PolarGeometry* PolarSchurMultibox::g_ = nullptr;
+
+}  // namespace
+
+// (A) PARITE TENSEUR (TERMES CROISES) THETA-SPLIT (8 boites) vs MONO-BOX, precond RadialLine.
+//     Exerce le COIN du 9-points cross-box (les ghosts diagonaux p(i+-1, j+-1) des termes croises
+//     traversent une frontiere de box theta -> remplis par fill_boundary, coins inclus).
+TEST_F(PolarSchurMultibox, tensor_cross_terms_theta_split_matches_mono_box_radial_line) {
+  const PolarGeometry& g = *g_;
+  // Tenseur PLEIN NON SYMETRIQUE (cf. test_polar_tensor_elliptic_mms : defini positif en partie sym).
+  const double arr = 1.4, att = 0.8, art = 0.5, atr = -0.3;
+  if (me_ == 0)
+    std::printf("\n--- (A) Tenseur croise : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
+
+  BoxArray ba_mono(std::vector<Box2D>{*dom_});
+  MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
+  PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m_, arr, art, atr, att,
+                                      PolarPrecond::RadialLine, phi_ref);
+  const double err_ref = err_l2(phi_ref, g, Problem::Dirichlet, m_);
+  EXPECT_TRUE(kr_ref.converged) << "A_mono_converge";
+
+  BoxArray ba8 = theta_split(nr_, nth_, 8);
+  MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
+  PolarKrylovResult kr8 = solve_mb(g, ba8, Problem::Dirichlet, m_, arr, art, atr, att,
+                                   PolarPrecond::RadialLine, phi8);
+  const double err8 = err_l2(phi8, g, Problem::Dirichlet, m_);
+  const double derr = std::fabs(err8 - err_ref);
+  if (me_ == 0)
+    std::printf("  mono : iters=%d err=%.6e | 8 boites theta : iters=%d err=%.6e | d=%.3e\n",
+                kr_ref.iters, err_ref, kr8.iters, err8, derr);
+  EXPECT_TRUE(kr8.converged) << "A_multibox_converge";
+  // coin 9-points cross-box correct
+  EXPECT_TRUE(derr <= 1e-8) << "A_multibox_err_matches_mono derr=" << derr;
+}
+
+// (B) PARITE 2D TILING (coupe r ET theta) avec precond JACOBI vs mono-box (Jacobi aussi). Vrai pavage
+//     2D (2 en r x 2 en theta = 4 boites) : exerce les halos en r, en theta, ET en diagonale. C'est le
+//     chemin "multi-box COMPLET" (Jacobi = par cellule, sans contrainte de layout). Tenseur croise.
+TEST_F(PolarSchurMultibox, tiled_2d_split_matches_mono_box_jacobi) {
+  const PolarGeometry& g = *g_;
+  const double arr = 1.4, att = 0.8, art = 0.5, atr = -0.3;
+  if (me_ == 0)
+    std::printf("\n--- (B) Pavage 2D (coupe r ET theta, 4 boites) vs mono-box [Jacobi] ---\n");
+
+  BoxArray ba_mono(std::vector<Box2D>{*dom_});
+  MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
+  PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m_, arr, art, atr, att,
+                                      PolarPrecond::Jacobi, phi_ref);
+  const double err_ref = err_l2(phi_ref, g, Problem::Dirichlet, m_);
+  EXPECT_TRUE(kr_ref.converged) << "B_mono_jacobi_converge";
+
+  BoxArray tile = tile_2d(nr_, nth_, 2, 2);  // 4 boites : coupe r ET theta
+  MultiFab phit(tile, rr_dm(tile), 1, 1);
+  PolarKrylovResult krt =
+      solve_mb(g, tile, Problem::Dirichlet, m_, arr, art, atr, att, PolarPrecond::Jacobi, phit);
+  const double errt = err_l2(phit, g, Problem::Dirichlet, m_);
+  const double derr = std::fabs(errt - err_ref);
+  if (me_ == 0)
+    std::printf("  mono : iters=%d err=%.6e | 2x2 tiles : iters=%d err=%.6e | d=%.3e\n", kr_ref.iters,
+                err_ref, krt.iters, errt, derr);
+  EXPECT_TRUE(krt.converged) << "B_tile2d_converge";
+  // halos r/theta/diagonale corrects
+  EXPECT_TRUE(derr <= 1e-8) << "B_tile2d_err_matches_mono derr=" << derr;
+}
+
+// (C) GARDE-FOU DE LAYOUT : un pavage qui COUPE r sous RadialLine DOIT lever (Thomas en r ne franchit
+//     pas une frontiere de box). Resultat CLAIR (pas de faux silencieux). Le repli est Jacobi (cas B).
+TEST_F(PolarSchurMultibox, radial_line_rejects_r_cut_layout_jacobi_accepts_it) {
+  const PolarGeometry& g = *g_;
+  if (me_ == 0)
+    std::printf("\n--- (C) Garde-fou : layout coupant r sous RadialLine -> doit lever ---\n");
+
+  BCRec bc;
+  bc.xlo = bc.xhi = BCType::Dirichlet;
+  bc.ylo = bc.yhi = BCType::Periodic;
+  BoxArray tile = tile_2d(nr_, nth_, 2, 1);  // coupe r seulement (2 boites en r)
+  bool threw = false;
+  try {
+    PolarTensorKrylovSolver bad(g, tile, bc, PolarPrecond::RadialLine);
+    (void)bad;
+  } catch (const std::runtime_error&) {
+    threw = true;
+  }
+  if (me_ == 0)
+    std::printf("  RadialLine + coupe-r : %s\n", threw ? "throw (attendu)" : "PAS de throw (BUG)");
+  EXPECT_TRUE(threw) << "C_radialline_rcut_throws";
+
+  // Le MEME layout coupant r sous JACOBI ne doit PAS lever (sans contrainte de layout).
+  bool threw_jac = false;
+  try {
+    PolarTensorKrylovSolver good(g, tile, bc, PolarPrecond::Jacobi);
+    (void)good;
+  } catch (const std::runtime_error&) {
+    threw_jac = true;
+  }
+  if (me_ == 0)
+    std::printf("  Jacobi + coupe-r     : %s\n", threw_jac ? "throw (BUG)" : "OK (pas de contrainte)");
+  EXPECT_TRUE(!threw_jac) << "C_jacobi_rcut_ok";
+}
+
+// (D) PARITE NEUMANN (jauge, project_mean multi-box) theta-split (8 boites) vs mono-box [RadialLine].
+//     L'operateur pure-Neumann est singulier : project_mean accumule sum/vol sur TOUTES les boites
+//     locales puis all_reduit. Multi-box mono-rang : verifie la jauge coherente sur plusieurs boites.
+TEST_F(PolarSchurMultibox, neumann_gauge_theta_split_matches_mono_box_radial_line) {
+  const PolarGeometry& g = *g_;
+  const int mN = 2;
+  if (me_ == 0)
+    std::printf("\n--- (D) Neumann (jauge) : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
+
+  BoxArray ba_mono(std::vector<Box2D>{*dom_});
+  MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
+  PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
+                                      PolarPrecond::RadialLine, phi_ref);
+  const double err_ref = err_l2(phi_ref, g, Problem::Neumann, mN);
+  EXPECT_TRUE(kr_ref.converged) << "D_mono_neumann_converge";
+
+  BoxArray ba8 = theta_split(nr_, nth_, 8);
+  MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
+  PolarKrylovResult kr8 = solve_mb(g, ba8, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
+                                   PolarPrecond::RadialLine, phi8);
+  const double err8 = err_l2(phi8, g, Problem::Neumann, mN);
+  const double derr = std::fabs(err8 - err_ref);
+  if (me_ == 0)
+    std::printf("  mono : iters=%d err=%.6e | 8 boites theta : iters=%d err=%.6e | d=%.3e\n",
+                kr_ref.iters, err_ref, kr8.iters, err8, derr);
+  EXPECT_TRUE(kr8.converged) << "D_multibox_neumann_converge";
+  // jauge multi-box coherente
+  EXPECT_TRUE(derr <= 1e-8) << "D_multibox_neumann_err_matches_mono derr=" << derr;
 }

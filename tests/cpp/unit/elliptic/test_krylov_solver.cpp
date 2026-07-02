@@ -22,7 +22,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/linear/krylov_solver.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -265,8 +264,8 @@ static DirichletReport dirichlet_mms(int n, double V) {
                          all_reduce_max(dex), std::fabs(V) + 1.0};
 }
 
-static int pops_run_test_krylov_solver(int argc, char** argv) {
-  comm_init(&argc, &argv);
+TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
+  comm_init();
   const int me = my_rank(), np = n_ranks();
   long fails = 0;
   auto chk = [&](bool cond, const char* w) {
@@ -274,6 +273,7 @@ static int pops_run_test_krylov_solver(int argc, char** argv) {
       if (me == 0)
         std::printf("FAIL %s\n", w);
       ++fails;
+      ADD_FAILURE() << w;
     }
   };
 
@@ -360,9 +360,4 @@ static int pops_run_test_krylov_solver(int argc, char** argv) {
   if (me == 0 && fails == 0)
     std::printf("OK test_krylov_solver (np=%d)\n", np);
   comm_finalize();
-  return fails == 0 ? 0 : 1;
-}
-
-TEST(test_krylov_solver, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_krylov_solver, "test_krylov_solver"), 0);
 }

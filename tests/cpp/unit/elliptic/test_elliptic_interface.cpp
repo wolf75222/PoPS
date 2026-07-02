@@ -1,9 +1,9 @@
 // Conformite des classes elliptiques EXISTANTES aux concepts communs formalises
 // dans elliptic_interface.hpp (audit D.1). Le test est ESSENTIELLEMENT statique : les
 // static_assert ci-dessous echouent A LA COMPILATION si une classe cesse de modeler son
-// concept. Le main() runtime existe parce que pops_add_test enregistre un binaire ctest ;
-// il exerce en plus field_postprocess A TRAVERS le concept FieldPostProcessor (preuve que
-// la contrainte est appelable, pas seulement bien-formee) et revalide quelques bits.
+// concept. Les TEST runtime existent parce qu'ils exercent en plus field_postprocess A
+// TRAVERS le concept FieldPostProcessor (preuve que la contrainte est appelable, pas
+// seulement bien-formee) et revalident quelques bits.
 //
 // AUCUNE classe elliptique n'est modifiee : ce fichier OBSERVE les contrats deja codes.
 // Les concepts sont de la metaprogrammation hote (pas de kernel) : zero incidence device,
@@ -11,7 +11,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/interface/elliptic_interface.hpp>
 
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>      // field_postprocess, FieldPostProcess
@@ -103,15 +102,19 @@ void apply_pp(PP pp, const MultiFab& phi, MultiFab& out, Real cx, Real cy, Field
   pp(phi, out, cx, cy, spec);
 }
 
-static int pops_run_test_elliptic_interface() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
+namespace {
 
+// phi connu (1 ghost) periodique, partage par le TEST FieldPostProcessor (identique au temoin de
+// test_elliptic_problem).
+auto fr(const Geometry& geom, int i, int j) {
+  return std::sin(2 * kPi * geom.x_cell(i)) * std::sin(2 * kPi * geom.y_cell(j));
+}
+
+}  // namespace
+
+// field_postprocess appele DIRECTEMENT vs via le helper contraint par FieldPostProcessor : memes
+// bits. Prouve que la fonction libre traverse la contrainte de concept sans rien changer.
+TEST(test_elliptic_interface, field_postprocess_via_concept_is_bit_identical) {
   const int N = 32;
   Box2D dom = Box2D::from_extents(N, N);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
@@ -119,23 +122,16 @@ static int pops_run_test_elliptic_interface() {
   DistributionMapping dm(1, 1);
   BCRec bc;  // periodique
 
-  auto fr = [&](int i, int j) {
-    return std::sin(2 * kPi * geom.x_cell(i)) * std::sin(2 * kPi * geom.y_cell(j));
-  };
-
-  // phi connu (1 ghost) periodique, identique au temoin de test_elliptic_problem.
   MultiFab phi(ba, dm, 1, 1);
   {
     Array4 p = phi.fab(0).array();
     const Box2D v = phi.box(0);
-    for_each_cell(v, [=] POPS_HD(int i, int j) { p(i, j) = fr(i, j); });
+    for_each_cell(v, [=] POPS_HD(int i, int j) { p(i, j) = fr(geom, i, j); });
     fill_ghosts(phi, dom, bc);
   }
   const Real cx = Real(1) / (2 * geom.dx());
   const Real cy = Real(1) / (2 * geom.dy());
 
-  // Appel DIRECT vs appel via le helper contraint par FieldPostProcessor : memes bits.
-  // Prouve que la fonction libre traverse la contrainte de concept sans rien changer.
   const FieldPostProcess spec{FieldPostProcess::GradSign::Plus, true};
   MultiFab direct(ba, dm, 3, 1), via_concept(ba, dm, 3, 1);
   field_postprocess(phi, direct, cx, cy, spec);
@@ -152,28 +148,28 @@ static int pops_run_test_elliptic_interface() {
           if (ad(i, j, c) != ac(i, j, c))
             bit_eq = false;
   }
-  chk(bit_eq, "FieldPostProcessor_via_concept_bit_identique");
-
-  // Verification runtime legere : GeometricMG (LinearSolver iteratif) resout et son
-  // compte rendu d'arret est un int positif borne par max_cycles. On ne valide pas la
-  // physique (couverte ailleurs), seulement le CONTRAT de retour du concept.
-  {
-    GeometricMG mg(geom, ba, bc);
-    Array4 f = mg.rhs().fab(0).array();
-    const Box2D v = mg.rhs().box(0);
-    for_each_cell(v, [=] POPS_HD(int i, int j) { f(i, j) = fr(i, j); });
-    mg.phi().set_val(0.0);
-    const int cycles = mg.solve(Real(1e-8), 50);  // variante LinearSolver (tol, iters)
-    chk(cycles >= 0 && cycles <= 50, "LinearSolver_GeometricMG_compte_rendu_borne");
-    static_assert(std::is_same_v<decltype(cycles), const int>,
-                  "GeometricMG::solve(tol, iters) rend int (nombre de V-cycles)");
-  }
-
-  if (fails == 0)
-    std::printf("OK test_elliptic_interface\n");
-  return fails == 0 ? 0 : 1;
+  EXPECT_TRUE(bit_eq) << "FieldPostProcessor_via_concept_bit_identique";
 }
 
-TEST(test_elliptic_interface, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_elliptic_interface, "test_elliptic_interface"), 0);
+// Verification runtime legere : GeometricMG (LinearSolver iteratif) resout et son compte rendu
+// d'arret est un int positif borne par max_cycles. On ne valide pas la physique (couverte
+// ailleurs), seulement le CONTRAT de retour du concept.
+TEST(test_elliptic_interface, linear_solver_report_is_bounded_int) {
+  const int N = 32;
+  Box2D dom = Box2D::from_extents(N, N);
+  Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  BoxArray ba(std::vector<Box2D>{dom});
+  DistributionMapping dm(1, 1);
+  BCRec bc;  // periodique
+
+  GeometricMG mg(geom, ba, bc);
+  Array4 f = mg.rhs().fab(0).array();
+  const Box2D v = mg.rhs().box(0);
+  for_each_cell(v, [=] POPS_HD(int i, int j) { f(i, j) = fr(geom, i, j); });
+  mg.phi().set_val(0.0);
+  const int cycles = mg.solve(Real(1e-8), 50);  // variante LinearSolver (tol, iters)
+  EXPECT_TRUE(cycles >= 0 && cycles <= 50) << "LinearSolver_GeometricMG_compte_rendu_borne cycles="
+                                            << cycles;
+  static_assert(std::is_same_v<decltype(cycles), const int>,
+                "GeometricMG::solve(tol, iters) rend int (nombre de V-cycles)");
 }

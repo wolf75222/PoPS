@@ -16,7 +16,6 @@
 
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
@@ -106,33 +105,21 @@ static double uniform_eps_residual_gap(int n) {
   return std::fabs(r_const - r_eps);
 }
 
-static int pops_run_test_variable_epsilon() {
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
+// Sequence de raffinement 32/64/128 : les deux ratios sont derives du MEME triplet (e32,e64,e128),
+// donc c'est UNE seule convergence a verifier (pas deux essais independants).
+TEST(VariableEpsilonTest, mms_converges_at_second_order) {
   const double e32 = solve_mms(32);
   const double e64 = solve_mms(64);
   const double e128 = solve_mms(128);
   const double r1 = e32 / e64, r2 = e64 / e128;
   std::printf("eps variable MMS : Linf  e32=%.3e e64=%.3e e128=%.3e | ratios %.2f %.2f\n", e32, e64,
               e128, r1, r2);
-  chk(r1 > 3.5 && r1 < 4.5, "ordre2_ratio_32_64");
-  chk(r2 > 3.5 && r2 < 4.5, "ordre2_ratio_64_128");
-
-  const double gap = uniform_eps_residual_gap(64);
-  std::printf("eps uniforme=1 : ecart residu vs operateur constant = %.3e\n", gap);
-  chk(gap < 1e-12, "eps_uniforme_non_regression");
-
-  if (fails == 0)
-    std::printf("OK test_variable_epsilon\n");
-  return fails == 0 ? 0 : 1;
+  EXPECT_TRUE(r1 > 3.5 && r1 < 4.5) << "ordre2_ratio_32_64: r1=" << r1;
+  EXPECT_TRUE(r2 > 3.5 && r2 < 4.5) << "ordre2_ratio_64_128: r2=" << r2;
 }
 
-TEST(test_variable_epsilon, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_variable_epsilon, "test_variable_epsilon"), 0);
+TEST(VariableEpsilonTest, uniform_epsilon_matches_constant_operator) {
+  const double gap = uniform_eps_residual_gap(64);
+  std::printf("eps uniforme=1 : ecart residu vs operateur constant = %.3e\n", gap);
+  EXPECT_TRUE(gap < 1e-12) << "eps_uniforme_non_regression: gap=" << gap;
 }
