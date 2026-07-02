@@ -183,6 +183,14 @@ class Spatial:
             recon_tok = _lower_selector(
                 recon, param="recon", schemes=_RECON_SCHEMES,
                 suggestion=_RECON_SUGGEST, categories=("variables",))
+        # Wave-speed provider ride-along (ADC-552): a flux descriptor built with
+        # HLL(waves=<WaveSpeedProvider>) carries the provider kind in options["waves"]. Record it
+        # on the Spatial so the install guard can cross-check the requested provider against the
+        # compiled model's actual wave-speed source (least-invasive: read the descriptor object
+        # here, the lowered route token stays byte-identical). None when no provider was pinned.
+        self.waves_provider = None
+        if _tokens is None and flux is not None and not isinstance(flux, str):
+            self.waves_provider = getattr(flux, "options", {}).get("waves")
         # Boolean shortcuts (typed flags, not strings): override the limiter / recon slot. They
         # stay as convenience sugar -- only the bare-string selectors are forbidden (Spec 5 sec.7).
         if none:

@@ -446,7 +446,18 @@ def build_requirements(compiled):
     capabilities = []
     for flag, token, used_by in _CAPABILITY_FLAGS:
         if getattr(model, flag, False):
-            capabilities.append({"capability": token, "used_by": used_by, "provided": True})
+            row = {"capability": token, "used_by": used_by, "provided": True}
+            # ADC-552: name the derivable wave-speed provider kind next to the wave_speeds row
+            # (additive key). None when the source is not derivable from today's metadata (a bare
+            # CompiledModel without a carried authoring model): honest, never fabricated.
+            if flag == "has_wave_speeds":
+                from pops.numerics.riemann.waves import provider_of
+                try:
+                    provider = provider_of(model) if model is not None else None
+                except ValueError:
+                    provider = None
+                row["wave_speed_provider"] = provider.kind if provider is not None else None
+            capabilities.append(row)
 
     constraints = {
         "backend": "production",
