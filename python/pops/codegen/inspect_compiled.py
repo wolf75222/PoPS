@@ -16,7 +16,7 @@ and its physical model), plus the compile artifacts on disk.
 
 Nothing here compiles, binds, dlopens or allocates: the builders read Python-side metadata only.
 The module imports ``pops.mesh`` lazily (in-function) to respect the codegen layering (a codegen
-module may not import ``pops.mesh`` at module scope; cf. tests/architecture/test_import_graph.py).
+module may not import ``pops.mesh`` at module scope; cf. tests/python/architecture/test_import_graph.py).
 """
 
 import json

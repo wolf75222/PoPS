@@ -318,7 +318,7 @@ def _check_schedules_lowerable(program):
         is not a Program value and cannot be lowered to C++.
 
     The cadence RUNTIME (the cache cadence in a stepping .so) is exercised on ROMEO; the cache
-    MANAGER is unit-tested by tests/test_cache_manager.cpp."""
+    MANAGER is unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp."""
     for v in _all_ops(program):
         sched = v.attrs.get("schedule")
         if sched is None or sched.is_always():

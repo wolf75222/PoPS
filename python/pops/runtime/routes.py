@@ -10,7 +10,7 @@ token (``str`` subclass), so the crossing stays byte-identical while the identit
 limitations and native entry point become typed and inspectable.
 
 This module is the MIRROR of ``include/pops/runtime/config/route_ids.hpp`` (same families, same
-tokens, same order); ``tests/architecture/test_route_registry_parity.py`` locks the two at the
+tokens, same order); ``tests/python/architecture/test_route_registry_parity.py`` locks the two at the
 source level, and the C++ static_asserts lock route_ids.hpp against the historical tag tables
 (kLimiters / kRiemanns / kTransports / kSources / kElliptics). Deliberately IMPORT-FREE (stdlib
 only): the architecture gate loads it standalone, without the compiled ``_pops`` module.
@@ -237,7 +237,7 @@ def route_registry_signature():
     """Compact per-family signature "family:count,..." (registry order) -- the embedded form.
 
     MIRROR of pops::route_registry_signature() (route_ids.hpp); the two strings must stay equal
-    (locked by tests/architecture/test_route_registry_parity.py). Embedded verbatim in generated
+    (locked by tests/python/architecture/test_route_registry_parity.py). Embedded verbatim in generated
     artifacts so a stale .so is refused with the mismatching family named, before any run.
     """
     return ",".join("%s:%d" % (family, len(_TABLES[family])) for family in _TABLES)

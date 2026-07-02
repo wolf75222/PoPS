@@ -36,7 +36,7 @@ The variables (sec.12.4):
 
 This module imports only the standard library at module scope (``os`` / ``sys`` / ``warnings``); it
 references no other ``pops`` layer, so it adds no edge to the codegen import graph
-(tests/architecture/test_import_graph.py).
+(tests/python/architecture/test_import_graph.py).
 """
 
 import os

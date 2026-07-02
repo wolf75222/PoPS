@@ -244,9 +244,10 @@ struct System::Impl {
   // diagnostics, the profiler, the scheduler cache and the multistep history rings -- extracted out of
   // this god-object into ONE inspectable struct (include/pops/runtime/program/program_runtime_state.hpp),
   // SHARED verbatim with AmrSystem::Impl (the documented common contract). The stepper reads only
-  // program_.step_ / substeps_ / stride_ / dt_bound_ (so the tests/test_strang_splitting.cpp MockImpl
-  // embeds the SAME struct); the diagnostics / params / cache / history / profiler are System-owned and
-  // NOT stepper-visible. Program invariants live here, block/field/layout invariants stay on Impl.
+  // program_.step_ / substeps_ / stride_ / dt_bound_ (so the
+  // tests/cpp/unit/numerics/test_strang_splitting.cpp MockImpl embeds the SAME struct); the diagnostics /
+  // params / cache / history / profiler are System-owned and NOT stepper-visible. Program invariants live
+  // here, block/field/layout invariants stay on Impl.
   pops::runtime::program::ProgramRuntimeState program_;
   // RUNTIME FREEZE LIFECYCLE (ADC-592): false while assembling (the composition is mutable), true
   // once mark_bound() runs (the Python bind flow calls it LAST, after every install call). When true,

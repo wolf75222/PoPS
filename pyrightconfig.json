@@ -1,0 +1,28 @@
+{
+  "include": [
+    "python/pops/_pops.pyi",
+    "python/pops/_bootstrap.py",
+    "python/pops/_version.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "build*",
+    ".kokkos-install",
+    "tests/gpu",
+    "tests/python"
+  ],
+  "extraPaths": ["python"],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none",
+  "reportMissingTypeStubs": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownArgumentType": "none",
+  "executionEnvironments": [
+    {
+      "root": "python",
+      "extraPaths": ["python"]
+    }
+  ]
+}

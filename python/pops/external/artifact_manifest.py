@@ -17,7 +17,7 @@ codegen follow-up to become real.
 
 The :func:`build_compiled_manifest` builder reads the passed ``compiled`` object's public
 surface only (no module-scope ``pops.codegen`` import), so the ``external`` layer stays at the
-bottom of the import graph (cf. tests/architecture/test_import_graph.py). It pulls in no numpy /
+bottom of the import graph (cf. tests/python/architecture/test_import_graph.py). It pulls in no numpy /
 ``_pops`` at module scope.
 """
 

@@ -9,7 +9,7 @@ name: CI
 #    sauf opt-in explicite par label `ci-kokkos` ou `ci-full`.
 #  - gate-cpp + gate-python-architecture + gate-python (sur pull_request, gate OBLIGATOIRE) :
 #    gate-python-architecture est source-only ; gate-cpp/gate-python sont Kokkos SERIAL, scindes et
-#    tournant EN PARALLELE. gate-cpp = ctest C++ ; gate-python = module _pops + suite python/tests.
+#    tournant EN PARALLELE. gate-cpp = ctest C++ ; gate-python = module _pops + suite tests/python.
 #    Avant ADC-171 c'etait UN seul job sequentiel (build C++ -> module Python -> tests Python) ;
 #    le split + jobs 4 + mold raccourcissent le chemin critique, et le routage epargne le gate
 #    inutile (une PR pur-Python ne paie que gate-python + architecture). Rapides grace aux caches (Kokkos
@@ -96,16 +96,17 @@ jobs:
               - 'scripts/gen_solver_kernel.py'
             python:
               - 'python/**'
+              - 'tests/python/**'
               - 'scripts/gen_solver_kernel.py'
             python_arch:
-              - 'tests/architecture/**'
+              - 'tests/python/architecture/**'
             # Les changements de workflows/actions CI sont valides par revue + lint YAML local,
             # et ne compilent pas Kokkos par defaut. Ajouter `ci-kokkos` pour forcer les gates
             # Serial, ou `ci-full` pour MPI + OpenMP.
             # full : un push master ne lance la suite COMPLETE (MPI + Kokkos OpenMP) que si un
             # chemin build/backend a bouge. Conservateur a dessein -- couvre tout ce qui peut affecter
             # l'artefact compile OU le chemin DSL/production exerce par le job kokkos-openmp (dsl.py et
-            # python/tests/test_dsl_production*.py inclus via python/**).
+            # tests/python/**/test_dsl_production*.py inclus via tests/**).
             # Hors liste : fichiers meta seuls (autres workflows, configs linters, LICENSE). Filet de
             # securite : le run nocturne (cron) lance la suite complete inconditionnellement.
             full:
@@ -206,6 +207,7 @@ jobs:
           fi
           python3 scripts/ci_select_tests.py cpp \
             --changed-files "${{ steps.changed-files.outputs.path }}" \
+            --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
@@ -215,7 +217,14 @@ jobs:
             echo ""
             echo "- ${cpp_summary}"
             echo "- areas: ${cpp_areas}"
+            echo "- plan: artifact \`gate-cpp-test-plan\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload C++ test plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-cpp-test-plan
+          path: ${{ runner.temp }}/cpp-test-plan.json
 
       # Action composite : apt deps (Eigen / Ninja / ccache) + mold, et install Kokkos Serial PIC
       # MISE EN CACHE sous la cle kokkos-<os>-4.4.01-<commit>-serial-cxx20-gcc-pic -- IDENTIQUE aux
@@ -314,8 +323,11 @@ jobs:
 
       - name: Spec 4 architecture tests
         run: |
-          pip install --upgrade pip pytest
-          python3 -m pytest tests/architecture -q
+          pip install --upgrade pip pytest pyright
+          python3 -m pytest tests/python/architecture -q
+
+      - name: Pyright
+        run: pyright
 
   # GATE PYTHON BUILD : construit UNE SEULE FOIS le module _pops partage par les shards de tests.
   # Les tests DSL compilent encore leurs loaders/.so a runtime dans chaque shard, mais le gros build
@@ -471,7 +483,7 @@ jobs:
         if: always()
         run: ccache -s
 
-  # GATE PYTHON (ADC-366). La suite python/tests est shardee en N legs, mais consomme l'artefact
+  # GATE PYTHON (ADC-366). La suite tests/python est shardee en N legs, mais consomme l'artefact
   # _pops construit par gate-python-build au lieu de reconstruire le module dans chaque shard.
   gate-python:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
@@ -524,6 +536,7 @@ jobs:
           fi
           python3 scripts/ci_select_tests.py python \
             --changed-files "${{ steps.changed-files.outputs.path }}" \
+            --explain-file "$RUNNER_TEMP/python-test-plan.json" \
             --tests-file "$RUNNER_TEMP/python-tests.txt" \
             --shard-index "$SHARD_INDEX" \
             --shard-total "$SHARD_TOTAL" \
@@ -537,7 +550,14 @@ jobs:
             echo ""
             echo "- ${python_summary}"
             echo "- areas: ${python_areas}"
+            echo "- plan: artifact \`gate-python-test-plan-shard-${{ matrix.shard }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Python test plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-python-test-plan-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/python-test-plan.json
 
       - id: kokkos
         if: steps.test-plan.outputs.python_shard_count != '0'
@@ -587,38 +607,25 @@ jobs:
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
           export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
           SECONDS=0
-          # ADC-366 instrumented + sharded runner. SHARD_INDEX/SHARD_TOTAL default to 0/1 (run EVERY file,
-          # identical to the old behaviour) when unset. The union of the 3 shards (index%total) is the full
-          # disjoint suite -> no test is dropped. ADC-112 fail semantics preserved: run_one returns the
-          # python rc; xargs returns 123 if ANY worker failed; `|| rc=$?` captures it WITHOUT aborting (so
-          # the timing summary/artifact still emit), then `exit $rc` fails the step.
+          # ADC-366 sharded runner. The selected file list is produced by scripts/ci_select_tests.py,
+          # then pytest owns collection, fixtures, markers and reporting.
           : "${SHARD_INDEX:=0}" "${SHARD_TOTAL:=1}"
           timings="$RUNNER_TEMP/pytimings"; mkdir -p "$timings"
-          run_one() {
-            f="$1"; s=$(date +%s.%N)
-            echo "::group::$f"; python3 "$f"; rc=$?; echo "::endgroup::"
-            e=$(date +%s.%N); d=$(awk -v a="$s" -v b="$e" 'BEGIN{printf "%.2f", b-a}')
-            printf '%s\t%s\t%s\n' "$f" "$d" "$rc" >> "$timings/timings.tsv"  # one <4KB O_APPEND line: atomic at -P4
-            return "$rc"
-          }
-          export -f run_one; export timings
-          rc=0
-          # NB: line-oriented (awk needs lines) -> assumes no test file name contains a newline (true for
-          # the test_*.py convention); we re-NUL the selected lines for xargs -0.
           selected="${{ steps.test-plan.outputs.tests_file }}"
           if [ ! -s "$selected" ]; then
             echo "No affected Python tests selected for shard ${SHARD_INDEX}/${SHARD_TOTAL}."
             exit 0
           fi
-          tr '\n' '\0' < "$selected" \
-            | xargs -0 -P 4 -I {} bash -c 'run_one "$@"' _ {} || rc=$?
+          mapfile -t selected_tests < "$selected"
+          printf '%s\n' "${selected_tests[@]}" > "$timings/selected.txt"
+          set +e
+          python3 -m pytest -q -ra --durations=20 "${selected_tests[@]}"
+          rc=$?
+          set -e
           test_s=$SECONDS
-          # Per-file durations, slowest first, to the log + a JSON/TSV artifact (always, even on failure).
-          sort -t"$(printf '\t')" -k2 -gr "$timings/timings.tsv" > "$timings/timings.sorted.tsv" 2>/dev/null || cp "$timings/timings.tsv" "$timings/timings.sorted.tsv"
-          echo "::group::per-file test durations (slowest first) -- shard ${SHARD_INDEX}/${SHARD_TOTAL}"
-          awk -F'\t' '{printf "%8.2fs  rc=%s  %s\n",$2,$3,$1}' "$timings/timings.sorted.tsv"
-          echo "::endgroup::"
-          { printf '['; awk -F'\t' 'NR>1{printf ","} {printf "{\"file\":\"%s\",\"seconds\":%s,\"rc\":%s}",$1,$2,$3}' "$timings/timings.sorted.tsv"; printf ']\n'; } > "$timings/timings.json"
+          cp "$timings/selected.txt" "$timings/timings.tsv"
+          printf '{"shard":%s,"total":%s,"seconds":%s,"files":%s}\n' \
+            "$SHARD_INDEX" "$SHARD_TOTAL" "$test_s" "$(wc -l < "$selected")" > "$timings/timings.json"
           {
             echo "### gate-python shard ${SHARD_INDEX}/${SHARD_TOTAL} (module _pops, Kokkos Serial)"
             echo ""
@@ -627,9 +634,9 @@ jobs:
             echo "| tests (python, this shard) | ${test_s} |"
             echo "| selection | ${{ steps.test-plan.outputs.python_summary }} |"
             echo ""
-            echo "Top 10 slowest test files (this shard):"
+            echo "Selected test files (first 25):"
             echo '```'
-            head -10 "$timings/timings.sorted.tsv" | awk -F'\t' '{printf "%8.2fs  %s\n",$2,$1}'
+            head -25 "$timings/selected.txt"
             echo '```'
             echo "Hit-rate ccache :"
             echo '```'
@@ -885,8 +892,13 @@ jobs:
           # est corrige a la racine (ManagedArena = singleton jamais detruit, allocator.hpp) --
           # la tolerance ciblee rc=134 est retiree, tout echec redevient fatal.
           for t in test_native_abi_std test_dsl_production test_dsl_production_amr; do
+            test_path="$(find tests/python -name "$t.py" -print -quit)"
+            if [ -z "$test_path" ]; then
+              echo "::error::Python test $t.py not found under tests/python"
+              exit 1
+            fi
             echo "::group::$t"
-            python3 "python/tests/$t.py"
+            python3 -m pytest -q "${test_path}"
             echo "::endgroup::"
           done
 

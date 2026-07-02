@@ -20,7 +20,7 @@ its physical model and its compile artifacts -- into deterministic, array-free p
 
 Nothing here compiles, binds, dlopens or allocates: the builders read Python-side metadata only.
 The module imports ``pops.time`` / the runtime lazily (in-function) to keep the codegen import
-graph acyclic (cf. tests/architecture/test_import_graph.py).
+graph acyclic (cf. tests/python/architecture/test_import_graph.py).
 """
 
 import json

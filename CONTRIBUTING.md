@@ -41,7 +41,7 @@ Use PR labels and commit tokens for validation modes; reserve Git tags for relea
 | Git tag `vX.Y.Z` | Release creation and wheel packaging. |
 
 The fast PR gate uses affected-test selection. Clear domain changes select only the matching
-CMake test targets and Python test files, plus a small smoke set. `tests/architecture/**` runs a
+CMake test targets and Python test files, plus a small smoke set. `tests/python/architecture/**` runs a
 source-only Python architecture gate and does not compile `_pops` or Kokkos by itself. Shared
 build/runtime changes (`CMakeLists.txt`, presets, `cmake/`, `include/pops/core/`,
 `include/pops/parallel/`, `python/bindings/`, packaging) run the full relevant suite. Unknown
