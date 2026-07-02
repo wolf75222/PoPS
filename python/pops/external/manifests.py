@@ -1,16 +1,17 @@
 """pops.external.manifests -- read + register a compiled-brick manifest (Spec 5 sec.5.17).
 
-A manifest is the JSON ``pops_brick_manifest()`` exports (``{"bricks": [{"id", "category",
-"requirements", "capabilities"}, ...]}``). It can be read from a ``.json`` file or from a
-``.so`` (dlopened). :func:`register` / :func:`register_manifest_file` register the ids in the
-in-process catalog owned by :mod:`pops.descriptors`; :func:`read_manifest` is the read-only
-counterpart that returns the metadata WITHOUT registering or executing anything. Nothing here
-computes.
+A manifest is the JSON ``pops_brick_manifest()`` exports under the STRICT versioned schema (ADC-611):
+``{"schema_version": 1, "abi_key": <opt>, "bricks": [{"id", "category", "requirements",
+"capabilities"}, ...]}``. It can be read from a ``.json`` file or from a ``.so`` (dlopened).
+:func:`register` / :func:`register_manifest_file` register the ids in the in-process catalog owned by
+:mod:`pops.descriptors`; :func:`read_manifest` is the read-only counterpart that returns the metadata
+WITHOUT registering or executing anything. The strict parse (schema_version / required fields /
+unknown-field refusal) lives ONCE in :func:`pops.descriptors.parse_brick_manifest`. Nothing here computes.
 """
 import ctypes
-import json
 
-from pops.descriptors import load_cpp_library, _register_manifest, _split_csv
+from pops.descriptors import (BRICK_MANIFEST_SCHEMA_VERSION, load_cpp_library, _register_manifest,
+                              parse_brick_manifest)
 
 
 def register_manifest_file(path):
@@ -65,31 +66,14 @@ class CompiledManifest:
 
 
 def _parse_manifest_metadata(manifest_json):
-    """Parse manifest JSON into a :class:`CompiledManifest` WITHOUT registering it.
+    """Parse manifest JSON into a :class:`CompiledManifest` WITHOUT registering it, under the STRICT
+    versioned schema (ADC-611).
 
-    Mirrors the shape :func:`pops.descriptors._register_manifest` accepts
-    (``{"bricks": [...], "abi_key": ...}``) but builds an inert value instead of mutating the
-    in-process catalog. A malformed manifest or an entry missing its id raises ``ValueError``.
+    Delegates to :func:`pops.descriptors.parse_brick_manifest` (the single strict parser: schema_version
+    check, required fields, unknown-field refusal, each error naming the offending field), building an
+    inert value instead of mutating the in-process catalog. Any schema violation raises ``ValueError``.
     """
-    try:
-        doc = json.loads(manifest_json)
-    except (json.JSONDecodeError, TypeError) as err:
-        raise ValueError("brick manifest is not valid JSON: %s" % (err,)) from err
-    bricks = doc.get("bricks") if isinstance(doc, dict) else None
-    if not isinstance(bricks, list):
-        raise ValueError("brick manifest must be {\"bricks\": [...]}; got %r" % (manifest_json,))
-    records = []
-    for entry in bricks:
-        if not isinstance(entry, dict) or not entry.get("id"):
-            raise ValueError("brick manifest entry must carry a non-empty 'id'; got %r"
-                             % (entry,))
-        records.append({
-            "id": str(entry["id"]),
-            "category": str(entry.get("category") or "brick"),
-            "requirements": _split_csv(entry.get("requirements")),
-            "capabilities": _split_csv(entry.get("capabilities")),
-        })
-    abi_key = doc.get("abi_key") if isinstance(doc, dict) else None
+    records, abi_key = parse_brick_manifest(manifest_json)
     return CompiledManifest(records, abi_key=abi_key)
 
 
@@ -120,4 +104,5 @@ def read_manifest(path):
     return _parse_manifest_metadata(raw.decode("utf-8"))
 
 
-__all__ = ["register", "register_manifest_file", "read_manifest", "CompiledManifest"]
+__all__ = ["register", "register_manifest_file", "read_manifest", "CompiledManifest",
+           "BRICK_MANIFEST_SCHEMA_VERSION"]

@@ -137,8 +137,14 @@ class CompiledReport:
             lines.append("    cache_key       : %s" % cache.get("cache_key"))
             lines.append("    const_params    : %s"
                          % (", ".join(cache.get("const_params", [])) or "(none)"))
+            runtime_params = cache.get("runtime_params", [])
             lines.append("    runtime_params  : %s"
-                         % (", ".join(cache.get("runtime_params", [])) or "(none)"))
+                         % (", ".join(runtime_params) or "(none)"))
+            # Runtime-param capacity utilization (ADC-610): surface the fixed-array kMaxRuntimeParams
+            # bound so the headroom is visible in the report (previously a hidden C++ constant).
+            from pops.physics.aux import max_runtime_params  # lazy: keep the report import-light
+            lines.append("    runtime_params_utilization : %d / %d"
+                         % (len(runtime_params), max_runtime_params()))
         if self.env:
             lines.append("  environment (active POPS_*):")
             lines.append("    log_level     : %s" % self.env.get("log_level"))

@@ -109,15 +109,19 @@ def _cadence(sim):
 
 
 def _params(sim):
-    """Per-program-block runtime-param COUNT (never the values -- inert metadata). Derived from the
-    block map (or, absent it, block 0): a block with no runtime param reports count 0."""
+    """Per-program-block runtime-param COUNT + the kMaxRuntimeParams limit (never the values -- inert
+    metadata). Derived from the block map (or, absent it, block 0): a block with no runtime param reports
+    count 0. The limit (ADC-610) surfaces the previously-hidden fixed-array capacity so a block's headroom
+    is introspectable."""
+    from pops.physics.aux import max_runtime_params  # lazy: keep the report import-light
+    limit = max_runtime_params()
     rows = []
     block_map = list(_call(sim, "program_block_map", []) or [])
     prog_blocks = list(range(len(block_map))) if block_map else [0]
     for prog_block in prog_blocks:
         rp = _call(sim, "program_params", None, prog_block)
         count = getattr(rp, "count", None) if rp is not None else None
-        rows.append({"program_block": prog_block, "count": count})
+        rows.append({"program_block": prog_block, "count": count, "limit": limit})
     return rows
 
 

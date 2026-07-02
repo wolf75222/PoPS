@@ -227,3 +227,23 @@ def test_plan_python_new_pops_file_fails_safe_to_all(tmp_path):
     )
     assert outputs["python_mode"] == "all"
     assert "off-graph-pops-file" in outputs["python_why"]
+
+
+def test_manifest_cpp_suites_exclude_mpi_only_targets():
+    """The serial C++ gate must never select an MPI-only suite.
+
+    MPI suites build only in the ci-mpi job; if one reached the serial selection the
+    build step would hit ``ninja: unknown target`` (seen live on
+    test_amr_regrid_mpi_parity, whose ``mpi`` segment is an INFIX the old ``test_mpi_``
+    prefix filter missed -- #435). Convention: every MPI-only suite carries an ``mpi``
+    name segment (and an ``mpi`` label / ``mpi_nproc``); the manifest-driven selector
+    must drop it. This asserts the same intent against the manifest API that replaced
+    the CMake target scraper.
+    """
+    sel = _load("ci_select_tests")
+    suites = sel.manifest_cpp_suites(sel.load_manifest())
+    names = [s["name"] for s in suites]
+    assert names, "no serial C++ suites resolved from tests/test_manifest.toml"
+    offenders = [n for n in names if "mpi" in n.split("_")]
+    assert not offenders, f"MPI-only suites leaked into the serial selection: {offenders}"
+    assert "test_strang_splitting" in names

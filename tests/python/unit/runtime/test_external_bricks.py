@@ -73,8 +73,17 @@ def _clean_catalog():
     lib._clear_external_catalog()
 
 
-def _manifest(*entries):
-    return json.dumps({"bricks": list(entries)})
+def _manifest(*entries, schema_version=1):
+    """Build a STRICT versioned manifest (ADC-611): stamp schema_version and fill each entry's four
+    required fields (id / category / requirements / capabilities) with defaults so the happy-path tests
+    exercise a valid payload. A test that probes a MISSING field passes the raw dict via _register_manifest
+    directly rather than through this helper."""
+    normed = []
+    for e in entries:
+        row = {"category": "brick", "requirements": "", "capabilities": ""}
+        row.update(e)
+        normed.append(row)
+    return json.dumps({"schema_version": schema_version, "bricks": normed})
 
 
 def test_unknown_external_id_raises_clear_error():

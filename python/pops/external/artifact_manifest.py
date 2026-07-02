@@ -30,6 +30,11 @@ _SUPPORTS_UNKNOWN = ("supports_stride", "supports_partial_imex_mask", "supports_
 _SUPPORTS_RUNTIME = ("supports_custom_communicator",)
 _SUPPORTS_FLAGS = _SUPPORTS_FROM_CAPS + _SUPPORTS_UNKNOWN + _SUPPORTS_RUNTIME
 
+# STRICT versioned schema of the rich compiled-artifact manifest (ADC-611). to_dict() stamps it;
+# from_dict() refuses a dict without it (or a wrong one) so any future read-back path is strict by
+# construction. Bump when a field is renamed/removed (an additive field keeps version 1).
+ARTIFACT_MANIFEST_SCHEMA_VERSION = 1
+
 
 class CompiledArtifactManifest:
     """The rich, self-describing manifest of a compiled artifact (Spec 5 sec.13.12, #36).
@@ -122,8 +127,11 @@ class CompiledArtifactManifest:
         return pending
 
     def to_dict(self):
-        """A plain-dict view of every manifest field (JSON-ready; ``None`` flags stay ``None``)."""
-        out = {"model_name": self.model_name, "abi_key": self.abi_key,
+        """A plain-dict view of every manifest field (JSON-ready; ``None`` flags stay ``None``). Stamped
+        with ``schema_version`` (ADC-611) so a strict :meth:`from_dict` read-back can reject a legacy or
+        incompatible dict by construction."""
+        out = {"schema_version": ARTIFACT_MANIFEST_SCHEMA_VERSION,
+               "model_name": self.model_name, "abi_key": self.abi_key,
                "abi_version": self.abi_version, "required_headers_sig": self.required_headers_sig,
                "blocks": list(self.blocks), "variables": list(self.variables),
                "roles": list(self.roles) if self.roles is not None else None,
@@ -141,6 +149,41 @@ class CompiledArtifactManifest:
                "capability_matrix": [row.to_dict() for row in self.capability_matrix().rows]}
         out.update(self.supports())
         return out
+
+    @classmethod
+    def from_dict(cls, data):
+        """Strict read-back of :meth:`to_dict` (ADC-611): reconstruct a manifest from its dict, refusing a
+        legacy/incompatible payload BY CONSTRUCTION. Policy -- the error NAMES the offending field:
+          - not a dict -> ValueError;
+          - missing ``schema_version`` -> ValueError (legacy dict; re-serialize with the current build);
+          - ``schema_version`` != ARTIFACT_MANIFEST_SCHEMA_VERSION -> ValueError (naming got vs expected);
+          - an UNKNOWN key -> ValueError (naming it; no permissive silent-ignore).
+        ``capability_matrix`` is a DERIVED view (rebuilt from the flags), so it is accepted and ignored on
+        read-back; the constructor recomputes it. Round-trip: ``from_dict(m.to_dict())`` equals ``m``."""
+        if not isinstance(data, dict):
+            raise ValueError("compiled-artifact manifest must be a dict; got %r" % (data,))
+        if "schema_version" not in data:
+            raise ValueError("compiled-artifact manifest is missing the required 'schema_version' "
+                             "field (expected %d); it predates the versioned schema -- re-serialize it "
+                             "with the current build" % (ARTIFACT_MANIFEST_SCHEMA_VERSION,))
+        version = data["schema_version"]
+        if version != ARTIFACT_MANIFEST_SCHEMA_VERSION:
+            raise ValueError("compiled-artifact manifest 'schema_version' is %r, incompatible with the "
+                             "supported version %d" % (version, ARTIFACT_MANIFEST_SCHEMA_VERSION))
+        # DERIVED keys are recomputed by the constructor, not passed to it: accept-and-ignore on read-back.
+        derived = {"schema_version", "capability_matrix"}
+        # The constructor keyword arguments (every stored field, including the supports_* flags).
+        ctor_keys = set(_SUPPORTS_FLAGS) | {
+            "model_name", "abi_key", "abi_version", "required_headers_sig", "blocks", "variables",
+            "roles", "aux_required", "params_const", "params_runtime", "ghost_depth", "field_outputs",
+            "native_entrypoints", "dimension", "amr_refinement_ratio", "precision", "real_bytes",
+            "communicator"}
+        unknown = sorted(set(data) - ctor_keys - derived)
+        if unknown:
+            raise ValueError("compiled-artifact manifest has unknown field(s) %s; the strict schema does "
+                             "not accept them" % (unknown,))
+        kwargs = {k: data[k] for k in data if k in ctor_keys}
+        return cls(**kwargs)
 
     def __str__(self):
         def _flag(value):
@@ -395,4 +438,5 @@ def check_layout_supported(manifest, layout_kind):
 
 
 __all__ = ["CompiledArtifactManifest", "build_compiled_manifest", "check_layout_supported",
-           "apply_native_manifest", "load_native_manifest", "build_compiled_manifest_from_so"]
+           "apply_native_manifest", "load_native_manifest", "build_compiled_manifest_from_so",
+           "ARTIFACT_MANIFEST_SCHEMA_VERSION"]

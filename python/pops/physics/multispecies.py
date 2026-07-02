@@ -121,6 +121,16 @@ class CompiledCoupledSource:
                 % (self.name, self.backend, len(self.in_blocks), len(self.consts),
                    len(self.out_blocks)))
 
+    def utilization(self):
+        """Capacity utilization of the compiled coupling against the FROZEN kCsMax* bounds (ADC-610):
+        {registers, terms, program} each a {count, limit} pair. Surfaces the previously-hidden C++
+        fixed-array capacities (coupled_source_program.hpp) so the headroom of a coupling is
+        introspectable. The compile() validation already refuses an overflow with a clear error; this
+        records the utilization rather than fabricating a pass."""
+        return {"registers": {"count": len(self._reg_order) + len(self.consts), "limit": _CS_MAX_REG},
+                "terms": {"count": len(self.out_blocks), "limit": _CS_MAX_TERMS},
+                "program": {"count": len(self.prog_ops), "limit": _CS_MAX_PROG}}
+
     def reference_terms(self, fields):
         """Evaluates the source terms on numpy arrays (REFERENCE for tests). @p fields:
         dict (block, role_canonical) -> array; returns [(block, role_canonical, dS)] with dS = S

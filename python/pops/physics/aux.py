@@ -35,9 +35,23 @@ AUX_NAMED_BASE = 5
 AUX_NAMED_MAX = 4  # maximum number of named aux fields per model (= kAuxMaxExtra on the C++ side)
 
 # Bound on the number of RUNTIME parameters per block (P7-b). MIRROR of kMaxRuntimeParams
-# (include/pops/runtime/runtime_params.hpp): the C++ carrier RuntimeParams has an array of this FIXED
-# size (device-copiable without allocation), so a model exceeding the bound is rejected at codegen.
+# (include/pops/runtime/config/runtime_params.hpp): the C++ carrier RuntimeParams has an array of this
+# FIXED size (device-copiable without allocation), so a model exceeding the bound is rejected at codegen.
+# This module stays stdlib-only (no _pops import), so the value is a literal; _pops exposes the same
+# number as __max_runtime_params__ (ADC-610) and max_runtime_params() below reconciles the two when the
+# module is present -- test_capacity_limits.py asserts they agree, so the literal cannot silently drift.
 _K_MAX_RUNTIME_PARAMS = 32
+
+
+def max_runtime_params():
+    """The runtime-param capacity, preferring the C++ constant _pops.__max_runtime_params__ when the
+    module is importable (single source), else the stdlib-only literal mirror. hasattr-gated so a stale
+    _pops (built before ADC-610 exposed the attribute) transparently falls back to the literal 32."""
+    try:
+        import pops._pops as _pops  # noqa: PLC0415 -- lazy, keeps this module _pops-free at import
+    except Exception:  # pragma: no cover -- _pops absent (pure-Python authoring / docs build)
+        return _K_MAX_RUNTIME_PARAMS
+    return int(getattr(_pops, "__max_runtime_params__", _K_MAX_RUNTIME_PARAMS))
 
 
 def aux_n_aux(aux_names):

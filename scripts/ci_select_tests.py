@@ -178,7 +178,11 @@ def manifest_cpp_suites(manifest: dict) -> list[dict]:
         labels = set(str(label) for label in suite.get("labels", []))
         if not name:
             raise SystemExit("invalid C++ suite without name in tests/test_manifest.toml")
-        if "mpi" in labels or suite.get("mpi_nproc"):
+        # MPI-only suites are built solely in the ci-mpi job; keep them out of the serial
+        # selection or the gate hits `ninja: unknown target`. The manifest label/mpi_nproc
+        # is the primary filter; the `mpi` NAME SEGMENT check is a belt-and-braces guard for
+        # a suite that forgets the label (see #435, test_amr_regrid_mpi_parity).
+        if "mpi" in labels or suite.get("mpi_nproc") or "mpi" in name.split("_"):
             continue
         sources = [normalize(str(source)) for source in suite.get("sources", [])]
         if not sources:
