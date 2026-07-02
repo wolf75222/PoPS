@@ -492,12 +492,16 @@ class _RecordingSim:
 
 
 def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
-    """Run bind() with System/AmrSystem replaced by recording stubs; return the chosen class.
+    """Run bind() with System/AmrSystem replaced by recording stubs; return the chosen ENGINE class.
 
-    The AmrSystem stub mirrors the real constructor (it accepts the derived ``AmrSystemConfig``)
-    and records the refinement flow (set_refinement / set_phi_refinement) bind() applies before
-    install. For target='amr_system' the compiled handle carries a per-block CompiledModel table
-    (``_block_compiled_models``) so the install routes the native path (compiled=None)."""
+    ADC-583: bind() now returns a ``BoundSimulation`` VIEW over the internal engine (not the raw
+    engine). The runtime adapters build the engine (the monkeypatched stub) and wrap it, so the
+    dispatch is asserted on ``type(sim._engine)`` (the stub the adapter chose) while ``sim`` is the
+    bound-simulation view. The AmrSystem stub mirrors the real constructor (it accepts the derived
+    ``AmrSystemConfig``) and records the refinement flow (set_refinement / set_phi_refinement) the
+    adapter applies before install. For target='amr_system' the compiled handle carries a per-block
+    CompiledModel table (``_block_compiled_models``) so the install routes the native path
+    (compiled=None)."""
     import pops.runtime.system as rtsys
 
     class _StubSystem(_RecordingSim):
@@ -530,7 +534,10 @@ def _bind_with_stub_runtime(target, layout=None, blocks=("ne",), initial=None):
         if initial is None:
             initial = {name: [1.0] for name in blocks}
         sim = orchestration.bind(compiled, initial_state=initial)
-        return type(sim), _RecordingSim.last, _StubSystem, _StubAmrSystem, sim
+        # bind() returns a BoundSimulation view (ADC-583); the dispatch is asserted on the wrapped
+        # engine (sim._engine), which is the stub the adapter built.
+        engine = sim._engine
+        return type(engine), _RecordingSim.last, _StubSystem, _StubAmrSystem, engine
     finally:
         rtsys.System, rtsys.AmrSystem = orig_sys, orig_amr
 
@@ -543,6 +550,36 @@ def test_bind_system_dispatch():
     _check(last["instances"]["ne"]["initial"] == [1.0], "initial state routed by block name")
     _check("phi" in last["solvers"], "the Poisson field solver derived from the problem")
     print("ok test_bind_system_dispatch")
+
+
+def test_bind_returns_bound_simulation_view():
+    # ADC-583: bind() returns a BoundSimulation VIEW over the internal engine, NOT the raw engine.
+    # The assembly setters are hidden; the wrapped engine is the internal escape hatch (sim._engine).
+    import pops.runtime.system as rtsys
+
+    class _StubSystem(_RecordingSim):
+        pass
+
+    orig = rtsys.System
+    rtsys.System = _StubSystem
+    try:
+        prob = pops.Case().block("ne", physics=_StubModel()).field(_poisson_problem())
+        compiled = _StubCompiled(target="system", problem=prob)
+        sim = orchestration.bind(compiled, initial_state={"ne": [1.0]})
+        _check(type(sim).__name__ == "BoundSimulation", "bind returns a BoundSimulation view")
+        _check(isinstance(sim._engine, _StubSystem), "sim._engine is the internal engine (escape hatch)")
+        # A hidden assembly setter raises a clear, engine-vocabulary-free AttributeError.
+        try:
+            sim.add_equation
+            raise AssertionError("add_equation must be hidden on the bound simulation")
+        except AttributeError as exc:
+            msg = str(exc)
+            _check("pops.Case" in msg and "pops.compile" in msg, "the reject speaks Case/compile/bind")
+            for bad in ("System.", "AmrSystem", "set_poisson", "install_program", "set_refinement"):
+                _check(bad not in msg, "the reject does not recommend %r" % bad)
+    finally:
+        rtsys.System = orig
+    print("ok test_bind_returns_bound_simulation_view")
 
 
 def test_bind_flows_output_policies():

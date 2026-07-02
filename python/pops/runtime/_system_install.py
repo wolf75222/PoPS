@@ -102,8 +102,9 @@ class _SystemInstall:
         # silently (the condensed source would be lost).
         if isinstance(time, Split):
             raise TypeError(
-                "System.add_block: pops.Split (Schur-condensed source stage) is only supported by "
-                "add_equation (which plugs the source stage); use add_equation(..., time=pops.Split(...)).")
+                "System.add_block: pops.Split (Schur-condensed source stage) is not wired on this "
+                "native seam. Declare the splitting on the pops.Case time scheme "
+                "(time=pops.Split(...)) and lower it with pops.compile(...) + pops.bind(...).")
         # Implicit mask + Newton options carried by the temporal policy (IMEX/SourceImplicit);
         # neutral defaults on the other policies (Explicit). Resolved/validated on the C++ side
         # (System::add_block) against the block's names/roles.
@@ -201,9 +202,10 @@ class _SystemInstall:
         # non-empty mask rather than ignore it silently (cf. the stride rejection on backend 'aot').
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
-                "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are only supported "
-                "on a composed model pops.Model(...) (-> add_block). The compiled model (.so) does not "
-                "carry the mask; use a native pops.Model(...).")
+                "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are carried "
+                "only by a composed native model (pops.Model(...)), available on the internal native "
+                "engine API (not part of the pops.bind surface). The compiled model (.so) does not "
+                "carry the mask.")
         # Same rules for the Newton options/diagnostics (IMEX): not carried by the .so ABI.
         # Non-default values would be ignored SILENTLY -> explicit rejection.
         if (getattr(time, "newton_max_iters", NEWTON_DEFAULT_MAX_ITERS)
@@ -221,9 +223,9 @@ class _SystemInstall:
                 != NEWTON_DEFAULT_FAIL_POLICY):
             raise ValueError(
                 "add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
-                "diagnostics/damping/fail_policy) are only supported on a composed model "
-                "pops.Model(...) (-> add_block). The compiled model (.so) ABI does not carry "
-                "them; use a native pops.Model(...).")
+                "diagnostics/damping/fail_policy) are carried only by a composed native model "
+                "(pops.Model(...)), available on the internal native engine API (not part of the "
+                "pops.bind surface). The compiled model (.so) ABI does not carry them.")
 
         if not isinstance(model, CompiledModel):
             raise TypeError("add_equation: model must be an pops.Model(...) (ModelSpec) or a "
@@ -283,7 +285,8 @@ class _SystemInstall:
                 raise ValueError(
                     "add_equation: limiter 'weno5' not supported on backend 'prototype' (JIT, host "
                     "Rusanov order-1 residual, without assemble_rhs); use backend='aot'/'production' "
-                    "(WENO5 wired end to end) or add_block (composed model pops.Model(...)).")
+                    "(WENO5 wired end to end), or a composed native model (pops.Model(...)) on the "
+                    "internal native engine API.")
             if spatial.flux != "rusanov":
                 raise ValueError(
                     "add_equation: backend 'prototype' (JIT, host Rusanov order-1 residual) only exposes "
@@ -296,16 +299,16 @@ class _SystemInstall:
             if not evolve:
                 raise ValueError(
                     "add_equation: evolve=False not supported on backend 'prototype' (the JIT .so ABI "
-                    "does not carry evolve; the block would be advanced silently). Use a composed "
-                    "native model pops.Model(...) -> add_block(..., evolve=False) (or add_background) "
-                    "for a frozen field.")
+                    "does not carry evolve; the block would be advanced silently). A frozen field "
+                    "(evolve=False / background) is available only on the internal native engine API "
+                    "(a composed native model, pops.Model(...)), not part of the pops.bind surface.")
             # positivity_floor (ADC-76) is NOT wired on the host JIT path (no assemble_rhs,
             # dedicated Rusanov order-1 residual): explicit rejection rather than a silently ignored floor.
             if getattr(spatial, "positivity_floor", 0.0) > 0.0:
                 raise ValueError(
                     "add_equation: positivity_floor not supported on backend 'prototype' (dedicated "
                     "host residual, without high-order reconstruction); use backend='aot'/'production' "
-                    "or a composed model pops.Model(...) -> add_block.")
+                    "or a composed native model (pops.Model(...)) on the internal native engine API.")
             # NB wave_speed_cache (ADC-199): no dedicated guard here -- the cache requires riemann='hll',
             # already rejected above on 'prototype' (rusanov order 1 only) -> never silently ignored on
             # this backend.
@@ -322,7 +325,7 @@ class _SystemInstall:
                     "add_equation: stride=%d not supported on backend 'aot' (the AOT .so ABI does not "
                     "carry the cadence; the block would run at stride=1 silently). Use "
                     "backend='production' (native path, cadence wired) or a composed native model "
-                    "pops.Model(...) -> add_block." % nstride)
+                    "(pops.Model(...)) on the internal native engine API." % nstride)
             # evolve=False (FROZEN block / fixed background) is NOT wired: the add_compiled_block ABI does
             # not carry evolve (add_compiled_block forces it to true on the C++ side) -> the block would be
             # advanced SILENTLY. We REJECT it (rejection rather than silent ignore). For a frozen field,
@@ -333,15 +336,15 @@ class _SystemInstall:
                     "add_equation: evolve=False not supported on backend 'aot' (the AOT .so ABI does not "
                     "carry evolve; the block would be advanced silently). Use "
                     "backend='production' (native path, evolve wired) or a composed native model "
-                    "pops.Model(...) -> add_block(..., evolve=False) (or add_background) for a frozen field.")
+                    "(pops.Model(...)) on the internal native engine API for a frozen field.")
             # wave_speed_cache (ADC-199): the AOT .so ABI does not carry the wave speed cache -> it would
             # be silently ignored. Explicit rejection (the cache is only wired on the composed native
             # add_block).
             if getattr(spatial, "wave_speed_cache", False):
                 raise ValueError(
                     "add_equation: wave_speed_cache not supported on backend 'aot' (the AOT .so ABI does "
-                    "not carry the HLL wave speed cache; it would be silently ignored). Use a composed "
-                    "native model pops.Model(...) -> add_block.")
+                    "not carry the HLL wave speed cache; it would be silently ignored). It is available "
+                    "only on the internal native engine API (a composed native model, pops.Model(...)).")
             self._s.add_compiled_block(name, compiled.so_path, spatial.limiter, spatial.flux,
                                        spatial.recon, time.kind, nsub, names_arg,
                                        getattr(spatial, "positivity_floor", 0.0))
@@ -364,7 +367,8 @@ class _SystemInstall:
                 raise ValueError(
                     "add_equation: wave_speed_cache not supported on backend 'production' (the "
                     "add_native_block ABI does not carry the HLL wave speed cache; it would be silently "
-                    "ignored). Use a composed native model pops.Model(...) -> add_block.")
+                    "ignored). It is available only on the internal native engine API (a composed "
+                    "native model, pops.Model(...)).")
             check_compiled_matches_module(getattr(compiled, "abi_key", ""))
             gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
             self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,

@@ -50,7 +50,7 @@ class _Geometry(MeshDescriptor):
         emitting an inert wall; subclasses that ARE a wall override this.
         """
         raise TypeError(
-            "%s cannot be used as a Poisson wall (set_poisson(wall=...) accepts a "
+            "%s cannot be used as a Poisson wall (the Case field problem's wall= accepts a "
             "pops.mesh.geometry.Disc / NoWall or the legacy 'circle' / 'none' string)"
             % self.name)
 

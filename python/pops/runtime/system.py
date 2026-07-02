@@ -198,10 +198,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         """The AMR runtime inspection surface does not apply to a uniform ``System``.
 
         ``System`` is single-level: it carries no AMR hierarchy, so ``sim.amr`` (the live
-        patch / regrid / ghost / reflux / checkpoint reports of Spec 5 sec.8.12) is an
-        ``AmrSystem``-only handle. Build an ``pops.AmrSystem`` for a refined run, or use the
-        STATIC authoring report ``pops.inspect_amr(layout)`` for a layout descriptor. Accessing it
-        raises a clear ``AttributeError`` (sourced in ``__getattr__`` so the message is single).
+        patch / regrid / ghost / reflux / checkpoint reports of Spec 5 sec.8.12) applies only to a
+        refined runtime. Declare ``layout=AMR(...)`` on the ``pops.Case`` for a refined run, or use
+        the STATIC authoring report ``pops.inspect_amr(layout)`` for a layout descriptor. Accessing
+        it raises a clear ``AttributeError`` (sourced in ``__getattr__`` so the message is single).
         """
         # The AttributeError routes through __getattr__('amr'), which raises the clear message.
         raise AttributeError("amr")
@@ -220,6 +220,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         if attr == "amr":
             raise AttributeError(
                 "System has no 'amr' inspection handle: System is a uniform single-level runtime "
-                "with no AMR hierarchy. Use pops.AmrSystem (its sim.amr returns an AmrRuntimeView), "
-                "or pops.inspect_amr(layout) for the static authoring report.")
+                "with no AMR hierarchy. Declare layout=AMR(...) on the pops.Case for a refined run "
+                "(its sim.amr returns an AmrRuntimeView), or pops.inspect_amr(layout) for the "
+                "static authoring report.")
         return getattr(self._s, attr)

@@ -31,8 +31,8 @@ class _SystemAuxState:
         table = self._aux_field_index.get(block)
         if table is None:
             raise ValueError(
-                "set_aux_field: block '%s' unknown (or added without a named aux field); add the block "
-                "via add_equation(model=...) with a model declaring m.aux_field('%s')." % (block, name))
+                "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
+                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name))
         if name not in table:
             known = sorted(table) if table else "(none)"
             raise ValueError(
