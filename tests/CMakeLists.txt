@@ -560,9 +560,14 @@ if(POPS_HAS_MPI)
 
   foreach(_test IN LISTS POPS_CPP_MPI_ONLY_TESTS)
     set(_extra_libs)
-    if(_test MATCHES "^(test_mpi_system_|test_mpi_coupled_source)$")
+    # test_mpi_system_* + test_mpi_coupled_source need the System runtime; test_mpi_amr_* +
+    # test_amr_regrid_mpi_parity need the AMR runtime (AmrSystem). These are PREFIX matches --
+    # a `$`-anchored pattern would only match the bare prefix and leave e.g.
+    # test_mpi_amr_twoblock_parity / test_mpi_system_solve_fields without their runtime object
+    # lib, so the link fails with undefined AmrSystem/System symbols.
+    if(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
-    elseif(_test MATCHES "^(test_mpi_amr_|test_amr_regrid_mpi_parity)$")
+    elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     endif()
     pops_add_mpi_gtest_suite(${_test} EXTRA_LIBS ${_extra_libs} RANKS ${POPS_MPI_RANKS_${_test}})
