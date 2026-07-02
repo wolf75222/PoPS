@@ -73,8 +73,7 @@ __all__ = [
     "numerical_defaults_report", "fallback_diagnostics_report", "reset_fallback_diagnostics",
     "time", "model", "math", "physics", "lib", "mesh",
     "params", "output", "external", "fields", "linalg", "solvers", "experimental",
-    "abi_key", "capabilities", "inspect_capabilities", "inspect_amr",
-    "native_capability_report",
+    "abi_key", "capabilities", "inspect_capabilities", "inspect_amr", "native_capability_report",
     "runtime_environment_report", "validate_runtime_environment", "RuntimeCapabilityError",
     "set_threads", "has_kokkos", "parallel_info", "doctor",
     "compile_problem", "CompiledProblem", "CompiledTime",
@@ -83,22 +82,13 @@ __all__ = [
 ]
 
 
-# Lower / authoring layers + the moved integrate (re-exported, surface unchanged).
+# Lower / authoring layers + the moved integrate (re-exported, surface unchanged). All pure-stdlib
+# authoring packages (numpy-free import; the dsl / codegen path pulls numpy lazily on first use).
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
-from . import time  # noqa: E402  (pops.time.Program IR; pure stdlib, no numpy/_pops dependency)
-from . import model  # noqa: E402  (pops.model operator-first type system; pure stdlib, Spec 2)
-from . import math  # noqa: E402  (pops.math board operators; pure stdlib, Spec 3, dsl lazy)
-from . import lib  # noqa: E402  (pops.lib typed-brick descriptor catalog; pure stdlib, Spec 3)
-from . import physics  # noqa: E402  (pops.physics board model authoring; numpy-free import, Spec 3)
-from . import mesh  # noqa: E402  (pops.mesh typed mesh/layout/AMR descriptors; pure stdlib, Spec 5)
-from . import params  # noqa: E402  (pops.params typed scalar params; pure stdlib, Spec 5)
-from . import output  # noqa: E402  (pops.output typed output/checkpoint policies; pure stdlib, Spec 5)
-from . import external  # noqa: E402  (pops.external compiled-brick references; pure stdlib, Spec 5)
-from . import fields  # noqa: E402  (pops.fields typed elliptic field-problem authoring; pure stdlib, Spec 5)
-from . import linalg  # noqa: E402  (pops.linalg abstract algebra: names A x = b; pure stdlib, Spec 5)
-from . import solvers  # noqa: E402  (pops.solvers linear/nonlinear/elliptic solver catalog; pure stdlib, Spec 5)
-# pops.experimental (numpy-host, TESTS-ONLY) is NOT eagerly imported onto the root (ADC-600): it stays
-# a lazily-reachable submodule so PythonFlux is never bound as pops.PythonFlux (its name is in __all__).
+from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
+from . import params, output, external, fields, linalg, solvers  # noqa: E402  (Spec 5 typed params/output/fields/algebra/solvers)
+# pops.experimental (numpy-host, TESTS-ONLY) is NOT eagerly imported onto the root (ADC-600): it
+# stays a lazily-reachable submodule so PythonFlux is never bound as pops.PythonFlux.
 from .case import Case  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)
