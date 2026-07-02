@@ -121,16 +121,17 @@ template <class Model, class Limiter, class Flux>
 AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp) {
   using Coupler = AmrCouplerMP<Model>;
   const int nc = Model::n_vars;
-  const Geometry g{Box2D::from_extents(bp.n, bp.n), 0.0, bp.L, 0.0, bp.L};
-  const double dxc = bp.L / bp.n, dxf = dxc / 2;
+  const Geometry g{Box2D::from_extents(bp.mesh.n, bp.mesh.n), 0.0, bp.mesh.L, 0.0, bp.mesh.L};
+  const double dxc = bp.mesh.L / bp.mesh.n, dxf = dxc / 2;
   // Level 0 (coarse): layout decided by the ownership policy (replicated mono-box by default,
-  // distributed multi-box if bp.distribute_coarse). When replicated, dmap = my_rank() everywhere (the box
+  // distributed multi-box if bp.mesh.distribute_coarse). When replicated, dmap = my_rank() everywhere (the box
   // lives on each rank; a round-robin would place it on rank 0 only -> out-of-bounds fab elsewhere,
   // segfault under np>1). The fine seed (allocated below ONLY when refinement is configured) starts on the
   // SAME dmap as the coarse; the initial regrid REBUILDS it then REDISTRIBUTES round-robin
   // (DistributionMapping(nfine, n_ranks())) -> multi-GPU distribution of the fine patches. When distributed,
   // the coarse is distributed TOO (AMR strong-scaling).
-  const auto [bac, dm] = coupler_make_coarse_layout(bp.n, bp.distribute_coarse, bp.coarse_max_grid);
+  const auto [bac, dm] =
+      coupler_make_coarse_layout(bp.mesh.n, bp.mesh.distribute_coarse, bp.mesh.coarse_max_grid);
   const int ng = Limiter::n_ghost;  // limiter stencil (1 NoSlope, 2 MUSCL): scheme parity
   MultiFab Uc(bac, dm, nc, ng);
   Uc.set_val(Real(0));
@@ -150,8 +151,9 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   //     patch). Gating on refine_threshold keeps the no-refinement hierarchy MONO-LEVEL (n_patches()==0, like
   //     the amr-schur path), so the coarse distributes cleanly. When refinement IS configured the seed is
   //     allocated and the first build regrid chops + distributes it round-robin exactly as before (UNCHANGED).
-  if (!bp.schur && bp.refine_threshold < kAmrRefinementDisabledThreshold) {
-    const int I0 = bp.n / 4, I1 = 3 * bp.n / 4 - 1, J0 = bp.n / 4, J1 = 3 * bp.n / 4 - 1;
+  if (!bp.schur.enabled && bp.regrid.threshold < kAmrRefinementDisabledThreshold) {
+    const int I0 = bp.mesh.n / 4, I1 = 3 * bp.mesh.n / 4 - 1, J0 = bp.mesh.n / 4,
+              J1 = 3 * bp.mesh.n / 4 - 1;
     Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
     BoxArray baf(std::vector<Box2D>{fb});
     MultiFab Uf(baf, dm, nc, ng);
@@ -159,54 +161,54 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
     levels.push_back({std::move(Uf), nullptr, dxf, dxf});
   }
 
-  auto cpl = std::make_shared<Coupler>(model, g, bac, bp.poisson_bc, std::move(levels), bp.wall,
-                                       !bp.distribute_coarse);
+  auto cpl = std::make_shared<Coupler>(model, g, bac, bp.poisson.bc, std::move(levels),
+                                       bp.poisson.wall, !bp.mesh.distribute_coarse);
   // Coarse seed: COMPLETE conservative state (preferred, set_conservative_state) otherwise density
   // only (historical). coupler_inject_coarse_to_fine_mb prolongs ALL components (loop k<nc), so the
   // momentum of the seed propagates freely to the fine levels -- no change of prolongation.
   // has_state==false -> bit-identical density path (NO-DEFAULT-CHANGE).
-  if (bp.has_state)
-    coupler_write_coarse_state(cpl->coarse(), bp.state, bp.n, nc);
-  else if (bp.has_density)
-    coupler_write_coarse(cpl->coarse(), bp.density, bp.n, nc, bp.gamma);
+  if (bp.initial.has_state)
+    coupler_write_coarse_state(cpl->coarse(), bp.initial.state, bp.mesh.n, nc);
+  else if (bp.initial.has_density)
+    coupler_write_coarse(cpl->coarse(), bp.initial.density, bp.mesh.n, nc, bp.physics.gamma);
   auto& Lv = cpl->levels();
   for (std::size_t k = 1; k < Lv.size(); ++k)
-    coupler_inject_coarse_to_fine_mb(cpl->coarse(), Lv[k].U, !bp.distribute_coarse);
+    coupler_inject_coarse_to_fine_mb(cpl->coarse(), Lv[k].U, !bp.mesh.distribute_coarse);
 
-  const double thr = bp.refine_threshold;
+  const double thr = bp.regrid.threshold;
   auto crit = [thr](const ConstArray4& a, int i, int j) { return a(i, j, 0) > thr; };
   if (cpl->levels().size() > 1)
     cpl->regrid(crit);  // no regrid on a mono-level hierarchy (amr-schur)
   // model-NAMED aux (ADC-291): seed the static named fields onto the coupler's shared aux BEFORE the
   // first update/step (like density/B_z seeding). The coupler re-applies them in compute_aux each
   // update, so they persist across regrid and reach every level via the aux injection. Empty -> no-op.
-  for (const auto& kv : bp.named_aux)
+  for (const auto& kv : bp.named_aux.fields)
     cpl->set_named_aux(kv.first, std::vector<Real>(kv.second.begin(), kv.second.end()));
   // ADC-369: per-field aux halo policies (compute_aux applies them after the shared fill).
-  for (const auto& kv : bp.named_aux_bc)
+  for (const auto& kv : bp.named_aux.halo_policies)
     cpl->set_named_aux_bc(kv.first, kv.second);
   cpl->update();
 
   AmrCompiledHooks h;
   h.coupler_holder = cpl;  // lifetime: the closures capture cpl (shared_ptr)
-  const int sub = bp.substeps;
-  const bool rprim = bp.recon_prim;
-  const bool imex = bp.imex;  // implicit stiff source (backward_euler) rather than forward Euler
-  const int regrid_every = bp.regrid_every;
+  const int sub = bp.physics.substeps;
+  const bool rprim = bp.physics.recon_prim;
+  const bool imex =
+      bp.physics.imex;  // implicit stiff source (backward_euler) rather than forward Euler
+  const int regrid_every = bp.mesh.regrid_every;
   // NEWTON OPTIONS of the mono-block IMEX source (wave 3): threaded to cpl->step -> advance_amr ->
   // backward_euler_source. DEFAULT {} (newton_options not set) = historical constants (2 iters) ->
   // bit-identical path (2a). Captured BY VALUE (POD) in the h.step closure.
-  const NewtonOptions nopts = bp.newton_options;
-  // TIME METHOD mono-block: integer of the flat ABI (bp.time_method) -> AmrTimeMethod, threaded to
-  // cpl->step -> advance_amr. 0 (default / older .so loader) = historical kEuler, bit-identical.
+  const NewtonOptions nopts = bp.physics.newton_options;
+  // TIME METHOD mono-block: integer of the flat ABI (bp.physics.time_method) -> AmrTimeMethod, threaded
+  // to cpl->step -> advance_amr. 0 (default / older .so loader) = historical kEuler, bit-identical.
   const AmrTimeMethod tmethod =
-      bp.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
+      bp.physics.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
   // Zhang-Shu positivity floor (ADC-259): threaded to cpl->step / advance_transport -> advance_amr ->
-  // compute_face_fluxes + C/F ghost clamp. bp.pos_floor == 0 (default / older flat-ABI .so loader that
-  // never sets this append-only field) -> inactive, bit-identical historical path.
-  const Real pf = static_cast<Real>(bp.pos_floor);
+  // compute_face_fluxes + C/F ghost clamp. bp.physics.pos_floor == 0 (default) -> inactive, bit-identical.
+  const Real pf = static_cast<Real>(bp.physics.pos_floor);
   auto step_state = std::make_shared<int>(0);  // step counter shared by the closure
-  if (bp.schur) {
+  if (bp.schur.enabled) {
     // amr-schur PATH: GLOBAL condensed source stage (electrostatic/Lorentz) instead of the LOCAL
     // explicit/imex source. The stage is built on the COARSE grid by COMPOSING the uniform stage #126
     // (Density/MomentumX/MomentumY roles of the Model -> clear error HERE if missing). Coarse B_z required
@@ -249,30 +251,30 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
       throw std::runtime_error("AmrSystem::set_source_stage: '" + spec +
                                "' is neither a stable role nor a block variable (" + label + ")");
     };
-    const int sc_rho = resolve_schur(bp.schur_density, VariableRole::Density, "Density");
-    const int sc_mx = resolve_schur(bp.schur_momentum_x, VariableRole::MomentumX, "MomentumX");
-    const int sc_my = resolve_schur(bp.schur_momentum_y, VariableRole::MomentumY, "MomentumY");
-    const int sc_E = (bp.schur_energy == "none")
+    const int sc_rho = resolve_schur(bp.schur.density, VariableRole::Density, "Density");
+    const int sc_mx = resolve_schur(bp.schur.momentum_x, VariableRole::MomentumX, "MomentumX");
+    const int sc_my = resolve_schur(bp.schur.momentum_y, VariableRole::MomentumY, "MomentumY");
+    const int sc_E = (bp.schur.energy == "none")
                          ? -1
-                         : (bp.schur_energy.empty()
+                         : (bp.schur.energy.empty()
                                 ? schur_vs.index_of(VariableRole::Energy)
-                                : resolve_schur(bp.schur_energy, VariableRole::Energy, "Energy"));
+                                : resolve_schur(bp.schur.energy, VariableRole::Energy, "Energy"));
     auto schur = std::make_shared<AmrCondensedSchurSourceStepper>(
-        schur_vs, sc_rho, sc_mx, sc_my, sc_E, g, bac, bp.poisson_bc,
-        static_cast<Real>(bp.schur_alpha));
-    if (bp.schur_krylov_tol > 0.0 || bp.schur_krylov_max_iters > 0)
+        schur_vs, sc_rho, sc_mx, sc_my, sc_E, g, bac, bp.poisson.bc,
+        static_cast<Real>(bp.schur.alpha));
+    if (bp.schur.krylov_tol > 0.0 || bp.schur.krylov_max_iters > 0)
       schur->set_krylov(
-          bp.schur_krylov_tol > 0.0 ? static_cast<Real>(bp.schur_krylov_tol)
+          bp.schur.krylov_tol > 0.0 ? static_cast<Real>(bp.schur.krylov_tol)
                                     : kKrylovDefaultRelTol,
-          bp.schur_krylov_max_iters > 0 ? bp.schur_krylov_max_iters
+          bp.schur.krylov_max_iters > 0 ? bp.schur.krylov_max_iters
                                         : kSchurKrylovCartesianMaxIters);
     auto bz_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
-    amr_write_coarse_bz(*bz_coarse, bp.bz_field, bp.n);
+    amr_write_coarse_bz(*bz_coarse, bp.schur.bz_field, bp.mesh.n);
     auto phi_coarse = std::make_shared<MultiFab>(bac, dm, 1, 1);
     phi_coarse->set_val(Real(0));
-    const double theta = bp.schur_theta;
-    const bool strang = bp.schur_strang;
-    h.step = [cpl, crit, sub, rprim, regrid_every, step_state, schur, bz_coarse, phi_coarse, theta,
+    const double theta = bp.schur.theta;
+    const bool strang = bp.schur.strang;
+    h.base.step = [cpl, crit, sub, rprim, regrid_every, step_state, schur, bz_coarse, phi_coarse, theta,
               strang, model, pf](double dt) {
       // amr-schur Step 2/3: MONO-LEVEL hierarchy (the condensed stage does not carry the multi-level case).
       // So we do NOT regrid (a regrid would create a fine patch -> multi-level guard of the stage). The
@@ -306,7 +308,7 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
       ++*step_state;
     };
   } else {
-    h.step = [cpl, crit, sub, rprim, imex, regrid_every, step_state, nopts, tmethod, model,
+    h.base.step = [cpl, crit, sub, rprim, imex, regrid_every, step_state, nopts, tmethod, model,
               pf](double dt) {
       if (regrid_every > 0 && *step_state > 0 && *step_state % regrid_every == 0)
         cpl->regrid(crit);
@@ -326,38 +328,38 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   // the macro-step counter of the mono-block (the regrid cadence reads *step_state) on restart. Shares the
   // SAME step_state as the step closure above -> the regrid phase resumes exactly. Without the call,
   // *step_state stays at 0 (default, bit-identical).
-  h.set_macro_step = [step_state](int s) { *step_state = s; };
+  h.checkpoint.set_macro_step = [step_state](int s) { *step_state = s; };
   // CFL SPEED: lambda* (HasStabilitySpeed trait) if declared, otherwise max_wave_speed of the coupler
   // (historical fallback, bit-identical) -- SAME policy as System/make_max_speed, evaluated on the
   // COARSE grid (the AMR mono-block CFL lives at the coarse step).
   if constexpr (HasStabilitySpeed<Model>) {
-    h.max_speed = [cpl, model] {
+    h.base.max_speed = [cpl, model] {
       return static_cast<double>(max_stability_speed_mf(model, cpl->coarse(), cpl->aux0()));
     };
   } else {
-    h.max_speed = [cpl] { return static_cast<double>(cpl->max_wave_speed()); };
+    h.base.max_speed = [cpl] { return static_cast<double>(cpl->max_wave_speed()); };
   }
   // OPTIONAL STEP BOUNDS (AMR mono-block StabilityPolicy): same reductions as System,
   // hooks left EMPTY without the trait (AmrSystem::step_cfl then keeps the historical formula).
   if constexpr (HasSourceFrequency<Model>) {
-    h.source_frequency = [cpl, model] {
+    h.stability.source_frequency = [cpl, model] {
       return static_cast<double>(max_source_frequency_mf(model, cpl->coarse(), cpl->aux0()));
     };
   }
   if constexpr (HasStabilityDt<Model>) {
-    h.stability_dt = [cpl, model] {
+    h.stability.stability_dt = [cpl, model] {
       return static_cast<double>(min_stability_dt_mf(model, cpl->coarse(), cpl->aux0()));
     };
   }
-  h.mass = [cpl] { return static_cast<double>(cpl->mass()); };
-  h.n_patches = [cpl] {
+  h.base.mass = [cpl] { return static_cast<double>(cpl->mass()); };
+  h.base.n_patches = [cpl] {
     auto& L = cpl->levels();
     return L.size() >= 2 ? static_cast<int>(L[1].U.box_array().size()) : 0;
   };
   // Index-space signatures of the fine patches (mono-block counterpart of AmrRuntime::patch_boxes).
   // Captures the SAME cpl as the other hooks (no new lifetime concern), reads the already materialized
   // BoxArray -> query between steps, zero cost on the hot path (h.step untouched).
-  h.patch_boxes = [cpl] {
+  h.stability.patch_boxes = [cpl] {
     auto& L = cpl->levels();
     std::vector<pops::PatchBox> out;
     for (std::size_t k = 1; k < L.size(); ++k) {
@@ -371,27 +373,27 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   // (local_size()) and the GLOBAL base box count (box_array().size()). Same cpl capture as the other
   // hooks (no new lifetime concern); a query between steps, zero cost on the hot path. distribute_coarse
   // -> local < total per rank (distributed coarse transport); replicated/single-box -> local == total.
-  h.coarse_local_boxes = [cpl] { return cpl->coarse().local_size(); };
-  h.coarse_total_boxes = [cpl] { return cpl->coarse().box_array().size(); };
+  h.mpi_gather.coarse_local_boxes = [cpl] { return cpl->coarse().local_size(); };
+  h.mpi_gather.coarse_total_boxes = [cpl] { return cpl->coarse().box_array().size(); };
   // AMR CHECKPOINT / RESTART single-rank (ADC-65): COMPLETE conservative state per level + phi
   // (warm-start) + imposing the saved fine hierarchy. Capture the SAME cpl (shared_ptr) as the
   // other hooks (no new lifetime concern). Single-rank: the coupler accessors loop over local_size()
   // (no gather) -- the facade rejects np>1 / multi-block upstream. These hooks are QUERIES/SETTERS
   // between steps: zero cost on the hot path (h.step untouched).
-  h.n_levels = [cpl] { return cpl->nlev(); };
-  h.n_vars = [] { return Model::n_vars; };
-  h.level_state = [cpl](int k) { return cpl->level_state(k); };
-  h.set_level_state = [cpl](int k, const std::vector<double>& s) { cpl->set_level_state(k, s); };
-  h.level_potential = [cpl](int k) { return cpl->level_potential(k); };
-  h.set_level_potential = [cpl](int k, const std::vector<double>& p) {
+  h.checkpoint.n_levels = [cpl] { return cpl->nlev(); };
+  h.checkpoint.n_vars = [] { return Model::n_vars; };
+  h.checkpoint.level_state = [cpl](int k) { return cpl->level_state(k); };
+  h.checkpoint.set_level_state = [cpl](int k, const std::vector<double>& s) { cpl->set_level_state(k, s); };
+  h.checkpoint.level_potential = [cpl](int k) { return cpl->level_potential(k); };
+  h.checkpoint.set_level_potential = [cpl](int k, const std::vector<double>& p) {
     cpl->set_level_potential(k, p);
   };
   // GLOBAL (np>1 gather) counterparts (ADC-509): the facade routes to these under MPI np>1 so a
   // bit-identical checkpoint gathers the distributed per-level fabs onto rank 0 (COLLECTIVE, all ranks
   // call). Mono-rank they return the same array as the non-global hooks above (reduce = identity).
-  h.level_state_global = [cpl](int k) { return cpl->level_state_global(k); };
-  h.level_potential_global = [cpl](int k) { return cpl->level_potential_global(k); };
-  h.set_hierarchy = [cpl](const std::vector<pops::PatchBox>& boxes) {
+  h.mpi_gather.level_state_global = [cpl](int k) { return cpl->level_state_global(k); };
+  h.mpi_gather.level_potential_global = [cpl](int k) { return cpl->level_potential_global(k); };
+  h.checkpoint.set_hierarchy = [cpl](const std::vector<pops::PatchBox>& boxes) {
     // Mono-block: all patches live at level 1 -> we filter level == 1 and convert to Box2D
     // (INCLUSIVE corners, fine-level index space), then impose this BoxArray on the coupler.
     std::vector<pops::Box2D> fb;
@@ -400,14 +402,14 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
         fb.push_back(pops::Box2D{{b.ilo, b.jlo}, {b.ihi, b.jhi}});
     cpl->set_hierarchy(fb);
   };
-  const int nn = bp.n;
-  const bool repl = !bp.distribute_coarse;
-  h.density = [cpl, nn, repl] { return coupler_read_coarse(cpl->coarse(), nn, repl); };
+  const int nn = bp.mesh.n;
+  const bool repl = !bp.mesh.distribute_coarse;
+  h.base.density = [cpl, nn, repl] { return coupler_read_coarse(cpl->coarse(), nn, repl); };
   // Coarse phi: we refresh (update() = sync_down + compute_aux, hence coarse Poisson solve)
   // then read aux0 component 0. Counterpart of System::potential() which calls ensure_elliptic: the
   // value is current even if no step has run yet. update() is already called at each step,
   // so the overhead exists only on a call outside the loop (diagnostic).
-  h.potential = [cpl, nn, repl] {
+  h.base.potential = [cpl, nn, repl] {
     cpl->update();
     return coupler_read_coarse_phi(cpl->aux0(), nn, repl);
   };
@@ -442,14 +444,15 @@ struct SharedAmrLayout {
 /// then settle onto it via build_amr_block.
 inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool single_level = false) {
   SharedAmrLayout S;
-  S.geom = Geometry{Box2D::from_extents(bp.n, bp.n), 0.0, bp.L, 0.0, bp.L};
-  S.n = bp.n;
-  S.replicated_coarse = !bp.distribute_coarse;
-  S.poisson_bc = bp.poisson_bc;
-  S.wall = bp.wall;
-  const double dxc = bp.L / bp.n, dxf = dxc / 2;
+  S.geom = Geometry{Box2D::from_extents(bp.mesh.n, bp.mesh.n), 0.0, bp.mesh.L, 0.0, bp.mesh.L};
+  S.n = bp.mesh.n;
+  S.replicated_coarse = !bp.mesh.distribute_coarse;
+  S.poisson_bc = bp.poisson.bc;
+  S.wall = bp.poisson.wall;
+  const double dxc = bp.mesh.L / bp.mesh.n, dxf = dxc / 2;
   const auto [bac, dmc] =
-      detail::coupler_make_coarse_layout(bp.n, bp.distribute_coarse, bp.coarse_max_grid);
+      detail::coupler_make_coarse_layout(bp.mesh.n, bp.mesh.distribute_coarse,
+                                         bp.mesh.coarse_max_grid);
   S.ba_coarse = bac;
   S.dm_coarse = dmc;
   // SINGLE-LEVEL layout (epic ADC-508, compiled-Program AMR driver opt-in): a coarse-only hierarchy,
@@ -472,7 +475,8 @@ inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool sin
   // of the fine box and the reflux (all_reduce_sum_inplace of the flux registers) would sum the SAME
   // contribution n_ranks() times -> mass over-counted (grows with np). In serial (np=1) the round-robin
   // dmap places the box on rank 0, identical to {my_rank()}: bit-identical.
-  const int I0 = bp.n / 4, I1 = 3 * bp.n / 4 - 1, J0 = bp.n / 4, J1 = 3 * bp.n / 4 - 1;
+  const int I0 = bp.mesh.n / 4, I1 = 3 * bp.mesh.n / 4 - 1, J0 = bp.mesh.n / 4,
+            J1 = 3 * bp.mesh.n / 4 - 1;
   const Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
   BoxArray baf(std::vector<Box2D>{fb});
   DistributionMapping dmf(baf.size(),
@@ -1139,8 +1143,8 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
   // lazy build (refine/poisson/density parameters frozen at that point). Historical path, untouched.
   auto mono_builder = [model, limiter, riemann, recon_prim, imex](const AmrBuildParams& bp) {
     AmrBuildParams p = bp;
-    p.recon_prim = recon_prim;
-    p.imex = imex;
+    p.physics.recon_prim = recon_prim;
+    p.physics.imex = imex;
     return detail::dispatch_amr_compiled(model, limiter, riemann, p);
   };
   // (2) MULTI-BLOCK builder: captures the SAME concrete Model/scheme, materializes the AmrRuntimeBlock of the

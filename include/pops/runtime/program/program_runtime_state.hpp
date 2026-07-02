@@ -172,12 +172,22 @@ struct ProgramRuntimeState {
   /// The whole name -> value diagnostics map (checkpoint / inspection). By value: inert copy.
   std::map<std::string, Real> diagnostics() const { return diagnostics_; }
 
-  /// Seed a program block's RuntimeParams to its declaration defaults (ADC-510 / ADC-508). Clamped to
-  /// kMaxRuntimeParams; idempotent (re-seeding resets to the baseline). Called by install.
+  /// Seed a program block's RuntimeParams to its declaration defaults (ADC-510 / ADC-508). Idempotent
+  /// (re-seeding resets to the baseline). Called by install. DEFENCE IN DEPTH (ADC-610): a block with
+  /// more than kMaxRuntimeParams params is REJECTED here with a user-facing error instead of being
+  /// SILENTLY TRUNCATED into the fixed-size device carrier -- the Python codegen enforces the same bound
+  /// upstream, so this only fires for a hand-built .so with bogus pops_program_param_* metadata.
   void seed_params(int prog_block, const std::vector<double>& defaults) {
-    RuntimeParams rp;
     const int count = static_cast<int>(defaults.size());
-    rp.count = count > kMaxRuntimeParams ? kMaxRuntimeParams : count;
+    if (count > kMaxRuntimeParams)
+      throw std::runtime_error(
+          "install_program: program block " + std::to_string(prog_block) + " declares " +
+          std::to_string(count) + " runtime parameters > kMaxRuntimeParams=" +
+          std::to_string(kMaxRuntimeParams) +
+          " (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
+          "RuntimeParams cannot hold them. Regenerate the problem.so with the current headers.");
+    RuntimeParams rp;
+    rp.count = count;
     for (int k = 0; k < rp.count; ++k)
       rp.values[k] = static_cast<Real>(defaults[static_cast<std::size_t>(k)]);
     block_params_[prog_block] = rp;

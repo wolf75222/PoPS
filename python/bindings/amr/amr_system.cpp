@@ -111,7 +111,7 @@ struct AmrSystem::Impl {
     bool newton_diagnostics = false;  // newton_report: native MULTI-BLOCK (single/.so REJECTED)
     // TEMPORAL METHOD of the block (time == "ssprk3" -> kSsprk3). 0 == historical forward Euler (default),
     // 1 == kSsprk3 (order 3 + per-stage reflux). Materialized to AmrTimeMethod at build (single-block via
-    // make_build_params -> bp.time_method; multi-block via dispatch_amr_block). Mutually exclusive with imex.
+    // make_build_params -> bp.physics.time_method; multi-block via dispatch_amr_block). Mutually exclusive with imex.
     int time_method = 0;
     // Zhang-Shu positivity floor (ADC-259): if > 0, the AMR transport floors the Density-role face
     // states + C/F fine ghost means to >= pos_floor. 0 (default) = inactive, bit-identical. Threaded
@@ -163,7 +163,7 @@ struct AmrSystem::Impl {
   // pushed to the multi-block runtime (build_multi). Empty -> bit-identical. cf. set_aux_field_component.
   std::map<int, std::vector<double>> named_aux_;
   // Per-field aux HALO policies (ADC-369): component -> uniform policy. Pending until build, then seeded
-  // into the engine (bp.named_aux_bc for the coupler; runtime->set_named_aux_bc for the runtime).
+  // into the engine (bp.named_aux.halo_policies for the coupler; runtime->set_named_aux_bc for the runtime).
   std::map<int, AuxHaloPolicy> named_aux_bc_;
   // NAMED multi-elliptic fields (ADC-428): the native AMR loader declares them (register_elliptic_field)
   // and attaches each field's per-block RHS closure (set_block_elliptic_field) BEFORE the lazy build,
@@ -330,74 +330,81 @@ struct AmrSystem::Impl {
   AmrBuildParams make_build_params() {
     const BlockSpec& b = blocks[0];
     AmrBuildParams bp;
-    bp.n = cfg.n;
-    bp.L = cfg.L;
-    bp.regrid_every = cfg.regrid_every;
-    bp.gamma = b.gamma;
-    bp.substeps = b.substeps;
-    bp.recon_prim = b.recon_prim;
-    bp.imex = b.imex;
-    bp.time_method =
+    // MESH group: coarse geometry + ownership policy.
+    bp.mesh.n = cfg.n;
+    bp.mesh.L = cfg.L;
+    bp.mesh.regrid_every = cfg.regrid_every;
+    bp.mesh.distribute_coarse = cfg.distribute_coarse;
+    bp.mesh.coarse_max_grid = cfg.coarse_max_grid;
+    // PHYSICS group: physical + temporal treatment + IMEX Newton + positivity floor.
+    bp.physics.gamma = b.gamma;
+    bp.physics.substeps = b.substeps;
+    bp.physics.recon_prim = b.recon_prim;
+    bp.physics.imex = b.imex;
+    bp.physics.time_method =
         b.time_method;  // SSPRK3 (1) / forward Euler (0) -> build_amr_compiled -> cpl->step
-    bp.refine_threshold = refine_threshold;
-    bp.poisson_bc = poisson_bc();
-    bp.wall = wall_active();
-    bp.has_density = b.has_density;
-    bp.density = b.density;
-    bp.has_state =
-        b.has_state;  // full conservative state (set_conservative_state), takes priority at seed
-    bp.state = b.state;
-    bp.distribute_coarse = cfg.distribute_coarse;
-    bp.coarse_max_grid = cfg.coarse_max_grid;
-    // SOURCE STAGE condensed by Schur (amr-schur): block theta/alpha + system splitting/B_z.
-    bp.schur = b.schur;
-    bp.schur_theta = b.schur_theta;
-    bp.schur_alpha = b.schur_alpha;
-    bp.schur_krylov_tol = b.schur_krylov_tol;
-    bp.schur_krylov_max_iters = b.schur_krylov_max_iters;
-    bp.schur_density = b.schur_density;
-    bp.schur_momentum_x = b.schur_momentum_x;
-    bp.schur_momentum_y = b.schur_momentum_y;
-    bp.schur_energy = b.schur_energy;
-    bp.schur_strang = schur_strang;
-    bp.bz_field = bz_field;
-    bp.named_aux =
-        named_aux_;  // ADC-291: model-named aux fields seeded onto the single-block coupler
-    bp.named_aux_bc = named_aux_bc_;  // ADC-369: per-field aux halo policies
-    // NEWTON OPTIONS of the single-block IMEX source (wave 3: now WIRED on the AmrCouplerMP
-    // coupler). build_amr_compiled captures them from bp and passes them to cpl->step. Default
-    // (add_block without option) = historical NewtonOptions{} -> path (2a) bit-identical.
-    bp.newton_options = b.newton;
+    // NEWTON OPTIONS of the single-block IMEX source (wave 3: WIRED on the AmrCouplerMP coupler).
+    // Default (add_block without option) = historical NewtonOptions{} -> path (2a) bit-identical.
+    bp.physics.newton_options = b.newton;
     // Zhang-Shu positivity floor (ADC-259): consumed by build_amr_compiled (mono-block ->
     // cpl->step / advance_transport). 0 (default) -> inactive, bit-identical historical path.
-    bp.pos_floor = b.pos_floor;
+    bp.physics.pos_floor = b.pos_floor;
+    // REGRID group: refinement threshold.
+    bp.regrid.threshold = refine_threshold;
+    // POISSON group: coarse Poisson BC + conductive wall.
+    bp.poisson.bc = poisson_bc();
+    bp.poisson.wall = wall_active();
+    // INITIAL DATA group: density (historical) OR full conservative state (priority at seed).
+    bp.initial.has_density = b.has_density;
+    bp.initial.density = b.density;
+    bp.initial.has_state = b.has_state;
+    bp.initial.state = b.state;
+    // SCHUR STAGE group (amr-schur): block theta/alpha/descriptors + system splitting/B_z.
+    bp.schur.enabled = b.schur;
+    bp.schur.theta = b.schur_theta;
+    bp.schur.alpha = b.schur_alpha;
+    bp.schur.krylov_tol = b.schur_krylov_tol;
+    bp.schur.krylov_max_iters = b.schur_krylov_max_iters;
+    bp.schur.density = b.schur_density;
+    bp.schur.momentum_x = b.schur_momentum_x;
+    bp.schur.momentum_y = b.schur_momentum_y;
+    bp.schur.energy = b.schur_energy;
+    bp.schur.strang = schur_strang;
+    bp.schur.bz_field = bz_field;
+    // NAMED AUX group: model-named aux fields (ADC-291) + per-field halo policies (ADC-369).
+    bp.named_aux.fields = named_aux_;
+    bp.named_aux.halo_policies = named_aux_bc_;
     return bp;
   }
 
   // Installs the type-erased closures of the SINGLE-BLOCK path (AmrCouplerMP).
   void install(AmrCompiledHooks&& h) {
-    coupler_holder = std::move(h.coupler_holder);
-    step_fn = std::move(h.step);
-    max_speed_fn = std::move(h.max_speed);
-    mass_fn = std::move(h.mass);
-    n_patches_fn = std::move(h.n_patches);
-    patch_boxes_fn = std::move(h.patch_boxes);
-    coarse_local_boxes_fn = std::move(h.coarse_local_boxes);  // ADC-319 MPI ownership diagnostic
-    coarse_total_boxes_fn = std::move(h.coarse_total_boxes);
-    density_fn = std::move(h.density);
-    potential_fn = std::move(h.potential);
-    source_frequency_fn = std::move(h.source_frequency);  // empty without trait (bit-identical)
-    stability_dt_fn = std::move(h.stability_dt);
-    set_macro_step_fn = std::move(h.set_macro_step);  // cadence phase restoration (IO v1)
-    n_levels_fn = std::move(h.n_levels);              // AMR single-rank checkpoint/restart (ADC-65)
-    n_vars_fn = std::move(h.n_vars);
-    level_state_fn = std::move(h.level_state);
-    set_level_state_fn = std::move(h.set_level_state);
-    level_potential_fn = std::move(h.level_potential);
-    set_level_potential_fn = std::move(h.set_level_potential);
-    set_hierarchy_fn = std::move(h.set_hierarchy);
-    level_state_global_fn = std::move(h.level_state_global);          // ADC-509 np>1 gather
-    level_potential_global_fn = std::move(h.level_potential_global);  // ADC-509 np>1 gather
+    coupler_holder = std::move(h.coupler_holder);  // LIFETIME tier
+    // BASE tier: macro-step + primary observables.
+    step_fn = std::move(h.base.step);
+    max_speed_fn = std::move(h.base.max_speed);
+    mass_fn = std::move(h.base.mass);
+    n_patches_fn = std::move(h.base.n_patches);
+    density_fn = std::move(h.base.density);
+    potential_fn = std::move(h.base.potential);
+    // STABILITY tier: patch signatures + optional step bounds (empty without trait, bit-identical).
+    patch_boxes_fn = std::move(h.stability.patch_boxes);
+    source_frequency_fn = std::move(h.stability.source_frequency);
+    stability_dt_fn = std::move(h.stability.stability_dt);
+    // CHECKPOINT tier: cadence phase (IO v1) + per-level state/phi + hierarchy (ADC-65).
+    set_macro_step_fn = std::move(h.checkpoint.set_macro_step);
+    n_levels_fn = std::move(h.checkpoint.n_levels);
+    n_vars_fn = std::move(h.checkpoint.n_vars);
+    level_state_fn = std::move(h.checkpoint.level_state);
+    set_level_state_fn = std::move(h.checkpoint.set_level_state);
+    level_potential_fn = std::move(h.checkpoint.level_potential);
+    set_level_potential_fn = std::move(h.checkpoint.set_level_potential);
+    set_hierarchy_fn = std::move(h.checkpoint.set_hierarchy);
+    // MPI-GATHER tier: coarse ownership diagnostic (ADC-319) + np>1 gather counterparts (ADC-509).
+    coarse_local_boxes_fn = std::move(h.mpi_gather.coarse_local_boxes);
+    coarse_total_boxes_fn = std::move(h.mpi_gather.coarse_total_boxes);
+    level_state_global_fn = std::move(h.mpi_gather.level_state_global);
+    level_potential_global_fn = std::move(h.mpi_gather.level_potential_global);
     built = true;
   }
 
@@ -642,7 +649,7 @@ struct AmrSystem::Impl {
           "MULTI-BLOCK (>= 2 add_block, runtime engine). In single-block the IMEX handles ALL "
           "components implicitly (full backward-Euler) : remove the mask or add a 2nd block.");
     // SINGLE-BLOCK NEWTON OPTIONS (wave 3, settled): NOW WIRED on the AmrCouplerMP coupler
-    // (make_build_params -> bp.newton_options -> build_amr_compiled -> cpl->step -> advance_amr ->
+    // (make_build_params -> bp.physics.newton_options -> build_amr_compiled -> cpl->step -> advance_amr ->
     // backward_euler_source). No more rejection of b.newton_non_default here: a single IMEX block with
     // newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy runs correctly. Default = historical
     // iters=2 (bit-identical). Still NOT wired in single-block: the aggregated Newton REPORT
@@ -663,7 +670,7 @@ struct AmrSystem::Impl {
           "use newton_fail_policy='throw', or use a single-level System for warn diagnostics.");
     const AmrBuildParams bp = make_build_params();
     if (b.is_compiled) {  // compiled path: the builder freezes the types (Model, Limiter, Flux)
-      // Zhang-Shu positivity floor (ADC-322): bp.pos_floor (= b.pos_floor, set by set_compiled_block
+      // Zhang-Shu positivity floor (ADC-322): bp.physics.pos_floor (= b.pos_floor, set by set_compiled_block
       // from the regenerated loader) flows into the SAME build_amr_compiled leaf as a native block ->
       // cpl->step / advance_transport floor the Density-role face states. An OLDER .so never marshals
       // the field, so b.pos_floor stays 0 -> inactive, bit-identical. No reject.

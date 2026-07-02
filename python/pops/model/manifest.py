@@ -157,7 +157,8 @@ class ModuleManifest:
     """
 
     def __init__(self, *, name, state_spaces, field_spaces, params, aux, has_eigenvalues,
-                 operators, capabilities, native_routes, native_catalog, abi_requirements):
+                 operators, capabilities, native_routes, native_catalog, abi_requirements,
+                 params_utilization=None):
         self.schema_version = SCHEMA_VERSION
         self.name = name
         self.state_spaces = dict(state_spaces)
@@ -170,6 +171,9 @@ class ModuleManifest:
         self.native_routes = dict(native_routes)
         self.native_catalog = dict(native_catalog)
         self.abi_requirements = dict(abi_requirements)
+        # Runtime-param capacity utilization (ADC-610): {count, limit, status}. Additive; a reader that
+        # ignores it is unaffected (SCHEMA_VERSION unchanged for a purely-additive field).
+        self.params_utilization = dict(params_utilization or _params_utilization(self.params))
 
     def to_dict(self):
         """A plain-dict view of the whole manifest (JSON-ready)."""
@@ -177,6 +181,7 @@ class ModuleManifest:
                 "state_spaces": {n: dict(s) for n, s in self.state_spaces.items()},
                 "field_spaces": {n: dict(s) for n, s in self.field_spaces.items()},
                 "params": {n: dict(p) for n, p in self.params.items()},
+                "params_utilization": dict(self.params_utilization),
                 "aux": dict(self.aux), "has_eigenvalues": dict(self.has_eigenvalues),
                 "operators": self.operators.to_dict(),
                 "capabilities": dict(self.capabilities),
@@ -224,6 +229,19 @@ def _param_row(param):
     if kind is not None:
         row["kind"] = kind
     return row
+
+
+def _params_utilization(params):
+    """Runtime-param capacity utilization row (ADC-610): {count, limit, status}. Surfaces the
+    previously-hidden kMaxRuntimeParams bound so an artifact's headroom is introspectable. @p params is
+    the already-built {name: row} map; count = number of kind='runtime' params. status is 'ok' below the
+    limit, 'at_limit' exactly at it, 'exceeded' above (the codegen would already have refused it -- the
+    row records the fact rather than fabricating a pass)."""
+    from pops.physics.aux import max_runtime_params  # lazy: keep manifest import-light
+    limit = max_runtime_params()
+    count = sum(1 for row in params.values() if row.get("kind") == "runtime")
+    status = "ok" if count < limit else ("at_limit" if count == limit else "exceeded")
+    return {"count": count, "limit": limit, "status": status}
 
 
 def _native_routes():
@@ -285,7 +303,7 @@ def build_module_manifest(module):
         name=module.name, state_spaces=state_spaces, field_spaces=field_spaces, params=params,
         aux=aux, has_eigenvalues=has_eigenvalues, operators=operators,
         capabilities=capabilities, native_routes=routes, native_catalog=catalog,
-        abi_requirements=abi_requirements)
+        abi_requirements=abi_requirements, params_utilization=_params_utilization(params))
 
 
 def _is_manifestable_module(obj):
