@@ -8,6 +8,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>  // AuxHaloPolicy (ADC-369: per-field aux halo tail marshaling)
+#include <pops/runtime/config/route_ids.hpp>  // verify_route_manifest (ADC-599: embedded route registry guard)
 #include <pops/runtime/dynamic/abi_key.hpp>   // pops::abi_key (ABI guard for the native loader)
 #include <pops/runtime/dynamic/dynamic_model.hpp>  // IModel: model loaded at runtime (dynamic block)
 #include <pops/runtime/context/grid_context.hpp>   // GridContext
@@ -215,6 +216,23 @@ inline VariableSet parse_var_set(VariableKind kind, const std::string& names_csv
   vs.size = static_cast<int>(vs.names.size());
   parse_roles_into(vs, roles_csv);  // canonical roles + any user-defined role label (ADC-292)
   return vs;
+}
+
+/// Refuses an already-open .so (@p h) whose EMBEDDED route registry signature
+/// (pops_compiled_route_manifest, ADC-599) differs from the current registry. OPTIONAL symbol:
+/// an old .so without it -> verify_route_manifest("") is a no-op (append-only compat, the ABI key
+/// still guards the header layout). A mismatch throws, naming the first differing family, BEFORE
+/// the block is installed. @p ctx names the entry point in the diagnostic (e.g. "add_native_block").
+inline void verify_block_route_manifest(pops::dynlib::handle h, const char* ctx) {
+  auto manifest_fn =
+      reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_compiled_route_manifest"));
+  const std::string embedded = manifest_fn ? std::string(manifest_fn()) : std::string();
+  try {
+    pops::verify_route_manifest(embedded, ctx);  // no-op if absent (old .so)
+  } catch (...) {
+    pops::dynlib::close(h);  // release the handle before propagating, like the abi-key path
+    throw;
+  }
 }
 
 /// Reads (by dlsym, all OPTIONAL) the metadata symbols of an already-open .so (@p h). Returns
@@ -444,6 +462,9 @@ void add_dynamic_block(System* self, ImplT* P, const std::string& name, const st
     throw std::runtime_error("add_dynamic_block: dlopen('" + so_path +
                              "'): " + (e.empty() ? std::string("?") : e));
   }
+  // Route registry guard (ADC-599): refuse a .so whose embedded route manifest disagrees with the
+  // current registry, before installing. Optional symbol (old .so) -> no-op.
+  verify_block_route_manifest(h, "add_dynamic_block");
   auto nv_fn = reinterpret_cast<int (*)()>(pops::dynlib::sym(h, "pops_model_nvars"));
   if (!nv_fn) {
     pops::dynlib::close(h);
@@ -500,6 +521,9 @@ void add_compiled_block(System* self, ImplT* P, const std::string& name, const s
     throw std::runtime_error("add_compiled_block: dlopen('" + so_path +
                              "'): " + (e.empty() ? std::string("?") : e));
   }
+  // Route registry guard (ADC-599): refuse a .so whose embedded route manifest disagrees with the
+  // current registry, before installing. Optional symbol (old .so) -> no-op.
+  verify_block_route_manifest(h, "add_compiled_block");
   // extern "C" ABI of the compiled block (compiled_block_abi.hpp). The .so runs the production path
   // (assemble_rhs<Limiter, Flux>, SSPRK2/IMEX) on the generated model; only flat arrays
   // pass through (no C++ object shared across the dlopen, thus RTLD_LOCAL without ABI risk).
@@ -813,6 +837,9 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
       throw std::runtime_error("add_native_block: incompatible ABI -- loader key '" + loader_key +
                                "' != module key '" + module_key + "'");
     }
+    // Route registry guard (ADC-599): refuse a .dll whose embedded route manifest disagrees with
+    // the current registry, right after the ABI-key check and before installing.
+    verify_block_route_manifest(h, "add_native_block");
     using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
                                   const char*, double, int, int, int, double);
     auto install = reinterpret_cast<install_fn_t>(pops::dynlib::sym(h, "pops_install_native"));
@@ -862,6 +889,9 @@ void add_native_block(System* self, ImplT* P, const std::string& name, const std
                              "'. Recompile the loader with the SAME compiler, C++ standard and "
                              "pops headers as the _pops module.");
   }
+  // Route registry guard (ADC-599): refuse a .so whose embedded route manifest disagrees with the
+  // current registry, right after the ABI-key check and before installing. Optional symbol -> no-op.
+  verify_block_route_manifest(h, "add_native_block");
   // Native installer of the loader: reinterpret_cast<System*>(this) then add_compiled_model<ProdModel>.
   // Scheme (limiter/riemann/recon/time/gamma/substeps) marshaled as flat extern "C" arguments: the
   // loader reconstructs imex/recon_prim and calls the template. evolve is passed so a fixed-background

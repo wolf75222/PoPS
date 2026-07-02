@@ -285,9 +285,28 @@ def _compiled_options(compiled):
                 "compiler",
                 "cxx_standard",
                 "const_params",
+                "route_registry",
+                "capability_vocab",
+                "platform",
             ],
             "const_params": const_params,
             "runtime_params": runtime_params,
             "runtime_params_affect_cache_key": False,
+            # Route registry / report vocabulary components (ADC-599): the native catalog the
+            # artifact was keyed against. A registry change (route added/removed/re-tokenized)
+            # is a cache MISS; these fields make the participating identity inspectable.
+            "route_registry": _route_registry_components(),
         },
+    }
+
+
+def _route_registry_components():
+    """The route-registry / vocabulary cache-key components (ADC-599), inspectable."""
+    from pops.runtime.routes import (CAPABILITY_VOCAB_VERSION, ROUTE_REGISTRY_VERSION,
+                                     route_registry_hash, route_registry_signature)
+    return {
+        "version": ROUTE_REGISTRY_VERSION,
+        "hash": route_registry_hash(),
+        "signature": route_registry_signature(),
+        "capability_vocab_version": CAPABILITY_VOCAB_VERSION,
     }

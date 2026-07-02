@@ -53,18 +53,35 @@ def pops_cache_dir():
     return base
 
 
+def _registry_cache_key():
+    """Route registry + report vocabulary components of EVERY cache key (ADC-599).
+
+    The typed native route registry (pops.runtime.routes / route_ids.hpp) and the
+    capabilities/reports vocabulary participate in the artifact identity: an artifact built
+    against a different route set (a route added/removed/re-tokenized, a native entry renamed)
+    or an older report vocabulary must be a cache MISS, never a silent reuse. The component is
+    readable ("routes=v1:<hash16>;capvocab=0") so the mismatching field is nameable in
+    diagnostics and in compiled.inspect()."""
+    from pops.runtime.routes import (CAPABILITY_VOCAB_VERSION, ROUTE_REGISTRY_VERSION,
+                                     route_registry_hash)
+    return "routes=v%d:%s;capvocab=%d" % (ROUTE_REGISTRY_VERSION, route_registry_hash()[:16],
+                                          CAPABILITY_VOCAB_VERSION)
+
+
 def _cache_so_path(model_hash, abi_key, backend, target, name):
     """Cached .so path for this (model_hash, abi_key, backend, target, name).
 
     The cache key combines model_hash (the WHAT: formulas/roles/params) and abi_key (the HOW:
     headers + compiler + std), plus backend/target/name which change the emitted code (native loader
-    vs AOT vs JIT, System vs AmrSystem). The file name is <model_hash[:16]>-<sha(rest)[:16]>.so:
+    vs AOT vs JIT, System vs AmrSystem), plus the route registry / report vocabulary component
+    (_registry_cache_key, ADC-599). The file name is <model_hash[:16]>-<sha(rest)[:16]>.so:
     readable (prefix = model identity) and collision-free (suffix = rest of the key)."""
     import hashlib
     import os
     # _platform_cache_key: the CPU arch + the optflags enter the key (a .so x86_64 or
     # -march=native reused on another machine via a shared cache = silent SIGILL).
-    parts = [abi_key or "", backend or "", target or "", name or "", _platform_cache_key()]
+    parts = [abi_key or "", backend or "", target or "", name or "", _platform_cache_key(),
+             _registry_cache_key()]
     # AOT schema marker: the aot .so built before aligning the flags on native were compiled at
     # a hardcoded -O2 while the key already advertised the native optflags -> set them apart so a
     # shared cache does not serve a stale -O2 binary. Native/jit, whose key already reflects their

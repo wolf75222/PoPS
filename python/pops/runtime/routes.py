@@ -215,6 +215,43 @@ def route_manifest():
     return [route.manifest() for family in _TABLES for route in _REGISTRY[family].values()]
 
 
+# Native route catalog version (ADC-599): bumped on any INCOMPATIBLE registry change (a removed
+# or re-tokenized route). Additive rows do not need a bump -- the registry hash below already
+# separates artifacts built against different route sets.
+ROUTE_REGISTRY_VERSION = 1
+
+# Capabilities/reports VOCABULARY version (ADC-599): the shared vocabulary of the capability and
+# inspection reports (status tokens available/partial/unavailable, route row fields, manifest
+# keys). Enters every compiled-artifact cache key so an artifact whose embedded reports speak an
+# older vocabulary is not silently reused after an incompatible vocabulary change.
+CAPABILITY_VOCAB_VERSION = 0
+
+
+def route_registry_signature():
+    """Compact per-family signature "family:count,..." (registry order) -- the embedded form.
+
+    MIRROR of pops::route_registry_signature() (route_ids.hpp); the two strings must stay equal
+    (locked by tests/architecture/test_route_registry_parity.py). Embedded verbatim in generated
+    artifacts so a stale .so is refused with the mismatching family named, before any run.
+    """
+    return ",".join("%s:%d" % (family, len(_TABLES[family])) for family in _TABLES)
+
+
+def route_registry_hash():
+    """Stable hash of the FULL route registry (tokens, entries, requirements, limitations).
+
+    Enters every compiled-artifact cache key (ADC-599): any registry change -- a new route, a
+    renamed native entry, an added limitation -- invalidates cached .so files instead of silently
+    reusing an artifact built against a different native catalog.
+    """
+    import hashlib
+    parts = ["v%d" % ROUTE_REGISTRY_VERSION]
+    for family in _TABLES:
+        for token, entry, req, lim in _TABLES[family]:
+            parts.append("%s|%s|%s|%s|%s" % (family, token, entry, req, lim))
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
 # --- Typed route constants (the internal currency of the lowering layer) -----------------------
 RIEMANN_RUSANOV = _REGISTRY["riemann"]["rusanov"]
 RIEMANN_HLL = _REGISTRY["riemann"]["hll"]

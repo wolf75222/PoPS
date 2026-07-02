@@ -436,6 +436,77 @@ inline const char* route_token(WallRouteId id) {
   return route_info(id).token;
 }
 
+/// Native route catalog version (ADC-599): bumped on any INCOMPATIBLE registry change (a removed
+/// or re-tokenized route). MIRROR of ROUTE_REGISTRY_VERSION in python/pops/runtime/routes.py.
+inline constexpr int kRouteRegistryVersion = 1;
+
+/// Compact per-family signature "family:count,..." (registry order) -- the form EMBEDDED in
+/// generated artifacts (pops_compiled_route_manifest / pops_program_route_manifest) and compared
+/// at load time. MIRROR of routes.py::route_registry_signature(); the parity is locked by
+/// tests/architecture/test_route_registry_parity.py. A stale .so built against a different route
+/// set is refused with the mismatching family named (see verify_route_manifest below), instead
+/// of failing later on a cryptic dispatch or symbol error.
+inline std::string route_registry_signature() {
+  auto count = [](const auto& tbl) { return static_cast<int>(sizeof(tbl) / sizeof(tbl[0])); };
+  std::string out;
+  auto add = [&out](const char* family, int n) {
+    if (!out.empty())
+      out += ',';
+    out += family;
+    out += ':';
+    out += std::to_string(n);
+  };
+  add("riemann", count(kRiemannRoutes));
+  add("limiter", count(kLimiterRoutes));
+  add("recon", count(kReconRoutes));
+  add("time", count(kTimeRoutes));
+  add("splitting", count(kSplittingRoutes));
+  add("field_solver", count(kFieldSolverRoutes));
+  add("poisson_bc", count(kPoissonBcRoutes));
+  add("layout", count(kLayoutRoutes));
+  add("transport", count(kTransportRoutes));
+  add("source", count(kSourceRoutes));
+  add("elliptic", count(kEllipticRoutes));
+  add("source_stage", count(kSourceStageRoutes));
+  add("poisson_rhs", count(kPoissonRhsRoutes));
+  add("wall", count(kWallRoutes));
+  return out;
+}
+
+/// Refuses a compiled artifact whose EMBEDDED route manifest differs from the current registry
+/// (ADC-599: no silent reuse of a stale artifact). @p embedded is the artifact's
+/// route_registry_signature() at build time; an empty string means an OLD artifact without the
+/// manifest symbol -- accepted unchanged (append-only compatibility). The refusal names the
+/// FIRST mismatching family (its built-against vs current count), never a generic message.
+inline void verify_route_manifest(const std::string& embedded, const char* ctx) {
+  if (embedded.empty())
+    return;  // pre-manifest artifact: append-only compat, the ABI key still guards headers
+  const std::string current = route_registry_signature();
+  if (embedded == current)
+    return;
+  // Name the first differing family for a precise diagnostic.
+  std::string built = embedded, cur = current;
+  while (!built.empty() || !cur.empty()) {
+    auto pop = [](std::string& s) {
+      const std::size_t p = s.find(',');
+      std::string tok = s.substr(0, p);
+      s = (p == std::string::npos) ? std::string() : s.substr(p + 1);
+      return tok;
+    };
+    const std::string b = pop(built);
+    const std::string c = pop(cur);
+    if (b != c)
+      throw std::runtime_error(
+          std::string(ctx) + ": stale compiled artifact -- route registry mismatch on '" +
+          (b.empty() ? c : b) + "' (built against '" + (b.empty() ? "<absent>" : b) +
+          "', current '" + (c.empty() ? "<absent>" : c) +
+          "'); recompile the artifact against the current pops headers");
+  }
+  throw std::runtime_error(std::string(ctx) +
+                           ": stale compiled artifact -- route registry mismatch (built against '" +
+                           embedded + "', current '" + current + "')");
+}
+
 // --- Non-drift locks --------------------------------------------------------------------------
 // (1) Every table row's `index` equals its position (the enumerator value): a reordered or
 // inserted row fails the build instead of silently remapping the enum.
