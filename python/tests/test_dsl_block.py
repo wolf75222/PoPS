@@ -11,6 +11,7 @@ import tempfile
 import numpy as np
 
 import pops
+import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
 from test_dsl_brick import build_euler_brick, GAMMA
 
 INCLUDE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "include"))

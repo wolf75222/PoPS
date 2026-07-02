@@ -58,6 +58,18 @@ class _Backend(Descriptor):
         """The canonical backend token (alias of :meth:`lower`; mirrors the brick ``scheme``)."""
         return self._string
 
+    @property
+    def tier(self):
+        """The route TIER (ADC-600): ``"production"`` | ``"prototype"`` | ``"internal"``.
+
+        Read from the single native ``_BACKEND_CAPS`` table so a report can name plainly whether
+        this descriptor is the target production route, a host prototype route, or an internal
+        host-marshalled harness. :class:`Production` is production; :class:`JIT` is a prototype;
+        :class:`AOT` is internal (it runs the production ALGORITHM through a host harness, not the
+        target route). Never used to route -- it is a label for diagnostics only.
+        """
+        return self.capabilities().get("tier")
+
     def lower(self, context=None):
         """The backend string the compile drivers consume (Spec 5 sec.6/7: inert metadata).
 

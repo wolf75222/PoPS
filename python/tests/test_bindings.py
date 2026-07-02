@@ -13,6 +13,7 @@ import sys
 import numpy as np
 
 import pops
+import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
 from pops.runtime import ModelSpec  # ADC-585: ModelSpec is the legacy native-bridge POD, off pops root
 
 fails = 0

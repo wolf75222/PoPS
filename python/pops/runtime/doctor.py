@@ -351,15 +351,19 @@ def capabilities():
             "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "
                        "baked compiler + matching headers), aot otherwise ; reason set on "
                        "CompiledModel.backend_auto_reason ; explicit backend = short-circuit",
-            "prototype": {"adder": "add_dynamic_block",
+            # ADC-600: each backend row carries "tier" (production | prototype | internal) so the
+            # report names plainly whether a route is the target production route, a host prototype
+            # route, or an internal host-marshalled harness (never a fallback for the target surface).
+            "prototype": {"adder": "add_dynamic_block", "tier": "prototype",
                           "riemann": [t for t in riemann_all if t == "rusanov"],
                           "limiter": dsl_limiters_low, "stride": False,
                           "evolve_false": False, "mpi": False, "amr": False},
-            "aot": {"adder": "add_compiled_block", "riemann": list(riemann_all),
+            "aot": {"adder": "add_compiled_block", "tier": "internal",
+                    "riemann": list(riemann_all),
                     "limiter": dsl_limiters, "stride": False,
                     "evolve_false": False, "mpi": False, "amr": False,
                     "runtime_params": True},
-            "production": {"adder": "add_native_block",
+            "production": {"adder": "add_native_block", "tier": "production",
                            "riemann": list(riemann_all),
                            "limiter": dsl_limiters, "stride": True,
                            "evolve_false": True, "mpi": True, "amr": "target='amr_system'",

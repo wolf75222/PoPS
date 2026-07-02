@@ -87,7 +87,8 @@ __all__ = [
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
 from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
 from . import params, output, external, fields, linalg, solvers  # noqa: E402  (Spec 5 typed params/output/fields/algebra/solvers)
-from . import experimental  # noqa: E402  (pops.experimental NON-PRODUCTION / TESTS-ONLY host helpers; not a stable API)
+# pops.experimental (numpy-host, TESTS-ONLY) is NOT eagerly imported onto the root (ADC-600): it
+# stays a lazily-reachable submodule so PythonFlux is never bound as pops.PythonFlux.
 from .case import Case  # noqa: E402,F401  (Spec 5 sec.5.16: top-level compilable assembly; pure stdlib)
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)
 from .codegen.library import (  # noqa: E402,F401  (re-export: brick-library manifest API, Spec 3 section 21)

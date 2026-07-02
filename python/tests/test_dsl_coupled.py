@@ -21,6 +21,7 @@ import tempfile
 import numpy as np
 
 import pops
+import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
 from pops.ir.ops import sqrt
 from pops.physics.model import HyperbolicModel
 
