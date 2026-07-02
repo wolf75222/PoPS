@@ -33,7 +33,11 @@ from pops.ir.ops import left, right, sqrt
 from pops.physics.facade import Model
 
 fails = 0
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    repo_include,
+    skip_process_test,
+)
 INCLUDE = repo_include()
 CS2 = 0.5  # vitesse du son au carre (isotherme / pseudo-pression p = cs2 rho)
 
@@ -218,14 +222,12 @@ except ValueError as ex:
 
 
 # === (c) bout en bout : roe_dissipation a la main == enable_roe (compile) =======================
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip (c) test_dsl_autodiff_roe : compilateur ou en-tetes pops absents")
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
     if fails:
         print(f"FAIL test_dsl_autodiff_roe : {fails} echec(s)")
         sys.exit(1)
-    print("OK test_dsl_autodiff_roe")
-    sys.exit(0)
+    skip_process_test(f"(c) test_dsl_autodiff_roe : {missing}")
 
 
 def iso_roe_hand(name):

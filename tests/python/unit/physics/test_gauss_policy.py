@@ -16,14 +16,16 @@ On verifie :
 Reutilise le fluide isotherme magnetise + l'etage Schur de test_strang_split. S'auto-saute (exit 0)
 sans compilateur C++ pour (b)/(c) ; (a) tourne toujours.
 """
-import os
-import shutil
 import sys
 
 import numpy as np
 
 import pops
 from test_strang_split import INCLUDE, build_sim, isothermal_magnetized, strang
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    skip_process_test,
+)
 
 fails = 0
 
@@ -52,11 +54,12 @@ chk(True, "(a) set_gauss_policy('restart'/'evolve') acceptes")
 chk(raises(lambda: s.set_gauss_policy("rejoindre")), "(a) politique inconnue rejetee")
 
 # --- (b)/(c) comportement (necessite un compilateur + en-tetes pops) --------------------------------
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (b)/(c) : compilateur ou en-tetes pops absents")
-    print("test_gauss_policy : OK (API verte)" if fails == 0 else f"{fails} ECHEC(S)")
-    sys.exit(0 if fails == 0 else 1)
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
+    if fails:
+        print(f"test_gauss_policy : {fails} ECHEC(S)")
+        sys.exit(1)
+    skip_process_test(f"(b)/(c) test_gauss_policy : {missing}")
 
 compiled = isothermal_magnetized().compile(backend="aot", include=INCLUDE)
 DT, NSTEPS = 2.0e-3, 25

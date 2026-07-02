@@ -31,7 +31,11 @@ from pops.physics.facade import Model
 from pops.physics.multispecies import CoupledSource
 
 fails = 0
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    missing_compiler_requirement,
+    repo_include,
+    skip_process_test,
+)
 INCLUDE = repo_include()
 
 
@@ -171,14 +175,12 @@ finally:
     shutil.rmtree(wdir, ignore_errors=True)
 
 # --- (D) DSL : enable_hllc + source_jacobian (compilateur requis) ---------------------
-cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-if not cxx or not os.path.isdir(INCLUDE):
-    print("skip  (D) : compilateur ou en-tetes pops absents")
+missing = missing_compiler_requirement(INCLUDE)
+if missing:
     if fails:
         print(f"FAIL test_v3_features : {fails} echec(s)")
         sys.exit(1)
-    print("OK test_v3_features (A-C)")
-    sys.exit(0)
+    skip_process_test(f"(D) test_v3_features : {missing}")
 
 
 def iso3_dsl(name, hllc=False, jac=False):
