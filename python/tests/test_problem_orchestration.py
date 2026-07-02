@@ -782,7 +782,10 @@ def test_bind_rejects_case_mutated_after_compile(monkeypatch=None):
         import pops.runtime.system as rtsys
 
         class _StubSystem(_RecordingSim):
-            pass
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # passes it to the engine constructor; mirror the real System signature.
+            def __init__(self, config=None):
+                self.config = config
 
         orig = rtsys.System
         rtsys.System = _StubSystem
@@ -819,7 +822,10 @@ def test_bind_uses_snapshot_not_live_physics(monkeypatch=None):
         import pops.runtime.system as rtsys
 
         class _StubSystem(_RecordingSim):
-            pass
+            # ADC-583/#427: the Uniform adapter derives a SystemConfig from the Case mesh and
+            # passes it to the engine constructor; mirror the real System signature.
+            def __init__(self, config=None):
+                self.config = config
 
         orig = rtsys.System
         rtsys.System = _StubSystem
