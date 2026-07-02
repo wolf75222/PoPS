@@ -45,7 +45,7 @@ class PythonProcessItem(pytest.Item):
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
-            timeout=PROCESS_TEST_TIMEOUT,
+            timeout=_process_timeout(Path(str(self.path))),
         )
         skip_reason = _process_skip_reason(result.stdout)
         if skip_reason:
@@ -204,6 +204,33 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if compiler_missing and not isinstance(item, PythonProcessItem):
             if any(m.name == "compiler" for m in item.iter_markers()):
                 item.add_marker(pytest.mark.skip(reason=compiler_missing))
+
+
+@lru_cache(maxsize=None)
+def _process_timeout(path: Path) -> int:
+    """Timeout for one process-isolated test file, in seconds.
+
+    A file whose workload legitimately exceeds the global budget (e.g. several
+    DSL native compiles in a row) declares a module-level
+    ``POPS_PROCESS_TIMEOUT = <seconds>`` constant; the larger of the two
+    budgets wins so a global raise via POPS_PY_PROCESS_TIMEOUT still applies.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError):
+        return PROCESS_TEST_TIMEOUT
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Name)
+                and target.id == "POPS_PROCESS_TIMEOUT"
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, int)
+            ):
+                return max(PROCESS_TEST_TIMEOUT, node.value.value)
+    return PROCESS_TEST_TIMEOUT
 
 
 @lru_cache(maxsize=None)

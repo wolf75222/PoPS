@@ -43,6 +43,10 @@ from tests.python.support.requirements import repo_include
 
 INCLUDE = os.environ.get("POPS_INCLUDE") or repo_include()
 
+# Up to 8 DSL native compiles by design (probe + 4 explicit-path + 2 cached + load probe):
+# the regression needs every one of them, and CI runners exceed the global 300 s budget.
+POPS_PROCESS_TIMEOUT = 900
+
 fails = 0
 
 
